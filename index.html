@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Management | POS System</title>
+    <meta name="description" content="Modern Customer Management module for a high-performance Restaurant POS system.">
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="app-header">
+        <div class="logo">
+            <h1>Super<span>POS</span></h1>
+        </div>
+        <div class="status-container">
+            <span id="connection-status" class="status-badge online">
+                <span class="status-dot"></span>
+                <span class="status-text">Online</span>
+            </span>
+            <button id="btn-open-config" class="btn-settings" title="Settings">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <main class="app-container">
+        <!-- Search Section -->
+        <section class="search-section">
+            <div class="search-box">
+                <label for="customer-search" class="sr-only">Search customer</label>
+                <div class="input-wrapper">
+                    <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                    <input type="text" id="customer-search" placeholder="Search by phone, name or email..." autofocus>
+                    <button id="btn-manual-search" class="btn btn-primary search-btn-overlay">Search</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Dynamic Content Section -->
+        <section id="dynamic-content" class="content-section">
+            <!-- Initial State / Empty State -->
+            <div id="initial-state" class="empty-state">
+                <div class="empty-icon-wrapper">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                </div>
+                <h3>Quick Search</h3>
+                <p>Start typing to find a customer or create a new one.</p>
+            </div>
+
+            <!-- Customer Card (Hidden by default) -->
+            <div id="customer-result" class="customer-card hidden">
+                <div class="card-header">
+                    <div class="customer-info">
+                        <h2 id="res-name">John Doe</h2>
+                        <span id="res-category" class="badge vip">VIP</span>
+                    </div>
+                    <div class="loyalty-points">
+                        <span class="label">Loyalty Points</span>
+                        <span id="res-points" class="points-value">1,250</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="detail-item">
+                        <span class="label">Phone</span>
+                        <span id="res-phone">555-0123</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Email</span>
+                        <span id="res-email">john.doe@example.com</span>
+                    </div>
+                </div>
+                <div class="card-footer">
+                    <button class="btn btn-primary btn-large">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                        Create Order
+                    </button>
+                    <button class="btn btn-secondary">Edit Details</button>
+                </div>
+            </div>
+
+            <!-- New Customer Form (Hidden by default) -->
+            <div id="new-customer-form" class="customer-form hidden">
+                <div class="form-header">
+                    <h2>New Customer</h2>
+                    <p>Enter details to quickly add a new client to the system.</p>
+                </div>
+                <form id="add-customer-form">
+                    <div class="form-grid">
+                        <div class="form-group required">
+                            <label for="form-phone">Phone Number</label>
+                            <input type="tel" id="form-phone" placeholder="e.g. 555-0000" required>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="form-name">First Name</label>
+                                <input type="text" id="form-name" placeholder="John">
+                            </div>
+                            <div class="form-group">
+                                <label for="form-lastname">Last Name</label>
+                                <input type="text" id="form-lastname" placeholder="Doe">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="form-category">Category</label>
+                                <select id="form-category">
+                                    <!-- Populated dynamically -->
+                                    <option value="">General Public</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="form-tax-id">RFC (Tax ID)</label>
+                                <input type="text" id="form-tax-id" placeholder="XAXX010101000">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="form-street">Main Street & Number</label>
+                            <input type="text" id="form-street" placeholder="Av. Colosio 123">
+                        </div>
+                        <div class="form-group">
+                            <label for="form-email">Email Address</label>
+                            <input type="email" id="form-email" placeholder="john@example.com">
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-success btn-large">Save & Create Order</button>
+                        <button type="reset" class="btn btn-outline" id="btn-cancel">Clear</button>
+                    </div>
+                </form>
+            </div>
+        <!-- Client Config View (Hidden by default) -->
+        <section id="config-view" class="content-section hidden">
+            <div class="config-container">
+                <div class="config-header">
+                    <h2>Client Configuration</h2>
+                    <button id="btn-close-config" class="btn btn-secondary">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 0.5rem;">
+                            <path d="M19 12H5M12 19l-7-7 7-7"></path>
+                        </svg>
+                        Back to POS
+                    </button>
+                </div>
+
+                <!-- Category Management -->
+                <div class="customer-card">
+                    <div class="form-header">
+                        <h3>Client Categories</h3>
+                        <p>Manage categories and set discount percentages for different customer levels.</p>
+                    </div>
+                    
+                    <form id="add-category-form" class="form-grid" style="margin-bottom: 2rem; padding-bottom: 2rem; border-bottom: 1px solid var(--border-color);">
+                        <div class="form-row">
+                            <div class="form-group required">
+                                <label for="cat-name">Category Name</label>
+                                <input type="text" id="cat-name" placeholder="e.g. VIP Gold" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="cat-discount">Discount %</label>
+                                <input type="number" id="cat-discount" placeholder="0" min="0" max="100" step="0.01">
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary" style="align-self: flex-start;">Add Category</button>
+                    </form>
+
+                    <div id="category-list" class="category-grid">
+                        <!-- Populated dynamically -->
+                        <div class="empty-state" style="padding: 2rem; grid-column: 1 / -1;">
+                            <p>Loading categories...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Supabase Client (Local for reliability) -->
+    <script src="supabase.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
