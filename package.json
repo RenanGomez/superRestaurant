@@ -1,0 +1,15 @@
+{
+  "name": "super-restaurant",
+  "version": "1.0.0",
+  "description": "Modern Restaurant POS System Customer Management",
+  "main": "superRestaurant/index.html",
+  "scripts": {
+    "start": "npx http-server superRestaurant -p 5174 -a 0.0.0.0",
+    "dev": "npm run start"
+  },
+  "dependencies": {
+    "http-server": "^14.1.1",
+    "localtunnel": "^2.0.2",
+    "concurrently": "^8.2.2"
+  }
+}
