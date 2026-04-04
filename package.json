@@ -4,7 +4,7 @@
   "description": "Modern Restaurant POS System Customer Management",
   "main": "superRestaurant/index.html",
   "scripts": {
-    "start": "npx http-server superRestaurant -p 5174 -a 0.0.0.0",
+    "start": "npx http-server superRestaurant -p 5174 -a 0.0.0.0 -c-1",
     "dev": "npm run start"
   },
   "dependencies": {
