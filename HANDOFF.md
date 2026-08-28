@@ -87,8 +87,8 @@ La versión 2.2:
 
 ## Bloqueos
 
-- **Estrategia Git del prototipo:** ADR-006 fue aceptada por el humano. `origin/main` y `origin/master` quedan intactas; el greenfield usa la raíz separada `codex/modernizacion-fase0` y no reutiliza código legado sin licencia/autorización escrita.
-- **Publicación Git:** HTTPS quedó verificado. El commit raíz `ceaffcb` se publicó en `origin/codex/modernizacion-fase0`; no hubo merge, rebase, force-push ni modificación de ramas legadas.
+- **Estrategia Git del prototipo:** ADR-006 fue aceptada por el humano. El greenfield usa la raíz `ceaffcb`; el merge `ours` `f9f4428` conserva la historia anterior como segundo padre sin incorporar su árbol. No se reutiliza código legado sin licencia/autorización escrita.
+- **Publicación Git:** HTTPS quedó verificado. `main` y `codex/modernizacion-fase0` publican el mismo árbol moderno; `main` avanzó desde `293a155` a `f9f4428` sin force-push y `origin/master` no cambió.
 - Mercado/CFDI/hardware no bloquean toda Fase 0, pero sí sus módulos.
 - **Regla fiscal definitiva:** ADR-007 solo resuelve invariantes técnicas. País, moneda inicial, tasas, exenciones, tratamiento fiscal de propina y CFDI requieren decisión humana y asesoría fiscal antes de producción.
 - **GO de ADR-010 B:** el entorno aislado, los gates comunes, la frontera Payment/CashMovement, refresh/revocación, restore lógico y TLS `verify-full` ya existen; faltan ejecutar la migración completa en un segundo proyecto/CI fresco, obtener score elegible y completar la revisión humana de la frontera. La recuperación física de desastre es una evidencia operativa separada para producción. El proyecto anterior `cxcnnhafchqslvgvkeye` sigue siendo ajeno/no aislado y no debe usarse para gates destructivos.

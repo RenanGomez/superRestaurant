@@ -13,10 +13,11 @@ El repositorio está en la base inicial del monorepo con pnpm y Turborepo. La ar
 
 ## Descargar la modernización
 
-La historia greenfield está publicada sin mezclar el prototipo legado:
+La rama principal contiene el greenfield; el prototipo legado permanece solo
+en el historial recuperable:
 
 ```sh
-git clone --branch codex/modernizacion-fase0 --single-branch https://github.com/RenanGomez/superRestaurant.git
+git clone https://github.com/RenanGomez/superRestaurant.git
 cd superRestaurant
 pnpm install --frozen-lockfile
 ```

@@ -1133,7 +1133,7 @@ Reglas:
 | ADR-003 | Money en unidad menor + snapshots | Propuesto para aceptación |
 | ADR-004 | Fases 1–2 online; Fase 3 offline por dispositivo | Propuesto para aceptación |
 | ADR-005 | Dexie/RxDB y WatermelonDB/alternativa | Pendiente de prototipo |
-| ADR-006 | Preservación y migración del prototipo Git | Aceptada: ramas legadas intactas y raíz greenfield separada |
+| ADR-006 | Preservación y migración del prototipo Git | Aceptada: historial legado recuperable y greenfield adoptado en main |
 | ADR-007 | País, moneda, impuestos y CFDI | Pendiente de decisión humana |
 | ADR-008 | Hardware e impresión | Pendiente de piloto |
 | ADR-009 | Servidor local LAN | Diferido; fuera de v1 por defecto |
