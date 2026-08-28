@@ -5,6 +5,7 @@ import {
   calculateOrderItemTotals,
   calculateOrderTotals,
   CurrencyMismatchError,
+  DomainError,
   DiscountExceedsAmountError,
   DuplicateOrderItemIdError,
   InvalidQuantityError,
@@ -413,6 +414,115 @@ test("zero lines permit only a zero order discount and preserve non-negative tot
   assert.equal(result.total.amountMinor, 0);
   assert.equal(result.lines.length, 0);
 });
+
+test("public total calculators reject malformed records, arrays, and hostile prototypes as domain failures", () => {
+  const hostileLine = line("hostile-prototype");
+  Object.setPrototypeOf(hostileLine, { orderItemId: "inherited" });
+  const hostileSnapshot = line("hostile-snapshot");
+  Object.setPrototypeOf(hostileSnapshot.snapshot, { unitPrice: mxn(999) });
+
+  for (const calculation of [
+    () => calculateOrderItemTotals(null as never),
+    () => calculateOrderItemTotals([] as never),
+    () => calculateOrderItemTotals({ orderItemId: "missing-everything" } as never),
+    () => calculateOrderItemTotals(hostileLine),
+    () => calculateOrderItemTotals(hostileSnapshot),
+    () => calculateOrderItemTotals(line("bad-modifiers", { snapshot: { ...line("template").snapshot, modifiers: {} as never } })),
+    () => calculateOrderTotals(null as never),
+    () => calculateOrderTotals([] as never),
+    () => calculateOrderTotals({ currency: "MXN", timeZone: "America/Mexico_City", lines: {} } as never),
+  ]) {
+    assertDomainFailure(calculation);
+  }
+});
+
+test("public total calculators never invoke hostile accessors and detach proxy reads before arithmetic", () => {
+  const accessorLine = line("accessor-line");
+  let accessorReads = 0;
+  Object.defineProperty(accessorLine, "snapshot", {
+    get(): never {
+      accessorReads += 1;
+      throw new TypeError("hostile snapshot getter must not run");
+    },
+  });
+
+  const accessorTaxLine = line("accessor-tax", {
+    snapshot: {
+      ...line("template").snapshot,
+      tax: { taxId: "tax", name: "Tax", taxRuleVersion: "v1", rate: { numerator: 1n, denominator: 10n }, inclusion: "excluded" },
+    },
+  });
+  Object.defineProperty(accessorTaxLine.snapshot.tax!, "rate", {
+    get(): never {
+      accessorReads += 1;
+      throw new TypeError("hostile tax getter must not run");
+    },
+  });
+
+  const accessorModifierLine = line("accessor-modifier", {
+    snapshot: {
+      ...line("template").snapshot,
+      modifiers: [{ modifierId: "extra", name: "Extra", unitPrice: mxn(1), quantity: 1 }],
+    },
+  });
+  Object.defineProperty(accessorModifierLine.snapshot.modifiers[0]!, "unitPrice", {
+    get(): never {
+      accessorReads += 1;
+      throw new TypeError("hostile modifier getter must not run");
+    },
+  });
+
+  const accessorDiscountLine = line("accessor-line-discount");
+  Object.defineProperty(accessorDiscountLine, "lineDiscount", {
+    get(): never {
+      accessorReads += 1;
+      throw new TypeError("hostile line discount getter must not run");
+    },
+  });
+
+  const accessorOrder = order();
+  Object.defineProperty(accessorOrder, "lines", {
+    get(): never {
+      accessorReads += 1;
+      throw new TypeError("hostile lines getter must not run");
+    },
+  });
+
+  const accessorOrderDiscount = order();
+  Object.defineProperty(accessorOrderDiscount, "orderDiscount", {
+    get(): never {
+      accessorReads += 1;
+      throw new TypeError("hostile order discount getter must not run");
+    },
+  });
+
+  assertDomainFailure(() => calculateOrderItemTotals(accessorLine));
+  assertDomainFailure(() => calculateOrderItemTotals(accessorTaxLine));
+  assertDomainFailure(() => calculateOrderItemTotals(accessorModifierLine));
+  assertDomainFailure(() => calculateOrderItemTotals(accessorDiscountLine));
+  assertDomainFailure(() => calculateOrderTotals(accessorOrder));
+  assertDomainFailure(() => calculateOrderTotals(accessorOrderDiscount));
+  assert.equal(accessorReads, 0);
+
+  const proxiedLine = new Proxy(line("single-read"), {
+    get(): never {
+      throw new TypeError("calculator must use descriptors, not property gets");
+    },
+  });
+  const result = calculateOrderItemTotals(proxiedLine);
+  assert.equal(result.total.amountMinor, 100);
+});
+
+function assertDomainFailure(operation: () => unknown): void {
+  let error: unknown;
+  try {
+    operation();
+  } catch (caught) {
+    error = caught;
+  }
+  assert.ok(error instanceof DomainError, "expected a DomainError instead of an untyped runtime failure");
+  assert.equal(error instanceof TypeError, false);
+}
 
 function pricedSnapshot(orderItemId: string, unitPrice: number, taxVariant = 0): OrderItemPricingInput["snapshot"] {
   const tax = taxVariant === 1

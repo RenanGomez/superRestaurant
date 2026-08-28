@@ -5,6 +5,7 @@ import {
   createModifierSelectionSnapshot,
   calculateOrderItemTotals,
   CurrencyMismatchError,
+  DomainError,
   DuplicateModifierOptionIdError,
   DuplicateModifierSelectionError,
   InvalidModifierGroupBoundsError,
@@ -227,3 +228,86 @@ test("modifier selection rejects a same-product catalog from another restaurant"
     ModifierGroupRestaurantMismatchError,
   );
 });
+
+test("modifier public boundaries reject malformed records, arrays, and hostile prototypes as domain failures", () => {
+  const hostileGroup = { ...toppings, options: [...toppings.options] };
+  Object.setPrototypeOf(hostileGroup, { id: "inherited-group" });
+  const hostileOption = { ...toppings, options: [{ ...toppings.options[0]! }] };
+  Object.setPrototypeOf(hostileOption.options[0]!, { id: "inherited-option" });
+  const hostileContext = { ...selectionContext };
+  Object.setPrototypeOf(hostileContext, { restaurantId: "inherited-context" });
+  const hostileSelection = { optionId: "jalapeno", quantity: 1 };
+  Object.setPrototypeOf(hostileSelection, { optionId: "inherited-selection" });
+
+  for (const operation of [
+    () => validateModifierGroupCatalog(null as never),
+    () => validateModifierGroupCatalog([] as never),
+    () => validateModifierGroupCatalog({ id: "incomplete" } as never),
+    () => validateModifierGroupCatalog({ ...toppings, options: {} as never }),
+    () => validateModifierGroupCatalog(hostileGroup),
+    () => validateModifierGroupCatalog(hostileOption),
+    () => createModifierSelectionSnapshot(toppings, null as never, []),
+    () => createModifierSelectionSnapshot(toppings, hostileContext, []),
+    () => createModifierSelectionSnapshot(toppings, selectionContext, {} as never),
+    () => createModifierSelectionSnapshot(toppings, selectionContext, [hostileSelection]),
+  ]) {
+    assertDomainFailure(operation);
+  }
+});
+
+test("modifier public boundaries reject accessors without invoking them and detach proxy reads", () => {
+  let accessorReads = 0;
+  const accessorOptions = { ...toppings };
+  Object.defineProperty(accessorOptions, "options", {
+    get(): never {
+      accessorReads += 1;
+      throw new TypeError("hostile options getter must not run");
+    },
+  });
+  const accessorOption = { ...toppings, options: [{ ...toppings.options[0] }] };
+  Object.defineProperty(accessorOption.options[0]!, "unitPrice", {
+    get(): never {
+      accessorReads += 1;
+      throw new TypeError("hostile option getter must not run");
+    },
+  });
+  const accessorContext = { ...selectionContext };
+  Object.defineProperty(accessorContext, "restaurantId", {
+    get(): never {
+      accessorReads += 1;
+      throw new TypeError("hostile context getter must not run");
+    },
+  });
+  const accessorSelection = { optionId: "jalapeno", quantity: 1 };
+  Object.defineProperty(accessorSelection, "optionId", {
+    get(): never {
+      accessorReads += 1;
+      throw new TypeError("hostile selection getter must not run");
+    },
+  });
+
+  assertDomainFailure(() => validateModifierGroupCatalog(accessorOptions));
+  assertDomainFailure(() => validateModifierGroupCatalog(accessorOption));
+  assertDomainFailure(() => createModifierSelectionSnapshot(toppings, accessorContext, []));
+  assertDomainFailure(() => createModifierSelectionSnapshot(toppings, selectionContext, [accessorSelection]));
+  assert.equal(accessorReads, 0);
+
+  const proxy = new Proxy({ ...toppings, options: [...toppings.options] }, {
+    get(): never {
+      throw new TypeError("catalog reads must use descriptors");
+    },
+  });
+  const catalog = validateModifierGroupCatalog(proxy);
+  assert.equal(catalog.id, "toppings");
+});
+
+function assertDomainFailure(operation: () => unknown): void {
+  let error: unknown;
+  try {
+    operation();
+  } catch (caught) {
+    error = caught;
+  }
+  assert.ok(error instanceof DomainError, "expected a DomainError instead of an untyped runtime failure");
+  assert.equal(error instanceof TypeError, false);
+}

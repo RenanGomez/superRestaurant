@@ -1,4 +1,5 @@
 import {
+  DomainError,
   DiscountExceedsAmountError,
   DuplicateOrderItemIdError,
   InvalidQuantityError,
@@ -125,6 +126,12 @@ export interface CalculatedOrderTotals {
  * never accepted as the source of truth.
  */
 export function calculateOrderItemTotals(input: OrderItemPricingInput): CalculatedOrderItemTotals {
+  return atPricingBoundary("order item pricing input", () => calculateOrderItemTotalsFromCanonical(
+    normalizeOrderItemPricingInput(input),
+  ));
+}
+
+function calculateOrderItemTotalsFromCanonical(input: OrderItemPricingInput): CalculatedOrderItemTotals {
   assertText(input.orderItemId, "orderItemId");
   assertPositiveQuantity(input.quantity);
   const snapshot = clonePriceSnapshot(input.snapshot);
@@ -164,9 +171,15 @@ export function calculateOrderItemTotals(input: OrderItemPricingInput): Calculat
  * amounts always sum exactly to the explicit order discount.
  */
 export function calculateOrderTotals(input: OrderPricingInput): CalculatedOrderTotals {
+  return atPricingBoundary("order pricing input", () => calculateOrderTotalsFromCanonical(
+    normalizeOrderPricingInput(input),
+  ));
+}
+
+function calculateOrderTotalsFromCanonical(input: OrderPricingInput): CalculatedOrderTotals {
   const expectedCurrency = new Money(0, input.currency).currency;
   assertTimeZone(input.timeZone);
-  const calculatedItems = input.lines.map(calculateOrderItemTotals);
+  const calculatedItems = input.lines.map(calculateOrderItemTotalsFromCanonical);
   assertUniqueOrderItemIds(calculatedItems);
   for (const item of calculatedItems) {
     assertCurrency(item.total, expectedCurrency);
@@ -274,6 +287,229 @@ function allocateOrderDiscount(
     }
     return new Money(Number(allocation.amount), item.total.currency);
   });
+}
+
+/**
+ * The public calculators accept values from persistence and transport boundaries.
+ * Detach every supported field through own data descriptors before calculating so
+ * getters, inherited values, proxies that change reads, and exotic prototypes
+ * cannot influence monetary arithmetic after validation.
+ */
+function normalizeOrderPricingInput(value: unknown): OrderPricingInput {
+  const input = asPlainRecord(value, "order pricing input");
+  const currency = ownData(input, "currency", "currency");
+  // Keep the existing validation order: currency and time zone precede lines.
+  const normalizedCurrency = new Money(0, currency as string).currency;
+  const timeZone = ownData(input, "timeZone", "timeZone");
+  assertTimeZone(timeZone as string);
+  const lines = ownDataArray(input, "lines", "lines").map((line) => normalizeOrderItemPricingInput(line));
+  const orderDiscount = optionalOwnData(input, "orderDiscount", "order discount");
+  const tip = optionalOwnData(input, "tip", "tip");
+
+  return deepFreeze({
+    currency: normalizedCurrency,
+    timeZone: timeZone as string,
+    lines,
+    ...(orderDiscount === undefined ? {} : { orderDiscount: normalizeOrderDiscount(orderDiscount, normalizedCurrency) }),
+    ...(tip === undefined ? {} : { tip: normalizeNonNegativeMoney(tip, normalizedCurrency, "tip") }),
+  });
+}
+
+function normalizeOrderItemPricingInput(value: unknown): OrderItemPricingInput {
+  const input = asPlainRecord(value, "order item pricing input");
+  const orderItemId = ownData(input, "orderItemId", "orderItemId");
+  assertText(orderItemId as string, "orderItemId");
+  const quantity = ownData(input, "quantity", "quantity");
+  assertPositiveQuantity(quantity as number);
+  const snapshot = normalizePriceSnapshot(ownData(input, "snapshot", "snapshot"));
+  const lineDiscount = optionalOwnData(input, "lineDiscount", "line discount");
+
+  return deepFreeze({
+    orderItemId: orderItemId as string,
+    snapshot,
+    quantity: quantity as number,
+    ...(lineDiscount === undefined
+      ? {}
+      : { lineDiscount: normalizeDiscount(lineDiscount, snapshot.unitPrice.currency, "line discount") }),
+  });
+}
+
+function normalizePriceSnapshot(value: unknown): OrderItemPriceSnapshot {
+  const snapshot = asPlainRecord(value, "price snapshot");
+  const catalogVersion = ownData(snapshot, "catalogVersion", "catalogVersion");
+  const productId = ownData(snapshot, "productId", "productId");
+  const name = ownData(snapshot, "name", "name");
+  const sku = optionalOwnData(snapshot, "sku", "sku");
+  const stationId = ownData(snapshot, "stationId", "stationId");
+  const unit = ownData(snapshot, "unit", "unit");
+  assertText(catalogVersion as string, "catalogVersion");
+  assertText(productId as string, "productId");
+  assertText(name as string, "name");
+  if (sku !== undefined) assertText(sku as string, "sku");
+  assertText(stationId as string, "stationId");
+  assertText(unit as string, "unit");
+  const unitPrice = normalizeNonNegativeMoney(ownData(snapshot, "unitPrice", "unit price"), undefined, "unit price");
+  const modifiers = ownDataArray(snapshot, "modifiers", "modifiers").map((modifier) => normalizeModifier(modifier, unitPrice.currency));
+  const tax = optionalOwnData(snapshot, "tax", "tax snapshot");
+
+  return deepFreeze({
+    catalogVersion: catalogVersion as string,
+    productId: productId as string,
+    name: name as string,
+    ...(sku === undefined ? {} : { sku: sku as string }),
+    stationId: stationId as string,
+    unit: unit as string,
+    unitPrice,
+    modifiers,
+    ...(tax === undefined ? {} : { tax: normalizeTaxSnapshot(tax) }),
+  });
+}
+
+function normalizeModifier(value: unknown, currency: string): ModifierPriceSnapshot {
+  const modifier = asPlainRecord(value, "modifier snapshot");
+  const modifierId = ownData(modifier, "modifierId", "modifierId");
+  const name = ownData(modifier, "name", "modifier name");
+  const quantity = ownData(modifier, "quantity", "modifier quantity");
+  const groupId = optionalOwnData(modifier, "groupId", "modifier groupId");
+  const groupName = optionalOwnData(modifier, "groupName", "modifier group name");
+  const groupCatalogVersion = optionalOwnData(modifier, "groupCatalogVersion", "modifier group catalogVersion");
+  assertText(modifierId as string, "modifierId");
+  assertText(name as string, "modifier name");
+  assertPositiveQuantity(quantity as number);
+  const hasGroupIdentity = groupId !== undefined || groupName !== undefined || groupCatalogVersion !== undefined;
+  if (hasGroupIdentity) {
+    assertText(groupId as string, "modifier groupId");
+    assertText(groupName as string, "modifier group name");
+    assertText(groupCatalogVersion as string, "modifier group catalogVersion");
+  }
+
+  return deepFreeze({
+    modifierId: modifierId as string,
+    name: name as string,
+    ...(hasGroupIdentity
+      ? { groupId: groupId as string, groupName: groupName as string, groupCatalogVersion: groupCatalogVersion as string }
+      : {}),
+    unitPrice: normalizeNonNegativeMoney(ownData(modifier, "unitPrice", "modifier unit price"), currency, "modifier unit price"),
+    quantity: quantity as number,
+  });
+}
+
+function normalizeTaxSnapshot(value: unknown): TaxSnapshot {
+  const tax = asPlainRecord(value, "tax snapshot");
+  const taxId = ownData(tax, "taxId", "taxId");
+  const name = ownData(tax, "name", "tax name");
+  const taxRuleVersion = ownData(tax, "taxRuleVersion", "taxRuleVersion");
+  const inclusion = ownData(tax, "inclusion", "tax inclusion");
+  assertText(taxId as string, "taxId");
+  assertText(name as string, "tax name");
+  assertText(taxRuleVersion as string, "taxRuleVersion");
+  if (inclusion !== "included" && inclusion !== "excluded") throw new InvalidSnapshotError("tax inclusion");
+
+  const rate = asTaxRateRecord(optionalOwnData(tax, "rate", "tax rate"));
+  const numerator = optionalOwnData(rate, "numerator", "tax rate numerator");
+  const denominator = optionalOwnData(rate, "denominator", "tax rate denominator");
+  if (typeof numerator !== "bigint" || typeof denominator !== "bigint" || numerator < 0n || denominator <= 0n) {
+    throw new InvalidTaxRateError();
+  }
+
+  return deepFreeze({
+    taxId: taxId as string,
+    name: name as string,
+    taxRuleVersion: taxRuleVersion as string,
+    rate: deepFreeze({ numerator, denominator }),
+    inclusion,
+  });
+}
+
+function normalizeDiscount(value: unknown, currency: string, field: string): AppliedDiscountSnapshot {
+  const discount = asPlainRecord(value, field);
+  const discountId = ownData(discount, "discountId", "discountId");
+  const discountRuleVersion = ownData(discount, "discountRuleVersion", "discountRuleVersion");
+  assertText(discountId as string, "discountId");
+  assertText(discountRuleVersion as string, "discountRuleVersion");
+  return deepFreeze({
+    discountId: discountId as string,
+    discountRuleVersion: discountRuleVersion as string,
+    amount: normalizeNonNegativeMoney(ownData(discount, "amount", `${field} amount`), currency, field),
+  });
+}
+
+function normalizeOrderDiscount(value: unknown, currency: string): OrderDiscountSnapshot {
+  const discount = asPlainRecord(value, "order discount");
+  const allocationStrategy = ownData(discount, "allocationStrategy", "order discount allocation strategy");
+  if (allocationStrategy !== ORDER_DISCOUNT_ALLOCATION_STRATEGY) {
+    throw new InvalidOrderDiscountAllocationStrategyError(typeof allocationStrategy === "string" ? allocationStrategy : "");
+  }
+  return deepFreeze({
+    ...normalizeDiscount(discount, currency, "order discount"),
+    allocationStrategy,
+  });
+}
+
+function normalizeNonNegativeMoney(value: unknown, currency: string | undefined, field: string): Money {
+  if (value === null || typeof value !== "object" || Object.getPrototypeOf(value) !== Money.prototype) {
+    throw new InvalidSnapshotError(field);
+  }
+  const money = value as Record<string, unknown>;
+  const amountMinor = ownData(money, "amountMinor", `${field} amountMinor`);
+  const moneyCurrency = ownData(money, "currency", `${field} currency`);
+  const normalized = new Money(amountMinor as number, moneyCurrency as string);
+  if (currency !== undefined) assertCurrency(normalized, currency);
+  if (normalized.amountMinor < 0) throw new NegativeMoneyAmountError(field);
+  return normalized;
+}
+
+function asPlainRecord(value: unknown, field: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new InvalidSnapshotError(field);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new InvalidSnapshotError(field);
+  return value as Record<string, unknown>;
+}
+
+function asTaxRateRecord(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new InvalidTaxRateError();
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new InvalidTaxRateError();
+  return value as Record<string, unknown>;
+}
+
+function ownData(record: Record<string, unknown>, key: string, field: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  if (descriptor === undefined || !("value" in descriptor)) throw new InvalidSnapshotError(field);
+  return descriptor.value;
+}
+
+function optionalOwnData(record: Record<string, unknown>, key: string, field: string): unknown | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  if (descriptor === undefined) return undefined;
+  if (!("value" in descriptor)) throw new InvalidSnapshotError(field);
+  return descriptor.value;
+}
+
+function ownDataArray(record: Record<string, unknown>, key: string, field: string): readonly unknown[] {
+  return asDataArray(ownData(record, key, field), field);
+}
+
+function asDataArray(value: unknown, field: string): readonly unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new InvalidSnapshotError(field);
+  const length = Object.getOwnPropertyDescriptor(value, "length");
+  if (length === undefined || !("value" in length) || !Number.isSafeInteger(length.value) || length.value < 0) {
+    throw new InvalidSnapshotError(field);
+  }
+  const values: unknown[] = [];
+  for (let index = 0; index < length.value; index += 1) {
+    values.push(ownData(value as unknown as Record<string, unknown>, String(index), field));
+  }
+  return values;
+}
+
+function atPricingBoundary<T>(field: string, operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    if (error instanceof DomainError) throw error;
+    throw new InvalidSnapshotError(field);
+  }
 }
 
 function cloneOrderPricingInput(input: OrderPricingInput): OrderPricingInput {

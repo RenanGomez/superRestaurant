@@ -1,4 +1,5 @@
 import {
+  DomainError,
   DuplicateModifierOptionIdError,
   DuplicateModifierSelectionError,
   InvalidModifierGroupBoundsError,
@@ -89,6 +90,12 @@ export interface ModifierSelectionSnapshot {
  * currency can be unambiguous; every option price must use that same currency.
  */
 export function validateModifierGroupCatalog(group: ModifierGroupCatalog): ValidatedModifierGroupCatalog {
+  return atModifierBoundary("modifier group", () => validateModifierGroupCatalogCanonical(
+    normalizeModifierGroupCatalog(group),
+  ));
+}
+
+function validateModifierGroupCatalogCanonical(group: ModifierGroupCatalog): ValidatedModifierGroupCatalog {
   assertText(group.id, "modifier group id");
   assertText(group.restaurantId, "modifier group restaurantId");
   assertText(group.name, "modifier group name");
@@ -159,7 +166,19 @@ export function createModifierSelectionSnapshot(
   context: ModifierSelectionContext,
   selections: readonly ModifierOptionSelection[],
 ): ModifierSelectionSnapshot {
-  const catalog = validateModifierGroupCatalog(group);
+  return atModifierBoundary("modifier selection", () => createModifierSelectionSnapshotCanonical(
+    normalizeModifierGroupCatalog(group),
+    normalizeModifierSelectionContext(context),
+    normalizeModifierOptionSelections(selections),
+  ));
+}
+
+function createModifierSelectionSnapshotCanonical(
+  group: ModifierGroupCatalog,
+  context: ModifierSelectionContext,
+  selections: readonly ModifierOptionSelection[],
+): ModifierSelectionSnapshot {
+  const catalog = validateModifierGroupCatalogCanonical(group);
   assertText(context.restaurantId, "selected restaurant id");
   assertText(context.productId, "selected product id");
   if (catalog.restaurantId !== context.restaurantId) {
@@ -227,6 +246,127 @@ export function createModifierSelectionSnapshot(
     modifiers,
     total,
   });
+}
+
+/**
+ * Public modifier values commonly arrive from catalog APIs. Read each expected
+ * field once from own data descriptors, then calculate only from detached
+ * ordinary objects. This prevents inherited data, getters, and changing proxy
+ * reads from participating in selection or price arithmetic.
+ */
+function normalizeModifierGroupCatalog(value: unknown): ModifierGroupCatalog {
+  const group = asPlainRecord(value, "modifier group");
+  const id = ownData(group, "id", "modifier group id");
+  const restaurantId = ownData(group, "restaurantId", "modifier group restaurantId");
+  const name = ownData(group, "name", "modifier group name");
+  const catalogVersion = ownData(group, "catalogVersion", "modifier group catalogVersion");
+  const productId = ownData(group, "productId", "modifier group productId");
+  const active = ownData(group, "active", "modifier group active");
+  const minimumQuantity = ownData(group, "minimumQuantity", "modifier group minimumQuantity");
+  const maximumQuantity = ownData(group, "maximumQuantity", "modifier group maximumQuantity");
+  const options = ownDataArray(group, "options", "modifier group options").map(normalizeModifierOptionCatalog);
+
+  return deepFreeze({
+    id: id as string,
+    restaurantId: restaurantId as string,
+    name: name as string,
+    catalogVersion: catalogVersion as string,
+    productId: productId as string,
+    active: active as boolean,
+    minimumQuantity: minimumQuantity as number,
+    maximumQuantity: maximumQuantity as number,
+    options,
+  });
+}
+
+function normalizeModifierOptionCatalog(value: unknown): ModifierOptionCatalog {
+  const option = asPlainRecord(value, "modifier option");
+  const id = ownData(option, "id", "modifier option id");
+  const name = ownData(option, "name", "modifier option name");
+  const active = ownData(option, "active", "modifier option active");
+  const maximumQuantity = optionalOwnData(option, "maximumQuantity", "modifier option maximumQuantity");
+  return deepFreeze({
+    id: id as string,
+    name: name as string,
+    unitPrice: normalizeMoney(ownData(option, "unitPrice", "modifier unit price"), "modifier unit price"),
+    active: active as boolean,
+    ...(maximumQuantity === undefined ? {} : { maximumQuantity: maximumQuantity as number }),
+  });
+}
+
+function normalizeModifierSelectionContext(value: unknown): ModifierSelectionContext {
+  const context = asPlainRecord(value, "modifier selection context");
+  return deepFreeze({
+    restaurantId: ownData(context, "restaurantId", "selected restaurant id") as string,
+    productId: ownData(context, "productId", "selected product id") as string,
+  });
+}
+
+function normalizeModifierOptionSelections(value: unknown): readonly ModifierOptionSelection[] {
+  return asDataArray(value, "modifier selections").map((value) => {
+    const selection = asPlainRecord(value, "modifier selection");
+    return deepFreeze({
+      optionId: ownData(selection, "optionId", "selected modifier option id") as string,
+      quantity: ownData(selection, "quantity", "selected modifier quantity") as number,
+    });
+  });
+}
+
+function normalizeMoney(value: unknown, field: string): Money {
+  if (value === null || typeof value !== "object" || Object.getPrototypeOf(value) !== Money.prototype) {
+    throw new InvalidSnapshotError(field);
+  }
+  const money = value as Record<string, unknown>;
+  return new Money(
+    ownData(money, "amountMinor", `${field} amountMinor`) as number,
+    ownData(money, "currency", `${field} currency`) as string,
+  );
+}
+
+function asPlainRecord(value: unknown, field: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new InvalidSnapshotError(field);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new InvalidSnapshotError(field);
+  return value as Record<string, unknown>;
+}
+
+function ownData(record: Record<string, unknown>, key: string, field: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  if (descriptor === undefined || !("value" in descriptor)) throw new InvalidSnapshotError(field);
+  return descriptor.value;
+}
+
+function optionalOwnData(record: Record<string, unknown>, key: string, field: string): unknown | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  if (descriptor === undefined) return undefined;
+  if (!("value" in descriptor)) throw new InvalidSnapshotError(field);
+  return descriptor.value;
+}
+
+function ownDataArray(record: Record<string, unknown>, key: string, field: string): readonly unknown[] {
+  return asDataArray(ownData(record, key, field), field);
+}
+
+function asDataArray(value: unknown, field: string): readonly unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new InvalidSnapshotError(field);
+  const length = Object.getOwnPropertyDescriptor(value, "length");
+  if (length === undefined || !("value" in length) || !Number.isSafeInteger(length.value) || length.value < 0) {
+    throw new InvalidSnapshotError(field);
+  }
+  const items: unknown[] = [];
+  for (let index = 0; index < length.value; index += 1) {
+    items.push(ownData(value as unknown as Record<string, unknown>, String(index), field));
+  }
+  return items;
+}
+
+function atModifierBoundary<T>(field: string, operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    if (error instanceof DomainError) throw error;
+    throw new InvalidSnapshotError(field);
+  }
 }
 
 function assertBounds(group: ModifierGroupCatalog): void {

@@ -163,6 +163,10 @@ test("Refund rejects uncaptured, cross-scope, currency, duplicate-id, and idempo
   const captured = capturedPayment();
   assert.throws(() => refundPayment(captured, refundInput({ restaurantId: "restaurant-2" })), RefundPaymentMismatchError);
   assert.throws(() => refundPayment(captured, refundInput({ amount: new Money(100, "USD") })), RefundPaymentMismatchError);
+  assert.throws(
+    () => refundPayment(captured, refundInput({ idempotencyKey: captured.idempotencyKey })),
+    RefundIdempotencyConflictError,
+  );
 
   const created = refundPayment(captured, refundInput());
   const replayed = refundPayment(created.payment, refundInput());
@@ -248,6 +252,12 @@ test("rehydrated refund history enforces immutability, scope, uniqueness, totals
   assert.throws(
     () => refundableAmount(rehydratedPayment(partial, {
       refunds: Object.freeze([frozenRefund(originalRefund, { eventId: partial.eventId })]),
+    })),
+    RefundIdempotencyConflictError,
+  );
+  assert.throws(
+    () => refundableAmount(rehydratedPayment(partial, {
+      refunds: Object.freeze([frozenRefund(originalRefund, { idempotencyKey: partial.idempotencyKey })]),
     })),
     RefundIdempotencyConflictError,
   );

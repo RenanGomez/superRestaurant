@@ -262,6 +262,10 @@ export function closeCashRegister(
   input = snapshotCloseInput(input);
   assertRegisterIntegrity(register);
   assertEvidence(input.evidence, register.branchId);
+  if (register.movements.some((movement) =>
+    movement.eventId === input.eventId || movement.idempotencyKey === input.idempotencyKey)) {
+    throw new CashRegisterCloseIdempotencyConflictError(input.idempotencyKey);
+  }
   if (register.status !== "open") {
     if (sameCloseAttempt(register, input)) {
       return Object.freeze({ register, evidence: freezeEvidence(input.evidence), outcome: "replayed" as const });
@@ -532,6 +536,10 @@ function assertRegisterIntegrity(register: CashRegister): void {
   }
 
   assertTextFields(register, ["closedByActorId", "closedAt", "closedDeviceId", "closeEventId", "closeIdempotencyKey"]);
+  if (register.movements.some((movement) =>
+    movement.eventId === register.closeEventId || movement.idempotencyKey === register.closeIdempotencyKey)) {
+    throw new CashRegisterCloseIdempotencyConflictError(register.closeIdempotencyKey ?? "");
+  }
   if (register.closeReason !== undefined && !hasText(register.closeReason)) {
     throw new InvalidCashRegisterFieldError("register.closeReason");
   }

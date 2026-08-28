@@ -334,6 +334,21 @@ test("closes once with expected, counted, and signed difference", () => {
   assert.throws(() => append(closed, movementInput({ localSequence: 2 })), CashRegisterClosedError);
 });
 
+test("close rejects event or idempotency keys already used by a cash movement", () => {
+  const register = append(openCashRegister(openInput()).register, movementInput({
+    eventId: "movement-event", idempotencyKey: "movement-key", localSequence: 1,
+  })).register;
+
+  assert.throws(
+    () => closeCashRegister(register, closeInput({ eventId: "movement-event" })),
+    CashRegisterCloseIdempotencyConflictError,
+  );
+  assert.throws(
+    () => closeCashRegister(register, closeInput({ idempotencyKey: "movement-key" })),
+    CashRegisterCloseIdempotencyConflictError,
+  );
+});
+
 test("rehydrated register state rejects closing fields while open and inconsistent closed balances", () => {
   const open = openCashRegister(openInput()).register;
   assert.throws(
@@ -346,6 +361,8 @@ test("rehydrated register state rejects closing fields while open and inconsiste
     countedClosingBalance: new Money(10_400, "MXN"),
     evidence: evidence({ reason: "Faltante contado" }),
   })).register;
+  const movement = closed.movements[0];
+  assert.ok(movement);
   assert.equal(expectedCashBalance(closed).amountMinor, 10_500);
   assert.throws(
     () => expectedCashBalance(Object.freeze({ ...closed, closedByActorId: undefined }) as unknown as CashRegister),
@@ -366,6 +383,14 @@ test("rehydrated register state rejects closing fields while open and inconsiste
   assert.throws(
     () => expectedCashBalance(Object.freeze({ ...closed, closeReason: undefined }) as unknown as CashRegister),
     CashRegisterVarianceReasonRequiredError,
+  );
+  assert.throws(
+    () => expectedCashBalance(Object.freeze({ ...closed, closeEventId: movement.eventId })),
+    CashRegisterCloseIdempotencyConflictError,
+  );
+  assert.throws(
+    () => expectedCashBalance(Object.freeze({ ...closed, closeIdempotencyKey: movement.idempotencyKey })),
+    CashRegisterCloseIdempotencyConflictError,
   );
 });
 

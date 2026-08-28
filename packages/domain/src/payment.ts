@@ -366,13 +366,13 @@ function assertPaymentIntegrity(payment: Payment): void {
       throw new DuplicateRefundIdError(refund.refundId);
     }
     refundIds.add(refund.refundId);
-    if (transitionEventIds.has(refund.eventId) || refundEventIds.has(refund.eventId)) {
+    if (
+      transitionEventIds.has(refund.eventId) || refundEventIds.has(refund.eventId) ||
+      transitionIdempotencyKeys.has(refund.idempotencyKey) || idempotencyKeys.has(refund.idempotencyKey)
+    ) {
       throw new RefundIdempotencyConflictError(refund.idempotencyKey);
     }
     refundEventIds.add(refund.eventId);
-    if (idempotencyKeys.has(refund.idempotencyKey)) {
-      throw new RefundIdempotencyConflictError(refund.idempotencyKey);
-    }
     idempotencyKeys.add(refund.idempotencyKey);
     assertFrozenEvidence(refund.evidence, `payment.refunds[${index}].evidence`, payment.branchId);
     assertReason(refund.evidence);
