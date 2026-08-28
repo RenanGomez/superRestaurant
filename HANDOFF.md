@@ -87,8 +87,8 @@ La versión 2.2:
 
 ## Bloqueos
 
-- **Estrategia Git del prototipo:** requiere decisión humana antes de mezclar o limpiar ramas remotas.
-- **Push por SSH:** requiere agregar una clave pública de este equipo a GitHub, o usar credenciales HTTPS.
+- **Estrategia Git del prototipo:** ADR-006 fue aceptada por el humano. `origin/main` y `origin/master` quedan intactas; el greenfield usa la raíz separada `codex/modernizacion-fase0` y no reutiliza código legado sin licencia/autorización escrita.
+- **Publicación Git:** HTTPS quedó verificado. El commit raíz `ceaffcb` se publicó en `origin/codex/modernizacion-fase0`; no hubo merge, rebase, force-push ni modificación de ramas legadas.
 - Mercado/CFDI/hardware no bloquean toda Fase 0, pero sí sus módulos.
 - **Regla fiscal definitiva:** ADR-007 solo resuelve invariantes técnicas. País, moneda inicial, tasas, exenciones, tratamiento fiscal de propina y CFDI requieren decisión humana y asesoría fiscal antes de producción.
 - **GO de ADR-010 B:** el entorno aislado, los gates comunes, la frontera Payment/CashMovement, refresh/revocación, restore lógico y TLS `verify-full` ya existen; faltan ejecutar la migración completa en un segundo proyecto/CI fresco, obtener score elegible y completar la revisión humana de la frontera. La recuperación física de desastre es una evidencia operativa separada para producción. El proyecto anterior `cxcnnhafchqslvgvkeye` sigue siendo ajeno/no aislado y no debe usarse para gates destructivos.
@@ -97,9 +97,8 @@ La versión 2.2:
 
 ## Siguiente acción recomendada
 
-1. Resolver ADR-006: archivar prototipo y crear rama limpia es la recomendación.
-2. Revisar humanamente el `.gitignore` y la configuración raíz del monorepo; resolver la estrategia Git antes de publicar cambios.
-3. Crear y autorizar un segundo proyecto Supabase vacío para `test:option-b:fresh-push`; después completar la inspección humana de `WRITE_FRONTIER.md` y el scoring B.
+1. Revisar humanamente el `.gitignore` y la configuración raíz del monorepo; ADR-006 ya preserva las ramas legadas y publica el greenfield por separado.
+2. Crear y autorizar un segundo proyecto Supabase vacío para `test:option-b:fresh-push`; después completar la inspección humana de `WRITE_FRONTIER.md` y el scoring B.
 
 ## Subagentes y verificación de la frontera financiera B
 

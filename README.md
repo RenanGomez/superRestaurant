@@ -11,6 +11,16 @@ El repositorio está en la base inicial del monorepo con pnpm y Turborepo. La ar
 - Node.js 24.19.0
 - pnpm 11.19.0
 
+## Descargar la modernización
+
+La historia greenfield está publicada sin mezclar el prototipo legado:
+
+```sh
+git clone --branch codex/modernizacion-fase0 --single-branch https://github.com/RenanGomez/superRestaurant.git
+cd superRestaurant
+pnpm install --frozen-lockfile
+```
+
 ## Comandos
 
 ```sh
@@ -29,3 +39,4 @@ pnpm build
 - [Notas del proyecto](PROJECT_NOTES.md)
 - [Handoff](HANDOFF.md)
 - [Instrucciones para agentes](AGENTS.md)
+- [ADR-006: estrategia Git greenfield](docs/adr/ADR-006.md)

@@ -56,7 +56,7 @@ La primera versión contenía una buena visión funcional, pero mezclaba alterna
 - [ ] Confirmar país, moneda inicial, impuestos y si CFDI México entra en la salida.
 - [ ] Confirmar licencia/modelo comercial del producto.
 - [ ] Seleccionar hardware de piloto.
-- [ ] Resolver la estrategia Git del prototipo remoto mediante ADR-006.
+- [x] Resolver la estrategia Git del prototipo remoto mediante ADR-006.
 - [ ] Ejecutar el spike y resolver ADR-010 antes de implementar Auth, acceso a datos o Realtime definitivos.
 - [ ] Prototipar y elegir almacenamiento/sync local mediante ADR-005.
 - [ ] Convertir decisiones aceptadas en ADRs versionadas bajo docs/adr.
@@ -1133,7 +1133,7 @@ Reglas:
 | ADR-003 | Money en unidad menor + snapshots | Propuesto para aceptación |
 | ADR-004 | Fases 1–2 online; Fase 3 offline por dispositivo | Propuesto para aceptación |
 | ADR-005 | Dexie/RxDB y WatermelonDB/alternativa | Pendiente de prototipo |
-| ADR-006 | Preservación y migración del prototipo Git | Pendiente de decisión humana |
+| ADR-006 | Preservación y migración del prototipo Git | Aceptada: ramas legadas intactas y raíz greenfield separada |
 | ADR-007 | País, moneda, impuestos y CFDI | Pendiente de decisión humana |
 | ADR-008 | Hardware e impresión | Pendiente de piloto |
 | ADR-009 | Servidor local LAN | Diferido; fuera de v1 por defecto |
@@ -1187,10 +1187,10 @@ Estas preguntas no bloquean toda la Fase 0; sí bloquean las decisiones específ
 
 ## 21. Siguiente paso
 
-1. Resolver ADR-006 para preservar el prototipo.
-2. Crear .gitignore y rama limpia de modernización.
-3. Inicializar monorepo y CI neutral.
-4. Iniciar en paralelo packages/domain y el spike timeboxed de ADR-010.
+1. Mantener ADR-006: prototipo preservado y raíz greenfield separada.
+2. Mantener `.gitignore` y la rama limpia de modernización.
+3. Mantener monorepo y CI neutral.
+4. Continuar en paralelo packages/domain y el spike timeboxed de ADR-010.
 5. Publicar scoring, GO/NO-GO y ADR-010 al hard stop.
 6. Aceptar ADR-001 con los componentes seleccionados.
 7. Configurar Auth/persistencia/Realtime y continuar Fase 0.

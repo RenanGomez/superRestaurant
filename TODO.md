@@ -21,8 +21,8 @@ Estados permitidos: `TODO`, `IN_PROGRESS`, `REVIEW`, `DONE`, `BLOCKED`, `CANCELL
 
 ## Fase 0 — Fundaciones
 
-- [ ] **REVIEW · P0** — Inicializar Git y enlazar el remoto. Nota: origin HTTPS configurado y fetch de main/master verificado el 2026-08-25; no hubo merge ni push y la autenticación de escritura no se ha verificado.
-- [ ] **BLOCKED · P0** — Definir la estrategia para el prototipo remoto y sus 10,427 rutas de `node_modules` versionadas. Nota: requiere decisión humana entre preservar rama/tag legado y crear rama limpia; no mezclar automáticamente.
+- [ ] **REVIEW · P0** — Inicializar Git y enlazar el remoto. Nota: origin HTTPS configurado; fetch de main/master y push de `codex/modernizacion-fase0` verificados. El commit raíz greenfield `ceaffcb` se publicó el 2026-08-28 sin merge ni cambios en las ramas legadas; pendiente revisión humana del conjunto.
+- [x] **DONE · P0** — Definir la estrategia para el prototipo remoto y sus 10,427 rutas de `node_modules` versionadas. Nota: el humano autorizó ADR-006 el 2026-08-28: preservar main/master intactas y publicar la raíz greenfield separada en `codex/modernizacion-fase0`; no copiar código legado sin licencia/autorización escrita.
 - [ ] **REVIEW · P0** — Crear un `.gitignore` para `node_modules`, secretos, builds, cobertura, caches y CodeGraph antes del primer commit nuevo. Nota: implementado y verificado el 2026-08-25; pendiente de revisión humana.
 - [ ] **REVIEW · P0** — Inicializar monorepo con Turborepo y pnpm. Nota: configuración raíz y lockfile reproducible implementados y verificados el 2026-08-25; pendiente de revisión humana.
 - [ ] **REVIEW · P0** — Versionar el plan maestro en `docs/PLAN_MODERNIZACION_POS_RESTAURANTE.md` y documentar en README la decisión greenfield/API-first. Nota: copia byte a byte y README greenfield/API-first verificados el 2026-08-25; pendiente de revisión humana.
