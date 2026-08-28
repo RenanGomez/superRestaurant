@@ -1,0 +1,33 @@
+{
+  "name": "@super-restaurant/adr-010-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@super-restaurant/config": "workspace:*",
+    "@super-restaurant/shared-types": "workspace:*",
+    "@types/node": "26.3.0",
+    "@types/pg": "8.23.1"
+  },
+  "dependencies": {
+    "@nestjs/common": "11.2.3",
+    "pg": "8.23.0",
+    "@supabase/supabase-js": "2.112.4",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs --ext .ts src options",
+    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node .test-dist/src/gates.test.js && node .test-dist/options/a-own-stack/src/preflight.test.js && node .test-dist/options/b-supabase-nest/src/preflight.test.js && node .test-dist/options/c-supabase-direct/src/preflight.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
+    "test:option-a:gates": "pnpm run build && node dist/options/a-own-stack/src/run-gates.js",
+    "test:option-b:local": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.option-b.test.json && node .test-dist/options/b-supabase-nest/src/preflight.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
+    "auth:bootstrap": "pnpm run build && node dist/options/b-supabase-nest/src/run-auth-bootstrap.js",
+    "auth:cleanup": "pnpm run build && node dist/options/b-supabase-nest/src/run-auth-cleanup.js",
+    "test:option-b:gates": "pnpm run test:option-b:local && pnpm run build && node dist/options/b-supabase-nest/src/run-integration.js",
+    "test:option-b:fresh-push": "pnpm run build && node dist/options/b-supabase-nest/src/run-fresh-remote-push.js",
+    "test:option-b:rls": "pnpm run build && node dist/options/b-supabase-nest/src/run-rls-read-probe.js",
+    "probe:option-c:read": "pnpm run build && node dist/options/c-supabase-direct/src/run-read-probe.js",
+    "typecheck": "tsc --noEmit --project tsconfig.json"
+  }
+}

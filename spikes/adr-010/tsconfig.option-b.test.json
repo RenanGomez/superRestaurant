@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "composite": false,
+    "types": ["node"],
+    "outDir": "./.test-dist"
+  },
+  "include": ["src/model.ts", "options/b-supabase-nest/src/**/*.ts"],
+  "exclude": []
+}

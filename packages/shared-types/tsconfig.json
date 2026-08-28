@@ -1,0 +1,10 @@
+{
+  "extends": "@super-restaurant/config/tsconfig/package.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

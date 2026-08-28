@@ -1,0 +1,21 @@
+{
+  "name": "@super-restaurant/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "eslint",
+    "tsconfig"
+  ],
+  "exports": {
+    "./eslint/base": "./eslint/base.mjs",
+    "./tsconfig/base.json": "./tsconfig/base.json",
+    "./tsconfig/package.json": "./tsconfig/package.json"
+  },
+  "scripts": {
+    "build": "tsc --noEmit --project tsconfig.verify.json",
+    "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs eslint/base.mjs",
+    "test": "tsc --noEmit --project tsconfig.verify.json",
+    "typecheck": "tsc --noEmit --project tsconfig.verify.json"
+  }
+}

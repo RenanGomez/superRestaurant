@@ -1,0 +1,26 @@
+{
+  "name": "@super-restaurant/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "@super-restaurant/config": "workspace:*",
+    "@types/node": "26.3.0"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs src",
+    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node .test-dist/money.test.js && node .test-dist/order-state.test.js && node .test-dist/order-totals.test.js && node .test-dist/order.test.js && node .test-dist/modifiers.test.js && node .test-dist/payment.test.js && node .test-dist/cash-register.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
+    "typecheck": "tsc --noEmit --project tsconfig.json"
+  }
+}

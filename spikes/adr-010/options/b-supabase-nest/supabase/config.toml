@@ -1,0 +1,31 @@
+# Local CLI metadata for the disposable ADR-010 option-B project. The remote
+# project reference is intentionally absent; `supabase link` stores it under
+# the ignored supabase/.temp directory.
+project_id = "adr010-option-b"
+
+[api]
+enabled = true
+schemas = ["public", "graphql_public", "adr010_b"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+# Match the hosted project's pre-spike Auth settings exactly. Supabase CLI
+# materializes defaults for omitted sections during `config push`, so these
+# values prevent an API-schema-only change from weakening Auth by accident.
+[auth]
+site_url = "http://localhost:3000"
+additional_redirect_urls = []
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
+[auth.email]
+enable_confirmations = true
+max_frequency = "1m"
+otp_length = 8
+
+# The isolated free-tier spike does not use Storage vector buckets. Keep the
+# hosted value explicit so config push does not attempt a paid-tier feature.
+[storage.vector]
+enabled = false

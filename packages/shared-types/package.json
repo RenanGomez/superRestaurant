@@ -1,0 +1,25 @@
+{
+  "name": "@super-restaurant/shared-types",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "@super-restaurant/config": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs src",
+    "test": "tsc --noEmit --project tsconfig.test.json",
+    "typecheck": "tsc --noEmit --project tsconfig.json"
+  }
+}

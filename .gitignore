@@ -1,0 +1,72 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Environment files and secrets (keep safe examples versioned)
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.test.example
+
+# Build and framework output
+dist/
+build/
+out/
+.next/
+.expo/
+web-build/
+*.tsbuildinfo
+
+# Mobile build output and signing credentials
+**/android/.gradle/
+**/android/app/build/
+**/ios/Pods/
+**/ios/build/
+*.apk
+*.aab
+*.ipa
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+xcuserdata/
+
+# Test and coverage artifacts
+coverage/
+.test-dist/
+.nyc_output/
+playwright-report/
+test-results/
+
+# Monorepo and tool caches
+.turbo/
+.cache/
+.parcel-cache/
+.eslintcache
+.codegraph/
+
+# ADR experiment evidence (never commit generated captures or credentials)
+spikes/*/evidence/
+
+# Supabase CLI local link/cache metadata (contains the project reference)
+**/supabase/.temp/
+
+# Logs and temporary files
+*.log
+*.log.*
+*.tmp
+tmp/
+temp/
+
+# Local databases and generated artifacts
+*.sqlite
+*.sqlite3
+*.db
+
+# Editors and operating systems
+.vscode/*
+!.vscode/settings.example.json
+.idea/
+.DS_Store
+Thumbs.db
