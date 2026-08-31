@@ -25,12 +25,25 @@ import {
   orderAcceptsNewLines,
   transitionOrder,
   transitionOrderItem,
+  type CancellableOrderItemState,
+  type CancellationAuthorization,
   type OrderItemCancellationAudit,
   type OrderItemState,
-  type OrderItemTransitionContext,
   type OrderState,
 } from "./order-state.js";
 import { Money } from "./money.js";
+import {
+  createOrderCreatedAuditEvent,
+  createOrderItemAddedAuditEvent,
+  createOrderItemStateChangedAuditEvent,
+  createOrderStateChangedAuditEvent,
+  type OrderAuditContext,
+  type OrderAuditEvent,
+  type OrderCreatedAuditEvent,
+  type OrderItemAddedAuditEvent,
+  type OrderItemStateChangedAuditEvent,
+  type OrderStateChangedAuditEvent,
+} from "./order-audit.js";
 
 export type OrderChannel = "table" | "counter" | "takeout" | "delivery";
 
@@ -73,16 +86,32 @@ export interface CreateOrderInput {
 
 export type AddOrderItemInput = OrderItemPricingInput;
 
-/** Aggregate-cancellation evidence mirrors the sensitive line-cancellation record. */
-export type OrderCancellationAudit = OrderItemCancellationAudit;
+/** Immutable evidence retained by a cancelled aggregate and linked to its audit event. */
+export interface OrderCancellationAudit {
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly from: "draft" | "open";
+  readonly actorId: string;
+  readonly branchId: string;
+  readonly deviceId: string;
+  readonly occurredAt: string;
+  readonly reason: string;
+  readonly authorization: CancellationAuthorization;
+}
 
-export interface OrderTransitionContext {
-  readonly cancellationAudit?: OrderCancellationAudit;
+/** The next aggregate and its inseparable audit fact; persistence must commit both atomically. */
+export interface OrderMutation<TEvent extends OrderAuditEvent = OrderAuditEvent> {
+  readonly order: Order;
+  readonly auditEvent: TEvent;
 }
 
 /** Creates a draft order after validating and freezing its monetary and channel facts. */
-export function createOrder(input: CreateOrderInput): Order {
+export function createOrder(
+  input: CreateOrderInput,
+  auditContext: OrderAuditContext,
+): OrderMutation<OrderCreatedAuditEvent> {
   assertRecord(input, "order");
+  assertStableValueGraph(input, "order");
   assertText(input.orderId, "orderId");
   assertText(input.restaurantId, "restaurantId");
   assertText(input.branchId, "branchId");
@@ -95,7 +124,7 @@ export function createOrder(input: CreateOrderInput): Order {
     ...(input.tip === undefined ? {} : { tip: input.tip }),
   }), "monetary policy");
 
-  return freezeOrder({
+  const order = freezeOrder({
     orderId: input.orderId,
     restaurantId: input.restaurantId,
     branchId: input.branchId,
@@ -108,6 +137,7 @@ export function createOrder(input: CreateOrderInput): Order {
     ...(totals.input.orderDiscount === undefined ? {} : { orderDiscount: totals.input.orderDiscount }),
     ...(totals.input.tip === undefined ? {} : { tip: totals.input.tip }),
   });
+  return freezeMutation(order, createOrderCreatedAuditEvent(auditScope(order), auditContext));
 }
 
 /** The aggregate-facing predicate delegates the shared state rule after fail-closed revalidation. */
@@ -116,8 +146,12 @@ export function canAddOrderItem(order: Order): boolean {
   return orderAcceptsNewLines(order.status);
 }
 
-/** Adds one pending, tenant-scoped line and returns a new immutable aggregate. */
-export function addOrderItem(order: Order, input: AddOrderItemInput): Order {
+/** Adds one pending, tenant-scoped line and returns the aggregate with its audit fact. */
+export function addOrderItem(
+  order: Order,
+  input: AddOrderItemInput,
+  auditContext: OrderAuditContext,
+): OrderMutation<OrderItemAddedAuditEvent> {
   assertValidOrder(order);
   assertRecord(input, "item snapshot");
   assertStableValueGraph(input, "item snapshot");
@@ -136,7 +170,11 @@ export function addOrderItem(order: Order, input: AddOrderItemInput): Order {
     branchId: order.branchId,
     status: "pending",
   });
-  return freezeOrder({ ...order, items: [...order.items, item] });
+  const nextOrder = freezeOrder({ ...order, items: [...order.items, item] });
+  return freezeMutation(
+    nextOrder,
+    createOrderItemAddedAuditEvent(auditScope(order), item.orderItemId, auditContext),
+  );
 }
 
 /**
@@ -147,41 +185,89 @@ export function addOrderItem(order: Order, input: AddOrderItemInput): Order {
 export function transitionOrderStatus(
   order: Order,
   to: OrderState,
-  context: OrderTransitionContext = {},
-): Order {
+  auditContext: OrderAuditContext,
+): OrderMutation<OrderStateChangedAuditEvent> {
   assertValidOrder(order);
-  const status = transitionOrder(order.status, to);
+  const from = order.status;
+  const status = transitionOrder(from, to);
   if (status === "closed") {
     assertOrderCanBeClosed(order);
-    return freezeOrder({ ...order, status });
+    const nextOrder = freezeOrder({ ...order, status });
+    return freezeMutation(
+      nextOrder,
+      createOrderStateChangedAuditEvent(auditScope(order), from, status, [], auditContext),
+    );
   }
-  if (status !== "cancelled") return freezeOrder({ ...order, status });
+  if (status !== "cancelled") {
+    const nextOrder = freezeOrder({ ...order, status });
+    return freezeMutation(
+      nextOrder,
+      createOrderStateChangedAuditEvent(auditScope(order), from, status, [], auditContext),
+    );
+  }
 
-  const cancellationAudit = assertOrderCancellationAudit(order, context.cancellationAudit);
   assertOrderCanBeCancelled(order);
+  const automaticallyCancelledOrderItemIds = order.items
+    .filter((item) => item.status === "pending")
+    .map((item) => item.orderItemId);
+  const auditEvent = createOrderStateChangedAuditEvent(
+    auditScope(order),
+    from,
+    status,
+    automaticallyCancelledOrderItemIds,
+    auditContext,
+  );
+  const cancellationAudit = orderCancellationAuditFromEvent(auditEvent);
+  const automaticallyCancelledItemAudit = orderItemCancellationAuditFromOrderEvent(auditEvent);
   const items = order.items.map((item) => item.status === "pending"
-    ? freezeOrderItem({ ...item, status: "cancelled" })
+    ? freezeOrderItem({
+      ...item,
+      status: "cancelled",
+      cancellationAudit: automaticallyCancelledItemAudit,
+    })
     : item);
-  return freezeOrder({ ...order, status, items, cancellationAudit });
+  return freezeMutation(
+    freezeOrder({ ...order, status, items, cancellationAudit }),
+    auditEvent,
+  );
 }
 
 /** Delegates line lifecycle validation and preserves validated cancellation evidence. */
-export function transitionOrderItemStatus(order: Order, orderItemId: string, to: OrderItemState, context: OrderItemTransitionContext = {}): Order {
+export function transitionOrderItemStatus(
+  order: Order,
+  orderItemId: string,
+  to: OrderItemState,
+  auditContext: OrderAuditContext,
+): OrderMutation<OrderItemStateChangedAuditEvent> {
   assertValidOrder(order);
   assertOrderAllowsItemMutation(order.status);
   const item = findItem(order, orderItemId);
-  if (to === "cancelled" && item.status !== "pending") {
-    assertCancellationScope(order, context.cancellationAudit);
-  }
-  const transition = transitionOrderItem(item.status, to, context);
+  const auditEvent = createOrderItemStateChangedAuditEvent(
+    auditScope(order),
+    item.orderItemId,
+    item.status,
+    to,
+    auditContext,
+  );
+  const cancellationAudit = to === "cancelled"
+    ? orderItemCancellationAuditFromEvent(auditEvent)
+    : undefined;
+  const transition = transitionOrderItem(
+    item.status,
+    to,
+    cancellationAudit === undefined ? {} : { cancellationAudit },
+  );
   const nextItem = freezeOrderItem({ ...item, status: transition.to, ...(transition.cancellationAudit === undefined ? {} : { cancellationAudit: transition.cancellationAudit }) });
-  return replaceItem(order, nextItem);
+  return freezeMutation(replaceItem(order, nextItem), auditEvent);
 }
 
 /** Explicit convenience operation for cancellation; post-send evidence remains mandatory in the state machine. */
-export function cancelOrderItem(order: Order, orderItemId: string, context: OrderItemTransitionContext = {}): Order {
-  assertValidOrder(order);
-  return transitionOrderItemStatus(order, orderItemId, "cancelled", context);
+export function cancelOrderItem(
+  order: Order,
+  orderItemId: string,
+  auditContext: OrderAuditContext,
+): OrderMutation<OrderItemStateChangedAuditEvent> {
+  return transitionOrderItemStatus(order, orderItemId, "cancelled", auditContext);
 }
 
 /** Uses the existing calculator and deliberately excludes cancelled lines from the payable amount. */
@@ -249,14 +335,22 @@ function assertValidOrder(order: Order): void {
     itemIds.add(item.orderItemId);
     if (item.restaurantId !== order.restaurantId || item.branchId !== order.branchId) throw new OrderItemScopeMismatchError();
     if (typeof item.status !== "string" || !orderItemStates.has(item.status as OrderItemState)) throw new InvalidOrderAggregateError("item status");
-    if (item.cancellationAudit !== undefined) {
-      if (!isRecord(item.cancellationAudit) || item.cancellationAudit.branchId !== order.branchId) {
+    const itemCancellationAudit = item.cancellationAudit as OrderItemCancellationAudit | undefined;
+    if (item.status === "cancelled" && itemCancellationAudit === undefined) {
+      throw new InvalidOrderAggregateError("cancellation audit");
+    }
+    if (itemCancellationAudit !== undefined) {
+      if (!isRecord(itemCancellationAudit) || itemCancellationAudit.branchId !== order.branchId) {
         throw new OrderItemCancellationScopeMismatchError();
       }
       if (item.status !== "cancelled") throw new InvalidOrderAggregateError("cancellation audit");
       // Reuse the state-machine validation rather than accepting malformed audit history.
       asDomainValidation(
-        () => transitionOrderItem("sent", "cancelled", { cancellationAudit: item.cancellationAudit as unknown as OrderItemCancellationAudit }),
+        () => transitionOrderItem(
+          itemCancellationAudit.from,
+          "cancelled",
+          { cancellationAudit: itemCancellationAudit },
+        ),
         "cancellation audit",
       );
     }
@@ -289,7 +383,73 @@ function replaceItem(order: Order, item: OrderItem): Order {
   return freezeOrder({ ...order, items: order.items.map((candidate) => candidate.orderItemId === item.orderItemId ? item : candidate) });
 }
 
-function assertCancellationScope(order: Order, audit: OrderItemCancellationAudit | undefined): void {
+function auditScope(order: Pick<Order, "restaurantId" | "branchId" | "orderId">) {
+  return {
+    restaurantId: order.restaurantId,
+    branchId: order.branchId,
+    orderId: order.orderId,
+  };
+}
+
+function orderItemCancellationAuditFromEvent(
+  event: OrderItemStateChangedAuditEvent,
+): OrderItemCancellationAudit {
+  const common = {
+    eventId: event.eventId,
+    idempotencyKey: event.idempotencyKey,
+    from: event.from as CancellableOrderItemState,
+    actorId: event.actorId,
+    branchId: event.branchId,
+    deviceId: event.deviceId,
+    occurredAt: event.occurredAt,
+    reason: event.reason!,
+  };
+  if (event.from === "pending") {
+    return deepFreeze({
+      ...common,
+      from: event.from,
+      ...(event.authorization === undefined ? {} : { authorization: event.authorization }),
+    });
+  }
+  if (event.from !== "sent" && event.from !== "preparing" && event.from !== "ready") {
+    throw new InvalidOrderAggregateError("cancellation audit");
+  }
+  return deepFreeze({ ...common, from: event.from, authorization: event.authorization! });
+}
+
+function orderItemCancellationAuditFromOrderEvent(
+  event: OrderStateChangedAuditEvent,
+): OrderItemCancellationAudit {
+  return deepFreeze({
+    eventId: event.eventId,
+    idempotencyKey: event.idempotencyKey,
+    from: "pending",
+    actorId: event.actorId,
+    branchId: event.branchId,
+    deviceId: event.deviceId,
+    occurredAt: event.occurredAt,
+    reason: event.reason!,
+    authorization: event.authorization!,
+  });
+}
+
+function orderCancellationAuditFromEvent(
+  event: OrderStateChangedAuditEvent,
+): OrderCancellationAudit {
+  return deepFreeze({
+    eventId: event.eventId,
+    idempotencyKey: event.idempotencyKey,
+    from: event.from as "draft" | "open",
+    actorId: event.actorId,
+    branchId: event.branchId,
+    deviceId: event.deviceId,
+    occurredAt: event.occurredAt,
+    reason: event.reason!,
+    authorization: event.authorization!,
+  });
+}
+
+function assertCancellationScope(order: Order, audit: { readonly branchId: string } | undefined): void {
   if (audit !== undefined && audit.branchId !== order.branchId) throw new OrderItemCancellationScopeMismatchError();
 }
 
@@ -298,11 +458,32 @@ function assertOrderCancellationAudit(
   audit: OrderCancellationAudit | undefined,
 ): OrderCancellationAudit {
   assertCancellationScope(order, audit);
-  return asDomainValidation(() => transitionOrderItem(
-    "sent",
+  if (!isRecord(audit)) throw new InvalidOrderAggregateError("cancellation audit");
+  assertOwnDataProperties(
+    audit,
+    ["eventId", "idempotencyKey", "from", "actorId", "branchId", "deviceId", "occurredAt", "reason", "authorization"],
+    [],
+    "cancellation audit",
+  );
+  if (audit.from !== "draft" && audit.from !== "open") {
+    throw new InvalidOrderAggregateError("cancellation audit");
+  }
+  const event = createOrderStateChangedAuditEvent(
+    auditScope(order),
+    audit.from,
     "cancelled",
-    audit === undefined ? {} : { cancellationAudit: audit },
-  ).cancellationAudit!, "cancellation audit");
+    [],
+    {
+      eventId: audit.eventId,
+      idempotencyKey: audit.idempotencyKey,
+      actorId: audit.actorId,
+      deviceId: audit.deviceId,
+      occurredAt: audit.occurredAt,
+      reason: audit.reason,
+      authorization: audit.authorization,
+    },
+  );
+  return orderCancellationAuditFromEvent(event);
 }
 
 function assertOrderCanBeCancelled(order: Order): void {
@@ -473,6 +654,9 @@ function asDomainValidation<T>(operation: () => T, field: string): T {
 
 function freezeOrderItem(item: OrderItem): OrderItem { return deepFreeze(item); }
 function freezeOrder(order: Order): Order { return deepFreeze(order); }
+function freezeMutation<TEvent extends OrderAuditEvent>(order: Order, auditEvent: TEvent): OrderMutation<TEvent> {
+  return deepFreeze({ order, auditEvent });
+}
 
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   if (isRecord(value) && !seen.has(value)) {

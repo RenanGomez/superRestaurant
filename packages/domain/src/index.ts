@@ -44,6 +44,20 @@ export {
   ModifierOptionNotInGroupError,
   DuplicateModifierOptionIdError,
   DuplicateModifierSelectionError,
+  DuplicateMenuEntityIdError,
+  DuplicateMenuModifierGroupSelectionError,
+  DuplicateMenuProductSkuError,
+  InvalidOrderAuditContextError,
+  InactiveMenuCategoryError,
+  InactiveMenuProductError,
+  MenuCatalogRestaurantMismatchError,
+  MenuCatalogVersionMismatchError,
+  MenuModifierGroupNotAllowedError,
+  MenuProductCategoryNotFoundError,
+  MenuProductModifierGroupNotFoundError,
+  MenuProductNotFoundError,
+  OrderAuditAuthorizationRequiredError,
+  OrderAuditReasonRequiredError,
 } from "./errors.js";
 export {
   DuplicateRefundIdError,
@@ -159,8 +173,18 @@ export type {
   OrderCancellationAudit,
   OrderChannel,
   OrderItem,
-  OrderTransitionContext,
+  OrderMutation,
 } from "./order.js";
+export { ORDER_AUDIT_SCHEMA_VERSION } from "./order-audit.js";
+export type {
+  OrderAuditContext,
+  OrderAuditEvent,
+  OrderAuditScope,
+  OrderCreatedAuditEvent,
+  OrderItemAddedAuditEvent,
+  OrderItemStateChangedAuditEvent,
+  OrderStateChangedAuditEvent,
+} from "./order-audit.js";
 export { createModifierSelectionSnapshot, validateModifierGroupCatalog } from "./modifiers.js";
 export type {
   ModifierGroupCatalog,
@@ -185,3 +209,12 @@ export type {
   OrderPricingInput,
   TaxSnapshot,
 } from "./order-totals.js";
+export { createMenuProductPriceSnapshot, validateMenuCatalog } from "./menu.js";
+export type {
+  MenuCatalog,
+  MenuCategoryCatalog,
+  MenuModifierGroupSelection,
+  MenuProductCatalog,
+  MenuProductSelectionContext,
+  ValidatedMenuCatalog,
+} from "./menu.js";

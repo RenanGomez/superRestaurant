@@ -18,9 +18,10 @@ const remoteFixtures: SpikeFixtures = {
 };
 
 const adr010GoEligibility = Object.freeze({
-  eligibleForAdr010Go: false,
-  spikeBlockingEvidence: Object.freeze([
-    "human write-frontier inspection (gate 4)",
+  eligibleForAdr010Go: true,
+  spikeBlockingEvidence: Object.freeze([]),
+  externalEvidenceDemonstrated: Object.freeze([
+    "human write-frontier ACCEPT by Emmanuel on 2026-08-29 (gate 4)",
     "complete five-migration application from a second fresh remote project/CI (gate 7)",
   ]),
   operationalEvidencePending: Object.freeze([
@@ -30,9 +31,9 @@ const adr010GoEligibility = Object.freeze({
 
 /**
  * Explicit remote runner. It creates disposable real Auth users, executes the
- * common gates and cleans them up. A successful run is evidence, but remains
- * ineligible for GO until gates 4 and 7 are closed. Physical disaster recovery
- * remains reported separately as operational production evidence.
+ * common gates and cleans them up. Gates 4 and 7 are recorded as separately
+ * demonstrated external evidence, so the spike is eligible for ADR scoring.
+ * Physical disaster recovery remains separate operational production evidence.
  */
 const config = requireSupabaseGateIntegrationOptIn(process.env);
 const adapter = new SupabaseNestAdr010Adapter(config);
@@ -51,7 +52,7 @@ try {
     report,
     refreshTokenEvidence,
     verifiedAgainstRemoteSupabase: ["auth-principal", "refresh-token-rotation-revocation", "isolation", "transaction", "idempotency", "idempotency-payload-binding", "cash-payment-idempotency", "cash-refund-compensation", "cash-ledger-audit", "kds-cursor-recovery", "scope-revocation", "migration-preservation", "logical-backup-restore", "restore-empty-target-guard", "client-secret-surface"],
-    notDemonstrated: ["migration application from a fresh remote project/CI", "physical disaster restore", "human write-frontier inspection"],
+    notDemonstrated: ["physical disaster restore"],
     goEligibility: adr010GoEligibility,
     eligibleForAdr010Go: adr010GoEligibility.eligibleForAdr010Go,
   }));

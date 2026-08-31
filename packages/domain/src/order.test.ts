@@ -7,7 +7,9 @@ import {
   canAddOrderItem,
   cancelOrderItem,
   createOrder,
+  DomainError,
   DuplicateOrderItemIdError,
+  InvalidOrderAuditContextError,
   InvalidOrderAggregateError,
   InvalidOrderChannelError,
   InvalidOrderTableAssignmentError,
@@ -16,15 +18,21 @@ import {
   OrderCancellationRequiresItemCancellationError,
   OrderClosureRequiresItemCompletionError,
   OrderDoesNotAcceptNewLinesError,
-  OrderItemCancellationScopeMismatchError,
-  OrderItemCancellationAuditContextRequiredError,
   OrderItemNotFoundError,
   OrderItemMutationNotAllowedError,
   OrderItemScopeMismatchError,
   transitionOrderItemStatus,
   transitionOrderStatus,
 } from "./index.js";
-import type { AddOrderItemInput, OrderItemCancellationAudit } from "./index.js";
+import type {
+  AddOrderItemInput,
+  Order,
+  OrderAuditContext,
+  OrderCancellationAudit,
+  OrderItemCancellationAudit,
+  OrderItemState,
+  OrderState,
+} from "./index.js";
 
 function mxn(amount: number): Money {
   return new Money(amount, "MXN");
@@ -47,15 +55,57 @@ function line(overrides: Partial<AddOrderItemInput> = {}): AddOrderItemInput {
   };
 }
 
-function audit(overrides: Partial<OrderItemCancellationAudit> = {}): OrderItemCancellationAudit {
+function audit(overrides: Partial<OrderAuditContext> = {}): OrderAuditContext {
   return {
+    eventId: "event-1",
+    idempotencyKey: "idempotency-1",
+    actorId: "cashier-1",
+    deviceId: "terminal-1",
+    occurredAt: "2026-08-28T12:00:00Z",
+    reason: "Producto agotado",
+    authorization: { approved: true, actorId: "manager-1" },
+    ...overrides,
+  };
+}
+
+function cancellationEvidence(
+  from: "pending" | "sent" | "preparing" | "ready" = "sent",
+): OrderItemCancellationAudit {
+  return {
+    eventId: "event-1",
+    idempotencyKey: "idempotency-1",
+    from,
     actorId: "cashier-1",
     branchId: "branch-1",
     deviceId: "terminal-1",
     occurredAt: "2026-08-28T12:00:00Z",
     reason: "Producto agotado",
     authorization: { approved: true, actorId: "manager-1" },
-    ...overrides,
+  };
+}
+
+function orderCancellationEvidence(from: "draft" | "open" = "draft"): OrderCancellationAudit {
+  return {
+    eventId: "event-1",
+    idempotencyKey: "idempotency-1",
+    from,
+    actorId: "cashier-1",
+    branchId: "branch-1",
+    deviceId: "terminal-1",
+    occurredAt: "2026-08-28T12:00:00Z",
+    reason: "Producto agotado",
+    authorization: { approved: true, actorId: "manager-1" },
+  };
+}
+
+function auditWithoutAuthorization(): OrderAuditContext {
+  return {
+    eventId: "event-1",
+    idempotencyKey: "idempotency-1",
+    actorId: "cashier-1",
+    deviceId: "terminal-1",
+    occurredAt: "2026-08-28T12:00:00Z",
+    reason: "Producto agotado",
   };
 }
 
@@ -68,8 +118,8 @@ test("Order creates an immutable tenant-scoped draft and adds detached immutable
     channel: "counter",
     currency: "MXN",
     timeZone: "America/Mexico_City",
-  });
-  const next = addOrderItem(order, source);
+  }, audit()).order;
+  const next = addOrderItem(order, source, audit()).order;
 
   assert.equal(order.items.length, 0);
   assert.equal(next.items.length, 1);
@@ -86,113 +136,143 @@ test("Order creates an immutable tenant-scoped draft and adds detached immutable
 });
 
 test("Order rejects duplicate lines and additions after its shared state rule closes the aggregate", () => {
-  const order = addOrderItem(baseOrder(), line());
-  assert.throws(() => addOrderItem(order, line()), DuplicateOrderItemIdError);
+  const order = added(baseOrder(), line());
+  assert.throws(() => addOrderItem(order, line(), audit()), DuplicateOrderItemIdError);
 
-  const paid = transitionOrderStatus(transitionOrderStatus(order, "open"), "paid");
+  const paid = changedOrder(changedOrder(order, "open"), "paid");
   assert.equal(canAddOrderItem(paid), false);
-  assert.throws(() => addOrderItem(paid, line({ orderItemId: "line-2" })), OrderDoesNotAcceptNewLinesError);
+  assert.throws(() => addOrderItem(paid, line({ orderItemId: "line-2" }), audit()), OrderDoesNotAcceptNewLinesError);
 });
 
 test("Order requires a valid channel and table identity only for table service", () => {
-  assert.throws(() => createOrder({ ...baseInput(), channel: "drive_through" as never }), InvalidOrderChannelError);
-  assert.throws(() => createOrder({ ...baseInput(), channel: "table" }), InvalidOrderTableAssignmentError);
-  assert.throws(() => createOrder({ ...baseInput(), channel: "counter", tableId: "table-1" }), InvalidOrderTableAssignmentError);
+  assert.throws(() => createOrder({ ...baseInput(), channel: "drive_through" as never }, audit()), InvalidOrderChannelError);
+  assert.throws(() => createOrder({ ...baseInput(), channel: "table" }, audit()), InvalidOrderTableAssignmentError);
+  assert.throws(() => createOrder({ ...baseInput(), channel: "counter", tableId: "table-1" }, audit()), InvalidOrderTableAssignmentError);
 
-  const table = createOrder({ ...baseInput(), channel: "table", tableId: "table-1" });
+  const table = createOrder({ ...baseInput(), channel: "table", tableId: "table-1" }, audit()).order;
   assert.equal(table.channel, "table");
   assert.equal(table.tableId, "table-1");
 });
 
+test("Order creation rejects accessors, hostile prototypes, and proxies before reading input facts", () => {
+  let channelReads = 0;
+  const accessorInput = { ...baseInput() };
+  Object.defineProperty(accessorInput, "channel", {
+    enumerable: true,
+    get() {
+      channelReads += 1;
+      return channelReads === 1 ? "table" : "counter";
+    },
+  });
+  const hostilePrototype = { ...baseInput() };
+  Object.setPrototypeOf(hostilePrototype, { tableId: "inherited-table" });
+  const hostileProxy = new Proxy({ ...baseInput() }, {
+    ownKeys() {
+      throw new TypeError("hostile ownKeys trap");
+    },
+  });
+
+  for (const invalidInput of [accessorInput, hostilePrototype, hostileProxy]) {
+    assert.throws(
+      () => createOrder(invalidInput as never, audit()),
+      InvalidOrderAggregateError,
+    );
+  }
+  assert.equal(channelReads, 0);
+});
+
 test("Order delegates item transitions and stores immutable, branch-scoped cancellation audit evidence", () => {
-  const sent = transitionOrderItemStatus(addOrderItem(baseOrder(), line()), "line-1", "sent");
-  const cancelled = cancelOrderItem(sent, "line-1", { cancellationAudit: audit() });
+  const sent = changedItem(added(baseOrder(), line()), "line-1", "sent");
+  const cancelled = cancelOrderItem(sent, "line-1", audit()).order;
 
   assert.equal(sent.items[0]?.status, "sent");
   assert.equal(cancelled.items[0]?.status, "cancelled");
-  assert.deepEqual(cancelled.items[0]?.cancellationAudit, audit());
+  assert.deepEqual(cancelled.items[0]?.cancellationAudit, cancellationEvidence());
   assert.equal(Object.isFrozen(cancelled.items[0]?.cancellationAudit), true);
-  assert.throws(
-    () => cancelOrderItem(sent, "line-1", { cancellationAudit: audit({ branchId: "branch-2" }) }),
-    OrderItemCancellationScopeMismatchError,
-  );
-  assert.throws(() => cancelOrderItem(sent, "missing", { cancellationAudit: audit() }), OrderItemNotFoundError);
+  assert.throws(() => cancelOrderItem(sent, "missing", audit()), OrderItemNotFoundError);
 });
 
 test("Order totals use the shared calculator and omit cancelled lines without mutating history", () => {
-  const twoLines = addOrderItem(addOrderItem(baseOrder(), line()), line({ orderItemId: "line-2", snapshot: { ...line().snapshot, productId: "soda", name: "Refresco", unitPrice: mxn(5000) } }));
+  const twoLines = added(added(baseOrder(), line()), line({ orderItemId: "line-2", snapshot: { ...line().snapshot, productId: "soda", name: "Refresco", unitPrice: mxn(5000) } }));
   const total = calculateOrderAggregateTotals(twoLines);
   assert.equal(total.total.amountMinor, 15000);
 
-  const cancelled = cancelOrderItem(twoLines, "line-1");
+  const cancelled = cancelOrderItem(twoLines, "line-1", auditWithoutAuthorization()).order;
   const afterCancellation = calculateOrderAggregateTotals(cancelled);
   assert.equal(afterCancellation.total.amountMinor, 5000);
+  assert.deepEqual(cancelled.items[0]?.cancellationAudit, {
+    eventId: "event-1",
+    idempotencyKey: "idempotency-1",
+    from: "pending",
+    actorId: "cashier-1",
+    branchId: "branch-1",
+    deviceId: "terminal-1",
+    occurredAt: "2026-08-28T12:00:00Z",
+    reason: "Producto agotado",
+  });
   assert.equal(twoLines.items[0]?.status, "pending");
 });
 
 test("Order cancellation retains complete evidence, cancels pending lines atomically, and makes its total zero", () => {
-  const pending = addOrderItem(
-    addOrderItem(createOrder({ ...baseInput(), tip: mxn(250) }), line()),
+  const pending = added(
+    added(createOrder({ ...baseInput(), tip: mxn(250) }, audit()).order, line()),
     line({ orderItemId: "line-2" }),
   );
 
   assert.throws(
-    () => transitionOrderStatus(pending, "cancelled"),
-    OrderItemCancellationAuditContextRequiredError,
-  );
-  assert.throws(
-    () => transitionOrderStatus(pending, "cancelled", { cancellationAudit: audit({ branchId: "branch-2" }) }),
-    OrderItemCancellationScopeMismatchError,
+    () => transitionOrderStatus(pending, "cancelled", undefined as never),
+    InvalidOrderAuditContextError,
   );
 
-  const cancelled = transitionOrderStatus(pending, "cancelled", { cancellationAudit: audit() });
+  const cancelled = transitionOrderStatus(pending, "cancelled", audit()).order;
   assert.equal(pending.items[0]?.status, "pending");
   assert.deepEqual(cancelled.items.map((item) => item.status), ["cancelled", "cancelled"]);
-  assert.deepEqual(cancelled.cancellationAudit, audit());
+  assert.deepEqual(cancelled.cancellationAudit, orderCancellationEvidence());
+  assert.deepEqual(cancelled.items[0]?.cancellationAudit, cancellationEvidence("pending"));
   assert.equal(Object.isFrozen(cancelled.cancellationAudit), true);
   assert.equal(Object.isFrozen(cancelled.cancellationAudit?.authorization), true);
   assert.equal(calculateOrderAggregateTotals(cancelled).total.amountMinor, 0);
 });
 
 test("Order cancellation requires active kitchen lines to be cancelled individually first", () => {
-  const sent = transitionOrderItemStatus(addOrderItem(baseOrder(), line()), "line-1", "sent");
+  const sent = changedItem(added(baseOrder(), line()), "line-1", "sent");
   assert.throws(
-    () => transitionOrderStatus(sent, "cancelled", { cancellationAudit: audit() }),
+    () => transitionOrderStatus(sent, "cancelled", audit()),
     OrderCancellationRequiresItemCancellationError,
   );
 
-  const lineCancelled = cancelOrderItem(sent, "line-1", { cancellationAudit: audit() });
-  const cancelled = transitionOrderStatus(lineCancelled, "cancelled", { cancellationAudit: audit() });
+  const lineCancelled = cancelOrderItem(sent, "line-1", audit()).order;
+  const cancelled = transitionOrderStatus(lineCancelled, "cancelled", audit()).order;
   assert.equal(cancelled.status, "cancelled");
 });
 
 test("Closed and cancelled orders reject item mutations while paid orders preserve the prepayment boundary", () => {
-  const paid = transitionOrderStatus(transitionOrderStatus(addOrderItem(baseOrder(), line()), "open"), "paid");
-  assert.equal(transitionOrderItemStatus(paid, "line-1", "sent").items[0]?.status, "sent");
+  const paid = changedOrder(changedOrder(added(baseOrder(), line()), "open"), "paid");
+  assert.equal(changedItem(paid, "line-1", "sent").items[0]?.status, "sent");
 
-  const sent = transitionOrderItemStatus(paid, "line-1", "sent");
-  const preparing = transitionOrderItemStatus(sent, "line-1", "preparing");
-  const ready = transitionOrderItemStatus(preparing, "line-1", "ready");
-  const closed = transitionOrderStatus(transitionOrderItemStatus(ready, "line-1", "delivered"), "closed");
-  assert.throws(() => transitionOrderItemStatus(closed, "line-1", "sent"), OrderItemMutationNotAllowedError);
+  const sent = changedItem(paid, "line-1", "sent");
+  const preparing = changedItem(sent, "line-1", "preparing");
+  const ready = changedItem(preparing, "line-1", "ready");
+  const closed = changedOrder(changedItem(ready, "line-1", "delivered"), "closed");
+  assert.throws(() => transitionOrderItemStatus(closed, "line-1", "sent", audit()), OrderItemMutationNotAllowedError);
 
-  const cancelled = transitionOrderStatus(addOrderItem(baseOrder(), line()), "cancelled", { cancellationAudit: audit() });
-  assert.throws(() => cancelOrderItem(cancelled, "line-1"), OrderItemMutationNotAllowedError);
+  const cancelled = transitionOrderStatus(added(baseOrder(), line()), "cancelled", audit()).order;
+  assert.throws(() => cancelOrderItem(cancelled, "line-1", audit()), OrderItemMutationNotAllowedError);
 });
 
 test("Order closure requires every item to be delivered or cancelled", () => {
-  const paid = transitionOrderStatus(transitionOrderStatus(addOrderItem(baseOrder(), line()), "open"), "paid");
-  assert.throws(() => transitionOrderStatus(paid, "closed"), OrderClosureRequiresItemCompletionError);
+  const paid = changedOrder(changedOrder(added(baseOrder(), line()), "open"), "paid");
+  assert.throws(() => transitionOrderStatus(paid, "closed", audit()), OrderClosureRequiresItemCompletionError);
 
-  const sent = transitionOrderItemStatus(paid, "line-1", "sent");
-  const preparing = transitionOrderItemStatus(sent, "line-1", "preparing");
-  const ready = transitionOrderItemStatus(preparing, "line-1", "ready");
-  const delivered = transitionOrderItemStatus(ready, "line-1", "delivered");
-  assert.equal(transitionOrderStatus(delivered, "closed").status, "closed");
+  const sent = changedItem(paid, "line-1", "sent");
+  const preparing = changedItem(sent, "line-1", "preparing");
+  const ready = changedItem(preparing, "line-1", "ready");
+  const delivered = changedItem(ready, "line-1", "delivered");
+  assert.equal(changedOrder(delivered, "closed").status, "closed");
 });
 
 test("Order revalidation rejects accessors before reading changing values", () => {
-  const valid = addOrderItem(baseOrder(), line());
+  const valid = added(baseOrder(), line());
   let reads = 0;
   const accessorOrder = Object.freeze({
     ...valid,
@@ -207,7 +287,7 @@ test("Order revalidation rejects accessors before reading changing values", () =
 });
 
 test("Order revalidation rejects inherited getters before they can substitute validated facts", () => {
-  const valid = addOrderItem(baseOrder(), line());
+  const valid = added(baseOrder(), line());
   let itemReads = 0;
   const itemPrototype = {
     get items() {
@@ -245,7 +325,7 @@ test("Order revalidation rejects inherited getters before they can substitute va
 
 test("Adding an item validates records and rejects accessors without leaking TypeError", () => {
   const order = baseOrder();
-  assert.throws(() => addOrderItem(order, null as unknown as AddOrderItemInput), InvalidOrderAggregateError);
+  assert.throws(() => addOrderItem(order, null as unknown as AddOrderItemInput, audit()), InvalidOrderAggregateError);
 
   let reads = 0;
   const accessorInput = {
@@ -255,12 +335,12 @@ test("Adding an item validates records and rejects accessors without leaking Typ
       return "line-2";
     },
   };
-  assert.throws(() => addOrderItem(order, accessorInput), InvalidOrderAggregateError);
+  assert.throws(() => addOrderItem(order, accessorInput, audit()), InvalidOrderAggregateError);
   assert.equal(reads, 0);
 });
 
 test("Every aggregate operation fails closed for mutable or scope-manipulated rehydrated orders", () => {
-  const valid = addOrderItem(baseOrder(), line());
+  const valid = added(baseOrder(), line());
   const mutable = { ...valid, items: [...valid.items] };
   const foreignScope = freeze({
     ...valid,
@@ -269,10 +349,10 @@ test("Every aggregate operation fails closed for mutable or scope-manipulated re
 
   for (const operation of [
     () => canAddOrderItem(mutable),
-    () => addOrderItem(mutable, line({ orderItemId: "line-2" })),
-    () => transitionOrderStatus(mutable, "open"),
-    () => transitionOrderItemStatus(mutable, "line-1", "sent"),
-    () => cancelOrderItem(mutable, "line-1"),
+    () => addOrderItem(mutable, line({ orderItemId: "line-2" }), audit()),
+    () => transitionOrderStatus(mutable, "open", audit()),
+    () => transitionOrderItemStatus(mutable, "line-1", "sent", audit()),
+    () => cancelOrderItem(mutable, "line-1", audit()),
     () => calculateOrderAggregateTotals(mutable),
   ]) {
     assert.throws(operation, OrderAggregateNotImmutableError);
@@ -280,8 +360,45 @@ test("Every aggregate operation fails closed for mutable or scope-manipulated re
   assert.throws(() => calculateOrderAggregateTotals(foreignScope), OrderItemScopeMismatchError);
 });
 
+test("Rehydrated cancelled lines require immutable event-linked evidence with a valid origin", () => {
+  const cancelled = cancelOrderItem(
+    added(baseOrder(), line()),
+    "line-1",
+    auditWithoutAuthorization(),
+  ).order;
+  const missingEvidence = freeze({
+    ...cancelled,
+    items: cancelled.items.map(({ cancellationAudit, ...item }) => {
+      assert.ok(cancellationAudit);
+      return freeze(item);
+    }),
+  }) as Order;
+  const forgedOrigin = freeze({
+    ...cancelled,
+    items: cancelled.items.map((item) => freeze({
+      ...item,
+      cancellationAudit: freeze({ ...item.cancellationAudit!, from: "delivered" }),
+    })),
+  }) as unknown as Order;
+
+  assert.throws(() => calculateOrderAggregateTotals(missingEvidence), InvalidOrderAggregateError);
+  assert.throws(() => calculateOrderAggregateTotals(forgedOrigin), DomainError);
+});
+
 function baseOrder() {
-  return createOrder(baseInput());
+  return createOrder(baseInput(), audit()).order;
+}
+
+function added(order: Order, input: AddOrderItemInput): Order {
+  return addOrderItem(order, input, audit()).order;
+}
+
+function changedOrder(order: Order, to: OrderState): Order {
+  return transitionOrderStatus(order, to, audit()).order;
+}
+
+function changedItem(order: Order, orderItemId: string, to: OrderItemState): Order {
+  return transitionOrderItemStatus(order, orderItemId, to, audit()).order;
 }
 
 function baseInput() {

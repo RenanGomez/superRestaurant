@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "@super-restaurant/config/tsconfig/base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": false,
+    "rootDir": "./src",
+    "target": "ES2024",
+    "outDir": "./.test-dist",
+    "types": ["node"]
+  },
+  "include": [
+    "src/env.ts",
+    "src/env.test.ts",
+    "src/lib/session.ts",
+    "src/lib/session.test.ts",
+    "src/proxy.ts",
+    "src/proxy.test.ts",
+    "src/test-doubles/supabase-ssr.ts"
+  ]
+}

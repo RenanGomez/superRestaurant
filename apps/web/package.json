@@ -1,0 +1,29 @@
+{
+  "name": "@super-restaurant/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs src",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node .test-dist/env.test.js && node .test-dist/lib/session.test.js && node --import ./test/proxy-esm-loader.mjs .test-dist/proxy.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\""
+  },
+  "dependencies": {
+    "@supabase/ssr": "0.12.5",
+    "@supabase/supabase-js": "2.112.4",
+    "next": "16.3.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@super-restaurant/config": "workspace:*",
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "26.3.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "tailwindcss": "4.3.3"
+  }
+}

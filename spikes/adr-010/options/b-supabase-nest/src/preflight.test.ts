@@ -17,7 +17,7 @@ import {
 } from "./config.js";
 import { SupabaseAdr010CriticalFinancialService, SupabaseAdr010CriticalOrderService, SupabaseNestAdr010Module, type SupabaseCreateOrderRequest } from "./nest-boundary.js";
 import type { CashPaymentRecord, CashRefundRecord, CriticalFinancialWritePort, SupabaseCreateCashPaymentRequest, SupabaseCreateCashRefundRequest } from "./financial-contract.js";
-import { freshRemotePushMigrationVersions, requireFreshRemotePushOptIn, runFreshRemotePush } from "./fresh-remote-push.js";
+import { freshRemotePushMigrationVersions, requireFreshRemotePushOptIn, resolveSupabaseCliInvocation, runFreshRemotePush, supabaseCliPackage } from "./fresh-remote-push.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { asBranchScope, type OrderRecord } from "../../../src/model.js";
 
@@ -152,7 +152,6 @@ test("[preflight/non-evidence] fresh remote push requires an independent opt-in 
     ADR010_RUN_SUPABASE: "1",
     ADR010_CONFIRM_ISOLATED_PROJECT: "abcdefghijklmnopqrst",
     ADR010_SUPABASE_URL: "https://abcdefghijklmnopqrst.supabase.co",
-    ADR010_SUPABASE_SECRET_KEY: "sb_secret_placeholder",
     ADR010_DATABASE_URL: "postgresql://postgres.abcdefghijklmnopqrst:password@aws.pooler.supabase.com:6543/postgres?sslmode=require",
   };
   assert.throws(() => requireFreshRemotePushOptIn(base), /ADR010_FRESH_PUSH_DISABLED/u);
@@ -162,6 +161,7 @@ test("[preflight/non-evidence] fresh remote push requires an independent opt-in 
   );
   const config = requireFreshRemotePushOptIn({ ...base, ADR010_RUN_SUPABASE_FRESH_PUSH: "1" });
   assert.equal(config.confirmedIsolatedProjectRef, "abcdefghijklmnopqrst");
+  assert.equal("secretKey" in config, false, "migration-only fresh push must not load an Auth Admin secret");
 });
 
 test("[preflight/non-evidence] fresh remote push checks emptiness, dry-runs first, and never creates projects", async () => {
@@ -182,6 +182,9 @@ test("[preflight/non-evidence] fresh remote push checks emptiness, dry-runs firs
   assert.ok(source.includes("storage.objects"));
   assert.ok(source.includes("storage.buckets"));
   assert.ok(source.includes("relation.relkind in ('r','p','v','m','f','S')"));
+  assert.ok(source.includes("pg_catalog.pg_proc"));
+  assert.ok(source.includes("data_type.typtype in ('d','e','r')"));
+  assert.ok(source.includes("row?.total_count"));
   assert.ok(source.includes('"db", "push", "--linked", "--dry-run", "--yes"'));
   assert.ok(source.includes('environment.ADR010_RUN_SUPABASE_FRESH_PUSH !== "1"'));
   assert.ok(source.indexOf("--dry-run") < source.indexOf('if (!options.apply)'));
@@ -190,14 +193,24 @@ test("[preflight/non-evidence] fresh remote push checks emptiness, dry-runs firs
   assert.equal(/console\.(?:log|warn|error)[\s\S]*(?:databaseUrl|secretKey)/u.test(source), false);
   assert.ok(runnerSource.includes("requireFreshRemotePushOptIn(process.env)"));
   assert.ok(runnerSource.includes("ADR010_APPLY_FRESH_REMOTE_PUSH"));
-  assert.equal(source.includes("supabase.cmd"), false);
+  assert.equal(supabaseCliPackage, "supabase@2.109.1");
+  assert.deepEqual(resolveSupabaseCliInvocation("win32"), {
+    executable: "npx.cmd",
+    prefixArgs: ["--yes", "supabase@2.109.1"],
+    shell: true,
+  });
+  assert.deepEqual(resolveSupabaseCliInvocation("linux"), {
+    executable: "npx",
+    prefixArgs: ["--yes", "supabase@2.109.1"],
+    shell: false,
+  });
+  assert.ok(source.includes("[...invocation.prefixArgs, ...args]"));
 });
 
 test("[preflight/non-evidence] fresh remote push fake runner is dry-run by default and applies only when requested", async () => {
   const commands: string[][] = [];
   const config = {
     url: "https://abcdefghijklmnopqrst.supabase.co",
-    secretKey: "not-used",
     databaseUrl: "postgresql://not-used",
     confirmedIsolatedProjectRef: "abcdefghijklmnopqrst",
   };
@@ -612,12 +625,18 @@ test("[preflight/non-evidence] remote report separates spike GO blockers from ph
   const eligibilityStart = runnerSource.indexOf("const adr010GoEligibility");
   const eligibilityEnd = runnerSource.indexOf("const config =", eligibilityStart);
   const eligibilitySource = runnerSource.slice(eligibilityStart, eligibilityEnd);
-  assert.ok(eligibilitySource.includes('"human write-frontier inspection (gate 4)"'));
+  assert.ok(eligibilitySource.includes('"human write-frontier ACCEPT by Emmanuel on 2026-08-29 (gate 4)"'));
   assert.ok(eligibilitySource.includes('"complete five-migration application from a second fresh remote project/CI (gate 7)"'));
   assert.ok(eligibilitySource.includes('"physical disaster recovery with production RPO/RTO"'));
-  const spikeBlockers = /spikeBlockingEvidence: Object\.freeze\(\[([\s\S]*?)\]\),\s*operationalEvidencePending/u.exec(eligibilitySource)?.[1];
+  const spikeBlockers = /spikeBlockingEvidence: Object\.freeze\(\[([\s\S]*?)\]\),\s*externalEvidenceDemonstrated/u.exec(eligibilitySource)?.[1];
   assert.notEqual(spikeBlockers, undefined);
+  assert.equal(spikeBlockers?.trim(), "");
+  assert.equal(spikeBlockers?.includes("gate 7"), false);
   assert.equal(spikeBlockers?.includes("physical disaster"), false);
+  assert.ok(eligibilitySource.includes("externalEvidenceDemonstrated"));
+  assert.ok(eligibilitySource.includes("eligibleForAdr010Go: true"));
+  assert.equal(runnerSource.includes('notDemonstrated: ["migration application from a fresh remote project/CI"'), false);
+  assert.equal(runnerSource.includes('notDemonstrated: ["physical disaster restore", "human write-frontier inspection"]'), false);
   assert.ok(runnerSource.includes("goEligibility: adr010GoEligibility"));
   assert.ok(runnerSource.includes("eligibleForAdr010Go: adr010GoEligibility.eligibleForAdr010Go"));
 });

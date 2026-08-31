@@ -1,0 +1,47 @@
+@import url("https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
+@import "tailwindcss";
+
+/*
+ * Design tokens for the "Operational Crisp" direction chosen for FE-0
+ * (superRestaurant FE-0 Login y Shell mockup). Tailwind v4 turns each
+ * `--color-*`/`--font-*` token below into matching utilities, e.g.
+ * `--color-accent` -> `bg-accent`, `text-accent`, `border-accent`.
+ */
+@theme {
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-heading: "Sora", system-ui, sans-serif;
+
+  --color-bg: oklch(98% 0.004 240);
+  --color-surface: oklch(100% 0 0);
+  --color-text: oklch(24% 0.02 250);
+  --color-text-muted: oklch(48% 0.018 250);
+  --color-accent: oklch(55% 0.14 230);
+  --color-accent-hover: oklch(47% 0.14 230);
+  --color-border: oklch(90% 0.008 250);
+  --color-error: oklch(55% 0.18 25);
+  --color-error-bg: oklch(96% 0.03 25);
+  --color-success: oklch(62% 0.14 155);
+  --color-nav: oklch(20% 0.03 250);
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--color-accent-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

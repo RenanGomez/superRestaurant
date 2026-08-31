@@ -59,8 +59,16 @@ En PowerShell, define las seis variables de la sesión que muestra `.env.example
 El script `test:option-b:fresh-push` no crea proyectos, no enlaza cuentas y
 no borra datos. Requiere además `ADR010_RUN_SUPABASE_FRESH_PUSH=1`, valida la
 URL, el project ref y la conexión PostgreSQL, comprueba que `adr010_b`,
-`adr010_b_private` y las cinco versiones de migración estén ausentes, y
-ejecuta primero `supabase db push --linked --dry-run --yes`.
+`adr010_b_private`, los objetos de aplicación en `public` y todo el historial
+de migraciones estén ausentes, y ejecuta primero
+`supabase db push --linked --dry-run --yes`. Este runner de migración no carga
+ni requiere `ADR010_SUPABASE_SECRET_KEY`; esa clave se reserva para los gates
+Auth posteriores.
+
+El runner invoca `supabase@2.109.1` mediante `npx --yes`, incluida la variante
+`npx.cmd` necesaria en Windows. La versión queda fijada y no depende de que un
+binario global `supabase` esté presente en `PATH`; la red sigue siendo un
+prerrequisito explícito del gate remoto.
 
 Para una previsualización local/CI, enlaza previamente el proyecto aislado con
 el CLI usando el project ref confirmado y ejecuta:
@@ -75,8 +83,8 @@ El push real exige un segundo opt-in explícito:
 ADR010_RUN_SUPABASE=1 ADR010_RUN_SUPABASE_FRESH_PUSH=1 ADR010_APPLY_FRESH_REMOTE_PUSH=1 ADR010_CONFIRM_ISOLATED_PROJECT=<project-ref> pnpm --filter @super-restaurant/adr-010-spike test:option-b:fresh-push
 ```
 
-Las credenciales deben venir del gestor de secretos o del entorno de CI; no se
-incluyen en comandos, archivos versionados ni reportes. Conserva fuera de Git
+La conexión PostgreSQL debe venir del gestor de secretos o del entorno de CI;
+no se incluye en comandos, archivos versionados ni reportes. Conserva fuera de Git
 la salida del dry-run, `supabase migration list`, la auditoría de catálogo y
 el reporte del runner. Si el push falla, no edites la historia de migraciones:
 deja el proyecto en modo fail-closed, conserva la salida y aplica una
@@ -87,8 +95,8 @@ El runner ejecuta los gates comunes con Auth y PostgreSQL reales y emite un repo
 
 El backup lógico lee todas las tablas y el cursor privado de dispositivos dentro de una única transacción `REPEATABLE READ READ ONLY`. `restore` acepta solo el formato/version y project ref esperados, usa listas fijas de tablas/columnas y exige que todas las tablas de negocio y cursores del destino estén vacíos; nunca los borra implícitamente. El runner cumple esa precondición mediante su reset explícito y separado.
 
-## Evidencia pendiente / bloqueo
+## Evidencia y decisión pendiente
 
-Las cinco migraciones ya se aplicaron y auditaron en el proyecto aislado actual. El Gate 7 sigue parcial hasta que el runner protegido aplique la serie completa en un segundo proyecto vacío autorizado o en CI y se conserve esa evidencia fuera de Git. El Gate 4 sigue pendiente de inspección humana de la frontera de escritura.
+Gate 7 quedó demostrado en el segundo proyecto vacío autorizado `zwbyiefqeujstyzysydn`: el runner protegido verificó vaciedad, mostró exactamente las cinco migraciones en el dry-run, revalidó el destino antes del push, aplicó las cinco versiones y confirmó que son todo el historial remoto. La auditoría posterior pasó 27/27 y `db lint` quedó sin errores. Emmanuel aceptó Gate 4 el 2026-08-29 después de las inspecciones técnica e independiente de la frontera de escritura; los diez gates están demostrados.
 
-El restore lógico del dataset del spike ya demostró el Gate 8. La recuperación física ante desastre, con RPO/RTO, permanece como evidencia operacional de producción separada y no es la causa de `eligibleForAdr010Go: false` en este spike. Aunque el thin slice financiero ya cubre efectivo, compensación y cursor por dispositivo, la opción B todavía no es una base autorizada para backend productivo hasta cerrar Gates 4 y 7, completar el scoring y recibir la decisión humana.
+El restore lógico del dataset del spike ya demostró el Gate 8. La recuperación física ante desastre, con RPO/RTO, permanece como evidencia operacional de producción separada y no bloquea `eligibleForAdr010Go: true`. El scoring documentado es 75/100; Emmanuel aceptó el GO y seleccionó la opción B el 2026-08-29. Este directorio continúa siendo evidencia aislada, no un backend ni un schema productivo.

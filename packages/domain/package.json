@@ -20,7 +20,7 @@
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs src",
-    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node .test-dist/money.test.js && node .test-dist/order-state.test.js && node .test-dist/order-totals.test.js && node .test-dist/order.test.js && node .test-dist/modifiers.test.js && node .test-dist/payment.test.js && node .test-dist/cash-register.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
+    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node .test-dist/money.test.js && node .test-dist/order-state.test.js && node .test-dist/order-totals.test.js && node .test-dist/order-audit.test.js && node .test-dist/order.test.js && node .test-dist/modifiers.test.js && node .test-dist/menu.test.js && node .test-dist/payment.test.js && node .test-dist/cash-register.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
     "typecheck": "tsc --noEmit --project tsconfig.json"
   }
 }

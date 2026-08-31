@@ -1,0 +1,9 @@
+# Local product configuration. The remote project reference is deliberately
+# absent; `supabase link` stores it only under the ignored `.temp` directory.
+project_id = "super-restaurant"
+
+[api]
+enabled = true
+schemas = ["public", "graphql_public", "app"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000

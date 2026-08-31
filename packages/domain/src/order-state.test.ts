@@ -50,7 +50,28 @@ test("Order item transitions follow KDS preparation lifecycle", () => {
   assert.equal(transitionOrderItem("sent", "preparing").to, "preparing");
   assert.equal(transitionOrderItem("preparing", "ready").to, "ready");
   assert.equal(transitionOrderItem("ready", "delivered").to, "delivered");
-  assert.deepEqual(transitionOrderItem("pending", "cancelled"), { from: "pending", to: "cancelled" });
+  assert.throws(
+    () => transitionOrderItem("pending", "cancelled"),
+    OrderItemCancellationAuditContextRequiredError,
+  );
+  const pendingAudit = auditFor({ from: "pending", authorization: undefined });
+  assert.deepEqual(
+    transitionOrderItem("pending", "cancelled", { cancellationAudit: pendingAudit }),
+    {
+      from: "pending",
+      to: "cancelled",
+      cancellationAudit: {
+        eventId: "event-1",
+        idempotencyKey: "idempotency-1",
+        from: "pending",
+        actorId: "cashier-1",
+        branchId: "branch-1",
+        deviceId: "device-1",
+        occurredAt: "2026-08-25T12:00:00Z",
+        reason: "Sin stock",
+      },
+    },
+  );
 });
 
 test("Order items reject skipped and terminal transitions", () => {
@@ -126,7 +147,7 @@ test("Preparing and ready cancellation require and preserve audit evidence", () 
       () => transitionOrderItem(state, "cancelled"),
       OrderItemCancellationAuditContextRequiredError,
     );
-    const audit = auditFor({ reason: `Cancel ${state}` });
+    const audit = auditFor({ from: state, reason: `Cancel ${state}` });
     assert.deepEqual(
       transitionOrderItem(state, "cancelled", { cancellationAudit: audit }).cancellationAudit,
       audit,
@@ -134,10 +155,53 @@ test("Preparing and ready cancellation require and preserve audit evidence", () 
   }
 });
 
+test("Cancellation evidence rejects mismatched origins, invalid UTC, accessors, and proxies fail-closed", () => {
+  let reads = 0;
+  const accessorAudit = { ...auditFor() };
+  Object.defineProperty(accessorAudit, "actorId", {
+    enumerable: true,
+    get() {
+      reads += 1;
+      return "attacker";
+    },
+  });
+  const proxyAudit = new Proxy({ ...auditFor() }, {
+    getOwnPropertyDescriptor() {
+      throw new TypeError("hostile descriptor trap");
+    },
+  });
+
+  for (const cancellationAudit of [
+    auditFor({ from: "preparing" }),
+    auditFor({ occurredAt: "2026-02-30T12:00:00Z" }),
+    accessorAudit,
+    proxyAudit,
+  ]) {
+    assert.throws(
+      () => transitionOrderItem("sent", "cancelled", { cancellationAudit: cancellationAudit as never }),
+      OrderItemCancellationAuditContextRequiredError,
+    );
+  }
+  assert.equal(reads, 0);
+});
+
 function auditFor(
-  overrides: Partial<OrderItemCancellationAudit> = {},
+  overrides: Partial<{
+    eventId: string;
+    idempotencyKey: string;
+    from: "pending" | "sent" | "preparing" | "ready";
+    actorId: string;
+    branchId: string;
+    deviceId: string;
+    occurredAt: string;
+    reason: string;
+    authorization: { readonly approved: true; readonly actorId: string } | undefined;
+  }> = {},
 ): OrderItemCancellationAudit {
-  return {
+  const value = {
+    eventId: "event-1",
+    idempotencyKey: "idempotency-1",
+    from: "sent" as const,
     actorId: "cashier-1",
     branchId: "branch-1",
     deviceId: "device-1",
@@ -146,4 +210,5 @@ function auditFor(
     authorization: { approved: true, actorId: "supervisor-1" },
     ...overrides,
   };
+  return value as OrderItemCancellationAudit;
 }

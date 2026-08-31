@@ -18,7 +18,7 @@ in the approved external evidence location after checking that every row has
 `passed = true` and `observed_count = expected_count`.
 
 The audit is intentionally scoped to `adr010_b`, `adr010_b_private`, their
-catalog metadata, the three Data API roles, and the two expected migration
+catalog metadata, the three Data API roles, and the five expected migration
 versions. Unrelated schemas and tables—including pre-existing objects in
 `public`—are neither inspected nor required to be empty. This does **not**
 authorize destructive gates, reset, cleanup, migration rollback, or fixture

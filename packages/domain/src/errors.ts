@@ -334,6 +334,174 @@ export class OrderItemCancellationAuditContextRequiredError extends DomainError 
   }
 }
 
+export class InvalidOrderAuditContextError extends DomainError {
+  public readonly code = "INVALID_ORDER_AUDIT_CONTEXT";
+
+  public constructor(field: string) {
+    super(`Order audit ${field} must be a valid immutable event value.`);
+    this.field = field;
+  }
+
+  public readonly field: string;
+}
+
+export class OrderAuditReasonRequiredError extends DomainError {
+  public readonly code = "ORDER_AUDIT_REASON_REQUIRED";
+
+  public constructor(operation: string) {
+    super(`Order audit operation ${operation} requires a non-empty reason.`);
+    this.operation = operation;
+  }
+
+  public readonly operation: string;
+}
+
+export class OrderAuditAuthorizationRequiredError extends DomainError {
+  public readonly code = "ORDER_AUDIT_AUTHORIZATION_REQUIRED";
+
+  public constructor(operation: string) {
+    super(`Order audit operation ${operation} requires an explicit verified authorization.`);
+    this.operation = operation;
+  }
+
+  public readonly operation: string;
+}
+
+export type MenuEntityKind = "category" | "product" | "modifier group";
+
+export class DuplicateMenuEntityIdError extends DomainError {
+  public readonly code = "DUPLICATE_MENU_ENTITY_ID";
+
+  public constructor(entity: MenuEntityKind, entityId: string) {
+    super(`Menu ${entity} ids must be unique within a catalog.`);
+    this.entity = entity;
+    this.entityId = entityId;
+  }
+
+  public readonly entity: MenuEntityKind;
+  public readonly entityId: string;
+}
+
+export class DuplicateMenuProductSkuError extends DomainError {
+  public readonly code = "DUPLICATE_MENU_PRODUCT_SKU";
+
+  public constructor(sku: string) {
+    super("Menu product SKUs must be unique within a restaurant catalog when provided.");
+    this.sku = sku;
+  }
+
+  public readonly sku: string;
+}
+
+export class MenuCatalogRestaurantMismatchError extends DomainError {
+  public readonly code = "MENU_CATALOG_RESTAURANT_MISMATCH";
+
+  public constructor(entity: MenuEntityKind, entityId: string) {
+    super(`Menu ${entity} must belong to the catalog restaurant.`);
+    this.entity = entity;
+    this.entityId = entityId;
+  }
+
+  public readonly entity: MenuEntityKind;
+  public readonly entityId: string;
+}
+
+export class MenuCatalogVersionMismatchError extends DomainError {
+  public readonly code = "MENU_CATALOG_VERSION_MISMATCH";
+
+  public constructor(entity: MenuEntityKind, entityId: string) {
+    super(`Menu ${entity} must belong to the catalog version.`);
+    this.entity = entity;
+    this.entityId = entityId;
+  }
+
+  public readonly entity: MenuEntityKind;
+  public readonly entityId: string;
+}
+
+export class MenuProductCategoryNotFoundError extends DomainError {
+  public readonly code = "MENU_PRODUCT_CATEGORY_NOT_FOUND";
+
+  public constructor(productId: string, categoryId: string) {
+    super("A menu product must reference a category in the same catalog.");
+    this.productId = productId;
+    this.categoryId = categoryId;
+  }
+
+  public readonly productId: string;
+  public readonly categoryId: string;
+}
+
+export class MenuProductModifierGroupNotFoundError extends DomainError {
+  public readonly code = "MENU_PRODUCT_MODIFIER_GROUP_NOT_FOUND";
+
+  public constructor(productId: string, groupId: string) {
+    super("A product modifier-group reference must resolve in the same catalog.");
+    this.productId = productId;
+    this.groupId = groupId;
+  }
+
+  public readonly productId: string;
+  public readonly groupId: string;
+}
+
+export class MenuModifierGroupNotAllowedError extends DomainError {
+  public readonly code = "MENU_MODIFIER_GROUP_NOT_ALLOWED";
+
+  public constructor(productId: string, groupId: string) {
+    super("The modifier group is not allowlisted for this menu product.");
+    this.productId = productId;
+    this.groupId = groupId;
+  }
+
+  public readonly productId: string;
+  public readonly groupId: string;
+}
+
+export class DuplicateMenuModifierGroupSelectionError extends DomainError {
+  public readonly code = "DUPLICATE_MENU_MODIFIER_GROUP_SELECTION";
+
+  public constructor(groupId: string) {
+    super("A modifier group can be selected only once for one menu product snapshot.");
+    this.groupId = groupId;
+  }
+
+  public readonly groupId: string;
+}
+
+export class MenuProductNotFoundError extends DomainError {
+  public readonly code = "MENU_PRODUCT_NOT_FOUND";
+
+  public constructor(productId: string) {
+    super("The selected product does not exist in this menu catalog.");
+    this.productId = productId;
+  }
+
+  public readonly productId: string;
+}
+
+export class InactiveMenuCategoryError extends DomainError {
+  public readonly code = "INACTIVE_MENU_CATEGORY";
+
+  public constructor(categoryId: string) {
+    super("A product in an inactive menu category cannot be sold.");
+    this.categoryId = categoryId;
+  }
+
+  public readonly categoryId: string;
+}
+
+export class InactiveMenuProductError extends DomainError {
+  public readonly code = "INACTIVE_MENU_PRODUCT";
+
+  public constructor(productId: string) {
+    super("An inactive menu product cannot produce an order-item snapshot.");
+    this.productId = productId;
+  }
+
+  public readonly productId: string;
+}
+
 export class InvalidModifierGroupBoundsError extends DomainError {
   public readonly code = "INVALID_MODIFIER_GROUP_BOUNDS";
 

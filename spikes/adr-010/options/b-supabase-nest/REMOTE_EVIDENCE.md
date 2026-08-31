@@ -42,10 +42,13 @@ applied history.
 Save the timestamped command result in the approved external evidence store.
 Do not commit `.env`, access tokens, refresh tokens, database URLs, secret keys,
 user emails or raw provider errors. A successful report remains
-`eligibleForAdr010Go: false` until the human frontier review, fresh-project
-migration evidence and physical recovery evidence are resolved. Payment,
-Refund, CashMovement and refresh rotation/revocation are now exercised by the
-remote runner. It proves preservation when rerunning the already-applied
-migration series, not application of migrations to a fresh remote project or
-physical disaster recovery; record those separately rather than inferring
-them.
+remote capability evidence rather than human approval by itself. Emmanuel
+accepted Gate 4 on 2026-08-29 and Gate 7 was demonstrated separately by the
+guarded five-migration push into the second fresh project, so the versioned
+eligibility metadata now records `eligibleForAdr010Go: true`. The earlier raw
+remote report predates that human decision and remains valid for the capabilities
+it actually executed; physical recovery remains non-blocking operational
+evidence.
+Payment, Refund, CashMovement and refresh rotation/revocation are exercised by
+the remote runner. The fresh-project runner separately proved application of
+the five-migration series; neither runner proves physical disaster recovery.

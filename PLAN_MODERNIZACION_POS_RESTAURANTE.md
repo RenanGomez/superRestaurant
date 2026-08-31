@@ -1,12 +1,12 @@
-# Plan Maestro v2.2: superRestaurant
+# Plan Maestro v2.3: superRestaurant
 
 Sistema POS para restaurantes — Web, Mobile, KDS y Offline-First
 
-**Versión:** 2.2
+**Versión:** 2.3
 
-**Fecha de revisión:** 2026-08-25
+**Fecha de revisión:** 2026-08-29
 
-**Estado:** READY_FOR_IMPLEMENTATION para Fase 0 neutral + spike ADR-010; las decisiones comerciales abiertas siguen bloqueando solo sus módulos
+**Estado:** IN_IMPLEMENTATION; ADR-010 aceptó la opción B híbrida y las decisiones comerciales abiertas bloquean solo sus módulos
 
 **Repositorio remoto:** https://github.com/RenanGomez/superRestaurant.git
 
@@ -57,7 +57,7 @@ La primera versión contenía una buena visión funcional, pero mezclaba alterna
 - [ ] Confirmar licencia/modelo comercial del producto.
 - [ ] Seleccionar hardware de piloto.
 - [x] Resolver la estrategia Git del prototipo remoto mediante ADR-006.
-- [ ] Ejecutar el spike y resolver ADR-010 antes de implementar Auth, acceso a datos o Realtime definitivos.
+- [x] Ejecutar el spike y resolver ADR-010 antes de implementar Auth, acceso a datos o Realtime definitivos.
 - [ ] Prototipar y elegir almacenamiento/sync local mediante ADR-005.
 - [ ] Convertir decisiones aceptadas en ADRs versionadas bajo docs/adr.
 
@@ -175,29 +175,31 @@ Todo roadmap debe demostrar estos journeys progresivamente.
 
 ## 5. Decisiones arquitectónicas iniciales
 
-### 5.1 Arquitectura objetivo provisional
+### 5.1 Arquitectura objetivo aceptada
 
-La siguiente tabla es la **alternativa A** y sirve como dirección de diseño, pero Auth, acceso a datos y Realtime no se consideran ratificados hasta resolver ADR-010. Fase 0 puede avanzar en Git, monorepo, dominio puro, CI y documentación; no debe invertir en una implementación desechable de autenticación, RLS o transporte realtime antes de esa decisión.
+ADR-010 seleccionó la **alternativa B híbrida** y ADR-001 fija sus límites. Las elecciones no demostradas por el spike permanecen explícitamente pendientes y no se infieren de la alternativa A histórica.
 
 | Capa | Decisión |
 |---|---|
 | Monorepo | pnpm workspaces + Turborepo |
 | Lenguaje | TypeScript en API, web, mobile, KDS y paquetes compartidos |
 | API | NestJS, REST versionado y OpenAPI |
-| ORM | Prisma |
-| Datos | PostgreSQL |
-| Cache/jobs | Redis + BullMQ |
-| Realtime | Socket.IO; notifica cambios, no reemplaza la persistencia |
+| Auth | Supabase Auth; NestJS valida identidad y alcance en operaciones de servidor |
+| Datos | Supabase PostgreSQL como autoridad canónica; migraciones SQL versionadas de Supabase como única autoridad de schema |
+| ORM | Pendiente; no puede introducir una segunda historia de migraciones ni sustituir el dominio |
+| Cache/jobs | Responsabilidad de NestJS; tecnología de cola pendiente |
+| Realtime | Transporte pendiente; solo notifica y exige recuperación durable por lectura/cursor |
+| Storage | Supabase Storage cuando el módulo defina buckets, políticas y datos permitidos |
 | Web | Next.js para backoffice/POS y evolución a PWA |
 | Mobile | Expo + React Native |
 | KDS | React ligero, compartiendo dominio/contratos cuando corresponda |
 | Validación | DTOs de API y esquemas compartidos versionados |
-| Infra inicial | Docker Compose local y despliegue simple en VM/contenedores |
+| Infra inicial | Topología local y despliegue pendientes de diseño operativo |
 | CI | lint + typecheck + tests + build + migración limpia |
 
 Las versiones exactas se fijarán en Fase 0 usando versiones mantenidas y compatibles, sin rangos abiertos en lockfiles.
 
-ADR-010 evaluará también una **alternativa B híbrida**: Supabase gestionado para PostgreSQL/Auth/Storage y NestJS para reglas de dominio, transacciones financieras, idempotencia, jobs e integraciones. Supabase y NestJS/Prisma no son opciones necesariamente excluyentes.
+NestJS es la única frontera de aplicación para escrituras críticas. Los clientes pueden usar Supabase Auth y lecturas explícitamente permitidas por grants/RLS; no pueden escribir Order, Payment, Refund o CashMovement mediante Data API/RPC ni recibir secretos de servidor.
 
 ### 5.2 Monorepo objetivo
 
@@ -227,7 +229,7 @@ docs/
 - packages/domain no importa NestJS, React, Prisma, red ni SDKs.
 - apps/api implementa persistencia, autorización, transacciones, idempotencia e integraciones.
 - web/mobile/KDS consumen contratos y dominio; el servidor siempre revalida.
-- si ADR-010 elige Supabase, debe definir si cada operación pasa por NestJS o por Data API/RPC; no se permitirán dos caminos de escritura con reglas distintas;
+- ADR-010 eligió Supabase con NestJS como única frontera crítica; toda lectura o CRUD no financiero directo requiere allowlist y no se permiten dos caminos de escritura con reglas distintas;
 - RLS será defensa en profundidad, no sustituto de las invariantes transaccionales de dinero, pagos, caja y órdenes;
 - pagos, PAC, almacenamiento, impresión, email y push se implementan con puertos/adaptadores.
 - empezar con monolito modular; separar servicios solo por evidencia de escala o aislamiento.
@@ -956,11 +958,11 @@ Requiere aprobación humana:
 
 No reescribir historia ni borrar ramas remotas sin autorización explícita.
 
-### 15.3 Implicación arquitectónica del hallazgo (pendiente de ADR-010)
+### 15.3 Implicación arquitectónica del hallazgo (resuelta por ADR-010)
 
 El prototipo legado en `origin/main` incluye el cliente de Supabase y usa Data API para CRUD de clientes, direcciones y categorías. La inspección del árbol remoto **no encontró** uso de Supabase Auth, Realtime, Storage o Functions, ni una carpeta de migraciones/esquema reproducible. Por tanto, el prototipo demuestra una elección tecnológica previa, pero no una plataforma backend completa que pueda asumirse reutilizable.
 
-ADR-010 no debe plantear una falsa elección entre “todo Supabase” y “todo propio”. Evaluará tres opciones:
+ADR-010 evitó una falsa elección entre “todo Supabase” y “todo propio”, evaluó tres opciones y seleccionó B el 2026-08-29:
 
 | Opción | Descripción | Riesgo principal |
 |---|---|---|
@@ -1094,7 +1096,7 @@ Restricciones del track paralelo:
 - APIs pequeñas y revisables;
 - los tipos compartidos no deben filtrar modelos del ORM.
 
-Quedan bloqueadas hasta resolver ADR-010 las implementaciones definitivas de Auth, acceso de cliente a datos, RLS, persistencia API y Realtime.
+Estas implementaciones quedaron desbloqueadas al aceptar ADR-010 y ahora deben respetar ADR-001; el transporte Realtime concreto, ORM, colas y schema productivo siguen pendientes de diseño y verificación.
 
 ---
 
@@ -1128,7 +1130,7 @@ Reglas:
 
 | ADR | Tema | Estado |
 |---|---|---|
-| ADR-001 | Arquitectura TypeScript/NestJS y componentes de persistencia | BLOCKED hasta resolver ADR-010 |
+| ADR-001 | Arquitectura híbrida Supabase + NestJS y límites de persistencia | Aceptada; documento en revisión humana |
 | ADR-002 | Restaurant/Branch como frontera de aislamiento | Propuesto para aceptación |
 | ADR-003 | Money en unidad menor + snapshots | Propuesto para aceptación |
 | ADR-004 | Fases 1–2 online; Fase 3 offline por dispositivo | Propuesto para aceptación |
@@ -1137,7 +1139,7 @@ Reglas:
 | ADR-007 | País, moneda, impuestos y CFDI | Pendiente de decisión humana |
 | ADR-008 | Hardware e impresión | Pendiente de piloto |
 | ADR-009 | Servidor local LAN | Diferido; fuera de v1 por defecto |
-| ADR-010 | Stack propio vs. híbrido Supabase+NestJS vs. Data API directa | BLOCKING; spike de 4 días, hard stop al quinto, GO ≥75/100 |
+| ADR-010 | Stack propio vs. híbrido Supabase+NestJS vs. Data API directa | Aceptada: opción B, 10 gates y 75/100 |
 
 ---
 
@@ -1168,7 +1170,7 @@ Reglas:
 6. ¿Qué hardware se usará en piloto?
 7. ¿Cómo debe preservarse el prototipo remoto?
 8. ¿Se necesita KDS multi-dispositivo sin internet en v1?
-9. ¿Qué opción aprueba ADR-010 después del spike: stack propio, híbrido Supabase+NestJS o Data API directa restringida?
+9. **Resuelta 2026-08-29:** opción B híbrida Supabase+NestJS.
 10. ¿Se aprueba `card_manual` para piloto/v1 bajo las reglas de la Sección 3.2?
 
 Estas preguntas no bloquean toda la Fase 0; sí bloquean las decisiones específicas indicadas en TODO.md.
@@ -1182,6 +1184,7 @@ Estas preguntas no bloquean toda la Fase 0; sí bloquean las decisiones específ
 - **2026-08-25** — Revisión cruzada de Claude: se agregó ADR-010, se aclararon pagos, `packages/config`, topología y referencias.
 - **2026-08-25** — Corrección posterior: ADR-010 se convirtió en puerta de Fase 0 con tres opciones y spike; se verificó que el prototipo solo usa CRUD de Supabase; se definió `card_manual`; se corrigieron datos/licencias de referencias y se eliminó lenguaje no demostrable.
 - **2026-08-25** — Plan v2.2 listo para implementación de Fase 0: spike ADR-010 limitado a 4 días/hard stop 5, gates y GO/NO-GO por opción, y packages/domain autorizado como track paralelo independiente.
+- **2026-08-29** — Plan v2.3: ADR-010 aceptó la opción B con 10 gates y 75/100; ADR-001 registra la arquitectura híbrida y separa las decisiones de ORM, colas, Realtime, despliegue y schema productivo.
 
 ---
 
@@ -1190,7 +1193,7 @@ Estas preguntas no bloquean toda la Fase 0; sí bloquean las decisiones específ
 1. Mantener ADR-006: prototipo preservado y raíz greenfield separada.
 2. Mantener `.gitignore` y la rama limpia de modernización.
 3. Mantener monorepo y CI neutral.
-4. Continuar en paralelo packages/domain y el spike timeboxed de ADR-010.
-5. Publicar scoring, GO/NO-GO y ADR-010 al hard stop.
-6. Aceptar ADR-001 con los componentes seleccionados.
-7. Configurar Auth/persistencia/Realtime y continuar Fase 0.
+4. Revisar ADR-001 y mantener sus límites de escritura, Auth, RLS y migraciones.
+5. Implementar `apps/api` y Auth productivos sin promover el schema del spike.
+6. Diseñar el schema/migraciones de producto desde invariantes y una sola autoridad.
+7. Elegir y verificar jobs, Realtime, despliegue y recuperación física antes de producción.

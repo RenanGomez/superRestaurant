@@ -29,6 +29,9 @@ web-build/
 *.jks
 *.keystore
 *.p12
+*.crt
+*.cer
+*.pem
 *.mobileprovision
 xcuserdata/
 

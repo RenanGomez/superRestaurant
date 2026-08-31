@@ -1,4 +1,11 @@
-import { parseBranchScope, parseRestaurantScope, SCOPE_SCHEMA_VERSION } from "./index.js";
+import {
+  BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
+  MEMBERSHIP_ROLE_CODES,
+  parseBranchMembershipListV1,
+  parseBranchScope,
+  parseRestaurantScope,
+  SCOPE_SCHEMA_VERSION,
+} from "./index.js";
 
 function expect(condition: boolean, message: string): void {
   if (!condition) throw new Error(message);
@@ -29,6 +36,7 @@ function expectBranchScope(input: unknown, message: string): void {
 }
 
 expectEqual(SCOPE_SCHEMA_VERSION, 1, "scope schema version is explicit");
+expect(Object.isFrozen(MEMBERSHIP_ROLE_CODES), "membership role codes are frozen");
 
 const restaurantInput = { restaurantId: "restaurant-1" };
 const restaurantScope = parseRestaurantScope(restaurantInput);
@@ -78,3 +86,41 @@ const hostileProxy = new Proxy({ restaurantId: "restaurant-1" }, {
   },
 });
 expectUndefined(parseRestaurantScope(hostileProxy), "parser fails closed for hostile proxy traps");
+
+const restaurantId = "1e37ae13-8507-484c-969f-2176f77b7000";
+const branchId = "23723e10-c0bf-49fd-9363-4f0e2c60e955";
+const membershipList = parseBranchMembershipListV1({
+  schemaVersion: BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
+  memberships: [{
+    scope: { restaurantId, branchId },
+    restaurantName: "Restaurante Centro",
+    branchName: "Sucursal Norte",
+    roles: ["manager", "waiter"],
+  }],
+});
+expectDefined(membershipList, "membership list parses");
+expect(Object.isFrozen(membershipList), "membership list is frozen");
+expect(Object.isFrozen(membershipList.memberships), "membership array is frozen");
+expect(Object.isFrozen(membershipList.memberships[0]?.roles), "membership roles are frozen");
+
+for (const invalid of [
+  { schemaVersion: 2, memberships: [] },
+  { schemaVersion: 1, memberships: [], extra: true },
+  { schemaVersion: 1, memberships: [{ scope: { restaurantId, branchId }, restaurantName: "", branchName: "Norte", roles: ["manager"] }] },
+  { schemaVersion: 1, memberships: [{ scope: { restaurantId, branchId }, restaurantName: "Centro", branchName: "Norte", roles: ["waiter", "manager"] }] },
+  { schemaVersion: 1, memberships: [{ scope: { restaurantId, branchId }, restaurantName: "Centro", branchName: "Norte", roles: ["manager", "manager"] }] },
+  { schemaVersion: 1, memberships: [{ scope: { restaurantId, branchId: "not-a-uuid" }, restaurantName: "Centro", branchName: "Norte", roles: ["manager"] }] },
+]) {
+  expectUndefined(parseBranchMembershipListV1(invalid), "membership parser rejects malformed contracts");
+}
+
+const membershipAccessor = { schemaVersion: 1 };
+Object.defineProperty(membershipAccessor, "memberships", { enumerable: true, get: () => [] });
+expectUndefined(parseBranchMembershipListV1(membershipAccessor), "membership parser rejects accessors");
+const hiddenMemberships = { schemaVersion: 1 };
+Object.defineProperty(hiddenMemberships, "memberships", { enumerable: false, value: [] });
+expectUndefined(parseBranchMembershipListV1(hiddenMemberships), "membership parser rejects hidden required fields");
+expectUndefined(
+  parseBranchMembershipListV1(new Proxy({ schemaVersion: 1, memberships: [] }, { ownKeys: () => { throw new Error("hostile"); } })),
+  "membership parser rejects hostile proxies",
+);

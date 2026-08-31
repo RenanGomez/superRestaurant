@@ -7,6 +7,12 @@ export interface SupabaseAdr010ServerConfig {
   readonly databaseUrl: string;
 }
 
+export interface SupabaseAdr010ProjectDatabaseConfig {
+  readonly url: string;
+  /** Server-only PostgreSQL connection; never a Data API credential. */
+  readonly databaseUrl: string;
+}
+
 export interface SupabaseAdr010ClientCheckConfig {
   readonly url: string;
   readonly publishableKey: string;
@@ -24,9 +30,19 @@ export interface SupabaseAdr010DestructiveServerConfig extends SupabaseAdr010Ser
   readonly confirmedIsolatedProjectRef: string;
 }
 
+export interface SupabaseAdr010DestructiveDatabaseConfig extends SupabaseAdr010ProjectDatabaseConfig {
+  /** Project ref repeated deliberately to acknowledge destructive spike work. */
+  readonly confirmedIsolatedProjectRef: string;
+}
+
 export const requiredSupabaseServerEnvironmentNames = [
   "ADR010_SUPABASE_URL",
   "ADR010_SUPABASE_SECRET_KEY",
+  "ADR010_DATABASE_URL",
+] as const;
+
+export const requiredSupabaseProjectDatabaseEnvironmentNames = [
+  "ADR010_SUPABASE_URL",
   "ADR010_DATABASE_URL",
 ] as const;
 
@@ -62,6 +78,15 @@ export const readSupabaseAdr010ServerConfig = (environment: NodeJS.ProcessEnv): 
   validateModernSecretKey(secretKey);
   validatePostgresUrl(databaseUrl);
   return { url, secretKey, databaseUrl };
+};
+
+export const readSupabaseAdr010ProjectDatabaseConfig = (environment: NodeJS.ProcessEnv): SupabaseAdr010ProjectDatabaseConfig => {
+  assertRequiredEnvironment(environment, requiredSupabaseProjectDatabaseEnvironmentNames);
+  const url = requireEnvironmentValue(environment, "ADR010_SUPABASE_URL");
+  const databaseUrl = requireEnvironmentValue(environment, "ADR010_DATABASE_URL");
+  validateUrl(url);
+  validatePostgresUrl(databaseUrl);
+  return { url, databaseUrl };
 };
 
 export const readSupabaseAdr010ClientCheckConfig = (environment: NodeJS.ProcessEnv): SupabaseAdr010ClientCheckConfig => {
@@ -154,6 +179,22 @@ export const requireSupabaseGateIntegrationOptIn = (environment: NodeJS.ProcessE
 /** Server-only destructive commands use the same exact project guard without requiring a client key. */
 export const requireSupabaseDestructiveServerOptIn = (environment: NodeJS.ProcessEnv): SupabaseAdr010DestructiveServerConfig => {
   const config = requireSupabaseIntegrationOptIn(environment);
+  return confirmDestructiveProjectTarget(config, environment);
+};
+
+/** Migration-only work needs project identity and PostgreSQL, but no Auth Admin secret. */
+export const requireSupabaseDestructiveDatabaseOptIn = (environment: NodeJS.ProcessEnv): SupabaseAdr010DestructiveDatabaseConfig => {
+  if (environment.ADR010_RUN_SUPABASE !== "1") {
+    throw new SupabaseAdr010ConfigurationError("Remote Supabase integration is disabled. Set ADR010_RUN_SUPABASE=1 only for the isolated spike project.");
+  }
+  const config = readSupabaseAdr010ProjectDatabaseConfig(environment);
+  return confirmDestructiveProjectTarget(config, environment);
+};
+
+const confirmDestructiveProjectTarget = <T extends SupabaseAdr010ProjectDatabaseConfig>(
+  config: T,
+  environment: NodeJS.ProcessEnv,
+): T & { readonly confirmedIsolatedProjectRef: string } => {
   const supabaseUrl = new URL(config.url);
   const hostParts = supabaseUrl.hostname.toLowerCase().split(".");
   const projectRef = hostParts.length === 3 && hostParts[1] === "supabase" && hostParts[2] === "co"

@@ -1,4 +1,5 @@
 import {
+  DomainError,
   InvalidOrderItemTransitionError,
   InvalidOrderStateError,
   InvalidOrderTransitionError,
@@ -22,19 +23,34 @@ export interface CancellationAuthorization {
   readonly actorId: string;
 }
 
-/**
- * Evidence that the application layer must persist with a sensitive item
- * cancellation. The domain stays storage-free but returns this exact evidence
- * in the transition result so the caller cannot lose it before audit logging.
- */
-export interface OrderItemCancellationAudit {
+export type CancellableOrderItemState = "pending" | "sent" | "preparing" | "ready";
+
+interface OrderItemCancellationAuditBase {
+  readonly eventId: string;
+  readonly idempotencyKey: string;
   readonly actorId: string;
   readonly branchId: string;
   readonly deviceId: string;
   readonly occurredAt: string;
   readonly reason: string;
+}
+
+/** Pending-line cancellation needs a reason but does not inherently require a supervisor. */
+export interface PendingOrderItemCancellationAudit extends OrderItemCancellationAuditBase {
+  readonly from: "pending";
+  readonly authorization?: CancellationAuthorization;
+}
+
+/** Once a line reached KDS, cancellation requires explicit supervisor evidence. */
+export interface AuthorizedOrderItemCancellationAudit extends OrderItemCancellationAuditBase {
+  readonly from: "sent" | "preparing" | "ready";
   readonly authorization: CancellationAuthorization;
 }
+
+/** Immutable evidence retained by every cancelled line and linked to its audit event. */
+export type OrderItemCancellationAudit =
+  | PendingOrderItemCancellationAudit
+  | AuthorizedOrderItemCancellationAudit;
 
 export interface OrderItemTransitionContext {
   readonly cancellationAudit?: OrderItemCancellationAudit;
@@ -94,9 +110,9 @@ export function transitionOrder(from: OrderState, to: OrderState): OrderState {
 
 /**
  * Returns a validated transition record; it never mutates an item. A rejected
- * cancellation leaves its caller untouched. For an item already sent to KDS,
- * the returned record carries the complete evidence that the application layer
- * must write to its immutable audit log.
+ * cancellation leaves its caller untouched. Every cancellation returns evidence
+ * linked to an immutable audit event; post-send cancellation also requires a
+ * supervisor authorization.
  */
 export function transitionOrderItem(
   from: OrderItemState,
@@ -107,11 +123,11 @@ export function transitionOrderItem(
     throw new InvalidOrderItemTransitionError(from, to);
   }
 
-  if (to === "cancelled" && from !== "pending") {
+  if (to === "cancelled") {
     return Object.freeze({
       from,
       to,
-      cancellationAudit: freezeCancellationAudit(assertPostSendCancellation(context)),
+      cancellationAudit: normalizeCancellationAudit(from as CancellableOrderItemState, context),
     });
   }
 
@@ -126,37 +142,106 @@ function isOrderItemState(state: unknown): state is OrderItemState {
   return typeof state === "string" && (Object.hasOwn(orderItemTransitions, state));
 }
 
-function assertPostSendCancellation(
+function normalizeCancellationAudit(
+  from: CancellableOrderItemState,
   context: OrderItemTransitionContext,
 ): OrderItemCancellationAudit {
-  const audit = context.cancellationAudit;
-  if (audit === undefined) {
-    throw new OrderItemCancellationAuditContextRequiredError();
-  }
+  return atCancellationBoundary(() => {
+    const contextRecord = asPlainRecord(context);
+    const auditValue = ownData(contextRecord, "cancellationAudit", false);
+    if (auditValue === undefined) throw new OrderItemCancellationAuditContextRequiredError();
+    const audit = asPlainRecord(auditValue);
+    const evidenceFrom = ownText(audit, "from");
+    if (evidenceFrom !== from) throw new OrderItemCancellationAuditContextRequiredError();
+    const reason = ownText(audit, "reason", "reason");
+    const occurredAt = ownText(audit, "occurredAt");
+    assertCanonicalUtcInstant(occurredAt);
+    const authorizationValue = ownData(audit, "authorization", false);
+    const authorization = authorizationValue === undefined
+      ? undefined
+      : normalizeAuthorization(authorizationValue);
+    if (from !== "pending" && authorization === undefined) {
+      throw new OrderItemCancellationAuthorizationRequiredError();
+    }
+    const common = {
+      eventId: ownText(audit, "eventId"),
+      idempotencyKey: ownText(audit, "idempotencyKey"),
+      actorId: ownText(audit, "actorId"),
+      branchId: ownText(audit, "branchId"),
+      deviceId: ownText(audit, "deviceId"),
+      occurredAt,
+      reason,
+    };
+    if (from === "pending") {
+      return Object.freeze({
+        ...common,
+        from,
+        ...(authorization === undefined ? {} : { authorization }),
+      });
+    }
+    return Object.freeze({ ...common, from, authorization: authorization! });
+  });
+}
 
-  if (!hasText(audit.reason)) {
-    throw new OrderItemCancellationReasonRequiredError();
-  }
-
-  const authorization = audit.authorization;
-  if (authorization?.approved !== true || !hasText(authorization?.actorId ?? "")) {
+function normalizeAuthorization(value: unknown): CancellationAuthorization {
+  const authorization = asPlainRecord(value);
+  if (ownData(authorization, "approved", true) !== true) {
     throw new OrderItemCancellationAuthorizationRequiredError();
   }
+  const actorId = ownText(authorization, "actorId", "authorization");
+  return Object.freeze({ approved: true, actorId });
+}
 
-  if (!hasText(audit.actorId) || !hasText(audit.branchId) || !hasText(audit.deviceId) || !hasText(audit.occurredAt)) {
+function asPlainRecord(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new OrderItemCancellationAuditContextRequiredError();
   }
-
-  return audit;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new OrderItemCancellationAuditContextRequiredError();
+  }
+  return value as Record<string, unknown>;
 }
 
-function hasText(value: string): boolean {
-  return value.trim().length > 0;
+function ownData(record: Record<string, unknown>, key: string, required: boolean): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  if (descriptor === undefined) {
+    if (required) throw new OrderItemCancellationAuditContextRequiredError();
+    return undefined;
+  }
+  if (!("value" in descriptor)) throw new OrderItemCancellationAuditContextRequiredError();
+  return descriptor.value;
 }
 
-function freezeCancellationAudit(audit: OrderItemCancellationAudit): OrderItemCancellationAudit {
-  return Object.freeze({
-    ...audit,
-    authorization: Object.freeze({ ...audit.authorization }),
-  });
+function ownText(
+  record: Record<string, unknown>,
+  key: string,
+  errorKind: "context" | "reason" | "authorization" = "context",
+): string {
+  const value = ownData(record, key, true);
+  if (typeof value !== "string" || value.trim().length === 0) {
+    if (errorKind === "reason") throw new OrderItemCancellationReasonRequiredError();
+    if (errorKind === "authorization") throw new OrderItemCancellationAuthorizationRequiredError();
+    throw new OrderItemCancellationAuditContextRequiredError();
+  }
+  return value;
+}
+
+function assertCanonicalUtcInstant(value: string): void {
+  if (!value.endsWith("Z")) throw new OrderItemCancellationAuditContextRequiredError();
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.valueOf())) throw new OrderItemCancellationAuditContextRequiredError();
+  const canonical = parsed.toISOString();
+  if (value !== canonical && value !== canonical.replace(".000Z", "Z")) {
+    throw new OrderItemCancellationAuditContextRequiredError();
+  }
+}
+
+function atCancellationBoundary<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    if (error instanceof DomainError) throw error;
+    throw new OrderItemCancellationAuditContextRequiredError();
+  }
 }

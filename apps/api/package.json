@@ -1,0 +1,37 @@
+{
+  "name": "@super-restaurant/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@nestjs/common": "11.2.2",
+    "@nestjs/core": "11.2.2",
+    "@nestjs/platform-express": "11.2.2",
+    "@super-restaurant/domain": "workspace:*",
+    "@super-restaurant/shared-types": "workspace:*",
+    "@supabase/supabase-js": "2.112.4",
+    "pg": "8.23.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@super-restaurant/config": "workspace:*",
+    "@nestjs/testing": "11.2.2",
+    "@types/node": "26.3.0",
+    "@types/pg": "8.23.1"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs src",
+    "start": "node dist/main.js",
+    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node .test-dist/config.test.js && node .test-dist/database.test.js && node .test-dist/auth/authentication.test.js && node .test-dist/auth/membership-authorization.test.js && node .test-dist/auth/postgres-membership-lookup.test.js && node .test-dist/auth/membership-directory.test.js && node .test-dist/operations/schema-verification.test.js && node .test-dist/operations/tenancy-verification-config.test.js && node .test-dist/operations/tenancy-fixture-recovery-config.test.js && node .test-dist/operations/tenancy-fixture-recovery.test.js && node .test-dist/operations/app-api-provisioning-config.test.js && node .test-dist/operations/app-api-provisioning.test.js && node .test-dist/operations/app-api-recovery-config.test.js && node .test-dist/operations/app-api-recovery.test.js && node .test-dist/operations/app-api-state-verification-config.test.js && node .test-dist/operations/app-api-state-verification.test.js && node .test-dist/persistence/order-persistence-codec.test.js && node .test-dist/schema-contract.test.js && node .test-dist/app.smoke.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "recover:tenancy:remote": "tsc --project tsconfig.build.json && node dist/operations/run-tenancy-fixture-recovery.js",
+    "recover:app-api:remote": "tsc --project tsconfig.build.json && node dist/operations/run-app-api-recovery.js",
+    "provision:app-api:remote": "tsc --project tsconfig.build.json && node dist/operations/run-app-api-provisioning.js",
+    "verify:schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-schema-verification.js",
+    "verify:membership-directory-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-membership-directory-schema-verification.js",
+    "verify:app-api-state:remote": "tsc --project tsconfig.build.json && node dist/operations/run-app-api-state-verification.js",
+    "verify:tenancy:remote": "tsc --project tsconfig.build.json && node dist/operations/run-tenancy-verification.js"
+  }
+}

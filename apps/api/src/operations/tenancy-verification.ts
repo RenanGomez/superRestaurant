@@ -1,0 +1,1118 @@
+import "reflect-metadata";
+
+import { randomBytes, randomUUID } from "node:crypto";
+
+import type { INestApplication } from "@nestjs/common";
+import { NestFactory } from "@nestjs/core";
+import {
+  BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
+  parseBranchMembershipListV1,
+  type BranchMembershipSummaryV1,
+} from "@super-restaurant/shared-types";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { Pool, type PoolClient } from "pg";
+
+import { AppModule } from "../app.module.js";
+import type { DatabaseConfig } from "../database.js";
+import {
+  codeForStage,
+  TenancyVerificationError,
+  type TenancyVerificationConfig,
+  type TenancyVerificationStage,
+} from "./tenancy-verification-config.js";
+import { validateCatalogAuditSql } from "./schema-verification.js";
+import {
+  appApiLifecycleAdvisoryLockKey,
+  tenancyAuthMetadataMarker,
+  tenancyAuthMetadataVersion,
+  tenancyCanarySuffixes,
+  tenancyFixtureAdvisoryLockKey,
+  tenancyFixtureEmail,
+  tenancyFixtureName,
+  type TenancyFixtureKey,
+} from "./tenancy-fixture-markers.js";
+
+type FixtureKey = TenancyFixtureKey;
+type AppTable = "roles" | "restaurants" | "branches" | "memberships" | "membership_role_grants";
+
+const appTables: readonly AppTable[] = [
+  "roles",
+  "restaurants",
+  "branches",
+  "memberships",
+  "membership_role_grants",
+];
+const expectedRoleCodes = [
+  "admin",
+  "auditor",
+  "cashier",
+  "kitchen",
+  "manager",
+  "owner",
+  "supervisor",
+  "viewer",
+  "waiter",
+] as const;
+export interface TenancyVerificationSummary {
+  readonly checks: number;
+  readonly fixtureRowsRemoved: true;
+  readonly fixtureUsersRemoved: 2;
+  readonly runId: string;
+  readonly status: "ok";
+}
+
+export interface RunTenancyVerificationOptions {
+  readonly config: TenancyVerificationConfig;
+  readonly runtimeCatalogAuditSql: string;
+  readonly onStart?: (runId: string) => void;
+}
+
+interface FixtureUserPlan {
+  readonly branchIds: readonly string[];
+  readonly credentials: Readonly<{ email: string; password: string }>;
+  readonly fixtureKey: FixtureKey;
+  readonly restaurantId: string;
+  userId?: string;
+}
+
+interface FixturePlan {
+  readonly branchIds: readonly [string, string, string, string];
+  readonly canaryRestaurantIds: readonly [string, string, string];
+  readonly grantIds: readonly [string, string, string, string, string];
+  readonly membershipIds: readonly [string, string, string, string];
+  readonly restaurantIds: readonly [string, string];
+  readonly runId: string;
+  readonly users: readonly [FixtureUserPlan, FixtureUserPlan];
+  authCreationAttempted: boolean;
+  databaseFixturesInserted: boolean;
+}
+
+interface AuthenticatedFixture {
+  readonly accessToken: string;
+  readonly client: SupabaseClient;
+  readonly fixtureKey: FixtureKey;
+  readonly userId: string;
+}
+
+class VerificationCounter {
+  public checks = 0;
+
+  public assert(stage: TenancyVerificationStage, condition: boolean): void {
+    this.checks += 1;
+    if (!condition) {
+      throw new TenancyVerificationError(stage, "TENANCY_VERIFICATION_ASSERTION_FAILED");
+    }
+  }
+}
+
+export async function runTenancyVerification(
+  options: RunTenancyVerificationOptions,
+): Promise<TenancyVerificationSummary> {
+  const runtimeCatalogAuditSql = validateRuntimeAuditSql(options.runtimeCatalogAuditSql);
+  const plan = createFixturePlan();
+  options.onStart?.(plan.runId);
+  const counter = new VerificationCounter();
+  const adminPool = createPool(options.config.adminDatabase, "super-restaurant-tenancy-admin");
+  const appApiPool = createPool(options.config.appDatabase, "super-restaurant-tenancy-app-api");
+  const serverClient = createSupabaseClient(options.config.supabaseUrl, options.config.secretKey);
+  let app: INestApplication | undefined;
+  let operationLock: PoolClient | undefined;
+  let failure: TenancyVerificationError | undefined;
+
+  try {
+    operationLock = await executeStage("fixtures", async () => acquireFixtureOperationLock(adminPool, plan.runId));
+    await executeStage("catalog_audit", async () => {
+      await adminPool.query(runtimeCatalogAuditSql);
+    });
+    await executeStage("app_api", async () => verifyAppApiSurface(appApiPool, counter));
+    await executeStage("fixtures", async () => createFixtures(serverClient, adminPool, plan, counter));
+    const authenticated = await executeStage("authentication", async () => authenticateFixtures(options.config, plan, counter));
+
+    app = await executeStage("http", async () => startProductApi());
+    await executeStage("data_api", async () => verifyDataApiBaseline(options.config, plan, authenticated, counter));
+    await executeStage("app_api", async () => verifyPrivateLookupBaseline(appApiPool, plan, counter));
+    await executeStage("http", async () => verifyHttpBaseline(app as INestApplication, plan, authenticated, counter));
+    await executeStage("revocation", async () => verifyRevocations(
+      adminPool,
+      appApiPool,
+      app as INestApplication,
+      plan,
+      authenticated,
+      counter,
+    ));
+    await executeStage("constraints", async () => verifyConstraints(adminPool, plan, counter));
+  } catch (error: unknown) {
+    failure = sanitizeExecutionError(error);
+  } finally {
+    try {
+      if (app !== undefined) await app.close();
+    } catch {
+      failure ??= new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+    }
+
+    try {
+      await cleanupFixtures(serverClient, adminPool, plan, counter);
+    } catch {
+      failure = new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+    }
+
+    if (operationLock !== undefined) {
+      await rollbackQuietly(operationLock);
+      operationLock.release();
+    }
+
+    try {
+      await Promise.all([appApiPool.end(), adminPool.end()]);
+    } catch {
+      failure ??= new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+    }
+  }
+
+  if (failure !== undefined) throw failure;
+  return Object.freeze({
+    checks: counter.checks,
+    fixtureRowsRemoved: true,
+    fixtureUsersRemoved: 2,
+    runId: plan.runId,
+    status: "ok",
+  });
+}
+
+async function acquireFixtureOperationLock(pool: Pool, runId: string): Promise<PoolClient> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "select pg_advisory_xact_lock(pg_catalog.hashtextextended($1::text, 0))",
+      [appApiLifecycleAdvisoryLockKey],
+    );
+    await client.query(
+      "select pg_advisory_xact_lock(pg_catalog.hashtextextended($1::text, 0))",
+      [tenancyFixtureAdvisoryLockKey(runId)],
+    );
+    return client;
+  } catch {
+    await rollbackQuietly(client);
+    client.release();
+    throw new TenancyVerificationError("fixtures", "TENANCY_VERIFICATION_FIXTURES_FAILED");
+  }
+}
+
+function createFixturePlan(): FixturePlan {
+  const runId = randomUUID();
+  const restaurantIds = [randomUUID(), randomUUID()] as const;
+  const branchIds = [randomUUID(), randomUUID(), randomUUID(), randomUUID()] as const;
+  return {
+    branchIds,
+    authCreationAttempted: false,
+    canaryRestaurantIds: [randomUUID(), randomUUID(), randomUUID()],
+    databaseFixturesInserted: false,
+    grantIds: [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()],
+    membershipIds: [randomUUID(), randomUUID(), randomUUID(), randomUUID()],
+    restaurantIds,
+    runId,
+    users: [
+      {
+        branchIds: [branchIds[0], branchIds[1]],
+        credentials: createCredentials("amber", runId),
+        fixtureKey: "amber",
+        restaurantId: restaurantIds[0],
+      },
+      {
+        branchIds: [branchIds[2], branchIds[3]],
+        credentials: createCredentials("cobalt", runId),
+        fixtureKey: "cobalt",
+        restaurantId: restaurantIds[1],
+      },
+    ],
+  };
+}
+
+function createCredentials(fixtureKey: FixtureKey, runId: string): Readonly<{ email: string; password: string }> {
+  return Object.freeze({
+    email: tenancyFixtureEmail(runId, fixtureKey),
+    password: randomBytes(32).toString("base64url"),
+  });
+}
+
+function createPool(config: DatabaseConfig, applicationName: string): Pool {
+  return new Pool({
+    application_name: applicationName,
+    connectionTimeoutMillis: 5_000,
+    connectionString: config.connectionString,
+    idleTimeoutMillis: 5_000,
+    max: 3,
+    query_timeout: 10_000,
+    ssl: { ca: config.caCertificate, rejectUnauthorized: true },
+    statement_timeout: 10_000,
+  });
+}
+
+function createSupabaseClient(url: string, key: string, accessToken?: string): SupabaseClient {
+  return createClient(url, key, {
+    auth: { autoRefreshToken: false, detectSessionInUrl: false, persistSession: false },
+    ...(accessToken === undefined ? {} : { global: { headers: { Authorization: `Bearer ${accessToken}` } } }),
+  });
+}
+
+async function createFixtures(
+  serverClient: SupabaseClient,
+  adminPool: Pool,
+  plan: FixturePlan,
+  counter: VerificationCounter,
+): Promise<void> {
+  for (const user of plan.users) {
+    plan.authCreationAttempted = true;
+    const result = await serverClient.auth.admin.createUser({
+      app_metadata: {
+        fixture_key: user.fixtureKey,
+        run_id: plan.runId,
+        [tenancyAuthMetadataMarker]: tenancyAuthMetadataVersion,
+      },
+      email: user.credentials.email,
+      email_confirm: true,
+      password: user.credentials.password,
+    });
+    counter.assert("fixtures", result.error === null && result.data.user !== null);
+    if (result.data.user === null) throw new TenancyVerificationError("fixtures", "TENANCY_VERIFICATION_FIXTURES_FAILED");
+    user.userId = result.data.user.id;
+  }
+
+  const amberId = requireUserId(plan.users[0]);
+  const cobaltId = requireUserId(plan.users[1]);
+  const client = await adminPool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `insert into app.restaurants (id, name) values ($1::uuid, $3::text), ($2::uuid, $4::text)`,
+      [
+        plan.restaurantIds[0],
+        plan.restaurantIds[1],
+        tenancyFixtureName(plan.runId, "restaurant-1"),
+        tenancyFixtureName(plan.runId, "restaurant-2"),
+      ],
+    );
+    await client.query(
+      `insert into app.branches (id, restaurant_id, name) values
+        ($1::uuid, $5::uuid, $7::text),
+        ($2::uuid, $5::uuid, $8::text),
+        ($3::uuid, $6::uuid, $9::text),
+        ($4::uuid, $6::uuid, $10::text)`,
+      [
+        ...plan.branchIds,
+        ...plan.restaurantIds,
+        tenancyFixtureName(plan.runId, "branch-11"),
+        tenancyFixtureName(plan.runId, "branch-12"),
+        tenancyFixtureName(plan.runId, "branch-21"),
+        tenancyFixtureName(plan.runId, "branch-22"),
+      ],
+    );
+    await client.query(
+      `insert into app.memberships (id, user_id, restaurant_id, branch_id, granted_by) values
+        ($1::uuid, $5::uuid, $7::uuid, $9::uuid, $5::uuid),
+        ($2::uuid, $5::uuid, $7::uuid, $10::uuid, $5::uuid),
+        ($3::uuid, $6::uuid, $8::uuid, $11::uuid, $5::uuid),
+        ($4::uuid, $6::uuid, $8::uuid, $12::uuid, $5::uuid)`,
+      [...plan.membershipIds, amberId, cobaltId, ...plan.restaurantIds, ...plan.branchIds],
+    );
+    await client.query(
+      `insert into app.membership_role_grants (id, membership_id, role_code, granted_by) values
+        ($1::uuid, $6::uuid, 'manager', $10::uuid),
+        ($2::uuid, $6::uuid, 'waiter', $10::uuid),
+        ($3::uuid, $7::uuid, 'viewer', $10::uuid),
+        ($4::uuid, $8::uuid, 'cashier', $10::uuid),
+        ($5::uuid, $9::uuid, 'kitchen', $10::uuid)`,
+      [...plan.grantIds, ...plan.membershipIds, amberId],
+    );
+    await client.query("COMMIT");
+    plan.databaseFixturesInserted = true;
+  } catch {
+    await rollbackQuietly(client);
+    throw new TenancyVerificationError("fixtures", "TENANCY_VERIFICATION_FIXTURES_FAILED");
+  } finally {
+    client.release();
+  }
+}
+
+async function authenticateFixtures(
+  config: TenancyVerificationConfig,
+  plan: FixturePlan,
+  counter: VerificationCounter,
+): Promise<readonly [AuthenticatedFixture, AuthenticatedFixture]> {
+  const authenticated: AuthenticatedFixture[] = [];
+  for (const user of plan.users) {
+    const loginClient = createSupabaseClient(config.supabaseUrl, config.publishableKey);
+    const result = await loginClient.auth.signInWithPassword(user.credentials);
+    const expectedUserId = requireUserId(user);
+    counter.assert(
+      "authentication",
+      result.error === null && result.data.session !== null && result.data.user?.id === expectedUserId,
+    );
+    if (result.data.session === null) {
+      throw new TenancyVerificationError("authentication", "TENANCY_VERIFICATION_AUTHENTICATION_FAILED");
+    }
+    const accessToken = result.data.session.access_token;
+    const client = createSupabaseClient(config.supabaseUrl, config.publishableKey, accessToken);
+    const verified = await client.auth.getUser(accessToken);
+    counter.assert("authentication", verified.error === null && verified.data.user?.id === expectedUserId);
+    authenticated.push({ accessToken, client, fixtureKey: user.fixtureKey, userId: expectedUserId });
+  }
+  if (authenticated.length !== 2) {
+    throw new TenancyVerificationError("authentication", "TENANCY_VERIFICATION_AUTHENTICATION_FAILED");
+  }
+  return authenticated as unknown as readonly [AuthenticatedFixture, AuthenticatedFixture];
+}
+
+async function startProductApi(): Promise<INestApplication> {
+  const app = await NestFactory.create(AppModule, { abortOnError: false, logger: false });
+  try {
+    app.setGlobalPrefix("api/v1");
+    app.enableShutdownHooks();
+    await app.listen(0, "127.0.0.1");
+    return app;
+  } catch {
+    try {
+      await app.close();
+    } catch {
+      // The outer stage maps both failures to one non-sensitive HTTP code.
+    }
+    throw new TenancyVerificationError("http", "TENANCY_VERIFICATION_HTTP_FAILED");
+  }
+}
+
+async function verifyDataApiBaseline(
+  config: TenancyVerificationConfig,
+  plan: FixturePlan,
+  authenticated: readonly [AuthenticatedFixture, AuthenticatedFixture],
+  counter: VerificationCounter,
+): Promise<void> {
+  const anon = createSupabaseClient(config.supabaseUrl, config.publishableKey);
+  const serviceRole = createSupabaseClient(config.supabaseUrl, config.secretKey);
+  for (const table of appTables) {
+    await expectDataApiDeniedRead(anon, table, counter);
+    await expectDataApiDeniedRead(serviceRole, table, counter);
+  }
+  await expectDataApiDeniedWrites(
+    anon,
+    plan.canaryRestaurantIds[0],
+    tenancyFixtureName(plan.runId, tenancyCanarySuffixes[0]),
+    counter,
+  );
+  await expectDataApiDeniedWrites(
+    authenticated[0].client,
+    plan.canaryRestaurantIds[1],
+    tenancyFixtureName(plan.runId, tenancyCanarySuffixes[1]),
+    counter,
+  );
+  await expectDataApiDeniedWrites(
+    serviceRole,
+    plan.canaryRestaurantIds[2],
+    tenancyFixtureName(plan.runId, tenancyCanarySuffixes[2]),
+    counter,
+  );
+
+  await assertVisibleIds(authenticated[0].client, "restaurants", plan.restaurantIds, [plan.restaurantIds[0]], counter, "data_api");
+  await assertVisibleIds(authenticated[0].client, "branches", plan.branchIds, [plan.branchIds[0], plan.branchIds[1]], counter, "data_api");
+  await assertVisibleIds(authenticated[0].client, "memberships", plan.membershipIds, [plan.membershipIds[0], plan.membershipIds[1]], counter, "data_api");
+  await assertVisibleIds(authenticated[0].client, "membership_role_grants", plan.grantIds, [plan.grantIds[0], plan.grantIds[1], plan.grantIds[2]], counter, "data_api");
+  await assertVisibleIds(authenticated[1].client, "restaurants", plan.restaurantIds, [plan.restaurantIds[1]], counter, "data_api");
+  await assertVisibleIds(authenticated[1].client, "branches", plan.branchIds, [plan.branchIds[2], plan.branchIds[3]], counter, "data_api");
+
+  const roles = await authenticated[0].client.schema("app").from("roles").select("code");
+  counter.assert("data_api", roles.error === null && Array.isArray(roles.data));
+  const roleCodes = Array.isArray(roles.data)
+    ? roles.data.map((row) => readStringProperty(row, "code")).filter((value): value is string => value !== undefined).sort()
+    : [];
+  counter.assert("data_api", arraysEqual(roleCodes, [...expectedRoleCodes]));
+
+  const falsePair = await authenticated[0].client
+    .schema("app")
+    .from("branches")
+    .select("id")
+    .eq("restaurant_id", plan.restaurantIds[0])
+    .eq("id", plan.branchIds[2]);
+  counter.assert("data_api", falsePair.error === null && Array.isArray(falsePair.data) && falsePair.data.length === 0);
+}
+
+async function expectDataApiDeniedRead(
+  client: SupabaseClient,
+  table: AppTable,
+  counter: VerificationCounter,
+): Promise<void> {
+  const result = await client.schema("app").from(table).select("*").limit(1);
+  counter.assert("data_api", result.data === null && result.error?.code === "42501");
+}
+
+async function expectDataApiDeniedWrites(
+  client: SupabaseClient,
+  canaryRestaurantId: string,
+  canaryName: string,
+  counter: VerificationCounter,
+): Promise<void> {
+  const insert = await client.schema("app").from("restaurants").insert({
+    id: canaryRestaurantId,
+    name: canaryName,
+  }).select("id");
+  counter.assert("data_api", insert.data === null && insert.error?.code === "42501");
+
+  const update = await client.schema("app").from("restaurants").update({ name: canaryName }).eq("id", canaryRestaurantId).select("id");
+  counter.assert("data_api", update.data === null && update.error?.code === "42501");
+
+  const deletion = await client.schema("app").from("restaurants").delete().eq("id", canaryRestaurantId).select("id");
+  counter.assert("data_api", deletion.data === null && deletion.error?.code === "42501");
+}
+
+async function assertVisibleIds(
+  client: SupabaseClient,
+  table: AppTable,
+  candidateIds: readonly string[],
+  expectedIds: readonly string[],
+  counter: VerificationCounter,
+  stage: TenancyVerificationStage,
+): Promise<void> {
+  const result = await client.schema("app").from(table).select("id").in("id", [...candidateIds]);
+  counter.assert(stage, result.error === null && Array.isArray(result.data));
+  const actualIds = readVisibleIds(result.data);
+  counter.assert(stage, arraysEqual(actualIds, [...expectedIds].sort()));
+}
+
+async function verifyAppApiSurface(appApiPool: Pool, counter: VerificationCounter): Promise<void> {
+  const identity = await appApiPool.query<{ currentUser: string; sessionUser: string }>(
+    `select current_user::text as "currentUser", session_user::text as "sessionUser"`,
+  );
+  counter.assert("app_api", identity.rows.length === 1 && identity.rows[0]?.currentUser === "app_api" && identity.rows[0]?.sessionUser === "app_api");
+  await expectPostgresDenied(appApiPool, "select * from app.roles limit 1", [], counter, "app_api");
+  await expectPostgresDenied(appApiPool, "insert into app.roles (code) values ('tenancy_canary')", [], counter, "app_api");
+  await expectPostgresDenied(appApiPool, "select app_rls.has_active_restaurant_membership($1::uuid)", [randomUUID()], counter, "app_api");
+  await assertPrivateDirectory(appApiPool, randomUUID(), [], counter, "app_api");
+}
+
+async function verifyPrivateLookupBaseline(appApiPool: Pool, plan: FixturePlan, counter: VerificationCounter): Promise<void> {
+  const amberId = requireUserId(plan.users[0]);
+  const cobaltId = requireUserId(plan.users[1]);
+  await assertPrivateLookup(appApiPool, amberId, plan.restaurantIds[0], plan.branchIds[0], ["manager", "waiter"], counter, "app_api");
+  await assertPrivateLookup(appApiPool, amberId, plan.restaurantIds[0], plan.branchIds[1], ["viewer"], counter, "app_api");
+  await assertPrivateLookup(appApiPool, amberId, plan.restaurantIds[1], plan.branchIds[2], [], counter, "app_api");
+  await assertPrivateLookup(appApiPool, amberId, plan.restaurantIds[0], plan.branchIds[2], [], counter, "app_api");
+  await assertPrivateDirectory(appApiPool, amberId, expectedDirectory(plan, 0), counter, "app_api");
+  await assertPrivateDirectory(appApiPool, cobaltId, expectedDirectory(plan, 1), counter, "app_api");
+}
+
+async function assertPrivateDirectory(
+  appApiPool: Pool,
+  actorId: string,
+  expected: readonly BranchMembershipSummaryV1[],
+  counter: VerificationCounter,
+  stage: TenancyVerificationStage,
+): Promise<void> {
+  const result = await appApiPool.query<{
+    branch_id: unknown;
+    branch_name: unknown;
+    restaurant_id: unknown;
+    restaurant_name: unknown;
+    roles: unknown;
+  }>(
+    `select
+       restaurant_id::text,
+       restaurant_name,
+       branch_id::text,
+       branch_name,
+       roles
+     from app_private.list_active_branch_memberships($1::uuid)
+     order by restaurant_id, branch_id`,
+    [actorId],
+  );
+  const parsed = parseBranchMembershipListV1({
+    memberships: result.rows.map((row) => ({
+      branchName: row.branch_name,
+      restaurantName: row.restaurant_name,
+      roles: row.roles,
+      scope: { branchId: row.branch_id, restaurantId: row.restaurant_id },
+    })),
+    schemaVersion: BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
+  });
+  counter.assert(
+    stage,
+    parsed !== undefined
+      && valuesEqual(parsed, { memberships: expected, schemaVersion: BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION }),
+  );
+}
+
+async function assertPrivateLookup(
+  appApiPool: Pool,
+  actorId: string,
+  restaurantId: string,
+  branchId: string,
+  expectedRoles: readonly string[],
+  counter: VerificationCounter,
+  stage: TenancyVerificationStage,
+): Promise<void> {
+  const result = await appApiPool.query<{ roles: unknown }>(
+    `select roles from app_private.find_active_branch_membership($1::uuid, $2::uuid, $3::uuid)`,
+    [actorId, restaurantId, branchId],
+  );
+  if (expectedRoles.length === 0) {
+    counter.assert(stage, result.rows.length === 0);
+    return;
+  }
+  counter.assert(stage, result.rows.length === 1 && Array.isArray(result.rows[0]?.roles));
+  const roles = Array.isArray(result.rows[0]?.roles) ? result.rows[0].roles : [];
+  counter.assert(stage, arraysEqual(roles, expectedRoles));
+}
+
+async function verifyHttpBaseline(
+  app: INestApplication,
+  plan: FixturePlan,
+  authenticated: readonly [AuthenticatedFixture, AuthenticatedFixture],
+  counter: VerificationCounter,
+): Promise<void> {
+  const baseUrl = await app.getUrl();
+  await assertHttp(baseUrl, "/api/v1/session", undefined, 401, { code: "AUTHENTICATION_REQUIRED" }, counter);
+  await assertHttp(baseUrl, "/api/v1/session", "invalid-access-token-value", 401, { code: "AUTHENTICATION_REQUIRED" }, counter);
+  await assertHttp(baseUrl, "/api/v1/session", authenticated[0].accessToken, 200, { actorId: authenticated[0].userId }, counter);
+  await assertHttp(baseUrl, "/api/v1/access/memberships", undefined, 401, { code: "AUTHENTICATION_REQUIRED" }, counter);
+  await assertMembershipDirectoryHttp(baseUrl, authenticated[0].accessToken, expectedDirectory(plan, 0), counter);
+  await assertMembershipDirectoryHttp(baseUrl, authenticated[1].accessToken, expectedDirectory(plan, 1), counter);
+  // Branch selection intentionally accepts every known membership role. Its
+  // 403 evidence is exact-scope/membership denial, not an action-specific RBAC
+  // denial; that belongs to the first product route with a narrower role set.
+  await assertBranchHttp(baseUrl, authenticated[0].accessToken, plan.restaurantIds[0], plan.branchIds[0], 200, ["manager", "waiter"], counter);
+  await assertBranchHttp(baseUrl, authenticated[0].accessToken, plan.restaurantIds[0], plan.branchIds[1], 200, ["viewer"], counter);
+  await assertBranchHttp(baseUrl, authenticated[0].accessToken, plan.restaurantIds[1], plan.branchIds[2], 403, undefined, counter);
+  await assertBranchHttp(baseUrl, authenticated[0].accessToken, plan.restaurantIds[0], plan.branchIds[2], 403, undefined, counter);
+  await assertBranchHttp(baseUrl, authenticated[1].accessToken, plan.restaurantIds[1], plan.branchIds[2], 200, ["cashier"], counter);
+  await assertBranchHttp(baseUrl, authenticated[1].accessToken, plan.restaurantIds[1], plan.branchIds[3], 200, ["kitchen"], counter);
+}
+
+async function verifyRevocations(
+  adminPool: Pool,
+  appApiPool: Pool,
+  app: INestApplication,
+  plan: FixturePlan,
+  authenticated: readonly [AuthenticatedFixture, AuthenticatedFixture],
+  counter: VerificationCounter,
+): Promise<void> {
+  const amber = authenticated[0];
+  const baseUrl = await app.getUrl();
+  await updateExactlyOne(adminPool,
+    `update app.membership_role_grants set revoked_at = clock_timestamp(), revoked_by = $2::uuid, revocation_reason = 'tenancy verification' where id = $1::uuid and revoked_at is null`,
+    [plan.grantIds[1], amber.userId],
+  );
+  await assertVisibleIds(amber.client, "membership_role_grants", plan.grantIds, [plan.grantIds[0], plan.grantIds[2]], counter, "revocation");
+  await assertPrivateLookup(appApiPool, amber.userId, plan.restaurantIds[0], plan.branchIds[0], ["manager"], counter, "revocation");
+  await assertPrivateDirectory(
+    appApiPool,
+    amber.userId,
+    expectedDirectory(plan, 0, [["manager"], ["viewer"]]),
+    counter,
+    "revocation",
+  );
+  await assertBranchHttp(baseUrl, amber.accessToken, plan.restaurantIds[0], plan.branchIds[0], 200, ["manager"], counter, "revocation");
+  await assertMembershipDirectoryHttp(
+    baseUrl,
+    amber.accessToken,
+    expectedDirectory(plan, 0, [["manager"], ["viewer"]]),
+    counter,
+    "revocation",
+  );
+
+  await updateExactlyOne(adminPool,
+    `update app.membership_role_grants set revoked_at = clock_timestamp(), revoked_by = $2::uuid, revocation_reason = 'tenancy verification' where id = $1::uuid and revoked_at is null`,
+    [plan.grantIds[2], amber.userId],
+  );
+  await assertVisibleIds(amber.client, "branches", plan.branchIds, [plan.branchIds[0]], counter, "revocation");
+  await assertPrivateLookup(appApiPool, amber.userId, plan.restaurantIds[0], plan.branchIds[1], [], counter, "revocation");
+  await assertPrivateDirectory(
+    appApiPool,
+    amber.userId,
+    expectedDirectory(plan, 0, [["manager"], []]),
+    counter,
+    "revocation",
+  );
+  await assertBranchHttp(baseUrl, amber.accessToken, plan.restaurantIds[0], plan.branchIds[1], 403, undefined, counter, "revocation");
+  await assertMembershipDirectoryHttp(
+    baseUrl,
+    amber.accessToken,
+    expectedDirectory(plan, 0, [["manager"], []]),
+    counter,
+    "revocation",
+  );
+
+  await updateExactlyOne(adminPool,
+    `update app.memberships set revoked_at = clock_timestamp(), revoked_by = $2::uuid, revocation_reason = 'tenancy verification' where id = $1::uuid and revoked_at is null`,
+    [plan.membershipIds[0], amber.userId],
+  );
+  await assertVisibleIds(amber.client, "restaurants", plan.restaurantIds, [], counter, "revocation");
+  await assertVisibleIds(amber.client, "branches", plan.branchIds, [], counter, "revocation");
+  await assertPrivateLookup(appApiPool, amber.userId, plan.restaurantIds[0], plan.branchIds[0], [], counter, "revocation");
+  await assertPrivateDirectory(appApiPool, amber.userId, [], counter, "revocation");
+  await assertBranchHttp(baseUrl, amber.accessToken, plan.restaurantIds[0], plan.branchIds[0], 403, undefined, counter, "revocation");
+  await assertMembershipDirectoryHttp(baseUrl, amber.accessToken, [], counter, "revocation");
+  await assertHttp(baseUrl, "/api/v1/session", amber.accessToken, 200, { actorId: amber.userId }, counter, "revocation");
+
+  const cobalt = authenticated[1];
+  await updateExactlyOne(
+    adminPool,
+    `update app.branches
+     set disabled_at = clock_timestamp(), disabled_by = $2::uuid, disabled_reason = 'tenancy verification'
+     where id = $1::uuid and disabled_at is null`,
+    [plan.branchIds[2], cobalt.userId],
+  );
+  await assertPrivateDirectory(
+    appApiPool,
+    cobalt.userId,
+    expectedDirectory(plan, 1, [[], ["kitchen"]]),
+    counter,
+    "revocation",
+  );
+  await assertMembershipDirectoryHttp(
+    baseUrl,
+    cobalt.accessToken,
+    expectedDirectory(plan, 1, [[], ["kitchen"]]),
+    counter,
+    "revocation",
+  );
+
+  await updateExactlyOne(
+    adminPool,
+    `update app.restaurants
+     set disabled_at = clock_timestamp(), disabled_by = $2::uuid, disabled_reason = 'tenancy verification'
+     where id = $1::uuid and disabled_at is null`,
+    [plan.restaurantIds[1], cobalt.userId],
+  );
+  await assertPrivateDirectory(appApiPool, cobalt.userId, [], counter, "revocation");
+  await assertMembershipDirectoryHttp(baseUrl, cobalt.accessToken, [], counter, "revocation");
+}
+
+async function verifyConstraints(adminPool: Pool, plan: FixturePlan, counter: VerificationCounter): Promise<void> {
+  const amberId = requireUserId(plan.users[0]);
+  const cobaltId = requireUserId(plan.users[1]);
+  await expectConstraintFailure(adminPool,
+    `insert into app.memberships (id, user_id, restaurant_id, branch_id, granted_by) values ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid)`,
+    [randomUUID(), cobaltId, plan.restaurantIds[0], plan.branchIds[2], amberId],
+    "23503",
+    counter,
+  );
+  await expectConstraintFailure(adminPool,
+    `insert into app.memberships (id, user_id, restaurant_id, branch_id, granted_by) values ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $2::uuid)`,
+    [randomUUID(), cobaltId, plan.restaurantIds[1], plan.branchIds[2]],
+    "23505",
+    counter,
+  );
+  await expectConstraintFailure(adminPool,
+    `insert into app.membership_role_grants (id, membership_id, role_code, granted_by) values ($1::uuid, $2::uuid, 'invented_role', $3::uuid)`,
+    [randomUUID(), plan.membershipIds[2], amberId],
+    "23503",
+    counter,
+  );
+  await expectConstraintFailure(adminPool,
+    `update app.memberships set revoked_at = clock_timestamp() where id = $1::uuid`,
+    [plan.membershipIds[2]],
+    "23514",
+    counter,
+  );
+}
+
+async function expectConstraintFailure(
+  pool: Pool,
+  sql: string,
+  parameters: readonly unknown[],
+  expectedCode: string,
+  counter: VerificationCounter,
+): Promise<void> {
+  const client = await pool.connect();
+  let observedCode: string | undefined;
+  try {
+    await client.query("BEGIN");
+    try {
+      await client.query(sql, [...parameters]);
+    } catch (error: unknown) {
+      observedCode = readPostgresCode(error);
+    }
+  } finally {
+    await rollbackQuietly(client);
+    client.release();
+  }
+  counter.assert("constraints", observedCode === expectedCode);
+}
+
+async function expectPostgresDenied(
+  pool: Pool,
+  sql: string,
+  parameters: readonly unknown[],
+  counter: VerificationCounter,
+  stage: TenancyVerificationStage,
+): Promise<void> {
+  let code: string | undefined;
+  try {
+    await pool.query(sql, [...parameters]);
+  } catch (error: unknown) {
+    code = readPostgresCode(error);
+  }
+  counter.assert(stage, code === "42501");
+}
+
+async function updateExactlyOne(pool: Pool, sql: string, parameters: readonly unknown[]): Promise<void> {
+  const result = await pool.query(sql, [...parameters]);
+  if (result.rowCount !== 1) {
+    throw new TenancyVerificationError("revocation", "TENANCY_VERIFICATION_REVOCATION_FAILED");
+  }
+}
+
+async function assertHttp(
+  baseUrl: string,
+  path: string,
+  accessToken: string | undefined,
+  expectedStatus: number,
+  expectedBody: Readonly<Record<string, unknown>>,
+  counter: VerificationCounter,
+  stage: TenancyVerificationStage = "http",
+): Promise<void> {
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers: accessToken === undefined ? {} : { authorization: `Bearer ${accessToken}` },
+  });
+  const body: unknown = await response.json();
+  counter.assert(stage, response.status === expectedStatus && recordsEqual(body, expectedBody));
+}
+
+async function assertBranchHttp(
+  baseUrl: string,
+  accessToken: string,
+  restaurantId: string,
+  branchId: string,
+  expectedStatus: number,
+  expectedRoles: readonly string[] | undefined,
+  counter: VerificationCounter,
+  stage: TenancyVerificationStage = "http",
+): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/v1/access/branch`, {
+    body: JSON.stringify({ branchId, restaurantId }),
+    headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
+    method: "POST",
+  });
+  const body: unknown = await response.json();
+  if (expectedStatus === 403) {
+    counter.assert(stage, response.status === 403 && recordsEqual(body, { code: "SCOPE_AUTHORIZATION_REJECTED" }));
+    return;
+  }
+  counter.assert(stage, response.status === 200 && recordsEqual(body, { branchId, restaurantId, roles: expectedRoles }));
+}
+
+async function assertMembershipDirectoryHttp(
+  baseUrl: string,
+  accessToken: string,
+  expectedMemberships: readonly BranchMembershipSummaryV1[],
+  counter: VerificationCounter,
+  stage: TenancyVerificationStage = "http",
+): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/v1/access/memberships`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  const parsed = parseBranchMembershipListV1(await response.json());
+  counter.assert(
+    stage,
+    response.status === 200
+      && response.headers.get("cache-control") === "private, no-store"
+      && parsed !== undefined
+      && valuesEqual(parsed, {
+        memberships: expectedMemberships,
+        schemaVersion: BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
+      }),
+  );
+}
+
+function expectedDirectory(
+  plan: FixturePlan,
+  userIndex: 0 | 1,
+  roleSets: readonly [readonly string[], readonly string[]] = userIndex === 0
+    ? [["manager", "waiter"], ["viewer"]]
+    : [["cashier"], ["kitchen"]],
+): readonly BranchMembershipSummaryV1[] {
+  const restaurantIndex = userIndex;
+  const branchOffset = userIndex * 2;
+  return [0, 1]
+    .flatMap((localIndex) => {
+      const roles = roleSets[localIndex] ?? [];
+      if (roles.length === 0) return [];
+      const branchIndex = branchOffset + localIndex;
+      return [{
+        branchName: tenancyFixtureName(plan.runId, userIndex === 0 ? `branch-1${localIndex + 1}` as "branch-11" | "branch-12" : `branch-2${localIndex + 1}` as "branch-21" | "branch-22"),
+        restaurantName: tenancyFixtureName(plan.runId, userIndex === 0 ? "restaurant-1" : "restaurant-2"),
+        roles: Object.freeze([...roles]) as BranchMembershipSummaryV1["roles"],
+        scope: {
+          branchId: plan.branchIds[branchIndex] as BranchMembershipSummaryV1["scope"]["branchId"],
+          restaurantId: plan.restaurantIds[restaurantIndex] as BranchMembershipSummaryV1["scope"]["restaurantId"],
+        },
+      }];
+    })
+    .sort((left, right) => left.scope.branchId < right.scope.branchId ? -1 : left.scope.branchId > right.scope.branchId ? 1 : 0);
+}
+
+async function cleanupFixtures(
+  serverClient: SupabaseClient,
+  adminPool: Pool,
+  plan: FixturePlan,
+  counter: VerificationCounter,
+): Promise<void> {
+  const knownUserIds = plan.users.map((user) => user.userId).filter((id): id is string => id !== undefined);
+  if (!plan.authCreationAttempted && knownUserIds.length === 0 && !plan.databaseFixturesInserted) return;
+  const discoveredUserIds = await discoverMarkedUsers(serverClient, plan.runId);
+  const userIds = [...new Set([...discoveredUserIds, ...knownUserIds])];
+  if (userIds.length === 0 && !plan.databaseFixturesInserted) return;
+
+  if (plan.databaseFixturesInserted) {
+    const client = await adminPool.connect();
+    try {
+      await client.query("BEGIN");
+      await verifyFixtureOwnership(client, plan);
+      await deleteRequiredFixtureRows(client, "app.membership_role_grants", plan.grantIds, plan.grantIds);
+      await deleteRequiredFixtureRows(client, "app.memberships", plan.membershipIds, plan.membershipIds);
+      await deleteRequiredFixtureRows(client, "app.branches", plan.branchIds, plan.branchIds);
+      await deleteRequiredFixtureRows(
+        client,
+        "app.restaurants",
+        [...plan.restaurantIds, ...plan.canaryRestaurantIds],
+        plan.restaurantIds,
+      );
+      await client.query("COMMIT");
+    } catch {
+      await rollbackQuietly(client);
+      throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+    } finally {
+      client.release();
+    }
+  }
+
+  for (const userId of userIds) {
+    await assertFixtureAuthUser(serverClient, plan, userId);
+    const deleted = await serverClient.auth.admin.deleteUser(userId);
+    if (deleted.error !== null) throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+  }
+
+  const residualUsers = await discoverMarkedUsers(serverClient, plan.runId);
+  counter.assert("cleanup", residualUsers.length === 0);
+  const residualRows = await adminPool.query<{ count: number }>(
+    `select (
+      (select count(*) from app.membership_role_grants where membership_id = any($1::uuid[]))
+      + (select count(*) from app.memberships where id = any($1::uuid[]))
+      + (select count(*) from app.branches where id = any($2::uuid[]))
+      + (select count(*) from app.restaurants where id = any($3::uuid[]))
+    )::integer as count`,
+    [[...plan.membershipIds], [...plan.branchIds], [...plan.restaurantIds, ...plan.canaryRestaurantIds]],
+  );
+  counter.assert("cleanup", residualRows.rows[0]?.count === 0);
+}
+
+async function deleteRequiredFixtureRows(
+  client: PoolClient,
+  table: string,
+  allowedIds: readonly string[],
+  requiredIds: readonly string[],
+): Promise<void> {
+  const result = await client.query<{ id: string }>(
+    `delete from ${table} where id = any($1::uuid[]) returning id::text`,
+    [[...allowedIds]],
+  );
+  const returned = new Set(result.rows.map((row) => row.id));
+  if (
+    result.rowCount !== returned.size
+    || [...returned].some((id) => !allowedIds.includes(id))
+    || requiredIds.some((id) => !returned.has(id))
+  ) throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+}
+
+async function assertFixtureAuthUser(
+  serverClient: SupabaseClient,
+  plan: FixturePlan,
+  userId: string,
+): Promise<void> {
+  const result = await serverClient.auth.admin.getUserById(userId);
+  if (result.error !== null || result.data.user === null) {
+    throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+  }
+  const user = result.data.user;
+  const marker = readStringProperty(user.app_metadata, tenancyAuthMetadataMarker);
+  const runId = readStringProperty(user.app_metadata, "run_id");
+  const fixtureKey = readStringProperty(user.app_metadata, "fixture_key");
+  const expected = plan.users.find((candidate) => candidate.fixtureKey === fixtureKey);
+  if (
+    marker !== tenancyAuthMetadataVersion
+    || runId !== plan.runId
+    || expected === undefined
+    || user.email !== expected.credentials.email
+    || (expected.userId !== undefined && expected.userId !== userId)
+  ) throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+}
+
+async function verifyFixtureOwnership(client: PoolClient, plan: FixturePlan): Promise<void> {
+  const restaurantNames = new Map<string, string>([
+    [plan.restaurantIds[0], tenancyFixtureName(plan.runId, "restaurant-1")],
+    [plan.restaurantIds[1], tenancyFixtureName(plan.runId, "restaurant-2")],
+    ...plan.canaryRestaurantIds.map((id, index) => [
+      id,
+      tenancyFixtureName(plan.runId, tenancyCanarySuffixes[index] as (typeof tenancyCanarySuffixes)[number]),
+    ] as const),
+  ]);
+  const restaurants = await client.query<{ id: string; name: string }>(
+    `select id::text, name from app.restaurants where id = any($1::uuid[]) for update`,
+    [[...restaurantNames.keys()]],
+  );
+  for (const row of restaurants.rows) {
+    if (restaurantNames.get(row.id) !== row.name) {
+      throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+    }
+  }
+  if (!plan.restaurantIds.every((id) => restaurants.rows.some((row) => row.id === id))) {
+    throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+  }
+
+  const expectedBranches = new Map<string, Readonly<{ name: string; restaurantId: string }>>([
+    [plan.branchIds[0], { name: tenancyFixtureName(plan.runId, "branch-11"), restaurantId: plan.restaurantIds[0] }],
+    [plan.branchIds[1], { name: tenancyFixtureName(plan.runId, "branch-12"), restaurantId: plan.restaurantIds[0] }],
+    [plan.branchIds[2], { name: tenancyFixtureName(plan.runId, "branch-21"), restaurantId: plan.restaurantIds[1] }],
+    [plan.branchIds[3], { name: tenancyFixtureName(plan.runId, "branch-22"), restaurantId: plan.restaurantIds[1] }],
+  ]);
+  const branches = await client.query<{ id: string; name: string; restaurantId: string }>(
+    `select id::text, name, restaurant_id::text as "restaurantId"
+     from app.branches where id = any($1::uuid[]) for update`,
+    [[...expectedBranches.keys()]],
+  );
+  if (branches.rows.length !== expectedBranches.size) {
+    throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+  }
+  for (const row of branches.rows) {
+    const expected = expectedBranches.get(row.id);
+    if (expected?.name !== row.name || expected.restaurantId !== row.restaurantId) {
+      throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+    }
+  }
+}
+
+async function discoverMarkedUsers(serverClient: SupabaseClient, runId: string): Promise<readonly string[]> {
+  const idsByFixture = new Map<FixtureKey, string>();
+  for (let page = 1; page <= 100; page += 1) {
+    const result = await serverClient.auth.admin.listUsers({ page, perPage: 1000 });
+    if (result.error !== null) throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+    for (const user of result.data.users) {
+      const marker = readStringProperty(user.app_metadata, tenancyAuthMetadataMarker);
+      const markedRunId = readStringProperty(user.app_metadata, "run_id");
+      if (marker !== tenancyAuthMetadataVersion || markedRunId !== runId) continue;
+      const fixtureKey = readStringProperty(user.app_metadata, "fixture_key");
+      if (
+        (fixtureKey !== "amber" && fixtureKey !== "cobalt")
+        || user.email !== tenancyFixtureEmail(runId, fixtureKey)
+        || idsByFixture.has(fixtureKey)
+      ) throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+      idsByFixture.set(fixtureKey, user.id);
+    }
+    if (result.data.nextPage === null) return Object.freeze([...idsByFixture.values()]);
+  }
+  throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+}
+
+async function rollbackQuietly(client: PoolClient): Promise<void> {
+  try {
+    await client.query("ROLLBACK");
+  } catch {
+    // The caller converts cleanup/fixture failures to a stable non-sensitive code.
+  }
+}
+
+async function executeStage<Result>(
+  stage: TenancyVerificationStage,
+  action: () => Promise<Result>,
+): Promise<Result> {
+  try {
+    return await action();
+  } catch (error: unknown) {
+    if (error instanceof TenancyVerificationError) throw error;
+    throw new TenancyVerificationError(stage, codeForStage(stage));
+  }
+}
+
+function sanitizeExecutionError(error: unknown): TenancyVerificationError {
+  return error instanceof TenancyVerificationError
+    ? error
+    : new TenancyVerificationError("configuration", "TENANCY_VERIFICATION_CONFIGURATION_REJECTED");
+}
+
+function validateRuntimeAuditSql(sql: string): string {
+  if (
+    typeof sql !== "string"
+    || sql.length === 0
+    || sql.length > 100_000
+    || !sql.includes("RUNTIME_AUDIT_APP_API_ATTRIBUTES")
+    || !sql.includes("RUNTIME_AUDIT_APP_API_TABLE_GRANTS")
+  ) {
+    throw new TenancyVerificationError("configuration", "TENANCY_VERIFICATION_CONFIGURATION_REJECTED");
+  }
+  try {
+    return validateCatalogAuditSql(sql);
+  } catch {
+    throw new TenancyVerificationError("configuration", "TENANCY_VERIFICATION_CONFIGURATION_REJECTED");
+  }
+}
+
+function requireUserId(user: FixtureUserPlan): string {
+  if (user.userId === undefined) {
+    throw new TenancyVerificationError("fixtures", "TENANCY_VERIFICATION_FIXTURES_FAILED");
+  }
+  return user.userId;
+}
+
+function readVisibleIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((row) => readStringProperty(row, "id")).filter((id): id is string => id !== undefined).sort();
+}
+
+function readStringProperty(value: unknown, key: string): string | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor !== undefined && "value" in descriptor && typeof descriptor.value === "string"
+    ? descriptor.value
+    : undefined;
+}
+
+function readPostgresCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(error, "code");
+  return descriptor !== undefined && "value" in descriptor && typeof descriptor.value === "string"
+    ? descriptor.value
+    : undefined;
+}
+
+function arraysEqual(left: readonly unknown[], right: readonly unknown[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function recordsEqual(actual: unknown, expected: Readonly<Record<string, unknown>>): boolean {
+  if (typeof actual !== "object" || actual === null || Array.isArray(actual)) return false;
+  try {
+    const actualRecord = actual as Record<string, unknown>;
+    const actualKeys = Object.keys(actualRecord).sort();
+    const expectedKeys = Object.keys(expected).sort();
+    if (!arraysEqual(actualKeys, expectedKeys)) return false;
+    return actualKeys.every((key) => valuesEqual(actualRecord[key], expected[key]));
+  } catch {
+    return false;
+  }
+}
+
+function valuesEqual(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left)
+      && Array.isArray(right)
+      && left.length === right.length
+      && left.every((value, index) => valuesEqual(value, right[index]));
+  }
+  if (typeof left === "object" || typeof right === "object") {
+    return typeof left === "object"
+      && left !== null
+      && !Array.isArray(left)
+      && typeof right === "object"
+      && right !== null
+      && !Array.isArray(right)
+      && recordsEqual(left, right as Readonly<Record<string, unknown>>);
+  }
+  return left === right;
+}

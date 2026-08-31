@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { Pool } from "pg";
 
-import { requireSupabaseDestructiveServerOptIn, type SupabaseAdr010DestructiveServerConfig } from "./config.js";
+import { requireSupabaseDestructiveDatabaseOptIn, type SupabaseAdr010DestructiveDatabaseConfig } from "./config.js";
 
 export const freshRemotePushMigrationVersions = [
   "20260825000100",
@@ -14,8 +14,26 @@ export const freshRemotePushMigrationVersions = [
   "20260829000100",
 ] as const;
 
+export const supabaseCliPackage = "supabase@2.109.1";
+
+export type SupabaseCliInvocation = Readonly<{
+  readonly executable: "npx" | "npx.cmd";
+  readonly prefixArgs: readonly ["--yes", typeof supabaseCliPackage];
+  readonly shell: boolean;
+}>;
+
+/**
+ * The CLI is deliberately version-pinned. Windows needs its .cmd shim through
+ * the system shell; every argument appended by this module is a fixed literal.
+ */
+export const resolveSupabaseCliInvocation = (platform: NodeJS.Platform = process.platform): SupabaseCliInvocation => ({
+  executable: platform === "win32" ? "npx.cmd" : "npx",
+  prefixArgs: ["--yes", supabaseCliPackage],
+  shell: platform === "win32",
+});
+
 export type FreshRemotePushOptions = {
-  readonly config: SupabaseAdr010DestructiveServerConfig;
+  readonly config: SupabaseAdr010DestructiveDatabaseConfig;
   readonly cwd: string;
   readonly apply: boolean;
   readonly runCommand?: (args: readonly string[]) => Promise<void>;
@@ -35,11 +53,11 @@ export type FreshRemotePushResult = Readonly<{
  * Requires a separate opt-in for a fresh remote push. The existing destructive
  * guard still validates the hosted URL, exact confirmation and database target.
  */
-export const requireFreshRemotePushOptIn = (environment: NodeJS.ProcessEnv): SupabaseAdr010DestructiveServerConfig => {
+export const requireFreshRemotePushOptIn = (environment: NodeJS.ProcessEnv): SupabaseAdr010DestructiveDatabaseConfig => {
   if (environment.ADR010_RUN_SUPABASE_FRESH_PUSH !== "1") {
     throw new Error("ADR010_FRESH_PUSH_DISABLED");
   }
-  return requireSupabaseDestructiveServerOptIn(environment);
+  return requireSupabaseDestructiveDatabaseOptIn(environment);
 };
 
 export const assertLinkedProjectRef = async (cwd: string, expectedProjectRef: string): Promise<void> => {
@@ -70,7 +88,7 @@ export const assertFreshRemoteTarget = async (databaseUrl: string): Promise<void
         await countRelationRows(pool, "auth.users") !== 0 ||
         await countRelationRows(pool, "storage.objects") !== 0 ||
         await countRelationRows(pool, "storage.buckets") !== 0 ||
-        await countManagedRelations(pool) !== 0) {
+        await countUnexpectedApplicationObjects(pool) !== 0) {
       throw new Error("ADR010_FRESH_PUSH_TARGET_NOT_EMPTY");
     }
   } finally {
@@ -85,9 +103,13 @@ const countRelationRows = async (pool: Pool, relation: "supabase_migrations.sche
   return Number(result.rows[0]?.count ?? "0");
 };
 
-const countManagedRelations = async (pool: Pool): Promise<number> => {
+const countUnexpectedApplicationObjects = async (pool: Pool): Promise<number> => {
   const result = await pool.query<{ readonly count: string }>(
-    "select count(*)::text as count from pg_catalog.pg_class relation join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace where namespace.nspname = any($1::text[]) and relation.relkind in ('r','p','v','m','f','S')",
+    `select (
+       (select count(*) from pg_catalog.pg_class relation join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace where namespace.nspname = any($1::text[]) and relation.relkind in ('r','p','v','m','f','S')) +
+       (select count(*) from pg_catalog.pg_proc routine join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace where namespace.nspname = any($1::text[])) +
+       (select count(*) from pg_catalog.pg_type data_type join pg_catalog.pg_namespace namespace on namespace.oid = data_type.typnamespace where namespace.nspname = any($1::text[]) and data_type.typtype in ('d','e','r'))
+     )::text as count`,
     [["public", "adr010_b", "adr010_b_private"]],
   );
   return Number(result.rows[0]?.count ?? "0");
@@ -96,14 +118,16 @@ const countManagedRelations = async (pool: Pool): Promise<number> => {
 export const assertFreshRemoteMigrationSeriesApplied = async (databaseUrl: string): Promise<void> => {
   const pool = new Pool({ connectionString: databaseUrl, max: 1 });
   try {
-    const result = await pool.query<{ readonly migration_count: string; readonly distinct_count: string }>(
-      `select count(*)::text as migration_count, count(distinct version)::text as distinct_count
-       from supabase_migrations.schema_migrations
-       where version = any($1::text[])`,
+    const result = await pool.query<{ readonly total_count: string; readonly migration_count: string; readonly distinct_count: string }>(
+      `select count(*)::text as total_count,
+              count(*) filter (where version = any($1::text[]))::text as migration_count,
+              count(distinct version) filter (where version = any($1::text[]))::text as distinct_count
+       from supabase_migrations.schema_migrations`,
       [freshRemotePushMigrationVersions],
     );
     const row = result.rows[0];
-    if (row?.migration_count !== String(freshRemotePushMigrationVersions.length) ||
+    if (row?.total_count !== String(freshRemotePushMigrationVersions.length) ||
+        row.migration_count !== String(freshRemotePushMigrationVersions.length) ||
         row.distinct_count !== String(freshRemotePushMigrationVersions.length)) {
       throw new Error("ADR010_FRESH_PUSH_MIGRATION_SERIES_INCOMPLETE");
     }
@@ -131,9 +155,13 @@ export const runFreshRemotePush = async (options: FreshRemotePushOptions): Promi
 };
 
 const runSupabaseCommand = (args: readonly string[], cwd: string): Promise<void> => {
-  const executable = "supabase";
+  const invocation = resolveSupabaseCliInvocation();
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { cwd, stdio: "inherit", shell: false });
+    const child = spawn(invocation.executable, [...invocation.prefixArgs, ...args], {
+      cwd,
+      stdio: "inherit",
+      shell: invocation.shell,
+    });
     child.once("error", () => reject(new Error("ADR010_FRESH_PUSH_SUPABASE_CLI_FAILED")));
     child.once("exit", (code) => {
       if (code === 0) resolve();

@@ -114,11 +114,9 @@ Toda transición a REVIEW, BLOCKED o de regreso a TODO debe incluir una nota bre
 
 ---
 
-## 6. Arquitectura base provisional
+## 6. Arquitectura base aceptada
 
-La dirección inicial es la alternativa A del plan, pero Auth, persistencia de aplicación y Realtime quedan condicionados por ADR-010. Antes de resolver ese spike solo se implementan tareas neutrales: Git, monorepo, CI, documentación, packages/domain y sus pruebas.
-
-La base candidata es:
+ADR-010 fue aceptada por Emmanuel el 2026-08-29 y selecciona la opción B híbrida. ADR-001 registra sus consecuencias. La base es:
 
 - monorepo TypeScript con pnpm workspaces y Turborepo;
 - apps/api: NestJS;
@@ -130,12 +128,13 @@ La base candidata es:
 - packages/sync-engine: sincronización offline reutilizable;
 - packages/ui: componentes compartidos donde sea técnicamente viable;
 - packages/printing: adaptadores ESC/POS y Bluetooth;
-- PostgreSQL + Prisma;
-- Redis + BullMQ;
-- REST versionado + OpenAPI y Socket.IO para tiempo real;
-- Docker Compose en desarrollo y despliegue inicial.
+- Supabase administrado para PostgreSQL y Auth; Storage se usa cuando el módulo correspondiente defina buckets y políticas;
+- migraciones SQL versionadas de Supabase como única autoridad del esquema; Prisma no puede mantener una segunda historia de migraciones;
+- jobs e integraciones en NestJS; ADR-010 no seleccionó todavía Redis/BullMQ u otra cola;
+- REST versionado + OpenAPI; el transporte Realtime sigue pendiente y siempre se complementa con recuperación durable por cursor;
+- NestJS usa conexión PostgreSQL privada con TLS `verify-full` para escrituras críticas y ningún cliente recibe esa conexión o secretos de servidor.
 
-Cambiar esta base requiere una ADR y autorización humana cuando afecte varias aplicaciones o el modelo de datos.
+La Data API directa queda limitada a lecturas RLS y CRUD no financiero expresamente permitido. Order, Payment, Refund y CashMovement solo se escriben mediante NestJS. Cambiar esta base requiere una ADR y autorización humana cuando afecte varias aplicaciones o el modelo de datos.
 
 ---
 
@@ -143,7 +142,7 @@ Cambiar esta base requiere una ADR y autorización humana cuando afecte varias a
 
 - packages/domain no importa frameworks, ORM, UI, SDKs externos ni infraestructura.
 - Las apps consumen dominio y contratos compartidos; no duplican cálculos financieros o máquinas de estados.
-- Prisma pertenece a la capa de persistencia/API; sus modelos no sustituyen las entidades y reglas del dominio.
+- Un ORM futuro pertenece a la capa de persistencia/API, no puede ser autoridad de migraciones y sus modelos no sustituyen las entidades y reglas del dominio.
 - Integraciones externas usan puertos/adaptadores: pagos, PAC, almacenamiento, email, push e impresión.
 - Web, mobile y KDS no acceden directamente a PostgreSQL.
 - Ningún cliente confía en permisos o totales calculados únicamente en el navegador/dispositivo; el servidor revalida.
@@ -245,7 +244,7 @@ Sin servidor local, una caída total de internet no garantiza comunicación entr
 - no inventar tablas o campos fuera del plan/tarea sin justificación;
 - usar UUID/ULID generados de forma segura, no IDs autoincrementales para entidades sincronizables;
 - incluir createdAt, updatedAt, deletedAt cuando corresponda;
-- usar migraciones Prisma versionadas y reproducibles desde cero;
+- usar migraciones SQL de Supabase versionadas y reproducibles desde cero como única autoridad del esquema;
 - preservar compatibilidad con datos existentes;
 - no editar migraciones ya aplicadas; crear una nueva;
 - cambios destructivos requieren plan de migración, respaldo y rollback;
