@@ -206,6 +206,7 @@ La versión 2.2:
 - Coordinación vigente: Claude debe detenerse. FE-0.1 será su siguiente slice previsto únicamente después de aplicar la migración, aprovisionar `app_api`, pasar E2E remota, enlazar `shared-types` a web, publicar este checkpoint y emitir una asignación nueva explícita.
 - Emmanuel autorizó aplicar persistentemente `20260830000200`. Dos preflights CLI correctamente invocados conservaron URL/TLS como un solo argumento y se detuvieron con SQLSTATE 28P01 por la contraseña administrativa antes de leer historial o escribir. La contraseña local de `app_api` sí pasó fuerza y separación; no se imprimieron secretos ni hubo mutación remota.
 - Pipeline global del checkpoint: `pnpm install --frozen-lockfile`, lint, typecheck, tests y build pasaron en los seis paquetes; Turbo reportó 6/6 lint, 9/9 tareas de tipos, 9/9 tareas de test y 6/6 builds. Web conserva 23/23 pruebas. La máquina local usó Node 22.20.0 y emitió el aviso de engine porque CI/producción fija Node 24.19.0; no produjo fallos.
+- Checkpoint Git 2026-08-30: tras confirmar que `HEAD`, `origin/main` y su merge-base eran exactamente `f0091f30324263ad253d5ea395733f0d1f56200a`, se publicó por fast-forward `36946ca002c69931fba35e03bd559f5ecdf2fb60` (`feat: establish phase 0 application foundations`). Incluye 128 archivos del avance acumulado. El staging pasó `git diff --cached --check` y excluyó `.env` reales, certificados, claves, dependencias y artefactos generados. No hubo merge, rebase, force-push ni cambio de `origin/master`.
 
 ## Verificación
 
