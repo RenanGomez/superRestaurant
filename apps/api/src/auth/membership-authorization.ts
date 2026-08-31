@@ -3,10 +3,12 @@ import {
   parseBranchScope,
   type BranchScope,
   type MembershipRoleCode,
+  type RbacPermissionCode,
 } from "@super-restaurant/shared-types";
 import { Inject, Injectable } from "@nestjs/common";
 
 import type { AuthenticatedPrincipal } from "./authentication.js";
+import { rolesGrantPermission } from "./rbac-policy.js";
 
 export const membershipRoles = MEMBERSHIP_ROLE_CODES;
 
@@ -43,11 +45,10 @@ export class MembershipAuthorizationService {
   public async authorizeBranch(
     principal: AuthenticatedPrincipal,
     requestedScope: unknown,
-    requiredAnyRole: readonly MembershipRole[],
+    requiredPermission: RbacPermissionCode,
   ): Promise<AuthorizedBranchContext> {
     const scope = parseBranchScope(requestedScope);
-    const requiredRoles = parseRoles(requiredAnyRole);
-    if (scope === undefined || !isPrincipal(principal) || requiredRoles === undefined) {
+    if (scope === undefined || !isPrincipal(principal)) {
       throw new ScopeAuthorizationRejectedError();
     }
 
@@ -63,7 +64,7 @@ export class MembershipAuthorizationService {
       throw new ScopeAuthorizationRejectedError();
     }
 
-    if (!requiredRoles.some((role) => parsedMembership.roles.includes(role))) {
+    if (!rolesGrantPermission(parsedMembership.roles, requiredPermission)) {
       throw new ScopeAuthorizationRejectedError();
     }
 

@@ -21,9 +21,21 @@ import { readApiConfig } from "./config.js";
 import { DATABASE_CLIENT, PostgresDatabaseClient, readDatabaseConfig } from "./database.js";
 import { HealthController } from "./health.controller.js";
 import { SessionController } from "./session.controller.js";
+import { DiningZonesController } from "./dining-zones.controller.js";
+import {
+  DINING_ZONE_CREATOR,
+  DiningZoneService,
+  PostgresDiningZoneCreator,
+} from "./dining-zones.js";
 
 @Module({
-  controllers: [HealthController, SessionController, BranchAccessController, AccessMembershipsController],
+  controllers: [
+    HealthController,
+    SessionController,
+    BranchAccessController,
+    AccessMembershipsController,
+    DiningZonesController,
+  ],
   providers: [
     {
       provide: AUTH_PRINCIPAL_VERIFIER,
@@ -44,6 +56,12 @@ import { SessionController } from "./session.controller.js";
       useExisting: PostgresMembershipDirectory,
     },
     MembershipAuthorizationService,
+    PostgresDiningZoneCreator,
+    {
+      provide: DINING_ZONE_CREATOR,
+      useExisting: PostgresDiningZoneCreator,
+    },
+    DiningZoneService,
     {
       provide: APP_GUARD,
       useClass: SupabaseAuthGuard,

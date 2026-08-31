@@ -25,31 +25,31 @@ test("authorizes only the verified actor in the exact active branch scope", asyn
   };
   const service = new MembershipAuthorizationService(memberships);
 
-  const authorized = await service.authorizeBranch(principal, scopeInput, ["manager", "owner"]);
+  const authorized = await service.authorizeBranch(principal, scopeInput, "catalog.manage");
   assert.deepEqual(authorized, { principal, roles: ["manager"], scope });
   assert.deepEqual(calls, [{ receivedPrincipal: principal, receivedScope: scope }]);
   assert.ok(Object.isFrozen(authorized));
   assert.ok(Object.isFrozen(authorized.roles));
 });
 
-test("rejects missing membership, wrong scope and insufficient role", async () => {
+test("rejects missing membership, wrong scope and insufficient permission", async () => {
   const noMembership = new MembershipAuthorizationService({ findActiveMembership: async () => undefined });
-  await assert.rejects(noMembership.authorizeBranch(principal, scopeInput, ["waiter"]), ScopeAuthorizationRejectedError);
+  await assert.rejects(noMembership.authorizeBranch(principal, scopeInput, "orders.create"), ScopeAuthorizationRejectedError);
 
   const wrongScope = parseBranchScope({ branchId: "branch-b", restaurantId: "restaurant-a" });
   if (wrongScope === undefined) throw new Error("test scope must be valid");
   const mismatched = new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["manager"], scope: wrongScope }),
   });
-  await assert.rejects(mismatched.authorizeBranch(principal, scopeInput, ["manager"]), ScopeAuthorizationRejectedError);
+  await assert.rejects(mismatched.authorizeBranch(principal, scopeInput, "catalog.manage"), ScopeAuthorizationRejectedError);
 
   const insufficient = new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["viewer"], scope }),
   });
-  await assert.rejects(insufficient.authorizeBranch(principal, scopeInput, ["cashier"]), ScopeAuthorizationRejectedError);
+  await assert.rejects(insufficient.authorizeBranch(principal, scopeInput, "payments.collect"), ScopeAuthorizationRejectedError);
 });
 
-test("rejects invalid scope, principal and role requirements before lookup", async () => {
+test("rejects invalid scope and principal before lookup", async () => {
   let calls = 0;
   const service = new MembershipAuthorizationService({
     findActiveMembership: async () => {
@@ -58,9 +58,8 @@ test("rejects invalid scope, principal and role requirements before lookup", asy
     },
   });
 
-  await assert.rejects(service.authorizeBranch(principal, { restaurantId: "restaurant-a" }, ["owner"]), ScopeAuthorizationRejectedError);
-  await assert.rejects(service.authorizeBranch({ actorId: "caller-id" }, scopeInput, ["owner"]), ScopeAuthorizationRejectedError);
-  await assert.rejects(service.authorizeBranch(principal, scopeInput, []), ScopeAuthorizationRejectedError);
+  await assert.rejects(service.authorizeBranch(principal, { restaurantId: "restaurant-a" }, "branch.select"), ScopeAuthorizationRejectedError);
+  await assert.rejects(service.authorizeBranch({ actorId: "caller-id" }, scopeInput, "branch.select"), ScopeAuthorizationRejectedError);
   assert.equal(calls, 0);
 });
 
@@ -69,17 +68,19 @@ test("fails closed on malformed or duplicated membership roles", async () => {
     const service = new MembershipAuthorizationService({
       findActiveMembership: async () => ({ roles: roles as never, scope }),
     });
-    await assert.rejects(service.authorizeBranch(principal, scopeInput, ["owner"]), ScopeAuthorizationRejectedError);
+    await assert.rejects(service.authorizeBranch(principal, scopeInput, "branch.select"), ScopeAuthorizationRejectedError);
   }
 });
 
-test("fails closed on hostile membership adapters and role requirements", async () => {
+test("fails closed on hostile membership adapters and unknown permissions", async () => {
   const hostileMembership = new Proxy({}, { ownKeys: () => { throw new Error("trap"); } });
   const service = new MembershipAuthorizationService({
     findActiveMembership: async () => hostileMembership as never,
   });
-  await assert.rejects(service.authorizeBranch(principal, scopeInput, ["owner"]), ScopeAuthorizationRejectedError);
+  await assert.rejects(service.authorizeBranch(principal, scopeInput, "branch.select"), ScopeAuthorizationRejectedError);
 
-  const hostileRoles = new Proxy(["owner"], { get: () => { throw new Error("trap"); } });
-  await assert.rejects(service.authorizeBranch(principal, scopeInput, hostileRoles as never), ScopeAuthorizationRejectedError);
+  const validMembership = new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["owner"], scope }),
+  });
+  await assert.rejects(validMembership.authorizeBranch(principal, scopeInput, "invented.permission" as never), ScopeAuthorizationRejectedError);
 });

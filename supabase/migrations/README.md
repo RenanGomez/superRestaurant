@@ -143,5 +143,22 @@ elevados, membresías distintas de la concesión administrativa inerte de
 PostgreSQL 16, grants adicionales, credenciales no SCRAM, sesiones residuales y
 cualquier objeto propiedad de `app_api`.
 
+### Slice de zonas de comedor
+
+`20260831000100_create_dining_zones.sql` añade dos tablas server-only y la
+capacidad privada `app_private.create_dining_zone`. Antes de cualquier aplicación
+persistente debe probarse dentro de una transacción que siempre termina en
+rollback:
+
+`pnpm --filter @super-restaurant/api verify:dining-zones-schema:rollback`
+
+El comando reutiliza las variables `SCHEMA_VERIFICATION_*`, exige la confirmación
+exacta `ROLLBACK_ONLY`, TLS `verify-full` y el project ref correlacionado. Espera
+el catálogo post-migración exacto de 5 políticas, 7 tablas con RLS+FORCE RLS y 6
+funciones `SECURITY DEFINER`. No reemplaza la autorización independiente para
+aplicar la migración. Antes del apply también deben versionarse las auditorías
+globales runtime para aceptar exactamente ese catálogo ampliado; las auditorías
+actuales de membresías fijan deliberadamente el estado previo.
+
 El rollback ordinario es forward-only. Eliminar estas tablas solo es aceptable
 antes de datos reales, con verificación de vaciedad y respaldo explícito.

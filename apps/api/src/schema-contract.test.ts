@@ -2,10 +2,22 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { MEMBERSHIP_ROLE_CODES } from "@super-restaurant/shared-types";
+
+import { RBAC_ROLE_PERMISSIONS_V1 } from "./auth/rbac-policy.js";
+
 const migrationUrl = new URL("../../../supabase/migrations/20260830000100_create_tenancy_memberships.sql", import.meta.url);
 const migration = readFileSync(migrationUrl, "utf8").toLowerCase();
 const membershipDirectoryMigration = readFileSync(
   new URL("../../../supabase/migrations/20260830000200_list_active_branch_memberships.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
+const diningZonesMigration = readFileSync(
+  new URL("../../../supabase/migrations/20260831000100_create_dining_zones.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
+const diningZonesCatalogAudit = readFileSync(
+  new URL("../../../supabase/tests/dining_zones_catalog.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
 const catalogAudit = readFileSync(
@@ -133,4 +145,41 @@ test("runtime audit permits only the provisioned app_api login capability", () =
   assert.match(runtimeCatalogAudit, /rolconfig is not null/u);
   assert.match(runtimeCatalogAudit, /pg_stat_activity where usename = 'app_api'/u);
   assert.match(runtimeCatalogAudit, /runtime_audit_app_api_owns_objects/u);
+});
+
+test("dining-zone migration is atomic, scoped, idempotent, audited and server-only", () => {
+  assert.deepEqual(
+    MEMBERSHIP_ROLE_CODES.filter((role) => RBAC_ROLE_PERMISSIONS_V1[role].includes("tables.manage")),
+    ["owner", "admin", "manager"],
+  );
+  assert.match(diningZonesMigration, /^begin;/u);
+  assert.match(diningZonesMigration, /create table app\.dining_zones/u);
+  assert.match(diningZonesMigration, /foreign key \(restaurant_id, branch_id\)[\s\S]*references app\.branches/u);
+  assert.match(diningZonesMigration, /unique \(restaurant_id, branch_id, name_key\)/u);
+  assert.match(diningZonesMigration, /create table app\.dining_zone_audit_events/u);
+  assert.match(diningZonesMigration, /unique \(actor_id, restaurant_id, branch_id, idempotency_key\)/u);
+  assert.match(diningZonesMigration, /create function app_private\.create_dining_zone/u);
+  assert.match(diningZonesMigration, /rg\.role_code in \('owner', 'admin', 'manager'\)/u);
+  assert.match(diningZonesMigration, /pg_advisory_xact_lock/u);
+  assert.match(diningZonesMigration, /on conflict do nothing/u);
+  assert.match(diningZonesMigration, /security definer\s+set search_path = ''/u);
+  assert.match(diningZonesMigration, /owner to postgres/u);
+  assert.match(diningZonesMigration, /grant execute on function app_private\.create_dining_zone[\s\S]*to app_api/u);
+  assert.doesNotMatch(diningZonesMigration, /grant (?:select|insert|update|delete|all) on app\.dining/u);
+  for (const table of ["dining_zones", "dining_zone_audit_events"]) {
+    assert.match(diningZonesMigration, new RegExp(`alter table app\\.${table} enable row level security`, "u"));
+    assert.match(diningZonesMigration, new RegExp(`alter table app\\.${table} force row level security`, "u"));
+  }
+  assert.match(diningZonesMigration, /commit;\s*$/u);
+});
+
+test("dining-zone catalog audit pins RLS, owner, search_path and grants", () => {
+  assert.match(diningZonesCatalogAudit, /dining_zones_audit_table_missing/u);
+  assert.match(diningZonesCatalogAudit, /c\.relrowsecurity/u);
+  assert.match(diningZonesCatalogAudit, /c\.relforcerowsecurity/u);
+  assert.match(diningZonesCatalogAudit, /p\.prosecdef/u);
+  assert.match(diningZonesCatalogAudit, /p\.provolatile = 'v'/u);
+  assert.match(diningZonesCatalogAudit, /owner\.rolname = 'postgres'/u);
+  assert.match(diningZonesCatalogAudit, /has_function_privilege\('app_api', function_oid, 'execute'\)/u);
+  assert.match(diningZonesCatalogAudit, /has_table_privilege\(grantee_name, table_name, privilege_name\)/u);
 });

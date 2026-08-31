@@ -15,6 +15,8 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
   const databaseCalls: { parameters: readonly unknown[]; sql: string }[] = [];
   let directoryFailure = false;
   let directoryRows: readonly unknown[] = [];
+  let membershipRoles: readonly string[] = ["manager"];
+  let diningZoneWrites = 0;
   const database: DatabaseClientPort = {
     query: async (sql, parameters) => {
       databaseCalls.push({ parameters: [...parameters], sql });
@@ -22,9 +24,25 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
         if (directoryFailure) throw new Error("database unavailable");
         return { rows: directoryRows };
       }
+      if (sql.includes("create_dining_zone")) {
+        diningZoneWrites += 1;
+        return {
+          rows: [{
+            status: "created",
+            schema_version: 1,
+            restaurant_id: parameters[1],
+            branch_id: parameters[2],
+            zone_id: parameters[3],
+            zone_name: parameters[8],
+            zone_version: "1",
+            created_at: new Date("2026-08-31T17:00:01.000Z"),
+            created_by: parameters[0],
+          }],
+        };
+      }
       return {
         rows: parameters[2] === branchId
-          ? [{ branch_id: branchId, restaurant_id: restaurantId, roles: ["manager"] }]
+          ? [{ branch_id: branchId, restaurant_id: restaurantId, roles: membershipRoles }]
           : [],
       };
     },
@@ -135,6 +153,53 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
     });
     assert.equal(otherBranchResponse.status, 403);
     assert.deepEqual(await otherBranchResponse.json(), { code: "SCOPE_AUTHORIZATION_REJECTED" });
+
+    const zoneCommand = {
+      schemaVersion: 1,
+      scope: { restaurantId, branchId },
+      zoneId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02",
+      eventId: "a409ec59-9f5e-496d-a45d-b83a46b49674",
+      idempotencyKey: "c483b6e7-e102-4cc5-a887-d30712c85e52",
+      deviceId: "e74df54b-30a7-449b-a23f-c4ca6f93bda4",
+      occurredAt: "2026-08-31T17:00:00.000Z",
+      name: "Terraza",
+    };
+    const unauthenticatedZoneResponse = await fetch(`${url}/api/v1/dining/zones`, {
+      body: JSON.stringify(zoneCommand),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    });
+    assert.equal(unauthenticatedZoneResponse.status, 401);
+    assert.deepEqual(await unauthenticatedZoneResponse.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const createdZoneResponse = await fetch(`${url}/api/v1/dining/zones`, {
+      body: JSON.stringify(zoneCommand),
+      headers: { authorization: "Bearer valid-smoke-access-token", "content-type": "application/json" },
+      method: "POST",
+    });
+    assert.equal(createdZoneResponse.status, 201);
+    assert.equal(createdZoneResponse.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await createdZoneResponse.json(), {
+      schemaVersion: 1,
+      scope: { restaurantId, branchId },
+      zoneId: zoneCommand.zoneId,
+      name: zoneCommand.name,
+      version: 1,
+      createdAt: "2026-08-31T17:00:01.000Z",
+      createdBy: actorId,
+      replayed: false,
+    });
+    assert.equal(diningZoneWrites, 1);
+
+    membershipRoles = ["viewer"];
+    const forbiddenZoneResponse = await fetch(`${url}/api/v1/dining/zones`, {
+      body: JSON.stringify({ ...zoneCommand, zoneId: "4e42eea6-a374-47f1-9419-1adf7079c51d" }),
+      headers: { authorization: "Bearer valid-smoke-access-token", "content-type": "application/json" },
+      method: "POST",
+    });
+    assert.equal(forbiddenZoneResponse.status, 403);
+    assert.deepEqual(await forbiddenZoneResponse.json(), { code: "ACTION_NOT_AUTHORIZED" });
+    assert.equal(diningZoneWrites, 1);
   } finally {
     await app.close();
   }

@@ -1,12 +1,20 @@
 import {
   BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
+  DINING_ZONE_SCHEMA_VERSION,
   MEMBERSHIP_ROLE_CODES,
+  parseCreateDiningZoneCommandV1,
+  parseDiningZoneV1,
+  parseRbacPermissionCode,
   parseBranchMembershipListV1,
   parseBranchScope,
   parseRestaurantScope,
+  RBAC_MATRIX_VERSION,
+  RBAC_PERMISSION_CODES,
   type BranchId,
   type BranchMembershipListV1,
   type BranchScope,
+  type CreateDiningZoneCommandV1,
+  type DiningZoneV1,
   type RestaurantId,
   type RestaurantScope,
 } from "./index.js";
@@ -35,8 +43,35 @@ const parsedMemberships: BranchMembershipListV1 | undefined = parseBranchMembers
   memberships: [],
 });
 const knownRole = MEMBERSHIP_ROLE_CODES[0];
+const knownPermission = RBAC_PERMISSION_CODES[0];
+const parsedPermission = parseRbacPermissionCode(knownPermission);
 void parsedMemberships;
 void knownRole;
+void parsedPermission;
+void RBAC_MATRIX_VERSION;
+
+const parsedZoneCommand: CreateDiningZoneCommandV1 | undefined = parseCreateDiningZoneCommandV1({
+  schemaVersion: DINING_ZONE_SCHEMA_VERSION,
+  scope: { restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" },
+  zoneId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02",
+  eventId: "a409ec59-9f5e-496d-a45d-b83a46b49674",
+  idempotencyKey: "c483b6e7-e102-4cc5-a887-d30712c85e52",
+  deviceId: "e74df54b-30a7-449b-a23f-c4ca6f93bda4",
+  occurredAt: "2026-08-31T17:00:00.000Z",
+  name: "Terraza",
+});
+const parsedZone: DiningZoneV1 | undefined = parseDiningZoneV1({
+  schemaVersion: DINING_ZONE_SCHEMA_VERSION,
+  scope: { restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" },
+  zoneId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02",
+  name: "Terraza",
+  version: 1,
+  createdAt: "2026-08-31T17:00:01.000Z",
+  createdBy: "8cc7eb84-af2a-4e84-95de-967c39af86ab",
+  replayed: false,
+});
+void parsedZoneCommand;
+void parsedZone;
 
 // @ts-expect-error Runtime parsing is required before untrusted strings become branded identifiers.
 const invalidRestaurantScope: RestaurantScope = { restaurantId: "restaurant-1" };

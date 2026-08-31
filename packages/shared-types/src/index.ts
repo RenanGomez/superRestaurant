@@ -12,6 +12,8 @@ declare const branchIdBrand: unique symbol;
  */
 export const SCOPE_SCHEMA_VERSION = 1 as const;
 export const BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION = 1 as const;
+export const RBAC_MATRIX_VERSION = 1 as const;
+export const DINING_ZONE_SCHEMA_VERSION = 1 as const;
 
 export const MEMBERSHIP_ROLE_CODES = Object.freeze([
   "owner",
@@ -26,6 +28,35 @@ export const MEMBERSHIP_ROLE_CODES = Object.freeze([
 ] as const);
 
 export type MembershipRoleCode = (typeof MEMBERSHIP_ROLE_CODES)[number];
+
+export const RBAC_PERMISSION_CODES = Object.freeze([
+  "branch.select",
+  "branch.settings.manage",
+  "memberships.manage",
+  "catalog.read",
+  "catalog.manage",
+  "tables.read",
+  "tables.manage",
+  "orders.read",
+  "orders.create",
+  "orders.update",
+  "orders.cancel.pending",
+  "orders.cancel.sent",
+  "kds.read",
+  "kds.transition",
+  "payments.collect",
+  "refunds.create",
+  "cash-register.manage",
+  "reports.read",
+] as const);
+
+export type RbacPermissionCode = (typeof RBAC_PERMISSION_CODES)[number];
+
+export function parseRbacPermissionCode(value: unknown): RbacPermissionCode | undefined {
+  return typeof value === "string" && (RBAC_PERMISSION_CODES as readonly string[]).includes(value)
+    ? value as RbacPermissionCode
+    : undefined;
+}
 
 export type RestaurantId = string & {
   readonly [restaurantIdBrand]: "RestaurantId";
@@ -55,6 +86,110 @@ export interface BranchMembershipSummaryV1 {
 export interface BranchMembershipListV1 {
   readonly memberships: readonly BranchMembershipSummaryV1[];
   readonly schemaVersion: typeof BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION;
+}
+
+export interface CreateDiningZoneCommandV1 {
+  readonly deviceId: string;
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly name: string;
+  readonly occurredAt: string;
+  readonly schemaVersion: typeof DINING_ZONE_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly zoneId: string;
+}
+
+export interface DiningZoneV1 {
+  readonly createdAt: string;
+  readonly createdBy: string;
+  readonly name: string;
+  readonly replayed: boolean;
+  readonly schemaVersion: typeof DINING_ZONE_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly version: number;
+  readonly zoneId: string;
+}
+
+export function parseCreateDiningZoneCommandV1(value: unknown): CreateDiningZoneCommandV1 | undefined {
+  const record = parseExactPlainRecord(value, [
+    "schemaVersion",
+    "scope",
+    "zoneId",
+    "eventId",
+    "idempotencyKey",
+    "deviceId",
+    "occurredAt",
+    "name",
+  ]);
+  if (record === undefined || ownValue(record, "schemaVersion") !== DINING_ZONE_SCHEMA_VERSION) return undefined;
+  const scope = parseUuidBranchScope(ownValue(record, "scope"));
+  const zoneId = parseUuid(ownValue(record, "zoneId"));
+  const eventId = parseUuid(ownValue(record, "eventId"));
+  const idempotencyKey = parseUuid(ownValue(record, "idempotencyKey"));
+  const deviceId = parseUuid(ownValue(record, "deviceId"));
+  const occurredAt = parseCanonicalTimestamp(ownValue(record, "occurredAt"));
+  const name = parseDisplayName(ownValue(record, "name"), 80);
+  if (
+    scope === undefined
+    || zoneId === undefined
+    || eventId === undefined
+    || idempotencyKey === undefined
+    || deviceId === undefined
+    || occurredAt === undefined
+    || name === undefined
+  ) return undefined;
+  return Object.freeze({
+    deviceId,
+    eventId,
+    idempotencyKey,
+    name,
+    occurredAt,
+    schemaVersion: DINING_ZONE_SCHEMA_VERSION,
+    scope,
+    zoneId,
+  });
+}
+
+export function parseDiningZoneV1(value: unknown): DiningZoneV1 | undefined {
+  const record = parseExactPlainRecord(value, [
+    "schemaVersion",
+    "scope",
+    "zoneId",
+    "name",
+    "version",
+    "createdAt",
+    "createdBy",
+    "replayed",
+  ]);
+  if (record === undefined || ownValue(record, "schemaVersion") !== DINING_ZONE_SCHEMA_VERSION) return undefined;
+  const scope = parseUuidBranchScope(ownValue(record, "scope"));
+  const zoneId = parseUuid(ownValue(record, "zoneId"));
+  const name = parseDisplayName(ownValue(record, "name"), 80);
+  const version = ownValue(record, "version");
+  const createdAt = parseCanonicalTimestamp(ownValue(record, "createdAt"));
+  const createdBy = parseUuid(ownValue(record, "createdBy"));
+  const replayed = ownValue(record, "replayed");
+  if (
+    scope === undefined
+    || zoneId === undefined
+    || name === undefined
+    || typeof version !== "number"
+    || !Number.isSafeInteger(version)
+    || version < 1
+    || createdAt === undefined
+    || createdBy === undefined
+    || typeof replayed !== "boolean"
+  ) return undefined;
+  return Object.freeze({
+    createdAt,
+    createdBy,
+    name,
+    replayed,
+    schemaVersion: DINING_ZONE_SCHEMA_VERSION,
+    scope,
+    version,
+    zoneId,
+  });
 }
 
 /**
@@ -204,14 +339,31 @@ function ownValue(record: PlainRecord, key: string): unknown {
   return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
 }
 
-function parseDisplayName(value: unknown): string | undefined {
+function parseDisplayName(value: unknown, maximumLength = 120): string | undefined {
   return typeof value === "string"
     && value === value.trim()
     && value.length > 0
-    && value.length <= 120
+    && value.length <= maximumLength
     && !/[\u0000-\u001f\u007f]/u.test(value)
     ? value
     : undefined;
+}
+
+function parseUuidBranchScope(value: unknown): BranchScope | undefined {
+  const scope = parseBranchScope(value);
+  return scope !== undefined && uuidPattern.test(scope.restaurantId) && uuidPattern.test(scope.branchId)
+    ? scope
+    : undefined;
+}
+
+function parseUuid(value: unknown): string | undefined {
+  return typeof value === "string" && uuidPattern.test(value) ? value.toLowerCase() : undefined;
+}
+
+function parseCanonicalTimestamp(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length !== 24) return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value ? value : undefined;
 }
 
 function compareCodeUnits(left: string, right: string): number {

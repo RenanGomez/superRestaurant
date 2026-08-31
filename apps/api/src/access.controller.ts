@@ -2,7 +2,7 @@ import { Body, Controller, ForbiddenException, Header, HttpCode, Inject, Post, R
 import { parseBranchScope } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
-import { MembershipAuthorizationService, membershipRoles } from "./auth/membership-authorization.js";
+import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 
 @Controller("access/branch")
 export class BranchAccessController {
@@ -23,7 +23,7 @@ export class BranchAccessController {
     if (scope === undefined) throw scopeRejected();
 
     try {
-      const authorized = await this.authorization.authorizeBranch(principal, scope, membershipRoles);
+      const authorized = await this.authorization.authorizeBranch(principal, scope, "branch.select");
       return Object.freeze({
         branchId: authorized.scope.branchId,
         restaurantId: authorized.scope.restaurantId,

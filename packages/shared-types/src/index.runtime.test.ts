@@ -1,9 +1,15 @@
 import {
   BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
+  DINING_ZONE_SCHEMA_VERSION,
   MEMBERSHIP_ROLE_CODES,
+  parseCreateDiningZoneCommandV1,
+  parseDiningZoneV1,
   parseBranchMembershipListV1,
   parseBranchScope,
+  parseRbacPermissionCode,
   parseRestaurantScope,
+  RBAC_MATRIX_VERSION,
+  RBAC_PERMISSION_CODES,
   SCOPE_SCHEMA_VERSION,
 } from "./index.js";
 
@@ -36,7 +42,14 @@ function expectBranchScope(input: unknown, message: string): void {
 }
 
 expectEqual(SCOPE_SCHEMA_VERSION, 1, "scope schema version is explicit");
+expectEqual(RBAC_MATRIX_VERSION, 1, "RBAC matrix version is explicit");
+expectEqual(DINING_ZONE_SCHEMA_VERSION, 1, "dining-zone schema version is explicit");
 expect(Object.isFrozen(MEMBERSHIP_ROLE_CODES), "membership role codes are frozen");
+expect(Object.isFrozen(RBAC_PERMISSION_CODES), "RBAC permission codes are frozen");
+expectEqual(parseRbacPermissionCode("orders.create"), "orders.create", "known RBAC permission parses");
+for (const invalidPermission of [undefined, null, 1, "", "orders.delete", new String("orders.create")]) {
+  expectUndefined(parseRbacPermissionCode(invalidPermission), "unknown or non-primitive RBAC permission is rejected");
+}
 
 const restaurantInput = { restaurantId: "restaurant-1" };
 const restaurantScope = parseRestaurantScope(restaurantInput);
@@ -124,3 +137,47 @@ expectUndefined(
   parseBranchMembershipListV1(new Proxy({ schemaVersion: 1, memberships: [] }, { ownKeys: () => { throw new Error("hostile"); } })),
   "membership parser rejects hostile proxies",
 );
+
+const zoneCommand = parseCreateDiningZoneCommandV1({
+  schemaVersion: 1,
+  scope: { restaurantId, branchId },
+  zoneId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02",
+  eventId: "a409ec59-9f5e-496d-a45d-b83a46b49674",
+  idempotencyKey: "c483b6e7-e102-4cc5-a887-d30712c85e52",
+  deviceId: "e74df54b-30a7-449b-a23f-c4ca6f93bda4",
+  occurredAt: "2026-08-31T17:00:00.000Z",
+  name: "Terraza",
+});
+expectDefined(zoneCommand, "dining-zone command parses");
+expect(Object.isFrozen(zoneCommand), "dining-zone command is frozen");
+expect(Object.isFrozen(zoneCommand.scope), "dining-zone command scope is frozen");
+
+const zoneResponse = parseDiningZoneV1({
+  schemaVersion: 1,
+  scope: { restaurantId, branchId },
+  zoneId: zoneCommand.zoneId,
+  name: zoneCommand.name,
+  version: 1,
+  createdAt: "2026-08-31T17:00:01.000Z",
+  createdBy: "8cc7eb84-af2a-4e84-95de-967c39af86ab",
+  replayed: false,
+});
+expectDefined(zoneResponse, "dining-zone response parses");
+expect(Object.isFrozen(zoneResponse), "dining-zone response is frozen");
+
+for (const invalid of [
+  { ...zoneCommand, schemaVersion: 2 },
+  { ...zoneCommand, name: " Terraza" },
+  { ...zoneCommand, name: "x".repeat(81) },
+  { ...zoneCommand, occurredAt: "2026-08-31T17:00:00Z" },
+  { ...zoneCommand, zoneId: "not-a-uuid" },
+  { ...zoneCommand, extra: true },
+]) expectUndefined(parseCreateDiningZoneCommandV1(invalid), "dining-zone command rejects malformed input");
+
+for (const invalid of [
+  { ...zoneResponse, version: 0 },
+  { ...zoneResponse, replayed: "false" },
+  { ...zoneResponse, createdAt: "invalid" },
+  { ...zoneResponse, createdBy: "not-a-uuid" },
+  { ...zoneResponse, extra: true },
+]) expectUndefined(parseDiningZoneV1(invalid), "dining-zone response rejects malformed input");

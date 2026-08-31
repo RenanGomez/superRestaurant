@@ -13,7 +13,7 @@ select
     from pg_catalog.pg_class as c
     join pg_catalog.pg_namespace as n on n.oid = c.relnamespace
     where n.nspname = 'app'
-      and c.relname in ('roles', 'restaurants', 'branches', 'memberships', 'membership_role_grants')
+      and c.relkind = 'r'
       and c.relrowsecurity
       and c.relforcerowsecurity
   ) as "securedTables",
@@ -26,13 +26,7 @@ select
     select count(*)::integer
     from pg_catalog.pg_proc as p
     join pg_catalog.pg_namespace as n on n.oid = p.pronamespace
-    where (n.nspname, p.proname) in (
-      ('app_rls', 'has_active_restaurant_membership'),
-      ('app_rls', 'has_active_branch_membership'),
-      ('app_rls', 'can_read_membership'),
-      ('app_private', 'find_active_branch_membership'),
-      ('app_private', 'list_active_branch_memberships')
-    )
+    where n.nspname in ('app_rls', 'app_private')
       and p.prosecdef
   ) as "securityDefinerFunctions"
 `;
@@ -88,16 +82,19 @@ export interface SchemaVerificationSession {
 }
 
 export interface SchemaVerificationSummary {
-  readonly policies: 5;
-  readonly securedTables: 5;
-  readonly securityDefinerFunctions: 4 | 5;
+  readonly policies: number;
+  readonly securedTables: number;
+  readonly securityDefinerFunctions: number;
 }
+
+export type ExpectedSchemaVerificationSummary = SchemaVerificationSummary;
 
 export interface RunSchemaVerificationOptions {
   readonly catalogAuditSql: string;
   readonly config: SchemaVerificationConfig;
   readonly createSession?: (config: SchemaVerificationConfig) => SchemaVerificationSession;
   readonly expectedSecurityDefinerFunctions?: 4 | 5;
+  readonly expectedSummary?: ExpectedSchemaVerificationSummary;
   readonly migrationSql: string;
 }
 
@@ -186,10 +183,21 @@ export function validateCatalogAuditSql(catalogAuditSql: string): string {
 }
 
 export async function runSchemaVerification(options: RunSchemaVerificationOptions): Promise<SchemaVerificationSummary> {
-  const expectedSecurityDefinerFunctions = options.expectedSecurityDefinerFunctions ?? 4;
-  if (expectedSecurityDefinerFunctions !== 4 && expectedSecurityDefinerFunctions !== 5) {
+  if (options.expectedSummary !== undefined && options.expectedSecurityDefinerFunctions !== undefined) {
     throw configurationError();
   }
+  if (
+    options.expectedSecurityDefinerFunctions !== undefined
+    && ![4, 5].includes(options.expectedSecurityDefinerFunctions)
+  ) {
+    throw configurationError();
+  }
+  const expectedSummary = options.expectedSummary ?? Object.freeze({
+    policies: 5,
+    securedTables: 5,
+    securityDefinerFunctions: options.expectedSecurityDefinerFunctions ?? 4,
+  });
+  if (!isExpectedSummary(expectedSummary)) throw configurationError();
   const migrationBody = extractMigrationBody(options.migrationSql);
   const catalogAudit = validateCatalogAuditSql(options.catalogAuditSql);
   const session = (options.createSession ?? createPostgresSchemaVerificationSession)(options.config);
@@ -213,7 +221,7 @@ export async function runSchemaVerification(options: RunSchemaVerificationOption
 
     stage = "summary";
     const summaryResult = await session.query(SUMMARY_SQL);
-    result = readSummary(summaryResult.rows, expectedSecurityDefinerFunctions);
+    result = readSummary(summaryResult.rows, expectedSummary);
   } catch (error: unknown) {
     failure = error instanceof SchemaVerificationError ? error : executionError(stage);
   } finally {
@@ -278,23 +286,30 @@ function createPostgresSchemaVerificationSession(config: SchemaVerificationConfi
 
 function readSummary(
   rows: readonly unknown[],
-  expectedSecurityDefinerFunctions: 4 | 5,
+  expected: ExpectedSchemaVerificationSummary,
 ): SchemaVerificationSummary {
   const row = rows[0];
   if (
     !isPlainRecord(row)
     || Reflect.ownKeys(row).length !== 3
-    || row.securedTables !== 5
-    || row.policies !== 5
-    || row.securityDefinerFunctions !== expectedSecurityDefinerFunctions
+    || row.securedTables !== expected.securedTables
+    || row.policies !== expected.policies
+    || row.securityDefinerFunctions !== expected.securityDefinerFunctions
   ) {
     throw new SchemaVerificationError("summary", "SCHEMA_VERIFICATION_SUMMARY_REJECTED");
   }
   return Object.freeze({
-    policies: 5,
-    securedTables: 5,
-    securityDefinerFunctions: expectedSecurityDefinerFunctions,
+    policies: expected.policies,
+    securedTables: expected.securedTables,
+    securityDefinerFunctions: expected.securityDefinerFunctions,
   });
+}
+
+function isExpectedSummary(value: unknown): value is ExpectedSchemaVerificationSummary {
+  if (!isPlainRecord(value) || Reflect.ownKeys(value).length !== 3) return false;
+  return [value.policies, value.securedTables, value.securityDefinerFunctions].every(
+    (count) => typeof count === "number" && Number.isSafeInteger(count) && count >= 0 && count <= 100,
+  );
 }
 
 function splitTopLevelStatements(sql: string): string[] {

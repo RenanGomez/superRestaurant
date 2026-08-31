@@ -160,6 +160,24 @@ test("verifies the exact expanded five-function post-migration state and still r
   assert.equal(session.closed, true);
 });
 
+test("supports an exact additive schema summary without weakening existing defaults", async () => {
+  const session = new FakeSession(
+    undefined,
+    undefined,
+    [{ policies: 5, securedTables: 7, securityDefinerFunctions: 6 }],
+  );
+  const summary = await runSchemaVerification({
+    catalogAuditSql: "do $$ begin perform 1; end $$;",
+    config,
+    createSession: () => session,
+    expectedSummary: { policies: 5, securedTables: 7, securityDefinerFunctions: 6 },
+    migrationSql: "begin; create table app.dining_zones(id uuid); commit;",
+  });
+  assert.deepEqual(summary, { policies: 5, securedTables: 7, securityDefinerFunctions: 6 });
+  assert.equal(session.queries.at(-1), "ROLLBACK");
+  assert.equal(session.closed, true);
+});
+
 test("rejects an unsupported expected summary before opening a database session", async () => {
   let factoryCalled = false;
   await assert.rejects(
@@ -178,6 +196,20 @@ test("rejects an unsupported expected summary before opening a database session"
       && error.code === "SCHEMA_VERIFICATION_CONFIGURATION_REJECTED",
   );
   assert.equal(factoryCalled, false);
+
+  for (const expectedSummary of [
+    { policies: -1, securedTables: 7, securityDefinerFunctions: 6 },
+    { policies: 5, securedTables: 7, securityDefinerFunctions: 101 },
+    { policies: 5, securedTables: 7, securityDefinerFunctions: 6, extra: true },
+  ]) {
+    await assert.rejects(runSchemaVerification({
+      catalogAuditSql: "select 1;",
+      config,
+      createSession: () => new FakeSession(),
+      expectedSummary: expectedSummary as never,
+      migrationSql: "begin; select 1; commit;",
+    }), SchemaVerificationError);
+  }
 });
 
 test("always rolls back and closes after a successful audit", async () => {
