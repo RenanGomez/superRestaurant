@@ -12,8 +12,8 @@ import {
   type AppApiStateVerificationStage,
 } from "./app-api-state-verification-config.js";
 
-const PRECHECK_AUDIT_SHA256 = "b9aaa1f50a27a49c8dbc20eeb06f3effb058df3c1a14af7ff08469012906e8fb";
-const RUNTIME_AUDIT_SHA256 = "fd27e954a2f68cc622d6ec9d93dcd271fb8ac288a16144aa901696dc13f25f36";
+const PRECHECK_AUDIT_SHA256 = "a6485bcdcc1f54beee9f939187d374a449541343b426d59341870dda63ccd983";
+const RUNTIME_AUDIT_SHA256 = "e4d89b714336edda12441567d9738507abcb807abe173413f1095a16ca7321e2";
 
 export type AppApiObservedState = "safe_disabled" | "temporary" | "expired" | "runtime" | "partial";
 

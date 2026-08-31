@@ -94,13 +94,16 @@ test("membership directory migration adds one bounded server-only capability", (
   assert.match(membershipDirectoryMigration, /commit;\s*$/u);
 });
 
-test("catalog audits accept only the old or exact expanded app_api function surface", () => {
+test("catalog audits require the exact expanded app_api function surface", () => {
   for (const audit of [catalogAudit, runtimeCatalogAudit]) {
     assert.match(audit, /app_private\.find_active_branch_membership\(uuid,uuid,uuid\)/u);
     assert.match(audit, /app_private\.list_active_branch_memberships\(uuid\)/u);
     assert.match(audit, /array\[lookup_function, directory_function\]::oid\[\]/u);
     assert.match(audit, /app_api_extra_function/u);
-    assert.match(audit, /expected_secured_functions := expected_secured_functions \+ 1/u);
+    assert.match(audit, /directory_function is null/u);
+    assert.match(audit, /secured_functions <> 5/u);
+    assert.match(audit, /has_function_privilege\('anon', directory_function, 'execute'\)/u);
+    assert.doesNotMatch(audit, /expected_secured_functions/u);
   }
 });
 

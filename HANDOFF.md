@@ -1,10 +1,10 @@
 # HANDOFF
 
-Última actualización: 2026-08-30
+Última actualización: 2026-08-31
 
 ## Estado actual
 
-El plan v2.3 está en implementación. Emmanuel aprobó ADR-010 opción B; ADR-001 registra sus límites. `apps/api` integra Auth Supabase fail-closed, guard global, conexión PostgreSQL TLS restringida al rol mínimo `app_api`, selección exacta y el directorio versionado `GET /api/v1/access/memberships`. `20260830000100` está aplicada persistentemente en `zwbyiefqeujstyzysydn`; `20260830000200` permanece local, pasó auditoría con rollback y tiene autorización humana vigente para aplicarse. Dos preflights alcanzaron el proyecto/TLS correctos, pero la contraseña de `ADR010_DATABASE_URL` fue rechazada con SQLSTATE 28P01 antes de leer el historial; no hubo escritura remota. `app_api` continúa `NOLOGIN`, password nula y cero sesiones; la autorización de LOGIN sigue vigente y su nueva contraseña local ya cumple el contrato fuerte y es distinta de la administrativa. Auth/schema/E2E siguen IN_PROGRESS. FE-0 cerró implementación y pruebas automatizadas con 23/23 casos; solo falta smoke humano. Claude no tiene actualmente ownership de escritura y debe permanecer detenido hasta una asignación nueva.
+El plan v2.3 está en implementación. Emmanuel aprobó ADR-010 opción B; ADR-001 registra sus límites. `apps/api` integra Auth Supabase fail-closed, guard global, conexión PostgreSQL TLS restringida al rol mínimo `app_api`, selección exacta y el directorio versionado `GET /api/v1/access/memberships`. `20260830000100` y `20260830000200` están aplicadas persistentemente en `zwbyiefqeujstyzysydn`; el historial remoto contiene exactamente siete versiones. La auditoría exige cinco funciones privadas/RLS exactas y ausencia de grants cliente. `app_api` quedó aprovisionado como `LOGIN` con SCRAM, vigencia infinita, mínimos privilegios, auditoría runtime verde y cero sesiones. Auth/E2E siguen IN_PROGRESS a la espera de autorización separada para exponer únicamente `app` en Data API y ejecutar la matriz remota. FE-0 cerró implementación y pruebas automatizadas con 23/23 casos; solo falta smoke humano. Claude no tiene ownership de escritura todavía y FE-0.1 sigue bloqueado por E2E, enlace `shared-types`, checkpoint publicado y asignación explícita.
 
 ## Trabajo realizado
 
@@ -103,17 +103,16 @@ La versión 2.2:
 - **Evidencia de ADR-010 A:** no hay Docker, PostgreSQL, Redis ni distribución WSL disponible en este equipo.
 - **Implementación offline:** ADR-004 y sus especificaciones están en REVIEW, y ADR-005 (almacenamiento local) sigue pendiente. No afirmar que Web, Mobile o KDS funcionan offline.
 - **Persistencia futura de auditoría:** el dominio no autentica actores ni demuestra unicidad o atomicidad de almacenamiento. La frontera seleccionada por ADR-010 deberá verificar RBAC, asignar `receivedAt`, comparar evidencia rehidratada con eventos, aplicar unicidad a `eventId`/idempotency key y guardar Order+evento en una sola transacción.
-- **Credencial administrativa expuesta en salida técnica:** una excepción nativa imprimió la URL local completa durante el primer intento de verificación de `20260830000200`. La contraseña no se escribió en Git ni en documentos, pero debe rotarse antes de otra conexión remota. Los reintentos quedaron sanitizados.
-- **Despliegue del directorio:** `20260830000200` está verificada solo mediante transacción+rollback y su aplicación persistente ya fue autorizada. El endpoint Nest no puede funcionar contra el proyecto remoto hasta corregir la contraseña administrativa y completar la aplicación.
+- **Credencial administrativa expuesta en salida técnica:** incidente histórico cerrado mediante rotación confirmada. La credencial vigente autenticó con TLS `verify-full`; no fue impresa, versionada ni copiada a documentación.
+- **Despliegue del directorio:** `20260830000200` ya está aplicada y auditada. El bloqueo restante es operativo: exponer solo `app` en Data API requiere autorización humana separada antes de la E2E destructiva/controlada.
 
 ## Siguiente acción recomendada
 
-1. Actualizar únicamente la contraseña administrativa dentro de `ADR010_DATABASE_URL` con la contraseña PostgreSQL vigente de `zwbyiefqeujstyzysydn`; los últimos dos intentos llegaron al proyecto/TLS correcto y fallaron con SQLSTATE 28P01. No publicar el valor en el chat.
-2. Reintentar el preflight y, bajo la autorización humana ya concedida, aplicar `20260830000200` mediante el staging temporal aprobado; después confirmar siete versiones, catálogo exacto y ausencia de grants cliente.
-3. Ejecutar el aprovisionador ya autorizado con la `APP_API_PROVISIONING_PASSWORD` fuerte y separada, y verificar que `app_api` llegue a estado `runtime` sin sesiones inesperadas.
-4. Solicitar por separado autorización para exponer únicamente `app` en Data API y correr la matriz 2×2 ampliada con listado, revocación y deshabilitación.
-5. Ejecutar el pipeline global y publicar el checkpoint Git solicitado. FE-0 queda detenido a la espera de smoke humano; FE-0.1 requiere backend remoto verde, enlace de `shared-types` y una asignación nueva explícita.
-6. Demostrar un upgrade productivo posterior antes de mover schema a REVIEW y repetir Gate 4 con controladores críticos/bundles reales; mantener recuperación física/RPO/RTO/observabilidad en el track preproducción.
+1. Solicitar autorización separada para exponer únicamente `app` en Data API; no ejecutar `config push` general ni alterar Auth.
+2. Cargar publishable/secret solo en memoria y correr la matriz E2E 2×2 ampliada con listado, revocación, deshabilitación y cleanup/recovery.
+3. Enlazar `@super-restaurant/shared-types` a `apps/web`, ejecutar el pipeline global y publicar un checkpoint Git por fast-forward si Emmanuel lo autoriza.
+4. Cuando backend remoto, contrato y checkpoint estén verdes, avisar a Emmanuel y emitir una asignación explícita de FE-0.1 a Claude limitada a `apps/web/**`.
+5. Repetir Gate 4 con controladores críticos/bundles reales y mantener recuperación física/RPO/RTO/observabilidad en el track preproducción.
 
 ## Subagentes y verificación de la frontera financiera B
 
@@ -207,10 +206,21 @@ La versión 2.2:
 - Emmanuel autorizó aplicar persistentemente `20260830000200`. Dos preflights CLI correctamente invocados conservaron URL/TLS como un solo argumento y se detuvieron con SQLSTATE 28P01 por la contraseña administrativa antes de leer historial o escribir. La contraseña local de `app_api` sí pasó fuerza y separación; no se imprimieron secretos ni hubo mutación remota.
 - Pipeline global del checkpoint: `pnpm install --frozen-lockfile`, lint, typecheck, tests y build pasaron en los seis paquetes; Turbo reportó 6/6 lint, 9/9 tareas de tipos, 9/9 tareas de test y 6/6 builds. Web conserva 23/23 pruebas. La máquina local usó Node 22.20.0 y emitió el aviso de engine porque CI/producción fija Node 24.19.0; no produjo fallos.
 - Checkpoint Git 2026-08-30: tras confirmar que `HEAD`, `origin/main` y su merge-base eran exactamente `f0091f30324263ad253d5ea395733f0d1f56200a`, se publicó por fast-forward `36946ca002c69931fba35e03bd559f5ecdf2fb60` (`feat: establish phase 0 application foundations`). Incluye 128 archivos del avance acumulado. El staging pasó `git diff --cached --check` y excluyó `.env` reales, certificados, claves, dependencias y artefactos generados. No hubo merge, rebase, force-push ni cambio de `origin/master`.
+- Continuación publicada 2026-08-31: el checkout inició limpio y `HEAD`, `origin/main` y merge-base coincidieron exactamente en `ca2e4cb0b2cea33b9387fd0a3947f333b6e6d7b4`; `git fetch origin main` no requirió mover `main`. CodeGraph previo estaba completo y sin pendientes: 133 archivos, 2,491 nodos y 9,712 relaciones.
+- Aplicación de `20260830000200`: el staging temporal reunió siete copias byte a byte con hashes coincidentes. El historial previo confirmó seis versiones y solo la segunda productiva pendiente; el dry-run anunció exclusivamente `20260830000200_list_active_branch_memberships.sql`. La aplicación oficial terminó con código 0 y el postcheck confirmó exactamente `20260825000100`–`20260830000200`. No hubo reparación, seed, roles, Vault, configuración, `db push` raíz ni secreto impreso; el staging se eliminó.
+- Aprovisionamiento `app_api`: dos intentos iniciales alcanzaron la auditoría runtime y fallaron porque Supavisor recreaba un backend retenido mientras `LOGIN` seguía visible; ambos compensaron y el verificador fresco confirmó `safe_disabled`, catálogo verde y cero sesiones. El flujo se corrigió con un corte quiescente: confirmar `NOLOGIN PASSWORD NULL`, drenar sesiones y reinstalar SCRAM+`infinity`+auditoría dentro de una sola transacción. El aprovisionador final devolvió `status=ok`; dos postchecks administrativos frescos confirmaron `runtime`, auditoría verde y cero sesiones.
+- Hardening posterior: las auditorías pinneadas ya no aceptan la superficie antigua de cuatro funciones. Exigen cinco funciones exactas y niegan `EXECUTE` de `anon`, `authenticated` y `service_role` en las capacidades privadas. El drenaje usa `pg_terminate_backend(pid, 5000)` y 14 pruebas del aprovisionador cubren reaparición del pooler, límite agotado, terminación falsa, sesión en el segundo corte y commits ambiguos 2/3. La instalación frozen y el pipeline global pasaron: lint 6/6, typecheck 9/9, tests 9/9 y build 6/6; API conserva 103 pruebas verdes. Node 22.20.0 emitió el aviso esperado frente a Node 24.19.0 fijado.
+- `auditar_supavisor_app_api` — razonamiento alto, read-only. Validó el corte quiescente, rechazó allowlists de PID/application name/sesión y enumeró riesgos de crash y regresiones; no editó, usó red ni leyó secretos.
+- `revisar_parche_provisionamiento` — razonamiento alto, read-only. Confirmó que drenar bajo `LOGIN` era una carrera, recomendó timeout acotado y detectó que las auditorías todavía aceptaban cuatro funciones; sus hallazgos quedaron integrados. No editó, usó red ni leyó secretos.
+- Esquema: cambio aditivo sin rollback destructivo; `20260830000200` permanece aplicado. Offline: sin cambios. Git remoto: solo fetch de `origin/main`; no hubo push, merge, rebase ni force-push. Frontend: Claude continúa detenido y FE-0.1 no fue autorizado.
 
 ## Verificación
 
 Esta sección es un historial acumulado de verificaciones. Las cifras anteriores (por ejemplo, tres migraciones o 24/24 checks) corresponden a cortes intermedios y no sustituyen la evidencia vigente de cinco migraciones y 27/27 checks.
+
+- Verificación vigente 2026-08-31: CodeGraph completo y sin pendientes, 133 archivos, 2,491 nodos y 9,744 relaciones. El impacto de `provisionAppApi` y `verifyAppApiState` queda limitado a cada implementación, runner y prueba.
+- Verificación vigente 2026-08-31: `pnpm install --frozen-lockfile`, lint 6/6, typecheck 9/9, tests 9/9 y build 6/6 pasaron con pnpm 11.19.0/Turbo 2.10.12. API suma 103 pruebas; las 14 de aprovisionamiento incluyen las regresiones de pooler y commit ambiguo. Solo apareció el warning de Node 22.20.0 frente al 24.19.0 fijado.
+- Verificación remota vigente 2026-08-31: historial exacto de siete migraciones, auditoría de catálogo de cinco funciones y grants cliente denegados; dos postchecks frescos clasificaron `app_api` como `runtime`, con auditoría verde y cero sesiones.
 
 - CodeGraph antes y después del cambio: 0 archivos/nodos/relaciones; no existe código fuente local que analizar y `.codegraph/` quedó excluido.
 - Se validó el remoto con ls-remote y fetch.

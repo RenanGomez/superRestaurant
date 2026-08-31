@@ -10,10 +10,10 @@ import {
 } from "./app-api-provisioning-config.js";
 import { appApiLifecycleAdvisoryLockKey } from "./tenancy-fixture-markers.js";
 
-const PRECHECK_AUDIT_SHA256 = "b9aaa1f50a27a49c8dbc20eeb06f3effb058df3c1a14af7ff08469012906e8fb";
-const RUNTIME_AUDIT_SHA256 = "fd27e954a2f68cc622d6ec9d93dcd271fb8ac288a16144aa901696dc13f25f36";
+const PRECHECK_AUDIT_SHA256 = "a6485bcdcc1f54beee9f939187d374a449541343b426d59341870dda63ccd983";
+const RUNTIME_AUDIT_SHA256 = "e4d89b714336edda12441567d9738507abcb807abe173413f1095a16ca7321e2";
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
-const COMPENSATION_DRAIN_ATTEMPTS = 3;
+const SESSION_DRAIN_ATTEMPTS = 3;
 
 const CREATE_TEMP_PROVISIONER_SQL = `
 create function pg_temp.provision_app_api(password_value text)
@@ -104,6 +104,16 @@ export async function provisionAppApi(
     stage = "runtime_audit";
     await admin.query("BEGIN");
     transactionOpen = true;
+    await admin.query("alter role app_api nologin password null valid until 'infinity'");
+    await admin.query("COMMIT");
+    transactionOpen = false;
+    await drainAppApiSessions(admin, "runtime_audit");
+
+    await admin.query("BEGIN");
+    transactionOpen = true;
+    await admin.query("set local password_encryption = 'scram-sha-256'");
+    await admin.query("select pg_temp.provision_app_api($1::text)", [options.config.password]);
+    await assertTemporaryCredential(admin, expectedRoleOid);
     await assertZeroAppApiSessions(admin, "runtime_audit");
     await admin.query("alter role app_api valid until 'infinity'");
     await admin.query(runtimeAuditSql);
@@ -305,7 +315,7 @@ async function compensateProvisioning(
     await recovery.query("alter role app_api nologin password null valid until 'infinity'");
     await recovery.query("COMMIT");
     transactionOpen = false;
-    await drainAppApiSessions(recovery);
+    await drainAppApiSessions(recovery, "compensation");
     await recovery.query(precheckAuditSql);
   } catch {
     if (transactionOpen) await rollbackQuietly(recovery);
@@ -319,25 +329,28 @@ async function compensateProvisioning(
   }
 }
 
-async function drainAppApiSessions(session: AppApiProvisioningSession): Promise<void> {
-  for (let attempt = 0; attempt < COMPENSATION_DRAIN_ATTEMPTS; attempt += 1) {
+async function drainAppApiSessions(
+  session: AppApiProvisioningSession,
+  stage: "runtime_audit" | "compensation",
+): Promise<void> {
+  for (let attempt = 0; attempt < SESSION_DRAIN_ATTEMPTS; attempt += 1) {
     const termination = await session.query<{ terminated: boolean }>(
-      `select pg_catalog.pg_terminate_backend(pid) as terminated
+      `select pg_catalog.pg_terminate_backend(pid, 5000::bigint) as terminated
        from pg_catalog.pg_stat_activity
        where usename = 'app_api' and pid <> pg_catalog.pg_backend_pid()`,
     );
     if (termination.rows.some((row) => row.terminated !== true)) {
-      throw provisioningError("compensation");
+      throw provisioningError(stage);
     }
     const sessions = await session.query<{ count: number }>(
       "select count(*)::integer as count from pg_catalog.pg_stat_activity where usename = 'app_api'",
     );
     if (sessions.rows.length !== 1 || typeof sessions.rows[0]?.count !== "number") {
-      throw provisioningError("compensation");
+      throw provisioningError(stage);
     }
     if (sessions.rows[0].count === 0) return;
   }
-  throw provisioningError("compensation");
+  throw provisioningError(stage);
 }
 
 async function assertCompensationTarget(

@@ -6,7 +6,6 @@ do $audit$
 declare
   app_api_oid oid;
   directory_function oid;
-  expected_secured_functions integer := 4;
   lookup_function oid;
   secured_tables integer;
   secured_functions integer;
@@ -22,8 +21,8 @@ begin
   directory_function := pg_catalog.to_regprocedure(
     'app_private.list_active_branch_memberships(uuid)'
   );
-  if directory_function is not null then
-    expected_secured_functions := expected_secured_functions + 1;
+  if directory_function is null then
+    raise exception 'CATALOG_AUDIT_DIRECTORY_FUNCTION_MISSING';
   end if;
 
   if exists (
@@ -110,7 +109,7 @@ begin
     and owner.rolname = 'postgres'
     and owner.rolbypassrls;
   if lookup_function is null
-    or secured_functions <> expected_secured_functions
+    or secured_functions <> 5
   then
     raise exception 'CATALOG_AUDIT_FUNCTION_OWNER_OR_SEARCH_PATH';
   end if;
@@ -159,6 +158,11 @@ begin
       'EXECUTE'
     )
     or pg_catalog.has_function_privilege(
+      'anon',
+      'app_private.find_active_branch_membership(uuid,uuid,uuid)',
+      'EXECUTE'
+    )
+    or pg_catalog.has_function_privilege(
       'authenticated',
       'app_private.find_active_branch_membership(uuid,uuid,uuid)',
       'EXECUTE'
@@ -172,12 +176,10 @@ begin
     raise exception 'CATALOG_AUDIT_PRIVATE_FUNCTION_GRANTS';
   end if;
 
-  if directory_function is not null
-    and (
-      not pg_catalog.has_function_privilege(app_api_oid, directory_function, 'EXECUTE')
-      or pg_catalog.has_function_privilege('authenticated', directory_function, 'EXECUTE')
-      or pg_catalog.has_function_privilege('service_role', directory_function, 'EXECUTE')
-    )
+  if not pg_catalog.has_function_privilege(app_api_oid, directory_function, 'EXECUTE')
+    or pg_catalog.has_function_privilege('anon', directory_function, 'EXECUTE')
+    or pg_catalog.has_function_privilege('authenticated', directory_function, 'EXECUTE')
+    or pg_catalog.has_function_privilege('service_role', directory_function, 'EXECUTE')
   then
     raise exception 'CATALOG_AUDIT_DIRECTORY_FUNCTION_GRANTS';
   end if;

@@ -73,14 +73,17 @@ Solo después de aplicar y auditar la migración:
 4. el aprovisionador toma un advisory lock compartido con el runner, revalida
    `NOLOGIN`/password nula/sin sesiones, crea SCRAM mediante un parámetro dentro
    de una función `pg_temp`, activa una validez de diez minutos, conecta como
-   `app_api`, prueba el lookup productivo permitido y denegaciones, y solo
-   entonces promueve la validez a `infinity` y ejecuta la auditoría runtime;
-5. si una comprobación falla después de intentar el cambio, cierra la sesión de
+   `app_api` y prueba el lookup productivo permitido y denegaciones;
+5. para contener backends retenidos por Supavisor, confirma de nuevo
+   `NOLOGIN PASSWORD NULL`, drena sesiones con terminación acotada y, en una
+   sola transacción, reinstala SCRAM temporal, exige cero sesiones, fija
+   `infinity`, ejecuta la auditoría runtime exacta y publica `LOGIN`;
+6. si una comprobación falla después de intentar el cambio, cierra la sesión de
    aplicación y compensa desde una conexión administrativa nueva a
    `NOLOGIN PASSWORD NULL`; confirma el cambio antes de terminar cualquier
    sesión `app_api` superviviente y la auditoría pre-provisioning debe volver a
    pasar;
-6. formar y guardar la misma URL derivada únicamente como `DATABASE_URL` del
+7. formar y guardar la misma URL derivada únicamente como `DATABASE_URL` del
    servidor, con `sslmode=verify-full` + `DATABASE_CA_CERT_PATH`. El comando no
    imprime ni persiste la URL o la contraseña.
 

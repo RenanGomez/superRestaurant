@@ -62,12 +62,23 @@ test("provisions a short-lived SCRAM credential, verifies it, then promotes it",
     "app:deny-set-role",
     "app:close",
     "admin:BEGIN",
+    "admin:disable",
+    "admin:COMMIT",
+    "admin:terminate",
+    "admin:sessions",
+    "admin:BEGIN",
+    "admin:scram",
+    "admin:bind-password",
+    "admin:temporary-state",
     "admin:sessions",
     "admin:promote",
     "admin:runtime-audit",
     "admin:COMMIT",
     "admin:close",
   ]);
+  assert.ok(events.indexOf("app:close") < events.indexOf("admin:disable"));
+  assert.ok(events.indexOf("admin:disable") < events.indexOf("admin:terminate"));
+  assert.ok(events.indexOf("admin:terminate") < events.indexOf("admin:runtime-audit"));
   assert.equal(events.join("|").includes(config.password), false);
 });
 
@@ -130,6 +141,87 @@ test("uses a fresh locked session to compensate any attempted role change", asyn
   assert.ok(events.indexOf("recovery:COMMIT") < events.indexOf("recovery:terminate"));
   assert.ok(events.includes("recovery:precheck"));
 });
+
+test("safe-disables before draining a pooler backend that reappears once", async () => {
+  const events: string[] = [];
+  const dependencies = dependenciesFor(
+    [adminSession(events, { sessionCounts: [0, 1, 0, 0] })],
+    appSession(events),
+  );
+
+  const result = await provisionAppApi({ config, dependencies, precheckAuditSql, runtimeAuditSql });
+
+  assert.equal(result.status, "ok");
+  assert.equal(events.filter((event) => event === "admin:terminate").length, 2);
+  assert.ok(events.indexOf("admin:disable") < events.indexOf("admin:terminate"));
+  assert.ok(events.lastIndexOf("admin:sessions") < events.indexOf("admin:runtime-audit"));
+});
+
+test("fails closed when the pooler backend cannot be drained in the bounded attempts", async () => {
+  const events: string[] = [];
+  const dependencies = dependenciesFor(
+    [
+      adminSession(events, { sessionCounts: [0, 1, 1, 1] }),
+      compensationSession(events),
+    ],
+    appSession(events),
+  );
+
+  await assertProvisioningFailure(
+    () => provisionAppApi({ config, dependencies, precheckAuditSql, runtimeAuditSql }),
+    "APP_API_PROVISIONING_RUNTIME_AUDIT_FAILED",
+  );
+  assert.equal(events.includes("admin:promote"), false);
+  assert.equal(events.filter((event) => event === "admin:terminate").length, 3);
+  assert.ok(events.includes("recovery:disable"));
+});
+
+test("fails closed when PostgreSQL cannot terminate the retained backend", async () => {
+  const events: string[] = [];
+  const dependencies = dependenciesFor(
+    [adminSession(events, { terminationSucceeds: false }), compensationSession(events)],
+    appSession(events),
+  );
+
+  await assertProvisioningFailure(
+    () => provisionAppApi({ config, dependencies, precheckAuditSql, runtimeAuditSql }),
+    "APP_API_PROVISIONING_RUNTIME_AUDIT_FAILED",
+  );
+  assert.ok(events.includes("recovery:disable"));
+});
+
+test("rolls back and compensates if a session appears before the final promotion", async () => {
+  const events: string[] = [];
+  const dependencies = dependenciesFor(
+    [adminSession(events, { sessionCounts: [0, 0, 1] }), compensationSession(events)],
+    appSession(events),
+  );
+
+  await assertProvisioningFailure(
+    () => provisionAppApi({ config, dependencies, precheckAuditSql, runtimeAuditSql }),
+    "APP_API_PROVISIONING_RUNTIME_AUDIT_FAILED",
+  );
+  assert.ok(events.includes("admin:ROLLBACK"));
+  assert.equal(events.includes("admin:promote"), false);
+  assert.ok(events.includes("recovery:disable"));
+});
+
+for (const commitNumber of [2, 3] as const) {
+  test(`compensates an ambiguous lifecycle commit ${commitNumber}`, async () => {
+    const events: string[] = [];
+    const dependencies = dependenciesFor(
+      [adminSession(events, { failCommitNumber: commitNumber }), compensationSession(events)],
+      appSession(events),
+    );
+
+    await assertProvisioningFailure(
+      () => provisionAppApi({ config, dependencies, precheckAuditSql, runtimeAuditSql }),
+      "APP_API_PROVISIONING_RUNTIME_AUDIT_FAILED",
+    );
+    assert.ok(events.includes(`admin:ambiguous-commit-${commitNumber}`));
+    assert.ok(events.includes("recovery:disable"));
+  });
+}
 
 test("compensates a committed temporary login when the private identity is wrong", async () => {
   const events: string[] = [];
@@ -202,22 +294,32 @@ function adminSession(
   events: string[],
   options: Readonly<{
     failFirstCommit?: boolean;
+    failCommitNumber?: number;
     failPrecheck?: boolean;
     failRuntimeAudit?: boolean;
     lockAcquired?: boolean;
+    sessionCounts?: readonly number[];
+    terminationSucceeds?: boolean;
   }> = {},
 ): AppApiProvisioningSession {
-  let commitAttempted = false;
+  let commitNumber = 0;
+  let sessionCountIndex = 0;
   return session(async (sql, parameters = []) => {
     if (sql.includes("pg_try_advisory_lock")) {
       events.push("admin:lock");
       return result([{ acquired: options.lockAcquired !== false }]);
     }
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
-      if (sql === "COMMIT" && options.failFirstCommit === true && !commitAttempted) {
-        commitAttempted = true;
-        events.push("admin:ambiguous-commit");
-        throw new Error("sensitive commit result");
+      if (sql === "COMMIT") {
+        commitNumber += 1;
+        const shouldFail = options.failCommitNumber === commitNumber
+          || (options.failFirstCommit === true && commitNumber === 1);
+        if (shouldFail) {
+          events.push(options.failFirstCommit === true
+            ? "admin:ambiguous-commit"
+            : `admin:ambiguous-commit-${commitNumber}`);
+          throw new Error("sensitive commit result");
+        }
       }
       events.push(`admin:${sql}`);
       return emptyResult();
@@ -236,9 +338,15 @@ function adminSession(
       if (options.failRuntimeAudit === true) throw new Error("sensitive runtime detail");
       return emptyResult();
     }
+    if (sql.includes("pg_terminate_backend")) {
+      events.push("admin:terminate");
+      return result(options.terminationSucceeds === false ? [{ terminated: false }] : []);
+    }
     if (sql.includes("pg_stat_activity")) {
       events.push("admin:sessions");
-      return result([{ count: 0 }]);
+      const count = options.sessionCounts?.[sessionCountIndex] ?? 0;
+      sessionCountIndex += 1;
+      return result([{ count }]);
     }
     if (sql.startsWith("set local password_encryption")) {
       events.push("admin:scram");
@@ -261,6 +369,10 @@ function adminSession(
     }
     if (sql === "alter role app_api valid until 'infinity'") {
       events.push("admin:promote");
+      return emptyResult();
+    }
+    if (sql === "alter role app_api nologin password null valid until 'infinity'") {
+      events.push("admin:disable");
       return emptyResult();
     }
     throw new Error(`UNEXPECTED_ADMIN_QUERY:${sql.slice(0, 30)}`);

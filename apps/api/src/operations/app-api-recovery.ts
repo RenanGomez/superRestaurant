@@ -11,7 +11,7 @@ import {
   type AppApiRecoveryStage,
 } from "./app-api-recovery-config.js";
 
-const PRECHECK_AUDIT_SHA256 = "b9aaa1f50a27a49c8dbc20eeb06f3effb058df3c1a14af7ff08469012906e8fb";
+const PRECHECK_AUDIT_SHA256 = "a6485bcdcc1f54beee9f939187d374a449541343b426d59341870dda63ccd983";
 const DISABLE_SQL = "alter role app_api nologin password null valid until 'infinity'";
 const TERMINATE_SQL = `select pg_catalog.pg_terminate_backend(pid) as terminated
 from pg_catalog.pg_stat_activity

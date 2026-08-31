@@ -4,7 +4,6 @@ do $audit$
 declare
   app_api_oid oid;
   directory_function oid;
-  expected_secured_functions integer := 4;
   lookup_function oid;
   secured_functions integer;
   secured_tables integer;
@@ -170,8 +169,8 @@ begin
   directory_function := pg_catalog.to_regprocedure(
     'app_private.list_active_branch_memberships(uuid)'
   );
-  if directory_function is not null then
-    expected_secured_functions := expected_secured_functions + 1;
+  if directory_function is null then
+    raise exception 'RUNTIME_AUDIT_DIRECTORY_FUNCTION_MISSING';
   end if;
 
   if lookup_function is null
@@ -196,12 +195,10 @@ begin
     raise exception 'RUNTIME_AUDIT_APP_API_EXTRA_FUNCTION';
   end if;
 
-  if directory_function is not null
-    and (
-      not pg_catalog.has_function_privilege(app_api_oid, directory_function, 'EXECUTE')
-      or pg_catalog.has_function_privilege('authenticated', directory_function, 'EXECUTE')
-      or pg_catalog.has_function_privilege('service_role', directory_function, 'EXECUTE')
-    )
+  if not pg_catalog.has_function_privilege(app_api_oid, directory_function, 'EXECUTE')
+    or pg_catalog.has_function_privilege('anon', directory_function, 'EXECUTE')
+    or pg_catalog.has_function_privilege('authenticated', directory_function, 'EXECUTE')
+    or pg_catalog.has_function_privilege('service_role', directory_function, 'EXECUTE')
   then
     raise exception 'RUNTIME_AUDIT_DIRECTORY_FUNCTION_GRANTS';
   end if;
@@ -219,6 +216,11 @@ begin
     or not pg_catalog.has_function_privilege(
       'authenticated',
       'app_rls.can_read_membership(uuid)',
+      'EXECUTE'
+    )
+    or pg_catalog.has_function_privilege(
+      'anon',
+      'app_private.find_active_branch_membership(uuid,uuid,uuid)',
       'EXECUTE'
     )
     or pg_catalog.has_function_privilege(
@@ -271,7 +273,7 @@ begin
       and coalesce(array_to_string(p.proconfig, ','), '') in ('search_path=', 'search_path=""')
       and owner.rolname = 'postgres'
       and owner.rolbypassrls;
-  if secured_functions <> expected_secured_functions then
+  if secured_functions <> 5 then
     raise exception 'RUNTIME_AUDIT_FUNCTION_OWNER_OR_SEARCH_PATH';
   end if;
 end
