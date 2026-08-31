@@ -42,6 +42,26 @@ El comando de `app_api` no ejecuta `config push`, no cambia Auth y no expone
 schemas. Exponer únicamente `app` requiere autorización humana propia y una
 comparación de configuración remota antes/después.
 
+La exposición se realiza con el endpoint dirigido de Management API para
+PostgREST; no se usa `supabase config push`. Cargar en memoria un
+`SUPABASE_ACCESS_TOKEN` limitado a `data_api_config_read` y
+`data_api_config_write`, `DATA_API_EXPOSURE_RUN=REMOTE_CONFIG_WRITE` y el ref
+exacto, y ejecutar:
+
+```text
+pnpm --filter @super-restaurant/api configure:data-api-exposure:remote -- --confirm=EXPOSE_ONLY_APP_DATA_API_FOR:<project-ref>
+```
+
+El runner consulta la configuración antes de escribir, acepta únicamente los
+estados conocidos `public,graphql_public`, el histórico con `adr010_b`, o el
+estado final, y envía un `PATCH` cuyo único campo es
+`db_schema=public,graphql_public,app`. Después reconsulta y exige exactamente el
+estado final sin cambios en `db_extra_search_path`, `max_rows`, `db_pool` o el
+timeout del pool. Rechaza cualquier schema desconocido, `app_private`,
+`app_rls`, drift o respuesta malformada. La salida solo incluye estado,
+booleanos y los nombres públicos de los schemas; nunca cuerpos del proveedor,
+tokens ni `jwt_secret`.
+
 Si el aprovisionamiento termina de forma ambigua, usar únicamente con otra
 autorización humana `recover:app-api:remote` y la confirmación exacta documentada
 en `supabase/migrations/README.md`. La herramienta confirma `NOLOGIN` y elimina

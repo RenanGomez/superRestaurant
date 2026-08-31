@@ -78,6 +78,9 @@ importers:
       '@supabase/supabase-js':
         specifier: 2.112.4
         version: 2.112.4
+      '@super-restaurant/shared-types':
+        specifier: workspace:*
+        version: link:../../packages/shared-types
       next:
         specifier: 16.3.3
         version: 16.3.3(@types/node@26.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)

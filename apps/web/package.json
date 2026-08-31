@@ -12,6 +12,7 @@
     "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node .test-dist/env.test.js && node .test-dist/lib/session.test.js && node --import ./test/proxy-esm-loader.mjs .test-dist/proxy.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\""
   },
   "dependencies": {
+    "@super-restaurant/shared-types": "workspace:*",
     "@supabase/ssr": "0.12.5",
     "@supabase/supabase-js": "2.112.4",
     "next": "16.3.3",
