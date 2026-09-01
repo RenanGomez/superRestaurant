@@ -12,6 +12,8 @@ import {
 } from "./app-api-recovery-config.js";
 
 const PRECHECK_AUDIT_SHA256 = "a6485bcdcc1f54beee9f939187d374a449541343b426d59341870dda63ccd983";
+const POST_DINING_ZONES_PRECHECK_AUDIT_SHA256 =
+  "8bc25f26058ec8512d364404629b595c690b987edf5fdd891ce0496943b6b4bc";
 const DISABLE_SQL = "alter role app_api nologin password null valid until 'infinity'";
 const TERMINATE_SQL = `select pg_catalog.pg_terminate_backend(pid) as terminated
 from pg_catalog.pg_stat_activity
@@ -31,6 +33,8 @@ export interface AppApiLifecycleTargetState {
   readonly scram: boolean;
 }
 
+export type AppApiLifecycleCatalogProfile = "memberships_v1" | "post_dining_zones_v1";
+
 export interface AppApiRecoveryDependencies {
   createAdminSession(config: DatabaseConfig): AppApiProvisioningSession;
 }
@@ -43,6 +47,7 @@ export interface AppApiRecoverySummary {
 }
 
 export interface AppApiRecoveryOptions {
+  readonly auditProfile?: AppApiLifecycleCatalogProfile;
   readonly config: AppApiRecoveryConfig;
   readonly precheckAuditSql: string;
   readonly dependencies?: AppApiRecoveryDependencies;
@@ -51,7 +56,8 @@ export interface AppApiRecoveryOptions {
 export async function recoverAppApi(
   options: AppApiRecoveryOptions,
 ): Promise<AppApiRecoverySummary> {
-  const precheckAuditSql = readPinnedPrecheck(options.precheckAuditSql);
+  const auditProfile = options.auditProfile ?? "memberships_v1";
+  const precheckAuditSql = readPinnedPrecheck(options.precheckAuditSql, auditProfile);
   const dependencies = options.dependencies ?? postgresDependencies;
   let primary: AppApiProvisioningSession | undefined;
   let expectedOid: string | undefined;
@@ -62,7 +68,7 @@ export async function recoverAppApi(
   try {
     primary = dependencies.createAdminSession(options.config.adminDatabase);
     await acquireAppApiLifecycleLock(primary);
-    const state = await readAppApiLifecycleTarget(primary, "precheck");
+    const state = await readAppApiLifecycleTarget(primary, "precheck", undefined, auditProfile);
     expectedOid = state.oid;
     initialStateWasDisabled = state.disabled;
     if (!state.disabled) {
@@ -91,6 +97,7 @@ export async function recoverAppApi(
       precheckAuditSql,
       expectedOid,
       changeAttempted || !initialStateWasDisabled,
+      auditProfile,
     );
   } catch (error: unknown) {
     if (error instanceof AppApiRecoveryError && error.stage === "postcheck") throw error;
@@ -118,18 +125,24 @@ async function reconcileAndVerify(
   precheckAuditSql: string,
   expectedOid: string,
   mayRetryDisable: boolean,
+  auditProfile: AppApiLifecycleCatalogProfile,
 ): Promise<void> {
   let reconciliation = dependencies.createAdminSession(adminDatabase);
   let requiresFreshPostcheck = false;
   try {
     await acquireAppApiLifecycleLock(reconciliation);
-    const state = await readAppApiLifecycleTarget(reconciliation, "postcheck", expectedOid);
+    const state = await readAppApiLifecycleTarget(
+      reconciliation,
+      "postcheck",
+      expectedOid,
+      auditProfile,
+    );
     if (!state.disabled) {
       if (!mayRetryDisable) throw recoveryError("postcheck");
       await commitDisable(reconciliation);
       requiresFreshPostcheck = true;
     } else {
-      await drainAndVerify(reconciliation, precheckAuditSql, expectedOid);
+      await drainAndVerify(reconciliation, precheckAuditSql, expectedOid, auditProfile);
     }
   } finally {
     try {
@@ -143,7 +156,7 @@ async function reconcileAndVerify(
   reconciliation = dependencies.createAdminSession(adminDatabase);
   try {
     await acquireAppApiLifecycleLock(reconciliation);
-    await drainAndVerify(reconciliation, precheckAuditSql, expectedOid);
+    await drainAndVerify(reconciliation, precheckAuditSql, expectedOid, auditProfile);
   } finally {
     try {
       await reconciliation.close();
@@ -171,8 +184,14 @@ async function drainAndVerify(
   session: AppApiProvisioningSession,
   precheckAuditSql: string,
   expectedOid: string,
+  auditProfile: AppApiLifecycleCatalogProfile,
 ): Promise<void> {
-  const state = await readAppApiLifecycleTarget(session, "postcheck", expectedOid);
+  const state = await readAppApiLifecycleTarget(
+    session,
+    "postcheck",
+    expectedOid,
+    auditProfile,
+  );
   if (!state.disabled) throw recoveryError("postcheck");
   for (let attempt = 0; attempt < MAX_DRAIN_ATTEMPTS; attempt += 1) {
     await terminateAppApiSessions(session);
@@ -188,7 +207,9 @@ export async function readAppApiLifecycleTarget(
   session: AppApiProvisioningSession,
   stage: "precheck" | "postcheck",
   expectedOid?: string,
+  catalogProfile: AppApiLifecycleCatalogProfile = "memberships_v1",
 ): Promise<AppApiLifecycleTargetState> {
+  const allowedAppApiFunctionOids = readAllowedAppApiFunctionOids(catalogProfile);
   const result = await session.query<AppApiLifecycleTargetState>(
     `select
        roles.oid::text as oid,
@@ -246,19 +267,7 @@ export async function readAppApiLifecycleTarget(
            from pg_catalog.pg_proc as functions
            join pg_catalog.pg_namespace as schemas on schemas.oid = functions.pronamespace
            where schemas.nspname in ('app_private', 'app_rls')
-             and functions.oid <> all (
-               pg_catalog.array_remove(
-                 array[
-                   pg_catalog.to_regprocedure(
-                     'app_private.find_active_branch_membership(uuid,uuid,uuid)'
-                   ),
-                   pg_catalog.to_regprocedure(
-                     'app_private.list_active_branch_memberships(uuid)'
-                   )
-                 ]::oid[],
-                 null::oid
-               )
-             )
+             and functions.oid <> all (${allowedAppApiFunctionOids})
              and pg_catalog.has_function_privilege(roles.oid, functions.oid, 'execute')
          )
          and not exists (
@@ -322,6 +331,39 @@ export async function readAppApiLifecycleTarget(
   return state;
 }
 
+function readAllowedAppApiFunctionOids(catalogProfile: AppApiLifecycleCatalogProfile): string {
+  if (catalogProfile === "memberships_v1") {
+    return `pg_catalog.array_remove(
+      array[
+        pg_catalog.to_regprocedure(
+          'app_private.find_active_branch_membership(uuid,uuid,uuid)'
+        ),
+        pg_catalog.to_regprocedure(
+          'app_private.list_active_branch_memberships(uuid)'
+        )
+      ]::oid[],
+      null::oid
+    )`;
+  }
+  if (catalogProfile === "post_dining_zones_v1") {
+    return `pg_catalog.array_remove(
+      array[
+        pg_catalog.to_regprocedure(
+          'app_private.find_active_branch_membership(uuid,uuid,uuid)'
+        ),
+        pg_catalog.to_regprocedure(
+          'app_private.list_active_branch_memberships(uuid)'
+        ),
+        pg_catalog.to_regprocedure(
+          'app_private.create_dining_zone(uuid,uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,text)'
+        )
+      ]::oid[],
+      null::oid
+    )`;
+  }
+  throw recoveryError("precheck");
+}
+
 async function terminateAppApiSessions(session: AppApiProvisioningSession): Promise<void> {
   const result = await session.query<{ terminated: boolean }>(TERMINATE_SQL);
   if (result.rows.some((row) => row.terminated !== true)) throw recoveryError("postcheck");
@@ -345,9 +387,15 @@ async function rollbackQuietly(session: AppApiProvisioningSession): Promise<void
   }
 }
 
-function readPinnedPrecheck(sql: string): string {
+function readPinnedPrecheck(
+  sql: string,
+  auditProfile: AppApiLifecycleCatalogProfile,
+): string {
   try {
-    return validatePinnedAudit(sql, PRECHECK_AUDIT_SHA256);
+    const expectedHash = auditProfile === "memberships_v1"
+      ? PRECHECK_AUDIT_SHA256
+      : POST_DINING_ZONES_PRECHECK_AUDIT_SHA256;
+    return validatePinnedAudit(sql, expectedHash);
   } catch {
     throw recoveryError("configuration");
   }

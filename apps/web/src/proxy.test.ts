@@ -67,6 +67,35 @@ test("a Nest rejection signs out once, clears cookies and redirects without cach
   }
 });
 
+test("a rejected protected Server Action continues with a cleared local session", async () => {
+  const state = createState({
+    session: { access_token: "rejected-action-token" },
+    signOutCookies: [{
+      name: "sb-auth-token",
+      options: { expires: new Date(0), httpOnly: true, path: "/" },
+      value: "",
+    }],
+    user: { id: ACTOR_ID },
+  });
+  const restoreFetch = stubFetch(async () => new Response(null, { status: 401 }));
+  setSupabaseSsrTestState(state);
+
+  try {
+    const response = await proxy(new NextRequest(`${APP_ORIGIN}/app`, {
+      headers: { "next-action": "logout-action" },
+      method: "POST",
+    }));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("location"), null);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.match(response.headers.get("set-cookie") ?? "", /sb-auth-token=;/u);
+    assert.deepEqual(state.calls, { getSession: 1, getUser: 1, signOut: 1 });
+  } finally {
+    restoreFetch();
+    setSupabaseSsrTestState(undefined);
+  }
+});
+
 test("a valid protected request calls Nest exactly once and remains private", async () => {
   const state = createState({
     session: { access_token: "valid-token" },

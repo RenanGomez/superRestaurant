@@ -12,12 +12,19 @@ try {
     new URL("../../../../supabase/migrations/20260831000100_create_dining_zones.sql", import.meta.url),
     "utf8",
   );
-  const catalogAuditSql = readFileSync(
+  const diningZonesCatalogAuditSql = readFileSync(
     new URL("../../../../supabase/tests/dining_zones_catalog.sql", import.meta.url),
     "utf8",
   );
+  const postDiningZonesRuntimeCatalogAuditSql = readFileSync(
+    new URL(
+      "../../../../supabase/tests/tenancy_memberships_post_dining_zones_runtime_catalog.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
   const summary = await runSchemaVerification({
-    catalogAuditSql,
+    catalogAuditSql: `${diningZonesCatalogAuditSql}\n${postDiningZonesRuntimeCatalogAuditSql}`,
     config,
     expectedSummary: { policies: 5, securedTables: 7, securityDefinerFunctions: 6 },
     migrationSql,

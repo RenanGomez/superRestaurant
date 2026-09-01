@@ -50,6 +50,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
 
   const { pathname } = request.nextUrl;
   const isProtected = pathname.startsWith(APP_PATH_PREFIX);
+  const isServerAction = request.method === "POST" && request.headers.has("next-action");
 
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -57,6 +58,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     response.headers.set("Cache-Control", "private, no-store");
 
     if (user === null) {
+      if (isServerAction) return response;
       return redirectPreservingCookies(LOGIN_PATH, request, response, { cacheControl: true });
     }
 
@@ -66,7 +68,11 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
       : await verifyRemoteSession(session.access_token, env.apiBaseUrl);
 
     if (remoteSession === undefined) {
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: "local" });
+      if (isServerAction) {
+        response.headers.set("Cache-Control", "private, no-store");
+        return response;
+      }
       return redirectPreservingCookies(LOGIN_PATH, request, response, { cacheControl: true });
     }
   }

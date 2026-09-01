@@ -8,7 +8,7 @@ Este plan permite que un agente trabaje en frontend sin competir con el trabajo 
 
 Estas delimitaciones son obligatorias, no orientativas.
 
-> **Contrato de ownership vigente:** Claude no tiene actualmente una tarea de escritura activa. FE-0 quedó cerrado en su parte automatizada y el integrador asumió el checkpoint. Las fases FE-0.1 a FE-7 son contexto de planificación, no autorización para implementarlas. Todo lo que no esté expresamente habilitado por una asignación nueva se considera reservado a Codex y Claude debe detenerse antes de tocarlo.
+> **Contrato de ownership vigente (2026-08-31):** Claude tiene asignado exclusivamente FE-0.1 —selector autorizado de Restaurant/Branch— dentro de `apps/web/**`. FE-0 quedó cerrado en su parte automatizada y el integrador asumió el checkpoint. FE-1 a FE-7 siguen siendo solo contexto de planificación. Todo lo que no pertenezca a FE-0.1 se considera reservado a Codex y Claude debe detenerse antes de tocarlo.
 
 #### Instrucción ejecutiva para Claude
 
@@ -17,10 +17,11 @@ Estas delimitaciones son obligatorias, no orientativas.
 | Corregir sesión, proxy, cookies o sus pruebas de FE-0 | Detenerse: ese slice ya no tiene trabajo automatizado pendiente ni ownership activo. |
 | Tocar cualquier archivo fuera de `apps/web/**` | Prohibido: detenerse y solicitarlo al integrador. |
 | Cambiar dependencias o regenerar `pnpm-lock.yaml` | Prohibido: informar la dependencia exacta y detenerse. |
-| Empezar selector de sucursal, FE-0.1 o una fase posterior | Prohibido hasta recibir una asignación nueva y explícita. |
+| Implementar FE-0.1 dentro de `apps/web/**` | Autorizado desde el checkpoint publicado `610613e`, sujeto a esta lista blanca. |
+| Empezar FE-1 o una fase posterior | Prohibido hasta recibir una asignación nueva y explícita. |
 | Encontrar un archivo cambiado, nuevo o eliminado por otro agente | No restaurarlo, borrarlo ni sobrescribirlo; detenerse y reportar la ruta. |
 | Necesitar un endpoint, DTO, parser, migración o cambio compartido | No improvisarlo en frontend; documentar el contrato requerido y esperar a Codex. |
-| Terminar FE-0 y sus verificaciones acotadas | Entregar el reporte y detenerse; no elegir por cuenta propia la siguiente tarea. |
+| Terminar FE-0.1 y sus verificaciones acotadas | Entregar el reporte y detenerse; no elegir por cuenta propia la siguiente tarea. |
 
 **Regla de interpretación:** leer no concede propiedad de escritura. Que un archivo sea necesario para compilar, que aparezca modificado en Git o que una fase figure en este plan tampoco autoriza a Claude a editarlo. Solo la lista blanca de FE-0 y una asignación explícita posterior amplían el alcance.
 
@@ -69,17 +70,17 @@ Claude puede ejecutar únicamente verificaciones acotadas que no cambien contrat
 
 #### Slice autorizado ahora
 
-No existe un slice de escritura autorizado para Claude en este momento. FE-0 ya entregó sus cambios y el integrador añadió la prueba funcional directa del proxy sin modificar dependencias productivas. Claude debe permanecer detenido y no debe tocar `apps/web/**`, el lockfile ni ningún otro archivo hasta recibir una asignación nueva y explícita.
+Claude queda autorizado a implementar exclusivamente FE-0.1 —selector autorizado de Restaurant/Branch— dentro de `apps/web/**`. Antes de editar debe releer este archivo, confirmar `HEAD=origin/main=610613eebfa0536e3ef94f349d8b2de0b84435ff` y revisar `git status --short`; si el checkout ya contiene cambios dentro de `apps/web/**`, debe detenerse y reportar la colisión. No puede tocar el lockfile, dependencias, contratos compartidos, backend, esquema ni documentos operativos.
 
-El siguiente slice previsto es FE-0.1 —selector autorizado de Restaurant/Branch—, pero continúa bloqueado. Solo podrá asignarse cuando Codex confirme simultáneamente:
+Codex confirmó los cinco prerrequisitos el 2026-08-31:
 
 1. `20260830000200` aplicada en el proyecto correcto;
 2. `app_api` aprovisionado y la E2E remota de membresías verde;
 3. `GET /api/v1/access/memberships` y `POST /api/v1/access/branch` disponibles en runtime;
 4. `@super-restaurant/shared-types` enlazado a `apps/web` por el integrador;
-5. checkpoint Git actual publicado y checkout sin escritura concurrente.
+5. checkpoint Git `610613e` publicado y checkout limpio al emitir la asignación.
 
-Cumplir esas dependencias no inicia automáticamente a Claude: Codex o Emmanuel deben emitir una asignación nueva que nombre FE-0.1. Hasta entonces no debe iniciar selector de sucursal, menú, mesas, órdenes, KDS, pagos, caja, backoffice ni trabajo offline.
+Esta asignación habilita únicamente las cinco tareas y pruebas descritas en FE-0.1. No autoriza menú, mesas, órdenes, KDS, pagos, caja, backoffice, trabajo offline, commits ni Git remoto. Si falta un endpoint/DTO/parser o surge una necesidad fuera de `apps/web/**`, Claude debe documentarla y detenerse.
 
 La entrega de Claude no autoriza commits, limpieza del checkout ni una siguiente tarea. Codex inspeccionará el diff, ejecutará la integración global cuando ya no haya escritura frontend concurrente y actualizará los archivos operativos.
 
@@ -119,7 +120,7 @@ Correcciones automatizadas cerradas:
 3. Las pruebas de sesión cubren rechazo remoto, API inaccesible, JSON inválido, campos extra y UUID exacto.
 4. Las pruebas del proxy demuestran limpieza efectiva de cookies, redirect fijo, ausencia de ciclo, una sola llamada Nest y `Cache-Control: private, no-store`.
 
-Asignación actual de Claude: **detenerse**. No queda otra modificación de FE-0 autorizada. El siguiente slice previsto es FE-0.1, pero solo podrá comenzar después de que Codex confirme por escrito que el endpoint remoto está desplegado, que `@super-restaurant/shared-types` quedó enlazado a `apps/web` por el integrador y que el checkpoint actual fue publicado. Esa confirmación será una asignación nueva; este documento por sí solo no la concede.
+Asignación actual de Claude: **FE-0.1 exclusivamente**. FE-0 no debe modificarse salvo el ajuste mínimo inevitable para integrar el selector; cualquier regresión de sesión/proxy se reporta al integrador. Esta autorización consta en la sección "Slice autorizado ahora" y no se extiende a fases posteriores.
 
 Alcance:
 
@@ -135,14 +136,14 @@ Criterios de salida:
 - [x] lint, typecheck, pruebas de configuración y build de `apps/web` verdes;
 - [x] contrato estático sin cliente Supabase de navegador, `NEXT_PUBLIC_`, Data API, RPC ni signup;
 - [x] pruebas funcionales directas de proxy, sesión remota, limpieza de cookies, redirect fijo y `no-store`;
-- [ ] smoke humano en navegador para login válido/inválido, refresh, rechazo/revocación y logout;
-- [ ] confirmación runtime de que ninguna respuesta protegida se cachea y no existe ciclo de redirección.
+- [x] smoke humano en navegador para login válido/inválido, refresh, rechazo/revocación y logout;
+- [x] confirmación runtime de respuestas protegidas `private, no-store` y ausencia de ciclo de redirección.
 
 ## Fase FE-0.1 — Contexto autorizado de restaurante/sucursal (P0)
 
-Estado: BLOCKED. Backend y contrato están implementados localmente, pero la migración remota y el runtime `app_api` aún no están disponibles. No iniciar todavía.
+Estado: REVIEW. Claude completó el alcance local asignado en `apps/web/**` y devolvió ownership al integrador. Backend, migración de membresías, runtime `app_api`, E2E remota base y enlace del contrato están disponibles desde el checkpoint `610613e`.
 
-Dependencias: despliegue operativo de `GET /api/v1/access/memberships`, `POST /api/v1/access/branch` y parsers de `packages/shared-types`, además del enlace workspace que debe realizar Codex. El listado ya existe y está probado localmente, pero no se considera disponible para frontend hasta completar migración, aprovisionamiento y E2E remoto.
+Dependencias satisfechas: `GET /api/v1/access/memberships`, `POST /api/v1/access/branch`, parsers de `packages/shared-types` y enlace workspace. El frontend debe consumir esos contratos publicados sin redefinirlos localmente.
 
 Tareas:
 
@@ -153,6 +154,29 @@ Tareas:
 5. Añadir pruebas de false pairs, revocación con token vivo, respuestas hostiles y navegación por teclado.
 
 No incluye turno, caja, Data API ni escritura PostgreSQL directa.
+
+Integración 2026-08-31: el shell consume el directorio Nest, permite seleccionar
+solo pares Restaurant/Branch revalidados por `POST /api/v1/access/branch`, guarda
+una preferencia HTTP-only no autoritativa, refresca al recuperar foco y bloquea
+una preferencia revocada. El integrador añadió binding exacto entre respuesta y
+scope solicitado y rechazo de roles duplicados. Web pasó lint, typecheck, 36
+pruebas y build; el smoke local confirmó `/login` en escritorio y 390×844 sin
+errores de consola. Sigue IN_PROGRESS hasta probar el selector protegido con
+Auth/API reales y revisar sus breakpoints en una sesión autorizada.
+
+Preparación 2026-09-01: el harness remoto de tenancy incorpora hooks vivos
+antes y después de revocar la membresía `amber`, un API local de puerto fijo y
+un coordinador de navegador con lease/ack temporales ignorados. Las credenciales
+no se imprimen, la fase posterior a revocación no las conserva y cualquier
+timeout o fallo vuelve al cleanup FK-safe/Auth existente.
+
+Ejecución 2026-09-01: el run final
+`694b7e52-1e64-4c95-b509-a5215dfed425` completó 119 checks, observó la
+sucursal exacta y roles `manager/waiter`, sobrevivió a recarga, mostró “Sin
+sucursales asignadas” tras revocación con token vivo y eliminó todas las filas
+y dos usuarios Auth. El logout se restringió a la sesión local y el proxy deja
+continuar Server Actions rechazados con cookies limpiadas para que el action
+pueda redirigir correctamente. FE-0.1 pasa a REVIEW.
 
 ## Fase FE-1 — Shell operativo y menú online (P1)
 

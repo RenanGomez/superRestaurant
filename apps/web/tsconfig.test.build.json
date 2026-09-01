@@ -16,6 +16,10 @@
     "src/env.test.ts",
     "src/lib/session.ts",
     "src/lib/session.test.ts",
+    "src/lib/memberships.ts",
+    "src/lib/memberships.test.ts",
+    "src/lib/branch-selection.ts",
+    "src/lib/branch-selection.test.ts",
     "src/proxy.ts",
     "src/proxy.test.ts",
     "src/test-doubles/supabase-ssr.ts"

@@ -17,6 +17,7 @@ export type TenancyVerificationStage =
   | "data_api"
   | "app_api"
   | "http"
+  | "dining_zones"
   | "revocation"
   | "constraints"
   | "cleanup";
@@ -29,6 +30,7 @@ export type TenancyVerificationCode =
   | "TENANCY_VERIFICATION_DATA_API_FAILED"
   | "TENANCY_VERIFICATION_APP_API_FAILED"
   | "TENANCY_VERIFICATION_HTTP_FAILED"
+  | "TENANCY_VERIFICATION_DINING_ZONES_FAILED"
   | "TENANCY_VERIFICATION_REVOCATION_FAILED"
   | "TENANCY_VERIFICATION_CONSTRAINT_FAILED"
   | "TENANCY_VERIFICATION_ASSERTION_FAILED"
@@ -157,6 +159,7 @@ export function codeForStage(stage: TenancyVerificationStage): TenancyVerificati
     configuration: "TENANCY_VERIFICATION_CONFIGURATION_REJECTED",
     constraints: "TENANCY_VERIFICATION_CONSTRAINT_FAILED",
     data_api: "TENANCY_VERIFICATION_DATA_API_FAILED",
+    dining_zones: "TENANCY_VERIFICATION_DINING_ZONES_FAILED",
     fixtures: "TENANCY_VERIFICATION_FIXTURES_FAILED",
     http: "TENANCY_VERIFICATION_HTTP_FAILED",
     revocation: "TENANCY_VERIFICATION_REVOCATION_FAILED",

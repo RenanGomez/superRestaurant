@@ -6,8 +6,13 @@ import type { INestApplication } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import {
   BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
+  DINING_ZONE_SCHEMA_VERSION,
   parseBranchMembershipListV1,
+  parseCreateDiningZoneCommandV1,
+  parseDiningZoneV1,
   type BranchMembershipSummaryV1,
+  type CreateDiningZoneCommandV1,
+  type DiningZoneV1,
 } from "@super-restaurant/shared-types";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { Pool, type PoolClient } from "pg";
@@ -26,6 +31,7 @@ import {
   tenancyAuthMetadataMarker,
   tenancyAuthMetadataVersion,
   tenancyCanarySuffixes,
+  tenancyDiningZoneSuffixes,
   tenancyFixtureAdvisoryLockKey,
   tenancyFixtureEmail,
   tenancyFixtureName,
@@ -33,7 +39,14 @@ import {
 } from "./tenancy-fixture-markers.js";
 
 type FixtureKey = TenancyFixtureKey;
-type AppTable = "roles" | "restaurants" | "branches" | "memberships" | "membership_role_grants";
+type AppTable =
+  | "roles"
+  | "restaurants"
+  | "branches"
+  | "memberships"
+  | "membership_role_grants"
+  | "dining_zones"
+  | "dining_zone_audit_events";
 
 const appTables: readonly AppTable[] = [
   "roles",
@@ -55,6 +68,7 @@ const expectedRoleCodes = [
 ] as const;
 export interface TenancyVerificationSummary {
   readonly checks: number;
+  readonly diningZonesVerified: boolean;
   readonly fixtureRowsRemoved: true;
   readonly fixtureUsersRemoved: 2;
   readonly runId: string;
@@ -62,9 +76,46 @@ export interface TenancyVerificationSummary {
 }
 
 export interface RunTenancyVerificationOptions {
+  readonly apiPort?: number;
   readonly config: TenancyVerificationConfig;
+  readonly liveFixtureHooks?: TenancyVerificationLiveFixtureHooks;
   readonly runtimeCatalogAuditSql: string;
   readonly onStart?: (runId: string) => void;
+  readonly verifyDiningZones?: true;
+}
+
+export interface TenancyVerificationLiveFixture {
+  readonly apiBaseUrl: string;
+  readonly branchId: string;
+  readonly branchName: string;
+  readonly credentials: Readonly<{ email: string; password: string }>;
+  readonly restaurantId: string;
+  readonly restaurantName: string;
+  readonly runId: string;
+}
+
+export interface TenancyVerificationLiveFixtureHooks {
+  afterRevocation(fixture: TenancyVerificationLiveFixture): Promise<void>;
+  beforeRevocation(fixture: TenancyVerificationLiveFixture): Promise<void>;
+}
+
+interface DiningZoneFixtureCommand {
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly name: string;
+  readonly zoneId: string;
+}
+
+interface DiningZoneFixturePlan {
+  readonly commands: readonly [
+    DiningZoneFixtureCommand,
+    DiningZoneFixtureCommand,
+    DiningZoneFixtureCommand,
+    DiningZoneFixtureCommand,
+    DiningZoneFixtureCommand,
+  ];
+  readonly deviceId: string;
+  readonly occurredAt: string;
 }
 
 interface FixtureUserPlan {
@@ -81,10 +132,13 @@ interface FixturePlan {
   readonly grantIds: readonly [string, string, string, string, string];
   readonly membershipIds: readonly [string, string, string, string];
   readonly restaurantIds: readonly [string, string];
+  readonly diningZones: DiningZoneFixturePlan;
   readonly runId: string;
   readonly users: readonly [FixtureUserPlan, FixtureUserPlan];
   authCreationAttempted: boolean;
   databaseFixturesInserted: boolean;
+  diningZoneCreated: boolean;
+  diningZonesEnabled: boolean;
 }
 
 interface AuthenticatedFixture {
@@ -108,8 +162,12 @@ class VerificationCounter {
 export async function runTenancyVerification(
   options: RunTenancyVerificationOptions,
 ): Promise<TenancyVerificationSummary> {
-  const runtimeCatalogAuditSql = validateRuntimeAuditSql(options.runtimeCatalogAuditSql);
-  const plan = createFixturePlan();
+  const runtimeCatalogAuditSql = validateRuntimeAuditSql(
+    options.runtimeCatalogAuditSql,
+    options.verifyDiningZones === true,
+  );
+  const apiPort = readApiPort(options.apiPort);
+  const plan = createFixturePlan(options.verifyDiningZones === true);
   options.onStart?.(plan.runId);
   const counter = new VerificationCounter();
   const adminPool = createPool(options.config.adminDatabase, "super-restaurant-tenancy-admin");
@@ -124,14 +182,33 @@ export async function runTenancyVerification(
     await executeStage("catalog_audit", async () => {
       await adminPool.query(runtimeCatalogAuditSql);
     });
-    await executeStage("app_api", async () => verifyAppApiSurface(appApiPool, counter));
+    await executeStage("app_api", async () => verifyAppApiSurface(appApiPool, counter, options.verifyDiningZones === true));
     await executeStage("fixtures", async () => createFixtures(serverClient, adminPool, plan, counter));
     const authenticated = await executeStage("authentication", async () => authenticateFixtures(options.config, plan, counter));
 
-    app = await executeStage("http", async () => startProductApi());
-    await executeStage("data_api", async () => verifyDataApiBaseline(options.config, plan, authenticated, counter));
+    app = await executeStage("http", async () => startProductApi(apiPort));
+    await executeStage("data_api", async () => verifyDataApiBaseline(
+      options.config,
+      plan,
+      authenticated,
+      counter,
+      options.verifyDiningZones === true,
+    ));
     await executeStage("app_api", async () => verifyPrivateLookupBaseline(appApiPool, plan, counter));
     await executeStage("http", async () => verifyHttpBaseline(app as INestApplication, plan, authenticated, counter));
+    const liveFixture = await readLiveFixture(app as INestApplication, plan);
+    if (options.liveFixtureHooks !== undefined) {
+      await executeStage("http", async () => options.liveFixtureHooks?.beforeRevocation(liveFixture));
+    }
+    if (options.verifyDiningZones === true) {
+      await executeStage("dining_zones", async () => verifyDiningZonesBaseline(
+        adminPool,
+        app as INestApplication,
+        plan,
+        authenticated,
+        counter,
+      ));
+    }
     await executeStage("revocation", async () => verifyRevocations(
       adminPool,
       appApiPool,
@@ -140,6 +217,18 @@ export async function runTenancyVerification(
       authenticated,
       counter,
     ));
+    if (options.liveFixtureHooks !== undefined) {
+      await executeStage("http", async () => options.liveFixtureHooks?.afterRevocation(liveFixture));
+    }
+    if (options.verifyDiningZones === true) {
+      await executeStage("dining_zones", async () => verifyDiningZoneAfterRevocation(
+        adminPool,
+        app as INestApplication,
+        plan,
+        authenticated[0],
+        counter,
+      ));
+    }
     await executeStage("constraints", async () => verifyConstraints(adminPool, plan, counter));
   } catch (error: unknown) {
     failure = sanitizeExecutionError(error);
@@ -171,6 +260,7 @@ export async function runTenancyVerification(
   if (failure !== undefined) throw failure;
   return Object.freeze({
     checks: counter.checks,
+    diningZonesVerified: options.verifyDiningZones === true,
     fixtureRowsRemoved: true,
     fixtureUsersRemoved: 2,
     runId: plan.runId,
@@ -198,15 +288,28 @@ async function acquireFixtureOperationLock(pool: Pool, runId: string): Promise<P
   }
 }
 
-function createFixturePlan(): FixturePlan {
+function createFixturePlan(diningZonesEnabled: boolean): FixturePlan {
   const runId = randomUUID();
   const restaurantIds = [randomUUID(), randomUUID()] as const;
   const branchIds = [randomUUID(), randomUUID(), randomUUID(), randomUUID()] as const;
+  const diningZones: DiningZoneFixturePlan = {
+    commands: tenancyDiningZoneSuffixes.map((suffix) => ({
+      eventId: randomUUID(),
+      idempotencyKey: randomUUID(),
+      name: tenancyFixtureName(runId, suffix),
+      zoneId: randomUUID(),
+    })) as unknown as DiningZoneFixturePlan["commands"],
+    deviceId: randomUUID(),
+    occurredAt: new Date().toISOString(),
+  };
   return {
     branchIds,
     authCreationAttempted: false,
     canaryRestaurantIds: [randomUUID(), randomUUID(), randomUUID()],
     databaseFixturesInserted: false,
+    diningZoneCreated: false,
+    diningZones,
+    diningZonesEnabled,
     grantIds: [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()],
     membershipIds: [randomUUID(), randomUUID(), randomUUID(), randomUUID()],
     restaurantIds,
@@ -363,12 +466,12 @@ async function authenticateFixtures(
   return authenticated as unknown as readonly [AuthenticatedFixture, AuthenticatedFixture];
 }
 
-async function startProductApi(): Promise<INestApplication> {
+async function startProductApi(port: number): Promise<INestApplication> {
   const app = await NestFactory.create(AppModule, { abortOnError: false, logger: false });
   try {
     app.setGlobalPrefix("api/v1");
     app.enableShutdownHooks();
-    await app.listen(0, "127.0.0.1");
+    await app.listen(port, "127.0.0.1");
     return app;
   } catch {
     try {
@@ -380,15 +483,34 @@ async function startProductApi(): Promise<INestApplication> {
   }
 }
 
+async function readLiveFixture(
+  app: INestApplication,
+  plan: FixturePlan,
+): Promise<TenancyVerificationLiveFixture> {
+  return Object.freeze({
+    apiBaseUrl: await app.getUrl(),
+    branchId: plan.branchIds[0],
+    branchName: tenancyFixtureName(plan.runId, "branch-11"),
+    credentials: plan.users[0].credentials,
+    restaurantId: plan.restaurantIds[0],
+    restaurantName: tenancyFixtureName(plan.runId, "restaurant-1"),
+    runId: plan.runId,
+  });
+}
+
 async function verifyDataApiBaseline(
   config: TenancyVerificationConfig,
   plan: FixturePlan,
   authenticated: readonly [AuthenticatedFixture, AuthenticatedFixture],
   counter: VerificationCounter,
+  verifyDiningZones: boolean,
 ): Promise<void> {
   const anon = createSupabaseClient(config.supabaseUrl, config.publishableKey);
   const serviceRole = createSupabaseClient(config.supabaseUrl, config.secretKey);
-  for (const table of appTables) {
+  const tables = verifyDiningZones
+    ? [...appTables, "dining_zones", "dining_zone_audit_events"] as const
+    : appTables;
+  for (const table of tables) {
     await expectDataApiDeniedRead(anon, table, counter);
     await expectDataApiDeniedRead(serviceRole, table, counter);
   }
@@ -476,7 +598,11 @@ async function assertVisibleIds(
   counter.assert(stage, arraysEqual(actualIds, [...expectedIds].sort()));
 }
 
-async function verifyAppApiSurface(appApiPool: Pool, counter: VerificationCounter): Promise<void> {
+async function verifyAppApiSurface(
+  appApiPool: Pool,
+  counter: VerificationCounter,
+  verifyDiningZones: boolean,
+): Promise<void> {
   const identity = await appApiPool.query<{ currentUser: string; sessionUser: string }>(
     `select current_user::text as "currentUser", session_user::text as "sessionUser"`,
   );
@@ -485,6 +611,16 @@ async function verifyAppApiSurface(appApiPool: Pool, counter: VerificationCounte
   await expectPostgresDenied(appApiPool, "insert into app.roles (code) values ('tenancy_canary')", [], counter, "app_api");
   await expectPostgresDenied(appApiPool, "select app_rls.has_active_restaurant_membership($1::uuid)", [randomUUID()], counter, "app_api");
   await assertPrivateDirectory(appApiPool, randomUUID(), [], counter, "app_api");
+  if (verifyDiningZones) {
+    await expectPostgresDenied(appApiPool, "select * from app.dining_zones limit 1", [], counter, "app_api");
+    await expectPostgresDenied(
+      appApiPool,
+      "select * from app.dining_zone_audit_events limit 1",
+      [],
+      counter,
+      "app_api",
+    );
+  }
 }
 
 async function verifyPrivateLookupBaseline(appApiPool: Pool, plan: FixturePlan, counter: VerificationCounter): Promise<void> {
@@ -582,6 +718,261 @@ async function verifyHttpBaseline(
   await assertBranchHttp(baseUrl, authenticated[0].accessToken, plan.restaurantIds[0], plan.branchIds[2], 403, undefined, counter);
   await assertBranchHttp(baseUrl, authenticated[1].accessToken, plan.restaurantIds[1], plan.branchIds[2], 200, ["cashier"], counter);
   await assertBranchHttp(baseUrl, authenticated[1].accessToken, plan.restaurantIds[1], plan.branchIds[3], 200, ["kitchen"], counter);
+}
+
+async function verifyDiningZonesBaseline(
+  adminPool: Pool,
+  app: INestApplication,
+  plan: FixturePlan,
+  authenticated: readonly [AuthenticatedFixture, AuthenticatedFixture],
+  counter: VerificationCounter,
+): Promise<void> {
+  const baseUrl = await app.getUrl();
+  const managerCommand = diningZoneCommand(plan, 0, plan.restaurantIds[0], plan.branchIds[0]);
+
+  await assertDiningZoneError(baseUrl, undefined, managerCommand, 401, "AUTHENTICATION_REQUIRED", counter);
+  await assertDiningZonePersistence(adminPool, plan, undefined, counter);
+
+  const created = await assertDiningZoneSuccess(
+    baseUrl,
+    authenticated[0].accessToken,
+    managerCommand,
+    false,
+    authenticated[0].userId,
+    counter,
+  );
+  plan.diningZoneCreated = true;
+  await assertDiningZonePersistence(adminPool, plan, created, counter);
+
+  const replayed = await assertDiningZoneSuccess(
+    baseUrl,
+    authenticated[0].accessToken,
+    managerCommand,
+    true,
+    authenticated[0].userId,
+    counter,
+  );
+  counter.assert("dining_zones", replayed.createdAt === created.createdAt);
+  await assertDiningZonePersistence(adminPool, plan, created, counter);
+
+  const conflictCommand = {
+    ...diningZoneCommand(plan, 1, plan.restaurantIds[0], plan.branchIds[0]),
+    idempotencyKey: managerCommand.idempotencyKey,
+  } satisfies CreateDiningZoneCommandV1;
+  await assertDiningZoneError(
+    baseUrl,
+    authenticated[0].accessToken,
+    conflictCommand,
+    409,
+    "DINING_ZONE_CONFLICT",
+    counter,
+  );
+  await assertDiningZonePersistence(adminPool, plan, created, counter);
+
+  const viewerCommand = diningZoneCommand(plan, 2, plan.restaurantIds[0], plan.branchIds[1]);
+  await assertDiningZoneError(
+    baseUrl,
+    authenticated[0].accessToken,
+    viewerCommand,
+    403,
+    "ACTION_NOT_AUTHORIZED",
+    counter,
+  );
+  await assertDiningZonePersistence(adminPool, plan, created, counter);
+
+  const falsePairCommand = diningZoneCommand(plan, 3, plan.restaurantIds[0], plan.branchIds[2]);
+  await assertDiningZoneError(
+    baseUrl,
+    authenticated[0].accessToken,
+    falsePairCommand,
+    403,
+    "ACTION_NOT_AUTHORIZED",
+    counter,
+  );
+  await assertDiningZonePersistence(adminPool, plan, created, counter);
+}
+
+async function verifyDiningZoneAfterRevocation(
+  adminPool: Pool,
+  app: INestApplication,
+  plan: FixturePlan,
+  authenticated: AuthenticatedFixture,
+  counter: VerificationCounter,
+): Promise<void> {
+  const baseUrl = await app.getUrl();
+  const command = diningZoneCommand(plan, 4, plan.restaurantIds[0], plan.branchIds[0]);
+  await assertDiningZoneError(
+    baseUrl,
+    authenticated.accessToken,
+    command,
+    403,
+    "ACTION_NOT_AUTHORIZED",
+    counter,
+  );
+  await assertDiningZonePersistence(adminPool, plan, undefined, counter, true);
+}
+
+function diningZoneCommand(
+  plan: FixturePlan,
+  commandIndex: 0 | 1 | 2 | 3 | 4,
+  restaurantId: string,
+  branchId: string,
+): CreateDiningZoneCommandV1 {
+  const fixture = plan.diningZones.commands[commandIndex];
+  const command = parseCreateDiningZoneCommandV1({
+    deviceId: plan.diningZones.deviceId,
+    eventId: fixture.eventId,
+    idempotencyKey: fixture.idempotencyKey,
+    name: fixture.name,
+    occurredAt: plan.diningZones.occurredAt,
+    schemaVersion: DINING_ZONE_SCHEMA_VERSION,
+    scope: { branchId, restaurantId },
+    zoneId: fixture.zoneId,
+  });
+  if (command === undefined) {
+    throw new TenancyVerificationError("dining_zones", "TENANCY_VERIFICATION_DINING_ZONES_FAILED");
+  }
+  return command;
+}
+
+async function assertDiningZoneSuccess(
+  baseUrl: string,
+  accessToken: string,
+  command: CreateDiningZoneCommandV1,
+  expectedReplay: boolean,
+  actorId: string,
+  counter: VerificationCounter,
+): Promise<DiningZoneV1> {
+  const response = await postDiningZone(baseUrl, accessToken, command);
+  const parsed = parseDiningZoneV1(await response.json());
+  counter.assert(
+    "dining_zones",
+    response.status === 201
+      && response.headers.get("cache-control") === "private, no-store"
+      && parsed !== undefined
+      && parsed.createdBy === actorId
+      && parsed.name === command.name
+      && parsed.replayed === expectedReplay
+      && parsed.schemaVersion === DINING_ZONE_SCHEMA_VERSION
+      && parsed.scope.branchId === command.scope.branchId
+      && parsed.scope.restaurantId === command.scope.restaurantId
+      && parsed.version === 1
+      && parsed.zoneId === command.zoneId,
+  );
+  if (parsed === undefined) {
+    throw new TenancyVerificationError("dining_zones", "TENANCY_VERIFICATION_DINING_ZONES_FAILED");
+  }
+  return parsed;
+}
+
+async function assertDiningZoneError(
+  baseUrl: string,
+  accessToken: string | undefined,
+  command: CreateDiningZoneCommandV1,
+  expectedStatus: number,
+  expectedCode: string,
+  counter: VerificationCounter,
+): Promise<void> {
+  const response = await postDiningZone(baseUrl, accessToken, command);
+  const body: unknown = await response.json();
+  counter.assert(
+    "dining_zones",
+    response.status === expectedStatus && recordsEqual(body, { code: expectedCode }),
+  );
+}
+
+async function postDiningZone(
+  baseUrl: string,
+  accessToken: string | undefined,
+  command: CreateDiningZoneCommandV1,
+): Promise<Response> {
+  return fetch(`${baseUrl}/api/v1/dining/zones`, {
+    body: JSON.stringify(command),
+    headers: {
+      ...(accessToken === undefined ? {} : { authorization: `Bearer ${accessToken}` }),
+      "content-type": "application/json",
+    },
+    method: "POST",
+  });
+}
+
+async function assertDiningZonePersistence(
+  adminPool: Pool,
+  plan: FixturePlan,
+  created: DiningZoneV1 | undefined,
+  counter: VerificationCounter,
+  expectCreatedFromPlan = false,
+): Promise<void> {
+  const zoneIds = plan.diningZones.commands.map((command) => command.zoneId);
+  const eventIds = plan.diningZones.commands.map((command) => command.eventId);
+  const zones = await adminPool.query<{
+    branchId: string;
+    createdAt: Date;
+    createdBy: string;
+    id: string;
+    name: string;
+    restaurantId: string;
+    version: string;
+  }>(
+    `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId", name,
+       version::text, created_at as "createdAt", created_by::text as "createdBy"
+     from app.dining_zones where id = any($1::uuid[]) order by id`,
+    [[...zoneIds]],
+  );
+  const audits = await adminPool.query<{
+    actorId: string;
+    branchId: string;
+    deviceId: string;
+    eventId: string;
+    idempotencyKey: string;
+    name: string;
+    occurredAt: Date;
+    operation: string;
+    restaurantId: string;
+    zoneId: string;
+  }>(
+    `select event_id::text as "eventId", idempotency_key::text as "idempotencyKey",
+       restaurant_id::text as "restaurantId", branch_id::text as "branchId", zone_id::text as "zoneId",
+       actor_id::text as "actorId", device_id::text as "deviceId", operation,
+       name_snapshot as name, occurred_at as "occurredAt"
+     from app.dining_zone_audit_events where event_id = any($1::uuid[]) order by event_id`,
+    [[...eventIds]],
+  );
+
+  const expectedCreatedAt = created?.createdAt
+    ?? (expectCreatedFromPlan && plan.diningZoneCreated ? zones.rows[0]?.createdAt.toISOString() : undefined);
+  if (expectedCreatedAt === undefined) {
+    counter.assert("dining_zones", zones.rows.length === 0 && audits.rows.length === 0);
+    return;
+  }
+
+  const zone = zones.rows[0];
+  const audit = audits.rows[0];
+  const fixture = plan.diningZones.commands[0];
+  counter.assert(
+    "dining_zones",
+    zones.rows.length === 1
+      && audits.rows.length === 1
+      && zone !== undefined
+      && audit !== undefined
+      && zone.id === fixture.zoneId
+      && zone.restaurantId === plan.restaurantIds[0]
+      && zone.branchId === plan.branchIds[0]
+      && zone.name === fixture.name
+      && zone.version === "1"
+      && zone.createdAt.toISOString() === expectedCreatedAt
+      && zone.createdBy === requireUserId(plan.users[0])
+      && audit.eventId === fixture.eventId
+      && audit.idempotencyKey === fixture.idempotencyKey
+      && audit.restaurantId === plan.restaurantIds[0]
+      && audit.branchId === plan.branchIds[0]
+      && audit.zoneId === fixture.zoneId
+      && audit.actorId === requireUserId(plan.users[0])
+      && audit.deviceId === plan.diningZones.deviceId
+      && audit.operation === "created"
+      && audit.name === fixture.name
+      && audit.occurredAt.toISOString() === plan.diningZones.occurredAt,
+  );
 }
 
 async function verifyRevocations(
@@ -865,6 +1256,22 @@ async function cleanupFixtures(
     try {
       await client.query("BEGIN");
       await verifyFixtureOwnership(client, plan);
+      if (plan.diningZonesEnabled) {
+        await verifyDiningZoneFixtureOwnership(client, plan);
+        await deleteRequiredFixtureRows(
+          client,
+          "app.dining_zone_audit_events",
+          plan.diningZones.commands.map((command) => command.eventId),
+          plan.diningZoneCreated ? [plan.diningZones.commands[0].eventId] : [],
+          "event_id",
+        );
+        await deleteRequiredFixtureRows(
+          client,
+          "app.dining_zones",
+          plan.diningZones.commands.map((command) => command.zoneId),
+          plan.diningZoneCreated ? [plan.diningZones.commands[0].zoneId] : [],
+        );
+      }
       await deleteRequiredFixtureRows(client, "app.membership_role_grants", plan.grantIds, plan.grantIds);
       await deleteRequiredFixtureRows(client, "app.memberships", plan.membershipIds, plan.membershipIds);
       await deleteRequiredFixtureRows(client, "app.branches", plan.branchIds, plan.branchIds);
@@ -901,6 +1308,19 @@ async function cleanupFixtures(
     [[...plan.membershipIds], [...plan.branchIds], [...plan.restaurantIds, ...plan.canaryRestaurantIds]],
   );
   counter.assert("cleanup", residualRows.rows[0]?.count === 0);
+  if (plan.diningZonesEnabled) {
+    const residualDiningRows = await adminPool.query<{ count: number }>(
+      `select (
+        (select count(*) from app.dining_zone_audit_events where event_id = any($1::uuid[]))
+        + (select count(*) from app.dining_zones where id = any($2::uuid[]))
+      )::integer as count`,
+      [
+        plan.diningZones.commands.map((command) => command.eventId),
+        plan.diningZones.commands.map((command) => command.zoneId),
+      ],
+    );
+    counter.assert("cleanup", residualDiningRows.rows[0]?.count === 0);
+  }
 }
 
 async function deleteRequiredFixtureRows(
@@ -908,9 +1328,10 @@ async function deleteRequiredFixtureRows(
   table: string,
   allowedIds: readonly string[],
   requiredIds: readonly string[],
+  idColumn: "event_id" | "id" = "id",
 ): Promise<void> {
   const result = await client.query<{ id: string }>(
-    `delete from ${table} where id = any($1::uuid[]) returning id::text`,
+    `delete from ${table} where ${idColumn} = any($1::uuid[]) returning ${idColumn}::text as id`,
     [[...allowedIds]],
   );
   const returned = new Set(result.rows.map((row) => row.id));
@@ -988,6 +1409,94 @@ async function verifyFixtureOwnership(client: PoolClient, plan: FixturePlan): Pr
   }
 }
 
+async function verifyDiningZoneFixtureOwnership(client: PoolClient, plan: FixturePlan): Promise<void> {
+  const amberId = requireUserId(plan.users[0]);
+  const expectedZones = new Map<string, Readonly<{ branchId: string; name: string; restaurantId: string }>>(
+    plan.diningZones.commands.map((command, index) => [
+      command.zoneId,
+      {
+        branchId: index === 2 ? plan.branchIds[1] : index === 3 ? plan.branchIds[2] : plan.branchIds[0],
+        name: command.name,
+        restaurantId: plan.restaurantIds[0],
+      },
+    ]),
+  );
+  const zones = await client.query<{
+    branchId: string;
+    createdBy: string;
+    id: string;
+    name: string;
+    restaurantId: string;
+  }>(
+    `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId",
+       name, created_by::text as "createdBy"
+     from app.dining_zones where id = any($1::uuid[]) for update`,
+    [[...expectedZones.keys()]],
+  );
+  for (const row of zones.rows) {
+    const expected = expectedZones.get(row.id);
+    if (
+      expected === undefined
+      || expected.restaurantId !== row.restaurantId
+      || expected.branchId !== row.branchId
+      || expected.name !== row.name
+      || row.createdBy !== amberId
+    ) throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+  }
+  if (plan.diningZoneCreated && !zones.rows.some((row) => row.id === plan.diningZones.commands[0].zoneId)) {
+    throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+  }
+
+  const expectedAudits = new Map<string, Readonly<{
+    branchId: string;
+    idempotencyKey: string;
+    name: string;
+    restaurantId: string;
+    zoneId: string;
+  }>>(
+    plan.diningZones.commands.map((command, index) => [
+      command.eventId,
+      {
+        branchId: index === 2 ? plan.branchIds[1] : index === 3 ? plan.branchIds[2] : plan.branchIds[0],
+        idempotencyKey: index === 1 ? plan.diningZones.commands[0].idempotencyKey : command.idempotencyKey,
+        name: command.name,
+        restaurantId: plan.restaurantIds[0],
+        zoneId: command.zoneId,
+      },
+    ]),
+  );
+  const audits = await client.query<{
+    actorId: string;
+    branchId: string;
+    eventId: string;
+    idempotencyKey: string;
+    name: string;
+    restaurantId: string;
+    zoneId: string;
+  }>(
+    `select event_id::text as "eventId", idempotency_key::text as "idempotencyKey",
+       restaurant_id::text as "restaurantId", branch_id::text as "branchId", zone_id::text as "zoneId",
+       actor_id::text as "actorId", name_snapshot as name
+     from app.dining_zone_audit_events where event_id = any($1::uuid[]) for update`,
+    [[...expectedAudits.keys()]],
+  );
+  for (const row of audits.rows) {
+    const expected = expectedAudits.get(row.eventId);
+    if (
+      expected === undefined
+      || expected.restaurantId !== row.restaurantId
+      || expected.branchId !== row.branchId
+      || expected.zoneId !== row.zoneId
+      || expected.idempotencyKey !== row.idempotencyKey
+      || expected.name !== row.name
+      || row.actorId !== amberId
+    ) throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+  }
+  if (plan.diningZoneCreated && !audits.rows.some((row) => row.eventId === plan.diningZones.commands[0].eventId)) {
+    throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+  }
+}
+
 async function discoverMarkedUsers(serverClient: SupabaseClient, runId: string): Promise<readonly string[]> {
   const idsByFixture = new Map<FixtureKey, string>();
   for (let page = 1; page <= 100; page += 1) {
@@ -1036,13 +1545,15 @@ function sanitizeExecutionError(error: unknown): TenancyVerificationError {
     : new TenancyVerificationError("configuration", "TENANCY_VERIFICATION_CONFIGURATION_REJECTED");
 }
 
-function validateRuntimeAuditSql(sql: string): string {
+function validateRuntimeAuditSql(sql: string, verifyDiningZones: boolean): string {
+  const requiredMarkers = verifyDiningZones
+    ? ["POST_DINING_RUNTIME_APP_API_ATTRIBUTES_REJECTED", "POST_DINING_RUNTIME_DINING_TABLE_GRANTS_REJECTED"]
+    : ["RUNTIME_AUDIT_APP_API_ATTRIBUTES", "RUNTIME_AUDIT_APP_API_TABLE_GRANTS"];
   if (
     typeof sql !== "string"
     || sql.length === 0
     || sql.length > 100_000
-    || !sql.includes("RUNTIME_AUDIT_APP_API_ATTRIBUTES")
-    || !sql.includes("RUNTIME_AUDIT_APP_API_TABLE_GRANTS")
+    || requiredMarkers.some((marker) => !sql.includes(marker))
   ) {
     throw new TenancyVerificationError("configuration", "TENANCY_VERIFICATION_CONFIGURATION_REJECTED");
   }
@@ -1051,6 +1562,17 @@ function validateRuntimeAuditSql(sql: string): string {
   } catch {
     throw new TenancyVerificationError("configuration", "TENANCY_VERIFICATION_CONFIGURATION_REJECTED");
   }
+}
+
+function readApiPort(value: number | undefined): number {
+  if (value === undefined) return 0;
+  if (!Number.isSafeInteger(value) || value < 1_024 || value > 65_535) {
+    throw new TenancyVerificationError(
+      "configuration",
+      "TENANCY_VERIFICATION_CONFIGURATION_REJECTED",
+    );
+  }
+  return value;
 }
 
 function requireUserId(user: FixtureUserPlan): string {

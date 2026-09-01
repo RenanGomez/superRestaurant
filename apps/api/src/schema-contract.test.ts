@@ -29,6 +29,29 @@ const runtimeCatalogAudit = readFileSync(
   new URL("../../../supabase/tests/tenancy_memberships_runtime_catalog.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
+const postDiningZonesCatalogAudit = readFileSync(
+  new URL(
+    "../../../supabase/tests/tenancy_memberships_post_dining_zones_catalog.sql",
+    import.meta.url,
+  ),
+  "utf8",
+).toLowerCase();
+const postDiningZonesRuntimeCatalogAudit = readFileSync(
+  new URL(
+    "../../../supabase/tests/tenancy_memberships_post_dining_zones_runtime_catalog.sql",
+    import.meta.url,
+  ),
+  "utf8",
+).toLowerCase();
+const diningZonesRemoteRunner = readFileSync(
+  new URL("./operations/run-dining-zones-tenancy-verification.js", import.meta.url),
+  "utf8",
+).toLowerCase();
+const protectedWebSmokeRunner = readFileSync(
+  new URL("./operations/run-web-protected-smoke.js", import.meta.url),
+  "utf8",
+).toLowerCase();
+const apiPackage = readFileSync(new URL("../package.json", import.meta.url), "utf8").toLowerCase();
 
 test("product migration is independent from the ADR-010 spike and models exact historical scope", () => {
   assert.equal(migration.includes("adr010_b"), false);
@@ -117,6 +140,42 @@ test("catalog audits require the exact expanded app_api function surface", () =>
     assert.match(audit, /has_function_privilege\('anon', directory_function, 'execute'\)/u);
     assert.doesNotMatch(audit, /expected_secured_functions/u);
   }
+});
+
+test("post-dining-zones audits pin the exact seven-table and six-function surface", () => {
+  for (const audit of [postDiningZonesCatalogAudit, postDiningZonesRuntimeCatalogAudit]) {
+    assert.match(audit, /\) <> 7/u);
+    assert.match(audit, /\) <> 6/u);
+    assert.match(audit, /app_private\.create_dining_zone\(uuid,uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,text\)/u);
+    assert.match(audit, /dining_zone_audit_events/u);
+    assert.match(audit, /app_api_extra_function/u);
+    assert.match(audit, /public_execute_rejected/u);
+    assert.doesNotMatch(audit, /expected_secured_(?:tables|functions)/u);
+  }
+  assert.match(postDiningZonesCatalogAudit, /rolcanlogin/u);
+  assert.match(postDiningZonesCatalogAudit, /rolpassword is not null/u);
+  assert.match(postDiningZonesRuntimeCatalogAudit, /not rolcanlogin/u);
+  assert.match(postDiningZonesRuntimeCatalogAudit, /scram-sha-256/u);
+});
+
+test("remote dining-zone E2E reuses the marked tenancy harness and post-migration audit", () => {
+  assert.match(diningZonesRemoteRunner, /runtenancyverification/u);
+  assert.match(diningZonesRemoteRunner, /tenancy_memberships_post_dining_zones_runtime_catalog\.sql/u);
+  assert.match(diningZonesRemoteRunner, /verifydiningzones: true/u);
+  assert.match(apiPackage, /"verify:dining-zones:remote"/u);
+  assert.match(apiPackage, /run-dining-zones-tenancy-verification\.js/u);
+});
+
+test("protected web smoke reuses marked fixtures, post-migration audit and cleanup", () => {
+  assert.match(protectedWebSmokeRunner, /runtenancyverification/u);
+  assert.match(
+    protectedWebSmokeRunner,
+    /tenancy_memberships_post_dining_zones_runtime_catalog\.sql/u,
+  );
+  assert.match(protectedWebSmokeRunner, /createwebprotectedsmokecoordinator/u);
+  assert.match(protectedWebSmokeRunner, /verifydiningzones:\s*true/u);
+  assert.match(apiPackage, /"verify:web-protected-smoke:remote"/u);
+  assert.match(apiPackage, /run-web-protected-smoke\.js/u);
 });
 
 test("runtime audit permits only the provisioned app_api login capability", () => {

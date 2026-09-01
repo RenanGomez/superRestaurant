@@ -22,6 +22,20 @@ const runtimeAuditSql = readFileSync(
   new URL("../../../../supabase/tests/tenancy_memberships_runtime_catalog.sql", import.meta.url),
   "utf8",
 );
+const postDiningZonesPrecheckAuditSql = readFileSync(
+  new URL(
+    "../../../../supabase/tests/tenancy_memberships_post_dining_zones_catalog.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const postDiningZonesRuntimeAuditSql = readFileSync(
+  new URL(
+    "../../../../supabase/tests/tenancy_memberships_post_dining_zones_runtime_catalog.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 const database: DatabaseConfig = Object.freeze({
   caCertificate: "TEST CA",
   connectionString: "postgresql://user:password@host.example/postgres",
@@ -80,6 +94,20 @@ test("provisions a short-lived SCRAM credential, verifies it, then promotes it",
   assert.ok(events.indexOf("admin:disable") < events.indexOf("admin:terminate"));
   assert.ok(events.indexOf("admin:terminate") < events.indexOf("admin:runtime-audit"));
   assert.equal(events.join("|").includes(config.password), false);
+});
+
+test("accepts the pinned post-dining-zones audit pair for its explicit profile", async () => {
+  const events: string[] = [];
+  const dependencies = dependenciesFor([adminSession(events)], appSession(events));
+  const result = await provisionAppApi({
+    auditProfile: "post_dining_zones_v1",
+    config,
+    dependencies,
+    precheckAuditSql: postDiningZonesPrecheckAuditSql,
+    runtimeAuditSql: postDiningZonesRuntimeAuditSql,
+  });
+  assert.equal(result.status, "ok");
+  assert.ok(events.includes("admin:runtime-audit"));
 });
 
 test("rolls back without compensation when the immutable precheck fails", async () => {
@@ -324,7 +352,10 @@ function adminSession(
       events.push(`admin:${sql}`);
       return emptyResult();
     }
-    if (sql.includes("CATALOG_AUDIT_APP_API_MISSING")) {
+    if (
+      sql.includes("CATALOG_AUDIT_APP_API_MISSING")
+      || sql.includes("POST_DINING_CATALOG_REQUIRED_OBJECT_MISSING")
+    ) {
       events.push("admin:precheck");
       if (options.failPrecheck === true) throw new Error("sensitive precheck detail");
       return emptyResult();
@@ -333,7 +364,10 @@ function adminSession(
       events.push("admin:role-oid");
       return result([{ oid: "4242" }]);
     }
-    if (sql.includes("RUNTIME_AUDIT_APP_API_MISSING")) {
+    if (
+      sql.includes("RUNTIME_AUDIT_APP_API_MISSING")
+      || sql.includes("POST_DINING_RUNTIME_REQUIRED_OBJECT_MISSING")
+    ) {
       events.push("admin:runtime-audit");
       if (options.failRuntimeAudit === true) throw new Error("sensitive runtime detail");
       return emptyResult();
@@ -385,7 +419,10 @@ function compensationSession(events: string[], failDisable = false): AppApiProvi
       events.push("recovery:lock");
       return result([{ acquired: true }]);
     }
-    if (sql.includes("CATALOG_AUDIT_APP_API_MISSING")) {
+    if (
+      sql.includes("CATALOG_AUDIT_APP_API_MISSING")
+      || sql.includes("POST_DINING_CATALOG_REQUIRED_OBJECT_MISSING")
+    ) {
       events.push("recovery:precheck");
       return emptyResult();
     }

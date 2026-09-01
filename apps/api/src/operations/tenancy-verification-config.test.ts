@@ -109,4 +109,12 @@ test("sanitizes arbitrary provider and database failures to an allowlisted repor
     stage: "http",
     status: "failed",
   });
+
+  assert.deepEqual(sanitizeTenancyVerificationFailure(
+    new TenancyVerificationError("dining_zones", "TENANCY_VERIFICATION_DINING_ZONES_FAILED"),
+  ), {
+    code: "TENANCY_VERIFICATION_DINING_ZONES_FAILED",
+    stage: "dining_zones",
+    status: "failed",
+  });
 });

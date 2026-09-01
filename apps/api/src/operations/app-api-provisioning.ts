@@ -9,9 +9,14 @@ import {
   type AppApiProvisioningStage,
 } from "./app-api-provisioning-config.js";
 import { appApiLifecycleAdvisoryLockKey } from "./tenancy-fixture-markers.js";
+import type { AppApiLifecycleCatalogProfile } from "./app-api-recovery.js";
 
 const PRECHECK_AUDIT_SHA256 = "a6485bcdcc1f54beee9f939187d374a449541343b426d59341870dda63ccd983";
 const RUNTIME_AUDIT_SHA256 = "e4d89b714336edda12441567d9738507abcb807abe173413f1095a16ca7321e2";
+const POST_DINING_ZONES_PRECHECK_AUDIT_SHA256 =
+  "8bc25f26058ec8512d364404629b595c690b987edf5fdd891ce0496943b6b4bc";
+const POST_DINING_ZONES_RUNTIME_AUDIT_SHA256 =
+  "c0648eecde4df52cf92e581bb1667b7fc10b904725803271767192ec50ebe688";
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 const SESSION_DRAIN_ATTEMPTS = 3;
 
@@ -57,6 +62,7 @@ export interface AppApiProvisioningSummary {
 }
 
 export interface AppApiProvisioningOptions {
+  readonly auditProfile?: AppApiLifecycleCatalogProfile;
   readonly config: AppApiProvisioningConfig;
   readonly precheckAuditSql: string;
   readonly runtimeAuditSql: string;
@@ -66,8 +72,9 @@ export interface AppApiProvisioningOptions {
 export async function provisionAppApi(
   options: AppApiProvisioningOptions,
 ): Promise<AppApiProvisioningSummary> {
-  const precheckAuditSql = validatePinnedAudit(options.precheckAuditSql, PRECHECK_AUDIT_SHA256);
-  const runtimeAuditSql = validatePinnedAudit(options.runtimeAuditSql, RUNTIME_AUDIT_SHA256);
+  const hashes = auditHashes(options.auditProfile ?? "memberships_v1");
+  const precheckAuditSql = validatePinnedAudit(options.precheckAuditSql, hashes.precheck);
+  const runtimeAuditSql = validatePinnedAudit(options.runtimeAuditSql, hashes.runtime);
   const dependencies = options.dependencies ?? postgresDependencies;
   let admin: AppApiProvisioningSession | undefined;
   let app: AppApiProvisioningSession | undefined;
@@ -162,6 +169,17 @@ export async function provisionAppApi(
     runtimeAudit: true,
     status: "ok",
   });
+}
+
+function auditHashes(
+  profile: AppApiLifecycleCatalogProfile,
+): Readonly<{ precheck: string; runtime: string }> {
+  return profile === "memberships_v1"
+    ? { precheck: PRECHECK_AUDIT_SHA256, runtime: RUNTIME_AUDIT_SHA256 }
+    : {
+        precheck: POST_DINING_ZONES_PRECHECK_AUDIT_SHA256,
+        runtime: POST_DINING_ZONES_RUNTIME_AUDIT_SHA256,
+      };
 }
 
 const postgresDependencies: AppApiProvisioningDependencies = Object.freeze({

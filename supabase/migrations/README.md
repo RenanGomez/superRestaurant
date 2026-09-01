@@ -155,10 +155,46 @@ rollback:
 El comando reutiliza las variables `SCHEMA_VERIFICATION_*`, exige la confirmación
 exacta `ROLLBACK_ONLY`, TLS `verify-full` y el project ref correlacionado. Espera
 el catálogo post-migración exacto de 5 políticas, 7 tablas con RLS+FORCE RLS y 6
-funciones `SECURITY DEFINER`. No reemplaza la autorización independiente para
-aplicar la migración. Antes del apply también deben versionarse las auditorías
-globales runtime para aceptar exactamente ese catálogo ampliado; las auditorías
-actuales de membresías fijan deliberadamente el estado previo.
+funciones `SECURITY DEFINER`, y ejecuta dentro de la misma transacción la
+auditoría global post-zonas correspondiente al estado runtime actual de
+`app_api`. No reemplaza la autorización independiente para aplicar la migración.
+
+La aplicación persistente autorizada se realizó desde un staging temporal con
+copias byte a byte de las cinco migraciones históricas y las tres productivas.
+El historial previo contenía siete versiones y el dry-run anunció únicamente
+`20260831000100`, sin seeds ni roles. El apply añadió la octava versión sin
+reparar historial ni ejecutar `db push` desde la raíz. El postcheck exige el
+auditor global post-zonas, cero sesiones de `app_api` y `db lint` limpio en
+`app`, `app_private` y `app_rls`.
+
+Las auditorías globales versionadas para ese estado son:
+
+- `tenancy_memberships_post_dining_zones_catalog.sql`, exclusivamente para
+  `app_api` en `NOLOGIN`, sin contraseña ni sesiones;
+- `tenancy_memberships_post_dining_zones_runtime_catalog.sql`, exclusivamente
+  para el `LOGIN` SCRAM estable, sin sesiones activas.
+
+Ambas fijan exactamente siete tablas, cinco políticas y seis funciones, además
+de owners, `search_path`, RLS/FORCE RLS, membresía inerte del rol y grants. No
+relajan ni sustituyen las auditorías del catálogo anterior. Después del apply,
+el estado global se comprueba con:
+
+`pnpm --filter @super-restaurant/api verify:post-dining-zones-app-api-state:remote`
+
+Ese entrypoint reutiliza la configuración read-only de
+`verify:app-api-state:remote`, selecciona hashes SHA-256 propios del catálogo
+post-zonas y falla antes de conectar si cualquiera de los dos archivos cambió.
+
+La prueba remota del endpoint se ejecuta con el arnés marcado de tenancy y el
+auditor runtime post-zonas:
+
+`pnpm --filter @super-restaurant/api verify:dining-zones:remote`
+
+El runner crea dos usuarios Auth y el grafo 2×2 temporal, demuestra creación,
+replay, conflicto, permiso insuficiente, false pair y revocación con token vivo,
+comprueba cero efectos rechazados y elimina auditoría, zona, grants, membresías,
+sucursales, restaurantes y usuarios en orden FK-safe. El recovery por `runId`
+también reconoce y elimina de forma exacta la zona/auditoría marcadas.
 
 El rollback ordinario es forward-only. Eliminar estas tablas solo es aceptable
 antes de datos reales, con verificación de vaciedad y respaldo explícito.

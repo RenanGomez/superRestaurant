@@ -49,6 +49,46 @@ test("accepts only the complete runner graph and allowed revocation prefix", () 
   validateTenancyFixtureRecoverySnapshot(runId, users, afterMembership);
 });
 
+test("accepts the completed dining-zone graph and verified disable prefix for recovery", () => {
+  const snapshot = completeSnapshot();
+  revoke(required(snapshot.grants[1]));
+  revoke(required(snapshot.grants[2]));
+  revoke(required(snapshot.memberships[0]));
+  disable(required(snapshot.branches[2]), ids.cobalt);
+  disable(required(snapshot.restaurants[1]), ids.cobalt);
+  const zoneId = "60000000-0000-4000-8000-000000000001";
+  const eventId = "70000000-0000-4000-8000-000000000001";
+  const idempotencyKey = "80000000-0000-4000-8000-000000000001";
+  const withDining = {
+    ...snapshot,
+    diningZoneAudits: [{
+      actorId: ids.amber,
+      branchId: ids.branch11,
+      eventId,
+      idempotencyKey,
+      name: tenancyFixtureName(runId, "dining-zone-created"),
+      operation: "created",
+      restaurantId: ids.restaurant1,
+      zoneId,
+    }],
+    diningZones: [{
+      branchId: ids.branch11,
+      createdBy: ids.amber,
+      id: zoneId,
+      name: tenancyFixtureName(runId, "dining-zone-created"),
+      restaurantId: ids.restaurant1,
+      version: 1,
+    }],
+  };
+  const validated = validateTenancyFixtureRecoverySnapshot(runId, users, withDining);
+  assert.deepEqual(validated.diningZoneIds, [zoneId]);
+  assert.deepEqual(validated.diningZoneEventIds, [eventId]);
+
+  const contaminated = structuredClone(withDining);
+  required(contaminated.diningZoneAudits[0]).name = tenancyFixtureName(runId, "dining-zone-conflict");
+  assertContamination(() => validateTenancyFixtureRecoverySnapshot(runId, users, contaminated));
+});
+
 test("accepts empty database with zero, one or two exact Auth fixtures", () => {
   const empty = emptySnapshot();
   for (const authUsers of [[], [amberUser], users]) {
@@ -212,6 +252,15 @@ function revoke(row: { revocationReason: string | null; revokedAt: string | null
   row.revokedAt = "2026-08-30T00:00:00.000Z";
   row.revokedBy = ids.amber;
   row.revocationReason = "tenancy verification";
+}
+
+function disable(
+  row: { disabledAt: string | null; disabledBy: string | null; disabledReason: string | null },
+  actorId: string,
+): void {
+  row.disabledAt = "2026-08-31T00:00:00.000Z";
+  row.disabledBy = actorId;
+  row.disabledReason = "tenancy verification";
 }
 
 function assertContamination(action: () => unknown): void {

@@ -14,6 +14,10 @@ import {
 
 const PRECHECK_AUDIT_SHA256 = "a6485bcdcc1f54beee9f939187d374a449541343b426d59341870dda63ccd983";
 const RUNTIME_AUDIT_SHA256 = "e4d89b714336edda12441567d9738507abcb807abe173413f1095a16ca7321e2";
+const POST_DINING_ZONES_PRECHECK_AUDIT_SHA256 = "8bc25f26058ec8512d364404629b595c690b987edf5fdd891ce0496943b6b4bc";
+const POST_DINING_ZONES_RUNTIME_AUDIT_SHA256 = "c0648eecde4df52cf92e581bb1667b7fc10b904725803271767192ec50ebe688";
+
+export type AppApiCatalogAuditProfile = "memberships_v1" | "post_dining_zones_v1";
 
 export type AppApiObservedState = "safe_disabled" | "temporary" | "expired" | "runtime" | "partial";
 
@@ -29,6 +33,7 @@ export interface AppApiStateVerificationSummary {
 }
 
 export interface AppApiStateVerificationOptions {
+  readonly auditProfile?: AppApiCatalogAuditProfile;
   readonly config: AppApiStateVerificationConfig;
   readonly precheckAuditSql: string;
   readonly runtimeAuditSql: string;
@@ -38,8 +43,10 @@ export interface AppApiStateVerificationOptions {
 export async function verifyAppApiState(
   options: AppApiStateVerificationOptions,
 ): Promise<AppApiStateVerificationSummary> {
-  const precheckAuditSql = readPinnedAudit(options.precheckAuditSql, PRECHECK_AUDIT_SHA256);
-  const runtimeAuditSql = readPinnedAudit(options.runtimeAuditSql, RUNTIME_AUDIT_SHA256);
+  const auditProfile = options.auditProfile ?? "memberships_v1";
+  const hashes = auditHashes(auditProfile);
+  const precheckAuditSql = readPinnedAudit(options.precheckAuditSql, hashes.precheck);
+  const runtimeAuditSql = readPinnedAudit(options.runtimeAuditSql, hashes.runtime);
   const dependencies = options.dependencies ?? postgresDependencies;
   let session: AppApiProvisioningSession | undefined;
   let failure: AppApiStateVerificationError | undefined;
@@ -50,7 +57,7 @@ export async function verifyAppApiState(
     session = dependencies.createAdminSession(options.config.adminDatabase);
     await acquireAppApiLifecycleLock(session);
     stage = "audit";
-    const target = await readAppApiLifecycleTarget(session, "precheck");
+    const target = await readAppApiLifecycleTarget(session, "precheck", undefined, auditProfile);
     const state = classifyState(target);
     const activeSessions = await readActiveSessionFlag(session);
     if (activeSessions) {
@@ -79,6 +86,22 @@ export async function verifyAppApiState(
   if (failure !== undefined) throw failure;
   if (summary === undefined) throw verificationError("audit");
   return summary;
+}
+
+function auditHashes(profile: AppApiCatalogAuditProfile): Readonly<{
+  precheck: string;
+  runtime: string;
+}> {
+  if (profile === "memberships_v1") {
+    return Object.freeze({ precheck: PRECHECK_AUDIT_SHA256, runtime: RUNTIME_AUDIT_SHA256 });
+  }
+  if (profile === "post_dining_zones_v1") {
+    return Object.freeze({
+      precheck: POST_DINING_ZONES_PRECHECK_AUDIT_SHA256,
+      runtime: POST_DINING_ZONES_RUNTIME_AUDIT_SHA256,
+    });
+  }
+  throw verificationError("configuration");
 }
 
 const postgresDependencies: AppApiStateVerificationDependencies = Object.freeze({

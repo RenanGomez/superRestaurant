@@ -77,6 +77,18 @@ Con las variables cargadas únicamente en el proceso local:
 pnpm --filter @super-restaurant/api verify:tenancy:remote
 ```
 
+Después de aplicar `20260831000100`, ejecutar el perfil ampliado con los mismos
+opt-ins y secretos efímeros:
+
+```text
+pnpm --filter @super-restaurant/api verify:dining-zones:remote
+```
+
+Este perfil reutiliza exactamente los usuarios y el grafo 2×2 marcados. Además
+prueba creación 201, replay idempotente, conflicto 409, viewer/false pair 403,
+revocación con el token todavía válido y conteos administrativos sin efectos
+para cada solicitud rechazada.
+
 Una ejecución válida demuestra:
 
 - `anon` y `service_role` sin acceso a las tablas de producto;
@@ -92,6 +104,53 @@ Una ejecución válida demuestra:
 El resultado solo contiene etapa, códigos allowlisted, conteos y `runId`. Un
 fallo no imprime errores crudos del proveedor, URLs, tokens o contraseñas.
 
+## Smoke protegido de `apps/web`
+
+El runner `verify:web-protected-smoke:remote` reutiliza el mismo grafo 2×2,
+usuarios Auth marcados, advisory locks, auditoría post-zonas y cleanup del
+harness anterior. Añade dos pausas acotadas, de hasta diez minutos cada una:
+
+1. `selection`: mantiene Nest en `127.0.0.1:4311` y publica en
+   `.web-protected-smoke-lease.tmp` la credencial temporal de `amber`, el
+   `runId` y la sucursal exacta que el navegador debe seleccionar;
+2. `revoked`: después de recibir una confirmación exacta, el harness revoca la
+   membresía con el access token aún vigente y espera que el navegador recupere
+   foco/recargue y muestre el bloqueo autoritativo.
+
+Los archivos de coordinación terminan en `.tmp`, están ignorados y se eliminan
+en `finally`. La segunda fase ya no contiene email ni contraseña. El runner
+rechaza artefactos previos, acknowledgements con campos extra, otro `runId` o
+una fase distinta; no imprime credenciales ni tokens.
+
+La ejecución requiere los opt-ins de tenancy habituales y, además:
+
+```text
+WEB_PROTECTED_SMOKE_RUN=REMOTE_BROWSER_SMOKE
+WEB_PROTECTED_SMOKE_CONFIRM_PROJECT_REF=<project-ref>
+```
+
+Con `apps/web` servido localmente en `http://127.0.0.1:3010`, usando
+`API_BASE_URL=http://127.0.0.1:4311`, ejecutar:
+
+```text
+pnpm --filter @super-restaurant/api verify:web-protected-smoke:remote
+```
+
+El operador del navegador lee el lease sin imprimirlo, prueba login inválido y
+válido, confirma `private, no-store`, selecciona únicamente el par esperado y
+verifica nombre/roles y refresh sin ciclo. Escribe un acknowledgement exacto
+para `selection`; tras la revocación recupera foco y exige el estado “Sin
+sucursales asignadas” antes de confirmar `revoked`. Solo entonces el harness
+prueba el rechazo de escritura con el token vivo, ejecuta constraints y cleanup
+final. El logout se prueba después del resumen `ok`: hacerlo antes puede revocar
+la sesión independiente del harness y convertir el 403 esperado en 401. El
+producto usa logout con scope local para no cerrar sesiones de otros dispositivos.
+
+Si el proceso se interrumpe, usar primero la recuperación remota por `runId`
+descrita abajo. Después de confirmar cero usuarios/filas, eliminar únicamente
+los tres archivos locales `.web-protected-smoke-*.tmp`; nunca reutilizar su
+contraseña temporal.
+
 ## Recuperación tras una interrupción
 
 Si el proceso termina antes del cleanup, conservar el `runId` que imprimió. No
@@ -103,8 +162,9 @@ pnpm --filter @super-restaurant/api recover:tenancy:remote -- --run-id=<UUID> --
 ```
 
 Los dos `<UUID>` deben ser idénticos. La recuperación toma el mismo advisory
-lock que el runner, vuelve a comprobar metadata, email, grafo 2×2 y prefijos de
-revocación, y solo elimina IDs exactos con `RETURNING`. Acepta una repetición
+lock que el runner, vuelve a comprobar metadata, email, grafo 2×2, prefijos de
+revocación/deshabilitación y, cuando existan, la zona y auditoría marcadas; solo
+elimina IDs exactos con `RETURNING`. Acepta una repetición
 cuando no queda nada y también el caso en que solo sobreviven uno o dos usuarios
 Auth. Cualquier fila parcial, tercer usuario marcado, relación inesperada o
 cambio entre descubrimiento y borrado aborta sin intentar una limpieza amplia.
@@ -113,7 +173,6 @@ La herramienta no necesita `DATABASE_URL` de `app_api` ni la publishable key.
 ## Evidencia que aún no cubre
 
 `POST /api/v1/access/branch` acepta cualquiera de los nueve roles conocidos;
-por ello esta prueba no inventa un 403 por permiso de acción específico. Ese
-caso debe probarse en el primer endpoint real con una allowlist de roles más
-estrecha. Tampoco prueba todavía la carrera entre revocación y una escritura
-financiera, porque esa ruta productiva aún no existe.
+el 403 por permiso de acción se cubre ahora en `POST /api/v1/dining/zones`, que
+exige `tables.manage`. La suite todavía no prueba la carrera entre revocación y
+una escritura financiera, porque esa ruta productiva aún no existe.

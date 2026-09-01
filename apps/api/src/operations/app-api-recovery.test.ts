@@ -14,6 +14,13 @@ const precheckAuditSql = readFileSync(
   new URL("../../../../supabase/tests/tenancy_memberships_catalog.sql", import.meta.url),
   "utf8",
 );
+const postDiningZonesPrecheckAuditSql = readFileSync(
+  new URL(
+    "../../../../supabase/tests/tenancy_memberships_post_dining_zones_catalog.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 const database: DatabaseConfig = Object.freeze({
   caCertificate: "TEST CA",
   connectionString: "postgresql://user:password@host.example/postgres",
@@ -69,6 +76,20 @@ test("is idempotent when app_api is already disabled", async () => {
     precheckAuditSql,
   });
   assert.equal(events.some((event) => event.endsWith(":disable")), false);
+  assert.ok(events.includes("verify:precheck"));
+});
+
+test("accepts only the pinned post-dining-zones catalog for its explicit profile", async () => {
+  const events: string[] = [];
+  await recoverAppApi({
+    auditProfile: "post_dining_zones_v1",
+    config,
+    dependencies: dependenciesFor([
+      recoverySession(events, { disabled: true, label: "primary" }),
+      recoverySession(events, { disabled: true, label: "verify", sessionCounts: [0] }),
+    ]),
+    precheckAuditSql: postDiningZonesPrecheckAuditSql,
+  });
   assert.ok(events.includes("verify:precheck"));
 });
 
@@ -273,7 +294,10 @@ function recoverySession(
       if (options.terminateDenied === true) return result([{ terminated: false }]);
       return currentCount > 0 ? result([{ terminated: true }]) : emptyResult();
     }
-    if (sql.includes("CATALOG_AUDIT_APP_API_MISSING")) {
+    if (
+      sql.includes("CATALOG_AUDIT_APP_API_MISSING")
+      || sql.includes("POST_DINING_CATALOG_REQUIRED_OBJECT_MISSING")
+    ) {
       events.push(`${label}:precheck`);
       return emptyResult();
     }

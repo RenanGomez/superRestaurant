@@ -22,6 +22,20 @@ const runtimeAuditSql = readFileSync(
   new URL("../../../../supabase/tests/tenancy_memberships_runtime_catalog.sql", import.meta.url),
   "utf8",
 );
+const postDiningZonesPrecheckAuditSql = readFileSync(
+  new URL(
+    "../../../../supabase/tests/tenancy_memberships_post_dining_zones_catalog.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const postDiningZonesRuntimeAuditSql = readFileSync(
+  new URL(
+    "../../../../supabase/tests/tenancy_memberships_post_dining_zones_runtime_catalog.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 const database: DatabaseConfig = Object.freeze({
   caCertificate: "TEST CA",
   connectionString: "postgresql://user:password@host.example/postgres",
@@ -51,6 +65,29 @@ test("audits the stable disabled and runtime states without mutating the role", 
     });
     assert.deepEqual(events, ["state:lock", "state:target", "state:sessions", auditEvent, "state:close"]);
     assert.equal(events.some((event) => event.includes("alter role")), false);
+  }
+});
+
+test("pins the exact post-dining-zones audits for disabled and runtime states", async () => {
+  for (const [target, expectedState, auditEvent] of [
+    [targetState("safe_disabled"), "safe_disabled", "state:post-dining-precheck"],
+    [targetState("runtime"), "runtime", "state:post-dining-runtime-audit"],
+  ] as const) {
+    const events: string[] = [];
+    const result = await verifyAppApiState({
+      auditProfile: "post_dining_zones_v1",
+      config,
+      dependencies: dependenciesFor(stateSession(events, target, 0, { postDiningZonesProfile: true })),
+      precheckAuditSql: postDiningZonesPrecheckAuditSql,
+      runtimeAuditSql: postDiningZonesRuntimeAuditSql,
+    });
+    assert.deepEqual(result, {
+      activeSessions: false,
+      catalogAudit: true,
+      state: expectedState,
+      status: "ok",
+    });
+    assert.deepEqual(events, ["state:lock", "state:target", "state:sessions", auditEvent, "state:close"]);
   }
 });
 
@@ -150,7 +187,12 @@ function stateSession(
   events: string[],
   target: AppApiLifecycleTargetState,
   sessionCount = 0,
-  options: Readonly<{ closeFails?: boolean; lockAcquired?: boolean; unsafe?: boolean }> = {},
+  options: Readonly<{
+    closeFails?: boolean;
+    lockAcquired?: boolean;
+    postDiningZonesProfile?: boolean;
+    unsafe?: boolean;
+  }> = {},
 ): AppApiProvisioningSession {
   return session(async (sql) => {
     if (sql.includes("pg_try_advisory_lock")) {
@@ -159,6 +201,10 @@ function stateSession(
     }
     if (sql.includes("roles.oid::text as oid")) {
       assert.match(sql, /roles\.rolconnlimit = -1/u);
+      assert.equal(
+        sql.includes("app_private.create_dining_zone"),
+        options.postDiningZonesProfile === true,
+      );
       events.push("state:target");
       return result([{ ...target, safe: options.unsafe !== true }]);
     }
@@ -168,6 +214,14 @@ function stateSession(
     }
     if (sql.includes("RUNTIME_AUDIT_APP_API_MISSING")) {
       events.push("state:runtime-audit");
+      return emptyResult();
+    }
+    if (sql.includes("POST_DINING_CATALOG_REQUIRED_OBJECT_MISSING")) {
+      events.push("state:post-dining-precheck");
+      return emptyResult();
+    }
+    if (sql.includes("POST_DINING_RUNTIME_REQUIRED_OBJECT_MISSING")) {
+      events.push("state:post-dining-runtime-audit");
       return emptyResult();
     }
     if (sql.includes("pg_stat_activity")) {

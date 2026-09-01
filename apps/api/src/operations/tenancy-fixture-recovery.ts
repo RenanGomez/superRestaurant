@@ -7,6 +7,7 @@ import {
   tenancyAuthMetadataVersion,
   tenancyBranchSuffixes,
   tenancyCanarySuffixes,
+  tenancyDiningZoneSuffixes,
   tenancyFixtureAdvisoryLockKey,
   tenancyFixtureEmail,
   tenancyFixtureKeys,
@@ -93,8 +94,30 @@ interface GrantRow {
   readonly roleCode: string;
 }
 
+interface DiningZoneRow {
+  readonly branchId: string;
+  readonly createdBy: string;
+  readonly id: string;
+  readonly name: string;
+  readonly restaurantId: string;
+  readonly version: number;
+}
+
+interface DiningZoneAuditRow {
+  readonly actorId: string;
+  readonly branchId: string;
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly name: string;
+  readonly operation: string;
+  readonly restaurantId: string;
+  readonly zoneId: string;
+}
+
 export interface TenancyFixtureRecoverySnapshot {
   readonly branches: readonly BranchRow[];
+  readonly diningZoneAudits?: readonly DiningZoneAuditRow[];
+  readonly diningZones?: readonly DiningZoneRow[];
   readonly grants: readonly GrantRow[];
   readonly memberships: readonly MembershipRow[];
   readonly restaurants: readonly RestaurantRow[];
@@ -102,6 +125,8 @@ export interface TenancyFixtureRecoverySnapshot {
 
 interface ValidatedSnapshot {
   readonly branchIds: readonly string[];
+  readonly diningZoneEventIds: readonly string[];
+  readonly diningZoneIds: readonly string[];
   readonly grantIds: readonly string[];
   readonly membershipIds: readonly string[];
   readonly restaurantIds: readonly string[];
@@ -188,9 +213,6 @@ export function validateTenancyFixtureRecoverySnapshot(
   if (snapshot.restaurants.some((row) =>
     !allowedRestaurantNames.has(row.name)
     || row.version !== 1
-    || row.disabledAt !== null
-    || row.disabledBy !== null
-    || row.disabledReason !== null
   )) {
     throw contaminationError();
   }
@@ -200,7 +222,9 @@ export function validateTenancyFixtureRecoverySnapshot(
   const hasMainGraph = snapshot.restaurants.length > 0
     || snapshot.branches.length > 0
     || snapshot.memberships.length > 0
-    || snapshot.grants.length > 0;
+    || snapshot.grants.length > 0
+    || (snapshot.diningZones?.length ?? 0) > 0
+    || (snapshot.diningZoneAudits?.length ?? 0) > 0;
   if (hasMainGraph && mainCount !== expectedMainNames.length) throw contaminationError();
 
   if (!hasMainGraph) {
@@ -209,6 +233,8 @@ export function validateTenancyFixtureRecoverySnapshot(
     }
     return Object.freeze({
       branchIds: Object.freeze([]),
+      diningZoneEventIds: Object.freeze([]),
+      diningZoneIds: Object.freeze([]),
       grantIds: Object.freeze([]),
       membershipIds: Object.freeze([]),
       restaurantIds: Object.freeze(snapshot.restaurants.map((row) => row.id)),
@@ -222,8 +248,21 @@ export function validateTenancyFixtureRecoverySnapshot(
   const secondRestaurant = restaurantsByName.get(tenancyFixtureName(runId, "restaurant-2"));
   if (firstRestaurant === undefined || secondRestaurant === undefined) throw contaminationError();
 
-  validateBranches(runId, snapshot.branches, firstRestaurant.id, secondRestaurant.id);
+  if (!isActiveRestaurant(firstRestaurant)) throw contaminationError();
+  if (!isActiveRestaurant(secondRestaurant) && !isVerificationDisabled(secondRestaurant, cobalt.id)) {
+    throw contaminationError();
+  }
+  for (const canaryName of expectedCanaryNames) {
+    const canary = restaurantsByName.get(canaryName);
+    if (canary !== undefined && !isActiveRestaurant(canary)) throw contaminationError();
+  }
+
+  validateBranches(runId, snapshot.branches, firstRestaurant.id, secondRestaurant.id, cobalt.id);
   const branchesByName = new Map(snapshot.branches.map((row) => [row.name, row]));
+  const branch21 = branchesByName.get(tenancyFixtureName(runId, "branch-21"));
+  if (branch21 === undefined || (!isActiveRestaurant(secondRestaurant) && !isVerificationDisabled(branch21, cobalt.id))) {
+    throw contaminationError();
+  }
   const membershipLabels = validateMemberships(
     snapshot.memberships,
     amber,
@@ -235,9 +274,19 @@ export function validateTenancyFixtureRecoverySnapshot(
   );
   validateGrants(snapshot.grants, membershipLabels, amber.id);
   validateCrossEntityRevocationPrefix(snapshot.memberships, snapshot.grants, membershipLabels, amber.id);
+  const dining = validateDiningZones(
+    runId,
+    snapshot.diningZones ?? [],
+    snapshot.diningZoneAudits ?? [],
+    amber.id,
+    firstRestaurant.id,
+    branchesByName,
+  );
 
   return Object.freeze({
     branchIds: Object.freeze(snapshot.branches.map((row) => row.id)),
+    diningZoneEventIds: dining.eventIds,
+    diningZoneIds: dining.zoneIds,
     grantIds: Object.freeze(snapshot.grants.map((row) => row.id)),
     membershipIds: Object.freeze(snapshot.memberships.map((row) => row.id)),
     restaurantIds: Object.freeze(snapshot.restaurants.map((row) => row.id)),
@@ -274,6 +323,13 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
       const snapshot = await loadSnapshot(client, runId, users.map((user) => user.id), true);
       const validated = validateTenancyFixtureRecoverySnapshot(runId, users, snapshot);
       let removed = 0;
+      removed += await deleteExactly(
+        client,
+        "app.dining_zone_audit_events",
+        validated.diningZoneEventIds,
+        "event_id",
+      );
+      removed += await deleteExactly(client, "app.dining_zones", validated.diningZoneIds);
       removed += await deleteExactly(client, "app.membership_role_grants", validated.grantIds);
       removed += await deleteExactly(client, "app.memberships", validated.membershipIds);
       removed += await deleteExactly(client, "app.branches", validated.branchIds);
@@ -298,6 +354,8 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
         || snapshot.branches.length !== 0
         || snapshot.memberships.length !== 0
         || snapshot.grants.length !== 0
+        || (snapshot.diningZones?.length ?? 0) !== 0
+        || (snapshot.diningZoneAudits?.length ?? 0) !== 0
       ) {
         throw recoveryError("postcheck", "TENANCY_FIXTURE_RECOVERY_POSTCHECK_FAILED");
       }
@@ -358,8 +416,40 @@ async function loadSnapshot(
      where membership_id = any($1::uuid[]) or granted_by = any($2::uuid[]) or revoked_by = any($2::uuid[])${lock}`,
     [membershipIds, userIds],
   );
+  const diningTables = await client.query<{ audits: boolean; zones: boolean }>(
+    `select
+       pg_catalog.to_regclass('app.dining_zone_audit_events') is not null as audits,
+       pg_catalog.to_regclass('app.dining_zones') is not null as zones`,
+  );
+  if (diningTables.rows[0]?.audits !== diningTables.rows[0]?.zones) throw contaminationError();
+  let diningZones: readonly DiningZoneRow[] = [];
+  let diningZoneAudits: readonly DiningZoneAuditRow[] = [];
+  if (diningTables.rows[0]?.zones === true) {
+    const diningNames = tenancyDiningZoneSuffixes.map((suffix) => tenancyFixtureName(runId, suffix));
+    const zones = await client.query<DiningZoneRow>(
+      `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId",
+              name, version::integer, created_by::text as "createdBy"
+       from app.dining_zones
+       where name = any($1::text[]) or restaurant_id = any($2::uuid[]) or created_by = any($3::uuid[])${lock}`,
+      [diningNames, restaurantIds, userIds],
+    );
+    diningZones = Object.freeze([...zones.rows]);
+    const zoneIds = diningZones.map((row) => row.id);
+    const audits = await client.query<DiningZoneAuditRow>(
+      `select event_id::text as "eventId", idempotency_key::text as "idempotencyKey",
+              restaurant_id::text as "restaurantId", branch_id::text as "branchId",
+              zone_id::text as "zoneId", actor_id::text as "actorId",
+              operation, name_snapshot as name
+       from app.dining_zone_audit_events
+       where zone_id = any($1::uuid[]) or actor_id = any($2::uuid[]) or restaurant_id = any($3::uuid[])${lock}`,
+      [zoneIds, userIds, restaurantIds],
+    );
+    diningZoneAudits = Object.freeze([...audits.rows]);
+  }
   return Object.freeze({
     branches: Object.freeze([...branches.rows]),
+    diningZoneAudits,
+    diningZones,
     grants: Object.freeze([...grants.rows]),
     memberships: Object.freeze([...memberships.rows]),
     restaurants: Object.freeze([...restaurants.rows]),
@@ -436,25 +526,66 @@ function validateBranches(
   rows: readonly BranchRow[],
   firstRestaurantId: string,
   secondRestaurantId: string,
+  cobaltId: string,
 ): void {
   if (rows.length !== tenancyBranchSuffixes.length) throw contaminationError();
   assertUniqueIds(rows);
   assertUniqueValues(rows.map((row) => row.name));
-  const expected = new Map<string, string>([
-    [tenancyFixtureName(runId, "branch-11"), firstRestaurantId],
-    [tenancyFixtureName(runId, "branch-12"), firstRestaurantId],
-    [tenancyFixtureName(runId, "branch-21"), secondRestaurantId],
-    [tenancyFixtureName(runId, "branch-22"), secondRestaurantId],
+  const expected = new Map<string, Readonly<{ mayBeDisabled: boolean; restaurantId: string }>>([
+    [tenancyFixtureName(runId, "branch-11"), { mayBeDisabled: false, restaurantId: firstRestaurantId }],
+    [tenancyFixtureName(runId, "branch-12"), { mayBeDisabled: false, restaurantId: firstRestaurantId }],
+    [tenancyFixtureName(runId, "branch-21"), { mayBeDisabled: true, restaurantId: secondRestaurantId }],
+    [tenancyFixtureName(runId, "branch-22"), { mayBeDisabled: false, restaurantId: secondRestaurantId }],
   ]);
   for (const row of rows) {
+    const expectedRow = expected.get(row.name);
     if (
-      expected.get(row.name) !== row.restaurantId
+      expectedRow?.restaurantId !== row.restaurantId
       || row.version !== 1
-      || row.disabledAt !== null
-      || row.disabledBy !== null
-      || row.disabledReason !== null
+      || (!isActiveRestaurant(row) && (!expectedRow.mayBeDisabled || !isVerificationDisabled(row, cobaltId)))
     ) throw contaminationError();
   }
+}
+
+function validateDiningZones(
+  runId: string,
+  zones: readonly DiningZoneRow[],
+  audits: readonly DiningZoneAuditRow[],
+  amberId: string,
+  restaurantId: string,
+  branchesByName: ReadonlyMap<string, BranchRow>,
+): Readonly<{ eventIds: readonly string[]; zoneIds: readonly string[] }> {
+  if (zones.length === 0 && audits.length === 0) {
+    return Object.freeze({ eventIds: Object.freeze([]), zoneIds: Object.freeze([]) });
+  }
+  if (zones.length !== 1 || audits.length !== 1) throw contaminationError();
+  const zone = zones[0];
+  const audit = audits[0];
+  const branch = branchesByName.get(tenancyFixtureName(runId, "branch-11"));
+  const expectedName = tenancyFixtureName(runId, "dining-zone-created");
+  if (
+    zone === undefined
+    || audit === undefined
+    || branch === undefined
+    || !UUID_PATTERN.test(zone.id)
+    || zone.restaurantId !== restaurantId
+    || zone.branchId !== branch.id
+    || zone.name !== expectedName
+    || zone.version !== 1
+    || zone.createdBy !== amberId
+    || !UUID_PATTERN.test(audit.eventId)
+    || !UUID_PATTERN.test(audit.idempotencyKey)
+    || audit.restaurantId !== restaurantId
+    || audit.branchId !== branch.id
+    || audit.zoneId !== zone.id
+    || audit.actorId !== amberId
+    || audit.operation !== "created"
+    || audit.name !== expectedName
+  ) throw contaminationError();
+  return Object.freeze({
+    eventIds: Object.freeze([audit.eventId]),
+    zoneIds: Object.freeze([zone.id]),
+  });
 }
 
 function validateMemberships(
@@ -582,10 +713,26 @@ function isVerificationRevocation(row: MembershipRow | GrantRow, amberId: string
     && row.revocationReason === "tenancy verification";
 }
 
-async function deleteExactly(client: PoolClient, table: string, ids: readonly string[]): Promise<number> {
+function isActiveRestaurant(row: RestaurantRow | BranchRow): boolean {
+  return row.disabledAt === null && row.disabledBy === null && row.disabledReason === null;
+}
+
+function isVerificationDisabled(row: RestaurantRow | BranchRow, actorId: string): boolean {
+  return typeof row.disabledAt === "string"
+    && row.disabledAt.length > 0
+    && row.disabledBy === actorId
+    && row.disabledReason === "tenancy verification";
+}
+
+async function deleteExactly(
+  client: PoolClient,
+  table: string,
+  ids: readonly string[],
+  idColumn: "event_id" | "id" = "id",
+): Promise<number> {
   if (ids.length === 0) return 0;
   const result = await client.query<{ id: string }>(
-    `delete from ${table} where id = any($1::uuid[]) returning id::text`,
+    `delete from ${table} where ${idColumn} = any($1::uuid[]) returning ${idColumn}::text as id`,
     [ids],
   );
   const returned = result.rows.map((row) => row.id).sort();
