@@ -27,6 +27,8 @@ import {
   DiningZoneService,
   PostgresDiningZoneCreator,
 } from "./dining-zones.js";
+import { DiningTablesController } from "./dining-tables.controller.js";
+import { DINING_TABLE_PORT, DiningTableService, PostgresDiningTableAdapter } from "./dining-tables.js";
 
 @Module({
   controllers: [
@@ -35,6 +37,7 @@ import {
     BranchAccessController,
     AccessMembershipsController,
     DiningZonesController,
+    DiningTablesController,
   ],
   providers: [
     {
@@ -62,6 +65,9 @@ import {
       useExisting: PostgresDiningZoneCreator,
     },
     DiningZoneService,
+    PostgresDiningTableAdapter,
+    { provide: DINING_TABLE_PORT, useExisting: PostgresDiningTableAdapter },
+    DiningTableService,
     {
       provide: APP_GUARD,
       useClass: SupabaseAuthGuard,

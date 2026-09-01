@@ -1,9 +1,14 @@
 import {
   BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
   DINING_ZONE_SCHEMA_VERSION,
+  DINING_LAYOUT_SCHEMA_VERSION,
   MEMBERSHIP_ROLE_CODES,
   parseCreateDiningZoneCommandV1,
   parseDiningZoneV1,
+  parseCreateDiningTableCommandV1,
+  parseDiningLayoutV1,
+  parseDiningTableV1,
+  parseUpdateDiningTableLayoutCommandV1,
   parseBranchMembershipListV1,
   parseBranchScope,
   parseRbacPermissionCode,
@@ -44,6 +49,7 @@ function expectBranchScope(input: unknown, message: string): void {
 expectEqual(SCOPE_SCHEMA_VERSION, 1, "scope schema version is explicit");
 expectEqual(RBAC_MATRIX_VERSION, 1, "RBAC matrix version is explicit");
 expectEqual(DINING_ZONE_SCHEMA_VERSION, 1, "dining-zone schema version is explicit");
+expectEqual(DINING_LAYOUT_SCHEMA_VERSION, 1, "dining-layout schema version is explicit");
 expect(Object.isFrozen(MEMBERSHIP_ROLE_CODES), "membership role codes are frozen");
 expect(Object.isFrozen(RBAC_PERMISSION_CODES), "RBAC permission codes are frozen");
 expectEqual(parseRbacPermissionCode("orders.create"), "orders.create", "known RBAC permission parses");
@@ -181,3 +187,71 @@ for (const invalid of [
   { ...zoneResponse, createdBy: "not-a-uuid" },
   { ...zoneResponse, extra: true },
 ]) expectUndefined(parseDiningZoneV1(invalid), "dining-zone response rejects malformed input");
+
+const tableCommand = parseCreateDiningTableCommandV1({
+  schemaVersion: 1,
+  scope: { restaurantId, branchId },
+  tableId: "9544c299-d25b-44ce-98ed-d30116610887",
+  zoneId: zoneCommand.zoneId,
+  eventId: "a72573ec-6224-4857-bc4a-f3d1d07b6d83",
+  idempotencyKey: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0",
+  deviceId: "88d34b74-6afe-4a3c-acb9-9fc8ed902c91",
+  occurredAt: "2026-09-01T18:00:00.000Z",
+  name: "Mesa 1",
+  capacity: 4,
+  shape: "round",
+  layout: { x: 2, y: 3, width: 4, height: 4 },
+});
+expectDefined(tableCommand, "dining-table command parses");
+expect(Object.isFrozen(tableCommand.layout), "dining-table geometry is frozen");
+
+const tableResponse = parseDiningTableV1({
+  ...tableCommand,
+  version: 1,
+  updatedAt: "2026-09-01T18:00:01.000Z",
+  updatedBy: "8cc7eb84-af2a-4e84-95de-967c39af86ab",
+  replayed: false,
+  eventId: undefined,
+  idempotencyKey: undefined,
+  deviceId: undefined,
+  occurredAt: undefined,
+});
+expectUndefined(tableResponse, "dining-table response rejects extra command fields");
+const exactTableResponse = {
+  schemaVersion: 1,
+  scope: { restaurantId, branchId },
+  tableId: tableCommand.tableId,
+  zoneId: tableCommand.zoneId,
+  name: tableCommand.name,
+  capacity: tableCommand.capacity,
+  shape: tableCommand.shape,
+  layout: tableCommand.layout,
+  version: 1,
+  updatedAt: "2026-09-01T18:00:01.000Z",
+  updatedBy: "8cc7eb84-af2a-4e84-95de-967c39af86ab",
+  replayed: false,
+};
+expectDefined(parseDiningTableV1(exactTableResponse), "dining-table response parses");
+expectDefined(parseUpdateDiningTableLayoutCommandV1({
+  schemaVersion: 1,
+  scope: { restaurantId, branchId },
+  tableId: tableCommand.tableId,
+  eventId: "5ed22a92-a93d-4034-9661-4df2b523517b",
+  idempotencyKey: "72371a5f-2056-448d-9ddb-14ab6664a4e8",
+  deviceId: tableCommand.deviceId,
+  occurredAt: "2026-09-01T18:05:00.000Z",
+  expectedVersion: 1,
+  layout: { x: 4, y: 5, width: 4, height: 4 },
+}), "layout update command parses");
+expectDefined(parseDiningLayoutV1({
+  schemaVersion: 1,
+  scope: { restaurantId, branchId },
+  zones: [{ zoneId: zoneCommand.zoneId, name: zoneCommand.name, version: 1, tables: [exactTableResponse] }],
+}), "dining layout parses");
+
+for (const invalid of [
+  { ...tableCommand, capacity: 0 },
+  { ...tableCommand, shape: "oval" },
+  { ...tableCommand, layout: { x: 23, y: 0, width: 2, height: 2 } },
+  { ...tableCommand, layout: { x: 0.5, y: 0, width: 2, height: 2 } },
+]) expectUndefined(parseCreateDiningTableCommandV1(invalid), "dining-table command rejects invalid geometry or properties");

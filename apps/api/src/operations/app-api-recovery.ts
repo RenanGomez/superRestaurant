@@ -33,7 +33,10 @@ export interface AppApiLifecycleTargetState {
   readonly scram: boolean;
 }
 
-export type AppApiLifecycleCatalogProfile = "memberships_v1" | "post_dining_zones_v1";
+export type AppApiLifecycleCatalogProfile =
+  | "memberships_v1"
+  | "post_dining_zones_v1"
+  | "post_dining_tables_v1";
 
 export interface AppApiRecoveryDependencies {
   createAdminSession(config: DatabaseConfig): AppApiProvisioningSession;
@@ -357,6 +360,19 @@ function readAllowedAppApiFunctionOids(catalogProfile: AppApiLifecycleCatalogPro
         pg_catalog.to_regprocedure(
           'app_private.create_dining_zone(uuid,uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,text)'
         )
+      ]::oid[],
+      null::oid
+    )`;
+  }
+  if (catalogProfile === "post_dining_tables_v1") {
+    return `pg_catalog.array_remove(
+      array[
+        pg_catalog.to_regprocedure('app_private.find_active_branch_membership(uuid,uuid,uuid)'),
+        pg_catalog.to_regprocedure('app_private.list_active_branch_memberships(uuid)'),
+        pg_catalog.to_regprocedure('app_private.create_dining_zone(uuid,uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,text)'),
+        pg_catalog.to_regprocedure('app_private.list_dining_layout(uuid,uuid,uuid)'),
+        pg_catalog.to_regprocedure('app_private.create_dining_table(uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,text,integer,text,integer,integer,integer,integer)'),
+        pg_catalog.to_regprocedure('app_private.update_dining_table_layout(uuid,uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,bigint,integer,integer,integer,integer)')
       ]::oid[],
       null::oid
     )`;

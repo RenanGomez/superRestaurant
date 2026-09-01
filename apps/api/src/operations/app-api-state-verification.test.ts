@@ -36,6 +36,13 @@ const postDiningZonesRuntimeAuditSql = readFileSync(
   ),
   "utf8",
 );
+const postDiningTablesAuditSql = readFileSync(
+  new URL(
+    "../../../../supabase/tests/tenancy_memberships_post_dining_tables_catalog.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 const database: DatabaseConfig = Object.freeze({
   caCertificate: "TEST CA",
   connectionString: "postgresql://user:password@host.example/postgres",
@@ -88,6 +95,29 @@ test("pins the exact post-dining-zones audits for disabled and runtime states", 
       status: "ok",
     });
     assert.deepEqual(events, ["state:lock", "state:target", "state:sessions", auditEvent, "state:close"]);
+  }
+});
+
+test("pins the exact post-dining-tables audit for disabled and runtime states", async () => {
+  for (const [target, expectedState] of [
+    [targetState("safe_disabled"), "safe_disabled"],
+    [targetState("runtime"), "runtime"],
+  ] as const) {
+    const events: string[] = [];
+    const result = await verifyAppApiState({
+      auditProfile: "post_dining_tables_v1",
+      config,
+      dependencies: dependenciesFor(stateSession(events, target, 0, { postDiningTablesProfile: true })),
+      precheckAuditSql: postDiningTablesAuditSql,
+      runtimeAuditSql: postDiningTablesAuditSql,
+    });
+    assert.deepEqual(result, {
+      activeSessions: false,
+      catalogAudit: true,
+      state: expectedState,
+      status: "ok",
+    });
+    assert.deepEqual(events, ["state:lock", "state:target", "state:sessions", "state:post-dining-tables-audit", "state:close"]);
   }
 });
 
@@ -190,6 +220,7 @@ function stateSession(
   options: Readonly<{
     closeFails?: boolean;
     lockAcquired?: boolean;
+    postDiningTablesProfile?: boolean;
     postDiningZonesProfile?: boolean;
     unsafe?: boolean;
   }> = {},
@@ -203,7 +234,11 @@ function stateSession(
       assert.match(sql, /roles\.rolconnlimit = -1/u);
       assert.equal(
         sql.includes("app_private.create_dining_zone"),
-        options.postDiningZonesProfile === true,
+        options.postDiningZonesProfile === true || options.postDiningTablesProfile === true,
+      );
+      assert.equal(
+        sql.includes("app_private.update_dining_table_layout"),
+        options.postDiningTablesProfile === true,
       );
       events.push("state:target");
       return result([{ ...target, safe: options.unsafe !== true }]);
@@ -222,6 +257,10 @@ function stateSession(
     }
     if (sql.includes("POST_DINING_RUNTIME_REQUIRED_OBJECT_MISSING")) {
       events.push("state:post-dining-runtime-audit");
+      return emptyResult();
+    }
+    if (sql.includes("POST_DINING_TABLES_REQUIRED_OBJECT_MISSING")) {
+      events.push("state:post-dining-tables-audit");
       return emptyResult();
     }
     if (sql.includes("pg_stat_activity")) {

@@ -8,6 +8,7 @@ import {
   tenancyBranchSuffixes,
   tenancyCanarySuffixes,
   tenancyDiningZoneSuffixes,
+  tenancyDiningTableSuffixes,
   tenancyFixtureAdvisoryLockKey,
   tenancyFixtureEmail,
   tenancyFixtureKeys,
@@ -114,10 +115,32 @@ interface DiningZoneAuditRow {
   readonly zoneId: string;
 }
 
+interface DiningTableRow {
+  readonly actorId: string;
+  readonly branchId: string;
+  readonly id: string;
+  readonly name: string;
+  readonly restaurantId: string;
+  readonly zoneId: string;
+}
+
+interface DiningTableAuditRow {
+  readonly actorId: string;
+  readonly branchId: string;
+  readonly eventId: string;
+  readonly name: string;
+  readonly operation: string;
+  readonly restaurantId: string;
+  readonly tableId: string;
+  readonly zoneId: string;
+}
+
 export interface TenancyFixtureRecoverySnapshot {
   readonly branches: readonly BranchRow[];
   readonly diningZoneAudits?: readonly DiningZoneAuditRow[];
   readonly diningZones?: readonly DiningZoneRow[];
+  readonly diningTableAudits?: readonly DiningTableAuditRow[];
+  readonly diningTables?: readonly DiningTableRow[];
   readonly grants: readonly GrantRow[];
   readonly memberships: readonly MembershipRow[];
   readonly restaurants: readonly RestaurantRow[];
@@ -127,6 +150,8 @@ interface ValidatedSnapshot {
   readonly branchIds: readonly string[];
   readonly diningZoneEventIds: readonly string[];
   readonly diningZoneIds: readonly string[];
+  readonly diningTableEventIds: readonly string[];
+  readonly diningTableIds: readonly string[];
   readonly grantIds: readonly string[];
   readonly membershipIds: readonly string[];
   readonly restaurantIds: readonly string[];
@@ -224,7 +249,9 @@ export function validateTenancyFixtureRecoverySnapshot(
     || snapshot.memberships.length > 0
     || snapshot.grants.length > 0
     || (snapshot.diningZones?.length ?? 0) > 0
-    || (snapshot.diningZoneAudits?.length ?? 0) > 0;
+    || (snapshot.diningZoneAudits?.length ?? 0) > 0
+    || (snapshot.diningTables?.length ?? 0) > 0
+    || (snapshot.diningTableAudits?.length ?? 0) > 0;
   if (hasMainGraph && mainCount !== expectedMainNames.length) throw contaminationError();
 
   if (!hasMainGraph) {
@@ -235,6 +262,8 @@ export function validateTenancyFixtureRecoverySnapshot(
       branchIds: Object.freeze([]),
       diningZoneEventIds: Object.freeze([]),
       diningZoneIds: Object.freeze([]),
+      diningTableEventIds: Object.freeze([]),
+      diningTableIds: Object.freeze([]),
       grantIds: Object.freeze([]),
       membershipIds: Object.freeze([]),
       restaurantIds: Object.freeze(snapshot.restaurants.map((row) => row.id)),
@@ -282,11 +311,22 @@ export function validateTenancyFixtureRecoverySnapshot(
     firstRestaurant.id,
     branchesByName,
   );
+  const diningTables = validateDiningTables(
+    runId,
+    snapshot.diningTables ?? [],
+    snapshot.diningTableAudits ?? [],
+    amber.id,
+    firstRestaurant.id,
+    branchesByName,
+    snapshot.diningZones ?? [],
+  );
 
   return Object.freeze({
     branchIds: Object.freeze(snapshot.branches.map((row) => row.id)),
     diningZoneEventIds: dining.eventIds,
     diningZoneIds: dining.zoneIds,
+    diningTableEventIds: diningTables.eventIds,
+    diningTableIds: diningTables.tableIds,
     grantIds: Object.freeze(snapshot.grants.map((row) => row.id)),
     membershipIds: Object.freeze(snapshot.memberships.map((row) => row.id)),
     restaurantIds: Object.freeze(snapshot.restaurants.map((row) => row.id)),
@@ -323,6 +363,8 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
       const snapshot = await loadSnapshot(client, runId, users.map((user) => user.id), true);
       const validated = validateTenancyFixtureRecoverySnapshot(runId, users, snapshot);
       let removed = 0;
+      removed += await deleteExactly(client, "app.dining_table_audit_events", validated.diningTableEventIds, "event_id");
+      removed += await deleteExactly(client, "app.dining_tables", validated.diningTableIds);
       removed += await deleteExactly(
         client,
         "app.dining_zone_audit_events",
@@ -356,6 +398,8 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
         || snapshot.grants.length !== 0
         || (snapshot.diningZones?.length ?? 0) !== 0
         || (snapshot.diningZoneAudits?.length ?? 0) !== 0
+        || (snapshot.diningTables?.length ?? 0) !== 0
+        || (snapshot.diningTableAudits?.length ?? 0) !== 0
       ) {
         throw recoveryError("postcheck", "TENANCY_FIXTURE_RECOVERY_POSTCHECK_FAILED");
       }
@@ -416,15 +460,20 @@ async function loadSnapshot(
      where membership_id = any($1::uuid[]) or granted_by = any($2::uuid[]) or revoked_by = any($2::uuid[])${lock}`,
     [membershipIds, userIds],
   );
-  const diningTables = await client.query<{ audits: boolean; zones: boolean }>(
+  const diningCatalog = await client.query<{ tableAudits: boolean; tables: boolean; zoneAudits: boolean; zones: boolean }>(
     `select
-       pg_catalog.to_regclass('app.dining_zone_audit_events') is not null as audits,
-       pg_catalog.to_regclass('app.dining_zones') is not null as zones`,
+       pg_catalog.to_regclass('app.dining_zone_audit_events') is not null as "zoneAudits",
+       pg_catalog.to_regclass('app.dining_zones') is not null as zones,
+       pg_catalog.to_regclass('app.dining_table_audit_events') is not null as "tableAudits",
+       pg_catalog.to_regclass('app.dining_tables') is not null as tables`,
   );
-  if (diningTables.rows[0]?.audits !== diningTables.rows[0]?.zones) throw contaminationError();
+  const catalog = diningCatalog.rows[0];
+  if (catalog?.zoneAudits !== catalog?.zones || catalog?.tableAudits !== catalog?.tables || catalog?.tables === true && catalog.zones !== true) throw contaminationError();
   let diningZones: readonly DiningZoneRow[] = [];
   let diningZoneAudits: readonly DiningZoneAuditRow[] = [];
-  if (diningTables.rows[0]?.zones === true) {
+  let diningTables: readonly DiningTableRow[] = [];
+  let diningTableAudits: readonly DiningTableAuditRow[] = [];
+  if (catalog?.zones === true) {
     const diningNames = tenancyDiningZoneSuffixes.map((suffix) => tenancyFixtureName(runId, suffix));
     const zones = await client.query<DiningZoneRow>(
       `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId",
@@ -446,8 +495,24 @@ async function loadSnapshot(
     );
     diningZoneAudits = Object.freeze([...audits.rows]);
   }
+  if (catalog?.tables === true) {
+    const tableNames = tenancyDiningTableSuffixes.map((suffix) => tenancyFixtureName(runId, suffix));
+    const tables = await client.query<DiningTableRow>(
+      `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId", zone_id::text as "zoneId", name, updated_by::text as "actorId" from app.dining_tables where name = any($1::text[]) or restaurant_id = any($2::uuid[]) or updated_by = any($3::uuid[])${lock}`,
+      [tableNames, restaurantIds, userIds],
+    );
+    diningTables = Object.freeze([...tables.rows]);
+    const tableIds = diningTables.map((row) => row.id);
+    const audits = await client.query<DiningTableAuditRow>(
+      `select event_id::text as "eventId", restaurant_id::text as "restaurantId", branch_id::text as "branchId", table_id::text as "tableId", zone_id::text as "zoneId", actor_id::text as "actorId", operation, name_snapshot as name from app.dining_table_audit_events where table_id = any($1::uuid[]) or actor_id = any($2::uuid[]) or restaurant_id = any($3::uuid[])${lock}`,
+      [tableIds, userIds, restaurantIds],
+    );
+    diningTableAudits = Object.freeze([...audits.rows]);
+  }
   return Object.freeze({
     branches: Object.freeze([...branches.rows]),
+    diningTableAudits,
+    diningTables,
     diningZoneAudits,
     diningZones,
     grants: Object.freeze([...grants.rows]),
@@ -586,6 +651,31 @@ function validateDiningZones(
     eventIds: Object.freeze([audit.eventId]),
     zoneIds: Object.freeze([zone.id]),
   });
+}
+
+function validateDiningTables(
+  runId: string,
+  tables: readonly DiningTableRow[],
+  audits: readonly DiningTableAuditRow[],
+  amberId: string,
+  restaurantId: string,
+  branchesByName: ReadonlyMap<string, BranchRow>,
+  zones: readonly DiningZoneRow[],
+): Readonly<{ eventIds: readonly string[]; tableIds: readonly string[] }> {
+  if (tables.length === 0 && audits.length === 0) return Object.freeze({ eventIds: Object.freeze([]), tableIds: Object.freeze([]) });
+  if (tables.length !== 1 || audits.length < 1 || audits.length > 2) throw contaminationError();
+  const table = tables[0];
+  const branch = branchesByName.get(tenancyFixtureName(runId, "branch-11"));
+  const zone = zones.find((candidate) => candidate.name === tenancyFixtureName(runId, "dining-zone-created"));
+  const expectedName = tenancyFixtureName(runId, "dining-table-created");
+  if (table === undefined || branch === undefined || zone === undefined || !UUID_PATTERN.test(table.id) || table.restaurantId !== restaurantId || table.branchId !== branch.id || table.zoneId !== zone.id || table.name !== expectedName || table.actorId !== amberId) throw contaminationError();
+  const operations = new Set<string>();
+  for (const audit of audits) {
+    if (!UUID_PATTERN.test(audit.eventId) || audit.restaurantId !== restaurantId || audit.branchId !== branch.id || audit.tableId !== table.id || audit.zoneId !== zone.id || audit.actorId !== amberId || audit.name !== expectedName || !["created", "layout_updated"].includes(audit.operation) || operations.has(audit.operation)) throw contaminationError();
+    operations.add(audit.operation);
+  }
+  if (!operations.has("created")) throw contaminationError();
+  return Object.freeze({ eventIds: Object.freeze(audits.map((audit) => audit.eventId)), tableIds: Object.freeze([table.id]) });
 }
 
 function validateMemberships(

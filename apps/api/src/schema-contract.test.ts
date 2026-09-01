@@ -20,6 +20,14 @@ const diningZonesCatalogAudit = readFileSync(
   new URL("../../../supabase/tests/dining_zones_catalog.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
+const diningTablesMigration = readFileSync(
+  new URL("../../../supabase/migrations/20260901000100_create_dining_tables_layout.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
+const diningTablesCatalogAudit = readFileSync(
+  new URL("../../../supabase/tests/dining_tables_layout_catalog.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
 const catalogAudit = readFileSync(
   new URL("../../../supabase/tests/tenancy_memberships_catalog.sql", import.meta.url),
   "utf8",
@@ -45,6 +53,10 @@ const postDiningZonesRuntimeCatalogAudit = readFileSync(
 ).toLowerCase();
 const diningZonesRemoteRunner = readFileSync(
   new URL("./operations/run-dining-zones-tenancy-verification.js", import.meta.url),
+  "utf8",
+).toLowerCase();
+const diningTablesRemoteRunner = readFileSync(
+  new URL("./operations/run-dining-tables-tenancy-verification.js", import.meta.url),
   "utf8",
 ).toLowerCase();
 const protectedWebSmokeRunner = readFileSync(
@@ -241,4 +253,60 @@ test("dining-zone catalog audit pins RLS, owner, search_path and grants", () => 
   assert.match(diningZonesCatalogAudit, /owner\.rolname = 'postgres'/u);
   assert.match(diningZonesCatalogAudit, /has_function_privilege\('app_api', function_oid, 'execute'\)/u);
   assert.match(diningZonesCatalogAudit, /has_table_privilege\(grantee_name, table_name, privilege_name\)/u);
+});
+
+test("remote dining-table E2E reuses the recoverable tenancy harness and global audit", () => {
+  assert.match(diningTablesRemoteRunner, /runtenancyverification/u);
+  assert.match(diningTablesRemoteRunner, /tenancy_memberships_post_dining_tables_catalog\.sql/u);
+  assert.match(diningTablesRemoteRunner, /verifydiningtables: true/u);
+  assert.match(apiPackage, /"verify:dining-tables:remote"/u);
+  assert.match(apiPackage, /run-dining-tables-tenancy-verification\.js/u);
+});
+
+test("dining-table layout migration is scoped, optimistic, idempotent and server-only", () => {
+  assert.match(diningTablesMigration, /^begin;/u);
+  assert.match(diningTablesMigration, /create table app\.dining_tables/u);
+  assert.match(diningTablesMigration, /references app\.dining_zones \(restaurant_id, branch_id, id\)/u);
+  assert.match(diningTablesMigration, /layout_x \+ layout_width <= 24/u);
+  assert.match(diningTablesMigration, /create table app\.dining_table_audit_events/u);
+  assert.match(diningTablesMigration, /unique \(actor_id, restaurant_id, branch_id, idempotency_key\)/u);
+  assert.match(diningTablesMigration, /create function app_private\.list_dining_layout/u);
+  assert.match(diningTablesMigration, /create function app_private\.create_dining_table/u);
+  assert.match(diningTablesMigration, /create function app_private\.update_dining_table_layout/u);
+  assert.match(diningTablesMigration, /version=p_expected_version/u);
+  assert.match(diningTablesMigration, /pg_advisory_xact_lock/u);
+  assert.match(diningTablesMigration, /security definer set search_path = ''/u);
+  assert.match(diningTablesMigration, /grant execute on function app_private\.list_dining_layout[\s\S]*to app_api/u);
+  assert.doesNotMatch(diningTablesMigration, /grant (?:select|insert|update|delete|all) on app\.dining/u);
+  for (const table of ["dining_tables", "dining_table_audit_events"]) {
+    assert.match(diningTablesMigration, new RegExp(`alter table app\\.${table} enable row level security`, "u"));
+    assert.match(diningTablesMigration, new RegExp(`alter table app\\.${table} force row level security`, "u"));
+  }
+  assert.match(diningTablesMigration, /commit;\s*$/u);
+  assert.match(diningTablesCatalogAudit, /dining_tables_audit_table_missing/u);
+  assert.match(diningTablesCatalogAudit, /dining_tables_audit_function_rejected/u);
+  assert.match(apiPackage, /verify:dining-tables-layout-schema:rollback/u);
+});
+
+test("post-dining-tables catalog audit pins the exact global table and function surface", () => {
+  const audit = readFileSync(
+    new URL("../../../supabase/tests/tenancy_memberships_post_dining_tables_catalog.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(audit, /POST_DINING_TABLES_REQUIRED_OBJECT_MISSING/u);
+  assert.match(audit, /\) <> 9/u);
+  assert.match(audit, /dining_table_audit_events/u);
+  assert.match(audit, /app_private\.update_dining_table_layout/u);
+  assert.match(audit, /POST_DINING_TABLES_APP_API_EXTRA_FUNCTION/u);
+});
+
+test("dining-table lint fix qualifies replay and optimistic-update columns", () => {
+  const migration = readFileSync(
+    new URL("../../../supabase/migrations/20260901000200_qualify_dining_table_function_columns.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(migration, /select audit\.\* into existing_audit/u);
+  assert.match(migration, /audit\.restaurant_id=p_restaurant_id/u);
+  assert.match(migration, /dining_table\.version=p_expected_version/u);
+  assert.doesNotMatch(migration, /where actor_id=p_actor_id/u);
 });

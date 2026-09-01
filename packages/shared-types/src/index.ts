@@ -14,6 +14,7 @@ export const SCOPE_SCHEMA_VERSION = 1 as const;
 export const BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION = 1 as const;
 export const RBAC_MATRIX_VERSION = 1 as const;
 export const DINING_ZONE_SCHEMA_VERSION = 1 as const;
+export const DINING_LAYOUT_SCHEMA_VERSION = 1 as const;
 
 export const MEMBERSHIP_ROLE_CODES = Object.freeze([
   "owner",
@@ -110,6 +111,67 @@ export interface DiningZoneV1 {
   readonly zoneId: string;
 }
 
+export const DINING_TABLE_SHAPES = Object.freeze(["round", "square", "rectangle"] as const);
+export type DiningTableShape = (typeof DINING_TABLE_SHAPES)[number];
+
+export interface DiningTableGeometryV1 {
+  readonly height: number;
+  readonly width: number;
+  readonly x: number;
+  readonly y: number;
+}
+
+export interface DiningTableV1 {
+  readonly capacity: number;
+  readonly layout: DiningTableGeometryV1;
+  readonly name: string;
+  readonly replayed: boolean;
+  readonly schemaVersion: typeof DINING_LAYOUT_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly shape: DiningTableShape;
+  readonly tableId: string;
+  readonly updatedAt: string;
+  readonly updatedBy: string;
+  readonly version: number;
+  readonly zoneId: string;
+}
+
+export interface DiningLayoutZoneV1 {
+  readonly name: string;
+  readonly tables: readonly DiningTableV1[];
+  readonly version: number;
+  readonly zoneId: string;
+}
+
+export interface DiningLayoutV1 {
+  readonly schemaVersion: typeof DINING_LAYOUT_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly zones: readonly DiningLayoutZoneV1[];
+}
+
+interface DiningTableMutationCommandV1 {
+  readonly deviceId: string;
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly occurredAt: string;
+  readonly schemaVersion: typeof DINING_LAYOUT_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly tableId: string;
+}
+
+export interface CreateDiningTableCommandV1 extends DiningTableMutationCommandV1 {
+  readonly capacity: number;
+  readonly layout: DiningTableGeometryV1;
+  readonly name: string;
+  readonly shape: DiningTableShape;
+  readonly zoneId: string;
+}
+
+export interface UpdateDiningTableLayoutCommandV1 extends DiningTableMutationCommandV1 {
+  readonly expectedVersion: number;
+  readonly layout: DiningTableGeometryV1;
+}
+
 export function parseCreateDiningZoneCommandV1(value: unknown): CreateDiningZoneCommandV1 | undefined {
   const record = parseExactPlainRecord(value, [
     "schemaVersion",
@@ -190,6 +252,86 @@ export function parseDiningZoneV1(value: unknown): DiningZoneV1 | undefined {
     version,
     zoneId,
   });
+}
+
+export function parseCreateDiningTableCommandV1(value: unknown): CreateDiningTableCommandV1 | undefined {
+  const record = parseExactPlainRecord(value, [
+    "schemaVersion", "scope", "tableId", "zoneId", "eventId", "idempotencyKey", "deviceId",
+    "occurredAt", "name", "capacity", "shape", "layout",
+  ]);
+  if (record === undefined || ownValue(record, "schemaVersion") !== DINING_LAYOUT_SCHEMA_VERSION) return undefined;
+  const common = parseDiningTableMutation(record);
+  const zoneId = parseUuid(ownValue(record, "zoneId"));
+  const name = parseDisplayName(ownValue(record, "name"), 40);
+  const capacity = parseBoundedInteger(ownValue(record, "capacity"), 1, 50);
+  const shape = parseDiningTableShape(ownValue(record, "shape"));
+  const layout = parseDiningTableGeometryV1(ownValue(record, "layout"));
+  if (common === undefined || zoneId === undefined || name === undefined || capacity === undefined || shape === undefined || layout === undefined) return undefined;
+  return Object.freeze({ ...common, capacity, layout, name, shape, zoneId });
+}
+
+export function parseUpdateDiningTableLayoutCommandV1(value: unknown): UpdateDiningTableLayoutCommandV1 | undefined {
+  const record = parseExactPlainRecord(value, [
+    "schemaVersion", "scope", "tableId", "eventId", "idempotencyKey", "deviceId", "occurredAt",
+    "expectedVersion", "layout",
+  ]);
+  if (record === undefined || ownValue(record, "schemaVersion") !== DINING_LAYOUT_SCHEMA_VERSION) return undefined;
+  const common = parseDiningTableMutation(record);
+  const expectedVersion = parseBoundedInteger(ownValue(record, "expectedVersion"), 1, Number.MAX_SAFE_INTEGER);
+  const layout = parseDiningTableGeometryV1(ownValue(record, "layout"));
+  if (common === undefined || expectedVersion === undefined || layout === undefined) return undefined;
+  return Object.freeze({ ...common, expectedVersion, layout });
+}
+
+export function parseDiningTableV1(value: unknown): DiningTableV1 | undefined {
+  const record = parseExactPlainRecord(value, [
+    "schemaVersion", "scope", "tableId", "zoneId", "name", "capacity", "shape", "layout",
+    "version", "updatedAt", "updatedBy", "replayed",
+  ]);
+  if (record === undefined || ownValue(record, "schemaVersion") !== DINING_LAYOUT_SCHEMA_VERSION) return undefined;
+  const scope = parseUuidBranchScope(ownValue(record, "scope"));
+  const tableId = parseUuid(ownValue(record, "tableId"));
+  const zoneId = parseUuid(ownValue(record, "zoneId"));
+  const name = parseDisplayName(ownValue(record, "name"), 40);
+  const capacity = parseBoundedInteger(ownValue(record, "capacity"), 1, 50);
+  const shape = parseDiningTableShape(ownValue(record, "shape"));
+  const layout = parseDiningTableGeometryV1(ownValue(record, "layout"));
+  const version = parseBoundedInteger(ownValue(record, "version"), 1, Number.MAX_SAFE_INTEGER);
+  const updatedAt = parseCanonicalTimestamp(ownValue(record, "updatedAt"));
+  const updatedBy = parseUuid(ownValue(record, "updatedBy"));
+  const replayed = ownValue(record, "replayed");
+  if (scope === undefined || tableId === undefined || zoneId === undefined || name === undefined || capacity === undefined || shape === undefined || layout === undefined || version === undefined || updatedAt === undefined || updatedBy === undefined || typeof replayed !== "boolean") return undefined;
+  return Object.freeze({ capacity, layout, name, replayed, schemaVersion: DINING_LAYOUT_SCHEMA_VERSION, scope, shape, tableId, updatedAt, updatedBy, version, zoneId });
+}
+
+export function parseDiningLayoutV1(value: unknown): DiningLayoutV1 | undefined {
+  const record = parseExactPlainRecord(value, ["schemaVersion", "scope", "zones"]);
+  if (record === undefined || ownValue(record, "schemaVersion") !== DINING_LAYOUT_SCHEMA_VERSION) return undefined;
+  const scope = parseUuidBranchScope(ownValue(record, "scope"));
+  const rawZones = parseExactArray(ownValue(record, "zones"), 100);
+  if (scope === undefined || rawZones === undefined) return undefined;
+  const zones: DiningLayoutZoneV1[] = [];
+  let previousZoneId: string | undefined;
+  for (const rawZone of rawZones) {
+    const zoneRecord = parseExactPlainRecord(rawZone, ["zoneId", "name", "version", "tables"]);
+    if (zoneRecord === undefined) return undefined;
+    const zoneId = parseUuid(ownValue(zoneRecord, "zoneId"));
+    const name = parseDisplayName(ownValue(zoneRecord, "name"), 80);
+    const version = parseBoundedInteger(ownValue(zoneRecord, "version"), 1, Number.MAX_SAFE_INTEGER);
+    const rawTables = parseExactArray(ownValue(zoneRecord, "tables"), 500);
+    if (zoneId === undefined || name === undefined || version === undefined || rawTables === undefined || (previousZoneId !== undefined && compareCodeUnits(previousZoneId, zoneId) >= 0)) return undefined;
+    previousZoneId = zoneId;
+    const tables: DiningTableV1[] = [];
+    let previousTableId: string | undefined;
+    for (const rawTable of rawTables) {
+      const table = parseDiningTableV1(rawTable);
+      if (table === undefined || table.zoneId !== zoneId || table.scope.restaurantId !== scope.restaurantId || table.scope.branchId !== scope.branchId || (previousTableId !== undefined && compareCodeUnits(previousTableId, table.tableId) >= 0)) return undefined;
+      previousTableId = table.tableId;
+      tables.push(table);
+    }
+    zones.push(Object.freeze({ name, tables: Object.freeze(tables), version, zoneId }));
+  }
+  return Object.freeze({ schemaVersion: DINING_LAYOUT_SCHEMA_VERSION, scope, zones: Object.freeze(zones) });
 }
 
 /**
@@ -364,6 +506,40 @@ function parseCanonicalTimestamp(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length !== 24) return undefined;
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value ? value : undefined;
+}
+
+function parseDiningTableMutation(record: PlainRecord): DiningTableMutationCommandV1 | undefined {
+  const scope = parseUuidBranchScope(ownValue(record, "scope"));
+  const tableId = parseUuid(ownValue(record, "tableId"));
+  const eventId = parseUuid(ownValue(record, "eventId"));
+  const idempotencyKey = parseUuid(ownValue(record, "idempotencyKey"));
+  const deviceId = parseUuid(ownValue(record, "deviceId"));
+  const occurredAt = parseCanonicalTimestamp(ownValue(record, "occurredAt"));
+  if (scope === undefined || tableId === undefined || eventId === undefined || idempotencyKey === undefined || deviceId === undefined || occurredAt === undefined) return undefined;
+  return Object.freeze({ deviceId, eventId, idempotencyKey, occurredAt, schemaVersion: DINING_LAYOUT_SCHEMA_VERSION, scope, tableId });
+}
+
+function parseDiningTableShape(value: unknown): DiningTableShape | undefined {
+  return typeof value === "string" && (DINING_TABLE_SHAPES as readonly string[]).includes(value)
+    ? value as DiningTableShape
+    : undefined;
+}
+
+function parseDiningTableGeometryV1(value: unknown): DiningTableGeometryV1 | undefined {
+  const record = parseExactPlainRecord(value, ["x", "y", "width", "height"]);
+  if (record === undefined) return undefined;
+  const x = parseBoundedInteger(ownValue(record, "x"), 0, 23);
+  const y = parseBoundedInteger(ownValue(record, "y"), 0, 99);
+  const width = parseBoundedInteger(ownValue(record, "width"), 2, 8);
+  const height = parseBoundedInteger(ownValue(record, "height"), 2, 8);
+  if (x === undefined || y === undefined || width === undefined || height === undefined || x + width > 24 || y + height > 100) return undefined;
+  return Object.freeze({ height, width, x, y });
+}
+
+function parseBoundedInteger(value: unknown, minimum: number, maximum: number): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum
+    ? value
+    : undefined;
 }
 
 function compareCodeUnits(left: string, right: string): number {

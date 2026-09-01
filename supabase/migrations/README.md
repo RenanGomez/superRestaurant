@@ -198,3 +198,29 @@ también reconoce y elimina de forma exacta la zona/auditoría marcadas.
 
 El rollback ordinario es forward-only. Eliminar estas tablas solo es aceptable
 antes de datos reales, con verificación de vaciedad y respaldo explícito.
+
+### Slice de mesas y editor de layout
+
+`20260901000100_create_dining_tables_layout.sql` es una migración aditiva aún
+no aplicada. Añade mesas scoped por Restaurant/Branch/Zone, geometría entera en
+una cuadrícula 24×100, versión optimista, soft delete preparado y auditoría
+inmutable/idempotente para alta y movimiento. Nest conserva la única ruta de
+lectura/escritura mediante tres funciones privadas; no se añaden grants Data API.
+
+Antes de solicitar un apply persistente, ejecutar únicamente:
+
+`pnpm --filter @super-restaurant/api verify:dining-tables-layout-schema:rollback`
+
+El verificador exige las variables `SCHEMA_VERIFICATION_*`, confirmación exacta
+`ROLLBACK_ONLY`, TLS `verify-full` y aplica migración + auditoría específica en
+una transacción que siempre termina en `ROLLBACK`. El resumen esperado después
+del cambio es 5 políticas, 9 tablas RLS+FORCE RLS y 9 funciones privilegiadas.
+Esta verificación remota y cualquier fixture/apply requieren autorización humana
+nueva; no están autorizados por las ejecuciones anteriores.
+
+Rollback persistente, solo mientras ambas tablas nuevas estén vacías y ninguna
+migración posterior las referencie: crear una migración forward-only que revoque
+y elimine primero `update_dining_table_layout`, `create_dining_table` y
+`list_dining_layout`, luego `dining_table_audit_events` y finalmente
+`dining_tables`. No editar ni borrar la migración ya aplicada, y exigir respaldo,
+dry-run e inspección de dependencias antes de ejecutar ese rollback.

@@ -3,10 +3,11 @@ import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 
 import { getServerEnv } from "../../env";
-import type { BranchMembershipSummaryV1 } from "@super-restaurant/shared-types";
+import type { BranchMembershipSummaryV1, DiningLayoutV1, DiningTableV1 } from "@super-restaurant/shared-types";
 import { BRANCH_PREFERENCE_COOKIE, encodeScope, findMembership, listMemberships, parseBranchPreference } from "../../lib/memberships";
 import { createServerSupabaseClient } from "../../lib/supabase-server";
-import { selectBranchAction } from "./actions";
+import { getDiningLayout } from "../../lib/dining-layout";
+import { createDiningTableAction, selectBranchAction, updateDiningTableLayoutAction } from "./actions";
 import { FocusRevalidate } from "./focus-revalidate";
 import { SelectBranchSubmitButton } from "./select-branch-submit-button";
 
@@ -65,7 +66,12 @@ export default async function AppHomePage({ searchParams }: AppHomePageProps): P
     return (
       <>
         <FocusRevalidate />
-        <CurrentBranchView membership={current} />
+        <CurrentBranchView
+          membership={current}
+          layout={await getDiningLayout(session.access_token, env.apiBaseUrl, current.scope)}
+          layoutError={typeof resolvedSearchParams.layoutError === "string" ? resolvedSearchParams.layoutError : undefined}
+          layoutStatus={typeof resolvedSearchParams.layoutStatus === "string" ? resolvedSearchParams.layoutStatus : undefined}
+        />
       </>
     );
   }
@@ -78,32 +84,67 @@ export default async function AppHomePage({ searchParams }: AppHomePageProps): P
   );
 }
 
-function CurrentBranchView({ membership }: { readonly membership: BranchMembershipSummaryV1 }): ReactNode {
+function CurrentBranchView({ membership, layout, layoutError, layoutStatus }: {
+  readonly membership: BranchMembershipSummaryV1;
+  readonly layout: DiningLayoutV1 | undefined;
+  readonly layoutError: string | undefined;
+  readonly layoutStatus: string | undefined;
+}): ReactNode {
+  const canManage = membership.roles.some((role) => role === "owner" || role === "admin" || role === "manager");
+  if (layout === undefined) return <NoticeState title="No se pudo cargar el plano" body="La configuración de mesas no está disponible en este momento. Vuelve a intentarlo." />;
   return (
-    <div className="flex flex-1 items-center justify-center">
-      <div className="flex max-w-[380px] flex-col items-center gap-4 text-center">
-        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[oklch(94%_0.01_240)]">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="text-text-muted" aria-hidden="true">
-            <path d="M3 9.5 12 3l9 6.5" />
-            <path d="M5 10v10h14V10" />
-          </svg>
+    <div className="flex min-w-0 flex-1 flex-col gap-5 p-5 lg:p-8">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-accent">Mesas y layout</p>
+          <h1 className="font-heading text-[22px] font-bold text-text">{membership.restaurantName} · {membership.branchName}</h1>
+          <p className="mt-1 text-[13px] text-text-muted">Plano en cuadrícula de 24 columnas. Los cambios se validan y versionan en el servidor.</p>
         </div>
-        <h1 className="font-heading text-[17px] font-semibold text-text">
-          {membership.restaurantName} · {membership.branchName}
-        </h1>
-        <p className="text-[13px] leading-relaxed text-text-muted">
-          Rol{membership.roles.length > 1 ? "es" : ""}: {membership.roles.join(", ")}. La selección de menú, mesas y
-          órdenes se habilita en las próximas fases.
-        </p>
-        <a
-          href="/app?change=1"
-          className="text-[13px] font-medium text-accent underline-offset-2 hover:underline focus-visible:underline"
-        >
-          Cambiar sucursal
-        </a>
+        <a href="/app?change=1" className="rounded-lg border border-border bg-surface px-3 py-2 text-[13px] font-medium">Cambiar sucursal</a>
       </div>
+      {layoutError !== undefined && <NoticeBanner text={layoutError === "update_failed" ? "No se guardó el cambio. El plano pudo cambiar en otro dispositivo; recarga e inténtalo de nuevo." : "No se pudo crear la mesa. Revisa los datos y que el nombre sea único."} />}
+      {layoutStatus !== undefined && <div role="status" className="rounded-[10px] border border-[oklch(84%_0.08_155)] bg-[oklch(96%_0.03_155)] px-3.5 py-2.5 text-[13px] text-[oklch(38%_0.1_155)]">{layoutStatus === "table_created" ? "Mesa creada." : "Layout guardado."}</div>}
+      {layout.zones.length === 0 ? (
+        <NoticeState title="Aún no hay zonas" body="Crea primero una zona del restaurante para poder agregar y acomodar mesas." />
+      ) : layout.zones.map((zone) => (
+        <section key={zone.zoneId} className="rounded-2xl border border-border bg-surface p-4 shadow-[0_8px_30px_oklch(20%_0.02_250_/_0.05)]">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div><h2 className="font-heading text-[16px] font-semibold">{zone.name}</h2><p className="text-[12px] text-text-muted">{zone.tables.length} mesa{zone.tables.length === 1 ? "" : "s"}</p></div>
+            {canManage && <CreateTableForm zoneId={zone.zoneId} />}
+          </div>
+          <div className="grid min-h-[360px] grid-cols-[repeat(24,minmax(20px,1fr))] auto-rows-[20px] gap-px overflow-auto rounded-xl border border-border bg-[linear-gradient(to_right,var(--color-border)_1px,transparent_1px),linear-gradient(to_bottom,var(--color-border)_1px,transparent_1px)] bg-[size:calc(100%/24)_20px] p-2" aria-label={`Plano de ${zone.name}`}>
+            {zone.tables.map((table) => <TableCard key={table.tableId} table={table} canManage={canManage} />)}
+          </div>
+        </section>
+      ))}
     </div>
   );
+}
+
+function TableCard({ table, canManage }: { readonly table: DiningTableV1; readonly canManage: boolean }): ReactNode {
+  const round = table.shape === "round";
+  return (
+    <article style={{ gridColumn: `${table.layout.x + 1} / span ${table.layout.width}`, gridRow: `${table.layout.y + 1} / span ${table.layout.height}` }} className={`z-10 flex min-h-0 flex-col items-center justify-center border-2 border-accent bg-[oklch(95%_0.025_230)] p-1 text-center ${round ? "rounded-full" : "rounded-lg"}`}>
+      <strong className="truncate text-[12px]">{table.name}</strong><span className="text-[10px] text-text-muted">{table.capacity} personas · v{table.version}</span>
+      {canManage && <details className="mt-1 text-[10px]"><summary className="cursor-pointer font-semibold text-accent">Editar</summary><LayoutForm table={table} /></details>}
+    </article>
+  );
+}
+
+function CreateTableForm({ zoneId }: { readonly zoneId: string }): ReactNode {
+  return <details className="relative"><summary className="cursor-pointer rounded-lg bg-accent px-3 py-2 text-[12px] font-semibold text-white">Nueva mesa</summary><form action={createDiningTableAction} className="absolute right-0 z-30 mt-2 grid w-[300px] grid-cols-2 gap-2 rounded-xl border border-border bg-surface p-3 shadow-xl"><input type="hidden" name="zoneId" value={zoneId} /><Field name="name" label="Nombre" defaultValue="Mesa nueva" /><Field name="capacity" label="Capacidad" defaultValue="4" type="number" /><label className="col-span-2 text-[11px] font-medium">Forma<select name="shape" className="mt-1 w-full rounded border border-border p-2"><option value="round">Redonda</option><option value="square">Cuadrada</option><option value="rectangle">Rectangular</option></select></label><GeometryFields defaults={{ x: 0, y: 0, width: 4, height: 4 }} /><button className="col-span-2 rounded bg-accent px-3 py-2 text-[12px] font-semibold text-white" type="submit">Crear mesa</button></form></details>;
+}
+
+function LayoutForm({ table }: { readonly table: DiningTableV1 }): ReactNode {
+  return <form action={updateDiningTableLayoutAction} className="mt-1 grid w-[180px] grid-cols-2 gap-1 rounded-lg bg-surface p-2 shadow-lg"><input type="hidden" name="tableId" value={table.tableId} /><input type="hidden" name="expectedVersion" value={table.version} /><GeometryFields defaults={table.layout} /><button className="col-span-2 rounded bg-accent px-2 py-1 text-white" type="submit">Guardar</button></form>;
+}
+
+function GeometryFields({ defaults }: { readonly defaults: DiningTableV1["layout"] }): ReactNode {
+  return <><Field name="x" label="Columna" defaultValue={String(defaults.x)} type="number" /><Field name="y" label="Fila" defaultValue={String(defaults.y)} type="number" /><Field name="width" label="Ancho" defaultValue={String(defaults.width)} type="number" /><Field name="height" label="Alto" defaultValue={String(defaults.height)} type="number" /></>;
+}
+
+function Field({ name, label, defaultValue, type = "text" }: { readonly name: string; readonly label: string; readonly defaultValue: string; readonly type?: string }): ReactNode {
+  return <label className="text-[11px] font-medium">{label}<input required name={name} type={type} defaultValue={defaultValue} className="mt-1 w-full rounded border border-border p-1.5" /></label>;
 }
 
 function NoticeState({ title, body }: { readonly title: string; readonly body: string }): ReactNode {

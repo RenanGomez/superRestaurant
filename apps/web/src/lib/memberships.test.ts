@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import "./dining-layout.test.js";
+
 import {
   encodeBranchPreference,
   encodeScope,

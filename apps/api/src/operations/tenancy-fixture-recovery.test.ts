@@ -89,6 +89,30 @@ test("accepts the completed dining-zone graph and verified disable prefix for re
   assertContamination(() => validateTenancyFixtureRecoverySnapshot(runId, users, contaminated));
 });
 
+test("accepts only the marked dining-table create and update prefix", () => {
+  const snapshot = completeSnapshot();
+  const zoneId = "60000000-0000-4000-8000-000000000001";
+  const tableId = "61000000-0000-4000-8000-000000000001";
+  const zoneName = tenancyFixtureName(runId, "dining-zone-created");
+  const tableName = tenancyFixtureName(runId, "dining-table-created");
+  const withTables = {
+    ...snapshot,
+    diningZones: [{ branchId: ids.branch11, createdBy: ids.amber, id: zoneId, name: zoneName, restaurantId: ids.restaurant1, version: 1 }],
+    diningZoneAudits: [{ actorId: ids.amber, branchId: ids.branch11, eventId: "70000000-0000-4000-8000-000000000001", idempotencyKey: "80000000-0000-4000-8000-000000000001", name: zoneName, operation: "created", restaurantId: ids.restaurant1, zoneId }],
+    diningTables: [{ actorId: ids.amber, branchId: ids.branch11, id: tableId, name: tableName, restaurantId: ids.restaurant1, zoneId }],
+    diningTableAudits: [
+      { actorId: ids.amber, branchId: ids.branch11, eventId: "71000000-0000-4000-8000-000000000001", name: tableName, operation: "created", restaurantId: ids.restaurant1, tableId, zoneId },
+      { actorId: ids.amber, branchId: ids.branch11, eventId: "71000000-0000-4000-8000-000000000002", name: tableName, operation: "layout_updated", restaurantId: ids.restaurant1, tableId, zoneId },
+    ],
+  };
+  const validated = validateTenancyFixtureRecoverySnapshot(runId, users, withTables);
+  assert.deepEqual(validated.diningTableIds, [tableId]);
+  assert.deepEqual(validated.diningTableEventIds, ["71000000-0000-4000-8000-000000000001", "71000000-0000-4000-8000-000000000002"]);
+  const contaminated = structuredClone(withTables);
+  required(contaminated.diningTableAudits[1]).operation = "created";
+  assertContamination(() => validateTenancyFixtureRecoverySnapshot(runId, users, contaminated));
+});
+
 test("accepts empty database with zero, one or two exact Auth fixtures", () => {
   const empty = emptySnapshot();
   for (const authUsers of [[], [amberUser], users]) {

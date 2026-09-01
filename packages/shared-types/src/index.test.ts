@@ -1,9 +1,14 @@
 import {
   BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
   DINING_ZONE_SCHEMA_VERSION,
+  DINING_LAYOUT_SCHEMA_VERSION,
   MEMBERSHIP_ROLE_CODES,
   parseCreateDiningZoneCommandV1,
   parseDiningZoneV1,
+  parseCreateDiningTableCommandV1,
+  parseDiningLayoutV1,
+  parseDiningTableV1,
+  parseUpdateDiningTableLayoutCommandV1,
   parseRbacPermissionCode,
   parseBranchMembershipListV1,
   parseBranchScope,
@@ -15,6 +20,10 @@ import {
   type BranchScope,
   type CreateDiningZoneCommandV1,
   type DiningZoneV1,
+  type CreateDiningTableCommandV1,
+  type DiningLayoutV1,
+  type DiningTableV1,
+  type UpdateDiningTableLayoutCommandV1,
   type RestaurantId,
   type RestaurantScope,
 } from "./index.js";
@@ -72,6 +81,15 @@ const parsedZone: DiningZoneV1 | undefined = parseDiningZoneV1({
 });
 void parsedZoneCommand;
 void parsedZone;
+
+const parsedTableCommand: CreateDiningTableCommandV1 | undefined = parseCreateDiningTableCommandV1({ schemaVersion: DINING_LAYOUT_SCHEMA_VERSION });
+const parsedTable: DiningTableV1 | undefined = parseDiningTableV1({ schemaVersion: DINING_LAYOUT_SCHEMA_VERSION });
+const parsedLayout: DiningLayoutV1 | undefined = parseDiningLayoutV1({ schemaVersion: DINING_LAYOUT_SCHEMA_VERSION });
+const parsedLayoutUpdate: UpdateDiningTableLayoutCommandV1 | undefined = parseUpdateDiningTableLayoutCommandV1({ schemaVersion: DINING_LAYOUT_SCHEMA_VERSION });
+void parsedTableCommand;
+void parsedTable;
+void parsedLayout;
+void parsedLayoutUpdate;
 
 // @ts-expect-error Runtime parsing is required before untrusted strings become branded identifiers.
 const invalidRestaurantScope: RestaurantScope = { restaurantId: "restaurant-1" };

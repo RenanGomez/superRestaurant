@@ -16,8 +16,12 @@ const PRECHECK_AUDIT_SHA256 = "a6485bcdcc1f54beee9f939187d374a449541343b426d5934
 const RUNTIME_AUDIT_SHA256 = "e4d89b714336edda12441567d9738507abcb807abe173413f1095a16ca7321e2";
 const POST_DINING_ZONES_PRECHECK_AUDIT_SHA256 = "8bc25f26058ec8512d364404629b595c690b987edf5fdd891ce0496943b6b4bc";
 const POST_DINING_ZONES_RUNTIME_AUDIT_SHA256 = "c0648eecde4df52cf92e581bb1667b7fc10b904725803271767192ec50ebe688";
+const POST_DINING_TABLES_AUDIT_SHA256 = "fb6a8a827475623dce277a6670232b630177fb0ae7db2e04502b44cfe00c9052";
 
-export type AppApiCatalogAuditProfile = "memberships_v1" | "post_dining_zones_v1";
+export type AppApiCatalogAuditProfile =
+  | "memberships_v1"
+  | "post_dining_zones_v1"
+  | "post_dining_tables_v1";
 
 export type AppApiObservedState = "safe_disabled" | "temporary" | "expired" | "runtime" | "partial";
 
@@ -99,6 +103,12 @@ function auditHashes(profile: AppApiCatalogAuditProfile): Readonly<{
     return Object.freeze({
       precheck: POST_DINING_ZONES_PRECHECK_AUDIT_SHA256,
       runtime: POST_DINING_ZONES_RUNTIME_AUDIT_SHA256,
+    });
+  }
+  if (profile === "post_dining_tables_v1") {
+    return Object.freeze({
+      precheck: POST_DINING_TABLES_AUDIT_SHA256,
+      runtime: POST_DINING_TABLES_AUDIT_SHA256,
     });
   }
   throw verificationError("configuration");

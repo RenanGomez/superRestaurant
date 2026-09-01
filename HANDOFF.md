@@ -131,6 +131,105 @@ Las viñetas de esta sección conservan la evolución cronológica; cuando una c
 - Siguiente acción mínima para otra conversación: leer los archivos operativos, confirmar el commit/push de este corte y continuar `Implementar mesas, zonas y editor de layout web` desde su único pendiente: contratos/esquema/API/UI de mesas y editor de layout. Antes de cualquier migración nueva, consultar CodeGraph, marcar el slice IN_PROGRESS, preparar rollback-only y solicitar autorización remota separada. No repetir migraciones, rotación/provisioning, exposición Data API ni E2E FE-0.1.
 - Agentes/Git: Claude trabajó FE-0.1 previamente en `apps/web/**` y terminó antes de esta integración; Codex no usó subagentes. No hubo cambios offline. Emmanuel autorizó commit y push de los 42 archivos; el corte se publica en `main` por fast-forward con el mensaje `feat(pos): complete dining zones and branch context`, sin merge, rebase ni force-push.
 
+## Continuación 2026-09-01 — mesas y editor de layout local
+
+- Estado: P1 mesas/zonas/layout permanece IN_PROGRESS. Zonas, FE-0.1, Auth/API, RBAC y el esquema remoto previo no se reabrieron ni se repitieron. El corte nuevo implementa fuentes locales de contratos, esquema, API y UI para mesas/layout; no declara el esquema desplegado.
+- Contratos/API: `DINING_LAYOUT_SCHEMA_VERSION=1` define mesa, forma, geometría, plano, alta y actualización optimista con parsers exactos/fail-closed. Nest añade `GET /api/v1/dining/layout`, `POST /api/v1/dining/tables` y `PATCH /api/v1/dining/tables/layout`, separados por `tables.read`/`tables.manage`, con 400/403/409/503 estables y `private, no-store`.
+- Esquema/rollback: la migración aditiva local `20260901000100` modela `dining_tables`, auditoría inmutable, soft delete preparado, geometría entera 24×100, snapshots de replay y tres funciones `SECURITY DEFINER` accesibles únicamente a `app_api`. La auditoría específica y `verify:dining-tables-layout-schema:rollback` quedaron preparados. El entrypoint sin configuración rechazó con `SCHEMA_VERIFICATION_CONFIGURATION_REJECTED`; no hubo conexión, SQL remoto, migración, fixture ni cambio de `app_api`/Data API. Rollback persistente está documentado como migración forward-only, condicionado a vaciedad/respaldo/dependencias.
+- UI: `/app` consume el plano exclusivamente por Nest, muestra zonas y mesas en cuadrícula responsive, permite alta y edición de coordenadas/tamaño mediante Server Actions, usa IDs/eventos/idempotencia nuevos y un `deviceId` HTTP-only local. Revalida sesión, directorio y Branch antes de cada mutación; roles sin `tables.manage` conservan vista read-only.
+- Verificación local: la compuerta global pasó lint 6/6, typecheck 9/9, tests 9/9 y build 6/6. El build final corrió fuera del sandbox después de reproducir el bloqueo esperado `spawn EPERM`; Next generó correctamente `/app`. Las pruebas nuevas cubren parser, autorización, adapter, HTTP y cliente web. El navegador real confirmó `/login` sin errores/warnings en el viewport normal y 390×844; el editor protegido no pudo renderizarse visualmente sin una sesión/fixture real, que no estaba autorizado crear. CodeGraph posterior quedó actualizado en 163 archivos, 2,987 nodos y 8,302 relaciones; `DiningTableService` alcanza módulo/controlador/pruebas y las acciones web alcanzan la página y cliente Nest, sin objetos huérfanos detectados. `git diff --check` pasó salvo avisos de conversión LF/CRLF.
+- Brechas/siguiente acción mínima: revisar SQL en PostgreSQL real mediante el verificador rollback-only con autorización expresa; después actualizar el auditor global post-mesas pinneado, hacer smoke protegido real en desktop/móvil y solicitar otra autorización separada para apply/E2E. Hasta entonces no marcar REVIEW ni ejecutar la migración.
+- Agentes: ninguno; razonamiento alto por esquema compartido, tenancy, autorización e idempotencia. No hubo cambios offline, interacción Git remota, commit, push, merge ni rebase.
+
+## Continuación 2026-09-01 — intento rollback-only autorizado
+
+- Estado: P1 permanece IN_PROGRESS. Emmanuel autorizó únicamente `verify:dining-tables-layout-schema:rollback`; no autorizó apply, fixtures, provisioning, Data API ni E2E.
+- Resultado: el primer intento rechazó en configuración porque la CA ya no estaba en la ruta histórica del repositorio. Se localizó la misma `Supabase Root 2021 CA` validada en `Downloads`; los intentos posteriores no alcanzaron `BEGIN` y terminaron en `SCHEMA_VERIFICATION_CONNECT_FAILED`.
+- Diagnóstico seguro: DNS ubicó el endpoint directo en AWS `ca-central-1`; el puerto 5432 del pooler oficial está accesible. La cadena pública contiene leaf `*.pooler.supabase.com`, intermedia `Supabase Intermediate 2021 CA` y raíz `Supabase Root 2021 CA`; su huella raíz coincide con el certificado local. Con la URL normalizada igual que el runner, PostgreSQL respondió solamente `28P01` para los usuarios `postgres.<ref>` y `app_api.<ref>`. No se imprimieron URL, contraseña ni errores nativos con datos sensibles.
+- Esquema/rollback: no se autenticó PostgreSQL, no inició ninguna transacción, no ejecutó migración/auditoría/fixture y no hubo cambio remoto persistente. La migración local `20260901000100` sigue sin validación PostgreSQL real ni aplicación.
+- Siguiente acción mínima: obtener o guardar localmente una credencial administrativa vigente de `zwbyiefqeujstyzysydn` y repetir exactamente el rollback-only ya autorizado; después actualizar el auditor global post-mesas. Apply y E2E requieren autorizaciones separadas.
+- Agentes: ninguno; razonamiento alto. No hubo cambios offline ni interacción Git remota.
+
+## Continuación 2026-09-01 — rollback-only de mesas/layout completado
+
+- Estado: P1 permanece IN_PROGRESS. Tras propagarse la nueva contraseña administrativa guardada únicamente en el archivo ignorado, la autenticación TLS al pooler oficial `ca-central-1` pasó.
+- Verificación autorizada: `verify:dining-tables-layout-schema:rollback` ejecutó `20260901000100` y su auditoría dentro de una transacción, obtuvo `status=ok`, `policies=5`, `securedTables=9` y `securityDefinerFunctions=9`, y finalizó con rollback.
+- Garantía posterior: `verify:post-dining-zones-app-api-state:remote` fue solo lectura y confirmó `state=runtime`, `catalogAudit=true`, `activeSessions=false`, `status=ok`. Esto demuestra que el catálogo persistente siguió exactamente en post-zonas y que no quedaron sesiones de `app_api`.
+- Remoto: no se aplicó ninguna migración, no se crearon fixtures, no se rotó/provisionó `app_api`, no se modificó Data API y no se ejecutó E2E. La autorización rollback-only queda consumida.
+- Siguiente acción mínima: preparar localmente el auditor global post-mesas pinneado y su prueba; después solicitar autorizaciones separadas para apply y para smoke/E2E protegido.
+- Agentes: ninguno; razonamiento alto. No hubo cambios offline ni interacción Git remota.
+
+## Continuación 2026-09-01 — auditor global post-mesas
+
+- Estado: P1 permanece IN_PROGRESS. Se añadió el perfil local `post_dining_tables_v1` sin modificar los perfiles históricos post-membresías/post-zonas.
+- Auditoría: `tenancy_memberships_post_dining_tables_catalog.sql` exige exactamente nueve tablas RLS+FORCE RLS, cinco políticas, nueve funciones `SECURITY DEFINER`, owners/search paths exactos, grants cliente/server-only y ausencia de capacidades extra de `app_api`. El SQL queda pinneado por SHA-256 y se usa tanto para estado `NOLOGIN` como runtime porque el lifecycle verifier clasifica por separado contraseña/login.
+- Integración: `readAppApiLifecycleTarget` permite exactamente seis funciones privadas post-mesas; el nuevo runner `verify:post-dining-tables-app-api-state:remote` es solo lectura. Una regresión cubre estados disabled/runtime, fingerprint y auditor pinneado; schema-contract cubre la superficie global.
+- Verificación: API pasó lint, typecheck y toda la suite. El runner rollback-only ejecutó migración + auditoría específica + auditoría global en PostgreSQL real y devolvió `policies=5`, `securedTables=9`, `securityDefinerFunctions=9`; el postcheck final volvió a confirmar catálogo post-zonas intacto, `app_api` runtime y cero sesiones.
+- Remoto: no hubo apply, fixtures, provisioning, Data API ni E2E. Siguiente acción mínima: autorización inequívoca para aplicar solo `20260901000100`; después ejecutar el nuevo postcheck global y preparar/autorizar por separado el smoke/E2E protegido.
+- Agentes: ninguno; razonamiento alto. No hubo cambios offline ni interacción Git remota.
+
+## Continuación 2026-09-01 — apply `20260901000100` y corrección preparada
+
+- Aplicación autorizada: staging temporal con las cinco migraciones ADR-010 y cuatro productivas, todas hash-idénticas. El historial previo contenía ocho versiones exactas; el dry-run anunció únicamente `20260901000100_create_dining_tables_layout.sql` y `db push` aplicó solo esa versión, sin seeds, roles, reparación de historial, fixtures ni configuración.
+- Postcheck: el historial remoto contiene nueve versiones exactas. `verify:post-dining-tables-app-api-state:remote` devolvió `state=runtime`, `catalogAudit=true`, `activeSessions=false`, `status=ok`.
+- Hallazgo: `db lint --level error` detectó SQLSTATE `42702` en `create_dining_table` y `update_dining_table_layout`: las consultas de replay comparan columnas sin alias contra parámetros PL/pgSQL y son ambiguas. El CLI terminó con código 0 pero reportó dos issues nivel error; se trató como fallo de entrega.
+- Corrección local: se añadió `20260901000200_qualify_dining_table_function_columns.sql`, sin editar `00100`. Reemplaza solo las dos funciones con firmas idénticas, aliases explícitos, owner `postgres`, `SECURITY DEFINER` y `search_path=''`; el verificador rollback-only de `00200` está preparado pero no ejecutado. API pasó lint, typecheck y toda la suite, incluida la regresión del contrato SQL.
+- Estado: P1 permanece IN_PROGRESS. El esquema post-mesas existe remotamente, pero las mutaciones no deben considerarse verificadas hasta validar/aplicar `00200`. No se ejecutó E2E ni se crearon fixtures.
+- Siguiente acción mínima: autorización expresa para ejecutar únicamente `verify:dining-tables-layout-lint-fix-schema:rollback` contra `zwbyiefqeujstyzysydn`. Aplicar `00200` requerirá una autorización posterior separada.
+- Agentes: ninguno; razonamiento alto. No hubo cambios offline ni interacción Git remota distinta del `db push` autorizado.
+
+## Continuación 2026-09-01 — rollback-only de `20260901000200`
+
+- Autorización consumida: se ejecutó únicamente `verify:dining-tables-layout-lint-fix-schema:rollback` contra `zwbyiefqeujstyzysydn`; no hubo apply, fixtures ni E2E.
+- Resultado: `20260901000200` compiló las dos funciones corregidas dentro de la transacción, pasó el auditor global con `policies=5`, `securedTables=9`, `securityDefinerFunctions=9` y terminó con rollback.
+- Garantía posterior: el auditor read-only confirmó `app_api` runtime, catálogo post-mesas válido y cero sesiones. El historial remoto contiene exactamente nueve versiones y termina en `20260901000100`; `00200` no está aplicada.
+- Limitación: `db lint` analiza mediante una conexión independiente y no puede ver el reemplazo no confirmado. La regresión local pinnea aliases explícitos; tras aplicar `00200` será obligatorio ejecutar inmediatamente `db lint --level error` y no avanzar a E2E si reporta issues.
+- Estado/siguiente acción: P1 permanece IN_PROGRESS. Requiere autorización expresa separada para aplicar únicamente `20260901000200`; después historial, auditor global y `db lint` deben quedar verdes antes de autorizar fixtures/E2E.
+- Agentes: ninguno; razonamiento alto. No hubo cambios offline ni interacción Git remota.
+
+## Continuación 2026-09-01 — apply `20260901000200`
+
+- Aplicación autorizada: staging temporal de diez migraciones hash-idénticas; historial previo de nueve versiones y dry-run anunciando únicamente `20260901000200_qualify_dining_table_function_columns.sql`. `db push` aplicó solo esa versión, sin seeds, roles, reparación, fixtures ni configuración.
+- Postchecks: historial remoto con diez versiones exactas; auditor global `post_dining_tables_v1` con `state=runtime`, `catalogAudit=true`, `activeSessions=false`; `db lint --level error` sobre `app`, `app_private`, `app_rls` devolvió `No schema errors found` y lista de resultados vacía.
+- Estado: el defecto `42702` queda corregido. P1 permanece IN_PROGRESS únicamente porque falta smoke/E2E protegido real del editor; esa ejecución y sus fixtures no estaban autorizados por este permiso.
+- Siguiente acción mínima: preparar el runner E2E específico de mesas/layout y solicitar autorización separada para crear/eliminar sus fixtures y ejecutar el smoke visual protegido en desktop/móvil.
+
+## Continuación 2026-09-01 — preparación E2E mesas/layout
+
+- Tarea/estado: P1 continúa `IN_PROGRESS`; no se ejecutaron fixtures ni E2E remotas en esta continuación.
+- Implementación: `tenancy-verification` incorpora perfil `verifyDiningTables`, runner dedicado post-mesas y checks HTTP/PostgreSQL para 401, creación manager, replay exacto, conflicto divergente, viewer/false-pair 403, lectura manager/viewer, actualización optimista, replay, versión obsoleta y revocación con el mismo token. También prueba denegación directa para `dining_tables` y `dining_table_audit_events` por Data API y `app_api`.
+- Recuperación/cleanup: los marcadores incluyen mesas; el recovery valida exclusivamente una mesa `dining-table-created` vinculada a la zona marcada y uno o dos eventos legítimos (`created`, `layout_updated`). El borrado conserva el orden FK auditorías de mesa → mesas → auditorías de zona → zonas y exige propiedad exacta antes de borrar.
+- Verificación local: pipeline global verde — lint 6/6, typecheck 9/9, tests 9/9 y build 6/6—, incluida la nueva regresión de recovery y contrato del runner; `git diff --check` también pasó. CodeGraph quedó actualizado en 166 archivos, 3,027 nodos y 8,518 relaciones; el impacto del recovery queda limitado a su almacén PostgreSQL y orquestador, y el del runner a su implementación/entrypoints operativos.
+- Migración/rollback: sin cambios nuevos y sin ejecución remota; `20260901000100`/`20260901000200` permanecen aplicadas. Offline: sin cambios. Git remoto: sin interacción. Subagentes: ninguno; razonamiento alto en esquema/seguridad.
+- Siguiente acción mínima: con autorización expresa, ejecutar una sola vez `verify:dining-tables:remote` contra `zwbyiefqeujstyzysydn`, confirmar cleanup total y auditor global; después realizar el smoke visual protegido del editor en desktop/móvil.
+
+## Continuación 2026-09-01 — autorización E2E mesas/layout
+
+- Emmanuel autorizó una sola ejecución remota con fixtures temporales en `zwbyiefqeujstyzysydn`.
+- El preflight local no imprimió secretos y confirmó que `.env.adr010.local` conserva únicamente `ADR010_DATABASE_PASSWORD`; las demás variables deben ensamblarse en memoria desde fuentes autorizadas.
+- La primera consulta read-only necesaria fue rechazada por el control de permisos de Codex debido al límite de uso de la sesión hasta las 18:09. El proceso no salió a red: no consultó Supabase, no creó usuarios/filas y no inició el runner. La autorización permanece sin consumir.
+- Estado: P1 sigue `IN_PROGRESS`, sin cambio remoto. Siguiente acción mínima: después del restablecimiento de uso, repetir el preflight seguro y ejecutar una sola vez la E2E autorizada.
+
+## Continuación 2026-09-01 — rotación `app_api` post-mesas
+
+- Credenciales locales: `.env.adr010.local` contiene contraseña administrativa y `APP_API_DATABASE_PASSWORD`; ambas pasan presencia, longitud, separación y ausencia de espacios sin imprimir valores. La contraseña administrativa autenticó como `postgres`; la nueva no era todavía la credencial vigente de `app_api`.
+- Alcance autorizado: rotar únicamente `app_api` en `zwbyiefqeujstyzysydn`, sin migraciones ni Data API. Antes de mutar se añadió el perfil pinneado `post_dining_tables_v1` al aprovisionador y un entrypoint específico.
+- Resultado remoto: dos intentos alcanzaron la etapa de conexión y devolvieron `APP_API_PROVISIONING_CONNECTION_FAILED`; en ambos el flujo compensó automáticamente. Los postchecks read-only confirmaron `state=safe_disabled`, `catalogAudit=true`, `activeSessions=false`. No se ejecutaron fixtures ni la E2E.
+- Endurecimiento local posterior: la validación del pooler ahora abre hasta tres sesiones nuevas, con espera acotada de 1 s/2 s para propagación de credencial; al agotarse mantiene la compensación existente. `apps/api` lint, typecheck, suite completa (17/17 pruebas de aprovisionamiento) y build pasaron.
+- CodeGraph: actualizado en 167 archivos, 3,037 nodos y 8,478 relaciones; el impacto de `provisionAppApi` permanece contenido en el módulo lifecycle y sus entrypoints.
+- Estado/siguiente acción: P1 permanece `IN_PROGRESS`; `app_api` está deliberadamente deshabilitado. Requiere autorización nueva para ejecutar una sola vez el aprovisionador corregido; solo si queda runtime/verde se consumirá después la autorización de E2E de mesas/layout.
+
+## Cierre de conversación 2026-09-01 — P1 mesas/layout
+
+- Rotación final: Emmanuel autorizó un único intento del aprovisionador corregido. Terminó con `appApiLogin=true`, `crashExpiryProtected=true`, `runtimeAudit=true`; el postcheck independiente confirmó `state=runtime`, `catalogAudit=true`, `activeSessions=false`.
+- E2E: la ejecución de mesas/layout previamente autorizada se rechazó en `configuration` antes de emitir `runId`, crear usuarios o insertar filas. Causa confirmada: Management API/CLI devuelve la clave `sb_secret_` enmascarada; `api` y `DATABASE_URL` pasaban configuración, `admin` no. No hubo fixtures ni cleanup pendiente.
+- Secreto local: Emmanuel copió después la clave secreta moderna completa a `.env.adr010.local` como `TENANCY_VERIFICATION_SUPABASE_SECRET_KEY`. Validación local: prefijo/formato/límite válidos; el archivo está ignorado y no se versiona. Nunca se imprimió el valor.
+- Instrucción humana de cierre: no continuar la E2E en esta conversación; hacer commit, push y dejar el siguiente paso para otra conversación.
+- Siguiente conversación: partir del commit publicado, leer los archivos operativos una sola vez, verificar árbol/CodeGraph y confirmar `app_api` read-only en runtime. Cargar desde `.env.adr010.local` las dos contraseñas y la secret key real; obtener solo la publishable key por CLI. Ejecutar una sola vez `apps/api/dist/operations/run-dining-tables-tenancy-verification.js` con los opt-ins exactos contra `zwbyiefqeujstyzysydn`. Exigir `diningTablesVerified=true`, `diningZonesVerified=true`, `fixtureRowsRemoved=true`, `fixtureUsersRemoved=2`; después confirmar catálogo/runtime/cero sesiones. Si falla tras emitir `runId`, usar únicamente el recovery run-scoped antes de cualquier repetición. No repetir migraciones, Data API ni provisioning.
+- Después de E2E verde: ejecutar el smoke visual protegido del editor en desktop/móvil, revisar consola/red y mover P1 a `REVIEW`; no marcar `DONE` sin aprobación humana.
+- Verificación local final antes del commit: `pnpm lint`, `pnpm typecheck`, `pnpm test` y `pnpm build` terminaron en verde; `git diff --check` no reportó errores. CodeGraph quedó sincronizado en 167 archivos, 3,037 nodos y 8,478 relaciones.
+- Agentes: ninguno; razonamiento alto. No hubo cambios offline ni interacción Git remota distinta del `db push` autorizado.
+
 ## Git remoto
 
 - SSH: la huella de GitHub fue aceptada, pero la autenticación falló con Permission denied (publickey).

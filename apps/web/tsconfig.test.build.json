@@ -18,6 +18,8 @@
     "src/lib/session.test.ts",
     "src/lib/memberships.ts",
     "src/lib/memberships.test.ts",
+    "src/lib/dining-layout.ts",
+    "src/lib/dining-layout.test.ts",
     "src/lib/branch-selection.ts",
     "src/lib/branch-selection.test.ts",
     "src/proxy.ts",

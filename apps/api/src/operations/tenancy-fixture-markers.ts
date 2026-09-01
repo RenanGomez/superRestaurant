@@ -14,11 +14,19 @@ export const tenancyDiningZoneSuffixes = [
   "dining-zone-false-pair",
   "dining-zone-revoked",
 ] as const;
+export const tenancyDiningTableSuffixes = [
+  "dining-table-created",
+  "dining-table-conflict",
+  "dining-table-viewer",
+  "dining-table-false-pair",
+  "dining-table-revoked",
+] as const;
 export type TenancyFixtureSuffix =
   | (typeof tenancyMainRestaurantSuffixes)[number]
   | (typeof tenancyBranchSuffixes)[number]
   | (typeof tenancyCanarySuffixes)[number]
-  | (typeof tenancyDiningZoneSuffixes)[number];
+  | (typeof tenancyDiningZoneSuffixes)[number]
+  | (typeof tenancyDiningTableSuffixes)[number];
 
 export function tenancyFixtureName(runId: string, suffix: TenancyFixtureSuffix): string {
   return `__tenancy_e2e__${runId}__${suffix}`;

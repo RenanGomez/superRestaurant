@@ -36,6 +36,10 @@ const postDiningZonesRuntimeAuditSql = readFileSync(
   ),
   "utf8",
 );
+const postDiningTablesAuditSql = readFileSync(
+  new URL("../../../../supabase/tests/tenancy_memberships_post_dining_tables_catalog.sql", import.meta.url),
+  "utf8",
+);
 const database: DatabaseConfig = Object.freeze({
   caCertificate: "TEST CA",
   connectionString: "postgresql://user:password@host.example/postgres",
@@ -108,6 +112,35 @@ test("accepts the pinned post-dining-zones audit pair for its explicit profile",
   });
   assert.equal(result.status, "ok");
   assert.ok(events.includes("admin:runtime-audit"));
+});
+
+test("accepts the pinned post-dining-tables audit for its explicit profile", async () => {
+  const events: string[] = [];
+  const dependencies = dependenciesFor([adminSession(events)], appSession(events));
+  const result = await provisionAppApi({
+    auditProfile: "post_dining_tables_v1",
+    config,
+    dependencies,
+    precheckAuditSql: postDiningTablesAuditSql,
+    runtimeAuditSql: postDiningTablesAuditSql,
+  });
+  assert.equal(result.status, "ok");
+  assert.ok(events.includes("admin:runtime-audit"));
+});
+
+test("retries bounded pooler credential propagation with fresh app sessions", async () => {
+  const events: string[] = [];
+  const waits: number[] = [];
+  const dependencies = dependenciesFor(
+    [adminSession(events)],
+    appSession(events, { failConnection: true }),
+    [appSession(events)],
+  );
+  dependencies.waitForAppCredentialPropagation = async (attempt) => { waits.push(attempt); };
+  const result = await provisionAppApi({ config, dependencies, precheckAuditSql, runtimeAuditSql });
+  assert.equal(result.status, "ok");
+  assert.deepEqual(waits, [1]);
+  assert.equal(events.filter((event) => event === "app:close").length, 2);
 });
 
 test("rolls back without compensation when the immutable precheck fails", async () => {
@@ -305,8 +338,11 @@ test("rejects modified audit SQL before creating any session", async () => {
 function dependenciesFor(
   adminSessions: readonly AppApiProvisioningSession[],
   app: AppApiProvisioningSession,
+  retryApps: readonly AppApiProvisioningSession[] = [],
 ): AppApiProvisioningDependencies {
   let adminIndex = 0;
+  let appIndex = 0;
+  const apps = [app, ...retryApps];
   return {
     createAdminSession: () => {
       const selected = adminSessions[adminIndex];
@@ -314,7 +350,7 @@ function dependenciesFor(
       if (selected === undefined) throw new Error("ADMIN_SESSION_MISSING");
       return selected;
     },
-    createAppSession: () => app,
+    createAppSession: () => apps[Math.min(appIndex++, apps.length - 1)] as AppApiProvisioningSession,
   };
 }
 
@@ -355,6 +391,7 @@ function adminSession(
     if (
       sql.includes("CATALOG_AUDIT_APP_API_MISSING")
       || sql.includes("POST_DINING_CATALOG_REQUIRED_OBJECT_MISSING")
+      || (sql.includes("POST_DINING_TABLES_TABLE_SURFACE_REJECTED") && !events.includes("admin:promote"))
     ) {
       events.push("admin:precheck");
       if (options.failPrecheck === true) throw new Error("sensitive precheck detail");
@@ -367,6 +404,7 @@ function adminSession(
     if (
       sql.includes("RUNTIME_AUDIT_APP_API_MISSING")
       || sql.includes("POST_DINING_RUNTIME_REQUIRED_OBJECT_MISSING")
+      || (sql.includes("POST_DINING_TABLES_TABLE_SURFACE_REJECTED") && events.includes("admin:promote"))
     ) {
       events.push("admin:runtime-audit");
       if (options.failRuntimeAudit === true) throw new Error("sensitive runtime detail");
@@ -453,11 +491,12 @@ function compensationSession(events: string[], failDisable = false): AppApiProvi
 
 function appSession(
   events: string[],
-  options: Readonly<{ wrongIdentity?: boolean }> = {},
+  options: Readonly<{ failConnection?: boolean; wrongIdentity?: boolean }> = {},
 ): AppApiProvisioningSession {
   return session(async (sql) => {
     if (sql.includes("current_user")) {
       events.push("app:identity");
+      if (options.failConnection === true) throw postgresError("28P01");
       return result([{
         currentUser: options.wrongIdentity === true ? "postgres" : "app_api",
         sessionUser: "app_api",

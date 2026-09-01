@@ -17,6 +17,7 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
   let directoryRows: readonly unknown[] = [];
   let membershipRoles: readonly string[] = ["manager"];
   let diningZoneWrites = 0;
+  let diningTableWrites = 0;
   const database: DatabaseClientPort = {
     query: async (sql, parameters) => {
       databaseCalls.push({ parameters: [...parameters], sql });
@@ -39,6 +40,16 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
             created_by: parameters[0],
           }],
         };
+      }
+      if (sql.includes("list_dining_layout")) {
+        return { rows: [{ layout: { schemaVersion: 1, scope: { restaurantId: parameters[1], branchId: parameters[2] }, zones: [] } }] };
+      }
+      if (sql.includes("create_dining_table")) {
+        diningTableWrites += 1;
+        return { rows: [{ status: "created", schema_version: 1, restaurant_id: parameters[1], branch_id: parameters[2],
+          table_id: parameters[3], zone_id: parameters[4], table_name: parameters[9], capacity: parameters[10],
+          shape: parameters[11], layout_x: parameters[12], layout_y: parameters[13], layout_width: parameters[14],
+          layout_height: parameters[15], table_version: "1", updated_at: new Date("2026-09-01T18:00:01.000Z"), updated_by: parameters[0] }] };
       }
       return {
         rows: parameters[2] === branchId
@@ -190,6 +201,41 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
       replayed: false,
     });
     assert.equal(diningZoneWrites, 1);
+
+    membershipRoles = ["manager"];
+    const layoutResponse = await fetch(`${url}/api/v1/dining/layout?restaurantId=${restaurantId}&branchId=${branchId}`, {
+      headers: { authorization: "Bearer valid-smoke-access-token" },
+    });
+    assert.equal(layoutResponse.status, 200);
+    assert.equal(layoutResponse.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await layoutResponse.json(), { schemaVersion: 1, scope: { restaurantId, branchId }, zones: [] });
+
+    const tableCommand = {
+      schemaVersion: 1, scope: { restaurantId, branchId }, tableId: "9544c299-d25b-44ce-98ed-d30116610887",
+      zoneId: zoneCommand.zoneId, eventId: "a72573ec-6224-4857-bc4a-f3d1d07b6d83",
+      idempotencyKey: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", deviceId: "88d34b74-6afe-4a3c-acb9-9fc8ed902c91",
+      occurredAt: "2026-09-01T18:00:00.000Z", name: "Mesa 1", capacity: 4, shape: "round",
+      layout: { x: 2, y: 3, width: 4, height: 4 },
+    };
+    const tableResponse = await fetch(`${url}/api/v1/dining/tables`, {
+      body: JSON.stringify(tableCommand),
+      headers: { authorization: "Bearer valid-smoke-access-token", "content-type": "application/json" }, method: "POST",
+    });
+    assert.equal(tableResponse.status, 201);
+    assert.equal(tableResponse.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await tableResponse.json(), { schemaVersion: 1, scope: { restaurantId, branchId },
+      tableId: tableCommand.tableId, zoneId: tableCommand.zoneId, name: tableCommand.name, capacity: 4, shape: "round",
+      layout: tableCommand.layout, version: 1, updatedAt: "2026-09-01T18:00:01.000Z", updatedBy: actorId, replayed: false });
+    assert.equal(diningTableWrites, 1);
+
+    membershipRoles = ["viewer"];
+    const forbiddenTableResponse = await fetch(`${url}/api/v1/dining/tables`, {
+      body: JSON.stringify({ ...tableCommand, tableId: "4165567a-d09b-40d0-9c82-39a808967cab" }),
+      headers: { authorization: "Bearer valid-smoke-access-token", "content-type": "application/json" }, method: "POST",
+    });
+    assert.equal(forbiddenTableResponse.status, 403);
+    assert.deepEqual(await forbiddenTableResponse.json(), { code: "ACTION_NOT_AUTHORIZED" });
+    assert.equal(diningTableWrites, 1);
 
     membershipRoles = ["viewer"];
     const forbiddenZoneResponse = await fetch(`${url}/api/v1/dining/zones`, {

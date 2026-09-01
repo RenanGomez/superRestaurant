@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import "./dining-tables.test.js";
+
 import { parseBranchScope } from "@super-restaurant/shared-types";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";

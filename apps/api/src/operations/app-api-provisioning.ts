@@ -17,8 +17,11 @@ const POST_DINING_ZONES_PRECHECK_AUDIT_SHA256 =
   "8bc25f26058ec8512d364404629b595c690b987edf5fdd891ce0496943b6b4bc";
 const POST_DINING_ZONES_RUNTIME_AUDIT_SHA256 =
   "c0648eecde4df52cf92e581bb1667b7fc10b904725803271767192ec50ebe688";
+const POST_DINING_TABLES_AUDIT_SHA256 =
+  "fb6a8a827475623dce277a6670232b630177fb0ae7db2e04502b44cfe00c9052";
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 const SESSION_DRAIN_ATTEMPTS = 3;
+const APP_CONNECTION_ATTEMPTS = 3;
 
 const CREATE_TEMP_PROVISIONER_SQL = `
 create function pg_temp.provision_app_api(password_value text)
@@ -52,6 +55,7 @@ export interface AppApiProvisioningSession {
 export interface AppApiProvisioningDependencies {
   createAdminSession(config: DatabaseConfig): AppApiProvisioningSession;
   createAppSession(config: DatabaseConfig): AppApiProvisioningSession;
+  waitForAppCredentialPropagation?(attempt: number): Promise<void>;
 }
 
 export interface AppApiProvisioningSummary {
@@ -103,10 +107,21 @@ export async function provisionAppApi(
     transactionOpen = false;
 
     stage = "connection";
-    app = dependencies.createAppSession(options.config.appDatabase);
-    await verifyAppApiConnection(app);
-    await app.close();
-    app = undefined;
+    for (let attempt = 1; attempt <= APP_CONNECTION_ATTEMPTS; attempt += 1) {
+      const attemptSession = dependencies.createAppSession(options.config.appDatabase);
+      app = attemptSession;
+      try {
+        await verifyAppApiConnection(attemptSession);
+        await attemptSession.close();
+        app = undefined;
+        break;
+      } catch (error: unknown) {
+        try { await attemptSession.close(); } catch { /* Compensation below remains authoritative. */ }
+        app = undefined;
+        if (attempt === APP_CONNECTION_ATTEMPTS) throw error;
+        await dependencies.waitForAppCredentialPropagation?.(attempt);
+      }
+    }
 
     stage = "runtime_audit";
     await admin.query("BEGIN");
@@ -174,17 +189,24 @@ export async function provisionAppApi(
 function auditHashes(
   profile: AppApiLifecycleCatalogProfile,
 ): Readonly<{ precheck: string; runtime: string }> {
-  return profile === "memberships_v1"
-    ? { precheck: PRECHECK_AUDIT_SHA256, runtime: RUNTIME_AUDIT_SHA256 }
-    : {
-        precheck: POST_DINING_ZONES_PRECHECK_AUDIT_SHA256,
-        runtime: POST_DINING_ZONES_RUNTIME_AUDIT_SHA256,
-      };
+  if (profile === "memberships_v1") {
+    return { precheck: PRECHECK_AUDIT_SHA256, runtime: RUNTIME_AUDIT_SHA256 };
+  }
+  if (profile === "post_dining_zones_v1") {
+    return {
+      precheck: POST_DINING_ZONES_PRECHECK_AUDIT_SHA256,
+      runtime: POST_DINING_ZONES_RUNTIME_AUDIT_SHA256,
+    };
+  }
+  return { precheck: POST_DINING_TABLES_AUDIT_SHA256, runtime: POST_DINING_TABLES_AUDIT_SHA256 };
 }
 
 const postgresDependencies: AppApiProvisioningDependencies = Object.freeze({
   createAdminSession: (config: DatabaseConfig) => createAppApiPostgresSession(config, "super-restaurant-app-api-provisioning-admin"),
   createAppSession: (config: DatabaseConfig) => createAppApiPostgresSession(config, "super-restaurant-app-api-provisioning-runtime"),
+  waitForAppCredentialPropagation: async (attempt: number) => new Promise<void>((resolve) => {
+    setTimeout(resolve, attempt * 1_000);
+  }),
 });
 
 export function createAppApiPostgresSession(
