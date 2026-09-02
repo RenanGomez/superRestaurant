@@ -53,6 +53,7 @@ test("dining table PostgreSQL adapter binds facts and rejects ambiguous rows", a
   const adapter = new PostgresDiningTableAdapter(database);
   assert.deepEqual(await adapter.list(principal.actorId, validScope), layout);
   assert.deepEqual(await adapter.create(principal.actorId, command), { status: "created", table });
+  assert.equal(calls[0]?.sql, "select app_private.list_dining_layout($1::uuid, $2::uuid, $3::uuid) as layout");
   assert.deepEqual(calls[0]?.parameters, [principal.actorId, validScope.restaurantId, validScope.branchId]);
   assert.equal(calls[1]?.parameters.length, 16);
   for (const rows of [[], [mutationRow("created"), mutationRow("created")], [{ ...mutationRow("created"), extra: true }]]) {

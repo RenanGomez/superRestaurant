@@ -19,7 +19,7 @@ import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
-const listLayoutSql = `select layout from app_private.list_dining_layout($1::uuid, $2::uuid, $3::uuid)`;
+const listLayoutSql = `select app_private.list_dining_layout($1::uuid, $2::uuid, $3::uuid) as layout`;
 const createTableSql = `
 select * from app_private.create_dining_table(
   $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid, $8::uuid,

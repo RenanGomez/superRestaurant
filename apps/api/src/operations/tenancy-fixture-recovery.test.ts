@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { tenancyFixtureEmail, tenancyFixtureName } from "./tenancy-fixture-markers.js";
+import { tenancyDiningTableSuffixes, tenancyFixtureEmail, tenancyFixtureName } from "./tenancy-fixture-markers.js";
 import {
   recoverTenancyFixtures,
   type RecoveryAuthUser,
@@ -29,6 +29,12 @@ const cobaltUser: RecoveryAuthUser = Object.freeze({
   email: tenancyFixtureEmail(runId, "cobalt"), fixtureKey: "cobalt", id: ids.cobalt,
 });
 const users: readonly [RecoveryAuthUser, RecoveryAuthUser] = Object.freeze([amberUser, cobaltUser]);
+
+test("keeps every run-scoped dining-table fixture name within the product contract", () => {
+  const names = tenancyDiningTableSuffixes.map((suffix) => tenancyFixtureName(runId, suffix));
+  assert.equal(new Set(names).size, tenancyDiningTableSuffixes.length);
+  assert.equal(names.every((name) => name.length <= 40 && name.includes(runId)), true);
+});
 
 test("accepts only the complete runner graph and allowed revocation prefix", () => {
   const snapshot = completeSnapshot();
@@ -108,6 +114,10 @@ test("accepts only the marked dining-table create and update prefix", () => {
   const validated = validateTenancyFixtureRecoverySnapshot(runId, users, withTables);
   assert.deepEqual(validated.diningTableIds, [tableId]);
   assert.deepEqual(validated.diningTableEventIds, ["71000000-0000-4000-8000-000000000001", "71000000-0000-4000-8000-000000000002"]);
+  const createOnly = structuredClone(withTables);
+  createOnly.diningTableAudits = createOnly.diningTableAudits.slice(0, 1);
+  const createOnlyValidated = validateTenancyFixtureRecoverySnapshot(runId, users, createOnly);
+  assert.deepEqual(createOnlyValidated.diningTableEventIds, ["71000000-0000-4000-8000-000000000001"]);
   const contaminated = structuredClone(withTables);
   required(contaminated.diningTableAudits[1]).operation = "created";
   assertContamination(() => validateTenancyFixtureRecoverySnapshot(runId, users, contaminated));

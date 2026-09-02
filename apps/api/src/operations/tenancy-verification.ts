@@ -18,7 +18,6 @@ import {
   type BranchMembershipSummaryV1,
   type CreateDiningZoneCommandV1,
   type CreateDiningTableCommandV1,
-  type DiningLayoutV1,
   type DiningTableV1,
   type DiningZoneV1,
   type UpdateDiningTableLayoutCommandV1,
@@ -47,6 +46,14 @@ import {
   tenancyFixtureName,
   type TenancyFixtureKey,
 } from "./tenancy-fixture-markers.js";
+import {
+  classifyDiningLayoutFetchFailure,
+  diagnoseDiningLayoutRead,
+  requiredDiningTableAuditEventIds,
+  type DiningLayoutReadDiagnostic,
+  type DiningLayoutReadObservation,
+  type DiningTableVerificationCheckpoint,
+} from "./tenancy-verification-progress.js";
 
 type FixtureKey = TenancyFixtureKey;
 type AppTable =
@@ -94,8 +101,17 @@ export interface RunTenancyVerificationOptions {
   readonly liveFixtureHooks?: TenancyVerificationLiveFixtureHooks;
   readonly runtimeCatalogAuditSql: string;
   readonly onStart?: (runId: string) => void;
+  readonly onCheckpoint?: (checkpoint: DiningTableVerificationCheckpoint) => void;
+  readonly onDiningLayoutDiagnostic?: (diagnostic: DiningLayoutReadDiagnostic) => void;
+  readonly onFailure?: (failure: TenancyVerificationFailureNotice) => void;
   readonly verifyDiningZones?: true;
   readonly verifyDiningTables?: true;
+}
+
+export interface TenancyVerificationFailureNotice {
+  readonly code: TenancyVerificationError["code"];
+  readonly stage: TenancyVerificationError["stage"];
+  readonly status: "failed_before_cleanup";
 }
 
 export interface TenancyVerificationLiveFixture {
@@ -166,6 +182,7 @@ interface FixturePlan {
   diningZoneCreated: boolean;
   diningZonesEnabled: boolean;
   diningTableCreated: boolean;
+  diningTableUpdated: boolean;
   diningTablesEnabled: boolean;
 }
 
@@ -229,9 +246,6 @@ export async function runTenancyVerification(
     await executeStage("app_api", async () => verifyPrivateLookupBaseline(appApiPool, plan, counter));
     await executeStage("http", async () => verifyHttpBaseline(app as INestApplication, plan, authenticated, counter));
     const liveFixture = await readLiveFixture(app as INestApplication, plan);
-    if (options.liveFixtureHooks !== undefined) {
-      await executeStage("http", async () => options.liveFixtureHooks?.beforeRevocation(liveFixture));
-    }
     if (verifyDiningZones) {
       await executeStage("dining_zones", async () => verifyDiningZonesBaseline(
         adminPool,
@@ -248,7 +262,12 @@ export async function runTenancyVerification(
         plan,
         authenticated,
         counter,
+        options.onCheckpoint,
+        options.onDiningLayoutDiagnostic,
       ));
+    }
+    if (options.liveFixtureHooks !== undefined) {
+      await executeStage("http", async () => options.liveFixtureHooks?.beforeRevocation(liveFixture));
     }
     await executeStage("revocation", async () => verifyRevocations(
       adminPool,
@@ -268,6 +287,7 @@ export async function runTenancyVerification(
         plan,
         authenticated[0],
         counter,
+        options.onCheckpoint,
       ));
     }
     if (verifyDiningZones) {
@@ -282,6 +302,11 @@ export async function runTenancyVerification(
     await executeStage("constraints", async () => verifyConstraints(adminPool, plan, counter));
   } catch (error: unknown) {
     failure = sanitizeExecutionError(error);
+    notifySafely(options.onFailure, Object.freeze({
+      code: failure.code,
+      stage: failure.stage,
+      status: "failed_before_cleanup",
+    }));
   } finally {
     try {
       if (app !== undefined) await app.close();
@@ -377,6 +402,7 @@ function createFixturePlan(diningZonesEnabled: boolean, diningTablesEnabled: boo
     diningZones,
     diningZonesEnabled,
     diningTableCreated: false,
+    diningTableUpdated: false,
     diningTables,
     diningTablesEnabled,
     grantIds: [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()],
@@ -1058,41 +1084,131 @@ async function verifyDiningTablesBaseline(
   plan: FixturePlan,
   authenticated: readonly [AuthenticatedFixture, AuthenticatedFixture],
   counter: VerificationCounter,
+  onCheckpoint: RunTenancyVerificationOptions["onCheckpoint"],
+  onDiagnostic: RunTenancyVerificationOptions["onDiningLayoutDiagnostic"],
 ): Promise<void> {
   const baseUrl = await app.getUrl();
   const command = diningTableCommand(plan, 0, plan.restaurantIds[0], plan.branchIds[0]);
+  onCheckpoint?.("dining_tables.unauthenticated_create");
   await assertDiningTableError(baseUrl, undefined, command, "POST", 401, "AUTHENTICATION_REQUIRED", counter);
+  onCheckpoint?.("dining_tables.empty_persistence");
   await assertDiningTablePersistence(adminPool, plan, undefined, counter);
 
+  onCheckpoint?.("dining_tables.manager_create");
   const created = await assertDiningTableSuccess(baseUrl, authenticated[0].accessToken, command, "POST", false, 1, authenticated[0].userId, counter);
   plan.diningTableCreated = true;
+  onCheckpoint?.("dining_tables.created_persistence");
   await assertDiningTablePersistence(adminPool, plan, created, counter);
+  onCheckpoint?.("dining_tables.create_replay");
   const replayed = await assertDiningTableSuccess(baseUrl, authenticated[0].accessToken, command, "POST", true, 1, authenticated[0].userId, counter);
   counter.assert("dining_tables", replayed.updatedAt === created.updatedAt);
 
   const conflict = { ...diningTableCommand(plan, 1, plan.restaurantIds[0], plan.branchIds[0]), idempotencyKey: command.idempotencyKey } satisfies CreateDiningTableCommandV1;
+  onCheckpoint?.("dining_tables.idempotency_conflict");
   await assertDiningTableError(baseUrl, authenticated[0].accessToken, conflict, "POST", 409, "DINING_TABLE_CONFLICT", counter);
+  onCheckpoint?.("dining_tables.viewer_write_rejected");
   await assertDiningTableError(baseUrl, authenticated[0].accessToken, diningTableCommand(plan, 2, plan.restaurantIds[0], plan.branchIds[1]), "POST", 403, "ACTION_NOT_AUTHORIZED", counter);
+  onCheckpoint?.("dining_tables.false_pair_write_rejected");
   await assertDiningTableError(baseUrl, authenticated[0].accessToken, diningTableCommand(plan, 3, plan.restaurantIds[0], plan.branchIds[2]), "POST", 403, "ACTION_NOT_AUTHORIZED", counter);
 
-  const layout = await getDiningLayout(baseUrl, authenticated[0].accessToken, plan.restaurantIds[0], plan.branchIds[0]);
-  const parsedLayout = parseDiningLayoutV1(await layout.json());
-  counter.assert("dining_tables", layout.status === 200 && layout.headers.get("cache-control") === "private, no-store" && parsedLayout !== undefined && layoutContainsTable(parsedLayout, created));
+  onCheckpoint?.("dining_tables.manager_layout_read");
+  let layout: Response;
+  try {
+    layout = await getDiningLayout(baseUrl, authenticated[0].accessToken, plan.restaurantIds[0], plan.branchIds[0]);
+  } catch (error: unknown) {
+    notifySafely(onDiagnostic, diagnoseDiningLayoutRead({
+      fetchSucceeded: false,
+      transportFailure: classifyDiningLayoutFetchFailure(error),
+    }));
+    throw error;
+  }
+  onCheckpoint?.("dining_tables.manager_layout_response_received");
+  let observation: DiningLayoutReadObservation = { fetchSucceeded: true, httpStatus: layout.status };
+  const statusValid = layout.status === 200;
+  if (!statusValid) notifySafely(onDiagnostic, diagnoseDiningLayoutRead(observation));
+  counter.assert("dining_tables", statusValid);
+  onCheckpoint?.("dining_tables.manager_layout_status_verified");
+  const cacheControlValid = layout.headers.get("cache-control") === "private, no-store";
+  observation = { ...observation, cacheControlValid };
+  if (!cacheControlValid) notifySafely(onDiagnostic, diagnoseDiningLayoutRead(observation));
+  counter.assert("dining_tables", cacheControlValid);
+  onCheckpoint?.("dining_tables.manager_layout_cache_verified");
+  let rawLayout: unknown;
+  try {
+    rawLayout = await layout.json();
+  } catch {
+    observation = { ...observation, jsonDecoded: false };
+    notifySafely(onDiagnostic, diagnoseDiningLayoutRead(observation));
+    counter.assert("dining_tables", false);
+    throw new TenancyVerificationError("dining_tables", "TENANCY_VERIFICATION_DINING_TABLES_FAILED");
+  }
+  observation = { ...observation, jsonDecoded: true };
+  counter.assert("dining_tables", true);
+  onCheckpoint?.("dining_tables.manager_layout_json_decoded");
+  const parsedLayout = parseDiningLayoutV1(rawLayout);
+  const contractValid = parsedLayout !== undefined;
+  observation = { ...observation, contractValid };
+  if (!contractValid) {
+    notifySafely(onDiagnostic, diagnoseDiningLayoutRead(observation));
+    counter.assert("dining_tables", false);
+    throw new TenancyVerificationError("dining_tables", "TENANCY_VERIFICATION_DINING_TABLES_FAILED");
+  }
+  counter.assert("dining_tables", true);
+  onCheckpoint?.("dining_tables.manager_layout_parsed");
+  const scopeMatches = parsedLayout.scope.restaurantId === plan.restaurantIds[0]
+    && parsedLayout.scope.branchId === plan.branchIds[0];
+  observation = { ...observation, scopeMatches };
+  if (!scopeMatches) notifySafely(onDiagnostic, diagnoseDiningLayoutRead(observation));
+  counter.assert("dining_tables", scopeMatches);
+  onCheckpoint?.("dining_tables.manager_layout_scope_verified");
+  const expectedZone = parsedLayout.zones.find((zone) => zone.zoneId === created.zoneId);
+  const zoneFound = expectedZone !== undefined;
+  observation = { ...observation, zoneFound };
+  if (!zoneFound) {
+    notifySafely(onDiagnostic, diagnoseDiningLayoutRead(observation));
+    counter.assert("dining_tables", false);
+    throw new TenancyVerificationError("dining_tables", "TENANCY_VERIFICATION_DINING_TABLES_FAILED");
+  }
+  counter.assert("dining_tables", true);
+  onCheckpoint?.("dining_tables.manager_layout_zone_found");
+  const expectedTable = expectedZone.tables.find((candidate) => candidate.tableId === created.tableId);
+  const tableFound = expectedTable !== undefined;
+  observation = { ...observation, tableFound };
+  if (!tableFound) {
+    notifySafely(onDiagnostic, diagnoseDiningLayoutRead(observation));
+    counter.assert("dining_tables", false);
+    throw new TenancyVerificationError("dining_tables", "TENANCY_VERIFICATION_DINING_TABLES_FAILED");
+  }
+  counter.assert("dining_tables", true);
+  onCheckpoint?.("dining_tables.manager_layout_table_found");
+  const tableMatches = valuesEqual(expectedTable, { ...created, replayed: false });
+  observation = { ...observation, tableMatches };
+  notifySafely(onDiagnostic, diagnoseDiningLayoutRead(observation));
+  counter.assert("dining_tables", tableMatches);
+  onCheckpoint?.("dining_tables.manager_layout_table_matches_created");
+  onCheckpoint?.("dining_tables.viewer_layout_read");
   const viewerLayout = await getDiningLayout(baseUrl, authenticated[0].accessToken, plan.restaurantIds[0], plan.branchIds[1]);
   counter.assert("dining_tables", viewerLayout.status === 200 && parseDiningLayoutV1(await viewerLayout.json()) !== undefined);
 
   const update = diningTableUpdateCommand(plan, plan.diningTables.updateEventId, plan.diningTables.updateIdempotencyKey, 1);
+  onCheckpoint?.("dining_tables.layout_update");
   const updated = await assertDiningTableSuccess(baseUrl, authenticated[0].accessToken, update, "PATCH", false, 2, authenticated[0].userId, counter);
+  plan.diningTableUpdated = true;
+  onCheckpoint?.("dining_tables.layout_update_replay");
   const updateReplay = await assertDiningTableSuccess(baseUrl, authenticated[0].accessToken, update, "PATCH", true, 2, authenticated[0].userId, counter);
   counter.assert("dining_tables", updateReplay.updatedAt === updated.updatedAt);
   const stale = diningTableUpdateCommand(plan, plan.diningTables.staleEventId, plan.diningTables.staleIdempotencyKey, 1);
+  onCheckpoint?.("dining_tables.stale_update_rejected");
   await assertDiningTableError(baseUrl, authenticated[0].accessToken, stale, "PATCH", 409, "DINING_TABLE_CONFLICT", counter);
+  onCheckpoint?.("dining_tables.updated_persistence");
   await assertDiningTablePersistence(adminPool, plan, updated, counter, true);
 }
 
-async function verifyDiningTableAfterRevocation(adminPool: Pool, app: INestApplication, plan: FixturePlan, authenticated: AuthenticatedFixture, counter: VerificationCounter): Promise<void> {
+async function verifyDiningTableAfterRevocation(adminPool: Pool, app: INestApplication, plan: FixturePlan, authenticated: AuthenticatedFixture, counter: VerificationCounter, onCheckpoint: RunTenancyVerificationOptions["onCheckpoint"]): Promise<void> {
   const command = diningTableCommand(plan, 4, plan.restaurantIds[0], plan.branchIds[0]);
+  onCheckpoint?.("dining_tables.revoked_write_rejected");
   await assertDiningTableError(await app.getUrl(), authenticated.accessToken, command, "POST", 403, "ACTION_NOT_AUTHORIZED", counter);
+  onCheckpoint?.("dining_tables.revoked_persistence");
   await assertDiningTablePersistence(adminPool, plan, undefined, counter, true);
 }
 
@@ -1139,10 +1255,6 @@ async function mutateDiningTable(baseUrl: string, accessToken: string | undefine
 
 function getDiningLayout(baseUrl: string, accessToken: string, restaurantId: string, branchId: string): Promise<Response> {
   return fetch(`${baseUrl}/api/v1/dining/layout?restaurantId=${restaurantId}&branchId=${branchId}`, { headers: { authorization: `Bearer ${accessToken}` } });
-}
-
-function layoutContainsTable(layout: DiningLayoutV1, table: DiningTableV1): boolean {
-  return layout.zones.some((zone) => zone.zoneId === table.zoneId && zone.tables.some((candidate) => valuesEqual(candidate, { ...table, replayed: false })));
 }
 
 async function assertDiningTablePersistence(adminPool: Pool, plan: FixturePlan, expected: DiningTableV1 | undefined, counter: VerificationCounter, updated = false): Promise<void> {
@@ -1450,7 +1562,11 @@ async function cleanupFixtures(
             client,
             "app.dining_table_audit_events",
             tableEventIds,
-            plan.diningTableCreated ? [plan.diningTables.commands[0].eventId, plan.diningTables.updateEventId] : [],
+            requiredDiningTableAuditEventIds(
+              { created: plan.diningTableCreated, updated: plan.diningTableUpdated },
+              plan.diningTables.commands[0].eventId,
+              plan.diningTables.updateEventId,
+            ),
             "event_id",
           );
           await deleteRequiredFixtureRows(
@@ -1728,7 +1844,12 @@ async function verifyDiningTableFixtureOwnership(client: PoolClient, plan: Fixtu
     `select event_id::text as "eventId", table_id::text as "tableId", actor_id::text as "actorId" from app.dining_table_audit_events where event_id = any($1::uuid[]) for update`,
     [allowedEvents],
   );
-  if (audits.rows.some((row) => row.actorId !== amberId || row.tableId !== plan.diningTables.commands[0].zoneId || !allowedEvents.includes(row.eventId)) || (plan.diningTableCreated && ![plan.diningTables.commands[0].eventId, plan.diningTables.updateEventId].every((id) => audits.rows.some((row) => row.eventId === id)))) {
+  const requiredEvents = requiredDiningTableAuditEventIds(
+    { created: plan.diningTableCreated, updated: plan.diningTableUpdated },
+    plan.diningTables.commands[0].eventId,
+    plan.diningTables.updateEventId,
+  );
+  if (audits.rows.some((row) => row.actorId !== amberId || row.tableId !== plan.diningTables.commands[0].zoneId || !allowedEvents.includes(row.eventId)) || requiredEvents.some((id) => !audits.rows.some((row) => row.eventId === id))) {
     throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
   }
 }
@@ -1779,6 +1900,14 @@ function sanitizeExecutionError(error: unknown): TenancyVerificationError {
   return error instanceof TenancyVerificationError
     ? error
     : new TenancyVerificationError("configuration", "TENANCY_VERIFICATION_CONFIGURATION_REJECTED");
+}
+
+function notifySafely<Value>(callback: ((value: Value) => void) | undefined, value: Value): void {
+  try {
+    callback?.(value);
+  } catch {
+    // Diagnostics must never alter the verification or cleanup outcome.
+  }
 }
 
 function validateRuntimeAuditSql(sql: string, verifyDiningZones: boolean, verifyDiningTables = false): string {

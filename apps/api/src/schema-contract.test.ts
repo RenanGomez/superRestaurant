@@ -63,6 +63,10 @@ const protectedWebSmokeRunner = readFileSync(
   new URL("./operations/run-web-protected-smoke.js", import.meta.url),
   "utf8",
 ).toLowerCase();
+const tenancyVerificationRunner = readFileSync(
+  new URL("./operations/tenancy-verification.js", import.meta.url),
+  "utf8",
+).toLowerCase();
 const apiPackage = readFileSync(new URL("../package.json", import.meta.url), "utf8").toLowerCase();
 
 test("product migration is independent from the ADR-010 spike and models exact historical scope", () => {
@@ -178,16 +182,23 @@ test("remote dining-zone E2E reuses the marked tenancy harness and post-migratio
   assert.match(apiPackage, /run-dining-zones-tenancy-verification\.js/u);
 });
 
-test("protected web smoke reuses marked fixtures, post-migration audit and cleanup", () => {
+test("protected web smoke publishes a populated table layout before revocation", () => {
   assert.match(protectedWebSmokeRunner, /runtenancyverification/u);
   assert.match(
     protectedWebSmokeRunner,
-    /tenancy_memberships_post_dining_zones_runtime_catalog\.sql/u,
+    /tenancy_memberships_post_dining_tables_catalog\.sql/u,
   );
   assert.match(protectedWebSmokeRunner, /createwebprotectedsmokecoordinator/u);
-  assert.match(protectedWebSmokeRunner, /verifydiningzones:\s*true/u);
+  assert.match(protectedWebSmokeRunner, /verifydiningtables:\s*true/u);
   assert.match(apiPackage, /"verify:web-protected-smoke:remote"/u);
   assert.match(apiPackage, /run-web-protected-smoke\.js/u);
+
+  const diningTablesBaseline = tenancyVerificationRunner.indexOf("verifydiningtablesbaseline(");
+  const publishSelectionFixture = tenancyVerificationRunner.indexOf("livefixturehooks?.beforerevocation");
+  const revokeFixture = tenancyVerificationRunner.indexOf("verifyrevocations(");
+  assert.ok(diningTablesBaseline >= 0);
+  assert.ok(publishSelectionFixture > diningTablesBaseline);
+  assert.ok(revokeFixture > publishSelectionFixture);
 });
 
 test("runtime audit permits only the provisioned app_api login capability", () => {

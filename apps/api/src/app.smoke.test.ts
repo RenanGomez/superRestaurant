@@ -18,6 +18,8 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
   let membershipRoles: readonly string[] = ["manager"];
   let diningZoneWrites = 0;
   let diningTableWrites = 0;
+  let createdZone: Readonly<{ name: unknown; zoneId: unknown }> | undefined;
+  let createdTable: Readonly<Record<string, unknown>> | undefined;
   const database: DatabaseClientPort = {
     query: async (sql, parameters) => {
       databaseCalls.push({ parameters: [...parameters], sql });
@@ -27,6 +29,7 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
       }
       if (sql.includes("create_dining_zone")) {
         diningZoneWrites += 1;
+        createdZone = Object.freeze({ name: parameters[8], zoneId: parameters[3] });
         return {
           rows: [{
             status: "created",
@@ -42,10 +45,20 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
         };
       }
       if (sql.includes("list_dining_layout")) {
-        return { rows: [{ layout: { schemaVersion: 1, scope: { restaurantId: parameters[1], branchId: parameters[2] }, zones: [] } }] };
+        const zones = createdZone === undefined || createdTable === undefined
+          ? []
+          : [{ zoneId: createdZone.zoneId, name: createdZone.name, version: 1, tables: [createdTable] }];
+        return { rows: [{ layout: { schemaVersion: 1, scope: { restaurantId: parameters[1], branchId: parameters[2] }, zones } }] };
       }
       if (sql.includes("create_dining_table")) {
         diningTableWrites += 1;
+        createdTable = Object.freeze({
+          schemaVersion: 1,
+          scope: { restaurantId: parameters[1], branchId: parameters[2] },
+          tableId: parameters[3], zoneId: parameters[4], name: parameters[9], capacity: parameters[10],
+          shape: parameters[11], layout: { x: parameters[12], y: parameters[13], width: parameters[14], height: parameters[15] },
+          version: 1, updatedAt: "2026-09-01T18:00:01.000Z", updatedBy: parameters[0], replayed: false,
+        });
         return { rows: [{ status: "created", schema_version: 1, restaurant_id: parameters[1], branch_id: parameters[2],
           table_id: parameters[3], zone_id: parameters[4], table_name: parameters[9], capacity: parameters[10],
           shape: parameters[11], layout_x: parameters[12], layout_y: parameters[13], layout_width: parameters[14],
@@ -227,6 +240,22 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
       tableId: tableCommand.tableId, zoneId: tableCommand.zoneId, name: tableCommand.name, capacity: 4, shape: "round",
       layout: tableCommand.layout, version: 1, updatedAt: "2026-09-01T18:00:01.000Z", updatedBy: actorId, replayed: false });
     assert.equal(diningTableWrites, 1);
+
+    const populatedLayoutResponse = await fetch(`${url}/api/v1/dining/layout?restaurantId=${restaurantId}&branchId=${branchId}`, {
+      headers: { authorization: "Bearer valid-smoke-access-token" },
+    });
+    assert.equal(populatedLayoutResponse.status, 200);
+    assert.equal(populatedLayoutResponse.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await populatedLayoutResponse.json(), {
+      schemaVersion: 1,
+      scope: { restaurantId, branchId },
+      zones: [{ zoneId: zoneCommand.zoneId, name: zoneCommand.name, version: 1, tables: [{
+        schemaVersion: 1, scope: { restaurantId, branchId }, tableId: tableCommand.tableId,
+        zoneId: tableCommand.zoneId, name: tableCommand.name, capacity: 4, shape: "round",
+        layout: tableCommand.layout, version: 1, updatedAt: "2026-09-01T18:00:01.000Z",
+        updatedBy: actorId, replayed: false,
+      }] }],
+    });
 
     membershipRoles = ["viewer"];
     const forbiddenTableResponse = await fetch(`${url}/api/v1/dining/tables`, {
