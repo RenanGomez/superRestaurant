@@ -14,6 +14,10 @@ import {
 const PRECHECK_AUDIT_SHA256 = "a6485bcdcc1f54beee9f939187d374a449541343b426d59341870dda63ccd983";
 const POST_DINING_ZONES_PRECHECK_AUDIT_SHA256 =
   "8bc25f26058ec8512d364404629b595c690b987edf5fdd891ce0496943b6b4bc";
+const POST_DINING_TABLES_AUDIT_SHA256 =
+  "fb6a8a827475623dce277a6670232b630177fb0ae7db2e04502b44cfe00c9052";
+const POST_MENU_AUDIT_SHA256 =
+  "2893432b8122de814e42ce967e6053f6519856f64b15b30fa873f21e6473b2a2";
 const DISABLE_SQL = "alter role app_api nologin password null valid until 'infinity'";
 const TERMINATE_SQL = `select pg_catalog.pg_terminate_backend(pid) as terminated
 from pg_catalog.pg_stat_activity
@@ -36,7 +40,9 @@ export interface AppApiLifecycleTargetState {
 export type AppApiLifecycleCatalogProfile =
   | "memberships_v1"
   | "post_dining_zones_v1"
-  | "post_dining_tables_v1";
+  | "post_dining_tables_v1"
+  | "post_menu_v1"
+  | "post_orders_realtime_v1";
 
 export interface AppApiRecoveryDependencies {
   createAdminSession(config: DatabaseConfig): AppApiProvisioningSession;
@@ -377,6 +383,39 @@ function readAllowedAppApiFunctionOids(catalogProfile: AppApiLifecycleCatalogPro
       null::oid
     )`;
   }
+  if (catalogProfile === "post_menu_v1") {
+    return `pg_catalog.array_remove(
+      array[
+        pg_catalog.to_regprocedure('app_private.find_active_branch_membership(uuid,uuid,uuid)'),
+        pg_catalog.to_regprocedure('app_private.list_active_branch_memberships(uuid)'),
+        pg_catalog.to_regprocedure('app_private.create_dining_zone(uuid,uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,text)'),
+        pg_catalog.to_regprocedure('app_private.list_dining_layout(uuid,uuid,uuid)'),
+        pg_catalog.to_regprocedure('app_private.create_dining_table(uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,text,integer,text,integer,integer,integer,integer)'),
+        pg_catalog.to_regprocedure('app_private.update_dining_table_layout(uuid,uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,bigint,integer,integer,integer,integer)'),
+        pg_catalog.to_regprocedure('app_private.get_menu_catalog(uuid,uuid,uuid)'),
+        pg_catalog.to_regprocedure('app_private.save_menu_catalog(uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,bigint,uuid,text,jsonb)')
+      ]::oid[],
+      null::oid
+    )`;
+  }
+  if (catalogProfile === "post_orders_realtime_v1") {
+    return `pg_catalog.array_remove(
+      array[
+        pg_catalog.to_regprocedure('app_private.find_active_branch_membership(uuid,uuid,uuid)'),
+        pg_catalog.to_regprocedure('app_private.list_active_branch_memberships(uuid)'),
+        pg_catalog.to_regprocedure('app_private.create_dining_zone(uuid,uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,text)'),
+        pg_catalog.to_regprocedure('app_private.list_dining_layout(uuid,uuid,uuid)'),
+        pg_catalog.to_regprocedure('app_private.create_dining_table(uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,text,integer,text,integer,integer,integer,integer)'),
+        pg_catalog.to_regprocedure('app_private.update_dining_table_layout(uuid,uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,bigint,integer,integer,integer,integer)'),
+        pg_catalog.to_regprocedure('app_private.get_menu_catalog(uuid,uuid,uuid)'),
+        pg_catalog.to_regprocedure('app_private.save_menu_catalog(uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,bigint,uuid,text,jsonb)'),
+        pg_catalog.to_regprocedure('app_private.read_order(uuid,uuid,uuid,uuid)'),
+        pg_catalog.to_regprocedure('app_private.persist_order_mutation(uuid,bigint,jsonb,jsonb)'),
+        pg_catalog.to_regprocedure('app_private.recover_kds_events(uuid,uuid,uuid,text,bigint,integer)')
+      ]::oid[],
+      null::oid
+    )`;
+  }
   throw recoveryError("precheck");
 }
 
@@ -410,7 +449,11 @@ function readPinnedPrecheck(
   try {
     const expectedHash = auditProfile === "memberships_v1"
       ? PRECHECK_AUDIT_SHA256
-      : POST_DINING_ZONES_PRECHECK_AUDIT_SHA256;
+      : auditProfile === "post_dining_zones_v1"
+        ? POST_DINING_ZONES_PRECHECK_AUDIT_SHA256
+        : auditProfile === "post_dining_tables_v1"
+          ? POST_DINING_TABLES_AUDIT_SHA256
+          : POST_MENU_AUDIT_SHA256;
     return validatePinnedAudit(sql, expectedHash);
   } catch {
     throw recoveryError("configuration");

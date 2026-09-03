@@ -5,6 +5,7 @@ import test from "node:test";
 import { MEMBERSHIP_ROLE_CODES } from "@super-restaurant/shared-types";
 
 import { RBAC_ROLE_PERMISSIONS_V1 } from "./auth/rbac-policy.js";
+import { extractMigrationBody, validateCatalogAuditSql } from "./operations/schema-verification.js";
 
 const migrationUrl = new URL("../../../supabase/migrations/20260830000100_create_tenancy_memberships.sql", import.meta.url);
 const migration = readFileSync(migrationUrl, "utf8").toLowerCase();
@@ -28,6 +29,33 @@ const diningTablesCatalogAudit = readFileSync(
   new URL("../../../supabase/tests/dining_tables_layout_catalog.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
+const menuCatalogMigration = readFileSync(
+  new URL("../../../supabase/migrations/20260902000100_create_menu_catalog.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
+const menuCatalogAudit = readFileSync(
+  new URL("../../../supabase/tests/menu_catalog_catalog.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
+const ordersRealtimeMigration = readFileSync(
+  new URL("../../../supabase/migrations/20260902000200_create_orders_realtime.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
+const ordersRealtimeAudit = readFileSync(
+  new URL("../../../supabase/tests/orders_realtime_catalog.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
+const postOrdersRealtimeAudit = readFileSync(
+  new URL("../../../supabase/tests/tenancy_memberships_post_orders_realtime.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
+const postOrdersRealtimeStateRunner = readFileSync(
+  new URL(
+    "../src/operations/run-post-orders-realtime-app-api-state-verification.ts",
+    import.meta.url,
+  ),
+  "utf8",
+);
 const catalogAudit = readFileSync(
   new URL("../../../supabase/tests/tenancy_memberships_catalog.sql", import.meta.url),
   "utf8",
@@ -61,6 +89,10 @@ const diningTablesRemoteRunner = readFileSync(
 ).toLowerCase();
 const protectedWebSmokeRunner = readFileSync(
   new URL("./operations/run-web-protected-smoke.js", import.meta.url),
+  "utf8",
+).toLowerCase();
+const protectedMenuWebSmokeRunner = readFileSync(
+  new URL("./operations/run-menu-web-protected-smoke.js", import.meta.url),
   "utf8",
 ).toLowerCase();
 const tenancyVerificationRunner = readFileSync(
@@ -201,6 +233,25 @@ test("protected web smoke publishes a populated table layout before revocation",
   assert.ok(revokeFixture > publishSelectionFixture);
 });
 
+test("protected menu web smoke publishes a populated catalog before revocation", () => {
+  assert.match(protectedMenuWebSmokeRunner, /runtenancyverification/u);
+  assert.match(
+    protectedMenuWebSmokeRunner,
+    /tenancy_memberships_post_menu_catalog\.sql/u,
+  );
+  assert.match(protectedMenuWebSmokeRunner, /createwebprotectedsmokecoordinator/u);
+  assert.match(protectedMenuWebSmokeRunner, /verifymenucatalog:\s*true/u);
+  assert.match(apiPackage, /"verify:menu-web-protected-smoke:remote"/u);
+  assert.match(apiPackage, /run-menu-web-protected-smoke\.js/u);
+
+  const menuBaseline = tenancyVerificationRunner.indexOf("verifymenucatalogbaseline(");
+  const publishSelectionFixture = tenancyVerificationRunner.indexOf("livefixturehooks?.beforerevocation");
+  const revokeFixture = tenancyVerificationRunner.indexOf("verifyrevocations(");
+  assert.ok(menuBaseline >= 0);
+  assert.ok(publishSelectionFixture > menuBaseline);
+  assert.ok(revokeFixture > publishSelectionFixture);
+});
+
 test("runtime audit permits only the provisioned app_api login capability", () => {
   assert.match(runtimeCatalogAudit, /not rolcanlogin/u);
   for (const forbiddenAttribute of [
@@ -320,4 +371,136 @@ test("dining-table lint fix qualifies replay and optimistic-update columns", () 
   assert.match(migration, /audit\.restaurant_id=p_restaurant_id/u);
   assert.match(migration, /dining_table\.version=p_expected_version/u);
   assert.doesNotMatch(migration, /where actor_id=p_actor_id/u);
+});
+
+test("menu catalog migration publishes immutable normalized releases atomically", () => {
+  assert.match(menuCatalogMigration, /^begin;/u);
+  for (const table of [
+    "menu_catalogs", "menu_categories", "menu_products", "menu_modifier_groups",
+    "menu_modifier_options", "menu_catalog_heads", "menu_catalog_audit_events",
+  ]) {
+    assert.match(menuCatalogMigration, new RegExp(`create table app\\.${table}`, "u"));
+    assert.match(menuCatalogMigration, new RegExp(`alter table app\\.${table} enable row level security`, "u"));
+    assert.match(menuCatalogMigration, new RegExp(`alter table app\\.${table} force row level security`, "u"));
+  }
+  assert.match(menuCatalogMigration, /menu_catalog_heads_release_fk[\s\S]*\(restaurant_id, catalog_id, version\)/u);
+  assert.match(menuCatalogMigration, /unit_price_minor between 0 and 9007199254740991/u);
+  assert.match(menuCatalogMigration, /result_version = expected_version \+ 1/u);
+  assert.match(menuCatalogMigration, /create function app_private\.get_menu_catalog/u);
+  assert.match(menuCatalogMigration, /create function app_private\.save_menu_catalog/u);
+  assert.match(menuCatalogMigration, /role_grant\.role_code/u);
+  assert.match(menuCatalogMigration, /pg_advisory_xact_lock/u);
+  assert.match(menuCatalogMigration, /payload_snapshot <> p_payload/u);
+  assert.match(menuCatalogMigration, /on conflict \(restaurant_id\) do update/u);
+  assert.doesNotMatch(menuCatalogMigration, /pg_catalog\.coalesce/u);
+  assert.match(menuCatalogMigration, /security definer set search_path = ''/u);
+  assert.match(menuCatalogMigration, /grant execute on function app_private\.get_menu_catalog[\s\S]*to app_api/u);
+  assert.match(menuCatalogMigration, /grant execute on function app_private\.save_menu_catalog[\s\S]*to app_api/u);
+  assert.doesNotMatch(menuCatalogMigration, /grant (?:select|insert|update|delete|all) on app\.menu/u);
+  assert.match(menuCatalogMigration, /commit;\s*$/u);
+});
+
+test("menu catalog audit keeps tables private and exposes only read and publish capabilities", () => {
+  assert.match(menuCatalogAudit, /menu_catalog_audit_table_missing/u);
+  assert.match(menuCatalogAudit, /relation\.relrowsecurity/u);
+  assert.match(menuCatalogAudit, /relation\.relforcerowsecurity/u);
+  assert.match(menuCatalogAudit, /owner\.rolname = 'postgres'/u);
+  assert.match(menuCatalogAudit, /menu_catalog_audit_helper_exposed/u);
+  assert.match(menuCatalogAudit, /app_private\.get_menu_catalog\(uuid,uuid,uuid\)/u);
+  assert.match(
+    menuCatalogAudit,
+    /app_private\.save_menu_catalog\(uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,bigint,uuid,text,jsonb\)/u,
+  );
+  assert.match(menuCatalogAudit, /2::integer as app_api_functions/u);
+  assert.doesNotMatch(menuCatalogAudit, /pg_catalog\.coalesce/u);
+  assert.match(apiPackage, /"verify:menu-catalog-schema:rollback"/u);
+  assert.match(apiPackage, /run-menu-catalog-schema-verification\.js/u);
+  assert.doesNotThrow(() => extractMigrationBody(menuCatalogMigration));
+  assert.doesNotThrow(() => validateCatalogAuditSql(menuCatalogAudit));
+});
+
+test("post-menu audit pins the exact global catalog and app_api surface", () => {
+  const audit = readFileSync(
+    new URL("../../../supabase/tests/tenancy_memberships_post_menu_catalog.sql", import.meta.url),
+    "utf8",
+  );
+  const runner = readFileSync(
+    new URL("../src/operations/run-menu-catalog-schema-verification.ts", import.meta.url),
+    "utf8",
+  );
+  const stateRunner = readFileSync(
+    new URL("../src/operations/run-post-menu-app-api-state-verification.ts", import.meta.url),
+    "utf8",
+  );
+  const tenancyRunner = readFileSync(
+    new URL("../src/operations/run-menu-catalog-tenancy-verification.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(audit, /POST_MENU_REQUIRED_OBJECT_MISSING/u);
+  assert.match(audit, /\) <> 16/u);
+  assert.match(audit, /\) <> 12/u);
+  assert.match(audit, /app_private\.jsonb_has_exact_keys/u);
+  assert.match(audit, /POST_MENU_HELPER_EXPOSED/u);
+  assert.match(audit, /POST_MENU_APP_API_EXTRA_FUNCTION/u);
+  assert.doesNotMatch(audit, /pg_catalog\.coalesce/u);
+  assert.match(runner, /tenancy_memberships_post_menu_catalog\.sql/u);
+  assert.match(stateRunner, /auditProfile: "post_menu_v1"/u);
+  assert.match(apiPackage, /"verify:post-menu-app-api-state:remote"/u);
+  assert.match(tenancyRunner, /tenancy_memberships_post_menu_catalog\.sql/u);
+  assert.match(tenancyRunner, /verifyMenuCatalog: true/u);
+  assert.match(apiPackage, /"verify:menu-catalog:remote"/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(audit));
+});
+
+test("orders and Realtime migration atomically persists scoped aggregates, audit, and KDS cursor events", () => {
+  assert.match(ordersRealtimeMigration, /^begin;/u);
+  for (const table of ["orders", "order_audit_events", "kds_events"]) {
+    assert.match(ordersRealtimeMigration, new RegExp(`create table app\\.${table}`, "u"));
+    assert.match(ordersRealtimeMigration, new RegExp(`alter table app\\.${table} enable row level security`, "u"));
+    assert.match(ordersRealtimeMigration, new RegExp(`alter table app\\.${table} force row level security`, "u"));
+  }
+  assert.match(ordersRealtimeMigration, /create table app_private\.kds_branch_cursors/u);
+  assert.match(ordersRealtimeMigration, /foreign key \(restaurant_id, branch_id, table_id\)[\s\S]*app\.dining_tables/u);
+  assert.match(ordersRealtimeMigration, /unique \(actor_id, restaurant_id, branch_id, idempotency_key\)/u);
+  assert.match(ordersRealtimeMigration, /pg_advisory_xact_lock/u);
+  assert.match(ordersRealtimeMigration, /expected_order_version/u);
+  assert.match(ordersRealtimeMigration, /last_cursor=last_cursor\+1/u);
+  assert.match(ordersRealtimeMigration, /e\.station_id=p_station_id/u);
+  assert.match(ordersRealtimeMigration, /e\.cursor>p_after_cursor/u);
+  assert.match(ordersRealtimeMigration, /rg\.role_code in \('owner','admin','manager','supervisor','kitchen'\)/u);
+  assert.match(ordersRealtimeMigration, /p_audit ->> 'to' in \('cancelled'\)[\s\S]*return pg_catalog\.jsonb_build_object\('status','conflict'\)/u);
+  assert.match(ordersRealtimeMigration, /security definer set search_path = ''/u);
+  for (const signature of ["read_order", "persist_order_mutation", "recover_kds_events"]) {
+    assert.match(ordersRealtimeMigration, new RegExp(`grant execute on function app_private\\.${signature}[\\s\\S]*to app_api`, "u"));
+  }
+  assert.doesNotMatch(ordersRealtimeMigration, /grant (?:select|insert|update|delete|all) on app\.(?:orders|order_audit_events|kds_events)/u);
+  assert.match(ordersRealtimeMigration, /commit;\s*$/u);
+  assert.doesNotThrow(() => extractMigrationBody(ordersRealtimeMigration));
+});
+
+test("orders and Realtime audits pin the exact private capabilities and global surface", () => {
+  const tenancyRunner = readFileSync(
+    new URL("../src/operations/run-orders-realtime-tenancy-verification.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(ordersRealtimeAudit, /ORDERS_REALTIME_REQUIRED_OBJECT_MISSING/iu);
+  assert.match(ordersRealtimeAudit, /orders_realtime_table_security_rejected/u);
+  assert.match(ordersRealtimeAudit, /orders_realtime_function_security_rejected/u);
+  assert.match(ordersRealtimeAudit, /orders_realtime_constraints_rejected/u);
+  assert.match(postOrdersRealtimeAudit, /post_orders_required_object_missing/u);
+  assert.match(postOrdersRealtimeAudit, /\) <> 19/u);
+  assert.match(postOrdersRealtimeAudit, /\) <> 15/u);
+  assert.match(postOrdersRealtimeAudit, /app_private\.recover_kds_events/u);
+  assert.match(postOrdersRealtimeAudit, /post_orders_app_api_extra_function/u);
+  assert.match(apiPackage, /"verify:orders-realtime-schema:rollback"/u);
+  assert.match(apiPackage, /run-orders-realtime-schema-verification\.js/u);
+  assert.match(apiPackage, /"verify:post-orders-realtime-app-api-state:remote"/u);
+  assert.match(apiPackage, /"verify:orders-realtime:remote"/u);
+  assert.match(tenancyRunner, /tenancy_memberships_post_orders_realtime\.sql/u);
+  assert.match(tenancyRunner, /runOrdersRealtimeTenancyVerification/u);
+  assert.match(apiPackage, /run-orders-realtime-tenancy-verification\.js/u);
+  assert.match(postOrdersRealtimeStateRunner, /auditProfile: "post_orders_realtime_v1"/u);
+  assert.match(postOrdersRealtimeStateRunner, /tenancy_memberships_post_orders_realtime\.sql/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(ordersRealtimeAudit));
+  assert.doesNotThrow(() => validateCatalogAuditSql(postOrdersRealtimeAudit));
 });

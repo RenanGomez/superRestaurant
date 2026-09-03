@@ -18,8 +18,10 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
   let membershipRoles: readonly string[] = ["manager"];
   let diningZoneWrites = 0;
   let diningTableWrites = 0;
+  let menuCatalogWrites = 0;
   let createdZone: Readonly<{ name: unknown; zoneId: unknown }> | undefined;
   let createdTable: Readonly<Record<string, unknown>> | undefined;
+  let currentMenuCatalog: Readonly<Record<string, unknown>> | null = null;
   const database: DatabaseClientPort = {
     query: async (sql, parameters) => {
       databaseCalls.push({ parameters: [...parameters], sql });
@@ -63,6 +65,25 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
           table_id: parameters[3], zone_id: parameters[4], table_name: parameters[9], capacity: parameters[10],
           shape: parameters[11], layout_x: parameters[12], layout_y: parameters[13], layout_width: parameters[14],
           layout_height: parameters[15], table_version: "1", updated_at: new Date("2026-09-01T18:00:01.000Z"), updated_by: parameters[0] }] };
+      }
+      if (sql.includes("get_menu_catalog")) {
+        return { rows: [{ state: { schemaVersion: 1, scope: { restaurantId: parameters[1], branchId: parameters[2] }, catalog: currentMenuCatalog } }] };
+      }
+      if (sql.includes("save_menu_catalog")) {
+        menuCatalogWrites += 1;
+        const payload = JSON.parse(String(parameters[10])) as Readonly<Record<string, unknown>>;
+        currentMenuCatalog = Object.freeze({
+          catalogVersion: parameters[8],
+          categories: payload.categories,
+          currency: parameters[9],
+          modifierGroups: payload.modifierGroups,
+          products: payload.products,
+          replayed: false,
+          updatedAt: "2026-09-02T18:00:01.000Z",
+          updatedBy: parameters[0],
+          version: Number(parameters[7]) + 1,
+        });
+        return { rows: [{ status: "saved", state: { schemaVersion: 1, scope: { restaurantId: parameters[1], branchId: parameters[2] }, catalog: currentMenuCatalog } }] };
       }
       return {
         rows: parameters[2] === branchId
@@ -169,6 +190,62 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
     assert.equal(authorizedResponse.status, 200, JSON.stringify({ authorizedBody, databaseCalls }));
     assert.equal(authorizedResponse.headers.get("cache-control"), "private, no-store");
     assert.deepEqual(authorizedBody, { branchId, restaurantId, roles: ["manager"] });
+
+    const emptyMenuResponse = await fetch(`${url}/api/v1/catalog/menu?restaurantId=${restaurantId}&branchId=${branchId}`, {
+      headers: { authorization: "Bearer valid-smoke-access-token" },
+    });
+    assert.equal(emptyMenuResponse.status, 200);
+    assert.equal(emptyMenuResponse.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await emptyMenuResponse.json(), { catalog: null, schemaVersion: 1, scope: { restaurantId, branchId } });
+
+    const menuCommand = {
+      catalogVersion: "af2f9a7d-d581-46a6-8661-263f69200a70",
+      categories: [{ active: true, categoryId: "8a3754cb-58d4-45c8-8502-9709d453a5dc", displayOrder: 0, name: "Bebidas" }],
+      currency: "MXN",
+      deviceId: "0a5dfef7-e2dd-4b66-845a-7e28d24a46ce",
+      eventId: "e56167a7-d5b6-4838-b29e-d82f79bc5e84",
+      expectedVersion: 0,
+      idempotencyKey: "179a3905-3450-41c9-900c-9983236e3209",
+      modifierGroups: [],
+      occurredAt: "2026-09-02T18:00:00.000Z",
+      products: [],
+      schemaVersion: 1,
+      scope: { restaurantId, branchId },
+    };
+    const savedMenuResponse = await fetch(`${url}/api/v1/catalog/menu`, {
+      body: JSON.stringify(menuCommand),
+      headers: { authorization: "Bearer valid-smoke-access-token", "content-type": "application/json" },
+      method: "PUT",
+    });
+    assert.equal(savedMenuResponse.status, 200);
+    assert.equal(savedMenuResponse.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await savedMenuResponse.json(), {
+      catalog: {
+        catalogVersion: menuCommand.catalogVersion,
+        categories: menuCommand.categories,
+        currency: "MXN",
+        modifierGroups: [],
+        products: [],
+        replayed: false,
+        updatedAt: "2026-09-02T18:00:01.000Z",
+        updatedBy: actorId,
+        version: 1,
+      },
+      schemaVersion: 1,
+      scope: { restaurantId, branchId },
+    });
+    assert.equal(menuCatalogWrites, 1);
+
+    membershipRoles = ["viewer"];
+    const forbiddenMenuResponse = await fetch(`${url}/api/v1/catalog/menu`, {
+      body: JSON.stringify({ ...menuCommand, catalogVersion: "ab574195-a67c-42b0-a8ba-cf32ba717fef" }),
+      headers: { authorization: "Bearer valid-smoke-access-token", "content-type": "application/json" },
+      method: "PUT",
+    });
+    assert.equal(forbiddenMenuResponse.status, 403);
+    assert.deepEqual(await forbiddenMenuResponse.json(), { code: "ACTION_NOT_AUTHORIZED" });
+    assert.equal(menuCatalogWrites, 1);
+    membershipRoles = ["manager"];
 
     const otherBranchResponse = await fetch(`${url}/api/v1/access/branch`, {
       body: JSON.stringify({ restaurantId, branchId: "b98b5914-002d-42a0-a26b-2a0f954ddf1e" }),

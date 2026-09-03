@@ -117,4 +117,20 @@ test("sanitizes arbitrary provider and database failures to an allowlisted repor
     stage: "dining_zones",
     status: "failed",
   });
+
+  assert.deepEqual(sanitizeTenancyVerificationFailure(
+    new TenancyVerificationError("menu_catalog", "TENANCY_VERIFICATION_MENU_CATALOG_FAILED"),
+  ), {
+    code: "TENANCY_VERIFICATION_MENU_CATALOG_FAILED",
+    stage: "menu_catalog",
+    status: "failed",
+  });
+
+  assert.deepEqual(sanitizeTenancyVerificationFailure(
+    new TenancyVerificationError("orders_realtime", "TENANCY_VERIFICATION_ORDERS_REALTIME_FAILED"),
+  ), {
+    code: "TENANCY_VERIFICATION_ORDERS_REALTIME_FAILED",
+    stage: "orders_realtime",
+    status: "failed",
+  });
 });

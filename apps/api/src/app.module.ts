@@ -29,6 +29,16 @@ import {
 } from "./dining-zones.js";
 import { DiningTablesController } from "./dining-tables.controller.js";
 import { DINING_TABLE_PORT, DiningTableService, PostgresDiningTableAdapter } from "./dining-tables.js";
+import { MenuCatalogController } from "./menu-catalog.controller.js";
+import { MENU_CATALOG_PORT, MenuCatalogService, PostgresMenuCatalogAdapter } from "./menu-catalog.js";
+import { OrdersController } from "./orders.controller.js";
+import {
+  ORDER_PERSISTENCE_PORT,
+  OrderService,
+  PostgresOrderPersistenceAdapter,
+  REALTIME_NOTIFICATION_PORT,
+} from "./orders.js";
+import { RealtimeGateway } from "./realtime.gateway.js";
 
 @Module({
   controllers: [
@@ -38,6 +48,8 @@ import { DINING_TABLE_PORT, DiningTableService, PostgresDiningTableAdapter } fro
     AccessMembershipsController,
     DiningZonesController,
     DiningTablesController,
+    MenuCatalogController,
+    OrdersController,
   ],
   providers: [
     {
@@ -68,6 +80,14 @@ import { DINING_TABLE_PORT, DiningTableService, PostgresDiningTableAdapter } fro
     PostgresDiningTableAdapter,
     { provide: DINING_TABLE_PORT, useExisting: PostgresDiningTableAdapter },
     DiningTableService,
+    PostgresMenuCatalogAdapter,
+    { provide: MENU_CATALOG_PORT, useExisting: PostgresMenuCatalogAdapter },
+    MenuCatalogService,
+    PostgresOrderPersistenceAdapter,
+    { provide: ORDER_PERSISTENCE_PORT, useExisting: PostgresOrderPersistenceAdapter },
+    RealtimeGateway,
+    { provide: REALTIME_NOTIFICATION_PORT, useExisting: RealtimeGateway },
+    OrderService,
     {
       provide: APP_GUARD,
       useClass: SupabaseAuthGuard,

@@ -135,12 +135,104 @@ interface DiningTableAuditRow {
   readonly zoneId: string;
 }
 
+interface MenuCatalogRow {
+  readonly currency: string;
+  readonly id: string;
+  readonly publishedBy: string;
+  readonly restaurantId: string;
+  readonly version: number;
+}
+
+interface MenuCategoryRow {
+  readonly catalogId: string;
+  readonly id: string;
+  readonly name: string;
+  readonly restaurantId: string;
+}
+
+interface MenuProductRow extends MenuCategoryRow {
+  readonly categoryId: string;
+}
+
+interface MenuModifierGroupRow extends MenuCategoryRow {
+  readonly productId: string;
+}
+
+interface MenuModifierOptionRow extends MenuCategoryRow {
+  readonly groupId: string;
+}
+
+interface MenuCatalogHeadRow {
+  readonly catalogId: string;
+  readonly restaurantId: string;
+  readonly updatedBy: string;
+  readonly version: number;
+}
+
+interface MenuCatalogAuditRow {
+  readonly actorId: string;
+  readonly branchId: string;
+  readonly catalogId: string;
+  readonly eventId: string;
+  readonly restaurantId: string;
+  readonly resultVersion: number;
+}
+
+interface OrderRow {
+  readonly actorId: string;
+  readonly branchId: string;
+  readonly channel: string;
+  readonly id: string;
+  readonly restaurantId: string;
+  readonly status: string;
+  readonly version: number;
+}
+
+interface OrderAuditRow {
+  readonly actorId: string;
+  readonly branchId: string;
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly operation: string;
+  readonly orderId: string;
+  readonly restaurantId: string;
+  readonly resultVersion: number;
+}
+
+interface KdsEventRow {
+  readonly branchId: string;
+  readonly cursor: number;
+  readonly eventId: string;
+  readonly operation: string;
+  readonly orderId: string;
+  readonly restaurantId: string;
+  readonly stationId: string;
+  readonly status: string;
+}
+
+interface KdsCursorRow {
+  readonly branchId: string;
+  readonly lastCursor: number;
+  readonly restaurantId: string;
+}
+
 export interface TenancyFixtureRecoverySnapshot {
   readonly branches: readonly BranchRow[];
   readonly diningZoneAudits?: readonly DiningZoneAuditRow[];
   readonly diningZones?: readonly DiningZoneRow[];
   readonly diningTableAudits?: readonly DiningTableAuditRow[];
   readonly diningTables?: readonly DiningTableRow[];
+  readonly menuCatalogs?: readonly MenuCatalogRow[];
+  readonly menuCategories?: readonly MenuCategoryRow[];
+  readonly menuProducts?: readonly MenuProductRow[];
+  readonly menuModifierGroups?: readonly MenuModifierGroupRow[];
+  readonly menuModifierOptions?: readonly MenuModifierOptionRow[];
+  readonly menuCatalogHeads?: readonly MenuCatalogHeadRow[];
+  readonly menuCatalogAudits?: readonly MenuCatalogAuditRow[];
+  readonly orders?: readonly OrderRow[];
+  readonly orderAudits?: readonly OrderAuditRow[];
+  readonly kdsEvents?: readonly KdsEventRow[];
+  readonly kdsCursors?: readonly KdsCursorRow[];
   readonly grants: readonly GrantRow[];
   readonly memberships: readonly MembershipRow[];
   readonly restaurants: readonly RestaurantRow[];
@@ -154,6 +246,17 @@ interface ValidatedSnapshot {
   readonly diningTableIds: readonly string[];
   readonly grantIds: readonly string[];
   readonly membershipIds: readonly string[];
+  readonly orderAuditEventIds: readonly string[];
+  readonly orderIds: readonly string[];
+  readonly kdsEventIds: readonly string[];
+  readonly kdsCursorScopes: readonly Readonly<{ branchId: string; restaurantId: string }>[];
+  readonly menuCatalogAuditEventIds: readonly string[];
+  readonly menuCatalogIds: readonly string[];
+  readonly menuCategoryIds: readonly string[];
+  readonly menuHeadRestaurantIds: readonly string[];
+  readonly menuModifierGroupIds: readonly string[];
+  readonly menuModifierOptionIds: readonly string[];
+  readonly menuProductIds: readonly string[];
   readonly restaurantIds: readonly string[];
 }
 
@@ -251,7 +354,13 @@ export function validateTenancyFixtureRecoverySnapshot(
     || (snapshot.diningZones?.length ?? 0) > 0
     || (snapshot.diningZoneAudits?.length ?? 0) > 0
     || (snapshot.diningTables?.length ?? 0) > 0
-    || (snapshot.diningTableAudits?.length ?? 0) > 0;
+    || (snapshot.diningTableAudits?.length ?? 0) > 0
+    || (snapshot.menuCatalogs?.length ?? 0) > 0
+    || (snapshot.menuCatalogAudits?.length ?? 0) > 0
+    || (snapshot.orders?.length ?? 0) > 0
+    || (snapshot.orderAudits?.length ?? 0) > 0
+    || (snapshot.kdsEvents?.length ?? 0) > 0
+    || (snapshot.kdsCursors?.length ?? 0) > 0;
   if (hasMainGraph && mainCount !== expectedMainNames.length) throw contaminationError();
 
   if (!hasMainGraph) {
@@ -266,6 +375,17 @@ export function validateTenancyFixtureRecoverySnapshot(
       diningTableIds: Object.freeze([]),
       grantIds: Object.freeze([]),
       membershipIds: Object.freeze([]),
+      orderAuditEventIds: Object.freeze([]),
+      orderIds: Object.freeze([]),
+      kdsEventIds: Object.freeze([]),
+      kdsCursorScopes: Object.freeze([]),
+      menuCatalogAuditEventIds: Object.freeze([]),
+      menuCatalogIds: Object.freeze([]),
+      menuCategoryIds: Object.freeze([]),
+      menuHeadRestaurantIds: Object.freeze([]),
+      menuModifierGroupIds: Object.freeze([]),
+      menuModifierOptionIds: Object.freeze([]),
+      menuProductIds: Object.freeze([]),
       restaurantIds: Object.freeze(snapshot.restaurants.map((row) => row.id)),
     });
   }
@@ -320,6 +440,20 @@ export function validateTenancyFixtureRecoverySnapshot(
     branchesByName,
     snapshot.diningZones ?? [],
   );
+  const menu = validateMenuCatalog(
+    runId,
+    snapshot,
+    amber.id,
+    firstRestaurant.id,
+    branchesByName,
+  );
+  const orders = validateOrdersRealtime(
+    runId,
+    snapshot,
+    amber.id,
+    firstRestaurant.id,
+    branchesByName,
+  );
 
   return Object.freeze({
     branchIds: Object.freeze(snapshot.branches.map((row) => row.id)),
@@ -329,6 +463,17 @@ export function validateTenancyFixtureRecoverySnapshot(
     diningTableIds: diningTables.tableIds,
     grantIds: Object.freeze(snapshot.grants.map((row) => row.id)),
     membershipIds: Object.freeze(snapshot.memberships.map((row) => row.id)),
+    orderAuditEventIds: orders.auditEventIds,
+    orderIds: orders.orderIds,
+    kdsEventIds: orders.kdsEventIds,
+    kdsCursorScopes: orders.cursorScopes,
+    menuCatalogAuditEventIds: menu.auditEventIds,
+    menuCatalogIds: menu.catalogIds,
+    menuCategoryIds: menu.categoryIds,
+    menuHeadRestaurantIds: menu.headRestaurantIds,
+    menuModifierGroupIds: menu.modifierGroupIds,
+    menuModifierOptionIds: menu.modifierOptionIds,
+    menuProductIds: menu.productIds,
     restaurantIds: Object.freeze(snapshot.restaurants.map((row) => row.id)),
   });
 }
@@ -363,6 +508,17 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
       const snapshot = await loadSnapshot(client, runId, users.map((user) => user.id), true);
       const validated = validateTenancyFixtureRecoverySnapshot(runId, users, snapshot);
       let removed = 0;
+      removed += await deleteExactly(client, "app.kds_events", validated.kdsEventIds, "event_id");
+      removed += await deleteExactly(client, "app.order_audit_events", validated.orderAuditEventIds, "event_id");
+      removed += await deleteExactly(client, "app.orders", validated.orderIds);
+      removed += await deleteKdsCursorsExactly(client, validated.kdsCursorScopes);
+      removed += await deleteExactly(client, "app.menu_modifier_options", validated.menuModifierOptionIds);
+      removed += await deleteExactly(client, "app.menu_modifier_groups", validated.menuModifierGroupIds);
+      removed += await deleteExactly(client, "app.menu_products", validated.menuProductIds);
+      removed += await deleteExactly(client, "app.menu_categories", validated.menuCategoryIds);
+      removed += await deleteExactly(client, "app.menu_catalog_audit_events", validated.menuCatalogAuditEventIds, "event_id");
+      removed += await deleteExactly(client, "app.menu_catalog_heads", validated.menuHeadRestaurantIds, "restaurant_id");
+      removed += await deleteExactly(client, "app.menu_catalogs", validated.menuCatalogIds);
       removed += await deleteExactly(client, "app.dining_table_audit_events", validated.diningTableEventIds, "event_id");
       removed += await deleteExactly(client, "app.dining_tables", validated.diningTableIds);
       removed += await deleteExactly(
@@ -400,6 +556,17 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
         || (snapshot.diningZoneAudits?.length ?? 0) !== 0
         || (snapshot.diningTables?.length ?? 0) !== 0
         || (snapshot.diningTableAudits?.length ?? 0) !== 0
+        || (snapshot.menuCatalogs?.length ?? 0) !== 0
+        || (snapshot.menuCategories?.length ?? 0) !== 0
+        || (snapshot.menuProducts?.length ?? 0) !== 0
+        || (snapshot.menuModifierGroups?.length ?? 0) !== 0
+        || (snapshot.menuModifierOptions?.length ?? 0) !== 0
+        || (snapshot.menuCatalogHeads?.length ?? 0) !== 0
+        || (snapshot.menuCatalogAudits?.length ?? 0) !== 0
+        || (snapshot.orders?.length ?? 0) !== 0
+        || (snapshot.orderAudits?.length ?? 0) !== 0
+        || (snapshot.kdsEvents?.length ?? 0) !== 0
+        || (snapshot.kdsCursors?.length ?? 0) !== 0
       ) {
         throw recoveryError("postcheck", "TENANCY_FIXTURE_RECOVERY_POSTCHECK_FAILED");
       }
@@ -460,19 +627,69 @@ async function loadSnapshot(
      where membership_id = any($1::uuid[]) or granted_by = any($2::uuid[]) or revoked_by = any($2::uuid[])${lock}`,
     [membershipIds, userIds],
   );
-  const diningCatalog = await client.query<{ tableAudits: boolean; tables: boolean; zoneAudits: boolean; zones: boolean }>(
+  const diningCatalog = await client.query<{
+    menuAudits: boolean;
+    menuCatalogs: boolean;
+    menuCategories: boolean;
+    menuGroups: boolean;
+    menuHeads: boolean;
+    menuOptions: boolean;
+    menuProducts: boolean;
+    orders: boolean;
+    orderAudits: boolean;
+    kdsEvents: boolean;
+    kdsCursors: boolean;
+    tableAudits: boolean;
+    tables: boolean;
+    zoneAudits: boolean;
+    zones: boolean;
+  }>(
     `select
        pg_catalog.to_regclass('app.dining_zone_audit_events') is not null as "zoneAudits",
        pg_catalog.to_regclass('app.dining_zones') is not null as zones,
        pg_catalog.to_regclass('app.dining_table_audit_events') is not null as "tableAudits",
-       pg_catalog.to_regclass('app.dining_tables') is not null as tables`,
+       pg_catalog.to_regclass('app.dining_tables') is not null as tables,
+       pg_catalog.to_regclass('app.menu_catalogs') is not null as "menuCatalogs",
+       pg_catalog.to_regclass('app.menu_categories') is not null as "menuCategories",
+       pg_catalog.to_regclass('app.menu_products') is not null as "menuProducts",
+       pg_catalog.to_regclass('app.menu_modifier_groups') is not null as "menuGroups",
+       pg_catalog.to_regclass('app.menu_modifier_options') is not null as "menuOptions",
+       pg_catalog.to_regclass('app.menu_catalog_heads') is not null as "menuHeads",
+       pg_catalog.to_regclass('app.menu_catalog_audit_events') is not null as "menuAudits",
+       pg_catalog.to_regclass('app.orders') is not null as orders,
+       pg_catalog.to_regclass('app.order_audit_events') is not null as "orderAudits",
+       pg_catalog.to_regclass('app.kds_events') is not null as "kdsEvents",
+       pg_catalog.to_regclass('app_private.kds_branch_cursors') is not null as "kdsCursors"`,
   );
   const catalog = diningCatalog.rows[0];
   if (catalog?.zoneAudits !== catalog?.zones || catalog?.tableAudits !== catalog?.tables || catalog?.tables === true && catalog.zones !== true) throw contaminationError();
+  const menuCatalogFlags = [
+    catalog?.menuCatalogs,
+    catalog?.menuCategories,
+    catalog?.menuProducts,
+    catalog?.menuGroups,
+    catalog?.menuOptions,
+    catalog?.menuHeads,
+    catalog?.menuAudits,
+  ];
+  if (menuCatalogFlags.some((value) => value !== menuCatalogFlags[0])) throw contaminationError();
+  const ordersFlags = [catalog?.orders, catalog?.orderAudits, catalog?.kdsEvents, catalog?.kdsCursors];
+  if (ordersFlags.some((value) => value !== ordersFlags[0])) throw contaminationError();
   let diningZones: readonly DiningZoneRow[] = [];
   let diningZoneAudits: readonly DiningZoneAuditRow[] = [];
   let diningTables: readonly DiningTableRow[] = [];
   let diningTableAudits: readonly DiningTableAuditRow[] = [];
+  let menuCatalogs: readonly MenuCatalogRow[] = [];
+  let menuCategories: readonly MenuCategoryRow[] = [];
+  let menuProducts: readonly MenuProductRow[] = [];
+  let menuModifierGroups: readonly MenuModifierGroupRow[] = [];
+  let menuModifierOptions: readonly MenuModifierOptionRow[] = [];
+  let menuCatalogHeads: readonly MenuCatalogHeadRow[] = [];
+  let menuCatalogAudits: readonly MenuCatalogAuditRow[] = [];
+  let orders: readonly OrderRow[] = [];
+  let orderAudits: readonly OrderAuditRow[] = [];
+  let kdsEvents: readonly KdsEventRow[] = [];
+  let kdsCursors: readonly KdsCursorRow[] = [];
   if (catalog?.zones === true) {
     const diningNames = tenancyDiningZoneSuffixes.map((suffix) => tenancyFixtureName(runId, suffix));
     const zones = await client.query<DiningZoneRow>(
@@ -509,6 +726,100 @@ async function loadSnapshot(
     );
     diningTableAudits = Object.freeze([...audits.rows]);
   }
+  if (catalog?.menuCatalogs === true) {
+    const catalogs = await client.query<MenuCatalogRow>(
+      `select id::text, restaurant_id::text as "restaurantId", version::integer,
+              currency, published_by::text as "publishedBy"
+       from app.menu_catalogs
+       where restaurant_id = any($1::uuid[]) or published_by = any($2::uuid[])${lock}`,
+      [restaurantIds, userIds],
+    );
+    menuCatalogs = Object.freeze([...catalogs.rows]);
+    const catalogIds = menuCatalogs.map((row) => row.id);
+    const categories = await client.query<MenuCategoryRow>(
+      `select id::text, restaurant_id::text as "restaurantId", catalog_id::text as "catalogId", name
+       from app.menu_categories where restaurant_id = any($1::uuid[]) or catalog_id = any($2::uuid[])${lock}`,
+      [restaurantIds, catalogIds],
+    );
+    menuCategories = Object.freeze([...categories.rows]);
+    const products = await client.query<MenuProductRow>(
+      `select id::text, restaurant_id::text as "restaurantId", catalog_id::text as "catalogId",
+              category_id::text as "categoryId", name
+       from app.menu_products where restaurant_id = any($1::uuid[]) or catalog_id = any($2::uuid[])${lock}`,
+      [restaurantIds, catalogIds],
+    );
+    menuProducts = Object.freeze([...products.rows]);
+    const groups = await client.query<MenuModifierGroupRow>(
+      `select id::text, restaurant_id::text as "restaurantId", catalog_id::text as "catalogId",
+              product_id::text as "productId", name
+       from app.menu_modifier_groups where restaurant_id = any($1::uuid[]) or catalog_id = any($2::uuid[])${lock}`,
+      [restaurantIds, catalogIds],
+    );
+    menuModifierGroups = Object.freeze([...groups.rows]);
+    const groupIds = menuModifierGroups.map((row) => row.id);
+    const options = await client.query<MenuModifierOptionRow>(
+      `select id::text, restaurant_id::text as "restaurantId", catalog_id::text as "catalogId",
+              group_id::text as "groupId", name
+       from app.menu_modifier_options
+       where restaurant_id = any($1::uuid[]) or catalog_id = any($2::uuid[]) or group_id = any($3::uuid[])${lock}`,
+      [restaurantIds, catalogIds, groupIds],
+    );
+    menuModifierOptions = Object.freeze([...options.rows]);
+    const heads = await client.query<MenuCatalogHeadRow>(
+      `select restaurant_id::text as "restaurantId", catalog_id::text as "catalogId",
+              version::integer, updated_by::text as "updatedBy"
+       from app.menu_catalog_heads where restaurant_id = any($1::uuid[]) or updated_by = any($2::uuid[])${lock}`,
+      [restaurantIds, userIds],
+    );
+    menuCatalogHeads = Object.freeze([...heads.rows]);
+    const audits = await client.query<MenuCatalogAuditRow>(
+      `select event_id::text as "eventId", restaurant_id::text as "restaurantId",
+              branch_id::text as "branchId", catalog_id::text as "catalogId",
+              actor_id::text as "actorId", result_version::integer as "resultVersion"
+       from app.menu_catalog_audit_events
+       where restaurant_id = any($1::uuid[]) or catalog_id = any($2::uuid[]) or actor_id = any($3::uuid[])${lock}`,
+      [restaurantIds, catalogIds, userIds],
+    );
+    menuCatalogAudits = Object.freeze([...audits.rows]);
+  }
+  if (catalog?.orders === true) {
+    const orderResult = await client.query<OrderRow>(
+      `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId",
+              channel, status, version::integer, created_by::text as "actorId"
+       from app.orders
+       where restaurant_id = any($1::uuid[]) or created_by = any($2::uuid[]) or updated_by = any($2::uuid[])${lock}`,
+      [restaurantIds, userIds],
+    );
+    orders = Object.freeze([...orderResult.rows]);
+    const orderIds = orders.map((row) => row.id);
+    const auditResult = await client.query<OrderAuditRow>(
+      `select event_id::text as "eventId", idempotency_key as "idempotencyKey",
+              restaurant_id::text as "restaurantId", branch_id::text as "branchId",
+              order_id::text as "orderId", actor_id::text as "actorId", operation,
+              result_order_version::integer as "resultVersion"
+       from app.order_audit_events
+       where order_id = any($1::uuid[]) or restaurant_id = any($2::uuid[]) or actor_id = any($3::uuid[])${lock}`,
+      [orderIds, restaurantIds, userIds],
+    );
+    orderAudits = Object.freeze([...auditResult.rows]);
+    const kdsResult = await client.query<KdsEventRow>(
+      `select event_id::text as "eventId", restaurant_id::text as "restaurantId",
+              branch_id::text as "branchId", cursor::integer, order_id::text as "orderId",
+              station_id as "stationId", operation, status
+       from app.kds_events
+       where order_id = any($1::uuid[]) or restaurant_id = any($2::uuid[])${lock}`,
+      [orderIds, restaurantIds],
+    );
+    kdsEvents = Object.freeze([...kdsResult.rows]);
+    const cursorResult = await client.query<KdsCursorRow>(
+      `select restaurant_id::text as "restaurantId", branch_id::text as "branchId",
+              last_cursor::integer as "lastCursor"
+       from app_private.kds_branch_cursors
+       where restaurant_id = any($1::uuid[]) or branch_id = any($2::uuid[])${lock}`,
+      [restaurantIds, branchIds],
+    );
+    kdsCursors = Object.freeze([...cursorResult.rows]);
+  }
   return Object.freeze({
     branches: Object.freeze([...branches.rows]),
     diningTableAudits,
@@ -516,7 +827,18 @@ async function loadSnapshot(
     diningZoneAudits,
     diningZones,
     grants: Object.freeze([...grants.rows]),
+    kdsCursors,
+    kdsEvents,
     memberships: Object.freeze([...memberships.rows]),
+    menuCatalogAudits,
+    menuCatalogHeads,
+    menuCatalogs,
+    menuCategories,
+    menuModifierGroups,
+    menuModifierOptions,
+    menuProducts,
+    orderAudits,
+    orders,
     restaurants: Object.freeze([...restaurants.rows]),
   });
 }
@@ -610,6 +932,171 @@ function validateBranches(
       || (!isActiveRestaurant(row) && (!expectedRow.mayBeDisabled || !isVerificationDisabled(row, cobaltId)))
     ) throw contaminationError();
   }
+}
+
+function validateMenuCatalog(
+  runId: string,
+  snapshot: TenancyFixtureRecoverySnapshot,
+  amberId: string,
+  restaurantId: string,
+  branchesByName: ReadonlyMap<string, BranchRow>,
+): Readonly<{
+  auditEventIds: readonly string[];
+  catalogIds: readonly string[];
+  categoryIds: readonly string[];
+  headRestaurantIds: readonly string[];
+  modifierGroupIds: readonly string[];
+  modifierOptionIds: readonly string[];
+  productIds: readonly string[];
+}> {
+  const catalogs = snapshot.menuCatalogs ?? [];
+  const categories = snapshot.menuCategories ?? [];
+  const products = snapshot.menuProducts ?? [];
+  const groups = snapshot.menuModifierGroups ?? [];
+  const options = snapshot.menuModifierOptions ?? [];
+  const heads = snapshot.menuCatalogHeads ?? [];
+  const audits = snapshot.menuCatalogAudits ?? [];
+  const collections = [catalogs, categories, products, groups, options, heads, audits];
+  const hasMenu = collections.some((rows) => rows.length > 0);
+  if (!hasMenu) {
+    return Object.freeze({
+      auditEventIds: Object.freeze([]),
+      catalogIds: Object.freeze([]),
+      categoryIds: Object.freeze([]),
+      headRestaurantIds: Object.freeze([]),
+      modifierGroupIds: Object.freeze([]),
+      modifierOptionIds: Object.freeze([]),
+      productIds: Object.freeze([]),
+    });
+  }
+  if (collections.some((rows) => rows.length !== 1)) throw contaminationError();
+  const catalog = catalogs[0];
+  const category = categories[0];
+  const product = products[0];
+  const group = groups[0];
+  const option = options[0];
+  const head = heads[0];
+  const audit = audits[0];
+  const branch = branchesByName.get(tenancyFixtureName(runId, "branch-11"));
+  if (
+    catalog === undefined
+    || category === undefined
+    || product === undefined
+    || group === undefined
+    || option === undefined
+    || head === undefined
+    || audit === undefined
+    || branch === undefined
+    || catalog.restaurantId !== restaurantId
+    || catalog.publishedBy !== amberId
+    || catalog.version !== 1
+    || catalog.currency !== "MXN"
+    || category.restaurantId !== restaurantId
+    || category.catalogId !== catalog.id
+    || category.name !== tenancyFixtureName(runId, "menu-category")
+    || product.restaurantId !== restaurantId
+    || product.catalogId !== catalog.id
+    || product.categoryId !== category.id
+    || product.name !== tenancyFixtureName(runId, "menu-product")
+    || group.restaurantId !== restaurantId
+    || group.catalogId !== catalog.id
+    || group.productId !== product.id
+    || group.name !== tenancyFixtureName(runId, "menu-group")
+    || option.restaurantId !== restaurantId
+    || option.catalogId !== catalog.id
+    || option.groupId !== group.id
+    || option.name !== tenancyFixtureName(runId, "menu-option")
+    || head.restaurantId !== restaurantId
+    || head.catalogId !== catalog.id
+    || head.version !== 1
+    || head.updatedBy !== amberId
+    || audit.restaurantId !== restaurantId
+    || audit.branchId !== branch.id
+    || audit.catalogId !== catalog.id
+    || audit.actorId !== amberId
+    || audit.resultVersion !== 1
+  ) throw contaminationError();
+  return Object.freeze({
+    auditEventIds: Object.freeze([audit.eventId]),
+    catalogIds: Object.freeze([catalog.id]),
+    categoryIds: Object.freeze([category.id]),
+    headRestaurantIds: Object.freeze([head.restaurantId]),
+    modifierGroupIds: Object.freeze([group.id]),
+    modifierOptionIds: Object.freeze([option.id]),
+    productIds: Object.freeze([product.id]),
+  });
+}
+
+function validateOrdersRealtime(
+  runId: string,
+  snapshot: TenancyFixtureRecoverySnapshot,
+  amberId: string,
+  restaurantId: string,
+  branchesByName: ReadonlyMap<string, BranchRow>,
+): Readonly<{
+  auditEventIds: readonly string[];
+  cursorScopes: readonly Readonly<{ branchId: string; restaurantId: string }>[];
+  kdsEventIds: readonly string[];
+  orderIds: readonly string[];
+}> {
+  const orders = snapshot.orders ?? [];
+  const audits = snapshot.orderAudits ?? [];
+  const kdsEvents = snapshot.kdsEvents ?? [];
+  const cursors = snapshot.kdsCursors ?? [];
+  if (orders.length === 0 && audits.length === 0 && kdsEvents.length === 0 && cursors.length === 0) {
+    return Object.freeze({ auditEventIds: Object.freeze([]), cursorScopes: Object.freeze([]), kdsEventIds: Object.freeze([]), orderIds: Object.freeze([]) });
+  }
+  const branch = branchesByName.get(tenancyFixtureName(runId, "branch-11"));
+  const order = orders[0];
+  if (orders.length !== 1 || order === undefined || branch === undefined || !UUID_PATTERN.test(order.id)
+    || order.restaurantId !== restaurantId || order.branchId !== branch.id || order.actorId !== amberId
+    || order.channel !== "counter" || order.version < 1 || order.version > 7
+    || order.status !== (order.version < 3 ? "draft" : "open")) throw contaminationError();
+
+  const expectedOperations = [
+    "order.created",
+    "order.item_added",
+    "order.state_changed",
+    "order_item.state_changed",
+    "order_item.state_changed",
+    "order_item.state_changed",
+    "order_item.state_changed",
+  ] as const;
+  const expectedMarkers = ["create", "add-item", "open", "item-sent", "item-preparing", "item-ready", "item-delivered"] as const;
+  if (audits.length !== order.version) throw contaminationError();
+  const sortedAudits = [...audits].sort((left, right) => left.resultVersion - right.resultVersion);
+  for (const [index, audit] of sortedAudits.entries()) {
+    if (!UUID_PATTERN.test(audit.eventId) || audit.resultVersion !== index + 1
+      || audit.restaurantId !== restaurantId || audit.branchId !== branch.id || audit.orderId !== order.id
+      || audit.actorId !== amberId || audit.operation !== expectedOperations[index]
+      || audit.idempotencyKey !== `tenancy-orders-v1:${runId}:${expectedMarkers[index]}`) throw contaminationError();
+  }
+
+  const expectedKdsAuditIndexes = [1, 3, 4, 5, 6].filter((index) => index < order.version);
+  const expectedKdsStatuses = ["pending", "sent", "preparing", "ready", "delivered"] as const;
+  if (kdsEvents.length !== expectedKdsAuditIndexes.length) throw contaminationError();
+  const sortedKds = [...kdsEvents].sort((left, right) => left.cursor - right.cursor);
+  for (const [index, event] of sortedKds.entries()) {
+    const audit = sortedAudits[expectedKdsAuditIndexes[index] ?? -1];
+    if (audit === undefined || event.eventId !== audit.eventId || event.cursor !== index + 1
+      || event.restaurantId !== restaurantId || event.branchId !== branch.id || event.orderId !== order.id
+      || event.stationId !== "kitchen" || event.status !== expectedKdsStatuses[index]
+      || event.operation !== (index === 0 ? "order_item.created" : "order_item.status_changed")) throw contaminationError();
+  }
+  if (sortedKds.length === 0) {
+    if (cursors.length !== 0) throw contaminationError();
+  } else {
+    const cursor = cursors[0];
+    if (cursors.length !== 1 || cursor?.restaurantId !== restaurantId || cursor.branchId !== branch.id || cursor.lastCursor !== sortedKds.length) {
+      throw contaminationError();
+    }
+  }
+  return Object.freeze({
+    auditEventIds: Object.freeze(sortedAudits.map((row) => row.eventId)),
+    cursorScopes: Object.freeze(cursors.map((row) => Object.freeze({ branchId: row.branchId, restaurantId: row.restaurantId }))),
+    kdsEventIds: Object.freeze(sortedKds.map((row) => row.eventId)),
+    orderIds: Object.freeze([order.id]),
+  });
 }
 
 function validateDiningZones(
@@ -818,7 +1305,7 @@ async function deleteExactly(
   client: PoolClient,
   table: string,
   ids: readonly string[],
-  idColumn: "event_id" | "id" = "id",
+  idColumn: "event_id" | "id" | "restaurant_id" = "id",
 ): Promise<number> {
   if (ids.length === 0) return 0;
   const result = await client.query<{ id: string }>(
@@ -831,6 +1318,23 @@ async function deleteExactly(
     throw recoveryError("database", "TENANCY_FIXTURE_RECOVERY_DATABASE_FAILED");
   }
   return ids.length;
+}
+
+async function deleteKdsCursorsExactly(
+  client: PoolClient,
+  scopes: readonly Readonly<{ branchId: string; restaurantId: string }>[],
+): Promise<number> {
+  let removed = 0;
+  for (const scope of scopes) {
+    const result = await client.query(
+      `delete from app_private.kds_branch_cursors
+       where restaurant_id = $1::uuid and branch_id = $2::uuid`,
+      [scope.restaurantId, scope.branchId],
+    );
+    if (result.rowCount !== 1) throw recoveryError("database", "TENANCY_FIXTURE_RECOVERY_DATABASE_FAILED");
+    removed += 1;
+  }
+  return removed;
 }
 
 async function rollbackQuietly(client: PoolClient): Promise<void> {

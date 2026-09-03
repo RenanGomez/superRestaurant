@@ -3,15 +3,34 @@ import test from "node:test";
 
 import {
   DINING_TABLE_VERIFICATION_CHECKPOINTS,
+  FIXTURE_VERIFICATION_CHECKPOINTS,
+  MENU_CATALOG_VERIFICATION_CHECKPOINTS,
+  ORDERS_REALTIME_VERIFICATION_CHECKPOINTS,
   classifyDiningLayoutFetchFailure,
   diagnoseDiningLayoutRead,
+  diagnoseMenuCatalogRead,
   requiredDiningTableAuditEventIds,
   type DiningLayoutReadObservation,
   type DiningLayoutReadOutcome,
+  type MenuCatalogReadObservation,
+  type MenuCatalogReadOutcome,
 } from "./tenancy-verification-progress.js";
+import { valuesEqual } from "./tenancy-verification.js";
 
 const createdEventId = "71000000-0000-4000-8000-000000000001";
 const updatedEventId = "71000000-0000-4000-8000-000000000002";
+
+test("compares null and nested verification values without treating null as a record", () => {
+  assert.equal(valuesEqual(null, null), true);
+  assert.equal(valuesEqual(null, {}), false);
+  assert.equal(valuesEqual({}, null), false);
+  assert.equal(valuesEqual(
+    { catalog: null, scope: { branchId: "branch", restaurantId: "restaurant" } },
+    { catalog: null, scope: { branchId: "branch", restaurantId: "restaurant" } },
+  ), true);
+  assert.equal(valuesEqual([null, { active: true }], [null, { active: true }]), true);
+  assert.equal(valuesEqual([null], [{}]), false);
+});
 
 test("requires only audit events confirmed by dining-table fixture progress", () => {
   assert.deepEqual(requiredDiningTableAuditEventIds(
@@ -45,6 +64,73 @@ test("keeps dining-table progress checkpoints unique and non-sensitive", () => {
     DINING_TABLE_VERIFICATION_CHECKPOINTS.every((checkpoint) => /^dining_tables\.[a-z_]+$/u.test(checkpoint)),
     true,
   );
+});
+
+test("keeps menu-catalog progress checkpoints unique and non-sensitive", () => {
+  assert.equal(new Set(MENU_CATALOG_VERIFICATION_CHECKPOINTS).size, MENU_CATALOG_VERIFICATION_CHECKPOINTS.length);
+  assert.equal(
+    MENU_CATALOG_VERIFICATION_CHECKPOINTS.every((checkpoint) => /^menu_catalog\.[a-z_]+$/u.test(checkpoint)),
+    true,
+  );
+});
+
+test("keeps fixture progress checkpoints unique and non-sensitive", () => {
+  assert.equal(new Set(FIXTURE_VERIFICATION_CHECKPOINTS).size, FIXTURE_VERIFICATION_CHECKPOINTS.length);
+  assert.equal(
+    FIXTURE_VERIFICATION_CHECKPOINTS.every((checkpoint) => /^fixtures\.[a-z_]+$/u.test(checkpoint)),
+    true,
+  );
+});
+
+test("keeps Orders and Realtime progress checkpoints unique and non-sensitive", () => {
+  assert.equal(new Set(ORDERS_REALTIME_VERIFICATION_CHECKPOINTS).size, ORDERS_REALTIME_VERIFICATION_CHECKPOINTS.length);
+  assert.equal(
+    ORDERS_REALTIME_VERIFICATION_CHECKPOINTS.every((checkpoint) => /^orders_realtime\.[a-z_]+$/u.test(checkpoint)),
+    true,
+  );
+});
+
+test("classifies every manager empty-menu read failure without returning fixture data", () => {
+  const successful: MenuCatalogReadObservation = {
+    cacheControlValid: true,
+    catalogMatches: true,
+    contractValid: true,
+    fetchSucceeded: true,
+    httpStatus: 200,
+    jsonDecoded: true,
+    scopeMatches: true,
+  };
+  const cases: readonly Readonly<{
+    expected: MenuCatalogReadOutcome;
+    observation: MenuCatalogReadObservation;
+  }>[] = [
+    { expected: "fetch_failed", observation: { fetchSucceeded: false } },
+    { expected: "unexpected_status", observation: { ...successful, httpStatus: 503 } },
+    { expected: "cache_control_invalid", observation: { ...successful, cacheControlValid: false } },
+    { expected: "invalid_json", observation: { ...successful, jsonDecoded: false } },
+    { expected: "contract_invalid", observation: { ...successful, contractValid: false } },
+    { expected: "scope_mismatch", observation: { ...successful, scopeMatches: false } },
+    { expected: "catalog_mismatch", observation: { ...successful, catalogMatches: false } },
+    { expected: "ok", observation: successful },
+  ];
+
+  for (const fixture of cases) {
+    const diagnostic = diagnoseMenuCatalogRead(fixture.observation);
+    assert.equal(diagnostic.outcome, fixture.expected);
+    assert.deepEqual(
+      Object.keys(diagnostic).sort(),
+      [
+        "cacheControlValid",
+        "catalogMatches",
+        "contractValid",
+        "httpStatus",
+        "jsonDecoded",
+        "outcome",
+        "scopeMatches",
+        "transportFailure",
+      ],
+    );
+  }
 });
 
 test("classifies every manager layout read failure without returning fixture data", () => {

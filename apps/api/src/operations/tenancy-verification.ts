@@ -8,18 +8,23 @@ import {
   BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
   DINING_LAYOUT_SCHEMA_VERSION,
   DINING_ZONE_SCHEMA_VERSION,
+  MENU_CATALOG_SCHEMA_VERSION,
   parseBranchMembershipListV1,
   parseCreateDiningZoneCommandV1,
   parseCreateDiningTableCommandV1,
   parseDiningLayoutV1,
   parseDiningTableV1,
   parseDiningZoneV1,
+  parseMenuCatalogStateV1,
+  parseSaveMenuCatalogCommandV1,
   parseUpdateDiningTableLayoutCommandV1,
   type BranchMembershipSummaryV1,
   type CreateDiningZoneCommandV1,
   type CreateDiningTableCommandV1,
   type DiningTableV1,
   type DiningZoneV1,
+  type MenuCatalogStateV1,
+  type SaveMenuCatalogCommandV1,
   type UpdateDiningTableLayoutCommandV1,
 } from "@super-restaurant/shared-types";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -49,10 +54,15 @@ import {
 import {
   classifyDiningLayoutFetchFailure,
   diagnoseDiningLayoutRead,
+  diagnoseMenuCatalogRead,
   requiredDiningTableAuditEventIds,
   type DiningLayoutReadDiagnostic,
   type DiningLayoutReadObservation,
   type DiningTableVerificationCheckpoint,
+  type FixtureVerificationCheckpoint,
+  type MenuCatalogVerificationCheckpoint,
+  type MenuCatalogReadDiagnostic,
+  type MenuCatalogReadObservation,
 } from "./tenancy-verification-progress.js";
 
 type FixtureKey = TenancyFixtureKey;
@@ -65,7 +75,17 @@ type AppTable =
   | "dining_zones"
   | "dining_zone_audit_events"
   | "dining_tables"
-  | "dining_table_audit_events";
+  | "dining_table_audit_events"
+  | "menu_catalogs"
+  | "menu_categories"
+  | "menu_products"
+  | "menu_modifier_groups"
+  | "menu_modifier_options"
+  | "menu_catalog_heads"
+  | "menu_catalog_audit_events"
+  | "orders"
+  | "order_audit_events"
+  | "kds_events";
 
 const appTables: readonly AppTable[] = [
   "roles",
@@ -74,6 +94,16 @@ const appTables: readonly AppTable[] = [
   "memberships",
   "membership_role_grants",
 ];
+const menuCatalogTables = [
+  "menu_catalogs",
+  "menu_categories",
+  "menu_products",
+  "menu_modifier_groups",
+  "menu_modifier_options",
+  "menu_catalog_heads",
+  "menu_catalog_audit_events",
+] as const satisfies readonly AppTable[];
+const ordersRealtimeTables = ["orders", "order_audit_events", "kds_events"] as const satisfies readonly AppTable[];
 const expectedRoleCodes = [
   "admin",
   "auditor",
@@ -89,6 +119,8 @@ export interface TenancyVerificationSummary {
   readonly checks: number;
   readonly diningZonesVerified: boolean;
   readonly diningTablesVerified: boolean;
+  readonly menuCatalogVerified: boolean;
+  readonly ordersRealtimeVerified: boolean;
   readonly fixtureRowsRemoved: true;
   readonly fixtureUsersRemoved: 2;
   readonly runId: string;
@@ -104,8 +136,13 @@ export interface RunTenancyVerificationOptions {
   readonly onCheckpoint?: (checkpoint: DiningTableVerificationCheckpoint) => void;
   readonly onDiningLayoutDiagnostic?: (diagnostic: DiningLayoutReadDiagnostic) => void;
   readonly onFailure?: (failure: TenancyVerificationFailureNotice) => void;
+  readonly onFixtureCheckpoint?: (checkpoint: FixtureVerificationCheckpoint) => void;
+  readonly onMenuCatalogCheckpoint?: (checkpoint: MenuCatalogVerificationCheckpoint) => void;
+  readonly onMenuCatalogDiagnostic?: (diagnostic: MenuCatalogReadDiagnostic) => void;
   readonly verifyDiningZones?: true;
   readonly verifyDiningTables?: true;
+  readonly verifyMenuCatalog?: true;
+  readonly verifyOrdersRealtime?: true;
 }
 
 export interface TenancyVerificationFailureNotice {
@@ -122,11 +159,26 @@ export interface TenancyVerificationLiveFixture {
   readonly restaurantId: string;
   readonly restaurantName: string;
   readonly runId: string;
+  readonly verificationContext?: TenancyVerificationLiveFixtureContext;
+}
+
+export interface TenancyVerificationLiveFixtureContext {
+  readonly accessToken: string;
+  readonly menuModifierGroupId: string;
+  readonly menuModifierOptionId: string;
+  readonly menuProductId: string;
+  readonly primaryUserId: string;
+  readonly secondaryAccessToken: string;
+  readonly secondaryBranchId: string;
+  readonly secondaryRestaurantId: string;
+  readonly secondaryUserId: string;
+  readonly viewerBranchId: string;
 }
 
 export interface TenancyVerificationLiveFixtureHooks {
   afterRevocation(fixture: TenancyVerificationLiveFixture): Promise<void>;
   beforeRevocation(fixture: TenancyVerificationLiveFixture): Promise<void>;
+  cleanup?(fixture: TenancyVerificationLiveFixture): Promise<void>;
 }
 
 interface DiningZoneFixtureCommand {
@@ -159,6 +211,28 @@ interface DiningTableFixturePlan {
   readonly staleIdempotencyKey: string;
 }
 
+interface MenuCatalogFixtureCommand {
+  readonly catalogVersion: string;
+  readonly categoryId: string;
+  readonly eventId: string;
+  readonly groupId: string;
+  readonly idempotencyKey: string;
+  readonly optionId: string;
+  readonly productId: string;
+}
+
+interface MenuCatalogFixturePlan {
+  readonly commands: readonly [
+    MenuCatalogFixtureCommand,
+    MenuCatalogFixtureCommand,
+    MenuCatalogFixtureCommand,
+    MenuCatalogFixtureCommand,
+    MenuCatalogFixtureCommand,
+  ];
+  readonly deviceId: string;
+  readonly occurredAt: string;
+}
+
 interface FixtureUserPlan {
   readonly branchIds: readonly string[];
   readonly credentials: Readonly<{ email: string; password: string }>;
@@ -175,6 +249,7 @@ interface FixturePlan {
   readonly restaurantIds: readonly [string, string];
   readonly diningZones: DiningZoneFixturePlan;
   readonly diningTables: DiningTableFixturePlan;
+  readonly menuCatalog: MenuCatalogFixturePlan;
   readonly runId: string;
   readonly users: readonly [FixtureUserPlan, FixtureUserPlan];
   authCreationAttempted: boolean;
@@ -184,6 +259,8 @@ interface FixturePlan {
   diningTableCreated: boolean;
   diningTableUpdated: boolean;
   diningTablesEnabled: boolean;
+  menuCatalogCreated: boolean;
+  menuCatalogEnabled: boolean;
 }
 
 interface AuthenticatedFixture {
@@ -209,29 +286,49 @@ export async function runTenancyVerification(
 ): Promise<TenancyVerificationSummary> {
   const verifyDiningTables = options.verifyDiningTables === true;
   const verifyDiningZones = options.verifyDiningZones === true || verifyDiningTables;
+  const verifyOrdersRealtime = options.verifyOrdersRealtime === true;
+  const verifyMenuCatalog = options.verifyMenuCatalog === true || verifyOrdersRealtime;
   const runtimeCatalogAuditSql = validateRuntimeAuditSql(
     options.runtimeCatalogAuditSql,
     verifyDiningZones,
     verifyDiningTables,
+    verifyMenuCatalog,
+    verifyOrdersRealtime,
   );
   const apiPort = readApiPort(options.apiPort);
-  const plan = createFixturePlan(verifyDiningZones, verifyDiningTables);
+  const plan = createFixturePlan(verifyDiningZones, verifyDiningTables, verifyMenuCatalog);
   options.onStart?.(plan.runId);
   const counter = new VerificationCounter();
   const adminPool = createPool(options.config.adminDatabase, "super-restaurant-tenancy-admin");
   const appApiPool = createPool(options.config.appDatabase, "super-restaurant-tenancy-app-api");
   const serverClient = createSupabaseClient(options.config.supabaseUrl, options.config.secretKey);
   let app: INestApplication | undefined;
+  let liveFixture: TenancyVerificationLiveFixture | undefined;
   let operationLock: PoolClient | undefined;
   let failure: TenancyVerificationError | undefined;
 
   try {
+    options.onFixtureCheckpoint?.("fixtures.operation_lock");
     operationLock = await executeStage("fixtures", async () => acquireFixtureOperationLock(adminPool, plan.runId));
+    options.onFixtureCheckpoint?.("fixtures.operation_lock_acquired");
     await executeStage("catalog_audit", async () => {
       await adminPool.query(runtimeCatalogAuditSql);
     });
-    await executeStage("app_api", async () => verifyAppApiSurface(appApiPool, counter, verifyDiningZones, verifyDiningTables));
-    await executeStage("fixtures", async () => createFixtures(serverClient, adminPool, plan, counter));
+    await executeStage("app_api", async () => verifyAppApiSurface(
+      appApiPool,
+      counter,
+      verifyDiningZones,
+      verifyDiningTables,
+      verifyMenuCatalog,
+      verifyOrdersRealtime,
+    ));
+    await executeStage("fixtures", async () => createFixtures(
+      serverClient,
+      adminPool,
+      plan,
+      counter,
+      options.onFixtureCheckpoint,
+    ));
     const authenticated = await executeStage("authentication", async () => authenticateFixtures(options.config, plan, counter));
 
     app = await executeStage("http", async () => startProductApi(apiPort));
@@ -242,10 +339,12 @@ export async function runTenancyVerification(
       counter,
       verifyDiningZones,
       verifyDiningTables,
+      verifyMenuCatalog,
+      verifyOrdersRealtime,
     ));
     await executeStage("app_api", async () => verifyPrivateLookupBaseline(appApiPool, plan, counter));
     await executeStage("http", async () => verifyHttpBaseline(app as INestApplication, plan, authenticated, counter));
-    const liveFixture = await readLiveFixture(app as INestApplication, plan);
+    liveFixture = await readLiveFixture(app as INestApplication, plan, authenticated);
     if (verifyDiningZones) {
       await executeStage("dining_zones", async () => verifyDiningZonesBaseline(
         adminPool,
@@ -266,8 +365,19 @@ export async function runTenancyVerification(
         options.onDiningLayoutDiagnostic,
       ));
     }
+    if (verifyMenuCatalog) {
+      await executeStage("menu_catalog", async () => verifyMenuCatalogBaseline(
+        adminPool,
+        app as INestApplication,
+        plan,
+        authenticated,
+        counter,
+        options.onMenuCatalogCheckpoint,
+        options.onMenuCatalogDiagnostic,
+      ));
+    }
     if (options.liveFixtureHooks !== undefined) {
-      await executeStage("http", async () => options.liveFixtureHooks?.beforeRevocation(liveFixture));
+      await executeStage("http", async () => options.liveFixtureHooks?.beforeRevocation(liveFixture as TenancyVerificationLiveFixture));
     }
     await executeStage("revocation", async () => verifyRevocations(
       adminPool,
@@ -278,7 +388,7 @@ export async function runTenancyVerification(
       counter,
     ));
     if (options.liveFixtureHooks !== undefined) {
-      await executeStage("http", async () => options.liveFixtureHooks?.afterRevocation(liveFixture));
+      await executeStage("http", async () => options.liveFixtureHooks?.afterRevocation(liveFixture as TenancyVerificationLiveFixture));
     }
     if (verifyDiningTables) {
       await executeStage("dining_tables", async () => verifyDiningTableAfterRevocation(
@@ -299,6 +409,16 @@ export async function runTenancyVerification(
         counter,
       ));
     }
+    if (verifyMenuCatalog) {
+      await executeStage("menu_catalog", async () => verifyMenuCatalogAfterRevocation(
+        adminPool,
+        app as INestApplication,
+        plan,
+        authenticated[0],
+        counter,
+        options.onMenuCatalogCheckpoint,
+      ));
+    }
     await executeStage("constraints", async () => verifyConstraints(adminPool, plan, counter));
   } catch (error: unknown) {
     failure = sanitizeExecutionError(error);
@@ -312,6 +432,12 @@ export async function runTenancyVerification(
       if (app !== undefined) await app.close();
     } catch {
       failure ??= new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
+    }
+
+    try {
+      if (liveFixture !== undefined) await options.liveFixtureHooks?.cleanup?.(liveFixture);
+    } catch {
+      failure = new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
     }
 
     try {
@@ -337,6 +463,8 @@ export async function runTenancyVerification(
     checks: counter.checks,
     diningZonesVerified: verifyDiningZones,
     diningTablesVerified: verifyDiningTables,
+    menuCatalogVerified: verifyMenuCatalog,
+    ordersRealtimeVerified: verifyOrdersRealtime,
     fixtureRowsRemoved: true,
     fixtureUsersRemoved: 2,
     runId: plan.runId,
@@ -364,7 +492,11 @@ async function acquireFixtureOperationLock(pool: Pool, runId: string): Promise<P
   }
 }
 
-function createFixturePlan(diningZonesEnabled: boolean, diningTablesEnabled: boolean): FixturePlan {
+function createFixturePlan(
+  diningZonesEnabled: boolean,
+  diningTablesEnabled: boolean,
+  menuCatalogEnabled: boolean,
+): FixturePlan {
   const runId = randomUUID();
   const restaurantIds = [randomUUID(), randomUUID()] as const;
   const branchIds = [randomUUID(), randomUUID(), randomUUID(), randomUUID()] as const;
@@ -393,6 +525,19 @@ function createFixturePlan(diningZonesEnabled: boolean, diningTablesEnabled: boo
     updateIdempotencyKey: randomUUID(),
     updateOccurredAt: new Date(Date.now() + 1_000).toISOString(),
   };
+  const menuCatalog: MenuCatalogFixturePlan = {
+    commands: [0, 1, 2, 3, 4].map(() => ({
+      catalogVersion: randomUUID(),
+      categoryId: randomUUID(),
+      eventId: randomUUID(),
+      groupId: randomUUID(),
+      idempotencyKey: randomUUID(),
+      optionId: randomUUID(),
+      productId: randomUUID(),
+    })) as unknown as MenuCatalogFixturePlan["commands"],
+    deviceId: randomUUID(),
+    occurredAt: new Date().toISOString(),
+  };
   return {
     branchIds,
     authCreationAttempted: false,
@@ -405,6 +550,9 @@ function createFixturePlan(diningZonesEnabled: boolean, diningTablesEnabled: boo
     diningTableUpdated: false,
     diningTables,
     diningTablesEnabled,
+    menuCatalog,
+    menuCatalogCreated: false,
+    menuCatalogEnabled,
     grantIds: [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()],
     membershipIds: [randomUUID(), randomUUID(), randomUUID(), randomUUID()],
     restaurantIds,
@@ -458,8 +606,10 @@ async function createFixtures(
   adminPool: Pool,
   plan: FixturePlan,
   counter: VerificationCounter,
+  onCheckpoint: RunTenancyVerificationOptions["onFixtureCheckpoint"],
 ): Promise<void> {
-  for (const user of plan.users) {
+  for (const [index, user] of plan.users.entries()) {
+    onCheckpoint?.(index === 0 ? "fixtures.auth_amber_create" : "fixtures.auth_cobalt_create");
     plan.authCreationAttempted = true;
     const result = await serverClient.auth.admin.createUser({
       app_metadata: {
@@ -474,12 +624,14 @@ async function createFixtures(
     counter.assert("fixtures", result.error === null && result.data.user !== null);
     if (result.data.user === null) throw new TenancyVerificationError("fixtures", "TENANCY_VERIFICATION_FIXTURES_FAILED");
     user.userId = result.data.user.id;
+    onCheckpoint?.(index === 0 ? "fixtures.auth_amber_created" : "fixtures.auth_cobalt_created");
   }
 
   const amberId = requireUserId(plan.users[0]);
   const cobaltId = requireUserId(plan.users[1]);
   const client = await adminPool.connect();
   try {
+    onCheckpoint?.("fixtures.database_begin");
     await client.query("BEGIN");
     await client.query(
       `insert into app.restaurants (id, name) values ($1::uuid, $3::text), ($2::uuid, $4::text)`,
@@ -490,6 +642,7 @@ async function createFixtures(
         tenancyFixtureName(plan.runId, "restaurant-2"),
       ],
     );
+    onCheckpoint?.("fixtures.restaurants_inserted");
     await client.query(
       `insert into app.branches (id, restaurant_id, name) values
         ($1::uuid, $5::uuid, $7::text),
@@ -505,6 +658,7 @@ async function createFixtures(
         tenancyFixtureName(plan.runId, "branch-22"),
       ],
     );
+    onCheckpoint?.("fixtures.branches_inserted");
     await client.query(
       `insert into app.memberships (id, user_id, restaurant_id, branch_id, granted_by) values
         ($1::uuid, $5::uuid, $7::uuid, $9::uuid, $5::uuid),
@@ -513,6 +667,7 @@ async function createFixtures(
         ($4::uuid, $6::uuid, $8::uuid, $12::uuid, $5::uuid)`,
       [...plan.membershipIds, amberId, cobaltId, ...plan.restaurantIds, ...plan.branchIds],
     );
+    onCheckpoint?.("fixtures.memberships_inserted");
     await client.query(
       `insert into app.membership_role_grants (id, membership_id, role_code, granted_by) values
         ($1::uuid, $6::uuid, 'manager', $10::uuid),
@@ -522,8 +677,10 @@ async function createFixtures(
         ($5::uuid, $9::uuid, 'kitchen', $10::uuid)`,
       [...plan.grantIds, ...plan.membershipIds, amberId],
     );
+    onCheckpoint?.("fixtures.grants_inserted");
     await client.query("COMMIT");
     plan.databaseFixturesInserted = true;
+    onCheckpoint?.("fixtures.database_committed");
   } catch {
     await rollbackQuietly(client);
     throw new TenancyVerificationError("fixtures", "TENANCY_VERIFICATION_FIXTURES_FAILED");
@@ -581,6 +738,7 @@ async function startProductApi(port: number): Promise<INestApplication> {
 async function readLiveFixture(
   app: INestApplication,
   plan: FixturePlan,
+  authenticated: readonly [AuthenticatedFixture, AuthenticatedFixture],
 ): Promise<TenancyVerificationLiveFixture> {
   return Object.freeze({
     apiBaseUrl: await app.getUrl(),
@@ -590,6 +748,18 @@ async function readLiveFixture(
     restaurantId: plan.restaurantIds[0],
     restaurantName: tenancyFixtureName(plan.runId, "restaurant-1"),
     runId: plan.runId,
+    verificationContext: Object.freeze({
+      accessToken: authenticated[0].accessToken,
+      menuModifierGroupId: plan.menuCatalog.commands[0].groupId,
+      menuModifierOptionId: plan.menuCatalog.commands[0].optionId,
+      menuProductId: plan.menuCatalog.commands[0].productId,
+      primaryUserId: authenticated[0].userId,
+      secondaryAccessToken: authenticated[1].accessToken,
+      secondaryBranchId: plan.branchIds[3],
+      secondaryRestaurantId: plan.restaurantIds[1],
+      secondaryUserId: authenticated[1].userId,
+      viewerBranchId: plan.branchIds[1],
+    }),
   });
 }
 
@@ -600,15 +770,20 @@ async function verifyDataApiBaseline(
   counter: VerificationCounter,
   verifyDiningZones: boolean,
   verifyDiningTables: boolean,
+  verifyMenuCatalog: boolean,
+  verifyOrdersRealtime: boolean,
 ): Promise<void> {
   const anon = createSupabaseClient(config.supabaseUrl, config.publishableKey);
   const serviceRole = createSupabaseClient(config.supabaseUrl, config.secretKey);
-  const tables = verifyDiningTables
+  const diningTables = verifyDiningTables
     ? [...appTables, "dining_zones", "dining_zone_audit_events", "dining_tables", "dining_table_audit_events"] as const
     : verifyDiningZones
     ? [...appTables, "dining_zones", "dining_zone_audit_events"] as const
     : appTables;
-  for (const table of tables) {
+  const tables: readonly AppTable[] = verifyMenuCatalog
+    ? [...diningTables, ...menuCatalogTables]
+    : diningTables;
+  for (const table of verifyOrdersRealtime ? [...tables, ...ordersRealtimeTables] : tables) {
     await expectDataApiDeniedRead(anon, table, counter);
     await expectDataApiDeniedRead(serviceRole, table, counter);
   }
@@ -701,6 +876,8 @@ async function verifyAppApiSurface(
   counter: VerificationCounter,
   verifyDiningZones: boolean,
   verifyDiningTables: boolean,
+  verifyMenuCatalog: boolean,
+  verifyOrdersRealtime: boolean,
 ): Promise<void> {
   const identity = await appApiPool.query<{ currentUser: string; sessionUser: string }>(
     `select current_user::text as "currentUser", session_user::text as "sessionUser"`,
@@ -723,6 +900,16 @@ async function verifyAppApiSurface(
   if (verifyDiningTables) {
     await expectPostgresDenied(appApiPool, "select * from app.dining_tables limit 1", [], counter, "app_api");
     await expectPostgresDenied(appApiPool, "select * from app.dining_table_audit_events limit 1", [], counter, "app_api");
+  }
+  if (verifyMenuCatalog) {
+    for (const table of menuCatalogTables) {
+      await expectPostgresDenied(appApiPool, `select * from app.${table} limit 1`, [], counter, "app_api");
+    }
+  }
+  if (verifyOrdersRealtime) {
+    for (const table of ordersRealtimeTables) {
+      await expectPostgresDenied(appApiPool, `select * from app.${table} limit 1`, [], counter, "app_api");
+    }
   }
 }
 
@@ -1372,6 +1559,398 @@ async function verifyRevocations(
   await assertMembershipDirectoryHttp(baseUrl, cobalt.accessToken, [], counter, "revocation");
 }
 
+async function verifyMenuCatalogBaseline(
+  adminPool: Pool,
+  app: INestApplication,
+  plan: FixturePlan,
+  authenticated: readonly [AuthenticatedFixture, AuthenticatedFixture],
+  counter: VerificationCounter,
+  onCheckpoint: RunTenancyVerificationOptions["onMenuCatalogCheckpoint"],
+  onDiagnostic: RunTenancyVerificationOptions["onMenuCatalogDiagnostic"],
+): Promise<void> {
+  const baseUrl = await app.getUrl();
+  const managerScope = { branchId: plan.branchIds[0], restaurantId: plan.restaurantIds[0] };
+  const viewerScope = { branchId: plan.branchIds[1], restaurantId: plan.restaurantIds[0] };
+  const cobaltScope = { branchId: plan.branchIds[2], restaurantId: plan.restaurantIds[1] };
+  const falsePairScope = { branchId: plan.branchIds[2], restaurantId: plan.restaurantIds[0] };
+  const managerCommand = menuCatalogCommand(plan, 0, managerScope.restaurantId, managerScope.branchId);
+
+  onCheckpoint?.("menu_catalog.unauthenticated_write");
+  await assertMenuCatalogError(baseUrl, undefined, managerCommand, 401, "AUTHENTICATION_REQUIRED", counter);
+  onCheckpoint?.("menu_catalog.empty_persistence");
+  await assertMenuCatalogPersistence(adminPool, plan, false, counter);
+  onCheckpoint?.("menu_catalog.manager_empty_read");
+  await assertMenuCatalogReadDiagnosed(
+    baseUrl,
+    authenticated[0].accessToken,
+    managerScope,
+    null,
+    counter,
+    onCheckpoint,
+    onDiagnostic,
+  );
+  onCheckpoint?.("menu_catalog.other_tenant_empty_read");
+  await assertMenuCatalogRead(baseUrl, authenticated[1].accessToken, cobaltScope, null, counter);
+  onCheckpoint?.("menu_catalog.false_pair_read_rejected");
+  await assertMenuCatalogReadError(baseUrl, authenticated[0].accessToken, falsePairScope, 403, counter);
+
+  onCheckpoint?.("menu_catalog.manager_publish");
+  const saved = await assertMenuCatalogSuccess(
+    baseUrl,
+    authenticated[0].accessToken,
+    managerCommand,
+    false,
+    authenticated[0].userId,
+    counter,
+  );
+  onCheckpoint?.("menu_catalog.manager_publish_response_verified");
+  plan.menuCatalogCreated = true;
+  onCheckpoint?.("menu_catalog.published_persistence");
+  await assertMenuCatalogPersistence(adminPool, plan, true, counter);
+
+  onCheckpoint?.("menu_catalog.publish_replay");
+  const replayed = await assertMenuCatalogSuccess(
+    baseUrl,
+    authenticated[0].accessToken,
+    managerCommand,
+    true,
+    authenticated[0].userId,
+    counter,
+  );
+  onCheckpoint?.("menu_catalog.publish_replay_response_verified");
+  counter.assert(
+    "menu_catalog",
+    replayed.catalog?.updatedAt === saved.catalog?.updatedAt && replayed.catalog?.version === saved.catalog?.version,
+  );
+  onCheckpoint?.("menu_catalog.replay_persistence");
+  await assertMenuCatalogPersistence(adminPool, plan, true, counter);
+  onCheckpoint?.("menu_catalog.viewer_read");
+  await assertMenuCatalogRead(baseUrl, authenticated[0].accessToken, viewerScope, saved.catalog, counter);
+
+  const conflict = {
+    ...menuCatalogCommand(plan, 1, managerScope.restaurantId, managerScope.branchId),
+    idempotencyKey: managerCommand.idempotencyKey,
+  } satisfies SaveMenuCatalogCommandV1;
+  onCheckpoint?.("menu_catalog.idempotency_conflict");
+  await assertMenuCatalogError(baseUrl, authenticated[0].accessToken, conflict, 409, "MENU_CATALOG_CONFLICT", counter);
+  onCheckpoint?.("menu_catalog.conflict_persistence");
+  await assertMenuCatalogPersistence(adminPool, plan, true, counter);
+
+  const viewerCommand = menuCatalogCommand(plan, 2, viewerScope.restaurantId, viewerScope.branchId);
+  onCheckpoint?.("menu_catalog.viewer_write_rejected");
+  await assertMenuCatalogError(baseUrl, authenticated[0].accessToken, viewerCommand, 403, "ACTION_NOT_AUTHORIZED", counter);
+  onCheckpoint?.("menu_catalog.viewer_write_persistence");
+  await assertMenuCatalogPersistence(adminPool, plan, true, counter);
+
+  const falsePairCommand = menuCatalogCommand(plan, 3, falsePairScope.restaurantId, falsePairScope.branchId);
+  onCheckpoint?.("menu_catalog.false_pair_write_rejected");
+  await assertMenuCatalogError(baseUrl, authenticated[0].accessToken, falsePairCommand, 403, "ACTION_NOT_AUTHORIZED", counter);
+  onCheckpoint?.("menu_catalog.false_pair_write_persistence");
+  await assertMenuCatalogPersistence(adminPool, plan, true, counter);
+}
+
+async function verifyMenuCatalogAfterRevocation(
+  adminPool: Pool,
+  app: INestApplication,
+  plan: FixturePlan,
+  authenticated: AuthenticatedFixture,
+  counter: VerificationCounter,
+  onCheckpoint: RunTenancyVerificationOptions["onMenuCatalogCheckpoint"],
+): Promise<void> {
+  const baseUrl = await app.getUrl();
+  const scope = { branchId: plan.branchIds[0], restaurantId: plan.restaurantIds[0] };
+  onCheckpoint?.("menu_catalog.revoked_read_rejected");
+  await assertMenuCatalogReadError(baseUrl, authenticated.accessToken, scope, 403, counter);
+  onCheckpoint?.("menu_catalog.revoked_write_rejected");
+  await assertMenuCatalogError(
+    baseUrl,
+    authenticated.accessToken,
+    menuCatalogCommand(plan, 4, scope.restaurantId, scope.branchId),
+    403,
+    "ACTION_NOT_AUTHORIZED",
+    counter,
+  );
+  onCheckpoint?.("menu_catalog.revoked_persistence");
+  await assertMenuCatalogPersistence(adminPool, plan, true, counter);
+}
+
+function menuCatalogCommand(
+  plan: FixturePlan,
+  index: 0 | 1 | 2 | 3 | 4,
+  restaurantId: string,
+  branchId: string,
+): SaveMenuCatalogCommandV1 {
+  const fixture = plan.menuCatalog.commands[index];
+  const command = parseSaveMenuCatalogCommandV1({
+    schemaVersion: MENU_CATALOG_SCHEMA_VERSION,
+    scope: { branchId, restaurantId },
+    eventId: fixture.eventId,
+    idempotencyKey: fixture.idempotencyKey,
+    deviceId: plan.menuCatalog.deviceId,
+    occurredAt: plan.menuCatalog.occurredAt,
+    expectedVersion: 0,
+    catalogVersion: fixture.catalogVersion,
+    currency: "MXN",
+    categories: [{
+      active: true,
+      categoryId: fixture.categoryId,
+      displayOrder: 0,
+      name: tenancyFixtureName(plan.runId, "menu-category"),
+    }],
+    products: [{
+      active: true,
+      categoryId: fixture.categoryId,
+      displayOrder: 0,
+      name: tenancyFixtureName(plan.runId, "menu-product"),
+      productId: fixture.productId,
+      sku: `E2E-${plan.runId}`,
+      stationId: "kitchen",
+      tax: null,
+      unit: "piece",
+      unitPriceMinor: 12_500,
+    }],
+    modifierGroups: [{
+      active: true,
+      displayOrder: 0,
+      groupId: fixture.groupId,
+      maximumQuantity: 2,
+      minimumQuantity: 0,
+      name: tenancyFixtureName(plan.runId, "menu-group"),
+      options: [{
+        active: true,
+        maximumQuantity: 2,
+        name: tenancyFixtureName(plan.runId, "menu-option"),
+        optionId: fixture.optionId,
+        unitPriceMinor: 1_500,
+      }],
+      productId: fixture.productId,
+    }],
+  });
+  if (command === undefined) {
+    throw new TenancyVerificationError("menu_catalog", "TENANCY_VERIFICATION_MENU_CATALOG_FAILED");
+  }
+  return command;
+}
+
+async function assertMenuCatalogSuccess(
+  baseUrl: string,
+  accessToken: string,
+  command: SaveMenuCatalogCommandV1,
+  expectedReplay: boolean,
+  actorId: string,
+  counter: VerificationCounter,
+): Promise<MenuCatalogStateV1> {
+  const response = await putMenuCatalog(baseUrl, accessToken, command);
+  const parsed = parseMenuCatalogStateV1(await response.json());
+  counter.assert(
+    "menu_catalog",
+    response.status === 200
+      && response.headers.get("cache-control") === "private, no-store"
+      && parsed !== undefined
+      && parsed.catalog !== null
+      && parsed.catalog.catalogVersion === command.catalogVersion
+      && parsed.catalog.currency === command.currency
+      && parsed.catalog.version === command.expectedVersion + 1
+      && parsed.catalog.updatedBy === actorId
+      && parsed.catalog.replayed === expectedReplay
+      && valuesEqual(parsed.catalog.categories, command.categories)
+      && valuesEqual(parsed.catalog.products, command.products)
+      && valuesEqual(parsed.catalog.modifierGroups, command.modifierGroups)
+      && valuesEqual(parsed.scope, command.scope),
+  );
+  if (parsed === undefined || parsed.catalog === null) {
+    throw new TenancyVerificationError("menu_catalog", "TENANCY_VERIFICATION_MENU_CATALOG_FAILED");
+  }
+  return parsed;
+}
+
+async function assertMenuCatalogError(
+  baseUrl: string,
+  accessToken: string | undefined,
+  command: SaveMenuCatalogCommandV1,
+  expectedStatus: number,
+  expectedCode: string,
+  counter: VerificationCounter,
+): Promise<void> {
+  const response = await putMenuCatalog(baseUrl, accessToken, command);
+  const body: unknown = await response.json();
+  counter.assert("menu_catalog", response.status === expectedStatus && recordsEqual(body, { code: expectedCode }));
+}
+
+async function putMenuCatalog(
+  baseUrl: string,
+  accessToken: string | undefined,
+  command: SaveMenuCatalogCommandV1,
+): Promise<Response> {
+  return fetch(`${baseUrl}/api/v1/catalog/menu`, {
+    body: JSON.stringify(command),
+    headers: {
+      ...(accessToken === undefined ? {} : { authorization: `Bearer ${accessToken}` }),
+      "content-type": "application/json",
+    },
+    method: "PUT",
+  });
+}
+
+async function assertMenuCatalogRead(
+  baseUrl: string,
+  accessToken: string,
+  scope: Readonly<{ branchId: string; restaurantId: string }>,
+  expectedCatalog: MenuCatalogStateV1["catalog"],
+  counter: VerificationCounter,
+): Promise<void> {
+  const response = await getMenuCatalog(baseUrl, accessToken, scope);
+  const parsed = parseMenuCatalogStateV1(await response.json());
+  const normalizedCatalog = expectedCatalog === null ? null : { ...expectedCatalog, replayed: false };
+  counter.assert(
+    "menu_catalog",
+    response.status === 200
+      && response.headers.get("cache-control") === "private, no-store"
+      && parsed !== undefined
+      && valuesEqual(parsed.scope, scope)
+      && valuesEqual(parsed.catalog, normalizedCatalog),
+  );
+}
+
+async function assertMenuCatalogReadDiagnosed(
+  baseUrl: string,
+  accessToken: string,
+  scope: Readonly<{ branchId: string; restaurantId: string }>,
+  expectedCatalog: MenuCatalogStateV1["catalog"],
+  counter: VerificationCounter,
+  onCheckpoint: RunTenancyVerificationOptions["onMenuCatalogCheckpoint"],
+  onDiagnostic: RunTenancyVerificationOptions["onMenuCatalogDiagnostic"],
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await getMenuCatalog(baseUrl, accessToken, scope);
+  } catch (error: unknown) {
+    notifySafely(onDiagnostic, diagnoseMenuCatalogRead({
+      fetchSucceeded: false,
+      transportFailure: classifyDiningLayoutFetchFailure(error),
+    }));
+    throw error;
+  }
+  onCheckpoint?.("menu_catalog.manager_empty_response_received");
+  let observation: MenuCatalogReadObservation = { fetchSucceeded: true, httpStatus: response.status };
+  const statusValid = response.status === 200;
+  if (!statusValid) notifySafely(onDiagnostic, diagnoseMenuCatalogRead(observation));
+  counter.assert("menu_catalog", statusValid);
+  onCheckpoint?.("menu_catalog.manager_empty_status_verified");
+
+  const cacheControlValid = response.headers.get("cache-control") === "private, no-store";
+  observation = { ...observation, cacheControlValid };
+  if (!cacheControlValid) notifySafely(onDiagnostic, diagnoseMenuCatalogRead(observation));
+  counter.assert("menu_catalog", cacheControlValid);
+  onCheckpoint?.("menu_catalog.manager_empty_cache_verified");
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    observation = { ...observation, jsonDecoded: false };
+    notifySafely(onDiagnostic, diagnoseMenuCatalogRead(observation));
+    counter.assert("menu_catalog", false);
+    return;
+  }
+  observation = { ...observation, jsonDecoded: true };
+  onCheckpoint?.("menu_catalog.manager_empty_json_decoded");
+
+  const parsed = parseMenuCatalogStateV1(body);
+  const contractValid = parsed !== undefined;
+  observation = { ...observation, contractValid };
+  if (!contractValid) {
+    notifySafely(onDiagnostic, diagnoseMenuCatalogRead(observation));
+    counter.assert("menu_catalog", false);
+    return;
+  }
+  onCheckpoint?.("menu_catalog.manager_empty_parsed");
+
+  const scopeMatches = valuesEqual(parsed.scope, scope);
+  observation = { ...observation, scopeMatches };
+  if (!scopeMatches) notifySafely(onDiagnostic, diagnoseMenuCatalogRead(observation));
+  counter.assert("menu_catalog", scopeMatches);
+  onCheckpoint?.("menu_catalog.manager_empty_scope_verified");
+
+  const normalizedCatalog = expectedCatalog === null ? null : { ...expectedCatalog, replayed: false };
+  const catalogMatches = valuesEqual(parsed.catalog, normalizedCatalog);
+  observation = { ...observation, catalogMatches };
+  notifySafely(onDiagnostic, diagnoseMenuCatalogRead(observation));
+  counter.assert("menu_catalog", catalogMatches);
+  onCheckpoint?.("menu_catalog.manager_empty_catalog_verified");
+}
+
+async function assertMenuCatalogReadError(
+  baseUrl: string,
+  accessToken: string,
+  scope: Readonly<{ branchId: string; restaurantId: string }>,
+  expectedStatus: number,
+  counter: VerificationCounter,
+): Promise<void> {
+  const response = await getMenuCatalog(baseUrl, accessToken, scope);
+  const body: unknown = await response.json();
+  counter.assert(
+    "menu_catalog",
+    response.status === expectedStatus && recordsEqual(body, { code: "ACTION_NOT_AUTHORIZED" }),
+  );
+}
+
+function getMenuCatalog(
+  baseUrl: string,
+  accessToken: string,
+  scope: Readonly<{ branchId: string; restaurantId: string }>,
+): Promise<Response> {
+  const query = new URLSearchParams({ branchId: scope.branchId, restaurantId: scope.restaurantId });
+  return fetch(`${baseUrl}/api/v1/catalog/menu?${query.toString()}`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+}
+
+async function assertMenuCatalogPersistence(
+  adminPool: Pool,
+  plan: FixturePlan,
+  expectedCreated: boolean,
+  counter: VerificationCounter,
+): Promise<void> {
+  const command = menuCatalogCommand(plan, 0, plan.restaurantIds[0], plan.branchIds[0]);
+  const result = await adminPool.query<{
+    actorId: string | null;
+    auditCount: string;
+    catalogCount: string;
+    categoryCount: string;
+    groupCount: string;
+    headCatalogId: string | null;
+    optionCount: string;
+    productCount: string;
+  }>(
+    `select
+      (select count(*)::text from app.menu_catalogs where restaurant_id = $1::uuid) as "catalogCount",
+      (select count(*)::text from app.menu_categories where restaurant_id = $1::uuid) as "categoryCount",
+      (select count(*)::text from app.menu_products where restaurant_id = $1::uuid) as "productCount",
+      (select count(*)::text from app.menu_modifier_groups where restaurant_id = $1::uuid) as "groupCount",
+      (select count(*)::text from app.menu_modifier_options where restaurant_id = $1::uuid) as "optionCount",
+      (select count(*)::text from app.menu_catalog_audit_events where restaurant_id = $1::uuid) as "auditCount",
+      (select catalog_id::text from app.menu_catalog_heads where restaurant_id = $1::uuid) as "headCatalogId",
+      (select actor_id::text from app.menu_catalog_audit_events where event_id = $2::uuid) as "actorId"`,
+    [plan.restaurantIds[0], command.eventId],
+  );
+  const row = result.rows[0];
+  const expected = expectedCreated ? "1" : "0";
+  counter.assert(
+    "menu_catalog",
+    result.rows.length === 1
+      && row !== undefined
+      && row.catalogCount === expected
+      && row.categoryCount === expected
+      && row.productCount === expected
+      && row.groupCount === expected
+      && row.optionCount === expected
+      && row.auditCount === expected
+      && row.headCatalogId === (expectedCreated ? command.catalogVersion : null)
+      && row.actorId === (expectedCreated ? requireUserId(plan.users[0]) : null),
+  );
+}
+
 async function verifyConstraints(adminPool: Pool, plan: FixturePlan, counter: VerificationCounter): Promise<void> {
   const amberId = requireUserId(plan.users[0]);
   const cobaltId = requireUserId(plan.users[1]);
@@ -1553,6 +2132,17 @@ async function cleanupFixtures(
     try {
       await client.query("BEGIN");
       await verifyFixtureOwnership(client, plan);
+      if (plan.menuCatalogEnabled) {
+        await verifyMenuCatalogFixtureOwnership(client, plan);
+        const created = plan.menuCatalogCreated ? [plan.menuCatalog.commands[0]] : [];
+        await deleteRequiredFixtureRows(client, "app.menu_modifier_options", plan.menuCatalog.commands.map((item) => item.optionId), created.map((item) => item.optionId));
+        await deleteRequiredFixtureRows(client, "app.menu_modifier_groups", plan.menuCatalog.commands.map((item) => item.groupId), created.map((item) => item.groupId));
+        await deleteRequiredFixtureRows(client, "app.menu_products", plan.menuCatalog.commands.map((item) => item.productId), created.map((item) => item.productId));
+        await deleteRequiredFixtureRows(client, "app.menu_categories", plan.menuCatalog.commands.map((item) => item.categoryId), created.map((item) => item.categoryId));
+        await deleteRequiredFixtureRows(client, "app.menu_catalog_audit_events", plan.menuCatalog.commands.map((item) => item.eventId), created.map((item) => item.eventId), "event_id");
+        await deleteRequiredFixtureRows(client, "app.menu_catalog_heads", plan.restaurantIds, plan.menuCatalogCreated ? [plan.restaurantIds[0]] : [], "restaurant_id");
+        await deleteRequiredFixtureRows(client, "app.menu_catalogs", plan.menuCatalog.commands.map((item) => item.catalogVersion), created.map((item) => item.catalogVersion), "id");
+      }
       if (plan.diningZonesEnabled) {
         await verifyDiningZoneFixtureOwnership(client, plan);
         if (plan.diningTablesEnabled) {
@@ -1654,7 +2244,7 @@ async function deleteRequiredFixtureRows(
   table: string,
   allowedIds: readonly string[],
   requiredIds: readonly string[],
-  idColumn: "event_id" | "id" = "id",
+  idColumn: "event_id" | "id" | "restaurant_id" = "id",
 ): Promise<void> {
   const result = await client.query<{ id: string }>(
     `delete from ${table} where ${idColumn} = any($1::uuid[]) returning ${idColumn}::text as id`,
@@ -1733,6 +2323,68 @@ async function verifyFixtureOwnership(client: PoolClient, plan: FixturePlan): Pr
       throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
     }
   }
+}
+
+async function verifyMenuCatalogFixtureOwnership(client: PoolClient, plan: FixturePlan): Promise<void> {
+  const command = menuCatalogCommand(plan, 0, plan.restaurantIds[0], plan.branchIds[0]);
+  const expectedCount = plan.menuCatalogCreated ? "1" : "0";
+  const result = await client.query<{
+    actorId: string | null;
+    auditCount: string;
+    catalogCount: string;
+    categoryCount: string;
+    categoryName: string | null;
+    groupCount: string;
+    groupName: string | null;
+    headCount: string;
+    headCatalogId: string | null;
+    optionCount: string;
+    optionName: string | null;
+    productCount: string;
+    productName: string | null;
+  }>(
+    `select
+      (select count(*)::text from app.menu_catalogs where restaurant_id = any($7::uuid[])) as "catalogCount",
+      (select count(*)::text from app.menu_categories where restaurant_id = any($7::uuid[])) as "categoryCount",
+      (select count(*)::text from app.menu_products where restaurant_id = any($7::uuid[])) as "productCount",
+      (select count(*)::text from app.menu_modifier_groups where restaurant_id = any($7::uuid[])) as "groupCount",
+      (select count(*)::text from app.menu_modifier_options where restaurant_id = any($7::uuid[])) as "optionCount",
+      (select count(*)::text from app.menu_catalog_heads where restaurant_id = any($7::uuid[])) as "headCount",
+      (select count(*)::text from app.menu_catalog_audit_events where restaurant_id = any($7::uuid[])) as "auditCount",
+      (select catalog_id::text from app.menu_catalog_heads where restaurant_id = $1::uuid) as "headCatalogId",
+      (select name from app.menu_categories where restaurant_id = $1::uuid and id = $3::uuid) as "categoryName",
+      (select name from app.menu_products where restaurant_id = $1::uuid and id = $4::uuid) as "productName",
+      (select name from app.menu_modifier_groups where restaurant_id = $1::uuid and id = $5::uuid) as "groupName",
+      (select name from app.menu_modifier_options where restaurant_id = $1::uuid and id = $6::uuid) as "optionName",
+      (select actor_id::text from app.menu_catalog_audit_events where event_id = $2::uuid) as "actorId"`,
+    [
+      plan.restaurantIds[0],
+      command.eventId,
+      command.categories[0]?.categoryId,
+      command.products[0]?.productId,
+      command.modifierGroups[0]?.groupId,
+      command.modifierGroups[0]?.options[0]?.optionId,
+      plan.restaurantIds,
+    ],
+  );
+  const row = result.rows[0];
+  if (
+    result.rows.length !== 1
+    || row === undefined
+    || row.catalogCount !== expectedCount
+    || row.categoryCount !== expectedCount
+    || row.productCount !== expectedCount
+    || row.groupCount !== expectedCount
+    || row.optionCount !== expectedCount
+    || row.headCount !== expectedCount
+    || row.auditCount !== expectedCount
+    || row.headCatalogId !== (plan.menuCatalogCreated ? command.catalogVersion : null)
+    || row.actorId !== (plan.menuCatalogCreated ? requireUserId(plan.users[0]) : null)
+    || row.categoryName !== (plan.menuCatalogCreated ? tenancyFixtureName(plan.runId, "menu-category") : null)
+    || row.productName !== (plan.menuCatalogCreated ? tenancyFixtureName(plan.runId, "menu-product") : null)
+    || row.groupName !== (plan.menuCatalogCreated ? tenancyFixtureName(plan.runId, "menu-group") : null)
+    || row.optionName !== (plan.menuCatalogCreated ? tenancyFixtureName(plan.runId, "menu-option") : null)
+  ) throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
 }
 
 async function verifyDiningZoneFixtureOwnership(client: PoolClient, plan: FixturePlan): Promise<void> {
@@ -1910,8 +2562,18 @@ function notifySafely<Value>(callback: ((value: Value) => void) | undefined, val
   }
 }
 
-function validateRuntimeAuditSql(sql: string, verifyDiningZones: boolean, verifyDiningTables = false): string {
-  const requiredMarkers = verifyDiningTables
+function validateRuntimeAuditSql(
+  sql: string,
+  verifyDiningZones: boolean,
+  verifyDiningTables = false,
+  verifyMenuCatalog = false,
+  verifyOrdersRealtime = false,
+): string {
+  const requiredMarkers = verifyOrdersRealtime
+    ? ["POST_ORDERS_SURFACE_REJECTED", "POST_ORDERS_SERVER_TABLE_GRANTS_REJECTED"]
+    : verifyMenuCatalog
+    ? ["POST_MENU_TABLE_SURFACE_REJECTED", "POST_MENU_SERVER_TABLE_GRANTS_REJECTED"]
+    : verifyDiningTables
     ? ["POST_DINING_TABLES_TABLE_SURFACE_REJECTED", "POST_DINING_TABLES_SERVER_TABLE_GRANTS_REJECTED"]
     : verifyDiningZones
     ? ["POST_DINING_RUNTIME_APP_API_ATTRIBUTES_REJECTED", "POST_DINING_RUNTIME_DINING_TABLE_GRANTS_REJECTED"]
@@ -1987,7 +2649,8 @@ function recordsEqual(actual: unknown, expected: Readonly<Record<string, unknown
   }
 }
 
-function valuesEqual(left: unknown, right: unknown): boolean {
+export function valuesEqual(left: unknown, right: unknown): boolean {
+  if (left === null || right === null) return left === right;
   if (Array.isArray(left) || Array.isArray(right)) {
     return Array.isArray(left)
       && Array.isArray(right)

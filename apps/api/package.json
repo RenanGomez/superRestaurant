@@ -7,16 +7,20 @@
     "@nestjs/common": "11.2.2",
     "@nestjs/core": "11.2.2",
     "@nestjs/platform-express": "11.2.2",
+    "@nestjs/platform-socket.io": "11.2.2",
+    "@nestjs/websockets": "11.2.2",
+    "@supabase/supabase-js": "2.112.4",
     "@super-restaurant/domain": "workspace:*",
     "@super-restaurant/shared-types": "workspace:*",
-    "@supabase/supabase-js": "2.112.4",
     "pg": "8.23.0",
     "reflect-metadata": "0.2.2",
-    "rxjs": "7.8.2"
+    "rxjs": "7.8.2",
+    "socket.io": "4.8.1",
+    "socket.io-client": "4.8.1"
   },
   "devDependencies": {
-    "@super-restaurant/config": "workspace:*",
     "@nestjs/testing": "11.2.2",
+    "@super-restaurant/config": "workspace:*",
     "@types/node": "26.3.0",
     "@types/pg": "8.23.1"
   },
@@ -24,7 +28,7 @@
     "build": "tsc --project tsconfig.build.json",
     "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs src",
     "start": "node dist/main.js",
-    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node .test-dist/config.test.js && node .test-dist/database.test.js && node .test-dist/auth/authentication.test.js && node .test-dist/auth/rbac-policy.test.js && node .test-dist/auth/membership-authorization.test.js && node .test-dist/auth/postgres-membership-lookup.test.js && node .test-dist/auth/membership-directory.test.js && node .test-dist/dining-zones.test.js && node .test-dist/operations/schema-verification.test.js && node .test-dist/operations/data-api-exposure-config.test.js && node .test-dist/operations/data-api-exposure.test.js && node .test-dist/operations/tenancy-verification-config.test.js && node .test-dist/operations/tenancy-verification-progress.test.js && node .test-dist/operations/tenancy-fixture-recovery-config.test.js && node .test-dist/operations/tenancy-fixture-recovery.test.js && node .test-dist/operations/app-api-provisioning-config.test.js && node .test-dist/operations/app-api-provisioning.test.js && node .test-dist/operations/app-api-recovery-config.test.js && node .test-dist/operations/app-api-recovery.test.js && node .test-dist/operations/app-api-state-verification-config.test.js && node .test-dist/operations/app-api-state-verification.test.js && node .test-dist/operations/web-protected-smoke-coordinator.test.js && node .test-dist/persistence/order-persistence-codec.test.js && node .test-dist/schema-contract.test.js && node .test-dist/app.smoke.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
+    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node .test-dist/config.test.js && node .test-dist/database.test.js && node .test-dist/auth/authentication.test.js && node .test-dist/auth/rbac-policy.test.js && node .test-dist/auth/membership-authorization.test.js && node .test-dist/auth/postgres-membership-lookup.test.js && node .test-dist/auth/membership-directory.test.js && node .test-dist/dining-zones.test.js && node .test-dist/menu-catalog.test.js && node .test-dist/orders.test.js && node .test-dist/realtime.gateway.test.js && node .test-dist/operations/schema-verification.test.js && node .test-dist/operations/data-api-exposure-config.test.js && node .test-dist/operations/data-api-exposure.test.js && node .test-dist/operations/tenancy-verification-config.test.js && node .test-dist/operations/tenancy-verification-progress.test.js && node .test-dist/operations/tenancy-fixture-recovery-config.test.js && node .test-dist/operations/tenancy-fixture-recovery.test.js && node .test-dist/operations/app-api-provisioning-config.test.js && node .test-dist/operations/app-api-provisioning.test.js && node .test-dist/operations/app-api-recovery-config.test.js && node .test-dist/operations/app-api-recovery.test.js && node .test-dist/operations/app-api-state-verification-config.test.js && node .test-dist/operations/app-api-state-verification.test.js && node .test-dist/operations/web-protected-smoke-coordinator.test.js && node .test-dist/persistence/order-persistence-codec.test.js && node .test-dist/schema-contract.test.js && node .test-dist/app.smoke.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "configure:data-api-exposure:remote": "tsc --project tsconfig.build.json && node dist/operations/run-data-api-exposure.js",
     "recover:tenancy:remote": "tsc --project tsconfig.build.json && node dist/operations/run-tenancy-fixture-recovery.js",
@@ -38,12 +42,19 @@
     "verify:dining-zones-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-zones-schema-verification.js",
     "verify:dining-tables-layout-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-tables-layout-schema-verification.js",
     "verify:dining-tables-layout-lint-fix-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-tables-layout-lint-fix-schema-verification.js",
+    "verify:menu-catalog-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-menu-catalog-schema-verification.js",
+    "verify:orders-realtime-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-orders-realtime-schema-verification.js",
+    "verify:menu-catalog:remote": "tsc --project tsconfig.build.json && node dist/operations/run-menu-catalog-tenancy-verification.js",
+    "verify:orders-realtime:remote": "tsc --project tsconfig.build.json && node dist/operations/run-orders-realtime-tenancy-verification.js",
     "verify:app-api-state:remote": "tsc --project tsconfig.build.json && node dist/operations/run-app-api-state-verification.js",
     "verify:post-dining-zones-app-api-state:remote": "tsc --project tsconfig.build.json && node dist/operations/run-post-dining-zones-app-api-state-verification.js",
     "verify:post-dining-tables-app-api-state:remote": "tsc --project tsconfig.build.json && node dist/operations/run-post-dining-tables-app-api-state-verification.js",
+    "verify:post-menu-app-api-state:remote": "tsc --project tsconfig.build.json && node dist/operations/run-post-menu-app-api-state-verification.js",
+    "verify:post-orders-realtime-app-api-state:remote": "tsc --project tsconfig.build.json && node dist/operations/run-post-orders-realtime-app-api-state-verification.js",
     "verify:tenancy:remote": "tsc --project tsconfig.build.json && node dist/operations/run-tenancy-verification.js",
     "verify:dining-zones:remote": "tsc --project tsconfig.build.json && node dist/operations/run-dining-zones-tenancy-verification.js",
     "verify:dining-tables:remote": "tsc --project tsconfig.build.json && node dist/operations/run-dining-tables-tenancy-verification.js",
-    "verify:web-protected-smoke:remote": "tsc --project tsconfig.build.json && node dist/operations/run-web-protected-smoke.js"
+    "verify:web-protected-smoke:remote": "tsc --project tsconfig.build.json && node dist/operations/run-web-protected-smoke.js",
+    "verify:menu-web-protected-smoke:remote": "tsc --project tsconfig.build.json && node dist/operations/run-menu-web-protected-smoke.js"
   }
 }

@@ -232,19 +232,25 @@ test("always rolls back and closes after a successful audit", async () => {
 });
 
 test("always rolls back and closes after migration failure without exposing the driver error", async () => {
-  const session = new FakeSession(2, new Error("postgresql://postgres:secret@host/database"));
+  const driverError = Object.assign(
+    new Error("postgresql://postgres:secret@host/database"),
+    { code: "42P01" },
+  );
+  const session = new FakeSession(3, driverError);
 
   await assert.rejects(
     runSchemaVerification({
       catalogAuditSql: "select 1;",
       config,
       createSession: () => session,
-      migrationSql: "begin; create schema app; commit;",
+      migrationSql: "begin; create schema app; create table app.example(id uuid); commit;",
     }),
     (error: unknown) => {
       assert.ok(error instanceof SchemaVerificationError);
       assert.equal(error.stage, "migration");
       assert.equal(error.code, "SCHEMA_VERIFICATION_MIGRATION_FAILED");
+      assert.equal(error.statementIndex, 2);
+      assert.equal(error.sqlState, "42P01");
       assert.equal(error.message.includes("secret"), false);
       return true;
     },
@@ -252,6 +258,23 @@ test("always rolls back and closes after migration failure without exposing the 
 
   assert.equal(session.closed, true);
   assert.equal(session.queries.at(-1), "ROLLBACK");
+});
+
+test("rejects unsafe driver diagnostics instead of reflecting them", async () => {
+  const session = new FakeSession(2, Object.assign(new Error("private"), { code: "secret-url" }));
+  await assert.rejects(
+    runSchemaVerification({
+      catalogAuditSql: "select 1;",
+      config,
+      createSession: () => session,
+      migrationSql: "begin; select 1; commit;",
+    }),
+    (error: unknown) => error instanceof SchemaVerificationError
+      && error.statementIndex === 1
+      && error.sqlState === undefined,
+  );
+  assert.equal(session.queries.at(-1), "ROLLBACK");
+  assert.equal(session.closed, true);
 });
 
 test("reports rollback failure with a stable code and still closes", async () => {

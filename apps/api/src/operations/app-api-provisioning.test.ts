@@ -40,6 +40,10 @@ const postDiningTablesAuditSql = readFileSync(
   new URL("../../../../supabase/tests/tenancy_memberships_post_dining_tables_catalog.sql", import.meta.url),
   "utf8",
 );
+const postMenuAuditSql = readFileSync(
+  new URL("../../../../supabase/tests/tenancy_memberships_post_menu_catalog.sql", import.meta.url),
+  "utf8",
+);
 const database: DatabaseConfig = Object.freeze({
   caCertificate: "TEST CA",
   connectionString: "postgresql://user:password@host.example/postgres",
@@ -123,6 +127,20 @@ test("accepts the pinned post-dining-tables audit for its explicit profile", asy
     dependencies,
     precheckAuditSql: postDiningTablesAuditSql,
     runtimeAuditSql: postDiningTablesAuditSql,
+  });
+  assert.equal(result.status, "ok");
+  assert.ok(events.includes("admin:runtime-audit"));
+});
+
+test("accepts the pinned post-menu audit for its explicit profile", async () => {
+  const events: string[] = [];
+  const dependencies = dependenciesFor([adminSession(events)], appSession(events));
+  const result = await provisionAppApi({
+    auditProfile: "post_menu_v1",
+    config,
+    dependencies,
+    precheckAuditSql: postMenuAuditSql,
+    runtimeAuditSql: postMenuAuditSql,
   });
   assert.equal(result.status, "ok");
   assert.ok(events.includes("admin:runtime-audit"));
@@ -392,6 +410,7 @@ function adminSession(
       sql.includes("CATALOG_AUDIT_APP_API_MISSING")
       || sql.includes("POST_DINING_CATALOG_REQUIRED_OBJECT_MISSING")
       || (sql.includes("POST_DINING_TABLES_TABLE_SURFACE_REJECTED") && !events.includes("admin:promote"))
+      || (sql.includes("POST_MENU_TABLE_SURFACE_REJECTED") && !events.includes("admin:promote"))
     ) {
       events.push("admin:precheck");
       if (options.failPrecheck === true) throw new Error("sensitive precheck detail");
@@ -405,6 +424,7 @@ function adminSession(
       sql.includes("RUNTIME_AUDIT_APP_API_MISSING")
       || sql.includes("POST_DINING_RUNTIME_REQUIRED_OBJECT_MISSING")
       || (sql.includes("POST_DINING_TABLES_TABLE_SURFACE_REJECTED") && events.includes("admin:promote"))
+      || (sql.includes("POST_MENU_TABLE_SURFACE_REJECTED") && events.includes("admin:promote"))
     ) {
       events.push("admin:runtime-audit");
       if (options.failRuntimeAudit === true) throw new Error("sensitive runtime detail");

@@ -55,13 +55,21 @@ export type SchemaVerificationCode =
 
 export class SchemaVerificationError extends Error {
   public readonly code: SchemaVerificationCode;
+  public readonly sqlState: string | undefined;
   public readonly stage: SchemaVerificationStage;
+  public readonly statementIndex: number | undefined;
 
-  public constructor(stage: SchemaVerificationStage, code: SchemaVerificationCode) {
+  public constructor(
+    stage: SchemaVerificationStage,
+    code: SchemaVerificationCode,
+    diagnostics: { readonly sqlState?: string; readonly statementIndex?: number } = {},
+  ) {
     super(code);
     this.name = "SchemaVerificationError";
     this.code = code;
+    this.sqlState = diagnostics.sqlState;
     this.stage = stage;
+    this.statementIndex = diagnostics.statementIndex;
   }
 }
 
@@ -198,11 +206,12 @@ export async function runSchemaVerification(options: RunSchemaVerificationOption
     securityDefinerFunctions: options.expectedSecurityDefinerFunctions ?? 4,
   });
   if (!isExpectedSummary(expectedSummary)) throw configurationError();
-  const migrationBody = extractMigrationBody(options.migrationSql);
+  const migrationStatements = extractMigrationStatements(options.migrationSql);
   const catalogAudit = validateCatalogAuditSql(options.catalogAuditSql);
   const session = (options.createSession ?? createPostgresSchemaVerificationSession)(options.config);
 
   let stage: SchemaVerificationStage = "connect";
+  let migrationStatementIndex: number | undefined;
   let transactionStarted = false;
   let result: SchemaVerificationSummary | undefined;
   let failure: SchemaVerificationError | undefined;
@@ -214,7 +223,11 @@ export async function runSchemaVerification(options: RunSchemaVerificationOption
     transactionStarted = true;
 
     stage = "migration";
-    await session.query(migrationBody);
+    for (const [index, statement] of migrationStatements.entries()) {
+      migrationStatementIndex = index + 1;
+      await session.query(statement);
+    }
+    migrationStatementIndex = undefined;
 
     stage = "catalog_audit";
     await session.query(catalogAudit);
@@ -223,7 +236,9 @@ export async function runSchemaVerification(options: RunSchemaVerificationOption
     const summaryResult = await session.query(SUMMARY_SQL);
     result = readSummary(summaryResult.rows, expectedSummary);
   } catch (error: unknown) {
-    failure = error instanceof SchemaVerificationError ? error : executionError(stage);
+    failure = error instanceof SchemaVerificationError
+      ? error
+      : executionError(stage, error, migrationStatementIndex);
   } finally {
     try {
       await session.query("ROLLBACK");
@@ -458,7 +473,11 @@ function catalogAuditSqlError(): SchemaVerificationError {
   return new SchemaVerificationError("catalog_audit", "SCHEMA_VERIFICATION_SQL_REJECTED");
 }
 
-function executionError(stage: SchemaVerificationStage): SchemaVerificationError {
+function executionError(
+  stage: SchemaVerificationStage,
+  driverError: unknown,
+  statementIndex?: number,
+): SchemaVerificationError {
   const codes: Readonly<Partial<Record<SchemaVerificationStage, SchemaVerificationCode>>> = {
     begin: "SCHEMA_VERIFICATION_BEGIN_FAILED",
     catalog_audit: "SCHEMA_VERIFICATION_CATALOG_AUDIT_FAILED",
@@ -466,5 +485,25 @@ function executionError(stage: SchemaVerificationStage): SchemaVerificationError
     migration: "SCHEMA_VERIFICATION_MIGRATION_FAILED",
     summary: "SCHEMA_VERIFICATION_SUMMARY_FAILED",
   };
-  return new SchemaVerificationError(stage, codes[stage] ?? "SCHEMA_VERIFICATION_SQL_REJECTED");
+  return new SchemaVerificationError(
+    stage,
+    codes[stage] ?? "SCHEMA_VERIFICATION_SQL_REJECTED",
+    {
+      ...(stage === "migration" && statementIndex !== undefined ? { statementIndex } : {}),
+      ...readSqlState(driverError),
+    },
+  );
+}
+
+function readSqlState(error: unknown): { readonly sqlState?: string } {
+  if (typeof error !== "object" || error === null) return {};
+  let code: unknown;
+  try {
+    code = Reflect.get(error, "code");
+  } catch {
+    return {};
+  }
+  return typeof code === "string" && /^[0-9A-Z]{5}$/u.test(code)
+    ? { sqlState: code }
+    : {};
 }

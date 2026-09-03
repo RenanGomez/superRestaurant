@@ -201,8 +201,9 @@ antes de datos reales, con verificación de vaciedad y respaldo explícito.
 
 ### Slice de mesas y editor de layout
 
-`20260901000100_create_dining_tables_layout.sql` es una migración aditiva aún
-no aplicada. Añade mesas scoped por Restaurant/Branch/Zone, geometría entera en
+`20260901000100_create_dining_tables_layout.sql` y su corrección
+`20260901000200_qualify_dining_table_function_columns.sql` están aplicadas
+persistentemente. Añaden mesas scoped por Restaurant/Branch/Zone, geometría entera en
 una cuadrícula 24×100, versión optimista, soft delete preparado y auditoría
 inmutable/idempotente para alta y movimiento. Nest conserva la única ruta de
 lectura/escritura mediante tres funciones privadas; no se añaden grants Data API.
@@ -224,3 +225,41 @@ y elimine primero `update_dining_table_layout`, `create_dining_table` y
 `list_dining_layout`, luego `dining_table_audit_events` y finalmente
 `dining_tables`. No editar ni borrar la migración ya aplicada, y exigir respaldo,
 dry-run e inspección de dependencias antes de ejecutar ese rollback.
+
+### Slice de catálogo de menú
+
+`20260902000100_create_menu_catalog.sql` quedó aplicada persistentemente el
+2026-09-02. Modela releases inmutables Restaurant-scoped, categorías, productos,
+precios/impuestos y modificadores, con head atómico y auditoría idempotente. Solo
+`get_menu_catalog` y `save_menu_catalog` son ejecutables por `app_api`; las tablas
+no reciben grants Data API.
+
+Antes del apply, `verify:menu-catalog-schema:rollback` pasó migración, auditoría
+específica y auditoría global post-menú dentro de una transacción revertida. El
+staging final contenía 11 migraciones hash-idénticas, el historial previo diez y
+el dry-run anunció únicamente `20260902000100_create_menu_catalog.sql`, sin seed,
+roles ni Vault. El postcheck confirmó 11 versiones, catálogo exacto de 16 tablas,
+cinco políticas y 12 funciones `SECURITY DEFINER`, `app_api` runtime sin sesiones
+y `db lint` limpio en `app`, `app_private` y `app_rls`.
+
+El rollback persistente es forward-only y no está autorizado. Antes de retirar
+el catálogo debe comprobarse vaciedad, dependencias, respaldo y alcance de datos;
+nunca se edita ni elimina la migración aplicada.
+
+### Slice de órdenes y Realtime recuperable
+
+`20260902000200_create_orders_realtime.sql` quedó aplicada persistentemente el
+2026-09-02. Modela Order,
+auditoría inmutable, eventos KDS y cursor durable por Restaurant/Branch; expone
+funciones privadas mínimas para persistencia y recuperación, sin grants Data API
+ni mutaciones por WebSocket.
+
+La segunda ejecución autorizada de
+`verify:orders-realtime-schema:rollback` pasó migración, auditoría específica y
+auditoría global dentro de una transacción revertida: 5 políticas, 19 tablas
+RLS+FORCE RLS y 15 funciones `SECURITY DEFINER`. El postcheck confirmó catálogo
+íntegro, `app_api` runtime y cero sesiones. El staging final reunió 12 migraciones
+hash-idénticas, el historial previo 11 y el dry-run anunció únicamente
+`20260902000200`, sin seeds, roles ni Vault. El postcheck confirmó 12 versiones,
+el mismo catálogo exacto y `db lint` limpio. E2E y smoke requieren permisos
+posteriores.

@@ -123,6 +123,99 @@ test("accepts only the marked dining-table create and update prefix", () => {
   assertContamination(() => validateTenancyFixtureRecoverySnapshot(runId, users, contaminated));
 });
 
+test("accepts only one complete marked menu release for recovery", () => {
+  const snapshot = completeSnapshot();
+  const catalogId = "62000000-0000-4000-8000-000000000001";
+  const categoryId = "63000000-0000-4000-8000-000000000001";
+  const productId = "64000000-0000-4000-8000-000000000001";
+  const groupId = "65000000-0000-4000-8000-000000000001";
+  const optionId = "66000000-0000-4000-8000-000000000001";
+  const eventId = "67000000-0000-4000-8000-000000000001";
+  const withMenu = {
+    ...snapshot,
+    menuCatalogs: [{ currency: "MXN", id: catalogId, publishedBy: ids.amber, restaurantId: ids.restaurant1, version: 1 }],
+    menuCategories: [{ catalogId, id: categoryId, name: tenancyFixtureName(runId, "menu-category"), restaurantId: ids.restaurant1 }],
+    menuProducts: [{ catalogId, categoryId, id: productId, name: tenancyFixtureName(runId, "menu-product"), restaurantId: ids.restaurant1 }],
+    menuModifierGroups: [{ catalogId, id: groupId, name: tenancyFixtureName(runId, "menu-group"), productId, restaurantId: ids.restaurant1 }],
+    menuModifierOptions: [{ catalogId, groupId, id: optionId, name: tenancyFixtureName(runId, "menu-option"), restaurantId: ids.restaurant1 }],
+    menuCatalogHeads: [{ catalogId, restaurantId: ids.restaurant1, updatedBy: ids.amber, version: 1 }],
+    menuCatalogAudits: [{ actorId: ids.amber, branchId: ids.branch11, catalogId, eventId, restaurantId: ids.restaurant1, resultVersion: 1 }],
+  };
+  const validated = validateTenancyFixtureRecoverySnapshot(runId, users, withMenu);
+  assert.deepEqual(validated.menuCatalogIds, [catalogId]);
+  assert.deepEqual(validated.menuCategoryIds, [categoryId]);
+  assert.deepEqual(validated.menuProductIds, [productId]);
+  assert.deepEqual(validated.menuModifierGroupIds, [groupId]);
+  assert.deepEqual(validated.menuModifierOptionIds, [optionId]);
+  assert.deepEqual(validated.menuHeadRestaurantIds, [ids.restaurant1]);
+  assert.deepEqual(validated.menuCatalogAuditEventIds, [eventId]);
+
+  const partial = structuredClone(withMenu);
+  partial.menuCatalogAudits = [];
+  assertContamination(() => validateTenancyFixtureRecoverySnapshot(runId, users, partial));
+  const contaminated = structuredClone(withMenu);
+  required(contaminated.menuProducts[0]).name = "foreign product";
+  assertContamination(() => validateTenancyFixtureRecoverySnapshot(runId, users, contaminated));
+});
+
+test("accepts only the ordered Orders and KDS recovery prefix for the marked run", () => {
+  const snapshot = completeSnapshot();
+  const orderId = "68000000-0000-4000-8000-000000000001";
+  const operations = [
+    "order.created",
+    "order.item_added",
+    "order.state_changed",
+    "order_item.state_changed",
+    "order_item.state_changed",
+    "order_item.state_changed",
+    "order_item.state_changed",
+  ];
+  const markers = ["create", "add-item", "open", "item-sent", "item-preparing", "item-ready", "item-delivered"];
+  const eventIds = markers.map((_, index) => `69000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`);
+  const withOrders = {
+    ...snapshot,
+    kdsCursors: [{ branchId: ids.branch11, lastCursor: 5, restaurantId: ids.restaurant1 }],
+    kdsEvents: [1, 3, 4, 5, 6].map((auditIndex, index) => ({
+      branchId: ids.branch11,
+      cursor: index + 1,
+      eventId: required(eventIds[auditIndex]),
+      operation: index === 0 ? "order_item.created" : "order_item.status_changed",
+      orderId,
+      restaurantId: ids.restaurant1,
+      stationId: "kitchen",
+      status: ["pending", "sent", "preparing", "ready", "delivered"][index]!,
+    })),
+    orderAudits: eventIds.map((eventId, index) => ({
+      actorId: ids.amber,
+      branchId: ids.branch11,
+      eventId,
+      idempotencyKey: `tenancy-orders-v1:${runId}:${markers[index]}`,
+      operation: operations[index]!,
+      orderId,
+      restaurantId: ids.restaurant1,
+      resultVersion: index + 1,
+    })),
+    orders: [{ actorId: ids.amber, branchId: ids.branch11, channel: "counter", id: orderId, restaurantId: ids.restaurant1, status: "open", version: 7 }],
+  };
+  const validated = validateTenancyFixtureRecoverySnapshot(runId, users, withOrders);
+  assert.deepEqual(validated.orderIds, [orderId]);
+  assert.deepEqual(validated.orderAuditEventIds, eventIds);
+  assert.deepEqual(validated.kdsEventIds, [eventIds[1], eventIds[3], eventIds[4], eventIds[5], eventIds[6]]);
+  assert.deepEqual(validated.kdsCursorScopes, [{ branchId: ids.branch11, restaurantId: ids.restaurant1 }]);
+
+  const interruptedAfterAdd = structuredClone(withOrders);
+  interruptedAfterAdd.orders[0]!.version = 2;
+  interruptedAfterAdd.orders[0]!.status = "draft";
+  interruptedAfterAdd.orderAudits = interruptedAfterAdd.orderAudits.slice(0, 2);
+  interruptedAfterAdd.kdsEvents = interruptedAfterAdd.kdsEvents.slice(0, 1);
+  interruptedAfterAdd.kdsCursors[0]!.lastCursor = 1;
+  validateTenancyFixtureRecoverySnapshot(runId, users, interruptedAfterAdd);
+
+  const contaminated = structuredClone(withOrders);
+  contaminated.orderAudits[4]!.idempotencyKey = `tenancy-orders-v1:${runId}:item-delivered`;
+  assertContamination(() => validateTenancyFixtureRecoverySnapshot(runId, users, contaminated));
+});
+
 test("accepts empty database with zero, one or two exact Auth fixtures", () => {
   const empty = emptySnapshot();
   for (const authUsers of [[], [amberUser], users]) {

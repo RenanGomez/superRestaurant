@@ -2,12 +2,16 @@ import {
   BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
   DINING_ZONE_SCHEMA_VERSION,
   DINING_LAYOUT_SCHEMA_VERSION,
+  MENU_CATALOG_SCHEMA_VERSION,
   MEMBERSHIP_ROLE_CODES,
   parseCreateDiningZoneCommandV1,
   parseDiningZoneV1,
   parseCreateDiningTableCommandV1,
   parseDiningLayoutV1,
   parseDiningTableV1,
+  parseMenuCatalogStateV1,
+  parseMenuCatalogV1,
+  parseSaveMenuCatalogCommandV1,
   parseUpdateDiningTableLayoutCommandV1,
   parseRbacPermissionCode,
   parseBranchMembershipListV1,
@@ -23,6 +27,9 @@ import {
   type CreateDiningTableCommandV1,
   type DiningLayoutV1,
   type DiningTableV1,
+  type MenuCatalogStateV1,
+  type MenuCatalogV1,
+  type SaveMenuCatalogCommandV1,
   type UpdateDiningTableLayoutCommandV1,
   type RestaurantId,
   type RestaurantScope,
@@ -90,6 +97,13 @@ void parsedTableCommand;
 void parsedTable;
 void parsedLayout;
 void parsedLayoutUpdate;
+
+const parsedMenuCommand: SaveMenuCatalogCommandV1 | undefined = parseSaveMenuCatalogCommandV1({ schemaVersion: MENU_CATALOG_SCHEMA_VERSION });
+const parsedMenuCatalog: MenuCatalogV1 | undefined = parseMenuCatalogV1({});
+const parsedMenuState: MenuCatalogStateV1 | undefined = parseMenuCatalogStateV1({ schemaVersion: MENU_CATALOG_SCHEMA_VERSION });
+void parsedMenuCommand;
+void parsedMenuCatalog;
+void parsedMenuState;
 
 // @ts-expect-error Runtime parsing is required before untrusted strings become branded identifiers.
 const invalidRestaurantScope: RestaurantScope = { restaurantId: "restaurant-1" };

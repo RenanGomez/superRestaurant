@@ -19,6 +19,8 @@ export type TenancyVerificationStage =
   | "http"
   | "dining_zones"
   | "dining_tables"
+  | "menu_catalog"
+  | "orders_realtime"
   | "revocation"
   | "constraints"
   | "cleanup";
@@ -33,6 +35,8 @@ export type TenancyVerificationCode =
   | "TENANCY_VERIFICATION_HTTP_FAILED"
   | "TENANCY_VERIFICATION_DINING_ZONES_FAILED"
   | "TENANCY_VERIFICATION_DINING_TABLES_FAILED"
+  | "TENANCY_VERIFICATION_MENU_CATALOG_FAILED"
+  | "TENANCY_VERIFICATION_ORDERS_REALTIME_FAILED"
   | "TENANCY_VERIFICATION_REVOCATION_FAILED"
   | "TENANCY_VERIFICATION_CONSTRAINT_FAILED"
   | "TENANCY_VERIFICATION_ASSERTION_FAILED"
@@ -165,6 +169,8 @@ export function codeForStage(stage: TenancyVerificationStage): TenancyVerificati
     dining_zones: "TENANCY_VERIFICATION_DINING_ZONES_FAILED",
     fixtures: "TENANCY_VERIFICATION_FIXTURES_FAILED",
     http: "TENANCY_VERIFICATION_HTTP_FAILED",
+    menu_catalog: "TENANCY_VERIFICATION_MENU_CATALOG_FAILED",
+    orders_realtime: "TENANCY_VERIFICATION_ORDERS_REALTIME_FAILED",
     revocation: "TENANCY_VERIFICATION_REVOCATION_FAILED",
   };
   return codes[stage];

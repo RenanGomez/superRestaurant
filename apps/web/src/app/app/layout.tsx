@@ -34,13 +34,23 @@ export default async function AppLayout({ children }: { readonly children: React
     <div className="flex min-h-screen bg-bg">
       <nav aria-label="Navegación principal" className="flex w-[76px] shrink-0 flex-col items-center gap-7 bg-nav py-5">
         <BrandMark size={36} />
+        <a href="/app" title="Mesas" aria-label="Mesas" className="flex h-11 w-11 items-center justify-center rounded-xl text-white hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M8 4v16M16 4v16M3 10h18" />
+          </svg>
+        </a>
+        <a href="/app/menu" title="Menú" aria-label="Menú" className="flex h-11 w-11 items-center justify-center rounded-xl text-white hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 5h16M4 12h16M4 19h10" /><circle cx="18" cy="19" r="2" />
+          </svg>
+        </a>
       </nav>
 
-      <div className="flex flex-1 flex-col">
-        <header className="flex h-[68px] shrink-0 items-center justify-between border-b border-border bg-surface px-8">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-[68px] shrink-0 items-center justify-between border-b border-border bg-surface px-3 sm:px-8">
           <span className="text-sm font-semibold text-text-muted">superRestaurant</span>
-          <div className="flex items-center gap-5">
-            <span className="text-[13px] text-text-muted">{user.email ?? user.id}</span>
+          <div className="flex min-w-0 items-center gap-2 sm:gap-5">
+            <span className="hidden min-w-0 truncate text-[13px] text-text-muted sm:inline">{user.email ?? user.id}</span>
             <form action={logoutAction}>
               <button
                 type="submit"
@@ -51,7 +61,7 @@ export default async function AppLayout({ children }: { readonly children: React
             </form>
           </div>
         </header>
-        <main className="flex flex-1">{children}</main>
+        <main className="flex min-w-0 flex-1">{children}</main>
       </div>
     </div>
   );

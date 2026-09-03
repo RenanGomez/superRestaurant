@@ -19,6 +19,8 @@ const POST_DINING_ZONES_RUNTIME_AUDIT_SHA256 =
   "c0648eecde4df52cf92e581bb1667b7fc10b904725803271767192ec50ebe688";
 const POST_DINING_TABLES_AUDIT_SHA256 =
   "fb6a8a827475623dce277a6670232b630177fb0ae7db2e04502b44cfe00c9052";
+const POST_MENU_AUDIT_SHA256 =
+  "2893432b8122de814e42ce967e6053f6519856f64b15b30fa873f21e6473b2a2";
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 const SESSION_DRAIN_ATTEMPTS = 3;
 const APP_CONNECTION_ATTEMPTS = 3;
@@ -198,7 +200,10 @@ function auditHashes(
       runtime: POST_DINING_ZONES_RUNTIME_AUDIT_SHA256,
     };
   }
-  return { precheck: POST_DINING_TABLES_AUDIT_SHA256, runtime: POST_DINING_TABLES_AUDIT_SHA256 };
+  if (profile === "post_dining_tables_v1") {
+    return { precheck: POST_DINING_TABLES_AUDIT_SHA256, runtime: POST_DINING_TABLES_AUDIT_SHA256 };
+  }
+  return { precheck: POST_MENU_AUDIT_SHA256, runtime: POST_MENU_AUDIT_SHA256 };
 }
 
 const postgresDependencies: AppApiProvisioningDependencies = Object.freeze({

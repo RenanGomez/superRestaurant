@@ -21,6 +21,12 @@ export const tenancyDiningTableSuffixes = [
   "dining-table-false-pair",
   "dining-table-revoked",
 ] as const;
+export const tenancyMenuSuffixes = [
+  "menu-category",
+  "menu-product",
+  "menu-group",
+  "menu-option",
+] as const;
 const tenancyDiningTableNameCodes: Readonly<Record<(typeof tenancyDiningTableSuffixes)[number], string>> = Object.freeze({
   "dining-table-created": "c",
   "dining-table-conflict": "x",
@@ -33,7 +39,8 @@ export type TenancyFixtureSuffix =
   | (typeof tenancyBranchSuffixes)[number]
   | (typeof tenancyCanarySuffixes)[number]
   | (typeof tenancyDiningZoneSuffixes)[number]
-  | (typeof tenancyDiningTableSuffixes)[number];
+  | (typeof tenancyDiningTableSuffixes)[number]
+  | (typeof tenancyMenuSuffixes)[number];
 
 export function tenancyFixtureName(runId: string, suffix: TenancyFixtureSuffix): string {
   if ((tenancyDiningTableSuffixes as readonly string[]).includes(suffix)) {
