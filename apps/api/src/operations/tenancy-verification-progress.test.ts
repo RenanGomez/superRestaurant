@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   DINING_TABLE_VERIFICATION_CHECKPOINTS,
   FIXTURE_VERIFICATION_CHECKPOINTS,
+  KDS_TICKET_VERIFICATION_CHECKPOINTS,
   MENU_CATALOG_VERIFICATION_CHECKPOINTS,
   ORDERS_REALTIME_VERIFICATION_CHECKPOINTS,
   classifyDiningLayoutFetchFailure,
@@ -86,6 +87,14 @@ test("keeps Orders and Realtime progress checkpoints unique and non-sensitive", 
   assert.equal(new Set(ORDERS_REALTIME_VERIFICATION_CHECKPOINTS).size, ORDERS_REALTIME_VERIFICATION_CHECKPOINTS.length);
   assert.equal(
     ORDERS_REALTIME_VERIFICATION_CHECKPOINTS.every((checkpoint) => /^orders_realtime\.[a-z_]+$/u.test(checkpoint)),
+    true,
+  );
+});
+
+test("keeps KDS ticket checkpoints unique and non-sensitive", () => {
+  assert.equal(new Set(KDS_TICKET_VERIFICATION_CHECKPOINTS).size, KDS_TICKET_VERIFICATION_CHECKPOINTS.length);
+  assert.equal(
+    KDS_TICKET_VERIFICATION_CHECKPOINTS.every((checkpoint) => /^kds_tickets\.[a-z_]+$/u.test(checkpoint)),
     true,
   );
 });

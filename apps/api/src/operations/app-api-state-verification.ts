@@ -19,13 +19,15 @@ const POST_DINING_ZONES_RUNTIME_AUDIT_SHA256 = "c0648eecde4df52cf92e581bb1667b7f
 const POST_DINING_TABLES_AUDIT_SHA256 = "fb6a8a827475623dce277a6670232b630177fb0ae7db2e04502b44cfe00c9052";
 const POST_MENU_AUDIT_SHA256 = "2893432b8122de814e42ce967e6053f6519856f64b15b30fa873f21e6473b2a2";
 const POST_ORDERS_REALTIME_AUDIT_SHA256 = "3242785923599694824512498975258072d94ef1d1615283380c6382735d6f88";
+const POST_KDS_AUDIT_SHA256 = "3acd64d001d250550aa400b3f6fe2e7c0b31aa1f39b6d6a06e608002b2f8eec9";
 
 export type AppApiCatalogAuditProfile =
   | "memberships_v1"
   | "post_dining_zones_v1"
   | "post_dining_tables_v1"
   | "post_menu_v1"
-  | "post_orders_realtime_v1";
+  | "post_orders_realtime_v1"
+  | "post_kds_v1";
 
 export type AppApiObservedState = "safe_disabled" | "temporary" | "expired" | "runtime" | "partial";
 
@@ -125,6 +127,12 @@ function auditHashes(profile: AppApiCatalogAuditProfile): Readonly<{
     return Object.freeze({
       precheck: POST_ORDERS_REALTIME_AUDIT_SHA256,
       runtime: POST_ORDERS_REALTIME_AUDIT_SHA256,
+    });
+  }
+  if (profile === "post_kds_v1") {
+    return Object.freeze({
+      precheck: POST_KDS_AUDIT_SHA256,
+      runtime: POST_KDS_AUDIT_SHA256,
     });
   }
   throw verificationError("configuration");

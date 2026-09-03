@@ -54,6 +54,10 @@ const postOrdersRealtimeAuditSql = readFileSync(
   ),
   "utf8",
 );
+const postKdsAuditSql = readFileSync(
+  new URL("../../../../supabase/tests/tenancy_memberships_post_kds.sql", import.meta.url),
+  "utf8",
+);
 const database: DatabaseConfig = Object.freeze({
   caCertificate: "TEST CA",
   connectionString: "postgresql://user:password@host.example/postgres",
@@ -178,6 +182,29 @@ test("pins the exact post-orders audit and allowlists only the Order/KDS capabil
   }
 });
 
+test("pins the exact post-KDS audit and allowlists the ticket read capability", async () => {
+  for (const [target, expectedState] of [
+    [targetState("safe_disabled"), "safe_disabled"],
+    [targetState("runtime"), "runtime"],
+  ] as const) {
+    const events: string[] = [];
+    const result = await verifyAppApiState({
+      auditProfile: "post_kds_v1",
+      config,
+      dependencies: dependenciesFor(stateSession(events, target, 0, { postKdsProfile: true })),
+      precheckAuditSql: postKdsAuditSql,
+      runtimeAuditSql: postKdsAuditSql,
+    });
+    assert.deepEqual(result, {
+      activeSessions: false,
+      catalogAudit: true,
+      state: expectedState,
+      status: "ok",
+    });
+    assert.deepEqual(events, ["state:lock", "state:target", "state:sessions", "state:post-kds-audit", "state:close"]);
+  }
+});
+
 test("reports active sessions as attention for stable states without running a quiescent audit", async () => {
   for (const state of ["safe_disabled", "runtime"] as const) {
     const events: string[] = [];
@@ -281,6 +308,7 @@ function stateSession(
     postDiningZonesProfile?: boolean;
     postMenuProfile?: boolean;
     postOrdersRealtimeProfile?: boolean;
+    postKdsProfile?: boolean;
     unsafe?: boolean;
   }> = {},
 ): AppApiProvisioningSession {
@@ -296,33 +324,43 @@ function stateSession(
         options.postDiningZonesProfile === true
           || options.postDiningTablesProfile === true
           || options.postMenuProfile === true
-          || options.postOrdersRealtimeProfile === true,
+          || options.postOrdersRealtimeProfile === true
+          || options.postKdsProfile === true,
       );
       assert.equal(
         sql.includes("app_private.update_dining_table_layout"),
         options.postDiningTablesProfile === true
           || options.postMenuProfile === true
-          || options.postOrdersRealtimeProfile === true,
+          || options.postOrdersRealtimeProfile === true
+          || options.postKdsProfile === true,
       );
       assert.equal(
         sql.includes("app_private.get_menu_catalog"),
-        options.postMenuProfile === true || options.postOrdersRealtimeProfile === true,
+        options.postMenuProfile === true
+          || options.postOrdersRealtimeProfile === true
+          || options.postKdsProfile === true,
       );
       assert.equal(
         sql.includes("app_private.save_menu_catalog"),
-        options.postMenuProfile === true || options.postOrdersRealtimeProfile === true,
+        options.postMenuProfile === true
+          || options.postOrdersRealtimeProfile === true
+          || options.postKdsProfile === true,
       );
       assert.equal(
         sql.includes("app_private.read_order"),
-        options.postOrdersRealtimeProfile === true,
+        options.postOrdersRealtimeProfile === true || options.postKdsProfile === true,
       );
       assert.equal(
         sql.includes("app_private.persist_order_mutation"),
-        options.postOrdersRealtimeProfile === true,
+        options.postOrdersRealtimeProfile === true || options.postKdsProfile === true,
       );
       assert.equal(
         sql.includes("app_private.recover_kds_events"),
-        options.postOrdersRealtimeProfile === true,
+        options.postOrdersRealtimeProfile === true || options.postKdsProfile === true,
+      );
+      assert.equal(
+        sql.includes("app_private.list_kds_tickets"),
+        options.postKdsProfile === true,
       );
       events.push("state:target");
       return result([{ ...target, safe: options.unsafe !== true }]);
@@ -353,6 +391,10 @@ function stateSession(
     }
     if (sql.includes("POST_ORDERS_REQUIRED_OBJECT_MISSING")) {
       events.push("state:post-orders-audit");
+      return emptyResult();
+    }
+    if (sql.includes("POST_KDS_REQUIRED_OBJECT_MISSING")) {
+      events.push("state:post-kds-audit");
       return emptyResult();
     }
     if (sql.includes("pg_stat_activity")) {

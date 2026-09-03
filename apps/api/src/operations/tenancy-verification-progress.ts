@@ -108,6 +108,22 @@ export const ORDERS_REALTIME_VERIFICATION_CHECKPOINTS = Object.freeze([
 
 export type OrdersRealtimeVerificationCheckpoint = (typeof ORDERS_REALTIME_VERIFICATION_CHECKPOINTS)[number];
 
+export const KDS_TICKET_VERIFICATION_CHECKPOINTS = Object.freeze([
+  "kds_tickets.unauthenticated_list_rejected",
+  "kds_tickets.empty_list_verified",
+  "kds_tickets.pending_item_excluded",
+  "kds_tickets.sent_ticket_verified",
+  "kds_tickets.station_isolation_verified",
+  "kds_tickets.branch_isolation_verified",
+  "kds_tickets.tenant_isolation_verified",
+  "kds_tickets.preparing_ticket_verified",
+  "kds_tickets.ready_ticket_verified",
+  "kds_tickets.delivered_ticket_removed",
+  "kds_tickets.revoked_list_rejected",
+] as const);
+
+export type KdsTicketVerificationCheckpoint = (typeof KDS_TICKET_VERIFICATION_CHECKPOINTS)[number];
+
 export type MenuCatalogReadOutcome =
   | "fetch_failed"
   | "unexpected_status"

@@ -44,6 +44,14 @@ const postMenuAuditSql = readFileSync(
   new URL("../../../../supabase/tests/tenancy_memberships_post_menu_catalog.sql", import.meta.url),
   "utf8",
 );
+const postOrdersRealtimeAuditSql = readFileSync(
+  new URL("../../../../supabase/tests/tenancy_memberships_post_orders_realtime.sql", import.meta.url),
+  "utf8",
+);
+const postKdsAuditSql = readFileSync(
+  new URL("../../../../supabase/tests/tenancy_memberships_post_kds.sql", import.meta.url),
+  "utf8",
+);
 const database: DatabaseConfig = Object.freeze({
   caCertificate: "TEST CA",
   connectionString: "postgresql://user:password@host.example/postgres",
@@ -141,6 +149,34 @@ test("accepts the pinned post-menu audit for its explicit profile", async () => 
     dependencies,
     precheckAuditSql: postMenuAuditSql,
     runtimeAuditSql: postMenuAuditSql,
+  });
+  assert.equal(result.status, "ok");
+  assert.ok(events.includes("admin:runtime-audit"));
+});
+
+test("accepts the pinned post-orders audit for its explicit profile", async () => {
+  const events: string[] = [];
+  const dependencies = dependenciesFor([adminSession(events)], appSession(events));
+  const result = await provisionAppApi({
+    auditProfile: "post_orders_realtime_v1",
+    config,
+    dependencies,
+    precheckAuditSql: postOrdersRealtimeAuditSql,
+    runtimeAuditSql: postOrdersRealtimeAuditSql,
+  });
+  assert.equal(result.status, "ok");
+  assert.ok(events.includes("admin:runtime-audit"));
+});
+
+test("accepts the pinned post-KDS audit for its explicit profile", async () => {
+  const events: string[] = [];
+  const dependencies = dependenciesFor([adminSession(events)], appSession(events));
+  const result = await provisionAppApi({
+    auditProfile: "post_kds_v1",
+    config,
+    dependencies,
+    precheckAuditSql: postKdsAuditSql,
+    runtimeAuditSql: postKdsAuditSql,
   });
   assert.equal(result.status, "ok");
   assert.ok(events.includes("admin:runtime-audit"));
@@ -411,6 +447,8 @@ function adminSession(
       || sql.includes("POST_DINING_CATALOG_REQUIRED_OBJECT_MISSING")
       || (sql.includes("POST_DINING_TABLES_TABLE_SURFACE_REJECTED") && !events.includes("admin:promote"))
       || (sql.includes("POST_MENU_TABLE_SURFACE_REJECTED") && !events.includes("admin:promote"))
+      || (sql.includes("POST_ORDERS_SURFACE_REJECTED") && !events.includes("admin:promote"))
+      || (sql.includes("POST_KDS_SURFACE_REJECTED") && !events.includes("admin:promote"))
     ) {
       events.push("admin:precheck");
       if (options.failPrecheck === true) throw new Error("sensitive precheck detail");
@@ -425,6 +463,8 @@ function adminSession(
       || sql.includes("POST_DINING_RUNTIME_REQUIRED_OBJECT_MISSING")
       || (sql.includes("POST_DINING_TABLES_TABLE_SURFACE_REJECTED") && events.includes("admin:promote"))
       || (sql.includes("POST_MENU_TABLE_SURFACE_REJECTED") && events.includes("admin:promote"))
+      || (sql.includes("POST_ORDERS_SURFACE_REJECTED") && events.includes("admin:promote"))
+      || (sql.includes("POST_KDS_SURFACE_REJECTED") && events.includes("admin:promote"))
     ) {
       events.push("admin:runtime-audit");
       if (options.failRuntimeAudit === true) throw new Error("sensitive runtime detail");

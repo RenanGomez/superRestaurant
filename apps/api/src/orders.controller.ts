@@ -13,7 +13,7 @@ import {
   Req,
   ServiceUnavailableException,
 } from "@nestjs/common";
-import type { KdsEventPageV1, OrderMutationSummaryV1 } from "@super-restaurant/shared-types";
+import type { KdsEventPageV1, KdsTicketListV1, OrderMutationSummaryV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
 import { OrderApplicationError, OrderService } from "./orders.js";
@@ -61,6 +61,20 @@ export class OrdersController {
       { schemaVersion: 1, scope: { branchId, restaurantId }, stationId },
       after,
       limit,
+    ));
+  }
+
+  @Get("kds/tickets")
+  @Header("Cache-Control", "private, no-store")
+  public listKdsTickets(
+    @Req() request: unknown,
+    @Query("restaurantId") restaurantId: unknown,
+    @Query("branchId") branchId: unknown,
+    @Query("stationId") stationId: unknown,
+  ): Promise<KdsTicketListV1> {
+    return this.map(() => this.orders.listKdsTickets(
+      getAuthenticatedPrincipal(request),
+      { schemaVersion: 1, scope: { branchId, restaurantId }, stationId },
     ));
   }
 

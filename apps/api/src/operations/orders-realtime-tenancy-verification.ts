@@ -6,11 +6,13 @@ import {
   REALTIME_NOTIFICATION_EVENT,
   REALTIME_SUBSCRIBE_EVENT,
   parseKdsEventPageV1,
+  parseKdsTicketListV1,
   parseRealtimeNotificationV1,
   parseRealtimeSubscriptionAckV1,
   type AddOrderItemCommandV1,
   type BranchScope,
   type CreateOrderCommandV1,
+  type KdsTicketListV1,
   type OpenOrderCommandV1,
   type OrderItemForwardStatusV1,
   type OrderMutationSummaryV1,
@@ -28,6 +30,8 @@ import {
   type TenancyVerificationConfig,
 } from "./tenancy-verification-config.js";
 import type { OrdersRealtimeVerificationCheckpoint } from "./tenancy-verification-progress.js";
+import type { KdsTicketVerificationCheckpoint } from "./tenancy-verification-progress.js";
+import { tenancyFixtureName } from "./tenancy-fixture-markers.js";
 import {
   runTenancyVerification,
   type RunTenancyVerificationOptions,
@@ -40,12 +44,27 @@ const HTTP_TIMEOUT_MS = 5_000;
 const SOCKET_TIMEOUT_MS = 5_000;
 
 export interface RunOrdersRealtimeTenancyVerificationOptions
-  extends Omit<RunTenancyVerificationOptions, "liveFixtureHooks" | "verifyMenuCatalog" | "verifyOrdersRealtime"> {
+  extends Omit<RunTenancyVerificationOptions, "liveFixtureHooks" | "verifyKdsTickets" | "verifyMenuCatalog" | "verifyOrdersRealtime"> {
   readonly onOrdersRealtimeCheckpoint?: (checkpoint: OrdersRealtimeVerificationCheckpoint) => void;
+}
+
+export interface KdsBrowserVerificationHooks {
+  readonly afterRevocation: (fixture: TenancyVerificationLiveFixture) => Promise<void>;
+  readonly ready: (fixture: TenancyVerificationLiveFixture) => Promise<void>;
+  readonly sent: (fixture: TenancyVerificationLiveFixture) => Promise<void>;
+}
+
+export interface RunKdsTenancyVerificationOptions extends RunOrdersRealtimeTenancyVerificationOptions {
+  readonly browserHooks?: KdsBrowserVerificationHooks;
+  readonly onKdsTicketCheckpoint?: (checkpoint: KdsTicketVerificationCheckpoint) => void;
 }
 
 export interface OrdersRealtimeTenancyVerificationSummary extends TenancyVerificationSummary {
   readonly ordersRealtimeVerified: true;
+}
+
+export interface KdsTenancyVerificationSummary extends OrdersRealtimeTenancyVerificationSummary {
+  readonly kdsTicketsVerified: true;
 }
 
 interface OrdersFixturePlan {
@@ -63,26 +82,54 @@ interface OrdersRuntimeState {
   fixture?: TenancyVerificationLiveFixture;
   mainSocket?: Socket;
   plan?: OrdersFixturePlan;
+  kdsTicketsVerified: boolean;
   verified: boolean;
+}
+
+interface KdsVerificationMode {
+  readonly browserHooks?: KdsBrowserVerificationHooks;
+  readonly checkpoint?: (checkpoint: KdsTicketVerificationCheckpoint) => void;
+  readonly enabled: boolean;
 }
 
 export async function runOrdersRealtimeTenancyVerification(
   options: RunOrdersRealtimeTenancyVerificationOptions,
 ): Promise<OrdersRealtimeTenancyVerificationSummary> {
-  const state: OrdersRuntimeState = { verified: false };
+  return runOrdersVerification(options, { enabled: false });
+}
+
+export async function runKdsTenancyVerification(
+  options: RunKdsTenancyVerificationOptions,
+): Promise<KdsTenancyVerificationSummary> {
+  const summary = await runOrdersVerification(options, {
+    ...(options.browserHooks === undefined ? {} : { browserHooks: options.browserHooks }),
+    ...(options.onKdsTicketCheckpoint === undefined
+      ? {}
+      : { checkpoint: options.onKdsTicketCheckpoint }),
+    enabled: true,
+  });
+  return Object.freeze({ ...summary, kdsTicketsVerified: true });
+}
+
+async function runOrdersVerification(
+  options: RunOrdersRealtimeTenancyVerificationOptions,
+  kds: KdsVerificationMode,
+): Promise<OrdersRealtimeTenancyVerificationSummary> {
+  const state: OrdersRuntimeState = { kdsTicketsVerified: false, verified: false };
   const pool = createPool(options.config.adminDatabase);
   try {
     const summary = await runTenancyVerification({
       ...options,
       liveFixtureHooks: {
-        afterRevocation: async (fixture) => verifyAfterRevocation(fixture, state, options.onOrdersRealtimeCheckpoint),
-        beforeRevocation: async (fixture) => verifyBeforeRevocation(fixture, state, pool, options.config, options.onOrdersRealtimeCheckpoint),
+        afterRevocation: async (fixture) => verifyAfterRevocation(fixture, state, options.onOrdersRealtimeCheckpoint, kds),
+        beforeRevocation: async (fixture) => verifyBeforeRevocation(fixture, state, pool, options.config, options.onOrdersRealtimeCheckpoint, kds),
         cleanup: async (fixture) => cleanupOrdersFixture(pool, fixture, state, options.onOrdersRealtimeCheckpoint),
       },
+      ...(kds.enabled ? { verifyKdsTickets: true as const } : {}),
       verifyMenuCatalog: true,
       verifyOrdersRealtime: true,
     });
-    if (!state.verified) throw ordersError();
+    if (!state.verified || (kds.enabled && !state.kdsTicketsVerified)) throw ordersError();
     return Object.freeze({ ...summary, ordersRealtimeVerified: true });
   } finally {
     state.mainSocket?.disconnect();
@@ -96,6 +143,7 @@ async function verifyBeforeRevocation(
   pool: Pool,
   config: TenancyVerificationConfig,
   checkpoint: RunOrdersRealtimeTenancyVerificationOptions["onOrdersRealtimeCheckpoint"],
+  kds: KdsVerificationMode,
 ): Promise<void> {
   const context = requireContext(fixture);
   const scope = branchScope(fixture.restaurantId, fixture.branchId);
@@ -104,6 +152,21 @@ async function verifyBeforeRevocation(
   state.plan = plan;
 
   await verifyOrderDataApiDenied(config, context.accessToken);
+
+  const subscription = subscriptionFor(scope, STATION_ID);
+  if (kds.enabled) {
+    await listTickets(fixture.apiBaseUrl, undefined, subscription, 401);
+    kds.checkpoint?.("kds_tickets.unauthenticated_list_rejected");
+    assertTicketList(
+      await listTickets(fixture.apiBaseUrl, context.accessToken, subscription, 200),
+      subscription,
+      plan,
+      fixture.runId,
+      undefined,
+      undefined,
+    );
+    kds.checkpoint?.("kds_tickets.empty_list_verified");
+  }
 
   await expectStatus(fixture.apiBaseUrl, "/api/v1/orders", plan.create, undefined, 401);
   checkpoint?.("orders_realtime.unauthenticated_create_rejected");
@@ -151,7 +214,6 @@ async function verifyBeforeRevocation(
 
   const mainSocket = await connectSocket(fixture.apiBaseUrl, context.accessToken);
   state.mainSocket = mainSocket;
-  const subscription = subscriptionFor(scope, STATION_ID);
   const ack = await subscribe(mainSocket, subscription);
   if (parseRealtimeSubscriptionAckV1(ack) === undefined) throw ordersError();
   checkpoint?.("orders_realtime.socket_subscribed");
@@ -163,6 +225,17 @@ async function verifyBeforeRevocation(
   const notification = await notificationPromise;
   if (notification.scope.restaurantId !== scope.restaurantId || notification.scope.branchId !== scope.branchId || notification.stationId !== STATION_ID) throw ordersError();
   checkpoint?.("orders_realtime.notification_received");
+  if (kds.enabled) {
+    assertTicketList(
+      await listTickets(fixture.apiBaseUrl, context.accessToken, subscription, 200),
+      subscription,
+      plan,
+      fixture.runId,
+      undefined,
+      undefined,
+    );
+    kds.checkpoint?.("kds_tickets.pending_item_excluded");
+  }
 
   const opened = await mutate(fixture.apiBaseUrl, "/api/v1/orders/open", plan.open, context.accessToken, 201);
   assertSummary(opened, plan.orderId, scope, 3, "open", false, false);
@@ -180,6 +253,28 @@ async function verifyBeforeRevocation(
       "orders_realtime.item_ready",
       "orders_realtime.item_delivered",
     ][index] as OrdersRealtimeVerificationCheckpoint);
+    if (kds.enabled) {
+      const expectedStatus = command.to === "delivered" ? undefined : command.to;
+      assertTicketList(
+        await listTickets(fixture.apiBaseUrl, context.accessToken, subscription, 200),
+        subscription,
+        plan,
+        fixture.runId,
+        expectedStatus,
+        expectedStatus === undefined ? undefined : 4 + index,
+      );
+      kds.checkpoint?.([
+        "kds_tickets.sent_ticket_verified",
+        "kds_tickets.preparing_ticket_verified",
+        "kds_tickets.ready_ticket_verified",
+        "kds_tickets.delivered_ticket_removed",
+      ][index] as KdsTicketVerificationCheckpoint);
+      if (index === 0) {
+        await verifyKdsTicketIsolation(fixture, subscription, plan, kds);
+        await kds.browserHooks?.sent(fixture);
+      }
+      if (index === 2) await kds.browserHooks?.ready(fixture);
+    }
   }
 
   await assertPersistence(context, pool, plan);
@@ -212,6 +307,7 @@ async function verifyAfterRevocation(
   fixture: TenancyVerificationLiveFixture,
   state: OrdersRuntimeState,
   checkpoint: RunOrdersRealtimeTenancyVerificationOptions["onOrdersRealtimeCheckpoint"],
+  kds: KdsVerificationMode,
 ): Promise<void> {
   const context = requireContext(fixture);
   const subscription = subscriptionFor(branchScope(fixture.restaurantId, fixture.branchId), STATION_ID);
@@ -224,6 +320,12 @@ async function verifyAfterRevocation(
     socket.disconnect();
   }
   checkpoint?.("orders_realtime.revoked_subscription_rejected");
+  if (kds.enabled) {
+    await listTickets(fixture.apiBaseUrl, context.accessToken, subscription, 403);
+    kds.checkpoint?.("kds_tickets.revoked_list_rejected");
+    await kds.browserHooks?.afterRevocation(fixture);
+    state.kdsTicketsVerified = true;
+  }
   state.verified = true;
 }
 
@@ -476,6 +578,122 @@ async function recover(baseUrl: string, accessToken: string, subscription: Realt
   const parsed = parseKdsEventPageV1(result);
   if (parsed === undefined) throw ordersError();
   return parsed;
+}
+
+async function listTickets(
+  baseUrl: string,
+  accessToken: string | undefined,
+  subscription: RealtimeSubscriptionV1,
+  expectedStatus: 200 | 401 | 403,
+): Promise<KdsTicketListV1 | undefined> {
+  const query = new URLSearchParams({
+    branchId: subscription.scope.branchId,
+    restaurantId: subscription.scope.restaurantId,
+    stationId: subscription.stationId,
+  });
+  const response = await timedFetch(`${baseUrl}/api/v1/kds/tickets?${query.toString()}`, {
+    headers: accessToken === undefined ? {} : { authorization: `Bearer ${accessToken}` },
+  });
+  const result: unknown = await response.json();
+  if (response.status !== expectedStatus) throw ordersError();
+  if (expectedStatus !== 200) {
+    const expectedCode = expectedStatus === 401 ? "AUTHENTICATION_REQUIRED" : "ACTION_NOT_AUTHORIZED";
+    if (!isExactCode(result, expectedCode)) throw ordersError();
+    return undefined;
+  }
+  if (response.headers.get("cache-control") !== "private, no-store") throw ordersError();
+  const parsed = parseKdsTicketListV1(result);
+  if (parsed === undefined) throw ordersError();
+  return parsed;
+}
+
+function assertTicketList(
+  list: KdsTicketListV1 | undefined,
+  subscription: RealtimeSubscriptionV1,
+  plan: OrdersFixturePlan,
+  runId: string,
+  expectedStatus: "sent" | "preparing" | "ready" | undefined,
+  expectedVersion: number | undefined,
+): void {
+  if (list === undefined
+    || !sameScope(list.scope, subscription.scope)
+    || list.stationId !== subscription.stationId
+    || list.truncated) throw ordersError();
+  if (expectedStatus === undefined) {
+    if (list.tickets.length !== 0) throw ordersError();
+    return;
+  }
+  const ticket = list.tickets[0];
+  const modifier = ticket?.modifiers[0];
+  if (list.tickets.length !== 1
+    || ticket === undefined
+    || ticket.orderId !== plan.orderId
+    || ticket.orderItemId !== plan.orderItemId
+    || ticket.orderVersion !== expectedVersion
+    || ticket.channel !== "counter"
+    || ticket.tableId !== null
+    || ticket.quantity !== 2
+    || ticket.productName !== tenancyFixtureName(runId, "menu-product")
+    || ticket.modifiers.length !== 1
+    || modifier?.name !== tenancyFixtureName(runId, "menu-option")
+    || modifier.quantity !== 1
+    || ticket.status !== expectedStatus
+    || ticket.stationId !== subscription.stationId
+    || !sameScope(ticket.scope, subscription.scope)) throw ordersError();
+}
+
+async function verifyKdsTicketIsolation(
+  fixture: TenancyVerificationLiveFixture,
+  subscription: RealtimeSubscriptionV1,
+  plan: OrdersFixturePlan,
+  kds: KdsVerificationMode,
+): Promise<void> {
+  const context = requireContext(fixture);
+  const wrongStation = subscriptionFor(subscription.scope, "bar");
+  assertTicketList(
+    await listTickets(fixture.apiBaseUrl, context.accessToken, wrongStation, 200),
+    wrongStation,
+    plan,
+    fixture.runId,
+    undefined,
+    undefined,
+  );
+  kds.checkpoint?.("kds_tickets.station_isolation_verified");
+
+  const viewerBranch = subscriptionFor(
+    branchScope(fixture.restaurantId, context.viewerBranchId),
+    STATION_ID,
+  );
+  assertTicketList(
+    await listTickets(fixture.apiBaseUrl, context.accessToken, viewerBranch, 200),
+    viewerBranch,
+    plan,
+    fixture.runId,
+    undefined,
+    undefined,
+  );
+  kds.checkpoint?.("kds_tickets.branch_isolation_verified");
+
+  const secondary = subscriptionFor(
+    branchScope(context.secondaryRestaurantId, context.secondaryBranchId),
+    STATION_ID,
+  );
+  assertTicketList(
+    await listTickets(fixture.apiBaseUrl, context.secondaryAccessToken, secondary, 200),
+    secondary,
+    plan,
+    fixture.runId,
+    undefined,
+    undefined,
+  );
+  await listTickets(fixture.apiBaseUrl, context.accessToken, secondary, 403);
+  await listTickets(
+    fixture.apiBaseUrl,
+    context.accessToken,
+    subscriptionFor(branchScope(fixture.restaurantId, context.secondaryBranchId), STATION_ID),
+    403,
+  );
+  kds.checkpoint?.("kds_tickets.tenant_isolation_verified");
 }
 
 function assertSummary(value: unknown, orderId: string, scope: BranchScope, version: number, orderStatus: string, replayed: boolean, hasKdsEvent: boolean): asserts value is OrderMutationSummaryV1 {

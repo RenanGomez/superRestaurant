@@ -1,4 +1,4 @@
-import { parseAddOrderItemCommandV1, parseCreateOrderCommandV1, parseOpenOrderCommandV1, parseTransitionOrderItemCommandV1 } from "./index.js";
+import { parseAddOrderItemCommandV1, parseCreateOrderCommandV1, parseOpenOrderCommandV1, parseOrderMutationSummaryV1, parseTransitionOrderItemCommandV1 } from "./index.js";
 
 const scope={restaurantId:"1e37ae13-8507-484c-969f-2176f77b7000",branchId:"23723e10-c0bf-49fd-9363-4f0e2c60e955"};
 const common={schemaVersion:1,scope,orderId:"ee50f0f6-746f-47cb-8383-ad7834ef3ef0",eventId:"e74df54b-30a7-449b-a23f-c4ca6f93bda4",idempotencyKey:"order-attempt-1",deviceId:"a72573ec-6224-4857-bc4a-f3d1d07b6d83",occurredAt:"2026-09-02T22:00:00.000Z"};
@@ -17,6 +17,11 @@ expect(parseAddOrderItemCommandV1({...add,modifierGroups:[...add.modifierGroups,
 expect(parseOpenOrderCommandV1({...common,expectedVersion:1})!==undefined,"open command parses");
 expect(parseTransitionOrderItemCommandV1({...common,expectedVersion:2,orderItemId:add.orderItemId,to:"ready"})!==undefined,"forward transition parses");
 expect(parseTransitionOrderItemCommandV1({...common,expectedVersion:2,orderItemId:add.orderItemId,to:"cancelled"})===undefined,"sensitive cancellation not exposed by this slice");
+
+const summary={schemaVersion:1,scope,orderId:common.orderId,version:3,orderStatus:"open",replayed:false,kdsEvent:null};
+expect(parseOrderMutationSummaryV1(summary)!==undefined,"order mutation summary parses");
+expect(parseOrderMutationSummaryV1({...summary,version:0})===undefined,"order mutation summary requires positive version");
+expect(parseOrderMutationSummaryV1({...summary,unexpected:true})===undefined,"order mutation summary rejects extra keys");
 
 const accessor={...common,channel:"counter",tableId:null,currency:"MXN",timeZone:"UTC"};
 Object.defineProperty(accessor,"currency",{enumerable:true,get:()=>{throw new Error("must not run");}});

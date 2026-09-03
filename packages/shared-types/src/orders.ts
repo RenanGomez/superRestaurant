@@ -1,8 +1,10 @@
 import type { BranchScope } from "./index.js";
+import { parseKdsEventV1 } from "./realtime.js";
 
 export const ORDER_COMMAND_SCHEMA_VERSION = 1 as const;
 export const ORDER_CHANNELS = Object.freeze(["table", "counter", "takeout", "delivery"] as const);
 export const ORDER_ITEM_FORWARD_STATUSES = Object.freeze(["sent", "preparing", "ready", "delivered"] as const);
+export const ORDER_STATUSES = Object.freeze(["draft", "open", "partially_paid", "paid", "closed", "cancelled"] as const);
 
 export type OrderChannelV1 = (typeof ORDER_CHANNELS)[number];
 export type OrderItemForwardStatusV1 = (typeof ORDER_ITEM_FORWARD_STATUSES)[number];
@@ -69,6 +71,32 @@ export interface OrderMutationSummaryV1 {
   readonly schemaVersion: typeof ORDER_COMMAND_SCHEMA_VERSION;
   readonly scope: BranchScope;
   readonly version: number;
+}
+
+export function parseOrderMutationSummaryV1(value: unknown): OrderMutationSummaryV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion","scope","orderId","version","orderStatus","replayed","kdsEvent"]);
+  if (record === undefined || own(record,"schemaVersion") !== ORDER_COMMAND_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record,"scope"));
+  const orderId = uuid(own(record,"orderId"));
+  const version = integer(own(record,"version"), 1, Number.MAX_SAFE_INTEGER);
+  const orderStatus = own(record,"orderStatus");
+  const replayed = own(record,"replayed");
+  const rawKdsEvent = own(record,"kdsEvent");
+  const kdsEvent = rawKdsEvent === null ? null : parseKdsEventV1(rawKdsEvent);
+  if (scope === undefined || orderId === undefined || version === undefined
+    || typeof orderStatus !== "string" || !(ORDER_STATUSES as readonly string[]).includes(orderStatus)
+    || typeof replayed !== "boolean" || kdsEvent === undefined) return undefined;
+  if (kdsEvent !== null && (kdsEvent.scope.restaurantId !== scope.restaurantId
+    || kdsEvent.scope.branchId !== scope.branchId || kdsEvent.orderId !== orderId)) return undefined;
+  return Object.freeze({
+    kdsEvent,
+    orderId,
+    orderStatus: orderStatus as OrderMutationSummaryV1["orderStatus"],
+    replayed,
+    schemaVersion: ORDER_COMMAND_SCHEMA_VERSION,
+    scope,
+    version,
+  });
 }
 
 export function parseCreateOrderCommandV1(value: unknown): CreateOrderCommandV1 | undefined {

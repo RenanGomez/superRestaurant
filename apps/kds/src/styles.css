@@ -1,0 +1,52 @@
+:root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #0b110e; color: #f4f7f5; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradient(circle at top right, #173126 0, #0b110e 42%); }
+button, input, select { font: inherit; }
+button, select, input { min-height: 46px; border-radius: 10px; border: 1px solid #385044; }
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #f6c453; outline-offset: 2px; }
+.workspace { min-height: 100vh; padding: 18px; }
+.topbar { display: flex; gap: 20px; align-items: end; justify-content: space-between; margin-bottom: 14px; }
+.topbar h1, .login-card h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 3rem); }
+.eyebrow { margin: 0 0 4px; color: #70d69b; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; font-size: .72rem; }
+.controls { display: flex; flex: 1; flex-wrap: wrap; gap: 10px; align-items: end; justify-content: flex-end; min-width: 0; }
+.controls label { min-width: 0; }
+.controls label:first-child { flex: 1 1 420px; }
+.controls label:nth-child(2) { flex: 0 1 190px; }
+.controls .ghost { flex: 0 0 auto; }
+.controls input, .controls select { width: 100%; min-width: 0; }
+label { display: grid; gap: 5px; color: #b8c6bd; font-size: .8rem; font-weight: 700; }
+input, select { background: #111c16; color: #fff; padding: 0 12px; max-width: 100%; }
+.primary { background: #42c77a; color: #07120c; border-color: #42c77a; padding: 0 18px; font-weight: 900; }
+.primary:hover { background: #63db92; }
+.primary:disabled { opacity: .55; cursor: wait; }
+.ghost, .inline { background: transparent; color: #dbe6df; padding: 0 14px; }
+.inline { min-height: 32px; margin-left: auto; border: 0; text-decoration: underline; }
+.status { display: flex; align-items: center; gap: 8px; min-height: 42px; margin-bottom: 14px; padding: 6px 12px; border: 1px solid #2f4639; border-radius: 12px; background: #101a15; color: #c9d4cd; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: #d1a23b; }
+.status.live .dot { background: #49d486; box-shadow: 0 0 0 5px #49d48622; }
+.status.error .dot { background: #ff7169; }
+.ticket-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(290px, 100%), 1fr)); gap: 14px; align-items: start; }
+.ticket { min-width: 0; border: 1px solid #304a3b; border-top: 5px solid #e0ad45; border-radius: 14px; background: #101a15; box-shadow: 0 12px 30px #0004; overflow: hidden; }
+.ticket.preparing { border-top-color: #5aa7ff; }
+.ticket.ready { border-top-color: #49d486; }
+.ticket > header, .ticket > footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; background: #16241c; }
+.ticket h2 { margin: 18px 14px 10px; font-size: 1.35rem; overflow-wrap: anywhere; }
+.ticket h2 span { color: #70d69b; }
+.ticket ul { margin: 0 14px 18px; padding-left: 20px; color: #d4ded8; }
+.ticket footer { margin-top: 14px; }
+.pill { color: #b9c7bf; font-size: .8rem; font-weight: 800; text-transform: uppercase; }
+.action { min-height: 54px; }
+.empty, .banner, .center-card, .login-card { border: 1px solid #304a3b; background: #101a15; border-radius: 14px; padding: 24px; }
+.empty { text-align: center; margin-top: 56px; color: #b9c7bf; }
+.empty h2 { color: #fff; }
+.banner { margin: 10px 0 14px; padding: 12px 14px; }
+.error { color: #ffaaa4; }
+.warning { color: #f6cf79; }
+.login-shell, .fatal { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
+.login-card { width: min(420px, 100%); }
+.login-card form { display: grid; gap: 14px; margin-top: 24px; }
+.login-card input { width: 100%; }
+.muted { color: #aab8af; }
+@media (max-width: 720px) { .topbar { align-items: stretch; flex-direction: column; } .controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); width: 100%; } .controls .ghost { grid-column: 1 / -1; } .workspace { padding: 12px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }

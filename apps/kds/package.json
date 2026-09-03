@@ -1,0 +1,27 @@
+{
+  "name": "@super-restaurant/kds",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit --project tsconfig.json && vite build",
+    "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs src vite.config.ts",
+    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node .test-dist/config.test.js && node .test-dist/kds-client.test.js && node .test-dist/kds-proxy-target.test.js && node .test-dist/kds-state.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
+    "typecheck": "tsc --noEmit --project tsconfig.json"
+  },
+  "dependencies": {
+    "@super-restaurant/shared-types": "workspace:*",
+    "@supabase/supabase-js": "2.112.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "socket.io-client": "4.8.1"
+  },
+  "devDependencies": {
+    "@super-restaurant/config": "workspace:*",
+    "@types/node": "26.3.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "vite": "8.2.2"
+  }
+}

@@ -52,6 +52,29 @@ export interface KdsEventPageV1 extends RealtimeSubscriptionV1 {
   readonly nextCursor: KdsCursorV1;
 }
 
+export interface KdsTicketModifierV1 {
+  readonly name: string;
+  readonly quantity: number;
+}
+
+export interface KdsTicketV1 extends RealtimeSubscriptionV1 {
+  readonly channel: "counter" | "delivery" | "table" | "takeout";
+  readonly modifiers: readonly KdsTicketModifierV1[];
+  readonly orderId: string;
+  readonly orderItemId: string;
+  readonly orderVersion: number;
+  readonly productName: string;
+  readonly quantity: number;
+  readonly queuedAt: string;
+  readonly status: "preparing" | "ready" | "sent";
+  readonly tableId: string | null;
+}
+
+export interface KdsTicketListV1 extends RealtimeSubscriptionV1 {
+  readonly tickets: readonly KdsTicketV1[];
+  readonly truncated: boolean;
+}
+
 export interface RealtimeNotificationV1 extends RealtimeSubscriptionV1 {
   readonly cursor: KdsCursorV1;
   readonly eventId: string;
@@ -162,6 +185,83 @@ export function parseKdsEventPageV1(value: unknown): KdsEventPageV1 | undefined 
   });
 }
 
+export function parseKdsTicketListV1(value: unknown): KdsTicketListV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "stationId", "tickets", "truncated"]);
+  if (record === undefined || ownValue(record, "schemaVersion") !== REALTIME_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(ownValue(record, "scope"));
+  const stationId = parseStationId(ownValue(record, "stationId"));
+  const rawTickets = ownValue(record, "tickets");
+  const truncated = ownValue(record, "truncated");
+  if (scope === undefined || stationId === undefined || !Array.isArray(rawTickets)
+    || rawTickets.length > 500 || typeof truncated !== "boolean") return undefined;
+  const tickets: KdsTicketV1[] = [];
+  const itemIds = new Set<string>();
+  for (const rawTicket of rawTickets) {
+    const ticket = parseKdsTicketV1(rawTicket);
+    if (ticket === undefined || !sameScope(ticket.scope, scope) || ticket.stationId !== stationId
+      || itemIds.has(ticket.orderItemId)) return undefined;
+    itemIds.add(ticket.orderItemId);
+    tickets.push(ticket);
+  }
+  return Object.freeze({
+    schemaVersion: REALTIME_SCHEMA_VERSION,
+    scope,
+    stationId,
+    tickets: Object.freeze(tickets),
+    truncated,
+  });
+}
+
+export function parseKdsTicketV1(value: unknown): KdsTicketV1 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "scope", "stationId", "orderId", "orderItemId", "orderVersion",
+    "channel", "tableId", "quantity", "productName", "modifiers", "status", "queuedAt",
+  ]);
+  if (record === undefined || ownValue(record, "schemaVersion") !== REALTIME_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(ownValue(record, "scope"));
+  const stationId = parseStationId(ownValue(record, "stationId"));
+  const orderId = parseUuid(ownValue(record, "orderId"));
+  const orderItemId = parseUuid(ownValue(record, "orderItemId"));
+  const orderVersion = parsePositiveInteger(ownValue(record, "orderVersion"));
+  const channel = ownValue(record, "channel");
+  const rawTableId = ownValue(record, "tableId");
+  const tableId = rawTableId === null ? null : parseUuid(rawTableId);
+  const quantity = parsePositiveInteger(ownValue(record, "quantity"), 1_000);
+  const productName = parseDisplayText(ownValue(record, "productName"), 120);
+  const rawModifiers = ownValue(record, "modifiers");
+  const status = ownValue(record, "status");
+  const queuedAt = parseTimestamp(ownValue(record, "queuedAt"));
+  if (scope === undefined || stationId === undefined || orderId === undefined || orderItemId === undefined
+    || orderVersion === undefined || !isOrderChannel(channel) || tableId === undefined
+    || (channel === "table") !== (tableId !== null) || quantity === undefined || productName === undefined
+    || !Array.isArray(rawModifiers) || rawModifiers.length > 200
+    || (status !== "sent" && status !== "preparing" && status !== "ready") || queuedAt === undefined) return undefined;
+  const modifiers: KdsTicketModifierV1[] = [];
+  for (const rawModifier of rawModifiers) {
+    const modifierRecord = exactRecord(rawModifier, ["name", "quantity"]);
+    if (modifierRecord === undefined) return undefined;
+    const name = parseDisplayText(ownValue(modifierRecord, "name"), 80);
+    const modifierQuantity = parsePositiveInteger(ownValue(modifierRecord, "quantity"), 1_000);
+    if (name === undefined || modifierQuantity === undefined) return undefined;
+    modifiers.push(Object.freeze({ name, quantity: modifierQuantity }));
+  }
+  return Object.freeze({
+    channel,
+    modifiers: Object.freeze(modifiers),
+    orderId,
+    orderItemId,
+    orderVersion,
+    productName,
+    quantity,
+    queuedAt,
+    schemaVersion: REALTIME_SCHEMA_VERSION,
+    scope,
+    stationId,
+    status,
+    tableId,
+  });
+}
+
 export function parseRealtimeNotificationV1(value: unknown): RealtimeNotificationV1 | undefined {
   const record = exactRecord(value, ["schemaVersion", "scope", "stationId", "cursor", "eventId", "eventType"]);
   if (
@@ -216,6 +316,20 @@ function parseTimestamp(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function parseDisplayText(value: unknown, maximumLength: number): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= maximumLength
+    && value === value.trim() && !/[\p{Cc}\p{Cf}]/u.test(value) ? value : undefined;
+}
+
+function parsePositiveInteger(value: unknown, maximum = Number.MAX_SAFE_INTEGER): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= maximum
+    ? value : undefined;
+}
+
+function isOrderChannel(value: unknown): value is KdsTicketV1["channel"] {
+  return value === "counter" || value === "delivery" || value === "table" || value === "takeout";
 }
 
 function sameScope(left: BranchScope, right: BranchScope): boolean {

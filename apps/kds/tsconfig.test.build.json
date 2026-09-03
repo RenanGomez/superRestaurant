@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".test-dist",
+    "rootDir": "src",
+    "declaration": false,
+    "sourceMap": false,
+    "types": ["node", "vite/client"]
+  },
+  "include": [
+    "src/config.ts",
+    "src/config.test.ts",
+    "src/kds-client.ts",
+    "src/kds-client.test.ts",
+    "src/kds-proxy-target.ts",
+    "src/kds-proxy-target.test.ts",
+    "src/kds-state.ts",
+    "src/kds-state.test.ts"
+  ]
+}

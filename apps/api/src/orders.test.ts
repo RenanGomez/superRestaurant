@@ -8,6 +8,7 @@ import {
   parseKdsCursorV1,
   parseKdsEventPageV1,
   parseKdsEventV1,
+  parseKdsTicketListV1,
   parseMenuCatalogStateV1,
   parseOpenOrderCommandV1,
   parseRealtimeSubscriptionV1,
@@ -92,7 +93,28 @@ const eventPage = parseKdsEventPageV1({
   scope,
   stationId: "kitchen",
 });
-if (subscription === undefined || initialCursor === undefined || eventPage === undefined) throw new Error("TEST_RECOVERY_INVALID");
+const ticketList = parseKdsTicketListV1({
+  schemaVersion: 1,
+  scope,
+  stationId: "kitchen",
+  tickets: [{
+    schemaVersion: 1,
+    scope,
+    stationId: "kitchen",
+    orderId,
+    orderItemId,
+    orderVersion: 3,
+    channel: "counter",
+    tableId: null,
+    quantity: 2,
+    productName: "Hamburguesa",
+    modifiers: [],
+    status: "sent",
+    queuedAt: "2026-09-02T22:00:01.000Z",
+  }],
+  truncated: false,
+});
+if (subscription === undefined || initialCursor === undefined || eventPage === undefined || ticketList === undefined) throw new Error("TEST_RECOVERY_INVALID");
 
 test("PostgreSQL order adapter binds private functions and validates exact responses", async () => {
   const calls: { readonly parameters: readonly unknown[]; readonly sql: string }[] = [];
@@ -101,6 +123,7 @@ test("PostgreSQL order adapter binds private functions and validates exact respo
       calls.push({ parameters, sql });
       if (sql.includes("read_order")) return { rows: [{ result: readResult() }] };
       if (sql.includes("recover_kds_events")) return { rows: [{ result: eventPage }] };
+      if (sql.includes("list_kds_tickets")) return { rows: [{ result: ticketList }] };
       return { rows: [{ result: persistResult("saved", null) }] };
     },
   };
@@ -111,11 +134,13 @@ test("PostgreSQL order adapter binds private functions and validates exact respo
   const persisted = await adapter.persist(principal.actorId, 0, domainMutation);
   assert.equal(persisted.status, "saved");
   assert.deepEqual(await adapter.recoverKds(principal.actorId, subscription, initialCursor, 50), eventPage);
+  assert.deepEqual(await adapter.listKdsTickets(principal.actorId, subscription), ticketList);
   assert.match(calls[0]?.sql ?? "", /app_private\.read_order/u);
   assert.deepEqual(calls[0]?.parameters, [principal.actorId, scope.restaurantId, scope.branchId, orderId]);
   assert.deepEqual(calls[1]?.parameters?.slice(0, 2), [principal.actorId, 0]);
   assert.equal(typeof calls[1]?.parameters?.[2], "string");
   assert.deepEqual(calls[2]?.parameters, [principal.actorId, scope.restaurantId, scope.branchId, "kitchen", "0", 50]);
+  assert.deepEqual(calls[3]?.parameters, [principal.actorId, scope.restaurantId, scope.branchId, "kitchen"]);
 });
 
 test("PostgreSQL order adapter fails closed for ambiguous, malformed, or forbidden output", async () => {
@@ -133,6 +158,7 @@ test("PostgreSQL order adapter fails closed for ambiguous, malformed, or forbidd
   assert.deepEqual(await forbiddenAdapter.persist(principal.actorId, 0, domainMutation), { status: "forbidden" });
   const nullAdapter = new PostgresOrderPersistenceAdapter({ query: async () => ({ rows: [{ result: null }] }) });
   assert.equal(await nullAdapter.recoverKds(principal.actorId, subscription, initialCursor, 50), "forbidden");
+  assert.equal(await nullAdapter.listKdsTickets(principal.actorId, subscription), "forbidden");
 });
 
 test("order service creates, snapshots catalog items, transitions, and only notifies fresh KDS events", async () => {
@@ -141,6 +167,7 @@ test("order service creates, snapshots catalog items, transitions, and only noti
   let storedOrder = storedMutation.order;
   let storedVersion = 1;
   const orders: OrderPersistencePort = {
+    listKdsTickets: async () => ticketList,
     persist: async (_actorId, _expectedVersion, mutation) => {
       storedOrder = mutation.order;
       storedVersion += 1;
@@ -189,10 +216,12 @@ test("order service creates, snapshots catalog items, transitions, and only noti
   assert.equal((await service.transitionItem(principal, itemTransition)).version, 3);
   assert.equal(notifications.length, 2);
   assert.deepEqual(await service.recoverKds(principal, subscription, initialCursor, "50"), eventPage);
+  assert.deepEqual(await service.listKdsTickets(principal, subscription), ticketList);
 });
 
 test("order service enforces permission, optimistic version, and domain transitions", async () => {
   const port: OrderPersistencePort = {
+    listKdsTickets: async () => "forbidden",
     persist: async () => ({ status: "conflict" }),
     read: async () => ({ order: domainMutation.order, version: 1 }),
     recoverKds: async () => "forbidden",
@@ -213,6 +242,9 @@ test("order service enforces permission, optimistic version, and domain transiti
   await assertCode(serviceFor(["viewer"], port).recoverKds(principal, subscription, initialCursor, 50), "authorization");
   await assertCode(serviceFor(["manager"], port).recoverKds(principal, subscription, initialCursor, 50), "authorization");
   await assertCode(serviceFor(["manager"], port).recoverKds(principal, subscription, "bad", 50), "request");
+  await assertCode(serviceFor(["viewer"], port).listKdsTickets(principal, subscription), "authorization");
+  await assertCode(serviceFor(["manager"], port).listKdsTickets(principal, subscription), "authorization");
+  await assertCode(serviceFor(["manager"], port).listKdsTickets(principal, { ...subscription, stationId: " kitchen" }), "request");
 });
 
 function serviceFor(

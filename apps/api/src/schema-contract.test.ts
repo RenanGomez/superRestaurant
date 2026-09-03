@@ -49,11 +49,27 @@ const postOrdersRealtimeAudit = readFileSync(
   new URL("../../../supabase/tests/tenancy_memberships_post_orders_realtime.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
+const kdsTicketMigration = readFileSync(
+  new URL("../../../supabase/migrations/20260903000100_create_kds_ticket_read_model.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
+const kdsTicketAudit = readFileSync(
+  new URL("../../../supabase/tests/kds_ticket_catalog.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
+const postKdsAudit = readFileSync(
+  new URL("../../../supabase/tests/tenancy_memberships_post_kds.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
 const postOrdersRealtimeStateRunner = readFileSync(
   new URL(
     "../src/operations/run-post-orders-realtime-app-api-state-verification.ts",
     import.meta.url,
   ),
+  "utf8",
+);
+const postKdsStateRunner = readFileSync(
+  new URL("../src/operations/run-post-kds-app-api-state-verification.ts", import.meta.url),
   "utf8",
 );
 const catalogAudit = readFileSync(
@@ -503,4 +519,89 @@ test("orders and Realtime audits pin the exact private capabilities and global s
   assert.match(postOrdersRealtimeStateRunner, /tenancy_memberships_post_orders_realtime\.sql/u);
   assert.doesNotThrow(() => validateCatalogAuditSql(ordersRealtimeAudit));
   assert.doesNotThrow(() => validateCatalogAuditSql(postOrdersRealtimeAudit));
+});
+
+test("KDS ticket migration exposes one bounded, authorized, server-only read model", () => {
+  assert.deepEqual(
+    MEMBERSHIP_ROLE_CODES.filter((role) => RBAC_ROLE_PERMISSIONS_V1[role].includes("kds.read")),
+    ["owner", "admin", "manager", "supervisor", "waiter", "kitchen", "viewer", "auditor"],
+  );
+  assert.match(kdsTicketMigration, /^begin;/u);
+  assert.match(kdsTicketMigration, /create function app_private\.list_kds_tickets/u);
+  assert.doesNotMatch(kdsTicketMigration, /create or replace function/u);
+  assert.match(kdsTicketMigration, /language plpgsql stable security definer set search_path = ''/u);
+  assert.match(kdsTicketMigration, /m\.user_id = p_actor_id/u);
+  assert.match(kdsTicketMigration, /m\.restaurant_id = p_restaurant_id/u);
+  assert.match(kdsTicketMigration, /m\.branch_id = p_branch_id/u);
+  assert.match(kdsTicketMigration, /item\.value -> 'snapshot' ->> 'stationid' = p_station_id/u);
+  assert.match(kdsTicketMigration, /item\.value ->> 'status' in \('sent','preparing','ready'\)/u);
+  assert.match(kdsTicketMigration, /limit 501/u);
+  assert.match(kdsTicketMigration, /limit 500/u);
+  assert.match(kdsTicketMigration, /'orderversion', p\.order_version/u);
+  assert.match(kdsTicketMigration, /'productname', p\.item -> 'snapshot' ->> 'name'/u);
+  assert.match(kdsTicketMigration, /revoke all on function app_private\.list_kds_tickets\(uuid,uuid,uuid,text\)[\s\S]*from public, anon, authenticated, service_role, app_api/u);
+  assert.match(kdsTicketMigration, /grant execute on function app_private\.list_kds_tickets\(uuid,uuid,uuid,text\) to app_api/u);
+  assert.doesNotMatch(kdsTicketMigration, /pg_catalog\.coalesce/u);
+  assert.match(kdsTicketMigration, /commit;\s*$/u);
+  assert.doesNotThrow(() => extractMigrationBody(kdsTicketMigration));
+});
+
+test("KDS ticket audits pin the additive function and exact global surface", () => {
+  const runner = readFileSync(
+    new URL("../src/operations/run-kds-ticket-schema-verification.ts", import.meta.url),
+    "utf8",
+  ).toLowerCase();
+  const tenancyRunner = readFileSync(
+    new URL("../src/operations/run-kds-tenancy-verification.ts", import.meta.url),
+    "utf8",
+  );
+  const protectedSmokeRunner = readFileSync(
+    new URL("../src/operations/run-kds-protected-smoke.ts", import.meta.url),
+    "utf8",
+  );
+  const protectedSmokeCoordinator = readFileSync(
+    new URL("../src/operations/kds-protected-smoke-coordinator.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(kdsTicketAudit, /kds_ticket_required_object_missing/u);
+  assert.match(kdsTicketAudit, /provolatile = 's'/u);
+  assert.match(kdsTicketAudit, /kds_ticket_function_grant_rejected/u);
+  assert.match(postKdsAudit, /post_kds_required_object_missing/u);
+  assert.match(postKdsAudit, /\) <> 19/u);
+  assert.match(postKdsAudit, /\) <> 16/u);
+  assert.match(postKdsAudit, /app_private\.list_kds_tickets/u);
+  assert.match(postKdsAudit, /post_kds_app_api_extra_function/u);
+  assert.doesNotMatch(kdsTicketAudit, /pg_catalog\.coalesce/u);
+  assert.doesNotMatch(postKdsAudit, /pg_catalog\.coalesce/u);
+  assert.match(runner, /tenancy_memberships_post_kds\.sql/u);
+  assert.match(runner, /securitydefinerfunctions: 16/u);
+  assert.match(apiPackage, /"verify:kds-ticket-schema:rollback"/u);
+  assert.match(apiPackage, /run-kds-ticket-schema-verification\.js/u);
+  assert.match(postKdsStateRunner, /auditProfile: "post_kds_v1"/u);
+  assert.match(postKdsStateRunner, /tenancy_memberships_post_kds\.sql/u);
+  assert.match(apiPackage, /"verify:post-kds-app-api-state:remote"/u);
+  assert.match(tenancyRunner, /tenancy_memberships_post_kds\.sql/u);
+  assert.match(tenancyRunner, /runKdsTenancyVerification/u);
+  assert.match(apiPackage, /"verify:kds:remote"/u);
+  assert.match(apiPackage, /run-kds-tenancy-verification\.js/u);
+  assert.match(apiPackage, /"verify:kds-protected-smoke:remote"/u);
+  assert.match(protectedSmokeRunner, /runKdsTenancyVerification/u);
+  assert.match(protectedSmokeRunner, /tenancy_memberships_post_kds\.sql/u);
+  assert.match(tenancyRunner, /runKdsTenancyVerification/u);
+  assert.match(
+    readFileSync(
+      new URL("../src/operations/orders-realtime-tenancy-verification.ts", import.meta.url),
+      "utf8",
+    ),
+    /verifyKdsTickets: true/u,
+  );
+  assert.match(
+    readFileSync(new URL("../src/operations/tenancy-verification.ts", import.meta.url), "utf8"),
+    /POST_KDS_SURFACE_REJECTED/u,
+  );
+  assert.match(protectedSmokeCoordinator, /KDS_PROTECTED_SMOKE_CONFIRM_PROJECT_REF/u);
+  assert.match(protectedSmokeCoordinator, /expectedProductName/u);
+  assert.match(protectedSmokeCoordinator, /expectedModifierName/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(kdsTicketAudit));
+  assert.doesNotThrow(() => validateCatalogAuditSql(postKdsAudit));
 });

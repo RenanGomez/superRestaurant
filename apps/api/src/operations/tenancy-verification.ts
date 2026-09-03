@@ -143,6 +143,7 @@ export interface RunTenancyVerificationOptions {
   readonly verifyDiningTables?: true;
   readonly verifyMenuCatalog?: true;
   readonly verifyOrdersRealtime?: true;
+  readonly verifyKdsTickets?: true;
 }
 
 export interface TenancyVerificationFailureNotice {
@@ -286,7 +287,8 @@ export async function runTenancyVerification(
 ): Promise<TenancyVerificationSummary> {
   const verifyDiningTables = options.verifyDiningTables === true;
   const verifyDiningZones = options.verifyDiningZones === true || verifyDiningTables;
-  const verifyOrdersRealtime = options.verifyOrdersRealtime === true;
+  const verifyKdsTickets = options.verifyKdsTickets === true;
+  const verifyOrdersRealtime = options.verifyOrdersRealtime === true || verifyKdsTickets;
   const verifyMenuCatalog = options.verifyMenuCatalog === true || verifyOrdersRealtime;
   const runtimeCatalogAuditSql = validateRuntimeAuditSql(
     options.runtimeCatalogAuditSql,
@@ -294,6 +296,7 @@ export async function runTenancyVerification(
     verifyDiningTables,
     verifyMenuCatalog,
     verifyOrdersRealtime,
+    verifyKdsTickets,
   );
   const apiPort = readApiPort(options.apiPort);
   const plan = createFixturePlan(verifyDiningZones, verifyDiningTables, verifyMenuCatalog);
@@ -2568,8 +2571,11 @@ function validateRuntimeAuditSql(
   verifyDiningTables = false,
   verifyMenuCatalog = false,
   verifyOrdersRealtime = false,
+  verifyKdsTickets = false,
 ): string {
-  const requiredMarkers = verifyOrdersRealtime
+  const requiredMarkers = verifyKdsTickets
+    ? ["POST_KDS_SURFACE_REJECTED", "POST_KDS_APP_API_OBJECT_PRIVILEGE_REJECTED"]
+    : verifyOrdersRealtime
     ? ["POST_ORDERS_SURFACE_REJECTED", "POST_ORDERS_SERVER_TABLE_GRANTS_REJECTED"]
     : verifyMenuCatalog
     ? ["POST_MENU_TABLE_SURFACE_REJECTED", "POST_MENU_SERVER_TABLE_GRANTS_REJECTED"]

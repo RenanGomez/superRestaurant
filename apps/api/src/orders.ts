@@ -4,6 +4,7 @@ import {
   parseKdsCursorV1,
   parseKdsEventPageV1,
   parseKdsEventV1,
+  parseKdsTicketListV1,
   parseOpenOrderCommandV1,
   parseBranchScope,
   parseRealtimeSubscriptionV1,
@@ -13,6 +14,7 @@ import {
   type KdsCursorV1,
   type KdsEventPageV1,
   type KdsEventV1,
+  type KdsTicketListV1,
   type MenuCatalogV1,
   type OrderAuditInputV1,
   type OrderMutationSummaryV1,
@@ -45,6 +47,7 @@ import {
 const readOrderSql = "select app_private.read_order($1::uuid, $2::uuid, $3::uuid, $4::uuid) as result";
 const persistOrderSql = "select app_private.persist_order_mutation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
 const recoverKdsSql = "select app_private.recover_kds_events($1::uuid, $2::uuid, $3::uuid, $4::text, $5::bigint, $6::integer) as result";
+const listKdsTicketsSql = "select app_private.list_kds_tickets($1::uuid, $2::uuid, $3::uuid, $4::text) as result";
 
 export type OrderApplicationErrorCode = "authorization" | "conflict" | "not_found" | "request" | "unavailable";
 
@@ -70,6 +73,7 @@ export type PersistOrderResult =
   }>;
 
 export interface OrderPersistencePort {
+  listKdsTickets(actorId: string, subscription: RealtimeSubscriptionV1): Promise<KdsTicketListV1 | "forbidden">;
   persist(actorId: string, expectedVersion: number, mutation: OrderMutation): Promise<PersistOrderResult>;
   read(actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing">;
   recoverKds(actorId: string, subscription: RealtimeSubscriptionV1, after: KdsCursorV1, limit: number): Promise<KdsEventPageV1 | "forbidden">;
@@ -86,6 +90,24 @@ export const REALTIME_NOTIFICATION_PORT = Symbol("REALTIME_NOTIFICATION_PORT");
 @Injectable()
 export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
   public constructor(@Inject(DATABASE_CLIENT) private readonly database: DatabaseClientPort) {}
+
+  public async listKdsTickets(
+    actorId: string,
+    subscription: RealtimeSubscriptionV1,
+  ): Promise<KdsTicketListV1 | "forbidden"> {
+    const result = await this.database.query(listKdsTicketsSql, [
+      actorId,
+      subscription.scope.restaurantId,
+      subscription.scope.branchId,
+      subscription.stationId,
+    ]);
+    const raw = singleResult(result.rows);
+    if (raw === null) return "forbidden";
+    const tickets = parseKdsTicketListV1(raw);
+    if (tickets === undefined || !sameScope(tickets.scope, subscription.scope)
+      || tickets.stationId !== subscription.stationId) throw unavailable();
+    return tickets;
+  }
 
   public async read(actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing"> {
     const result = await this.database.query(readOrderSql, [actorId, scope.restaurantId, scope.branchId, orderId]);
@@ -168,6 +190,7 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
     if (page === undefined || !sameScope(page.scope, subscription.scope) || page.stationId !== subscription.stationId) throw unavailable();
     return page;
   }
+
 }
 
 @Injectable()
@@ -253,6 +276,23 @@ export class OrderService {
       const page = await this.orders.recoverKds(actorId, subscription, after, limit);
       if (page === "forbidden") throw applicationError("authorization");
       return page;
+    } catch (error: unknown) {
+      if (error instanceof OrderApplicationError) throw error;
+      throw unavailable();
+    }
+  }
+
+  public async listKdsTickets(
+    principal: AuthenticatedPrincipal,
+    subscriptionInput: unknown,
+  ): Promise<KdsTicketListV1> {
+    const subscription = parseRealtimeSubscriptionV1(subscriptionInput);
+    if (subscription === undefined) throw applicationError("request");
+    const actorId = await this.authorize(principal, subscription.scope, "kds.read");
+    try {
+      const tickets = await this.orders.listKdsTickets(actorId, subscription);
+      if (tickets === "forbidden") throw applicationError("authorization");
+      return tickets;
     } catch (error: unknown) {
       if (error instanceof OrderApplicationError) throw error;
       throw unavailable();

@@ -4,6 +4,7 @@ import {
   parseKdsCursorV1,
   parseKdsEventPageV1,
   parseKdsEventV1,
+  parseKdsTicketListV1,
   parseRealtimeNotificationV1,
   parseRealtimeSubscriptionAckV1,
   parseRealtimeSubscriptionV1,
@@ -68,6 +69,28 @@ expect(parseKdsEventPageV1({ ...page, events: [{ ...event(), scope: { ...scope, 
 
 expect(parseRealtimeSubscriptionAckV1({ schemaVersion: 1, scope, stationId: "kitchen", cursor: "v1:2", status: "subscribed" }) !== undefined, "ack parses");
 expect(parseRealtimeNotificationV1({ schemaVersion: 1, scope, stationId: "kitchen", cursor: "v1:2", eventId, eventType: "kds.changed" }) !== undefined, "notification parses");
+
+const ticket = {
+  schemaVersion: 1,
+  scope,
+  stationId: "kitchen",
+  orderId,
+  orderItemId,
+  orderVersion: 4,
+  channel: "table",
+  tableId: "f62229e6-b84f-4c34-9f16-a891b11c6143",
+  quantity: 2,
+  productName: "Hamburguesa",
+  modifiers: [{ name: "Sin cebolla", quantity: 1 }],
+  status: "preparing",
+  queuedAt: "2026-09-02T22:00:00.100Z",
+};
+const ticketList = parseKdsTicketListV1({ schemaVersion: 1, scope, stationId: "kitchen", tickets: [ticket], truncated: false });
+expect(ticketList !== undefined && Object.isFrozen(ticketList.tickets) && Object.isFrozen(ticketList.tickets[0]?.modifiers), "ticket list parses deeply frozen");
+expect(parseKdsTicketListV1({ schemaVersion: 1, scope, stationId: "kitchen", tickets: [{ ...ticket, stationId: "bar" }], truncated: false }) === undefined, "cross-station ticket fails");
+expect(parseKdsTicketListV1({ schemaVersion: 1, scope, stationId: "kitchen", tickets: [{ ...ticket, channel: "counter", tableId: ticket.tableId }], truncated: false }) === undefined, "counter ticket with table fails");
+expect(parseKdsTicketListV1({ schemaVersion: 1, scope, stationId: "kitchen", tickets: [{ ...ticket, orderVersion: 0 }], truncated: false }) === undefined, "non-positive order version fails");
+expect(parseKdsTicketListV1({ schemaVersion: 1, scope, stationId: "kitchen", tickets: [ticket, ticket], truncated: false }) === undefined, "duplicate ticket item fails");
 
 const accessor = { schemaVersion: 1, scope, stationId: "kitchen" };
 Object.defineProperty(accessor, "stationId", { enumerable: true, get: () => { throw new Error("must not run"); } });
