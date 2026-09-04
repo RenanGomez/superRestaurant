@@ -53,6 +53,14 @@ const kdsTicketMigration = readFileSync(
   new URL("../../../supabase/migrations/20260903000100_create_kds_ticket_read_model.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
+const financialMigration = readFileSync(
+  new URL("../../../supabase/migrations/20260903000200_create_cash_registers_simple_payments.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
+const financialCatalogAudit = readFileSync(
+  new URL("../../../supabase/tests/cash_registers_simple_payments_catalog.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
 const kdsTicketAudit = readFileSync(
   new URL("../../../supabase/tests/kds_ticket_catalog.sql", import.meta.url),
   "utf8",
@@ -604,4 +612,39 @@ test("KDS ticket audits pin the additive function and exact global surface", () 
   assert.match(protectedSmokeCoordinator, /expectedModifierName/u);
   assert.doesNotThrow(() => validateCatalogAuditSql(kdsTicketAudit));
   assert.doesNotThrow(() => validateCatalogAuditSql(postKdsAudit));
+});
+
+test("cash register and simple payment migration keeps financial writes atomic, scoped, and server-only", () => {
+  assert.deepEqual(
+    MEMBERSHIP_ROLE_CODES.filter((role) => RBAC_ROLE_PERMISSIONS_V1[role].includes("payments.collect")),
+    ["owner", "admin", "manager", "supervisor", "cashier"],
+  );
+  assert.match(financialMigration, /^begin;/u);
+  for (const table of ["cash_register_sessions", "payments", "cash_movements", "financial_audit_events"]) {
+    assert.match(financialMigration, new RegExp(`create table app\\.${table}`, "u"));
+    assert.match(financialMigration, new RegExp(`alter table app\\.${table} enable row level security`, "u"));
+    assert.match(financialMigration, new RegExp(`alter table app\\.${table} force row level security`, "u"));
+  }
+  assert.match(financialMigration, /create unique index cash_register_one_open_session_idx/u);
+  assert.match(financialMigration, /unique \(actor_id, restaurant_id, branch_id, idempotency_key\)/u);
+  assert.match(financialMigration, /unique \(restaurant_id, branch_id, device_id, local_sequence\)/u);
+  assert.match(financialMigration, /financial_device_sequences/u);
+  assert.match(financialMigration, /last_sequence\+1=v_local_sequence/u);
+  assert.match(financialMigration, /p_prior_captured_amount_minor/u);
+  assert.match(financialMigration, /p_order_total_minor-v_captured-v_amount/u);
+  assert.match(financialMigration, /movement_type = 'cash_adjustment'[\s\S]*compensates_movement_id is not null/u);
+  assert.match(financialMigration, /cardnumber/u);
+  assert.match(financialMigration, /security definer set search_path = ''/u);
+  for (const signature of ["read_cash_register", "replay_financial_command", "open_cash_register", "collect_simple_payment", "close_cash_register"]) {
+    assert.match(financialMigration, new RegExp(`grant execute on function app_private\\.${signature}[\\s\\S]*to app_api`, "u"));
+  }
+  assert.doesNotMatch(financialMigration, /grant (?:select|insert|update|delete|all) on app\.(?:cash_register_sessions|payments|cash_movements|financial_audit_events)/u);
+  assert.match(financialMigration, /commit;\s*$/u);
+  assert.doesNotThrow(() => extractMigrationBody(financialMigration));
+  assert.match(financialCatalogAudit, /financial_table_security_rejected/u);
+  assert.match(financialCatalogAudit, /financial_function_security_rejected/u);
+  assert.match(financialCatalogAudit, /financial_idempotency_constraint_rejected/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(financialCatalogAudit));
+  assert.match(apiPackage, /"verify:cash-registers-simple-payments-schema:rollback"/u);
+  assert.match(apiPackage, /run-cash-registers-simple-payments-schema-verification\.js/u);
 });

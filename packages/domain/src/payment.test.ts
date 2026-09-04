@@ -49,6 +49,39 @@ test("Payment validates positive money and explicit non-sensitive methods", () =
   assert.throws(() => createPayment(paymentInput({ idempotencyKey: "   " })), InvalidPaymentFieldError);
 });
 
+test("card_manual retains only explicit external confirmation and rejects cardholder fields", () => {
+  const created = createPayment(paymentInput()).payment;
+  assert.deepEqual(created.cardManualEvidence, {
+    externalConfirmed: true,
+    provider: "Terminal externa",
+    terminalId: "terminal-1",
+    reference: "AUTH-123",
+  });
+  assert.equal(Object.isFrozen(created.cardManualEvidence), true);
+  assert.throws(
+    () => createPayment(paymentInput({
+      cardManualEvidence: {
+        externalConfirmed: true,
+        provider: "Terminal externa",
+        terminalId: "terminal-1",
+        pan: "4111111111111111",
+      } as never,
+    })),
+    InvalidPaymentFieldError,
+  );
+  assert.throws(
+    () => createPayment(paymentInput({ cardManualEvidence: undefined } as unknown as Partial<CreatePaymentInput>)),
+    InvalidPaymentFieldError,
+  );
+  assert.throws(
+    () => createPayment(paymentInput({
+      method: "cash",
+      cardManualEvidence: { externalConfirmed: true, provider: "Terminal externa", terminalId: "terminal-1" },
+    })),
+    InvalidPaymentFieldError,
+  );
+});
+
 test("Payment state machine allows only declared forward transitions", () => {
   const initiated = createPayment(paymentInput()).payment;
   const authorized = transition(initiated, "authorized", evidence()).payment;
@@ -307,7 +340,9 @@ function transition(payment: Payment, to: Payment["state"], mutationEvidence: Pa
 function paymentInput(overrides: Partial<CreatePaymentInput> = {}): CreatePaymentInput {
   return {
     paymentId: "payment-1", eventId: "payment-create-event-1", restaurantId: "restaurant-1", branchId: "branch-1", orderId: "order-1",
-    amount: new Money(500, "MXN"), method: "card_manual", idempotencyKey: "payment-key-1", evidence: evidence(), ...overrides,
+    amount: new Money(500, "MXN"), method: "card_manual",
+    cardManualEvidence: { externalConfirmed: true, provider: "Terminal externa", terminalId: "terminal-1", reference: "AUTH-123" },
+    idempotencyKey: "payment-key-1", evidence: evidence(), ...overrides,
   };
 }
 

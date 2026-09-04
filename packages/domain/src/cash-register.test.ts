@@ -85,13 +85,13 @@ test("replays the same movement and rejects divergent idempotency reuse", () => 
   assert.throws(() => append(created.register, movementInput({ amount: 501, type: "cash_sale", direction: "in", source: { type: "payment", paymentId: "payment-1" }, localSequence: 1 })), CashMovementIdempotencyConflictError);
 });
 
-test("requires the next sequence per device and allows interleaved devices", () => {
+test("requires the authoritative sequence and allows interleaved devices plus non-cash gaps", () => {
   let register = openCashRegister(openInput()).register;
   assert.throws(() => append(register, movementInput({ localSequence: 2, sequenceContext: { deviceId: "device-1", expectedNextSequence: 1 } })), CashMovementSequenceError);
   register = append(register, movementInput({ localSequence: 1 })).register;
   register = append(register, movementInput({ movementId: "movement-2", eventId: "event-2", idempotencyKey: "key-2", localSequence: 1, evidence: evidence({ deviceId: "device-2" }), sequenceContext: { deviceId: "device-2", expectedNextSequence: 1 } })).register;
-  assert.throws(() => append(register, movementInput({ movementId: "movement-3", eventId: "event-3", idempotencyKey: "key-3", localSequence: 3 })), CashMovementSequenceError);
-  register = append(register, movementInput({ movementId: "movement-3", eventId: "event-3", idempotencyKey: "key-3", localSequence: 2 })).register;
+  register = append(register, movementInput({ movementId: "movement-3", eventId: "event-3", idempotencyKey: "key-3", localSequence: 3 })).register;
+  assert.throws(() => append(register, movementInput({ movementId: "movement-4", eventId: "event-4", idempotencyKey: "key-4", localSequence: 2 })), CashMovementSequenceError);
   assert.equal(register.movements.length, 3);
 });
 

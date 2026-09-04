@@ -33,8 +33,9 @@ export interface CashAuditEvidence {
 
 /**
  * Server/device-authoritative cursor for ADR-004's global per-device sequence.
- * A cash-register session only contains a slice of a device's event stream, so
- * the session cannot safely derive the next sequence after a new session opens.
+ * A cash-register session only contains the cash-movement slice of a device's
+ * financial event stream. Non-cash events can therefore create legitimate
+ * gaps, so only the authoritative cursor can identify the exact next value.
  */
 export interface CashMovementSequenceContext {
   readonly deviceId: string;
@@ -384,7 +385,7 @@ function assertSequence(register: CashRegister, input: AppendCashMovementInput):
   }
   const deviceMovements = register.movements.filter((movement) => movement.deviceId === input.evidence.deviceId);
   const last = deviceMovements.at(-1)?.localSequence ?? 0;
-  if (deviceMovements.length > 0 && input.localSequence !== last + 1) {
+  if (deviceMovements.length > 0 && input.localSequence <= last) {
     throw new CashMovementSequenceError(input.evidence.deviceId, last + 1, input.localSequence);
   }
 }
@@ -497,7 +498,7 @@ function assertRegisterIntegrity(register: CashRegister): void {
       throw new CashRegisterCurrencyMismatchError();
     }
     const previousSequence = lastSequenceByDevice.get(movement.deviceId);
-    if (previousSequence !== undefined && movement.localSequence !== previousSequence + 1) {
+    if (previousSequence !== undefined && movement.localSequence <= previousSequence) {
       throw new CashMovementSequenceError(movement.deviceId, previousSequence + 1, movement.localSequence);
     }
     lastSequenceByDevice.set(movement.deviceId, movement.localSequence);

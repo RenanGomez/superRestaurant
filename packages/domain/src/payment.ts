@@ -21,6 +21,14 @@ export type PaymentState = "initiated" | "authorized" | "captured" | "failed" | 
 /** Intentionally contains no card number, CVV, token, or provider secret. */
 export type PaymentMethod = "cash" | "card_manual" | "card_terminal" | "transfer" | "other";
 
+/** Snapshot of an externally confirmed manual-card payment; never contains cardholder data. */
+export interface CardManualEvidence {
+  readonly externalConfirmed: true;
+  readonly provider: string;
+  readonly terminalId: string;
+  readonly reference?: string;
+}
+
 export interface PaymentAuthorization {
   readonly approved: true;
   readonly actorId: string;
@@ -53,6 +61,7 @@ export interface Payment {
   readonly orderId: string;
   readonly amount: Money;
   readonly method: PaymentMethod;
+  readonly cardManualEvidence?: CardManualEvidence;
   readonly idempotencyKey: string;
   readonly state: PaymentState;
   readonly transitions: readonly PaymentTransition[];
@@ -80,6 +89,7 @@ export interface CreatePaymentInput {
   readonly orderId: string;
   readonly amount: Money;
   readonly method: PaymentMethod;
+  readonly cardManualEvidence?: CardManualEvidence;
   readonly idempotencyKey: string;
   readonly evidence: PaymentAuditEvidence;
 }
@@ -146,6 +156,7 @@ export function createPayment(input: CreatePaymentInput): PaymentMutation {
     orderId: input.orderId,
     amount: input.amount,
     method: input.method,
+    ...(input.cardManualEvidence === undefined ? {} : { cardManualEvidence: input.cardManualEvidence }),
     idempotencyKey: input.idempotencyKey,
     state: "initiated",
     transitions: [Object.freeze({ eventId: input.eventId, idempotencyKey: input.idempotencyKey, from: null, to: "initiated" as const, evidence })],
@@ -295,6 +306,7 @@ function assertPaymentIntegrity(payment: Payment): void {
   if (!methods.has(payment.method)) {
     throw new InvalidPaymentMethodError(payment.method);
   }
+  assertCardManualEvidence(payment.method, payment.cardManualEvidence, "payment.cardManualEvidence", true);
   if (!states.has(payment.state)) {
     throw new InvalidPaymentFieldError("payment.state");
   }
@@ -414,6 +426,7 @@ function assertPaymentInput(input: CreatePaymentInput): void {
   if (!methods.has(input.method)) {
     throw new InvalidPaymentMethodError(input.method);
   }
+  assertCardManualEvidence(input.method, input.cardManualEvidence, "cardManualEvidence", true);
   assertEvidence(input.evidence, input.branchId);
 }
 
@@ -452,6 +465,7 @@ function assertSamePaymentAttempt(payment: Payment, input: CreatePaymentInput): 
     payment.orderId !== input.orderId ||
     !payment.amount.equals(input.amount) ||
     payment.method !== input.method ||
+    !sameCardManualEvidence(payment.cardManualEvidence, input.cardManualEvidence) ||
     !sameEvidence(payment.transitions[0]?.evidence, input.evidence)
   ) {
     throw new PaymentIdempotencyConflictError(input.idempotencyKey);
@@ -581,9 +595,42 @@ function sameEvidence(left: PaymentAuditEvidence | undefined, right: PaymentAudi
   );
 }
 
+function sameCardManualEvidence(left: CardManualEvidence | undefined, right: CardManualEvidence | undefined): boolean {
+  return left?.externalConfirmed === right?.externalConfirmed
+    && left?.provider === right?.provider
+    && left?.terminalId === right?.terminalId
+    && left?.reference === right?.reference;
+}
+
+function assertCardManualEvidence(
+  method: PaymentMethod,
+  value: CardManualEvidence | undefined,
+  field: string,
+  frozen: boolean,
+): void {
+  if (method !== "card_manual") {
+    if (value !== undefined) throw new InvalidPaymentFieldError(field);
+    return;
+  }
+  const record = readPlainDataRecord(value, field, frozen);
+  const keys = Reflect.ownKeys(record);
+  const allowed = record.reference === undefined
+    ? ["externalConfirmed", "provider", "terminalId"]
+    : ["externalConfirmed", "provider", "terminalId", "reference"];
+  if (keys.length !== allowed.length || allowed.some((key) => !keys.includes(key))
+    || record.externalConfirmed !== true || !hasText(record.provider as string)
+    || !hasText(record.terminalId as string)
+    || (record.reference !== undefined && !hasText(record.reference as string))) {
+    throw new InvalidPaymentFieldError(field);
+  }
+}
+
 function freezePayment(payment: Payment): Payment {
   return Object.freeze({
     ...payment,
+    ...(payment.cardManualEvidence === undefined
+      ? {}
+      : { cardManualEvidence: Object.freeze({ ...payment.cardManualEvidence }) }),
     transitions: Object.freeze(payment.transitions.map((transition) => Object.freeze({ ...transition, evidence: freezeEvidence(transition.evidence) }))),
     refunds: Object.freeze(payment.refunds.map(freezeRefund)),
   });
@@ -611,6 +658,9 @@ function snapshotCreatePaymentInput(input: CreatePaymentInput): CreatePaymentInp
     orderId: record.orderId as string,
     amount: record.amount as Money,
     method: record.method as PaymentMethod,
+    ...(record.cardManualEvidence === undefined
+      ? {}
+      : { cardManualEvidence: snapshotCardManualEvidence(record.cardManualEvidence, "cardManualEvidence", false) }),
     idempotencyKey: record.idempotencyKey as string,
     evidence: snapshotEvidence(record.evidence, "evidence", false),
   });
@@ -645,11 +695,26 @@ function snapshotTransitionPaymentInput(input: TransitionPaymentInput): Transiti
 
 function snapshotPayment(payment: Payment): Payment {
   const record = readPlainDataRecord(payment, "payment", true);
+  if (record.cardManualEvidence !== undefined) {
+    snapshotCardManualEvidence(record.cardManualEvidence, "payment.cardManualEvidence", true);
+  }
   const transitionsValue = readFrozenDataArray(record.transitions, "payment.transitions");
   const refundsValue = readFrozenDataArray(record.refunds, "payment.refunds");
   transitionsValue.forEach((transition, index) => { snapshotTransition(transition, index); });
   refundsValue.forEach((refund, index) => { snapshotRefund(refund, index); });
   return payment;
+}
+
+function snapshotCardManualEvidence(value: unknown, field: string, frozen: boolean): CardManualEvidence {
+  const record = readPlainDataRecord(value, field, frozen);
+  assertCardManualEvidence("card_manual", record as unknown as CardManualEvidence, field, frozen);
+  const snapshot = Object.freeze({
+    externalConfirmed: record.externalConfirmed as true,
+    provider: record.provider as string,
+    terminalId: record.terminalId as string,
+    ...(record.reference === undefined ? {} : { reference: record.reference as string }),
+  });
+  return snapshot;
 }
 
 function snapshotTransition(value: unknown, index: number): PaymentTransition {

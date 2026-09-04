@@ -39,6 +39,12 @@ import {
   REALTIME_NOTIFICATION_PORT,
 } from "./orders.js";
 import { RealtimeGateway } from "./realtime.gateway.js";
+import { PaymentsController } from "./payments.controller.js";
+import {
+  FINANCIAL_PERSISTENCE_PORT,
+  FinancialService,
+  PostgresFinancialPersistenceAdapter,
+} from "./payments.js";
 
 @Module({
   controllers: [
@@ -50,6 +56,7 @@ import { RealtimeGateway } from "./realtime.gateway.js";
     DiningTablesController,
     MenuCatalogController,
     OrdersController,
+    PaymentsController,
   ],
   providers: [
     {
@@ -88,6 +95,9 @@ import { RealtimeGateway } from "./realtime.gateway.js";
     RealtimeGateway,
     { provide: REALTIME_NOTIFICATION_PORT, useExisting: RealtimeGateway },
     OrderService,
+    PostgresFinancialPersistenceAdapter,
+    { provide: FINANCIAL_PERSISTENCE_PORT, useExisting: PostgresFinancialPersistenceAdapter },
+    FinancialService,
     {
       provide: APP_GUARD,
       useClass: SupabaseAuthGuard,

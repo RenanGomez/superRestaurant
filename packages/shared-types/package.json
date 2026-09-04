@@ -19,7 +19,7 @@
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs src",
-    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --noEmit --project tsconfig.test.json && tsc --project tsconfig.test.build.json && node .test-dist/index.runtime.test.js && node .test-dist/menu.runtime.test.js && node .test-dist/realtime.runtime.test.js && node .test-dist/orders.runtime.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
+    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --noEmit --project tsconfig.test.json && tsc --project tsconfig.test.build.json && node .test-dist/index.runtime.test.js && node .test-dist/menu.runtime.test.js && node .test-dist/realtime.runtime.test.js && node .test-dist/orders.runtime.test.js && node .test-dist/payments.runtime.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
     "typecheck": "tsc --noEmit --project tsconfig.json"
   }
 }
