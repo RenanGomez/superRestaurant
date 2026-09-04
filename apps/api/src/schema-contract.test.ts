@@ -672,3 +672,42 @@ test("cash-register operational reporting is read-only, scoped, and separately v
   assert.match(financialReportingMigration, /commit;\s*$/u);
   assert.doesNotThrow(() => extractMigrationBody(financialReportingMigration));
 });
+
+test("full POS flow reuses the recoverable tenancy, table, KDS, and finance harnesses", () => {
+  const fullFlowRunner = readFileSync(
+    new URL("../src/operations/full-pos-flow-tenancy-verification.ts", import.meta.url),
+    "utf8",
+  );
+  const fullFlowEntrypoint = readFileSync(
+    new URL("../src/operations/run-full-pos-flow-tenancy-verification.ts", import.meta.url),
+    "utf8",
+  );
+  const ordersRunner = readFileSync(
+    new URL("../src/operations/orders-realtime-tenancy-verification.ts", import.meta.url),
+    "utf8",
+  );
+  const tenancyHarness = readFileSync(
+    new URL("../src/operations/tenancy-verification.ts", import.meta.url),
+    "utf8",
+  );
+  const recovery = readFileSync(
+    new URL("../src/operations/tenancy-fixture-recovery.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(fullFlowRunner, /runKdsTenancyVerification/u);
+  assert.match(fullFlowRunner, /verifyFinancials: true/u);
+  assert.match(fullFlowRunner, /useDiningTable: true/u);
+  assert.match(fullFlowRunner, /tenancy-full-flow-v1/u);
+  assert.match(fullFlowEntrypoint, /tenancy_memberships_post_finance\.sql/u);
+  assert.match(apiPackage, /"verify:full-pos-flow:remote"/u);
+  assert.match(tenancyHarness, /diningTableId: plan\.diningTables\.commands\[0\]\.tableId/u);
+  assert.doesNotMatch(tenancyHarness, /diningTableId: plan\.diningTables\.commands\[0\]\.zoneId/u);
+  assert.match(ordersRunner, /channel: create\.channel === "table" \? "counter" : "takeout",\s+tableId: null/u);
+  assert.match(ordersRunner, /ticket\.channel !== plan\.create\.channel/u);
+  assert.match(ordersRunner, /ticket\.tableId !== plan\.create\.tableId/u);
+  assert.match(recovery, /tenancy-full-flow-v1/u);
+  for (const table of ["cash_register_sessions", "payments", "cash_movements", "financial_audit_events", "financial_device_sequences"]) {
+    assert.match(recovery, new RegExp(table, "u"));
+  }
+});

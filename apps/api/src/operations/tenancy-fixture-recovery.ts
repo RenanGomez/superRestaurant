@@ -185,6 +185,7 @@ interface OrderRow {
   readonly id: string;
   readonly restaurantId: string;
   readonly status: string;
+  readonly tableId?: string | null;
   readonly version: number;
 }
 
@@ -216,8 +217,65 @@ interface KdsCursorRow {
   readonly restaurantId: string;
 }
 
+interface CashRegisterSessionRow {
+  readonly branchId: string;
+  readonly cashierId: string;
+  readonly currency: string;
+  readonly id: string;
+  readonly registerId: string;
+  readonly restaurantId: string;
+  readonly status: string;
+  readonly version: number;
+}
+
+interface PaymentRow {
+  readonly amountMinor: number;
+  readonly branchId: string;
+  readonly capturedBy: string;
+  readonly cashRegisterSessionId: string;
+  readonly currency: string;
+  readonly id: string;
+  readonly method: string;
+  readonly orderId: string;
+  readonly restaurantId: string;
+}
+
+interface CashMovementRow {
+  readonly actorId: string;
+  readonly branchId: string;
+  readonly cashRegisterSessionId: string;
+  readonly deviceId: string;
+  readonly id: string;
+  readonly restaurantId: string;
+  readonly sourcePaymentId: string | null;
+}
+
+interface FinancialAuditRow {
+  readonly actorId: string;
+  readonly branchId: string;
+  readonly cashRegisterSessionId: string;
+  readonly deviceId: string;
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly operation: string;
+  readonly orderId: string | null;
+  readonly paymentId: string | null;
+  readonly restaurantId: string;
+  readonly resultCashRegisterVersion: number;
+  readonly resultOrderVersion: number | null;
+}
+
+interface FinancialDeviceSequenceRow {
+  readonly branchId: string;
+  readonly deviceId: string;
+  readonly lastSequence: number;
+  readonly restaurantId: string;
+}
+
 export interface TenancyFixtureRecoverySnapshot {
   readonly branches: readonly BranchRow[];
+  readonly cashMovements?: readonly CashMovementRow[];
+  readonly cashRegisterSessions?: readonly CashRegisterSessionRow[];
   readonly diningZoneAudits?: readonly DiningZoneAuditRow[];
   readonly diningZones?: readonly DiningZoneRow[];
   readonly diningTableAudits?: readonly DiningTableAuditRow[];
@@ -234,20 +292,28 @@ export interface TenancyFixtureRecoverySnapshot {
   readonly kdsEvents?: readonly KdsEventRow[];
   readonly kdsCursors?: readonly KdsCursorRow[];
   readonly grants: readonly GrantRow[];
+  readonly financialAudits?: readonly FinancialAuditRow[];
+  readonly financialDeviceSequences?: readonly FinancialDeviceSequenceRow[];
   readonly memberships: readonly MembershipRow[];
+  readonly payments?: readonly PaymentRow[];
   readonly restaurants: readonly RestaurantRow[];
 }
 
 interface ValidatedSnapshot {
   readonly branchIds: readonly string[];
+  readonly cashMovementIds: readonly string[];
+  readonly cashRegisterSessionIds: readonly string[];
   readonly diningZoneEventIds: readonly string[];
   readonly diningZoneIds: readonly string[];
   readonly diningTableEventIds: readonly string[];
   readonly diningTableIds: readonly string[];
   readonly grantIds: readonly string[];
+  readonly financialAuditEventIds: readonly string[];
+  readonly financialDeviceSequenceScopes: readonly Readonly<{ branchId: string; deviceId: string; restaurantId: string }>[];
   readonly membershipIds: readonly string[];
   readonly orderAuditEventIds: readonly string[];
   readonly orderIds: readonly string[];
+  readonly paymentIds: readonly string[];
   readonly kdsEventIds: readonly string[];
   readonly kdsCursorScopes: readonly Readonly<{ branchId: string; restaurantId: string }>[];
   readonly menuCatalogAuditEventIds: readonly string[];
@@ -360,7 +426,12 @@ export function validateTenancyFixtureRecoverySnapshot(
     || (snapshot.orders?.length ?? 0) > 0
     || (snapshot.orderAudits?.length ?? 0) > 0
     || (snapshot.kdsEvents?.length ?? 0) > 0
-    || (snapshot.kdsCursors?.length ?? 0) > 0;
+    || (snapshot.kdsCursors?.length ?? 0) > 0
+    || (snapshot.cashRegisterSessions?.length ?? 0) > 0
+    || (snapshot.payments?.length ?? 0) > 0
+    || (snapshot.cashMovements?.length ?? 0) > 0
+    || (snapshot.financialAudits?.length ?? 0) > 0
+    || (snapshot.financialDeviceSequences?.length ?? 0) > 0;
   if (hasMainGraph && mainCount !== expectedMainNames.length) throw contaminationError();
 
   if (!hasMainGraph) {
@@ -369,14 +440,19 @@ export function validateTenancyFixtureRecoverySnapshot(
     }
     return Object.freeze({
       branchIds: Object.freeze([]),
+      cashMovementIds: Object.freeze([]),
+      cashRegisterSessionIds: Object.freeze([]),
       diningZoneEventIds: Object.freeze([]),
       diningZoneIds: Object.freeze([]),
       diningTableEventIds: Object.freeze([]),
       diningTableIds: Object.freeze([]),
       grantIds: Object.freeze([]),
+      financialAuditEventIds: Object.freeze([]),
+      financialDeviceSequenceScopes: Object.freeze([]),
       membershipIds: Object.freeze([]),
       orderAuditEventIds: Object.freeze([]),
       orderIds: Object.freeze([]),
+      paymentIds: Object.freeze([]),
       kdsEventIds: Object.freeze([]),
       kdsCursorScopes: Object.freeze([]),
       menuCatalogAuditEventIds: Object.freeze([]),
@@ -454,17 +530,30 @@ export function validateTenancyFixtureRecoverySnapshot(
     firstRestaurant.id,
     branchesByName,
   );
+  const finances = validateFinancialJourney(
+    runId,
+    snapshot,
+    amber.id,
+    firstRestaurant.id,
+    branchesByName,
+    orders.orderIds,
+  );
 
   return Object.freeze({
     branchIds: Object.freeze(snapshot.branches.map((row) => row.id)),
+    cashMovementIds: finances.cashMovementIds,
+    cashRegisterSessionIds: finances.cashRegisterSessionIds,
     diningZoneEventIds: dining.eventIds,
     diningZoneIds: dining.zoneIds,
     diningTableEventIds: diningTables.eventIds,
     diningTableIds: diningTables.tableIds,
     grantIds: Object.freeze(snapshot.grants.map((row) => row.id)),
+    financialAuditEventIds: finances.auditEventIds,
+    financialDeviceSequenceScopes: finances.deviceSequenceScopes,
     membershipIds: Object.freeze(snapshot.memberships.map((row) => row.id)),
     orderAuditEventIds: orders.auditEventIds,
     orderIds: orders.orderIds,
+    paymentIds: finances.paymentIds,
     kdsEventIds: orders.kdsEventIds,
     kdsCursorScopes: orders.cursorScopes,
     menuCatalogAuditEventIds: menu.auditEventIds,
@@ -508,6 +597,11 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
       const snapshot = await loadSnapshot(client, runId, users.map((user) => user.id), true);
       const validated = validateTenancyFixtureRecoverySnapshot(runId, users, snapshot);
       let removed = 0;
+      removed += await deleteExactly(client, "app.financial_audit_events", validated.financialAuditEventIds, "event_id");
+      removed += await deleteExactly(client, "app.cash_movements", validated.cashMovementIds);
+      removed += await deleteExactly(client, "app.payments", validated.paymentIds);
+      removed += await deleteFinancialDeviceSequencesExactly(client, validated.financialDeviceSequenceScopes);
+      removed += await deleteExactly(client, "app.cash_register_sessions", validated.cashRegisterSessionIds);
       removed += await deleteExactly(client, "app.kds_events", validated.kdsEventIds, "event_id");
       removed += await deleteExactly(client, "app.order_audit_events", validated.orderAuditEventIds, "event_id");
       removed += await deleteExactly(client, "app.orders", validated.orderIds);
@@ -567,6 +661,11 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
         || (snapshot.orderAudits?.length ?? 0) !== 0
         || (snapshot.kdsEvents?.length ?? 0) !== 0
         || (snapshot.kdsCursors?.length ?? 0) !== 0
+        || (snapshot.cashRegisterSessions?.length ?? 0) !== 0
+        || (snapshot.payments?.length ?? 0) !== 0
+        || (snapshot.cashMovements?.length ?? 0) !== 0
+        || (snapshot.financialAudits?.length ?? 0) !== 0
+        || (snapshot.financialDeviceSequences?.length ?? 0) !== 0
       ) {
         throw recoveryError("postcheck", "TENANCY_FIXTURE_RECOVERY_POSTCHECK_FAILED");
       }
@@ -639,6 +738,11 @@ async function loadSnapshot(
     orderAudits: boolean;
     kdsEvents: boolean;
     kdsCursors: boolean;
+    cashRegisters: boolean;
+    payments: boolean;
+    cashMovements: boolean;
+    financialAudits: boolean;
+    financialSequences: boolean;
     tableAudits: boolean;
     tables: boolean;
     zoneAudits: boolean;
@@ -659,7 +763,12 @@ async function loadSnapshot(
        pg_catalog.to_regclass('app.orders') is not null as orders,
        pg_catalog.to_regclass('app.order_audit_events') is not null as "orderAudits",
        pg_catalog.to_regclass('app.kds_events') is not null as "kdsEvents",
-       pg_catalog.to_regclass('app_private.kds_branch_cursors') is not null as "kdsCursors"`,
+       pg_catalog.to_regclass('app_private.kds_branch_cursors') is not null as "kdsCursors",
+       pg_catalog.to_regclass('app.cash_register_sessions') is not null as "cashRegisters",
+       pg_catalog.to_regclass('app.payments') is not null as payments,
+       pg_catalog.to_regclass('app.cash_movements') is not null as "cashMovements",
+       pg_catalog.to_regclass('app.financial_audit_events') is not null as "financialAudits",
+       pg_catalog.to_regclass('app_private.financial_device_sequences') is not null as "financialSequences"`,
   );
   const catalog = diningCatalog.rows[0];
   if (catalog?.zoneAudits !== catalog?.zones || catalog?.tableAudits !== catalog?.tables || catalog?.tables === true && catalog.zones !== true) throw contaminationError();
@@ -675,6 +784,8 @@ async function loadSnapshot(
   if (menuCatalogFlags.some((value) => value !== menuCatalogFlags[0])) throw contaminationError();
   const ordersFlags = [catalog?.orders, catalog?.orderAudits, catalog?.kdsEvents, catalog?.kdsCursors];
   if (ordersFlags.some((value) => value !== ordersFlags[0])) throw contaminationError();
+  const financeFlags = [catalog?.cashRegisters, catalog?.payments, catalog?.cashMovements, catalog?.financialAudits, catalog?.financialSequences];
+  if (financeFlags.some((value) => value !== financeFlags[0])) throw contaminationError();
   let diningZones: readonly DiningZoneRow[] = [];
   let diningZoneAudits: readonly DiningZoneAuditRow[] = [];
   let diningTables: readonly DiningTableRow[] = [];
@@ -690,6 +801,11 @@ async function loadSnapshot(
   let orderAudits: readonly OrderAuditRow[] = [];
   let kdsEvents: readonly KdsEventRow[] = [];
   let kdsCursors: readonly KdsCursorRow[] = [];
+  let cashRegisterSessions: readonly CashRegisterSessionRow[] = [];
+  let payments: readonly PaymentRow[] = [];
+  let cashMovements: readonly CashMovementRow[] = [];
+  let financialAudits: readonly FinancialAuditRow[] = [];
+  let financialDeviceSequences: readonly FinancialDeviceSequenceRow[] = [];
   if (catalog?.zones === true) {
     const diningNames = tenancyDiningZoneSuffixes.map((suffix) => tenancyFixtureName(runId, suffix));
     const zones = await client.query<DiningZoneRow>(
@@ -785,7 +901,7 @@ async function loadSnapshot(
   if (catalog?.orders === true) {
     const orderResult = await client.query<OrderRow>(
       `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId",
-              channel, status, version::integer, created_by::text as "actorId"
+              channel, table_id::text as "tableId", status, version::integer, created_by::text as "actorId"
        from app.orders
        where restaurant_id = any($1::uuid[]) or created_by = any($2::uuid[]) or updated_by = any($2::uuid[])${lock}`,
       [restaurantIds, userIds],
@@ -820,16 +936,71 @@ async function loadSnapshot(
     );
     kdsCursors = Object.freeze([...cursorResult.rows]);
   }
+  if (catalog?.cashRegisters === true) {
+    const sessionResult = await client.query<CashRegisterSessionRow>(
+      `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId",
+              register_id::text as "registerId", cashier_id::text as "cashierId", currency, status, version::integer
+       from app.cash_register_sessions
+       where restaurant_id=any($1::uuid[]) or cashier_id=any($2::uuid[])${lock}`,
+      [restaurantIds, userIds],
+    );
+    cashRegisterSessions = Object.freeze([...sessionResult.rows]);
+    const sessionIds = cashRegisterSessions.map((row) => row.id);
+    const paymentResult = await client.query<PaymentRow>(
+      `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId",
+              order_id::text as "orderId", cash_register_session_id::text as "cashRegisterSessionId",
+              method, amount_minor::integer as "amountMinor", currency, captured_by::text as "capturedBy"
+       from app.payments where restaurant_id=any($1::uuid[]) or captured_by=any($2::uuid[])
+          or cash_register_session_id=any($3::uuid[])${lock}`,
+      [restaurantIds, userIds, sessionIds],
+    );
+    payments = Object.freeze([...paymentResult.rows]);
+    const paymentIds = payments.map((row) => row.id);
+    const movementResult = await client.query<CashMovementRow>(
+      `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId",
+              cash_register_session_id::text as "cashRegisterSessionId", actor_id::text as "actorId",
+              device_id::text as "deviceId", source_payment_id::text as "sourcePaymentId"
+       from app.cash_movements where restaurant_id=any($1::uuid[]) or actor_id=any($2::uuid[])
+          or cash_register_session_id=any($3::uuid[]) or source_payment_id=any($4::uuid[])${lock}`,
+      [restaurantIds, userIds, sessionIds, paymentIds],
+    );
+    cashMovements = Object.freeze([...movementResult.rows]);
+    const auditResult = await client.query<FinancialAuditRow>(
+      `select event_id::text as "eventId", idempotency_key as "idempotencyKey",
+              restaurant_id::text as "restaurantId", branch_id::text as "branchId", actor_id::text as "actorId",
+              device_id::text as "deviceId", operation, cash_register_session_id::text as "cashRegisterSessionId",
+              order_id::text as "orderId", payment_id::text as "paymentId",
+              result_cash_register_version::integer as "resultCashRegisterVersion",
+              result_order_version::integer as "resultOrderVersion"
+       from app.financial_audit_events where restaurant_id=any($1::uuid[]) or actor_id=any($2::uuid[])
+          or cash_register_session_id=any($3::uuid[])${lock}`,
+      [restaurantIds, userIds, sessionIds],
+    );
+    financialAudits = Object.freeze([...auditResult.rows]);
+    const deviceResult = await client.query<FinancialDeviceSequenceRow>(
+      `select restaurant_id::text as "restaurantId", branch_id::text as "branchId",
+              device_id::text as "deviceId", last_sequence::integer as "lastSequence"
+       from app_private.financial_device_sequences
+       where restaurant_id=any($1::uuid[]) or branch_id=any($2::uuid[])${lock}`,
+      [restaurantIds, branchIds],
+    );
+    financialDeviceSequences = Object.freeze([...deviceResult.rows]);
+  }
   return Object.freeze({
     branches: Object.freeze([...branches.rows]),
+    cashMovements,
+    cashRegisterSessions,
     diningTableAudits,
     diningTables,
     diningZoneAudits,
     diningZones,
     grants: Object.freeze([...grants.rows]),
+    financialAudits,
+    financialDeviceSequences,
     kdsCursors,
     kdsEvents,
     memberships: Object.freeze([...memberships.rows]),
+    payments,
     menuCatalogAudits,
     menuCatalogHeads,
     menuCatalogs,
@@ -1050,8 +1221,11 @@ function validateOrdersRealtime(
   const order = orders[0];
   if (orders.length !== 1 || order === undefined || branch === undefined || !UUID_PATTERN.test(order.id)
     || order.restaurantId !== restaurantId || order.branchId !== branch.id || order.actorId !== amberId
-    || order.channel !== "counter" || order.version < 1 || order.version > 7
-    || order.status !== (order.version < 3 ? "draft" : "open")) throw contaminationError();
+    || !((order.channel === "counter" && (order.tableId === null || order.tableId === undefined))
+      || (order.channel === "table" && order.tableId !== null
+        && (snapshot.diningTables ?? []).some((table) => table.id === order.tableId)))
+    || order.version < 1 || order.version > 9
+    || order.status !== (order.version < 3 ? "draft" : order.version < 8 ? "open" : order.version === 8 ? "partially_paid" : "paid")) throw contaminationError();
 
   const expectedOperations = [
     "order.created",
@@ -1063,7 +1237,7 @@ function validateOrdersRealtime(
     "order_item.state_changed",
   ] as const;
   const expectedMarkers = ["create", "add-item", "open", "item-sent", "item-preparing", "item-ready", "item-delivered"] as const;
-  if (audits.length !== order.version) throw contaminationError();
+  if (audits.length !== Math.min(order.version, expectedOperations.length)) throw contaminationError();
   const sortedAudits = [...audits].sort((left, right) => left.resultVersion - right.resultVersion);
   for (const [index, audit] of sortedAudits.entries()) {
     if (!UUID_PATTERN.test(audit.eventId) || audit.resultVersion !== index + 1
@@ -1096,6 +1270,91 @@ function validateOrdersRealtime(
     cursorScopes: Object.freeze(cursors.map((row) => Object.freeze({ branchId: row.branchId, restaurantId: row.restaurantId }))),
     kdsEventIds: Object.freeze(sortedKds.map((row) => row.eventId)),
     orderIds: Object.freeze([order.id]),
+  });
+}
+
+function validateFinancialJourney(
+  runId: string,
+  snapshot: TenancyFixtureRecoverySnapshot,
+  amberId: string,
+  restaurantId: string,
+  branchesByName: ReadonlyMap<string, BranchRow>,
+  orderIds: readonly string[],
+): Readonly<{
+  auditEventIds: readonly string[];
+  cashMovementIds: readonly string[];
+  cashRegisterSessionIds: readonly string[];
+  deviceSequenceScopes: readonly Readonly<{ branchId: string; deviceId: string; restaurantId: string }>[];
+  paymentIds: readonly string[];
+}> {
+  const sessions = snapshot.cashRegisterSessions ?? [];
+  const payments = snapshot.payments ?? [];
+  const movements = snapshot.cashMovements ?? [];
+  const audits = snapshot.financialAudits ?? [];
+  const sequences = snapshot.financialDeviceSequences ?? [];
+  if (sessions.length === 0 && payments.length === 0 && movements.length === 0 && audits.length === 0 && sequences.length === 0) {
+    return Object.freeze({
+      auditEventIds: Object.freeze([]),
+      cashMovementIds: Object.freeze([]),
+      cashRegisterSessionIds: Object.freeze([]),
+      deviceSequenceScopes: Object.freeze([]),
+      paymentIds: Object.freeze([]),
+    });
+  }
+  const branch = branchesByName.get(tenancyFixtureName(runId, "branch-11"));
+  const session = sessions[0];
+  const orderId = orderIds[0];
+  if (sessions.length !== 1 || session === undefined || branch === undefined || orderId === undefined
+    || !UUID_PATTERN.test(session.id) || !UUID_PATTERN.test(session.registerId)
+    || session.restaurantId !== restaurantId || session.branchId !== branch.id || session.cashierId !== amberId
+    || session.currency !== "MXN" || session.version < 1 || session.version > 4
+    || session.status !== (session.version === 4 ? "closed" : "open")) throw contaminationError();
+
+  const sortedAudits = [...audits].sort((left, right) => left.resultCashRegisterVersion - right.resultCashRegisterVersion);
+  const expectedOperations = ["cash_register.opened", "payment.captured", "payment.captured", "cash_register.closed"] as const;
+  const expectedMarkers = ["register-open", "cash-partial", "card-settlement", "register-close"] as const;
+  if (sortedAudits.length !== session.version) throw contaminationError();
+  for (const [index, audit] of sortedAudits.entries()) {
+    const paymentIndex = index - 1;
+    if (!UUID_PATTERN.test(audit.eventId) || audit.resultCashRegisterVersion !== index + 1
+      || audit.restaurantId !== restaurantId || audit.branchId !== branch.id || audit.actorId !== amberId
+      || audit.cashRegisterSessionId !== session.id || audit.operation !== expectedOperations[index]
+      || audit.idempotencyKey !== `tenancy-full-flow-v1:${runId}:${expectedMarkers[index]}`
+      || (paymentIndex >= 0 && paymentIndex <= 1
+        ? audit.orderId !== orderId || audit.paymentId === null || audit.resultOrderVersion !== 8 + paymentIndex
+        : audit.orderId !== null || audit.paymentId !== null || audit.resultOrderVersion !== null)) throw contaminationError();
+  }
+  const paymentAudits = sortedAudits.filter((audit) => audit.operation === "payment.captured");
+  if (payments.length !== paymentAudits.length || payments.length > 2) throw contaminationError();
+  const sortedPayments = paymentAudits.map((audit) => payments.find((payment) => payment.id === audit.paymentId));
+  for (const [index, payment] of sortedPayments.entries()) {
+    if (payment === undefined || !UUID_PATTERN.test(payment.id) || payment.restaurantId !== restaurantId
+      || payment.branchId !== branch.id || payment.orderId !== orderId || payment.cashRegisterSessionId !== session.id
+      || payment.capturedBy !== amberId || payment.currency !== session.currency || payment.amountMinor <= 0
+      || payment.method !== (index === 0 ? "cash" : "card_manual")) throw contaminationError();
+  }
+  if (movements.length !== (payments.length >= 1 ? 1 : 0)) throw contaminationError();
+  const movement = movements[0];
+  const cashPayment = sortedPayments[0];
+  if (movement !== undefined && (cashPayment === undefined || movement.id !== cashPayment.id
+    || movement.sourcePaymentId !== cashPayment.id || movement.restaurantId !== restaurantId
+    || movement.branchId !== branch.id || movement.cashRegisterSessionId !== session.id || movement.actorId !== amberId
+    || !sortedAudits.every((audit) => audit.deviceId === movement.deviceId))) throw contaminationError();
+  if (sequences.length !== (payments.length > 0 ? 1 : 0)) throw contaminationError();
+  const sequence = sequences[0];
+  if (sequence !== undefined && (sequence.restaurantId !== restaurantId || sequence.branchId !== branch.id
+    || sequence.lastSequence !== payments.length || sequence.deviceId !== sortedAudits[0]?.deviceId)) throw contaminationError();
+
+  return Object.freeze({
+    auditEventIds: Object.freeze(sortedAudits.map((row) => row.eventId)),
+    cashMovementIds: Object.freeze(movements.map((row) => row.id)),
+    cashRegisterSessionIds: Object.freeze([session.id]),
+    deviceSequenceScopes: Object.freeze(sequences.map((row) => Object.freeze({
+      branchId: row.branchId,
+      deviceId: row.deviceId,
+      restaurantId: row.restaurantId,
+    }))),
+    paymentIds: Object.freeze(payments.map((row) => row.id)),
   });
 }
 
@@ -1332,6 +1591,23 @@ async function deleteKdsCursorsExactly(
       [scope.restaurantId, scope.branchId],
     );
     if (result.rowCount !== 1) throw recoveryError("database", "TENANCY_FIXTURE_RECOVERY_DATABASE_FAILED");
+    removed += 1;
+  }
+  return removed;
+}
+
+async function deleteFinancialDeviceSequencesExactly(
+  client: PoolClient,
+  scopes: readonly Readonly<{ branchId: string; deviceId: string; restaurantId: string }>[],
+): Promise<number> {
+  let removed = 0;
+  for (const scope of scopes) {
+    const result = await client.query(
+      `delete from app_private.financial_device_sequences
+       where restaurant_id=$1::uuid and branch_id=$2::uuid and device_id=$3::uuid`,
+      [scope.restaurantId, scope.branchId, scope.deviceId],
+    );
+    if (result.rowCount !== 1) throw contaminationError();
     removed += 1;
   }
   return removed;

@@ -85,7 +85,11 @@ type AppTable =
   | "menu_catalog_audit_events"
   | "orders"
   | "order_audit_events"
-  | "kds_events";
+  | "kds_events"
+  | "cash_register_sessions"
+  | "payments"
+  | "cash_movements"
+  | "financial_audit_events";
 
 const appTables: readonly AppTable[] = [
   "roles",
@@ -104,6 +108,7 @@ const menuCatalogTables = [
   "menu_catalog_audit_events",
 ] as const satisfies readonly AppTable[];
 const ordersRealtimeTables = ["orders", "order_audit_events", "kds_events"] as const satisfies readonly AppTable[];
+const financialTables = ["cash_register_sessions", "payments", "cash_movements", "financial_audit_events"] as const satisfies readonly AppTable[];
 const expectedRoleCodes = [
   "admin",
   "auditor",
@@ -144,6 +149,7 @@ export interface RunTenancyVerificationOptions {
   readonly verifyMenuCatalog?: true;
   readonly verifyOrdersRealtime?: true;
   readonly verifyKdsTickets?: true;
+  readonly verifyFinancials?: true;
 }
 
 export interface TenancyVerificationFailureNotice {
@@ -165,6 +171,8 @@ export interface TenancyVerificationLiveFixture {
 
 export interface TenancyVerificationLiveFixtureContext {
   readonly accessToken: string;
+  readonly diningTableId: string;
+  readonly menuCurrency: string;
   readonly menuModifierGroupId: string;
   readonly menuModifierOptionId: string;
   readonly menuProductId: string;
@@ -201,8 +209,15 @@ interface DiningZoneFixturePlan {
   readonly occurredAt: string;
 }
 
+interface DiningTableFixtureCommand {
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly name: string;
+  readonly tableId: string;
+}
+
 interface DiningTableFixturePlan {
-  readonly commands: readonly [DiningZoneFixtureCommand, DiningZoneFixtureCommand, DiningZoneFixtureCommand, DiningZoneFixtureCommand, DiningZoneFixtureCommand];
+  readonly commands: readonly [DiningTableFixtureCommand, DiningTableFixtureCommand, DiningTableFixtureCommand, DiningTableFixtureCommand, DiningTableFixtureCommand];
   readonly deviceId: string;
   readonly occurredAt: string;
   readonly updateEventId: string;
@@ -290,6 +305,7 @@ export async function runTenancyVerification(
   const verifyKdsTickets = options.verifyKdsTickets === true;
   const verifyOrdersRealtime = options.verifyOrdersRealtime === true || verifyKdsTickets;
   const verifyMenuCatalog = options.verifyMenuCatalog === true || verifyOrdersRealtime;
+  const verifyFinancials = options.verifyFinancials === true;
   const runtimeCatalogAuditSql = validateRuntimeAuditSql(
     options.runtimeCatalogAuditSql,
     verifyDiningZones,
@@ -297,6 +313,7 @@ export async function runTenancyVerification(
     verifyMenuCatalog,
     verifyOrdersRealtime,
     verifyKdsTickets,
+    verifyFinancials,
   );
   const apiPort = readApiPort(options.apiPort);
   const plan = createFixturePlan(verifyDiningZones, verifyDiningTables, verifyMenuCatalog);
@@ -324,6 +341,7 @@ export async function runTenancyVerification(
       verifyDiningTables,
       verifyMenuCatalog,
       verifyOrdersRealtime,
+      verifyFinancials,
     ));
     await executeStage("fixtures", async () => createFixtures(
       serverClient,
@@ -344,6 +362,7 @@ export async function runTenancyVerification(
       verifyDiningTables,
       verifyMenuCatalog,
       verifyOrdersRealtime,
+      verifyFinancials,
     ));
     await executeStage("app_api", async () => verifyPrivateLookupBaseline(appApiPool, plan, counter));
     await executeStage("http", async () => verifyHttpBaseline(app as INestApplication, plan, authenticated, counter));
@@ -518,7 +537,7 @@ function createFixturePlan(
       eventId: randomUUID(),
       idempotencyKey: randomUUID(),
       name: tenancyFixtureName(runId, suffix),
-      zoneId: randomUUID(),
+      tableId: randomUUID(),
     })) as unknown as DiningTableFixturePlan["commands"],
     deviceId: randomUUID(),
     occurredAt: new Date().toISOString(),
@@ -753,6 +772,8 @@ async function readLiveFixture(
     runId: plan.runId,
     verificationContext: Object.freeze({
       accessToken: authenticated[0].accessToken,
+      diningTableId: plan.diningTables.commands[0].tableId,
+      menuCurrency: "MXN",
       menuModifierGroupId: plan.menuCatalog.commands[0].groupId,
       menuModifierOptionId: plan.menuCatalog.commands[0].optionId,
       menuProductId: plan.menuCatalog.commands[0].productId,
@@ -775,6 +796,7 @@ async function verifyDataApiBaseline(
   verifyDiningTables: boolean,
   verifyMenuCatalog: boolean,
   verifyOrdersRealtime: boolean,
+  verifyFinancials: boolean,
 ): Promise<void> {
   const anon = createSupabaseClient(config.supabaseUrl, config.publishableKey);
   const serviceRole = createSupabaseClient(config.supabaseUrl, config.secretKey);
@@ -786,7 +808,8 @@ async function verifyDataApiBaseline(
   const tables: readonly AppTable[] = verifyMenuCatalog
     ? [...diningTables, ...menuCatalogTables]
     : diningTables;
-  for (const table of verifyOrdersRealtime ? [...tables, ...ordersRealtimeTables] : tables) {
+  const orderTables = verifyOrdersRealtime ? [...tables, ...ordersRealtimeTables] : tables;
+  for (const table of verifyFinancials ? [...orderTables, ...financialTables] : orderTables) {
     await expectDataApiDeniedRead(anon, table, counter);
     await expectDataApiDeniedRead(serviceRole, table, counter);
   }
@@ -881,6 +904,7 @@ async function verifyAppApiSurface(
   verifyDiningTables: boolean,
   verifyMenuCatalog: boolean,
   verifyOrdersRealtime: boolean,
+  verifyFinancials: boolean,
 ): Promise<void> {
   const identity = await appApiPool.query<{ currentUser: string; sessionUser: string }>(
     `select current_user::text as "currentUser", session_user::text as "sessionUser"`,
@@ -911,6 +935,11 @@ async function verifyAppApiSurface(
   }
   if (verifyOrdersRealtime) {
     for (const table of ordersRealtimeTables) {
+      await expectPostgresDenied(appApiPool, `select * from app.${table} limit 1`, [], counter, "app_api");
+    }
+  }
+  if (verifyFinancials) {
+    for (const table of financialTables) {
       await expectPostgresDenied(appApiPool, `select * from app.${table} limit 1`, [], counter, "app_api");
     }
   }
@@ -1408,7 +1437,7 @@ function diningTableCommand(plan: FixturePlan, index: 0 | 1 | 2 | 3 | 4, restaur
     capacity: 4, deviceId: plan.diningTables.deviceId, eventId: fixture.eventId,
     idempotencyKey: fixture.idempotencyKey, layout: { height: 4, width: 4, x: 2, y: 3 },
     name: fixture.name, occurredAt: plan.diningTables.occurredAt, schemaVersion: DINING_LAYOUT_SCHEMA_VERSION,
-    scope: { branchId, restaurantId }, shape: "round", tableId: fixture.zoneId,
+    scope: { branchId, restaurantId }, shape: "round", tableId: fixture.tableId,
     zoneId: plan.diningZones.commands[0].zoneId,
   });
   if (command === undefined) throw new TenancyVerificationError("dining_tables", "TENANCY_VERIFICATION_DINING_TABLES_FAILED");
@@ -1420,7 +1449,7 @@ function diningTableUpdateCommand(plan: FixturePlan, eventId: string, idempotenc
     deviceId: plan.diningTables.deviceId, eventId, expectedVersion, idempotencyKey,
     layout: { height: 4, width: 5, x: 8, y: 6 }, occurredAt: plan.diningTables.updateOccurredAt,
     schemaVersion: DINING_LAYOUT_SCHEMA_VERSION, scope: { branchId: plan.branchIds[0], restaurantId: plan.restaurantIds[0] },
-    tableId: plan.diningTables.commands[0].zoneId,
+    tableId: plan.diningTables.commands[0].tableId,
   });
   if (command === undefined) throw new TenancyVerificationError("dining_tables", "TENANCY_VERIFICATION_DINING_TABLES_FAILED");
   return command;
@@ -1448,7 +1477,7 @@ function getDiningLayout(baseUrl: string, accessToken: string, restaurantId: str
 }
 
 async function assertDiningTablePersistence(adminPool: Pool, plan: FixturePlan, expected: DiningTableV1 | undefined, counter: VerificationCounter, updated = false): Promise<void> {
-  const tableIds = plan.diningTables.commands.map((command) => command.zoneId);
+  const tableIds = plan.diningTables.commands.map((command) => command.tableId);
   const eventIds = [...plan.diningTables.commands.map((command) => command.eventId), plan.diningTables.updateEventId, plan.diningTables.staleEventId];
   const tables = await adminPool.query<{ id: string; version: string; x: number; y: number; width: number; height: number }>(`select id::text, version::text, layout_x as x, layout_y as y, layout_width as width, layout_height as height from app.dining_tables where id = any($1::uuid[])`, [[...tableIds]]);
   const audits = await adminPool.query<{ eventId: string; operation: string; resultVersion: string }>(`select event_id::text as "eventId", operation, result_version::text as "resultVersion" from app.dining_table_audit_events where event_id = any($1::uuid[]) order by result_version`, [eventIds]);
@@ -1459,7 +1488,7 @@ async function assertDiningTablePersistence(adminPool: Pool, plan: FixturePlan, 
   const table = tables.rows[0];
   const layout = expected?.layout ?? (updated ? { height: 4, width: 5, x: 8, y: 6 } : { height: 4, width: 4, x: 2, y: 3 });
   const version = expected?.version ?? (updated ? 2 : 1);
-  counter.assert("dining_tables", tables.rows.length === 1 && table?.id === plan.diningTables.commands[0].zoneId && table.version === String(version) && table.x === layout.x && table.y === layout.y && table.width === layout.width && table.height === layout.height && audits.rows.length === (updated ? 2 : 1) && audits.rows[0]?.eventId === plan.diningTables.commands[0].eventId && audits.rows[0]?.operation === "created" && (!updated || audits.rows[1]?.eventId === plan.diningTables.updateEventId && audits.rows[1]?.operation === "layout_updated"));
+  counter.assert("dining_tables", tables.rows.length === 1 && table?.id === plan.diningTables.commands[0].tableId && table.version === String(version) && table.x === layout.x && table.y === layout.y && table.width === layout.width && table.height === layout.height && audits.rows.length === (updated ? 2 : 1) && audits.rows[0]?.eventId === plan.diningTables.commands[0].eventId && audits.rows[0]?.operation === "created" && (!updated || audits.rows[1]?.eventId === plan.diningTables.updateEventId && audits.rows[1]?.operation === "layout_updated"));
 }
 
 async function verifyRevocations(
@@ -2165,8 +2194,8 @@ async function cleanupFixtures(
           await deleteRequiredFixtureRows(
             client,
             "app.dining_tables",
-            plan.diningTables.commands.map((command) => command.zoneId),
-            plan.diningTableCreated ? [plan.diningTables.commands[0].zoneId] : [],
+            plan.diningTables.commands.map((command) => command.tableId),
+            plan.diningTableCreated ? [plan.diningTables.commands[0].tableId] : [],
           );
         }
         await deleteRequiredFixtureRows(
@@ -2236,7 +2265,7 @@ async function cleanupFixtures(
     const eventIds = [...plan.diningTables.commands.map((command) => command.eventId), plan.diningTables.updateEventId, plan.diningTables.staleEventId];
     const residualDiningTableRows = await adminPool.query<{ count: number }>(
       `select ((select count(*) from app.dining_table_audit_events where event_id = any($1::uuid[])) + (select count(*) from app.dining_tables where id = any($2::uuid[])))::integer as count`,
-      [eventIds, plan.diningTables.commands.map((command) => command.zoneId)],
+      [eventIds, plan.diningTables.commands.map((command) => command.tableId)],
     );
     counter.assert("cleanup", residualDiningTableRows.rows[0]?.count === 0);
   }
@@ -2480,18 +2509,18 @@ async function verifyDiningZoneFixtureOwnership(client: PoolClient, plan: Fixtur
 
 async function verifyDiningTableFixtureOwnership(client: PoolClient, plan: FixturePlan): Promise<void> {
   const amberId = requireUserId(plan.users[0]);
-  const ids = plan.diningTables.commands.map((command) => command.zoneId);
+  const ids = plan.diningTables.commands.map((command) => command.tableId);
   const rows = await client.query<{ actorId: string; branchId: string; id: string; name: string; restaurantId: string; zoneId: string }>(
     `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId", zone_id::text as "zoneId", name, updated_by::text as "actorId" from app.dining_tables where id = any($1::uuid[]) for update`,
     [ids],
   );
   for (const row of rows.rows) {
-    const command = plan.diningTables.commands.find((candidate) => candidate.zoneId === row.id);
+    const command = plan.diningTables.commands.find((candidate) => candidate.tableId === row.id);
     if (command === undefined || row.restaurantId !== plan.restaurantIds[0] || row.branchId !== plan.branchIds[0] || row.zoneId !== plan.diningZones.commands[0].zoneId || row.name !== command.name || row.actorId !== amberId) {
       throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
     }
   }
-  if (plan.diningTableCreated && !rows.rows.some((row) => row.id === plan.diningTables.commands[0].zoneId)) {
+  if (plan.diningTableCreated && !rows.rows.some((row) => row.id === plan.diningTables.commands[0].tableId)) {
     throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
   }
   const allowedEvents = [...plan.diningTables.commands.map((command) => command.eventId), plan.diningTables.updateEventId, plan.diningTables.staleEventId];
@@ -2504,7 +2533,7 @@ async function verifyDiningTableFixtureOwnership(client: PoolClient, plan: Fixtu
     plan.diningTables.commands[0].eventId,
     plan.diningTables.updateEventId,
   );
-  if (audits.rows.some((row) => row.actorId !== amberId || row.tableId !== plan.diningTables.commands[0].zoneId || !allowedEvents.includes(row.eventId)) || requiredEvents.some((id) => !audits.rows.some((row) => row.eventId === id))) {
+  if (audits.rows.some((row) => row.actorId !== amberId || row.tableId !== plan.diningTables.commands[0].tableId || !allowedEvents.includes(row.eventId)) || requiredEvents.some((id) => !audits.rows.some((row) => row.eventId === id))) {
     throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");
   }
 }
@@ -2572,8 +2601,11 @@ function validateRuntimeAuditSql(
   verifyMenuCatalog = false,
   verifyOrdersRealtime = false,
   verifyKdsTickets = false,
+  verifyFinancials = false,
 ): string {
-  const requiredMarkers = verifyKdsTickets
+  const requiredMarkers = verifyFinancials
+    ? ["POST_FINANCE_SURFACE_REJECTED", "POST_FINANCE_APP_API_SURFACE_REJECTED"]
+    : verifyKdsTickets
     ? ["POST_KDS_SURFACE_REJECTED", "POST_KDS_APP_API_OBJECT_PRIVILEGE_REJECTED"]
     : verifyOrdersRealtime
     ? ["POST_ORDERS_SURFACE_REJECTED", "POST_ORDERS_SERVER_TABLE_GRANTS_REJECTED"]

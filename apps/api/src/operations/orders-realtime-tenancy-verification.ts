@@ -45,7 +45,23 @@ const SOCKET_TIMEOUT_MS = 5_000;
 
 export interface RunOrdersRealtimeTenancyVerificationOptions
   extends Omit<RunTenancyVerificationOptions, "liveFixtureHooks" | "verifyKdsTickets" | "verifyMenuCatalog" | "verifyOrdersRealtime"> {
+  readonly journeyHooks?: OrderJourneyHooks;
   readonly onOrdersRealtimeCheckpoint?: (checkpoint: OrdersRealtimeVerificationCheckpoint) => void;
+  readonly useDiningTable?: true;
+}
+
+export interface OrderJourneyContext {
+  readonly currency: string;
+  readonly deviceId: string;
+  readonly fixture: TenancyVerificationLiveFixture;
+  readonly orderId: string;
+  readonly orderVersion: number;
+  readonly tableId: string | null;
+}
+
+export interface OrderJourneyHooks {
+  readonly afterDelivery: (context: OrderJourneyContext) => Promise<void>;
+  readonly cleanup: (context: OrderJourneyContext) => Promise<void>;
 }
 
 export interface KdsBrowserVerificationHooks {
@@ -80,6 +96,7 @@ interface OrdersFixturePlan {
 
 interface OrdersRuntimeState {
   fixture?: TenancyVerificationLiveFixture;
+  journey?: OrderJourneyContext;
   mainSocket?: Socket;
   plan?: OrdersFixturePlan;
   kdsTicketsVerified: boolean;
@@ -122,8 +139,23 @@ async function runOrdersVerification(
       ...options,
       liveFixtureHooks: {
         afterRevocation: async (fixture) => verifyAfterRevocation(fixture, state, options.onOrdersRealtimeCheckpoint, kds),
-        beforeRevocation: async (fixture) => verifyBeforeRevocation(fixture, state, pool, options.config, options.onOrdersRealtimeCheckpoint, kds),
-        cleanup: async (fixture) => cleanupOrdersFixture(pool, fixture, state, options.onOrdersRealtimeCheckpoint),
+        beforeRevocation: async (fixture) => verifyBeforeRevocation(
+          fixture,
+          state,
+          pool,
+          options.config,
+          options.onOrdersRealtimeCheckpoint,
+          kds,
+          options.journeyHooks,
+          options.useDiningTable === true,
+        ),
+        cleanup: async (fixture) => cleanupOrdersFixture(
+          pool,
+          fixture,
+          state,
+          options.onOrdersRealtimeCheckpoint,
+          options.journeyHooks,
+        ),
       },
       ...(kds.enabled ? { verifyKdsTickets: true as const } : {}),
       verifyMenuCatalog: true,
@@ -144,12 +176,22 @@ async function verifyBeforeRevocation(
   config: TenancyVerificationConfig,
   checkpoint: RunOrdersRealtimeTenancyVerificationOptions["onOrdersRealtimeCheckpoint"],
   kds: KdsVerificationMode,
+  journeyHooks: OrderJourneyHooks | undefined,
+  useDiningTable: boolean,
 ): Promise<void> {
   const context = requireContext(fixture);
   const scope = branchScope(fixture.restaurantId, fixture.branchId);
-  const plan = createPlan(fixture, scope);
+  const plan = createPlan(fixture, scope, useDiningTable);
   state.fixture = fixture;
   state.plan = plan;
+  state.journey = Object.freeze({
+    currency: plan.create.currency,
+    deviceId: plan.deviceId,
+    fixture,
+    orderId: plan.orderId,
+    orderVersion: 7,
+    tableId: plan.create.tableId,
+  });
 
   await verifyOrderDataApiDenied(config, context.accessToken);
 
@@ -301,6 +343,7 @@ async function verifyBeforeRevocation(
   if (secondary.events.length !== 0 || secondary.hasMore) throw ordersError();
   await recover(fixture.apiBaseUrl, context.accessToken, subscriptionFor(branchScope(context.secondaryRestaurantId, context.secondaryBranchId), STATION_ID), KDS_INITIAL_CURSOR, 50, 403);
   checkpoint?.("orders_realtime.tenant_isolation_verified");
+  if (journeyHooks !== undefined) await journeyHooks.afterDelivery(state.journey);
 }
 
 async function verifyAfterRevocation(
@@ -329,15 +372,15 @@ async function verifyAfterRevocation(
   state.verified = true;
 }
 
-function createPlan(fixture: TenancyVerificationLiveFixture, scope: BranchScope): OrdersFixturePlan {
+function createPlan(fixture: TenancyVerificationLiveFixture, scope: BranchScope, useDiningTable: boolean): OrdersFixturePlan {
   const context = requireContext(fixture);
   const orderId = randomUUID();
   const orderItemId = randomUUID();
   const deviceId = randomUUID();
   const occurredAt = new Date().toISOString();
   const create: CreateOrderCommandV1 = Object.freeze({
-    channel: "counter",
-    currency: "MXN",
+    channel: useDiningTable ? "table" : "counter",
+    currency: context.menuCurrency,
     deviceId,
     eventId: randomUUID(),
     idempotencyKey: marker(fixture.runId, "create"),
@@ -345,7 +388,7 @@ function createPlan(fixture: TenancyVerificationLiveFixture, scope: BranchScope)
     orderId,
     schemaVersion: 1,
     scope,
-    tableId: null,
+    tableId: useDiningTable ? context.diningTableId : null,
     timeZone: "America/Mexico_City",
   });
   const addItem: AddOrderItemCommandV1 = Object.freeze({
@@ -382,7 +425,11 @@ function createPlan(fixture: TenancyVerificationLiveFixture, scope: BranchScope)
     addItem,
     create,
     deviceId,
-    divergentCreate: Object.freeze({ ...create, channel: "takeout" }),
+    divergentCreate: Object.freeze({
+      ...create,
+      channel: create.channel === "table" ? "counter" : "takeout",
+      tableId: null,
+    }),
     open: Object.freeze({
       deviceId,
       eventId: randomUUID(),
@@ -413,8 +460,10 @@ async function cleanupOrdersFixture(
   fixture: TenancyVerificationLiveFixture,
   state: OrdersRuntimeState,
   checkpoint: RunOrdersRealtimeTenancyVerificationOptions["onOrdersRealtimeCheckpoint"],
+  journeyHooks: OrderJourneyHooks | undefined,
 ): Promise<void> {
   state.mainSocket?.disconnect();
+  if (state.journey !== undefined) await journeyHooks?.cleanup(state.journey);
   const plan = state.plan;
   if (plan === undefined) return;
   const context = requireContext(fixture);
@@ -453,9 +502,9 @@ async function validateCleanupOwnership(
   actorId: string,
   plan: OrdersFixturePlan,
 ): Promise<void> {
-  const orders = await client.query<{ actorId: string; branchId: string; id: string; restaurantId: string; version: number }>(
+  const orders = await client.query<{ actorId: string; branchId: string; id: string; restaurantId: string; status: string; version: number }>(
     `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId",
-            created_by::text as "actorId", version::integer
+            created_by::text as "actorId", status, version::integer
      from app.orders where id = $1::uuid for update`,
     [plan.orderId],
   );
@@ -476,8 +525,9 @@ async function validateCleanupOwnership(
   const order = orders.rows[0];
   const expectedCommands = [plan.create, plan.addItem, plan.open, ...plan.transitions];
   if (orders.rows.length !== 1 || order?.restaurantId !== fixture.restaurantId || order.branchId !== fixture.branchId
-    || order.actorId !== actorId || order.version < 1 || order.version > expectedCommands.length
-    || audits.rows.length !== order.version) throw ordersError("cleanup");
+    || order.actorId !== actorId || order.version < 1 || order.version > expectedCommands.length + 2
+    || order.status !== (order.version < 3 ? "draft" : order.version < 8 ? "open" : order.version === 8 ? "partially_paid" : "paid")
+    || audits.rows.length !== Math.min(order.version, expectedCommands.length)) throw ordersError("cleanup");
   for (const [index, audit] of audits.rows.entries()) {
     const command = expectedCommands[index];
     if (command === undefined || audit.resultVersion !== index + 1 || audit.actorId !== actorId
@@ -630,8 +680,8 @@ function assertTicketList(
     || ticket.orderId !== plan.orderId
     || ticket.orderItemId !== plan.orderItemId
     || ticket.orderVersion !== expectedVersion
-    || ticket.channel !== "counter"
-    || ticket.tableId !== null
+    || ticket.channel !== plan.create.channel
+    || ticket.tableId !== plan.create.tableId
     || ticket.quantity !== 2
     || ticket.productName !== tenancyFixtureName(runId, "menu-product")
     || ticket.modifiers.length !== 1

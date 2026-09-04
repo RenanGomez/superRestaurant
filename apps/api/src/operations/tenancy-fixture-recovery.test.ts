@@ -216,6 +216,48 @@ test("accepts only the ordered Orders and KDS recovery prefix for the marked run
   assertContamination(() => validateTenancyFixtureRecoverySnapshot(runId, users, contaminated));
 });
 
+test("accepts the marked financial prefix and rejects an unmarked payment audit", () => {
+  const orderId = "68000000-0000-4000-8000-000000000001";
+  const sessionId = "72000000-0000-4000-8000-000000000001";
+  const cashPaymentId = "73000000-0000-4000-8000-000000000001";
+  const cardPaymentId = "73000000-0000-4000-8000-000000000002";
+  const deviceId = "74000000-0000-4000-8000-000000000001";
+  const orderMarkers = ["create", "add-item", "open", "item-sent", "item-preparing", "item-ready", "item-delivered"];
+  const orderOperations = ["order.created", "order.item_added", "order.state_changed", "order_item.state_changed", "order_item.state_changed", "order_item.state_changed", "order_item.state_changed"];
+  const orderEventIds = orderMarkers.map((_, index) => `69000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`);
+  const financialEventIds = [1, 2, 3, 4].map((index) => `75000000-0000-4000-8000-${String(index).padStart(12, "0")}`);
+  const snapshot = {
+    ...completeSnapshot(),
+    cashMovements: [{ actorId: ids.amber, branchId: ids.branch11, cashRegisterSessionId: sessionId, deviceId, id: cashPaymentId, restaurantId: ids.restaurant1, sourcePaymentId: cashPaymentId }],
+    cashRegisterSessions: [{ branchId: ids.branch11, cashierId: ids.amber, currency: "MXN", id: sessionId, registerId: "76000000-0000-4000-8000-000000000001", restaurantId: ids.restaurant1, status: "closed", version: 4 }],
+    financialAudits: [
+      { actorId: ids.amber, branchId: ids.branch11, cashRegisterSessionId: sessionId, deviceId, eventId: financialEventIds[0]!, idempotencyKey: `tenancy-full-flow-v1:${runId}:register-open`, operation: "cash_register.opened", orderId: null, paymentId: null, restaurantId: ids.restaurant1, resultCashRegisterVersion: 1, resultOrderVersion: null },
+      { actorId: ids.amber, branchId: ids.branch11, cashRegisterSessionId: sessionId, deviceId, eventId: financialEventIds[1]!, idempotencyKey: `tenancy-full-flow-v1:${runId}:cash-partial`, operation: "payment.captured", orderId, paymentId: cashPaymentId, restaurantId: ids.restaurant1, resultCashRegisterVersion: 2, resultOrderVersion: 8 },
+      { actorId: ids.amber, branchId: ids.branch11, cashRegisterSessionId: sessionId, deviceId, eventId: financialEventIds[2]!, idempotencyKey: `tenancy-full-flow-v1:${runId}:card-settlement`, operation: "payment.captured", orderId, paymentId: cardPaymentId, restaurantId: ids.restaurant1, resultCashRegisterVersion: 3, resultOrderVersion: 9 },
+      { actorId: ids.amber, branchId: ids.branch11, cashRegisterSessionId: sessionId, deviceId, eventId: financialEventIds[3]!, idempotencyKey: `tenancy-full-flow-v1:${runId}:register-close`, operation: "cash_register.closed", orderId: null, paymentId: null, restaurantId: ids.restaurant1, resultCashRegisterVersion: 4, resultOrderVersion: null },
+    ],
+    financialDeviceSequences: [{ branchId: ids.branch11, deviceId, lastSequence: 2, restaurantId: ids.restaurant1 }],
+    kdsCursors: [{ branchId: ids.branch11, lastCursor: 5, restaurantId: ids.restaurant1 }],
+    kdsEvents: [1, 3, 4, 5, 6].map((auditIndex, index) => ({ branchId: ids.branch11, cursor: index + 1, eventId: orderEventIds[auditIndex]!, operation: index === 0 ? "order_item.created" : "order_item.status_changed", orderId, restaurantId: ids.restaurant1, stationId: "kitchen", status: ["pending", "sent", "preparing", "ready", "delivered"][index]! })),
+    orderAudits: orderEventIds.map((eventId, index) => ({ actorId: ids.amber, branchId: ids.branch11, eventId, idempotencyKey: `tenancy-orders-v1:${runId}:${orderMarkers[index]}`, operation: orderOperations[index]!, orderId, restaurantId: ids.restaurant1, resultVersion: index + 1 })),
+    orders: [{ actorId: ids.amber, branchId: ids.branch11, channel: "counter", id: orderId, restaurantId: ids.restaurant1, status: "paid", tableId: null, version: 9 }],
+    payments: [
+      { amountMinor: 14_000, branchId: ids.branch11, capturedBy: ids.amber, cashRegisterSessionId: sessionId, currency: "MXN", id: cashPaymentId, method: "cash", orderId, restaurantId: ids.restaurant1 },
+      { amountMinor: 14_000, branchId: ids.branch11, capturedBy: ids.amber, cashRegisterSessionId: sessionId, currency: "MXN", id: cardPaymentId, method: "card_manual", orderId, restaurantId: ids.restaurant1 },
+    ],
+  };
+  const validated = validateTenancyFixtureRecoverySnapshot(runId, users, snapshot);
+  assert.deepEqual(validated.cashRegisterSessionIds, [sessionId]);
+  assert.deepEqual(validated.paymentIds, [cashPaymentId, cardPaymentId]);
+  assert.deepEqual(validated.cashMovementIds, [cashPaymentId]);
+  assert.deepEqual(validated.financialAuditEventIds, financialEventIds);
+  assert.deepEqual(validated.financialDeviceSequenceScopes, [{ branchId: ids.branch11, deviceId, restaurantId: ids.restaurant1 }]);
+
+  const contaminated = structuredClone(snapshot);
+  contaminated.financialAudits[2]!.idempotencyKey = "foreign-payment";
+  assertContamination(() => validateTenancyFixtureRecoverySnapshot(runId, users, contaminated));
+});
+
 test("accepts empty database with zero, one or two exact Auth fixtures", () => {
   const empty = emptySnapshot();
   for (const authUsers of [[], [amberUser], users]) {

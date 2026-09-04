@@ -50,6 +50,7 @@
     "verify:menu-catalog:remote": "tsc --project tsconfig.build.json && node dist/operations/run-menu-catalog-tenancy-verification.js",
     "verify:orders-realtime:remote": "tsc --project tsconfig.build.json && node dist/operations/run-orders-realtime-tenancy-verification.js",
     "verify:kds:remote": "tsc --project tsconfig.build.json && node dist/operations/run-kds-tenancy-verification.js",
+    "verify:full-pos-flow:remote": "tsc --project tsconfig.build.json && node dist/operations/run-full-pos-flow-tenancy-verification.js",
     "verify:kds-protected-smoke:remote": "tsc --project tsconfig.build.json && node dist/operations/run-kds-protected-smoke.js",
     "verify:app-api-state:remote": "tsc --project tsconfig.build.json && node dist/operations/run-app-api-state-verification.js",
     "verify:post-dining-zones-app-api-state:remote": "tsc --project tsconfig.build.json && node dist/operations/run-post-dining-zones-app-api-state-verification.js",
