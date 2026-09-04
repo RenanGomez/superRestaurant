@@ -65,6 +65,40 @@ No iniciar una fase si no se cumplieron los criterios de salida de la anterior, 
 
 ---
 
+## 3.1. Autonomía y aprobaciones
+
+Una solicitud humana de implementar, corregir, verificar o dejar lista una tarea autoriza de forma continua las acciones rutinarias necesarias dentro de ese alcance. No pedir aprobación paso a paso ni volver a pedirla por una acción ya autorizada mientras no cambien el destino, el impacto o la clase de riesgo.
+
+Están autorizados por defecto:
+
+- leer, crear y modificar fuentes y documentación dentro del workspace;
+- consultar y resincronizar CodeGraph;
+- instalar o restaurar dependencias declaradas por el proyecto sin introducir paquetes no solicitados;
+- ejecutar lint, format, typecheck, unit/integration/contract tests y builds locales;
+- iniciar y detener servidores locales, usar navegador real y revisar consola/red;
+- hacer consultas remotas read-only contra destinos ya identificados del proyecto;
+- ejecutar verificaciones PostgreSQL rollback-only que garanticen transacción, `ROLLBACK` en éxito/fallo y postcheck sin estado persistente;
+- ejecutar E2E remotas cuando la tarea exige verificación y el arnés usa destino exacto, `runId`, fixtures inequívocamente marcadas, cleanup obligatorio y recovery acotado; si se emite `runId` y falla, no repetir automáticamente: ejecutar solo el recovery seguro previsto;
+- repetir comandos que fallaron antes de producir efectos, o reintentos cuya idempotencia y resultado remoto estén demostrados;
+- crear commits locales cuando el humano pidió publicar, entregar o dejar listo el corte.
+
+Requieren aprobación humana explícita porque cambian estado crítico o amplían el alcance:
+
+- aplicar o revertir persistentemente migraciones en una base remota;
+- desplegar a producción o cambiar infraestructura, dominios, facturación o proveedores externos;
+- crear, rotar, revocar, revelar o modificar credenciales, secretos, roles, grants, Data API o Vault;
+- borrar, corregir o importar datos reales, o ejecutar recovery sin identidad/alcance inequívocos;
+- enviar pagos, comunicaciones o cualquier efecto externo no reversible;
+- hacer `push`, merge, rebase, force-push, reescribir historia remota o publicar releases;
+- operaciones destructivas de filesystem o Git, incluida eliminación recursiva material;
+- desactivar controles de seguridad, ampliar globalmente red/filesystem o usar acceso completo sin sandbox.
+
+Una aprobación crítica puede cubrir en una sola autorización un plan concreto con destino, versiones y verificaciones enumeradas. No fragmentarla en confirmaciones redundantes. Si el resultado de una mutación remota es ambiguo, detener reintentos, inspeccionar estado de forma read-only y pedir dirección solo si la idempotencia o el estado real no resuelven la incertidumbre.
+
+Preferir `workspace-write` con Auto-review y reglas/prefijos estrechos para comandos habituales. No solicitar permisos amplios para intérpretes, shells o destinos genéricos cuando basta un comando o dominio acotado.
+
+---
+
 ## 4. CodeGraph es obligatorio
 
 CodeGraph es la fuente estructural principal del repositorio.

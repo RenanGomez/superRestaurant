@@ -1,5 +1,13 @@
 # HANDOFF
 
+## Cierre 2026-09-04 — autonomía operativa y publicación web financiera
+
+- Decisión humana: Emmanuel pidió eliminar aprobaciones rutinarias. `AGENTS.md` ahora considera autorizados por la tarea el trabajo dentro del workspace, CodeGraph, dependencias declaradas, verificaciones locales, navegador, consultas remotas read-only, rollback-only garantizado y E2E recuperables con destino/runId/fixtures/cleanup exactos. Solo se consulta por efectos críticos persistentes, credenciales/permisos, datos reales, producción, Git remoto, acciones destructivas o ampliaciones globales de seguridad. Una aprobación crítica cubre el plan concreto completo y no debe fragmentarse.
+- Git: el fetch previo confirmó `HEAD=origin/main=cb2d124e5b3adeaa3302851b0127b7ca8bb0b162`. El corte funcional se creó como `e8af316` (`feat: add web checkout and cash reports`) y se publicó por fast-forward `cb2d124 → e8af316`; sin merge, rebase, force-push ni cambios remotos ajenos. Este cierre operativo se publica en un commit documental posterior.
+- Estado verificado: “Implementar cobro y cortes X/Z en web” permanece en REVIEW, no DONE, porque no hubo una aprobación humana funcional explícita. Las dos migraciones financieras ya están aplicadas; catálogo remoto, lifecycle `post_finance_v1`, lint SQL, lint/typecheck/test/build globales, CodeGraph y navegador sintético desktop/móvil están verdes. No se ejecutó una E2E financiera poblada ni se cambiaron credenciales.
+- Siguiente acción mínima: tomar la tarea P1 “Probar el flujo completo: abrir mesa → comanda → KDS → cobrar → cerrar mesa”. Puede prepararse y ejecutarse autónomamente contra `zwbyiefqeujstyzysydn` si reutiliza el arnés recuperable, genera un `runId`, marca inequívocamente usuarios/filas, garantiza cleanup y hace postcheck read-only; si falla después de emitir `runId`, ejecutar únicamente recovery para ese UUID y no repetir. No inventar moneda, fiscalidad, CFDI, terminal o proveedor. Cualquier nueva migración persistente, cambio de credenciales o push futuro sigue siendo crítico y requiere autorización.
+- Subagentes: ninguno. Razonamiento alto por política operativa, dinero, estado remoto y publicación Git.
+
 ## Continuación 2026-09-04 — migraciones financieras aplicadas
 
 - Estado: con autorización separada de Emmanuel se completó el apply requerido por “Implementar cobro y cortes X/Z en web”, que permanece en REVIEW hasta aprobación humana. El destino se fijó explícitamente en `zwbyiefqeujstyzysydn`; antes del apply tenía 13 versiones y el dry-run anunció únicamente `20260903000200_create_cash_registers_simple_payments.sql` y `20260903000300_create_cash_register_operational_reporting.sql`, en ese orden, sin seed ni roles.
