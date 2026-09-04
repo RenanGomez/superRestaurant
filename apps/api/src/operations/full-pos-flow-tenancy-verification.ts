@@ -42,6 +42,9 @@ export type FullPosFlowVerificationCheckpoint =
   | "full_flow.account_and_table_closed"
   | "full_flow.x_report_read_only"
   | "full_flow.z_close_immutable"
+  | "full_flow.order_history_verified"
+  | "full_flow.payment_history_verified"
+  | "full_flow.financial_audit_verified"
   | "full_flow.audit_and_history_verified"
   | "full_flow.cleanup_verified";
 
@@ -237,7 +240,7 @@ async function verifyFinancialJourney(
     || z.register.differenceMinor !== CLOSE_DIFFERENCE_MINOR || z.paymentCount !== 2) throw flowError();
   checkpoint?.("full_flow.z_close_immutable");
 
-  await assertFinancialHistory(pool, context, plan, checkout.orderTotalMinor, cashAmount, closeReason);
+  await assertFinancialHistory(pool, context, plan, checkout.orderTotalMinor, cashAmount, closeReason, checkpoint);
   checkpoint?.("full_flow.audit_and_history_verified");
 }
 
@@ -281,6 +284,7 @@ async function assertFinancialHistory(
   orderTotalMinor: number,
   cashAmountMinor: number,
   closeReason: string,
+  checkpoint: RunFullPosFlowTenancyVerificationOptions["onFullPosFlowCheckpoint"],
 ): Promise<void> {
   const actorId = requireFixtureContext(context).primaryUserId;
   const result = await pool.query<{
@@ -298,7 +302,8 @@ async function assertFinancialHistory(
     snapshotName: string;
     snapshotOptionName: string;
   }>(
-    `select o.status as "orderStatus", o.version::text as "orderVersion", o.currency as "orderCurrency",
+    `select o.status as "orderStatus", o.version::text as "orderVersion",
+       o.aggregate->>'currency' as "orderCurrency",
        o.table_id::text as "orderTableId",
        o.aggregate #>> '{items,0,snapshot,name}' as "snapshotName",
        o.aggregate #>> '{items,0,snapshot,modifiers,0,name}' as "snapshotOptionName",
@@ -319,11 +324,14 @@ async function assertFinancialHistory(
   if (result.rows.length !== 1 || row?.orderStatus !== "paid" || row.orderVersion !== String(context.orderVersion + 2)
     || row.orderCurrency !== context.currency || row.orderTableId !== context.tableId
     || row.snapshotName !== tenancyFixtureName(context.fixture.runId, "menu-product")
-    || row.snapshotOptionName !== tenancyFixtureName(context.fixture.runId, "menu-option")
-    || row.paymentCount !== "2" || row.cashAmount !== String(cashAmountMinor)
+    || row.snapshotOptionName !== tenancyFixtureName(context.fixture.runId, "menu-option")) throw flowError();
+  checkpoint?.("full_flow.order_history_verified");
+  if (row.paymentCount !== "2" || row.cashAmount !== String(cashAmountMinor)
     || row.cardAmount !== String(orderTotalMinor - cashAmountMinor)
-    || row.cardProvider !== "E2E external confirmation" || row.cashMovementCount !== "1"
-    || row.auditCount !== "4" || row.closeReason !== closeReason) throw flowError();
+    || row.cardProvider !== "E2E external confirmation" || row.cashMovementCount !== "1") throw flowError();
+  checkpoint?.("full_flow.payment_history_verified");
+  if (row.auditCount !== "4" || row.closeReason !== closeReason) throw flowError();
+  checkpoint?.("full_flow.financial_audit_verified");
 }
 
 async function cleanupFinancialJourney(pool: Pool, context: OrderJourneyContext, plan: FinancialPlan | undefined): Promise<void> {

@@ -22,7 +22,7 @@ try {
   );
   const runtimeCatalogAuditSql = readFileSync(
     new URL(
-      "../../../../supabase/tests/tenancy_memberships_post_dining_tables_catalog.sql",
+      "../../../../supabase/tests/tenancy_memberships_post_finance.sql",
       import.meta.url,
     ),
     "utf8",
@@ -36,6 +36,7 @@ try {
     },
     runtimeCatalogAuditSql,
     verifyDiningTables: true,
+    verifyFinancials: true,
   });
   process.stdout.write(`${JSON.stringify({ ...summary, protectedWebSmoke: true })}\n`);
 } catch (error: unknown) {

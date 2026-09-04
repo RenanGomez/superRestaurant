@@ -17,6 +17,7 @@ const WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const POLL_INTERVAL_MS = 250;
 
 export const KDS_PROTECTED_SMOKE_API_PORT = 4_312;
+export const KDS_PROTECTED_SMOKE_WEB_ORIGIN = "http://127.0.0.1:4313";
 export const KDS_PROTECTED_SMOKE_LEASE_PATH = new URL(
   "../../../../.kds-protected-smoke-lease.tmp",
   import.meta.url,

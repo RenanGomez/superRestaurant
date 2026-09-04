@@ -246,10 +246,12 @@ test("protected web smoke publishes a populated table layout before revocation",
   assert.match(protectedWebSmokeRunner, /runtenancyverification/u);
   assert.match(
     protectedWebSmokeRunner,
-    /tenancy_memberships_post_dining_tables_catalog\.sql/u,
+    /tenancy_memberships_post_finance\.sql/u,
   );
+  assert.doesNotMatch(protectedWebSmokeRunner, /tenancy_memberships_post_dining_tables_catalog\.sql/u);
   assert.match(protectedWebSmokeRunner, /createwebprotectedsmokecoordinator/u);
   assert.match(protectedWebSmokeRunner, /verifydiningtables:\s*true/u);
+  assert.match(protectedWebSmokeRunner, /verifyfinancials:\s*true/u);
   assert.match(apiPackage, /"verify:web-protected-smoke:remote"/u);
   assert.match(apiPackage, /run-web-protected-smoke\.js/u);
 
@@ -598,7 +600,13 @@ test("KDS ticket audits pin the additive function and exact global surface", () 
   assert.match(apiPackage, /run-kds-tenancy-verification\.js/u);
   assert.match(apiPackage, /"verify:kds-protected-smoke:remote"/u);
   assert.match(protectedSmokeRunner, /runKdsTenancyVerification/u);
-  assert.match(protectedSmokeRunner, /tenancy_memberships_post_kds\.sql/u);
+  assert.match(protectedSmokeRunner, /tenancy_memberships_post_finance\.sql/u);
+  assert.doesNotMatch(protectedSmokeRunner, /tenancy_memberships_post_kds\.sql/u);
+  assert.match(protectedSmokeRunner, /verifyFinancials: true/u);
+  assert.match(protectedSmokeRunner, /apiCorsOrigin: KDS_PROTECTED_SMOKE_WEB_ORIGIN/u);
+  assert.match(protectedSmokeCoordinator, /http:\/\/127\.0\.0\.1:4313/u);
+  assert.match(tenancyVerificationRunner, /app\.enablecors/u);
+  assert.match(tenancyVerificationRunner, /origin: corsorigin/u);
   assert.match(tenancyRunner, /runKdsTenancyVerification/u);
   assert.match(
     readFileSync(
@@ -699,6 +707,11 @@ test("full POS flow reuses the recoverable tenancy, table, KDS, and finance harn
   assert.match(fullFlowRunner, /verifyFinancials: true/u);
   assert.match(fullFlowRunner, /useDiningTable: true/u);
   assert.match(fullFlowRunner, /tenancy-full-flow-v1/u);
+  assert.match(fullFlowRunner, /full_flow\.order_history_verified/u);
+  assert.match(fullFlowRunner, /full_flow\.payment_history_verified/u);
+  assert.match(fullFlowRunner, /full_flow\.financial_audit_verified/u);
+  assert.match(fullFlowRunner, /o\.aggregate->>'currency' as "orderCurrency"/u);
+  assert.doesNotMatch(fullFlowRunner, /o\.currency as "orderCurrency"/u);
   assert.match(fullFlowEntrypoint, /tenancy_memberships_post_finance\.sql/u);
   assert.match(apiPackage, /"verify:full-pos-flow:remote"/u);
   assert.match(tenancyHarness, /diningTableId: plan\.diningTables\.commands\[0\]\.tableId/u);

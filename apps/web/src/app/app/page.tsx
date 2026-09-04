@@ -94,10 +94,10 @@ function CurrentBranchView({ membership, layout, layoutError, layoutStatus }: {
   if (layout === undefined) return <NoticeState title="No se pudo cargar el plano" body="La configuración de mesas no está disponible en este momento. Vuelve a intentarlo." />;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-5 p-5 lg:p-8">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-accent">Mesas y layout</p>
-          <h1 className="font-heading text-[22px] font-bold text-text">{membership.restaurantName} · {membership.branchName}</h1>
+          <h1 className="break-words font-heading text-[22px] font-bold text-text">{membership.restaurantName} · {membership.branchName}</h1>
           <p className="mt-1 text-[13px] text-text-muted">Plano en cuadrícula de 24 columnas. Los cambios se validan y versionan en el servidor.</p>
         </div>
         <a href="/app?change=1" className="rounded-lg border border-border bg-surface px-3 py-2 text-[13px] font-medium">Cambiar sucursal</a>
@@ -108,8 +108,8 @@ function CurrentBranchView({ membership, layout, layoutError, layoutStatus }: {
         <NoticeState title="Aún no hay zonas" body="Crea primero una zona del restaurante para poder agregar y acomodar mesas." />
       ) : layout.zones.map((zone) => (
         <section key={zone.zoneId} className="rounded-2xl border border-border bg-surface p-4 shadow-[0_8px_30px_oklch(20%_0.02_250_/_0.05)]">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div><h2 className="font-heading text-[16px] font-semibold">{zone.name}</h2><p className="text-[12px] text-text-muted">{zone.tables.length} mesa{zone.tables.length === 1 ? "" : "s"}</p></div>
+          <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0"><h2 className="break-words font-heading text-[16px] font-semibold">{zone.name}</h2><p className="text-[12px] text-text-muted">{zone.tables.length} mesa{zone.tables.length === 1 ? "" : "s"}</p></div>
             {canManage && <CreateTableForm zoneId={zone.zoneId} />}
           </div>
           <div className="grid min-h-[360px] grid-cols-[repeat(24,minmax(20px,1fr))] auto-rows-[20px] gap-px overflow-auto rounded-xl border border-border bg-[linear-gradient(to_right,var(--color-border)_1px,transparent_1px),linear-gradient(to_bottom,var(--color-border)_1px,transparent_1px)] bg-[size:calc(100%/24)_20px] p-2" aria-label={`Plano de ${zone.name}`}>

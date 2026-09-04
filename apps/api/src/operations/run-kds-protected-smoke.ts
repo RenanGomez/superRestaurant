@@ -7,6 +7,7 @@ import {
 import {
   createKdsProtectedSmokeCoordinator,
   KDS_PROTECTED_SMOKE_API_PORT,
+  KDS_PROTECTED_SMOKE_WEB_ORIGIN,
 } from "./kds-protected-smoke-coordinator.js";
 import { runKdsTenancyVerification } from "./orders-realtime-tenancy-verification.js";
 
@@ -21,10 +22,11 @@ try {
     ),
   );
   const runtimeCatalogAuditSql = readFileSync(
-    new URL("../../../../supabase/tests/tenancy_memberships_post_kds.sql", import.meta.url),
+    new URL("../../../../supabase/tests/tenancy_memberships_post_finance.sql", import.meta.url),
     "utf8",
   );
   const summary = await runKdsTenancyVerification({
+    apiCorsOrigin: KDS_PROTECTED_SMOKE_WEB_ORIGIN,
     apiPort: KDS_PROTECTED_SMOKE_API_PORT,
     browserHooks: coordinator.hooks,
     config,
@@ -45,6 +47,7 @@ try {
       `${JSON.stringify({ runId, stage: "start", status: "running" })}\n`,
     ),
     runtimeCatalogAuditSql,
+    verifyFinancials: true,
   });
   process.stdout.write(`${JSON.stringify({ ...summary, protectedKdsSmoke: true })}\n`);
 } catch (error: unknown) {

@@ -99,6 +99,29 @@ test("PostgreSQL financial adapter reads the scoped operational report through o
   await assertCode(hostile.readReport(actorId, query), "unavailable");
 });
 
+test("PostgreSQL financial adapter canonicalizes report timestamps emitted with a database offset", async () => {
+  const report = operationalReport(openRegister(), 1, 0, 0);
+  const databaseReport = Object.freeze({
+    ...report,
+    register: Object.freeze({
+      ...report.register,
+      openedAt: "2026-09-03T12:00:00+00:00",
+    }),
+  });
+  const adapter = new PostgresFinancialPersistenceAdapter({
+    query: async () => ({ rows: [{ result: databaseReport }] }),
+  });
+
+  const normalized = await adapter.readReport(actorId, reportQuery(sessionId));
+  assert.notEqual(normalized, "missing");
+  assert.notEqual(normalized, "forbidden");
+  assert.notEqual(normalized, "conflict");
+  if (normalized === "missing" || normalized === "forbidden" || normalized === "conflict") {
+    throw new Error("TEST_OPERATIONAL_REPORT_MISSING");
+  }
+  assert.equal(normalized.register.openedAt, "2026-09-03T12:00:00.000Z");
+});
+
 test("financial service opens a cashier-bound register and persists audit evidence", async () => {
   let opened: CashRegister | undefined;
   const finances = financialPort({

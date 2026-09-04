@@ -133,6 +133,7 @@ export interface TenancyVerificationSummary {
 }
 
 export interface RunTenancyVerificationOptions {
+  readonly apiCorsOrigin?: string;
   readonly apiPort?: number;
   readonly config: TenancyVerificationConfig;
   readonly liveFixtureHooks?: TenancyVerificationLiveFixtureHooks;
@@ -352,7 +353,7 @@ export async function runTenancyVerification(
     ));
     const authenticated = await executeStage("authentication", async () => authenticateFixtures(options.config, plan, counter));
 
-    app = await executeStage("http", async () => startProductApi(apiPort));
+    app = await executeStage("http", async () => startProductApi(apiPort, options.apiCorsOrigin));
     await executeStage("data_api", async () => verifyDataApiBaseline(
       options.config,
       plan,
@@ -740,9 +741,17 @@ async function authenticateFixtures(
   return authenticated as unknown as readonly [AuthenticatedFixture, AuthenticatedFixture];
 }
 
-async function startProductApi(port: number): Promise<INestApplication> {
+async function startProductApi(port: number, corsOrigin: string | undefined): Promise<INestApplication> {
   const app = await NestFactory.create(AppModule, { abortOnError: false, logger: false });
   try {
+    if (corsOrigin !== undefined) {
+      app.enableCors({
+        allowedHeaders: ["Authorization", "Content-Type"],
+        credentials: false,
+        methods: ["GET", "POST", "OPTIONS"],
+        origin: corsOrigin,
+      });
+    }
     app.setGlobalPrefix("api/v1");
     app.enableShutdownHooks();
     await app.listen(port, "127.0.0.1");

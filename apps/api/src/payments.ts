@@ -145,7 +145,7 @@ export class PostgresFinancialPersistenceAdapter implements FinancialPersistence
       const status = own(minimal, "status");
       if (status === "conflict" || status === "forbidden") return status;
     }
-    const report = parseCashRegisterOperationalReportV1(raw);
+    const report = parseCashRegisterOperationalReportV1(normalizeOperationalReportTimestamps(raw));
     if (report === undefined || !sameScope(report.scope, query.scope)
       || report.register.registerId !== query.registerId
       || (query.cashRegisterSessionId !== null && report.register.cashRegisterSessionId !== query.cashRegisterSessionId)) throw unavailable();
@@ -482,6 +482,35 @@ function exactRecord(value: unknown, keys: readonly string[]): Readonly<Record<s
     }
     return value as Readonly<Record<string, unknown>>;
   } catch { return undefined; }
+}
+
+function normalizeOperationalReportTimestamps(value: unknown): unknown {
+  const report = exactRecord(value, [
+    "schemaVersion", "scope", "register", "paymentCount", "cashCapturedMinor", "cardManualCapturedMinor",
+    "totalCapturedMinor", "nextLocalSequence",
+  ]);
+  if (report === undefined) return value;
+  const register = exactRecord(own(report, "register"), [
+    "schemaVersion", "scope", "cashRegisterSessionId", "registerId", "shiftId", "cashierId", "currency", "status",
+    "openingFloatMinor", "expectedCashBalanceMinor", "countedClosingBalanceMinor", "differenceMinor",
+    "version", "openedAt", "closedAt", "replayed",
+  ]);
+  if (register === undefined) return value;
+  const openedAt = canonicalDatabaseTimestamp(own(register, "openedAt"));
+  const rawClosedAt = own(register, "closedAt");
+  const closedAt = rawClosedAt === null ? null : canonicalDatabaseTimestamp(rawClosedAt);
+  if (openedAt === undefined || closedAt === undefined) return value;
+  return Object.freeze({
+    ...report,
+    register: Object.freeze({ ...register, closedAt, openedAt }),
+  });
+}
+
+function canonicalDatabaseTimestamp(value: unknown): string | undefined {
+  if (typeof value !== "string"
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) return undefined;
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : undefined;
 }
 
 function own(record: Readonly<Record<string, unknown>>, key: string): unknown {
