@@ -1,5 +1,10 @@
 # HANDOFF
 
+## Publicación 2026-09-04 — arnés E2E integral P1
+
+- Git: después de `git fetch origin main`, `HEAD` y `origin/main` coincidían en `a915f1e07db6b22f80116f822e89664b078a5d8c` con divergencia `0/0`. El corte verificado se publicó por fast-forward como `b2ab8a3f42b75cded40465e2f225d43f31cdeb9a` (`test: add recoverable full POS flow verification`). No hubo merge, rebase, force-push ni incorporación de cambios remotos ajenos.
+- Estado/siguiente conversación: la tarea permanece IN_PROGRESS porque ninguna corrida alcanzó caja/pagos/X/Z ni el navegador autenticado. Partir de `origin/main@b2ab8a3f42b75cded40465e2f225d43f31cdeb9a`; leer una sola vez los cuatro archivos operativos y P1, confirmar árbol limpio/CodeGraph y solicitar autorización humana nueva para una tercera E2E recuperable. No repetir `5cd4b34a-ba88-4353-a420-7a6b69461c6a` ni `9b43483a-3aba-4c67-a47e-63dcb6e7daec`; ambos están recuperados con cero residuos. Si la nueva corrida emite UUID y falla, ejecutar únicamente recovery para ese UUID, postcheck y diagnóstico. Solo pasar a REVIEW si completa flujo funcional, navegador web/KDS desktop y 390×844, consola/red/accesibilidad, cleanup y postcheck.
+
 ## Continuación 2026-09-04 — segunda E2E integral contenida y diagnosticada
 
 - Tarea/estado: “Probar el flujo completo: abrir mesa → comanda → KDS → cobrar → cerrar mesa” permanece IN_PROGRESS, no REVIEW. La autorización humana se consumió en una segunda corrida efectiva; tras el fallo no se repitió el runner.
