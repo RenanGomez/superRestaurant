@@ -1,5 +1,13 @@
 # HANDOFF
 
+## Preparación 2026-09-04 — workstream frontend aislado para Claude
+
+- Entregable creado: `docs/CLAUDE_FRONTEND_WORKSTREAM.md`. Autoriza a Claude únicamente a crear `apps/mobile/**` y actualizar `pnpm-lock.yaml` por dependencias directas de ese app, siempre en rama/worktree separados. El documento exige entregar commits convencionales, `apps/mobile/CLAUDE_DELIVERY.md`, pruebas, matriz visual y comparación de rutas contra el hash base.
+- Frontera: `apps/web`, `apps/kds`, `apps/api`, dominio, tipos compartidos, sync, UI compartida, Supabase/SQL, documentación operativa, configuración raíz y CI son de solo lectura o están prohibidos. P1 permanece congelado en REVIEW. No se autorizan secretos, cambios remotos, pagos, fiscalidad, offline ni push a `main`.
+- Dependencias existentes permitidas: Supabase Auth con clave publishable, `GET /api/v1/access/memberships`, `POST /api/v1/access/branch`, `GET /api/v1/dining/layout` y `GET /api/v1/catalog/menu`, usando parsers de `@super-restaurant/shared-types`. Las mutaciones Order quedan fuera de este primer entregable.
+- Regla backend: si falta un endpoint, parser, dato, permiso o decisión, Claude debe detener esa capacidad y documentar la solicitud en `apps/mobile/BACKEND_REQUESTS.md`; no puede implementarlo, simularlo como contrato productivo ni inventarlo. El coordinador conserva arquitectura, integración, CodeGraph y aprobación final.
+- Estado: este documento prepara la delegación pero no inicia Fase 2 ni cambia TODO; la tarea empieza cuando Claude recibe el archivo y crea su rama. Subagentes: ninguno.
+
 ## Cierre 2026-09-04 — flujo completo P1 listo para revisión
 
 - Tarea/estado: “Probar el flujo completo: abrir mesa → comanda → KDS → cobrar → cerrar mesa” pasa de IN_PROGRESS a REVIEW, nunca DONE automáticamente. La evidencia funcional completa es `runId=9423a003-dc24-48a0-a0e0-99d4724ca1bf` con 216 checks; preserva dinero en unidad menor/moneda explícita, `card_manual` como confirmación externa sin PAN/CVV, historia inmutable y correcciones financieras compensatorias.
