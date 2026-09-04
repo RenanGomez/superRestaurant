@@ -52,6 +52,10 @@ const postKdsAuditSql = readFileSync(
   new URL("../../../../supabase/tests/tenancy_memberships_post_kds.sql", import.meta.url),
   "utf8",
 );
+const postFinanceAuditSql = readFileSync(
+  new URL("../../../../supabase/tests/tenancy_memberships_post_finance.sql", import.meta.url),
+  "utf8",
+);
 const database: DatabaseConfig = Object.freeze({
   caCertificate: "TEST CA",
   connectionString: "postgresql://user:password@host.example/postgres",
@@ -177,6 +181,20 @@ test("accepts the pinned post-KDS audit for its explicit profile", async () => {
     dependencies,
     precheckAuditSql: postKdsAuditSql,
     runtimeAuditSql: postKdsAuditSql,
+  });
+  assert.equal(result.status, "ok");
+  assert.ok(events.includes("admin:runtime-audit"));
+});
+
+test("accepts the pinned post-finance audit for its explicit profile", async () => {
+  const events: string[] = [];
+  const dependencies = dependenciesFor([adminSession(events)], appSession(events));
+  const result = await provisionAppApi({
+    auditProfile: "post_finance_v1",
+    config,
+    dependencies,
+    precheckAuditSql: postFinanceAuditSql,
+    runtimeAuditSql: postFinanceAuditSql,
   });
   assert.equal(result.status, "ok");
   assert.ok(events.includes("admin:runtime-audit"));
@@ -449,6 +467,7 @@ function adminSession(
       || (sql.includes("POST_MENU_TABLE_SURFACE_REJECTED") && !events.includes("admin:promote"))
       || (sql.includes("POST_ORDERS_SURFACE_REJECTED") && !events.includes("admin:promote"))
       || (sql.includes("POST_KDS_SURFACE_REJECTED") && !events.includes("admin:promote"))
+      || (sql.includes("POST_FINANCE_SURFACE_REJECTED") && !events.includes("admin:promote"))
     ) {
       events.push("admin:precheck");
       if (options.failPrecheck === true) throw new Error("sensitive precheck detail");
@@ -465,6 +484,7 @@ function adminSession(
       || (sql.includes("POST_MENU_TABLE_SURFACE_REJECTED") && events.includes("admin:promote"))
       || (sql.includes("POST_ORDERS_SURFACE_REJECTED") && events.includes("admin:promote"))
       || (sql.includes("POST_KDS_SURFACE_REJECTED") && events.includes("admin:promote"))
+      || (sql.includes("POST_FINANCE_SURFACE_REJECTED") && events.includes("admin:promote"))
     ) {
       events.push("admin:runtime-audit");
       if (options.failRuntimeAudit === true) throw new Error("sensitive runtime detail");

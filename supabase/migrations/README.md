@@ -263,3 +263,31 @@ hash-idénticas, el historial previo 11 y el dry-run anunció únicamente
 `20260902000200`, sin seeds, roles ni Vault. El postcheck confirmó 12 versiones,
 el mismo catálogo exacto y `db lint` limpio. E2E y smoke requieren permisos
 posteriores.
+
+### Slice financiero y reporte operativo de caja
+
+`20260903000200_create_cash_registers_simple_payments.sql` y
+`20260903000300_create_cash_register_operational_reporting.sql` quedaron
+aplicadas persistentemente el 2026-09-04. La primera incorpora apertura/cierre
+de caja, pagos simples y ledger inmutable; la segunda agrega una única lectura
+privada y acotada para la vista operativa X/Z. Ninguna tabla financiera recibe
+CRUD por Data API y `card_manual` conserva solo evidencia externa no sensible.
+
+Antes del apply, ambas versiones se validaron juntas con
+`verify:cash-register-operational-reporting-schema:rollback`: migraciones y
+auditor se ejecutaron en una transacción revertida y confirmaron cinco
+políticas, 23 tablas RLS+FORCE RLS y 22 funciones `SECURITY DEFINER`. Un staging
+con las 15 migraciones hash-idénticas produjo un dry-run que anunció únicamente
+`20260903000200` y `20260903000300`, sin seed ni roles; el apply usó el destino
+explícito `zwbyiefqeujstyzysydn` y respetó ese orden.
+
+El postcheck se ejecuta con:
+
+`pnpm --filter @super-restaurant/api verify:post-finance-app-api-state:remote`
+
+El perfil pinneado `post_finance_v1` comprueba el catálogo global exacto, las
+18 capacidades mínimas de `app_api`, el rol runtime y cero sesiones activas. El
+post-apply confirmó las 15 versiones y `db lint` limpio en `app`, `app_private`
+y `app_rls`. Un rollback persistente sigue siendo forward-only y requeriría una
+migración nueva, respaldo, inspección de dependencias y autorización separada;
+nunca se editan estas migraciones aplicadas.

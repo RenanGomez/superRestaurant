@@ -4,14 +4,21 @@ import {
   ConflictException,
   Controller,
   ForbiddenException,
+  Get,
   Header,
   Inject,
   NotFoundException,
   Post,
+  Query,
   Req,
   ServiceUnavailableException,
 } from "@nestjs/common";
-import type { CashRegisterSummaryV1, PaymentCollectionSummaryV1 } from "@super-restaurant/shared-types";
+import type {
+  CashRegisterOperationalReportV1,
+  CashRegisterSummaryV1,
+  CheckoutOrderSummaryV1,
+  PaymentCollectionSummaryV1,
+} from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
 import { FinancialApplicationError, FinancialService } from "./payments.js";
@@ -36,6 +43,46 @@ export class PaymentsController {
   @Header("Cache-Control", "private, no-store")
   public close(@Req() request: unknown, @Body() body: unknown): Promise<CashRegisterSummaryV1> {
     return this.map(() => this.finances.close(getAuthenticatedPrincipal(request), body));
+  }
+
+  @Get("cash-registers/report")
+  @Header("Cache-Control", "private, no-store")
+  public report(
+    @Req() request: unknown,
+    @Query("restaurantId") restaurantId: unknown,
+    @Query("branchId") branchId: unknown,
+    @Query("registerId") registerId: unknown,
+    @Query("cashRegisterSessionId") cashRegisterSessionId: unknown,
+    @Query("deviceId") deviceId: unknown,
+  ): Promise<CashRegisterOperationalReportV1> {
+    return this.map(() => this.finances.report(getAuthenticatedPrincipal(request), {
+      cashRegisterSessionId: cashRegisterSessionId ?? null,
+      deviceId,
+      registerId,
+      schemaVersion: 1,
+      scope: { branchId, restaurantId },
+    }));
+  }
+
+  @Get("payments/checkout")
+  @Header("Cache-Control", "private, no-store")
+  public checkout(
+    @Req() request: unknown,
+    @Query("restaurantId") restaurantId: unknown,
+    @Query("branchId") branchId: unknown,
+    @Query("registerId") registerId: unknown,
+    @Query("cashRegisterSessionId") cashRegisterSessionId: unknown,
+    @Query("deviceId") deviceId: unknown,
+    @Query("orderId") orderId: unknown,
+  ): Promise<CheckoutOrderSummaryV1> {
+    return this.map(() => this.finances.checkout(getAuthenticatedPrincipal(request), {
+      cashRegisterSessionId,
+      deviceId,
+      orderId,
+      registerId,
+      schemaVersion: 1,
+      scope: { branchId, restaurantId },
+    }));
   }
 
   private async map<T>(operation: () => Promise<T>): Promise<T> {

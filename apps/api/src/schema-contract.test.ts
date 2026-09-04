@@ -57,6 +57,10 @@ const financialMigration = readFileSync(
   new URL("../../../supabase/migrations/20260903000200_create_cash_registers_simple_payments.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
+const financialReportingMigration = readFileSync(
+  new URL("../../../supabase/migrations/20260903000300_create_cash_register_operational_reporting.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
 const financialCatalogAudit = readFileSync(
   new URL("../../../supabase/tests/cash_registers_simple_payments_catalog.sql", import.meta.url),
   "utf8",
@@ -647,4 +651,24 @@ test("cash register and simple payment migration keeps financial writes atomic, 
   assert.doesNotThrow(() => validateCatalogAuditSql(financialCatalogAudit));
   assert.match(apiPackage, /"verify:cash-registers-simple-payments-schema:rollback"/u);
   assert.match(apiPackage, /run-cash-registers-simple-payments-schema-verification\.js/u);
+});
+
+test("cash-register operational reporting is read-only, scoped, and separately versioned", () => {
+  assert.match(financialReportingMigration, /^begin;/u);
+  assert.doesNotMatch(financialReportingMigration, /create table|alter table|insert into|update app\.|delete from/u);
+  assert.match(financialReportingMigration, /create function app_private\.read_cash_register_operational_report/u);
+  assert.match(financialReportingMigration, /language plpgsql stable security definer set search_path = ''/u);
+  assert.match(financialReportingMigration, /m\.user_id=p_actor_id/u);
+  assert.match(financialReportingMigration, /m\.restaurant_id=p_restaurant_id and m\.branch_id=p_branch_id/u);
+  assert.match(financialReportingMigration, /s\.restaurant_id=p_restaurant_id and s\.branch_id=p_branch_id/u);
+  assert.match(financialReportingMigration, /p\.cash_register_session_id=v_session\.id/u);
+  assert.match(financialReportingMigration, /p\.method='cash'/u);
+  assert.match(financialReportingMigration, /p\.method='card_manual'/u);
+  assert.match(financialReportingMigration, /d\.device_id=p_device_id/u);
+  assert.match(financialReportingMigration, /revoke all on function app_private\.read_cash_register_operational_report[\s\S]*from public,anon,authenticated,service_role,app_api/u);
+  assert.match(financialReportingMigration, /grant execute on function app_private\.read_cash_register_operational_report[\s\S]*to app_api/u);
+  assert.doesNotMatch(financialReportingMigration, /grant (?:select|insert|update|delete|all) on/u);
+  assert.match(financialReportingMigration, /non-fiscal operational register summary/u);
+  assert.match(financialReportingMigration, /commit;\s*$/u);
+  assert.doesNotThrow(() => extractMigrationBody(financialReportingMigration));
 });

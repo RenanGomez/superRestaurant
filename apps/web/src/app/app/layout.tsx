@@ -44,6 +44,11 @@ export default async function AppLayout({ children }: { readonly children: React
             <path d="M4 5h16M4 12h16M4 19h10" /><circle cx="18" cy="19" r="2" />
           </svg>
         </a>
+        <a href="/app/caja" title="Caja" aria-label="Caja" className="flex h-11 w-11 items-center justify-center rounded-xl text-white hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 9h10M7 13h3M14 13h3" />
+          </svg>
+        </a>
       </nav>
 
       <div className="flex min-w-0 flex-1 flex-col">

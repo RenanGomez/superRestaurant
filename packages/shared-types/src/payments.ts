@@ -88,6 +88,49 @@ export interface PaymentCollectionSummaryV1 {
   readonly scope: BranchScope;
 }
 
+export interface CashRegisterReportQueryV1 {
+  readonly cashRegisterSessionId: string | null;
+  readonly deviceId: string;
+  readonly registerId: string;
+  readonly schemaVersion: typeof FINANCIAL_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+}
+
+export interface CashRegisterOperationalReportV1 {
+  readonly cardManualCapturedMinor: number;
+  readonly cashCapturedMinor: number;
+  readonly nextLocalSequence: number;
+  readonly paymentCount: number;
+  readonly register: CashRegisterSummaryV1;
+  readonly schemaVersion: typeof FINANCIAL_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly totalCapturedMinor: number;
+}
+
+export interface CheckoutOrderQueryV1 {
+  readonly cashRegisterSessionId: string;
+  readonly deviceId: string;
+  readonly orderId: string;
+  readonly registerId: string;
+  readonly schemaVersion: typeof FINANCIAL_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+}
+
+export interface CheckoutOrderSummaryV1 {
+  readonly capturedAmountMinor: number;
+  readonly cashRegisterSessionId: string;
+  readonly cashRegisterVersion: number;
+  readonly currency: string;
+  readonly nextLocalSequence: number;
+  readonly orderId: string;
+  readonly orderStatus: "open" | "partially_paid";
+  readonly orderTotalMinor: number;
+  readonly orderVersion: number;
+  readonly remainingBalanceMinor: number;
+  readonly schemaVersion: typeof FINANCIAL_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+}
+
 export function parseOpenCashRegisterCommandV1(value: unknown): OpenCashRegisterCommandV1 | undefined {
   const record = exactRecord(value, [
     "schemaVersion", "scope", "cashRegisterSessionId", "registerId", "shiftId", "openingFloatMinor", "currency",
@@ -234,6 +277,89 @@ export function parsePaymentCollectionSummaryV1(value: unknown): PaymentCollecti
   });
 }
 
+export function parseCashRegisterReportQueryV1(value: unknown): CashRegisterReportQueryV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "registerId", "cashRegisterSessionId", "deviceId"]);
+  if (record === undefined || own(record, "schemaVersion") !== FINANCIAL_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const registerId = uuid(own(record, "registerId"));
+  const rawSessionId = own(record, "cashRegisterSessionId");
+  const cashRegisterSessionId = rawSessionId === null ? null : uuid(rawSessionId);
+  const deviceId = uuid(own(record, "deviceId"));
+  return scope === undefined || registerId === undefined || cashRegisterSessionId === undefined || deviceId === undefined
+    ? undefined
+    : Object.freeze({ cashRegisterSessionId, deviceId, registerId, schemaVersion: 1, scope });
+}
+
+export function parseCashRegisterOperationalReportV1(value: unknown): CashRegisterOperationalReportV1 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "scope", "register", "paymentCount", "cashCapturedMinor", "cardManualCapturedMinor",
+    "totalCapturedMinor", "nextLocalSequence",
+  ]);
+  if (record === undefined || own(record, "schemaVersion") !== FINANCIAL_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const register = parseCashRegisterSummaryV1(own(record, "register"));
+  const paymentCount = integer(own(record, "paymentCount"), 0, Number.MAX_SAFE_INTEGER);
+  const cashCapturedMinor = integer(own(record, "cashCapturedMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const cardManualCapturedMinor = integer(own(record, "cardManualCapturedMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const totalCapturedMinor = integer(own(record, "totalCapturedMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const nextLocalSequence = integer(own(record, "nextLocalSequence"), 1, Number.MAX_SAFE_INTEGER);
+  const tenderTotal = cashCapturedMinor === undefined || cardManualCapturedMinor === undefined
+    ? undefined : cashCapturedMinor + cardManualCapturedMinor;
+  if (scope === undefined || register === undefined || paymentCount === undefined || cashCapturedMinor === undefined
+    || cardManualCapturedMinor === undefined || totalCapturedMinor === undefined || nextLocalSequence === undefined
+    || !Number.isSafeInteger(tenderTotal) || tenderTotal !== totalCapturedMinor || !sameScope(register.scope, scope)) return undefined;
+  return Object.freeze({
+    cardManualCapturedMinor, cashCapturedMinor, nextLocalSequence, paymentCount, register,
+    schemaVersion: 1, scope, totalCapturedMinor,
+  });
+}
+
+export function parseCheckoutOrderQueryV1(value: unknown): CheckoutOrderQueryV1 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "scope", "registerId", "cashRegisterSessionId", "deviceId", "orderId",
+  ]);
+  if (record === undefined || own(record, "schemaVersion") !== FINANCIAL_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const registerId = uuid(own(record, "registerId"));
+  const cashRegisterSessionId = uuid(own(record, "cashRegisterSessionId"));
+  const deviceId = uuid(own(record, "deviceId"));
+  const orderId = uuid(own(record, "orderId"));
+  return scope === undefined || registerId === undefined || cashRegisterSessionId === undefined
+    || deviceId === undefined || orderId === undefined
+    ? undefined
+    : Object.freeze({ cashRegisterSessionId, deviceId, orderId, registerId, schemaVersion: 1, scope });
+}
+
+export function parseCheckoutOrderSummaryV1(value: unknown): CheckoutOrderSummaryV1 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "scope", "cashRegisterSessionId", "cashRegisterVersion", "orderId", "orderVersion",
+    "orderStatus", "currency", "orderTotalMinor", "capturedAmountMinor", "remainingBalanceMinor", "nextLocalSequence",
+  ]);
+  if (record === undefined || own(record, "schemaVersion") !== FINANCIAL_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const cashRegisterSessionId = uuid(own(record, "cashRegisterSessionId"));
+  const cashRegisterVersion = integer(own(record, "cashRegisterVersion"), 1, Number.MAX_SAFE_INTEGER);
+  const orderId = uuid(own(record, "orderId"));
+  const orderVersion = integer(own(record, "orderVersion"), 1, Number.MAX_SAFE_INTEGER);
+  const orderStatus = own(record, "orderStatus");
+  const currency = currencyCode(own(record, "currency"));
+  const orderTotalMinor = integer(own(record, "orderTotalMinor"), 1, Number.MAX_SAFE_INTEGER);
+  const capturedAmountMinor = integer(own(record, "capturedAmountMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const remainingBalanceMinor = integer(own(record, "remainingBalanceMinor"), 1, Number.MAX_SAFE_INTEGER);
+  const nextLocalSequence = integer(own(record, "nextLocalSequence"), 1, Number.MAX_SAFE_INTEGER);
+  const reconstructedTotal = capturedAmountMinor === undefined || remainingBalanceMinor === undefined
+    ? undefined : capturedAmountMinor + remainingBalanceMinor;
+  if (scope === undefined || cashRegisterSessionId === undefined || cashRegisterVersion === undefined || orderId === undefined
+    || orderVersion === undefined || (orderStatus !== "open" && orderStatus !== "partially_paid") || currency === undefined
+    || orderTotalMinor === undefined || capturedAmountMinor === undefined || remainingBalanceMinor === undefined
+    || nextLocalSequence === undefined || !Number.isSafeInteger(reconstructedTotal) || reconstructedTotal !== orderTotalMinor
+    || (orderStatus === "open" && capturedAmountMinor !== 0)) return undefined;
+  return Object.freeze({
+    capturedAmountMinor, cashRegisterSessionId, cashRegisterVersion, currency, nextLocalSequence, orderId,
+    orderStatus, orderTotalMinor, orderVersion, remainingBalanceMinor, schemaVersion: 1, scope,
+  });
+}
+
 function parseCommon(record: Readonly<Record<string, unknown>>): FinancialAuditInputV1 | undefined {
   const deviceId = uuid(own(record, "deviceId"));
   const eventId = uuid(own(record, "eventId"));
@@ -249,6 +375,10 @@ function parseScope(value: unknown): BranchScope | undefined {
   const branchId = record === undefined ? undefined : uuid(own(record, "branchId"));
   return restaurantId === undefined || branchId === undefined
     ? undefined : Object.freeze({ restaurantId, branchId }) as BranchScope;
+}
+
+function sameScope(left: BranchScope, right: BranchScope): boolean {
+  return left.restaurantId === right.restaurantId && left.branchId === right.branchId;
 }
 
 function exactRecord(value: unknown, keys: readonly string[]): Readonly<Record<string, unknown>> | undefined {

@@ -78,6 +78,27 @@ test("PostgreSQL financial adapter binds private functions and fails closed", as
   );
 });
 
+test("PostgreSQL financial adapter reads the scoped operational report through one private capability", async () => {
+  const register = openRegister();
+  const report = operationalReport(register, 3, 5_000, 2_500);
+  const calls: { readonly parameters: readonly unknown[]; readonly sql: string }[] = [];
+  const adapter = new PostgresFinancialPersistenceAdapter({
+    query: async (sql, parameters) => {
+      calls.push({ parameters, sql });
+      return { rows: [{ result: report }] };
+    },
+  });
+  const query = reportQuery(sessionId);
+  assert.deepEqual(await adapter.readReport(actorId, query), report);
+  assert.match(calls[0]?.sql ?? "", /app_private\.read_cash_register_operational_report/u);
+  assert.deepEqual(calls[0]?.parameters, [actorId, scope.restaurantId, scope.branchId, registerId, sessionId, deviceId]);
+
+  const forbidden = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: { status: "forbidden" } }] }) });
+  assert.equal(await forbidden.readReport(actorId, query), "forbidden");
+  const hostile = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: { ...report, extra: true } }] }) });
+  await assertCode(hostile.readReport(actorId, query), "unavailable");
+});
+
 test("financial service opens a cashier-bound register and persists audit evidence", async () => {
   let opened: CashRegister | undefined;
   const finances = financialPort({
@@ -90,6 +111,37 @@ test("financial service opens a cashier-bound register and persists audit eviden
   assert.equal(summary.cashierId, actorId);
   assert.equal(summary.openingFloatMinor, 2_000);
   assert.equal(opened?.openedDeviceId, deviceId);
+});
+
+test("financial service exposes an authorized X view and an exact payable checkout summary", async () => {
+  const register = openRegister();
+  const order = transitionOrderStatus(payableOrder(), "partially_paid", {
+    actorId, deviceId, eventId: "19a8584a-9e47-42b4-a1e1-7bf1ac4c7b6d",
+    idempotencyKey: "test-partial-payment-state", occurredAt: "2026-09-03T12:05:00.000Z",
+  }).order;
+  const report = operationalReport(register, 4, 2_000, 500);
+  const finances = financialPort({
+    read: async () => storedRegister(register, 3, 2_500),
+    readReport: async () => report,
+  });
+  const service = serviceFor(["cashier"], finances, orderPort(order, 7));
+  assert.deepEqual(await service.report(principal, reportQuery(sessionId)), report);
+  const checkout = await service.checkout(principal, {
+    ...reportQuery(sessionId),
+    orderId,
+  });
+  assert.equal(checkout.cashRegisterVersion, 3);
+  assert.equal(checkout.orderVersion, 7);
+  assert.equal(checkout.orderTotalMinor, 12_500);
+  assert.equal(checkout.capturedAmountMinor, 2_500);
+  assert.equal(checkout.remainingBalanceMinor, 10_000);
+  assert.equal(checkout.nextLocalSequence, 4);
+
+  await assertCode(serviceFor(["viewer"], finances).report(principal, reportQuery(sessionId)), "authorization");
+  await assertCode(serviceFor(["cashier"], financialPort({ readReport: async () => "missing" })).report(
+    principal,
+    reportQuery(null),
+  ), "not_found");
 });
 
 test("cash payment captures an exact partial amount and creates one cash movement", async () => {
@@ -357,11 +409,29 @@ function financialPort(overrides: Partial<FinancialPersistencePort> = {}): Finan
     collect: async () => "conflict",
     open: async () => "conflict",
     read: async () => "missing",
+    readReport: async () => "missing",
     replayClose: async () => "missing",
     replayCollect: async () => "missing",
     replayOpen: async () => "missing",
     ...overrides,
   };
+}
+
+function reportQuery(cashRegisterSessionId: string | null) {
+  return Object.freeze({ cashRegisterSessionId, deviceId, registerId, schemaVersion: 1 as const, scope });
+}
+
+function operationalReport(register: CashRegister, nextLocalSequence: number, cashCapturedMinor: number, cardManualCapturedMinor: number) {
+  return Object.freeze({
+    cardManualCapturedMinor,
+    cashCapturedMinor,
+    nextLocalSequence,
+    paymentCount: Number(cashCapturedMinor > 0) + Number(cardManualCapturedMinor > 0),
+    register: registerSummary(register, 3),
+    schemaVersion: 1 as const,
+    scope,
+    totalCapturedMinor: cashCapturedMinor + cardManualCapturedMinor,
+  });
 }
 
 async function capturedInput(order: Order, register: CashRegister): Promise<PersistPaymentInput> {

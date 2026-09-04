@@ -25,6 +25,8 @@ const POST_ORDERS_REALTIME_AUDIT_SHA256 =
   "3242785923599694824512498975258072d94ef1d1615283380c6382735d6f88";
 const POST_KDS_AUDIT_SHA256 =
   "3acd64d001d250550aa400b3f6fe2e7c0b31aa1f39b6d6a06e608002b2f8eec9";
+const POST_FINANCE_AUDIT_SHA256 =
+  "a7de06df0c17748bf2f33bfa8f0a6b5d76e08959d4dc231dfecf164b246b5a3b";
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 const SESSION_DRAIN_ATTEMPTS = 3;
 const APP_CONNECTION_ATTEMPTS = 3;
@@ -216,7 +218,10 @@ function auditHashes(
       runtime: POST_ORDERS_REALTIME_AUDIT_SHA256,
     };
   }
-  return { precheck: POST_KDS_AUDIT_SHA256, runtime: POST_KDS_AUDIT_SHA256 };
+  if (profile === "post_kds_v1") {
+    return { precheck: POST_KDS_AUDIT_SHA256, runtime: POST_KDS_AUDIT_SHA256 };
+  }
+  return { precheck: POST_FINANCE_AUDIT_SHA256, runtime: POST_FINANCE_AUDIT_SHA256 };
 }
 
 const postgresDependencies: AppApiProvisioningDependencies = Object.freeze({

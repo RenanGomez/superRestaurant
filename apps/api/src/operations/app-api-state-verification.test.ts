@@ -58,6 +58,10 @@ const postKdsAuditSql = readFileSync(
   new URL("../../../../supabase/tests/tenancy_memberships_post_kds.sql", import.meta.url),
   "utf8",
 );
+const postFinanceAuditSql = readFileSync(
+  new URL("../../../../supabase/tests/tenancy_memberships_post_finance.sql", import.meta.url),
+  "utf8",
+);
 const database: DatabaseConfig = Object.freeze({
   caCertificate: "TEST CA",
   connectionString: "postgresql://user:password@host.example/postgres",
@@ -205,6 +209,29 @@ test("pins the exact post-KDS audit and allowlists the ticket read capability", 
   }
 });
 
+test("pins the exact post-finance audit and allowlists only the financial capabilities", async () => {
+  for (const [target, expectedState] of [
+    [targetState("safe_disabled"), "safe_disabled"],
+    [targetState("runtime"), "runtime"],
+  ] as const) {
+    const events: string[] = [];
+    const result = await verifyAppApiState({
+      auditProfile: "post_finance_v1",
+      config,
+      dependencies: dependenciesFor(stateSession(events, target, 0, { postFinanceProfile: true })),
+      precheckAuditSql: postFinanceAuditSql,
+      runtimeAuditSql: postFinanceAuditSql,
+    });
+    assert.deepEqual(result, {
+      activeSessions: false,
+      catalogAudit: true,
+      state: expectedState,
+      status: "ok",
+    });
+    assert.deepEqual(events, ["state:lock", "state:target", "state:sessions", "state:post-finance-audit", "state:close"]);
+  }
+});
+
 test("reports active sessions as attention for stable states without running a quiescent audit", async () => {
   for (const state of ["safe_disabled", "runtime"] as const) {
     const events: string[] = [];
@@ -309,6 +336,7 @@ function stateSession(
     postMenuProfile?: boolean;
     postOrdersRealtimeProfile?: boolean;
     postKdsProfile?: boolean;
+    postFinanceProfile?: boolean;
     unsafe?: boolean;
   }> = {},
 ): AppApiProvisioningSession {
@@ -325,42 +353,50 @@ function stateSession(
           || options.postDiningTablesProfile === true
           || options.postMenuProfile === true
           || options.postOrdersRealtimeProfile === true
-          || options.postKdsProfile === true,
+          || options.postKdsProfile === true
+          || options.postFinanceProfile === true,
       );
       assert.equal(
         sql.includes("app_private.update_dining_table_layout"),
         options.postDiningTablesProfile === true
           || options.postMenuProfile === true
           || options.postOrdersRealtimeProfile === true
-          || options.postKdsProfile === true,
+          || options.postKdsProfile === true
+          || options.postFinanceProfile === true,
       );
       assert.equal(
         sql.includes("app_private.get_menu_catalog"),
         options.postMenuProfile === true
           || options.postOrdersRealtimeProfile === true
-          || options.postKdsProfile === true,
+          || options.postKdsProfile === true
+          || options.postFinanceProfile === true,
       );
       assert.equal(
         sql.includes("app_private.save_menu_catalog"),
         options.postMenuProfile === true
           || options.postOrdersRealtimeProfile === true
-          || options.postKdsProfile === true,
+          || options.postKdsProfile === true
+          || options.postFinanceProfile === true,
       );
       assert.equal(
         sql.includes("app_private.read_order"),
-        options.postOrdersRealtimeProfile === true || options.postKdsProfile === true,
+        options.postOrdersRealtimeProfile === true || options.postKdsProfile === true || options.postFinanceProfile === true,
       );
       assert.equal(
         sql.includes("app_private.persist_order_mutation"),
-        options.postOrdersRealtimeProfile === true || options.postKdsProfile === true,
+        options.postOrdersRealtimeProfile === true || options.postKdsProfile === true || options.postFinanceProfile === true,
       );
       assert.equal(
         sql.includes("app_private.recover_kds_events"),
-        options.postOrdersRealtimeProfile === true || options.postKdsProfile === true,
+        options.postOrdersRealtimeProfile === true || options.postKdsProfile === true || options.postFinanceProfile === true,
       );
       assert.equal(
         sql.includes("app_private.list_kds_tickets"),
-        options.postKdsProfile === true,
+        options.postKdsProfile === true || options.postFinanceProfile === true,
+      );
+      assert.equal(
+        sql.includes("app_private.read_cash_register_operational_report"),
+        options.postFinanceProfile === true,
       );
       events.push("state:target");
       return result([{ ...target, safe: options.unsafe !== true }]);
@@ -395,6 +431,10 @@ function stateSession(
     }
     if (sql.includes("POST_KDS_REQUIRED_OBJECT_MISSING")) {
       events.push("state:post-kds-audit");
+      return emptyResult();
+    }
+    if (sql.includes("POST_FINANCE_REQUIRED_OBJECT_MISSING")) {
+      events.push("state:post-finance-audit");
       return emptyResult();
     }
     if (sql.includes("pg_stat_activity")) {

@@ -1,13 +1,20 @@
 import {
+  parseCashRegisterOperationalReportV1,
+  parseCashRegisterReportQueryV1,
   parseCashRegisterSummaryV1,
   parseCloseCashRegisterCommandV1,
   parseCollectPaymentCommandV1,
+  parseCheckoutOrderQueryV1,
+  parseCheckoutOrderSummaryV1,
   parseOpenCashRegisterCommandV1,
   parsePaymentCollectionSummaryV1,
   type BranchScope,
+  type CashRegisterOperationalReportV1,
+  type CashRegisterReportQueryV1,
   type CashRegisterSummaryV1,
   type CloseCashRegisterCommandV1,
   type CollectPaymentCommandV1,
+  type CheckoutOrderSummaryV1,
   type OpenCashRegisterCommandV1,
   type PaymentCollectionSummaryV1,
 } from "@super-restaurant/shared-types";
@@ -38,6 +45,7 @@ import {
 import { encodeOrderRecord } from "./persistence/order-persistence-codec.js";
 
 const readRegisterSql = "select app_private.read_cash_register($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid) as result";
+const readRegisterReportSql = "select app_private.read_cash_register_operational_report($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid) as result";
 const openRegisterSql = "select app_private.open_cash_register($1::uuid,$2::jsonb,$3::jsonb) as result";
 const collectPaymentSql = "select app_private.collect_simple_payment($1::uuid,$2::jsonb,$3::jsonb,$4::jsonb,$5::jsonb,$6::bigint,$7::bigint) as result";
 const closeRegisterSql = "select app_private.close_cash_register($1::uuid,$2::jsonb,$3::jsonb) as result";
@@ -69,12 +77,14 @@ export interface PersistPaymentInput {
 
 export type FinancialMutationResult<T> = T | "conflict" | "forbidden";
 export type FinancialReplayResult<T> = FinancialMutationResult<T> | "missing";
+export type FinancialReadResult<T> = FinancialReplayResult<T>;
 
 export interface FinancialPersistencePort {
   close(actorId: string, command: CloseCashRegisterCommandV1, register: CashRegister): Promise<FinancialMutationResult<CashRegisterSummaryV1>>;
   collect(actorId: string, input: PersistPaymentInput): Promise<FinancialMutationResult<PaymentCollectionSummaryV1>>;
   open(actorId: string, command: OpenCashRegisterCommandV1, register: CashRegister): Promise<FinancialMutationResult<CashRegisterSummaryV1>>;
   read(actorId: string, scope: BranchScope, cashRegisterSessionId: string, orderId?: string): Promise<StoredCashRegister | "missing">;
+  readReport(actorId: string, query: CashRegisterReportQueryV1): Promise<FinancialReadResult<CashRegisterOperationalReportV1>>;
   replayClose(actorId: string, command: CloseCashRegisterCommandV1): Promise<FinancialReplayResult<CashRegisterSummaryV1>>;
   replayCollect(actorId: string, command: CollectPaymentCommandV1): Promise<FinancialReplayResult<PaymentCollectionSummaryV1>>;
   replayOpen(actorId: string, command: OpenCashRegisterCommandV1): Promise<FinancialReplayResult<CashRegisterSummaryV1>>;
@@ -115,6 +125,31 @@ export class PostgresFinancialPersistenceAdapter implements FinancialPersistence
   ): Promise<FinancialMutationResult<CashRegisterSummaryV1>> {
     const raw = await this.call(openRegisterSql, [actorId, JSON.stringify(command), JSON.stringify(encodeCashRegisterRecord(register))]);
     return parseMutation(raw, parseCashRegisterSummaryV1);
+  }
+
+  public async readReport(
+    actorId: string,
+    query: CashRegisterReportQueryV1,
+  ): Promise<FinancialReadResult<CashRegisterOperationalReportV1>> {
+    const raw = await this.call(readRegisterReportSql, [
+      actorId,
+      query.scope.restaurantId,
+      query.scope.branchId,
+      query.registerId,
+      query.cashRegisterSessionId,
+      query.deviceId,
+    ]);
+    if (raw === null) return "missing";
+    const minimal = exactRecord(raw, ["status"]);
+    if (minimal !== undefined) {
+      const status = own(minimal, "status");
+      if (status === "conflict" || status === "forbidden") return status;
+    }
+    const report = parseCashRegisterOperationalReportV1(raw);
+    if (report === undefined || !sameScope(report.scope, query.scope)
+      || report.register.registerId !== query.registerId
+      || (query.cashRegisterSessionId !== null && report.register.cashRegisterSessionId !== query.cashRegisterSessionId)) throw unavailable();
+    return report;
   }
 
   public async collect(
@@ -201,13 +236,55 @@ export class FinancialService {
     return this.mutation(() => this.finances.open(actorId, command, register));
   }
 
+  public async report(principal: AuthenticatedPrincipal, input: unknown): Promise<CashRegisterOperationalReportV1> {
+    const query = parseCashRegisterReportQueryV1(input);
+    if (query === undefined) throw applicationError("request");
+    const actorId = await this.authorize(principal, query.scope, "cash-register.manage");
+    return this.readOperationalReport(actorId, query);
+  }
+
+  public async checkout(principal: AuthenticatedPrincipal, input: unknown): Promise<CheckoutOrderSummaryV1> {
+    const query = parseCheckoutOrderQueryV1(input);
+    if (query === undefined) throw applicationError("request");
+    const actorId = await this.authorize(principal, query.scope, "payments.collect");
+    const report = await this.readOperationalReport(actorId, query);
+    const storedOrder = await this.readOrder(actorId, query.scope, query.orderId);
+    const storedRegister = await this.readRegister(actorId, query.scope, query.cashRegisterSessionId, query.orderId);
+    const order = storedOrder.order;
+    const register = storedRegister.register;
+    if (report.register.cashRegisterSessionId !== query.cashRegisterSessionId
+      || report.register.version !== storedRegister.version || register.registerId !== query.registerId
+      || register.status !== "open" || (order.status !== "open" && order.status !== "partially_paid")
+      || register.currency !== order.currency) throw applicationError("conflict");
+    let orderTotalMinor: number;
+    try { orderTotalMinor = calculateOrderAggregateTotals(order).total.amountMinor; } catch { throw applicationError("request"); }
+    const remainingBalanceMinor = orderTotalMinor - storedRegister.capturedAmountMinor;
+    if (!Number.isSafeInteger(remainingBalanceMinor) || remainingBalanceMinor <= 0) throw applicationError("conflict");
+    const summary = parseCheckoutOrderSummaryV1({
+      capturedAmountMinor: storedRegister.capturedAmountMinor,
+      cashRegisterSessionId: register.cashRegisterId,
+      cashRegisterVersion: storedRegister.version,
+      currency: order.currency,
+      nextLocalSequence: report.nextLocalSequence,
+      orderId: order.orderId,
+      orderStatus: order.status,
+      orderTotalMinor,
+      orderVersion: storedOrder.version,
+      remainingBalanceMinor,
+      schemaVersion: 1,
+      scope: query.scope,
+    });
+    if (summary === undefined) throw unavailable();
+    return summary;
+  }
+
   public async collect(principal: AuthenticatedPrincipal, input: unknown): Promise<PaymentCollectionSummaryV1> {
     const command = parseCollectPaymentCommandV1(input);
     if (command === undefined) throw applicationError("request");
     const actorId = await this.authorize(principal, command.scope, "payments.collect");
     const replay = await this.replay(() => this.finances.replayCollect(actorId, command));
     if (replay !== "missing") return replay;
-    const storedOrder = await this.readOrder(actorId, command);
+    const storedOrder = await this.readOrder(actorId, command.scope, command.orderId);
     const storedRegister = await this.readRegister(actorId, command.scope, command.cashRegisterSessionId, command.orderId);
     if (storedRegister.version !== command.cashRegisterExpectedVersion || storedOrder.version !== command.orderExpectedVersion) {
       throw applicationError("conflict");
@@ -305,15 +382,27 @@ export class FinancialService {
     return this.mutation(() => this.finances.close(actorId, command, register));
   }
 
-  private async readOrder(actorId: string, command: CollectPaymentCommandV1) {
+  private async readOrder(actorId: string, scope: BranchScope, orderId: string) {
     try {
-      const stored = await this.orders.read(actorId, command.scope, command.orderId);
+      const stored = await this.orders.read(actorId, scope, orderId);
       if (stored === "missing") throw applicationError("not_found");
       return stored;
     } catch (error: unknown) {
       if (error instanceof FinancialApplicationError) throw error;
       throw unavailable();
     }
+  }
+
+  private async readOperationalReport(
+    actorId: string,
+    query: CashRegisterReportQueryV1,
+  ): Promise<CashRegisterOperationalReportV1> {
+    let result: FinancialReadResult<CashRegisterOperationalReportV1>;
+    try { result = await this.finances.readReport(actorId, query); } catch { throw unavailable(); }
+    if (result === "missing") throw applicationError("not_found");
+    if (result === "forbidden") throw applicationError("authorization");
+    if (result === "conflict") throw applicationError("conflict");
+    return result;
   }
 
   private async readRegister(actorId: string, scope: BranchScope, id: string, orderId?: string): Promise<StoredCashRegister> {

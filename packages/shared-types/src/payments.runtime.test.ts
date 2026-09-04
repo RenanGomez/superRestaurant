@@ -1,7 +1,11 @@
 import {
   parseCashRegisterSummaryV1,
+  parseCashRegisterOperationalReportV1,
+  parseCashRegisterReportQueryV1,
   parseCloseCashRegisterCommandV1,
   parseCollectPaymentCommandV1,
+  parseCheckoutOrderQueryV1,
+  parseCheckoutOrderSummaryV1,
   parseOpenCashRegisterCommandV1,
   parsePaymentCollectionSummaryV1,
 } from "./payments.js";
@@ -88,3 +92,24 @@ const payment = {
 };
 expect(parsePaymentCollectionSummaryV1(payment) === undefined, "paid summary rejects remaining balance");
 expect(parsePaymentCollectionSummaryV1({ ...payment, remainingBalanceMinor: 0 }) !== undefined, "paid summary parses at zero balance");
+
+const reportQuery = { cashRegisterSessionId, deviceId: audit.deviceId, registerId, schemaVersion: 1, scope };
+expect(parseCashRegisterReportQueryV1(reportQuery) !== undefined, "cash-register report query parses");
+expect(parseCashRegisterReportQueryV1({ ...reportQuery, extra: true }) === undefined, "cash-register report query rejects extras");
+const operationalReport = {
+  cardManualCapturedMinor: 2_500, cashCapturedMinor: 10_000, nextLocalSequence: 8, paymentCount: 2,
+  register, schemaVersion: 1, scope, totalCapturedMinor: 12_500,
+};
+expect(parseCashRegisterOperationalReportV1(operationalReport) !== undefined, "operational cash-register report parses");
+expect(parseCashRegisterOperationalReportV1({ ...operationalReport, totalCapturedMinor: 12_499 }) === undefined, "tender totals must balance");
+
+const checkoutQuery = { cashRegisterSessionId, deviceId: audit.deviceId, orderId, registerId, schemaVersion: 1, scope };
+expect(parseCheckoutOrderQueryV1(checkoutQuery) !== undefined, "checkout query parses");
+const checkout = {
+  capturedAmountMinor: 2_500, cashRegisterSessionId, cashRegisterVersion: 2, currency: "MXN",
+  nextLocalSequence: 8, orderId, orderStatus: "partially_paid", orderTotalMinor: 12_500,
+  orderVersion: 4, remainingBalanceMinor: 10_000, schemaVersion: 1, scope,
+};
+expect(parseCheckoutOrderSummaryV1(checkout) !== undefined, "checkout summary parses");
+expect(parseCheckoutOrderSummaryV1({ ...checkout, remainingBalanceMinor: 9_999 }) === undefined, "checkout balance must reconcile");
+expect(parseCheckoutOrderSummaryV1({ ...checkout, orderStatus: "open" }) === undefined, "open order cannot report prior captures");

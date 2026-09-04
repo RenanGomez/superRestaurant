@@ -24,6 +24,8 @@
     "src/lib/branch-selection.test.ts",
     "src/lib/menu-catalog.ts",
     "src/lib/menu-catalog.test.ts",
+    "src/lib/finance.ts",
+    "src/lib/finance.test.ts",
     "src/proxy.ts",
     "src/proxy.test.ts",
     "src/test-doubles/supabase-ssr.ts"

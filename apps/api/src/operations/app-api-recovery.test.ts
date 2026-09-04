@@ -29,6 +29,10 @@ const postKdsAuditSql = readFileSync(
   new URL("../../../../supabase/tests/tenancy_memberships_post_kds.sql", import.meta.url),
   "utf8",
 );
+const postFinanceAuditSql = readFileSync(
+  new URL("../../../../supabase/tests/tenancy_memberships_post_finance.sql", import.meta.url),
+  "utf8",
+);
 const database: DatabaseConfig = Object.freeze({
   caCertificate: "TEST CA",
   connectionString: "postgresql://user:password@host.example/postgres",
@@ -101,10 +105,11 @@ test("accepts only the pinned post-dining-zones catalog for its explicit profile
   assert.ok(events.includes("verify:precheck"));
 });
 
-test("accepts the pinned post-orders and post-KDS catalogs for their explicit profiles", async () => {
+test("accepts the pinned post-orders, post-KDS, and post-finance catalogs for their explicit profiles", async () => {
   for (const [auditProfile, auditSql] of [
     ["post_orders_realtime_v1", postOrdersRealtimeAuditSql],
     ["post_kds_v1", postKdsAuditSql],
+    ["post_finance_v1", postFinanceAuditSql],
   ] as const) {
     const events: string[] = [];
     await recoverAppApi({
@@ -266,7 +271,7 @@ function recoverySession(
     sessionCounts?: readonly number[];
     terminateDenied?: boolean;
     unsafeTarget?: boolean;
-    auditProfile?: "post_orders_realtime_v1" | "post_kds_v1";
+    auditProfile?: "post_orders_realtime_v1" | "post_kds_v1" | "post_finance_v1";
   }>,
 ): AppApiProvisioningSession {
   const label = options.label ?? "recovery";
@@ -282,7 +287,11 @@ function recoverySession(
     if (sql.includes("roles.oid::text as oid")) {
       assert.equal(
         sql.includes("app_private.list_kds_tickets"),
-        options.auditProfile === "post_kds_v1",
+        options.auditProfile === "post_kds_v1" || options.auditProfile === "post_finance_v1",
+      );
+      assert.equal(
+        sql.includes("app_private.read_cash_register_operational_report"),
+        options.auditProfile === "post_finance_v1",
       );
       events.push(`${label}:target-${disabled ? "disabled" : "enabled"}`);
       return result([{
@@ -331,6 +340,7 @@ function recoverySession(
       || sql.includes("POST_DINING_CATALOG_REQUIRED_OBJECT_MISSING")
       || sql.includes("POST_ORDERS_REQUIRED_OBJECT_MISSING")
       || sql.includes("POST_KDS_REQUIRED_OBJECT_MISSING")
+      || sql.includes("POST_FINANCE_REQUIRED_OBJECT_MISSING")
     ) {
       events.push(`${label}:precheck`);
       return emptyResult();
