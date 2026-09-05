@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import type { DiningTableV1 } from "@super-restaurant/shared-types";
 
 import { gateMobileAuth, type MobileAuthGate } from "../auth-gate.js";
 import type { MobileAuthPort } from "../auth-port.js";
@@ -28,11 +29,24 @@ import {
   type MobileState,
   type MobileTab,
 } from "../mobile-state.js";
+import {
+  initialOrderDraftState,
+  reduceOrderDraft,
+  type OrderDraftEvent,
+  type OrderDraftState,
+} from "../order-draft.js";
+import {
+  buildOrderDraftHandoff,
+  disconnectedOrderDraftIntegration,
+  offerOrderDraft,
+  type OrderDraftIntegration,
+} from "../order-intents.js";
 import { readInitialSession, revalidateAccess } from "../revalidation.js";
 import { endMobileSession } from "../sign-out.js";
 import { BranchScreen } from "./branch-screen.js";
 import { ActionButton, Banner, Caption, LoadingBlock, StateBlock, Subheading, useFocusRing } from "./components.js";
 import { MenuScreen } from "./menu-screen.js";
+import { OrderDraftScreen } from "./order-draft-screen.js";
 import { SignInScreen } from "./sign-in-screen.js";
 import { TablesScreen } from "./tables-screen.js";
 import { ShiftScreen } from "./shift-screen.js";
@@ -40,12 +54,20 @@ import { colors, radius, spacing, touchTarget, typography } from "./theme.js";
 
 const TAB_LABELS: Readonly<Record<MobileTab, string>> = Object.freeze({ menu: "Menú", tables: "Mesas" });
 
-export function App({ auth, config, lifecycle }: {
+export function App({ auth, config, lifecycle, orderDraftIntegration = disconnectedOrderDraftIntegration }: {
   readonly auth: MobileAuthPort;
   readonly config: MobileConfig;
   readonly lifecycle: MobileLifecyclePort;
+  /**
+   * Who performs the Order writes. The default accepts the draft and reports
+   * that nothing was sent, which is the truth of this slice: the composer is
+   * built, the server-side integration is not.
+   */
+  readonly orderDraftIntegration?: OrderDraftIntegration;
 }): React.JSX.Element {
   const [state, dispatch] = useReducer(reduceMobileState, initialMobileState);
+  const [draft, dispatchDraft] = useReducer(reduceOrderDraft, initialOrderDraftState);
+  const [draftCategory, setDraftCategory] = useState<string | undefined>(undefined);
   // Every conversation with the identity provider goes through the gate, so a
   // late notification, a late session read or a listener the provider never
   // released cannot revive a session this device already closed.
@@ -221,7 +243,9 @@ export function App({ auth, config, lifecycle }: {
 
   useEffect(() => {
     if (!operationallyReadable || token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
-    if (state.tab !== "menu" || state.menu.status !== "idle") return undefined;
+    // The catalog also backs the draft composer, which lives inside the tables
+    // tab, so it is read whenever a table is selected as well.
+    if ((state.tab !== "menu" && draft.tableId === undefined) || state.menu.status !== "idle") return undefined;
     const target: MobileBranchScope = { branchId, restaurantId };
     let active = true;
     dispatch({ scope: target, type: "menuLoading" });
@@ -234,13 +258,75 @@ export function App({ auth, config, lifecycle }: {
         else dispatch({ failure, scope: target, type: "menuFailed" });
       });
     return (): void => { active = false; };
-  }, [branchId, config, operationallyReadable, restaurantId, state.menu.status, state.tab, token]);
+  }, [branchId, config, draft.tableId, operationallyReadable, restaurantId, state.menu.status, state.tab, token]);
+
+  // A draft belongs to exactly one operator, branch and shift. When any of them
+  // changes — sign-out, another operator, another branch, another shift, or an
+  // access the server revoked — the draft is dropped in the same transition, so
+  // nothing composed for one context can be sent in another.
+  const draftContext = `${state.session?.userId ?? ""}|${restaurantId ?? ""}|${branchId ?? ""}|${state.shift?.shiftId ?? ""}`;
+  const previousDraftContext = useRef(draftContext);
+  useEffect(() => {
+    if (previousDraftContext.current === draftContext) return;
+    previousDraftContext.current = draftContext;
+    dispatchDraft({ type: "contextReleased" });
+    setDraftCategory(undefined);
+  }, [draftContext]);
 
   const retry = useCallback((tab: MobileTab): void => {
     if (branchId === undefined || restaurantId === undefined) return;
     const target: MobileBranchScope = { branchId, restaurantId };
     dispatch(tab === "tables" ? { scope: target, type: "layoutReset" } : { scope: target, type: "menuReset" });
   }, [branchId, restaurantId]);
+
+  const retryMenu = useCallback((): void => {
+    if (branchId === undefined || restaurantId === undefined) return;
+    dispatch({ scope: { branchId, restaurantId }, type: "menuReset" });
+  }, [branchId, restaurantId]);
+
+  /**
+   * Hands the finished draft to the integration. It builds the intents, offers
+   * them and reports the outcome; it never performs a request itself, and the
+   * default integration performs none either. The ref makes a double tap a
+   * single hand-over even before React re-renders with `sending`.
+   */
+  const submitting = useRef(false);
+  const submitDraft = useCallback((): void => {
+    const tableId = draft.tableId;
+    const catalog = state.menu.value?.catalog ?? null;
+    if (submitting.current || tableId === undefined || branchId === undefined || restaurantId === undefined) return;
+    if (draft.lines.length === 0 || draft.composer !== undefined || draft.submission.status === "sending") return;
+
+    submitting.current = true;
+    dispatchDraft({ type: "submissionStarted" });
+    const handoff = catalog === null
+      ? undefined
+      : buildOrderDraftHandoff({
+        currency: catalog.currency,
+        knownProductIds: new Set(catalog.products.filter((product) => product.active).map((p) => p.productId)),
+        lines: draft.lines,
+        scope: { branchId, restaurantId },
+        tableId,
+      });
+    if (handoff === undefined) {
+      submitting.current = false;
+      dispatchDraft({ failure: "stale", type: "submissionFailed" });
+      return;
+    }
+    offerOrderDraft(handoff, orderDraftIntegration);
+    void orderDraftIntegration.submit(handoff)
+      .then((failure) => {
+        dispatchDraft(failure === undefined
+          ? { type: "submissionSucceeded" }
+          : { failure, type: "submissionFailed" });
+      })
+      .catch(() => { dispatchDraft({ failure: "unavailable", type: "submissionFailed" }); })
+      .finally(() => { submitting.current = false; });
+  }, [branchId, draft, orderDraftIntegration, restaurantId, state.menu.value]);
+
+  const selectTable = useCallback((table: DiningTableV1): void => {
+    dispatchDraft({ tableId: table.tableId, type: "tableSelected", zoneId: table.zoneId });
+  }, []);
 
   const screen = mobileScreen(state);
   const notice = state.notice === undefined ? undefined : noticeMessage(state.notice);
@@ -324,10 +410,17 @@ export function App({ auth, config, lifecycle }: {
 
     <View style={styles.content}>
       <WorkspaceContent
+        draft={draft}
+        draftCategory={draftCategory}
         menu={state.menu}
         layout={state.layout}
+        onDraftCategory={setDraftCategory}
+        onDraftEvent={dispatchDraft}
+        onRetryMenu={retryMenu}
         onRetryRead={retry}
         onRetryRevalidation={() => { dispatch({ type: "revalidationStarted" }); }}
+        onSelectTable={selectTable}
+        onSubmitDraft={submitDraft}
         revalidating={state.revalidating}
         revalidationFailure={state.revalidationFailure}
         tab={state.tab}
@@ -376,11 +469,33 @@ function WorkspaceTab({ onPress, selected, tab }: {
  * complete — the branch screens are not rendered at all. There is nothing left
  * to leak: the reducer already dropped the loaded layout and menu.
  */
-function WorkspaceContent({ layout, menu, onRetryRead, onRetryRevalidation, revalidating, revalidationFailure, tab }: {
+function WorkspaceContent({
+  draft,
+  draftCategory,
+  layout,
+  menu,
+  onDraftCategory,
+  onDraftEvent,
+  onRetryMenu,
+  onRetryRead,
+  onRetryRevalidation,
+  onSelectTable,
+  onSubmitDraft,
+  revalidating,
+  revalidationFailure,
+  tab,
+}: {
+  readonly draft: OrderDraftState;
+  readonly draftCategory: string | undefined;
   readonly layout: MobileState["layout"];
   readonly menu: MobileState["menu"];
+  readonly onDraftCategory: (categoryId: string) => void;
+  readonly onDraftEvent: (event: OrderDraftEvent) => void;
+  readonly onRetryMenu: () => void;
   readonly onRetryRead: (tab: MobileTab) => void;
   readonly onRetryRevalidation: () => void;
+  readonly onSelectTable: (table: DiningTableV1) => void;
+  readonly onSubmitDraft: () => void;
   readonly revalidating: boolean;
   readonly revalidationFailure: MobileFailure | undefined;
   readonly tab: MobileTab;
@@ -398,9 +513,45 @@ function WorkspaceContent({ layout, menu, onRetryRead, onRetryRevalidation, reva
       title="No se pudo revalidar tu acceso"
     />;
   }
-  return tab === "tables"
-    ? <TablesScreen layout={layout} onRetry={() => { onRetryRead("tables"); }} />
-    : <MenuScreen menu={menu} onRetry={() => { onRetryRead("menu"); }} />;
+  if (tab === "menu") return <MenuScreen menu={menu} onRetry={() => { onRetryRead("menu"); }} />;
+
+  if (draft.tableId === undefined) {
+    return <TablesScreen
+      layout={layout}
+      onRetry={() => { onRetryRead("tables"); }}
+      onSelectTable={onSelectTable}
+      selectedTableId={undefined}
+    />;
+  }
+
+  // The composer only exists for a table the layout still publishes: the plan
+  // is authoritative, and a table that disappeared from it is not composed for.
+  if (layout.status === "idle" || layout.status === "loading") {
+    return <LoadingBlock label="Cargando mesas de la sucursal…" />;
+  }
+  const located = layout.value?.zones
+    .flatMap((zone) => zone.tables.map((table) => ({ table, zoneName: zone.name })))
+    .find((candidate) => candidate.table.tableId === draft.tableId);
+  if (located === undefined) {
+    return <StateBlock
+      action={{ label: "Volver a mesas", onPress: () => { onDraftEvent({ type: "tableReleased" }); } }}
+      description="Esta mesa ya no aparece en el plano de la sucursal. El borrador local no puede seguir asociado a ella."
+      title="La mesa ya no está disponible"
+    />;
+  }
+
+  return <OrderDraftScreen
+    category={draftCategory}
+    draft={draft}
+    menu={menu}
+    onBackToTables={() => { onDraftEvent({ type: "tableReleased" }); }}
+    onCategorySelected={onDraftCategory}
+    onEvent={onDraftEvent}
+    onRetryMenu={onRetryMenu}
+    onSubmit={onSubmitDraft}
+    table={located.table}
+    zoneName={located.zoneName}
+  />;
 }
 
 const styles = StyleSheet.create({
