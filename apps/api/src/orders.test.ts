@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   parseAddOrderItemCommandV1,
   parseBranchScope,
+  parseCancelOrderItemCommandV1,
   parseCreateOrderCommandV1,
   parseCreateOrderCommandV2,
   parseKdsCursorV1,
@@ -17,7 +18,7 @@ import {
   parseTransitionOrderItemCommandV1,
   type MenuCatalogStateV1,
 } from "@super-restaurant/shared-types";
-import { createOrder } from "@super-restaurant/domain";
+import { createOrder, type OrderMutation } from "@super-restaurant/domain";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService, type MembershipLookupPort } from "./auth/membership-authorization.js";
@@ -171,6 +172,7 @@ test("PostgreSQL order adapter fails closed for ambiguous, malformed, or forbidd
 
 test("order service creates, snapshots catalog items, transitions, and only notifies fresh KDS events", async () => {
   const notifications: string[] = [];
+  let cancellationMutation: OrderMutation | undefined;
   const storedMutation = domainMutation;
   let storedOrder = storedMutation.order;
   let storedVersion = 1;
@@ -179,6 +181,9 @@ test("order service creates, snapshots catalog items, transitions, and only noti
     persist: async (_actorId, _expectedVersion, mutation) => {
       storedOrder = mutation.order;
       storedVersion += 1;
+      if (mutation.auditEvent.operation === "order_item.state_changed" && mutation.auditEvent.to === "cancelled") {
+        cancellationMutation = mutation;
+      }
       return { kdsEvent: mutation.auditEvent.operation === "order.created" ? null : kdsEvent, order: mutation.order, status: "saved", version: storedVersion };
     },
     read: async () => ({ order: storedOrder, version: storedVersion }),
@@ -209,6 +214,36 @@ test("order service creates, snapshots catalog items, transitions, and only noti
   assert.equal(added.version, 2);
   assert.equal(storedOrder.items[0]?.snapshot.unitPrice.amountMinor, 12_500);
 
+  const pendingOrder = storedOrder;
+  let pendingCancellation: OrderMutation | undefined;
+  const pendingOrders: OrderPersistencePort = {
+    listKdsTickets: async () => ticketList,
+    persist: async (_actorId, expectedVersion, mutation) => {
+      pendingCancellation = mutation;
+      return { kdsEvent, order: mutation.order, status: "saved", version: expectedVersion + 1 };
+    },
+    read: async () => ({ order: pendingOrder, version: 2 }),
+    recoverKds: async () => eventPage,
+  };
+  const pendingCancelCommand = parseCancelOrderItemCommandV1({
+    ...audit,
+    eventId: randomUUID(),
+    expectedVersion: 2,
+    idempotencyKey: "orders-test-cancel-pending",
+    orderId,
+    orderItemId,
+    reason: "Captura duplicada",
+    schemaVersion: 1,
+    scope,
+  });
+  if (pendingCancelCommand === undefined) throw new Error("TEST_PENDING_CANCEL_COMMAND_INVALID");
+  assert.equal((await serviceFor(["waiter"], pendingOrders).cancelItem(principal, pendingCancelCommand)).version, 3);
+  assert.equal(pendingCancellation?.order.items[0]?.cancellationAudit?.authorization, undefined);
+  await assertCode(serviceFor(["supervisor"], {
+    ...pendingOrders,
+    read: async () => ({ order: { ...pendingOrder, status: "partially_paid" }, version: 2 }),
+  }).cancelItem(principal, pendingCancelCommand), "conflict");
+
   const itemTransition = parseTransitionOrderItemCommandV1({
     ...audit,
     eventId: "fa859575-a48f-47d0-bc2e-e3520723968a",
@@ -223,6 +258,38 @@ test("order service creates, snapshots catalog items, transitions, and only noti
   if (itemTransition === undefined) throw new Error("TEST_TRANSITION_COMMAND_INVALID");
   assert.equal((await service.transitionItem(principal, itemTransition)).version, 3);
   assert.equal(notifications.length, 2);
+
+  const cancelCommand = parseCancelOrderItemCommandV1({
+    ...audit,
+    eventId: randomUUID(),
+    expectedVersion: 3,
+    idempotencyKey: "orders-test-cancel-sent",
+    orderId,
+    orderItemId,
+    reason: "El cliente cambió su selección",
+    schemaVersion: 1,
+    scope,
+  });
+  if (cancelCommand === undefined) throw new Error("TEST_CANCEL_COMMAND_INVALID");
+  await assertCode(serviceFor(["waiter"], orders).cancelItem(principal, cancelCommand), "authorization");
+  const cancelled = await serviceFor(["supervisor"], orders, {
+    notify: async (event) => { notifications.push(event.eventId); },
+  }).cancelItem(principal, cancelCommand);
+  assert.equal(cancelled.version, 4);
+  assert.equal(storedOrder.items[0]?.status, "cancelled");
+  assert.equal(storedOrder.items[0]?.cancellationAudit?.reason, "El cliente cambió su selección");
+  assert.equal(storedOrder.items[0]?.cancellationAudit?.authorization?.actorId, principal.actorId);
+  assert.equal(notifications.length, 3);
+  if (cancellationMutation === undefined) throw new Error("TEST_CANCELLATION_MUTATION_MISSING");
+  const cancellationCalls: string[] = [];
+  const cancellationAdapter = new PostgresOrderPersistenceAdapter({
+    query: async (sql) => {
+      cancellationCalls.push(sql);
+      return { rows: [{ result: { status: "conflict" } }] };
+    },
+  });
+  assert.deepEqual(await cancellationAdapter.persist(principal.actorId, 3, cancellationMutation), { status: "conflict" });
+  assert.match(cancellationCalls[0] ?? "", /app_private\.persist_order_item_cancellation/u);
   assert.deepEqual(await service.recoverKds(principal, subscription, initialCursor, "50"), eventPage);
   assert.deepEqual(await service.listKdsTickets(principal, subscription), ticketList);
 });
@@ -290,7 +357,7 @@ test("order service enforces permission, optimistic version, and domain transiti
 });
 
 function serviceFor(
-  roles: readonly ("manager" | "viewer")[],
+  roles: readonly ("manager" | "supervisor" | "viewer" | "waiter")[],
   orders: OrderPersistencePort,
   notifications: RealtimeNotificationPort = { notify: async () => undefined },
 ): OrderService {

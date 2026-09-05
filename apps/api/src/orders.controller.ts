@@ -46,6 +46,12 @@ export class OrdersController {
     return this.map(() => this.orders.transitionItem(getAuthenticatedPrincipal(request), body));
   }
 
+  @Post("orders/items/cancel")
+  @Header("Cache-Control", "private, no-store")
+  public cancelItem(@Req() request: unknown, @Body() body: unknown): Promise<OrderMutationSummaryV1> {
+    return this.map(() => this.orders.cancelItem(getAuthenticatedPrincipal(request), body));
+  }
+
   @Get("kds/events")
   @Header("Cache-Control", "private, no-store")
   public recoverKds(

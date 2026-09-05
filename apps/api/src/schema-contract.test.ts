@@ -69,6 +69,10 @@ const operationalOrdersMigration = readFileSync(
   new URL("../../../supabase/migrations/20260905000200_link_operational_shifts_to_orders.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
+const orderItemCancellationMigration = readFileSync(
+  new URL("../../../supabase/migrations/20260905000300_enable_order_item_cancellations.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
 const financialCatalogAudit = readFileSync(
   new URL("../../../supabase/tests/cash_registers_simple_payments_catalog.sql", import.meta.url),
   "utf8",
@@ -169,6 +173,19 @@ test("operational order creation is additive, atomic, scoped and server-only", (
   assert.match(operationalOrdersMigration, /grant execute on function app_private\.list_active_table_orders\(uuid,uuid,uuid,uuid\) to app_api/u);
   assert.doesNotMatch(operationalOrdersMigration, /grant .*order_operational_shifts.* to (anon|authenticated|service_role)/u);
   assert.doesNotMatch(operationalOrdersMigration, /alter table app\.orders/u);
+});
+
+test("order item cancellation is atomic, server-authorized, audited and recoverable by KDS", () => {
+  assert.match(orderItemCancellationMigration, /create function app_private\.persist_order_item_cancellation/u);
+  assert.match(orderItemCancellationMigration, /p_item_status = 'pending'[\s\S]*'cashier','waiter'/u);
+  assert.match(orderItemCancellationMigration, /p_item_status in \('sent','preparing','ready'\)[\s\S]*'supervisor'/u);
+  assert.match(orderItemCancellationMigration, /v_current\.status not in \('draft', 'open'\)/u);
+  assert.match(orderItemCancellationMigration, /p_audit -> 'authorization' ->> 'actorid' <> p_actor_id::text/u);
+  assert.match(orderItemCancellationMigration, /insert into app\.order_audit_events/u);
+  assert.match(orderItemCancellationMigration, /insert into app\.kds_events/u);
+  assert.match(orderItemCancellationMigration, /'status', 'cancelled'/u);
+  assert.match(orderItemCancellationMigration, /grant execute on function app_private\.persist_order_item_cancellation\(uuid,bigint,jsonb,jsonb\) to app_api/u);
+  assert.doesNotMatch(orderItemCancellationMigration, /grant execute[\s\S]*to (anon|authenticated|service_role)/u);
 });
 
 test("product migration is independent from the ADR-010 spike and models exact historical scope", () => {

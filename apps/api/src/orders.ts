@@ -1,5 +1,6 @@
 import {
   parseAddOrderItemCommandV1,
+  parseCancelOrderItemCommandV1,
   parseCreateOrderCommandV1,
   parseCreateOrderCommandV2,
   parseKdsCursorV1,
@@ -25,6 +26,7 @@ import {
 import {
   Money,
   addOrderItem,
+  cancelOrderItem,
   createMenuProductPriceSnapshot,
   createOrder,
   transitionOrderItemStatus,
@@ -48,6 +50,7 @@ import {
 
 const readOrderSql = "select app_private.read_order($1::uuid, $2::uuid, $3::uuid, $4::uuid) as result";
 const persistOrderSql = "select app_private.persist_order_mutation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
+const cancelOrderItemSql = "select app_private.persist_order_item_cancellation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
 const createOperationalOrderSql = "select app_private.create_operational_order($1::uuid, $2::uuid, $3::jsonb, $4::jsonb) as result";
 const recoverKdsSql = "select app_private.recover_kds_events($1::uuid, $2::uuid, $3::uuid, $4::text, $5::bigint, $6::integer) as result";
 const listKdsTicketsSql = "select app_private.list_kds_tickets($1::uuid, $2::uuid, $3::uuid, $4::text) as result";
@@ -138,8 +141,10 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
     const encodedOrder = encodeOrderRecord(mutation.order);
     const encodedAudit = encodeOrderAuditEventRecord(mutation.auditEvent);
     if (operationalShiftId !== undefined && expectedVersion !== 0) throw unavailable();
+    const isCancellation = mutation.auditEvent.operation === "order_item.state_changed"
+      && mutation.auditEvent.to === "cancelled";
     const result = operationalShiftId === undefined
-      ? await this.database.query(persistOrderSql, [
+      ? await this.database.query(isCancellation ? cancelOrderItemSql : persistOrderSql, [
         actorId,
         expectedVersion,
         JSON.stringify(encodedOrder),
@@ -283,6 +288,40 @@ export class OrderService {
     }
   }
 
+  public async cancelItem(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
+    const command = parseCancelOrderItemCommandV1(input);
+    if (command === undefined) throw applicationError("request");
+    const readerId = await this.authorize(principal, command.scope, "orders.read");
+    const stored = await this.readExact(readerId, command.scope, command.orderId, command.expectedVersion);
+    if (stored.order.status !== "draft" && stored.order.status !== "open") {
+      throw applicationError("conflict");
+    }
+    const item = stored.order.items.find((candidate) => candidate.orderItemId === command.orderItemId);
+    if (item === undefined || !["pending", "sent", "preparing", "ready"].includes(item.status)) {
+      throw applicationError("request");
+    }
+    const sensitive = item.status !== "pending";
+    const actorId = await this.authorize(
+      principal,
+      command.scope,
+      sensitive ? "orders.cancel.sent" : "orders.cancel.pending",
+    );
+    try {
+      return await this.persist(actorId, command.expectedVersion, cancelOrderItem(
+        stored.order,
+        command.orderItemId,
+        {
+          ...auditContext(command, actorId),
+          reason: command.reason,
+          ...(sensitive ? { authorization: { actorId, approved: true as const } } : {}),
+        },
+      ));
+    } catch (error: unknown) {
+      if (error instanceof OrderApplicationError) throw error;
+      throw applicationError("request");
+    }
+  }
+
   public async recoverKds(
     principal: AuthenticatedPrincipal,
     subscriptionInput: unknown,
@@ -375,7 +414,7 @@ export class OrderService {
   private async authorize(
     principal: AuthenticatedPrincipal,
     scope: BranchScope,
-    permission: "kds.read" | "kds.transition" | "orders.create" | "orders.update",
+    permission: "kds.read" | "kds.transition" | "orders.cancel.pending" | "orders.cancel.sent" | "orders.create" | "orders.read" | "orders.update",
   ): Promise<string> {
     try { return (await this.authorization.authorizeBranch(principal, scope, permission)).principal.actorId; }
     catch { throw applicationError("authorization"); }

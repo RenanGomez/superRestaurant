@@ -88,6 +88,15 @@ export interface TransitionOrderItemCommandV1 extends OrderAuditInputV1 {
   readonly to: OrderItemForwardStatusV1;
 }
 
+export interface CancelOrderItemCommandV1 extends OrderAuditInputV1 {
+  readonly expectedVersion: number;
+  readonly orderId: string;
+  readonly orderItemId: string;
+  readonly reason: string;
+  readonly schemaVersion: typeof ORDER_COMMAND_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+}
+
 export interface OrderMutationSummaryV1 {
   readonly kdsEvent: import("./realtime.js").KdsEventV1 | null;
   readonly orderId: string;
@@ -231,6 +240,21 @@ export function parseTransitionOrderItemCommandV1(value: unknown): TransitionOrd
   return common === undefined || scope === undefined || orderId === undefined || orderItemId === undefined
     || expectedVersion === undefined || typeof to !== "string" || !(ORDER_ITEM_FORWARD_STATUSES as readonly string[]).includes(to)
     ? undefined : Object.freeze({ ...common, expectedVersion, orderId, orderItemId, schemaVersion: 1, scope, to: to as OrderItemForwardStatusV1 });
+}
+
+export function parseCancelOrderItemCommandV1(value: unknown): CancelOrderItemCommandV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion","scope","orderId","expectedVersion","orderItemId","reason","eventId","idempotencyKey","deviceId","occurredAt"]);
+  if (record === undefined || own(record,"schemaVersion") !== ORDER_COMMAND_SCHEMA_VERSION) return undefined;
+  const common = parseCommon(record);
+  const scope = parseScope(own(record,"scope"));
+  const orderId = uuid(own(record,"orderId"));
+  const orderItemId = uuid(own(record,"orderItemId"));
+  const expectedVersion = integer(own(record,"expectedVersion"),1,Number.MAX_SAFE_INTEGER);
+  const reason = text(own(record,"reason"),1,500);
+  return common === undefined || scope === undefined || orderId === undefined || orderItemId === undefined
+    || expectedVersion === undefined || reason === undefined
+    ? undefined
+    : Object.freeze({ ...common, expectedVersion, orderId, orderItemId, reason, schemaVersion: ORDER_COMMAND_SCHEMA_VERSION, scope });
 }
 
 function parseCommon(record: Readonly<Record<string, unknown>>): OrderAuditInputV1 | undefined {

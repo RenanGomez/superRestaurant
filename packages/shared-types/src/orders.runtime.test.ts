@@ -1,6 +1,7 @@
 import {
   parseActiveTableOrderListV1,
   parseAddOrderItemCommandV1,
+  parseCancelOrderItemCommandV1,
   parseCreateOrderCommandV1,
   parseCreateOrderCommandV2,
   parseOpenOrderCommandV1,
@@ -77,3 +78,8 @@ expect(parseActiveTableOrderListV1({...activeList,orders:[{...activeOrder,shiftI
 const sparseOrders:unknown[]=[];
 sparseOrders.length=1;
 expect(parseActiveTableOrderListV1({...activeList,orders:sparseOrders})===undefined,"sparse active order list fails closed");
+
+const cancellation={...common,expectedVersion:2,orderItemId:add.orderItemId,reason:"Producto equivocado"};
+expect(parseCancelOrderItemCommandV1(cancellation)!==undefined,"item cancellation with an explicit reason parses");
+expect(parseCancelOrderItemCommandV1({...cancellation,reason:" "})===undefined,"blank cancellation reason fails");
+expect(parseCancelOrderItemCommandV1({...cancellation,authorization:{approved:true}})===undefined,"client cannot supply authorization evidence");
