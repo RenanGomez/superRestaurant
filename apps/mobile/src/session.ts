@@ -10,13 +10,22 @@ export interface MobileSession {
 }
 
 /**
- * Supabase client options for this slice: the session lives in memory only.
- * No storage adapter is selected here, so nothing is written to the device and
- * the session ends when the app process ends.
+ * Supabase client options for this slice.
+ *
+ * `persistSession: false` and the absence of a `storage` adapter keep the whole
+ * session — access **and** refresh token — in process memory: nothing is written
+ * to the device, and closing the app ends the session. That is the storage
+ * decision still pending in `BACKEND_REQUESTS.md` (SR-MOB-001).
+ *
+ * `autoRefreshToken: true` is a different concern: while the app is open and in
+ * the foreground, the in-memory session renews itself instead of expiring in the
+ * middle of a shift. On React Native the ticker must be driven by the app
+ * lifecycle, so the adapter calls `startAutoRefresh`/`stopAutoRefresh` (see
+ * `src/supabase-auth.ts`).
  */
 export const MOBILE_AUTH_OPTIONS = Object.freeze({
   auth: Object.freeze({
-    autoRefreshToken: false,
+    autoRefreshToken: true,
     detectSessionInUrl: false,
     persistSession: false,
   }),

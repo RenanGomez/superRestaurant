@@ -6,8 +6,15 @@ import { MOBILE_AUTH_OPTIONS, MOBILE_SIGN_OUT_SCOPE, toMobileSession } from "./s
 
 /**
  * The single place that talks to Supabase Auth, with the publishable key only.
- * The session is held in memory (see `MOBILE_AUTH_OPTIONS`): this slice does
- * not choose a device storage adapter, so nothing is written to disk.
+ *
+ * The session is held in memory (see `MOBILE_AUTH_OPTIONS`): this slice does not
+ * choose a device storage adapter, so no token is ever written to disk. Token
+ * renewal is driven by the app lifecycle: `@supabase/supabase-js` 2.112.4
+ * exposes `auth.startAutoRefresh()`/`auth.stopAutoRefresh()` for exactly this
+ * React Native case, and this adapter is the only caller.
+ *
+ * Nothing here logs a token: failures are reduced to a coarse outcome before
+ * they reach the UI.
  */
 export function createMobileAuth(config: MobileConfig): MobileAuthPort {
   const client = createClient(config.supabaseUrl, config.supabasePublishableKey, MOBILE_AUTH_OPTIONS);
@@ -29,5 +36,7 @@ export function createMobileAuth(config: MobileConfig): MobileAuthPort {
       return error.status === 400 || error.status === 401 || error.status === 403 ? "rejected" : "unavailable";
     },
     signOut: async (): Promise<void> => { await client.auth.signOut({ scope: MOBILE_SIGN_OUT_SCOPE }); },
+    startAutoRefresh: async (): Promise<void> => { await client.auth.startAutoRefresh(); },
+    stopAutoRefresh: async (): Promise<void> => { await client.auth.stopAutoRefresh(); },
   });
 }

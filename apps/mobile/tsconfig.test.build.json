@@ -9,8 +9,13 @@
     "types": ["node"]
   },
   "include": [
+    "src/bundle-isolation.test.ts",
     "src/config.ts",
     "src/config.test.ts",
+    "src/lifecycle.ts",
+    "src/lifecycle.test.ts",
+    "src/supabase-auth.ts",
+    "src/supabase-auth.test.ts",
     "src/money.ts",
     "src/money.test.ts",
     "src/session.ts",
