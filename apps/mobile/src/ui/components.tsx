@@ -28,6 +28,25 @@ export function useReducedMotion(): boolean {
   return reduced;
 }
 
+/**
+ * Visible keyboard focus for pressable controls.
+ *
+ * `Pressable` only reports `pressed` to its style callback, and react-native-web
+ * removes the browser outline, so a focused button would otherwise show nothing.
+ * Tracking focus explicitly keeps the ring visible on every runtime that has a
+ * keyboard and costs nothing on a touch-only device.
+ */
+export function useFocusRing(): {
+  readonly focused: boolean;
+  readonly handlers: { readonly onBlur: () => void; readonly onFocus: () => void };
+} {
+  const [focused, setFocused] = useState(false);
+  return {
+    focused,
+    handlers: { onBlur: (): void => { setFocused(false); }, onFocus: (): void => { setFocused(true); } },
+  };
+}
+
 export function Heading({ children }: { readonly children: ReactNode }): React.JSX.Element {
   return <Text accessibilityRole="header" style={styles.heading}>{children}</Text>;
 }
@@ -57,6 +76,7 @@ export function ActionButton({ accessibilityHint, busy = false, disabled = false
   readonly tone?: "primary" | "secondary";
 }): React.JSX.Element {
   const inactive = disabled || busy;
+  const focus = useFocusRing();
   return <Pressable
     accessibilityLabel={label}
     accessibilityRole="button"
@@ -64,11 +84,12 @@ export function ActionButton({ accessibilityHint, busy = false, disabled = false
     {...(accessibilityHint === undefined ? {} : { accessibilityHint })}
     disabled={inactive}
     onPress={onPress}
+    {...focus.handlers}
     style={(state) => [
       styles.button,
       tone === "primary" ? styles.buttonPrimary : styles.buttonSecondary,
       inactive && styles.buttonInactive,
-      (state.pressed || isFocused(state)) && styles.buttonFocused,
+      (state.pressed || focus.focused) && styles.buttonFocused,
     ]}
   >
     <Text style={[styles.buttonLabel, tone === "primary" ? styles.buttonLabelPrimary : styles.buttonLabelSecondary]}>
@@ -121,15 +142,6 @@ export function Field({ label, ...input }: { readonly label: string } & TextInpu
       {...input}
     />
   </View>;
-}
-
-/**
- * Keyboard focus is reported by the runtimes that have a keyboard (web, TV);
- * on a touch-only runtime the flag is simply absent and only the pressed state
- * draws the ring.
- */
-function isFocused(state: Readonly<{ pressed: boolean }>): boolean {
-  return (state as Readonly<{ focused?: boolean }>).focused === true;
 }
 
 const styles = StyleSheet.create({

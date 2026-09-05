@@ -3,7 +3,17 @@ import type { BranchMembershipSummaryV1 } from "@super-restaurant/shared-types";
 
 import type { MobileBranchScope } from "../mobile-client.js";
 import { failureMessage, type MobileFailure, type MobileResource } from "../mobile-state.js";
-import { ActionButton, Banner, Body, Caption, Heading, LoadingBlock, StateBlock, Subheading } from "./components.js";
+import {
+  ActionButton,
+  Banner,
+  Body,
+  Caption,
+  Heading,
+  LoadingBlock,
+  StateBlock,
+  Subheading,
+  useFocusRing,
+} from "./components.js";
 import { colors, radius, spacing, touchTarget, typography } from "./theme.js";
 
 export function BranchScreen({ branchFailure, memberships, notice, onRetry, onSelect, onSignOut, pendingScope }: {
@@ -76,6 +86,7 @@ function MembershipRow({ busy, membership, onSelect, pending }: {
   readonly onSelect: (scope: MobileBranchScope) => void;
   readonly pending: boolean;
 }): React.JSX.Element {
+  const focus = useFocusRing();
   return <Pressable
     accessibilityHint="Revalida tu acceso con el servidor antes de abrir la sucursal"
     accessibilityLabel={`${membership.restaurantName}, ${membership.branchName}`}
@@ -83,7 +94,12 @@ function MembershipRow({ busy, membership, onSelect, pending }: {
     accessibilityState={{ busy: pending, disabled: busy }}
     disabled={busy}
     onPress={() => { onSelect({ branchId: membership.scope.branchId, restaurantId: membership.scope.restaurantId }); }}
-    style={(state) => [styles.row, state.pressed && styles.rowPressed, busy && !pending && styles.rowInactive]}
+    {...focus.handlers}
+    style={(state) => [
+      styles.row,
+      (state.pressed || focus.focused) && styles.rowPressed,
+      busy && !pending && styles.rowInactive,
+    ]}
   >
     <View style={styles.rowText}>
       <Subheading>{membership.restaurantName}</Subheading>
