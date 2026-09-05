@@ -73,6 +73,10 @@ const orderItemCancellationMigration = readFileSync(
   new URL("../../../supabase/migrations/20260905000300_enable_order_item_cancellations.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
+const orderItemCancellationAudit = readFileSync(
+  new URL("../../../supabase/tests/order_item_cancellations_catalog.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
 const financialCatalogAudit = readFileSync(
   new URL("../../../supabase/tests/cash_registers_simple_payments_catalog.sql", import.meta.url),
   "utf8",
@@ -186,6 +190,25 @@ test("order item cancellation is atomic, server-authorized, audited and recovera
   assert.match(orderItemCancellationMigration, /'status', 'cancelled'/u);
   assert.match(orderItemCancellationMigration, /grant execute on function app_private\.persist_order_item_cancellation\(uuid,bigint,jsonb,jsonb\) to app_api/u);
   assert.doesNotMatch(orderItemCancellationMigration, /grant execute[\s\S]*to (anon|authenticated|service_role)/u);
+  assert.match(orderItemCancellationAudit, /order_item_cancellation_function_security_rejected/u);
+  assert.match(orderItemCancellationAudit, /order_item_cancellation_public_grant_rejected/u);
+  assert.match(orderItemCancellationAudit, /order_item_cancellation_app_api_grant_rejected/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(orderItemCancellationAudit));
+  const runner = readFileSync(
+    new URL("../src/operations/run-order-item-cancellation-schema-verification.ts", import.meta.url),
+    "utf8",
+  ).toLowerCase();
+  const baselineAudit = readFileSync(
+    new URL("../../../supabase/tests/tenancy_memberships_post_finance.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(runner, /tenancy_memberships_post_finance\.sql/u);
+  assert.match(runner, /securitydefinerfunctions: 24/u);
+  assert.match(apiPackage, /"verify:order-item-cancellation-schema:rollback"/u);
+  assert.match(apiPackage, /run-order-item-cancellation-schema-verification\.js/u);
+  assert.doesNotThrow(() => extractMigrationBody(
+    `begin;\n${baselineAudit}\n${extractMigrationBody(orderItemCancellationMigration)}\ncommit;`,
+  ));
 });
 
 test("product migration is independent from the ADR-010 spike and models exact historical scope", () => {

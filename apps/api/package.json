@@ -45,6 +45,7 @@
     "verify:dining-tables-layout-lint-fix-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-tables-layout-lint-fix-schema-verification.js",
     "verify:menu-catalog-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-menu-catalog-schema-verification.js",
     "verify:orders-realtime-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-orders-realtime-schema-verification.js",
+    "verify:order-item-cancellation-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-order-item-cancellation-schema-verification.js",
     "verify:kds-ticket-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-kds-ticket-schema-verification.js",
     "verify:cash-registers-simple-payments-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-cash-registers-simple-payments-schema-verification.js",
     "verify:cash-register-operational-reporting-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-cash-register-operational-reporting-schema-verification.js",
