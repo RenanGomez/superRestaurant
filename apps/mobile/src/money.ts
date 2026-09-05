@@ -17,6 +17,17 @@ export function formatMinorAmount(amountMinor: number, currency: string): string
   return `${groupMinorUnits(amountMinor)} u.m. · ${currency}`;
 }
 
+/**
+ * Renders one amount for a screen, never guessing: an amount or a currency the
+ * contract did not deliver cleanly is reported as unavailable instead of being
+ * rounded, converted or given a default code.
+ */
+export function renderMinorAmount(amountMinor: number, currency: string): string {
+  return isRenderableMinorAmount(amountMinor, currency)
+    ? formatMinorAmount(amountMinor, currency)
+    : "Precio no disponible";
+}
+
 /** True when a value can be rendered by {@link formatMinorAmount}. */
 export function isRenderableMinorAmount(amountMinor: unknown, currency: unknown): boolean {
   return typeof amountMinor === "number" && Number.isSafeInteger(amountMinor)

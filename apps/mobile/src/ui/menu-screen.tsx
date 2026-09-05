@@ -7,7 +7,7 @@ import type {
   MenuProductV1,
 } from "@super-restaurant/shared-types";
 
-import { formatMinorAmount, isRenderableMinorAmount } from "../money.js";
+import { renderMinorAmount } from "../money.js";
 import { failureMessage, type MobileResource } from "../mobile-state.js";
 import { Banner, Body, Caption, Card, LoadingBlock, StateBlock, Subheading } from "./components.js";
 import { spacing } from "./theme.js";
@@ -81,7 +81,7 @@ function ProductCard({ currency, groups, product }: {
 }): React.JSX.Element {
   return <Card>
     <Subheading>{product.active ? product.name : `${product.name} (inactivo)`}</Subheading>
-    <Body>{price(product.unitPriceMinor, currency)}</Body>
+    <Body>{renderMinorAmount(product.unitPriceMinor, currency)}</Body>
     <Caption>{`Unidad: ${product.unit} · Estación: ${product.stationId}${product.sku === null ? "" : ` · SKU: ${product.sku}`}`}</Caption>
     {product.tax === null
       ? <Caption>Sin impuesto declarado en el catálogo.</Caption>
@@ -94,17 +94,10 @@ function ProductCard({ currency, groups, product }: {
         {`${group.active ? group.name : `${group.name} (inactivo)`} · elige ${group.minimumQuantity} a ${group.maximumQuantity}`}
       </Caption>
       {group.options.map((option) => <Body key={option.optionId}>
-        {`• ${option.name} — ${price(option.unitPriceMinor, currency)}`}
+        {`• ${option.name} — ${renderMinorAmount(option.unitPriceMinor, currency)}`}
       </Body>)}
     </View>)}
   </Card>;
-}
-
-/** Never guesses: an amount the contract did not deliver cleanly is not shown. */
-function price(amountMinor: number, currency: string): string {
-  return isRenderableMinorAmount(amountMinor, currency)
-    ? formatMinorAmount(amountMinor, currency)
-    : "Precio no disponible";
 }
 
 const styles = StyleSheet.create({
