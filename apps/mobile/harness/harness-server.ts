@@ -22,6 +22,7 @@ import {
   diningLayoutBody,
   membershipListBody,
   menuCatalogStateBody,
+  operationalShiftListBody,
   scopeA,
   scopeB,
 } from "../src/test-fixtures.js";
@@ -114,6 +115,9 @@ export function installHarnessFetch(apiBaseUrl: string): void {
     }
 
     const scope = url.searchParams.get("branchId") === scopeB.branchId ? scopeB : scopeA;
+    if (path === MOBILE_API_PATHS.operationalShifts) {
+      return jsonResponse(operationalShiftListBody(scope));
+    }
     if (path === MOBILE_API_PATHS.diningLayout) {
       return jsonResponse(diningLayoutBody(scope, scope === scopeB ? "Salón principal" : "Terraza"));
     }

@@ -1,5 +1,16 @@
 # HANDOFF
 
+## Entrega 2026-09-05 — selección de turno operativo en REVIEW
+
+- Tarea: `Implementar login y selección de sucursal/turno` pasó de `IN_PROGRESS` a `REVIEW`. Emmanuel eligió la opción 1: `Shift` es el periodo operativo de servicio de una sucursal, separado del horario laboral y de la sesión de caja.
+- Alcance: se añadió el contrato compartido v1 fail-closed; el endpoint autenticado `GET /api/v1/shifts/active`; el adaptador PostgreSQL server-only; la selección mobile obligatoria antes de leer mesas o menú; y la limpieza del turno al cambiar sucursal, cerrar sesión o revalidar al volver a primer plano.
+- Migración local: `20260905000100_create_operational_shifts.sql` define pertenencia Restaurant/Branch, ciclo `open|closed`, actores y timestamps, versión y un máximo de un turno abierto por sucursal. La tabla queda con RLS forzado y sin grants directos; solo `app_api` puede ejecutar la lectura privada. No se aplicó a base remota ni se modificaron credenciales, permisos existentes, Data API o Vault. Al no haberse aplicado, no hubo rollback remoto; cualquier despliegue y su reversión requieren autorización y verificación separadas.
+- Decisiones: esta tarea solo consume turnos ya abiertos. Apertura/cierre, asignación laboral y el enlace validado del `shiftId` de caja quedan fuera de alcance para no mezclar ciclos ni alterar contratos financieros. La hora visible usa `America/Hermosillo`. No se añadieron impuestos, CFDI, proveedor ni cálculos monetarios.
+- Verificación: contratos compartidos; servicio/adaptador API 3/3; contrato estático de esquema 28/28; cliente/estado/auth/cierre mobile verdes; validación global sin caché previa al ajuste visual (`lint` 8/8, `typecheck` 11/11, `test` 11/11, `build` 8/8); y corte mobile final en Node 24.19.0 (`lint`, `typecheck`, 84 pruebas y export Android, todos verdes). En navegador real, el flujo acceso → sucursal → turno → mesas/menú pasó en 390×844 y 1024×768, sin desbordamiento ni errores de consola y con targets de 48 px; la revisión corrigió la lista inicialmente fuera del área tocable y el desbordamiento del tercer botón en teléfono. No se verificó en Android/iOS físicos.
+- CodeGraph: índice local resincronizado con 18 archivos cambiados; la exploración situó el alcance en contrato compartido, API y mobile, y el impacto del parser alcanzó 12 símbolos esperados. El índice también contiene el worktree histórico de Claude, por lo que el barrido dirigido del checkout actual excluyó ese árbol y confirmó que no hay consumidores fuera del alcance previsto.
+- Riesgos y siguiente acción: la migración todavía no se ejecutó contra PostgreSQL y no existe aún una operación de apertura/cierre; por ello el flujo real necesita primero autorizar y verificar la migración y después implementar la gestión del turno. El siguiente ítem de `TODO.md` no debe iniciarse hasta la revisión humana de este corte.
+- Subagentes: ninguno.
+
 ## Integración 2026-09-05 — fundación mobile aprobada
 
 - Tarea/estado: Emmanuel autorizó expresamente el merge del workstream mobile aprobado. La P2 “Inicializar `apps/mobile` con Expo/React Native y tipos compartidos” pasa a DONE; la siguiente P2, login/sucursal/turno, queda BLOCKED porque login y Restaurant/Branch están resueltos pero `Shift` no tiene semántica, contrato ni endpoint definidos.

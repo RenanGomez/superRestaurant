@@ -45,6 +45,12 @@ import {
   FinancialService,
   PostgresFinancialPersistenceAdapter,
 } from "./payments.js";
+import { OperationalShiftsController } from "./operational-shifts.controller.js";
+import {
+  OPERATIONAL_SHIFT_DIRECTORY,
+  OperationalShiftService,
+  PostgresOperationalShiftDirectory,
+} from "./operational-shifts.js";
 
 @Module({
   controllers: [
@@ -57,6 +63,7 @@ import {
     MenuCatalogController,
     OrdersController,
     PaymentsController,
+    OperationalShiftsController,
   ],
   providers: [
     {
@@ -98,6 +105,9 @@ import {
     PostgresFinancialPersistenceAdapter,
     { provide: FINANCIAL_PERSISTENCE_PORT, useExisting: PostgresFinancialPersistenceAdapter },
     FinancialService,
+    PostgresOperationalShiftDirectory,
+    { provide: OPERATIONAL_SHIFT_DIRECTORY, useExisting: PostgresOperationalShiftDirectory },
+    OperationalShiftService,
     {
       provide: APP_GUARD,
       useClass: SupabaseAuthGuard,

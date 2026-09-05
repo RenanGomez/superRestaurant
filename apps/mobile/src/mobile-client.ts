@@ -4,10 +4,12 @@ import {
   parseBranchScope,
   parseDiningLayoutV1,
   parseMenuCatalogStateV1,
+  parseOperationalShiftListV1,
   type BranchMembershipListV1,
   type DiningLayoutV1,
   type MembershipRoleCode,
   type MenuCatalogStateV1,
+  type OperationalShiftListV1,
 } from "@super-restaurant/shared-types";
 
 import type { MobileConfig } from "./config.js";
@@ -22,6 +24,7 @@ export const MOBILE_API_PATHS = Object.freeze({
   diningLayout: "/api/v1/dining/layout",
   memberships: "/api/v1/access/memberships",
   menuCatalog: "/api/v1/catalog/menu",
+  operationalShifts: "/api/v1/shifts/active",
 } as const);
 
 /** HTTP status, or the two client-side failures that never reach the server. */
@@ -107,6 +110,24 @@ export async function getMenuCatalog(
   const state = await request(config, accessToken, scopedPath(MOBILE_API_PATHS.menuCatalog, scope), parseMenuCatalogStateV1, fetcher);
   if (!sameScope(state.scope, scope)) throw new MobileRequestError("protocol");
   return state;
+}
+
+/** Lists open service periods for one freshly authorized branch. */
+export async function listOperationalShifts(
+  config: MobileConfig,
+  accessToken: string,
+  scope: MobileBranchScope,
+  fetcher: typeof fetch = fetch,
+): Promise<OperationalShiftListV1> {
+  const list = await request(
+    config,
+    accessToken,
+    scopedPath(MOBILE_API_PATHS.operationalShifts, scope),
+    parseOperationalShiftListV1,
+    fetcher,
+  );
+  if (!sameScope(list.scope, scope)) throw new MobileRequestError("protocol");
+  return list;
 }
 
 function scopedPath(path: string, scope: MobileBranchScope): string {

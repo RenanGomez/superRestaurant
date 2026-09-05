@@ -200,7 +200,7 @@ test("A signs in and out, B signs in and out, and a late notification from A cha
   assert.equal(app.state().session?.userId, FIXTURE_USER_A);
   app.dispatch({ scope: scopeA, type: "branchRequested" });
   app.dispatch({ branch: branchA, type: "branchAuthorized" });
-  assert.equal(mobileScreen(app.state()), "workspace");
+  assert.equal(mobileScreen(app.state()), "shifts");
 
   app.signOut(undefined);
   await settle();
@@ -273,14 +273,14 @@ test("a deliberate sign-in re-opens the gate, and the operator in place can rene
 
   app.dispatch({ scope: scopeA, type: "branchRequested" });
   app.dispatch({ branch: branchA, type: "branchAuthorized" });
-  assert.equal(mobileScreen(app.state()), "workspace");
+  assert.equal(mobileScreen(app.state()), "shifts");
 
   // A renewed token of the operator in place keeps the branch and its data.
   provider.emit(sessionA3);
   await settle();
   assert.equal(app.state().session?.accessToken, "token-a-3");
   assert.equal(app.state().branch, branchA);
-  assert.equal(mobileScreen(app.state()), "workspace");
+  assert.equal(mobileScreen(app.state()), "shifts");
 });
 
 test("a sign-in that fails leaves no gate open behind it", async () => {

@@ -8,6 +8,7 @@
 import type { MobileConfig } from "./config.js";
 import type { MobileBranchScope } from "./mobile-client.js";
 import type { MobileSession } from "./session.js";
+import type { OperationalShiftSummaryV1 } from "@super-restaurant/shared-types";
 
 export const FIXTURE_RESTAURANT_A = "11111111-1111-4111-8111-111111111111";
 export const FIXTURE_BRANCH_A = "22222222-2222-4222-8222-222222222222";
@@ -23,6 +24,7 @@ const FIXTURE_OPTION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const FIXTURE_CATALOG = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const FIXTURE_ACTOR = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const FIXTURE_TIMESTAMP = "2026-09-04T12:00:00.000Z";
+const FIXTURE_SHIFT = "f1111111-1111-4111-8111-111111111111";
 
 /** Synthetic Supabase user ids; two distinct operators. */
 export const FIXTURE_USER_A = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
@@ -70,6 +72,23 @@ export function membershipListBody(scopes: readonly MobileBranchScope[]): unknow
 
 export function authorizedBranchBody(scope: MobileBranchScope): unknown {
   return { branchId: scope.branchId, restaurantId: scope.restaurantId, roles: ["waiter"] };
+}
+
+export function operationalShiftListBody(scope: MobileBranchScope): unknown {
+  return {
+    schemaVersion: 1,
+    scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
+    shifts: [{
+      name: "Servicio activo",
+      openedAt: FIXTURE_TIMESTAMP,
+      openedBy: FIXTURE_ACTOR,
+      schemaVersion: 1,
+      scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
+      shiftId: FIXTURE_SHIFT,
+      status: "open",
+      version: 1,
+    } satisfies OperationalShiftSummaryV1],
+  };
 }
 
 export function diningLayoutBody(scope: MobileBranchScope, zoneName = "Terraza"): unknown {

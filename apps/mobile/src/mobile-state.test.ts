@@ -22,6 +22,7 @@ import {
   fixtureSession,
   membershipListBody,
   menuCatalogStateBody,
+  operationalShiftListBody,
   scopeA,
   scopeB,
 } from "./test-fixtures.js";
@@ -31,6 +32,7 @@ import {
   parseBranchMembershipListV1,
   parseDiningLayoutV1,
   parseMenuCatalogStateV1,
+  parseOperationalShiftListV1,
 } from "@super-restaurant/shared-types";
 
 const session: MobileSession = fixtureSession();
@@ -38,6 +40,7 @@ const memberships = parseBranchMembershipListV1(membershipListBody([scopeA, scop
 const layoutA = parseDiningLayoutV1(diningLayoutBody(scopeA));
 const layoutB = parseDiningLayoutV1(diningLayoutBody(scopeB, "Salón"));
 const menuA = parseMenuCatalogStateV1(menuCatalogStateBody(scopeA));
+const shiftsA = parseOperationalShiftListV1(operationalShiftListBody(scopeA));
 const branchA = authorizedBranchBody(scopeA) as { branchId: string; restaurantId: string; roles: readonly "waiter"[] };
 const branchB = authorizedBranchBody(scopeB) as { branchId: string; restaurantId: string; roles: readonly "waiter"[] };
 
@@ -50,12 +53,14 @@ function signedIn(): MobileState {
 }
 
 function onBranchA(): MobileState {
-  assert.ok(layoutA !== undefined && menuA !== undefined && layoutB !== undefined);
+  assert.ok(layoutA !== undefined && menuA !== undefined && layoutB !== undefined && shiftsA !== undefined && shiftsA.shifts[0] !== undefined);
   return apply(
     signedIn(),
     { memberships, type: "membershipsLoaded" },
     { scope: scopeA, type: "branchRequested" },
     { branch: branchA, type: "branchAuthorized" },
+    { list: shiftsA, scope: scopeA, type: "shiftsLoaded" },
+    { shift: shiftsA.shifts[0], type: "shiftSelected" },
     { layout: layoutA, scope: scopeA, type: "layoutLoaded" },
     { menu: menuA, scope: scopeA, type: "menuLoaded" },
   );
@@ -65,7 +70,31 @@ test("navigation follows the session and the authorized branch, never history", 
   assert.equal(mobileScreen(initialMobileState), "starting");
   assert.equal(mobileScreen(apply(initialMobileState, { session: undefined, type: "sessionRestored" })), "signIn");
   assert.equal(mobileScreen(signedIn()), "branches");
+  const branchOnly = apply(
+    signedIn(),
+    { scope: scopeA, type: "branchRequested" },
+    { branch: branchA, type: "branchAuthorized" },
+  );
+  assert.equal(mobileScreen(branchOnly), "shifts");
   assert.equal(mobileScreen(onBranchA()), "workspace");
+});
+
+test("operational data stays closed until an active shift from the exact branch is selected", () => {
+  assert.ok(shiftsA !== undefined && shiftsA.shifts[0] !== undefined);
+  const branchOnly = apply(
+    signedIn(),
+    { scope: scopeA, type: "branchRequested" },
+    { branch: branchA, type: "branchAuthorized" },
+    { list: shiftsA, scope: scopeA, type: "shiftsLoaded" },
+  );
+  assert.equal(canReadBranchData(branchOnly), true);
+  assert.equal(mobileScreen(branchOnly), "shifts");
+  const selected = apply(branchOnly, { shift: shiftsA.shifts[0], type: "shiftSelected" });
+  assert.equal(mobileScreen(selected), "workspace");
+
+  const foreign = parseOperationalShiftListV1(operationalShiftListBody(scopeB));
+  assert.ok(foreign !== undefined && foreign.shifts[0] !== undefined);
+  assert.equal(apply(branchOnly, { shift: foreign.shifts[0], type: "shiftSelected" }), branchOnly);
 });
 
 test("a tab cannot be opened before a branch is authorized", () => {
@@ -276,7 +305,7 @@ test("repeated foreground events never start a second revalidation", () => {
   assert.equal(third, first);
 });
 
-test("a valid revalidation restores the branch and lets the reads run again", () => {
+test("a valid revalidation restores the branch and requires a fresh open-shift selection", () => {
   const confirmed = apply(
     onBranchA(),
     { type: "revalidationStarted" },
@@ -286,7 +315,8 @@ test("a valid revalidation restores the branch and lets the reads run again", ()
   assert.equal(confirmed.revalidating, false);
   assert.equal(confirmed.revalidationFailure, undefined);
   assert.equal(canReadBranchData(confirmed), true);
-  assert.equal(mobileScreen(confirmed), "workspace");
+  assert.equal(mobileScreen(confirmed), "shifts");
+  assert.equal(confirmed.shift, undefined);
   assert.equal(confirmed.layout.status, "idle");
 });
 
@@ -305,7 +335,7 @@ test("loaded, backgrounded, revoked, foregrounded: no data survives the revocati
   assert.equal(revoked.menu.value, undefined);
   assert.equal(revoked.memberships.status, "idle");
   assert.equal(revoked.revalidating, false);
-  assert.equal(canReadBranchData(revoked), true);
+  assert.equal(canReadBranchData(revoked), false);
 });
 
 test("loaded, backgrounded, session expired, foregrounded: back to sign-in", () => {
@@ -334,6 +364,7 @@ test("a revalidation that cannot complete blocks every branch read until retried
 
   const retried = apply(failed, { type: "revalidationStarted" }, { branch: branchA, type: "revalidationSucceeded" });
   assert.equal(canReadBranchData(retried), true);
+  assert.equal(mobileScreen(retried), "shifts");
 });
 
 test("a revalidation answer for another branch, or with none pending, is ignored", () => {
@@ -351,5 +382,5 @@ test("selecting a branch clears any pending revalidation state", () => {
 
   assert.equal(selecting.revalidating, false);
   assert.equal(selecting.revalidationFailure, undefined);
-  assert.equal(canReadBranchData(selecting), true);
+  assert.equal(canReadBranchData(selecting), false);
 });

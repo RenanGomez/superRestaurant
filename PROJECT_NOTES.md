@@ -3,7 +3,7 @@
 ## Integración mobile confirmada el 2026-09-05
 
 - Emmanuel autorizó integrar `ecd585af26ff2494e3ddbe269fd4acfecdf9c42e` en `main`. La fundación de `apps/mobile` usa Expo 57.0.20, sesión Supabase solo en memoria, una compuerta por generación para impedir restauraciones tardías, selección autoritativa Restaurant/Branch y lecturas Nest de mesas y menú. No incluye turno, comandas, push, impresión Bluetooth, persistencia segura de sesión ni verificación en dispositivos físicos.
-- La siguiente decisión de producto es la semántica de `Shift`. No debe inferirse que turno operativo de sucursal, jornada laboral y sesión de caja sean la misma entidad: esa elección afecta órdenes, caja, permisos y el futuro modelo de empleados. Ningún esquema remoto se modifica hasta contar con decisión y autorización explícitas.
+- Emmanuel confirmó que `Shift` es un periodo operativo de servicio de una sucursal. No representa la jornada laboral del empleado ni la sesión de caja; órdenes y cajas podrán referenciar el turno operativo sin fusionar sus ciclos de vida. El primer contrato solo lista y permite seleccionar el turno abierto de la sucursal, con un máximo de uno abierto por sucursal; abrir/cerrar y enlazar la caja existente requieren una tarea posterior. Ningún esquema remoto se modifica sin autorización explícita.
 
 ## Decisiones de producto confirmadas el 2026-09-04
 

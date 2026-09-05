@@ -54,7 +54,7 @@ function signedInOnBranchA(sink: ReturnType<typeof recorder>): void {
 test("a sign-out that never resolves still closes the screen immediately", async () => {
   const sink = recorder();
   signedInOnBranchA(sink);
-  assert.equal(mobileScreen(sink.state), "workspace");
+  assert.equal(mobileScreen(sink.state), "shifts");
 
   let settled = false;
   // Never settles: the provider is unreachable or hanging.

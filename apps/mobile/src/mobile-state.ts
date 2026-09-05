@@ -2,12 +2,14 @@ import type {
   BranchMembershipSummaryV1,
   DiningLayoutV1,
   MenuCatalogStateV1,
+  OperationalShiftListV1,
+  OperationalShiftSummaryV1,
 } from "@super-restaurant/shared-types";
 
 import { MobileRequestError, type AuthorizedMobileBranch, type MobileBranchScope } from "./mobile-client.js";
 import { isSameOperator, type MobileSession } from "./session.js";
 
-export type MobileScreen = "starting" | "signIn" | "branches" | "workspace";
+export type MobileScreen = "starting" | "signIn" | "branches" | "shifts" | "workspace";
 export type MobileTab = "tables" | "menu";
 export type MobileFailure = "authorization" | "network" | "protocol" | "unavailable";
 export type MobileNotice = "branchRevoked" | "sessionEnded";
@@ -38,6 +40,8 @@ export interface MobileState {
   /** Set when that revalidation could not complete; blocks every branch read. */
   readonly revalidationFailure: MobileFailure | undefined;
   readonly session: MobileSession | undefined;
+  readonly shift: OperationalShiftSummaryV1 | undefined;
+  readonly shifts: MobileResource<OperationalShiftListV1>;
   readonly started: boolean;
   readonly tab: MobileTab;
 }
@@ -65,6 +69,12 @@ export type MobileEvent =
   | { readonly type: "sessionObserved"; readonly session: MobileSession }
   | { readonly type: "sessionRestored"; readonly session: MobileSession | undefined }
   | { readonly type: "signedOut"; readonly notice: MobileNotice | undefined }
+  | { readonly type: "shiftReleased" }
+  | { readonly type: "shiftSelected"; readonly shift: OperationalShiftSummaryV1 }
+  | { readonly type: "shiftsFailed"; readonly failure: MobileFailure; readonly scope: MobileBranchScope }
+  | { readonly type: "shiftsLoaded"; readonly list: OperationalShiftListV1; readonly scope: MobileBranchScope }
+  | { readonly type: "shiftsLoading"; readonly scope: MobileBranchScope }
+  | { readonly type: "shiftsReset"; readonly scope: MobileBranchScope }
   | { readonly type: "tabSelected"; readonly tab: MobileTab };
 
 const idleResource = Object.freeze({ failure: undefined, status: "idle", value: undefined }) as MobileResource<never>;
@@ -80,6 +90,8 @@ export const initialMobileState: MobileState = Object.freeze({
   revalidating: false,
   revalidationFailure: undefined,
   session: undefined,
+  shift: undefined,
+  shifts: idleResource,
   started: false,
   tab: "tables",
 });
@@ -129,6 +141,8 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         menu: idleResource,
         notice: "branchRevoked",
         pendingScope: undefined,
+        shift: undefined,
+        shifts: idleResource,
         revalidating: false,
         revalidationFailure: undefined,
         tab: "tables",
@@ -144,6 +158,8 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
           ...state,
           layout: idleResource,
           menu: idleResource,
+          shift: undefined,
+          shifts: idleResource,
           revalidating: true,
           revalidationFailure: undefined,
         });
@@ -169,6 +185,8 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
           menu: idleResource,
           notice: "branchRevoked",
           pendingScope: undefined,
+          shift: undefined,
+          shifts: idleResource,
           revalidating: false,
           revalidationFailure: undefined,
           tab: "tables",
@@ -192,6 +210,8 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         menu: idleResource,
         notice: undefined,
         pendingScope: frozenScope(event.scope),
+        shift: undefined,
+        shifts: idleResource,
         revalidating: false,
         revalidationFailure: undefined,
         tab: "tables",
@@ -217,12 +237,30 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         layout: idleResource,
         menu: idleResource,
         pendingScope: undefined,
+        shift: undefined,
+        shifts: idleResource,
         revalidating: false,
         revalidationFailure: undefined,
         tab: "tables",
       });
+    case "shiftSelected":
+      return state.branch !== undefined && state.shifts.status === "ready"
+        && state.shifts.value?.shifts.some((candidate) => candidate.shiftId === event.shift.shiftId)
+        && sameScope(state.branch, event.shift.scope)
+        ? freeze({ ...state, shift: event.shift })
+        : state;
+    case "shiftReleased":
+      return freeze({ ...state, layout: idleResource, menu: idleResource, shift: undefined, tab: "tables" });
+    case "shiftsLoading":
+      return forActiveScope(state, event.scope, (current) => ({ ...current, shifts: loading(current.shifts) }));
+    case "shiftsLoaded":
+      return forActiveScope(state, event.scope, (current) => ({ ...current, shifts: ready(event.list) }));
+    case "shiftsFailed":
+      return forActiveScope(state, event.scope, (current) => ({ ...current, shifts: failed(event.failure) }));
+    case "shiftsReset":
+      return forActiveScope(state, event.scope, (current) => ({ ...current, shifts: idleResource }));
     case "tabSelected":
-      return state.branch === undefined ? state : freeze({ ...state, tab: event.tab });
+      return state.branch === undefined || state.shift === undefined ? state : freeze({ ...state, tab: event.tab });
     case "layoutLoading":
       return forActiveScope(state, event.scope, (current) => ({ ...current, layout: loading(current.layout) }));
     case "layoutLoaded":
@@ -250,6 +288,8 @@ export function mobileScreen(state: MobileState): MobileScreen {
   if (!state.started) return "starting";
   if (state.session === undefined) return "signIn";
   if (state.branch === undefined) return "branches";
+  if (state.revalidating || state.revalidationFailure !== undefined) return "workspace";
+  if (state.shift === undefined) return "shifts";
   return "workspace";
 }
 
@@ -265,7 +305,12 @@ export function activeScope(state: MobileState): MobileBranchScope | undefined {
  * a foreground revalidation is running, and never after one failed.
  */
 export function canReadBranchData(state: MobileState): boolean {
-  return !state.revalidating && state.revalidationFailure === undefined;
+  return state.branch !== undefined && !state.revalidating && state.revalidationFailure === undefined;
+}
+
+/** Tables and menu are operational reads and require a freshly selected open shift. */
+export function canReadOperationalData(state: MobileState): boolean {
+  return canReadBranchData(state) && state.shift !== undefined;
 }
 
 /** True once Nest answered with an empty, and therefore explicit, membership list. */

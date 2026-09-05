@@ -10,11 +10,13 @@ import {
   getDiningLayout,
   getMenuCatalog,
   listMemberships,
+  listOperationalShifts,
   type MobileBranchScope,
 } from "../mobile-client.js";
 import {
   activeScope,
   canReadBranchData,
+  canReadOperationalData,
   failureMessage,
   initialMobileState,
   mobileScreen,
@@ -33,6 +35,7 @@ import { ActionButton, Banner, Caption, LoadingBlock, StateBlock, Subheading, us
 import { MenuScreen } from "./menu-screen.js";
 import { SignInScreen } from "./sign-in-screen.js";
 import { TablesScreen } from "./tables-screen.js";
+import { ShiftScreen } from "./shift-screen.js";
 import { colors, radius, spacing, touchTarget, typography } from "./theme.js";
 
 const TAB_LABELS: Readonly<Record<MobileTab, string>> = Object.freeze({ menu: "Menú", tables: "Mesas" });
@@ -57,6 +60,9 @@ export function App({ auth, config, lifecycle }: {
   const branchId = scope?.branchId;
   const restaurantId = scope?.restaurantId;
   const readable = canReadBranchData(state);
+  const operationallyReadable = canReadOperationalData(state);
+  const canReadMemberships = state.session !== undefined && !state.revalidating
+    && state.revalidationFailure === undefined;
 
   /**
    * Ends the session on this device only, keeping the reason to explain it. The
@@ -160,8 +166,8 @@ export function App({ auth, config, lifecycle }: {
   }, [branchId, config, endSession, gate, loadMemberships, restaurantId, state.revalidating]);
 
   useEffect(() => {
-    if (readable && token !== undefined && state.memberships.status === "idle") loadMemberships(token);
-  }, [loadMemberships, readable, state.memberships.status, token]);
+    if (canReadMemberships && token !== undefined && state.memberships.status === "idle") loadMemberships(token);
+  }, [canReadMemberships, loadMemberships, state.memberships.status, token]);
 
   useEffect(() => {
     const pending = state.pendingScope;
@@ -181,6 +187,23 @@ export function App({ auth, config, lifecycle }: {
 
   useEffect(() => {
     if (!readable || token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
+    if (state.shifts.status !== "idle") return undefined;
+    const target: MobileBranchScope = { branchId, restaurantId };
+    let active = true;
+    dispatch({ scope: target, type: "shiftsLoading" });
+    void listOperationalShifts(config, token, target)
+      .then((list) => { if (active) dispatch({ list, scope: target, type: "shiftsLoaded" }); })
+      .catch((error: unknown) => {
+        if (!active) return;
+        const failure = toMobileFailure(error);
+        if (failure === "authorization") dispatch({ type: "accessRevoked" });
+        else dispatch({ failure, scope: target, type: "shiftsFailed" });
+      });
+    return (): void => { active = false; };
+  }, [branchId, config, readable, restaurantId, state.shifts.status, token]);
+
+  useEffect(() => {
+    if (!operationallyReadable || token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
     if (state.tab !== "tables" || state.layout.status !== "idle") return undefined;
     const target: MobileBranchScope = { branchId, restaurantId };
     let active = true;
@@ -194,10 +217,10 @@ export function App({ auth, config, lifecycle }: {
         else dispatch({ failure, scope: target, type: "layoutFailed" });
       });
     return (): void => { active = false; };
-  }, [branchId, config, readable, restaurantId, state.layout.status, state.tab, token]);
+  }, [branchId, config, operationallyReadable, restaurantId, state.layout.status, state.tab, token]);
 
   useEffect(() => {
-    if (!readable || token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
+    if (!operationallyReadable || token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
     if (state.tab !== "menu" || state.menu.status !== "idle") return undefined;
     const target: MobileBranchScope = { branchId, restaurantId };
     let active = true;
@@ -211,7 +234,7 @@ export function App({ auth, config, lifecycle }: {
         else dispatch({ failure, scope: target, type: "menuFailed" });
       });
     return (): void => { active = false; };
-  }, [branchId, config, readable, restaurantId, state.menu.status, state.tab, token]);
+  }, [branchId, config, operationallyReadable, restaurantId, state.menu.status, state.tab, token]);
 
   const retry = useCallback((tab: MobileTab): void => {
     if (branchId === undefined || restaurantId === undefined) return;
@@ -240,6 +263,24 @@ export function App({ auth, config, lifecycle }: {
     />;
   }
 
+  if (screen === "shifts") {
+    if (state.revalidating) return <LoadingBlock label="Confirmando sesión y sucursal…" />;
+    const selectedMembership = state.memberships.value?.find((candidate) => (
+      candidate.scope.restaurantId === restaurantId && candidate.scope.branchId === branchId
+    ));
+    return <ShiftScreen
+      branchName={selectedMembership?.branchName ?? "Sucursal autorizada"}
+      onBack={() => { dispatch({ type: "branchReleased" }); }}
+      onRetry={() => {
+        if (branchId !== undefined && restaurantId !== undefined) {
+          dispatch({ scope: { branchId, restaurantId }, type: "shiftsReset" });
+        }
+      }}
+      onSelect={(shift) => { dispatch({ shift, type: "shiftSelected" }); }}
+      shifts={state.shifts}
+    />;
+  }
+
   // Identity is rendered only while the scope is confirmed. During a
   // revalidation, or after one failed, the pair stays in state for the request
   // but no restaurant, branch or operator is shown.
@@ -256,6 +297,7 @@ export function App({ auth, config, lifecycle }: {
           ? <>
             <Caption>{membership?.restaurantName ?? "Restaurante autorizado"}</Caption>
             <Subheading>{membership?.branchName ?? "Sucursal autorizada"}</Subheading>
+            <Caption>{state.shift?.name ?? "Turno no seleccionado"}</Caption>
             <Caption>{state.session?.email ?? ""}</Caption>
           </>
           : <>
@@ -265,6 +307,7 @@ export function App({ auth, config, lifecycle }: {
           </>}
       </View>
       <View style={styles.headerActions}>
+        <ActionButton label="Cambiar turno" onPress={() => { dispatch({ type: "shiftReleased" }); }} tone="secondary" />
         <ActionButton label="Cambiar sucursal" onPress={() => { dispatch({ type: "branchReleased" }); }} tone="secondary" />
         <ActionButton label="Salir" onPress={() => { endSession(undefined); }} tone="secondary" />
       </View>
@@ -369,7 +412,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     justifyContent: "space-between",
   },
-  headerActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  headerActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, width: "100%" },
   headerText: { flexGrow: 1, flexShrink: 1, gap: spacing.xs, minWidth: 0 },
   tab: {
     alignItems: "center",

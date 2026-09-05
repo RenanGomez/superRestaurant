@@ -61,6 +61,10 @@ const financialReportingMigration = readFileSync(
   new URL("../../../supabase/migrations/20260903000300_create_cash_register_operational_reporting.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
+const operationalShiftsMigration = readFileSync(
+  new URL("../../../supabase/migrations/20260905000100_create_operational_shifts.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
 const financialCatalogAudit = readFileSync(
   new URL("../../../supabase/tests/cash_registers_simple_payments_catalog.sql", import.meta.url),
   "utf8",
@@ -128,6 +132,20 @@ const tenancyVerificationRunner = readFileSync(
   "utf8",
 ).toLowerCase();
 const apiPackage = readFileSync(new URL("../package.json", import.meta.url), "utf8").toLowerCase();
+
+test("operational shifts are branch service periods exposed only through the private server read", () => {
+  assert.match(operationalShiftsMigration, /create table app\.operational_shifts/u);
+  assert.match(operationalShiftsMigration, /foreign key \(restaurant_id, branch_id\)/u);
+  assert.match(operationalShiftsMigration, /where status = 'open'/u);
+  assert.match(operationalShiftsMigration, /status = 'closed'.*closed_at is not null.*closed_by is not null/su);
+  assert.match(operationalShiftsMigration, /alter table app\.operational_shifts enable row level security/u);
+  assert.match(operationalShiftsMigration, /alter table app\.operational_shifts force row level security/u);
+  assert.match(operationalShiftsMigration, /security definer\s+set search_path = ''/u);
+  assert.match(operationalShiftsMigration, /app_private\.find_active_branch_membership/u);
+  assert.match(operationalShiftsMigration, /grant execute on function app_private\.list_active_operational_shifts\(uuid,uuid,uuid\) to app_api/u);
+  assert.doesNotMatch(operationalShiftsMigration, /grant .*operational_shifts.* to (anon|authenticated|service_role)/u);
+  assert.doesNotMatch(operationalShiftsMigration, /create function app_private\.(open|close)_operational_shift/u);
+});
 
 test("product migration is independent from the ADR-010 spike and models exact historical scope", () => {
   assert.equal(migration.includes("adr010_b"), false);

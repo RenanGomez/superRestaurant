@@ -10,6 +10,7 @@ import {
   getMenuCatalog,
   isAuthorizedMobilePath,
   listMemberships,
+  listOperationalShifts,
 } from "./mobile-client.js";
 import {
   FIXTURE_CURRENCY,
@@ -20,6 +21,7 @@ import {
   jsonFetcher,
   membershipListBody,
   menuCatalogStateBody,
+  operationalShiftListBody,
   scopeA,
   scopeB,
   valueFetcher,
@@ -34,12 +36,14 @@ test("exposes only read capabilities: no order, payment or cash mutation", () =>
     "getMenuCatalog",
     "isAuthorizedMobilePath",
     "listMemberships",
+    "listOperationalShifts",
   ]);
   assert.deepEqual(Object.values(MOBILE_API_PATHS).sort(), [
     "/api/v1/access/branch",
     "/api/v1/access/memberships",
     "/api/v1/catalog/menu",
     "/api/v1/dining/layout",
+    "/api/v1/shifts/active",
   ]);
 });
 
@@ -121,6 +125,22 @@ test("reads the layout of the requested branch only", async () => {
   const crossed = jsonFetcher(diningLayoutBody(scopeB));
   await assert.rejects(
     () => getDiningLayout(fixtureConfig, "token-1", scopeA, crossed.fetcher),
+    (error: unknown) => error instanceof MobileRequestError && error.status === "protocol",
+  );
+});
+
+test("lists only open operational shifts for the exact authorized branch", async () => {
+  const { calls, fetcher } = jsonFetcher(operationalShiftListBody(scopeA));
+  const list = await listOperationalShifts(fixtureConfig, "token-1", scopeA, fetcher);
+  assert.equal(list.shifts.length, 1);
+  assert.equal(list.shifts[0]?.status, "open");
+  assert.equal(
+    calls[0]?.url,
+    `${fixtureConfig.apiBaseUrl}/api/v1/shifts/active?branchId=${scopeA.branchId}&restaurantId=${scopeA.restaurantId}`,
+  );
+
+  await assert.rejects(
+    () => listOperationalShifts(fixtureConfig, "token-1", scopeA, jsonFetcher(operationalShiftListBody(scopeB)).fetcher),
     (error: unknown) => error instanceof MobileRequestError && error.status === "protocol",
   );
 });

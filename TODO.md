@@ -52,7 +52,7 @@ Estados permitidos: `TODO`, `IN_PROGRESS`, `REVIEW`, `DONE`, `BLOCKED`, `CANCELL
 ## Fase 2 — Mobile
 
 - [x] **DONE · P2** — Inicializar `apps/mobile` con Expo/React Native y tipos compartidos. Nota: Emmanuel autorizó integrar el workstream mobile el 2026-09-05 después de cinco rondas de revisión. El corte quedó en `main` con Expo 57.0.20, TypeScript, Auth efímero fail-closed, selección Restaurant/Branch, lecturas de mesas/menú y arnés visual aislado; lint 8/8, typecheck 11/11, tests 11/11 y build 8/8 pasaron en Node 24.19.0.
-- [ ] **BLOCKED · P2** — Implementar login y selección de sucursal/turno. Nota: login y selección Restaurant/Branch ya están integrados; falta definir qué representa `Shift` antes de crear contrato, endpoint o esquema. Debe decidirse si es un turno operativo de sucursal, un turno laboral del empleado o si se acopla a la sesión de caja. Siguiente acción mínima: decisión humana sobre esa semántica; no se modificará el esquema remoto sin autorización explícita.
+- [ ] **REVIEW · P2** — Implementar login y selección de sucursal/turno. Nota: login y selección Restaurant/Branch ya estaban integrados. Este corte añade contrato v1 estricto, entidad y lectura server-only de turnos operativos abiertos, selección mobile previa a mesas/menú y limpieza al cambiar o revalidar sucursal. La migración permanece local y no se aplicó a ningún esquema remoto; apertura/cierre y el enlace explícito con caja quedan fuera de alcance.
 - [ ] **TODO · P2** — Implementar vista de mesas y toma de comanda online.
 - [ ] **TODO · P2** — Implementar notificaciones de platillo listo.
 - [ ] **TODO · P2** — Implementar impresión Bluetooth mediante `packages/printing`.
