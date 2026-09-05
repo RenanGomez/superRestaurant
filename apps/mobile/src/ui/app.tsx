@@ -25,6 +25,7 @@ import {
   type MobileState,
   type MobileTab,
 } from "../mobile-state.js";
+import { readInitialSession, revalidateAccess } from "../revalidation.js";
 import { BranchScreen } from "./branch-screen.js";
 import { ActionButton, Banner, Caption, LoadingBlock, StateBlock, Subheading, useFocusRing } from "./components.js";
 import { MenuScreen } from "./menu-screen.js";
@@ -51,7 +52,9 @@ export function App({ auth, config, lifecycle }: {
   /** Ends the session on this device only, keeping the reason to explain it. */
   const endSession = useCallback((notice: MobileNotice | undefined): void => {
     pendingNotice.current = notice;
-    void auth.signOut().finally(() => {
+    // A failing sign-out must still clear this device: the session only ever
+    // lived in memory, so dropping it locally is always safe.
+    void auth.signOut().catch(() => undefined).finally(() => {
       dispatch({ notice, type: "signedOut" });
       pendingNotice.current = undefined;
     });
@@ -75,7 +78,9 @@ export function App({ auth, config, lifecycle }: {
 
   useEffect(() => {
     let active = true;
-    void auth.currentSession().then((session) => {
+    // A session port that rejects is treated as "no session": the app shows
+    // sign-in instead of staying on the start-up screen.
+    void readInitialSession(auth.currentSession).then((session) => {
       if (active) dispatch({ session, type: "sessionRestored" });
     });
     const unsubscribe = auth.onSessionChange((session) => {
@@ -85,8 +90,12 @@ export function App({ auth, config, lifecycle }: {
     });
     // The token ticker only runs while this component is mounted and the app is
     // in the foreground; it never writes anything to the device.
-    void auth.startAutoRefresh();
-    return (): void => { active = false; unsubscribe(); void auth.stopAutoRefresh(); };
+    void auth.startAutoRefresh().catch(() => undefined);
+    return (): void => {
+      active = false;
+      unsubscribe();
+      void auth.stopAutoRefresh().catch(() => undefined);
+    };
   }, [auth]);
 
   // Foreground lifecycle: drive the token ticker and revalidate the session and
@@ -96,7 +105,8 @@ export function App({ auth, config, lifecycle }: {
     return lifecycle.subscribe((next) => {
       const effects = lifecycleEffects(previous, next);
       previous = next;
-      void (effects.autoRefresh === "start" ? auth.startAutoRefresh() : auth.stopAutoRefresh());
+      void (effects.autoRefresh === "start" ? auth.startAutoRefresh() : auth.stopAutoRefresh())
+        .catch(() => undefined);
       if (effects.revalidate) dispatch({ type: "revalidationStarted" });
     });
   }, [auth, lifecycle]);
@@ -109,23 +119,21 @@ export function App({ auth, config, lifecycle }: {
     const target = branchId !== undefined && restaurantId !== undefined
       ? { branchId, restaurantId } satisfies MobileBranchScope
       : undefined;
-    void (async (): Promise<void> => {
-      const session = await auth.currentSession();
+    void revalidateAccess({
+      authorizeScope: (session, requested) => authorizeBranch(config, session.accessToken, requested),
+      currentSession: auth.currentSession,
+      scope: target,
+    }).then((outcome) => {
       if (!active) return;
-      if (session === undefined) { endSession("sessionEnded"); return; }
-      dispatch({ session, type: "sessionObserved" });
-      if (target === undefined) {
-        dispatch({ branch: undefined, type: "revalidationSucceeded" });
-        loadMemberships(session.accessToken);
+      if (outcome.kind === "sessionLost") { endSession("sessionEnded"); return; }
+      dispatch({ session: outcome.session, type: "sessionObserved" });
+      if (outcome.kind === "failed") {
+        dispatch({ failure: outcome.failure, type: "revalidationFailed" });
         return;
       }
-      try {
-        const branch = await authorizeBranch(config, session.accessToken, target);
-        if (active) dispatch({ branch, type: "revalidationSucceeded" });
-      } catch (error: unknown) {
-        if (active) dispatch({ failure: toMobileFailure(error), type: "revalidationFailed" });
-      }
-    })();
+      dispatch({ branch: outcome.branch, type: "revalidationSucceeded" });
+      if (outcome.branch === undefined) loadMemberships(outcome.session.accessToken);
+    });
     return (): void => { active = false; };
   }, [auth, branchId, config, endSession, loadMemberships, restaurantId, state.revalidating]);
 
@@ -208,16 +216,29 @@ export function App({ auth, config, lifecycle }: {
     />;
   }
 
-  const membership = state.memberships.value?.find((candidate) => (
-    candidate.scope.restaurantId === restaurantId && candidate.scope.branchId === branchId
-  ));
+  // Identity is rendered only while the scope is confirmed. During a
+  // revalidation, or after one failed, the pair stays in state for the request
+  // but no restaurant, branch or operator is shown.
+  const membership = readable
+    ? state.memberships.value?.find((candidate) => (
+      candidate.scope.restaurantId === restaurantId && candidate.scope.branchId === branchId
+    ))
+    : undefined;
 
   return <View style={styles.workspace}>
     <View style={styles.header}>
       <View style={styles.headerText}>
-        <Caption>{membership?.restaurantName ?? "Restaurante autorizado"}</Caption>
-        <Subheading>{membership?.branchName ?? "Sucursal autorizada"}</Subheading>
-        <Caption>{state.session?.email ?? ""}</Caption>
+        {readable
+          ? <>
+            <Caption>{membership?.restaurantName ?? "Restaurante autorizado"}</Caption>
+            <Subheading>{membership?.branchName ?? "Sucursal autorizada"}</Subheading>
+            <Caption>{state.session?.email ?? ""}</Caption>
+          </>
+          : <>
+            <Caption>superRestaurant</Caption>
+            <Subheading>Acceso sin confirmar</Subheading>
+            <Caption>No se muestra información hasta revalidar tu acceso.</Caption>
+          </>}
       </View>
       <View style={styles.headerActions}>
         <ActionButton label="Cambiar sucursal" onPress={() => { dispatch({ type: "branchReleased" }); }} tone="secondary" />

@@ -23,7 +23,10 @@ export function SignInScreen({ notice, onSignIn }: {
     if (busy || email.trim().length === 0 || password.length === 0) return;
     setBusy(true);
     setFailure(undefined);
+    // A rejected port is reported as a service failure instead of leaving the
+    // form stuck on "Ingresando…".
     void onSignIn(email.trim(), password)
+      .catch((): MobileSignInResult => "unavailable")
       .then((result) => { if (result !== "ok") setFailure(result); })
       .finally(() => { setBusy(false); });
   };
