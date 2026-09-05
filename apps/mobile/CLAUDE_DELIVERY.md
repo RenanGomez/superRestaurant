@@ -8,7 +8,8 @@ integrada**. No hubo merge, rebase, push ni publicación de rama.
 - **Hash base del workstream**: `16f30f1fd3aa0cce3f47d7a7bac2dd5d0f354de1`
   (`docs: define isolated Claude frontend workstream`), descendiente del
   ancestro mínimo exigido `941293b1d4658f7f683f1591841a5ab101eebfef`.
-- **Base de esta tercera ronda**: `541c00dd627f979c7d5ecfde32cf6b06e8af5b94`.
+- **Base de la cuarta ronda**: `2bcd438ff269623d2ca21bf6cb901b4683dd7aa1`.
+- **Base de la tercera ronda**: `541c00dd627f979c7d5ecfde32cf6b06e8af5b94`.
 - **Rama**: `claude/super-restaurant-mobile-foundation-2acb73`.
 - **Worktree**: `.claude/worktrees/super-restaurant-mobile-foundation-2acb73`.
 - Árbol limpio al iniciar y al terminar (sin artefactos ni temporales).
@@ -43,9 +44,56 @@ integrada**. No hubo merge, rebase, push ni publicación de rama.
 | `96dea5d8ef53fda29b16af94d06d0875aa333bf6` | `fix(mobile): fail closed on session errors and hide unconfirmed identity` |
 | `dcf8b3b541277a46f97c30cb0e62d3d94725e3e5` | `test(mobile): drive session errors and app restarts from the harness` |
 | `bfad1918a02bfe0ea41f07ec43dd53a49397f211` | `chore(mobile): declare the license and wire the new test file` |
-| (este documento) | `docs(mobile): record the third review round` — su hash se reporta al cierre, porque un commit no puede contener el suyo |
+| `2bcd438ff269623d2ca21bf6cb901b4683dd7aa1` | `docs(mobile): record the third review round` |
+| `4056fd276b750521c7e6926a27d3cef0933595b7` | `fix(mobile): close the local session without waiting for the provider` |
+| `05668b191a0df93083c66fef2acb4baa0044212e` | `chore(mobile): update expo to 57.0.20` |
+| `09c3e461d870d3ec0da97305f1b814fb94d1e0f1` | `test(mobile): drive hanging and failing sign-outs from the harness` |
+| (este documento) | `docs(mobile): record the fourth review round` — su hash se reporta al cierre, porque un commit no puede contener el suyo |
 
-## 2. Hallazgos de la tercera ronda
+## 2. Hallazgos de la cuarta ronda
+
+### Cierre de sesión local inmediato
+
+`endSession()` ya no espera a `auth.signOut()`. `src/sign-out.ts` despacha
+`signedOut` **de forma síncrona** y solo después pide al proveedor que borre su
+copia, como mejor esfuerzo: una promesa pendiente, un rechazo o incluso un
+puerto que lanza de forma síncrona no pueden bloquear la interfaz.
+
+Para que una notificación tardía no deshaga el cierre, el reducer recuerda la
+identidad de la sesión cerrada (`closedSessionKey`, nunca renderizada) y rechaza
+cualquier `sessionObserved` que la traiga de vuelta, incluso después de un
+inicio de sesión posterior. Un acceso nuevo emite un token nuevo y entra
+limpio.
+
+### `expo` 57.0.20 — compuerta cerrada
+
+La compuerta que quedó pendiente en la ronda anterior está resuelta. Las cuatro
+versiones implicadas cumplieron sus 24 h de antigüedad
+(`expo@57.0.20` 2026-09-04T07:46:21Z, `@expo/cli@57.0.22` 07:47:45Z,
+`expo-modules-jsi@57.0.8` 07:47:34Z y `expo-modules-core@57.0.16` 07:49:59Z),
+así que a partir de las 00:50 de Sonora `pnpm install` las aceptó **sin
+exclusiones**: no se relajó `minimumReleaseAge` y `pnpm-workspace.yaml` no
+cambió. `expo install --check` responde ahora `Dependencies are up to date`
+(exit 0).
+
+El cambio se limita a `apps/mobile/package.json` (`expo` 57.0.19 → 57.0.20) y al
+`pnpm-lock.yaml` derivado: `@expo/cli` 57.0.21 → 57.0.22,
+`expo-modules-core` 57.0.15 → 57.0.16 y `expo-modules-jsi` 57.0.7 → 57.0.8.
+Ningún otro paquete cambió de versión.
+
+Pruebas nuevas (`src/sign-out.test.ts`, 5):
+
+1. `signOut()` que nunca resuelve: la interfaz vuelve al acceso de inmediato y
+   sigue cerrada tras varios turnos del bucle de eventos;
+2. `signOut()` que rechaza: la sesión queda cerrada, con su motivo, y no se
+   produce ningún `unhandledRejection`;
+3. un puerto que lanza de forma síncrona tampoco impide el cierre local;
+4. una notificación tardía con la sesión cerrada no repuebla sucursal,
+   membresías, mesas ni menú;
+5. un inicio de sesión posterior funciona, arranca limpio y sigue rechazando el
+   token cerrado.
+
+## 3. Hallazgos de la tercera ronda
 
 ### 1 — Identidad del operador por `user.id`
 
@@ -86,20 +134,19 @@ se renderiza, y mesas y menú ya estaban descartados desde la ronda anterior.
 
 `apps/mobile/package.json` declara `"license": "UNLICENSED"`.
 
-### 5 — `expo install --check`: **compuerta pendiente**
+### 5 — `expo install --check`
 
-Sigue reportando `expo@57.0.19 - expected version: ~57.0.20` y termina en
-código 1. Resolverlo hoy exige registrar cuatro paquetes en
-`minimumReleaseAgeExclude` de `pnpm-workspace.yaml`, que es configuración raíz
-fuera del alcance autorizado; no se relajó `minimumReleaseAge` ni se tocó ese
-archivo. Evidencia y decisión requerida: `BACKEND_REQUESTS.md`, SR-MOB-006.
+Quedó como compuerta pendiente en esta ronda porque `expo@57.0.20` aún no
+cumplía la antigüedad mínima que exige pnpm y subirlo habría requerido tocar
+`pnpm-workspace.yaml`. Se resolvió en la cuarta ronda sin tocar configuración
+raíz; ver la sección 2.
 
 ### 6 — Espacio final
 
 Eliminado el espacio al final de la línea 48 de este documento; `git diff
 --check` no reporta errores de espacios en toda la rama.
 
-## 3. Alcance implementado
+## 4. Alcance implementado
 
 Primer slice móvil **online y de solo lectura**:
 
@@ -107,7 +154,7 @@ Primer slice móvil **online y de solo lectura**:
 - validación fail-closed de la configuración pública, con pantalla explícita
   cuando es inválida y sin ninguna llamada de red en ese estado;
 - acceso con Supabase Auth (email/contraseña), sesión en memoria con renovación
-  automática en primer plano y cierre de sesión **local**;
+  automática en primer plano y cierre de sesión **local e inmediato**;
 - identidad del operador por `user.id` inmutable;
 - revalidación de sesión y alcance al volver al primer plano, con resultado
   siempre explícito;
@@ -127,14 +174,22 @@ Primer slice móvil **online y de solo lectura**:
 - persistencia de sesión en el dispositivo (SR-MOB-001);
 - cualquier cambio en backend, dominio, contratos compartidos, SQL, Web o KDS.
 
-## 4. Archivos
+## 5. Archivos
 
-Todos dentro de `apps/mobile/**`. `pnpm-lock.yaml` **no cambió** ni en esta
-ronda ni en la anterior.
+Todos dentro de `apps/mobile/**`.
 
-**Nuevos en esta ronda**: `src/revalidation.ts`, `src/revalidation.test.ts`.
+**Nuevos en la cuarta ronda**: `src/sign-out.ts`, `src/sign-out.test.ts`.
 
-**Modificados en esta ronda**: `src/session.ts`, `src/session.test.ts`,
+**Modificados en la cuarta ronda**: `src/mobile-state.ts`,
+`src/mobile-state.test.ts`, `src/ui/app.tsx`, `harness/harness-server.ts`,
+`harness/harness-root.tsx`, `harness/README.md`, `package.json`,
+`tsconfig.test.build.json`, `CLAUDE_DELIVERY.md`, `BACKEND_REQUESTS.md`, y
+`pnpm-lock.yaml` —el único archivo fuera de `apps/mobile/**`— por la subida de
+`expo`.
+
+**Nuevos en la tercera ronda**: `src/revalidation.ts`, `src/revalidation.test.ts`.
+
+**Modificados en la tercera ronda**: `src/session.ts`, `src/session.test.ts`,
 `src/mobile-state.ts`, `src/mobile-state.test.ts`, `src/test-fixtures.ts`,
 `src/ui/app.tsx`, `src/ui/sign-in-screen.tsx`, `harness/harness-server.ts`,
 `harness/harness-root.tsx`, `harness/README.md`, `package.json`,
@@ -145,9 +200,9 @@ ronda ni en la anterior.
 `src/money.ts`, `src/lifecycle.ts`, `src/auth-port.ts`, `src/supabase-auth.ts`,
 `src/mobile-client.ts`, `src/ui/*` y sus pruebas.
 
-No se versionaron capturas: la evidencia visual se resume en la sección 7.
+No se versionaron capturas: la evidencia visual se resume en la sección 8.
 
-## 5. Contratos y endpoints consumidos
+## 6. Contratos y endpoints consumidos
 
 Todos existentes y autorizados por el mandato §6. El cliente móvil nunca accede
 a PostgreSQL ni a la Data API.
@@ -168,7 +223,7 @@ Dinero: entero en unidad menor con la moneda ISO del contrato
 (`"12,500 u.m. · XTS"`). Sin moneda por defecto, sin coma flotante, sin
 impuestos, fiscalidad, CFDI, turnos, caja ni proveedor inventados.
 
-## 6. Comandos ejecutados y resultados
+## 7. Comandos ejecutados y resultados
 
 Entorno: Windows 10, pnpm 11.19.0 vía Corepack y **Node v24.19.0**, la versión
 que declara `engines.node`. El binario oficial se descargó de
@@ -184,9 +239,9 @@ Del app:
 | --- | --- |
 | `pnpm --filter @super-restaurant/mobile lint` | ✅ 0 errores, 0 warnings |
 | `pnpm --filter @super-restaurant/mobile typecheck` | ✅ sin errores |
-| `pnpm --filter @super-restaurant/mobile test` | ✅ **69 pruebas, 0 fallos** (config 5, session 7, supabase-auth 2, lifecycle 4, revalidation 6, aislamiento de bundle 2, money 4, cliente 16, estado 23) |
+| `pnpm --filter @super-restaurant/mobile test` | ✅ **74 pruebas, 0 fallos** (config 5, session 7, supabase-auth 2, lifecycle 4, revalidation 6, cierre de sesión 5, aislamiento de bundle 2, money 4, cliente 16, estado 23) |
 | `pnpm --filter @super-restaurant/mobile build` | ✅ `tsc --noEmit` + `expo export --platform android` → bundle Hermes de 2.17 MB en `dist/` (ignorado por Git) |
-| `pnpm --filter @super-restaurant/mobile exec expo install --check` | ❌ **compuerta pendiente**: `expo@57.0.19 - expected version: ~57.0.20`, exit 1. Ver sección 2.5 y SR-MOB-006 |
+| `pnpm --filter @super-restaurant/mobile exec expo install --check` | ✅ `Dependencies are up to date`, exit 0 (con `expo@57.0.20`) |
 
 Globales, **sin caché** (`--force`):
 
@@ -203,7 +258,7 @@ Nota operativa: Turbo necesita el binario `pnpm` en `PATH`; en este entorno solo
 existe Corepack, así que se usó un shim temporal en el directorio scratchpad de
 la sesión. No se modificó ninguna configuración del repositorio.
 
-## 7. Matriz de validación visual
+## 8. Matriz de validación visual
 
 Runtime: **Expo web (react-native-web)** con Metro local sobre Node 24.19.0,
 controlado con navegador real y el arnés (`MOBILE_VISUAL_HARNESS=1`). Las
@@ -230,7 +285,11 @@ estados son los reales.
 | Foco visible por teclado | 1024×768 | ✅ 1 px → 3 px `#0b3a7d` → 1 px en botones y pestañas |
 | Consola | ambos | ✅ Sin warnings ni errores del app |
 | Red | ambos | ✅ Solo el bundle local; ningún destino externo |
-| Aislamiento del arnés en el bundle distribuible | — | ✅ El `.hbc` contiene "Cambiar sucursal", "Acceso sin confirmar" y "Sin sucursales asignadas", y **no** contiene "Ir a segundo plano", "Reiniciar arn", "harness", "HARNESS_SESSION_UNREADABLE", "operador.sintetico" ni `sb_publishable_fixture` |
+| Cierre de sesión con `signOut()` colgado | 390×844 | ✅ La interfaz vuelve al acceso mientras la llamada sigue en vuelo |
+| Notificación tardía con la sesión cerrada | 390×844 | ✅ Sigue en el acceso: sin sucursal, membresías ni datos |
+| Nuevo inicio de sesión tras el cierre local | 390×844 | ✅ Entra limpio a la selección de sucursal |
+| Cierre de sesión con `signOut()` que rechaza | 390×844 | ✅ Cerrado a los 60 ms y estable; consola sin errores ni rechazos no manejados |
+| Aislamiento del arnés en el bundle distribuible | — | ✅ El `.hbc` contiene "Cambiar sucursal", "Acceso sin confirmar" y "Sin sucursales asignadas", y **no** contiene "Ir a segundo plano", "Reiniciar arn", "harness", "HARNESS_SESSION_UNREADABLE", "HARNESS_SIGN_OUT_FAILED", "operador.sintetico" ni `sb_publishable_fixture`. Las cadenas con acentos no se buscan porque Hermes las almacena en UTF-16; se usan controles ASCII de ambos lados |
 
 Notas de método: el panel del navegador automatizado no entrega foco real de
 ventana, así que el anillo se comprueba despachando `focusin`/`focusout` y
@@ -238,7 +297,7 @@ midiendo el borde. El estado transitorio de revalidación se capturó por texto
 del DOM —dura menos de lo que tarda una captura— mientras que el estado de
 fallo, que persiste hasta reintentar, sí quedó capturado en pantalla.
 
-## 8. Confirmación de fronteras
+## 9. Confirmación de fronteras
 
 Comparado con `16f30f1fd3aa0cce3f47d7a7bac2dd5d0f354de1`, el diff toca
 exclusivamente `apps/mobile/**` y `pnpm-lock.yaml` (este último solo por el
@@ -251,36 +310,33 @@ remota; no se crearon usuarios ni fixtures remotas, y no se reutilizó ningún
 UUID documentado en el historial del repositorio. El flujo P1 Web/KDS/caja en
 REVIEW quedó intacto.
 
-## 9. Limitaciones, riesgos y solicitudes pendientes
+## 10. Limitaciones, riesgos y solicitudes pendientes
 
-1. **`expo install --check` no pasa** (SR-MOB-006): es la única compuerta
-   pendiente de esta entrega.
-2. **Sesión sin persistencia** (SR-MOB-001): al cerrar la app hay que volver a
+1. **Sesión sin persistencia** (SR-MOB-001): al cerrar la app hay que volver a
    autenticarse. La renovación en memoria ya existe y es un asunto distinto.
-3. **Sin verificación en Android/iOS reales**: no hay emulador ni SDK nativo en
+2. **Sin verificación en Android/iOS reales**: no hay emulador ni SDK nativo en
    este entorno. El bundle Android se genera, pero no se ejecutó en dispositivo;
    `react-native-safe-area-context` y la entrega real de eventos de `AppState`
    siguen sin comprobarse en hardware.
-4. **`user.id` se exige como UUID**: es lo que emite Supabase Auth. Un proveedor
+3. **`user.id` se exige como UUID**: es lo que emite Supabase Auth. Un proveedor
    que emitiera otro formato haría fallar el acceso de forma visible, nunca
    silenciosa.
-5. **CodeGraph no disponible**: análisis por inspección dirigida.
-6. **Divergencia de versiones de React/React Native** respecto de Web/KDS,
+4. **CodeGraph no disponible**: análisis por inspección dirigida.
+5. **Divergencia de versiones de React/React Native** respecto de Web/KDS,
    impuesta por Expo SDK 57 y aislada en este app.
-7. **Parser local para `POST /api/v1/access/branch`** (SR-MOB-002).
-8. **Turno operativo** (SR-MOB-003) y **origen de API para dispositivos
+6. **Parser local para `POST /api/v1/access/branch`** (SR-MOB-002).
+7. **Turno operativo** (SR-MOB-003) y **origen de API para dispositivos
    físicos** (SR-MOB-004) siguen pendientes de decisión.
-9. **Verificación contra Auth y Nest reales** (SR-MOB-005): el arnés la
+8. **Verificación contra Auth y Nest reales** (SR-MOB-005): el arnés la
    anticipa, no la sustituye.
 
-## 10. Siguiente acción recomendada
+## 11. Siguiente acción recomendada
 
-1. Decidir SR-MOB-006 y, con esa decisión, cerrar `expo install --check`.
-2. Revisar el diff completo y confirmar que `pnpm-lock.yaml` solo cambió en el
+1. Revisar el diff completo y confirmar que `pnpm-lock.yaml` solo cambió en el
    primer corte y solo por `apps/mobile`.
-3. Ejecutar el arnés (`harness/README.md`) para reproducir la matriz visual y
+2. Ejecutar el arnés (`harness/README.md`) para reproducir la matriz visual y
    después la app real contra un entorno propio.
-4. Decidir SR-MOB-001 a SR-MOB-005 por separado; la comanda móvil no debe
+3. Decidir SR-MOB-001 a SR-MOB-005 por separado; la comanda móvil no debe
    abrirse antes de resolver SR-MOB-001 y SR-MOB-003.
-5. Solo con aprobación humana, integrar la rama y actualizar `TODO.md`. Este
+4. Solo con aprobación humana, integrar la rama y actualizar `TODO.md`. Este
    workstream no cambió el estado de ninguna tarea.

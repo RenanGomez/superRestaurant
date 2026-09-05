@@ -154,7 +154,7 @@ token se escribe en almacenamiento ni se registra en logs.
 
 ---
 
-## SR-MOB-006 — Actualizar `expo` a 57.0.20 exige tocar configuración raíz
+## SR-MOB-006 — Actualizar `expo` a 57.0.20 (CERRADA)
 
 - **Capacidad requerida**: una decisión sobre cómo subir `expo` a la versión que
   `expo install --check` exige, sin relajar la política de antigüedad mínima de
@@ -175,9 +175,11 @@ token se escribe en almacenamiento ni se registra en logs.
   `apps/mobile/**`.
 - **Impacto si se difiere**: la compuerta `expo install --check` queda en rojo.
   El app compila, exporta y pasa el resto de las compuertas con `expo@57.0.19`.
-- **Decisión requerida**: una de estas dos, a criterio del coordinador:
-  1. reejecutar `expo install --check` cuando las versiones superen la ventana
-     de antigüedad, y entonces subir `expo` a `57.0.20` en
-     `apps/mobile/package.json` con el cambio derivado de `pnpm-lock.yaml`; o
-  2. autorizar expresamente añadir esas cuatro entradas a
-     `minimumReleaseAgeExclude`, indicando quién realiza el cambio.
+- **Decisión requerida**: ninguna. **Resuelta el 2026-09-05.**
+- **Cómo se cerró**: pasada la ventana de 24 h de las cuatro versiones
+  (`expo@57.0.20` 07:46:21Z, `@expo/cli@57.0.22` 07:47:45Z,
+  `expo-modules-jsi@57.0.8` 07:47:34Z, `expo-modules-core@57.0.16` 07:49:59Z),
+  `pnpm install` las aceptó sin exclusiones. Se subió `expo` a `57.0.20` en
+  `apps/mobile/package.json` y el `pnpm-lock.yaml` derivado; no se relajó
+  `minimumReleaseAge` ni se modificó `pnpm-workspace.yaml`.
+  `expo install --check` responde `Dependencies are up to date` (exit 0).
