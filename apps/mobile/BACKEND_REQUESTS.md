@@ -8,7 +8,11 @@ Referencia: `docs/CLAUDE_FRONTEND_WORKSTREAM.md`, secciones 6, 7 y 8.2.
 
 ---
 
-## SR-MOB-001 — Decisión de arquitectura: almacenamiento de sesión en el dispositivo
+## SR-MOB-001 — Decisión de arquitectura: persistencia segura de la sesión
+
+> **Alcance de esta solicitud**: solo la *persistencia en el dispositivo*. La
+> *renovación del token en memoria* ya está implementada y no depende de esta
+> decisión; se describe abajo para que ambas no se confundan.
 
 - **Capacidad requerida**: una decisión aprobada sobre dónde y cómo persistir la
   sesión de Supabase Auth en el dispositivo (adaptador de almacenamiento,
@@ -25,18 +29,27 @@ Referencia: `docs/CLAUDE_FRONTEND_WORKSTREAM.md`, secciones 6, 7 y 8.2.
   sesión en memoria mientras no haya un adaptador aprobado. `packages/*` no
   contiene ningún adaptador de almacenamiento móvil.
 - **Decisión aplicada mientras tanto**: `src/session.ts` fija
-  `persistSession: false`, `autoRefreshToken: false` y
-  `detectSessionInUrl: false`; nada se escribe en el dispositivo y la sesión
-  muere con el proceso. Está cubierto por pruebas.
-- **Datos mínimos que necesitaría la UI**: poder recuperar, al abrir la app, una
-  sesión válida o la ausencia de sesión, sin exponer el refresh token al código
-  de pantalla y con borrado garantizado al cerrar sesión o al revocarse el
-  acceso.
-- **Impacto si se difiere**: el operador vuelve a autenticarse en cada apertura y
-  no existe renovación automática del access token; una jornada larga puede
-  requerir reingreso. No hay riesgo de fuga de credenciales por diferirlo.
+  `persistSession: false` y no declara `storage`; nada se escribe en el
+  dispositivo y la sesión muere con el proceso. Cubierto por pruebas, incluida
+  una que instala un espía sobre `localStorage`/`sessionStorage` y comprueba
+  cero accesos durante inicio, pausa, reanudación, lectura de sesión y cierre.
+- **Datos mínimos que necesitaría la UI**: recuperar al abrir la app una sesión
+  válida o la ausencia de sesión, sin exponer el refresh token al código de
+  pantalla y con borrado garantizado al cerrar sesión o al revocarse el acceso.
+- **Impacto si se difiere**: el operador vuelve a autenticarse en cada apertura.
+  No hay riesgo de fuga de credenciales por diferirlo.
 - **Decisión requerida**: elegir adaptador y política de cifrado/expiración, o
   confirmar por escrito que la sesión en memoria es aceptable para el piloto.
+
+### Renovación en memoria — resuelto, no requiere decisión
+
+`autoRefreshToken: true` con `persistSession: false`: mientras la app está
+abierta y en primer plano, la sesión en memoria se renueva sola.
+`MobileAuthPort` expone `startAutoRefresh`/`stopAutoRefresh`, implementados con
+`client.auth.startAutoRefresh()`/`stopAutoRefresh()` de `@supabase/auth-js`
+2.112.4 (`GoTrueClient.d.ts`, líneas 2321 y 2352), y el ciclo de vida los
+arranca al montar, los pausa en segundo plano y los reanuda al volver. Ningún
+token se escribe en almacenamiento ni se registra en logs.
 
 ---
 
@@ -54,8 +67,10 @@ Referencia: `docs/CLAUDE_FRONTEND_WORKSTREAM.md`, secciones 6, 7 y 8.2.
   contiene ningún parser de esa respuesta; `apps/web/src/lib/branch-selection.ts`
   documenta explícitamente que mantiene el suyo local por esa razón.
 - **Estado en este entregable**: `src/mobile-client.ts` valida la respuesta con
-  un parser local estricto (UUID exactos, `roles` no vacío, sin duplicados y
-  solo códigos de `MEMBERSHIP_ROLE_CODES`) y exige que el par devuelto sea
+  un parser local endurecido, equivalente al de `apps/web`: prototipo
+  `Object.prototype`/`null`, claves exactas por `Reflect.ownKeys`, solo
+  descriptores de datos, fallo cerrado ante proxies que lanzan, `roles` denso y
+  sin duplicados, y UUID normalizados. Exige además que el par devuelto sea
   idéntico al solicitado. No se modificó `packages/shared-types`.
 - **Impacto si se difiere**: dos validaciones locales equivalentes (web y mobile)
   que pueden divergir si el servidor cambia la forma de la respuesta.
@@ -122,15 +137,17 @@ Referencia: `docs/CLAUDE_FRONTEND_WORKSTREAM.md`, secciones 6, 7 y 8.2.
   levantar `apps/api` (requiere conexión PostgreSQL privada y secretos) y
   `EXPO_PUBLIC_SUPABASE_URL` exige TLS, por lo que un doble local de Auth no es
   alcanzable desde el cliente sin relajar la validación de configuración.
-- **Qué sí se verificó**: pantalla de configuración inválida, pantalla de acceso
-  (estados vacío, escritura, foco, teclado y fallo de servicio) en 390×844 y en
-  vista tablet, además de 36 pruebas automatizadas que cubren el aislamiento del
-  par Restaurant/Branch, el cambio y la revocación de sucursal, los estados de
-  carga/vacío/red/protocolo, la moneda explícita y la navegación.
-- **Impacto si se difiere**: las tres pantallas autenticadas quedan verificadas
-  por pruebas y no por observación directa; un defecto puramente visual en ellas
-  podría pasar desapercibido.
+- **Qué ya se verificó sin entorno remoto**: el arnés local `harness/`
+  (fixtures sintéticas, sin credenciales ni datos remotos, resuelto por Metro
+  solo con `MOBILE_VISUAL_HARNESS=1`) permitió recorrer en navegador real
+  acceso, selección y cambio de sucursal, mesas, menú, revocación sin fuga,
+  sesión expirada, y los estados vacío/carga/error/reintento, en 390×844 y en
+  vista tablet, con consola limpia, contraste AA, foco visible y objetivos
+  táctiles de 48 px. Lo respaldan 59 pruebas automatizadas.
+- **Impacto si se difiere**: sigue sin comprobarse el comportamiento contra el
+  servidor real y contra Supabase Auth (latencias, formas de error, expiración
+  real de token) y en dispositivo Android/iOS.
 - **Decisión requerida**: que el coordinador ejecute la app con su propio
   entorno, o que autorice expresamente un smoke acotado con usuario temporal,
   fixtures marcadas, cleanup obligatorio y recovery exclusivo, como se hizo para
-  Web y KDS.
+  Web y KDS. El arnés no sustituye esa verificación: solo la anticipa.
