@@ -1,5 +1,16 @@
 # HANDOFF
 
+## Avance 2026-09-05 — servidor para mesas/comanda mobile
+
+- Tarea/estado: `Implementar vista de mesas y toma de comanda online` permanece IN_PROGRESS. El slice server-side local está implementado; Claude continúa en un worktree separado sobre la presentación/interacción de `apps/mobile/**`, que no fue modificada por Codex.
+- Contratos/API: `CreateOrderCommandV1` permanece compatible. El nuevo `CreateOrderCommandV2` exige `shiftId` y reutiliza las mismas reglas de Order; `GET /api/v1/orders/active` autoriza `orders.read` para el scope Restaurant/Branch/mesa exacto y devuelve como máximo 100 órdenes `draft|open|partially_paid`, con `shiftId` nullable para historia anterior al enlace. La respuesta y sus arrays se validan fail-closed, normalizan UUID y rechazan duplicados, campos extra y resultados sobredimensionados.
+- Persistencia local: `20260905000200_link_operational_shifts_to_orders.sql` añade una asociación inmutable y scoped entre Order y turno. La creación v2 bloquea/valida un turno abierto, llama a la autoridad existente de persistencia y crea el enlace dentro de la misma transacción; los replays deben coincidir con el turno original. No se impuso una orden activa única por mesa ni se derivó ocupación, porque el dominio vigente admite múltiples órdenes y el producto no ha definido otra invariante.
+- Seguridad y límites: la tabla tiene RLS forzado y cero grants directos; las dos funciones privadas son ejecutables solo por `app_api`. No se modificaron dinero, impuestos, CFDI, fiscalidad, proveedor, credenciales, permisos existentes, Data API, Vault o esquema remoto. La migración permanece sin aplicar.
+- Verificación: Node 24.19.0; compuertas globales sin caché verdes (`lint` 8/8, `typecheck` 11/11, `test` 11/11 y `build` 8/8); el contrato estático de esquema pasó 29/29 y `git diff --check` quedó limpio. Supabase local no pudo iniciar porque la máquina no tiene Docker/Podman, así que el SQL aún no fue compilado ni ejecutado contra PostgreSQL; esa brecha impide mover la tarea a REVIEW.
+- CodeGraph: índice actualizado. Los contratos nuevos alcanzan únicamente shared-types, API y sus pruebas; `TableOrderContextService` llega al controller, módulo y test esperados. El impacto amplio de `OrderPersistencePort` incluye Payments y copias de los worktrees de Claude; el pipeline global cubrió los consumidores del checkout actual y la inspección dirigida confirmó la frontera. Reconsulta posterior sin referencias huérfanas conocidas.
+- Riesgos/siguiente acción: verificar la migración en PostgreSQL mediante rollback-only cuando exista runtime o autorización remota; después integrar el corte de Claude, conectar la UI a los contratos consolidados y ejecutar pruebas funcionales/visuales. No declarar REVIEW antes de esas verificaciones.
+- Subagentes Codex: ninguno. Claude es un workstream externo paralelo. Razonamiento alto por tenancy, estado de Order y vínculo transaccional con turno.
+
 ## Aprobación y coordinación 2026-09-05 — mesas/comanda mobile en paralelo
 
 - Emmanuel aprobó expresamente la selección de turno operativo; `Implementar login y selección de sucursal/turno` pasa de REVIEW a DONE. La fundación previa entregada por Claude ya estaba marcada DONE y permanece así; no se duplicó su cierre.

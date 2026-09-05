@@ -65,6 +65,10 @@ const operationalShiftsMigration = readFileSync(
   new URL("../../../supabase/migrations/20260905000100_create_operational_shifts.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
+const operationalOrdersMigration = readFileSync(
+  new URL("../../../supabase/migrations/20260905000200_link_operational_shifts_to_orders.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
 const financialCatalogAudit = readFileSync(
   new URL("../../../supabase/tests/cash_registers_simple_payments_catalog.sql", import.meta.url),
   "utf8",
@@ -145,6 +149,26 @@ test("operational shifts are branch service periods exposed only through the pri
   assert.match(operationalShiftsMigration, /grant execute on function app_private\.list_active_operational_shifts\(uuid,uuid,uuid\) to app_api/u);
   assert.doesNotMatch(operationalShiftsMigration, /grant .*operational_shifts.* to (anon|authenticated|service_role)/u);
   assert.doesNotMatch(operationalShiftsMigration, /create function app_private\.(open|close)_operational_shift/u);
+});
+
+test("operational order creation is additive, atomic, scoped and server-only", () => {
+  assert.match(operationalOrdersMigration, /create table app\.order_operational_shifts/u);
+  assert.match(operationalOrdersMigration, /foreign key \(restaurant_id, branch_id, order_id\)[\s\S]*references app\.orders/u);
+  assert.match(operationalOrdersMigration, /foreign key \(restaurant_id, branch_id, shift_id\)[\s\S]*references app\.operational_shifts/u);
+  assert.match(operationalOrdersMigration, /create function app_private\.create_operational_order/u);
+  assert.match(operationalOrdersMigration, /shift\.status = 'open'/u);
+  assert.match(operationalOrdersMigration, /app_private\.persist_order_mutation\(p_actor_id, 0, p_order, p_audit\)/u);
+  assert.match(operationalOrdersMigration, /v_result ->> 'status' = 'saved'[\s\S]*insert into app\.order_operational_shifts/u);
+  assert.match(operationalOrdersMigration, /v_result ->> 'status' = 'replayed'[\s\S]*link\.shift_id = p_shift_id/u);
+  assert.match(operationalOrdersMigration, /create function app_private\.list_active_table_orders/u);
+  assert.match(operationalOrdersMigration, /orders\.status in \('draft', 'open', 'partially_paid'\)/u);
+  assert.match(operationalOrdersMigration, /limit 101/u);
+  assert.match(operationalOrdersMigration, /alter table app\.order_operational_shifts enable row level security/u);
+  assert.match(operationalOrdersMigration, /alter table app\.order_operational_shifts force row level security/u);
+  assert.match(operationalOrdersMigration, /grant execute on function app_private\.create_operational_order\(uuid,uuid,jsonb,jsonb\) to app_api/u);
+  assert.match(operationalOrdersMigration, /grant execute on function app_private\.list_active_table_orders\(uuid,uuid,uuid,uuid\) to app_api/u);
+  assert.doesNotMatch(operationalOrdersMigration, /grant .*order_operational_shifts.* to (anon|authenticated|service_role)/u);
+  assert.doesNotMatch(operationalOrdersMigration, /alter table app\.orders/u);
 });
 
 test("product migration is independent from the ADR-010 spike and models exact historical scope", () => {

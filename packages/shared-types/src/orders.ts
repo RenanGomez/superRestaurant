@@ -2,9 +2,11 @@ import type { BranchScope } from "./index.js";
 import { parseKdsEventV1 } from "./realtime.js";
 
 export const ORDER_COMMAND_SCHEMA_VERSION = 1 as const;
+export const CREATE_ORDER_COMMAND_V2_SCHEMA_VERSION = 2 as const;
 export const ORDER_CHANNELS = Object.freeze(["table", "counter", "takeout", "delivery"] as const);
 export const ORDER_ITEM_FORWARD_STATUSES = Object.freeze(["sent", "preparing", "ready", "delivered"] as const);
 export const ORDER_STATUSES = Object.freeze(["draft", "open", "partially_paid", "paid", "closed", "cancelled"] as const);
+export const ACTIVE_TABLE_ORDER_STATUSES = Object.freeze(["draft", "open", "partially_paid"] as const);
 
 export type OrderChannelV1 = (typeof ORDER_CHANNELS)[number];
 export type OrderItemForwardStatusV1 = (typeof ORDER_ITEM_FORWARD_STATUSES)[number];
@@ -24,6 +26,29 @@ export interface CreateOrderCommandV1 extends OrderAuditInputV1 {
   readonly scope: BranchScope;
   readonly tableId: string | null;
   readonly timeZone: string;
+}
+
+/** Additive mobile command: v1 remains valid for existing clients, while v2 binds a new order to an operational shift. */
+export interface CreateOrderCommandV2 extends Omit<CreateOrderCommandV1, "schemaVersion"> {
+  readonly schemaVersion: typeof CREATE_ORDER_COMMAND_V2_SCHEMA_VERSION;
+  readonly shiftId: string;
+}
+
+export interface ActiveTableOrderSummaryV1 {
+  readonly itemCount: number;
+  readonly orderId: string;
+  readonly shiftId: string | null;
+  readonly status: (typeof ACTIVE_TABLE_ORDER_STATUSES)[number];
+  readonly tableId: string;
+  readonly updatedAt: string;
+  readonly version: number;
+}
+
+export interface ActiveTableOrderListV1 {
+  readonly orders: readonly ActiveTableOrderSummaryV1[];
+  readonly schemaVersion: typeof ORDER_COMMAND_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly tableId: string;
 }
 
 export interface ModifierOptionSelectionV1 {
@@ -99,6 +124,54 @@ export function parseOrderMutationSummaryV1(value: unknown): OrderMutationSummar
   });
 }
 
+export function parseActiveTableOrderListV1(value: unknown): ActiveTableOrderListV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "tableId", "orders"]);
+  if (record === undefined || own(record, "schemaVersion") !== ORDER_COMMAND_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const tableId = uuid(own(record, "tableId"));
+  const rawOrders = exactDenseArray(own(record, "orders"), 100);
+  if (scope === undefined || tableId === undefined || rawOrders === undefined) return undefined;
+  const orders: ActiveTableOrderSummaryV1[] = [];
+  const ids = new Set<string>();
+  for (const value of rawOrders) {
+    const order = parseActiveTableOrderSummaryV1(value, tableId);
+    if (order === undefined || ids.has(order.orderId)) return undefined;
+    ids.add(order.orderId);
+    orders.push(order);
+  }
+  return Object.freeze({ orders: Object.freeze(orders), schemaVersion: ORDER_COMMAND_SCHEMA_VERSION, scope, tableId });
+}
+
+export function parseCreateOrderCommandV2(value: unknown): CreateOrderCommandV2 | undefined {
+  const record = exactRecord(value, ["schemaVersion","scope","orderId","shiftId","channel","tableId","currency","timeZone","eventId","idempotencyKey","deviceId","occurredAt"]);
+  if (record === undefined || own(record,"schemaVersion") !== CREATE_ORDER_COMMAND_V2_SCHEMA_VERSION) return undefined;
+  const common = parseCommon(record);
+  const scope = parseScope(own(record,"scope"));
+  const orderId = uuid(own(record,"orderId"));
+  const shiftId = uuid(own(record,"shiftId"));
+  const channel = own(record,"channel");
+  const tableValue = own(record,"tableId");
+  const tableId = tableValue === null ? null : uuid(tableValue);
+  const currency = text(own(record,"currency"),3,3);
+  const timeZone = text(own(record,"timeZone"),1,100);
+  if (common === undefined || scope === undefined || orderId === undefined || shiftId === undefined
+    || typeof channel !== "string" || !(ORDER_CHANNELS as readonly string[]).includes(channel)
+    || tableId === undefined || (channel === "table") !== (tableId !== null)
+    || currency === undefined || !/^[A-Z]{3}$/u.test(currency) || timeZone === undefined) return undefined;
+  try { new Intl.DateTimeFormat("en", { timeZone }).format(); } catch { return undefined; }
+  return Object.freeze({
+    ...common,
+    channel: channel as OrderChannelV1,
+    currency,
+    orderId,
+    schemaVersion: CREATE_ORDER_COMMAND_V2_SCHEMA_VERSION,
+    scope,
+    shiftId,
+    tableId,
+    timeZone,
+  });
+}
+
 export function parseCreateOrderCommandV1(value: unknown): CreateOrderCommandV1 | undefined {
   const record = exactRecord(value, ["schemaVersion","scope","orderId","channel","tableId","currency","timeZone","eventId","idempotencyKey","deviceId","occurredAt"]);
   if (record === undefined || own(record,"schemaVersion") !== ORDER_COMMAND_SCHEMA_VERSION) return undefined;
@@ -169,6 +242,31 @@ function parseCommon(record: Readonly<Record<string, unknown>>): OrderAuditInput
     ? undefined : Object.freeze({ deviceId, eventId, idempotencyKey, occurredAt });
 }
 
+function parseActiveTableOrderSummaryV1(value: unknown, expectedTableId: string): ActiveTableOrderSummaryV1 | undefined {
+  const record = exactRecord(value, ["orderId", "tableId", "shiftId", "status", "version", "itemCount", "updatedAt"]);
+  if (record === undefined) return undefined;
+  const orderId = uuid(own(record, "orderId"));
+  const tableId = uuid(own(record, "tableId"));
+  const rawShiftId = own(record, "shiftId");
+  const shiftId = rawShiftId === null ? null : uuid(rawShiftId);
+  const status = own(record, "status");
+  const version = integer(own(record, "version"), 1, Number.MAX_SAFE_INTEGER);
+  const itemCount = integer(own(record, "itemCount"), 0, 100_000);
+  const updatedAt = timestamp(own(record, "updatedAt"));
+  if (orderId === undefined || tableId === undefined || tableId !== expectedTableId || shiftId === undefined
+    || typeof status !== "string" || !(ACTIVE_TABLE_ORDER_STATUSES as readonly string[]).includes(status)
+    || version === undefined || itemCount === undefined || updatedAt === undefined) return undefined;
+  return Object.freeze({
+    itemCount,
+    orderId,
+    shiftId,
+    status: status as ActiveTableOrderSummaryV1["status"],
+    tableId,
+    updatedAt,
+    version,
+  });
+}
+
 function parseGroups(value: unknown): readonly ModifierGroupSelectionV1[] | undefined {
   if (!Array.isArray(value) || value.length > 50) return undefined;
   const groups: ModifierGroupSelectionV1[] = [];
@@ -210,6 +308,14 @@ function exactRecord(value: unknown, keys: readonly string[]): Readonly<Record<s
     for (const key of keys) { const descriptor=Object.getOwnPropertyDescriptor(value,key); if (descriptor===undefined || !("value" in descriptor) || !descriptor.enumerable) return undefined; }
     return value as Readonly<Record<string,unknown>>;
   } catch { return undefined; }
+}
+function exactDenseArray(value: unknown, maximum: number): readonly unknown[] | undefined {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > maximum) return undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) return undefined;
+  }
+  return value;
 }
 
 function own(record: Readonly<Record<string,unknown>>, key: string): unknown { const descriptor=Object.getOwnPropertyDescriptor(record,key); return descriptor!==undefined && "value" in descriptor ? descriptor.value : undefined; }

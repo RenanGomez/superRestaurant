@@ -51,6 +51,12 @@ import {
   OperationalShiftService,
   PostgresOperationalShiftDirectory,
 } from "./operational-shifts.js";
+import { TableOrderContextController } from "./table-order-context.controller.js";
+import {
+  PostgresTableOrderContextDirectory,
+  TABLE_ORDER_CONTEXT_DIRECTORY,
+  TableOrderContextService,
+} from "./table-order-context.js";
 
 @Module({
   controllers: [
@@ -64,6 +70,7 @@ import {
     OrdersController,
     PaymentsController,
     OperationalShiftsController,
+    TableOrderContextController,
   ],
   providers: [
     {
@@ -108,6 +115,9 @@ import {
     PostgresOperationalShiftDirectory,
     { provide: OPERATIONAL_SHIFT_DIRECTORY, useExisting: PostgresOperationalShiftDirectory },
     OperationalShiftService,
+    PostgresTableOrderContextDirectory,
+    { provide: TABLE_ORDER_CONTEXT_DIRECTORY, useExisting: PostgresTableOrderContextDirectory },
+    TableOrderContextService,
     {
       provide: APP_GUARD,
       useClass: SupabaseAuthGuard,

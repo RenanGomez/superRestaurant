@@ -1,6 +1,7 @@
 import {
   parseAddOrderItemCommandV1,
   parseCreateOrderCommandV1,
+  parseCreateOrderCommandV2,
   parseKdsCursorV1,
   parseKdsEventPageV1,
   parseKdsEventV1,
@@ -11,6 +12,7 @@ import {
   parseTransitionOrderItemCommandV1,
   type BranchScope,
   type CreateOrderCommandV1,
+  type CreateOrderCommandV2,
   type KdsCursorV1,
   type KdsEventPageV1,
   type KdsEventV1,
@@ -46,6 +48,7 @@ import {
 
 const readOrderSql = "select app_private.read_order($1::uuid, $2::uuid, $3::uuid, $4::uuid) as result";
 const persistOrderSql = "select app_private.persist_order_mutation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
+const createOperationalOrderSql = "select app_private.create_operational_order($1::uuid, $2::uuid, $3::jsonb, $4::jsonb) as result";
 const recoverKdsSql = "select app_private.recover_kds_events($1::uuid, $2::uuid, $3::uuid, $4::text, $5::bigint, $6::integer) as result";
 const listKdsTicketsSql = "select app_private.list_kds_tickets($1::uuid, $2::uuid, $3::uuid, $4::text) as result";
 
@@ -74,7 +77,7 @@ export type PersistOrderResult =
 
 export interface OrderPersistencePort {
   listKdsTickets(actorId: string, subscription: RealtimeSubscriptionV1): Promise<KdsTicketListV1 | "forbidden">;
-  persist(actorId: string, expectedVersion: number, mutation: OrderMutation): Promise<PersistOrderResult>;
+  persist(actorId: string, expectedVersion: number, mutation: OrderMutation, operationalShiftId?: string): Promise<PersistOrderResult>;
   read(actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing">;
   recoverKds(actorId: string, subscription: RealtimeSubscriptionV1, after: KdsCursorV1, limit: number): Promise<KdsEventPageV1 | "forbidden">;
 }
@@ -126,15 +129,28 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
     return Object.freeze({ order, version });
   }
 
-  public async persist(actorId: string, expectedVersion: number, mutation: OrderMutation): Promise<PersistOrderResult> {
+  public async persist(
+    actorId: string,
+    expectedVersion: number,
+    mutation: OrderMutation,
+    operationalShiftId?: string,
+  ): Promise<PersistOrderResult> {
     const encodedOrder = encodeOrderRecord(mutation.order);
     const encodedAudit = encodeOrderAuditEventRecord(mutation.auditEvent);
-    const result = await this.database.query(persistOrderSql, [
-      actorId,
-      expectedVersion,
-      JSON.stringify(encodedOrder),
-      JSON.stringify(encodedAudit),
-    ]);
+    if (operationalShiftId !== undefined && expectedVersion !== 0) throw unavailable();
+    const result = operationalShiftId === undefined
+      ? await this.database.query(persistOrderSql, [
+        actorId,
+        expectedVersion,
+        JSON.stringify(encodedOrder),
+        JSON.stringify(encodedAudit),
+      ])
+      : await this.database.query(createOperationalOrderSql, [
+        actorId,
+        operationalShiftId,
+        JSON.stringify(encodedOrder),
+        JSON.stringify(encodedAudit),
+      ]);
     const raw = singleResult(result.rows);
     const minimal = exactRecord(raw, ["status"]);
     if (minimal !== undefined) {
@@ -203,10 +219,16 @@ export class OrderService {
   ) {}
 
   public async create(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
-    const command = parseCreateOrderCommandV1(input);
+    const operationalCommand = parseCreateOrderCommandV2(input);
+    const command = operationalCommand ?? parseCreateOrderCommandV1(input);
     if (command === undefined) throw applicationError("request");
     const actorId = await this.authorize(principal, command.scope, "orders.create");
-    return this.persist(actorId, 0, createOrder(orderInput(command), auditContext(command, actorId)));
+    return this.persist(
+      actorId,
+      0,
+      createOrder(orderInput(command), auditContext(command, actorId)),
+      operationalCommand?.shiftId,
+    );
   }
 
   public async addItem(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
@@ -323,9 +345,14 @@ export class OrderService {
     }
   }
 
-  private async persist(actorId: string, expectedVersion: number, mutation: OrderMutation): Promise<OrderMutationSummaryV1> {
+  private async persist(
+    actorId: string,
+    expectedVersion: number,
+    mutation: OrderMutation,
+    operationalShiftId?: string,
+  ): Promise<OrderMutationSummaryV1> {
     let result: PersistOrderResult;
-    try { result = await this.orders.persist(actorId, expectedVersion, mutation); } catch { throw unavailable(); }
+    try { result = await this.orders.persist(actorId, expectedVersion, mutation, operationalShiftId); } catch { throw unavailable(); }
     if (result.status === "forbidden") throw applicationError("authorization");
     if (result.status === "conflict") throw applicationError("conflict");
     if (result.status !== "saved" && result.status !== "replayed") throw unavailable();
@@ -355,7 +382,7 @@ export class OrderService {
   }
 }
 
-function orderInput(command: CreateOrderCommandV1): Parameters<typeof createOrder>[0] {
+function orderInput(command: CreateOrderCommandV1 | CreateOrderCommandV2): Parameters<typeof createOrder>[0] {
   return {
     branchId: command.scope.branchId,
     channel: command.channel,

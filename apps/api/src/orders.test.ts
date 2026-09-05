@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
 
 import {
   parseAddOrderItemCommandV1,
   parseBranchScope,
   parseCreateOrderCommandV1,
+  parseCreateOrderCommandV2,
   parseKdsCursorV1,
   parseKdsEventPageV1,
   parseKdsEventV1,
@@ -133,14 +135,20 @@ test("PostgreSQL order adapter binds private functions and validates exact respo
   assert.equal(stored === "missing" ? 0 : stored.version, 1);
   const persisted = await adapter.persist(principal.actorId, 0, domainMutation);
   assert.equal(persisted.status, "saved");
+  const operationalShiftId = randomUUID();
+  const operationalPersisted = await adapter.persist(principal.actorId, 0, domainMutation, operationalShiftId);
+  assert.equal(operationalPersisted.status, "saved");
   assert.deepEqual(await adapter.recoverKds(principal.actorId, subscription, initialCursor, 50), eventPage);
   assert.deepEqual(await adapter.listKdsTickets(principal.actorId, subscription), ticketList);
   assert.match(calls[0]?.sql ?? "", /app_private\.read_order/u);
   assert.deepEqual(calls[0]?.parameters, [principal.actorId, scope.restaurantId, scope.branchId, orderId]);
   assert.deepEqual(calls[1]?.parameters?.slice(0, 2), [principal.actorId, 0]);
   assert.equal(typeof calls[1]?.parameters?.[2], "string");
-  assert.deepEqual(calls[2]?.parameters, [principal.actorId, scope.restaurantId, scope.branchId, "kitchen", "0", 50]);
-  assert.deepEqual(calls[3]?.parameters, [principal.actorId, scope.restaurantId, scope.branchId, "kitchen"]);
+  assert.match(calls[2]?.sql ?? "", /app_private\.create_operational_order/u);
+  assert.deepEqual(calls[2]?.parameters?.slice(0, 2), [principal.actorId, operationalShiftId]);
+  assert.equal(typeof calls[2]?.parameters?.[2], "string");
+  assert.deepEqual(calls[3]?.parameters, [principal.actorId, scope.restaurantId, scope.branchId, "kitchen", "0", 50]);
+  assert.deepEqual(calls[4]?.parameters, [principal.actorId, scope.restaurantId, scope.branchId, "kitchen"]);
 });
 
 test("PostgreSQL order adapter fails closed for ambiguous, malformed, or forbidden output", async () => {
@@ -217,6 +225,40 @@ test("order service creates, snapshots catalog items, transitions, and only noti
   assert.equal(notifications.length, 2);
   assert.deepEqual(await service.recoverKds(principal, subscription, initialCursor, "50"), eventPage);
   assert.deepEqual(await service.listKdsTickets(principal, subscription), ticketList);
+});
+
+test("order service keeps v1 compatible and binds only v2 creation to an operational shift", async () => {
+  const receivedShiftIds: (string | undefined)[] = [];
+  const orders: OrderPersistencePort = {
+    listKdsTickets: async () => ticketList,
+    persist: async (_actorId, expectedVersion, mutation, operationalShiftId) => {
+      receivedShiftIds.push(operationalShiftId);
+      return { kdsEvent: null, order: mutation.order, status: "saved", version: expectedVersion + 1 };
+    },
+    read: async () => ({ order: domainMutation.order, version: 1 }),
+    recoverKds: async () => eventPage,
+  };
+  const service = serviceFor(["manager"], orders);
+  await service.create(principal, createCommand);
+
+  const shiftId = randomUUID();
+  const v2 = parseCreateOrderCommandV2({
+    channel: "table",
+    currency: "MXN",
+    deviceId: randomUUID(),
+    eventId: randomUUID(),
+    idempotencyKey: "orders-test-operational-v2",
+    occurredAt: "2026-09-05T20:30:00.000Z",
+    orderId: randomUUID(),
+    schemaVersion: 2,
+    scope,
+    shiftId,
+    tableId: randomUUID(),
+    timeZone: "America/Hermosillo",
+  });
+  if (v2 === undefined) throw new Error("TEST_OPERATIONAL_CREATE_COMMAND_INVALID");
+  assert.equal((await service.create(principal, v2)).orderStatus, "draft");
+  assert.deepEqual(receivedShiftIds, [undefined, shiftId]);
 });
 
 test("order service enforces permission, optimistic version, and domain transitions", async () => {
