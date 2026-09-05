@@ -19,7 +19,7 @@ El entregable de Claude debe ser útil e integrable, pero no puede anticipar cap
 ### 0.2 Base, rama y aislamiento
 
 1. Crear un worktree nuevo; no reutilizar el worktree de la fundación.
-2. Partir exactamente de `main@0f6de7a444ee9930eea2ca4a83415c7caeba8c21` y confirmar árbol limpio.
+2. Partir exactamente de `main@c6f87961b2afddaef0c84fec50e8fa5ae4abbbc2` y confirmar árbol limpio. Este es el commit que contiene el mandato vigente; no incorporar commits posteriores por cuenta propia.
 3. Rama sugerida: `claude/mobile-order-entry-ui-20260905`.
 4. Leer una sola vez los archivos operativos exigidos por `AGENTS.md`, este documento completo y la sección Fase 2 del plan.
 5. Consultar CodeGraph antes de editar y después de terminar.

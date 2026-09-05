@@ -7,7 +7,7 @@
 - Emmanuel autorizó a Claude a instalar y usar los MCP necesarios. El mandato permite CodeGraph MCP y el plugin/MCP oficial de Expo en configuración de usuario, sin versionar configuración, credenciales ni artefactos. No autoriza Supabase MCP, EAS build/publicación, mutaciones remotas, secretos, push, merge o rebase.
 - La UI paralela puede seleccionar mesa y construir visualmente un borrador con productos, modificadores y cantidades usando contratos compartidos de solo lectura. No puede afirmar ocupación, calcular totales/impuestos, crear órdenes reales ni inventar recuperación de orden activa; esas capacidades dependen del trabajo server-side del coordinador.
 - Cambios de esta unidad: documentación operativa y de coordinación únicamente. Sin código de producto, dependencias, dinero, fiscalidad, credenciales, permisos, Data API, Vault, esquema remoto u operaciones Git remotas.
-- Siguiente acción Codex: analizar el contrato de contexto de mesa/orden activa y la validación del turno operativo antes de exponer la integración mobile. Siguiente acción Claude: crear worktree nuevo desde `0f6de7a444ee9930eea2ca4a83415c7caeba8c21`, instalar los MCP permitidos, consultar CodeGraph y ejecutar el slice visual acotado.
+- Siguiente acción Codex: analizar el contrato de contexto de mesa/orden activa y la validación del turno operativo antes de exponer la integración mobile. Siguiente acción Claude: crear worktree nuevo desde `c6f87961b2afddaef0c84fec50e8fa5ae4abbbc2`, el commit que contiene su mandato, instalar los MCP permitidos, consultar CodeGraph y ejecutar el slice visual acotado.
 - Subagentes Codex: ninguno. Claude trabajará como workstream externo paralelo bajo revisión del coordinador.
 
 ## Entrega 2026-09-05 — selección de turno operativo en REVIEW
