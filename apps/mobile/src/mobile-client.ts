@@ -1,0 +1,257 @@
+import {
+  MEMBERSHIP_ROLE_CODES,
+  parseBranchMembershipListV1,
+  parseBranchScope,
+  parseDiningLayoutV1,
+  parseMenuCatalogStateV1,
+  type BranchMembershipListV1,
+  type DiningLayoutV1,
+  type MembershipRoleCode,
+  type MenuCatalogStateV1,
+} from "@super-restaurant/shared-types";
+
+import type { MobileConfig } from "./config.js";
+
+/**
+ * The only Nest paths this client is allowed to call. The mobile foundation is
+ * read-only: no Order, payment or cash mutation exists here, and `request`
+ * refuses any path outside this allowlist before touching the network.
+ */
+export const MOBILE_API_PATHS = Object.freeze({
+  authorizeBranch: "/api/v1/access/branch",
+  diningLayout: "/api/v1/dining/layout",
+  memberships: "/api/v1/access/memberships",
+  menuCatalog: "/api/v1/catalog/menu",
+} as const);
+
+/** HTTP status, or the two client-side failures that never reach the server. */
+export type MobileRequestStatus = number | "network" | "protocol";
+
+export class MobileRequestError extends Error {
+  public constructor(public readonly status: MobileRequestStatus) {
+    super("MOBILE_REQUEST_FAILED");
+    this.name = "MobileRequestError";
+  }
+}
+
+/** A structural Restaurant/Branch pair; both ids are validated before use. */
+export interface MobileBranchScope {
+  readonly branchId: string;
+  readonly restaurantId: string;
+}
+
+/** Exact response contract of `POST /api/v1/access/branch`. */
+export interface AuthorizedMobileBranch {
+  readonly branchId: string;
+  readonly restaurantId: string;
+  readonly roles: readonly MembershipRoleCode[];
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/** True only for the four authorized paths, ignoring their query string. */
+export function isAuthorizedMobilePath(path: string): boolean {
+  const pathname = path.split("?")[0];
+  return Object.values(MOBILE_API_PATHS).some((allowed) => allowed === pathname);
+}
+
+/** Lists the memberships Nest considers active for the bearer of the token. */
+export async function listMemberships(
+  config: MobileConfig,
+  accessToken: string,
+  fetcher: typeof fetch = fetch,
+): Promise<BranchMembershipListV1> {
+  return request(config, accessToken, MOBILE_API_PATHS.memberships, parseBranchMembershipListV1, fetcher);
+}
+
+/**
+ * Revalidates one Restaurant/Branch pair against Nest. A pair offered by the
+ * membership list is never assumed to still be authorized: revocation, a false
+ * pair or a stale selection are all decided by the server, and the response is
+ * additionally required to echo the exact pair that was requested.
+ */
+export async function authorizeBranch(
+  config: MobileConfig,
+  accessToken: string,
+  scope: MobileBranchScope,
+  fetcher: typeof fetch = fetch,
+): Promise<AuthorizedMobileBranch> {
+  const validated = validScope(scope);
+  const authorized = await request(config, accessToken, MOBILE_API_PATHS.authorizeBranch, parseAuthorizedMobileBranch, fetcher, {
+    body: JSON.stringify({ branchId: validated.branchId, restaurantId: validated.restaurantId }),
+    method: "POST",
+  });
+  if (!sameScope(authorized, validated)) throw new MobileRequestError("protocol");
+  return authorized;
+}
+
+/** Reads the zones and tables of one authorized branch. */
+export async function getDiningLayout(
+  config: MobileConfig,
+  accessToken: string,
+  scope: MobileBranchScope,
+  fetcher: typeof fetch = fetch,
+): Promise<DiningLayoutV1> {
+  const layout = await request(config, accessToken, scopedPath(MOBILE_API_PATHS.diningLayout, scope), parseDiningLayoutV1, fetcher);
+  if (!sameScope(layout.scope, scope)) throw new MobileRequestError("protocol");
+  return layout;
+}
+
+/** Reads the published catalog of one authorized branch, in read-only mode. */
+export async function getMenuCatalog(
+  config: MobileConfig,
+  accessToken: string,
+  scope: MobileBranchScope,
+  fetcher: typeof fetch = fetch,
+): Promise<MenuCatalogStateV1> {
+  const state = await request(config, accessToken, scopedPath(MOBILE_API_PATHS.menuCatalog, scope), parseMenuCatalogStateV1, fetcher);
+  if (!sameScope(state.scope, scope)) throw new MobileRequestError("protocol");
+  return state;
+}
+
+function scopedPath(path: string, scope: MobileBranchScope): string {
+  const validated = validScope(scope);
+  const query = new URLSearchParams({ branchId: validated.branchId, restaurantId: validated.restaurantId });
+  return `${path}?${query.toString()}`;
+}
+
+/**
+ * Accepts only the exact `{restaurantId, branchId}` shape, with both ids
+ * UUIDs, matching the boundary check `apps/api` applies. A pair that fails
+ * here is a client defect or a hostile value and must never become a request.
+ */
+function validScope(scope: MobileBranchScope): MobileBranchScope {
+  const parsed = parseBranchScope({ branchId: scope.branchId, restaurantId: scope.restaurantId });
+  if (parsed === undefined || !UUID_PATTERN.test(parsed.restaurantId) || !UUID_PATTERN.test(parsed.branchId)) {
+    throw new MobileRequestError("protocol");
+  }
+  // Normalized once, so the request, the echoed scope and the parsed response
+  // are all compared in the same form.
+  return Object.freeze({
+    branchId: parsed.branchId.toLowerCase(),
+    restaurantId: parsed.restaurantId.toLowerCase(),
+  });
+}
+
+/** UUIDs are case-insensitive; the pair itself must still match exactly. */
+function sameScope(left: MobileBranchScope, right: MobileBranchScope): boolean {
+  return left.restaurantId.toLowerCase() === right.restaurantId.toLowerCase()
+    && left.branchId.toLowerCase() === right.branchId.toLowerCase();
+}
+
+/**
+ * Accepts only the exact contract `BranchAccessController` returns: a plain
+ * object with exactly `{branchId, restaurantId, roles}`, both ids UUIDs, and
+ * `roles` a dense array of distinct codes from the shared allowlist.
+ *
+ * The checks match the guarantees `apps/web/src/lib/branch-selection.ts`
+ * documents for the same response: only `Object.prototype`/`null` prototypes,
+ * exact own keys through `Reflect.ownKeys` (so a symbol key is a rejection, not
+ * an invisible extra), plain data descriptors only (a getter or an accessor is
+ * refused instead of invoked), and any throw — a hostile proxy trap included —
+ * ends as `undefined`. No shared parser covers this shape yet, so the check
+ * stays local to this app; see `BACKEND_REQUESTS.md` SR-MOB-002.
+ */
+function parseAuthorizedMobileBranch(value: unknown): AuthorizedMobileBranch | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+
+    const ownKeys = Reflect.ownKeys(value);
+    const expectedKeys = ["branchId", "restaurantId", "roles"];
+    if (ownKeys.length !== expectedKeys.length || !expectedKeys.every((key) => ownKeys.includes(key))) {
+      return undefined;
+    }
+
+    const branchId = ownStringValue(value, "branchId");
+    const restaurantId = ownStringValue(value, "restaurantId");
+    const rolesDescriptor = Object.getOwnPropertyDescriptor(value, "roles");
+    if (
+      branchId === undefined || !UUID_PATTERN.test(branchId)
+      || restaurantId === undefined || !UUID_PATTERN.test(restaurantId)
+      || rolesDescriptor === undefined || !("value" in rolesDescriptor)
+    ) {
+      return undefined;
+    }
+
+    const roles = parseAuthorizedRoles(rolesDescriptor.value);
+    if (roles === undefined) return undefined;
+
+    return Object.freeze({
+      branchId: branchId.toLowerCase(),
+      restaurantId: restaurantId.toLowerCase(),
+      roles,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+/** A dense, non-empty array of distinct known role codes; holes are rejected. */
+function parseAuthorizedRoles(value: unknown): readonly MembershipRoleCode[] | undefined {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
+  if (value.length === 0 || value.length > MEMBERSHIP_ROLE_CODES.length) return undefined;
+
+  const roles: MembershipRoleCode[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    const raw = descriptor?.value;
+    if (
+      descriptor === undefined
+      || !descriptor.enumerable
+      || typeof raw !== "string"
+      || !(MEMBERSHIP_ROLE_CODES as readonly string[]).includes(raw)
+      || roles.includes(raw as MembershipRoleCode)
+    ) {
+      return undefined;
+    }
+    roles.push(raw as MembershipRoleCode);
+  }
+  return Object.freeze(roles);
+}
+
+/** Reads an own data property; an accessor or a missing key yields `undefined`. */
+function ownStringValue(value: object, key: string): string | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor !== undefined && "value" in descriptor && typeof descriptor.value === "string"
+    ? descriptor.value
+    : undefined;
+}
+
+async function request<T>(
+  config: MobileConfig,
+  accessToken: string,
+  path: string,
+  parser: (value: unknown) => T | undefined,
+  fetcher: typeof fetch,
+  init: Readonly<{ body?: string; method?: "POST" }> = {},
+): Promise<T> {
+  if (!isAuthorizedMobilePath(path)) throw new Error("MOBILE_PATH_NOT_AUTHORIZED");
+  if (accessToken.length === 0) throw new MobileRequestError(401);
+
+  let response: Response;
+  try {
+    response = await fetcher(`${config.apiBaseUrl}${path}`, {
+      ...(init.body === undefined ? {} : { body: init.body }),
+      cache: "no-store",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        ...(init.body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      method: init.method ?? "GET",
+    });
+  } catch {
+    throw new MobileRequestError("network");
+  }
+
+  if (!response.ok) throw new MobileRequestError(response.status);
+
+  let value: unknown;
+  try { value = await response.json(); } catch { throw new MobileRequestError("protocol"); }
+
+  const parsed = parser(value);
+  if (parsed === undefined) throw new MobileRequestError("protocol");
+  return parsed;
+}

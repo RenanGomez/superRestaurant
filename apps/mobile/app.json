@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "superRestaurant",
+    "slug": "super-restaurant-mobile",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "scheme": "superrestaurant",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.superrestaurant.mobile"
+    },
+    "ios": {
+      "bundleIdentifier": "com.superrestaurant.mobile",
+      "supportsTablet": true
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
