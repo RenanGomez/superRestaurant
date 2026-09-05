@@ -156,6 +156,8 @@ export function createHarnessAuth(): MobileAuthPort & {
     signIn: (_email: string, password: string): Promise<MobileSignInResult> => {
       if (harnessControl.scenario === "network") return Promise.resolve("unavailable");
       if (password === "rechazar") return Promise.resolve("rejected");
+      // Every sign-in mints a new token, as Auth does.
+      harnessControl.tokenSerial += 1;
       session = Object.freeze({
         accessToken: `harness-token-${harnessControl.tokenSerial}`,
         email: HARNESS_EMAIL,

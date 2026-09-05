@@ -16,6 +16,8 @@
     "src/lifecycle.test.ts",
     "src/revalidation.ts",
     "src/revalidation.test.ts",
+    "src/sign-out.ts",
+    "src/sign-out.test.ts",
     "src/supabase-auth.ts",
     "src/supabase-auth.test.ts",
     "src/money.ts",

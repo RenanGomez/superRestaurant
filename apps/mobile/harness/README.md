@@ -34,5 +34,6 @@ $env:MOBILE_VISUAL_HARNESS = "1"; pnpm --filter @super-restaurant/mobile run web
 - **Ciclo de vida**: ir a segundo plano, volver a primer plano (dispara la
   revalidación), renovar token, reiniciar la app conservando el escenario y
   reiniciar el arnés completo.
-- **Acceso**: cualquier contraseña inicia sesión; la contraseña literal
-  `rechazar` produce el estado de credenciales inválidas.
+- **Acceso**: cualquier contraseña inicia sesión y emite un token nuevo, como
+  hace Auth; la contraseña literal `rechazar` produce el estado de credenciales
+  inválidas.

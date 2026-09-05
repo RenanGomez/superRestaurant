@@ -26,6 +26,7 @@ import {
   type MobileTab,
 } from "../mobile-state.js";
 import { readInitialSession, revalidateAccess } from "../revalidation.js";
+import { endMobileSession } from "../sign-out.js";
 import { BranchScreen } from "./branch-screen.js";
 import { ActionButton, Banner, Caption, LoadingBlock, StateBlock, Subheading, useFocusRing } from "./components.js";
 import { MenuScreen } from "./menu-screen.js";
@@ -49,15 +50,13 @@ export function App({ auth, config, lifecycle }: {
   const restaurantId = scope?.restaurantId;
   const readable = canReadBranchData(state);
 
-  /** Ends the session on this device only, keeping the reason to explain it. */
+  /**
+   * Ends the session on this device only, keeping the reason to explain it. The
+   * screen closes immediately; telling the provider is best effort.
+   */
   const endSession = useCallback((notice: MobileNotice | undefined): void => {
     pendingNotice.current = notice;
-    // A failing sign-out must still clear this device: the session only ever
-    // lived in memory, so dropping it locally is always safe.
-    void auth.signOut().catch(() => undefined).finally(() => {
-      dispatch({ notice, type: "signedOut" });
-      pendingNotice.current = undefined;
-    });
+    endMobileSession({ dispatch, notice, signOut: auth.signOut });
   }, [auth]);
 
   const loadMemberships = useCallback((accessToken: string): void => {
@@ -84,9 +83,16 @@ export function App({ auth, config, lifecycle }: {
       if (active) dispatch({ session, type: "sessionRestored" });
     });
     const unsubscribe = auth.onSessionChange((session) => {
-      dispatch(session === undefined
-        ? { notice: pendingNotice.current, type: "signedOut" }
-        : { session, type: "sessionObserved" });
+      if (session === undefined) {
+        // Echo of a local sign-out, or one decided by the provider: reuse the
+        // reason when this device asked for it.
+        dispatch({ notice: pendingNotice.current, type: "signedOut" });
+        return;
+      }
+      // A session that the reducer accepts starts a new story; a late echo of a
+      // closed session is refused there and leaves the reason untouched.
+      pendingNotice.current = undefined;
+      dispatch({ session, type: "sessionObserved" });
     });
     // The token ticker only runs while this component is mounted and the app is
     // in the foreground; it never writes anything to the device.
