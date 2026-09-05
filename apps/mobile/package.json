@@ -1,0 +1,32 @@
+{
+  "name": "@super-restaurant/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "android": "expo start --android",
+    "build": "tsc --noEmit --project tsconfig.json && expo export --platform android --output-dir dist",
+    "ios": "expo start --ios",
+    "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs index.ts src",
+    "start": "expo start",
+    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node --input-type=module --eval \"import { writeFileSync } from 'node:fs'; writeFileSync('.test-dist/package.json', '{\\\"type\\\":\\\"module\\\"}');\" && node .test-dist/config.test.js && node .test-dist/session.test.js && node .test-dist/money.test.js && node .test-dist/mobile-client.test.js && node .test-dist/mobile-state.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@super-restaurant/shared-types": "workspace:*",
+    "@supabase/supabase-js": "2.112.4",
+    "expo": "57.0.19",
+    "expo-status-bar": "57.0.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "5.7.0",
+    "react-native-web": "0.21.2"
+  },
+  "devDependencies": {
+    "@super-restaurant/config": "workspace:*",
+    "@types/node": "26.3.0",
+    "@types/react": "19.2.18"
+  }
+}

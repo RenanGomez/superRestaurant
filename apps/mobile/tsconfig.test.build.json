@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".test-dist",
+    "rootDir": "src",
+    "declaration": false,
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  "include": [
+    "src/config.ts",
+    "src/config.test.ts",
+    "src/money.ts",
+    "src/money.test.ts",
+    "src/session.ts",
+    "src/session.test.ts",
+    "src/mobile-client.ts",
+    "src/mobile-client.test.ts",
+    "src/mobile-state.ts",
+    "src/mobile-state.test.ts"
+  ]
+}
