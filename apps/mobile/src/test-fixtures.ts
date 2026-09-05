@@ -148,6 +148,19 @@ export function jsonFetcher(body: unknown, status = 200): {
   return { calls, fetcher };
 }
 
+/**
+ * A `fetch` double that hands the parser the exact value it is given, without a
+ * JSON round trip. Serializing would erase symbol keys, accessors, prototypes
+ * and array holes — precisely what the adversarial parser tests exercise.
+ */
+export function valueFetcher(value: unknown, status = 200): typeof fetch {
+  return ((): Promise<Response> => Promise.resolve({
+    json: (): Promise<unknown> => Promise.resolve(value),
+    ok: status >= 200 && status < 300,
+    status,
+  } as unknown as Response)) as typeof fetch;
+}
+
 /** A `fetch` double that fails the way an unreachable network does. */
 export function failingFetcher(): typeof fetch {
   return ((): Promise<Response> => Promise.reject(new Error("ECONNREFUSED"))) as typeof fetch;

@@ -125,33 +125,99 @@ function validScope(scope: MobileBranchScope): MobileBranchScope {
   if (parsed === undefined || !UUID_PATTERN.test(parsed.restaurantId) || !UUID_PATTERN.test(parsed.branchId)) {
     throw new MobileRequestError("protocol");
   }
-  return Object.freeze({ branchId: parsed.branchId, restaurantId: parsed.restaurantId });
+  // Normalized once, so the request, the echoed scope and the parsed response
+  // are all compared in the same form.
+  return Object.freeze({
+    branchId: parsed.branchId.toLowerCase(),
+    restaurantId: parsed.restaurantId.toLowerCase(),
+  });
 }
 
+/** UUIDs are case-insensitive; the pair itself must still match exactly. */
 function sameScope(left: MobileBranchScope, right: MobileBranchScope): boolean {
-  return left.restaurantId === right.restaurantId && left.branchId === right.branchId;
+  return left.restaurantId.toLowerCase() === right.restaurantId.toLowerCase()
+    && left.branchId.toLowerCase() === right.branchId.toLowerCase();
 }
 
 /**
- * Accepts only the exact contract `BranchAccessController` returns. No shared
- * parser covers this response shape, so the check stays local to this app
- * instead of being invented as a shared contract — the same decision
- * `apps/web` recorded at its own boundary.
+ * Accepts only the exact contract `BranchAccessController` returns: a plain
+ * object with exactly `{branchId, restaurantId, roles}`, both ids UUIDs, and
+ * `roles` a dense array of distinct codes from the shared allowlist.
+ *
+ * The checks match the guarantees `apps/web/src/lib/branch-selection.ts`
+ * documents for the same response: only `Object.prototype`/`null` prototypes,
+ * exact own keys through `Reflect.ownKeys` (so a symbol key is a rejection, not
+ * an invisible extra), plain data descriptors only (a getter or an accessor is
+ * refused instead of invoked), and any throw — a hostile proxy trap included —
+ * ends as `undefined`. No shared parser covers this shape yet, so the check
+ * stays local to this app; see `BACKEND_REQUESTS.md` SR-MOB-002.
  */
 function parseAuthorizedMobileBranch(value: unknown): AuthorizedMobileBranch | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record);
-  if (keys.length !== 3 || !keys.includes("branchId") || !keys.includes("restaurantId") || !keys.includes("roles")) return undefined;
-  const { branchId, restaurantId, roles } = record;
-  if (typeof branchId !== "string" || !UUID_PATTERN.test(branchId)) return undefined;
-  if (typeof restaurantId !== "string" || !UUID_PATTERN.test(restaurantId)) return undefined;
-  if (!Array.isArray(roles) || roles.length === 0 || roles.length > MEMBERSHIP_ROLE_CODES.length) return undefined;
-  const known = roles.every((role): role is MembershipRoleCode => (
-    typeof role === "string" && (MEMBERSHIP_ROLE_CODES as readonly string[]).includes(role)
-  ));
-  if (!known || new Set(roles).size !== roles.length) return undefined;
-  return Object.freeze({ branchId, restaurantId, roles: Object.freeze([...roles]) });
+  if (typeof value !== "object" || value === null) return undefined;
+
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+
+    const ownKeys = Reflect.ownKeys(value);
+    const expectedKeys = ["branchId", "restaurantId", "roles"];
+    if (ownKeys.length !== expectedKeys.length || !expectedKeys.every((key) => ownKeys.includes(key))) {
+      return undefined;
+    }
+
+    const branchId = ownStringValue(value, "branchId");
+    const restaurantId = ownStringValue(value, "restaurantId");
+    const rolesDescriptor = Object.getOwnPropertyDescriptor(value, "roles");
+    if (
+      branchId === undefined || !UUID_PATTERN.test(branchId)
+      || restaurantId === undefined || !UUID_PATTERN.test(restaurantId)
+      || rolesDescriptor === undefined || !("value" in rolesDescriptor)
+    ) {
+      return undefined;
+    }
+
+    const roles = parseAuthorizedRoles(rolesDescriptor.value);
+    if (roles === undefined) return undefined;
+
+    return Object.freeze({
+      branchId: branchId.toLowerCase(),
+      restaurantId: restaurantId.toLowerCase(),
+      roles,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+/** A dense, non-empty array of distinct known role codes; holes are rejected. */
+function parseAuthorizedRoles(value: unknown): readonly MembershipRoleCode[] | undefined {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
+  if (value.length === 0 || value.length > MEMBERSHIP_ROLE_CODES.length) return undefined;
+
+  const roles: MembershipRoleCode[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    const raw = descriptor?.value;
+    if (
+      descriptor === undefined
+      || !descriptor.enumerable
+      || typeof raw !== "string"
+      || !(MEMBERSHIP_ROLE_CODES as readonly string[]).includes(raw)
+      || roles.includes(raw as MembershipRoleCode)
+    ) {
+      return undefined;
+    }
+    roles.push(raw as MembershipRoleCode);
+  }
+  return Object.freeze(roles);
+}
+
+/** Reads an own data property; an accessor or a missing key yields `undefined`. */
+function ownStringValue(value: object, key: string): string | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor !== undefined && "value" in descriptor && typeof descriptor.value === "string"
+    ? descriptor.value
+    : undefined;
 }
 
 async function request<T>(
