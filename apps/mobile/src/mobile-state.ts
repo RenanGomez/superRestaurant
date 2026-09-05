@@ -33,12 +33,6 @@ export interface MobileState {
   readonly menu: MobileResource<MenuCatalogStateV1>;
   readonly notice: MobileNotice | undefined;
   readonly pendingScope: MobileBranchScope | undefined;
-  /**
-   * Identity of the session closed on this device, kept until a genuinely new
-   * one arrives. It is never rendered: it exists only so a late notification
-   * carrying the old session cannot bring the operator back.
-   */
-  readonly closedSessionKey: string | undefined;
   /** True while the foreground revalidation of session and scope is running. */
   readonly revalidating: boolean;
   /** Set when that revalidation could not complete; blocks every branch read. */
@@ -78,7 +72,6 @@ const idleResource = Object.freeze({ failure: undefined, status: "idle", value: 
 export const initialMobileState: MobileState = Object.freeze({
   branch: undefined,
   branchFailure: undefined,
-  closedSessionKey: undefined,
   layout: idleResource,
   memberships: idleResource,
   menu: idleResource,
@@ -95,23 +88,26 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
   switch (event.type) {
     case "sessionRestored":
       return event.session === undefined
-        ? signedOutState(state.notice, true, sessionKey(state.session) ?? state.closedSessionKey)
-        : freeze({ ...initialMobileState, closedSessionKey: state.closedSessionKey, session: event.session, started: true });
+        ? signedOutState(state.notice, true)
+        : freeze({ ...initialMobileState, session: event.session, started: true });
     case "sessionObserved":
-      // A notification that arrives after a local sign-out, carrying the very
-      // session that was closed, is ignored: nothing is restored.
-      if (state.closedSessionKey !== undefined && state.closedSessionKey === sessionKey(event.session)) return state;
-      // A session that simply renewed its token keeps the branch and its data;
-      // a first session, or a different operator, starts from a clean state so
-      // nothing from a previous scope survives. Identity is the immutable
-      // Supabase user id: an email is display data and could be reassigned.
-      // The closed session stays refused forever: a signed-out token must never
-      // come back, not even behind a later, legitimate sign-in.
+      // Whether a session may be observed at all is not decided here: the
+      // authentication gate (`src/auth-gate.ts`) only lets through what belongs
+      // to the generation that is open, so a notification about a session this
+      // device already closed never reaches the reducer. What is decided here
+      // is what an accepted session does to the screen: a renewed token of the
+      // operator in place keeps the branch and its data; a first session, or a
+      // different operator, starts from a clean state so nothing from a
+      // previous scope survives. Identity is the immutable Supabase user id: an
+      // email is display data and could be reassigned.
       return state.session !== undefined && isSameOperator(state.session, event.session)
         ? freeze({ ...state, session: event.session, started: true })
-        : freeze({ ...initialMobileState, closedSessionKey: state.closedSessionKey, session: event.session, started: true });
+        : freeze({ ...initialMobileState, session: event.session, started: true });
     case "signedOut":
-      return signedOutState(event.notice, true, sessionKey(state.session) ?? state.closedSessionKey);
+      // Nothing about the closed session is kept — no token, no identity, no
+      // derived key. Refusing what the provider says afterwards is the gate's
+      // job, and it does it without remembering any credential.
+      return signedOutState(event.notice, true);
     default:
       break;
   }
@@ -307,17 +303,8 @@ export function noticeMessage(notice: MobileNotice): string {
   }[notice];
 }
 
-function signedOutState(
-  notice: MobileNotice | undefined,
-  started: boolean,
-  closedSessionKey: string | undefined,
-): MobileState {
-  return freeze({ ...initialMobileState, closedSessionKey, notice, started });
-}
-
-/** Identity of one session: the operator plus the exact token that was issued. */
-function sessionKey(session: MobileSession | undefined): string | undefined {
-  return session === undefined ? undefined : `${session.userId}|${session.accessToken}`;
+function signedOutState(notice: MobileNotice | undefined, started: boolean): MobileState {
+  return freeze({ ...initialMobileState, notice, started });
 }
 
 function forActiveScope(

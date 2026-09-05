@@ -156,15 +156,9 @@ test("a branch revoked mid-session drops its data and forces a fresh membership 
 test("signing out locally clears every branch-scoped value", () => {
   const state = apply(onBranchA(), { notice: "sessionEnded", type: "signedOut" });
 
-  // The only thing kept is the identity of the closed session, so a late
-  // notification carrying it cannot bring the operator back.
-  assert.equal(state.closedSessionKey, `${session.userId}|${session.accessToken}`);
-  assert.deepEqual(state, {
-    ...initialMobileState,
-    closedSessionKey: state.closedSessionKey,
-    notice: "sessionEnded",
-    started: true,
-  });
+  // Nothing of the closed session survives: the state is the initial one plus
+  // the reason to explain it. Refusing late provider events is the gate's job.
+  assert.deepEqual(state, { ...initialMobileState, notice: "sessionEnded", started: true });
   assert.equal(state.session, undefined);
   assert.equal(state.memberships.value, undefined);
   assert.equal(mobileScreen(state), "signIn");
@@ -321,13 +315,7 @@ test("loaded, backgrounded, session expired, foregrounded: back to sign-in", () 
     { notice: "sessionEnded", type: "signedOut" },
   );
 
-  assert.deepEqual(expired, {
-    ...initialMobileState,
-    closedSessionKey: expired.closedSessionKey,
-    notice: "sessionEnded",
-    started: true,
-  });
-  assert.equal(expired.closedSessionKey, `${session.userId}|${session.accessToken}`);
+  assert.deepEqual(expired, { ...initialMobileState, notice: "sessionEnded", started: true });
   assert.equal(mobileScreen(expired), "signIn");
 });
 

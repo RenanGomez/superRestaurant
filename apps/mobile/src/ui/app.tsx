@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
+import { gateMobileAuth, type MobileAuthGate } from "../auth-gate.js";
 import type { MobileAuthPort } from "../auth-port.js";
 import type { MobileConfig } from "../config.js";
 import { lifecycleEffects, type MobileAppStatus, type MobileLifecyclePort } from "../lifecycle.js";
@@ -42,7 +43,14 @@ export function App({ auth, config, lifecycle }: {
   readonly lifecycle: MobileLifecyclePort;
 }): React.JSX.Element {
   const [state, dispatch] = useReducer(reduceMobileState, initialMobileState);
+  // Every conversation with the identity provider goes through the gate, so a
+  // late notification, a late session read or a listener the provider never
+  // released cannot revive a session this device already closed.
+  const gate = useAuthGate(auth);
   const pendingNotice = useRef<MobileNotice | undefined>(undefined);
+  // Whether this device is currently holding a session, readable from the
+  // provider callbacks, which run long after the render that produced them.
+  const identified = useRef(false);
   const membershipRequest = useRef(0);
   const token = state.session?.accessToken;
   const scope = activeScope(state);
@@ -56,8 +64,9 @@ export function App({ auth, config, lifecycle }: {
    */
   const endSession = useCallback((notice: MobileNotice | undefined): void => {
     pendingNotice.current = notice;
-    endMobileSession({ dispatch, notice, signOut: auth.signOut });
-  }, [auth]);
+    // `gate.signOut` closes the generation before the provider is asked.
+    endMobileSession({ dispatch, notice, signOut: gate.signOut });
+  }, [gate]);
 
   const loadMemberships = useCallback((accessToken: string): void => {
     const request = membershipRequest.current + 1;
@@ -75,34 +84,41 @@ export function App({ auth, config, lifecycle }: {
       });
   }, [config, endSession]);
 
+  useEffect(() => { identified.current = state.session !== undefined; }, [state.session]);
+
   useEffect(() => {
     let active = true;
     // A session port that rejects is treated as "no session": the app shows
-    // sign-in instead of staying on the start-up screen.
-    void readInitialSession(auth.currentSession).then((session) => {
+    // sign-in instead of staying on the start-up screen. A read that answers
+    // after a sign-out answers for an older generation, and the gate turns it
+    // into "no session" too.
+    void readInitialSession(gate.currentSession).then((session) => {
       if (active) dispatch({ session, type: "sessionRestored" });
     });
-    const unsubscribe = auth.onSessionChange((session) => {
+    const unsubscribe = gate.onSessionChange((session) => {
       if (session === undefined) {
         // Echo of a local sign-out, or one decided by the provider: reuse the
-        // reason when this device asked for it.
+        // reason when this device asked for it. When a session really ended,
+        // close the generation as well, so nothing the provider says afterwards
+        // can revive it — including a sign-out this device never asked for.
+        if (identified.current) gate.closeGeneration();
         dispatch({ notice: pendingNotice.current, type: "signedOut" });
         return;
       }
-      // A session that the reducer accepts starts a new story; a late echo of a
-      // closed session is refused there and leaves the reason untouched.
+      // Only sessions of the generation that is open reach this point, so an
+      // accepted one always starts a new story or renews the current operator.
       pendingNotice.current = undefined;
       dispatch({ session, type: "sessionObserved" });
     });
     // The token ticker only runs while this component is mounted and the app is
     // in the foreground; it never writes anything to the device.
-    void auth.startAutoRefresh().catch(() => undefined);
+    void gate.startAutoRefresh().catch(() => undefined);
     return (): void => {
       active = false;
       unsubscribe();
-      void auth.stopAutoRefresh().catch(() => undefined);
+      void gate.stopAutoRefresh().catch(() => undefined);
     };
-  }, [auth]);
+  }, [gate]);
 
   // Foreground lifecycle: drive the token ticker and revalidate the session and
   // the exact Restaurant/Branch pair on every real return to the foreground.
@@ -111,11 +127,11 @@ export function App({ auth, config, lifecycle }: {
     return lifecycle.subscribe((next) => {
       const effects = lifecycleEffects(previous, next);
       previous = next;
-      void (effects.autoRefresh === "start" ? auth.startAutoRefresh() : auth.stopAutoRefresh())
+      void (effects.autoRefresh === "start" ? gate.startAutoRefresh() : gate.stopAutoRefresh())
         .catch(() => undefined);
       if (effects.revalidate) dispatch({ type: "revalidationStarted" });
     });
-  }, [auth, lifecycle]);
+  }, [gate, lifecycle]);
 
   // One revalidation at a time: the reducer ignores repeated starts, and this
   // effect only runs while `revalidating` is true.
@@ -127,7 +143,7 @@ export function App({ auth, config, lifecycle }: {
       : undefined;
     void revalidateAccess({
       authorizeScope: (session, requested) => authorizeBranch(config, session.accessToken, requested),
-      currentSession: auth.currentSession,
+      currentSession: gate.currentSession,
       scope: target,
     }).then((outcome) => {
       if (!active) return;
@@ -141,7 +157,7 @@ export function App({ auth, config, lifecycle }: {
       if (outcome.branch === undefined) loadMemberships(outcome.session.accessToken);
     });
     return (): void => { active = false; };
-  }, [auth, branchId, config, endSession, loadMemberships, restaurantId, state.revalidating]);
+  }, [branchId, config, endSession, gate, loadMemberships, restaurantId, state.revalidating]);
 
   useEffect(() => {
     if (readable && token !== undefined && state.memberships.status === "idle") loadMemberships(token);
@@ -208,7 +224,9 @@ export function App({ auth, config, lifecycle }: {
 
   if (screen === "starting") return <LoadingBlock label="Abriendo superRestaurant…" />;
 
-  if (screen === "signIn") return <SignInScreen notice={notice} onSignIn={auth.signIn} />;
+  // `gate.signIn` is what opens a new generation: entering again is always a
+  // deliberate act, never something a provider event can do on its own.
+  if (screen === "signIn") return <SignInScreen notice={notice} onSignIn={gate.signIn} />;
 
   if (screen === "branches") {
     return <BranchScreen
@@ -273,6 +291,19 @@ export function App({ auth, config, lifecycle }: {
       />
     </View>
   </View>;
+}
+
+/**
+ * One authentication generation per mounted app. Held in a ref rather than a
+ * memo because the gate is stateful: it must survive every render of this
+ * component and be replaced only when the underlying port really changes.
+ */
+function useAuthGate(auth: MobileAuthPort): MobileAuthGate {
+  const held = useRef<{ readonly gate: MobileAuthGate; readonly port: MobileAuthPort } | undefined>(undefined);
+  if (held.current === undefined || held.current.port !== auth) {
+    held.current = { gate: gateMobileAuth(auth), port: auth };
+  }
+  return held.current.gate;
 }
 
 function WorkspaceTab({ onPress, selected, tab }: {

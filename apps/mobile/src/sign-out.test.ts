@@ -13,6 +13,16 @@ import { fixtureSession } from "./test-fixtures.js";
 
 const session = fixtureSession();
 
+/** Every path inside the state whose value contains `needle`. */
+function carriers(value: unknown, needle: string, path = "state"): readonly string[] {
+  if (typeof value === "string") return value.includes(needle) ? [path] : [];
+  if (Array.isArray(value)) return value.flatMap((item, index) => carriers(item, needle, `${path}[${index}]`));
+  if (typeof value === "object" && value !== null) {
+    return Object.entries(value).flatMap(([key, item]) => carriers(item, needle, `${path}.${key}`));
+  }
+  return [];
+}
+
 /** Applies to the reducer exactly what the app dispatches, in order. */
 function recorder(): { readonly dispatch: (event: MobileEvent) => void; readonly events: MobileEvent[]; state: MobileState } {
   const events: MobileEvent[] = [];
@@ -102,33 +112,32 @@ test("a port that throws synchronously does not break the local sign-out", () =>
   assert.equal(mobileScreen(sink.state), "signIn");
 });
 
-test("a late notification carrying the closed session restores nothing", () => {
+test("the closed state keeps no bearer and nothing branch-scoped", () => {
   const sink = recorder();
   signedInOnBranchA(sink);
-  const beforeSignOut = sink.state;
-  assert.notEqual(beforeSignOut.branch, undefined);
+  assert.equal(carriers(sink.state, session.accessToken).length, 1, "the token is held while signed in");
 
   endMobileSession({ dispatch: sink.dispatch, notice: "sessionEnded", signOut: () => new Promise<void>(() => undefined) });
-  const closed = sink.state;
 
-  // The provider notifies late with the very session that was closed.
-  sink.dispatch({ session, type: "sessionObserved" });
-
-  assert.equal(sink.state, closed);
+  // No field of the state — not even a derived key — carries the bearer, and
+  // no field was added to hold one.
+  assert.deepEqual(carriers(sink.state, session.accessToken), []);
+  assert.deepEqual(Object.keys(sink.state).sort(), Object.keys(initialMobileState).sort());
+  assert.deepEqual(sink.state, { ...initialMobileState, notice: "sessionEnded", started: true });
   assert.equal(mobileScreen(sink.state), "signIn");
-  assert.equal(sink.state.session, undefined);
   assert.equal(sink.state.branch, undefined);
   assert.equal(sink.state.memberships.value, undefined);
   assert.equal(sink.state.layout.value, undefined);
   assert.equal(sink.state.menu.value, undefined);
 });
 
-test("signing in again after a local sign-out works and starts clean", () => {
+test("a session accepted after a local sign-out starts clean", () => {
   const sink = recorder();
   signedInOnBranchA(sink);
   endMobileSession({ dispatch: sink.dispatch, notice: undefined, signOut: () => Promise.resolve() });
 
-  // A new sign-in always carries a newly issued token.
+  // Which sessions may be accepted at all is decided by the gate
+  // (`src/auth-gate.test.ts`); one that gets through starts from nothing.
   const fresh = fixtureSession({ accessToken: "harness-token-2" });
   sink.dispatch({ session: fresh, type: "sessionObserved" });
 
@@ -136,10 +145,4 @@ test("signing in again after a local sign-out works and starts clean", () => {
   assert.deepEqual(sink.state.session, fresh);
   assert.equal(sink.state.branch, undefined);
   assert.equal(sink.state.memberships.status, "idle");
-
-  // The closed token stays refused even after the new sign-in: no downgrade.
-  const afterSignIn = sink.state;
-  sink.dispatch({ session, type: "sessionObserved" });
-  assert.equal(sink.state, afterSignIn);
-  assert.equal(sink.state.session?.accessToken, "harness-token-2");
 });
