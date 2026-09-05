@@ -52,8 +52,8 @@ Estados permitidos: `TODO`, `IN_PROGRESS`, `REVIEW`, `DONE`, `BLOCKED`, `CANCELL
 ## Fase 2 — Mobile
 
 - [x] **DONE · P2** — Inicializar `apps/mobile` con Expo/React Native y tipos compartidos. Nota: Emmanuel autorizó integrar el workstream mobile el 2026-09-05 después de cinco rondas de revisión. El corte quedó en `main` con Expo 57.0.20, TypeScript, Auth efímero fail-closed, selección Restaurant/Branch, lecturas de mesas/menú y arnés visual aislado; lint 8/8, typecheck 11/11, tests 11/11 y build 8/8 pasaron en Node 24.19.0.
-- [ ] **REVIEW · P2** — Implementar login y selección de sucursal/turno. Nota: login y selección Restaurant/Branch ya estaban integrados. Este corte añade contrato v1 estricto, entidad y lectura server-only de turnos operativos abiertos, selección mobile previa a mesas/menú y limpieza al cambiar o revalidar sucursal. La migración permanece local y no se aplicó a ningún esquema remoto; apertura/cierre y el enlace explícito con caja quedan fuera de alcance.
-- [ ] **TODO · P2** — Implementar vista de mesas y toma de comanda online.
+- [x] **DONE · P2** — Implementar login y selección de sucursal/turno. Nota: Emmanuel aprobó expresamente el corte el 2026-09-05. Incluye contrato v1 estricto, entidad y lectura server-only de turnos operativos abiertos, selección mobile previa a mesas/menú y limpieza al cambiar o revalidar sucursal. La migración permanece local y no se aplicó a ningún esquema remoto; apertura/cierre y el enlace explícito con caja quedan fuera de alcance.
+- [ ] **IN_PROGRESS · P2** — Implementar vista de mesas y toma de comanda online. Nota: trabajo dividido en paralelo el 2026-09-05. Claude tiene exclusivamente la presentación e interacción mobile dentro de `apps/mobile/**`, sin mutaciones productivas ni reglas duplicadas; Codex conserva contratos, dominio, API, esquema, seguridad e integración. El mandato exacto está en `docs/CLAUDE_FRONTEND_WORKSTREAM.md`.
 - [ ] **TODO · P2** — Implementar notificaciones de platillo listo.
 - [ ] **TODO · P2** — Implementar impresión Bluetooth mediante `packages/printing`.
 

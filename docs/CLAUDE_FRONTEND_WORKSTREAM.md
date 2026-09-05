@@ -1,5 +1,102 @@
 # Workstream frontend para Claude — fundación móvil aislada
 
+## 0. Mandato vigente desde 2026-09-05 — mesas y borrador de comanda
+
+Esta sección sustituye cualquier instrucción contradictoria del mandato histórico que aparece debajo. La fundación Expo/Auth/Restaurant/Branch/turno y sus cinco rondas de corrección ya fueron integradas en `main` y están **DONE**. No reabrirlas ni reconstruirlas.
+
+### 0.1 Objetivo y división paralela
+
+Claude debe implementar exclusivamente la capa de presentación e interacción mobile para la siguiente P2: **vista de mesas y toma de comanda online**. Codex trabaja en paralelo fuera de `apps/mobile/**` y conserva:
+
+- contratos compartidos y parsers;
+- reglas de dominio y cálculos;
+- endpoints, servicios y adaptadores Nest;
+- esquema, migraciones, RLS, permisos y verificación PostgreSQL;
+- integración productiva final entre UI, estado, cliente y backend.
+
+El entregable de Claude debe ser útil e integrable, pero no puede anticipar capacidades server-side ausentes. En particular, hoy no existe una lectura POS consolidada para recuperar la orden activa de una mesa y el backend todavía no valida el turno operativo nuevo en las mutaciones de Order. Por ello Claude construirá la UI y sus estados mediante callbacks/props tipados, pero **no conectará todavía mutaciones productivas de Order**.
+
+### 0.2 Base, rama y aislamiento
+
+1. Crear un worktree nuevo; no reutilizar el worktree de la fundación.
+2. Partir exactamente de `main@0f6de7a444ee9930eea2ca4a83415c7caeba8c21` y confirmar árbol limpio.
+3. Rama sugerida: `claude/mobile-order-entry-ui-20260905`.
+4. Leer una sola vez los archivos operativos exigidos por `AGENTS.md`, este documento completo y la sección Fase 2 del plan.
+5. Consultar CodeGraph antes de editar y después de terminar.
+6. No incorporar cambios posteriores de `main`, hacer merge, rebase, push o modificar otra rama. Reportar cualquier divergencia.
+
+### 0.3 MCP autorizado y obligatorio
+
+Emmanuel autorizó instalar y usar los MCP necesarios para esta unidad. Antes de editar:
+
+1. Instalar CodeGraph MCP para Claude en configuración global de usuario, sin crear ni versionar configuración dentro del repositorio:
+   - `codegraph install --target claude --location global`
+2. Instalar el plugin oficial de Expo para Claude Code:
+   - `claude plugin install expo@claude-plugins-official`
+3. Abrir `/mcp`, confirmar que CodeGraph y Expo estén disponibles y usar CodeGraph para el análisis estructural.
+
+La autorización cubre únicamente instalación/configuración de usuario y consultas necesarias. No autoriza Supabase MCP, acceso a cuentas o secretos del proyecto, EAS Build, publicación, deployment, firma, creación de credenciales ni cambios remotos. Si Expo pide iniciar sesión, detener ese paso y reportarlo: este slice local no necesita una cuenta Expo.
+
+### 0.4 Rutas y fronteras
+
+Claude puede modificar únicamente:
+
+- `apps/mobile/**`;
+- `pnpm-lock.yaml` solo si una dependencia de `apps/mobile/package.json` es imprescindible, está justificada y no existe ya una alternativa instalada.
+
+Todo lo demás es de solo lectura. En especial, no modificar `apps/api/**`, `packages/**`, `supabase/**`, documentos operativos, configuración raíz, Web o KDS. No añadir una librería de estado, navegación, formularios o UI sin demostrar que los recursos actuales no bastan y solicitar decisión primero.
+
+Codex no modificará `apps/mobile/**` mientras este mandato esté activo. Si Claude necesita una capacidad fuera de esa frontera, debe registrarla en `apps/mobile/BACKEND_REQUESTS.md` y continuar con trabajo independiente.
+
+### 0.5 Contratos existentes que debe reutilizar
+
+Confirmar nombres y formas exactas con CodeGraph; no copiarlos ni redefinirlos:
+
+- `DiningLayoutV1` y sus zonas/mesas;
+- `MenuCatalogStateV1`, `MenuCatalogV1`, productos, modificadores y precios;
+- `CreateOrderCommandV1`;
+- `AddOrderItemCommandV1`;
+- `OpenOrderCommandV1`;
+- `OrderMutationSummaryV1`;
+- contrato de turno operativo v1 integrado en `main`.
+
+Los endpoints `POST /api/v1/orders`, `POST /api/v1/orders/items` y `POST /api/v1/orders/open` existen y pueden inspeccionarse, pero en este slice son **solo referencia**. No llamarlos desde el producto ni simular que una orden quedó guardada. La ausencia de una lectura de orden activa debe permanecer visible como frontera, no cubrirse con estado autoritativo inventado.
+
+### 0.6 Entregable funcional
+
+Implementar componentes y flujo visual mobile para:
+
+- convertir la vista de mesas existente en una selección táctil accesible;
+- mostrar zona, nombre y capacidad provenientes del contrato, sin inventar ocupación, disponibilidad o cuenta;
+- entrar a un compositor de borrador para la mesa seleccionada;
+- explorar el catálogo por categorías y seleccionar un producto;
+- elegir únicamente modificadores permitidos por el contrato y una cantidad entera válida;
+- presentar las líneas del borrador y permitir edición/eliminación local;
+- mostrar estados explícitos `idle`, vacío, cargando, listo, enviando, éxito, conflicto, autorización, red y protocolo;
+- exponer callbacks claros para `crear orden`, `agregar ítem` y `abrir/enviar comanda`, sin implementar la escritura HTTP;
+- ofrecer salida segura a mesas y descarte del borrador mediante confirmación dentro de la pantalla, nunca `alert()`, `confirm()` o `prompt()`.
+
+No calcular subtotal, impuestos, descuentos, propina o total en mobile. Puede mostrar el precio unitario recibido, siempre con entero en unidad menor y moneda ISO explícita mediante el helper existente. Usar `MXN` solo cuando llegue en el contrato; nunca como fallback. No incluir CFDI, fiscalidad, pagos, caja, impresión, notificaciones push u offline.
+
+Los tipos locales permitidos son exclusivamente estado efímero de presentación y props de componentes; no pueden convertirse en una segunda entidad Order ni duplicar reglas del dominio.
+
+### 0.7 Calidad y pruebas
+
+- Reutilizar el sistema visual y componentes actuales de `apps/mobile`; no crear otro design system.
+- Targets primarios de 48 px, foco visible, labels/roles accesibles, contraste AA, texto largo y reduced motion.
+- Verificar 390×844 y 1024×768, sin overflow y con consola limpia.
+- Ampliar el arnés visual aislado; sus cadenas, fixtures y controles no pueden aparecer en el bundle distribuible.
+- Usar UUID generados durante pruebas o UUID nuevos no documentados; nunca repetir los UUID de evidencias existentes.
+- Probar selección/cambio de mesa, borrador vacío, producto/modificadores/cantidad, eliminación, descarte, doble toque, estados de envío/error/conflicto y limpieza al cambiar sucursal/turno o cerrar sesión.
+- Demostrar que ningún gesto llama endpoints Order y que ninguna regla monetaria se calcula localmente.
+- Ejecutar lint, typecheck, tests, `expo install --check`, export Android y las cuatro compuertas globales con Node 24.19.0. No publicar builds.
+
+### 0.8 Entrega
+
+Entregar commits convencionales pequeños, hash final y árbol limpio. Actualizar `apps/mobile/CLAUDE_DELIVERY.md` con base/rama, alcance, archivos, pruebas, matriz visual, resultado de CodeGraph/MCP, limitaciones y diff de rutas. Actualizar `apps/mobile/BACKEND_REQUESTS.md` solo para necesidades reales, conservando los identificadores existentes y creando identificadores nuevos sin reutilizar ninguno.
+
+No integrar la rama. El coordinador revisará el diff, resolverá la frontera backend y pedirá autorización humana antes de cualquier merge.
+
 ## 1. Mandato
 
 Claude debe implementar una unidad frontend independiente para `superRestaurant` sin interferir con el curso principal del repositorio.
