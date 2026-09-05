@@ -151,3 +151,33 @@ token se escribe en almacenamiento ni se registra en logs.
   entorno, o que autorice expresamente un smoke acotado con usuario temporal,
   fixtures marcadas, cleanup obligatorio y recovery exclusivo, como se hizo para
   Web y KDS. El arnés no sustituye esa verificación: solo la anticipa.
+
+---
+
+## SR-MOB-006 — Actualizar `expo` a 57.0.20 exige tocar configuración raíz
+
+- **Capacidad requerida**: una decisión sobre cómo subir `expo` a la versión que
+  `expo install --check` exige, sin relajar la política de antigüedad mínima de
+  paquetes del monorepo.
+- **Compuerta bloqueada**: `pnpm --filter @super-restaurant/mobile exec expo
+  install --check` termina en código 1 con
+  `expo@57.0.19 - expected version: ~57.0.20`.
+- **Evidencia exacta**: `expo@57.0.20` se publicó el 2026-09-04T07:46Z y
+  `@expo/cli@57.0.22` el 2026-09-04T07:47Z. Una instalación de prueba en un
+  proyecto aislado, fuera del repositorio, mostró que pnpm 11.19.0 solo acepta
+  esas versiones si se registran cuatro entradas en `minimumReleaseAgeExclude`
+  de `pnpm-workspace.yaml`: `@expo/cli@57.0.22`, `expo-modules-core@57.0.16`,
+  `expo-modules-jsi@57.0.8` y `expo@57.0.20`. La última comprobación fue a las
+  2026-09-05T06:54Z, todavía dentro de la ventana de 24 h.
+- **Por qué se detuvo aquí**: `pnpm-workspace.yaml` es configuración raíz y el
+  mandato la declara de solo lectura. No se relajó `minimumReleaseAge`, no se
+  añadieron exclusiones y no se modificó ningún archivo fuera de
+  `apps/mobile/**`.
+- **Impacto si se difiere**: la compuerta `expo install --check` queda en rojo.
+  El app compila, exporta y pasa el resto de las compuertas con `expo@57.0.19`.
+- **Decisión requerida**: una de estas dos, a criterio del coordinador:
+  1. reejecutar `expo install --check` cuando las versiones superen la ventana
+     de antigüedad, y entonces subir `expo` a `57.0.20` en
+     `apps/mobile/package.json` con el cambio derivado de `pnpm-lock.yaml`; o
+  2. autorizar expresamente añadir esas cuatro entradas a
+     `minimumReleaseAgeExclude`, indicando quién realiza el cambio.
