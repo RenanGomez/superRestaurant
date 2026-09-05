@@ -1,5 +1,10 @@
 # PROJECT_NOTES
 
+## Integración mobile confirmada el 2026-09-05
+
+- Emmanuel autorizó integrar `ecd585af26ff2494e3ddbe269fd4acfecdf9c42e` en `main`. La fundación de `apps/mobile` usa Expo 57.0.20, sesión Supabase solo en memoria, una compuerta por generación para impedir restauraciones tardías, selección autoritativa Restaurant/Branch y lecturas Nest de mesas y menú. No incluye turno, comandas, push, impresión Bluetooth, persistencia segura de sesión ni verificación en dispositivos físicos.
+- La siguiente decisión de producto es la semántica de `Shift`. No debe inferirse que turno operativo de sucursal, jornada laboral y sesión de caja sean la misma entidad: esa elección afecta órdenes, caja, permisos y el futuro modelo de empleados. Ningún esquema remoto se modifica hasta contar con decisión y autorización explícitas.
+
 ## Decisiones de producto confirmadas el 2026-09-04
 
 - Licencia: Emmanuel Renan Gomez Alvarez confirmó ser el titular y aprobó superRestaurant como software propietario/comercial. El código propio queda con todos los derechos reservados y los workspaces se marcan `UNLICENSED`; las dependencias conservan sus licencias. La auditoría preliminar mantiene bloqueada cualquier distribución hasta resolver avisos de `sharp/libvips`, metadata opcional por plataforma y `THIRD_PARTY_NOTICES` del artefacto real.

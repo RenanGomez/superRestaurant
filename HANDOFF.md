@@ -1,5 +1,17 @@
 # HANDOFF
 
+## Integración 2026-09-05 — fundación mobile aprobada
+
+- Tarea/estado: Emmanuel autorizó expresamente el merge del workstream mobile aprobado. La P2 “Inicializar `apps/mobile` con Expo/React Native y tipos compartidos” pasa a DONE; la siguiente P2, login/sucursal/turno, queda BLOCKED porque login y Restaurant/Branch están resueltos pero `Shift` no tiene semántica, contrato ni endpoint definidos.
+- Git local: los cambios de decisiones previamente aprobadas se preservaron primero en `bf051f9`; `ecd585af26ff2494e3ddbe269fd4acfecdf9c42e` se integró sin conflictos mediante el merge commit `119900525b77a464e63955f16a40fbf4517be78a`. No hubo rebase, push, force-push ni interacción Git remota.
+- Cambios: se incorporó `apps/mobile/**` y su lockfile derivado; se corrigió en `apps/mobile/src/sign-out.ts` un comentario obsoleto para atribuir el bloqueo de sesiones tardías a la compuerta de autenticación, sin cambio funcional. `TODO.md`, `PROJECT_NOTES.md` y `HANDOFF.md` registran integración, alcance y siguiente decisión.
+- Dependencias: el `node_modules` anterior se apartó de forma recuperable porque pnpm agotaba CPU al reconciliarlo. La instalación limpia congelada reutilizó 681 paquetes y descargó únicamente `@eslint/js@10.0.1`, ya fijado en el lockfile; el respaldo incompleto permanece en `C:\tmp\superRestaurant-node_modules-pre-mobile-20260905-0938` porque su eliminación recursiva no fue autorizada.
+- Verificación integrada en Node 24.19.0/pnpm 11.19.0: lint 8/8 sin caché; typecheck 11/11 sin caché; tests 11/11 verdes, incluidos 82 tests mobile; build 8/8 verde, incluido Android/Hermes de 2.2 MB. `git diff --check` quedó limpio.
+- CodeGraph: se sincronizó tras el merge y quedó actualizado con 536 archivos, 9,278 nodos y 36,687 relaciones. `gateMobileAuth` impacta `App`, `useAuthGate`, su prueba, el root y el arnés; no tiene consumidores fuera de mobile. El índice también incluye el worktree `.claude`, por lo que las consultas muestran duplicados conocidos y se filtraron a rutas de `main`.
+- Límites: no se cambiaron credenciales, permisos, Data API, Vault, esquema remoto, dinero, impuestos, CFDI, fiscalidad ni proveedor. Tampoco se aplicó migración ni se afirmó soporte offline o verificación física Android/iOS.
+- Siguiente acción mínima: Emmanuel debe elegir la semántica de `Shift`; después se diseñarán primero contrato e invariantes, se consultará CodeGraph y se implementará el slice mínimo sin aplicar esquema remoto sin autorización separada.
+- Subagentes: ninguno. Razonamiento alto por integración Git, autenticación y futura relación entre turno, órdenes y caja.
+
 ## Aprobación 2026-09-04 — AGENTS.md alineado
 
 - Tarea/estado: Emmanuel aprobó expresamente la P0 “Alinear `AGENTS.md` con este proyecto POS”; pasa de REVIEW a DONE sin retrabajo.

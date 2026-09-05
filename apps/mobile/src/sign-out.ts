@@ -9,9 +9,9 @@ import type { MobileEvent, MobileNotice } from "./mobile-state.js";
  * Supabase to drop its own copy is best effort — a call that never settles or
  * that rejects can neither block the screen nor bring the operator back.
  *
- * A late notification carrying the session that was just closed is rejected by
- * the reducer, which remembers the closed session until a genuinely new one
- * arrives.
+ * A late notification carrying a closed session is rejected by the
+ * authentication gate through its generation boundary; the reducer does not
+ * retain the token, identity or any derived credential.
  */
 export function endMobileSession({ dispatch, notice, signOut }: {
   readonly dispatch: (event: MobileEvent) => void;
