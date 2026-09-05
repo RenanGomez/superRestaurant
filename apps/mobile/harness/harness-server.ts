@@ -25,7 +25,16 @@ import {
   scopeB,
 } from "../src/test-fixtures.js";
 
-export type HarnessScenario = "ok" | "revoked" | "expired" | "empty" | "network" | "slow" | "sessionError";
+export type HarnessScenario =
+  | "ok"
+  | "revoked"
+  | "expired"
+  | "empty"
+  | "network"
+  | "slow"
+  | "sessionError"
+  | "signOutHang"
+  | "signOutBroken";
 
 export const HARNESS_SCENARIOS: readonly { readonly label: string; readonly value: HarnessScenario }[] = Object.freeze([
   { label: "Datos válidos", value: "ok" },
@@ -35,6 +44,8 @@ export const HARNESS_SCENARIOS: readonly { readonly label: string; readonly valu
   { label: "Red caída", value: "network" },
   { label: "Respuesta lenta", value: "slow" },
   { label: "Sesión ilegible", value: "sessionError" },
+  { label: "Cierre colgado", value: "signOutHang" },
+  { label: "Cierre fallido", value: "signOutBroken" },
 ]);
 
 /** Mutable control surface driven by the harness UI. */
@@ -123,10 +134,12 @@ export function installHarnessFetch(apiBaseUrl: string): void {
  * the rejected-credentials state.
  */
 export function createHarnessAuth(): MobileAuthPort & {
+  readonly emitPreviousSession: () => void;
   readonly emitRefreshedToken: () => void;
   readonly expireSession: () => void;
 } {
   let session: MobileSession | undefined;
+  let previous: MobileSession | undefined;
   const listeners = new Set<(next: MobileSession | undefined) => void>();
   const notify = (): void => { for (const listener of listeners) listener(session); };
 
@@ -138,6 +151,11 @@ export function createHarnessAuth(): MobileAuthPort & {
       }
       return Promise.resolve(harnessControl.scenario === "expired" ? undefined : session);
     },
+    // Replays the session that was just closed, as a provider notifying late.
+    emitPreviousSession: (): void => {
+      if (previous === undefined) return;
+      for (const listener of listeners) listener(previous);
+    },
     emitRefreshedToken: (): void => {
       if (session === undefined) return;
       harnessControl.tokenSerial += 1;
@@ -146,6 +164,7 @@ export function createHarnessAuth(): MobileAuthPort & {
         email: session.email,
         userId: session.userId,
       });
+      previous = session;
       notify();
     },
     expireSession: (): void => { harnessControl.scenario = "expired"; },
@@ -163,10 +182,18 @@ export function createHarnessAuth(): MobileAuthPort & {
         email: HARNESS_EMAIL,
         userId: FIXTURE_USER_A,
       });
+      previous = session;
       notify();
       return Promise.resolve("ok");
     },
-    signOut: (): Promise<void> => { session = undefined; notify(); return Promise.resolve(); },
+    signOut: (): Promise<void> => {
+      // The provider hangs: nothing is cleared and nobody is notified.
+      if (harnessControl.scenario === "signOutHang") return new Promise<void>(() => undefined);
+      if (harnessControl.scenario === "signOutBroken") return Promise.reject(new Error("HARNESS_SIGN_OUT_FAILED"));
+      session = undefined;
+      notify();
+      return Promise.resolve();
+    },
     startAutoRefresh: (): Promise<void> => { harnessControl.autoRefreshRuns += 1; return Promise.resolve(); },
     stopAutoRefresh: (): Promise<void> => { harnessControl.autoRefreshRuns -= 1; return Promise.resolve(); },
   });

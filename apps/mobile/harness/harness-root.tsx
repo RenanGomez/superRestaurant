@@ -64,6 +64,11 @@ export function Root(): React.JSX.Element {
             selected={false}
           />
           <Control
+            label="Notificar sesión anterior"
+            onPress={() => { doubles.auth.emitPreviousSession(); setTicks((value) => value + 1); }}
+            selected={false}
+          />
+          <Control
             label="Reiniciar app"
             onPress={() => { setReloads((value) => value + 1); setTicks((value) => value + 1); }}
             selected={false}
