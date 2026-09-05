@@ -8,11 +8,14 @@ import { App } from "../src/ui/app.js";
 import { useFocusRing } from "../src/ui/components.js";
 import { colors, spacing, touchTarget, typography } from "../src/ui/theme.js";
 import {
+  HARNESS_DRAFT_OUTCOMES,
   HARNESS_SCENARIOS,
   createHarnessAuth,
   createHarnessLifecycle,
+  createHarnessOrderIntegration,
   harnessControl,
   installHarnessFetch,
+  type HarnessDraftOutcome,
   type HarnessScenario,
 } from "./harness-server.js";
 
@@ -23,10 +26,17 @@ installHarnessFetch(fixtureConfig.apiBaseUrl);
  * `MOBILE_VISUAL_HARNESS=1`, so the shipped app never contains it.
  */
 export function Root(): React.JSX.Element {
-  const doubles = useMemo(() => ({ auth: createHarnessAuth(), lifecycle: createHarnessLifecycle() }), []);
-  const [scenario, setScenario] = useState<HarnessScenario>("ok");
-  const [reloads, setReloads] = useState(0);
   const [ticks, setTicks] = useState(0);
+  const doubles = useMemo(() => ({
+    auth: createHarnessAuth(),
+    lifecycle: createHarnessLifecycle(),
+    // The double redraws the control bar whenever it is offered an intent, so
+    // what the screen handed over is visible without touching anything else.
+    orders: createHarnessOrderIntegration(() => { setTicks((value) => value + 1); }),
+  }), []);
+  const [scenario, setScenario] = useState<HarnessScenario>("ok");
+  const [draftOutcome, setDraftOutcome] = useState<HarnessDraftOutcome>("notConnected");
+  const [reloads, setReloads] = useState(0);
 
   const apply = (next: HarnessScenario): void => {
     harnessControl.scenario = next;
@@ -39,6 +49,27 @@ export function Root(): React.JSX.Element {
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.controls} horizontal={false}>
         <Text style={styles.banner}>ARNÉS DE VERIFICACIÓN · DATOS SINTÉTICOS · SIN SERVIDOR REAL</Text>
+        <View style={styles.row}>
+          {HARNESS_DRAFT_OUTCOMES.map((option) => <Control
+            key={option.value}
+            label={option.label}
+            onPress={() => {
+              harnessControl.draftOutcome = option.value;
+              setDraftOutcome(option.value);
+              setTicks((value) => value + 1);
+            }}
+            selected={draftOutcome === option.value}
+          />)}
+          <Control
+            label="Limpiar intentos ofrecidos"
+            onPress={() => { doubles.orders.reset(); setTicks((value) => value + 1); }}
+            selected={false}
+          />
+        </View>
+        <Text style={styles.hint}>
+          {`Intentos ofrecidos a la integración (sin ninguna petición HTTP): ${
+            doubles.orders.offered().length === 0 ? "ninguno todavía" : doubles.orders.offered().join(" | ")}`}
+        </Text>
         <View style={styles.row}>
           {HARNESS_SCENARIOS.map((option) => <Control
             key={option.value}
@@ -89,7 +120,13 @@ export function Root(): React.JSX.Element {
           />
           <Control
             label="Reiniciar arnés"
-            onPress={() => { apply("ok"); setReloads((value) => value + 1); }}
+            onPress={() => {
+              apply("ok");
+              harnessControl.draftOutcome = "notConnected";
+              setDraftOutcome("notConnected");
+              doubles.orders.reset();
+              setReloads((value) => value + 1);
+            }}
             selected={false}
           />
         </View>
@@ -100,7 +137,13 @@ export function Root(): React.JSX.Element {
         </Text>
       </ScrollView>
       <View style={styles.app}>
-        <App auth={doubles.auth} config={fixtureConfig} key={reloads} lifecycle={doubles.lifecycle} />
+        <App
+          auth={doubles.auth}
+          config={fixtureConfig}
+          key={reloads}
+          lifecycle={doubles.lifecycle}
+          orderDraftIntegration={doubles.orders}
+        />
       </View>
     </SafeAreaView>
   </SafeAreaProvider>;

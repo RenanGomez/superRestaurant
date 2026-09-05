@@ -14,15 +14,22 @@
 import type { MobileAuthPort, MobileSignInResult } from "../src/auth-port.js";
 import type { MobileAppStatus, MobileLifecyclePort } from "../src/lifecycle.js";
 import { MOBILE_API_PATHS } from "../src/mobile-client.js";
+import type { OrderDraftFailure } from "../src/order-draft.js";
+import type {
+  AddOrderItemIntentV1,
+  CreateOrderIntentV1,
+  OpenOrderIntentV1,
+  OrderDraftIntegration,
+} from "../src/order-intents.js";
 import type { MobileSession } from "../src/session.js";
 import {
   FIXTURE_USER_A,
   FIXTURE_USER_B,
   authorizedBranchBody,
-  diningLayoutBody,
   membershipListBody,
-  menuCatalogStateBody,
   operationalShiftListBody,
+  orderEntryCatalogStateBody,
+  orderEntryLayoutBody,
   scopeA,
   scopeB,
 } from "../src/test-fixtures.js";
@@ -50,14 +57,47 @@ export const HARNESS_SCENARIOS: readonly { readonly label: string; readonly valu
   { label: "Cierre fallido", value: "signOutBroken" },
 ]);
 
+/**
+ * What the draft integration double answers. `notConnected` is what the app
+ * really ships with; the others exist so every state the composer can show is
+ * reachable by hand in a browser.
+ */
+export type HarnessDraftOutcome =
+  | "notConnected"
+  | "accepted"
+  | "conflict"
+  | "authorization"
+  | "network"
+  | "protocol"
+  | "unavailable"
+  | "slowAccepted";
+
+export const HARNESS_DRAFT_OUTCOMES: readonly { readonly label: string; readonly value: HarnessDraftOutcome }[] =
+  Object.freeze([
+    { label: "Envío: sin conexión de integración", value: "notConnected" },
+    { label: "Envío: aceptado", value: "accepted" },
+    { label: "Envío: aceptado (lento)", value: "slowAccepted" },
+    { label: "Envío: conflicto", value: "conflict" },
+    { label: "Envío: sin autorización", value: "authorization" },
+    { label: "Envío: red caída", value: "network" },
+    { label: "Envío: protocolo inválido", value: "protocol" },
+    { label: "Envío: servicio no disponible", value: "unavailable" },
+  ]);
+
 /** Mutable control surface driven by the harness UI. */
 export interface HarnessControl {
   autoRefreshRuns: number;
+  draftOutcome: HarnessDraftOutcome;
   scenario: HarnessScenario;
   tokenSerial: number;
 }
 
-export const harnessControl: HarnessControl = { autoRefreshRuns: 0, scenario: "ok", tokenSerial: 1 };
+export const harnessControl: HarnessControl = {
+  autoRefreshRuns: 0,
+  draftOutcome: "notConnected",
+  scenario: "ok",
+  tokenSerial: 1,
+};
 
 // Exposed for the browser verification only, from harness code that never
 // reaches a build: it lets the reviewer read the token-ticker counter directly.
@@ -119,10 +159,10 @@ export function installHarnessFetch(apiBaseUrl: string): void {
       return jsonResponse(operationalShiftListBody(scope));
     }
     if (path === MOBILE_API_PATHS.diningLayout) {
-      return jsonResponse(diningLayoutBody(scope, scope === scopeB ? "Salón principal" : "Terraza"));
+      return jsonResponse(orderEntryLayoutBody(scope, scope === scopeB ? "Salón principal" : "Terraza"));
     }
     if (path === MOBILE_API_PATHS.menuCatalog) {
-      return jsonResponse(menuCatalogStateBody(scope, "XTS", scope === scopeB ? 9_900 : 12_500));
+      return jsonResponse(orderEntryCatalogStateBody(scope, "XTS", scope === scopeB ? 9_900 : 12_500));
     }
 
     return jsonResponse({ code: "HARNESS_PATH_NOT_ALLOWED", path }, 404);
@@ -243,6 +283,41 @@ export function createHarnessLifecycle(): MobileLifecyclePort & {
     subscribe: (handler: (status: MobileAppStatus) => void): (() => void) => {
       listeners.add(handler);
       return (): void => { listeners.delete(handler); };
+    },
+  });
+}
+
+/**
+ * A draft integration double. It records the intents the screen offered — which
+ * is how a reviewer can see that no field of audit identity was invented — and
+ * answers with whatever outcome the control bar selected. It performs no
+ * request of any kind.
+ */
+export function createHarnessOrderIntegration(onChange: () => void): OrderDraftIntegration & {
+  readonly offered: () => readonly string[];
+  readonly reset: () => void;
+} {
+  const offered: string[] = [];
+  const record = (entry: string): void => { offered.push(entry); onChange(); };
+  return Object.freeze({
+    offered: (): readonly string[] => [...offered],
+    onAddItem: (intent: AddOrderItemIntentV1): void => {
+      record(`ítem ${intent.draftLineId} ×${intent.quantity} [${Object.keys(intent).sort().join(",")}]`);
+    },
+    onCreateOrder: (intent: CreateOrderIntentV1): void => {
+      record(`crear ${intent.channel}/${intent.currency} [${Object.keys(intent).sort().join(",")}]`);
+    },
+    onOpenOrder: (intent: OpenOrderIntentV1): void => {
+      record(`abrir [${Object.keys(intent).sort().join(",")}]`);
+    },
+    reset: (): void => { offered.length = 0; onChange(); },
+    submit: async (): Promise<OrderDraftFailure | undefined> => {
+      if (harnessControl.draftOutcome === "slowAccepted") {
+        await delay(1_500);
+        return undefined;
+      }
+      if (harnessControl.draftOutcome === "accepted") return undefined;
+      return harnessControl.draftOutcome;
     },
   });
 }
