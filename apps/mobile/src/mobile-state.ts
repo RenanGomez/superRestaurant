@@ -33,6 +33,10 @@ export interface MobileState {
   readonly menu: MobileResource<MenuCatalogStateV1>;
   readonly notice: MobileNotice | undefined;
   readonly pendingScope: MobileBranchScope | undefined;
+  /** True while the foreground revalidation of session and scope is running. */
+  readonly revalidating: boolean;
+  /** Set when that revalidation could not complete; blocks every branch read. */
+  readonly revalidationFailure: MobileFailure | undefined;
   readonly session: MobileSession | undefined;
   readonly started: boolean;
   readonly tab: MobileTab;
@@ -55,8 +59,11 @@ export type MobileEvent =
   | { readonly type: "menuLoaded"; readonly menu: MenuCatalogStateV1; readonly scope: MobileBranchScope }
   | { readonly type: "menuLoading"; readonly scope: MobileBranchScope }
   | { readonly type: "menuReset"; readonly scope: MobileBranchScope }
+  | { readonly type: "revalidationFailed"; readonly failure: MobileFailure }
+  | { readonly type: "revalidationStarted" }
+  | { readonly type: "revalidationSucceeded"; readonly branch: AuthorizedMobileBranch | undefined }
+  | { readonly type: "sessionObserved"; readonly session: MobileSession }
   | { readonly type: "sessionRestored"; readonly session: MobileSession | undefined }
-  | { readonly type: "signedIn"; readonly session: MobileSession }
   | { readonly type: "signedOut"; readonly notice: MobileNotice | undefined }
   | { readonly type: "tabSelected"; readonly tab: MobileTab };
 
@@ -70,6 +77,8 @@ export const initialMobileState: MobileState = Object.freeze({
   menu: idleResource,
   notice: undefined,
   pendingScope: undefined,
+  revalidating: false,
+  revalidationFailure: undefined,
   session: undefined,
   started: false,
   tab: "tables",
@@ -81,8 +90,13 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
       return event.session === undefined
         ? signedOutState(state.notice, true)
         : freeze({ ...initialMobileState, session: event.session, started: true });
-    case "signedIn":
-      return freeze({ ...initialMobileState, session: event.session, started: true });
+    case "sessionObserved":
+      // A session that simply renewed its token keeps the branch and its data;
+      // a first session, or a different operator, starts from a clean state so
+      // nothing from a previous scope survives.
+      return state.session !== undefined && state.session.email === event.session.email
+        ? freeze({ ...state, session: event.session, started: true })
+        : freeze({ ...initialMobileState, session: event.session, started: true });
     case "signedOut":
       return signedOutState(event.notice, true);
     default:
@@ -106,8 +120,52 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         menu: idleResource,
         notice: "branchRevoked",
         pendingScope: undefined,
+        revalidating: false,
+        revalidationFailure: undefined,
         tab: "tables",
       });
+    case "revalidationStarted":
+      // Idempotent on purpose: repeated foreground events while a revalidation
+      // is in flight must not start a second one. Branch data is dropped here,
+      // before any request, so nothing loaded earlier can stay on screen while
+      // the scope is unconfirmed.
+      return state.revalidating
+        ? state
+        : freeze({
+          ...state,
+          layout: idleResource,
+          menu: idleResource,
+          revalidating: true,
+          revalidationFailure: undefined,
+        });
+    case "revalidationSucceeded":
+      if (!state.revalidating) return state;
+      if (event.branch === undefined) {
+        return freeze({ ...state, revalidating: false, revalidationFailure: undefined });
+      }
+      // An answer for a pair that is no longer active is ignored, exactly as in
+      // the selection flow.
+      return state.branch !== undefined && sameScope(state.branch, event.branch)
+        ? freeze({ ...state, branch: event.branch, revalidating: false, revalidationFailure: undefined })
+        : state;
+    case "revalidationFailed":
+      if (!state.revalidating) return state;
+      if (event.failure === "authorization") {
+        return freeze({
+          ...state,
+          branch: undefined,
+          branchFailure: "authorization",
+          layout: idleResource,
+          memberships: idleResource,
+          menu: idleResource,
+          notice: "branchRevoked",
+          pendingScope: undefined,
+          revalidating: false,
+          revalidationFailure: undefined,
+          tab: "tables",
+        });
+      }
+      return freeze({ ...state, revalidating: false, revalidationFailure: event.failure });
     case "membershipsLoading":
       return freeze({ ...state, memberships: loading(state.memberships) });
     case "membershipsLoaded":
@@ -125,6 +183,8 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         menu: idleResource,
         notice: undefined,
         pendingScope: frozenScope(event.scope),
+        revalidating: false,
+        revalidationFailure: undefined,
         tab: "tables",
       });
     case "branchAuthorized":
@@ -148,6 +208,8 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         layout: idleResource,
         menu: idleResource,
         pendingScope: undefined,
+        revalidating: false,
+        revalidationFailure: undefined,
         tab: "tables",
       });
     case "tabSelected":
@@ -187,6 +249,14 @@ export function activeScope(state: MobileState): MobileBranchScope | undefined {
   return state.branch === undefined
     ? undefined
     : Object.freeze({ branchId: state.branch.branchId, restaurantId: state.branch.restaurantId });
+}
+
+/**
+ * Branch-scoped reads are allowed only when the scope is confirmed: never while
+ * a foreground revalidation is running, and never after one failed.
+ */
+export function canReadBranchData(state: MobileState): boolean {
+  return !state.revalidating && state.revalidationFailure === undefined;
 }
 
 /** True once Nest answered with an empty, and therefore explicit, membership list. */

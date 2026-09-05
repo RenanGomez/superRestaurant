@@ -5,8 +5,10 @@ import { StatusBar } from "expo-status-bar";
 
 import type { MobileAuthPort } from "../auth-port.js";
 import { readMobileConfig, type MobileConfig } from "../config.js";
+import type { MobileLifecyclePort } from "../lifecycle.js";
 import { createMobileAuth } from "../supabase-auth.js";
 import { App } from "./app.js";
+import { createAppStateLifecycle } from "./app-state-lifecycle.js";
 import { Body, Caption, Heading } from "./components.js";
 import { colors, spacing } from "./theme.js";
 
@@ -24,10 +26,14 @@ function readEnvironment(): Readonly<Record<string, string | undefined>> {
 
 /** Root component: fails closed when the public configuration is unusable. */
 export function Root(): React.JSX.Element {
-  const bootstrap = useMemo((): { readonly auth: MobileAuthPort; readonly config: MobileConfig } | undefined => {
+  const bootstrap = useMemo((): {
+    readonly auth: MobileAuthPort;
+    readonly config: MobileConfig;
+    readonly lifecycle: MobileLifecyclePort;
+  } | undefined => {
     try {
       const config = readMobileConfig(readEnvironment());
-      return { auth: createMobileAuth(config), config };
+      return { auth: createMobileAuth(config), config, lifecycle: createAppStateLifecycle() };
     } catch {
       return undefined;
     }
@@ -38,7 +44,7 @@ export function Root(): React.JSX.Element {
     <SafeAreaView style={styles.safeArea}>
       {bootstrap === undefined
         ? <ConfigurationErrorScreen />
-        : <App auth={bootstrap.auth} config={bootstrap.config} />}
+        : <App auth={bootstrap.auth} config={bootstrap.config} lifecycle={bootstrap.lifecycle} />}
     </SafeAreaView>
   </SafeAreaProvider>;
 }

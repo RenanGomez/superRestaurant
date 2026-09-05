@@ -4,6 +4,7 @@ import test from "node:test";
 import { MobileRequestError } from "./mobile-client.js";
 import {
   activeScope,
+  canReadBranchData,
   failureMessage,
   hasNoMemberships,
   initialMobileState,
@@ -43,7 +44,7 @@ function apply(state: MobileState, ...events: readonly MobileEvent[]): MobileSta
 }
 
 function signedIn(): MobileState {
-  return apply(initialMobileState, { session, type: "signedIn" });
+  return apply(initialMobileState, { session, type: "sessionObserved" });
 }
 
 function onBranchA(): MobileState {
@@ -211,4 +212,121 @@ test("transport failures map to operational states with Spanish messages", () =>
   for (const notice of ["branchRevoked", "sessionEnded"] as const) {
     assert.match(noticeMessage(notice), /^[A-ZÁÉÍÓÚÑ].+\.$/u);
   }
+});
+
+test("a renewed token keeps the branch and its data; another operator does not", () => {
+  const renewed = apply(onBranchA(), { session: { accessToken: "token-2", email: session.email }, type: "sessionObserved" });
+  assert.equal(renewed.session?.accessToken, "token-2");
+  assert.equal(renewed.branch?.branchId, scopeA.branchId);
+  assert.equal(renewed.layout.status, "ready");
+  assert.equal(renewed.menu.status, "ready");
+
+  const other = apply(onBranchA(), {
+    session: { accessToken: "token-3", email: "otra@example.com" },
+    type: "sessionObserved",
+  });
+  assert.equal(other.branch, undefined);
+  assert.equal(other.layout.value, undefined);
+  assert.equal(other.memberships.value, undefined);
+  assert.equal(mobileScreen(other), "branches");
+});
+
+test("returning to the foreground drops the loaded branch data before revalidating", () => {
+  const revalidating = apply(onBranchA(), { type: "revalidationStarted" });
+
+  assert.equal(revalidating.revalidating, true);
+  assert.equal(revalidating.layout.value, undefined);
+  assert.equal(revalidating.menu.value, undefined);
+  assert.equal(revalidating.layout.status, "idle");
+  assert.equal(revalidating.menu.status, "idle");
+  assert.equal(canReadBranchData(revalidating), false);
+  // The scope is still known, so it can be revalidated; only its data is gone.
+  assert.deepEqual(activeScope(revalidating), { branchId: scopeA.branchId, restaurantId: scopeA.restaurantId });
+});
+
+test("repeated foreground events never start a second revalidation", () => {
+  const first = apply(onBranchA(), { type: "revalidationStarted" });
+  const second = apply(first, { type: "revalidationStarted" });
+  const third = apply(second, { type: "revalidationStarted" });
+
+  assert.equal(second, first);
+  assert.equal(third, first);
+});
+
+test("a valid revalidation restores the branch and lets the reads run again", () => {
+  const confirmed = apply(
+    onBranchA(),
+    { type: "revalidationStarted" },
+    { branch: branchA, type: "revalidationSucceeded" },
+  );
+
+  assert.equal(confirmed.revalidating, false);
+  assert.equal(confirmed.revalidationFailure, undefined);
+  assert.equal(canReadBranchData(confirmed), true);
+  assert.equal(mobileScreen(confirmed), "workspace");
+  assert.equal(confirmed.layout.status, "idle");
+});
+
+test("loaded, backgrounded, revoked, foregrounded: no data survives the revocation", () => {
+  const revoked = apply(
+    onBranchA(),
+    { type: "revalidationStarted" },
+    { failure: "authorization", type: "revalidationFailed" },
+  );
+
+  assert.equal(mobileScreen(revoked), "branches");
+  assert.equal(revoked.branch, undefined);
+  assert.equal(revoked.notice, "branchRevoked");
+  assert.equal(revoked.branchFailure, "authorization");
+  assert.equal(revoked.layout.value, undefined);
+  assert.equal(revoked.menu.value, undefined);
+  assert.equal(revoked.memberships.status, "idle");
+  assert.equal(revoked.revalidating, false);
+  assert.equal(canReadBranchData(revoked), true);
+});
+
+test("loaded, backgrounded, session expired, foregrounded: back to sign-in", () => {
+  const expired = apply(
+    onBranchA(),
+    { type: "revalidationStarted" },
+    { notice: "sessionEnded", type: "signedOut" },
+  );
+
+  assert.deepEqual(expired, { ...initialMobileState, notice: "sessionEnded", started: true });
+  assert.equal(mobileScreen(expired), "signIn");
+});
+
+test("a revalidation that cannot complete blocks every branch read until retried", () => {
+  const failed = apply(
+    onBranchA(),
+    { type: "revalidationStarted" },
+    { failure: "network", type: "revalidationFailed" },
+  );
+
+  assert.equal(failed.revalidationFailure, "network");
+  assert.equal(canReadBranchData(failed), false);
+  assert.equal(failed.layout.value, undefined);
+  assert.equal(failed.menu.value, undefined);
+  assert.equal(mobileScreen(failed), "workspace");
+
+  const retried = apply(failed, { type: "revalidationStarted" }, { branch: branchA, type: "revalidationSucceeded" });
+  assert.equal(canReadBranchData(retried), true);
+});
+
+test("a revalidation answer for another branch, or with none pending, is ignored", () => {
+  const running = apply(onBranchA(), { type: "revalidationStarted" });
+  assert.equal(apply(running, { branch: branchB, type: "revalidationSucceeded" }), running);
+
+  const settled = apply(running, { branch: branchA, type: "revalidationSucceeded" });
+  assert.equal(apply(settled, { branch: branchA, type: "revalidationSucceeded" }), settled);
+  assert.equal(apply(settled, { failure: "network", type: "revalidationFailed" }), settled);
+});
+
+test("selecting a branch clears any pending revalidation state", () => {
+  const failed = apply(onBranchA(), { type: "revalidationStarted" }, { failure: "network", type: "revalidationFailed" });
+  const selecting = apply(failed, { scope: scopeB, type: "branchRequested" });
+
+  assert.equal(selecting.revalidating, false);
+  assert.equal(selecting.revalidationFailure, undefined);
+  assert.equal(canReadBranchData(selecting), true);
 });

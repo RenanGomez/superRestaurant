@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import type { MobileAuthPort } from "../auth-port.js";
 import type { MobileConfig } from "../config.js";
+import { lifecycleEffects, type MobileAppStatus, type MobileLifecyclePort } from "../lifecycle.js";
 import {
   authorizeBranch,
   getDiningLayout,
@@ -12,16 +13,20 @@ import {
 } from "../mobile-client.js";
 import {
   activeScope,
+  canReadBranchData,
+  failureMessage,
   initialMobileState,
   mobileScreen,
   noticeMessage,
   reduceMobileState,
   toMobileFailure,
+  type MobileFailure,
   type MobileNotice,
+  type MobileState,
   type MobileTab,
 } from "../mobile-state.js";
 import { BranchScreen } from "./branch-screen.js";
-import { ActionButton, Caption, LoadingBlock, Subheading } from "./components.js";
+import { ActionButton, Banner, Caption, LoadingBlock, StateBlock, Subheading, useFocusRing } from "./components.js";
 import { MenuScreen } from "./menu-screen.js";
 import { SignInScreen } from "./sign-in-screen.js";
 import { TablesScreen } from "./tables-screen.js";
@@ -29,9 +34,10 @@ import { colors, radius, spacing, touchTarget, typography } from "./theme.js";
 
 const TAB_LABELS: Readonly<Record<MobileTab, string>> = Object.freeze({ menu: "Menú", tables: "Mesas" });
 
-export function App({ auth, config }: {
+export function App({ auth, config, lifecycle }: {
   readonly auth: MobileAuthPort;
   readonly config: MobileConfig;
+  readonly lifecycle: MobileLifecyclePort;
 }): React.JSX.Element {
   const [state, dispatch] = useReducer(reduceMobileState, initialMobileState);
   const pendingNotice = useRef<MobileNotice | undefined>(undefined);
@@ -40,6 +46,7 @@ export function App({ auth, config }: {
   const scope = activeScope(state);
   const branchId = scope?.branchId;
   const restaurantId = scope?.restaurantId;
+  const readable = canReadBranchData(state);
 
   /** Ends the session on this device only, keeping the reason to explain it. */
   const endSession = useCallback((notice: MobileNotice | undefined): void => {
@@ -74,14 +81,57 @@ export function App({ auth, config }: {
     const unsubscribe = auth.onSessionChange((session) => {
       dispatch(session === undefined
         ? { notice: pendingNotice.current, type: "signedOut" }
-        : { session, type: "signedIn" });
+        : { session, type: "sessionObserved" });
     });
-    return (): void => { active = false; unsubscribe(); };
+    // The token ticker only runs while this component is mounted and the app is
+    // in the foreground; it never writes anything to the device.
+    void auth.startAutoRefresh();
+    return (): void => { active = false; unsubscribe(); void auth.stopAutoRefresh(); };
   }, [auth]);
 
+  // Foreground lifecycle: drive the token ticker and revalidate the session and
+  // the exact Restaurant/Branch pair on every real return to the foreground.
   useEffect(() => {
-    if (token !== undefined && state.memberships.status === "idle") loadMemberships(token);
-  }, [loadMemberships, state.memberships.status, token]);
+    let previous: MobileAppStatus = "active";
+    return lifecycle.subscribe((next) => {
+      const effects = lifecycleEffects(previous, next);
+      previous = next;
+      void (effects.autoRefresh === "start" ? auth.startAutoRefresh() : auth.stopAutoRefresh());
+      if (effects.revalidate) dispatch({ type: "revalidationStarted" });
+    });
+  }, [auth, lifecycle]);
+
+  // One revalidation at a time: the reducer ignores repeated starts, and this
+  // effect only runs while `revalidating` is true.
+  useEffect(() => {
+    if (!state.revalidating) return undefined;
+    let active = true;
+    const target = branchId !== undefined && restaurantId !== undefined
+      ? { branchId, restaurantId } satisfies MobileBranchScope
+      : undefined;
+    void (async (): Promise<void> => {
+      const session = await auth.currentSession();
+      if (!active) return;
+      if (session === undefined) { endSession("sessionEnded"); return; }
+      dispatch({ session, type: "sessionObserved" });
+      if (target === undefined) {
+        dispatch({ branch: undefined, type: "revalidationSucceeded" });
+        loadMemberships(session.accessToken);
+        return;
+      }
+      try {
+        const branch = await authorizeBranch(config, session.accessToken, target);
+        if (active) dispatch({ branch, type: "revalidationSucceeded" });
+      } catch (error: unknown) {
+        if (active) dispatch({ failure: toMobileFailure(error), type: "revalidationFailed" });
+      }
+    })();
+    return (): void => { active = false; };
+  }, [auth, branchId, config, endSession, loadMemberships, restaurantId, state.revalidating]);
+
+  useEffect(() => {
+    if (readable && token !== undefined && state.memberships.status === "idle") loadMemberships(token);
+  }, [loadMemberships, readable, state.memberships.status, token]);
 
   useEffect(() => {
     const pending = state.pendingScope;
@@ -100,7 +150,7 @@ export function App({ auth, config }: {
   }, [config, loadMemberships, state.pendingScope, token]);
 
   useEffect(() => {
-    if (token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
+    if (!readable || token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
     if (state.tab !== "tables" || state.layout.status !== "idle") return undefined;
     const target: MobileBranchScope = { branchId, restaurantId };
     let active = true;
@@ -114,10 +164,10 @@ export function App({ auth, config }: {
         else dispatch({ failure, scope: target, type: "layoutFailed" });
       });
     return (): void => { active = false; };
-  }, [branchId, config, restaurantId, state.layout.status, state.tab, token]);
+  }, [branchId, config, readable, restaurantId, state.layout.status, state.tab, token]);
 
   useEffect(() => {
-    if (token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
+    if (!readable || token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
     if (state.tab !== "menu" || state.menu.status !== "idle") return undefined;
     const target: MobileBranchScope = { branchId, restaurantId };
     let active = true;
@@ -131,7 +181,7 @@ export function App({ auth, config }: {
         else dispatch({ failure, scope: target, type: "menuFailed" });
       });
     return (): void => { active = false; };
-  }, [branchId, config, restaurantId, state.menu.status, state.tab, token]);
+  }, [branchId, config, readable, restaurantId, state.menu.status, state.tab, token]);
 
   const retry = useCallback((tab: MobileTab): void => {
     if (branchId === undefined || restaurantId === undefined) return;
@@ -176,28 +226,80 @@ export function App({ auth, config }: {
     </View>
 
     <View accessibilityRole="tablist" style={styles.tabs}>
-      {(["tables", "menu"] as const).map((tab) => <Pressable
-        accessibilityLabel={TAB_LABELS[tab]}
-        accessibilityRole="tab"
-        accessibilityState={{ selected: state.tab === tab }}
+      {(["tables", "menu"] as const).map((tab) => <WorkspaceTab
         key={tab}
         onPress={() => { dispatch({ tab, type: "tabSelected" }); }}
-        style={(pressableState) => [
-          styles.tab,
-          state.tab === tab && styles.tabSelected,
-          pressableState.pressed && styles.tabPressed,
-        ]}
-      >
-        <Text style={[styles.tabLabel, state.tab === tab && styles.tabLabelSelected]}>{TAB_LABELS[tab]}</Text>
-      </Pressable>)}
+        selected={state.tab === tab}
+        tab={tab}
+      />)}
     </View>
 
     <View style={styles.content}>
-      {state.tab === "tables"
-        ? <TablesScreen layout={state.layout} onRetry={() => { retry("tables"); }} />
-        : <MenuScreen menu={state.menu} onRetry={() => { retry("menu"); }} />}
+      <WorkspaceContent
+        menu={state.menu}
+        layout={state.layout}
+        onRetryRead={retry}
+        onRetryRevalidation={() => { dispatch({ type: "revalidationStarted" }); }}
+        revalidating={state.revalidating}
+        revalidationFailure={state.revalidationFailure}
+        tab={state.tab}
+      />
     </View>
   </View>;
+}
+
+function WorkspaceTab({ onPress, selected, tab }: {
+  readonly onPress: () => void;
+  readonly selected: boolean;
+  readonly tab: MobileTab;
+}): React.JSX.Element {
+  const focus = useFocusRing();
+  return <Pressable
+    accessibilityLabel={TAB_LABELS[tab]}
+    accessibilityRole="tab"
+    accessibilityState={{ selected }}
+    onPress={onPress}
+    {...focus.handlers}
+    style={(state) => [
+      styles.tab,
+      selected && styles.tabSelected,
+      (state.pressed || focus.focused) && styles.tabPressed,
+    ]}
+  >
+    <Text style={[styles.tabLabel, selected && styles.tabLabelSelected]}>{TAB_LABELS[tab]}</Text>
+  </Pressable>;
+}
+
+/**
+ * While the scope is being revalidated — or after a revalidation that could not
+ * complete — the branch screens are not rendered at all. There is nothing left
+ * to leak: the reducer already dropped the loaded layout and menu.
+ */
+function WorkspaceContent({ layout, menu, onRetryRead, onRetryRevalidation, revalidating, revalidationFailure, tab }: {
+  readonly layout: MobileState["layout"];
+  readonly menu: MobileState["menu"];
+  readonly onRetryRead: (tab: MobileTab) => void;
+  readonly onRetryRevalidation: () => void;
+  readonly revalidating: boolean;
+  readonly revalidationFailure: MobileFailure | undefined;
+  readonly tab: MobileTab;
+}): React.JSX.Element {
+  if (revalidating) {
+    return <>
+      <Banner message="Revalidando tu acceso a esta sucursal…" tone="info" />
+      <LoadingBlock label="Confirmando sesión y sucursal…" />
+    </>;
+  }
+  if (revalidationFailure !== undefined) {
+    return <StateBlock
+      action={{ label: "Reintentar", onPress: onRetryRevalidation }}
+      description={failureMessage(revalidationFailure)}
+      title="No se pudo revalidar tu acceso"
+    />;
+  }
+  return tab === "tables"
+    ? <TablesScreen layout={layout} onRetry={() => { onRetryRead("tables"); }} />
+    : <MenuScreen menu={menu} onRetry={() => { onRetryRead("menu"); }} />;
 }
 
 const styles = StyleSheet.create({
