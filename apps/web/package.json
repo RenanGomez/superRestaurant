@@ -2,6 +2,7 @@
   "name": "@super-restaurant/web",
   "version": "0.0.0",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "scripts": {
     "dev": "next dev",

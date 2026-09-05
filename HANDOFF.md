@@ -1,5 +1,79 @@
 # HANDOFF
 
+## Aprobación 2026-09-04 — AGENTS.md alineado
+
+- Tarea/estado: Emmanuel aprobó expresamente la P0 “Alinear `AGENTS.md` con este proyecto POS”; pasa de REVIEW a DONE sin retrabajo.
+- Evidencia: las reglas vigentes cubren arquitectura híbrida, dinero exacto, Restaurant/Branch, pagos, offline, seguridad, CodeGraph, pruebas, aprobaciones críticas, Git y handoff; no se detectó una brecha que justificara modificar el archivo.
+- Cambios: `TODO.md` y `HANDOFF.md`, solo para registrar la aprobación. No hubo cambios de código, esquema, dependencias, credenciales, permisos, Data API, Vault, infraestructura remota, dinero, fiscalidad o Git remoto.
+- Siguiente acción mínima: revisar de forma read-only el worktree móvil de Claude en `541c00dd627f979c7d5ecfde32cf6b06e8af5b94`, sin integrar ni modificar su rama.
+- Subagentes: ninguno. Razonamiento bajo para la transición documental; la revisión móvil usa razonamiento alto por sesión, autorización y fuga visual.
+
+## Aprobación 2026-09-04 — documentos operativos P0
+
+- Tarea/estado: Emmanuel aprobó expresamente la creación y uso de `TODO.md`, `PROJECT_NOTES.md` y `HANDOFF.md`; la primera P0 documental pasa de REVIEW a DONE.
+- Evidencia: los tres archivos existen, se mantienen desde el 2026-08-25 y han funcionado como fuentes de estado, decisiones durables y continuidad durante Fases 0–1 y la preparación de Fase 2. La aprobación no altera ni reinterpreta el roadmap.
+- Cambios: `TODO.md` y `HANDOFF.md`, solo para registrar la transición. No hubo cambios de código, esquema, dependencias, credenciales, permisos, Data API, Vault, infraestructura remota, dinero, fiscalidad o Git remoto.
+- Verificación: cambio documental inspeccionado con `git diff --check`; CodeGraph no aplica a la transición porque no se modificaron símbolos o dependencias.
+- Siguiente acción mínima: revisar la siguiente P0 en REVIEW, “Alinear `AGENTS.md` con este proyecto POS”, sin releer o modificar el archivo salvo que la revisión encuentre una brecha concreta.
+- Subagentes: ninguno. Razonamiento bajo por transición documental aprobada.
+
+## Aprobación 2026-09-04 — licencia propietaria
+
+- Tarea/estado: Emmanuel Renan Gomez Alvarez confirmó que es el titular y aprobó el modelo propietario/comercial; la P0 de licencia pasa de BLOCKED a DONE.
+- Cambios: se añadió `LICENSE` con todos los derechos reservados, `license: UNLICENSED` a los ocho manifests vigentes, una sección de licencia en README y `docs/THIRD_PARTY_LICENSE_AUDIT.md`. El worktree móvil de Claude no se modificó; su manifest deberá alinearse después de integrar y revisar ese workstream.
+- Auditoría: el grafo de producción de pnpm enumeró 202 paquetes y se recuperó metadata local para 169: MIT 148, ISC 9, Apache-2.0 6, BSD-3-Clause 3, 0BSD 1, CC-BY-4.0 1 y Apache-2.0 AND LGPL-3.0-or-later 1. No apareció metadata AGPL/GPL/SSPL/BUSL/Commons Clause en ese subconjunto. `@img/sharp-win32-x64@0.35.4` y 33 opcionales de otras plataformas exigen revisión/avisos antes de distribuir.
+- Limitación: `pnpm licenses list --prod --json` falló por un índice local ausente; una instalación offline congelada no lo reparó. El respaldo cruzó `pnpm list` con manifests del virtual store. No se declara compliance de distribución y debe regenerarse el inventario por target en CI/release, con revisión jurídica para licencias copyleft/no estándar.
+- Límites: no se cambió código funcional, lockfile, credenciales, permisos, Data API, Vault, esquema, infraestructura remota, dinero, fiscalidad o Git remoto. El aviso propietario no reemplaza una EULA, contrato comercial, política de privacidad ni asesoría jurídica.
+- Verificación local: los ocho manifests parsean con `private: true` y `license: UNLICENSED`; `pnpm install --offline --frozen-lockfile` quedó reproducible, `git diff --check` pasó y lint global ejecutó 7/7 paquetes sin caché ni warnings. No se requirieron typecheck, tests o build porque no cambió código ni resolución de dependencias.
+- Siguiente acción mínima: seleccionar para aprobación humana la primera tarea P0 en REVIEW; no iniciar Fase 2 hasta integrar y revisar el workstream `apps/mobile` de Claude.
+- Subagentes: ninguno. Razonamiento alto por propiedad intelectual y distribución comercial.
+
+## Aprobación 2026-09-04 — ADR-012 e infraestructura P0
+
+- Tarea/estado: Emmanuel aprobó ADR-012; la P0 de infraestructura pasa de IN_PROGRESS a DONE. PostgreSQL/Auth siguen en Supabase, Realtime conserva Socket.IO + REST/cursor bajo ADR-011 y el primer workload asíncrono aprobado usará Supabase Queues/PGMQ privado con un worker NestJS separado.
+- Límites de aprobación: no se aprovisiona cola sin workload concreto; no se habilitó extensión, creó cola, aplicó migración, agregó Redis/dependencias, expuso Data API, cambió infraestructura remota ni seleccionó proveedor externo. La futura implementación conserva enqueue transaccional, idempotencia del efecto, reintentos acotados, dead letter, aislamiento, observabilidad y verificación rollback-only previa a cualquier apply autorizado.
+- Realtime/escalamiento: PGMQ no es backplane de Socket.IO. v1.0 permanece en una sola réplica API y múltiples réplicas requieren ADR y pruebas separadas.
+- Archivos modificados: `docs/adr/ADR-012.md`, `README.md`, `TODO.md`, `PROJECT_NOTES.md` y `HANDOFF.md`. No hubo cambios de código, esquema, credenciales, permisos, Vault, dinero, impuestos, CFDI, fiscalidad ni Git remoto.
+- Verificación: los enlaces locales de ADR existen, `git diff --check` quedó verde y CodeGraph confirmó `RealtimeGateway`; el único símbolo cuyo nombre contiene `queue`/`worker` sigue siendo `queuedFetch` de una prueba de Data API, no una cola productiva.
+- Siguiente acción mínima: seleccionar la siguiente tarea elegible de mayor prioridad sin interferir con el workstream `apps/mobile` de Claude.
+- Subagentes: ninguno. Razonamiento alto por durabilidad, efectos externos y arquitectura transversal.
+
+## Propuesta 2026-09-04 — cola durable de jobs
+
+- Tarea/estado: la P0 de infraestructura permanece IN_PROGRESS. La auditoría confirmó PostgreSQL/Auth productivos y Realtime ya resuelto por ADR-011 con Socket.IO + REST/cursor; no existen worker, dependencia o cola de jobs.
+- Propuesta: `docs/adr/ADR-012.md` recomienda Supabase Queues/PGMQ privado, consumido por un proceso NestJS separado, para el primer workload asíncrono aprobado. Enqueue debe compartir transacción con el cambio origen, mientras el efecto externo conserva idempotencia propia, reintentos acotados, archivo/dead letter, aislamiento y observabilidad.
+- Límites: la propuesta no usa PGMQ como backplane de Socket.IO y v1.0 conserva una sola réplica API. No se habilitó extensión, creó cola, aplicó migración, agregó Redis/dependencias, expuso Data API, cambió infraestructura remota ni seleccionó proveedor externo. Aprobar la ADR tampoco autorizaría esas mutaciones.
+- Archivos modificados en este corte: `docs/adr/ADR-012.md`, `README.md`, `TODO.md` y `HANDOFF.md`, además de las decisiones de producto ya pendientes en `PROJECT_NOTES.md`.
+- Evidencia: CodeGraph localizó gateway, contratos, consumidores KDS y recuperación por cursor, sin símbolos de worker/cola. La inspección dirigida de manifests tampoco halló BullMQ, Redis, PGMQ, Graphile Worker, pg-boss o scheduler. Se contrastaron las opciones con documentación oficial de Supabase Queues/PGMQ y NestJS/BullMQ.
+- Riesgo/siguiente acción mínima: requiere aprobación humana de ADR-012. Después debe seleccionarse un workload concreto; solo entonces se diseña la migración rollback-only y se solicita autorización separada para cualquier apply remoto. Multi-réplica requiere otra ADR de backplane.
+- Subagentes: ninguno. Razonamiento alto por entrega durable, efectos externos, aislamiento y operación.
+
+## Aprobación 2026-09-04 — mercado y frontera fiscal de v1.0
+
+- Tarea/estado: Emmanuel confirmó México como mercado inicial, `MXN` como moneda y la zona de Sonora, registrada técnicamente como `America/Hermosillo`; la P0 pasa de IN_PROGRESS a DONE.
+- Decisión fiscal: v1.0 es no fiscal y solo emite tickets internos no fiscales. CFDI queda para una versión posterior mediante una frontera desacoplada; no se eligió PAC/proveedor, no se solicitaron certificados o credenciales, no se asumieron impuestos ni obligaciones fiscales y la facturación retrospectiva permanece sin decidir.
+- Archivos modificados: `TODO.md`, `PROJECT_NOTES.md` y `HANDOFF.md`. No hubo cambios de código, dinero existente, esquema, migraciones, infraestructura remota, permisos, Data API, Vault, certificados, credenciales ni proveedor.
+- Siguiente tarea: se seleccionó y marcó IN_PROGRESS la P0 de infraestructura definitiva. CodeGraph confirma la implementación vigente de Socket.IO en NestJS/KDS, sus contratos compartidos y recuperación durable por cursor; no halló una cola/jobs definitiva. El primer alcance será auditar decisiones faltantes sin introducir Redis ni modificar servicios remotos por inferencia.
+- Riesgos y siguiente acción mínima: separar el estado ya implementado de PostgreSQL/Auth/Realtime de las decisiones realmente pendientes sobre jobs/cola y operación; cualquier mutación remota o elección transversal requerirá su ADR y, cuando corresponda, autorización humana.
+- Subagentes: ninguno. Razonamiento alto por frontera fiscal futura, dinero y arquitectura de infraestructura.
+
+## Aprobación 2026-09-04 — alcance vendible v1.0/v1.1
+
+- Tarea/estado: Emmanuel aprobó expresamente la P0 de alcance vendible; pasa de IN_PROGRESS a DONE. v1.0 cubre Fases 0–2 como producto online-first y exige Mobile; v1.1 contiene la Fase 3 offline-first. v1.0 requiere conectividad y no puede presentarse como offline. El servidor local opcional continúa fuera de alcance hasta contar con ADR.
+- Decisiones y límites: la separación no autoriza iniciar Fase 3 ni modifica contratos financieros, esquema, infraestructura o proveedor. Licencia comercial, mercado, moneda, zona horaria y fiscalidad permanecen como gates independientes; no se asumieron México, CFDI, impuestos ni moneda.
+- Verificación estructural: CodeGraph se consultó antes de registrar la decisión. El índice vigente contiene API (108 archivos), web (42) y KDS (12), pero todavía no contiene `apps/mobile` ni `packages/sync-engine`; esto respalda tratar Mobile como el workstream activo de v1.0 y reservar el motor offline para v1.1. No hubo cambios de código ni reconsulta posterior aplicable a símbolos.
+- Archivos modificados: `TODO.md` y `HANDOFF.md`. No hubo cambios de esquema, migraciones, credenciales, permisos, Data API, Vault, dinero, moneda, impuestos, CFDI, fiscalidad, proveedor ni interacción Git remota.
+- Siguiente acción mínima: se seleccionó y marcó IN_PROGRESS la siguiente P0 elegible, que requiere decisión humana sobre mercado objetivo, moneda, zona horaria, reglas fiscales y pertenencia de CFDI México al producto.
+- Subagentes: ninguno. Razonamiento alto por definición de frontera comercial, operación online y separación del riesgo offline.
+
+## Aprobación 2026-09-04 — flujo completo P1 cerrado
+
+- Tarea/estado: Emmanuel aprobó expresamente P1 “Probar el flujo completo: abrir mesa → comanda → KDS → cobrar → cerrar mesa”; pasa de REVIEW a DONE. Se conserva sin repetir toda la evidencia verde ya documentada y no se ejecutaron nuevas E2E, smokes ni operaciones remotas.
+- Archivos modificados: `TODO.md` y `HANDOFF.md`, únicamente para registrar la transición y la aprobación humana. No hubo cambios de código, esquema, migraciones, credenciales, permisos, Data API, Vault, dinero, moneda, impuestos, CFDI, fiscalidad ni proveedor.
+- Verificación: árbol inicialmente limpio; el remoto consultado de forma read-only confirmó `HEAD=origin/main=16f30f1fd3aa0cce3f47d7a7bac2dd5d0f354de1`, un commit posterior al hash solicitado `941293b1d4658f7f683f1591841a5ab101eebfef`. CodeGraph local se consultó read-only: índice completo, 229 archivos, 4,177 nodos, 16,708 relaciones y cero archivos con error; `apps/mobile` aún no tiene nodos.
+- Continuación y siguiente tarea: Emmanuel indicó continuar, por lo que se acepta como base el `origin/main` vigente `16f30f1fd3aa0cce3f47d7a7bac2dd5d0f354de1` sin descartar su workstream móvil. Se seleccionó y marcó IN_PROGRESS la decisión P0 sobre el alcance del v1 vendible. El plan propone Fases 0–3, pero iniciar mobile u offline requiere que Emmanuel confirme si ambos son requisitos del mismo v1 o entregas separadas; no se asumieron alcance, mercado, moneda, fiscalidad ni proveedor.
+- Subagentes: ninguno. Razonamiento alto por aprobación de fase, coordinación de workstreams y discrepancia de base Git.
+
 ## Preparación 2026-09-04 — workstream frontend aislado para Claude
 
 - Entregable creado: `docs/CLAUDE_FRONTEND_WORKSTREAM.md`. Autoriza a Claude únicamente a crear `apps/mobile/**` y actualizar `pnpm-lock.yaml` por dependencias directas de ese app, siempre en rama/worktree separados. El documento exige entregar commits convencionales, `apps/mobile/CLAUDE_DELIVERY.md`, pruebas, matriz visual y comparación de rutas contra el hash base.

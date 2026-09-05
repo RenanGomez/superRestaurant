@@ -2,6 +2,7 @@
   "name": "@super-restaurant/adr-010-spike",
   "version": "0.0.0",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "devDependencies": {
     "@super-restaurant/config": "workspace:*",

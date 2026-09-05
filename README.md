@@ -4,7 +4,7 @@ superRestaurant es un sistema POS greenfield y API-first para restaurantes, con 
 
 ## Estado actual
 
-El repositorio está en la base inicial del monorepo con pnpm y Turborepo. ADR-010 seleccionó la arquitectura híbrida: Supabase administrado para PostgreSQL/Auth y Storage cuando un módulo lo requiera, con NestJS como única frontera de escritura crítica. ADR-001 registra los límites de implementación; las aplicaciones, el schema productivo, la cola y el transporte Realtime todavía no están implementados o elegidos.
+El repositorio usa un monorepo con pnpm y Turborepo. ADR-010 seleccionó la arquitectura híbrida: Supabase administrado para PostgreSQL/Auth y Storage cuando un módulo lo requiera, con NestJS como única frontera de escritura crítica. ADR-001 registra sus límites; ADR-011 seleccionó e implementó Socket.IO con recuperación durable por cursor para Realtime. ADR-012 adopta Supabase Queues/PGMQ privado para el primer workload asíncrono aprobado; la cola permanece deliberadamente sin aprovisionar hasta entonces.
 
 ## Requisitos locales
 
@@ -41,3 +41,11 @@ pnpm build
 - [Handoff](HANDOFF.md)
 - [Instrucciones para agentes](AGENTS.md)
 - [ADR-006: estrategia Git greenfield](docs/adr/ADR-006.md)
+- [Auditoría preliminar de licencias de terceros](docs/THIRD_PARTY_LICENSE_AUDIT.md)
+
+## Licencia
+
+Copyright (c) 2026 Emmanuel Renan Gomez Alvarez. Todos los derechos reservados.
+superRestaurant es software propietario y no se concede permiso de uso, copia,
+modificación o distribución sin autorización escrita del titular. Consulta
+[LICENSE](LICENSE). Las dependencias de terceros conservan sus propias licencias.
