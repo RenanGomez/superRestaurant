@@ -5,7 +5,7 @@ import type {
 } from "@super-restaurant/shared-types";
 
 import { MobileRequestError, type AuthorizedMobileBranch, type MobileBranchScope } from "./mobile-client.js";
-import type { MobileSession } from "./session.js";
+import { isSameOperator, type MobileSession } from "./session.js";
 
 export type MobileScreen = "starting" | "signIn" | "branches" | "workspace";
 export type MobileTab = "tables" | "menu";
@@ -93,8 +93,9 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
     case "sessionObserved":
       // A session that simply renewed its token keeps the branch and its data;
       // a first session, or a different operator, starts from a clean state so
-      // nothing from a previous scope survives.
-      return state.session !== undefined && state.session.email === event.session.email
+      // nothing from a previous scope survives. Identity is the immutable
+      // Supabase user id: an email is display data and could be reassigned.
+      return state.session !== undefined && isSameOperator(state.session, event.session)
         ? freeze({ ...state, session: event.session, started: true })
         : freeze({ ...initialMobileState, session: event.session, started: true });
     case "signedOut":

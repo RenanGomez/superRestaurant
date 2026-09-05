@@ -16,8 +16,10 @@ import {
   type MobileState,
 } from "./mobile-state.js";
 import {
+  FIXTURE_USER_B,
   authorizedBranchBody,
   diningLayoutBody,
+  fixtureSession,
   membershipListBody,
   menuCatalogStateBody,
   scopeA,
@@ -31,7 +33,7 @@ import {
   parseMenuCatalogStateV1,
 } from "@super-restaurant/shared-types";
 
-const session: MobileSession = Object.freeze({ accessToken: "token-1", email: "operador@example.com" });
+const session: MobileSession = fixtureSession();
 const memberships = parseBranchMembershipListV1(membershipListBody([scopeA, scopeB]))?.memberships ?? [];
 const layoutA = parseDiningLayoutV1(diningLayoutBody(scopeA));
 const layoutB = parseDiningLayoutV1(diningLayoutBody(scopeB, "Salón"));
@@ -214,21 +216,40 @@ test("transport failures map to operational states with Spanish messages", () =>
   }
 });
 
-test("a renewed token keeps the branch and its data; another operator does not", () => {
-  const renewed = apply(onBranchA(), { session: { accessToken: "token-2", email: session.email }, type: "sessionObserved" });
+test("the same operator renewing a token keeps the branch, its memberships and its data", () => {
+  const renewed = apply(onBranchA(), { session: fixtureSession({ accessToken: "token-2" }), type: "sessionObserved" });
+
   assert.equal(renewed.session?.accessToken, "token-2");
+  assert.equal(renewed.session?.userId, session.userId);
   assert.equal(renewed.branch?.branchId, scopeA.branchId);
+  assert.equal(renewed.memberships.status, "ready");
   assert.equal(renewed.layout.status, "ready");
   assert.equal(renewed.menu.status, "ready");
+});
 
-  const other = apply(onBranchA(), {
-    session: { accessToken: "token-3", email: "otra@example.com" },
+test("a different operator with the same email starts from a clean state", () => {
+  const impostor = apply(onBranchA(), {
+    session: fixtureSession({ accessToken: "token-3", userId: FIXTURE_USER_B }),
     type: "sessionObserved",
   });
-  assert.equal(other.branch, undefined);
-  assert.equal(other.layout.value, undefined);
-  assert.equal(other.memberships.value, undefined);
-  assert.equal(mobileScreen(other), "branches");
+
+  assert.equal(impostor.session?.userId, FIXTURE_USER_B);
+  assert.equal(impostor.session?.email, session.email, "same email on purpose");
+  assert.equal(impostor.branch, undefined);
+  assert.equal(impostor.layout.value, undefined);
+  assert.equal(impostor.menu.value, undefined);
+  assert.equal(impostor.memberships.value, undefined);
+  assert.equal(mobileScreen(impostor), "branches");
+});
+
+test("the same operator with a changed email is still the same operator", () => {
+  const renamed = apply(onBranchA(), {
+    session: fixtureSession({ accessToken: "token-4", email: "correo.nuevo@example.invalid" }),
+    type: "sessionObserved",
+  });
+
+  assert.equal(renamed.branch?.branchId, scopeA.branchId);
+  assert.equal(renamed.layout.status, "ready");
 });
 
 test("returning to the foreground drops the loaded branch data before revalidating", () => {

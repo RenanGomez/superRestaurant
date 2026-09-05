@@ -7,6 +7,7 @@
  */
 import type { MobileConfig } from "./config.js";
 import type { MobileBranchScope } from "./mobile-client.js";
+import type { MobileSession } from "./session.js";
 
 export const FIXTURE_RESTAURANT_A = "11111111-1111-4111-8111-111111111111";
 export const FIXTURE_BRANCH_A = "22222222-2222-4222-8222-222222222222";
@@ -22,6 +23,10 @@ const FIXTURE_OPTION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const FIXTURE_CATALOG = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const FIXTURE_ACTOR = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const FIXTURE_TIMESTAMP = "2026-09-04T12:00:00.000Z";
+
+/** Synthetic Supabase user ids; two distinct operators. */
+export const FIXTURE_USER_A = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+export const FIXTURE_USER_B = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 
 /** ISO 4217 test currency: never a real market currency, never a default. */
 export const FIXTURE_CURRENCY = "XTS";
@@ -41,6 +46,15 @@ export const scopeB: MobileBranchScope = Object.freeze({
   branchId: FIXTURE_BRANCH_B,
   restaurantId: FIXTURE_RESTAURANT_B,
 });
+
+export function fixtureSession(overrides: Partial<MobileSession> = {}): MobileSession {
+  return Object.freeze({
+    accessToken: "harness-token-1",
+    email: "operador.sintetico@example.invalid",
+    userId: FIXTURE_USER_A,
+    ...overrides,
+  });
+}
 
 export function membershipListBody(scopes: readonly MobileBranchScope[]): unknown {
   return {

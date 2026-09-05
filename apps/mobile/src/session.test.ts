@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { MOBILE_AUTH_OPTIONS, MOBILE_SIGN_OUT_SCOPE, toMobileSession } from "./session.js";
+import { MOBILE_AUTH_OPTIONS, MOBILE_SIGN_OUT_SCOPE, isSameOperator, toMobileSession } from "./session.js";
+import { FIXTURE_USER_A, FIXTURE_USER_B, fixtureSession } from "./test-fixtures.js";
 
 test("keeps the session in memory: no persistence and no storage adapter", () => {
   assert.deepEqual(MOBILE_AUTH_OPTIONS, {
@@ -24,15 +25,42 @@ test("signs out only this device", () => {
   assert.equal(MOBILE_SIGN_OUT_SCOPE, "local");
 });
 
-test("narrows a Supabase session to the token and the operator email", () => {
-  assert.deepEqual(toMobileSession({ access_token: "token-1", user: { email: "operador@example.com" } }), {
-    accessToken: "token-1",
-    email: "operador@example.com",
-  });
-  assert.deepEqual(toMobileSession({ access_token: "token-1", user: { email: null } }), {
-    accessToken: "token-1",
-    email: undefined,
-  });
+test("narrows a Supabase session to the token, the immutable id and the email", () => {
+  assert.deepEqual(
+    toMobileSession({ access_token: "token-1", user: { email: "operador@example.com", id: FIXTURE_USER_A } }),
+    { accessToken: "token-1", email: "operador@example.com", userId: FIXTURE_USER_A },
+  );
+  assert.deepEqual(
+    toMobileSession({ access_token: "token-1", user: { email: null, id: FIXTURE_USER_A.toUpperCase() } }),
+    { accessToken: "token-1", email: undefined, userId: FIXTURE_USER_A },
+  );
+});
+
+test("refuses a session without a valid Supabase user id", () => {
+  for (const user of [
+    undefined,
+    null,
+    {},
+    { id: "" },
+    { id: "not-a-uuid" },
+    { id: 42 },
+    { id: `${FIXTURE_USER_A} ` },
+    { email: "operador@example.com" },
+  ]) {
+    assert.equal(toMobileSession({ access_token: "token-1", user }), undefined, JSON.stringify(user ?? null));
+  }
+});
+
+test("identity is the user id, never the email", () => {
+  const renewed = fixtureSession({ accessToken: "token-2" });
+  const renamed = fixtureSession({ accessToken: "token-3", email: "otro.correo@example.invalid" });
+  const other = fixtureSession({ userId: FIXTURE_USER_B });
+
+  assert.equal(isSameOperator(fixtureSession(), renewed), true);
+  assert.equal(isSameOperator(fixtureSession(), renamed), true);
+  assert.equal(isSameOperator(fixtureSession(), other), false);
+  // Same email, different operator: still a different actor.
+  assert.equal(isSameOperator(fixtureSession(), fixtureSession({ userId: FIXTURE_USER_B })), false);
 });
 
 test("treats an unusable session as signed out", () => {
@@ -45,6 +73,7 @@ test("treats an unusable session as signed out", () => {
     { access_token: " token " },
     { access_token: 42 },
     { access_token: "x".repeat(8_193) },
+    { access_token: "token-1" },
   ]) {
     assert.equal(toMobileSession(value), undefined, JSON.stringify(value ?? null));
   }
