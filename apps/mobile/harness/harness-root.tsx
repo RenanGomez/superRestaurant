@@ -64,8 +64,22 @@ export function Root(): React.JSX.Element {
             selected={false}
           />
           <Control
-            label="Notificar sesión anterior"
-            onPress={() => { doubles.auth.emitPreviousSession(); setTicks((value) => value + 1); }}
+            label="Notificar sesión histórica 1"
+            onPress={() => { doubles.auth.emitHistoricalSession(0); setTicks((value) => value + 1); }}
+            selected={false}
+          />
+          <Control
+            label="Notificar sesión histórica 2"
+            onPress={() => { doubles.auth.emitHistoricalSession(1); setTicks((value) => value + 1); }}
+            selected={false}
+          />
+          <Control
+            label="Notificar todas las históricas"
+            onPress={() => {
+              const total = doubles.auth.history().length;
+              for (let index = 0; index < total; index += 1) doubles.auth.emitHistoricalSession(index);
+              setTicks((value) => value + 1);
+            }}
             selected={false}
           />
           <Control
@@ -80,7 +94,9 @@ export function Root(): React.JSX.Element {
           />
         </View>
         <Text style={styles.hint}>
-          {`Contraseña "rechazar" = credenciales inválidas · ticker de sesión: ${harnessControl.autoRefreshRuns} · eventos: ${ticks}`}
+          {`Contraseña "rechazar" = credenciales inválidas · correo que empieza por "b" = operador B · `
+            + `operador actual: ${doubles.auth.operator()} · sesiones históricas: ${doubles.auth.history().length} · `
+            + `ticker de sesión: ${harnessControl.autoRefreshRuns} · eventos: ${ticks}`}
         </Text>
       </ScrollView>
       <View style={styles.app}>

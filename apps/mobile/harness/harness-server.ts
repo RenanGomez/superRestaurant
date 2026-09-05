@@ -17,6 +17,7 @@ import { MOBILE_API_PATHS } from "../src/mobile-client.js";
 import type { MobileSession } from "../src/session.js";
 import {
   FIXTURE_USER_A,
+  FIXTURE_USER_B,
   authorizedBranchBody,
   diningLayoutBody,
   membershipListBody,
@@ -61,7 +62,20 @@ export const harnessControl: HarnessControl = { autoRefreshRuns: 0, scenario: "o
 // reaches a build: it lets the reviewer read the token-ticker counter directly.
 (globalThis as unknown as { __harnessControl?: HarnessControl }).__harnessControl = harnessControl;
 
-const HARNESS_EMAIL = "operador.sintetico@example.invalid";
+/**
+ * Two synthetic operators, so a complete A-in/A-out/B-in/B-out cycle can be
+ * driven by hand. The access screen picks one by the local part of the email:
+ * anything starting with "b" is operator B, everything else operator A. No
+ * credential is checked against anything.
+ */
+const HARNESS_OPERATORS = Object.freeze({
+  a: Object.freeze({ email: "operador.a.sintetico@example.invalid", userId: FIXTURE_USER_A }),
+  b: Object.freeze({ email: "operador.b.sintetico@example.invalid", userId: FIXTURE_USER_B }),
+});
+
+function harnessOperator(email: string): { readonly email: string; readonly userId: string } {
+  return email.trim().toLowerCase().startsWith("b") ? HARNESS_OPERATORS.b : HARNESS_OPERATORS.a;
+}
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, milliseconds); });
@@ -128,20 +142,42 @@ export function installHarnessFetch(apiBaseUrl: string): void {
   }) as typeof fetch;
 }
 
+type HarnessSessionHandler = (next: MobileSession | undefined) => void;
+
 /**
  * An in-memory identity double. No credential is ever checked against a real
  * service: any password signs in, except the literal `rechazar`, which produces
  * the rejected-credentials state.
+ *
+ * It behaves worse than a real provider on purpose, in the two ways that break
+ * naive session handling:
+ *
+ * - it keeps **every** session it ever minted, so one from an earlier cycle can
+ *   be notified after two or more complete sign-in/sign-out rounds;
+ * - it keeps **every** handler it was ever given, released or not, and replays
+ *   historical sessions to all of them, so a provider that never lets go can be
+ *   reproduced by hand.
  */
 export function createHarnessAuth(): MobileAuthPort & {
-  readonly emitPreviousSession: () => void;
+  readonly emitHistoricalSession: (index: number) => void;
   readonly emitRefreshedToken: () => void;
   readonly expireSession: () => void;
+  readonly history: () => readonly MobileSession[];
+  readonly operator: () => string;
 } {
   let session: MobileSession | undefined;
-  let previous: MobileSession | undefined;
-  const listeners = new Set<(next: MobileSession | undefined) => void>();
-  const notify = (): void => { for (const listener of listeners) listener(session); };
+  // Oldest first; every token this double ever issued. All synthetic.
+  const history: MobileSession[] = [];
+  const live = new Set<HarnessSessionHandler>();
+  const retired = new Set<HarnessSessionHandler>();
+  const notify = (): void => { for (const listener of [...live]) listener(session); };
+
+  const mint = (email: string, userId: string): void => {
+    harnessControl.tokenSerial += 1;
+    session = Object.freeze({ accessToken: `harness-token-${harnessControl.tokenSerial}`, email, userId });
+    history.push(session);
+    notify();
+  };
 
   return Object.freeze({
     currentSession: (): Promise<MobileSession | undefined> => {
@@ -151,39 +187,33 @@ export function createHarnessAuth(): MobileAuthPort & {
       }
       return Promise.resolve(harnessControl.scenario === "expired" ? undefined : session);
     },
-    // Replays the session that was just closed, as a provider notifying late.
-    emitPreviousSession: (): void => {
-      if (previous === undefined) return;
-      for (const listener of listeners) listener(previous);
+    /**
+     * Replays a session from the history to every handler this double ever
+     * received, released or not: the provider notifying late about a session
+     * that may be one, two or more cycles old.
+     */
+    emitHistoricalSession: (index: number): void => {
+      const replayed = history[index];
+      if (replayed === undefined) return;
+      for (const listener of [...live, ...retired]) listener(replayed);
     },
     emitRefreshedToken: (): void => {
       if (session === undefined) return;
-      harnessControl.tokenSerial += 1;
-      session = Object.freeze({
-        accessToken: `harness-token-${harnessControl.tokenSerial}`,
-        email: session.email,
-        userId: session.userId,
-      });
-      previous = session;
-      notify();
+      mint(session.email ?? HARNESS_OPERATORS.a.email, session.userId);
     },
     expireSession: (): void => { harnessControl.scenario = "expired"; },
-    onSessionChange: (handler: (next: MobileSession | undefined) => void): (() => void) => {
-      listeners.add(handler);
-      return (): void => { listeners.delete(handler); };
+    history: (): readonly MobileSession[] => [...history],
+    onSessionChange: (handler: HarnessSessionHandler): (() => void) => {
+      live.add(handler);
+      return (): void => { live.delete(handler); retired.add(handler); };
     },
-    signIn: (_email: string, password: string): Promise<MobileSignInResult> => {
+    operator: (): string => session?.email ?? "—",
+    signIn: (email: string, password: string): Promise<MobileSignInResult> => {
       if (harnessControl.scenario === "network") return Promise.resolve("unavailable");
       if (password === "rechazar") return Promise.resolve("rejected");
       // Every sign-in mints a new token, as Auth does.
-      harnessControl.tokenSerial += 1;
-      session = Object.freeze({
-        accessToken: `harness-token-${harnessControl.tokenSerial}`,
-        email: HARNESS_EMAIL,
-        userId: FIXTURE_USER_A,
-      });
-      previous = session;
-      notify();
+      const operator = harnessOperator(email);
+      mint(operator.email, operator.userId);
       return Promise.resolve("ok");
     },
     signOut: (): Promise<void> => {
