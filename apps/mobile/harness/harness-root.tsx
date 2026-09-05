@@ -64,6 +64,11 @@ export function Root(): React.JSX.Element {
             selected={false}
           />
           <Control
+            label="Reiniciar app"
+            onPress={() => { setReloads((value) => value + 1); setTicks((value) => value + 1); }}
+            selected={false}
+          />
+          <Control
             label="Reiniciar arnés"
             onPress={() => { apply("ok"); setReloads((value) => value + 1); }}
             selected={false}

@@ -16,6 +16,7 @@ import type { MobileAppStatus, MobileLifecyclePort } from "../src/lifecycle.js";
 import { MOBILE_API_PATHS } from "../src/mobile-client.js";
 import type { MobileSession } from "../src/session.js";
 import {
+  FIXTURE_USER_A,
   authorizedBranchBody,
   diningLayoutBody,
   membershipListBody,
@@ -24,7 +25,7 @@ import {
   scopeB,
 } from "../src/test-fixtures.js";
 
-export type HarnessScenario = "ok" | "revoked" | "expired" | "empty" | "network" | "slow";
+export type HarnessScenario = "ok" | "revoked" | "expired" | "empty" | "network" | "slow" | "sessionError";
 
 export const HARNESS_SCENARIOS: readonly { readonly label: string; readonly value: HarnessScenario }[] = Object.freeze([
   { label: "Datos válidos", value: "ok" },
@@ -33,6 +34,7 @@ export const HARNESS_SCENARIOS: readonly { readonly label: string; readonly valu
   { label: "Sin sucursales", value: "empty" },
   { label: "Red caída", value: "network" },
   { label: "Respuesta lenta", value: "slow" },
+  { label: "Sesión ilegible", value: "sessionError" },
 ]);
 
 /** Mutable control surface driven by the harness UI. */
@@ -129,13 +131,21 @@ export function createHarnessAuth(): MobileAuthPort & {
   const notify = (): void => { for (const listener of listeners) listener(session); };
 
   return Object.freeze({
-    currentSession: (): Promise<MobileSession | undefined> => Promise.resolve(
-      harnessControl.scenario === "expired" ? undefined : session,
-    ),
+    currentSession: (): Promise<MobileSession | undefined> => {
+      // Exercises the rejected-port path end to end.
+      if (harnessControl.scenario === "sessionError") {
+        return Promise.reject(new Error("HARNESS_SESSION_UNREADABLE"));
+      }
+      return Promise.resolve(harnessControl.scenario === "expired" ? undefined : session);
+    },
     emitRefreshedToken: (): void => {
       if (session === undefined) return;
       harnessControl.tokenSerial += 1;
-      session = Object.freeze({ accessToken: `harness-token-${harnessControl.tokenSerial}`, email: session.email });
+      session = Object.freeze({
+        accessToken: `harness-token-${harnessControl.tokenSerial}`,
+        email: session.email,
+        userId: session.userId,
+      });
       notify();
     },
     expireSession: (): void => { harnessControl.scenario = "expired"; },
@@ -146,7 +156,11 @@ export function createHarnessAuth(): MobileAuthPort & {
     signIn: (_email: string, password: string): Promise<MobileSignInResult> => {
       if (harnessControl.scenario === "network") return Promise.resolve("unavailable");
       if (password === "rechazar") return Promise.resolve("rejected");
-      session = Object.freeze({ accessToken: `harness-token-${harnessControl.tokenSerial}`, email: HARNESS_EMAIL });
+      session = Object.freeze({
+        accessToken: `harness-token-${harnessControl.tokenSerial}`,
+        email: HARNESS_EMAIL,
+        userId: FIXTURE_USER_A,
+      });
       notify();
       return Promise.resolve("ok");
     },
