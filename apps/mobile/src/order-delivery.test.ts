@@ -11,11 +11,14 @@ import {
   type OrderDraftIntegration,
 } from "./order-intents.js";
 import {
+  FIXTURE_CATEGORY_STARTERS,
   FIXTURE_GROUP_DONENESS,
   FIXTURE_OPTION_WELL_DONE,
   FIXTURE_PRODUCT_MAIN,
   FIXTURE_TABLE_LONG_NAME,
   orderEntryCatalog,
+  orderEntryCatalogWithBulkGroups,
+  republishedOrderEntryCatalog,
   scopeA,
   scopeB,
 } from "./test-fixtures.js";
@@ -332,6 +335,49 @@ test("a draft the catalog refuses fails closed as stale, and is never delivered"
     onStart: record.onStart,
   }), true);
   assert.equal(integration.calls(), 1);
+});
+
+test("a required group past the presentation cap becomes stale, and never reaches the integration", () => {
+  const tracker = createOrderDeliveryTracker();
+  const record = recorder();
+  const integration = deferred();
+  // 51 active groups: 50 optional, the 51st required and unselected.
+  const catalog = orderEntryCatalogWithBulkGroups(51, (index) => index === 51);
+
+  tracker.run({
+    build: () => buildOrderDraftHandoff({
+      catalog,
+      lines: [{ draftLineId: "draft-line-1", modifierGroups: [], productId: FIXTURE_PRODUCT_MAIN, quantity: 1 }],
+      scope: scopeA,
+      tableId: FIXTURE_TABLE_LONG_NAME,
+    }),
+    context: CONTEXT_A,
+    integration,
+    onSettle: record.onSettle,
+    onStart: record.onStart,
+  });
+  assert.deepEqual(record.settled, ["stale"]);
+  assert.equal(integration.calls(), 0, "a draft the catalog refuses reached the integration");
+});
+
+test("a retired category becomes stale, and never reaches the integration", () => {
+  const tracker = createOrderDeliveryTracker();
+  const record = recorder();
+  const integration = deferred();
+  const catalog = republishedOrderEntryCatalog((body) => {
+    const category = body.catalog.categories.find((entry) => entry.categoryId === FIXTURE_CATEGORY_STARTERS);
+    if (category !== undefined) category.active = false;
+  });
+
+  tracker.run({
+    build: () => buildOrderDraftHandoff({ catalog, lines, scope: scopeA, tableId: FIXTURE_TABLE_LONG_NAME }),
+    context: CONTEXT_A,
+    integration,
+    onSettle: record.onSettle,
+    onStart: record.onStart,
+  });
+  assert.deepEqual(record.settled, ["stale"]);
+  assert.equal(integration.calls(), 0, "a retired category reached the integration");
 });
 
 test("a build that throws is contained too, and still delivers nothing", () => {

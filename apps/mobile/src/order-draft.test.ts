@@ -6,10 +6,14 @@ import test from "node:test";
 import { parseDiningLayoutV1 } from "@super-restaurant/shared-types";
 
 import {
+  DRAFT_MAX_GROUPS,
   DRAFT_MAX_QUANTITY,
   DRAFT_MIN_QUANTITY,
+  activeProductGroups,
   composerIssues,
+  draftLineIssues,
   initialOrderDraftState,
+  isOrderableProduct,
   orderDraftFailureMessage,
   orderableCategories,
   orderableGroups,
@@ -27,6 +31,7 @@ import {
   FIXTURE_CATEGORY_STARTERS,
   FIXTURE_GROUP_DONENESS,
   FIXTURE_GROUP_EXTRAS,
+  FIXTURE_GROUP_RETIRED,
   FIXTURE_OPTION_BACON,
   FIXTURE_OPTION_CHEESE,
   FIXTURE_OPTION_RARE,
@@ -38,7 +43,9 @@ import {
   FIXTURE_TABLE_LONG_NAME,
   FIXTURE_ZONE,
   FIXTURE_ZONE_BAR,
+  bulkGroupId,
   orderEntryCatalog,
+  orderEntryCatalogWithBulkGroups,
   orderEntryLayoutBody,
   scopeA,
 } from "./test-fixtures.js";
@@ -472,6 +479,36 @@ test("only what the catalog publishes as active is offered", () => {
   assert.deepEqual(groups[0]?.options.map((option) => option.optionId), [FIXTURE_OPTION_WELL_DONE]);
   assert.equal(groups[0]?.options.some((option) => option.optionId === FIXTURE_OPTION_RARE), false);
   assert.deepEqual(orderableGroups(catalog, FIXTURE_PRODUCT_DRINK), []);
+});
+
+test("presentation truncates the group list; validation never does", () => {
+  const many = orderEntryCatalogWithBulkGroups(2_000, () => false);
+  // The catalog may publish far more groups than one command can carry.
+  assert.equal(activeProductGroups(many, FIXTURE_PRODUCT_MAIN).length, 2_000);
+  // The screen shows a bounded slice, in catalog order, from the front.
+  const shown = orderableGroups(many, FIXTURE_PRODUCT_MAIN);
+  assert.equal(shown.length, DRAFT_MAX_GROUPS);
+  assert.equal(shown[0]?.groupId, bulkGroupId(1));
+  assert.equal(shown.at(-1)?.groupId, bulkGroupId(DRAFT_MAX_GROUPS));
+  // With nothing required, an empty composition is offerable despite the size.
+  assert.deepEqual(draftLineIssues(many, { modifierGroups: [], productId: FIXTURE_PRODUCT_MAIN, quantity: 1 }), []);
+});
+
+test("an inactive group is excluded from both the presentation list and the validation set", () => {
+  // The retired group of the base fixture must not reappear through the
+  // uncapped validation set: "uncapped" is not "unfiltered".
+  assert.equal(activeProductGroups(catalog, FIXTURE_PRODUCT_MAIN).some((g) => g.groupId === FIXTURE_GROUP_RETIRED), false);
+  assert.equal(orderableGroups(catalog, FIXTURE_PRODUCT_MAIN).some((g) => g.groupId === FIXTURE_GROUP_RETIRED), false);
+  // Inactive options stay filtered out of the validation set too.
+  const doneness = activeProductGroups(catalog, FIXTURE_PRODUCT_MAIN)
+    .find((group) => group.groupId === FIXTURE_GROUP_DONENESS);
+  assert.deepEqual(doneness?.options.map((option) => option.optionId), [FIXTURE_OPTION_WELL_DONE]);
+});
+
+test("a product is orderable only while its category is published and active", () => {
+  assert.equal(isOrderableProduct(catalog, FIXTURE_PRODUCT_MAIN), true);
+  assert.equal(isOrderableProduct(catalog, FIXTURE_PRODUCT_RETIRED), false, "inactive product");
+  assert.equal(isOrderableProduct(catalog, UNKNOWN_GROUP), false, "unknown product");
 });
 
 test("the bounds the catalog publishes are what the interface may offer", () => {

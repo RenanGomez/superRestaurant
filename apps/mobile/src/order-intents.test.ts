@@ -4,7 +4,14 @@ import path from "node:path";
 import test from "node:test";
 
 import { MOBILE_API_PATHS } from "./mobile-client.js";
-import type { OrderDraftLine } from "./order-draft.js";
+import {
+  DRAFT_MAX_GROUPS,
+  activeProductGroups,
+  draftLineIssues,
+  isOrderableProduct,
+  orderableGroups,
+  type OrderDraftLine,
+} from "./order-draft.js";
 import {
   buildOrderDraftHandoff,
   disconnectedOrderDraftIntegration,
@@ -13,6 +20,7 @@ import {
   type OpenOrderIntentV1,
 } from "./order-intents.js";
 import {
+  FIXTURE_CATEGORY_STARTERS,
   FIXTURE_CURRENCY,
   FIXTURE_GROUP_DONENESS,
   FIXTURE_GROUP_EXTRAS,
@@ -23,7 +31,11 @@ import {
   FIXTURE_PRODUCT_MAIN,
   FIXTURE_PRODUCT_RETIRED,
   FIXTURE_TABLE_LONG_NAME,
+  bulkGroupId,
+  bulkOptionId,
   orderEntryCatalog,
+  orderEntryCatalogMissingCategory,
+  orderEntryCatalogWithBulkGroups,
   republishedOrderEntryCatalog,
   scopeA,
 } from "./test-fixtures.js";
@@ -242,6 +254,88 @@ test("a line the reducer could not have produced is still refused", () => {
   for (const [label, line] of cases) {
     assert.equal(build({ lines: [line] }), undefined, label);
   }
+});
+
+test("a required group past the presentation cap is still enforced", () => {
+  // 51 active groups: the first 50 optional, the 51st required. The screen can
+  // only present DRAFT_MAX_GROUPS of them, so before this fix the 51st was
+  // invisible to validation too and the line was handed over unsatisfied.
+  const catalogWith51 = orderEntryCatalogWithBulkGroups(51, (index) => index === 51);
+  assert.equal(activeProductGroups(catalogWith51, FIXTURE_PRODUCT_MAIN).length, 51);
+  assert.equal(orderableGroups(catalogWith51, FIXTURE_PRODUCT_MAIN).length, DRAFT_MAX_GROUPS);
+  // The required group really is the one the presentation list drops.
+  assert.equal(
+    orderableGroups(catalogWith51, FIXTURE_PRODUCT_MAIN).some((g) => g.groupId === bulkGroupId(51)),
+    false,
+  );
+
+  const unsatisfied = mainLine({ modifierGroups: [] });
+  assert.deepEqual(build({ catalog: catalogWith51, lines: [unsatisfied] }), undefined);
+  assert.equal(draftLineIssues(catalogWith51, unsatisfied).length > 0, true);
+
+  // Satisfying the 51st group makes the very same line offerable, so the rule
+  // is "the requirement is enforced", not "many groups are refused".
+  const satisfied = mainLine({
+    modifierGroups: [{ groupId: bulkGroupId(51), selections: [{ optionId: bulkOptionId(51), quantity: 1 }] }],
+  });
+  const handoff = build({ catalog: catalogWith51, lines: [satisfied] });
+  assert.notEqual(handoff, undefined);
+  // And the command still carries far fewer groups than the contract's bound.
+  assert.equal(handoff?.addItems[0]?.modifierGroups.length, 1);
+});
+
+test("a catalog demanding more mandatory groups than a command can carry is refused, not truncated", () => {
+  // 51 groups, all required: no selection can satisfy them within
+  // DRAFT_MAX_GROUPS, so the honest answer is that it cannot be ordered here.
+  const impossible = orderEntryCatalogWithBulkGroups(51, () => true);
+  const issues = draftLineIssues(impossible, mainLine({ modifierGroups: [] }));
+  assert.equal(issues.length, 1);
+  assert.match(issues[0] ?? "", /51 grupos obligatorios/u);
+  assert.equal(build({ catalog: impossible, lines: [mainLine({ modifierGroups: [] })] }), undefined);
+  // Selecting 50 of them does not sneak past the bound either.
+  const fifty = mainLine({
+    modifierGroups: Array.from({ length: DRAFT_MAX_GROUPS }, (_unused, index) => ({
+      groupId: bulkGroupId(index + 1),
+      selections: [{ optionId: bulkOptionId(index + 1), quantity: 1 }],
+    })),
+  });
+  assert.equal(build({ catalog: impossible, lines: [fifty] }), undefined);
+});
+
+test("a product whose category was retired is no longer orderable", () => {
+  const valid = [mainLine()];
+  assert.notEqual(build({ lines: valid }), undefined, "the baseline line is offerable");
+
+  // The category is deactivated between composing and sending.
+  const deactivated = republishedOrderEntryCatalog((body) => {
+    const category = body.catalog.categories.find((entry) => entry.categoryId === FIXTURE_CATEGORY_STARTERS);
+    if (category !== undefined) category.active = false;
+  });
+  assert.equal(isOrderableProduct(deactivated, FIXTURE_PRODUCT_MAIN), false);
+  assert.equal(build({ catalog: deactivated, lines: valid }), undefined, "inactive category");
+  assert.deepEqual(draftLineIssues(deactivated, mainLine()), ["La categoría de este producto ya no está publicada."]);
+
+  // A category that is not in the catalog at all. The shared parser refuses
+  // such a body — asserted just below — so this only reaches the client's
+  // defensive branch, which must still fail closed rather than assume.
+  assert.throws(
+    () => republishedOrderEntryCatalog((body) => {
+      body.catalog.categories = body.catalog.categories
+        .filter((entry) => entry.categoryId !== FIXTURE_CATEGORY_STARTERS);
+    }),
+    /FIXTURE_CATALOG_INVALID/u,
+    "the contract should refuse a product whose category is absent",
+  );
+  const removed = orderEntryCatalogMissingCategory(FIXTURE_CATEGORY_STARTERS);
+  assert.equal(isOrderableProduct(removed, FIXTURE_PRODUCT_MAIN), false);
+  assert.equal(build({ catalog: removed, lines: valid }), undefined, "missing category");
+  assert.deepEqual(draftLineIssues(removed, mainLine()), ["La categoría de este producto ya no está publicada."]);
+
+  // A line of a still-published category is not dragged down by its own merits,
+  // but it is by sharing the hand-over with a retired one: nothing partial.
+  const drink = mainLine({ draftLineId: "draft-line-2", modifierGroups: [], productId: FIXTURE_PRODUCT_DRINK });
+  assert.notEqual(build({ catalog: deactivated, lines: [drink] }), undefined, "the drinks category is untouched");
+  assert.equal(build({ catalog: deactivated, lines: [drink, ...valid] }), undefined, "mixed hand-over");
 });
 
 test("one invalid line poisons the whole hand-over: nothing partial is offered", () => {

@@ -364,25 +364,56 @@ export function orderableCategories(
 }
 
 /**
- * The modifier groups a product may offer, with only the options the catalog
- * still publishes as active. An inactive group is not offered at all.
+ * **Every** active modifier group of a product, with every active option, in
+ * catalog order and deliberately **not** truncated.
+ *
+ * This is the set validation must judge against. `MenuCatalogV1` allows far
+ * more groups per product than one `AddOrderItemCommandV1` may carry, so the
+ * list the screen renders is capped — and a required group sitting past that
+ * cap used to be invisible to the checks as well, which let a line be handed
+ * over while the published catalog still demanded a selection it did not have.
+ * Presentation truncates; validation never does.
  */
-export function orderableGroups(catalog: MenuCatalogV1, productId: string): readonly MenuModifierGroupV1[] {
+export function activeProductGroups(catalog: MenuCatalogV1, productId: string): readonly MenuModifierGroupV1[] {
   return Object.freeze(catalog.modifierGroups
     .filter((group) => group.productId === productId && group.active)
     .slice()
     .sort(byDisplayOrder)
+    .map((group) => Object.freeze({
+      ...group,
+      options: Object.freeze(group.options.filter((option) => option.active)),
+    })));
+}
+
+/**
+ * The modifier groups the screen may **present**, bounded by what one command
+ * can carry. Use `activeProductGroups` for anything that decides whether a
+ * line may be handed over: this list is allowed to be incomplete.
+ */
+export function orderableGroups(catalog: MenuCatalogV1, productId: string): readonly MenuModifierGroupV1[] {
+  return Object.freeze(activeProductGroups(catalog, productId)
     .slice(0, DRAFT_MAX_GROUPS)
     .map((group) => Object.freeze({
       ...group,
-      options: Object.freeze(group.options
-        .filter((option) => option.active)
-        .slice(0, DRAFT_MAX_SELECTIONS_PER_GROUP)),
+      options: Object.freeze(group.options.slice(0, DRAFT_MAX_SELECTIONS_PER_GROUP)),
     })));
 }
 
 export function findProduct(catalog: MenuCatalogV1, productId: string): MenuProductV1 | undefined {
   return catalog.products.find((product) => product.productId === productId);
+}
+
+/**
+ * Whether the catalog still publishes this product as orderable: the product
+ * itself active, and its category still present and active. A product whose
+ * category was retired is no longer reachable in the catalog the operator
+ * browses, so it must not be reachable through a stale draft either.
+ */
+export function isOrderableProduct(catalog: MenuCatalogV1, productId: string): boolean {
+  const product = findProduct(catalog, productId);
+  if (product === undefined || !product.active) return false;
+  const category = catalog.categories.find((entry) => entry.categoryId === product.categoryId);
+  return category !== undefined && category.active;
 }
 
 export function findOption(group: MenuModifierGroupV1, optionId: string): MenuModifierOptionV1 | undefined {
@@ -472,7 +503,23 @@ export function draftLineIssues(catalog: MenuCatalogV1, line: OrderDraftComposit
   if (product === undefined || !product.active) {
     return Object.freeze(["El catálogo publicado ya no incluye este producto."]);
   }
-  return composerIssues(orderableGroups(catalog, line.productId), line);
+  if (!isOrderableProduct(catalog, line.productId)) {
+    return Object.freeze(["La categoría de este producto ya no está publicada."]);
+  }
+  // Judged against every active group, never the truncated presentation list:
+  // a required group past the visual cap still has to be satisfied.
+  const groups = activeProductGroups(catalog, line.productId);
+  const required = groups.filter((group) => group.minimumQuantity > 0);
+  if (required.length > DRAFT_MAX_GROUPS) {
+    // The catalog demands more mandatory groups than one command may carry, so
+    // no draft of this product is expressible. Say so instead of sending a
+    // command the contract would reject.
+    return Object.freeze([
+      `Este producto exige ${required.length} grupos obligatorios y una comanda admite `
+      + `${DRAFT_MAX_GROUPS}. Pídelo en caja hasta que el catálogo se corrija.`,
+    ]);
+  }
+  return composerIssues(groups, line);
 }
 
 /** Extra units of one option the contract still allows on top of the current selection. */

@@ -11,9 +11,11 @@ import type {
 import { renderMinorAmount } from "../money.js";
 import { failureMessage, type MobileResource } from "../mobile-state.js";
 import {
+  DRAFT_MAX_GROUPS,
   DRAFT_MAX_QUANTITY,
   DRAFT_MIN_QUANTITY,
-  composerIssues,
+  activeProductGroups,
+  draftLineIssues,
   findOption,
   findProduct,
   orderableCategories,
@@ -258,8 +260,12 @@ function ProductComposer({ catalog, draft, onEvent, product }: {
 }): React.JSX.Element {
   const composer = draft.composer;
   if (composer === undefined) return <View />;
+  // Rendered from the bounded list, judged by the same fail-closed check the
+  // hand-over uses. If the catalog requires something this screen cannot show,
+  // the operator is told here rather than after a rejected send.
   const groups = orderableGroups(catalog, product.productId);
-  const issues = composerIssues(groups, composer);
+  const hidden = activeProductGroups(catalog, product.productId).length - groups.length;
+  const issues = draftLineIssues(catalog, composer);
   const editing = composer.replacingLineId !== undefined;
 
   return <ScrollView contentContainerStyle={styles.paneContent} style={styles.pane}>
@@ -285,6 +291,13 @@ function ProductComposer({ catalog, draft, onEvent, product }: {
         onEvent={onEvent}
         selections={composer.modifierGroups}
       />)}
+
+    {hidden > 0
+      ? <Caption>
+        {`El catálogo publica ${hidden === 1 ? "1 grupo más" : `${hidden} grupos más`} de los que una comanda `
+          + `admite; esta pantalla muestra los primeros ${DRAFT_MAX_GROUPS}.`}
+      </Caption>
+      : null}
 
     {issues.length === 0
       ? null
@@ -403,7 +416,9 @@ function DraftLineCard({ busy, catalog, line, onEvent }: {
   readonly onEvent: (event: OrderDraftEvent) => void;
 }): React.JSX.Element {
   const product = catalog === null ? undefined : findProduct(catalog, line.productId);
-  const groups = catalog === null ? [] : orderableGroups(catalog, line.productId);
+  // Name lookup, not a render list: resolve against every active group so a
+  // selection past the presentation cap still shows its real name.
+  const groups = catalog === null ? [] : activeProductGroups(catalog, line.productId);
   return <Card>
     <Subheading>{`${line.quantity} × ${product?.name ?? "Producto no disponible"}`}</Subheading>
     {product === undefined || catalog === null

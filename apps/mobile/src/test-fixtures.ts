@@ -311,16 +311,25 @@ export function orderEntryCatalog(
 /** The mutable view of the catalog body that the mutation helper below edits. */
 export interface MutableCatalogBody {
   catalog: {
+    categories: { active: boolean; categoryId: string; displayOrder: number; name: string }[];
     currency: string;
     modifierGroups: {
       active: boolean;
+      displayOrder: number;
       groupId: string;
       maximumQuantity: number;
       minimumQuantity: number;
-      options: { active: boolean; maximumQuantity: number | null; optionId: string }[];
+      name: string;
+      options: {
+        active: boolean;
+        maximumQuantity: number | null;
+        name: string;
+        optionId: string;
+        unitPriceMinor: number;
+      }[];
       productId: string;
     }[];
-    products: { active: boolean; productId: string }[];
+    products: { active: boolean; categoryId: string; productId: string }[];
   };
 }
 
@@ -340,6 +349,77 @@ export function republishedOrderEntryCatalog(
   const state = parseMenuCatalogStateV1(body);
   if (state?.catalog === undefined || state.catalog === null) throw new Error("FIXTURE_CATALOG_INVALID");
   return state.catalog;
+}
+
+/**
+ * A fabricated identifier for bulk fixtures. Shaped like a v4 UUID so the
+ * shared parser accepts it, and built from the index so it cannot collide with
+ * any identifier documented in this repository's evidence.
+ */
+function bulkFixtureUuid(kind: number, index: number): string {
+  return `${index.toString(16).padStart(8, "0")}-${kind.toString(16).padStart(4, "0")}-4bbb-8bbb-bbbbbbbbbbbb`;
+}
+
+/**
+ * The order-entry catalog with the main product's modifier groups replaced by
+ * `count` synthetic ones, each holding a single option. `isRequired` decides,
+ * by 1-based position, which groups publish `minimumQuantity: 1`.
+ *
+ * It exists to reach past `DRAFT_MAX_GROUPS`: a catalog may publish far more
+ * groups than one command can carry, and a required group sitting beyond the
+ * screen's cap must still be enforced.
+ */
+export function orderEntryCatalogWithBulkGroups(
+  count: number,
+  isRequired: (oneBasedIndex: number) => boolean,
+  scope: MobileBranchScope = scopeA,
+): MenuCatalogV1 {
+  return republishedOrderEntryCatalog((body) => {
+    body.catalog.modifierGroups = Array.from({ length: count }, (_unused, index) => {
+      const position = index + 1;
+      const required = isRequired(position);
+      return {
+        active: true,
+        displayOrder: index,
+        groupId: bulkFixtureUuid(1, position),
+        maximumQuantity: 1,
+        minimumQuantity: required ? 1 : 0,
+        name: `Grupo sintético ${position}${required ? " (obligatorio)" : ""}`,
+        options: [{
+          active: true,
+          maximumQuantity: 1,
+          name: `Opción sintética ${position}`,
+          optionId: bulkFixtureUuid(2, position),
+          unitPriceMinor: 0,
+        }],
+        productId: FIXTURE_PRODUCT,
+      };
+    });
+  }, scope);
+}
+
+/** The group and option identifiers `orderEntryCatalogWithBulkGroups` mints. */
+export function bulkGroupId(oneBasedIndex: number): string { return bulkFixtureUuid(1, oneBasedIndex); }
+export function bulkOptionId(oneBasedIndex: number): string { return bulkFixtureUuid(2, oneBasedIndex); }
+
+/**
+ * A parsed catalog with one category dropped **after** parsing, leaving its
+ * products pointing at a category that is not there.
+ *
+ * `parseMenuCatalogStateV1` refuses such a body outright — verified by a test —
+ * so this shape cannot arrive over the wire. It is built here anyway to cover
+ * the client's defensive branch: the client must not assume a product's
+ * category can always be resolved, and must fail closed if it cannot.
+ */
+export function orderEntryCatalogMissingCategory(
+  categoryId: string,
+  scope: MobileBranchScope = scopeA,
+): MenuCatalogV1 {
+  const catalog = orderEntryCatalog(scope);
+  return Object.freeze({
+    ...catalog,
+    categories: Object.freeze(catalog.categories.filter((entry) => entry.categoryId !== categoryId)),
+  });
 }
 
 /** Two zones and three tables, one with a deliberately long name. */
