@@ -17,7 +17,7 @@ Criterios exactos de aceptación R3:
 - añadir una regresión proporcional del layout/estructura si el patrón de pruebas vigente puede fijar la causa sin inventar otro arnés; después ejecutar lint, typecheck, 150+ pruebas, `expo install --check`, Android export, compuertas globales `--force`, `git diff --check`, aislamiento del bundle y CodeGraph final;
 - modificar solo `apps/mobile/**`; no conectar mutaciones reales, no copiar contratos, no tocar `pnpm-lock.yaml`, server/API/esquema, Web o KDS, y no hacer push, merge o rebase.
 
-La P2 continúa `IN_PROGRESS`: este retrabajo solo cerrará la operabilidad visual Mobile; la conexión productiva y la lectura de líneas de la orden activa siguen siendo un slice de integración separado.
+La P2 continúa `IN_PROGRESS`: este retrabajo solo cerrará la operabilidad visual Mobile. La lectura server-side v2 de líneas de la orden activa ya está preparada en el workstream de Codex, pero su aplicación de esquema, integración productiva y prueba conjunta siguen siendo un slice coordinado separado.
 
 ## 0.R2 Revisión del coordinador 2026-09-06 — catálogo completo y arnés reproducible
 
@@ -38,7 +38,7 @@ El coordinador revisó el corte `3061487a8b5568c32afc7730099182ffb09da774` de la
 4. **Handoff fail-closed contra el catálogo vigente.** Validar al construir el handoff el producto activo y todas las líneas: cantidades enteras acotadas, grupos/opciones todavía activos y pertenecientes al producto, ausencia de duplicados, máximos por opción/grupo y mínimos requeridos. No basta con comprobar `knownProductIds`. Un cambio de catálogo entre composición y envío debe producir `stale` y cero callbacks. Añadir pruebas adversariales para grupo/opción retirados, nuevo requisito mínimo, duplicados y cantidades inválidas.
 5. **Una sola frontera de efecto.** `App` no debe invocar callbacks con forma de mutación y después llamar además a `submit` sobre el mismo objeto. Dejar una única llamada de entrega con semántica inequívoca; el arnés puede inspeccionar el handoff dentro de esa llamada. Así se evita que la integración productiva futura ejecute crear/agregar/abrir dos veces. Mantener cero HTTP y cero identificadores de auditoría inventados en este slice.
 
-Actualizar las pruebas, arnés, `CLAUDE_DELIVERY.md` y `BACKEND_REQUESTS.md` solo dentro de la lista blanca existente. En la entrega, tratar SR-MOB-007 como **parcialmente resuelta en `main`**: ya existe una lectura acotada de órdenes activas con `orderId`, versión, estado, `shiftId` e `itemCount`, pero no devuelve líneas/modificadores. Tratar SR-MOB-010 como **resuelta para creación v2** mediante `shiftId`, dejando explícito que el coordinador hará la integración contra esos contratos después del merge; no copiar ni redefinirlos en la rama antigua. SR-MOB-008, SR-MOB-009 y SR-MOB-011 permanecen abiertos. Repetir Node 24.19.0, lint, typecheck, tests, `expo install --check`, export Android, compuertas globales sin caché, matriz visual, aislamiento del arnés, CodeGraph final, diff de rutas y árbol limpio.
+Actualizar las pruebas, arnés, `CLAUDE_DELIVERY.md` y `BACKEND_REQUESTS.md` solo dentro de la lista blanca existente. En la entrega, tratar SR-MOB-007 como **resuelta server-side pero todavía no integrada en Mobile**: el contrato aditivo `ActiveTableOrderListV2` devuelve la lectura acotada con líneas y modificadores históricos, aunque la migración sigue local y no aplicada. Tratar SR-MOB-010 como **resuelta para creación v2** mediante `shiftId`, dejando explícito que el coordinador hará la integración contra esos contratos después del merge; no copiar ni redefinirlos en la rama antigua. SR-MOB-008, SR-MOB-009 y SR-MOB-011 permanecen abiertos. Repetir Node 24.19.0, lint, typecheck, tests, `expo install --check`, export Android, compuertas globales sin caché, matriz visual, aislamiento del arnés, CodeGraph final, diff de rutas y árbol limpio.
 
 ## 0. Mandato vigente desde 2026-09-05 — mesas y borrador de comanda
 
@@ -54,7 +54,7 @@ Claude debe implementar exclusivamente la capa de presentación e interacción m
 - esquema, migraciones, RLS, permisos y verificación PostgreSQL;
 - integración productiva final entre UI, estado, cliente y backend.
 
-El entregable de Claude debe ser útil e integrable, pero no puede anticipar capacidades server-side ausentes. En particular, hoy no existe una lectura POS consolidada para recuperar la orden activa de una mesa y el backend todavía no valida el turno operativo nuevo en las mutaciones de Order. Por ello Claude construirá la UI y sus estados mediante callbacks/props tipados, pero **no conectará todavía mutaciones productivas de Order**.
+El entregable de Claude debe ser útil e integrable, pero no puede asumir capacidades server-side no integradas o no aplicadas. Codex ya preparó creación v2 ligada a turno y lectura activa v2 con líneas, pero siguen en una rama/migración local separada. Por ello Claude construirá la UI y sus estados mediante la frontera tipada vigente, pero **no conectará todavía mutaciones productivas de Order**.
 
 ### 0.2 Base, rama y aislamiento
 
@@ -100,7 +100,7 @@ Confirmar nombres y formas exactas con CodeGraph; no copiarlos ni redefinirlos:
 - `OrderMutationSummaryV1`;
 - contrato de turno operativo v1 integrado en `main`.
 
-Los endpoints `POST /api/v1/orders`, `POST /api/v1/orders/items` y `POST /api/v1/orders/open` existen y pueden inspeccionarse, pero en este slice son **solo referencia**. No llamarlos desde el producto ni simular que una orden quedó guardada. La ausencia de una lectura de orden activa debe permanecer visible como frontera, no cubrirse con estado autoritativo inventado.
+Los endpoints `POST /api/v1/orders`, `POST /api/v1/orders/items`, `POST /api/v1/orders/open` y `GET /api/v1/orders/active` existen y pueden inspeccionarse, pero en este slice son **solo referencia**. No llamarlos desde el producto ni simular que una orden quedó guardada o recuperada hasta que el coordinador integre y autorice el contrato v2; no cubrir esa frontera con estado autoritativo inventado.
 
 ### 0.6 Entregable funcional
 
