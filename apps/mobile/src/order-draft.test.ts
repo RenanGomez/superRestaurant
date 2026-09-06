@@ -252,28 +252,115 @@ test("removing a line drops it, and removing the line being edited closes the co
 test("discarding always passes through an in-screen confirmation", () => {
   const drafted = withOneLine();
   // Nothing is discarded by the request itself.
-  const asked = reduceOrderDraft(drafted, { type: "discardRequested" });
-  assert.equal(asked.discardRequested, true);
+  const asked = reduceOrderDraft(drafted, { intent: "discardDraft", type: "confirmationRequested" });
+  assert.equal(asked.pendingConfirmation, "discardDraft");
   assert.equal(asked.lines.length, 1);
 
-  const kept = reduceOrderDraft(asked, { type: "discardCancelled" });
-  assert.equal(kept.discardRequested, false);
+  const kept = reduceOrderDraft(asked, { type: "confirmationCancelled" });
+  assert.equal(kept.pendingConfirmation, undefined);
   assert.equal(kept.lines.length, 1);
 
-  const discarded = reduceOrderDraft(asked, { type: "discardConfirmed" });
+  const discarded = reduceOrderDraft(asked, { type: "confirmationConfirmed" });
   assert.equal(discarded.lines.length, 0);
-  assert.equal(discarded.discardRequested, false);
+  assert.equal(discarded.pendingConfirmation, undefined);
   // Discarding the draft is not leaving the table.
   assert.equal(discarded.tableId, TABLE);
   assert.equal(discarded.zoneId, ZONE);
 
-  // Confirming without asking first does nothing, and an empty draft cannot ask.
-  assert.equal(reduceOrderDraft(drafted, { type: "discardConfirmed" }), drafted);
-  assert.equal(reduceOrderDraft(discarded, { type: "discardRequested" }), discarded);
+  // Confirming without asking first does nothing, and an empty draft has
+  // nothing to confirm about.
+  assert.equal(reduceOrderDraft(drafted, { type: "confirmationConfirmed" }), drafted);
+  assert.equal(reduceOrderDraft(discarded, { intent: "discardDraft", type: "confirmationRequested" }), discarded);
+});
+
+test("leaving to the tables plan with a draft is confirmed, and says so before anything is lost", () => {
+  const drafted = withOneLine();
+  const asked = reduceOrderDraft(drafted, { intent: "leaveTable", type: "confirmationRequested" });
+  // The request alone loses nothing: the table and the line are still there.
+  assert.equal(asked.pendingConfirmation, "leaveTable");
+  assert.equal(asked.tableId, TABLE);
+  assert.equal(asked.lines.length, 1);
+
+  // Cancelling the exit keeps the operator exactly where they were.
+  const stayed = reduceOrderDraft(asked, { type: "confirmationCancelled" });
+  assert.equal(stayed.tableId, TABLE);
+  assert.equal(stayed.lines.length, 1);
+  assert.equal(stayed.pendingConfirmation, undefined);
+
+  // Only the confirmation leaves, and leaving really releases the table.
+  assert.deepEqual(reduceOrderDraft(asked, { type: "confirmationConfirmed" }), initialOrderDraftState);
+
+  // A double tap on "volver a mesas" asks once; it does not confirm itself.
+  const twice = reduceOrderDraft(asked, { intent: "leaveTable", type: "confirmationRequested" });
+  assert.equal(twice, asked);
+  assert.equal(twice.tableId, TABLE);
+  assert.equal(twice.lines.length, 1);
+});
+
+test("the two destinations are never confused: each confirmation resolves its own", () => {
+  const drafted = withOneLine();
+  // Answering "sí" to «descartar y seguir aquí» keeps the table.
+  const staying = apply(
+    drafted,
+    { intent: "discardDraft", type: "confirmationRequested" },
+    { type: "confirmationConfirmed" },
+  );
+  assert.equal(staying.tableId, TABLE);
+  assert.equal(staying.lines.length, 0);
+
+  // Answering "sí" to «descartar y volver a mesas» releases it.
+  const leaving = apply(
+    drafted,
+    { intent: "leaveTable", type: "confirmationRequested" },
+    { type: "confirmationConfirmed" },
+  );
+  assert.equal(leaving.tableId, undefined);
+
+  // Re-asking with the other intent replaces the question, and the answer
+  // follows the question actually on screen — never the earlier one.
+  const switched = apply(
+    drafted,
+    { intent: "discardDraft", type: "confirmationRequested" },
+    { intent: "leaveTable", type: "confirmationRequested" },
+  );
+  assert.equal(switched.pendingConfirmation, "leaveTable");
+  assert.equal(reduceOrderDraft(switched, { type: "confirmationConfirmed" }).tableId, undefined);
+});
+
+test("an unconfirmed composition is content too: leaving it behind is confirmed", () => {
+  // No committed line, but a product is being configured. Walking out of that
+  // silently is the same loss as walking out of a line.
+  const composing = apply(
+    initialOrderDraftState,
+    { tableId: TABLE, type: "tableSelected", zoneId: ZONE },
+    { productId: FIXTURE_PRODUCT_MAIN, type: "productOpened" },
+  );
+  assert.equal(composing.lines.length, 0);
+  const asked = reduceOrderDraft(composing, { intent: "leaveTable", type: "confirmationRequested" });
+  assert.equal(asked.pendingConfirmation, "leaveTable");
+  assert.equal(asked.tableId, TABLE);
+  assert.equal(reduceOrderDraft(asked, { type: "confirmationConfirmed" }).tableId, undefined);
+});
+
+test("a truly empty draft leaves for the tables plan without a confirmation", () => {
+  const empty = apply(initialOrderDraftState, { tableId: TABLE, type: "tableSelected", zoneId: ZONE });
+  const left = reduceOrderDraft(empty, { intent: "leaveTable", type: "confirmationRequested" });
+  assert.deepEqual(left, initialOrderDraftState);
+  assert.equal(left.pendingConfirmation, undefined);
+  // And a second tap on an already-released table still changes nothing.
+  assert.deepEqual(reduceOrderDraft(left, { intent: "leaveTable", type: "confirmationRequested" }), left);
+});
+
+test("removing the last line closes a confirmation left open over nothing", () => {
+  const asked = reduceOrderDraft(withOneLine(), { intent: "leaveTable", type: "confirmationRequested" });
+  const emptied = reduceOrderDraft(asked, { draftLineId: "draft-line-1", type: "lineRemoved" });
+  assert.equal(emptied.lines.length, 0);
+  assert.equal(emptied.pendingConfirmation, undefined);
+  assert.equal(emptied.tableId, TABLE);
 });
 
 test("a context change — branch, shift, operator or sign-out — drops the draft entirely", () => {
-  const asked = reduceOrderDraft(withOneLine(), { type: "discardRequested" });
+  const asked = reduceOrderDraft(withOneLine(), { intent: "discardDraft", type: "confirmationRequested" });
   assert.deepEqual(reduceOrderDraft(asked, { type: "contextReleased" }), initialOrderDraftState);
 });
 
@@ -288,7 +375,8 @@ test("the hand-over is idempotent and freezes the draft while it runs", () => {
     { draftLineId: "draft-line-1", type: "lineRemoved" },
     { draftLineId: "draft-line-1", type: "lineEditRequested" },
     { productId: FIXTURE_PRODUCT_DRINK, type: "productOpened" },
-    { type: "discardRequested" },
+    { intent: "discardDraft", type: "confirmationRequested" },
+    { intent: "leaveTable", type: "confirmationRequested" },
   ] as const satisfies readonly OrderDraftEvent[]) {
     assert.equal(reduceOrderDraft(sending, event), sending, event.type);
   }
@@ -313,6 +401,61 @@ test("a result that belongs to no hand-over is ignored", () => {
   const drafted = withOneLine();
   assert.equal(reduceOrderDraft(drafted, { type: "submissionSucceeded" }), drafted);
   assert.equal(reduceOrderDraft(drafted, { failure: "network", type: "submissionFailed" }), drafted);
+});
+
+test("accepted lines leave the draft, so nothing accepted can be offered twice", () => {
+  const sent = apply(withOneLine(), { type: "submissionStarted" }, { type: "submissionSucceeded" });
+  assert.equal(sent.submission.status, "sent");
+  assert.equal(sent.lines.length, 0);
+  // The table and the success notice stay; only the delivered lines are gone.
+  assert.equal(sent.tableId, TABLE);
+  assert.equal(sent.zoneId, ZONE);
+
+  // A second tap on the primary action has nothing left to offer.
+  assert.equal(reduceOrderDraft(sent, { type: "submissionStarted" }), sent);
+  // Editing or removing what was accepted is not possible either: it is gone.
+  assert.equal(reduceOrderDraft(sent, { draftLineId: "draft-line-1", type: "lineEditRequested" }), sent);
+  assert.equal(reduceOrderDraft(sent, { draftLineId: "draft-line-1", type: "lineRemoved" }), sent);
+});
+
+test("a second local comanda for the same table carries only the lines composed after the acceptance", () => {
+  const sent = apply(withOneLine(), { type: "submissionStarted" }, { type: "submissionSucceeded" });
+
+  const second = apply(
+    sent,
+    { productId: FIXTURE_PRODUCT_DRINK, type: "productOpened" },
+    { quantity: 1, type: "composerQuantitySet" },
+    { type: "composerCommitted" },
+  );
+  assert.equal(second.lines.length, 1);
+  assert.equal(second.lines[0]?.productId, FIXTURE_PRODUCT_DRINK);
+  // Adding a line clears the previous outcome: this is a new, unsent comanda.
+  assert.equal(second.submission.status, "idle");
+  // The new line never reuses a handle the accepted comanda already carried.
+  assert.notEqual(second.lines[0]?.draftLineId, "draft-line-1");
+
+  const resent = reduceOrderDraft(second, { type: "submissionStarted" });
+  assert.equal(resent.submission.status, "sending");
+  assert.deepEqual(resent.lines.map((line) => line.productId), [FIXTURE_PRODUCT_DRINK]);
+});
+
+test("a handle is never reused after a discard either, so two comandas cannot collide", () => {
+  const sent = apply(withOneLine(), { type: "submissionStarted" }, { type: "submissionSucceeded" });
+  const discarded = apply(
+    sent,
+    { productId: FIXTURE_PRODUCT_DRINK, type: "productOpened" },
+    { type: "composerCommitted" },
+    { intent: "discardDraft", type: "confirmationRequested" },
+    { type: "confirmationConfirmed" },
+  );
+  const next = apply(
+    discarded,
+    { productId: FIXTURE_PRODUCT_DRINK, type: "productOpened" },
+    { type: "composerCommitted" },
+  );
+  assert.equal(next.lines.length, 1);
+  assert.notEqual(next.lines[0]?.draftLineId, "draft-line-1");
+  assert.notEqual(next.lines[0]?.draftLineId, "draft-line-2");
 });
 
 test("only what the catalog publishes as active is offered", () => {

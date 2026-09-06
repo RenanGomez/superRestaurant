@@ -14,10 +14,10 @@
  * same reason: the client must not decide the operational time zone of a
  * branch. See `BACKEND_REQUESTS.md`.
  */
-import type { ModifierGroupSelectionV1, OrderChannelV1 } from "@super-restaurant/shared-types";
+import type { MenuCatalogV1, ModifierGroupSelectionV1, OrderChannelV1 } from "@super-restaurant/shared-types";
 
 import type { MobileBranchScope } from "./mobile-client.js";
-import type { OrderDraftFailure, OrderDraftLine } from "./order-draft.js";
+import { draftLineIssues, type OrderDraftFailure, type OrderDraftLine } from "./order-draft.js";
 
 const CURRENCY_PATTERN = /^[A-Z]{3}$/u;
 
@@ -53,19 +53,20 @@ export interface OrderDraftHandoffV1 {
   readonly openOrder: OpenOrderIntentV1;
 }
 
-export interface OrderDraftCallbacks {
-  readonly onAddItem: (intent: AddOrderItemIntentV1) => void;
-  readonly onCreateOrder: (intent: CreateOrderIntentV1) => void;
-  readonly onOpenOrder: (intent: OpenOrderIntentV1) => void;
-}
-
 /**
- * What the screen needs from whoever will perform the writes: the three
- * callbacks plus one hand-over that reports how it went. `submit` resolves
- * `undefined` on success, or the failure the transport produced.
+ * The one and only effect boundary of this slice.
+ *
+ * `deliver` receives the whole hand-over — the create-order intent, one
+ * add-item intent per line and the open-order intent, in the order the Order
+ * contracts expect — and resolves `undefined` on success or the failure the
+ * transport produced. There is deliberately no second callback surface beside
+ * it: when the screen offered the intents *and* called a submit, a future
+ * production integration wired to both would have created, added and opened
+ * twice. Whoever implements `deliver` decides how to walk `handoff`; a test
+ * double or the visual harness inspects it inside the same call.
  */
-export interface OrderDraftIntegration extends OrderDraftCallbacks {
-  readonly submit: (handoff: OrderDraftHandoffV1) => Promise<OrderDraftFailure | undefined>;
+export interface OrderDraftIntegration {
+  readonly deliver: (handoff: OrderDraftHandoffV1) => Promise<OrderDraftFailure | undefined>;
 }
 
 /**
@@ -74,27 +75,35 @@ export interface OrderDraftIntegration extends OrderDraftCallbacks {
  * then no gesture in the app can reach an Order endpoint.
  */
 export const disconnectedOrderDraftIntegration: OrderDraftIntegration = Object.freeze({
-  onAddItem: (): void => undefined,
-  onCreateOrder: (): void => undefined,
-  onOpenOrder: (): void => undefined,
-  submit: (): Promise<OrderDraftFailure> => Promise.resolve("notConnected"),
+  deliver: (): Promise<OrderDraftFailure> => Promise.resolve("notConnected"),
 });
 
 /**
  * Builds the hand-over, or returns `undefined` when the draft cannot be
- * expressed with the data at hand: no lines, a currency the catalog did not
- * deliver as an ISO code, or a product the catalog no longer publishes. Failing
- * closed here is what keeps a stale draft from becoming a request.
+ * expressed against the catalog as it stands now.
+ *
+ * Every line is revalidated here, not merely checked for a known product id:
+ * the product must still be published and active, the quantity must be an
+ * integer inside the range the command accepts, and each line's modifier
+ * groups must still be active, still belong to that product, hold no repeated
+ * group or option, respect every per-option and per-group maximum and satisfy
+ * every required minimum. A catalog that changed between composing and sending
+ * therefore yields `undefined`, which the caller reports as `stale` — no
+ * partial hand-over, and nothing offered at all.
  */
 export function buildOrderDraftHandoff(input: {
-  readonly currency: string;
-  readonly knownProductIds: ReadonlySet<string>;
+  readonly catalog: MenuCatalogV1;
   readonly lines: readonly OrderDraftLine[];
   readonly scope: MobileBranchScope;
   readonly tableId: string;
 }): OrderDraftHandoffV1 | undefined {
-  if (input.lines.length === 0 || !CURRENCY_PATTERN.test(input.currency)) return undefined;
-  if (input.lines.some((line) => !input.knownProductIds.has(line.productId))) return undefined;
+  const currency = input.catalog.currency;
+  if (input.lines.length === 0 || !CURRENCY_PATTERN.test(currency)) return undefined;
+  if (input.lines.some((line) => draftLineIssues(input.catalog, line).length > 0)) return undefined;
+  // Two lines sharing a handle would make the feedback for one of them
+  // ambiguous, and nothing downstream could tell them apart.
+  const handles = input.lines.map((line) => line.draftLineId);
+  if (new Set(handles).size !== handles.length) return undefined;
 
   const scope = Object.freeze({ branchId: input.scope.branchId, restaurantId: input.scope.restaurantId });
   return Object.freeze({
@@ -107,22 +116,10 @@ export function buildOrderDraftHandoff(input: {
     }))),
     createOrder: Object.freeze({
       channel: TABLE_CHANNEL,
-      currency: input.currency,
+      currency,
       scope,
       tableId: input.tableId,
     }),
     openOrder: Object.freeze({ scope, tableId: input.tableId }),
   });
-}
-
-/**
- * Offers the draft to the caller in the order the Order contracts expect:
- * create, then one item per line, then open. It only calls back — it performs
- * no request and reports no result, so nothing here can claim an order was
- * saved.
- */
-export function offerOrderDraft(handoff: OrderDraftHandoffV1, callbacks: OrderDraftCallbacks): void {
-  callbacks.onCreateOrder(handoff.createOrder);
-  for (const item of handoff.addItems) callbacks.onAddItem(item);
-  callbacks.onOpenOrder(handoff.openOrder);
 }

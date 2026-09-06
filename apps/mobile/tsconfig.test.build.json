@@ -33,6 +33,8 @@
     "src/order-draft.ts",
     "src/order-draft.test.ts",
     "src/order-intents.ts",
-    "src/order-intents.test.ts"
+    "src/order-intents.test.ts",
+    "src/order-delivery.ts",
+    "src/order-delivery.test.ts"
   ]
 }

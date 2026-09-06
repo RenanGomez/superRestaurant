@@ -44,10 +44,13 @@ $env:MOBILE_VISUAL_HARNESS = "1"; pnpm --filter @super-restaurant/mobile run web
   entorno.
 - **Envío de comanda**: elige qué contesta la integración de borrador —sin
   conexión (lo que trae la app real), aceptado, aceptado lento, conflicto, sin
-  autorización, red caída, protocolo inválido y servicio no disponible—. La
-  barra imprime los intentos que la pantalla ofreció y las claves exactas de
-  cada uno; `Limpiar intentos ofrecidos` los borra. El doble **no hace ninguna
-  petición**: solo recibe los intentos y devuelve el resultado elegido.
+  autorización, red caída, protocolo inválido, servicio no disponible, **promesa
+  colgada** y **falla síncrona**—. Las dos últimas son integraciones que se
+  portan mal a propósito: una nunca resuelve, la otra lanza antes de devolver
+  promesa alguna. La barra imprime los intentos que la pantalla entregó y las
+  claves exactas de cada uno; `Limpiar intentos ofrecidos` los borra. El doble
+  **no hace ninguna petición**: lee el handoff dentro de la única llamada de
+  entrega (`deliver`) y devuelve el resultado elegido.
 
 ## Recorrer la comanda
 
@@ -57,11 +60,25 @@ $env:MOBILE_VISUAL_HARNESS = "1"; pnpm --filter @super-restaurant/mobile run web
    modificadores; el botón de agregar permanece deshabilitado mientras el
    catálogo no permita la combinación, y explica por qué.
 3. Edita o elimina líneas, y prueba **Descartar borrador**: la confirmación
-   ocurre dentro de la pantalla, nunca con `confirm()`.
-4. Pulsa **Enviar comanda** dos veces seguidas: la barra debe mostrar un solo
+   ocurre dentro de la pantalla, nunca con `confirm()`, y dice que seguirás en
+   la mesa.
+4. Con líneas compuestas, pulsa **Volver a mesas**: aparece una confirmación
+   distinta —«¿Volver a mesas y descartar el borrador?»— que nombra su propio
+   destino. `Conservar borrador` te deja donde estabas; solo `Sí, descartar y
+   volver a mesas` sale. Con el borrador realmente vacío se sale directo, sin
+   preguntar.
+5. Pulsa **Enviar comanda** dos veces seguidas: la barra debe mostrar un solo
    `crear` + un `ítem` por línea + un `abrir`, y el borrador queda congelado
    mientras el envío está en vuelo.
-5. Cambia de turno, de sucursal o cierra sesión con un borrador abierto: debe
+6. Con el resultado en **aceptado**, envía: las líneas aceptadas salen del
+   borrador y el aviso lo dice. Vuelve a pulsar **Enviar comanda**: no hay nada
+   que reenviar. Agrega una línea nueva y envíala: la barra muestra únicamente
+   esa línea, con un handle que no repite ninguno ya entregado.
+7. Con **promesa colgada**, envía y luego cambia de turno o de sucursal: el
+   borrador nuevo debe poder enviarse igualmente, sin quedar bloqueado por el
+   envío que nunca resolvió. Con **falla síncrona**, el envío falla de
+   inmediato y la pantalla queda utilizable para reintentar.
+8. Cambia de turno, de sucursal o cierra sesión con un borrador abierto: debe
    desaparecer por completo.
 
 ## Proveedor deliberadamente hostil

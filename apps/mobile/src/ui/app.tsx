@@ -30,6 +30,10 @@ import {
   type MobileTab,
 } from "../mobile-state.js";
 import {
+  createOrderDeliveryTracker,
+  type OrderDeliveryTracker,
+} from "../order-delivery.js";
+import {
   initialOrderDraftState,
   reduceOrderDraft,
   type OrderDraftEvent,
@@ -38,7 +42,6 @@ import {
 import {
   buildOrderDraftHandoff,
   disconnectedOrderDraftIntegration,
-  offerOrderDraft,
   type OrderDraftIntegration,
 } from "../order-intents.js";
 import { readInitialSession, revalidateAccess } from "../revalidation.js";
@@ -266,12 +269,23 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
   // nothing composed for one context can be sent in another.
   const draftContext = `${state.session?.userId ?? ""}|${restaurantId ?? ""}|${branchId ?? ""}|${state.shift?.shiftId ?? ""}`;
   const previousDraftContext = useRef(draftContext);
+  /**
+   * One delivery tracker per mounted app, held in a ref because it is stateful:
+   * it is what keeps a hand-over in flight tied to the context that started it.
+   */
+  const trackerRef = useRef<OrderDeliveryTracker | undefined>(undefined);
+  trackerRef.current ??= createOrderDeliveryTracker();
+  const delivery = trackerRef.current;
   useEffect(() => {
     if (previousDraftContext.current === draftContext) return;
     previousDraftContext.current = draftContext;
+    // The hand-over in flight, if any, belonged to the context being left. It is
+    // abandoned here so it can neither block the new context nor apply its
+    // outcome to the draft composed in it.
+    delivery.abandon();
     dispatchDraft({ type: "contextReleased" });
     setDraftCategory(undefined);
-  }, [draftContext]);
+  }, [delivery, draftContext]);
 
   const retry = useCallback((tab: MobileTab): void => {
     if (branchId === undefined || restaurantId === undefined) return;
@@ -284,45 +298,26 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
     dispatch({ scope: { branchId, restaurantId }, type: "menuReset" });
   }, [branchId, restaurantId]);
 
-  /**
-   * Hands the finished draft to the integration. It builds the intents, offers
-   * them and reports the outcome; it never performs a request itself, and the
-   * default integration performs none either. The ref makes a double tap a
-   * single hand-over even before React re-renders with `sending`.
-   */
-  const submitting = useRef(false);
   const submitDraft = useCallback((): void => {
     const tableId = draft.tableId;
     const catalog = state.menu.value?.catalog ?? null;
-    if (submitting.current || tableId === undefined || branchId === undefined || restaurantId === undefined) return;
+    if (tableId === undefined || branchId === undefined || restaurantId === undefined) return;
     if (draft.lines.length === 0 || draft.composer !== undefined || draft.submission.status === "sending") return;
 
-    submitting.current = true;
-    dispatchDraft({ type: "submissionStarted" });
-    const handoff = catalog === null
-      ? undefined
-      : buildOrderDraftHandoff({
-        currency: catalog.currency,
-        knownProductIds: new Set(catalog.products.filter((product) => product.active).map((p) => p.productId)),
-        lines: draft.lines,
-        scope: { branchId, restaurantId },
-        tableId,
-      });
-    if (handoff === undefined) {
-      submitting.current = false;
-      dispatchDraft({ failure: "stale", type: "submissionFailed" });
-      return;
-    }
-    offerOrderDraft(handoff, orderDraftIntegration);
-    void orderDraftIntegration.submit(handoff)
-      .then((failure) => {
+    delivery.run({
+      build: () => (catalog === null
+        ? undefined
+        : buildOrderDraftHandoff({ catalog, lines: draft.lines, scope: { branchId, restaurantId }, tableId })),
+      context: draftContext,
+      integration: orderDraftIntegration,
+      onSettle: (failure) => {
         dispatchDraft(failure === undefined
           ? { type: "submissionSucceeded" }
           : { failure, type: "submissionFailed" });
-      })
-      .catch(() => { dispatchDraft({ failure: "unavailable", type: "submissionFailed" }); })
-      .finally(() => { submitting.current = false; });
-  }, [branchId, draft, orderDraftIntegration, restaurantId, state.menu.value]);
+      },
+      onStart: () => { dispatchDraft({ type: "submissionStarted" }); },
+    });
+  }, [branchId, delivery, draft, draftContext, orderDraftIntegration, restaurantId, state.menu.value]);
 
   const selectTable = useCallback((table: DiningTableV1): void => {
     dispatchDraft({ tableId: table.tableId, type: "tableSelected", zoneId: table.zoneId });
@@ -533,8 +528,13 @@ function WorkspaceContent({
     .flatMap((zone) => zone.tables.map((table) => ({ table, zoneName: zone.name })))
     .find((candidate) => candidate.table.tableId === draft.tableId);
   if (located === undefined) {
+    // The table itself is gone, so there is no composition to return to and no
+    // choice to confirm: the only honest action states the loss in its label.
     return <StateBlock
-      action={{ label: "Volver a mesas", onPress: () => { onDraftEvent({ type: "tableReleased" }); } }}
+      action={{
+        label: draft.lines.length === 0 ? "Volver a mesas" : "Descartar borrador y volver a mesas",
+        onPress: () => { onDraftEvent({ type: "tableReleased" }); },
+      }}
       description="Esta mesa ya no aparece en el plano de la sucursal. El borrador local no puede seguir asociado a ella."
       title="La mesa ya no está disponible"
     />;
@@ -544,7 +544,7 @@ function WorkspaceContent({
     category={draftCategory}
     draft={draft}
     menu={menu}
-    onBackToTables={() => { onDraftEvent({ type: "tableReleased" }); }}
+    onBackToTables={() => { onDraftEvent({ intent: "leaveTable", type: "confirmationRequested" }); }}
     onCategorySelected={onDraftCategory}
     onEvent={onDraftEvent}
     onRetryMenu={onRetryMenu}

@@ -308,6 +308,40 @@ export function orderEntryCatalog(
   return state.catalog;
 }
 
+/** The mutable view of the catalog body that the mutation helper below edits. */
+export interface MutableCatalogBody {
+  catalog: {
+    currency: string;
+    modifierGroups: {
+      active: boolean;
+      groupId: string;
+      maximumQuantity: number;
+      minimumQuantity: number;
+      options: { active: boolean; maximumQuantity: number | null; optionId: string }[];
+      productId: string;
+    }[];
+    products: { active: boolean; productId: string }[];
+  };
+}
+
+/**
+ * The order-entry catalog republished with one deliberate change, still parsed
+ * by the shared contract so the result is a real `MenuCatalogV1` and not a
+ * hand-built object. This is how a catalog that changed *after* the operator
+ * composed — a retired product, group or option, a new required minimum, a
+ * lowered maximum — is expressed in a test.
+ */
+export function republishedOrderEntryCatalog(
+  mutate: (body: MutableCatalogBody) => void,
+  scope: MobileBranchScope = scopeA,
+): MenuCatalogV1 {
+  const body = JSON.parse(JSON.stringify(orderEntryCatalogStateBody(scope))) as MutableCatalogBody;
+  mutate(body);
+  const state = parseMenuCatalogStateV1(body);
+  if (state?.catalog === undefined || state.catalog === null) throw new Error("FIXTURE_CATALOG_INVALID");
+  return state.catalog;
+}
+
 /** Two zones and three tables, one with a deliberately long name. */
 export function orderEntryLayoutBody(scope: MobileBranchScope, zoneName = "Terraza"): unknown {
   const scoped = { branchId: scope.branchId, restaurantId: scope.restaurantId };

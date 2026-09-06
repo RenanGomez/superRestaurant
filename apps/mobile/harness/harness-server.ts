@@ -19,6 +19,7 @@ import type {
   AddOrderItemIntentV1,
   CreateOrderIntentV1,
   OpenOrderIntentV1,
+  OrderDraftHandoffV1,
   OrderDraftIntegration,
 } from "../src/order-intents.js";
 import type { MobileSession } from "../src/session.js";
@@ -60,7 +61,9 @@ export const HARNESS_SCENARIOS: readonly { readonly label: string; readonly valu
 /**
  * What the draft integration double answers. `notConnected` is what the app
  * really ships with; the others exist so every state the composer can show is
- * reachable by hand in a browser.
+ * reachable by hand in a browser. `hang` and `throws` are the two badly
+ * behaved integrations: one never settles, the other fails before returning a
+ * promise at all. Both must leave the screen usable.
  */
 export type HarnessDraftOutcome =
   | "notConnected"
@@ -70,7 +73,9 @@ export type HarnessDraftOutcome =
   | "network"
   | "protocol"
   | "unavailable"
-  | "slowAccepted";
+  | "slowAccepted"
+  | "hang"
+  | "throws";
 
 export const HARNESS_DRAFT_OUTCOMES: readonly { readonly label: string; readonly value: HarnessDraftOutcome }[] =
   Object.freeze([
@@ -82,6 +87,8 @@ export const HARNESS_DRAFT_OUTCOMES: readonly { readonly label: string; readonly
     { label: "Envío: red caída", value: "network" },
     { label: "Envío: protocolo inválido", value: "protocol" },
     { label: "Envío: servicio no disponible", value: "unavailable" },
+    { label: "Envío: promesa colgada", value: "hang" },
+    { label: "Envío: falla síncrona", value: "throws" },
   ]);
 
 /** Mutable control surface driven by the harness UI. */
@@ -298,26 +305,33 @@ export function createHarnessOrderIntegration(onChange: () => void): OrderDraftI
   readonly reset: () => void;
 } {
   const offered: string[] = [];
-  const record = (entry: string): void => { offered.push(entry); onChange(); };
   return Object.freeze({
     offered: (): readonly string[] => [...offered],
-    onAddItem: (intent: AddOrderItemIntentV1): void => {
-      record(`ítem ${intent.draftLineId} ×${intent.quantity} [${Object.keys(intent).sort().join(",")}]`);
-    },
-    onCreateOrder: (intent: CreateOrderIntentV1): void => {
-      record(`crear ${intent.channel}/${intent.currency} [${Object.keys(intent).sort().join(",")}]`);
-    },
-    onOpenOrder: (intent: OpenOrderIntentV1): void => {
-      record(`abrir [${Object.keys(intent).sort().join(",")}]`);
-    },
     reset: (): void => { offered.length = 0; onChange(); },
-    submit: async (): Promise<OrderDraftFailure | undefined> => {
-      if (harnessControl.draftOutcome === "slowAccepted") {
-        await delay(1_500);
-        return undefined;
+    /**
+     * The one delivery call. The handoff is read here — inside it — instead of
+     * through a second callback surface, which is exactly what keeps a real
+     * integration from performing create/add/open twice. Reading it performs
+     * no request; the outcome comes from the control bar.
+     */
+    // Deliberately not `async`: an `async` function turns every throw into a
+    // rejected promise, which would make the "falla síncrona" control test
+    // something the app already handles. This one really throws before any
+    // promise exists.
+    deliver: (handoff: OrderDraftHandoffV1): Promise<OrderDraftFailure | undefined> => {
+      const create: CreateOrderIntentV1 = handoff.createOrder;
+      const open: OpenOrderIntentV1 = handoff.openOrder;
+      offered.push(`crear ${create.channel}/${create.currency} [${Object.keys(create).sort().join(",")}]`);
+      for (const item of handoff.addItems as readonly AddOrderItemIntentV1[]) {
+        offered.push(`ítem ${item.draftLineId} ×${item.quantity} [${Object.keys(item).sort().join(",")}]`);
       }
-      if (harnessControl.draftOutcome === "accepted") return undefined;
-      return harnessControl.draftOutcome;
+      offered.push(`abrir [${Object.keys(open).sort().join(",")}]`);
+      onChange();
+      if (harnessControl.draftOutcome === "throws") throw new Error("HARNESS_SYNCHRONOUS_THROW");
+      if (harnessControl.draftOutcome === "hang") return new Promise<never>(() => undefined);
+      if (harnessControl.draftOutcome === "slowAccepted") return delay(1_500).then(() => undefined);
+      if (harnessControl.draftOutcome === "accepted") return Promise.resolve(undefined);
+      return Promise.resolve(harnessControl.draftOutcome);
     },
   });
 }

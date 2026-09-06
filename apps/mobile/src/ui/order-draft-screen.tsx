@@ -20,9 +20,11 @@ import {
   orderableGroups,
   orderableProducts,
   orderDraftFailureMessage,
+  orderDraftHasContent,
   remainingOptionCapacity,
   selectedGroupQuantity,
   selectedOptionQuantity,
+  type OrderDraftConfirmation,
   type OrderDraftEvent,
   type OrderDraftLine,
   type OrderDraftState,
@@ -77,6 +79,7 @@ export function OrderDraftScreen({
   const wide = width >= tabletBreakpoint;
   const catalog = menu.value?.catalog ?? null;
   const busy = draft.submission.status === "sending";
+  const hasContent = orderDraftHasContent(draft);
 
   return <View style={styles.screen}>
     <View style={styles.header}>
@@ -90,17 +93,19 @@ export function OrderDraftScreen({
       </View>
       <View style={styles.headerActions}>
         <ActionButton
-          accessibilityHint="Vuelve al plano de mesas conservando este borrador en el dispositivo"
+          accessibilityHint={hasContent
+            ? "Pide confirmación dentro de la pantalla: volver al plano descarta este borrador"
+            : "Vuelve al plano de mesas; no hay nada compuesto que perder"}
           disabled={busy}
           label="Volver a mesas"
           onPress={onBackToTables}
           tone="secondary"
         />
         <ActionButton
-          accessibilityHint="Pide confirmación dentro de la pantalla antes de vaciar el borrador"
-          disabled={busy || draft.lines.length === 0}
+          accessibilityHint="Pide confirmación dentro de la pantalla antes de vaciar el borrador y seguir en esta mesa"
+          disabled={busy || !hasContent}
           label="Descartar borrador"
-          onPress={() => { onEvent({ type: "discardRequested" }); }}
+          onPress={() => { onEvent({ intent: "discardDraft", type: "confirmationRequested" }); }}
           tone="secondary"
         />
       </View>
@@ -112,13 +117,15 @@ export function OrderDraftScreen({
       tone="info"
     />
 
-    {draft.discardRequested
-      ? <DiscardConfirmation
+    {draft.pendingConfirmation === undefined
+      ? null
+      : <DraftLossConfirmation
+        composing={draft.composer !== undefined}
+        intent={draft.pendingConfirmation}
         lineCount={draft.lines.length}
-        onCancel={() => { onEvent({ type: "discardCancelled" }); }}
-        onConfirm={() => { onEvent({ type: "discardConfirmed" }); }}
-      />
-      : null}
+        onCancel={() => { onEvent({ type: "confirmationCancelled" }); }}
+        onConfirm={() => { onEvent({ type: "confirmationConfirmed" }); }}
+      />}
 
     <View style={wide ? styles.columnsWide : styles.columns}>
       <View style={styles.column}>
@@ -354,7 +361,11 @@ function DraftPane({ catalog, draft, onEvent, onSubmit }: {
 
     {draft.submission.status === "sending" ? <LoadingBlock label="Enviando la comanda…" /> : null}
     {draft.submission.status === "sent"
-      ? <Banner message="La comanda se entregó al servidor." tone="info" />
+      ? <Banner
+        message={"La comanda se entregó y sus líneas salieron del borrador, así que no pueden reenviarse. "
+          + "Lo que agregues ahora será una comanda nueva para esta mesa."}
+        tone="info"
+      />
       : null}
     {draft.submission.status === "failed" && draft.submission.failure !== undefined
       ? <Banner message={orderDraftFailureMessage(draft.submission.failure)} tone="error" />
@@ -363,7 +374,7 @@ function DraftPane({ catalog, draft, onEvent, onSubmit }: {
     {draft.lines.length === 0
       ? <StateBlock
         description="Elige un producto del catálogo para empezar la comanda de esta mesa."
-        title="Borrador vacío"
+        title={draft.submission.status === "sent" ? "Sin líneas pendientes" : "Borrador vacío"}
       />
       : <ScrollView contentContainerStyle={styles.paneContent}>
         {draft.lines.map((line) => <DraftLineCard
@@ -430,21 +441,38 @@ function DraftLineCard({ busy, catalog, line, onEvent }: {
 }
 
 /** In-screen confirmation. The product never uses `alert`/`confirm`/`prompt`. */
-function DiscardConfirmation({ lineCount, onCancel, onConfirm }: {
+/**
+ * The single in-screen confirmation for both ways of losing the draft. The two
+ * destinations never share wording: the question, the body and the confirming
+ * label each name where the operator will end up, so answering "sí" can only
+ * do the thing that was asked about.
+ */
+function DraftLossConfirmation({ composing, intent, lineCount, onCancel, onConfirm }: {
+  readonly composing: boolean;
+  readonly intent: OrderDraftConfirmation;
   readonly lineCount: number;
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
 }): React.JSX.Element {
+  const leaving = intent === "leaveTable";
+  const lines = lineCount === 1 ? "1 línea" : `${lineCount} líneas`;
+  const lost = lineCount === 0
+    ? "el producto que estás configurando"
+    : `${lines}${composing ? " y el producto que estás configurando" : ""}`;
   return <View accessibilityLiveRegion="polite" accessibilityRole="alert" style={styles.confirm}>
-    <Subheading>¿Descartar el borrador?</Subheading>
+    <Subheading>{leaving ? "¿Volver a mesas y descartar el borrador?" : "¿Descartar el borrador?"}</Subheading>
     <Body>
-      {(lineCount === 1
-        ? "Se eliminará 1 línea de esta mesa en este dispositivo. "
-        : `Se eliminarán ${lineCount} líneas de esta mesa en este dispositivo. `)
+      {`Se perderá ${lost} de esta mesa en este dispositivo. `
+        + (leaving
+          ? "Volverás al plano de mesas y la mesa quedará sin borrador. "
+          : "Seguirás en esta mesa, con el borrador vacío. ")
         + "No afecta ninguna orden del servidor."}
     </Body>
     <View style={styles.confirmActions}>
-      <ActionButton label="Sí, descartar" onPress={onConfirm} />
+      <ActionButton
+        label={leaving ? "Sí, descartar y volver a mesas" : "Sí, descartar y seguir aquí"}
+        onPress={onConfirm}
+      />
       <ActionButton label="Conservar borrador" onPress={onCancel} tone="secondary" />
     </View>
   </View>;

@@ -56,29 +56,43 @@ export interface OrderDraftSubmission {
   readonly status: OrderDraftSubmissionStatus;
 }
 
-/** One line of the draft. No price is stored here; the catalog carries them. */
-export interface OrderDraftLine {
-  readonly draftLineId: string;
+/**
+ * One product with its selected modifiers and quantity, whether it is still
+ * being configured or already a line. Validation only ever needs this shape,
+ * so the same rules apply to a composition and to a line about to be handed
+ * over — a line can never be checked less strictly than the composer was.
+ */
+export interface OrderDraftComposition {
   readonly modifierGroups: readonly ModifierGroupSelectionV1[];
   readonly productId: string;
   readonly quantity: number;
 }
 
+/** One line of the draft. No price is stored here; the catalog carries them. */
+export interface OrderDraftLine extends OrderDraftComposition {
+  readonly draftLineId: string;
+}
+
 /** The product currently being configured, before it becomes a line. */
-export interface OrderDraftComposer {
-  readonly modifierGroups: readonly ModifierGroupSelectionV1[];
-  readonly productId: string;
-  readonly quantity: number;
+export interface OrderDraftComposer extends OrderDraftComposition {
   /** Set while editing an existing line, so committing replaces it in place. */
   readonly replacingLineId: string | undefined;
 }
 
+/**
+ * What an open in-screen confirmation is asking about. The two destinations are
+ * deliberately distinct: `discardDraft` empties the draft and stays on the
+ * table, `leaveTable` empties it *and* returns to the plan. Collapsing them
+ * into one boolean is what let "Volver a mesas" throw a draft away silently.
+ */
+export type OrderDraftConfirmation = "discardDraft" | "leaveTable";
+
 export interface OrderDraftState {
   readonly composer: OrderDraftComposer | undefined;
-  /** True while the in-screen discard confirmation is open. Never `confirm()`. */
-  readonly discardRequested: boolean;
   readonly lines: readonly OrderDraftLine[];
   readonly nextLineSerial: number;
+  /** The confirmation currently open inside the screen. Never `confirm()`. */
+  readonly pendingConfirmation: OrderDraftConfirmation | undefined;
   readonly submission: OrderDraftSubmission;
   readonly tableId: string | undefined;
   readonly zoneId: string | undefined;
@@ -110,10 +124,10 @@ export type OrderDraftEvent =
   }
   | { readonly type: "composerQuantitySet"; readonly quantity: number }
   | { readonly type: "composerQuantityStepped"; readonly delta: number }
+  | { readonly type: "confirmationCancelled" }
+  | { readonly type: "confirmationConfirmed" }
+  | { readonly type: "confirmationRequested"; readonly intent: OrderDraftConfirmation }
   | { readonly type: "contextReleased" }
-  | { readonly type: "discardCancelled" }
-  | { readonly type: "discardConfirmed" }
-  | { readonly type: "discardRequested" }
   | { readonly type: "lineEditRequested"; readonly draftLineId: string }
   | { readonly type: "lineRemoved"; readonly draftLineId: string }
   | { readonly type: "productOpened"; readonly productId: string }
@@ -127,13 +141,18 @@ const idleSubmission: OrderDraftSubmission = Object.freeze({ failure: undefined,
 
 export const initialOrderDraftState: OrderDraftState = Object.freeze({
   composer: undefined,
-  discardRequested: false,
   lines: Object.freeze([]),
   nextLineSerial: 1,
+  pendingConfirmation: undefined,
   submission: idleSubmission,
   tableId: undefined,
   zoneId: undefined,
 });
+
+/** Whether anything would be lost by emptying this draft right now. */
+export function orderDraftHasContent(state: OrderDraftState): boolean {
+  return state.lines.length > 0 || state.composer !== undefined;
+}
 
 export function reduceOrderDraft(state: OrderDraftState, event: OrderDraftEvent): OrderDraftState {
   switch (event.type) {
@@ -251,27 +270,46 @@ export function reduceOrderDraft(state: OrderDraftState, event: OrderDraftEvent)
       const lines = state.lines.filter((line) => line.draftLineId !== event.draftLineId);
       if (lines.length === state.lines.length) return state;
       const composer = state.composer?.replacingLineId === event.draftLineId ? undefined : state.composer;
+      const emptied = lines.length === 0 && composer === undefined;
       return freeze({
         ...state,
         composer,
-        discardRequested: lines.length === 0 ? false : state.discardRequested,
         lines: Object.freeze(lines),
+        // A confirmation about losing the draft is meaningless once the draft
+        // is already empty, so it closes instead of staying open over nothing.
+        pendingConfirmation: emptied ? undefined : state.pendingConfirmation,
         submission: idleSubmission,
       });
     }
-    case "discardRequested":
+    case "confirmationRequested":
       // Destructive actions are confirmed inside the screen; never with a
-      // platform `alert()`, `confirm()` or `prompt()`.
-      return state.lines.length === 0 || state.discardRequested
+      // platform `alert()`, `confirm()` or `prompt()`. With nothing composed
+      // there is nothing to warn about: leaving is immediate and a second tap
+      // on an already-released table changes nothing.
+      if (!orderDraftHasContent(state)) {
+        return event.intent === "leaveTable" ? initialOrderDraftState : state;
+      }
+      return state.pendingConfirmation === event.intent
         ? state
-        : freeze({ ...state, discardRequested: true });
-    case "discardCancelled":
-      return state.discardRequested ? freeze({ ...state, discardRequested: false }) : state;
-    case "discardConfirmed":
-      // The table stays selected: discarding the draft is not leaving the table.
-      return state.discardRequested
-        ? freeze({ ...initialOrderDraftState, tableId: state.tableId, zoneId: state.zoneId })
-        : state;
+        : freeze({ ...state, pendingConfirmation: event.intent });
+    case "confirmationCancelled":
+      return state.pendingConfirmation === undefined
+        ? state
+        : freeze({ ...state, pendingConfirmation: undefined });
+    case "confirmationConfirmed":
+      // Which destination was confirmed is read from the state, so "discard and
+      // stay" can never be answered with "discard and leave", or the reverse.
+      if (state.pendingConfirmation === undefined) return state;
+      if (state.pendingConfirmation === "leaveTable") return initialOrderDraftState;
+      // The table stays selected: discarding the draft is not leaving the
+      // table. The serial keeps running so a later line cannot reuse a handle
+      // this table already showed.
+      return freeze({
+        ...initialOrderDraftState,
+        nextLineSerial: state.nextLineSerial,
+        tableId: state.tableId,
+        zoneId: state.zoneId,
+      });
     case "submissionStarted":
       // Idempotent on purpose: a double tap on the primary action must not
       // start a second hand-over, and an open composer is not a finished draft.
@@ -279,12 +317,23 @@ export function reduceOrderDraft(state: OrderDraftState, event: OrderDraftEvent)
         ? state
         : freeze({
           ...state,
-          discardRequested: false,
+          pendingConfirmation: undefined,
           submission: Object.freeze({ failure: undefined, status: "sending" }),
         });
     case "submissionSucceeded":
+      // The accepted lines leave the draft. Keeping them would let a second tap,
+      // an edit or one new line re-offer what the server already took. The table
+      // and the success notice stay, so the next comanda for the same table
+      // starts empty and carries only lines composed after the acceptance; the
+      // serial keeps running so no new handle repeats a delivered one.
       return state.submission.status === "sending"
-        ? freeze({ ...state, submission: Object.freeze({ failure: undefined, status: "sent" }) })
+        ? freeze({
+          ...state,
+          composer: undefined,
+          lines: Object.freeze([]),
+          pendingConfirmation: undefined,
+          submission: Object.freeze({ failure: undefined, status: "sent" }),
+        })
         : state;
     case "submissionFailed":
       return state.submission.status === "sending"
@@ -362,17 +411,23 @@ export function selectedGroupQuantity(groups: readonly ModifierGroupSelectionV1[
  */
 export function composerIssues(
   groups: readonly MenuModifierGroupV1[],
-  composer: OrderDraftComposer,
+  composer: OrderDraftComposition,
 ): readonly string[] {
   const issues: string[] = [];
   if (!isCountableQuantity(composer.quantity)) {
     issues.push(`La cantidad debe ser un entero entre ${DRAFT_MIN_QUANTITY} y ${DRAFT_MAX_QUANTITY}.`);
+  }
+  if (composer.modifierGroups.length > DRAFT_MAX_GROUPS) {
+    issues.push(`Una línea admite como máximo ${DRAFT_MAX_GROUPS} grupos de modificadores.`);
   }
   for (const group of groups) {
     const selected = selectedGroupQuantity(composer.modifierGroups, group.groupId);
     if (selected < group.minimumQuantity) issues.push(`«${group.name}» requiere al menos ${group.minimumQuantity}.`);
     if (selected > group.maximumQuantity) issues.push(`«${group.name}» admite como máximo ${group.maximumQuantity}.`);
     const selections = composer.modifierGroups.find((entry) => entry.groupId === group.groupId)?.selections ?? [];
+    if (selections.length > DRAFT_MAX_SELECTIONS_PER_GROUP) {
+      issues.push(`«${group.name}» admite como máximo ${DRAFT_MAX_SELECTIONS_PER_GROUP} opciones distintas.`);
+    }
     for (const selection of selections) {
       const option = findOption(group, selection.optionId);
       if (option === undefined) {
@@ -380,6 +435,14 @@ export function composerIssues(
       } else if (option.maximumQuantity !== null && selection.quantity > option.maximumQuantity) {
         issues.push(`«${option.name}» admite como máximo ${option.maximumQuantity}.`);
       }
+      if (!isCountableQuantity(selection.quantity)) {
+        issues.push(`«${group.name}» tiene una cantidad de opción que el contrato no acepta.`);
+      }
+    }
+    // The reducer cannot produce a repeated option, but a line handed over is
+    // never trusted to have come from it.
+    if (new Set(selections.map((selection) => selection.optionId)).size !== selections.length) {
+      issues.push(`«${group.name}» repite una opción.`);
     }
   }
   // A selection for a group the product no longer publishes can only appear
@@ -388,7 +451,28 @@ export function composerIssues(
   if (composer.modifierGroups.some((entry) => !groups.some((group) => group.groupId === entry.groupId))) {
     issues.push("El catálogo cambió: vuelve a elegir los modificadores de este producto.");
   }
+  const groupIds = composer.modifierGroups.map((entry) => entry.groupId);
+  if (new Set(groupIds).size !== groupIds.length) {
+    issues.push("Un grupo de modificadores aparece dos veces en esta línea.");
+  }
   return Object.freeze(issues);
+}
+
+/**
+ * Everything that stops one composed line from being handed over, judged
+ * against the catalog as it stands *now*. This is the fail-closed check: it
+ * re-derives the product and its active groups from the published catalog
+ * rather than trusting the selections the reducer stored, so a catalog that
+ * changed while the operator was composing — a retired product, a retired
+ * group or option, a newly required minimum — is caught before anything is
+ * offered rather than refused later by the server.
+ */
+export function draftLineIssues(catalog: MenuCatalogV1, line: OrderDraftComposition): readonly string[] {
+  const product = findProduct(catalog, line.productId);
+  if (product === undefined || !product.active) {
+    return Object.freeze(["El catálogo publicado ya no incluye este producto."]);
+  }
+  return composerIssues(orderableGroups(catalog, line.productId), line);
 }
 
 /** Extra units of one option the contract still allows on top of the current selection. */
