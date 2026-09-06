@@ -28,6 +28,14 @@ $env:MOBILE_VISUAL_HARNESS = "1"; pnpm --filter @super-restaurant/mobile run web
 
 ## Controles
 
+- **Ocultar / mostrar controles**: contrae y expande la barra del arnés. En
+  390×844 la barra desplegada ocupaba toda la columna y dejaba a la aplicación
+  sin altura utilizable, de modo que verificarla obligaba a editar DOM o CSS
+  desde el navegador y la matriz visual dejaba de ser reproducible. **Contrae la
+  barra antes de recorrer la aplicación en viewport de teléfono.** El control se
+  opera con puntero y con teclado, anuncia el nombre accesible «Controles del
+  arnés» y su estado expandido/contraído, y mide 48 px. Aun expandida, la barra
+  está acotada a 240 px de alto para que la aplicación conserve columna.
 - **Escenarios**: datos válidos, acceso revocado, sesión expirada, sin
   sucursales, red caída, respuesta lenta, sesión ilegible (el puerto de sesión
   rechaza), cierre colgado (`signOut` nunca resuelve) y cierre fallido
@@ -54,6 +62,10 @@ $env:MOBILE_VISUAL_HARNESS = "1"; pnpm --filter @super-restaurant/mobile run web
 
 ## Recorrer la comanda
 
+0. En viewport de teléfono (390×844), pulsa **Ocultar controles** antes de
+   empezar. Sin eso la barra deja a la aplicación sin altura utilizable y el
+   recorrido no es reproducible sin tocar el DOM. Vuelve a expandirla cuando
+   necesites cambiar un escenario o un resultado de envío.
 1. Ingresa, elige sucursal y turno; la pestaña **Mesas** ahora es una selección
    táctil. No muestra ocupación ni cuenta: esa lectura no existe en el servidor.
 2. Toca una mesa para abrir su borrador. Elige categoría, producto, cantidad y

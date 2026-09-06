@@ -34,6 +34,7 @@ export function Root(): React.JSX.Element {
     // what the screen handed over is visible without touching anything else.
     orders: createHarnessOrderIntegration(() => { setTicks((value) => value + 1); }),
   }), []);
+  const [controlsExpanded, setControlsExpanded] = useState(true);
   const [scenario, setScenario] = useState<HarnessScenario>("ok");
   const [draftOutcome, setDraftOutcome] = useState<HarnessDraftOutcome>("notConnected");
   const [reloads, setReloads] = useState(0);
@@ -47,8 +48,21 @@ export function Root(): React.JSX.Element {
   return <SafeAreaProvider>
     <StatusBar style="dark" />
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.controls} horizontal={false}>
+      {/*
+        The control bar used to be an unbounded ScrollView, so at 390×844 it ate
+        the whole column and left the application with no usable height at all.
+        Verifying the app then meant editing DOM or CSS from the browser, which
+        makes a visual matrix unreproducible. The bar is now collapsible from
+        inside the harness, and bounded while expanded.
+      */}
+      <View style={styles.controlsHeader}>
         <Text style={styles.banner}>ARNÉS DE VERIFICACIÓN · DATOS SINTÉTICOS · SIN SERVIDOR REAL</Text>
+        <Toggle
+          expanded={controlsExpanded}
+          onPress={() => { setControlsExpanded((value) => !value); }}
+        />
+      </View>
+      {controlsExpanded ? <ScrollView contentContainerStyle={styles.controls} horizontal={false} style={styles.controlsScroll}>
         <View style={styles.row}>
           {HARNESS_DRAFT_OUTCOMES.map((option) => <Control
             key={option.value}
@@ -135,7 +149,7 @@ export function Root(): React.JSX.Element {
             + `operador actual: ${doubles.auth.operator()} · sesiones históricas: ${doubles.auth.history().length} · `
             + `ticker de sesión: ${harnessControl.autoRefreshRuns} · eventos: ${ticks}`}
         </Text>
-      </ScrollView>
+      </ScrollView> : null}
       <View style={styles.app}>
         <App
           auth={doubles.auth}
@@ -147,6 +161,43 @@ export function Root(): React.JSX.Element {
       </View>
     </SafeAreaView>
   </SafeAreaProvider>;
+}
+
+/**
+ * Collapses and expands the control bar so the application can be exercised at
+ * a real phone viewport without touching DOM or CSS from outside.
+ *
+ * Its accessible name says what it controls and its `expanded` state says which
+ * way it will go, so a keyboard or screen-reader user gets the same affordance
+ * as a pointer one. It is deliberately `touchTarget.primary` tall: the other
+ * harness controls sit at the 44 px minimum, and this one is operated during
+ * every run of the visual matrix.
+ */
+function Toggle({ expanded, onPress }: {
+  readonly expanded: boolean;
+  readonly onPress: () => void;
+}): React.JSX.Element {
+  const focus = useFocusRing();
+  return <Pressable
+    accessibilityHint={expanded
+      ? "Oculta los controles del arnés y devuelve la altura a la aplicación"
+      : "Vuelve a mostrar los controles del arnés"}
+    accessibilityLabel="Controles del arnés"
+    accessibilityRole="button"
+    accessibilityState={{ expanded }}
+    // `accessibilityState.expanded` is honoured on native but react-native-web
+    // 0.21 does not translate it, so the web run would expose a button with no
+    // state at all. The ARIA prop is passed explicitly and maps on both.
+    aria-expanded={expanded}
+    onPress={onPress}
+    {...focus.handlers}
+    style={(state) => [
+      styles.toggle,
+      (state.pressed || focus.focused) && styles.controlPressed,
+    ]}
+  >
+    <Text style={styles.controlLabel}>{expanded ? "Ocultar controles ▲" : "Mostrar controles ▼"}</Text>
+  </Pressable>;
 }
 
 function Control({ label, onPress, selected }: {
@@ -188,13 +239,39 @@ const styles = StyleSheet.create({
   controlPressed: { borderColor: colors.focus, borderWidth: 3 },
   controlSelected: { backgroundColor: colors.accent, borderColor: colors.accent },
   controls: {
+    gap: spacing.xs,
+    padding: spacing.sm,
+  },
+  controlsHeader: {
+    alignItems: "center",
+    backgroundColor: colors.infoSurface,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  // Bounded even while expanded, so the application always keeps a usable
+  // column. `flexShrink` lets it give way further on short viewports.
+  controlsScroll: {
     backgroundColor: colors.infoSurface,
     borderBottomColor: colors.border,
     borderBottomWidth: 1,
-    gap: spacing.xs,
-    padding: spacing.sm,
+    flexGrow: 0,
+    flexShrink: 1,
+    maxHeight: 240,
   },
   hint: { color: colors.textMuted, ...typography.caption },
   row: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   safeArea: { backgroundColor: colors.background, flex: 1 },
+  toggle: {
+    alignItems: "center",
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: touchTarget.primary,
+    paddingHorizontal: spacing.md,
+  },
 });

@@ -39,6 +39,34 @@ test("the shipped app never imports the harness or the synthetic fixtures", () =
   }
 });
 
+test("the harness control bar can be collapsed, accessibly, from inside the harness", () => {
+  // The bar used to consume the whole column at 390x844, leaving the app with
+  // no usable height, so the visual matrix could only be run by editing DOM or
+  // CSS from the browser. The collapse control is what makes it reproducible,
+  // so its contract is pinned here rather than left to a manual check.
+  const root = readFileSync(path.join(projectRoot, "harness", "harness-root.tsx"), "utf8");
+
+  // Operable by pointer and by keyboard, with a name and an expanded state.
+  assert.match(root, /function Toggle\(/u, "the collapse control should exist");
+  assert.match(root, /accessibilityLabel="Controles del arnés"/u);
+  assert.match(root, /accessibilityRole="button"/u);
+  assert.match(root, /accessibilityState=\{\{ expanded \}\}/u);
+  // react-native-web does not translate `accessibilityState.expanded`, so the
+  // ARIA prop has to be passed explicitly or the web run exposes no state.
+  assert.match(root, /aria-expanded=\{expanded\}/u);
+  assert.match(root, /\{\.\.\.focus\.handlers\}/u, "it should carry the shared focus ring");
+
+  // A real 48 px target, not the 44 px minimum the other harness controls use.
+  assert.match(root, /toggle: \{[^}]*minHeight: touchTarget\.primary/su);
+
+  // Collapsing removes the scroller entirely, and it can be expanded again.
+  assert.match(root, /controlsExpanded \? <ScrollView/u);
+  assert.match(root, /setControlsExpanded\(\(value\) => !value\)/u);
+
+  // Even expanded, the bar is bounded so the app keeps a column to render in.
+  assert.match(root, /controlsScroll: \{[^}]*maxHeight: \d+/su);
+});
+
 test("the harness is reachable only behind the explicit Metro flag", () => {
   const metro = readFileSync(path.join(projectRoot, "metro.config.js"), "utf8");
   assert.match(metro, /MOBILE_VISUAL_HARNESS/u);
