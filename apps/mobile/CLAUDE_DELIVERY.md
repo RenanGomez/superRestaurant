@@ -58,8 +58,13 @@ contra esos contratos la hará el coordinador **después del merge**.
 
 | Hash | Mensaje |
 | --- | --- |
-| `f8f1f8422e91ee1a3ac6a4d1a9d5b6dbb2eb6cf7` | `fix(mobile): rework the comanda hand-over after the coordinator review` |
-| (este documento) | `docs(mobile): record the coordinator rework` — su hash se reporta al cierre |
+| `f8f1f84a88881f1ee70e45fa5a72984a21aefd2d` | `fix(mobile): rework the comanda hand-over after the coordinator review` |
+| `27e787c9fb559ca697030b1660eedbe4a9edb216` | `docs(mobile): record the coordinator rework and its evidence` |
+| (este documento) | `docs(mobile): correct the recorded hash of the rework commit` — su hash es el **hash final** y se reporta fuera del documento, porque un commit no puede contener el suyo |
+
+Para auditar, el hash final se toma de `git rev-parse HEAD` sobre la rama
+`claude/mobile-order-entry-ui-20260905`; debe ser descendiente directo de
+`27e787c9…` y la punta del árbol limpio.
 
 ### Archivos de esta ronda
 
