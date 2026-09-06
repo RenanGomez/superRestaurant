@@ -1,5 +1,15 @@
 # HANDOFF
 
+## Revisión 2026-09-06 — retrabajo Mobile de comanda, ronda R2
+
+- Tarea/estado: P2 `Implementar vista de mesas y toma de comanda online` permanece IN_PROGRESS. Se revisó read-only el corte Mobile `27e787c9fb559ca697030b1660eedbe4a9edb216`; no se integró ni se modificó `apps/mobile/**`, el worktree de Claude, `main` o `pnpm-lock.yaml`.
+- Evidencia reproducida: worktree temporal detached y limpio; Node 24.19.0/pnpm 11.19.0; lint y typecheck Mobile verdes; 141/141 pruebas verdes; `expo install --check` al día; export Android verde con 660 módulos. CodeGraph local indexó 281 archivos, 4,891 nodos y 19,905 relaciones, y confirmó que `createOrderDeliveryTracker`, `reduceOrderDraft`, `buildOrderDraftHandoff`, `draftLineIssues` y `OrderDraftIntegration` no salen de `apps/mobile/**`.
+- Resultado R1: las cinco correcciones solicitadas están presentes: confirmación de salida, retiro de líneas aceptadas, intento asíncrono ligado al contexto, revalidación de líneas y una única frontera `deliver`.
+- Hallazgo fail-closed: `MenuCatalogV1` admite hasta 2,000 grupos, pero `orderableGroups` aplica `.slice(0, 50)` antes de `draftLineIssues`. Una regresión directa con 51 grupos y el último obligatorio devolvió `requiredGroupAfterLimitAccepted=true`; el handoff omitió el requisito. Otra regresión con una línea válida y su categoría retirada devolvió `inactiveProductCategoryAccepted=true`. Deben fallar como `stale` con cero entregas.
+- Hallazgo visual: la matriz declarada no fue reproducible en el arnés actual a 390×844. El panel de controles consume la altura y el contenedor operativo/lista de sucursales queda con `clientHeight=0`; el flujo necesita un panel contraíble o layout acotado y una repetición sin manipular DOM/CSS. La verificación se hizo con la habilidad Browser y datos sintéticos locales; no hubo red remota ni credenciales.
+- Siguiente acción mínima: aplicar únicamente el retrabajo §0.R2 dentro de Mobile, repetir pruebas/matriz/CodeGraph y revisar de nuevo. La posterior conexión productiva con `CreateOrderCommandV2`, `shiftId` y órdenes activas requiere ampliar expresamente el alcance actual; las migraciones continúan locales y sin aplicar.
+- Entorno/Git: el primer intento de compilar artefactos de prueba/build fue bloqueado por permisos del sandbox y se repitió con permiso estrecho; las ejecuciones efectivas quedaron verdes. No hubo subagentes, push, merge, rebase, reset, mutación PostgreSQL ni cambio remoto.
+
 ## Verificación 2026-09-06 — enlace Order/turno server-side
 
 - Tarea/estado: la P2 `Implementar vista de mesas y toma de comanda online` permanece IN_PROGRESS porque Mobile sigue en retrabajo. Solo el slice server-side quedó verificado; no se modificó `apps/mobile/**`, Web, KDS, `pnpm-lock.yaml`, dinero, moneda, impuestos, CFDI, fiscalidad, proveedor ni reglas de ocupación/unicidad por mesa.

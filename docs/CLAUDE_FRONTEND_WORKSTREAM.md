@@ -1,5 +1,14 @@
 # Workstream frontend para Claude — fundación móvil aislada
 
+## 0.R2 Revisión del coordinador 2026-09-06 — catálogo completo y arnés reproducible
+
+El coordinador revisó de forma read-only el retrabajo `27e787c9fb559ca697030b1660eedbe4a9edb216`. El árbol de Claude estaba limpio, el diff permanecía limitado a `apps/mobile/**`, CodeGraph dejó las cinco fronteras de R1 dentro de Mobile y se reprodujeron con Node 24.19.0 lint, typecheck, 141 pruebas, `expo install --check` y el export Android de 660 módulos. Los cinco hallazgos originales de R1 están corregidos, pero el corte todavía no debe integrarse por estas dos brechas nuevas:
+
+1. **Fail-closed contra todo el catálogo, no solo contra los primeros 50 grupos.** El contrato compartido acepta hasta 2,000 grupos de modificadores. `orderableGroups` recorta a `DRAFT_MAX_GROUPS` antes de que `draftLineIssues` valide, por lo que un grupo obligatorio agregado después de los primeros 50 no se observa y el handoff se acepta. La regresión directa devolvió `requiredGroupAfterLimitAccepted=true`. Separar los grupos presentables de los grupos usados para validar o fallar como `stale` cuando el producto ya no puede representarse dentro del límite del comando. Además, retirar la categoría activa del producto debe invalidar el handoff: la regresión directa actual devolvió `inactiveProductCategoryAccepted=true`. Añadir pruebas para ambos cambios y conservar cero entregas cuando fallen.
+2. **Matriz visual reproducible en el viewport declarado.** En el arnés vigente, a 390×844 el `ScrollView` de controles consume la altura y deja el contenedor operativo/lista de sucursales con `clientHeight=0`; el flujo no puede recorrerse con eventos reales sin una manipulación externa no documentada. Proveer un control accesible para contraer el panel o un layout acotado que mantenga la aplicación interactuable, y repetir 390×844 y 1024×768 sin editar el DOM ni CSS desde el navegador.
+
+Mantener el retrabajo dentro de `apps/mobile/**`, sin incorporar `main`, merge/rebase/push, lockfile o conexión productiva a Order. La integración contra `CreateOrderCommandV2`, `shiftId` y la lectura activa sigue a cargo del coordinador después de aprobar este corte. Repetir las compuertas Mobile, globales sin caché, CodeGraph, aislamiento del bundle, matriz visual, `git diff --check` y árbol limpio.
+
 ## 0.R1 Revisión del coordinador 2026-09-06 — retrabajo previo a integración
 
 El coordinador revisó el corte `3061487a8b5568c32afc7730099182ffb09da774` de la rama `claude/mobile-order-entry-ui-20260905`. El alcance, CodeGraph, lint, typecheck y 118 pruebas se reprodujeron, pero el corte no debe integrarse todavía. Claude debe corregir únicamente los puntos siguientes dentro de `apps/mobile/**`, sobre su rama y worktree actuales; no debe incorporar `main`, hacer merge/rebase/push ni conectar endpoints Order.
