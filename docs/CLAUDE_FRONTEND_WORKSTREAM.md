@@ -1,5 +1,24 @@
 # Workstream frontend para Claude — fundación móvil aislada
 
+## 0.R3 Revisión del coordinador 2026-09-06 — interacción táctil estrecha
+
+El coordinador revisó de forma independiente el corte limpio `59b26ca15628e3c9ed847efe6dae549e74592eaf` (árbol `a7ac9de413944607bb9002bc75825ad073b1fc2b`). El diff sigue limitado a once rutas de `apps/mobile/**`; lint, typecheck, las 150 pruebas, `expo install --check`, el export Android de 660 módulos y las compuertas globales sin caché quedaron verdes. El bundle de 2,232,339 bytes contiene las acciones de producto y no contiene cadenas del arnés. La separación `activeProductGroups`/`orderableGroups`, la categoría fail-closed, las confirmaciones, el retiro de líneas aceptadas y el envío ligado al contexto quedan aceptados para esta revisión.
+
+Queda un único retrabajo acotado antes de integrar el slice Mobile:
+
+1. **Hacer operable la comanda a 390×844 con eventos táctiles reales.** Contraer los controles del arnés sí deja 740 px para la app, pero en la pantalla de comanda las dos `column` verticales conservan `flexBasis: 0`/`flexGrow: 1`: el `ScrollView` del catálogo termina con `clientHeight=0` y su producto desborda detrás de `DraftPane`. En la reproducción, Playwright llevó el documento hasta su `scrollTop` máximo y el centro del producto seguía resolviendo por `elementFromPoint` al encabezado/banner del borrador; el clic semántico no abrió el compositor. Corregir el layout estrecho con el cambio mínimo para que catálogo y borrador sean desplazables/alcanzables sin superposición, sin alterar la disposición de dos columnas de 1024×768.
+
+Criterios exactos de aceptación R3:
+
+- desde un arnés reiniciado, recorrer a 390×844 `login → sucursal → turno → mesa → producto → modificador requerido → agregar línea` con clics/taps normales, sin `force`, coordenadas contra elementos tapados ni edición de DOM/CSS;
+- demostrar que el producto tiene un área táctil alcanzable de al menos 48 px y que `elementFromPoint` dentro de esa área pertenece al propio botón, no a `DraftPane`;
+- conservar `scrollWidth == innerWidth`, consola sin errores y cero llamadas a `/api/v1/orders*`;
+- repetir 1024×768 y conservar las dos columnas, las confirmaciones distintas y un doble envío equivalente a exactamente `crear + un ítem por línea + abrir`;
+- añadir una regresión proporcional del layout/estructura si el patrón de pruebas vigente puede fijar la causa sin inventar otro arnés; después ejecutar lint, typecheck, 150+ pruebas, `expo install --check`, Android export, compuertas globales `--force`, `git diff --check`, aislamiento del bundle y CodeGraph final;
+- modificar solo `apps/mobile/**`; no conectar mutaciones reales, no copiar contratos, no tocar `pnpm-lock.yaml`, server/API/esquema, Web o KDS, y no hacer push, merge o rebase.
+
+La P2 continúa `IN_PROGRESS`: este retrabajo solo cerrará la operabilidad visual Mobile; la conexión productiva y la lectura de líneas de la orden activa siguen siendo un slice de integración separado.
+
 ## 0.R2 Revisión del coordinador 2026-09-06 — catálogo completo y arnés reproducible
 
 El coordinador revisó de forma read-only el retrabajo de código `27e787c9fb559ca697030b1660eedbe4a9edb216`. Durante el cierre, la rama avanzó únicamente con la corrección documental `16a5e65460e0796470997bccd8103243316ad84b`, sin cambiar el código revisado. El árbol de Claude estaba limpio, el diff permanecía limitado a `apps/mobile/**`, CodeGraph dejó las cinco fronteras de R1 dentro de Mobile y se reprodujeron con Node 24.19.0 lint, typecheck, 141 pruebas, `expo install --check` y el export Android de 660 módulos. Los cinco hallazgos originales de R1 están corregidos, pero el corte todavía no debe integrarse por estas dos brechas nuevas:
