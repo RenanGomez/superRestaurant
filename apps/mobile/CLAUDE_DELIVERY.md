@@ -5,9 +5,9 @@ revisión y **no integrada**: no hubo merge, rebase, push ni publicación de ram
 
 - **Unidad 2 — mesas y borrador de comanda (2026-09-05)**: sección A, abajo. Es
   el corte vigente y responde al mandato de la sección 0 del documento.
-  **Retrabajada dos veces el 2026-09-06**: la sección **A.R2** describe la
-  segunda revisión del coordinador y es la más reciente; **A.R1** describe la
-  primera. Donde se contradigan, prevalece la más reciente sobre A.R1, y ambas
+  **Retrabajada tres veces el 2026-09-06**: la sección **A.R3** describe la
+  tercera revisión del coordinador y es la más reciente; **A.R2** la segunda y
+  **A.R1** la primera. Donde se contradigan, prevalece la más reciente, y todas
   sobre las secciones A.1 a A.11, escritas para el corte `3061487a…`.
 - **Unidad 1 — fundación Expo/Auth/sucursal**: ya integrada en `main` y marcada
   DONE. Su registro histórico se conserva a partir de la sección B y no describe
@@ -16,6 +16,145 @@ revisión y **no integrada**: no hubo merge, rebase, push ni publicación de ram
 ---
 
 # A. Unidad 2 — mesas y borrador de comanda
+
+## A.R3 Tercera revisión del coordinador (2026-09-06) — interacción táctil estrecha
+
+Partiendo de `59b26ca15628e3c9ed847efe6dae549e74592eaf` (árbol
+`a7ac9de413944607bb9002bc75825ad073b1fc2b`), sobre la misma rama
+`claude/mobile-order-entry-ui-20260905` y el mismo worktree, con árbol limpio
+verificado antes de editar. Sin merge, rebase, cherry-pick, push ni `main`
+incorporado; `pnpm-lock.yaml` no cambió y el diff sigue confinado a
+`apps/mobile/**`. Sin mutaciones reales de Order: cero llamadas a
+`/api/v1/orders*` en las dos matrices. La P2 permanece **IN_PROGRESS**.
+
+### Hallazgo R3.1 — el borrador no era operable a 390×844
+
+`OrderDraftScreen` usaba la misma `column` (`flexBasis: 0`/`flexGrow: 1`) en las
+dos disposiciones. A 390×844, con la barra del arnés contraída, el encabezado de
+la mesa y el aviso de importes ya consumían casi toda la columna, así que las dos
+`column` verticales se repartían un resto de pocos píxeles: el `ScrollView` del
+catálogo terminaba con `clientHeight = 0`, sus productos se pintaban fuera de él
+y `DraftPane` —que va después en el DOM— recibía el hit-testing. Un clic
+semántico sobre el producto no abría el compositor.
+
+La corrección separa **quién scrollea** en cada disposición, sin tocar la de dos
+columnas:
+
+| Disposición | Ancho | Scroller | Caja de cada panel |
+| --- | --- | --- | --- |
+| `columns` | ≥ 768 px | cada panel, dentro de su columna | `flexBasis: 0`/`flexGrow: 1`, igual que antes |
+| `stacked` | < 768 px | **la pantalla**, una sola vez | altura natural, sin reparto de flex |
+
+La decisión vive en un módulo puro nuevo, `src/ui/order-draft-layout.ts`
+(`orderDraftLayout`, `screenOwnsScroller`, `paneOwnsScroller`,
+`orderDraftPaneBox`), y la pantalla la consume: en `stacked` el encabezado, el
+aviso y los dos paneles van dentro de un único `ScrollView`, y `PaneList` degrada
+el scroller interno de cada panel a una caja normal —anidarlo dentro de un padre
+de altura automática lo volvería a colapsar a cero—. `tabletBreakpoint` ya no se
+lee desde la pantalla.
+
+### Hallazgo R3.2 — bloqueo previo que impedía demostrar la aceptación R3
+
+Al recorrer el flujo con taps reales apareció un **segundo bloqueo, ya presente
+en el corte base sin modificar**: tras tocar el turno, la pantalla de mesas se
+quedaba en «Cargando mesas de la sucursal…» para siempre, así que `mesa →
+producto` no era alcanzable y la aceptación R3 no podía demostrarse.
+
+Causa: en `app.tsx`, los efectos que leen el plano y el catálogo despachan su
+propio estado `loading` y guardan el resultado con una bandera `active` de
+instancia de efecto. Cuando la lectura la inicia un **tap real**, React vacía esa
+actualización de forma síncrona dentro del mismo evento discreto, el efecto se
+vuelve a ejecutar por su propia dependencia de estado y su limpieza pone
+`active = false` **antes** de que resuelva la petición que él mismo acaba de
+lanzar. La respuesta se descarta y el recurso queda `loading` de forma
+permanente, sin reintento posible.
+
+Reproducción en `59b26ca1` sin ningún cambio aplicado (Chrome real, dev server
+del arnés, mismo guion):
+
+| Gesto sobre el turno | Resultado |
+| --- | --- |
+| clic real (Playwright, evento confiable) | `STUCK LOADING` |
+| `element.click()` programático (evento no confiable) | `TABLES LOADED` |
+
+Corrección: los dos efectos dejan de usar la bandera de instancia y confían en el
+filtro que ya existía y que sí describe lo que hace obsoleta una respuesta —
+`forActiveScope` en el reducer, que descarta cualquier resultado cuyo
+Restaurant/Branch ya no sea el activo—. No se tocó ningún otro efecto, contrato
+ni estado.
+
+**Esto excede lo que §0.R3 autoriza literalmente** («corregir únicamente el
+bloqueo de layout»). Se hizo porque la aceptación obligatoria de R3 exige
+recorrer `login → sucursal → turno → mesa → producto` con taps normales, y ese
+recorrido es imposible sin ello. Va en un commit propio y separado
+(`fix(mobile): keep a branch read alive through its own loading dispatch`) para
+que el coordinador pueda aceptarlo, dividirlo o revertirlo sin tocar el arreglo
+de layout. Es también un defecto real de producto: cualquier operador que
+seleccione su turno con un toque real dejaba la vista de mesas colgada.
+
+### Regresión añadida
+
+`src/order-draft-layout.test.ts`, con el sistema de pruebas vigente
+(`node:test` compilado por `tsconfig.test.build.json`), fija la causa sin inventar
+otro arnés: qué disposición recibe cada ancho (390, 767, 768, 1024), que existe
+exactamente un scroller por disposición y que nunca se anida, y que la caja
+`stacked` no declara `flexGrow` ni `flexBasis` mientras la de `columns` sí. Una
+cuarta prueba comprueba que la pantalla no reintroduzca una comparación de ancho
+propia fuera del módulo. Total: **154 pruebas** (150 antes, +4).
+
+### Matriz visual R3 — Chrome real, taps normales
+
+Sin `force`, sin coordenadas contra elementos tapados y sin editar DOM ni CSS
+desde el navegador. La barra del arnés se contrae con su propio control antes de
+recorrer, como indica su README, y sólo se expande para leer los intentos
+ofrecidos.
+
+| Comprobación | 390×844 | 1024×768 |
+| --- | --- | --- |
+| `login → sucursal → turno → mesa → producto → modificador requerido → agregar línea` | recorrido completo | recorrido completo |
+| Área alcanzable del producto | **134 px** (≥ 48) | **98 px** (≥ 48) |
+| `elementFromPoint` dentro de esa área | pertenece al botón en las 5 sondas | pertenece al botón en las sondas dentro del área |
+| `scrollWidth` vs `innerWidth` | 390 = 390 | 1024 = 1024 |
+| Consola | sin errores ni advertencias | sin errores ni advertencias |
+| Llamadas a `/api/v1/orders*` | 0 | 0 |
+| Dos columnas | n/a (apiladas a propósito) | catálogo `x 24–500`, borrador `x 524–1000`, lado a lado |
+| Confirmaciones distintas | n/a | «¿Descartar el borrador?» ≠ «¿Volver a mesas y descartar el borrador?» |
+| Doble envío en vuelo (`aceptado (lento)`) | n/a | `crear` + **1** `ítem` por línea + `abrir`, una sola vez; el segundo toque lo rechaza el botón |
+
+### Compuertas ejecutadas con Node 24.19.0
+
+| Compuerta | Resultado |
+| --- | --- |
+| `pnpm --filter @super-restaurant/mobile run lint` | limpio |
+| `pnpm --filter @super-restaurant/mobile run typecheck` | limpio |
+| `pnpm --filter @super-restaurant/mobile run test` | 154/154 |
+| `pnpm exec expo install --check` | `Dependencies are up to date` |
+| `pnpm --filter @super-restaurant/mobile run build` (export Android) | 661 módulos, `index-…​.hbc` de 2 233 530 bytes |
+| `pnpm lint --force` / `typecheck --force` / `test --force` / `build --force` | 8 / 11 / 11 / 8 tareas, todas verdes, sin caché |
+| `git diff --check` | sin hallazgos |
+| Aislamiento del bundle | sin `ARNÉS DE VERIFICACIÓN`, `harnessControl`, `FIXTURE_`, `Ocultar controles`, `example.invalid` ni `XTS`; con `Agregar al borrador`, `Enviar comanda` y `Volver a mesas` |
+| CodeGraph final | los cinco símbolos nuevos se consumen sólo dentro de `apps/mobile`; `OrderDraftScreen` sigue con `app.tsx` como único consumidor; sin referencias rotas ni huérfanos |
+
+### Archivos tocados en R3
+
+| Archivo | Cambio |
+| --- | --- |
+| `src/ui/order-draft-layout.ts` | nuevo módulo puro con la decisión de disposición y las dos cajas de panel |
+| `src/ui/order-draft-screen.tsx` | consume la decisión; `stacked` usa un solo scroller de pantalla y `PaneList` degrada los internos; se retira el estilo `columns` vertical y se añaden `stack` y `paneStacked` |
+| `src/ui/app.tsx` | R3.2: las lecturas de plano y catálogo sobreviven a su propio despacho de `loading` |
+| `src/order-draft-layout.test.ts` | regresión nueva del layout |
+| `tsconfig.test.build.json`, `package.json` | registran el módulo y la prueba nueva |
+
+### Límites que siguen abiertos
+
+Sin cambios respecto de A.R2: no hay conexión productiva de Order, no hay lectura
+de las líneas de una orden activa y no se copió ni redefinió ningún contrato.
+SR-MOB-008, SR-MOB-009 y SR-MOB-011 siguen abiertas; SR-MOB-007 sigue parcial en
+`main` y SR-MOB-010 resuelta para creación v2. La integración contra
+`CreateOrderCommandV2`, `shiftId` y la lectura activa sigue a cargo del
+coordinador después del merge.
+
+---
 
 ## A.R2 Segunda revisión del coordinador (2026-09-06)
 
