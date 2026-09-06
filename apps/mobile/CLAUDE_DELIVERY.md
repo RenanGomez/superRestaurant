@@ -5,9 +5,10 @@ revisión y **no integrada**: no hubo merge, rebase, push ni publicación de ram
 
 - **Unidad 2 — mesas y borrador de comanda (2026-09-05)**: sección A, abajo. Es
   el corte vigente y responde al mandato de la sección 0 del documento.
-  **Retrabajada el 2026-09-06** según la revisión 0.R1 del coordinador: la
-  sección **A.R1** describe esa ronda y es la que prevalece donde contradiga a
-  las secciones A.1 a A.11, escritas para el corte anterior `3061487a…`.
+  **Retrabajada dos veces el 2026-09-06**: la sección **A.R2** describe la
+  segunda revisión del coordinador y es la más reciente; **A.R1** describe la
+  primera. Donde se contradigan, prevalece la más reciente sobre A.R1, y ambas
+  sobre las secciones A.1 a A.11, escritas para el corte `3061487a…`.
 - **Unidad 1 — fundación Expo/Auth/sucursal**: ya integrada en `main` y marcada
   DONE. Su registro histórico se conserva a partir de la sección B y no describe
   el corte actual.
@@ -15,6 +16,133 @@ revisión y **no integrada**: no hubo merge, rebase, push ni publicación de ram
 ---
 
 # A. Unidad 2 — mesas y borrador de comanda
+
+## A.R2 Segunda revisión del coordinador (2026-09-06)
+
+Partiendo de `16a5e65460e0796470997bccd8103243316ad84b`, sobre la misma rama y el
+mismo worktree. Sin merge, rebase, cherry-pick, push ni `main` incorporado. El
+diff sigue confinado a `apps/mobile/**` y `pnpm-lock.yaml` no cambió. Los cinco
+hallazgos R1 siguen cubiertos por sus pruebas y no se regresionaron.
+
+| # | Hallazgo | Corrección |
+| --- | --- | --- |
+| 1 | `orderableGroups` recortaba a `DRAFT_MAX_GROUPS` **antes** de que `draftLineIssues` validara, así que un grupo activo obligatorio en la posición 51 quedaba invisible para la comprobación y la línea se entregaba sin cumplirlo | Se separan las dos responsabilidades: **`activeProductGroups`** devuelve *todos* los grupos activos con *todas* sus opciones activas y **nunca** recorta —es contra lo que se valida—, y **`orderableGroups`** queda como la lista acotada que la pantalla presenta. `draftLineIssues` usa la primera. El compositor de la pantalla ahora corre la **misma** comprobación fail-closed, así que lo que la UI permite y lo que el handoff acepta no pueden divergir, y avisa cuántos grupos no cabe mostrar |
+| 1b | Un catálogo puede exigir más grupos obligatorios de los que un comando admite | `draftLineIssues` lo reporta como no ordenable en vez de truncar. Los límites de `AddOrderItemCommandV1` no se relajaron: ningún comando lleva más de `DRAFT_MAX_GROUPS` grupos seleccionados. Queda registrado como **SR-MOB-012** |
+| 2 | `draftLineIssues` comprobaba que el producto siguiera activo, pero no su categoría | **`isOrderableProduct`** exige producto activo **y** categoría presente y activa. Un producto cuya categoría se retiró deja de ser alcanzable por un borrador compuesto antes del cambio, igual que ya no es alcanzable navegando |
+| 3 | A 390×844 el `ScrollView` de la barra del arnés consumía toda la columna y dejaba la aplicación con `clientHeight=0`; la matriz visual sólo podía ejecutarse editando DOM/CSS desde el navegador | La barra tiene un control **contraer/expandir** y está acotada incluso desplegada (`maxHeight: 240`). Es un `<button>` nativo enfocable, con nombre accesible «Controles del arnés», `accessibilityHint` que dice hacia dónde va, `accessibilityState.expanded` **y** `aria-expanded` explícito —react-native-web 0.21 no traduce el primero—, y objetivo táctil de **48 px** frente a los 44 px del resto de controles del arnés |
+
+Los dos primeros hacen que `buildOrderDraftHandoff` devuelva `undefined`, que
+`createOrderDeliveryTracker` traduce a `stale`, con **cero llamadas a `deliver`**
+y sin entrega parcial de ninguna otra línea.
+
+### Evidencia de los dos casos fail-closed
+
+| Caso | Evidencia |
+| --- | --- |
+| **51 grupos activos**, los 50 primeros opcionales y el 51 con `minimumQuantity: 1` | `activeProductGroups` devuelve 51; `orderableGroups` devuelve 50 y **no** contiene el grupo 51; con el grupo 51 sin elegir, `draftLineIssues` reporta el incumplimiento, `buildOrderDraftHandoff` devuelve `undefined`, el tracker reporta **`stale`** y `integration.calls() === 0`. Al satisfacer el grupo 51 la **misma** línea se vuelve entregable y el comando lleva 1 grupo: la regla es "el requisito se exige", no "muchos grupos se rechazan" |
+| **51 grupos, todos obligatorios** | `draftLineIssues` devuelve un único issue («exige 51 grupos obligatorios y una comanda admite 50»); `buildOrderDraftHandoff` devuelve `undefined` incluso seleccionando 50 de ellos |
+| **Categoría inactiva** | `isOrderableProduct` = `false`; `draftLineIssues` = `["La categoría de este producto ya no está publicada."]`; handoff `undefined`; tracker **`stale`**; `deliver` **0 veces** |
+| **Categoría inexistente** | `parseMenuCatalogStateV1` **rechaza** un cuerpo cuyo producto apunta a una categoría ausente —se afirma con `assert.throws`—, así que no puede llegar por la red; la rama defensiva se cubre con un catálogo ya parseado al que se le quita la categoría, y también falla cerrada |
+| **No hay entrega parcial** | Una línea de una categoría vigente es entregable por sí sola, pero compartir el handoff con una línea de categoría retirada lo invalida entero |
+
+### Matriz visual R2 — sin editar DOM ni CSS
+
+Recorrido completo con eventos reales de puntero, en **390×844** y **1024×768**.
+El panel del navegador de esta sesión sigue oculto y no dibuja, así que se mide
+sobre el DOM real, como en las rondas anteriores.
+
+| Caso | Viewport | Resultado |
+| --- | --- | --- |
+| Control contraíble: nombre, rol, estado y foco | 390×844 | ✅ `<button>`, `aria-label="Controles del arnés"`, `role=button`, `tabindex=0`, `aria-expanded` alterna `true`/`false`, texto «Ocultar controles ▲» / «Mostrar controles ▼» |
+| Objetivo táctil del control | 390×844 y 1024×768 | ✅ 48 px en ambos |
+| Altura utilizable de la aplicación | 390×844 | ✅ **740 px contraído** frente a 500 px desplegado; antes era **0** |
+| Altura utilizable de la aplicación | 1024×768 | ✅ **712 px contraído** frente a 472 px desplegado |
+| Contraer y volver a expandir | 390×844 | ✅ Alterna en ambos sentidos, con puntero y con activación de teclado |
+| Login sintético → sucursal → turno → mesa | 390×844 y 1024×768 | ✅ Recorrido completo con la barra contraída, sin tocar DOM ni CSS |
+| Composición con modificadores | 390×844 y 1024×768 | ✅ `1 × Arrachera…` con `• 1 × Bien cocido` |
+| Salida con confirmación | 390×844 y 1024×768 | ✅ «¿Volver a mesas y descartar el borrador?» · «…Volverás al plano de mesas y la mesa quedará sin borrador.» · botones de 48 px · `Conservar borrador` deja la línea intacta |
+| Descarte permaneciendo en la mesa | 390×844 | ✅ «Sí, descartar y seguir aquí» → sigue en Mesa 1 con «Borrador vacío» |
+| Envío aceptado sin reenvío | 390×844 | ✅ Las líneas salen del borrador; un segundo toque no añade ni un intento a la barra |
+| Doble toque en «Enviar comanda» | 390×844 | ✅ Un solo `crear table/XTS` + un `ítem draft-line-2` + un `abrir` |
+| Promesa colgada + cambio de turno | 390×844 | ✅ Queda «Enviando la comanda…»; tras cambiar de turno el borrador desaparece y **la comanda del turno nuevo se entrega sin bloqueo** |
+| Lanzamiento síncrono | 390×844 | ✅ «El servicio no está disponible en este momento.», la línea se conserva y `unhandledrejection` = **0** |
+| Desbordamiento horizontal | 390×844 y 1024×768 | ✅ `scrollWidth == innerWidth` en cada paso |
+| Dos columnas | 1024×768 | ✅ Catálogo 476 px en x=24, Borrador 476 px en x=524 |
+| Consola | ambos | ✅ Sin errores ni warnings del app |
+| Red | ambos | ✅ **0** llamadas a `/api/v1/orders*`, 0 recursos externos |
+
+Nota de método, para que el auditor pueda repetirlo: la activación por teclado
+se comprobó enviando un `click` sin eventos de puntero (`detail: 0`), que es
+exactamente lo que un `<button>` nativo enfocado emite al pulsar Enter o Espacio.
+Un `KeyboardEvent` sintético **no** dispara la activación por defecto del
+navegador —eso sólo ocurre con eventos de confianza—, así que ese camino no
+sirve como evidencia. El elemento es un `<button>` real con `tabindex=0`.
+
+### Commits de esta ronda
+
+| Hash | Mensaje |
+| --- | --- |
+| `531d1d6…` | `fix(mobile): validate a draft line against the whole published catalog` |
+| `7e05e32…` | `fix(mobile): make the harness control bar collapsible so the matrix is reproducible` |
+| (este documento) | `docs(mobile): record the second coordinator review` — su hash es el hash final y se reporta fuera del documento |
+
+Los hashes completos y el hash final se reportan en la entrega; se leen con
+`git rev-parse HEAD` sobre `claude/mobile-order-entry-ui-20260905`.
+
+### Archivos y compuertas de esta ronda
+
+Once archivos, todos bajo `apps/mobile/`. **Ninguno fuera**, y `pnpm-lock.yaml`
+sin tocar.
+
+**Modificados**: `src/order-draft.ts`, `src/order-draft.test.ts`,
+`src/order-intents.test.ts`, `src/order-delivery.test.ts`,
+`src/bundle-isolation.test.ts`, `src/test-fixtures.ts`,
+`src/ui/order-draft-screen.tsx`, `harness/harness-root.tsx`,
+`harness/README.md`, y este documento junto con `BACKEND_REQUESTS.md`.
+
+Node **v24.19.0**, pnpm 11.19.0.
+
+| Comando | Resultado |
+| --- | --- |
+| `pnpm --filter @super-restaurant/mobile lint` | ✅ 0 errores, 0 warnings |
+| `pnpm --filter @super-restaurant/mobile typecheck` | ✅ sin errores |
+| `pnpm --filter @super-restaurant/mobile test` | ✅ **150 pruebas, 0 fallos** (eran 141) |
+| `pnpm --filter @super-restaurant/mobile exec expo install --check` | ✅ `Dependencies are up to date` |
+| `pnpm --filter @super-restaurant/mobile build` | ✅ `.hbc` de 2,232,339 bytes |
+| `pnpm lint --force` | ✅ 8/8, **0 en caché**, 13.9 s |
+| `pnpm typecheck --force` | ✅ 11/11, **0 en caché**, 14.0 s |
+| `pnpm test --force` | ✅ 11/11, **0 en caché**, 43.4 s |
+| `pnpm build --force` | ✅ 8/8, **0 en caché**, 28.7 s |
+| `git diff --check` | ✅ sin errores de espacios; finales de línea LF sin cambios |
+
+Las 9 pruebas nuevas: 3 en `order-draft` (presentación acotada frente a
+validación completa; grupo y opción inactivos excluidos de **ambas**; producto
+ordenable sólo con su categoría activa), 3 en `order-intents` (grupo obligatorio
+más allá del tope y su contraparte satisfecha; catálogo con más obligatorios de
+los representables; categoría retirada, inexistente y sin entrega parcial), 2 en
+`order-delivery` (los dos casos anteriores traducidos a `stale` con `deliver`
+cero veces) y 1 en `bundle-isolation` (contrato del control contraíble).
+
+**Aislamiento del bundle** sobre el `.hbc` reexportado: contiene `Enviar
+comanda`, `Agregar al borrador`, `Descartar borrador` y `draft-line-`; **no**
+contiene `Ocultar controles`, `Mostrar controles`, `Controles del arn`,
+`Intentos ofrecidos`, `harness`, `HARNESS_NETWORK_DOWN`,
+`HARNESS_SESSION_UNREADABLE`, `HARNESS_SYNCHRONOUS_THROW`,
+`sb_publishable_fixture`, `operador.a.sintetico`, `Limpiar intentos`,
+`Grupo sint`, `example.invalid` ni `XTS`.
+
+**CodeGraph final** (índice re-sincronizado: 8 archivos, 188 nodos): el flujo
+queda `buildOrderDraftHandoff → draftLineIssues → isOrderableProduct`, y el
+blast radius de `activeProductGroups`, `orderableGroups`, `isOrderableProduct`,
+`draftLineIssues`, `buildOrderDraftHandoff` y `createOrderDeliveryTracker`
+devuelve consumidores **sólo** dentro de `apps/mobile/**`. `draftLineIssues`
+pasó de «sin pruebas que lo cubran» a estar cubierto por `order-draft.test.ts` y
+`order-intents.test.ts`.
+
+**La P2 no está terminada ni integrada**: sigue sin conectar mutaciones de Order
+y sin la lectura de líneas de la orden activa.
+
+---
 
 ## A.R1 Retrabajo de la revisión del coordinador (2026-09-06)
 

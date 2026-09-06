@@ -311,3 +311,33 @@ token se escribe en almacenamiento ni se registra en logs.
   mobile; hoy debe consultarlo en la caja web.
 - **Decisión requerida**: publicar los importes junto con la lectura de
   SR-MOB-007, o como un contrato aparte. Mobile no los calculará.
+
+## SR-MOB-012 — Un catálogo puede publicar más grupos obligatorios de los que un comando admite
+
+- **Capacidad requerida**: una regla acordada para el caso en que un producto
+  publique más grupos de modificadores **obligatorios** (`minimumQuantity >= 1`)
+  de los que un solo `AddOrderItemCommandV1` puede transportar.
+- **Pantalla o caso de uso bloqueado**: la toma de comanda de ese producto, por
+  completo. No es hipotético en el contrato: `MenuCatalogV1` admite hasta 2,000
+  grupos por catálogo, mientras que `parseAddOrderItemCommandV1` acepta como
+  máximo 50 grupos en un comando. Con 51 grupos obligatorios no existe ninguna
+  selección válida que quepa en el comando.
+- **Contrato o endpoint buscado**: ninguno lo impide hoy. El catálogo no valida
+  que un producto sea pedible dentro de los límites del comando, así que puede
+  publicarse un producto que ningún cliente puede ordenar.
+- **Evidencia**: reproducido con una fixture sintética de 51 grupos activos y
+  obligatorios en `apps/mobile/src/order-intents.test.ts`.
+- **Estado en este entregable**: mobile **falla cerrado y lo dice**. Al construir
+  el handoff, un producto en esa situación produce un único mensaje operativo
+  —«exige N grupos obligatorios y una comanda admite 50»— y el envío se reporta
+  como `stale` sin llamar a la integración. **No se trunca la selección** ni se
+  relajan los límites del comando: enviar 50 de 51 grupos obligatorios sería
+  construir una comanda que el servidor rechazaría, o peor, aceptaría incompleta.
+- **Impacto si se difiere**: un error de captura en el catálogo deja un producto
+  imposible de comandar desde mobile, y el operador solo se entera al intentar
+  enviarlo. Hoy el mensaje le dice que lo pida en caja.
+- **Decisión requerida**: decidir dónde se impone la coherencia —validación al
+  publicar el catálogo, un límite declarado en el contrato de menú, o un comando
+  capaz de transportar más grupos— y si el cliente debe ocultar por completo los
+  productos que no puede representar en lugar de explicarlo al enviar. Mobile no
+  inventará una regla de dominio para esto.
