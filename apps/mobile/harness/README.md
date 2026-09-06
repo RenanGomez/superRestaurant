@@ -42,6 +42,27 @@ $env:MOBILE_VISUAL_HARNESS = "1"; pnpm --filter @super-restaurant/mobile run web
   `b` entra el operador B (`FIXTURE_USER_B`); cualquier otro correo entra como
   operador A (`FIXTURE_USER_A`). Los dos son sintéticos y no existen en ningún
   entorno.
+- **Envío de comanda**: elige qué contesta la integración de borrador —sin
+  conexión (lo que trae la app real), aceptado, aceptado lento, conflicto, sin
+  autorización, red caída, protocolo inválido y servicio no disponible—. La
+  barra imprime los intentos que la pantalla ofreció y las claves exactas de
+  cada uno; `Limpiar intentos ofrecidos` los borra. El doble **no hace ninguna
+  petición**: solo recibe los intentos y devuelve el resultado elegido.
+
+## Recorrer la comanda
+
+1. Ingresa, elige sucursal y turno; la pestaña **Mesas** ahora es una selección
+   táctil. No muestra ocupación ni cuenta: esa lectura no existe en el servidor.
+2. Toca una mesa para abrir su borrador. Elige categoría, producto, cantidad y
+   modificadores; el botón de agregar permanece deshabilitado mientras el
+   catálogo no permita la combinación, y explica por qué.
+3. Edita o elimina líneas, y prueba **Descartar borrador**: la confirmación
+   ocurre dentro de la pantalla, nunca con `confirm()`.
+4. Pulsa **Enviar comanda** dos veces seguidas: la barra debe mostrar un solo
+   `crear` + un `ítem` por línea + un `abrir`, y el borrador queda congelado
+   mientras el envío está en vuelo.
+5. Cambia de turno, de sucursal o cierra sesión con un borrador abierto: debe
+   desaparecer por completo.
 
 ## Proveedor deliberadamente hostil
 

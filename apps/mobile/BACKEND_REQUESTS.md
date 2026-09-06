@@ -183,3 +183,115 @@ token se escribe en almacenamiento ni se registra en logs.
   `apps/mobile/package.json` y el `pnpm-lock.yaml` derivado; no se relajó
   `minimumReleaseAge` ni se modificó `pnpm-workspace.yaml`.
   `expo install --check` responde `Dependencies are up to date` (exit 0).
+
+---
+
+## SR-MOB-007 — Lectura consolidada de la orden activa de una mesa
+
+- **Capacidad requerida**: un contrato versionado y un endpoint autorizado que
+  devuelvan, para un par Restaurant/Branch y un `tableId`, si existe una orden
+  abierta y cuál es su estado, versión, líneas y estados de `OrderItem`.
+- **Pantalla o caso de uso bloqueado**: la vista de mesas no puede indicar
+  ocupación, cuenta ni comanda en curso, y el compositor no puede continuar una
+  comanda existente: solo puede empezar un borrador local. Tampoco puede
+  aportar el `expectedVersion` que exigen `AddOrderItemCommandV1` y
+  `OpenOrderCommandV1`.
+- **Contrato o endpoint buscado**: `packages/shared-types` expone
+  `parseOrderMutationSummaryV1`, que es la **respuesta de una mutación**, no una
+  lectura. `apps/api` expone `POST /api/v1/orders`, `/orders/items`,
+  `/orders/open` y `/orders/items/transition`; `GET /api/v1/kds/tickets` es una
+  lectura por estación, no por mesa.
+- **Evidencia de no disponibilidad**: CodeGraph sobre el worktree en
+  `f1f8f27b4732810ee26c1bbab122016a7ede0dc1` sitúa a `OrderMutationSummaryV1`
+  solo en `packages/shared-types/src/orders.ts`, `apps/api/src/orders.ts`,
+  `apps/api/src/orders.controller.ts` y el verificador de tenancy; no existe
+  ningún símbolo de lectura de orden por mesa. El mandato §0.5 lo declara
+  explícitamente ausente.
+- **Datos mínimos que necesitaría la UI**: por mesa, si hay orden abierta; su
+  `orderId`, `version` y estado; y por línea, producto, cantidad, modificadores
+  y estado de preparación. Descrito como necesidad, no como diseño impuesto.
+- **Estado en este entregable**: la pantalla de mesas dice en texto que no
+  muestra ocupación, cuenta ni orden activa, y el compositor declara que el
+  borrador es local al dispositivo. No se inventó estado autoritativo alguno.
+- **Impacto si se difiere**: dos operadores pueden componer borradores para la
+  misma mesa sin verse, y el borrador no puede reanudar una comanda existente.
+- **Decisión requerida**: definir el contrato de lectura y su permiso RBAC antes
+  de conectar las mutaciones de Order desde mobile.
+
+## SR-MOB-008 — Zona horaria operativa autoritativa de la sucursal
+
+- **Capacidad requerida**: que el servidor determine el `timeZone` que exige
+  `CreateOrderCommandV1`, o que lo publique en un contrato que mobile pueda
+  leer.
+- **Pantalla o caso de uso bloqueado**: la creación real de una orden desde
+  mobile. El intent `CreateOrderIntentV1` de este entregable omite `timeZone` a
+  propósito.
+- **Contrato o endpoint buscado**: `parseCreateOrderCommandV1` valida
+  `timeZone` con `Intl.DateTimeFormat`, pero ningún contrato de acceso, layout,
+  catálogo o turno publica la zona de la sucursal.
+- **Evidencia de no disponibilidad**: `BranchMembershipSummaryV1`,
+  `DiningLayoutV1`, `MenuCatalogStateV1` y `OperationalShiftSummaryV1` no
+  contienen zona horaria. `PROJECT_NOTES.md` registra `America/Hermosillo` como
+  decisión de producto, no como dato del contrato.
+- **Impacto si se difiere**: ninguno para este slice. Al conectar la mutación,
+  el cliente tendría que adivinar la zona de la sucursal, que es exactamente lo
+  que `AGENTS.md` §5 prohíbe.
+- **Decisión requerida**: derivarla en el servidor a partir de la sucursal, o
+  añadirla al contrato de acceso/turno. Mobile no la asumirá.
+
+## SR-MOB-009 — `deviceId` estable para la identidad de auditoría
+
+- **Capacidad requerida**: una política aprobada para obtener un `deviceId` UUID
+  estable por instalación, y una decisión sobre quién acuña `eventId` e
+  `idempotencyKey` en el flujo móvil.
+- **Pantalla o caso de uso bloqueado**: cualquier mutación de Order. Los cuatro
+  comandos exigen `deviceId`, `eventId`, `idempotencyKey` y `occurredAt`.
+- **Contrato o endpoint buscado**: `OrderAuditInputV1` los exige, pero nada en
+  `apps/mobile` puede producir un `deviceId` que sobreviva al proceso: la
+  sesión es solo de memoria y no hay almacenamiento aprobado (SR-MOB-001).
+- **Estado en este entregable**: `src/order-intents.ts` omite deliberadamente
+  todos esos campos y lo documenta. Un `deviceId` aleatorio por arranque haría
+  inútil la deduplicación por dispositivo, así que no se generó ninguno.
+- **Impacto si se difiere**: sin identidad de dispositivo estable, un reintento
+  tras reiniciar la app no podría deduplicarse por dispositivo.
+- **Decisión requerida**: elegir el origen del `deviceId` —junto con la decisión
+  de almacenamiento de SR-MOB-001— y confirmar si el cliente acuña `eventId` e
+  `idempotencyKey` o si los entrega el servidor.
+
+## SR-MOB-010 — Validación del turno operativo en las mutaciones de Order
+
+- **Capacidad requerida**: confirmar si una comanda queda ligada al turno
+  operativo y, en ese caso, cómo viaja esa relación.
+- **Pantalla o caso de uso bloqueado**: el envío real de la comanda. La UI ya
+  obliga a seleccionar un turno abierto antes de leer mesas y menú, pero el
+  intent no puede declarar una relación que el contrato no modela.
+- **Contrato o endpoint buscado**: `CreateOrderCommandV1`, `AddOrderItemCommandV1`
+  y `OpenOrderCommandV1` no contienen `shiftId`, y el mandato §0.1 indica que el
+  backend todavía no valida el turno operativo nuevo en esas mutaciones.
+- **Evidencia de no disponibilidad**: CodeGraph no encuentra ninguna referencia
+  a turno en `packages/shared-types/src/orders.ts` ni en `apps/api/src/orders.ts`.
+- **Impacto si se difiere**: una comanda podría enviarse fuera de un turno
+  abierto sin que el servidor lo note, y los cortes por turno no cuadrarían.
+- **Decisión requerida**: decidir si `shiftId` entra en los comandos de Order o
+  si el servidor lo deriva del estado de la sucursal, y hacerlo antes de
+  conectar el envío.
+
+## SR-MOB-011 — Importes calculados por el servidor para mostrarlos en la comanda
+
+- **Capacidad requerida**: una lectura autorizada que devuelva subtotal,
+  impuestos, descuentos y total de una orden, en unidad menor entera y con la
+  moneda del contrato.
+- **Pantalla o caso de uso bloqueado**: la comanda solo muestra precios
+  unitarios. No puede decirle al operador cuánto suma lo que lleva, y el mandato
+  §0.6 prohíbe calcularlo en el dispositivo, con razón: duplicaría reglas de
+  dominio de dinero.
+- **Contrato o endpoint buscado**: `OrderMutationSummaryV1` devuelve estado y
+  versión, no importes. `packages/domain` calcula totales, pero no puede
+  importarse desde el cliente sin duplicar la regla en el bundle.
+- **Estado en este entregable**: la pantalla declara en texto que no calcula
+  subtotales, impuestos, descuentos, propinas ni total, y una prueba verifica
+  que el módulo de borrador no referencia ningún importe ni moneda.
+- **Impacto si se difiere**: el operador no ve el importe de la comanda desde
+  mobile; hoy debe consultarlo en la caja web.
+- **Decisión requerida**: publicar los importes junto con la lectura de
+  SR-MOB-007, o como un contrato aparte. Mobile no los calculará.

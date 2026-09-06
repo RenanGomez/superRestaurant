@@ -1,7 +1,351 @@
-# Entrega — fundación frontend móvil (`apps/mobile`)
+# Entregas del workstream frontend móvil (`apps/mobile`)
 
-Mandato: `docs/CLAUDE_FRONTEND_WORKSTREAM.md`. Entrega lista para revisión, **no
-integrada**. No hubo merge, rebase, push ni publicación de rama.
+Mandato: `docs/CLAUDE_FRONTEND_WORKSTREAM.md`. Cada unidad queda lista para
+revisión y **no integrada**: no hubo merge, rebase, push ni publicación de rama.
+
+- **Unidad 2 — mesas y borrador de comanda (2026-09-05)**: sección A, abajo. Es
+  el corte vigente y responde al mandato de la sección 0 del documento.
+- **Unidad 1 — fundación Expo/Auth/sucursal**: ya integrada en `main` y marcada
+  DONE. Su registro histórico se conserva a partir de la sección B y no describe
+  el corte actual.
+
+---
+
+# A. Unidad 2 — mesas y borrador de comanda
+
+## A.1 Punto de partida
+
+- **Hash base**: `f1f8f27b4732810ee26c1bbab122016a7ede0dc1`
+  (`docs(mobile): make Claude base handoff stable`), descendiente del ancestro
+  mínimo exigido `c6f87961b2afddaef0c84fec50e8fa5ae4abbbc2` y portador del
+  mandato de la sección 0.
+- **Rama**: `claude/mobile-order-entry-ui-20260905`.
+- **Worktree**: `.claude/worktrees/mobile-order-entry-ui-a7b3c5`, creado para
+  esta sesión. **No se reutilizó** el worktree de la fundación
+  (`.claude/worktrees/super-restaurant-mobile-foundation-2acb73`), que sigue
+  intacto en su propia rama. El worktree lo creó el arnés de sesión con un
+  sufijo aleatorio; la rama se renombró al nombre sugerido por el mandato.
+- Árbol limpio al iniciar y al terminar. No se incorporó ningún commit posterior
+  de `main`, ni hubo merge, rebase, push o cambio en otra rama.
+- Archivos operativos leídos una sola vez: `AGENTS.md`, `TODO.md`, la sección
+  Fase 2 del plan maestro y `docs/CLAUDE_FRONTEND_WORKSTREAM.md` completo.
+  `PROJECT_NOTES.md` y `HANDOFF.md` son bitácoras acumulativas de 107 KB y
+  269 KB; se leyeron dirigidamente —las secciones vigentes, las decisiones
+  durables de mesas/layout y la coordinación del 2026-09-05— en lugar de
+  completas, para no agotar la ventana de contexto de esta unidad. Queda
+  registrado como desviación deliberada.
+
+### Commits de esta unidad
+
+| Hash | Mensaje |
+| --- | --- |
+| `b13ee69b1dc76c713608d6119a5c65dfd47f4843` | `feat(mobile): add an ephemeral order draft state and its integration seam` |
+| `caadba3974841ef72367d7287b0df5ff6e599cde` | `feat(mobile): select a table and compose its comanda draft` |
+| `d875cac706f7b9491ddfe10998b1e56202938328` | `test(mobile): cover table selection, draft composition and the hand-over` |
+| `898a5d5aab015e4db6242e6e3e0ef40c9f1bb12b` | `test(mobile): drive the comanda hand-over from the isolated harness` |
+| (este documento) | `docs(mobile): record the order entry slice` — su hash se reporta al cierre, porque un commit no puede contener el suyo |
+
+## A.2 MCP instalados y usados
+
+Emmanuel autorizó instalar y usar los MCP necesarios para esta unidad.
+
+| Paso | Resultado |
+| --- | --- |
+| `codegraph install --target claude --location global --yes` | ✅ Escribió solo configuración de usuario: `~/.claude.json`, `~/.claude/settings.json` y `~/.claude/CLAUDE.md`. **Nada dentro del repositorio**; `git status` quedó limpio inmediatamente después. Se añadió `--yes` porque el instalador es interactivo y esta sesión no tiene stdin; el destino y la ubicación son los que pidió el mandato |
+| `claude plugin install expo@claude-plugins-official` | ✅ `Successfully installed plugin: expo@claude-plugins-official (scope: user)`. **No pidió iniciar sesión en ninguna cuenta Expo**, así que no hubo que detenerse en ese paso |
+| `/mcp` | ⚠️ No disponible: los diálogos interactivos de terminal no existen en el cliente de escritorio. En su lugar se comprobó la disponibilidad real por su efecto: el hook de CodeGraph empezó a inyectar contexto estructural en esta sesión, la herramienta MCP `codegraph_explore` quedó expuesta y la CLI `codegraph` respondió a `status`, `init`, `sync` e `impact`. Se reporta como limitación del entorno, no como omisión |
+
+No se usó Supabase MCP, EAS, publicación, firma, credenciales ni ninguna
+operación remota.
+
+### CodeGraph — antes y después
+
+El índice global vivía en el checkout principal e incluía los worktrees, así que
+el propio CodeGraph avisó de la discrepancia. Se construyó un índice **local a
+este worktree** (`codegraph init -i .`, 274 archivos, 4,736 nodos, 18,953
+relaciones); `.codegraph/` está en `.gitignore` y no aparece en el diff.
+
+- **Antes de editar**: `impact` sobre `TablesScreen`, `MenuScreen`,
+  `reduceMobileState` y `MobileState` confirmó que ninguno tiene consumidores
+  fuera de `apps/mobile/**`. `impact` sobre `CreateOrderCommandV1`,
+  `AddOrderItemCommandV1`, `OpenOrderCommandV1`, `OrderMutationSummaryV1` y
+  `ModifierGroupSelectionV1` los situó exclusivamente en
+  `packages/shared-types/src/orders.ts`, `apps/api/src/orders.ts`,
+  `apps/api/src/orders.controller.ts` y el verificador de tenancy: no existe
+  ningún consumidor móvil ni ninguna lectura de orden por mesa.
+- **Después de editar**: `codegraph sync` procesó 13 archivos (5 nuevos, 8
+  modificados) y el índice quedó en 279 archivos, 4,862 nodos y 19,507
+  relaciones. `impact` sobre `reduceOrderDraft`, `OrderDraftScreen`,
+  `buildOrderDraftHandoff`, `disconnectedOrderDraftIntegration`,
+  `renderMinorAmount` y `TablesScreen` devuelve consumidores **solo** dentro de
+  `apps/mobile/**`, sin referencias rotas ni símbolos huérfanos.
+
+## A.3 Alcance implementado
+
+- **Selección táctil de mesa**: cada mesa es un control de 48 px con etiqueta
+  accesible `zona, mesa, capacidad`, foco visible y estado seleccionado. Muestra
+  solo lo que trae `DiningLayoutV1` —zona, nombre, capacidad y forma— y declara
+  en texto que **no** muestra ocupación, cuenta ni orden activa.
+- **Compositor visual del borrador** por mesa: categorías y productos del
+  catálogo publicado, cantidad entera, grupos y opciones de modificadores que el
+  contrato sigue publicando como activos, líneas editables y eliminables, salida
+  segura a mesas y descarte con confirmación **dentro de la pantalla**.
+- **Estados operativos explícitos**: `idle` (sin mesa), vacío, cargando, listo,
+  enviando, éxito, conflicto, autorización, red, protocolo, más dos propios de
+  esta frontera: catálogo obsoleto (`stale`) e integración sin conectar
+  (`notConnected`).
+- **Callbacks tipados** para `crear orden`, `agregar ítem` y `abrir/enviar
+  comanda`, más una integración que reporta el resultado. La que trae el
+  producto acepta el borrador, **no hace ninguna petición** y lo dice.
+- **Limpieza de contexto**: el borrador pertenece a un operador, una sucursal y
+  un turno; al cambiar cualquiera de ellos —o al cerrar sesión, o si el servidor
+  revoca el acceso— se descarta en la misma transición.
+
+### Alcance omitido deliberadamente
+
+- Mutaciones productivas de Order: ningún gesto llama a `POST /api/v1/orders`,
+  `/orders/items` ni `/orders/open`. La lista de rutas autorizadas del cliente
+  sigue siendo la misma y una prueba la fija.
+- Lectura de la orden activa de una mesa, ocupación, disponibilidad y cuenta
+  (SR-MOB-007): no existen en el servidor y no se simularon.
+- Subtotales, impuestos, descuentos, propinas y totales (SR-MOB-011): la
+  pantalla muestra únicamente precios unitarios del contrato.
+- CFDI, fiscalidad, pagos, caja, impresión, notificaciones push y offline.
+- Cualquier cambio fuera de `apps/mobile/**`.
+
+## A.4 Archivos
+
+Todos dentro de `apps/mobile/**`. **`pnpm-lock.yaml` no cambió**: no se añadió,
+quitó ni actualizó ninguna dependencia.
+
+**Nuevos**: `src/order-draft.ts`, `src/order-draft.test.ts`,
+`src/order-intents.ts`, `src/order-intents.test.ts`,
+`src/ui/order-draft-screen.tsx`.
+
+**Modificados**: `src/ui/tables-screen.tsx`, `src/ui/app.tsx`,
+`src/ui/menu-screen.tsx`, `src/money.ts`, `src/money.test.ts`,
+`src/test-fixtures.ts`, `harness/harness-server.ts`, `harness/harness-root.tsx`,
+`harness/README.md`, `package.json`, `tsconfig.test.build.json`, y este
+documento junto con `BACKEND_REQUESTS.md`.
+
+## A.5 Cómo se respetaron las fronteras de dominio
+
+| Regla del mandato | Cómo se cumple, y cómo se comprueba |
+| --- | --- |
+| No calcular dinero en mobile | `src/order-draft.ts` no referencia ningún importe ni moneda. Una prueba lee el módulo del disco, le quita los comentarios y falla si aparece `unitPriceMinor`, `amountMinor`, `PriceMinor`, `currency`, `MXN` o `formatMinorAmount` |
+| Moneda del contrato, nunca `MXN` por defecto | `renderMinorAmount` exige entero seguro e ISO de tres letras mayúsculas; si no, muestra "Precio no disponible". `buildOrderDraftHandoff` devuelve `undefined` ante una moneda malformada en lugar de sustituirla. Probado con `""`, `"mxn"`, `"MX"`, `"MXNN"`, `" MXN"` y `"XT1"` |
+| No inventar estado autoritativo | La mesa no declara ocupación; el borrador se declara local; la integración por defecto responde "no conectado" en vez de fingir éxito |
+| No repetir UUID documentados | Los 12 identificadores nuevos de fixture se generaron con `crypto.randomUUID()` en esta sesión y se comprobó por `grep` que ninguno existía en el repositorio |
+| No duplicar reglas de dominio | Los únicos límites que la UI aplica son los que el propio contrato publica (`minimumQuantity`/`maximumQuantity` por grupo y por opción) y el rango entero que acepta `parseAddOrderItemCommandV1`. Existen para no ofrecer lo que el contrato ya rechaza; el servidor revalida |
+| Tipos locales solo de presentación | `OrderDraftState` guarda mesa, líneas, composición en curso y estado de envío. Los identificadores de línea son `draft-line-N`, **no** UUID, y una prueba lo fija |
+| Ningún `alert`/`confirm`/`prompt` | El descarte se confirma con un bloque dentro de la pantalla, con `accessibilityRole="alert"` |
+
+## A.6 Pruebas
+
+`pnpm --filter @super-restaurant/mobile test` ejecuta **118 pruebas, 0 fallos**
+(antes de esta unidad eran 84):
+
+| Archivo | Pruebas |
+| --- | --- |
+| config | 5 |
+| session | 7 |
+| supabase-auth | 2 |
+| lifecycle | 4 |
+| revalidation | 6 |
+| sign-out | 5 |
+| auth-gate | 8 |
+| bundle-isolation | 2 |
+| money | 5 (+1) |
+| mobile-client | 17 |
+| mobile-state | 24 |
+| **order-draft** | **24 (nuevo)** |
+| **order-intents** | **9 (nuevo)** |
+
+Lo que cubren las 33 nuevas: selección, reselección y cambio de mesa; borrador
+vacío; producto con modificadores y cantidad; edición de línea en su sitio;
+eliminación; descarte confirmado y cancelado; cambio de contexto; doble toque
+sobre la mesa, sobre el compositor, sobre los steppers y sobre la acción
+primaria; congelación del borrador durante el envío; cada estado de fallo con su
+mensaje; filtrado de categorías, productos, grupos y opciones inactivos; los
+límites publicados por el catálogo; la forma exacta de los tres intents y la
+ausencia de todo campo de auditoría; la moneda sin valor por defecto; el orden
+crear → ítems → abrir; y la lista de rutas Nest sin ninguna ruta de Order.
+
+Dos son invariantes en lugar de comportamiento: la ausencia de dinero en el
+módulo de borrador, y que ninguna fuente de comanda contenga `fetch(`, `/api/`,
+`XMLHttpRequest`, `WebSocket` ni `MOBILE_API_PATHS`, con el cliente HTTP
+alcanzable solo por un `import type`.
+
+Además, las fixtures nuevas se parsean con `parseDiningLayoutV1` y
+`parseMenuCatalogStateV1` dentro de una prueba, así que un cuerpo que el
+servidor rechazaría falla en `pnpm test` y no solo en el navegador. Esa prueba
+ya atrapó dos defectos reales de fixture durante esta sesión.
+
+## A.7 Comandos ejecutados
+
+Entorno: Windows 10, pnpm 11.19.0 y **Node v24.19.0**, la versión que declara
+`engines.node`. El binario oficial ya estaba descargado y verificado por SHA-256
+en una sesión anterior de este proyecto; se copió al scratchpad de esta sesión y
+se usó desde ahí. **No se descargó nada nuevo** y no se instaló nada en el
+sistema ni se tocó configuración del repositorio.
+
+Del app:
+
+| Comando | Resultado |
+| --- | --- |
+| `pnpm --filter @super-restaurant/mobile lint` | ✅ 0 errores, 0 warnings |
+| `pnpm --filter @super-restaurant/mobile typecheck` | ✅ sin errores |
+| `pnpm --filter @super-restaurant/mobile test` | ✅ **118 pruebas, 0 fallos** |
+| `pnpm --filter @super-restaurant/mobile exec expo install --check` | ✅ `Dependencies are up to date`, exit 0 |
+| `pnpm --filter @super-restaurant/mobile build` | ✅ `tsc --noEmit` + `expo export --platform android` → 659 módulos, bundle Hermes de 2.2 MB en `dist/` (ignorado por Git) |
+
+Globales, sin caché (`--force`), con Node 24.19.0:
+
+| Comando | Resultado |
+| --- | --- |
+| `pnpm lint --force` | ✅ 8/8 tareas, 0 en caché, 19.0 s |
+| `pnpm typecheck --force` | ✅ 11/11 tareas, 0 en caché, 24.5 s |
+| `pnpm test --force` | ✅ 11/11 tareas, 0 en caché, 66.0 s |
+| `pnpm build --force` | ✅ 8/8 tareas, 0 en caché, 86.1 s |
+
+`git diff --check` no reporta errores de espacios en la rama ni en el árbol.
+
+Nota operativa: Turbo necesita `pnpm` en `PATH` y ejecuta las tareas con el
+entorno filtrado, así que el shim temporal del scratchpad tuvo que apuntar al
+binario por ruta absoluta en vez de por variable de entorno. No se modificó
+ninguna configuración del repositorio.
+
+### Aislamiento del arnés en el bundle distribuible
+
+Sobre el `.hbc` exportado (2,226,932 bytes): contiene `Enviar comanda`,
+`Agregar al borrador`, `Descartar borrador` y `draft-line-`, y **no** contiene
+`Intentos ofrecidos`, `harness`, `HARNESS_NETWORK_DOWN`,
+`HARNESS_SESSION_UNREADABLE`, `sb_publishable_fixture`, `operador.a.sintetico`,
+`Limpiar intentos` ni la moneda de prueba `XTS`. Solo se buscan cadenas ASCII
+porque Hermes guarda en UTF-16 cualquier literal con acentos o `·`.
+
+## A.8 Matriz de validación visual
+
+Runtime: **Expo web (react-native-web)** con Metro local sobre Node 24.19.0,
+conducido con un navegador real y el arnés (`MOBILE_VISUAL_HARNESS=1`). Todas
+las respuestas son fixtures sintéticas locales; no se usó credencial, usuario ni
+dato remoto, y el cliente, los parsers compartidos y la máquina de estados son
+los reales.
+
+| Caso | Viewport | Resultado |
+| --- | --- | --- |
+| Plano de mesas con dos zonas y tres mesas, seleccionables | 390×844 | ✅ Sin ocupación ni cuenta; el aviso lo dice explícitamente |
+| Nombre de mesa largo (36 de 40 caracteres) | 390×844 y 1024×768 | ✅ Envuelve sin desbordar |
+| Entrar al compositor desde una mesa | 390×844 | ✅ Encabezado con zona, mesa, capacidad y "Borrador local, sin orden creada" |
+| Borrador vacío | 390×844 | ✅ Estado explícito con instrucción |
+| Producto con grupo obligatorio sin cumplir | 390×844 | ✅ "«Término» requiere al menos 1." y acción deshabilitada (`aria-disabled=true`, opacidad 0.6) |
+| Filtrado del catálogo | 390×844 | ✅ La opción inactiva, el producto inactivo, el grupo inactivo y la categoría inactiva no aparecen |
+| Doble toque en `+` de cantidad | 390×844 | ✅ 1 → 3, no 1 → 2 |
+| Tope por opción (`Queso extra`, máximo 2) | 390×844 | ✅ Tres toques rápidos quedan en 2 |
+| Dos líneas con modificadores | 390×844 | ✅ Solo precios unitarios; ningún total en pantalla |
+| Aislamiento entre sucursales | 1024×768 | ✅ Sucursal 1 `12,500 u.m. · XTS`, sucursal 2 `9,900 u.m. · XTS` |
+| Editar una línea | 390×844 | ✅ Reabre con cantidad y modificadores; el botón pasa a "Guardar línea" |
+| Descarte con confirmación | 390×844 | ✅ "¿Descartar el borrador?" · "Conservar borrador" mantiene la línea · "Sí, descartar" la elimina y **conserva la mesa** |
+| Doble toque en "Enviar comanda" | 390×844 | ✅ La barra del arnés registra un solo `crear` + un `ítem` + un `abrir` |
+| Intents ofrecidos | 390×844 | ✅ `crear table/XTS [channel,currency,scope,tableId]`, `ítem draft-line-1 ×1 [draftLineId,modifierGroups,productId,quantity,scope]`, `abrir [scope,tableId]` — sin ningún campo de auditoría |
+| Envío: sin conexión de integración | 390×844 | ✅ "El envío de comandas todavía no está conectado con el servidor…" |
+| Envío: enviando y éxito | 390×844 | ✅ "Enviando la comanda…" con la acción deshabilitada, luego "La comanda se entregó al servidor." |
+| Envío: conflicto | 390×844 | ✅ "La comanda cambió en el servidor mientras la editabas…" |
+| Envío: autorización / red / protocolo | 390×844 | ✅ Los tres mensajes compartidos del cliente |
+| Cambiar turno con borrador abierto | 390×844 | ✅ Vuelve a turnos; al reentrar, el plano no tiene mesa seleccionada ni borrador |
+| Cambiar sucursal con borrador abierto | 390×844 | ✅ Igual, y la sucursal 2 muestra su propio plano y precios |
+| Dos columnas catálogo/borrador | 1024×768 | ✅ `row`, 476 px + 476 px con origen en 24 y 524 |
+| Mesas en dos columnas | 1024×768 | ✅ 477 px + 477 px |
+| Desbordamiento horizontal | 390×844 y 1024×768 | ✅ `scrollWidth == innerWidth` en cada paso del recorrido |
+| Objetivos táctiles | 390×844 y 1024×768 | ✅ Todos los controles del app ≥ 48 px, incluidos los `−`/`+` (48×48). Los controles de 44 px que aparecen en la medición son de la barra del arnés, no del producto |
+| Contraste medido sobre los elementos nuevos | 390×844 | ✅ 16.31 (nombre de grupo y opción), 8.68 (`+`, acciones), 7.03 (precio unitario, límites del grupo, mensajes de validación) — todos ≥ AA |
+| Foco visible por teclado en un stepper | 390×844 | ✅ 1 px → 3 px `#0b3a7d` → 1 px, `tabIndex=0`, rol y etiqueta correctos |
+| Etiquetas accesibles del stepper | 390×844 | ✅ `Disminuir Cantidad` · `Cantidad: 1` · `Aumentar Cantidad`, sin duplicar el nombre en la fila contenedora |
+| Consola | ambos | ✅ Sin warnings ni errores del app durante todo el recorrido |
+| Red | ambos | ✅ `performance.getEntriesByType('resource')` = 1 entrada, el bundle local; cero destinos externos y cero llamadas a `/api/v1/orders*` |
+
+Notas de método:
+
+- El panel del navegador de esta sesión queda oculto y no dibuja, así que —como
+  en las rondas anteriores— la interfaz se condujo con eventos reales de
+  puntero, clic e `input` y se midió sobre el DOM real (`innerText`,
+  `getBoundingClientRect`, `getComputedStyle`, `scrollWidth` frente a
+  `innerWidth`). No hay capturas de pantalla de esta unidad.
+- **Reduced motion** no se pudo emular desde este panel. El único elemento
+  animado del compositor es el `ActivityIndicator` de `LoadingBlock`, el mismo
+  componente que ya respeta `AccessibilityInfo.isReduceMotionEnabled` y que
+  quedó verificado en la unidad anterior; no se añadió ninguna animación nueva.
+- La emulación de viewport del panel no dispara la actualización de
+  `Dimensions` en la instancia de react-native-web ya montada, así que la vista
+  tablet se verificó recargando la página con el viewport ya en 1024×768. Es un
+  artefacto de la herramienta, no del app.
+- `aria-busy` no aparece en el botón primario durante el envío: react-native-web
+  mapea `accessibilityState.disabled` pero no `busy` en este `Pressable`. El
+  estado sí se anuncia por texto en una región `accessibilityLiveRegion`
+  ("Enviando la comanda…", rol `progressbar`). Queda anotado como limitación
+  menor.
+
+## A.9 Confirmación de fronteras
+
+Comparado con `f1f8f27b4732810ee26c1bbab122016a7ede0dc1`, el diff toca
+**exclusivamente 15 archivos bajo `apps/mobile/`** (2,364 inserciones, 44
+eliminaciones), más este documento y `BACKEND_REQUESTS.md`. `pnpm-lock.yaml`
+**no cambió**. No se modificó ni creó nada en `apps/api`, `apps/web`,
+`apps/kds`, `packages/`, `supabase/`, migraciones, SQL, RLS, permisos,
+credenciales, `.env`, configuración raíz —incluidos `package.json` raíz,
+`pnpm-workspace.yaml` y `turbo.json`—, CI ni documentación operativa
+(`AGENTS.md`, `TODO.md`, `PROJECT_NOTES.md`, `HANDOFF.md`).
+
+Sobre esa última fila hay una contradicción que conviene dejar escrita:
+`AGENTS.md` §3 y §21 piden actualizar `TODO.md`, `PROJECT_NOTES.md` y
+`HANDOFF.md` al cerrar, mientras el mandato de la sección 0 y la instrucción
+humana de esta sesión declaran los documentos operativos de solo lectura para
+este workstream. Prevalece la instrucción humana explícita; el registro
+equivalente queda aquí y el coordinador decidirá si lo traslada.
+
+No se ejecutó ninguna operación contra Supabase, PostgreSQL, Data API o Vault,
+ni ninguna E2E remota; no se crearon usuarios ni fixtures remotas; no se usó
+EAS, publicación ni firma; y no se reutilizó ningún UUID documentado en el
+historial del repositorio.
+
+## A.10 Limitaciones, riesgos y solicitudes pendientes
+
+1. **La comanda no se envía a ningún lado** y no puede hacerlo todavía. Faltan
+   cinco decisiones del coordinador, registradas como SR-MOB-007 (lectura de la
+   orden activa y `expectedVersion`), SR-MOB-008 (zona horaria autoritativa),
+   SR-MOB-009 (`deviceId` estable y quién acuña `eventId`/`idempotencyKey`),
+   SR-MOB-010 (validación del turno en las mutaciones) y SR-MOB-011 (importes
+   calculados por el servidor).
+2. **Dos operadores pueden componer borradores para la misma mesa sin verse.**
+   Es consecuencia directa de SR-MOB-007 y del alcance local de esta unidad.
+3. **El borrador vive en memoria**: cerrar la app lo pierde, como la sesión
+   (SR-MOB-001). No se implementó persistencia ni se afirmó ninguna.
+4. **Sin verificación en Android/iOS reales**: no hay emulador ni SDK nativo en
+   este entorno. El bundle Android se genera pero no se ejecutó en dispositivo.
+5. **Reduced motion y `aria-busy`**: ver las notas de método de la sección A.8.
+6. Siguen abiertas las solicitudes anteriores SR-MOB-001, SR-MOB-002,
+   SR-MOB-004 y SR-MOB-005. SR-MOB-003 (turno) quedó resuelta por el
+   coordinador y esta unidad la consume; SR-MOB-006 (expo 57.0.20) sigue
+   cerrada.
+
+## A.11 Siguiente acción mínima para el coordinador
+
+1. Revisar el diff completo y confirmar que no sale de `apps/mobile/` y que
+   `pnpm-lock.yaml` no cambió.
+2. Ejecutar el arnés (`harness/README.md`, sección "Recorrer la comanda") para
+   reproducir la matriz visual.
+3. Decidir SR-MOB-007 a SR-MOB-011 por separado. La integración productiva de
+   Order no debería abrirse antes de resolver SR-MOB-007, SR-MOB-009 y
+   SR-MOB-010, que son las tres que impiden construir un comando válido.
+4. Solo con aprobación humana, integrar la rama y actualizar `TODO.md`. Este
+   workstream no cambió el estado de ninguna tarea.
+
+---
+
+# B. Unidad 1 — fundación frontend móvil (registro histórico)
+
+Lo que sigue documenta la fundación ya integrada en `main` y aprobada como DONE
+el 2026-09-05. Se conserva como evidencia y **no describe el corte actual**.
 
 ## 1. Punto de partida
 
