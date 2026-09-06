@@ -328,6 +328,111 @@ test("order service keeps v1 compatible and binds only v2 creation to an operati
   assert.deepEqual(receivedShiftIds, [undefined, shiftId]);
 });
 
+test("order service accepts the mobile handoff sequence through v2 create, item mutations, and open", async () => {
+  const operationalOrderId = randomUUID();
+  const operationalShiftId = randomUUID();
+  const tableId = randomUUID();
+  const calls: {
+    readonly eventId: string;
+    readonly expectedVersion: number;
+    readonly operation: OrderMutation["auditEvent"]["operation"];
+    readonly shiftId: string | undefined;
+  }[] = [];
+  let stored: { readonly order: OrderMutation["order"]; readonly version: number } | undefined;
+  const orders: OrderPersistencePort = {
+    listKdsTickets: async () => ticketList,
+    persist: async (_actorId, expectedVersion, mutation, shiftId) => {
+      assert.equal(expectedVersion, stored?.version ?? 0);
+      calls.push({
+        eventId: mutation.auditEvent.eventId,
+        expectedVersion,
+        operation: mutation.auditEvent.operation,
+        shiftId,
+      });
+      stored = { order: mutation.order, version: expectedVersion + 1 };
+      return { kdsEvent: null, order: mutation.order, status: "saved", version: stored.version };
+    },
+    read: async (_actorId, receivedScope, receivedOrderId) => {
+      assert.deepEqual(receivedScope, scope);
+      return stored !== undefined && receivedOrderId === stored.order.orderId ? stored : "missing";
+    },
+    recoverKds: async () => eventPage,
+  };
+  const service = serviceFor(["waiter"], orders);
+  const createEventId = randomUUID();
+  const create = parseCreateOrderCommandV2({
+    channel: "table",
+    currency: menuState.catalog?.currency,
+    deviceId: randomUUID(),
+    eventId: createEventId,
+    idempotencyKey: `mobile-handoff:${operationalOrderId}:create`,
+    occurredAt: "2026-09-06T18:00:00.000Z",
+    orderId: operationalOrderId,
+    schemaVersion: 2,
+    scope,
+    shiftId: operationalShiftId,
+    tableId,
+    timeZone: "America/Hermosillo",
+  });
+  if (create === undefined) throw new Error("TEST_MOBILE_CREATE_COMMAND_INVALID");
+  assert.equal((await service.create(principal, create)).version, 1);
+
+  const itemEventIds: string[] = [];
+  for (const [index, quantity] of [2, 1].entries()) {
+    const eventId = randomUUID();
+    itemEventIds.push(eventId);
+    const add = parseAddOrderItemCommandV1({
+      deviceId: create.deviceId,
+      eventId,
+      expectedVersion: index + 1,
+      idempotencyKey: `mobile-handoff:${operationalOrderId}:line:${index + 1}`,
+      modifierGroups: [],
+      occurredAt: `2026-09-06T18:00:0${index + 1}.000Z`,
+      orderId: operationalOrderId,
+      orderItemId: randomUUID(),
+      productId,
+      quantity,
+      schemaVersion: 1,
+      scope,
+    });
+    if (add === undefined) throw new Error("TEST_MOBILE_ADD_COMMAND_INVALID");
+    assert.equal((await service.addItem(principal, add)).version, index + 2);
+  }
+
+  const openEventId = randomUUID();
+  const open = parseOpenOrderCommandV1({
+    deviceId: create.deviceId,
+    eventId: openEventId,
+    expectedVersion: 3,
+    idempotencyKey: `mobile-handoff:${operationalOrderId}:open`,
+    occurredAt: "2026-09-06T18:00:03.000Z",
+    orderId: operationalOrderId,
+    schemaVersion: 1,
+    scope,
+  });
+  if (open === undefined) throw new Error("TEST_MOBILE_OPEN_COMMAND_INVALID");
+  const opened = await service.open(principal, open);
+
+  assert.equal(opened.version, 4);
+  assert.equal(opened.orderStatus, "open");
+  assert.equal(stored?.order.items.length, 2);
+  assert.deepEqual(stored?.order.items.map((item) => ({
+    currency: item.snapshot.unitPrice.currency,
+    quantity: item.quantity,
+    unitPriceMinor: item.snapshot.unitPrice.amountMinor,
+  })), [
+    { currency: "MXN", quantity: 2, unitPriceMinor: 12_500 },
+    { currency: "MXN", quantity: 1, unitPriceMinor: 12_500 },
+  ]);
+  assert.deepEqual(calls.map(({ expectedVersion, operation, shiftId }) => ({ expectedVersion, operation, shiftId })), [
+    { expectedVersion: 0, operation: "order.created", shiftId: operationalShiftId },
+    { expectedVersion: 1, operation: "order.item_added", shiftId: undefined },
+    { expectedVersion: 2, operation: "order.item_added", shiftId: undefined },
+    { expectedVersion: 3, operation: "order.state_changed", shiftId: undefined },
+  ]);
+  assert.deepEqual(calls.map(({ eventId }) => eventId), [createEventId, ...itemEventIds, openEventId]);
+});
+
 test("order service enforces permission, optimistic version, and domain transitions", async () => {
   const port: OrderPersistencePort = {
     listKdsTickets: async () => "forbidden",
