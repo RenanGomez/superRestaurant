@@ -86,4 +86,3 @@ test("does not attempt a migration when the exact base audit fails", async () =>
   );
   assert.equal(migrationAttempted, false);
 });
-

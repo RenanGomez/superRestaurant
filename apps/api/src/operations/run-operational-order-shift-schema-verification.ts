@@ -40,4 +40,3 @@ try {
   })}\n`);
   process.exitCode = 1;
 }
-
