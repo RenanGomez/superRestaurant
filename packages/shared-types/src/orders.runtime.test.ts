@@ -1,5 +1,6 @@
 import {
   parseActiveTableOrderListV1,
+  parseActiveTableOrderListV2,
   parseAddOrderItemCommandV1,
   parseCancelOrderItemCommandV1,
   parseCreateOrderCommandV1,
@@ -78,6 +79,48 @@ expect(parseActiveTableOrderListV1({...activeList,orders:[{...activeOrder,shiftI
 const sparseOrders:unknown[]=[];
 sparseOrders.length=1;
 expect(parseActiveTableOrderListV1({...activeList,orders:sparseOrders})===undefined,"sparse active order list fails closed");
+
+const activeItem={
+  orderItemId:add.orderItemId,
+  productId:add.productId,
+  productName:"Arrachera al carbón",
+  quantity:2,
+  status:"pending",
+  unit:"pieza",
+  unitPrice:{amountMinor:12500,currency:"MXN"},
+  modifiers:[{
+    groupId:add.modifierGroups[0]?.groupId,
+    groupName:"Término",
+    optionId:add.modifierGroups[0]?.selections[0]?.optionId,
+    optionName:"Bien cocido",
+    quantity:1,
+    unitPrice:{amountMinor:0,currency:"MXN"},
+  }],
+};
+const activeOrderV2={...activeOrder,itemCount:1,currency:"MXN",items:[activeItem]};
+const activeListV2={schemaVersion:2,scope:operationalScope,tableId:operationalTableId,orders:[activeOrderV2]};
+const parsedActiveListV2=parseActiveTableOrderListV2(activeListV2);
+expect(parsedActiveListV2!==undefined && Object.isFrozen(parsedActiveListV2.orders)
+  && Object.isFrozen(parsedActiveListV2.orders[0]?.items)
+  && Object.isFrozen(parsedActiveListV2.orders[0]?.items[0]?.modifiers),"active table order lines parse deeply frozen");
+expect(parseActiveTableOrderListV1(activeListV2)===undefined,"v1 rejects the active line response v2");
+expect(parseActiveTableOrderListV2({...activeListV2,schemaVersion:1})===undefined,"active lines require schema v2");
+expect(parseActiveTableOrderListV2({...activeListV2,orders:[{...activeOrderV2,itemCount:2}]})===undefined,"item count must match lines");
+expect(parseActiveTableOrderListV2({...activeListV2,orders:[{...activeOrderV2,items:[activeItem,{...activeItem}]}]})===undefined,"duplicate active lines fail");
+expect(parseActiveTableOrderListV2({...activeListV2,orders:[{
+  ...activeOrderV2,
+  items:[{...activeItem,unitPrice:{amountMinor:12500,currency:"USD"}}],
+}]})===undefined,"line money must keep the order currency");
+expect(parseActiveTableOrderListV2({...activeListV2,orders:[{
+  ...activeOrderV2,
+  items:[{...activeItem,modifiers:[{...activeItem.modifiers[0],unitPrice:{amountMinor:0,currency:"USD"}}]}],
+}]})===undefined,"modifier money must keep the order currency");
+expect(parseActiveTableOrderListV2({...activeListV2,orders:[{
+  ...activeOrderV2,
+  items:[{...activeItem,modifiers:[activeItem.modifiers[0],{...activeItem.modifiers[0],groupId:null,groupName:null}]}],
+}]})!==undefined,"active reads preserve repeated historical option snapshots without inventing uniqueness");
+expect(parseActiveTableOrderListV2({...activeListV2,orders:[{...activeOrderV2,shiftId:null}]})!==undefined,"v2 keeps legacy unlinked orders visible");
+expect(parseActiveTableOrderListV2({...activeListV2,orders:[{...activeOrderV2,items:new Array(101).fill(activeItem),itemCount:101}]})===undefined,"active line response is bounded");
 
 const cancellation={...common,expectedVersion:2,orderItemId:add.orderItemId,reason:"Producto equivocado"};
 expect(parseCancelOrderItemCommandV1(cancellation)!==undefined,"item cancellation with an explicit reason parses");

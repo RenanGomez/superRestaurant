@@ -3,8 +3,10 @@ import { parseKdsEventV1 } from "./realtime.js";
 
 export const ORDER_COMMAND_SCHEMA_VERSION = 1 as const;
 export const CREATE_ORDER_COMMAND_V2_SCHEMA_VERSION = 2 as const;
+export const ACTIVE_TABLE_ORDER_LIST_V2_SCHEMA_VERSION = 2 as const;
 export const ORDER_CHANNELS = Object.freeze(["table", "counter", "takeout", "delivery"] as const);
 export const ORDER_ITEM_FORWARD_STATUSES = Object.freeze(["sent", "preparing", "ready", "delivered"] as const);
+export const ORDER_ITEM_STATUSES = Object.freeze(["pending", "sent", "preparing", "ready", "delivered", "cancelled"] as const);
 export const ORDER_STATUSES = Object.freeze(["draft", "open", "partially_paid", "paid", "closed", "cancelled"] as const);
 export const ACTIVE_TABLE_ORDER_STATUSES = Object.freeze(["draft", "open", "partially_paid"] as const);
 
@@ -47,6 +49,43 @@ export interface ActiveTableOrderSummaryV1 {
 export interface ActiveTableOrderListV1 {
   readonly orders: readonly ActiveTableOrderSummaryV1[];
   readonly schemaVersion: typeof ORDER_COMMAND_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly tableId: string;
+}
+
+export interface ActiveTableOrderMoneyV1 {
+  readonly amountMinor: number;
+  readonly currency: string;
+}
+
+export interface ActiveTableOrderModifierV1 {
+  readonly groupId: string | null;
+  readonly groupName: string | null;
+  readonly optionId: string;
+  readonly optionName: string;
+  readonly quantity: number;
+  readonly unitPrice: ActiveTableOrderMoneyV1;
+}
+
+export interface ActiveTableOrderItemV1 {
+  readonly modifiers: readonly ActiveTableOrderModifierV1[];
+  readonly orderItemId: string;
+  readonly productId: string;
+  readonly productName: string;
+  readonly quantity: number;
+  readonly status: (typeof ORDER_ITEM_STATUSES)[number];
+  readonly unit: string;
+  readonly unitPrice: ActiveTableOrderMoneyV1;
+}
+
+export interface ActiveTableOrderSummaryV2 extends ActiveTableOrderSummaryV1 {
+  readonly currency: string;
+  readonly items: readonly ActiveTableOrderItemV1[];
+}
+
+export interface ActiveTableOrderListV2 {
+  readonly orders: readonly ActiveTableOrderSummaryV2[];
+  readonly schemaVersion: typeof ACTIVE_TABLE_ORDER_LIST_V2_SCHEMA_VERSION;
   readonly scope: BranchScope;
   readonly tableId: string;
 }
@@ -149,6 +188,29 @@ export function parseActiveTableOrderListV1(value: unknown): ActiveTableOrderLis
     orders.push(order);
   }
   return Object.freeze({ orders: Object.freeze(orders), schemaVersion: ORDER_COMMAND_SCHEMA_VERSION, scope, tableId });
+}
+
+export function parseActiveTableOrderListV2(value: unknown): ActiveTableOrderListV2 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "tableId", "orders"]);
+  if (record === undefined || own(record, "schemaVersion") !== ACTIVE_TABLE_ORDER_LIST_V2_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const tableId = uuid(own(record, "tableId"));
+  const rawOrders = exactDenseArray(own(record, "orders"), 100);
+  if (scope === undefined || tableId === undefined || rawOrders === undefined) return undefined;
+  const orders: ActiveTableOrderSummaryV2[] = [];
+  const ids = new Set<string>();
+  for (const value of rawOrders) {
+    const order = parseActiveTableOrderSummaryV2(value, tableId);
+    if (order === undefined || ids.has(order.orderId)) return undefined;
+    ids.add(order.orderId);
+    orders.push(order);
+  }
+  return Object.freeze({
+    orders: Object.freeze(orders),
+    schemaVersion: ACTIVE_TABLE_ORDER_LIST_V2_SCHEMA_VERSION,
+    scope,
+    tableId,
+  });
 }
 
 export function parseCreateOrderCommandV2(value: unknown): CreateOrderCommandV2 | undefined {
@@ -289,6 +351,109 @@ function parseActiveTableOrderSummaryV1(value: unknown, expectedTableId: string)
     updatedAt,
     version,
   });
+}
+
+function parseActiveTableOrderSummaryV2(value: unknown, expectedTableId: string): ActiveTableOrderSummaryV2 | undefined {
+  const record = exactRecord(value, [
+    "orderId", "tableId", "shiftId", "status", "version", "itemCount", "currency", "items", "updatedAt",
+  ]);
+  if (record === undefined) return undefined;
+  const orderId = uuid(own(record, "orderId"));
+  const tableId = uuid(own(record, "tableId"));
+  const rawShiftId = own(record, "shiftId");
+  const shiftId = rawShiftId === null ? null : uuid(rawShiftId);
+  const status = own(record, "status");
+  const version = integer(own(record, "version"), 1, Number.MAX_SAFE_INTEGER);
+  const itemCount = integer(own(record, "itemCount"), 0, 100);
+  const currency = text(own(record, "currency"), 3, 3);
+  const rawItems = exactDenseArray(own(record, "items"), 100);
+  const updatedAt = timestamp(own(record, "updatedAt"));
+  if (orderId === undefined || tableId === undefined || tableId !== expectedTableId || shiftId === undefined
+    || typeof status !== "string" || !(ACTIVE_TABLE_ORDER_STATUSES as readonly string[]).includes(status)
+    || version === undefined || itemCount === undefined || currency === undefined || !/^[A-Z]{3}$/u.test(currency)
+    || rawItems === undefined || itemCount !== rawItems.length || updatedAt === undefined) return undefined;
+  const items: ActiveTableOrderItemV1[] = [];
+  const itemIds = new Set<string>();
+  for (const value of rawItems) {
+    const item = parseActiveTableOrderItemV1(value, currency);
+    if (item === undefined || itemIds.has(item.orderItemId)) return undefined;
+    itemIds.add(item.orderItemId);
+    items.push(item);
+  }
+  return Object.freeze({
+    currency,
+    itemCount,
+    items: Object.freeze(items),
+    orderId,
+    shiftId,
+    status: status as ActiveTableOrderSummaryV2["status"],
+    tableId,
+    updatedAt,
+    version,
+  });
+}
+
+function parseActiveTableOrderItemV1(value: unknown, currency: string): ActiveTableOrderItemV1 | undefined {
+  const record = exactRecord(value, [
+    "orderItemId", "productId", "productName", "quantity", "status", "unit", "unitPrice", "modifiers",
+  ]);
+  if (record === undefined) return undefined;
+  const orderItemId = uuid(own(record, "orderItemId"));
+  const productId = uuid(own(record, "productId"));
+  const productName = text(own(record, "productName"), 1, 200);
+  const quantity = integer(own(record, "quantity"), 1, 1_000);
+  const status = own(record, "status");
+  const unit = text(own(record, "unit"), 1, 50);
+  const unitPrice = parseActiveTableOrderMoneyV1(own(record, "unitPrice"), currency);
+  const rawModifiers = exactDenseArray(own(record, "modifiers"), 5_000);
+  if (orderItemId === undefined || productId === undefined || productName === undefined || quantity === undefined
+    || typeof status !== "string" || !(ORDER_ITEM_STATUSES as readonly string[]).includes(status)
+    || unit === undefined || unitPrice === undefined || rawModifiers === undefined) return undefined;
+  const modifiers: ActiveTableOrderModifierV1[] = [];
+  for (const value of rawModifiers) {
+    const modifier = parseActiveTableOrderModifierV1(value, currency);
+    if (modifier === undefined) return undefined;
+    modifiers.push(modifier);
+  }
+  return Object.freeze({
+    modifiers: Object.freeze(modifiers),
+    orderItemId,
+    productId,
+    productName,
+    quantity,
+    status: status as ActiveTableOrderItemV1["status"],
+    unit,
+    unitPrice,
+  });
+}
+
+function parseActiveTableOrderModifierV1(value: unknown, currency: string): ActiveTableOrderModifierV1 | undefined {
+  const record = exactRecord(value, [
+    "groupId", "groupName", "optionId", "optionName", "quantity", "unitPrice",
+  ]);
+  if (record === undefined) return undefined;
+  const rawGroupId = own(record, "groupId");
+  const groupId = rawGroupId === null ? null : uuid(rawGroupId);
+  const rawGroupName = own(record, "groupName");
+  const groupName = rawGroupName === null ? null : text(rawGroupName, 1, 200);
+  const optionId = uuid(own(record, "optionId"));
+  const optionName = text(own(record, "optionName"), 1, 200);
+  const quantity = integer(own(record, "quantity"), 1, 1_000);
+  const unitPrice = parseActiveTableOrderMoneyV1(own(record, "unitPrice"), currency);
+  return groupId === undefined || groupName === undefined || optionId === undefined || optionName === undefined
+    || quantity === undefined || unitPrice === undefined
+    ? undefined
+    : Object.freeze({ groupId, groupName, optionId, optionName, quantity, unitPrice });
+}
+
+function parseActiveTableOrderMoneyV1(value: unknown, expectedCurrency: string): ActiveTableOrderMoneyV1 | undefined {
+  const record = exactRecord(value, ["amountMinor", "currency"]);
+  if (record === undefined) return undefined;
+  const amountMinor = integer(own(record, "amountMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const currency = text(own(record, "currency"), 3, 3);
+  return amountMinor === undefined || currency === undefined || !/^[A-Z]{3}$/u.test(currency) || currency !== expectedCurrency
+    ? undefined
+    : Object.freeze({ amountMinor, currency });
 }
 
 function parseGroups(value: unknown): readonly ModifierGroupSelectionV1[] | undefined {

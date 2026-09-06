@@ -191,6 +191,19 @@ begin
     ) = 0
     or pg_catalog.strpos(list_definition, 'orders.status in (''draft'', ''open'', ''partially_paid'')') = 0
     or pg_catalog.strpos(list_definition, '''shiftid'', active_order.shift_id') = 0
+    or pg_catalog.strpos(list_definition, '''schemaversion'', 2') = 0
+    or pg_catalog.strpos(list_definition, '''currency'', active_order.currency') = 0
+    or pg_catalog.strpos(list_definition, '''items'', active_order.items') = 0
+    or pg_catalog.strpos(list_definition, '''orderitemid''') = 0
+    or pg_catalog.strpos(list_definition, '''productid''') = 0
+    or pg_catalog.strpos(list_definition, '''productname''') = 0
+    or pg_catalog.strpos(list_definition, '''modifiers''') = 0
+    or pg_catalog.strpos(list_definition, '''optionid''') = 0
+    or pg_catalog.strpos(list_definition, '''optionname''') = 0
+    or pg_catalog.strpos(list_definition, '''unitprice''') = 0
+    or pg_catalog.strpos(list_definition, 'limit_exceeded') = 0
+    or pg_catalog.strpos(list_definition, '> 100') = 0
+    or pg_catalog.strpos(list_definition, '> 5000') = 0
     or pg_catalog.strpos(list_definition, 'limit 101') = 0
   then
     raise exception using errcode = '55000', message = 'OPERATIONAL_ORDER_SHIFT_ACTIVE_READ_REJECTED';

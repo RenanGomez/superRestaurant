@@ -9,7 +9,7 @@ import {
   Req,
   ServiceUnavailableException,
 } from "@nestjs/common";
-import type { ActiveTableOrderListV1 } from "@super-restaurant/shared-types";
+import type { ActiveTableOrderListV2 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
 import { TableOrderContextError, TableOrderContextService } from "./table-order-context.js";
@@ -25,7 +25,7 @@ export class TableOrderContextController {
     @Query("restaurantId") restaurantId: unknown,
     @Query("branchId") branchId: unknown,
     @Query("tableId") tableId: unknown,
-  ): Promise<ActiveTableOrderListV1> {
+  ): Promise<ActiveTableOrderListV2> {
     return this.map(() => this.context.listActive(getAuthenticatedPrincipal(request), { branchId, restaurantId, tableId }));
   }
 

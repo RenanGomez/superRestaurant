@@ -177,6 +177,16 @@ test("operational order creation is additive, atomic, scoped and server-only", (
   assert.match(operationalOrdersMigration, /orders\.status in \('draft', 'open', 'partially_paid'\)/u);
   assert.match(operationalOrdersMigration, /left join app\.order_operational_shifts/u);
   assert.match(operationalOrdersMigration, /'shiftid', active_order\.shift_id/u);
+  assert.match(operationalOrdersMigration, /'schemaversion', 2/u);
+  assert.match(operationalOrdersMigration, /'currency', active_order\.currency/u);
+  assert.match(operationalOrdersMigration, /'items', active_order\.items/u);
+  assert.match(operationalOrdersMigration, /'orderitemid', item\.value ->> 'orderitemid'/u);
+  assert.match(operationalOrdersMigration, /'productid', item\.value -> 'snapshot' ->> 'productid'/u);
+  assert.match(operationalOrdersMigration, /'modifiers', coalesce/u);
+  assert.match(operationalOrdersMigration, /'optionid', modifier\.value ->> 'modifierid'/u);
+  assert.match(operationalOrdersMigration, /jsonb_array_length\(orders\.aggregate -> 'items'\) > 100/u);
+  assert.match(operationalOrdersMigration, /jsonb_array_length\(item\.value -> 'snapshot' -> 'modifiers'\) > 5000/u);
+  assert.match(operationalOrdersMigration, /return '\{"status":"limit_exceeded"\}'::jsonb/u);
   assert.match(operationalOrdersMigration, /limit 101/u);
   assert.match(operationalOrdersMigration, /alter table app\.order_operational_shifts enable row level security/u);
   assert.match(operationalOrdersMigration, /alter table app\.order_operational_shifts force row level security/u);

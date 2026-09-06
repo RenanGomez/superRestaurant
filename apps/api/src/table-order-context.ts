@@ -1,8 +1,8 @@
 import { Inject, Injectable } from "@nestjs/common";
 import {
-  parseActiveTableOrderListV1,
+  parseActiveTableOrderListV2,
   parseBranchScope,
-  type ActiveTableOrderListV1,
+  type ActiveTableOrderListV2,
   type BranchScope,
 } from "@super-restaurant/shared-types";
 
@@ -22,7 +22,7 @@ export class TableOrderContextError extends Error {
 }
 
 export interface TableOrderContextDirectoryPort {
-  listActive(actorId: string, scope: BranchScope, tableId: string): Promise<ActiveTableOrderListV1 | "forbidden">;
+  listActive(actorId: string, scope: BranchScope, tableId: string): Promise<ActiveTableOrderListV2 | "forbidden">;
 }
 
 export const TABLE_ORDER_CONTEXT_DIRECTORY = Symbol("TABLE_ORDER_CONTEXT_DIRECTORY");
@@ -35,7 +35,7 @@ export class PostgresTableOrderContextDirectory implements TableOrderContextDire
     actorId: string,
     scope: BranchScope,
     tableId: string,
-  ): Promise<ActiveTableOrderListV1 | "forbidden"> {
+  ): Promise<ActiveTableOrderListV2 | "forbidden"> {
     let rows: readonly unknown[];
     try {
       rows = (await this.database.query(listSql, [actorId, scope.restaurantId, scope.branchId, tableId])).rows;
@@ -45,7 +45,7 @@ export class PostgresTableOrderContextDirectory implements TableOrderContextDire
     if (record === undefined) throw unavailable();
     const state = own(record, "state");
     if (state === null) return "forbidden";
-    const parsed = parseActiveTableOrderListV1(state);
+    const parsed = parseActiveTableOrderListV2(state);
     if (parsed === undefined || !sameScope(parsed.scope, scope) || parsed.tableId !== tableId) throw unavailable();
     return parsed;
   }
@@ -58,7 +58,7 @@ export class TableOrderContextService {
     @Inject(TABLE_ORDER_CONTEXT_DIRECTORY) private readonly directory: TableOrderContextDirectoryPort,
   ) {}
 
-  public async listActive(principal: AuthenticatedPrincipal, input: unknown): Promise<ActiveTableOrderListV1> {
+  public async listActive(principal: AuthenticatedPrincipal, input: unknown): Promise<ActiveTableOrderListV2> {
     const parsed = parseInput(input);
     if (parsed === undefined) throw applicationError("request");
     let actorId: string;

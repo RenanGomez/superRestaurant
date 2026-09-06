@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 
-import { parseActiveTableOrderListV1, parseBranchScope } from "@super-restaurant/shared-types";
+import { parseActiveTableOrderListV2, parseBranchScope } from "@super-restaurant/shared-types";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService, type MembershipLookupPort } from "./auth/membership-authorization.js";
@@ -19,9 +19,30 @@ const parsedScope = parseBranchScope({ branchId: randomUUID(), restaurantId: ran
 if (parsedScope === undefined) throw new Error("TEST_SCOPE_INVALID");
 const scope = parsedScope;
 const tableId = randomUUID();
-const list = parseActiveTableOrderListV1({
+const orderItemId = randomUUID();
+const productId = randomUUID();
+const optionId = randomUUID();
+const list = parseActiveTableOrderListV2({
   orders: [{
-    itemCount: 2,
+    currency: "MXN",
+    itemCount: 1,
+    items: [{
+      modifiers: [{
+        groupId: null,
+        groupName: null,
+        optionId,
+        optionName: "Bien cocido",
+        quantity: 1,
+        unitPrice: { amountMinor: 0, currency: "MXN" },
+      }],
+      orderItemId,
+      productId,
+      productName: "Arrachera al carbón",
+      quantity: 2,
+      status: "pending",
+      unit: "pieza",
+      unitPrice: { amountMinor: 12_500, currency: "MXN" },
+    }],
     orderId: randomUUID(),
     shiftId: randomUUID(),
     status: "open",
@@ -29,7 +50,7 @@ const list = parseActiveTableOrderListV1({
     updatedAt: "2026-09-05T20:00:00.000Z",
     version: 3,
   }],
-  schemaVersion: 1,
+  schemaVersion: 2,
   scope,
   tableId,
 });

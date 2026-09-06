@@ -137,8 +137,42 @@ begin
     return null;
   end if;
 
+  if (
+    select pg_catalog.count(*)
+    from (
+      select 1
+      from app.orders as orders
+      where orders.restaurant_id = p_restaurant_id
+        and orders.branch_id = p_branch_id
+        and orders.table_id = p_table_id
+        and orders.status in ('draft', 'open', 'partially_paid')
+      limit 101
+    ) as bounded_orders
+  ) > 100 then
+    return '{"status":"limit_exceeded"}'::jsonb;
+  end if;
+
+  if exists (
+    select 1
+    from app.orders as orders
+    where orders.restaurant_id = p_restaurant_id
+      and orders.branch_id = p_branch_id
+      and orders.table_id = p_table_id
+      and orders.status in ('draft', 'open', 'partially_paid')
+      and (
+        pg_catalog.jsonb_array_length(orders.aggregate -> 'items') > 100
+        or exists (
+          select 1
+          from pg_catalog.jsonb_array_elements(orders.aggregate -> 'items') as item(value)
+          where pg_catalog.jsonb_array_length(item.value -> 'snapshot' -> 'modifiers') > 5000
+        )
+      )
+  ) then
+    return '{"status":"limit_exceeded"}'::jsonb;
+  end if;
+
   select pg_catalog.jsonb_build_object(
-    'schemaVersion', 1,
+    'schemaVersion', 2,
     'scope', pg_catalog.jsonb_build_object('restaurantId', p_restaurant_id, 'branchId', p_branch_id),
     'tableId', p_table_id,
     'orders', coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
@@ -148,12 +182,40 @@ begin
       'status', active_order.status,
       'version', active_order.version,
       'itemCount', active_order.item_count,
+      'currency', active_order.currency,
+      'items', active_order.items,
       'updatedAt', pg_catalog.to_char(active_order.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
     ) order by active_order.updated_at desc, active_order.id), '[]'::jsonb)
   ) into result
   from (
     select orders.id, orders.table_id, link.shift_id, orders.status, orders.version,
       pg_catalog.jsonb_array_length(orders.aggregate -> 'items') as item_count,
+      orders.aggregate ->> 'currency' as currency,
+      coalesce((
+        select pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+          'orderItemId', item.value ->> 'orderItemId',
+          'productId', item.value -> 'snapshot' ->> 'productId',
+          'productName', item.value -> 'snapshot' ->> 'name',
+          'quantity', item.value -> 'quantity',
+          'status', item.value ->> 'status',
+          'unit', item.value -> 'snapshot' ->> 'unit',
+          'unitPrice', item.value -> 'snapshot' -> 'unitPrice',
+          'modifiers', coalesce((
+            select pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+              'groupId', modifier.value -> 'groupId',
+              'groupName', modifier.value -> 'groupName',
+              'optionId', modifier.value ->> 'modifierId',
+              'optionName', modifier.value ->> 'name',
+              'quantity', modifier.value -> 'quantity',
+              'unitPrice', modifier.value -> 'unitPrice'
+            ) order by modifier.ordinality)
+            from pg_catalog.jsonb_array_elements(item.value -> 'snapshot' -> 'modifiers')
+              with ordinality as modifier(value, ordinality)
+          ), '[]'::jsonb)
+        ) order by item.ordinality)
+        from pg_catalog.jsonb_array_elements(orders.aggregate -> 'items')
+          with ordinality as item(value, ordinality)
+      ), '[]'::jsonb) as items,
       orders.updated_at
     from app.orders as orders
     left join app.order_operational_shifts as link
