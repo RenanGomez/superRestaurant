@@ -5,6 +5,9 @@ revisión y **no integrada**: no hubo merge, rebase, push ni publicación de ram
 
 - **Unidad 2 — mesas y borrador de comanda (2026-09-05)**: sección A, abajo. Es
   el corte vigente y responde al mandato de la sección 0 del documento.
+  **Retrabajada el 2026-09-06** según la revisión 0.R1 del coordinador: la
+  sección **A.R1** describe esa ronda y es la que prevalece donde contradiga a
+  las secciones A.1 a A.11, escritas para el corte anterior `3061487a…`.
 - **Unidad 1 — fundación Expo/Auth/sucursal**: ya integrada en `main` y marcada
   DONE. Su registro histórico se conserva a partir de la sección B y no describe
   el corte actual.
@@ -12,6 +15,143 @@ revisión y **no integrada**: no hubo merge, rebase, push ni publicación de ram
 ---
 
 # A. Unidad 2 — mesas y borrador de comanda
+
+## A.R1 Retrabajo de la revisión del coordinador (2026-09-06)
+
+El coordinador revisó el corte `3061487a8b5568c32afc7730099182ffb09da774` y pidió
+corregir cinco puntos antes de integrar (sección 0.R1 del mandato). Esta ronda
+los corrige **sobre la misma rama y el mismo worktree**, partiendo exactamente de
+ese hash: no hubo merge, rebase, `main` incorporado, push ni conexión de
+endpoints Order. El diff sigue confinado a `apps/mobile/**` y `pnpm-lock.yaml`
+no cambió.
+
+| # | Hallazgo | Corrección | Dónde |
+| --- | --- | --- | --- |
+| 1 | `onBackToTables` despachaba `tableReleased` y vaciaba el borrador sin confirmar, mientras la ayuda accesible afirmaba lo contrario | El booleano `discardRequested` pasa a ser `pendingConfirmation: "discardDraft" \| "leaveTable"`, que **nombra el destino**. Con líneas o composición abierta la salida pasa por una confirmación dentro de la pantalla que dice exactamente qué se perderá y a dónde se va; con borrador realmente vacío se sale directo. Los dos textos, los dos cuerpos y las dos etiquetas de confirmación son distintos, así que un "sí" solo puede ejecutar lo que se preguntó | `order-draft.ts`, `order-draft-screen.tsx`, `app.tsx` |
+| 2 | Tras `submissionSucceeded` las líneas aceptadas seguían siendo reenviables | `submissionSucceeded` **retira las líneas entregadas** y conserva mesa, zona y el aviso de éxito. Un segundo toque no tiene nada que ofrecer, editar o eliminar una línea aceptada es imposible porque ya no está, y `nextLineSerial` sigue corriendo para que ningún handle nuevo repita uno entregado | `order-draft.ts`, `order-draft-screen.tsx` |
+| 3 | Un booleano global `submitting` bloqueaba para siempre una sucursal/turno/operador posterior, y una resolución tardía modificaba el borrador nuevo | Módulo nuevo `order-delivery.ts`: cada intento lleva **serial e identidad de contexto**. Solo un intento del *mismo* contexto bloquea; solo se aplica el desenlace del intento vigente; un cambio de contexto lo abandona. Contiene promesa colgada, rechazo tardío, valor que no es promesa y **lanzamiento síncrono** —sin `sending` atascado ni rechazo no manejado | `order-delivery.ts`, `app.tsx` |
+| 4 | El handoff solo comprobaba `knownProductIds` | `buildOrderDraftHandoff` recibe el **catálogo** y revalida cada línea con `draftLineIssues`: producto activo, cantidad entera acotada, grupos y opciones activos y pertenecientes al producto, sin duplicados de grupo ni de opción, máximos por opción y por grupo, y mínimos requeridos. Un cambio de catálogo entre composición y envío produce `stale` y **cero callbacks**; una sola línea inválida invalida todo el handoff | `order-draft.ts`, `order-intents.ts` |
+| 5 | `App` invocaba los callbacks de mutación y además llamaba a `submit` sobre el mismo objeto | `OrderDraftCallbacks` y `offerOrderDraft` desaparecen. `OrderDraftIntegration` expone **solo `deliver`**, una única llamada de entrega; el arnés inspecciona el handoff **dentro** de esa llamada. Una integración productiva futura ya no puede ejecutar crear/agregar/abrir dos veces | `order-intents.ts`, `app.tsx`, `harness-server.ts` |
+
+Los cinco están acoplados por tipos (`OrderDraftEvent`, `OrderDraftState`,
+`OrderDraftIntegration`), así que se entregan en un solo commit de código:
+separarlos más habría producido commits que no compilan. Queda anotado como
+desviación deliberada de "commits pequeños".
+
+**Sigue sin haber**: HTTP, endpoints Order, auditoría, UUID acuñados por el
+cliente, zona horaria, importes, impuestos, CFDI ni proveedor.
+
+### Estado de las solicitudes tras la revisión
+
+- **SR-MOB-007 — parcialmente resuelta en `main`**: ya existe una lectura
+  acotada de órdenes activas con `orderId`, versión, estado, `shiftId` e
+  `itemCount`, pero **no devuelve líneas ni modificadores**, así que el
+  compositor todavía no puede reanudar una comanda.
+- **SR-MOB-010 — resuelta para creación v2** mediante `shiftId` en el comando.
+- **SR-MOB-008, SR-MOB-009 y SR-MOB-011 siguen abiertas.**
+
+En los dos casos resueltos, esta rama **no copia ni redefine** los contratos
+nuevos: parte de `3061487a…` y no incorpora `main`. La integración productiva
+contra esos contratos la hará el coordinador **después del merge**.
+
+### Commits de esta ronda
+
+| Hash | Mensaje |
+| --- | --- |
+| `f8f1f8422e91ee1a3ac6a4d1a9d5b6dbb2eb6cf7` | `fix(mobile): rework the comanda hand-over after the coordinator review` |
+| (este documento) | `docs(mobile): record the coordinator rework` — su hash se reporta al cierre |
+
+### Archivos de esta ronda
+
+Trece archivos, todos bajo `apps/mobile/` (1,100 inserciones, 177 eliminaciones
+frente a `3061487a…`).
+
+**Nuevos**: `src/order-delivery.ts`, `src/order-delivery.test.ts`.
+
+**Modificados**: `src/order-draft.ts`, `src/order-draft.test.ts`,
+`src/order-intents.ts`, `src/order-intents.test.ts`, `src/test-fixtures.ts`,
+`src/ui/app.tsx`, `src/ui/order-draft-screen.tsx`, `harness/harness-server.ts`,
+`harness/README.md`, `package.json`, `tsconfig.test.build.json`, y este
+documento junto con `BACKEND_REQUESTS.md`.
+
+### Pruebas adversariales añadidas
+
+De **118 a 141 pruebas, 0 fallos** (+23):
+
+| Archivo | Antes | Ahora | Qué se añadió |
+| --- | --- | --- | --- |
+| `order-draft` | 24 | **32** | Salida a mesas confirmada; cancelar la salida; doble toque sobre "Volver a mesas"; los dos destinos resueltos por separado y nunca confundidos; composición sin confirmar como contenido; borrador vacío que sale directo; confirmación que se cierra al quedarse sin líneas; líneas aceptadas retiradas; segunda comanda local solo con líneas nuevas; handles no reutilizados tras éxito ni tras descarte |
+| `order-intents` | 9 | **13** | Grupo retirado, opción retirada, mínimo nuevo y máximo rebajado entre composición y envío; línea que el reducer no podría producir (mínimo incumplido, grupo duplicado, opción duplicada, opción de otro grupo, máximo de grupo excedido, cantidad 0/negativa/fraccionaria/fuera de rango/`NaN`/infinita, cantidad de opción 0 y fraccionaria); una línea inválida invalida todo el handoff; handles duplicados; frontera única sin superficie de callbacks |
+| `order-delivery` | — | **11 (nuevo)** | Un inicio y un solo desenlace; segundo toque rechazado de raíz; promesa colgada que no bloquea sucursal/turno/operador posterior; desenlace tardío de un contexto abandonado; intento superado que pierde frente al vigente; rechazo sin `unhandledRejection`; **lanzamiento síncrono** sin envío atascado y con reintento posible; valor que no es promesa; `stale` que libera el contexto y no llega a la integración; `build` que lanza; ausencia de red en el módulo |
+
+### Compuertas de esta ronda
+
+Node **v24.19.0**, pnpm 11.19.0, sin instalar nada en el sistema ni tocar
+configuración del repositorio.
+
+| Comando | Resultado |
+| --- | --- |
+| `pnpm --filter @super-restaurant/mobile lint` | ✅ 0 errores, 0 warnings |
+| `pnpm --filter @super-restaurant/mobile typecheck` | ✅ sin errores |
+| `pnpm --filter @super-restaurant/mobile test` | ✅ **141 pruebas, 0 fallos** |
+| `pnpm --filter @super-restaurant/mobile exec expo install --check` | ✅ `Dependencies are up to date`, exit 0 |
+| `pnpm --filter @super-restaurant/mobile build` | ✅ `tsc --noEmit` + `expo export --platform android` → 660 módulos, `.hbc` de 2,230,489 bytes |
+| `pnpm lint --force` | ✅ 8/8 tareas, **0 en caché**, 14.6 s |
+| `pnpm typecheck --force` | ✅ 11/11 tareas, **0 en caché**, 14.3 s |
+| `pnpm test --force` | ✅ 11/11 tareas, **0 en caché**, 52.2 s |
+| `pnpm build --force` | ✅ 8/8 tareas, **0 en caché**, 29.1 s |
+
+`git diff --check` no reporta errores de espacios. Los finales de línea no
+cambiaron: base y árbol siguen en LF en los trece archivos.
+
+**Aislamiento del arnés** sobre el `.hbc` reexportado (2,230,489 bytes):
+contiene `Enviar comanda`, `Agregar al borrador`, `Descartar borrador` y
+`draft-line-`; **no** contiene `Intentos ofrecidos`, `harness`,
+`HARNESS_NETWORK_DOWN`, `HARNESS_SESSION_UNREADABLE`,
+`HARNESS_SYNCHRONOUS_THROW`, `sb_publishable_fixture`, `operador.a.sintetico`,
+`Limpiar intentos` ni `XTS`. Los dos controles nuevos del arnés («promesa
+colgada» y «falla síncrona») tampoco filtran al bundle.
+
+**CodeGraph final**: `impact` sobre `createOrderDeliveryTracker`,
+`reduceOrderDraft`, `buildOrderDraftHandoff`, `draftLineIssues` y
+`OrderDraftIntegration` devuelve consumidores **solo** dentro de
+`apps/mobile/**` (`order-delivery.ts`, `order-intents.ts`, `ui/app.tsx`,
+`harness/harness-server.ts` y sus pruebas). Ninguna referencia sale de la
+frontera y no quedan símbolos huérfanos.
+
+### Matriz visual de esta ronda
+
+Mismo método que A.8 —Expo web con el arnés, panel del navegador oculto, se
+conduce con eventos reales de puntero y se mide sobre el DOM real—, en
+**390×844** y **1024×768**.
+
+| Caso | Viewport | Resultado |
+| --- | --- | --- |
+| Borrador vacío → "Volver a mesas" | 390×844 | ✅ Sale directo al plano, sin preguntar |
+| Composición sin confirmar → "Volver a mesas" | 390×844 | ✅ «¿Volver a mesas y descartar el borrador?» · «Se perderá **el producto que estás configurando**…» |
+| 1 línea → "Descartar borrador" | 390×844 | ✅ «¿Descartar el borrador?» · «…**Seguirás en esta mesa**, con el borrador vacío.» · «Sí, descartar y seguir aquí» |
+| 1 línea → "Volver a mesas" | 390×844 y 1024×768 | ✅ «¿Volver a mesas y descartar el borrador?» · «…**Volverás al plano de mesas** y la mesa quedará sin borrador.» · «Sí, descartar y volver a mesas» |
+| Cancelar la salida | 390×844 y 1024×768 | ✅ «Conservar borrador» deja la mesa y la línea intactas |
+| Doble toque en "Volver a mesas" | 390×844 | ✅ Una sola confirmación abierta; sigue en la mesa con su línea |
+| Confirmar cada destino | 390×844 | ✅ «seguir aquí» conserva la mesa con borrador vacío; «volver a mesas» regresa al plano, y al reentrar la mesa no tiene borrador |
+| Éxito y no reenvío | 390×844 | ✅ Las 2 líneas salen del borrador; «…sus líneas salieron del borrador, así que no pueden reenviarse»; estado «Sin líneas pendientes» |
+| Segundo toque tras el éxito | 390×844 | ✅ La barra del arnés no registra ni un intento más |
+| Segunda comanda local | 390×844 | ✅ Solo `ítem draft-line-4`; no reaparecen `draft-line-2` ni `draft-line-3` |
+| Doble toque en "Enviar comanda" | 390×844 | ✅ Un solo `crear` + un `ítem` por línea + un `abrir` — **frontera única confirmada** |
+| Envío: falla síncrona | 390×844 | ✅ «El servicio no está disponible…», la línea se conserva, `unhandledrejection` = 0 y el reintento en sitio funciona |
+| Envío: promesa colgada + cambio de turno | 390×844 | ✅ Queda «Enviando la comanda…»; al cambiar de turno el borrador desaparece y **la comanda del turno nuevo se entrega sin bloqueo** |
+| Objetivos táctiles de la confirmación | 390×844 y 1024×768 | ✅ «Sí, descartar…» y «Conservar borrador» a 48 px en ambos |
+| Rol y región viva de la confirmación | 390×844 | ✅ `role="alert"`, `aria-live="polite"` |
+| Contraste de la confirmación | 390×844 | ✅ 15.57 (título y cuerpo), 8.68 (ambas acciones) — AA |
+| Desbordamiento horizontal | 390×844 y 1024×768 | ✅ `scrollWidth == innerWidth` en cada paso |
+| Dos columnas con la confirmación abierta | 1024×768 | ✅ Columna de catálogo 476 px; la confirmación ocupa 976 px dentro de 1024, sin desbordar |
+| Consola | ambos | ✅ Sin warnings ni errores del app (solo los avisos de modo desarrollo de React) |
+| Red | ambos | ✅ 0 llamadas a `/api/v1/orders*`, 0 recursos externos |
+
+Sigue vigente la limitación de A.8 sobre reduced motion y `aria-busy`: no se
+añadió ninguna animación nueva en esta ronda.
+
+---
 
 ## A.1 Punto de partida
 
@@ -43,7 +183,9 @@ revisión y **no integrada**: no hubo merge, rebase, push ni publicación de ram
 | `caadba3974841ef72367d7287b0df5ff6e599cde` | `feat(mobile): select a table and compose its comanda draft` |
 | `d875cac706f7b9491ddfe10998b1e56202938328` | `test(mobile): cover table selection, draft composition and the hand-over` |
 | `898a5d5aab015e4db6242e6e3e0ef40c9f1bb12b` | `test(mobile): drive the comanda hand-over from the isolated harness` |
-| (este documento) | `docs(mobile): record the order entry slice` — su hash se reporta al cierre, porque un commit no puede contener el suyo |
+| `3061487a8b5568c32afc7730099182ffb09da774` | `docs(mobile): record the order entry slice and its backend frontier` |
+
+Los commits de la ronda de revisión están en **A.R1**.
 
 ## A.2 MCP instalados y usados
 
@@ -142,7 +284,10 @@ documento junto con `BACKEND_REQUESTS.md`.
 
 ## A.6 Pruebas
 
-`pnpm --filter @super-restaurant/mobile test` ejecuta **118 pruebas, 0 fallos**
+Cifras del corte `3061487a…`; la ronda de revisión las lleva a **141** y añade
+`order-delivery` (ver **A.R1**).
+
+`pnpm --filter @super-restaurant/mobile test` ejecutaba **118 pruebas, 0 fallos**
 (antes de esta unidad eran 84):
 
 | Archivo | Pruebas |
@@ -287,9 +432,11 @@ Notas de método:
 
 ## A.9 Confirmación de fronteras
 
-Comparado con `f1f8f27b4732810ee26c1bbab122016a7ede0dc1`, el diff toca
-**exclusivamente 15 archivos bajo `apps/mobile/`** (2,364 inserciones, 44
-eliminaciones), más este documento y `BACKEND_REQUESTS.md`. `pnpm-lock.yaml`
+Comparado con `f1f8f27b4732810ee26c1bbab122016a7ede0dc1`, el diff del corte
+`3061487a…` tocaba **exclusivamente 15 archivos bajo `apps/mobile/`** (2,364
+inserciones, 44 eliminaciones), más este documento y `BACKEND_REQUESTS.md`. La
+ronda de revisión añade dos archivos y mantiene la frontera: ver **A.R1**.
+`pnpm-lock.yaml`
 **no cambió**. No se modificó ni creó nada en `apps/api`, `apps/web`,
 `apps/kds`, `packages/`, `supabase/`, migraciones, SQL, RLS, permisos,
 credenciales, `.env`, configuración raíz —incluidos `package.json` raíz,
@@ -310,12 +457,14 @@ historial del repositorio.
 
 ## A.10 Limitaciones, riesgos y solicitudes pendientes
 
-1. **La comanda no se envía a ningún lado** y no puede hacerlo todavía. Faltan
-   cinco decisiones del coordinador, registradas como SR-MOB-007 (lectura de la
-   orden activa y `expectedVersion`), SR-MOB-008 (zona horaria autoritativa),
-   SR-MOB-009 (`deviceId` estable y quién acuña `eventId`/`idempotencyKey`),
-   SR-MOB-010 (validación del turno en las mutaciones) y SR-MOB-011 (importes
-   calculados por el servidor).
+1. **La comanda no se envía a ningún lado** y no puede hacerlo todavía. Tras la
+   revisión 0.R1, SR-MOB-007 quedó **parcialmente resuelta en `main`** (lectura
+   acotada de órdenes activas, sin líneas ni modificadores) y SR-MOB-010
+   **resuelta para creación v2** vía `shiftId`; siguen abiertas SR-MOB-008 (zona
+   horaria autoritativa), SR-MOB-009 (`deviceId` estable y quién acuña
+   `eventId`/`idempotencyKey`) y SR-MOB-011 (importes calculados por el
+   servidor). Esta rama no incorpora esos contratos: la integración es del
+   coordinador, después del merge.
 2. **Dos operadores pueden componer borradores para la misma mesa sin verse.**
    Es consecuencia directa de SR-MOB-007 y del alcance local de esta unidad.
 3. **El borrador vive en memoria**: cerrar la app lo pierde, como la sesión
@@ -334,11 +483,17 @@ historial del repositorio.
    `pnpm-lock.yaml` no cambió.
 2. Ejecutar el arnés (`harness/README.md`, sección "Recorrer la comanda") para
    reproducir la matriz visual.
-3. Decidir SR-MOB-007 a SR-MOB-011 por separado. La integración productiva de
-   Order no debería abrirse antes de resolver SR-MOB-007, SR-MOB-009 y
-   SR-MOB-010, que son las tres que impiden construir un comando válido.
+3. Decidir SR-MOB-008, SR-MOB-009 y SR-MOB-011, y completar SR-MOB-007 con las
+   líneas y modificadores que la lectura acotada de `main` todavía no devuelve.
+   SR-MOB-009 sigue siendo la que impide construir un comando de auditoría
+   válido desde el cliente.
 4. Solo con aprobación humana, integrar la rama y actualizar `TODO.md`. Este
    workstream no cambió el estado de ninguna tarea.
+5. Después del merge, conectar `OrderDraftIntegration.deliver` —la **única**
+   frontera de entrega— contra los contratos reales de `main` (creación v2 con
+   `shiftId` y la lectura de órdenes activas). El punto de conexión es uno solo
+   y está aislado por `order-delivery.ts`, que ya contiene reintentos, cambios
+   de contexto y fallos del transporte.
 
 ---
 

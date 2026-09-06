@@ -186,8 +186,17 @@ token se escribe en almacenamiento ni se registra en logs.
 
 ---
 
-## SR-MOB-007 — Lectura consolidada de la orden activa de una mesa
+## SR-MOB-007 — Lectura consolidada de la orden activa de una mesa (PARCIALMENTE RESUELTA EN `main`)
 
+- **Estado tras la revisión 0.R1 (2026-09-06)**: el coordinador informa que
+  `main` ya incorporó una **lectura acotada de órdenes activas** que devuelve
+  `orderId`, versión, estado, `shiftId` e `itemCount`. Eso resuelve la parte de
+  `expectedVersion` y permite saber si una mesa tiene orden abierta, pero **no
+  devuelve líneas ni modificadores**, así que el compositor todavía no puede
+  reanudar una comanda existente ni mostrar lo ya pedido. Esta rama parte de
+  `3061487a…` y **no incorpora `main`**: no se copió ni se redefinió ese
+  contrato aquí. La integración contra él la hará el coordinador **después del
+  merge**. Lo que sigue describe el estado en la base de esta rama.
 - **Capacidad requerida**: un contrato versionado y un endpoint autorizado que
   devuelvan, para un par Restaurant/Branch y un `tableId`, si existe una orden
   abierta y cuál es su estado, versión, líneas y estados de `OrderItem`.
@@ -258,8 +267,15 @@ token se escribe en almacenamiento ni se registra en logs.
   de almacenamiento de SR-MOB-001— y confirmar si el cliente acuña `eventId` e
   `idempotencyKey` o si los entrega el servidor.
 
-## SR-MOB-010 — Validación del turno operativo en las mutaciones de Order
+## SR-MOB-010 — Validación del turno operativo en las mutaciones de Order (RESUELTA PARA CREACIÓN v2)
 
+- **Estado tras la revisión 0.R1 (2026-09-06)**: el coordinador informa que
+  `main` **resolvió la creación v2 ligando la orden al turno mediante
+  `shiftId`**. La pregunta de esta solicitud queda contestada: `shiftId` viaja
+  en el comando. Esta rama no incorpora `main` ni redefine ese contrato; el
+  `CreateOrderIntentV1` local sigue **sin** `shiftId` a propósito, porque
+  añadirlo aquí sería inventar la forma de un contrato que ya existe fuera. El
+  coordinador hará la integración contra el contrato real después del merge.
 - **Capacidad requerida**: confirmar si una comanda queda ligada al turno
   operativo y, en ese caso, cómo viaja esa relación.
 - **Pantalla o caso de uso bloqueado**: el envío real de la comanda. La UI ya
