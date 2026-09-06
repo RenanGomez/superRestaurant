@@ -231,17 +231,20 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
     if (!operationallyReadable || token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
     if (state.tab !== "tables" || state.layout.status !== "idle") return undefined;
     const target: MobileBranchScope = { branchId, restaurantId };
-    let active = true;
+    // No cancel flag here: the `loading` dispatch below is what re-runs this
+    // effect, and when the read was started by a real tap React flushes that
+    // update synchronously — so an effect-scoped flag would cancel the very
+    // request it just started and leave the screen loading forever. The answer
+    // is filtered by scope instead, which is what actually makes it stale.
     dispatch({ scope: target, type: "layoutLoading" });
     void getDiningLayout(config, token, target)
-      .then((layout) => { if (active) dispatch({ layout, scope: target, type: "layoutLoaded" }); })
+      .then((layout) => { dispatch({ layout, scope: target, type: "layoutLoaded" }); })
       .catch((error: unknown) => {
-        if (!active) return;
         const failure = toMobileFailure(error);
         if (failure === "authorization") dispatch({ type: "accessRevoked" });
         else dispatch({ failure, scope: target, type: "layoutFailed" });
       });
-    return (): void => { active = false; };
+    return undefined;
   }, [branchId, config, operationallyReadable, restaurantId, state.layout.status, state.tab, token]);
 
   useEffect(() => {
@@ -250,17 +253,17 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
     // tab, so it is read whenever a table is selected as well.
     if ((state.tab !== "menu" && draft.tableId === undefined) || state.menu.status !== "idle") return undefined;
     const target: MobileBranchScope = { branchId, restaurantId };
-    let active = true;
+    // Same reason as the layout read above: a tap on a table starts this one,
+    // so its own `loading` dispatch would cancel it.
     dispatch({ scope: target, type: "menuLoading" });
     void getMenuCatalog(config, token, target)
-      .then((menu) => { if (active) dispatch({ menu, scope: target, type: "menuLoaded" }); })
+      .then((menu) => { dispatch({ menu, scope: target, type: "menuLoaded" }); })
       .catch((error: unknown) => {
-        if (!active) return;
         const failure = toMobileFailure(error);
         if (failure === "authorization") dispatch({ type: "accessRevoked" });
         else dispatch({ failure, scope: target, type: "menuFailed" });
       });
-    return (): void => { active = false; };
+    return undefined;
   }, [branchId, config, draft.tableId, operationallyReadable, restaurantId, state.menu.status, state.tab, token]);
 
   // A draft belongs to exactly one operator, branch and shift. When any of them
