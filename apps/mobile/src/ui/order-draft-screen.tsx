@@ -1,5 +1,13 @@
 import { Fragment } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+  type ViewStyle,
+} from "react-native";
 import type {
   DiningTableV1,
   MenuCatalogStateV1,
@@ -43,7 +51,14 @@ import {
   Subheading,
   useFocusRing,
 } from "./components.js";
-import { colors, radius, spacing, tabletBreakpoint, touchTarget, typography } from "./theme.js";
+import {
+  orderDraftLayout,
+  orderDraftPaneBox,
+  paneOwnsScroller,
+  screenOwnsScroller,
+  type OrderDraftLayout,
+} from "./order-draft-layout.js";
+import { colors, radius, spacing, touchTarget, typography } from "./theme.js";
 
 /**
  * Visual composer for one table's draft.
@@ -78,12 +93,12 @@ export function OrderDraftScreen({
   readonly zoneName: string;
 }): React.JSX.Element {
   const { width } = useWindowDimensions();
-  const wide = width >= tabletBreakpoint;
+  const layout = orderDraftLayout(width);
   const catalog = menu.value?.catalog ?? null;
   const busy = draft.submission.status === "sending";
   const hasContent = orderDraftHasContent(draft);
 
-  return <View style={styles.screen}>
+  const head = <>
     <View style={styles.header}>
       <View style={styles.headerText}>
         <Caption>{zoneName}</Caption>
@@ -128,33 +143,69 @@ export function OrderDraftScreen({
         onCancel={() => { onEvent({ type: "confirmationCancelled" }); }}
         onConfirm={() => { onEvent({ type: "confirmationConfirmed" }); }}
       />}
+  </>;
 
-    <View style={wide ? styles.columnsWide : styles.columns}>
-      <View style={styles.column}>
-        <CatalogPane
-          busy={busy}
-          category={category}
-          catalog={catalog}
-          draft={draft}
-          menu={menu}
-          onCategorySelected={onCategorySelected}
-          onEvent={onEvent}
-          onRetryMenu={onRetryMenu}
-        />
-      </View>
-      <View style={styles.column}>
-        <DraftPane catalog={catalog} draft={draft} onEvent={onEvent} onSubmit={onSubmit} />
-      </View>
+  const catalogPane = <CatalogPane
+    busy={busy}
+    category={category}
+    catalog={catalog}
+    draft={draft}
+    layout={layout}
+    menu={menu}
+    onCategorySelected={onCategorySelected}
+    onEvent={onEvent}
+    onRetryMenu={onRetryMenu}
+  />;
+  const draftPane = <DraftPane catalog={catalog} draft={draft} layout={layout} onEvent={onEvent} onSubmit={onSubmit} />;
+
+  // On a phone the header and the notice already claim most of the column, so
+  // two panes flexing over what is left get a few pixels each and the catalog
+  // ends up under the draft. The screen scrolls instead, and both panes keep
+  // the height their content needs.
+  if (screenOwnsScroller(layout)) {
+    return <ScrollView contentContainerStyle={styles.stack} style={styles.screen}>
+      {head}
+      {catalogPane}
+      {draftPane}
+    </ScrollView>;
+  }
+
+  return <View style={styles.screen}>
+    {head}
+    <View style={styles.columnsWide}>
+      <View style={styles.column}>{catalogPane}</View>
+      <View style={styles.column}>{draftPane}</View>
     </View>
   </View>;
 }
 
+/** The pane box for one arrangement: a flex share only where there is one. */
+function paneStyle(layout: OrderDraftLayout): ViewStyle {
+  return layout === "columns" ? styles.pane : styles.paneStacked;
+}
+
+/**
+ * The scrolling region of a pane. Where the pane owns the scroller it is a
+ * real `ScrollView`; where the screen owns it this is a plain box, because a
+ * scroller nested in an auto-height parent resolves to zero height and hides
+ * its own rows behind whatever follows.
+ */
+function PaneList({ children, layout }: {
+  readonly children: React.ReactNode;
+  readonly layout: OrderDraftLayout;
+}): React.JSX.Element {
+  return paneOwnsScroller(layout)
+    ? <ScrollView contentContainerStyle={styles.paneContent}>{children}</ScrollView>
+    : <View style={styles.paneContent}>{children}</View>;
+}
+
 /** Catalog side: categories, products, and the configurator of one product. */
-function CatalogPane({ busy, category, catalog, draft, menu, onCategorySelected, onEvent, onRetryMenu }: {
+function CatalogPane({ busy, category, catalog, draft, layout, menu, onCategorySelected, onEvent, onRetryMenu }: {
   readonly busy: boolean;
   readonly category: string | undefined;
   readonly catalog: MenuCatalogV1 | null;
   readonly draft: OrderDraftState;
+  readonly layout: OrderDraftLayout;
   readonly menu: MobileResource<MenuCatalogStateV1>;
   readonly onCategorySelected: (categoryId: string) => void;
   readonly onEvent: (event: OrderDraftEvent) => void;
@@ -197,13 +248,13 @@ function CatalogPane({ busy, category, catalog, draft, menu, onCategorySelected,
         title="Producto no disponible"
       />;
     }
-    return <ProductComposer catalog={catalog} draft={draft} onEvent={onEvent} product={product} />;
+    return <ProductComposer catalog={catalog} draft={draft} layout={layout} onEvent={onEvent} product={product} />;
   }
 
   const selected = categories.find((entry) => entry.categoryId === category) ?? categories[0];
   const products = selected === undefined ? [] : orderableProducts(catalog, selected.categoryId);
 
-  return <View style={styles.pane}>
+  return <View style={paneStyle(layout)}>
     <Subheading>Catálogo</Subheading>
     <View accessibilityRole="tablist" style={styles.chips}>
       {categories.map((entry) => <Chip
@@ -213,7 +264,7 @@ function CatalogPane({ busy, category, catalog, draft, menu, onCategorySelected,
         selected={entry.categoryId === selected?.categoryId}
       />)}
     </View>
-    <ScrollView contentContainerStyle={styles.paneContent}>
+    <PaneList layout={layout}>
       {products.map((product) => <ProductRow
         busy={busy}
         currency={catalog.currency}
@@ -221,7 +272,7 @@ function CatalogPane({ busy, category, catalog, draft, menu, onCategorySelected,
         onPress={() => { onEvent({ productId: product.productId, type: "productOpened" }); }}
         product={product}
       />)}
-    </ScrollView>
+    </PaneList>
   </View>;
 }
 
@@ -252,9 +303,10 @@ function ProductRow({ busy, currency, onPress, product }: {
 }
 
 /** Quantity and modifiers of one product, bounded by what the contract allows. */
-function ProductComposer({ catalog, draft, onEvent, product }: {
+function ProductComposer({ catalog, draft, layout, onEvent, product }: {
   readonly catalog: MenuCatalogV1;
   readonly draft: OrderDraftState;
+  readonly layout: OrderDraftLayout;
   readonly onEvent: (event: OrderDraftEvent) => void;
   readonly product: MenuProductV1;
 }): React.JSX.Element {
@@ -268,52 +320,54 @@ function ProductComposer({ catalog, draft, onEvent, product }: {
   const issues = draftLineIssues(catalog, composer);
   const editing = composer.replacingLineId !== undefined;
 
-  return <ScrollView contentContainerStyle={styles.paneContent} style={styles.pane}>
-    <Subheading>{editing ? `Editar ${product.name}` : product.name}</Subheading>
-    <Caption>{`Unitario: ${renderMinorAmount(product.unitPriceMinor, catalog.currency)}`}</Caption>
+  return <View style={paneStyle(layout)}>
+    <PaneList layout={layout}>
+      <Subheading>{editing ? `Editar ${product.name}` : product.name}</Subheading>
+      <Caption>{`Unitario: ${renderMinorAmount(product.unitPriceMinor, catalog.currency)}`}</Caption>
 
-    <Stepper
-      decreaseHint="Resta una unidad al producto"
-      increaseHint="Suma una unidad al producto"
-      label="Cantidad"
-      max={DRAFT_MAX_QUANTITY}
-      min={DRAFT_MIN_QUANTITY}
-      onStep={(delta) => { onEvent({ delta, type: "composerQuantityStepped" }); }}
-      value={composer.quantity}
-    />
-
-    {groups.length === 0
-      ? <Caption>Este producto no publica modificadores.</Caption>
-      : groups.map((group) => <ModifierGroup
-        currency={catalog.currency}
-        group={group}
-        key={group.groupId}
-        onEvent={onEvent}
-        selections={composer.modifierGroups}
-      />)}
-
-    {hidden > 0
-      ? <Caption>
-        {`El catálogo publica ${hidden === 1 ? "1 grupo más" : `${hidden} grupos más`} de los que una comanda `
-          + `admite; esta pantalla muestra los primeros ${DRAFT_MAX_GROUPS}.`}
-      </Caption>
-      : null}
-
-    {issues.length === 0
-      ? null
-      : <View accessibilityLiveRegion="polite" style={styles.issues}>
-        {issues.map((issue) => <Caption key={issue}>{issue}</Caption>)}
-      </View>}
-
-    <View style={styles.composerActions}>
-      <ActionButton
-        disabled={issues.length > 0}
-        label={editing ? "Guardar línea" : "Agregar al borrador"}
-        onPress={() => { onEvent({ type: "composerCommitted" }); }}
+      <Stepper
+        decreaseHint="Resta una unidad al producto"
+        increaseHint="Suma una unidad al producto"
+        label="Cantidad"
+        max={DRAFT_MAX_QUANTITY}
+        min={DRAFT_MIN_QUANTITY}
+        onStep={(delta) => { onEvent({ delta, type: "composerQuantityStepped" }); }}
+        value={composer.quantity}
       />
-      <ActionButton label="Cancelar" onPress={() => { onEvent({ type: "composerClosed" }); }} tone="secondary" />
-    </View>
-  </ScrollView>;
+
+      {groups.length === 0
+        ? <Caption>Este producto no publica modificadores.</Caption>
+        : groups.map((group) => <ModifierGroup
+          currency={catalog.currency}
+          group={group}
+          key={group.groupId}
+          onEvent={onEvent}
+          selections={composer.modifierGroups}
+        />)}
+
+      {hidden > 0
+        ? <Caption>
+          {`El catálogo publica ${hidden === 1 ? "1 grupo más" : `${hidden} grupos más`} de los que una comanda `
+            + `admite; esta pantalla muestra los primeros ${DRAFT_MAX_GROUPS}.`}
+        </Caption>
+        : null}
+
+      {issues.length === 0
+        ? null
+        : <View accessibilityLiveRegion="polite" style={styles.issues}>
+          {issues.map((issue) => <Caption key={issue}>{issue}</Caption>)}
+        </View>}
+
+      <View style={styles.composerActions}>
+        <ActionButton
+          disabled={issues.length > 0}
+          label={editing ? "Guardar línea" : "Agregar al borrador"}
+          onPress={() => { onEvent({ type: "composerCommitted" }); }}
+        />
+        <ActionButton label="Cancelar" onPress={() => { onEvent({ type: "composerClosed" }); }} tone="secondary" />
+      </View>
+    </PaneList>
+  </View>;
 }
 
 function ModifierGroup({ currency, group, onEvent, selections }: {
@@ -362,14 +416,15 @@ function ModifierGroup({ currency, group, onEvent, selections }: {
 }
 
 /** Draft side: the composed lines and the single primary action. */
-function DraftPane({ catalog, draft, onEvent, onSubmit }: {
+function DraftPane({ catalog, draft, layout, onEvent, onSubmit }: {
   readonly catalog: MenuCatalogV1 | null;
   readonly draft: OrderDraftState;
+  readonly layout: OrderDraftLayout;
   readonly onEvent: (event: OrderDraftEvent) => void;
   readonly onSubmit: () => void;
 }): React.JSX.Element {
   const busy = draft.submission.status === "sending";
-  return <View style={styles.pane}>
+  return <View style={paneStyle(layout)}>
     <Subheading>{`Borrador · ${draft.lines.length === 1 ? "1 línea" : `${draft.lines.length} líneas`}`}</Subheading>
 
     {draft.submission.status === "sending" ? <LoadingBlock label="Enviando la comanda…" /> : null}
@@ -389,7 +444,7 @@ function DraftPane({ catalog, draft, onEvent, onSubmit }: {
         description="Elige un producto del catálogo para empezar la comanda de esta mesa."
         title={draft.submission.status === "sent" ? "Sin líneas pendientes" : "Borrador vacío"}
       />
-      : <ScrollView contentContainerStyle={styles.paneContent}>
+      : <PaneList layout={layout}>
         {draft.lines.map((line) => <DraftLineCard
           busy={busy}
           catalog={catalog}
@@ -397,7 +452,7 @@ function DraftPane({ catalog, draft, onEvent, onSubmit }: {
           line={line}
           onEvent={onEvent}
         />)}
-      </ScrollView>}
+      </PaneList>}
 
     <ActionButton
       accessibilityHint="Entrega el borrador a la integración de comandas; todavía no escribe en el servidor"
@@ -594,7 +649,6 @@ const styles = StyleSheet.create({
   chipSelected: { backgroundColor: colors.accent, borderColor: colors.accent },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   column: { flexBasis: 0, flexGrow: 1, flexShrink: 1, minWidth: 0 },
-  columns: { flex: 1, gap: spacing.lg },
   columnsWide: { flex: 1, flexDirection: "row", gap: spacing.lg },
   composerActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.sm },
   confirm: {
@@ -629,8 +683,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingVertical: spacing.xs,
   },
-  pane: { flex: 1, gap: spacing.sm, minWidth: 0 },
+  pane: { ...orderDraftPaneBox.columns, gap: spacing.sm },
   paneContent: { gap: spacing.sm, paddingBottom: spacing.lg },
+  paneStacked: { ...orderDraftPaneBox.stacked, gap: spacing.sm },
   row: {
     alignItems: "center",
     backgroundColor: colors.surface,
@@ -647,6 +702,7 @@ const styles = StyleSheet.create({
   rowPressed: { borderColor: colors.focus, borderWidth: 3 },
   rowText: { flexShrink: 1, gap: spacing.xs, minWidth: 0 },
   screen: { flex: 1 },
+  stack: { gap: spacing.lg, paddingBottom: spacing.lg },
   stepper: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
   stepperButton: {
     alignItems: "center",
