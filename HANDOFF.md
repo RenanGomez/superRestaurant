@@ -1,5 +1,16 @@
 # HANDOFF
 
+## Verificación 2026-09-06 — cancelación autorizada de ítems en REVIEW
+
+- Tarea/estado: la P1 `Implementar auditoría de operaciones de orden y autorizaciones sensibles` pasa de IN_PROGRESS a REVIEW. El alcance continúa limitado a cancelar un `OrderItem`; la cancelación total de `Order` permanece fuera de este corte.
+- PostgreSQL: Emmanuel autorizó ejecutar el verificador contra el proyecto ya identificado. El primer intento falló cerrado en configuración antes de conectar porque la URL local contenía `sslrootcert` además del certificado dedicado. El reintento eliminó ese parámetro solo en memoria, conservó `sslmode=verify-full` y terminó `status=ok` con 5 políticas, 23 tablas con RLS forzado y 24 funciones `SECURITY DEFINER`.
+- Efectos: el runner aplicó el cuerpo de la migración dentro de su transacción externa y terminó obligatoriamente en `ROLLBACK`; no se aplicó ninguna migración ni cambio de esquema persistente. No se mostraron o modificaron credenciales, permisos, Data API o Vault.
+- Verificación acumulada: compuertas globales sin caché verdes en Node 24.19.0 (`lint` 8/8, `typecheck` 11/11, `test` 11/11, `build` 8/8), contrato estático 30/30 y `git diff --check` limpio. CodeGraph permaneció actualizado y no se modificó código después de esa consulta.
+- Coordinación: la revisión read-only de la entrega mobile de Claude `3061487a8b5568c32afc7730099182ffb09da774` confirmó que el diff se limita a 18 archivos de `apps/mobile/**`, sin lockfile, y reprodujo lint, typecheck y 118 pruebas con árbol limpio. No se integró ni se editó `apps/mobile/**`.
+- Hallazgos mobile: volver a mesas elimina el borrador sin la confirmación exigida y contradice su ayuda accesible; `submissionSucceeded` deja las líneas reenviables; el booleano de envío puede bloquear un contexto nuevo si la promesa anterior cuelga y no contiene lanzamientos síncronos; el handoff solo revalida producto/moneda, no modificadores o cantidades frente al catálogo vigente; y `App` ofrece callbacks con forma de mutación antes de llamar además a `submit`, una doble frontera de efecto peligrosa. El retrabajo exacto quedó en `docs/CLAUDE_FRONTEND_WORKSTREAM.md` §0.R1.
+- Siguiente acción mínima: obtener correcciones de Claude para salida segura, ciclo de envío y validación fail-closed del borrador; después integrar por separado contra los contratos actuales de orden/turno y verificar la migración local de enlace Order/turno mediante rollback-only.
+- Agentes: los tres subagentes read-only previos no produjeron cambios por cuota agotada; Claude es un workstream externo. Razonamiento alto por autorización, transacción y futura idempotencia de comandas.
+
 ## Avance 2026-09-05 — cancelación autorizada de ítems de orden
 
 - Tarea/estado: la P1 `Implementar auditoría de operaciones de orden y autorizaciones sensibles` volvió de REVIEW a IN_PROGRESS al comprobar que el dominio y la matriz RBAC modelaban cancelaciones, pero API/PostgreSQL rechazaban todas. Se implementó el slice local de cancelación de un `OrderItem`; la cancelación total de `Order` permanece fuera de alcance.
