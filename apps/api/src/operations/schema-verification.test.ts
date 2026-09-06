@@ -6,6 +6,7 @@ import {
   extractMigrationBody,
   extractMigrationStatements,
   readSchemaVerificationConfig,
+  runReadOnlySchemaAudit,
   runSchemaVerification,
   SchemaVerificationError,
   validateCatalogAuditSql,
@@ -229,6 +230,46 @@ test("always rolls back and closes after a successful audit", async () => {
   assert.match(session.queries[2] ?? "", /do \$\$/u);
   assert.match(session.queries[3] ?? "", /pg_catalog\.pg_policies/u);
   assert.equal(session.queries[4], "ROLLBACK");
+});
+
+test("runs catalog prechecks and postchecks in explicit read-only transactions", async () => {
+  const session = new FakeSession(
+    undefined,
+    undefined,
+    [{ policies: 5, securedTables: 23, securityDefinerFunctions: 22 }],
+  );
+  const summary = await runReadOnlySchemaAudit({
+    catalogAuditSql: "do $$ begin perform 1; end $$;",
+    config,
+    createSession: () => session,
+    expectedSummary: { policies: 5, securedTables: 23, securityDefinerFunctions: 22 },
+  });
+
+  assert.deepEqual(summary, { policies: 5, securedTables: 23, securityDefinerFunctions: 22 });
+  assert.equal(session.connected, true);
+  assert.equal(session.closed, true);
+  assert.equal(session.queries[0], "BEGIN TRANSACTION READ ONLY");
+  assert.match(session.queries[1] ?? "", /do \$\$/u);
+  assert.match(session.queries[2] ?? "", /pg_catalog\.pg_policies/u);
+  assert.equal(session.queries[3], "ROLLBACK");
+});
+
+test("read-only catalog audits still roll back and close after failure", async () => {
+  const session = new FakeSession(2, Object.assign(new Error("private"), { code: "55000" }));
+  await assert.rejects(
+    runReadOnlySchemaAudit({
+      catalogAuditSql: "select 1;",
+      config,
+      createSession: () => session,
+      expectedSummary: { policies: 5, securedTables: 23, securityDefinerFunctions: 22 },
+    }),
+    (error: unknown) => error instanceof SchemaVerificationError
+      && error.stage === "catalog_audit"
+      && error.code === "SCHEMA_VERIFICATION_CATALOG_AUDIT_FAILED"
+      && error.sqlState === "55000",
+  );
+  assert.equal(session.queries.at(-1), "ROLLBACK");
+  assert.equal(session.closed, true);
 });
 
 test("always rolls back and closes after migration failure without exposing the driver error", async () => {

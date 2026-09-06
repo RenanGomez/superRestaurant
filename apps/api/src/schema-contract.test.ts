@@ -69,6 +69,10 @@ const operationalOrdersMigration = readFileSync(
   new URL("../../../supabase/migrations/20260905000200_link_operational_shifts_to_orders.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
+const operationalOrderShiftAudit = readFileSync(
+  new URL("../../../supabase/tests/operational_order_shift_catalog.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
 const orderItemCancellationMigration = readFileSync(
   new URL("../../../supabase/migrations/20260905000300_enable_order_item_cancellations.sql", import.meta.url),
   "utf8",
@@ -165,11 +169,14 @@ test("operational order creation is additive, atomic, scoped and server-only", (
   assert.match(operationalOrdersMigration, /foreign key \(restaurant_id, branch_id, shift_id\)[\s\S]*references app\.operational_shifts/u);
   assert.match(operationalOrdersMigration, /create function app_private\.create_operational_order/u);
   assert.match(operationalOrdersMigration, /shift\.status = 'open'/u);
+  assert.match(operationalOrdersMigration, /shift\.opened_at <= v_occurred_at[\s\S]*for share/u);
   assert.match(operationalOrdersMigration, /app_private\.persist_order_mutation\(p_actor_id, 0, p_order, p_audit\)/u);
   assert.match(operationalOrdersMigration, /v_result ->> 'status' = 'saved'[\s\S]*insert into app\.order_operational_shifts/u);
   assert.match(operationalOrdersMigration, /v_result ->> 'status' = 'replayed'[\s\S]*link\.shift_id = p_shift_id/u);
   assert.match(operationalOrdersMigration, /create function app_private\.list_active_table_orders/u);
   assert.match(operationalOrdersMigration, /orders\.status in \('draft', 'open', 'partially_paid'\)/u);
+  assert.match(operationalOrdersMigration, /left join app\.order_operational_shifts/u);
+  assert.match(operationalOrdersMigration, /'shiftid', active_order\.shift_id/u);
   assert.match(operationalOrdersMigration, /limit 101/u);
   assert.match(operationalOrdersMigration, /alter table app\.order_operational_shifts enable row level security/u);
   assert.match(operationalOrdersMigration, /alter table app\.order_operational_shifts force row level security/u);
@@ -177,6 +184,13 @@ test("operational order creation is additive, atomic, scoped and server-only", (
   assert.match(operationalOrdersMigration, /grant execute on function app_private\.list_active_table_orders\(uuid,uuid,uuid,uuid\) to app_api/u);
   assert.doesNotMatch(operationalOrdersMigration, /grant .*order_operational_shifts.* to (anon|authenticated|service_role)/u);
   assert.doesNotMatch(operationalOrdersMigration, /alter table app\.orders/u);
+  assert.doesNotMatch(operationalOrdersMigration, /unique[^;]*table_id/u);
+  assert.doesNotThrow(() => extractMigrationBody(operationalOrdersMigration));
+  assert.doesNotThrow(() => validateCatalogAuditSql(operationalOrderShiftAudit));
+  assert.match(operationalOrderShiftAudit, /operational_order_shift_false_table_uniqueness/u);
+  assert.match(operationalOrderShiftAudit, /begin transaction read only|operational_order_shift_fail_closed_rejected/u);
+  assert.match(apiPackage, /"verify:operational-order-shift-schema:rollback"/u);
+  assert.match(apiPackage, /run-operational-order-shift-schema-verification\.js/u);
 });
 
 test("order item cancellation is atomic, server-authorized, audited and recoverable by KDS", () => {

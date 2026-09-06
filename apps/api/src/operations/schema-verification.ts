@@ -106,6 +106,13 @@ export interface RunSchemaVerificationOptions {
   readonly migrationSql: string;
 }
 
+export interface RunReadOnlySchemaAuditOptions {
+  readonly catalogAuditSql: string;
+  readonly config: SchemaVerificationConfig;
+  readonly createSession?: (config: SchemaVerificationConfig) => SchemaVerificationSession;
+  readonly expectedSummary: ExpectedSchemaVerificationSummary;
+}
+
 type CertificateLoader = (path: string) => string;
 
 export function readSchemaVerificationConfig(
@@ -239,6 +246,57 @@ export async function runSchemaVerification(options: RunSchemaVerificationOption
     failure = error instanceof SchemaVerificationError
       ? error
       : executionError(stage, error, migrationStatementIndex);
+  } finally {
+    try {
+      await session.query("ROLLBACK");
+    } catch {
+      if (transactionStarted || failure === undefined) {
+        failure = new SchemaVerificationError("rollback", "SCHEMA_VERIFICATION_ROLLBACK_FAILED");
+      }
+    }
+
+    try {
+      await session.close();
+    } catch {
+      if (failure === undefined) {
+        failure = new SchemaVerificationError("close", "SCHEMA_VERIFICATION_CLOSE_FAILED");
+      }
+    }
+  }
+
+  if (failure !== undefined) throw failure;
+  if (result === undefined) throw new SchemaVerificationError("summary", "SCHEMA_VERIFICATION_SUMMARY_REJECTED");
+  return result;
+}
+
+export async function runReadOnlySchemaAudit(
+  options: RunReadOnlySchemaAuditOptions,
+): Promise<SchemaVerificationSummary> {
+  if (!isExpectedSummary(options.expectedSummary)) throw configurationError();
+  const catalogAudit = validateCatalogAuditSql(options.catalogAuditSql);
+  const session = (options.createSession ?? createPostgresSchemaVerificationSession)(options.config);
+
+  let stage: SchemaVerificationStage = "connect";
+  let transactionStarted = false;
+  let result: SchemaVerificationSummary | undefined;
+  let failure: SchemaVerificationError | undefined;
+
+  try {
+    await session.connect();
+    stage = "begin";
+    await session.query("BEGIN TRANSACTION READ ONLY");
+    transactionStarted = true;
+
+    stage = "catalog_audit";
+    await session.query(catalogAudit);
+
+    stage = "summary";
+    const summaryResult = await session.query(SUMMARY_SQL);
+    result = readSummary(summaryResult.rows, options.expectedSummary);
+  } catch (error: unknown) {
+    failure = error instanceof SchemaVerificationError
+      ? error
+      : executionError(stage, error);
   } finally {
     try {
       await session.query("ROLLBACK");
