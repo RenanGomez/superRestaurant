@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { MobileRequestError } from "./mobile-client.js";
+import { MobileRequestError, type MobileBranchScope } from "./mobile-client.js";
 import {
   activeScope,
   canReadBranchData,
   failureMessage,
   hasNoMemberships,
   initialMobileState,
+  layoutReadTarget,
+  menuReadTarget,
   mobileScreen,
   noticeMessage,
   reduceMobileState,
+  shiftsReadTarget,
   toMobileFailure,
   type MobileEvent,
   type MobileState,
@@ -33,6 +36,7 @@ import {
   parseDiningLayoutV1,
   parseMenuCatalogStateV1,
   parseOperationalShiftListV1,
+  type DiningLayoutV1,
 } from "@super-restaurant/shared-types";
 
 const session: MobileSession = fixtureSession();
@@ -48,21 +52,47 @@ function apply(state: MobileState, ...events: readonly MobileEvent[]): MobileSta
   return events.reduce(reduceMobileState, state);
 }
 
+/**
+ * Stands in for the tracker that allocates a read attempt in the screen. Every
+ * answer below is announced by the `loading` of its own attempt, because that
+ * is the only way a branch-scoped answer is ever accepted.
+ */
+let attempts = 0;
+function nextAttempt(): number {
+  attempts += 1;
+  return attempts;
+}
+
+/** The two events one complete layout read produces, under a single attempt. */
+function loadedLayout(scope: MobileBranchScope, layout: DiningLayoutV1): readonly MobileEvent[] {
+  const attempt = nextAttempt();
+  return [
+    { attempt, scope, type: "layoutLoading" },
+    { attempt, layout, scope, type: "layoutLoaded" },
+  ];
+}
+
 function signedIn(): MobileState {
   return apply(initialMobileState, { session, type: "sessionObserved" });
 }
 
 function onBranchA(): MobileState {
   assert.ok(layoutA !== undefined && menuA !== undefined && layoutB !== undefined && shiftsA !== undefined && shiftsA.shifts[0] !== undefined);
+  const shifts = nextAttempt();
+  const layout = nextAttempt();
+  const menu = nextAttempt();
   return apply(
     signedIn(),
     { memberships, type: "membershipsLoaded" },
     { scope: scopeA, type: "branchRequested" },
     { branch: branchA, type: "branchAuthorized" },
-    { list: shiftsA, scope: scopeA, type: "shiftsLoaded" },
+    { attempt: shifts, scope: scopeA, type: "shiftsLoading" },
+    { attempt: shifts, list: shiftsA, scope: scopeA, type: "shiftsLoaded" },
     { shift: shiftsA.shifts[0], type: "shiftSelected" },
-    { layout: layoutA, scope: scopeA, type: "layoutLoaded" },
-    { menu: menuA, scope: scopeA, type: "menuLoaded" },
+    { attempt: layout, scope: scopeA, type: "layoutLoading" },
+    { attempt: layout, layout: layoutA, scope: scopeA, type: "layoutLoaded" },
+    { attempt: menu, scope: scopeA, type: "menuLoading" },
+    { attempt: menu, menu: menuA, scope: scopeA, type: "menuLoaded" },
   );
 }
 
@@ -81,11 +111,13 @@ test("navigation follows the session and the authorized branch, never history", 
 
 test("operational data stays closed until an active shift from the exact branch is selected", () => {
   assert.ok(shiftsA !== undefined && shiftsA.shifts[0] !== undefined);
+  const shifts = nextAttempt();
   const branchOnly = apply(
     signedIn(),
     { scope: scopeA, type: "branchRequested" },
     { branch: branchA, type: "branchAuthorized" },
-    { list: shiftsA, scope: scopeA, type: "shiftsLoaded" },
+    { attempt: shifts, scope: scopeA, type: "shiftsLoading" },
+    { attempt: shifts, list: shiftsA, scope: scopeA, type: "shiftsLoaded" },
   );
   assert.equal(canReadBranchData(branchOnly), true);
   assert.equal(mobileScreen(branchOnly), "shifts");
@@ -129,13 +161,15 @@ test("selecting another branch drops the previous branch data in the same transi
 
 test("a late response for another branch never reaches the active branch", () => {
   assert.ok(layoutB !== undefined);
+  const staleA = nextAttempt();
   const onB = apply(
     onBranchA(),
+    { attempt: staleA, scope: scopeA, type: "menuLoading" },
     { scope: scopeB, type: "branchRequested" },
     { branch: branchB, type: "branchAuthorized" },
-    { layout: layoutB, scope: scopeB, type: "layoutLoaded" },
-    { layout: layoutA as NonNullable<typeof layoutA>, scope: scopeA, type: "layoutLoaded" },
-    { failure: "network", scope: scopeA, type: "menuFailed" },
+    ...loadedLayout(scopeB, layoutB),
+    { attempt: staleA, layout: layoutA as NonNullable<typeof layoutA>, scope: scopeA, type: "layoutLoaded" },
+    { attempt: staleA, failure: "network", scope: scopeA, type: "menuFailed" },
   );
 
   assert.equal(onB.layout.value?.scope.branchId, scopeB.branchId);
@@ -194,11 +228,13 @@ test("signing out locally clears every branch-scoped value", () => {
 });
 
 test("nothing is accepted after sign-out, including a response already in flight", () => {
-  const signedOut = apply(onBranchA(), { notice: undefined, type: "signedOut" });
+  const attempt = nextAttempt();
+  const inFlight = apply(onBranchA(), { attempt, scope: scopeA, type: "layoutLoading" });
+  const signedOut = apply(inFlight, { notice: undefined, type: "signedOut" });
   const late = apply(
     signedOut,
     { memberships, type: "membershipsLoaded" },
-    { layout: layoutA as NonNullable<typeof layoutA>, scope: scopeA, type: "layoutLoaded" },
+    { attempt, layout: layoutA as NonNullable<typeof layoutA>, scope: scopeA, type: "layoutLoaded" },
     { branch: branchA, type: "branchAuthorized" },
   );
 
@@ -206,20 +242,28 @@ test("nothing is accepted after sign-out, including a response already in flight
 });
 
 test("loading, failure and retry are explicit for every read", () => {
-  const loading = apply(onBranchA(), { scope: scopeA, type: "layoutLoading" });
+  const attempt = nextAttempt();
+  const loading = apply(onBranchA(), { attempt, scope: scopeA, type: "layoutLoading" });
   assert.equal(loading.layout.status, "loading");
+  assert.equal(loading.layout.attempt, attempt);
 
-  const failed = apply(loading, { failure: "network", scope: scopeA, type: "layoutFailed" });
+  const failed = apply(loading, { attempt, failure: "network", scope: scopeA, type: "layoutFailed" });
   assert.equal(failed.layout.status, "failed");
   assert.equal(failed.layout.failure, "network");
   assert.equal(failed.layout.value, undefined);
+  assert.equal(failed.layout.attempt, undefined);
 
   const reset = apply(failed, { scope: scopeA, type: "layoutReset" });
   assert.equal(reset.layout.status, "idle");
   assert.equal(reset.layout.failure, undefined);
   assert.equal(apply(failed, { scope: scopeB, type: "layoutReset" }).layout.status, "failed");
 
-  const retried = apply(reset, { layout: layoutA as NonNullable<typeof layoutA>, scope: scopeA, type: "layoutLoaded" });
+  const retry = nextAttempt();
+  const retried = apply(
+    reset,
+    { attempt: retry, scope: scopeA, type: "layoutLoading" },
+    { attempt: retry, layout: layoutA as NonNullable<typeof layoutA>, scope: scopeA, type: "layoutLoaded" },
+  );
   assert.equal(retried.layout.status, "ready");
   assert.equal(retried.layout.failure, undefined);
 
@@ -374,6 +418,106 @@ test("a revalidation answer for another branch, or with none pending, is ignored
   const settled = apply(running, { branch: branchA, type: "revalidationSucceeded" });
   assert.equal(apply(settled, { branch: branchA, type: "revalidationSucceeded" }), settled);
   assert.equal(apply(settled, { failure: "network", type: "revalidationFailed" }), settled);
+});
+
+test("only the attempt the resource is waiting for may settle it", () => {
+  assert.ok(layoutA !== undefined);
+  const attempt = nextAttempt();
+  const loading = apply(onBranchA(), { attempt, scope: scopeA, type: "layoutLoading" });
+
+  // Same session, same Restaurant/Branch, different read: nothing is applied.
+  const other = attempt + 1000;
+  assert.equal(apply(loading, { attempt: other, layout: layoutA, scope: scopeA, type: "layoutLoaded" }), loading);
+  assert.equal(apply(loading, { attempt: other, failure: "network", scope: scopeA, type: "layoutFailed" }), loading);
+  assert.equal(
+    apply(loading, { attempt: other, failure: "authorization", scope: scopeA, type: "layoutFailed" }),
+    loading,
+    "a 401 from a read nobody is waiting for must not revoke the branch",
+  );
+
+  const settled = apply(loading, { attempt, layout: layoutA, scope: scopeA, type: "layoutLoaded" });
+  assert.equal(settled.layout.status, "ready");
+  // The attempt is spent: the same answer twice cannot be applied twice.
+  assert.equal(apply(settled, { attempt, layout: layoutA, scope: scopeA, type: "layoutLoaded" }), settled);
+});
+
+test("an authorization failure for the current read revokes the branch", () => {
+  const attempt = nextAttempt();
+  const revoked = apply(
+    onBranchA(),
+    { attempt, scope: scopeA, type: "shiftsLoading" },
+    { attempt, failure: "authorization", scope: scopeA, type: "shiftsFailed" },
+  );
+
+  assert.equal(mobileScreen(revoked), "branches");
+  assert.equal(revoked.branch, undefined);
+  assert.equal(revoked.notice, "branchRevoked");
+  assert.equal(revoked.memberships.status, "idle");
+});
+
+test("a renewed token gives up the reads in flight and keeps what already answered", () => {
+  const attempt = nextAttempt();
+  const reading = apply(onBranchA(), { attempt, scope: scopeA, type: "shiftsLoading" });
+  const renewed = apply(reading, { session: fixtureSession({ accessToken: "token-9" }), type: "sessionObserved" });
+
+  // The list read with the old token is given up, and left ready to be started
+  // again with the new one — never stranded on `loading`.
+  assert.equal(renewed.shifts.status, "idle");
+  assert.equal(renewed.shifts.attempt, undefined);
+  assert.deepEqual(shiftsReadTarget(renewed), { branchId: scopeA.branchId, restaurantId: scopeA.restaurantId });
+  // What had already answered is untouched: it is the same operator and branch.
+  assert.equal(renewed.layout.status, "ready");
+  assert.equal(renewed.menu.status, "ready");
+  assert.equal(renewed.shift?.shiftId, shiftsA?.shifts[0]?.shiftId);
+
+  // The old token's answer — including its 401 — cannot reach the state.
+  assert.equal(apply(renewed, { attempt, failure: "authorization", scope: scopeA, type: "shiftsFailed" }), renewed);
+  assert.equal(renewed.session?.accessToken, "token-9");
+});
+
+test("choosing a shift gives up an operational read started under the previous one", () => {
+  assert.ok(layoutA !== undefined && shiftsA?.shifts[0] !== undefined);
+  const stale = nextAttempt();
+  const reselected = apply(
+    onBranchA(),
+    { scope: scopeA, type: "layoutReset" },
+    { attempt: stale, scope: scopeA, type: "layoutLoading" },
+    { type: "shiftReleased" },
+    { shift: shiftsA.shifts[0], type: "shiftSelected" },
+  );
+
+  assert.equal(reselected.layout.status, "idle");
+  assert.deepEqual(layoutReadTarget(reselected), { branchId: scopeA.branchId, restaurantId: scopeA.restaurantId });
+  assert.equal(apply(reselected, { attempt: stale, layout: layoutA, scope: scopeA, type: "layoutLoaded" }), reselected);
+});
+
+test("what may be read is decided by the state alone", () => {
+  const idle = apply(onBranchA(), { scope: scopeA, type: "layoutReset" }, { scope: scopeA, type: "menuReset" });
+  const pair = { branchId: scopeA.branchId, restaurantId: scopeA.restaurantId };
+
+  assert.deepEqual(layoutReadTarget(idle), pair);
+  assert.equal(menuReadTarget(idle, false), undefined, "the catalog is not read from the tables tab alone");
+  assert.deepEqual(menuReadTarget(idle, true), pair, "a selected table is what the composer needs it for");
+  assert.deepEqual(menuReadTarget(apply(idle, { tab: "menu", type: "tabSelected" }), false), pair);
+  assert.equal(shiftsReadTarget(idle), undefined, "the shift list already answered");
+
+  // Nothing is read while the scope is unconfirmed, or after a revalidation
+  // that could not complete.
+  const revalidating = apply(idle, { type: "revalidationStarted" });
+  assert.equal(shiftsReadTarget(revalidating), undefined);
+  assert.equal(layoutReadTarget(revalidating), undefined);
+  assert.equal(menuReadTarget(revalidating, true), undefined);
+
+  const blocked = apply(revalidating, { failure: "network", type: "revalidationFailed" });
+  assert.equal(shiftsReadTarget(blocked), undefined);
+  assert.equal(layoutReadTarget(blocked), undefined);
+
+  // No shift, no operational read; the shift list itself is still read.
+  const confirmed = apply(revalidating, { branch: branchA, type: "revalidationSucceeded" });
+  assert.deepEqual(shiftsReadTarget(confirmed), pair);
+  assert.equal(layoutReadTarget(confirmed), undefined);
+  assert.equal(menuReadTarget(confirmed, true), undefined);
+  assert.equal(shiftsReadTarget(signedIn()), undefined, "no branch, no branch-scoped read");
 });
 
 test("selecting a branch clears any pending revalidation state", () => {

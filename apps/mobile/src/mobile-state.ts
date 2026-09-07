@@ -16,6 +16,20 @@ export type MobileNotice = "branchRevoked" | "sessionEnded";
 export type MobileResourceStatus = "failed" | "idle" | "loading" | "ready";
 
 export interface MobileResource<T> {
+  /**
+   * Which read owns a branch-scoped resource — shifts, layout and menu. It is
+   * set while that resource is `loading` and `undefined` in every other status,
+   * so it names exactly one request: the one the screen is still waiting for.
+   *
+   * Restaurant/Branch alone cannot name it, because the same pair is read again
+   * after a token renewal, a shift change or a foreground revalidation. An
+   * answer that no longer matches the attempt on the resource is an answer
+   * nobody is waiting for, and it is dropped instead of applied.
+   *
+   * The membership list is not branch-scoped and keeps its own serial in the
+   * access screen, so it leaves this field `undefined` even while loading.
+   */
+  readonly attempt: number | undefined;
   readonly failure: MobileFailure | undefined;
   readonly status: MobileResourceStatus;
   readonly value: T | undefined;
@@ -52,16 +66,16 @@ export type MobileEvent =
   | { readonly type: "branchRejected"; readonly failure: MobileFailure; readonly scope: MobileBranchScope }
   | { readonly type: "branchReleased" }
   | { readonly type: "branchRequested"; readonly scope: MobileBranchScope }
-  | { readonly type: "layoutFailed"; readonly failure: MobileFailure; readonly scope: MobileBranchScope }
-  | { readonly type: "layoutLoaded"; readonly layout: DiningLayoutV1; readonly scope: MobileBranchScope }
-  | { readonly type: "layoutLoading"; readonly scope: MobileBranchScope }
+  | { readonly type: "layoutFailed"; readonly attempt: number; readonly failure: MobileFailure; readonly scope: MobileBranchScope }
+  | { readonly type: "layoutLoaded"; readonly attempt: number; readonly layout: DiningLayoutV1; readonly scope: MobileBranchScope }
+  | { readonly type: "layoutLoading"; readonly attempt: number; readonly scope: MobileBranchScope }
   | { readonly type: "layoutReset"; readonly scope: MobileBranchScope }
   | { readonly type: "membershipsFailed"; readonly failure: MobileFailure }
   | { readonly type: "membershipsLoaded"; readonly memberships: readonly BranchMembershipSummaryV1[] }
   | { readonly type: "membershipsLoading" }
-  | { readonly type: "menuFailed"; readonly failure: MobileFailure; readonly scope: MobileBranchScope }
-  | { readonly type: "menuLoaded"; readonly menu: MenuCatalogStateV1; readonly scope: MobileBranchScope }
-  | { readonly type: "menuLoading"; readonly scope: MobileBranchScope }
+  | { readonly type: "menuFailed"; readonly attempt: number; readonly failure: MobileFailure; readonly scope: MobileBranchScope }
+  | { readonly type: "menuLoaded"; readonly attempt: number; readonly menu: MenuCatalogStateV1; readonly scope: MobileBranchScope }
+  | { readonly type: "menuLoading"; readonly attempt: number; readonly scope: MobileBranchScope }
   | { readonly type: "menuReset"; readonly scope: MobileBranchScope }
   | { readonly type: "revalidationFailed"; readonly failure: MobileFailure }
   | { readonly type: "revalidationStarted" }
@@ -71,13 +85,18 @@ export type MobileEvent =
   | { readonly type: "signedOut"; readonly notice: MobileNotice | undefined }
   | { readonly type: "shiftReleased" }
   | { readonly type: "shiftSelected"; readonly shift: OperationalShiftSummaryV1 }
-  | { readonly type: "shiftsFailed"; readonly failure: MobileFailure; readonly scope: MobileBranchScope }
-  | { readonly type: "shiftsLoaded"; readonly list: OperationalShiftListV1; readonly scope: MobileBranchScope }
-  | { readonly type: "shiftsLoading"; readonly scope: MobileBranchScope }
+  | { readonly type: "shiftsFailed"; readonly attempt: number; readonly failure: MobileFailure; readonly scope: MobileBranchScope }
+  | { readonly type: "shiftsLoaded"; readonly attempt: number; readonly list: OperationalShiftListV1; readonly scope: MobileBranchScope }
+  | { readonly type: "shiftsLoading"; readonly attempt: number; readonly scope: MobileBranchScope }
   | { readonly type: "shiftsReset"; readonly scope: MobileBranchScope }
   | { readonly type: "tabSelected"; readonly tab: MobileTab };
 
-const idleResource = Object.freeze({ failure: undefined, status: "idle", value: undefined }) as MobileResource<never>;
+const idleResource = Object.freeze({
+  attempt: undefined,
+  failure: undefined,
+  status: "idle",
+  value: undefined,
+}) as MobileResource<never>;
 
 export const initialMobileState: MobileState = Object.freeze({
   branch: undefined,
@@ -112,9 +131,17 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
       // different operator, starts from a clean state so nothing from a
       // previous scope survives. Identity is the immutable Supabase user id: an
       // email is display data and could be reassigned.
-      return state.session !== undefined && isSameOperator(state.session, event.session)
-        ? freeze({ ...state, session: event.session, started: true })
-        : freeze({ ...initialMobileState, session: event.session, started: true });
+      //
+      // A renewed token keeps the data that is already on screen, but not the
+      // reads still in flight: those were started with the token that is being
+      // replaced, and their answer — a 401 from it above all — belongs to a
+      // request nobody is waiting for any more.
+      if (state.session === undefined || !isSameOperator(state.session, event.session)) {
+        return freeze({ ...initialMobileState, session: event.session, started: true });
+      }
+      return freeze(state.session.accessToken === event.session.accessToken
+        ? { ...state, session: event.session, started: true }
+        : withoutReadsInFlight({ ...state, session: event.session, started: true }));
     case "signedOut":
       // Nothing about the closed session is kept — no token, no identity, no
       // derived key. Refusing what the provider says afterwards is the gate's
@@ -132,21 +159,7 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
     case "accessRevoked":
       // The server refused an authorized branch mid-session. Drop the branch and
       // its data, and force the membership list to be read again from Nest.
-      return freeze({
-        ...state,
-        branch: undefined,
-        branchFailure: "authorization",
-        layout: idleResource,
-        memberships: idleResource,
-        menu: idleResource,
-        notice: "branchRevoked",
-        pendingScope: undefined,
-        shift: undefined,
-        shifts: idleResource,
-        revalidating: false,
-        revalidationFailure: undefined,
-        tab: "tables",
-      });
+      return freeze(revokedState(state));
     case "revalidationStarted":
       // Idempotent on purpose: repeated foreground events while a revalidation
       // is in flight must not start a second one. Branch data is dropped here,
@@ -175,26 +188,12 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         : state;
     case "revalidationFailed":
       if (!state.revalidating) return state;
-      if (event.failure === "authorization") {
-        return freeze({
-          ...state,
-          branch: undefined,
-          branchFailure: "authorization",
-          layout: idleResource,
-          memberships: idleResource,
-          menu: idleResource,
-          notice: "branchRevoked",
-          pendingScope: undefined,
-          shift: undefined,
-          shifts: idleResource,
-          revalidating: false,
-          revalidationFailure: undefined,
-          tab: "tables",
-        });
-      }
+      if (event.failure === "authorization") return freeze(revokedState(state));
       return freeze({ ...state, revalidating: false, revalidationFailure: event.failure });
     case "membershipsLoading":
-      return freeze({ ...state, memberships: loading(state.memberships) });
+      // The membership list is not branch-scoped: it is owned by the request
+      // serial the access screen keeps, so it carries no attempt here.
+      return freeze({ ...state, memberships: loading(undefined) });
     case "membershipsLoaded":
       return freeze({ ...state, memberships: ready(Object.freeze([...event.memberships])) });
     case "membershipsFailed":
@@ -244,38 +243,47 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         tab: "tables",
       });
     case "shiftSelected":
+      // The operational reads belong to the shift too, so a layout or catalog
+      // request started under the previous one stops being the current attempt.
       return state.branch !== undefined && state.shifts.status === "ready"
         && state.shifts.value?.shifts.some((candidate) => candidate.shiftId === event.shift.shiftId)
         && sameScope(state.branch, event.shift.scope)
-        ? freeze({ ...state, shift: event.shift })
+        ? freeze(withoutReadsInFlight({ ...state, shift: event.shift }))
         : state;
     case "shiftReleased":
       return freeze({ ...state, layout: idleResource, menu: idleResource, shift: undefined, tab: "tables" });
     case "shiftsLoading":
-      return forActiveScope(state, event.scope, (current) => ({ ...current, shifts: loading(current.shifts) }));
+      return forActiveScope(state, event.scope, (current) => ({ ...current, shifts: loading(event.attempt) }));
     case "shiftsLoaded":
-      return forActiveScope(state, event.scope, (current) => ({ ...current, shifts: ready(event.list) }));
+      return forCurrentRead(state, event, state.shifts, (current) => ({ ...current, shifts: ready(event.list) }));
     case "shiftsFailed":
-      return forActiveScope(state, event.scope, (current) => ({ ...current, shifts: failed(event.failure) }));
+      return forCurrentRead(state, event, state.shifts, (current) => (event.failure === "authorization"
+        ? revokedState(current)
+        : { ...current, shifts: failed(event.failure) }));
     case "shiftsReset":
       return forActiveScope(state, event.scope, (current) => ({ ...current, shifts: idleResource }));
     case "tabSelected":
       return state.branch === undefined || state.shift === undefined ? state : freeze({ ...state, tab: event.tab });
     case "layoutLoading":
-      return forActiveScope(state, event.scope, (current) => ({ ...current, layout: loading(current.layout) }));
+      return forActiveScope(state, event.scope, (current) => ({ ...current, layout: loading(event.attempt) }));
     case "layoutLoaded":
-      return forActiveScope(state, event.scope, (current) => ({ ...current, layout: ready(event.layout) }));
+      return forCurrentRead(state, event, state.layout, (current) => ({ ...current, layout: ready(event.layout) }));
     case "layoutFailed":
-      return forActiveScope(state, event.scope, (current) => ({ ...current, layout: failed(event.failure) }));
+      return forCurrentRead(state, event, state.layout, (current) => (event.failure === "authorization"
+        ? revokedState(current)
+        : { ...current, layout: failed(event.failure) }));
     case "layoutReset":
-      // Retry: back to idle, which is what makes the screen read again.
+      // Retry: back to idle, which is what makes the screen read again. It also
+      // gives up the attempt in flight, so the retry owns the next answer.
       return forActiveScope(state, event.scope, (current) => ({ ...current, layout: idleResource }));
     case "menuLoading":
-      return forActiveScope(state, event.scope, (current) => ({ ...current, menu: loading(current.menu) }));
+      return forActiveScope(state, event.scope, (current) => ({ ...current, menu: loading(event.attempt) }));
     case "menuLoaded":
-      return forActiveScope(state, event.scope, (current) => ({ ...current, menu: ready(event.menu) }));
+      return forCurrentRead(state, event, state.menu, (current) => ({ ...current, menu: ready(event.menu) }));
     case "menuFailed":
-      return forActiveScope(state, event.scope, (current) => ({ ...current, menu: failed(event.failure) }));
+      return forCurrentRead(state, event, state.menu, (current) => (event.failure === "authorization"
+        ? revokedState(current)
+        : { ...current, menu: failed(event.failure) }));
     case "menuReset":
       return forActiveScope(state, event.scope, (current) => ({ ...current, menu: idleResource }));
     default:
@@ -311,6 +319,35 @@ export function canReadBranchData(state: MobileState): boolean {
 /** Tables and menu are operational reads and require a freshly selected open shift. */
 export function canReadOperationalData(state: MobileState): boolean {
   return canReadBranchData(state) && state.shift !== undefined;
+}
+
+/**
+ * The Restaurant/Branch pair each branch-scoped read may be started for right
+ * now, or `undefined` when the state does not authorize starting it.
+ *
+ * State alone decides this, and it decides it in one place: the screen effects
+ * ask these functions instead of restating the conditions in a dependency list.
+ * A read starts only from `idle`, and `idle` is exactly what every event that
+ * invalidates a read leaves behind, so giving up an answer and starting the
+ * current read are the same transition seen from both sides.
+ */
+export function shiftsReadTarget(state: MobileState): MobileBranchScope | undefined {
+  return canReadBranchData(state) && state.shifts.status === "idle" ? activeScope(state) : undefined;
+}
+
+export function layoutReadTarget(state: MobileState): MobileBranchScope | undefined {
+  return canReadOperationalData(state) && state.tab === "tables" && state.layout.status === "idle"
+    ? activeScope(state)
+    : undefined;
+}
+
+/**
+ * The catalog also backs the draft composer, which lives inside the tables tab,
+ * so it is read whenever a table is selected as well.
+ */
+export function menuReadTarget(state: MobileState, tableSelected: boolean): MobileBranchScope | undefined {
+  if (!canReadOperationalData(state) || state.menu.status !== "idle") return undefined;
+  return state.tab === "menu" || tableSelected ? activeScope(state) : undefined;
 }
 
 /** True once Nest answered with an empty, and therefore explicit, membership list. */
@@ -361,16 +398,71 @@ function forActiveScope(
   return active !== undefined && sameScope(active, scope) ? freeze(change(state)) : state;
 }
 
-function loading<T>(current: MobileResource<T>): MobileResource<T> {
-  return Object.freeze({ failure: undefined, status: "loading", value: current.value });
+/**
+ * Applies the answer of a branch-scoped read only when that read is still the
+ * one the resource is waiting for: the active Restaurant/Branch has to match,
+ * and so does the attempt. The two together are the ownership test — success,
+ * failure and the revocation a 401 causes all pass through here, so an answer
+ * to a request the app already gave up on can change nothing at all.
+ */
+function forCurrentRead<T>(
+  state: MobileState,
+  event: { readonly attempt: number; readonly scope: MobileBranchScope },
+  resource: MobileResource<T>,
+  change: (current: MobileState) => MobileState,
+): MobileState {
+  if (resource.attempt !== event.attempt) return state;
+  return forActiveScope(state, event.scope, change);
+}
+
+/**
+ * Gives up every branch-scoped read that has not answered yet, leaving each one
+ * `idle` rather than `loading`. Idle is what lets the screen start the read that
+ * is current now; staying `loading` would wait forever for an answer that can no
+ * longer be applied. Resources that already settled are left exactly as they are.
+ */
+function withoutReadsInFlight(state: MobileState): MobileState {
+  return {
+    ...state,
+    layout: givenUp(state.layout),
+    menu: givenUp(state.menu),
+    shifts: givenUp(state.shifts),
+  };
+}
+
+function givenUp<T>(resource: MobileResource<T>): MobileResource<T> {
+  return resource.status === "loading" ? idleResource : resource;
+}
+
+/** The branch is gone and so is everything read for it; memberships are re-read. */
+function revokedState(state: MobileState): MobileState {
+  return {
+    ...state,
+    branch: undefined,
+    branchFailure: "authorization",
+    layout: idleResource,
+    memberships: idleResource,
+    menu: idleResource,
+    notice: "branchRevoked",
+    pendingScope: undefined,
+    shift: undefined,
+    shifts: idleResource,
+    revalidating: false,
+    revalidationFailure: undefined,
+    tab: "tables",
+  };
+}
+
+function loading<T>(attempt: number | undefined): MobileResource<T> {
+  return Object.freeze({ attempt, failure: undefined, status: "loading", value: undefined });
 }
 
 function ready<T>(value: T): MobileResource<T> {
-  return Object.freeze({ failure: undefined, status: "ready", value });
+  return Object.freeze({ attempt: undefined, failure: undefined, status: "ready", value });
 }
 
 function failed<T>(failure: MobileFailure): MobileResource<T> {
-  return Object.freeze({ failure, status: "failed", value: undefined });
+  return Object.freeze({ attempt: undefined, failure, status: "failed", value: undefined });
 }
 
 function frozenScope(scope: MobileBranchScope): MobileBranchScope {

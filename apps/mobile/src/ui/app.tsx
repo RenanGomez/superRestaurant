@@ -4,6 +4,7 @@ import type { DiningTableV1 } from "@super-restaurant/shared-types";
 
 import { gateMobileAuth, type MobileAuthGate } from "../auth-gate.js";
 import type { MobileAuthPort } from "../auth-port.js";
+import { createBranchReadTracker, type BranchReadTracker } from "../branch-read.js";
 import type { MobileConfig } from "../config.js";
 import { lifecycleEffects, type MobileAppStatus, type MobileLifecyclePort } from "../lifecycle.js";
 import {
@@ -17,12 +18,14 @@ import {
 import {
   activeScope,
   canReadBranchData,
-  canReadOperationalData,
   failureMessage,
   initialMobileState,
+  layoutReadTarget,
+  menuReadTarget,
   mobileScreen,
   noticeMessage,
   reduceMobileState,
+  shiftsReadTarget,
   toMobileFailure,
   type MobileFailure,
   type MobileNotice,
@@ -80,12 +83,19 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
   // provider callbacks, which run long after the render that produced them.
   const identified = useRef(false);
   const membershipRequest = useRef(0);
+  /**
+   * One read tracker per mounted app, held in a ref because it is stateful: it
+   * is what gives each branch-scoped read the identity the reducer checks
+   * before applying an answer.
+   */
+  const readerRef = useRef<BranchReadTracker | undefined>(undefined);
+  readerRef.current ??= createBranchReadTracker();
+  const reader = readerRef.current;
   const token = state.session?.accessToken;
   const scope = activeScope(state);
   const branchId = scope?.branchId;
   const restaurantId = scope?.restaurantId;
   const readable = canReadBranchData(state);
-  const operationallyReadable = canReadOperationalData(state);
   const canReadMemberships = state.session !== undefined && !state.revalidating
     && state.revalidationFailure === undefined;
 
@@ -210,61 +220,46 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
     return (): void => { active = false; };
   }, [config, loadMemberships, state.pendingScope, token]);
 
+  // The three branch-scoped reads. None of them cancels anything on cleanup:
+  // the `loading` dispatch each one makes is what re-runs its own effect, and
+  // when a real tap started the read React flushes that update synchronously,
+  // so a cleanup flag would cancel the request it had just issued. What decides
+  // whether an answer is still wanted is the attempt the tracker allocates and
+  // the reducer stores on the resource: a read that has been given up — another
+  // token, another branch, another shift, a revalidation — leaves its resource
+  // `idle`, which both refuses the old answer and lets the current read start.
   useEffect(() => {
-    if (!readable || token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
-    if (state.shifts.status !== "idle") return undefined;
-    const target: MobileBranchScope = { branchId, restaurantId };
-    let active = true;
-    dispatch({ scope: target, type: "shiftsLoading" });
-    void listOperationalShifts(config, token, target)
-      .then((list) => { if (active) dispatch({ list, scope: target, type: "shiftsLoaded" }); })
-      .catch((error: unknown) => {
-        if (!active) return;
-        const failure = toMobileFailure(error);
-        if (failure === "authorization") dispatch({ type: "accessRevoked" });
-        else dispatch({ failure, scope: target, type: "shiftsFailed" });
-      });
-    return (): void => { active = false; };
-  }, [branchId, config, readable, restaurantId, state.shifts.status, token]);
+    const target = shiftsReadTarget(state);
+    if (target === undefined || token === undefined) return;
+    reader.start({
+      onFailed: (failure, attempt) => { dispatch({ attempt, failure, scope: target, type: "shiftsFailed" }); },
+      onLoaded: (list, attempt) => { dispatch({ attempt, list, scope: target, type: "shiftsLoaded" }); },
+      onLoading: (attempt) => { dispatch({ attempt, scope: target, type: "shiftsLoading" }); },
+      read: () => listOperationalShifts(config, token, target),
+    });
+  }, [config, reader, state, token]);
 
   useEffect(() => {
-    if (!operationallyReadable || token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
-    if (state.tab !== "tables" || state.layout.status !== "idle") return undefined;
-    const target: MobileBranchScope = { branchId, restaurantId };
-    // No cancel flag here: the `loading` dispatch below is what re-runs this
-    // effect, and when the read was started by a real tap React flushes that
-    // update synchronously — so an effect-scoped flag would cancel the very
-    // request it just started and leave the screen loading forever. The answer
-    // is filtered by scope instead, which is what actually makes it stale.
-    dispatch({ scope: target, type: "layoutLoading" });
-    void getDiningLayout(config, token, target)
-      .then((layout) => { dispatch({ layout, scope: target, type: "layoutLoaded" }); })
-      .catch((error: unknown) => {
-        const failure = toMobileFailure(error);
-        if (failure === "authorization") dispatch({ type: "accessRevoked" });
-        else dispatch({ failure, scope: target, type: "layoutFailed" });
-      });
-    return undefined;
-  }, [branchId, config, operationallyReadable, restaurantId, state.layout.status, state.tab, token]);
+    const target = layoutReadTarget(state);
+    if (target === undefined || token === undefined) return;
+    reader.start({
+      onFailed: (failure, attempt) => { dispatch({ attempt, failure, scope: target, type: "layoutFailed" }); },
+      onLoaded: (layout, attempt) => { dispatch({ attempt, layout, scope: target, type: "layoutLoaded" }); },
+      onLoading: (attempt) => { dispatch({ attempt, scope: target, type: "layoutLoading" }); },
+      read: () => getDiningLayout(config, token, target),
+    });
+  }, [config, reader, state, token]);
 
   useEffect(() => {
-    if (!operationallyReadable || token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
-    // The catalog also backs the draft composer, which lives inside the tables
-    // tab, so it is read whenever a table is selected as well.
-    if ((state.tab !== "menu" && draft.tableId === undefined) || state.menu.status !== "idle") return undefined;
-    const target: MobileBranchScope = { branchId, restaurantId };
-    // Same reason as the layout read above: a tap on a table starts this one,
-    // so its own `loading` dispatch would cancel it.
-    dispatch({ scope: target, type: "menuLoading" });
-    void getMenuCatalog(config, token, target)
-      .then((menu) => { dispatch({ menu, scope: target, type: "menuLoaded" }); })
-      .catch((error: unknown) => {
-        const failure = toMobileFailure(error);
-        if (failure === "authorization") dispatch({ type: "accessRevoked" });
-        else dispatch({ failure, scope: target, type: "menuFailed" });
-      });
-    return undefined;
-  }, [branchId, config, draft.tableId, operationallyReadable, restaurantId, state.menu.status, state.tab, token]);
+    const target = menuReadTarget(state, draft.tableId !== undefined);
+    if (target === undefined || token === undefined) return;
+    reader.start({
+      onFailed: (failure, attempt) => { dispatch({ attempt, failure, scope: target, type: "menuFailed" }); },
+      onLoaded: (menu, attempt) => { dispatch({ attempt, menu, scope: target, type: "menuLoaded" }); },
+      onLoading: (attempt) => { dispatch({ attempt, scope: target, type: "menuLoading" }); },
+      read: () => getMenuCatalog(config, token, target),
+    });
+  }, [config, draft.tableId, reader, state, token]);
 
   // A draft belongs to exactly one operator, branch and shift. When any of them
   // changes — sign-out, another operator, another branch, another shift, or an

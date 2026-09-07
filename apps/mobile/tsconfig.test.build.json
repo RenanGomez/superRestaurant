@@ -10,6 +10,8 @@
   },
   "include": [
     "src/bundle-isolation.test.ts",
+    "src/branch-read.ts",
+    "src/branch-read.test.ts",
     "src/auth-gate.ts",
     "src/auth-gate.test.ts",
     "src/config.ts",
