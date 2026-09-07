@@ -21,12 +21,15 @@ import {
   failureMessage,
   initialMobileState,
   layoutReadTarget,
+  membershipsReadOperator,
   menuReadTarget,
   mobileScreen,
   noticeMessage,
+  ownsMembershipsRead,
   reduceMobileState,
   shiftsReadTarget,
   toMobileFailure,
+  type MobileEvent,
   type MobileFailure,
   type MobileNotice,
   type MobileState,
@@ -48,6 +51,7 @@ import {
   type OrderDraftIntegration,
 } from "../order-intents.js";
 import { readInitialSession, revalidateAccess } from "../revalidation.js";
+import type { MobileSession } from "../session.js";
 import { endMobileSession } from "../sign-out.js";
 import { BranchScreen } from "./branch-screen.js";
 import { ActionButton, Banner, Caption, LoadingBlock, StateBlock, Subheading, useFocusRing } from "./components.js";
@@ -71,7 +75,23 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
    */
   readonly orderDraftIntegration?: OrderDraftIntegration;
 }): React.JSX.Element {
-  const [state, dispatch] = useReducer(reduceMobileState, initialMobileState);
+  const [state, applyEvent] = useReducer(reduceMobileState, initialMobileState);
+  /**
+   * A mirror of the reducer's state, advanced in the same synchronous step as
+   * the event that changes it.
+   *
+   * `state` is what a render saw. A provider callback or a request answer runs
+   * long after that render, and the one question it has to ask — did the reducer
+   * accept this read as the current one? — can only be answered against what the
+   * reducer knows *now*. The mirror is the same pure reducer over the same
+   * events in the same order, so it cannot disagree with what React renders; it
+   * is only ever ahead of it, which is exactly what those callbacks need.
+   */
+  const mirror = useRef(state);
+  const dispatch = useCallback((event: MobileEvent): void => {
+    mirror.current = reduceMobileState(mirror.current, event);
+    applyEvent(event);
+  }, []);
   const [draft, dispatchDraft] = useReducer(reduceOrderDraft, initialOrderDraftState);
   const [draftCategory, setDraftCategory] = useState<string | undefined>(undefined);
   // Every conversation with the identity provider goes through the gate, so a
@@ -82,11 +102,10 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
   // Whether this device is currently holding a session, readable from the
   // provider callbacks, which run long after the render that produced them.
   const identified = useRef(false);
-  const membershipRequest = useRef(0);
   /**
    * One read tracker per mounted app, held in a ref because it is stateful: it
-   * is what gives each branch-scoped read the identity the reducer checks
-   * before applying an answer.
+   * is what gives each read — the membership list included — the identity the
+   * reducer checks before applying an answer.
    */
   const readerRef = useRef<BranchReadTracker | undefined>(undefined);
   readerRef.current ??= createBranchReadTracker();
@@ -96,8 +115,6 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
   const branchId = scope?.branchId;
   const restaurantId = scope?.restaurantId;
   const readable = canReadBranchData(state);
-  const canReadMemberships = state.session !== undefined && !state.revalidating
-    && state.revalidationFailure === undefined;
 
   /**
    * Ends the session on this device only, keeping the reason to explain it. The
@@ -107,23 +124,34 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
     pendingNotice.current = notice;
     // `gate.signOut` closes the generation before the provider is asked.
     endMobileSession({ dispatch, notice, signOut: gate.signOut });
-  }, [gate]);
+  }, [dispatch, gate]);
 
-  const loadMemberships = useCallback((accessToken: string): void => {
-    const request = membershipRequest.current + 1;
-    membershipRequest.current = request;
-    dispatch({ type: "membershipsLoading" });
-    void listMemberships(config, accessToken)
-      .then((list) => {
-        if (membershipRequest.current === request) dispatch({ memberships: list.memberships, type: "membershipsLoaded" });
-      })
-      .catch((error: unknown) => {
-        if (membershipRequest.current !== request) return;
-        const failure = toMobileFailure(error);
-        if (failure === "authorization") endSession("sessionEnded");
-        else dispatch({ failure, type: "membershipsFailed" });
-      });
-  }, [config, endSession]);
+  /**
+   * Reads the membership list of one operator. The whole session is taken, not
+   * just its token, because the read belongs to the immutable `userId`: that is
+   * what the reducer checks before putting a list on screen, so an answer for
+   * the operator who was here before can never be shown to the one who is here
+   * now — and cannot end their session either.
+   */
+  const loadMemberships = useCallback((session: MobileSession): void => {
+    const operator = session.userId;
+    reader.start({
+      onFailed: (failure, attempt) => {
+        // Read before the dispatch, because the dispatch is what ends the
+        // session when this is the read the state is waiting for.
+        const owned = ownsMembershipsRead(mirror.current, { attempt, operator });
+        dispatch({ attempt, failure, operator, type: "membershipsFailed" });
+        // The reducer has already signed this device out; `endSession` is the
+        // provider half of it, and restating the same reason changes nothing.
+        if (owned && failure === "authorization") endSession("sessionEnded");
+      },
+      onLoaded: (list, attempt) => {
+        dispatch({ attempt, memberships: list.memberships, operator, type: "membershipsLoaded" });
+      },
+      onLoading: (attempt) => { dispatch({ attempt, operator, type: "membershipsLoading" }); },
+      read: () => listMemberships(config, session.accessToken),
+    });
+  }, [config, dispatch, endSession, reader]);
 
   useEffect(() => { identified.current = state.session !== undefined; }, [state.session]);
 
@@ -195,30 +223,35 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
         return;
       }
       dispatch({ branch: outcome.branch, type: "revalidationSucceeded" });
-      if (outcome.branch === undefined) loadMemberships(outcome.session.accessToken);
+      if (outcome.branch === undefined) loadMemberships(outcome.session);
     });
     return (): void => { active = false; };
-  }, [branchId, config, endSession, gate, loadMemberships, restaurantId, state.revalidating]);
+  }, [branchId, config, dispatch, endSession, gate, loadMemberships, restaurantId, state.revalidating]);
 
   useEffect(() => {
-    if (canReadMemberships && token !== undefined && state.memberships.status === "idle") loadMemberships(token);
-  }, [canReadMemberships, loadMemberships, state.memberships.status, token]);
+    // `membershipsReadOperator` is the whole condition, and it is the same one
+    // the reducer uses to decide whose list may be shown.
+    const session = state.session;
+    if (session === undefined || membershipsReadOperator(state) !== session.userId) return;
+    loadMemberships(session);
+  }, [loadMemberships, state]);
 
   useEffect(() => {
     const pending = state.pendingScope;
-    if (pending === undefined || token === undefined) return undefined;
+    const session = state.session;
+    if (pending === undefined || session === undefined) return undefined;
     let active = true;
-    void authorizeBranch(config, token, pending)
+    void authorizeBranch(config, session.accessToken, pending)
       .then((branch) => { if (active) dispatch({ branch, type: "branchAuthorized" }); })
       .catch((error: unknown) => {
         if (!active) return;
         const failure = toMobileFailure(error);
         dispatch({ failure, scope: pending, type: "branchRejected" });
         // A refused pair may mean the membership itself changed: read it again.
-        if (failure === "authorization") loadMemberships(token);
+        if (failure === "authorization") loadMemberships(session);
       });
     return (): void => { active = false; };
-  }, [config, loadMemberships, state.pendingScope, token]);
+  }, [config, dispatch, loadMemberships, state.pendingScope, state.session]);
 
   // The three branch-scoped reads. None of them cancels anything on cleanup:
   // the `loading` dispatch each one makes is what re-runs its own effect, and
@@ -335,7 +368,7 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
       branchFailure={state.branchFailure}
       memberships={state.memberships}
       notice={notice}
-      onRetry={() => { if (token !== undefined) loadMemberships(token); }}
+      onRetry={() => { if (state.session !== undefined) loadMemberships(state.session); }}
       onSelect={(selected) => { dispatch({ scope: selected, type: "branchRequested" }); }}
       onSignOut={() => { endSession(undefined); }}
       pendingScope={state.pendingScope}

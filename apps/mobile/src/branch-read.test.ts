@@ -6,10 +6,13 @@ import { MobileRequestError, type MobileBranchScope } from "./mobile-client.js";
 import {
   initialMobileState,
   layoutReadTarget,
+  membershipsReadOperator,
   menuReadTarget,
   mobileScreen,
+  ownsMembershipsRead,
   reduceMobileState,
   shiftsReadTarget,
+  type MembershipsRead,
   type MobileEvent,
   type MobileFailure,
   type MobileState,
@@ -23,6 +26,7 @@ import {
   operationalShiftListBody,
   scopeA,
   scopeB,
+  FIXTURE_USER_A,
   FIXTURE_USER_B,
 } from "./test-fixtures.js";
 import {
@@ -30,6 +34,7 @@ import {
   parseDiningLayoutV1,
   parseMenuCatalogStateV1,
   parseOperationalShiftListV1,
+  type BranchMembershipSummaryV1,
   type DiningLayoutV1,
   type MenuCatalogStateV1,
   type OperationalShiftListV1,
@@ -40,7 +45,21 @@ import {
 const unhandled: unknown[] = [];
 process.on("unhandledRejection", (reason) => { unhandled.push(reason); });
 
-const memberships = parseBranchMembershipListV1(membershipListBody([scopeA, scopeB]))?.memberships ?? [];
+/**
+ * Two operators with different lists, so an answer can be traced back to the
+ * operator it belongs to: A is authorized in both branches, B only in the
+ * second one. Nothing but the immutable `userId` distinguishes them.
+ */
+function membershipsOf(operator: string): readonly BranchMembershipSummaryV1[] {
+  const scopes = operator === FIXTURE_USER_A ? [scopeA, scopeB] : [scopeB];
+  const parsed = parseBranchMembershipListV1(membershipListBody(scopes));
+  assert.ok(parsed !== undefined);
+  return parsed.memberships;
+}
+
+const memberships = membershipsOf(FIXTURE_USER_A);
+const sessionA = fixtureSession();
+const sessionB = fixtureSession({ accessToken: "harness-token-b", userId: FIXTURE_USER_B });
 
 function branchOf(scope: MobileBranchScope): { branchId: string; restaurantId: string; roles: readonly "waiter"[] } {
   return authorizedBranchBody(scope) as { branchId: string; restaurantId: string; roles: readonly "waiter"[] };
@@ -64,7 +83,7 @@ function menuOf(scope: MobileBranchScope): MenuCatalogStateV1 {
   return parsed;
 }
 
-type ReadKind = "layout" | "menu" | "shifts";
+type ReadKind = "layout" | "memberships" | "menu" | "shifts";
 
 /** One request in flight, settled by the test rather than by a timer. */
 interface StartedRead {
@@ -72,7 +91,10 @@ interface StartedRead {
   readonly attempt: number;
   readonly fail: (error: unknown) => Promise<void>;
   readonly kind: ReadKind;
-  readonly scope: MobileBranchScope;
+  /** Set for a membership read: the operator it belongs to. */
+  readonly operator?: string;
+  /** Set for a branch-scoped read: the pair it belongs to. */
+  readonly scope?: MobileBranchScope;
 }
 
 /** Lets every already-queued promise callback run before the next assertion. */
@@ -94,6 +116,8 @@ function screen(): {
   readonly dispatch: (event: MobileEvent) => void;
   readonly reads: readonly StartedRead[];
   readonly selectTable: (selected: boolean) => void;
+  /** Operators whose session this screen closed at the identity provider. */
+  readonly signOuts: readonly string[];
   readonly state: () => MobileState;
 } {
   let state = initialMobileState;
@@ -101,6 +125,7 @@ function screen(): {
   let running = false;
   const tracker = createBranchReadTracker();
   const reads: StartedRead[] = [];
+  const signOuts: string[] = [];
 
   function dispatch(event: MobileEvent): void {
     state = reduceMobileState(state, event);
@@ -116,11 +141,15 @@ function screen(): {
     finally { running = false; }
   }
 
-  function begin<T>(kind: ReadKind, scope: MobileBranchScope, value: T, events: {
-    readonly failed: (failure: MobileFailure, attempt: number) => MobileEvent;
-    readonly loaded: (loadedValue: T, attempt: number) => MobileEvent;
-    readonly loading: (attempt: number) => MobileEvent;
-  }): void {
+  function begin<T>(
+    read: { readonly kind: ReadKind; readonly operator?: string; readonly scope?: MobileBranchScope },
+    value: T,
+    events: {
+      readonly failed: (failure: MobileFailure, attempt: number) => void;
+      readonly loaded: (loadedValue: T, attempt: number) => void;
+      readonly loading: (attempt: number) => void;
+    },
+  ): void {
     let resolve: ((loaded: T) => void) | undefined;
     let reject: ((error: unknown) => void) | undefined;
     const request = new Promise<T>((resolveRequest, rejectRequest) => {
@@ -128,45 +157,65 @@ function screen(): {
       reject = rejectRequest;
     });
     const attempt = tracker.start<T>({
-      onFailed: (failure, at) => { dispatch(events.failed(failure, at)); },
-      onLoaded: (loaded, at) => { dispatch(events.loaded(loaded, at)); },
-      onLoading: (at) => { dispatch(events.loading(at)); },
+      onFailed: events.failed,
+      onLoaded: events.loaded,
+      onLoading: events.loading,
       read: () => request,
     });
     reads.push({
       answer: async (): Promise<void> => { resolve?.(value); await drain(); },
       attempt,
       fail: async (error: unknown): Promise<void> => { reject?.(error); await drain(); },
-      kind,
-      scope,
+      ...read,
     });
   }
 
   function startOne(): boolean {
+    // The membership list is read before any branch exists, so it goes first.
+    const operator = membershipsReadOperator(state);
+    if (operator !== undefined) {
+      begin({ kind: "memberships", operator }, membershipsOf(operator), {
+        failed: (failure, attempt) => {
+          // Exactly what `src/ui/app.tsx` does: ownership is read before the
+          // dispatch, because the dispatch is what ends the session.
+          const owned = ownsMembershipsRead(state, { attempt, operator });
+          dispatch({ attempt, failure, operator, type: "membershipsFailed" });
+          if (owned && failure === "authorization") {
+            signOuts.push(operator);
+            dispatch({ notice: "sessionEnded", type: "signedOut" });
+          }
+        },
+        loaded: (list, attempt) => {
+          dispatch({ attempt, memberships: list, operator, type: "membershipsLoaded" });
+        },
+        loading: (attempt) => { dispatch({ attempt, operator, type: "membershipsLoading" }); },
+      });
+      return true;
+    }
     const shifts = shiftsReadTarget(state);
     if (shifts !== undefined) {
-      begin("shifts", shifts, shiftListOf(shifts), {
-        failed: (failure, attempt) => ({ attempt, failure, scope: shifts, type: "shiftsFailed" }),
-        loaded: (list, attempt) => ({ attempt, list, scope: shifts, type: "shiftsLoaded" }),
-        loading: (attempt) => ({ attempt, scope: shifts, type: "shiftsLoading" }),
+      begin({ kind: "shifts", scope: shifts }, shiftListOf(shifts), {
+        failed: (failure, attempt) => { dispatch({ attempt, failure, scope: shifts, type: "shiftsFailed" }); },
+        loaded: (list, attempt) => { dispatch({ attempt, list, scope: shifts, type: "shiftsLoaded" }); },
+        loading: (attempt) => { dispatch({ attempt, scope: shifts, type: "shiftsLoading" }); },
       });
       return true;
     }
     const layout = layoutReadTarget(state);
     if (layout !== undefined) {
-      begin("layout", layout, layoutOf(layout), {
-        failed: (failure, attempt) => ({ attempt, failure, scope: layout, type: "layoutFailed" }),
-        loaded: (loaded, attempt) => ({ attempt, layout: loaded, scope: layout, type: "layoutLoaded" }),
-        loading: (attempt) => ({ attempt, scope: layout, type: "layoutLoading" }),
+      begin({ kind: "layout", scope: layout }, layoutOf(layout), {
+        failed: (failure, attempt) => { dispatch({ attempt, failure, scope: layout, type: "layoutFailed" }); },
+        loaded: (loaded, attempt) => { dispatch({ attempt, layout: loaded, scope: layout, type: "layoutLoaded" }); },
+        loading: (attempt) => { dispatch({ attempt, scope: layout, type: "layoutLoading" }); },
       });
       return true;
     }
     const menu = menuReadTarget(state, tableSelected);
     if (menu !== undefined) {
-      begin("menu", menu, menuOf(menu), {
-        failed: (failure, attempt) => ({ attempt, failure, scope: menu, type: "menuFailed" }),
-        loaded: (loaded, attempt) => ({ attempt, menu: loaded, scope: menu, type: "menuLoaded" }),
-        loading: (attempt) => ({ attempt, scope: menu, type: "menuLoading" }),
+      begin({ kind: "menu", scope: menu }, menuOf(menu), {
+        failed: (failure, attempt) => { dispatch({ attempt, failure, scope: menu, type: "menuFailed" }); },
+        loaded: (loaded, attempt) => { dispatch({ attempt, menu: loaded, scope: menu, type: "menuLoaded" }); },
+        loading: (attempt) => { dispatch({ attempt, scope: menu, type: "menuLoading" }); },
       });
       return true;
     }
@@ -177,6 +226,7 @@ function screen(): {
     dispatch,
     reads,
     selectTable: (selected: boolean): void => { tableSelected = selected; runReads(); },
+    signOuts,
     state: (): MobileState => state,
   };
 }
@@ -191,11 +241,17 @@ const last = (reads: readonly StartedRead[], kind: ReadKind): StartedRead => {
   return found;
 };
 
+/** Signed in as operator A, with the membership list read and answered. */
+async function signedIn(): Promise<ReturnType<typeof screen>> {
+  const app = screen();
+  app.dispatch({ session: sessionA, type: "sessionObserved" });
+  await last(app.reads, "memberships").answer();
+  return app;
+}
+
 /** Signed in, branch A authorized, shift list answered and a shift chosen. */
 async function onShift(): Promise<ReturnType<typeof screen>> {
-  const app = screen();
-  app.dispatch({ session: fixtureSession(), type: "sessionObserved" });
-  app.dispatch({ memberships, type: "membershipsLoaded" });
+  const app = await signedIn();
   app.dispatch({ scope: scopeA, type: "branchRequested" });
   app.dispatch({ branch: branchOf(scopeA), type: "branchAuthorized" });
   await last(app.reads, "shifts").answer();
@@ -315,7 +371,7 @@ test("a late answer for the same branch but another shift is ignored", async () 
 
   const underSecondShift = last(app.reads, "layout");
   assert.notEqual(underSecondShift.attempt, underFirstShift.attempt);
-  assert.equal(underSecondShift.scope.branchId, underFirstShift.scope.branchId, "same Restaurant/Branch on purpose");
+  assert.equal(underSecondShift.scope?.branchId, underFirstShift.scope?.branchId, "same Restaurant/Branch on purpose");
 
   await underFirstShift.answer();
   assert.equal(app.state().layout.status, "loading", "the current read still owns the resource");
@@ -408,6 +464,223 @@ test("every attempt is distinct and settles exactly once", async () => {
   resolveFirst?.(11);
   await drain();
   assert.deepEqual([...settlements].sort((left, right) => left - right), [1, 2]);
+});
+
+test("a membership answer of the previous operator never reaches the next one", async () => {
+  // A's read is still in flight when B takes over. The list A would have shown
+  // is not B's, and the reducer is what refuses it.
+  const app = screen();
+  app.dispatch({ session: sessionA, type: "sessionObserved" });
+  const forA = last(app.reads, "memberships");
+  assert.equal(forA.operator, FIXTURE_USER_A);
+
+  app.dispatch({ session: sessionB, type: "sessionObserved" });
+  const forB = last(app.reads, "memberships");
+  assert.equal(forB.operator, FIXTURE_USER_B);
+  assert.notEqual(forB.attempt, forA.attempt);
+  assert.equal(only(app.reads, "memberships").length, 2, "B does not wait for A's request");
+
+  await forA.answer();
+  assert.equal(app.state().memberships.value, undefined, "A's list is not B's list");
+  assert.equal(app.state().memberships.status, "loading");
+  assert.equal(app.state().memberships.attempt, forB.attempt);
+
+  await forB.answer();
+  assert.equal(app.state().memberships.status, "ready");
+  assert.deepEqual(app.state().memberships.value, membershipsOf(FIXTURE_USER_B));
+  assert.equal(app.state().session?.userId, FIXTURE_USER_B);
+});
+
+test("a membership answer of the previous operator is refused before B even reads", async () => {
+  // The same answer, arriving in the window between the operator change and the
+  // read B is about to start. `revalidating` keeps that window open here.
+  const app = screen();
+  app.dispatch({ session: sessionA, type: "sessionObserved" });
+  const forA = last(app.reads, "memberships");
+
+  app.dispatch({ session: sessionB, type: "sessionObserved" });
+  app.dispatch({ scope: scopeB, type: "branchRequested" });
+  app.dispatch({ branch: branchOf(scopeB), type: "branchAuthorized" });
+  app.dispatch({ type: "revalidationStarted" });
+  assert.equal(membershipsReadOperator(app.state()), undefined, "nothing is read while unconfirmed");
+  const before = only(app.reads, "memberships").length;
+
+  await forA.answer();
+  assert.equal(app.state().memberships.value, undefined);
+  assert.equal(only(app.reads, "memberships").length, before);
+  assert.equal(app.state().session?.userId, FIXTURE_USER_B);
+});
+
+test("a late membership failure of the previous operator does not disturb the next one", async () => {
+  const app = screen();
+  app.dispatch({ session: sessionA, type: "sessionObserved" });
+  const forA = last(app.reads, "memberships");
+
+  app.dispatch({ session: sessionB, type: "sessionObserved" });
+  const forB = last(app.reads, "memberships");
+  await forB.answer();
+  assert.equal(app.state().memberships.status, "ready");
+
+  await forA.fail(new MobileRequestError("network"));
+  assert.equal(app.state().memberships.status, "ready", "B's list stays on screen");
+  assert.equal(app.state().memberships.failure, undefined);
+  assert.deepEqual(app.state().memberships.value, membershipsOf(FIXTURE_USER_B));
+});
+
+test("a late 401 of the previous operator does not end the next operator's session", async () => {
+  const app = screen();
+  app.dispatch({ session: sessionA, type: "sessionObserved" });
+  const forA = last(app.reads, "memberships");
+
+  app.dispatch({ session: sessionB, type: "sessionObserved" });
+  const forB = last(app.reads, "memberships");
+  await forB.answer();
+
+  await forA.fail(new MobileRequestError(401));
+  assert.equal(app.state().session?.userId, FIXTURE_USER_B, "B is still signed in");
+  assert.equal(app.state().notice, undefined);
+  assert.equal(mobileScreen(app.state()), "branches");
+  assert.deepEqual(app.signOuts, [], "the provider was never told to close B's session");
+  assert.deepEqual(app.state().memberships.value, membershipsOf(FIXTURE_USER_B));
+});
+
+test("a late 401 of the previous operator is refused before B even reads", async () => {
+  // The window a serial kept in the screen cannot close: B has taken over but
+  // has not started a read yet, so nothing has moved that serial on. Only an
+  // identity tied to the operator refuses this answer.
+  const app = screen();
+  app.dispatch({ session: sessionA, type: "sessionObserved" });
+  const forA = last(app.reads, "memberships");
+
+  app.dispatch({ session: sessionB, type: "sessionObserved" });
+  app.dispatch({ scope: scopeB, type: "branchRequested" });
+  app.dispatch({ branch: branchOf(scopeB), type: "branchAuthorized" });
+  app.dispatch({ type: "revalidationStarted" });
+  assert.equal(membershipsReadOperator(app.state()), undefined, "B has started no read of its own");
+
+  await forA.fail(new MobileRequestError(401));
+  assert.equal(app.state().session?.userId, FIXTURE_USER_B, "B's session survives A's 401");
+  assert.equal(app.state().notice, undefined);
+  assert.deepEqual(app.signOuts, []);
+
+  // And B's own read still completes once the scope is confirmed.
+  app.dispatch({ branch: branchOf(scopeB), type: "revalidationSucceeded" });
+  await last(app.reads, "shifts").answer();
+  assert.equal(app.state().shifts.status, "ready");
+  assert.equal(app.state().session?.userId, FIXTURE_USER_B);
+});
+
+test("a 401 of the read the screen is waiting for does end the session", async () => {
+  const app = screen();
+  app.dispatch({ session: sessionA, type: "sessionObserved" });
+
+  await last(app.reads, "memberships").fail(new MobileRequestError(403));
+  assert.equal(app.state().session, undefined);
+  assert.equal(app.state().notice, "sessionEnded");
+  assert.equal(mobileScreen(app.state()), "signIn");
+  assert.deepEqual(app.signOuts, [FIXTURE_USER_A]);
+});
+
+test("a hung read of the previous operator does not block the next one", async () => {
+  const app = screen();
+  app.dispatch({ session: sessionA, type: "sessionObserved" });
+  const hung = last(app.reads, "memberships");
+
+  app.dispatch({ session: sessionB, type: "sessionObserved" });
+  const forB = last(app.reads, "memberships");
+  assert.notEqual(forB.attempt, hung.attempt);
+
+  // A's request never settles at all; B's completes on its own.
+  await forB.answer();
+  assert.equal(app.state().memberships.status, "ready");
+  assert.deepEqual(app.state().memberships.value, membershipsOf(FIXTURE_USER_B));
+  assert.equal(mobileScreen(app.state()), "branches");
+});
+
+test("renewing the token of the same operator reads the list again, and only once", async () => {
+  const app = screen();
+  app.dispatch({ session: sessionA, type: "sessionObserved" });
+  const withOldToken = last(app.reads, "memberships");
+
+  app.dispatch({ session: fixtureSession({ accessToken: "harness-token-renewed" }), type: "sessionObserved" });
+  // The read started with the replaced token is given up, and the resource is
+  // left ready to be read again — never stranded on `loading`.
+  const withNewToken = last(app.reads, "memberships");
+  assert.equal(only(app.reads, "memberships").length, 2);
+  assert.notEqual(withNewToken.attempt, withOldToken.attempt);
+  assert.equal(app.state().memberships.attempt, withNewToken.attempt);
+
+  await withOldToken.answer();
+  assert.equal(app.state().memberships.status, "loading", "the superseded answer changes nothing");
+
+  await withNewToken.answer();
+  assert.equal(app.state().memberships.status, "ready");
+  assert.deepEqual(app.state().memberships.value, memberships);
+  assert.equal(only(app.reads, "memberships").length, 2, "the answer must not start another read");
+  assert.deepEqual(app.signOuts, []);
+});
+
+test("signing out while the list is being read leaves nothing behind", async () => {
+  const app = screen();
+  app.dispatch({ session: sessionA, type: "sessionObserved" });
+  const inFlight = last(app.reads, "memberships");
+
+  app.dispatch({ notice: undefined, type: "signedOut" });
+  assert.equal(app.state().memberships.status, "idle");
+
+  await inFlight.answer();
+  assert.deepEqual(app.state(), { ...initialMobileState, notice: undefined, started: true });
+
+  await inFlight.fail(new MobileRequestError(401));
+  assert.equal(app.state().session, undefined);
+  assert.deepEqual(app.signOuts, [], "a signed-out device is not signed out again");
+});
+
+test("a membership read that rejects or throws synchronously is an ordinary failure", async () => {
+  const app = screen();
+  app.dispatch({ session: sessionA, type: "sessionObserved" });
+  await last(app.reads, "memberships").fail(new MobileRequestError("protocol"));
+  assert.equal(app.state().memberships.status, "failed");
+  assert.equal(app.state().memberships.failure, "protocol");
+  assert.equal(app.state().memberships.attempt, undefined);
+  assert.equal(membershipsReadOperator(app.state()), undefined, "a failure is not retried on its own");
+
+  // A retry is a fresh attempt; a reader that throws before returning a promise
+  // reaches the same state as one that rejects.
+  const tracker = createBranchReadTracker();
+  const outcomes: string[] = [];
+  const attempt = tracker.start<readonly BranchMembershipSummaryV1[]>({
+    onFailed: (failure, at) => { outcomes.push(`failed:${failure}:${at}`); },
+    onLoaded: (list, at) => { outcomes.push(`loaded:${list.length}:${at}`); },
+    onLoading: (at) => { outcomes.push(`loading:${at}`); },
+    read: () => { throw new MobileRequestError(401); },
+  });
+  await drain();
+  assert.deepEqual(outcomes, [`loading:${attempt}`, `failed:authorization:${attempt}`]);
+});
+
+test("membership ownership needs both halves of the identity", async () => {
+  const app = await signedIn();
+  const answered = last(app.reads, "memberships");
+  const owned: MembershipsRead = { attempt: answered.attempt, operator: FIXTURE_USER_A };
+
+  // Spent: the resource is `ready`, so it waits for nothing.
+  assert.equal(ownsMembershipsRead(app.state(), owned), false);
+
+  const reading = screen();
+  reading.dispatch({ session: sessionA, type: "sessionObserved" });
+  const current = last(reading.reads, "memberships");
+  assert.equal(ownsMembershipsRead(reading.state(), { attempt: current.attempt, operator: FIXTURE_USER_A }), true);
+  assert.equal(
+    ownsMembershipsRead(reading.state(), { attempt: current.attempt, operator: FIXTURE_USER_B }),
+    false,
+    "right attempt, wrong operator",
+  );
+  assert.equal(
+    ownsMembershipsRead(reading.state(), { attempt: current.attempt + 1000, operator: FIXTURE_USER_A }),
+    false,
+    "right operator, wrong attempt",
+  );
 });
 
 test("no rejection was left unhandled", async () => {

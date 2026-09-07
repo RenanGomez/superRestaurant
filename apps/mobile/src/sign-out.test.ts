@@ -39,7 +39,10 @@ function recorder(): { readonly dispatch: (event: MobileEvent) => void; readonly
 
 function signedInOnBranchA(sink: ReturnType<typeof recorder>): void {
   sink.dispatch({ session, type: "sessionObserved" });
-  sink.dispatch({ memberships: [], type: "membershipsLoaded" });
+  // One complete membership read: the reducer only accepts an answer for the
+  // attempt and operator the resource is waiting for.
+  sink.dispatch({ attempt: 1, operator: session.userId, type: "membershipsLoading" });
+  sink.dispatch({ attempt: 1, memberships: [], operator: session.userId, type: "membershipsLoaded" });
   sink.dispatch({ scope: { branchId: "22222222-2222-4222-8222-222222222222", restaurantId: "11111111-1111-4111-8111-111111111111" }, type: "branchRequested" });
   sink.dispatch({
     branch: {

@@ -9,6 +9,7 @@ import {
   hasNoMemberships,
   initialMobileState,
   layoutReadTarget,
+  membershipsReadOperator,
   menuReadTarget,
   mobileScreen,
   noticeMessage,
@@ -36,6 +37,7 @@ import {
   parseDiningLayoutV1,
   parseMenuCatalogStateV1,
   parseOperationalShiftListV1,
+  type BranchMembershipSummaryV1,
   type DiningLayoutV1,
 } from "@super-restaurant/shared-types";
 
@@ -63,6 +65,18 @@ function nextAttempt(): number {
   return attempts;
 }
 
+/** The two events one complete membership read produces, for one operator. */
+function loadedMemberships(
+  operator: string,
+  list: readonly BranchMembershipSummaryV1[],
+): readonly MobileEvent[] {
+  const attempt = nextAttempt();
+  return [
+    { attempt, operator, type: "membershipsLoading" },
+    { attempt, memberships: list, operator, type: "membershipsLoaded" },
+  ];
+}
+
 /** The two events one complete layout read produces, under a single attempt. */
 function loadedLayout(scope: MobileBranchScope, layout: DiningLayoutV1): readonly MobileEvent[] {
   const attempt = nextAttempt();
@@ -83,7 +97,7 @@ function onBranchA(): MobileState {
   const menu = nextAttempt();
   return apply(
     signedIn(),
-    { memberships, type: "membershipsLoaded" },
+    ...loadedMemberships(session.userId, memberships),
     { scope: scopeA, type: "branchRequested" },
     { branch: branchA, type: "branchAuthorized" },
     { attempt: shifts, scope: scopeA, type: "shiftsLoading" },
@@ -137,7 +151,7 @@ test("a tab cannot be opened before a branch is authorized", () => {
 });
 
 test("an empty membership list is an explicit state, not a silent empty screen", () => {
-  const state = apply(signedIn(), { memberships: [], type: "membershipsLoaded" });
+  const state = apply(signedIn(), ...loadedMemberships(session.userId, []));
   assert.equal(hasNoMemberships(state), true);
   assert.equal(state.memberships.status, "ready");
   assert.equal(mobileScreen(state), "branches");
@@ -233,7 +247,7 @@ test("nothing is accepted after sign-out, including a response already in flight
   const signedOut = apply(inFlight, { notice: undefined, type: "signedOut" });
   const late = apply(
     signedOut,
-    { memberships, type: "membershipsLoaded" },
+    ...loadedMemberships(session.userId, memberships),
     { attempt, layout: layoutA as NonNullable<typeof layoutA>, scope: scopeA, type: "layoutLoaded" },
     { branch: branchA, type: "branchAuthorized" },
   );
@@ -270,7 +284,12 @@ test("loading, failure and retry are explicit for every read", () => {
   const menuReset = apply(onBranchA(), { scope: scopeA, type: "menuReset" });
   assert.equal(menuReset.menu.status, "idle");
 
-  const failing = apply(signedIn(), { type: "membershipsLoading" }, { failure: "unavailable", type: "membershipsFailed" });
+  const membershipsAttempt = nextAttempt();
+  const failing = apply(
+    signedIn(),
+    { attempt: membershipsAttempt, operator: session.userId, type: "membershipsLoading" },
+    { attempt: membershipsAttempt, failure: "unavailable", operator: session.userId, type: "membershipsFailed" },
+  );
   assert.equal(failing.memberships.status, "failed");
   assert.equal(hasNoMemberships(failing), false);
 });
@@ -518,6 +537,85 @@ test("what may be read is decided by the state alone", () => {
   assert.equal(layoutReadTarget(confirmed), undefined);
   assert.equal(menuReadTarget(confirmed, true), undefined);
   assert.equal(shiftsReadTarget(signedIn()), undefined, "no branch, no branch-scoped read");
+});
+
+test("a membership list belongs to the operator that asked for it", () => {
+  const attempt = nextAttempt();
+  const reading = apply(
+    signedIn(),
+    { attempt, operator: session.userId, type: "membershipsLoading" },
+  );
+  assert.equal(reading.memberships.status, "loading");
+  assert.equal(reading.memberships.attempt, attempt);
+
+  // The coordinator's regression: the operator changes while the read is in
+  // flight, and the answer of the previous one arrives afterwards.
+  const onB = apply(reading, {
+    session: fixtureSession({ accessToken: "token-b", userId: FIXTURE_USER_B }),
+    type: "sessionObserved",
+  });
+  assert.equal(onB.memberships.status, "idle");
+  assert.equal(onB.memberships.attempt, undefined);
+  assert.equal(membershipsReadOperator(onB), FIXTURE_USER_B, "B may read its own list at once");
+
+  const late = apply(onB, { attempt, memberships, operator: session.userId, type: "membershipsLoaded" });
+  assert.equal(late, onB);
+  assert.equal(late.memberships.value, undefined);
+
+  // Neither does a failure, nor the 401 that would otherwise end the session.
+  assert.equal(apply(onB, { attempt, failure: "network", operator: session.userId, type: "membershipsFailed" }), onB);
+  assert.equal(
+    apply(onB, { attempt, failure: "authorization", operator: session.userId, type: "membershipsFailed" }),
+    onB,
+    "a 401 nobody is waiting for must not end the session of the operator in place",
+  );
+  // Not even the `loading` of a read started for the operator who left.
+  assert.equal(apply(onB, { attempt: nextAttempt(), operator: session.userId, type: "membershipsLoading" }), onB);
+});
+
+test("a 401 on the current membership read ends the session on this device", () => {
+  const attempt = nextAttempt();
+  const ended = apply(
+    signedIn(),
+    { attempt, operator: session.userId, type: "membershipsLoading" },
+    { attempt, failure: "authorization", operator: session.userId, type: "membershipsFailed" },
+  );
+
+  assert.deepEqual(ended, { ...initialMobileState, notice: "sessionEnded", started: true });
+  assert.equal(mobileScreen(ended), "signIn");
+});
+
+test("renewing a token gives up the membership read in flight, not the list on screen", () => {
+  const attempt = nextAttempt();
+  const rereading = apply(
+    onBranchA(),
+    { attempt, operator: session.userId, type: "membershipsLoading" },
+    { session: fixtureSession({ accessToken: "token-renewed" }), type: "sessionObserved" },
+  );
+
+  assert.equal(rereading.memberships.status, "idle", "never left loading");
+  assert.equal(membershipsReadOperator(rereading), session.userId);
+  assert.equal(apply(rereading, { attempt, memberships, operator: session.userId, type: "membershipsLoaded" }), rereading);
+
+  // A read that had already answered is untouched by the renewal.
+  const settled = apply(onBranchA(), { session: fixtureSession({ accessToken: "token-renewed" }), type: "sessionObserved" });
+  assert.equal(settled.memberships.status, "ready");
+  assert.equal(membershipsReadOperator(settled), undefined);
+});
+
+test("whose membership list may be read is decided by the state alone", () => {
+  assert.equal(membershipsReadOperator(initialMobileState), undefined, "no session, no read");
+  assert.equal(membershipsReadOperator(signedIn()), session.userId);
+  assert.equal(membershipsReadOperator(onBranchA()), undefined, "the list already answered");
+
+  const revalidating = apply(onBranchA(), { type: "revalidationStarted" });
+  assert.equal(membershipsReadOperator(revalidating), undefined);
+  const blocked = apply(revalidating, { failure: "network", type: "revalidationFailed" });
+  assert.equal(membershipsReadOperator(blocked), undefined);
+
+  // A revocation forces a fresh read, for the operator still in place.
+  const revoked = apply(onBranchA(), { type: "accessRevoked" });
+  assert.equal(membershipsReadOperator(revoked), session.userId);
 });
 
 test("selecting a branch clears any pending revalidation state", () => {

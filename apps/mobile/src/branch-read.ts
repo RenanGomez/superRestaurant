@@ -1,15 +1,20 @@
 /**
- * Gives every branch-scoped read (open shifts, dining layout, menu catalog) an
- * identity of its own, and settles it exactly once.
+ * Gives every read the screen owns an identity of its own, and settles it
+ * exactly once: the three branch-scoped ones (open shifts, dining layout, menu
+ * catalog) and the operator's membership list, which is read before any branch
+ * exists and belongs to a `userId` rather than to a Restaurant/Branch pair.
+ * One tracker serves all four, so an attempt names exactly one request.
  *
  * The previous guard was an effect-scoped boolean, and it could not work: the
  * effect announces its own `loading` state, React re-runs the effect on that
  * very state, and the cleanup then cancelled the request the effect had just
  * issued — which is what left the shift screen on "Consultando turnos
  * abiertos…" forever after a foreground revalidation. Dropping the boolean
- * without replacing it is not right either: Restaurant/Branch is the same pair
- * before and after a token renewal, a shift change or a revalidation, so it
- * cannot tell an answer that is still wanted from one that is not.
+ * without replacing it is not right either: what a read belongs to is not what
+ * identifies it. Restaurant/Branch is the same pair before and after a token
+ * renewal, a shift change or a revalidation, and one operator reads their
+ * membership list more than once, so neither can tell an answer that is still
+ * wanted from one that is not.
  *
  * So an attempt carries a serial. The serial is announced before the request,
  * stored on the resource by the reducer, and returned with the answer; the

@@ -17,17 +17,15 @@ export type MobileResourceStatus = "failed" | "idle" | "loading" | "ready";
 
 export interface MobileResource<T> {
   /**
-   * Which read owns a branch-scoped resource — shifts, layout and menu. It is
-   * set while that resource is `loading` and `undefined` in every other status,
-   * so it names exactly one request: the one the screen is still waiting for.
+   * Which read owns this resource. It is set while the resource is `loading`
+   * and `undefined` in every other status, so it names exactly one request:
+   * the one the screen is still waiting for.
    *
-   * Restaurant/Branch alone cannot name it, because the same pair is read again
-   * after a token renewal, a shift change or a foreground revalidation. An
-   * answer that no longer matches the attempt on the resource is an answer
-   * nobody is waiting for, and it is dropped instead of applied.
-   *
-   * The membership list is not branch-scoped and keeps its own serial in the
-   * access screen, so it leaves this field `undefined` even while loading.
+   * What the resource belongs to cannot name it on its own. Restaurant/Branch
+   * is the same pair before and after a token renewal, a shift change or a
+   * foreground revalidation; an operator can read the membership list twice in
+   * one session. An answer that no longer matches the attempt on the resource
+   * is an answer nobody is waiting for, and it is dropped instead of applied.
    */
   readonly attempt: number | undefined;
   readonly failure: MobileFailure | undefined;
@@ -70,9 +68,9 @@ export type MobileEvent =
   | { readonly type: "layoutLoaded"; readonly attempt: number; readonly layout: DiningLayoutV1; readonly scope: MobileBranchScope }
   | { readonly type: "layoutLoading"; readonly attempt: number; readonly scope: MobileBranchScope }
   | { readonly type: "layoutReset"; readonly scope: MobileBranchScope }
-  | { readonly type: "membershipsFailed"; readonly failure: MobileFailure }
-  | { readonly type: "membershipsLoaded"; readonly memberships: readonly BranchMembershipSummaryV1[] }
-  | { readonly type: "membershipsLoading" }
+  | { readonly type: "membershipsFailed"; readonly attempt: number; readonly failure: MobileFailure; readonly operator: string }
+  | { readonly type: "membershipsLoaded"; readonly attempt: number; readonly memberships: readonly BranchMembershipSummaryV1[]; readonly operator: string }
+  | { readonly type: "membershipsLoading"; readonly attempt: number; readonly operator: string }
   | { readonly type: "menuFailed"; readonly attempt: number; readonly failure: MobileFailure; readonly scope: MobileBranchScope }
   | { readonly type: "menuLoaded"; readonly attempt: number; readonly menu: MenuCatalogStateV1; readonly scope: MobileBranchScope }
   | { readonly type: "menuLoading"; readonly attempt: number; readonly scope: MobileBranchScope }
@@ -133,9 +131,11 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
       // email is display data and could be reassigned.
       //
       // A renewed token keeps the data that is already on screen, but not the
-      // reads still in flight: those were started with the token that is being
-      // replaced, and their answer — a 401 from it above all — belongs to a
-      // request nobody is waiting for any more.
+      // reads still in flight — the membership list included: those were started
+      // with the token that is being replaced, and their answer — a 401 from it
+      // above all — belongs to a request nobody is waiting for any more. They
+      // are left `idle`, which is what starts a fresh read instead of leaving a
+      // spinner nobody will ever answer.
       if (state.session === undefined || !isSameOperator(state.session, event.session)) {
         return freeze({ ...initialMobileState, session: event.session, started: true });
       }
@@ -191,13 +191,26 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
       if (event.failure === "authorization") return freeze(revokedState(state));
       return freeze({ ...state, revalidating: false, revalidationFailure: event.failure });
     case "membershipsLoading":
-      // The membership list is not branch-scoped: it is owned by the request
-      // serial the access screen keeps, so it carries no attempt here.
-      return freeze({ ...state, memberships: loading(undefined) });
+      // Only the operator in place may put their own list on screen. There is
+      // no attempt to match yet — this event is what creates one — so the owner
+      // is the whole test, which also stops a read started for the previous
+      // operator from blanking the list of the one who is here now.
+      return state.session.userId === event.operator
+        ? freeze({ ...state, memberships: loading(event.attempt) })
+        : state;
     case "membershipsLoaded":
-      return freeze({ ...state, memberships: ready(Object.freeze([...event.memberships])) });
+      return ownsMembershipsRead(state, event)
+        ? freeze({ ...state, memberships: ready(Object.freeze([...event.memberships])) })
+        : state;
     case "membershipsFailed":
-      return freeze({ ...state, memberships: failed(event.failure) });
+      if (!ownsMembershipsRead(state, event)) return state;
+      // A token the server refuses ends the session on this device. Deciding it
+      // here is what keeps a late 401 of the previous operator from closing the
+      // session of the one who is signed in now: that answer is not owned, so
+      // it never reaches this line. Telling the provider is the screen's half.
+      return event.failure === "authorization"
+        ? signedOutState("sessionEnded", true)
+        : freeze({ ...state, memberships: failed(event.failure) });
     case "branchRequested":
       // Clearing branch-scoped data here is what keeps the previous branch from
       // being visible while the new pair is revalidated.
@@ -248,7 +261,7 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
       return state.branch !== undefined && state.shifts.status === "ready"
         && state.shifts.value?.shifts.some((candidate) => candidate.shiftId === event.shift.shiftId)
         && sameScope(state.branch, event.shift.scope)
-        ? freeze(withoutReadsInFlight({ ...state, shift: event.shift }))
+        ? freeze(withoutBranchReadsInFlight({ ...state, shift: event.shift }))
         : state;
     case "shiftReleased":
       return freeze({ ...state, layout: idleResource, menu: idleResource, shift: undefined, tab: "tables" });
@@ -350,6 +363,40 @@ export function menuReadTarget(state: MobileState, tableSelected: boolean): Mobi
   return state.tab === "menu" || tableSelected ? activeScope(state) : undefined;
 }
 
+/**
+ * Identity of one membership read: the operator it was started for and the
+ * attempt that started it.
+ *
+ * The membership list is not branch-scoped — it belongs to an operator — so its
+ * owner is the immutable Supabase `userId`, never the email and never the token.
+ * The attempt is what distinguishes two reads of the *same* operator, which is
+ * what a token renewal or a retry produces.
+ */
+export interface MembershipsRead {
+  readonly attempt: number;
+  readonly operator: string;
+}
+
+/**
+ * Whether a membership answer may still be applied: same operator, and the
+ * attempt the resource is waiting for. Both halves are required, and both are
+ * checked here rather than in the screen, so success, failure and the sign-out
+ * a 401 causes are decided in one place.
+ */
+export function ownsMembershipsRead(state: MobileState, read: MembershipsRead): boolean {
+  return state.session?.userId === read.operator && state.memberships.attempt === read.attempt;
+}
+
+/**
+ * The operator whose membership list may be read right now, or `undefined` when
+ * the state does not authorize starting that read. Same shape as the
+ * branch-scoped targets: the screen asks, it does not decide.
+ */
+export function membershipsReadOperator(state: MobileState): string | undefined {
+  if (state.session === undefined || state.revalidating || state.revalidationFailure !== undefined) return undefined;
+  return state.memberships.status === "idle" ? state.session.userId : undefined;
+}
+
 /** True once Nest answered with an empty, and therefore explicit, membership list. */
 export function hasNoMemberships(state: MobileState): boolean {
   return state.memberships.status === "ready" && (state.memberships.value?.length ?? 0) === 0;
@@ -416,12 +463,17 @@ function forCurrentRead<T>(
 }
 
 /**
- * Gives up every branch-scoped read that has not answered yet, leaving each one
- * `idle` rather than `loading`. Idle is what lets the screen start the read that
- * is current now; staying `loading` would wait forever for an answer that can no
- * longer be applied. Resources that already settled are left exactly as they are.
+ * Gives up every read that has not answered yet, leaving each one `idle` rather
+ * than `loading`. Idle is what lets the screen start the read that is current
+ * now; staying `loading` would wait forever for an answer that can no longer be
+ * applied. Resources that already settled are left exactly as they are.
  */
 function withoutReadsInFlight(state: MobileState): MobileState {
+  return { ...withoutBranchReadsInFlight(state), memberships: givenUp(state.memberships) };
+}
+
+/** The same, for the three reads a shift change invalidates but a list read outlives. */
+function withoutBranchReadsInFlight(state: MobileState): MobileState {
   return {
     ...state,
     layout: givenUp(state.layout),
@@ -453,7 +505,7 @@ function revokedState(state: MobileState): MobileState {
   };
 }
 
-function loading<T>(attempt: number | undefined): MobileResource<T> {
+function loading<T>(attempt: number): MobileResource<T> {
   return Object.freeze({ attempt, failure: undefined, status: "loading", value: undefined });
 }
 
