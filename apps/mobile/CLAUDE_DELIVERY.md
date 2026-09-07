@@ -5,11 +5,11 @@ revisión y **no integrada**: no hubo merge, rebase, push ni publicación de ram
 
 - **Unidad 2 — mesas y borrador de comanda (2026-09-05)**: sección A, abajo. Es
   el corte vigente y responde al mandato de la sección 0 del documento.
-  **Retrabajada cuatro veces el 2026-09-06**: la sección **A.R4** describe la
-  cuarta revisión del coordinador y es la más reciente; **A.R3** la tercera,
-  **A.R2** la segunda y **A.R1** la primera. Donde se contradigan, prevalece la
-  más reciente, y todas sobre las secciones A.1 a A.11, escritas para el corte
-  `3061487a…`.
+  **Retrabajada cinco veces el 2026-09-06**: la sección **A.R5** describe la
+  quinta revisión del coordinador y es la más reciente; **A.R4** la cuarta,
+  **A.R3** la tercera, **A.R2** la segunda y **A.R1** la primera. Donde se
+  contradigan, prevalece la más reciente, y todas sobre las secciones A.1 a
+  A.11, escritas para el corte `3061487a…`.
 - **Unidad 1 — fundación Expo/Auth/sucursal**: ya integrada en `main` y marcada
   DONE. Su registro histórico se conserva a partir de la sección B y no describe
   el corte actual.
@@ -17,6 +17,194 @@ revisión y **no integrada**: no hubo merge, rebase, push ni publicación de ram
 ---
 
 # A. Unidad 2 — mesas y borrador de comanda
+
+## A.R5 Quinta revisión del coordinador (2026-09-06) — pertenencia de las lecturas de membresías
+
+Partiendo de `9d1aa64c6d790f66af866832ae79eb45eb4e5917` (árbol
+`4201508719c15aca488de6783db682f1c022342b`), sobre la misma rama
+`claude/mobile-order-entry-ui-20260905` y el mismo worktree, con árbol limpio
+verificado antes de editar. Sin reset, pull, merge, rebase ni push; `main` no se
+incorporó. El diff sigue confinado a `apps/mobile/**`; `pnpm-lock.yaml` no
+cambió. Las correcciones R1–R4 se conservan sin cambios funcionales. La P2
+permanece **IN_PROGRESS**.
+
+Nota de procedimiento: la sección **0.R5** de `docs/CLAUDE_FRONTEND_WORKSTREAM.md`
+no existe en esta rama. El coordinador la añadió en
+`904e420ee5f0e27b5cd0bfeb02ad2f2f0acfa52f`, sobre
+`codex/p2-order-shift-server-evidence`. Se leyó ahí, sin incorporar ese commit ni
+tocar `docs/**`, y sus criterios coinciden con el prompt humano.
+
+### Hallazgo R5.1 — la lista de membresías no pertenecía a ningún operador
+
+El guardia de la lectura de membresías era un serial local
+(`membershipRequest.current`) que vivía sólo en la pantalla, y `membershipsLoaded`
+/ `membershipsFailed` no llevaban ninguna identidad que el reductor pudiera
+comprobar. De ahí dos agujeros:
+
+1. **El serial no se invalida al cambiar de operador.** `sessionObserved` con otro
+   `userId` reinicia el estado, pero no mueve el serial. Si el operador B no ha
+   iniciado todavía su propia lectura —por ejemplo mientras `revalidating` está
+   activo—, la respuesta de A pasa el guardia y se asienta: la regresión del
+   coordinador cambió A→B con la lectura en vuelo, esperaba
+   `memberships.value === undefined` y recibió las dos membresías de A.
+2. **El 401 tardío de A podía cerrar la sesión de B.** En esa misma ventana, el
+   `catch` llamaba `endSession("sessionEnded")` sin comprobar de quién era la
+   respuesta, cerrando la generación y pidiendo `signOut()` al proveedor para una
+   sesión que ya era de otro operador.
+
+Además, una renovación de token del mismo operador durante la lectura dejaba el
+recurso en `loading` con una respuesta que nadie iba a aplicar: spinner colgado.
+
+### Corrección — la misma identidad de intento de R4, ahora con operador
+
+No hay un sistema nuevo: la lectura de membresías pasa por el **mismo tracker**
+(`src/branch-read.ts`, `createBranchReadTracker`) y por el mismo campo
+`MobileResource.attempt` que R4 introdujo para `shifts`, `layout` y `menu`. Un
+solo tracker sirve las cuatro lecturas, así que un intento nombra exactamente una
+petición.
+
+1. **`MembershipsRead = { attempt, operator }`** — el dueño es el `userId`
+   inmutable de Supabase, nunca el correo y nunca el token; el intento distingue
+   dos lecturas del *mismo* operador, que es lo que produce una renovación de
+   token o un reintento.
+2. **`ownsMembershipsRead(state, read)`** — exige las dos mitades. La usan el
+   reductor (para `membershipsLoaded` y `membershipsFailed`) y la pantalla (para
+   el único efecto que no es una transición de estado: avisar al proveedor). Una
+   sola definición, dos llamadores.
+3. **La revocación por 401 pasó al reductor.** `membershipsFailed` con
+   `authorization`, y sólo si es la lectura vigente, produce el estado de sesión
+   cerrada con el motivo `sessionEnded`. Un 401 que no es de la lectura vigente no
+   llega a esa línea.
+4. **`membershipsLoading` también se valida** por operador: una lectura iniciada
+   para quien ya se fue no puede vaciar la lista de quien está ahora.
+5. **`withoutReadsInFlight` incluye `memberships`**, así que renovar el token del
+   mismo operador devuelve la lectura en vuelo a `idle` —lista para una lectura
+   fresca, nunca colgada—. El cambio de turno usa
+   `withoutBranchReadsInFlight`, que no toca la lista. Cierre de sesión y cambio
+   de operador ya la dejaban `idle` por la vía del estado inicial.
+6. **`membershipsReadOperator(state)`** dice de quién puede leerse la lista ahora,
+   igual que los tres `*ReadTarget` de R4: el estado decide, la pantalla pregunta.
+7. **Espejo del reductor en la pantalla.** `dispatch` avanza un `useRef` con el
+   mismo reductor puro sobre los mismos eventos, en el mismo paso sincrónico. Un
+   callback de petición corre mucho después del render que lo creó, y su única
+   pregunta —¿el reductor acepta esta lectura como la vigente?— sólo puede
+   responderse contra lo que el reductor sabe *ahora*. El espejo no puede
+   discrepar de lo que React renderiza; sólo va por delante, que es exactamente
+   lo que esos callbacks necesitan. Es lo que permite que la decisión del 401 use
+   `ownsMembershipsRead` en lugar de un segundo guardia con reglas propias.
+
+`loadMemberships` recibe la sesión completa, no sólo el token: la identidad y la
+credencial viajan juntas porque la lectura pertenece a la primera.
+
+### Pruebas nuevas — promesas controladas, sin temporizadores
+
+`src/branch-read.test.ts` extiende el mismo arnés determinista de R4 con la
+lectura de membresías y con el efecto que la pantalla ejecuta al recibir un 401,
+de modo que «no cerró la sesión de B» es una aserción y no una lectura de código.
+Los dos operadores tienen listas distintas —A autorizado en las dos sucursales, B
+sólo en la segunda— así que cada respuesta se puede atribuir a su dueño.
+
+| Prueba | Demuestra |
+| --- | --- |
+| `a membership answer of the previous operator never reaches the next one` | success tardío de A **después** de iniciar la lectura de B; B no espera a la petición de A |
+| `a membership answer of the previous operator is refused before B even reads` | success tardío de A **antes** de que B lea: la ventana que el serial local no podía cerrar |
+| `a late membership failure of the previous operator does not disturb the next one` | failure tardío de A: la lista de B sigue en pantalla, sin `failure` |
+| `a late 401 of the previous operator does not end the next operator's session` | 401 tardío de A con la lectura de B ya respondida |
+| `a late 401 of the previous operator is refused before B even reads` | 401 tardío de A en la ventana sin lectura de B: la sesión de B sobrevive, el proveedor no recibe `signOut`, y la lectura vigente de B se completa después |
+| `a 401 of the read the screen is waiting for does end the session` | el 401 vigente sí cierra la sesión, con su motivo |
+| `a hung read of the previous operator does not block the next one` | lectura colgada de A seguida de una lectura exitosa de B |
+| `renewing the token of the same operator reads the list again, and only once` | renovación del mismo operador: una lectura nueva, sin spinner colgado, y la respuesta superada no aplica |
+| `signing out while the list is being read leaves nothing behind` | cierre de sesión con la lectura en vuelo; su respuesta y su 401 no devuelven nada ni vuelven a cerrar |
+| `a membership read that rejects or throws synchronously is an ordinary failure` | rechazo y lanzamiento síncrono contenidos, sin reintento automático |
+| `membership ownership needs both halves of the identity` | intento correcto con operador equivocado y operador correcto con intento equivocado: ambos rechazados |
+| `no rejection was left unhandled` | ningún `unhandledRejection` en todo el archivo |
+
+`src/mobile-state.test.ts` suma cuatro pruebas de reductor —incluida la
+regresión exacta del coordinador (`a membership list belongs to the operator that
+asked for it`)— y sus casos existentes, junto con `src/sign-out.test.ts`, pasan a
+anunciar el `loading` de cada respuesta de membresías.
+
+Total: **185 pruebas** en `apps/mobile` (170 antes, +15).
+
+### Matriz visual R5 — Chrome real, clics de confianza, `Respuesta lenta`
+
+Sin `force`, sin coordenadas contra elementos tapados y sin editar DOM ni CSS. La
+barra del arnés se contrae con su propio control y sólo se expande para pulsar un
+control. `Respuesta lenta` está activa durante todo el recorrido, así que cada
+control se pulsa con la lectura de membresías realmente en vuelo.
+
+| Comprobación | 390×844 | 1024×768 |
+| --- | --- | --- |
+| A: la lista de sucursales queda en lectura lenta (`Consultando tus sucursales…`) | ✅ | ✅ |
+| A: `Renovar token` durante esa lectura | ✅ no cuelga, no cierra sesión, llega la lista completa | ✅ |
+| B: `Salir` con la lectura en vuelo | ✅ vuelve al acceso sin spinner | ✅ |
+| B: la respuesta abandonada llega después (espera de 2,5 s) | ✅ no reabre la sesión ni muestra sucursales | ✅ |
+| B: recorrido completo `acceso → sucursal → turno → mesas` con respuesta lenta | ✅ `Salón principal`, sin rastro de `Terraza` | ✅ |
+| 401 de la lectura vigente (`Sesión expirada` al ingresar) | ✅ termina en el acceso con «Tu sesión se cerró en este dispositivo.» | ✅ |
+| Consola | ✅ sin `error`, `warning`, `pageerror` ni rechazos no manejados | ✅ |
+
+La matriz R4 se repitió completa en los dos viewports para comprobar que R1–R4
+siguen en pie: recorrido con turno lento, la reproducción de R4.1 tras
+`Cambiar turno` + segundo/primer plano, reingreso al turno, `Renovar token` con
+una lectura de sucursal en vuelo, cambio de sucursal, `scrollWidth == innerWidth`
+(390 y 1024) y consola limpia — **9/9 PASS en cada viewport**.
+
+**Limitación del arnés (registrada, no cubierta con clics).** Dos cosas del
+hallazgo R5.1 no son observables desde el arnés sin editar DOM/CSS ni ampliarlo:
+
+1. Sus fixtures de membresías no varían por operador —`scenario: "ok"` responde
+   siempre las dos sucursales—, así que un navegador no puede distinguir «la
+   lista de A mostrada a B» de «la lista de B».
+2. El cambio A→B **dentro de una misma generación** de autenticación no tiene
+   control que lo produzca: en el arnés (y en el producto) pasar de A a B implica
+   `Salir` e `Ingresar`, lo que cierra y abre la generación. El caso patológico
+   que el reductor debe rechazar es precisamente el otro.
+
+Ambas quedan sostenidas por las pruebas deterministas de la tabla anterior, que
+usan dos `userId` distintos con listas distintas y despachan `sessionObserved`
+directamente. Lo que el arnés sí demuestra con clics reales es la ventana
+temporal: renovación de token y cierre de sesión con la lectura en vuelo, y el
+401 de la lectura vigente.
+
+### Compuertas ejecutadas con Node 24.19.0
+
+| Compuerta | Resultado |
+| --- | --- |
+| `pnpm --filter @super-restaurant/mobile run lint` | limpio |
+| `pnpm --filter @super-restaurant/mobile run typecheck` | limpio |
+| `pnpm --filter @super-restaurant/mobile run test` | 185/185 |
+| `pnpm exec expo install --check` | `Dependencies are up to date` |
+| `pnpm --filter @super-restaurant/mobile run build` (export Android) | 662 módulos, `index-09d39976107222312df02cc2dee82bc3.hbc` de 2 238 549 bytes |
+| `pnpm lint --force` | 8/8 tareas, sin caché |
+| `pnpm typecheck --force` | 11/11 tareas, sin caché |
+| `pnpm test --force` | 11/11 tareas, sin caché |
+| `pnpm build --force` | 8/8 tareas, sin caché |
+| `git diff --check` | sin hallazgos |
+| Fin de línea | LF conservado en los seis archivos (0 bytes CR, igual que en `HEAD`) |
+| Aislamiento del bundle | **sin** `harnessControl`, `FIXTURE_`, `Ocultar controles`, `example.invalid`, `Ir a segundo plano`, `HARNESS_SESSION_UNREADABLE`, `sb_publishable_fixture`, `Respuesta lenta` ni `XTS`; **con** `Cambiar sucursal`, `Acceso sin confirmar`, `Agregar al borrador`, `Enviar comanda` y `Volver a mesas` |
+| CodeGraph final | el índice compartido no había reindexado los símbolos nuevos del worktree y devolvió coincidencias ajenas (`read`, `without` de `apps/api`); se completó con una búsqueda dirigida: `ownsMembershipsRead`, `membershipsReadOperator`, `MembershipsRead` y `withoutBranchReadsInFlight` sólo se usan dentro de `apps/mobile`, y `membershipRequest`/`canReadMemberships` no dejaron ninguna referencia |
+
+### Archivos tocados en R5
+
+| Archivo | Cambio |
+| --- | --- |
+| `src/mobile-state.ts` | `MembershipsRead`; `ownsMembershipsRead`; `membershipsReadOperator`; los tres eventos de membresías llevan `attempt` y `operator`; la revocación por 401 pasa al reductor; `withoutReadsInFlight` incluye la lista y `withoutBranchReadsInFlight` no |
+| `src/ui/app.tsx` | espejo sincrónico del reductor; `loadMemberships` recibe la sesión y usa el tracker compartido; se retira `membershipRequest`; el efecto usa `membershipsReadOperator` |
+| `src/branch-read.ts` | sólo documentación: el tracker sirve también la lista de membresías |
+| `src/branch-read.test.ts` | el arnés determinista incluye la lectura de membresías y el aviso al proveedor; 12 pruebas nuevas |
+| `src/mobile-state.test.ts` | 4 pruebas de reductor nuevas; los casos existentes anuncian el `loading` de membresías |
+| `src/sign-out.test.ts` | idem para su lectura de membresías |
+
+### Límites que siguen abiertos
+
+Sin cambios respecto de A.R4, salvo que el límite que A.R4 anotaba —la lista de
+membresías protegida sólo por un serial local— queda cerrado. Nuevo, menor: el
+módulo se llama `src/branch-read.ts` y ahora también sirve una lectura que no es
+branch-scoped; se dejó el nombre para no mover un archivo que el coordinador
+acaba de aceptar, y renombrarlo a algo como `owned-read.ts` es un cambio
+puramente cosmético que puede hacerse en el corte coordinado posterior.
+
+---
 
 ## A.R4 Cuarta revisión del coordinador (2026-09-06) — propiedad de las lecturas branch-scoped
 
