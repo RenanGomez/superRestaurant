@@ -5,10 +5,11 @@ revisión y **no integrada**: no hubo merge, rebase, push ni publicación de ram
 
 - **Unidad 2 — mesas y borrador de comanda (2026-09-05)**: sección A, abajo. Es
   el corte vigente y responde al mandato de la sección 0 del documento.
-  **Retrabajada tres veces el 2026-09-06**: la sección **A.R3** describe la
-  tercera revisión del coordinador y es la más reciente; **A.R2** la segunda y
-  **A.R1** la primera. Donde se contradigan, prevalece la más reciente, y todas
-  sobre las secciones A.1 a A.11, escritas para el corte `3061487a…`.
+  **Retrabajada cuatro veces el 2026-09-06**: la sección **A.R4** describe la
+  cuarta revisión del coordinador y es la más reciente; **A.R3** la tercera,
+  **A.R2** la segunda y **A.R1** la primera. Donde se contradigan, prevalece la
+  más reciente, y todas sobre las secciones A.1 a A.11, escritas para el corte
+  `3061487a…`.
 - **Unidad 1 — fundación Expo/Auth/sucursal**: ya integrada en `main` y marcada
   DONE. Su registro histórico se conserva a partir de la sección B y no describe
   el corte actual.
@@ -16,6 +17,183 @@ revisión y **no integrada**: no hubo merge, rebase, push ni publicación de ram
 ---
 
 # A. Unidad 2 — mesas y borrador de comanda
+
+## A.R4 Cuarta revisión del coordinador (2026-09-06) — propiedad de las lecturas branch-scoped
+
+Partiendo de `5bb97233bf96acc31088cd2b1c353d76bea3fe75` (árbol
+`13e719da55898a6967374dc07eb189533793bf9f`), sobre la misma rama
+`claude/mobile-order-entry-ui-20260905` y el mismo worktree, con árbol limpio
+verificado antes de editar. Sin reset, pull, merge, rebase ni push. El diff sigue
+confinado a `apps/mobile/**`; `pnpm-lock.yaml` no cambió. El arreglo de layout de
+`aa6bb2c4` no se tocó. La P2 permanece **IN_PROGRESS**.
+
+### Hallazgo R4.1 — la lista de turnos quedaba cargando para siempre
+
+Reproducido en Chrome real (Playwright sobre el Chrome instalado, clics de
+confianza, sin `force` y sin editar DOM ni CSS) contra el HEAD sin modificar,
+a 390×844:
+
+1. `operador.a@example.invalid` / contraseña cualquiera → `Restaurante 1, Sucursal 1` → `Servicio activo`.
+2. En el arnés, `Respuesta lenta`.
+3. `Cambiar turno` → `Servicio activo`.
+4. `Ir a segundo plano` → `Volver a primer plano`.
+
+Resultado en el HEAD `5bb9723`, medido cada 1 500 ms:
+
+```
++1500ms: screen=shifts shiftsLoading=true
++3000ms: screen=shifts shiftsLoading=true
++4500ms: screen=shifts shiftsLoading=true
++6000ms: screen=shifts shiftsLoading=true
++7500ms: screen=shifts shiftsLoading=true
+```
+
+Texto final de la aplicación: `Sucursal 1 | Elige el turno operativo | … |
+Cambiar sucursal | Consultando turnos abiertos…`. Es decir, más de 7,5 s colgada,
+sin ninguna salida: la sucursal ya no puede operarse hasta reiniciar la app.
+
+**Causa.** La lectura de turnos seguía protegida por una bandera de cancelación
+con alcance de efecto. El efecto despacha su propio `shiftsLoading`; ese despacho
+cambia `state.shifts.status`, que está en su lista de dependencias; React vuelve a
+ejecutar el efecto y la limpieza cancela la petición que el propio efecto acaba
+de emitir. Como el efecto ya no está en `idle`, no vuelve a pedir nada. `3969aeb`
+había quitado esa bandera de plano y catálogo, pero no de turnos, y la sustituyó
+por un guardia que sólo compara Restaurant/Branch.
+
+**Causa relacionada.** `forActiveScope` comparaba únicamente Restaurant/Branch, y
+ese par es el mismo antes y después de una renovación de token, un cambio de
+turno o una revalidación. Por eso:
+
+- una respuesta vieja de plano o catálogo podía repoblar lo que
+  `revalidationStarted` acababa de vaciar;
+- un `401`/`403` de una petición emitida con el token anterior despachaba
+  `accessRevoked` aunque el mismo operador ya hubiera renovado su token
+  correctamente.
+
+### Corrección — identidad explícita de intento, no otra bandera
+
+Se extiende el patrón que ya existe en `src/order-delivery.ts` (serial + contexto,
+un solo asentamiento por intento), esta vez para las tres lecturas de sucursal.
+
+1. **`src/branch-read.ts` (nuevo)** — `createBranchReadTracker()` asigna un serial
+   monótono por lectura, lo anuncia antes de la petición, contiene un `read()` que
+   lanza de forma síncrona y garantiza exactamente un resultado por intento. No
+   decide qué está obsoleto y no conoce ningún endpoint.
+2. **`MobileResource.attempt`** — el reductor guarda ese serial en el recurso
+   mientras está `loading`, y lo deja `undefined` en cualquier otro estado. Sólo
+   el intento vigente puede aplicar `*Loaded`, `*Failed` o la revocación que
+   provoca un `401`: `forCurrentRead` exige par activo **y** intento.
+3. **La revocación pasó al reductor.** Las pantallas ya no despachan
+   `accessRevoked` desde el `catch`; despachan `*Failed` con `authorization` y el
+   reductor revoca sólo si ese intento es el vigente.
+4. **`withoutReadsInFlight`** — al cambiar el token del mismo operador y al elegir
+   turno, toda lectura que siga `loading` vuelve a `idle`, nunca se queda colgada.
+   Los eventos que ya vaciaban los tres recursos (`revalidationStarted`,
+   `branchRequested`, `branchReleased`, `shiftReleased`, `accessRevoked`,
+   `revalidationFailed` de autorización, cambio de operador y cierre de sesión)
+   siguen invalidando por la misma vía: `idle` no lleva intento.
+5. **`shiftsReadTarget` / `layoutReadTarget` / `menuReadTarget`** — las condiciones
+   de arranque de cada lectura viven en el estado, en un solo sitio, en vez de
+   repetirse en listas de dependencias. Los efectos preguntan; no deciden. Es lo
+   que permite que la prueba determinista ejerza exactamente la misma regla que la
+   pantalla.
+
+Invalidación garantizada: sesión/operador, token, Restaurant/Branch, turno y
+comienzo de revalidación. **No** invalida el render que provoca el propio
+`*Loading`: ese despacho es justamente el que fija el intento.
+
+### Pruebas nuevas — promesas controladas, sin temporizadores
+
+`src/branch-read.test.ts` (11) monta el bucle de lecturas de `src/ui/app.tsx` sin
+React: el mismo reductor, el mismo tracker y las mismas funciones `*ReadTarget`,
+con cada petición asentada a mano. Reproduce la propiedad que rompía la bandera:
+anunciar `loading` vuelve a ejecutar la pasada de lecturas de inmediato.
+
+| Prueba | Demuestra |
+| --- | --- |
+| `a read is not cancelled by the loading it announced itself` | un toque real que inicia una lectura no cancela su propia respuesta; una sola petición por lectura |
+| `the shift list is never left loading by a foreground revalidation` | `shifts` no queda `loading` tras segundo plano/revalidación |
+| `an answer started before the revalidation cannot repopulate what it emptied` | una respuesta de plano anterior al primer plano no repuebla, y después se hace una lectura nueva |
+| `a late 401 from the previous token does not revoke the renewed session` | el `401` del token anterior no revoca la sesión renovada, y la lectura vigente sí responde |
+| `a 401 from the read the screen is waiting for does revoke the branch` | la revocación sigue ocurriendo cuando corresponde |
+| `a late answer for the same branch but another shift is ignored` | mismo Restaurant/Branch, otro intento/turno: se ignora |
+| `changing branch, changing operator and signing out all fail closed` | los tres siguen fallando cerrado |
+| `a failed read is reported once and can be retried` | un fallo no arranca lecturas solo, y el reintento sí |
+| `a reader that throws before returning a promise is an ordinary failure` | contención del lanzamiento síncrono |
+| `every attempt is distinct and settles exactly once` | seriales distintos, un solo asentamiento |
+| `no rejection was left unhandled` | ningún rechazo sin manejar en todo el archivo (`process.on("unhandledRejection")`) |
+
+`src/mobile-state.test.ts` suma 5 pruebas de reductor (`only the attempt the
+resource is waiting for may settle it`, `an authorization failure for the current
+read revokes the branch`, `a renewed token gives up the reads in flight and keeps
+what already answered`, `choosing a shift gives up an operational read started
+under the previous one`, `what may be read is decided by the state alone`) y sus
+casos existentes pasan a anunciar el `loading` de cada respuesta, porque el
+reductor ya no acepta una respuesta que nadie estaba esperando.
+
+Total: **170 pruebas** en `apps/mobile` (154 antes, +16).
+
+### Matriz visual R4 — Chrome real, clics de confianza, `Respuesta lenta`
+
+Sin `force`, sin coordenadas contra elementos tapados y sin editar DOM ni CSS. La
+barra del arnés se contrae con su propio control y sólo se expande para pulsar un
+control.
+
+| Comprobación | 390×844 | 1024×768 |
+| --- | --- | --- |
+| `login → sucursal → turno → mesas → producto` con respuestas lentas | ✅ | ✅ |
+| Reproducción R4.1 tras `Cambiar turno` + segundo plano/primer plano | ✅ la lista de turnos responde; ya no queda `Consultando turnos abiertos…` | ✅ |
+| Volver a entrar al turno y a las mesas después de esa revalidación | ✅ | ✅ |
+| `Renovar token` con una lectura lenta en vuelo | ✅ no revoca, no queda `Cargando mesas…`, muestra `Terraza` | ✅ |
+| Cambio a la sucursal 2 con respuestas lentas | ✅ `Salón principal`, sin rastro de `Terraza` | ✅ |
+| `scrollWidth` vs `innerWidth` | 390 = 390 | 1024 = 1024 |
+| Consola | ✅ sin `error`, `warning`, `pageerror` ni rechazos no manejados | ✅ |
+
+Nota de método: el único ruido de consola es el banner de desarrollo de
+react-native-web (`Running application "main"…`, `Development-level warnings: ON.`)
+y el aviso `[DOM] Password field is not contained in a form`, ambos a nivel `log`
+y `verbose`; se filtra por **nivel** de consola, no por la palabra «warning».
+Runtime: Expo web sobre Metro local con Node 24.19.0 y
+`MOBILE_VISUAL_HARNESS=1`; fixtures sintéticas, sin servidor ni credenciales
+reales. Playwright se instaló únicamente en el scratchpad de la sesión y lanza el
+Chrome ya instalado: no se añadió nada al repositorio ni a `pnpm-lock.yaml`.
+
+### Compuertas ejecutadas con Node 24.19.0
+
+| Compuerta | Resultado |
+| --- | --- |
+| `pnpm --filter @super-restaurant/mobile run lint` | limpio |
+| `pnpm --filter @super-restaurant/mobile run typecheck` | limpio |
+| `pnpm --filter @super-restaurant/mobile run test` | 170/170 |
+| `pnpm exec expo install --check` | `Dependencies are up to date` |
+| `pnpm --filter @super-restaurant/mobile run build` (export Android) | 662 módulos, `index-e14ad2c0a0cc0c2abab73d3871046a5c.hbc` de 2,2 MB |
+| `pnpm lint --force` | 8/8 tareas, sin caché |
+| `pnpm typecheck --force` | 11/11 tareas, sin caché |
+| `pnpm test --force` | 11/11 tareas, sin caché |
+| `pnpm build --force` | 8/8 tareas, sin caché |
+| `git diff --check` | sin hallazgos |
+| Fin de línea | LF conservado en los siete archivos (0 bytes CR, igual que en `HEAD`) |
+| CodeGraph final | `MobileResource` se consume en las cinco pantallas y sólo por `status`/`value`/`failure`; `branch-read.ts` sólo lo usan `ui/app.tsx` y su prueba; sin referencias rotas ni huérfanos |
+
+### Archivos tocados en R4
+
+| Archivo | Cambio |
+| --- | --- |
+| `src/branch-read.ts` | nuevo: identidad de intento y asentamiento único de las lecturas de sucursal |
+| `src/branch-read.test.ts` | nuevo: 11 pruebas deterministas con promesas controladas |
+| `src/mobile-state.ts` | `MobileResource.attempt`; `forCurrentRead`; revocación en el reductor; `withoutReadsInFlight`; `shiftsReadTarget`/`layoutReadTarget`/`menuReadTarget` |
+| `src/ui/app.tsx` | las tres lecturas usan el tracker y las funciones de objetivo; sin banderas de cancelación y sin `accessRevoked` desde el `catch` |
+| `src/mobile-state.test.ts` | anuncia el `loading` de cada respuesta; 5 pruebas nuevas |
+| `tsconfig.test.build.json`, `package.json` | registran el módulo y la prueba nueva |
+
+### Límites que siguen abiertos
+
+Sin cambios respecto de A.R3. Además: la lista de membresías **no** entra en este
+alcance —sigue protegida por su propio serial en `src/ui/app.tsx`— y su caso
+límite (una respuesta en vuelo cuando cambia el operador) queda anotado, no
+corregido, porque no es una lectura branch-scoped.
+
+---
 
 ## A.R3 Tercera revisión del coordinador (2026-09-06) — interacción táctil estrecha
 
