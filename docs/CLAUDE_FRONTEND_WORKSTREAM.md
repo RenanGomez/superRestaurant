@@ -1,5 +1,23 @@
 # Workstream frontend para Claude — fundación móvil aislada
 
+## 0.R5 Revisión del coordinador 2026-09-06 — pertenencia de lecturas de membresías
+
+El coordinador revisó de forma independiente el corte limpio `9d1aa64c6d790f66af866832ae79eb45eb4e5917` (árbol `4201508719c15aca488de6783db682f1c022342b`) sobre la base exacta `5bb97233bf96acc31088cd2b1c353d76bea3fe75`. Los dos commits y las ocho rutas permanecen dentro de `apps/mobile/**`; la identidad de intento incorporada para `shifts`, `layout` y `menu` corrige la cancelación por el propio despacho y queda aceptada. El corte todavía no debe integrarse porque la lectura de membresías conserva un guard independiente basado solo en un serial local.
+
+Claude debe hacer un único retrabajo acotado: **ligar cada lectura de membresías al operador inmutable y al intento que la originó**. Hoy `membershipRequest.current` no se invalida sincrónicamente cuando `sessionObserved` cambia de `userId`, y `membershipsLoaded`/`membershipsFailed` no llevan identidad que el reductor pueda comprobar. Una respuesta del operador A puede, por tanto, asentarse después de que el estado ya pertenece al operador B. La regresión del coordinador cambió A→B mientras la lectura estaba en vuelo y esperaba `memberships.value === undefined`; falló porque recibió las dos membresías de A. Los otros 29 casos de `mobile-state.test` pasaron.
+
+Criterios exactos de aceptación R5:
+
+- extender el patrón vigente de pertenencia de intento, sin crear otro sistema paralelo, para que success, failure y 401 de membresías solo tengan efecto si coinciden con el `userId` actual y el intento que el recurso espera;
+- invalidar sincrónicamente la lectura en vuelo al cerrar sesión, cambiar de operador y renovar el token mientras se está leyendo; dejar un estado que permita iniciar una lectura fresca, sin spinner colgado;
+- garantizar que un success tardío de A nunca muestra membresías en B, un failure tardío de A no altera B y un 401 tardío de A no cierra la sesión de B; la lectura vigente de B debe poder completarse aunque la de A quede colgada;
+- cubrir con promesas controladas las respuestas de A antes y después de iniciar la lectura de B, renovación del mismo operador, rechazo, 401, lanzamiento síncrono y ausencia de `unhandledrejection`; conservar los casos existentes de sign-out y rama;
+- repetir el recorrido real en 390×844 y 1024×768 con respuesta lenta y cambio de operador si el arnés lo permite sin editar DOM/CSS; si no lo permite, registrar esa limitación y sostener la garantía con la prueba determinista de integración/reductor;
+- ejecutar con Node 24.19.0 lint, typecheck, pruebas Mobile, `expo install --check`, export Android, compuertas globales `--force`, `git diff --check`, aislamiento del bundle y CodeGraph final; actualizar solo la documentación Mobile correspondiente;
+- modificar únicamente `apps/mobile/**`; preservar R1–R4, no copiar contratos, no tocar `pnpm-lock.yaml`, API, Supabase, Web o KDS, y no hacer reset, pull, merge, rebase ni push.
+
+La P2 continúa `IN_PROGRESS`. Este retrabajo solo corrige aislamiento Mobile; la conexión productiva con Order y la aplicación de migraciones permanecen en el corte coordinado posterior.
+
 ## 0.R3 Revisión del coordinador 2026-09-06 — interacción táctil estrecha
 
 El coordinador revisó de forma independiente el corte limpio `59b26ca15628e3c9ed847efe6dae549e74592eaf` (árbol `a7ac9de413944607bb9002bc75825ad073b1fc2b`). El diff sigue limitado a once rutas de `apps/mobile/**`; lint, typecheck, las 150 pruebas, `expo install --check`, el export Android de 660 módulos y las compuertas globales sin caché quedaron verdes. El bundle de 2,232,339 bytes contiene las acciones de producto y no contiene cadenas del arnés. La separación `activeProductGroups`/`orderableGroups`, la categoría fail-closed, las confirmaciones, el retiro de líneas aceptadas y el envío ligado al contexto quedan aceptados para esta revisión.
