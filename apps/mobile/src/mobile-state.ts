@@ -36,6 +36,22 @@ export interface MobileResource<T> {
   readonly value: T | undefined;
 }
 
+/** The complete operational owner of one active-Order snapshot or read. */
+export interface ActiveOrdersTarget {
+  readonly scope: MobileBranchScope;
+  readonly shiftId: string;
+  readonly tableId: string;
+}
+
+/**
+ * Active Orders need a finer owner than the other branch reads. Two tables in
+ * the same branch and shift are different security/operational contexts, so
+ * the owner stays attached after loading as well as while the read is pending.
+ */
+export interface ActiveOrdersResource extends MobileResource<ActiveTableOrderListV2> {
+  readonly target: ActiveOrdersTarget | undefined;
+}
+
 /**
  * Whole client state. Everything below `branch` belongs to exactly one
  * authorized Restaurant/Branch pair: selecting, changing or releasing a branch
@@ -67,7 +83,7 @@ export interface MobileState {
   readonly branch: MobileBranchContext | undefined;
   readonly branchFailure: MobileFailure | undefined;
   /** The active Orders of the selected table, as the server reports them. */
-  readonly activeOrders: MobileResource<ActiveTableOrderListV2>;
+  readonly activeOrders: ActiveOrdersResource;
   /** The context read in flight for `pendingScope`, if any. */
   readonly contextRead: MobileContextRead | undefined;
   readonly layout: MobileResource<DiningLayoutV1>;
@@ -88,9 +104,9 @@ export interface MobileState {
 
 export type MobileEvent =
   | { readonly type: "accessRevoked" }
-  | { readonly type: "activeOrdersFailed"; readonly attempt: number; readonly failure: MobileFailure; readonly scope: MobileBranchScope; readonly tableId: string }
-  | { readonly type: "activeOrdersLoaded"; readonly attempt: number; readonly list: ActiveTableOrderListV2; readonly scope: MobileBranchScope; readonly tableId: string }
-  | { readonly type: "activeOrdersLoading"; readonly attempt: number; readonly scope: MobileBranchScope; readonly tableId: string }
+  | { readonly type: "activeOrdersFailed"; readonly attempt: number; readonly failure: MobileFailure; readonly scope: MobileBranchScope; readonly shiftId: string; readonly tableId: string }
+  | { readonly type: "activeOrdersLoaded"; readonly attempt: number; readonly list: ActiveTableOrderListV2; readonly scope: MobileBranchScope; readonly shiftId: string; readonly tableId: string }
+  | { readonly type: "activeOrdersLoading"; readonly attempt: number; readonly scope: MobileBranchScope; readonly shiftId: string; readonly tableId: string }
   | { readonly type: "activeOrdersReset"; readonly scope: MobileBranchScope }
   | { readonly type: "branchAuthorized"; readonly attempt: number; readonly context: BranchOperationalContextV1; readonly operator: string }
   | { readonly type: "branchContextRequested"; readonly attempt: number; readonly operator: string; readonly scope: MobileBranchScope }
@@ -129,8 +145,13 @@ const idleResource = Object.freeze({
   value: undefined,
 }) as MobileResource<never>;
 
+const idleActiveOrdersResource: ActiveOrdersResource = Object.freeze({
+  ...idleResource,
+  target: undefined,
+});
+
 export const initialMobileState: MobileState = Object.freeze({
-  activeOrders: idleResource,
+  activeOrders: idleActiveOrdersResource,
   branch: undefined,
   branchFailure: undefined,
   contextRead: undefined,
@@ -204,7 +225,7 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         ? state
         : freeze({
           ...state,
-          activeOrders: idleResource,
+          activeOrders: idleActiveOrdersResource,
           layout: idleResource,
           menu: idleResource,
           shift: undefined,
@@ -258,7 +279,7 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
       // with it: an answer for the pair being left cannot confirm this one.
       return freeze({
         ...state,
-        activeOrders: idleResource,
+        activeOrders: idleActiveOrdersResource,
         branch: undefined,
         branchFailure: undefined,
         contextRead: undefined,
@@ -305,7 +326,7 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
     case "branchReleased":
       return freeze({
         ...state,
-        activeOrders: idleResource,
+        activeOrders: idleActiveOrdersResource,
         branch: undefined,
         branchFailure: undefined,
         contextRead: undefined,
@@ -329,7 +350,7 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
     case "shiftReleased":
       return freeze({
         ...state,
-        activeOrders: idleResource,
+        activeOrders: idleActiveOrdersResource,
         layout: idleResource,
         menu: idleResource,
         shift: undefined,
@@ -370,21 +391,23 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
     case "menuReset":
       return forActiveScope(state, event.scope, (current) => ({ ...current, menu: idleResource }));
     case "activeOrdersLoading":
-      return forActiveScope(state, event.scope, (current) => ({ ...current, activeOrders: loading(event.attempt) }));
+      return ownsActiveOrdersTarget(state, event)
+        ? freeze({ ...state, activeOrders: activeOrdersLoading(event.attempt, activeOrdersTarget(event)) })
+        : state;
     case "activeOrdersLoaded":
       // The answer has to be about the table that was asked about. A table may
       // hold more than one active Order, so the list is kept whole.
-      return forCurrentRead(state, event, state.activeOrders, (current) => (
+      return forCurrentActiveOrdersRead(state, event, (current) => (
         event.list.tableId.toLowerCase() === event.tableId.toLowerCase()
-          ? { ...current, activeOrders: ready(event.list) }
+          ? { ...current, activeOrders: activeOrdersReady(event.list, activeOrdersTarget(event)) }
           : current
       ));
     case "activeOrdersFailed":
-      return forCurrentRead(state, event, state.activeOrders, (current) => (event.failure === "authorization"
+      return forCurrentActiveOrdersRead(state, event, (current) => (event.failure === "authorization"
         ? revokedState(current)
-        : { ...current, activeOrders: failed(event.failure) }));
+        : { ...current, activeOrders: activeOrdersFailed(event.failure, activeOrdersTarget(event)) }));
     case "activeOrdersReset":
-      return forActiveScope(state, event.scope, (current) => ({ ...current, activeOrders: idleResource }));
+      return forActiveScope(state, event.scope, (current) => ({ ...current, activeOrders: idleActiveOrdersResource }));
     default:
       return state;
   }
@@ -504,9 +527,29 @@ export function contextReadTarget(state: MobileState): MobileContextRead | undef
 export function activeOrdersReadTarget(
   state: MobileState,
   tableId: string | undefined,
-): MobileBranchScope | undefined {
-  if (!canReadOperationalData(state) || tableId === undefined || state.activeOrders.status !== "idle") return undefined;
-  return activeScope(state);
+): ActiveOrdersTarget | undefined {
+  const scope = activeScope(state);
+  const shiftId = state.shift?.shiftId;
+  if (!canReadOperationalData(state) || scope === undefined || shiftId === undefined || tableId === undefined) return undefined;
+  const target = freezeActiveOrdersTarget({ scope, shiftId, tableId });
+  return sameActiveOrdersTarget(state.activeOrders.target, target) ? undefined : target;
+}
+
+/**
+ * Filters the resource at the rendering boundary too. The effect normally
+ * replaces a stale owner synchronously, but a render can never expose another
+ * table's snapshot even if a caller misses that transition.
+ */
+export function activeOrdersForTable(
+  state: MobileState,
+  tableId: string | undefined,
+): ActiveOrdersResource {
+  const scope = activeScope(state);
+  const shiftId = state.shift?.shiftId;
+  if (scope === undefined || shiftId === undefined || tableId === undefined) return idleActiveOrdersResource;
+  return sameActiveOrdersTarget(state.activeOrders.target, { scope, shiftId, tableId })
+    ? state.activeOrders
+    : idleActiveOrdersResource;
 }
 
 /**
@@ -584,6 +627,54 @@ function forCurrentRead<T>(
   return forActiveScope(state, event.scope, change);
 }
 
+function activeOrdersTarget(event: {
+  readonly scope: MobileBranchScope;
+  readonly shiftId: string;
+  readonly tableId: string;
+}): ActiveOrdersTarget {
+  return freezeActiveOrdersTarget(event);
+}
+
+function freezeActiveOrdersTarget(target: ActiveOrdersTarget): ActiveOrdersTarget {
+  return Object.freeze({
+    scope: frozenScope(target.scope),
+    shiftId: target.shiftId,
+    tableId: target.tableId,
+  });
+}
+
+function sameActiveOrdersTarget(
+  left: ActiveOrdersTarget | undefined,
+  right: ActiveOrdersTarget,
+): boolean {
+  return left !== undefined
+    && sameScope(left.scope, right.scope)
+    && left.shiftId === right.shiftId
+    && left.tableId === right.tableId;
+}
+
+function ownsActiveOrdersTarget(
+  state: MobileState,
+  target: ActiveOrdersTarget,
+): boolean {
+  const scope = activeScope(state);
+  return scope !== undefined
+    && state.shift?.shiftId === target.shiftId
+    && sameScope(scope, target.scope);
+}
+
+function forCurrentActiveOrdersRead(
+  state: MobileState,
+  event: ActiveOrdersTarget & { readonly attempt: number },
+  change: (current: MobileState) => MobileState,
+): MobileState {
+  return state.activeOrders.attempt === event.attempt
+    && sameActiveOrdersTarget(state.activeOrders.target, event)
+    && ownsActiveOrdersTarget(state, event)
+    ? freeze(change(state))
+    : state;
+}
+
 /**
  * Gives up every read that has not answered yet, leaving each one `idle` rather
  * than `loading`. Idle is what lets the screen start the read that is current
@@ -606,7 +697,7 @@ function withoutReadsInFlight(state: MobileState): MobileState {
 function withoutBranchReadsInFlight(state: MobileState): MobileState {
   return {
     ...state,
-    activeOrders: givenUp(state.activeOrders),
+    activeOrders: state.activeOrders.status === "loading" ? idleActiveOrdersResource : state.activeOrders,
     layout: givenUp(state.layout),
     menu: givenUp(state.menu),
     shifts: givenUp(state.shifts),
@@ -621,7 +712,7 @@ function givenUp<T>(resource: MobileResource<T>): MobileResource<T> {
 function revokedState(state: MobileState): MobileState {
   return {
     ...state,
-    activeOrders: idleResource,
+    activeOrders: idleActiveOrdersResource,
     branch: undefined,
     branchFailure: "authorization",
     contextRead: undefined,
@@ -640,6 +731,18 @@ function revokedState(state: MobileState): MobileState {
 
 function loading<T>(attempt: number): MobileResource<T> {
   return Object.freeze({ attempt, failure: undefined, status: "loading", value: undefined });
+}
+
+function activeOrdersLoading(attempt: number, target: ActiveOrdersTarget): ActiveOrdersResource {
+  return Object.freeze({ attempt, failure: undefined, status: "loading", target, value: undefined });
+}
+
+function activeOrdersReady(value: ActiveTableOrderListV2, target: ActiveOrdersTarget): ActiveOrdersResource {
+  return Object.freeze({ attempt: undefined, failure: undefined, status: "ready", target, value });
+}
+
+function activeOrdersFailed(failure: MobileFailure, target: ActiveOrdersTarget): ActiveOrdersResource {
+  return Object.freeze({ attempt: undefined, failure, status: "failed", target, value: undefined });
 }
 
 function ready<T>(value: T): MobileResource<T> {

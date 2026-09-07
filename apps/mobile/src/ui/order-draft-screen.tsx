@@ -137,7 +137,7 @@ export function OrderDraftScreen({
 
     <Banner
       message={"Los importes provienen del catálogo publicado y son unitarios. Este dispositivo no calcula subtotales, "
-        + "impuestos, descuentos, propinas ni total, y no consulta la orden activa de la mesa."}
+        + "impuestos, descuentos, propinas ni total. Las órdenes activas se muestran aparte, tal como las entrega el servidor."}
       tone="info"
     />
 

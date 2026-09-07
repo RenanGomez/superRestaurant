@@ -53,8 +53,8 @@ export function TablesScreen({ layout, onRetry, onSelectTable, selectedTableId }
     data={layout.value.zones}
     keyExtractor={(zone) => zone.zoneId}
     ListHeaderComponent={<Banner
-      message={"Elige una mesa para preparar su comanda. Esta pantalla no muestra ocupación, cuenta ni orden activa: "
-        + "esa lectura todavía no existe en el servidor."}
+      message={"Elige una mesa para preparar su comanda. Este plano no infiere ocupación ni cuenta; "
+        + "al abrir una mesa se consultan sus órdenes activas."}
       tone="info"
     />}
     renderItem={({ item }) => <ZoneSection

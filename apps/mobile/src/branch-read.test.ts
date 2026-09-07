@@ -4,6 +4,8 @@ import test from "node:test";
 import { createBranchReadTracker } from "./branch-read.js";
 import { MobileRequestError, type MobileBranchScope } from "./mobile-client.js";
 import {
+  activeOrdersReadTarget,
+  activeScope,
   initialMobileState,
   contextReadTarget,
   layoutReadTarget,
@@ -19,6 +21,7 @@ import {
   type MobileState,
 } from "./mobile-state.js";
 import {
+  activeTableOrderListBody,
   branchOperationalContextBody,
   diningLayoutBody,
   fixtureSession,
@@ -27,15 +30,18 @@ import {
   operationalShiftListBody,
   scopeA,
   scopeB,
+  FIXTURE_TABLE,
   FIXTURE_USER_A,
   FIXTURE_USER_B,
 } from "./test-fixtures.js";
 import {
+  parseActiveTableOrderListV2,
   parseBranchMembershipListV1,
   parseBranchOperationalContextV1,
   parseDiningLayoutV1,
   parseMenuCatalogStateV1,
   parseOperationalShiftListV1,
+  type ActiveTableOrderListV2,
   type BranchMembershipSummaryV1,
   type BranchOperationalContextV1,
   type DiningLayoutV1,
@@ -88,7 +94,17 @@ function menuOf(scope: MobileBranchScope): MenuCatalogStateV1 {
   return parsed;
 }
 
-type ReadKind = "context" | "layout" | "memberships" | "menu" | "shifts";
+function activeOrdersOf(scope: MobileBranchScope, tableId: string): ActiveTableOrderListV2 {
+  const parsed = parseActiveTableOrderListV2(activeTableOrderListBody({
+    orders: tableId === FIXTURE_TABLE ? [{}] : [],
+    scope,
+    tableId,
+  }));
+  assert.ok(parsed !== undefined);
+  return parsed;
+}
+
+type ReadKind = "activeOrders" | "context" | "layout" | "memberships" | "menu" | "shifts";
 
 /** One request in flight, settled by the test rather than by a timer. */
 interface StartedRead {
@@ -100,6 +116,9 @@ interface StartedRead {
   readonly operator?: string;
   /** Set for a branch-scoped read: the pair it belongs to. */
   readonly scope?: MobileBranchScope;
+  /** Set for the table-scoped active-Order read. */
+  readonly shiftId?: string;
+  readonly tableId?: string;
 }
 
 /** Lets every already-queued promise callback run before the next assertion. */
@@ -120,13 +139,13 @@ function drain(): Promise<void> {
 function screen(): {
   readonly dispatch: (event: MobileEvent) => void;
   readonly reads: readonly StartedRead[];
-  readonly selectTable: (selected: boolean) => void;
+  readonly selectTable: (tableId: string | undefined) => void;
   /** Operators whose session this screen closed at the identity provider. */
   readonly signOuts: readonly string[];
   readonly state: () => MobileState;
 } {
   let state = initialMobileState;
-  let tableSelected = false;
+  let selectedTableId: string | undefined;
   let running = false;
   const tracker = createBranchReadTracker();
   const reads: StartedRead[] = [];
@@ -147,7 +166,13 @@ function screen(): {
   }
 
   function begin<T>(
-    read: { readonly kind: ReadKind; readonly operator?: string; readonly scope?: MobileBranchScope },
+    read: {
+      readonly kind: ReadKind;
+      readonly operator?: string;
+      readonly scope?: MobileBranchScope;
+      readonly shiftId?: string;
+      readonly tableId?: string;
+    },
     value: T,
     events: {
       readonly failed: (failure: MobileFailure, attempt: number) => void;
@@ -230,12 +255,28 @@ function screen(): {
       });
       return true;
     }
-    const menu = menuReadTarget(state, tableSelected);
+    const menu = menuReadTarget(state, selectedTableId !== undefined);
     if (menu !== undefined) {
       begin({ kind: "menu", scope: menu }, menuOf(menu), {
         failed: (failure, attempt) => { dispatch({ attempt, failure, scope: menu, type: "menuFailed" }); },
         loaded: (loaded, attempt) => { dispatch({ attempt, menu: loaded, scope: menu, type: "menuLoaded" }); },
         loading: (attempt) => { dispatch({ attempt, scope: menu, type: "menuLoading" }); },
+      });
+      return true;
+    }
+    const activeOrders = activeOrdersReadTarget(state, selectedTableId);
+    if (activeOrders !== undefined) {
+      const { scope, shiftId, tableId } = activeOrders;
+      begin({ kind: "activeOrders", scope, shiftId, tableId }, activeOrdersOf(scope, tableId), {
+        failed: (failure, attempt) => {
+          dispatch({ attempt, failure, scope, shiftId, tableId, type: "activeOrdersFailed" });
+        },
+        loaded: (list, attempt) => {
+          dispatch({ attempt, list, scope, shiftId, tableId, type: "activeOrdersLoaded" });
+        },
+        loading: (attempt) => {
+          dispatch({ attempt, scope, shiftId, tableId, type: "activeOrdersLoading" });
+        },
       });
       return true;
     }
@@ -245,7 +286,13 @@ function screen(): {
   return {
     dispatch,
     reads,
-    selectTable: (selected: boolean): void => { tableSelected = selected; runReads(); },
+    selectTable: (tableId: string | undefined): void => {
+      const changed = selectedTableId !== tableId;
+      selectedTableId = tableId;
+      const scope = activeScope(state);
+      if (changed && scope !== undefined) dispatch({ scope, type: "activeOrdersReset" });
+      else runReads();
+    },
     signOuts,
     state: (): MobileState => state,
   };
@@ -293,11 +340,106 @@ test("a read is not cancelled by the loading it announced itself", async () => {
   assert.equal(app.state().layout.value?.scope.branchId, scopeA.branchId);
 
   // Selecting a table is the second discrete event, for the catalog this time.
-  app.selectTable(true);
+  app.selectTable(FIXTURE_TABLE);
   assert.equal(only(app.reads, "menu").length, 1);
+  assert.equal(only(app.reads, "activeOrders").length, 1);
   await last(app.reads, "menu").answer();
   assert.equal(app.state().menu.status, "ready");
   assert.equal(only(app.reads, "menu").length, 1, "the answer must not start another read");
+  await last(app.reads, "activeOrders").answer();
+  assert.equal(app.state().activeOrders.status, "ready");
+});
+
+test("a ready table snapshot is dropped before another table is selected", async () => {
+  const app = await onShift();
+  const tableB = "66666666-6666-4666-8666-666666666667";
+  app.selectTable(FIXTURE_TABLE);
+  await last(app.reads, "activeOrders").answer();
+  assert.equal(app.state().activeOrders.value?.tableId, FIXTURE_TABLE);
+
+  app.selectTable(undefined);
+  assert.equal(app.state().activeOrders.status, "idle", "leaving A removes its snapshot immediately");
+  app.selectTable(tableB);
+  const forB = last(app.reads, "activeOrders");
+  assert.equal(forB.tableId, tableB);
+  assert.equal(app.state().activeOrders.status, "loading");
+  assert.equal(app.state().activeOrders.value, undefined, "A is not visible while B loads");
+
+  await forB.answer();
+  assert.equal(app.state().activeOrders.value?.tableId, tableB);
+  assert.deepEqual(app.state().activeOrders.value?.orders, [], "B's empty list remains a ready answer");
+});
+
+test("a hung table read does not block the next table and its late success is ignored", async () => {
+  const app = await onShift();
+  const tableB = "66666666-6666-4666-8666-666666666667";
+  app.selectTable(FIXTURE_TABLE);
+  const forA = last(app.reads, "activeOrders");
+
+  app.selectTable(tableB);
+  const forB = last(app.reads, "activeOrders");
+  assert.notEqual(forB.attempt, forA.attempt);
+  assert.equal(forB.tableId, tableB);
+  assert.equal(only(app.reads, "activeOrders").length, 2);
+
+  await forA.answer();
+  assert.equal(app.state().activeOrders.status, "loading");
+  assert.equal(app.state().activeOrders.attempt, forB.attempt);
+  assert.equal(app.state().activeOrders.value, undefined);
+
+  await forB.answer();
+  assert.equal(app.state().activeOrders.value?.tableId, tableB);
+});
+
+test("late failure and 401 from the previous table cannot disturb the current one", async () => {
+  for (const error of [new MobileRequestError("network"), new MobileRequestError(401)]) {
+    const app = await onShift();
+    const tableB = "66666666-6666-4666-8666-666666666667";
+    app.selectTable(FIXTURE_TABLE);
+    const forA = last(app.reads, "activeOrders");
+    app.selectTable(tableB);
+    const forB = last(app.reads, "activeOrders");
+
+    await forA.fail(error);
+    assert.equal(app.state().activeOrders.status, "loading");
+    assert.equal(app.state().activeOrders.attempt, forB.attempt);
+    assert.equal(app.state().branch?.branchId, scopeA.branchId);
+    assert.equal(app.state().session?.userId, FIXTURE_USER_A);
+    assert.equal(app.state().notice, undefined);
+
+    await forB.answer();
+    assert.equal(app.state().activeOrders.value?.tableId, tableB);
+  }
+});
+
+test("leaving a table invalidates its 401 before another table is chosen", async () => {
+  const app = await onShift();
+  const tableB = "66666666-6666-4666-8666-666666666667";
+  app.selectTable(FIXTURE_TABLE);
+  const forA = last(app.reads, "activeOrders");
+
+  app.selectTable(undefined);
+  assert.equal(app.state().activeOrders.status, "idle");
+  await forA.fail(new MobileRequestError(401));
+  assert.equal(app.state().branch?.branchId, scopeA.branchId);
+  assert.equal(app.state().session?.userId, FIXTURE_USER_A);
+  assert.equal(app.state().notice, undefined);
+  assert.equal(app.state().activeOrders.status, "idle");
+
+  app.selectTable(tableB);
+  const forB = last(app.reads, "activeOrders");
+  assert.equal(forB.tableId, tableB);
+  await forB.answer();
+  assert.equal(app.state().activeOrders.value?.tableId, tableB);
+});
+
+test("selecting the same table never duplicates its current read", async () => {
+  const app = await onShift();
+  app.selectTable(FIXTURE_TABLE);
+  const first = last(app.reads, "activeOrders");
+  app.selectTable(FIXTURE_TABLE);
+  assert.equal(only(app.reads, "activeOrders").length, 1);
+  assert.equal(last(app.reads, "activeOrders").attempt, first.attempt);
 });
 
 test("the shift list is never left loading by a foreground revalidation", async () => {

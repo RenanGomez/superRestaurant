@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { MobileRequestError, type MobileBranchScope } from "./mobile-client.js";
 import {
+  activeOrdersForTable,
   activeOrdersReadTarget,
   activeScope,
   canReadBranchData,
@@ -736,46 +737,108 @@ test("renewing a token gives up a context read in flight and keeps the selection
 test("the active orders of a table belong to the scope, the table and the attempt", () => {
   assert.ok(shiftsA?.shifts[0] !== undefined);
   const onTable = onBranchA();
+  const shiftId = onTable.shift?.shiftId;
+  assert.ok(shiftId !== undefined);
   assert.deepEqual(activeOrdersReadTarget(onTable, FIXTURE_TABLE), {
-    branchId: scopeA.branchId,
-    restaurantId: scopeA.restaurantId,
+    scope: { branchId: scopeA.branchId, restaurantId: scopeA.restaurantId },
+    shiftId,
+    tableId: FIXTURE_TABLE,
   });
   assert.equal(activeOrdersReadTarget(onTable, undefined), undefined, "no table, no read");
 
   const attempt = nextAttempt();
-  const loading = apply(onTable, { attempt, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoading" });
+  const loading = apply(onTable, { attempt, scope: scopeA, shiftId, tableId: FIXTURE_TABLE, type: "activeOrdersLoading" });
   assert.equal(loading.activeOrders.status, "loading");
   assert.equal(activeOrdersReadTarget(loading, FIXTURE_TABLE), undefined, "one read at a time");
 
   const list = parseActiveTableOrderListV2(activeTableOrderListBody({ orders: [{}, { shiftId: null }], scope: scopeA }));
   assert.ok(list !== undefined);
-  const ready = apply(loading, { attempt, list, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" });
+  const ready = apply(loading, { attempt, list, scope: scopeA, shiftId, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" });
   assert.equal(ready.activeOrders.value?.orders.length, 2, "a table may carry more than one active order");
   assert.equal(ready.activeOrders.value?.orders[1]?.shiftId, null, "a historic order without a shift is kept");
 
   // An answer for another attempt, another scope or another table changes nothing.
-  assert.equal(apply(loading, { attempt: attempt + 1_000, list, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" }), loading);
-  assert.equal(apply(loading, { attempt, list, scope: scopeB, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" }), loading);
+  assert.equal(apply(loading, { attempt: attempt + 1_000, list, scope: scopeA, shiftId, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" }), loading);
+  assert.equal(apply(loading, { attempt, list, scope: scopeB, shiftId, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" }), loading);
+  assert.equal(apply(loading, {
+    attempt,
+    list,
+    scope: scopeA,
+    shiftId: "55555555-5555-4555-8555-555555555556",
+    tableId: FIXTURE_TABLE,
+    type: "activeOrdersLoaded",
+  }), loading);
   const otherTable = parseActiveTableOrderListV2(activeTableOrderListBody({
     scope: scopeA,
     tableId: "66666666-6666-4666-8666-666666666667",
   }));
   assert.ok(otherTable !== undefined);
   assert.equal(
-    apply(loading, { attempt, list: otherTable, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" }).activeOrders.value,
+    apply(loading, { attempt, list: otherTable, scope: scopeA, shiftId, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" }).activeOrders.value,
     undefined,
     "an answer about another table is not this table's",
   );
+
+  const otherTableId = otherTable.tableId;
+  assert.deepEqual(activeOrdersReadTarget(ready, otherTableId), {
+    scope: { branchId: scopeA.branchId, restaurantId: scopeA.restaurantId },
+    shiftId,
+    tableId: otherTableId,
+  }, "a ready snapshot for A never blocks B");
+  assert.equal(activeOrdersForTable(ready, otherTableId).status, "idle", "A is never rendered for B");
+  assert.equal(activeOrdersForTable(ready, FIXTURE_TABLE), ready.activeOrders);
+});
+
+test("changing table replaces the read owner before an old answer can settle", () => {
+  const onTable = onBranchA();
+  const shiftId = onTable.shift?.shiftId;
+  assert.ok(shiftId !== undefined);
+  const tableB = "66666666-6666-4666-8666-666666666667";
+  const listA = parseActiveTableOrderListV2(activeTableOrderListBody({ scope: scopeA, tableId: FIXTURE_TABLE }));
+  const listB = parseActiveTableOrderListV2(activeTableOrderListBody({ orders: [], scope: scopeA, tableId: tableB }));
+  assert.ok(listA !== undefined && listB !== undefined);
+
+  const attemptA = nextAttempt();
+  const loadingA = apply(onTable, {
+    attempt: attemptA,
+    scope: scopeA,
+    shiftId,
+    tableId: FIXTURE_TABLE,
+    type: "activeOrdersLoading",
+  });
+  const targetB = activeOrdersReadTarget(loadingA, tableB);
+  assert.ok(targetB !== undefined, "B may start without waiting for A");
+  const attemptB = nextAttempt();
+  const loadingB = apply(loadingA, { attempt: attemptB, ...targetB, type: "activeOrdersLoading" });
+
+  assert.equal(
+    apply(loadingB, { attempt: attemptA, list: listA, scope: scopeA, shiftId, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" }),
+    loadingB,
+    "late A success is ignored",
+  );
+  assert.equal(
+    apply(loadingB, { attempt: attemptA, failure: "authorization", scope: scopeA, shiftId, tableId: FIXTURE_TABLE, type: "activeOrdersFailed" }),
+    loadingB,
+    "late A 401 is ignored",
+  );
+
+  const readyB = apply(loadingB, { attempt: attemptB, list: listB, ...targetB, type: "activeOrdersLoaded" });
+  assert.equal(readyB.activeOrders.status, "ready");
+  assert.equal(readyB.activeOrders.value?.tableId, tableB);
+  assert.deepEqual(readyB.activeOrders.value?.orders, [], "B's empty list is an explicit answer");
 });
 
 test("changing shift, branch or access drops the active orders with everything else", () => {
+  const onTable = onBranchA();
+  const shiftId = onTable.shift?.shiftId;
+  assert.ok(shiftId !== undefined);
   const attempt = nextAttempt();
   const list = parseActiveTableOrderListV2(activeTableOrderListBody({ orders: [{}], scope: scopeA }));
   assert.ok(list !== undefined);
   const withOrders = apply(
-    onBranchA(),
-    { attempt, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoading" },
-    { attempt, list, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" },
+    onTable,
+    { attempt, scope: scopeA, shiftId, tableId: FIXTURE_TABLE, type: "activeOrdersLoading" },
+    { attempt, list, scope: scopeA, shiftId, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" },
   );
   assert.equal(withOrders.activeOrders.status, "ready");
 
@@ -794,8 +857,8 @@ test("changing shift, branch or access drops the active orders with everything e
   // A 401 on the current read revokes, exactly like the other branch reads.
   const revoked = apply(
     apply(withOrders, { scope: scopeA, type: "activeOrdersReset" }),
-    { attempt: attempt + 1, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoading" },
-    { attempt: attempt + 1, failure: "authorization", scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersFailed" },
+    { attempt: attempt + 1, scope: scopeA, shiftId, tableId: FIXTURE_TABLE, type: "activeOrdersLoading" },
+    { attempt: attempt + 1, failure: "authorization", scope: scopeA, shiftId, tableId: FIXTURE_TABLE, type: "activeOrdersFailed" },
   );
   assert.equal(mobileScreen(revoked), "branches");
   assert.equal(revoked.notice, "branchRevoked");

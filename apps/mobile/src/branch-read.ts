@@ -1,9 +1,9 @@
 /**
  * Gives every read the screen owns an identity of its own, and settles it
- * exactly once: the three branch-scoped ones (open shifts, dining layout, menu
- * catalog) and the operator's membership list, which is read before any branch
+ * exactly once: open shifts, dining layout, menu catalog, one table's active
+ * Orders, and the operator's membership list, which is read before any branch
  * exists and belongs to a `userId` rather than to a Restaurant/Branch pair.
- * One tracker serves all four, so an attempt names exactly one request.
+ * One tracker serves them all, so an attempt names exactly one request.
  *
  * The previous guard was an effect-scoped boolean, and it could not work: the
  * effect announces its own `loading` state, React re-runs the effect on that

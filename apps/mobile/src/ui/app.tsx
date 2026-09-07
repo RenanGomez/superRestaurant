@@ -24,6 +24,7 @@ import {
   type MobileBranchScope,
 } from "../mobile-client.js";
 import {
+  activeOrdersForTable,
   activeOrdersReadTarget,
   activeScope,
   canReadBranchData,
@@ -324,18 +325,20 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
   // more than one, and the list is the only authority on what is already there:
   // the composer never assumes it owns the table.
   useEffect(() => {
-    const tableId = draft.tableId;
-    const target = activeOrdersReadTarget(state, tableId);
-    if (target === undefined || tableId === undefined || token === undefined) return;
+    const target = activeOrdersReadTarget(state, draft.tableId);
+    if (target === undefined || token === undefined) return;
+    const { scope: targetScope, shiftId, tableId } = target;
     reader.start({
       onFailed: (failure, attempt) => {
-        dispatch({ attempt, failure, scope: target, tableId, type: "activeOrdersFailed" });
+        dispatch({ attempt, failure, scope: targetScope, shiftId, tableId, type: "activeOrdersFailed" });
       },
       onLoaded: (list, attempt) => {
-        dispatch({ attempt, list, scope: target, tableId, type: "activeOrdersLoaded" });
+        dispatch({ attempt, list, scope: targetScope, shiftId, tableId, type: "activeOrdersLoaded" });
       },
-      onLoading: (attempt) => { dispatch({ attempt, scope: target, tableId, type: "activeOrdersLoading" }); },
-      read: () => listActiveTableOrders(config, token, target, tableId),
+      onLoading: (attempt) => {
+        dispatch({ attempt, scope: targetScope, shiftId, tableId, type: "activeOrdersLoading" });
+      },
+      read: () => listActiveTableOrders(config, token, targetScope, tableId),
     });
   }, [config, dispatch, draft.tableId, reader, state, token]);
 
@@ -485,9 +488,22 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     randomUuid, restaurantId, state.branch, state.menu.value, state.shift,
   ]);
 
+  const dispatchOrderDraft = useCallback((event: OrderDraftEvent): void => {
+    const nextDraft = reduceOrderDraft(draft, event);
+    if (nextDraft.tableId !== draft.tableId && branchId !== undefined && restaurantId !== undefined) {
+      // The draft and the server snapshot have separate reducers, so leaving
+      // or changing table invalidates the read before the draft transition is
+      // rendered. Deriving that fact from the same pure reducer also covers the
+      // empty-draft shortcut and a confirmed departure without duplicating its
+      // rules here. A late failure — a 401 especially — then belongs nowhere.
+      dispatch({ scope: { branchId, restaurantId }, type: "activeOrdersReset" });
+    }
+    dispatchDraft(event);
+  }, [branchId, dispatch, draft, restaurantId]);
+
   const selectTable = useCallback((table: DiningTableV1): void => {
-    dispatchDraft({ tableId: table.tableId, type: "tableSelected", zoneId: table.zoneId });
-  }, []);
+    dispatchOrderDraft({ tableId: table.tableId, type: "tableSelected", zoneId: table.zoneId });
+  }, [dispatchOrderDraft]);
 
   const screen = mobileScreen(state);
   const notice = state.notice === undefined ? undefined : noticeMessage(state.notice);
@@ -571,13 +587,13 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
 
     <View style={styles.content}>
       <WorkspaceContent
-        activeOrders={state.activeOrders}
+        activeOrders={activeOrdersForTable(state, draft.tableId)}
         draft={draft}
         draftCategory={draftCategory}
         menu={state.menu}
         layout={state.layout}
         onDraftCategory={setDraftCategory}
-        onDraftEvent={dispatchDraft}
+        onDraftEvent={dispatchOrderDraft}
         onRetryActiveOrders={retryActiveOrders}
         onRetryMenu={retryMenu}
         onRetryRead={retry}
