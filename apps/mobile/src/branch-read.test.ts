@@ -5,6 +5,7 @@ import { createBranchReadTracker } from "./branch-read.js";
 import { MobileRequestError, type MobileBranchScope } from "./mobile-client.js";
 import {
   initialMobileState,
+  contextReadTarget,
   layoutReadTarget,
   membershipsReadOperator,
   menuReadTarget,
@@ -18,7 +19,7 @@ import {
   type MobileState,
 } from "./mobile-state.js";
 import {
-  authorizedBranchBody,
+  branchOperationalContextBody,
   diningLayoutBody,
   fixtureSession,
   membershipListBody,
@@ -31,10 +32,12 @@ import {
 } from "./test-fixtures.js";
 import {
   parseBranchMembershipListV1,
+  parseBranchOperationalContextV1,
   parseDiningLayoutV1,
   parseMenuCatalogStateV1,
   parseOperationalShiftListV1,
   type BranchMembershipSummaryV1,
+  type BranchOperationalContextV1,
   type DiningLayoutV1,
   type MenuCatalogStateV1,
   type OperationalShiftListV1,
@@ -61,8 +64,10 @@ const memberships = membershipsOf(FIXTURE_USER_A);
 const sessionA = fixtureSession();
 const sessionB = fixtureSession({ accessToken: "harness-token-b", userId: FIXTURE_USER_B });
 
-function branchOf(scope: MobileBranchScope): { branchId: string; restaurantId: string; roles: readonly "waiter"[] } {
-  return authorizedBranchBody(scope) as { branchId: string; restaurantId: string; roles: readonly "waiter"[] };
+function contextOf(scope: MobileBranchScope): BranchOperationalContextV1 {
+  const parsed = parseBranchOperationalContextV1(branchOperationalContextBody(scope));
+  assert.ok(parsed !== undefined);
+  return parsed;
 }
 
 function shiftListOf(scope: MobileBranchScope): OperationalShiftListV1 {
@@ -83,7 +88,7 @@ function menuOf(scope: MobileBranchScope): MenuCatalogStateV1 {
   return parsed;
 }
 
-type ReadKind = "layout" | "memberships" | "menu" | "shifts";
+type ReadKind = "context" | "layout" | "memberships" | "menu" | "shifts";
 
 /** One request in flight, settled by the test rather than by a timer. */
 interface StartedRead {
@@ -192,6 +197,21 @@ function screen(): {
       });
       return true;
     }
+    // A selected pair is confirmed by its operational context, before any
+    // branch-scoped read can start.
+    const pending = contextReadTarget(state);
+    if (pending !== undefined) {
+      const operator = pending.operator;
+      const scope = pending.scope;
+      begin({ kind: "context", operator, scope }, contextOf(scope), {
+        failed: (failure, attempt) => {
+          dispatch({ attempt, failure, operator, scope, type: "branchRejected" });
+        },
+        loaded: (context, attempt) => { dispatch({ attempt, context, operator, type: "branchAuthorized" }); },
+        loading: (attempt) => { dispatch({ attempt, operator, scope, type: "branchContextRequested" }); },
+      });
+      return true;
+    }
     const shifts = shiftsReadTarget(state);
     if (shifts !== undefined) {
       begin({ kind: "shifts", scope: shifts }, shiftListOf(shifts), {
@@ -253,7 +273,7 @@ async function signedIn(): Promise<ReturnType<typeof screen>> {
 async function onShift(): Promise<ReturnType<typeof screen>> {
   const app = await signedIn();
   app.dispatch({ scope: scopeA, type: "branchRequested" });
-  app.dispatch({ branch: branchOf(scopeA), type: "branchAuthorized" });
+  await last(app.reads, "context").answer();
   await last(app.reads, "shifts").answer();
   const shift = app.state().shifts.value?.shifts[0];
   assert.ok(shift !== undefined);
@@ -290,7 +310,7 @@ test("the shift list is never left loading by a foreground revalidation", async 
   assert.equal(app.reads.length, before, "nothing may be read while the scope is unconfirmed");
 
   app.dispatch({ session: fixtureSession(), type: "sessionObserved" });
-  app.dispatch({ branch: branchOf(scopeA), type: "revalidationSucceeded" });
+  app.dispatch({ context: contextOf(scopeA), type: "revalidationSucceeded" });
 
   const reread = only(app.reads, "shifts");
   assert.equal(reread.length, 2, "the list is read again, once");
@@ -315,7 +335,7 @@ test("an answer started before the revalidation cannot repopulate what it emptie
   assert.equal(app.state().menu.value, undefined);
 
   app.dispatch({ session: fixtureSession(), type: "sessionObserved" });
-  app.dispatch({ branch: branchOf(scopeA), type: "revalidationSucceeded" });
+  app.dispatch({ context: contextOf(scopeA), type: "revalidationSucceeded" });
   await last(app.reads, "shifts").answer();
   const shift = app.state().shifts.value?.shifts[0];
   assert.ok(shift !== undefined);
@@ -385,7 +405,7 @@ test("changing branch, changing operator and signing out all fail closed", async
   const changingBranch = await onShift();
   const forA = last(changingBranch.reads, "layout");
   changingBranch.dispatch({ scope: scopeB, type: "branchRequested" });
-  changingBranch.dispatch({ branch: branchOf(scopeB), type: "branchAuthorized" });
+  await last(changingBranch.reads, "context").answer();
   await forA.answer();
   assert.equal(changingBranch.state().layout.value, undefined);
   assert.equal(changingBranch.state().layout.status, "idle");
@@ -500,7 +520,7 @@ test("a membership answer of the previous operator is refused before B even read
 
   app.dispatch({ session: sessionB, type: "sessionObserved" });
   app.dispatch({ scope: scopeB, type: "branchRequested" });
-  app.dispatch({ branch: branchOf(scopeB), type: "branchAuthorized" });
+  await last(app.reads, "context").answer();
   app.dispatch({ type: "revalidationStarted" });
   assert.equal(membershipsReadOperator(app.state()), undefined, "nothing is read while unconfirmed");
   const before = only(app.reads, "memberships").length;
@@ -554,7 +574,7 @@ test("a late 401 of the previous operator is refused before B even reads", async
 
   app.dispatch({ session: sessionB, type: "sessionObserved" });
   app.dispatch({ scope: scopeB, type: "branchRequested" });
-  app.dispatch({ branch: branchOf(scopeB), type: "branchAuthorized" });
+  await last(app.reads, "context").answer();
   app.dispatch({ type: "revalidationStarted" });
   assert.equal(membershipsReadOperator(app.state()), undefined, "B has started no read of its own");
 
@@ -564,7 +584,7 @@ test("a late 401 of the previous operator is refused before B even reads", async
   assert.deepEqual(app.signOuts, []);
 
   // And B's own read still completes once the scope is confirmed.
-  app.dispatch({ branch: branchOf(scopeB), type: "revalidationSucceeded" });
+  app.dispatch({ context: contextOf(scopeB), type: "revalidationSucceeded" });
   await last(app.reads, "shifts").answer();
   assert.equal(app.state().shifts.status, "ready");
   assert.equal(app.state().session?.userId, FIXTURE_USER_B);

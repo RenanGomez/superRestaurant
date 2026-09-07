@@ -1,23 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { MobileRequestError, type AuthorizedMobileBranch, type MobileBranchScope } from "./mobile-client.js";
+import { MobileRequestError, type MobileBranchScope } from "./mobile-client.js";
 import { readInitialSession, revalidateAccess } from "./revalidation.js";
 import type { MobileSession } from "./session.js";
-import { fixtureSession, scopeA } from "./test-fixtures.js";
+import { branchOperationalContextBody, fixtureSession, scopeA } from "./test-fixtures.js";
+import {
+  parseBranchOperationalContextV1,
+  type BranchOperationalContextV1,
+} from "@super-restaurant/shared-types";
 
 const session = fixtureSession();
-const branch: AuthorizedMobileBranch = Object.freeze({
-  branchId: scopeA.branchId,
-  restaurantId: scopeA.restaurantId,
-  roles: Object.freeze(["waiter" as const]),
-});
+const context = parseBranchOperationalContextV1(branchOperationalContextBody(scopeA));
+assert.ok(context !== undefined);
 
 function rejectingSession(): () => Promise<MobileSession | undefined> {
   return () => Promise.reject(new Error("SESSION_PORT_FAILED"));
 }
 
-function neverAuthorize(): (session: MobileSession, scope: MobileBranchScope) => Promise<AuthorizedMobileBranch> {
+function neverAuthorize(): (session: MobileSession, scope: MobileBranchScope) => Promise<BranchOperationalContextV1> {
   return () => { throw new Error("authorizeScope must not be called"); };
 }
 
@@ -54,7 +55,7 @@ test("without an active branch the session alone is confirmed", async () => {
     scope: undefined,
   });
 
-  assert.deepEqual(outcome, { branch: undefined, kind: "confirmed", session });
+  assert.deepEqual(outcome, { context: undefined, kind: "confirmed", session });
 });
 
 test("the branch is revalidated with the freshly read session, never a stale token", async () => {
@@ -64,13 +65,13 @@ test("the branch is revalidated with the freshly read session, never a stale tok
     authorizeScope: (current, scope) => {
       seen.push(current.accessToken);
       assert.deepEqual(scope, scopeA);
-      return Promise.resolve(branch);
+      return Promise.resolve(context);
     },
     currentSession: () => Promise.resolve(renewed),
     scope: scopeA,
   });
 
-  assert.deepEqual(outcome, { branch, kind: "confirmed", session: renewed });
+  assert.deepEqual(outcome, { context, kind: "confirmed", session: renewed });
   assert.deepEqual(seen, ["token-renewed"]);
 });
 

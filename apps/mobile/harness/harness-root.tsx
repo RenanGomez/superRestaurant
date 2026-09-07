@@ -11,10 +11,14 @@ import {
   HARNESS_DRAFT_OUTCOMES,
   HARNESS_SCENARIOS,
   createHarnessAuth,
+  createHarnessDeviceIdentity,
   createHarnessLifecycle,
-  createHarnessOrderIntegration,
+  createHarnessOrderDelivery,
   harnessControl,
+  harnessOrderSummary,
+  harnessRandomUuid,
   installHarnessFetch,
+  resetHarnessOrders,
   type HarnessDraftOutcome,
   type HarnessScenario,
 } from "./harness-server.js";
@@ -30,13 +34,22 @@ export function Root(): React.JSX.Element {
   const doubles = useMemo(() => ({
     auth: createHarnessAuth(),
     lifecycle: createHarnessLifecycle(),
-    // The double redraws the control bar whenever it is offered an intent, so
-    // what the screen handed over is visible without touching anything else.
-    orders: createHarnessOrderIntegration(() => { setTicks((value) => value + 1); }),
+    // The double redraws the control bar whenever it is offered a plan, so what
+    // the screen handed over is visible without touching anything else.
+    orders: createHarnessOrderDelivery(() => { setTicks((value) => value + 1); }),
   }), []);
   const [controlsExpanded, setControlsExpanded] = useState(true);
   const [scenario, setScenario] = useState<HarnessScenario>("ok");
-  const [draftOutcome, setDraftOutcome] = useState<HarnessDraftOutcome>("notConnected");
+  const [draftOutcome, setDraftOutcome] = useState<HarnessDraftOutcome>("synthetic");
+  const [deviceStore, setDeviceStore] = useState(harnessControl.deviceStore);
+  /**
+   * The keystore double is rebuilt whenever the simulated keystore changes.
+   * An identity, once read, is cached for the life of the app — which is right,
+   * and is why changing what the keystore holds has to look like a new
+   * installation rather than a new read on the old one.
+   */
+  const deviceIdentity = useMemo(() => createHarnessDeviceIdentity(), [deviceStore]);
+  const [orderConflict, setOrderConflict] = useState(false);
   const [reloads, setReloads] = useState(0);
 
   const apply = (next: HarnessScenario): void => {
@@ -81,9 +94,44 @@ export function Root(): React.JSX.Element {
           />
         </View>
         <Text style={styles.hint}>
-          {`Intentos ofrecidos a la integración (sin ninguna petición HTTP): ${
+          {`Plan ofrecido a la integración: ${
             doubles.orders.offered().length === 0 ? "ninguno todavía" : doubles.orders.offered().join(" | ")}`}
         </Text>
+        <Text style={styles.hint}>
+          {`Órdenes en el servidor sintético: ${
+            harnessOrderSummary().length === 0 ? "ninguna todavía" : harnessOrderSummary().join(" | ")}`}
+        </Text>
+        <View style={styles.row}>
+          {([
+            { label: "Almacén seguro: disponible", value: "available" },
+            { label: "Almacén seguro: no disponible", value: "unavailable" },
+            { label: "Almacén seguro: dato corrupto", value: "corrupt" },
+          ] as const).map((option) => <Control
+            key={option.value}
+            label={option.label}
+            onPress={() => {
+              harnessControl.deviceStore = option.value;
+              setDeviceStore(option.value);
+              // The identity is read once per mount, so the app is remounted.
+              setReloads((value) => value + 1);
+            }}
+            selected={deviceStore === option.value}
+          />)}
+          <Control
+            label="Conflicto en la siguiente mutación"
+            onPress={() => {
+              harnessControl.orderConflict = !harnessControl.orderConflict;
+              setOrderConflict(harnessControl.orderConflict);
+              setTicks((value) => value + 1);
+            }}
+            selected={orderConflict}
+          />
+          <Control
+            label="Limpiar órdenes sintéticas"
+            onPress={() => { resetHarnessOrders(); setTicks((value) => value + 1); }}
+            selected={false}
+          />
+        </View>
         <View style={styles.row}>
           {HARNESS_SCENARIOS.map((option) => <Control
             key={option.value}
@@ -136,9 +184,14 @@ export function Root(): React.JSX.Element {
             label="Reiniciar arnés"
             onPress={() => {
               apply("ok");
-              harnessControl.draftOutcome = "notConnected";
-              setDraftOutcome("notConnected");
+              harnessControl.draftOutcome = "synthetic";
+              setDraftOutcome("synthetic");
+              harnessControl.deviceStore = "available";
+              setDeviceStore("available");
+              harnessControl.orderConflict = false;
+              setOrderConflict(false);
               doubles.orders.reset();
+              resetHarnessOrders();
               setReloads((value) => value + 1);
             }}
             selected={false}
@@ -154,9 +207,13 @@ export function Root(): React.JSX.Element {
         <App
           auth={doubles.auth}
           config={fixtureConfig}
+          deviceIdentity={deviceIdentity}
           key={reloads}
           lifecycle={doubles.lifecycle}
-          orderDraftIntegration={doubles.orders}
+          // `synthetic` means "run the real sequence", so the screen builds its
+          // own productive port instead of receiving the double.
+          {...(draftOutcome === "synthetic" ? {} : { orderDelivery: doubles.orders })}
+          randomUuid={harnessRandomUuid}
         />
       </View>
     </SafeAreaView>

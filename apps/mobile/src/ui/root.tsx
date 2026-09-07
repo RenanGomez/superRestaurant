@@ -5,6 +5,8 @@ import { StatusBar } from "expo-status-bar";
 
 import type { MobileAuthPort } from "../auth-port.js";
 import { readMobileConfig, type MobileConfig } from "../config.js";
+import type { MobileDeviceIdentity } from "../device-identity.js";
+import { createExpoDeviceIdentity, expoRandomUuid } from "../expo-device-identity.js";
 import type { MobileLifecyclePort } from "../lifecycle.js";
 import { createMobileAuth } from "../supabase-auth.js";
 import { App } from "./app.js";
@@ -29,11 +31,17 @@ export function Root(): React.JSX.Element {
   const bootstrap = useMemo((): {
     readonly auth: MobileAuthPort;
     readonly config: MobileConfig;
+    readonly deviceIdentity: MobileDeviceIdentity;
     readonly lifecycle: MobileLifecyclePort;
   } | undefined => {
     try {
       const config = readMobileConfig(readEnvironment());
-      return { auth: createMobileAuth(config), config, lifecycle: createAppStateLifecycle() };
+      return {
+        auth: createMobileAuth(config),
+        config,
+        deviceIdentity: createExpoDeviceIdentity(),
+        lifecycle: createAppStateLifecycle(),
+      };
     } catch {
       return undefined;
     }
@@ -44,7 +52,13 @@ export function Root(): React.JSX.Element {
     <SafeAreaView style={styles.safeArea}>
       {bootstrap === undefined
         ? <ConfigurationErrorScreen />
-        : <App auth={bootstrap.auth} config={bootstrap.config} lifecycle={bootstrap.lifecycle} />}
+        : <App
+          auth={bootstrap.auth}
+          config={bootstrap.config}
+          deviceIdentity={bootstrap.deviceIdentity}
+          lifecycle={bootstrap.lifecycle}
+          randomUuid={expoRandomUuid}
+        />}
     </SafeAreaView>
   </SafeAreaProvider>;
 }

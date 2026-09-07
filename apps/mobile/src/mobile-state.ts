@@ -1,12 +1,15 @@
 import type {
+  ActiveTableOrderListV2,
   BranchMembershipSummaryV1,
+  BranchOperationalContextV1,
   DiningLayoutV1,
+  MembershipRoleCode,
   MenuCatalogStateV1,
   OperationalShiftListV1,
   OperationalShiftSummaryV1,
 } from "@super-restaurant/shared-types";
 
-import { MobileRequestError, type AuthorizedMobileBranch, type MobileBranchScope } from "./mobile-client.js";
+import { MobileRequestError, type MobileBranchScope } from "./mobile-client.js";
 import { isSameOperator, type MobileSession } from "./session.js";
 
 export type MobileScreen = "starting" | "signIn" | "branches" | "shifts" | "workspace";
@@ -39,9 +42,34 @@ export interface MobileResource<T> {
  * drops the previous branch's data in the same transition, so one branch can
  * never render data that was loaded for another.
  */
+/**
+ * The authoritative operating context of one branch, flattened to what this app
+ * uses. `timeZone` is the reason it exists: `CreateOrderCommandV2` requires the
+ * branch's IANA zone, and only PostgreSQL knows it — a device must never decide
+ * the operational day of a restaurant.
+ */
+export interface MobileBranchContext {
+  readonly branchId: string;
+  readonly restaurantId: string;
+  readonly roles: readonly MembershipRoleCode[];
+  readonly timeZone: string;
+}
+
+/** Identity of one operational-context read: operator, pair and attempt. */
+export interface MobileContextRead {
+  readonly attempt: number;
+  readonly operator: string;
+  readonly scope: MobileBranchScope;
+}
+
 export interface MobileState {
-  readonly branch: AuthorizedMobileBranch | undefined;
+  /** The active branch and its context, or `undefined` while none is confirmed. */
+  readonly branch: MobileBranchContext | undefined;
   readonly branchFailure: MobileFailure | undefined;
+  /** The active Orders of the selected table, as the server reports them. */
+  readonly activeOrders: MobileResource<ActiveTableOrderListV2>;
+  /** The context read in flight for `pendingScope`, if any. */
+  readonly contextRead: MobileContextRead | undefined;
   readonly layout: MobileResource<DiningLayoutV1>;
   readonly memberships: MobileResource<readonly BranchMembershipSummaryV1[]>;
   readonly menu: MobileResource<MenuCatalogStateV1>;
@@ -60,8 +88,13 @@ export interface MobileState {
 
 export type MobileEvent =
   | { readonly type: "accessRevoked" }
-  | { readonly type: "branchAuthorized"; readonly branch: AuthorizedMobileBranch }
-  | { readonly type: "branchRejected"; readonly failure: MobileFailure; readonly scope: MobileBranchScope }
+  | { readonly type: "activeOrdersFailed"; readonly attempt: number; readonly failure: MobileFailure; readonly scope: MobileBranchScope; readonly tableId: string }
+  | { readonly type: "activeOrdersLoaded"; readonly attempt: number; readonly list: ActiveTableOrderListV2; readonly scope: MobileBranchScope; readonly tableId: string }
+  | { readonly type: "activeOrdersLoading"; readonly attempt: number; readonly scope: MobileBranchScope; readonly tableId: string }
+  | { readonly type: "activeOrdersReset"; readonly scope: MobileBranchScope }
+  | { readonly type: "branchAuthorized"; readonly attempt: number; readonly context: BranchOperationalContextV1; readonly operator: string }
+  | { readonly type: "branchContextRequested"; readonly attempt: number; readonly operator: string; readonly scope: MobileBranchScope }
+  | { readonly type: "branchRejected"; readonly attempt: number; readonly failure: MobileFailure; readonly operator: string; readonly scope: MobileBranchScope }
   | { readonly type: "branchReleased" }
   | { readonly type: "branchRequested"; readonly scope: MobileBranchScope }
   | { readonly type: "layoutFailed"; readonly attempt: number; readonly failure: MobileFailure; readonly scope: MobileBranchScope }
@@ -77,7 +110,7 @@ export type MobileEvent =
   | { readonly type: "menuReset"; readonly scope: MobileBranchScope }
   | { readonly type: "revalidationFailed"; readonly failure: MobileFailure }
   | { readonly type: "revalidationStarted" }
-  | { readonly type: "revalidationSucceeded"; readonly branch: AuthorizedMobileBranch | undefined }
+  | { readonly type: "revalidationSucceeded"; readonly context: BranchOperationalContextV1 | undefined }
   | { readonly type: "sessionObserved"; readonly session: MobileSession }
   | { readonly type: "sessionRestored"; readonly session: MobileSession | undefined }
   | { readonly type: "signedOut"; readonly notice: MobileNotice | undefined }
@@ -97,8 +130,10 @@ const idleResource = Object.freeze({
 }) as MobileResource<never>;
 
 export const initialMobileState: MobileState = Object.freeze({
+  activeOrders: idleResource,
   branch: undefined,
   branchFailure: undefined,
+  contextRead: undefined,
   layout: idleResource,
   memberships: idleResource,
   menu: idleResource,
@@ -169,6 +204,7 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         ? state
         : freeze({
           ...state,
+          activeOrders: idleResource,
           layout: idleResource,
           menu: idleResource,
           shift: undefined,
@@ -178,13 +214,18 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         });
     case "revalidationSucceeded":
       if (!state.revalidating) return state;
-      if (event.branch === undefined) {
+      if (event.context === undefined) {
         return freeze({ ...state, revalidating: false, revalidationFailure: undefined });
       }
       // An answer for a pair that is no longer active is ignored, exactly as in
-      // the selection flow.
-      return state.branch !== undefined && sameScope(state.branch, event.branch)
-        ? freeze({ ...state, branch: event.branch, revalidating: false, revalidationFailure: undefined })
+      // the selection flow. A confirmed one also refreshes the branch's zone.
+      return state.branch !== undefined && sameScope(state.branch, event.context.scope)
+        ? freeze({
+          ...state,
+          branch: toMobileBranchContext(event.context),
+          revalidating: false,
+          revalidationFailure: undefined,
+        })
         : state;
     case "revalidationFailed":
       if (!state.revalidating) return state;
@@ -213,11 +254,14 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         : freeze({ ...state, memberships: failed(event.failure) });
     case "branchRequested":
       // Clearing branch-scoped data here is what keeps the previous branch from
-      // being visible while the new pair is revalidated.
+      // being visible while the new pair is revalidated. The context read goes
+      // with it: an answer for the pair being left cannot confirm this one.
       return freeze({
         ...state,
+        activeOrders: idleResource,
         branch: undefined,
         branchFailure: undefined,
+        contextRead: undefined,
         layout: idleResource,
         menu: idleResource,
         notice: undefined,
@@ -228,15 +272,32 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         revalidationFailure: undefined,
         tab: "tables",
       });
+    case "branchContextRequested":
+      // The announcement that fixes the identity of this context read. Only the
+      // operator in place, for the pair actually pending, may start one.
+      return state.session.userId === event.operator
+        && state.pendingScope !== undefined && sameScope(state.pendingScope, event.scope)
+        ? freeze({ ...state, contextRead: frozenContextRead(event) })
+        : state;
     case "branchAuthorized":
-      return state.pendingScope !== undefined && sameScope(state.pendingScope, event.branch)
-        ? freeze({ ...state, branch: event.branch, branchFailure: undefined, pendingScope: undefined })
+      // What confirms a branch is the server's own context: the roles it grants
+      // there and the branch's IANA zone, bound to the operator, the pair and
+      // the attempt that asked for it.
+      return ownsContextRead(state, { attempt: event.attempt, operator: event.operator, scope: event.context.scope })
+        ? freeze({
+          ...state,
+          branch: toMobileBranchContext(event.context),
+          branchFailure: undefined,
+          contextRead: undefined,
+          pendingScope: undefined,
+        })
         : state;
     case "branchRejected":
-      return state.pendingScope !== undefined && sameScope(state.pendingScope, event.scope)
+      return ownsContextRead(state, event)
         ? freeze({
           ...state,
           branchFailure: event.failure,
+          contextRead: undefined,
           notice: event.failure === "authorization" ? "branchRevoked" : state.notice,
           pendingScope: undefined,
         })
@@ -244,8 +305,10 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
     case "branchReleased":
       return freeze({
         ...state,
+        activeOrders: idleResource,
         branch: undefined,
         branchFailure: undefined,
+        contextRead: undefined,
         layout: idleResource,
         menu: idleResource,
         pendingScope: undefined,
@@ -264,7 +327,14 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         ? freeze(withoutBranchReadsInFlight({ ...state, shift: event.shift }))
         : state;
     case "shiftReleased":
-      return freeze({ ...state, layout: idleResource, menu: idleResource, shift: undefined, tab: "tables" });
+      return freeze({
+        ...state,
+        activeOrders: idleResource,
+        layout: idleResource,
+        menu: idleResource,
+        shift: undefined,
+        tab: "tables",
+      });
     case "shiftsLoading":
       return forActiveScope(state, event.scope, (current) => ({ ...current, shifts: loading(event.attempt) }));
     case "shiftsLoaded":
@@ -299,6 +369,22 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         : { ...current, menu: failed(event.failure) }));
     case "menuReset":
       return forActiveScope(state, event.scope, (current) => ({ ...current, menu: idleResource }));
+    case "activeOrdersLoading":
+      return forActiveScope(state, event.scope, (current) => ({ ...current, activeOrders: loading(event.attempt) }));
+    case "activeOrdersLoaded":
+      // The answer has to be about the table that was asked about. A table may
+      // hold more than one active Order, so the list is kept whole.
+      return forCurrentRead(state, event, state.activeOrders, (current) => (
+        event.list.tableId.toLowerCase() === event.tableId.toLowerCase()
+          ? { ...current, activeOrders: ready(event.list) }
+          : current
+      ));
+    case "activeOrdersFailed":
+      return forCurrentRead(state, event, state.activeOrders, (current) => (event.failure === "authorization"
+        ? revokedState(current)
+        : { ...current, activeOrders: failed(event.failure) }));
+    case "activeOrdersReset":
+      return forActiveScope(state, event.scope, (current) => ({ ...current, activeOrders: idleResource }));
     default:
       return state;
   }
@@ -388,6 +474,42 @@ export function ownsMembershipsRead(state: MobileState, read: MembershipsRead): 
 }
 
 /**
+ * Whether a context answer may still be applied: same operator, same pending
+ * pair, and the attempt the state is waiting for. The token is covered by the
+ * attempt — a renewal gives the read up, so its answer no longer matches.
+ */
+export function ownsContextRead(state: MobileState, read: MobileContextRead): boolean {
+  return state.session?.userId === read.operator
+    && state.contextRead?.attempt === read.attempt
+    && state.pendingScope !== undefined
+    && sameScope(state.pendingScope, read.scope);
+}
+
+/**
+ * The pair whose operational context may be read right now, with the operator
+ * it belongs to, or `undefined` when the state does not authorize starting it.
+ */
+export function contextReadTarget(state: MobileState): MobileContextRead | undefined {
+  const pending = state.pendingScope;
+  if (state.session === undefined || pending === undefined || state.contextRead !== undefined) return undefined;
+  // The attempt is allocated by the screen's tracker, not here; `0` is a
+  // placeholder the caller replaces. Only the operator and pair are decided.
+  return Object.freeze({ attempt: 0, operator: state.session.userId, scope: pending });
+}
+
+/**
+ * The table whose active Orders may be read right now, or `undefined`. A table
+ * is only asked about while a shift is open and its own draft is on screen.
+ */
+export function activeOrdersReadTarget(
+  state: MobileState,
+  tableId: string | undefined,
+): MobileBranchScope | undefined {
+  if (!canReadOperationalData(state) || tableId === undefined || state.activeOrders.status !== "idle") return undefined;
+  return activeScope(state);
+}
+
+/**
  * The operator whose membership list may be read right now, or `undefined` when
  * the state does not authorize starting that read. Same shape as the
  * branch-scoped targets: the screen asks, it does not decide.
@@ -469,13 +591,22 @@ function forCurrentRead<T>(
  * applied. Resources that already settled are left exactly as they are.
  */
 function withoutReadsInFlight(state: MobileState): MobileState {
-  return { ...withoutBranchReadsInFlight(state), memberships: givenUp(state.memberships) };
+  return {
+    ...withoutBranchReadsInFlight(state),
+    // A context read started with the token being replaced is given up too, and
+    // `pendingScope` is deliberately kept: the selection the operator made is
+    // still what they want, so the screen starts a fresh read for it at once
+    // instead of dropping them back to the branch list.
+    contextRead: undefined,
+    memberships: givenUp(state.memberships),
+  };
 }
 
 /** The same, for the three reads a shift change invalidates but a list read outlives. */
 function withoutBranchReadsInFlight(state: MobileState): MobileState {
   return {
     ...state,
+    activeOrders: givenUp(state.activeOrders),
     layout: givenUp(state.layout),
     menu: givenUp(state.menu),
     shifts: givenUp(state.shifts),
@@ -490,8 +621,10 @@ function givenUp<T>(resource: MobileResource<T>): MobileResource<T> {
 function revokedState(state: MobileState): MobileState {
   return {
     ...state,
+    activeOrders: idleResource,
     branch: undefined,
     branchFailure: "authorization",
+    contextRead: undefined,
     layout: idleResource,
     memberships: idleResource,
     menu: idleResource,
@@ -519,6 +652,24 @@ function failed<T>(failure: MobileFailure): MobileResource<T> {
 
 function frozenScope(scope: MobileBranchScope): MobileBranchScope {
   return Object.freeze({ branchId: scope.branchId, restaurantId: scope.restaurantId });
+}
+
+function frozenContextRead(read: MobileContextRead): MobileContextRead {
+  return Object.freeze({ attempt: read.attempt, operator: read.operator, scope: frozenScope(read.scope) });
+}
+
+/**
+ * Flattens the shared context contract to what this app holds. Nothing is
+ * invented and nothing is dropped silently: the pair, the roles and the zone
+ * all come from the response the shared parser accepted.
+ */
+export function toMobileBranchContext(context: BranchOperationalContextV1): MobileBranchContext {
+  return Object.freeze({
+    branchId: context.scope.branchId,
+    restaurantId: context.scope.restaurantId,
+    roles: context.roles,
+    timeZone: context.timeZone,
+  });
 }
 
 function freeze(state: MobileState): MobileState {

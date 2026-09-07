@@ -17,7 +17,7 @@
 import type { MenuCatalogV1, ModifierGroupSelectionV1, OrderChannelV1 } from "@super-restaurant/shared-types";
 
 import type { MobileBranchScope } from "./mobile-client.js";
-import { draftLineIssues, type OrderDraftFailure, type OrderDraftLine } from "./order-draft.js";
+import { draftLineIssues, type OrderDraftLine } from "./order-draft.js";
 
 const CURRENCY_PATTERN = /^[A-Z]{3}$/u;
 
@@ -52,31 +52,6 @@ export interface OrderDraftHandoffV1 {
   readonly createOrder: CreateOrderIntentV1;
   readonly openOrder: OpenOrderIntentV1;
 }
-
-/**
- * The one and only effect boundary of this slice.
- *
- * `deliver` receives the whole hand-over — the create-order intent, one
- * add-item intent per line and the open-order intent, in the order the Order
- * contracts expect — and resolves `undefined` on success or the failure the
- * transport produced. There is deliberately no second callback surface beside
- * it: when the screen offered the intents *and* called a submit, a future
- * production integration wired to both would have created, added and opened
- * twice. Whoever implements `deliver` decides how to walk `handoff`; a test
- * double or the visual harness inspects it inside the same call.
- */
-export interface OrderDraftIntegration {
-  readonly deliver: (handoff: OrderDraftHandoffV1) => Promise<OrderDraftFailure | undefined>;
-}
-
-/**
- * The integration this slice ships with: it accepts the draft, performs no
- * request and says so. Replacing it is the whole point of the seam — until
- * then no gesture in the app can reach an Order endpoint.
- */
-export const disconnectedOrderDraftIntegration: OrderDraftIntegration = Object.freeze({
-  deliver: (): Promise<OrderDraftFailure> => Promise.resolve("notConnected"),
-});
 
 /**
  * Builds the hand-over, or returns `undefined` when the draft cannot be

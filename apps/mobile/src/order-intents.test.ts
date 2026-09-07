@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
+import { MAX_ORDER_ITEM_MODIFIER_GROUPS } from "@super-restaurant/shared-types";
+
 import { MOBILE_API_PATHS } from "./mobile-client.js";
 import {
   DRAFT_MAX_GROUPS,
@@ -14,7 +16,6 @@ import {
 } from "./order-draft.js";
 import {
   buildOrderDraftHandoff,
-  disconnectedOrderDraftIntegration,
   type AddOrderItemIntentV1,
   type CreateOrderIntentV1,
   type OpenOrderIntentV1,
@@ -284,22 +285,49 @@ test("a required group past the presentation cap is still enforced", () => {
   assert.equal(handoff?.addItems[0]?.modifierGroups.length, 1);
 });
 
-test("a catalog demanding more mandatory groups than a command can carry is refused, not truncated", () => {
-  // 51 groups, all required: no selection can satisfy them within
-  // DRAFT_MAX_GROUPS, so the honest answer is that it cannot be ordered here.
-  const impossible = orderEntryCatalogWithBulkGroups(51, () => true);
-  const issues = draftLineIssues(impossible, mainLine({ modifierGroups: [] }));
-  assert.equal(issues.length, 1);
-  assert.match(issues[0] ?? "", /51 grupos obligatorios/u);
-  assert.equal(build({ catalog: impossible, lines: [mainLine({ modifierGroups: [] })] }), undefined);
-  // Selecting 50 of them does not sneak past the bound either.
-  const fifty = mainLine({
+test("a catalog demanding more mandatory groups than a command can carry cannot be published", () => {
+  // This used to be a case this app had to refuse on its own. The shared
+  // contract now forbids it upstream: a published catalog may not declare more
+  // than MAX_ORDER_ITEM_MODIFIER_GROUPS required groups for one product, so the
+  // fixture cannot even build such a body. The invariant is upstream, and the
+  // check that it *is* upstream belongs here, at the boundary this app trusts.
+  assert.throws(
+    () => orderEntryCatalogWithBulkGroups(MAX_ORDER_ITEM_MODIFIER_GROUPS + 1, () => true),
+    /FIXTURE_CATALOG_INVALID/u,
+  );
+  // The fixture parses its own body with the shared parser, so its refusal to
+  // build one *is* the shared parser refusing it.
+});
+
+test("a line that leaves a mandatory group unselected is refused, never truncated", () => {
+  // The boundary the contract does allow: exactly as many required groups as a
+  // command can carry. Nothing may be dropped to make a draft fit.
+  const atTheLimit = orderEntryCatalogWithBulkGroups(DRAFT_MAX_GROUPS, () => true);
+  const unselected = draftLineIssues(atTheLimit, mainLine({ modifierGroups: [] }));
+  // One issue per group left unselected: the operator is told about every one,
+  // not about a count they would then have to go and find.
+  assert.equal(unselected.length, DRAFT_MAX_GROUPS);
+  for (const issue of unselected) assert.match(issue, /requiere/u);
+  assert.equal(build({ catalog: atTheLimit, lines: [mainLine({ modifierGroups: [] })] }), undefined);
+
+  // Selecting every one of them is what makes the line offerable.
+  const all = mainLine({
     modifierGroups: Array.from({ length: DRAFT_MAX_GROUPS }, (_unused, index) => ({
       groupId: bulkGroupId(index + 1),
       selections: [{ optionId: bulkOptionId(index + 1), quantity: 1 }],
     })),
   });
-  assert.equal(build({ catalog: impossible, lines: [fifty] }), undefined);
+  assert.deepEqual(draftLineIssues(atTheLimit, all), []);
+  assert.notEqual(build({ catalog: atTheLimit, lines: [all] }), undefined);
+
+  // One left out is still a refusal, not a truncation to 49.
+  assert.equal(
+    build({
+      catalog: atTheLimit,
+      lines: [mainLine({ modifierGroups: all.modifierGroups.slice(0, DRAFT_MAX_GROUPS - 1) })],
+    }),
+    undefined,
+  );
 });
 
 test("a product whose category was retired is no longer orderable", () => {
@@ -348,28 +376,44 @@ test("two lines may not share a handle, or the feedback for one would be ambiguo
   assert.notEqual(build({ lines: [mainLine(), mainLine({ draftLineId: "draft-line-2" })] }), undefined);
 });
 
-test("the hand-over is the single delivery boundary: no callback surface beside it", () => {
-  // A second surface is exactly what let a wired integration create, add and
-  // open twice. The contract exposes `deliver` and nothing else.
-  assert.deepEqual(Object.keys(disconnectedOrderDraftIntegration), ["deliver"]);
-});
-
-test("the integration this slice ships with performs no write and says so", async () => {
+test("the hand-over carries no audit identity of its own", () => {
+  // Identity belongs to the delivery plan, which mints it once per delivery.
+  // A hand-over that carried an `orderId` or an `eventId` would be inventing an
+  // audit trail at composition time, before anything had been sent.
   const handoff = build();
   assert.ok(handoff !== undefined);
-  assert.equal(await disconnectedOrderDraftIntegration.deliver(handoff), "notConnected");
+  assert.deepEqual(Object.keys(handoff.createOrder).sort(), ["channel", "currency", "scope", "tableId"]);
+  assert.deepEqual(Object.keys(handoff.openOrder).sort(), ["scope", "tableId"]);
+  for (const item of handoff.addItems) {
+    assert.deepEqual(
+      Object.keys(item).sort(),
+      ["draftLineId", "modifierGroups", "productId", "quantity", "scope"],
+    );
+  }
 });
 
-test("no Order endpoint is reachable from the app: the allowlist is unchanged", () => {
+test("only the three Order mutations and the two operational reads are reachable", () => {
   assert.deepEqual(Object.values(MOBILE_API_PATHS).sort(), [
-    "/api/v1/access/branch",
+    "/api/v1/access/branch/context",
     "/api/v1/access/memberships",
     "/api/v1/catalog/menu",
     "/api/v1/dining/layout",
+    "/api/v1/orders",
+    "/api/v1/orders/active",
+    "/api/v1/orders/items",
+    "/api/v1/orders/open",
     "/api/v1/shifts/active",
   ]);
+  // The whole write surface: create, add one line, open. No payment, cash,
+  // refund or item-transition path is reachable from this app at all.
+  assert.deepEqual(
+    Object.values(MOBILE_API_PATHS).filter((endpoint) => endpoint.includes("orders")).sort(),
+    ["/api/v1/orders", "/api/v1/orders/active", "/api/v1/orders/items", "/api/v1/orders/open"],
+  );
   for (const endpoint of Object.values(MOBILE_API_PATHS)) {
-    assert.equal(endpoint.includes("orders"), false, endpoint);
+    for (const forbidden of ["payments", "cash", "refund", "transition", "cancel"]) {
+      assert.equal(endpoint.includes(forbidden), false, endpoint);
+    }
   }
 });
 

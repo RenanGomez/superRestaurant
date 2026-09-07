@@ -1,5 +1,7 @@
+import type { BranchOperationalContextV1 } from "@super-restaurant/shared-types";
+
 import type { MobileAuthPort } from "./auth-port.js";
-import type { AuthorizedMobileBranch, MobileBranchScope } from "./mobile-client.js";
+import type { MobileBranchScope } from "./mobile-client.js";
 import { toMobileFailure, type MobileFailure } from "./mobile-state.js";
 import type { MobileSession } from "./session.js";
 
@@ -9,7 +11,7 @@ import type { MobileSession } from "./session.js";
  * explicit state, so no screen can stay loading or revalidating forever.
  */
 export type MobileRevalidationOutcome =
-  | { readonly branch: AuthorizedMobileBranch | undefined; readonly kind: "confirmed"; readonly session: MobileSession }
+  | { readonly context: BranchOperationalContextV1 | undefined; readonly kind: "confirmed"; readonly session: MobileSession }
   | { readonly failure: MobileFailure; readonly kind: "failed"; readonly session: MobileSession }
   | { readonly kind: "sessionLost" };
 
@@ -29,7 +31,9 @@ export async function readInitialSession(
 
 /**
  * Revalidates the session and, when a branch is active, its exact
- * Restaurant/Branch pair.
+ * Restaurant/Branch pair — through the operational context endpoint, so a
+ * confirmed branch also brings back its authoritative IANA zone rather than
+ * leaving the screen with a zone read once at selection time.
  *
  * Fail-closed: if the session cannot be read — absent **or** rejected — the
  * outcome is `sessionLost` and the branch is never revalidated, so a device
@@ -37,7 +41,7 @@ export async function readInitialSession(
  */
 export async function revalidateAccess({ authorizeScope, currentSession, scope }: {
   /** Receives the freshly read session, so the request never uses a stale token. */
-  readonly authorizeScope: (session: MobileSession, scope: MobileBranchScope) => Promise<AuthorizedMobileBranch>;
+  readonly authorizeScope: (session: MobileSession, scope: MobileBranchScope) => Promise<BranchOperationalContextV1>;
   readonly currentSession: MobileAuthPort["currentSession"];
   readonly scope: MobileBranchScope | undefined;
 }): Promise<MobileRevalidationOutcome> {
@@ -49,11 +53,11 @@ export async function revalidateAccess({ authorizeScope, currentSession, scope }
   }
   if (session === undefined) return Object.freeze({ kind: "sessionLost" });
 
-  if (scope === undefined) return Object.freeze({ branch: undefined, kind: "confirmed", session });
+  if (scope === undefined) return Object.freeze({ context: undefined, kind: "confirmed", session });
 
   try {
-    const branch = await authorizeScope(session, scope);
-    return Object.freeze({ branch, kind: "confirmed", session });
+    const context = await authorizeScope(session, scope);
+    return Object.freeze({ context, kind: "confirmed", session });
   } catch (error: unknown) {
     return Object.freeze({ failure: toMobileFailure(error), kind: "failed", session });
   }

@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import type { DiningTableV1 } from "@super-restaurant/shared-types";
+import type {
+  ActiveTableOrderListV2,
+  DiningTableV1,
+  OrderMutationSummaryV1,
+} from "@super-restaurant/shared-types";
 
 import { gateMobileAuth, type MobileAuthGate } from "../auth-gate.js";
 import type { MobileAuthPort } from "../auth-port.js";
@@ -8,16 +12,22 @@ import { createBranchReadTracker, type BranchReadTracker } from "../branch-read.
 import type { MobileConfig } from "../config.js";
 import { lifecycleEffects, type MobileAppStatus, type MobileLifecyclePort } from "../lifecycle.js";
 import {
-  authorizeBranch,
+  addOrderItem,
+  createOrder,
   getDiningLayout,
   getMenuCatalog,
+  listActiveTableOrders,
   listMemberships,
   listOperationalShifts,
+  openOrder,
+  selectBranchContext,
   type MobileBranchScope,
 } from "../mobile-client.js";
 import {
+  activeOrdersReadTarget,
   activeScope,
   canReadBranchData,
+  contextReadTarget,
   failureMessage,
   initialMobileState,
   layoutReadTarget,
@@ -25,10 +35,10 @@ import {
   menuReadTarget,
   mobileScreen,
   noticeMessage,
+  ownsContextRead,
   ownsMembershipsRead,
   reduceMobileState,
   shiftsReadTarget,
-  toMobileFailure,
   type MobileEvent,
   type MobileFailure,
   type MobileNotice,
@@ -45,11 +55,9 @@ import {
   type OrderDraftEvent,
   type OrderDraftState,
 } from "../order-draft.js";
-import {
-  buildOrderDraftHandoff,
-  disconnectedOrderDraftIntegration,
-  type OrderDraftIntegration,
-} from "../order-intents.js";
+import { buildOrderDeliveryPlan, type OrderDeliveryPlanV1 } from "../order-plan.js";
+import { createOrderDeliveryPort, type OrderDeliveryPort, type OrderMutationTransport } from "../order-submission.js";
+import type { MobileDeviceIdentity } from "../device-identity.js";
 import { readInitialSession, revalidateAccess } from "../revalidation.js";
 import type { MobileSession } from "../session.js";
 import { endMobileSession } from "../sign-out.js";
@@ -64,16 +72,28 @@ import { colors, radius, spacing, touchTarget, typography } from "./theme.js";
 
 const TAB_LABELS: Readonly<Record<MobileTab, string>> = Object.freeze({ menu: "Menú", tables: "Mesas" });
 
-export function App({ auth, config, lifecycle, orderDraftIntegration = disconnectedOrderDraftIntegration }: {
+export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, randomUuid }: {
   readonly auth: MobileAuthPort;
   readonly config: MobileConfig;
+  /**
+   * Where this installation's `deviceId` comes from. It is a port because the
+   * keystore is a platform capability: the app must not care which one, and the
+   * rules that decide whether an identity is usable are testable without it.
+   */
+  readonly deviceIdentity: MobileDeviceIdentity;
   readonly lifecycle: MobileLifecyclePort;
   /**
-   * Who performs the Order writes. The default accepts the draft and reports
-   * that nothing was sent, which is the truth of this slice: the composer is
-   * built, the server-side integration is not.
+   * Who performs the Order writes. Left out, the screen builds the productive
+   * port over the three authorized Order paths; the verification harness passes
+   * its own so every outcome the composer can show stays reachable by hand.
    */
-  readonly orderDraftIntegration?: OrderDraftIntegration;
+  readonly orderDelivery?: OrderDeliveryPort;
+  /**
+   * How a fresh identifier is minted. It is a port for the same reason the
+   * keystore is: the platform provides the entropy, and a test needs to hand
+   * over a generator whose values it chose.
+   */
+  readonly randomUuid: () => string;
 }): React.JSX.Element {
   const [state, applyEvent] = useReducer(reduceMobileState, initialMobileState);
   /**
@@ -211,7 +231,7 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
       ? { branchId, restaurantId } satisfies MobileBranchScope
       : undefined;
     void revalidateAccess({
-      authorizeScope: (session, requested) => authorizeBranch(config, session.accessToken, requested),
+      authorizeScope: (session, requested) => selectBranchContext(config, session.accessToken, requested),
       currentSession: gate.currentSession,
       scope: target,
     }).then((outcome) => {
@@ -222,8 +242,8 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
         dispatch({ failure: outcome.failure, type: "revalidationFailed" });
         return;
       }
-      dispatch({ branch: outcome.branch, type: "revalidationSucceeded" });
-      if (outcome.branch === undefined) loadMemberships(outcome.session);
+      dispatch({ context: outcome.context, type: "revalidationSucceeded" });
+      if (outcome.context === undefined) loadMemberships(outcome.session);
     });
     return (): void => { active = false; };
   }, [branchId, config, dispatch, endSession, gate, loadMemberships, restaurantId, state.revalidating]);
@@ -236,22 +256,28 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
     loadMemberships(session);
   }, [loadMemberships, state]);
 
+  // Selecting a branch reads its operational context. That answer — roles and
+  // the branch's IANA zone — is what authorizes the operational flow, and it is
+  // owned by the operator, the pair and the attempt that asked for it, so a
+  // late one cannot confirm a branch nobody is selecting any more.
   useEffect(() => {
-    const pending = state.pendingScope;
+    const target = contextReadTarget(state);
     const session = state.session;
-    if (pending === undefined || session === undefined) return undefined;
-    let active = true;
-    void authorizeBranch(config, session.accessToken, pending)
-      .then((branch) => { if (active) dispatch({ branch, type: "branchAuthorized" }); })
-      .catch((error: unknown) => {
-        if (!active) return;
-        const failure = toMobileFailure(error);
-        dispatch({ failure, scope: pending, type: "branchRejected" });
+    if (target === undefined || session === undefined) return;
+    const operator = target.operator;
+    const scope = target.scope;
+    reader.start({
+      onFailed: (failure, attempt) => {
+        const owned = ownsContextRead(mirror.current, { attempt, operator, scope });
+        dispatch({ attempt, failure, operator, scope, type: "branchRejected" });
         // A refused pair may mean the membership itself changed: read it again.
-        if (failure === "authorization") loadMemberships(session);
-      });
-    return (): void => { active = false; };
-  }, [config, dispatch, loadMemberships, state.pendingScope, state.session]);
+        if (owned && failure === "authorization") loadMemberships(session);
+      },
+      onLoaded: (context, attempt) => { dispatch({ attempt, context, operator, type: "branchAuthorized" }); },
+      onLoading: (attempt) => { dispatch({ attempt, operator, scope, type: "branchContextRequested" }); },
+      read: () => selectBranchContext(config, session.accessToken, scope),
+    });
+  }, [config, dispatch, loadMemberships, reader, state]);
 
   // The three branch-scoped reads. None of them cancels anything on cleanup:
   // the `loading` dispatch each one makes is what re-runs its own effect, and
@@ -294,6 +320,25 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
     });
   }, [config, draft.tableId, reader, state, token]);
 
+  // The active Orders of the table whose draft is on screen. A table can hold
+  // more than one, and the list is the only authority on what is already there:
+  // the composer never assumes it owns the table.
+  useEffect(() => {
+    const tableId = draft.tableId;
+    const target = activeOrdersReadTarget(state, tableId);
+    if (target === undefined || tableId === undefined || token === undefined) return;
+    reader.start({
+      onFailed: (failure, attempt) => {
+        dispatch({ attempt, failure, scope: target, tableId, type: "activeOrdersFailed" });
+      },
+      onLoaded: (list, attempt) => {
+        dispatch({ attempt, list, scope: target, tableId, type: "activeOrdersLoaded" });
+      },
+      onLoading: (attempt) => { dispatch({ attempt, scope: target, tableId, type: "activeOrdersLoading" }); },
+      read: () => listActiveTableOrders(config, token, target, tableId),
+    });
+  }, [config, dispatch, draft.tableId, reader, state, token]);
+
   // A draft belongs to exactly one operator, branch and shift. When any of them
   // changes — sign-out, another operator, another branch, another shift, or an
   // access the server revoked — the draft is dropped in the same transition, so
@@ -307,6 +352,13 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
   const trackerRef = useRef<OrderDeliveryTracker | undefined>(undefined);
   trackerRef.current ??= createOrderDeliveryTracker();
   const delivery = trackerRef.current;
+  /**
+   * The plan of the delivery currently on screen, kept so that a retry reuses
+   * the very same identities. `key` is what a *new* delivery looks like: another
+   * context, another table, or a draft the operator edited. When it changes the
+   * plan is dropped, and the next submit mints fresh identities.
+   */
+  const planRef = useRef<{ readonly key: string; readonly plan: OrderDeliveryPlanV1 } | undefined>(undefined);
   useEffect(() => {
     if (previousDraftContext.current === draftContext) return;
     previousDraftContext.current = draftContext;
@@ -314,9 +366,47 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
     // abandoned here so it can neither block the new context nor apply its
     // outcome to the draft composed in it.
     delivery.abandon();
+    planRef.current = undefined;
     dispatchDraft({ type: "contextReleased" });
     setDraftCategory(undefined);
   }, [delivery, draftContext]);
+
+  /**
+   * The `deviceId` of this installation, read once. It is not optional: every
+   * Order mutation carries it, so a keystore that cannot produce one blocks the
+   * hand-over explicitly rather than letting an audit record be written without
+   * saying which device wrote it.
+   */
+  const [deviceId, setDeviceId] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let active = true;
+    void deviceIdentity.load().then(
+      (identity) => { if (active) setDeviceId(identity); },
+      // Deliberately not logged: the failure is reported through the screen, and
+      // the identity itself must never reach a log.
+      () => { if (active) setDeviceId(undefined); },
+    );
+    return (): void => { active = false; };
+  }, [deviceIdentity]);
+
+  /**
+   * The productive port, or the one the harness supplied. It is rebuilt when the
+   * token changes so a delivery never runs with a credential that was replaced;
+   * a delivery already in flight keeps the port it started with, which is the
+   * tracker's job, not this one's.
+   */
+  const deliveryPort = useMemo((): OrderDeliveryPort | undefined => {
+    if (orderDelivery !== undefined) return orderDelivery;
+    if (token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
+    const scope: MobileBranchScope = { branchId, restaurantId };
+    const transport: OrderMutationTransport = {
+      addItem: (command): Promise<OrderMutationSummaryV1> => addOrderItem(config, token, command),
+      createOrder: (command): Promise<OrderMutationSummaryV1> => createOrder(config, token, command),
+      listActiveOrders: (table): Promise<ActiveTableOrderListV2> => listActiveTableOrders(config, token, scope, table),
+      openOrder: (command): Promise<OrderMutationSummaryV1> => openOrder(config, token, command),
+    };
+    return createOrderDeliveryPort(Object.freeze(transport));
+  }, [branchId, config, orderDelivery, restaurantId, token]);
 
   const retry = useCallback((tab: MobileTab): void => {
     if (branchId === undefined || restaurantId === undefined) return;
@@ -327,28 +417,73 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
   const retryMenu = useCallback((): void => {
     if (branchId === undefined || restaurantId === undefined) return;
     dispatch({ scope: { branchId, restaurantId }, type: "menuReset" });
-  }, [branchId, restaurantId]);
+  }, [branchId, dispatch, restaurantId]);
+
+  const retryActiveOrders = useCallback((): void => {
+    if (branchId === undefined || restaurantId === undefined) return;
+    dispatch({ scope: { branchId, restaurantId }, type: "activeOrdersReset" });
+  }, [branchId, dispatch, restaurantId]);
 
   const submitDraft = useCallback((): void => {
     const tableId = draft.tableId;
     const catalog = state.menu.value?.catalog ?? null;
+    const timeZone = state.branch?.timeZone;
+    const shiftId = state.shift?.shiftId;
     if (tableId === undefined || branchId === undefined || restaurantId === undefined) return;
     if (draft.lines.length === 0 || draft.composer !== undefined || draft.submission.status === "sending") return;
 
+    // Everything a mutation needs has to be present *before* the first request.
+    // Missing identity or a missing context is reported as a failure the
+    // operator can see, never worked around with a value invented here.
+    if (deviceId === undefined || timeZone === undefined || shiftId === undefined || deliveryPort === undefined) {
+      dispatchDraft({ failure: "unavailable", type: "submissionFailed" });
+      return;
+    }
+
+    // The key of this delivery. Editing the draft changes it, which is what
+    // makes the next submit a new delivery with new identities.
+    const key = `${draftContext}|${tableId}|${JSON.stringify(draft.lines)}`;
     delivery.run({
-      build: () => (catalog === null
-        ? undefined
-        : buildOrderDraftHandoff({ catalog, lines: draft.lines, scope: { branchId, restaurantId }, tableId })),
+      build: () => {
+        if (catalog === null) return undefined;
+        const held = planRef.current;
+        if (held !== undefined && held.key === key) return held.plan;
+        const plan = buildOrderDeliveryPlan({
+          catalog,
+          deviceId,
+          lines: draft.lines,
+          now: Date.now(),
+          randomUuid,
+          scope: { branchId, restaurantId },
+          shiftId,
+          tableId,
+          timeZone,
+        });
+        planRef.current = plan === undefined ? undefined : { key, plan };
+        return plan;
+      },
       context: draftContext,
-      integration: orderDraftIntegration,
+      integration: deliveryPort,
       onSettle: (failure) => {
-        dispatchDraft(failure === undefined
-          ? { type: "submissionSucceeded" }
-          : { failure, type: "submissionFailed" });
+        if (failure === undefined) {
+          // Accepted by the server: the plan is spent, and the lines it carried
+          // must never be offered again.
+          planRef.current = undefined;
+          dispatchDraft({ type: "submissionSucceeded" });
+          // What the table now holds changed, so the active list is read again.
+          if (branchId !== undefined && restaurantId !== undefined) {
+            dispatch({ scope: { branchId, restaurantId }, type: "activeOrdersReset" });
+          }
+          return;
+        }
+        dispatchDraft({ failure, type: "submissionFailed" });
       },
       onStart: () => { dispatchDraft({ type: "submissionStarted" }); },
     });
-  }, [branchId, delivery, draft, draftContext, orderDraftIntegration, restaurantId, state.menu.value]);
+  }, [
+    branchId, config, deliveryPort, deviceId, dispatch, delivery, draft, draftContext,
+    randomUuid, restaurantId, state.branch, state.menu.value, state.shift,
+  ]);
 
   const selectTable = useCallback((table: DiningTableV1): void => {
     dispatchDraft({ tableId: table.tableId, type: "tableSelected", zoneId: table.zoneId });
@@ -436,12 +571,14 @@ export function App({ auth, config, lifecycle, orderDraftIntegration = disconnec
 
     <View style={styles.content}>
       <WorkspaceContent
+        activeOrders={state.activeOrders}
         draft={draft}
         draftCategory={draftCategory}
         menu={state.menu}
         layout={state.layout}
         onDraftCategory={setDraftCategory}
         onDraftEvent={dispatchDraft}
+        onRetryActiveOrders={retryActiveOrders}
         onRetryMenu={retryMenu}
         onRetryRead={retry}
         onRetryRevalidation={() => { dispatch({ type: "revalidationStarted" }); }}
@@ -496,12 +633,14 @@ function WorkspaceTab({ onPress, selected, tab }: {
  * to leak: the reducer already dropped the loaded layout and menu.
  */
 function WorkspaceContent({
+  activeOrders,
   draft,
   draftCategory,
   layout,
   menu,
   onDraftCategory,
   onDraftEvent,
+  onRetryActiveOrders,
   onRetryMenu,
   onRetryRead,
   onRetryRevalidation,
@@ -511,12 +650,14 @@ function WorkspaceContent({
   revalidationFailure,
   tab,
 }: {
+  readonly activeOrders: MobileState["activeOrders"];
   readonly draft: OrderDraftState;
   readonly draftCategory: string | undefined;
   readonly layout: MobileState["layout"];
   readonly menu: MobileState["menu"];
   readonly onDraftCategory: (categoryId: string) => void;
   readonly onDraftEvent: (event: OrderDraftEvent) => void;
+  readonly onRetryActiveOrders: () => void;
   readonly onRetryMenu: () => void;
   readonly onRetryRead: (tab: MobileTab) => void;
   readonly onRetryRevalidation: () => void;
@@ -572,12 +713,14 @@ function WorkspaceContent({
   }
 
   return <OrderDraftScreen
+    activeOrders={activeOrders}
     category={draftCategory}
     draft={draft}
     menu={menu}
     onBackToTables={() => { onDraftEvent({ intent: "leaveTable", type: "confirmationRequested" }); }}
     onCategorySelected={onDraftCategory}
     onEvent={onDraftEvent}
+    onRetryActiveOrders={onRetryActiveOrders}
     onRetryMenu={onRetryMenu}
     onSubmit={onSubmitDraft}
     table={located.table}

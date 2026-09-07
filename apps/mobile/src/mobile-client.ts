@@ -1,29 +1,51 @@
 import {
-  MEMBERSHIP_ROLE_CODES,
+  parseActiveTableOrderListV2,
+  parseAddOrderItemCommandV1,
   parseBranchMembershipListV1,
+  parseBranchOperationalContextV1,
   parseBranchScope,
+  parseCreateOrderCommandV2,
   parseDiningLayoutV1,
   parseMenuCatalogStateV1,
+  parseOpenOrderCommandV1,
   parseOperationalShiftListV1,
+  parseOrderMutationSummaryV1,
+  type ActiveTableOrderListV2,
+  type AddOrderItemCommandV1,
   type BranchMembershipListV1,
+  type BranchOperationalContextV1,
+  type CreateOrderCommandV2,
   type DiningLayoutV1,
-  type MembershipRoleCode,
   type MenuCatalogStateV1,
+  type OpenOrderCommandV1,
   type OperationalShiftListV1,
+  type OrderMutationSummaryV1,
 } from "@super-restaurant/shared-types";
 
 import type { MobileConfig } from "./config.js";
 
 /**
- * The only Nest paths this client is allowed to call. The mobile foundation is
- * read-only: no Order, payment or cash mutation exists here, and `request`
- * refuses any path outside this allowlist before touching the network.
+ * The only Nest paths this client is allowed to call, and `request` refuses any
+ * path outside this allowlist before touching the network.
+ *
+ * The three Order paths are the *whole* write surface of this app: create, add
+ * one line, open. No payment, cash, refund or item-transition path is listed,
+ * so no gesture in the app can reach one.
+ *
+ * A selected pair is confirmed by `branchContext`, whose response is the
+ * authoritative one — roles **and** the branch's IANA zone — and is validated by
+ * a shared parser. The older `/access/branch` endpoint is not listed: it needed
+ * a copy of its contract inside this app, and a copy is what this slice removes.
  */
 export const MOBILE_API_PATHS = Object.freeze({
-  authorizeBranch: "/api/v1/access/branch",
+  activeTableOrders: "/api/v1/orders/active",
+  addOrderItem: "/api/v1/orders/items",
+  branchContext: "/api/v1/access/branch/context",
+  createOrder: "/api/v1/orders",
   diningLayout: "/api/v1/dining/layout",
   memberships: "/api/v1/access/memberships",
   menuCatalog: "/api/v1/catalog/menu",
+  openOrder: "/api/v1/orders/open",
   operationalShifts: "/api/v1/shifts/active",
 } as const);
 
@@ -43,16 +65,9 @@ export interface MobileBranchScope {
   readonly restaurantId: string;
 }
 
-/** Exact response contract of `POST /api/v1/access/branch`. */
-export interface AuthorizedMobileBranch {
-  readonly branchId: string;
-  readonly restaurantId: string;
-  readonly roles: readonly MembershipRoleCode[];
-}
-
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
-/** True only for the four authorized paths, ignoring their query string. */
+/** True only for the authorized paths, ignoring their query string. */
 export function isAuthorizedMobilePath(path: string): boolean {
   const pathname = path.split("?")[0];
   return Object.values(MOBILE_API_PATHS).some((allowed) => allowed === pathname);
@@ -65,27 +80,6 @@ export async function listMemberships(
   fetcher: typeof fetch = fetch,
 ): Promise<BranchMembershipListV1> {
   return request(config, accessToken, MOBILE_API_PATHS.memberships, parseBranchMembershipListV1, fetcher);
-}
-
-/**
- * Revalidates one Restaurant/Branch pair against Nest. A pair offered by the
- * membership list is never assumed to still be authorized: revocation, a false
- * pair or a stale selection are all decided by the server, and the response is
- * additionally required to echo the exact pair that was requested.
- */
-export async function authorizeBranch(
-  config: MobileConfig,
-  accessToken: string,
-  scope: MobileBranchScope,
-  fetcher: typeof fetch = fetch,
-): Promise<AuthorizedMobileBranch> {
-  const validated = validScope(scope);
-  const authorized = await request(config, accessToken, MOBILE_API_PATHS.authorizeBranch, parseAuthorizedMobileBranch, fetcher, {
-    body: JSON.stringify({ branchId: validated.branchId, restaurantId: validated.restaurantId }),
-    method: "POST",
-  });
-  if (!sameScope(authorized, validated)) throw new MobileRequestError("protocol");
-  return authorized;
 }
 
 /** Reads the zones and tables of one authorized branch. */
@@ -130,6 +124,128 @@ export async function listOperationalShifts(
   return list;
 }
 
+/**
+ * Selects one Restaurant/Branch pair and reads its authoritative operating
+ * context: the roles Nest grants there and the branch's IANA time zone.
+ *
+ * This replaces the local authorization check in the operational flow. The zone
+ * is the reason: `CreateOrderCommandV2` requires one, and a client must not
+ * decide the operational zone of a branch — that belongs to the Restaurant's
+ * record in PostgreSQL. The response is validated only by the shared parser,
+ * and is additionally required to echo the exact pair that was requested.
+ */
+export async function selectBranchContext(
+  config: MobileConfig,
+  accessToken: string,
+  scope: MobileBranchScope,
+  fetcher: typeof fetch = fetch,
+): Promise<BranchOperationalContextV1> {
+  const validated = validScope(scope);
+  const context = await request(config, accessToken, MOBILE_API_PATHS.branchContext, parseBranchOperationalContextV1, fetcher, {
+    body: JSON.stringify({ branchId: validated.branchId, restaurantId: validated.restaurantId }),
+    method: "POST",
+  });
+  if (!sameScope(context.scope, validated)) throw new MobileRequestError("protocol");
+  return context;
+}
+
+/**
+ * The active Orders of one table. A bounded list, not a single order: a table
+ * can legitimately carry more than one, and `shiftId: null` is a valid historic
+ * value from before operational shifts existed. Nothing is recalculated from
+ * it — the snapshot prices it carries are the server's.
+ */
+export async function listActiveTableOrders(
+  config: MobileConfig,
+  accessToken: string,
+  scope: MobileBranchScope,
+  tableId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ActiveTableOrderListV2> {
+  const validated = validScope(scope);
+  const table = validUuid(tableId);
+  const query = new URLSearchParams({
+    branchId: validated.branchId,
+    restaurantId: validated.restaurantId,
+    tableId: table,
+  });
+  const list = await request(
+    config,
+    accessToken,
+    `${MOBILE_API_PATHS.activeTableOrders}?${query.toString()}`,
+    parseActiveTableOrderListV2,
+    fetcher,
+  );
+  if (!sameScope(list.scope, validated) || list.tableId.toLowerCase() !== table) {
+    throw new MobileRequestError("protocol");
+  }
+  return list;
+}
+
+/**
+ * The three Order mutations, in the only order the contracts accept.
+ *
+ * Each body is built by the caller and then validated **with the shared command
+ * parser** before it can become a request: the parser is the contract, so a
+ * command this client got wrong fails here as a client defect instead of being
+ * sent and rejected. The parsed value is what goes on the wire, so the body is
+ * exactly the normalized shape the server will parse again.
+ */
+export async function createOrder(
+  config: MobileConfig,
+  accessToken: string,
+  command: CreateOrderCommandV2,
+  fetcher: typeof fetch = fetch,
+): Promise<OrderMutationSummaryV1> {
+  return mutateOrder(config, accessToken, MOBILE_API_PATHS.createOrder, command, parseCreateOrderCommandV2, fetcher);
+}
+
+export async function addOrderItem(
+  config: MobileConfig,
+  accessToken: string,
+  command: AddOrderItemCommandV1,
+  fetcher: typeof fetch = fetch,
+): Promise<OrderMutationSummaryV1> {
+  return mutateOrder(config, accessToken, MOBILE_API_PATHS.addOrderItem, command, parseAddOrderItemCommandV1, fetcher);
+}
+
+export async function openOrder(
+  config: MobileConfig,
+  accessToken: string,
+  command: OpenOrderCommandV1,
+  fetcher: typeof fetch = fetch,
+): Promise<OrderMutationSummaryV1> {
+  return mutateOrder(config, accessToken, MOBILE_API_PATHS.openOrder, command, parseOpenOrderCommandV1, fetcher);
+}
+
+async function mutateOrder<T extends { readonly orderId: string; readonly scope: { readonly branchId: string; readonly restaurantId: string } }>(
+  config: MobileConfig,
+  accessToken: string,
+  path: string,
+  command: T,
+  parseCommand: (value: unknown) => T | undefined,
+  fetcher: typeof fetch,
+): Promise<OrderMutationSummaryV1> {
+  const validated = parseCommand(command);
+  if (validated === undefined) throw new MobileRequestError("protocol");
+  const summary = await request(config, accessToken, path, parseOrderMutationSummaryV1, fetcher, {
+    body: JSON.stringify(validated),
+    method: "POST",
+  });
+  // The answer has to be about the order that was asked about, in the pair that
+  // was asked about. Anything else is a response this client will not apply.
+  if (summary.orderId.toLowerCase() !== validated.orderId.toLowerCase() || !sameScope(summary.scope, validated.scope)) {
+    throw new MobileRequestError("protocol");
+  }
+  return summary;
+}
+
+/** A table id reaches the network only as the exact UUID the contracts accept. */
+function validUuid(value: string): string {
+  if (typeof value !== "string" || !UUID_PATTERN.test(value)) throw new MobileRequestError("protocol");
+  return value.toLowerCase();
+}
+
 function scopedPath(path: string, scope: MobileBranchScope): string {
   const validated = validScope(scope);
   const query = new URLSearchParams({ branchId: validated.branchId, restaurantId: validated.restaurantId });
@@ -158,87 +274,6 @@ function validScope(scope: MobileBranchScope): MobileBranchScope {
 function sameScope(left: MobileBranchScope, right: MobileBranchScope): boolean {
   return left.restaurantId.toLowerCase() === right.restaurantId.toLowerCase()
     && left.branchId.toLowerCase() === right.branchId.toLowerCase();
-}
-
-/**
- * Accepts only the exact contract `BranchAccessController` returns: a plain
- * object with exactly `{branchId, restaurantId, roles}`, both ids UUIDs, and
- * `roles` a dense array of distinct codes from the shared allowlist.
- *
- * The checks match the guarantees `apps/web/src/lib/branch-selection.ts`
- * documents for the same response: only `Object.prototype`/`null` prototypes,
- * exact own keys through `Reflect.ownKeys` (so a symbol key is a rejection, not
- * an invisible extra), plain data descriptors only (a getter or an accessor is
- * refused instead of invoked), and any throw — a hostile proxy trap included —
- * ends as `undefined`. No shared parser covers this shape yet, so the check
- * stays local to this app; see `BACKEND_REQUESTS.md` SR-MOB-002.
- */
-function parseAuthorizedMobileBranch(value: unknown): AuthorizedMobileBranch | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-
-  try {
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return undefined;
-
-    const ownKeys = Reflect.ownKeys(value);
-    const expectedKeys = ["branchId", "restaurantId", "roles"];
-    if (ownKeys.length !== expectedKeys.length || !expectedKeys.every((key) => ownKeys.includes(key))) {
-      return undefined;
-    }
-
-    const branchId = ownStringValue(value, "branchId");
-    const restaurantId = ownStringValue(value, "restaurantId");
-    const rolesDescriptor = Object.getOwnPropertyDescriptor(value, "roles");
-    if (
-      branchId === undefined || !UUID_PATTERN.test(branchId)
-      || restaurantId === undefined || !UUID_PATTERN.test(restaurantId)
-      || rolesDescriptor === undefined || !("value" in rolesDescriptor)
-    ) {
-      return undefined;
-    }
-
-    const roles = parseAuthorizedRoles(rolesDescriptor.value);
-    if (roles === undefined) return undefined;
-
-    return Object.freeze({
-      branchId: branchId.toLowerCase(),
-      restaurantId: restaurantId.toLowerCase(),
-      roles,
-    });
-  } catch {
-    return undefined;
-  }
-}
-
-/** A dense, non-empty array of distinct known role codes; holes are rejected. */
-function parseAuthorizedRoles(value: unknown): readonly MembershipRoleCode[] | undefined {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
-  if (value.length === 0 || value.length > MEMBERSHIP_ROLE_CODES.length) return undefined;
-
-  const roles: MembershipRoleCode[] = [];
-  for (let index = 0; index < value.length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-    const raw = descriptor?.value;
-    if (
-      descriptor === undefined
-      || !descriptor.enumerable
-      || typeof raw !== "string"
-      || !(MEMBERSHIP_ROLE_CODES as readonly string[]).includes(raw)
-      || roles.includes(raw as MembershipRoleCode)
-    ) {
-      return undefined;
-    }
-    roles.push(raw as MembershipRoleCode);
-  }
-  return Object.freeze(roles);
-}
-
-/** Reads an own data property; an accessor or a missing key yields `undefined`. */
-function ownStringValue(value: object, key: string): string | undefined {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  return descriptor !== undefined && "value" in descriptor && typeof descriptor.value === "string"
-    ? descriptor.value
-    : undefined;
 }
 
 async function request<T>(

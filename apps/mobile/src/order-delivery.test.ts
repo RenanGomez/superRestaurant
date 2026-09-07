@@ -5,13 +5,12 @@ import test from "node:test";
 
 import { createOrderDeliveryTracker } from "./order-delivery.js";
 import type { OrderDraftFailure, OrderDraftLine } from "./order-draft.js";
-import {
-  buildOrderDraftHandoff,
-  type OrderDraftHandoffV1,
-  type OrderDraftIntegration,
-} from "./order-intents.js";
+import { buildOrderDeliveryPlan, type OrderDeliveryPlanV1 } from "./order-plan.js";
+import type { OrderDeliveryPort } from "./order-submission.js";
 import {
   FIXTURE_CATEGORY_STARTERS,
+  FIXTURE_SHIFT,
+  FIXTURE_TIME_ZONE,
   FIXTURE_GROUP_DONENESS,
   FIXTURE_OPTION_WELL_DONE,
   FIXTURE_PRODUCT_MAIN,
@@ -36,14 +35,28 @@ const lines: readonly OrderDraftLine[] = Object.freeze([Object.freeze({
   quantity: 1,
 })]);
 
-function handoff(scope = scopeA): OrderDraftHandoffV1 {
-  const built = buildOrderDraftHandoff({
+const DEVICE_ID = "d0000000-0000-4000-8000-000000000001";
+
+/** Unique, valid and readable: the plan under test owns its identities. */
+let planSerial = 0;
+function planUuid(): string {
+  planSerial += 1;
+  return `e0000000-0000-4000-8000-${planSerial.toString(16).padStart(12, "0")}`;
+}
+
+function handoff(scope = scopeA): OrderDeliveryPlanV1 {
+  const built = buildOrderDeliveryPlan({
     catalog: orderEntryCatalog(scope),
+    deviceId: DEVICE_ID,
     lines,
+    now: Date.parse("2026-09-06T18:00:00.000Z"),
+    randomUuid: planUuid,
     scope,
+    shiftId: FIXTURE_SHIFT,
     tableId: FIXTURE_TABLE_LONG_NAME,
+    timeZone: FIXTURE_TIME_ZONE,
   });
-  if (built === undefined) throw new Error("FIXTURE_HANDOFF_INVALID");
+  if (built === undefined) throw new Error("FIXTURE_PLAN_INVALID");
   return built;
 }
 
@@ -65,7 +78,7 @@ function recorder(): {
 }
 
 /** An integration whose single outcome the test controls by hand. */
-function deferred(): OrderDraftIntegration & {
+function deferred(): OrderDeliveryPort & {
   readonly calls: () => number;
   readonly reject: (error: unknown) => void;
   readonly resolve: (failure: OrderDraftFailure | undefined) => void;
@@ -82,8 +95,8 @@ function deferred(): OrderDraftIntegration & {
         fail = rejectPromise;
       });
     },
-    reject: (error) => { fail?.(error); },
-    resolve: (failure) => { settle?.(failure); },
+    reject: (error: unknown) => { fail?.(error); },
+    resolve: (failure: OrderDraftFailure | undefined) => { settle?.(failure); },
   };
 }
 
@@ -141,7 +154,7 @@ test("a hung delivery never blocks a later branch, shift or operator", () => {
   const tracker = createOrderDeliveryTracker();
   const record = recorder();
   // This integration never settles, at all, ever.
-  const hung: OrderDraftIntegration = { deliver: () => new Promise<never>(() => undefined) };
+  const hung: OrderDeliveryPort = { deliver: () => new Promise<never>(() => undefined) };
 
   assert.equal(tracker.run({
     build: () => handoff(),
@@ -265,7 +278,7 @@ test("an integration that throws synchronously leaves no stuck delivery", async 
   const tracker = createOrderDeliveryTracker();
   const record = recorder();
   // Not an async function: this really throws before any promise exists.
-  const throwing: OrderDraftIntegration = {
+  const throwing: OrderDeliveryPort = {
     deliver: (): Promise<OrderDraftFailure | undefined> => { throw new Error("SYNCHRONOUS"); },
   };
 
@@ -345,11 +358,16 @@ test("a required group past the presentation cap becomes stale, and never reache
   const catalog = orderEntryCatalogWithBulkGroups(51, (index) => index === 51);
 
   tracker.run({
-    build: () => buildOrderDraftHandoff({
+    build: () => buildOrderDeliveryPlan({
       catalog,
+      deviceId: DEVICE_ID,
       lines: [{ draftLineId: "draft-line-1", modifierGroups: [], productId: FIXTURE_PRODUCT_MAIN, quantity: 1 }],
+      now: Date.parse("2026-09-06T18:00:00.000Z"),
+      randomUuid: planUuid,
       scope: scopeA,
+      shiftId: FIXTURE_SHIFT,
       tableId: FIXTURE_TABLE_LONG_NAME,
+      timeZone: FIXTURE_TIME_ZONE,
     }),
     context: CONTEXT_A,
     integration,
@@ -370,7 +388,17 @@ test("a retired category becomes stale, and never reaches the integration", () =
   });
 
   tracker.run({
-    build: () => buildOrderDraftHandoff({ catalog, lines, scope: scopeA, tableId: FIXTURE_TABLE_LONG_NAME }),
+    build: () => buildOrderDeliveryPlan({
+      catalog,
+      deviceId: DEVICE_ID,
+      lines,
+      now: Date.parse("2026-09-06T18:00:00.000Z"),
+      randomUuid: planUuid,
+      scope: scopeA,
+      shiftId: FIXTURE_SHIFT,
+      tableId: FIXTURE_TABLE_LONG_NAME,
+      timeZone: FIXTURE_TIME_ZONE,
+    }),
     context: CONTEXT_A,
     integration,
     onSettle: record.onSettle,
@@ -386,7 +414,7 @@ test("a build that throws is contained too, and still delivers nothing", () => {
   const integration = deferred();
 
   tracker.run({
-    build: (): OrderDraftHandoffV1 => { throw new Error("BUILD"); },
+    build: (): OrderDeliveryPlanV1 => { throw new Error("BUILD"); },
     context: CONTEXT_A,
     integration,
     onSettle: record.onSettle,

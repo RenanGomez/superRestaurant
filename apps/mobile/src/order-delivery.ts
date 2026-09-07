@@ -16,14 +16,19 @@
  * only effect, and it is called exactly once per accepted attempt.
  */
 import type { OrderDraftFailure } from "./order-draft.js";
-import type { OrderDraftHandoffV1, OrderDraftIntegration } from "./order-intents.js";
+import type { OrderDeliveryPlanV1 } from "./order-plan.js";
+import type { OrderDeliveryPort } from "./order-submission.js";
 
 export interface OrderDeliveryRun {
   /** Which operator, restaurant, branch and shift this delivery belongs to. */
   readonly context: string;
-  /** The hand-over, or `undefined` for a draft the current catalog refuses. */
-  readonly build: () => OrderDraftHandoffV1 | undefined;
-  readonly integration: OrderDraftIntegration;
+  /**
+   * The plan for this delivery, or `undefined` for a draft the current catalog
+   * refuses. A retry of the same draft returns the *same* plan, byte for byte,
+   * which is what makes the retry idempotent rather than a second order.
+   */
+  readonly build: () => OrderDeliveryPlanV1 | undefined;
+  readonly integration: OrderDeliveryPort;
   /** Runs synchronously when the attempt is accepted, before anything else. */
   readonly onStart: () => void;
   /** Runs at most once, and never for an attempt that is no longer current. */
@@ -68,14 +73,14 @@ export function createOrderDeliveryTracker(): OrderDeliveryTracker {
       input.onSettle(failure);
     };
 
-    let handoff: OrderDraftHandoffV1 | undefined;
+    let plan: OrderDeliveryPlanV1 | undefined;
     try {
-      handoff = input.build();
+      plan = input.build();
     } catch {
       settle("unavailable");
       return true;
     }
-    if (handoff === undefined) {
+    if (plan === undefined) {
       settle("stale");
       return true;
     }
@@ -85,7 +90,7 @@ export function createOrderDeliveryTracker(): OrderDeliveryTracker {
     // can leave a stuck `sending` or an unhandled rejection.
     let delivery: Promise<OrderDraftFailure | undefined>;
     try {
-      delivery = Promise.resolve(input.integration.deliver(handoff));
+      delivery = Promise.resolve(input.integration.deliver(plan));
     } catch {
       settle("unavailable");
       return true;

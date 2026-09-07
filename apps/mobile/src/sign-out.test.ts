@@ -9,7 +9,8 @@ import {
   type MobileState,
 } from "./mobile-state.js";
 import { endMobileSession } from "./sign-out.js";
-import { fixtureSession } from "./test-fixtures.js";
+import { branchOperationalContextBody, fixtureSession } from "./test-fixtures.js";
+import { parseBranchOperationalContextV1 } from "@super-restaurant/shared-types";
 
 const session = fixtureSession();
 
@@ -43,15 +44,17 @@ function signedInOnBranchA(sink: ReturnType<typeof recorder>): void {
   // attempt and operator the resource is waiting for.
   sink.dispatch({ attempt: 1, operator: session.userId, type: "membershipsLoading" });
   sink.dispatch({ attempt: 1, memberships: [], operator: session.userId, type: "membershipsLoaded" });
-  sink.dispatch({ scope: { branchId: "22222222-2222-4222-8222-222222222222", restaurantId: "11111111-1111-4111-8111-111111111111" }, type: "branchRequested" });
-  sink.dispatch({
-    branch: {
-      branchId: "22222222-2222-4222-8222-222222222222",
-      restaurantId: "11111111-1111-4111-8111-111111111111",
-      roles: ["waiter"],
-    },
-    type: "branchAuthorized",
-  });
+  const scope = {
+    branchId: "22222222-2222-4222-8222-222222222222",
+    restaurantId: "11111111-1111-4111-8111-111111111111",
+  };
+  sink.dispatch({ scope, type: "branchRequested" });
+  // A branch is confirmed by its operational context, announced first so the
+  // reducer knows which read the answer belongs to.
+  const context = parseBranchOperationalContextV1(branchOperationalContextBody(scope));
+  assert.ok(context !== undefined);
+  sink.dispatch({ attempt: 2, operator: session.userId, scope, type: "branchContextRequested" });
+  sink.dispatch({ attempt: 2, context, operator: session.userId, type: "branchAuthorized" });
 }
 
 test("a sign-out that never resolves still closes the screen immediately", async () => {

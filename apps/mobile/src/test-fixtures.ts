@@ -26,7 +26,10 @@ const FIXTURE_OPTION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const FIXTURE_CATALOG = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const FIXTURE_ACTOR = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const FIXTURE_TIMESTAMP = "2026-09-04T12:00:00.000Z";
-const FIXTURE_SHIFT = "f1111111-1111-4111-8111-111111111111";
+export const FIXTURE_SHIFT = "f1111111-1111-4111-8111-111111111111";
+
+/** The branch's authoritative IANA zone, as PostgreSQL would return it. */
+export const FIXTURE_TIME_ZONE = "America/Hermosillo";
 
 /** Synthetic Supabase user ids; two distinct operators. */
 export const FIXTURE_USER_A = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
@@ -74,6 +77,94 @@ export function membershipListBody(scopes: readonly MobileBranchScope[]): unknow
 
 export function authorizedBranchBody(scope: MobileBranchScope): unknown {
   return { branchId: scope.branchId, restaurantId: scope.restaurantId, roles: ["waiter"] };
+}
+
+/** Exact body of `POST /api/v1/access/branch/context`. */
+export function branchOperationalContextBody(
+  scope: MobileBranchScope,
+  timeZone: string = FIXTURE_TIME_ZONE,
+): unknown {
+  return {
+    roles: ["waiter"],
+    schemaVersion: 1,
+    scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
+    timeZone,
+  };
+}
+
+/** One line of an active Order, with the snapshot prices the server stored. */
+export function activeTableOrderItemBody(overrides: Readonly<Record<string, unknown>> = {}): unknown {
+  return {
+    modifiers: [{
+      groupId: FIXTURE_GROUP,
+      groupName: "Término",
+      optionId: FIXTURE_OPTION,
+      optionName: "Bien cocido",
+      quantity: 1,
+      unitPrice: { amountMinor: 0, currency: FIXTURE_CURRENCY },
+    }],
+    orderItemId: "a0000000-0000-4000-8000-000000000001",
+    productId: FIXTURE_PRODUCT,
+    productName: "Arrachera al carbón con guarnición de temporada",
+    quantity: 1,
+    status: "sent",
+    unit: "pieza",
+    unitPrice: { amountMinor: 12_500, currency: FIXTURE_CURRENCY },
+    ...overrides,
+  };
+}
+
+/**
+ * Exact body of `GET /api/v1/orders/active`. A table can carry more than one
+ * active Order, and `shiftId: null` is a valid historic value, so both are
+ * expressible here rather than assumed away.
+ */
+export function activeTableOrderListBody(input: {
+  readonly orders?: readonly Readonly<Record<string, unknown>>[];
+  readonly scope: MobileBranchScope;
+  readonly tableId?: string;
+}): unknown {
+  const tableId = input.tableId ?? FIXTURE_TABLE;
+  return {
+    orders: (input.orders ?? []).map((order, index) => {
+      const merged = {
+        currency: FIXTURE_CURRENCY,
+        items: [activeTableOrderItemBody()],
+        orderId: `b0000000-0000-4000-8000-00000000000${index + 1}`,
+        shiftId: FIXTURE_SHIFT,
+        status: "open",
+        tableId,
+        updatedAt: FIXTURE_TIMESTAMP,
+        version: 3,
+        ...order,
+      };
+      // The contract requires the two to agree, so the fixture derives one from
+      // the other instead of letting a caller state a count that cannot be true.
+      return { ...merged, itemCount: (merged.items as readonly unknown[]).length };
+    }),
+    schemaVersion: 2,
+    scope: { branchId: input.scope.branchId, restaurantId: input.scope.restaurantId },
+    tableId,
+  };
+}
+
+/** Exact body of the three Order mutations' shared response. */
+export function orderMutationSummaryBody(input: {
+  readonly orderId: string;
+  readonly orderStatus?: string;
+  readonly replayed?: boolean;
+  readonly scope: MobileBranchScope;
+  readonly version: number;
+}): unknown {
+  return {
+    kdsEvent: null,
+    orderId: input.orderId,
+    orderStatus: input.orderStatus ?? "draft",
+    replayed: input.replayed ?? false,
+    schemaVersion: 1,
+    scope: { branchId: input.scope.branchId, restaurantId: input.scope.restaurantId },
+    version: input.version,
+  };
 }
 
 export function operationalShiftListBody(scope: MobileBranchScope): unknown {

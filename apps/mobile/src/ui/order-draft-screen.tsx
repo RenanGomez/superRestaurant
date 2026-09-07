@@ -9,6 +9,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import type {
+  ActiveTableOrderListV2,
   DiningTableV1,
   MenuCatalogStateV1,
   MenuCatalogV1,
@@ -18,6 +19,7 @@ import type {
 
 import { renderMinorAmount } from "../money.js";
 import { failureMessage, type MobileResource } from "../mobile-state.js";
+import { ActiveOrdersPanel } from "./active-orders-panel.js";
 import {
   DRAFT_MAX_GROUPS,
   DRAFT_MAX_QUANTITY,
@@ -70,23 +72,28 @@ import { colors, radius, spacing, touchTarget, typography } from "./theme.js";
  * unit prices the catalog delivered, each with the currency it carries.
  */
 export function OrderDraftScreen({
+  activeOrders,
   category,
   draft,
   menu,
   onBackToTables,
   onCategorySelected,
   onEvent,
+  onRetryActiveOrders,
   onRetryMenu,
   onSubmit,
   table,
   zoneName,
 }: {
+  /** What the server already holds for this table; never recalculated here. */
+  readonly activeOrders: MobileResource<ActiveTableOrderListV2>;
   readonly category: string | undefined;
   readonly draft: OrderDraftState;
   readonly menu: MobileResource<MenuCatalogStateV1>;
   readonly onBackToTables: () => void;
   readonly onCategorySelected: (categoryId: string) => void;
   readonly onEvent: (event: OrderDraftEvent) => void;
+  readonly onRetryActiveOrders: () => void;
   readonly onRetryMenu: () => void;
   readonly onSubmit: () => void;
   readonly table: DiningTableV1;
@@ -156,7 +163,15 @@ export function OrderDraftScreen({
     onEvent={onEvent}
     onRetryMenu={onRetryMenu}
   />;
-  const draftPane = <DraftPane catalog={catalog} draft={draft} layout={layout} onEvent={onEvent} onSubmit={onSubmit} />;
+  const draftPane = <DraftPane
+    activeOrders={activeOrders}
+    catalog={catalog}
+    draft={draft}
+    layout={layout}
+    onEvent={onEvent}
+    onRetryActiveOrders={onRetryActiveOrders}
+    onSubmit={onSubmit}
+  />;
 
   // On a phone the header and the notice already claim most of the column, so
   // two panes flexing over what is left get a few pixels each and the catalog
@@ -415,16 +430,25 @@ function ModifierGroup({ currency, group, onEvent, selections }: {
   </View>;
 }
 
-/** Draft side: the composed lines and the single primary action. */
-function DraftPane({ catalog, draft, layout, onEvent, onSubmit }: {
+/**
+ * Draft side: what the server already holds for this table, then the lines being
+ * composed, then the single primary action. The two are kept visibly separate —
+ * one is the server's, one is local and unsent — so nothing suggests the draft
+ * is part of an order until it has been accepted.
+ */
+function DraftPane({ activeOrders, catalog, draft, layout, onEvent, onRetryActiveOrders, onSubmit }: {
+  readonly activeOrders: MobileResource<ActiveTableOrderListV2>;
   readonly catalog: MenuCatalogV1 | null;
   readonly draft: OrderDraftState;
   readonly layout: OrderDraftLayout;
   readonly onEvent: (event: OrderDraftEvent) => void;
+  readonly onRetryActiveOrders: () => void;
   readonly onSubmit: () => void;
 }): React.JSX.Element {
   const busy = draft.submission.status === "sending";
   return <View style={paneStyle(layout)}>
+    <ActiveOrdersPanel activeOrders={activeOrders} onRetry={onRetryActiveOrders} />
+
     <Subheading>{`Borrador · ${draft.lines.length === 1 ? "1 línea" : `${draft.lines.length} líneas`}`}</Subheading>
 
     {draft.submission.status === "sending" ? <LoadingBlock label="Enviando la comanda…" /> : null}
@@ -455,7 +479,7 @@ function DraftPane({ catalog, draft, layout, onEvent, onSubmit }: {
       </PaneList>}
 
     <ActionButton
-      accessibilityHint="Entrega el borrador a la integración de comandas; todavía no escribe en el servidor"
+      accessibilityHint="Crea la orden, agrega sus líneas y la abre en el servidor"
       busy={busy}
       disabled={draft.lines.length === 0 || draft.composer !== undefined}
       label="Enviar comanda"

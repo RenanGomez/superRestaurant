@@ -12,21 +12,21 @@
  * provider are replaced by doubles.
  */
 import type { MobileAuthPort, MobileSignInResult } from "../src/auth-port.js";
+import {
+  createMobileDeviceIdentity,
+  type MobileDeviceIdentity,
+  type MobileSecureStorePort,
+} from "../src/device-identity.js";
 import type { MobileAppStatus, MobileLifecyclePort } from "../src/lifecycle.js";
-import { MOBILE_API_PATHS } from "../src/mobile-client.js";
+import { MOBILE_API_PATHS, type MobileBranchScope } from "../src/mobile-client.js";
 import type { OrderDraftFailure } from "../src/order-draft.js";
-import type {
-  AddOrderItemIntentV1,
-  CreateOrderIntentV1,
-  OpenOrderIntentV1,
-  OrderDraftHandoffV1,
-  OrderDraftIntegration,
-} from "../src/order-intents.js";
+import type { OrderDeliveryPlanV1 } from "../src/order-plan.js";
+import type { OrderDeliveryPort } from "../src/order-submission.js";
 import type { MobileSession } from "../src/session.js";
 import {
   FIXTURE_USER_A,
   FIXTURE_USER_B,
-  authorizedBranchBody,
+  branchOperationalContextBody,
   membershipListBody,
   operationalShiftListBody,
   orderEntryCatalogStateBody,
@@ -66,6 +66,8 @@ export const HARNESS_SCENARIOS: readonly { readonly label: string; readonly valu
  * promise at all. Both must leave the screen usable.
  */
 export type HarnessDraftOutcome =
+  /** The real create/add/open sequence, against the synthetic Order server below. */
+  | "synthetic"
   | "notConnected"
   | "accepted"
   | "conflict"
@@ -79,6 +81,7 @@ export type HarnessDraftOutcome =
 
 export const HARNESS_DRAFT_OUTCOMES: readonly { readonly label: string; readonly value: HarnessDraftOutcome }[] =
   Object.freeze([
+    { label: "Envío: servidor sintético (secuencia real)", value: "synthetic" },
     { label: "Envío: sin conexión de integración", value: "notConnected" },
     { label: "Envío: aceptado", value: "accepted" },
     { label: "Envío: aceptado (lento)", value: "slowAccepted" },
@@ -94,14 +97,20 @@ export const HARNESS_DRAFT_OUTCOMES: readonly { readonly label: string; readonly
 /** Mutable control surface driven by the harness UI. */
 export interface HarnessControl {
   autoRefreshRuns: number;
+  /** Simulates a keystore that is not there, so the `deviceId` cannot be read. */
+  deviceStore: "available" | "corrupt" | "unavailable";
   draftOutcome: HarnessDraftOutcome;
+  /** Makes the next Order mutation answer 409, to reach the conflict state. */
+  orderConflict: boolean;
   scenario: HarnessScenario;
   tokenSerial: number;
 }
 
 export const harnessControl: HarnessControl = {
   autoRefreshRuns: 0,
-  draftOutcome: "notConnected",
+  deviceStore: "available",
+  draftOutcome: "synthetic",
+  orderConflict: false,
   scenario: "ok",
   tokenSerial: 1,
 };
@@ -139,7 +148,7 @@ function jsonResponse(body: unknown, status = 200): Response {
  * never calls a path it is not allowed to call.
  */
 export function installHarnessFetch(apiBaseUrl: string): void {
-  const harnessFetch = async (input: RequestInfo | URL): Promise<Response> => {
+  const harnessFetch = async (input: RequestInfo | URL, body: unknown): Promise<Response> => {
     const url = new URL(String(input), apiBaseUrl);
     const path = url.pathname;
 
@@ -156,9 +165,9 @@ export function installHarnessFetch(apiBaseUrl: string): void {
 
     if (harnessControl.scenario === "revoked") return jsonResponse({ code: "SCOPE_AUTHORIZATION_REJECTED" }, 403);
 
-    if (path === MOBILE_API_PATHS.authorizeBranch) {
+    if (path === MOBILE_API_PATHS.branchContext) {
       const requested = url.searchParams.get("branchId");
-      return jsonResponse(authorizedBranchBody(requested === scopeB.branchId ? scopeB : scopeA));
+      return jsonResponse(branchOperationalContextBody(requested === scopeB.branchId ? scopeB : scopeA));
     }
 
     const scope = url.searchParams.get("branchId") === scopeB.branchId ? scopeB : scopeA;
@@ -171,26 +180,229 @@ export function installHarnessFetch(apiBaseUrl: string): void {
     if (path === MOBILE_API_PATHS.menuCatalog) {
       return jsonResponse(orderEntryCatalogStateBody(scope, "XTS", scope === scopeB ? 9_900 : 12_500));
     }
+    if (path === MOBILE_API_PATHS.activeTableOrders) {
+      return jsonResponse(harnessOrders.listActive(scope, url.searchParams.get("tableId") ?? ""));
+    }
+    if (path === MOBILE_API_PATHS.createOrder) return harnessOrders.create(body);
+    if (path === MOBILE_API_PATHS.addOrderItem) return harnessOrders.addItem(body);
+    if (path === MOBILE_API_PATHS.openOrder) return harnessOrders.open(body);
 
     return jsonResponse({ code: "HARNESS_PATH_NOT_ALLOWED", path }, 404);
   };
 
   (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    // `POST /access/branch` carries its pair in the body; mirror it into the URL
-    // so one handler can answer every authorized path.
+    let body: unknown;
     if (typeof init?.body === "string") {
-      const parsed: unknown = JSON.parse(init.body);
-      const branchId = typeof parsed === "object" && parsed !== null
-        ? (parsed as { readonly branchId?: unknown }).branchId
+      body = JSON.parse(init.body);
+      // `POST /access/branch` and `/access/branch/context` carry their pair in
+      // the body; mirror it into the URL so one handler answers every path.
+      const branchId = typeof body === "object" && body !== null
+        ? (body as { readonly branchId?: unknown }).branchId
         : undefined;
       if (typeof branchId === "string") {
         const url = new URL(String(input), apiBaseUrl);
         url.searchParams.set("branchId", branchId);
-        return harnessFetch(url.toString());
+        return harnessFetch(url.toString(), body);
       }
     }
-    return harnessFetch(input);
+    return harnessFetch(input, body);
   }) as typeof fetch;
+}
+
+/**
+ * A synthetic Order server: enough state to answer the three mutations the way
+ * Nest does, so the *real* create/add/open sequence — including a replay and a
+ * resume — can be driven by hand in a browser without a server.
+ *
+ * It keeps the two rules that shape the client's retry: `create` is idempotent
+ * by `idempotencyKey`, and `addItem`/`open` require the exact `expectedVersion`
+ * and answer 409 otherwise.
+ */
+interface HarnessOrder {
+  items: { orderItemId: string; productId: string; quantity: number }[];
+  orderId: string;
+  shiftId: string | null;
+  status: "draft" | "open";
+  tableId: string;
+  version: number;
+}
+
+const harnessOrders = createHarnessOrderServer();
+
+function createHarnessOrderServer(): {
+  readonly addItem: (body: unknown) => Response;
+  readonly create: (body: unknown) => Response;
+  readonly listActive: (scope: MobileBranchScope, tableId: string) => unknown;
+  readonly open: (body: unknown) => Response;
+  readonly reset: () => void;
+  readonly summary: () => readonly string[];
+} {
+  const orders = new Map<string, HarnessOrder>();
+  const applied = new Map<string, { orderId: string; version: number }>();
+
+  const record = (body: unknown, key: string): string | undefined => {
+    const value = field(body, key);
+    return typeof value === "string" ? value.toLowerCase() : undefined;
+  };
+
+  const answer = (order: HarnessOrder, replayed: boolean): Response => jsonResponse({
+    kdsEvent: null,
+    orderId: order.orderId,
+    orderStatus: order.status,
+    replayed,
+    schemaVersion: 1,
+    scope: { branchId: scopeA.branchId, restaurantId: scopeA.restaurantId },
+    version: order.version,
+  });
+
+  const conflict = (): Response => jsonResponse({ code: "ORDER_CONFLICT" }, 409);
+
+  return Object.freeze({
+    addItem: (body: unknown): Response => {
+      const orderId = record(body, "orderId");
+      const idempotencyKey = record(body, "idempotencyKey");
+      const orderItemId = record(body, "orderItemId");
+      const productId = record(body, "productId");
+      const expectedVersion = field(body, "expectedVersion");
+      const quantity = field(body, "quantity");
+      if (orderId === undefined || idempotencyKey === undefined || orderItemId === undefined
+        || productId === undefined) return jsonResponse({ code: "ORDER_REQUEST_REJECTED" }, 400);
+      const order = orders.get(orderId);
+      if (order === undefined) return jsonResponse({ code: "ORDER_NOT_FOUND" }, 404);
+      if (harnessControl.orderConflict) return conflict();
+      // Exactly as Nest: the version gate runs before the idempotency check.
+      if (order.version !== expectedVersion) return conflict();
+      order.items.push({
+        orderItemId,
+        productId,
+        quantity: typeof quantity === "number" ? quantity : 1,
+      });
+      order.version += 1;
+      applied.set(idempotencyKey, { orderId, version: order.version });
+      return answer(order, false);
+    },
+    create: (body: unknown): Response => {
+      const orderId = record(body, "orderId");
+      const idempotencyKey = record(body, "idempotencyKey");
+      const tableId = record(body, "tableId");
+      const shiftId = record(body, "shiftId");
+      if (orderId === undefined || idempotencyKey === undefined || tableId === undefined) {
+        return jsonResponse({ code: "ORDER_REQUEST_REJECTED" }, 400);
+      }
+      if (harnessControl.orderConflict) return conflict();
+      const existing = orders.get(orderId);
+      // Idempotent by key, which is what a byte-for-byte retry relies on.
+      if (existing !== undefined && applied.get(idempotencyKey)?.orderId === orderId) {
+        return answer(existing, true);
+      }
+      const order: HarnessOrder = {
+        items: [],
+        orderId,
+        shiftId: shiftId ?? null,
+        status: "draft",
+        tableId,
+        version: 1,
+      };
+      orders.set(orderId, order);
+      applied.set(idempotencyKey, { orderId, version: 1 });
+      return answer(order, false);
+    },
+    listActive: (scope: MobileBranchScope, tableId: string): unknown => ({
+      orders: [...orders.values()]
+        .filter((order) => order.tableId === tableId.toLowerCase())
+        .map((order) => ({
+          currency: "XTS",
+          itemCount: order.items.length,
+          items: order.items.map((item, index) => ({
+            modifiers: [],
+            orderItemId: item.orderItemId,
+            productId: item.productId,
+            productName: index === 0
+              ? "Arrachera al carbón con guarnición de temporada"
+              : "Agua mineral",
+            quantity: item.quantity,
+            status: "sent",
+            unit: "pieza",
+            unitPrice: { amountMinor: scope === scopeB ? 9_900 : 12_500, currency: "XTS" },
+          })),
+          orderId: order.orderId,
+          shiftId: order.shiftId,
+          status: order.status,
+          tableId: order.tableId,
+          updatedAt: "2026-09-04T12:00:00.000Z",
+          version: order.version,
+        })),
+      schemaVersion: 2,
+      scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
+      tableId: tableId.toLowerCase(),
+    }),
+    open: (body: unknown): Response => {
+      const orderId = record(body, "orderId");
+      const idempotencyKey = record(body, "idempotencyKey");
+      const expectedVersion = field(body, "expectedVersion");
+      if (orderId === undefined || idempotencyKey === undefined) {
+        return jsonResponse({ code: "ORDER_REQUEST_REJECTED" }, 400);
+      }
+      const order = orders.get(orderId);
+      if (order === undefined) return jsonResponse({ code: "ORDER_NOT_FOUND" }, 404);
+      if (harnessControl.orderConflict) return conflict();
+      if (order.version !== expectedVersion) return conflict();
+      order.status = "open";
+      order.version += 1;
+      applied.set(idempotencyKey, { orderId, version: order.version });
+      return answer(order, false);
+    },
+    reset: (): void => { orders.clear(); applied.clear(); },
+    summary: (): readonly string[] => [...orders.values()].map(
+      (order) => `${order.status} v${order.version} · ${order.items.length} línea(s) · mesa ${order.tableId.slice(0, 8)}`,
+    ),
+  });
+}
+
+function field(body: unknown, key: string): unknown {
+  if (typeof body !== "object" || body === null) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(body, key);
+  return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
+}
+
+/** What the synthetic server currently holds, for the control bar to display. */
+export function harnessOrderSummary(): readonly string[] {
+  return harnessOrders.summary();
+}
+
+export function resetHarnessOrders(): void {
+  harnessOrders.reset();
+}
+
+/**
+ * A keystore double. It behaves like `expo-secure-store` in the three ways that
+ * matter — present, absent and holding something this app did not write — so the
+ * `deviceId` rules can be exercised by hand instead of only in a unit test.
+ */
+export function createHarnessDeviceIdentity(): MobileDeviceIdentity {
+  const values = new Map<string, string>();
+  const store: MobileSecureStorePort = Object.freeze({
+    getItem: (key: string): Promise<string | null> => Promise.resolve(
+      harnessControl.deviceStore === "corrupt" ? "no-es-un-uuid" : values.get(key) ?? null,
+    ),
+    isAvailable: (): Promise<boolean> => Promise.resolve(harnessControl.deviceStore !== "unavailable"),
+    setItem: (key: string, value: string): Promise<void> => {
+      values.set(key, value);
+      return Promise.resolve();
+    },
+  });
+  return createMobileDeviceIdentity({ randomUuid: harnessRandomUuid, store });
+}
+
+/**
+ * Unique, valid, and boring on purpose: a reviewer can read the ids the screen
+ * produced and see that a retry reused them. Never a real random source, and
+ * never one of the UUIDs any recorded evidence already uses.
+ */
+let harnessUuidSerial = 0;
+export function harnessRandomUuid(): string {
+  harnessUuidSerial += 1;
+  return `4d000000-0000-4000-8000-${harnessUuidSerial.toString(16).padStart(12, "0")}`;
 }
 
 type HarnessSessionHandler = (next: MobileSession | undefined) => void;
@@ -295,12 +507,16 @@ export function createHarnessLifecycle(): MobileLifecyclePort & {
 }
 
 /**
- * A draft integration double. It records the intents the screen offered — which
- * is how a reviewer can see that no field of audit identity was invented — and
- * answers with whatever outcome the control bar selected. It performs no
- * request of any kind.
+ * A draft delivery double. It records the plan the screen offered — which is how
+ * a reviewer can see that every audit identity came from the plan and that a
+ * retry reused it — and answers with whatever outcome the control bar selected.
+ * It performs no request of any kind.
+ *
+ * `synthetic` is the exception, and the default: it means "use the real
+ * sequence", so the screen builds its productive port instead of receiving this
+ * one at all. That choice is made in `harness-root.tsx`.
  */
-export function createHarnessOrderIntegration(onChange: () => void): OrderDraftIntegration & {
+export function createHarnessOrderDelivery(onChange: () => void): OrderDeliveryPort & {
   readonly offered: () => readonly string[];
   readonly reset: () => void;
 } {
@@ -309,28 +525,27 @@ export function createHarnessOrderIntegration(onChange: () => void): OrderDraftI
     offered: (): readonly string[] => [...offered],
     reset: (): void => { offered.length = 0; onChange(); },
     /**
-     * The one delivery call. The handoff is read here — inside it — instead of
+     * The one delivery call. The plan is read here — inside it — instead of
      * through a second callback surface, which is exactly what keeps a real
-     * integration from performing create/add/open twice. Reading it performs
-     * no request; the outcome comes from the control bar.
+     * integration from performing create/add/open twice.
      */
     // Deliberately not `async`: an `async` function turns every throw into a
-    // rejected promise, which would make the "falla síncrona" control test
+    // rejected promise, which would make the "falla sincrona" control test
     // something the app already handles. This one really throws before any
     // promise exists.
-    deliver: (handoff: OrderDraftHandoffV1): Promise<OrderDraftFailure | undefined> => {
-      const create: CreateOrderIntentV1 = handoff.createOrder;
-      const open: OpenOrderIntentV1 = handoff.openOrder;
-      offered.push(`crear ${create.channel}/${create.currency} [${Object.keys(create).sort().join(",")}]`);
-      for (const item of handoff.addItems as readonly AddOrderItemIntentV1[]) {
-        offered.push(`ítem ${item.draftLineId} ×${item.quantity} [${Object.keys(item).sort().join(",")}]`);
+    deliver: (plan: OrderDeliveryPlanV1): Promise<OrderDraftFailure | undefined> => {
+      offered.push(`crear ${plan.channel}/${plan.currency} @${plan.timeZone} orden ${plan.orderId.slice(0, 8)}`);
+      offered.push(`turno ${plan.shiftId.slice(0, 8)} dispositivo ${plan.deviceId.slice(0, 8)} en ${plan.occurredAt}`);
+      for (const line of plan.addItems) {
+        offered.push(`item ${line.draftLineId} x${line.quantity} -> ${line.orderItemId.slice(0, 8)} (${line.idempotencyKey.slice(0, 8)})`);
       }
-      offered.push(`abrir [${Object.keys(open).sort().join(",")}]`);
+      offered.push(`abrir ${plan.openOrder.idempotencyKey.slice(0, 8)}`);
       onChange();
       if (harnessControl.draftOutcome === "throws") throw new Error("HARNESS_SYNCHRONOUS_THROW");
       if (harnessControl.draftOutcome === "hang") return new Promise<never>(() => undefined);
       if (harnessControl.draftOutcome === "slowAccepted") return delay(1_500).then(() => undefined);
       if (harnessControl.draftOutcome === "accepted") return Promise.resolve(undefined);
+      if (harnessControl.draftOutcome === "synthetic") return Promise.resolve(undefined);
       return Promise.resolve(harnessControl.draftOutcome);
     },
   });

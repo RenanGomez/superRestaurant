@@ -3,8 +3,10 @@ import test from "node:test";
 
 import { MobileRequestError, type MobileBranchScope } from "./mobile-client.js";
 import {
+  activeOrdersReadTarget,
   activeScope,
   canReadBranchData,
+  contextReadTarget,
   failureMessage,
   hasNoMemberships,
   initialMobileState,
@@ -13,15 +15,19 @@ import {
   menuReadTarget,
   mobileScreen,
   noticeMessage,
+  ownsContextRead,
   reduceMobileState,
   shiftsReadTarget,
   toMobileFailure,
   type MobileEvent,
+  type MobileFailure,
   type MobileState,
 } from "./mobile-state.js";
 import {
+  FIXTURE_TABLE,
   FIXTURE_USER_B,
-  authorizedBranchBody,
+  activeTableOrderListBody,
+  branchOperationalContextBody,
   diningLayoutBody,
   fixtureSession,
   membershipListBody,
@@ -33,11 +39,14 @@ import {
 import type { MobileSession } from "./session.js";
 
 import {
+  parseActiveTableOrderListV2,
   parseBranchMembershipListV1,
+  parseBranchOperationalContextV1,
   parseDiningLayoutV1,
   parseMenuCatalogStateV1,
   parseOperationalShiftListV1,
   type BranchMembershipSummaryV1,
+  type BranchOperationalContextV1,
   type DiningLayoutV1,
 } from "@super-restaurant/shared-types";
 
@@ -47,8 +56,41 @@ const layoutA = parseDiningLayoutV1(diningLayoutBody(scopeA));
 const layoutB = parseDiningLayoutV1(diningLayoutBody(scopeB, "Salón"));
 const menuA = parseMenuCatalogStateV1(menuCatalogStateBody(scopeA));
 const shiftsA = parseOperationalShiftListV1(operationalShiftListBody(scopeA));
-const branchA = authorizedBranchBody(scopeA) as { branchId: string; restaurantId: string; roles: readonly "waiter"[] };
-const branchB = authorizedBranchBody(scopeB) as { branchId: string; restaurantId: string; roles: readonly "waiter"[] };
+const contextA = branchContext(scopeA);
+const contextB = branchContext(scopeB);
+
+/** The exact context response, through the shared parser and nothing else. */
+function branchContext(scope: MobileBranchScope): BranchOperationalContextV1 {
+  const parsed = parseBranchOperationalContextV1(branchOperationalContextBody(scope));
+  assert.ok(parsed !== undefined);
+  return parsed;
+}
+
+/**
+ * The three events one branch selection produces: the read is announced, then
+ * the server's own context confirms it. The reducer accepts a context only for
+ * the operator, pair and attempt that asked, so the announcement is not optional.
+ */
+function authorized(context: BranchOperationalContextV1, operator: string = session.userId): readonly MobileEvent[] {
+  const attempt = nextAttempt();
+  return [
+    { attempt, operator, scope: context.scope, type: "branchContextRequested" },
+    { attempt, context, operator, type: "branchAuthorized" },
+  ];
+}
+
+/** The same, for a pair the server refuses. */
+function rejected(
+  scope: MobileBranchScope,
+  failure: MobileFailure,
+  operator: string = session.userId,
+): readonly MobileEvent[] {
+  const attempt = nextAttempt();
+  return [
+    { attempt, operator, scope, type: "branchContextRequested" },
+    { attempt, failure, operator, scope, type: "branchRejected" },
+  ];
+}
 
 function apply(state: MobileState, ...events: readonly MobileEvent[]): MobileState {
   return events.reduce(reduceMobileState, state);
@@ -99,7 +141,7 @@ function onBranchA(): MobileState {
     signedIn(),
     ...loadedMemberships(session.userId, memberships),
     { scope: scopeA, type: "branchRequested" },
-    { branch: branchA, type: "branchAuthorized" },
+    ...authorized(contextA),
     { attempt: shifts, scope: scopeA, type: "shiftsLoading" },
     { attempt: shifts, list: shiftsA, scope: scopeA, type: "shiftsLoaded" },
     { shift: shiftsA.shifts[0], type: "shiftSelected" },
@@ -117,7 +159,7 @@ test("navigation follows the session and the authorized branch, never history", 
   const branchOnly = apply(
     signedIn(),
     { scope: scopeA, type: "branchRequested" },
-    { branch: branchA, type: "branchAuthorized" },
+    ...authorized(contextA),
   );
   assert.equal(mobileScreen(branchOnly), "shifts");
   assert.equal(mobileScreen(onBranchA()), "workspace");
@@ -129,7 +171,7 @@ test("operational data stays closed until an active shift from the exact branch 
   const branchOnly = apply(
     signedIn(),
     { scope: scopeA, type: "branchRequested" },
-    { branch: branchA, type: "branchAuthorized" },
+    ...authorized(contextA),
     { attempt: shifts, scope: scopeA, type: "shiftsLoading" },
     { attempt: shifts, list: shiftsA, scope: scopeA, type: "shiftsLoaded" },
   );
@@ -168,7 +210,7 @@ test("selecting another branch drops the previous branch data in the same transi
   assert.equal(switched.menu.status, "idle");
   assert.equal(mobileScreen(switched), "branches");
 
-  const onB = apply(switched, { branch: branchB, type: "branchAuthorized" });
+  const onB = apply(switched, ...authorized(contextB));
   assert.deepEqual(activeScope(onB), { branchId: scopeB.branchId, restaurantId: scopeB.restaurantId });
   assert.equal(onB.layout.value, undefined);
 });
@@ -180,7 +222,7 @@ test("a late response for another branch never reaches the active branch", () =>
     onBranchA(),
     { attempt: staleA, scope: scopeA, type: "menuLoading" },
     { scope: scopeB, type: "branchRequested" },
-    { branch: branchB, type: "branchAuthorized" },
+    ...authorized(contextB),
     ...loadedLayout(scopeB, layoutB),
     { attempt: staleA, layout: layoutA as NonNullable<typeof layoutA>, scope: scopeA, type: "layoutLoaded" },
     { attempt: staleA, failure: "network", scope: scopeA, type: "menuFailed" },
@@ -196,7 +238,7 @@ test("an authorization answer for a pair that is no longer pending is ignored", 
     signedIn(),
     { scope: scopeA, type: "branchRequested" },
     { scope: scopeB, type: "branchRequested" },
-    { branch: branchA, type: "branchAuthorized" },
+    ...authorized(contextA),
   );
 
   assert.equal(state.branch, undefined);
@@ -207,7 +249,7 @@ test("a revoked branch returns to selection with an explicit notice", () => {
   const state = apply(
     onBranchA(),
     { scope: scopeA, type: "branchRequested" },
-    { failure: "authorization", scope: scopeA, type: "branchRejected" },
+    ...rejected(scopeA, "authorization"),
   );
 
   assert.equal(mobileScreen(state), "branches");
@@ -249,7 +291,7 @@ test("nothing is accepted after sign-out, including a response already in flight
     signedOut,
     ...loadedMemberships(session.userId, memberships),
     { attempt, layout: layoutA as NonNullable<typeof layoutA>, scope: scopeA, type: "layoutLoaded" },
-    { branch: branchA, type: "branchAuthorized" },
+    ...authorized(contextA),
   );
 
   assert.deepEqual(late, signedOut);
@@ -372,7 +414,7 @@ test("a valid revalidation restores the branch and requires a fresh open-shift s
   const confirmed = apply(
     onBranchA(),
     { type: "revalidationStarted" },
-    { branch: branchA, type: "revalidationSucceeded" },
+    { context: contextA, type: "revalidationSucceeded" },
   );
 
   assert.equal(confirmed.revalidating, false);
@@ -425,17 +467,17 @@ test("a revalidation that cannot complete blocks every branch read until retried
   assert.equal(failed.menu.value, undefined);
   assert.equal(mobileScreen(failed), "workspace");
 
-  const retried = apply(failed, { type: "revalidationStarted" }, { branch: branchA, type: "revalidationSucceeded" });
+  const retried = apply(failed, { type: "revalidationStarted" }, { context: contextA, type: "revalidationSucceeded" });
   assert.equal(canReadBranchData(retried), true);
   assert.equal(mobileScreen(retried), "shifts");
 });
 
 test("a revalidation answer for another branch, or with none pending, is ignored", () => {
   const running = apply(onBranchA(), { type: "revalidationStarted" });
-  assert.equal(apply(running, { branch: branchB, type: "revalidationSucceeded" }), running);
+  assert.equal(apply(running, { context: contextB, type: "revalidationSucceeded" }), running);
 
-  const settled = apply(running, { branch: branchA, type: "revalidationSucceeded" });
-  assert.equal(apply(settled, { branch: branchA, type: "revalidationSucceeded" }), settled);
+  const settled = apply(running, { context: contextA, type: "revalidationSucceeded" });
+  assert.equal(apply(settled, { context: contextA, type: "revalidationSucceeded" }), settled);
   assert.equal(apply(settled, { failure: "network", type: "revalidationFailed" }), settled);
 });
 
@@ -532,7 +574,7 @@ test("what may be read is decided by the state alone", () => {
   assert.equal(layoutReadTarget(blocked), undefined);
 
   // No shift, no operational read; the shift list itself is still read.
-  const confirmed = apply(revalidating, { branch: branchA, type: "revalidationSucceeded" });
+  const confirmed = apply(revalidating, { context: contextA, type: "revalidationSucceeded" });
   assert.deepEqual(shiftsReadTarget(confirmed), pair);
   assert.equal(layoutReadTarget(confirmed), undefined);
   assert.equal(menuReadTarget(confirmed, true), undefined);
@@ -616,6 +658,147 @@ test("whose membership list may be read is decided by the state alone", () => {
   // A revocation forces a fresh read, for the operator still in place.
   const revoked = apply(onBranchA(), { type: "accessRevoked" });
   assert.equal(membershipsReadOperator(revoked), session.userId);
+});
+
+test("a branch is confirmed by its own operational context, and only by it", () => {
+  const attempt = nextAttempt();
+  const selecting = apply(signedIn(), { scope: scopeA, type: "branchRequested" });
+  assert.deepEqual(contextReadTarget(selecting), {
+    attempt: 0,
+    operator: session.userId,
+    scope: { branchId: scopeA.branchId, restaurantId: scopeA.restaurantId },
+  });
+
+  const reading = apply(selecting, { attempt, operator: session.userId, scope: scopeA, type: "branchContextRequested" });
+  assert.equal(contextReadTarget(reading), undefined, "one read at a time");
+  assert.equal(ownsContextRead(reading, { attempt, operator: session.userId, scope: scopeA }), true);
+
+  const confirmed = apply(reading, { attempt, context: contextA, operator: session.userId, type: "branchAuthorized" });
+  assert.equal(confirmed.branch?.branchId, scopeA.branchId);
+  assert.equal(confirmed.branch?.timeZone, contextA.timeZone, "the zone comes from the server, never the device");
+  assert.deepEqual(confirmed.branch?.roles, contextA.roles);
+  assert.equal(confirmed.pendingScope, undefined);
+  assert.equal(confirmed.contextRead, undefined);
+  assert.equal(mobileScreen(confirmed), "shifts");
+});
+
+test("a context answer needs the operator, the pending pair and the attempt", () => {
+  const attempt = nextAttempt();
+  const reading = apply(
+    signedIn(),
+    { scope: scopeA, type: "branchRequested" },
+    { attempt, operator: session.userId, scope: scopeA, type: "branchContextRequested" },
+  );
+
+  for (const [read, why] of [
+    [{ attempt, operator: FIXTURE_USER_B, scope: scopeA }, "another operator"],
+    [{ attempt: attempt + 1_000, operator: session.userId, scope: scopeA }, "another attempt"],
+    [{ attempt, operator: session.userId, scope: scopeB }, "another pair"],
+  ] as const) {
+    assert.equal(ownsContextRead(reading, read), false, why);
+  }
+
+  // A context for a pair that is not the pending one confirms nothing.
+  assert.equal(apply(reading, { attempt, context: contextB, operator: session.userId, type: "branchAuthorized" }), reading);
+  // Nor does one for the previous operator.
+  assert.equal(apply(reading, { attempt, context: contextA, operator: FIXTURE_USER_B, type: "branchAuthorized" }), reading);
+  // Nor a refusal from a read nobody is waiting for.
+  assert.equal(
+    apply(reading, { attempt: attempt + 1_000, failure: "authorization", operator: session.userId, scope: scopeA, type: "branchRejected" }),
+    reading,
+  );
+
+  const refused = apply(reading, { attempt, failure: "authorization", operator: session.userId, scope: scopeA, type: "branchRejected" });
+  assert.equal(refused.branchFailure, "authorization");
+  assert.equal(refused.notice, "branchRevoked");
+  assert.equal(refused.pendingScope, undefined);
+  assert.equal(refused.contextRead, undefined);
+});
+
+test("renewing a token gives up a context read in flight and keeps the selection", () => {
+  const attempt = nextAttempt();
+  const reading = apply(
+    signedIn(),
+    { scope: scopeA, type: "branchRequested" },
+    { attempt, operator: session.userId, scope: scopeA, type: "branchContextRequested" },
+  );
+  const renewed = apply(reading, { session: fixtureSession({ accessToken: "token-renewed" }), type: "sessionObserved" });
+
+  // The pair the operator chose survives, so the screen reads it again at once
+  // instead of dropping them back to the branch list.
+  assert.deepEqual(renewed.pendingScope, { branchId: scopeA.branchId, restaurantId: scopeA.restaurantId });
+  assert.equal(renewed.contextRead, undefined);
+  assert.equal(contextReadTarget(renewed)?.operator, session.userId);
+  // And the answer of the read started with the replaced token cannot confirm.
+  assert.equal(apply(renewed, { attempt, context: contextA, operator: session.userId, type: "branchAuthorized" }), renewed);
+});
+
+test("the active orders of a table belong to the scope, the table and the attempt", () => {
+  assert.ok(shiftsA?.shifts[0] !== undefined);
+  const onTable = onBranchA();
+  assert.deepEqual(activeOrdersReadTarget(onTable, FIXTURE_TABLE), {
+    branchId: scopeA.branchId,
+    restaurantId: scopeA.restaurantId,
+  });
+  assert.equal(activeOrdersReadTarget(onTable, undefined), undefined, "no table, no read");
+
+  const attempt = nextAttempt();
+  const loading = apply(onTable, { attempt, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoading" });
+  assert.equal(loading.activeOrders.status, "loading");
+  assert.equal(activeOrdersReadTarget(loading, FIXTURE_TABLE), undefined, "one read at a time");
+
+  const list = parseActiveTableOrderListV2(activeTableOrderListBody({ orders: [{}, { shiftId: null }], scope: scopeA }));
+  assert.ok(list !== undefined);
+  const ready = apply(loading, { attempt, list, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" });
+  assert.equal(ready.activeOrders.value?.orders.length, 2, "a table may carry more than one active order");
+  assert.equal(ready.activeOrders.value?.orders[1]?.shiftId, null, "a historic order without a shift is kept");
+
+  // An answer for another attempt, another scope or another table changes nothing.
+  assert.equal(apply(loading, { attempt: attempt + 1_000, list, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" }), loading);
+  assert.equal(apply(loading, { attempt, list, scope: scopeB, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" }), loading);
+  const otherTable = parseActiveTableOrderListV2(activeTableOrderListBody({
+    scope: scopeA,
+    tableId: "66666666-6666-4666-8666-666666666667",
+  }));
+  assert.ok(otherTable !== undefined);
+  assert.equal(
+    apply(loading, { attempt, list: otherTable, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" }).activeOrders.value,
+    undefined,
+    "an answer about another table is not this table's",
+  );
+});
+
+test("changing shift, branch or access drops the active orders with everything else", () => {
+  const attempt = nextAttempt();
+  const list = parseActiveTableOrderListV2(activeTableOrderListBody({ orders: [{}], scope: scopeA }));
+  assert.ok(list !== undefined);
+  const withOrders = apply(
+    onBranchA(),
+    { attempt, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoading" },
+    { attempt, list, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoaded" },
+  );
+  assert.equal(withOrders.activeOrders.status, "ready");
+
+  for (const [event, why] of [
+    [{ type: "shiftReleased" } as const, "another shift"],
+    [{ scope: scopeB, type: "branchRequested" } as const, "another branch"],
+    [{ type: "branchReleased" } as const, "no branch"],
+    [{ type: "revalidationStarted" } as const, "an unconfirmed scope"],
+    [{ type: "accessRevoked" } as const, "a revoked access"],
+  ] as const) {
+    const after = apply(withOrders, event);
+    assert.equal(after.activeOrders.status, "idle", why);
+    assert.equal(after.activeOrders.value, undefined, why);
+  }
+
+  // A 401 on the current read revokes, exactly like the other branch reads.
+  const revoked = apply(
+    apply(withOrders, { scope: scopeA, type: "activeOrdersReset" }),
+    { attempt: attempt + 1, scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersLoading" },
+    { attempt: attempt + 1, failure: "authorization", scope: scopeA, tableId: FIXTURE_TABLE, type: "activeOrdersFailed" },
+  );
+  assert.equal(mobileScreen(revoked), "branches");
+  assert.equal(revoked.notice, "branchRevoked");
 });
 
 test("selecting a branch clears any pending revalidation state", () => {

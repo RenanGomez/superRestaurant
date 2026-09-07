@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { gateMobileAuth, type MobileAuthGate } from "./auth-gate.js";
 import type { MobileAuthPort, MobileSignInResult } from "./auth-port.js";
-import type { AuthorizedMobileBranch } from "./mobile-client.js";
+import { parseBranchOperationalContextV1 } from "@super-restaurant/shared-types";
 import {
   initialMobileState,
   mobileScreen,
@@ -15,7 +15,13 @@ import {
 import { readInitialSession } from "./revalidation.js";
 import type { MobileSession } from "./session.js";
 import { endMobileSession } from "./sign-out.js";
-import { FIXTURE_USER_A, FIXTURE_USER_B, fixtureSession, scopeA } from "./test-fixtures.js";
+import {
+  FIXTURE_USER_A,
+  FIXTURE_USER_B,
+  branchOperationalContextBody,
+  fixtureSession,
+  scopeA,
+} from "./test-fixtures.js";
 
 type SessionHandler = (session: MobileSession | undefined) => void;
 
@@ -24,11 +30,23 @@ const sessionA2 = fixtureSession({ accessToken: "token-a-2", userId: FIXTURE_USE
 const sessionA3 = fixtureSession({ accessToken: "token-a-3", userId: FIXTURE_USER_A });
 const sessionB1 = fixtureSession({ accessToken: "token-b-1", email: "b@example.invalid", userId: FIXTURE_USER_B });
 
-const branchA: AuthorizedMobileBranch = Object.freeze({
-  branchId: scopeA.branchId,
-  restaurantId: scopeA.restaurantId,
-  roles: Object.freeze(["waiter"] as const),
-});
+const contextA = parseBranchOperationalContextV1(branchOperationalContextBody(scopeA));
+assert.ok(contextA !== undefined);
+
+/**
+ * The two events one branch selection produces. The reducer accepts a context
+ * only for the operator, pair and attempt that asked for it, so the read has to
+ * be announced before its answer.
+ */
+let contextAttempts = 0;
+function authorized(operator: string): readonly MobileEvent[] {
+  assert.ok(contextA !== undefined);
+  contextAttempts += 1;
+  return [
+    { attempt: contextAttempts, operator, scope: scopeA, type: "branchContextRequested" },
+    { attempt: contextAttempts, context: contextA, operator, type: "branchAuthorized" },
+  ];
+}
 
 /** Lets every pending microtask and one macrotask run. */
 function settle(): Promise<void> {
@@ -199,7 +217,7 @@ test("A signs in and out, B signs in and out, and a late notification from A cha
   await app.signIn(sessionA1);
   assert.equal(app.state().session?.userId, FIXTURE_USER_A);
   app.dispatch({ scope: scopeA, type: "branchRequested" });
-  app.dispatch({ branch: branchA, type: "branchAuthorized" });
+  for (const event of authorized(FIXTURE_USER_A)) app.dispatch(event);
   assert.equal(mobileScreen(app.state()), "shifts");
 
   app.signOut(undefined);
@@ -272,14 +290,15 @@ test("a deliberate sign-in re-opens the gate, and the operator in place can rene
   assert.equal(app.state().memberships.status, "idle");
 
   app.dispatch({ scope: scopeA, type: "branchRequested" });
-  app.dispatch({ branch: branchA, type: "branchAuthorized" });
+  for (const event of authorized(FIXTURE_USER_A)) app.dispatch(event);
   assert.equal(mobileScreen(app.state()), "shifts");
 
   // A renewed token of the operator in place keeps the branch and its data.
   provider.emit(sessionA3);
   await settle();
   assert.equal(app.state().session?.accessToken, "token-a-3");
-  assert.equal(app.state().branch, branchA);
+  assert.equal(app.state().branch?.branchId, scopeA.branchId);
+  assert.equal(app.state().branch?.timeZone, contextA.timeZone);
   assert.equal(mobileScreen(app.state()), "shifts");
 });
 
