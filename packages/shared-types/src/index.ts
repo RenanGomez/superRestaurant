@@ -1,3 +1,5 @@
+import { MAX_ORDER_ITEM_MODIFIER_GROUPS } from "./orders.js";
+
 /**
  * Opaque identifiers keep restaurant and branch scopes distinct across clients
  * without defining persistence models, domain entities, or transport DTOs.
@@ -685,9 +687,15 @@ function parseMenuCatalogPayload(record: PlainRecord): MenuCatalogPayloadV1 | un
   }
 
   const groupIds = new Set<string>();
+  const requiredGroupCounts = new Map<string, number>();
   for (const group of definedModifierGroups) {
     if (!productIds.has(group.productId) || groupIds.has(group.groupId)) return undefined;
     groupIds.add(group.groupId);
+    if (group.active && group.minimumQuantity > 0) {
+      const count = (requiredGroupCounts.get(group.productId) ?? 0) + 1;
+      if (count > MAX_ORDER_ITEM_MODIFIER_GROUPS) return undefined;
+      requiredGroupCounts.set(group.productId, count);
+    }
   }
 
   definedCategories.sort(compareMenuEntityOrder);

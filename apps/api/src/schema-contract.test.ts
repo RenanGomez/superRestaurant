@@ -37,6 +37,14 @@ const menuCatalogAudit = readFileSync(
   new URL("../../../supabase/tests/menu_catalog_catalog.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
+const menuOrderabilityMigration = readFileSync(
+  new URL("../../../supabase/migrations/20260906000100_enforce_orderable_menu_modifier_groups.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
+const menuOrderabilityAudit = readFileSync(
+  new URL("../../../supabase/tests/menu_orderability_catalog.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
 const ordersRealtimeMigration = readFileSync(
   new URL("../../../supabase/migrations/20260902000200_create_orders_realtime.sql", import.meta.url),
   "utf8",
@@ -553,6 +561,30 @@ test("menu catalog audit keeps tables private and exposes only read and publish 
   assert.match(apiPackage, /run-menu-catalog-schema-verification\.js/u);
   assert.doesNotThrow(() => extractMigrationBody(menuCatalogMigration));
   assert.doesNotThrow(() => validateCatalogAuditSql(menuCatalogAudit));
+});
+
+test("menu orderability patch enforces the order-item command boundary without a new capability", () => {
+  assert.match(menuOrderabilityMigration, /^begin;/u);
+  assert.match(menuOrderabilityMigration, /create function app_private\.enforce_menu_modifier_group_command_limit/u);
+  assert.match(menuOrderabilityMigration, /required_group_count >= 50/u);
+  assert.match(menuOrderabilityMigration, /modifier_group\.active/u);
+  assert.match(menuOrderabilityMigration, /modifier_group\.minimum_quantity > 0/u);
+  assert.match(menuOrderabilityMigration, /before insert or update of restaurant_id, catalog_id, product_id, active, minimum_quantity/u);
+  assert.match(menuOrderabilityMigration, /having pg_catalog\.count\(\*\) > 50/u);
+  assert.match(menuOrderabilityMigration, /revoke all on function app_private\.enforce_menu_modifier_group_command_limit\(\)[\s\S]*from public, anon, authenticated, service_role, app_api/u);
+  assert.doesNotMatch(menuOrderabilityMigration, /security definer/u);
+  assert.doesNotMatch(menuOrderabilityMigration, /grant execute/u);
+  assert.match(menuOrderabilityMigration, /commit;\s*$/u);
+  assert.match(menuOrderabilityAudit, /menu_orderability_function_public/u);
+  assert.match(menuOrderabilityAudit, /menu_orderability_trigger_rejected/u);
+  assert.match(menuOrderabilityAudit, /menu_orderability_existing_data_rejected/u);
+  assert.doesNotMatch(menuOrderabilityAudit, /pg_catalog\.position/u);
+  assert.match(menuOrderabilityAudit, /23::integer as secured_tables/u);
+  assert.match(menuOrderabilityAudit, /22::integer as security_definer_functions/u);
+  assert.match(apiPackage, /"verify:menu-orderability-schema:rollback"/u);
+  assert.match(apiPackage, /run-menu-orderability-schema-verification\.js/u);
+  assert.doesNotThrow(() => extractMigrationBody(menuOrderabilityMigration));
+  assert.doesNotThrow(() => validateCatalogAuditSql(menuOrderabilityAudit));
 });
 
 test("post-menu audit pins the exact global catalog and app_api surface", () => {

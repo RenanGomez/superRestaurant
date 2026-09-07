@@ -4,6 +4,7 @@ import { parseKdsEventV1 } from "./realtime.js";
 export const ORDER_COMMAND_SCHEMA_VERSION = 1 as const;
 export const CREATE_ORDER_COMMAND_V2_SCHEMA_VERSION = 2 as const;
 export const ACTIVE_TABLE_ORDER_LIST_V2_SCHEMA_VERSION = 2 as const;
+export const MAX_ORDER_ITEM_MODIFIER_GROUPS = 50 as const;
 export const ORDER_CHANNELS = Object.freeze(["table", "counter", "takeout", "delivery"] as const);
 export const ORDER_ITEM_FORWARD_STATUSES = Object.freeze(["sent", "preparing", "ready", "delivered"] as const);
 export const ORDER_ITEM_STATUSES = Object.freeze(["pending", "sent", "preparing", "ready", "delivered", "cancelled"] as const);
@@ -457,7 +458,7 @@ function parseActiveTableOrderMoneyV1(value: unknown, expectedCurrency: string):
 }
 
 function parseGroups(value: unknown): readonly ModifierGroupSelectionV1[] | undefined {
-  if (!Array.isArray(value) || value.length > 50) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_ORDER_ITEM_MODIFIER_GROUPS) return undefined;
   const groups: ModifierGroupSelectionV1[] = [];
   const groupIds = new Set<string>();
   for (const entry of value as readonly unknown[]) {

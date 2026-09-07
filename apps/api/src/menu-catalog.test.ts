@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  MAX_ORDER_ITEM_MODIFIER_GROUPS,
   parseBranchScope,
   parseMenuCatalogStateV1,
   parseSaveMenuCatalogCommandV1,
@@ -102,6 +103,35 @@ test("menu catalog rejects malformed requests and maps conflict, forbidden, and 
   });
   await assertCode(unavailable.read(principal, validScope), "unavailable");
   await assertCode(unavailable.save(principal, command), "unavailable");
+});
+
+test("menu publication rejects a product no order-item command can represent", async () => {
+  let saveCalled = false;
+  const service = serviceFor(["manager"], {
+    read: async () => populatedState,
+    save: async () => {
+      saveCalled = true;
+      return { state: populatedState, status: "saved" };
+    },
+  });
+  const template = command.modifierGroups[0];
+  if (template === undefined) throw new Error("TEST_GROUP_TEMPLATE_MISSING");
+  const impossibleCatalog = {
+    ...command,
+    modifierGroups: Array.from({ length: MAX_ORDER_ITEM_MODIFIER_GROUPS + 1 }, (_, index) => ({
+      ...template,
+      displayOrder: index,
+      groupId: `20000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      minimumQuantity: 1,
+      options: template.options.map((option, optionIndex) => ({
+        ...option,
+        optionId: `30000000-0000-4000-8000-${String(index * 10 + optionIndex + 1).padStart(12, "0")}`,
+      })),
+    })),
+  };
+
+  await assertCode(service.save(principal, impossibleCatalog), "request");
+  assert.equal(saveCalled, false);
 });
 
 test("menu PostgreSQL adapter binds scope and canonical catalog payload", async () => {

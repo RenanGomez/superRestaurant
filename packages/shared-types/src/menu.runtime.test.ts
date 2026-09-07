@@ -1,4 +1,5 @@
 import {
+  MAX_ORDER_ITEM_MODIFIER_GROUPS,
   MENU_CATALOG_SCHEMA_VERSION,
   parseMenuCatalogStateV1,
   parseMenuCatalogV1,
@@ -121,6 +122,41 @@ invalidBounds.modifierGroups = [{
   maximumQuantity: 2,
 }];
 expectRejected(invalidBounds, "invalid modifier bounds are rejected");
+
+const groupTemplate = (command().modifierGroups as readonly Record<string, unknown>[])[0];
+if (groupTemplate === undefined) throw new Error("TEST_GROUP_TEMPLATE_MISSING");
+const requiredGroups = Array.from({ length: MAX_ORDER_ITEM_MODIFIER_GROUPS + 1 }, (_, index) => ({
+  ...groupTemplate,
+  displayOrder: index,
+  groupId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+  minimumQuantity: 1,
+  options: [{
+    ...((groupTemplate.options as readonly Record<string, unknown>[])[0] ?? {}),
+    optionId: `10000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+  }],
+}));
+const tooManyRequiredGroups = command();
+tooManyRequiredGroups.modifierGroups = requiredGroups;
+expectRejected(
+  tooManyRequiredGroups,
+  "a product cannot require more modifier groups than one order-item command can carry",
+);
+
+const maximumRequiredGroups = command();
+maximumRequiredGroups.modifierGroups = requiredGroups.slice(0, MAX_ORDER_ITEM_MODIFIER_GROUPS);
+expectDefined(
+  parseSaveMenuCatalogCommandV1(maximumRequiredGroups),
+  "the exact order-item modifier-group limit remains publishable",
+);
+
+const extraInactiveGroup = command();
+extraInactiveGroup.modifierGroups = requiredGroups.map((group, index) => (
+  index === MAX_ORDER_ITEM_MODIFIER_GROUPS ? { ...group, active: false } : group
+));
+expectDefined(
+  parseSaveMenuCatalogCommandV1(extraInactiveGroup),
+  "inactive groups do not consume the order-item command limit",
+);
 
 const invalidTax = command();
 invalidTax.products = [{
