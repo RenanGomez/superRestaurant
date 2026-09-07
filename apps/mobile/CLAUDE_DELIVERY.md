@@ -5,10 +5,11 @@ revisión y **no integrada**: no hubo merge, rebase, push ni publicación de ram
 
 - **Unidad 2 — mesas y borrador de comanda (2026-09-05)**: sección A, abajo. Es
   el corte vigente y responde al mandato de la sección 0 del documento.
-  **Retrabajada cinco veces el 2026-09-06**: la sección **A.R5** describe la
-  quinta revisión del coordinador y es la más reciente; **A.R4** la cuarta,
-  **A.R3** la tercera, **A.R2** la segunda y **A.R1** la primera. Donde se
-  contradigan, prevalece la más reciente, y todas sobre las secciones A.1 a
+  **Integrada y conectada el 2026-09-06**: la sección **A.R6** describe la
+  integración autorizada por §0.R6 —contexto operativo, `deviceId` y la
+  secuencia Order v2— y es la más reciente. **A.R5** a **A.R1** describen las
+  cinco revisiones anteriores del corte que R6 incorporó por cherry-pick. Donde
+  se contradigan, prevalece la más reciente, y todas sobre las secciones A.1 a
   A.11, escritas para el corte `3061487a…`.
 - **Unidad 1 — fundación Expo/Auth/sucursal**: ya integrada en `main` y marcada
   DONE. Su registro histórico se conserva a partir de la sección B y no describe
@@ -17,6 +18,230 @@ revisión y **no integrada**: no hubo merge, rebase, push ni publicación de ram
 ---
 
 # A. Unidad 2 — mesas y borrador de comanda
+
+## A.R6 Integración autorizada (2026-09-06) — contexto, `deviceId` y Order v2
+
+Worktree y rama **nuevos**, como exige §0.R6: `claude/mobile-order-integration-20260906`
+en `.claude/worktrees/mobile-order-integration-r6`, creado desde el HEAD limpio
+del coordinador `cbde9b21562f0d91a4fd18306b922c8a921e24be`, que contiene
+`3ce02dfe1db6032da6ad392585925c311041c5ac` (comprobado con `git merge-base
+--is-ancestor`). El worktree R5 no se tocó. La P2 permanece **IN_PROGRESS**: la
+integración local no es evidencia remota y las migraciones siguen sin aplicar.
+
+### Incorporación del rango Mobile aceptado
+
+`git cherry-pick f1f8f27b4732810ee26c1bbab122016a7ede0dc1..0fcd61d22c07d32ae47b0780992182f800f1d60f`
+— los 18 commits ya revisados, en orden, **sin un solo conflicto**. Sin pull,
+merge, rebase, reset ni push.
+
+Comprobación de fidelidad: el árbol `apps/mobile` resultante es **idéntico** al
+del corte aceptado — `git rev-parse HEAD:apps/mobile` y
+`git rev-parse 0fcd61d:apps/mobile` dan ambos
+`86fbcc59156ad367bb7a6c4489d041d4807b693c` — y el diff contra `cbde9b2` no toca
+nada fuera de `apps/mobile/**`. HEAD tras la incorporación:
+`ee6c037f1d1ab3f8959c143101fdc37b9c165112`.
+
+### 1. Contexto operativo autoritativo
+
+`POST /api/v1/access/branch/context` sustituye la autorización local en el flujo
+operativo. Se valida **sólo** con `parseBranchOperationalContextV1`, y la
+respuesta debe además devolver el par exacto que se pidió.
+
+Al hacerlo se eliminó la copia local del contrato anterior: `authorizeBranch`,
+`AuthorizedMobileBranch`, `parseAuthorizedMobileBranch` y sus ayudantes (~90
+líneas) y la ruta `/api/v1/access/branch` salieron de la app. Eso **cierra
+SR-MOB-002**, que pedía exactamente no conservar esa copia.
+
+La zona que usa `CreateOrderCommandV2` viene de esa respuesta. Está ligada al
+operador, al token, al Restaurant/Branch y al intento: `contextRead` guarda
+`{attempt, operator, scope}`, `ownsContextRead` exige las tres cosas, y una
+renovación de token entrega la lectura en vuelo dejando `pendingScope` intacto,
+así que la pantalla vuelve a leer de inmediato en vez de devolver al operador a
+la lista de sucursales. Una respuesta tardía no puebla otro contexto. La
+revalidación de primer plano usa el mismo endpoint, así que un acceso confirmado
+también refresca la zona. **Cierra SR-MOB-008.**
+
+### 2. Identidad de dispositivo
+
+`expo install expo-secure-store expo-crypto` (`~57.0.3` y `~57.0.2`, las versiones
+que Expo 57.0.20 fija). El único efecto en `pnpm-lock.yaml` son esas dos
+dependencias; `app.json` gana el config plugin `expo-secure-store`, que el
+propio `expo install` añade.
+
+`src/device-identity.ts` es puro y no importa nada nativo: acuña **un** UUID por
+instalación bajo `superRestaurant.deviceId.v1`, lo valida al leer, comparte un
+único intento entre llamadas concurrentes —dos lecturas iniciales no pueden
+generar dos valores—, no lo registra nunca, y falla **explícitamente** con
+`unavailable`, `unreadable`, `corrupt` o `unwritable`. Un valor que esta app no
+escribió se trata como corrupto y **no se sobreescribe**: borrarlo eliminaría la
+única evidencia de que algo más tocó la clave. `src/expo-device-identity.ts` es
+el único archivo que importa los módulos nativos, con
+`WHEN_UNLOCKED_THIS_DEVICE_ONLY` para que la identidad no viaje a otro
+dispositivo por un respaldo de llavero. Ni correo, ni token, ni id de hardware,
+ni advertising id, ni una constante. **Cierra SR-MOB-009.**
+
+### 3. Plan inmutable por entrega
+
+`src/order-plan.ts` construye una vez, por entrega lógica: `orderId`, un
+`orderItemId` por línea, `eventId` e `idempotencyKey` **distintos por mutación**,
+`occurredAt` UTC canónico, `deviceId`, scope, `shiftId`, la moneda del catálogo y
+la zona del contexto. Se apoya en `buildOrderDraftHandoff`, así que la validación
+fail-closed contra el catálogo completo es la misma de R1–R5, en un solo sitio.
+Un generador que repita un valor, lance o devuelva algo que no sea UUID no
+produce plan.
+
+La pantalla guarda el plan con una clave `contexto|mesa|líneas`: un reintento del
+mismo borrador reutiliza el plan **byte por byte**, y editar el borrador, cambiar
+de mesa o de contexto, o un envío aceptado, lo descartan — la siguiente entrega
+acuña identidades nuevas. Nada de esto se guarda en SecureStore: ni tokens, ni el
+borrador. No se anuncia offline.
+
+### 4. La secuencia real
+
+`src/order-submission.ts` ejecuta exactamente `CreateOrderCommandV2 →
+AddOrderItemCommandV1[] → OpenOrderCommandV1`, valida cada respuesta con
+`parseOrderMutationSummaryV1` y **encadena `expectedVersion` desde la respuesta
+autoritativa anterior** — nunca desde una versión que el cliente calculó. Un
+fallo detiene la secuencia donde ocurrió: no se emite ninguna petición posterior
+y `open` es inalcanzable mientras una línea no esté confirmada. Conflicto,
+autorización, red y protocolo son estados distintos y recuperables.
+
+Un reintento **reanuda, no repite**. `create` es idempotente por
+`idempotencyKey`, pero `addItem` y `open` comprueban `expectedVersion` antes de
+la idempotencia (`readExact` en `apps/api/src/orders.ts`), así que un paso ya
+aplicado responde `409` y no `replayed`. Por eso, cuando `create` responde
+`replayed`, la secuencia lee `GET /api/v1/orders/active`, compara los
+`orderItemId` del plan con los que la orden ya tiene, y envía sólo las que
+faltan. Una línea cancelada cuenta como aplicada: su id está tomado. Queda
+anotado como **SR-MOB-013**, por si el servidor prefiriera comprobar la
+idempotencia antes de la versión y ahorrar esa lectura.
+
+Además el cliente **valida cada comando con el parser compartido antes de
+enviarlo**: un comando mal construido falla como defecto de cliente sin llegar a
+la red, y lo que va en el cuerpo es la forma normalizada que el servidor volverá
+a parsear.
+
+### 5. Órdenes activas de la mesa
+
+`GET /api/v1/orders/active` con `parseActiveTableOrderListV2`. Se trata como
+lista acotada: `src/ui/active-orders-panel.tsx` muestra **todas** las órdenes
+activas de la mesa, con sus líneas y modificadores snapshot y el precio unitario
+tal como llegó, y dice «Sin turno registrado» cuando `shiftId` es `null` —un
+valor histórico válido—. No se calcula ni se muestra subtotal, impuesto,
+descuento, propina ni total, y nada asume ocupación exclusiva por mesa: el panel
+del borrador separa visiblemente lo que ya es del servidor de lo que sigue siendo
+local y sin enviar. El recurso pertenece al scope, la mesa y el intento, igual
+que las otras lecturas, y se relee cuando un envío es aceptado.
+
+### 6. Garantías R1–R5 conservadas
+
+Salida segura y confirmaciones dentro de la pantalla, cero reenvío de líneas
+aceptadas, intentos ligados al contexto (`createOrderDeliveryTracker` sigue
+siendo el único que decide qué entrega está en vuelo), validación fail-closed
+contra el catálogo completo, una sola frontera de efecto (`OrderDeliveryPort`),
+el layout de una sola columna a 390, y las lecturas pertenecientes a
+operador/scope/intento de R4 y R5 —ahora también la de contexto y la de órdenes
+activas—. La matriz R4 completa se repitió y sigue verde.
+
+### Pruebas — 224 en `apps/mobile` (219 antes de las de reductor, 191 antes de R6)
+
+| Archivo | Qué demuestra |
+| --- | --- |
+| `src/device-identity.test.ts` (10) | almacén vacío, ya escrito, no disponible, ilegible, que rechaza al escribir y con dato corrupto; dos cargas concurrentes comparten un intento; un generador que lanza o devuelve algo que no es UUID; un intento fallido se puede reintentar y uno exitoso no se repite; la identidad no se registra y nada más se guarda |
+| `src/order-plan.test.ts` (7) | una identidad por mutación, todas distintas; cada comando construido desde el plan pasa el parser compartido; dos entregas no comparten identidades; un borrador que el catálogo ya no acepta no produce plan; identidad y contexto son obligatorios; un generador que repite o lanza no produce plan; el plan no pide, no nombra endpoints y no calcula dinero |
+| `src/order-submission.test.ts` (15) | la secuencia exacta con rutas, métodos, Bearer y cuerpos; `expectedVersion` encadenado desde cada respuesta; reintento exacto que reanuda y envía sólo lo que falta; reintento de una entrega ya completa que no manda ninguna mutación; fallo ambiguo en cada paso, sin peticiones posteriores; `open` inalcanzable con una línea sin confirmar; cada fallo con su propio significado; respuesta de otra orden u otra sucursal rechazada; réplica cuya orden ya no está activa; lectura de reanudación que falla; línea cancelada que cuenta como aplicada; mesa con varias órdenes activas; lanzamiento síncrono contenido; promesa colgada sin duplicar; ningún rechazo sin manejar |
+| `src/mobile-state.test.ts` (+5, 38) | el contexto confirma la sucursal y trae su zona; una respuesta de contexto exige operador, par pendiente e intento; una renovación de token entrega la lectura y conserva la selección; las órdenes activas pertenecen a scope, mesa e intento; turno, sucursal y acceso revocado las descartan, y un 401 de la lectura vigente revoca |
+| `src/mobile-client.test.ts` (+9, 26) | el contexto con su cuerpo y su par de vuelta; una zona inutilizable como fallo de protocolo; los tres comandos con ruta, método, Bearer y cuerpo exacto; un comando mal construido que no llega a la red; el conflicto con su propio estado; la lista activa de una mesa, vacía, múltiple y con `shiftId: null`; un `tableId` que no es UUID no llega a la red |
+| `src/order-intents.test.ts` (ajustado) | el handoff no lleva identidad de auditoría; el catálogo imposible ya no es publicable (lo refuta el parser compartido) y una línea con un grupo obligatorio sin seleccionar se rechaza en el límite que el contrato sí permite |
+
+El doble HTTP de `order-submission.test.ts` es deliberadamente estricto: una
+petición no guionizada **falla la prueba** en vez de absorberse, que es la forma
+de demostrar «ninguna llamada después del primer fallo».
+
+### Matriz visual R6 — Chrome real, clics de confianza
+
+Sin `force`, sin coordenadas contra elementos tapados y sin editar DOM ni CSS.
+El arnés simula los cinco endpoints nuevos con un **servidor de Order sintético**
+que conserva las dos reglas que dan forma al reintento: `create` idempotente por
+`idempotencyKey`, y `addItem`/`open` con `expectedVersion` exacto o `409`. Su
+control por defecto es «Envío: servidor sintético (secuencia real)», que hace que
+la pantalla construya su **puerto productivo** en lugar de recibir el doble.
+
+| Comprobación | 390×844 | 1024×768 |
+| --- | --- | --- |
+| acceso → contexto de sucursal → turno → mesas | ✅ | ✅ |
+| la mesa consulta sus órdenes activas y no inventa ocupación | ✅ «no tiene órdenes activas registradas» | ✅ |
+| producto + modificador requerido → línea de borrador | ✅ | ✅ |
+| `create` v2 → `add item` → `open` contra el servidor sintético | ✅ «La comanda se entregó» | ✅ |
+| el servidor sintético quedó con la orden abierta y su línea | ✅ `open v3 · 1 línea(s) · mesa 66666666` | ✅ |
+| en modo sintético el doble no recibe nada: la secuencia fue la real | ✅ «Plan ofrecido: ninguno todavía» | ✅ |
+| la orden creada aparece como activa, con su línea snapshot | ✅ 1 orden abierta, con su precio unitario del servidor | ✅ |
+| no se calcula ningún total en el dispositivo | ✅ sin total, subtotal, impuesto ni propina | ✅ |
+| un conflicto se reporta como conflicto y el borrador sigue ahí | ✅ | ✅ |
+| sin almacén seguro no hay `deviceId` y el envío falla explícitamente | ✅ el envío no reporta éxito y el borrador se conserva | ✅ |
+| `scrollWidth` vs `innerWidth` | 390 = 390 | 1024 = 1024 |
+| consola sin errores ni rechazos no manejados | ✅ | ✅ |
+
+Un hallazgo del arnés, corregido: el doble del almacén seguro se creaba una sola
+vez por montaje, así que cambiar el control a «no disponible» reusaba la
+identidad ya cacheada y el envío **seguía funcionando**. El caché es correcto
+—una identidad leída vale para toda la vida de la app—, así que lo que se corrigió
+es el arnés: cambiar lo que el almacén contiene ahora se ve como una instalación
+nueva. Antes del arreglo esa fila fallaba; después pasa en los dos viewports.
+
+### Compuertas ejecutadas con Node 24.19.0
+
+| Compuerta | Resultado |
+| --- | --- |
+| `pnpm --filter @super-restaurant/mobile run lint` | limpio |
+| `pnpm --filter @super-restaurant/mobile run typecheck` | limpio |
+| `pnpm --filter @super-restaurant/mobile run test` | 224/224 |
+| `pnpm exec expo install --check` | `Dependencies are up to date` |
+| `pnpm --filter @super-restaurant/mobile run build` (export Android) | 676 módulos, `index-f9efe33aeb037d89eaeff654c1ce5258.hbc` de 2 291 403 bytes |
+| `pnpm lint --force` | 8/8 tareas, sin caché |
+| `pnpm typecheck --force` | 11/11 tareas, sin caché |
+| `pnpm test --force` | 11/11 tareas, sin caché |
+| `pnpm build --force` | 8/8 tareas, sin caché |
+| `git diff --check` | sin hallazgos |
+| Fin de línea | LF en los 23 archivos modificados y los 8 nuevos (0 bytes CR) |
+| Aislamiento del bundle | **sin** `harnessControl`, `FIXTURE_`, `Ocultar controles`, `example.invalid`, `Ir a segundo plano`, `HARNESS_SESSION_UNREADABLE`, `sb_publishable_fixture`, `Respuesta lenta`, `XTS`, `servidor sint`, `Almacen seguro` ni `no-es-un-uuid`; **con** `Cambiar sucursal`, `Acceso sin confirmar`, `Enviar comanda`, `Volver a mesas`, `superRestaurant.deviceId.v1`, `abierta`, `parcialmente pagada`, `borrador en el servidor` y `entregado`. Las cadenas con acentos del panel nuevo se comprobaron como UTF-16 (`Órdenes activas de la mesa` presente), porque Hermes las almacena así |
+| CodeGraph final | índice local del worktree nuevo. `submitOrderPlan`, `buildOrderDeliveryPlan`, `listActiveTableOrders`, `ownsContextRead` y `ActiveOrdersPanel` se consumen sólo dentro de `apps/mobile`; sin referencias rotas ni huérfanos. CodeGraph señaló que `ownsContextRead` no tenía prueba propia y por eso se añadieron las cinco de reductor |
+
+### Archivos tocados en R6
+
+| Archivo | Cambio |
+| --- | --- |
+| `src/device-identity.ts` | nuevo: reglas puras del `deviceId` |
+| `src/expo-device-identity.ts` | nuevo: el único archivo que importa `expo-secure-store` y `expo-crypto` |
+| `src/order-plan.ts` | nuevo: el plan inmutable de una entrega |
+| `src/order-submission.ts` | nuevo: la secuencia, la reanudación y el puerto de entrega |
+| `src/ui/active-orders-panel.tsx` | nuevo: las órdenes activas de la mesa, snapshot y sin totales |
+| `src/mobile-client.ts` | contexto, tres mutaciones y lista activa; se retira la copia local del contrato de `/access/branch` |
+| `src/mobile-state.ts` | `MobileBranchContext`, `contextRead`, `ownsContextRead`, `contextReadTarget`, recurso `activeOrders` y su objetivo |
+| `src/ui/app.tsx` | lectura de contexto con identidad de intento; identidad de dispositivo; caché del plan; puerto productivo; lectura de órdenes activas |
+| `src/ui/order-draft-screen.tsx`, `src/ui/root.tsx` | reciben el panel y los puertos nuevos |
+| `src/order-delivery.ts`, `src/order-intents.ts`, `src/revalidation.ts` | el seam pasa del handoff al plan; la revalidación devuelve el contexto |
+| `harness/harness-server.ts`, `harness/harness-root.tsx` | servidor de Order sintético, doble de almacén seguro, generador de UUID y controles nuevos |
+| `src/test-fixtures.ts` | cuerpos del contexto, de la lista activa y del resumen de mutación |
+| `app.json`, `package.json`, `pnpm-lock.yaml`, `tsconfig.test.build.json` | las dos dependencias Expo y el registro de las pruebas nuevas |
+| las seis suites existentes | actualizadas al contrato nuevo |
+
+### Límites que siguen abiertos
+
+- **Nada se ejecutó contra PostgreSQL, Data API ni Supabase**, y no se aplicó
+  ninguna migración. Todo lo verificado corre contra fixtures sintéticas locales.
+- **Sin verificación en Android/iOS reales**: no hay emulador ni SDK nativo en
+  este entorno, así que `expo-secure-store` y `expo-crypto` sólo se ejercitaron a
+  través de sus puertos. El bundle Android se genera; no se ejecutó en hardware.
+- **SR-MOB-001** (persistencia de sesión), **SR-MOB-004** (origen de API para
+  dispositivos físicos), **SR-MOB-005** (entorno verificable real),
+  **SR-MOB-011** (importes calculados por el servidor) y **SR-MOB-013**
+  (idempotencia antes de la versión en `addItem`/`open`) siguen abiertas.
+- El módulo se llama `src/branch-read.ts` y también sirve lecturas que no son
+  branch-scoped —membresías y contexto—. Renombrarlo es cosmético y se dejó para
+  el corte coordinado.
+
+---
 
 ## A.R5 Quinta revisión del coordinador (2026-09-06) — pertenencia de las lecturas de membresías
 

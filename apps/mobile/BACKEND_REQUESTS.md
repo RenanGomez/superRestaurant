@@ -53,7 +53,16 @@ token se escribe en almacenamiento ni se registra en logs.
 
 ---
 
-## SR-MOB-002 — Contrato compartido para la respuesta de `POST /api/v1/access/branch`
+## SR-MOB-002 — Contrato compartido para la respuesta de `POST /api/v1/access/branch` (CERRADA EN R6)
+
+- **Cierre (2026-09-06, R6)**: resuelta de forma más completa de lo pedido. El
+  flujo operativo ya no llama `POST /api/v1/access/branch` sino
+  `POST /api/v1/access/branch/context`, cuya respuesta valida
+  `parseBranchOperationalContextV1` —un parser compartido y versionado— y que
+  además trae la zona IANA de la sucursal. Con eso **se eliminó el parser local**
+  (`parseAuthorizedMobileBranch` y sus ayudantes, ~90 líneas) junto con el
+  endpoint anterior de la lista de rutas autorizadas: mobile ya no conserva
+  ninguna copia de ese contrato.
 
 - **Capacidad requerida**: un parser versionado y compartido para la respuesta de
   revalidación de sucursal, equivalente a `parseBranchMembershipListV1`.
@@ -227,7 +236,14 @@ token se escribe en almacenamiento ni se registra en logs.
 - **Decisión requerida**: definir el contrato de lectura y su permiso RBAC antes
   de conectar las mutaciones de Order desde mobile.
 
-## SR-MOB-008 — Zona horaria operativa autoritativa de la sucursal
+## SR-MOB-008 — Zona horaria operativa autoritativa de la sucursal (CERRADA EN R6)
+
+- **Cierre (2026-09-06, R6)**: `POST /api/v1/access/branch/context` devuelve
+  `timeZone` y es la única fuente que mobile usa para el `timeZone` de
+  `CreateOrderCommandV2`. El dispositivo **no** lo deriva de su propio reloj ni
+  de `Intl` local: sólo comprueba que este runtime pueda resolver la zona que el
+  servidor envió, y si no puede, no construye el plan. La zona queda ligada al
+  mismo operador, token, Restaurant/Branch e intento que la leyó.
 
 - **Capacidad requerida**: que el servidor determine el `timeZone` que exige
   `CreateOrderCommandV1`, o que lo publique en un contrato que mobile pueda
@@ -248,7 +264,16 @@ token se escribe en almacenamiento ni se registra en logs.
 - **Decisión requerida**: derivarla en el servidor a partir de la sucursal, o
   añadirla al contrato de acceso/turno. Mobile no la asumirá.
 
-## SR-MOB-009 — `deviceId` estable para la identidad de auditoría
+## SR-MOB-009 — `deviceId` estable para la identidad de auditoría (CERRADA EN R6)
+
+- **Cierre (2026-09-06, R6)**: Emmanuel autorizó `expo-secure-store`. Mobile
+  acuña un UUID por instalación bajo la clave versionada
+  `superRestaurant.deviceId.v1`, lo valida al leer, serializa la concurrencia con
+  un único intento compartido —dos lecturas iniciales no pueden generar dos
+  valores—, nunca lo registra y **falla explícitamente** si el almacén no está
+  disponible, no se puede leer o guarda algo que esta app no escribió; un valor
+  corrupto no se sobreescribe. `eventId` e `idempotencyKey` los acuña el cliente,
+  uno por mutación, dentro de un plan inmutable por entrega (`src/order-plan.ts`).
 
 - **Capacidad requerida**: una política aprobada para obtener un `deviceId` UUID
   estable por instalación, y una decisión sobre quién acuña `eventId` e
@@ -312,7 +337,16 @@ token se escribe en almacenamiento ni se registra en logs.
 - **Decisión requerida**: publicar los importes junto con la lectura de
   SR-MOB-007, o como un contrato aparte. Mobile no los calculará.
 
-## SR-MOB-012 — Un catálogo puede publicar más grupos obligatorios de los que un comando admite
+## SR-MOB-012 — Un catálogo puede publicar más grupos obligatorios de los que un comando admite (CERRADA EN `main`)
+
+- **Cierre (2026-09-06, R6)**: la base del coordinador impuso la coherencia
+  donde correspondía: `parseMenuCatalogPayload` ahora rechaza un catálogo que
+  declare más de `MAX_ORDER_ITEM_MODIFIER_GROUPS` grupos obligatorios activos
+  para un mismo producto. El caso ya no puede publicarse, así que la fixture que
+  lo construía dejó de ser válida y la prueba de mobile pasó a comprobar que el
+  parser compartido lo refuse. La garantía local —una línea con un grupo
+  obligatorio sin seleccionar se rechaza, nunca se trunca— se conserva y se
+  prueba en el límite que el contrato sí permite (50 grupos).
 
 - **Capacidad requerida**: una regla acordada para el caso en que un producto
   publique más grupos de modificadores **obligatorios** (`minimumQuantity >= 1`)
@@ -341,3 +375,29 @@ token se escribe en almacenamiento ni se registra en logs.
   capaz de transportar más grupos— y si el cliente debe ocultar por completo los
   productos que no puede representar en lugar de explicarlo al enviar. Mobile no
   inventará una regla de dominio para esto.
+
+---
+
+## SR-MOB-013 — Reanudar una entrega ambigua exige leer la orden activa
+
+- **Capacidad requerida**: una forma de saber qué pasos de una secuencia
+  `create → add → open` ya se aplicaron, cuando la primera respuesta se perdió.
+- **Pantalla o caso de uso bloqueado**: ninguna; hay una solución que funciona,
+  pero cuesta una lectura extra y depende de un detalle de implementación del
+  servidor que conviene dejar por escrito.
+- **Contrato o endpoint buscado**: `POST /api/v1/orders` es idempotente por
+  `idempotencyKey` y responde `replayed: true`. `POST /api/v1/orders/items` y
+  `POST /api/v1/orders/open`, en cambio, comprueban `expectedVersion` **antes**
+  de mirar la idempotencia (`readExact` en `apps/api/src/orders.ts`), así que un
+  paso ya aplicado responde `409` en lugar de reproducirse.
+- **Estado en este entregable**: mobile reanuda en vez de repetir. Si `create`
+  responde `replayed`, lee `GET /api/v1/orders/active`, compara los
+  `orderItemId` del plan inmutable con los que la orden ya tiene y envía sólo
+  las líneas que faltan, encadenando `expectedVersion` desde la versión que el
+  servidor reporta. Una línea cancelada cuenta como aplicada: su id está tomado.
+- **Impacto si se difiere**: ninguno urgente. La lectura extra sólo ocurre en un
+  reintento, y es la misma que la pantalla de mesa ya hace.
+- **Decisión requerida**: si el servidor prefiriera que un `addItem`/`open`
+  repetido respondiera `replayed` en lugar de `409` —comprobando la idempotencia
+  antes de la versión—, mobile podría reintentar sin esa lectura. Es una decisión
+  del lado servidor; mobile no la anticipa.
