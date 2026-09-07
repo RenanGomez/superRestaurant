@@ -1,5 +1,6 @@
 import {
   BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
+  BRANCH_OPERATIONAL_CONTEXT_SCHEMA_VERSION,
   DINING_ZONE_SCHEMA_VERSION,
   DINING_LAYOUT_SCHEMA_VERSION,
   MEMBERSHIP_ROLE_CODES,
@@ -10,6 +11,7 @@ import {
   parseDiningTableV1,
   parseUpdateDiningTableLayoutCommandV1,
   parseBranchAuthorizationV1,
+  parseBranchOperationalContextV1,
   parseBranchMembershipListV1,
   parseBranchScope,
   parseRbacPermissionCode,
@@ -48,6 +50,7 @@ function expectBranchScope(input: unknown, message: string): void {
 }
 
 expectEqual(SCOPE_SCHEMA_VERSION, 1, "scope schema version is explicit");
+expectEqual(BRANCH_OPERATIONAL_CONTEXT_SCHEMA_VERSION, 1, "branch operational context schema version is explicit");
 expectEqual(RBAC_MATRIX_VERSION, 1, "RBAC matrix version is explicit");
 expectEqual(DINING_ZONE_SCHEMA_VERSION, 1, "dining-zone schema version is explicit");
 expectEqual(DINING_LAYOUT_SCHEMA_VERSION, 1, "dining-layout schema version is explicit");
@@ -181,6 +184,50 @@ expect(!branchAuthorizationAccessorInvoked, "branch authorization does not invok
 expectUndefined(
   parseBranchAuthorizationV1(new Proxy({ branchId, restaurantId, roles: ["manager"] }, { ownKeys: () => { throw new Error("hostile"); } })),
   "branch authorization rejects hostile proxies",
+);
+
+const branchOperationalContext = parseBranchOperationalContextV1({
+  roles: ["manager", "waiter"],
+  schemaVersion: BRANCH_OPERATIONAL_CONTEXT_SCHEMA_VERSION,
+  scope: { branchId: branchId.toUpperCase(), restaurantId: restaurantId.toUpperCase() },
+  timeZone: "America/Hermosillo",
+});
+expectDefined(branchOperationalContext, "branch operational context parses");
+expectEqual(branchOperationalContext.scope.branchId, branchId, "operational context normalizes branch UUID");
+expectEqual(branchOperationalContext.scope.restaurantId, restaurantId, "operational context normalizes restaurant UUID");
+expect(Object.isFrozen(branchOperationalContext), "branch operational context is frozen");
+expect(Object.isFrozen(branchOperationalContext.scope), "branch operational context scope is frozen");
+expect(Object.isFrozen(branchOperationalContext.roles), "branch operational context roles are frozen");
+
+for (const invalid of [
+  { ...branchOperationalContext, schemaVersion: 2 },
+  { ...branchOperationalContext, roles: [] },
+  { ...branchOperationalContext, roles: ["manager", "manager"] },
+  { ...branchOperationalContext, roles: ["invented"] },
+  { ...branchOperationalContext, timeZone: "Not/A_Zone" },
+  { ...branchOperationalContext, timeZone: " America/Hermosillo" },
+  { ...branchOperationalContext, extra: true },
+  Object.create(branchOperationalContext),
+]) expectUndefined(parseBranchOperationalContextV1(invalid), "branch operational context rejects malformed contracts");
+
+let branchOperationalTimeZoneAccessorInvoked = false;
+const branchOperationalContextAccessor = {
+  roles: ["manager"],
+  schemaVersion: 1,
+  scope: { branchId, restaurantId },
+};
+Object.defineProperty(branchOperationalContextAccessor, "timeZone", {
+  enumerable: true,
+  get: () => {
+    branchOperationalTimeZoneAccessorInvoked = true;
+    return "America/Hermosillo";
+  },
+});
+expectUndefined(parseBranchOperationalContextV1(branchOperationalContextAccessor), "operational context rejects accessors");
+expect(!branchOperationalTimeZoneAccessorInvoked, "operational context does not invoke accessors");
+expectUndefined(
+  parseBranchOperationalContextV1(new Proxy(branchOperationalContext, { ownKeys: () => { throw new Error("hostile"); } })),
+  "operational context rejects hostile proxies",
 );
 
 const zoneCommand = parseCreateDiningZoneCommandV1({

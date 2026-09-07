@@ -14,6 +14,7 @@ declare const branchIdBrand: unique symbol;
  */
 export const SCOPE_SCHEMA_VERSION = 1 as const;
 export const BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION = 1 as const;
+export const BRANCH_OPERATIONAL_CONTEXT_SCHEMA_VERSION = 1 as const;
 export const RBAC_MATRIX_VERSION = 1 as const;
 export const DINING_ZONE_SCHEMA_VERSION = 1 as const;
 export const DINING_LAYOUT_SCHEMA_VERSION = 1 as const;
@@ -101,6 +102,14 @@ export interface BranchAuthorizationV1 {
   readonly branchId: BranchId;
   readonly restaurantId: RestaurantId;
   readonly roles: readonly MembershipRoleCode[];
+}
+
+/** Authoritative operating context returned after selecting an exact branch. */
+export interface BranchOperationalContextV1 {
+  readonly roles: readonly MembershipRoleCode[];
+  readonly schemaVersion: typeof BRANCH_OPERATIONAL_CONTEXT_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly timeZone: string;
 }
 
 export interface CreateDiningZoneCommandV1 {
@@ -576,6 +585,36 @@ export function parseBranchAuthorizationV1(value: unknown): BranchAuthorizationV
   });
 }
 
+/** Parses the versioned branch context used by operational clients. */
+export function parseBranchOperationalContextV1(value: unknown): BranchOperationalContextV1 | undefined {
+  const record = parseExactPlainRecord(value, ["roles", "schemaVersion", "scope", "timeZone"]);
+  if (record === undefined || ownValue(record, "schemaVersion") !== BRANCH_OPERATIONAL_CONTEXT_SCHEMA_VERSION) {
+    return undefined;
+  }
+
+  const scope = parseNormalizedUuidBranchScope(ownValue(record, "scope"));
+  const rawRoles = parseExactArray(ownValue(record, "roles"), MEMBERSHIP_ROLE_CODES.length);
+  const timeZone = parseTimeZone(ownValue(record, "timeZone"));
+  if (scope === undefined || rawRoles === undefined || rawRoles.length === 0 || timeZone === undefined) return undefined;
+
+  const roles: MembershipRoleCode[] = [];
+  for (const rawRole of rawRoles) {
+    if (
+      typeof rawRole !== "string"
+      || !(MEMBERSHIP_ROLE_CODES as readonly string[]).includes(rawRole)
+      || roles.includes(rawRole as MembershipRoleCode)
+    ) return undefined;
+    roles.push(rawRole as MembershipRoleCode);
+  }
+
+  return Object.freeze({
+    roles: Object.freeze(roles),
+    schemaVersion: BRANCH_OPERATIONAL_CONTEXT_SCHEMA_VERSION,
+    scope,
+    timeZone,
+  });
+}
+
 type PlainRecord = Record<string, unknown>;
 
 function parseExactPlainRecord(value: unknown, expectedKeys: readonly string[]): PlainRecord | undefined {
@@ -674,11 +713,37 @@ function parseDisplayName(value: unknown, maximumLength = 120): string | undefin
     : undefined;
 }
 
+function parseTimeZone(value: unknown): string | undefined {
+  if (
+    typeof value !== "string"
+    || value !== value.trim()
+    || value.length < 1
+    || value.length > 100
+    || /[\u0000-\u001f\u007f]/u.test(value)
+  ) return undefined;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value }).format();
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseUuidBranchScope(value: unknown): BranchScope | undefined {
   const scope = parseBranchScope(value);
   return scope !== undefined && uuidPattern.test(scope.restaurantId) && uuidPattern.test(scope.branchId)
     ? scope
     : undefined;
+}
+
+function parseNormalizedUuidBranchScope(value: unknown): BranchScope | undefined {
+  const scope = parseBranchScope(value);
+  if (scope === undefined) return undefined;
+  const restaurantId = parseUuid(scope.restaurantId);
+  const branchId = parseUuid(scope.branchId);
+  return restaurantId === undefined || branchId === undefined
+    ? undefined
+    : Object.freeze({ branchId: branchId as BranchId, restaurantId: restaurantId as RestaurantId });
 }
 
 function parseUuid(value: unknown): string | undefined {

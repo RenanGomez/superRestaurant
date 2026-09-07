@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { Test } from "@nestjs/testing";
-import { parseBranchAuthorizationV1 } from "@super-restaurant/shared-types";
+import { parseBranchAuthorizationV1, parseBranchOperationalContextV1 } from "@super-restaurant/shared-types";
 
 import { AppModule } from "./app.module.js";
 import { AUTH_PRINCIPAL_VERIFIER } from "./auth/authentication.js";
@@ -29,6 +29,16 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
       if (sql.includes("list_active_branch_memberships")) {
         if (directoryFailure) throw new Error("database unavailable");
         return { rows: directoryRows };
+      }
+      if (sql.includes("read_branch_operational_context")) {
+        return {
+          rows: [{ result: {
+            roles: membershipRoles,
+            schemaVersion: 1,
+            scope: { branchId: parameters[2], restaurantId: parameters[1] },
+            timeZone: "America/Hermosillo",
+          } }],
+        };
       }
       if (sql.includes("create_dining_zone")) {
         diningZoneWrites += 1;
@@ -192,6 +202,21 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
     assert.equal(authorizedResponse.headers.get("cache-control"), "private, no-store");
     assert.deepEqual(authorizedBody, { branchId, restaurantId, roles: ["manager"] });
     assert.deepEqual(parseBranchAuthorizationV1(authorizedBody), { branchId, restaurantId, roles: ["manager"] });
+
+    const contextResponse = await fetch(`${url}/api/v1/access/branch/context`, {
+      body: JSON.stringify({ restaurantId, branchId }),
+      headers: { authorization: "Bearer valid-smoke-access-token", "content-type": "application/json" },
+      method: "POST",
+    });
+    const contextBody = await contextResponse.json();
+    assert.equal(contextResponse.status, 200, JSON.stringify({ contextBody, databaseCalls }));
+    assert.equal(contextResponse.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(parseBranchOperationalContextV1(contextBody), {
+      roles: ["manager"],
+      schemaVersion: 1,
+      scope: { branchId, restaurantId },
+      timeZone: "America/Hermosillo",
+    });
 
     const emptyMenuResponse = await fetch(`${url}/api/v1/catalog/menu?restaurantId=${restaurantId}&branchId=${branchId}`, {
       headers: { authorization: "Bearer valid-smoke-access-token" },

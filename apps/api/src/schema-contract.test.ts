@@ -45,6 +45,14 @@ const menuOrderabilityAudit = readFileSync(
   new URL("../../../supabase/tests/menu_orderability_catalog.sql", import.meta.url),
   "utf8",
 ).toLowerCase();
+const restaurantTimeZoneMigration = readFileSync(
+  new URL("../../../supabase/migrations/20260906000200_add_authoritative_restaurant_time_zone.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
+const restaurantTimeZoneAudit = readFileSync(
+  new URL("../../../supabase/tests/restaurant_time_zone_catalog.sql", import.meta.url),
+  "utf8",
+).toLowerCase();
 const ordersRealtimeMigration = readFileSync(
   new URL("../../../supabase/migrations/20260902000200_create_orders_realtime.sql", import.meta.url),
   "utf8",
@@ -585,6 +593,36 @@ test("menu orderability patch enforces the order-item command boundary without a
   assert.match(apiPackage, /run-menu-orderability-schema-verification\.js/u);
   assert.doesNotThrow(() => extractMigrationBody(menuOrderabilityMigration));
   assert.doesNotThrow(() => validateCatalogAuditSql(menuOrderabilityAudit));
+});
+
+test("restaurant time zone is authoritative, private and immutable on new order snapshots", () => {
+  assert.match(restaurantTimeZoneMigration, /^begin;/u);
+  assert.match(restaurantTimeZoneMigration, /alter table app\.restaurants add column time_zone text/u);
+  assert.match(restaurantTimeZoneMigration, /update app\.restaurants set time_zone = 'america\/hermosillo'/u);
+  assert.match(restaurantTimeZoneMigration, /alter column time_zone set not null/u);
+  assert.doesNotMatch(restaurantTimeZoneMigration, /set default/u);
+  assert.match(restaurantTimeZoneMigration, /pg_catalog\.pg_timezone_names/u);
+  assert.match(restaurantTimeZoneMigration, /create trigger restaurants_time_zone_iana/u);
+  assert.match(restaurantTimeZoneMigration, /create trigger orders_restaurant_time_zone\s+before insert on app\.orders/u);
+  assert.match(restaurantTimeZoneMigration, /new\.aggregate ->> 'timezone' is distinct from authoritative_time_zone/u);
+  assert.match(restaurantTimeZoneMigration, /create function app_private\.read_branch_operational_context/u);
+  assert.match(restaurantTimeZoneMigration, /membership\.user_id = p_actor_id/u);
+  assert.match(restaurantTimeZoneMigration, /membership\.restaurant_id = p_restaurant_id/u);
+  assert.match(restaurantTimeZoneMigration, /membership\.branch_id = p_branch_id/u);
+  assert.match(restaurantTimeZoneMigration, /grant execute on function app_private\.read_branch_operational_context\(uuid, uuid, uuid\) to app_api/u);
+  assert.doesNotMatch(restaurantTimeZoneMigration, /grant execute[\s\S]*to (anon|authenticated|service_role)/u);
+  assert.match(restaurantTimeZoneMigration, /commit;\s*$/u);
+  assert.match(restaurantTimeZoneAudit, /restaurant_time_zone_column_rejected/u);
+  assert.match(restaurantTimeZoneAudit, /order_time_zone_guard_rejected/u);
+  assert.match(restaurantTimeZoneAudit, /branch_operational_context_function_rejected/u);
+  assert.match(restaurantTimeZoneAudit, /restaurant_time_zone_app_api_grants_rejected/u);
+  assert.match(restaurantTimeZoneAudit, /restaurant_time_zone_rls_rejected/u);
+  assert.match(restaurantTimeZoneAudit, /23::integer as secured_tables/u);
+  assert.match(restaurantTimeZoneAudit, /25::integer as security_definer_functions/u);
+  assert.match(apiPackage, /"verify:restaurant-time-zone-schema:rollback"/u);
+  assert.match(apiPackage, /run-restaurant-time-zone-schema-verification\.js/u);
+  assert.doesNotThrow(() => extractMigrationBody(restaurantTimeZoneMigration));
+  assert.doesNotThrow(() => validateCatalogAuditSql(restaurantTimeZoneAudit));
 });
 
 test("post-menu audit pins the exact global catalog and app_api surface", () => {

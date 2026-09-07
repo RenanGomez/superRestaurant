@@ -16,6 +16,11 @@ import {
   PostgresMembershipDirectory,
 } from "./auth/membership-directory.js";
 import { BranchAccessController } from "./access.controller.js";
+import { BranchOperationalContextController } from "./branch-operational-context.controller.js";
+import {
+  BRANCH_OPERATIONAL_CONTEXT_PORT,
+  PostgresBranchOperationalContext,
+} from "./branch-operational-context.js";
 import { AccessMembershipsController } from "./access-memberships.controller.js";
 import { readApiConfig } from "./config.js";
 import { DATABASE_CLIENT, PostgresDatabaseClient, readDatabaseConfig } from "./database.js";
@@ -63,6 +68,7 @@ import {
     HealthController,
     SessionController,
     BranchAccessController,
+    BranchOperationalContextController,
     AccessMembershipsController,
     DiningZonesController,
     DiningTablesController,
@@ -92,6 +98,8 @@ import {
       useExisting: PostgresMembershipDirectory,
     },
     MembershipAuthorizationService,
+    PostgresBranchOperationalContext,
+    { provide: BRANCH_OPERATIONAL_CONTEXT_PORT, useExisting: PostgresBranchOperationalContext },
     PostgresDiningZoneCreator,
     {
       provide: DINING_ZONE_CREATOR,

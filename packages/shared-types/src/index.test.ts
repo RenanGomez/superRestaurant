@@ -1,5 +1,6 @@
 import {
   BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
+  BRANCH_OPERATIONAL_CONTEXT_SCHEMA_VERSION,
   DINING_ZONE_SCHEMA_VERSION,
   DINING_LAYOUT_SCHEMA_VERSION,
   MENU_CATALOG_SCHEMA_VERSION,
@@ -15,6 +16,7 @@ import {
   parseUpdateDiningTableLayoutCommandV1,
   parseRbacPermissionCode,
   parseBranchAuthorizationV1,
+  parseBranchOperationalContextV1,
   parseBranchMembershipListV1,
   parseBranchScope,
   parseRestaurantScope,
@@ -22,6 +24,7 @@ import {
   RBAC_PERMISSION_CODES,
   type BranchId,
   type BranchAuthorizationV1,
+  type BranchOperationalContextV1,
   type BranchMembershipListV1,
   type BranchScope,
   type CreateDiningZoneCommandV1,
@@ -74,6 +77,17 @@ const parsedBranchAuthorization: BranchAuthorizationV1 | undefined = parseBranch
   roles: ["manager"],
 });
 void parsedBranchAuthorization;
+
+const parsedBranchOperationalContext: BranchOperationalContextV1 | undefined = parseBranchOperationalContextV1({
+  roles: ["manager"],
+  schemaVersion: BRANCH_OPERATIONAL_CONTEXT_SCHEMA_VERSION,
+  scope: {
+    branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955",
+    restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000",
+  },
+  timeZone: "America/Hermosillo",
+});
+void parsedBranchOperationalContext;
 
 const parsedZoneCommand: CreateDiningZoneCommandV1 | undefined = parseCreateDiningZoneCommandV1({
   schemaVersion: DINING_ZONE_SCHEMA_VERSION,
