@@ -10,7 +10,7 @@
     "ios": "expo start --ios",
     "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs index.ts src harness",
     "start": "expo start",
-    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node --input-type=module --eval \"import { writeFileSync } from 'node:fs'; writeFileSync('.test-dist/package.json', '{\\\"type\\\":\\\"module\\\"}');\" && node .test-dist/config.test.js && node .test-dist/session.test.js && node .test-dist/supabase-auth.test.js && node .test-dist/lifecycle.test.js && node .test-dist/revalidation.test.js && node .test-dist/sign-out.test.js && node .test-dist/auth-gate.test.js && node .test-dist/bundle-isolation.test.js && node .test-dist/money.test.js && node .test-dist/mobile-client.test.js && node .test-dist/mobile-state.test.js && node .test-dist/branch-read.test.js && node .test-dist/order-draft.test.js && node .test-dist/order-draft-layout.test.js && node .test-dist/order-intents.test.js && node .test-dist/order-delivery.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
+    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node --input-type=module --eval \"import { writeFileSync } from 'node:fs'; writeFileSync('.test-dist/package.json', '{\\\"type\\\":\\\"module\\\"}');\" && node .test-dist/config.test.js && node .test-dist/session.test.js && node .test-dist/supabase-auth.test.js && node .test-dist/lifecycle.test.js && node .test-dist/revalidation.test.js && node .test-dist/sign-out.test.js && node .test-dist/auth-gate.test.js && node .test-dist/bundle-isolation.test.js && node .test-dist/money.test.js && node .test-dist/mobile-client.test.js && node .test-dist/mobile-state.test.js && node .test-dist/branch-read.test.js && node .test-dist/device-identity.test.js && node .test-dist/order-plan.test.js && node .test-dist/order-submission.test.js && node .test-dist/order-draft.test.js && node .test-dist/order-draft-layout.test.js && node .test-dist/order-intents.test.js && node .test-dist/order-delivery.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "web": "expo start --web"
   },
@@ -18,6 +18,8 @@
     "@super-restaurant/shared-types": "workspace:*",
     "@supabase/supabase-js": "2.112.4",
     "expo": "57.0.20",
+    "expo-crypto": "~57.0.2",
+    "expo-secure-store": "~57.0.3",
     "expo-status-bar": "57.0.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
