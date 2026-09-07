@@ -1,5 +1,5 @@
 import { Body, Controller, ForbiddenException, Header, HttpCode, Inject, Post, Req } from "@nestjs/common";
-import { parseBranchScope } from "@super-restaurant/shared-types";
+import { parseBranchScope, type BranchAuthorizationV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
@@ -13,11 +13,7 @@ export class BranchAccessController {
   @Post()
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
-  public async selectBranch(@Req() request: unknown, @Body() body: unknown): Promise<Readonly<{
-    branchId: string;
-    restaurantId: string;
-    roles: readonly string[];
-  }>> {
+  public async selectBranch(@Req() request: unknown, @Body() body: unknown): Promise<BranchAuthorizationV1> {
     const principal = getAuthenticatedPrincipal(request);
     const scope = parseUuidBranchScope(body);
     if (scope === undefined) throw scopeRejected();

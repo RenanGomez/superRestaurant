@@ -9,6 +9,7 @@ import {
   parseDiningLayoutV1,
   parseDiningTableV1,
   parseUpdateDiningTableLayoutCommandV1,
+  parseBranchAuthorizationV1,
   parseBranchMembershipListV1,
   parseBranchScope,
   parseRbacPermissionCode,
@@ -142,6 +143,44 @@ expectUndefined(parseBranchMembershipListV1(hiddenMemberships), "membership pars
 expectUndefined(
   parseBranchMembershipListV1(new Proxy({ schemaVersion: 1, memberships: [] }, { ownKeys: () => { throw new Error("hostile"); } })),
   "membership parser rejects hostile proxies",
+);
+
+const branchAuthorization = parseBranchAuthorizationV1({
+  branchId: branchId.toUpperCase(),
+  restaurantId: restaurantId.toUpperCase(),
+  roles: ["waiter", "manager"],
+});
+expectDefined(branchAuthorization, "branch authorization parses");
+expectEqual(branchAuthorization.branchId, branchId, "branch authorization normalizes branch UUID");
+expectEqual(branchAuthorization.restaurantId, restaurantId, "branch authorization normalizes restaurant UUID");
+expect(Object.isFrozen(branchAuthorization), "branch authorization is frozen");
+expect(Object.isFrozen(branchAuthorization.roles), "branch authorization roles are frozen");
+
+for (const invalid of [
+  { branchId, restaurantId, roles: [] },
+  { branchId, restaurantId, roles: ["manager", "manager"] },
+  { branchId, restaurantId, roles: ["invented"] },
+  { branchId, restaurantId, roles: Array(1) },
+  { branchId: "not-a-uuid", restaurantId, roles: ["manager"] },
+  { branchId, restaurantId, roles: ["manager"], extra: true },
+  Object.create({ branchId, restaurantId, roles: ["manager"] }),
+]) {
+  expectUndefined(parseBranchAuthorizationV1(invalid), "branch authorization rejects malformed contracts");
+}
+let branchAuthorizationAccessorInvoked = false;
+const branchAuthorizationAccessor = { branchId, restaurantId };
+Object.defineProperty(branchAuthorizationAccessor, "roles", {
+  enumerable: true,
+  get: () => {
+    branchAuthorizationAccessorInvoked = true;
+    return ["manager"];
+  },
+});
+expectUndefined(parseBranchAuthorizationV1(branchAuthorizationAccessor), "branch authorization rejects accessors");
+expect(!branchAuthorizationAccessorInvoked, "branch authorization does not invoke accessors");
+expectUndefined(
+  parseBranchAuthorizationV1(new Proxy({ branchId, restaurantId, roles: ["manager"] }, { ownKeys: () => { throw new Error("hostile"); } })),
+  "branch authorization rejects hostile proxies",
 );
 
 const zoneCommand = parseCreateDiningZoneCommandV1({

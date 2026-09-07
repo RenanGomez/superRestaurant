@@ -96,6 +96,13 @@ export interface BranchMembershipListV1 {
   readonly schemaVersion: typeof BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION;
 }
 
+/** Exact v1 response returned after Nest authorizes one branch selection. */
+export interface BranchAuthorizationV1 {
+  readonly branchId: BranchId;
+  readonly restaurantId: RestaurantId;
+  readonly roles: readonly MembershipRoleCode[];
+}
+
 export interface CreateDiningZoneCommandV1 {
   readonly deviceId: string;
   readonly eventId: string;
@@ -537,6 +544,35 @@ export function parseBranchMembershipListV1(value: unknown): BranchMembershipLis
   return Object.freeze({
     memberships: Object.freeze(memberships),
     schemaVersion: BRANCH_MEMBERSHIP_LIST_SCHEMA_VERSION,
+  });
+}
+
+/** Parses the existing, unversioned-on-wire v1 branch authorization response. */
+export function parseBranchAuthorizationV1(value: unknown): BranchAuthorizationV1 | undefined {
+  const record = parseExactPlainRecord(value, ["branchId", "restaurantId", "roles"]);
+  if (record === undefined) return undefined;
+
+  const branchId = parseUuid(ownValue(record, "branchId"));
+  const restaurantId = parseUuid(ownValue(record, "restaurantId"));
+  const rawRoles = parseExactArray(ownValue(record, "roles"), MEMBERSHIP_ROLE_CODES.length);
+  if (branchId === undefined || restaurantId === undefined || rawRoles === undefined || rawRoles.length === 0) {
+    return undefined;
+  }
+
+  const roles: MembershipRoleCode[] = [];
+  for (const rawRole of rawRoles) {
+    if (
+      typeof rawRole !== "string"
+      || !(MEMBERSHIP_ROLE_CODES as readonly string[]).includes(rawRole)
+      || roles.includes(rawRole as MembershipRoleCode)
+    ) return undefined;
+    roles.push(rawRole as MembershipRoleCode);
+  }
+
+  return Object.freeze({
+    branchId: branchId as BranchId,
+    restaurantId: restaurantId as RestaurantId,
+    roles: Object.freeze(roles),
   });
 }
 

@@ -14,12 +14,14 @@ import {
   parseSaveMenuCatalogCommandV1,
   parseUpdateDiningTableLayoutCommandV1,
   parseRbacPermissionCode,
+  parseBranchAuthorizationV1,
   parseBranchMembershipListV1,
   parseBranchScope,
   parseRestaurantScope,
   RBAC_MATRIX_VERSION,
   RBAC_PERMISSION_CODES,
   type BranchId,
+  type BranchAuthorizationV1,
   type BranchMembershipListV1,
   type BranchScope,
   type CreateDiningZoneCommandV1,
@@ -65,6 +67,13 @@ void parsedMemberships;
 void knownRole;
 void parsedPermission;
 void RBAC_MATRIX_VERSION;
+
+const parsedBranchAuthorization: BranchAuthorizationV1 | undefined = parseBranchAuthorizationV1({
+  branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955",
+  restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000",
+  roles: ["manager"],
+});
+void parsedBranchAuthorization;
 
 const parsedZoneCommand: CreateDiningZoneCommandV1 | undefined = parseCreateDiningZoneCommandV1({
   schemaVersion: DINING_ZONE_SCHEMA_VERSION,

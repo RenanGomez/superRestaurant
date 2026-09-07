@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { Test } from "@nestjs/testing";
+import { parseBranchAuthorizationV1 } from "@super-restaurant/shared-types";
 
 import { AppModule } from "./app.module.js";
 import { AUTH_PRINCIPAL_VERIFIER } from "./auth/authentication.js";
@@ -190,6 +191,7 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
     assert.equal(authorizedResponse.status, 200, JSON.stringify({ authorizedBody, databaseCalls }));
     assert.equal(authorizedResponse.headers.get("cache-control"), "private, no-store");
     assert.deepEqual(authorizedBody, { branchId, restaurantId, roles: ["manager"] });
+    assert.deepEqual(parseBranchAuthorizationV1(authorizedBody), { branchId, restaurantId, roles: ["manager"] });
 
     const emptyMenuResponse = await fetch(`${url}/api/v1/catalog/menu?restaurantId=${restaurantId}&branchId=${branchId}`, {
       headers: { authorization: "Bearer valid-smoke-access-token" },
