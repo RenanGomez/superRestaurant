@@ -1,5 +1,24 @@
 # Workstream frontend para Claude — fundación móvil aislada
 
+## 0.R7 Revisión del coordinador 2026-09-07 — pertenencia de órdenes activas a la mesa
+
+La entrega R6 `0454f18470831ab3dd505f4dd0c98f69ae79adf7` no queda aceptada todavía. El flujo de mutación, la identidad de dispositivo y los contratos pasan sus pruebas, pero `activeOrders` pertenece solo al scope y al intento: la mesa seleccionada vive fuera de `MobileState`. Después de cargar la mesa A, salir y seleccionar B, el recurso continúa `ready` con A, `activeOrdersReadTarget(state, B)` no inicia otra lectura y la pantalla de B muestra el snapshot de A. Si la lectura de A estaba en vuelo, su success tardío también se acepta y bloquea B. La prueba R6 existente solo rechaza una respuesta cuyo `list.tableId` contradice el `tableId` del mismo evento; no cubre que la selección haya cambiado desde que comenzó el intento.
+
+Continuar desde el HEAD R6 limpio en el mismo worktree de integración. No incorporar historia, abrir otra implementación de lecturas ni modificar contratos o backend. Extender el patrón único de ownership de R4/R5 para que el recurso de órdenes activas esté ligado simultáneamente a Restaurant/Branch, turno, mesa e intento; la selección vigente debe formar parte de la autoridad que decide tanto el inicio como la aplicación de success, failure y 401. Cambiar o abandonar mesa debe invalidar sincrónicamente el intento anterior, permitir de inmediato la lectura de la mesa nueva aunque la anterior cuelgue y evitar que un resultado tardío cambie datos, estado de error o sesión. No basta con limpiar el valor renderizado si la respuesta anterior todavía puede repoblarlo.
+
+Criterios exactos de aceptación R7:
+
+1. A cargada → volver a mesas → seleccionar B: B inicia su propia lectura y nunca renderiza la lista de A.
+2. A cargando → seleccionar B → success tardío de A: se ignora; B puede cargar y queda como único snapshot visible.
+3. Failure o 401 tardío de A después de seleccionar B: no altera el recurso de B, no cierra la sesión y no emite un aviso ajeno.
+4. Una promesa colgada de A no bloquea B; volver a seleccionar la misma mesa no duplica una lectura vigente.
+5. Lista vacía de B permanece una respuesta `ready` explícita y una respuesta cuyo scope, turno, mesa o intento no coincide falla cerrada.
+6. Añadir pruebas deterministas con promesas controladas para los cinco casos anteriores y una regresión pura del reductor para `ready(A) → seleccionar B` y `loading(A) → seleccionar B`.
+7. Repetir la matriz con clics de confianza y `Respuesta lenta` en 390×844 y 1024×768, usando respuestas distinguibles por mesa; comprobar ausencia de datos de A en B, consola limpia y ninguna mutación duplicada.
+8. Ejecutar con Node 24.19.0 lint, typecheck, pruebas, `expo install --check`, export Android, las cuatro compuertas globales `--force`, `git diff --check` y aislamiento del bundle. Reindexar CodeGraph en el worktree exacto: no reportar como local un índice que advierte pertenecer a otro working tree.
+
+El alcance sigue limitado a `apps/mobile/**`; `pnpm-lock.yaml` solo puede cambiar si una dependencia declarada de Mobile cambia justificadamente. P2 permanece `IN_PROGRESS` y ninguna migración puede aplicarse persistentemente.
+
 ## 0.R6 Integración autorizada 2026-09-06 — contexto, identidad de dispositivo y Order v2
 
 Emmanuel autorizó la decisión faltante: cada Restaurant tiene una zona IANA autoritativa en PostgreSQL y Mobile conserva un `deviceId` estable mediante `expo-secure-store`; los totales permanecen fuera de este corte. El mínimo server-side es `3ce02dfe1db6032da6ad392585925c311041c5ac`. El corte Mobile R5 aceptado está limpio en `0fcd61d22c07d32ae47b0780992182f800f1d60f` y parte del ancestro común `f1f8f27b4732810ee26c1bbab122016a7ede0dc1`.
