@@ -1,5 +1,16 @@
 # HANDOFF
 
+## Continuación 2026-09-06 — contrato compartido de selección de sucursal
+
+- Tarea/estado: P2 `Implementar vista de mesas y toma de comanda online` permanece IN_PROGRESS. Mientras Mobile procesa R5, se cerró server-side la deuda SR-MOB-002 sin tocar `apps/mobile/**`, Web, KDS, SQL ni `pnpm-lock.yaml`.
+- Contrato: `BranchAuthorizationV1` y `parseBranchAuthorizationV1` describen la respuesta existente de `POST /api/v1/access/branch`. No se cambió el wire format `{branchId, restaurantId, roles}`: el parser exige objeto plano exacto, UUID válidos normalizados, array denso/no vacío y roles conocidos sin duplicados; devuelve estructura profundamente congelada y falla cerrado ante extras, accessors, prototipos o proxies hostiles. El controller Nest ahora declara ese tipo compartido y el smoke HTTP valida el cuerpo real con el parser.
+- Compatibilidad: Web y Mobile conservan temporalmente sus parsers locales; no se editaron porque pertenecen a cortes separados. Al integrarlos podrán sustituirlos por el parser compartido sin cambio de endpoint. No se introdujo esquema, persistencia, dinero, zona horaria, identidad de dispositivo ni regla financiera.
+- Verificación Node 24.19.0: shared-types y API pasaron lint, typecheck, pruebas y build. Las compuertas globales sin caché pasaron: lint 8/8, typecheck 11/11, test 11/11 y build 8/8, todas con `0 cached`; el build Mobile base exportó 656 módulos. `git diff --check` pasó.
+- CodeGraph final: índice sincronizado en 284 archivos, 4,907 nodos y 19,798 relaciones. `parseBranchAuthorizationV1` afecta cuatro símbolos —sus dos pruebas de contrato y el smoke API—; `BranchAuthorizationV1` afecta nueve símbolos, incluidos controller/ruta y las mismas pruebas. El análisis conservador señaló 77 pruebas potenciales y la compuerta global las cubrió.
+- Riesgos abiertos: SR-MOB-008 no puede resolverse confiando en la constante inicial `America/Hermosillo`: el plan exige configuración por restaurante y `app.restaurants` aún no persiste moneda/zona. SR-MOB-009 depende de la decisión de almacenamiento seguro Mobile y SR-MOB-011 es financiero. No se inventó ninguna de esas fronteras.
+- Git/alcance: trabajo únicamente en la rama/worktree Codex; sin pull, reset, merge, rebase, push, cambios remotos o subagentes. Razonamiento moderado para el contrato compatible y alto al descartar inferencias de tenancy/dinero.
+- Siguiente acción mínima: recibir y revisar R5 de Claude. Después, integrar Mobile sustituyendo su parser local por `parseBranchAuthorizationV1` y conectar Order solo cuando se resuelvan autoritativamente zona horaria e identidad de dispositivo.
+
 ## Revisión 2026-09-06 — entrega Mobile, ronda R5 requerida
 
 - Tarea/estado: P2 `Implementar vista de mesas y toma de comanda online` permanece IN_PROGRESS. Se revisó read-only el corte limpio de Claude `9d1aa64c6d790f66af866832ae79eb45eb4e5917`, árbol `4201508719c15aca488de6783db682f1c022342b`, sobre base `5bb97233bf96acc31088cd2b1c353d76bea3fe75`; dos commits, cero merges y ocho rutas, todas bajo `apps/mobile/**`. No se integró ni modificó el worktree de Claude, `main`, Mobile o `pnpm-lock.yaml`.
