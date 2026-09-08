@@ -1,21 +1,29 @@
 import { readFileSync } from "node:fs";
 
-import { verifyOrderItemCancellationSchema } from "./order-item-cancellation-schema-verification.js";
+import { verifyP2MobileSchema } from "./p2-mobile-schema-verification.js";
 import { readSchemaVerificationConfig, SchemaVerificationError } from "./schema-verification.js";
 
+const migration = (name: string): string => readFileSync(
+  new URL(`../../../../supabase/migrations/${name}`, import.meta.url),
+  "utf8",
+);
+
 try {
-  const result = await verifyOrderItemCancellationSchema({
+  const result = await verifyP2MobileSchema({
     baseCatalogAuditSql: readFileSync(
       new URL("../../../../supabase/tests/tenancy_memberships_post_finance.sql", import.meta.url),
       "utf8",
     ),
     config: readSchemaVerificationConfig(process.env),
-    migrationSql: readFileSync(
-      new URL("../../../../supabase/migrations/20260905000300_enable_order_item_cancellations.sql", import.meta.url),
-      "utf8",
-    ),
+    migrationSqls: [
+      migration("20260905000100_create_operational_shifts.sql"),
+      migration("20260905000200_link_operational_shifts_to_orders.sql"),
+      migration("20260905000300_enable_order_item_cancellations.sql"),
+      migration("20260906000100_enforce_orderable_menu_modifier_groups.sql"),
+      migration("20260906000200_add_authoritative_restaurant_time_zone.sql"),
+    ],
     targetCatalogAuditSql: readFileSync(
-      new URL("../../../../supabase/tests/order_item_cancellations_catalog.sql", import.meta.url),
+      new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url),
       "utf8",
     ),
   });

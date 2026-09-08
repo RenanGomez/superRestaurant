@@ -14,6 +14,7 @@ import type { KdsBrowserVerificationHooks } from "./orders-realtime-tenancy-veri
 
 const RUN_OPT_IN = "REMOTE_BROWSER_SMOKE";
 const WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
+const MAX_WAIT_TIMEOUT_MS = 30 * 60 * 1_000;
 const POLL_INTERVAL_MS = 250;
 
 export const KDS_PROTECTED_SMOKE_API_PORT = 4_312;
@@ -39,23 +40,27 @@ export function createKdsProtectedSmokeCoordinator(
   environment: NodeJS.ProcessEnv,
   expectedProjectRef: string,
   onPhase: (phase: KdsSmokePhase, runId: string) => void,
+  waitTimeoutMs = WAIT_TIMEOUT_MS,
 ): KdsProtectedSmokeCoordinator {
   if (
     environment.KDS_PROTECTED_SMOKE_RUN !== RUN_OPT_IN
     || environment.KDS_PROTECTED_SMOKE_CONFIRM_PROJECT_REF !== expectedProjectRef
+    || !Number.isSafeInteger(waitTimeoutMs)
+    || waitTimeoutMs < POLL_INTERVAL_MS
+    || waitTimeoutMs > MAX_WAIT_TIMEOUT_MS
     || [KDS_PROTECTED_SMOKE_LEASE_PATH, KDS_PROTECTED_SMOKE_ACK_PATH, WRITING_PATH]
       .some((path) => existsSync(path))
   ) throw configurationError();
 
   const hooks: KdsBrowserVerificationHooks = Object.freeze({
     afterRevocation: async (fixture: TenancyVerificationLiveFixture) => (
-      publishAndWait("revoked", fixture, onPhase)
+      publishAndWait("revoked", fixture, onPhase, waitTimeoutMs)
     ),
     ready: async (fixture: TenancyVerificationLiveFixture) => (
-      publishAndWait("ready", fixture, onPhase)
+      publishAndWait("ready", fixture, onPhase, waitTimeoutMs)
     ),
     sent: async (fixture: TenancyVerificationLiveFixture) => (
-      publishAndWait("sent", fixture, onPhase)
+      publishAndWait("sent", fixture, onPhase, waitTimeoutMs)
     ),
   });
   return Object.freeze({ cleanup: clearArtifacts, hooks });
@@ -65,6 +70,7 @@ async function publishAndWait(
   phase: KdsSmokePhase,
   fixture: TenancyVerificationLiveFixture,
   onPhase: (phase: KdsSmokePhase, runId: string) => void,
+  waitTimeoutMs: number,
 ): Promise<void> {
   const record = phase === "sent"
     ? {
@@ -85,11 +91,15 @@ async function publishAndWait(
 
   replaceLease(JSON.stringify(record));
   onPhase(phase, fixture.runId);
-  await waitForAck(phase, fixture.runId);
+  await waitForAck(phase, fixture.runId, waitTimeoutMs);
 }
 
-async function waitForAck(phase: KdsSmokePhase, runId: string): Promise<void> {
-  const deadline = Date.now() + WAIT_TIMEOUT_MS;
+async function waitForAck(
+  phase: KdsSmokePhase,
+  runId: string,
+  waitTimeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + waitTimeoutMs;
   while (Date.now() < deadline) {
     if (!existsSync(KDS_PROTECTED_SMOKE_ACK_PATH)) {
       await delay(POLL_INTERVAL_MS);

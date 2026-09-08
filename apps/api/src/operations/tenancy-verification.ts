@@ -89,7 +89,9 @@ type AppTable =
   | "cash_register_sessions"
   | "payments"
   | "cash_movements"
-  | "financial_audit_events";
+  | "financial_audit_events"
+  | "operational_shifts"
+  | "order_operational_shifts";
 
 const appTables: readonly AppTable[] = [
   "roles",
@@ -109,6 +111,7 @@ const menuCatalogTables = [
 ] as const satisfies readonly AppTable[];
 const ordersRealtimeTables = ["orders", "order_audit_events", "kds_events"] as const satisfies readonly AppTable[];
 const financialTables = ["cash_register_sessions", "payments", "cash_movements", "financial_audit_events"] as const satisfies readonly AppTable[];
+const operationalOrderTables = ["operational_shifts", "order_operational_shifts"] as const;
 const expectedRoleCodes = [
   "admin",
   "auditor",
@@ -151,6 +154,7 @@ export interface RunTenancyVerificationOptions {
   readonly verifyOrdersRealtime?: true;
   readonly verifyKdsTickets?: true;
   readonly verifyFinancials?: true;
+  readonly verifyOperationalOrders?: true;
 }
 
 export interface TenancyVerificationFailureNotice {
@@ -278,6 +282,7 @@ interface FixturePlan {
   diningTablesEnabled: boolean;
   menuCatalogCreated: boolean;
   menuCatalogEnabled: boolean;
+  operationalOrdersEnabled: boolean;
 }
 
 interface AuthenticatedFixture {
@@ -307,6 +312,7 @@ export async function runTenancyVerification(
   const verifyOrdersRealtime = options.verifyOrdersRealtime === true || verifyKdsTickets;
   const verifyMenuCatalog = options.verifyMenuCatalog === true || verifyOrdersRealtime;
   const verifyFinancials = options.verifyFinancials === true;
+  const verifyOperationalOrders = options.verifyOperationalOrders === true;
   const runtimeCatalogAuditSql = validateRuntimeAuditSql(
     options.runtimeCatalogAuditSql,
     verifyDiningZones,
@@ -315,9 +321,15 @@ export async function runTenancyVerification(
     verifyOrdersRealtime,
     verifyKdsTickets,
     verifyFinancials,
+    verifyOperationalOrders,
   );
   const apiPort = readApiPort(options.apiPort);
-  const plan = createFixturePlan(verifyDiningZones, verifyDiningTables, verifyMenuCatalog);
+  const plan = createFixturePlan(
+    verifyDiningZones,
+    verifyDiningTables,
+    verifyMenuCatalog,
+    verifyOperationalOrders,
+  );
   options.onStart?.(plan.runId);
   const counter = new VerificationCounter();
   const adminPool = createPool(options.config.adminDatabase, "super-restaurant-tenancy-admin");
@@ -343,6 +355,7 @@ export async function runTenancyVerification(
       verifyMenuCatalog,
       verifyOrdersRealtime,
       verifyFinancials,
+      verifyOperationalOrders,
     ));
     await executeStage("fixtures", async () => createFixtures(
       serverClient,
@@ -364,6 +377,7 @@ export async function runTenancyVerification(
       verifyMenuCatalog,
       verifyOrdersRealtime,
       verifyFinancials,
+      verifyOperationalOrders,
     ));
     await executeStage("app_api", async () => verifyPrivateLookupBaseline(appApiPool, plan, counter));
     await executeStage("http", async () => verifyHttpBaseline(app as INestApplication, plan, authenticated, counter));
@@ -519,6 +533,7 @@ function createFixturePlan(
   diningZonesEnabled: boolean,
   diningTablesEnabled: boolean,
   menuCatalogEnabled: boolean,
+  operationalOrdersEnabled: boolean,
 ): FixturePlan {
   const runId = randomUUID();
   const restaurantIds = [randomUUID(), randomUUID()] as const;
@@ -576,6 +591,7 @@ function createFixturePlan(
     menuCatalog,
     menuCatalogCreated: false,
     menuCatalogEnabled,
+    operationalOrdersEnabled,
     grantIds: [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()],
     membershipIds: [randomUUID(), randomUUID(), randomUUID(), randomUUID()],
     restaurantIds,
@@ -657,7 +673,11 @@ async function createFixtures(
     onCheckpoint?.("fixtures.database_begin");
     await client.query("BEGIN");
     await client.query(
-      `insert into app.restaurants (id, name) values ($1::uuid, $3::text), ($2::uuid, $4::text)`,
+      plan.operationalOrdersEnabled
+        ? `insert into app.restaurants (id, name, time_zone) values
+             ($1::uuid, $3::text, 'America/Hermosillo'),
+             ($2::uuid, $4::text, 'America/Hermosillo')`
+        : `insert into app.restaurants (id, name) values ($1::uuid, $3::text), ($2::uuid, $4::text)`,
       [
         plan.restaurantIds[0],
         plan.restaurantIds[1],
@@ -806,6 +826,7 @@ async function verifyDataApiBaseline(
   verifyMenuCatalog: boolean,
   verifyOrdersRealtime: boolean,
   verifyFinancials: boolean,
+  verifyOperationalOrders: boolean,
 ): Promise<void> {
   const anon = createSupabaseClient(config.supabaseUrl, config.publishableKey);
   const serviceRole = createSupabaseClient(config.supabaseUrl, config.secretKey);
@@ -818,7 +839,10 @@ async function verifyDataApiBaseline(
     ? [...diningTables, ...menuCatalogTables]
     : diningTables;
   const orderTables = verifyOrdersRealtime ? [...tables, ...ordersRealtimeTables] : tables;
-  for (const table of verifyFinancials ? [...orderTables, ...financialTables] : orderTables) {
+  const financialSurface = verifyFinancials ? [...orderTables, ...financialTables] : orderTables;
+  for (const table of verifyOperationalOrders
+    ? [...financialSurface, ...operationalOrderTables]
+    : financialSurface) {
     await expectDataApiDeniedRead(anon, table, counter);
     await expectDataApiDeniedRead(serviceRole, table, counter);
   }
@@ -914,6 +938,7 @@ async function verifyAppApiSurface(
   verifyMenuCatalog: boolean,
   verifyOrdersRealtime: boolean,
   verifyFinancials: boolean,
+  verifyOperationalOrders: boolean,
 ): Promise<void> {
   const identity = await appApiPool.query<{ currentUser: string; sessionUser: string }>(
     `select current_user::text as "currentUser", session_user::text as "sessionUser"`,
@@ -949,6 +974,11 @@ async function verifyAppApiSurface(
   }
   if (verifyFinancials) {
     for (const table of financialTables) {
+      await expectPostgresDenied(appApiPool, `select * from app.${table} limit 1`, [], counter, "app_api");
+    }
+  }
+  if (verifyOperationalOrders) {
+    for (const table of operationalOrderTables) {
       await expectPostgresDenied(appApiPool, `select * from app.${table} limit 1`, [], counter, "app_api");
     }
   }
@@ -2611,8 +2641,11 @@ function validateRuntimeAuditSql(
   verifyOrdersRealtime = false,
   verifyKdsTickets = false,
   verifyFinancials = false,
+  verifyOperationalOrders = false,
 ): string {
-  const requiredMarkers = verifyFinancials
+  const requiredMarkers = verifyOperationalOrders
+    ? ["POST_P2_TABLE_SURFACE_REJECTED", "POST_P2_APP_API_SURFACE_REJECTED"]
+    : verifyFinancials
     ? ["POST_FINANCE_SURFACE_REJECTED", "POST_FINANCE_APP_API_SURFACE_REJECTED"]
     : verifyKdsTickets
     ? ["POST_KDS_SURFACE_REJECTED", "POST_KDS_APP_API_OBJECT_PRIVILEGE_REJECTED"]

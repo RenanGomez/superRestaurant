@@ -7,11 +7,14 @@ import {
   REALTIME_SUBSCRIBE_EVENT,
   parseKdsEventPageV1,
   parseKdsTicketListV1,
+  parseActiveTableOrderListV2,
+  parseOperationalShiftListV1,
   parseRealtimeNotificationV1,
   parseRealtimeSubscriptionAckV1,
   type AddOrderItemCommandV1,
   type BranchScope,
   type CreateOrderCommandV1,
+  type CreateOrderCommandV2,
   type KdsTicketListV1,
   type OpenOrderCommandV1,
   type OrderItemForwardStatusV1,
@@ -36,6 +39,7 @@ import {
   runTenancyVerification,
   type RunTenancyVerificationOptions,
   type TenancyVerificationLiveFixture,
+  type TenancyVerificationLiveFixtureContext,
   type TenancyVerificationSummary,
 } from "./tenancy-verification.js";
 
@@ -48,6 +52,7 @@ export interface RunOrdersRealtimeTenancyVerificationOptions
   readonly journeyHooks?: OrderJourneyHooks;
   readonly onOrdersRealtimeCheckpoint?: (checkpoint: OrdersRealtimeVerificationCheckpoint) => void;
   readonly useDiningTable?: true;
+  readonly useOperationalShift?: true;
 }
 
 export interface OrderJourneyContext {
@@ -85,13 +90,19 @@ export interface KdsTenancyVerificationSummary extends OrdersRealtimeTenancyVeri
 
 interface OrdersFixturePlan {
   readonly addItem: AddOrderItemCommandV1;
-  readonly create: CreateOrderCommandV1;
+  readonly create: CreateOrderCommandV1 | CreateOrderCommandV2;
   readonly deviceId: string;
-  readonly divergentCreate: CreateOrderCommandV1;
+  readonly divergentCreate: CreateOrderCommandV1 | CreateOrderCommandV2;
   readonly open: OpenOrderCommandV1;
   readonly orderId: string;
   readonly orderItemId: string;
   readonly transitions: readonly TransitionOrderItemCommandV1[];
+  readonly operational?: Readonly<{
+    closedShiftId: string;
+    foreignShiftId: string;
+    legacyCreate: CreateOrderCommandV1;
+    openShiftId: string;
+  }>;
 }
 
 interface OrdersRuntimeState {
@@ -148,6 +159,7 @@ async function runOrdersVerification(
           kds,
           options.journeyHooks,
           options.useDiningTable === true,
+          options.useOperationalShift === true,
         ),
         cleanup: async (fixture) => cleanupOrdersFixture(
           pool,
@@ -158,6 +170,7 @@ async function runOrdersVerification(
         ),
       },
       ...(kds.enabled ? { verifyKdsTickets: true as const } : {}),
+      ...(options.useOperationalShift === true ? { verifyOperationalOrders: true as const } : {}),
       verifyMenuCatalog: true,
       verifyOrdersRealtime: true,
     });
@@ -178,10 +191,11 @@ async function verifyBeforeRevocation(
   kds: KdsVerificationMode,
   journeyHooks: OrderJourneyHooks | undefined,
   useDiningTable: boolean,
+  useOperationalShift: boolean,
 ): Promise<void> {
   const context = requireContext(fixture);
   const scope = branchScope(fixture.restaurantId, fixture.branchId);
-  const plan = createPlan(fixture, scope, useDiningTable);
+  const plan = createPlan(fixture, scope, useDiningTable, useOperationalShift);
   state.fixture = fixture;
   state.plan = plan;
   state.journey = Object.freeze({
@@ -193,7 +207,12 @@ async function verifyBeforeRevocation(
     tableId: plan.create.tableId,
   });
 
-  await verifyOrderDataApiDenied(config, context.accessToken);
+  await verifyOrderDataApiDenied(config, context.accessToken, plan.operational !== undefined);
+
+  if (plan.operational !== undefined) {
+    await createOperationalShiftFixtures(pool, fixture, context, plan);
+    await verifyOperationalOrderPreconditions(fixture, context, plan, checkpoint);
+  }
 
   const subscription = subscriptionFor(scope, STATION_ID);
   if (kds.enabled) {
@@ -282,6 +301,10 @@ async function verifyBeforeRevocation(
   const opened = await mutate(fixture.apiBaseUrl, "/api/v1/orders/open", plan.open, context.accessToken, 201);
   assertSummary(opened, plan.orderId, scope, 3, "open", false, false);
   checkpoint?.("orders_realtime.order_opened");
+
+  if (plan.operational !== undefined) {
+    await verifyActiveOperationalOrders(fixture, context, plan, checkpoint);
+  }
 
   await verifyDuplicateSubscription(fixture.apiBaseUrl, context.accessToken, subscription);
   checkpoint?.("orders_realtime.duplicate_subscription_rejected");
@@ -372,13 +395,19 @@ async function verifyAfterRevocation(
   state.verified = true;
 }
 
-function createPlan(fixture: TenancyVerificationLiveFixture, scope: BranchScope, useDiningTable: boolean): OrdersFixturePlan {
+function createPlan(
+  fixture: TenancyVerificationLiveFixture,
+  scope: BranchScope,
+  useDiningTable: boolean,
+  useOperationalShift: boolean,
+): OrdersFixturePlan {
   const context = requireContext(fixture);
   const orderId = randomUUID();
   const orderItemId = randomUUID();
   const deviceId = randomUUID();
   const occurredAt = new Date().toISOString();
-  const create: CreateOrderCommandV1 = Object.freeze({
+  const openShiftId = randomUUID();
+  const createBase: CreateOrderCommandV1 = Object.freeze({
     channel: useDiningTable ? "table" : "counter",
     currency: context.menuCurrency,
     deviceId,
@@ -389,8 +418,11 @@ function createPlan(fixture: TenancyVerificationLiveFixture, scope: BranchScope,
     schemaVersion: 1,
     scope,
     tableId: useDiningTable ? context.diningTableId : null,
-    timeZone: "America/Mexico_City",
+    timeZone: useOperationalShift ? "America/Hermosillo" : "America/Mexico_City",
   });
+  const create: CreateOrderCommandV1 | CreateOrderCommandV2 = useOperationalShift
+    ? Object.freeze({ ...createBase, schemaVersion: 2 as const, shiftId: openShiftId })
+    : createBase;
   const addItem: AddOrderItemCommandV1 = Object.freeze({
     deviceId,
     eventId: randomUUID(),
@@ -442,17 +474,244 @@ function createPlan(fixture: TenancyVerificationLiveFixture, scope: BranchScope,
     }),
     orderId,
     orderItemId,
+    ...(useOperationalShift ? {
+      operational: Object.freeze({
+        closedShiftId: randomUUID(),
+        foreignShiftId: randomUUID(),
+        legacyCreate: Object.freeze({
+          ...createBase,
+          eventId: randomUUID(),
+          idempotencyKey: marker(fixture.runId, "legacy-create"),
+          orderId: randomUUID(),
+        }),
+        openShiftId,
+      }),
+    } : {}),
     transitions: Object.freeze(transitions),
   });
 }
 
-function newCreate(plan: OrdersFixturePlan): CreateOrderCommandV1 {
+function newCreate(plan: OrdersFixturePlan): CreateOrderCommandV1 | CreateOrderCommandV2 {
   return Object.freeze({
     ...plan.create,
     eventId: randomUUID(),
     idempotencyKey: randomUUID(),
     orderId: randomUUID(),
   });
+}
+
+async function createOperationalShiftFixtures(
+  pool: Pool,
+  fixture: TenancyVerificationLiveFixture,
+  context: TenancyVerificationLiveFixtureContext,
+  plan: OrdersFixturePlan,
+): Promise<void> {
+  const operational = plan.operational;
+  if (operational === undefined) throw ordersError();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `insert into app.operational_shifts
+        (id, restaurant_id, branch_id, name, status, opened_at, opened_by, closed_at, closed_by)
+       values
+        ($1::uuid, $4::uuid, $5::uuid, $8::text, 'open', clock_timestamp() - interval '5 minutes', $6::uuid, null, null),
+        ($2::uuid, $4::uuid, $5::uuid, $9::text, 'closed', clock_timestamp() - interval '10 minutes', $6::uuid, clock_timestamp() - interval '1 minute', $6::uuid),
+        ($3::uuid, $10::uuid, $11::uuid, $12::text, 'open', clock_timestamp() - interval '5 minutes', $7::uuid, null, null)`,
+      [
+        operational.openShiftId,
+        operational.closedShiftId,
+        operational.foreignShiftId,
+        fixture.restaurantId,
+        fixture.branchId,
+        context.primaryUserId,
+        context.secondaryUserId,
+        marker(fixture.runId, "shift-open"),
+        marker(fixture.runId, "shift-closed"),
+        context.secondaryRestaurantId,
+        context.secondaryBranchId,
+        marker(fixture.runId, "shift-foreign"),
+      ],
+    );
+    await client.query("COMMIT");
+  } catch {
+    await rollback(client);
+    throw ordersError();
+  } finally {
+    client.release();
+  }
+}
+
+async function verifyOperationalOrderPreconditions(
+  fixture: TenancyVerificationLiveFixture,
+  context: TenancyVerificationLiveFixtureContext,
+  plan: OrdersFixturePlan,
+  checkpoint: RunOrdersRealtimeTenancyVerificationOptions["onOrdersRealtimeCheckpoint"],
+): Promise<void> {
+  const operational = plan.operational;
+  if (operational === undefined || plan.create.tableId === null || !("shiftId" in plan.create)) throw ordersError();
+  const shifts = await getOperationalShifts(
+    fixture.apiBaseUrl,
+    context.accessToken,
+    fixture.restaurantId,
+    fixture.branchId,
+    200,
+  );
+  const parsedShifts = parseOperationalShiftListV1(shifts);
+  if (parsedShifts === undefined || parsedShifts.shifts.length !== 1
+    || parsedShifts.shifts[0]?.shiftId !== operational.openShiftId
+    || parsedShifts.shifts[0].status !== "open") throw ordersError();
+  checkpoint?.("orders_realtime.operational_shift_list_verified");
+
+  const empty = await getActiveOrders(
+    fixture.apiBaseUrl,
+    context.accessToken,
+    fixture.restaurantId,
+    fixture.branchId,
+    plan.create.tableId,
+    200,
+  );
+  if (empty === undefined || empty.orders.length !== 0) throw ordersError();
+  checkpoint?.("orders_realtime.empty_active_orders_verified");
+
+  await expectOrderError(
+    fixture.apiBaseUrl,
+    "/api/v1/orders",
+    { ...newCreate(plan), shiftId: operational.closedShiftId },
+    context.accessToken,
+    409,
+    "ORDER_CONFLICT",
+  );
+  checkpoint?.("orders_realtime.closed_shift_rejected");
+  await expectOrderError(
+    fixture.apiBaseUrl,
+    "/api/v1/orders",
+    { ...newCreate(plan), shiftId: operational.foreignShiftId },
+    context.accessToken,
+    409,
+    "ORDER_CONFLICT",
+  );
+  checkpoint?.("orders_realtime.foreign_shift_rejected");
+  await expectOrderError(
+    fixture.apiBaseUrl,
+    "/api/v1/orders",
+    { ...plan.create, shiftId: operational.closedShiftId },
+    context.accessToken,
+    409,
+    "ORDER_CONFLICT",
+  );
+  checkpoint?.("orders_realtime.shift_replay_conflict_verified");
+}
+
+async function verifyActiveOperationalOrders(
+  fixture: TenancyVerificationLiveFixture,
+  context: TenancyVerificationLiveFixtureContext,
+  plan: OrdersFixturePlan,
+  checkpoint: RunOrdersRealtimeTenancyVerificationOptions["onOrdersRealtimeCheckpoint"],
+): Promise<void> {
+  const operational = plan.operational;
+  if (operational === undefined || plan.create.tableId === null) throw ordersError();
+  const active = await getActiveOrders(
+    fixture.apiBaseUrl,
+    context.accessToken,
+    fixture.restaurantId,
+    fixture.branchId,
+    plan.create.tableId,
+    200,
+  );
+  const main = active?.orders.find((order) => order.orderId === plan.orderId);
+  const item = main?.items[0];
+  const modifier = item?.modifiers[0];
+  if (active === undefined || active.orders.length !== 1 || main === undefined
+    || main.shiftId !== operational.openShiftId || main.currency !== context.menuCurrency
+    || main.itemCount !== 1 || item?.orderItemId !== plan.orderItemId || item.quantity !== 2
+    || item.productId !== context.menuProductId || item.productName !== tenancyFixtureName(fixture.runId, "menu-product")
+    || item.unitPrice.currency !== context.menuCurrency || !Number.isSafeInteger(item.unitPrice.amountMinor)
+    || modifier?.optionId !== context.menuModifierOptionId
+    || modifier.optionName !== tenancyFixtureName(fixture.runId, "menu-option")
+    || modifier.unitPrice.currency !== context.menuCurrency
+    || !Number.isSafeInteger(modifier.unitPrice.amountMinor)) throw ordersError();
+  checkpoint?.("orders_realtime.active_snapshots_verified");
+
+  const legacy = await mutate(
+    fixture.apiBaseUrl,
+    "/api/v1/orders",
+    operational.legacyCreate,
+    context.accessToken,
+    201,
+  );
+  assertSummary(legacy, operational.legacyCreate.orderId, plan.create.scope, 1, "draft", false, false);
+  const multiple = await getActiveOrders(
+    fixture.apiBaseUrl,
+    context.accessToken,
+    fixture.restaurantId,
+    fixture.branchId,
+    plan.create.tableId,
+    200,
+  );
+  if (multiple === undefined || multiple.orders.length !== 2) throw ordersError();
+  checkpoint?.("orders_realtime.multiple_orders_verified");
+  const historical = multiple.orders.find((order) => order.orderId === operational.legacyCreate.orderId);
+  if (historical === undefined || historical.shiftId !== null || historical.items.length !== 0) throw ordersError();
+  checkpoint?.("orders_realtime.legacy_null_shift_verified");
+
+  await getActiveOrders(
+    fixture.apiBaseUrl,
+    context.accessToken,
+    fixture.restaurantId,
+    context.viewerBranchId,
+    plan.create.tableId,
+    403,
+  );
+  await getActiveOrders(
+    fixture.apiBaseUrl,
+    context.secondaryAccessToken,
+    context.secondaryRestaurantId,
+    context.secondaryBranchId,
+    plan.create.tableId,
+    403,
+  );
+  checkpoint?.("orders_realtime.active_scope_isolation_verified");
+}
+
+async function getOperationalShifts(
+  baseUrl: string,
+  accessToken: string,
+  restaurantId: string,
+  branchId: string,
+  expectedStatus: number,
+): Promise<unknown> {
+  const response = await fetch(
+    `${baseUrl}/api/v1/shifts/active?restaurantId=${restaurantId}&branchId=${branchId}`,
+    { headers: { authorization: `Bearer ${accessToken}` } },
+  );
+  const body: unknown = await response.json();
+  if (response.status !== expectedStatus || response.headers.get("cache-control") !== "private, no-store") {
+    throw ordersError();
+  }
+  return body;
+}
+
+async function getActiveOrders(
+  baseUrl: string,
+  accessToken: string,
+  restaurantId: string,
+  branchId: string,
+  tableId: string,
+  expectedStatus: number,
+): Promise<ReturnType<typeof parseActiveTableOrderListV2>> {
+  const response = await fetch(
+    `${baseUrl}/api/v1/orders/active?restaurantId=${restaurantId}&branchId=${branchId}&tableId=${tableId}`,
+    { headers: { authorization: `Bearer ${accessToken}` } },
+  );
+  const body: unknown = await response.json();
+  if (response.status !== expectedStatus || response.headers.get("cache-control") !== "private, no-store") {
+    throw ordersError();
+  }
+  if (expectedStatus !== 200) return undefined;
+  const parsed = parseActiveTableOrderListV2(body);
+  if (parsed === undefined) throw ordersError();
+  return parsed;
 }
 
 async function cleanupOrdersFixture(
@@ -467,14 +726,24 @@ async function cleanupOrdersFixture(
   const plan = state.plan;
   if (plan === undefined) return;
   const context = requireContext(fixture);
+  const orderIds = [plan.orderId, ...(plan.operational === undefined ? [] : [plan.operational.legacyCreate.orderId])];
+  const shiftIds = plan.operational === undefined
+    ? []
+    : [plan.operational.openShiftId, plan.operational.closedShiftId, plan.operational.foreignShiftId];
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await validateCleanupOwnership(client, fixture, context.primaryUserId, plan);
-    await client.query("delete from app.kds_events where order_id = $1::uuid and restaurant_id = $2::uuid and branch_id = $3::uuid", [plan.orderId, fixture.restaurantId, fixture.branchId]);
-    await client.query("delete from app.order_audit_events where order_id = $1::uuid and restaurant_id = $2::uuid and branch_id = $3::uuid", [plan.orderId, fixture.restaurantId, fixture.branchId]);
-    await client.query("delete from app.orders where id = $1::uuid and restaurant_id = $2::uuid and branch_id = $3::uuid", [plan.orderId, fixture.restaurantId, fixture.branchId]);
+    await client.query("delete from app.kds_events where order_id = any($1::uuid[])", [orderIds]);
+    await client.query("delete from app.order_audit_events where order_id = any($1::uuid[])", [orderIds]);
+    if (plan.operational !== undefined) {
+      await client.query("delete from app.order_operational_shifts where order_id = any($1::uuid[])", [orderIds]);
+    }
+    await client.query("delete from app.orders where id = any($1::uuid[])", [orderIds]);
     await client.query("delete from app_private.kds_branch_cursors where restaurant_id = $1::uuid and branch_id = $2::uuid", [fixture.restaurantId, fixture.branchId]);
+    if (plan.operational !== undefined) {
+      await client.query("delete from app.operational_shifts where id = any($1::uuid[])", [shiftIds]);
+    }
     await client.query("COMMIT");
   } catch (error: unknown) {
     await rollback(client);
@@ -483,15 +752,27 @@ async function cleanupOrdersFixture(
   } finally {
     client.release();
   }
-  const remaining = await pool.query<{ count: string }>(
-    `select (
-      (select count(*) from app.orders where id = $1::uuid)
-      + (select count(*) from app.order_audit_events where order_id = $1::uuid)
-      + (select count(*) from app.kds_events where order_id = $1::uuid)
-      + (select count(*) from app_private.kds_branch_cursors where restaurant_id = $2::uuid and branch_id = $3::uuid)
-    )::text as count`,
-    [plan.orderId, fixture.restaurantId, fixture.branchId],
-  );
+  const remaining = plan.operational === undefined
+    ? await pool.query<{ count: string }>(
+      `select (
+        (select count(*) from app.orders where id = any($1::uuid[]))
+        + (select count(*) from app.order_audit_events where order_id = any($1::uuid[]))
+        + (select count(*) from app.kds_events where order_id = any($1::uuid[]))
+        + (select count(*) from app_private.kds_branch_cursors where restaurant_id = $2::uuid and branch_id = $3::uuid)
+      )::text as count`,
+      [orderIds, fixture.restaurantId, fixture.branchId],
+    )
+    : await pool.query<{ count: string }>(
+      `select (
+        (select count(*) from app.orders where id = any($1::uuid[]))
+        + (select count(*) from app.order_audit_events where order_id = any($1::uuid[]))
+        + (select count(*) from app.kds_events where order_id = any($1::uuid[]))
+        + (select count(*) from app_private.kds_branch_cursors where restaurant_id = $2::uuid and branch_id = $3::uuid)
+        + (select count(*) from app.order_operational_shifts where order_id = any($1::uuid[]))
+        + (select count(*) from app.operational_shifts where id = any($4::uuid[]))
+      )::text as count`,
+      [orderIds, fixture.restaurantId, fixture.branchId, shiftIds],
+    );
   if (remaining.rows[0]?.count !== "0") throw ordersError("cleanup");
   checkpoint?.("orders_realtime.cleanup_verified");
 }
@@ -502,6 +783,7 @@ async function validateCleanupOwnership(
   actorId: string,
   plan: OrdersFixturePlan,
 ): Promise<void> {
+  await validateOperationalCleanupOwnership(client, fixture, actorId, plan);
   const orders = await client.query<{ actorId: string; branchId: string; id: string; restaurantId: string; status: string; version: number }>(
     `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId",
             created_by::text as "actorId", status, version::integer
@@ -537,9 +819,68 @@ async function validateCleanupOwnership(
     .filter((eventId) => audits.rows.some((audit) => audit.eventId === eventId));
   if (kds.rows.length !== expectedKdsEventIds.length
     || kds.rows.some((row, index) => row.eventId !== expectedKdsEventIds[index])) throw ordersError("cleanup");
+
+  if (plan.operational !== undefined) {
+    const legacy = await client.query<{ actorId: string; auditCount: string; eventId: string; idempotencyKey: string; status: string; version: number }>(
+      `select o.created_by::text as "actorId", o.status, o.version::integer,
+         count(a.event_id)::text as "auditCount", min(a.event_id)::text as "eventId",
+         min(a.idempotency_key)::text as "idempotencyKey"
+       from app.orders o left join app.order_audit_events a on a.order_id=o.id
+       where o.id=$1::uuid group by o.id`,
+      [plan.operational.legacyCreate.orderId],
+    );
+    const row = legacy.rows[0];
+    if (legacy.rows.length > 1 || (row !== undefined && (
+      row.actorId !== actorId || row.status !== "draft" || row.version !== 1 || row.auditCount !== "1"
+      || row.eventId !== plan.operational.legacyCreate.eventId
+      || row.idempotencyKey !== plan.operational.legacyCreate.idempotencyKey
+    ))) throw ordersError("cleanup");
+  }
 }
 
-async function verifyOrderDataApiDenied(config: TenancyVerificationConfig, accessToken: string): Promise<void> {
+async function validateOperationalCleanupOwnership(
+  client: PoolClient,
+  fixture: TenancyVerificationLiveFixture,
+  actorId: string,
+  plan: OrdersFixturePlan,
+): Promise<void> {
+  const operational = plan.operational;
+  if (operational === undefined) return;
+  const shifts = await client.query<{ branchId: string; closedBy: string | null; id: string; name: string; openedBy: string; restaurantId: string; status: string }>(
+    `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId", name, status,
+       opened_by::text as "openedBy", closed_by::text as "closedBy"
+     from app.operational_shifts where id=any($1::uuid[]) for update`,
+    [[operational.openShiftId, operational.closedShiftId, operational.foreignShiftId]],
+  );
+  const context = requireContext(fixture);
+  const expected = new Map<string, readonly [string, string, string, string, string, string | null]>([
+    [operational.openShiftId, [fixture.restaurantId, fixture.branchId, marker(fixture.runId, "shift-open"), "open", actorId, null]],
+    [operational.closedShiftId, [fixture.restaurantId, fixture.branchId, marker(fixture.runId, "shift-closed"), "closed", actorId, actorId]],
+    [operational.foreignShiftId, [context.secondaryRestaurantId, context.secondaryBranchId, marker(fixture.runId, "shift-foreign"), "open", context.secondaryUserId, null]],
+  ]);
+  if (shifts.rows.length !== expected.size) throw ordersError("cleanup");
+  for (const row of shifts.rows) {
+    const value = expected.get(row.id);
+    if (value === undefined || JSON.stringify([
+      row.restaurantId, row.branchId, row.name, row.status, row.openedBy, row.closedBy,
+    ]) !== JSON.stringify(value)) throw ordersError("cleanup");
+  }
+  const links = await client.query<{ actorId: string; orderId: string; shiftId: string }>(
+    `select order_id::text as "orderId", shift_id::text as "shiftId", linked_by::text as "actorId"
+     from app.order_operational_shifts where order_id=any($1::uuid[]) for update`,
+    [[plan.orderId, operational.legacyCreate.orderId]],
+  );
+  if (links.rows.length > 1 || (links.rows[0] !== undefined && (
+    links.rows[0].orderId !== plan.orderId || links.rows[0].shiftId !== operational.openShiftId
+    || links.rows[0].actorId !== actorId
+  ))) throw ordersError("cleanup");
+}
+
+async function verifyOrderDataApiDenied(
+  config: TenancyVerificationConfig,
+  accessToken: string,
+  verifyOperationalOrders: boolean,
+): Promise<void> {
   const clients = [
     createClient(config.supabaseUrl, config.publishableKey, { auth: { autoRefreshToken: false, detectSessionInUrl: false, persistSession: false } }),
     createClient(config.supabaseUrl, config.publishableKey, {
@@ -549,7 +890,12 @@ async function verifyOrderDataApiDenied(config: TenancyVerificationConfig, acces
     createClient(config.supabaseUrl, config.secretKey, { auth: { autoRefreshToken: false, detectSessionInUrl: false, persistSession: false } }),
   ];
   for (const client of clients) {
-    for (const table of ["orders", "order_audit_events", "kds_events"] as const) {
+    for (const table of [
+      "orders",
+      "order_audit_events",
+      "kds_events",
+      ...(verifyOperationalOrders ? ["operational_shifts", "order_operational_shifts"] as const : []),
+    ] as const) {
       const result = await client.schema("app").from(table).select("*").limit(1);
       if (result.data !== null || result.error?.code !== "42501") throw ordersError();
     }

@@ -49,7 +49,7 @@ export type FullPosFlowVerificationCheckpoint =
   | "full_flow.cleanup_verified";
 
 export interface RunFullPosFlowTenancyVerificationOptions
-  extends Omit<RunKdsTenancyVerificationOptions, "journeyHooks" | "useDiningTable" | "verifyDiningTables"> {
+  extends Omit<RunKdsTenancyVerificationOptions, "journeyHooks" | "useDiningTable" | "useOperationalShift" | "verifyDiningTables"> {
   readonly onFullPosFlowCheckpoint?: (checkpoint: FullPosFlowVerificationCheckpoint) => void;
 }
 
@@ -84,6 +84,7 @@ export async function runFullPosFlowTenancyVerification(
       ...options,
       journeyHooks: hooks,
       useDiningTable: true,
+      useOperationalShift: true,
       verifyDiningTables: true,
       verifyFinancials: true,
     });

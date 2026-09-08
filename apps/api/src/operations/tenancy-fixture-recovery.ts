@@ -200,6 +200,25 @@ interface OrderAuditRow {
   readonly resultVersion: number;
 }
 
+interface OperationalShiftRow {
+  readonly branchId: string;
+  readonly closedBy: string | null;
+  readonly id: string;
+  readonly name: string;
+  readonly openedBy: string;
+  readonly restaurantId: string;
+  readonly status: string;
+  readonly version: number;
+}
+
+interface OrderOperationalShiftRow {
+  readonly branchId: string;
+  readonly linkedBy: string;
+  readonly orderId: string;
+  readonly restaurantId: string;
+  readonly shiftId: string;
+}
+
 interface KdsEventRow {
   readonly branchId: string;
   readonly cursor: number;
@@ -289,6 +308,8 @@ export interface TenancyFixtureRecoverySnapshot {
   readonly menuCatalogAudits?: readonly MenuCatalogAuditRow[];
   readonly orders?: readonly OrderRow[];
   readonly orderAudits?: readonly OrderAuditRow[];
+  readonly operationalShifts?: readonly OperationalShiftRow[];
+  readonly orderOperationalShifts?: readonly OrderOperationalShiftRow[];
   readonly kdsEvents?: readonly KdsEventRow[];
   readonly kdsCursors?: readonly KdsCursorRow[];
   readonly grants: readonly GrantRow[];
@@ -312,7 +333,9 @@ interface ValidatedSnapshot {
   readonly financialDeviceSequenceScopes: readonly Readonly<{ branchId: string; deviceId: string; restaurantId: string }>[];
   readonly membershipIds: readonly string[];
   readonly orderAuditEventIds: readonly string[];
+  readonly orderOperationalShiftOrderIds: readonly string[];
   readonly orderIds: readonly string[];
+  readonly operationalShiftIds: readonly string[];
   readonly paymentIds: readonly string[];
   readonly kdsEventIds: readonly string[];
   readonly kdsCursorScopes: readonly Readonly<{ branchId: string; restaurantId: string }>[];
@@ -425,6 +448,8 @@ export function validateTenancyFixtureRecoverySnapshot(
     || (snapshot.menuCatalogAudits?.length ?? 0) > 0
     || (snapshot.orders?.length ?? 0) > 0
     || (snapshot.orderAudits?.length ?? 0) > 0
+    || (snapshot.operationalShifts?.length ?? 0) > 0
+    || (snapshot.orderOperationalShifts?.length ?? 0) > 0
     || (snapshot.kdsEvents?.length ?? 0) > 0
     || (snapshot.kdsCursors?.length ?? 0) > 0
     || (snapshot.cashRegisterSessions?.length ?? 0) > 0
@@ -451,7 +476,9 @@ export function validateTenancyFixtureRecoverySnapshot(
       financialDeviceSequenceScopes: Object.freeze([]),
       membershipIds: Object.freeze([]),
       orderAuditEventIds: Object.freeze([]),
+      orderOperationalShiftOrderIds: Object.freeze([]),
       orderIds: Object.freeze([]),
+      operationalShiftIds: Object.freeze([]),
       paymentIds: Object.freeze([]),
       kdsEventIds: Object.freeze([]),
       kdsCursorScopes: Object.freeze([]),
@@ -530,6 +557,16 @@ export function validateTenancyFixtureRecoverySnapshot(
     firstRestaurant.id,
     branchesByName,
   );
+  const operationalShifts = validateOperationalShiftFixtures(
+    runId,
+    snapshot,
+    amber.id,
+    cobalt.id,
+    firstRestaurant.id,
+    secondRestaurant.id,
+    branchesByName,
+    orders.primaryOrderId,
+  );
   const finances = validateFinancialJourney(
     runId,
     snapshot,
@@ -552,7 +589,9 @@ export function validateTenancyFixtureRecoverySnapshot(
     financialDeviceSequenceScopes: finances.deviceSequenceScopes,
     membershipIds: Object.freeze(snapshot.memberships.map((row) => row.id)),
     orderAuditEventIds: orders.auditEventIds,
+    orderOperationalShiftOrderIds: operationalShifts.linkedOrderIds,
     orderIds: orders.orderIds,
+    operationalShiftIds: operationalShifts.shiftIds,
     paymentIds: finances.paymentIds,
     kdsEventIds: orders.kdsEventIds,
     kdsCursorScopes: orders.cursorScopes,
@@ -604,7 +643,14 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
       removed += await deleteExactly(client, "app.cash_register_sessions", validated.cashRegisterSessionIds);
       removed += await deleteExactly(client, "app.kds_events", validated.kdsEventIds, "event_id");
       removed += await deleteExactly(client, "app.order_audit_events", validated.orderAuditEventIds, "event_id");
+      removed += await deleteExactly(
+        client,
+        "app.order_operational_shifts",
+        validated.orderOperationalShiftOrderIds,
+        "order_id",
+      );
       removed += await deleteExactly(client, "app.orders", validated.orderIds);
+      removed += await deleteExactly(client, "app.operational_shifts", validated.operationalShiftIds);
       removed += await deleteKdsCursorsExactly(client, validated.kdsCursorScopes);
       removed += await deleteExactly(client, "app.menu_modifier_options", validated.menuModifierOptionIds);
       removed += await deleteExactly(client, "app.menu_modifier_groups", validated.menuModifierGroupIds);
@@ -659,6 +705,8 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
         || (snapshot.menuCatalogAudits?.length ?? 0) !== 0
         || (snapshot.orders?.length ?? 0) !== 0
         || (snapshot.orderAudits?.length ?? 0) !== 0
+        || (snapshot.operationalShifts?.length ?? 0) !== 0
+        || (snapshot.orderOperationalShifts?.length ?? 0) !== 0
         || (snapshot.kdsEvents?.length ?? 0) !== 0
         || (snapshot.kdsCursors?.length ?? 0) !== 0
         || (snapshot.cashRegisterSessions?.length ?? 0) !== 0
@@ -736,6 +784,8 @@ async function loadSnapshot(
     menuProducts: boolean;
     orders: boolean;
     orderAudits: boolean;
+    operationalShifts: boolean;
+    orderOperationalShifts: boolean;
     kdsEvents: boolean;
     kdsCursors: boolean;
     cashRegisters: boolean;
@@ -762,6 +812,8 @@ async function loadSnapshot(
        pg_catalog.to_regclass('app.menu_catalog_audit_events') is not null as "menuAudits",
        pg_catalog.to_regclass('app.orders') is not null as orders,
        pg_catalog.to_regclass('app.order_audit_events') is not null as "orderAudits",
+       pg_catalog.to_regclass('app.operational_shifts') is not null as "operationalShifts",
+       pg_catalog.to_regclass('app.order_operational_shifts') is not null as "orderOperationalShifts",
        pg_catalog.to_regclass('app.kds_events') is not null as "kdsEvents",
        pg_catalog.to_regclass('app_private.kds_branch_cursors') is not null as "kdsCursors",
        pg_catalog.to_regclass('app.cash_register_sessions') is not null as "cashRegisters",
@@ -784,6 +836,7 @@ async function loadSnapshot(
   if (menuCatalogFlags.some((value) => value !== menuCatalogFlags[0])) throw contaminationError();
   const ordersFlags = [catalog?.orders, catalog?.orderAudits, catalog?.kdsEvents, catalog?.kdsCursors];
   if (ordersFlags.some((value) => value !== ordersFlags[0])) throw contaminationError();
+  if (catalog?.operationalShifts !== catalog?.orderOperationalShifts) throw contaminationError();
   const financeFlags = [catalog?.cashRegisters, catalog?.payments, catalog?.cashMovements, catalog?.financialAudits, catalog?.financialSequences];
   if (financeFlags.some((value) => value !== financeFlags[0])) throw contaminationError();
   let diningZones: readonly DiningZoneRow[] = [];
@@ -799,6 +852,8 @@ async function loadSnapshot(
   let menuCatalogAudits: readonly MenuCatalogAuditRow[] = [];
   let orders: readonly OrderRow[] = [];
   let orderAudits: readonly OrderAuditRow[] = [];
+  let operationalShifts: readonly OperationalShiftRow[] = [];
+  let orderOperationalShifts: readonly OrderOperationalShiftRow[] = [];
   let kdsEvents: readonly KdsEventRow[] = [];
   let kdsCursors: readonly KdsCursorRow[] = [];
   let cashRegisterSessions: readonly CashRegisterSessionRow[] = [];
@@ -936,6 +991,30 @@ async function loadSnapshot(
     );
     kdsCursors = Object.freeze([...cursorResult.rows]);
   }
+  if (catalog?.operationalShifts === true) {
+    const shiftNames = ["shift-open", "shift-closed", "shift-foreign"]
+      .map((marker) => `tenancy-orders-v1:${runId}:${marker}`);
+    const shiftResult = await client.query<OperationalShiftRow>(
+      `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId",
+              name, status, version::integer, opened_by::text as "openedBy", closed_by::text as "closedBy"
+       from app.operational_shifts
+       where name = any($1::text[]) or restaurant_id = any($2::uuid[])
+          or opened_by = any($3::uuid[]) or closed_by = any($3::uuid[])${lock}`,
+      [shiftNames, restaurantIds, userIds],
+    );
+    operationalShifts = Object.freeze([...shiftResult.rows]);
+    const shiftIds = operationalShifts.map((row) => row.id);
+    const orderIds = orders.map((row) => row.id);
+    const linkResult = await client.query<OrderOperationalShiftRow>(
+      `select restaurant_id::text as "restaurantId", branch_id::text as "branchId",
+              order_id::text as "orderId", shift_id::text as "shiftId", linked_by::text as "linkedBy"
+       from app.order_operational_shifts
+       where restaurant_id = any($1::uuid[]) or order_id = any($2::uuid[])
+          or shift_id = any($3::uuid[]) or linked_by = any($4::uuid[])${lock}`,
+      [restaurantIds, orderIds, shiftIds, userIds],
+    );
+    orderOperationalShifts = Object.freeze([...linkResult.rows]);
+  }
   if (catalog?.cashRegisters === true) {
     const sessionResult = await client.query<CashRegisterSessionRow>(
       `select id::text, restaurant_id::text as "restaurantId", branch_id::text as "branchId",
@@ -1009,6 +1088,8 @@ async function loadSnapshot(
     menuModifierOptions,
     menuProducts,
     orderAudits,
+    operationalShifts,
+    orderOperationalShifts,
     orders,
     restaurants: Object.freeze([...restaurants.rows]),
   });
@@ -1209,23 +1290,49 @@ function validateOrdersRealtime(
   cursorScopes: readonly Readonly<{ branchId: string; restaurantId: string }>[];
   kdsEventIds: readonly string[];
   orderIds: readonly string[];
+  primaryOrderId: string | undefined;
 }> {
   const orders = snapshot.orders ?? [];
   const audits = snapshot.orderAudits ?? [];
   const kdsEvents = snapshot.kdsEvents ?? [];
   const cursors = snapshot.kdsCursors ?? [];
   if (orders.length === 0 && audits.length === 0 && kdsEvents.length === 0 && cursors.length === 0) {
-    return Object.freeze({ auditEventIds: Object.freeze([]), cursorScopes: Object.freeze([]), kdsEventIds: Object.freeze([]), orderIds: Object.freeze([]) });
+    return Object.freeze({ auditEventIds: Object.freeze([]), cursorScopes: Object.freeze([]), kdsEventIds: Object.freeze([]), orderIds: Object.freeze([]), primaryOrderId: undefined });
   }
   const branch = branchesByName.get(tenancyFixtureName(runId, "branch-11"));
-  const order = orders[0];
-  if (orders.length !== 1 || order === undefined || branch === undefined || !UUID_PATTERN.test(order.id)
+  const legacyKey = `tenancy-orders-v1:${runId}:legacy-create`;
+  const legacyAudits = audits.filter((audit) => audit.idempotencyKey === legacyKey);
+  if (legacyAudits.length > 1) throw contaminationError();
+  const legacyAudit = legacyAudits[0];
+  const legacyOrder = legacyAudit === undefined
+    ? undefined
+    : orders.find((candidate) => candidate.id === legacyAudit.orderId);
+  const primaryOrders = orders.filter((candidate) => candidate.id !== legacyOrder?.id);
+  const order = primaryOrders[0];
+  assertUniqueIds(orders);
+  assertUniqueValues(audits.map((audit) => audit.eventId));
+  if (primaryOrders.length !== 1 || order === undefined || branch === undefined || !UUID_PATTERN.test(order.id)
     || order.restaurantId !== restaurantId || order.branchId !== branch.id || order.actorId !== amberId
     || !((order.channel === "counter" && (order.tableId === null || order.tableId === undefined))
       || (order.channel === "table" && order.tableId !== null
         && (snapshot.diningTables ?? []).some((table) => table.id === order.tableId)))
     || order.version < 1 || order.version > 9
     || order.status !== (order.version < 3 ? "draft" : order.version < 8 ? "open" : order.version === 8 ? "partially_paid" : "paid")) throw contaminationError();
+
+  if (legacyAudit === undefined) {
+    if (legacyOrder !== undefined || orders.length !== 1) throw contaminationError();
+  } else {
+    const table = (snapshot.diningTables ?? []).find((candidate) => candidate.id === order.tableId);
+    if (orders.length !== 2 || legacyOrder === undefined || table === undefined
+      || !UUID_PATTERN.test(legacyOrder.id) || !UUID_PATTERN.test(legacyAudit.eventId)
+      || order.channel !== "table" || legacyOrder.channel !== "table"
+      || legacyOrder.tableId !== order.tableId
+      || legacyOrder.restaurantId !== restaurantId || legacyOrder.branchId !== branch.id
+      || legacyOrder.actorId !== amberId || legacyOrder.version !== 1 || legacyOrder.status !== "draft"
+      || legacyAudit.restaurantId !== restaurantId || legacyAudit.branchId !== branch.id
+      || legacyAudit.orderId !== legacyOrder.id || legacyAudit.actorId !== amberId
+      || legacyAudit.operation !== "order.created" || legacyAudit.resultVersion !== 1) throw contaminationError();
+  }
 
   const expectedOperations = [
     "order.created",
@@ -1237,8 +1344,12 @@ function validateOrdersRealtime(
     "order_item.state_changed",
   ] as const;
   const expectedMarkers = ["create", "add-item", "open", "item-sent", "item-preparing", "item-ready", "item-delivered"] as const;
-  if (audits.length !== Math.min(order.version, expectedOperations.length)) throw contaminationError();
-  const sortedAudits = [...audits].sort((left, right) => left.resultVersion - right.resultVersion);
+  const primaryAudits = audits.filter((audit) => audit.orderId === order.id);
+  if (audits.length !== Math.min(order.version, expectedOperations.length) + (legacyAudit === undefined ? 0 : 1)) {
+    throw contaminationError();
+  }
+  const sortedAudits = [...primaryAudits].sort((left, right) => left.resultVersion - right.resultVersion);
+  if (sortedAudits.length !== Math.min(order.version, expectedOperations.length)) throw contaminationError();
   for (const [index, audit] of sortedAudits.entries()) {
     if (!UUID_PATTERN.test(audit.eventId) || audit.resultVersion !== index + 1
       || audit.restaurantId !== restaurantId || audit.branchId !== branch.id || audit.orderId !== order.id
@@ -1266,10 +1377,87 @@ function validateOrdersRealtime(
     }
   }
   return Object.freeze({
-    auditEventIds: Object.freeze(sortedAudits.map((row) => row.eventId)),
+    auditEventIds: Object.freeze([
+      ...sortedAudits.map((row) => row.eventId),
+      ...(legacyAudit === undefined ? [] : [legacyAudit.eventId]),
+    ]),
     cursorScopes: Object.freeze(cursors.map((row) => Object.freeze({ branchId: row.branchId, restaurantId: row.restaurantId }))),
     kdsEventIds: Object.freeze(sortedKds.map((row) => row.eventId)),
-    orderIds: Object.freeze([order.id]),
+    orderIds: Object.freeze([order.id, ...(legacyOrder === undefined ? [] : [legacyOrder.id])]),
+    primaryOrderId: order.id,
+  });
+}
+
+function validateOperationalShiftFixtures(
+  runId: string,
+  snapshot: TenancyFixtureRecoverySnapshot,
+  amberId: string,
+  cobaltId: string,
+  firstRestaurantId: string,
+  secondRestaurantId: string,
+  branchesByName: ReadonlyMap<string, BranchRow>,
+  primaryOrderId: string | undefined,
+): Readonly<{ linkedOrderIds: readonly string[]; shiftIds: readonly string[] }> {
+  const shifts = snapshot.operationalShifts ?? [];
+  const links = snapshot.orderOperationalShifts ?? [];
+  if (shifts.length === 0 && links.length === 0) {
+    return Object.freeze({ linkedOrderIds: Object.freeze([]), shiftIds: Object.freeze([]) });
+  }
+  const branch11 = branchesByName.get(tenancyFixtureName(runId, "branch-11"));
+  const branch22 = branchesByName.get(tenancyFixtureName(runId, "branch-22"));
+  if (branch11 === undefined || branch22 === undefined || shifts.length > 3 || links.length > 1) {
+    throw contaminationError();
+  }
+  assertUniqueIds(shifts);
+  assertUniqueValues(shifts.map((shift) => shift.name));
+  assertUniqueValues(links.map((link) => link.orderId));
+  const expected = [
+    {
+      branchId: branch11.id,
+      closedBy: null,
+      name: `tenancy-orders-v1:${runId}:shift-open`,
+      openedBy: amberId,
+      restaurantId: firstRestaurantId,
+      status: "open",
+    },
+    {
+      branchId: branch11.id,
+      closedBy: amberId,
+      name: `tenancy-orders-v1:${runId}:shift-closed`,
+      openedBy: amberId,
+      restaurantId: firstRestaurantId,
+      status: "closed",
+    },
+    {
+      branchId: branch22.id,
+      closedBy: null,
+      name: `tenancy-orders-v1:${runId}:shift-foreign`,
+      openedBy: cobaltId,
+      restaurantId: secondRestaurantId,
+      status: "open",
+    },
+  ] as const;
+  const expectedByName = new Map<string, (typeof expected)[number]>(
+    expected.map((fixture) => [fixture.name, fixture]),
+  );
+  for (const shift of shifts) {
+    const fixture = expectedByName.get(shift.name);
+    if (fixture === undefined || !UUID_PATTERN.test(shift.id) || shift.name !== fixture.name
+      || shift.restaurantId !== fixture.restaurantId || shift.branchId !== fixture.branchId
+      || shift.openedBy !== fixture.openedBy || shift.closedBy !== fixture.closedBy
+      || shift.status !== fixture.status || shift.version !== 1) throw contaminationError();
+  }
+  const link = links[0];
+  const openShift = shifts.find((shift) => shift.name === `tenancy-orders-v1:${runId}:shift-open`);
+  if (link !== undefined && (primaryOrderId === undefined || openShift === undefined
+    || !UUID_PATTERN.test(link.orderId) || !UUID_PATTERN.test(link.shiftId)
+    || link.restaurantId !== firstRestaurantId || link.branchId !== branch11.id
+    || link.orderId !== primaryOrderId || link.shiftId !== openShift.id || link.linkedBy !== amberId)) {
+    throw contaminationError();
+  }
+  return Object.freeze({
+    linkedOrderIds: Object.freeze(links.map((row) => row.orderId)),
+    shiftIds: Object.freeze(shifts.map((row) => row.id)),
   });
 }
 
@@ -1564,7 +1752,7 @@ async function deleteExactly(
   client: PoolClient,
   table: string,
   ids: readonly string[],
-  idColumn: "event_id" | "id" | "restaurant_id" = "id",
+  idColumn: "event_id" | "id" | "order_id" | "restaurant_id" = "id",
 ): Promise<number> {
   if (ids.length === 0) return 0;
   const result = await client.query<{ id: string }>(

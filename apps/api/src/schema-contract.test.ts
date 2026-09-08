@@ -159,6 +159,10 @@ const protectedMenuWebSmokeRunner = readFileSync(
   new URL("./operations/run-menu-web-protected-smoke.js", import.meta.url),
   "utf8",
 ).toLowerCase();
+const protectedP2MobileSmokeRunner = readFileSync(
+  new URL("./operations/run-p2-mobile-protected-smoke.js", import.meta.url),
+  "utf8",
+).toLowerCase();
 const tenancyVerificationRunner = readFileSync(
   new URL("./operations/tenancy-verification.js", import.meta.url),
   "utf8",
@@ -177,6 +181,11 @@ test("operational shifts are branch service periods exposed only through the pri
   assert.match(operationalShiftsMigration, /grant execute on function app_private\.list_active_operational_shifts\(uuid,uuid,uuid\) to app_api/u);
   assert.doesNotMatch(operationalShiftsMigration, /grant .*operational_shifts.* to (anon|authenticated|service_role)/u);
   assert.doesNotMatch(operationalShiftsMigration, /create function app_private\.(open|close)_operational_shift/u);
+  assert.match(apiPackage, /"verify:p2-mobile-protected-smoke:remote"/u);
+  assert.match(protectedP2MobileSmokeRunner, /runfullposflowtenancyverification/u);
+  assert.match(protectedP2MobileSmokeRunner, /tenancy_memberships_post_p2\.sql/u);
+  assert.match(protectedP2MobileSmokeRunner, /protectedp2mobilesmoke/u);
+  assert.match(protectedP2MobileSmokeRunner, /http:\/\/127\.0\.0\.1:8082/u);
 });
 
 test("operational order creation is additive, atomic, scoped and server-only", () => {
@@ -238,17 +247,19 @@ test("order item cancellation is atomic, server-authorized, audited and recovera
     new URL("../src/operations/run-order-item-cancellation-schema-verification.ts", import.meta.url),
     "utf8",
   ).toLowerCase();
-  const baselineAudit = readFileSync(
-    new URL("../../../supabase/tests/tenancy_memberships_post_finance.sql", import.meta.url),
+  const verifier = readFileSync(
+    new URL("../src/operations/order-item-cancellation-schema-verification.ts", import.meta.url),
     "utf8",
-  );
+  ).toLowerCase();
   assert.match(runner, /tenancy_memberships_post_finance\.sql/u);
-  assert.match(runner, /securitydefinerfunctions: 24/u);
+  assert.match(runner, /verifyorderitemcancellationschema/u);
+  assert.match(verifier, /runreadonlyschemaaudit/u);
+  assert.match(verifier, /runschemaverification/u);
+  assert.match(verifier, /securitydefinerfunctions: 22/u);
+  assert.match(verifier, /securitydefinerfunctions: 24/u);
   assert.match(apiPackage, /"verify:order-item-cancellation-schema:rollback"/u);
   assert.match(apiPackage, /run-order-item-cancellation-schema-verification\.js/u);
-  assert.doesNotThrow(() => extractMigrationBody(
-    `begin;\n${baselineAudit}\n${extractMigrationBody(orderItemCancellationMigration)}\ncommit;`,
-  ));
+  assert.doesNotThrow(() => extractMigrationBody(orderItemCancellationMigration));
 });
 
 test("product migration is independent from the ADR-010 spike and models exact historical scope", () => {
@@ -888,7 +899,8 @@ test("full POS flow reuses the recoverable tenancy, table, KDS, and finance harn
   assert.match(fullFlowRunner, /full_flow\.financial_audit_verified/u);
   assert.match(fullFlowRunner, /o\.aggregate->>'currency' as "orderCurrency"/u);
   assert.doesNotMatch(fullFlowRunner, /o\.currency as "orderCurrency"/u);
-  assert.match(fullFlowEntrypoint, /tenancy_memberships_post_finance\.sql/u);
+  assert.match(fullFlowEntrypoint, /tenancy_memberships_post_p2\.sql/u);
+  assert.match(fullFlowRunner, /useOperationalShift: true/u);
   assert.match(apiPackage, /"verify:full-pos-flow:remote"/u);
   assert.match(tenancyHarness, /diningTableId: plan\.diningTables\.commands\[0\]\.tableId/u);
   assert.doesNotMatch(tenancyHarness, /diningTableId: plan\.diningTables\.commands\[0\]\.zoneId/u);

@@ -216,6 +216,66 @@ test("accepts only the ordered Orders and KDS recovery prefix for the marked run
   assertContamination(() => validateTenancyFixtureRecoverySnapshot(runId, users, contaminated));
 });
 
+test("accepts the operational-shift link plus the legacy null-shift order and fails closed on ownership", () => {
+  const tableId = "61000000-0000-4000-8000-000000000001";
+  const zoneId = "60000000-0000-4000-8000-000000000001";
+  const orderId = "68000000-0000-4000-8000-000000000001";
+  const legacyOrderId = "68000000-0000-4000-8000-000000000002";
+  const openShiftId = "77000000-0000-4000-8000-000000000001";
+  const closedShiftId = "77000000-0000-4000-8000-000000000002";
+  const foreignShiftId = "77000000-0000-4000-8000-000000000003";
+  const primaryEventId = "69000000-0000-4000-8000-000000000001";
+  const legacyEventId = "69000000-0000-4000-8000-000000000002";
+  const snapshot = {
+    ...completeSnapshot(),
+    diningZones: [{
+      branchId: ids.branch11, createdBy: ids.amber, id: zoneId,
+      name: tenancyFixtureName(runId, "dining-zone-created"), restaurantId: ids.restaurant1, version: 1,
+    }],
+    diningZoneAudits: [{
+      actorId: ids.amber, branchId: ids.branch11, eventId: "70000000-0000-4000-8000-000000000001",
+      idempotencyKey: "80000000-0000-4000-8000-000000000001",
+      name: tenancyFixtureName(runId, "dining-zone-created"), operation: "created",
+      restaurantId: ids.restaurant1, zoneId,
+    }],
+    diningTables: [{
+      actorId: ids.amber, branchId: ids.branch11, id: tableId,
+      name: tenancyFixtureName(runId, "dining-table-created"), restaurantId: ids.restaurant1, zoneId,
+    }],
+    diningTableAudits: [{
+      actorId: ids.amber, branchId: ids.branch11, eventId: "71000000-0000-4000-8000-000000000001",
+      name: tenancyFixtureName(runId, "dining-table-created"), operation: "created",
+      restaurantId: ids.restaurant1, tableId, zoneId,
+    }],
+    operationalShifts: [
+      { branchId: ids.branch22, closedBy: null, id: foreignShiftId, name: `tenancy-orders-v1:${runId}:shift-foreign`, openedBy: ids.cobalt, restaurantId: ids.restaurant2, status: "open", version: 1 },
+      { branchId: ids.branch11, closedBy: ids.amber, id: closedShiftId, name: `tenancy-orders-v1:${runId}:shift-closed`, openedBy: ids.amber, restaurantId: ids.restaurant1, status: "closed", version: 1 },
+      { branchId: ids.branch11, closedBy: null, id: openShiftId, name: `tenancy-orders-v1:${runId}:shift-open`, openedBy: ids.amber, restaurantId: ids.restaurant1, status: "open", version: 1 },
+    ],
+    orderOperationalShifts: [{
+      branchId: ids.branch11, linkedBy: ids.amber, orderId,
+      restaurantId: ids.restaurant1, shiftId: openShiftId,
+    }],
+    orderAudits: [
+      { actorId: ids.amber, branchId: ids.branch11, eventId: primaryEventId, idempotencyKey: `tenancy-orders-v1:${runId}:create`, operation: "order.created", orderId, restaurantId: ids.restaurant1, resultVersion: 1 },
+      { actorId: ids.amber, branchId: ids.branch11, eventId: legacyEventId, idempotencyKey: `tenancy-orders-v1:${runId}:legacy-create`, operation: "order.created", orderId: legacyOrderId, restaurantId: ids.restaurant1, resultVersion: 1 },
+    ],
+    orders: [
+      { actorId: ids.amber, branchId: ids.branch11, channel: "table", id: orderId, restaurantId: ids.restaurant1, status: "draft", tableId, version: 1 },
+      { actorId: ids.amber, branchId: ids.branch11, channel: "table", id: legacyOrderId, restaurantId: ids.restaurant1, status: "draft", tableId, version: 1 },
+    ],
+  };
+
+  const validated = validateTenancyFixtureRecoverySnapshot(runId, users, snapshot);
+  assert.deepEqual(validated.orderIds, [orderId, legacyOrderId]);
+  assert.deepEqual(new Set(validated.operationalShiftIds), new Set([openShiftId, closedShiftId, foreignShiftId]));
+  assert.deepEqual(validated.orderOperationalShiftOrderIds, [orderId]);
+
+  const contaminated = structuredClone(snapshot);
+  (contaminated.orderOperationalShifts[0]! as { linkedBy: string }).linkedBy = ids.cobalt;
+  assertContamination(() => validateTenancyFixtureRecoverySnapshot(runId, users, contaminated));
+});
+
 test("accepts the marked financial prefix and rejects an unmarked payment audit", () => {
   const orderId = "68000000-0000-4000-8000-000000000001";
   const sessionId = "72000000-0000-4000-8000-000000000001";

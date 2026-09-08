@@ -27,6 +27,12 @@ const fixture: TenancyVerificationLiveFixture = Object.freeze({
 test("requires exact KDS opt-ins and refuses stale coordination artifacts", () => {
   clearArtifacts();
   assert.throws(() => createKdsProtectedSmokeCoordinator({}, PROJECT_REF, () => undefined));
+  assert.throws(() => createKdsProtectedSmokeCoordinator(
+    validEnvironment(),
+    PROJECT_REF,
+    () => undefined,
+    31 * 60 * 1_000,
+  ));
 
   writeFileSync(KDS_PROTECTED_SMOKE_LEASE_PATH, "stale", "utf8");
   try {

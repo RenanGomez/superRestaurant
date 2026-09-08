@@ -21,6 +21,7 @@ const POST_MENU_AUDIT_SHA256 = "2893432b8122de814e42ce967e6053f6519856f64b15b30f
 const POST_ORDERS_REALTIME_AUDIT_SHA256 = "3242785923599694824512498975258072d94ef1d1615283380c6382735d6f88";
 const POST_KDS_AUDIT_SHA256 = "3acd64d001d250550aa400b3f6fe2e7c0b31aa1f39b6d6a06e608002b2f8eec9";
 const POST_FINANCE_AUDIT_SHA256 = "a7de06df0c17748bf2f33bfa8f0a6b5d76e08959d4dc231dfecf164b246b5a3b";
+const POST_P2_AUDIT_SHA256 = "2c9a10c6560301b3b3544912a84073957180339864c2d195a18af7577a21f33a";
 
 export type AppApiCatalogAuditProfile =
   | "memberships_v1"
@@ -29,7 +30,8 @@ export type AppApiCatalogAuditProfile =
   | "post_menu_v1"
   | "post_orders_realtime_v1"
   | "post_kds_v1"
-  | "post_finance_v1";
+  | "post_finance_v1"
+  | "post_p2_v1";
 
 export type AppApiObservedState = "safe_disabled" | "temporary" | "expired" | "runtime" | "partial";
 
@@ -142,6 +144,9 @@ function auditHashes(profile: AppApiCatalogAuditProfile): Readonly<{
       precheck: POST_FINANCE_AUDIT_SHA256,
       runtime: POST_FINANCE_AUDIT_SHA256,
     });
+  }
+  if (profile === "post_p2_v1") {
+    return Object.freeze({ precheck: POST_P2_AUDIT_SHA256, runtime: POST_P2_AUDIT_SHA256 });
   }
   throw verificationError("configuration");
 }
