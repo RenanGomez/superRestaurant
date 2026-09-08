@@ -11,3 +11,9 @@ minimumReleaseAgeExclude:
   - '@turbo/windows-arm64@2.10.12'
   - turbo@2.10.12
   - '@nestjs/common@11.2.3'
+  - '@expo/cli@57.0.23'
+  - '@expo/metro-file-map@57.0.3'
+  - babel-preset-expo@57.0.11
+  - expo-modules-core@57.0.17
+  - expo-modules-jsi@57.1.0
+  - expo@57.0.21

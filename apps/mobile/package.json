@@ -15,9 +15,9 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "@super-restaurant/shared-types": "workspace:*",
     "@supabase/supabase-js": "2.112.4",
-    "expo": "57.0.20",
+    "@super-restaurant/shared-types": "workspace:*",
+    "expo": "57.0.21",
     "expo-crypto": "~57.0.2",
     "expo-secure-store": "~57.0.3",
     "expo-status-bar": "57.0.1",
