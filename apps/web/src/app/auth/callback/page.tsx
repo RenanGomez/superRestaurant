@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { createAuthCallbackConsumer } from "../../../lib/auth-callback";
+
 type CallbackState = "processing" | "error";
 
 /**
@@ -12,31 +14,17 @@ type CallbackState = "processing" | "error";
  */
 export default function AuthCallbackPage(): React.ReactElement {
   const [state, setState] = useState<CallbackState>("processing");
+  const [consumeCallback] = useState(createAuthCallbackConsumer);
 
   useEffect(() => {
-    const hash = window.location.hash;
-    window.history.replaceState(null, "", "/auth/callback");
-
-    const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : "");
-    const accessToken = params.get("access_token");
-    const refreshToken = params.get("refresh_token");
-    const type = params.get("type");
-
-    if ((type !== "recovery" && type !== "invite") || !isToken(accessToken) || !isToken(refreshToken)) {
-      setState("error");
-      return;
-    }
-
-    void fetch("/auth/callback/session", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ accessToken, refreshToken }),
-      credentials: "same-origin",
-    }).then((response) => {
-      if (!response.ok) throw new Error("AUTH_CALLBACK_FAILED");
-      window.location.replace("/reset-password");
-    }).catch(() => setState("error"));
-  }, []);
+    let active = true;
+    void consumeCallback(window).then((accepted) => {
+      if (!active) return;
+      if (accepted) window.location.replace("/reset-password");
+      else setState("error");
+    });
+    return () => { active = false; };
+  }, [consumeCallback]);
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-bg p-6">
@@ -49,15 +37,11 @@ export default function AuthCallbackPage(): React.ReactElement {
         ) : (
           <>
             <h1 className="font-heading text-xl font-bold text-text">Enlace no válido</h1>
-            <p className="mt-2 text-sm text-text-muted">Solicita un correo nuevo e inténtalo otra vez.</p>
-            <a href="/login" className="mt-5 inline-flex rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white">Volver a iniciar sesión</a>
+            <p className="mt-2 text-sm text-text-muted">No pudimos verificar el enlace. Si ya tienes contraseña, vuelve a iniciar sesión; de lo contrario, solicita un enlace nuevo.</p>
+            <a href="/login" className="mt-5 inline-flex min-h-11 items-center rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white! focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Volver a iniciar sesión</a>
           </>
         )}
       </section>
     </main>
   );
-}
-
-function isToken(value: string | null): value is string {
-  return value !== null && value.length >= 20 && value.length <= 8_192 && !/\s/u.test(value);
 }

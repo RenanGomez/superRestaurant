@@ -1,5 +1,8 @@
 # TODO
 
+- [ ] **REVIEW · P2** — Correcciones de callback y herramienta de recovery local sin correo. Nota 2026-09-09: tokens sin tipo, prioridad de error, consumo único y limpieza inmediata; herramienta de identidad/destino fijo con journal exclusivo y sin reintentos. Pasan 52 pruebas web, 13 de herramienta, lint/typecheck/build y revisión visual local. Runbook `docs/runbooks/local-admin-recovery.md`. La recuperación real aún no se ejecutó.
+- [ ] **BLOCKED · P2** — Completar acceso real del administrador en consola 8082. Nota 2026-09-09: configuración local creada, API 200/401 y conexión `app_api` TLS verificadas; administrador existente/activo confirmado por preflight read-only. Supabase tiene Site URL localhost:3000 sin Redirect URLs. Siguiente acción: obtener autorización para guardar únicamente `http://localhost:8082/auth/callback`, verificarla, generar un único enlace y entregar contraseña/login al humano. No hay journal de intento ni correo generado; no crear tenant aún.
+
 Última actualización: 2026-09-08
 
 Fuente principal: `PLAN_MODERNIZACION_POS_RESTAURANTE.md`.

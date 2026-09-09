@@ -1,5 +1,13 @@
 # PROJECT_NOTES
 
+## Decisiones del corte 2026-09-09 — recuperación local
+
+- Consola Next.js en `http://localhost:8082`, API loopback en 3000 y 8081 reservado para Expo. `.env.local` de web tiene exactamente cuatro variables publicables/server-only; el API usa `app_api` con TLS y ninguna clave administrativa de Auth. Los archivos locales ignorados no viajan por Git.
+- El humano autorizó la excepción de utilizar la clave administrativa existente exclusivamente en `tools/local-admin-recovery.mjs` para un recovery del administrador existente, sin correo. La herramienta exige identidad activa, destino fijo, origen/nonce y journal exclusivo; no genera en GET/preflight y no reintenta tras ambigüedad. No equivale a autorización para cambiar credenciales del proyecto, grants o infraestructura.
+- Se comprobó en el panel de Supabase que Site URL es `http://localhost:3000` y no hay Redirect URLs. Añadir `http://localhost:8082/auth/callback` está preparado pero pendiente de autorización/guardado; no se generó ningún enlace. La autorización posterior de commit/push no incluye ese cambio remoto de Auth.
+- Callback acepta ausencia de `type` solo con tokens completos, valida la sesión en servidor, prioriza errores y consume una vez ante replay de efectos. El control de retorno al login tiene contraste y foco verificados. `agentRules:false` evita archivos de instrucciones autogenerados por Next.js y preserva las reglas del repositorio.
+- Runbook de continuación: `docs/runbooks/local-admin-recovery.md`. P2 sigue `IN_PROGRESS`; no se creó tenant/manager ni se completó la reautenticación y segundo reinicio nativo.
+
 ## E2E P2 y compatibilidad Expo del 2026-09-08
 
 - La única E2E remota nueva autorizada usó `runId=e87eac0c-b2d1-40e5-bb15-b1c9b52146cd` contra `zwbyiefqeujstyzysydn`. Mobile real autenticado confirmó selección acotada a Restaurant/Branch, turno y mesa, órdenes activas con snapshots y legado `shiftId:null`, KDS `sent`, `ready`, entrega y revocación; el arnés completó además aislamiento de Station y el recorrido financiero disponible hasta pagos, cierre de cuenta/mesa y reportes X/Z. El cleanup integrado falló al final, por lo que la corrida no se repitió: el recovery seguro del mismo UUID eliminó 47 filas y 2 usuarios y el postcheck volvió a `runtime`, `catalogAudit=true`, `activeSessions=false`.
