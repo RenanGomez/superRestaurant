@@ -19,6 +19,7 @@ export const RBAC_MATRIX_VERSION = 1 as const;
 export const DINING_ZONE_SCHEMA_VERSION = 1 as const;
 export const DINING_LAYOUT_SCHEMA_VERSION = 1 as const;
 export const MENU_CATALOG_SCHEMA_VERSION = 1 as const;
+export const SYSTEM_ONBOARDING_SCHEMA_VERSION = 1 as const;
 
 export * from "./realtime.js";
 export * from "./orders.js";
@@ -37,6 +38,76 @@ export const MEMBERSHIP_ROLE_CODES = Object.freeze([
 ] as const);
 
 export type MembershipRoleCode = (typeof MEMBERSHIP_ROLE_CODES)[number];
+
+export interface SystemRestaurantOnboardingRequestV1 {
+  readonly idempotencyKey: string;
+  readonly restaurant: { readonly name: string; readonly timeZone: string; readonly currency: string };
+  readonly branch: { readonly name: string };
+  readonly manager: { readonly email: string; readonly role: "manager" };
+  readonly seedProfile: "development_minimal_v1";
+}
+
+export type SystemOnboardingResultStatusV1 = "invitation_pending" | "forbidden" | "invalid_request" | "duplicate" | "idempotency_conflict";
+
+export interface SystemOnboardingResultV1 {
+  readonly status: SystemOnboardingResultStatusV1;
+  readonly operationId?: string;
+  readonly restaurantId?: string;
+  readonly branchId?: string;
+  readonly managerEmail?: string;
+  readonly seedProfile?: "development_minimal_v1";
+}
+
+export function parseSystemRestaurantOnboardingRequestV1(value: unknown): SystemRestaurantOnboardingRequestV1 | undefined {
+  const record = parseExactPlainRecord(value, ["idempotencyKey", "restaurant", "branch", "manager", "seedProfile"]);
+  if (record === undefined || ownValue(record, "seedProfile") !== "development_minimal_v1") return undefined;
+  const idempotencyKey = parseUuid(ownValue(record, "idempotencyKey"));
+  const restaurant = parseExactPlainRecord(ownValue(record, "restaurant"), ["name", "timeZone", "currency"]);
+  const branch = parseExactPlainRecord(ownValue(record, "branch"), ["name"]);
+  const manager = parseExactPlainRecord(ownValue(record, "manager"), ["email", "role"]);
+  const name = restaurant === undefined ? undefined : parseDisplayName(ownValue(restaurant, "name"));
+  const timeZone = restaurant === undefined ? undefined : parseDisplayName(ownValue(restaurant, "timeZone"), 100);
+  const rawCurrency = restaurant === undefined ? undefined : ownValue(restaurant, "currency");
+  const currency = typeof rawCurrency === "string" && /^[A-Z]{3}$/u.test(rawCurrency) ? rawCurrency : undefined;
+  const branchName = branch === undefined ? undefined : parseDisplayName(ownValue(branch, "name"));
+  const email = manager === undefined || typeof ownValue(manager, "email") !== "string" ? undefined : (ownValue(manager, "email") as string).trim().toLowerCase();
+  const role = manager === undefined ? undefined : ownValue(manager, "role");
+  if (idempotencyKey === undefined || name === undefined || timeZone === undefined || currency === undefined || branchName === undefined
+    || email === undefined || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email) || role !== "manager") return undefined;
+  return Object.freeze({
+    branch: Object.freeze({ name: branchName }),
+    idempotencyKey,
+    manager: Object.freeze({ email, role: "manager" as const }),
+    restaurant: Object.freeze({ currency, name, timeZone }),
+    seedProfile: "development_minimal_v1" as const,
+  });
+}
+
+export function parseSystemOnboardingResultV1(value: unknown): SystemOnboardingResultV1 | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as PlainRecord;
+  if (![Object.prototype, null].includes(Object.getPrototypeOf(record))) return undefined;
+  const status = ownValue(record, "status");
+  if (!["invitation_pending", "forbidden", "invalid_request", "duplicate", "idempotency_conflict"].includes(status as string)) return undefined;
+  const operationId = ownValue(record, "operationId");
+  const restaurantId = ownValue(record, "restaurantId");
+  const branchId = ownValue(record, "branchId");
+  const managerEmail = ownValue(record, "managerEmail");
+  const seedProfile = ownValue(record, "seedProfile");
+  if (operationId !== undefined && typeof operationId !== "string") return undefined;
+  if (restaurantId !== undefined && typeof restaurantId !== "string") return undefined;
+  if (branchId !== undefined && typeof branchId !== "string") return undefined;
+  if (managerEmail !== undefined && typeof managerEmail !== "string") return undefined;
+  if (seedProfile !== undefined && seedProfile !== "development_minimal_v1") return undefined;
+  return Object.freeze({
+    status: status as SystemOnboardingResultStatusV1,
+    ...(typeof operationId === "string" ? { operationId } : {}),
+    ...(typeof restaurantId === "string" ? { restaurantId } : {}),
+    ...(typeof branchId === "string" ? { branchId } : {}),
+    ...(typeof managerEmail === "string" ? { managerEmail } : {}),
+    ...(seedProfile === "development_minimal_v1" ? { seedProfile } : {}),
+  });
+}
 
 export const RBAC_PERMISSION_CODES = Object.freeze([
   "branch.select",

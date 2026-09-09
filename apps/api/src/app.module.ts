@@ -62,6 +62,8 @@ import {
   TABLE_ORDER_CONTEXT_DIRECTORY,
   TableOrderContextService,
 } from "./table-order-context.js";
+import { SystemOnboardingController } from "./system-onboarding.controller.js";
+import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboardingAuth } from "./system-onboarding.js";
 
 @Module({
   controllers: [
@@ -77,6 +79,7 @@ import {
     PaymentsController,
     OperationalShiftsController,
     TableOrderContextController,
+    SystemOnboardingController,
   ],
   providers: [
     {
@@ -126,6 +129,8 @@ import {
     PostgresTableOrderContextDirectory,
     { provide: TABLE_ORDER_CONTEXT_DIRECTORY, useExisting: PostgresTableOrderContextDirectory },
     TableOrderContextService,
+    { provide: SYSTEM_ONBOARDING_AUTH, useFactory: () => createSystemOnboardingAuth(process.env) },
+    SystemOnboardingService,
     {
       provide: APP_GUARD,
       useClass: SupabaseAuthGuard,

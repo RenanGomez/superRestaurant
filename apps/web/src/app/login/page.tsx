@@ -16,6 +16,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps): Promi
   const resolvedSearchParams = await searchParams;
   const rawError = resolvedSearchParams.error;
   const errorCode = typeof rawError === "string" && KNOWN_ERRORS.has(rawError) ? rawError : undefined;
+  const passwordUpdated = resolvedSearchParams.password_updated === "1";
 
   return (
     <div className="flex min-h-screen bg-bg">
@@ -49,6 +50,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps): Promi
           </div>
 
           <div aria-live="polite">
+            {passwordUpdated && <div role="status" className="rounded-[10px] border border-[oklch(84%_0.08_155)] bg-[oklch(96%_0.03_155)] px-3.5 py-2.5 text-[13px] text-[oklch(38%_0.1_155)]">Contraseña configurada. Inicia sesión para continuar.</div>}
             {errorCode !== undefined && <ErrorBanner />}
           </div>
 

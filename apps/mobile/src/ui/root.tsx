@@ -10,6 +10,7 @@ import { createExpoDeviceIdentity, expoRandomUuid } from "../expo-device-identit
 import type { MobileLifecyclePort } from "../lifecycle.js";
 import { createMobileAuth } from "../supabase-auth.js";
 import { App } from "./app.js";
+import { NativeSecureStoreDiagnostics } from "./native-secure-store-diagnostics.js";
 import { createAppStateLifecycle } from "./app-state-lifecycle.js";
 import { Body, Caption, Heading } from "./components.js";
 import { colors, spacing } from "./theme.js";
@@ -28,6 +29,7 @@ function readEnvironment(): Readonly<Record<string, string | undefined>> {
 
 /** Root component: fails closed when the public configuration is unusable. */
 export function Root(): React.JSX.Element {
+  const diagnosticsEnabled = process.env.EXPO_PUBLIC_ENABLE_NATIVE_DIAGNOSTICS === "1";
   const bootstrap = useMemo((): {
     readonly auth: MobileAuthPort;
     readonly config: MobileConfig;
@@ -50,7 +52,9 @@ export function Root(): React.JSX.Element {
   return <SafeAreaProvider>
     <StatusBar style="dark" />
     <SafeAreaView style={styles.safeArea}>
-      {bootstrap === undefined
+      {diagnosticsEnabled
+        ? <NativeSecureStoreDiagnostics />
+        : bootstrap === undefined
         ? <ConfigurationErrorScreen />
         : <App
           auth={bootstrap.auth}
@@ -58,7 +62,7 @@ export function Root(): React.JSX.Element {
           deviceIdentity={bootstrap.deviceIdentity}
           lifecycle={bootstrap.lifecycle}
           randomUuid={expoRandomUuid}
-        />}
+          />}
     </SafeAreaView>
   </SafeAreaProvider>;
 }

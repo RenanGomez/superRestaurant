@@ -49,6 +49,9 @@ export default async function AppLayout({ children }: { readonly children: React
             <rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 9h10M7 13h3M14 13h3" />
           </svg>
         </a>
+        <a href="/app/system-admin/restaurants" title="Administración del sistema" aria-label="Administración del sistema" className="flex h-11 w-11 items-center justify-center rounded-xl text-white hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+          <span aria-hidden="true" className="text-lg">⚙</span>
+        </a>
       </nav>
 
       <div className="flex min-w-0 flex-1 flex-col">
