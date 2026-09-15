@@ -26,6 +26,8 @@
     "src/lib/branch-selection.test.ts",
     "src/lib/menu-catalog.ts",
     "src/lib/menu-catalog.test.ts",
+    "src/lib/system-onboarding.ts",
+    "src/lib/system-onboarding.test.ts",
     "src/lib/finance.ts",
     "src/lib/finance.test.ts",
     "src/proxy.ts",

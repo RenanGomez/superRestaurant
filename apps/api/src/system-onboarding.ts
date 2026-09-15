@@ -88,13 +88,26 @@ export class SystemOnboardingService {
 export function hashRequest(request: SystemRestaurantOnboardingRequestV1): string { return createHash("sha256").update(JSON.stringify(request)).digest("hex"); }
 export function createSystemOnboardingAuth(environment: NodeJS.ProcessEnv): SystemOnboardingAuthPort {
   const url = environment.SUPABASE_URL?.trim(); const key = (environment.SUPABASE_SECRET_KEY ?? environment.SUPABASE_SERVICE_ROLE_KEY)?.trim();
-  if (url === undefined || key === undefined || !url.startsWith("https://") || key.length < 20) return Object.freeze({ deleteUser: async () => { throw new Error("SYSTEM_ONBOARDING_AUTH_NOT_CONFIGURED"); }, findUserByEmail: async () => { throw new Error("SYSTEM_ONBOARDING_AUTH_NOT_CONFIGURED"); }, inviteUser: async () => { throw new Error("SYSTEM_ONBOARDING_AUTH_NOT_CONFIGURED"); } });
-  return new SupabaseSystemOnboardingAuth(createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } }));
+  const inviteRedirectUrl = readSystemOnboardingInviteRedirectUrl(environment.SYSTEM_ONBOARDING_INVITE_REDIRECT_URL);
+  if (url === undefined || key === undefined || !url.startsWith("https://") || key.length < 20 || inviteRedirectUrl === undefined) return Object.freeze({ deleteUser: async () => { throw new Error("SYSTEM_ONBOARDING_AUTH_NOT_CONFIGURED"); }, findUserByEmail: async () => { throw new Error("SYSTEM_ONBOARDING_AUTH_NOT_CONFIGURED"); }, inviteUser: async () => { throw new Error("SYSTEM_ONBOARDING_AUTH_NOT_CONFIGURED"); } });
+  return new SupabaseSystemOnboardingAuth(createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } }), inviteRedirectUrl);
 }
-class SupabaseSystemOnboardingAuth implements SystemOnboardingAuthPort {
-  public constructor(private readonly client: Pick<SupabaseClient, "auth">) {}
+export class SupabaseSystemOnboardingAuth implements SystemOnboardingAuthPort {
+  public constructor(private readonly client: Pick<SupabaseClient, "auth">, private readonly inviteRedirectUrl: string) {}
   public async findUserByEmail(email: string): Promise<Readonly<{ id: string }> | undefined> { const { data, error } = await this.client.auth.admin.listUsers({ page: 1, perPage: 1000 }); if (error !== null) return undefined; const user = data.users.find((candidate) => candidate.email?.toLowerCase() === email); return user === undefined ? undefined : Object.freeze({ id: user.id }); }
-  public async inviteUser(email: string): Promise<Readonly<{ id: string }>> { const { data, error } = await this.client.auth.admin.inviteUserByEmail(email); if (error !== null || data.user === null) throw new Error("AUTH_INVITE_FAILED"); return Object.freeze({ id: data.user.id }); }
+  public async inviteUser(email: string): Promise<Readonly<{ id: string }>> { const { data, error } = await this.client.auth.admin.inviteUserByEmail(email, { redirectTo: this.inviteRedirectUrl }); if (error !== null || data.user === null) throw new Error("AUTH_INVITE_FAILED"); return Object.freeze({ id: data.user.id }); }
   public async deleteUser(id: string): Promise<void> { const { error } = await this.client.auth.admin.deleteUser(id); if (error !== null) throw error; }
+}
+export function readSystemOnboardingInviteRedirectUrl(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (normalized === undefined || normalized === "") return undefined;
+  try {
+    const parsed = new URL(normalized);
+    const isLocalHttp = parsed.protocol === "http:" && (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1");
+    if ((parsed.protocol !== "https:" && !isLocalHttp) || parsed.username !== "" || parsed.password !== "" || parsed.search !== "" || parsed.hash !== "" || parsed.pathname !== "/auth/callback") return undefined;
+    return parsed.toString();
+  } catch {
+    return undefined;
+  }
 }
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
