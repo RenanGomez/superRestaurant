@@ -144,6 +144,49 @@ export {
   transitionOrder,
   transitionOrderItem,
 } from "./order-state.js";
+export {
+  InvalidCommercialOrderTransitionError,
+  InvalidOrderPreparationStateError,
+  ORDER_FULFILLMENT_CHANNELS,
+  ORDER_SOURCE_CHANNELS,
+  deriveOrderPreparationStatus,
+  transitionCommercialOrder,
+} from "./commercial-order-state.js";
+export {
+  CAPTURE_AUDIT_SCHEMA_VERSION,
+  CaptureDraftConfirmationFactsRequiredError,
+  CaptureDraftOwnershipError,
+  InvalidCaptureDraftError,
+  InvalidCaptureDraftOperationError,
+  autosaveCaptureDraft,
+  claimCaptureDraft,
+  closeCaptureNoSale,
+  confirmCaptureDraft,
+  createCaptureDraft,
+  holdCaptureDraft,
+  resumeCaptureDraft,
+  transferCaptureDraft,
+} from "./capture-draft.js";
+export type {
+  AutosaveCaptureDraftInput,
+  CaptureAuditContext,
+  CaptureAuditEvent,
+  CaptureAuditEventType,
+  CaptureDraft,
+  CaptureDraftMutation,
+  CaptureDraftState,
+  CreateCaptureDraftInput,
+} from "./capture-draft.js";
+export type {
+  CommercialOrderState,
+  CommercialOrderStatusSnapshot,
+  OrderAttentionState,
+  OrderFulfillmentChannel,
+  OrderFulfillmentStatus,
+  OrderPaymentStatus,
+  OrderPreparationStatus,
+  OrderSourceChannel,
+} from "./commercial-order-state.js";
 export type {
   CancellationAuthorization,
   OrderItemCancellationAudit,

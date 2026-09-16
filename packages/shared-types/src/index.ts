@@ -24,6 +24,7 @@ export const SYSTEM_ONBOARDING_SCHEMA_VERSION = 1 as const;
 export * from "./realtime.js";
 export * from "./orders.js";
 export * from "./payments.js";
+export * from "./commercial-capture.js";
 
 export const MEMBERSHIP_ROLE_CODES = Object.freeze([
   "owner",

@@ -1,8 +1,9 @@
 # TODO
 
+- [ ] **REVIEW · P2** — Rebaseline funcional de captura multicanal para Vittorinos. Nota 2026-09-15: auditoría trazable RP-01…RP-50 y diseño del primer slice documentados en `docs/architecture/P2_MULTICHANNEL_CAPTURE_SLICE.md`; 0/50 role plays están aceptados end-to-end. S0 añadió vocabulario ortogonal y proyección de preparación en dominio puro, sin tocar contratos productivos, esquema ni UI. Pendiente revisión humana.
 - [ ] **REVIEW · P2** — Correcciones de callback y herramienta de recovery local sin correo. Nota 2026-09-10: tokens sin tipo, prioridad de error, consumo único y limpieza inmediata; herramientas de identidad/destino fijo con journal exclusivo y sin reintentos. El onboarding futuro exige callback `/auth/callback` explícito y validado, sin depender de Site URL. Suites completas web/API, lint, typecheck y build pasan. El recovery real se consumió pero falló después de la generación; su journal permanece intacto en `failed`.
 - [ ] **IN_PROGRESS · P2** — Completar acceso real del administrador en consola 8082. Nota 2026-09-15: el slice volvió de REVIEW a trabajo activo porque Emmanuel reportó `/app` atascado en “rendering” y retorno a login. Un postcheck remoto read-only confirmó login manager reciente y alcance correcto; el rechazo local se correlacionó con `API_BASE_URL` y `WEB_ORIGIN` desalineadas. Ambas URLs ignoradas ya coinciden con API 3000 y web 8082; los tres servicios locales responden 200. El shell oculta el enlace global salvo respuesta autoritativa 200 válida, ahora con espera máxima de 3 s. Corrección de código pasó suite web/lint/typecheck; falta un nuevo login y verificación humana de la consola antes de volver a REVIEW.
-- [x] **DONE · P2** — Matriz nativa en Expo Go/BlueStacks. Nota 2026-09-15: Emmanuel confirmó nuevamente todos los diagnósticos `true` y el funcionamiento de la app en Expo Go, y aprobó expresamente este corte como DONE. La validación nativa previa incluyó el segundo reinicio, identidad estable y login manager; esto no aprueba el acceso web pendiente ni el diseño visual final.
+- [x] **DONE · P2** — Matriz nativa en Expo Go/BlueStacks. Nota 2026-09-15: Emmanuel confirmó nuevamente todos los indicadores del diagnosticador en `true`; la validación nativa previa incluyó el segundo reinicio e identidad estable. Este DONE corresponde sólo al diagnóstico nativo: la pantalla de POS no llegó a mostrarse en su revisión y se verifica por separado.
 
 Última actualización: 2026-09-15
 
@@ -57,9 +58,17 @@ Estados permitidos: `TODO`, `IN_PROGRESS`, `REVIEW`, `DONE`, `BLOCKED`, `CANCELL
 
 - [x] **DONE · P2** — Inicializar `apps/mobile` con Expo/React Native y tipos compartidos. Nota: Emmanuel autorizó integrar el workstream mobile el 2026-09-05 después de cinco rondas de revisión. El corte quedó en `main` con Expo 57.0.20, TypeScript, Auth efímero fail-closed, selección Restaurant/Branch, lecturas de mesas/menú y arnés visual aislado; lint 8/8, typecheck 11/11, tests 11/11 y build 8/8 pasaron en Node 24.19.0.
 - [x] **DONE · P2** — Implementar login y selección de sucursal/turno. Nota: Emmanuel aprobó expresamente el corte el 2026-09-05. Incluye contrato v1 estricto, entidad y lectura server-only de turnos operativos abiertos, selección mobile previa a mesas/menú y limpieza al cambiar o revalidar sucursal. La migración permanece local y no se aplicó a ningún esquema remoto; apertura/cierre y el enlace explícito con caja quedan fuera de alcance.
-- [x] **DONE · P2** — Implementar vista de mesas y toma de comanda online. Nota: `main@34d1f0aeae84c68b43321522b494525b3b9235e0` contiene el slice server-side y Mobile con contexto autoritativo, `deviceId` seguro, secuencia `crear → líneas → abrir`, lectura v2 y ownership por Restaurant/Branch, turno, mesa e intento. Las cinco migraciones P2 permanecen aplicadas exactamente una vez en `zwbyiefqeujstyzysydn`, con última versión `20260906000200` y audit SHA-256 `2c9a10c6560301b3b3544912a84073957180339864c2d195a18af7577a21f33a`. La única E2E nueva documentada completó en Mobile real autenticado `sent → ready → delivered → revoked`, aislamiento Restaurant/Branch/Station, snapshots/múltiples órdenes/legado null y el cierre financiero del arnés; se verificaron 390×844 y 1024×768 sin overflow. Su cleanup integrado falló, no se repitió la corrida, y el recovery seguro retiró 47 filas y 2 usuarios; el postcheck final quedó `runtime`, `catalogAudit=true`, `activeSessions=false`. Node 24, compuertas, `expo install --check` con Expo 57.0.21 y export Android pasan. La matriz nativa en Expo Go/BlueStacks conservó todos los indicadores `true` tras cerrar completamente y reabrir la aplicación. El 2026-09-10 el manager real inició sesión, seleccionó su única sucursal Vittorinos/Navojoa, recargó el layout de dos mesas con la API directa y recibió rechazo explícito en la ruta de administrador global. Emmanuel confirmó que la app en Expo Go funciona y aprobó expresamente este corte como DONE el 2026-09-15; la revisión UI/UX se registra por separado.
+- [ ] **IN_PROGRESS · P2** — Implementar vista de mesas y toma de comanda online. Nota: el slice server-side y Mobile conserva contexto autoritativo, `deviceId` seguro, secuencia `crear → líneas → abrir`, lectura v2 y ownership por Restaurant/Branch, turno, mesa e intento. Las cinco migraciones P2 ya aplicadas, la E2E remota única, cleanup/recovery y postcheck permanecen como evidencia técnica previa; no repetirlos. Node 24, compuertas, `expo install --check` y export Android pasaron. Corrección 2026-09-15: el DONE fue prematuro porque Emmanuel sólo vio el diagnosticador. Tras deshabilitarlo, Expo Go muestra la app pero falla la carga de sucursales. La API del host está sana y escucha únicamente en loopback 3000; falta comprobar desde BlueStacks el transporte API antes de revisión funcional/visual. No cambiar Auth, roles ni datos como solución automática.
 - [ ] **REVIEW · P2** — Bootstrap administrativo y primer cliente de desarrollo. Nota: `20260908000100_create_system_admin_onboarding.sql` se aplicó exactamente una vez al proyecto autorizado; `app.system_admins`, operaciones idempotentes/auditables, autorización privada y semilla `development_minimal_v1` quedaron disponibles. API `POST/GET /api/v1/system/onboarding/restaurants` con invitación Auth server-only y compensación; consola protegida `/app/system-admin/restaurants`; runbook en `docs/runbooks/system-admin-bootstrap.md`. `rgafrog@gmail.com` permanece como administrador global activo. El payload aprobado se provisionó una sola vez con idempotency key `2901bd0d-ed86-4f4b-9c94-091939c4d65e`: `Vittorinos Pizza`, `Sucursal Navojoa`, manager `emmanuel.rgomez@gmail.com`, turno/zona/dos mesas/catálogo/producto. Como el correo no fue entregado, una activación local única y autorizada confirmó la cuenta existente y estableció su contraseña sin recrear usuario ni cambiar roles. El login manager y su único scope quedaron verificados; la ruta global falla cerrada. Pendiente revisión humana y ocultar en UI el enlace global para usuarios sin ese grant.
-- [ ] **IN_PROGRESS · P2** — Revisar UI/UX del POS móvil antes de rediseñar. Nota 2026-09-15: Emmanuel aprobó la funcionalidad de Expo Go, pero observó que la presentación es demasiado genérica. Comparar propuestas visuales modernas propias de un POS (mesas, comanda, turno, menú y estados), verificar legibilidad, tactilidad, accesibilidad y operación a alto ritmo; acordar una dirección con el humano antes de modificar pantallas. La skill `visualize` permite explorar mockups en conversación; la dirección FE-0 aprobada para web no se impone automáticamente a mobile.
+- [ ] **IN_PROGRESS · P2** — Rebaselinar el POS alrededor de captura multicanal y documentar los role plays operativos. Nota 2026-09-15: la revisión humana confirmó que el flujo real es principalmente domicilio y que la propuesta centrada en mesas no representa el negocio. `PLAN_MODERNIZACION_POS_RESTAURANTE.md` v3.0 incorpora cliente/dirección, llamadas interrumpidas, espera/recuperación, pedidos programados, configurador de pizza, cambios/cancelaciones por estado, pagos, cocina, empaque, reparto e incidencias. Falta revisión humana del rebaseline; después se diseñan contratos y pantallas sobre esos journeys.
+- [ ] **IN_PROGRESS · P2** — Definir estados y comandos independientes de orden, preparación, cumplimiento y pago; incluir borrador, espera, confirmación, cambio, cancelación y compensación con concurrencia optimista e idempotencia. Nota 2026-09-15: S0 separa vocabulario y deriva preparación desde `OrderItemState`; S1 añade contratos V1 fail-closed y agregado puro `CaptureDraft` para create/autosave/hold/claim/resume/transfer/confirm/no-sale. Persistencia/API, leases autoritativos, idempotencia server-side, Customer/Address y UI siguen pendientes; no se tocó SQL ni Order legado.
+- [ ] **TODO · P2** — Implementar directorio operativo de clientes, teléfonos, direcciones, búsqueda, duplicados, snapshots e historial/repetición de pedido con aislamiento Restaurant/Branch y privacidad.
+- [ ] **TODO · P2** — Implementar bandeja de captura para teléfono, mostrador, recoger, domicilio y mesa; separar origen del contacto y forma de cumplimiento, con autoguardado, recuperación y transferencia entre operadores.
+- [ ] **TODO · P2** — Extender catálogo/configurador con variantes, plantillas, dependencias, defaults, combos, agotados y reglas de pizza por tamaños, masas, orillas, ingredientes, exclusiones, extras y fracciones.
+- [ ] **TODO · P2** — Implementar cambios/eliminaciones/cancelaciones antes y después del envío a cocina, con impresión/KDS correctiva, autorizaciones e impactos financieros/inventario explícitos.
+- [ ] **TODO · P2** — Implementar operación de domicilio propio: cobertura, zonas/cargos, promesa, programados, empaque, asignación/despacho, incidencias, entrega y liquidación del repartidor.
+- [ ] **TODO · P2** — Completar captura/cobro con efectivo, “pagará con”, tarjeta manual, pagos mixtos, anticipos, saldo contra entrega y estados pendientes/ambiguos; conservar pagos mediante devoluciones/compensaciones.
+- [ ] **TODO · P2** — Diseñar y validar el puesto operativo web/tablet/mobile con bandeja, búsqueda, favoritos, teclado/táctil, acciones contextuales y los role plays de la sección 8.8; medir recuperación de llamada en ≤10 s.
 - [ ] **TODO · P2** — Implementar notificaciones de platillo listo.
 - [ ] **TODO · P2** — Implementar impresión Bluetooth mediante `packages/printing`.
 
@@ -82,19 +91,22 @@ Estados permitidos: `TODO`, `IN_PROGRESS`, `REVIEW`, `DONE`, `BLOCKED`, `CANCELL
 - [ ] **TODO · P4** — Implementar alertas de stock mínimo.
 - [ ] **TODO · P4** — Implementar costeo promedio y margen por platillo.
 
-## Fase 5 — Fiscal y pagos avanzados
+## Fase 5 — Gestión, CRM y personal
 
-- [ ] **TODO · P5** — Seleccionar PAC e implementar adaptador CFDI 4.0 desacoplado, si México queda confirmado.
-- [ ] **TODO · P5** — Implementar `pending_invoice`, reintentos y operación fiscal degradada sin red.
-- [ ] **TODO · P5** — Seleccionar e integrar pasarela/terminal mediante `PaymentProvider`.
-- [ ] **TODO · P5** — Implementar división avanzada, propinas y reparto.
+- [ ] **TODO · P5** — Implementar dashboard gerencial y operativo reconciliable con órdenes/pagos.
+- [ ] **TODO · P5** — Implementar reportes y exportación Excel/PDF por Restaurant/Branch/canal/zona.
+- [ ] **TODO · P5** — Extender clientes con consentimiento, segmentación, preferencias y lealtad sobre el directorio operativo de P2.
+- [ ] **TODO · P5** — Implementar empleados, asistencia, comisiones y desempeño.
+- [ ] **TODO · P5** — Implementar rentabilidad por canal, producto, zona y repartidor.
 
-## Fase 6 — Reportes, CRM y personal
+## Fase 6 — Fiscal, pagos integrados y canales externos
 
-- [ ] **TODO · P6** — Implementar dashboard gerencial.
-- [ ] **TODO · P6** — Implementar exportación Excel/PDF.
-- [ ] **TODO · P6** — Implementar clientes e historial de consumo.
-- [ ] **TODO · P6** — Implementar empleados, asistencia y comisiones.
+- [ ] **TODO · P6** — Seleccionar PAC e implementar adaptador CFDI 4.0 desacoplado.
+- [ ] **TODO · P6** — Implementar `pending_invoice`, reintentos y operación fiscal degradada sin red.
+- [ ] **TODO · P6** — Seleccionar e integrar pasarela/terminal mediante `PaymentProvider`.
+- [ ] **TODO · P6** — Implementar refunds y conciliación externa.
+- [ ] **TODO · P6** — Integrar agregadores de delivery mediante adaptadores/webhooks idempotentes.
+- [ ] **TODO · P6** — Implementar canales propios opcionales: pedido web, kiosco y menú QR.
 
 ## Fase 7 — Multi-sucursal y lanzamiento
 
@@ -104,8 +116,8 @@ Estados permitidos: `TODO`, `IN_PROGRESS`, `REVIEW`, `DONE`, `BLOCKED`, `CANCELL
 - [ ] **TODO · P7** — Documentar despliegue, respaldo, restauración y recuperación ante desastres.
 - [ ] **TODO · P7** — Implementar importación CSV desde sistemas legacy.
 
-## Fase 8 — Futuro
+## Fase 8 — Expansión
 
-- [ ] **TODO · P8** — Integrar apps de delivery mediante adaptadores/webhooks.
-- [ ] **TODO · P8** — Implementar lealtad avanzada.
-- [ ] **TODO · P8** — Implementar reservaciones online.
+- [ ] **TODO · P8** — Implementar reservaciones y lista de espera.
+- [ ] **TODO · P8** — Implementar promociones/lealtad avanzada y tarjetas de regalo.
+- [ ] **TODO · P8** — Evaluar optimización de rutas/flota, franquicias y central de producción.

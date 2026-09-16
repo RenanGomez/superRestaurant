@@ -1,10 +1,10 @@
-# Plan Maestro v2.3: superRestaurant
+# Plan Maestro v3.0: superRestaurant
 
 Sistema POS para restaurantes — Web, Mobile, KDS y Offline-First
 
-**Versión:** 2.3
+**Versión:** 3.0
 
-**Fecha de revisión:** 2026-08-29
+**Fecha de revisión:** 2026-09-15
 
 **Estado:** IN_IMPLEMENTATION; ADR-010 aceptó la opción B híbrida y las decisiones comerciales abiertas bloquean solo sus módulos
 
@@ -49,6 +49,7 @@ La primera versión contenía una buena visión funcional, pero mezclaba alterna
 - [x] Limitar ADR-010 a 4 días hábiles, con quinto día como hard stop.
 - [x] Definir gates comunes y criterios GO/NO-GO por opción.
 - [x] Permitir que packages/domain avance en paralelo al spike.
+- [x] Rebaselinar el producto alrededor de captura multicanal, clientes, productos configurables, continuidad de llamadas, cocina, cobro y reparto propio. La validación centrada sólo en mesas no representa el negocio objetivo.
 
 ### 1.2 Trabajo documental todavía pendiente
 
@@ -69,12 +70,12 @@ Ninguna decisión pendiente debe permanecer implícita dentro del código.
 
 Construir un POS de restaurante production-ready que cubra el ciclo:
 
-**mesas/canales → comanda → cocina/KDS → entrega → cuenta → cobro → corte → inventario → reportes → administración**
+**contacto/mesa/canal → cliente y cumplimiento → captura configurable → confirmación → cocina/KDS → entrega o reparto → cobro → corte → inventario → reportes → administración**
 
 Clientes previstos:
 
 1. **Web Backoffice/POS:** configuración, operación de caja, mesas, cobro y reportes.
-2. **Mobile:** toma de comandas y operación de mesero en iOS/Android.
+2. **Mobile:** captura operativa multicanal, servicio de mesa, consulta de pedidos y apoyo a entrega en iOS/Android.
 3. **KDS:** tickets por estación y control de preparación.
 4. **API:** fuente de reglas, autorización, persistencia, realtime, jobs e integraciones.
 
@@ -99,12 +100,12 @@ Incluye Fases 0 y 1:
 
 - un restaurante y al menos una sucursal;
 - usuarios, roles y turnos;
-- menú, modificadores, mesas y canales mostrador/para llevar;
+- menú configurable, clientes, direcciones, mesas y canales mostrador/para llevar/domicilio propio;
 - orden, KDS, cobro simple, ticket y corte;
 - web POS y KDS online;
 - auditoría y reportes operativos mínimos;
 - sin garantía offline;
-- sin CFDI, delivery externo, lealtad ni inventario avanzado.
+- sin CFDI, agregadores externos de delivery, lealtad ni inventario avanzado.
 
 Objetivo: validar el flujo completo real antes de añadir sincronización.
 
@@ -114,6 +115,11 @@ Incluye Fases 0–3:
 
 - todo el piloto;
 - mobile para meseros;
+- estación de captura para teléfono, mostrador, recoger y domicilio propio;
+- directorio de clientes y direcciones con historial operativo;
+- productos configurables, combos y reglas específicas de pizza;
+- pedidos en espera, programados, modificables, cancelables y recuperables;
+- despacho básico de reparto propio;
 - operación offline por dispositivo en web POS y mobile;
 - efectivo y ticket offline;
 - reintentos y resolución determinista de conflictos;
@@ -132,7 +138,7 @@ La comunicación KDS multi-dispositivo durante una caída total de internet **no
 - inventario y compras avanzadas;
 - CFDI/PAC;
 - integración directa con terminal/pasarela;
-- delivery apps;
+- integraciones con apps/agregadores de delivery;
 - CRM/lealtad avanzada;
 - reservaciones online;
 - nómina/RH completo;
@@ -153,21 +159,23 @@ La comunicación KDS multi-dispositivo durante una caída total de internet **no
 - supervisor autorizador;
 - soporte técnico;
 - cliente final registrado o anónimo.
+- encargado de teléfono/capturista;
+- despachador y repartidor;
 
 ### 4.2 Journeys que definen el producto
 
 1. Abrir turno y caja.
-2. Abrir mesa u orden por canal.
-3. Añadir productos, modificadores y notas.
-4. Enviar ítems a su estación.
-5. Preparar, marcar listo y entregar.
-6. Aplicar descuento/cortesía con autorización.
-7. Dividir o consolidar cuenta según alcance de fase.
-8. Registrar pago sin duplicados.
-9. Imprimir ticket y cerrar orden.
-10. Cerrar caja y obtener corte.
-11. Continuar operaciones permitidas durante pérdida de red.
-12. Reconectar sin perder ni duplicar operaciones.
+2. Iniciar o recuperar una orden por teléfono, mostrador, recoger, domicilio o mesa.
+3. Buscar/crear cliente y confirmar teléfono, dirección, referencias, cobertura y tiempo prometido cuando aplique.
+4. Configurar productos, tamaños, variantes, mitades, ingredientes, extras, exclusiones, combos y notas.
+5. Guardar en espera, retomar, modificar o cancelar con reglas según el avance en cocina y cobro.
+6. Confirmar precio, forma de cumplimiento, pago y cambio requerido; enviar cada ítem a su estación.
+7. Preparar, marcar listo, empacar, recoger o asignar/despachar reparto.
+8. Aplicar descuento/cortesía con autorización.
+9. Dividir, consolidar o registrar pagos mixtos sin duplicados.
+10. Imprimir ticket/comanda y cerrar orden con historial íntegro.
+11. Cerrar caja y conciliar pedidos, métodos de pago y repartidores.
+12. Continuar operaciones permitidas durante pérdida de red y reconectar sin perder ni duplicar operaciones.
 
 Todo roadmap debe demostrar estos journeys progresivamente.
 
@@ -438,19 +446,209 @@ Reglas:
 
 ### 8.7 Clientes/reportes/personal
 
-- clientes e historial;
+- clientes, contactos, direcciones e historial operativo desde el POS core;
+- preferencias y advertencias visibles sin almacenar datos innecesarios;
 - ventas, márgenes, ocupación y tiempos;
 - empleados, turnos, asistencia y comisiones;
 - exportación con permisos.
 
-### 8.8 Integraciones futuras
+### 8.8 Captura multicanal y continuidad de la atención
+
+Esta sección es normativa para el rediseño del POS. Una orden es una conversación que puede interrumpirse, cambiar de canal, avanzar en cocina, cobrarse de varias formas y terminar en entrega, recolección o cancelación. La aplicación debe conservar contexto y ofrecer la siguiente acción segura según el estado real.
+
+#### 8.8.1 Puesto operativo y datos siempre visibles
+
+La pantalla principal del capturista muestra sin navegar a módulos separados:
+
+- búsqueda o alta rápida de cliente;
+- teléfono principal, direcciones y última dirección utilizada;
+- canal, origen del contacto, hora de captura, hora prometida y tiempo transcurrido;
+- sucursal, turno, caja, operador y estado de conexión/sincronización;
+- estado del pedido, cocina, cobro, empaque y entrega;
+- subtotal, descuentos, cargo de entrega, propina, impuestos cuando apliquen, pagado y saldo;
+- búsqueda de productos, favoritos y productos frecuentes del cliente;
+- acciones contextuales: guardar, poner en espera, retomar, confirmar, enviar, editar, cancelar, cobrar, imprimir y despachar;
+- indicador visible de cambios aún no enviados a cocina.
+
+Debe existir una bandeja única de trabajo con filtros para borradores, llamadas en espera, programados, confirmados, en preparación, listos, por despachar, en ruta, con incidencia y pendientes de cobro. Mesas es una vista de esa bandeja, no el centro obligatorio del producto.
+
+#### 8.8.2 Clientes y direcciones
+
+- buscar por teléfono normalizado, nombre, alias, dirección y referencia; resultados limitados al Restaurant autorizado;
+- crear cliente mínimo durante la llamada con nombre o alias y al menos un medio de contacto cuando el canal lo requiera;
+- admitir cliente anónimo para mostrador/mesa, pero exigir identidad operativa y dirección validada para domicilio;
+- conservar varios teléfonos y direcciones etiquetadas, colonia, referencias, instrucciones, coordenadas opcionales y zona de reparto;
+- detectar posibles duplicados sin fusionarlos automáticamente;
+- mostrar pedidos recientes y permitir “repetir pedido” reconstruyéndolo contra el catálogo actual, señalando productos retirados, precios cambiados y opciones inválidas;
+- congelar en la orden un snapshot de nombre, teléfono y dirección usados; editar la ficha del cliente no cambia pedidos históricos;
+- registrar consentimiento, retención y acceso a datos personales conforme se habiliten campañas o lealtad;
+- impedir que advertencias o preferencias se conviertan en texto discriminatorio o datos sensibles innecesarios.
+
+#### 8.8.3 Apertura, espera y recuperación de pedidos
+
+- iniciar pedido de teléfono, WhatsApp/manual, mostrador, recoger, domicilio, mesa, autoservicio o integración;
+- separar `fulfillmentChannel` de `sourceChannel`: un pedido de WhatsApp puede ser recoger o domicilio;
+- generar un folio humano corto además del identificador técnico;
+- autoguardar borrador tras cada cambio confirmado localmente;
+- poner una llamada en espera con motivo opcional y temporizador; volver a ella desde cualquier estación autorizada;
+- localizar una orden por folio, teléfono, cliente, dirección, operador o estado;
+- impedir borradores invisibles: toda orden abandonada aparece en una cola y puede cerrarse como “sin venta” con motivo;
+- reclamar/transferir atención entre operadores evitando ediciones simultáneas silenciosas;
+- permitir pedido inmediato o programado, con ventana prometida y activación de cocina calculada por tiempos de preparación;
+- detectar posible duplicado si el mismo teléfono/origen crea pedidos equivalentes en una ventana corta, sin bloquear falsos positivos.
+
+#### 8.8.4 Configurador de productos
+
+El catálogo debe modelar elecciones del negocio, no depender de notas libres:
+
+- variantes como tamaño y presentación;
+- grupos obligatorios y opcionales con mínimos, máximos, cantidades y opciones predeterminadas;
+- masa/pan, tipo de orilla, queso, salsa, término, guarnición, bebida y otros grupos reutilizables mediante plantillas versionadas;
+- ingredientes incluidos que puedan marcarse “sin”, sustituciones permitidas y extras con precio;
+- dependencias y compatibilidades: una opción puede habilitar, exigir o excluir otra;
+- límites por variante: ingredientes, precio, disponibilidad, estación y receta pueden variar por tamaño;
+- pizzas completas, por mitades y, si el negocio lo habilita, fracciones adicionales; cada fracción conserva sabor, ingredientes y exclusiones;
+- regla de precio de fracciones configurable y versionada: mayor precio, promedio, suma proporcional o tabla explícita;
+- combos/paquetes con componentes obligatorios, sustituciones, sobreprecios y faltantes visibles;
+- cantidad de producto y cantidad de modificador diferenciadas;
+- notas estructuradas de preparación y nota libre adicional con límites y auditoría;
+- disponibilidad por sucursal, horario, canal y agotamiento temporal;
+- snapshot completo de nombre, variante, opciones, exclusiones, precios, impuestos, estación y receta/versiones necesarias para historia y cocina.
+
+La UI resume la configuración en lenguaje de cocina y permite editarla con un toque. Antes de agregar, muestra requisitos pendientes, incompatibilidades y nuevo total. Debe poder duplicar una línea y luego variar sólo una mitad, ingrediente o nota.
+
+#### 8.8.5 Cambios, eliminación y cancelación
+
+- un ítem de borrador puede editarse o eliminarse directamente;
+- un ítem confirmado pero aún no enviado puede modificarse conservando auditoría ligera;
+- un ítem enviado requiere una operación de cambio/cancelación que notifique a las estaciones afectadas;
+- un ítem en preparación requiere permiso y confirmación del estado de cocina; el sistema registra desperdicio/cargo según política;
+- un ítem listo o entregado no desaparece: se cancela o compensa con autorización, motivo e impacto financiero/inventario;
+- si se sustituye un producto después del envío, cocina recibe cancelación del anterior y alta del nuevo, ambas relacionadas;
+- una cancelación total evalúa cocina, pagos, delivery y emisión de ticket antes de decidir devolución, saldo o movimiento compensatorio;
+- toda edición concurrente usa versión esperada y presenta un conflicto recuperable; jamás sobrescribe silenciosamente;
+- deshacer sólo aplica antes de cruzar una frontera externa; después se usa una acción compensatoria auditable.
+
+#### 8.8.6 Pagos durante la toma de pedido
+
+- efectivo ahora, efectivo contra entrega, tarjeta manual confirmada externamente, terminal integrada futura, transferencia, vale/tarjeta de regalo futura y crédito autorizado;
+- uno o varios pagos por orden, división por importe, persona o productos cuando el módulo correspondiente esté habilitado;
+- captura de “pagará con” para calcular cambio requerido sin registrarlo como pago;
+- anticipo y saldo contra entrega para pedidos programados;
+- estados independientes de orden, preparación, cumplimiento y pago;
+- pago fallido, pendiente o ambiguo no cierra la orden ni se reintenta como si fuera seguro;
+- cancelación posterior al pago crea devolución o compensación según el método; nunca elimina el pago original;
+- conciliación por caja, terminal, referencia externa y repartidor;
+- propina separada de venta y cargo de entrega, con política por canal.
+
+#### 8.8.7 Domicilio propio, recoger y despacho
+
+- verificar dirección y zona de cobertura antes de prometer entrega;
+- calcular cargo y tiempo por zona, distancia o tabla configurada, siempre con explicación al operador;
+- registrar instrucciones, referencias, contacto alterno y restricciones de acceso;
+- confirmar pedido, forma de pago, cambio necesario y hora prometida mediante lectura final al cliente;
+- estados de cumplimiento: por confirmar, programado, confirmado, preparando, listo para empacar, listo para recoger/despachar, asignado, en ruta, entregado, entrega fallida y cancelado;
+- asignar repartidor manual o automáticamente con capacidad, zona y carga visibles;
+- agrupar rutas sin mezclar dinero o propiedad de órdenes;
+- entregar al repartidor dirección, contacto mínimo, navegación, importe por cobrar e instrucciones; ocultar datos innecesarios después del cierre;
+- registrar salida, intento, incidencia, devolución a sucursal, entrega y liquidación de efectivo;
+- permitir entrega parcial sólo con política explícita y seguimiento del faltante;
+- para recoger, mostrar nombre/folio, hora prometida, llegada del cliente y anaquel/ubicación opcional;
+- integraciones con plataformas externas entran por adaptadores idempotentes y conservan origen, comisión, pago y restricciones propias.
+
+#### 8.8.8 Atajos y ergonomía
+
+- teclado y táctil con equivalencia funcional; foco visible y objetivos táctiles amplios;
+- búsqueda inmediata al escribir teléfono o producto;
+- favoritos configurables por sucursal/turno y recientes del operador;
+- atajos visibles y enseñables para nueva orden, buscar cliente, guardar/espera, enviar, cobrar y volver;
+- acciones peligrosas separadas y con autorización contextual;
+- cantidades con controles rápidos `−`, `+`, teclado numérico y multiplicación;
+- panel de orden persistente mientras se explora catálogo/cliente;
+- colores acompañados de texto/icono; sonido sólo para eventos que exigen atención y con alternativa visual;
+- modo de alto volumen que reduce navegación y conserva confirmación para dinero/cancelaciones;
+- mensajes en lenguaje operativo: qué ocurrió, qué quedó guardado y qué puede hacerse ahora;
+- ninguna espera de red borra lo capturado; el operador puede reconocer el estado pendiente y reintentar de forma idempotente.
+
+#### 8.8.9 Role plays obligatorios de descubrimiento y aceptación
+
+Cada guion se ejecuta primero como walkthrough de diseño, luego como prueba de contrato/dominio y finalmente como E2E en los clientes aplicables.
+
+| Escenario representado | Respuesta que debe ofrecer el POS | Riesgo que valida |
+|---|---|---|
+| El cliente empieza a pedir, cuelga y llama diez minutos después | Autoguardar, localizar por teléfono, mostrar quién atendió y retomar exactamente el borrador | pérdida o duplicación |
+| Entra otra llamada mientras se captura una orden | Poner la primera en espera, abrir otra y alternar desde bandeja con temporizadores | mezcla de clientes |
+| Dos operadores contestan al mismo cliente | Advertir posible duplicado y controlar propiedad/versiones sin bloquear una orden legítima | doble preparación/cobro |
+| Cliente nuevo dicta una dirección confusa | Alta rápida, búsqueda de colonia/zona, referencias, validación de cobertura y confirmación leída | entrega fallida |
+| Cliente habitual llama desde otro número | Buscar por nombre/dirección, añadir contacto y evitar fusión automática | identidad incorrecta |
+| Cliente pide “lo mismo de siempre” | Mostrar historial y reconstruir con catálogo vigente, advirtiendo cambios | precio/opción histórica inválida |
+| Pizza grande mitad especialidad A y mitad B, sin cebolla en una mitad, extra queso en toda | Configurar fracciones y alcance de cada opción, calcular con regla versionada y producir instrucción inequívoca | precio/cocina incorrectos |
+| Cambia masa/orilla y esa combinación no existe en el tamaño elegido | Explicar incompatibilidad y ofrecer opciones válidas sin perder el resto | pedido imposible |
+| Combo requiere bebida pero está agotada | Bloquear confirmación incompleta y mostrar sustituciones autorizadas/sobreprecio | comanda incompleta |
+| Cliente elimina un artículo antes de enviar | Retirarlo inmediatamente y recalcular | fricción innecesaria |
+| Cliente cambia un artículo ya enviado | Consultar estado, emitir cancelación/cambio a cocina y recalcular con autorización aplicable | cocina prepara versión vieja |
+| Cliente cancela mientras ya se prepara | Mostrar costo/estado/pago, pedir motivo y autorización, avisar cocina y crear devolución/compensación | pérdida financiera/auditoría |
+| Cliente agrega artículos cuando el pedido está en ruta | Crear ampliación vinculada o nueva entrega según política; no alterar silenciosamente lo despachado | repartidor lleva pedido incorrecto |
+| Pedido programado para más tarde | Guardar hora prometida, calcular liberación a cocina y alertar retraso | preparación demasiado temprana/tardía |
+| Cliente cambia de domicilio a recoger | Revalidar cargo, hora, pago, cocina y cumplimiento; conservar historial del cambio | cobro/entrega inconsistentes |
+| Cliente pagará efectivo con billete grande | Registrar cambio requerido, mostrarlo a despacho/repartidor y conciliar importe real | falta de cambio |
+| Cliente divide efectivo y tarjeta | Registrar pagos independientes y saldo restante; cerrar sólo al liquidar | doble cobro/saldo falso |
+| Terminal tarda y el cliente cuelga | Mantener pago pendiente/ambiguo y permitir consulta/conciliación antes de reintentar | doble cargo |
+| Dirección está fuera de cobertura | Bloquear promesa automática; permitir recoger u override autorizado con cargo/tiempo explícitos | promesa incumplida |
+| Repartidor no encuentra al cliente | Registrar intentos, contactar con datos mínimos, reprogramar o regresar con incidencia | pedido perdido/dinero sin liquidar |
+| Falta un producto al empacar | Detener despacho, marcar incidencia, decidir reposición/reembolso y actualizar tiempo prometido | entrega incompleta |
+| Se cae la red al confirmar | Mostrar pendiente, conservar orden y reenviar con la misma idempotencia al reconectar | pedido perdido/duplicado |
+| Cliente reclama que su pedido previo fue distinto | Mostrar snapshot, cambios, actor, tiempos, pagos y eventos sin exponer datos ajenos | disputa sin evidencia |
+| Supervisor corrige un error después del cierre | Movimiento compensatorio, motivo y autorización; historial inmutable | fraude o borrado financiero |
+| Dos personas comparten teléfono pero tienen nombres/direcciones distintas | Mostrar coincidencias con contexto y exigir selección explícita | asignar historial equivocado |
+| Cliente no conoce colonia o numeración exacta | Guardar borrador, apoyar búsqueda por referencias/mapa y marcar dirección pendiente de validar | inventar una dirección |
+| Cliente solicita entrega en una sucursal distinta | Evaluar cobertura/capacidad de sucursales autorizadas y transferir mediante operación explícita | fuga entre sucursales/doble orden |
+| Cliente reporta alergia | Mostrar advertencia operativa, confirmar limitaciones del negocio y propagar nota destacada a cocina | falsa garantía o nota oculta |
+| Precio cambia mientras la llamada está en espera | Mostrar el cambio y exigir reconfirmación antes de enviar; conservar snapshot al confirmar | cobro inesperado |
+| Promoción deja de aplicar al eliminar un producto | Recalcular y explicar la regla afectada antes de confirmar el cambio | total engañoso |
+| Cupón ya fue utilizado desde otro dispositivo | Revalidar en servidor y ofrecer continuar sin cupón o cancelar | doble beneficio |
+| Se agota un ingrediente después de confirmar | Marcar incidencia, localizar órdenes afectadas y ofrecer sustitución/reembolso autorizado | cocina improvisa |
+| Cocina necesita aclaración | Pausar el ítem, notificar al capturista con pregunta asociada y registrar la respuesta | llamadas informales sin trazabilidad |
+| Una estación termina y otra se retrasa | Mostrar preparación parcial y coordinar promesa/empaque sin marcar todo listo | entrega fría/incompleta |
+| Falla la impresora pero KDS recibió la orden | Mostrar canales de producción confirmados y reimprimir sólo el destino fallido | comanda duplicada |
+| Cliente recoge y otra persona pasará por el pedido | Registrar nombre/contacto de recogida y verificar por folio sin revelar datos excesivos | entrega a persona incorrecta |
+| Cliente llega antes o después de la hora prometida | Mostrar estado real, nueva estimación y tiempo de espera; registrar entrega efectiva | promesa invisible |
+| Parte del pedido se entrega ahora y otra después | Exigir política de cumplimiento parcial, responsable, saldo e ítems pendientes vinculados | cierre prematuro |
+| Pedido corporativo requiere varias direcciones o comprobantes | Dividir en cumplimientos/órdenes relacionadas según política y preservar conciliación | una orden imposible de despachar |
+| Cambio de turno con llamadas en espera y pedidos en ruta | Handoff obligatorio de bandeja, dinero por cobrar e incidencias | trabajo huérfano |
+| Repartidor lleva varias órdenes y una se cancela | Retirar sólo la orden afectada, recalcular ruta/liquidación y avisar al repartidor | afectar pedidos ajenos |
+| Repartidor cobra una cantidad diferente | Registrar cobro real, diferencia, motivo y revisión; no ajustar venta silenciosamente | faltante de caja |
+| Cliente pide factura después del cierre | Iniciar flujo fiscal vinculado al ticket sin reabrir ni alterar la venta | historia financiera mutada |
+| Cliente solicita devolución parcial al día siguiente | Localizar venta y línea, validar política/autorización y crear refund/compensación | devolución sin venta origen |
+| Orden externa llega repetida por webhook | Deduplicar por identidad del canal y devolver el mismo resultado | doble producción |
+| Plataforma externa cancela cuando cocina inició | Aplicar política de aceptación/cancelación del canal y registrar comisión/reembolso | estados externos divergentes |
+| Operador intenta ver clientes de otro restaurante | Fallar cerrado en búsqueda, historial, direcciones y pedidos | fuga de datos personales |
+| Sesión del operador es revocada durante una captura | Conservar borrador seguro, bloquear mutaciones y permitir reasignación autorizada | acciones sin permiso/pérdida |
+| Dispositivo se reinicia con un borrador y pago pendiente | Restaurar estado y consultar autoridad antes de permitir cobro o envío | pérdida/doble cobro |
+| Cliente no responde durante la confirmación final | Mantener la orden por confirmar, programar devolución de llamada y no liberar cocina/cobro automáticamente | preparar un pedido no confirmado |
+
+#### 8.8.10 Criterios de aceptación del puesto de captura
+
+- una persona capacitada localiza y retoma una llamada interrumpida en no más de 10 segundos;
+- cliente habitual por teléfono y dirección frecuente se asignan sin abandonar la orden;
+- una pizza configurable válida se captura sin nota libre y llega a KDS/impresión sin ambigüedad;
+- el sistema bloquea configuraciones incompletas o incompatibles antes de cocina;
+- eliminar, modificar y cancelar producen comportamientos distintos según estado y todos preservan auditoría;
+- domicilio muestra cobertura, cargo, promesa, pago/cambio y despacho antes de confirmar;
+- búsqueda, captura y cobro funcionan con táctil y teclado, sin acciones críticas ocultas;
+- cierre/reapertura, pérdida de red y doble envío no pierden ni duplican orden, cocina o pago;
+- aislamiento por Restaurant/Branch y permisos se prueba en clientes, direcciones, órdenes y reparto;
+- cada role play aplicable tiene resultado esperado, evidencia y prueba de regresión antes del lanzamiento.
+
+### 8.9 Integraciones y expansión
 
 - PAC/CFDI;
 - pasarela/terminal;
-- delivery;
-- notificaciones;
+- agregadores y canales externos de delivery;
+- notificaciones y mensajería;
 - almacenamiento;
-- reservas/lealtad.
+- reservas/lealtad;
+- kiosco, menú QR y pedido web propio.
 
 ---
 
@@ -764,7 +962,7 @@ Criterios de salida:
 - secretos fuera de Git;
 - documentación de ejecución local.
 
-### Fase 1 — POS core online / piloto
+### Fase 1 — Base técnica POS online (completada parcialmente)
 
 Trabajo:
 
@@ -780,33 +978,46 @@ Trabajo:
 
 Criterios de salida:
 
-- journey mesa → comanda → KDS → pago → cierre;
+- journeys técnicos de mesa → comanda → KDS → pago → cierre;
 - snapshots conservan totales históricos;
 - reintentos no duplican;
 - estados inválidos/doble cobro bloqueados;
 - `card_manual` conciliado por separado, sin simular una integración con terminal;
 - KDS aislado por sucursal/estación;
 - acciones sensibles auditadas;
-- piloto online operable.
+- base técnica operable; no se considera piloto comercial hasta completar la Fase 2 rebaselinada.
 
-### Fase 2 — Mobile online
+### Fase 2 — Puesto de captura multicanal y operación comercial
 
 Trabajo:
 
-- Expo;
-- login/sucursal/turno;
-- mesas/comandas;
-- push de listo;
-- impresión Bluetooth según hardware elegido;
-- paridad de dominio.
+- mapa de estados independiente para orden, preparación, cumplimiento y pago;
+- directorio de clientes, contactos, direcciones, duplicados e historial operativo;
+- bandeja de nueva orden/borradores/en espera/programados/activos e incidencias;
+- canales teléfono, mostrador, recoger, domicilio propio y mesa, separando origen y cumplimiento;
+- autoguardado, recuperación, propiedad/transferencia y control de edición concurrente;
+- catálogo de variantes, plantillas de modificadores, dependencias, combos y agotados;
+- configurador de pizza con tamaños, masas, orillas, ingredientes, exclusiones, extras y fracciones;
+- modificaciones y cancelaciones según avance de cocina y pago;
+- pago simple y mixto, “pagará con”, anticipos, saldos y estados ambiguos;
+- domicilio propio: cobertura, zonas/cargos, promesa, empaque, repartidor, incidencias y liquidación;
+- POS web/tablet como puesto primario de captura y Mobile con funciones según rol;
+- KDS/impresión con instrucciones estructuradas y cambios relacionados;
+- notificación de listo y impresión según hardware elegido;
+- role plays y mediciones operativas de la sección 8.8.
 
 Criterios de salida:
 
-- Android/iOS objetivo completan el flujo;
-- permisos correctos;
-- mismos cálculos que web/API;
-- push correcto;
-- impresión verificada en hardware o excluida explícitamente.
+- teléfono → cliente/dirección → pizza configurable → cocina → despacho → cobro → cierre funciona end-to-end;
+- llamada interrumpida se guarda y recupera en menos de 10 segundos sin duplicar;
+- cambios y cancelaciones antes/después de cocina y pago conservan auditoría y compensaciones;
+- órdenes de mesa, mostrador, recoger y domicilio comparten reglas y presentan acciones propias del canal;
+- búsqueda por teléfono/nombre/dirección e historial respetan aislamiento y privacidad;
+- KDS y ticket expresan variantes, fracciones, exclusiones y extras sin ambigüedad;
+- pruebas de doble envío, doble cobro, concurrencia, pago ambiguo y caída de red quedan verdes;
+- teclado, táctil, desktop/tablet y Android objetivo completan los role plays aplicables;
+- impresión verificada en hardware o excluida explícitamente;
+- Emmanuel aprueba el flujo funcional antes de convertirlo en dirección visual final.
 
 ### Fase 3 — Offline-first por dispositivo
 
@@ -866,41 +1077,42 @@ Criterios de salida:
 - costo reproducible;
 - trazabilidad por actor/motivo.
 
-### Fase 5 — Fiscal y pagos avanzados
+### Fase 5 — Gestión, CRM y personal
+
+Trabajo:
+
+- dashboard operativo y gerencial;
+- reportes y exportación;
+- segmentación, preferencias, consentimiento y lealtad sobre el directorio de clientes ya operativo;
+- empleados, asistencia, comisiones y desempeño;
+- rentabilidad por canal, producto, zona y repartidor.
+
+Criterios de salida:
+
+- métricas definidas/versionadas y reconciliables con órdenes/pagos;
+- filtros por Restaurant/Branch/canal/zona horaria;
+- exportaciones con permisos y privacidad/retención;
+- historial operativo no se altera por cambios posteriores del cliente o catálogo;
+- indicadores de tiempo y margen trazables hasta eventos autoritativos.
+
+### Fase 6 — Fiscal, pagos integrados y canales externos
 
 Trabajo:
 
 - PAC/CFDI si aplica;
 - pending_invoice y reintentos;
 - proveedor de pago/terminal;
-- pagos mixtos/división;
-- propinas/reparto;
-- refunds/conciliación.
+- refunds y conciliación externa;
+- adaptadores para agregadores de delivery, pedido web propio, kiosco y menú QR;
+- normalización de productos, modificadores, disponibilidad, promociones y estados por canal.
 
 Criterios de salida:
 
-- contract tests;
-- secretos externos;
-- webhooks/reintentos idempotentes;
-- sin PAN/CVV;
-- factura pendiente recuperable;
-- conciliación auditada.
-
-### Fase 6 — Reportes, CRM y personal
-
-Trabajo:
-
-- dashboard;
-- exportación;
-- clientes;
-- empleados/clock-in/comisiones.
-
-Criterios de salida:
-
-- métricas definidas/versionadas;
-- filtros por Restaurant/Branch/zona horaria;
-- exportaciones con permisos;
-- privacidad/retención.
+- contract tests y webhooks/reintentos idempotentes;
+- secretos externos protegidos y sin PAN/CVV;
+- pago/factura pendiente recuperable y conciliación auditada;
+- pedidos externos no duplican órdenes ni eluden permisos, disponibilidad o cocina;
+- comisión, pago, cancelación y reembolso conservan la semántica del canal origen.
 
 ### Fase 7 — Multi-sucursal y lanzamiento
 
@@ -922,12 +1134,13 @@ Criterios de salida:
 - importador idempotente;
 - checklist go/no-go aprobado.
 
-### Fase 8 — Futuro
+### Fase 8 — Expansión
 
-- delivery;
-- lealtad;
-- reservaciones;
-- integraciones no críticas.
+- reservaciones y lista de espera;
+- promociones/lealtad avanzada y tarjetas de regalo;
+- optimización de rutas y flota;
+- franquicias, central de producción y capacidades multiempresa avanzadas;
+- integraciones no críticas evaluadas por contrato y demanda real.
 
 ---
 
@@ -1115,6 +1328,9 @@ No se hará fork literal de un POS legado. La tabla es un inventario de referenc
 | [longnick/small-pos-open-source](https://github.com/longnick/small-pos-open-source) | Estructura TypeScript/local-first | Prototipo pequeño; no prueba producción |
 | [rezadrian01/Kasirku](https://github.com/rezadrian01/Kasirku) | KDS, impresión e integración de pago | Verificar contratos/licencia |
 | [ury-erp/mosaic](https://github.com/ury-erp/mosaic) | KDS/KOT y estaciones | Referencia acotada de cocina |
+| [Soft Restaurant Cloud — ficha técnica](https://softrestaurant.com/docs?download=206%3Aficha-tecnica-soft-restaurant-cloud) | Benchmark funcional de captura | Documenta cliente/dirección para domicilio, búsqueda, modificadores, comentarios, paquetes, eliminación, cancelación enviada, reimpresión y envío a preparación; se usa como cobertura, no como contrato ni código |
+| [Soft Restaurant — integraciones](https://softrestaurant.com/integraciones/) | Benchmark de canales | Distingue reparto propio, pedidos digitales y centralización de agregadores; superRestaurant también los separa por alcance |
+| [Soft Restaurant — temario de servicio a domicilio](https://email.softrestaurant.com.mx/images/calendario/files/Nivel_1_-_Control_de_Venta.pdf) | Benchmark de operación | Incluye último pedido, zonas/costo, pedidos programados, preparación, despacho, arribo, entrega, pagos múltiples y agrupados |
 
 Reglas:
 
@@ -1157,6 +1373,10 @@ Reglas:
 | Base local comprometida | Alta | mínimo de datos, cifrado y revocación |
 | Prototipo remoto contaminado | Media | rama/tag legado y .gitignore |
 | Migraciones irreversibles | Alta | backups, migraciones aditivas y rollback |
+| Captura diseñada alrededor de mesas | Crítica | Fase 2 multicanal y role plays de domicilio antes de aceptar UX/piloto |
+| Configuración de producto ambigua en cocina | Alta | opciones estructuradas, snapshots y pruebas KDS/impresión |
+| Llamadas interrumpidas o ediciones concurrentes | Alta | autoguardado, bandeja, ownership, versiones e idempotencia |
+| Cambios/cancelaciones sin propagación | Crítica | máquina de estados, eventos correctivos, autorizaciones y compensaciones |
 
 ---
 
@@ -1172,6 +1392,8 @@ Reglas:
 8. ¿Se necesita KDS multi-dispositivo sin internet en v1?
 9. **Resuelta 2026-08-29:** opción B híbrida Supabase+NestJS.
 10. ¿Se aprueba `card_manual` para piloto/v1 bajo las reglas de la Sección 3.2?
+11. ¿Qué reglas comerciales usará Vittorinos para precio por mitades, sustituciones, cargos por zona y cancelaciones después de cocina? Se documentan como configuración, no se adivinan en código.
+12. ¿Qué funciones pertenecen al POS web/tablet, al móvil de mesero/repartidor y al backoffice según cada rol y hardware del piloto?
 
 Estas preguntas no bloquean toda la Fase 0; sí bloquean las decisiones específicas indicadas en TODO.md.
 
@@ -1185,15 +1407,15 @@ Estas preguntas no bloquean toda la Fase 0; sí bloquean las decisiones específ
 - **2026-08-25** — Corrección posterior: ADR-010 se convirtió en puerta de Fase 0 con tres opciones y spike; se verificó que el prototipo solo usa CRUD de Supabase; se definió `card_manual`; se corrigieron datos/licencias de referencias y se eliminó lenguaje no demostrable.
 - **2026-08-25** — Plan v2.2 listo para implementación de Fase 0: spike ADR-010 limitado a 4 días/hard stop 5, gates y GO/NO-GO por opción, y packages/domain autorizado como track paralelo independiente.
 - **2026-08-29** — Plan v2.3: ADR-010 aceptó la opción B con 10 gates y 75/100; ADR-001 registra la arquitectura híbrida y separa las decisiones de ORM, colas, Realtime, despliegue y schema productivo.
+- **2026-09-15** — Plan v3.0: revisión funcional detectó que clientes estaban diferidos y Mobile restringía captura a mesa pese a que dominio reconocía canales. Se rebaselinó Fase 2 alrededor de domicilio propio, clientes/direcciones, continuidad de llamadas, productos configurables, cambios, cancelaciones, pagos, cocina y despacho; agregadores externos permanecen en una fase posterior.
 
 ---
 
 ## 21. Siguiente paso
 
-1. Mantener ADR-006: prototipo preservado y raíz greenfield separada.
-2. Mantener `.gitignore` y la rama limpia de modernización.
-3. Mantener monorepo y CI neutral.
-4. Revisar ADR-001 y mantener sus límites de escritura, Auth, RLS y migraciones.
-5. Implementar `apps/api` y Auth productivos sin promover el schema del spike.
-6. Diseñar el schema/migraciones de producto desde invariantes y una sola autoridad.
-7. Elegir y verificar jobs, Realtime, despliegue y recuperación física antes de producción.
+1. Revisar y aprobar el rebaseline funcional y los role plays de la sección 8.8.
+2. Convertir el primer slice en contratos y dominio: estados independientes, borrador recuperable, cliente/dirección snapshot y canal origen/cumplimiento.
+3. Diseñar la bandeja de captura y el configurador con walkthroughs de teléfono/domicilio antes de implementar UI final.
+4. Implementar verticalmente teléfono → cliente/dirección → producto configurable → cocina, seguido de cambios/cancelaciones y luego cobro/despacho.
+5. Mantener ADR-001, ADR-006, aislamiento, dinero, idempotencia y migraciones como límites de cada slice.
+6. Ejecutar los role plays aplicables como E2E antes de declarar el piloto comercial.
