@@ -1,5 +1,12 @@
 # HANDOFF
 
+## Política temporal pura de captura — 2026-09-15
+
+- Tarea/estado: definición P2 de captura sigue `IN_PROGRESS`. Se añadió `packages/domain/src/capture-timing-policy.ts` con cuatro pruebas nuevas, export en barrel y entrada en el script del paquete; se actualizaron matriz/plan de slice, TODO y decisiones durables. Alcance estrictamente local; no hay lease persistente, opt-in en contrato, API, UI ni SQL.
+- Decisiones: recuperación un mes calendario UTC con clamp al último día; reserva de edición cinco minutos desde reloj servidor; igualdad al vencimiento = expirado; lease vencido se reclama con CAS nuevo; renovación de recuperación sólo al vencimiento con selección previa del usuario. La retención de abandonados 90 días sigue separada. No se usaron relojes de dispositivo como autoridad, ni se creó una segunda autoridad de Order/Payment/KDS.
+- Verificación: ESLint, typecheck, build y suite completa `npm.cmd test --prefix packages/domain` pasaron; cuatro casos nuevos cubren fin de mes/bisiesto, cruce de medianoche, igualdad de vencimiento, opt-in, reloj que retrocede y timestamps inválidos. CodeGraph pre-edit encontró sólo leases de arneses de smoke, no política de captura equivalente; post-sync quedó actualizado en 346 archivos, 5,898 nodos y 24,421 relaciones. `impact captureRecoveryExpiresAt` y `affected` sólo alcanzan módulo, barrel y su prueba.
+- Riesgo/siguiente acción mínima: diseñar el flag opt-in en contrato, la migración nueva local y el servicio PostgreSQL/Nest con CAS/idempotencia/aislamiento antes de afirmar recuperación real. Ninguna mutación remota ni interacción Git en este subcorte; se avisará antes de commit/push por tamaño del diff. No subagentes; razonamiento alto por concurrencia, tenancy y retención.
+
 ## Publicación del corte S0/S1 de captura — 2026-09-15
 
 - Emmanuel autorizó commit y push a `origin/main`. El commit convencional `7715ef1b9ac2275e9478bcc9c9a8b9c310a80b6c` (`feat: add multichannel capture domain contracts`) publicó los 16 archivos de plan, matriz, contratos, dominio, pruebas y documentación; `main...origin/main` quedó `0/0` después del push. El archivo generado `apps/web/next-env.d.ts` permaneció sin stage y sigue modificado por Next dev.

@@ -167,6 +167,16 @@ export {
   resumeCaptureDraft,
   transferCaptureDraft,
 } from "./capture-draft.js";
+export {
+  ExpiredCaptureEditingLeaseError,
+  InvalidCaptureRecoveryPreferenceError,
+  InvalidCaptureTimestampError,
+  captureEditingLeaseExpiresAt,
+  captureRecoveryExpiresAt,
+  isCaptureDeadlineActive,
+  renewCaptureEditingLease,
+  renewCaptureRecovery,
+} from "./capture-timing-policy.js";
 export type {
   AutosaveCaptureDraftInput,
   CaptureAuditContext,

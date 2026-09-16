@@ -37,6 +37,8 @@ El legado conserva `channel` y `Order.status`. No se hará backfill heurístico 
 
 `packages/domain/src/capture-draft.ts` implementa el agregado puro e inmutable `CaptureDraft` y eventos de auditoría para ownership, hold, claim/resume, transferencia, confirmación y `no_sale`. El dominio recibe actor autenticado y aplica reglas de propiedad; versiones optimistas, leases, deduplicación y resolución membership→actor pertenecen a persistencia/API. No se modificaron `Order`, codecs V1/V2, API, SQL, migraciones ni UI.
 
+`packages/domain/src/capture-timing-policy.ts` fija el cálculo puro de los dos plazos aprobados: un mes calendario UTC de recuperabilidad (el día final se acota al último día del mes), y cinco minutos de reserva exclusiva. Un lease sólo se renueva si seguía activo en el instante observado; el vencido necesita un nuevo claim CAS. La recuperación opt-in no se extiende en cada autoguardado: al alcanzar el vencimiento, una comprobación server-side podrá extenderla por un mes desde el instante autoritativo de comprobación. El servidor, no el reloj del dispositivo, decide estos instantes; el contrato aún no tiene el flag de opt-in ni existe job/API de renovación.
+
 `confirmCaptureDraft` significa confirmar la venta y enlazarla a una Order operativa; la atención del borrador se libera, pero la Order sigue visible en la bandeja de trabajo para cocina, cobro y entrega. Sólo después de cumplirse **cobro y entrega** la orden pasa a historial de sólo lectura. La confirmación comercial por sí sola no equivale a pago ni fulfillment. El cierre autoritativo requiere una proyección transaccional de esos estados, todavía no implementada.
 
 ## 3. Primer slice utilizable: llamada recuperable en espera
