@@ -1,5 +1,11 @@
 # HANDOFF
 
+## Publicación del corte S0/S1 de captura — 2026-09-15
+
+- Emmanuel autorizó commit y push a `origin/main`. El commit convencional `7715ef1b9ac2275e9478bcc9c9a8b9c310a80b6c` (`feat: add multichannel capture domain contracts`) publicó los 16 archivos de plan, matriz, contratos, dominio, pruebas y documentación; `main...origin/main` quedó `0/0` después del push. El archivo generado `apps/web/next-env.d.ts` permaneció sin stage y sigue modificado por Next dev.
+- Antes de publicar pasaron ESLint y typecheck de ambos paquetes, compilación de tests, las 7 pruebas de `CaptureDraft`, las 3 de estados comerciales y el runtime test del contrato; `git diff --cached --check` pasó. No hubo SQL, migraciones remotas, E2E, datos, Auth o secretos.
+- Siguiente acción mínima: diseñar y verificar localmente la persistencia/CAS para los dos plazos aprobados (recuperación un mes renovable opt-in, reserva de edición cinco minutos), seguida del RBAC y aislamiento por tenant. Avisar antes del siguiente commit; ninguna migración remota se aplica sin autorización concreta.
+
 ## S1 contrato y dominio de captura multicanal — 2026-09-15
 
 - Tarea/estado: rebaseline permanece `REVIEW`; definición de estados/comandos continúa `IN_PROGRESS` porque faltan persistencia/API/UI y revisión humana. S1 local implementado sobre `docs/architecture/P2_MULTICHANNEL_CAPTURE_SLICE.md`.
