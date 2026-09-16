@@ -49,3 +49,15 @@ export function buildCaptureCatalogAudit(baseSql: string, captureSupplementSql: 
     .replace(") <> 38", ") <> 40").replace(") <> 36", ") <> 38");
   return validateCatalogAuditSql(`${migrated}\n${captureSupplementSql}`);
 }
+
+export function buildCustomerDirectoryCatalogAudit(baseSql: string, captureSupplementSql: string, directorySupplementSql: string): string {
+  const capture = buildCaptureCatalogAudit(baseSql, captureSupplementSql);
+  const functionTail = "pg_catalog.to_regprocedure('app_private.mutate_capture_attention(uuid,text,jsonb)')";
+  const migrated = capture.replace(
+    "'capture_drafts','capture_command_events'",
+    "'capture_drafts','capture_command_events','customers','customer_phones','customer_addresses','customer_party_snapshots','customer_fulfillment_snapshots','customer_command_events'",
+  ).replaceAll(") <> 29", ") <> 35")
+    .replaceAll(functionTail, `${functionTail},\n    pg_catalog.to_regprocedure('app_private.mutate_customer_directory(uuid,text,jsonb)'),\n    pg_catalog.to_regprocedure('app_private.search_customer_directory(uuid,jsonb)')`)
+    .replace(") <> 40", ") <> 42").replace(") <> 38", ") <> 40");
+  return validateCatalogAuditSql(`${migrated}\n${directorySupplementSql}`);
+}

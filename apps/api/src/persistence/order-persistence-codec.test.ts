@@ -169,3 +169,4 @@ test("rejects non-canonical ratios and divergent mutation scope", () => {
   divergent.auditEvent.branchId = "branch-2";
   assert.throws(() => decodeOrderMutationRecord(divergent), OrderPersistenceCodecError);
 });
+import "./customer-persistence-codec.test.js";

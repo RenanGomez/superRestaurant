@@ -384,3 +384,4 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
   }
 });
 import "./captures.test.js";
+import "./customer-directory.test.js";

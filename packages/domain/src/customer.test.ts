@@ -17,9 +17,9 @@ test("coordinates do not validate an address; explicit attestation and edits pre
   const address = createCustomerAddress(source);
   const party = snapshotCustomerParty(createCustomerProfile(input()), "restaurant-a", "contact-a");
   assert.equal(address.validation, null);
-  assert.throws(() => snapshotCustomerFulfillment(address, party, "restaurant-a"), InvalidCustomerProfileError);
+  assert.throws(() => snapshotCustomerFulfillment(address, party, "restaurant-a", "branch-a"), InvalidCustomerProfileError);
   const validated = validateCustomerAddress(address, validationInput());
-  const snapshot = snapshotCustomerFulfillment(validated, party, "restaurant-a");
+  const snapshot = snapshotCustomerFulfillment(validated, party, "restaurant-a", "branch-a");
   source.coordinates.latitudeE6 = 0;
   const edited = createCustomerAddress({ ...addressInput(), streetLine: "Calle Dos 20" });
   assert.equal(edited.validation, null);
@@ -36,9 +36,10 @@ test("address validation and fulfillment reject incomplete, foreign and malforme
   const validated = validateCustomerAddress(address, validationInput());
   assert.throws(() => validateCustomerAddress(createCustomerAddress({ ...addressInput(), streetLine: null }), validationInput()), InvalidCustomerProfileError);
   assert.throws(() => validateCustomerAddress(address, { ...validationInput(), restaurantId: "other" }), CustomerScopeRejectedError);
-  assert.throws(() => snapshotCustomerFulfillment(validated, party, "other"), CustomerScopeRejectedError);
-  assert.throws(() => snapshotCustomerFulfillment(validated, { ...party, customerId: "other" }, "restaurant-a"), CustomerScopeRejectedError);
-  assert.throws(() => snapshotCustomerFulfillment(validated, { ...party, phoneNormalizedValue: "tampered" }, "restaurant-a"), InvalidCustomerProfileError);
+  assert.throws(() => snapshotCustomerFulfillment(validated, party, "other", "branch-a"), CustomerScopeRejectedError);
+  assert.throws(() => snapshotCustomerFulfillment(validated, party, "restaurant-a", "branch-b"), CustomerScopeRejectedError);
+  assert.throws(() => snapshotCustomerFulfillment(validated, { ...party, customerId: "other" }, "restaurant-a", "branch-a"), CustomerScopeRejectedError);
+  assert.throws(() => snapshotCustomerFulfillment(validated, { ...party, phoneNormalizedValue: "tampered" }, "restaurant-a", "branch-a"), InvalidCustomerProfileError);
   for (const validatedAt of ["infinity", "2026-02-30T10:00:00.000Z", "2026-09-16T10:00:00Z"]) {
     assert.throws(() => validateCustomerAddress(address, { ...validationInput(), validatedAt }), InvalidCustomerProfileError);
   }

@@ -135,6 +135,10 @@ export const RBAC_PERMISSION_CODES = Object.freeze([
   "captures.claim",
   "captures.transfer",
   "captures.takeover",
+  "customers.read",
+  "customers.create",
+  "customers.update",
+  "customers.validate",
 ] as const);
 
 export type RbacPermissionCode = (typeof RBAC_PERMISSION_CODES)[number];
@@ -1085,3 +1089,5 @@ export type {
   OperationalShiftScopeV1,
   OperationalShiftSummaryV1,
 } from "./shifts.js";
+export { CUSTOMER_SEARCH_MODES, parseSaveCustomerProfileCommandV1, parseSaveCustomerAddressCommandV1, parseValidateCustomerAddressCommandV1, parseCustomerProfileRecordV1, parseCustomerAddressRecordV1, parseCustomerProfileMutationResultV1, parseCustomerAddressMutationResultV1, parseSearchCustomerDirectoryQueryV1, parseCustomerDirectorySearchResultV1 } from "./customers.js";
+export type { CustomerCommandInputV1, CustomerPhoneInputV1, SaveCustomerProfileCommandV1, CustomerAddressFieldsV1, SaveCustomerAddressCommandV1, ValidateCustomerAddressCommandV1, CustomerPhoneV1, CustomerProfileRecordV1, CustomerAddressValidationV1, CustomerAddressRecordV1, CustomerProfileMutationResultV1, CustomerAddressMutationResultV1, CustomerSearchModeV1, CustomerSearchCursorV1, SearchCustomerDirectoryQueryV1, CustomerSearchAddressV1, CustomerSearchCandidateV1, CustomerDirectorySearchResultV1 } from "./customers.js";

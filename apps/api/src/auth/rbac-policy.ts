@@ -31,6 +31,10 @@ const allPermissions = Object.freeze([
   "captures.claim",
   "captures.transfer",
   "captures.takeover",
+  "customers.read",
+  "customers.create",
+  "customers.update",
+  "customers.validate",
 ] satisfies readonly RbacPermissionCode[]);
 
 const managerPermissions = without(allPermissions, "memberships.manage");
@@ -55,6 +59,10 @@ const supervisorPermissions = permissions(
   "captures.claim",
   "captures.transfer",
   "captures.takeover",
+  "customers.read",
+  "customers.create",
+  "customers.update",
+  "customers.validate",
 );
 
 export const RBAC_ROLE_PERMISSIONS_V1 = Object.freeze({
@@ -76,6 +84,10 @@ export const RBAC_ROLE_PERMISSIONS_V1 = Object.freeze({
     "captures.create",
     "captures.update",
     "captures.claim",
+    "customers.read",
+    "customers.create",
+    "customers.update",
+    "customers.validate",
   ),
   waiter: permissions(
     "branch.select",
@@ -90,6 +102,10 @@ export const RBAC_ROLE_PERMISSIONS_V1 = Object.freeze({
     "captures.create",
     "captures.update",
     "captures.claim",
+    "customers.read",
+    "customers.create",
+    "customers.update",
+    "customers.validate",
   ),
   kitchen: permissions("branch.select", "orders.read", "kds.read", "kds.transition"),
   viewer: permissions("branch.select", "catalog.read", "tables.read", "orders.read", "kds.read", "reports.read"),

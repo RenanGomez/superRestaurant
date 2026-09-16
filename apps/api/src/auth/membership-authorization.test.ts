@@ -108,3 +108,15 @@ test("capture authorization revalidates active exact-scope membership on every r
     await assert.rejects(mismatched.authorizeBranch(principal, scopeInput, "captures.takeover"), ScopeAuthorizationRejectedError);
   }
 });
+
+test("customer directory authorization revalidates the operational branch even for restaurant-owned records", async () => {
+  let active = true;
+  const operator = new MembershipAuthorizationService({
+    findActiveMembership: async () => active ? { roles: ["waiter"], scope } : undefined,
+  });
+  for (const permission of ["customers.read", "customers.create", "customers.update", "customers.validate"] as const) {
+    await operator.authorizeBranch(principal, scopeInput, permission);
+  }
+  active = false;
+  await assert.rejects(operator.authorizeBranch(principal, scopeInput, "customers.read"), ScopeAuthorizationRejectedError);
+});

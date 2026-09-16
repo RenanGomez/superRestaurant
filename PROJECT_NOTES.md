@@ -1,5 +1,15 @@
 # PROJECT_NOTES
 
+Búsqueda Customer V1 (2026-09-16): phone es coincidencia exacta de clave normalizada; name/address son contains case-insensitive dentro del Restaurant. Paginación estable por updatedAt desc+customerId asc, máximo 20. Resultados muestran teléfono capturado y contexto de dirección, no normalizedValue ni evidencia de auditoría; validación se reduce a booleano para la Branch solicitada. Coincidencias nunca se fusionan.
+
+Journal Customer (2026-09-16): una operación privada versionada maneja profile_saved, address_saved y address_validated. Cada comando aceptado produce exactamente un customer_command_event que también conserva el resultado de replay; idempotencia se limita por actor+Restaurant+Branch. Profile y Address tienen secuencias CAS independientes. occurredAt del dispositivo es sólo evidencia; validatedAt/updatedAt provienen del reloj servidor tras adquirir locks.
+
+RBAC directorio Customer (2026-09-16): read/create/update/validate son permisos operativos de owner/admin/manager/supervisor/cashier/waiter; no de kitchen/viewer/auditor. Customer es Restaurant-scoped, pero toda operación requiere una membresía activa en la Branch de request. Guardar Address siempre devuelve ficha sin validación; validar es un comando separado con actor/Branch/event/device derivados o vinculados por servidor.
+
+Persistencia candidata Customer (2026-09-16): directorio editable normalizado y snapshots históricos son superficies separadas. Teléfono normalizado se indexa pero nunca es único; coincidencias son candidatos. Customer es Restaurant-scoped; Branch se conserva en validación y cumplimiento. Borradores Address pueden estar incompletos/con coordenadas sin validarse. No hay acceso directo: writers privados futuros serán responsables de CAS, auditoría, normalización, limpieza de validación al editar e inserción inmutable de snapshots.
+
+Contratos Customer/Address V1 (2026-09-16): pertenencia del directorio por Restaurant, Branch como contexto operativo/autorizado. expectedVersion de comandos Address corresponde al registro Address, independiente de Profile. Save es reemplazo completo y reinicia validación; Validate expresa intención sobre versión existente, no recibe evidencia/actor/fecha de validación. Autoridad de autenticación, normalización y validación queda en servidor/dominio.
+
 Decisión de implementación 2026-09-16: las direcciones Customer pueden guardarse incompletas y con coordenadas sin quedar validadas. El dominio permite atestación explícita con contexto auditado y snapshot inmutable del cliente/dirección seleccionados; editar ficha reinicia validación. Coordenadas E6 no equivalen a geocodificación verificada o cobertura de reparto. El API futuro debe derivar autorización/actor/timestamp y comprobar Branch, no confiar en evidencia del cliente.
 
 ## Directorio: búsqueda telefónica conservadora — 2026-09-16

@@ -163,10 +163,11 @@ export function validateCustomerAddress(address: CustomerAddress, context: Custo
 }
 
 /** Freeze the explicitly selected customer's validated address, never current catalog references. */
-export function snapshotCustomerFulfillment(address: CustomerAddress, party: CustomerPartySnapshot, authorizedRestaurantId: string): CustomerFulfillmentSnapshot {
+export function snapshotCustomerFulfillment(address: CustomerAddress, party: CustomerPartySnapshot, authorizedRestaurantId: string, authorizedBranchId: string): CustomerFulfillmentSnapshot {
   const fields = record(address, [...addressKeys, "schemaVersion", "validation"]);
   const partyFields = record(party, ["schemaVersion", "customerId", "restaurantId", "displayName", "contactId", "phoneDisplayValue", "phoneNormalizedValue"]);
   text(authorizedRestaurantId, "restaurantId", 200);
+  text(authorizedBranchId, "branchId", 200);
   if (fields.restaurantId !== authorizedRestaurantId || partyFields.restaurantId !== authorizedRestaurantId
     || fields.customerId !== partyFields.customerId) throw new CustomerScopeRejectedError();
   if (partyFields.schemaVersion !== 1) throw invalid("schemaVersion");
@@ -177,6 +178,7 @@ export function snapshotCustomerFulfillment(address: CustomerAddress, party: Cus
   if (fields.validation === null) throw invalid("addressUnverified");
   const stable = validateCustomerAddress(address, readAddressValidation(fields.validation));
   const validation = readAddressValidation(fields.validation);
+  if (validation.branchId !== authorizedBranchId) throw new CustomerScopeRejectedError();
   return Object.freeze({ ...stable, validation });
 }
 

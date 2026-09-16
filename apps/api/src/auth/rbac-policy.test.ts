@@ -58,3 +58,14 @@ test("capture permissions distinguish operators from privileged transfer and tak
   assert.equal(rolesGrantPermission(["cashier", "waiter"], "captures.takeover"), false);
   assert.equal(rolesGrantPermission(["cashier", "supervisor"], "captures.takeover"), true);
 });
+
+test("customer directory permissions stay operational and exclude non-capture roles", () => {
+  const operators = ["owner", "admin", "manager", "supervisor", "cashier", "waiter"];
+  for (const role of MEMBERSHIP_ROLE_CODES) {
+    for (const permission of ["customers.read", "customers.create", "customers.update", "customers.validate"]) {
+      assert.equal(rolesGrantPermission([role], permission), operators.includes(role), `${role}: ${permission}`);
+    }
+  }
+  assert.equal(rolesGrantPermission(["viewer", "waiter"], "customers.read"), true);
+  assert.equal(rolesGrantPermission(["viewer", "kitchen"], "customers.read"), false);
+});
