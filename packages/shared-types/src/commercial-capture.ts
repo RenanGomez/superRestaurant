@@ -61,6 +61,17 @@ export interface HoldCaptureDraftCommandV1 extends CaptureVersionedMutationInput
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
 }
 
+/** Server computes deadlines; the client supplies only its explicit preference. */
+export interface SetCaptureRecoveryPreferenceCommandV1 extends HoldCaptureDraftCommandV1 {
+  readonly autoRenewSelected: boolean;
+}
+
+export interface CaptureRecoveryPolicyV1 {
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+  readonly autoRenewSelected: boolean;
+  readonly recoveryExpiresAt: string;
+}
+
 export interface ClaimCaptureDraftCommandV1 extends CaptureVersionedMutationInputV1 {
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
 }
@@ -174,6 +185,25 @@ export function parseAutosaveCaptureDraftCommandV1(value: unknown): AutosaveCapt
 
 export function parseHoldCaptureDraftCommandV1(value: unknown): HoldCaptureDraftCommandV1 | undefined {
   return parseLeasedCommand(value);
+}
+
+export function parseSetCaptureRecoveryPreferenceCommandV1(value: unknown): SetCaptureRecoveryPreferenceCommandV1 | undefined {
+  const record = exactRecord(value, [...VERSIONED_KEYS, "attentionLeaseId", "autoRenewSelected"]);
+  if (record === undefined) return undefined;
+  const common = parseVersionedMutationInput(record);
+  const attentionLeaseId = uuid(own(record, "attentionLeaseId"));
+  const autoRenewSelected = own(record, "autoRenewSelected");
+  if (common === undefined || attentionLeaseId === undefined || typeof autoRenewSelected !== "boolean") return undefined;
+  return Object.freeze({ ...common, attentionLeaseId, autoRenewSelected, schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION });
+}
+
+export function parseCaptureRecoveryPolicyV1(value: unknown): CaptureRecoveryPolicyV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "autoRenewSelected", "recoveryExpiresAt"]);
+  if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_SCHEMA_VERSION) return undefined;
+  const autoRenewSelected = own(record, "autoRenewSelected");
+  const recoveryExpiresAt = timestamp(own(record, "recoveryExpiresAt"));
+  if (typeof autoRenewSelected !== "boolean" || recoveryExpiresAt === undefined) return undefined;
+  return Object.freeze({ autoRenewSelected, recoveryExpiresAt, schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION });
 }
 
 export function parseClaimCaptureDraftCommandV1(value: unknown): ClaimCaptureDraftCommandV1 | undefined {
@@ -317,6 +347,8 @@ function parseSummaryRecord(record: PlainRecord): CaptureDraftSummaryV1 | undefi
   if (scope === undefined || captureDraftId === undefined || folio === undefined || sourceChannel === undefined
     || fulfillmentChannel === undefined || status === undefined || attentionStatus === undefined
     || ownerMembershipId === undefined || version === undefined || updatedAt === undefined
+    || (status !== "draft" && attentionStatus !== "unclaimed")
+    || (status === "confirmed" && fulfillmentChannel === null)
     || (attentionStatus === "unclaimed" || attentionStatus === "held") !== (ownerMembershipId === null)) return undefined;
   return Object.freeze({
     attentionStatus,

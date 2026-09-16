@@ -8,6 +8,8 @@ import {
   parseConfirmCaptureDraftCommandV1,
   parseCreateCaptureDraftCommandV1,
   parseHoldCaptureDraftCommandV1,
+  parseSetCaptureRecoveryPreferenceCommandV1,
+  parseCaptureRecoveryPolicyV1,
   parseResumeCaptureDraftCommandV1,
   parseTransferCaptureDraftCommandV1,
 } from "./index.js";
@@ -44,6 +46,18 @@ expect(parseCreateCaptureDraftCommandV1({ ...create, sourceChannel: "delivery" }
 expect(parseCreateCaptureDraftCommandV1({ ...create, actorId: targetMembershipId }) === undefined, "client actor identity is forbidden");
 
 const versioned = { ...common, expectedVersion };
+const preference = { ...versioned, attentionLeaseId, autoRenewSelected: true };
+expect(parseSetCaptureRecoveryPreferenceCommandV1(preference)?.autoRenewSelected === true, "explicit opt-in parses");
+expect(parseSetCaptureRecoveryPreferenceCommandV1({ ...preference, autoRenewSelected: false })?.autoRenewSelected === false, "explicit opt-out parses");
+expect(parseSetCaptureRecoveryPreferenceCommandV1({ ...preference, autoRenewSelected: "true" }) === undefined, "preference is a strict boolean");
+expect(parseSetCaptureRecoveryPreferenceCommandV1({ ...preference, recoveryExpiresAt: common.occurredAt }) === undefined, "client cannot dictate expiry");
+expect(parseSetCaptureRecoveryPreferenceCommandV1({ ...preference, expectedVersion: 0 }) === undefined, "preference requires persisted version");
+const policy = { schemaVersion: 1, autoRenewSelected: true, recoveryExpiresAt: "2026-10-15T18:00:00.000Z" };
+expect(Object.isFrozen(parseCaptureRecoveryPolicyV1(policy)), "recovery policy is immutable");
+expect(parseCaptureRecoveryPolicyV1({ ...policy, recoveryExpiresAt: "2026-02-30T18:00:00.000Z" }) === undefined, "invalid recovery deadline rejected");
+const hostilePreference = { ...preference };
+Object.defineProperty(hostilePreference, "autoRenewSelected", { enumerable: true, get: () => { throw new Error("must not execute"); } });
+expect(parseSetCaptureRecoveryPreferenceCommandV1(hostilePreference) === undefined, "preference getter fails closed");
 const autosave = {
   ...versioned,
   attentionLeaseId,
@@ -79,6 +93,9 @@ const summary = {
   updatedAt: "2026-09-15T18:01:00.000Z",
 };
 const parsedSummary = parseCaptureDraftSummaryV1(summary);
+expect(parseCaptureDraftSummaryV1({ ...summary, status: "confirmed" }) === undefined, "confirmed capture has released attention");
+expect(parseCaptureDraftSummaryV1({ ...summary, status: "no_sale" }) === undefined, "no-sale capture has released attention");
+expect(parseCaptureDraftSummaryV1({ ...summary, status: "confirmed", attentionStatus: "unclaimed", ownerMembershipId: null, fulfillmentChannel: null }) === undefined, "confirmed capture needs fulfillment");
 expect(parsedSummary !== undefined && Object.isFrozen(parsedSummary.scope), "minimal summary parses frozen");
 expect(parseCaptureDraftSummaryV1({ ...summary, attentionStatus: "unclaimed", ownerMembershipId: targetMembershipId }) === undefined, "unclaimed summary has no owner");
 

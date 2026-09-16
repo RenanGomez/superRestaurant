@@ -53,6 +53,8 @@ El legado conserva `channel` y `Order.status`. No se hará backfill heurístico 
 
 ### Entidades
 
+Candidato local `20260916000100_create_capture_drafts.sql`: persistencia normalizada de captura, scope branch exacto en owner membership y Order, RLS forzada sin acceso directo, índices de bandeja/recuperación y constraints de lifecycle/versión. No aplicado ni verificado aún contra PostgreSQL; funciones privadas CAS/replay/auditoría y snapshots Customer siguen pendientes. El codec produce una proyección JSON del estado, no una segunda tabla ni un segundo agregado Order.
+
 - `Customer`: Restaurant-scoped, nombre/alias, timestamps y soft delete.
 - `CustomerContact`: tipo, valor mostrado, valor normalizado y etiqueta. El teléfono normalizado **no es único** porque puede compartirse.
 - `CustomerAddress`: etiqueta, componentes, referencias, instrucciones, coordenadas opcionales y estado de validación. Zona/cobertura es nullable hasta su slice.
@@ -98,6 +100,10 @@ Creación usa versión esperada cero; toda otra mutación exige `expectedVersion
 Emmanuel aprobó que cajero, mesero, supervisor, gerente y administrador puedan leer/crear/editar/reclamar capturas; transferir y apropiarse por fuerza queda sólo para supervisor, gerente y administrador. `captures.read`, `captures.create`, `captures.update`, `captures.claim`, `captures.transfer`, `customers.read`, `customers.create` y `customers.update` son los códigos propuestos: aún no se incorporaron a la matriz RBAC compartida ni a PostgreSQL. Toda apropiación forzada exige motivo y auditoría. Kitchen no accede al directorio.
 
 ### Concurrencia
+
+La frontera local de persistencia usa `PersistedCaptureRecordV1` (detalle y política) y `decodeCaptureRecord`/`encodeCaptureRecord`; valida el scope ya autorizado y rechaza campos/estados incompatibles. Confirmed/no_sale no mantienen reserva de atención; confirmed exige fulfillment. Este codec no autoriza usuarios, valida pertenencia de referencias opacas ni guarda datos: esas comprobaciones deben implementarse en las operaciones privadas PostgreSQL/Nest.
+
+El contrato aditivo `SetCaptureRecoveryPreferenceCommandV1` permite seleccionar/deseleccionar renovación con versión positiva y lease vigente. `CaptureRecoveryPolicyV1` devuelve preferencia y deadline calculado en servidor. Aún no existe endpoint ni persistencia; los parsers rechazan timestamps de expiración aportados como campos del comando.
 
 La propiedad usa `attentionLeaseId`, propietario y expiración calculada por servidor. La **reserva exclusiva de edición** dura cinco minutos y se renueva automáticamente mientras el operador trabaja; hold la libera de inmediato. Autosave, hold y transfer verifican simultáneamente scope, lease y versión; claim/resume adquieren un lease nuevo mediante CAS. La **recuperabilidad del borrador** dura un mes y se puede renovar si el usuario selecciona esa opción; no bloquea a otros operadores durante ese mes. El plazo de retención de borradores abandonados (90 días) es distinto: la expiración de recuperabilidad no autoriza por sí sola borrar registros. La detección de pedidos parecidos por teléfono/origen/ventana sólo advierte: no es idempotencia y no bloquea falsos positivos.
 

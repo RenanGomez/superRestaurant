@@ -1,5 +1,39 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { parseBranchScope } from "@super-restaurant/shared-types";
+import { CapturePersistenceCodecError, decodeCaptureRecord, encodeCaptureRecord } from "./capture-persistence-codec.js";
+
+test("capture persistence codec detaches storage records and rejects cross-scope and hostile envelopes", () => {
+  const scope = parseBranchScope({ restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" });
+  assert.ok(scope);
+  const detail = {
+    schemaVersion: 1, scope, captureDraftId: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", folio: "CAP-42",
+    sourceChannel: "phone", fulfillmentChannel: null, status: "draft", attentionStatus: "held",
+    ownerMembershipId: null, version: 1, updatedAt: "2026-09-16T12:00:00.000Z",
+    attentionLeaseId: null, attentionLeaseExpiresAt: null, confirmedOrderId: null,
+    customerSnapshotRef: null, fulfillmentSnapshotRef: null,
+  };
+  const input = { schemaVersion: 1, detail, recoveryPolicy: { schemaVersion: 1, autoRenewSelected: false, recoveryExpiresAt: "2026-10-16T12:00:00.000Z" } };
+  const decoded = decodeCaptureRecord(input, scope);
+  assert.ok(Object.isFrozen(decoded));
+  assert.ok(Object.isFrozen(decoded.detail.scope));
+  assert.ok(Object.isFrozen(decoded.recoveryPolicy));
+  detail.folio = "changed";
+  assert.equal(decoded.detail.folio, "CAP-42");
+  assert.deepEqual(encodeCaptureRecord(decoded, scope), decoded);
+  const foreign = parseBranchScope({ ...scope, branchId: "e74df54b-30a7-449b-a23f-c4ca6f93bda4" });
+  assert.ok(foreign);
+  assert.throws(() => decodeCaptureRecord(input, foreign), CapturePersistenceCodecError);
+  const foreignRestaurant = parseBranchScope({ ...scope, restaurantId: foreign.branchId });
+  assert.ok(foreignRestaurant);
+  assert.throws(() => decodeCaptureRecord(input, foreignRestaurant), CapturePersistenceCodecError);
+  for (const invalid of [{ ...input, schemaVersion: 2 }, { ...input, extra: true }, { ...input, recoveryPolicy: null }, new Proxy(input, {})]) {
+    assert.throws(() => decodeCaptureRecord(invalid, scope), CapturePersistenceCodecError);
+  }
+  const hostile = { ...input };
+  Object.defineProperty(hostile, "detail", { enumerable: true, get: () => { throw new Error("do not execute"); } });
+  assert.throws(() => decodeCaptureRecord(hostile, scope), CapturePersistenceCodecError);
+});
 
 import {
   Money,

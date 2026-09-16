@@ -1,5 +1,37 @@
 # HANDOFF
 
+## Corte autorizado para publicación — 2026-09-16
+
+- Emmanuel pidió commit, push y continuación. Corte: contratos de recuperación, codec aislado, migración candidata local y preparación rollback-only. Suite API completa y shared-types, lint/typecheck/build API y diff check verdes. CodeGraph confirma alcance acotado del verificador.
+- Se excluye `apps/web/next-env.d.ts` generado. Migración NO aplicada; falta baseline post-bootstrap exacto y prueba PostgreSQL real. P2 permanece IN_PROGRESS, sin captura durable operativa ni nuevos role plays aprobados.
+- Destino autorizado: origin/main en RenanGomez/superRestaurant. Después del push continúa el audit exacto del bootstrap; no se infiere autorización de migraciones remotas ni publicaciones futuras. Sin subagentes.
+
+## Preparación rollback-only de capturas — 2026-09-16
+
+- P2 IN_PROGRESS: añadido `verifyCaptureSchema` sobre los runners transaccionales existentes, con precheck/baseSummary explícito, aumento esperado de una tabla y postcheck obligatorio tras éxito/fallo (incluido throw undefined). Añadido suplemento de catálogo `supabase/tests/capture_drafts_catalog.sql` para owner/RLS/grants/policies/constraints/FKs. No existe todavía runner remoto con baseline fijado ni ejecución PostgreSQL.
+- Hallazgo: `tenancy_memberships_post_p2.sql` exige 25 tablas/30 funciones; no incluye el bootstrap administrativo aplicado después. No usarlo contra runtime actual como auditoría exacta. Los números de la prueba unitaria de captura son fixtures, NO conteos remotos observados. Se debe obtener y pinnear un audit actualizado antes de invocar el verificador real.
+- Verificación: pruebas del orquestador y regresiones existentes 4/4, ESLint, typecheck/build API, CodeGraph sync/impact y diff check verdes. Sin red, migración aplicada, fixture remota, credenciales o subagentes. Siguiente acción mínima: audit base post-bootstrap exacto, runner saneado y verificación rollback-only; después funciones CAS/audit/replay y endpoint. No afirmar durable/operable aún.
+
+## Candidato de esquema de capturas — 2026-09-16
+
+- P2 IN_PROGRESS: nueva migración local `20260916000100_create_capture_drafts.sql`, no aplicada. Tabla normalizada capture_drafts con folio único por branch, source/fulfillment separados, lifecycle y evidencia coherente de lease/owner, recuperación/opt-in, versión segura JS y vínculo Order con scope exacto. Añade clave única compuesta a memberships para FK de owner sin cruces de tenant/branch; no altera permisos de usuarios ni datos existentes.
+- Seguridad: RLS+FORCE RLS sin políticas ni grants operativos; todos los clientes y app_api carecen de acceso directo. No hay funciones CAS/audit/replay aún ni directorio/snapshots Customer. Ninguna captura puede usarse desde API hasta el siguiente corte privado.
+- Pruebas: compilación de tests API, contrato SQL completo 33/33, ESLint del test, CodeGraph sync/affected y diff check verdes. Son pruebas estáticas, NO evidencia de compilación/constraints reales PostgreSQL. psql/Docker no disponibles en PATH; resta verificador rollback-only mediante infraestructura existente. No red, migración aplicada, cambios financieros o subagentes.
+- Siguiente acción mínima: implementar funciones privadas con journal idempotente y auditoría, adapter/API, audit del catálogo y verificador rollback-only. Si cambia esquema candidato no aplicado se puede ajustar; no editar versiones aplicadas. El diff local ya amerita otro commit al cerrar la verificación coherente; avisar antes de publicar.
+
+## Codec de persistencia de captura — 2026-09-16
+
+- P2 sigue IN_PROGRESS: nuevo `apps/api/src/persistence/capture-persistence-codec.ts` valida envelope V1 (detalle + política de recuperación), desprende/congela datos y rechaza Restaurant/Branch distinto del scope ya autorizado. No sustituye autorización ni implementa almacenamiento. Regresiones incorporadas a la suite de codecs existente para ejecutarse en el script API actual.
+- Se corrigió el parser compartido: captura confirmed/no_sale exige atención unclaimed; confirmed necesita fulfillment. Esto alinea contrato con dominio, sin modificar Order ni esquemas productivos.
+- Verificación: suite shared-types completa, suite API completa (`npm.cmd test --prefix apps/api`, exit 0), pruebas de codec (5/5), ESLint de shared-types/persistencia API, typecheck y build API verdes. CodeGraph sync/impact/affected confirma sólo codecs y regresiones esperadas; `git diff --check` pasó. No remoto, SQL, migraciones, pagos, secretos ni subagentes.
+- Siguiente acción mínima: migración local de captura + operaciones CAS/replay y autorización aprobada, verificación PostgreSQL rollback-only y adapter Nest. UI/recuperación durable siguen ausentes; no declarar role plays cubiertos. Corte aún local, sin nueva autorización inferida para push.
+
+## Publicación temporal y preferencia de recuperación — 2026-09-16
+
+- Git autorizado por Emmanuel: `441e04e` (`feat: define capture recovery and editing deadlines`) publicado por fast-forward a `origin/main`, desde `e603d16`; ocho archivos y Next generado excluido. No migración, datos, Auth ni secretos.
+- Continuación P2 IN_PROGRESS: contratos aditivos `SetCaptureRecoveryPreferenceCommandV1` y `CaptureRecoveryPolicyV1` en `commercial-capture.ts`, con parsers exactos y regresiones en su runtime test existente. Preferencia requiere versión positiva y lease; cliente sólo selecciona booleano, nunca dicta vencimiento. No se cambiaron formas de comandos V1 anteriores ni se habilitó endpoint.
+- Verificación: `npm.cmd test --prefix packages/shared-types`, ESLint, typecheck, build y `git diff --check` verdes. CodeGraph resincronizado; impacto del parser nuevo sólo alcanza módulo y runtime test. Sin subagentes. Siguiente acción mínima: persistencia/API con autorización, CAS, deduplicación y reloj servidor; probar opt-out/replay/lease vencido antes de UI. Cambios posteriores al push quedan locales para el siguiente corte.
+
 ## Política temporal pura de captura — 2026-09-15
 
 - Tarea/estado: definición P2 de captura sigue `IN_PROGRESS`. Se añadió `packages/domain/src/capture-timing-policy.ts` con cuatro pruebas nuevas, export en barrel y entrada en el script del paquete; se actualizaron matriz/plan de slice, TODO y decisiones durables. Alcance estrictamente local; no hay lease persistente, opt-in en contrato, API, UI ni SQL.

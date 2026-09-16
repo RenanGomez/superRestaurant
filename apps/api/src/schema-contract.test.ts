@@ -7,6 +7,22 @@ import { MEMBERSHIP_ROLE_CODES } from "@super-restaurant/shared-types";
 import { RBAC_ROLE_PERMISSIONS_V1 } from "./auth/rbac-policy.js";
 import { extractMigrationBody, validateCatalogAuditSql } from "./operations/schema-verification.js";
 
+test("capture schema candidate closes client access and scopes owner/order references", () => {
+  const sql = readFileSync(new URL("../../../supabase/migrations/20260916000100_create_capture_drafts.sql", import.meta.url), "utf8").toLowerCase();
+  assert.ok(extractMigrationBody(sql).includes("create table app.capture_drafts"));
+  assert.ok(sql.includes("primary key (restaurant_id, branch_id, id)"));
+  assert.ok(sql.includes("references app.memberships (restaurant_id, branch_id, id)"));
+  assert.ok(sql.includes("references app.orders (restaurant_id, branch_id, id)"));
+  assert.ok(sql.includes("enable row level security"));
+  assert.ok(sql.includes("force row level security"));
+  assert.ok(sql.includes("revoke all on app.capture_drafts from public, anon, authenticated, service_role, app_api"));
+  assert.ok(sql.includes("capture_drafts_attention_evidence"));
+  assert.ok(sql.includes("capture_drafts_confirmation_evidence"));
+  assert.ok(sql.includes("capture_drafts_terminal_attention"));
+  assert.ok(sql.includes("9007199254740991"));
+  assert.equal(/grant\s+/u.test(sql), false);
+});
+
 const migrationUrl = new URL("../../../supabase/migrations/20260830000100_create_tenancy_memberships.sql", import.meta.url);
 const migration = readFileSync(migrationUrl, "utf8").toLowerCase();
 const membershipDirectoryMigration = readFileSync(

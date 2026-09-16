@@ -1,5 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { verifyCaptureSchema } from "./capture-schema-verification.js";
+
+test("capture verification uses the caller's audited baseline and postchecks even after undefined failure", async () => {
+  const calls: string[] = [];
+  const baseSummary = { policies: 5, securedTables: 26, securityDefinerFunctions: 33 };
+  const captureInput = { ...input, baseSummary };
+  const result = await verifyCaptureSchema(captureInput, {
+    runReadOnlyAudit: async (options) => { calls.push("read"); assert.deepEqual(options.expectedSummary, baseSummary); return baseSummary; },
+    runRollbackVerification: async (options) => { calls.push("rollback"); assert.deepEqual(options.expectedSummary, { ...baseSummary, securedTables: 27 }); return options.expectedSummary!; },
+  });
+  assert.deepEqual(calls, ["read", "rollback", "read"]);
+  assert.deepEqual(result.postcheck, result.base);
+  calls.length = 0;
+  let failed = false;
+  try {
+    await verifyCaptureSchema(captureInput, {
+      runReadOnlyAudit: async () => { calls.push("read"); return baseSummary; },
+      runRollbackVerification: async () => { calls.push("rollback"); throw undefined; },
+    });
+  } catch { failed = true; }
+  assert.equal(failed, true);
+  assert.deepEqual(calls, ["read", "rollback", "read"]);
+});
 
 import {
   verifyRestaurantTimeZoneSchema,
