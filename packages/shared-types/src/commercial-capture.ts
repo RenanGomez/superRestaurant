@@ -126,6 +126,10 @@ export interface CaptureMutationResultV1 {
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
 }
 
+export interface CaptureRecoveryPreferenceResultV1 extends CaptureMutationResultV1 {
+  readonly recoveryPolicy: CaptureRecoveryPolicyV1;
+}
+
 const CREATE_KEYS = [
   "schemaVersion", "scope", "captureDraftId", "expectedVersion", "sourceChannel", "fulfillmentChannel",
   "eventId", "idempotencyKey", "deviceId", "occurredAt",
@@ -289,6 +293,15 @@ export function parseCaptureMutationResultV1(value: unknown): CaptureMutationRes
   return detail === undefined
     ? undefined
     : Object.freeze({ detail, replayed: own(record, "replayed") as boolean, schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION });
+}
+
+export function parseCaptureRecoveryPreferenceResultV1(value: unknown): CaptureRecoveryPreferenceResultV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "replayed", "detail", "recoveryPolicy"]);
+  if (record === undefined) return undefined;
+  const result = parseCaptureMutationResultV1({ schemaVersion: own(record, "schemaVersion"),
+    replayed: own(record, "replayed"), detail: own(record, "detail") });
+  const recoveryPolicy = parseCaptureRecoveryPolicyV1(own(record, "recoveryPolicy"));
+  return result === undefined || recoveryPolicy === undefined ? undefined : Object.freeze({ ...result, recoveryPolicy });
 }
 
 function parseMutationInput(record: PlainRecord): CaptureMutationInputV1 | undefined {

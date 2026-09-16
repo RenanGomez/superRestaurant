@@ -129,6 +129,12 @@ export const RBAC_PERMISSION_CODES = Object.freeze([
   "refunds.create",
   "cash-register.manage",
   "reports.read",
+  "captures.read",
+  "captures.create",
+  "captures.update",
+  "captures.claim",
+  "captures.transfer",
+  "captures.takeover",
 ] as const);
 
 export type RbacPermissionCode = (typeof RBAC_PERMISSION_CODES)[number];

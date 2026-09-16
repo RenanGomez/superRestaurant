@@ -42,3 +42,19 @@ test("combines multiple active roles but rejects malformed or hostile input fail
   const hostileRoles = new Proxy(["owner"], { get: () => { throw new Error("trap"); } });
   assert.equal(rolesGrantPermission(hostileRoles, "branch.select"), false);
 });
+
+test("capture permissions distinguish operators from privileged transfer and takeover", () => {
+  const operators = ["owner", "admin", "manager", "supervisor", "cashier", "waiter"];
+  const privileged = ["owner", "admin", "manager", "supervisor"];
+  for (const role of MEMBERSHIP_ROLE_CODES) {
+    for (const permission of ["captures.read", "captures.create", "captures.update", "captures.claim"]) {
+      assert.equal(rolesGrantPermission([role], permission), operators.includes(role), `${role}: ${permission}`);
+    }
+    for (const permission of ["captures.transfer", "captures.takeover"]) {
+      assert.equal(rolesGrantPermission([role], permission), privileged.includes(role), `${role}: ${permission}`);
+    }
+  }
+  assert.equal(rolesGrantPermission(["viewer", "waiter"], "captures.claim"), true);
+  assert.equal(rolesGrantPermission(["cashier", "waiter"], "captures.takeover"), false);
+  assert.equal(rolesGrantPermission(["cashier", "supervisor"], "captures.takeover"), true);
+});

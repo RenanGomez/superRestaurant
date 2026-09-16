@@ -84,3 +84,27 @@ test("fails closed on hostile membership adapters and unknown permissions", asyn
   });
   await assert.rejects(validMembership.authorizeBranch(principal, scopeInput, "invented.permission" as never), ScopeAuthorizationRejectedError);
 });
+
+test("capture authorization revalidates active exact-scope membership on every request", async () => {
+  let active = true;
+  const operator = new MembershipAuthorizationService({
+    findActiveMembership: async () => active ? { roles: ["cashier"], scope } : undefined,
+  });
+  await operator.authorizeBranch(principal, scopeInput, "captures.create");
+  await operator.authorizeBranch(principal, scopeInput, "captures.claim");
+  await assert.rejects(operator.authorizeBranch(principal, scopeInput, "captures.transfer"), ScopeAuthorizationRejectedError);
+  await assert.rejects(operator.authorizeBranch(principal, scopeInput, "captures.takeover"), ScopeAuthorizationRejectedError);
+  active = false;
+  await assert.rejects(operator.authorizeBranch(principal, scopeInput, "captures.update"), ScopeAuthorizationRejectedError);
+  for (const wrong of [
+    { restaurantId: "restaurant-b", branchId: "branch-a" },
+    { restaurantId: "restaurant-a", branchId: "branch-b" },
+  ]) {
+    const wrongScope = parseBranchScope(wrong);
+    if (wrongScope === undefined) throw new Error("test scope must be valid");
+    const mismatched = new MembershipAuthorizationService({
+      findActiveMembership: async () => ({ roles: ["owner"], scope: wrongScope }),
+    });
+    await assert.rejects(mismatched.authorizeBranch(principal, scopeInput, "captures.takeover"), ScopeAuthorizationRejectedError);
+  }
+});

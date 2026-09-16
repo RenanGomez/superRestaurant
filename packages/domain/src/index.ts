@@ -271,3 +271,7 @@ export type {
   MenuProductSelectionContext,
   ValidatedMenuCatalog,
 } from "./menu.js";
+export { createCustomerProfile, normalizeCustomerPhone, snapshotCustomerParty, InvalidCustomerProfileError, CustomerScopeRejectedError } from "./customer.js";
+export type { CustomerProfile, CustomerProfileInput, CustomerPhone, CustomerPhoneInput, CustomerPartySnapshot } from "./customer.js";
+export { createCustomerAddress, validateCustomerAddress, snapshotCustomerFulfillment } from "./customer.js";
+export type { CustomerAddressInput, CustomerAddress, CustomerAddressValidation, CustomerFulfillmentSnapshot } from "./customer.js";

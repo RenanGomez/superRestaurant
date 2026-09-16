@@ -10,6 +10,7 @@ import {
   parseHoldCaptureDraftCommandV1,
   parseSetCaptureRecoveryPreferenceCommandV1,
   parseCaptureRecoveryPolicyV1,
+  parseCaptureRecoveryPreferenceResultV1,
   parseResumeCaptureDraftCommandV1,
   parseTransferCaptureDraftCommandV1,
 } from "./index.js";
@@ -112,6 +113,14 @@ expect(parseCaptureDraftDetailV1({ ...detail, status: "confirmed", confirmedOrde
 expect(parseCaptureDraftDetailV1({ ...detail, attentionStatus: "held", attentionLeaseId }) === undefined, "only claimed detail exposes a lease");
 expect(parseCaptureDraftDetailV1({ ...detail, attentionStatus: "held", ownerMembershipId: null, attentionLeaseId: null, attentionLeaseExpiresAt: null }) !== undefined, "held detail releases lease and owner");
 expect(parseCaptureMutationResultV1({ schemaVersion: 1, replayed: false, detail }) !== undefined, "mutation result exposes replay flag");
+const preferenceResult = { schemaVersion: 1, replayed: false, detail,
+  recoveryPolicy: { schemaVersion: 1, autoRenewSelected: true, recoveryExpiresAt: "2026-10-16T12:00:00.000Z" } };
+expect(parseCaptureRecoveryPreferenceResultV1(preferenceResult) !== undefined, "preference result includes explicit selected policy");
+expect(parseCaptureMutationResultV1(preferenceResult) === undefined, "prior mutation shape remains exact");
+for (const invalid of [{ ...preferenceResult, extra: true }, { ...preferenceResult, recoveryPolicy: null },
+  { ...preferenceResult, recoveryPolicy: { ...preferenceResult.recoveryPolicy, autoRenewSelected: "yes" } }]) {
+  expect(parseCaptureRecoveryPreferenceResultV1(invalid) === undefined, "preference result rejects extra or malformed policy");
+}
 
 for (const invalid of [
   { ...create, eventId: "not-a-uuid" },

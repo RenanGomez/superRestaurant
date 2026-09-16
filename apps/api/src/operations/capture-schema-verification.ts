@@ -19,7 +19,7 @@ export interface CaptureSchemaVerificationDependencies {
   readonly runRollbackVerification?: typeof runSchemaVerification;
 }
 
-/** Schema foundation adds one table and no functions/policies. Always re-audit after rollback. */
+/** Capture/journal and private commands add two tables and two definers, no policies. */
 export async function verifyCaptureSchema(
   input: CaptureSchemaVerificationInput,
   dependencies: CaptureSchemaVerificationDependencies = {},
@@ -35,7 +35,8 @@ export async function verifyCaptureSchema(
       config: input.config,
       migrationSql: input.migrationSql,
       catalogAuditSql: input.targetCatalogAuditSql,
-      expectedSummary: { ...input.baseSummary, securedTables: input.baseSummary.securedTables + 1 },
+      expectedSummary: { ...input.baseSummary, securedTables: input.baseSummary.securedTables + 2,
+        securityDefinerFunctions: input.baseSummary.securityDefinerFunctions + 2 },
     });
   } catch (error: unknown) {
     failed = true;

@@ -25,6 +25,8 @@ import { AccessMembershipsController } from "./access-memberships.controller.js"
 import { readApiConfig } from "./config.js";
 import { DATABASE_CLIENT, PostgresDatabaseClient, readDatabaseConfig } from "./database.js";
 import { HealthController } from "./health.controller.js";
+import { CapturesController } from "./captures.controller.js";
+import { CAPTURE_ATTENTION_PORT, CAPTURE_CREATION_PORT, CaptureAttentionService, CaptureService, PostgresCaptureCreator } from "./captures.js";
 import { SessionController } from "./session.controller.js";
 import { DiningZonesController } from "./dining-zones.controller.js";
 import {
@@ -68,6 +70,7 @@ import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboarding
 @Module({
   controllers: [
     HealthController,
+    CapturesController,
     SessionController,
     BranchAccessController,
     BranchOperationalContextController,
@@ -101,6 +104,11 @@ import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboarding
       useExisting: PostgresMembershipDirectory,
     },
     MembershipAuthorizationService,
+    PostgresCaptureCreator,
+    { provide: CAPTURE_CREATION_PORT, useExisting: PostgresCaptureCreator },
+    CaptureService,
+    { provide: CAPTURE_ATTENTION_PORT, useExisting: PostgresCaptureCreator },
+    CaptureAttentionService,
     PostgresBranchOperationalContext,
     { provide: BRANCH_OPERATIONAL_CONTEXT_PORT, useExisting: PostgresBranchOperationalContext },
     PostgresDiningZoneCreator,

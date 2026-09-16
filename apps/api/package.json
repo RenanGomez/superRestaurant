@@ -39,6 +39,7 @@
     "provision:post-dining-zones-app-api:remote": "tsc --project tsconfig.build.json && node dist/operations/run-post-dining-zones-app-api-provisioning.js",
     "provision:post-dining-tables-app-api:remote": "tsc --project tsconfig.build.json && node dist/operations/run-post-dining-tables-app-api-provisioning.js",
     "verify:schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-schema-verification.js",
+    "verify:capture-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-schema-verification.js",
     "verify:membership-directory-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-membership-directory-schema-verification.js",
     "verify:dining-zones-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-zones-schema-verification.js",
     "verify:dining-tables-layout-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-tables-layout-schema-verification.js",

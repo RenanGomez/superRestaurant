@@ -1,5 +1,25 @@
 # PROJECT_NOTES
 
+Decisión de implementación 2026-09-16: las direcciones Customer pueden guardarse incompletas y con coordenadas sin quedar validadas. El dominio permite atestación explícita con contexto auditado y snapshot inmutable del cliente/dirección seleccionados; editar ficha reinicia validación. Coordenadas E6 no equivalen a geocodificación verificada o cobertura de reparto. El API futuro debe derivar autorización/actor/timestamp y comprobar Branch, no confiar en evidencia del cliente.
+
+## Directorio: búsqueda telefónica conservadora — 2026-09-16
+
+- Clave normalizada de teléfono es sólo de búsqueda: remueve formato ASCII, conserva + explícito y ceros. No adivina país ni equivale a teléfono verificado/dialable. Nacional e internacional no se enlazan automáticamente; dos personas pueden compartir número y siempre mantienen identidad/contexto separados.
+- Snapshot party congela el nombre y contacto expresamente elegido dentro del Restaurant autorizado. No reconstruir historia desde ficha actual ni fusionar coincidencias. Dirección y validación operativa de delivery son requisitos separados; no habilitar cumplimiento por la sola presencia de teléfono normalizado.
+
+## Capturas: autorización por operación — 2026-09-16
+
+- Guardar selección de auto-renovación no extiende recovery expiry ni lease expiry. Requiere reserva vigente del dueño, versión esperada y audit; devuelve la política persistida. Un replay de esa selección devuelve el resultado original. Sólo una comprobación al vencimiento con opt-in puede renovar el mes; nunca un deadline recibido del cliente.
+
+- Espera/claim/resume consultan el reloj después del lock de capture; el tiempo de espera no rescata una reserva vencida. Hold requiere lease vigente y propietario; claim normal nunca fuerza una reserva activa. Resume se limita a held; un lease abandonado se reclama con nueva reserva y CAS. La recuperación mensual opt-in se evalúa aparte, no por renovar edición.
+
+- Creación privada calcula la huella SHA-256 en PostgreSQL, no acepta una huella arbitraria del cliente. Lock de idempotencia y bloqueos de autorización duran la transacción; actor es parámetro server-only. Capture y su journal se aceptan juntos o se revierten juntos. El replay no modifica lease ni extiende recuperación: devuelve el resultado original tras revalidar permiso.
+
+- Persistencia candidata usa un solo journal para comando aceptado y auditoría/replay, siguiendo el patrón de Order. La huella canónica debe incluir comando completo, actor y scope; una llave reutilizada con contenido diferente es conflicto, nunca actualización. El replay revalida autorización y devuelve el snapshot histórico, no el catálogo ni estado actual recalculados. No se guarda el payload Customer crudo en el journal.
+
+- Captura usa permisos explícitos `captures.read/create/update/claim/transfer/takeover` en el RBAC existente. Cajero y mesero pueden operar capturas propias o reclamar una disponible; transferir/tomar por fuerza es distinto y queda a supervisor/manager/admin/owner. Kitchen/viewer/auditor no reciben esos permisos. Owner sigue el patrón de permiso completo vigente.
+- La autorización de branch no sustituye ownership, lease, CAS o auditoría. Un claim ordinario no permite forzar una reserva vigente ajena; takeover requerirá motivo y evento explícitos. Cada comando revalidará membresía activa. No se cambiaron roles/grants remotos al añadir el vocabulario local.
+
 - 2026-09-16 — Renovación de recuperación usa contrato aditivo `SetCaptureRecoveryPreferenceCommandV1`: booleano explícito, expectedVersion positiva y lease de edición; ningún timestamp de expiración puede venir del cliente. `CaptureRecoveryPolicyV1` proyecta preferencia y vencimiento server-side. API/persistencia aún pendientes; comandos V1 previos conservan su forma exacta.
 
 - 2026-09-15 — S1 de captura multicanal: `@super-restaurant/shared-types` expone `commercial-capture.ts` con comandos V1 exactos y referencias opacas, y `@super-restaurant/domain` expone `CaptureDraft`/eventos inmutables. `sourceChannel` es obligatorio; `fulfillmentChannel` puede ser nulo en borrador; `expectedVersion=0` sólo en create y positivo en mutaciones posteriores. Leases, CAS, idempotencia/replay y resolución de membership a actor son responsabilidad de persistencia/API. No se modificaron Order, codecs, SQL, migraciones, API ni UI.

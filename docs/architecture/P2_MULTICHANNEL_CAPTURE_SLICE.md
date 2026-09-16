@@ -4,6 +4,10 @@
 **Fecha:** 2026-09-15
 **Autoridad funcional:** sección 8.8 de `PLAN_MODERNIZACION_POS_RESTAURANTE.md`
 
+Verificación 2026-09-16: candidato `20260916000100` compiló en PostgreSQL real exclusivamente rollback-only. Audit post-bootstrap exacto: base 27 tablas protegidas/5 políticas/36 funciones definer; transacción candidata 28/5/36; postcheck 27/5/36. La migración NO está aplicada. Esta evidencia prueba superficie/compilación, no comandos, aislamiento con fixtures, concurrencia, API o UI. Runner: `npm run verify:capture-schema:rollback --prefix apps/api`, con configuración server-only y destino validado por el arnés.
+
+Regresiones posteriores: `capture_drafts_invariants.sql` ya cubre 16 rechazos por constraint exacta, incluidos cruces de Restaurant/Branch del owner y branch ajena, más caminos válidos hold/no_sale y opt-in independiente. Fixtures y esquema fueron descartados por rollback real, con postcheck base verde. El aislamiento referencial está probado; autorización, concurrencia entre operadores e idempotencia server-side continúan pendientes.
+
 ## 1. Resultado de la auditoría
 
 Ninguno de los 50 role plays está cubierto end-to-end. Hay fundamentos parciales reutilizables en órdenes, concurrencia optimista, snapshots de producto, KDS, cobro simple, auditoría y autorización; no equivalen a aceptación funcional. La clasificación conservadora de la matriz es 23 parciales y 27 ausentes. Los escenarios RP-43, RP-45 y RP-46 pertenecen deliberadamente a P6.
@@ -53,7 +57,11 @@ El legado conserva `channel` y `Order.status`. No se hará backfill heurístico 
 
 ### Entidades
 
-Candidato local `20260916000100_create_capture_drafts.sql`: persistencia normalizada de captura, scope branch exacto en owner membership y Order, RLS forzada sin acceso directo, índices de bandeja/recuperación y constraints de lifecycle/versión. No aplicado ni verificado aún contra PostgreSQL; funciones privadas CAS/replay/auditoría y snapshots Customer siguen pendientes. El codec produce una proyección JSON del estado, no una segunda tabla ni un segundo agregado Order.
+S2 local: `packages/domain/src/customer.ts` implementa ficha mínima pura con varios teléfonos etiquetados, clave de búsqueda conservadora e inmutable y snapshot party por elección explícita/Restaurant. Mismo teléfono puede pertenecer a fichas distintas; no merges ni país inferido. Normalización NO valida dialabilidad/propiedad. Faltan dirección/fulfillment snapshot, contratos, storage, búsquedas y API/UI; todavía no hay refs Customer válidas para autoguardado.
+
+Candidato posterior `20260916000200_create_capture_command_journal.sql`: journal único de comandos aceptados/audit con scope de capture y actor-membership, fingerprint y resultado histórico, unicidad de event/idempotencia/versión. Ambas migraciones compiladas juntas rollback-only en PostgreSQL real, con 28 rechazos SQL y postcheck base 27/5/36 tras candidato 29/5/36. Ninguna aplicada persistentemente; writers atómicos, append-only operativo y replay exacto aún pendientes.
+
+Candidato local `20260916000100_create_capture_drafts.sql`: persistencia normalizada de captura, scope branch exacto en owner membership y Order, RLS forzada sin acceso directo, índices de bandeja/recuperación y constraints de lifecycle/versión. Verificado rollback-only contra PostgreSQL, NO aplicado; comandos posteriores CAS/replay/auditoría y snapshots Customer siguen pendientes. El codec produce una proyección JSON del estado, no una segunda tabla ni un segundo agregado Order.
 
 - `Customer`: Restaurant-scoped, nombre/alias, timestamps y soft delete.
 - `CustomerContact`: tipo, valor mostrado, valor normalizado y etiqueta. El teléfono normalizado **no es único** porque puede compartirse.
@@ -65,6 +73,10 @@ Candidato local `20260916000100_create_capture_drafts.sql`: persistencia normali
 KDS no recibe PII de cliente/dirección salvo el mínimo que un contrato posterior justifique explícitamente.
 
 ### Comandos y eventos
+
+Nest local ya incorpora `POST /api/v1/captures`: guard Auth global, permiso captures.create con membership vigente, parser V1, adapter parametrizado y validación codec del scope/resultado; devuelve CaptureMutationResultV1 con replayed y private/no-store. Probado con puerto fixture y HTTP real local, no con adapter+PostgreSQL integrados. Mientras candidatos no estén aplicados, runtime remoto falla 503; no hay UI operativa nueva ni autorización implícita para migraciones persistentes.
+
+`20260916000300` añade la creación privada validada y autorizada, con lease/recuperación por reloj servidor, capture+event atómicos, huella SHA-256 calculada en PostgreSQL y replay de snapshot exacto. Probada rollback-only junto a dos foundations: candidato 29/5/37 y postcheck base 27/5/36. Aún sin adapter/endpoint Nest, comandos posteriores ni prueba simultánea de dos conexiones; migraciones no aplicadas.
 
 | Comando | Evento |
 |---|---|
@@ -95,11 +107,17 @@ Creación usa versión esperada cero; toda otra mutación exige `expectedVersion
 - Coincidencias de cliente nunca se fusionan automáticamente.
 - Todo acceso y búsqueda falla cerrado por Restaurant; Branch limita la operación cuando aplica.
 
-### Permisos confirmados; implementación RBAC pendiente
+### Permisos confirmados; matriz local implementada
 
-Emmanuel aprobó que cajero, mesero, supervisor, gerente y administrador puedan leer/crear/editar/reclamar capturas; transferir y apropiarse por fuerza queda sólo para supervisor, gerente y administrador. `captures.read`, `captures.create`, `captures.update`, `captures.claim`, `captures.transfer`, `customers.read`, `customers.create` y `customers.update` son los códigos propuestos: aún no se incorporaron a la matriz RBAC compartida ni a PostgreSQL. Toda apropiación forzada exige motivo y auditoría. Kitchen no accede al directorio.
+Emmanuel aprobó que cajero, mesero, supervisor, gerente y administrador puedan leer/crear/editar/reclamar capturas; transferir y apropiarse por fuerza queda sólo para supervisor, gerente y administrador. `captures.read`, `captures.create`, `captures.update`, `captures.claim`, `captures.transfer` y `captures.takeover` ya se incorporaron de forma aditiva al vocabulario compartido y a la matriz RBAC Nest existente. Owner mantiene todos los permisos como en la política existente; kitchen/viewer/auditor no reciben permisos de captura. Los permisos legacy no cambian. `MembershipAuthorizationService` sigue revalidando actor y membresía activa del scope exacto en cada petición. No existe aún endpoint ni autorización PostgreSQL de capturas; no se modificaron roles/grants remotos. Toda apropiación forzada requerirá comando explícito, motivo y auditoría, no un claim ordinario. Los códigos Customer continúan propuestos y pendientes del directorio.
 
 ### Concurrencia
+
+POST `/api/v1/captures/recovery-preference` ya guarda opt-in/opt-out con permiso captures.update, CAS y lease propio vigente; devuelve detalle, replayed y policy explícita en el contrato aditivo CaptureRecoveryPreferenceResultV1. Guardar/reintentar selección conserva plazos y reserva. Probado HTTP local con fixtures y PostgreSQL rollback-only, sin aplicar migración ni implementar job/UI. Referencias no-null de Customer/Address siguen bloqueadas hasta implementar directorio y validación de pertenencia.
+
+Nest local añade POST `/api/v1/captures/hold`, `/claim` y `/resume` con parsers V1, captures.update/claim, adapter SQL parametrizado, codec y validación de versión/estado devueltos. HTTP local con fixtures y tests de autorización/error/replay verificados; no UI, migración aplicada ni integración adapter+PostgreSQL probada aún. El snapshot de replay conserva lease histórico; no lo renueva al reintentar.
+
+Writer privado candidato `20260916000400` ya aplica hold/claim/resume con CAS bajo FOR UPDATE, lease por reloj servidor observado tras el lock, replay y actualización+audit atómicos. Hold libera edición; claim reserva nueva sólo si libre/held/vencida, resume sólo held. Recuperación vencida requiere opt-in para renovar un mes. Probado secuencialmente rollback-only en PostgreSQL, candidato 29/5/38 y postcheck 27/5/36. Faltan adapter/endpoint de atención, prueba simultánea de dos conexiones y despliegue autorizado.
 
 La frontera local de persistencia usa `PersistedCaptureRecordV1` (detalle y política) y `decodeCaptureRecord`/`encodeCaptureRecord`; valida el scope ya autorizado y rechaza campos/estados incompatibles. Confirmed/no_sale no mantienen reserva de atención; confirmed exige fulfillment. Este codec no autoriza usuarios, valida pertenencia de referencias opacas ni guarda datos: esas comprobaciones deben implementarse en las operaciones privadas PostgreSQL/Nest.
 

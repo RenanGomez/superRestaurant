@@ -8,7 +8,7 @@ test("capture verification uses the caller's audited baseline and postchecks eve
   const captureInput = { ...input, baseSummary };
   const result = await verifyCaptureSchema(captureInput, {
     runReadOnlyAudit: async (options) => { calls.push("read"); assert.deepEqual(options.expectedSummary, baseSummary); return baseSummary; },
-    runRollbackVerification: async (options) => { calls.push("rollback"); assert.deepEqual(options.expectedSummary, { ...baseSummary, securedTables: 27 }); return options.expectedSummary!; },
+    runRollbackVerification: async (options) => { calls.push("rollback"); assert.deepEqual(options.expectedSummary, { ...baseSummary, securedTables: 28, securityDefinerFunctions: 35 }); return options.expectedSummary!; },
   });
   assert.deepEqual(calls, ["read", "rollback", "read"]);
   assert.deepEqual(result.postcheck, result.base);

@@ -25,6 +25,12 @@ const allPermissions = Object.freeze([
   "refunds.create",
   "cash-register.manage",
   "reports.read",
+  "captures.read",
+  "captures.create",
+  "captures.update",
+  "captures.claim",
+  "captures.transfer",
+  "captures.takeover",
 ] satisfies readonly RbacPermissionCode[]);
 
 const managerPermissions = without(allPermissions, "memberships.manage");
@@ -43,6 +49,12 @@ const supervisorPermissions = permissions(
   "refunds.create",
   "cash-register.manage",
   "reports.read",
+  "captures.read",
+  "captures.create",
+  "captures.update",
+  "captures.claim",
+  "captures.transfer",
+  "captures.takeover",
 );
 
 export const RBAC_ROLE_PERMISSIONS_V1 = Object.freeze({
@@ -60,6 +72,10 @@ export const RBAC_ROLE_PERMISSIONS_V1 = Object.freeze({
     "orders.cancel.pending",
     "payments.collect",
     "cash-register.manage",
+    "captures.read",
+    "captures.create",
+    "captures.update",
+    "captures.claim",
   ),
   waiter: permissions(
     "branch.select",
@@ -70,6 +86,10 @@ export const RBAC_ROLE_PERMISSIONS_V1 = Object.freeze({
     "orders.update",
     "orders.cancel.pending",
     "kds.read",
+    "captures.read",
+    "captures.create",
+    "captures.update",
+    "captures.claim",
   ),
   kitchen: permissions("branch.select", "orders.read", "kds.read", "kds.transition"),
   viewer: permissions("branch.select", "catalog.read", "tables.read", "orders.read", "kds.read", "reports.read"),
