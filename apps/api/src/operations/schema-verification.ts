@@ -329,7 +329,7 @@ class PostgresSchemaVerificationSession implements SchemaVerificationSession {
   public constructor(config: SchemaVerificationConfig) {
     this.#client = new Client({
       application_name: "super-restaurant-schema-rollback-verifier",
-      connectionTimeoutMillis: 5_000,
+      connectionTimeoutMillis: 15_000,
       connectionString: config.connectionString,
       query_timeout: 120_000,
       ssl: { ca: config.caCertificate, rejectUnauthorized: true },

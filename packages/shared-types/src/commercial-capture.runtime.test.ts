@@ -9,6 +9,7 @@ import {
   parseCreateCaptureDraftCommandV1,
   parseHoldCaptureDraftCommandV1,
   parseSetCaptureRecoveryPreferenceCommandV1,
+  parseSetCaptureCustomerCommandV1,
   parseCaptureRecoveryPolicyV1,
   parseCaptureRecoveryPreferenceResultV1,
   parseResumeCaptureDraftCommandV1,
@@ -47,6 +48,17 @@ expect(parseCreateCaptureDraftCommandV1({ ...create, sourceChannel: "delivery" }
 expect(parseCreateCaptureDraftCommandV1({ ...create, actorId: targetMembershipId }) === undefined, "client actor identity is forbidden");
 
 const versioned = { ...common, expectedVersion };
+const customerSelection = { ...versioned, attentionLeaseId, customerId: customerSnapshotRef,
+  contactId: fulfillmentSnapshotRef, expectedCustomerVersion: 1 };
+expect(Object.isFrozen(parseSetCaptureCustomerCommandV1(customerSelection)), "customer selection parses frozen");
+expect(parseSetCaptureCustomerCommandV1({ ...customerSelection, customerId: null, contactId: null,
+  expectedCustomerVersion: null }) !== undefined, "explicit removal parses");
+for (const invalid of [{ ...customerSelection, customerId: null }, { ...customerSelection, contactId: null },
+  { ...customerSelection, expectedCustomerVersion: null }, { ...customerSelection, expectedCustomerVersion: 0 },
+  { ...customerSelection, expectedCustomerVersion: 1.5 }, { ...customerSelection, customerSnapshotRef },
+  { ...customerSelection, displayName: "Client-controlled snapshot" }, { ...customerSelection, attentionLeaseId: null }]) {
+  expect(parseSetCaptureCustomerCommandV1(invalid) === undefined, "customer selection rejects partial identity or client facts");
+}
 const preference = { ...versioned, attentionLeaseId, autoRenewSelected: true };
 expect(parseSetCaptureRecoveryPreferenceCommandV1(preference)?.autoRenewSelected === true, "explicit opt-in parses");
 expect(parseSetCaptureRecoveryPreferenceCommandV1({ ...preference, autoRenewSelected: false })?.autoRenewSelected === false, "explicit opt-out parses");

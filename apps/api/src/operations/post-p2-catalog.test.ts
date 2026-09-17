@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { extractMigrationBody, validateCatalogAuditSql } from "./schema-verification.js";
-import { buildCaptureCatalogAudit, buildCustomerDirectoryCatalogAudit, buildPostBootstrapCatalogAudit, postBootstrapSummary } from "./post-bootstrap-catalog.js";
+import { buildCaptureCatalogAudit, buildCaptureCustomerCatalogAudit, buildCustomerDirectoryCatalogAudit, buildPostBootstrapCatalogAudit, postBootstrapSummary } from "./post-bootstrap-catalog.js";
 
 const audit = readFileSync(
   new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url),
@@ -14,6 +14,23 @@ const runner = readFileSync(
   "utf8",
 ).toLowerCase();
 const apiPackage = readFileSync(new URL("../../package.json", import.meta.url), "utf8").toLowerCase();
+
+test("capture customer audit retains the baseline and verifies scoped linkage without direct grants", () => {
+  const base = readFileSync(new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url), "utf8");
+  const capture = readFileSync(new URL("../../../../supabase/tests/capture_drafts_catalog.sql", import.meta.url), "utf8");
+  const directory = readFileSync(new URL("../../../../supabase/tests/customer_directory_catalog.sql", import.meta.url), "utf8");
+  const prior = buildCustomerDirectoryCatalogAudit(base, capture, directory);
+  const target = buildCaptureCustomerCatalogAudit(base, capture, directory);
+  assert.match(prior, /where conrelid = target and convalidated\) <> 17/u);
+  assert.match(target, /where conrelid = target and convalidated\) <> 19/u);
+  assert.match(target, /where conrelid = target and convalidated\) <> 12/u);
+  assert.match(target, /capture_customer_snapshot_scope_fk/u);
+  assert.match(target, /capture_customer_snapshot_pair_valid/u);
+  assert.match(target, /CUSTOMER_DIRECTORY_GRANT_REJECTED/u);
+  assert.match(target, /POST_P2_APP_API_SURFACE_REJECTED/u);
+  assert.equal(target.split("pg_catalog.to_regprocedure('app_private.set_capture_customer(uuid,jsonb)')").length - 1, 2);
+  assert.doesNotThrow(() => validateCatalogAuditSql(target));
+});
 
 test("post-bootstrap audit extends the pinned baseline without relaxing security", () => {
   const base = readFileSync(new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url), "utf8");

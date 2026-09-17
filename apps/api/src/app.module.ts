@@ -32,7 +32,7 @@ import {
   CustomerDirectoryQueryService, CustomerDirectoryService,
   PostgresCustomerDirectoryReader, PostgresCustomerDirectoryWriter,
 } from "./customer-directory.js";
-import { CAPTURE_ATTENTION_PORT, CAPTURE_CREATION_PORT, CaptureAttentionService, CaptureService, PostgresCaptureCreator } from "./captures.js";
+import { CAPTURE_ATTENTION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CaptureCustomerService, CaptureAttentionService, CaptureService, PostgresCaptureCreator } from "./captures.js";
 import { SessionController } from "./session.controller.js";
 import { DiningZonesController } from "./dining-zones.controller.js";
 import {
@@ -116,6 +116,8 @@ import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboarding
     CaptureService,
     { provide: CAPTURE_ATTENTION_PORT, useExisting: PostgresCaptureCreator },
     CaptureAttentionService,
+    { provide: CAPTURE_CUSTOMER_PORT, useExisting: PostgresCaptureCreator },
+    CaptureCustomerService,
     PostgresCustomerDirectoryWriter,
     { provide: CUSTOMER_DIRECTORY_WRITER_PORT, useExisting: PostgresCustomerDirectoryWriter },
     CustomerDirectoryService,

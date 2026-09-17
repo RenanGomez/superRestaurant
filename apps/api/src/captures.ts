@@ -8,6 +8,8 @@ import {
   parseResumeCaptureDraftCommandV1,
   parseSetCaptureRecoveryPreferenceCommandV1,
   parseCaptureRecoveryPreferenceResultV1,
+  parseSetCaptureCustomerCommandV1,
+  type SetCaptureCustomerCommandV1,
   type SetCaptureRecoveryPreferenceCommandV1,
   type CaptureRecoveryPreferenceResultV1,
   type BranchScope,
@@ -41,10 +43,14 @@ export interface CaptureAttentionPort {
   mutateAttention(actorId: string, operation: CaptureEditOperation, command: CaptureAttentionCommand): Promise<unknown>;
 }
 export const CAPTURE_ATTENTION_PORT = Symbol("CAPTURE_ATTENTION_PORT");
+export interface CaptureCustomerPort {
+  setCustomer(actorId: string, command: SetCaptureCustomerCommandV1): Promise<unknown>;
+}
+export const CAPTURE_CUSTOMER_PORT = Symbol("CAPTURE_CUSTOMER_PORT");
 const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 @Injectable()
-export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAttentionPort {
+export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAttentionPort, CaptureCustomerPort {
   public constructor(@Inject(DATABASE_CLIENT) private readonly database: DatabaseClientPort) {}
 
   public async createDraft(actorId: string, input: CreateCaptureDraftCommandV1): Promise<unknown> {
@@ -71,6 +77,49 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     const row = exactRecord(response.rows[0], ["result"]);
     if (row === undefined) throw unavailable();
     return row.result;
+  }
+
+  public async setCustomer(actorId: string, input: SetCaptureCustomerCommandV1): Promise<unknown> {
+    const command = parseCustomerCommand(input);
+    if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.set_capture_customer($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(command)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+}
+
+@Injectable()
+export class CaptureCustomerService {
+  public constructor(
+    @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
+    @Inject(CAPTURE_CUSTOMER_PORT) private readonly persistence: CaptureCustomerPort,
+  ) {}
+
+  public async setCustomer(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureMutationResultV1> {
+    const command = parseCustomerCommand(input);
+    let actorId: string;
+    try {
+      const authorized = await this.authorization.authorizeBranch(principal, command.scope, "captures.update");
+      if (command.customerId !== null) await this.authorization.authorizeBranch(principal, command.scope, "customers.read");
+      actorId = authorized.principal.actorId;
+    } catch { throw new CaptureApplicationError("authorization"); }
+    let raw: unknown;
+    try { raw = await this.persistence.setCustomer(actorId, command); }
+    catch { throw unavailable(); }
+    const { record, replayed } = parseOutcome(raw, command.scope);
+    if (record.detail.captureDraftId !== command.captureDraftId || record.detail.version !== command.expectedVersion + 1
+      || record.detail.status !== "draft" || record.detail.attentionStatus !== "claimed"
+      || record.detail.attentionLeaseId !== command.attentionLeaseId
+      || (record.detail.customerSnapshotRef === null) !== (command.customerId === null)
+      || record.detail.fulfillmentSnapshotRef !== null) throw unavailable();
+    const result = parseCaptureMutationResultV1({ schemaVersion: 1, detail: record.detail, replayed });
+    if (result === undefined) throw unavailable();
+    return result;
   }
 }
 
@@ -176,6 +225,11 @@ function parseOutcome(raw: unknown, scope: BranchScope) {
 function parseStorageCommand(input: unknown): CreateCaptureDraftCommandV1 {
   const command = parseCreateCaptureDraftCommandV1(input);
   if (command === undefined) throw new CaptureApplicationError("request");
+  return command;
+}
+function parseCustomerCommand(input: unknown): SetCaptureCustomerCommandV1 {
+  const command = parseSetCaptureCustomerCommandV1(input);
+  if (command === undefined || command.expectedVersion >= Number.MAX_SAFE_INTEGER) throw new CaptureApplicationError("request");
   return command;
 }
 function unavailable(): CaptureApplicationError { return new CaptureApplicationError("unavailable"); }

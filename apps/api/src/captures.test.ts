@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
-import { parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1 } from "@super-restaurant/shared-types";
+import { parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseSetCaptureCustomerCommandV1 } from "@super-restaurant/shared-types";
 
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
-import { CAPTURE_ATTENTION_PORT, CAPTURE_CREATION_PORT, CaptureApplicationError, CaptureAttentionService, CaptureService, PostgresCaptureCreator, type CaptureAttentionPort, type CaptureCreationPort } from "./captures.js";
+import { CAPTURE_ATTENTION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CaptureCustomerService, CaptureApplicationError, CaptureAttentionService, CaptureService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 
 const principal = { actorId: "8cc7eb84-af2a-4e84-95de-967c39af86ab" };
@@ -48,6 +48,62 @@ const heldRecord = { ...record, detail: { ...record.detail, version: 2, attentio
 const preferenceCommand = { ...holdCommand, autoRenewSelected: true };
 const preferenceRecord = { ...record, detail: { ...record.detail, version: 2 },
   recoveryPolicy: { ...record.recoveryPolicy, autoRenewSelected: true } };
+const customerCommand = { ...holdCommand, schemaVersion: 1 as const, customerId: validCommand.captureDraftId,
+  contactId: validCommand.eventId, expectedCustomerVersion: 1 };
+const customerRecord = { ...record, detail: { ...record.detail, version: 2, customerSnapshotRef: validCommand.idempotencyKey } };
+function customerFor(port: CaptureCustomerPort, allowed = true) {
+  return new CaptureCustomerService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: allowed ? ["cashier"] : ["viewer"], scope: validCommand.scope }),
+  }), port);
+}
+
+test("capture customer validates selection, removal, replay and authorization before persistence", async () => {
+  const calls: unknown[] = [];
+  const service = customerFor({ setCustomer: async (actor, input) => {
+    calls.push({ actor, input }); return { status: "replayed", record: customerRecord };
+  } });
+  assert.deepEqual(await service.setCustomer(principal, customerCommand),
+    { schemaVersion: 1, detail: customerRecord.detail, replayed: true });
+  assert.deepEqual(calls, [{ actor: principal.actorId, input: customerCommand }]);
+  const removal = { ...customerCommand, customerId: null, contactId: null, expectedCustomerVersion: null };
+  assert.equal((await customerFor({ setCustomer: async () => ({ status: "applied", record: preferenceRecord }) })
+    .setCustomer(principal, removal)).detail.customerSnapshotRef, null);
+  const noCall = { setCustomer: async () => { throw new Error("must not call"); } };
+  for (const invalid of [{ ...customerCommand, contactId: null }, { ...customerCommand, customerSnapshotRef: validCommand.deviceId },
+    { ...customerCommand, expectedVersion: Number.MAX_SAFE_INTEGER }, { ...customerCommand, expectedCustomerVersion: 0 }]) {
+    await assert.rejects(customerFor(noCall).setCustomer(principal, invalid), code("request"));
+  }
+  await assert.rejects(customerFor(noCall, false).setCustomer(principal, customerCommand), code("authorization"));
+  await assert.rejects(customerFor(noCall).setCustomer(principal, { ...customerCommand,
+    scope: { ...validCommand.scope, branchId: validCommand.deviceId } }), code("authorization"));
+});
+
+test("capture customer checks result scope, lease, version and opaque reference", async () => {
+  for (const [status, expected] of [["denied", "authorization"], ["conflict", "conflict"], ["rejected", "request"]]) {
+    await assert.rejects(customerFor({ setCustomer: async () => ({ status }) }).setCustomer(principal, customerCommand), code(expected!));
+  }
+  for (const detail of [{ ...customerRecord.detail, version: 3 }, { ...customerRecord.detail, customerSnapshotRef: null },
+    { ...customerRecord.detail, captureDraftId: validCommand.deviceId }, { ...customerRecord.detail, attentionLeaseId: validCommand.eventId },
+    { ...customerRecord.detail, fulfillmentSnapshotRef: validCommand.deviceId },
+    { ...customerRecord.detail, scope: { ...validCommand.scope, restaurantId: validCommand.deviceId } }]) {
+    await assert.rejects(customerFor({ setCustomer: async () => ({ status: "applied", record: { ...customerRecord, detail } }) })
+      .setCustomer(principal, customerCommand), code("unavailable"));
+  }
+  await assert.rejects(customerFor({ setCustomer: async () => { throw new Error("secret"); } })
+    .setCustomer(principal, customerCommand), code("unavailable"));
+});
+
+test("capture customer adapter binds validated identifiers", async () => {
+  const calls: unknown[] = [];
+  const adapter = new PostgresCaptureCreator({ query: async (sql, parameters) => {
+    calls.push({ sql, parameters }); return { rows: [{ result: { status: "conflict" } }] };
+  } });
+  assert.deepEqual(await adapter.setCustomer(principal.actorId, customerCommand), { status: "conflict" });
+  assert.deepEqual(calls, [{ sql: "select app_private.set_capture_customer($1::uuid, $2::jsonb) as result",
+    parameters: [principal.actorId, JSON.stringify(parseSetCaptureCustomerCommandV1(customerCommand))] }]);
+  await assert.rejects(adapter.setCustomer("forged", customerCommand), code("request"));
+  assert.equal(calls.length, 1);
+});
 function attentionFor(port: CaptureAttentionPort, allowed = true) {
   return new CaptureAttentionService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: allowed ? ["cashier"] : ["viewer"], scope: validCommand.scope }),
@@ -194,6 +250,7 @@ test("capture PostgreSQL adapter binds actor and detached JSON without dynamic S
 });
 
 test("capture HTTP boundary enforces auth and translates request, replay, denial, conflict and failure safely", async () => {
+  let customerOutcome: unknown = { status: "applied", record: customerRecord };
   let calls = 0;
   let outcome: unknown = { status: "applied", record };
   let fail = false;
@@ -201,6 +258,8 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
   const module = await Test.createTestingModule({ controllers: [CapturesController], providers: [
     CaptureService,
     CaptureAttentionService,
+    CaptureCustomerService,
+    { provide: CAPTURE_CUSTOMER_PORT, useValue: { setCustomer: async () => customerOutcome } },
     { provide: MembershipAuthorizationService, useValue: new MembershipAuthorizationService({
       findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
     }) },
@@ -243,6 +302,24 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
     assert.equal(preference.status, 200);
     assert.equal(preference.headers.get("cache-control"), "private, no-store");
     assert.equal((await preference.json() as { recoveryPolicy: { autoRenewSelected: boolean } }).recoveryPolicy.autoRenewSelected, true);
+    const sendCustomer = (body: unknown, authenticated = true) => fetch(`${url}/customer`, { method: "POST", body: JSON.stringify(body),
+      headers: { "content-type": "application/json", ...(authenticated ? { authorization: "Bearer test-capture-access-token" } : {}) } });
+    assert.equal((await sendCustomer(customerCommand, false)).status, 401);
+    assert.equal((await sendCustomer({ ...customerCommand, displayName: "forged" })).status, 400);
+    const selected = await sendCustomer(customerCommand);
+    assert.equal(selected.status, 200);
+    assert.equal(selected.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await selected.json(), { schemaVersion: 1, detail: customerRecord.detail, replayed: false });
+    customerOutcome = { status: "replayed", record: customerRecord };
+    assert.equal((await (await sendCustomer(customerCommand)).json() as { replayed: boolean }).replayed, true);
+    for (const [status, http, errorCode] of [["conflict", 409, "CAPTURE_CONFLICT"], ["denied", 403, "ACTION_NOT_AUTHORIZED"], ["rejected", 400, "CAPTURE_REQUEST_REJECTED"]] as const) {
+      customerOutcome = { status };
+      const response = await sendCustomer(customerCommand);
+      assert.equal(response.status, http);
+      assert.deepEqual(await response.json(), { code: errorCode });
+    }
+    customerOutcome = {};
+    assert.equal((await sendCustomer(customerCommand)).status, 503);
     outcome = { status: "replayed", record };
     assert.equal((await (await send(validCommand)).json() as { replayed: boolean }).replayed, true);
     for (const [status, http, errorCode] of [["conflict", 409, "CAPTURE_CONFLICT"], ["denied", 403, "ACTION_NOT_AUTHORIZED"], ["rejected", 400, "CAPTURE_REQUEST_REJECTED"]] as const) {

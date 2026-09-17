@@ -66,3 +66,22 @@ Prueba manual: iniciar sesión con rol operativo; elegir sucursal; buscar un tel
 ## Aplicación persistente 2026-09-16
 
 El historial previo tenía 20 versiones. `20260908000100` no figuraba en `supabase_migrations` aunque su catálogo ya existe, por lo que se excluyó del staging y no se reejecutó ni reparó. El staging temporal reunió copias hash-idénticas de las 20 registradas y las ocho autorizadas; el dry-run anunció sólo 001–008, sin seed, roles ni Vault. El apply finalizó con código 0 y el historial quedó en 28 versiones. Auditoría posterior: 35 tablas RLS+FORCE, 5 políticas, 41 funciones `SECURITY DEFINER`, `app_api` LOGIN/SCRAM/vigencia infinita, membresía postgres ADMIN=true/INHERIT=false/SET=false, cero sesiones y lint SQL limpio. El post-dry-run reportó remoto al día y el staging se eliminó.
+# S2.1: enlace Capture/Customer (2026-09-17)
+
+Actualización de cierre: rollback remoto y postcheck pasaron; se aplicó únicamente `20260917000200`, historial 30 versiones, catálogo persistido 35/5/42. Las notas siguientes de migración pendiente son evidencia histórica superada. El usuario postgres administrado no puede SET ROLE app_api; el runner remoto elimina sólo esas instrucciones de la fixture y conserva la auditoría de grants, mientras el runner local sí ejerce los writers como app_api. El tiempo de conexión del verificador es 15 s.
+
+`POST /api/v1/captures/customer` requiere autenticación, `captures.update`, `customers.read` al seleccionar, versión/lease/propietario Capture y versión Customer. El comando v1 extiende la mutación con lease e incluye `customerId`, `contactId`, `expectedCustomerVersion`; los tres null quitan el cliente. No acepta nombre, teléfono ni referencias arbitrarias de snapshot. Seleccionar/reemplazar crea snapshot nuevo; replay devuelve exactamente el resultado anterior; quitar conserva el histórico. No confirma una captura ni entrega/cobra un pedido.
+
+Verificación local reproducible desde raíz:
+
+```powershell
+npm.cmd run build --prefix packages/shared-types
+npm.cmd run build --prefix apps/api
+node apps/api/dist/operations/run-local-customer-concurrency.js --local-disposable-only
+```
+
+El runner exige PostgreSQL 17 portable en `.cache/postgres-local/pgsql/bin`, loopback, base nueva marcada y conjunto exacto de 26 migraciones. Ignora URLs remotas. Audita baseline 25, aplica 002 + invariantes dentro de transacción, hace rollback y postcheck `35/5/41 → 35/5/42 → 35/5/41`; después aplica 002 sólo a ese clúster desechable para carreras reales como `app_api`. Detiene el clúster en `finally`. Corrida final `17b9bb2cbece48a8ac386f338e37e3d9`: Customer 11/5 bloqueos y Capture 24/6, cleanup detenido.
+
+El runner remoto `npm.cmd run verify:capture-customer-schema:rollback --prefix apps/api` usa la configuración `SCHEMA_VERIFICATION_*` habitual: destino exacto `zwbyiefqeujstyzysydn`, `ROLLBACK_ONLY`, TLS verify-full y CA aprobada. No imprime URL/secretos. Corridas de esta sesión fallaron en conexión antes de efectos: esta evidencia no sustituye una prueba remota exitosa. La nueva migración sigue pendiente. Con autorización de migraciones vigente, recuperar conexión, verificar rollback y usar staging exacto/dry-run de sólo `20260917000200` antes de aplicar/postcheck. No ejecutar push raíz ni reejecutar la versión administrativa 20260908000100 ausente del historial.
+
+No se añadieron controles Capture a la UI en S2.1. Las pruebas manuales de selección dentro de Capture se solicitarán cuando exista esa pantalla; `/app/customers` conserva el flujo ya revisado.

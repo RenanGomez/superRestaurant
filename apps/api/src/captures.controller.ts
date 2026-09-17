@@ -5,13 +5,14 @@ import {
 import type { CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
-import { CaptureApplicationError, CaptureAttentionService, CaptureService } from "./captures.js";
+import { CaptureApplicationError, CaptureAttentionService, CaptureCustomerService, CaptureService } from "./captures.js";
 
 @Controller("captures")
 export class CapturesController {
   public constructor(
     @Inject(CaptureService) private readonly captures: CaptureService,
     @Inject(CaptureAttentionService) private readonly attention: CaptureAttentionService,
+    @Inject(CaptureCustomerService) private readonly customer: CaptureCustomerService,
   ) {}
 
   @Post()
@@ -28,6 +29,13 @@ export class CapturesController {
   public async hold(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.attention.mutateAttention(principal, "capture.held", body));
+  }
+  @Post("customer")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async setCustomer(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.customer.setCustomer(principal, body));
   }
   @Post("claim")
   @HttpCode(200)

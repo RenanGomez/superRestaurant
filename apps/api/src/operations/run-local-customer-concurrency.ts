@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -7,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 import { verifyCustomerDirectoryConcurrency } from "./customer-directory-concurrency-verification.js";
 import { verifyCaptureConcurrency } from "./capture-concurrency-verification.js";
+import { buildCaptureCustomerCatalogAudit, buildCustomerDirectoryCatalogAudit } from "./post-bootstrap-catalog.js";
+import { extractMigrationBody } from "./schema-verification.js";
 
 // No env URLs/PGHOST, remote configuration, services or global installation.
 // Each invocation owns a new cluster and stops it in finally; files stay ignored
@@ -80,12 +83,71 @@ try {
     CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS 'SELECT NULL::uuid';`);
   const migrations = join(root, "supabase", "migrations");
   const names = readdirSync(migrations).filter((name) => /^\d{14}_[a-z0-9_]+\.sql$/u.test(name)).sort();
-  if (names.length !== 25 || !names.at(-1)?.startsWith("20260917000100_")) throw new Error("LOCAL_MIGRATION_SET_REJECTED");
-  for (const name of names) await admin.query(readFileSync(join(migrations, name), "utf8"));
-  await admin.query("CREATE TABLE app_private.local_concurrency_guard(marker text PRIMARY KEY)");
-  await admin.query("INSERT INTO app_private.local_concurrency_guard VALUES($1)", [marker]);
+  if (names.length !== 26 || !names.at(-1)?.startsWith("20260917000200_")) throw new Error("LOCAL_MIGRATION_SET_REJECTED");
+  for (const name of names.slice(0, -1)) await admin.query(readFileSync(join(migrations, name), "utf8"));
+  // Supply an FK actor before rollback-only SQL invariants; no provider Auth is
+  // simulated and no URL or inherited remote configuration is accepted.
   const actorId = randomUUID(), restaurantId = randomUUID(), branchId = randomUUID(), membershipId = randomUUID();
   await admin.query("INSERT INTO auth.users(id,email) VALUES($1,'local-concurrency@invalid.test')", [actorId]);
+  const readTest = (name: string) => readFileSync(join(root, "supabase", "tests", name), "utf8");
+  const baseSql = readTest("tenancy_memberships_post_p2.sql");
+  const captureSql = readTest("capture_drafts_catalog.sql");
+  const directorySql = readTest("customer_directory_catalog.sql");
+  const baseAudit = buildCustomerDirectoryCatalogAudit(baseSql, captureSql, directorySql);
+  const targetAudit = buildCaptureCustomerCatalogAudit(baseSql, captureSql, directorySql);
+  const summarySql = `select
+    (select count(*)::integer from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
+      where n.nspname='app' and c.relkind='r' and c.relrowsecurity and c.relforcerowsecurity) as "securedTables",
+    (select count(*)::integer from pg_catalog.pg_policies where schemaname='app') as policies,
+    (select count(*)::integer from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace
+      where n.nspname in ('app_rls','app_private') and p.prosecdef) as "securityDefinerFunctions"`;
+  const audit = async (sql: string, definers: number) => {
+    assert.ok(admin);
+    await admin.query(sql);
+    const result = await admin.query(summarySql);
+    const expected = { securedTables: 35, policies: 5, securityDefinerFunctions: definers };
+    assert.deepEqual(result.rows, [expected]);
+    return expected;
+  };
+  const migrationName = names.at(-1);
+  assert.ok(migrationName);
+  const migrationSql = readFileSync(join(migrations, migrationName), "utf8");
+  stage = "capture_customer_rollback_baseline";
+  await admin.query("BEGIN READ ONLY");
+  let baseline;
+  try { baseline = await audit(baseAudit, 41); } finally { await admin.query("ROLLBACK"); }
+  stage = "capture_customer_rollback_invariants";
+  await admin.query("BEGIN");
+  let migrated;
+  let rollbackVerificationFailed = false;
+  let rollbackVerificationError: unknown;
+  try {
+    await admin.query(extractMigrationBody(migrationSql));
+    await admin.query(extractMigrationBody(readTest("capture_customer_invariants.sql")));
+    migrated = await audit(targetAudit, 42);
+  } catch (error: unknown) {
+    rollbackVerificationFailed = true;
+    rollbackVerificationError = error;
+  } finally { await admin.query("ROLLBACK"); }
+  stage = "capture_customer_rollback_postcheck";
+  await admin.query("BEGIN READ ONLY");
+  let postcheck;
+  try {
+    postcheck = await audit(baseAudit, 41);
+    assert.equal((await admin.query("select to_regprocedure('app_private.set_capture_customer(uuid,jsonb)') is null as removed")).rows[0]?.removed, true);
+    assert.equal((await admin.query("select count(*)::integer as snapshots from app.customer_party_snapshots")).rows[0]?.snapshots, 0);
+  } finally { await admin.query("ROLLBACK"); }
+  if (rollbackVerificationFailed) {
+    stage = "capture_customer_rollback_invariants";
+    throw rollbackVerificationError;
+  }
+  process.stdout.write(`${JSON.stringify({ stage: "capture_customer_rollback", status: "ok", runId, baseline, migrated, postcheck })}\n`);
+  // Apply only after baseline/target/postcheck passed, exclusively to this new
+  // disposable cluster, then run independent two-connection races below.
+  stage = "capture_customer_local_migration";
+  await admin.query(migrationSql);
+  await admin.query("CREATE TABLE app_private.local_concurrency_guard(marker text PRIMARY KEY)");
+  await admin.query("INSERT INTO app_private.local_concurrency_guard VALUES($1)", [marker]);
   await admin.query("INSERT INTO app.restaurants(id,name,time_zone) VALUES($1,'local concurrency','America/Hermosillo')", [restaurantId]);
   await admin.query("INSERT INTO app.branches(id,restaurant_id,name) VALUES($1,$2,'local concurrency')", [branchId, restaurantId]);
   await admin.query("INSERT INTO app.memberships(id,user_id,restaurant_id,branch_id,granted_by) VALUES($1,$2,$3,$4,$2)", [membershipId, actorId, restaurantId, branchId]);

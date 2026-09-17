@@ -9,7 +9,7 @@ import { assertLocalCustomerConcurrencyConfig, type CustomerConcurrencyConfig } 
 interface CaptureOutcome {
   readonly status: string;
   readonly record: { readonly detail: { readonly version: number; readonly attentionLeaseId: string;
-    readonly ownerMembershipId: string; readonly attentionStatus: string } };
+    readonly ownerMembershipId: string; readonly attentionStatus: string; readonly customerSnapshotRef: string | null } };
 }
 
 /** Only the dedicated, marked disposable PG17 cluster accepts fixture commits. */
@@ -116,8 +116,90 @@ export async function verifyCaptureConcurrency(config: CustomerConcurrencyConfig
       [config.restaurantId, config.branchId, captureDraftId],
     );
     assert.deepEqual(state.rows, [{ version: "5", owner: ownerId, lease: resumed.record.detail.attentionLeaseId, attention: "claimed", events: "5" }]);
-    return Object.freeze({ checks: 8, blockedPairs, version: 5, journalEvents: 5,
-      cases: Object.freeze(["create_same_key_replay", "claim_two_actors_cas", "resume_two_actors_cas", "resume_exact_replay"]) });
+    // S2.1 uses real private writers as app_api; only this guarded local cluster
+    // receives committed fixtures. Capture CAS and snapshot/journal are atomic.
+    const customerId = randomUUID(), contactId = randomUUID();
+    await observer.query("insert into app.customers(id,restaurant_id,display_name,created_by,updated_by) values($1,$2,'Snapshot original',$3,$3)",
+      [customerId, config.restaurantId, config.actorId]);
+    await observer.query("insert into app.customer_phones(restaurant_id,customer_id,contact_id,label,display_value,normalized_value) values($1,$2,$3,'Local','642 100 2000','6421002000')",
+      [config.restaurantId, customerId, contactId]);
+    const selection = (version: number, customerVersion = 1) => ({ ...common(version),
+      attentionLeaseId: resumed.record.detail.attentionLeaseId, customerId, contactId, expectedCustomerVersion: customerVersion });
+    const selectedCommand = selection(5);
+    const selected = await race(() => writerA.setCustomer(config.actorId, selectedCommand),
+      () => writerB.setCustomer(config.actorId, selectedCommand), "replayed");
+    assert.ok(selected.record.detail.customerSnapshotRef);
+    const snapshotRows = async () => (await observer.query(
+      "select id::text,customer_id::text,contact_id::text,display_name,phone_display_value,phone_normalized_value from app.customer_party_snapshots where restaurant_id=$1 and customer_id=$2 order by id",
+      [config.restaurantId, customerId])).rows;
+    const originalSnapshot = await snapshotRows();
+    assert.equal(originalSnapshot.length, 1);
+    assert.equal(originalSnapshot[0]?.id, selected.record.detail.customerSnapshotRef);
+    const divergent = selection(6);
+    await race(() => writerA.setCustomer(config.actorId, divergent),
+      () => writerB.setCustomer(config.actorId, { ...divergent, customerId: null, contactId: null, expectedCustomerVersion: null }), "conflict");
+    await race(() => writerA.setCustomer(config.actorId, selection(7)),
+      () => writerB.setCustomer(config.actorId, selection(7)), "conflict");
+    assert.equal((await snapshotRows()).length, 3);
+    await observer.query("update app.customers set display_name='Snapshot changed',version=2,updated_at=clock_timestamp() where restaurant_id=$1 and id=$2",
+      [config.restaurantId, customerId]);
+    await observer.query("update app.customer_phones set display_value='642 300 4000',normalized_value='6423004000',updated_at=clock_timestamp() where restaurant_id=$1 and customer_id=$2",
+      [config.restaurantId, customerId]);
+    const frozenAfterEdit = await snapshotRows();
+    assert.deepEqual(frozenAfterEdit.find((row) => row.id === selected.record.detail.customerSnapshotRef), originalSnapshot[0]);
+    const counts = async () => (await observer.query(
+      `select version::text,(select count(*)::text from app.capture_command_events where capture_draft_id=$1) as events,
+       (select count(*)::text from app.customer_party_snapshots where restaurant_id=$2 and customer_id=$3) as snapshots
+       from app.capture_drafts where id=$1 and restaurant_id=$2 and branch_id=$4`,
+      [captureDraftId, config.restaurantId, customerId, config.branchId])).rows;
+    const unchanged = await counts();
+    const failure = async (actor: string, command: ReturnType<typeof selection>, expectedStatus: string) => {
+      await begin(first);
+      const result = await writerA.setCustomer(actor, command) as CaptureOutcome;
+      assert.equal(result.status, expectedStatus);
+      await first.query("COMMIT");
+      assert.deepEqual(await counts(), unchanged);
+    };
+    await failure(config.actorId, selection(8), "conflict"); // stale customer version
+    await failure(config.actorId, { ...selection(8, 2), attentionLeaseId: randomUUID() }, "conflict");
+    await failure(secondActor, selection(8, 2), "conflict"); // valid membership, wrong owner
+    await failure(config.actorId, { ...selection(8, 2), scope: parseBranchScope({ restaurantId: randomUUID(), branchId: randomUUID() })! }, "denied");
+    // An event UUID already accepted by another operation must not leave the
+    // newly derived snapshot or incremented Capture behind.
+    await failure(config.actorId, { ...selection(8, 2), eventId: creation.eventId }, "conflict");
+    await observer.query("update app.memberships set revoked_at=clock_timestamp(),revoked_by=$1,revocation_reason='Local verification' where id=$2", [config.actorId, ownerId]);
+    await failure(config.actorId, selectedCommand, "denied"); // replay renews authorization
+    await observer.query("update app.memberships set revoked_at=null,revoked_by=null,revocation_reason=null where id=$1", [ownerId]);
+    await begin(first);
+    const replacement = await writerA.setCustomer(config.actorId, selection(8, 2)) as CaptureOutcome;
+    assert.equal(replacement.status, "applied");
+    await first.query("COMMIT");
+    assert.notEqual(replacement.record.detail.customerSnapshotRef, selected.record.detail.customerSnapshotRef);
+    const replacementSnapshot = (await snapshotRows()).find((row) => row.id === replacement.record.detail.customerSnapshotRef);
+    assert.equal(replacementSnapshot?.display_name, "Snapshot changed");
+    assert.equal(replacementSnapshot?.phone_normalized_value, "6423004000");
+    await begin(first);
+    const customerHeld = await writerA.mutateAttention(config.actorId, "capture.held", { ...common(9), attentionLeaseId: resumed.record.detail.attentionLeaseId }) as CaptureOutcome;
+    assert.equal(customerHeld.status, "applied");
+    assert.equal(customerHeld.record.detail.customerSnapshotRef, replacement.record.detail.customerSnapshotRef);
+    await first.query("COMMIT");
+    await begin(first);
+    const customerResumed = await writerA.mutateAttention(config.actorId, "capture.resumed", common(10)) as CaptureOutcome;
+    assert.equal(customerResumed.status, "applied");
+    assert.equal(customerResumed.record.detail.customerSnapshotRef, replacement.record.detail.customerSnapshotRef);
+    await first.query("COMMIT");
+    await begin(first);
+    const removed = await writerA.setCustomer(config.actorId, { ...common(11), attentionLeaseId: customerResumed.record.detail.attentionLeaseId,
+      customerId: null, contactId: null, expectedCustomerVersion: null }) as CaptureOutcome;
+    assert.equal(removed.status, "applied");
+    assert.equal(removed.record.detail.customerSnapshotRef, null);
+    await first.query("COMMIT");
+    assert.deepEqual(await counts(), [{ version: "12", events: "12", snapshots: "4" }]);
+    return Object.freeze({ checks: 24, blockedPairs, version: 12, journalEvents: 12, partySnapshots: 4,
+      cases: Object.freeze(["create_same_key_replay", "claim_two_actors_cas", "resume_two_actors_cas", "resume_exact_replay",
+        "customer_same_key_replay", "customer_divergence", "customer_two_connections_cas", "snapshot_immutable_after_edit",
+        "stale_customer", "wrong_lease", "wrong_owner", "tenant_isolation", "event_collision_atomicity", "revoked_replay",
+        "customer_replace", "attention_preserves_snapshot", "customer_remove"]) });
   } finally {
     const cleanup = await Promise.allSettled(clients.map(async (client) => { try { await client.query("ROLLBACK"); } finally { await client.end(); } }));
     if (cleanup.some((result) => result.status === "rejected")) throw new Error("LOCAL_CAPTURE_CONCURRENCY_CONNECTION_CLEANUP_FAILED");

@@ -66,6 +66,13 @@ export interface SetCaptureRecoveryPreferenceCommandV1 extends HoldCaptureDraftC
   readonly autoRenewSelected: boolean;
 }
 
+/** Select current server-owned customer facts, or remove them with three nulls. */
+export interface SetCaptureCustomerCommandV1 extends HoldCaptureDraftCommandV1 {
+  readonly customerId: string | null;
+  readonly contactId: string | null;
+  readonly expectedCustomerVersion: number | null;
+}
+
 export interface CaptureRecoveryPolicyV1 {
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
   readonly autoRenewSelected: boolean;
@@ -189,6 +196,22 @@ export function parseAutosaveCaptureDraftCommandV1(value: unknown): AutosaveCapt
 
 export function parseHoldCaptureDraftCommandV1(value: unknown): HoldCaptureDraftCommandV1 | undefined {
   return parseLeasedCommand(value);
+}
+
+export function parseSetCaptureCustomerCommandV1(value: unknown): SetCaptureCustomerCommandV1 | undefined {
+  const record = exactRecord(value, [...VERSIONED_KEYS, "attentionLeaseId", "customerId", "contactId", "expectedCustomerVersion"]);
+  if (record === undefined) return undefined;
+  const common = parseVersionedMutationInput(record);
+  const attentionLeaseId = uuid(own(record, "attentionLeaseId"));
+  const customerId = nullableUuid(own(record, "customerId"));
+  const contactId = nullableUuid(own(record, "contactId"));
+  const expectedCustomerVersion = own(record, "expectedCustomerVersion") === null ? null
+    : integer(own(record, "expectedCustomerVersion"), 1, Number.MAX_SAFE_INTEGER);
+  if (common === undefined || attentionLeaseId === undefined || customerId === undefined || contactId === undefined
+    || expectedCustomerVersion === undefined || (customerId === null) !== (contactId === null)
+    || (customerId === null) !== (expectedCustomerVersion === null)) return undefined;
+  return Object.freeze({ ...common, attentionLeaseId, customerId, contactId, expectedCustomerVersion,
+    schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION });
 }
 
 export function parseSetCaptureRecoveryPreferenceCommandV1(value: unknown): SetCaptureRecoveryPreferenceCommandV1 | undefined {
