@@ -7,9 +7,10 @@ import { CustomerDirectoryApplicationError, CustomerDirectoryQueryService, Custo
   PostgresCustomerDirectoryReader, PostgresCustomerDirectoryWriter } from "../customer-directory.js";
 import type { DatabaseClientPort } from "../database.js";
 import type { SchemaVerificationSession } from "./schema-verification.js";
+import { verifyCustomerDirectoryHttp } from "./customer-directory-http-verification.js";
 
 /** Caller owns BEGIN/ROLLBACK and postcheck. No second connection or persistent fixture. */
-export async function verifyCustomerDirectoryAdapters(session: SchemaVerificationSession): Promise<void> {
+export async function verifyCustomerDirectoryAdapters(session: SchemaVerificationSession, http = false): Promise<void> {
   let queryIndex = 0;
   const database: DatabaseClientPort = { query: async (sql, parameters) => {
     queryIndex += 1;
@@ -66,6 +67,7 @@ export async function verifyCustomerDirectoryAdapters(session: SchemaVerificatio
     assert.equal(search.candidates[0]?.customerId, customerId);
     await assert.rejects(queries.read(principal, { schemaVersion: 1, scope, customerId: randomUUID() }),
       (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === "not_found");
+    if (http) await verifyCustomerDirectoryHttp(session, database, { actorId, restaurantId, branchId, membershipId });
   } finally {
     await session.query("RESET ROLE");
     await session.query("GRANT app_api TO postgres WITH SET FALSE");

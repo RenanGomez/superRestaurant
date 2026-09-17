@@ -1,16 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Test } from "@nestjs/testing";
-import { APP_GUARD } from "@nestjs/core";
-import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
-import { CustomerDirectoryController } from "./customer-directory.controller.js";
+import { AUTH_PRINCIPAL_VERIFIER } from "./auth/authentication.js";
+import { AppModule } from "./app.module.js";
 import { CUSTOMER_DIRECTORY_READER_PORT, CUSTOMER_DIRECTORY_WRITER_PORT } from "./customer-directory.js";
 import { parseBranchScope } from "@super-restaurant/shared-types";
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { CustomerDirectoryApplicationError, CustomerDirectoryQueryService, CustomerDirectoryService, PostgresCustomerDirectoryReader, PostgresCustomerDirectoryWriter,
   type CustomerDirectoryReaderPort, type CustomerDirectoryWriterPort } from "./customer-directory.js";
-import type { DatabaseClientPort } from "./database.js";
+import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 
 const restaurantId = "1e37ae13-8507-484c-969f-2176f77b7000";
 const branchId = "23723e10-c0bf-49fd-9363-4f0e2c60e955";
@@ -42,22 +41,21 @@ test("customer HTTP boundary authenticates every route and sanitizes persistence
   let profileOutcome: unknown = { status: "applied", record: profileRecord };
   let fail = false;
   const authorization = new MembershipAuthorizationService({ findActiveMembership: async () => active ? { roles: ["cashier"], scope } : undefined });
-  const module = await Test.createTestingModule({ controllers: [CustomerDirectoryController], providers: [
-    CustomerDirectoryService, CustomerDirectoryQueryService,
-    { provide: MembershipAuthorizationService, useValue: authorization },
-    { provide: CUSTOMER_DIRECTORY_WRITER_PORT, useValue: {
+  const module = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(DATABASE_CLIENT).useValue({ query: async () => { throw new Error("unexpected database call"); } })
+    .overrideProvider(MembershipAuthorizationService).useValue(authorization)
+    .overrideProvider(CUSTOMER_DIRECTORY_WRITER_PORT).useValue({
       saveProfile: async (actor: string) => { assert.equal(actor, actorId); calls++; if (fail) throw new Error("private phone/password"); return profileOutcome; },
       saveAddress: async () => ({ status: "applied", record: addressRecord }),
       validateAddress: async () => ({ status: "applied", record: { ...addressRecord, version: 2,
         validation: { branchId, actorId, deviceId, eventId, validatedAt: occurredAt } } }),
-    } },
-    { provide: CUSTOMER_DIRECTORY_READER_PORT, useValue: {
+    })
+    .overrideProvider(CUSTOMER_DIRECTORY_READER_PORT).useValue({
       search: async () => ({ status: "ok", result: { schemaVersion: 1, scope, candidates: [], nextCursor: null } }),
       read: missingRead,
-    } },
-    { provide: AUTH_PRINCIPAL_VERIFIER, useValue: { verifyAccessToken: async () => principal } },
-    { provide: APP_GUARD, useClass: SupabaseAuthGuard },
-  ] }).compile();
+    })
+    .overrideProvider(AUTH_PRINCIPAL_VERIFIER).useValue({ verifyAccessToken: async () => principal })
+    .compile();
   const app = module.createNestApplication({ logger: false });
   app.setGlobalPrefix("api/v1");
   await app.listen(0, "127.0.0.1");

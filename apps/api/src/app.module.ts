@@ -26,6 +26,12 @@ import { readApiConfig } from "./config.js";
 import { DATABASE_CLIENT, PostgresDatabaseClient, readDatabaseConfig } from "./database.js";
 import { HealthController } from "./health.controller.js";
 import { CapturesController } from "./captures.controller.js";
+import { CustomerDirectoryController } from "./customer-directory.controller.js";
+import {
+  CUSTOMER_DIRECTORY_READER_PORT, CUSTOMER_DIRECTORY_WRITER_PORT,
+  CustomerDirectoryQueryService, CustomerDirectoryService,
+  PostgresCustomerDirectoryReader, PostgresCustomerDirectoryWriter,
+} from "./customer-directory.js";
 import { CAPTURE_ATTENTION_PORT, CAPTURE_CREATION_PORT, CaptureAttentionService, CaptureService, PostgresCaptureCreator } from "./captures.js";
 import { SessionController } from "./session.controller.js";
 import { DiningZonesController } from "./dining-zones.controller.js";
@@ -71,6 +77,7 @@ import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboarding
   controllers: [
     HealthController,
     CapturesController,
+    CustomerDirectoryController,
     SessionController,
     BranchAccessController,
     BranchOperationalContextController,
@@ -109,6 +116,12 @@ import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboarding
     CaptureService,
     { provide: CAPTURE_ATTENTION_PORT, useExisting: PostgresCaptureCreator },
     CaptureAttentionService,
+    PostgresCustomerDirectoryWriter,
+    { provide: CUSTOMER_DIRECTORY_WRITER_PORT, useExisting: PostgresCustomerDirectoryWriter },
+    CustomerDirectoryService,
+    PostgresCustomerDirectoryReader,
+    { provide: CUSTOMER_DIRECTORY_READER_PORT, useExisting: PostgresCustomerDirectoryReader },
+    CustomerDirectoryQueryService,
     PostgresBranchOperationalContext,
     { provide: BRANCH_OPERATIONAL_CONTEXT_PORT, useExisting: PostgresBranchOperationalContext },
     PostgresDiningZoneCreator,
