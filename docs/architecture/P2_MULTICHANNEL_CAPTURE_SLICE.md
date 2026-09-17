@@ -57,7 +57,7 @@ El legado conserva `channel` y `Order.status`. No se hará backfill heurístico 
 
 ### Entidades
 
-S2 local: `packages/domain/src/customer.ts` implementa ficha mínima pura con varios teléfonos etiquetados, clave de búsqueda conservadora e inmutable y snapshot party por elección explícita/Restaurant. Mismo teléfono puede pertenecer a fichas distintas; no merges ni país inferido. Normalización NO valida dialabilidad/propiedad. Faltan dirección/fulfillment snapshot, contratos, storage, búsquedas y API/UI; todavía no hay refs Customer válidas para autoguardado.
+S2 candidato local: dominio, contratos V1, codec, esquema normalizado, writer CAS/audit/replay, búsqueda y lectura detallada privada ya están implementados sin exposición HTTP. Mismo teléfono puede pertenecer a fichas distintas; no hay merges ni país inferido. Búsqueda devuelve candidatos minimizados y el detalle exige identidad explícita; ninguna lectura expone la clave normalizada o evidencia privada de validación. Migraciones Customer permanecen sin aplicar y pendientes del runner PostgreSQL rollback-only, por lo que todavía no hay refs Customer operativas para autoguardado ni UI/API registrada.
 
 Candidato posterior `20260916000200_create_capture_command_journal.sql`: journal único de comandos aceptados/audit con scope de capture y actor-membership, fingerprint y resultado histórico, unicidad de event/idempotencia/versión. Ambas migraciones compiladas juntas rollback-only en PostgreSQL real, con 28 rechazos SQL y postcheck base 27/5/36 tras candidato 29/5/36. Ninguna aplicada persistentemente; writers atómicos, append-only operativo y replay exacto aún pendientes.
 

@@ -28,7 +28,12 @@ declare
   validate_result jsonb;
   search_query jsonb;
   search_result jsonb;
+  detail_query jsonb;
+  detail_result jsonb;
   first_search_customer text;
+  sibling_branch uuid := gen_random_uuid();
+  sibling_member uuid := gen_random_uuid();
+  axis integer;
 begin
   if actor is null then raise exception 'CUSTOMER_DIRECTORY_TEST_ACTOR_REQUIRED'; end if;
   insert into app.restaurants (id, name, time_zone) values
@@ -110,6 +115,30 @@ begin
     from app.customer_addresses where restaurant_id = restaurant_a and customer_id = customer_a and id = address_a;
   if (select count(*) from app.customer_fulfillment_snapshots where restaurant_id = restaurant_a and branch_id = branch_a) <> 1
   then raise exception 'CUSTOMER_FULFILLMENT_SNAPSHOT_REJECTED'; end if;
+  for axis in 1..2 loop
+    begin
+      update app.customer_addresses set
+        latitude_e6=case when axis=1 then null else 27000000 end,
+        longitude_e6=case when axis=2 then null else -109000000 end
+        where restaurant_id=restaurant_a and customer_id=customer_a and id=address_a;
+      raise exception 'CUSTOMER_ADDRESS_HALF_COORDINATES_ACCEPTED';
+    exception when check_violation then
+      get stacked diagnostics actual_constraint = constraint_name;
+      if actual_constraint <> 'customer_addresses_coordinates_valid'
+      then raise exception 'CUSTOMER_ADDRESS_HALF_COORDINATES_WRONG_CONSTRAINT'; end if;
+    end;
+    begin
+      update app.customer_fulfillment_snapshots set
+        latitude_e6=case when axis=1 then null else 27000000 end,
+        longitude_e6=case when axis=2 then null else -109000000 end
+        where restaurant_id=restaurant_a and branch_id=branch_a;
+      raise exception 'CUSTOMER_SNAPSHOT_HALF_COORDINATES_ACCEPTED';
+    exception when check_violation then
+      get stacked diagnostics actual_constraint = constraint_name;
+      if actual_constraint <> 'customer_fulfillment_snapshots_coordinates_valid'
+      then raise exception 'CUSTOMER_SNAPSHOT_HALF_COORDINATES_WRONG_CONSTRAINT'; end if;
+    end;
+  end loop;
 
   begin
     insert into app.customer_fulfillment_snapshots (
@@ -210,12 +239,58 @@ begin
   then raise exception 'CUSTOMER_SEARCH_NAME_REJECTED'; end if;
   if app_private.search_customer_directory(actor,search_query || '{"actorId":"client"}'::jsonb) ->> 'status' is distinct from 'rejected'
   then raise exception 'CUSTOMER_SEARCH_AUTHORITY_FIELD_ACCEPTED'; end if;
+  detail_query := pg_catalog.jsonb_build_object('schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+    'restaurantId',restaurant_a::text,'branchId',branch_a::text),'customerId',writer_customer::text);
+  detail_result := app_private.read_customer_directory(actor,detail_query);
+  if detail_result ->> 'status' is distinct from 'ok'
+    or detail_result #>> '{result,customer,customerId}' is distinct from writer_customer::text
+    or detail_result #>> '{result,customer,displayName}' is distinct from 'Writer edited'
+    or pg_catalog.jsonb_array_length(detail_result #> '{result,customer,phones}') <> 0
+    or pg_catalog.jsonb_array_length(detail_result #> '{result,addresses}') <> 1
+    or detail_result #>> '{result,addresses,0,addressId}' is distinct from writer_address::text
+    or detail_result #>> '{result,addresses,0,address,label}' is distinct from 'Casa editada'
+    or detail_result #>> '{result,addresses,0,validatedForRequestedBranch}' is distinct from 'true'
+    or detail_result #>> '{result,addressesTruncated}' is distinct from 'false'
+  then raise exception 'CUSTOMER_DETAIL_READ_REJECTED'; end if;
+  if app_private.read_customer_directory(actor,detail_query || '{"actorId":"client"}'::jsonb) ->> 'status' is distinct from 'rejected'
+  then raise exception 'CUSTOMER_DETAIL_AUTHORITY_FIELD_ACCEPTED'; end if;
+  if app_private.read_customer_directory(actor,detail_query || pg_catalog.jsonb_build_object('customerId',gen_random_uuid()::text)) ->> 'status' is distinct from 'missing'
+  then raise exception 'CUSTOMER_DETAIL_MISSING_REJECTED'; end if;
+  if app_private.read_customer_directory(actor,detail_query || pg_catalog.jsonb_build_object('customerId',customer_b::text)) ->> 'status' is distinct from 'missing'
+  then raise exception 'CUSTOMER_DETAIL_CROSS_TENANT_ACCEPTED'; end if;
+  insert into app.branches(id,restaurant_id,name) values(sibling_branch,restaurant_a,'rollback-only sibling branch');
+  insert into app.memberships(id,user_id,restaurant_id,branch_id,granted_by)
+    values(sibling_member,actor,restaurant_a,sibling_branch,actor);
+  insert into app.membership_role_grants(membership_id,role_code,granted_by) values(sibling_member,'cashier',actor);
+  detail_result := app_private.read_customer_directory(actor,pg_catalog.jsonb_set(detail_query,'{scope,branchId}',pg_catalog.to_jsonb(sibling_branch::text)));
+  if detail_result ->> 'status' is distinct from 'ok'
+    or detail_result #>> '{result,addresses,0,validatedForRequestedBranch}' is distinct from 'false'
+  then raise exception 'CUSTOMER_DETAIL_OTHER_BRANCH_VALIDATION_ACCEPTED'; end if;
+  address_command := address_command || pg_catalog.jsonb_build_object('expectedVersion',3,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'address',(address_command -> 'address') || '{"label":"Edited after validation"}'::jsonb);
+  address_result := app_private.mutate_customer_directory(actor,'customer.address_saved',address_command);
+  if address_result ->> 'status' is distinct from 'applied' or address_result #>> '{record,version}' is distinct from '4'
+    or address_result #> '{record,validation}' is distinct from 'null'::jsonb
+  then raise exception 'CUSTOMER_ADDRESS_EDIT_KEPT_VALIDATION'; end if;
+  detail_result := app_private.read_customer_directory(actor,detail_query);
+  if detail_result #>> '{result,addresses,0,validatedForRequestedBranch}' is distinct from 'false'
+  then raise exception 'CUSTOMER_DETAIL_EDIT_KEPT_VALIDATION'; end if;
+  insert into app.customer_addresses(id,restaurant_id,customer_id,label,created_by,updated_by)
+    select gen_random_uuid(),restaurant_a,writer_customer,'rollback-only overflow ' || sequence::text,actor,actor
+    from pg_catalog.generate_series(1,20) as sequence;
+  detail_result := app_private.read_customer_directory(actor,detail_query);
+  if detail_result ->> 'status' is distinct from 'ok'
+    or pg_catalog.jsonb_array_length(detail_result #> '{result,addresses}') <> 20
+    or detail_result #>> '{result,addressesTruncated}' is distinct from 'true'
+  then raise exception 'CUSTOMER_DETAIL_OVERFLOW_NOT_DECLARED'; end if;
   update app.membership_role_grants set revoked_at=pg_catalog.clock_timestamp(),revoked_by=actor,
     revocation_reason='rollback-only directory fixture revocation' where membership_id=member_a and role_code='cashier';
   if app_private.mutate_customer_directory(actor,'customer.address_validated',validate_command) ->> 'status' is distinct from 'denied'
   then raise exception 'CUSTOMER_DIRECTORY_REVOKED_REPLAY_ACCEPTED'; end if;
   if app_private.search_customer_directory(actor,search_query) ->> 'status' is distinct from 'denied'
   then raise exception 'CUSTOMER_SEARCH_REVOKED_ACCESS_ACCEPTED'; end if;
+  if app_private.read_customer_directory(actor,detail_query) ->> 'status' is distinct from 'denied'
+  then raise exception 'CUSTOMER_DETAIL_REVOKED_ACCESS_ACCEPTED'; end if;
 end
 $directory_tests$;
 commit;

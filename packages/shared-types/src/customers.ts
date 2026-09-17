@@ -122,6 +122,31 @@ export interface CustomerDirectorySearchResultV1 {
   readonly candidates: readonly CustomerSearchCandidateV1[];
   readonly nextCursor: CustomerSearchCursorV1 | null;
 }
+export interface ReadCustomerDirectoryQueryV1 {
+  readonly schemaVersion: 1;
+  readonly scope: BranchScope;
+  readonly customerId: string;
+}
+export interface CustomerDirectoryDetailAddressV1 {
+  readonly addressId: string;
+  readonly address: CustomerAddressFieldsV1;
+  readonly version: number;
+  readonly updatedAt: string;
+  readonly validatedForRequestedBranch: boolean;
+}
+export interface CustomerDirectoryDetailV1 {
+  readonly schemaVersion: 1;
+  readonly scope: BranchScope;
+  readonly customer: Readonly<{
+    customerId: string;
+    displayName: string;
+    phones: readonly CustomerPhoneInputV1[];
+    version: number;
+    updatedAt: string;
+  }>;
+  readonly addresses: readonly CustomerDirectoryDetailAddressV1[];
+  readonly addressesTruncated: boolean;
+}
 
 const commonKeys = ["schemaVersion", "scope", "customerId", "expectedVersion", "eventId", "deviceId", "idempotencyKey", "occurredAt"] as const;
 const addressKeys = ["label", "streetLine", "unit", "neighborhood", "locality", "region", "countryCode", "postalCode", "references", "instructions", "coordinates"] as const;
@@ -200,12 +225,59 @@ export function parseCustomerDirectorySearchResultV1(value: unknown): CustomerDi
   for (const item of items) {
     const candidate = parseSearchCandidate(item);
     if (candidate === undefined || customerIds.has(candidate.customerId)) return undefined;
+    const previous = candidates.at(-1);
+    if (previous !== undefined && (candidate.updatedAt > previous.updatedAt
+      || (candidate.updatedAt === previous.updatedAt && candidate.customerId <= previous.customerId))) return undefined;
     customerIds.add(candidate.customerId);
     candidates.push(candidate);
   }
   if (nextCursor !== null && (candidates.length === 0 || nextCursor.customerId !== candidates.at(-1)?.customerId
     || nextCursor.updatedAt !== candidates.at(-1)?.updatedAt)) return undefined;
   return Object.freeze({ schemaVersion: 1, scope, candidates: Object.freeze(candidates), nextCursor });
+}
+
+export function parseReadCustomerDirectoryQueryV1(value: unknown): ReadCustomerDirectoryQueryV1 | undefined {
+  const fields = record(value, ["schemaVersion", "scope", "customerId"]);
+  const scope = fields === undefined ? undefined : parseScope(fields.scope);
+  const customerId = fields === undefined ? undefined : uuid(fields.customerId);
+  return fields === undefined || fields.schemaVersion !== 1 || scope === undefined || customerId === undefined
+    ? undefined : Object.freeze({ schemaVersion: 1, scope, customerId });
+}
+
+export function parseCustomerDirectoryDetailV1(value: unknown): CustomerDirectoryDetailV1 | undefined {
+  const fields = record(value, ["schemaVersion", "scope", "customer", "addresses", "addressesTruncated"]);
+  const scope = fields === undefined ? undefined : parseScope(fields.scope);
+  const customerFields = fields === undefined ? undefined
+    : record(fields.customer, ["customerId", "displayName", "phones", "version", "updatedAt"]);
+  const customerId = customerFields === undefined ? undefined : uuid(customerFields.customerId);
+  const phoneItems = customerFields === undefined ? undefined : boundedArray(customerFields.phones, 20);
+  const addressItems = fields === undefined ? undefined : boundedArray(fields.addresses, 20);
+  if (fields === undefined || fields.schemaVersion !== 1 || scope === undefined || customerFields === undefined
+    || customerId === undefined || !text(customerFields.displayName, 120)
+    || !integer(customerFields.version, 1, Number.MAX_SAFE_INTEGER) || !timestamp(customerFields.updatedAt)
+    || phoneItems === undefined || addressItems === undefined || typeof fields.addressesTruncated !== "boolean"
+    || (fields.addressesTruncated && addressItems.length !== 20)) return undefined;
+  const phones = parseDisplayPhones(phoneItems);
+  if (phones === undefined) return undefined;
+  const addresses: CustomerDirectoryDetailAddressV1[] = [];
+  const addressIds = new Set<string>();
+  for (const item of addressItems) {
+    const addressFields = record(item, ["addressId", "address", "version", "updatedAt", "validatedForRequestedBranch"]);
+    const addressId = addressFields === undefined ? undefined : uuid(addressFields.addressId);
+    const address = addressFields === undefined ? undefined : parseAddressFields(addressFields.address);
+    if (addressFields === undefined || addressId === undefined || address === undefined || addressIds.has(addressId)
+      || !integer(addressFields.version, 1, Number.MAX_SAFE_INTEGER) || !timestamp(addressFields.updatedAt)
+      || typeof addressFields.validatedForRequestedBranch !== "boolean") return undefined;
+    if (addressFields.validatedForRequestedBranch
+      && (address.streetLine === null || address.locality === null || address.countryCode === null)) return undefined;
+    addressIds.add(addressId);
+    addresses.push(Object.freeze({ addressId, address, version: addressFields.version,
+      updatedAt: addressFields.updatedAt, validatedForRequestedBranch: addressFields.validatedForRequestedBranch }));
+  }
+  const customer = Object.freeze({ customerId, displayName: customerFields.displayName,
+    phones, version: customerFields.version, updatedAt: customerFields.updatedAt });
+  return Object.freeze({ schemaVersion: 1, scope, customer, addresses: Object.freeze(addresses),
+    addressesTruncated: fields.addressesTruncated });
 }
 
 export function parseCustomerProfileRecordV1(value: unknown): CustomerProfileRecordV1 | undefined {
@@ -288,16 +360,8 @@ function parseSearchCandidate(value: unknown): CustomerSearchCandidateV1 | undef
   if (fields === undefined || customerId === undefined || !text(fields.displayName, 120)
     || !integer(fields.version, 1, Number.MAX_SAFE_INTEGER) || !timestamp(fields.updatedAt)
     || phoneItems === undefined || addressItems === undefined) return undefined;
-  const phones: CustomerPhoneInputV1[] = [];
-  const contactIds = new Set<string>();
-  for (const item of phoneItems) {
-    const phone = record(item, ["contactId", "label", "displayValue"]);
-    const contactId = phone === undefined ? undefined : uuid(phone.contactId);
-    if (phone === undefined || contactId === undefined || contactIds.has(contactId) || !text(phone.label, 40)
-      || !text(phone.displayValue, 80) || normalizePhone(phone.displayValue) === undefined) return undefined;
-    contactIds.add(contactId);
-    phones.push(Object.freeze({ contactId, label: phone.label, displayValue: phone.displayValue }));
-  }
+  const phones = parseDisplayPhones(phoneItems);
+  if (phones === undefined) return undefined;
   const addresses: CustomerSearchAddressV1[] = [];
   const addressIds = new Set<string>();
   for (const item of addressItems) {
@@ -315,6 +379,19 @@ function parseSearchCandidate(value: unknown): CustomerSearchCandidateV1 | undef
   }
   return Object.freeze({ customerId, displayName: fields.displayName, phones: Object.freeze(phones),
     addresses: Object.freeze(addresses), version: fields.version, updatedAt: fields.updatedAt });
+}
+function parseDisplayPhones(items: readonly unknown[]): readonly CustomerPhoneInputV1[] | undefined {
+  const phones: CustomerPhoneInputV1[] = [];
+  const contactIds = new Set<string>();
+  for (const item of items) {
+    const phone = record(item, ["contactId", "label", "displayValue"]);
+    const contactId = phone === undefined ? undefined : uuid(phone.contactId);
+    if (phone === undefined || contactId === undefined || contactIds.has(contactId) || !text(phone.label, 40)
+      || !text(phone.displayValue, 80) || normalizePhone(phone.displayValue) === undefined) return undefined;
+    contactIds.add(contactId);
+    phones.push(Object.freeze({ contactId, label: phone.label, displayValue: phone.displayValue }));
+  }
+  return Object.freeze(phones);
 }
 function metadataFields(fields: Record<string, unknown>): Readonly<{ version: number; createdAt: string; updatedAt: string; deletedAt: string | null }> | undefined {
   if (!integer(fields.version, 1, Number.MAX_SAFE_INTEGER) || !timestamp(fields.createdAt) || !timestamp(fields.updatedAt)

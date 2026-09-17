@@ -12,6 +12,14 @@ test("capture verification uses the caller's audited baseline and postchecks eve
   });
   assert.deepEqual(calls, ["read", "rollback", "read"]);
   assert.deepEqual(result.postcheck, result.base);
+  const targetSummary = { policies: 5, securedTables: 35, securityDefinerFunctions: 41 };
+  await verifyCaptureSchema({ ...captureInput, targetSummary }, {
+    runReadOnlyAudit: async () => baseSummary,
+    runRollbackVerification: async (options) => {
+      assert.deepEqual(options.expectedSummary, targetSummary);
+      return targetSummary;
+    },
+  });
   calls.length = 0;
   let failed = false;
   try {

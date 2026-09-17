@@ -57,7 +57,7 @@ export function buildCustomerDirectoryCatalogAudit(baseSql: string, captureSuppl
     "'capture_drafts','capture_command_events'",
     "'capture_drafts','capture_command_events','customers','customer_phones','customer_addresses','customer_party_snapshots','customer_fulfillment_snapshots','customer_command_events'",
   ).replaceAll(") <> 29", ") <> 35")
-    .replaceAll(functionTail, `${functionTail},\n    pg_catalog.to_regprocedure('app_private.mutate_customer_directory(uuid,text,jsonb)'),\n    pg_catalog.to_regprocedure('app_private.search_customer_directory(uuid,jsonb)')`)
-    .replace(") <> 40", ") <> 42").replace(") <> 38", ") <> 40");
+    .replaceAll(functionTail, `${functionTail},\n    pg_catalog.to_regprocedure('app_private.mutate_customer_directory(uuid,text,jsonb)'),\n    pg_catalog.to_regprocedure('app_private.search_customer_directory(uuid,jsonb)'),\n    pg_catalog.to_regprocedure('app_private.read_customer_directory(uuid,jsonb)')`)
+    .replace(") <> 40", ") <> 43").replace(") <> 38", ") <> 41");
   return validateCatalogAuditSql(`${migrated}\n${directorySupplementSql}`);
 }

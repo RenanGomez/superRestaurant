@@ -232,6 +232,29 @@ test("always rolls back and closes after a successful audit", async () => {
   assert.equal(session.queries[4], "ROLLBACK");
 });
 
+test("transaction verification callback runs before audit and its failure still rolls back", async () => {
+  for (const fail of [false, true]) {
+    const session = new FakeSession();
+    let invoked = false;
+    const execution = runSchemaVerification({
+      catalogAuditSql: "select 1;", config, createSession: () => session,
+      migrationSql: "begin; create schema app; commit;",
+      verifyWithinTransaction: async (received) => {
+        assert.equal(received, session);
+        assert.deepEqual(session.queries, ["BEGIN", "create schema app"]);
+        invoked = true;
+        if (fail) throw new Error("private adapter details");
+      },
+    });
+    if (fail) await assert.rejects(execution, (error: unknown) => error instanceof SchemaVerificationError
+      && error.code === "SCHEMA_VERIFICATION_MIGRATION_FAILED");
+    else await execution;
+    assert.equal(invoked, true);
+    assert.equal(session.queries.at(-1), "ROLLBACK");
+    assert.equal(session.closed, true);
+  }
+});
+
 test("runs catalog prechecks and postchecks in explicit read-only transactions", async () => {
   const session = new FakeSession(
     undefined,

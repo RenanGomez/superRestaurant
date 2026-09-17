@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Test } from "@nestjs/testing";
+import { APP_GUARD } from "@nestjs/core";
+import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
+import { CustomerDirectoryController } from "./customer-directory.controller.js";
+import { CUSTOMER_DIRECTORY_READER_PORT, CUSTOMER_DIRECTORY_WRITER_PORT } from "./customer-directory.js";
 import { parseBranchScope } from "@super-restaurant/shared-types";
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
@@ -29,6 +34,83 @@ const profileRecord = { schemaVersion: 1, restaurantId, customerId, displayName:
   createdAt: occurredAt, updatedAt: occurredAt, deletedAt: null };
 const addressRecord = { schemaVersion: 1, restaurantId, customerId, addressId, address, validation: null,
   version: 1, createdAt: occurredAt, updatedAt: occurredAt, deletedAt: null };
+const missingRead = async (): Promise<unknown> => ({ status: "missing" });
+
+test("customer HTTP boundary authenticates every route and sanitizes persistence outcomes", async () => {
+  let active = true;
+  let calls = 0;
+  let profileOutcome: unknown = { status: "applied", record: profileRecord };
+  let fail = false;
+  const authorization = new MembershipAuthorizationService({ findActiveMembership: async () => active ? { roles: ["cashier"], scope } : undefined });
+  const module = await Test.createTestingModule({ controllers: [CustomerDirectoryController], providers: [
+    CustomerDirectoryService, CustomerDirectoryQueryService,
+    { provide: MembershipAuthorizationService, useValue: authorization },
+    { provide: CUSTOMER_DIRECTORY_WRITER_PORT, useValue: {
+      saveProfile: async (actor: string) => { assert.equal(actor, actorId); calls++; if (fail) throw new Error("private phone/password"); return profileOutcome; },
+      saveAddress: async () => ({ status: "applied", record: addressRecord }),
+      validateAddress: async () => ({ status: "applied", record: { ...addressRecord, version: 2,
+        validation: { branchId, actorId, deviceId, eventId, validatedAt: occurredAt } } }),
+    } },
+    { provide: CUSTOMER_DIRECTORY_READER_PORT, useValue: {
+      search: async () => ({ status: "ok", result: { schemaVersion: 1, scope, candidates: [], nextCursor: null } }),
+      read: missingRead,
+    } },
+    { provide: AUTH_PRINCIPAL_VERIFIER, useValue: { verifyAccessToken: async () => principal } },
+    { provide: APP_GUARD, useClass: SupabaseAuthGuard },
+  ] }).compile();
+  const app = module.createNestApplication({ logger: false });
+  app.setGlobalPrefix("api/v1");
+  await app.listen(0, "127.0.0.1");
+  const url = `${await app.getUrl()}/api/v1/customers`;
+  const send = (route: string, body: unknown, authenticated = true) => fetch(`${url}/${route}`, {
+    method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json",
+      ...(authenticated ? { authorization: "Bearer customer-http-fixture-token" } : {}) },
+  });
+  try {
+    const routes = ["profile", "address", "address/validate", "search", "detail"];
+    for (const route of routes) {
+      assert.equal((await send(route, {}, false)).status, 401);
+      assert.equal((await send(route, {})).status, 400);
+    }
+    assert.equal(calls, 0);
+    const saved = await send("profile", profileCommand);
+    assert.equal(saved.status, 200);
+    assert.equal(saved.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await saved.json(), { schemaVersion: 1, record: profileRecord, replayed: false });
+    profileOutcome = { status: "replayed", record: profileRecord };
+    assert.equal((await (await send("profile", profileCommand)).json() as { replayed: boolean }).replayed, true);
+    for (const [route, body, expected] of [
+      ["address", { ...common, addressId, address }, 200],
+      ["address/validate", { ...common, addressId, expectedVersion: 1 }, 200],
+      ["search", { schemaVersion: 1, scope, mode: "name", query: "Ana", limit: 20, cursor: null }, 200],
+      ["detail", { schemaVersion: 1, scope, customerId }, 404],
+    ] as const) {
+      const response = await send(route, body);
+      assert.equal(response.status, expected);
+      assert.equal(response.headers.get("cache-control"), "private, no-store");
+    }
+    assert.equal((await send("profile", { ...profileCommand, actorId })).status, 400);
+    active = false;
+    const beforeDenied = calls;
+    assert.equal((await send("profile", profileCommand)).status, 403);
+    assert.equal(calls, beforeDenied);
+    active = true;
+    for (const [outcome, status, code] of [
+      [{ status: "conflict" }, 409, "CUSTOMER_CONFLICT"],
+      [{ status: "denied" }, 403, "ACTION_NOT_AUTHORIZED"],
+      [{ status: "applied", record: {} }, 503, "CUSTOMER_UNAVAILABLE"],
+    ] as const) {
+      profileOutcome = outcome;
+      const response = await send("profile", profileCommand);
+      assert.equal(response.status, status);
+      assert.deepEqual(await response.json(), { code });
+    }
+    fail = true;
+    const response = await send("profile", profileCommand);
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { code: "CUSTOMER_UNAVAILABLE" });
+  } finally { await app.close(); }
+});
 
 function harness(outcomes: Partial<Record<keyof CustomerDirectoryWriterPort, unknown>> = {}, failProfile = false) {
   const calls: Array<{ kind: string; actorId: string; command: unknown }> = [];
@@ -149,7 +231,7 @@ test("directory search authorizes branch context, bounds results and preserves e
   version: 1, updatedAt: occurredAt };
   const calls: unknown[] = [];
   const authorization = new MembershipAuthorizationService({ findActiveMembership: async () => ({ roles: ["cashier"], scope }) });
-  const reader: CustomerDirectoryReaderPort = { search: async (receivedActor, receivedQuery) => {
+  const reader: CustomerDirectoryReaderPort = { read: missingRead, search: async (receivedActor, receivedQuery) => {
     calls.push({ receivedActor, receivedQuery });
     return { status: "ok", result: { schemaVersion: 1, scope, candidates: [candidate], nextCursor: null } };
   } };
@@ -159,14 +241,18 @@ test("directory search authorizes branch context, bounds results and preserves e
   assert.equal(result.candidates[0]?.addresses[0]?.validatedForRequestedBranch, true);
   assert.deepEqual(calls, [{ receivedActor: actorId, receivedQuery: query }]);
   assert.ok(Object.isFrozen(result.candidates[0]?.addresses));
+  await assert.rejects(service.search(principal, { ...query, cursor: { updatedAt: occurredAt, customerId } }),
+    (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === "unavailable");
+  const precedingCursor = { updatedAt: "2026-09-17T18:00:00.000Z", customerId };
+  assert.equal((await service.search(principal, { ...query, cursor: precedingCursor })).candidates.length, 1);
 
   await assert.rejects(service.search(principal, { ...query, actorId }),
     (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === "request");
-  const foreign = new CustomerDirectoryQueryService(authorization, { search: async () => ({ status: "ok", result: { schemaVersion: 1,
+  const foreign = new CustomerDirectoryQueryService(authorization, { read: missingRead, search: async () => ({ status: "ok", result: { schemaVersion: 1,
     scope: parseBranchScope({ restaurantId, branchId: addressId })!, candidates: [candidate], nextCursor: null } }) });
   await assert.rejects(foreign.search(principal, query),
     (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === "unavailable");
-  const overLimit = new CustomerDirectoryQueryService(authorization, { search: async () => ({ status: "ok", result: { schemaVersion: 1,
+  const overLimit = new CustomerDirectoryQueryService(authorization, { read: missingRead, search: async () => ({ status: "ok", result: { schemaVersion: 1,
     scope, candidates: [candidate, { ...candidate, customerId: contactId }], nextCursor: {
       updatedAt: occurredAt, customerId: contactId,
     } } }) });
@@ -179,7 +265,7 @@ test("directory search rechecks membership and sanitizes reader failures", async
   let active = false;
   const authorization = new MembershipAuthorizationService({ findActiveMembership: async () => active ? { roles: ["waiter"], scope } : undefined });
   let calls = 0;
-  const reader: CustomerDirectoryReaderPort = { search: async () => { calls += 1; throw new Error("private query detail"); } };
+  const reader: CustomerDirectoryReaderPort = { read: missingRead, search: async () => { calls += 1; throw new Error("private query detail"); } };
   const service = new CustomerDirectoryQueryService(authorization, reader);
   await assert.rejects(service.search(principal, query),
     (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === "authorization");
@@ -192,7 +278,7 @@ test("directory search rechecks membership and sanitizes reader failures", async
     [{ status: "ok", result: {}, extra: true }, "unavailable"]] as const) {
     const target = new CustomerDirectoryQueryService(new MembershipAuthorizationService({
       findActiveMembership: async () => ({ roles: ["waiter"], scope }),
-    }), { search: async () => outcome });
+    }), { read: missingRead, search: async () => outcome });
     await assert.rejects(target.search(principal, query),
       (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === code);
   }
@@ -213,6 +299,51 @@ test("PostgreSQL search adapter uses one fixed private query and rejects ambiguo
     (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === "request");
   for (const rows of [[], [{ result: outcome }, { result: outcome }], [{ other: outcome }], [new Proxy({ result: outcome }, {})]]) {
     await assert.rejects(new PostgresCustomerDirectoryReader({ query: async () => ({ rows }) }).search(actorId, query),
+      (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === "unavailable");
+  }
+});
+
+test("directory detail authorizes exact scope and returns one explicit identity without private keys", async () => {
+  const query = { schemaVersion: 1 as const, scope, customerId };
+  const detail = { schemaVersion: 1, scope, customer: { customerId, displayName: "Ana",
+    phones: profileCommand.phones, version: 1, updatedAt: occurredAt }, addresses: [{ addressId, address,
+    version: 1, updatedAt: occurredAt, validatedForRequestedBranch: false }], addressesTruncated: false };
+  const calls: unknown[] = [];
+  const authorization = new MembershipAuthorizationService({ findActiveMembership: async () => ({ roles: ["cashier"], scope }) });
+  const reader: CustomerDirectoryReaderPort = { search: async () => ({ status: "rejected" }),
+    read: async (receivedActor, receivedQuery) => { calls.push({ receivedActor, receivedQuery }); return { status: "ok", result: detail }; } };
+  const service = new CustomerDirectoryQueryService(authorization, reader);
+  const result = await service.read(principal, query);
+  assert.equal(result.customer.customerId, customerId);
+  assert.equal(result.addresses[0]?.address.instructions, null);
+  assert.deepEqual(calls, [{ receivedActor: actorId, receivedQuery: query }]);
+  assert.ok(Object.isFrozen(result.addresses[0]?.address));
+
+  await assert.rejects(service.read(principal, { ...query, actorId }),
+    (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === "request");
+  for (const [outcome, code] of [[{ status: "missing" }, "not_found"], [{ status: "denied" }, "authorization"],
+    [{ status: "rejected" }, "unavailable"], [{ status: "ok", result: { ...detail,
+      customer: { ...detail.customer, customerId: contactId } } }, "unavailable"]] as const) {
+    const target = new CustomerDirectoryQueryService(authorization, { search: async () => ({ status: "rejected" }), read: async () => outcome });
+    await assert.rejects(target.read(principal, query),
+      (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === code);
+  }
+});
+
+test("PostgreSQL detail adapter uses one fixed private query and rejects ambiguous rows", async () => {
+  const query = { schemaVersion: 1 as const, scope, customerId };
+  const outcome = { status: "missing" };
+  const calls: Array<{ sql: string; parameters: readonly unknown[] }> = [];
+  const adapter = new PostgresCustomerDirectoryReader({ query: async (sql, parameters) => {
+    calls.push({ sql, parameters }); return { rows: [{ result: outcome }] };
+  } });
+  assert.equal(await adapter.read(actorId, query), outcome);
+  assert.deepEqual(calls, [{ sql: "select app_private.read_customer_directory($1::uuid, $2::jsonb) as result",
+    parameters: [actorId, JSON.stringify(query)] }]);
+  await assert.rejects(adapter.read("bad", query),
+    (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === "request");
+  for (const rows of [[], [{ result: outcome }, { result: outcome }], [{ other: outcome }], [new Proxy({ result: outcome }, {})]]) {
+    await assert.rejects(new PostgresCustomerDirectoryReader({ query: async () => ({ rows }) }).read(actorId, query),
       (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === "unavailable");
   }
 });

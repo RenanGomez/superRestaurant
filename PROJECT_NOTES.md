@@ -1,5 +1,9 @@
 # PROJECT_NOTES
 
+Integración Customer PostgreSQL (2026-09-16): Emmanuel autorizó SET temporal app_api exclusivamente en transacción rollback-only. El arnés comprueba membresía original, prueba servicios/adaptadores como app_api y restaura SET=false antes de auditoría candidata; rollback y postcheck confirman catálogo y membresía originales. Pasaron profile/replay/conflicto/address/validate/search/detail/missing. Esta autorización no cubre permisos ni migraciones persistentes, despliegue o Git remoto. Controller y UI aún no expuestos.
+
+Detalle Customer V1 (2026-09-16): seleccionar una coincidencia siempre lee por `customerId` explícito y scope Restaurant/Branch autorizado; missing no revela si existe en otro tenant. El resultado operativo muestra teléfonos capturados y las 20 direcciones activas más recientes con truncación explícita, pero no la clave normalizada ni actor/event/device/fecha de validación. La validez se proyecta únicamente como booleano relativo a la Branch solicitada.
+
 Búsqueda Customer V1 (2026-09-16): phone es coincidencia exacta de clave normalizada; name/address son contains case-insensitive dentro del Restaurant. Paginación estable por updatedAt desc+customerId asc, máximo 20. Resultados muestran teléfono capturado y contexto de dirección, no normalizedValue ni evidencia de auditoría; validación se reduce a booleano para la Branch solicitada. Coincidencias nunca se fusionan.
 
 Journal Customer (2026-09-16): una operación privada versionada maneja profile_saved, address_saved y address_validated. Cada comando aceptado produce exactamente un customer_command_event que también conserva el resultado de replay; idempotencia se limita por actor+Restaurant+Branch. Profile y Address tienen secuencias CAS independientes. occurredAt del dispositivo es sólo evidencia; validatedAt/updatedAt provienen del reloj servidor tras adquirir locks.

@@ -12,6 +12,8 @@ export interface CaptureSchemaVerificationInput {
   readonly targetCatalogAuditSql: string;
   /** Must come from the exact audited baseline, including administrative bootstrap. */
   readonly baseSummary: ExpectedSchemaVerificationSummary;
+  readonly targetSummary?: ExpectedSchemaVerificationSummary;
+  readonly verifyWithinTransaction?: import("./schema-verification.js").RunSchemaVerificationOptions["verifyWithinTransaction"];
 }
 
 export interface CaptureSchemaVerificationDependencies {
@@ -35,7 +37,8 @@ export async function verifyCaptureSchema(
       config: input.config,
       migrationSql: input.migrationSql,
       catalogAuditSql: input.targetCatalogAuditSql,
-      expectedSummary: { ...input.baseSummary, securedTables: input.baseSummary.securedTables + 2,
+      ...(input.verifyWithinTransaction === undefined ? {} : { verifyWithinTransaction: input.verifyWithinTransaction }),
+      expectedSummary: input.targetSummary ?? { ...input.baseSummary, securedTables: input.baseSummary.securedTables + 2,
         securityDefinerFunctions: input.baseSummary.securityDefinerFunctions + 2 },
     });
   } catch (error: unknown) {

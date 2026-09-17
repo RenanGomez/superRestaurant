@@ -98,6 +98,24 @@ Frontera Nest Customer/Address lista para REVIEW sin exposición: permisos opera
 
 Búsqueda Customer candidata lista para REVIEW estática: contratos/servicio/adapter no registrados y función privada por phone/name/address con scope, paginación y minimización de PII. Fixtures cubren teléfonos compartidos, cursor y revocación. Falta ejecución PostgreSQL, medición de scans, endpoint y UI; no declarar búsqueda operativa todavía.
 
+Detalle Customer candidato listo para REVIEW estática: lectura por identidad explícita, scope Branch reautorizado, direcciones completas y teléfono mostrable sin clave normalizada ni evidencia privada de validación. Función privada y fixtures cubren missing, aislamiento y revocación; falta PostgreSQL real, controller/endpoint y UI.
+
+Actualización 2026-09-16 14:40: runner PostgreSQL rollback-only completo 001–008 pasó tras corregir sintaxis CASE/BETWEEN y resumen esperado. Evidencia real 27/5/36 -> 35/5/41 -> 27/5/36; sin aplicación persistente. Supersede las brechas SQL anteriores. Subcortes para REVIEW; directorio continúa IN_PROGRESS por integración adapter/DB, concurrencia, controller y UI pendientes.
+
+Controller Customer implementado para REVIEW local sin registro en AppModule; smoke HTTP real fixture cubre cinco rutas, Auth, no-store, cuerpos inválidos, replay, revocación y error mapping. Pendiente integración service/adapter/PostgreSQL y wiring final, no declarar API productiva.
+
+Integración Customer app_api IN_PROGRESS: arnés transaccional añadido, pero SET LOCAL ROLE app_api falla 42501 incluso en read-only aislada; membresía postgres sí existe. Sin cambios remotos de permisos. No habilitar controller ni declarar integración verde; siguiente paso es resolver estrategia de prueba del rol exacto con diagnóstico read-only/autorización humana si exige grants.
+
+Diagnóstico confirmado: PostgreSQL 17, membresía postgres->app_api con ADMIN=true/SET=false/INHERIT=false. Integración exacta pendiente de autorización humana para habilitar SET sólo durante transacción rollback-only y demostrar restauración posterior; no ampliar permisos persistentemente.
+
+Actualización 2026-09-16 tras autorización humana: integración Customer service/adapter/PostgreSQL como app_api pasó rollback-only (alta, replay, conflicto, dirección, validación, búsqueda, detalle y missing). Postcheck confirmó 27/5/36 y membresía original SET=false/INHERIT=false/ADMIN=true; supersede bloqueo anterior. Subcorte para REVIEW; directorio sigue IN_PROGRESS por wiring, concurrencia y UI. No migraciones persistentes ni nuevo commit/push.
+
+Fixtures SQL ampliadas verificadas realmente rollback-only: cross-tenant detail missing, validación relativa a Branch, edición limpia atestación, 21 direcciones -> 20 con truncación explícita. Postcheck conserva 27/5/36. No sustituye integración app_api pendiente.
+
+Lecturas fail-closed reforzadas para REVIEW: parsers rechazan páginas desordenadas y direcciones incompletas marcadas válidas; servicio liga filas al cursor solicitado sin repetición/retroceso. Regresiones y consumidores verdes; integración app_api sigue pendiente.
+
+Bug SQL candidato corregido y verificado rollback-only: coordenadas de Address/fulfillment snapshot deben estar ambas null o ambas presentes/en rango; CHECK ya no acepta un eje ausente por resultado NULL. Fixtures cuatro combinaciones parciales rechazan constraint exacto; postcheck remoto intacto.
+
 - [ ] **TODO · P3** — Implementar `packages/sync-engine` con outbox, reintentos e idempotencia.
 - [ ] **TODO · P3** — Integrar almacenamiento local móvil; elegir WatermelonDB o una alternativa mediante ADR.
 - [ ] **TODO · P3** — Integrar IndexedDB y Service Worker en web; elegir Dexie/RxDB mediante ADR y convertir el POS en PWA.

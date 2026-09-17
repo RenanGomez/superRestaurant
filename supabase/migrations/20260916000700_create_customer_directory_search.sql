@@ -19,7 +19,7 @@ begin
     or p_query -> 'schemaVersion' is distinct from '1'::jsonb
     or not coalesce(p_query ->> 'mode' in ('phone','name','address'),false)
     or pg_catalog.jsonb_typeof(p_query -> 'query') is distinct from 'string'
-    or char_length(p_query ->> 'query') not between 1 and case when p_query ->> 'mode' = 'address' then 200 else 120 end
+    or char_length(p_query ->> 'query') not between 1 and (case when p_query ->> 'mode' = 'address' then 200 else 120 end)
     or p_query ->> 'query' <> btrim(p_query ->> 'query') or p_query ->> 'query' ~ '[[:cntrl:]]'
     or pg_catalog.jsonb_typeof(p_query -> 'limit') is distinct from 'number'
     or not coalesce(p_query ->> 'limit' ~ '^([1-9]|1[0-9]|20)$',false)

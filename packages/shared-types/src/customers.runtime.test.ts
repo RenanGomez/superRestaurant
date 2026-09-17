@@ -1,6 +1,7 @@
 import { parseSaveCustomerProfileCommandV1, parseSaveCustomerAddressCommandV1, parseValidateCustomerAddressCommandV1,
   parseCustomerProfileMutationResultV1, parseCustomerAddressMutationResultV1,
-  parseSearchCustomerDirectoryQueryV1, parseCustomerDirectorySearchResultV1 } from "./index.js";
+  parseSearchCustomerDirectoryQueryV1, parseCustomerDirectorySearchResultV1,
+  parseReadCustomerDirectoryQueryV1, parseCustomerDirectoryDetailV1 } from "./index.js";
 
 const expect = (condition: boolean, message: string): void => { if (!condition) throw new Error(message); };
 const id = "abcdef01-2345-4678-9abc-0123456789ab";
@@ -115,3 +116,37 @@ expect(parseCustomerDirectorySearchResultV1({ schemaVersion: 1, scope: base.scop
   addresses: [candidate.addresses[0], candidate.addresses[0]] }], nextCursor: null }) === undefined, "duplicate address identities rejected");
 expect(parseCustomerDirectorySearchResultV1({ schemaVersion: 1, scope: base.scope, candidates: [{ ...candidate,
   phones: [{ ...candidatePhone, displayValue: "642 ext 1" }] }], nextCursor: null }) === undefined, "invalid search phone rejected");
+
+const readQuery = { schemaVersion: 1, scope: base.scope, customerId: id };
+expect(parseReadCustomerDirectoryQueryV1(readQuery) !== undefined, "exact customer detail query parses");
+expect(parseReadCustomerDirectoryQueryV1({ ...readQuery, actorId: id }) === undefined, "detail query rejects actor");
+const detail = { schemaVersion: 1, scope: base.scope, customer: {
+  customerId: id, displayName: "Ana", phones: [candidatePhone], version: 1, updatedAt: base.occurredAt,
+}, addresses: [{ addressId: id, address: addressRecord.address, version: 3,
+  updatedAt: base.occurredAt, validatedForRequestedBranch: true }], addressesTruncated: false };
+const parsedDetail = parseCustomerDirectoryDetailV1(detail);
+expect(parsedDetail !== undefined && Object.isFrozen(parsedDetail.customer)
+  && Object.isFrozen(parsedDetail.customer.phones) && Object.isFrozen(parsedDetail.addresses[0]?.address.coordinates),
+"customer detail is deeply frozen");
+expect(parseCustomerDirectoryDetailV1({ ...detail, customer: { ...detail.customer,
+  phones: [{ ...candidatePhone, normalizedValue: "+526421234567" }] } }) === undefined,
+"detail does not expose normalized phone keys");
+expect(parseCustomerDirectoryDetailV1({ ...detail, addresses: [detail.addresses[0], detail.addresses[0]] }) === undefined,
+"detail rejects duplicate addresses");
+expect(parseCustomerDirectoryDetailV1({ ...detail, addresses: [{ ...detail.addresses[0],
+  validatedBy: id }] }) === undefined, "detail does not expose validation audit evidence");
+expect(parseCustomerDirectoryDetailV1({ ...detail, addressesTruncated: true }) === undefined,
+"detail cannot claim truncation before the page is full");
+for (const key of ["streetLine", "locality", "countryCode"] as const) {
+  expect(parseCustomerDirectoryDetailV1({ ...detail, addresses: [{ ...detail.addresses[0],
+    address: { ...addressRecord.address, [key]: null } }] }) === undefined,
+  "validated detail requires complete delivery fields");
+}
+const secondCandidate = { ...candidate, customerId: "abcdef02-2345-4678-9abc-0123456789ab" };
+expect(parseCustomerDirectorySearchResultV1({ schemaVersion: 1, scope: base.scope,
+  candidates: [candidate, secondCandidate], nextCursor: null }) !== undefined, "equal-date candidates sorted by identity");
+expect(parseCustomerDirectorySearchResultV1({ schemaVersion: 1, scope: base.scope,
+  candidates: [secondCandidate, candidate], nextCursor: null }) === undefined, "reverse equal-date identities rejected");
+expect(parseCustomerDirectorySearchResultV1({ schemaVersion: 1, scope: base.scope,
+  candidates: [candidate, { ...secondCandidate, updatedAt: "2026-09-17T10:00:00.000Z" }], nextCursor: null }) === undefined,
+"reverse chronological page rejected");

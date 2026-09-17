@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { verifyCaptureSchema } from "./capture-schema-verification.js";
+import { verifyCustomerDirectoryAdapters } from "./customer-directory-adapter-verification.js";
 import { buildCustomerDirectoryCatalogAudit, buildPostBootstrapCatalogAudit, postBootstrapSummary } from "./post-bootstrap-catalog.js";
 import { extractMigrationBody, readSchemaVerificationConfig, SchemaVerificationError } from "./schema-verification.js";
 
@@ -12,9 +13,12 @@ try {
   const result = await verifyCaptureSchema({
     config: readSchemaVerificationConfig(process.env),
     baseSummary: postBootstrapSummary,
+    targetSummary: { securedTables: 35, policies: 5, securityDefinerFunctions: 41 },
+    ...(process.env.CUSTOMER_ADAPTER_VERIFICATION === "ROLLBACK_ONLY_APP_API"
+      ? { verifyWithinTransaction: verifyCustomerDirectoryAdapters } : {}),
     baseCatalogAuditSql: buildPostBootstrapCatalogAudit(base),
     targetCatalogAuditSql: buildCustomerDirectoryCatalogAudit(base, supplement, directorySupplement),
-    migrationSql: `begin;\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/migrations/20260916000100_create_capture_drafts.sql", import.meta.url), "utf8"))}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/migrations/20260916000200_create_capture_command_journal.sql", import.meta.url), "utf8"))}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/migrations/20260916000300_create_capture_draft_command.sql", import.meta.url), "utf8"))}\n${attentionMigration}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/migrations/20260916000500_create_customer_directory.sql", import.meta.url), "utf8"))}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/migrations/20260916000600_create_customer_directory_command.sql", import.meta.url), "utf8"))}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/migrations/20260916000700_create_customer_directory_search.sql", import.meta.url), "utf8"))}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/tests/customer_directory_invariants.sql", import.meta.url), "utf8"))}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/tests/capture_drafts_invariants.sql", import.meta.url), "utf8"))}\ncommit;`,
+    migrationSql: `begin;\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/migrations/20260916000100_create_capture_drafts.sql", import.meta.url), "utf8"))}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/migrations/20260916000200_create_capture_command_journal.sql", import.meta.url), "utf8"))}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/migrations/20260916000300_create_capture_draft_command.sql", import.meta.url), "utf8"))}\n${attentionMigration}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/migrations/20260916000500_create_customer_directory.sql", import.meta.url), "utf8"))}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/migrations/20260916000600_create_customer_directory_command.sql", import.meta.url), "utf8"))}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/migrations/20260916000700_create_customer_directory_search.sql", import.meta.url), "utf8"))}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/migrations/20260916000800_create_customer_directory_detail.sql", import.meta.url), "utf8"))}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/tests/customer_directory_invariants.sql", import.meta.url), "utf8"))}\n${extractMigrationBody(readFileSync(new URL("../../../../supabase/tests/capture_drafts_invariants.sql", import.meta.url), "utf8"))}\ncommit;`,
   });
   process.stdout.write(`${JSON.stringify({ stage: "complete", status: "ok", ...result })}\n`);
 } catch (error: unknown) {

@@ -85,7 +85,7 @@ export interface SchemaVerificationQueryResult {
 
 export interface SchemaVerificationSession {
   connect(): Promise<void>;
-  query(sql: string): Promise<SchemaVerificationQueryResult>;
+  query(sql: string, parameters?: readonly unknown[]): Promise<SchemaVerificationQueryResult>;
   close(): Promise<void>;
 }
 
@@ -98,6 +98,8 @@ export interface SchemaVerificationSummary {
 export type ExpectedSchemaVerificationSummary = SchemaVerificationSummary;
 
 export interface RunSchemaVerificationOptions {
+  /** Runs inside the rollback transaction; must never commit or open a second session. */
+  readonly verifyWithinTransaction?: (session: SchemaVerificationSession) => Promise<void>;
   readonly catalogAuditSql: string;
   readonly config: SchemaVerificationConfig;
   readonly createSession?: (config: SchemaVerificationConfig) => SchemaVerificationSession;
@@ -235,6 +237,7 @@ export async function runSchemaVerification(options: RunSchemaVerificationOption
       await session.query(statement);
     }
     migrationStatementIndex = undefined;
+    await options.verifyWithinTransaction?.(session);
 
     stage = "catalog_audit";
     await session.query(catalogAudit);
@@ -338,8 +341,8 @@ class PostgresSchemaVerificationSession implements SchemaVerificationSession {
     await this.#client.connect();
   }
 
-  public async query(sql: string): Promise<SchemaVerificationQueryResult> {
-    const queryResult = await this.#client.query<QueryResultRow>(sql) as
+  public async query(sql: string, parameters?: readonly unknown[]): Promise<SchemaVerificationQueryResult> {
+    const queryResult = await this.#client.query<QueryResultRow>(sql, parameters === undefined ? undefined : [...parameters]) as
       | QueryResult<QueryResultRow>
       | QueryResult<QueryResultRow>[];
     const results = Array.isArray(queryResult) ? queryResult : [queryResult];

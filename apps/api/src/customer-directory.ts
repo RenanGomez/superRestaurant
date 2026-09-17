@@ -10,6 +10,8 @@ import {
   parseCustomerAddressMutationResultV1,
   parseSearchCustomerDirectoryQueryV1,
   parseCustomerDirectorySearchResultV1,
+  parseReadCustomerDirectoryQueryV1,
+  parseCustomerDirectoryDetailV1,
   type SaveCustomerProfileCommandV1,
   type SaveCustomerAddressCommandV1,
   type ValidateCustomerAddressCommandV1,
@@ -17,13 +19,15 @@ import {
   type CustomerAddressMutationResultV1,
   type SearchCustomerDirectoryQueryV1,
   type CustomerDirectorySearchResultV1,
+  type ReadCustomerDirectoryQueryV1,
+  type CustomerDirectoryDetailV1,
   type RbacPermissionCode,
 } from "@super-restaurant/shared-types";
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 
-export type CustomerDirectoryApplicationErrorCode = "request" | "authorization" | "conflict" | "unavailable";
+export type CustomerDirectoryApplicationErrorCode = "request" | "authorization" | "conflict" | "not_found" | "unavailable";
 export class CustomerDirectoryApplicationError extends Error {
   public constructor(public readonly code: CustomerDirectoryApplicationErrorCode) {
     super(`CUSTOMER_DIRECTORY_${code.toUpperCase()}`);
@@ -38,6 +42,7 @@ export interface CustomerDirectoryWriterPort {
 export const CUSTOMER_DIRECTORY_WRITER_PORT = Symbol("CUSTOMER_DIRECTORY_WRITER_PORT");
 export interface CustomerDirectoryReaderPort {
   search(actorId: string, query: SearchCustomerDirectoryQueryV1): Promise<unknown>;
+  read(actorId: string, query: ReadCustomerDirectoryQueryV1): Promise<unknown>;
 }
 export const CUSTOMER_DIRECTORY_READER_PORT = Symbol("CUSTOMER_DIRECTORY_READER_PORT");
 
@@ -49,6 +54,18 @@ export class PostgresCustomerDirectoryReader implements CustomerDirectoryReaderP
     if (query === undefined || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(actorId)) throw request();
     const response = await this.database.query(
       "select app_private.search_customer_directory($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(query)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exact(response.rows[0]);
+    if (row === undefined || Reflect.ownKeys(row).length !== 1 || !Reflect.ownKeys(row).includes("result")) throw unavailable();
+    return own(row, "result");
+  }
+  public async read(actorId: string, input: ReadCustomerDirectoryQueryV1): Promise<unknown> {
+    const query = parseReadCustomerDirectoryQueryV1(input);
+    if (query === undefined || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(actorId)) throw request();
+    const response = await this.database.query(
+      "select app_private.read_customer_directory($1::uuid, $2::jsonb) as result",
       [actorId, JSON.stringify(query)],
     );
     if (response.rows.length !== 1) throw unavailable();
@@ -171,29 +188,52 @@ export class CustomerDirectoryQueryService {
   public async search(principal: AuthenticatedPrincipal, input: unknown): Promise<CustomerDirectorySearchResultV1> {
     const query = parseSearchCustomerDirectoryQueryV1(input);
     if (query === undefined) throw request();
-    let actorId: string;
-    try {
-      const authorized = await this.authorization.authorizeBranch(principal, query.scope, "customers.read");
-      actorId = authorized.principal.actorId;
-    } catch { throw new CustomerDirectoryApplicationError("authorization"); }
+    const actorId = await this.authorizeRead(principal, query.scope);
     let raw: unknown;
     try { raw = await this.reader.search(actorId, query); } catch { throw unavailable(); }
     const outcome = parseQueryOutcome(raw);
-    if (outcome === undefined || outcome.status === "rejected") throw unavailable();
+    if (outcome === undefined || outcome.status === "rejected" || outcome.status === "missing") throw unavailable();
     if (outcome.status === "denied") throw new CustomerDirectoryApplicationError("authorization");
     const result = parseCustomerDirectorySearchResultV1(outcome.result);
+    const cursor = query.cursor;
     if (result === undefined || result.scope.restaurantId !== query.scope.restaurantId || result.scope.branchId !== query.scope.branchId
-      || result.candidates.length > query.limit || (result.nextCursor !== null && result.candidates.length !== query.limit)) throw unavailable();
+      || result.candidates.length > query.limit || (result.nextCursor !== null && result.candidates.length !== query.limit)
+      || (cursor !== null && result.candidates.some(candidate => candidate.updatedAt > cursor.updatedAt
+        || (candidate.updatedAt === cursor.updatedAt && candidate.customerId <= cursor.customerId)))) throw unavailable();
     return result;
+  }
+
+  public async read(principal: AuthenticatedPrincipal, input: unknown): Promise<CustomerDirectoryDetailV1> {
+    const query = parseReadCustomerDirectoryQueryV1(input);
+    if (query === undefined) throw request();
+    const actorId = await this.authorizeRead(principal, query.scope);
+    let raw: unknown;
+    try { raw = await this.reader.read(actorId, query); } catch { throw unavailable(); }
+    const outcome = parseQueryOutcome(raw);
+    if (outcome === undefined || outcome.status === "rejected") throw unavailable();
+    if (outcome.status === "denied") throw new CustomerDirectoryApplicationError("authorization");
+    if (outcome.status === "missing") throw new CustomerDirectoryApplicationError("not_found");
+    const result = parseCustomerDirectoryDetailV1(outcome.result);
+    if (result === undefined || result.scope.restaurantId !== query.scope.restaurantId
+      || result.scope.branchId !== query.scope.branchId || result.customer.customerId !== query.customerId) throw unavailable();
+    return result;
+  }
+
+  private async authorizeRead(principal: AuthenticatedPrincipal, scope: SearchCustomerDirectoryQueryV1["scope"]): Promise<string> {
+    try {
+      const authorized = await this.authorization.authorizeBranch(principal, scope, "customers.read");
+      return authorized.principal.actorId;
+    } catch { throw new CustomerDirectoryApplicationError("authorization"); }
   }
 }
 
-type QueryOutcome = Readonly<{ status: "ok"; result: unknown }> | Readonly<{ status: "denied" }> | Readonly<{ status: "rejected" }>;
+type QueryOutcome = Readonly<{ status: "ok"; result: unknown }> | Readonly<{ status: "denied" }>
+  | Readonly<{ status: "rejected" }> | Readonly<{ status: "missing" }>;
 function parseQueryOutcome(value: unknown): QueryOutcome | undefined {
   const fields = exact(value);
   if (fields === undefined) return undefined;
   const status = own(fields, "status");
-  if ((status === "denied" || status === "rejected") && Reflect.ownKeys(fields).length === 1) return Object.freeze({ status });
+  if ((status === "denied" || status === "rejected" || status === "missing") && Reflect.ownKeys(fields).length === 1) return Object.freeze({ status });
   return status === "ok" && Reflect.ownKeys(fields).length === 2 && Reflect.ownKeys(fields).includes("result")
     ? Object.freeze({ status, result: own(fields, "result") }) : undefined;
 }

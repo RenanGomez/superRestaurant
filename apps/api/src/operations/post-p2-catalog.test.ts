@@ -82,8 +82,9 @@ test("customer directory target extends capture without weakening the pinned sur
   assert.match(target, /'capture_command_events','customers','customer_phones','customer_addresses','customer_party_snapshots','customer_fulfillment_snapshots','customer_command_events'/u);
   assert.match(target, /pg_catalog\.to_regprocedure\('app_private\.mutate_customer_directory\(uuid,text,jsonb\)'\)/u);
   assert.match(target, /pg_catalog\.to_regprocedure\('app_private\.search_customer_directory\(uuid,jsonb\)'\)/u);
-  assert.match(target, /\) <> 40/u);
-  assert.match(target, /\) <> 42/u);
+  assert.match(target, /pg_catalog\.to_regprocedure\('app_private\.read_customer_directory\(uuid,jsonb\)'\)/u);
+  assert.match(target, /\) <> 41/u);
+  assert.match(target, /\) <> 43/u);
   assert.match(target, /CUSTOMER_PHONE_MUST_NOT_BE_UNIQUE_BY_VALUE/u);
   assert.match(target, /CUSTOMER_FULFILLMENT_SCOPE_REJECTED/u);
   assert.doesNotMatch(target, /\) <> (?:29|34)\b/u);
@@ -111,6 +112,14 @@ test("customer directory target extends capture without weakening the pinned sur
   assert.match(fixture, /CUSTOMER_SEARCH_FIRST_PAGE_REJECTED/u);
   assert.match(fixture, /CUSTOMER_SEARCH_SECOND_PAGE_REJECTED/u);
   assert.match(fixture, /CUSTOMER_SEARCH_REVOKED_ACCESS_ACCEPTED/u);
+  assert.match(fixture, /CUSTOMER_DETAIL_READ_REJECTED/u);
+  assert.match(fixture, /CUSTOMER_DETAIL_REVOKED_ACCESS_ACCEPTED/u);
+  assert.match(fixture, /CUSTOMER_DETAIL_CROSS_TENANT_ACCEPTED/u);
+  assert.match(fixture, /CUSTOMER_DETAIL_OTHER_BRANCH_VALIDATION_ACCEPTED/u);
+  assert.match(fixture, /CUSTOMER_ADDRESS_EDIT_KEPT_VALIDATION/u);
+  assert.match(fixture, /CUSTOMER_DETAIL_OVERFLOW_NOT_DECLARED/u);
+  assert.match(fixture, /CUSTOMER_ADDRESS_HALF_COORDINATES_ACCEPTED/u);
+  assert.match(fixture, /CUSTOMER_SNAPSHOT_HALF_COORDINATES_ACCEPTED/u);
   assert.doesNotMatch(fixture, /(?:insert into|update|delete from) auth\./u);
 });
 
@@ -133,7 +142,23 @@ test("capture fixture assertions run inside the rollback migration, never the re
   assert.match(captureRunner, /20260916000500_create_customer_directory\.sql/u);
   assert.match(captureRunner, /20260916000600_create_customer_directory_command\.sql/u);
   assert.match(captureRunner, /20260916000700_create_customer_directory_search\.sql/u);
+  assert.match(captureRunner, /20260916000800_create_customer_directory_detail\.sql/u);
   assert.match(captureRunner, /customer_directory_invariants\.sql/u);
+});
+
+test("private customer detail is identity-bound, minimized and read-only", () => {
+  const migration = readFileSync(new URL("../../../../supabase/migrations/20260916000800_create_customer_directory_detail.sql", import.meta.url), "utf8");
+  assert.doesNotThrow(() => extractMigrationBody(migration));
+  assert.match(migration, /security definer set search_path = ''/u);
+  assert.match(migration, /g\.role_code in \('owner','admin','manager','supervisor','cashier','waiter'\)/u);
+  assert.match(migration, /for share of m,b,r,g/u);
+  assert.match(migration, /c\.restaurant_id=restaurant and c\.id=customer and c\.deleted_at is null/u);
+  assert.match(migration, /'validatedForRequestedBranch'/u);
+  assert.match(migration, /'addressesTruncated'/u);
+  assert.match(migration, /offset 20 limit 1/u);
+  assert.match(migration, /grant execute on function app_private\.read_customer_directory\(uuid,jsonb\) to app_api/u);
+  assert.doesNotMatch(migration, /normalizedValue|validatedBy|validationEventId|validationDeviceId/u);
+  assert.doesNotMatch(migration, /\b(?:insert into|update|delete from|truncate)\b/u);
 });
 
 test("private customer search is bounded, scoped, cursor-stable and read-only", () => {

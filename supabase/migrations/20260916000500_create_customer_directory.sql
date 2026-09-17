@@ -93,7 +93,8 @@ create table app.customer_addresses (
   ),
   constraint customer_addresses_coordinates_valid check (
     (latitude_e6 is null and longitude_e6 is null) or
-    (latitude_e6 between -90000000 and 90000000 and longitude_e6 between -180000000 and 180000000)
+    (latitude_e6 is not null and longitude_e6 is not null and
+      latitude_e6 between -90000000 and 90000000 and longitude_e6 between -180000000 and 180000000)
   ),
   constraint customer_addresses_validation_valid check (
     (validation_branch_id is null and validation_event_id is null and validated_by is null and validation_device_id is null and validated_at is null) or
@@ -177,7 +178,8 @@ create table app.customer_fulfillment_snapshots (
   ),
   constraint customer_fulfillment_snapshots_coordinates_valid check (
     (latitude_e6 is null and longitude_e6 is null) or
-    (latitude_e6 between -90000000 and 90000000 and longitude_e6 between -180000000 and 180000000)
+    (latitude_e6 is not null and longitude_e6 is not null and
+      latitude_e6 between -90000000 and 90000000 and longitude_e6 between -180000000 and 180000000)
   ),
   constraint customer_fulfillment_snapshots_timestamp_valid check (validated_at <= created_at)
 );
