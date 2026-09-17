@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import "./operations/customer-directory-concurrency-verification.test.js";
 import test from "node:test";
 import { Test } from "@nestjs/testing";
 import { AUTH_PRINCIPAL_VERIFIER } from "./auth/authentication.js";
