@@ -95,6 +95,7 @@ test("customer HTTP boundary authenticates every route and sanitizes persistence
     assert.equal(calls, beforeDenied);
     active = true;
     for (const [outcome, status, code] of [
+      [{ status: "rejected" }, 400, "CUSTOMER_REQUEST_REJECTED"],
       [{ status: "conflict" }, 409, "CUSTOMER_CONFLICT"],
       [{ status: "denied" }, 403, "ACTION_NOT_AUTHORIZED"],
       [{ status: "applied", record: {} }, 503, "CUSTOMER_UNAVAILABLE"],
@@ -186,7 +187,7 @@ test("commands and authorization fail before writer; writer outcomes remain sani
   await assert.rejects(target.service.saveProfile(principal, profileCommand),
     (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === "authorization");
   assert.equal(target.calls.length, 0);
-  for (const [outcome, code] of [[{ status: "conflict" }, "conflict"], [{ status: "denied" }, "authorization"],
+  for (const [outcome, code] of [[{ status: "rejected" }, "request"], [{ status: "conflict" }, "conflict"], [{ status: "denied" }, "authorization"],
     [{ status: "applied", record: profileRecord, extra: true }, "unavailable"], [new Proxy({}, {}), "unavailable"]] as const) {
     await assert.rejects(harness({ saveProfile: outcome }).service.saveProfile(principal, profileCommand),
       (error: unknown) => error instanceof CustomerDirectoryApplicationError && error.code === code);

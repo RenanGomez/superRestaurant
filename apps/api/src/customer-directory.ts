@@ -173,6 +173,7 @@ export class CustomerDirectoryService {
     try { value = await call(); } catch { throw unavailable(); }
     const outcome = parseOutcome(value);
     if (outcome === undefined) throw unavailable();
+    if (outcome.status === "rejected") throw request();
     if (outcome.status === "conflict") throw new CustomerDirectoryApplicationError("conflict");
     if (outcome.status === "denied") throw new CustomerDirectoryApplicationError("authorization");
     return Object.freeze({ record: outcome.record, replayed: outcome.status === "replayed" });
@@ -239,12 +240,12 @@ function parseQueryOutcome(value: unknown): QueryOutcome | undefined {
 }
 
 type Outcome = Readonly<{ status: "applied"; record: unknown }> | Readonly<{ status: "replayed"; record: unknown }>
-  | Readonly<{ status: "conflict" }> | Readonly<{ status: "denied" }>;
+  | Readonly<{ status: "conflict" }> | Readonly<{ status: "denied" }> | Readonly<{ status: "rejected" }>;
 function parseOutcome(value: unknown): Outcome | undefined {
   const base = exact(value);
   if (base === undefined) return undefined;
   const status = own(base, "status");
-  if (status === "conflict" || status === "denied") {
+  if (status === "conflict" || status === "denied" || status === "rejected") {
     return Reflect.ownKeys(base).length === 1 ? Object.freeze({ status }) : undefined;
   }
   if ((status === "applied" || status === "replayed") && Reflect.ownKeys(base).length === 2 && Reflect.ownKeys(base).includes("record")) {

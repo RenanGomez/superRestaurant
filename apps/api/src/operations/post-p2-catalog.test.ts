@@ -146,6 +146,22 @@ test("capture fixture assertions run inside the rollback migration, never the re
   assert.match(captureRunner, /customer_directory_invariants\.sql/u);
 });
 
+test("incomplete customer addresses are rejected without disguising request errors as concurrency conflicts", () => {
+  const migration = readFileSync(new URL(
+    "../../../../supabase/migrations/20260917000100_reject_incomplete_customer_address_validation.sql",
+    import.meta.url,
+  ), "utf8");
+  const fixture = readFileSync(new URL("../../../../supabase/tests/customer_directory_invariants.sql", import.meta.url), "utf8");
+  const runner = readFileSync(new URL("../../src/operations/run-customer-address-validation-schema-verification.ts", import.meta.url), "utf8");
+  assert.doesNotThrow(() => extractMigrationBody(migration));
+  assert.match(migration, /create or replace function app_private\.mutate_customer_directory/u);
+  assert.match(migration, /street_line is null or current_address\.locality is null or current_address\.country_code is null\s+then return pg_catalog\.jsonb_build_object\('status','rejected'\)/u);
+  assert.match(fixture, /CUSTOMER_INCOMPLETE_ADDRESS_VALIDATION_ACCEPTED/u);
+  assert.match(fixture, /CUSTOMER_INCOMPLETE_ADDRESS_VALIDATION_CHANGED_STATE/u);
+  assert.match(runner, /20260917000100_reject_incomplete_customer_address_validation\.sql/u);
+  assert.match(runner, /customer_directory_invariants\.sql/u);
+});
+
 test("private customer detail is identity-bound, minimized and read-only", () => {
   const migration = readFileSync(new URL("../../../../supabase/migrations/20260916000800_create_customer_directory_detail.sql", import.meta.url), "utf8");
   assert.doesNotThrow(() => extractMigrationBody(migration));

@@ -80,7 +80,7 @@ try {
     CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS 'SELECT NULL::uuid';`);
   const migrations = join(root, "supabase", "migrations");
   const names = readdirSync(migrations).filter((name) => /^\d{14}_[a-z0-9_]+\.sql$/u.test(name)).sort();
-  if (names.length !== 24 || !names.at(-1)?.startsWith("20260916000800_")) throw new Error("LOCAL_MIGRATION_SET_REJECTED");
+  if (names.length !== 25 || !names.at(-1)?.startsWith("20260917000100_")) throw new Error("LOCAL_MIGRATION_SET_REJECTED");
   for (const name of names) await admin.query(readFileSync(join(migrations, name), "utf8"));
   await admin.query("CREATE TABLE app_private.local_concurrency_guard(marker text PRIMARY KEY)");
   await admin.query("INSERT INTO app_private.local_concurrency_guard VALUES($1)", [marker]);

@@ -1,6 +1,6 @@
 # Customer: verificación HTTP rollback-only
 
-Estado del corte: REVIEW. Las migraciones 20260916000100–20260916000800 siguen candidatas, sin aplicar persistentemente. Registrar Customer en AppModule no vuelve operativa la persistencia del directorio en la base actual.
+Estado del corte: REVIEW. Las migraciones 20260916000100–20260916000800 y la corrección 20260917000100 quedaron aplicadas persistentemente al proyecto `zwbyiefqeujstyzysydn` con autorización explícita. La API Customer y la UI autenticada están verificadas; falta el enlace con Capture/Order.
 
 ## Ensayo verificado
 
@@ -40,14 +40,29 @@ npm.cmd run build --prefix apps/api
 node apps/api/dist/operations/run-local-customer-concurrency.js --local-disposable-only
 ```
 
-Bootstrap aplica las 24 migraciones fuente existentes, en base única `superrestaurant_concurrency_<runId>` y cluster propios. Un shim Auth local mínimo aporta únicamente `auth.users` para FK y `auth.uid()` nulo; no prueba el proveedor Supabase Auth. Los writers usan SET LOCAL ROLE app_api y lo comprueban; el observer local verifica locks/estado. Se exigen PG17, dirección loopback, base exacta y marcador inequívoco antes de comandos. El rol postgres es superuser sólo en este cluster; no se infiere equivalencia de configuración administrativa con Supabase remoto.
+Bootstrap aplica las 25 migraciones fuente existentes, en base única `superrestaurant_concurrency_<runId>` y cluster propios. Un shim Auth local mínimo aporta únicamente `auth.users` para FK y `auth.uid()` nulo; no prueba el proveedor Supabase Auth. Los writers usan SET LOCAL ROLE app_api y lo comprueban; el observer local verifica locks/estado. Se exigen PG17, dirección loopback, base exacta y marcador inequívoco antes de comandos. El rol postgres es superuser sólo en este cluster; no se infiere equivalencia de configuración administrativa con Supabase remoto.
 
 Resultado local 2026-09-16 (`runId=6022f921bdf946a4bd3420170ff9b269`): Customer pasó 11 checks con cinco pares bloqueados observados, perfil v3/dirección v3, seis eventos aceptados de esa identidad y un evento único de la colisión UUID separada. Ningún replay/conflict sumó eventos; la edición vigente limpió la atestación. Capture pasó ocho checks con tres pares bloqueados, versión 5 y cinco eventos: create/replay exacto, claim y resume concurrentes entre dos actores y replay exacto de resume. Cleanup confirmó `stopped=true`. El shim Auth local y superuser local siguen siendo límites explícitos de esta evidencia.
 
 Casos: misma key/payload aplicado+replay; key divergente aplicado+conflict; keys distintas y misma expectedVersion un éxito/un conflicto; creación con mismo UUID sin huérfanos; validate contra edición Address con CAS/limpieza; claim/resume Capture con único dueño/lease; reloj autoritativo después de espera y vencimiento. Rollback A seguido de éxito B no prueba replay tras commit.
 
+## Corrección de dirección incompleta
+
+La prueba autenticada del 2026-09-17 encontró que el SQL publicado devolvía `conflict` tanto para CAS obsoleto como para datos incompletos. La candidata `20260917000100` devuelve `rejected` cuando falta calle, localidad o país; Nest responde 400 y conserva 409 para concurrencia real. Verificación rollback-only exacta:
+
+```powershell
+npm.cmd run build --prefix apps/api
+node --env-file=.env.adr010.local --input-type=module -e "const u=new URL(process.env.ADR010_DATABASE_URL); u.searchParams.delete('sslrootcert'); process.env.SCHEMA_VERIFICATION_CONFIRMATION='ROLLBACK_ONLY'; process.env.SCHEMA_VERIFICATION_EXPECTED_PROJECT_REF='zwbyiefqeujstyzysydn'; process.env.SCHEMA_VERIFICATION_DATABASE_URL=u.toString(); process.env.SCHEMA_VERIFICATION_CA_CERT_PATH='.certs/prod-ca-2021.crt'; await import('./apps/api/dist/operations/run-customer-address-validation-schema-verification.js');"
+```
+
+Resultado rollback-only: base/migrated/postcheck 35/5/41. La fixture comprueba `rejected`, versión sin cambio, ausencia de evento y la ruta completa todavía aplicable. Después se aplicó persistentemente sólo `20260917000100`: dry-run previo anunció una versión, post-dry-run quedó al día e historial final 29. Un postcheck `READ ONLY` confirmó la función persistida. La UI autenticada mostró la instrucción de completar calle/localidad/país; cleanup eliminó 1 Customer, 1 teléfono, 1 dirección y 2 eventos, con residuo cero.
+
 ## Prueba humana
 
-La interfaz `/app/customers` ya existe y pasó navegador real con un fixture local sintético: búsqueda/selección, dirección incompleta, validación, invalidación al editar y replay de resultado ambiguo; 1280×800 y 390×844 sin overflow ni consola. No pedir todavía prueba humana funcional contra datos reales: el schema candidato no está aplicado.
+La interfaz `/app/customers` ya existe y pasó navegador real con un fixture local sintético: búsqueda/selección, dirección incompleta, validación, invalidación al editar y replay de resultado ambiguo; 1280×800 y 390×844 sin overflow ni consola. La E2E remota `a8d4a8ba-101e-4e70-ba86-587fdb1b3e98` añadió 14 checks con Auth/RBAC/API/PostgreSQL reales y cleanup completo. La prueba autenticada del 2026-09-17 completó también alta, persistencia, búsqueda y conflicto entre dos estaciones; tras aplicar `20260917000100`, el rechazo incompleto mostró el mensaje correcto. Ambos cleanups terminaron con residuo cero.
 
-Después de una autorización separada para aplicar exactamente 20260916000100–20260916000800 y completar postchecks/E2E, la prueba manual será: iniciar sesión con rol operativo; elegir sucursal; buscar un teléfono compartido y seleccionar una identidad explícita; dar de alta nombre+teléfono; guardar dirección incompleta; completar calle/localidad/país y validarla; editar calle y comprobar que vuelve a pendiente; abrir dos estaciones y provocar conflicto/reload. Confirmar que kitchen/viewer/auditor no acceden y que ninguna búsqueda cruza Restaurant. No incluir datos personales reales en el ensayo inicial.
+Prueba manual: iniciar sesión con rol operativo; elegir sucursal; buscar un teléfono compartido y seleccionar una identidad explícita; dar de alta nombre+teléfono; guardar dirección incompleta; completar calle/localidad/país y validarla; editar calle y comprobar que vuelve a pendiente; abrir dos estaciones y provocar conflicto/reload. Confirmar que kitchen/viewer/auditor no acceden y que ninguna búsqueda cruza Restaurant. No incluir datos personales reales en el ensayo inicial.
+
+## Aplicación persistente 2026-09-16
+
+El historial previo tenía 20 versiones. `20260908000100` no figuraba en `supabase_migrations` aunque su catálogo ya existe, por lo que se excluyó del staging y no se reejecutó ni reparó. El staging temporal reunió copias hash-idénticas de las 20 registradas y las ocho autorizadas; el dry-run anunció sólo 001–008, sin seed, roles ni Vault. El apply finalizó con código 0 y el historial quedó en 28 versiones. Auditoría posterior: 35 tablas RLS+FORCE, 5 políticas, 41 funciones `SECURITY DEFINER`, `app_api` LOGIN/SCRAM/vigencia infinita, membresía postgres ADMIN=true/INHERIT=false/SET=false, cero sesiones y lint SQL limpio. El post-dry-run reportó remoto al día y el staging se eliminó.

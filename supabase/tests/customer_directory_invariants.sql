@@ -20,12 +20,15 @@ declare
   writer_customer uuid := gen_random_uuid();
   writer_contact uuid := gen_random_uuid();
   writer_address uuid := gen_random_uuid();
+  incomplete_address uuid := gen_random_uuid();
   profile_command jsonb;
   profile_result jsonb;
   address_command jsonb;
   address_result jsonb;
   validate_command jsonb;
   validate_result jsonb;
+  incomplete_command jsonb;
+  incomplete_result jsonb;
   search_query jsonb;
   search_result jsonb;
   detail_query jsonb;
@@ -185,6 +188,25 @@ begin
     or pg_catalog.jsonb_array_length(profile_result #> '{record,phones}') <> 0
     or (select deleted_at is null from app.customer_phones where restaurant_id=restaurant_a and customer_id=writer_customer and contact_id=writer_contact)
   then raise exception 'CUSTOMER_PROFILE_UPDATE_REJECTED'; end if;
+
+  incomplete_command := pg_catalog.jsonb_build_object('schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+    'restaurantId',restaurant_a::text,'branchId',branch_a::text),'customerId',customer_a::text,'addressId',incomplete_address::text,
+    'expectedVersion',0,'eventId',gen_random_uuid()::text,'deviceId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'address',pg_catalog.jsonb_build_object(
+      'label','Dirección incompleta','streetLine',null,'unit',null,'neighborhood',null,'locality',null,'region',null,
+      'countryCode',null,'postalCode',null,'references',null,'instructions',null,'coordinates',null));
+  incomplete_result := app_private.mutate_customer_directory(actor,'customer.address_saved',incomplete_command);
+  if incomplete_result ->> 'status' is distinct from 'applied' or incomplete_result #>> '{record,version}' is distinct from '1'
+  then raise exception 'CUSTOMER_INCOMPLETE_ADDRESS_CREATE_REJECTED'; end if;
+  incomplete_command := (incomplete_command - 'address') || pg_catalog.jsonb_build_object('expectedVersion',1,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text);
+  if app_private.mutate_customer_directory(actor,'customer.address_validated',incomplete_command) ->> 'status' is distinct from 'rejected'
+  then raise exception 'CUSTOMER_INCOMPLETE_ADDRESS_VALIDATION_ACCEPTED'; end if;
+  if (select version from app.customer_addresses where restaurant_id=restaurant_a and customer_id=customer_a and id=incomplete_address) <> 1
+    or (select validation_branch_id is not null from app.customer_addresses
+      where restaurant_id=restaurant_a and customer_id=customer_a and id=incomplete_address)
+    or exists (select 1 from app.customer_command_events where event_id=(incomplete_command ->> 'eventId')::uuid)
+  then raise exception 'CUSTOMER_INCOMPLETE_ADDRESS_VALIDATION_CHANGED_STATE'; end if;
 
   address_command := pg_catalog.jsonb_build_object('schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
     'restaurantId',restaurant_a::text,'branchId',branch_a::text),'customerId',writer_customer::text,'addressId',writer_address::text,
