@@ -10,6 +10,7 @@ import {
   parseHoldCaptureDraftCommandV1,
   parseSetCaptureRecoveryPreferenceCommandV1,
   parseSetCaptureCustomerCommandV1,
+  parseSetCaptureFulfillmentCommandV1,
   parseCaptureRecoveryPolicyV1,
   parseCaptureRecoveryPreferenceResultV1,
   parseResumeCaptureDraftCommandV1,
@@ -51,6 +52,13 @@ const versioned = { ...common, expectedVersion };
 const customerSelection = { ...versioned, attentionLeaseId, customerId: customerSnapshotRef,
   contactId: fulfillmentSnapshotRef, expectedCustomerVersion: 1 };
 expect(Object.isFrozen(parseSetCaptureCustomerCommandV1(customerSelection)), "customer selection parses frozen");
+const fulfillmentSelection = { ...versioned, attentionLeaseId, customerSnapshotRef: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  addressId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", expectedAddressVersion: 1 };
+expect(Object.isFrozen(parseSetCaptureFulfillmentCommandV1(fulfillmentSelection)), "fulfillment selection parses frozen");
+expect(parseSetCaptureFulfillmentCommandV1({ ...fulfillmentSelection, addressId: null, expectedAddressVersion: null }) !== undefined,
+  "fulfillment removal parses");
+expect(parseSetCaptureFulfillmentCommandV1({ ...fulfillmentSelection, addressId: null }) === undefined,
+  "fulfillment selection rejects partial address");
 expect(parseSetCaptureCustomerCommandV1({ ...customerSelection, customerId: null, contactId: null,
   expectedCustomerVersion: null }) !== undefined, "explicit removal parses");
 for (const invalid of [{ ...customerSelection, customerId: null }, { ...customerSelection, contactId: null },

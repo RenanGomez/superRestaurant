@@ -5,7 +5,7 @@ import {
 import type { CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
-import { CaptureApplicationError, CaptureAttentionService, CaptureCustomerService, CaptureService } from "./captures.js";
+import { CaptureApplicationError, CaptureAttentionService, CaptureCustomerService, CaptureFulfillmentService, CaptureService } from "./captures.js";
 
 @Controller("captures")
 export class CapturesController {
@@ -13,6 +13,7 @@ export class CapturesController {
     @Inject(CaptureService) private readonly captures: CaptureService,
     @Inject(CaptureAttentionService) private readonly attention: CaptureAttentionService,
     @Inject(CaptureCustomerService) private readonly customer: CaptureCustomerService,
+    @Inject(CaptureFulfillmentService) private readonly fulfillment: CaptureFulfillmentService,
   ) {}
 
   @Post()
@@ -36,6 +37,13 @@ export class CapturesController {
   public async setCustomer(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.customer.setCustomer(principal, body));
+  }
+  @Post("fulfillment")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async setFulfillment(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.fulfillment.setFulfillment(principal, body));
   }
   @Post("claim")
   @HttpCode(200)

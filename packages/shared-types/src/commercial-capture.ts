@@ -73,6 +73,13 @@ export interface SetCaptureCustomerCommandV1 extends HoldCaptureDraftCommandV1 {
   readonly expectedCustomerVersion: number | null;
 }
 
+/** Freeze a branch-validated address for the currently selected party, or remove it. */
+export interface SetCaptureFulfillmentCommandV1 extends HoldCaptureDraftCommandV1 {
+  readonly customerSnapshotRef: string;
+  readonly addressId: string | null;
+  readonly expectedAddressVersion: number | null;
+}
+
 export interface CaptureRecoveryPolicyV1 {
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
   readonly autoRenewSelected: boolean;
@@ -211,6 +218,22 @@ export function parseSetCaptureCustomerCommandV1(value: unknown): SetCaptureCust
     || expectedCustomerVersion === undefined || (customerId === null) !== (contactId === null)
     || (customerId === null) !== (expectedCustomerVersion === null)) return undefined;
   return Object.freeze({ ...common, attentionLeaseId, customerId, contactId, expectedCustomerVersion,
+    schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION });
+}
+
+export function parseSetCaptureFulfillmentCommandV1(value: unknown): SetCaptureFulfillmentCommandV1 | undefined {
+  const record = exactRecord(value, [...VERSIONED_KEYS, "attentionLeaseId", "customerSnapshotRef", "addressId", "expectedAddressVersion"]);
+  if (record === undefined) return undefined;
+  const common = parseVersionedMutationInput(record);
+  const attentionLeaseId = uuid(own(record, "attentionLeaseId"));
+  const customerSnapshotRef = uuid(own(record, "customerSnapshotRef"));
+  const addressId = nullableUuid(own(record, "addressId"));
+  const expectedAddressVersion = own(record, "expectedAddressVersion") === null ? null
+    : integer(own(record, "expectedAddressVersion"), 1, Number.MAX_SAFE_INTEGER);
+  if (common === undefined || attentionLeaseId === undefined || customerSnapshotRef === undefined
+    || addressId === undefined || expectedAddressVersion === undefined
+    || (addressId === null) !== (expectedAddressVersion === null)) return undefined;
+  return Object.freeze({ ...common, attentionLeaseId, customerSnapshotRef, addressId, expectedAddressVersion,
     schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION });
 }
 

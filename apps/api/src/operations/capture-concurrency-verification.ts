@@ -9,7 +9,8 @@ import { assertLocalCustomerConcurrencyConfig, type CustomerConcurrencyConfig } 
 interface CaptureOutcome {
   readonly status: string;
   readonly record: { readonly detail: { readonly version: number; readonly attentionLeaseId: string;
-    readonly ownerMembershipId: string; readonly attentionStatus: string; readonly customerSnapshotRef: string | null } };
+    readonly ownerMembershipId: string; readonly attentionStatus: string; readonly customerSnapshotRef: string | null;
+    readonly fulfillmentSnapshotRef?: string | null } };
 }
 
 /** Only the dedicated, marked disposable PG17 cluster accepts fixture commits. */
@@ -66,6 +67,7 @@ export async function verifyCaptureConcurrency(config: CustomerConcurrencyConfig
     const race = async (a: () => Promise<unknown>, b: () => Promise<unknown>, status: string) => {
       await begin(first); await begin(second);
       const winner = await a() as CaptureOutcome;
+      if (winner.status !== "applied") process.stdout.write(`${JSON.stringify({ stage: "capture_race_winner", status: winner.status })}\n`);
       assert.equal(winner.status, "applied");
       const pending = b().then((value) => ({ value }), (error: unknown) => ({ error }));
       let blocked = false;
@@ -178,28 +180,69 @@ export async function verifyCaptureConcurrency(config: CustomerConcurrencyConfig
     const replacementSnapshot = (await snapshotRows()).find((row) => row.id === replacement.record.detail.customerSnapshotRef);
     assert.equal(replacementSnapshot?.display_name, "Snapshot changed");
     assert.equal(replacementSnapshot?.phone_normalized_value, "6423004000");
+    const addressId = randomUUID(), validationEventId = randomUUID(), validationDeviceId = randomUUID();
+    process.stdout.write(`${JSON.stringify({ stage: "capture_fulfillment_fixture", status: "started" })}\n`);
+    const validatedAt = new Date().toISOString();
+    await observer.query(`insert into app.customer_addresses(id,restaurant_id,customer_id,label,street_line,locality,country_code,
+      validation_branch_id,validation_event_id,validated_by,validation_device_id,validated_at,created_at,created_by,updated_at,updated_by)
+      values($1,$2,$3,'Home','Original street','Navojoa','MX',$4,$5,$6,$7,$8,$8,$6,$8,$6)`,
+      [addressId, config.restaurantId, customerId, config.branchId, validationEventId, config.actorId, validationDeviceId, validatedAt]);
+    process.stdout.write(`${JSON.stringify({ stage: "capture_fulfillment_fixture", status: "ok" })}\n`);
+    const fulfillment = (version: number) => ({ ...common(version), attentionLeaseId: resumed.record.detail.attentionLeaseId,
+      customerSnapshotRef: replacement.record.detail.customerSnapshotRef!, addressId, expectedAddressVersion: 1 });
+    const fulfillmentCommand = fulfillment(9);
     await begin(first);
-    const customerHeld = await writerA.mutateAttention(config.actorId, "capture.held", { ...common(9), attentionLeaseId: resumed.record.detail.attentionLeaseId }) as CaptureOutcome;
+    let selectedFulfillment: CaptureOutcome;
+    try { selectedFulfillment = await writerA.setFulfillment(config.actorId, fulfillmentCommand) as CaptureOutcome;
+      process.stdout.write(`${JSON.stringify({ stage: "capture_fulfillment_writer", status: selectedFulfillment.status })}\n`);
+    } catch (error: unknown) { process.stdout.write(`${JSON.stringify({ stage: "capture_fulfillment_writer", status: "failed",
+      code: typeof error === "object" && error !== null && "code" in error ? error.code : "unknown" })}\n`); throw error; }
+    await first.query("COMMIT");
+    assert.ok(selectedFulfillment.record.detail.fulfillmentSnapshotRef);
+    await begin(second);
+    const fulfillmentReplay = await writerB.setFulfillment(config.actorId, fulfillmentCommand) as CaptureOutcome;
+    process.stdout.write(`${JSON.stringify({ stage: "capture_fulfillment_direct_replay", status: fulfillmentReplay.status })}\n`);
+    assert.equal(fulfillmentReplay.status, "replayed");
+    assert.deepEqual(fulfillmentReplay.record, selectedFulfillment.record);
+    await second.query("COMMIT");
+    process.stdout.write(`${JSON.stringify({ stage: "capture_fulfillment_replay", status: "ok" })}\n`);
+    const fulfillmentCas = fulfillment(10);
+    await race(() => writerA.setFulfillment(config.actorId, fulfillmentCas),
+      () => writerB.setFulfillment(config.actorId, { ...fulfillmentCas, idempotencyKey: randomUUID(), eventId: randomUUID() }), "conflict");
+    process.stdout.write(`${JSON.stringify({ stage: "capture_fulfillment_cas", status: "ok" })}\n`);
+    await observer.query(`update app.customer_addresses set street_line='Changed street',validation_branch_id=null,validation_event_id=null,
+      validated_by=null,validation_device_id=null,validated_at=null,version=2,updated_at=clock_timestamp(),updated_by=$1
+      where restaurant_id=$2 and customer_id=$3 and id=$4`, [config.actorId, config.restaurantId, customerId, addressId]);
+    assert.deepEqual((await observer.query("select street_line from app.customer_fulfillment_snapshots where restaurant_id=$1 and id=$2",
+      [config.restaurantId, selectedFulfillment.record.detail.fulfillmentSnapshotRef])).rows, [{ street_line: "Original street" }]);
+    await begin(first);
+    const staleFulfillment = await writerA.setFulfillment(config.actorId, fulfillment(11)) as CaptureOutcome;
+    assert.equal(staleFulfillment.status, "conflict");
+    await first.query("COMMIT");
+    await begin(first);
+    const customerHeld = await writerA.mutateAttention(config.actorId, "capture.held", { ...common(11), attentionLeaseId: resumed.record.detail.attentionLeaseId }) as CaptureOutcome;
     assert.equal(customerHeld.status, "applied");
     assert.equal(customerHeld.record.detail.customerSnapshotRef, replacement.record.detail.customerSnapshotRef);
     await first.query("COMMIT");
     await begin(first);
-    const customerResumed = await writerA.mutateAttention(config.actorId, "capture.resumed", common(10)) as CaptureOutcome;
+    const customerResumed = await writerA.mutateAttention(config.actorId, "capture.resumed", common(12)) as CaptureOutcome;
     assert.equal(customerResumed.status, "applied");
     assert.equal(customerResumed.record.detail.customerSnapshotRef, replacement.record.detail.customerSnapshotRef);
     await first.query("COMMIT");
     await begin(first);
-    const removed = await writerA.setCustomer(config.actorId, { ...common(11), attentionLeaseId: customerResumed.record.detail.attentionLeaseId,
+    const removed = await writerA.setCustomer(config.actorId, { ...common(13), attentionLeaseId: customerResumed.record.detail.attentionLeaseId,
       customerId: null, contactId: null, expectedCustomerVersion: null }) as CaptureOutcome;
     assert.equal(removed.status, "applied");
     assert.equal(removed.record.detail.customerSnapshotRef, null);
+    assert.equal(removed.record.detail.fulfillmentSnapshotRef, null);
     await first.query("COMMIT");
-    assert.deepEqual(await counts(), [{ version: "12", events: "12", snapshots: "4" }]);
-    return Object.freeze({ checks: 24, blockedPairs, version: 12, journalEvents: 12, partySnapshots: 4,
+    assert.deepEqual(await counts(), [{ version: "14", events: "14", snapshots: "4" }]);
+    return Object.freeze({ checks: 31, blockedPairs, version: 14, journalEvents: 14, partySnapshots: 4,
       cases: Object.freeze(["create_same_key_replay", "claim_two_actors_cas", "resume_two_actors_cas", "resume_exact_replay",
         "customer_same_key_replay", "customer_divergence", "customer_two_connections_cas", "snapshot_immutable_after_edit",
         "stale_customer", "wrong_lease", "wrong_owner", "tenant_isolation", "event_collision_atomicity", "revoked_replay",
-        "customer_replace", "attention_preserves_snapshot", "customer_remove"]) });
+        "customer_replace", "fulfillment_exact_replay", "fulfillment_two_connections_cas", "fulfillment_snapshot_immutable", "stale_address",
+        "attention_preserves_snapshot", "customer_remove_clears_fulfillment"]) });
   } finally {
     const cleanup = await Promise.allSettled(clients.map(async (client) => { try { await client.query("ROLLBACK"); } finally { await client.end(); } }));
     if (cleanup.some((result) => result.status === "rejected")) throw new Error("LOCAL_CAPTURE_CONCURRENCY_CONNECTION_CLEANUP_FAILED");

@@ -74,3 +74,16 @@ export function buildCaptureCustomerCatalogAudit(baseSql: string, captureSupplem
     then raise exception 'CAPTURE_CUSTOMER_SCOPE_REJECTED'; end if;
   end $capture_customer_catalog$;`);
 }
+
+export function buildCaptureFulfillmentCatalogAudit(baseSql: string, captureSupplementSql: string, directorySupplementSql: string): string {
+  const base = buildCaptureCustomerCatalogAudit(baseSql, captureSupplementSql, directorySupplementSql);
+  const tail = "pg_catalog.to_regprocedure('app_private.set_capture_customer(uuid,jsonb)')";
+  const migrated = base.replaceAll(tail, `${tail},\n    pg_catalog.to_regprocedure('app_private.set_capture_fulfillment(uuid,jsonb)')`)
+    .replace(") <> 44", ") <> 45").replace(") <> 42", ") <> 43")
+    .replace("where conrelid = target and convalidated) <> 19", "where conrelid = target and convalidated) <> 21");
+  return validateCatalogAuditSql(`${migrated}\ndo $capture_fulfillment_catalog$ begin
+    if (select count(*) from pg_catalog.pg_constraint where conrelid=pg_catalog.to_regclass('app.capture_drafts')
+      and conname in ('capture_fulfillment_snapshot_scope_fk','capture_fulfillment_snapshot_pair_valid')) <> 2
+    then raise exception 'CAPTURE_FULFILLMENT_SCOPE_REJECTED'; end if;
+  end $capture_fulfillment_catalog$;`);
+}

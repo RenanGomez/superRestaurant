@@ -42,6 +42,7 @@
     "verify:capture-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-schema-verification.js",
     "verify:customer-address-validation-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-customer-address-validation-schema-verification.js",
     "verify:capture-customer-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-customer-schema-verification.js",
+    "verify:capture-fulfillment-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-fulfillment-schema-verification.js",
     "verify:membership-directory-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-membership-directory-schema-verification.js",
     "verify:dining-zones-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-zones-schema-verification.js",
     "verify:dining-tables-layout-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-tables-layout-schema-verification.js",

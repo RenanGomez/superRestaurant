@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
-import { parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseSetCaptureCustomerCommandV1 } from "@super-restaurant/shared-types";
+import { parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureFulfillmentCommandV1 } from "@super-restaurant/shared-types";
 
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
-import { CAPTURE_ATTENTION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CaptureCustomerService, CaptureApplicationError, CaptureAttentionService, CaptureService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort } from "./captures.js";
+import { CAPTURE_ATTENTION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_FULFILLMENT_PORT, CaptureCustomerService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 
 const principal = { actorId: "8cc7eb84-af2a-4e84-95de-967c39af86ab" };
@@ -51,6 +51,10 @@ const preferenceRecord = { ...record, detail: { ...record.detail, version: 2 },
 const customerCommand = { ...holdCommand, schemaVersion: 1 as const, customerId: validCommand.captureDraftId,
   contactId: validCommand.eventId, expectedCustomerVersion: 1 };
 const customerRecord = { ...record, detail: { ...record.detail, version: 2, customerSnapshotRef: validCommand.idempotencyKey } };
+const fulfillmentCommand = { ...holdCommand, schemaVersion: 1 as const, customerSnapshotRef: validCommand.idempotencyKey,
+  addressId: validCommand.captureDraftId, expectedAddressVersion: 1 };
+const fulfillmentRecord = { ...record, detail: { ...record.detail, version: 2,
+  customerSnapshotRef: validCommand.idempotencyKey, fulfillmentSnapshotRef: validCommand.eventId } };
 function customerFor(port: CaptureCustomerPort, allowed = true) {
   return new CaptureCustomerService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: allowed ? ["cashier"] : ["viewer"], scope: validCommand.scope }),
@@ -76,6 +80,28 @@ test("capture customer validates selection, removal, replay and authorization be
   await assert.rejects(customerFor(noCall, false).setCustomer(principal, customerCommand), code("authorization"));
   await assert.rejects(customerFor(noCall).setCustomer(principal, { ...customerCommand,
     scope: { ...validCommand.scope, branchId: validCommand.deviceId } }), code("authorization"));
+});
+
+test("capture fulfillment validates selected party, address and adapter binding", async () => {
+  const calls: unknown[] = [];
+  const service = new CaptureFulfillmentService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), { setFulfillment: async (actor, input) => { calls.push({ actor, input }); return { status: "applied", record: fulfillmentRecord }; } });
+  assert.deepEqual(await service.setFulfillment(principal, fulfillmentCommand),
+    { schemaVersion: 1, detail: fulfillmentRecord.detail, replayed: false });
+  assert.deepEqual(calls, [{ actor: principal.actorId, input: parseSetCaptureFulfillmentCommandV1(fulfillmentCommand) }]);
+  const removal = { ...fulfillmentCommand, addressId: null, expectedAddressVersion: null };
+  const removedRecord = { ...fulfillmentRecord, detail: { ...fulfillmentRecord.detail, fulfillmentSnapshotRef: null } };
+  assert.equal((await new CaptureFulfillmentService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), { setFulfillment: async () => ({ status: "applied", record: removedRecord }) }).setFulfillment(principal, removal))
+    .detail.fulfillmentSnapshotRef, null);
+  const adapter = new PostgresCaptureCreator({ query: async (sql, parameters) => {
+    assert.equal(sql, "select app_private.set_capture_fulfillment($1::uuid, $2::jsonb) as result");
+    assert.deepEqual(parameters, [principal.actorId, JSON.stringify(parseSetCaptureFulfillmentCommandV1(fulfillmentCommand))]);
+    return { rows: [{ result: { status: "applied", record: fulfillmentRecord } }] };
+  } });
+  assert.deepEqual(await adapter.setFulfillment(principal.actorId, fulfillmentCommand), { status: "applied", record: fulfillmentRecord });
 });
 
 test("capture customer checks result scope, lease, version and opaque reference", async () => {
@@ -251,6 +277,7 @@ test("capture PostgreSQL adapter binds actor and detached JSON without dynamic S
 
 test("capture HTTP boundary enforces auth and translates request, replay, denial, conflict and failure safely", async () => {
   let customerOutcome: unknown = { status: "applied", record: customerRecord };
+  let fulfillmentOutcome: unknown = { status: "applied", record: fulfillmentRecord };
   let calls = 0;
   let outcome: unknown = { status: "applied", record };
   let fail = false;
@@ -259,7 +286,9 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
     CaptureService,
     CaptureAttentionService,
     CaptureCustomerService,
+    CaptureFulfillmentService,
     { provide: CAPTURE_CUSTOMER_PORT, useValue: { setCustomer: async () => customerOutcome } },
+    { provide: CAPTURE_FULFILLMENT_PORT, useValue: { setFulfillment: async () => fulfillmentOutcome } },
     { provide: MembershipAuthorizationService, useValue: new MembershipAuthorizationService({
       findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
     }) },
@@ -320,6 +349,16 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
     }
     customerOutcome = {};
     assert.equal((await sendCustomer(customerCommand)).status, 503);
+    const sendFulfillment = (body: unknown, authenticated = true) => fetch(`${url}/fulfillment`, { method: "POST", body: JSON.stringify(body),
+      headers: { "content-type": "application/json", ...(authenticated ? { authorization: "Bearer test-capture-access-token" } : {}) } });
+    assert.equal((await sendFulfillment(fulfillmentCommand, false)).status, 401);
+    assert.equal((await sendFulfillment({ ...fulfillmentCommand, streetLine: "forged" })).status, 400);
+    const fulfilled = await sendFulfillment(fulfillmentCommand);
+    assert.equal(fulfilled.status, 200);
+    assert.equal(fulfilled.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await fulfilled.json(), { schemaVersion: 1, detail: fulfillmentRecord.detail, replayed: false });
+    fulfillmentOutcome = { status: "conflict" };
+    assert.equal((await sendFulfillment(fulfillmentCommand)).status, 409);
     outcome = { status: "replayed", record };
     assert.equal((await (await send(validCommand)).json() as { replayed: boolean }).replayed, true);
     for (const [status, http, errorCode] of [["conflict", 409, "CAPTURE_CONFLICT"], ["denied", 403, "ACTION_NOT_AUTHORIZED"], ["rejected", 400, "CAPTURE_REQUEST_REJECTED"]] as const) {
