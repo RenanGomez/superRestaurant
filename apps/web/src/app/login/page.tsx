@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
 
 import { BrandMark } from "../../components/brand-mark";
+import type { LoginErrorCode } from "../../lib/login-error";
 import { loginAction } from "./actions";
 import { LoginSubmitButton } from "./submit-button";
 
 export const dynamic = "force-dynamic";
 
-const KNOWN_ERRORS = new Set(["invalid_credentials"]);
+const KNOWN_ERRORS = new Set<LoginErrorCode>(["invalid_credentials", "service_unavailable"]);
 
 interface LoginPageProps {
   readonly searchParams: Promise<Readonly<Record<string, string | ReadonlyArray<string> | undefined>>>;
@@ -15,7 +16,8 @@ interface LoginPageProps {
 export default async function LoginPage({ searchParams }: LoginPageProps): Promise<ReactNode> {
   const resolvedSearchParams = await searchParams;
   const rawError = resolvedSearchParams.error;
-  const errorCode = typeof rawError === "string" && KNOWN_ERRORS.has(rawError) ? rawError : undefined;
+  const errorCode = typeof rawError === "string" && KNOWN_ERRORS.has(rawError as LoginErrorCode)
+    ? rawError as LoginErrorCode : undefined;
   const passwordUpdated = resolvedSearchParams.password_updated === "1";
 
   return (
@@ -51,7 +53,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps): Promi
 
           <div aria-live="polite">
             {passwordUpdated && <div role="status" className="rounded-[10px] border border-[oklch(84%_0.08_155)] bg-[oklch(96%_0.03_155)] px-3.5 py-2.5 text-[13px] text-[oklch(38%_0.1_155)]">Contraseña configurada. Inicia sesión para continuar.</div>}
-            {errorCode !== undefined && <ErrorBanner />}
+            {errorCode !== undefined && <ErrorBanner errorCode={errorCode} />}
           </div>
 
           <form action={loginAction} className="flex flex-col gap-4.5">
@@ -90,7 +92,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps): Promi
   );
 }
 
-function ErrorBanner(): ReactNode {
+function ErrorBanner({ errorCode }: { readonly errorCode: LoginErrorCode }): ReactNode {
   return (
     <div role="alert" className="flex items-start gap-2.5 rounded-[10px] border border-[oklch(85%_0.06_25)] bg-error-bg px-3.5 py-3">
       <svg
@@ -110,7 +112,9 @@ function ErrorBanner(): ReactNode {
         <line x1="12" y1="16" x2="12.01" y2="16" />
       </svg>
       <span className="text-[13px] leading-snug text-[oklch(35%_0.1_25)]">
-        Correo o contraseña incorrectos. Verifica tus datos e inténtalo de nuevo.
+        {errorCode === "service_unavailable"
+          ? "No se pudo contactar al servicio de acceso. Verifica la conexión e inténtalo de nuevo."
+          : "Correo o contraseña incorrectos. Verifica tus datos e inténtalo de nuevo."}
       </span>
     </div>
   );

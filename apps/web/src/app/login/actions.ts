@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 
+import { classifyLoginError } from "../../lib/login-error";
 import { createServerSupabaseClient } from "../../lib/supabase-server";
 
 /**
@@ -23,7 +24,7 @@ export async function loginAction(formData: FormData): Promise<void> {
   const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
 
   if (error) {
-    redirect("/login?error=invalid_credentials");
+    redirect(`/login?error=${classifyLoginError(error)}`);
   }
 
   redirect("/app");
