@@ -2,6 +2,10 @@ import {
   parseAutosaveCaptureDraftCommandV1,
   parseCaptureDraftDetailV1,
   parseCaptureDraftSummaryV1,
+  parseCaptureWorkTrayRequestV1,
+  parseCaptureWorkTrayResultV1,
+  parseCaptureWorkspaceRequestV1,
+  parseCaptureWorkspaceV1,
   parseCaptureMutationResultV1,
   parseClaimCaptureDraftCommandV1,
   parseCloseCaptureNoSaleCommandV1,
@@ -91,6 +95,10 @@ const parsedAutosave = parseAutosaveCaptureDraftCommandV1(autosave);
 expect(parsedAutosave !== undefined && parsedAutosave.customerSnapshotRef === customerSnapshotRef, "autosave parses opaque snapshot refs");
 expect(parseAutosaveCaptureDraftCommandV1({ ...autosave, expectedVersion: 0 }) === undefined, "autosave requires a positive version");
 expect(parseAutosaveCaptureDraftCommandV1({ ...autosave, customer: { name: "PII" } }) === undefined, "autosave rejects embedded PII");
+expect(parseAutosaveCaptureDraftCommandV1({ ...autosave, fulfillmentSnapshotRef, fulfillmentChannel: "pickup" }) === undefined,
+  "autosave cannot carry a delivery snapshot into another fulfillment channel");
+expect(parseAutosaveCaptureDraftCommandV1({ ...autosave, fulfillmentSnapshotRef, customerSnapshotRef: null,
+  fulfillmentChannel: "delivery" }) === undefined, "autosave fulfillment snapshot requires its party snapshot");
 
 expect(parseHoldCaptureDraftCommandV1({ ...versioned, attentionLeaseId }) !== undefined, "hold parses");
 expect(parseClaimCaptureDraftCommandV1(versioned) !== undefined, "claim parses without client actor");
@@ -114,6 +122,13 @@ const summary = {
   updatedAt: "2026-09-15T18:01:00.000Z",
 };
 const parsedSummary = parseCaptureDraftSummaryV1(summary);
+expect(parseCaptureWorkTrayRequestV1({ schemaVersion: 1, scope, limit: 20 }) !== undefined, "tray request accepted");
+expect(parseCaptureWorkTrayRequestV1({ schemaVersion: 1, scope, limit: 51 }) === undefined, "tray request limit bounded");
+const tray = parseCaptureWorkTrayResultV1({ schemaVersion: 1, items: [summary] });
+expect(tray?.items.length === 1 && Object.isFrozen(tray.items), "tray result accepted and frozen");
+expect(parseCaptureWorkTrayResultV1({ schemaVersion: 1, items: [{ ...summary, scope: { ...scope, branchId: common.captureDraftId } }] }) !== undefined,
+  "tray parser validates shape while service binds scope");
+expect(parseCaptureWorkTrayResultV1({ schemaVersion: 1, items: [summary], cursor: null }) === undefined, "tray result exact keys");
 expect(parseCaptureDraftSummaryV1({ ...summary, status: "confirmed" }) === undefined, "confirmed capture has released attention");
 expect(parseCaptureDraftSummaryV1({ ...summary, status: "no_sale" }) === undefined, "no-sale capture has released attention");
 expect(parseCaptureDraftSummaryV1({ ...summary, status: "confirmed", attentionStatus: "unclaimed", ownerMembershipId: null, fulfillmentChannel: null }) === undefined, "confirmed capture needs fulfillment");
@@ -133,6 +148,25 @@ expect(parseCaptureDraftDetailV1({ ...detail, status: "confirmed", confirmedOrde
 expect(parseCaptureDraftDetailV1({ ...detail, attentionStatus: "held", attentionLeaseId }) === undefined, "only claimed detail exposes a lease");
 expect(parseCaptureDraftDetailV1({ ...detail, attentionStatus: "held", ownerMembershipId: null, attentionLeaseId: null, attentionLeaseExpiresAt: null }) !== undefined, "held detail releases lease and owner");
 expect(parseCaptureMutationResultV1({ schemaVersion: 1, replayed: false, detail }) !== undefined, "mutation result exposes replay flag");
+expect(parseCaptureWorkspaceRequestV1({ schemaVersion: 1, scope, captureDraftId: common.captureDraftId }) !== undefined,
+  "workspace request binds capture and scope");
+const customerSnapshot = { schemaVersion: 1, snapshotRef: customerSnapshotRef, customerId: common.eventId,
+  contactId: common.deviceId, displayName: "Cliente histórico", phoneDisplayValue: "+52 555 000 0000",
+  phoneNormalizedValue: "+525550000000" };
+const fulfillmentSnapshot = { schemaVersion: 1, snapshotRef: fulfillmentSnapshotRef,
+  customerSnapshotRef, customerId: common.eventId, addressId: orderId, label: "Casa", streetLine: "Acacia 84",
+  unit: null, neighborhood: "Centro", locality: "Hermosillo", region: "Sonora", countryCode: "MX",
+  postalCode: "83000", referencesText: "Portón azul", legacyAddressInstructions: null, latitudeE6: null, longitudeE6: null,
+  validatedAt: "2026-09-15T18:00:00.000Z" };
+const workspace = parseCaptureWorkspaceV1({ schemaVersion: 1, detail, customerSnapshot, fulfillmentSnapshot });
+expect(workspace !== undefined && Object.isFrozen(workspace.customerSnapshot) && Object.isFrozen(workspace.fulfillmentSnapshot),
+  "workspace rehydrates immutable snapshots linked to capture refs");
+expect(parseCaptureWorkspaceV1({ schemaVersion: 1, detail, customerSnapshot: { ...customerSnapshot,
+  displayName: "Current mutable name", snapshotRef: orderId }, fulfillmentSnapshot }) === undefined,
+  "workspace rejects a party snapshot not linked by the capture");
+expect(parseCaptureWorkspaceV1({ schemaVersion: 1, detail, customerSnapshot,
+  fulfillmentSnapshot: { ...fulfillmentSnapshot, customerSnapshotRef: orderId } }) === undefined,
+  "workspace rejects fulfillment linked to another party snapshot");
 const preferenceResult = { schemaVersion: 1, replayed: false, detail,
   recoveryPolicy: { schemaVersion: 1, autoRenewSelected: true, recoveryExpiresAt: "2026-10-16T12:00:00.000Z" } };
 expect(parseCaptureRecoveryPreferenceResultV1(preferenceResult) !== undefined, "preference result includes explicit selected policy");

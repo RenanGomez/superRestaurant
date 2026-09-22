@@ -259,6 +259,18 @@ begin
   if search_result ->> 'status' is distinct from 'ok'
     or search_result #>> '{result,candidates,0,customerId}' is distinct from writer_customer::text
   then raise exception 'CUSTOMER_SEARCH_NAME_REJECTED'; end if;
+  search_query := search_query || pg_catalog.jsonb_build_object('mode','phone','query','4567','limit',20,'cursor',null);
+  search_result := app_private.search_customer_directory(actor,search_query);
+  if search_result ->> 'status' is distinct from 'ok'
+    or pg_catalog.jsonb_array_length(search_result #> '{result,candidates}') <> 2
+  then raise exception 'CUSTOMER_SEARCH_PHONE_SUFFIX_REJECTED'; end if;
+  if app_private.search_customer_directory(actor,search_query || pg_catalog.jsonb_build_object('query','567')) ->> 'status' is distinct from 'rejected'
+  then raise exception 'CUSTOMER_SEARCH_SHORT_PHONE_ACCEPTED'; end if;
+  search_query := search_query || pg_catalog.jsonb_build_object('mode','address','query','editada casa','limit',20,'cursor',null);
+  search_result := app_private.search_customer_directory(actor,search_query);
+  if search_result ->> 'status' is distinct from 'ok'
+    or search_result #>> '{result,candidates,0,customerId}' is distinct from writer_customer::text
+  then raise exception 'CUSTOMER_SEARCH_ADDRESS_TOKEN_ORDER_REJECTED'; end if;
   if app_private.search_customer_directory(actor,search_query || '{"actorId":"client"}'::jsonb) ->> 'status' is distinct from 'rejected'
   then raise exception 'CUSTOMER_SEARCH_AUTHORITY_FIELD_ACCEPTED'; end if;
   detail_query := pg_catalog.jsonb_build_object('schemaVersion',1,'scope',pg_catalog.jsonb_build_object(

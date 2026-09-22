@@ -10,7 +10,7 @@ interface CaptureOutcome {
   readonly status: string;
   readonly record: { readonly detail: { readonly version: number; readonly attentionLeaseId: string;
     readonly ownerMembershipId: string; readonly attentionStatus: string; readonly customerSnapshotRef: string | null;
-    readonly fulfillmentSnapshotRef?: string | null } };
+    readonly fulfillmentSnapshotRef?: string | null; readonly sourceChannel?: string; readonly fulfillmentChannel?: string | null } };
 }
 
 /** Only the dedicated, marked disposable PG17 cluster accepts fixture commits. */
@@ -207,42 +207,84 @@ export async function verifyCaptureConcurrency(config: CustomerConcurrencyConfig
     await second.query("COMMIT");
     process.stdout.write(`${JSON.stringify({ stage: "capture_fulfillment_replay", status: "ok" })}\n`);
     const fulfillmentCas = fulfillment(10);
-    await race(() => writerA.setFulfillment(config.actorId, fulfillmentCas),
+    const racedFulfillment = await race(() => writerA.setFulfillment(config.actorId, fulfillmentCas),
       () => writerB.setFulfillment(config.actorId, { ...fulfillmentCas, idempotencyKey: randomUUID(), eventId: randomUUID() }), "conflict");
     process.stdout.write(`${JSON.stringify({ stage: "capture_fulfillment_cas", status: "ok" })}\n`);
+    await begin(first);
+    const workspace = await writerA.readWorkspace(config.actorId, { schemaVersion: 1, scope, captureDraftId }) as {
+      readonly detail: { readonly customerSnapshotRef: string; readonly fulfillmentSnapshotRef: string; readonly version: number };
+      readonly customerSnapshot: { readonly displayName: string; readonly snapshotRef: string };
+      readonly fulfillmentSnapshot: { readonly streetLine: string; readonly snapshotRef: string };
+    };
+    await first.query("COMMIT");
+    assert.equal(workspace.detail.version, 11);
+    assert.equal(workspace.customerSnapshot.snapshotRef, racedFulfillment.record.detail.customerSnapshotRef);
+    assert.equal(workspace.customerSnapshot.displayName, "Snapshot changed");
+    assert.equal(workspace.fulfillmentSnapshot.snapshotRef, racedFulfillment.record.detail.fulfillmentSnapshotRef);
+    assert.equal(workspace.fulfillmentSnapshot.streetLine, "Original street");
+    const autosaveCommand = { ...common(11), attentionLeaseId: resumed.record.detail.attentionLeaseId,
+      sourceChannel: "whatsapp_manual" as const, fulfillmentChannel: "delivery" as const,
+      customerSnapshotRef: racedFulfillment.record.detail.customerSnapshotRef,
+      fulfillmentSnapshotRef: racedFulfillment.record.detail.fulfillmentSnapshotRef ?? null };
+    const autosaved = await race(() => writerA.autosaveDraft(config.actorId, autosaveCommand),
+      () => writerB.autosaveDraft(config.actorId, { ...autosaveCommand, idempotencyKey: randomUUID(), eventId: randomUUID() }), "conflict");
+    assert.equal(autosaved.record.detail.version, 12);
+    assert.equal(autosaved.record.detail.sourceChannel, "whatsapp_manual");
+    assert.equal(autosaved.record.detail.fulfillmentChannel, "delivery");
+    await begin(second);
+    const autosaveReplay = await writerB.autosaveDraft(config.actorId, autosaveCommand) as CaptureOutcome;
+    assert.equal(autosaveReplay.status, "replayed");
+    assert.deepEqual(autosaveReplay.record, autosaved.record);
+    await second.query("COMMIT");
     await observer.query(`update app.customer_addresses set street_line='Changed street',validation_branch_id=null,validation_event_id=null,
       validated_by=null,validation_device_id=null,validated_at=null,version=2,updated_at=clock_timestamp(),updated_by=$1
       where restaurant_id=$2 and customer_id=$3 and id=$4`, [config.actorId, config.restaurantId, customerId, addressId]);
     assert.deepEqual((await observer.query("select street_line from app.customer_fulfillment_snapshots where restaurant_id=$1 and id=$2",
       [config.restaurantId, selectedFulfillment.record.detail.fulfillmentSnapshotRef])).rows, [{ street_line: "Original street" }]);
     await begin(first);
-    const staleFulfillment = await writerA.setFulfillment(config.actorId, fulfillment(11)) as CaptureOutcome;
+    const staleFulfillment = await writerA.setFulfillment(config.actorId, fulfillment(12)) as CaptureOutcome;
     assert.equal(staleFulfillment.status, "conflict");
     await first.query("COMMIT");
     await begin(first);
-    const customerHeld = await writerA.mutateAttention(config.actorId, "capture.held", { ...common(11), attentionLeaseId: resumed.record.detail.attentionLeaseId }) as CaptureOutcome;
+    const customerHeld = await writerA.mutateAttention(config.actorId, "capture.held", { ...common(12), attentionLeaseId: resumed.record.detail.attentionLeaseId }) as CaptureOutcome;
     assert.equal(customerHeld.status, "applied");
     assert.equal(customerHeld.record.detail.customerSnapshotRef, replacement.record.detail.customerSnapshotRef);
     await first.query("COMMIT");
     await begin(first);
-    const customerResumed = await writerA.mutateAttention(config.actorId, "capture.resumed", common(12)) as CaptureOutcome;
+    const customerResumed = await writerA.mutateAttention(config.actorId, "capture.resumed", common(13)) as CaptureOutcome;
     assert.equal(customerResumed.status, "applied");
     assert.equal(customerResumed.record.detail.customerSnapshotRef, replacement.record.detail.customerSnapshotRef);
     await first.query("COMMIT");
     await begin(first);
-    const removed = await writerA.setCustomer(config.actorId, { ...common(13), attentionLeaseId: customerResumed.record.detail.attentionLeaseId,
+    const removed = await writerA.setCustomer(config.actorId, { ...common(14), attentionLeaseId: customerResumed.record.detail.attentionLeaseId,
       customerId: null, contactId: null, expectedCustomerVersion: null }) as CaptureOutcome;
     assert.equal(removed.status, "applied");
     assert.equal(removed.record.detail.customerSnapshotRef, null);
     assert.equal(removed.record.detail.fulfillmentSnapshotRef, null);
     await first.query("COMMIT");
-    assert.deepEqual(await counts(), [{ version: "14", events: "14", snapshots: "4" }]);
-    return Object.freeze({ checks: 31, blockedPairs, version: 14, journalEvents: 14, partySnapshots: 4,
+    assert.deepEqual(await counts(), [{ version: "15", events: "15", snapshots: "4" }]);
+    await begin(first);
+    const tray = await writerA.list(config.actorId, { schemaVersion: 1, scope, limit: 20 }) as {
+      readonly schemaVersion: number; readonly items: readonly { readonly captureDraftId: string; readonly version: number }[];
+    };
+    await first.query("COMMIT");
+    assert.equal(tray.schemaVersion, 1);
+    assert.deepEqual(tray.items.map(({ captureDraftId: id, version }) => ({ id, version })), [{ id: captureDraftId, version: 15 }]);
+    const priorLease = customerResumed.record.detail.attentionLeaseId;
+    const reclaimed = await race(() => writerA.mutateAttention(config.actorId, "capture.claimed", common(15)),
+      () => writerB.mutateAttention(secondActor, "capture.claimed", common(15)), "conflict");
+    assert.equal(reclaimed.record.detail.ownerMembershipId, ownerId);
+    assert.equal(reclaimed.record.detail.attentionStatus, "claimed");
+    assert.notEqual(reclaimed.record.detail.attentionLeaseId, priorLease);
+    assert.deepEqual(await counts(), [{ version: "16", events: "16", snapshots: "4" }]);
+    return Object.freeze({ checks: 44, blockedPairs, version: 16, journalEvents: 16, partySnapshots: 4,
       cases: Object.freeze(["create_same_key_replay", "claim_two_actors_cas", "resume_two_actors_cas", "resume_exact_replay",
         "customer_same_key_replay", "customer_divergence", "customer_two_connections_cas", "snapshot_immutable_after_edit",
         "stale_customer", "wrong_lease", "wrong_owner", "tenant_isolation", "event_collision_atomicity", "revoked_replay",
         "customer_replace", "fulfillment_exact_replay", "fulfillment_two_connections_cas", "fulfillment_snapshot_immutable", "stale_address",
-        "attention_preserves_snapshot", "customer_remove_clears_fulfillment"]) });
+        "attention_preserves_snapshot", "workspace_rehydrates_immutable_snapshots", "autosave_two_connections_cas",
+        "autosave_exact_replay", "customer_remove_clears_fulfillment", "tray_scope_and_version",
+        "same_owner_reclaim_rotates_lease", "same_owner_reclaim_two_connections_cas"]) });
   } finally {
     const cleanup = await Promise.allSettled(clients.map(async (client) => { try { await client.query("ROLLBACK"); } finally { await client.end(); } }));
     if (cleanup.some((result) => result.status === "rejected")) throw new Error("LOCAL_CAPTURE_CONCURRENCY_CONNECTION_CLEANUP_FAILED");

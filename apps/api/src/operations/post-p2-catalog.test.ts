@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { extractMigrationBody, validateCatalogAuditSql } from "./schema-verification.js";
-import { buildCaptureCatalogAudit, buildCaptureCustomerCatalogAudit, buildCustomerDirectoryCatalogAudit, buildPostBootstrapCatalogAudit, postBootstrapSummary } from "./post-bootstrap-catalog.js";
+import { buildCaptureCatalogAudit, buildCaptureContinuityCatalogAudit, buildCaptureCustomerCatalogAudit, buildCustomerDirectoryCatalogAudit, buildPostBootstrapCatalogAudit, postBootstrapSummary } from "./post-bootstrap-catalog.js";
 
 const audit = readFileSync(
   new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url),
@@ -209,6 +209,18 @@ test("private customer search is bounded, scoped, cursor-stable and read-only", 
   assert.doesNotMatch(migration, /\b(?:insert into|update|delete from|truncate)\b/u);
 });
 
+test("customer search upgrade requires four phone digits and matches all normalized address terms", () => {
+  const migration = readFileSync(new URL("../../../../supabase/migrations/20260920000100_improve_customer_directory_search.sql", import.meta.url), "utf8");
+  assert.doesNotThrow(() => extractMigrationBody(migration));
+  assert.match(migration, /create or replace function app_private\.search_customer_directory/u);
+  assert.match(migration, /phone_key !~ '\^\\\+\?\[0-9\]\{4,20\}\$'/u);
+  assert.match(migration, /pg_catalog\.unnest\(search_tokens\)/u);
+  assert.match(migration, /a\.label,a\.street_line,a\.unit,a\.neighborhood/u);
+  assert.match(migration, /pg_catalog\.strpos\(p\.normalized_value,phone_key\) > 0/u);
+  assert.match(migration, /grant execute on function app_private\.search_customer_directory\(uuid,jsonb\) to app_api/u);
+  assert.doesNotMatch(migration, /\b(?:insert into|update|delete from|truncate)\b/u);
+});
+
 test("private customer directory writer binds authorization, CAS, replay and audit atomically", () => {
   const migration = readFileSync(new URL("../../../../supabase/migrations/20260916000600_create_customer_directory_command.sql", import.meta.url), "utf8");
   assert.doesNotThrow(() => extractMigrationBody(migration));
@@ -267,6 +279,40 @@ test("attention writer limits operations and checks CAS plus authoritative lease
   assert.match(sql, /exception when unique_violation then return/u);
   assert.match(sql, /for share of m,b,r,g/u);
   assert.match(sql, /revoke all on function app_private.mutate_capture_attention/u);
+});
+
+test("capture work tray is private, bounded and permits only same-owner active reclaim", () => {
+  const sql = readFileSync(new URL("../../../../supabase/migrations/20260918000100_create_capture_work_tray.sql", import.meta.url), "utf8");
+  assert.doesNotThrow(() => extractMigrationBody(sql));
+  assert.match(sql, /create or replace function app_private\.mutate_capture_attention/u);
+  assert.match(sql, /owner_membership_id is distinct from member/u);
+  assert.match(sql, /create function app_private\.list_capture_work_tray/u);
+  assert.match(sql, /requested_limit not between 1 and 50/u);
+  assert.match(sql, /c\.restaurant_id=restaurant and c\.branch_id=branch and c\.status='draft'/u);
+  assert.match(sql, /c\.recovery_expires_at>clock_timestamp\(\)/u);
+  assert.match(sql, /grant execute on function app_private\.list_capture_work_tray\(uuid,jsonb\) to app_api/u);
+  assert.doesNotMatch(sql, /grant (?:select|insert|update|delete|all) on app\.capture_drafts/u);
+});
+
+test("capture continuity keeps snapshots server-owned and autosave CAS-bound to the active lease", () => {
+  const sql = readFileSync(new URL("../../../../supabase/migrations/20260920000200_capture_continuity_autosave.sql", import.meta.url), "utf8");
+  assert.doesNotThrow(() => extractMigrationBody(sql));
+  assert.match(sql, /create function app_private\.autosave_capture_draft/u);
+  assert.match(sql, /current_capture\.version<>expected/u);
+  assert.match(sql, /attention_lease_id is distinct from requested_lease/u);
+  assert.match(sql, /attention_lease_expires_at<=observed/u);
+  assert.match(sql, /stored\.command_fingerprint <> fingerprint/u);
+  assert.match(sql, /create function app_private\.read_capture_workspace/u);
+  assert.match(sql, /from app\.customer_party_snapshots/u);
+  assert.match(sql, /from app\.customer_fulfillment_snapshots/u);
+  assert.doesNotMatch(sql, /grant (?:select|insert|update|delete|all) on app\./u);
+  const base = readFileSync(new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url), "utf8");
+  const capture = readFileSync(new URL("../../../../supabase/tests/capture_drafts_catalog.sql", import.meta.url), "utf8");
+  const directory = readFileSync(new URL("../../../../supabase/tests/customer_directory_catalog.sql", import.meta.url), "utf8");
+  const audit = buildCaptureContinuityCatalogAudit(base, capture, directory);
+  assert.equal(audit.split("pg_catalog.to_regprocedure('app_private.autosave_capture_draft(uuid,jsonb)')").length - 1, 2);
+  assert.equal(audit.split("pg_catalog.to_regprocedure('app_private.read_capture_workspace(uuid,jsonb)')").length - 1, 2);
+  assert.doesNotThrow(() => validateCatalogAuditSql(audit));
 });
 
 test("post-P2 state runner uses the pinned profile for both stable lifecycle states", () => {

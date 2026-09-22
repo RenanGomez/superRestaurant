@@ -134,6 +134,62 @@ export interface CaptureDraftDetailV1 extends CaptureDraftSummaryV1 {
   readonly fulfillmentSnapshotRef: string | null;
 }
 
+export interface CaptureWorkTrayRequestV1 {
+  readonly limit: number;
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+}
+
+export interface CaptureWorkTrayResultV1 {
+  readonly items: readonly CaptureDraftSummaryV1[];
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+}
+
+export interface CaptureWorkspaceRequestV1 {
+  readonly captureDraftId: string;
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+}
+
+export interface CaptureCustomerSnapshotV1 {
+  readonly contactId: string;
+  readonly customerId: string;
+  readonly displayName: string;
+  readonly phoneDisplayValue: string;
+  readonly phoneNormalizedValue: string;
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+  readonly snapshotRef: string;
+}
+
+export interface CaptureFulfillmentSnapshotV1 {
+  readonly addressId: string;
+  readonly countryCode: string;
+  readonly customerId: string;
+  readonly customerSnapshotRef: string;
+  /** Historical Address value only; never an active Capture/Order delivery instruction. */
+  readonly legacyAddressInstructions: string | null;
+  readonly label: string;
+  readonly latitudeE6: number | null;
+  readonly locality: string;
+  readonly longitudeE6: number | null;
+  readonly neighborhood: string | null;
+  readonly postalCode: string | null;
+  readonly referencesText: string | null;
+  readonly region: string | null;
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+  readonly snapshotRef: string;
+  readonly streetLine: string;
+  readonly unit: string | null;
+  readonly validatedAt: string;
+}
+
+export interface CaptureWorkspaceV1 {
+  readonly customerSnapshot: CaptureCustomerSnapshotV1 | null;
+  readonly detail: CaptureDraftDetailV1;
+  readonly fulfillmentSnapshot: CaptureFulfillmentSnapshotV1 | null;
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+}
+
 export interface CaptureMutationResultV1 {
   readonly detail: CaptureDraftDetailV1;
   readonly replayed: boolean;
@@ -189,7 +245,8 @@ export function parseAutosaveCaptureDraftCommandV1(value: unknown): AutosaveCapt
   const fulfillmentSnapshotRef = record === undefined ? undefined : nullableUuid(own(record, "fulfillmentSnapshotRef"));
   if (common === undefined || attentionLeaseId === undefined || sourceChannel === undefined
     || fulfillmentChannel === undefined || customerSnapshotRef === undefined
-    || fulfillmentSnapshotRef === undefined) return undefined;
+    || fulfillmentSnapshotRef === undefined
+    || (fulfillmentSnapshotRef !== null && (customerSnapshotRef === null || fulfillmentChannel !== "delivery"))) return undefined;
   return Object.freeze({
     ...common,
     attentionLeaseId,
@@ -302,6 +359,101 @@ export function parseCloseCaptureNoSaleCommandV1(value: unknown): CloseCaptureNo
 export function parseCaptureDraftSummaryV1(value: unknown): CaptureDraftSummaryV1 | undefined {
   const record = exactRecord(value, SUMMARY_KEYS);
   return record === undefined ? undefined : parseSummaryRecord(record);
+}
+
+export function parseCaptureWorkTrayRequestV1(value: unknown): CaptureWorkTrayRequestV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "limit"]);
+  const scope = record === undefined ? undefined : parseUuidScope(own(record, "scope"));
+  const limit = record === undefined ? undefined : integer(own(record, "limit"), 1, 50);
+  return record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_SCHEMA_VERSION
+    || scope === undefined || limit === undefined ? undefined
+      : Object.freeze({ limit, schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION, scope });
+}
+
+export function parseCaptureWorkTrayResultV1(value: unknown): CaptureWorkTrayResultV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "items"]);
+  const rawItems = record === undefined ? undefined : own(record, "items");
+  if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_SCHEMA_VERSION
+    || !Array.isArray(rawItems) || rawItems.length > 50) return undefined;
+  const items = rawItems.map(parseCaptureDraftSummaryV1);
+  return items.some((item) => item === undefined) ? undefined
+    : Object.freeze({ items: Object.freeze(items as CaptureDraftSummaryV1[]), schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION });
+}
+
+export function parseCaptureWorkspaceRequestV1(value: unknown): CaptureWorkspaceRequestV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "captureDraftId"]);
+  const scope = record === undefined ? undefined : parseUuidScope(own(record, "scope"));
+  const captureDraftId = record === undefined ? undefined : uuid(own(record, "captureDraftId"));
+  return record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_SCHEMA_VERSION
+    || scope === undefined || captureDraftId === undefined ? undefined
+      : Object.freeze({ captureDraftId, schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION, scope });
+}
+
+export function parseCaptureCustomerSnapshotV1(value: unknown): CaptureCustomerSnapshotV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "snapshotRef", "customerId", "contactId", "displayName",
+    "phoneDisplayValue", "phoneNormalizedValue"]);
+  if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_SCHEMA_VERSION) return undefined;
+  const snapshotRef = uuid(own(record, "snapshotRef"));
+  const customerId = uuid(own(record, "customerId"));
+  const contactId = uuid(own(record, "contactId"));
+  const displayName = boundedText(own(record, "displayName"), 1, 120);
+  const phoneDisplayValue = boundedText(own(record, "phoneDisplayValue"), 1, 80);
+  const phoneNormalizedValue = own(record, "phoneNormalizedValue");
+  if (snapshotRef === undefined || customerId === undefined || contactId === undefined || displayName === undefined
+    || phoneDisplayValue === undefined || typeof phoneNormalizedValue !== "string"
+    || !/^\+?[0-9]{1,20}$/u.test(phoneNormalizedValue)) return undefined;
+  return Object.freeze({ contactId, customerId, displayName, phoneDisplayValue, phoneNormalizedValue,
+    schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION, snapshotRef });
+}
+
+export function parseCaptureFulfillmentSnapshotV1(value: unknown): CaptureFulfillmentSnapshotV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "snapshotRef", "customerSnapshotRef", "customerId", "addressId",
+    "label", "streetLine", "unit", "neighborhood", "locality", "region", "countryCode", "postalCode", "referencesText",
+    "legacyAddressInstructions", "latitudeE6", "longitudeE6", "validatedAt"]);
+  if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_SCHEMA_VERSION) return undefined;
+  const snapshotRef = uuid(own(record, "snapshotRef"));
+  const customerSnapshotRef = uuid(own(record, "customerSnapshotRef"));
+  const customerId = uuid(own(record, "customerId"));
+  const addressId = uuid(own(record, "addressId"));
+  const label = boundedText(own(record, "label"), 1, 40);
+  const streetLine = boundedText(own(record, "streetLine"), 1, 200);
+  const unit = nullableBoundedText(own(record, "unit"), 1, 200);
+  const neighborhood = nullableBoundedText(own(record, "neighborhood"), 1, 200);
+  const locality = boundedText(own(record, "locality"), 1, 200);
+  const region = nullableBoundedText(own(record, "region"), 1, 200);
+  const countryCode = own(record, "countryCode");
+  const postalCode = nullableBoundedText(own(record, "postalCode"), 1, 200);
+  const referencesText = nullableBoundedText(own(record, "referencesText"), 1, 500);
+  const legacyAddressInstructions = nullableBoundedText(own(record, "legacyAddressInstructions"), 1, 500);
+  const latitudeE6 = nullableInteger(own(record, "latitudeE6"), -90_000_000, 90_000_000);
+  const longitudeE6 = nullableInteger(own(record, "longitudeE6"), -180_000_000, 180_000_000);
+  const validatedAt = timestamp(own(record, "validatedAt"));
+  if (snapshotRef === undefined || customerSnapshotRef === undefined || customerId === undefined || addressId === undefined
+    || label === undefined || streetLine === undefined || unit === undefined || neighborhood === undefined
+    || locality === undefined || region === undefined || typeof countryCode !== "string" || !/^[A-Z]{2}$/u.test(countryCode)
+    || postalCode === undefined || referencesText === undefined || legacyAddressInstructions === undefined || latitudeE6 === undefined
+    || longitudeE6 === undefined || (latitudeE6 === null) !== (longitudeE6 === null) || validatedAt === undefined) return undefined;
+  return Object.freeze({ addressId, countryCode, customerId, customerSnapshotRef, legacyAddressInstructions, label, latitudeE6, locality,
+    longitudeE6, neighborhood, postalCode, referencesText, region, schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION,
+    snapshotRef, streetLine, unit, validatedAt });
+}
+
+export function parseCaptureWorkspaceV1(value: unknown): CaptureWorkspaceV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "detail", "customerSnapshot", "fulfillmentSnapshot"]);
+  if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_SCHEMA_VERSION) return undefined;
+  const detail = parseCaptureDraftDetailV1(own(record, "detail"));
+  const rawCustomer = own(record, "customerSnapshot");
+  const rawFulfillment = own(record, "fulfillmentSnapshot");
+  const customerSnapshot = rawCustomer === null ? null : parseCaptureCustomerSnapshotV1(rawCustomer);
+  const fulfillmentSnapshot = rawFulfillment === null ? null : parseCaptureFulfillmentSnapshotV1(rawFulfillment);
+  if (detail === undefined || customerSnapshot === undefined || fulfillmentSnapshot === undefined
+    || (detail.customerSnapshotRef === null) !== (customerSnapshot === null)
+    || (detail.fulfillmentSnapshotRef === null) !== (fulfillmentSnapshot === null)
+    || (customerSnapshot !== null && customerSnapshot.snapshotRef !== detail.customerSnapshotRef)
+    || (fulfillmentSnapshot !== null && (fulfillmentSnapshot.snapshotRef !== detail.fulfillmentSnapshotRef
+      || fulfillmentSnapshot.customerSnapshotRef !== detail.customerSnapshotRef
+      || fulfillmentSnapshot.customerId !== customerSnapshot?.customerId))) return undefined;
+  return Object.freeze({ customerSnapshot, detail, fulfillmentSnapshot, schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION });
 }
 
 export function parseCaptureDraftDetailV1(value: unknown): CaptureDraftDetailV1 | undefined {
@@ -486,11 +638,19 @@ function integer(value: unknown, minimum: number, maximum: number): number | und
     : undefined;
 }
 
+function nullableInteger(value: unknown, minimum: number, maximum: number): number | null | undefined {
+  return value === null ? null : integer(value, minimum, maximum);
+}
+
 function boundedText(value: unknown, minimum: number, maximum: number): string | undefined {
   return typeof value === "string" && value.length >= minimum && value.length <= maximum
     && value === value.trim() && !/[\p{Cc}\p{Cf}]/u.test(value)
     ? value
     : undefined;
+}
+
+function nullableBoundedText(value: unknown, minimum: number, maximum: number): string | null | undefined {
+  return value === null ? null : boundedText(value, minimum, maximum);
 }
 
 function timestamp(value: unknown): string | undefined {

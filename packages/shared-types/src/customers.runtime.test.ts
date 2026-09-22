@@ -93,6 +93,8 @@ expect(parseCustomerAddressMutationResultV1({ schemaVersion: 1, record: { ...add
 const searchQuery = { schemaVersion: 1, scope: base.scope, mode: "phone", query: "+52 (642) 123-4567", limit: 20, cursor: null };
 const parsedSearch = parseSearchCustomerDirectoryQueryV1(searchQuery);
 expect(parsedSearch !== undefined && Object.isFrozen(parsedSearch.scope), "bounded phone search parses");
+expect(parseSearchCustomerDirectoryQueryV1({ ...searchQuery, query: "4567" }) !== undefined, "four digit phone search parses");
+expect(parseSearchCustomerDirectoryQueryV1({ ...searchQuery, query: "567" }) === undefined, "phone search requires four digits");
 for (const invalid of [
   { ...searchQuery, mode: "unknown" }, { ...searchQuery, query: "642 ext 1" }, { ...searchQuery, limit: 21 },
   { ...searchQuery, cursor: { updatedAt: base.occurredAt, customerId: "bad" } }, { ...searchQuery, actorId: id },

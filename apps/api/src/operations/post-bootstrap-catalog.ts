@@ -87,3 +87,19 @@ export function buildCaptureFulfillmentCatalogAudit(baseSql: string, captureSupp
     then raise exception 'CAPTURE_FULFILLMENT_SCOPE_REJECTED'; end if;
   end $capture_fulfillment_catalog$;`);
 }
+
+export function buildCaptureTrayCatalogAudit(baseSql: string, captureSupplementSql: string, directorySupplementSql: string): string {
+  const base = buildCaptureFulfillmentCatalogAudit(baseSql, captureSupplementSql, directorySupplementSql);
+  const tail = "pg_catalog.to_regprocedure('app_private.set_capture_fulfillment(uuid,jsonb)')";
+  return validateCatalogAuditSql(base.replaceAll(tail,
+    `${tail},\n    pg_catalog.to_regprocedure('app_private.list_capture_work_tray(uuid,jsonb)')`)
+    .replace(") <> 45", ") <> 46").replace(") <> 43", ") <> 44"));
+}
+
+export function buildCaptureContinuityCatalogAudit(baseSql: string, captureSupplementSql: string, directorySupplementSql: string): string {
+  const base = buildCaptureTrayCatalogAudit(baseSql, captureSupplementSql, directorySupplementSql);
+  const tail = "pg_catalog.to_regprocedure('app_private.list_capture_work_tray(uuid,jsonb)')";
+  return validateCatalogAuditSql(base.replaceAll(tail,
+    `${tail},\n    pg_catalog.to_regprocedure('app_private.autosave_capture_draft(uuid,jsonb)'),\n    pg_catalog.to_regprocedure('app_private.read_capture_workspace(uuid,jsonb)')`)
+    .replace(") <> 46", ") <> 48").replace(") <> 44", ") <> 46"));
+}

@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { parseBranchScope } from "@super-restaurant/shared-types";
-import { requestCustomerDirectory } from "./customer-directory.js";
+import {
+  getCustomerAutocompleteRequest,
+  getCustomerDirectorySuggestions,
+  insertCustomerDirectorySuggestion,
+  isCurrentCustomerAutocompleteRequest,
+  requestCustomerDirectory,
+} from "./customer-directory.js";
 
 const scope = parseBranchScope({
   restaurantId: "11111111-1111-4111-8111-111111111111",
@@ -77,4 +83,75 @@ test("customer server client rejects hostile identity, version and validation br
     const accepted = await requestCustomerDirectory("token", "http://127.0.0.1:3000", "validate", command);
     assert.equal(accepted.ok, true);
   } finally { globalThis.fetch = original; }
+});
+
+test("autocomplete derives bounded name and address terms only from the authorized result", () => {
+  const result = {
+    schemaVersion: 1 as const,
+    scope,
+    candidates: [{
+      customerId,
+      displayName: "Ana María Morena",
+      phones: [phone],
+      addresses: [{
+        addressId,
+        label: "Casa",
+        streetLine: "Acacia Morena 84",
+        neighborhood: "Las Fuentes",
+        locality: "Navojoa",
+        version: 2,
+        validatedForRequestedBranch: true,
+      }],
+      version: 3,
+      updatedAt: occurredAt,
+    }],
+    nextCursor: null,
+  };
+
+  assert.deepEqual(getCustomerDirectorySuggestions(result, "name", "ma"), [
+    { id: "name-0-maria", value: "María", context: "Ana María Morena" },
+  ]);
+  assert.deepEqual(getCustomerDirectorySuggestions(result, "address", "Morena 8"), [
+    { id: "address-0-84", value: "84", context: "Ana María Morena" },
+  ]);
+  assert.deepEqual(getCustomerDirectorySuggestions(result, "address", "Fuentes A"), [
+    { id: "address-0-acacia", value: "Acacia", context: "Ana María Morena" },
+  ]);
+  assert.equal(getCustomerDirectorySuggestions(result, "address", "A", 20).length <= 10, true);
+  assert.deepEqual(getCustomerDirectorySuggestions(undefined, "name", "Ana"), []);
+});
+
+test("autocomplete requires four phone digits and accepting replaces only the active term", () => {
+  const result = {
+    schemaVersion: 1 as const,
+    scope,
+    candidates: [{ customerId, displayName: "Ana", phones: [phone], addresses: [], version: 1, updatedAt: occurredAt }],
+    nextCursor: null,
+  };
+  assert.deepEqual(getCustomerDirectorySuggestions(result, "phone", "456"), []);
+  assert.deepEqual(getCustomerDirectorySuggestions(result, "phone", "4567"), [
+    { id: "phone-0-526421234567", value: "+52 642 123 4567", context: "Ana" },
+  ]);
+  assert.equal(insertCustomerDirectorySuggestion("Morena Ac", "Acacia", "address"), "Morena Acacia ");
+  assert.equal(insertCustomerDirectorySuggestion("Morena ", "84", "address"), "Morena 84 ");
+  assert.equal(insertCustomerDirectorySuggestion("4567", "+52 642 123 4567", "phone"), "+52 642 123 4567 ");
+});
+
+test("automatic autocomplete search waits for a useful authorized prefix", () => {
+  assert.equal(getCustomerAutocompleteRequest("phone", "123"), undefined);
+  assert.deepEqual(getCustomerAutocompleteRequest("phone", " 642 1 "), { mode: "phone", query: "642 1" });
+  assert.equal(getCustomerAutocompleteRequest("name", "a"), undefined);
+  assert.deepEqual(getCustomerAutocompleteRequest("name", "aca"), { mode: "name", query: "aca" });
+  assert.equal(getCustomerAutocompleteRequest("address", "8"), undefined);
+  assert.deepEqual(getCustomerAutocompleteRequest("address", "Morena 8"), { mode: "address", query: "Morena 8" });
+  assert.equal(getCustomerAutocompleteRequest("name", "a".repeat(121)), undefined);
+});
+
+test("automatic autocomplete discards responses for a stale mode or query", () => {
+  const request = getCustomerAutocompleteRequest("address", "aca");
+  assert.notEqual(request, undefined);
+  if (request === undefined) return;
+  assert.equal(isCurrentCustomerAutocompleteRequest(request, "address", " aca "), true);
+  assert.equal(isCurrentCustomerAutocompleteRequest(request, "address", "acac"), false);
+  assert.equal(isCurrentCustomerAutocompleteRequest(request, "name", "aca"), false);
 });

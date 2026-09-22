@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 import { verifyCustomerDirectoryConcurrency } from "./customer-directory-concurrency-verification.js";
 import { verifyCaptureConcurrency } from "./capture-concurrency-verification.js";
-import { buildCaptureCustomerCatalogAudit, buildCaptureFulfillmentCatalogAudit } from "./post-bootstrap-catalog.js";
+import { buildCaptureContinuityCatalogAudit, buildCaptureFulfillmentCatalogAudit, buildCaptureTrayCatalogAudit } from "./post-bootstrap-catalog.js";
 import { extractMigrationBody } from "./schema-verification.js";
 
 // No env URLs/PGHOST, remote configuration, services or global installation.
@@ -83,8 +83,12 @@ try {
     CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS 'SELECT NULL::uuid';`);
   const migrations = join(root, "supabase", "migrations");
   const names = readdirSync(migrations).filter((name) => /^\d{14}_[a-z0-9_]+\.sql$/u.test(name)).sort();
-  if (names.length !== 27 || !names.at(-1)?.startsWith("20260917000300_")) throw new Error("LOCAL_MIGRATION_SET_REJECTED");
-  for (const name of names.slice(0, -1)) await admin.query(readFileSync(join(migrations, name), "utf8"));
+  const migrationName = "20260918000100_create_capture_work_tray.sql";
+  const migrationIndex = names.indexOf(migrationName);
+  if (migrationIndex < 1 || names[migrationIndex - 1] !== "20260917000300_link_capture_fulfillment_snapshots.sql") {
+    throw new Error("LOCAL_MIGRATION_SET_REJECTED");
+  }
+  for (const name of names.slice(0, migrationIndex)) await admin.query(readFileSync(join(migrations, name), "utf8"));
   // Supply an FK actor before rollback-only SQL invariants; no provider Auth is
   // simulated and no URL or inherited remote configuration is accepted.
   const actorId = randomUUID(), restaurantId = randomUUID(), branchId = randomUUID(), membershipId = randomUUID();
@@ -93,8 +97,8 @@ try {
   const baseSql = readTest("tenancy_memberships_post_p2.sql");
   const captureSql = readTest("capture_drafts_catalog.sql");
   const directorySql = readTest("customer_directory_catalog.sql");
-  const baseAudit = buildCaptureCustomerCatalogAudit(baseSql, captureSql, directorySql);
-  const targetAudit = buildCaptureFulfillmentCatalogAudit(baseSql, captureSql, directorySql);
+  const baseAudit = buildCaptureFulfillmentCatalogAudit(baseSql, captureSql, directorySql);
+  const targetAudit = buildCaptureTrayCatalogAudit(baseSql, captureSql, directorySql);
   const summarySql = `select
     (select count(*)::integer from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
       where n.nspname='app' and c.relkind='r' and c.relrowsecurity and c.relforcerowsecurity) as "securedTables",
@@ -109,43 +113,71 @@ try {
     assert.deepEqual(result.rows, [expected]);
     return expected;
   };
-  const migrationName = names.at(-1);
-  assert.ok(migrationName);
   const migrationSql = readFileSync(join(migrations, migrationName), "utf8");
-  stage = "capture_fulfillment_rollback_baseline";
+  stage = "capture_tray_rollback_baseline";
   await admin.query("BEGIN READ ONLY");
   let baseline;
-  try { baseline = await audit(baseAudit, 42); } finally { await admin.query("ROLLBACK"); }
-  stage = "capture_fulfillment_rollback_invariants";
+  try { baseline = await audit(baseAudit, 43); } finally { await admin.query("ROLLBACK"); }
+  stage = "capture_tray_rollback_invariants";
   await admin.query("BEGIN");
   let migrated;
   let rollbackVerificationFailed = false;
   let rollbackVerificationError: unknown;
   try {
     await admin.query(extractMigrationBody(migrationSql));
-    await admin.query(extractMigrationBody(readTest("capture_fulfillment_invariants.sql")));
-    migrated = await audit(targetAudit, 43);
+    migrated = await audit(targetAudit, 44);
   } catch (error: unknown) {
     rollbackVerificationFailed = true;
     rollbackVerificationError = error;
   } finally { await admin.query("ROLLBACK"); }
-  stage = "capture_fulfillment_rollback_postcheck";
+  stage = "capture_tray_rollback_postcheck";
   await admin.query("BEGIN READ ONLY");
   let postcheck;
   try {
-    postcheck = await audit(baseAudit, 42);
-    assert.equal((await admin.query("select to_regprocedure('app_private.set_capture_fulfillment(uuid,jsonb)') is null as removed")).rows[0]?.removed, true);
-    assert.equal((await admin.query("select count(*)::integer as snapshots from app.customer_fulfillment_snapshots")).rows[0]?.snapshots, 0);
+    postcheck = await audit(baseAudit, 43);
+    assert.equal((await admin.query("select to_regprocedure('app_private.list_capture_work_tray(uuid,jsonb)') is null as removed")).rows[0]?.removed, true);
   } finally { await admin.query("ROLLBACK"); }
   if (rollbackVerificationFailed) {
-    stage = "capture_fulfillment_rollback_invariants";
+    stage = "capture_tray_rollback_invariants";
     throw rollbackVerificationError;
   }
-  process.stdout.write(`${JSON.stringify({ stage: "capture_fulfillment_rollback", status: "ok", runId, baseline, migrated, postcheck })}\n`);
+  process.stdout.write(`${JSON.stringify({ stage: "capture_tray_rollback", status: "ok", runId, baseline, migrated, postcheck })}\n`);
   // Apply only after baseline/target/postcheck passed, exclusively to this new
   // disposable cluster, then run independent two-connection races below.
-  stage = "capture_fulfillment_local_migration";
+  stage = "capture_tray_local_migration";
   await admin.query(migrationSql);
+  const continuityMigrationName = "20260920000200_capture_continuity_autosave.sql";
+  if (!names.includes(continuityMigrationName)) throw new Error("LOCAL_CONTINUITY_MIGRATION_REJECTED");
+  const continuitySql = readFileSync(join(migrations, continuityMigrationName), "utf8");
+  const continuityAudit = buildCaptureContinuityCatalogAudit(baseSql, captureSql, directorySql);
+  stage = "capture_continuity_rollback_baseline";
+  await admin.query("BEGIN READ ONLY");
+  let continuityBaseline;
+  try { continuityBaseline = await audit(targetAudit, 44); } finally { await admin.query("ROLLBACK"); }
+  stage = "capture_continuity_rollback_invariants";
+  await admin.query("BEGIN");
+  let continuityMigrated;
+  let continuityFailure: unknown;
+  try {
+    await admin.query(extractMigrationBody(continuitySql));
+    continuityMigrated = await audit(continuityAudit, 46);
+  } catch (error: unknown) { continuityFailure = error; }
+  finally { await admin.query("ROLLBACK"); }
+  stage = "capture_continuity_rollback_postcheck";
+  await admin.query("BEGIN READ ONLY");
+  let continuityPostcheck;
+  try {
+    continuityPostcheck = await audit(targetAudit, 44);
+    const removed = await admin.query(`select
+      to_regprocedure('app_private.autosave_capture_draft(uuid,jsonb)') is null as autosave_removed,
+      to_regprocedure('app_private.read_capture_workspace(uuid,jsonb)') is null as workspace_removed`);
+    assert.deepEqual(removed.rows, [{ autosave_removed: true, workspace_removed: true }]);
+  } finally { await admin.query("ROLLBACK"); }
+  if (continuityFailure !== undefined) { stage = "capture_continuity_rollback_invariants"; throw continuityFailure; }
+  process.stdout.write(`${JSON.stringify({ stage: "capture_continuity_rollback", status: "ok", runId,
+    baseline: continuityBaseline, migrated: continuityMigrated, postcheck: continuityPostcheck })}\n`);
+  stage = "capture_continuity_local_migration";
+  await admin.query(continuitySql);
   await admin.query("CREATE TABLE app_private.local_concurrency_guard(marker text PRIMARY KEY)");
   await admin.query("INSERT INTO app_private.local_concurrency_guard VALUES($1)", [marker]);
   await admin.query("INSERT INTO app.restaurants(id,name,time_zone) VALUES($1,'local concurrency','America/Hermosillo')", [restaurantId]);

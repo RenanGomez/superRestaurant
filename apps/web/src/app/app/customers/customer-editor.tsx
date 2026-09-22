@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, type ReactNode, type FormEvent } from "react";
-import type { BranchScope, CustomerDirectoryDetailV1, CustomerDirectoryDetailAddressV1, CustomerDirectorySearchResultV1, CustomerPhoneInputV1, CustomerAddressFieldsV1 } from "@super-restaurant/shared-types";
-import type { CustomerRequestResult } from "../../../lib/customer-directory";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type FormEvent, type KeyboardEvent } from "react";
+import type { BranchScope, CustomerDirectoryDetailV1, CustomerDirectoryDetailAddressV1, CustomerDirectorySearchResultV1, CustomerPhoneInputV1, CustomerAddressFieldsV1, CustomerSearchModeV1 } from "@super-restaurant/shared-types";
+import { getCustomerAutocompleteRequest, getCustomerDirectorySuggestions, insertCustomerDirectorySuggestion, isCurrentCustomerAutocompleteRequest, type CustomerAutocompleteRequest, type CustomerRequestResult } from "../../../lib/customer-directory";
 
 export type CustomerAction = "search" | "detail" | "profile" | "address" | "validate";
 export type CustomerActionResult = CustomerRequestResult<CustomerDirectorySearchResultV1 | CustomerDirectoryDetailV1> & { readonly command?: unknown };
@@ -23,32 +23,71 @@ const messages = {
 
 export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNode {
   const [busy, setBusy] = useState(false);
+  const [busyOperation, setBusyOperation] = useState<CustomerAction>();
   const [deviceId] = useState(() => crypto.randomUUID());
   const [error, setError] = useState<keyof typeof messages>();
   const [notice, setNotice] = useState("");
   const [result, setResult] = useState<CustomerDirectorySearchResultV1>();
   const [detail, setDetail] = useState<CustomerDirectoryDetailV1>();
   const [creating, setCreating] = useState(false);
+  const [addingAddress, setAddingAddress] = useState(false);
   const [pending, setPending] = useState<{ operation: CustomerAction; command: unknown }>();
-  const [search, setSearch] = useState<{ mode: string; query: string }>();
+  const [search, setSearch] = useState<{ mode: CustomerSearchModeV1; query: string }>();
+  const [searchMode, setSearchMode] = useState<CustomerSearchModeV1>("phone");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState(-1);
+  const [autocompleteLoading, setAutocompleteLoading] = useState(false);
+  const [autocompleteResult, setAutocompleteResult] = useState<{ readonly request: CustomerAutocompleteRequest; readonly value: CustomerDirectorySearchResultV1 }>();
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const autocompleteSequence = useRef(0);
+  const currentSearch = useRef({ mode: searchMode, input: searchQuery });
+  currentSearch.current = { mode: searchMode, input: searchQuery };
+  const autocompleteRequest = useMemo(() => getCustomerAutocompleteRequest(searchMode, searchQuery), [searchMode, searchQuery]);
+  const suggestionResult = autocompleteResult !== undefined
+    && isCurrentCustomerAutocompleteRequest(autocompleteResult.request, searchMode, searchQuery) ? autocompleteResult.value : undefined;
+  const suggestions = useMemo(() => getCustomerDirectorySuggestions(suggestionResult, searchMode, searchQuery), [suggestionResult, searchMode, searchQuery]);
   const locked = busy || pending !== undefined || error === "denied";
+
+  useEffect(() => {
+    autocompleteSequence.current += 1;
+    const sequence = autocompleteSequence.current;
+    if (autocompleteRequest === undefined || locked) { setAutocompleteLoading(false); return; }
+    setAutocompleteLoading(true);
+    const timeout = window.setTimeout(() => {
+      void action("search", { schemaVersion: 1, scope, ...autocompleteRequest, limit: 10, cursor: null })
+        .then(reply => {
+          const current = currentSearch.current;
+          if (sequence !== autocompleteSequence.current
+            || !isCurrentCustomerAutocompleteRequest(autocompleteRequest, current.mode, current.input)
+            || !reply.ok || !("candidates" in reply.value)) return;
+          setAutocompleteResult({ request: autocompleteRequest, value: reply.value });
+          setActiveSuggestion(-1);
+          setSuggestionsOpen(document.activeElement === searchInputRef.current);
+        })
+        .catch(() => undefined)
+        .finally(() => { if (sequence === autocompleteSequence.current) setAutocompleteLoading(false); });
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [action, autocompleteRequest, locked, scope]);
 
   async function run(operation: CustomerAction, command: unknown): Promise<void> {
     if (busy) return;
-    setBusy(true); setError(undefined); setNotice("");
+    setBusy(true); setBusyOperation(operation); setError(undefined); setNotice("");
     let reply: CustomerActionResult;
     try { reply = await action(operation, command); }
     catch { reply = { ok: false, error: "unavailable", command }; }
-    setBusy(false);
+    setBusy(false); setBusyOperation(undefined);
     if (!reply.ok) {
       setError(reply.error);
+      setSuggestionsOpen(false);
       if (reply.error === "unavailable" && ["profile", "address", "validate"].includes(operation)) setPending({ operation, command: reply.command ?? command });
       else setPending(undefined);
       return;
     }
     setPending(undefined);
-    if ("candidates" in reply.value) { setResult(reply.value); setDetail(undefined); setCreating(false); }
-    else { setDetail(reply.value); setCreating(false); if (operation !== "detail") setNotice(operation === "validate" ? "Dirección validada para esta sucursal." : "Ficha guardada. Las direcciones editadas requieren validación nuevamente."); }
+    if ("candidates" in reply.value) { setResult(reply.value); setDetail(undefined); setCreating(false); setAddingAddress(false); setActiveSuggestion(-1); setSuggestionsOpen(document.activeElement === searchInputRef.current); }
+    else { setDetail(reply.value); setCreating(false); if (operation === "detail" || operation === "address") setAddingAddress(false); if (operation !== "detail") setNotice(operation === "validate" ? "Dirección validada para esta sucursal. Se confirmó la atestación operativa; esto no sustituye geocodificación ni cálculo de cobertura." : "Ficha guardada. Las direcciones editadas requieren validación nuevamente."); }
   }
   function base(customerId: string, expectedVersion: number) {
     return { schemaVersion: 1, scope, customerId, expectedVersion, deviceId,
@@ -56,22 +95,61 @@ export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNod
   }
   function read(customerId: string) { void run("detail", { schemaVersion: 1, scope, customerId }); }
   function searchSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); const data = new FormData(event.currentTarget);
-    const query = String(data.get("query") ?? "").trim(); const mode = String(data.get("mode"));
-    setSearch({ query, mode });
-    void run("search", { schemaVersion: 1, scope, mode, query, limit: 20, cursor: null });
+    event.preventDefault();
+    const query = searchQuery.trim();
+    setSearch({ query, mode: searchMode });
+    void run("search", { schemaVersion: 1, scope, mode: searchMode, query, limit: 20, cursor: null });
+  }
+  function acceptSuggestion(value: string): void {
+    setSearchQuery(insertCustomerDirectorySuggestion(searchQuery, value, searchMode));
+    setActiveSuggestion(-1);
+    setSuggestionsOpen(true);
+    searchInputRef.current?.focus();
+  }
+  function searchKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    if (event.key === "Escape") { setSuggestionsOpen(false); setActiveSuggestion(-1); return; }
+    if (suggestions.length === 0 || !["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) return;
+    if (event.key === "Enter" && (!suggestionsOpen || activeSuggestion < 0)) return;
+    event.preventDefault();
+    if (event.key === "ArrowDown") {
+      setSuggestionsOpen(true);
+      setActiveSuggestion(current => current < suggestions.length - 1 ? current + 1 : 0);
+    } else if (event.key === "ArrowUp") {
+      setSuggestionsOpen(true);
+      setActiveSuggestion(current => current > 0 ? current - 1 : suggestions.length - 1);
+    } else {
+      const suggestion = suggestions[activeSuggestion];
+      if (suggestion !== undefined) acceptSuggestion(suggestion.value);
+    }
   }
   return <div className="flex min-w-0 flex-col gap-4" aria-busy={busy}>
     <div aria-live="polite" role={error === undefined ? "status" : "alert"} className={error === undefined ? "text-sm text-text-muted" : "rounded-lg border border-border bg-error-bg p-4 text-sm"}>
-      {busy ? "Consultando el directorio…" : error === undefined ? notice : messages[error]}
+      {busy ? busyOperation === "validate" ? "Validando la dirección para esta sucursal…" : busyOperation === "address" ? "Guardando la dirección…" : "Consultando el directorio…" : error === undefined ? notice : messages[error]}
       {pending !== undefined && <button className={`${buttonClass} mt-3 block`} disabled={busy} onClick={() => void run(pending.operation, pending.command)}>Reintentar la misma operación</button>}
       {error === "conflict" && detail !== undefined && <button className={`${buttonClass} mt-3 block`} disabled={busy} onClick={() => read(detail.customer.customerId)}>Recargar ficha</button>}
     </div>
     <section className={panelClass} aria-labelledby="customer-search-title">
       <h2 id="customer-search-title" className="mb-3 font-heading text-lg font-semibold">Buscar cliente</h2>
       <form onSubmit={searchSubmit} className="flex flex-wrap items-end gap-3">
-        <label className="flex min-w-0 flex-col gap-1 text-sm">Buscar por<select name="mode" className={inputClass} disabled={locked}><option value="phone">Teléfono</option><option value="name">Nombre o alias</option><option value="address">Dirección o referencia</option></select></label>
-        <label className="flex min-w-0 flex-1 basis-48 flex-col gap-1 text-sm">Dato de búsqueda<input name="query" required maxLength={200} className={inputClass} disabled={locked} autoComplete="off" /></label>
+        <label className="flex min-w-0 flex-col gap-1 text-sm">Buscar por<select name="mode" className={inputClass} disabled={locked} value={searchMode} onChange={event => { setSearchMode(event.target.value as CustomerSearchModeV1); setActiveSuggestion(-1); setSuggestionsOpen(false); }}><option value="phone">Teléfono</option><option value="name">Nombre o alias</option><option value="address">Dirección o referencia</option></select></label>
+        <label className="relative flex min-w-0 flex-1 basis-48 flex-col gap-1 text-sm">Dato de búsqueda
+          <input ref={searchInputRef} name="query" required maxLength={200} className={inputClass} disabled={locked} autoComplete="off"
+            role="combobox" aria-autocomplete="list" aria-expanded={suggestionsOpen && suggestions.length > 0} aria-controls="customer-search-suggestions"
+            aria-activedescendant={suggestionsOpen && activeSuggestion >= 0 ? `customer-suggestion-${suggestions[activeSuggestion]?.id}` : undefined}
+            value={searchQuery} onChange={event => { setSearchQuery(event.target.value); setActiveSuggestion(-1); setSuggestionsOpen(true); }}
+            onFocus={() => setSuggestionsOpen(true)} onBlur={() => window.setTimeout(() => { if (document.activeElement !== searchInputRef.current) setSuggestionsOpen(false); }, 0)}
+            onKeyDown={searchKeyDown} />
+          {suggestionsOpen && suggestions.length > 0 && <ul id="customer-search-suggestions" role="listbox" aria-label="Sugerencias del resultado autorizado" className="absolute left-0 right-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg">
+            {suggestions.map((suggestion, index) => <li key={suggestion.id} role="presentation">
+              <button id={`customer-suggestion-${suggestion.id}`} type="button" role="option" aria-selected={activeSuggestion === index}
+                className={`min-h-11 w-full rounded-md px-3 py-2 text-left ${activeSuggestion === index ? "bg-bg" : "hover:bg-bg"}`}
+                onMouseDown={event => event.preventDefault()} onPointerMove={() => setActiveSuggestion(index)} onClick={() => acceptSuggestion(suggestion.value)}>
+                <span className="block font-semibold">{suggestion.value}</span><span className="block text-xs text-text-muted">De {suggestion.context}</span>
+              </button>
+            </li>)}
+          </ul>}
+          <span aria-live="polite" className="text-xs text-text-muted">{autocompleteLoading ? "Buscando sugerencias autorizadas…" : ""}</span>
+        </label>
         <button className={buttonClass} disabled={locked}>Buscar</button>
         <button type="button" className={buttonClass} disabled={locked} onClick={() => { setDetail(undefined); setCreating(true); setNotice(""); setError(undefined); }}>Alta rápida</button>
       </form>
@@ -93,14 +171,15 @@ export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNod
     }} />}
     {detail !== undefined && <section className={panelClass} aria-labelledby="customer-address-title">
       <h2 id="customer-address-title" className="font-heading text-lg font-semibold">Direcciones · {detail.customer.displayName}</h2>
-      <p className="mt-1 text-sm text-text-muted">Guarda datos incompletos durante la llamada. Validar es una acción separada para esta sucursal; cada edición elimina la validación anterior.</p>
+      <p className="mt-1 text-sm text-text-muted">Guarda datos incompletos durante la llamada. Validar registra que la sucursal revisó esta dirección; no geocodifica ni garantiza por sí solo la zona de reparto. Cada edición elimina la validación anterior.</p>
       {detail.addressesTruncated && <p role="status" className="mt-2 text-sm">Se muestran las primeras 20 direcciones. Hay más direcciones en la ficha.</p>}
       <div className="mt-4 flex flex-col gap-4">{detail.addresses.map(address => <AddressForm key={`${address.addressId}/${address.version}`} item={address} disabled={locked}
         onSave={fields => void run("address", { ...base(detail.customer.customerId, address.version), addressId: address.addressId, address: fields })}
         onValidate={() => void run("validate", { ...base(detail.customer.customerId, address.version), addressId: address.addressId })} />)}
-        <AddressForm key={`new/${detail.customer.customerId}/${detail.addresses.length}`} disabled={locked}
-          onSave={fields => void run("address", { ...base(detail.customer.customerId, 0), addressId: crypto.randomUUID(), address: fields })} />
+        {addingAddress && <AddressForm key={`new/${detail.customer.customerId}/${detail.addresses.length}`} disabled={locked} onCancel={() => setAddingAddress(false)}
+          onSave={fields => void run("address", { ...base(detail.customer.customerId, 0), addressId: crypto.randomUUID(), address: fields })} />}
       </div>
+      {!addingAddress && <button type="button" className={`${buttonClass} mt-4`} disabled={locked} onClick={() => setAddingAddress(true)}>+ Nueva dirección</button>}
     </section>}
   </div>;
 }
@@ -126,25 +205,33 @@ function ProfileForm({ customer, disabled, onSave }: {
   </section>;
 }
 
-const addressLabels = { label: "Etiqueta", streetLine: "Calle y número", unit: "Interior", neighborhood: "Colonia", locality: "Localidad", region: "Estado o región", countryCode: "País (código de dos letras)", postalCode: "Código postal", references: "Referencias", instructions: "Instrucciones de entrega" } as const;
-function AddressForm({ item, disabled, onSave, onValidate }: {
+const primaryAddressLabels = { label: "Etiqueta", streetLine: "Calle y número", unit: "Interior", neighborhood: "Colonia", references: "Referencias" } as const;
+const additionalAddressLabels = { locality: "Localidad", region: "Estado o región", countryCode: "País (código de dos letras)", postalCode: "Código postal" } as const;
+const addressLabels = { ...primaryAddressLabels, ...additionalAddressLabels } as const;
+function AddressForm({ item, disabled, onSave, onValidate, onCancel }: {
   readonly item?: CustomerDirectoryDetailAddressV1; readonly disabled: boolean;
-  readonly onSave: (fields: CustomerAddressFieldsV1) => void; readonly onValidate?: () => void;
+  readonly onSave: (fields: CustomerAddressFieldsV1) => void; readonly onValidate?: () => void; readonly onCancel?: () => void;
 }): ReactNode {
   const [dirty, setDirty] = useState(false);
   return <form className="rounded-lg border border-border p-3" onChange={() => setDirty(true)} onSubmit={event => {
     event.preventDefault(); const data = new FormData(event.currentTarget);
     const fields = Object.fromEntries(Object.keys(addressLabels).map(key => { const value = String(data.get(key) ?? "").trim(); return [key, value === "" ? null : key === "countryCode" ? value.toUpperCase() : value]; }));
-    onSave({ ...fields, coordinates: item?.address.coordinates ?? null } as unknown as CustomerAddressFieldsV1);
+    onSave({ ...fields, instructions: item?.address.instructions ?? null, coordinates: item?.address.coordinates ?? null } as unknown as CustomerAddressFieldsV1);
   }}>
     <h3 className="mb-2 font-semibold">{item?.address.label ?? "Nueva dirección"}</h3>
     {item !== undefined && <p className="mb-3 text-sm text-text-muted">{dirty ? "Cambios sin guardar. Guarda antes de validar." : item.validatedForRequestedBranch ? "Validada para esta sucursal" : "Pendiente de validación para esta sucursal"}</p>}
     <fieldset disabled={disabled} className="grid min-w-0 gap-3 sm:grid-cols-2">
-      {Object.entries(addressLabels).map(([key, label]) => <label key={key} className={`flex min-w-0 flex-col gap-1 text-sm ${key === "references" || key === "instructions" ? "sm:col-span-2" : ""}`}>{label}
-        <input name={key} required={key === "label"} maxLength={key === "label" ? 40 : key === "countryCode" ? 2 : key === "references" || key === "instructions" ? 500 : 200} defaultValue={item?.address[key as keyof typeof addressLabels] ?? ""} autoComplete="off" className={inputClass} />
+      {Object.entries(primaryAddressLabels).map(([key, label]) => <label key={key} className={`flex min-w-0 flex-col gap-1 text-sm ${key === "references" ? "sm:col-span-2" : ""}`}>{label}
+        <input name={key} required={key === "label"} maxLength={key === "label" ? 40 : key === "references" ? 500 : 200} defaultValue={item?.address[key as keyof typeof primaryAddressLabels] ?? ""} autoComplete="off" className={inputClass} />
       </label>)}
+      <details className="sm:col-span-2"><summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold">Datos adicionales</summary>
+        <div className="grid min-w-0 gap-3 sm:grid-cols-2">{Object.entries(additionalAddressLabels).map(([key, label]) => <label key={key} className="flex min-w-0 flex-col gap-1 text-sm">{label}
+          <input name={key} maxLength={key === "countryCode" ? 2 : 200} defaultValue={item?.address[key as keyof typeof additionalAddressLabels] ?? ""} autoComplete="off" className={inputClass} />
+        </label>)}</div>
+      </details>
       <div className="flex flex-wrap gap-2 sm:col-span-2"><button className={buttonClass}>Guardar dirección</button>
-        {onValidate !== undefined && <button type="button" className={buttonClass} disabled={dirty || item?.validatedForRequestedBranch === true} onClick={onValidate}>Validar dirección para esta sucursal</button>}</div>
+        {onCancel !== undefined && <button type="button" className={buttonClass} onClick={onCancel}>Cancelar</button>}
+        {onValidate !== undefined && <button type="button" className={buttonClass} disabled={dirty || item?.validatedForRequestedBranch === true} onClick={onValidate}>{item?.validatedForRequestedBranch ? "Dirección validada" : "Validar para esta sucursal"}</button>}</div>
     </fieldset>
   </form>;
 }

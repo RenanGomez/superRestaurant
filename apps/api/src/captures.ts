@@ -2,12 +2,16 @@ import { types as nodeTypes } from "node:util";
 import { Inject, Injectable } from "@nestjs/common";
 import {
   parseCreateCaptureDraftCommandV1,
+  parseAutosaveCaptureDraftCommandV1,
   parseCaptureMutationResultV1,
   parseHoldCaptureDraftCommandV1,
   parseClaimCaptureDraftCommandV1,
   parseResumeCaptureDraftCommandV1,
   parseSetCaptureRecoveryPreferenceCommandV1,
   parseCaptureRecoveryPreferenceResultV1,
+  parseCaptureWorkTrayRequestV1,
+  parseCaptureWorkTrayResultV1,
+  parseCaptureWorkspaceRequestV1,
   parseSetCaptureCustomerCommandV1,
   parseSetCaptureFulfillmentCommandV1,
   type SetCaptureCustomerCommandV1,
@@ -19,15 +23,20 @@ import {
   type ClaimCaptureDraftCommandV1,
   type ResumeCaptureDraftCommandV1,
   type CreateCaptureDraftCommandV1,
+  type AutosaveCaptureDraftCommandV1,
   type CaptureMutationResultV1,
+  type CaptureWorkTrayRequestV1,
+  type CaptureWorkTrayResultV1,
+  type CaptureWorkspaceRequestV1,
+  type CaptureWorkspaceV1,
 } from "@super-restaurant/shared-types";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
-import { decodeCaptureRecord } from "./persistence/capture-persistence-codec.js";
+import { decodeCaptureRecord, decodeCaptureWorkspace } from "./persistence/capture-persistence-codec.js";
 
-export type CaptureApplicationErrorCode = "request" | "authorization" | "conflict" | "unavailable";
+export type CaptureApplicationErrorCode = "request" | "authorization" | "conflict" | "missing" | "unavailable";
 export class CaptureApplicationError extends Error {
   public constructor(public readonly code: CaptureApplicationErrorCode) {
     super(`CAPTURE_${code.toUpperCase()}`);
@@ -36,6 +45,8 @@ export class CaptureApplicationError extends Error {
 }
 export interface CaptureCreationPort {
   createDraft(actorId: string, command: CreateCaptureDraftCommandV1): Promise<unknown>;
+  autosaveDraft?(actorId: string, command: AutosaveCaptureDraftCommandV1): Promise<unknown>;
+  readWorkspace?(actorId: string, request: CaptureWorkspaceRequestV1): Promise<unknown>;
 }
 export const CAPTURE_CREATION_PORT = Symbol("CAPTURE_CREATION_PORT");
 export type CaptureAttentionOperation = "capture.held" | "capture.claimed" | "capture.resumed";
@@ -53,10 +64,12 @@ export interface CaptureFulfillmentPort {
   setFulfillment(actorId: string, command: SetCaptureFulfillmentCommandV1): Promise<unknown>;
 }
 export const CAPTURE_FULFILLMENT_PORT = Symbol("CAPTURE_FULFILLMENT_PORT");
+export interface CaptureTrayPort { list(actorId: string, request: CaptureWorkTrayRequestV1): Promise<unknown>; }
+export const CAPTURE_TRAY_PORT = Symbol("CAPTURE_TRAY_PORT");
 const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 @Injectable()
-export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAttentionPort, CaptureCustomerPort, CaptureFulfillmentPort {
+export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAttentionPort, CaptureCustomerPort, CaptureFulfillmentPort, CaptureTrayPort {
   public constructor(@Inject(DATABASE_CLIENT) private readonly database: DatabaseClientPort) {}
 
   public async createDraft(actorId: string, input: CreateCaptureDraftCommandV1): Promise<unknown> {
@@ -65,6 +78,32 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     const response = await this.database.query(
       "select app_private.create_capture_draft($1::uuid, $2::jsonb) as result",
       [actorId, JSON.stringify(command)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async autosaveDraft(actorId: string, input: AutosaveCaptureDraftCommandV1): Promise<unknown> {
+    const command = parseAutosaveCommand(input);
+    if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.autosave_capture_draft($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(command)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async readWorkspace(actorId: string, input: CaptureWorkspaceRequestV1): Promise<unknown> {
+    const request = parseCaptureWorkspaceRequestV1(input);
+    if (!canonicalUuid.test(actorId) || request === undefined) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.read_capture_workspace($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(request)],
     );
     if (response.rows.length !== 1) throw unavailable();
     const row = exactRecord(response.rows[0], ["result"]);
@@ -109,6 +148,43 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     const row = exactRecord(response.rows[0], ["result"]);
     if (row === undefined) throw unavailable();
     return row.result;
+  }
+
+  public async list(actorId: string, input: CaptureWorkTrayRequestV1): Promise<unknown> {
+    const request = parseCaptureWorkTrayRequestV1(input);
+    if (!canonicalUuid.test(actorId) || request === undefined) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.list_capture_work_tray($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+}
+
+@Injectable()
+export class CaptureTrayService {
+  public constructor(
+    @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
+    @Inject(CAPTURE_TRAY_PORT) private readonly tray: CaptureTrayPort,
+  ) {}
+  public async list(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkTrayResultV1> {
+    const request = parseCaptureWorkTrayRequestV1(input);
+    if (request === undefined) throw new CaptureApplicationError("request");
+    let actorId: string;
+    try { actorId = (await this.authorization.authorizeBranch(principal, request.scope, "captures.read")).principal.actorId; }
+    catch { throw new CaptureApplicationError("authorization"); }
+    let raw: unknown;
+    try { raw = await this.tray.list(actorId, request); } catch { throw unavailable(); }
+    const statusOnly = exactRecord(raw, ["status"]);
+    if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
+    if (statusOnly !== undefined) throw statusOnly.status === "rejected" ? new CaptureApplicationError("request") : unavailable();
+    const result = parseCaptureWorkTrayResultV1(raw);
+    if (result === undefined || result.items.length > request.limit || result.items.some((item) => item.status !== "draft"
+      || item.scope.restaurantId !== request.scope.restaurantId || item.scope.branchId !== request.scope.branchId)) throw unavailable();
+    return result;
   }
 }
 
@@ -201,6 +277,51 @@ export class CaptureService {
       return result;
     } catch { throw unavailable(); }
   }
+
+  public async autosaveDraft(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureMutationResultV1> {
+    const command = parseAutosaveCommand(input);
+    let actorId: string;
+    try { actorId = (await this.authorization.authorizeBranch(principal, command.scope, "captures.update")).principal.actorId; }
+    catch { throw new CaptureApplicationError("authorization"); }
+    if (this.creator.autosaveDraft === undefined) throw unavailable();
+    let raw: unknown;
+    try { raw = await this.creator.autosaveDraft(actorId, command); } catch { throw unavailable(); }
+    const { record, replayed } = parseOutcome(raw, command.scope);
+    if (record.detail.captureDraftId !== command.captureDraftId || record.detail.version !== command.expectedVersion + 1
+      || record.detail.status !== "draft" || record.detail.attentionStatus !== "claimed"
+      || record.detail.attentionLeaseId !== command.attentionLeaseId
+      || record.detail.sourceChannel !== command.sourceChannel
+      || record.detail.fulfillmentChannel !== command.fulfillmentChannel
+      || record.detail.customerSnapshotRef !== command.customerSnapshotRef
+      || record.detail.fulfillmentSnapshotRef !== command.fulfillmentSnapshotRef) throw unavailable();
+    const result = parseCaptureMutationResultV1({ schemaVersion: 1, detail: record.detail, replayed });
+    if (result === undefined) throw unavailable();
+    return result;
+  }
+
+  public async readWorkspace(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV1> {
+    const request = parseCaptureWorkspaceRequestV1(input);
+    if (request === undefined) throw new CaptureApplicationError("request");
+    let actorId: string;
+    try {
+      const authorized = await this.authorization.authorizeBranch(principal, request.scope, "captures.read");
+      await this.authorization.authorizeBranch(principal, request.scope, "customers.read");
+      actorId = authorized.principal.actorId;
+    } catch { throw new CaptureApplicationError("authorization"); }
+    if (this.creator.readWorkspace === undefined) throw unavailable();
+    let raw: unknown;
+    try { raw = await this.creator.readWorkspace(actorId, request); } catch { throw unavailable(); }
+    const statusOnly = exactRecord(raw, ["status"]);
+    if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
+    if (statusOnly?.status === "missing") throw new CaptureApplicationError("missing");
+    if (statusOnly?.status === "rejected") throw new CaptureApplicationError("request");
+    if (statusOnly !== undefined) throw unavailable();
+    try {
+      const workspace = decodeCaptureWorkspace(raw, request.scope);
+      if (workspace.detail.captureDraftId !== request.captureDraftId) throw unavailable();
+      return workspace;
+    } catch { throw unavailable(); }
+  }
 }
 
 @Injectable()
@@ -272,6 +393,14 @@ function parseOutcome(raw: unknown, scope: BranchScope) {
 function parseStorageCommand(input: unknown): CreateCaptureDraftCommandV1 {
   const command = parseCreateCaptureDraftCommandV1(input);
   if (command === undefined) throw new CaptureApplicationError("request");
+  return command;
+}
+function parseAutosaveCommand(input: unknown): AutosaveCaptureDraftCommandV1 {
+  const command = parseAutosaveCaptureDraftCommandV1(input);
+  if (command === undefined || command.expectedVersion >= Number.MAX_SAFE_INTEGER
+    || (command.fulfillmentSnapshotRef !== null && command.fulfillmentChannel !== "delivery")) {
+    throw new CaptureApplicationError("request");
+  }
   return command;
 }
 function parseCustomerCommand(input: unknown): SetCaptureCustomerCommandV1 {

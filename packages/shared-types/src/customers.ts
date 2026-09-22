@@ -209,7 +209,7 @@ export function parseSearchCustomerDirectoryQueryV1(value: unknown): SearchCusto
     ? fields.mode as CustomerSearchModeV1 : undefined;
   if (fields === undefined || fields.schemaVersion !== 1 || scope === undefined || mode === undefined
     || !integer(fields.limit, 1, 20) || !text(fields.query, mode === "address" ? 200 : 120)
-    || (mode === "phone" && normalizePhone(fields.query) === undefined)) return undefined;
+    || (mode === "phone" && normalizeSearchPhone(fields.query) === undefined)) return undefined;
   const cursor = fields.cursor === null ? null : parseSearchCursor(fields.cursor);
   return cursor === undefined ? undefined : Object.freeze({ schemaVersion: 1, scope, mode, query: fields.query, limit: fields.limit, cursor });
 }
@@ -420,6 +420,12 @@ function normalizePhone(value: unknown): string | undefined {
   if (!text(value, 80) || !/^[+0-9 ().-]+$/u.test(value)) return undefined;
   const normalized = value.replace(/[ ().-]/gu, "");
   return /^\+?[0-9]{1,20}$/u.test(normalized) ? normalized : undefined;
+}
+function normalizeSearchPhone(value: unknown): string | undefined {
+  const normalized = normalizePhone(value);
+  if (normalized === undefined) return undefined;
+  const digits = normalized.startsWith("+") ? normalized.slice(1) : normalized;
+  return digits.length >= 4 ? normalized : undefined;
 }
 function uuid(value: unknown): string | undefined {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value) ? value.toLowerCase() : undefined;

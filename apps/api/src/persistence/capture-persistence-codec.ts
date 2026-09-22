@@ -3,9 +3,11 @@ import {
   parseBranchScope,
   parseCaptureDraftDetailV1,
   parseCaptureRecoveryPolicyV1,
+  parseCaptureWorkspaceV1,
   type BranchScope,
   type CaptureDraftDetailV1,
   type CaptureRecoveryPolicyV1,
+  type CaptureWorkspaceV1,
 } from "@super-restaurant/shared-types";
 
 export interface PersistedCaptureRecordV1 {
@@ -36,6 +38,14 @@ export function decodeCaptureRecord(value: unknown, authorizedScope: BranchScope
 /** Detached, deeply immutable JSON-compatible storage facts, never live client objects. */
 export function encodeCaptureRecord(value: PersistedCaptureRecordV1, authorizedScope: BranchScope): PersistedCaptureRecordV1 {
   return decodeCaptureRecord(value, authorizedScope);
+}
+
+export function decodeCaptureWorkspace(value: unknown, authorizedScope: BranchScope): CaptureWorkspaceV1 {
+  const scope = parseBranchScope(authorizedScope);
+  const workspace = parseCaptureWorkspaceV1(value);
+  if (scope === undefined || workspace === undefined || workspace.detail.scope.restaurantId !== scope.restaurantId
+    || workspace.detail.scope.branchId !== scope.branchId) throw rejected();
+  return workspace;
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
