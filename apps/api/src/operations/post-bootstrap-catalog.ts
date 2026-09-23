@@ -130,3 +130,24 @@ export function buildCaptureDeliveryOrderCatalogAudit(
     .replace("where conrelid = target and convalidated) <> 21", "where conrelid = target and convalidated) <> 22");
   return validateCatalogAuditSql(`${migrated}\n${deliveryOrderSupplementSql}`);
 }
+
+export function buildCustomerOrderHistoryCatalogAudit(
+  baseSql: string,
+  captureSupplementSql: string,
+  directorySupplementSql: string,
+  deliveryOrderSupplementSql: string,
+  historySupplementSql: string,
+): string {
+  const base = buildCaptureDeliveryOrderCatalogAudit(
+    baseSql,
+    captureSupplementSql,
+    directorySupplementSql,
+    deliveryOrderSupplementSql,
+  );
+  const tail = "pg_catalog.to_regprocedure('app_private.confirm_capture_draft(uuid,jsonb,jsonb,jsonb)')";
+  const migrated = base.replaceAll(tail,
+    `${tail},\n    pg_catalog.to_regprocedure('app_private.list_customer_recent_orders(uuid,jsonb)')`)
+    .replace(") <> 53", ") <> 54")
+    .replace(") <> 50", ") <> 51");
+  return validateCatalogAuditSql(`${migrated}\n${historySupplementSql}`);
+}

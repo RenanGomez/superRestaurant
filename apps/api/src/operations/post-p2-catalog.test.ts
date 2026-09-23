@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { extractMigrationBody, validateCatalogAuditSql } from "./schema-verification.js";
-import { buildCaptureCatalogAudit, buildCaptureContinuityCatalogAudit, buildCaptureCustomerCatalogAudit, buildCaptureDeliveryOrderCatalogAudit, buildCustomerDirectoryCatalogAudit, buildPostBootstrapCatalogAudit, postBootstrapSummary } from "./post-bootstrap-catalog.js";
+import { buildCaptureCatalogAudit, buildCaptureContinuityCatalogAudit, buildCaptureCustomerCatalogAudit, buildCaptureDeliveryOrderCatalogAudit, buildCustomerDirectoryCatalogAudit, buildCustomerOrderHistoryCatalogAudit, buildPostBootstrapCatalogAudit, postBootstrapSummary } from "./post-bootstrap-catalog.js";
 
 const audit = readFileSync(
   new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url),
@@ -388,6 +388,12 @@ test("Capture confirmation and Order fulfillment freeze are one server-only tran
 
 test("Customer recent Order history is bounded, tenant-scoped and server-only", () => {
   const sql = readFileSync(new URL("../../../../supabase/migrations/20260923000100_customer_recent_order_history.sql", import.meta.url), "utf8");
+  const catalog = readFileSync(new URL("../../../../supabase/tests/customer_order_history_catalog.sql", import.meta.url), "utf8");
+  const invariants = readFileSync(new URL("../../../../supabase/tests/customer_order_history_invariants.sql", import.meta.url), "utf8");
+  const base = readFileSync(new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url), "utf8");
+  const capture = readFileSync(new URL("../../../../supabase/tests/capture_drafts_catalog.sql", import.meta.url), "utf8");
+  const directory = readFileSync(new URL("../../../../supabase/tests/customer_directory_catalog.sql", import.meta.url), "utf8");
+  const deliveryOrder = readFileSync(new URL("../../../../supabase/tests/capture_delivery_order_catalog.sql", import.meta.url), "utf8");
   assert.doesNotThrow(() => extractMigrationBody(sql));
   assert.match(sql, /create index order_fulfillment_customer_history_idx/u);
   assert.match(sql, /create function app_private\.list_customer_recent_orders\(/u);
@@ -402,6 +408,24 @@ test("Customer recent Order history is bounded, tenant-scoped and server-only", 
   assert.match(sql, /grant execute on function app_private\.list_customer_recent_orders\(uuid,jsonb\) to app_api/u);
   assert.doesNotMatch(sql, /grant (?:select|insert|update|delete|all) on app\./u);
   assert.doesNotMatch(sql, /\b(?:insert into|update|delete from|truncate)\b/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(catalog));
+  assert.doesNotThrow(() => extractMigrationBody(invariants));
+  assert.match(catalog, /CUSTOMER_ORDER_HISTORY_GRANTS_REJECTED/u);
+  assert.match(catalog, /order_id DESC/u);
+  assert.match(invariants, /CUSTOMER_ORDER_HISTORY_ORDER_OR_LIMIT_REJECTED/u);
+  assert.match(invariants, /CUSTOMER_ORDER_HISTORY_SCOPE_LEAKED/u);
+  assert.match(invariants, /CUSTOMER_ORDER_HISTORY_ROLE_LEAKED/u);
+  const audit = buildCustomerOrderHistoryCatalogAudit(base, capture, directory, deliveryOrder, catalog);
+  assert.equal(audit.split("pg_catalog.to_regprocedure('app_private.list_customer_recent_orders(uuid,jsonb)')").length - 1, 2);
+  assert.match(audit, /\) <> 54/u);
+  assert.match(audit, /\) <> 51/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(audit));
+  const historyRunner = readFileSync(new URL("../../src/operations/run-customer-order-history-schema-verification.ts", import.meta.url), "utf8");
+  assert.match(historyRunner, /20260922000100_capture_delivery_instructions\.sql/u);
+  assert.match(historyRunner, /20260922000200_confirm_capture_order\.sql/u);
+  assert.match(historyRunner, /20260923000100_customer_recent_order_history\.sql/u);
+  assert.match(historyRunner, /customer_order_history_invariants\.sql/u);
+  assert.match(apiPackage, /"verify:customer-order-history-schema:rollback"/u);
 });
 
 test("post-P2 state runner uses the pinned profile for both stable lifecycle states", () => {
