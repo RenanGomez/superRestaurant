@@ -2,10 +2,10 @@ import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException,
   Header, HttpCode, Inject, NotFoundException, Post, Req, ServiceUnavailableException,
 } from "@nestjs/common";
-import type { CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkTrayResultV1 } from "@super-restaurant/shared-types";
+import type { CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
-import { CaptureApplicationError, CaptureAttentionService, CaptureCustomerService, CaptureFulfillmentService, CaptureService, CaptureTrayService } from "./captures.js";
+import { CaptureApplicationError, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureService, CaptureTrayService } from "./captures.js";
 
 @Controller("captures")
 export class CapturesController {
@@ -14,6 +14,8 @@ export class CapturesController {
     @Inject(CaptureAttentionService) private readonly attention: CaptureAttentionService,
     @Inject(CaptureCustomerService) private readonly customer: CaptureCustomerService,
     @Inject(CaptureFulfillmentService) private readonly fulfillment: CaptureFulfillmentService,
+    @Inject(CaptureDeliveryInstructionsService) private readonly deliveryInstructions: CaptureDeliveryInstructionsService,
+    @Inject(CaptureConfirmationService) private readonly confirmation: CaptureConfirmationService,
     @Inject(CaptureTrayService) private readonly tray: CaptureTrayService,
   ) {}
 
@@ -44,7 +46,7 @@ export class CapturesController {
   @Post("workspace")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
-  public async readWorkspace(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV1> {
+  public async readWorkspace(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.captures.readWorkspace(principal, body));
   }
@@ -69,6 +71,23 @@ export class CapturesController {
   public async setFulfillment(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.fulfillment.setFulfillment(principal, body));
+  }
+  @Post("delivery-instructions")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async setDeliveryInstructions(
+    @Req() request: unknown,
+    @Body() body: unknown,
+  ): Promise<SetCaptureDeliveryInstructionsResultV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.deliveryInstructions.setDeliveryInstructions(principal, body));
+  }
+  @Post("confirm")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async confirm(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.confirmation.confirm(principal, body));
   }
   @Post("claim")
   @HttpCode(200)

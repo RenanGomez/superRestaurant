@@ -30,8 +30,17 @@ export interface CustomerAddressFieldsV1 {
   readonly countryCode: string | null;
   readonly postalCode: string | null;
   readonly references: string | null;
+  /** @deprecated Historical compatibility field. It is not an active delivery instruction. */
   readonly instructions: string | null;
   readonly coordinates: Readonly<{ latitudeE6: number; longitudeE6: number }> | null;
+}
+
+/**
+ * D4 read model. New consumers see the inherited Address text under an
+ * explicitly historical name; active delivery instructions live on Capture.
+ */
+export interface CustomerAddressFieldsV2 extends Omit<CustomerAddressFieldsV1, "instructions"> {
+  readonly legacyAddressInstructions: string | null;
 }
 /** Saving never carries forward address validation; incomplete drafts are allowed. */
 export interface SaveCustomerAddressCommandV1 extends CustomerCommandInputV1 {
@@ -150,6 +159,24 @@ export interface CustomerDirectoryDetailV1 {
 
 const commonKeys = ["schemaVersion", "scope", "customerId", "expectedVersion", "eventId", "deviceId", "idempotencyKey", "occurredAt"] as const;
 const addressKeys = ["label", "streetLine", "unit", "neighborhood", "locality", "region", "countryCode", "postalCode", "references", "instructions", "coordinates"] as const;
+const addressV2Keys = ["label", "streetLine", "unit", "neighborhood", "locality", "region", "countryCode", "postalCode", "references", "legacyAddressInstructions", "coordinates"] as const;
+
+export function parseCustomerAddressFieldsV2(value: unknown): CustomerAddressFieldsV2 | undefined {
+  const fields = record(value, addressV2Keys);
+  if (fields === undefined || !text(fields.label, 40)) return undefined;
+  for (const key of ["streetLine", "unit", "neighborhood", "locality", "region", "postalCode", "references", "legacyAddressInstructions"] as const) {
+    if (fields[key] !== null && !text(fields[key], key === "references" || key === "legacyAddressInstructions" ? 500 : 200)) return undefined;
+  }
+  if (fields.countryCode !== null && (typeof fields.countryCode !== "string" || !/^[A-Z]{2}$/u.test(fields.countryCode))) return undefined;
+  let coordinates: CustomerAddressFieldsV2["coordinates"] = null;
+  if (fields.coordinates !== null) {
+    const point = record(fields.coordinates, ["latitudeE6", "longitudeE6"]);
+    if (point === undefined || !integer(point.latitudeE6, -90_000_000, 90_000_000)
+      || !integer(point.longitudeE6, -180_000_000, 180_000_000)) return undefined;
+    coordinates = Object.freeze({ latitudeE6: point.latitudeE6, longitudeE6: point.longitudeE6 });
+  }
+  return Object.freeze({ ...fields, coordinates }) as unknown as CustomerAddressFieldsV2;
+}
 
 export function parseSaveCustomerProfileCommandV1(value: unknown): SaveCustomerProfileCommandV1 | undefined {
   const fields = record(value, [...commonKeys, "displayName", "phones"]);

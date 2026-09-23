@@ -5,12 +5,13 @@ import type {
   BranchScope,
   CaptureCustomerSnapshotV1,
   CaptureDraftDetailV1,
+  CaptureDraftDetailV2,
   CaptureDraftSummaryV1,
   CaptureFulfillmentChannelV1,
   CaptureFulfillmentSnapshotV1,
   CaptureMutationResultV1,
   CaptureSourceChannelV1,
-  CaptureWorkspaceV1,
+  CaptureWorkspaceV2,
   CaptureWorkTrayResultV1,
   CustomerDirectoryDetailV1,
   CustomerDirectorySearchResultV1,
@@ -43,7 +44,7 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<keyof typeof messages>();
   const [pending, setPending] = useState<{ operation: CaptureWorkspaceOperation; command: unknown }>();
-  const [capture, setCapture] = useState<CaptureDraftDetailV1>();
+  const [capture, setCapture] = useState<CaptureDraftDetailV1 | CaptureDraftDetailV2>();
   const [tray, setTray] = useState<readonly CaptureDraftSummaryV1[]>([]);
   const [results, setResults] = useState<CustomerDirectorySearchResultV1>();
   const [customer, setCustomer] = useState<CustomerDirectoryDetailV1>();
@@ -53,6 +54,7 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
   const [selectedAddress, setSelectedAddress] = useState<string>();
   const [sourceChannel, setSourceChannel] = useState<CaptureSourceChannelV1>("phone");
   const [fulfillmentChannel, setFulfillmentChannel] = useState<CaptureFulfillmentChannelV1 | null>("delivery");
+  const [deliveryInstructions, setDeliveryInstructions] = useState("");
 
   async function run(operation: CaptureWorkspaceOperation, command: unknown): Promise<ActionReply | undefined> {
     if (busy) return undefined;
@@ -77,10 +79,13 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
     setPending(undefined);
     const value = reply.value;
     if ("items" in value) setTray((value as CaptureWorkTrayResultV1).items);
-    else if ("customerSnapshot" in value) applyWorkspace(value as CaptureWorkspaceV1);
+    else if ("customerSnapshot" in value) applyWorkspace(value as CaptureWorkspaceV2);
     else if ("replayed" in value) {
       const mutation = value as CaptureMutationResultV1;
       setCapture(mutation.detail);
+      if ("deliveryInstructions" in value) {
+        setDeliveryInstructions(typeof value.deliveryInstructions === "string" ? value.deliveryInstructions : "");
+      }
       setCustomerSnapshot(current => current?.snapshotRef === mutation.detail.customerSnapshotRef ? current : null);
       setFulfillmentSnapshot(current => current?.snapshotRef === mutation.detail.fulfillmentSnapshotRef ? current : null);
       if (mutation.detail.customerSnapshotRef === null) setSelectedContact(undefined);
@@ -92,7 +97,7 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
     return reply;
   }
 
-  function applyWorkspace(value: CaptureWorkspaceV1): void {
+  function applyWorkspace(value: CaptureWorkspaceV2): void {
     const hydrated = rehydrateCaptureWorkspace(value);
     if (hydrated === undefined) {
       setError("unavailable");
@@ -105,6 +110,7 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
     setSelectedAddress(hydrated.fulfillmentSnapshot?.addressId);
     setSourceChannel(hydrated.sourceChannel);
     setFulfillmentChannel(hydrated.fulfillmentChannel);
+    setDeliveryInstructions(hydrated.deliveryInstructions ?? "");
   }
 
   useEffect(() => { void (async () => {
@@ -131,7 +137,7 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
   }
 
   async function refreshWorkspace(captureDraftId: string): Promise<void> {
-    await run("workspace", { schemaVersion: 1, scope, captureDraftId });
+    await run("workspace", { schemaVersion: 2, scope, captureDraftId });
   }
 
   function recover(item: CaptureDraftSummaryV1): void {
@@ -159,7 +165,16 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
   function changeFulfillment(event: ChangeEvent<HTMLSelectElement>): void {
     const next = event.target.value === "" ? null : event.target.value as CaptureFulfillmentChannelV1;
     setFulfillmentChannel(next);
+    if (next !== "delivery") setDeliveryInstructions("");
     autosave(sourceChannel, next);
+  }
+
+  function saveDeliveryInstructions(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    if (capture === undefined || fulfillmentChannel !== "delivery") return;
+    const normalized = deliveryInstructions.trim();
+    const command = { ...base(), deliveryInstructions: normalized === "" ? null : normalized };
+    void run("deliveryInstructions", command);
   }
 
   function search(event: FormEvent<HTMLFormElement>): void {
@@ -198,7 +213,7 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
     if (pending === undefined) return;
     void (async () => {
       const reply = await run(pending.operation, pending.command);
-      if (reply?.ok && ["autosave", "claim", "customer", "fulfillment"].includes(pending.operation)) {
+      if (reply?.ok && ["autosave", "claim", "customer", "deliveryInstructions", "fulfillment"].includes(pending.operation)) {
         const target = typeof pending.command === "object" && pending.command !== null && "captureDraftId" in pending.command
           ? pending.command.captureDraftId : undefined;
         if (typeof target === "string") await refreshWorkspace(target);
@@ -210,6 +225,7 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
     setCapture(undefined); setResults(undefined); setCustomer(undefined); setCustomerSnapshot(null);
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
     setError(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
+    setDeliveryInstructions("");
   }
 
   const locked = busy || error === "denied" || error === "conflict";
@@ -247,6 +263,18 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
           <strong>{fulfillmentSnapshot.label}</strong><br />{[fulfillmentSnapshot.streetLine, fulfillmentSnapshot.unit,
             fulfillmentSnapshot.neighborhood, fulfillmentSnapshot.locality].filter(Boolean).join(", ")}</p>}
         <p className="mt-2 text-xs text-text-muted">Datos congelados al guardar esta captura.</p></section>}
+      {fulfillmentChannel === "delivery" && <section className={panel}>
+        <h2 className="font-heading text-lg font-semibold">Instrucciones para esta entrega</h2>
+        <p className="mt-1 text-sm text-text-muted">Se guardan en esta captura; nunca modifican la dirección del cliente ni se heredan automáticamente.</p>
+        <form className="mt-3 grid gap-3" onSubmit={saveDeliveryInstructions}>
+          <label className="grid gap-1 text-sm" htmlFor="capture-delivery-instructions">Indicaciones opcionales</label>
+          <textarea id="capture-delivery-instructions" maxLength={500} rows={3} className={`${input} min-h-24 resize-y`}
+            value={deliveryInstructions} onChange={(event) => setDeliveryInstructions(event.target.value)}
+            disabled={locked} placeholder="Ej. Tocar dos veces; no dejar con vigilancia" />
+          <div className="flex items-center justify-between gap-3"><span className="text-xs text-text-muted">{deliveryInstructions.length}/500</span>
+            <button className={button} disabled={locked}>Guardar instrucciones</button></div>
+        </form>
+      </section>}
       <section className={panel}><h2 className="font-heading text-lg font-semibold">1. Buscar cliente</h2>
         <form onSubmit={search} className="mt-3 flex flex-wrap gap-3"><select name="mode" className={input} disabled={locked}>
           <option value="phone">Teléfono</option><option value="name">Nombre</option><option value="address">Dirección</option></select>

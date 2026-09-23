@@ -1,6 +1,7 @@
 import type { BranchScope } from "./index.js";
 
 export const COMMERCIAL_CAPTURE_SCHEMA_VERSION = 1 as const;
+export const COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION = 2 as const;
 
 export const CAPTURE_SOURCE_CHANNELS = Object.freeze([
   "phone",
@@ -106,6 +107,19 @@ export interface ConfirmCaptureDraftCommandV1 extends CaptureVersionedMutationIn
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
 }
 
+/**
+ * Atomic Capture-to-Order confirmation. Channel is derived from Capture by the
+ * server; the client supplies only operational Order facts that Capture does
+ * not own.
+ */
+export interface ConfirmCaptureDraftCommandV2 extends Omit<ConfirmCaptureDraftCommandV1, "schemaVersion"> {
+  readonly currency: string;
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION;
+  readonly shiftId: string;
+  readonly tableId: string | null;
+  readonly timeZone: string;
+}
+
 export interface CloseCaptureNoSaleCommandV1 extends CaptureVersionedMutationInputV1 {
   readonly attentionLeaseId: string;
   readonly reason: string;
@@ -134,6 +148,12 @@ export interface CaptureDraftDetailV1 extends CaptureDraftSummaryV1 {
   readonly fulfillmentSnapshotRef: string | null;
 }
 
+/** Additive D4 detail; V1 remains the stable journal payload. */
+export interface CaptureDraftDetailV2 extends Omit<CaptureDraftDetailV1, "schemaVersion"> {
+  readonly deliveryInstructions: string | null;
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION;
+}
+
 export interface CaptureWorkTrayRequestV1 {
   readonly limit: number;
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
@@ -149,6 +169,10 @@ export interface CaptureWorkspaceRequestV1 {
   readonly captureDraftId: string;
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
   readonly scope: BranchScope;
+}
+
+export interface CaptureWorkspaceRequestV2 extends Omit<CaptureWorkspaceRequestV1, "schemaVersion"> {
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION;
 }
 
 export interface CaptureCustomerSnapshotV1 {
@@ -188,6 +212,11 @@ export interface CaptureWorkspaceV1 {
   readonly detail: CaptureDraftDetailV1;
   readonly fulfillmentSnapshot: CaptureFulfillmentSnapshotV1 | null;
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+}
+
+export interface CaptureWorkspaceV2 extends Omit<CaptureWorkspaceV1, "detail" | "schemaVersion"> {
+  readonly detail: CaptureDraftDetailV2;
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION;
 }
 
 export interface CaptureMutationResultV1 {
@@ -346,6 +375,39 @@ export function parseConfirmCaptureDraftCommandV1(value: unknown): ConfirmCaptur
     : Object.freeze({ ...common, attentionLeaseId, orderId, schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION });
 }
 
+export function parseConfirmCaptureDraftCommandV2(value: unknown): ConfirmCaptureDraftCommandV2 | undefined {
+  const record = exactRecord(value, [
+    ...VERSIONED_KEYS, "attentionLeaseId", "orderId", "shiftId", "tableId", "currency", "timeZone",
+  ]);
+  if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION) return undefined;
+  const common = parseMutationInput(record);
+  const captureDraftId = uuid(own(record, "captureDraftId"));
+  const expectedVersion = integer(own(record, "expectedVersion"), 1, Number.MAX_SAFE_INTEGER);
+  const attentionLeaseId = uuid(own(record, "attentionLeaseId"));
+  const orderId = uuid(own(record, "orderId"));
+  const shiftId = uuid(own(record, "shiftId"));
+  const tableId = nullableUuid(own(record, "tableId"));
+  const currency = boundedText(own(record, "currency"), 3, 3);
+  const timeZone = boundedText(own(record, "timeZone"), 1, 100);
+  if (common === undefined || captureDraftId === undefined || expectedVersion === undefined
+    || attentionLeaseId === undefined || orderId === undefined || shiftId === undefined || tableId === undefined
+    || currency === undefined || !/^[A-Z]{3}$/u.test(currency) || timeZone === undefined || !validTimeZone(timeZone)) {
+    return undefined;
+  }
+  return Object.freeze({
+    ...common,
+    attentionLeaseId,
+    captureDraftId,
+    currency,
+    expectedVersion,
+    orderId,
+    schemaVersion: COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION,
+    shiftId,
+    tableId,
+    timeZone,
+  });
+}
+
 export function parseCloseCaptureNoSaleCommandV1(value: unknown): CloseCaptureNoSaleCommandV1 | undefined {
   const record = exactRecord(value, [...VERSIONED_KEYS, "attentionLeaseId", "reason"]);
   const common = record === undefined ? undefined : parseVersionedMutationInput(record);
@@ -387,6 +449,15 @@ export function parseCaptureWorkspaceRequestV1(value: unknown): CaptureWorkspace
   return record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_SCHEMA_VERSION
     || scope === undefined || captureDraftId === undefined ? undefined
       : Object.freeze({ captureDraftId, schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION, scope });
+}
+
+export function parseCaptureWorkspaceRequestV2(value: unknown): CaptureWorkspaceRequestV2 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "captureDraftId"]);
+  const scope = record === undefined ? undefined : parseUuidScope(own(record, "scope"));
+  const captureDraftId = record === undefined ? undefined : uuid(own(record, "captureDraftId"));
+  return record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION
+    || scope === undefined || captureDraftId === undefined ? undefined
+      : Object.freeze({ captureDraftId, schemaVersion: COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION, scope });
 }
 
 export function parseCaptureCustomerSnapshotV1(value: unknown): CaptureCustomerSnapshotV1 | undefined {
@@ -456,6 +527,29 @@ export function parseCaptureWorkspaceV1(value: unknown): CaptureWorkspaceV1 | un
   return Object.freeze({ customerSnapshot, detail, fulfillmentSnapshot, schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION });
 }
 
+export function parseCaptureWorkspaceV2(value: unknown): CaptureWorkspaceV2 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "detail", "customerSnapshot", "fulfillmentSnapshot"]);
+  if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION) return undefined;
+  const detail = parseCaptureDraftDetailV2(own(record, "detail"));
+  const rawCustomer = own(record, "customerSnapshot");
+  const rawFulfillment = own(record, "fulfillmentSnapshot");
+  const customerSnapshot = rawCustomer === null ? null : parseCaptureCustomerSnapshotV1(rawCustomer);
+  const fulfillmentSnapshot = rawFulfillment === null ? null : parseCaptureFulfillmentSnapshotV1(rawFulfillment);
+  if (detail === undefined || customerSnapshot === undefined || fulfillmentSnapshot === undefined
+    || (detail.customerSnapshotRef === null) !== (customerSnapshot === null)
+    || (detail.fulfillmentSnapshotRef === null) !== (fulfillmentSnapshot === null)
+    || (customerSnapshot !== null && customerSnapshot.snapshotRef !== detail.customerSnapshotRef)
+    || (fulfillmentSnapshot !== null && (fulfillmentSnapshot.snapshotRef !== detail.fulfillmentSnapshotRef
+      || fulfillmentSnapshot.customerSnapshotRef !== detail.customerSnapshotRef
+      || fulfillmentSnapshot.customerId !== customerSnapshot?.customerId))) return undefined;
+  return Object.freeze({
+    customerSnapshot,
+    detail,
+    fulfillmentSnapshot,
+    schemaVersion: COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION,
+  });
+}
+
 export function parseCaptureDraftDetailV1(value: unknown): CaptureDraftDetailV1 | undefined {
   const record = exactRecord(value, [
     ...SUMMARY_KEYS, "attentionLeaseId", "attentionLeaseExpiresAt", "customerSnapshotRef", "fulfillmentSnapshotRef", "confirmedOrderId",
@@ -481,6 +575,40 @@ export function parseCaptureDraftDetailV1(value: unknown): CaptureDraftDetailV1 
     customerSnapshotRef,
     fulfillmentSnapshotRef,
   });
+}
+
+export function parseCaptureDraftDetailV2(value: unknown): CaptureDraftDetailV2 | undefined {
+  const record = exactRecord(value, [
+    ...SUMMARY_KEYS, "attentionLeaseId", "attentionLeaseExpiresAt", "customerSnapshotRef", "fulfillmentSnapshotRef", "confirmedOrderId",
+    "deliveryInstructions",
+  ]);
+  if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION) return undefined;
+  const detail = parseCaptureDraftDetailV1({
+    attentionLeaseExpiresAt: own(record, "attentionLeaseExpiresAt"),
+    attentionLeaseId: own(record, "attentionLeaseId"),
+    attentionStatus: own(record, "attentionStatus"),
+    captureDraftId: own(record, "captureDraftId"),
+    confirmedOrderId: own(record, "confirmedOrderId"),
+    customerSnapshotRef: own(record, "customerSnapshotRef"),
+    folio: own(record, "folio"),
+    fulfillmentChannel: own(record, "fulfillmentChannel"),
+    fulfillmentSnapshotRef: own(record, "fulfillmentSnapshotRef"),
+    ownerMembershipId: own(record, "ownerMembershipId"),
+    schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION,
+    scope: own(record, "scope"),
+    sourceChannel: own(record, "sourceChannel"),
+    status: own(record, "status"),
+    updatedAt: own(record, "updatedAt"),
+    version: own(record, "version"),
+  });
+  const deliveryInstructions = nullableBoundedText(own(record, "deliveryInstructions"), 1, 500);
+  return detail === undefined || deliveryInstructions === undefined
+    ? undefined
+    : Object.freeze({
+      ...detail,
+      deliveryInstructions,
+      schemaVersion: COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION,
+    });
 }
 
 export function parseCaptureMutationResultV1(value: unknown): CaptureMutationResultV1 | undefined {
@@ -664,6 +792,15 @@ function timestamp(value: unknown): string | undefined {
 
 function nullableTimestamp(value: unknown): string | null | undefined {
   return value === null ? null : timestamp(value);
+}
+
+function validTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 type PlainRecord = Readonly<Record<string, unknown>>;

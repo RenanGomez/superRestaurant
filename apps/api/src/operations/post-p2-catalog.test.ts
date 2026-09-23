@@ -315,6 +315,43 @@ test("capture continuity keeps snapshots server-owned and autosave CAS-bound to 
   assert.doesNotThrow(() => validateCatalogAuditSql(audit));
 });
 
+test("capture delivery instructions are Capture-owned, lease-bound and exposed through a compatible V2 read", () => {
+  const sql = readFileSync(new URL("../../../../supabase/migrations/20260922000100_capture_delivery_instructions.sql", import.meta.url), "utf8");
+  assert.match(sql, /add column delivery_instructions text/u);
+  assert.match(sql, /capture_drafts_delivery_instructions_valid/u);
+  assert.match(sql, /create function app_private\.set_capture_delivery_instructions\(p_actor_id uuid, p_command jsonb\)/u);
+  assert.match(sql, /current_capture\.attention_lease_id is distinct from lease/u);
+  assert.match(sql, /current_capture\.version<>expected/u);
+  assert.match(sql, /current_capture\.fulfillment_channel is distinct from 'delivery'/u);
+  assert.match(sql, /stored\.operation <> 'capture\.delivery_instructions_changed'/u);
+  assert.match(sql, /create trigger capture_drafts_clear_delivery_instructions_for_channel/u);
+  assert.match(sql, /create function app_private\.read_capture_workspace_v2/u);
+  assert.match(sql, /'detail',\(v1->'detail'\)\|\|pg_catalog\.jsonb_build_object\('schemaVersion',2,'deliveryInstructions',instructions\)/u);
+  assert.match(sql, /grant execute on function app_private\.set_capture_delivery_instructions\(uuid,jsonb\) to app_api/u);
+  assert.match(sql, /grant execute on function app_private\.read_capture_workspace_v2\(uuid,jsonb\) to app_api/u);
+  assert.doesNotMatch(sql, /grant (?:select|insert|update|delete|all) on app\.capture_drafts/u);
+  assert.doesNotMatch(sql, /customer_addresses[\s\S]{0,80}delivery_instructions/u);
+});
+
+test("Capture confirmation and Order fulfillment freeze are one server-only transaction", () => {
+  const sql = readFileSync(new URL("../../../../supabase/migrations/20260922000200_confirm_capture_order.sql", import.meta.url), "utf8");
+  assert.match(sql, /create table app\.order_fulfillment_snapshots/u);
+  assert.match(sql, /order_fulfillment_snapshots_capture_unique/u);
+  assert.match(sql, /order_fulfillment_instruction_history_idx/u);
+  assert.match(sql, /create function app_private\.confirm_capture_draft\(/u);
+  assert.match(sql, /select \* into current_capture[\s\S]*for update/u);
+  assert.match(sql, /current_capture\.version<>expected/u);
+  assert.match(sql, /current_capture\.attention_lease_id is distinct from lease/u);
+  assert.match(sql, /order_result:=app_private\.create_operational_order/u);
+  assert.match(sql, /insert into app\.order_fulfillment_snapshots/u);
+  assert.match(sql, /update app\.capture_drafts set status='confirmed'/u);
+  assert.match(sql, /insert into app\.capture_command_events/u);
+  assert.match(sql, /stored\.operation<>'capture\.confirmed'/u);
+  assert.match(sql, /grant execute on function app_private\.confirm_capture_draft\(uuid,jsonb,jsonb,jsonb\) to app_api/u);
+  assert.match(sql, /force row level security/u);
+  assert.doesNotMatch(sql, /grant (?:select|insert|update|delete|all) on app\.order_fulfillment_snapshots/u);
+});
+
 test("post-P2 state runner uses the pinned profile for both stable lifecycle states", () => {
   assert.match(runner, /auditprofile: "post_p2_v1"/u);
   assert.match(runner, /tenancy_memberships_post_p2\.sql/u);

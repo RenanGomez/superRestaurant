@@ -1,16 +1,19 @@
 import {
   parseAutosaveCaptureDraftCommandV1,
   parseCaptureMutationResultV1,
-  parseCaptureWorkspaceRequestV1,
-  parseCaptureWorkspaceV1,
+  parseCaptureWorkspaceRequestV2,
+  parseCaptureWorkspaceV2,
   parseCaptureWorkTrayRequestV1,
   parseCaptureWorkTrayResultV1,
   parseClaimCaptureDraftCommandV1,
+  parseConfirmCaptureDraftCommandV2,
   parseCreateCaptureDraftCommandV1,
   parseSetCaptureCustomerCommandV1,
   parseSetCaptureFulfillmentCommandV1,
+  parseSetCaptureDeliveryInstructionsCommandV1,
+  parseSetCaptureDeliveryInstructionsResultV1,
   type CaptureCustomerSnapshotV1,
-  type CaptureDraftDetailV1,
+  type CaptureDraftDetailV2,
   type AutosaveCaptureDraftCommandV1,
   type BranchScope,
   type CaptureFulfillmentChannelV1,
@@ -19,7 +22,7 @@ import {
 } from "@super-restaurant/shared-types";
 export type CaptureRequestResult<T> = { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable" };
-export type CaptureOperation = "autosave" | "create" | "claim" | "customer" | "fulfillment" | "tray" | "workspace";
+export type CaptureOperation = "autosave" | "confirm" | "create" | "claim" | "customer" | "deliveryInstructions" | "fulfillment" | "tray" | "workspace";
 export interface CaptureKeyValueStore {
   readonly getItem: (key: string) => string | null;
   readonly removeItem: (key: string) => void;
@@ -63,18 +66,22 @@ export function clearPendingCaptureAutosave(
   const current = readPendingCaptureAutosave(store, command.scope);
   if (current?.idempotencyKey === command.idempotencyKey) store.removeItem(pendingKey(command.scope));
 }
-const paths = { autosave: "/autosave", create: "", claim: "/claim", customer: "/customer", fulfillment: "/fulfillment",
+const paths = { autosave: "/autosave", confirm: "/confirm", create: "", claim: "/claim", customer: "/customer",
+  deliveryInstructions: "/delivery-instructions", fulfillment: "/fulfillment",
   tray: "/tray", workspace: "/workspace" } as const;
 const parsers = {
   autosave: parseAutosaveCaptureDraftCommandV1,
+  confirm: parseConfirmCaptureDraftCommandV2,
   create: parseCreateCaptureDraftCommandV1,
   claim: parseClaimCaptureDraftCommandV1,
   customer: parseSetCaptureCustomerCommandV1,
+  deliveryInstructions: parseSetCaptureDeliveryInstructionsCommandV1,
   fulfillment: parseSetCaptureFulfillmentCommandV1,
 } as const;
 type CaptureResponse = NonNullable<ReturnType<typeof parseCaptureMutationResultV1>>
   | NonNullable<ReturnType<typeof parseCaptureWorkTrayResultV1>>
-  | NonNullable<ReturnType<typeof parseCaptureWorkspaceV1>>;
+  | NonNullable<ReturnType<typeof parseCaptureWorkspaceV2>>
+  | NonNullable<ReturnType<typeof parseSetCaptureDeliveryInstructionsResultV1>>;
 export async function requestCapture(token: string, baseUrl: string, operation: CaptureOperation, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
   if (operation === "tray") return requestCaptureTray(token, baseUrl, input);
   if (operation === "workspace") return requestCaptureWorkspace(token, baseUrl, input);
@@ -86,7 +93,10 @@ export async function requestCapture(token: string, baseUrl: string, operation: 
     if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
       : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
         : response.status === 400 ? "invalid" : "unavailable" };
-    const value = parseCaptureMutationResultV1(await response.json());
+    const body = await response.json();
+    const value = operation === "deliveryInstructions"
+      ? parseSetCaptureDeliveryInstructionsResultV1(body)
+      : parseCaptureMutationResultV1(body);
     if (value === undefined || value.detail.scope.restaurantId !== command.scope.restaurantId
       || value.detail.scope.branchId !== command.scope.branchId || value.detail.captureDraftId !== command.captureDraftId
       || value.detail.version !== command.expectedVersion + 1) return { ok: false, error: "unavailable" };
@@ -96,7 +106,8 @@ export async function requestCapture(token: string, baseUrl: string, operation: 
 
 export interface RehydratedCaptureWorkspace {
   readonly customerSnapshot: CaptureCustomerSnapshotV1 | null;
-  readonly detail: CaptureDraftDetailV1;
+  readonly deliveryInstructions: string | null;
+  readonly detail: CaptureDraftDetailV2;
   readonly fulfillmentChannel: CaptureFulfillmentChannelV1 | null;
   readonly fulfillmentSnapshot: CaptureFulfillmentSnapshotV1 | null;
   readonly sourceChannel: CaptureSourceChannelV1;
@@ -104,9 +115,10 @@ export interface RehydratedCaptureWorkspace {
 
 /** Rehydrates only immutable snapshot facts returned for the Capture; it never accepts a live Customer record. */
 export function rehydrateCaptureWorkspace(value: unknown): RehydratedCaptureWorkspace | undefined {
-  const workspace = parseCaptureWorkspaceV1(value);
+  const workspace = parseCaptureWorkspaceV2(value);
   return workspace === undefined ? undefined : Object.freeze({
     customerSnapshot: workspace.customerSnapshot,
+    deliveryInstructions: workspace.detail.deliveryInstructions,
     detail: workspace.detail,
     fulfillmentChannel: workspace.detail.fulfillmentChannel,
     fulfillmentSnapshot: workspace.fulfillmentSnapshot,
@@ -133,7 +145,7 @@ async function requestCaptureTray(token: string, baseUrl: string, input: unknown
 }
 
 async function requestCaptureWorkspace(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
-  const command = parseCaptureWorkspaceRequestV1(input);
+  const command = parseCaptureWorkspaceRequestV2(input);
   if (command === undefined) return { ok: false, error: "invalid" };
   try {
     const response = await fetch(`${baseUrl}/api/v1/captures${paths.workspace}`, { method: "POST", cache: "no-store",
@@ -141,7 +153,7 @@ async function requestCaptureWorkspace(token: string, baseUrl: string, input: un
     if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
       : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
         : response.status === 400 ? "invalid" : "unavailable" };
-    const value = parseCaptureWorkspaceV1(await response.json());
+    const value = parseCaptureWorkspaceV2(await response.json());
     if (value === undefined || value.detail.scope.restaurantId !== command.scope.restaurantId
       || value.detail.scope.branchId !== command.scope.branchId || value.detail.captureDraftId !== command.captureDraftId) {
       return { ok: false, error: "unavailable" };

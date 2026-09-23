@@ -32,7 +32,7 @@ import {
   CustomerDirectoryQueryService, CustomerDirectoryService,
   PostgresCustomerDirectoryReader, PostgresCustomerDirectoryWriter,
 } from "./customer-directory.js";
-import { CAPTURE_ATTENTION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_TRAY_PORT, CaptureCustomerService, CaptureFulfillmentService, CaptureAttentionService, CaptureService, CaptureTrayService, PostgresCaptureCreator } from "./captures.js";
+import { CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_TRAY_PORT, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureAttentionService, CaptureService, CaptureTrayService, PostgresCaptureCreator } from "./captures.js";
 import { SessionController } from "./session.controller.js";
 import { DiningZonesController } from "./dining-zones.controller.js";
 import {
@@ -120,6 +120,10 @@ import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboarding
     CaptureCustomerService,
     { provide: CAPTURE_FULFILLMENT_PORT, useExisting: PostgresCaptureCreator },
     CaptureFulfillmentService,
+    { provide: CAPTURE_DELIVERY_INSTRUCTIONS_PORT, useExisting: PostgresCaptureCreator },
+    CaptureDeliveryInstructionsService,
+    { provide: CAPTURE_CONFIRMATION_PORT, useExisting: PostgresCaptureCreator },
+    CaptureConfirmationService,
     { provide: CAPTURE_TRAY_PORT, useExisting: PostgresCaptureCreator },
     CaptureTrayService,
     PostgresCustomerDirectoryWriter,

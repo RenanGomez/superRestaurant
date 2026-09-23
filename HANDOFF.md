@@ -1,5 +1,14 @@
 # HANDOFF
 
+## Corte local D4 2026-09-22 — instrucciones Capture y puente Order (IN_PROGRESS)
+
+- Estado: D4 continúa `IN_PROGRESS`. Se implementaron contratos V2 aditivos, comando `SetCaptureDeliveryInstructionsCommandV1`, endpoint/UI y el puente Nest/SQL candidato de confirmación atómica. No se aplicó ninguna migración nueva al proyecto remoto; la autorización previa cubría únicamente `20260920000200` y no se reutilizó.
+- Esquema candidato: `20260922000100_capture_delivery_instructions.sql` añade el valor activo a Capture, validación 1–500, trigger que lo limpia fuera de delivery, mutación con lease/CAS/idempotencia y Workspace V2. `20260922000200_confirm_capture_order.sql` añade el snapshot Order inmutable y una función que valida Capture, deriva `table/counter/takeout/delivery`, crea Order+turno, congela party/address/instrucciones y cierra Capture dentro de una sola sentencia.
+- Compatibilidad/seguridad: el journal y consumidores V1 permanecen intactos; Address V1 queda deprecado y Address V2 renombra el dato histórico a `legacyAddressInstructions`. Las tablas no otorgan CRUD a clientes; sólo `app_api` recibe execute sobre capacidades privadas. La confirmación revalida permisos `captures.update` y `orders.create`, versión, lease, turno y payload Order derivado.
+- Verificación: suites completas shared-types/API/web, lint, typecheck y builds de los tres alcances verdes; los contratos SQL estáticos pasan 19/19. CodeGraph quedó sincronizado y al día con 397 archivos, 6.951 nodos y 29.100 relaciones tras reconsultar los consumidores compartidos. El dry-run remoto no conectó (`LegacyProjectNotLinkedError`) y el host no tiene Docker/Podman, por lo que no existe todavía prueba PostgreSQL ejecutada de estas dos candidatas; no pasan a `REVIEW`.
+- Pendientes/riesgos: crear verificador rollback-only con invariantes y perfil de catálogo post-D4; implementar sugerencias del mismo Customer/Branch, últimos 180 días, máximo cinco y selección explícita; conectar la confirmación en UI sólo cuando turno y mesa/canal sean autoritativos; inspeccionar UI real; sólo después solicitar autorización separada para cualquier apply remoto. Preservar y excluir `apps/web/next-env.d.ts`.
+- Subagente: `/root/d4_shared_contract`, unidad acotada a contratos/parsers/tests shared-types, razonamiento alto por esquema compartido; el agente principal integró API, UI, SQL y documentación. Sin push, merge ni despliegue.
+
 ## Smoke Auth 2026-09-22 — continuidad Capture y D2/D3
 
 - Estado: continuidad Capture y directorio D2 pasan a `REVIEW`; D3 permanece `IN_PROGRESS` sólo hasta reinspeccionar visualmente el fix responsive con sesión autenticada. D4 sigue `IN_PROGRESS`. No se infiere `DONE` ni se confunde Capture con Order, entrega o cobro.
