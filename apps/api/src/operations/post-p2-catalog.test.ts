@@ -386,6 +386,24 @@ test("Capture confirmation and Order fulfillment freeze are one server-only tran
   assert.doesNotMatch(sql, /grant (?:select|insert|update|delete|all) on app\.order_fulfillment_snapshots/u);
 });
 
+test("Customer recent Order history is bounded, tenant-scoped and server-only", () => {
+  const sql = readFileSync(new URL("../../../../supabase/migrations/20260923000100_customer_recent_order_history.sql", import.meta.url), "utf8");
+  assert.doesNotThrow(() => extractMigrationBody(sql));
+  assert.match(sql, /create index order_fulfillment_customer_history_idx/u);
+  assert.match(sql, /create function app_private\.list_customer_recent_orders\(/u);
+  assert.match(sql, /security definer/u);
+  assert.match(sql, /set search_path = ''/u);
+  assert.match(sql, /requested_limit not between 1 and 20/u);
+  assert.match(sql, /g\.role_code in \('owner','admin','manager','supervisor','cashier','waiter'\)/u);
+  assert.match(sql, /frozen\.restaurant_id=restaurant and frozen\.branch_id=branch and frozen\.customer_id=customer/u);
+  assert.match(sql, /join app\.orders o on o\.restaurant_id=frozen\.restaurant_id and o\.branch_id=frozen\.branch_id/u);
+  assert.match(sql, /order by frozen\.confirmed_at desc,frozen\.order_id desc/u);
+  assert.match(sql, /limit requested_limit/u);
+  assert.match(sql, /grant execute on function app_private\.list_customer_recent_orders\(uuid,jsonb\) to app_api/u);
+  assert.doesNotMatch(sql, /grant (?:select|insert|update|delete|all) on app\./u);
+  assert.doesNotMatch(sql, /\b(?:insert into|update|delete from|truncate)\b/u);
+});
+
 test("post-P2 state runner uses the pinned profile for both stable lifecycle states", () => {
   assert.match(runner, /auditprofile: "post_p2_v1"/u);
   assert.match(runner, /tenancy_memberships_post_p2\.sql/u);

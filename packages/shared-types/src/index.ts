@@ -26,6 +26,7 @@ export * from "./orders.js";
 export * from "./payments.js";
 export * from "./commercial-capture.js";
 export * from "./delivery-instructions.js";
+export * from "./customer-order-history.js";
 
 export const MEMBERSHIP_ROLE_CODES = Object.freeze([
   "owner",

@@ -27,11 +27,17 @@ import { DATABASE_CLIENT, PostgresDatabaseClient, readDatabaseConfig } from "./d
 import { HealthController } from "./health.controller.js";
 import { CapturesController } from "./captures.controller.js";
 import { CustomerDirectoryController } from "./customer-directory.controller.js";
+import { CustomerOrderHistoryController } from "./customer-order-history.controller.js";
 import {
   CUSTOMER_DIRECTORY_READER_PORT, CUSTOMER_DIRECTORY_WRITER_PORT,
   CustomerDirectoryQueryService, CustomerDirectoryService,
   PostgresCustomerDirectoryReader, PostgresCustomerDirectoryWriter,
 } from "./customer-directory.js";
+import {
+  CUSTOMER_ORDER_HISTORY_PORT,
+  CustomerOrderHistoryService,
+  PostgresCustomerOrderHistory,
+} from "./customer-order-history.js";
 import { CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_TRAY_PORT, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureAttentionService, CaptureService, CaptureTrayService, PostgresCaptureCreator } from "./captures.js";
 import { SessionController } from "./session.controller.js";
 import { DiningZonesController } from "./dining-zones.controller.js";
@@ -78,6 +84,7 @@ import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboarding
     HealthController,
     CapturesController,
     CustomerDirectoryController,
+    CustomerOrderHistoryController,
     SessionController,
     BranchAccessController,
     BranchOperationalContextController,
@@ -132,6 +139,9 @@ import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboarding
     PostgresCustomerDirectoryReader,
     { provide: CUSTOMER_DIRECTORY_READER_PORT, useExisting: PostgresCustomerDirectoryReader },
     CustomerDirectoryQueryService,
+    PostgresCustomerOrderHistory,
+    { provide: CUSTOMER_ORDER_HISTORY_PORT, useExisting: PostgresCustomerOrderHistory },
+    CustomerOrderHistoryService,
     PostgresBranchOperationalContext,
     { provide: BRANCH_OPERATIONAL_CONTEXT_PORT, useExisting: PostgresBranchOperationalContext },
     PostgresDiningZoneCreator,
