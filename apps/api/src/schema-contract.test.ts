@@ -171,6 +171,18 @@ const protectedWebSmokeRunner = readFileSync(
   new URL("./operations/run-web-protected-smoke.js", import.meta.url),
   "utf8",
 ).toLowerCase();
+const protectedCaptureContinuitySmokeRunner = readFileSync(
+  new URL("./operations/run-capture-continuity-protected-smoke.js", import.meta.url),
+  "utf8",
+).toLowerCase();
+const protectedCaptureContinuitySmokeCoordinator = readFileSync(
+  new URL("./operations/capture-continuity-protected-smoke-coordinator.js", import.meta.url),
+  "utf8",
+).toLowerCase();
+const captureContinuitySmokeRecoveryRunner = readFileSync(
+  new URL("./operations/run-capture-continuity-smoke-recovery.js", import.meta.url),
+  "utf8",
+).toLowerCase();
 const protectedMenuWebSmokeRunner = readFileSync(
   new URL("./operations/run-menu-web-protected-smoke.js", import.meta.url),
   "utf8",
@@ -410,6 +422,23 @@ test("protected web smoke publishes a populated table layout before revocation",
   assert.ok(diningTablesBaseline >= 0);
   assert.ok(publishSelectionFixture > diningTablesBaseline);
   assert.ok(revokeFixture > publishSelectionFixture);
+});
+
+test("protected capture continuity smoke uses the current catalog and marked cleanup coordinator", () => {
+  assert.match(protectedCaptureContinuitySmokeRunner, /runtenancyverification/u);
+  assert.match(protectedCaptureContinuitySmokeRunner, /buildcapturecontinuitycatalogaudit/u);
+  assert.match(protectedCaptureContinuitySmokeRunner, /createcapturecontinuityprotectedsmokecoordinator/u);
+  assert.match(protectedCaptureContinuitySmokeRunner, /verifyoperationalorders:\s*true/u);
+  assert.match(
+    protectedCaptureContinuitySmokeCoordinator,
+    /where capture_draft_id=\$1::uuid[\s\S]+where customer_id=\$2::uuid/u,
+  );
+  assert.match(protectedCaptureContinuitySmokeCoordinator, /\[plan\.capturedraftid, plan\.customerid\]/u);
+  assert.match(apiPackage, /"verify:capture-continuity-protected-smoke:remote"/u);
+  assert.match(apiPackage, /run-capture-continuity-protected-smoke\.js/u);
+  assert.match(apiPackage, /"recover:capture-continuity-smoke:remote"/u);
+  assert.match(captureContinuitySmokeRecoveryRunner, /executecapturecontinuitysmokerecovery/u);
+  assert.match(captureContinuitySmokeRecoveryRunner, /readtenancyfixturerecoveryconfig/u);
 });
 
 test("protected menu web smoke publishes a populated catalog before revocation", () => {

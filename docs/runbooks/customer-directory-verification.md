@@ -89,3 +89,19 @@ El runner exige PostgreSQL 17 portable en `.cache/postgres-local/pgsql/bin`, loo
 El runner remoto `npm.cmd run verify:capture-customer-schema:rollback --prefix apps/api` usa la configuración `SCHEMA_VERIFICATION_*` habitual: destino exacto `zwbyiefqeujstyzysydn`, `ROLLBACK_ONLY`, TLS verify-full y CA aprobada. No imprime URL/secretos. Corridas de esta sesión fallaron en conexión antes de efectos: esta evidencia no sustituye una prueba remota exitosa. La nueva migración sigue pendiente. Con autorización de migraciones vigente, recuperar conexión, verificar rollback y usar staging exacto/dry-run de sólo `20260917000200` antes de aplicar/postcheck. No ejecutar push raíz ni reejecutar la versión administrativa 20260908000100 ausente del historial.
 
 No se añadieron controles Capture a la UI en S2.1. Las pruebas manuales de selección dentro de Capture se solicitarán cuando exista esa pantalla; `/app/customers` conserva el flujo ya revisado.
+
+## Smoke protegido de continuidad Capture
+
+`verify:capture-continuity-protected-smoke:remote` reutiliza el tenant Auth/RBAC 2×2 y la API Nest del arnés de tenancy. Antes de la pausa de navegador crea por HTTP, con el token manager temporal, un Customer marcado por `runId`, un teléfono, una Address completa/validada y un Capture `draft` con snapshots Customer/Address. Publica en `.capture-continuity-smoke-lease.tmp` sólo la credencial temporal, scope e identidades esperadas; nunca publica access token, URL PostgreSQL ni secretos administrativos.
+
+El navegador debe recuperar el mismo folio, comprobar los snapshots congelados, cambiar origen de Teléfono a WhatsApp manual, esperar la versión guardada, recargar y recuperar otra vez. Antes de aceptar el ack, revisar D2 en `/app/customers` y abrir/cancelar `+ Nueva dirección` con “Datos adicionales” colapsado en escritorio y 390×844. El ack exacto es `{ "phase": "capture_continuity", "runId": "<runId>" }`. Después del ack el runner exige journal continuo de seis operaciones (`created`, Customer, fulfillment, claim, autosave, claim), versión 6, ambos snapshots, `delivery`, origen `whatsapp_manual` y ausencia de Order.
+
+El cleanup normal valida ownership y borra dentro de una transacción, en este orden: `capture_command_events`, `capture_drafts`, fulfillment snapshots, party snapshots, `customer_command_events`, addresses, phones y Customer. Sólo después el arnés base elimina grants, memberships, branches, restaurants y usuarios Auth. El postcheck exige cero residuos.
+
+Si el proceso se interrumpe después de emitir `runId`, no repetir el smoke. Ejecutar el recovery específico con la misma confirmación fuerte del recovery de tenancy:
+
+```text
+npm.cmd run recover:capture-continuity-smoke:remote --prefix apps/api -- --run-id=<UUID> --confirm=DELETE_TENANCY_E2E_FIXTURES_FOR_RUN:<UUID>
+```
+
+Ese recovery toma el mismo advisory lock, acepta sólo prefijos legítimos del flujo (Customer, Address v1/v2, Capture versiones 1–6), rechaza actor/tenant ajeno, filas extra, journal no prefijo o Capture confirmado, elimina primero las ocho superficies de continuidad y delega después al recovery 2×2 existente. Al terminar, retirar únicamente los tres `.capture-continuity-smoke-*.tmp` si aún existen.
