@@ -271,6 +271,19 @@ export type {
   MenuProductSelectionContext,
   ValidatedMenuCatalog,
 } from "./menu.js";
+export {
+  REPEAT_ORDER_ISSUE_CODES,
+  RepeatOrderScopeMismatchError,
+  buildRepeatOrderPlan,
+} from "./order-repeat.js";
+export type {
+  RepeatOrderIssue,
+  RepeatOrderIssueCode,
+  RepeatOrderIssueSeverity,
+  RepeatOrderLinePlan,
+  RepeatOrderPlan,
+  RepeatOrderSelection,
+} from "./order-repeat.js";
 export { createCustomerProfile, normalizeCustomerPhone, snapshotCustomerParty, InvalidCustomerProfileError, CustomerScopeRejectedError } from "./customer.js";
 export type { CustomerProfile, CustomerProfileInput, CustomerPhone, CustomerPhoneInput, CustomerPartySnapshot } from "./customer.js";
 export { createCustomerAddress, validateCustomerAddress, snapshotCustomerFulfillment } from "./customer.js";

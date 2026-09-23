@@ -1,5 +1,15 @@
 # HANDOFF
 
+## Corte D5 2026-09-23 — reconciliación de pedido histórico (IN_PROGRESS)
+
+- Estado: se abrió D5 y permanece `IN_PROGRESS`. El primer corte implementa sólo el reconciliador puro Order histórica → plan contra catálogo vigente; no hay lector de historial, contrato HTTP, persistencia, mutación Capture/Order ni UI.
+- Invariantes: `buildRepeatOrderPlan` revalida la Order y el catálogo, exige mismo Restaurant/moneda, no reutiliza snapshots de precio ni descuentos históricos, no descarta líneas u opciones y no sustituye selecciones. Productos/categorías/grupos/opciones retirados o inactivos y reglas actuales incompatibles bloquean la línea; cambios de precio de producto/modificador son warnings y el nuevo snapshot se deriva exclusivamente del catálogo actual. El resultado queda profundamente congelado.
+- Archivos: `packages/domain/src/order-repeat.ts`, su prueba, barrel y script de suite; TODO/PROJECT_NOTES/HANDOFF. `apps/web/next-env.d.ts` sigue siendo un cambio ajeno preservado y excluido.
+- Verificación: suite completa de dominio verde, incluidas 6/6 regresiones D5; lint, typecheck, build y `git diff --check` verdes. CodeGraph sincronizado: 401 archivos, 7.023 nodos y 29.477 relaciones; `buildRepeatOrderPlan` sólo alcanza su archivo, prueba y barrel, sin consumidores productivos todavía.
+- Bloqueos paralelos: D3 no pudo reinspeccionarse porque la sesión IAB estaba cerrada y la ruta redirigió a login; no se introdujeron credenciales. D4 sigue pendiente de autorización separada para aplicar `20260922000100/00200`; no se reutilizó la autorización de continuidad ni se mutó la base remota.
+- Siguiente acción mínima: diseñar contrato compartido y lectura server-only de pedidos recientes por Customer/Restaurant/Branch, con límites y RBAC; después adaptar las líneas `ready` a un borrador Capture explícito. La UI debe mostrar bloqueos/warnings antes de crear una nueva orden.
+- Subagentes: ninguno. Razonamiento alto por snapshots monetarios, aislamiento y reconstrucción contra catálogo mutable.
+
 ## Continuación D4 2026-09-22 — historial, confirmación UI y PostgreSQL real (IN_PROGRESS)
 
 - Estado: D4 sigue `IN_PROGRESS`, ya no por brecha de implementación o PostgreSQL sino porque `20260922000100/00200` aún no están aplicadas persistentemente y la UI final requiere inspección autenticada después de ese apply. No se reutilizó la autorización limitada a `20260920000200`; no hubo apply, despliegue, push, cambios de credenciales ni Data API.
