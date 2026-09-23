@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
-import { parseAutosaveCaptureDraftCommandV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkTrayRequestV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1 } from "@super-restaurant/shared-types";
+import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkTrayRequestV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1 } from "@super-restaurant/shared-types";
 
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
@@ -346,7 +346,7 @@ test("capture delivery instructions stay lease-bound, idempotent and outside Add
   const calls: unknown[] = [];
   const service = new CaptureDeliveryInstructionsService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
-  }), { setDeliveryInstructions: async (actor, input) => {
+  }), { listDeliveryInstructionSuggestions: async () => ({ status: "missing" }), setDeliveryInstructions: async (actor, input) => {
     calls.push({ actor, input });
     return { status: "replayed", record: autosaveRecord, deliveryInstructions: "Portón lateral" };
   } });
@@ -357,7 +357,8 @@ test("capture delivery instructions stay lease-bound, idempotent and outside Add
   await assert.rejects(service.setDeliveryInstructions(principal, { ...deliveryCommand, instructions: "forged" }), code("request"));
   await assert.rejects(new CaptureDeliveryInstructionsService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["viewer"], scope: validCommand.scope }),
-  }), { setDeliveryInstructions: async () => { throw new Error("must not persist"); } })
+  }), { listDeliveryInstructionSuggestions: async () => { throw new Error("must not read"); },
+    setDeliveryInstructions: async () => { throw new Error("must not persist"); } })
     .setDeliveryInstructions(principal, deliveryCommand), code("authorization"));
 
   const adapter = new PostgresCaptureCreator({ query: async (sql, parameters) => {
@@ -380,6 +381,42 @@ test("capture delivery instructions stay lease-bound, idempotent and outside Add
     return { rows: [{ result: workspaceV2 }] };
   } });
   assert.deepEqual(await workspaceAdapter.readWorkspaceV2(principal.actorId, requestV2), workspaceV2);
+});
+
+test("capture delivery instruction suggestions are Capture-derived, Branch-scoped and opt-in", async () => {
+  const request = parseCaptureDeliveryInstructionSuggestionsRequestV1({
+    schemaVersion: 1, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId,
+  });
+  assert.ok(request);
+  const history = { schemaVersion: 1 as const, captureDraftId: validCommand.captureDraftId, items: [
+    { deliveryInstructions: "Portón lateral", lastUsedAt: "2026-09-22T12:00:00.000Z", usageCount: 2 },
+  ] };
+  const calls: unknown[] = [];
+  const service = new CaptureDeliveryInstructionsService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), {
+    setDeliveryInstructions: async () => { throw new Error("read must not mutate"); },
+    listDeliveryInstructionSuggestions: async (actorId, input) => {
+      calls.push({ actorId, input });
+      return history;
+    },
+  });
+  assert.deepEqual(await service.listSuggestions(principal, request), history);
+  assert.deepEqual(calls, [{ actorId: principal.actorId, input: request }]);
+  await assert.rejects(service.listSuggestions(principal, { ...request, customerId: validCommand.deviceId }), code("request"));
+  await assert.rejects(new CaptureDeliveryInstructionsService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["viewer"], scope: validCommand.scope }),
+  }), {
+    setDeliveryInstructions: async () => { throw new Error("must not mutate"); },
+    listDeliveryInstructionSuggestions: async () => { throw new Error("must not read"); },
+  }).listSuggestions(principal, request), code("authorization"));
+
+  const adapter = new PostgresCaptureCreator({ query: async (sql, parameters) => {
+    assert.equal(sql, "select app_private.list_capture_delivery_instruction_suggestions($1::uuid, $2::jsonb) as result");
+    assert.deepEqual(parameters, [principal.actorId, JSON.stringify(request)]);
+    return { rows: [{ result: history }] };
+  } });
+  assert.deepEqual(await adapter.listDeliveryInstructionSuggestions(principal.actorId, request), history);
 });
 
 test("capture continuity adapter parameterizes autosave and workspace reads", async () => {
@@ -505,7 +542,10 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
     CaptureTrayService,
     { provide: CAPTURE_CUSTOMER_PORT, useValue: { setCustomer: async () => customerOutcome } },
     { provide: CAPTURE_FULFILLMENT_PORT, useValue: { setFulfillment: async () => fulfillmentOutcome } },
-    { provide: CAPTURE_DELIVERY_INSTRUCTIONS_PORT, useValue: { setDeliveryInstructions: async () => ({
+    { provide: CAPTURE_DELIVERY_INSTRUCTIONS_PORT, useValue: {
+      listDeliveryInstructionSuggestions: async () => ({ schemaVersion: 1,
+        captureDraftId: validCommand.captureDraftId, items: [] }),
+      setDeliveryInstructions: async () => ({
       status: "applied", record: autosaveRecord, deliveryInstructions: "Portón lateral",
     }) } },
     { provide: CAPTURE_CONFIRMATION_PORT, useValue: { confirmDraft: async () => ({ status: "conflict" }) } },
@@ -582,6 +622,19 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
     assert.equal((await fetch(workspaceUrl, { method: "POST", body: JSON.stringify(workspaceRequest),
       headers: { authorization: "Bearer test-capture-access-token", "content-type": "application/json" } })).status, 403);
     workspaceOutcome = workspace;
+    const suggestionsUrl = `${url}/delivery-instruction-suggestions`;
+    const suggestionsRequest = { schemaVersion: 1, scope: validCommand.scope,
+      captureDraftId: validCommand.captureDraftId };
+    assert.equal((await fetch(suggestionsUrl, { method: "POST" })).status, 401);
+    assert.equal((await fetch(suggestionsUrl, { method: "POST",
+      body: JSON.stringify({ ...suggestionsRequest, customerId: validCommand.deviceId }),
+      headers: { authorization: "Bearer test-capture-access-token", "content-type": "application/json" } })).status, 400);
+    const suggestionsResponse = await fetch(suggestionsUrl, { method: "POST", body: JSON.stringify(suggestionsRequest),
+      headers: { authorization: "Bearer test-capture-access-token", "content-type": "application/json" } });
+    assert.equal(suggestionsResponse.status, 200);
+    assert.equal(suggestionsResponse.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await suggestionsResponse.json(), { schemaVersion: 1,
+      captureDraftId: validCommand.captureDraftId, items: [] });
     for (const route of ["hold", "claim", "resume"]) {
       attentionOutcome = { status: "applied", record: route === "hold" ? heldRecord : { ...record, detail: { ...record.detail, version: 2 } } };
       const body = route === "hold" ? holdCommand : mutationCommand;

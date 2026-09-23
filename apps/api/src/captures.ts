@@ -14,6 +14,8 @@ import {
   parseCaptureWorkTrayResultV1,
   parseCaptureWorkspaceRequestV1,
   parseCaptureWorkspaceRequestV2,
+  parseCaptureDeliveryInstructionSuggestionsRequestV1,
+  parseCaptureDeliveryInstructionSuggestionsV1,
   parseSetCaptureDeliveryInstructionsCommandV1,
   parseSetCaptureDeliveryInstructionsResultV1,
   parseConfirmCaptureDraftCommandV2,
@@ -36,6 +38,8 @@ import {
   type CaptureWorkspaceRequestV2,
   type CaptureWorkspaceV1,
   type CaptureWorkspaceV2,
+  type CaptureDeliveryInstructionSuggestionsRequestV1,
+  type CaptureDeliveryInstructionSuggestionsV1,
   type SetCaptureDeliveryInstructionsCommandV1,
   type SetCaptureDeliveryInstructionsResultV1,
   type ConfirmCaptureDraftCommandV2,
@@ -78,6 +82,10 @@ export interface CaptureFulfillmentPort {
 export const CAPTURE_FULFILLMENT_PORT = Symbol("CAPTURE_FULFILLMENT_PORT");
 export interface CaptureDeliveryInstructionsPort {
   setDeliveryInstructions(actorId: string, command: SetCaptureDeliveryInstructionsCommandV1): Promise<unknown>;
+  listDeliveryInstructionSuggestions(
+    actorId: string,
+    request: CaptureDeliveryInstructionSuggestionsRequestV1,
+  ): Promise<unknown>;
 }
 export const CAPTURE_DELIVERY_INSTRUCTIONS_PORT = Symbol("CAPTURE_DELIVERY_INSTRUCTIONS_PORT");
 export interface CaptureConfirmationPort {
@@ -189,6 +197,22 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     const response = await this.database.query(
       "select app_private.set_capture_delivery_instructions($1::uuid, $2::jsonb) as result",
       [actorId, JSON.stringify(command)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async listDeliveryInstructionSuggestions(
+    actorId: string,
+    input: CaptureDeliveryInstructionSuggestionsRequestV1,
+  ): Promise<unknown> {
+    const request = parseCaptureDeliveryInstructionSuggestionsRequestV1(input);
+    if (!canonicalUuid.test(actorId) || request === undefined) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.list_capture_delivery_instruction_suggestions($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(request)],
     );
     if (response.rows.length !== 1) throw unavailable();
     const row = exactRecord(response.rows[0], ["result"]);
@@ -315,6 +339,31 @@ export class CaptureDeliveryInstructionsService {
       || result.detail.status !== "draft" || result.detail.attentionStatus !== "claimed"
       || result.detail.attentionLeaseId !== command.attentionLeaseId
       || result.deliveryInstructions !== command.deliveryInstructions) throw unavailable();
+    return result;
+  }
+
+  public async listSuggestions(
+    principal: AuthenticatedPrincipal,
+    input: unknown,
+  ): Promise<CaptureDeliveryInstructionSuggestionsV1> {
+    const request = parseCaptureDeliveryInstructionSuggestionsRequestV1(input);
+    if (request === undefined) throw new CaptureApplicationError("request");
+    let actorId: string;
+    try {
+      const captureAuthorization = await this.authorization.authorizeBranch(principal, request.scope, "captures.read");
+      const customerAuthorization = await this.authorization.authorizeBranch(principal, request.scope, "customers.read");
+      if (captureAuthorization.principal.actorId !== customerAuthorization.principal.actorId) throw new Error("actor mismatch");
+      actorId = captureAuthorization.principal.actorId;
+    } catch { throw new CaptureApplicationError("authorization"); }
+    let raw: unknown;
+    try { raw = await this.persistence.listDeliveryInstructionSuggestions(actorId, request); } catch { throw unavailable(); }
+    const statusOnly = exactRecord(raw, ["status"]);
+    if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
+    if (statusOnly?.status === "missing") throw new CaptureApplicationError("missing");
+    if (statusOnly?.status === "rejected") throw new CaptureApplicationError("request");
+    if (statusOnly !== undefined) throw unavailable();
+    const result = parseCaptureDeliveryInstructionSuggestionsV1(raw);
+    if (result === undefined || result.captureDraftId !== request.captureDraftId) throw unavailable();
     return result;
   }
 }

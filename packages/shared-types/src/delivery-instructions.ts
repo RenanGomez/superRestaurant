@@ -12,6 +12,8 @@ import {
 
 export const DELIVERY_INSTRUCTIONS_SCHEMA_VERSION = 1 as const;
 export const DELIVERY_INSTRUCTIONS_MAX_LENGTH = 500 as const;
+export const DELIVERY_INSTRUCTION_SUGGESTION_LIMIT = 5 as const;
+export const DELIVERY_INSTRUCTION_SUGGESTION_WINDOW_DAYS = 180 as const;
 
 /**
  * Capture owns the current delivery instructions. The client may replace or
@@ -29,6 +31,29 @@ export interface SetCaptureDeliveryInstructionsResultV1 {
   readonly deliveryInstructions: string | null;
   readonly detail: CaptureDraftDetailV1;
   readonly replayed: boolean;
+  readonly schemaVersion: typeof DELIVERY_INSTRUCTIONS_SCHEMA_VERSION;
+}
+
+/**
+ * Reads history for the Customer already frozen on this Capture. The request
+ * never accepts a Customer id, so callers cannot use this endpoint as a
+ * cross-customer history lookup.
+ */
+export interface CaptureDeliveryInstructionSuggestionsRequestV1 {
+  readonly captureDraftId: string;
+  readonly schemaVersion: typeof DELIVERY_INSTRUCTIONS_SCHEMA_VERSION;
+  readonly scope: CaptureVersionedMutationInputV1["scope"];
+}
+
+export interface CaptureDeliveryInstructionSuggestionV1 {
+  readonly deliveryInstructions: string;
+  readonly lastUsedAt: string;
+  readonly usageCount: number;
+}
+
+export interface CaptureDeliveryInstructionSuggestionsV1 {
+  readonly captureDraftId: string;
+  readonly items: readonly CaptureDeliveryInstructionSuggestionV1[];
   readonly schemaVersion: typeof DELIVERY_INSTRUCTIONS_SCHEMA_VERSION;
 }
 
@@ -100,6 +125,56 @@ export function parseSetCaptureDeliveryInstructionsResultV1(
   return detail === undefined || typeof replayed !== "boolean" || deliveryInstructions === undefined
     ? undefined
     : Object.freeze({ deliveryInstructions, detail, replayed, schemaVersion: DELIVERY_INSTRUCTIONS_SCHEMA_VERSION });
+}
+
+export function parseCaptureDeliveryInstructionSuggestionsRequestV1(
+  value: unknown,
+): CaptureDeliveryInstructionSuggestionsRequestV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "captureDraftId"]);
+  if (record === undefined || own(record, "schemaVersion") !== DELIVERY_INSTRUCTIONS_SCHEMA_VERSION) return undefined;
+  const scope = exactRecord(own(record, "scope"), ["restaurantId", "branchId"]);
+  const restaurantId = scope === undefined ? undefined : uuid(own(scope, "restaurantId"));
+  const branchId = scope === undefined ? undefined : uuid(own(scope, "branchId"));
+  const captureDraftId = uuid(own(record, "captureDraftId"));
+  return restaurantId === undefined || branchId === undefined || captureDraftId === undefined
+    ? undefined
+    : Object.freeze({
+      captureDraftId,
+      schemaVersion: DELIVERY_INSTRUCTIONS_SCHEMA_VERSION,
+      scope: Object.freeze({ branchId, restaurantId }),
+    }) as CaptureDeliveryInstructionSuggestionsRequestV1;
+}
+
+export function parseCaptureDeliveryInstructionSuggestionsV1(
+  value: unknown,
+): CaptureDeliveryInstructionSuggestionsV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "captureDraftId", "items"]);
+  if (record === undefined || own(record, "schemaVersion") !== DELIVERY_INSTRUCTIONS_SCHEMA_VERSION) return undefined;
+  const captureDraftId = uuid(own(record, "captureDraftId"));
+  const rawItems = own(record, "items");
+  if (captureDraftId === undefined || !Array.isArray(rawItems)
+    || rawItems.length > DELIVERY_INSTRUCTION_SUGGESTION_LIMIT) return undefined;
+  const seen = new Set<string>();
+  const items: CaptureDeliveryInstructionSuggestionV1[] = [];
+  let previousUsedAt: string | undefined;
+  for (const rawItem of rawItems as readonly unknown[]) {
+    const item = exactRecord(rawItem, ["deliveryInstructions", "lastUsedAt", "usageCount"]);
+    if (item === undefined) return undefined;
+    const deliveryInstructions = nullableInstructions(own(item, "deliveryInstructions"));
+    const lastUsedAt = timestamp(own(item, "lastUsedAt"));
+    const usageCount = integer(own(item, "usageCount"), 1, Number.MAX_SAFE_INTEGER);
+    if (deliveryInstructions === undefined || deliveryInstructions === null || lastUsedAt === undefined
+      || usageCount === undefined || seen.has(deliveryInstructions)
+      || (previousUsedAt !== undefined && lastUsedAt > previousUsedAt)) return undefined;
+    seen.add(deliveryInstructions);
+    previousUsedAt = lastUsedAt;
+    items.push(Object.freeze({ deliveryInstructions, lastUsedAt, usageCount }));
+  }
+  return Object.freeze({
+    captureDraftId,
+    items: Object.freeze(items),
+    schemaVersion: DELIVERY_INSTRUCTIONS_SCHEMA_VERSION,
+  });
 }
 
 export function parseOrderFulfillmentSnapshotV1(value: unknown): OrderFulfillmentSnapshotV1 | undefined {

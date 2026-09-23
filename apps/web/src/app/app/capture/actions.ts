@@ -6,9 +6,9 @@ import { requestCapture, type CaptureOperation, type CaptureRequestResult } from
 import { customerOperations, requestCustomerDirectory } from "../../../lib/customer-directory";
 import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
-import type { CaptureMutationResultV1, CaptureWorkspaceV2, CaptureWorkTrayResultV1, CustomerDirectoryDetailV1, CustomerDirectorySearchResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
+import type { CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureWorkspaceV2, CaptureWorkTrayResultV1, CustomerDirectoryDetailV1, CustomerDirectorySearchResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 export type CaptureWorkspaceOperation=CaptureOperation|"search"|"detail";
-export type CaptureWorkspaceResult=CaptureRequestResult<CaptureMutationResultV1|CaptureWorkspaceV2|CaptureWorkTrayResultV1|SetCaptureDeliveryInstructionsResultV1|CustomerDirectorySearchResultV1|CustomerDirectoryDetailV1>&{readonly command?:unknown};
+export type CaptureWorkspaceResult=CaptureRequestResult<CaptureDeliveryInstructionSuggestionsV1|CaptureMutationResultV1|CaptureWorkspaceV2|CaptureWorkTrayResultV1|SetCaptureDeliveryInstructionsResultV1|CustomerDirectorySearchResultV1|CustomerDirectoryDetailV1>&{readonly command?:unknown};
 export async function captureWorkspaceAction(operation:CaptureWorkspaceOperation,input:unknown):Promise<CaptureWorkspaceResult>{
  const supabase=await createServerSupabaseClient();const {data:{session}}=await supabase.auth.getSession();if(session===null)return{ok:false,error:"denied"};
  const scope=parseBranchPreference((await cookies()).get(BRANCH_PREFERENCE_COOKIE)?.value);if(scope===undefined)return{ok:false,error:"denied"};

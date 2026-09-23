@@ -7,7 +7,11 @@ alter table app.capture_drafts
     or (
       delivery_instructions = pg_catalog.btrim(delivery_instructions)
       and pg_catalog.char_length(delivery_instructions) between 1 and 500
-      and delivery_instructions !~ '[[:cntrl:]]'
+      and delivery_instructions = pg_catalog.translate(
+        delivery_instructions,
+        U&'\0001\0002\0003\0004\0005\0006\0007\0008\0009\000A\000B\000C\000D\000E\000F\0010\0011\0012\0013\0014\0015\0016\0017\0018\0019\001A\001B\001C\001D\001E\001F\007F',
+        ''
+      )
     )
   );
 
@@ -62,7 +66,11 @@ begin
         pg_catalog.jsonb_typeof(p_command->'deliveryInstructions') = 'string'
         and p_command->>'deliveryInstructions' = pg_catalog.btrim(p_command->>'deliveryInstructions')
         and pg_catalog.char_length(p_command->>'deliveryInstructions') between 1 and 500
-        and p_command->>'deliveryInstructions' !~ '[[:cntrl:]]'
+        and p_command->>'deliveryInstructions' = pg_catalog.translate(
+          p_command->>'deliveryInstructions',
+          U&'\0001\0002\0003\0004\0005\0006\0007\0008\0009\000A\000B\000C\000D\000E\000F\0010\0011\0012\0013\0014\0015\0016\0017\0018\0019\001A\001B\001C\001D\001E\001F\007F',
+          ''
+        )
       )
     )
   then return pg_catalog.jsonb_build_object('status','rejected'); end if;
@@ -118,7 +126,7 @@ begin
 
   select * into current_capture from app.capture_drafts
   where restaurant_id=restaurant and branch_id=branch and id=capture for update;
-  observed := pg_catalog.greatest(pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp()),current_capture.updated_at);
+  observed := greatest(pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp()),current_capture.updated_at);
   if not found or current_capture.version<>expected or current_capture.status<>'draft'
     or current_capture.attention_status<>'claimed' or current_capture.owner_membership_id is distinct from member
     or current_capture.attention_lease_id is distinct from lease or current_capture.attention_lease_expires_at<=observed

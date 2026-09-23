@@ -21,7 +21,7 @@ export interface CaptureSchemaVerificationDependencies {
   readonly runRollbackVerification?: typeof runSchemaVerification;
 }
 
-/** Capture/journal and private commands add two tables and two definers, no policies. */
+/** Orchestrates an exact baseline → rollback candidate → unchanged baseline verification. */
 export async function verifyCaptureSchema(
   input: CaptureSchemaVerificationInput,
   dependencies: CaptureSchemaVerificationDependencies = {},

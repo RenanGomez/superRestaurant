@@ -3,6 +3,8 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import type {
   BranchScope,
+  CaptureDeliveryInstructionSuggestionV1,
+  CaptureDeliveryInstructionSuggestionsV1,
   CaptureCustomerSnapshotV1,
   CaptureDraftDetailV1,
   CaptureDraftDetailV2,
@@ -19,6 +21,7 @@ import type {
 
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
   rehydrateCaptureWorkspace } from "../../../lib/capture-workspace";
+import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -35,10 +38,11 @@ const messages = {
 interface CaptureWorkspaceParameters {
   readonly scope: BranchScope;
   readonly action: (operation: CaptureWorkspaceOperation, input: unknown) => Promise<CaptureWorkspaceResult>;
+  readonly confirmationContext?: CaptureConfirmationContext;
 }
 type ActionReply = Awaited<ReturnType<CaptureWorkspaceParameters["action"]>>;
 
-export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters): ReactNode {
+export function CaptureWorkspace({ scope, action, confirmationContext }: CaptureWorkspaceParameters): ReactNode {
   const [deviceId] = useState(() => captureDeviceId(typeof window === "undefined" ? undefined : window.localStorage,
     () => crypto.randomUUID()));
   const [busy, setBusy] = useState(false);
@@ -55,6 +59,9 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
   const [sourceChannel, setSourceChannel] = useState<CaptureSourceChannelV1>("phone");
   const [fulfillmentChannel, setFulfillmentChannel] = useState<CaptureFulfillmentChannelV1 | null>("delivery");
   const [deliveryInstructions, setDeliveryInstructions] = useState("");
+  const [deliveryInstructionSuggestions, setDeliveryInstructionSuggestions] = useState<readonly CaptureDeliveryInstructionSuggestionV1[]>([]);
+  const [selectedShiftId, setSelectedShiftId] = useState("");
+  const [selectedTableId, setSelectedTableId] = useState("");
 
   async function run(operation: CaptureWorkspaceOperation, command: unknown): Promise<ActionReply | undefined> {
     if (busy) return undefined;
@@ -78,7 +85,10 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
     if (persistedAutosave !== undefined) clearPendingCaptureAutosave(window.localStorage, persistedAutosave);
     setPending(undefined);
     const value = reply.value;
-    if ("items" in value) setTray((value as CaptureWorkTrayResultV1).items);
+    if ("items" in value && "captureDraftId" in value) {
+      setDeliveryInstructionSuggestions((value as CaptureDeliveryInstructionSuggestionsV1).items);
+    }
+    else if ("items" in value) setTray((value as CaptureWorkTrayResultV1).items);
     else if ("customerSnapshot" in value) applyWorkspace(value as CaptureWorkspaceV2);
     else if ("replayed" in value) {
       const mutation = value as CaptureMutationResultV1;
@@ -137,7 +147,13 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
   }
 
   async function refreshWorkspace(captureDraftId: string): Promise<void> {
-    await run("workspace", { schemaVersion: 2, scope, captureDraftId });
+    const reply = await run("workspace", { schemaVersion: 2, scope, captureDraftId });
+    if (reply?.ok && "customerSnapshot" in reply.value && reply.value.detail.fulfillmentChannel === "delivery"
+      && reply.value.customerSnapshot !== null) {
+      await run("deliveryInstructionSuggestions", { schemaVersion: 1, scope, captureDraftId });
+    } else {
+      setDeliveryInstructionSuggestions([]);
+    }
   }
 
   function recover(item: CaptureDraftSummaryV1): void {
@@ -166,6 +182,7 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
     const next = event.target.value === "" ? null : event.target.value as CaptureFulfillmentChannelV1;
     setFulfillmentChannel(next);
     if (next !== "delivery") setDeliveryInstructions("");
+    if (next !== "delivery") setDeliveryInstructionSuggestions([]);
     autosave(sourceChannel, next);
   }
 
@@ -175,6 +192,22 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
     const normalized = deliveryInstructions.trim();
     const command = { ...base(), deliveryInstructions: normalized === "" ? null : normalized };
     void run("deliveryInstructions", command);
+  }
+
+  function confirmCapture(): void {
+    if (capture === undefined || capture.status !== "draft" || capture.attentionLeaseId === null
+      || confirmationContext === undefined || fulfillmentChannel === null || selectedShiftId === ""
+      || (fulfillmentChannel === "dine_in" && selectedTableId === "")
+      || (fulfillmentChannel === "delivery" && (customerSnapshot === null || fulfillmentSnapshot === null))) return;
+    void run("confirm", {
+      ...base(),
+      schemaVersion: 2,
+      orderId: crypto.randomUUID(),
+      shiftId: selectedShiftId,
+      tableId: fulfillmentChannel === "dine_in" ? selectedTableId : null,
+      currency: confirmationContext.currency,
+      timeZone: confirmationContext.timeZone,
+    });
   }
 
   function search(event: FormEvent<HTMLFormElement>): void {
@@ -226,9 +259,16 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
     setError(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
     setDeliveryInstructions("");
+    setDeliveryInstructionSuggestions([]);
+    setSelectedShiftId("");
+    setSelectedTableId("");
   }
 
-  const locked = busy || error === "denied" || error === "conflict";
+  const locked = busy || capture?.status !== "draft" || capture?.attentionLeaseId === null
+    || error === "denied" || error === "conflict";
+  const canConfirm = confirmationContext !== undefined && selectedShiftId !== "" && fulfillmentChannel !== null
+    && (fulfillmentChannel !== "dine_in" || selectedTableId !== "")
+    && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null));
   return <div className="flex flex-col gap-4" aria-busy={busy}>
     <div role={error === undefined ? "status" : "alert"} aria-live="polite"
       className={error === undefined ? "text-sm text-text-muted" : "rounded-lg border border-border bg-error-bg p-4 text-sm"}>
@@ -248,6 +288,11 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
           <span className="text-xs text-text-muted">{item.sourceChannel} · {item.fulfillmentChannel} · versión {item.version}</span></button>)}</div>
       </section>}
     </> : <>
+      {capture.status === "confirmed" && <section className={panel} data-testid="confirmed-capture">
+        <h2 className="font-heading text-lg font-semibold">Captura convertida en orden</h2>
+        <p className="mt-2 text-sm">La captura quedó cerrada y ya no admite cambios.</p>
+        <p className="mt-1 break-all text-xs text-text-muted">Orden: {capture.confirmedOrderId}</p>
+      </section>}
       <section className={panel}><h2 className="font-heading text-lg font-semibold">Canal y cumplimiento</h2>
         <div className="mt-3 flex flex-wrap gap-3"><label className="text-sm">Origen <select value={sourceChannel} onChange={changeSource}
           className={`${input} ml-2`} disabled={locked}><option value="phone">Teléfono</option><option value="whatsapp_manual">WhatsApp manual</option>
@@ -266,6 +311,17 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
       {fulfillmentChannel === "delivery" && <section className={panel}>
         <h2 className="font-heading text-lg font-semibold">Instrucciones para esta entrega</h2>
         <p className="mt-1 text-sm text-text-muted">Se guardan en esta captura; nunca modifican la dirección del cliente ni se heredan automáticamente.</p>
+        {deliveryInstructionSuggestions.length > 0 && <div className="mt-3 rounded-lg border border-border bg-bg p-3">
+          <p className="text-sm font-semibold">Usadas antes por este cliente en esta sucursal</p>
+          <p className="mt-1 text-xs text-text-muted">Últimos 180 días, máximo cinco. Elige una para copiarla; no se aplica ni guarda sola.</p>
+          <ul className="mt-2 grid gap-2">{deliveryInstructionSuggestions.map((suggestion) => <li key={suggestion.deliveryInstructions}>
+            <button type="button" className={`${button} w-full text-left`} disabled={locked}
+              onClick={() => setDeliveryInstructions(suggestion.deliveryInstructions)}>
+              <span className="block">{suggestion.deliveryInstructions}</span>
+              <span className="block text-xs text-text-muted">Usada {suggestion.usageCount} {suggestion.usageCount === 1 ? "vez" : "veces"} · última {suggestion.lastUsedAt.slice(0, 10)}</span>
+            </button>
+          </li>)}</ul>
+        </div>}
         <form className="mt-3 grid gap-3" onSubmit={saveDeliveryInstructions}>
           <label className="grid gap-1 text-sm" htmlFor="capture-delivery-instructions">Indicaciones opcionales</label>
           <textarea id="capture-delivery-instructions" maxLength={500} rows={3} className={`${input} min-h-24 resize-y`}
@@ -295,7 +351,48 @@ export function CaptureWorkspace({ scope, action }: CaptureWorkspaceParameters):
           <span className="block text-xs text-text-muted">{[item.address.streetLine, item.address.neighborhood, item.address.locality].filter(Boolean).join(", ")}</span>
           <span className="text-xs text-accent">{item.validatedForRequestedBranch ? selectedAddress === item.addressId ? "Selección local" : "Validada para esta sucursal" : "Pendiente de validación"}</span>
         </button>)}</div><a href="/app/customers" className="mt-3 inline-block text-sm font-semibold text-accent underline">Editar o validar direcciones en Directorio</a></section>}
-      <aside className="rounded-xl border border-[oklch(80%_0.08_75)] bg-[oklch(96%_0.03_75)] p-4 text-sm"><strong>Captura abierta.</strong> Los cambios guardados incrementan una versión; recargar exige recuperar un lease nuevo.</aside>
+      {capture.status === "draft" && <section className={panel} data-testid="capture-confirmation">
+        <h2 className="font-heading text-lg font-semibold">4. Convertir en orden</h2>
+        {confirmationContext === undefined ? <p role="alert" className="mt-2 text-sm text-text-muted">
+          No fue posible leer el turno, moneda o zona horaria de esta sucursal. Recarga antes de confirmar.
+        </p> : <>
+          <p className="mt-2 text-sm text-text-muted">
+            La orden usará {confirmationContext.currency} y {confirmationContext.timeZone}, definidos por el servidor.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="grid gap-1 text-sm" htmlFor="capture-shift">Turno abierto
+              <select id="capture-shift" className={input} value={selectedShiftId}
+                onChange={(event) => setSelectedShiftId(event.target.value)} disabled={locked}>
+                <option value="">Selecciona un turno</option>
+                {confirmationContext.shifts.map((shift) => <option key={shift.shiftId} value={shift.shiftId}>{shift.name}</option>)}
+              </select>
+            </label>
+            {fulfillmentChannel === "dine_in" && <label className="grid gap-1 text-sm" htmlFor="capture-table">Mesa
+              <select id="capture-table" className={input} value={selectedTableId}
+                onChange={(event) => setSelectedTableId(event.target.value)}
+                disabled={locked || confirmationContext.tables === null}>
+                <option value="">Selecciona una mesa</option>
+                {confirmationContext.tables?.map((table) => <option key={table.tableId} value={table.tableId}>
+                  {table.name} · {table.capacity} personas
+                </option>)}
+              </select>
+            </label>}
+          </div>
+          {confirmationContext.shifts.length === 0 && <p role="alert" className="mt-2 text-sm text-text-muted">
+            No hay turnos abiertos para confirmar la orden.
+          </p>}
+          {fulfillmentChannel === "dine_in" && confirmationContext.tables === null && <p role="alert" className="mt-2 text-sm text-text-muted">
+            No fue posible leer el plano de mesas; la confirmación permanece bloqueada.
+          </p>}
+          {fulfillmentChannel === "delivery" && (customerSnapshot === null || fulfillmentSnapshot === null) && <p className="mt-2 text-sm text-text-muted">
+            Guarda un cliente y una dirección validada antes de confirmar el domicilio.
+          </p>}
+          <button type="button" className={`${button} mt-4`} onClick={confirmCapture} disabled={locked || !canConfirm}>
+            Convertir captura en orden
+          </button>
+        </>}
+      </section>}
+      {capture.status === "draft" && <aside className="rounded-xl border border-[oklch(80%_0.08_75)] bg-[oklch(96%_0.03_75)] p-4 text-sm"><strong>Captura abierta.</strong> Los cambios guardados incrementan una versión; recargar exige recuperar un lease nuevo.</aside>}
     </>}
   </div>;
 }

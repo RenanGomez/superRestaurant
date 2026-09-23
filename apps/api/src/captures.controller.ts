@@ -2,7 +2,7 @@ import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException,
   Header, HttpCode, Inject, NotFoundException, Post, Req, ServiceUnavailableException,
 } from "@nestjs/common";
-import type { CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
+import type { CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
 import { CaptureApplicationError, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureService, CaptureTrayService } from "./captures.js";
@@ -81,6 +81,16 @@ export class CapturesController {
   ): Promise<SetCaptureDeliveryInstructionsResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.deliveryInstructions.setDeliveryInstructions(principal, body));
+  }
+  @Post("delivery-instruction-suggestions")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async listDeliveryInstructionSuggestions(
+    @Req() request: unknown,
+    @Body() body: unknown,
+  ): Promise<CaptureDeliveryInstructionSuggestionsV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.deliveryInstructions.listSuggestions(principal, body));
   }
   @Post("confirm")
   @HttpCode(200)

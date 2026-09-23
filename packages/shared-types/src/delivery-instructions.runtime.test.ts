@@ -1,5 +1,7 @@
 import {
   parseCaptureDraftDetailV2,
+  parseCaptureDeliveryInstructionSuggestionsRequestV1,
+  parseCaptureDeliveryInstructionSuggestionsV1,
   parseCaptureWorkspaceRequestV2,
   parseCaptureWorkspaceV2,
   parseConfirmCaptureDraftCommandV2,
@@ -77,6 +79,35 @@ expect(parseSetCaptureDeliveryInstructionsResultV1({
   detail: detailV1,
   deliveryInstructions: command.deliveryInstructions,
 })?.replayed === true, "specific result keeps the existing V1 journal detail and the D4 value beside it");
+
+const suggestionRequest = { schemaVersion: 1, scope: command.scope, captureDraftId: id };
+expect(parseCaptureDeliveryInstructionSuggestionsRequestV1(suggestionRequest) !== undefined,
+  "instruction history is requested through a Capture, never a caller supplied Customer id");
+expect(parseCaptureDeliveryInstructionSuggestionsRequestV1({ ...suggestionRequest, customerId: id }) === undefined,
+  "instruction history rejects a parallel Customer selector");
+const suggestions = parseCaptureDeliveryInstructionSuggestionsV1({
+  schemaVersion: 1,
+  captureDraftId: id,
+  items: [
+    { deliveryInstructions: "Portón lateral", lastUsedAt: "2026-09-22T12:00:00.000Z", usageCount: 2 },
+    { deliveryInstructions: "Tocar dos veces", lastUsedAt: "2026-09-21T12:00:00.000Z", usageCount: 1 },
+  ],
+});
+expect(suggestions !== undefined && Object.isFrozen(suggestions.items) && Object.isFrozen(suggestions.items[0]),
+  "at most five ordered, detached suggestions cross the trust boundary");
+expect(parseCaptureDeliveryInstructionSuggestionsV1({
+  schemaVersion: 1, captureDraftId: id,
+  items: Array.from({ length: 6 }, (_, index) => ({
+    deliveryInstructions: `Indicacion ${index}`, lastUsedAt: "2026-09-22T12:00:00.000Z", usageCount: 1,
+  })),
+}) === undefined, "suggestion history is capped at five");
+expect(parseCaptureDeliveryInstructionSuggestionsV1({
+  schemaVersion: 1, captureDraftId: id,
+  items: [
+    { deliveryInstructions: "Repetida", lastUsedAt: "2026-09-22T12:00:00.000Z", usageCount: 1 },
+    { deliveryInstructions: "Repetida", lastUsedAt: "2026-09-21T12:00:00.000Z", usageCount: 1 },
+  ],
+}) === undefined, "suggestions reject duplicate instruction values");
 
 const detailV2 = { ...detailV1, schemaVersion: 2, deliveryInstructions: command.deliveryInstructions };
 expect(parseCaptureDraftDetailV2(detailV2)?.deliveryInstructions === command.deliveryInstructions,

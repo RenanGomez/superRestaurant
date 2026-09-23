@@ -28,7 +28,11 @@ create table app.order_fulfillment_snapshots (
       fulfillment_channel='delivery'
       and delivery_instructions=pg_catalog.btrim(delivery_instructions)
       and pg_catalog.char_length(delivery_instructions) between 1 and 500
-      and delivery_instructions !~ '[[:cntrl:]]'
+      and delivery_instructions = pg_catalog.translate(
+        delivery_instructions,
+        U&'\0001\0002\0003\0004\0005\0006\0007\0008\0009\000A\000B\000C\000D\000E\000F\0010\0011\0012\0013\0014\0015\0016\0017\0018\0019\001A\001B\001C\001D\001E\001F\007F',
+        ''
+      )
     )
   ),
   constraint order_fulfillment_snapshots_payload_valid check (
@@ -38,7 +42,7 @@ create table app.order_fulfillment_snapshots (
     and snapshot->>'captureDraftId'=capture_draft_id::text
     and snapshot->>'captureVersion'=capture_version::text
     and snapshot->>'fulfillmentChannel'=fulfillment_channel
-    and snapshot->'deliveryInstructions' is not distinct from pg_catalog.coalesce(
+    and snapshot->'deliveryInstructions' is not distinct from coalesce(
       pg_catalog.to_jsonb(delivery_instructions),'null'::jsonb
     )
   )
@@ -64,7 +68,8 @@ security definer
 set search_path = ''
 as $function$
 declare
-  restaurant uuid; branch uuid; capture uuid; event uuid; device uuid; lease uuid; order_id uuid; shift_id uuid; table_id uuid;
+  restaurant uuid; branch uuid; capture uuid; event uuid; device uuid; lease uuid;
+  requested_order_id uuid; requested_shift_id uuid; requested_table_id uuid;
   member uuid; expected bigint; occurred timestamptz; observed timestamptz; fingerprint text; order_channel text;
   current_capture app.capture_drafts%rowtype; stored app.capture_command_events%rowtype;
   result_record jsonb; order_result jsonb; party jsonb; fulfillment jsonb; frozen_snapshot jsonb;
@@ -88,16 +93,16 @@ begin
     event:=(p_command->>'eventId')::uuid;
     device:=(p_command->>'deviceId')::uuid;
     lease:=(p_command->>'attentionLeaseId')::uuid;
-    order_id:=(p_command->>'orderId')::uuid;
-    shift_id:=(p_command->>'shiftId')::uuid;
-    table_id:=(p_command->>'tableId')::uuid;
+    requested_order_id:=(p_command->>'orderId')::uuid;
+    requested_shift_id:=(p_command->>'shiftId')::uuid;
+    requested_table_id:=(p_command->>'tableId')::uuid;
     expected:=(p_command->>'expectedVersion')::bigint;
     occurred:=(p_command->>'occurredAt')::timestamptz;
   exception when invalid_text_representation or numeric_value_out_of_range or datetime_field_overflow or invalid_datetime_format then
     return pg_catalog.jsonb_build_object('status','rejected');
   end;
   if restaurant is null or branch is null or capture is null or event is null or device is null or lease is null
-    or order_id is null or shift_id is null or expected not between 1 and 9007199254740990 or occurred is null
+    or requested_order_id is null or requested_shift_id is null or expected not between 1 and 9007199254740990 or occurred is null
     or p_command#>>'{scope,restaurantId}' is distinct from restaurant::text
     or p_command#>>'{scope,branchId}' is distinct from branch::text
     or p_command->>'occurredAt' is distinct from pg_catalog.to_char(occurred at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
@@ -126,11 +131,11 @@ begin
       or not exists (
         select 1 from app.order_audit_events audit
         join app.order_operational_shifts link on link.restaurant_id=audit.restaurant_id and link.branch_id=audit.branch_id
-          and link.order_id=audit.order_id and link.shift_id=shift_id
+          and link.order_id=audit.order_id and link.shift_id=requested_shift_id
         join app.order_fulfillment_snapshots frozen on frozen.restaurant_id=audit.restaurant_id
           and frozen.branch_id=audit.branch_id and frozen.order_id=audit.order_id and frozen.capture_draft_id=capture
         where audit.event_id=event and audit.actor_id=p_actor_id and audit.restaurant_id=restaurant
-          and audit.branch_id=branch and audit.order_id=order_id and audit.expected_order_version=0
+          and audit.branch_id=branch and audit.order_id=requested_order_id and audit.expected_order_version=0
           and audit.result_order_version=1 and audit.event_payload=p_order_audit and audit.result_order=p_order
       )
     then return pg_catalog.jsonb_build_object('status','conflict'); end if;
@@ -139,12 +144,12 @@ begin
 
   select * into current_capture from app.capture_drafts
   where restaurant_id=restaurant and branch_id=branch and id=capture for update;
-  observed:=pg_catalog.greatest(pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp()),current_capture.updated_at);
+  observed:=greatest(pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp()),current_capture.updated_at);
   if not found or current_capture.version<>expected or current_capture.status<>'draft'
     or current_capture.fulfillment_channel is null
     or current_capture.attention_status<>'claimed' or current_capture.owner_membership_id is distinct from member
     or current_capture.attention_lease_id is distinct from lease or current_capture.attention_lease_expires_at<=observed
-    or (current_capture.fulfillment_channel='dine_in') is distinct from (table_id is not null)
+    or (current_capture.fulfillment_channel='dine_in') is distinct from (requested_table_id is not null)
     or (current_capture.fulfillment_channel='delivery' and (
       current_capture.customer_snapshot_id is null or current_capture.fulfillment_snapshot_id is null
     ))
@@ -154,8 +159,8 @@ begin
     when 'dine_in' then 'table' when 'pickup' then 'takeout'
     when 'counter' then 'counter' when 'delivery' then 'delivery' end;
   if p_order->>'schemaVersion'<>'1' or p_order->>'restaurantId' is distinct from restaurant::text
-    or p_order->>'branchId' is distinct from branch::text or p_order->>'orderId' is distinct from order_id::text
-    or p_order->>'channel' is distinct from order_channel or (p_order->>'tableId') is distinct from table_id::text
+    or p_order->>'branchId' is distinct from branch::text or p_order->>'orderId' is distinct from requested_order_id::text
+    or p_order->>'channel' is distinct from order_channel or (p_order->>'tableId') is distinct from requested_table_id::text
     or p_order->>'currency' is distinct from p_command->>'currency'
     or p_order->>'timeZone' is distinct from p_command->>'timeZone'
     or p_order->>'status'<>'draft' or pg_catalog.jsonb_typeof(p_order->'items')<>'array'
@@ -164,8 +169,8 @@ begin
     or p_order_audit->>'actorId' is distinct from p_actor_id::text
     or p_order_audit->>'restaurantId' is distinct from restaurant::text
     or p_order_audit->>'branchId' is distinct from branch::text
-    or p_order_audit->>'orderId' is distinct from order_id::text
-    or p_order_audit->>'entityId' is distinct from order_id::text
+    or p_order_audit->>'orderId' is distinct from requested_order_id::text
+    or p_order_audit->>'entityId' is distinct from requested_order_id::text
     or p_order_audit->>'eventId' is distinct from event::text
     or p_order_audit->>'deviceId' is distinct from device::text
     or p_order_audit->>'idempotencyKey' is distinct from p_command->>'idempotencyKey'
@@ -196,14 +201,14 @@ begin
     if not found then raise exception using errcode='55000',message='CAPTURE_FULFILLMENT_SNAPSHOT_MISSING'; end if;
   end if;
   frozen_snapshot:=pg_catalog.jsonb_build_object(
-    'schemaVersion',1,'orderId',order_id::text,'captureDraftId',capture::text,'captureVersion',expected,
-    'fulfillmentChannel',current_capture.fulfillment_channel,'tableId',table_id::text,
+    'schemaVersion',1,'orderId',requested_order_id::text,'captureDraftId',capture::text,'captureVersion',expected,
+    'fulfillmentChannel',current_capture.fulfillment_channel,'tableId',requested_table_id::text,
     'partySnapshot',party,'fulfillmentSnapshot',fulfillment,
     'deliveryInstructions',current_capture.delivery_instructions,
     'frozenAt',pg_catalog.to_char(observed at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
   );
 
-  order_result:=app_private.create_operational_order(p_actor_id,shift_id,p_order,p_order_audit);
+  order_result:=app_private.create_operational_order(p_actor_id,requested_shift_id,p_order,p_order_audit);
   if order_result->>'status'='forbidden' then return pg_catalog.jsonb_build_object('status','denied'); end if;
   if order_result->>'status'<>'saved' then return pg_catalog.jsonb_build_object('status','conflict'); end if;
 
@@ -211,17 +216,17 @@ begin
     restaurant_id,branch_id,order_id,capture_draft_id,capture_version,customer_id,fulfillment_channel,
     delivery_instructions,snapshot,confirmed_at,confirmed_by
   ) values (
-    restaurant,branch,order_id,capture,expected,current_capture.customer_id,current_capture.fulfillment_channel,
+    restaurant,branch,requested_order_id,capture,expected,current_capture.customer_id,current_capture.fulfillment_channel,
     current_capture.delivery_instructions,frozen_snapshot,observed,p_actor_id
   );
   update app.capture_drafts set status='confirmed',attention_status='unclaimed',owner_membership_id=null,
-    attention_lease_id=null,attention_lease_expires_at=null,confirmed_order_id=order_id,version=expected+1,
+    attention_lease_id=null,attention_lease_expires_at=null,confirmed_order_id=requested_order_id,version=expected+1,
     updated_at=observed,updated_by=p_actor_id
   where restaurant_id=restaurant and branch_id=branch and id=capture and version=expected;
   if not found then raise exception using errcode='40001',message='CAPTURE_CONFIRMATION_LOST_UPDATE'; end if;
   result_record:=pg_catalog.jsonb_set(result_record,'{detail}',(result_record->'detail')||pg_catalog.jsonb_build_object(
     'status','confirmed','attentionStatus','unclaimed','ownerMembershipId',null,'attentionLeaseId',null,
-    'attentionLeaseExpiresAt',null,'confirmedOrderId',order_id::text,'version',expected+1,
+    'attentionLeaseExpiresAt',null,'confirmedOrderId',requested_order_id::text,'version',expected+1,
     'updatedAt',pg_catalog.to_char(observed at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
   ));
   insert into app.capture_command_events(
@@ -239,6 +244,83 @@ alter function app_private.confirm_capture_draft(uuid,jsonb,jsonb,jsonb) owner t
 revoke all on function app_private.confirm_capture_draft(uuid,jsonb,jsonb,jsonb)
   from public,anon,authenticated,service_role,app_api;
 grant execute on function app_private.confirm_capture_draft(uuid,jsonb,jsonb,jsonb) to app_api;
+
+create function app_private.list_capture_delivery_instruction_suggestions(
+  p_actor_id uuid,
+  p_request jsonb
+) returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $function$
+declare
+  restaurant uuid;
+  branch uuid;
+  capture uuid;
+  customer uuid;
+  channel text;
+  suggestions jsonb;
+begin
+  if p_actor_id is null
+    or not app_private.jsonb_has_exact_keys(p_request,array['schemaVersion','scope','captureDraftId'])
+    or not app_private.jsonb_has_exact_keys(p_request->'scope',array['restaurantId','branchId'])
+    or p_request->'schemaVersion' is distinct from '1'::jsonb
+  then return pg_catalog.jsonb_build_object('status','rejected'); end if;
+  begin
+    restaurant := (p_request#>>'{scope,restaurantId}')::uuid;
+    branch := (p_request#>>'{scope,branchId}')::uuid;
+    capture := (p_request->>'captureDraftId')::uuid;
+  exception when invalid_text_representation then
+    return pg_catalog.jsonb_build_object('status','rejected');
+  end;
+  if restaurant is null or branch is null or capture is null
+    or p_request#>>'{scope,restaurantId}' is distinct from restaurant::text
+    or p_request#>>'{scope,branchId}' is distinct from branch::text
+  then return pg_catalog.jsonb_build_object('status','rejected'); end if;
+
+  if not exists (
+    select 1 from app.memberships m
+    join app.branches b on b.id=m.branch_id and b.restaurant_id=m.restaurant_id
+    join app.restaurants r on r.id=m.restaurant_id
+    join app.membership_role_grants g on g.membership_id=m.id
+    where m.user_id=p_actor_id and m.restaurant_id=restaurant and m.branch_id=branch
+      and m.revoked_at is null and b.disabled_at is null and r.disabled_at is null and g.revoked_at is null
+      and g.role_code in ('owner','admin','manager','supervisor','cashier','waiter')
+  ) then return pg_catalog.jsonb_build_object('status','denied'); end if;
+
+  select draft.customer_id,draft.fulfillment_channel into customer,channel
+  from app.capture_drafts draft
+  where draft.restaurant_id=restaurant and draft.branch_id=branch and draft.id=capture and draft.status='draft';
+  if not found then return pg_catalog.jsonb_build_object('status','missing'); end if;
+  if customer is null or channel is distinct from 'delivery' then
+    return pg_catalog.jsonb_build_object('schemaVersion',1,'captureDraftId',capture::text,'items','[]'::jsonb);
+  end if;
+
+  select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+    'deliveryInstructions',history.delivery_instructions,
+    'lastUsedAt',pg_catalog.to_char(history.last_used_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'usageCount',history.usage_count
+  ) order by history.last_used_at desc,history.delivery_instructions),'[]'::jsonb) into suggestions
+  from (
+    select frozen.delivery_instructions,pg_catalog.max(frozen.confirmed_at) as last_used_at,
+      least(pg_catalog.count(*),9007199254740991)::bigint as usage_count
+    from app.order_fulfillment_snapshots frozen
+    where frozen.restaurant_id=restaurant and frozen.branch_id=branch and frozen.customer_id=customer
+      and frozen.delivery_instructions is not null
+      and frozen.confirmed_at >= current_timestamp - interval '180 days'
+    group by frozen.delivery_instructions
+    order by pg_catalog.max(frozen.confirmed_at) desc,frozen.delivery_instructions
+    limit 5
+  ) history;
+  return pg_catalog.jsonb_build_object('schemaVersion',1,'captureDraftId',capture::text,'items',suggestions);
+end
+$function$;
+
+alter function app_private.list_capture_delivery_instruction_suggestions(uuid,jsonb) owner to postgres;
+revoke all on function app_private.list_capture_delivery_instruction_suggestions(uuid,jsonb)
+  from public,anon,authenticated,service_role,app_api;
+grant execute on function app_private.list_capture_delivery_instruction_suggestions(uuid,jsonb) to app_api;
 
 comment on table app.order_fulfillment_snapshots is
   'Immutable Order-owned Capture snapshot. Legacy Address instructions remain labeled history; only Capture delivery_instructions is frozen as active.';

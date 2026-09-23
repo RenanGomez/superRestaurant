@@ -48,6 +48,7 @@
     "verify:capture-tray-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-tray-schema-verification.js",
     "verify:capture-tray-http:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-tray-http-verification.js",
     "verify:capture-continuity-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-continuity-schema-verification.js",
+    "verify:capture-delivery-order-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-delivery-order-schema-verification.js",
     "verify:membership-directory-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-membership-directory-schema-verification.js",
     "verify:dining-zones-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-zones-schema-verification.js",
     "verify:dining-tables-layout-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-tables-layout-schema-verification.js",

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { extractMigrationBody, validateCatalogAuditSql } from "./schema-verification.js";
-import { buildCaptureCatalogAudit, buildCaptureContinuityCatalogAudit, buildCaptureCustomerCatalogAudit, buildCustomerDirectoryCatalogAudit, buildPostBootstrapCatalogAudit, postBootstrapSummary } from "./post-bootstrap-catalog.js";
+import { buildCaptureCatalogAudit, buildCaptureContinuityCatalogAudit, buildCaptureCustomerCatalogAudit, buildCaptureDeliveryOrderCatalogAudit, buildCustomerDirectoryCatalogAudit, buildPostBootstrapCatalogAudit, postBootstrapSummary } from "./post-bootstrap-catalog.js";
 
 const audit = readFileSync(
   new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url),
@@ -313,6 +313,40 @@ test("capture continuity keeps snapshots server-owned and autosave CAS-bound to 
   assert.equal(audit.split("pg_catalog.to_regprocedure('app_private.autosave_capture_draft(uuid,jsonb)')").length - 1, 2);
   assert.equal(audit.split("pg_catalog.to_regprocedure('app_private.read_capture_workspace(uuid,jsonb)')").length - 1, 2);
   assert.doesNotThrow(() => validateCatalogAuditSql(audit));
+});
+
+test("capture delivery and Order confirmation extend the exact post-continuity catalog", () => {
+  const base = readFileSync(new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url), "utf8");
+  const capture = readFileSync(new URL("../../../../supabase/tests/capture_drafts_catalog.sql", import.meta.url), "utf8");
+  const directory = readFileSync(new URL("../../../../supabase/tests/customer_directory_catalog.sql", import.meta.url), "utf8");
+  const supplement = readFileSync(new URL("../../../../supabase/tests/capture_delivery_order_catalog.sql", import.meta.url), "utf8");
+  const audit = buildCaptureDeliveryOrderCatalogAudit(base, capture, directory, supplement);
+  for (const signature of [
+    "app_private.set_capture_delivery_instructions(uuid,jsonb)",
+    "app_private.read_capture_workspace_v2(uuid,jsonb)",
+    "app_private.list_capture_delivery_instruction_suggestions(uuid,jsonb)",
+    "app_private.confirm_capture_draft(uuid,jsonb,jsonb,jsonb)",
+  ]) {
+    assert.equal(audit.split(`pg_catalog.to_regprocedure('${signature}')`).length - 1, 2);
+  }
+  assert.equal(
+    audit.split("pg_catalog.to_regprocedure('app_private.clear_capture_delivery_instructions_for_channel()')").length - 1,
+    1,
+  );
+  assert.match(audit, /\) <> 36/u);
+  assert.match(audit, /\) <> 50/u);
+  assert.match(audit, /\) <> 53/u);
+  assert.match(audit, /order_fulfillment_snapshots/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(audit));
+  const invariants = readFileSync(
+    new URL("../../../../supabase/tests/capture_delivery_order_invariants.sql", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotThrow(() => extractMigrationBody(invariants));
+  assert.match(invariants, /CAPTURE_CONFIRM_LATE_COLLISION_NOT_ATOMIC/u);
+  assert.match(invariants, /pg_catalog\.jsonb_array_length\(suggestions->'items'\) <> 5/u);
+  assert.match(invariants, /item->>'usageCount'='2'/u);
+  assert.match(invariants, /delivery_instructions[\s\S]*is not null/u);
 });
 
 test("capture delivery instructions are Capture-owned, lease-bound and exposed through a compatible V2 read", () => {

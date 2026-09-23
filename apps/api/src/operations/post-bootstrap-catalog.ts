@@ -103,3 +103,30 @@ export function buildCaptureContinuityCatalogAudit(baseSql: string, captureSuppl
     `${tail},\n    pg_catalog.to_regprocedure('app_private.autosave_capture_draft(uuid,jsonb)'),\n    pg_catalog.to_regprocedure('app_private.read_capture_workspace(uuid,jsonb)')`)
     .replace(") <> 46", ") <> 48").replace(") <> 44", ") <> 46"));
 }
+
+export function buildCaptureDeliveryOrderCatalogAudit(
+  baseSql: string,
+  captureSupplementSql: string,
+  directorySupplementSql: string,
+  deliveryOrderSupplementSql: string,
+): string {
+  const base = buildCaptureContinuityCatalogAudit(baseSql, captureSupplementSql, directorySupplementSql);
+  const definerTail = "pg_catalog.to_regprocedure('app_private.read_capture_workspace(uuid,jsonb)')";
+  const helperTail = "pg_catalog.to_regprocedure('app_private.enforce_menu_modifier_group_command_limit()')";
+  const definers = [
+    "app_private.set_capture_delivery_instructions(uuid,jsonb)",
+    "app_private.read_capture_workspace_v2(uuid,jsonb)",
+    "app_private.list_capture_delivery_instruction_suggestions(uuid,jsonb)",
+    "app_private.confirm_capture_draft(uuid,jsonb,jsonb,jsonb)",
+  ] as const;
+  const additions = definers.map((signature) => `pg_catalog.to_regprocedure('${signature}')`).join(",\n    ");
+  const migrated = base
+    .replace("'customer_command_events'", "'customer_command_events','order_fulfillment_snapshots'")
+    .replaceAll(definerTail, `${definerTail},\n    ${additions}`)
+    .replace(helperTail, `${helperTail},\n    pg_catalog.to_regprocedure('app_private.clear_capture_delivery_instructions_for_channel()')`)
+    .replaceAll(") <> 35", ") <> 36")
+    .replace(") <> 48", ") <> 53")
+    .replace(") <> 46", ") <> 50")
+    .replace("where conrelid = target and convalidated) <> 21", "where conrelid = target and convalidated) <> 22");
+  return validateCatalogAuditSql(`${migrated}\n${deliveryOrderSupplementSql}`);
+}
