@@ -5,7 +5,9 @@ import { Money, addOrderItem, createOrder } from "@super-restaurant/domain";
 import {
   parseCustomerRecentOrderListV1,
   parseCustomerRecentOrdersQueryV1,
+  parseCustomerRepeatOrderPreviewQueryV1,
   parseBranchScope,
+  type MenuCatalogStateV1,
   type MembershipRoleCode,
 } from "@super-restaurant/shared-types";
 
@@ -14,10 +16,13 @@ import { MembershipAuthorizationService } from "./auth/membership-authorization.
 import {
   CustomerOrderHistoryError,
   CustomerOrderHistoryService,
+  CustomerOrderRepeatPreviewService,
   PostgresCustomerOrderHistory,
   type CustomerOrderHistoryPort,
+  type CustomerOrderRepeatSourcePort,
 } from "./customer-order-history.js";
 import type { DatabaseClientPort } from "./database.js";
+import type { MenuCatalogPort } from "./menu-catalog.js";
 import { encodeOrderRecord } from "./persistence/order-persistence-codec.js";
 
 const restaurantId = "1e37ae13-8507-484c-969f-2176f77b7000";
@@ -29,6 +34,9 @@ const orderItemId = "3e30ce7e-f786-4db7-88c0-a3e96820899b";
 const productId = "42803a4d-44d2-49af-92a9-3e6d7f51dfd4";
 const modifierId = "5d81b813-dfa4-417d-9784-60dbad82c541";
 const groupId = "62fa5ebc-e713-4382-85bc-277abc5ae856";
+const categoryId = "9e1bb2eb-6f99-49ae-a28a-b7fa951e03d9";
+const catalogVersion = "47f7f293-b155-42b9-bdc7-f9be3846f44e";
+const stationId = "9670f4ab-c871-43cd-b0fa-72a3f7cf8316";
 const confirmedAt = "2026-09-23T12:00:00.000Z";
 const parsedScope = parseBranchScope({ branchId, restaurantId });
 if (parsedScope === undefined) throw new Error("Invalid test scope");
@@ -42,6 +50,14 @@ const query = parseCustomerRecentOrdersQueryV1({
   scope,
 });
 assert.ok(query);
+
+const previewQuery = parseCustomerRepeatOrderPreviewQueryV1({
+  customerId,
+  orderId,
+  schemaVersion: 1,
+  scope,
+});
+assert.ok(previewQuery);
 
 const order = addOrderItem(createOrder({
   branchId,
@@ -184,10 +200,139 @@ test("PostgreSQL history adapter fails closed for denied, malformed, foreign and
   }
 });
 
+test("PostgreSQL history adapter resolves a repeat source only inside the bounded recent history", async () => {
+  const database: DatabaseClientPort = { query: async () => ({ rows: [{ result: {
+    status: "ok",
+    result: {
+      customerId,
+      orders: [{ confirmedAt, fulfillmentChannel: "delivery", order: encodeOrderRecord(order) }],
+      schemaVersion: 1,
+      scope,
+    },
+  } }] }) };
+  const adapter = new PostgresCustomerOrderHistory(database);
+  assert.deepEqual(await adapter.read(actorId, previewQuery), order);
+  assert.equal(await adapter.read(actorId, { ...previewQuery,
+    orderId: "fb0379c4-9dde-4f2e-bb6e-21f47c627f69" }), "missing");
+});
+
+test("repeat preview rebuilds lines from current catalog facts and reports price changes", async () => {
+  const sourceCalls: unknown[] = [];
+  const catalogCalls: unknown[] = [];
+  const source: CustomerOrderRepeatSourcePort = { read: async (receivedActor, receivedQuery) => {
+    sourceCalls.push({ receivedActor, receivedQuery });
+    return order;
+  } };
+  const catalogs = catalogPort(async (receivedActor, receivedScope) => {
+    catalogCalls.push({ receivedActor, receivedScope });
+    return catalogState();
+  });
+  const service = previewServiceFor(["waiter"], source, catalogs);
+
+  const result = await service.preview(principal, { branchId, customerId, orderId, restaurantId });
+  assert.equal(result.readyLineCount, 1);
+  assert.equal(result.blockedLineCount, 0);
+  assert.equal(result.hasPriceChanges, true);
+  assert.equal(result.lines[0]?.currentUnitPriceMinor, 4_000);
+  assert.deepEqual(result.lines[0]?.issues.map(({ code }) => code),
+    ["product_price_changed", "modifier_price_changed"]);
+  assert.deepEqual(sourceCalls, [{ receivedActor: actorId, receivedQuery: previewQuery }]);
+  assert.deepEqual(catalogCalls, [{ receivedActor: actorId, receivedScope: scope }]);
+  assert.ok(Object.isFrozen(result.lines[0]?.issues));
+});
+
+test("repeat preview blocks removed products and fails closed before data access without every permission", async () => {
+  let sourceCalls = 0;
+  let catalogCalls = 0;
+  const source: CustomerOrderRepeatSourcePort = { read: async () => { sourceCalls += 1; return order; } };
+  const removedCatalog = catalogState({ modifierGroups: [], products: [] });
+  const catalogs = catalogPort(async () => { catalogCalls += 1; return removedCatalog; });
+
+  const blocked = await previewServiceFor(["waiter"], source, catalogs).preview(principal,
+    { branchId, customerId, orderId, restaurantId });
+  assert.equal(blocked.lines[0]?.status, "blocked");
+  assert.equal(blocked.lines[0]?.currentUnitPriceMinor, null);
+  assert.deepEqual(blocked.lines[0]?.issues.map(({ code }) => code), ["product_removed"]);
+
+  sourceCalls = 0;
+  catalogCalls = 0;
+  await assert.rejects(previewServiceFor(["kitchen"], source, catalogs).preview(principal,
+    { branchId, customerId, orderId, restaurantId }), isError("authorization"));
+  assert.equal(sourceCalls, 0);
+  assert.equal(catalogCalls, 0);
+});
+
+test("repeat preview distinguishes an absent recent order and sanitizes catalog failures", async () => {
+  const catalog = catalogPort(async () => catalogState());
+  await assert.rejects(previewServiceFor(["waiter"], { read: async () => "missing" }, catalog).preview(principal,
+    { branchId, customerId, orderId, restaurantId }), isError("not_found"));
+  await assert.rejects(previewServiceFor(["waiter"], { read: async () => order },
+    catalogPort(async () => ({ catalog: null, schemaVersion: 1, scope }))).preview(principal,
+    { branchId, customerId, orderId, restaurantId }), isError("unavailable"));
+  await assert.rejects(previewServiceFor(["waiter"], { read: async () => order },
+    catalogPort(async () => { throw new Error("private detail"); })).preview(principal,
+    { branchId, customerId, orderId, restaurantId }), isError("unavailable"));
+  await assert.rejects(previewServiceFor(["waiter"], { read: async () => order }, catalog).preview(principal,
+    { branchId, customerId, orderId: "bad", restaurantId }), isError("request"));
+});
+
 function serviceFor(roles: readonly MembershipRoleCode[], port: CustomerOrderHistoryPort): CustomerOrderHistoryService {
   return new CustomerOrderHistoryService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles, scope }),
   }), port);
+}
+
+function previewServiceFor(
+  roles: readonly MembershipRoleCode[],
+  source: CustomerOrderRepeatSourcePort,
+  catalogs: MenuCatalogPort,
+): CustomerOrderRepeatPreviewService {
+  return new CustomerOrderRepeatPreviewService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles, scope }),
+  }), source, catalogs);
+}
+
+function catalogPort(read: MenuCatalogPort["read"]): MenuCatalogPort {
+  return { read, save: async () => { throw new Error("Unexpected save"); } };
+}
+
+function catalogState(overrides: Partial<NonNullable<MenuCatalogStateV1["catalog"]>> = {}): MenuCatalogStateV1 {
+  return Object.freeze({
+    catalog: Object.freeze({
+      catalogVersion,
+      categories: [{ active: true, categoryId, displayOrder: 0, name: "Comida" }],
+      currency: "MXN",
+      modifierGroups: [{
+        active: true,
+        displayOrder: 0,
+        groupId,
+        maximumQuantity: 1,
+        minimumQuantity: 0,
+        name: "Extras",
+        options: [{ active: true, maximumQuantity: 1, name: "Queso", optionId: modifierId, unitPriceMinor: 600 }],
+        productId,
+      }],
+      products: [{
+        active: true,
+        categoryId,
+        displayOrder: 0,
+        name: "Tacos actuales",
+        productId,
+        sku: "TACO-1",
+        stationId,
+        tax: null,
+        unit: "piece",
+        unitPriceMinor: 4_000,
+      }],
+      replayed: false,
+      updatedAt: confirmedAt,
+      updatedBy: actorId,
+      version: 2,
+      ...overrides,
+    }),
+    schemaVersion: 1,
+    scope,
+  });
 }
 
 function audit(suffix: string) {

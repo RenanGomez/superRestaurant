@@ -3,6 +3,8 @@ import {
   CUSTOMER_RECENT_ORDER_LIMIT,
   parseCustomerRecentOrderListV1,
   parseCustomerRecentOrdersQueryV1,
+  parseCustomerRepeatOrderPreviewQueryV1,
+  parseCustomerRepeatOrderPreviewV1,
 } from "./index.js";
 
 const expect = (condition: boolean, message: string): void => {
@@ -140,3 +142,79 @@ expect(parseCustomerRecentOrderListV1({
   schemaVersion: 1,
   scope: query.scope,
 }) === undefined, "history parser rejects sparse arrays");
+
+const previewQuery = parseCustomerRepeatOrderPreviewQueryV1({
+  customerId,
+  orderId,
+  schemaVersion: 1,
+  scope: query.scope,
+});
+if (previewQuery === undefined) throw new Error("valid repeat preview query rejected");
+expect(previewQuery.orderId === orderId && Object.isFrozen(previewQuery.scope),
+  "repeat preview query binds and freezes exact Customer, Order and Branch scope");
+expect(parseCustomerRepeatOrderPreviewQueryV1({ ...previewQuery, limit: 20 }) === undefined,
+  "repeat preview query rejects caller-controlled history bounds");
+
+const warning = {
+  code: "product_price_changed",
+  currentAmountMinor: 19_000,
+  groupId: null,
+  historicalAmountMinor: 18_000,
+  modifierId: null,
+  severity: "warning",
+};
+const blocking = {
+  code: "product_removed",
+  currentAmountMinor: null,
+  groupId: null,
+  historicalAmountMinor: null,
+  modifierId: null,
+  severity: "blocking",
+};
+const preview = {
+  blockedLineCount: 1,
+  catalogVersion: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  currency: "MXN",
+  customerId,
+  hasPriceChanges: true,
+  lines: [{
+    currentName: "Pizza grande",
+    currentUnitPriceMinor: 19_000,
+    historicalName: "Pizza grande",
+    issues: [warning],
+    productId,
+    quantity: 2,
+    sourceOrderItemId: orderItemId,
+    status: "ready",
+  }, {
+    currentName: null,
+    currentUnitPriceMinor: null,
+    historicalName: "Producto retirado",
+    issues: [blocking],
+    productId: "99999999-9999-4999-8999-999999999999",
+    quantity: 1,
+    sourceOrderItemId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    status: "blocked",
+  }],
+  readyLineCount: 1,
+  schemaVersion: 1,
+  scope: query.scope,
+  sourceOrderId: orderId,
+};
+const parsedPreview = parseCustomerRepeatOrderPreviewV1(preview);
+expect(parsedPreview?.readyLineCount === 1 && parsedPreview.blockedLineCount === 1
+  && parsedPreview.lines[0]?.currentUnitPriceMinor === 19_000,
+"repeat preview preserves only current public price and explicit reconciliation issues");
+expect(Object.isFrozen(parsedPreview) && Object.isFrozen(parsedPreview?.lines)
+  && Object.isFrozen(parsedPreview?.lines[0]?.issues),
+"repeat preview is deeply frozen");
+expect(parseCustomerRepeatOrderPreviewV1({ ...preview, readyLineCount: 2 }) === undefined,
+  "repeat preview rejects divergent derived counts");
+expect(parseCustomerRepeatOrderPreviewV1({ ...preview, hasPriceChanges: false }) === undefined,
+  "repeat preview rejects hidden price changes");
+expect(parseCustomerRepeatOrderPreviewV1({ ...preview, readyLineCount: 0, blockedLineCount: 2, lines: [{
+  ...preview.lines[0], status: "blocked", currentUnitPriceMinor: null,
+}, preview.lines[1]] }) === undefined, "blocked preview lines require a blocking issue");
+expect(parseCustomerRepeatOrderPreviewV1({ ...preview, lines: [{
+  ...preview.lines[0], issues: [{ ...warning, severity: "blocking" }],
+}, preview.lines[1]] }) === undefined, "price changes cannot be mislabeled as blocking");

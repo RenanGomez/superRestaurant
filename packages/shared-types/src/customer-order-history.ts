@@ -4,6 +4,21 @@ import { ORDER_ITEM_STATUSES, ORDER_STATUSES } from "./orders.js";
 
 export const CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION = 1 as const;
 export const CUSTOMER_RECENT_ORDER_LIMIT = 20 as const;
+export const REPEAT_ORDER_PREVIEW_ISSUE_CODES = Object.freeze([
+  "historical_item_cancelled",
+  "product_removed",
+  "product_inactive",
+  "category_inactive",
+  "historical_modifier_unmapped",
+  "modifier_group_unavailable",
+  "modifier_group_inactive",
+  "modifier_option_removed",
+  "modifier_option_inactive",
+  "modifier_quantity_invalid",
+  "modifier_group_requirements_changed",
+  "product_price_changed",
+  "modifier_price_changed",
+] as const);
 
 export interface CustomerRecentOrdersQueryV1 {
   readonly customerId: string;
@@ -48,6 +63,46 @@ export interface CustomerRecentOrderListV1 {
   readonly scope: BranchScope;
 }
 
+export interface CustomerRepeatOrderPreviewQueryV1 {
+  readonly customerId: string;
+  readonly orderId: string;
+  readonly schemaVersion: typeof CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+}
+
+export interface CustomerRepeatOrderPreviewIssueV1 {
+  readonly code: (typeof REPEAT_ORDER_PREVIEW_ISSUE_CODES)[number];
+  readonly currentAmountMinor: number | null;
+  readonly groupId: string | null;
+  readonly historicalAmountMinor: number | null;
+  readonly modifierId: string | null;
+  readonly severity: "blocking" | "warning";
+}
+
+export interface CustomerRepeatOrderPreviewLineV1 {
+  readonly currentName: string | null;
+  readonly currentUnitPriceMinor: number | null;
+  readonly historicalName: string;
+  readonly issues: readonly CustomerRepeatOrderPreviewIssueV1[];
+  readonly productId: string;
+  readonly quantity: number;
+  readonly sourceOrderItemId: string;
+  readonly status: "blocked" | "ready";
+}
+
+export interface CustomerRepeatOrderPreviewV1 {
+  readonly blockedLineCount: number;
+  readonly catalogVersion: string;
+  readonly currency: string;
+  readonly customerId: string;
+  readonly hasPriceChanges: boolean;
+  readonly lines: readonly CustomerRepeatOrderPreviewLineV1[];
+  readonly readyLineCount: number;
+  readonly schemaVersion: typeof CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly sourceOrderId: string;
+}
+
 export function parseCustomerRecentOrdersQueryV1(value: unknown): CustomerRecentOrdersQueryV1 | undefined {
   const record = exactRecord(value, ["schemaVersion", "scope", "customerId", "limit"]);
   if (record === undefined || own(record, "schemaVersion") !== CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION) return undefined;
@@ -83,6 +138,128 @@ export function parseCustomerRecentOrderListV1(value: unknown): CustomerRecentOr
     schemaVersion: CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION,
     scope,
   });
+}
+
+export function parseCustomerRepeatOrderPreviewQueryV1(value: unknown): CustomerRepeatOrderPreviewQueryV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "customerId", "orderId"]);
+  if (record === undefined || own(record, "schemaVersion") !== CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const customerId = uuid(own(record, "customerId"));
+  const orderId = uuid(own(record, "orderId"));
+  return scope === undefined || customerId === undefined || orderId === undefined
+    ? undefined
+    : Object.freeze({ customerId, orderId, schemaVersion: CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION, scope });
+}
+
+export function parseCustomerRepeatOrderPreviewV1(value: unknown): CustomerRepeatOrderPreviewV1 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "scope", "customerId", "sourceOrderId", "catalogVersion", "currency",
+    "readyLineCount", "blockedLineCount", "hasPriceChanges", "lines",
+  ]);
+  if (record === undefined || own(record, "schemaVersion") !== CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const customerId = uuid(own(record, "customerId"));
+  const sourceOrderId = uuid(own(record, "sourceOrderId"));
+  const catalogVersion = uuid(own(record, "catalogVersion"));
+  const currency = currencyCode(own(record, "currency"));
+  const readyLineCount = integer(own(record, "readyLineCount"), 0, 200);
+  const blockedLineCount = integer(own(record, "blockedLineCount"), 0, 200);
+  const hasPriceChanges = own(record, "hasPriceChanges");
+  const rawLines = denseArray(own(record, "lines"), 200);
+  if (scope === undefined || customerId === undefined || sourceOrderId === undefined || catalogVersion === undefined
+    || currency === undefined || readyLineCount === undefined || blockedLineCount === undefined
+    || typeof hasPriceChanges !== "boolean" || rawLines === undefined) return undefined;
+  const lines: CustomerRepeatOrderPreviewLineV1[] = [];
+  const ids = new Set<string>();
+  for (const rawLine of rawLines) {
+    const line = parsePreviewLine(rawLine);
+    if (line === undefined || ids.has(line.sourceOrderItemId)) return undefined;
+    ids.add(line.sourceOrderItemId);
+    lines.push(line);
+  }
+  const actualReady = lines.filter(({ status }) => status === "ready").length;
+  const actualPriceChanges = lines.some(({ issues }) => issues.some(({ code }) =>
+    code === "product_price_changed" || code === "modifier_price_changed"));
+  if (readyLineCount !== actualReady || blockedLineCount !== lines.length - actualReady
+    || hasPriceChanges !== actualPriceChanges) return undefined;
+  return Object.freeze({
+    blockedLineCount,
+    catalogVersion,
+    currency,
+    customerId,
+    hasPriceChanges,
+    lines: Object.freeze(lines),
+    readyLineCount,
+    schemaVersion: CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION,
+    scope,
+    sourceOrderId,
+  });
+}
+
+function parsePreviewLine(value: unknown): CustomerRepeatOrderPreviewLineV1 | undefined {
+  const record = exactRecord(value, [
+    "sourceOrderItemId", "productId", "historicalName", "currentName", "quantity", "status",
+    "currentUnitPriceMinor", "issues",
+  ]);
+  if (record === undefined) return undefined;
+  const sourceOrderItemId = uuid(own(record, "sourceOrderItemId"));
+  const productId = uuid(own(record, "productId"));
+  const historicalName = text(own(record, "historicalName"), 1, 120);
+  const rawCurrentName = own(record, "currentName");
+  const currentName = rawCurrentName === null ? null : text(rawCurrentName, 1, 120);
+  const quantity = integer(own(record, "quantity"), 1, 1_000_000);
+  const status = member(own(record, "status"), ["blocked", "ready"] as const);
+  const rawCurrentPrice = own(record, "currentUnitPriceMinor");
+  const currentUnitPriceMinor = rawCurrentPrice === null
+    ? null
+    : integer(rawCurrentPrice, 0, Number.MAX_SAFE_INTEGER);
+  const rawIssues = denseArray(own(record, "issues"), 50);
+  if (sourceOrderItemId === undefined || productId === undefined || historicalName === undefined
+    || currentName === undefined || quantity === undefined || status === undefined
+    || currentUnitPriceMinor === undefined || rawIssues === undefined) return undefined;
+  const issues: CustomerRepeatOrderPreviewIssueV1[] = [];
+  const keys = new Set<string>();
+  for (const rawIssue of rawIssues) {
+    const issue = parsePreviewIssue(rawIssue);
+    const key = issue === undefined ? "" : `${issue.code}\u0000${issue.groupId ?? ""}\u0000${issue.modifierId ?? ""}`;
+    if (issue === undefined || keys.has(key)) return undefined;
+    keys.add(key);
+    issues.push(issue);
+  }
+  const hasBlocking = issues.some(({ severity }) => severity === "blocking");
+  if ((status === "ready" && (hasBlocking || currentName === null || currentUnitPriceMinor === null))
+    || (status === "blocked" && (!hasBlocking || currentUnitPriceMinor !== null))) return undefined;
+  return Object.freeze({
+    currentName,
+    currentUnitPriceMinor,
+    historicalName,
+    issues: Object.freeze(issues),
+    productId,
+    quantity,
+    sourceOrderItemId,
+    status,
+  });
+}
+
+function parsePreviewIssue(value: unknown): CustomerRepeatOrderPreviewIssueV1 | undefined {
+  const record = exactRecord(value, [
+    "code", "severity", "groupId", "modifierId", "historicalAmountMinor", "currentAmountMinor",
+  ]);
+  if (record === undefined) return undefined;
+  const code = member(own(record, "code"), REPEAT_ORDER_PREVIEW_ISSUE_CODES);
+  const severity = member(own(record, "severity"), ["blocking", "warning"] as const);
+  const groupId = nullableUuid(own(record, "groupId"));
+  const modifierId = nullableUuid(own(record, "modifierId"));
+  const historicalAmountMinor = nullableInteger(own(record, "historicalAmountMinor"));
+  const currentAmountMinor = nullableInteger(own(record, "currentAmountMinor"));
+  if (code === undefined || severity === undefined || groupId === undefined || modifierId === undefined
+    || historicalAmountMinor === undefined || currentAmountMinor === undefined) return undefined;
+  const priceChange = code === "product_price_changed" || code === "modifier_price_changed";
+  if (priceChange !== (severity === "warning")
+    || (priceChange
+      ? historicalAmountMinor === null || currentAmountMinor === null
+      : historicalAmountMinor !== null || currentAmountMinor !== null)) return undefined;
+  return Object.freeze({ code, currentAmountMinor, groupId, historicalAmountMinor, modifierId, severity });
 }
 
 function parseOrder(value: unknown): CustomerRecentOrderV1 | undefined {
@@ -214,8 +391,16 @@ function integer(value: unknown, minimum: number, maximum: number): number | und
     : undefined;
 }
 
+function nullableInteger(value: unknown): number | null | undefined {
+  return value === null ? null : integer(value, 0, Number.MAX_SAFE_INTEGER);
+}
+
 function uuid(value: unknown): string | undefined {
   return typeof value === "string" && UUID_PATTERN.test(value) ? value.toLowerCase() : undefined;
+}
+
+function nullableUuid(value: unknown): string | null | undefined {
+  return value === null ? null : uuid(value);
 }
 
 function text(value: unknown, minimum: number, maximum: number): string | undefined {

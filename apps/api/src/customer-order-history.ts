@@ -1,23 +1,30 @@
 import { Inject, Injectable } from "@nestjs/common";
 import {
   CAPTURE_FULFILLMENT_CHANNELS,
+  CUSTOMER_RECENT_ORDER_LIMIT,
   CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION,
   parseCustomerRecentOrderListV1,
   parseCustomerRecentOrdersQueryV1,
+  parseCustomerRepeatOrderPreviewQueryV1,
+  parseCustomerRepeatOrderPreviewV1,
   type BranchScope,
   type CustomerRecentOrderListV1,
   type CustomerRecentOrdersQueryV1,
+  type CustomerRepeatOrderPreviewQueryV1,
+  type CustomerRepeatOrderPreviewV1,
 } from "@super-restaurant/shared-types";
-import type { Order } from "@super-restaurant/domain";
+import { buildRepeatOrderPlan, type Order, type RepeatOrderPlan } from "@super-restaurant/domain";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
+import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
+import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
 import { decodeOrderRecord } from "./persistence/order-persistence-codec.js";
 
 const listSql = "select app_private.list_customer_recent_orders($1::uuid, $2::jsonb) as result";
 
-export type CustomerOrderHistoryErrorCode = "authorization" | "request" | "unavailable";
+export type CustomerOrderHistoryErrorCode = "authorization" | "not_found" | "request" | "unavailable";
 
 export class CustomerOrderHistoryError extends Error {
   public constructor(public readonly code: CustomerOrderHistoryErrorCode) {
@@ -32,14 +39,49 @@ export interface CustomerOrderHistoryPort {
 
 export const CUSTOMER_ORDER_HISTORY_PORT = Symbol("CUSTOMER_ORDER_HISTORY_PORT");
 
+export interface CustomerOrderRepeatSourcePort {
+  read(actorId: string, query: CustomerRepeatOrderPreviewQueryV1): Promise<Order | "forbidden" | "missing">;
+}
+
+export const CUSTOMER_ORDER_REPEAT_SOURCE_PORT = Symbol("CUSTOMER_ORDER_REPEAT_SOURCE_PORT");
+
+interface InternalHistoryRead {
+  readonly orders: readonly Order[];
+  readonly publicList: CustomerRecentOrderListV1;
+}
+
 @Injectable()
-export class PostgresCustomerOrderHistory implements CustomerOrderHistoryPort {
+export class PostgresCustomerOrderHistory implements CustomerOrderHistoryPort, CustomerOrderRepeatSourcePort {
   public constructor(@Inject(DATABASE_CLIENT) private readonly database: DatabaseClientPort) {}
 
   public async list(
     actorId: string,
     query: CustomerRecentOrdersQueryV1,
   ): Promise<CustomerRecentOrderListV1 | "forbidden"> {
+    const result = await this.readInternal(actorId, query);
+    return result === "forbidden" ? result : result.publicList;
+  }
+
+  public async read(
+    actorId: string,
+    query: CustomerRepeatOrderPreviewQueryV1,
+  ): Promise<Order | "forbidden" | "missing"> {
+    const historyQuery = parseCustomerRecentOrdersQueryV1({
+      customerId: query.customerId,
+      limit: CUSTOMER_RECENT_ORDER_LIMIT,
+      schemaVersion: CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION,
+      scope: query.scope,
+    });
+    if (historyQuery === undefined) throw unavailable();
+    const result = await this.readInternal(actorId, historyQuery);
+    if (result === "forbidden") return result;
+    return result.orders.find(({ orderId }) => orderId === query.orderId) ?? "missing";
+  }
+
+  private async readInternal(
+    actorId: string,
+    query: CustomerRecentOrdersQueryV1,
+  ): Promise<InternalHistoryRead | "forbidden"> {
     let rows: readonly unknown[];
     try {
       rows = (await this.database.query(listSql, [actorId, JSON.stringify(query)])).rows;
@@ -53,7 +95,7 @@ export class PostgresCustomerOrderHistory implements CustomerOrderHistoryPort {
       if (outcome.status === "denied") return "forbidden";
       throw unavailable();
     }
-    const result = publicList(outcome.result, query);
+    const result = internalList(outcome.result, query);
     if (result === undefined) throw unavailable();
     return result;
   }
@@ -89,7 +131,56 @@ export class CustomerOrderHistoryService {
   }
 }
 
-function publicList(value: unknown, query: CustomerRecentOrdersQueryV1): CustomerRecentOrderListV1 | undefined {
+@Injectable()
+export class CustomerOrderRepeatPreviewService {
+  public constructor(
+    @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
+    @Inject(CUSTOMER_ORDER_REPEAT_SOURCE_PORT) private readonly source: CustomerOrderRepeatSourcePort,
+    @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
+  ) {}
+
+  public async preview(principal: AuthenticatedPrincipal, input: unknown): Promise<CustomerRepeatOrderPreviewV1> {
+    const query = parsePreviewInput(input);
+    if (query === undefined) throw applicationError("request");
+    const actorId = await this.authorize(principal, query.scope);
+    try {
+      const [sourceOrder, catalogState] = await Promise.all([
+        this.source.read(actorId, query),
+        this.catalogs.read(actorId, query.scope),
+      ]);
+      if (sourceOrder === "forbidden" || catalogState === "forbidden") throw applicationError("authorization");
+      if (sourceOrder === "missing") throw applicationError("not_found");
+      if (!sameScope(catalogState.scope, query.scope) || catalogState.catalog === null
+        || sourceOrder.restaurantId !== query.scope.restaurantId
+        || sourceOrder.branchId !== query.scope.branchId
+        || sourceOrder.orderId !== query.orderId) throw unavailable();
+      const plan = buildRepeatOrderPlan(
+        sourceOrder,
+        toDomainMenuCatalog(catalogState.catalog, query.scope.restaurantId),
+      );
+      const preview = publicPreview(plan, query);
+      if (preview === undefined) throw unavailable();
+      return preview;
+    } catch (error: unknown) {
+      if (error instanceof CustomerOrderHistoryError) throw error;
+      throw unavailable();
+    }
+  }
+
+  private async authorize(principal: AuthenticatedPrincipal, scope: BranchScope): Promise<string> {
+    try {
+      const permissions = ["customers.read", "orders.read", "catalog.read"] as const;
+      const decisions = await Promise.all(permissions.map((permission) =>
+        this.authorization.authorizeBranch(principal, scope, permission)));
+      const actorId = decisions[0]?.principal.actorId;
+      if (actorId === undefined || decisions.some(({ principal: decisionPrincipal }) =>
+        decisionPrincipal.actorId !== actorId)) throw new Error("ACTOR_MISMATCH");
+      return actorId;
+    } catch { throw applicationError("authorization"); }
+  }
+}
+
+function internalList(value: unknown, query: CustomerRecentOrdersQueryV1): InternalHistoryRead | undefined {
   const envelope = exactRecord(value, ["schemaVersion", "scope", "customerId", "orders"]);
   if (envelope === undefined || own(envelope, "schemaVersion") !== CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION) return undefined;
   const scope = exactRecord(own(envelope, "scope"), ["restaurantId", "branchId"]);
@@ -99,17 +190,27 @@ function publicList(value: unknown, query: CustomerRecentOrdersQueryV1): Custome
   const rawOrders = denseArray(own(envelope, "orders"), query.limit);
   if (restaurantId !== query.scope.restaurantId || branchId !== query.scope.branchId
     || customerId !== query.customerId || rawOrders === undefined) return undefined;
-  const orders = rawOrders.map((raw) => publicOrder(raw, query.scope));
-  if (orders.some((order) => order === undefined)) return undefined;
-  return parseCustomerRecentOrderListV1({
+  const decoded = rawOrders.map((raw) => decodeHistoryOrder(raw, query.scope));
+  if (decoded.some((entry) => entry === undefined)) return undefined;
+  const entries = decoded as readonly DecodedHistoryOrder[];
+  const publicList = parseCustomerRecentOrderListV1({
     customerId,
-    orders,
+    orders: entries.map(({ publicOrder }) => publicOrder),
     schemaVersion: CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION,
     scope: query.scope,
   });
+  return publicList === undefined ? undefined : Object.freeze({
+    orders: Object.freeze(entries.map(({ order }) => order)),
+    publicList,
+  });
 }
 
-function publicOrder(value: unknown, scope: BranchScope): CustomerRecentOrderListV1["orders"][number] | undefined {
+interface DecodedHistoryOrder {
+  readonly order: Order;
+  readonly publicOrder: CustomerRecentOrderListV1["orders"][number];
+}
+
+function decodeHistoryOrder(value: unknown, scope: BranchScope): DecodedHistoryOrder | undefined {
   const record = exactRecord(value, ["confirmedAt", "fulfillmentChannel", "order"]);
   if (record === undefined) return undefined;
   const confirmedAt = timestamp(own(record, "confirmedAt"));
@@ -118,7 +219,7 @@ function publicOrder(value: unknown, scope: BranchScope): CustomerRecentOrderLis
   let order: Order;
   try { order = decodeOrderRecord(own(record, "order")); } catch { return undefined; }
   if (order.restaurantId !== scope.restaurantId || order.branchId !== scope.branchId) return undefined;
-  return {
+  const publicOrder = {
     confirmedAt,
     currency: order.currency,
     fulfillmentChannel,
@@ -142,6 +243,7 @@ function publicOrder(value: unknown, scope: BranchScope): CustomerRecentOrderLis
     orderId: order.orderId,
     status: order.status,
   };
+  return Object.freeze({ order, publicOrder });
 }
 
 function parseInput(value: unknown): CustomerRecentOrdersQueryV1 | undefined {
@@ -156,6 +258,52 @@ function parseInput(value: unknown): CustomerRecentOrdersQueryV1 | undefined {
     limit,
     schemaVersion: CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION,
     scope: { branchId: own(record, "branchId"), restaurantId: own(record, "restaurantId") },
+  });
+}
+
+function parsePreviewInput(value: unknown): CustomerRepeatOrderPreviewQueryV1 | undefined {
+  const record = exactRecord(value, ["restaurantId", "branchId", "customerId", "orderId"]);
+  return record === undefined ? undefined : parseCustomerRepeatOrderPreviewQueryV1({
+    customerId: own(record, "customerId"),
+    orderId: own(record, "orderId"),
+    schemaVersion: CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION,
+    scope: { branchId: own(record, "branchId"), restaurantId: own(record, "restaurantId") },
+  });
+}
+
+function publicPreview(
+  plan: RepeatOrderPlan,
+  query: CustomerRepeatOrderPreviewQueryV1,
+): CustomerRepeatOrderPreviewV1 | undefined {
+  if (plan.sourceOrderId !== query.orderId || plan.restaurantId !== query.scope.restaurantId
+    || plan.sourceBranchId !== query.scope.branchId) return undefined;
+  return parseCustomerRepeatOrderPreviewV1({
+    blockedLineCount: plan.blockedLineCount,
+    catalogVersion: plan.catalogVersion,
+    currency: plan.currency,
+    customerId: query.customerId,
+    hasPriceChanges: plan.hasPriceChanges,
+    lines: plan.lines.map((line) => ({
+      currentName: line.currentName,
+      currentUnitPriceMinor: line.currentSnapshot?.unitPrice.amountMinor ?? null,
+      historicalName: line.historicalName,
+      issues: line.issues.map((issue) => ({
+        code: issue.code,
+        currentAmountMinor: issue.currentAmountMinor ?? null,
+        groupId: issue.groupId ?? null,
+        historicalAmountMinor: issue.historicalAmountMinor ?? null,
+        modifierId: issue.modifierId ?? null,
+        severity: issue.severity,
+      })),
+      productId: line.productId,
+      quantity: line.quantity,
+      sourceOrderItemId: line.sourceOrderItemId,
+      status: line.status,
+    })),
+    readyLineCount: plan.readyLineCount,
+    schemaVersion: CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION,
+    scope: query.scope,
+    sourceOrderId: plan.sourceOrderId,
   });
 }
 
