@@ -5,7 +5,9 @@ import {
   parseCaptureWorkTrayRequestV1,
   parseCaptureWorkTrayResultV1,
   parseCaptureWorkspaceRequestV1,
+  parseCaptureWorkspaceRequestV3,
   parseCaptureWorkspaceV1,
+  parseCaptureWorkspaceV3,
   parseCaptureMutationResultV1,
   parseClaimCaptureDraftCommandV1,
   parseCloseCaptureNoSaleCommandV1,
@@ -150,6 +152,8 @@ expect(parseCaptureDraftDetailV1({ ...detail, attentionStatus: "held", ownerMemb
 expect(parseCaptureMutationResultV1({ schemaVersion: 1, replayed: false, detail }) !== undefined, "mutation result exposes replay flag");
 expect(parseCaptureWorkspaceRequestV1({ schemaVersion: 1, scope, captureDraftId: common.captureDraftId }) !== undefined,
   "workspace request binds capture and scope");
+expect(parseCaptureWorkspaceRequestV3({ schemaVersion: 3, scope, captureDraftId: common.captureDraftId }) !== undefined,
+  "workspace V3 request binds capture and scope");
 const customerSnapshot = { schemaVersion: 1, snapshotRef: customerSnapshotRef, customerId: common.eventId,
   contactId: common.deviceId, displayName: "Cliente histórico", phoneDisplayValue: "+52 555 000 0000",
   phoneNormalizedValue: "+525550000000" };
@@ -167,6 +171,16 @@ expect(parseCaptureWorkspaceV1({ schemaVersion: 1, detail, customerSnapshot: { .
 expect(parseCaptureWorkspaceV1({ schemaVersion: 1, detail, customerSnapshot,
   fulfillmentSnapshot: { ...fulfillmentSnapshot, customerSnapshotRef: orderId } }) === undefined,
   "workspace rejects fulfillment linked to another party snapshot");
+const workspaceV3 = parseCaptureWorkspaceV3({ schemaVersion: 3, detail: { ...detail, schemaVersion: 2,
+  deliveryInstructions: "Portón lateral" }, customerSnapshot, fulfillmentSnapshot,
+  repeatOrderPlan: { schemaVersion: 1, customerId: customerSnapshot.customerId, sourceOrderId: orderId,
+    catalogVersion: targetMembershipId, appliedCaptureVersion: 2, lineCount: 3 } });
+expect(workspaceV3?.repeatOrderPlan?.lineCount === 3 && Object.isFrozen(workspaceV3.repeatOrderPlan),
+  "workspace V3 rehydrates a bounded repeat plan summary");
+expect(parseCaptureWorkspaceV3({ ...workspaceV3, repeatOrderPlan: { ...workspaceV3?.repeatOrderPlan,
+  customerId: common.captureDraftId } }) === undefined, "workspace V3 rejects a repeat plan for another customer");
+expect(parseCaptureWorkspaceV3({ ...workspaceV3, repeatOrderPlan: { ...workspaceV3?.repeatOrderPlan,
+  lineCount: 201 } }) === undefined, "workspace V3 bounds repeat plan lines");
 const preferenceResult = { schemaVersion: 1, replayed: false, detail,
   recoveryPolicy: { schemaVersion: 1, autoRenewSelected: true, recoveryExpiresAt: "2026-10-16T12:00:00.000Z" } };
 expect(parseCaptureRecoveryPreferenceResultV1(preferenceResult) !== undefined, "preference result includes explicit selected policy");

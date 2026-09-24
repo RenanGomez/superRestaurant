@@ -12,8 +12,9 @@ import type {
   CaptureFulfillmentChannelV1,
   CaptureFulfillmentSnapshotV1,
   CaptureMutationResultV1,
+  CaptureRepeatOrderPlanSummaryV1,
   CaptureSourceChannelV1,
-  CaptureWorkspaceV2,
+  CaptureWorkspaceV3,
   CaptureWorkTrayResultV1,
   CustomerDirectoryDetailV1,
   CustomerDirectorySearchResultV1,
@@ -54,6 +55,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
   const [customer, setCustomer] = useState<CustomerDirectoryDetailV1>();
   const [customerSnapshot, setCustomerSnapshot] = useState<CaptureCustomerSnapshotV1 | null>(null);
   const [fulfillmentSnapshot, setFulfillmentSnapshot] = useState<CaptureFulfillmentSnapshotV1 | null>(null);
+  const [repeatOrderPlan, setRepeatOrderPlan] = useState<CaptureRepeatOrderPlanSummaryV1 | null>(null);
   const [selectedContact, setSelectedContact] = useState<string>();
   const [selectedAddress, setSelectedAddress] = useState<string>();
   const [sourceChannel, setSourceChannel] = useState<CaptureSourceChannelV1>("phone");
@@ -89,7 +91,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
       setDeliveryInstructionSuggestions((value as CaptureDeliveryInstructionSuggestionsV1).items);
     }
     else if ("items" in value) setTray((value as CaptureWorkTrayResultV1).items);
-    else if ("customerSnapshot" in value) applyWorkspace(value as CaptureWorkspaceV2);
+    else if ("customerSnapshot" in value) applyWorkspace(value as CaptureWorkspaceV3);
     else if ("replayed" in value) {
       const mutation = value as CaptureMutationResultV1;
       setCapture(mutation.detail);
@@ -98,6 +100,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
       }
       setCustomerSnapshot(current => current?.snapshotRef === mutation.detail.customerSnapshotRef ? current : null);
       setFulfillmentSnapshot(current => current?.snapshotRef === mutation.detail.fulfillmentSnapshotRef ? current : null);
+      if (mutation.detail.status !== "draft" || mutation.detail.customerSnapshotRef !== customerSnapshot?.snapshotRef) {
+        setRepeatOrderPlan(null);
+      }
       if (mutation.detail.customerSnapshotRef === null) setSelectedContact(undefined);
       if (mutation.detail.fulfillmentSnapshotRef === null) setSelectedAddress(undefined);
       setSourceChannel(mutation.detail.sourceChannel);
@@ -107,7 +112,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
     return reply;
   }
 
-  function applyWorkspace(value: CaptureWorkspaceV2): void {
+  function applyWorkspace(value: CaptureWorkspaceV3): void {
     const hydrated = rehydrateCaptureWorkspace(value);
     if (hydrated === undefined) {
       setError("unavailable");
@@ -116,6 +121,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
     setCapture(hydrated.detail);
     setCustomerSnapshot(hydrated.customerSnapshot);
     setFulfillmentSnapshot(hydrated.fulfillmentSnapshot);
+    setRepeatOrderPlan(hydrated.repeatOrderPlan);
     setSelectedContact(hydrated.customerSnapshot?.contactId);
     setSelectedAddress(hydrated.fulfillmentSnapshot?.addressId);
     setSourceChannel(hydrated.sourceChannel);
@@ -147,7 +153,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
   }
 
   async function refreshWorkspace(captureDraftId: string): Promise<void> {
-    const reply = await run("workspace", { schemaVersion: 2, scope, captureDraftId });
+    const reply = await run("workspace", { schemaVersion: 3, scope, captureDraftId });
     if (reply?.ok && "customerSnapshot" in reply.value && reply.value.detail.fulfillmentChannel === "delivery"
       && reply.value.customerSnapshot !== null) {
       await run("deliveryInstructionSuggestions", { schemaVersion: 1, scope, captureDraftId });
@@ -257,6 +263,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
   function reset(): void {
     setCapture(undefined); setResults(undefined); setCustomer(undefined); setCustomerSnapshot(null);
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
+    setRepeatOrderPlan(null);
     setError(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
     setDeliveryInstructions("");
     setDeliveryInstructionSuggestions([]);
@@ -266,7 +273,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
 
   const locked = busy || capture?.status !== "draft" || capture?.attentionLeaseId === null
     || error === "denied" || error === "conflict";
-  const canConfirm = confirmationContext !== undefined && selectedShiftId !== "" && fulfillmentChannel !== null
+  const canConfirm = repeatOrderPlan === null && confirmationContext !== undefined && selectedShiftId !== "" && fulfillmentChannel !== null
     && (fulfillmentChannel !== "dine_in" || selectedTableId !== "")
     && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null));
   return <div className="flex flex-col gap-4" aria-busy={busy}>
@@ -308,6 +315,11 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
           <strong>{fulfillmentSnapshot.label}</strong><br />{[fulfillmentSnapshot.streetLine, fulfillmentSnapshot.unit,
             fulfillmentSnapshot.neighborhood, fulfillmentSnapshot.locality].filter(Boolean).join(", ")}</p>}
         <p className="mt-2 text-xs text-text-muted">Datos congelados al guardar esta captura.</p></section>}
+      {repeatOrderPlan !== null && <section className={panel} data-testid="rehydrated-repeat-order-plan">
+        <h2 className="font-heading text-lg font-semibold">Pedido repetido preparado</h2>
+        <p className="mt-2 text-sm">{repeatOrderPlan.lineCount} {repeatOrderPlan.lineCount === 1 ? "línea lista" : "líneas listas"} para esta captura.</p>
+        <p className="mt-1 text-xs text-text-muted">La preparación se conserva al recargar. La conversión permanece bloqueada hasta poder crear sus líneas en la orden.</p>
+      </section>}
       {fulfillmentChannel === "delivery" && <section className={panel}>
         <h2 className="font-heading text-lg font-semibold">Instrucciones para esta entrega</h2>
         <p className="mt-1 text-sm text-text-muted">Se guardan en esta captura; nunca modifican la dirección del cliente ni se heredan automáticamente.</p>
@@ -386,6 +398,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
           </p>}
           {fulfillmentChannel === "delivery" && (customerSnapshot === null || fulfillmentSnapshot === null) && <p className="mt-2 text-sm text-text-muted">
             Guarda un cliente y una dirección validada antes de confirmar el domicilio.
+          </p>}
+          {repeatOrderPlan !== null && <p role="alert" className="mt-2 text-sm text-text-muted">
+            Este pedido repetido todavía no puede convertirse: falta materializar y volver a cotizar sus líneas en el servidor.
           </p>}
           <button type="button" className={`${button} mt-4`} onClick={confirmCapture} disabled={locked || !canConfirm}>
             Convertir captura en orden

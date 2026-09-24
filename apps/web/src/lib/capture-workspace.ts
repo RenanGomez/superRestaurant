@@ -3,8 +3,8 @@ import {
   parseCaptureMutationResultV1,
   parseCaptureDeliveryInstructionSuggestionsRequestV1,
   parseCaptureDeliveryInstructionSuggestionsV1,
-  parseCaptureWorkspaceRequestV2,
-  parseCaptureWorkspaceV2,
+  parseCaptureWorkspaceRequestV3,
+  parseCaptureWorkspaceV3,
   parseCaptureWorkTrayRequestV1,
   parseCaptureWorkTrayResultV1,
   parseClaimCaptureDraftCommandV1,
@@ -20,6 +20,7 @@ import {
   type BranchScope,
   type CaptureFulfillmentChannelV1,
   type CaptureFulfillmentSnapshotV1,
+  type CaptureRepeatOrderPlanSummaryV1,
   type CaptureSourceChannelV1,
 } from "@super-restaurant/shared-types";
 export type CaptureRequestResult<T> = { readonly ok: true; readonly value: T }
@@ -85,7 +86,7 @@ const parsers = {
 type CaptureResponse = NonNullable<ReturnType<typeof parseCaptureMutationResultV1>>
   | NonNullable<ReturnType<typeof parseCaptureDeliveryInstructionSuggestionsV1>>
   | NonNullable<ReturnType<typeof parseCaptureWorkTrayResultV1>>
-  | NonNullable<ReturnType<typeof parseCaptureWorkspaceV2>>
+  | NonNullable<ReturnType<typeof parseCaptureWorkspaceV3>>
   | NonNullable<ReturnType<typeof parseSetCaptureDeliveryInstructionsResultV1>>;
 export async function requestCapture(token: string, baseUrl: string, operation: CaptureOperation, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
   if (operation === "tray") return requestCaptureTray(token, baseUrl, input);
@@ -142,18 +143,20 @@ export interface RehydratedCaptureWorkspace {
   readonly detail: CaptureDraftDetailV2;
   readonly fulfillmentChannel: CaptureFulfillmentChannelV1 | null;
   readonly fulfillmentSnapshot: CaptureFulfillmentSnapshotV1 | null;
+  readonly repeatOrderPlan: CaptureRepeatOrderPlanSummaryV1 | null;
   readonly sourceChannel: CaptureSourceChannelV1;
 }
 
 /** Rehydrates only immutable snapshot facts returned for the Capture; it never accepts a live Customer record. */
 export function rehydrateCaptureWorkspace(value: unknown): RehydratedCaptureWorkspace | undefined {
-  const workspace = parseCaptureWorkspaceV2(value);
+  const workspace = parseCaptureWorkspaceV3(value);
   return workspace === undefined ? undefined : Object.freeze({
     customerSnapshot: workspace.customerSnapshot,
     deliveryInstructions: workspace.detail.deliveryInstructions,
     detail: workspace.detail,
     fulfillmentChannel: workspace.detail.fulfillmentChannel,
     fulfillmentSnapshot: workspace.fulfillmentSnapshot,
+    repeatOrderPlan: workspace.repeatOrderPlan,
     sourceChannel: workspace.detail.sourceChannel,
   });
 }
@@ -177,7 +180,7 @@ async function requestCaptureTray(token: string, baseUrl: string, input: unknown
 }
 
 async function requestCaptureWorkspace(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
-  const command = parseCaptureWorkspaceRequestV2(input);
+  const command = parseCaptureWorkspaceRequestV3(input);
   if (command === undefined) return { ok: false, error: "invalid" };
   try {
     const response = await fetch(`${baseUrl}/api/v1/captures${paths.workspace}`, { method: "POST", cache: "no-store",
@@ -185,7 +188,7 @@ async function requestCaptureWorkspace(token: string, baseUrl: string, input: un
     if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
       : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
         : response.status === 400 ? "invalid" : "unavailable" };
-    const value = parseCaptureWorkspaceV2(await response.json());
+    const value = parseCaptureWorkspaceV3(await response.json());
     if (value === undefined || value.detail.scope.restaurantId !== command.scope.restaurantId
       || value.detail.scope.branchId !== command.scope.branchId || value.detail.captureDraftId !== command.captureDraftId) {
       return { ok: false, error: "unavailable" };

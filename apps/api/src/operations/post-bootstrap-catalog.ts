@@ -180,3 +180,28 @@ export function buildCaptureRepeatOrderCatalogAudit(
     .replace(") <> 51", ") <> 52");
   return validateCatalogAuditSql(`${migrated}\n${repeatOrderSupplementSql}`);
 }
+
+export function buildCaptureRepeatOrderWorkspaceCatalogAudit(
+  baseSql: string,
+  captureSupplementSql: string,
+  directorySupplementSql: string,
+  deliveryOrderSupplementSql: string,
+  historySupplementSql: string,
+  repeatOrderSupplementSql: string,
+  repeatOrderWorkspaceSupplementSql: string,
+): string {
+  const base = buildCaptureRepeatOrderCatalogAudit(
+    baseSql,
+    captureSupplementSql,
+    directorySupplementSql,
+    deliveryOrderSupplementSql,
+    historySupplementSql,
+    repeatOrderSupplementSql,
+  );
+  const tail = "pg_catalog.to_regprocedure('app_private.repeat_customer_order_into_capture(uuid,jsonb,jsonb)')";
+  const migrated = base.replace(tail,
+    `${tail},\n    pg_catalog.to_regprocedure('app_private.read_capture_workspace_v3(uuid,jsonb)')`)
+    .replace(") <> 56", ") <> 57")
+    .replace(") <> 52", ") <> 53");
+  return validateCatalogAuditSql(`${migrated}\n${repeatOrderWorkspaceSupplementSql}`);
+}

@@ -2,7 +2,7 @@ import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException,
   Header, HttpCode, Inject, NotFoundException, Post, Req, ServiceUnavailableException,
 } from "@nestjs/common";
-import type { CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
+import type { CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
 import { CaptureApplicationError, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureService, CaptureTrayService } from "./captures.js";
@@ -46,7 +46,7 @@ export class CapturesController {
   @Post("workspace")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
-  public async readWorkspace(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2> {
+  public async readWorkspace(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2 | CaptureWorkspaceV3> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.captures.readWorkspace(principal, body));
   }

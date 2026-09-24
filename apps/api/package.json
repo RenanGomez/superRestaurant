@@ -51,6 +51,7 @@
     "verify:capture-delivery-order-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-delivery-order-schema-verification.js",
     "verify:customer-order-history-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-customer-order-history-schema-verification.js",
     "verify:capture-repeat-order-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-repeat-order-schema-verification.js",
+    "verify:capture-repeat-order-workspace-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-repeat-order-workspace-schema-verification.js",
     "verify:membership-directory-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-membership-directory-schema-verification.js",
     "verify:dining-zones-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-zones-schema-verification.js",
     "verify:dining-tables-layout-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-tables-layout-schema-verification.js",

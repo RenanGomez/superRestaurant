@@ -9,6 +9,7 @@ import {
   buildCaptureCustomerCatalogAudit,
   buildCaptureDeliveryOrderCatalogAudit,
   buildCaptureRepeatOrderCatalogAudit,
+  buildCaptureRepeatOrderWorkspaceCatalogAudit,
   buildCustomerDirectoryCatalogAudit,
   buildCustomerOrderHistoryCatalogAudit,
   buildPostBootstrapCatalogAudit,
@@ -492,6 +493,44 @@ test("Capture repeat Order plan is server-derived, durable and context-bound", (
   assert.match(repeatRunner, /securedTables: 37/u);
   assert.match(repeatRunner, /securityDefinerFunctions: 52/u);
   assert.match(apiPackage, /"verify:capture-repeat-order-schema:rollback"/u);
+});
+
+test("Capture Workspace V3 exposes only a bounded repeat-order plan summary", () => {
+  const sql = readFileSync(new URL("../../../../supabase/migrations/20260923000300_capture_repeat_order_workspace.sql", import.meta.url), "utf8");
+  const catalog = readFileSync(new URL("../../../../supabase/tests/capture_repeat_order_workspace_catalog.sql", import.meta.url), "utf8");
+  const invariants = readFileSync(new URL("../../../../supabase/tests/capture_repeat_order_workspace_invariants.sql", import.meta.url), "utf8");
+  const base = readFileSync(new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url), "utf8");
+  const capture = readFileSync(new URL("../../../../supabase/tests/capture_drafts_catalog.sql", import.meta.url), "utf8");
+  const directory = readFileSync(new URL("../../../../supabase/tests/customer_directory_catalog.sql", import.meta.url), "utf8");
+  const deliveryOrder = readFileSync(new URL("../../../../supabase/tests/capture_delivery_order_catalog.sql", import.meta.url), "utf8");
+  const history = readFileSync(new URL("../../../../supabase/tests/customer_order_history_catalog.sql", import.meta.url), "utf8");
+  const repeatOrder = readFileSync(new URL("../../../../supabase/tests/capture_repeat_order_catalog.sql", import.meta.url), "utf8");
+  assert.doesNotThrow(() => extractMigrationBody(sql));
+  assert.match(sql, /create function app_private\.read_capture_workspace_v3\(p_actor_id uuid, p_request jsonb\)/u);
+  assert.match(sql, /app_private\.read_capture_workspace_v2/u);
+  assert.match(sql, /pg_catalog\.jsonb_array_length\(stored\.selection_plan->'lines'\)/u);
+  assert.doesNotMatch(sql, /'selectionPlan'|'selections'|'unitPriceMinor'/u);
+  assert.match(sql, /grant execute on function app_private\.read_capture_workspace_v3\(uuid,jsonb\) to app_api/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(catalog));
+  assert.doesNotThrow(() => extractMigrationBody(invariants));
+  const audit = buildCaptureRepeatOrderWorkspaceCatalogAudit(
+    base,
+    capture,
+    directory,
+    deliveryOrder,
+    history,
+    repeatOrder,
+    catalog,
+  );
+  assert.equal(audit.split("pg_catalog.to_regprocedure('app_private.read_capture_workspace_v3(uuid,jsonb)')").length - 1, 2);
+  assert.match(audit, /\) <> 57/u);
+  assert.match(audit, /\) <> 53/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(audit));
+  const workspaceRunner = readFileSync(new URL("../../src/operations/run-capture-repeat-order-workspace-schema-verification.ts", import.meta.url), "utf8");
+  assert.match(workspaceRunner, /20260923000300_capture_repeat_order_workspace\.sql/u);
+  assert.match(workspaceRunner, /capture_repeat_order_workspace_invariants\.sql/u);
+  assert.match(workspaceRunner, /securityDefinerFunctions: 53/u);
+  assert.match(apiPackage, /"verify:capture-repeat-order-workspace-schema:rollback"/u);
 });
 
 test("post-P2 state runner uses the pinned profile for both stable lifecycle states", () => {

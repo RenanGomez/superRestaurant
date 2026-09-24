@@ -14,6 +14,7 @@ import {
   parseCaptureWorkTrayResultV1,
   parseCaptureWorkspaceRequestV1,
   parseCaptureWorkspaceRequestV2,
+  parseCaptureWorkspaceRequestV3,
   parseCaptureDeliveryInstructionSuggestionsRequestV1,
   parseCaptureDeliveryInstructionSuggestionsV1,
   parseSetCaptureDeliveryInstructionsCommandV1,
@@ -36,8 +37,10 @@ import {
   type CaptureWorkTrayResultV1,
   type CaptureWorkspaceRequestV1,
   type CaptureWorkspaceRequestV2,
+  type CaptureWorkspaceRequestV3,
   type CaptureWorkspaceV1,
   type CaptureWorkspaceV2,
+  type CaptureWorkspaceV3,
   type CaptureDeliveryInstructionSuggestionsRequestV1,
   type CaptureDeliveryInstructionSuggestionsV1,
   type SetCaptureDeliveryInstructionsCommandV1,
@@ -48,7 +51,7 @@ import {
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
-import { decodeCaptureRecord, decodeCaptureWorkspace, decodeCaptureWorkspaceV2 } from "./persistence/capture-persistence-codec.js";
+import { decodeCaptureRecord, decodeCaptureWorkspace, decodeCaptureWorkspaceV2, decodeCaptureWorkspaceV3 } from "./persistence/capture-persistence-codec.js";
 import { encodeOrderAuditEventRecord, encodeOrderRecord } from "./persistence/order-persistence-codec.js";
 
 export type CaptureApplicationErrorCode = "request" | "authorization" | "conflict" | "missing" | "unavailable";
@@ -63,6 +66,7 @@ export interface CaptureCreationPort {
   autosaveDraft?(actorId: string, command: AutosaveCaptureDraftCommandV1): Promise<unknown>;
   readWorkspace?(actorId: string, request: CaptureWorkspaceRequestV1): Promise<unknown>;
   readWorkspaceV2?(actorId: string, request: CaptureWorkspaceRequestV2): Promise<unknown>;
+  readWorkspaceV3?(actorId: string, request: CaptureWorkspaceRequestV3): Promise<unknown>;
 }
 export const CAPTURE_CREATION_PORT = Symbol("CAPTURE_CREATION_PORT");
 export type CaptureAttentionOperation = "capture.held" | "capture.claimed" | "capture.resumed";
@@ -144,6 +148,19 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     if (!canonicalUuid.test(actorId) || request === undefined) throw new CaptureApplicationError("request");
     const response = await this.database.query(
       "select app_private.read_capture_workspace_v2($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async readWorkspaceV3(actorId: string, input: CaptureWorkspaceRequestV3): Promise<unknown> {
+    const request = parseCaptureWorkspaceRequestV3(input);
+    if (!canonicalUuid.test(actorId) || request === undefined) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.read_capture_workspace_v3($1::uuid, $2::jsonb) as result",
       [actorId, JSON.stringify(request)],
     );
     if (response.rows.length !== 1) throw unavailable();
@@ -514,9 +531,10 @@ export class CaptureService {
     return result;
   }
 
-  public async readWorkspace(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2> {
-    const requestV2 = parseCaptureWorkspaceRequestV2(input);
-    const request = requestV2 ?? parseCaptureWorkspaceRequestV1(input);
+  public async readWorkspace(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2 | CaptureWorkspaceV3> {
+    const requestV3 = parseCaptureWorkspaceRequestV3(input);
+    const requestV2 = requestV3 === undefined ? parseCaptureWorkspaceRequestV2(input) : undefined;
+    const request = requestV3 ?? requestV2 ?? parseCaptureWorkspaceRequestV1(input);
     if (request === undefined) throw new CaptureApplicationError("request");
     let actorId: string;
     try {
@@ -524,13 +542,16 @@ export class CaptureService {
       await this.authorization.authorizeBranch(principal, request.scope, "customers.read");
       actorId = authorized.principal.actorId;
     } catch { throw new CaptureApplicationError("authorization"); }
-    const reader = requestV2 === undefined ? this.creator.readWorkspace : this.creator.readWorkspaceV2;
+    const reader = requestV3 !== undefined ? this.creator.readWorkspaceV3
+      : requestV2 !== undefined ? this.creator.readWorkspaceV2 : this.creator.readWorkspace;
     if (reader === undefined) throw unavailable();
     let raw: unknown;
     try {
-      raw = requestV2 === undefined
-        ? await this.creator.readWorkspace!(actorId, request as CaptureWorkspaceRequestV1)
-        : await this.creator.readWorkspaceV2!(actorId, requestV2);
+      raw = requestV3 !== undefined
+        ? await this.creator.readWorkspaceV3!(actorId, requestV3)
+        : requestV2 !== undefined
+          ? await this.creator.readWorkspaceV2!(actorId, requestV2)
+          : await this.creator.readWorkspace!(actorId, request as CaptureWorkspaceRequestV1);
     } catch { throw unavailable(); }
     const statusOnly = exactRecord(raw, ["status"]);
     if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
@@ -538,9 +559,11 @@ export class CaptureService {
     if (statusOnly?.status === "rejected") throw new CaptureApplicationError("request");
     if (statusOnly !== undefined) throw unavailable();
     try {
-      const workspace = requestV2 === undefined
-        ? decodeCaptureWorkspace(raw, request.scope)
-        : decodeCaptureWorkspaceV2(raw, request.scope);
+      const workspace = requestV3 !== undefined
+        ? decodeCaptureWorkspaceV3(raw, request.scope)
+        : requestV2 !== undefined
+          ? decodeCaptureWorkspaceV2(raw, request.scope)
+          : decodeCaptureWorkspace(raw, request.scope);
       if (workspace.detail.captureDraftId !== request.captureDraftId) throw unavailable();
       return workspace;
     } catch { throw unavailable(); }

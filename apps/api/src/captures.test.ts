@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
-import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkTrayRequestV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1 } from "@super-restaurant/shared-types";
+import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkspaceRequestV3, parseCaptureWorkTrayRequestV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1 } from "@super-restaurant/shared-types";
 
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
@@ -381,6 +381,22 @@ test("capture delivery instructions stay lease-bound, idempotent and outside Add
     return { rows: [{ result: workspaceV2 }] };
   } });
   assert.deepEqual(await workspaceAdapter.readWorkspaceV2(principal.actorId, requestV2), workspaceV2);
+
+  const requestV3 = parseCaptureWorkspaceRequestV3({ schemaVersion: 3, scope: validCommand.scope,
+    captureDraftId: validCommand.captureDraftId });
+  assert.ok(requestV3);
+  const repeatOrderPlan = { schemaVersion: 1 as const, customerId: workspace.customerSnapshot.customerId,
+    sourceOrderId: validCommand.deviceId, catalogVersion: validCommand.eventId,
+    appliedCaptureVersion: 3, lineCount: 2 };
+  const workspaceV3 = { ...workspaceV2, schemaVersion: 3 as const, repeatOrderPlan };
+  const workspaceV3Adapter = new PostgresCaptureCreator({ query: async (sql, parameters) => {
+    assert.equal(sql, "select app_private.read_capture_workspace_v3($1::uuid, $2::jsonb) as result");
+    assert.deepEqual(parameters, [principal.actorId, JSON.stringify(requestV3)]);
+    return { rows: [{ result: workspaceV3 }] };
+  } });
+  assert.deepEqual(await workspaceV3Adapter.readWorkspaceV3(principal.actorId, requestV3), workspaceV3);
+  assert.deepEqual(await serviceFor({ createDraft: async () => ({}), readWorkspaceV3: async () => workspaceV3 })
+    .readWorkspace(principal, requestV3), workspaceV3);
 });
 
 test("capture delivery instruction suggestions are Capture-derived, Branch-scoped and opt-in", async () => {

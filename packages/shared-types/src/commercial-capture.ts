@@ -2,6 +2,7 @@ import type { BranchScope } from "./index.js";
 
 export const COMMERCIAL_CAPTURE_SCHEMA_VERSION = 1 as const;
 export const COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION = 2 as const;
+export const COMMERCIAL_CAPTURE_V3_SCHEMA_VERSION = 3 as const;
 
 export const CAPTURE_SOURCE_CHANNELS = Object.freeze([
   "phone",
@@ -175,6 +176,10 @@ export interface CaptureWorkspaceRequestV2 extends Omit<CaptureWorkspaceRequestV
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION;
 }
 
+export interface CaptureWorkspaceRequestV3 extends Omit<CaptureWorkspaceRequestV1, "schemaVersion"> {
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_V3_SCHEMA_VERSION;
+}
+
 export interface CaptureCustomerSnapshotV1 {
   readonly contactId: string;
   readonly customerId: string;
@@ -217,6 +222,21 @@ export interface CaptureWorkspaceV1 {
 export interface CaptureWorkspaceV2 extends Omit<CaptureWorkspaceV1, "detail" | "schemaVersion"> {
   readonly detail: CaptureDraftDetailV2;
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION;
+}
+
+/** Durable repeat intent only; authoritative selections remain server-owned. */
+export interface CaptureRepeatOrderPlanSummaryV1 {
+  readonly appliedCaptureVersion: number;
+  readonly catalogVersion: string;
+  readonly customerId: string;
+  readonly lineCount: number;
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+  readonly sourceOrderId: string;
+}
+
+export interface CaptureWorkspaceV3 extends Omit<CaptureWorkspaceV2, "schemaVersion"> {
+  readonly repeatOrderPlan: CaptureRepeatOrderPlanSummaryV1 | null;
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_V3_SCHEMA_VERSION;
 }
 
 export interface CaptureMutationResultV1 {
@@ -460,6 +480,15 @@ export function parseCaptureWorkspaceRequestV2(value: unknown): CaptureWorkspace
       : Object.freeze({ captureDraftId, schemaVersion: COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION, scope });
 }
 
+export function parseCaptureWorkspaceRequestV3(value: unknown): CaptureWorkspaceRequestV3 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "captureDraftId"]);
+  const scope = record === undefined ? undefined : parseUuidScope(own(record, "scope"));
+  const captureDraftId = record === undefined ? undefined : uuid(own(record, "captureDraftId"));
+  return record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_V3_SCHEMA_VERSION
+    || scope === undefined || captureDraftId === undefined ? undefined
+      : Object.freeze({ captureDraftId, schemaVersion: COMMERCIAL_CAPTURE_V3_SCHEMA_VERSION, scope });
+}
+
 export function parseCaptureCustomerSnapshotV1(value: unknown): CaptureCustomerSnapshotV1 | undefined {
   const record = exactRecord(value, ["schemaVersion", "snapshotRef", "customerId", "contactId", "displayName",
     "phoneDisplayValue", "phoneNormalizedValue"]);
@@ -547,6 +576,46 @@ export function parseCaptureWorkspaceV2(value: unknown): CaptureWorkspaceV2 | un
     detail,
     fulfillmentSnapshot,
     schemaVersion: COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION,
+  });
+}
+
+export function parseCaptureRepeatOrderPlanSummaryV1(value: unknown): CaptureRepeatOrderPlanSummaryV1 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "customerId", "sourceOrderId", "catalogVersion", "appliedCaptureVersion", "lineCount",
+  ]);
+  if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_SCHEMA_VERSION) return undefined;
+  const customerId = uuid(own(record, "customerId"));
+  const sourceOrderId = uuid(own(record, "sourceOrderId"));
+  const catalogVersion = uuid(own(record, "catalogVersion"));
+  const appliedCaptureVersion = integer(own(record, "appliedCaptureVersion"), 2, Number.MAX_SAFE_INTEGER);
+  const lineCount = integer(own(record, "lineCount"), 1, 200);
+  return customerId === undefined || sourceOrderId === undefined || catalogVersion === undefined
+    || appliedCaptureVersion === undefined || lineCount === undefined ? undefined
+      : Object.freeze({ appliedCaptureVersion, catalogVersion, customerId, lineCount,
+        schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION, sourceOrderId });
+}
+
+export function parseCaptureWorkspaceV3(value: unknown): CaptureWorkspaceV3 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "detail", "customerSnapshot", "fulfillmentSnapshot", "repeatOrderPlan",
+  ]);
+  if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_V3_SCHEMA_VERSION) return undefined;
+  const v2 = parseCaptureWorkspaceV2({
+    schemaVersion: COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION,
+    detail: own(record, "detail"),
+    customerSnapshot: own(record, "customerSnapshot"),
+    fulfillmentSnapshot: own(record, "fulfillmentSnapshot"),
+  });
+  const rawPlan = own(record, "repeatOrderPlan");
+  const repeatOrderPlan = rawPlan === null ? null : parseCaptureRepeatOrderPlanSummaryV1(rawPlan);
+  if (v2 === undefined || repeatOrderPlan === undefined
+    || (repeatOrderPlan !== null && repeatOrderPlan.customerId !== v2.customerSnapshot?.customerId)) return undefined;
+  return Object.freeze({
+    customerSnapshot: v2.customerSnapshot,
+    detail: v2.detail,
+    fulfillmentSnapshot: v2.fulfillmentSnapshot,
+    repeatOrderPlan,
+    schemaVersion: COMMERCIAL_CAPTURE_V3_SCHEMA_VERSION,
   });
 }
 

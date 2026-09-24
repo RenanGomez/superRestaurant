@@ -179,6 +179,24 @@ begin
     raise exception 'CAPTURE_REPEAT_ORDER_DURABLE_PLAN_REJECTED';
   end if;
 
+  if pg_catalog.to_regprocedure('app_private.read_capture_workspace_v3(uuid,jsonb)') is not null then
+    execute 'set local role app_api';
+    result := app_private.read_capture_workspace_v3(actor,pg_catalog.jsonb_build_object(
+      'schemaVersion',3,'scope',pg_catalog.jsonb_build_object(
+        'restaurantId',restaurant::text,'branchId',branch::text
+      ),'captureDraftId',target_capture::text
+    ));
+    execute 'reset role';
+    if result->>'schemaVersion'<>'3'
+      or result#>>'{repeatOrderPlan,schemaVersion}'<>'1'
+      or result#>>'{repeatOrderPlan,customerId}'<>customer::text
+      or result#>>'{repeatOrderPlan,sourceOrderId}'<>source_order::text
+      or result#>>'{repeatOrderPlan,catalogVersion}'<>catalog::text
+      or result#>>'{repeatOrderPlan,appliedCaptureVersion}'<>'3'
+      or result#>>'{repeatOrderPlan,lineCount}'<>'1'
+    then raise exception 'CAPTURE_REPEAT_ORDER_WORKSPACE_SUMMARY_REJECTED'; end if;
+  end if;
+
   execute 'set local role app_api';
   if app_private.repeat_customer_order_into_capture(
     actor,command || pg_catalog.jsonb_build_object(

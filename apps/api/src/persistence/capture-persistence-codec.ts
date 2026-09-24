@@ -5,11 +5,13 @@ import {
   parseCaptureRecoveryPolicyV1,
   parseCaptureWorkspaceV1,
   parseCaptureWorkspaceV2,
+  parseCaptureWorkspaceV3,
   type BranchScope,
   type CaptureDraftDetailV1,
   type CaptureRecoveryPolicyV1,
   type CaptureWorkspaceV1,
   type CaptureWorkspaceV2,
+  type CaptureWorkspaceV3,
 } from "@super-restaurant/shared-types";
 
 export interface PersistedCaptureRecordV1 {
@@ -53,6 +55,14 @@ export function decodeCaptureWorkspace(value: unknown, authorizedScope: BranchSc
 export function decodeCaptureWorkspaceV2(value: unknown, authorizedScope: BranchScope): CaptureWorkspaceV2 {
   const scope = parseBranchScope(authorizedScope);
   const workspace = parseCaptureWorkspaceV2(value);
+  if (scope === undefined || workspace === undefined || workspace.detail.scope.restaurantId !== scope.restaurantId
+    || workspace.detail.scope.branchId !== scope.branchId) throw rejected();
+  return workspace;
+}
+
+export function decodeCaptureWorkspaceV3(value: unknown, authorizedScope: BranchScope): CaptureWorkspaceV3 {
+  const scope = parseBranchScope(authorizedScope);
+  const workspace = parseCaptureWorkspaceV3(value);
   if (scope === undefined || workspace === undefined || workspace.detail.scope.restaurantId !== scope.restaurantId
     || workspace.detail.scope.branchId !== scope.branchId) throw rejected();
   return workspace;
