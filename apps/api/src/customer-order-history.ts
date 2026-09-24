@@ -7,11 +7,17 @@ import {
   parseCustomerRecentOrdersQueryV1,
   parseCustomerRepeatOrderPreviewQueryV1,
   parseCustomerRepeatOrderPreviewV1,
+  parseCustomerRepeatOrderCaptureResultV1,
+  parseCaptureMutationResultV1,
+  parseRepeatCustomerOrderIntoCaptureCommandV1,
   type BranchScope,
+  type CustomerRepeatOrderCaptureResultV1,
   type CustomerRecentOrderListV1,
   type CustomerRecentOrdersQueryV1,
   type CustomerRepeatOrderPreviewQueryV1,
   type CustomerRepeatOrderPreviewV1,
+  type RepeatCustomerOrderIntoCaptureCommandV1,
+  type RbacPermissionCode,
 } from "@super-restaurant/shared-types";
 import { buildRepeatOrderPlan, type Order, type RepeatOrderPlan } from "@super-restaurant/domain";
 
@@ -20,11 +26,13 @@ import { MembershipAuthorizationService } from "./auth/membership-authorization.
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
+import { decodeCaptureRecord } from "./persistence/capture-persistence-codec.js";
 import { decodeOrderRecord } from "./persistence/order-persistence-codec.js";
 
 const listSql = "select app_private.list_customer_recent_orders($1::uuid, $2::jsonb) as result";
+const repeatIntoCaptureSql = "select app_private.repeat_customer_order_into_capture($1::uuid, $2::jsonb, $3::jsonb) as result";
 
-export type CustomerOrderHistoryErrorCode = "authorization" | "not_found" | "request" | "unavailable";
+export type CustomerOrderHistoryErrorCode = "authorization" | "conflict" | "not_found" | "request" | "unavailable";
 
 export class CustomerOrderHistoryError extends Error {
   public constructor(public readonly code: CustomerOrderHistoryErrorCode) {
@@ -44,6 +52,34 @@ export interface CustomerOrderRepeatSourcePort {
 }
 
 export const CUSTOMER_ORDER_REPEAT_SOURCE_PORT = Symbol("CUSTOMER_ORDER_REPEAT_SOURCE_PORT");
+
+export interface CaptureRepeatSelectionPlan {
+  readonly catalogVersion: string;
+  readonly customerId: string;
+  readonly lines: readonly CaptureRepeatSelectionLine[];
+  readonly schemaVersion: 1;
+  readonly sourceOrderId: string;
+}
+
+export interface CaptureRepeatSelectionLine {
+  readonly modifierGroups: readonly Readonly<{
+    groupId: string;
+    selections: readonly Readonly<{ optionId: string; quantity: number }>[];
+  }>[];
+  readonly productId: string;
+  readonly quantity: number;
+  readonly sourceOrderItemId: string;
+}
+
+export interface CustomerOrderRepeatCapturePort {
+  apply(
+    actorId: string,
+    command: RepeatCustomerOrderIntoCaptureCommandV1,
+    plan: CaptureRepeatSelectionPlan,
+  ): Promise<unknown>;
+}
+
+export const CUSTOMER_ORDER_REPEAT_CAPTURE_PORT = Symbol("CUSTOMER_ORDER_REPEAT_CAPTURE_PORT");
 
 interface InternalHistoryRead {
   readonly orders: readonly Order[];
@@ -102,6 +138,32 @@ export class PostgresCustomerOrderHistory implements CustomerOrderHistoryPort, C
 }
 
 @Injectable()
+export class PostgresCustomerOrderRepeatCapture implements CustomerOrderRepeatCapturePort {
+  public constructor(@Inject(DATABASE_CLIENT) private readonly database: DatabaseClientPort) {}
+
+  public async apply(
+    actorId: string,
+    input: RepeatCustomerOrderIntoCaptureCommandV1,
+    plan: CaptureRepeatSelectionPlan,
+  ): Promise<unknown> {
+    const command = parseRepeatCustomerOrderIntoCaptureCommandV1(input);
+    if (command === undefined || !UUID_PATTERN.test(actorId)) throw applicationError("request");
+    let rows: readonly unknown[];
+    try {
+      rows = (await this.database.query(repeatIntoCaptureSql, [
+        actorId,
+        JSON.stringify(command),
+        JSON.stringify(plan),
+      ])).rows;
+    } catch { throw unavailable(); }
+    if (rows.length !== 1) throw unavailable();
+    const row = exactRecord(rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return own(row, "result");
+  }
+}
+
+@Injectable()
 export class CustomerOrderHistoryService {
   public constructor(
     @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
@@ -142,22 +204,10 @@ export class CustomerOrderRepeatPreviewService {
   public async preview(principal: AuthenticatedPrincipal, input: unknown): Promise<CustomerRepeatOrderPreviewV1> {
     const query = parsePreviewInput(input);
     if (query === undefined) throw applicationError("request");
-    const actorId = await this.authorize(principal, query.scope);
+    const actorId = await authorizePermissions(this.authorization, principal, query.scope,
+      ["customers.read", "orders.read", "catalog.read"]);
     try {
-      const [sourceOrder, catalogState] = await Promise.all([
-        this.source.read(actorId, query),
-        this.catalogs.read(actorId, query.scope),
-      ]);
-      if (sourceOrder === "forbidden" || catalogState === "forbidden") throw applicationError("authorization");
-      if (sourceOrder === "missing") throw applicationError("not_found");
-      if (!sameScope(catalogState.scope, query.scope) || catalogState.catalog === null
-        || sourceOrder.restaurantId !== query.scope.restaurantId
-        || sourceOrder.branchId !== query.scope.branchId
-        || sourceOrder.orderId !== query.orderId) throw unavailable();
-      const plan = buildRepeatOrderPlan(
-        sourceOrder,
-        toDomainMenuCatalog(catalogState.catalog, query.scope.restaurantId),
-      );
+      const plan = await loadRepeatPlan(actorId, query, this.source, this.catalogs);
       const preview = publicPreview(plan, query);
       if (preview === undefined) throw unavailable();
       return preview;
@@ -167,17 +217,137 @@ export class CustomerOrderRepeatPreviewService {
     }
   }
 
-  private async authorize(principal: AuthenticatedPrincipal, scope: BranchScope): Promise<string> {
+}
+
+@Injectable()
+export class CustomerOrderRepeatCaptureService {
+  public constructor(
+    @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
+    @Inject(CUSTOMER_ORDER_REPEAT_SOURCE_PORT) private readonly source: CustomerOrderRepeatSourcePort,
+    @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
+    @Inject(CUSTOMER_ORDER_REPEAT_CAPTURE_PORT) private readonly persistence: CustomerOrderRepeatCapturePort,
+  ) {}
+
+  public async apply(
+    principal: AuthenticatedPrincipal,
+    input: unknown,
+    routeCustomerId: unknown,
+    routeOrderId: unknown,
+  ): Promise<CustomerRepeatOrderCaptureResultV1> {
+    const command = parseRepeatCustomerOrderIntoCaptureCommandV1(input);
+    const customerId = uuid(routeCustomerId);
+    const sourceOrderId = uuid(routeOrderId);
+    if (command === undefined || command.expectedVersion >= Number.MAX_SAFE_INTEGER
+      || customerId !== command.customerId || sourceOrderId !== command.sourceOrderId) {
+      throw applicationError("request");
+    }
+    const actorId = await authorizePermissions(this.authorization, principal, command.scope,
+      ["captures.update", "customers.read", "orders.read", "catalog.read"]);
     try {
-      const permissions = ["customers.read", "orders.read", "catalog.read"] as const;
-      const decisions = await Promise.all(permissions.map((permission) =>
-        this.authorization.authorizeBranch(principal, scope, permission)));
-      const actorId = decisions[0]?.principal.actorId;
-      if (actorId === undefined || decisions.some(({ principal: decisionPrincipal }) =>
-        decisionPrincipal.actorId !== actorId)) throw new Error("ACTOR_MISMATCH");
-      return actorId;
-    } catch { throw applicationError("authorization"); }
+      const query = parseCustomerRepeatOrderPreviewQueryV1({
+        customerId: command.customerId,
+        orderId: command.sourceOrderId,
+        schemaVersion: CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION,
+        scope: command.scope,
+      });
+      if (query === undefined) throw applicationError("request");
+      const plan = await loadRepeatPlan(actorId, query, this.source, this.catalogs);
+      if (plan.readyLineCount === 0) throw applicationError("conflict");
+      const selectionPlan = captureSelectionPlan(plan, command.customerId);
+      const raw = await this.persistence.apply(actorId, command, selectionPlan);
+      const response = exactRecord(raw, ["status", "record"]);
+      if (response === undefined) {
+        const statusOnly = exactRecord(raw, ["status"]);
+        if (statusOnly?.status === "denied") throw applicationError("authorization");
+        if (statusOnly?.status === "conflict") throw applicationError("conflict");
+        if (statusOnly?.status === "rejected") throw applicationError("request");
+        throw unavailable();
+      }
+      if (response.status !== "applied" && response.status !== "replayed") throw unavailable();
+      const record = decodeCaptureRecord(own(response, "record"), command.scope);
+      if (record.detail.captureDraftId !== command.captureDraftId
+        || record.detail.version !== command.expectedVersion + 1
+        || record.detail.status !== "draft" || record.detail.attentionStatus !== "claimed"
+        || record.detail.attentionLeaseId !== command.attentionLeaseId
+        || record.detail.customerSnapshotRef === null) throw unavailable();
+      const capture = parseCaptureMutationResultV1({
+        detail: record.detail,
+        replayed: response.status === "replayed",
+        schemaVersion: 1,
+      });
+      const preview = publicPreview(plan, query);
+      const result = capture === undefined || preview === undefined ? undefined
+        : parseCustomerRepeatOrderCaptureResultV1({ capture, preview, schemaVersion: 1 });
+      if (result === undefined) throw unavailable();
+      return result;
+    } catch (error: unknown) {
+      if (error instanceof CustomerOrderHistoryError) throw error;
+      throw unavailable();
+    }
   }
+}
+
+async function authorizePermissions(
+  authorization: MembershipAuthorizationService,
+  principal: AuthenticatedPrincipal,
+  scope: BranchScope,
+  permissions: readonly RbacPermissionCode[],
+): Promise<string> {
+  try {
+    const decisions = await Promise.all(permissions.map((permission) =>
+      authorization.authorizeBranch(principal, scope, permission)));
+    const actorId = decisions[0]?.principal.actorId;
+    if (actorId === undefined || decisions.some(({ principal: decisionPrincipal }) =>
+      decisionPrincipal.actorId !== actorId)) throw new Error("ACTOR_MISMATCH");
+    return actorId;
+  } catch { throw applicationError("authorization"); }
+}
+
+async function loadRepeatPlan(
+  actorId: string,
+  query: CustomerRepeatOrderPreviewQueryV1,
+  source: CustomerOrderRepeatSourcePort,
+  catalogs: MenuCatalogPort,
+): Promise<RepeatOrderPlan> {
+  const [sourceOrder, catalogState] = await Promise.all([
+    source.read(actorId, query),
+    catalogs.read(actorId, query.scope),
+  ]);
+  if (sourceOrder === "forbidden" || catalogState === "forbidden") throw applicationError("authorization");
+  if (sourceOrder === "missing") throw applicationError("not_found");
+  if (!sameScope(catalogState.scope, query.scope) || catalogState.catalog === null
+    || sourceOrder.restaurantId !== query.scope.restaurantId
+    || sourceOrder.branchId !== query.scope.branchId
+    || sourceOrder.orderId !== query.orderId) throw unavailable();
+  return buildRepeatOrderPlan(
+    sourceOrder,
+    toDomainMenuCatalog(catalogState.catalog, query.scope.restaurantId),
+  );
+}
+
+function captureSelectionPlan(plan: RepeatOrderPlan, customerId: string): CaptureRepeatSelectionPlan {
+  const lines = plan.lines.filter((line) => line.status === "ready").map((line) => {
+    if (line.selection === null) throw unavailable();
+    return Object.freeze({
+      modifierGroups: Object.freeze(line.selection.modifierGroups.map((group) => Object.freeze({
+        groupId: group.groupId,
+        selections: Object.freeze(group.selections.map((selection) => Object.freeze({
+          optionId: selection.optionId,
+          quantity: selection.quantity,
+        }))),
+      }))),
+      productId: line.selection.productId,
+      quantity: line.quantity,
+      sourceOrderItemId: line.sourceOrderItemId,
+    });
+  });
+  return Object.freeze({
+    catalogVersion: plan.catalogVersion,
+    customerId,
+    lines: Object.freeze(lines),
+    schemaVersion: 1 as const,
+    sourceOrderId: plan.sourceOrderId,
+  });
 }
 
 function internalList(value: unknown, query: CustomerRecentOrdersQueryV1): InternalHistoryRead | undefined {

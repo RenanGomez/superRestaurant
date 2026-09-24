@@ -5,6 +5,8 @@ import {
   parseCustomerRecentOrdersQueryV1,
   parseCustomerRepeatOrderPreviewQueryV1,
   parseCustomerRepeatOrderPreviewV1,
+  parseCustomerRepeatOrderCaptureResultV1,
+  parseRepeatCustomerOrderIntoCaptureCommandV1,
 } from "./index.js";
 
 const expect = (condition: boolean, message: string): void => {
@@ -218,3 +220,54 @@ expect(parseCustomerRepeatOrderPreviewV1({ ...preview, readyLineCount: 0, blocke
 expect(parseCustomerRepeatOrderPreviewV1({ ...preview, lines: [{
   ...preview.lines[0], issues: [{ ...warning, severity: "blocking" }],
 }, preview.lines[1]] }) === undefined, "price changes cannot be mislabeled as blocking");
+
+const repeatCommand = parseRepeatCustomerOrderIntoCaptureCommandV1({
+  attentionLeaseId: "10000000-0000-4000-8000-000000000001",
+  captureDraftId: "10000000-0000-4000-8000-000000000002",
+  customerId,
+  deviceId: "10000000-0000-4000-8000-000000000003",
+  eventId: "10000000-0000-4000-8000-000000000004",
+  expectedVersion: 7,
+  idempotencyKey: "10000000-0000-4000-8000-000000000008",
+  occurredAt: "2026-09-23T15:00:00.000Z",
+  schemaVersion: 1,
+  scope: query.scope,
+  sourceOrderId: orderId,
+});
+if (repeatCommand === undefined) throw new Error("valid repeat-to-Capture command rejected");
+expect(Object.isFrozen(repeatCommand) && repeatCommand.expectedVersion === 7,
+  "repeat-to-Capture command freezes its CAS, lease and idempotency facts");
+expect(parseRepeatCustomerOrderIntoCaptureCommandV1({ ...repeatCommand, currentPrice: 19_000 }) === undefined,
+  "repeat-to-Capture command rejects client-supplied prices or selections");
+
+const captureMutation = {
+  detail: {
+    attentionLeaseExpiresAt: "2026-09-23T15:05:00.000Z",
+    attentionLeaseId: repeatCommand.attentionLeaseId,
+    attentionStatus: "claimed",
+    captureDraftId: repeatCommand.captureDraftId,
+    confirmedOrderId: null,
+    customerSnapshotRef: "10000000-0000-4000-8000-000000000005",
+    folio: "CAP-0001",
+    fulfillmentChannel: "delivery",
+    fulfillmentSnapshotRef: "10000000-0000-4000-8000-000000000006",
+    ownerMembershipId: "10000000-0000-4000-8000-000000000007",
+    schemaVersion: 1,
+    scope: query.scope,
+    sourceChannel: "phone",
+    status: "draft",
+    updatedAt: "2026-09-23T15:00:00.000Z",
+    version: 8,
+  },
+  replayed: false,
+  schemaVersion: 1,
+};
+const captureResult = parseCustomerRepeatOrderCaptureResultV1({
+  capture: captureMutation,
+  preview,
+  schemaVersion: 1,
+});
+expect(captureResult?.capture.detail.version === 8 && Object.isFrozen(captureResult),
+  "repeat result combines the durable Capture mutation with the exact preview");
+expect(parseCustomerRepeatOrderCaptureResultV1({ capture: captureMutation, preview, schemaVersion: 1, plan: {} }) === undefined,
+  "repeat result rejects leaking the internal selection plan");

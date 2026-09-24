@@ -1,5 +1,6 @@
 import { CAPTURE_FULFILLMENT_CHANNELS, type CaptureFulfillmentChannelV1 } from "./commercial-capture.js";
 import type { BranchScope } from "./index.js";
+import { parseCaptureMutationResultV1, type CaptureMutationResultV1 } from "./commercial-capture.js";
 import { ORDER_ITEM_STATUSES, ORDER_STATUSES } from "./orders.js";
 
 export const CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION = 1 as const;
@@ -103,6 +104,26 @@ export interface CustomerRepeatOrderPreviewV1 {
   readonly sourceOrderId: string;
 }
 
+export interface RepeatCustomerOrderIntoCaptureCommandV1 {
+  readonly attentionLeaseId: string;
+  readonly captureDraftId: string;
+  readonly customerId: string;
+  readonly deviceId: string;
+  readonly eventId: string;
+  readonly expectedVersion: number;
+  readonly idempotencyKey: string;
+  readonly occurredAt: string;
+  readonly schemaVersion: typeof CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly sourceOrderId: string;
+}
+
+export interface CustomerRepeatOrderCaptureResultV1 {
+  readonly capture: CaptureMutationResultV1;
+  readonly preview: CustomerRepeatOrderPreviewV1;
+  readonly schemaVersion: typeof CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION;
+}
+
 export function parseCustomerRecentOrdersQueryV1(value: unknown): CustomerRecentOrdersQueryV1 | undefined {
   const record = exactRecord(value, ["schemaVersion", "scope", "customerId", "limit"]);
   if (record === undefined || own(record, "schemaVersion") !== CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION) return undefined;
@@ -194,6 +215,54 @@ export function parseCustomerRepeatOrderPreviewV1(value: unknown): CustomerRepea
     scope,
     sourceOrderId,
   });
+}
+
+export function parseRepeatCustomerOrderIntoCaptureCommandV1(
+  value: unknown,
+): RepeatCustomerOrderIntoCaptureCommandV1 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "scope", "customerId", "sourceOrderId", "captureDraftId", "expectedVersion",
+    "attentionLeaseId", "eventId", "idempotencyKey", "deviceId", "occurredAt",
+  ]);
+  if (record === undefined || own(record, "schemaVersion") !== CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const customerId = uuid(own(record, "customerId"));
+  const sourceOrderId = uuid(own(record, "sourceOrderId"));
+  const captureDraftId = uuid(own(record, "captureDraftId"));
+  const expectedVersion = integer(own(record, "expectedVersion"), 1, Number.MAX_SAFE_INTEGER);
+  const attentionLeaseId = uuid(own(record, "attentionLeaseId"));
+  const eventId = uuid(own(record, "eventId"));
+  const idempotencyKey = uuid(own(record, "idempotencyKey"));
+  const deviceId = uuid(own(record, "deviceId"));
+  const occurredAt = timestamp(own(record, "occurredAt"));
+  if (scope === undefined || customerId === undefined || sourceOrderId === undefined || captureDraftId === undefined
+    || expectedVersion === undefined || attentionLeaseId === undefined || eventId === undefined
+    || idempotencyKey === undefined || deviceId === undefined || occurredAt === undefined) return undefined;
+  return Object.freeze({
+    attentionLeaseId,
+    captureDraftId,
+    customerId,
+    deviceId,
+    eventId,
+    expectedVersion,
+    idempotencyKey,
+    occurredAt,
+    schemaVersion: CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION,
+    scope,
+    sourceOrderId,
+  });
+}
+
+export function parseCustomerRepeatOrderCaptureResultV1(
+  value: unknown,
+): CustomerRepeatOrderCaptureResultV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "capture", "preview"]);
+  if (record === undefined || own(record, "schemaVersion") !== CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION) return undefined;
+  const capture = parseCaptureMutationResultV1(own(record, "capture"));
+  const preview = parseCustomerRepeatOrderPreviewV1(own(record, "preview"));
+  return capture === undefined || preview === undefined
+    ? undefined
+    : Object.freeze({ capture, preview, schemaVersion: CUSTOMER_ORDER_HISTORY_SCHEMA_VERSION });
 }
 
 function parsePreviewLine(value: unknown): CustomerRepeatOrderPreviewLineV1 | undefined {

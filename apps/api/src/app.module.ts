@@ -36,9 +36,12 @@ import {
 import {
   CUSTOMER_ORDER_HISTORY_PORT,
   CUSTOMER_ORDER_REPEAT_SOURCE_PORT,
+  CUSTOMER_ORDER_REPEAT_CAPTURE_PORT,
   CustomerOrderHistoryService,
   CustomerOrderRepeatPreviewService,
+  CustomerOrderRepeatCaptureService,
   PostgresCustomerOrderHistory,
+  PostgresCustomerOrderRepeatCapture,
 } from "./customer-order-history.js";
 import { CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_TRAY_PORT, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureAttentionService, CaptureService, CaptureTrayService, PostgresCaptureCreator } from "./captures.js";
 import { SessionController } from "./session.controller.js";
@@ -144,8 +147,11 @@ import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboarding
     PostgresCustomerOrderHistory,
     { provide: CUSTOMER_ORDER_HISTORY_PORT, useExisting: PostgresCustomerOrderHistory },
     { provide: CUSTOMER_ORDER_REPEAT_SOURCE_PORT, useExisting: PostgresCustomerOrderHistory },
+    PostgresCustomerOrderRepeatCapture,
+    { provide: CUSTOMER_ORDER_REPEAT_CAPTURE_PORT, useExisting: PostgresCustomerOrderRepeatCapture },
     CustomerOrderHistoryService,
     CustomerOrderRepeatPreviewService,
+    CustomerOrderRepeatCaptureService,
     PostgresBranchOperationalContext,
     { provide: BRANCH_OPERATIONAL_CONTEXT_PORT, useExisting: PostgresBranchOperationalContext },
     PostgresDiningZoneCreator,

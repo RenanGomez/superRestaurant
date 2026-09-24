@@ -151,3 +151,32 @@ export function buildCustomerOrderHistoryCatalogAudit(
     .replace(") <> 50", ") <> 51");
   return validateCatalogAuditSql(`${migrated}\n${historySupplementSql}`);
 }
+
+export function buildCaptureRepeatOrderCatalogAudit(
+  baseSql: string,
+  captureSupplementSql: string,
+  directorySupplementSql: string,
+  deliveryOrderSupplementSql: string,
+  historySupplementSql: string,
+  repeatOrderSupplementSql: string,
+): string {
+  const base = buildCustomerOrderHistoryCatalogAudit(
+    baseSql,
+    captureSupplementSql,
+    directorySupplementSql,
+    deliveryOrderSupplementSql,
+    historySupplementSql,
+  );
+  const definerTail = "pg_catalog.to_regprocedure('app_private.list_customer_recent_orders(uuid,jsonb)')";
+  const helperTail = "pg_catalog.to_regprocedure('app_private.clear_capture_delivery_instructions_for_channel()')";
+  const migrated = base
+    .replace("'order_fulfillment_snapshots'", "'order_fulfillment_snapshots','capture_repeat_order_plans'")
+    .replaceAll(definerTail,
+      `${definerTail},\n    pg_catalog.to_regprocedure('app_private.repeat_customer_order_into_capture(uuid,jsonb,jsonb)')`)
+    .replace(helperTail,
+      `${helperTail},\n    pg_catalog.to_regprocedure('app_private.clear_capture_repeat_order_plan_for_context()')`)
+    .replaceAll(") <> 36", ") <> 37")
+    .replace(") <> 54", ") <> 56")
+    .replace(") <> 51", ") <> 52");
+  return validateCatalogAuditSql(`${migrated}\n${repeatOrderSupplementSql}`);
+}

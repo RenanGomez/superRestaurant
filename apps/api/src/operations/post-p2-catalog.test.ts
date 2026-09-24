@@ -3,7 +3,17 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { extractMigrationBody, validateCatalogAuditSql } from "./schema-verification.js";
-import { buildCaptureCatalogAudit, buildCaptureContinuityCatalogAudit, buildCaptureCustomerCatalogAudit, buildCaptureDeliveryOrderCatalogAudit, buildCustomerDirectoryCatalogAudit, buildCustomerOrderHistoryCatalogAudit, buildPostBootstrapCatalogAudit, postBootstrapSummary } from "./post-bootstrap-catalog.js";
+import {
+  buildCaptureCatalogAudit,
+  buildCaptureContinuityCatalogAudit,
+  buildCaptureCustomerCatalogAudit,
+  buildCaptureDeliveryOrderCatalogAudit,
+  buildCaptureRepeatOrderCatalogAudit,
+  buildCustomerDirectoryCatalogAudit,
+  buildCustomerOrderHistoryCatalogAudit,
+  buildPostBootstrapCatalogAudit,
+  postBootstrapSummary,
+} from "./post-bootstrap-catalog.js";
 
 const audit = readFileSync(
   new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url),
@@ -426,6 +436,62 @@ test("Customer recent Order history is bounded, tenant-scoped and server-only", 
   assert.match(historyRunner, /20260923000100_customer_recent_order_history\.sql/u);
   assert.match(historyRunner, /customer_order_history_invariants\.sql/u);
   assert.match(apiPackage, /"verify:customer-order-history-schema:rollback"/u);
+});
+
+test("Capture repeat Order plan is server-derived, durable and context-bound", () => {
+  const sql = readFileSync(new URL("../../../../supabase/migrations/20260923000200_capture_repeat_order_plan.sql", import.meta.url), "utf8");
+  const catalog = readFileSync(new URL("../../../../supabase/tests/capture_repeat_order_catalog.sql", import.meta.url), "utf8");
+  const invariants = readFileSync(new URL("../../../../supabase/tests/capture_repeat_order_invariants.sql", import.meta.url), "utf8");
+  const base = readFileSync(new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url), "utf8");
+  const capture = readFileSync(new URL("../../../../supabase/tests/capture_drafts_catalog.sql", import.meta.url), "utf8");
+  const directory = readFileSync(new URL("../../../../supabase/tests/customer_directory_catalog.sql", import.meta.url), "utf8");
+  const deliveryOrder = readFileSync(new URL("../../../../supabase/tests/capture_delivery_order_catalog.sql", import.meta.url), "utf8");
+  const history = readFileSync(new URL("../../../../supabase/tests/customer_order_history_catalog.sql", import.meta.url), "utf8");
+  assert.doesNotThrow(() => extractMigrationBody(sql));
+  assert.match(sql, /create table app\.capture_repeat_order_plans/u);
+  assert.match(sql, /enable row level security/u);
+  assert.match(sql, /force row level security/u);
+  assert.match(sql, /create function app_private\.repeat_customer_order_into_capture\(/u);
+  assert.match(sql, /security definer/u);
+  assert.match(sql, /set search_path = ''/u);
+  assert.match(sql, /current_capture\.version<>expected/u);
+  assert.match(sql, /current_capture\.attention_lease_id is distinct from lease/u);
+  assert.match(sql, /order by frozen\.confirmed_at desc,frozen\.order_id desc limit 20/u);
+  assert.match(sql, /select head\.catalog_id into catalog_head_id/u);
+  assert.match(sql, /capture_drafts_clear_repeat_order_plan_for_context/u);
+  assert.match(sql, /new\.customer_id is distinct from old\.customer_id/u);
+  assert.match(sql, /capture\.order_repeated/u);
+  assert.match(sql, /grant execute on function app_private\.repeat_customer_order_into_capture\(uuid,jsonb,jsonb\) to app_api/u);
+  assert.doesNotMatch(sql, /grant (?:select|insert|update|delete|all) on app\.capture_repeat_order_plans/u);
+  assert.match(sql, /case when coalesce\(line\.value->>'quantity'.*then \(line\.value->>'quantity'\)::numeric<=1000000/su);
+  assert.doesNotThrow(() => validateCatalogAuditSql(catalog));
+  assert.doesNotThrow(() => extractMigrationBody(invariants));
+  assert.match(catalog, /CAPTURE_REPEAT_ORDER_TABLE_SECURITY_REJECTED/u);
+  assert.match(catalog, /CAPTURE_REPEAT_ORDER_CLEAR_TRIGGER_REJECTED/u);
+  assert.match(invariants, /CAPTURE_REPEAT_ORDER_CLIENT_PRICE_ACCEPTED/u);
+  assert.match(invariants, /CAPTURE_REPEAT_ORDER_DIVERGENT_REPLAY_ACCEPTED/u);
+  assert.match(invariants, /CAPTURE_REPEAT_ORDER_SCOPE_LEAKED/u);
+  assert.match(invariants, /CAPTURE_REPEAT_ORDER_STALE_CONTEXT_NOT_CLEARED/u);
+  const audit = buildCaptureRepeatOrderCatalogAudit(
+    base,
+    capture,
+    directory,
+    deliveryOrder,
+    history,
+    catalog,
+  );
+  assert.equal(audit.split("pg_catalog.to_regprocedure('app_private.repeat_customer_order_into_capture(uuid,jsonb,jsonb)')").length - 1, 2);
+  assert.equal(audit.split("pg_catalog.to_regprocedure('app_private.clear_capture_repeat_order_plan_for_context()')").length - 1, 1);
+  assert.match(audit, /'capture_repeat_order_plans'/u);
+  assert.match(audit, /\) <> 56/u);
+  assert.match(audit, /\) <> 52/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(audit));
+  const repeatRunner = readFileSync(new URL("../../src/operations/run-capture-repeat-order-schema-verification.ts", import.meta.url), "utf8");
+  assert.match(repeatRunner, /20260923000200_capture_repeat_order_plan\.sql/u);
+  assert.match(repeatRunner, /capture_repeat_order_invariants\.sql/u);
+  assert.match(repeatRunner, /securedTables: 37/u);
+  assert.match(repeatRunner, /securityDefinerFunctions: 52/u);
+  assert.match(apiPackage, /"verify:capture-repeat-order-schema:rollback"/u);
 });
 
 test("post-P2 state runner uses the pinned profile for both stable lifecycle states", () => {

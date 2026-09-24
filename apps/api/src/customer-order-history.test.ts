@@ -6,6 +6,7 @@ import {
   parseCustomerRecentOrderListV1,
   parseCustomerRecentOrdersQueryV1,
   parseCustomerRepeatOrderPreviewQueryV1,
+  parseRepeatCustomerOrderIntoCaptureCommandV1,
   parseBranchScope,
   type MenuCatalogStateV1,
   type MembershipRoleCode,
@@ -16,9 +17,13 @@ import { MembershipAuthorizationService } from "./auth/membership-authorization.
 import {
   CustomerOrderHistoryError,
   CustomerOrderHistoryService,
+  CustomerOrderRepeatCaptureService,
   CustomerOrderRepeatPreviewService,
   PostgresCustomerOrderHistory,
+  PostgresCustomerOrderRepeatCapture,
+  type CaptureRepeatSelectionPlan,
   type CustomerOrderHistoryPort,
+  type CustomerOrderRepeatCapturePort,
   type CustomerOrderRepeatSourcePort,
 } from "./customer-order-history.js";
 import type { DatabaseClientPort } from "./database.js";
@@ -37,6 +42,9 @@ const groupId = "62fa5ebc-e713-4382-85bc-277abc5ae856";
 const categoryId = "9e1bb2eb-6f99-49ae-a28a-b7fa951e03d9";
 const catalogVersion = "47f7f293-b155-42b9-bdc7-f9be3846f44e";
 const stationId = "9670f4ab-c871-43cd-b0fa-72a3f7cf8316";
+const captureDraftId = "4c98955c-1934-4236-97d0-843e31481336";
+const attentionLeaseId = "1ef2a6f5-a6cc-40c4-b105-5eb03ae5fb32";
+const membershipId = "8009ad37-8424-4915-960b-b89096261cc7";
 const confirmedAt = "2026-09-23T12:00:00.000Z";
 const parsedScope = parseBranchScope({ branchId, restaurantId });
 if (parsedScope === undefined) throw new Error("Invalid test scope");
@@ -58,6 +66,21 @@ const previewQuery = parseCustomerRepeatOrderPreviewQueryV1({
   scope,
 });
 assert.ok(previewQuery);
+
+const repeatCommand = parseRepeatCustomerOrderIntoCaptureCommandV1({
+  attentionLeaseId,
+  captureDraftId,
+  customerId,
+  deviceId: "b81a6d8d-32eb-4425-a8cf-137048d26743",
+  eventId: "cda1a49e-4e0a-435d-8d5f-7bc854946a90",
+  expectedVersion: 7,
+  idempotencyKey: "1ba05a96-fb26-4207-a8d3-a17f8327896f",
+  occurredAt: confirmedAt,
+  schemaVersion: 1,
+  scope,
+  sourceOrderId: orderId,
+});
+assert.ok(repeatCommand);
 
 const order = addOrderItem(createOrder({
   branchId,
@@ -276,6 +299,110 @@ test("repeat preview distinguishes an absent recent order and sanitizes catalog 
     { branchId, customerId, orderId: "bad", restaurantId }), isError("request"));
 });
 
+test("repeat-to-Capture reauthorizes every boundary and persists only current IDs and quantities", async () => {
+  const plans: CaptureRepeatSelectionPlan[] = [];
+  const persistence: CustomerOrderRepeatCapturePort = { apply: async (receivedActor, receivedCommand, plan) => {
+    assert.equal(receivedActor, actorId);
+    assert.deepEqual(receivedCommand, repeatCommand);
+    plans.push(plan);
+    return { status: "applied", record: captureRecord(8) };
+  } };
+  const result = await repeatCaptureServiceFor(["waiter"], { read: async () => order },
+    catalogPort(async () => catalogState()), persistence).apply(
+    principal, repeatCommand, customerId, orderId,
+  );
+
+  assert.equal(result.capture.detail.version, 8);
+  assert.equal(result.capture.replayed, false);
+  assert.equal(result.preview.readyLineCount, 1);
+  assert.equal(plans.length, 1);
+  assert.deepEqual(plans[0], {
+    catalogVersion,
+    customerId,
+    lines: [{
+      modifierGroups: [{ groupId, selections: [{ optionId: modifierId, quantity: 1 }] }],
+      productId,
+      quantity: 2,
+      sourceOrderItemId: orderItemId,
+    }],
+    schemaVersion: 1,
+    sourceOrderId: orderId,
+  });
+  assert.equal(/price|amount|name/iu.test(JSON.stringify(plans[0])), false);
+  assert.ok(Object.isFrozen(plans[0]?.lines[0]?.modifierGroups[0]?.selections));
+});
+
+test("repeat-to-Capture rejects route mismatch, incomplete authorization and zero ready lines before persistence", async () => {
+  let reads = 0;
+  let writes = 0;
+  const source: CustomerOrderRepeatSourcePort = { read: async () => { reads += 1; return order; } };
+  const persistence: CustomerOrderRepeatCapturePort = { apply: async () => { writes += 1; return {}; } };
+  const service = repeatCaptureServiceFor(["waiter"], source, catalogPort(async () => catalogState()), persistence);
+  await assert.rejects(service.apply(principal, repeatCommand, customerId,
+    "fb0379c4-9dde-4f2e-bb6e-21f47c627f69"), isError("request"));
+  assert.equal(reads, 0);
+  assert.equal(writes, 0);
+
+  await assert.rejects(repeatCaptureServiceFor(["kitchen"], source,
+    catalogPort(async () => catalogState()), persistence).apply(
+    principal, repeatCommand, customerId, orderId,
+  ), isError("authorization"));
+  assert.equal(reads, 0);
+  assert.equal(writes, 0);
+
+  await assert.rejects(repeatCaptureServiceFor(["waiter"], source,
+    catalogPort(async () => catalogState({ modifierGroups: [], products: [] })), persistence).apply(
+    principal, repeatCommand, customerId, orderId,
+  ), isError("conflict"));
+  assert.equal(reads, 1);
+  assert.equal(writes, 0);
+});
+
+test("repeat-to-Capture maps replay and persistence failures without trusting divergent Capture facts", async () => {
+  const replay = await repeatCaptureServiceFor(["waiter"], { read: async () => order },
+    catalogPort(async () => catalogState()), { apply: async () => ({ status: "replayed", record: captureRecord(8) }) }).apply(
+    principal, repeatCommand, customerId, orderId,
+  );
+  assert.equal(replay.capture.replayed, true);
+
+  for (const [raw, code] of [
+    [{ status: "denied" }, "authorization"],
+    [{ status: "conflict" }, "conflict"],
+    [{ status: "rejected" }, "request"],
+    [{ status: "applied", record: captureRecord(9) }, "unavailable"],
+  ] as const) {
+    await assert.rejects(repeatCaptureServiceFor(["waiter"], { read: async () => order },
+      catalogPort(async () => catalogState()), { apply: async () => raw }).apply(
+      principal, repeatCommand, customerId, orderId,
+    ), isError(code));
+  }
+});
+
+test("PostgreSQL repeat-to-Capture adapter binds the verified actor, command and server-built plan", async () => {
+  const plan: CaptureRepeatSelectionPlan = Object.freeze({
+    catalogVersion,
+    customerId,
+    lines: Object.freeze([Object.freeze({
+      modifierGroups: Object.freeze([]), productId, quantity: 2, sourceOrderItemId: orderItemId,
+    })]),
+    schemaVersion: 1,
+    sourceOrderId: orderId,
+  });
+  const calls: unknown[] = [];
+  const adapter = new PostgresCustomerOrderRepeatCapture({ query: async (sql, parameters) => {
+    calls.push({ sql, parameters });
+    return { rows: [{ result: { status: "applied", record: captureRecord(8) } }] };
+  } });
+  assert.deepEqual(await adapter.apply(actorId, repeatCommand, plan),
+    { status: "applied", record: captureRecord(8) });
+  assert.deepEqual(calls, [{
+    parameters: [actorId, JSON.stringify(repeatCommand), JSON.stringify(plan)],
+    sql: "select app_private.repeat_customer_order_into_capture($1::uuid, $2::jsonb, $3::jsonb) as result",
+  }]);
+  await assert.rejects(new PostgresCustomerOrderRepeatCapture({ query: async () => ({ rows: [] }) })
+    .apply(actorId, repeatCommand, plan), isError("unavailable"));
+});
+
 function serviceFor(roles: readonly MembershipRoleCode[], port: CustomerOrderHistoryPort): CustomerOrderHistoryService {
   return new CustomerOrderHistoryService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles, scope }),
@@ -290,6 +417,17 @@ function previewServiceFor(
   return new CustomerOrderRepeatPreviewService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles, scope }),
   }), source, catalogs);
+}
+
+function repeatCaptureServiceFor(
+  roles: readonly MembershipRoleCode[],
+  source: CustomerOrderRepeatSourcePort,
+  catalogs: MenuCatalogPort,
+  persistence: CustomerOrderRepeatCapturePort,
+): CustomerOrderRepeatCaptureService {
+  return new CustomerOrderRepeatCaptureService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles, scope }),
+  }), source, catalogs, persistence);
 }
 
 function catalogPort(read: MenuCatalogPort["read"]): MenuCatalogPort {
@@ -333,6 +471,35 @@ function catalogState(overrides: Partial<NonNullable<MenuCatalogStateV1["catalog
     schemaVersion: 1,
     scope,
   });
+}
+
+function captureRecord(version: number) {
+  return {
+    detail: {
+      attentionLeaseExpiresAt: "2026-09-23T12:05:00.000Z",
+      attentionLeaseId,
+      attentionStatus: "claimed",
+      captureDraftId,
+      confirmedOrderId: null,
+      customerSnapshotRef: "0e22dfd1-9064-4fa8-86da-8fcce41fe821",
+      folio: "CAP-REPEAT-1",
+      fulfillmentChannel: "delivery",
+      fulfillmentSnapshotRef: "e2a6113b-d5cb-4e26-8f65-a0bc9065b08c",
+      ownerMembershipId: membershipId,
+      schemaVersion: 1,
+      scope,
+      sourceChannel: "phone",
+      status: "draft",
+      updatedAt: confirmedAt,
+      version,
+    },
+    recoveryPolicy: {
+      autoRenewSelected: false,
+      recoveryExpiresAt: "2026-09-23T12:30:00.000Z",
+      schemaVersion: 1,
+    },
+    schemaVersion: 1,
+  };
 }
 
 function audit(suffix: string) {
