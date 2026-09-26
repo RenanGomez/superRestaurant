@@ -9,6 +9,7 @@ function expect(condition: boolean, message: string): void {
 
 const pendingUnpaidRequest = {
   capturedAmountMinor: 0,
+  financialCompensationPending: false,
   inventoryCommitment: "none",
   itemStatus: "pending",
   operation: "cancel",
@@ -25,6 +26,7 @@ for (const invalid of [
   { ...pendingUnpaidRequest, itemStatus: "future" },
   { ...pendingUnpaidRequest, capturedAmountMinor: -1 },
   { ...pendingUnpaidRequest, capturedAmountMinor: 1.5 },
+  { ...pendingUnpaidRequest, financialCompensationPending: "false" },
   { ...pendingUnpaidRequest, inventoryCommitment: "maybe" },
   { ...pendingUnpaidRequest, orderStatus: "future" },
   { ...pendingUnpaidRequest, schemaVersion: 2 },
@@ -47,6 +49,9 @@ const pendingUnpaidProjection = {
   inventory: "none",
   policyDecisions: [],
   production: "none",
+  productionDestination: null,
+  refundObligation: "none",
+  reprintAvailable: false,
   replacementLineRequired: false,
 } as const;
 const parsedPendingProjection = parseOrderItemChangeImpactProjectionV1(pendingUnpaidProjection);
@@ -59,6 +64,7 @@ expect(
 
 const sentReplacementProjection = {
   capturedAmountMinor: 0,
+  financialCompensationPending: false,
   inventoryCommitment: "reserved",
   itemStatus: "sent",
   operation: "replace",
@@ -69,8 +75,11 @@ const sentReplacementProjection = {
   execution: "eligible",
   financial: "none",
   inventory: "release_required",
-  policyDecisions: ["authorization_role", "inventory_disposition", "production_destinations"],
+  policyDecisions: ["authorization_role", "inventory_disposition"],
   production: "correction_required",
+  productionDestination: "kds_primary",
+  refundObligation: "none",
+  reprintAvailable: true,
   replacementLineRequired: true,
 } as const;
 expect(
@@ -78,8 +87,39 @@ expect(
   "sent replacement exposes correction, authorization and reserved inventory",
 );
 
-const paidCancelProjection = {
+// Approved decision 6: captured/settled money never blocks by itself; it only
+// creates a refund obligation. A partially paid cancellation with captured
+// money on the line stays eligible.
+const partiallyPaidCancelProjection = {
   capturedAmountMinor: 15_900,
+  financialCompensationPending: false,
+  inventoryCommitment: "consumed",
+  itemStatus: "preparing",
+  operation: "cancel",
+  orderStatus: "partially_paid",
+  schemaVersion: 1,
+  authorization: "elevated",
+  blockReason: null,
+  execution: "eligible",
+  financial: "none",
+  inventory: "compensation_required",
+  policyDecisions: ["authorization_role", "inventory_disposition"],
+  production: "correction_required",
+  productionDestination: "kds_primary",
+  refundObligation: "pending",
+  reprintAvailable: true,
+  replacementLineRequired: false,
+} as const;
+expect(
+  parseOrderItemChangeImpactProjectionV1(partiallyPaidCancelProjection) !== undefined,
+  "partially paid cancellation with captured money is eligible with a pending refund obligation",
+);
+
+// An already-pending compensation (a distinct input fact) is the only thing
+// that blocks — never captured money by itself.
+const pendingCompensationBlockedProjection = {
+  capturedAmountMinor: 15_900,
+  financialCompensationPending: true,
   inventoryCommitment: "consumed",
   itemStatus: "preparing",
   operation: "cancel",
@@ -90,14 +130,21 @@ const paidCancelProjection = {
   execution: "blocked",
   financial: "compensation_required",
   inventory: "compensation_required",
-  policyDecisions: ["authorization_role", "financial_atomicity", "inventory_disposition", "production_destinations"],
+  policyDecisions: ["authorization_role", "financial_atomicity", "inventory_disposition"],
   production: "correction_required",
+  productionDestination: "kds_primary",
+  refundObligation: "pending",
+  reprintAvailable: true,
   replacementLineRequired: false,
 } as const;
-expect(parseOrderItemChangeImpactProjectionV1(paidCancelProjection) !== undefined, "paid change is blocked pending compensation");
+expect(
+  parseOrderItemChangeImpactProjectionV1(pendingCompensationBlockedProjection) !== undefined,
+  "an already-pending compensation blocks the change",
+);
 
 const deliveredReplaceProjection = {
   capturedAmountMinor: 0,
+  financialCompensationPending: false,
   inventoryCommitment: "unknown",
   itemStatus: "delivered",
   operation: "replace",
@@ -108,8 +155,11 @@ const deliveredReplaceProjection = {
   execution: "blocked",
   financial: "none",
   inventory: "review_required",
-  policyDecisions: ["authorization_role", "inventory_disposition", "production_destinations"],
+  policyDecisions: ["authorization_role", "inventory_disposition"],
   production: "post_delivery_adjustment_required",
+  productionDestination: "kds_primary",
+  refundObligation: "none",
+  reprintAvailable: true,
   replacementLineRequired: true,
 } as const;
 expect(parseOrderItemChangeImpactProjectionV1(deliveredReplaceProjection) !== undefined, "delivered lines require post-delivery adjustment");
@@ -119,9 +169,16 @@ for (const invalid of [
   { ...pendingUnpaidProjection, execution: "blocked" },
   { ...pendingUnpaidProjection, authorization: "elevated" },
   { ...pendingUnpaidProjection, blockReason: "already_cancelled" },
-  { ...sentReplacementProjection, policyDecisions: ["inventory_disposition", "authorization_role", "production_destinations"] },
+  { ...pendingUnpaidProjection, productionDestination: "kds_primary" },
+  { ...pendingUnpaidProjection, reprintAvailable: true },
+  { ...sentReplacementProjection, policyDecisions: ["inventory_disposition", "authorization_role"] },
+  { ...sentReplacementProjection, policyDecisions: ["authorization_role", "inventory_disposition", "production_destinations"] },
   { ...sentReplacementProjection, replacementLineRequired: false },
-  { ...paidCancelProjection, execution: "eligible", blockReason: null },
+  { ...sentReplacementProjection, productionDestination: null },
+  { ...sentReplacementProjection, reprintAvailable: false },
+  { ...partiallyPaidCancelProjection, execution: "blocked", blockReason: "financial_compensation_required" },
+  { ...partiallyPaidCancelProjection, refundObligation: "none" },
+  { ...pendingCompensationBlockedProjection, execution: "eligible", blockReason: null },
 ]) expect(parseOrderItemChangeImpactProjectionV1(invalid) === undefined, `projection rejects inconsistent facts: ${JSON.stringify(invalid)}`);
 
 const projectionAccessor = Object.defineProperty({ ...pendingUnpaidProjection }, "execution", { get: () => "eligible", enumerable: true });

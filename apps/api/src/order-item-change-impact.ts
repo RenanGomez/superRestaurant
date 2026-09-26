@@ -32,6 +32,7 @@ export function projectOrderItemChangeImpact(input: unknown): OrderItemChangeImp
   try {
     const impact = assessOrderItemChangeImpact({
       capturedAmountMinor: request.capturedAmountMinor,
+      financialCompensationPending: request.financialCompensationPending,
       inventoryCommitment: request.inventoryCommitment,
       itemStatus: request.itemStatus,
       operation: request.operation,
