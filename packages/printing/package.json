@@ -23,7 +23,7 @@
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs src",
-    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node .test-dist/escpos.test.js && node .test-dist/handoff-ticket.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
+    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node .test-dist/escpos.test.js && node .test-dist/handoff-ticket.test.js && node .test-dist/print-job-queue.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
     "typecheck": "tsc --noEmit --project tsconfig.json"
   }
 }
