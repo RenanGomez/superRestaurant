@@ -26,6 +26,7 @@ export * from "./orders.js";
 export * from "./payments.js";
 export * from "./payment-intent.js";
 export * from "./payment-obligation.js";
+export * from "./order-item-change-impact.js";
 export * from "./operational-work-tray.js";
 export * from "./commercial-capture.js";
 export * from "./delivery-instructions.js";
