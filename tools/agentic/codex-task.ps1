@@ -70,7 +70,7 @@ $sandbox = if ($ReadOnly) { "read-only" } else { "workspace-write" }
 $gitDir = Join-Path $repo ".git"
 
 # The sandbox has no network: restore dependencies from the pnpm store before Codex starts.
-if (-not (Test-Path (Join-Path $wt "node_modules"))) {
+if ((Test-Path (Join-Path $wt "pnpm-lock.yaml")) -and -not (Test-Path (Join-Path $wt "node_modules"))) {
   Write-Host "pnpm install (offline-first) en $wt"
   Push-Location $wt
   pnpm install --frozen-lockfile --prefer-offline 2>&1 | Select-Object -Last 3
