@@ -202,6 +202,19 @@ Estas decisiones no se infieren del plan ni del catálogo actual:
 
 Hasta resolverlas, se pueden preparar parsers e invariantes estructurales, pero no persistir una fórmula monetaria ni afirmar totales correctos.
 
+### 7.1. Decisiones aprobadas por Emmanuel el 2026-09-26
+
+1. Precio de mitades y fracciones: se cobra el mayor precio entre las fracciones seleccionadas.
+2. Fracciones permitidas en v1: entera y mitades; sin cuartos ni otra geometría.
+3. Un extra `whole` se cobra completo; el mismo extra aplicado a una mitad se cobra al 50 % redondeado hacia arriba al centavo (minor unit).
+4. Excluir un ingrediente incluido no reduce el precio; sólo cambia la receta.
+5. Sustituciones en combos: equivalencia sin costo dentro del mismo grupo; fuera del grupo, sobreprecio explícito por opción.
+6. Las especialidades por fracción son sabores dentro del producto pizza, no productos independientes.
+7. Límite operativo: máximo 5 ingredientes extra por fracción; override sólo por gerente con motivo auditado.
+8. Agotados temporales: la autoridad es la opción o variante marcada por el supervisor en la Branch; sin autoridad por estación en v1.
+
+Con esto S5.1 y S5.2 quedan desbloqueados.
+
 ## 8. Riesgos y verificación
 
 - Dinero: todo importe usa `Money`/minor units; ninguna fórmula usa `Number` fraccionario.

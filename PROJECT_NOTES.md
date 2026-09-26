@@ -100,7 +100,7 @@ Decisión de implementación 2026-09-16: las direcciones Customer pueden guardar
 
 - Emmanuel aprobó en bloque las 26 propuestas de Claude para las decisiones abiertas de cambios/cancelaciones (S6, 6), domicilio propio (S7, 10) y cobro (S8, 10). El texto normativo quedó en `docs/architecture/P2_ORDER_CHANGE_CANCELLATION_SLICE.md` §5.1, `P2_OWN_DELIVERY_OPERATION_SLICE.md` §8.1 y `P2_CAPTURE_PAYMENT_OPERATION_SLICE.md` §9.1; esos apartados son la autoridad y no se repiten aquí.
 - Líneas maestras: supervisor o gerente autorizan con motivo; cambio enviado = cancelar + reemplazo idempotente; KDS primario e impresora secundaria; refund como obligación pendiente, nunca atómico; zonas manuales con cargo fijo, ventana de 15 min, 2 intentos, sin entrega parcial; métodos piloto `cash|card_manual|transfer` con caja abierta, efectivo contra entrega registrado al liquidar el viaje, propina separada, resolución manual en 24 h, sin división de cuenta.
-- Siguen abiertas las 8 decisiones S5 (precio de fracciones/combos/agotados) y las 5 de S9 (roles/hardware/favoritos); Claude propondrá defaults del mismo modo.
+- Las 8 decisiones S5 y las 5 de S9 se aprobaron del mismo modo más tarde el 2026-09-26 (Emmanuel: "continúa" sobre los defaults propuestos); constan en `P2_CONFIGURABLE_CATALOG_SLICE.md` §7.1 y `P2_OPERATIONAL_STATION_SLICE.md` §11.1. Ya no queda ninguna decisión de producto abierta en P2.
 
 ## Orquestación multiagente — 2026-09-26
 

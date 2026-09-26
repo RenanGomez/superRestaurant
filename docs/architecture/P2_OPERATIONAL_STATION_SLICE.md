@@ -167,3 +167,13 @@ La matriz no convierte contratos aislados en evidencia de cliente ni usa una pru
 3. Atajos físicos requeridos y layout/teclado objetivo del piloto.
 4. Qué datos mínimos puede portar Mobile por rol y por cuánto tiempo.
 5. Qué role plays quedan explícitamente fuera del piloto por módulos futuros, sin presentarlos como soportados.
+
+### 11.1. Decisiones aprobadas por Emmanuel el 2026-09-26
+
+1. Roles y hardware del piloto: capturista y caja en PC o tablet web; supervisor en web; repartidor en móvil; sin rol mesero en el piloto.
+2. Favoritos por Branch, administrados por el supervisor; recientes por operador, automáticos y no editables.
+3. Teclado estándar; sin teclado numérico dedicado ni atajos de hardware en el piloto.
+4. Mobile sólo porta el pedido asignado al repartidor: nombre, teléfono enmascarado, dirección e instrucciones; se borra del dispositivo al liquidar el viaje.
+5. Fuera del piloto: mesas, reservaciones, división de cuenta, notificaciones push al cliente y agregadores; no se presentan como soportados.
+
+Con esto S9.3 (tras publicación S5) y S9.5 quedan desbloqueados.
