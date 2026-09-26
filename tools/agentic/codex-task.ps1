@@ -25,7 +25,9 @@ param(
   [switch] $Resume,
   [switch] $ReadOnly
 )
-$ErrorActionPreference = "Stop"
+# "Continue": Windows PowerShell 5.1 turns native stderr (git progress, codex logs) into
+# terminating errors under "Stop". Exit codes are checked explicitly instead.
+$ErrorActionPreference = "Continue"
 if ($env:OPENAI_API_KEY) { throw "OPENAI_API_KEY está definida; el harness exige login ChatGPT Plus. Quita la variable." }
 if ($Task -notmatch '^[a-z0-9][a-z0-9-]{2,40}$') { throw "Task debe ser kebab-case corto: $Task" }
 if (-not (Test-Path $Packet)) { throw "Paquete no encontrado: $Packet" }
@@ -46,9 +48,9 @@ $wt = Join-Path $wtRoot $Task
 $branch = "codex/$Task"
 New-Item -ItemType Directory -Force $wtRoot | Out-Null
 if (-not (Test-Path $wt)) {
-  if (git -C $repo branch --list $branch) { git -C $repo worktree add $wt $branch }
-  else { git -C $repo worktree add -b $branch $wt $Base }
-  if ($LASTEXITCODE -ne 0) { throw "git worktree add falló" }
+  if (git -C $repo branch --list $branch) { git -C $repo worktree add -q $wt $branch 2>&1 | Out-Null }
+  else { git -C $repo worktree add -q -b $branch $wt $Base 2>&1 | Out-Null }
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $wt)) { throw "git worktree add falló" }
 }
 
 $runDir = Join-Path $repo ".claude\runs\$Task"
@@ -61,13 +63,16 @@ $threadFile = Join-Path $runDir "thread-id.txt"
 $prompt = Get-Content $Packet -Raw
 $prompt += "`n`n## Reglas del harness`n- Trabajas en el worktree $wt, rama $branch. Haz commits locales pequeños con conventional commits.`n- Nunca git push/merge/rebase, nunca toques Supabase remoto, nunca edites migraciones ya existentes.`n- Node 24 y pnpm 11 están en PATH; ejecuta los comandos de verificación del paquete y pega su salida literal.`n- No edites TODO.md, HANDOFF.md ni PROJECT_NOTES.md."
 
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $sandbox = if ($ReadOnly) { "read-only" } else { "workspace-write" }
-$args = @("exec", "-C", $wt, "-s", $sandbox, "-c", "approval_policy=`"never`"",
+# The worktree's git dir lives under the main repo; grant it so Codex can commit locally.
+$gitDir = Join-Path $repo ".git\worktrees\$Task"
+$args = @("exec", "-C", $wt, "--add-dir", $gitDir, "-s", $sandbox, "-c", "approval_policy=`"never`"",
           "-c", "model_reasoning_effort=`"$Effort`"", "--json", "-o", $last)
 if ($Model) { $args += @("-m", $Model) }
 if ($Resume -and (Test-Path $threadFile)) {
-  $args = @("exec", "resume", (Get-Content $threadFile -Raw).Trim(), "-C", $wt, "-s", $sandbox,
-            "-c", "approval_policy=`"never`"", "--json", "-o", $last)
+  $args = @("exec", "resume", (Get-Content $threadFile -Raw).Trim(), "-C", $wt, "--add-dir", $gitDir,
+            "-s", $sandbox, "-c", "approval_policy=`"never`"", "--json", "-o", $last)
 }
 
 Write-Host "codex: $codex"

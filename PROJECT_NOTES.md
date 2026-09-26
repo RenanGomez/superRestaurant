@@ -96,6 +96,14 @@ Contratos Customer/Address V1 (2026-09-16): pertenencia del directorio por Resta
 
 Decisión de implementación 2026-09-16: las direcciones Customer pueden guardarse incompletas y con coordenadas sin quedar validadas. El dominio permite atestación explícita con contexto auditado y snapshot inmutable del cliente/dirección seleccionados; editar ficha reinicia validación. Coordenadas E6 no equivalen a geocodificación verificada o cobertura de reparto. El API futuro debe derivar autorización/actor/timestamp y comprobar Branch, no confiar en evidencia del cliente.
 
+## Orquestación multiagente — 2026-09-26
+
+- Emmanuel autorizó el 2026-09-26 un harness L0-L3 documentado en AGENTS.md §19.1 y concedió autonomía continua para Supabase, CodeGraph, escritura y comandos rutinarios dentro del alcance de las tareas; siguen requiriendo autorización push/merge/rebase, credenciales, deploy y borrado de datos reales.
+- Descartado: Paperclip, `claude-code-router` y cualquier `ANTHROPIC_BASE_URL` global (facturaría por uso en lugar del plan Pro). `codex mcp-server` fue eliminado por OpenAI en 0.154; L2 usa `codex exec` en worktrees (`tools/agentic/codex-task.ps1`) con login ChatGPT Plus, nunca `OPENAI_API_KEY`.
+- L3 (MCP `delegator` sobre OpenRouter) queda fijado a `deepseek/deepseek-v4-flash` por decisión de Emmanuel; sólo devuelve texto y recibe rutas absolutas, nunca contenido pegado. Clave únicamente en la variable de usuario `OPENROUTER_API_KEY`.
+- Un escritor por tarea y un worktree por tarea; dinero, tenancy, SQL, sync y auth se implementan sólo con `implementer-claude` y plan aprobado. Toda integración de ramas `codex/*` la hace L0 tras `VEREDICTO: APROBAR` del `reviewer`.
+- Entorno: Node 24.19.0 y pnpm 11.19.0 (Corepack) instalados en `%LOCALAPPDATA%\Programs\node24`, primero en el PATH de usuario; las cuatro puertas globales se ejecutan desde ahí.
+
 ## Directorio: búsqueda telefónica conservadora — 2026-09-16
 
 - Clave normalizada de teléfono es sólo de búsqueda: remueve formato ASCII, conserva + explícito y ceros. No adivina país ni equivale a teléfono verificado/dialable. Nacional e internacional no se enlazan automáticamente; dos personas pueden compartir número y siempre mantienen identidad/contexto separados.
