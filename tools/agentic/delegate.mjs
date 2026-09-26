@@ -5,6 +5,7 @@
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const argv = process.argv.slice(2);
 const opt = { task: "read", prompt: "", files: [], out: "" };
@@ -17,7 +18,7 @@ for (let i = 0; i < argv.length; i += 1) {
 }
 if (!opt.prompt) { console.error("--prompt es obligatorio"); process.exit(2); }
 if (process.env.OPENROUTER_API_KEY === undefined) { console.error("OPENROUTER_API_KEY no está en el entorno"); process.exit(2); }
-const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..", "..");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const env = { ...process.env, DELEGATOR_CONFIG: process.env.DELEGATOR_CONFIG ?? path.join(repoRoot, ".claude", "delegator.json") };
 
 const child = spawn("cmd", ["/c", "npx", "-y", "claude-code-deepseek-delegator"], { stdio: ["pipe", "pipe", "ignore"], env });
