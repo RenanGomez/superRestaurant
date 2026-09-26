@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { Pool, type PoolClient } from "pg";
 
-import type { DatabaseConfig } from "../database.js";
+import { guardPostgresPool, type DatabaseConfig } from "../database.js";
 import {
   tenancyAuthMetadataMarker,
   tenancyAuthMetadataVersion,
@@ -610,7 +610,7 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
   readonly #pool: Pool;
 
   public constructor(config: DatabaseConfig) {
-    this.#pool = new Pool({
+    this.#pool = guardPostgresPool(new Pool({
       application_name: "super-restaurant-tenancy-recovery",
       connectionTimeoutMillis: 5_000,
       connectionString: config.connectionString,
@@ -619,7 +619,7 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
       query_timeout: 10_000,
       ssl: { ca: config.caCertificate, rejectUnauthorized: true },
       statement_timeout: 10_000,
-    });
+    }));
   }
 
   public async deleteVerified(runId: string, users: readonly RecoveryAuthUser[]): Promise<number> {

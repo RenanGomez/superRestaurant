@@ -21,6 +21,8 @@ import {
   FinancialApplicationError,
   FinancialService,
   PostgresFinancialPersistenceAdapter,
+  projectPaymentObligation,
+  quotePaymentIntent,
   type FinancialPersistencePort,
   type PersistPaymentInput,
   type StoredCashRegister,
@@ -41,6 +43,75 @@ const shiftId = "db7bcd0c-61f3-4c65-8280-dd8d78fa39cf";
 const orderId = "72371a5f-2056-448d-9ddb-14ab6664a4e8";
 const paymentId = "2ee5f057-7971-468d-b197-f946911743eb";
 const deviceId = "a72573ec-6224-4857-bc4a-f3d1d07b6d83";
+
+test("payment intent boundary returns an exact non-financial change quote", () => {
+  const quote = quotePaymentIntent({
+    capturedAmountMinor: 2_500,
+    currency: "MXN",
+    method: "cash",
+    orderTotalMinor: 12_500,
+    plannedAmountMinor: 10_000,
+    schemaVersion: 1,
+    tenderedAmountMinor: 20_000,
+    timing: "on_fulfillment",
+  });
+  assert.equal(quote.remainingBeforePlanMinor, 10_000);
+  assert.equal(quote.remainingAfterPlanMinor, 0);
+  assert.equal(quote.changeDueMinor, 10_000);
+  assert.equal(Object.isFrozen(quote), true);
+});
+
+test("payment intent boundary maps invalid financial facts to a request error", () => {
+  for (const invalid of [
+    {
+      capturedAmountMinor: 0, currency: "MXN", method: "cash", orderTotalMinor: 1_000,
+      plannedAmountMinor: 1_001, schemaVersion: 1, tenderedAmountMinor: 2_000, timing: "now",
+    },
+    {
+      capturedAmountMinor: 0, currency: "MXN", method: "card_manual", orderTotalMinor: 1_000,
+      plannedAmountMinor: 1_000, schemaVersion: 1, tenderedAmountMinor: 1_000, timing: "now",
+    },
+  ]) {
+    assert.throws(
+      () => quotePaymentIntent(invalid),
+      (error: unknown) => error instanceof FinancialApplicationError && error.code === "request",
+    );
+  }
+});
+
+test("payment obligation boundary projects unresolved exposure without treating it as captured", () => {
+  const projection = projectPaymentObligation({
+    ambiguousAmountMinor: 1_000,
+    capturedAmountMinor: 2_500,
+    currency: "MXN",
+    orderTotalMinor: 12_500,
+    pendingAmountMinor: 4_000,
+    schemaVersion: 1,
+  });
+  assert.equal(projection.paymentStatus, "ambiguous");
+  assert.equal(projection.remainingBalanceMinor, 10_000);
+  assert.equal(projection.unresolvedExposureMinor, 5_000);
+  assert.equal(projection.collectibleAmountMinor, null);
+  assert.equal(Object.isFrozen(projection), true);
+});
+
+test("payment obligation boundary maps invalid authoritative facts to a request error", () => {
+  for (const invalid of [
+    {
+      ambiguousAmountMinor: 0, capturedAmountMinor: 1_001, currency: "MXN", orderTotalMinor: 1_000,
+      pendingAmountMinor: 0, schemaVersion: 1,
+    },
+    {
+      ambiguousAmountMinor: 1, capturedAmountMinor: 0, currency: "MXN", orderTotalMinor: 1_000,
+      pendingAmountMinor: Number.MAX_SAFE_INTEGER, schemaVersion: 1,
+    },
+  ]) {
+    assert.throws(
+      () => projectPaymentObligation(invalid),
+      (error: unknown) => error instanceof FinancialApplicationError && error.code === "request",
+    );
+  }
+});
 
 test("PostgreSQL financial adapter binds private functions and fails closed", async () => {
   const register = openRegister();

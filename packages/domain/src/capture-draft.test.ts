@@ -13,6 +13,7 @@ import {
   createCaptureDraft,
   holdCaptureDraft,
   resumeCaptureDraft,
+  takeOverCaptureDraft,
   transferCaptureDraft,
   type CaptureAuditContext,
   type CaptureDraft,
@@ -131,6 +132,23 @@ test("transfer requires current ownership and a distinct new owner", () => {
   assert.throws(
     () => transferCaptureDraft(transferred.captureDraft, "operator-2", audit("operator-2", "4")),
     (error: unknown) => error instanceof InvalidCaptureDraftOperationError,
+  );
+});
+
+test("takeover requires a different active owner and records the mandatory reason", () => {
+  const created = createCaptureDraft(input, audit()).captureDraft;
+  const taken = takeOverCaptureDraft(created, "Operador ausente", audit("supervisor-1", "2"));
+  assert.equal(taken.captureDraft.ownerActorId, "supervisor-1");
+  assert.equal(taken.auditEvent.type, "capture.taken_over");
+  assert.equal(taken.auditEvent.previousOwnerActorId, "operator-1");
+  assert.equal(taken.auditEvent.reason, "Operador ausente");
+  assert.throws(
+    () => takeOverCaptureDraft(taken.captureDraft, "Mismo operador", audit("supervisor-1", "3")),
+    (error: unknown) => error instanceof InvalidCaptureDraftOperationError,
+  );
+  assert.throws(
+    () => takeOverCaptureDraft(created, " ", audit("supervisor-1", "4")),
+    (error: unknown) => error instanceof InvalidCaptureDraftError,
   );
 });
 

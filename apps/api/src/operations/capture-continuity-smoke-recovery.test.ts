@@ -5,6 +5,7 @@ import {
   validateCaptureContinuityRecoverySnapshot,
   type CaptureContinuityRecoverySnapshot,
 } from "./capture-continuity-smoke-recovery.js";
+import { captureContinuityAssignmentIds } from "./capture-continuity-smoke-markers.js";
 
 const runId = "11111111-1111-4111-8111-111111111111";
 const restaurantId = "22222222-2222-4222-8222-222222222222";
@@ -31,14 +32,39 @@ test("accepts an empty or profile-only interrupted continuity fixture", () => {
   assert.deepEqual(validated.captureDraftIds, []);
 });
 
-test("accepts the exact six-version browser journey and returns every cleanup identity", () => {
+test("accepts an assignment target committed before the Capture fixture and returns exact cleanup ids", () => {
+  const assignment = captureContinuityAssignmentIds(runId);
+  const validated = validateCaptureContinuityRecoverySnapshot(snapshot({
+    assignmentGrants: [{
+      grantedBy: actorId,
+      id: assignment.grantId,
+      membershipId: assignment.membershipId,
+      revokedAt: null,
+      roleCode: "waiter",
+    }],
+    assignmentMemberships: [{
+      branchId,
+      grantedBy: actorId,
+      id: assignment.membershipId,
+      restaurantId,
+      revokedAt: null,
+      userId: "abababab-abab-4bab-8bab-abababababab",
+    }],
+  }));
+  assert.deepEqual(validated.assignmentMembershipIds, [assignment.membershipId]);
+  assert.deepEqual(validated.assignmentGrantIds, [assignment.grantId]);
+});
+
+test("accepts the exact eight-version assignment journey and returns every cleanup identity", () => {
   const full = fullSnapshot();
   const validated = validateCaptureContinuityRecoverySnapshot(full);
   assert.deepEqual(validated.customerIds, [customerId]);
   assert.deepEqual(validated.addressIds, [addressId]);
   assert.deepEqual(validated.captureDraftIds, [captureId]);
   assert.equal(validated.customerEventIds.length, 3);
-  assert.equal(validated.captureEventIds.length, 6);
+  assert.equal(validated.captureEventIds.length, 8);
+  assert.equal(validated.assignmentMembershipIds.length, 1);
+  assert.equal(validated.assignmentGrantIds.length, 1);
   assert.deepEqual(validated.partySnapshotIds, [partyId]);
   assert.deepEqual(validated.fulfillmentSnapshotIds, [fulfillmentId]);
 });
@@ -64,6 +90,7 @@ test("rejects confirmed captures, foreign actors, extra rows and non-prefix jour
 });
 
 function fullSnapshot(): CaptureContinuityRecoverySnapshot {
+  const assignment = captureContinuityAssignmentIds(runId);
   const address = {
     createdBy: actorId,
     customerId,
@@ -83,9 +110,26 @@ function fullSnapshot(): CaptureContinuityRecoverySnapshot {
     "capture.claimed",
     "capture.autosaved",
     "capture.claimed",
+    "capture.transferred",
+    "capture.taken_over",
   ];
   return snapshot({
     addressRows: [address],
+    assignmentGrants: [{
+      grantedBy: actorId,
+      id: assignment.grantId,
+      membershipId: assignment.membershipId,
+      revokedAt: null,
+      roleCode: "waiter",
+    }],
+    assignmentMemberships: [{
+      branchId,
+      grantedBy: actorId,
+      id: assignment.membershipId,
+      restaurantId,
+      revokedAt: null,
+      userId: "abababab-abab-4bab-8bab-abababababab",
+    }],
     captureEvents: operations.map((operation, index) => ({
       actorId,
       branchId,
@@ -108,7 +152,7 @@ function fullSnapshot(): CaptureContinuityRecoverySnapshot {
       sourceChannel: "whatsapp_manual",
       status: "draft",
       updatedBy: actorId,
-      version: 6,
+      version: 8,
     }],
     customerEvents: [
       customerEvent("customer.profile_saved", customerId, 1, "dddddddd-dddd-4ddd-8ddd-dddddddddddd"),
@@ -144,6 +188,8 @@ function snapshot(
 ): CaptureContinuityRecoverySnapshot {
   return {
     addressRows: [],
+    assignmentGrants: [],
+    assignmentMemberships: [],
     branchId,
     captureEvents: [],
     captures: [],

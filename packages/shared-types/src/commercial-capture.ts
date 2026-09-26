@@ -1,4 +1,4 @@
-import type { BranchScope } from "./index.js";
+import type { BranchScope, MembershipRoleCode } from "./index.js";
 
 export const COMMERCIAL_CAPTURE_SCHEMA_VERSION = 1 as const;
 export const COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION = 2 as const;
@@ -22,6 +22,9 @@ export const CAPTURE_FULFILLMENT_CHANNELS = Object.freeze([
 
 export const CAPTURE_DRAFT_STATUSES = Object.freeze(["draft", "confirmed", "no_sale"] as const);
 export const CAPTURE_ATTENTION_STATUSES = Object.freeze(["unclaimed", "claimed", "held"] as const);
+const CAPTURE_ASSIGNMENT_ROLE_CODES = Object.freeze([
+  "owner", "admin", "manager", "supervisor", "cashier", "waiter",
+] as const);
 
 export type CaptureSourceChannelV1 = (typeof CAPTURE_SOURCE_CHANNELS)[number];
 export type CaptureFulfillmentChannelV1 = (typeof CAPTURE_FULFILLMENT_CHANNELS)[number];
@@ -102,6 +105,12 @@ export interface TransferCaptureDraftCommandV1 extends CaptureVersionedMutationI
   readonly targetMembershipId: string;
 }
 
+/** Privileged forced reassignment to the acting operator; normal claim remains the non-forced path. */
+export interface TakeoverCaptureDraftCommandV1 extends CaptureVersionedMutationInputV1 {
+  readonly reason: string;
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+}
+
 export interface ConfirmCaptureDraftCommandV1 extends CaptureVersionedMutationInputV1 {
   readonly attentionLeaseId: string;
   readonly orderId: string;
@@ -164,6 +173,24 @@ export interface CaptureWorkTrayRequestV1 {
 export interface CaptureWorkTrayResultV1 {
   readonly items: readonly CaptureDraftSummaryV1[];
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+}
+
+export interface CaptureAssignmentDirectoryRequestV1 {
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+}
+
+export interface CaptureAssignmentCandidateV1 {
+  readonly displayLabel: string;
+  readonly membershipId: string;
+  readonly roles: readonly MembershipRoleCode[];
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+}
+
+export interface CaptureAssignmentDirectoryV1 {
+  readonly candidates: readonly CaptureAssignmentCandidateV1[];
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
+  readonly scope: BranchScope;
 }
 
 export interface CaptureWorkspaceRequestV1 {
@@ -385,6 +412,15 @@ export function parseTransferCaptureDraftCommandV1(value: unknown): TransferCapt
     });
 }
 
+export function parseTakeoverCaptureDraftCommandV1(value: unknown): TakeoverCaptureDraftCommandV1 | undefined {
+  const record = exactRecord(value, [...VERSIONED_KEYS, "reason"]);
+  const common = record === undefined ? undefined : parseVersionedMutationInput(record);
+  const reason = record === undefined ? undefined : boundedText(own(record, "reason"), 1, 500);
+  return common === undefined || reason === undefined
+    ? undefined
+    : Object.freeze({ ...common, reason, schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION });
+}
+
 export function parseConfirmCaptureDraftCommandV1(value: unknown): ConfirmCaptureDraftCommandV1 | undefined {
   const record = exactRecord(value, [...VERSIONED_KEYS, "attentionLeaseId", "orderId"]);
   const common = record === undefined ? undefined : parseVersionedMutationInput(record);
@@ -460,6 +496,57 @@ export function parseCaptureWorkTrayResultV1(value: unknown): CaptureWorkTrayRes
   const items = rawItems.map(parseCaptureDraftSummaryV1);
   return items.some((item) => item === undefined) ? undefined
     : Object.freeze({ items: Object.freeze(items as CaptureDraftSummaryV1[]), schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION });
+}
+
+export function parseCaptureAssignmentDirectoryRequestV1(
+  value: unknown,
+): CaptureAssignmentDirectoryRequestV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope"]);
+  const scope = record === undefined ? undefined : parseUuidScope(own(record, "scope"));
+  return record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_SCHEMA_VERSION
+    || scope === undefined ? undefined
+      : Object.freeze({ schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION, scope });
+}
+
+export function parseCaptureAssignmentCandidateV1(value: unknown): CaptureAssignmentCandidateV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "membershipId", "displayLabel", "roles"]);
+  if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_SCHEMA_VERSION) return undefined;
+  const membershipId = uuid(own(record, "membershipId"));
+  const displayLabel = boundedText(own(record, "displayLabel"), 1, 320);
+  const rawRoles = own(record, "roles");
+  if (membershipId === undefined || displayLabel === undefined || !Array.isArray(rawRoles)
+    || rawRoles.length === 0 || rawRoles.length > CAPTURE_ASSIGNMENT_ROLE_CODES.length) return undefined;
+  const roles: MembershipRoleCode[] = [];
+  let previousIndex = -1;
+  for (const rawRole of rawRoles) {
+    const roleIndex = CAPTURE_ASSIGNMENT_ROLE_CODES.indexOf(rawRole as never);
+    if (typeof rawRole !== "string" || roleIndex <= previousIndex) return undefined;
+    previousIndex = roleIndex;
+    roles.push(rawRole as MembershipRoleCode);
+  }
+  return Object.freeze({
+    displayLabel,
+    membershipId,
+    roles: Object.freeze(roles),
+    schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION,
+  });
+}
+
+export function parseCaptureAssignmentDirectoryV1(value: unknown): CaptureAssignmentDirectoryV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "candidates"]);
+  const scope = record === undefined ? undefined : parseUuidScope(own(record, "scope"));
+  const rawCandidates = record === undefined ? undefined : own(record, "candidates");
+  if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_SCHEMA_VERSION
+    || scope === undefined || !Array.isArray(rawCandidates) || rawCandidates.length > 200) return undefined;
+  const candidates: CaptureAssignmentCandidateV1[] = [];
+  const membershipIds = new Set<string>();
+  for (const rawCandidate of rawCandidates) {
+    const candidate = parseCaptureAssignmentCandidateV1(rawCandidate);
+    if (candidate === undefined || membershipIds.has(candidate.membershipId)) return undefined;
+    membershipIds.add(candidate.membershipId);
+    candidates.push(candidate);
+  }
+  return Object.freeze({ candidates: Object.freeze(candidates), schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION, scope });
 }
 
 export function parseCaptureWorkspaceRequestV1(value: unknown): CaptureWorkspaceRequestV1 | undefined {

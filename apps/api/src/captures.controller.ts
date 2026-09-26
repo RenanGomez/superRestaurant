@@ -2,10 +2,10 @@ import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException,
   Header, HttpCode, Inject, NotFoundException, Post, Req, ServiceUnavailableException,
 } from "@nestjs/common";
-import type { CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
+import type { CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
-import { CaptureApplicationError, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureService, CaptureTrayService } from "./captures.js";
+import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureService, CaptureTrayService } from "./captures.js";
 
 @Controller("captures")
 export class CapturesController {
@@ -17,7 +17,19 @@ export class CapturesController {
     @Inject(CaptureDeliveryInstructionsService) private readonly deliveryInstructions: CaptureDeliveryInstructionsService,
     @Inject(CaptureConfirmationService) private readonly confirmation: CaptureConfirmationService,
     @Inject(CaptureTrayService) private readonly tray: CaptureTrayService,
+    @Inject(CaptureAssignmentDirectoryService) private readonly assignmentDirectory: CaptureAssignmentDirectoryService,
   ) {}
+
+  @Post("assignment-candidates")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async listAssignmentCandidates(
+    @Req() request: unknown,
+    @Body() body: unknown,
+  ): Promise<CaptureAssignmentDirectoryV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.assignmentDirectory.list(principal, body));
+  }
 
   @Post("tray")
   @HttpCode(200)
@@ -112,6 +124,20 @@ export class CapturesController {
   public async resume(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.attention.mutateAttention(principal, "capture.resumed", body));
+  }
+  @Post("transfer")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async transfer(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.attention.mutateAttention(principal, "capture.transferred", body));
+  }
+  @Post("takeover")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async takeover(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.attention.mutateAttention(principal, "capture.taken_over", body));
   }
   @Post("recovery-preference")
   @HttpCode(200)

@@ -43,7 +43,7 @@ import {
   PostgresCustomerOrderHistory,
   PostgresCustomerOrderRepeatCapture,
 } from "./customer-order-history.js";
-import { CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_TRAY_PORT, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureAttentionService, CaptureService, CaptureTrayService, PostgresCaptureCreator } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureAttentionService, CaptureService, CaptureTrayService, PostgresCaptureCreator } from "./captures.js";
 import { SessionController } from "./session.controller.js";
 import { DiningZonesController } from "./dining-zones.controller.js";
 import {
@@ -83,6 +83,12 @@ import {
 } from "./table-order-context.js";
 import { SystemOnboardingController } from "./system-onboarding.controller.js";
 import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboardingAuth } from "./system-onboarding.js";
+import { OperationalWorkTrayController } from "./operational-work-tray.controller.js";
+import {
+  OPERATIONAL_WORK_TRAY_PORT,
+  OperationalWorkTrayService,
+  PostgresOperationalWorkTray,
+} from "./operational-work-tray.js";
 
 @Module({
   controllers: [
@@ -101,6 +107,7 @@ import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboarding
     PaymentsController,
     OperationalShiftsController,
     TableOrderContextController,
+    OperationalWorkTrayController,
     SystemOnboardingController,
   ],
   providers: [
@@ -138,6 +145,8 @@ import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboarding
     CaptureConfirmationService,
     { provide: CAPTURE_TRAY_PORT, useExisting: PostgresCaptureCreator },
     CaptureTrayService,
+    { provide: CAPTURE_ASSIGNMENT_DIRECTORY_PORT, useExisting: PostgresCaptureCreator },
+    CaptureAssignmentDirectoryService,
     PostgresCustomerDirectoryWriter,
     { provide: CUSTOMER_DIRECTORY_WRITER_PORT, useExisting: PostgresCustomerDirectoryWriter },
     CustomerDirectoryService,
@@ -180,6 +189,9 @@ import { SYSTEM_ONBOARDING_AUTH, SystemOnboardingService, createSystemOnboarding
     PostgresTableOrderContextDirectory,
     { provide: TABLE_ORDER_CONTEXT_DIRECTORY, useExisting: PostgresTableOrderContextDirectory },
     TableOrderContextService,
+    PostgresOperationalWorkTray,
+    { provide: OPERATIONAL_WORK_TRAY_PORT, useExisting: PostgresOperationalWorkTray },
+    OperationalWorkTrayService,
     { provide: SYSTEM_ONBOARDING_AUTH, useFactory: () => createSystemOnboardingAuth(process.env) },
     SystemOnboardingService,
     {

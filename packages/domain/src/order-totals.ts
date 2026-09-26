@@ -117,6 +117,11 @@ export interface CalculatedOrderTotals {
   readonly total: Money;
 }
 
+/** Validates and detaches one immutable tax rule snapshot for catalog reuse. */
+export function validateTaxSnapshot(value: TaxSnapshot): TaxSnapshot {
+  return atPricingBoundary("tax snapshot", () => normalizeTaxSnapshot(value));
+}
+
 /**
  * Calculates a line strictly from its price snapshot. Inputs and the returned
  * record are deeply frozen. Taxes use exact ratios and Money's documented

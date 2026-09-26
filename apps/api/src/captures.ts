@@ -1,13 +1,16 @@
 import { types as nodeTypes } from "node:util";
 import { Inject, Injectable } from "@nestjs/common";
-import { createOrder, type OrderAuditContext, type OrderMutation } from "@super-restaurant/domain";
 import {
   parseCreateCaptureDraftCommandV1,
   parseAutosaveCaptureDraftCommandV1,
   parseCaptureMutationResultV1,
+  parseCaptureAssignmentDirectoryRequestV1,
+  parseCaptureAssignmentDirectoryV1,
   parseHoldCaptureDraftCommandV1,
   parseClaimCaptureDraftCommandV1,
   parseResumeCaptureDraftCommandV1,
+  parseTakeoverCaptureDraftCommandV1,
+  parseTransferCaptureDraftCommandV1,
   parseSetCaptureRecoveryPreferenceCommandV1,
   parseCaptureRecoveryPreferenceResultV1,
   parseCaptureWorkTrayRequestV1,
@@ -30,9 +33,13 @@ import {
   type HoldCaptureDraftCommandV1,
   type ClaimCaptureDraftCommandV1,
   type ResumeCaptureDraftCommandV1,
+  type TakeoverCaptureDraftCommandV1,
+  type TransferCaptureDraftCommandV1,
   type CreateCaptureDraftCommandV1,
   type AutosaveCaptureDraftCommandV1,
   type CaptureMutationResultV1,
+  type CaptureAssignmentDirectoryRequestV1,
+  type CaptureAssignmentDirectoryV1,
   type CaptureWorkTrayRequestV1,
   type CaptureWorkTrayResultV1,
   type CaptureWorkspaceRequestV1,
@@ -43,6 +50,7 @@ import {
   type CaptureWorkspaceV3,
   type CaptureDeliveryInstructionSuggestionsRequestV1,
   type CaptureDeliveryInstructionSuggestionsV1,
+  type MenuCatalogV1,
   type SetCaptureDeliveryInstructionsCommandV1,
   type SetCaptureDeliveryInstructionsResultV1,
   type ConfirmCaptureDraftCommandV2,
@@ -50,7 +58,14 @@ import {
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
+import {
+  materializeCaptureOrder,
+  parseCaptureRepeatSelectionPlan,
+  type CaptureOrderMaterialization,
+  type CaptureRepeatSelectionPlan,
+} from "./capture-repeat-order-plan.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
+import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { decodeCaptureRecord, decodeCaptureWorkspace, decodeCaptureWorkspaceV2, decodeCaptureWorkspaceV3 } from "./persistence/capture-persistence-codec.js";
 import { encodeOrderAuditEventRecord, encodeOrderRecord } from "./persistence/order-persistence-codec.js";
 
@@ -69,9 +84,12 @@ export interface CaptureCreationPort {
   readWorkspaceV3?(actorId: string, request: CaptureWorkspaceRequestV3): Promise<unknown>;
 }
 export const CAPTURE_CREATION_PORT = Symbol("CAPTURE_CREATION_PORT");
-export type CaptureAttentionOperation = "capture.held" | "capture.claimed" | "capture.resumed";
+export type CaptureAttentionOperation = "capture.held" | "capture.claimed" | "capture.resumed"
+  | "capture.transferred" | "capture.taken_over";
 export type CaptureEditOperation = CaptureAttentionOperation | "capture.recovery_preference_changed";
-export type CaptureAttentionCommand = HoldCaptureDraftCommandV1 | ClaimCaptureDraftCommandV1 | ResumeCaptureDraftCommandV1 | SetCaptureRecoveryPreferenceCommandV1;
+export type CaptureAttentionCommand = HoldCaptureDraftCommandV1 | ClaimCaptureDraftCommandV1
+  | ResumeCaptureDraftCommandV1 | SetCaptureRecoveryPreferenceCommandV1 | TransferCaptureDraftCommandV1
+  | TakeoverCaptureDraftCommandV1;
 export interface CaptureAttentionPort {
   mutateAttention(actorId: string, operation: CaptureEditOperation, command: CaptureAttentionCommand): Promise<unknown>;
 }
@@ -93,15 +111,25 @@ export interface CaptureDeliveryInstructionsPort {
 }
 export const CAPTURE_DELIVERY_INSTRUCTIONS_PORT = Symbol("CAPTURE_DELIVERY_INSTRUCTIONS_PORT");
 export interface CaptureConfirmationPort {
-  confirmDraft(actorId: string, command: ConfirmCaptureDraftCommandV2, mutation: OrderMutation): Promise<unknown>;
+  probeConfirmation(actorId: string, command: ConfirmCaptureDraftCommandV2): Promise<unknown>;
+  readRepeatOrderPlan(actorId: string, request: CaptureWorkspaceRequestV3): Promise<unknown>;
+  confirmDraft(
+    actorId: string,
+    command: ConfirmCaptureDraftCommandV2,
+    materialization: CaptureOrderMaterialization,
+  ): Promise<unknown>;
 }
 export const CAPTURE_CONFIRMATION_PORT = Symbol("CAPTURE_CONFIRMATION_PORT");
 export interface CaptureTrayPort { list(actorId: string, request: CaptureWorkTrayRequestV1): Promise<unknown>; }
 export const CAPTURE_TRAY_PORT = Symbol("CAPTURE_TRAY_PORT");
+export interface CaptureAssignmentDirectoryPort {
+  listAssignmentCandidates(actorId: string, request: CaptureAssignmentDirectoryRequestV1): Promise<unknown>;
+}
+export const CAPTURE_ASSIGNMENT_DIRECTORY_PORT = Symbol("CAPTURE_ASSIGNMENT_DIRECTORY_PORT");
 const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 @Injectable()
-export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAttentionPort, CaptureCustomerPort, CaptureFulfillmentPort, CaptureDeliveryInstructionsPort, CaptureConfirmationPort, CaptureTrayPort {
+export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAttentionPort, CaptureCustomerPort, CaptureFulfillmentPort, CaptureDeliveryInstructionsPort, CaptureConfirmationPort, CaptureTrayPort, CaptureAssignmentDirectoryPort {
   public constructor(@Inject(DATABASE_CLIENT) private readonly database: DatabaseClientPort) {}
 
   public async createDraft(actorId: string, input: CreateCaptureDraftCommandV1): Promise<unknown> {
@@ -169,11 +197,27 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     return row.result;
   }
 
+  public async listAssignmentCandidates(actorId: string, input: CaptureAssignmentDirectoryRequestV1): Promise<unknown> {
+    const request = parseCaptureAssignmentDirectoryRequestV1(input);
+    if (!canonicalUuid.test(actorId) || request === undefined) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.list_capture_assignment_candidates($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
   public async mutateAttention(actorId: string, operation: CaptureEditOperation, input: CaptureAttentionCommand): Promise<unknown> {
     const command = parseAttentionCommand(operation, input);
     if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
+    const statement = operation === "capture.transferred" || operation === "capture.taken_over"
+      ? "select app_private.mutate_capture_assignment($1::uuid, $2::text, $3::jsonb) as result"
+      : "select app_private.mutate_capture_attention($1::uuid, $2::text, $3::jsonb) as result";
     const response = await this.database.query(
-      "select app_private.mutate_capture_attention($1::uuid, $2::text, $3::jsonb) as result",
+      statement,
       [actorId, operation, JSON.stringify(command)],
     );
     if (response.rows.length !== 1) throw unavailable();
@@ -237,13 +281,43 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     return row.result;
   }
 
-  public async confirmDraft(actorId: string, input: ConfirmCaptureDraftCommandV2, mutation: OrderMutation): Promise<unknown> {
+  public async probeConfirmation(actorId: string, input: ConfirmCaptureDraftCommandV2): Promise<unknown> {
     const command = parseConfirmCommand(input);
     if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
     const response = await this.database.query(
-      "select app_private.confirm_capture_draft($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb) as result",
-      [actorId, JSON.stringify(command), JSON.stringify(encodeOrderRecord(mutation.order)),
-        JSON.stringify(encodeOrderAuditEventRecord(mutation.auditEvent))],
+      "select app_private.confirm_capture_draft_v3($1::uuid, $2::jsonb, null::jsonb, null::jsonb) as result",
+      [actorId, JSON.stringify(command)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async readRepeatOrderPlan(actorId: string, input: CaptureWorkspaceRequestV3): Promise<unknown> {
+    const request = parseCaptureWorkspaceRequestV3(input);
+    if (!canonicalUuid.test(actorId) || request === undefined) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.read_capture_repeat_order_plan($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async confirmDraft(
+    actorId: string,
+    input: ConfirmCaptureDraftCommandV2,
+    materialization: CaptureOrderMaterialization,
+  ): Promise<unknown> {
+    const command = parseConfirmCommand(input);
+    if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.confirm_capture_draft_v3($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb) as result",
+      [actorId, JSON.stringify(command), JSON.stringify(encodeOrderRecord(materialization.order)),
+        JSON.stringify(materialization.auditEvents.map(encodeOrderAuditEventRecord))],
     );
     if (response.rows.length !== 1) throw unavailable();
     const row = exactRecord(response.rows[0], ["result"]);
@@ -285,6 +359,36 @@ export class CaptureTrayService {
     const result = parseCaptureWorkTrayResultV1(raw);
     if (result === undefined || result.items.length > request.limit || result.items.some((item) => item.status !== "draft"
       || item.scope.restaurantId !== request.scope.restaurantId || item.scope.branchId !== request.scope.branchId)) throw unavailable();
+    return result;
+  }
+}
+
+@Injectable()
+export class CaptureAssignmentDirectoryService {
+  public constructor(
+    @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
+    @Inject(CAPTURE_ASSIGNMENT_DIRECTORY_PORT) private readonly directory: CaptureAssignmentDirectoryPort,
+  ) {}
+
+  public async list(
+    principal: AuthenticatedPrincipal,
+    input: unknown,
+  ): Promise<CaptureAssignmentDirectoryV1> {
+    const request = parseCaptureAssignmentDirectoryRequestV1(input);
+    if (request === undefined) throw new CaptureApplicationError("request");
+    let actorId: string;
+    try {
+      actorId = (await this.authorization.authorizeBranch(principal, request.scope, "captures.transfer")).principal.actorId;
+    } catch { throw new CaptureApplicationError("authorization"); }
+    let raw: unknown;
+    try { raw = await this.directory.listAssignmentCandidates(actorId, request); } catch { throw unavailable(); }
+    const statusOnly = exactRecord(raw, ["status"]);
+    if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
+    if (statusOnly?.status === "rejected") throw new CaptureApplicationError("request");
+    if (statusOnly !== undefined) throw unavailable();
+    const result = parseCaptureAssignmentDirectoryV1(raw);
+    if (result === undefined || result.scope.restaurantId !== request.scope.restaurantId
+      || result.scope.branchId !== request.scope.branchId) throw unavailable();
     return result;
   }
 }
@@ -391,6 +495,7 @@ export class CaptureConfirmationService {
     @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
     @Inject(CAPTURE_CREATION_PORT) private readonly captures: CaptureCreationPort,
     @Inject(CAPTURE_CONFIRMATION_PORT) private readonly persistence: CaptureConfirmationPort,
+    @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
   ) {}
 
   public async confirm(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureMutationResultV1> {
@@ -402,19 +507,29 @@ export class CaptureConfirmationService {
       if (captureAuthorization.principal.actorId !== orderAuthorization.principal.actorId) throw new Error("actor mismatch");
       actorId = captureAuthorization.principal.actorId;
     } catch { throw new CaptureApplicationError("authorization"); }
-    if (this.captures.readWorkspaceV2 === undefined) throw unavailable();
+    let rawProbe: unknown;
+    try { rawProbe = await this.persistence.probeConfirmation(actorId, command); } catch { throw unavailable(); }
+    const replay = exactRecord(rawProbe, ["status", "record"]);
+    if (replay?.status === "replayed") return confirmationResult(replay, command);
+    const probeStatus = exactRecord(rawProbe, ["status"]);
+    if (probeStatus?.status === "denied") throw new CaptureApplicationError("authorization");
+    if (probeStatus?.status === "rejected") throw new CaptureApplicationError("request");
+    if (probeStatus?.status !== "pending") throw unavailable();
+
+    if (this.captures.readWorkspaceV3 === undefined) throw unavailable();
+    const workspaceRequest = {
+      schemaVersion: 3 as const, scope: command.scope, captureDraftId: command.captureDraftId,
+    };
     let rawWorkspace: unknown;
     try {
-      rawWorkspace = await this.captures.readWorkspaceV2(actorId, {
-        schemaVersion: 2, scope: command.scope, captureDraftId: command.captureDraftId,
-      });
+      rawWorkspace = await this.captures.readWorkspaceV3(actorId, workspaceRequest);
     } catch { throw unavailable(); }
     const statusOnly = exactRecord(rawWorkspace, ["status"]);
     if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
     if (statusOnly?.status === "missing") throw new CaptureApplicationError("missing");
     if (statusOnly !== undefined) throw unavailable();
-    let workspace: CaptureWorkspaceV2;
-    try { workspace = decodeCaptureWorkspaceV2(rawWorkspace, command.scope); } catch { throw unavailable(); }
+    let workspace: CaptureWorkspaceV3;
+    try { workspace = decodeCaptureWorkspaceV3(rawWorkspace, command.scope); } catch { throw unavailable(); }
     const detail = workspace.detail;
     if (detail.captureDraftId !== command.captureDraftId || detail.version !== command.expectedVersion
       || detail.status !== "draft" || detail.attentionStatus !== "claimed"
@@ -424,27 +539,44 @@ export class CaptureConfirmationService {
         || workspace.fulfillmentSnapshot === null))) throw new CaptureApplicationError("conflict");
     const channel = detail.fulfillmentChannel === "dine_in" ? "table"
       : detail.fulfillmentChannel === "pickup" ? "takeout" : detail.fulfillmentChannel;
-    let mutation: OrderMutation;
+    let plan: CaptureRepeatSelectionPlan | null = null;
+    let catalog: MenuCatalogV1 | null = null;
+    if (workspace.repeatOrderPlan !== null) {
+      try {
+        const permissions = await Promise.all(["catalog.read", "customers.read", "orders.read"].map((permission) =>
+          this.authorization.authorizeBranch(principal, command.scope, permission as "catalog.read" | "customers.read" | "orders.read")));
+        if (permissions.some(({ principal: decisionPrincipal }) => decisionPrincipal.actorId !== actorId)) {
+          throw new Error("actor mismatch");
+        }
+      } catch { throw new CaptureApplicationError("authorization"); }
+      let rawPlan: unknown;
+      try { rawPlan = await this.persistence.readRepeatOrderPlan(actorId, workspaceRequest); } catch { throw unavailable(); }
+      const planEnvelope = exactRecord(rawPlan, ["status", "plan"]);
+      if (planEnvelope?.status !== "ok") {
+        const planStatus = exactRecord(rawPlan, ["status"]);
+        if (planStatus?.status === "denied") throw new CaptureApplicationError("authorization");
+        if (planStatus?.status === "missing") throw new CaptureApplicationError("conflict");
+        throw unavailable();
+      }
+      plan = parseCaptureRepeatSelectionPlan(planEnvelope.plan) ?? null;
+      if (plan === null || plan.customerId !== workspace.repeatOrderPlan.customerId
+        || plan.sourceOrderId !== workspace.repeatOrderPlan.sourceOrderId
+        || plan.catalogVersion !== workspace.repeatOrderPlan.catalogVersion
+        || plan.lines.length !== workspace.repeatOrderPlan.lineCount) throw unavailable();
+      let catalogState;
+      try { catalogState = await this.catalogs.read(actorId, command.scope); } catch { throw unavailable(); }
+      if (catalogState === "forbidden") throw new CaptureApplicationError("authorization");
+      if (catalogState.catalog === null || catalogState.scope.restaurantId !== command.scope.restaurantId
+        || catalogState.scope.branchId !== command.scope.branchId) throw new CaptureApplicationError("conflict");
+      catalog = catalogState.catalog;
+    }
+    let materialization: CaptureOrderMaterialization;
     try {
-      mutation = createOrder({
-        orderId: command.orderId,
-        restaurantId: command.scope.restaurantId,
-        branchId: command.scope.branchId,
-        channel,
-        ...(command.tableId === null ? {} : { tableId: command.tableId }),
-        currency: command.currency,
-        timeZone: command.timeZone,
-      }, confirmationAudit(command, actorId));
-    } catch { throw new CaptureApplicationError("request"); }
+      materialization = materializeCaptureOrder(command, actorId, channel, plan, catalog);
+    } catch { throw new CaptureApplicationError(plan === null ? "request" : "conflict"); }
     let raw: unknown;
-    try { raw = await this.persistence.confirmDraft(actorId, command, mutation); } catch { throw unavailable(); }
-    const { record, replayed } = parseOutcome(raw, command.scope);
-    if (record.detail.captureDraftId !== command.captureDraftId
-      || record.detail.version !== command.expectedVersion + 1 || record.detail.status !== "confirmed"
-      || record.detail.confirmedOrderId !== command.orderId || record.detail.attentionStatus !== "unclaimed") throw unavailable();
-    const result = parseCaptureMutationResultV1({ schemaVersion: 1, detail: record.detail, replayed });
-    if (result === undefined) throw unavailable();
-    return result;
+    try { raw = await this.persistence.confirmDraft(actorId, command, materialization); } catch { throw unavailable(); }
+    return confirmationResult(raw, command);
   }
 }
 
@@ -601,7 +733,7 @@ export class CaptureAttentionService {
     let actorId: string;
     try {
       const authorized = await this.authorization.authorizeBranch(principal, command.scope,
-        operation === "capture.held" || operation === "capture.recovery_preference_changed" ? "captures.update" : "captures.claim");
+        captureAttentionPermission(operation));
       actorId = authorized.principal.actorId;
     } catch { throw new CaptureApplicationError("authorization"); }
     let raw: unknown;
@@ -610,15 +742,26 @@ export class CaptureAttentionService {
     const { record, replayed } = parseOutcome(raw, command.scope);
     if (record.detail.captureDraftId !== command.captureDraftId || record.detail.version !== command.expectedVersion + 1
       || record.detail.status !== "draft" || record.detail.attentionStatus !== (operation === "capture.held" ? "held" : "claimed")) throw unavailable();
+    if (operation === "capture.transferred"
+      && (!("targetMembershipId" in command) || record.detail.ownerMembershipId !== command.targetMembershipId)) throw unavailable();
     return { record, replayed };
   }
+}
+
+function captureAttentionPermission(operation: CaptureEditOperation) {
+  if (operation === "capture.held" || operation === "capture.recovery_preference_changed") return "captures.update" as const;
+  if (operation === "capture.transferred") return "captures.transfer" as const;
+  if (operation === "capture.taken_over") return "captures.takeover" as const;
+  return "captures.claim" as const;
 }
 
 function parseAttentionCommand(operation: CaptureEditOperation, input: unknown): CaptureAttentionCommand {
   const command = operation === "capture.held" ? parseHoldCaptureDraftCommandV1(input)
     : operation === "capture.claimed" ? parseClaimCaptureDraftCommandV1(input)
       : operation === "capture.resumed" ? parseResumeCaptureDraftCommandV1(input)
-        : operation === "capture.recovery_preference_changed" ? parseSetCaptureRecoveryPreferenceCommandV1(input) : undefined;
+        : operation === "capture.transferred" ? parseTransferCaptureDraftCommandV1(input)
+          : operation === "capture.taken_over" ? parseTakeoverCaptureDraftCommandV1(input)
+            : operation === "capture.recovery_preference_changed" ? parseSetCaptureRecoveryPreferenceCommandV1(input) : undefined;
   if (command === undefined || command.expectedVersion >= Number.MAX_SAFE_INTEGER) throw new CaptureApplicationError("request");
   return command;
 }
@@ -673,15 +816,16 @@ function parseConfirmCommand(input: unknown): ConfirmCaptureDraftCommandV2 {
   }
   return command;
 }
-function confirmationAudit(command: ConfirmCaptureDraftCommandV2, actorId: string): OrderAuditContext {
-  return Object.freeze({
-    actorId,
-    branchId: command.scope.branchId,
-    deviceId: command.deviceId,
-    eventId: command.eventId,
-    idempotencyKey: command.idempotencyKey,
-    occurredAt: command.occurredAt,
-  });
+function confirmationResult(raw: unknown, command: ConfirmCaptureDraftCommandV2): CaptureMutationResultV1 {
+  const { record, replayed } = parseOutcome(raw, command.scope);
+  if (record.detail.captureDraftId !== command.captureDraftId
+    || record.detail.version !== command.expectedVersion + 1 || record.detail.status !== "confirmed"
+    || record.detail.confirmedOrderId !== command.orderId || record.detail.attentionStatus !== "unclaimed") {
+    throw unavailable();
+  }
+  const result = parseCaptureMutationResultV1({ schemaVersion: 1, detail: record.detail, replayed });
+  if (result === undefined) throw unavailable();
+  return result;
 }
 function unavailable(): CaptureApplicationError { return new CaptureApplicationError("unavailable"); }
 function exactRecord(value: unknown, keys: readonly string[]): Record<string, unknown> | undefined {

@@ -19,6 +19,16 @@ export interface DatabaseConfig {
   readonly connectionString: string;
 }
 
+/**
+ * node-postgres emits `error` for an idle client outside any query promise.
+ * Registering a listener prevents that transport event from terminating the
+ * process; active and subsequent query failures continue to reject normally.
+ */
+export function guardPostgresPool(pool: Pool): Pool {
+  pool.on("error", () => undefined);
+  return pool;
+}
+
 export class DatabaseConfigurationError extends Error {
   public constructor() {
     super("DATABASE_CONFIGURATION_REJECTED");
@@ -79,7 +89,7 @@ export class PostgresDatabaseClient implements DatabaseClientPort, OnApplication
   readonly #pool: Pool;
 
   public constructor(config: DatabaseConfig) {
-    this.#pool = new Pool({
+    this.#pool = guardPostgresPool(new Pool({
       application_name: "super-restaurant-api",
       connectionTimeoutMillis: 5_000,
       connectionString: config.connectionString,
@@ -88,7 +98,7 @@ export class PostgresDatabaseClient implements DatabaseClientPort, OnApplication
       query_timeout: 5_000,
       ssl: { ca: config.caCertificate, rejectUnauthorized: true },
       statement_timeout: 5_000,
-    });
+    }));
   }
 
   public async query(sql: string, parameters: readonly unknown[]): Promise<DatabaseQueryResult> {

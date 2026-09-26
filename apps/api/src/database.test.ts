@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DatabaseConfigurationError, readDatabaseConfig } from "./database.js";
+import { Pool } from "pg";
+
+import { DatabaseConfigurationError, guardPostgresPool, readDatabaseConfig } from "./database.js";
 
 const projectRef = "abcdefghijklmnopqrst";
 const validEnvironment = Object.freeze({
@@ -59,4 +61,14 @@ test("fails closed when the CA cannot be loaded or validated", () => {
     return true;
   });
   assert.throws(() => readDatabaseConfig(validEnvironment, () => ""), DatabaseConfigurationError);
+});
+
+test("guards idle PostgreSQL transport errors without masking query promises", async () => {
+  const pool = guardPostgresPool(new Pool());
+  try {
+    assert.doesNotThrow(() => pool.emit("error", new Error("idle connection terminated")));
+    await assert.rejects(pool.query("select 1"), Error);
+  } finally {
+    await pool.end();
+  }
 });

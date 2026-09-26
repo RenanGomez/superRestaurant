@@ -53,6 +53,7 @@ export type CaptureAuditEventType =
   | "capture.claimed"
   | "capture.resumed"
   | "capture.transferred"
+  | "capture.taken_over"
   | "capture.confirmed"
   | "capture.no_sale";
 
@@ -220,6 +221,23 @@ export function transferCaptureDraft(
   }
   const next = freezeDraft({ ...captureDraft, ownerActorId: newOwnerActorId });
   return mutation(next, auditEvent(captureDraft, next, audit, "capture.transferred"));
+}
+
+/** Privileged reassignment of an actively owned draft to the acting operator. */
+export function takeOverCaptureDraft(
+  captureDraft: CaptureDraft,
+  reason: string,
+  auditContext: CaptureAuditContext,
+): CaptureDraftMutation {
+  assertValidDraft(captureDraft);
+  const audit = snapshotAuditContext(auditContext);
+  if (captureDraft.state !== "draft" || captureDraft.attention !== "claimed"
+    || captureDraft.ownerActorId === audit.actorId) {
+    throw new InvalidCaptureDraftOperationError("capture.taken_over");
+  }
+  assertText(reason, "reason");
+  const next = freezeDraft({ ...captureDraft, ownerActorId: audit.actorId });
+  return mutation(next, auditEvent(captureDraft, next, audit, "capture.taken_over", { reason }));
 }
 
 export function confirmCaptureDraft(

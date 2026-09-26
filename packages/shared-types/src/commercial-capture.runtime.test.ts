@@ -2,6 +2,8 @@ import {
   parseAutosaveCaptureDraftCommandV1,
   parseCaptureDraftDetailV1,
   parseCaptureDraftSummaryV1,
+  parseCaptureAssignmentDirectoryRequestV1,
+  parseCaptureAssignmentDirectoryV1,
   parseCaptureWorkTrayRequestV1,
   parseCaptureWorkTrayResultV1,
   parseCaptureWorkspaceRequestV1,
@@ -20,6 +22,7 @@ import {
   parseCaptureRecoveryPolicyV1,
   parseCaptureRecoveryPreferenceResultV1,
   parseResumeCaptureDraftCommandV1,
+  parseTakeoverCaptureDraftCommandV1,
   parseTransferCaptureDraftCommandV1,
 } from "./index.js";
 
@@ -46,6 +49,25 @@ const targetMembershipId = "c483b6e7-e102-4cc5-a887-d30712c85e52";
 const customerSnapshotRef = "8cc7eb84-af2a-4e84-95de-967c39af86ab";
 const fulfillmentSnapshotRef = "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02";
 const orderId = "7c3e9a20-5d61-4f84-a237-1b6d8e4c9052";
+
+const assignmentDirectoryRequest = { schemaVersion: 1, scope };
+const assignmentDirectory = { schemaVersion: 1, scope, candidates: [{ schemaVersion: 1,
+  membershipId: targetMembershipId, displayLabel: "caja@example.com", roles: ["cashier"] }] };
+expect(parseCaptureAssignmentDirectoryRequestV1(assignmentDirectoryRequest) !== undefined,
+  "assignment directory request binds exact branch scope");
+expect(Object.isFrozen(parseCaptureAssignmentDirectoryV1(assignmentDirectory)?.candidates),
+  "assignment directory parses frozen bounded candidates");
+expect(parseCaptureAssignmentDirectoryV1({ ...assignmentDirectory, candidates: [{
+  ...assignmentDirectory.candidates[0], roles: ["cashier", "owner"],
+}] }) === undefined, "assignment directory requires canonical role order");
+expect(parseCaptureAssignmentDirectoryV1({ ...assignmentDirectory, candidates: [
+  assignmentDirectory.candidates[0], assignmentDirectory.candidates[0],
+] }) === undefined, "assignment directory rejects duplicate memberships");
+expect(parseCaptureAssignmentDirectoryV1({ ...assignmentDirectory, candidates: [{
+  ...assignmentDirectory.candidates[0], displayLabel: "operador\nforjado",
+}] }) === undefined, "assignment directory rejects control characters");
+expect(parseCaptureAssignmentDirectoryRequestV1({ ...assignmentDirectoryRequest, actorId: common.eventId }) === undefined,
+  "assignment directory never accepts client actor identity");
 
 const create = { ...common, expectedVersion: 0, sourceChannel: "phone", fulfillmentChannel: null };
 const parsedCreate = parseCreateCaptureDraftCommandV1(create);
@@ -106,6 +128,12 @@ expect(parseHoldCaptureDraftCommandV1({ ...versioned, attentionLeaseId }) !== un
 expect(parseClaimCaptureDraftCommandV1(versioned) !== undefined, "claim parses without client actor");
 expect(parseResumeCaptureDraftCommandV1(versioned) !== undefined, "resume parses without a stale lease");
 expect(parseTransferCaptureDraftCommandV1({ ...versioned, attentionLeaseId, targetMembershipId }) !== undefined, "transfer targets a membership");
+expect(parseTakeoverCaptureDraftCommandV1({ ...versioned, reason: "Operador ausente" }) !== undefined,
+  "takeover requires an explicit reason");
+expect(parseTakeoverCaptureDraftCommandV1({ ...versioned, reason: " " }) === undefined,
+  "takeover rejects a blank reason");
+expect(parseTakeoverCaptureDraftCommandV1({ ...versioned, reason: "Forzado", targetMembershipId }) === undefined,
+  "takeover rejects a client-selected owner");
 expect(parseConfirmCaptureDraftCommandV1({ ...versioned, attentionLeaseId, orderId }) !== undefined, "confirm binds the resulting order id");
 expect(parseCloseCaptureNoSaleCommandV1({ ...versioned, attentionLeaseId, reason: "Cliente no respondió" }) !== undefined, "no-sale requires a bounded reason");
 expect(parseCloseCaptureNoSaleCommandV1({ ...versioned, attentionLeaseId, reason: " " }) === undefined, "no-sale rejects blank reason");

@@ -5,9 +5,11 @@ import test from "node:test";
 import { extractMigrationBody, validateCatalogAuditSql } from "./schema-verification.js";
 import {
   buildCaptureCatalogAudit,
+  buildCaptureAssignmentCatalogAudit,
   buildCaptureContinuityCatalogAudit,
   buildCaptureCustomerCatalogAudit,
   buildCaptureDeliveryOrderCatalogAudit,
+  buildCaptureRepeatOrderConfirmationCatalogAudit,
   buildCaptureRepeatOrderCatalogAudit,
   buildCaptureRepeatOrderWorkspaceCatalogAudit,
   buildCustomerDirectoryCatalogAudit,
@@ -531,6 +533,89 @@ test("Capture Workspace V3 exposes only a bounded repeat-order plan summary", ()
   assert.match(workspaceRunner, /capture_repeat_order_workspace_invariants\.sql/u);
   assert.match(workspaceRunner, /securityDefinerFunctions: 53/u);
   assert.match(apiPackage, /"verify:capture-repeat-order-workspace-schema:rollback"/u);
+});
+
+test("repeat-order confirmation materializes current catalog facts behind private capabilities", () => {
+  const migration = readFileSync(new URL("../../../../supabase/migrations/20260924000100_confirm_capture_repeat_order.sql", import.meta.url), "utf8");
+  const catalog = readFileSync(new URL("../../../../supabase/tests/capture_repeat_order_confirmation_catalog.sql", import.meta.url), "utf8");
+  const invariants = readFileSync(new URL("../../../../supabase/tests/capture_repeat_order_confirmation_invariants.sql", import.meta.url), "utf8");
+  const base = readFileSync(new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url), "utf8");
+  const capture = readFileSync(new URL("../../../../supabase/tests/capture_drafts_catalog.sql", import.meta.url), "utf8");
+  const directory = readFileSync(new URL("../../../../supabase/tests/customer_directory_catalog.sql", import.meta.url), "utf8");
+  const deliveryOrder = readFileSync(new URL("../../../../supabase/tests/capture_delivery_order_catalog.sql", import.meta.url), "utf8");
+  const history = readFileSync(new URL("../../../../supabase/tests/customer_order_history_catalog.sql", import.meta.url), "utf8");
+  const repeatOrder = readFileSync(new URL("../../../../supabase/tests/capture_repeat_order_catalog.sql", import.meta.url), "utf8");
+  const repeatOrderWorkspace = readFileSync(new URL("../../../../supabase/tests/capture_repeat_order_workspace_catalog.sql", import.meta.url), "utf8");
+  assert.doesNotThrow(() => extractMigrationBody(migration));
+  assert.match(migration, /create function app_private\.read_capture_repeat_order_plan\(/u);
+  assert.match(migration, /create function app_private\.confirm_capture_draft_v3\(/u);
+  assert.match(migration, /app_private\.persist_order_mutation\(/u);
+  assert.match(migration, /app\.menu_catalog_heads/u);
+  assert.match(migration, /command_fingerprint=fingerprint/u);
+  assert.match(migration, /grant execute on function app_private\.confirm_capture_draft_v3\(uuid,jsonb,jsonb,jsonb\) to app_api/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(catalog));
+  assert.doesNotThrow(() => extractMigrationBody(invariants));
+  const confirmationAudit = buildCaptureRepeatOrderConfirmationCatalogAudit(
+    base,
+    capture,
+    directory,
+    deliveryOrder,
+    history,
+    repeatOrder,
+    repeatOrderWorkspace,
+    catalog,
+  );
+  assert.match(confirmationAudit, /\) <> 59/u);
+  assert.match(confirmationAudit, /\) <> 55/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(confirmationAudit));
+  const confirmationRunner = readFileSync(new URL("../../src/operations/run-capture-repeat-order-confirmation-schema-verification.ts", import.meta.url), "utf8");
+  assert.match(confirmationRunner, /20260924000100_confirm_capture_repeat_order\.sql/u);
+  assert.match(confirmationRunner, /capture_repeat_order_confirmation_invariants\.sql/u);
+  assert.match(confirmationRunner, /securityDefinerFunctions: 55/u);
+  assert.match(apiPackage, /"verify:capture-repeat-order-confirmation-schema:rollback"/u);
+});
+
+test("capture assignment rotates active leases with privileged transfer and audited takeover", () => {
+  const migration = readFileSync(new URL("../../../../supabase/migrations/20260924000200_capture_assignment.sql", import.meta.url), "utf8");
+  const catalog = readFileSync(new URL("../../../../supabase/tests/capture_assignment_catalog.sql", import.meta.url), "utf8");
+  const invariants = readFileSync(new URL("../../../../supabase/tests/capture_assignment_invariants.sql", import.meta.url), "utf8");
+  const base = readFileSync(new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url), "utf8");
+  const capture = readFileSync(new URL("../../../../supabase/tests/capture_drafts_catalog.sql", import.meta.url), "utf8");
+  const directory = readFileSync(new URL("../../../../supabase/tests/customer_directory_catalog.sql", import.meta.url), "utf8");
+  const deliveryOrder = readFileSync(new URL("../../../../supabase/tests/capture_delivery_order_catalog.sql", import.meta.url), "utf8");
+  const history = readFileSync(new URL("../../../../supabase/tests/customer_order_history_catalog.sql", import.meta.url), "utf8");
+  const repeatOrder = readFileSync(new URL("../../../../supabase/tests/capture_repeat_order_catalog.sql", import.meta.url), "utf8");
+  const repeatOrderWorkspace = readFileSync(new URL("../../../../supabase/tests/capture_repeat_order_workspace_catalog.sql", import.meta.url), "utf8");
+  const repeatOrderConfirmation = readFileSync(new URL("../../../../supabase/tests/capture_repeat_order_confirmation_catalog.sql", import.meta.url), "utf8");
+  assert.doesNotThrow(() => extractMigrationBody(migration));
+  assert.match(migration, /create function app_private\.mutate_capture_assignment\(p_actor_id uuid, p_operation text, p_command jsonb\)/u);
+  assert.match(migration, /create function app_private\.list_capture_assignment_candidates\(p_actor_id uuid,p_request jsonb\)/u);
+  assert.match(migration, /p_operation not in \('capture\.transferred','capture\.taken_over'\)/u);
+  assert.match(migration, /g\.role_code in \('owner','admin','manager','supervisor'\)/u);
+  assert.match(migration, /exception when unique_violation then return jsonb_build_object\('status','conflict'\)/u);
+  assert.match(migration, /grant execute on function app_private\.mutate_capture_assignment\(uuid,text,jsonb\) to app_api/u);
+  assert.match(migration, /grant execute on function app_private\.list_capture_assignment_candidates\(uuid,jsonb\) to app_api/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(catalog));
+  assert.doesNotThrow(() => extractMigrationBody(invariants));
+  const assignmentAudit = buildCaptureAssignmentCatalogAudit(
+    base,
+    capture,
+    directory,
+    deliveryOrder,
+    history,
+    repeatOrder,
+    repeatOrderWorkspace,
+    repeatOrderConfirmation,
+    catalog,
+  );
+  assert.match(assignmentAudit, /\) <> 61/u);
+  assert.match(assignmentAudit, /\) <> 57/u);
+  assert.doesNotThrow(() => validateCatalogAuditSql(assignmentAudit));
+  const assignmentRunner = readFileSync(new URL("../../src/operations/run-capture-assignment-schema-verification.ts", import.meta.url), "utf8");
+  assert.match(assignmentRunner, /20260924000200_capture_assignment\.sql/u);
+  assert.match(assignmentRunner, /capture_assignment_invariants\.sql/u);
+  assert.match(assignmentRunner, /securityDefinerFunctions: 57/u);
+  assert.match(apiPackage, /"verify:capture-assignment-schema:rollback"/u);
 });
 
 test("post-P2 state runner uses the pinned profile for both stable lifecycle states", () => {

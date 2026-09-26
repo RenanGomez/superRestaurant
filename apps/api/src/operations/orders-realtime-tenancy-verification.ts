@@ -26,7 +26,7 @@ import {
 import { Pool, type PoolClient } from "pg";
 import { io, type Socket } from "socket.io-client";
 
-import type { DatabaseConfig } from "../database.js";
+import { guardPostgresPool, type DatabaseConfig } from "../database.js";
 import { createClient } from "@supabase/supabase-js";
 import {
   TenancyVerificationError,
@@ -1163,7 +1163,7 @@ async function timedFetch(url: string, init: RequestInit): Promise<Response> {
 }
 
 function createPool(config: DatabaseConfig): Pool {
-  return new Pool({
+  return guardPostgresPool(new Pool({
     application_name: "super-restaurant-orders-e2e",
     connectionString: config.connectionString,
     connectionTimeoutMillis: 5_000,
@@ -1172,7 +1172,7 @@ function createPool(config: DatabaseConfig): Pool {
     query_timeout: 10_000,
     ssl: { ca: config.caCertificate, rejectUnauthorized: true },
     statement_timeout: 10_000,
-  });
+  }));
 }
 
 function requireContext(fixture: TenancyVerificationLiveFixture): NonNullable<TenancyVerificationLiveFixture["verificationContext"]> {

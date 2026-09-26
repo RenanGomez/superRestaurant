@@ -28,6 +28,8 @@
     "src/lib/menu-catalog.test.ts",
     "src/lib/customer-directory.ts",
     "src/lib/customer-directory.test.ts",
+    "src/lib/customer-order-history.ts",
+    "src/lib/customer-order-history.test.ts",
     "src/lib/login-error.ts",
     "src/lib/login-error.test.ts",
     "src/lib/capture-workspace.ts",

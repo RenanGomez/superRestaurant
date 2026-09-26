@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   DINING_TABLE_VERIFICATION_CHECKPOINTS,
   FIXTURE_VERIFICATION_CHECKPOINTS,
+  HTTP_VERIFICATION_CHECKPOINTS,
   KDS_TICKET_VERIFICATION_CHECKPOINTS,
   MENU_CATALOG_VERIFICATION_CHECKPOINTS,
   ORDERS_REALTIME_VERIFICATION_CHECKPOINTS,
@@ -79,6 +80,14 @@ test("keeps fixture progress checkpoints unique and non-sensitive", () => {
   assert.equal(new Set(FIXTURE_VERIFICATION_CHECKPOINTS).size, FIXTURE_VERIFICATION_CHECKPOINTS.length);
   assert.equal(
     FIXTURE_VERIFICATION_CHECKPOINTS.every((checkpoint) => /^fixtures\.[a-z_]+$/u.test(checkpoint)),
+    true,
+  );
+});
+
+test("keeps HTTP progress checkpoints unique and non-sensitive", () => {
+  assert.equal(new Set(HTTP_VERIFICATION_CHECKPOINTS).size, HTTP_VERIFICATION_CHECKPOINTS.length);
+  assert.equal(
+    HTTP_VERIFICATION_CHECKPOINTS.every((checkpoint) => /^http\.[a-z_]+$/u.test(checkpoint)),
     true,
   );
 });

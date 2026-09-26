@@ -13,7 +13,7 @@ import {
 } from "@super-restaurant/shared-types";
 import { Pool, type PoolClient } from "pg";
 
-import type { DatabaseConfig } from "../database.js";
+import { guardPostgresPool, type DatabaseConfig } from "../database.js";
 import {
   runKdsTenancyVerification,
   type KdsTenancyVerificationSummary,
@@ -484,7 +484,7 @@ function isExactCode(value: unknown, code: string): boolean {
 }
 
 function createPool(config: DatabaseConfig): Pool {
-  return new Pool({
+  return guardPostgresPool(new Pool({
     application_name: "super-restaurant-full-pos-flow-e2e",
     connectionString: config.connectionString,
     connectionTimeoutMillis: 5_000,
@@ -493,7 +493,7 @@ function createPool(config: DatabaseConfig): Pool {
     query_timeout: 10_000,
     ssl: { ca: config.caCertificate, rejectUnauthorized: true },
     statement_timeout: 10_000,
-  });
+  }));
 }
 
 function flowError(): TenancyVerificationError {

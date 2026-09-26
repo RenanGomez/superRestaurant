@@ -205,3 +205,59 @@ export function buildCaptureRepeatOrderWorkspaceCatalogAudit(
     .replace(") <> 52", ") <> 53");
   return validateCatalogAuditSql(`${migrated}\n${repeatOrderWorkspaceSupplementSql}`);
 }
+
+export function buildCaptureRepeatOrderConfirmationCatalogAudit(
+  baseSql: string,
+  captureSupplementSql: string,
+  directorySupplementSql: string,
+  deliveryOrderSupplementSql: string,
+  historySupplementSql: string,
+  repeatOrderSupplementSql: string,
+  repeatOrderWorkspaceSupplementSql: string,
+  repeatOrderConfirmationSupplementSql: string,
+): string {
+  const base = buildCaptureRepeatOrderWorkspaceCatalogAudit(
+    baseSql,
+    captureSupplementSql,
+    directorySupplementSql,
+    deliveryOrderSupplementSql,
+    historySupplementSql,
+    repeatOrderSupplementSql,
+    repeatOrderWorkspaceSupplementSql,
+  );
+  const tail = "pg_catalog.to_regprocedure('app_private.read_capture_workspace_v3(uuid,jsonb)')";
+  const migrated = base.replace(tail,
+    `${tail},\n    pg_catalog.to_regprocedure('app_private.read_capture_repeat_order_plan(uuid,jsonb)'),\n    pg_catalog.to_regprocedure('app_private.confirm_capture_draft_v3(uuid,jsonb,jsonb,jsonb)')`)
+    .replace(") <> 57", ") <> 59")
+    .replace(") <> 53", ") <> 55");
+  return validateCatalogAuditSql(`${migrated}\n${repeatOrderConfirmationSupplementSql}`);
+}
+
+export function buildCaptureAssignmentCatalogAudit(
+  baseSql: string,
+  captureSupplementSql: string,
+  directorySupplementSql: string,
+  deliveryOrderSupplementSql: string,
+  historySupplementSql: string,
+  repeatOrderSupplementSql: string,
+  repeatOrderWorkspaceSupplementSql: string,
+  repeatOrderConfirmationSupplementSql: string,
+  captureAssignmentSupplementSql: string,
+): string {
+  const base = buildCaptureRepeatOrderConfirmationCatalogAudit(
+    baseSql,
+    captureSupplementSql,
+    directorySupplementSql,
+    deliveryOrderSupplementSql,
+    historySupplementSql,
+    repeatOrderSupplementSql,
+    repeatOrderWorkspaceSupplementSql,
+    repeatOrderConfirmationSupplementSql,
+  );
+  const tail = "pg_catalog.to_regprocedure('app_private.confirm_capture_draft_v3(uuid,jsonb,jsonb,jsonb)')";
+  const migrated = base.replace(tail,
+    `${tail},\n    pg_catalog.to_regprocedure('app_private.list_capture_assignment_candidates(uuid,jsonb)'),\n    pg_catalog.to_regprocedure('app_private.mutate_capture_assignment(uuid,text,jsonb)')`)
+    .replace(") <> 59", ") <> 61")
+    .replace(") <> 55", ") <> 57");
+  return validateCatalogAuditSql(`${migrated}\n${captureAssignmentSupplementSql}`);
+}

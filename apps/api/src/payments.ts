@@ -7,7 +7,11 @@ import {
   parseCheckoutOrderQueryV1,
   parseCheckoutOrderSummaryV1,
   parseOpenCashRegisterCommandV1,
+  parsePaymentIntentQuoteV1,
+  parsePaymentObligationProjectionV1,
   parsePaymentCollectionSummaryV1,
+  parseProjectPaymentObligationRequestV1,
+  parseQuotePaymentIntentRequestV1,
   type BranchScope,
   type CashRegisterOperationalReportV1,
   type CashRegisterReportQueryV1,
@@ -17,13 +21,19 @@ import {
   type CheckoutOrderSummaryV1,
   type OpenCashRegisterCommandV1,
   type PaymentCollectionSummaryV1,
+  type PaymentIntentQuoteV1,
+  type PaymentObligationProjectionV1,
 } from "@super-restaurant/shared-types";
 import {
+  InvalidPaymentIntentError,
+  InvalidPaymentObligationError,
   Money,
   appendCashMovement,
   calculateOrderAggregateTotals,
   closeCashRegister,
   createPayment,
+  buildPaymentIntentQuote,
+  derivePaymentObligation,
   openCashRegister,
   transitionOrderStatus,
   transitionPayment,
@@ -57,6 +67,63 @@ export class FinancialApplicationError extends Error {
   public constructor(public readonly code: FinancialApplicationErrorCode) {
     super(`FINANCIAL_${code.toUpperCase()}`);
     this.name = "FinancialApplicationError";
+  }
+}
+
+/** Pure transport/domain boundary. It quotes intent only and never persists money. */
+export function quotePaymentIntent(input: unknown): PaymentIntentQuoteV1 {
+  const request = parseQuotePaymentIntentRequestV1(input);
+  if (request === undefined) throw applicationError("request");
+  try {
+    const quote = buildPaymentIntentQuote({
+      capturedAmount: new Money(request.capturedAmountMinor, request.currency),
+      method: request.method,
+      orderTotal: new Money(request.orderTotalMinor, request.currency),
+      plannedAmount: new Money(request.plannedAmountMinor, request.currency),
+      tenderedAmount: request.tenderedAmountMinor === null
+        ? null : new Money(request.tenderedAmountMinor, request.currency),
+      timing: request.timing,
+    });
+    const result = parsePaymentIntentQuoteV1({
+      ...request,
+      changeDueMinor: quote.changeDue?.amountMinor ?? null,
+      remainingAfterPlanMinor: quote.remainingAfterPlan.amountMinor,
+      remainingBeforePlanMinor: quote.remainingBeforePlan.amountMinor,
+    });
+    if (result === undefined) throw unavailable();
+    return result;
+  } catch (error: unknown) {
+    if (error instanceof FinancialApplicationError) throw error;
+    if (error instanceof InvalidPaymentIntentError) throw applicationError("request");
+    throw unavailable();
+  }
+}
+
+/** Pure authoritative-facts projection. It neither reads nor writes financial state. */
+export function projectPaymentObligation(input: unknown): PaymentObligationProjectionV1 {
+  const request = parseProjectPaymentObligationRequestV1(input);
+  if (request === undefined) throw applicationError("request");
+  try {
+    const projection = derivePaymentObligation({
+      ambiguousAmount: new Money(request.ambiguousAmountMinor, request.currency),
+      capturedAmount: new Money(request.capturedAmountMinor, request.currency),
+      orderTotal: new Money(request.orderTotalMinor, request.currency),
+      pendingAmount: new Money(request.pendingAmountMinor, request.currency),
+    });
+    const result = parsePaymentObligationProjectionV1({
+      ...request,
+      collectibleAmountMinor: projection.collectibleAmount?.amountMinor ?? null,
+      overexposureAmountMinor: projection.overexposureAmount.amountMinor,
+      paymentStatus: projection.paymentStatus,
+      remainingBalanceMinor: projection.remainingBalance.amountMinor,
+      unresolvedExposureMinor: projection.unresolvedExposure.amountMinor,
+    });
+    if (result === undefined) throw unavailable();
+    return result;
+  } catch (error: unknown) {
+    if (error instanceof FinancialApplicationError) throw error;
+    if (error instanceof InvalidPaymentObligationError) throw applicationError("request");
+    throw unavailable();
   }
 }
 

@@ -117,6 +117,26 @@ export type {
   RefundMutation,
 } from "./payment.js";
 export {
+  InvalidPaymentIntentError,
+  PAYMENT_INTENT_METHODS,
+  PAYMENT_INTENT_TIMINGS,
+  buildPaymentIntentQuote,
+} from "./payment-intent.js";
+export type {
+  BuildPaymentIntentQuoteInput,
+  PaymentIntentMethod,
+  PaymentIntentQuote,
+  PaymentIntentTiming,
+} from "./payment-intent.js";
+export {
+  InvalidPaymentObligationError,
+  derivePaymentObligation,
+} from "./payment-obligation.js";
+export type {
+  DerivePaymentObligationInput,
+  PaymentObligationProjection,
+} from "./payment-obligation.js";
+export {
   appendCashMovement,
   closeCashRegister,
   expectedCashBalance,
@@ -165,6 +185,7 @@ export {
   createCaptureDraft,
   holdCaptureDraft,
   resumeCaptureDraft,
+  takeOverCaptureDraft,
   transferCaptureDraft,
 } from "./capture-draft.js";
 export {
@@ -206,9 +227,24 @@ export type {
   OrderState,
 } from "./order-state.js";
 export {
+  InvalidOrderItemChangeImpactError,
+  ORDER_ITEM_CHANGE_OPERATIONS,
+  ORDER_ITEM_INVENTORY_COMMITMENTS,
+  assessOrderItemChangeImpact,
+} from "./order-item-change-impact.js";
+export type {
+  AssessOrderItemChangeImpactInput,
+  OrderItemChangeBlockReason,
+  OrderItemChangeImpact,
+  OrderItemChangeOperation,
+  OrderItemChangePolicyDecision,
+  OrderItemInventoryCommitment,
+} from "./order-item-change-impact.js";
+export {
   calculateOrderItemTotals,
   calculateOrderTotals,
   ORDER_DISCOUNT_ALLOCATION_STRATEGY,
+  validateTaxSnapshot,
 } from "./order-totals.js";
 export {
   addOrderItem,
@@ -248,6 +284,50 @@ export type {
   ModifierSelectionSnapshot,
   ValidatedModifierGroupCatalog,
 } from "./modifiers.js";
+export { instantiateModifierGroupTemplate, validateModifierGroupTemplateCatalog } from "./modifier-templates.js";
+export type {
+  InstantiatedModifierGroupCatalog,
+  ModifierGroupTemplateBinding,
+  ModifierGroupTemplateCatalog,
+  ModifierGroupTemplateOptionCatalog,
+  ModifierTemplateOptionBinding,
+  ValidatedModifierGroupTemplateCatalog,
+} from "./modifier-templates.js";
+export { resolveModifierConstraints, validateModifierConstraintCatalog } from "./modifier-constraints.js";
+export type {
+  ModifierConstraint,
+  ModifierConstraintCatalog,
+  ModifierConstraintIssue,
+  ModifierConstraintIssueCode,
+  ModifierConstraintKind,
+  ModifierConstraintGroupCatalog,
+  ModifierConstraintOptionReference,
+  ModifierConstraintResolution,
+  ModifierConstraintSelectionState,
+  ModifierGroupConstraint,
+  ModifierOptionConstraint,
+  ValidatedModifierConstraintCatalog,
+} from "./modifier-constraints.js";
+export { instantiateProductVariantCatalog } from "./product-variants.js";
+export type {
+  InstantiatedProductVariantCatalog,
+  ProductVariantCatalog,
+  ProductVariantModifierGroupBinding,
+} from "./product-variants.js";
+export { validateConfiguredCatalogRelease } from "./configured-catalog.js";
+export type {
+  ConfiguredCatalogRelease,
+  ConfiguredProductCatalog,
+  ValidatedConfiguredCatalogRelease,
+} from "./configured-catalog.js";
+export { materializeConfiguredOrderItemSnapshot, resolveProductConfiguration } from "./configured-selection.js";
+export type {
+  ConfiguredModifierGroupSelection,
+  ConfiguredOrderItemPriceSnapshot,
+  ConfiguredProductSelectionInput,
+  ProductConfigurationResolution,
+  ResolvedProductConfiguration,
+} from "./configured-selection.js";
 export type {
   AppliedDiscountSnapshot,
   CalculatedOrderItemTotals,

@@ -183,6 +183,14 @@ const captureContinuitySmokeRecoveryRunner = readFileSync(
   new URL("./operations/run-capture-continuity-smoke-recovery.js", import.meta.url),
   "utf8",
 ).toLowerCase();
+const captureContinuitySmokeRecovery = readFileSync(
+  new URL("./operations/capture-continuity-smoke-recovery.js", import.meta.url),
+  "utf8",
+).toLowerCase();
+const captureCustomerJourneySmokeRecovery = readFileSync(
+  new URL("./operations/capture-customer-journey-smoke-recovery.js", import.meta.url),
+  "utf8",
+).toLowerCase();
 const protectedMenuWebSmokeRunner = readFileSync(
   new URL("./operations/run-menu-web-protected-smoke.js", import.meta.url),
   "utf8",
@@ -426,14 +434,29 @@ test("protected web smoke publishes a populated table layout before revocation",
 
 test("protected capture continuity smoke uses the current catalog and marked cleanup coordinator", () => {
   assert.match(protectedCaptureContinuitySmokeRunner, /runtenancyverification/u);
-  assert.match(protectedCaptureContinuitySmokeRunner, /buildcapturecontinuitycatalogaudit/u);
+  assert.match(protectedCaptureContinuitySmokeRunner, /buildcaptureassignmentcatalogaudit/u);
+  assert.match(protectedCaptureContinuitySmokeRunner, /capture_assignment_catalog\.sql/u);
   assert.match(protectedCaptureContinuitySmokeRunner, /createcapturecontinuityprotectedsmokecoordinator/u);
+  assert.match(protectedCaptureContinuitySmokeRunner, /verifymenucatalog:\s*true/u);
   assert.match(protectedCaptureContinuitySmokeRunner, /verifyoperationalorders:\s*true/u);
+  assert.match(protectedCaptureContinuitySmokeCoordinator, /capture\.transferred/u);
+  assert.match(protectedCaptureContinuitySmokeCoordinator, /capture\.taken_over/u);
   assert.match(
     protectedCaptureContinuitySmokeCoordinator,
-    /where capture_draft_id=\$1::uuid[\s\S]+where customer_id=\$2::uuid/u,
+    /cleanupcapturecontinuityrowsforactiverun/u,
   );
-  assert.match(protectedCaptureContinuitySmokeCoordinator, /\[plan\.capturedraftid, plan\.customerid\]/u);
+  assert.doesNotMatch(protectedCaptureContinuitySmokeCoordinator, /delete from app\.capture_command_events/u);
+  assert.match(captureContinuitySmokeRecovery, /deletecapturecontinuityrows\(config, false\)/u);
+  assert.match(captureContinuitySmokeRecovery, /deletecapturecontinuityrows\(config, true\)/u);
+  assert.match(captureContinuitySmokeRecovery, /if \(requireinactiverun\)/u);
+  assert.match(captureContinuitySmokeRecovery, /pg_try_advisory_xact_lock/u);
+  assert.match(captureContinuitySmokeRecovery, /deleteexactly/u);
+  assert.match(captureContinuitySmokeRecovery, /recovercapturecustomerjourneyrows/u);
+  assert.match(captureCustomerJourneySmokeRecovery, /capture\.order_repeated/u);
+  assert.match(captureCustomerJourneySmokeRecovery, /pg_try_advisory_xact_lock/u);
+  assert.match(captureCustomerJourneySmokeRecovery, /app\.order_fulfillment_snapshots/u);
+  assert.match(captureCustomerJourneySmokeRecovery, /app\.capture_repeat_order_plans/u);
+  assert.match(captureCustomerJourneySmokeRecovery, /app\.kds_events/u);
   assert.match(apiPackage, /"verify:capture-continuity-protected-smoke:remote"/u);
   assert.match(apiPackage, /run-capture-continuity-protected-smoke\.js/u);
   assert.match(apiPackage, /"recover:capture-continuity-smoke:remote"/u);

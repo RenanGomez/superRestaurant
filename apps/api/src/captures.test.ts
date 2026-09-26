@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
-import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkspaceRequestV3, parseCaptureWorkTrayRequestV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1 } from "@super-restaurant/shared-types";
+import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkspaceRequestV3, parseCaptureWorkTrayRequestV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1, parseTakeoverCaptureDraftCommandV1, parseTransferCaptureDraftCommandV1, type MembershipRoleCode } from "@super-restaurant/shared-types";
 
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
-import { CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_TRAY_PORT, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort } from "./captures.js";
+import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
+import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
 const principal = { actorId: "8cc7eb84-af2a-4e84-95de-967c39af86ab" };
 const command = parseCreateCaptureDraftCommandV1({
@@ -45,6 +47,19 @@ const mutationCommand = {
 const holdCommand = { ...mutationCommand, attentionLeaseId: validCommand.deviceId };
 const heldRecord = { ...record, detail: { ...record.detail, version: 2, attentionStatus: "held",
   ownerMembershipId: null, attentionLeaseId: null, attentionLeaseExpiresAt: null } };
+const targetMembershipId = "2f99dfcb-e7b1-4ab0-95a4-40ad0f9a7227";
+const rotatedLeaseId = "874216e9-e709-4f00-aa45-62f4cbc334a8";
+const transferCommand = parseTransferCaptureDraftCommandV1({ ...holdCommand, targetMembershipId });
+assert.ok(transferCommand);
+const transferredRecord = { ...record, detail: { ...record.detail, version: 2,
+  ownerMembershipId: targetMembershipId, attentionLeaseId: rotatedLeaseId,
+  attentionLeaseExpiresAt: "2026-09-16T12:05:02.000Z" } };
+const takeoverCommand = parseTakeoverCaptureDraftCommandV1({ ...mutationCommand,
+  reason: "Operador ausente durante el servicio" });
+assert.ok(takeoverCommand);
+const takenOverRecord = { ...record, detail: { ...record.detail, version: 2,
+  ownerMembershipId: targetMembershipId, attentionLeaseId: rotatedLeaseId,
+  attentionLeaseExpiresAt: "2026-09-16T12:05:02.000Z" } };
 const preferenceCommand = { ...holdCommand, autoRenewSelected: true };
 const preferenceRecord = { ...record, detail: { ...record.detail, version: 2 },
   recoveryPolicy: { ...record.recoveryPolicy, autoRenewSelected: true } };
@@ -148,9 +163,9 @@ test("capture customer adapter binds validated identifiers", async () => {
   await assert.rejects(adapter.setCustomer("forged", customerCommand), code("request"));
   assert.equal(calls.length, 1);
 });
-function attentionFor(port: CaptureAttentionPort, allowed = true) {
+function attentionFor(port: CaptureAttentionPort, roles: readonly MembershipRoleCode[] = ["cashier"]) {
   return new CaptureAttentionService(new MembershipAuthorizationService({
-    findActiveMembership: async () => ({ roles: allowed ? ["cashier"] : ["viewer"], scope: validCommand.scope }),
+    findActiveMembership: async () => ({ roles, scope: validCommand.scope }),
   }), port);
 }
 
@@ -169,6 +184,20 @@ test("capture attention authorizes and validates exact version, ownership shape 
     assert.equal(response.replayed, true);
     assert.equal(response.detail.attentionStatus, "claimed");
   }
+  const transferred = await attentionFor({ mutateAttention: async (actor, operation, received) => {
+    assert.deepEqual({ actor, operation, received }, {
+      actor: principal.actorId, operation: "capture.transferred", received: transferCommand,
+    });
+    return { status: "applied", record: transferredRecord };
+  } }, ["supervisor"]).mutateAttention(principal, "capture.transferred", transferCommand);
+  assert.equal(transferred.detail.ownerMembershipId, targetMembershipId);
+  const takenOver = await attentionFor({ mutateAttention: async (actor, operation, received) => {
+    assert.deepEqual({ actor, operation, received }, {
+      actor: principal.actorId, operation: "capture.taken_over", received: takeoverCommand,
+    });
+    return { status: "replayed", record: takenOverRecord };
+  } }, ["supervisor"]).mutateAttention(principal, "capture.taken_over", takeoverCommand);
+  assert.equal(takenOver.replayed, true);
 });
 
 test("capture attention rejects invalid commands and unauthorized roles before SQL", async () => {
@@ -179,8 +208,16 @@ test("capture attention rejects invalid commands and unauthorized roles before S
     await assert.rejects(attentionFor(port).mutateAttention(principal, "capture.held", input), code("request"));
   }
   await assert.rejects(attentionFor(port).mutateAttention(principal, "capture.claimed", holdCommand), code("request"));
-  await assert.rejects(attentionFor(port).mutateAttention(principal, "capture.taken_over" as never, mutationCommand), code("request"));
-  await assert.rejects(attentionFor(port, false).mutateAttention(principal, "capture.claimed", mutationCommand), code("authorization"));
+  await assert.rejects(attentionFor(port, ["supervisor"]).mutateAttention(principal, "capture.taken_over", mutationCommand), code("request"));
+  await assert.rejects(attentionFor(port, ["supervisor"]).mutateAttention(principal, "capture.taken_over", {
+    ...takeoverCommand, reason: " ",
+  }), code("request"));
+  await assert.rejects(attentionFor(port, ["supervisor"]).mutateAttention(principal, "capture.taken_over", {
+    ...takeoverCommand, targetMembershipId,
+  }), code("request"));
+  await assert.rejects(attentionFor(port).mutateAttention(principal, "capture.transferred", transferCommand), code("authorization"));
+  await assert.rejects(attentionFor(port).mutateAttention(principal, "capture.taken_over", takeoverCommand), code("authorization"));
+  await assert.rejects(attentionFor(port, ["viewer"]).mutateAttention(principal, "capture.claimed", mutationCommand), code("authorization"));
   await assert.rejects(attentionFor(port).mutateAttention(principal, "capture.claimed", {
     ...mutationCommand, scope: { ...validCommand.scope, branchId: validCommand.deviceId },
   }), code("authorization"));
@@ -199,6 +236,9 @@ test("capture attention sanitizes failures and rejects wrong status, scope or re
   }
   await assert.rejects(attentionFor({ mutateAttention: async () => { throw new Error("secret-password"); } })
     .mutateAttention(principal, "capture.claimed", mutationCommand), code("unavailable"));
+  await assert.rejects(attentionFor({ mutateAttention: async () => ({ status: "applied", record: {
+    ...transferredRecord, detail: { ...transferredRecord.detail, ownerMembershipId: validCommand.eventId },
+  } }) }, ["supervisor"]).mutateAttention(principal, "capture.transferred", transferCommand), code("unavailable"));
 });
 
 test("capture attention adapter validates and parameterizes operation instead of constructing SQL", async () => {
@@ -210,8 +250,16 @@ test("capture attention adapter validates and parameterizes operation instead of
   assert.deepEqual(await adapter.mutateAttention(principal.actorId, "capture.held", parsed), { status: "conflict" });
   assert.deepEqual(calls, [{ sql: "select app_private.mutate_capture_attention($1::uuid, $2::text, $3::jsonb) as result",
     parameters: [principal.actorId, "capture.held", JSON.stringify(parseHoldCaptureDraftCommandV1(parsed))] }]);
-  await assert.rejects(adapter.mutateAttention(principal.actorId, "capture.taken_over" as never, parsed), code("request"));
-  assert.equal(calls.length, 1);
+  assert.deepEqual(await adapter.mutateAttention(principal.actorId, "capture.transferred", transferCommand), { status: "conflict" });
+  assert.deepEqual(await adapter.mutateAttention(principal.actorId, "capture.taken_over", takeoverCommand), { status: "conflict" });
+  assert.deepEqual(calls.slice(1), [
+    { sql: "select app_private.mutate_capture_assignment($1::uuid, $2::text, $3::jsonb) as result",
+      parameters: [principal.actorId, "capture.transferred", JSON.stringify(parseTransferCaptureDraftCommandV1(transferCommand))] },
+    { sql: "select app_private.mutate_capture_assignment($1::uuid, $2::text, $3::jsonb) as result",
+      parameters: [principal.actorId, "capture.taken_over", JSON.stringify(parseTakeoverCaptureDraftCommandV1(takeoverCommand))] },
+  ]);
+  await assert.rejects(adapter.mutateAttention(principal.actorId, "capture.destroyed" as never, parsed), code("request"));
+  assert.equal(calls.length, 3);
 });
 
 test("capture recovery preference validates explicit selection, lease, policy and replay", async () => {
@@ -450,7 +498,7 @@ test("capture continuity adapter parameterizes autosave and workspace reads", as
   ]);
 });
 
-test("capture confirmation derives Order channel and delegates one atomic persistence command", async () => {
+test("capture confirmation probes replay and delegates one atomic persistence command", async () => {
   const confirmCommand = parseConfirmCaptureDraftCommandV2({
     ...mutationCommand,
     schemaVersion: 2,
@@ -463,37 +511,46 @@ test("capture confirmation derives Order channel and delegates one atomic persis
     timeZone: "America/Hermosillo",
   });
   assert.ok(confirmCommand);
-  const workspaceV2 = { ...workspace, schemaVersion: 2 as const,
+  const workspaceV3 = { ...workspace, schemaVersion: 3 as const,
     detail: { ...fulfillmentRecord.detail, schemaVersion: 2 as const, fulfillmentChannel: "delivery" as const,
-      deliveryInstructions: "Portón lateral" } };
+      deliveryInstructions: "Portón lateral" }, repeatOrderPlan: null };
   const confirmedRecord = { ...autosaveRecord, detail: { ...autosaveRecord.detail, status: "confirmed",
     attentionStatus: "unclaimed", ownerMembershipId: null, attentionLeaseId: null,
     attentionLeaseExpiresAt: null, confirmedOrderId: confirmCommand.orderId } };
-  let persisted: { actorId: string; command: unknown; mutation: import("@super-restaurant/domain").OrderMutation } | undefined;
+  let persisted: { actorId: string; command: unknown; materialization: CaptureOrderMaterialization } | undefined;
   const service = new CaptureConfirmationService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
-  }), { createDraft: async () => ({}), readWorkspaceV2: async () => workspaceV2 }, {
-    confirmDraft: async (actorId, parsed, mutation) => {
-      persisted = { actorId, command: parsed, mutation };
+  }), { createDraft: async () => ({}), readWorkspaceV3: async () => workspaceV3 }, {
+    probeConfirmation: async () => ({ status: "pending" }),
+    readRepeatOrderPlan: async () => { throw new Error("must not read a repeat plan"); },
+    confirmDraft: async (actorId, parsed, materialization) => {
+      persisted = { actorId, command: parsed, materialization };
       return { status: "applied", record: confirmedRecord };
     },
-  });
+  }, { read: async () => { throw new Error("must not read a catalog"); },
+    save: async () => { throw new Error("must not save a catalog"); } });
   const result = await service.confirm(principal, confirmCommand);
   assert.equal(result.detail.confirmedOrderId, confirmCommand.orderId);
   assert.equal(persisted?.actorId, principal.actorId);
   assert.deepEqual(persisted?.command, confirmCommand);
-  assert.equal(persisted?.mutation.order.channel, "delivery");
-  assert.equal(persisted?.mutation.auditEvent.operation, "order.created");
+  assert.equal(persisted?.materialization.order.channel, "delivery");
+  assert.equal(persisted?.materialization.auditEvents[0]?.operation, "order.created");
 
+  let queryCount = 0;
   const adapter = new PostgresCaptureCreator({ query: async (sql, parameters) => {
-    assert.equal(sql, "select app_private.confirm_capture_draft($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb) as result");
+    queryCount += 1;
+    assert.equal(sql, queryCount === 1
+      ? "select app_private.confirm_capture_draft_v3($1::uuid, $2::jsonb, null::jsonb, null::jsonb) as result"
+      : "select app_private.confirm_capture_draft_v3($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb) as result");
     assert.equal(parameters[0], principal.actorId);
     assert.equal(parameters[1], JSON.stringify(confirmCommand));
+    if (queryCount === 1) return { rows: [{ result: { status: "pending" } }] };
     assert.equal(JSON.parse(String(parameters[2])).channel, "delivery");
-    assert.equal(JSON.parse(String(parameters[3])).operation, "order.created");
+    assert.equal(JSON.parse(String(parameters[3]))[0].operation, "order.created");
     return { rows: [{ result: { status: "applied", record: confirmedRecord } }] };
   } });
-  assert.deepEqual(await adapter.confirmDraft(principal.actorId, confirmCommand, persisted!.mutation), {
+  assert.deepEqual(await adapter.probeConfirmation(principal.actorId, confirmCommand), { status: "pending" });
+  assert.deepEqual(await adapter.confirmDraft(principal.actorId, confirmCommand, persisted!.materialization), {
     status: "applied", record: confirmedRecord,
   });
   await assert.rejects(service.confirm(principal, { ...confirmCommand, tableId: validCommand.captureDraftId }), code("conflict"));
@@ -538,7 +595,35 @@ test("capture tray authorizes, binds scope and rejects hostile persistence", asy
   assert.equal(calls.length, 1);
 });
 
+test("capture assignment directory is privileged, exact-scope and parameterized", async () => {
+  const request = { schemaVersion: 1 as const, scope: validCommand.scope };
+  const directory = { schemaVersion: 1 as const, scope: validCommand.scope, candidates: [{
+    schemaVersion: 1 as const, membershipId: targetMembershipId, displayLabel: "caja@example.com",
+    roles: ["cashier" as const],
+  }] };
+  const service = new CaptureAssignmentDirectoryService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["supervisor"], scope: validCommand.scope }),
+  }), { listAssignmentCandidates: async () => directory });
+  assert.equal((await service.list(principal, request)).candidates[0]?.membershipId, targetMembershipId);
+  await assert.rejects(service.list(principal, { ...request, actorId: principal.actorId }), code("request"));
+  await assert.rejects(new CaptureAssignmentDirectoryService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), { listAssignmentCandidates: async () => directory }).list(principal, request), code("authorization"));
+  await assert.rejects(new CaptureAssignmentDirectoryService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["supervisor"], scope: validCommand.scope }),
+  }), { listAssignmentCandidates: async () => ({ ...directory, scope: { ...directory.scope,
+    branchId: validCommand.deviceId } }) }).list(principal, request), code("unavailable"));
+  const calls: unknown[] = [];
+  const adapter = new PostgresCaptureCreator({ query: async (sql, parameters) => {
+    calls.push({ sql, parameters }); return { rows: [{ result: directory }] };
+  } });
+  assert.deepEqual(await adapter.listAssignmentCandidates(principal.actorId, request), directory);
+  assert.deepEqual(calls, [{ sql: "select app_private.list_capture_assignment_candidates($1::uuid, $2::jsonb) as result",
+    parameters: [principal.actorId, JSON.stringify(request)] }]);
+});
+
 test("capture HTTP boundary enforces auth and translates request, replay, denial, conflict and failure safely", async () => {
+  let authorizationRoles: readonly MembershipRoleCode[] = ["cashier"];
   let customerOutcome: unknown = { status: "applied", record: customerRecord };
   let fulfillmentOutcome: unknown = { status: "applied", record: fulfillmentRecord };
   let calls = 0;
@@ -556,6 +641,7 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
     CaptureDeliveryInstructionsService,
     CaptureConfirmationService,
     CaptureTrayService,
+    CaptureAssignmentDirectoryService,
     { provide: CAPTURE_CUSTOMER_PORT, useValue: { setCustomer: async () => customerOutcome } },
     { provide: CAPTURE_FULFILLMENT_PORT, useValue: { setFulfillment: async () => fulfillmentOutcome } },
     { provide: CAPTURE_DELIVERY_INSTRUCTIONS_PORT, useValue: {
@@ -564,10 +650,22 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
       setDeliveryInstructions: async () => ({
       status: "applied", record: autosaveRecord, deliveryInstructions: "Portón lateral",
     }) } },
-    { provide: CAPTURE_CONFIRMATION_PORT, useValue: { confirmDraft: async () => ({ status: "conflict" }) } },
+    { provide: CAPTURE_CONFIRMATION_PORT, useValue: {
+      probeConfirmation: async () => ({ status: "conflict" }),
+      readRepeatOrderPlan: async () => ({ status: "missing" }),
+      confirmDraft: async () => ({ status: "conflict" }),
+    } },
+    { provide: MENU_CATALOG_PORT, useValue: {
+      read: async () => "forbidden",
+      save: async () => ({ status: "forbidden" }),
+    } },
     { provide: CAPTURE_TRAY_PORT, useValue: { list: async () => ({ schemaVersion: 1, items: [] }) } },
+    { provide: CAPTURE_ASSIGNMENT_DIRECTORY_PORT, useValue: { listAssignmentCandidates: async () => ({
+      schemaVersion: 1, scope: validCommand.scope, candidates: [{ schemaVersion: 1,
+        membershipId: targetMembershipId, displayLabel: "caja@example.com", roles: ["cashier"] }],
+    }) } },
     { provide: MembershipAuthorizationService, useValue: new MembershipAuthorizationService({
-      findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+      findActiveMembership: async () => ({ roles: authorizationRoles, scope: validCommand.scope }),
     }) },
     { provide: CAPTURE_CREATION_PORT, useValue: { createDraft: async (actor: string) => {
       assert.equal(actor, principal.actorId); calls++; if (fail) throw new Error("server-password"); return outcome;
@@ -661,6 +759,32 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
       assert.equal((await response.json() as { detail: { version: number } }).detail.version, 2);
       assert.equal((await fetch(`${url}/${route}`, { method: "POST" })).status, 401);
     }
+    authorizationRoles = ["supervisor"];
+    const assignmentDirectoryUrl = `${url}/assignment-candidates`;
+    const assignmentDirectoryResponse = await fetch(assignmentDirectoryUrl, { method: "POST",
+      body: JSON.stringify({ schemaVersion: 1, scope: validCommand.scope }),
+      headers: { authorization: "Bearer test-capture-access-token", "content-type": "application/json" } });
+    assert.equal(assignmentDirectoryResponse.status, 200);
+    assert.equal(assignmentDirectoryResponse.headers.get("cache-control"), "private, no-store");
+    assert.equal((await assignmentDirectoryResponse.json() as { candidates: unknown[] }).candidates.length, 1);
+    assert.equal((await fetch(assignmentDirectoryUrl, { method: "POST",
+      body: JSON.stringify({ schemaVersion: 1, scope: validCommand.scope, actorId: principal.actorId }),
+      headers: { authorization: "Bearer test-capture-access-token", "content-type": "application/json" } })).status, 400);
+    for (const [route, body, assignmentRecord] of [["transfer", transferCommand, transferredRecord],
+      ["takeover", takeoverCommand, takenOverRecord]] as const) {
+      attentionOutcome = { status: "applied", record: assignmentRecord };
+      const response = await fetch(`${url}/${route}`, { method: "POST", body: JSON.stringify(body),
+        headers: { authorization: "Bearer test-capture-access-token", "content-type": "application/json" } });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("cache-control"), "private, no-store");
+      assert.equal((await response.json() as { detail: { version: number } }).detail.version, 2);
+      assert.equal((await fetch(`${url}/${route}`, { method: "POST" })).status, 401);
+    }
+    assert.equal((await fetch(`${url}/takeover`, { method: "POST", body: JSON.stringify({ ...takeoverCommand, reason: "" }),
+      headers: { authorization: "Bearer test-capture-access-token", "content-type": "application/json" } })).status, 400);
+    authorizationRoles = ["cashier"];
+    assert.equal((await fetch(`${url}/transfer`, { method: "POST", body: JSON.stringify(transferCommand),
+      headers: { authorization: "Bearer test-capture-access-token", "content-type": "application/json" } })).status, 403);
     attentionOutcome = { status: "applied", record: preferenceRecord };
     const preference = await fetch(`${url}/recovery-preference`, { method: "POST", body: JSON.stringify(preferenceCommand),
       headers: { authorization: "Bearer test-capture-access-token", "content-type": "application/json" } });

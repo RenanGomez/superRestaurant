@@ -25,6 +25,7 @@ export default async function CapturePage(): Promise<ReactNode> {
     redirect("/app?branchError=not_authorized");
   }
   const canOperate = membership.roles.some((role) => ["owner", "admin", "manager", "supervisor", "cashier", "waiter"].includes(role));
+  const canManageAssignment = membership.roles.some((role) => ["owner", "admin", "manager", "supervisor"].includes(role));
   const confirmationContext = canOperate
     ? await getCaptureConfirmationContext(session.access_token, env.apiBaseUrl, scope)
     : undefined;
@@ -34,7 +35,7 @@ export default async function CapturePage(): Promise<ReactNode> {
       <p className="mt-1 break-words text-sm text-text-muted">{membership.branchName} · conexión requerida · el borrador aún no es una orden</p>
     </header>
     {canOperate
-      ? <CaptureWorkspace scope={scope} action={captureWorkspaceAction}
+      ? <CaptureWorkspace scope={scope} action={captureWorkspaceAction} canManageAssignment={canManageAssignment}
         {...(confirmationContext === undefined ? {} : { confirmationContext })} />
       : <p role="alert" className="rounded-xl border border-border bg-surface p-5">Tu rol no permite capturar pedidos.</p>}
   </div>;

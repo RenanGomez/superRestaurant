@@ -1,6 +1,8 @@
 import {
   parseAutosaveCaptureDraftCommandV1,
   parseCaptureMutationResultV1,
+  parseCaptureAssignmentDirectoryRequestV1,
+  parseCaptureAssignmentDirectoryV1,
   parseCaptureDeliveryInstructionSuggestionsRequestV1,
   parseCaptureDeliveryInstructionSuggestionsV1,
   parseCaptureWorkspaceRequestV3,
@@ -14,6 +16,8 @@ import {
   parseSetCaptureFulfillmentCommandV1,
   parseSetCaptureDeliveryInstructionsCommandV1,
   parseSetCaptureDeliveryInstructionsResultV1,
+  parseTakeoverCaptureDraftCommandV1,
+  parseTransferCaptureDraftCommandV1,
   type CaptureCustomerSnapshotV1,
   type CaptureDraftDetailV2,
   type AutosaveCaptureDraftCommandV1,
@@ -26,7 +30,8 @@ import {
 export type CaptureRequestResult<T> = { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable" };
 export type CaptureOperation = "autosave" | "confirm" | "create" | "claim" | "customer" | "deliveryInstructions"
-  | "deliveryInstructionSuggestions" | "fulfillment" | "tray" | "workspace";
+  | "deliveryInstructionSuggestions" | "fulfillment" | "assignmentCandidates" | "takeover" | "transfer"
+  | "tray" | "workspace";
 export interface CaptureKeyValueStore {
   readonly getItem: (key: string) => string | null;
   readonly removeItem: (key: string) => void;
@@ -71,9 +76,10 @@ export function clearPendingCaptureAutosave(
   if (current?.idempotencyKey === command.idempotencyKey) store.removeItem(pendingKey(command.scope));
 }
 const paths = { autosave: "/autosave", confirm: "/confirm", create: "", claim: "/claim", customer: "/customer",
+  assignmentCandidates: "/assignment-candidates",
   deliveryInstructions: "/delivery-instructions", deliveryInstructionSuggestions: "/delivery-instruction-suggestions",
   fulfillment: "/fulfillment",
-  tray: "/tray", workspace: "/workspace" } as const;
+  takeover: "/takeover", transfer: "/transfer", tray: "/tray", workspace: "/workspace" } as const;
 const parsers = {
   autosave: parseAutosaveCaptureDraftCommandV1,
   confirm: parseConfirmCaptureDraftCommandV2,
@@ -82,13 +88,17 @@ const parsers = {
   customer: parseSetCaptureCustomerCommandV1,
   deliveryInstructions: parseSetCaptureDeliveryInstructionsCommandV1,
   fulfillment: parseSetCaptureFulfillmentCommandV1,
+  takeover: parseTakeoverCaptureDraftCommandV1,
+  transfer: parseTransferCaptureDraftCommandV1,
 } as const;
 type CaptureResponse = NonNullable<ReturnType<typeof parseCaptureMutationResultV1>>
+  | NonNullable<ReturnType<typeof parseCaptureAssignmentDirectoryV1>>
   | NonNullable<ReturnType<typeof parseCaptureDeliveryInstructionSuggestionsV1>>
   | NonNullable<ReturnType<typeof parseCaptureWorkTrayResultV1>>
   | NonNullable<ReturnType<typeof parseCaptureWorkspaceV3>>
   | NonNullable<ReturnType<typeof parseSetCaptureDeliveryInstructionsResultV1>>;
 export async function requestCapture(token: string, baseUrl: string, operation: CaptureOperation, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
+  if (operation === "assignmentCandidates") return requestCaptureAssignmentCandidates(token, baseUrl, input);
   if (operation === "tray") return requestCaptureTray(token, baseUrl, input);
   if (operation === "workspace") return requestCaptureWorkspace(token, baseUrl, input);
   if (operation === "deliveryInstructionSuggestions") {
@@ -109,6 +119,29 @@ export async function requestCapture(token: string, baseUrl: string, operation: 
     if (value === undefined || value.detail.scope.restaurantId !== command.scope.restaurantId
       || value.detail.scope.branchId !== command.scope.branchId || value.detail.captureDraftId !== command.captureDraftId
       || value.detail.version !== command.expectedVersion + 1) return { ok: false, error: "unavailable" };
+    return { ok: true, value };
+  } catch { return { ok: false, error: "unavailable" }; }
+}
+
+async function requestCaptureAssignmentCandidates(
+  token: string,
+  baseUrl: string,
+  input: unknown,
+): Promise<CaptureRequestResult<CaptureResponse>> {
+  const request = parseCaptureAssignmentDirectoryRequestV1(input);
+  if (request === undefined) return { ok: false, error: "invalid" };
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/captures${paths.assignmentCandidates}`, {
+      method: "POST", cache: "no-store", signal: AbortSignal.timeout(10_000),
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
+      : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
+        : response.status === 400 ? "invalid" : "unavailable" };
+    const value = parseCaptureAssignmentDirectoryV1(await response.json());
+    if (value === undefined || value.scope.restaurantId !== request.scope.restaurantId
+      || value.scope.branchId !== request.scope.branchId) return { ok: false, error: "unavailable" };
     return { ok: true, value };
   } catch { return { ok: false, error: "unavailable" }; }
 }

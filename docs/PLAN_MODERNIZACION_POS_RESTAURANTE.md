@@ -475,9 +475,16 @@ Debe existir una bandeja única de trabajo con filtros para borradores, llamadas
 #### 8.8.2 Clientes y direcciones
 
 - buscar por teléfono normalizado, nombre, alias, dirección y referencia; resultados limitados al Restaurant autorizado;
+- normalizar mayúsculas, acentos, puntuación y espacios para búsqueda, dividir nombres y direcciones en términos y exigir que todos estén presentes sin depender de su orden; `Acacia Morena`, `Morena Acacia`, `Morena` y `Morena 84` deben encontrar una dirección que contenga esos términos, incluido el número exterior;
+- permitir búsqueda telefónica parcial sólo a partir de cuatro dígitos normalizados y mostrar coincidencias cuando cualquier teléfono activo contenga esa secuencia, de modo que los últimos 4–6 dígitos sirvan para una verificación rápida;
 - crear cliente mínimo durante la llamada con nombre o alias y al menos un medio de contacto cuando el canal lo requiera;
 - admitir cliente anónimo para mostrador/mesa, pero exigir identidad operativa y dirección validada para domicilio;
-- conservar varios teléfonos y direcciones etiquetadas, colonia, referencias, instrucciones, coordenadas opcionales y zona de reparto;
+- conservar varios teléfonos y direcciones etiquetadas, colonia, referencias, coordenadas opcionales y zona de reparto;
+- ofrecer autocompletado contextual en nombres, números y partes de dirección usando únicamente datos autorizados del Restaurant: al aceptar una sugerencia se inserta el término, se agrega un espacio cuando corresponda y el foco permanece listo para continuar; las sugerencias se filtran con el prefijo y los términos ya escritos, funcionan con teclado y táctil y no fusionan fichas automáticamente;
+- mantener localidad, estado o región, país y código postal como datos adicionales colapsados por defecto en el formulario de dirección;
+- crear formularios de dirección sólo mediante `+ Nueva dirección`; un formulario nuevo aún no guardado puede cerrarse sin mutar la ficha;
+- explicar en la interfaz qué comprueba “Validar dirección para esta sucursal”, mostrar progreso y resultado, y no dejar una pulsación sin respuesta visible;
+- capturar instrucciones de entrega en el pedido o borrador Capture, nunca como atributo de la dirección del cliente; conservar un historial acotado de instrucciones usadas por ese cliente para sugerirlas en pedidos posteriores sin aplicarlas automáticamente;
 - detectar posibles duplicados sin fusionarlos automáticamente;
 - mostrar pedidos recientes y permitir “repetir pedido” reconstruyéndolo contra el catálogo actual, señalando productos retirados, precios cambiados y opciones inválidas;
 - congelar en la orden un snapshot de nombre, teléfono y dirección usados; editar la ficha del cliente no cambia pedidos históricos;

@@ -31,7 +31,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { Pool, type PoolClient } from "pg";
 
 import { AppModule } from "../app.module.js";
-import type { DatabaseConfig } from "../database.js";
+import { guardPostgresPool, type DatabaseConfig } from "../database.js";
 import {
   codeForStage,
   TenancyVerificationError,
@@ -60,6 +60,7 @@ import {
   type DiningLayoutReadObservation,
   type DiningTableVerificationCheckpoint,
   type FixtureVerificationCheckpoint,
+  type HttpVerificationCheckpoint,
   type MenuCatalogVerificationCheckpoint,
   type MenuCatalogReadDiagnostic,
   type MenuCatalogReadObservation,
@@ -146,6 +147,7 @@ export interface RunTenancyVerificationOptions {
   readonly onDiningLayoutDiagnostic?: (diagnostic: DiningLayoutReadDiagnostic) => void;
   readonly onFailure?: (failure: TenancyVerificationFailureNotice) => void;
   readonly onFixtureCheckpoint?: (checkpoint: FixtureVerificationCheckpoint) => void;
+  readonly onHttpCheckpoint?: (checkpoint: HttpVerificationCheckpoint) => void;
   readonly onMenuCatalogCheckpoint?: (checkpoint: MenuCatalogVerificationCheckpoint) => void;
   readonly onMenuCatalogDiagnostic?: (diagnostic: MenuCatalogReadDiagnostic) => void;
   readonly verifyDiningZones?: true;
@@ -366,7 +368,9 @@ export async function runTenancyVerification(
     ));
     const authenticated = await executeStage("authentication", async () => authenticateFixtures(options.config, plan, counter));
 
+    notifySafely(options.onHttpCheckpoint, "http.api_start");
     app = await executeStage("http", async () => startProductApi(apiPort, options.apiCorsOrigin));
+    notifySafely(options.onHttpCheckpoint, "http.api_started");
     await executeStage("data_api", async () => verifyDataApiBaseline(
       options.config,
       plan,
@@ -380,7 +384,13 @@ export async function runTenancyVerification(
       verifyOperationalOrders,
     ));
     await executeStage("app_api", async () => verifyPrivateLookupBaseline(appApiPool, plan, counter));
-    await executeStage("http", async () => verifyHttpBaseline(app as INestApplication, plan, authenticated, counter));
+    await executeStage("http", async () => verifyHttpBaseline(
+      app as INestApplication,
+      plan,
+      authenticated,
+      counter,
+      options.onHttpCheckpoint,
+    ));
     liveFixture = await readLiveFixture(app as INestApplication, plan, authenticated);
     if (verifyDiningZones) {
       await executeStage("dining_zones", async () => verifyDiningZonesBaseline(
@@ -621,7 +631,7 @@ function createCredentials(fixtureKey: FixtureKey, runId: string): Readonly<{ em
 }
 
 function createPool(config: DatabaseConfig, applicationName: string): Pool {
-  return new Pool({
+  return guardPostgresPool(new Pool({
     application_name: applicationName,
     connectionTimeoutMillis: 5_000,
     connectionString: config.connectionString,
@@ -630,7 +640,7 @@ function createPool(config: DatabaseConfig, applicationName: string): Pool {
     query_timeout: 10_000,
     ssl: { ca: config.caCertificate, rejectUnauthorized: true },
     statement_timeout: 10_000,
-  });
+  }));
 }
 
 function createSupabaseClient(url: string, key: string, accessToken?: string): SupabaseClient {
@@ -1062,23 +1072,37 @@ async function verifyHttpBaseline(
   plan: FixturePlan,
   authenticated: readonly [AuthenticatedFixture, AuthenticatedFixture],
   counter: VerificationCounter,
+  onCheckpoint: RunTenancyVerificationOptions["onHttpCheckpoint"],
 ): Promise<void> {
   const baseUrl = await app.getUrl();
+  notifySafely(onCheckpoint, "http.session_unauthenticated");
   await assertHttp(baseUrl, "/api/v1/session", undefined, 401, { code: "AUTHENTICATION_REQUIRED" }, counter);
+  notifySafely(onCheckpoint, "http.session_invalid_token");
   await assertHttp(baseUrl, "/api/v1/session", "invalid-access-token-value", 401, { code: "AUTHENTICATION_REQUIRED" }, counter);
+  notifySafely(onCheckpoint, "http.session_authenticated");
   await assertHttp(baseUrl, "/api/v1/session", authenticated[0].accessToken, 200, { actorId: authenticated[0].userId }, counter);
+  notifySafely(onCheckpoint, "http.memberships_unauthenticated");
   await assertHttp(baseUrl, "/api/v1/access/memberships", undefined, 401, { code: "AUTHENTICATION_REQUIRED" }, counter);
+  notifySafely(onCheckpoint, "http.memberships_primary");
   await assertMembershipDirectoryHttp(baseUrl, authenticated[0].accessToken, expectedDirectory(plan, 0), counter);
+  notifySafely(onCheckpoint, "http.memberships_secondary");
   await assertMembershipDirectoryHttp(baseUrl, authenticated[1].accessToken, expectedDirectory(plan, 1), counter);
   // Branch selection intentionally accepts every known membership role. Its
   // 403 evidence is exact-scope/membership denial, not an action-specific RBAC
   // denial; that belongs to the first product route with a narrower role set.
+  notifySafely(onCheckpoint, "http.branch_primary_manager");
   await assertBranchHttp(baseUrl, authenticated[0].accessToken, plan.restaurantIds[0], plan.branchIds[0], 200, ["manager", "waiter"], counter);
+  notifySafely(onCheckpoint, "http.branch_primary_viewer");
   await assertBranchHttp(baseUrl, authenticated[0].accessToken, plan.restaurantIds[0], plan.branchIds[1], 200, ["viewer"], counter);
+  notifySafely(onCheckpoint, "http.branch_cross_tenant_rejected");
   await assertBranchHttp(baseUrl, authenticated[0].accessToken, plan.restaurantIds[1], plan.branchIds[2], 403, undefined, counter);
+  notifySafely(onCheckpoint, "http.branch_false_pair_rejected");
   await assertBranchHttp(baseUrl, authenticated[0].accessToken, plan.restaurantIds[0], plan.branchIds[2], 403, undefined, counter);
+  notifySafely(onCheckpoint, "http.branch_secondary_cashier");
   await assertBranchHttp(baseUrl, authenticated[1].accessToken, plan.restaurantIds[1], plan.branchIds[2], 200, ["cashier"], counter);
+  notifySafely(onCheckpoint, "http.branch_secondary_kitchen");
   await assertBranchHttp(baseUrl, authenticated[1].accessToken, plan.restaurantIds[1], plan.branchIds[3], 200, ["kitchen"], counter);
+  notifySafely(onCheckpoint, "http.complete");
 }
 
 async function verifyDiningZonesBaseline(

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
-import type { DatabaseConfig } from "../database.js";
+import { guardPostgresPool, type DatabaseConfig } from "../database.js";
 import {
   AppApiProvisioningError,
   type AppApiProvisioningConfig,
@@ -236,7 +236,7 @@ export function createAppApiPostgresSession(
   config: DatabaseConfig,
   applicationName: string,
 ): AppApiProvisioningSession {
-  const pool = new Pool({
+  const pool = guardPostgresPool(new Pool({
     application_name: applicationName,
     connectionTimeoutMillis: 5_000,
     connectionString: config.connectionString,
@@ -245,7 +245,7 @@ export function createAppApiPostgresSession(
     query_timeout: 10_000,
     ssl: { ca: config.caCertificate, rejectUnauthorized: true },
     statement_timeout: 10_000,
-  });
+  }));
   let client: PoolClient | undefined;
   return Object.freeze({
     close: async () => {

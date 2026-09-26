@@ -45,6 +45,26 @@ export const FIXTURE_VERIFICATION_CHECKPOINTS = Object.freeze([
 
 export type FixtureVerificationCheckpoint = (typeof FIXTURE_VERIFICATION_CHECKPOINTS)[number];
 
+export const HTTP_VERIFICATION_CHECKPOINTS = Object.freeze([
+  "http.api_start",
+  "http.api_started",
+  "http.session_unauthenticated",
+  "http.session_invalid_token",
+  "http.session_authenticated",
+  "http.memberships_unauthenticated",
+  "http.memberships_primary",
+  "http.memberships_secondary",
+  "http.branch_primary_manager",
+  "http.branch_primary_viewer",
+  "http.branch_cross_tenant_rejected",
+  "http.branch_false_pair_rejected",
+  "http.branch_secondary_cashier",
+  "http.branch_secondary_kitchen",
+  "http.complete",
+] as const);
+
+export type HttpVerificationCheckpoint = (typeof HTTP_VERIFICATION_CHECKPOINTS)[number];
+
 export const MENU_CATALOG_VERIFICATION_CHECKPOINTS = Object.freeze([
   "menu_catalog.unauthenticated_write",
   "menu_catalog.empty_persistence",

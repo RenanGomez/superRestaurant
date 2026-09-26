@@ -19,12 +19,19 @@ declare
   history_capture uuid := gen_random_uuid();
   target_capture uuid := gen_random_uuid();
   device uuid := gen_random_uuid();
+  shift uuid := gen_random_uuid();
+  confirmed_order uuid := gen_random_uuid();
+  confirmation_event uuid := gen_random_uuid();
+  item_event uuid := gen_random_uuid();
   now_at timestamptz := pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp());
   created jsonb;
   party jsonb;
   command jsonb;
   plan jsonb;
   result jsonb;
+  confirmation_command jsonb;
+  order_record jsonb;
+  order_audits jsonb;
 begin
   if actor is null then raise exception 'CAPTURE_REPEAT_ORDER_TEST_ACTOR_REQUIRED'; end if;
 
@@ -230,22 +237,116 @@ begin
     raise exception 'CAPTURE_REPEAT_ORDER_SCOPE_LEAKED';
   end if;
 
-  result := app_private.set_capture_customer(actor,pg_catalog.jsonb_build_object(
-    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
-      'restaurantId',restaurant::text,'branchId',branch::text
-    ),'captureDraftId',target_capture::text,'expectedVersion',3,'eventId',gen_random_uuid()::text,
-    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
-    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    'attentionLeaseId',created#>>'{record,detail,attentionLeaseId}',
-    'customerId',null,'contactId',null,'expectedCustomerVersion',null
-  ));
-  execute 'reset role';
-  if result->>'status'<>'applied' or exists (
-    select 1 from app.capture_repeat_order_plans stored
-    where stored.restaurant_id=restaurant and stored.branch_id=branch
-      and stored.capture_draft_id=target_capture
-  ) then
-    raise exception 'CAPTURE_REPEAT_ORDER_STALE_CONTEXT_NOT_CLEARED';
+  if pg_catalog.to_regprocedure('app_private.confirm_capture_draft_v3(uuid,jsonb,jsonb,jsonb)') is not null then
+    execute 'reset role';
+    update app.capture_drafts set fulfillment_channel='counter'
+    where restaurant_id=restaurant and branch_id=branch and id=target_capture;
+    insert into app.operational_shifts(id,restaurant_id,branch_id,name,status,opened_at,opened_by)
+      values(shift,restaurant,branch,'rollback repeat confirmation','open',now_at-interval '1 minute',actor);
+    confirmation_command := pg_catalog.jsonb_build_object(
+      'schemaVersion',2,'scope',pg_catalog.jsonb_build_object(
+        'restaurantId',restaurant::text,'branchId',branch::text
+      ),'captureDraftId',target_capture::text,'expectedVersion',3,
+      'eventId',confirmation_event::text,'idempotencyKey',gen_random_uuid()::text,
+      'deviceId',device::text,
+      'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+      'attentionLeaseId',created#>>'{record,detail,attentionLeaseId}',
+      'orderId',confirmed_order::text,'shiftId',shift::text,'tableId',null,
+      'currency','MXN','timeZone','America/Hermosillo'
+    );
+    order_record := pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'orderId',confirmed_order::text,'restaurantId',restaurant::text,
+      'branchId',branch::text,'channel','counter','currency','MXN','timeZone','America/Hermosillo',
+      'status','draft','items',pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+        'orderItemId',gen_random_uuid()::text,'snapshot',pg_catalog.jsonb_build_object(
+          'catalogVersion',catalog::text,'productId',product::text,'name','Taco vigente','sku','TACO-REPEAT',
+          'stationId','kitchen','unit','piece',
+          'unitPrice',pg_catalog.jsonb_build_object('amountMinor',4900,'currency','MXN'),
+          'modifiers',pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+            'modifierId',modifier_option::text,'name','Roja vigente','groupId',modifier_group::text,
+            'groupName','Salsas','groupCatalogVersion',catalog::text,
+            'unitPrice',pg_catalog.jsonb_build_object('amountMinor',700,'currency','MXN'),'quantity',1
+          ))
+        ),'quantity',2,'restaurantId',restaurant::text,'branchId',branch::text,'status','pending'
+      ))
+    );
+    order_audits := pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'schemaVersion',1,'eventId',confirmation_event::text,
+        'idempotencyKey',confirmation_command->>'idempotencyKey','restaurantId',restaurant::text,
+        'branchId',branch::text,'orderId',confirmed_order::text,'actorId',actor::text,
+        'deviceId',device::text,'occurredAt',confirmation_command->>'occurredAt',
+        'operation','order.created','entityType','order','entityId',confirmed_order::text,'to','draft'
+      ),
+      pg_catalog.jsonb_build_object(
+        'schemaVersion',1,'eventId',item_event::text,'idempotencyKey',gen_random_uuid()::text,
+        'restaurantId',restaurant::text,'branchId',branch::text,'orderId',confirmed_order::text,
+        'actorId',actor::text,'deviceId',device::text,'occurredAt',confirmation_command->>'occurredAt',
+        'operation','order.item_added','entityType','order_item',
+        'entityId',order_record#>>'{items,0,orderItemId}','orderItemId',order_record#>>'{items,0,orderItemId}'
+      )
+    );
+    execute 'set local role app_api';
+    if app_private.read_capture_repeat_order_plan(actor,pg_catalog.jsonb_build_object(
+      'schemaVersion',3,'scope',confirmation_command->'scope','captureDraftId',target_capture::text
+    ))#>>'{plan,lines,0,productId}'<>product::text
+    then raise exception 'CAPTURE_REPEAT_CONFIRMATION_PLAN_READER_REJECTED'; end if;
+    if app_private.confirm_capture_draft_v3(actor,confirmation_command,null,null)->>'status'<>'pending'
+      then raise exception 'CAPTURE_REPEAT_CONFIRMATION_PROBE_REJECTED'; end if;
+    if app_private.confirm_capture_draft_v3(
+      actor,
+      confirmation_command,
+      order_record,
+      pg_catalog.jsonb_set(order_audits,'{1,eventId}',pg_catalog.to_jsonb(confirmation_event::text))
+    )->>'status'<>'conflict' then
+      raise exception 'CAPTURE_REPEAT_CONFIRMATION_PARTIAL_FAILURE_REJECTED';
+    end if;
+    if exists (
+      select 1 from app.orders placed
+      where placed.restaurant_id=restaurant and placed.branch_id=branch and placed.id=confirmed_order
+    ) or not exists (
+      select 1 from app.capture_drafts draft
+      where draft.restaurant_id=restaurant and draft.branch_id=branch and draft.id=target_capture
+        and draft.status='draft' and draft.version=3 and draft.confirmed_order_id is null
+    ) or not exists (
+      select 1 from app.capture_repeat_order_plans stored
+      where stored.restaurant_id=restaurant and stored.branch_id=branch and stored.capture_draft_id=target_capture
+    ) then raise exception 'CAPTURE_REPEAT_CONFIRMATION_PARTIAL_WRITE_LEAKED'; end if;
+    result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+    if result->>'status'<>'applied' or result#>>'{record,detail,status}'<>'confirmed'
+      or app_private.confirm_capture_draft_v3(actor,confirmation_command,null,null)->>'status'<>'replayed'
+    then raise exception 'CAPTURE_REPEAT_CONFIRMATION_APPLY_OR_REPLAY_REJECTED'; end if;
+    execute 'reset role';
+    if exists (
+      select 1 from app.capture_repeat_order_plans stored
+      where stored.restaurant_id=restaurant and stored.branch_id=branch and stored.capture_draft_id=target_capture
+    ) or not exists (
+      select 1 from app.orders placed
+      where placed.restaurant_id=restaurant and placed.branch_id=branch and placed.id=confirmed_order
+        and placed.version=2 and placed.aggregate->'items'->0->'snapshot'->>'name'='Taco vigente'
+        and placed.aggregate#>>'{items,0,snapshot,unitPrice,amountMinor}'='4900'
+        and placed.aggregate#>>'{items,0,snapshot,modifiers,0,unitPrice,amountMinor}'='700'
+    ) or not exists (
+      select 1 from app.kds_events event
+      where event.restaurant_id=restaurant and event.branch_id=branch and event.order_id=confirmed_order
+        and event.operation='order_item.created' and event.status='pending'
+    ) then raise exception 'CAPTURE_REPEAT_CONFIRMATION_ATOMIC_GRAPH_REJECTED'; end if;
+  else
+    result := app_private.set_capture_customer(actor,pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+        'restaurantId',restaurant::text,'branchId',branch::text
+      ),'captureDraftId',target_capture::text,'expectedVersion',3,'eventId',gen_random_uuid()::text,
+      'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+      'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+      'attentionLeaseId',created#>>'{record,detail,attentionLeaseId}',
+      'customerId',null,'contactId',null,'expectedCustomerVersion',null
+    ));
+    execute 'reset role';
+    if result->>'status'<>'applied' or exists (
+      select 1 from app.capture_repeat_order_plans stored
+      where stored.restaurant_id=restaurant and stored.branch_id=branch
+        and stored.capture_draft_id=target_capture
+    ) then raise exception 'CAPTURE_REPEAT_ORDER_STALE_CONTEXT_NOT_CLEARED'; end if;
   end if;
 end
 $capture_repeat_order_tests$;

@@ -53,17 +53,21 @@ test("publishes only the marked fixture, accepts an exact ack, and delegates exa
   const phases: string[] = [];
   let cleanupPlan: CaptureContinuityFixturePlan | undefined;
   let cleanupPrepared: boolean | undefined;
+  let leasedAssignmentTargetMembershipId: string | undefined;
+  const lifecycle: string[] = [];
   const coordinator = createCaptureContinuityProtectedSmokeCoordinator(
     validEnvironment(),
     config,
     (runId) => phases.push(runId),
     {
-      prepareFixture: async (_fixture, plan) => ({ ...plan, folio: "C-SMOKE" }),
+      prepareFixture: async (_config, _fixture, plan) => ({ ...plan, folio: "C-SMOKE" }),
       cleanupFixture: async (_config, _fixture, plan, prepared) => {
+        lifecycle.push("cleanup");
         cleanupPlan = plan;
         cleanupPrepared = prepared;
       },
-      verifyFixture: async () => undefined,
+      retireAssignmentTarget: async () => { lifecycle.push("retire"); },
+      verifyFixture: async () => { lifecycle.push("verify"); },
     },
   );
   writeFileSync(
@@ -81,14 +85,22 @@ test("publishes only the marked fixture, accepts an exact ack, and delegates exa
     assert.equal(lease.password, fixture.credentials.password);
     assert.equal(lease.folio, "C-SMOKE");
     assert.equal(lease.expectedSourceAfterAutosave, "whatsapp_manual");
+    assert.equal(typeof lease.assignmentTargetMembershipId, "string");
+    leasedAssignmentTargetMembershipId = lease.assignmentTargetMembershipId as string;
+    assert.equal(lease.assignmentTargetRole, "waiter");
     assert.equal(typeof lease.customerId, "string");
     assert.equal(typeof lease.captureDraftId, "string");
+    assert.equal(typeof lease.customerJourneyCaptureDraftId, "string");
+    assert.equal(typeof lease.historicalOrderId, "string");
+    assert.equal(lease.customerJourneyDeliveryInstructions, "Tocar dos veces; entregar en el portón lateral");
     await coordinator.hooks.afterRevocation(fixture);
     await coordinator.hooks.cleanup?.(fixture);
   } finally {
     coordinator.cleanupArtifacts();
   }
   assert.equal(cleanupPrepared, true);
+  assert.deepEqual(lifecycle, ["verify", "retire", "cleanup"]);
+  assert.equal(leasedAssignmentTargetMembershipId, cleanupPlan?.assignmentTargetMembershipId);
   assert.equal(cleanupPlan?.displayName.includes(fixture.runId), true);
   assert.equal(exists(CAPTURE_CONTINUITY_SMOKE_LEASE_PATH), false);
   assert.equal(exists(CAPTURE_CONTINUITY_SMOKE_ACK_PATH), false);
@@ -102,7 +114,7 @@ test("rejects acknowledgements with extra fields and still offers cleanup for th
     config,
     () => undefined,
     {
-      prepareFixture: async (_fixture, plan) => ({ ...plan, folio: "C-SMOKE" }),
+      prepareFixture: async (_config, _fixture, plan) => ({ ...plan, folio: "C-SMOKE" }),
       cleanupFixture: async () => { cleaned = true; },
       verifyFixture: async () => undefined,
     },

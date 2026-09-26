@@ -1,5 +1,8 @@
 import { Pool, type PoolClient } from "pg";
 
+import { guardPostgresPool } from "../database.js";
+import { recoverCaptureCustomerJourneyRows } from "./capture-customer-journey-smoke-recovery.js";
+import { captureContinuityAssignmentIds } from "./capture-continuity-smoke-markers.js";
 import { tenancyFixtureAdvisoryLockKey, tenancyFixtureName } from "./tenancy-fixture-markers.js";
 import {
   TenancyFixtureRecoveryError,
@@ -17,7 +20,26 @@ const CAPTURE_OPERATIONS = [
   "capture.claimed",
   "capture.autosaved",
   "capture.claimed",
+  "capture.transferred",
+  "capture.taken_over",
 ] as const;
+
+interface AssignmentMembershipRow {
+  readonly branchId: string;
+  readonly grantedBy: string;
+  readonly id: string;
+  readonly restaurantId: string;
+  readonly revokedAt: string | null;
+  readonly userId: string;
+}
+
+interface AssignmentGrantRow {
+  readonly grantedBy: string;
+  readonly id: string;
+  readonly membershipId: string;
+  readonly revokedAt: string | null;
+  readonly roleCode: string;
+}
 
 interface CustomerRow {
   readonly createdBy: string;
@@ -107,6 +129,8 @@ interface CaptureEventRow {
 
 export interface CaptureContinuityRecoverySnapshot {
   readonly addressRows: readonly AddressRow[];
+  readonly assignmentGrants: readonly AssignmentGrantRow[];
+  readonly assignmentMemberships: readonly AssignmentMembershipRow[];
   readonly branchId: string;
   readonly captureEvents: readonly CaptureEventRow[];
   readonly captures: readonly CaptureRow[];
@@ -122,6 +146,8 @@ export interface CaptureContinuityRecoverySnapshot {
 
 export interface ValidatedCaptureContinuityRecovery {
   readonly addressIds: readonly string[];
+  readonly assignmentGrantIds: readonly string[];
+  readonly assignmentMembershipIds: readonly string[];
   readonly captureDraftIds: readonly string[];
   readonly captureEventIds: readonly string[];
   readonly contactIds: readonly string[];
@@ -138,6 +164,7 @@ export interface CaptureContinuitySmokeRecoverySummary extends TenancyFixtureRec
 export function validateCaptureContinuityRecoverySnapshot(
   snapshot: CaptureContinuityRecoverySnapshot,
 ): ValidatedCaptureContinuityRecovery {
+  const assignment = validateAssignmentRows(snapshot);
   const expectedName = `__tenancy_e2e__${snapshot.runId}${CUSTOMER_NAME_SUFFIX}`;
   if (snapshot.customers.length > 1 || snapshot.captures.length > 1) throw contaminationError();
   const customer = snapshot.customers[0];
@@ -152,7 +179,7 @@ export function validateCaptureContinuityRecoverySnapshot(
       || snapshot.fulfillmentSnapshots.length !== 0
       || snapshot.captureEvents.length !== 0
     ) throw contaminationError();
-    return emptyValidated();
+    return emptyValidated(assignment);
   }
   if (
     customer.displayName !== expectedName
@@ -215,6 +242,8 @@ export function validateCaptureContinuityRecoverySnapshot(
 
   return Object.freeze({
     addressIds: Object.freeze(snapshot.addressRows.map((row) => row.id)),
+    assignmentGrantIds: assignment.assignmentGrantIds,
+    assignmentMembershipIds: assignment.assignmentMembershipIds,
     captureDraftIds: Object.freeze(snapshot.captures.map((row) => row.id)),
     captureEventIds: Object.freeze(snapshot.captureEvents.map((row) => row.eventId)),
     contactIds: Object.freeze(snapshot.phoneRows.map((row) => row.contactId)),
@@ -222,6 +251,38 @@ export function validateCaptureContinuityRecoverySnapshot(
     customerIds: Object.freeze(snapshot.customers.map((row) => row.id)),
     fulfillmentSnapshotIds: Object.freeze(snapshot.fulfillmentSnapshots.map((row) => row.id)),
     partySnapshotIds: Object.freeze(snapshot.partySnapshots.map((row) => row.id)),
+  });
+}
+
+function validateAssignmentRows(
+  snapshot: CaptureContinuityRecoverySnapshot,
+): Readonly<{ assignmentGrantIds: readonly string[]; assignmentMembershipIds: readonly string[] }> {
+  const expected = captureContinuityAssignmentIds(snapshot.runId);
+  if (snapshot.assignmentMemberships.length > 1 || snapshot.assignmentGrants.length > 1) throw contaminationError();
+  const membership = snapshot.assignmentMemberships[0];
+  const grant = snapshot.assignmentGrants[0];
+  if (membership === undefined) {
+    if (grant !== undefined) throw contaminationError();
+    return Object.freeze({ assignmentGrantIds: Object.freeze([]), assignmentMembershipIds: Object.freeze([]) });
+  }
+  if (
+    membership.id !== expected.membershipId
+    || membership.restaurantId !== snapshot.restaurantId
+    || membership.branchId !== snapshot.branchId
+    || membership.userId === snapshot.primaryUserId
+    || membership.grantedBy !== snapshot.primaryUserId
+    || membership.revokedAt !== null
+    || (grant !== undefined && (
+      grant.id !== expected.grantId
+      || grant.membershipId !== membership.id
+      || grant.roleCode !== "waiter"
+      || grant.grantedBy !== snapshot.primaryUserId
+      || grant.revokedAt !== null
+    ))
+  ) throw contaminationError();
+  return Object.freeze({
+    assignmentGrantIds: Object.freeze(grant === undefined ? [] : [grant.id]),
+    assignmentMembershipIds: Object.freeze([membership.id]),
   });
 }
 
@@ -298,13 +359,25 @@ function validateCapture(
 export async function executeCaptureContinuitySmokeRecovery(
   config: TenancyFixtureRecoveryConfig,
 ): Promise<CaptureContinuitySmokeRecoverySummary> {
-  const captureContinuityRowsRemoved = await deleteCaptureContinuityRows(config);
+  const customerJourneyRowsRemoved = await recoverCaptureCustomerJourneyRows(config);
+  const captureContinuityRowsRemoved = customerJourneyRowsRemoved + await deleteCaptureContinuityRows(config, true);
   const base = await executeTenancyFixtureRecovery(config);
   return Object.freeze({ ...base, captureContinuityRowsRemoved });
 }
 
-async function deleteCaptureContinuityRows(config: TenancyFixtureRecoveryConfig): Promise<number> {
-  const pool = new Pool({
+type CaptureContinuityCleanupConfig = Pick<TenancyFixtureRecoveryConfig, "adminDatabase" | "runId">;
+
+export async function cleanupCaptureContinuityRowsForActiveRun(
+  config: CaptureContinuityCleanupConfig,
+): Promise<number> {
+  return deleteCaptureContinuityRows(config, false);
+}
+
+async function deleteCaptureContinuityRows(
+  config: CaptureContinuityCleanupConfig,
+  requireInactiveRun: boolean,
+): Promise<number> {
+  const pool = guardPostgresPool(new Pool({
     application_name: "super-restaurant-capture-continuity-smoke-recovery",
     connectionString: config.adminDatabase.connectionString,
     connectionTimeoutMillis: 15_000,
@@ -312,23 +385,27 @@ async function deleteCaptureContinuityRows(config: TenancyFixtureRecoveryConfig)
     query_timeout: 15_000,
     ssl: { ca: config.adminDatabase.caCertificate, rejectUnauthorized: true },
     statement_timeout: 15_000,
-  });
+  }));
   let client: PoolClient | undefined;
   try {
     client = await pool.connect();
     await client.query("BEGIN");
-    const lock = await client.query<{ acquired: boolean }>(
-      "select pg_try_advisory_xact_lock(pg_catalog.hashtextextended($1::text, 0)) as acquired",
-      [tenancyFixtureAdvisoryLockKey(config.runId)],
-    );
-    if (lock.rows[0]?.acquired !== true) {
-      throw new TenancyFixtureRecoveryError("database", "TENANCY_FIXTURE_RECOVERY_RUN_ACTIVE");
+    if (requireInactiveRun) {
+      const lock = await client.query<{ acquired: boolean }>(
+        "select pg_try_advisory_xact_lock(pg_catalog.hashtextextended($1::text, 0)) as acquired",
+        [tenancyFixtureAdvisoryLockKey(config.runId)],
+      );
+      if (lock.rows[0]?.acquired !== true) {
+        throw new TenancyFixtureRecoveryError("database", "TENANCY_FIXTURE_RECOVERY_RUN_ACTIVE");
+      }
     }
     const snapshot = await loadCaptureContinuitySnapshot(client, config.runId);
     const validated = validateCaptureContinuityRecoverySnapshot(snapshot);
     let removed = 0;
     removed += await deleteExactly(client, "app.capture_command_events", "event_id", validated.captureEventIds);
     removed += await deleteExactly(client, "app.capture_drafts", "id", validated.captureDraftIds);
+    removed += await deleteExactly(client, "app.membership_role_grants", "id", validated.assignmentGrantIds);
+    removed += await deleteExactly(client, "app.memberships", "id", validated.assignmentMembershipIds);
     removed += await deleteExactly(client, "app.customer_fulfillment_snapshots", "id", validated.fulfillmentSnapshotIds);
     removed += await deleteExactly(client, "app.customer_party_snapshots", "id", validated.partySnapshotIds);
     removed += await deleteExactly(client, "app.customer_command_events", "event_id", validated.customerEventIds);
@@ -370,7 +447,20 @@ async function loadCaptureContinuitySnapshot(
   if (scope.rows.length !== 1) throw contaminationError();
   const selected = scope.rows[0];
   if (selected === undefined) throw contaminationError();
+  const assignmentIds = captureContinuityAssignmentIds(runId);
   const parameters = [selected.restaurantId, selected.branchId];
+  const assignmentMemberships = await client.query<AssignmentMembershipRow>(
+    `select id::text, user_id::text as "userId", restaurant_id::text as "restaurantId",
+            branch_id::text as "branchId", granted_by::text as "grantedBy", revoked_at::text as "revokedAt"
+     from app.memberships where id=$1::uuid for update`,
+    [assignmentIds.membershipId],
+  );
+  const assignmentGrants = await client.query<AssignmentGrantRow>(
+    `select id::text, membership_id::text as "membershipId", role_code as "roleCode",
+            granted_by::text as "grantedBy", revoked_at::text as "revokedAt"
+     from app.membership_role_grants where id=$1::uuid for update`,
+    [assignmentIds.grantId],
+  );
   const customers = await client.query<CustomerRow>(
     `select id::text, display_name as "displayName", version::integer, created_by::text as "createdBy",
             updated_by::text as "updatedBy", deleted_at::text as "deletedAt"
@@ -434,6 +524,8 @@ async function loadCaptureContinuitySnapshot(
   );
   return Object.freeze({
     addressRows: Object.freeze([...addressRows.rows]),
+    assignmentGrants: Object.freeze([...assignmentGrants.rows]),
+    assignmentMemberships: Object.freeze([...assignmentMemberships.rows]),
     branchId: selected.branchId,
     captureEvents: Object.freeze([...captureEvents.rows]),
     captures: Object.freeze([...captures.rows]),
@@ -469,6 +561,8 @@ async function deleteExactly(
 function emptySnapshot(runId: string): CaptureContinuityRecoverySnapshot {
   return Object.freeze({
     addressRows: Object.freeze([]),
+    assignmentGrants: Object.freeze([]),
+    assignmentMemberships: Object.freeze([]),
     branchId: "00000000-0000-4000-8000-000000000000",
     captureEvents: Object.freeze([]),
     captures: Object.freeze([]),
@@ -483,9 +577,16 @@ function emptySnapshot(runId: string): CaptureContinuityRecoverySnapshot {
   });
 }
 
-function emptyValidated(): ValidatedCaptureContinuityRecovery {
+function emptyValidated(
+  assignment: Readonly<{ assignmentGrantIds: readonly string[]; assignmentMembershipIds: readonly string[] }> = {
+    assignmentGrantIds: Object.freeze([]),
+    assignmentMembershipIds: Object.freeze([]),
+  },
+): ValidatedCaptureContinuityRecovery {
   return Object.freeze({
     addressIds: Object.freeze([]),
+    assignmentGrantIds: assignment.assignmentGrantIds,
+    assignmentMembershipIds: assignment.assignmentMembershipIds,
     captureDraftIds: Object.freeze([]),
     captureEventIds: Object.freeze([]),
     contactIds: Object.freeze([]),

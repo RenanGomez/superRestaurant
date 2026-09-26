@@ -28,6 +28,9 @@ import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
 import { decodeCaptureRecord } from "./persistence/capture-persistence-codec.js";
 import { decodeOrderRecord } from "./persistence/order-persistence-codec.js";
+import type { CaptureRepeatSelectionPlan } from "./capture-repeat-order-plan.js";
+
+export type { CaptureRepeatSelectionPlan } from "./capture-repeat-order-plan.js";
 
 const listSql = "select app_private.list_customer_recent_orders($1::uuid, $2::jsonb) as result";
 const repeatIntoCaptureSql = "select app_private.repeat_customer_order_into_capture($1::uuid, $2::jsonb, $3::jsonb) as result";
@@ -52,24 +55,6 @@ export interface CustomerOrderRepeatSourcePort {
 }
 
 export const CUSTOMER_ORDER_REPEAT_SOURCE_PORT = Symbol("CUSTOMER_ORDER_REPEAT_SOURCE_PORT");
-
-export interface CaptureRepeatSelectionPlan {
-  readonly catalogVersion: string;
-  readonly customerId: string;
-  readonly lines: readonly CaptureRepeatSelectionLine[];
-  readonly schemaVersion: 1;
-  readonly sourceOrderId: string;
-}
-
-export interface CaptureRepeatSelectionLine {
-  readonly modifierGroups: readonly Readonly<{
-    groupId: string;
-    selections: readonly Readonly<{ optionId: string; quantity: number }>[];
-  }>[];
-  readonly productId: string;
-  readonly quantity: number;
-  readonly sourceOrderItemId: string;
-}
 
 export interface CustomerOrderRepeatCapturePort {
   apply(

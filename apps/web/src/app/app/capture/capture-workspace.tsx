@@ -3,6 +3,7 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import type {
   BranchScope,
+  CaptureAssignmentCandidateV1,
   CaptureDeliveryInstructionSuggestionV1,
   CaptureDeliveryInstructionSuggestionsV1,
   CaptureCustomerSnapshotV1,
@@ -18,6 +19,10 @@ import type {
   CaptureWorkTrayResultV1,
   CustomerDirectoryDetailV1,
   CustomerDirectorySearchResultV1,
+  CustomerRecentOrderListV1,
+  CustomerRepeatOrderCaptureResultV1,
+  CustomerRepeatOrderPreviewIssueV1,
+  CustomerRepeatOrderPreviewV1,
 } from "@super-restaurant/shared-types";
 
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
@@ -35,15 +40,31 @@ const messages = {
   missing: "La captura o ficha ya no está disponible.",
   unavailable: "No se pudo confirmar el resultado. Tu selección local sigue visible; reintenta exactamente la misma operación.",
 } as const;
+const issueLabels: Record<CustomerRepeatOrderPreviewIssueV1["code"], string> = {
+  historical_item_cancelled: "La línea histórica estaba cancelada.",
+  product_removed: "El producto ya no existe en el catálogo.",
+  product_inactive: "El producto está inactivo.",
+  category_inactive: "La categoría del producto está inactiva.",
+  historical_modifier_unmapped: "Un modificador histórico no se puede relacionar con el catálogo actual.",
+  modifier_group_unavailable: "Un grupo de modificadores ya no está disponible para este producto.",
+  modifier_group_inactive: "Un grupo de modificadores está inactivo.",
+  modifier_option_removed: "Una opción de modificador ya no existe.",
+  modifier_option_inactive: "Una opción de modificador está inactiva.",
+  modifier_quantity_invalid: "La cantidad de un modificador ya no es válida.",
+  modifier_group_requirements_changed: "Cambiaron los requisitos de selección de modificadores.",
+  product_price_changed: "Cambió el precio del producto.",
+  modifier_price_changed: "Cambió el precio de un modificador.",
+};
 
 interface CaptureWorkspaceParameters {
   readonly scope: BranchScope;
   readonly action: (operation: CaptureWorkspaceOperation, input: unknown) => Promise<CaptureWorkspaceResult>;
   readonly confirmationContext?: CaptureConfirmationContext;
+  readonly canManageAssignment: boolean;
 }
 type ActionReply = Awaited<ReturnType<CaptureWorkspaceParameters["action"]>>;
 
-export function CaptureWorkspace({ scope, action, confirmationContext }: CaptureWorkspaceParameters): ReactNode {
+export function CaptureWorkspace({ scope, action, confirmationContext, canManageAssignment }: CaptureWorkspaceParameters): ReactNode {
   const [deviceId] = useState(() => captureDeviceId(typeof window === "undefined" ? undefined : window.localStorage,
     () => crypto.randomUUID()));
   const [busy, setBusy] = useState(false);
@@ -51,11 +72,19 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
   const [pending, setPending] = useState<{ operation: CaptureWorkspaceOperation; command: unknown }>();
   const [capture, setCapture] = useState<CaptureDraftDetailV1 | CaptureDraftDetailV2>();
   const [tray, setTray] = useState<readonly CaptureDraftSummaryV1[]>([]);
+  const [assignmentCandidates, setAssignmentCandidates] = useState<readonly CaptureAssignmentCandidateV1[]>([]);
+  const [transferTarget, setTransferTarget] = useState("");
+  const [transferConfirmed, setTransferConfirmed] = useState(false);
+  const [takeoverDraftId, setTakeoverDraftId] = useState("");
+  const [takeoverReason, setTakeoverReason] = useState("");
+  const [takeoverConfirmed, setTakeoverConfirmed] = useState(false);
   const [results, setResults] = useState<CustomerDirectorySearchResultV1>();
   const [customer, setCustomer] = useState<CustomerDirectoryDetailV1>();
   const [customerSnapshot, setCustomerSnapshot] = useState<CaptureCustomerSnapshotV1 | null>(null);
   const [fulfillmentSnapshot, setFulfillmentSnapshot] = useState<CaptureFulfillmentSnapshotV1 | null>(null);
   const [repeatOrderPlan, setRepeatOrderPlan] = useState<CaptureRepeatOrderPlanSummaryV1 | null>(null);
+  const [recentOrders, setRecentOrders] = useState<CustomerRecentOrderListV1>();
+  const [repeatPreview, setRepeatPreview] = useState<CustomerRepeatOrderPreviewV1>();
   const [selectedContact, setSelectedContact] = useState<string>();
   const [selectedAddress, setSelectedAddress] = useState<string>();
   const [sourceChannel, setSourceChannel] = useState<CaptureSourceChannelV1>("phone");
@@ -87,7 +116,17 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
     if (persistedAutosave !== undefined) clearPendingCaptureAutosave(window.localStorage, persistedAutosave);
     setPending(undefined);
     const value = reply.value;
-    if ("items" in value && "captureDraftId" in value) {
+    if (operation === "assignmentCandidates") {
+      setAssignmentCandidates((value as { candidates: readonly CaptureAssignmentCandidateV1[] }).candidates);
+    }
+    else if (operation === "recentOrders") setRecentOrders(value as CustomerRecentOrderListV1);
+    else if (operation === "repeatPreview") setRepeatPreview(value as CustomerRepeatOrderPreviewV1);
+    else if (operation === "repeatOrder") {
+      const repeated = value as CustomerRepeatOrderCaptureResultV1;
+      setCapture(repeated.capture.detail);
+      setRepeatPreview(repeated.preview);
+    }
+    else if ("items" in value && "captureDraftId" in value) {
       setDeliveryInstructionSuggestions((value as CaptureDeliveryInstructionSuggestionsV1).items);
     }
     else if ("items" in value) setTray((value as CaptureWorkTrayResultV1).items);
@@ -122,6 +161,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
     setCustomerSnapshot(hydrated.customerSnapshot);
     setFulfillmentSnapshot(hydrated.fulfillmentSnapshot);
     setRepeatOrderPlan(hydrated.repeatOrderPlan);
+    setRecentOrders((current) => current?.customerId === hydrated.customerSnapshot?.customerId ? current : undefined);
+    setRepeatPreview((current) => current?.customerId === hydrated.customerSnapshot?.customerId ? current : undefined);
     setSelectedContact(hydrated.customerSnapshot?.contactId);
     setSelectedAddress(hydrated.fulfillmentSnapshot?.addressId);
     setSourceChannel(hydrated.sourceChannel);
@@ -137,6 +178,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
       if (replay === undefined || !replay.ok) return;
     }
     await run("tray", { schemaVersion: 1, scope, limit: 20 });
+    if (canManageAssignment) await run("assignmentCandidates", { schemaVersion: 1, scope });
   })(); }, []);
 
   function base(): Record<string, unknown> {
@@ -154,8 +196,15 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
 
   async function refreshWorkspace(captureDraftId: string): Promise<void> {
     const reply = await run("workspace", { schemaVersion: 3, scope, captureDraftId });
-    if (reply?.ok && "customerSnapshot" in reply.value && reply.value.detail.fulfillmentChannel === "delivery"
-      && reply.value.customerSnapshot !== null) {
+    if (!reply?.ok || !("customerSnapshot" in reply.value) || reply.value.customerSnapshot === null) {
+      setRecentOrders(undefined);
+      setRepeatPreview(undefined);
+      setDeliveryInstructionSuggestions([]);
+      return;
+    }
+    await run("recentOrders", { schemaVersion: 1, scope,
+      customerId: reply.value.customerSnapshot.customerId, limit: 20 });
+    if (reply.value.detail.fulfillmentChannel === "delivery") {
       await run("deliveryInstructionSuggestions", { schemaVersion: 1, scope, captureDraftId });
     } else {
       setDeliveryInstructionSuggestions([]);
@@ -168,6 +217,33 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
     void (async () => {
       const reply = await run("claim", command);
       if (reply?.ok) await refreshWorkspace(item.captureDraftId);
+    })();
+  }
+
+  function transferCapture(): void {
+    if (!canManageAssignment || capture === undefined || transferTarget === "" || !transferConfirmed) return;
+    void (async () => {
+      const reply = await run("transfer", { ...base(), targetMembershipId: transferTarget });
+      if (!reply?.ok) return;
+      reset();
+      await run("tray", { schemaVersion: 1, scope, limit: 20 });
+      await run("assignmentCandidates", { schemaVersion: 1, scope });
+    })();
+  }
+
+  function takeOverCapture(): void {
+    const item = tray.find((candidate) => candidate.captureDraftId === takeoverDraftId);
+    const reason = takeoverReason.trim();
+    if (!canManageAssignment || item === undefined || item.attentionStatus !== "claimed"
+      || reason.length === 0 || !takeoverConfirmed) return;
+    void (async () => {
+      const reply = await run("takeover", { schemaVersion: 1, scope, captureDraftId: item.captureDraftId,
+        expectedVersion: item.version, eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(),
+        deviceId, occurredAt: new Date().toISOString(), reason });
+      if (!reply?.ok) return;
+      setTakeoverDraftId(""); setTakeoverReason(""); setTakeoverConfirmed(false);
+      await refreshWorkspace(item.captureDraftId);
+      await run("tray", { schemaVersion: 1, scope, limit: 20 });
     })();
   }
 
@@ -227,6 +303,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
 
   function selectCustomer(contactId: string): void {
     if (customer === undefined || capture === undefined) return;
+    setRecentOrders(undefined);
+    setRepeatPreview(undefined);
     setSelectedContact(contactId);
     setSelectedAddress(undefined);
     const command = { ...base(), customerId: customer.customer.customerId, contactId,
@@ -248,14 +326,35 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
     })();
   }
 
+  function previewOrder(orderId: string): void {
+    if (customerSnapshot === null) return;
+    setRepeatPreview(undefined);
+    void run("repeatPreview", { schemaVersion: 1, scope, customerId: customerSnapshot.customerId, orderId });
+  }
+
+  function repeatOrder(): void {
+    if (capture === undefined || customerSnapshot === null || repeatPreview === undefined) return;
+    const captureDraftId = capture.captureDraftId;
+    void (async () => {
+      const reply = await run("repeatOrder", { ...base(), customerId: customerSnapshot.customerId,
+        sourceOrderId: repeatPreview.sourceOrderId });
+      if (reply?.ok) await refreshWorkspace(captureDraftId);
+    })();
+  }
+
   function retryPending(): void {
     if (pending === undefined) return;
     void (async () => {
       const reply = await run(pending.operation, pending.command);
-      if (reply?.ok && ["autosave", "claim", "customer", "deliveryInstructions", "fulfillment"].includes(pending.operation)) {
+      if (reply?.ok && ["autosave", "claim", "customer", "deliveryInstructions", "fulfillment", "repeatOrder", "takeover"].includes(pending.operation)) {
         const target = typeof pending.command === "object" && pending.command !== null && "captureDraftId" in pending.command
           ? pending.command.captureDraftId : undefined;
         if (typeof target === "string") await refreshWorkspace(target);
+      }
+      if (reply?.ok && pending.operation === "transfer") {
+        reset();
+        await run("tray", { schemaVersion: 1, scope, limit: 20 });
+        await run("assignmentCandidates", { schemaVersion: 1, scope });
       }
     })();
   }
@@ -264,16 +363,19 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
     setCapture(undefined); setResults(undefined); setCustomer(undefined); setCustomerSnapshot(null);
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
     setRepeatOrderPlan(null);
+    setRecentOrders(undefined); setRepeatPreview(undefined);
     setError(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
     setDeliveryInstructions("");
     setDeliveryInstructionSuggestions([]);
     setSelectedShiftId("");
     setSelectedTableId("");
+    setTransferTarget("");
+    setTransferConfirmed(false);
   }
 
   const locked = busy || capture?.status !== "draft" || capture?.attentionLeaseId === null
     || error === "denied" || error === "conflict";
-  const canConfirm = repeatOrderPlan === null && confirmationContext !== undefined && selectedShiftId !== "" && fulfillmentChannel !== null
+  const canConfirm = confirmationContext !== undefined && selectedShiftId !== "" && fulfillmentChannel !== null
     && (fulfillmentChannel !== "dine_in" || selectedTableId !== "")
     && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null));
   return <div className="flex flex-col gap-4" aria-busy={busy}>
@@ -292,7 +394,35 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
         <p className="my-2 text-sm text-text-muted">Retoma una captura de esta sucursal. El servidor asignará un lease nuevo antes de editar.</p>
         <div className="grid gap-2">{tray.map((item) => <button key={item.captureDraftId} className={`${button} text-left`}
           disabled={busy} onClick={() => recover(item)}><strong className="block">{item.folio}</strong>
-          <span className="text-xs text-text-muted">{item.sourceChannel} · {item.fulfillmentChannel} · versión {item.version}</span></button>)}</div>
+          <span className="text-xs text-text-muted">{item.sourceChannel} · {item.fulfillmentChannel} · versión {item.version}</span>
+          {item.ownerMembershipId !== null && <span className="block text-xs text-text-muted">Asignada a {assignmentCandidates.find((candidate) => candidate.membershipId === item.ownerMembershipId)?.displayLabel ?? "otro operador"}</span>}
+        </button>)}</div>
+        {canManageAssignment && tray.some((item) => item.attentionStatus === "claimed") && <div className="mt-5 border-t border-border pt-4">
+          <h3 className="font-heading font-semibold">Apropiación supervisada</h3>
+          <p className="mt-1 text-sm text-text-muted">Úsala sólo cuando otro operador no pueda continuar. El motivo queda auditado y el lease cambia.</p>
+          <div className="mt-3 grid gap-3">
+            <label className="grid gap-1 text-sm" htmlFor="capture-takeover-draft">Captura asignada
+              <select id="capture-takeover-draft" className={input} value={takeoverDraftId}
+                onChange={(event) => setTakeoverDraftId(event.target.value)} disabled={busy}>
+                <option value="">Selecciona una captura</option>
+                {tray.filter((item) => item.attentionStatus === "claimed").map((item) => <option
+                  key={item.captureDraftId} value={item.captureDraftId}>{item.folio} · versión {item.version}</option>)}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm" htmlFor="capture-takeover-reason">Motivo obligatorio
+              <textarea id="capture-takeover-reason" className={`${input} min-h-24 resize-y`} maxLength={500}
+                value={takeoverReason} onChange={(event) => setTakeoverReason(event.target.value)} disabled={busy} />
+            </label>
+            <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1 min-h-5 min-w-5"
+              checked={takeoverConfirmed} onChange={(event) => setTakeoverConfirmed(event.target.checked)} disabled={busy} />
+              Confirmo que el operador actual no puede continuar y que esta reasignación quedará auditada.
+            </label>
+            <button type="button" className={button} onClick={takeOverCapture}
+              disabled={busy || takeoverDraftId === "" || takeoverReason.trim().length === 0 || !takeoverConfirmed}>
+              Tomar control de la captura
+            </button>
+          </div>
+        </div>}
       </section>}
     </> : <>
       {capture.status === "confirmed" && <section className={panel} data-testid="confirmed-capture">
@@ -309,16 +439,89 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
           <option value="pickup" disabled={fulfillmentSnapshot !== null}>Recoger</option><option value="counter" disabled={fulfillmentSnapshot !== null}>Mostrador</option>
           <option value="dine_in" disabled={fulfillmentSnapshot !== null}>Mesa</option></select></label></div>
       </section>
+      {capture.status === "draft" && canManageAssignment && <section className={panel} data-testid="capture-transfer">
+        <h2 className="font-heading text-lg font-semibold">Transferir captura</h2>
+        <p className="mt-1 text-sm text-text-muted">El operador destino recibirá un lease nuevo. Esta estación dejará de editar la captura.</p>
+        {assignmentCandidates.length === 0 ? <p className="mt-3 text-sm">No hay otro operador activo elegible en esta sucursal.</p>
+          : <div className="mt-3 grid gap-3">
+            <label className="grid gap-1 text-sm" htmlFor="capture-transfer-target">Operador destino
+              <select id="capture-transfer-target" className={input} value={transferTarget}
+                onChange={(event) => { setTransferTarget(event.target.value); setTransferConfirmed(false); }} disabled={locked}>
+                <option value="">Selecciona un operador</option>
+                {assignmentCandidates.map((candidate) => <option key={candidate.membershipId} value={candidate.membershipId}>
+                  {candidate.displayLabel} · {candidate.roles.join(", ")}
+                </option>)}
+              </select>
+            </label>
+            <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1 min-h-5 min-w-5"
+              checked={transferConfirmed} onChange={(event) => setTransferConfirmed(event.target.checked)} disabled={locked || transferTarget === ""} />
+              Confirmo que el operador seleccionado continuará esta captura y que perderé el lease actual.
+            </label>
+            <button type="button" className={button} onClick={transferCapture}
+              disabled={locked || transferTarget === "" || !transferConfirmed}>Transferir de forma segura</button>
+          </div>}
+      </section>}
       {customerSnapshot !== null && <section className={panel} data-testid="rehydrated-customer-snapshot">
         <h2 className="font-heading text-lg font-semibold">Cliente guardado</h2><p className="mt-2"><strong>{customerSnapshot.displayName}</strong><br />
           {customerSnapshot.phoneDisplayValue}</p>{fulfillmentSnapshot !== null && <p className="mt-2 text-sm">
           <strong>{fulfillmentSnapshot.label}</strong><br />{[fulfillmentSnapshot.streetLine, fulfillmentSnapshot.unit,
             fulfillmentSnapshot.neighborhood, fulfillmentSnapshot.locality].filter(Boolean).join(", ")}</p>}
         <p className="mt-2 text-xs text-text-muted">Datos congelados al guardar esta captura.</p></section>}
+      {customerSnapshot !== null && <section className={panel} data-testid="customer-recent-orders">
+        <h2 className="font-heading text-lg font-semibold">Pedidos recientes</h2>
+        <p className="mt-1 text-sm text-text-muted">Consulta lo que el cliente pidió antes en esta sucursal y revisa los cambios antes de repetirlo.</p>
+        {recentOrders === undefined ? <p className="mt-3 text-sm text-text-muted">Cargando historial…</p>
+          : recentOrders.orders.length === 0 ? <p className="mt-3 text-sm">Este cliente todavía no tiene pedidos confirmados en la sucursal.</p>
+            : <div className="mt-3 grid gap-3">{recentOrders.orders.map((order) => <article key={order.orderId}
+              className="rounded-lg border border-border bg-bg p-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div><strong className="block">{formatDate(order.confirmedAt)}</strong>
+                  <span className="text-xs text-text-muted">{fulfillmentLabel(order.fulfillmentChannel)} · {orderStatusLabel(order.status)}</span></div>
+                <button type="button" className={button} disabled={locked} onClick={() => previewOrder(order.orderId)}>
+                  Revisar para repetir
+                </button>
+              </div>
+              <ul className="mt-3 grid gap-2 text-sm">{order.items.map((item) => <li key={item.orderItemId}>
+                <span className={item.status === "cancelled" ? "line-through text-text-muted" : ""}>
+                  {item.quantity} × {item.productName} · {money(item.unitPriceMinor, order.currency)} c/u
+                </span>
+                {item.modifiers.length > 0 && <span className="block pl-4 text-xs text-text-muted">
+                  {item.modifiers.map((modifier) => `${modifier.quantity} × ${modifier.name}`).join(" · ")}
+                </span>}
+              </li>)}</ul>
+            </article>)}</div>}
+      </section>}
+      {repeatPreview !== undefined && <section className={panel} data-testid="repeat-order-preview">
+        <h2 className="font-heading text-lg font-semibold">Vista previa para repetir</h2>
+        <p className="mt-1 text-sm">
+          <strong>{repeatPreview.readyLineCount}</strong> {repeatPreview.readyLineCount === 1 ? "línea disponible" : "líneas disponibles"}
+          {repeatPreview.blockedLineCount > 0 && <> · <strong>{repeatPreview.blockedLineCount}</strong> {repeatPreview.blockedLineCount === 1 ? "línea bloqueada" : "líneas bloqueadas"}</>}
+        </p>
+        <p className="mt-1 text-xs text-text-muted">Los precios y las opciones se comparan con el catálogo vigente. Las líneas bloqueadas no se prepararán.</p>
+        <div className="mt-3 grid gap-3">{repeatPreview.lines.map((line) => <article key={line.sourceOrderItemId}
+          className={`rounded-lg border p-3 ${line.status === "blocked" ? "border-[oklch(75%_0.13_25)] bg-error-bg" : "border-border bg-bg"}`}>
+          <div className="flex flex-wrap justify-between gap-2"><strong>{line.quantity} × {line.currentName ?? line.historicalName}</strong>
+            <span className="text-sm">{line.currentUnitPriceMinor === null ? "No disponible" : `${money(line.currentUnitPriceMinor, repeatPreview.currency)} c/u`}</span></div>
+          {line.currentName !== null && line.currentName !== line.historicalName && <p className="mt-1 text-xs text-text-muted">Antes: {line.historicalName}</p>}
+          {line.issues.length > 0 && <ul className="mt-2 grid gap-1 text-xs">{line.issues.map((issue) => <li
+            key={`${issue.code}:${issue.groupId ?? ""}:${issue.modifierId ?? ""}`}
+            className={issue.severity === "blocking" ? "font-semibold" : "text-text-muted"}>
+            {issueLabels[issue.code]}{issue.historicalAmountMinor !== null && issue.currentAmountMinor !== null
+              ? ` ${money(issue.historicalAmountMinor, repeatPreview.currency)} → ${money(issue.currentAmountMinor, repeatPreview.currency)}` : ""}
+          </li>)}</ul>}
+        </article>)}</div>
+        {repeatPreview.blockedLineCount > 0 && <p role="alert" className="mt-3 text-sm">
+          Revisa las líneas bloqueadas: no se agregarán a la captura. El resto puede prepararse de forma segura.
+        </p>}
+        <button type="button" className={`${button} mt-4`} onClick={repeatOrder}
+          disabled={locked || repeatPreview.readyLineCount === 0}>
+          Preparar {repeatPreview.readyLineCount} {repeatPreview.readyLineCount === 1 ? "línea" : "líneas"} en la captura
+        </button>
+      </section>}
       {repeatOrderPlan !== null && <section className={panel} data-testid="rehydrated-repeat-order-plan">
         <h2 className="font-heading text-lg font-semibold">Pedido repetido preparado</h2>
         <p className="mt-2 text-sm">{repeatOrderPlan.lineCount} {repeatOrderPlan.lineCount === 1 ? "línea lista" : "líneas listas"} para esta captura.</p>
-        <p className="mt-1 text-xs text-text-muted">La preparación se conserva al recargar. La conversión permanece bloqueada hasta poder crear sus líneas en la orden.</p>
+        <p className="mt-1 text-xs text-text-muted">La preparación se conserva al recargar. Al confirmar, el servidor validará nuevamente cada selección y usará los precios vigentes.</p>
       </section>}
       {fulfillmentChannel === "delivery" && <section className={panel}>
         <h2 className="font-heading text-lg font-semibold">Instrucciones para esta entrega</h2>
@@ -399,8 +602,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
           {fulfillmentChannel === "delivery" && (customerSnapshot === null || fulfillmentSnapshot === null) && <p className="mt-2 text-sm text-text-muted">
             Guarda un cliente y una dirección validada antes de confirmar el domicilio.
           </p>}
-          {repeatOrderPlan !== null && <p role="alert" className="mt-2 text-sm text-text-muted">
-            Este pedido repetido todavía no puede convertirse: falta materializar y volver a cotizar sus líneas en el servidor.
+          {repeatOrderPlan !== null && <p role="status" className="mt-2 text-sm text-text-muted">
+            El servidor volverá a cotizar este pedido con el catálogo vigente. Si algún producto o modificador ya no es válido, la confirmación se detendrá sin crear una orden parcial.
           </p>}
           <button type="button" className={`${button} mt-4`} onClick={confirmCapture} disabled={locked || !canConfirm}>
             Convertir captura en orden
@@ -410,4 +613,21 @@ export function CaptureWorkspace({ scope, action, confirmationContext }: Capture
       {capture.status === "draft" && <aside className="rounded-xl border border-[oklch(80%_0.08_75)] bg-[oklch(96%_0.03_75)] p-4 text-sm"><strong>Captura abierta.</strong> Los cambios guardados incrementan una versión; recargar exige recuperar un lease nuevo.</aside>}
     </>}
   </div>;
+}
+
+function money(amountMinor: number, currency: string): string {
+  return new Intl.NumberFormat("es-MX", { currency, style: "currency" }).format(amountMinor / 100);
+}
+
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function fulfillmentLabel(value: CaptureFulfillmentChannelV1): string {
+  return { counter: "Mostrador", delivery: "Domicilio", dine_in: "Mesa", pickup: "Para recoger" }[value];
+}
+
+function orderStatusLabel(value: CustomerRecentOrderListV1["orders"][number]["status"]): string {
+  return { cancelled: "Cancelado", closed: "Cerrado", draft: "Borrador", open: "Abierto", paid: "Pagado",
+    partially_paid: "Pago parcial" }[value];
 }
