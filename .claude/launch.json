@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "C:\\Users\\Emmanuel G\\AppData\\Local\\Programs\\node24\\pnpm.cmd",
+      "runtimeArgs": ["--filter", "@super-restaurant/web", "dev", "-p", "8082"],
+      "port": 8082
+    }
+  ]
+}
