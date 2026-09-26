@@ -19,6 +19,16 @@ const SCHEDULE_CUTOFF_MS = 30 * 60 * 1000;
 /** Decisión 8.1.4: horizonte de 7 días para pedidos programados. */
 const SCHEDULE_HORIZON_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * Named expiry policy for §8.1 decisión 3 ("promesa como ventana de 15
+ * minutos congelada en el quote"): a quote is authoritative only until its
+ * promised window begins. S7.2 may replace this with a `quotedAt + X`
+ * policy (a separate quoting TTL, decoupled from the promise window) if
+ * Emmanuel decides a quote should also expire before it is ever promised —
+ * that would require a distinct named policy, not a silent change here.
+ */
+export const DELIVERY_QUOTE_EXPIRY_POLICY = "promise_start" as const;
+
 const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 
 export type DeliveryQuoteCoverageStatus = "covered" | "not_covered";
@@ -131,6 +141,7 @@ export function quoteDelivery(input: QuoteDeliveryInput): DeliveryQuote {
     promiseEnd: serializeTimestamp(promiseEndMs, "promiseEnd"),
     timeZone: input.timeZone,
     quotedAt: input.quotedAt,
+    // DELIVERY_QUOTE_EXPIRY_POLICY === "promise_start": the quote expires when its promised window begins.
     expiresAt: serializeTimestamp(promiseStartMs, "expiresAt"),
     version: input.version,
     override: null,

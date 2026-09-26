@@ -384,7 +384,7 @@ export {
   InvalidDeliveryQuoteFieldError,
   InvalidDeliveryTimestampError,
 } from "./errors.js";
-export { applyDeliveryQuoteOverride, quoteDelivery } from "./delivery-quote.js";
+export { applyDeliveryQuoteOverride, DELIVERY_QUOTE_EXPIRY_POLICY, quoteDelivery } from "./delivery-quote.js";
 export type {
   ApplyDeliveryQuoteOverrideInput,
   DeliveryQuote,
