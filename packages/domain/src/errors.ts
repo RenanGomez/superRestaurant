@@ -977,3 +977,95 @@ export class CashRegisterVarianceReasonRequiredError extends DomainError {
     super("A non-zero cash register closing difference requires a reason.");
   }
 }
+
+export class InvalidDeliveryZoneFieldError extends DomainError {
+  public readonly code = "INVALID_DELIVERY_ZONE_FIELD";
+
+  public constructor(field: string) {
+    super(`Delivery zone ${field} must be a valid value.`);
+    this.field = field;
+  }
+
+  public readonly field: string;
+}
+
+export class InvalidDeliveryAddressFactsError extends DomainError {
+  public readonly code = "INVALID_DELIVERY_ADDRESS_FACTS";
+
+  public constructor(field: string) {
+    super(`Delivery address facts ${field} must be a valid value.`);
+    this.field = field;
+  }
+
+  public readonly field: string;
+}
+
+export class InvalidDeliveryQuoteFieldError extends DomainError {
+  public readonly code = "INVALID_DELIVERY_QUOTE_FIELD";
+
+  public constructor(field: string) {
+    super(`Delivery quote ${field} must be a valid value.`);
+    this.field = field;
+  }
+
+  public readonly field: string;
+}
+
+export class InvalidDeliveryTimestampError extends DomainError {
+  public readonly code = "INVALID_DELIVERY_TIMESTAMP";
+
+  public constructor(field: string) {
+    super(`Delivery ${field} must be a canonical UTC timestamp with millisecond precision.`);
+    this.field = field;
+  }
+
+  public readonly field: string;
+}
+
+export class DeliveryScheduleInPastError extends DomainError {
+  public readonly code = "DELIVERY_SCHEDULE_IN_PAST";
+
+  public constructor() {
+    super("A scheduled delivery window must start after the quote was requested.");
+  }
+}
+
+export class DeliveryScheduleExceedsHorizonError extends DomainError {
+  public readonly code = "DELIVERY_SCHEDULE_EXCEEDS_HORIZON";
+
+  public constructor() {
+    super("Scheduled delivery orders cannot be placed more than 7 days in advance.");
+  }
+}
+
+export class DeliveryScheduleCutoffError extends DomainError {
+  public readonly code = "DELIVERY_SCHEDULE_CUTOFF";
+
+  public constructor() {
+    super("A scheduled delivery window must start at least 30 minutes after the quote was requested.");
+  }
+}
+
+export class DeliveryOverrideAuthorizationRequiredError extends DomainError {
+  public readonly code = "DELIVERY_OVERRIDE_AUTHORIZATION_REQUIRED";
+
+  public constructor() {
+    super("Overriding a delivery quote's fee or promise window requires an explicit manager role.");
+  }
+}
+
+export class DeliveryOverrideReasonRequiredError extends DomainError {
+  public readonly code = "DELIVERY_OVERRIDE_REASON_REQUIRED";
+
+  public constructor() {
+    super("Overriding a delivery quote requires a non-empty reason.");
+  }
+}
+
+export class InvalidDeliveryOverrideWindowError extends DomainError {
+  public readonly code = "INVALID_DELIVERY_OVERRIDE_WINDOW";
+
+  public constructor() {
+    super("A delivery override promise window must have a start strictly before its end.");
+  }
+}
