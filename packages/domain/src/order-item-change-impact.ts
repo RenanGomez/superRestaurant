@@ -13,11 +13,18 @@ export type OrderItemChangeBlockReason =
 export type OrderItemChangePolicyDecision =
   | "authorization_role"
   | "financial_atomicity"
-  | "inventory_disposition"
-  | "production_destinations";
+  | "inventory_disposition";
 
+/**
+ * `financialCompensationPending` is a fact about an *already existing*,
+ * unresolved compensation (e.g. from a prior change still awaiting
+ * reconciliation) — it is never derived from `capturedAmountMinor`. Approved
+ * S6 policy (decision 6): captured money by itself never blocks a change; it
+ * only creates a refund obligation. Only a pending compensation blocks.
+ */
 export interface AssessOrderItemChangeImpactInput {
   readonly capturedAmountMinor: number;
+  readonly financialCompensationPending: boolean;
   readonly inventoryCommitment: OrderItemInventoryCommitment;
   readonly itemStatus: OrderItemState;
   readonly operation: OrderItemChangeOperation;
@@ -33,6 +40,11 @@ export interface OrderItemChangeImpact {
   readonly operation: OrderItemChangeOperation;
   readonly policyDecisions: readonly OrderItemChangePolicyDecision[];
   readonly production: "correction_required" | "none" | "post_delivery_adjustment_required";
+  /** Declarative production-routing fact (decision 4); S6.3 owns KDS/printer reconciliation. */
+  readonly productionDestination: "kds_primary" | null;
+  readonly refundObligation: "none" | "pending";
+  /** Declarative fact (decision 5): manual reprint is always available; S6.3 owns the flow. */
+  readonly reprintAvailable: boolean;
   readonly replacementLineRequired: boolean;
 }
 
@@ -48,7 +60,11 @@ export function assessOrderItemChangeImpact(inputValue: AssessOrderItemChangeImp
     if (error instanceof InvalidOrderItemChangeImpactError) throw error;
     throw new InvalidOrderItemChangeImpactError();
   }
-  const financial = input.capturedAmountMinor === 0 ? "none" : "compensation_required";
+  const financial = input.financialCompensationPending ? "compensation_required" : "none";
+  const refundObligation = input.capturedAmountMinor > 0
+    || input.orderStatus === "partially_paid" || input.orderStatus === "paid"
+    ? "pending"
+    : "none";
   const production = productionImpact(input.itemStatus);
   const inventory = inventoryImpact(input.inventoryCommitment);
   const authorization = input.itemStatus === "pending"
@@ -59,7 +75,6 @@ export function assessOrderItemChangeImpact(inputValue: AssessOrderItemChangeImp
   if (authorization === "elevated") policyDecisions.add("authorization_role");
   if (financial === "compensation_required") policyDecisions.add("financial_atomicity");
   if (inventory !== "none") policyDecisions.add("inventory_disposition");
-  if (production !== "none") policyDecisions.add("production_destinations");
 
   return deepFreeze({
     authorization,
@@ -70,6 +85,9 @@ export function assessOrderItemChangeImpact(inputValue: AssessOrderItemChangeImp
     operation: input.operation,
     policyDecisions: [...policyDecisions].sort(compareCodeUnits),
     production,
+    productionDestination: production === "none" ? null : "kds_primary",
+    refundObligation,
+    reprintAvailable: production !== "none",
     replacementLineRequired: input.operation === "replace" && input.itemStatus !== "cancelled",
   });
 }
@@ -81,9 +99,7 @@ function changeBlockReason(
   if (input.itemStatus === "cancelled") return "already_cancelled";
   if (input.itemStatus === "delivered") return "post_delivery_adjustment_required";
   if (input.orderStatus === "closed" || input.orderStatus === "cancelled") return "order_terminal";
-  if (input.orderStatus === "partially_paid" || input.orderStatus === "paid" || financial === "compensation_required") {
-    return "financial_compensation_required";
-  }
+  if (financial === "compensation_required") return "financial_compensation_required";
   return null;
 }
 
@@ -101,13 +117,17 @@ function inventoryImpact(commitment: OrderItemInventoryCommitment): OrderItemCha
 }
 
 function normalizeInput(value: AssessOrderItemChangeImpactInput): AssessOrderItemChangeImpactInput {
-  const record = exactRecord(value, ["capturedAmountMinor", "inventoryCommitment", "itemStatus", "operation", "orderStatus"]);
+  const record = exactRecord(value, [
+    "capturedAmountMinor", "financialCompensationPending", "inventoryCommitment", "itemStatus", "operation", "orderStatus",
+  ]);
   const capturedAmountMinor = data(record, "capturedAmountMinor");
+  const financialCompensationPending = data(record, "financialCompensationPending");
   const inventoryCommitment = data(record, "inventoryCommitment");
   const itemStatus = data(record, "itemStatus");
   const operation = data(record, "operation");
   const orderStatus = data(record, "orderStatus");
   if (!Number.isSafeInteger(capturedAmountMinor) || (capturedAmountMinor as number) < 0
+    || typeof financialCompensationPending !== "boolean"
     || !includes(ORDER_ITEM_INVENTORY_COMMITMENTS, inventoryCommitment)
     || !includes(["pending", "sent", "preparing", "ready", "delivered", "cancelled"] as const, itemStatus)
     || !includes(ORDER_ITEM_CHANGE_OPERATIONS, operation)
@@ -116,6 +136,7 @@ function normalizeInput(value: AssessOrderItemChangeImpactInput): AssessOrderIte
   }
   return Object.freeze({
     capturedAmountMinor: capturedAmountMinor as number,
+    financialCompensationPending,
     inventoryCommitment,
     itemStatus,
     operation,
