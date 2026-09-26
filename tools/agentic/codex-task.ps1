@@ -89,8 +89,11 @@ if ($Resume -and (Test-Path $threadFile)) {
 
 Write-Host "codex: $codex"
 Write-Host "worktree: $wt ($branch) · sandbox: $sandbox · log: $events"
+# Run from inside the worktree: `exec resume` takes the writable root from the current directory.
+Push-Location $wt
 $prompt | & $codex @args 2>&1 | Tee-Object -FilePath $events | Out-Null
 $exit = $LASTEXITCODE
+Pop-Location
 
 # Persist thread id for -Resume, if the event stream carried one.
 $idLine = Select-String -Path $events -Pattern '"(thread_id|session_id)"\s*:\s*"([^"]+)"' | Select-Object -First 1
