@@ -65,8 +65,17 @@ $prompt += "`n`n## Reglas del harness`n- Trabajas en el worktree $wt, rama $bran
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $sandbox = if ($ReadOnly) { "read-only" } else { "workspace-write" }
-# The worktree's git dir lives under the main repo; grant it so Codex can commit locally.
-$gitDir = Join-Path $repo ".git\worktrees\$Task"
+# Objects and refs of a linked worktree live in the main repo's .git; grant it so Codex can
+# commit locally (it still cannot touch the main working tree).
+$gitDir = Join-Path $repo ".git"
+
+# The sandbox has no network: restore dependencies from the pnpm store before Codex starts.
+if (-not (Test-Path (Join-Path $wt "node_modules"))) {
+  Write-Host "pnpm install (offline-first) en $wt"
+  Push-Location $wt
+  pnpm install --frozen-lockfile --prefer-offline 2>&1 | Select-Object -Last 3
+  Pop-Location
+}
 $args = @("exec", "-C", $wt, "--add-dir", $gitDir, "-s", $sandbox, "-c", "approval_policy=`"never`"",
           "-c", "model_reasoning_effort=`"$Effort`"", "--json", "-o", $last)
 if ($Model) { $args += @("-m", $Model) }
