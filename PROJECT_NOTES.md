@@ -96,6 +96,12 @@ Contratos Customer/Address V1 (2026-09-16): pertenencia del directorio por Resta
 
 Decisión de implementación 2026-09-16: las direcciones Customer pueden guardarse incompletas y con coordenadas sin quedar validadas. El dominio permite atestación explícita con contexto auditado y snapshot inmutable del cliente/dirección seleccionados; editar ficha reinicia validación. Coordenadas E6 no equivalen a geocodificación verificada o cobertura de reparto. El API futuro debe derivar autorización/actor/timestamp y comprobar Branch, no confiar en evidencia del cliente.
 
+## Decisiones de producto S6/S7/S8 aprobadas — 2026-09-26
+
+- Emmanuel aprobó en bloque las 26 propuestas de Claude para las decisiones abiertas de cambios/cancelaciones (S6, 6), domicilio propio (S7, 10) y cobro (S8, 10). El texto normativo quedó en `docs/architecture/P2_ORDER_CHANGE_CANCELLATION_SLICE.md` §5.1, `P2_OWN_DELIVERY_OPERATION_SLICE.md` §8.1 y `P2_CAPTURE_PAYMENT_OPERATION_SLICE.md` §9.1; esos apartados son la autoridad y no se repiten aquí.
+- Líneas maestras: supervisor o gerente autorizan con motivo; cambio enviado = cancelar + reemplazo idempotente; KDS primario e impresora secundaria; refund como obligación pendiente, nunca atómico; zonas manuales con cargo fijo, ventana de 15 min, 2 intentos, sin entrega parcial; métodos piloto `cash|card_manual|transfer` con caja abierta, efectivo contra entrega registrado al liquidar el viaje, propina separada, resolución manual en 24 h, sin división de cuenta.
+- Siguen abiertas las 8 decisiones S5 (precio de fracciones/combos/agotados) y las 5 de S9 (roles/hardware/favoritos); Claude propondrá defaults del mismo modo.
+
 ## Orquestación multiagente — 2026-09-26
 
 - Emmanuel autorizó el 2026-09-26 un harness L0-L3 documentado en AGENTS.md §19.1 y concedió autonomía continua para Supabase, CodeGraph, escritura y comandos rutinarios dentro del alcance de las tareas; siguen requiriendo autorización push/merge/rebase, credenciales, deploy y borrado de datos reales.

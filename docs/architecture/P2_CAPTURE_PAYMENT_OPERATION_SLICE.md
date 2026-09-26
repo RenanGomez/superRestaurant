@@ -157,3 +157,18 @@ Cada incremento requiere pruebas unitarias de dominio, integración PostgreSQL, 
 10. Si la división por persona/productos entra al piloto y cómo se asigna sin alterar el ledger.
 
 S8.1–S8.2 pueden modelar intención y lectura sin elegir esas políticas. S8.3+ no debe ampliar SQL, estados persistidos, métodos, refunds o conciliación hasta resolver las decisiones aplicables.
+
+### 9.1. Decisiones aprobadas por Emmanuel el 2026-09-26
+
+1. Métodos del piloto: `cash`, `card_manual` (terminal externa) y `transfer`; los tres requieren caja abierta en la Branch.
+2. `card_manual` significa terminal externa ya aprobada; es obligatoria una referencia de autorización de al menos 6 caracteres.
+3. Una transferencia la confirma cajero o gerente contra el estado de cuenta; se conserva la referencia bancaria como evidencia.
+4. Anticipo sólo en pedidos programados, mínimo 50% del total, sin máximo; confirma el compromiso comercial y no libera cocina.
+5. El efectivo contra entrega se registra como Payment capturado al liquidar el viaje en caja, no en la recepción por el repartidor ni en la entrega.
+6. El repartidor responde por el efectivo que porta; las diferencias se registran como CashMovement con motivo y actor, nunca editando el Payment.
+7. Propina opcional en todos los canales y métodos, separada de venta y de cargo de entrega, sin impuesto.
+8. Intentos `pending`/`ambiguous` los resuelve manualmente el cajero o gerente en un máximo de 24 horas; sin proveedor, timeout automático ni webhook en el piloto.
+9. Void el mismo día por cajero; refund parcial o total por gerente, con motivo, al mismo método original; siempre como compensación persistida.
+10. Sin división de cuenta por persona o productos en el piloto.
+
+Con esto S8.3 a S8.6 quedan desbloqueados; S8.1c sigue esperando el total Capture autoritativo de S5.

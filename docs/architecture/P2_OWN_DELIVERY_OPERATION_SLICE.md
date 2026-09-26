@@ -145,3 +145,18 @@ Cada entrega requiere dominio, contrato, Nest+PostgreSQL, rollback-only, aislami
 10. Hardware/canal de impresión y evidencia de handoff/entrega del piloto.
 
 Hasta resolverlas, S7.0 no autoriza tablas, endpoint, cálculo monetario, job, asignación automática ni mutación financiera.
+
+### 8.1. Decisiones aprobadas por Emmanuel el 2026-09-26
+
+1. Cobertura por zonas manuales definidas por colonias y códigos postales por Branch; sin geocodificación ni polígonos en el piloto.
+2. Cargo de entrega fijo por zona en minor units, sin impuesto separado; propina opcional y separada; override del cargo sólo por gerente, con motivo auditado.
+3. Promesa como ventana de 15 minutos congelada en el quote; re-promesa manual con motivo y registro del retraso.
+4. Pedidos programados hasta 7 días adelante, cutoff de 30 minutos antes de la ventana, sin límite de capacidad en el piloto, zona horaria del Restaurant con DST resuelto por el servidor.
+5. "Listo para empacar" cuando todas las líneas están `ready` en KDS; el cajero libera; liberar con faltantes requiere supervisor y motivo.
+6. Repartidor es un rol de membership por Branch; máximo 4 órdenes por viaje; asignación y reasignación manuales, sin autoasignación.
+7. Dos intentos de entrega; contacto por el teléfono del snapshot; tras el segundo fallo la orden regresa a sucursal; PII de dirección retenida 180 días.
+8. Sin entrega parcial en el piloto: la orden se entrega completa o se registra incidencia.
+9. Contra entrega: efectivo y terminal externa. "Pagará con" registra el billete esperado y el cambio informativo; las diferencias se liquidan en caja al cierre del viaje.
+10. Ticket de handoff impreso en la impresora de mostrador; la evidencia de entrega es el registro del repartidor con timestamp, sin foto.
+
+Con esto S7.1 a S7.6 quedan desbloqueados en ese orden; S7.6 depende además de S8.3/S8.5.

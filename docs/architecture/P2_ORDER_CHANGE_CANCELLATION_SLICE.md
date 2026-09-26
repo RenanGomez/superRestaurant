@@ -91,6 +91,17 @@ Antes de codificar la política posterior al envío se requieren respuestas expl
 
 Hasta resolverlas, el comportamiento seguro existente se conserva: cancelación de `draft/open` solamente, autorización server-side para líneas enviadas, evento KDS durable y rechazo de órdenes `partially_paid|paid`. No se afirmará soporte de impresión, devolución o inventario.
 
+### 5.1. Decisiones aprobadas por Emmanuel el 2026-09-26
+
+1. Cancelar una línea `sent`, `preparing` o `ready` puede hacerlo supervisor o gerente; ambos con motivo obligatorio auditado. El cliente nunca autoriza.
+2. Inventario: `sent` no descuenta; `preparing` y `ready` registran merma que confirma el supervisor. Hasta que exista autoridad de recetas/inventario el efecto se declara `pending`.
+3. Un cambio sobre línea enviada siempre cancela la línea original y crea una línea reemplazo con identidad idempotente común; nunca se edita en sitio. Una operación puede terminar sólo en cancelación cuando el operador no añade reemplazo.
+4. Destinos: KDS es el destino primario; la impresora de cocina es opcional y secundaria; reimpresión manual siempre disponible.
+5. Si KDS confirma y la impresora falla, la orden continúa y la corrección queda marcada `reimprimir`; si la impresora confirma y KDS falla, KDS reintenta por cursor durable. Ninguna impresión sustituye la recuperación KDS.
+6. Con pago parcial o total capturado, la cancelación crea una obligación de refund `pending` vinculada a la corrección; no se exige compensación atómica. La línea queda cancelada y la obligación se resuelve en S8.6.
+
+Con esto S6.1b (contrato y matriz publicada) y S6.3 quedan desbloqueados; S6.4 sigue dependiendo de la autoridad financiera S8.6 y de inventario P4.
+
 ## 6. Criterios de salida
 
 - eliminar, cambiar y cancelar tienen contratos y auditorías distintos;
