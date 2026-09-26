@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import type {
   BranchScope,
   CaptureAssignmentCandidateV1,
@@ -28,6 +28,7 @@ import type {
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
   rehydrateCaptureWorkspace } from "../../../lib/capture-workspace";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
+import { ariaKeyShortcut, dispatchShortcut, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -65,6 +66,7 @@ interface CaptureWorkspaceParameters {
 type ActionReply = Awaited<ReturnType<CaptureWorkspaceParameters["action"]>>;
 
 export function CaptureWorkspace({ scope, action, confirmationContext, canManageAssignment }: CaptureWorkspaceParameters): ReactNode {
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [deviceId] = useState(() => captureDeviceId(typeof window === "undefined" ? undefined : window.localStorage,
     () => crypto.randomUUID()));
   const [busy, setBusy] = useState(false);
@@ -378,18 +380,40 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const canConfirm = confirmationContext !== undefined && selectedShiftId !== "" && fulfillmentChannel !== null
     && (fulfillmentChannel !== "dine_in" || selectedTableId !== "")
     && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null));
+  useEffect(() => {
+    const shortcuts: ShortcutTable = busy ? {} : error === "conflict" || capture?.status === "confirmed"
+      ? { reset: ariaKeyShortcut("reset") }
+      : capture === undefined ? { create: ariaKeyShortcut("create") }
+        : locked ? {} : { search: ariaKeyShortcut("search") };
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.defaultPrevented || event.repeat || event.shiftKey) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const id = dispatchShortcut({ key: event.key, ctrlKey: event.ctrlKey, metaKey: event.metaKey,
+        altKey: event.altKey, targetTag: target?.tagName,
+        targetIsEditable: target instanceof HTMLElement && target.isContentEditable }, shortcuts);
+      if (id === undefined) return;
+      event.preventDefault();
+      if (id === "create") create();
+      else if (id === "reset") reset();
+      else searchInputRef.current?.focus();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
   return <div className="flex flex-col gap-4" aria-busy={busy}>
     <div role={error === undefined ? "status" : "alert"} aria-live="polite"
       className={error === undefined ? "text-sm text-text-muted" : "rounded-lg border border-border bg-error-bg p-4 text-sm"}>
       {busy ? "Guardando en el servidor…" : error === undefined ? capture === undefined ? "Crea o recupera un borrador para comenzar."
         : `Borrador ${capture.folio} · versión ${capture.version}` : messages[error]}
       {pending !== undefined && <button className={`${button} ml-3`} onClick={retryPending}>Reintentar misma operación</button>}
-      {error === "conflict" && <button className={`${button} ml-3`} onClick={reset}>Volver a la bandeja</button>}
+      {(error === "conflict" || capture?.status === "confirmed") && <button className={`${button} ml-3`}
+        aria-keyshortcuts={ariaKeyShortcut("reset")} disabled={busy} onClick={reset}>Volver a la bandeja</button>}
     </div>
     {capture === undefined ? <>
       <section className={panel}><h2 className="font-heading text-lg font-semibold">Abrir captura</h2>
         <p className="my-2 text-sm text-text-muted">Crea un borrador durable para una llamada con entrega a domicilio.</p>
-        <button className={button} onClick={create} disabled={busy}>Nueva captura telefónica</button></section>
+        <button className={button} onClick={create} aria-keyshortcuts={ariaKeyShortcut("create")}
+          disabled={busy}>Nueva captura telefónica</button></section>
       {tray.length > 0 && <section className={panel}><h2 className="font-heading text-lg font-semibold">Borradores recuperables</h2>
         <p className="my-2 text-sm text-text-muted">Retoma una captura de esta sucursal. El servidor asignará un lease nuevo antes de editar.</p>
         <div className="grid gap-2">{tray.map((item) => <button key={item.captureDraftId} className={`${button} text-left`}
@@ -413,7 +437,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
               <textarea id="capture-takeover-reason" className={`${input} min-h-24 resize-y`} maxLength={500}
                 value={takeoverReason} onChange={(event) => setTakeoverReason(event.target.value)} disabled={busy} />
             </label>
-            <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1 min-h-5 min-w-5"
+            <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="min-h-5 min-w-5 shrink-0 focus-visible:outline-2 focus-visible:outline-accent"
               checked={takeoverConfirmed} onChange={(event) => setTakeoverConfirmed(event.target.checked)} disabled={busy} />
               Confirmo que el operador actual no puede continuar y que esta reasignación quedará auditada.
             </label>
@@ -453,7 +477,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
                 </option>)}
               </select>
             </label>
-            <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1 min-h-5 min-w-5"
+            <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="min-h-5 min-w-5 shrink-0 focus-visible:outline-2 focus-visible:outline-accent"
               checked={transferConfirmed} onChange={(event) => setTransferConfirmed(event.target.checked)} disabled={locked || transferTarget === ""} />
               Confirmo que el operador seleccionado continuará esta captura y que perderé el lease actual.
             </label>
@@ -547,9 +571,15 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         </form>
       </section>}
       <section className={panel}><h2 className="font-heading text-lg font-semibold">1. Buscar cliente</h2>
-        <form onSubmit={search} className="mt-3 flex flex-wrap gap-3"><select name="mode" className={input} disabled={locked}>
+        <form onSubmit={search} className="mt-3 flex flex-wrap gap-3"><label className="grid gap-1 text-sm" htmlFor="capture-search-mode">Buscar por
+          <select id="capture-search-mode" name="mode" className={input} disabled={locked}>
           <option value="phone">Teléfono</option><option value="name">Nombre</option><option value="address">Dirección</option></select>
-          <input name="query" required maxLength={200} className={`${input} min-w-48 flex-1`} placeholder="Teléfono, nombre o dirección" disabled={locked}/>
+          </label>
+          <label className="grid flex-1 gap-1 text-sm" htmlFor="capture-search-query">Consulta
+            <input id="capture-search-query" ref={searchInputRef} name="query" required maxLength={200}
+              aria-keyshortcuts={ariaKeyShortcut("search")} className={`${input} min-w-48 w-full`}
+              placeholder="Teléfono, nombre o dirección" disabled={locked}/>
+          </label>
           <button className={button} disabled={locked}>Buscar</button></form>
         {results !== undefined && <div className="mt-3 grid gap-2">{results.candidates.length === 0 ? <p className="text-sm">Sin coincidencias.</p>
           : results.candidates.map((item) => <button key={item.customerId} className={`${button} text-left`} disabled={locked}
@@ -612,6 +642,14 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       </section>}
       {capture.status === "draft" && <aside className="rounded-xl border border-[oklch(80%_0.08_75)] bg-[oklch(96%_0.03_75)] p-4 text-sm"><strong>Captura abierta.</strong> Los cambios guardados incrementan una versión; recargar exige recuperar un lease nuevo.</aside>}
     </>}
+    <details className={panel}>
+      <summary className="flex min-h-11 cursor-pointer items-center font-semibold focus-visible:outline-2 focus-visible:outline-accent">Atajos</summary>
+      <ul className="mt-2 grid gap-2 text-sm">
+        <li><kbd>N</kbd> — Nueva captura desde la bandeja.</li>
+        <li><kbd>/</kbd> — Enfocar la búsqueda de cliente en un borrador editable.</li>
+        <li><kbd>Esc</kbd> — Volver a la bandeja tras un conflicto o una captura confirmada.</li>
+      </ul>
+    </details>
   </div>;
 }
 

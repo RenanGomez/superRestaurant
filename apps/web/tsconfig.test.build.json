@@ -34,6 +34,8 @@
     "src/lib/login-error.test.ts",
     "src/lib/capture-workspace.ts",
     "src/lib/capture-workspace.test.ts",
+    "src/lib/shortcut-dispatch.ts",
+    "src/lib/shortcut-dispatch.test.ts",
     "src/lib/system-onboarding.ts",
     "src/lib/system-onboarding.test.ts",
     "src/lib/finance.ts",
