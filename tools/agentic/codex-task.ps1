@@ -74,6 +74,8 @@ if (-not (Test-Path (Join-Path $wt "node_modules"))) {
   Write-Host "pnpm install (offline-first) en $wt"
   Push-Location $wt
   pnpm install --frozen-lockfile --prefer-offline 2>&1 | Select-Object -Last 3
+  # Apps resolve workspace packages through their dist; build them once so typecheck/test work.
+  pnpm --filter "./packages/*" build 2>&1 | Select-Object -Last 3
   Pop-Location
 }
 $args = @("exec", "-C", $wt, "--add-dir", $gitDir, "-s", $sandbox, "-c", "approval_policy=`"never`"",
