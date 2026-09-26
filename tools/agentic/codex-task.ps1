@@ -82,8 +82,9 @@ $args = @("exec", "-C", $wt, "--add-dir", $gitDir, "-s", $sandbox, "-c", "approv
           "-c", "model_reasoning_effort=`"$Effort`"", "--json", "-o", $last)
 if ($Model) { $args += @("-m", $Model) }
 if ($Resume -and (Test-Path $threadFile)) {
-  $args = @("exec", "resume", (Get-Content $threadFile -Raw).Trim(), "-C", $wt, "--add-dir", $gitDir,
-            "-s", $sandbox, "-c", "approval_policy=`"never`"", "--json", "-o", $last)
+  # `exec resume` inherits cwd/sandbox from the recorded session and rejects -C/-s/--add-dir.
+  $args = @("exec", "resume", (Get-Content $threadFile -Raw).Trim(),
+            "-c", "approval_policy=`"never`"", "--json", "-o", $last, "-")
 }
 
 Write-Host "codex: $codex"
