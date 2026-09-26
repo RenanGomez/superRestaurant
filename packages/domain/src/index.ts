@@ -368,3 +368,27 @@ export { createCustomerProfile, normalizeCustomerPhone, snapshotCustomerParty, I
 export type { CustomerProfile, CustomerProfileInput, CustomerPhone, CustomerPhoneInput, CustomerPartySnapshot } from "./customer.js";
 export { createCustomerAddress, validateCustomerAddress, snapshotCustomerFulfillment } from "./customer.js";
 export type { CustomerAddressInput, CustomerAddress, CustomerAddressValidation, CustomerFulfillmentSnapshot } from "./customer.js";
+export {
+  InvalidDeliveryAddressFactsError,
+  InvalidDeliveryZoneFieldError,
+} from "./errors.js";
+export { createDeliveryZone, findDeliveryZone } from "./delivery-zone.js";
+export type { CreateDeliveryZoneInput, DeliveryAddressFacts, DeliveryZone } from "./delivery-zone.js";
+export {
+  DeliveryOverrideAuthorizationRequiredError,
+  DeliveryOverrideReasonRequiredError,
+  DeliveryScheduleCutoffError,
+  DeliveryScheduleExceedsHorizonError,
+  DeliveryScheduleInPastError,
+  InvalidDeliveryOverrideWindowError,
+  InvalidDeliveryQuoteFieldError,
+  InvalidDeliveryTimestampError,
+} from "./errors.js";
+export { applyDeliveryQuoteOverride, DELIVERY_QUOTE_EXPIRY_POLICY, quoteDelivery } from "./delivery-quote.js";
+export type {
+  ApplyDeliveryQuoteOverrideInput,
+  DeliveryQuote,
+  DeliveryQuoteCoverageStatus,
+  DeliveryQuoteOverride,
+  QuoteDeliveryInput,
+} from "./delivery-quote.js";
