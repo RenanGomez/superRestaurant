@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "delegator": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "claude-code-deepseek-delegator"],
+      "env": {
+        "DELEGATOR_CONFIG": "${CLAUDE_PROJECT_DIR}/.claude/delegator.json"
+      }
+    }
+  }
+}

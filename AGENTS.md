@@ -417,6 +417,30 @@ Usar el nivel mínimo de razonamiento suficiente:
 
 Registrar en HANDOFF.md subagentes, alcance y nivel. El agente principal sigue siendo responsable del resultado.
 
+### 19.1. Orquestación multiagente (vigente desde 2026-09-26)
+
+Autorizado por Emmanuel el 2026-09-26. Claude Fable en la sesión principal es el **orquestador (L0)**: planifica, arma paquetes de contexto, delega, revisa diffs, decide y mantiene TODO/PROJECT_NOTES/HANDOFF. **No edita código fuente**; el hook `.claude/hooks/guard-orchestrator-writes.js` rechaza `Write|Edit` fuera de documentos de seguimiento, `docs/**`, `.claude/**` y `tools/agentic/**` salvo que el agente sea `implementer-claude`.
+
+| Capa | Quién | Cuenta | Rol | Escribe código |
+|---|---|---|---|---|
+| L0 | Fable, sesión principal | Claude Pro | Planificar, delegar, revisar, documentar | No |
+| L1 | `.claude/agents/researcher.md` (haiku), `reviewer.md` (sonnet) | Claude Pro | Paquete de contexto; revisión de diffs. Solo lectura | No |
+| L1 | `.claude/agents/implementer-claude.md` (sonnet, worktree) | Claude Pro | Dinero, tenancy, SQL, sync, auth, refactors transversales | Sí |
+| L2 | `tools/agentic/codex-task.ps1` → `codex exec` | ChatGPT Plus (login, nunca `OPENAI_API_KEY`) | Implementación con aceptación cerrada: UI, tests, adaptadores, docs largos | Sí, en su worktree `C:\tmp\sr-wt\<task>` |
+| L3 | MCP `delegator` (OpenRouter) | OpenRouter, sólo `deepseek/deepseek-v4-flash` | Resúmenes de archivos >300 líneas, comparaciones, bucles de análisis | No, devuelve texto |
+
+Reglas:
+
+- todo prompt delegado sigue `docs/templates/CONTEXT_PACKET.md`; sin paquete no hay delegación;
+- un escritor por tarea y un worktree por tarea; el orquestador serializa tareas del mismo módulo;
+- L2 corre en paralelo cuando los paquetes no comparten archivos; cada corrida deja log en `.claude/runs/<task>/`;
+- el orquestador lee resultados con `git diff` y `reviewer`; nunca aplica cambios a mano;
+- L3 sólo recibe rutas absolutas en `files`, nunca contenido pegado, y sólo puede usar DeepSeek V4 Flash;
+- ningún subagente hace push, merge, rebase ni toca Supabase remoto; la integración de ramas `codex/*` y `claude/*` la hace L0 tras `VEREDICTO: APROBAR`;
+- si un archivo supera 300 líneas, L0 no lo lee completo: pide rango o resumen L3;
+- costo por tarea (tokens Codex/OpenRouter según logs y recibos) se anota en HANDOFF.
+- Sin `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` ni `ANTHROPIC_MODEL` en el entorno: Claude Code factura al plan Pro.
+
 ---
 
 ## 20. Definition of Done

@@ -76,3 +76,4 @@ Thumbs.db
 
 # Claude Code local worktrees
 .claude/worktrees/
+.claude/runs/

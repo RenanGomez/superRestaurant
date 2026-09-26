@@ -1,0 +1,10 @@
+{
+  "provider": "openrouter",
+  "mode": "manual",
+  "shortlist": ["deepseek/deepseek-v4-flash"],
+  "routing": {
+    "read": "deepseek/deepseek-v4-flash",
+    "reason": "deepseek/deepseek-v4-flash",
+    "write": "deepseek/deepseek-v4-flash"
+  }
+}
