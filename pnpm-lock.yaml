@@ -213,6 +213,22 @@ importers:
         specifier: 26.3.0
         version: 26.3.0
 
+  packages/printing:
+    dependencies:
+      '@super-restaurant/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@super-restaurant/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
+    devDependencies:
+      '@super-restaurant/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: 26.3.0
+        version: 26.3.0
+
   packages/shared-types:
     devDependencies:
       '@super-restaurant/config':
