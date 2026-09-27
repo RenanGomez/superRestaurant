@@ -21,6 +21,13 @@ export function ariaKeyShortcut(id: CaptureShortcutId): string {
   return shortcuts[id];
 }
 
+export type SearchFocusTarget = "customer" | "menu";
+
+/** When the menu step is visible, `/` should focus the product search instead of the customer search. */
+export function searchFocusTarget(menuVisible: boolean): SearchFocusTarget {
+  return menuVisible ? "menu" : "customer";
+}
+
 export function dispatchShortcut(event: ShortcutKey, table: ShortcutTable): CaptureShortcutId | undefined {
   if (event.ctrlKey || event.metaKey || event.altKey) return undefined;
   const editable = event.targetIsEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(event.targetTag?.toUpperCase() ?? "");

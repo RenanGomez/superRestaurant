@@ -53,6 +53,9 @@ export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onD
     </div>
     <div className="grid gap-2 p-3 pt-0">
       <button type="button" className={button} disabled={locked} onClick={onHold}>⏸ Dejar en espera</button>
+      {/* No "Sin venta" button here on purpose: there is no API operation to close a capture without a sale yet.
+          A disabled button with a "coming soon" tooltip would only add clutter; "Dejar en espera" already
+          covers leaving the ticket without confirming an order. Add it once the server supports the operation. */}
     </div>
   </>;
 

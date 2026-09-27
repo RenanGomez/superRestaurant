@@ -35,7 +35,7 @@ import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAuto
 import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
   type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
-import { ariaKeyShortcut, dispatchShortcut, type ShortcutTable } from "../../../lib/shortcut-dispatch";
+import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import { formatDeliveryQuote, quoteMatchesDeliverySnapshot } from "../../../lib/delivery-zones";
 import { deliveryZonesAction } from "../delivery-zones/actions";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
@@ -566,13 +566,14 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       event.preventDefault();
       if (id === "create") create();
       else if (id === "reset") reset();
+      else if (searchFocusTarget(capture?.status === "draft") === "menu") productSearchRef.current?.focus();
       else searchInputRef.current?.focus();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   });
   const menuConflict = error === "conflict" && errorOperation === "selectionPlan";
-  return <div className="flex flex-col gap-4" aria-busy={busy}>
+  return <div className={`flex flex-col gap-4 ${capture?.status === "draft" ? "pb-20 sm:pb-0" : ""}`} aria-busy={busy}>
     <div role={error === undefined ? "status" : "alert"} aria-live="polite"
       className={error === undefined ? "text-sm text-text-muted" : "rounded-lg border border-border bg-error-bg p-4 text-sm"}>
       {busy ? "Guardando en el servidor…" : error === undefined ? capture === undefined ? "Crea o recupera un borrador para comenzar."
@@ -658,9 +659,12 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); }}
         onAdd={(quantity, modifierGroups) => void addFromSheet(quantity, modifierGroups)} />}
       {capture.status === "draft" && canManageAssignment && <section className={panel} data-testid="capture-transfer">
-        <h2 className="font-heading text-lg font-semibold">Transferir captura</h2>
-        <p className="mt-1 text-sm text-text-muted">El operador destino recibirá un lease nuevo. Esta estación dejará de editar la captura.</p>
-        {assignmentCandidates.length === 0 ? <p className="mt-3 text-sm">No hay otro operador activo elegible en esta sucursal.</p>
+        <h2 className="font-heading text-lg font-semibold">Pasar la captura a otro operador</h2>
+        <p className="mt-1 text-sm text-text-muted">El otro operador la verá en su bandeja y podrá continuar donde la dejaste.</p>
+        {assignmentCandidates.length === 0 ? <div className="mt-3 flex flex-wrap items-center gap-3">
+            <p className="text-sm">Nadie más de esta sucursal tiene sesión activa ahora. Puedes dejarla en espera y otro operador la retomará desde la bandeja.</p>
+            <button type="button" className={button} disabled={locked} onClick={reset}>Dejar en espera</button>
+          </div>
           : <div className="mt-3 grid gap-3">
             <label className="grid gap-1 text-sm" htmlFor="capture-transfer-target">Operador destino
               <select id="capture-transfer-target" className={input} value={transferTarget}
@@ -858,7 +862,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       <summary className="flex min-h-11 cursor-pointer items-center font-semibold focus-visible:outline-2 focus-visible:outline-accent">Atajos</summary>
       <ul className="mt-2 grid gap-2 text-sm">
         <li><kbd>N</kbd> — Nueva captura desde la bandeja.</li>
-        <li><kbd>/</kbd> — Enfocar la búsqueda de cliente en un borrador editable.</li>
+        <li><kbd>/</kbd> — Enfocar la búsqueda de productos si el menú está visible; si no, la búsqueda de cliente.</li>
         <li><kbd>Esc</kbd> — Volver a la bandeja tras un conflicto o una captura confirmada.</li>
       </ul>
     </details>

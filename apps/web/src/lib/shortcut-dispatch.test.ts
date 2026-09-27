@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ariaKeyShortcut, dispatchShortcut, type ShortcutKey, type ShortcutTable } from "./shortcut-dispatch.js";
+import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutKey, type ShortcutTable } from "./shortcut-dispatch.js";
 
 const event: ShortcutKey = { key: "n", ctrlKey: false, metaKey: false, altKey: false,
   targetTag: "BODY", targetIsEditable: false };
@@ -35,6 +35,11 @@ test("typing in an editable control never starts another action, but Escape can 
   }
   assert.equal(dispatchShortcut({ ...event, targetTag: "DIV", targetIsEditable: true }, tray), undefined);
   assert.equal(dispatchShortcut({ ...event, key: "Escape", targetIsEditable: true }, conflict), "reset");
+});
+
+test("search focus target follows menu visibility", () => {
+  assert.equal(searchFocusTarget(true), "menu");
+  assert.equal(searchFocusTarget(false), "customer");
 });
 
 test("modifiers and unknown keys are ignored", () => {
