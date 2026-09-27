@@ -34,8 +34,14 @@ export class MigrationRollbackProbeError extends Error {
   }
 }
 
-function createProbeClient(config: SchemaVerificationConfig): Client {
-  return new Client({
+export interface MigrationRollbackProbeSession {
+  connect(): Promise<void>;
+  query(sql: string): Promise<unknown>;
+  end(): Promise<void>;
+}
+
+function createProbeClient(config: SchemaVerificationConfig): MigrationRollbackProbeSession {
+  const client = new Client({
     application_name: "super-restaurant-migration-rollback-probe",
     connectionTimeoutMillis: 15_000,
     connectionString: config.connectionString,
@@ -43,12 +49,17 @@ function createProbeClient(config: SchemaVerificationConfig): Client {
     ssl: config.caCertificate.length === 0 ? false : { ca: config.caCertificate, rejectUnauthorized: true },
     statement_timeout: 120_000,
   });
+  return {
+    connect: async (): Promise<void> => { await client.connect(); },
+    query: async (sql: string): Promise<unknown> => client.query(sql),
+    end: async (): Promise<void> => { await client.end(); },
+  };
 }
 
 export async function runMigrationRollbackProbe(
   migrationSql: string,
   config: SchemaVerificationConfig,
-  createClient: (config: SchemaVerificationConfig) => Client = createProbeClient,
+  createClient: (config: SchemaVerificationConfig) => MigrationRollbackProbeSession = createProbeClient,
 ): Promise<MigrationRollbackProbeResult> {
   const statements = extractMigrationStatements(migrationSql);
   const client = createClient(config);
@@ -100,7 +111,10 @@ function toProbeError(
     ? (error as { code: string }).code
     : undefined;
   const message = error instanceof Error ? error.message : "MIGRATION_ROLLBACK_PROBE_FAILED";
-  return new MigrationRollbackProbeError(stage, message, { sqlState, statementIndex });
+  return new MigrationRollbackProbeError(stage, message, {
+    ...(sqlState === undefined ? {} : { sqlState }),
+    ...(statementIndex === undefined ? {} : { statementIndex }),
+  });
 }
 
 async function main(): Promise<void> {
