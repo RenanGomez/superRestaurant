@@ -54,19 +54,36 @@ import {
   type SetCaptureDeliveryInstructionsCommandV1,
   type SetCaptureDeliveryInstructionsResultV1,
   type ConfirmCaptureDraftCommandV2,
+  parseCaptureWorkspaceRequestV4,
+  parseCaptureSelectionPlanV1,
+  parseCaptureSelectionPlanProjectionV1,
+  parseReplaceCaptureSelectionPlanCommandV1,
+  type CaptureWorkspaceRequestV4,
+  type CaptureWorkspaceV4,
+  type CaptureSelectionPlanProjectionModifierV1,
+  type CaptureSelectionPlanProjectionLineV1,
+  type CaptureSelectionPlanProjectionV1,
+  type CaptureSelectionPlanV1,
+  type ReplaceCaptureSelectionPlanCommandV1,
 } from "@super-restaurant/shared-types";
+import { calculateOrderItemTotals, createMenuProductPriceSnapshot } from "@super-restaurant/domain";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import {
   materializeCaptureOrder,
+  materializeCaptureSelectionOrder,
   parseCaptureRepeatSelectionPlan,
   type CaptureOrderMaterialization,
   type CaptureRepeatSelectionPlan,
 } from "./capture-repeat-order-plan.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
-import { decodeCaptureRecord, decodeCaptureWorkspace, decodeCaptureWorkspaceV2, decodeCaptureWorkspaceV3 } from "./persistence/capture-persistence-codec.js";
+import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
+import {
+  decodeCaptureRecord, decodeCaptureWorkspace, decodeCaptureWorkspaceV2, decodeCaptureWorkspaceV3,
+  decodeCaptureWorkspaceV4, withCaptureSelectionProjection,
+} from "./persistence/capture-persistence-codec.js";
 import { encodeOrderAuditEventRecord, encodeOrderRecord } from "./persistence/order-persistence-codec.js";
 
 export type CaptureApplicationErrorCode = "request" | "authorization" | "conflict" | "missing" | "unavailable";
@@ -82,6 +99,7 @@ export interface CaptureCreationPort {
   readWorkspace?(actorId: string, request: CaptureWorkspaceRequestV1): Promise<unknown>;
   readWorkspaceV2?(actorId: string, request: CaptureWorkspaceRequestV2): Promise<unknown>;
   readWorkspaceV3?(actorId: string, request: CaptureWorkspaceRequestV3): Promise<unknown>;
+  readWorkspaceV4?(actorId: string, request: CaptureWorkspaceRequestV4): Promise<unknown>;
 }
 export const CAPTURE_CREATION_PORT = Symbol("CAPTURE_CREATION_PORT");
 export type CaptureAttentionOperation = "capture.held" | "capture.claimed" | "capture.resumed"
@@ -113,6 +131,7 @@ export const CAPTURE_DELIVERY_INSTRUCTIONS_PORT = Symbol("CAPTURE_DELIVERY_INSTR
 export interface CaptureConfirmationPort {
   probeConfirmation(actorId: string, command: ConfirmCaptureDraftCommandV2): Promise<unknown>;
   readRepeatOrderPlan(actorId: string, request: CaptureWorkspaceRequestV3): Promise<unknown>;
+  readSelectionPlan(actorId: string, request: CaptureWorkspaceRequestV3): Promise<unknown>;
   confirmDraft(
     actorId: string,
     command: ConfirmCaptureDraftCommandV2,
@@ -120,6 +139,10 @@ export interface CaptureConfirmationPort {
   ): Promise<unknown>;
 }
 export const CAPTURE_CONFIRMATION_PORT = Symbol("CAPTURE_CONFIRMATION_PORT");
+export interface CaptureSelectionPlanPort {
+  replaceSelectionPlan(actorId: string, command: ReplaceCaptureSelectionPlanCommandV1): Promise<unknown>;
+}
+export const CAPTURE_SELECTION_PLAN_PORT = Symbol("CAPTURE_SELECTION_PLAN_PORT");
 export interface CaptureTrayPort { list(actorId: string, request: CaptureWorkTrayRequestV1): Promise<unknown>; }
 export const CAPTURE_TRAY_PORT = Symbol("CAPTURE_TRAY_PORT");
 export interface CaptureAssignmentDirectoryPort {
@@ -129,7 +152,7 @@ export const CAPTURE_ASSIGNMENT_DIRECTORY_PORT = Symbol("CAPTURE_ASSIGNMENT_DIRE
 const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 @Injectable()
-export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAttentionPort, CaptureCustomerPort, CaptureFulfillmentPort, CaptureDeliveryInstructionsPort, CaptureConfirmationPort, CaptureTrayPort, CaptureAssignmentDirectoryPort {
+export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAttentionPort, CaptureCustomerPort, CaptureFulfillmentPort, CaptureDeliveryInstructionsPort, CaptureConfirmationPort, CaptureTrayPort, CaptureAssignmentDirectoryPort, CaptureSelectionPlanPort {
   public constructor(@Inject(DATABASE_CLIENT) private readonly database: DatabaseClientPort) {}
 
   public async createDraft(actorId: string, input: CreateCaptureDraftCommandV1): Promise<unknown> {
@@ -190,6 +213,33 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     const response = await this.database.query(
       "select app_private.read_capture_workspace_v3($1::uuid, $2::jsonb) as result",
       [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async readWorkspaceV4(actorId: string, input: CaptureWorkspaceRequestV4): Promise<unknown> {
+    const request = parseCaptureWorkspaceRequestV4(input);
+    if (!canonicalUuid.test(actorId) || request === undefined) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.read_capture_workspace_v4($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async replaceSelectionPlan(actorId: string, input: ReplaceCaptureSelectionPlanCommandV1): Promise<unknown> {
+    const command = parseReplaceCaptureSelectionPlanCommandV1(input);
+    if (!canonicalUuid.test(actorId) || command === undefined) throw new CaptureApplicationError("request");
+    const { plan, ...envelope } = command;
+    const response = await this.database.query(
+      "select app_private.replace_capture_selection_plan($1::uuid, $2::jsonb, $3::jsonb) as result",
+      [actorId, JSON.stringify(envelope), JSON.stringify(plan)],
     );
     if (response.rows.length !== 1) throw unavailable();
     const row = exactRecord(response.rows[0], ["result"]);
@@ -299,6 +349,19 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     if (!canonicalUuid.test(actorId) || request === undefined) throw new CaptureApplicationError("request");
     const response = await this.database.query(
       "select app_private.read_capture_repeat_order_plan($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async readSelectionPlan(actorId: string, input: CaptureWorkspaceRequestV3): Promise<unknown> {
+    const request = parseCaptureWorkspaceRequestV3(input);
+    if (!canonicalUuid.test(actorId) || request === undefined) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.read_capture_selection_plan($1::uuid, $2::jsonb) as result",
       [actorId, JSON.stringify(request)],
     );
     if (response.rows.length !== 1) throw unavailable();
@@ -516,20 +579,21 @@ export class CaptureConfirmationService {
     if (probeStatus?.status === "rejected") throw new CaptureApplicationError("request");
     if (probeStatus?.status !== "pending") throw unavailable();
 
-    if (this.captures.readWorkspaceV3 === undefined) throw unavailable();
+    if (this.captures.readWorkspaceV4 === undefined) throw unavailable();
     const workspaceRequest = {
       schemaVersion: 3 as const, scope: command.scope, captureDraftId: command.captureDraftId,
     };
+    const workspaceRequestV4 = { schemaVersion: 4 as const, scope: command.scope, captureDraftId: command.captureDraftId };
     let rawWorkspace: unknown;
     try {
-      rawWorkspace = await this.captures.readWorkspaceV3(actorId, workspaceRequest);
+      rawWorkspace = await this.captures.readWorkspaceV4(actorId, workspaceRequestV4);
     } catch { throw unavailable(); }
     const statusOnly = exactRecord(rawWorkspace, ["status"]);
     if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
     if (statusOnly?.status === "missing") throw new CaptureApplicationError("missing");
     if (statusOnly !== undefined) throw unavailable();
-    let workspace: CaptureWorkspaceV3;
-    try { workspace = decodeCaptureWorkspaceV3(rawWorkspace, command.scope); } catch { throw unavailable(); }
+    let workspace: CaptureWorkspaceV4;
+    try { workspace = decodeCaptureWorkspaceV4(rawWorkspace, command.scope); } catch { throw unavailable(); }
     const detail = workspace.detail;
     if (detail.captureDraftId !== command.captureDraftId || detail.version !== command.expectedVersion
       || detail.status !== "draft" || detail.attentionStatus !== "claimed"
@@ -570,14 +634,158 @@ export class CaptureConfirmationService {
         || catalogState.scope.branchId !== command.scope.branchId) throw new CaptureApplicationError("conflict");
       catalog = catalogState.catalog;
     }
+    let selectionPlan: CaptureSelectionPlanV1 | null = null;
+    if (workspace.selectionPlan !== null) {
+      try {
+        const authorized = await this.authorization.authorizeBranch(principal, command.scope, "catalog.read");
+        if (authorized.principal.actorId !== actorId) throw new Error("actor mismatch");
+      } catch { throw new CaptureApplicationError("authorization"); }
+      let rawSelectionPlan: unknown;
+      try { rawSelectionPlan = await this.persistence.readSelectionPlan(actorId, workspaceRequest); } catch { throw unavailable(); }
+      const planEnvelope = exactRecord(rawSelectionPlan, ["status", "plan"]);
+      if (planEnvelope?.status !== "ok") {
+        const planStatus = exactRecord(rawSelectionPlan, ["status"]);
+        if (planStatus?.status === "denied") throw new CaptureApplicationError("authorization");
+        if (planStatus?.status === "missing") throw new CaptureApplicationError("conflict");
+        throw unavailable();
+      }
+      selectionPlan = parseCaptureSelectionPlanV1(planEnvelope.plan) ?? null;
+      if (selectionPlan === null || selectionPlan.catalogVersion !== workspace.selectionPlan.catalogVersion
+        || selectionPlan.lines.length !== workspace.selectionPlan.lineCount) throw unavailable();
+      let catalogState;
+      try { catalogState = await this.catalogs.read(actorId, command.scope); } catch { throw unavailable(); }
+      if (catalogState === "forbidden") throw new CaptureApplicationError("authorization");
+      if (catalogState.catalog === null || catalogState.scope.restaurantId !== command.scope.restaurantId
+        || catalogState.scope.branchId !== command.scope.branchId) throw new CaptureApplicationError("conflict");
+      catalog = catalogState.catalog;
+    }
     let materialization: CaptureOrderMaterialization;
     try {
-      materialization = materializeCaptureOrder(command, actorId, channel, plan, catalog);
-    } catch { throw new CaptureApplicationError(plan === null ? "request" : "conflict"); }
+      materialization = selectionPlan !== null
+        ? materializeCaptureSelectionOrder(command, actorId, channel, selectionPlan, catalog)
+        : materializeCaptureOrder(command, actorId, channel, plan, catalog);
+    } catch { throw new CaptureApplicationError((plan === null && selectionPlan === null) ? "request" : "conflict"); }
     let raw: unknown;
     try { raw = await this.persistence.confirmDraft(actorId, command, materialization); } catch { throw unavailable(); }
     return confirmationResult(raw, command);
   }
+}
+
+@Injectable()
+export class CaptureSelectionPlanService {
+  public constructor(
+    @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
+    @Inject(CAPTURE_SELECTION_PLAN_PORT) private readonly persistence: CaptureSelectionPlanPort,
+    @Inject(CAPTURE_CREATION_PORT) private readonly captures: CaptureCreationPort,
+    @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
+  ) {}
+
+  public async replace(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV4> {
+    const command = parseReplaceCaptureSelectionPlanCommandV1(input);
+    if (command === undefined) throw new CaptureApplicationError("request");
+    let actorId: string;
+    try {
+      const captureAuthorization = await this.authorization.authorizeBranch(principal, command.scope, "captures.update");
+      const catalogAuthorization = await this.authorization.authorizeBranch(principal, command.scope, "catalog.read");
+      if (captureAuthorization.principal.actorId !== catalogAuthorization.principal.actorId) throw new Error("actor mismatch");
+      actorId = captureAuthorization.principal.actorId;
+    } catch { throw new CaptureApplicationError("authorization"); }
+
+    let catalogState;
+    try { catalogState = await this.catalogs.read(actorId, command.scope); } catch { throw unavailable(); }
+    if (catalogState === "forbidden") throw new CaptureApplicationError("authorization");
+    if (catalogState.catalog === null || catalogState.scope.restaurantId !== command.scope.restaurantId
+      || catalogState.scope.branchId !== command.scope.branchId) throw new CaptureApplicationError("conflict");
+    const catalog = catalogState.catalog;
+    if (catalog.catalogVersion !== command.plan.catalogVersion) throw new CaptureApplicationError("conflict");
+
+    // Validate and price every line against the live, published catalog before persisting anything: an
+    // inactive product/option or a group outside its configured limits fails closed with 409, never a
+    // silent reprice or a partially-applied plan.
+    const projection = command.plan.lines.length === 0
+      ? null
+      : priceSelectionPlan(command.plan, catalog, command.scope.restaurantId);
+
+    let raw: unknown;
+    try { raw = await this.persistence.replaceSelectionPlan(actorId, command); } catch { throw unavailable(); }
+    const envelope = exactRecord(raw, ["status", "record"]);
+    if (envelope?.status !== "applied" && envelope?.status !== "replayed") {
+      const statusOnly = exactRecord(raw, ["status"]);
+      if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
+      if (statusOnly?.status === "conflict") throw new CaptureApplicationError("conflict");
+      if (statusOnly?.status === "rejected") throw new CaptureApplicationError("request");
+      throw unavailable();
+    }
+
+    if (this.captures.readWorkspaceV4 === undefined) throw unavailable();
+    const workspaceRequest = { schemaVersion: 4 as const, scope: command.scope, captureDraftId: command.captureDraftId };
+    let rawWorkspace: unknown;
+    try { rawWorkspace = await this.captures.readWorkspaceV4(actorId, workspaceRequest); } catch { throw unavailable(); }
+    const statusOnly = exactRecord(rawWorkspace, ["status"]);
+    if (statusOnly !== undefined) throw unavailable();
+    let workspace: CaptureWorkspaceV4;
+    try { workspace = decodeCaptureWorkspaceV4(rawWorkspace, command.scope); } catch { throw unavailable(); }
+    if (workspace.detail.captureDraftId !== command.captureDraftId
+      || workspace.detail.version !== command.expectedVersion + 1
+      || workspace.selectionPlan === null
+      || workspace.selectionPlan.lineCount !== command.plan.lines.length
+      || workspace.selectionPlan.catalogVersion !== command.plan.catalogVersion) throw unavailable();
+    return withCaptureSelectionProjection(workspace, projection);
+  }
+}
+
+/** Prices every line of a validated selection plan against the live catalog; throws a typed 409 on any mismatch. */
+function priceSelectionPlan(
+  plan: CaptureSelectionPlanV1,
+  catalog: MenuCatalogV1,
+  restaurantId: string,
+): CaptureSelectionPlanProjectionV1 {
+  if (plan.lines.some((line) => line.variantId !== null)) throw new CaptureApplicationError("conflict");
+  const domainCatalog = toDomainMenuCatalog(catalog, restaurantId);
+  let subtotalMinor = 0;
+  const lines: CaptureSelectionPlanProjectionLineV1[] = [];
+  for (const line of plan.lines) {
+    let snapshot;
+    try {
+      snapshot = createMenuProductPriceSnapshot(domainCatalog, {
+        currency: catalog.currency, productId: line.productId, restaurantId,
+      }, line.modifierGroups);
+    } catch { throw new CaptureApplicationError("conflict"); }
+    const totals = calculateOrderItemTotals({ orderItemId: line.lineId, quantity: line.quantity, snapshot });
+    subtotalMinor += totals.subtotalBeforeTax.amountMinor;
+    const modifiers: CaptureSelectionPlanProjectionModifierV1[] = [];
+    for (const modifier of snapshot.modifiers) {
+      if (modifier.groupId === undefined) throw unavailable();
+      modifiers.push({
+        groupId: modifier.groupId,
+        name: modifier.name,
+        optionId: modifier.modifierId,
+        quantity: modifier.quantity,
+        unitPriceMinor: modifier.unitPrice.amountMinor,
+      });
+    }
+    lines.push({
+      lineId: line.lineId,
+      lineTotalMinor: totals.subtotalBeforeTax.amountMinor,
+      modifiers,
+      note: line.note,
+      productId: line.productId,
+      productName: snapshot.name,
+      quantity: line.quantity,
+      unitPriceMinor: snapshot.unitPrice.amountMinor,
+      variantId: line.variantId,
+    });
+  }
+  const projection = parseCaptureSelectionPlanProjectionV1({
+    catalogVersion: plan.catalogVersion,
+    currency: catalog.currency,
+    lineCount: lines.length,
+    lines,
+    schemaVersion: 1,
+    subtotalMinor,
+  });
+  if (projection === undefined) throw unavailable();
+  return projection;
 }
 
 @Injectable()

@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
-import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkspaceRequestV3, parseCaptureWorkTrayRequestV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1, parseTakeoverCaptureDraftCommandV1, parseTransferCaptureDraftCommandV1, type MembershipRoleCode } from "@super-restaurant/shared-types";
+import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkspaceRequestV3, parseCaptureWorkTrayRequestV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseReplaceCaptureSelectionPlanCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1, parseTakeoverCaptureDraftCommandV1, parseTransferCaptureDraftCommandV1, type MembershipRoleCode, type MenuCatalogV1 } from "@super-restaurant/shared-types";
 
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
 import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort, type CaptureSelectionPlanPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
@@ -511,18 +511,19 @@ test("capture confirmation probes replay and delegates one atomic persistence co
     timeZone: "America/Hermosillo",
   });
   assert.ok(confirmCommand);
-  const workspaceV3 = { ...workspace, schemaVersion: 3 as const,
+  const workspaceV4 = { ...workspace, schemaVersion: 4 as const,
     detail: { ...fulfillmentRecord.detail, schemaVersion: 2 as const, fulfillmentChannel: "delivery" as const,
-      deliveryInstructions: "Portón lateral" }, repeatOrderPlan: null };
+      deliveryInstructions: "Portón lateral" }, repeatOrderPlan: null, selectionPlan: null };
   const confirmedRecord = { ...autosaveRecord, detail: { ...autosaveRecord.detail, status: "confirmed",
     attentionStatus: "unclaimed", ownerMembershipId: null, attentionLeaseId: null,
     attentionLeaseExpiresAt: null, confirmedOrderId: confirmCommand.orderId } };
   let persisted: { actorId: string; command: unknown; materialization: CaptureOrderMaterialization } | undefined;
   const service = new CaptureConfirmationService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
-  }), { createDraft: async () => ({}), readWorkspaceV3: async () => workspaceV3 }, {
+  }), { createDraft: async () => ({}), readWorkspaceV4: async () => workspaceV4 }, {
     probeConfirmation: async () => ({ status: "pending" }),
     readRepeatOrderPlan: async () => { throw new Error("must not read a repeat plan"); },
+    readSelectionPlan: async () => { throw new Error("must not read a selection plan"); },
     confirmDraft: async (actorId, parsed, materialization) => {
       persisted = { actorId, command: parsed, materialization };
       return { status: "applied", record: confirmedRecord };
@@ -554,6 +555,103 @@ test("capture confirmation probes replay and delegates one atomic persistence co
     status: "applied", record: confirmedRecord,
   });
   await assert.rejects(service.confirm(principal, { ...confirmCommand, tableId: validCommand.captureDraftId }), code("conflict"));
+});
+
+const selectionCatalog: MenuCatalogV1 = {
+  catalogVersion: "47f7f293-b155-42b9-bdc7-f9be3846f44e",
+  currency: "MXN",
+  replayed: false,
+  updatedAt: "2026-09-24T11:59:00.000Z",
+  updatedBy: principal.actorId,
+  version: 3,
+  categories: [{ categoryId: "a409ec59-9f5e-496d-a45d-b83a46b49674", name: "Comida", active: true, displayOrder: 0 }],
+  products: [{
+    productId: "ec5e7c30-edac-4b79-bf8c-e363b041c59f",
+    categoryId: "a409ec59-9f5e-496d-a45d-b83a46b49674",
+    name: "Tacos vigentes", sku: "TACO-1", active: true, displayOrder: 0,
+    stationId: "hot", unit: "piece", unitPriceMinor: 4_500, tax: null,
+  }],
+  modifierGroups: [],
+};
+const selectionPlanCommand = parseReplaceCaptureSelectionPlanCommandV1({
+  schemaVersion: 1,
+  scope: validCommand.scope,
+  captureDraftId: validCommand.captureDraftId,
+  expectedVersion: 1,
+  attentionLeaseId: validCommand.deviceId,
+  eventId: "0438d8ac-a86d-4f5b-8b26-1a35f9d82a39",
+  idempotencyKey: "0e22dfd1-9064-4fa8-86da-8fcce41fe821",
+  deviceId: validCommand.deviceId,
+  occurredAt: "2026-09-24T12:00:00.000Z",
+  plan: {
+    schemaVersion: 1,
+    catalogVersion: selectionCatalog.catalogVersion,
+    lines: [{
+      lineId: "60a26e69-3ea6-4ef8-8a2b-ad43ba0a0da1",
+      productId: selectionCatalog.products[0]!.productId,
+      variantId: null,
+      quantity: 2,
+      modifierGroups: [],
+      note: null,
+    }],
+  },
+});
+assert.ok(selectionPlanCommand);
+
+test("capture selection plan prices every line against the live catalog before persisting", async () => {
+  const workspaceV4Record = {
+    schemaVersion: 4,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+  };
+  let persistedCommand: unknown;
+  const persistence: CaptureSelectionPlanPort = {
+    replaceSelectionPlan: async (actorId, submittedCommand) => {
+      assert.equal(actorId, principal.actorId);
+      persistedCommand = submittedCommand;
+      return { status: "applied", record: workspaceV4Record.detail };
+    },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => workspaceV4Record,
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } });
+  const result = await service.replace(principal, selectionPlanCommand);
+  assert.deepEqual(persistedCommand, selectionPlanCommand);
+  assert.equal(result.selectionPlan?.lineCount, 1);
+  assert.equal(result.selectionProjection?.subtotalMinor, 9_000);
+  assert.equal(result.selectionProjection?.lines[0]?.productName, "Tacos vigentes");
+  assert.equal(result.selectionProjection?.lines[0]?.unitPriceMinor, 4_500);
+
+  await assert.rejects(new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, {
+    read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: { ...selectionCatalog, catalogVersion: validCommand.deviceId } }),
+    save: async () => { throw new Error("must not save a catalog"); },
+  }).replace(principal, selectionPlanCommand), code("conflict"));
+
+  await assert.rejects(new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["viewer"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => { throw new Error("must not read"); },
+    save: async () => { throw new Error("must not save"); } }).replace(principal, selectionPlanCommand), code("authorization"));
+
+  const variantCommand = parseReplaceCaptureSelectionPlanCommandV1({
+    ...selectionPlanCommand,
+    plan: { ...selectionPlanCommand.plan, lines: [{ ...selectionPlanCommand.plan.lines[0]!, variantId: selectionCatalog.products[0]!.productId }] },
+  });
+  assert.ok(variantCommand);
+  await assert.rejects(new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }).replace(principal, variantCommand), code("conflict"));
 });
 
 test("capture tray authorizes, binds scope and rejects hostile persistence", async () => {
@@ -640,6 +738,7 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
     CaptureFulfillmentService,
     CaptureDeliveryInstructionsService,
     CaptureConfirmationService,
+    CaptureSelectionPlanService,
     CaptureTrayService,
     CaptureAssignmentDirectoryService,
     { provide: CAPTURE_CUSTOMER_PORT, useValue: { setCustomer: async () => customerOutcome } },
@@ -653,7 +752,11 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
     { provide: CAPTURE_CONFIRMATION_PORT, useValue: {
       probeConfirmation: async () => ({ status: "conflict" }),
       readRepeatOrderPlan: async () => ({ status: "missing" }),
+      readSelectionPlan: async () => ({ status: "missing" }),
       confirmDraft: async () => ({ status: "conflict" }),
+    } },
+    { provide: CAPTURE_SELECTION_PLAN_PORT, useValue: {
+      replaceSelectionPlan: async () => ({ status: "conflict" }),
     } },
     { provide: MENU_CATALOG_PORT, useValue: {
       read: async () => "forbidden",
