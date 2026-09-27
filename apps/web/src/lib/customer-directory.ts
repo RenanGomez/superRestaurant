@@ -15,6 +15,7 @@ export type CustomerRequestResult<T> = { readonly ok: true; readonly value: T }
 
 export interface CustomerDirectorySuggestion {
   readonly id: string;
+  readonly customerId: string;
   readonly value: string;
   readonly context: string;
 }
@@ -84,8 +85,9 @@ export function getCustomerDirectorySuggestions(
       const normalizedValue = normalizedTerm(mode === "phone" ? value.replace(/\D/gu, "") : value);
       const normalizedPrefix = mode === "phone" ? input.replace(/\D/gu, "") : prefix;
       const matchesPrefix = mode === "phone" ? normalizedValue.includes(normalizedPrefix) : normalizedValue.startsWith(normalizedPrefix);
-      if (!matchesPrefix || completed.includes(normalizedValue) || suggestions.has(normalizedValue)) continue;
-      suggestions.set(normalizedValue, { id: `${mode}-${suggestions.size}-${normalizedValue}`, value, context });
+      const suggestionKey = `${candidate.customerId}:${normalizedValue}`;
+      if (!matchesPrefix || completed.includes(normalizedValue) || suggestions.has(suggestionKey)) continue;
+      suggestions.set(suggestionKey, { id: `${mode}-${suggestions.size}-${normalizedValue}`, customerId: candidate.customerId, value, context });
       if (suggestions.size >= Math.min(limit, 10)) return [...suggestions.values()];
     }
   }

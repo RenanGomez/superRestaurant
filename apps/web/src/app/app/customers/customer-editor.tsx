@@ -1,14 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode, type FormEvent, type KeyboardEvent } from "react";
-import type { BranchScope, CustomerDirectoryDetailV1, CustomerDirectoryDetailAddressV1, CustomerDirectorySearchResultV1, CustomerPhoneInputV1, CustomerAddressFieldsV1, CustomerSearchModeV1 } from "@super-restaurant/shared-types";
-import { getCustomerAutocompleteRequest, getCustomerDirectorySuggestions, insertCustomerDirectorySuggestion, isCurrentCustomerAutocompleteRequest, type CustomerAutocompleteRequest, type CustomerRequestResult } from "../../../lib/customer-directory";
+import Link from "next/link";
+import type { BranchScope, CustomerDirectoryDetailV1, CustomerDirectoryDetailAddressV1, CustomerDirectorySearchResultV1, CustomerRecentOrderListV1, CustomerPhoneInputV1, CustomerAddressFieldsV1, CustomerSearchModeV1 } from "@super-restaurant/shared-types";
+import { getCustomerAutocompleteRequest, getCustomerDirectorySuggestions, insertCustomerDirectorySuggestion, isCurrentCustomerAutocompleteRequest, type CustomerAutocompleteRequest, type CustomerDirectorySuggestion, type CustomerRequestResult } from "../../../lib/customer-directory";
 
 export type CustomerAction = "search" | "detail" | "profile" | "address" | "validate";
 export type CustomerActionResult = CustomerRequestResult<CustomerDirectorySearchResultV1 | CustomerDirectoryDetailV1> & { readonly command?: unknown };
 export interface CustomerEditorProps {
   readonly scope: BranchScope;
+  readonly branchName: string;
   readonly action: (operation: CustomerAction, input: unknown) => Promise<CustomerActionResult>;
+  readonly historyAction: (input: unknown) => Promise<{ ok: true; value: CustomerRecentOrderListV1 } | { ok: false }>;
 }
 const inputClass = "min-h-11 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-accent";
 const buttonClass = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
@@ -21,9 +24,10 @@ const messages = {
   unavailable: "No se pudo confirmar el resultado. Mantén esta página abierta y reintenta la operación para confirmar su resultado.",
 };
 
-export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNode {
+export function CustomerEditor({ scope, branchName, action, historyAction }: CustomerEditorProps): ReactNode {
   const [busy, setBusy] = useState(false);
   const [busyOperation, setBusyOperation] = useState<CustomerAction>();
+  const [validatingAddressId, setValidatingAddressId] = useState<string>();
   const [deviceId] = useState(() => crypto.randomUUID());
   const [error, setError] = useState<keyof typeof messages>();
   const [notice, setNotice] = useState("");
@@ -31,6 +35,10 @@ export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNod
   const [detail, setDetail] = useState<CustomerDirectoryDetailV1>();
   const [creating, setCreating] = useState(false);
   const [addingAddress, setAddingAddress] = useState(false);
+  const [createdCustomerId, setCreatedCustomerId] = useState<string>();
+  const [addressFeedback, setAddressFeedback] = useState<{ addressId: string; message: string; error: boolean }>();
+  const [history, setHistory] = useState<CustomerRecentOrderListV1>();
+  const [historyState, setHistoryState] = useState<"loading" | "ready" | "error">("loading");
   const [pending, setPending] = useState<{ operation: CustomerAction; command: unknown }>();
   const [search, setSearch] = useState<{ mode: CustomerSearchModeV1; query: string }>();
   const [searchMode, setSearchMode] = useState<CustomerSearchModeV1>("phone");
@@ -48,6 +56,16 @@ export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNod
     && isCurrentCustomerAutocompleteRequest(autocompleteResult.request, searchMode, searchQuery) ? autocompleteResult.value : undefined;
   const suggestions = useMemo(() => getCustomerDirectorySuggestions(suggestionResult, searchMode, searchQuery), [suggestionResult, searchMode, searchQuery]);
   const locked = busy || pending !== undefined || error === "denied";
+
+  useEffect(() => {
+    if (detail === undefined) { setHistory(undefined); return; }
+    let current = true;
+    setHistory(undefined); setHistoryState("loading");
+    void historyAction({ schemaVersion: 1, scope, customerId: detail.customer.customerId, limit: 10 })
+      .then(reply => { if (current) { if (reply.ok) { setHistory(reply.value); setHistoryState("ready"); } else setHistoryState("error"); } })
+      .catch(() => { if (current) setHistoryState("error"); });
+    return () => { current = false; };
+  }, [detail?.customer.customerId, historyAction, scope]);
 
   useEffect(() => {
     autocompleteSequence.current += 1;
@@ -74,20 +92,24 @@ export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNod
   async function run(operation: CustomerAction, command: unknown): Promise<void> {
     if (busy) return;
     setBusy(true); setBusyOperation(operation); setError(undefined); setNotice("");
+    if (operation === "validate" && typeof command === "object" && command !== null && "addressId" in command && typeof command.addressId === "string") setValidatingAddressId(command.addressId);
+    if (operation === "address" || operation === "detail") setAddressFeedback(undefined);
     let reply: CustomerActionResult;
     try { reply = await action(operation, command); }
     catch { reply = { ok: false, error: "unavailable", command }; }
-    setBusy(false); setBusyOperation(undefined);
+    setBusy(false); setBusyOperation(undefined); setValidatingAddressId(undefined);
     if (!reply.ok) {
       setError(reply.error);
+      if (operation === "validate" && typeof command === "object" && command !== null && "addressId" in command && typeof command.addressId === "string")
+        setAddressFeedback({ addressId: command.addressId, message: messages[reply.error], error: true });
       setSuggestionsOpen(false);
       if (reply.error === "unavailable" && ["profile", "address", "validate"].includes(operation)) setPending({ operation, command: reply.command ?? command });
       else setPending(undefined);
       return;
     }
     setPending(undefined);
-    if ("candidates" in reply.value) { setResult(reply.value); setDetail(undefined); setCreating(false); setAddingAddress(false); setActiveSuggestion(-1); setSuggestionsOpen(document.activeElement === searchInputRef.current); }
-    else { setDetail(reply.value); setCreating(false); if (operation === "detail" || operation === "address") setAddingAddress(false); if (operation !== "detail") setNotice(operation === "validate" ? "Dirección validada para esta sucursal. Se confirmó la atestación operativa; esto no sustituye geocodificación ni cálculo de cobertura." : "Ficha guardada. Las direcciones editadas requieren validación nuevamente."); }
+    if ("candidates" in reply.value) { setResult(reply.value); setDetail(undefined); setCreating(false); setCreatedCustomerId(undefined); setAddingAddress(false); setActiveSuggestion(-1); setSuggestionsOpen(document.activeElement === searchInputRef.current); }
+    else { setDetail(reply.value); if (operation === "profile" && creating) setCreatedCustomerId(reply.value.customer.customerId); setCreating(false); if (operation === "detail" || operation === "address") setAddingAddress(false); if (operation === "validate" && typeof command === "object" && command !== null && "addressId" in command && typeof command.addressId === "string") setAddressFeedback({ addressId: command.addressId, message: `Dirección validada en ${branchName}.`, error: false }); if (operation !== "detail") setNotice(operation === "validate" ? "Dirección validada para esta sucursal." : "Ficha guardada. Las direcciones editadas requieren validación nuevamente."); }
   }
   function base(customerId: string, expectedVersion: number) {
     return { schemaVersion: 1, scope, customerId, expectedVersion, deviceId,
@@ -100,11 +122,11 @@ export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNod
     setSearch({ query, mode: searchMode });
     void run("search", { schemaVersion: 1, scope, mode: searchMode, query, limit: 20, cursor: null });
   }
-  function acceptSuggestion(value: string): void {
-    setSearchQuery(insertCustomerDirectorySuggestion(searchQuery, value, searchMode));
+  function acceptSuggestion(suggestion: CustomerDirectorySuggestion): void {
+    setSearchQuery(insertCustomerDirectorySuggestion(searchQuery, suggestion.value, searchMode));
     setActiveSuggestion(-1);
-    setSuggestionsOpen(true);
-    searchInputRef.current?.focus();
+    setSuggestionsOpen(false);
+    read(suggestion.customerId);
   }
   function searchKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
     if (event.key === "Escape") { setSuggestionsOpen(false); setActiveSuggestion(-1); return; }
@@ -119,7 +141,7 @@ export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNod
       setActiveSuggestion(current => current > 0 ? current - 1 : suggestions.length - 1);
     } else {
       const suggestion = suggestions[activeSuggestion];
-      if (suggestion !== undefined) acceptSuggestion(suggestion.value);
+      if (suggestion !== undefined) acceptSuggestion(suggestion);
     }
   }
   return <div className="flex min-w-0 flex-col gap-4" aria-busy={busy}>
@@ -128,6 +150,7 @@ export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNod
       {pending !== undefined && <button className={`${buttonClass} mt-3 block`} disabled={busy} onClick={() => void run(pending.operation, pending.command)}>Reintentar la misma operación</button>}
       {error === "conflict" && detail !== undefined && <button className={`${buttonClass} mt-3 block`} disabled={busy} onClick={() => read(detail.customer.customerId)}>Recargar ficha</button>}
     </div>
+    <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
     <section className={panelClass} aria-labelledby="customer-search-title">
       <h2 id="customer-search-title" className="mb-3 font-heading text-lg font-semibold">Buscar cliente</h2>
       <form onSubmit={searchSubmit} className="flex flex-wrap items-end gap-3">
@@ -142,8 +165,8 @@ export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNod
           {suggestionsOpen && suggestions.length > 0 && <ul id="customer-search-suggestions" role="listbox" aria-label="Sugerencias del resultado autorizado" className="absolute left-0 right-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg">
             {suggestions.map((suggestion, index) => <li key={suggestion.id} role="presentation">
               <button id={`customer-suggestion-${suggestion.id}`} type="button" role="option" aria-selected={activeSuggestion === index}
-                className={`min-h-11 w-full rounded-md px-3 py-2 text-left ${activeSuggestion === index ? "bg-bg" : "hover:bg-bg"}`}
-                onMouseDown={event => event.preventDefault()} onPointerMove={() => setActiveSuggestion(index)} onClick={() => acceptSuggestion(suggestion.value)}>
+                className={`min-h-11 w-full rounded-md px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-accent ${activeSuggestion === index ? "bg-bg" : "hover:bg-bg"}`}
+                onMouseDown={event => event.preventDefault()} onPointerMove={() => setActiveSuggestion(index)} onClick={() => acceptSuggestion(suggestion)}>
                 <span className="block font-semibold">{suggestion.value}</span><span className="block text-xs text-text-muted">De {suggestion.context}</span>
               </button>
             </li>)}
@@ -151,7 +174,7 @@ export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNod
           <span aria-live="polite" className="text-xs text-text-muted">{autocompleteLoading ? "Buscando sugerencias autorizadas…" : ""}</span>
         </label>
         <button className={buttonClass} disabled={locked}>Buscar</button>
-        <button type="button" className={buttonClass} disabled={locked} onClick={() => { setDetail(undefined); setCreating(true); setNotice(""); setError(undefined); }}>Alta rápida</button>
+        <button type="button" className={buttonClass} disabled={locked} onClick={() => { setDetail(undefined); setCreating(true); setCreatedCustomerId(undefined); setNotice(""); setError(undefined); }}>Alta rápida</button>
       </form>
       <p className="mt-3 text-xs text-text-muted">Un teléfono puede pertenecer a varias personas. Revisa nombre y dirección y elige una ficha explícitamente.</p>
       {result !== undefined && <div className="mt-4 flex flex-col gap-2">
@@ -165,6 +188,8 @@ export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNod
         {result.nextCursor !== null && search !== undefined && <button className={buttonClass} disabled={locked} onClick={() => void run("search", { schemaVersion: 1, scope, ...search, limit: 20, cursor: result.nextCursor })}>Siguiente página de coincidencias</button>}
       </div>}
     </section>
+    <div className="flex min-w-0 flex-col gap-4">
+    {createdCustomerId !== undefined && detail?.customer.customerId === createdCustomerId && <Link href="/app/capture" className={`${buttonClass} inline-flex items-center justify-center`}>Ir a captura telefónica</Link>}
     {(creating || detail !== undefined) && <ProfileForm key={detail === undefined ? "new" : `${detail.customer.customerId}/${detail.customer.version}`} customer={detail?.customer} disabled={locked} onSave={(name, phones) => {
       const customerId = detail?.customer.customerId ?? crypto.randomUUID();
       void run("profile", { ...base(customerId, detail?.customer.version ?? 0), displayName: name, phones });
@@ -173,7 +198,7 @@ export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNod
       <h2 id="customer-address-title" className="font-heading text-lg font-semibold">Direcciones · {detail.customer.displayName}</h2>
       <p className="mt-1 text-sm text-text-muted">Guarda datos incompletos durante la llamada. Validar registra que la sucursal revisó esta dirección; no geocodifica ni garantiza por sí solo la zona de reparto. Cada edición elimina la validación anterior.</p>
       {detail.addressesTruncated && <p role="status" className="mt-2 text-sm">Se muestran las primeras 20 direcciones. Hay más direcciones en la ficha.</p>}
-      <div className="mt-4 flex flex-col gap-4">{detail.addresses.map(address => <AddressForm key={`${address.addressId}/${address.version}`} item={address} disabled={locked}
+      <div className="mt-4 flex flex-col gap-4">{detail.addresses.map(address => <AddressForm key={`${address.addressId}/${address.version}`} item={address} branchName={branchName} feedback={addressFeedback?.addressId === address.addressId ? addressFeedback : undefined} validating={validatingAddressId === address.addressId} disabled={locked}
         onSave={fields => void run("address", { ...base(detail.customer.customerId, address.version), addressId: address.addressId, address: fields })}
         onValidate={() => void run("validate", { ...base(detail.customer.customerId, address.version), addressId: address.addressId })} />)}
         {addingAddress && <AddressForm key={`new/${detail.customer.customerId}/${detail.addresses.length}`} disabled={locked} onCancel={() => setAddingAddress(false)}
@@ -181,6 +206,17 @@ export function CustomerEditor({ scope, action }: CustomerEditorProps): ReactNod
       </div>
       {!addingAddress && <button type="button" className={`${buttonClass} mt-4`} disabled={locked} onClick={() => setAddingAddress(true)}>+ Nueva dirección</button>}
     </section>}
+    {detail !== undefined && <section className={panelClass} aria-labelledby="customer-history-title">
+      <h2 id="customer-history-title" className="font-heading text-lg font-semibold">Historial reciente</h2>
+      {historyState === "loading" && <p role="status" className="mt-2 text-sm text-text-muted">Cargando historial…</p>}
+      {historyState === "error" && <p role="alert" className="mt-2 text-sm text-error">No se pudo cargar el historial. Vuelve a abrir la ficha para reintentar.</p>}
+      {historyState === "ready" && history?.orders.length === 0 && <p className="mt-2 text-sm text-text-muted">Sin pedidos recientes en esta sucursal.</p>}
+      {historyState === "ready" && history?.orders.map(order => <div key={order.orderId} className="mt-3 rounded-lg border border-border p-3 text-sm">
+        <p className="font-semibold">{new Date(order.confirmedAt).toLocaleString("es-MX")} · {order.items.length} artículos</p>
+        <p className="text-text-muted">{order.items.map(item => item.productName).join(" · ")}</p>
+      </div>)}
+    </section>}
+    </div></div>
   </div>;
 }
 
@@ -208,8 +244,9 @@ function ProfileForm({ customer, disabled, onSave }: {
 const primaryAddressLabels = { label: "Etiqueta", streetLine: "Calle y número", unit: "Interior", neighborhood: "Colonia", references: "Referencias" } as const;
 const additionalAddressLabels = { locality: "Localidad", region: "Estado o región", countryCode: "País (código de dos letras)", postalCode: "Código postal" } as const;
 const addressLabels = { ...primaryAddressLabels, ...additionalAddressLabels } as const;
-function AddressForm({ item, disabled, onSave, onValidate, onCancel }: {
+function AddressForm({ item, branchName, feedback, validating = false, disabled, onSave, onValidate, onCancel }: {
   readonly item?: CustomerDirectoryDetailAddressV1; readonly disabled: boolean;
+  readonly branchName?: string; readonly feedback?: { message: string; error: boolean } | undefined; readonly validating?: boolean;
   readonly onSave: (fields: CustomerAddressFieldsV1) => void; readonly onValidate?: () => void; readonly onCancel?: () => void;
 }): ReactNode {
   const [dirty, setDirty] = useState(false);
@@ -219,10 +256,13 @@ function AddressForm({ item, disabled, onSave, onValidate, onCancel }: {
     onSave({ ...fields, instructions: item?.address.instructions ?? null, coordinates: item?.address.coordinates ?? null } as unknown as CustomerAddressFieldsV1);
   }}>
     <h3 className="mb-2 font-semibold">{item?.address.label ?? "Nueva dirección"}</h3>
-    {item !== undefined && <p className="mb-3 text-sm text-text-muted">{dirty ? "Cambios sin guardar. Guarda antes de validar." : item.validatedForRequestedBranch ? "Validada para esta sucursal" : "Pendiente de validación para esta sucursal"}</p>}
+    {item !== undefined && <p className="mb-3"><span className={`inline-flex min-h-11 items-center rounded-full border px-3 text-sm font-semibold ${item.validatedForRequestedBranch ? "border-success text-text" : "border-border text-text-muted"}`}>{item.validatedForRequestedBranch ? `Validada en ${branchName}` : "Sin validar aquí"}</span>{dirty && <span className="ml-2 text-sm text-text-muted">Cambios sin guardar. Guarda antes de validar.</span>}</p>}
+    {feedback !== undefined && <p role={feedback.error ? "alert" : "status"} className={`mb-3 rounded-lg border p-3 text-sm ${feedback.error ? "border-error bg-error-bg" : "border-success"}`}>{feedback.message}</p>}
+    {validating && <p role="status" className="mb-3 text-sm text-text-muted">Validando esta dirección…</p>}
     <fieldset disabled={disabled} className="grid min-w-0 gap-3 sm:grid-cols-2">
       {Object.entries(primaryAddressLabels).map(([key, label]) => <label key={key} className={`flex min-w-0 flex-col gap-1 text-sm ${key === "references" ? "sm:col-span-2" : ""}`}>{label}
-        <input name={key} required={key === "label"} maxLength={key === "label" ? 40 : key === "references" ? 500 : 200} defaultValue={item?.address[key as keyof typeof primaryAddressLabels] ?? ""} autoComplete="off" className={inputClass} />
+        <input name={key} required={key === "label"} maxLength={key === "label" ? 40 : key === "references" ? 500 : 200} defaultValue={item?.address[key as keyof typeof primaryAddressLabels] ?? ""} placeholder={key === "label" ? "Casa, Oficina, Casa de mamá" : undefined} autoComplete="off" className={inputClass} />
+        {key === "label" && <span className="text-xs text-text-muted">Nombre corto para reconocer la dirección.</span>}
       </label>)}
       <details className="sm:col-span-2"><summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold">Datos adicionales</summary>
         <div className="grid min-w-0 gap-3 sm:grid-cols-2">{Object.entries(additionalAddressLabels).map(([key, label]) => <label key={key} className="flex min-w-0 flex-col gap-1 text-sm">{label}
@@ -231,7 +271,7 @@ function AddressForm({ item, disabled, onSave, onValidate, onCancel }: {
       </details>
       <div className="flex flex-wrap gap-2 sm:col-span-2"><button className={buttonClass}>Guardar dirección</button>
         {onCancel !== undefined && <button type="button" className={buttonClass} onClick={onCancel}>Cancelar</button>}
-        {onValidate !== undefined && <button type="button" className={buttonClass} disabled={dirty || item?.validatedForRequestedBranch === true} onClick={onValidate}>{item?.validatedForRequestedBranch ? "Dirección validada" : "Validar para esta sucursal"}</button>}</div>
+        {onValidate !== undefined && <button type="button" className={buttonClass} disabled={disabled || dirty || item?.validatedForRequestedBranch === true} onClick={onValidate}>{item?.validatedForRequestedBranch ? "Validada" : validating ? "Validando…" : "Validar para esta sucursal"}</button>}</div>
     </fieldset>
   </form>;
 }

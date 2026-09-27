@@ -109,13 +109,13 @@ test("autocomplete derives bounded name and address terms only from the authoriz
   };
 
   assert.deepEqual(getCustomerDirectorySuggestions(result, "name", "ma"), [
-    { id: "name-0-maria", value: "María", context: "Ana María Morena" },
+    { id: "name-0-maria", customerId, value: "María", context: "Ana María Morena" },
   ]);
   assert.deepEqual(getCustomerDirectorySuggestions(result, "address", "Morena 8"), [
-    { id: "address-0-84", value: "84", context: "Ana María Morena" },
+    { id: "address-0-84", customerId, value: "84", context: "Ana María Morena" },
   ]);
   assert.deepEqual(getCustomerDirectorySuggestions(result, "address", "Fuentes A"), [
-    { id: "address-0-acacia", value: "Acacia", context: "Ana María Morena" },
+    { id: "address-0-acacia", customerId, value: "Acacia", context: "Ana María Morena" },
   ]);
   assert.equal(getCustomerDirectorySuggestions(result, "address", "A", 20).length <= 10, true);
   assert.deepEqual(getCustomerDirectorySuggestions(undefined, "name", "Ana"), []);
@@ -130,8 +130,12 @@ test("autocomplete requires four phone digits and accepting replaces only the ac
   };
   assert.deepEqual(getCustomerDirectorySuggestions(result, "phone", "456"), []);
   assert.deepEqual(getCustomerDirectorySuggestions(result, "phone", "4567"), [
-    { id: "phone-0-526421234567", value: "+52 642 123 4567", context: "Ana" },
+    { id: "phone-0-526421234567", customerId, value: "+52 642 123 4567", context: "Ana" },
   ]);
+  const otherCustomerId = "abcdef02-2345-4678-9abc-0123456789ab";
+  assert.deepEqual(getCustomerDirectorySuggestions({ ...result, candidates: [
+    ...result.candidates, { ...result.candidates[0]!, customerId: otherCustomerId, displayName: "Luis" },
+  ] }, "phone", "4567").map(suggestion => suggestion.customerId), [customerId, otherCustomerId]);
   assert.equal(insertCustomerDirectorySuggestion("Morena Ac", "Acacia", "address"), "Morena Acacia ");
   assert.equal(insertCustomerDirectorySuggestion("Morena ", "84", "address"), "Morena 84 ");
   assert.equal(insertCustomerDirectorySuggestion("4567", "+52 642 123 4567", "phone"), "+52 642 123 4567 ");
