@@ -633,7 +633,7 @@ test("capture selection plan prices every line against the live catalog before p
     replaceSelectionPlan: async (actorId, submittedCommand) => {
       assert.equal(actorId, principal.actorId);
       persistedCommand = submittedCommand;
-      return { status: "applied", record: workspaceV4Record.detail };
+      return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
     },
   };
   const captures: CaptureCreationPort = {
@@ -674,6 +674,59 @@ test("capture selection plan prices every line against the live catalog before p
     save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort).replace(principal, variantCommand), code("conflict"));
 });
 
+test("capture selection plan applied write accepts a follow-up read whose version advanced further still", async () => {
+  // The write's own result proves the draft reached expectedVersion+1 (version 2); a second
+  // connection then advances the draft to version 4 (an unrelated mutation) before the
+  // separate readWorkspaceV4 call following this write observes it. The response must still
+  // be 200 with the fresher version, never unavailable for failing an exact-match comparison.
+  const advancedAfterWriteRecord = {
+    schemaVersion: 4,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 4, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+  };
+  const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "pending" }),
+    replaceSelectionPlan: async () => ({ status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } }),
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => advancedAfterWriteRecord,
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort);
+  const result = await service.replace(principal, selectionPlanCommand);
+  assert.equal(result.detail.version, 4);
+  assert.equal(result.selectionPlan?.lineCount, 1);
+  assert.equal(result.selectionProjection?.subtotalMinor, 9_000);
+
+  // But the write's OWN result never lies: if it claims a version other than expectedVersion+1,
+  // that is not a race to tolerate, it is an inconsistent write result.
+  await assert.rejects(new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), {
+    probeReplaceSelectionPlan: async () => ({ status: "pending" }),
+    replaceSelectionPlan: async () => ({ status: "applied", record: { ...record, detail: { ...record.detail, version: 3 } } }),
+  }, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort)
+    .replace(principal, selectionPlanCommand), code("unavailable"));
+
+  // And a follow-up read that is STALE (behind the write's own proven version) is still rejected.
+  await assert.rejects(new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => ({ ...advancedAfterWriteRecord, detail: { ...advancedAfterWriteRecord.detail, version: 1 } }),
+  }, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort)
+    .replace(principal, selectionPlanCommand), code("unavailable"));
+});
+
 test("capture selection plan with zero lines is treated as no plan, never priced or persisted with an empty line array", async () => {
   const emptyCommand = parseReplaceCaptureSelectionPlanCommandV1({
     ...selectionPlanCommand,
@@ -693,7 +746,7 @@ test("capture selection plan with zero lines is treated as no plan, never priced
     probeReplaceSelectionPlan: async () => ({ status: "pending" }),
     replaceSelectionPlan: async (_actorId, submittedCommand) => {
       persistedPlan = submittedCommand.plan;
-      return { status: "applied", record: noPlanWorkspaceV4Record.detail };
+      return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
     },
   };
   const captures: CaptureCreationPort = {

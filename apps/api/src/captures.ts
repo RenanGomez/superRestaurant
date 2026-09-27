@@ -82,7 +82,7 @@ import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
 import {
   decodeCaptureRecord, decodeCaptureWorkspace, decodeCaptureWorkspaceV2, decodeCaptureWorkspaceV3,
-  decodeCaptureWorkspaceV4, withCaptureSelectionProjection,
+  decodeCaptureWorkspaceV4, withCaptureSelectionProjection, type PersistedCaptureRecordV1,
 } from "./persistence/capture-persistence-codec.js";
 import { encodeOrderAuditEventRecord, encodeOrderRecord } from "./persistence/order-persistence-codec.js";
 
@@ -764,6 +764,13 @@ export class CaptureSelectionPlanService {
       throw unavailable();
     }
 
+    // The write's own result is the ground truth for the version it produced; the record was
+    // written inside the same transaction that bumped the draft, so its version is exact.
+    let appliedRecord: PersistedCaptureRecordV1;
+    try { appliedRecord = decodeCaptureRecord(envelope.record, command.scope); } catch { throw unavailable(); }
+    if (appliedRecord.detail.captureDraftId !== command.captureDraftId
+      || appliedRecord.detail.version !== command.expectedVersion + 1) throw unavailable();
+
     if (this.captures.readWorkspaceV4 === undefined) throw unavailable();
     const workspaceRequest = { schemaVersion: 4 as const, scope: command.scope, captureDraftId: command.captureDraftId };
     let rawWorkspace: unknown;
@@ -772,11 +779,13 @@ export class CaptureSelectionPlanService {
     if (statusOnly !== undefined) throw unavailable();
     let workspace: CaptureWorkspaceV4;
     try { workspace = decodeCaptureWorkspaceV4(rawWorkspace, command.scope); } catch { throw unavailable(); }
-    // A fresh apply's draft version must be exactly expectedVersion+1 (nothing else could have
-    // committed in between). A 0-line plan is "no plan": the row was deleted, so `selectionPlan`
-    // reads back null.
+    // This write's own result already proved the draft reached expectedVersion+1. The separate
+    // read that follows it is a different round trip: another connection may have advanced the
+    // draft further in between (an unrelated mutation, or another selection-plan write), so the
+    // read is only required to reflect a version at least that fresh, never exactly that one.
+    // A 0-line plan is "no plan": the row was deleted, so `selectionPlan` reads back null.
     if (workspace.detail.captureDraftId !== command.captureDraftId
-      || workspace.detail.version !== command.expectedVersion + 1
+      || workspace.detail.version < appliedRecord.detail.version
       || (command.plan.lines.length === 0
         ? workspace.selectionPlan !== null
         : workspace.selectionPlan === null
