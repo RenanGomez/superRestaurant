@@ -54,6 +54,8 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
   const suggestionResult = autocompleteResult !== undefined
     && isCurrentCustomerAutocompleteRequest(autocompleteResult.request, searchMode, searchQuery) ? autocompleteResult.value : undefined;
   const suggestions = useMemo(() => getCustomerDirectorySuggestions(suggestionResult, searchMode, searchQuery), [suggestionResult, searchMode, searchQuery]);
+  const customerOptions = suggestionResult?.candidates ?? [];
+  const optionCount = suggestions.length + customerOptions.length;
   const locked = busy || pending !== undefined || error === "denied";
 
   useEffect(() => {
@@ -114,23 +116,32 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
   function acceptSuggestion(suggestion: CustomerDirectorySuggestion): void {
     setSearchQuery(insertCustomerDirectorySuggestion(searchQuery, suggestion.value, searchMode));
     setActiveSuggestion(-1);
+    setSuggestionsOpen(true);
+    searchInputRef.current?.focus();
+  }
+  function acceptCustomer(customerId: string): void {
+    setActiveSuggestion(-1);
     setSuggestionsOpen(false);
-    read(suggestion.customerId);
+    read(customerId);
   }
   function searchKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
     if (event.key === "Escape") { setSuggestionsOpen(false); setActiveSuggestion(-1); return; }
-    if (suggestions.length === 0 || !["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) return;
+    if (optionCount === 0 || !["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) return;
     if (event.key === "Enter" && (!suggestionsOpen || activeSuggestion < 0)) return;
     event.preventDefault();
     if (event.key === "ArrowDown") {
       setSuggestionsOpen(true);
-      setActiveSuggestion(current => current < suggestions.length - 1 ? current + 1 : 0);
+      setActiveSuggestion(current => current < optionCount - 1 ? current + 1 : 0);
     } else if (event.key === "ArrowUp") {
       setSuggestionsOpen(true);
-      setActiveSuggestion(current => current > 0 ? current - 1 : suggestions.length - 1);
+      setActiveSuggestion(current => current > 0 ? current - 1 : optionCount - 1);
     } else {
       const suggestion = suggestions[activeSuggestion];
       if (suggestion !== undefined) acceptSuggestion(suggestion);
+      else {
+        const customer = customerOptions[activeSuggestion - suggestions.length];
+        if (customer !== undefined) acceptCustomer(customer.customerId);
+      }
     }
   }
   return <div className="flex min-w-0 flex-col gap-4" aria-busy={busy}>
@@ -146,17 +157,29 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
         <label className="flex min-w-0 flex-col gap-1 text-sm">Buscar por<select name="mode" className={inputClass} disabled={locked} value={searchMode} onChange={event => { setSearchMode(event.target.value as CustomerSearchModeV1); setActiveSuggestion(-1); setSuggestionsOpen(false); }}><option value="phone">Teléfono</option><option value="name">Nombre o alias</option><option value="address">Dirección o referencia</option></select></label>
         <label className="relative flex min-w-0 flex-1 basis-48 flex-col gap-1 text-sm">Dato de búsqueda
           <input ref={searchInputRef} name="query" required maxLength={200} className={inputClass} disabled={locked} autoComplete="off"
-            role="combobox" aria-autocomplete="list" aria-expanded={suggestionsOpen && suggestions.length > 0} aria-controls="customer-search-suggestions"
-            aria-activedescendant={suggestionsOpen && activeSuggestion >= 0 ? `customer-suggestion-${suggestions[activeSuggestion]?.id}` : undefined}
+            role="combobox" aria-autocomplete="list" aria-expanded={suggestionsOpen && optionCount > 0} aria-controls="customer-search-suggestions"
+            aria-activedescendant={suggestionsOpen && activeSuggestion >= 0 ? activeSuggestion < suggestions.length
+              ? `customer-suggestion-${suggestions[activeSuggestion]?.id}` : `customer-option-${customerOptions[activeSuggestion - suggestions.length]?.customerId}` : undefined}
             value={searchQuery} onChange={event => { setSearchQuery(event.target.value); setActiveSuggestion(-1); setSuggestionsOpen(true); }}
             onFocus={() => setSuggestionsOpen(true)} onBlur={() => window.setTimeout(() => { if (document.activeElement !== searchInputRef.current) setSuggestionsOpen(false); }, 0)}
             onKeyDown={searchKeyDown} />
-          {suggestionsOpen && suggestions.length > 0 && <ul id="customer-search-suggestions" role="listbox" aria-label="Sugerencias del resultado autorizado" className="absolute left-0 right-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg">
+          {suggestionsOpen && optionCount > 0 && <ul id="customer-search-suggestions" role="listbox" aria-label="Sugerencias y clientes autorizados" className="absolute left-0 right-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg">
+            {suggestions.length > 0 && <li role="presentation" className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-text-muted">Completar búsqueda</li>}
             {suggestions.map((suggestion, index) => <li key={suggestion.id} role="presentation">
               <button id={`customer-suggestion-${suggestion.id}`} type="button" role="option" aria-selected={activeSuggestion === index}
                 className={`min-h-11 w-full rounded-md px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-accent ${activeSuggestion === index ? "bg-bg" : "hover:bg-bg"}`}
                 onMouseDown={event => event.preventDefault()} onPointerMove={() => setActiveSuggestion(index)} onClick={() => acceptSuggestion(suggestion)}>
-                <span className="block font-semibold">{suggestion.value}</span><span className="block text-xs text-text-muted">De {suggestion.context}</span>
+                <span className="block font-semibold"><span aria-hidden="true">🔎 </span>Buscar: {suggestion.value}</span><span className="block text-xs text-text-muted">De {suggestion.context}</span>
+              </button>
+            </li>)}
+            {customerOptions.length > 0 && <li role="presentation" className="border-t border-border px-3 py-2 text-xs font-semibold uppercase tracking-wide text-text-muted">Clientes</li>}
+            {customerOptions.map((customer, index) => <li key={customer.customerId} role="presentation">
+              <button id={`customer-option-${customer.customerId}`} type="button" role="option" aria-selected={activeSuggestion === suggestions.length + index}
+                className={`min-h-11 w-full rounded-md px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-accent ${activeSuggestion === suggestions.length + index ? "bg-bg" : "hover:bg-bg"}`}
+                onMouseDown={event => event.preventDefault()} onPointerMove={() => setActiveSuggestion(suggestions.length + index)} onClick={() => acceptCustomer(customer.customerId)}>
+                <span className="block font-semibold"><span aria-hidden="true">👤 </span>{customer.displayName}</span>
+                <span className="block break-words text-xs text-text-muted">{customer.phones.map(phone => phone.displayValue).join(" · ") || "Sin teléfono"}</span>
+                <span className="block break-words text-xs text-text-muted">{customer.addresses.map(address => [address.label, address.streetLine, address.locality].filter(Boolean).join(", ")).join(" · ") || "Sin direcciones"}</span>
               </button>
             </li>)}
           </ul>}
