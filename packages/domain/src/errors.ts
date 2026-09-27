@@ -238,6 +238,14 @@ export class InvalidSnapshotError extends DomainError {
   public readonly field: string;
 }
 
+export class InvalidOrderItemNoteError extends DomainError {
+  public readonly code = "INVALID_ORDER_ITEM_NOTE";
+
+  public constructor() {
+    super("Order item note must be null or 1-200 characters with no control characters.");
+  }
+}
+
 export class InvalidTimeZoneError extends DomainError {
   public readonly code = "INVALID_TIME_ZONE";
 

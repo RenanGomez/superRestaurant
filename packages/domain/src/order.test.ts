@@ -401,6 +401,26 @@ function changedItem(order: Order, orderItemId: string, to: OrderItemState): Ord
   return transitionOrderItemStatus(order, orderItemId, to, audit()).order;
 }
 
+test("Order item note accepts null and valid text, and freezes it after cancellation", () => {
+  const order = createOrder(baseInput(), audit()).order;
+  const withNull = addOrderItem(order, line({ note: null }), audit()).order;
+  assert.equal(withNull.items[0]!.note, null);
+
+  const withText = addOrderItem(order, line({ note: "sin cebolla" }), audit()).order;
+  assert.equal(withText.items[0]!.note, "sin cebolla");
+
+  const cancelled = cancelOrderItem(withText, "line-1", audit()).order;
+  assert.equal(cancelled.items[0]!.note, "sin cebolla");
+});
+
+test("Order item note rejects empty, too-long, and control-character text", () => {
+  const order = createOrder(baseInput(), audit()).order;
+  assert.throws(() => addOrderItem(order, line({ note: "" }), audit()), DomainError);
+  assert.throws(() => addOrderItem(order, line({ note: "a".repeat(201) }), audit()), DomainError);
+  assert.throws(() => addOrderItem(order, line({ note: "line1\nline2" }), audit()), DomainError);
+  assert.throws(() => addOrderItem(order, line({ note: "bell\u0007" }), audit()), DomainError);
+});
+
 function baseInput() {
   return {
     orderId: "order-1",
