@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { types as nodeTypes } from "node:util";
 import { Inject, Injectable } from "@nestjs/common";
 import {
@@ -156,7 +157,7 @@ export class DeliveryZoneService {
       const zones = await this.fetchZonesForBranch(actorId, branchScope);
       allZones.push(...zones);
     }
-    allZones.sort((left, right) => (left.zoneId < right.zoneId ? -1 : left.zoneId > right.zoneId ? 1 : 0));
+    allZones.sort(compareZoneId);
     const result = parseDeliveryZoneListV1({ schemaVersion: 1, scope: query.scope, zones: allZones });
     if (result === undefined) throw unavailable();
     return result;
@@ -269,6 +270,9 @@ export class DeliveryZoneService {
     let quote;
     try {
       quote = quoteDelivery({
+        // Placeholder: quoteDelivery only requires quoteId to be non-empty text and never reads
+        // it back to derive coverage/fee/window, so the real, fact-derived id is computed below
+        // (from the coverage/fee/window this call produces) and substituted into the wire result.
         quoteId: command.captureDraftId,
         restaurantId: command.scope.restaurantId,
         branchId: command.scope.branchId,
@@ -284,9 +288,23 @@ export class DeliveryZoneService {
       });
     } catch { throw new DeliveryZoneApplicationError("request"); }
 
+    // Deterministic, fact-derived quoteId (never Math.random/uuid-v4): the same draft, address,
+    // coverage and window always reproduce the same id, while any change to the quoted facts
+    // (zone, fee, promised window, or requested schedule) produces a different one. S7.2 will
+    // decide whether/how a quote is persisted under this id; for now it only identifies the
+    // as-quoted facts for the caller (e.g. to detect a stale quote client-side).
+    const quoteId = deterministicQuoteId([
+      command.captureDraftId,
+      workspace.fulfillmentSnapshot.snapshotRef,
+      quote.zoneId,
+      quote.feeMinor.amountMinor,
+      quote.promiseStart,
+      command.scheduledFor,
+    ]);
+
     const result = parseDeliveryQuoteV1({
       schemaVersion: 1,
-      quoteId: quote.quoteId,
+      quoteId,
       restaurantId: quote.restaurantId,
       branchId: quote.branchId,
       captureDraftId: quote.captureDraftId,
@@ -316,10 +334,16 @@ export class DeliveryZoneService {
     if (statusOnly?.status === "denied") throw new DeliveryZoneApplicationError("authorization");
     if (statusOnly?.status === "rejected") throw new DeliveryZoneApplicationError("request");
     if (statusOnly !== undefined) throw unavailable();
+    // app_private.list_delivery_zones orders its rows by (name, id) for a human-friendly listing,
+    // not by zoneId — but parseDeliveryZoneListV1 requires zones strictly ascending by zoneId, so
+    // the SQL order can never be handed to the parser as-is. Sort by zoneId first, the same as the
+    // restaurant-wide aggregation path below already does after merging multiple branches.
+    const rawZones = exactRecord(raw, ["schemaVersion", "scope", "zones"])?.zones;
+    const sortedZones = Array.isArray(rawZones) ? [...rawZones].sort(compareZoneId) : rawZones;
     const parsed = parseDeliveryZoneListV1({
       schemaVersion: 1,
       scope: { kind: "branch", restaurantId: scope.restaurantId, branchId: scope.branchId },
-      zones: exactRecord(raw, ["schemaVersion", "scope", "zones"])?.zones,
+      zones: sortedZones,
     });
     if (parsed === undefined) throw unavailable();
     return parsed.zones;
@@ -343,6 +367,34 @@ export class DeliveryZoneService {
     }
     return Object.freeze(scopes);
   }
+}
+
+/**
+ * Deterministic, name-based id (sha-256 over the given facts, reshaped into the canonical
+ * UUID format the rest of the codebase expects) — never `Math.random`/`crypto.randomUUID()`.
+ * Identical facts always produce the identical id; any differing fact produces a different one.
+ */
+export function deterministicQuoteId(facts: readonly (string | number | null)[]): string {
+  const hash = createHash("sha256").update(facts.map((fact) => String(fact)).join("\u0000")).digest("hex");
+  const variantNibble = ((parseInt(hash[16] as string, 16) & 0x3) | 0x8).toString(16);
+  return [
+    hash.slice(0, 8),
+    hash.slice(8, 12),
+    `5${hash.slice(13, 16)}`,
+    `${variantNibble}${hash.slice(17, 20)}`,
+    hash.slice(20, 32),
+  ].join("-");
+}
+
+function compareZoneId(left: unknown, right: unknown): number {
+  const leftId = zoneIdOf(left);
+  const rightId = zoneIdOf(right);
+  return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+}
+function zoneIdOf(value: unknown): string {
+  if (typeof value !== "object" || value === null) return "";
+  const zoneId = (value as Record<string, unknown>).zoneId;
+  return typeof zoneId === "string" ? zoneId : "";
 }
 
 export function canonicalizeTextArray(values: readonly string[]): readonly string[] {

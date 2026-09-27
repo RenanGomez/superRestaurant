@@ -6,6 +6,7 @@ import { MembershipAuthorizationService } from "./auth/membership-authorization.
 import type { MembershipDirectoryPort } from "./auth/membership-directory.js";
 import {
   canonicalizeTextArray,
+  deterministicQuoteId,
   DeliveryZoneApplicationError,
   DeliveryZoneService,
   type DeliveryZoneListPort,
@@ -142,6 +143,22 @@ test("listZones: authorized branch scope returns zones", async () => {
   const result = await service.listZones(principal, { schemaVersion: 1, scope: { kind: "branch", ...scope } });
   assert.equal(result.zones.length, 1);
   assert.equal(result.zones[0]?.zoneId, zoneId);
+});
+
+test("listZones: SQL rows ordered by name (not zoneId) are re-sorted before parsing", async () => {
+  // app_private.list_delivery_zones orders by (name, id) for a human-friendly listing; here the
+  // name order is the exact reverse of the zoneId order, which parseDeliveryZoneListV1 requires.
+  const lowId = "10000000-0000-4000-8000-000000000001";
+  const highId = "90000000-0000-4000-8000-000000000009";
+  const lowIdZone = { ...zoneWire, zoneId: lowId, name: "Zulu" };
+  const highIdZone = { ...zoneWire, zoneId: highId, name: "Alpha" };
+  const listPort: DeliveryZoneListPort = {
+    // SQL row order: "Alpha" (highId) before "Zulu" (lowId) — reversed relative to zoneId.
+    listZones: async () => ({ schemaVersion: 1, scope, zones: [highIdZone, lowIdZone] }),
+  };
+  const service = serviceFor({ listPort });
+  const result = await service.listZones(principal, { schemaVersion: 1, scope: { kind: "branch", ...scope } });
+  assert.deepEqual(result.zones.map((zone) => zone.zoneId), [lowId, highId]);
 });
 
 test("listZones: denies actor without captures.read in the branch", async () => {
@@ -296,6 +313,39 @@ test("quoteForCapture: draft without a fulfillment snapshot is a conflict, not a
 test("quoteForCapture: denies an actor without captures.read on the branch", async () => {
   const service = serviceFor({ roles: ["kitchen"] });
   await assert.rejects(service.quoteForCapture(principal, quoteInput), code("authorization"));
+});
+
+test("quoteForCapture: identical facts always produce the identical quoteId", async () => {
+  const service = serviceFor();
+  const first = await service.quoteForCapture(principal, quoteInput);
+  const second = await service.quoteForCapture(principal, quoteInput);
+  assert.equal(first.quoteId, second.quoteId);
+  assert.notEqual(first.quoteId, captureDraftId);
+});
+
+test("quoteForCapture: a different scheduledFor produces a different quoteId", async () => {
+  const service = serviceFor();
+  const asap = await service.quoteForCapture(principal, quoteInput);
+  const scheduled = await service.quoteForCapture(principal, {
+    ...quoteInput, scheduledFor: "2026-09-16T13:00:00.000Z",
+  });
+  assert.notEqual(asap.quoteId, scheduled.quoteId);
+});
+
+test("deterministicQuoteId: identical facts produce the identical id, in canonical UUID form", () => {
+  const facts = [captureDraftId, "snapshot-ref", zoneId, 2500, "2026-09-16T12:00:02.000Z", null] as const;
+  const first = deterministicQuoteId([...facts]);
+  const second = deterministicQuoteId([...facts]);
+  assert.equal(first, second);
+  assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+});
+
+test("deterministicQuoteId: any changed fact produces a different id (no Math.random involved)", () => {
+  const base = deterministicQuoteId([captureDraftId, "snapshot-ref", zoneId, 2500, "2026-09-16T12:00:02.000Z", null]);
+  const feeChanged = deterministicQuoteId([captureDraftId, "snapshot-ref", zoneId, 2600, "2026-09-16T12:00:02.000Z", null]);
+  const scheduleChanged = deterministicQuoteId([captureDraftId, "snapshot-ref", zoneId, 2500, "2026-09-16T12:00:02.000Z", "2026-09-16T13:00:00.000Z"]);
+  assert.notEqual(base, feeChanged);
+  assert.notEqual(base, scheduleChanged);
 });
 
 test("quoteForCapture: hostile inputs (unknown captureDraftId shape) are rejected as a request error", async () => {
