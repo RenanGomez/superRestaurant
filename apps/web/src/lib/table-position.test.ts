@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clampTablePosition, savedTablePosition } from "./table-position.js";
+import { clampTablePosition, moveTableByKeyboard, savedTablePosition } from "./table-position.js";
 
 test("movement stays within the 24 by 100 canvas, accounting for table size", () => {
   assert.deepEqual(clampTablePosition({ x: -2, y: 120 }, 4, 6), { x: 0, y: 94 });
@@ -16,4 +16,12 @@ test("shrinking a table allows movement into the newly available edge cells", ()
   assert.deepEqual(clampTablePosition({ x: 22, y: 98 }, 4, 4), { x: 20, y: 96 });
   assert.deepEqual(clampTablePosition({ x: 22, y: 98 }, 2, 2), { x: 22, y: 98 });
   assert.deepEqual(savedTablePosition({ x: 22, y: 98 }, 2, 2), { x: 22, y: 98 });
+});
+
+test("each arrow moves one saved grid cell, or four with Shift", () => {
+  const start = { x: 5, y: 6 };
+  assert.deepEqual(moveTableByKeyboard(start, "ArrowRight", false, 4, 4), { x: 6, y: 6 });
+  assert.deepEqual(moveTableByKeyboard(start, "ArrowDown", true, 4, 4), { x: 5, y: 10 });
+  assert.deepEqual(moveTableByKeyboard({ x: 5.2, y: 6.2 }, "ArrowLeft", false, 4, 4), { x: 4, y: 6 });
+  assert.deepEqual(moveTableByKeyboard({ x: 19, y: 95 }, "ArrowRight", true, 4, 4), { x: 20, y: 95 });
 });
