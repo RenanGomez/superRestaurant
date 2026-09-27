@@ -593,6 +593,198 @@ begin
 end
 $capture_selection_plan_kind_conversion_tests$;
 
+-- A catalog selection plan has no Customer dependency: an unrelated mutation (here, toggling
+-- the recovery preference) that advances draft.version past applied_capture_version must not
+-- turn a perfectly valid selection into 503 on read, nor block confirm from materializing it.
+do $capture_selection_plan_stale_version_tests$
+declare
+  actor uuid := (select id from auth.users where deleted_at is null order by id limit 1);
+  restaurant uuid := gen_random_uuid();
+  branch uuid := gen_random_uuid();
+  catalog uuid := gen_random_uuid();
+  category uuid := gen_random_uuid();
+  product uuid := gen_random_uuid();
+  target_capture uuid := gen_random_uuid();
+  line_a uuid := gen_random_uuid();
+  device uuid := gen_random_uuid();
+  shift uuid := gen_random_uuid();
+  confirmed_order uuid := gen_random_uuid();
+  confirmation_event uuid := gen_random_uuid();
+  item_event uuid := gen_random_uuid();
+  now_at timestamptz := pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp());
+  created jsonb;
+  lease text;
+  command jsonb;
+  plan jsonb;
+  preference_command jsonb;
+  result jsonb;
+  confirmation_command jsonb;
+  order_record jsonb;
+  order_audits jsonb;
+begin
+  if actor is null then raise exception 'CAPTURE_SELECTION_PLAN_STALE_VERSION_TEST_ACTOR_REQUIRED'; end if;
+
+  insert into app.restaurants(id,name,time_zone)
+    values(restaurant,'rollback-only Capture stale selection version','America/Hermosillo');
+  insert into app.branches(id,restaurant_id,name) values(branch,restaurant,'rollback-only stale-version branch');
+  insert into app.memberships(id,user_id,restaurant_id,branch_id,granted_by)
+    values(gen_random_uuid(),actor,restaurant,branch,actor);
+  insert into app.membership_role_grants(membership_id,role_code,granted_by)
+    select id,'cashier',actor from app.memberships where restaurant_id=restaurant and branch_id=branch;
+
+  insert into app.menu_catalogs(id,restaurant_id,version,currency,published_by)
+    values(catalog,restaurant,1,'MXN',actor);
+  insert into app.menu_categories(restaurant_id,catalog_id,id,name,active,display_order)
+    values(restaurant,catalog,category,'Tacos',true,1);
+  insert into app.menu_products(
+    restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor
+  ) values (
+    restaurant,catalog,product,category,'Taco vigente','TACO-STALE',true,1,'kitchen','piece',4900
+  );
+  insert into app.menu_catalog_heads(restaurant_id,catalog_id,version,updated_at,updated_by)
+    values(restaurant,catalog,1,now_at,actor);
+
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',target_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','counter'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_SELECTION_PLAN_STALE_VERSION_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  -- Step 1: attach a selection plan (version 1 -> 2, applied_capture_version=2).
+  command := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',target_capture::text,'expectedVersion',1,
+    'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  );
+  plan := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'catalogVersion',catalog::text,'lines',pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'lineId',line_a::text,'productId',product::text,'variantId',null,'quantity',2,'note',null,
+        'modifierGroups','[]'::jsonb
+      )
+    )
+  );
+  execute 'set local role app_api';
+  result := app_private.replace_capture_selection_plan(actor,command,plan);
+  execute 'reset role';
+  if result->>'status'<>'applied' or result#>>'{record,detail,version}'<>'2' then
+    raise exception 'CAPTURE_SELECTION_PLAN_STALE_VERSION_SETUP_REJECTED';
+  end if;
+
+  -- Step 2: an unrelated mutation (recovery preference) advances the draft to version 3
+  -- WITHOUT touching the selection plan: applied_capture_version stays at 2.
+  preference_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',target_capture::text,'expectedVersion',2,
+    'attentionLeaseId',lease,'autoRenewSelected',true,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  );
+  execute 'set local role app_api';
+  result := app_private.mutate_capture_attention(actor,'capture.recovery_preference_changed',preference_command);
+  execute 'reset role';
+  if result->>'status'<>'applied' or result#>>'{record,detail,version}'<>'3' then
+    raise exception 'CAPTURE_SELECTION_PLAN_STALE_VERSION_DRIFT_REJECTED';
+  end if;
+  if not exists (
+    select 1 from app.capture_repeat_order_plans stored
+    where stored.restaurant_id=restaurant and stored.branch_id=branch and stored.capture_draft_id=target_capture
+      and stored.plan_kind='selection' and stored.applied_capture_version=2
+  ) then raise exception 'CAPTURE_SELECTION_PLAN_STALE_VERSION_PLAN_UNEXPECTEDLY_CHANGED'; end if;
+
+  -- read_capture_selection_plan must still answer 'ok' (not 'missing') for the now-stale plan.
+  execute 'set local role app_api';
+  result := app_private.read_capture_selection_plan(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',3,'scope',command->'scope','captureDraftId',target_capture::text
+  ));
+  execute 'reset role';
+  if result->>'status'<>'ok' or result#>>'{plan,lines,0,productId}'<>product::text then
+    raise exception 'CAPTURE_SELECTION_PLAN_STALE_VERSION_READER_REJECTED';
+  end if;
+
+  -- V4 must still expose a non-null selectionPlan summary (informative appliedCaptureVersion=2).
+  execute 'set local role app_api';
+  result := app_private.read_capture_workspace_v4(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',4,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',target_capture::text
+  ));
+  execute 'reset role';
+  if result#>>'{selectionPlan,appliedCaptureVersion}'<>'2' or result#>>'{selectionPlan,lineCount}'<>'1' then
+    raise exception 'CAPTURE_SELECTION_PLAN_STALE_VERSION_WORKSPACE_REJECTED';
+  end if;
+
+  -- Confirm must still materialize the Order from the stale-but-valid selection plan.
+  insert into app.operational_shifts(id,restaurant_id,branch_id,name,status,opened_at,opened_by)
+    values(shift,restaurant,branch,'rollback stale selection confirmation','open',now_at-interval '1 minute',actor);
+  confirmation_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',2,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',target_capture::text,'expectedVersion',3,
+    'eventId',confirmation_event::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'attentionLeaseId',lease,
+    'orderId',confirmed_order::text,'shiftId',shift::text,'tableId',null,
+    'currency','MXN','timeZone','America/Hermosillo'
+  );
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',confirmed_order::text,'restaurantId',restaurant::text,
+    'branchId',branch::text,'channel','counter','currency','MXN','timeZone','America/Hermosillo',
+    'status','draft','items',pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+      'orderItemId',gen_random_uuid()::text,'snapshot',pg_catalog.jsonb_build_object(
+        'catalogVersion',catalog::text,'productId',product::text,'name','Taco vigente','sku','TACO-STALE',
+        'stationId','kitchen','unit','piece',
+        'unitPrice',pg_catalog.jsonb_build_object('amountMinor',4900,'currency','MXN'),
+        'modifiers','[]'::jsonb
+      ),'quantity',2,'restaurantId',restaurant::text,'branchId',branch::text,'status','pending'
+    ))
+  );
+  order_audits := pg_catalog.jsonb_build_array(
+    pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'eventId',confirmation_event::text,
+      'idempotencyKey',confirmation_command->>'idempotencyKey','restaurantId',restaurant::text,
+      'branchId',branch::text,'orderId',confirmed_order::text,'actorId',actor::text,
+      'deviceId',device::text,'occurredAt',confirmation_command->>'occurredAt',
+      'operation','order.created','entityType','order','entityId',confirmed_order::text,'to','draft'
+    ),
+    pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'eventId',item_event::text,'idempotencyKey',gen_random_uuid()::text,
+      'restaurantId',restaurant::text,'branchId',branch::text,'orderId',confirmed_order::text,
+      'actorId',actor::text,'deviceId',device::text,'occurredAt',confirmation_command->>'occurredAt',
+      'operation','order.item_added','entityType','order_item',
+      'entityId',order_record#>>'{items,0,orderItemId}','orderItemId',order_record#>>'{items,0,orderItemId}'
+    )
+  );
+  execute 'set local role app_api';
+  if app_private.confirm_capture_draft_v3(actor,confirmation_command,null,null)->>'status'<>'pending'
+    then raise exception 'CAPTURE_SELECTION_PLAN_STALE_VERSION_CONFIRMATION_PROBE_REJECTED'; end if;
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'applied' or result#>>'{record,detail,status}'<>'confirmed' then
+    raise exception 'CAPTURE_SELECTION_PLAN_STALE_VERSION_CONFIRMATION_REJECTED';
+  end if;
+  if not exists (
+    select 1 from app.orders placed
+    where placed.restaurant_id=restaurant and placed.branch_id=branch and placed.id=confirmed_order
+      and placed.aggregate->'items'->0->'snapshot'->>'name'='Taco vigente'
+  ) then raise exception 'CAPTURE_SELECTION_PLAN_STALE_VERSION_CONFIRMATION_NOT_MATERIALIZED'; end if;
+end
+$capture_selection_plan_stale_version_tests$;
+
 -- A 0-line selection plan means "no plan": the row is deleted (still
 -- audited by the command event), never persisted with an empty lines array.
 do $capture_selection_plan_empty_tests$

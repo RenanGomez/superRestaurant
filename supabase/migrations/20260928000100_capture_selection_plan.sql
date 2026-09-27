@@ -595,10 +595,14 @@ begin
       and grant_record.role_code in ('owner','admin','manager','supervisor','cashier','waiter')
   ) then return pg_catalog.jsonb_build_object('status','denied'); end if;
 
+  -- A catalog selection plan has no Customer dependency, unlike a repeat-order plan: an
+  -- unrelated mutation (fulfillment, customer, attention) that advances draft.version past
+  -- applied_capture_version must not turn a perfectly valid selection into 'missing'. Only the
+  -- draft's draft status is still required; line/catalog freshness is revalidated by the caller.
   select plan.selection_plan into selected_plan
   from app.capture_repeat_order_plans plan
   join app.capture_drafts draft on draft.restaurant_id=plan.restaurant_id and draft.branch_id=plan.branch_id
-    and draft.id=plan.capture_draft_id and draft.status='draft' and draft.version=plan.applied_capture_version
+    and draft.id=plan.capture_draft_id and draft.status='draft'
   where plan.restaurant_id=restaurant and plan.branch_id=branch and plan.capture_draft_id=capture
     and plan.plan_kind='selection';
   if not found then return pg_catalog.jsonb_build_object('status','missing'); end if;
@@ -880,7 +884,12 @@ begin
   if not found then
     if item_count<>0 then return pg_catalog.jsonb_build_object('status','conflict'); end if;
   else
-    if repeat_plan.applied_capture_version<>expected
+    -- A repeat-order plan is derived from the Customer and is invalidated the moment the
+    -- draft advances without it (applied_capture_version must still match the confirmed
+    -- version). A catalog selection plan has no such dependency: fulfillment/customer/other
+    -- mutations unrelated to the lines must not turn a perfectly valid selection into a 409;
+    -- its lines/catalog freshness is independently revalidated below against the live catalog.
+    if (repeat_plan.plan_kind='repeat' and repeat_plan.applied_capture_version<>expected)
       or (repeat_plan.plan_kind='repeat' and repeat_plan.customer_id::text is distinct from repeat_plan.selection_plan->>'customerId')
       or pg_catalog.jsonb_array_length(repeat_plan.selection_plan->'lines')<>item_count
     then return pg_catalog.jsonb_build_object('status','conflict'); end if;
