@@ -658,9 +658,12 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); }}
         onAdd={(quantity, modifierGroups) => void addFromSheet(quantity, modifierGroups)} />}
       {capture.status === "draft" && canManageAssignment && <section className={panel} data-testid="capture-transfer">
-        <h2 className="font-heading text-lg font-semibold">Transferir captura</h2>
-        <p className="mt-1 text-sm text-text-muted">El operador destino recibirá un lease nuevo. Esta estación dejará de editar la captura.</p>
-        {assignmentCandidates.length === 0 ? <p className="mt-3 text-sm">No hay otro operador activo elegible en esta sucursal.</p>
+        <h2 className="font-heading text-lg font-semibold">Pasar la captura a otro operador</h2>
+        <p className="mt-1 text-sm text-text-muted">El otro operador la verá en su bandeja y podrá continuar donde la dejaste.</p>
+        {assignmentCandidates.length === 0 ? <div className="mt-3 flex flex-wrap items-center gap-3">
+            <p className="text-sm">Nadie más de esta sucursal tiene sesión activa ahora. Puedes dejarla en espera y otro operador la retomará desde la bandeja.</p>
+            <button type="button" className={button} disabled={locked} onClick={reset}>Dejar en espera</button>
+          </div>
           : <div className="mt-3 grid gap-3">
             <label className="grid gap-1 text-sm" htmlFor="capture-transfer-target">Operador destino
               <select id="capture-transfer-target" className={input} value={transferTarget}
