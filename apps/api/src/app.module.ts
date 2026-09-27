@@ -43,7 +43,7 @@ import {
   PostgresCustomerOrderHistory,
   PostgresCustomerOrderRepeatCapture,
 } from "./customer-order-history.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureAttentionService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator } from "./captures.js";
 import { SessionController } from "./session.controller.js";
 import { DiningZonesController } from "./dining-zones.controller.js";
 import {
@@ -153,6 +153,8 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     CaptureDeliveryInstructionsService,
     { provide: CAPTURE_CONFIRMATION_PORT, useExisting: PostgresCaptureCreator },
     CaptureConfirmationService,
+    { provide: CAPTURE_NO_SALE_PORT, useExisting: PostgresCaptureCreator },
+    CaptureNoSaleService,
     { provide: CAPTURE_SELECTION_PLAN_PORT, useExisting: PostgresCaptureCreator },
     CaptureSelectionPlanService,
     { provide: CAPTURE_TRAY_PORT, useExisting: PostgresCaptureCreator },

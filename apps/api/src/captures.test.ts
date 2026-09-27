@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
-import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkspaceRequestV3, parseCaptureWorkTrayRequestV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseReplaceCaptureSelectionPlanCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1, parseTakeoverCaptureDraftCommandV1, parseTransferCaptureDraftCommandV1, type MembershipRoleCode, type MenuCatalogV1 } from "@super-restaurant/shared-types";
+import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkspaceRequestV3, parseCaptureWorkTrayRequestV1, parseCloseCaptureNoSaleCommandV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseReplaceCaptureSelectionPlanCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1, parseTakeoverCaptureDraftCommandV1, parseTransferCaptureDraftCommandV1, type MembershipRoleCode, type MenuCatalogV1 } from "@super-restaurant/shared-types";
 
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
 import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureSelectionNoteUnsupportedError, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureSelectionPlanPort } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionNoteUnsupportedError, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureNoSalePort, type CaptureSelectionPlanPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
@@ -1100,6 +1100,8 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
     CaptureSelectionPlanService,
     CaptureTrayService,
     CaptureAssignmentDirectoryService,
+    CaptureNoSaleService,
+    { provide: CAPTURE_NO_SALE_PORT, useValue: { closeNoSale: async () => { throw new Error("must not close no-sale"); } } },
     { provide: CAPTURE_CUSTOMER_PORT, useValue: { setCustomer: async () => customerOutcome } },
     { provide: CAPTURE_FULFILLMENT_PORT, useValue: { setFulfillment: async () => fulfillmentOutcome } },
     { provide: CAPTURE_DELIVERY_INSTRUCTIONS_PORT, useValue: {
@@ -1293,5 +1295,130 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
     const failure = await send(validCommand);
     assert.equal(failure.status, 503);
     assert.deepEqual(await failure.json(), { code: "CAPTURE_UNAVAILABLE" });
+  } finally { await app.close(); }
+});
+
+const noSaleCommand = { ...holdCommand, reason: "Cliente desistió antes de ordenar" };
+const noSaleRecord = { ...record, detail: { ...record.detail, version: 2, status: "no_sale" as const,
+  attentionStatus: "unclaimed" as const, ownerMembershipId: null, attentionLeaseId: null,
+  attentionLeaseExpiresAt: null } };
+function noSaleFor(port: CaptureNoSalePort, roles: readonly MembershipRoleCode[] = ["cashier"]) {
+  return new CaptureNoSaleService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles, scope: validCommand.scope }),
+  }), port);
+}
+
+test("capture no-sale authorizes, validates the terminal transition and preserves replay", async () => {
+  const calls: unknown[] = [];
+  const service = noSaleFor({ closeNoSale: async (actor, received) => {
+    calls.push({ actor, received }); return { status: "applied", record: noSaleRecord };
+  } });
+  assert.deepEqual(await service.closeNoSale(principal, noSaleCommand),
+    { schemaVersion: 1, detail: noSaleRecord.detail, replayed: false });
+  assert.deepEqual(calls, [{ actor: principal.actorId, received: noSaleCommand }]);
+  const replayed = await noSaleFor({ closeNoSale: async () => ({ status: "replayed", record: noSaleRecord }) })
+    .closeNoSale(principal, noSaleCommand);
+  assert.equal(replayed.replayed, true);
+});
+
+test("capture no-sale rejects invalid commands and unauthorized roles before SQL", async () => {
+  let calls = 0;
+  const port = { closeNoSale: async () => { calls++; return {}; } };
+  for (const input of [mutationCommand, { ...noSaleCommand, reason: " " }, { ...noSaleCommand, reason: "" },
+    { ...noSaleCommand, expectedVersion: Number.MAX_SAFE_INTEGER }, { ...noSaleCommand, actorId: principal.actorId }]) {
+    await assert.rejects(noSaleFor(port).closeNoSale(principal, input), code("request"));
+  }
+  await assert.rejects(noSaleFor(port, ["viewer"]).closeNoSale(principal, noSaleCommand), code("authorization"));
+  await assert.rejects(noSaleFor(port).closeNoSale(principal, {
+    ...noSaleCommand, scope: { ...validCommand.scope, branchId: validCommand.deviceId },
+  }), code("authorization"));
+  assert.equal(calls, 0);
+});
+
+test("capture no-sale sanitizes failures and rejects wrong status, scope or result version", async () => {
+  for (const [status, expected] of [["denied", "authorization"], ["conflict", "conflict"], ["rejected", "request"]] as const) {
+    await assert.rejects(noSaleFor({ closeNoSale: async () => ({ status }) }).closeNoSale(principal, noSaleCommand), code(expected));
+  }
+  for (const stored of [record, { ...noSaleRecord, detail: { ...noSaleRecord.detail, version: 3 } },
+    { ...noSaleRecord, detail: { ...noSaleRecord.detail, status: "draft" as const } },
+    { ...noSaleRecord, detail: { ...noSaleRecord.detail, attentionStatus: "claimed" as const } }]) {
+    await assert.rejects(noSaleFor({ closeNoSale: async () => ({ status: "applied", record: stored }) })
+      .closeNoSale(principal, noSaleCommand), code("unavailable"));
+  }
+  await assert.rejects(noSaleFor({ closeNoSale: async () => { throw new Error("secret-password"); } })
+    .closeNoSale(principal, noSaleCommand), code("unavailable"));
+});
+
+test("capture no-sale adapter validates and parameterizes the command instead of constructing SQL", async () => {
+  const calls: unknown[] = [];
+  const adapter = new PostgresCaptureCreator({ query: async (sql, parameters) => {
+    calls.push({ sql, parameters }); return { rows: [{ result: { status: "conflict" } }] };
+  } });
+  const parsed = { ...noSaleCommand, schemaVersion: 1 as const };
+  assert.deepEqual(await adapter.closeNoSale(principal.actorId, parsed), { status: "conflict" });
+  assert.deepEqual(calls, [{ sql: "select app_private.close_capture_no_sale($1::uuid, $2::jsonb) as result",
+    parameters: [principal.actorId, JSON.stringify(parseCloseCaptureNoSaleCommandV1(parsed))] }]);
+  await assert.rejects(adapter.closeNoSale("forged", parsed), code("request"));
+  assert.equal(calls.length, 1);
+});
+
+test("capture no-sale HTTP route authorizes, validates and translates every outcome", async () => {
+  let outcome: unknown = { status: "applied", record: noSaleRecord };
+  const module = await Test.createTestingModule({ controllers: [CapturesController], providers: [
+    CaptureService, CaptureAttentionService, CaptureCustomerService, CaptureFulfillmentService,
+    CaptureDeliveryInstructionsService, CaptureConfirmationService, CaptureSelectionPlanService,
+    CaptureTrayService, CaptureAssignmentDirectoryService, CaptureNoSaleService,
+    { provide: CAPTURE_CREATION_PORT, useValue: { createDraft: async () => { throw new Error("must not create"); } } },
+    { provide: CAPTURE_ATTENTION_PORT, useValue: { mutateAttention: async () => { throw new Error("must not mutate attention"); } } },
+    { provide: CAPTURE_CUSTOMER_PORT, useValue: { setCustomer: async () => { throw new Error("must not set customer"); } } },
+    { provide: CAPTURE_FULFILLMENT_PORT, useValue: { setFulfillment: async () => { throw new Error("must not set fulfillment"); } } },
+    { provide: CAPTURE_DELIVERY_INSTRUCTIONS_PORT, useValue: {
+      listDeliveryInstructionSuggestions: async () => { throw new Error("must not list suggestions"); },
+      setDeliveryInstructions: async () => { throw new Error("must not set delivery instructions"); } } },
+    { provide: CAPTURE_CONFIRMATION_PORT, useValue: {
+      probeConfirmation: async () => { throw new Error("must not probe confirmation"); },
+      readRepeatOrderPlan: async () => { throw new Error("must not read repeat order plan"); },
+      readSelectionPlan: async () => { throw new Error("must not read selection plan"); },
+      confirmDraft: async () => { throw new Error("must not confirm"); } } },
+    { provide: CAPTURE_SELECTION_PLAN_PORT, useValue: {
+      replaceSelectionPlan: async () => { throw new Error("must not replace selection plan"); },
+      probeReplaceSelectionPlan: async () => { throw new Error("must not probe selection plan"); } } },
+    { provide: CAPTURE_TRAY_PORT, useValue: { list: async () => { throw new Error("must not list tray"); } } },
+    { provide: CAPTURE_ASSIGNMENT_DIRECTORY_PORT, useValue: {
+      listAssignmentCandidates: async () => { throw new Error("must not list assignment candidates"); } } },
+    { provide: MENU_CATALOG_PORT, useValue: {
+      read: async () => { throw new Error("must not read catalog"); },
+      save: async () => { throw new Error("must not save a catalog"); } } },
+    { provide: CAPTURE_NO_SALE_PORT, useValue: { closeNoSale: async (actor: string) => {
+      assert.equal(actor, principal.actorId); return outcome;
+    } } },
+    { provide: MembershipAuthorizationService, useValue: new MembershipAuthorizationService({
+      findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+    }) },
+    { provide: AUTH_PRINCIPAL_VERIFIER, useValue: { verifyAccessToken: async () => principal } },
+    { provide: APP_GUARD, useClass: SupabaseAuthGuard },
+  ] }).compile();
+  const app = module.createNestApplication({ logger: false });
+  app.setGlobalPrefix("api/v1");
+  await app.listen(0, "127.0.0.1");
+  const url = `${await app.getUrl()}/api/v1/captures/no-sale`;
+  const send = (body: unknown, authenticated = true) => fetch(url, { method: "POST", body: JSON.stringify(body),
+    headers: { "content-type": "application/json", ...(authenticated ? { authorization: "Bearer test-capture-access-token" } : {}) } });
+  try {
+    assert.equal((await send(noSaleCommand, false)).status, 401);
+    assert.equal((await send({ ...noSaleCommand, reason: " " })).status, 400);
+    const response = await send(noSaleCommand);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await response.json(), { schemaVersion: 1, detail: noSaleRecord.detail, replayed: false });
+    for (const [status, http, errorCode] of [["conflict", 409, "CAPTURE_CONFLICT"], ["denied", 403, "ACTION_NOT_AUTHORIZED"],
+      ["rejected", 400, "CAPTURE_REQUEST_REJECTED"]] as const) {
+      outcome = { status };
+      const failed = await send(noSaleCommand);
+      assert.equal(failed.status, http);
+      assert.deepEqual(await failed.json(), { code: errorCode });
+    }
+    outcome = {};
+    assert.equal((await send(noSaleCommand)).status, 503);
   } finally { await app.close(); }
 });

@@ -5,7 +5,7 @@ import {
 import type { CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
-import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureSelectionNoteUnsupportedError, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
+import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureNoSaleService, CaptureSelectionNoteUnsupportedError, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
 
 @Controller("captures")
 export class CapturesController {
@@ -16,6 +16,7 @@ export class CapturesController {
     @Inject(CaptureFulfillmentService) private readonly fulfillment: CaptureFulfillmentService,
     @Inject(CaptureDeliveryInstructionsService) private readonly deliveryInstructions: CaptureDeliveryInstructionsService,
     @Inject(CaptureConfirmationService) private readonly confirmation: CaptureConfirmationService,
+    @Inject(CaptureNoSaleService) private readonly noSale: CaptureNoSaleService,
     @Inject(CaptureSelectionPlanService) private readonly selectionPlan: CaptureSelectionPlanService,
     @Inject(CaptureTrayService) private readonly tray: CaptureTrayService,
     @Inject(CaptureAssignmentDirectoryService) private readonly assignmentDirectory: CaptureAssignmentDirectoryService,
@@ -111,6 +112,13 @@ export class CapturesController {
   public async confirm(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.confirmation.confirm(principal, body));
+  }
+  @Post("no-sale")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async closeNoSale(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.noSale.closeNoSale(principal, body));
   }
   @Post("selection-plan")
   @HttpCode(200)
