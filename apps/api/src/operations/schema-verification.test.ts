@@ -78,6 +78,35 @@ test("requires exact rollback opt-in and an administrative Supabase target", () 
   );
 });
 
+test("the loopback local-cluster escape hatch accepts only an unauthenticated plaintext 127.0.0.1/postgres target", () => {
+  const localAccepted = readSchemaVerificationConfig({
+    SCHEMA_VERIFICATION_CONFIRMATION: "ROLLBACK_ONLY",
+    SCHEMA_VERIFICATION_DATABASE_URL: "postgresql://postgres@127.0.0.1:54333/postgres",
+    SCHEMA_VERIFICATION_LOCAL_CLUSTER: "1",
+  });
+  assert.equal(localAccepted.caCertificate, "");
+  assert.equal(localAccepted.expectedProjectRef, "local-disposable-cluster");
+  assert.equal(new URL(localAccepted.connectionString).hostname, "127.0.0.1");
+
+  for (const environment of [
+    // Never a remote host, even one that resembles a real Supabase target.
+    { SCHEMA_VERIFICATION_CONFIRMATION: "ROLLBACK_ONLY", SCHEMA_VERIFICATION_DATABASE_URL: `postgresql://postgres@db.${projectRef}.supabase.co/postgres`, SCHEMA_VERIFICATION_LOCAL_CLUSTER: "1" },
+    // Never a relaxed TLS mode -- loopback local-cluster is plaintext only.
+    { SCHEMA_VERIFICATION_CONFIRMATION: "ROLLBACK_ONLY", SCHEMA_VERIFICATION_DATABASE_URL: "postgresql://postgres@127.0.0.1:54333/postgres?sslmode=require", SCHEMA_VERIFICATION_LOCAL_CLUSTER: "1" },
+    // Never a database other than postgres, nor a role other than postgres.
+    { SCHEMA_VERIFICATION_CONFIRMATION: "ROLLBACK_ONLY", SCHEMA_VERIFICATION_DATABASE_URL: "postgresql://postgres@127.0.0.1:54333/other", SCHEMA_VERIFICATION_LOCAL_CLUSTER: "1" },
+    { SCHEMA_VERIFICATION_CONFIRMATION: "ROLLBACK_ONLY", SCHEMA_VERIFICATION_DATABASE_URL: "postgresql://app_api@127.0.0.1:54333/postgres", SCHEMA_VERIFICATION_LOCAL_CLUSTER: "1" },
+    // Without the exact opt-in flag, the remote path applies and rejects a loopback URL.
+    { SCHEMA_VERIFICATION_CONFIRMATION: "ROLLBACK_ONLY", SCHEMA_VERIFICATION_DATABASE_URL: "postgresql://postgres@127.0.0.1:54333/postgres" },
+  ]) {
+    assert.throws(() => readSchemaVerificationConfig(environment), (error: unknown) => {
+      assert.ok(error instanceof SchemaVerificationError);
+      assert.equal(error.message, "SCHEMA_VERIFICATION_CONFIGURATION_REJECTED");
+      return true;
+    });
+  }
+});
+
 test("extracts only the outer transaction and rejects internal transaction control", () => {
   const body = extractMigrationBody(`
     -- envelope

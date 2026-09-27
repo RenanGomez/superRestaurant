@@ -117,10 +117,49 @@ export interface RunReadOnlySchemaAuditOptions {
 
 type CertificateLoader = (path: string) => string;
 
+const LOCAL_CLUSTER_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+
+/**
+ * Loopback-only escape hatch for developer machines that cannot reach a Supabase project:
+ * skips the project-ref/TLS-verify-full checks, but only for a connection string whose host is
+ * exactly 127.0.0.1/localhost/::1 and which carries no sslmode (plaintext loopback, never a
+ * relaxed TLS mode). Never touches, weakens, or is reachable from the remote verification path.
+ */
+function readLocalClusterSchemaVerificationConfig(environment: NodeJS.ProcessEnv): SchemaVerificationConfig {
+  const confirmation = boundedValue(environment.SCHEMA_VERIFICATION_CONFIRMATION, 64);
+  const rawUrl = boundedValue(environment.SCHEMA_VERIFICATION_DATABASE_URL, 8_192);
+  if (confirmation !== CONFIRMATION || rawUrl === undefined) throw configurationError();
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw configurationError();
+  }
+
+  if (
+    !["postgres:", "postgresql:"].includes(parsed.protocol) ||
+    parsed.hash.length !== 0 ||
+    parsed.username !== "postgres" ||
+    !LOCAL_CLUSTER_HOSTS.has(parsed.hostname.toLowerCase()) ||
+    parsed.pathname !== "/postgres" ||
+    parsed.search.length !== 0
+  ) {
+    throw configurationError();
+  }
+
+  parsed.search = "";
+  return Object.freeze({ caCertificate: "", connectionString: parsed.toString(), expectedProjectRef: "local-disposable-cluster" });
+}
+
 export function readSchemaVerificationConfig(
   environment: NodeJS.ProcessEnv,
   certificateLoader: CertificateLoader = loadAndValidateCaCertificate,
 ): SchemaVerificationConfig {
+  if (environment.SCHEMA_VERIFICATION_LOCAL_CLUSTER === "1") {
+    return readLocalClusterSchemaVerificationConfig(environment);
+  }
+
   const confirmation = boundedValue(environment.SCHEMA_VERIFICATION_CONFIRMATION, 64);
   const expectedProjectRef = boundedValue(environment.SCHEMA_VERIFICATION_EXPECTED_PROJECT_REF, 64);
   const rawUrl = boundedValue(environment.SCHEMA_VERIFICATION_DATABASE_URL, 8_192);
@@ -332,7 +371,10 @@ class PostgresSchemaVerificationSession implements SchemaVerificationSession {
       connectionTimeoutMillis: 15_000,
       connectionString: config.connectionString,
       query_timeout: 120_000,
-      ssl: { ca: config.caCertificate, rejectUnauthorized: true },
+      // Loopback-only local cluster (see readLocalClusterSchemaVerificationConfig) carries no
+      // certificate and connects in plaintext; every remote target always supplies one and gets
+      // full certificate verification.
+      ssl: config.caCertificate.length === 0 ? false : { ca: config.caCertificate, rejectUnauthorized: true },
       statement_timeout: 120_000,
     });
   }
