@@ -8,7 +8,7 @@ import {
   type OrderAuditContext,
   type OrderAuditEvent,
 } from "@super-restaurant/domain";
-import type { ConfirmCaptureDraftCommandV2, MenuCatalogV1 } from "@super-restaurant/shared-types";
+import type { CaptureSelectionPlanV1, ConfirmCaptureDraftCommandV2, MenuCatalogV1 } from "@super-restaurant/shared-types";
 
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
 
@@ -65,6 +65,56 @@ export function materializeCaptureOrder(
   plan: CaptureRepeatSelectionPlan | null,
   catalog: MenuCatalogV1 | null,
 ): CaptureOrderMaterialization {
+  const base = createBaseOrder(command, actorId, channel);
+  if (plan === null) return base;
+  if (catalog === null || plan.lines.length === 0 || catalog.currency !== command.currency) {
+    throw new Error("CAPTURE_REPEAT_CATALOG_CONFLICT");
+  }
+  const domainCatalog = toDomainMenuCatalog(catalog, command.scope.restaurantId);
+  return appendMaterializedItems(base, command, actorId, domainCatalog, plan.lines.map((line) => ({
+    identity: line.sourceOrderItemId,
+    modifierGroups: line.modifierGroups,
+    productId: line.productId,
+    quantity: line.quantity,
+  })), "capture-repeat");
+}
+
+/**
+ * Materializes the Order from a catalog-derived `CaptureSelectionPlanV1`
+ * (server-owned pricing via `createMenuProductPriceSnapshot`, never a
+ * client-supplied price). `variantId` is not supported by the legacy
+ * `MenuCatalogV1`/domain snapshot: any non-null `variantId` is rejected here
+ * rather than silently ignored, so the gap is explicit instead of silent.
+ */
+export function materializeCaptureSelectionOrder(
+  command: ConfirmCaptureDraftCommandV2,
+  actorId: string,
+  channel: "counter" | "delivery" | "table" | "takeout",
+  plan: CaptureSelectionPlanV1,
+  catalog: MenuCatalogV1 | null,
+): CaptureOrderMaterialization {
+  const base = createBaseOrder(command, actorId, channel);
+  if (catalog === null || plan.lines.length === 0 || catalog.currency !== command.currency
+    || catalog.catalogVersion !== plan.catalogVersion) {
+    throw new Error("CAPTURE_SELECTION_CATALOG_CONFLICT");
+  }
+  if (plan.lines.some((line) => line.variantId !== null)) {
+    throw new Error("CAPTURE_SELECTION_VARIANT_UNSUPPORTED");
+  }
+  const domainCatalog = toDomainMenuCatalog(catalog, command.scope.restaurantId);
+  return appendMaterializedItems(base, command, actorId, domainCatalog, plan.lines.map((line) => ({
+    identity: line.lineId,
+    modifierGroups: line.modifierGroups,
+    productId: line.productId,
+    quantity: line.quantity,
+  })), "capture-selection");
+}
+
+function createBaseOrder(
+  command: ConfirmCaptureDraftCommandV2,
+  actorId: string,
+  channel: "counter" | "delivery" | "table" | "takeout",
+): CaptureOrderMaterialization {
   const created = createOrder({
     orderId: command.orderId,
     restaurantId: command.scope.restaurantId,
@@ -74,27 +124,43 @@ export function materializeCaptureOrder(
     currency: command.currency,
     timeZone: command.timeZone,
   }, audit(command, actorId));
-  let order = created.order;
-  const auditEvents: OrderAuditEvent[] = [created.auditEvent];
-  if (plan === null) return deepFreeze({ auditEvents, order });
-  if (catalog === null || plan.lines.length === 0 || catalog.currency !== command.currency) {
-    throw new Error("CAPTURE_REPEAT_CATALOG_CONFLICT");
-  }
-  const domainCatalog = toDomainMenuCatalog(catalog, command.scope.restaurantId);
-  for (const line of plan.lines) {
+  return deepFreeze({ auditEvents: [created.auditEvent], order: created.order });
+}
+
+interface MaterializableLine {
+  readonly identity: string;
+  readonly modifierGroups: readonly Readonly<{
+    groupId: string;
+    selections: readonly Readonly<{ optionId: string; quantity: number }>[];
+  }>[];
+  readonly productId: string;
+  readonly quantity: number;
+}
+
+function appendMaterializedItems(
+  base: CaptureOrderMaterialization,
+  command: ConfirmCaptureDraftCommandV2,
+  actorId: string,
+  domainCatalog: ReturnType<typeof toDomainMenuCatalog>,
+  lines: readonly MaterializableLine[],
+  namespace: "capture-repeat" | "capture-selection",
+): CaptureOrderMaterialization {
+  let order = base.order;
+  const auditEvents: OrderAuditEvent[] = [...base.auditEvents];
+  for (const line of lines) {
     const snapshot = createMenuProductPriceSnapshot(domainCatalog, {
       currency: command.currency,
       productId: line.productId,
       restaurantId: command.scope.restaurantId,
     }, line.modifierGroups);
     const added = addOrderItem(order, {
-      orderItemId: derivedUuid("capture-repeat-item", command.eventId, line.sourceOrderItemId),
+      orderItemId: derivedUuid(`${namespace}-item`, command.eventId, line.identity),
       quantity: line.quantity,
       snapshot,
     }, {
       ...audit(command, actorId),
-      eventId: derivedUuid("capture-repeat-event", command.eventId, line.sourceOrderItemId),
-      idempotencyKey: derivedUuid("capture-repeat-idempotency", command.idempotencyKey, line.sourceOrderItemId),
+      eventId: derivedUuid(`${namespace}-event`, command.eventId, line.identity),
+      idempotencyKey: derivedUuid(`${namespace}-idempotency`, command.idempotencyKey, line.identity),
     });
     order = added.order;
     auditEvents.push(added.auditEvent);
