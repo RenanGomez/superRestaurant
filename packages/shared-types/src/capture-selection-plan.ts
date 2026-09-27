@@ -1,5 +1,10 @@
 import type { BranchScope } from "./index.js";
-import type { CaptureVersionedMutationInputV1 } from "./commercial-capture.js";
+import {
+  COMMERCIAL_CAPTURE_V4_SCHEMA_VERSION,
+  parseCaptureWorkspaceV3,
+  type CaptureVersionedMutationInputV1,
+  type CaptureWorkspaceV3,
+} from "./commercial-capture.js";
 
 export const CAPTURE_SELECTION_PLAN_SCHEMA_VERSION = 1 as const;
 
@@ -88,6 +93,72 @@ export interface CaptureSelectionPlanProjectionV1 {
   readonly subtotalMinor: number;
   readonly lineCount: number;
   readonly lines: readonly CaptureSelectionPlanProjectionLineV1[];
+}
+
+/** Durable selection intent only, mirroring `CaptureRepeatOrderPlanSummaryV1`; no prices, no lines. */
+export interface CaptureSelectionPlanSummaryV1 {
+  readonly appliedCaptureVersion: number;
+  readonly catalogVersion: string;
+  readonly lineCount: number;
+  readonly schemaVersion: typeof CAPTURE_SELECTION_PLAN_SCHEMA_VERSION;
+}
+
+/**
+ * Widens `CaptureWorkspaceV3` with a nullable selection-plan summary (facts
+ * from storage) and a nullable, server-computed selection projection
+ * (resolved names/prices from the catalog, never stored). Exactly one of
+ * `repeatOrderPlan`/`selectionPlan` is non-null per capture.
+ */
+export interface CaptureWorkspaceV4 extends Omit<CaptureWorkspaceV3, "schemaVersion"> {
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_V4_SCHEMA_VERSION;
+  readonly selectionPlan: CaptureSelectionPlanSummaryV1 | null;
+  readonly selectionProjection: CaptureSelectionPlanProjectionV1 | null;
+}
+
+export function parseCaptureSelectionPlanSummaryV1(value: unknown): CaptureSelectionPlanSummaryV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "catalogVersion", "appliedCaptureVersion", "lineCount"]);
+  if (record === undefined || own(record, "schemaVersion") !== CAPTURE_SELECTION_PLAN_SCHEMA_VERSION) return undefined;
+  const catalogVersion = uuid(own(record, "catalogVersion"));
+  const appliedCaptureVersion = integer(own(record, "appliedCaptureVersion"), 2, Number.MAX_SAFE_INTEGER);
+  const lineCount = integer(own(record, "lineCount"), 0, MAX_LINES);
+  return catalogVersion === undefined || appliedCaptureVersion === undefined || lineCount === undefined
+    ? undefined
+    : Object.freeze({ appliedCaptureVersion, catalogVersion, lineCount, schemaVersion: CAPTURE_SELECTION_PLAN_SCHEMA_VERSION });
+}
+
+export function parseCaptureWorkspaceV4(value: unknown): CaptureWorkspaceV4 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "detail", "customerSnapshot", "fulfillmentSnapshot", "repeatOrderPlan",
+    "selectionPlan", "selectionProjection",
+  ]);
+  if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_V4_SCHEMA_VERSION) return undefined;
+  const v3 = parseCaptureWorkspaceV3({
+    schemaVersion: 3,
+    detail: own(record, "detail"),
+    customerSnapshot: own(record, "customerSnapshot"),
+    fulfillmentSnapshot: own(record, "fulfillmentSnapshot"),
+    repeatOrderPlan: own(record, "repeatOrderPlan"),
+  });
+  const rawSelectionPlan = own(record, "selectionPlan");
+  const selectionPlan = rawSelectionPlan === null ? null : parseCaptureSelectionPlanSummaryV1(rawSelectionPlan);
+  const rawSelectionProjection = own(record, "selectionProjection");
+  const selectionProjection = rawSelectionProjection === null
+    ? null
+    : parseCaptureSelectionPlanProjectionV1(rawSelectionProjection);
+  if (v3 === undefined || selectionPlan === undefined || selectionProjection === undefined
+    || (v3.repeatOrderPlan !== null && selectionPlan !== null)
+    || (selectionProjection !== null && (selectionPlan === null
+      || selectionProjection.catalogVersion !== selectionPlan.catalogVersion
+      || selectionProjection.lineCount !== selectionPlan.lineCount))) return undefined;
+  return Object.freeze({
+    customerSnapshot: v3.customerSnapshot,
+    detail: v3.detail,
+    fulfillmentSnapshot: v3.fulfillmentSnapshot,
+    repeatOrderPlan: v3.repeatOrderPlan,
+    schemaVersion: COMMERCIAL_CAPTURE_V4_SCHEMA_VERSION,
+    selectionPlan,
+    selectionProjection,
+  });
 }
 
 export function parseCaptureSelectionPlanV1(value: unknown): CaptureSelectionPlanV1 | undefined {

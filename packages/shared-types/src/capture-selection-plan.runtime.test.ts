@@ -2,6 +2,8 @@ import {
   parseCaptureSelectionPlanV1,
   parseReplaceCaptureSelectionPlanCommandV1,
   parseCaptureSelectionPlanProjectionV1,
+  parseCaptureSelectionPlanSummaryV1,
+  parseCaptureWorkspaceV4,
 } from "./index.js";
 
 const expect = (condition: boolean, message: string): void => {
@@ -185,6 +187,58 @@ expect(parseCaptureSelectionPlanProjectionV1({
   ...projection,
   lines: [projectionLineWithoutVariantId],
 }) === undefined, "projection rejects line missing variantId key");
+
+// Workspace V4: widens V3 with a nullable selection-plan summary and a
+// nullable, server-computed projection; exactly one of repeat/selection is
+// non-null, and the projection (when present) must agree with the summary.
+const detailV2 = {
+  schemaVersion: 2,
+  scope,
+  captureDraftId: catalogVersion,
+  folio: "CAP-000042",
+  sourceChannel: "phone",
+  fulfillmentChannel: "counter",
+  status: "draft",
+  attentionStatus: "claimed",
+  ownerMembershipId: groupId,
+  version: 2,
+  updatedAt: "2026-09-15T18:00:00.000Z",
+  attentionLeaseId: optionId,
+  attentionLeaseExpiresAt: "2026-09-15T18:31:00.000Z",
+  customerSnapshotRef: null,
+  fulfillmentSnapshotRef: null,
+  confirmedOrderId: null,
+  deliveryInstructions: null,
+};
+const workspaceV4Base = {
+  schemaVersion: 4,
+  detail: detailV2,
+  customerSnapshot: null,
+  fulfillmentSnapshot: null,
+  repeatOrderPlan: null,
+  selectionPlan: { schemaVersion: 1, catalogVersion, appliedCaptureVersion: 2, lineCount: 1 },
+  selectionProjection: null,
+};
+const parsedWorkspaceV4 = parseCaptureWorkspaceV4(workspaceV4Base);
+expect(parsedWorkspaceV4 !== undefined && parsedWorkspaceV4.selectionPlan?.lineCount === 1,
+  "workspace V4 rehydrates a bounded selection plan summary");
+expect(parseCaptureWorkspaceV4({ ...workspaceV4Base, selectionProjection: projection }) !== undefined,
+  "workspace V4 accepts a projection matching the stored summary");
+expect(parseCaptureWorkspaceV4({
+  ...workspaceV4Base,
+  selectionProjection: { ...projection, lineCount: 5 },
+}) === undefined, "workspace V4 rejects a projection mismatched with the summary");
+expect(parseCaptureWorkspaceV4({
+  ...workspaceV4Base,
+  repeatOrderPlan: { schemaVersion: 1, customerId: catalogVersion, sourceOrderId: catalogVersion,
+    catalogVersion, appliedCaptureVersion: 2, lineCount: 1 },
+}) === undefined, "workspace V4 never carries both repeat and selection plans");
+expect(parseCaptureSelectionPlanSummaryV1({
+  schemaVersion: 1, catalogVersion, appliedCaptureVersion: 2, lineCount: 1,
+}) !== undefined, "selection plan summary parses");
+expect(parseCaptureSelectionPlanSummaryV1({
+  schemaVersion: 1, catalogVersion, appliedCaptureVersion: 1, lineCount: 1,
+}) === undefined, "selection plan summary requires an applied version past creation");
 
 // Arrays: exact own-index elements only, no reliance on iterator protocol.
 const arrayWithHole = [fullLine];
