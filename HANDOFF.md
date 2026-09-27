@@ -1,5 +1,13 @@
 # HANDOFF
 
+## Cierre S7.1b y revisión doble Codex+Sonnet — 2026-09-26 (REVIEW)
+
+- S7.1b integrado en `main`: SQL `346d089`, contratos `1952154`, módulo NestJS `12d686c`, verificador `9fb5be0` (conflicto en la cadena `test` de apps/api resuelto de forma aditiva por L0). La migración `20260927000100_delivery_zones.sql` sigue siendo candidata: aplicarla al proyecto `zwbyiefqeujstyzysydn` requiere autorización explícita de Emmanuel; el runner remoto `verify:delivery-zones-schema:rollback` está listo para la prueba rollback-only previa.
+- Revisión doble estrenada: `codex exec review --base main` (cuota Plus, sin costo Claude) corrió antes o en paralelo a Sonnet. Sobre el módulo de API Sonnet aprobó y Codex encontró un P1 real (SQL ordena por nombre, el parser exige `zoneId` ascendente → 503 con dos o más zonas) y un P2 (identidad de quote), ambos corregidos antes de integrar. Sobre el verificador ambos aprobaron; Sonnet pidió quitar `localhost` de la vía local, hecho. Restricciones de `exec review`: no acepta prompt junto con `--base`, ni `-s`, ni `-o`; la salida se captura por stdout.
+- Decisiones registradas: forma canónica de postalCodes/localities y regla de motivo (PROJECT_NOTES); listado restaurant-wide se agrega en API por membresías del actor (sin función SQL restaurant-wide); `quoteId` determinista sha-256 con forma uuid sobre todos los hechos congelados hasta que S7.2 persista quotes; rutas `POST /delivery-zones/{list,upsert,quote}` siguiendo la convención de captures.
+- En curso: Codex L2 `web-delivery-zones-ui` (página de gerente y cotización en Capture). Puertas globales tras los merges: en ejecución al cerrar esta nota.
+- Siguiente acción mínima: integrar la UI tras revisión y verificación en navegador; pedir autorización para aplicar la migración; abrir S6.3 (L1) y S8.3 (L1) con revisión doble.
+
 ## Ronda tres del harness: S5.1, S7.1b en subunidades — 2026-09-26 (IN_PROGRESS)
 
 - Integrado en `main` con reviewer `APROBAR` y puertas globales verdes (lint 9/9, typecheck 12/12, test 12/12, build 9/9): `c6d3a1b` S5.1 resolver de precios de fracciones (Claude L1; CORREGIR por pérdida de `fractionBreakdown` en `clonePriceSnapshot` y normalizadores no hostiles → corregido → APROBAR); `1952154` contratos `DeliveryZoneV1`/`Upsert*`/`RequestDeliveryQuoteCommandV1` (S7.1b subunidad 2).
