@@ -785,6 +785,124 @@ begin
 end
 $capture_selection_plan_stale_version_tests$;
 
+-- probe_capture_selection_plan_replace answers purely from actor+scope+idempotencyKey+
+-- fingerprint: it must recognize a replay (and a divergent-payload conflict) without ever
+-- touching catalog/product state, and without requiring a pending request to have been applied.
+do $capture_selection_plan_probe_tests$
+declare
+  actor uuid := (select id from auth.users where deleted_at is null order by id limit 1);
+  restaurant uuid := gen_random_uuid();
+  branch uuid := gen_random_uuid();
+  catalog uuid := gen_random_uuid();
+  category uuid := gen_random_uuid();
+  product uuid := gen_random_uuid();
+  target_capture uuid := gen_random_uuid();
+  line_a uuid := gen_random_uuid();
+  device uuid := gen_random_uuid();
+  now_at timestamptz := pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp());
+  created jsonb;
+  lease text;
+  command jsonb;
+  plan jsonb;
+  result jsonb;
+begin
+  if actor is null then raise exception 'CAPTURE_SELECTION_PLAN_PROBE_TEST_ACTOR_REQUIRED'; end if;
+
+  insert into app.restaurants(id,name,time_zone)
+    values(restaurant,'rollback-only Capture selection plan probe','America/Hermosillo');
+  insert into app.branches(id,restaurant_id,name) values(branch,restaurant,'rollback-only probe branch');
+  insert into app.memberships(id,user_id,restaurant_id,branch_id,granted_by)
+    values(gen_random_uuid(),actor,restaurant,branch,actor);
+  insert into app.membership_role_grants(membership_id,role_code,granted_by)
+    select id,'cashier',actor from app.memberships where restaurant_id=restaurant and branch_id=branch;
+
+  insert into app.menu_catalogs(id,restaurant_id,version,currency,published_by)
+    values(catalog,restaurant,1,'MXN',actor);
+  insert into app.menu_categories(restaurant_id,catalog_id,id,name,active,display_order)
+    values(restaurant,catalog,category,'Tacos',true,1);
+  insert into app.menu_products(
+    restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor
+  ) values (
+    restaurant,catalog,product,category,'Taco vigente','TACO-PROBE',true,1,'kitchen','piece',4900
+  );
+  insert into app.menu_catalog_heads(restaurant_id,catalog_id,version,updated_at,updated_by)
+    values(restaurant,catalog,1,now_at,actor);
+
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',target_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','counter'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_SELECTION_PLAN_PROBE_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  command := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',target_capture::text,'expectedVersion',1,
+    'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  );
+  plan := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'catalogVersion',catalog::text,'lines',pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'lineId',line_a::text,'productId',product::text,'variantId',null,'quantity',1,'note',null,
+        'modifierGroups','[]'::jsonb
+      )
+    )
+  );
+
+  -- Before the write ever happens, the probe must answer 'pending' -- not 'applied', not
+  -- 'replayed' -- purely because no command event exists yet for this idempotency key.
+  execute 'set local role app_api';
+  result := app_private.probe_capture_selection_plan_replace(actor,command,plan);
+  execute 'reset role';
+  if result->>'status'<>'pending' then raise exception 'CAPTURE_SELECTION_PLAN_PROBE_PENDING_REJECTED'; end if;
+
+  execute 'set local role app_api';
+  result := app_private.replace_capture_selection_plan(actor,command,plan);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_SELECTION_PLAN_PROBE_APPLY_REJECTED'; end if;
+
+  -- Even after every product/head behind this exact plan is gone (the catalog row itself
+  -- stays, since capture_repeat_order_plans_catalog_fk still references it), the probe must
+  -- still recognize the replay: it never reads menu_products/menu_catalog_heads at all.
+  delete from app.menu_catalog_heads where restaurant_id=restaurant;
+  delete from app.menu_modifier_options where restaurant_id=restaurant;
+  delete from app.menu_modifier_groups where restaurant_id=restaurant;
+  delete from app.menu_products where restaurant_id=restaurant;
+  delete from app.menu_categories where restaurant_id=restaurant;
+
+  execute 'set local role app_api';
+  result := app_private.probe_capture_selection_plan_replace(actor,command,plan);
+  execute 'reset role';
+  if result->>'status'<>'replayed' or result#>>'{record,detail,version}'<>'2' then
+    raise exception 'CAPTURE_SELECTION_PLAN_PROBE_REPLAY_REJECTED';
+  end if;
+
+  -- Same idempotencyKey, different plan payload -> conflict, never treated as a replay.
+  execute 'set local role app_api';
+  result := app_private.probe_capture_selection_plan_replace(
+    actor,command,pg_catalog.jsonb_set(plan,'{lines,0,quantity}','2'::jsonb)
+  );
+  execute 'reset role';
+  if result->>'status'<>'conflict' then raise exception 'CAPTURE_SELECTION_PLAN_PROBE_DIVERGENT_ACCEPTED'; end if;
+
+  -- A structurally rejected command/plan must fail closed the same way the write does.
+  execute 'set local role app_api';
+  result := app_private.probe_capture_selection_plan_replace(actor,command||'{"unexpected":true}'::jsonb,plan);
+  execute 'reset role';
+  if result->>'status'<>'rejected' then raise exception 'CAPTURE_SELECTION_PLAN_PROBE_EXTRA_KEYS_ACCEPTED'; end if;
+end
+$capture_selection_plan_probe_tests$;
+
 -- A 0-line selection plan means "no plan": the row is deleted (still
 -- audited by the command event), never persisted with an empty lines array.
 do $capture_selection_plan_empty_tests$

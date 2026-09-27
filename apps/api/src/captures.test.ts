@@ -629,6 +629,7 @@ test("capture selection plan prices every line against the live catalog before p
   };
   let persistedCommand: unknown;
   const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "pending" }),
     replaceSelectionPlan: async (actorId, submittedCommand) => {
       assert.equal(actorId, principal.actorId);
       persistedCommand = submittedCommand;
@@ -689,6 +690,7 @@ test("capture selection plan with zero lines is treated as no plan, never priced
   };
   let persistedPlan: unknown;
   const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "pending" }),
     replaceSelectionPlan: async (_actorId, submittedCommand) => {
       persistedPlan = submittedCommand.plan;
       return { status: "applied", record: noPlanWorkspaceV4Record.detail };
@@ -717,6 +719,7 @@ test("capture selection plan with a line note is rejected: OrderItem has nowhere
   });
   assert.ok(notedCommand);
   const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "pending" }),
     replaceSelectionPlan: async () => { throw new Error("must not persist a rejected note"); },
   };
   const captures: CaptureCreationPort = {
@@ -746,7 +749,9 @@ test("capture selection plan replay returns the stored result even after a later
       appliedCaptureVersion: 2, lineCount: 1 },
   };
   const persistence: CaptureSelectionPlanPort = {
-    replaceSelectionPlan: async () => ({ status: "replayed", record: advancedWorkspaceV4Record.detail }),
+    // The probe alone recognizes the replay; the real write must never be attempted for it.
+    probeReplaceSelectionPlan: async () => ({ status: "replayed", record: advancedWorkspaceV4Record.detail }),
+    replaceSelectionPlan: async () => { throw new Error("must not attempt a real write for a replay"); },
   };
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
@@ -777,6 +782,53 @@ test("capture selection plan replay returns the stored result even after a later
   // Priced from storedReplayPlan's quantity 3, not selectionPlanCommand's quantity 2.
   assert.equal(result.selectionProjection?.subtotalMinor, 13_500);
   assert.equal(result.selectionProjection?.lines[0]?.quantity, 3);
+});
+
+test("capture selection plan replay never 503s, even when the catalog changed since the original apply", async () => {
+  const replayedRecord = {
+    schemaVersion: 4,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+  };
+  const persistence: CaptureSelectionPlanPort = {
+    // The probe answers purely from the idempotency key: it must never even attempt to read
+    // the catalog or price the plan, so a changed/unpublished catalog cannot reject a replay.
+    probeReplaceSelectionPlan: async () => ({ status: "replayed", record: replayedRecord.detail }),
+    replaceSelectionPlan: async () => { throw new Error("must not attempt a real write for a replay"); },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => replayedRecord,
+  };
+  const confirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    readSelectionPlan: async () => ({
+      status: "ok",
+      plan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion, lines: [{
+        lineId: "60a26e69-3ea6-4ef8-8a2b-ad43ba0a0da1", productId: selectionCatalog.products[0]!.productId,
+        variantId: null, quantity: 2, modifierGroups: [], note: null,
+      }] },
+    }),
+  };
+  // The live catalog has since republished under a different catalogVersion (the stored plan's
+  // catalog no longer exists) -- this must yield selectionProjection: null, never a rejection.
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, {
+    read: async () => ({
+      schemaVersion: 1, scope: validCommand.scope,
+      catalog: { ...selectionCatalog, catalogVersion: validCommand.deviceId, products: [] },
+    }),
+    save: async () => { throw new Error("must not save a catalog"); },
+  }, confirmation);
+  const result = await service.replace(principal, selectionPlanCommand);
+  assert.equal(result.detail.version, 2);
+  assert.equal(result.selectionPlan?.lineCount, 1);
+  assert.equal(result.selectionProjection, null);
 });
 
 test("capture tray authorizes, binds scope and rejects hostile persistence", async () => {

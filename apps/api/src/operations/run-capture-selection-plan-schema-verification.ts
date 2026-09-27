@@ -37,6 +37,7 @@ const SUMMARY_SQL = `select
 
 const REGPROC_SQL = `select
   to_regprocedure('app_private.replace_capture_selection_plan(uuid,jsonb,jsonb)') is not null as "hasReplace",
+  to_regprocedure('app_private.probe_capture_selection_plan_replace(uuid,jsonb,jsonb)') is not null as "hasProbe",
   to_regprocedure('app_private.read_capture_selection_plan(uuid,jsonb)') is not null as "hasReader",
   to_regprocedure('app_private.confirm_capture_draft_v3(uuid,jsonb,jsonb,jsonb)') is not null as "hasConfirmV3",
   to_regprocedure('app_private.read_capture_workspace_v3(uuid,jsonb)') is not null as "hasWorkspaceV3",
@@ -120,7 +121,7 @@ try {
     await admin.query(extractMigrationBody(candidateSql));
     migrated = (await admin.query(SUMMARY_SQL)).rows[0];
     const regprocs = (await admin.query(REGPROC_SQL)).rows[0];
-    assert.deepEqual(regprocs, { hasReplace: true, hasReader: true, hasConfirmV3: true, hasWorkspaceV3: true, hasWorkspaceV4: true });
+    assert.deepEqual(regprocs, { hasReplace: true, hasProbe: true, hasReader: true, hasConfirmV3: true, hasWorkspaceV3: true, hasWorkspaceV4: true });
     await admin.query(extractMigrationBody(invariantsSql));
   } catch (error: unknown) {
     migrationFailure = error;
@@ -133,19 +134,20 @@ try {
     postcheck = (await admin.query(SUMMARY_SQL)).rows[0];
     const removed = (await admin.query(`select
       to_regprocedure('app_private.replace_capture_selection_plan(uuid,jsonb,jsonb)') is null as "replaceAbsent",
+      to_regprocedure('app_private.probe_capture_selection_plan_replace(uuid,jsonb,jsonb)') is null as "probeAbsent",
       to_regprocedure('app_private.read_capture_selection_plan(uuid,jsonb)') is null as "readerAbsent",
       (select count(*)::integer from pg_catalog.pg_attribute a join pg_catalog.pg_class c on c.oid=a.attrelid
         join pg_catalog.pg_namespace n on n.oid=c.relnamespace
         where n.nspname='app' and c.relname='capture_repeat_order_plans' and a.attname='plan_kind'
           and a.attnum>0 and not a.attisdropped) as "planKindColumns"`)).rows[0];
-    assert.deepEqual(removed, { replaceAbsent: true, readerAbsent: true, planKindColumns: 0 });
+    assert.deepEqual(removed, { replaceAbsent: true, probeAbsent: true, readerAbsent: true, planKindColumns: 0 });
   } finally { await admin.query("ROLLBACK"); }
 
   if (migrationFailure !== undefined) { stage = "migrated"; throw migrationFailure; }
   assert.deepEqual(baseline, postcheck);
   assert.equal(baseline.securedTables, migrated.securedTables);
   assert.equal(baseline.policies, migrated.policies);
-  assert.equal(migrated.securityDefinerFunctions - baseline.securityDefinerFunctions, 3);
+  assert.equal(migrated.securityDefinerFunctions - baseline.securityDefinerFunctions, 4);
 
   process.stdout.write(`${JSON.stringify({
     stage: "capture_selection_plan_rollback", status: "ok", runId,

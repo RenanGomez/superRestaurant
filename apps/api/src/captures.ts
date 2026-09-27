@@ -154,6 +154,7 @@ export interface CaptureConfirmationPort {
 export const CAPTURE_CONFIRMATION_PORT = Symbol("CAPTURE_CONFIRMATION_PORT");
 export interface CaptureSelectionPlanPort {
   replaceSelectionPlan(actorId: string, command: ReplaceCaptureSelectionPlanCommandV1): Promise<unknown>;
+  probeReplaceSelectionPlan(actorId: string, command: ReplaceCaptureSelectionPlanCommandV1): Promise<unknown>;
 }
 export const CAPTURE_SELECTION_PLAN_PORT = Symbol("CAPTURE_SELECTION_PLAN_PORT");
 export interface CaptureTrayPort { list(actorId: string, request: CaptureWorkTrayRequestV1): Promise<unknown>; }
@@ -252,6 +253,20 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     const { plan, ...envelope } = command;
     const response = await this.database.query(
       "select app_private.replace_capture_selection_plan($1::uuid, $2::jsonb, $3::jsonb) as result",
+      [actorId, JSON.stringify(envelope), JSON.stringify(plan)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async probeReplaceSelectionPlan(actorId: string, input: ReplaceCaptureSelectionPlanCommandV1): Promise<unknown> {
+    const command = parseReplaceCaptureSelectionPlanCommandV1(input);
+    if (!canonicalUuid.test(actorId) || command === undefined) throw new CaptureApplicationError("request");
+    const { plan, ...envelope } = command;
+    const response = await this.database.query(
+      "select app_private.probe_capture_selection_plan_replace($1::uuid, $2::jsonb, $3::jsonb) as result",
       [actorId, JSON.stringify(envelope), JSON.stringify(plan)],
     );
     if (response.rows.length !== 1) throw unavailable();
@@ -705,6 +720,21 @@ export class CaptureSelectionPlanService {
       actorId = captureAuthorization.principal.actorId;
     } catch { throw new CaptureApplicationError("authorization"); }
 
+    // Idempotency is decided purely by actor+scope+idempotencyKey+fingerprint, entirely
+    // independent of catalog/pricing state. Probing it first -- before any catalog read or
+    // pricing attempt -- means a catalog change (or a later, different write) since the
+    // original apply can never turn a legitimate replay into a spurious rejection, and the
+    // replayed response is never derived from comparing against this echoed command.
+    let rawProbe: unknown;
+    try { rawProbe = await this.persistence.probeReplaceSelectionPlan(actorId, command); } catch { throw unavailable(); }
+    const probe = exactRecord(rawProbe, ["status", "record"]);
+    if (probe?.status === "replayed") return this.replayedWorkspace(actorId, command);
+    const probeStatus = exactRecord(rawProbe, ["status"]);
+    if (probeStatus?.status === "denied") throw new CaptureApplicationError("authorization");
+    if (probeStatus?.status === "conflict") throw new CaptureApplicationError("conflict");
+    if (probeStatus?.status === "rejected") throw new CaptureApplicationError("request");
+    if (probeStatus?.status !== "pending") throw unavailable();
+
     let catalogState;
     try { catalogState = await this.catalogs.read(actorId, command.scope); } catch { throw unavailable(); }
     if (catalogState === "forbidden") throw new CaptureApplicationError("authorization");
@@ -715,18 +745,18 @@ export class CaptureSelectionPlanService {
 
     // Validate and price every line against the live, published catalog before persisting anything: an
     // inactive product/option or a group outside its configured limits fails closed with 409, never a
-    // silent reprice or a partially-applied plan. This projection is provisional: on a genuine
-    // "applied" write it is exactly what gets returned, but on a replay it is only used to fail
-    // fast if the echoed command itself cannot even be priced -- the returned projection is
-    // re-derived below from the actually-stored plan, never trusted from the replayed command.
-    let projection = command.plan.lines.length === 0
+    // silent reprice or a partially-applied plan.
+    const projection = command.plan.lines.length === 0
       ? null
       : priceSelectionPlan(command.plan, catalog, command.scope.restaurantId);
 
     let raw: unknown;
     try { raw = await this.persistence.replaceSelectionPlan(actorId, command); } catch { throw unavailable(); }
     const envelope = exactRecord(raw, ["status", "record"]);
-    if (envelope?.status !== "applied" && envelope?.status !== "replayed") {
+    // A genuine race between the probe and the write (another replica applied it in between)
+    // still resolves correctly: fall back to the same replay path rather than mistrusting it.
+    if (envelope?.status === "replayed") return this.replayedWorkspace(actorId, command);
+    if (envelope?.status !== "applied") {
       const statusOnly = exactRecord(raw, ["status"]);
       if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
       if (statusOnly?.status === "conflict") throw new CaptureApplicationError("conflict");
@@ -742,38 +772,61 @@ export class CaptureSelectionPlanService {
     if (statusOnly !== undefined) throw unavailable();
     let workspace: CaptureWorkspaceV4;
     try { workspace = decodeCaptureWorkspaceV4(rawWorkspace, command.scope); } catch { throw unavailable(); }
-    // On a fresh apply the draft version must be exactly expectedVersion+1 (nothing else could have
-    // committed in between). On replay of an already-applied idempotency key, an unrelated mutation
-    // may have advanced the draft further since then; the stored plan/catalog match is what matters.
-    // A 0-line plan is "no plan": the row was deleted, so `selectionPlan` reads back null.
+    // A fresh apply's draft version must be exactly expectedVersion+1 (nothing else could have
+    // committed in between). A 0-line plan is "no plan": the row was deleted, so `selectionPlan`
+    // reads back null.
     if (workspace.detail.captureDraftId !== command.captureDraftId
-      || (envelope.status === "applied" && workspace.detail.version !== command.expectedVersion + 1)
+      || workspace.detail.version !== command.expectedVersion + 1
       || (command.plan.lines.length === 0
         ? workspace.selectionPlan !== null
         : workspace.selectionPlan === null
           || workspace.selectionPlan.lineCount !== command.plan.lines.length
           || workspace.selectionPlan.catalogVersion !== command.plan.catalogVersion)) throw unavailable();
+    return withCaptureSelectionProjection(workspace, projection);
+  }
 
-    // On replay, never price the client-echoed command: re-read whatever is actually stored
-    // (which the idempotency check already guarantees is byte-identical to the original plan)
-    // and price that instead, so the response is never derived from an untrusted echo.
-    if (envelope.status === "replayed") {
-      if (workspace.selectionPlan === null) { projection = null; }
-      else {
-        let rawStoredPlan: unknown;
-        try {
-          rawStoredPlan = await this.confirmation.readSelectionPlan(actorId, {
-            schemaVersion: 3, scope: command.scope, captureDraftId: command.captureDraftId,
-          });
-        } catch { throw unavailable(); }
+  /**
+   * The replayed response for `replace`: the current workspace with a best-effort projection of
+   * whatever is actually stored, never the replayed command and never validated against the live
+   * catalog as a precondition -- a catalog change, or an unrelated mutation that advanced the
+   * draft, must never turn an already-applied replay into 409/503. If pricing the stored plan
+   * fails for any reason, `selectionProjection` is simply `null`, matching the same fallback
+   * `CaptureService.readWorkspaceV4` already uses for a stale catalog on a plain read.
+   */
+  private async replayedWorkspace(
+    actorId: string,
+    command: ReplaceCaptureSelectionPlanCommandV1,
+  ): Promise<CaptureWorkspaceV4> {
+    if (this.captures.readWorkspaceV4 === undefined) throw unavailable();
+    const workspaceRequest = { schemaVersion: 4 as const, scope: command.scope, captureDraftId: command.captureDraftId };
+    let rawWorkspace: unknown;
+    try { rawWorkspace = await this.captures.readWorkspaceV4(actorId, workspaceRequest); } catch { throw unavailable(); }
+    const statusOnly = exactRecord(rawWorkspace, ["status"]);
+    if (statusOnly !== undefined) throw unavailable();
+    let workspace: CaptureWorkspaceV4;
+    try { workspace = decodeCaptureWorkspaceV4(rawWorkspace, command.scope); } catch { throw unavailable(); }
+    if (workspace.detail.captureDraftId !== command.captureDraftId) throw unavailable();
+    let projection: CaptureSelectionPlanProjectionV1 | null = null;
+    if (workspace.selectionPlan !== null) {
+      try {
+        const rawStoredPlan = await this.confirmation.readSelectionPlan(actorId, {
+          schemaVersion: 3, scope: command.scope, captureDraftId: command.captureDraftId,
+        });
         const storedPlanEnvelope = exactRecord(rawStoredPlan, ["status", "plan"]);
-        if (storedPlanEnvelope?.status !== "ok") throw unavailable();
-        const storedPlan = parseCaptureSelectionPlanV1(storedPlanEnvelope.plan);
-        if (storedPlan === undefined || storedPlan.catalogVersion !== workspace.selectionPlan.catalogVersion
-          || storedPlan.lines.length !== workspace.selectionPlan.lineCount) throw unavailable();
-        try { projection = storedPlan.lines.length === 0 ? null : priceSelectionPlan(storedPlan, catalog, command.scope.restaurantId); }
-        catch { throw unavailable(); }
-      }
+        if (storedPlanEnvelope?.status === "ok") {
+          const storedPlan = parseCaptureSelectionPlanV1(storedPlanEnvelope.plan);
+          if (storedPlan !== undefined && storedPlan.lines.length > 0
+            && storedPlan.catalogVersion === workspace.selectionPlan.catalogVersion
+            && storedPlan.lines.length === workspace.selectionPlan.lineCount) {
+            const catalogState = await this.catalogs.read(actorId, command.scope);
+            if (catalogState !== "forbidden" && catalogState.catalog !== null
+              && catalogState.scope.restaurantId === command.scope.restaurantId
+              && catalogState.scope.branchId === command.scope.branchId) {
+              projection = priceSelectionPlan(storedPlan, catalogState.catalog, command.scope.restaurantId);
+            }
+          }
+        }
+      } catch { projection = null; }
     }
     return withCaptureSelectionProjection(workspace, projection);
   }
