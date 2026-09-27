@@ -215,6 +215,38 @@ test("more than 5 extras on one fraction is rejected without a manager override"
   assert.equal(managerWithReason.modifiers.filter((modifier) => modifier.modifierId.startsWith("extra:")).length, 6);
 });
 
+test("decision 7: a manager override with a non-empty reason accepts more than 5 extras on one fraction", () => {
+  const manyExtras = ["extra-cheese", "extra-pepperoni", "extra-cheese-2", "extra-cheese-3", "extra-cheese-4", "extra-cheese-5"];
+  const variant = baseVariant({
+    extras: manyExtras.map((optionId) => ({ active: true, name: optionId, optionId, priceMinor: 100 })),
+  });
+  const input = wholeInput({
+    slots: [{ excludedIngredientIds: [], extraOptionIds: manyExtras, flavorOptionId: "flavor-margherita", fraction: "whole" }],
+  });
+  const snapshot = expectSnapshot(resolveFractionPricing(variant, input, {
+    actorId: "manager-1",
+    actorRole: "manager",
+    overrideReason: "Cliente frecuente, autorizado por gerente",
+  }));
+  assert.equal(snapshot.modifiers.filter((modifier) => modifier.modifierId.startsWith("extra:")).length, 6);
+});
+
+test("decision 7: a manager override with a blank reason is rejected", () => {
+  const manyExtras = ["extra-cheese", "extra-pepperoni", "extra-cheese-2", "extra-cheese-3", "extra-cheese-4", "extra-cheese-5"];
+  const variant = baseVariant({
+    extras: manyExtras.map((optionId) => ({ active: true, name: optionId, optionId, priceMinor: 100 })),
+  });
+  const input = wholeInput({
+    slots: [{ excludedIngredientIds: [], extraOptionIds: manyExtras, flavorOptionId: "flavor-margherita", fraction: "whole" }],
+  });
+  const blankReasonIssues = expectIssues(resolveFractionPricing(variant, input, {
+    actorId: "manager-1",
+    actorRole: "manager",
+    overrideReason: "   ",
+  }));
+  assert.ok(blankReasonIssues.some((issue) => issue.code === "extra_override_reason_required"));
+});
+
 test("quarters and other geometries are rejected", () => {
   const input = { ...wholeInput(), geometry: "quarters" as never };
   const issues = expectIssues(resolveFractionPricing(baseVariant(), input, STAFF_CONTEXT));
@@ -272,6 +304,77 @@ test("malformed structural input throws InvalidSnapshotError rather than silentl
   assert.throws(() => resolveFractionPricing(null as unknown as FractionPricingVariant, wholeInput(), STAFF_CONTEXT), InvalidSnapshotError);
   assert.throws(() => resolveFractionPricing(baseVariant(), null as unknown as ResolveFractionPricingInput, STAFF_CONTEXT), InvalidSnapshotError);
   assert.throws(() => resolveFractionPricing(baseVariant(), wholeInput(), { actorId: "a" } as unknown as ResolveFractionPricingContext), InvalidSnapshotError);
+});
+
+test("hostile getters on the variant, selection, or context are rejected instead of invoked", () => {
+  let getterInvoked = false;
+  const hostileVariant = { ...baseVariant() };
+  Object.defineProperty(hostileVariant, "currency", {
+    enumerable: true,
+    get(): string {
+      getterInvoked = true;
+      return "MXN";
+    },
+  });
+  assert.throws(() => resolveFractionPricing(hostileVariant, wholeInput(), STAFF_CONTEXT), InvalidSnapshotError);
+  assert.equal(getterInvoked, false, "a getter-backed field must never be read for arithmetic");
+
+  const hostileContext = { ...STAFF_CONTEXT };
+  Object.defineProperty(hostileContext, "actorRole", {
+    enumerable: true,
+    get(): string {
+      getterInvoked = true;
+      return "manager";
+    },
+  });
+  assert.throws(() => resolveFractionPricing(baseVariant(), wholeInput(), hostileContext), InvalidSnapshotError);
+  assert.equal(getterInvoked, false, "a getter-backed actorRole must never be trusted for authorization");
+});
+
+test("a variant or selection with a foreign, non-plain prototype is rejected", () => {
+  const hostileVariant = Object.create({ tampered: true }, Object.getOwnPropertyDescriptors(baseVariant()));
+  assert.throws(() => resolveFractionPricing(hostileVariant, wholeInput(), STAFF_CONTEXT), InvalidSnapshotError);
+
+  const hostileSlot = Object.create({ tampered: true }, Object.getOwnPropertyDescriptors(wholeInput().slots[0]));
+  const inputWithHostileSlot = { ...wholeInput(), slots: [hostileSlot] };
+  assert.throws(() => resolveFractionPricing(baseVariant(), inputWithHostileSlot, STAFF_CONTEXT), InvalidSnapshotError);
+});
+
+test("a Proxy whose getOwnPropertyDescriptor trap throws propagates as InvalidSnapshotError instead of a raw error leaking out", () => {
+  const proxiedVariant = new Proxy(baseVariant(), {
+    getOwnPropertyDescriptor(): never {
+      throw new Error("hostile getOwnPropertyDescriptor trap");
+    },
+  });
+  assert.throws(() => resolveFractionPricing(proxiedVariant, wholeInput(), STAFF_CONTEXT), InvalidSnapshotError);
+
+  const proxiedContext = new Proxy(STAFF_CONTEXT, {
+    getOwnPropertyDescriptor(): never {
+      throw new Error("hostile getOwnPropertyDescriptor trap");
+    },
+  });
+  assert.throws(() => resolveFractionPricing(baseVariant(), wholeInput(), proxiedContext), InvalidSnapshotError);
+});
+
+test("a Proxy 'get' trap on a field is never actually invoked (only own descriptors are read)", () => {
+  let getTrapInvoked = false;
+  const proxiedContext = new Proxy(STAFF_CONTEXT, {
+    get(target, key, receiver): unknown {
+      if (key === "actorRole") getTrapInvoked = true;
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  const snapshot = expectSnapshot(resolveFractionPricing(baseVariant(), wholeInput(), proxiedContext));
+  assert.equal(getTrapInvoked, false, "resolution must read actorRole via getOwnPropertyDescriptor, never via a 'get' trap");
+  assert.deepEqual(snapshot.unitPrice, new Money(10000, CURRENCY));
+});
+
+test("an array field whose prototype was swapped away from Array.prototype is rejected, even though Array.isArray still reports true", () => {
+  const tamperedFlavors = baseVariant().flavors.slice();
+  Object.setPrototypeOf(tamperedFlavors, {});
+  assert.equal(Array.isArray(tamperedFlavors), true, "test setup sanity check: Array.isArray still says true");
+  const variant = { ...baseVariant(), flavors: tamperedFlavors };
+  assert.throws(() => resolveFractionPricing(variant, wholeInput(), STAFF_CONTEXT), InvalidSnapshotError);
 });
 
 function moneyReplacer(_key: string, value: unknown): unknown {

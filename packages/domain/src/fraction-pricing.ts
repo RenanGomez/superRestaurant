@@ -309,179 +309,285 @@ export function resolveFractionPricing(
   });
 }
 
-function normalizeVariant(value: FractionPricingVariant): FractionPricingVariant {
+/*
+ * Normalization below deliberately duplicates the "own data descriptor" boundary pattern used by
+ * order-totals.ts / configured-catalog.ts / configured-selection.ts (own asPlainRecord/ownData/
+ * ownDataArray helpers per file) rather than importing theirs: every one of those modules keeps its
+ * own copy so a change to one boundary can never silently loosen another's. Every record read goes
+ * through `ownData`/`optionalOwnData`, which fail closed on a missing own-value descriptor — so a
+ * getter, an inherited/prototype value, or a Proxy whose `get` trap fabricates a value is rejected
+ * instead of silently accepted. Reading `Reflect.ownKeys`/`Object.getPrototypeOf` on a hostile Proxy
+ * that throws from those traps propagates that throw here, which normalizeVariant/normalizeInput/
+ * normalizeContext funnel into InvalidSnapshotError via atFractionPricingBoundary.
+ */
+
+function normalizeVariant(value: unknown): FractionPricingVariant {
   return atFractionPricingBoundary("fraction pricing variant", () => {
-    if (!isRecord(value)) throw new InvalidSnapshotError("fraction pricing variant");
-    assertText(value.restaurantId, "variant restaurantId");
-    assertText(value.catalogVersion, "variant catalogVersion");
-    assertText(value.variantId, "variant variantId");
-    assertText(value.productId, "variant productId");
-    assertText(value.name, "variant name");
-    assertText(value.stationId, "variant stationId");
-    assertText(value.unit, "variant unit");
-    const currency = new Money(0, value.currency).currency;
-    if (typeof value.active !== "boolean") throw new InvalidSnapshotError("variant active");
-    if (!Array.isArray(value.flavors) || value.flavors.length === 0) throw new InvalidSnapshotError("variant flavors");
-    const flavors = value.flavors.map((flavor) => normalizeFlavor(flavor, currency));
+    const record = asPlainRecord(value, "fraction pricing variant");
+    const restaurantId = ownData(record, "restaurantId", "variant restaurantId");
+    const catalogVersion = ownData(record, "catalogVersion", "variant catalogVersion");
+    const variantId = ownData(record, "variantId", "variant variantId");
+    const productId = ownData(record, "productId", "variant productId");
+    const name = ownData(record, "name", "variant name");
+    const sku = optionalOwnData(record, "sku", "variant sku");
+    const stationId = ownData(record, "stationId", "variant stationId");
+    const unit = ownData(record, "unit", "variant unit");
+    const currencyValue = ownData(record, "currency", "variant currency");
+    const active = ownData(record, "active", "variant active");
+    const tax = optionalOwnData(record, "tax", "variant tax");
+    assertText(restaurantId as string, "variant restaurantId");
+    assertText(catalogVersion as string, "variant catalogVersion");
+    assertText(variantId as string, "variant variantId");
+    assertText(productId as string, "variant productId");
+    assertText(name as string, "variant name");
+    if (sku !== undefined) assertText(sku as string, "variant sku");
+    assertText(stationId as string, "variant stationId");
+    assertText(unit as string, "variant unit");
+    const currency = new Money(0, currencyValue as string).currency;
+    if (typeof active !== "boolean") throw new InvalidSnapshotError("variant active");
+
+    const flavors = ownDataArray(record, "flavors", "variant flavors").map((flavor) => normalizeFlavor(flavor, currency));
+    if (flavors.length === 0) throw new InvalidSnapshotError("variant flavors");
     if (!unique(flavors.map((flavor) => flavor.optionId))) throw new InvalidSnapshotError("variant flavors optionId");
-    if (!Array.isArray(value.extras)) throw new InvalidSnapshotError("variant extras");
-    const extras = value.extras.map((extra) => normalizeExtra(extra, currency));
+
+    const extras = ownDataArray(record, "extras", "variant extras").map((extra) => normalizeExtra(extra, currency));
     if (!unique(extras.map((extra) => extra.optionId))) throw new InvalidSnapshotError("variant extras optionId");
-    if (!Array.isArray(value.includedIngredients)) throw new InvalidSnapshotError("variant includedIngredients");
-    const includedIngredients = value.includedIngredients.map(normalizeIngredient);
-    if (!unique(includedIngredients.map((ingredient) => ingredient.ingredientId))) throw new InvalidSnapshotError("variant includedIngredients ingredientId");
-    if (!Array.isArray(value.comboSlots)) throw new InvalidSnapshotError("variant comboSlots");
-    const comboSlots = value.comboSlots.map(normalizeComboSlot);
+
+    const includedIngredients = ownDataArray(record, "includedIngredients", "variant includedIngredients").map(normalizeIngredient);
+    if (!unique(includedIngredients.map((ingredient) => ingredient.ingredientId))) {
+      throw new InvalidSnapshotError("variant includedIngredients ingredientId");
+    }
+
+    const comboSlots = ownDataArray(record, "comboSlots", "variant comboSlots").map(normalizeComboSlot);
     if (!unique(comboSlots.map((slot) => slot.slotId))) throw new InvalidSnapshotError("variant comboSlots slotId");
-    if (value.sku !== undefined) assertText(value.sku, "variant sku");
+
     return deepFreeze({
-      active: value.active,
-      catalogVersion: value.catalogVersion,
+      active,
+      catalogVersion: catalogVersion as string,
       comboSlots,
       currency,
       extras,
       flavors,
       includedIngredients,
-      name: value.name,
-      productId: value.productId,
-      restaurantId: value.restaurantId,
-      ...(value.sku === undefined ? {} : { sku: value.sku }),
-      stationId: value.stationId,
-      ...(value.tax === undefined ? {} : { tax: cloneTaxSnapshot(value.tax) }),
-      unit: value.unit,
-      variantId: value.variantId,
+      name: name as string,
+      productId: productId as string,
+      restaurantId: restaurantId as string,
+      ...(sku === undefined ? {} : { sku: sku as string }),
+      stationId: stationId as string,
+      ...(tax === undefined ? {} : { tax: normalizeTaxSnapshot(tax) }),
+      unit: unit as string,
+      variantId: variantId as string,
     });
   });
 }
 
 function normalizeFlavor(value: unknown, currency: string): FractionFlavorOption {
-  if (!isRecord(value)) throw new InvalidSnapshotError("fraction flavor option");
-  assertText(value.optionId as string, "flavor optionId");
-  assertText(value.name as string, "flavor name");
-  const priceMinor = new Money(value.priceMinor as number, currency).amountMinor;
+  const record = asPlainRecord(value, "fraction flavor option");
+  const optionId = ownData(record, "optionId", "flavor optionId");
+  const name = ownData(record, "name", "flavor name");
+  const priceMinorValue = ownData(record, "priceMinor", "flavor priceMinor");
+  const active = ownData(record, "active", "flavor active");
+  assertText(optionId as string, "flavor optionId");
+  assertText(name as string, "flavor name");
+  const priceMinor = new Money(priceMinorValue as number, currency).amountMinor;
   if (priceMinor < 0) throw new InvalidSnapshotError("flavor priceMinor");
-  if (typeof value.active !== "boolean") throw new InvalidSnapshotError("flavor active");
-  return deepFreeze({ active: value.active, name: value.name as string, optionId: value.optionId as string, priceMinor });
+  if (typeof active !== "boolean") throw new InvalidSnapshotError("flavor active");
+  return deepFreeze({ active, name: name as string, optionId: optionId as string, priceMinor });
 }
 
 function normalizeExtra(value: unknown, currency: string): FractionExtraOption {
-  if (!isRecord(value)) throw new InvalidSnapshotError("fraction extra option");
-  assertText(value.optionId as string, "extra optionId");
-  assertText(value.name as string, "extra name");
-  const priceMinor = new Money(value.priceMinor as number, currency).amountMinor;
+  const record = asPlainRecord(value, "fraction extra option");
+  const optionId = ownData(record, "optionId", "extra optionId");
+  const name = ownData(record, "name", "extra name");
+  const priceMinorValue = ownData(record, "priceMinor", "extra priceMinor");
+  const active = ownData(record, "active", "extra active");
+  assertText(optionId as string, "extra optionId");
+  assertText(name as string, "extra name");
+  const priceMinor = new Money(priceMinorValue as number, currency).amountMinor;
   if (priceMinor < 0) throw new InvalidSnapshotError("extra priceMinor");
-  if (typeof value.active !== "boolean") throw new InvalidSnapshotError("extra active");
-  return deepFreeze({ active: value.active, name: value.name as string, optionId: value.optionId as string, priceMinor });
+  if (typeof active !== "boolean") throw new InvalidSnapshotError("extra active");
+  return deepFreeze({ active, name: name as string, optionId: optionId as string, priceMinor });
 }
 
 function normalizeIngredient(value: unknown): FractionIncludedIngredient {
-  if (!isRecord(value)) throw new InvalidSnapshotError("fraction included ingredient");
-  assertText(value.ingredientId as string, "ingredient ingredientId");
-  assertText(value.name as string, "ingredient name");
-  return deepFreeze({ ingredientId: value.ingredientId as string, name: value.name as string });
+  const record = asPlainRecord(value, "fraction included ingredient");
+  const ingredientId = ownData(record, "ingredientId", "ingredient ingredientId");
+  const name = ownData(record, "name", "ingredient name");
+  assertText(ingredientId as string, "ingredient ingredientId");
+  assertText(name as string, "ingredient name");
+  return deepFreeze({ ingredientId: ingredientId as string, name: name as string });
 }
 
 function normalizeComboSlot(value: unknown): FractionComboSlot {
-  if (!isRecord(value)) throw new InvalidSnapshotError("fraction combo slot");
-  assertText(value.slotId as string, "combo slot slotId");
-  assertText(value.defaultOptionId as string, "combo slot defaultOptionId");
-  if (!Array.isArray(value.options) || value.options.length === 0) throw new InvalidSnapshotError("combo slot options");
-  const options = value.options.map(normalizeComboOption);
+  const record = asPlainRecord(value, "fraction combo slot");
+  const slotId = ownData(record, "slotId", "combo slot slotId");
+  const defaultOptionId = ownData(record, "defaultOptionId", "combo slot defaultOptionId");
+  assertText(slotId as string, "combo slot slotId");
+  assertText(defaultOptionId as string, "combo slot defaultOptionId");
+  const options = ownDataArray(record, "options", "combo slot options").map(normalizeComboOption);
+  if (options.length === 0) throw new InvalidSnapshotError("combo slot options");
   if (!unique(options.map((option) => option.optionId))) throw new InvalidSnapshotError("combo slot options optionId");
-  if (!options.some((option) => option.optionId === value.defaultOptionId)) {
+  if (!options.some((option) => option.optionId === defaultOptionId)) {
     throw new InvalidSnapshotError("combo slot defaultOptionId");
   }
-  return deepFreeze({ defaultOptionId: value.defaultOptionId as string, options, slotId: value.slotId as string });
+  return deepFreeze({ defaultOptionId: defaultOptionId as string, options, slotId: slotId as string });
 }
 
 function normalizeComboOption(value: unknown): FractionComboSubstitutionOption {
-  if (!isRecord(value)) throw new InvalidSnapshotError("fraction combo option");
-  assertText(value.optionId as string, "combo option optionId");
-  assertText(value.name as string, "combo option name");
-  assertText(value.groupId as string, "combo option groupId");
-  if (!Number.isSafeInteger(value.surchargeMinor) || (value.surchargeMinor as number) < 0) {
+  const record = asPlainRecord(value, "fraction combo option");
+  const optionId = ownData(record, "optionId", "combo option optionId");
+  const name = ownData(record, "name", "combo option name");
+  const groupId = ownData(record, "groupId", "combo option groupId");
+  const surchargeMinor = ownData(record, "surchargeMinor", "combo option surchargeMinor");
+  const active = ownData(record, "active", "combo option active");
+  assertText(optionId as string, "combo option optionId");
+  assertText(name as string, "combo option name");
+  assertText(groupId as string, "combo option groupId");
+  if (!Number.isSafeInteger(surchargeMinor) || (surchargeMinor as number) < 0) {
     throw new InvalidSnapshotError("combo option surchargeMinor");
   }
-  if (typeof value.active !== "boolean") throw new InvalidSnapshotError("combo option active");
+  if (typeof active !== "boolean") throw new InvalidSnapshotError("combo option active");
   return deepFreeze({
-    active: value.active,
-    groupId: value.groupId as string,
-    name: value.name as string,
-    optionId: value.optionId as string,
-    surchargeMinor: value.surchargeMinor as number,
+    active,
+    groupId: groupId as string,
+    name: name as string,
+    optionId: optionId as string,
+    surchargeMinor: surchargeMinor as number,
   });
 }
 
-function normalizeInput(value: ResolveFractionPricingInput): ResolveFractionPricingInput {
+function normalizeInput(value: unknown): ResolveFractionPricingInput {
   return atFractionPricingBoundary("fraction pricing selection", () => {
-    if (!isRecord(value)) throw new InvalidSnapshotError("fraction pricing selection");
-    assertText(value.restaurantId, "selection restaurantId");
-    assertText(value.catalogVersion, "selection catalogVersion");
-    assertText(value.variantId, "selection variantId");
-    if (typeof value.geometry !== "string") throw new InvalidSnapshotError("selection geometry");
-    if (!Array.isArray(value.slots) || value.slots.length === 0) throw new InvalidSnapshotError("selection slots");
-    const slots = value.slots.map(normalizeSlotSelection);
-    if (!Array.isArray(value.comboSubstitutions)) throw new InvalidSnapshotError("selection comboSubstitutions");
-    const comboSubstitutions = value.comboSubstitutions.map(normalizeComboSelection);
+    const record = asPlainRecord(value, "fraction pricing selection");
+    const restaurantId = ownData(record, "restaurantId", "selection restaurantId");
+    const catalogVersion = ownData(record, "catalogVersion", "selection catalogVersion");
+    const variantId = ownData(record, "variantId", "selection variantId");
+    const geometry = ownData(record, "geometry", "selection geometry");
+    assertText(restaurantId as string, "selection restaurantId");
+    assertText(catalogVersion as string, "selection catalogVersion");
+    assertText(variantId as string, "selection variantId");
+    if (typeof geometry !== "string") throw new InvalidSnapshotError("selection geometry");
+
+    const slots = ownDataArray(record, "slots", "selection slots").map(normalizeSlotSelection);
+    if (slots.length === 0) throw new InvalidSnapshotError("selection slots");
+    const comboSubstitutions = ownDataArray(record, "comboSubstitutions", "selection comboSubstitutions").map(normalizeComboSelection);
+
     return deepFreeze({
-      catalogVersion: value.catalogVersion,
+      catalogVersion: catalogVersion as string,
       comboSubstitutions,
-      geometry: value.geometry as FractionGeometry,
-      restaurantId: value.restaurantId,
+      geometry: geometry as FractionGeometry,
+      restaurantId: restaurantId as string,
       slots,
-      variantId: value.variantId,
+      variantId: variantId as string,
     });
   });
 }
 
 function normalizeSlotSelection(value: unknown): ResolveFractionSlotSelection {
-  if (!isRecord(value)) throw new InvalidSnapshotError("fraction slot selection");
-  if (value.fraction !== "whole" && value.fraction !== "half-a" && value.fraction !== "half-b") {
+  const record = asPlainRecord(value, "fraction slot selection");
+  const fraction = ownData(record, "fraction", "slot fraction");
+  const flavorOptionId = ownData(record, "flavorOptionId", "slot flavorOptionId");
+  if (fraction !== "whole" && fraction !== "half-a" && fraction !== "half-b") {
     throw new InvalidSnapshotError("slot fraction");
   }
-  assertText(value.flavorOptionId as string, "slot flavorOptionId");
-  if (!Array.isArray(value.extraOptionIds)) throw new InvalidSnapshotError("slot extraOptionIds");
-  if (!Array.isArray(value.excludedIngredientIds)) throw new InvalidSnapshotError("slot excludedIngredientIds");
-  const extraOptionIds = value.extraOptionIds.map((id) => assertTextReturn(id, "slot extraOptionId"));
-  const excludedIngredientIds = value.excludedIngredientIds.map((id) => assertTextReturn(id, "slot excludedIngredientId"));
+  assertText(flavorOptionId as string, "slot flavorOptionId");
+  const extraOptionIds = ownDataArray(record, "extraOptionIds", "slot extraOptionIds")
+    .map((id) => assertTextReturn(id, "slot extraOptionId"));
+  const excludedIngredientIds = ownDataArray(record, "excludedIngredientIds", "slot excludedIngredientIds")
+    .map((id) => assertTextReturn(id, "slot excludedIngredientId"));
   return deepFreeze({
     excludedIngredientIds,
     extraOptionIds,
-    flavorOptionId: value.flavorOptionId as string,
-    fraction: value.fraction,
+    flavorOptionId: flavorOptionId as string,
+    fraction,
   });
 }
 
 function normalizeComboSelection(value: unknown): ResolveFractionComboSubstitutionSelection {
-  if (!isRecord(value)) throw new InvalidSnapshotError("fraction combo selection");
-  assertText(value.slotId as string, "combo selection slotId");
-  assertText(value.optionId as string, "combo selection optionId");
-  return deepFreeze({ optionId: value.optionId as string, slotId: value.slotId as string });
+  const record = asPlainRecord(value, "fraction combo selection");
+  const slotId = ownData(record, "slotId", "combo selection slotId");
+  const optionId = ownData(record, "optionId", "combo selection optionId");
+  assertText(slotId as string, "combo selection slotId");
+  assertText(optionId as string, "combo selection optionId");
+  return deepFreeze({ optionId: optionId as string, slotId: slotId as string });
 }
 
-function normalizeContext(value: ResolveFractionPricingContext): ResolveFractionPricingContext {
+function normalizeContext(value: unknown): ResolveFractionPricingContext {
   return atFractionPricingBoundary("fraction pricing context", () => {
-    if (!isRecord(value)) throw new InvalidSnapshotError("fraction pricing context");
-    assertText(value.actorId, "context actorId");
-    if (value.actorRole !== "staff" && value.actorRole !== "manager") throw new InvalidSnapshotError("context actorRole");
-    if (value.overrideReason !== undefined && typeof value.overrideReason !== "string") {
+    const record = asPlainRecord(value, "fraction pricing context");
+    const actorId = ownData(record, "actorId", "context actorId");
+    const actorRole = ownData(record, "actorRole", "context actorRole");
+    const overrideReason = optionalOwnData(record, "overrideReason", "context overrideReason");
+    assertText(actorId as string, "context actorId");
+    if (actorRole !== "staff" && actorRole !== "manager") throw new InvalidSnapshotError("context actorRole");
+    if (overrideReason !== undefined && typeof overrideReason !== "string") {
       throw new InvalidSnapshotError("context overrideReason");
     }
     return deepFreeze({
-      actorId: value.actorId,
-      actorRole: value.actorRole,
-      ...(value.overrideReason === undefined ? {} : { overrideReason: value.overrideReason }),
+      actorId: actorId as string,
+      actorRole,
+      ...(overrideReason === undefined ? {} : { overrideReason: overrideReason as string }),
     });
   });
 }
 
-function cloneTaxSnapshot(tax: TaxSnapshot): TaxSnapshot {
-  if (!isRecord(tax)) throw new InvalidSnapshotError("tax snapshot");
-  return deepFreeze({ ...tax, rate: deepFreeze({ ...tax.rate }) });
+function normalizeTaxSnapshot(value: unknown): TaxSnapshot {
+  const record = asPlainRecord(value, "variant tax snapshot");
+  const taxId = ownData(record, "taxId", "tax taxId");
+  const name = ownData(record, "name", "tax name");
+  const taxRuleVersion = ownData(record, "taxRuleVersion", "tax taxRuleVersion");
+  const inclusion = ownData(record, "inclusion", "tax inclusion");
+  const rate = asPlainRecord(ownData(record, "rate", "tax rate"), "tax rate");
+  const numerator = ownData(rate, "numerator", "tax rate numerator");
+  const denominator = ownData(rate, "denominator", "tax rate denominator");
+  assertText(taxId as string, "tax taxId");
+  assertText(name as string, "tax name");
+  assertText(taxRuleVersion as string, "tax taxRuleVersion");
+  if (inclusion !== "included" && inclusion !== "excluded") throw new InvalidSnapshotError("tax inclusion");
+  if (typeof numerator !== "bigint" || typeof denominator !== "bigint" || numerator < 0n || denominator <= 0n) {
+    throw new InvalidSnapshotError("tax rate");
+  }
+  return deepFreeze({
+    inclusion,
+    name: name as string,
+    rate: deepFreeze({ denominator, numerator }),
+    taxId: taxId as string,
+    taxRuleVersion: taxRuleVersion as string,
+  });
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+function asPlainRecord(value: unknown, field: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new InvalidSnapshotError(field);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new InvalidSnapshotError(field);
+  return value as Record<string, unknown>;
+}
+
+function ownData(record: Record<string, unknown>, key: string, field: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  if (descriptor === undefined || !("value" in descriptor)) throw new InvalidSnapshotError(field);
+  return descriptor.value;
+}
+
+function optionalOwnData(record: Record<string, unknown>, key: string, field: string): unknown | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  if (descriptor === undefined) return undefined;
+  if (!("value" in descriptor)) throw new InvalidSnapshotError(field);
+  return descriptor.value;
+}
+
+function ownDataArray(record: Record<string, unknown>, key: string, field: string): readonly unknown[] {
+  const value = ownData(record, key, field);
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new InvalidSnapshotError(field);
+  const length = Object.getOwnPropertyDescriptor(value, "length");
+  if (length === undefined || !("value" in length) || !Number.isSafeInteger(length.value) || length.value < 0) {
+    throw new InvalidSnapshotError(field);
+  }
+  const items: unknown[] = [];
+  for (let index = 0; index < length.value; index += 1) {
+    items.push(ownData(value as unknown as Record<string, unknown>, String(index), field));
+  }
+  return items;
 }
 
 function assertText(value: string, field: string): void {
