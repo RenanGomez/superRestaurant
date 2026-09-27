@@ -17,6 +17,7 @@ const base = {
   quantity: 1,
   productName: "Taco",
   modifiers: [],
+  note: null,
   queuedAt: "2026-09-03T10:00:00.000Z",
 } as const;
 

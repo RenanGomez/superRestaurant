@@ -34,6 +34,7 @@ input, select { background: #111c16; color: #fff; padding: 0 12px; max-width: 10
 .ticket h2 { margin: 18px 14px 10px; font-size: 1.35rem; overflow-wrap: anywhere; }
 .ticket h2 span { color: #70d69b; }
 .ticket ul { margin: 0 14px 18px; padding-left: 20px; color: #d4ded8; }
+.ticket .note { margin: 0 14px 18px; padding: 8px 10px; border-radius: 8px; background: #4a2f0f; color: #ffd68a; font-weight: 800; overflow-wrap: anywhere; }
 .ticket footer { margin-top: 14px; }
 .pill { color: #b9c7bf; font-size: .8rem; font-weight: 800; text-transform: uppercase; }
 .action { min-height: 54px; }
