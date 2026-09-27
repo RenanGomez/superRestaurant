@@ -6,6 +6,7 @@ import { authorizeBranch } from "../../../lib/branch-selection";
 import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
 import { customerDirectoryAction } from "./actions";
+import { customerHistoryAction } from "./history-action";
 import { CustomerEditor } from "./customer-editor";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +29,7 @@ export default async function CustomersPage(): Promise<ReactNode> {
         <p className="mt-1 break-words text-sm text-text-muted">Sucursal: {membership.branchName} · Conexión requerida</p></div>
       <a href="/app?change=1" className="rounded-lg border border-border px-3 py-3 text-sm focus-visible:outline-2">Cambiar sucursal</a>
     </header>
-    {canOperate ? <CustomerEditor key={`${scope.restaurantId}/${scope.branchId}`} scope={scope} action={customerDirectoryAction} />
+    {canOperate ? <CustomerEditor key={`${scope.restaurantId}/${scope.branchId}`} scope={scope} branchName={membership.branchName} action={customerDirectoryAction} historyAction={customerHistoryAction} />
       : <p role="alert" className="rounded-xl border border-border bg-surface p-5">Tu rol no permite consultar ni modificar clientes. Solicita acceso al responsable de la sucursal.</p>}
   </div>;
 }

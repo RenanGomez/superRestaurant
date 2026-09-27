@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { requestCustomerOrder } from "./customer-order-history.js";
+import { countOrderArticles, requestCustomerOrder } from "./customer-order-history.js";
+
+test("recent order article count sums line quantities", () => {
+  assert.equal(countOrderArticles([{ quantity: 3 }]), 3);
+  assert.equal(countOrderArticles([{ quantity: 1 }, { quantity: 2 }]), 3);
+  assert.equal(countOrderArticles([]), 0);
+});
 
 const scope = { restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" };
 const customerId = "c483b6e7-e102-4cc5-a887-d30712c85e52";
