@@ -37,8 +37,6 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
   const [addingAddress, setAddingAddress] = useState(false);
   const [createdCustomerId, setCreatedCustomerId] = useState<string>();
   const [addressFeedback, setAddressFeedback] = useState<{ addressId: string; message: string; error: boolean }>();
-  const [history, setHistory] = useState<CustomerRecentOrderListV1>();
-  const [historyState, setHistoryState] = useState<"loading" | "ready" | "error">("loading");
   const [pending, setPending] = useState<{ operation: CustomerAction; command: unknown }>();
   const [search, setSearch] = useState<{ mode: CustomerSearchModeV1; query: string }>();
   const [searchMode, setSearchMode] = useState<CustomerSearchModeV1>("phone");
@@ -56,16 +54,6 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
     && isCurrentCustomerAutocompleteRequest(autocompleteResult.request, searchMode, searchQuery) ? autocompleteResult.value : undefined;
   const suggestions = useMemo(() => getCustomerDirectorySuggestions(suggestionResult, searchMode, searchQuery), [suggestionResult, searchMode, searchQuery]);
   const locked = busy || pending !== undefined || error === "denied";
-
-  useEffect(() => {
-    if (detail === undefined) { setHistory(undefined); return; }
-    let current = true;
-    setHistory(undefined); setHistoryState("loading");
-    void historyAction({ schemaVersion: 1, scope, customerId: detail.customer.customerId, limit: 10 })
-      .then(reply => { if (current) { if (reply.ok) { setHistory(reply.value); setHistoryState("ready"); } else setHistoryState("error"); } })
-      .catch(() => { if (current) setHistoryState("error"); });
-    return () => { current = false; };
-  }, [detail?.customer.customerId, historyAction, scope]);
 
   useEffect(() => {
     autocompleteSequence.current += 1;
@@ -206,18 +194,50 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
       </div>
       {!addingAddress && <button type="button" className={`${buttonClass} mt-4`} disabled={locked} onClick={() => setAddingAddress(true)}>+ Nueva dirección</button>}
     </section>}
-    {detail !== undefined && <section className={panelClass} aria-labelledby="customer-history-title">
-      <h2 id="customer-history-title" className="font-heading text-lg font-semibold">Historial reciente</h2>
-      {historyState === "loading" && <p role="status" className="mt-2 text-sm text-text-muted">Cargando historial…</p>}
-      {historyState === "error" && <p role="alert" className="mt-2 text-sm text-error">No se pudo cargar el historial. Vuelve a abrir la ficha para reintentar.</p>}
-      {historyState === "ready" && history?.orders.length === 0 && <p className="mt-2 text-sm text-text-muted">Sin pedidos recientes en esta sucursal.</p>}
-      {historyState === "ready" && history?.orders.map(order => <div key={order.orderId} className="mt-3 rounded-lg border border-border p-3 text-sm">
-        <p className="font-semibold">{new Date(order.confirmedAt).toLocaleString("es-MX")} · {order.items.length} artículos</p>
-        <p className="text-text-muted">{order.items.map(item => item.productName).join(" · ")}</p>
-      </div>)}
-    </section>}
+    {detail !== undefined && <CustomerHistory key={detail.customer.customerId} customerId={detail.customer.customerId} scope={scope} action={historyAction} />}
     </div></div>
   </div>;
+}
+
+function CustomerHistory({ customerId, scope, action }: {
+  readonly customerId: string;
+  readonly scope: BranchScope;
+  readonly action: CustomerEditorProps["historyAction"];
+}): ReactNode {
+  const [state, setState] = useState<{ status: "loading" } | { status: "error" } | { status: "ready"; value: CustomerRecentOrderListV1 }>({ status: "loading" });
+  const [attempt, setAttempt] = useState(0);
+  const requestSequence = useRef(0);
+  const selectedCustomerId = useRef(customerId);
+  selectedCustomerId.current = customerId;
+
+  useEffect(() => {
+    const sequence = ++requestSequence.current;
+    setState({ status: "loading" });
+    void action({ schemaVersion: 1, scope, customerId, limit: 10 })
+      .then(reply => {
+        if (sequence !== requestSequence.current || customerId !== selectedCustomerId.current) return;
+        setState(reply.ok && reply.value.customerId === customerId
+          ? { status: "ready", value: reply.value } : { status: "error" });
+      })
+      .catch(() => {
+        if (sequence === requestSequence.current && customerId === selectedCustomerId.current) setState({ status: "error" });
+      });
+    return () => { requestSequence.current += 1; };
+  }, [action, attempt, customerId, scope]);
+
+  return <section className={panelClass} aria-labelledby="customer-history-title">
+    <h2 id="customer-history-title" className="font-heading text-lg font-semibold">Historial reciente</h2>
+    {state.status === "loading" && <p role="status" className="mt-2 text-sm text-text-muted">Cargando historial…</p>}
+    {state.status === "error" && <div className="mt-2">
+      <p role="alert" className="text-sm text-error">No se pudo cargar el historial.</p>
+      <button type="button" className={`${buttonClass} mt-2`} onClick={() => { setState({ status: "loading" }); setAttempt(value => value + 1); }}>Reintentar</button>
+    </div>}
+    {state.status === "ready" && state.value.orders.length === 0 && <p className="mt-2 text-sm text-text-muted">Sin pedidos recientes en esta sucursal.</p>}
+    {state.status === "ready" && state.value.orders.map(order => <div key={order.orderId} className="mt-3 rounded-lg border border-border p-3 text-sm">
+      <p className="font-semibold">{new Date(order.confirmedAt).toLocaleString("es-MX")} · {order.items.length} artículos</p>
+      <p className="text-text-muted">{order.items.map(item => item.productName).join(" · ")}</p>
+    </div>)}
+  </section>;
 }
 
 function ProfileForm({ customer, disabled, onSave }: {
