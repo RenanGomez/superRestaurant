@@ -127,6 +127,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [sheetConfirmedTotalMinor, setSheetConfirmedTotalMinor] = useState<number | null>();
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [selectionBusyLineId, setSelectionBusyLineId] = useState<string>();
+  const [noteSheetLineId, setNoteSheetLineId] = useState<string>();
+  const [noteSheetDraft, setNoteSheetDraft] = useState("");
   const productSearchRef = useRef<HTMLInputElement>(null);
 
   function invalidateQuote(): void {
@@ -334,6 +336,24 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setSelectionBusyLineId(lineId);
     await sendSelectionPlan(applyLineChange(selectionDraftLines(), { type: "remove", lineId }));
     setSelectionBusyLineId(undefined);
+  }
+
+  function openNoteSheet(lineId: string, currentNote: string | null): void {
+    if (locked || selectionBusy) return;
+    setNoteSheetLineId(lineId);
+    setNoteSheetDraft(currentNote ?? "");
+  }
+
+  async function saveLineNote(): Promise<void> {
+    const lineId = noteSheetLineId;
+    if (lineId === undefined) return;
+    const trimmed = noteSheetDraft.trim();
+    setSelectionBusyLineId(lineId);
+    await sendSelectionPlan(applyLineChange(selectionDraftLines(),
+      { type: "setNote", lineId, note: trimmed.length === 0 ? null : trimmed }));
+    setSelectionBusyLineId(undefined);
+    setNoteSheetLineId(undefined);
+    setNoteSheetDraft("");
   }
 
   function create(): void {
@@ -701,9 +721,28 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
             onIncrement={(lineId) => void changeLineQuantity(lineId, 1)}
             onDecrement={(lineId) => void changeLineQuantity(lineId, -1)}
             onRemove={(lineId) => void removeLine(lineId)}
+            onEditNote={openNoteSheet}
             onHold={reset} onNoSale={openNoSale} />
         </div>
       </section>}
+      {noteSheetLineId !== undefined && <div className="fixed inset-0 z-30 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
+        role="dialog" aria-modal="true" aria-labelledby="capture-line-note-title"
+        onClick={(event) => { if (event.target === event.currentTarget) { setNoteSheetLineId(undefined); setNoteSheetDraft(""); } }}>
+        <div className="grid w-full max-w-md gap-3 rounded-t-2xl bg-surface p-4 sm:rounded-2xl">
+          <h2 id="capture-line-note-title" className="font-heading text-lg font-semibold">Nota para cocina</h2>
+          <label className="grid gap-1 text-sm" htmlFor="capture-line-note-text">Instrucción (opcional)
+            <textarea id="capture-line-note-text" className={`${input} min-h-24 resize-y`} maxLength={200}
+              value={noteSheetDraft} onChange={(event) => setNoteSheetDraft(event.target.value.slice(0, 200))} />
+          </label>
+          <span className="text-xs text-text-muted">{noteSheetDraft.length}/200</span>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="min-h-11 min-w-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent"
+              onClick={() => { setNoteSheetLineId(undefined); setNoteSheetDraft(""); }}>Cancelar</button>
+            <button type="button" className="min-h-11 min-w-11 rounded-lg border border-border bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent"
+              disabled={selectionBusyLineId !== undefined} onClick={() => void saveLineNote()}>Guardar</button>
+          </div>
+        </div>
+      </div>}
       {noSaleOpen && <div className="fixed inset-0 z-30 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
         role="dialog" aria-modal="true" aria-labelledby="capture-no-sale-title"
         onClick={(event) => { if (event.target === event.currentTarget) cancelNoSale(); }}>

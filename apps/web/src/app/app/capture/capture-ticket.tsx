@@ -13,12 +13,13 @@ interface CaptureTicketProps {
   readonly onIncrement: (lineId: string) => void;
   readonly onDecrement: (lineId: string) => void;
   readonly onRemove: (lineId: string) => void;
+  readonly onEditNote: (lineId: string, currentNote: string | null) => void;
   readonly onHold: () => void;
   readonly onNoSale: () => void;
 }
 
 /** Fixed ticket (desktop sidebar) / bottom sheet (mobile) painting only server-priced amounts. */
-export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onDecrement, onRemove, onHold, onNoSale }: CaptureTicketProps) {
+export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onDecrement, onRemove, onEditNote, onHold, onNoSale }: CaptureTicketProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const lineCount = projection?.lines.reduce((sum, line) => sum + line.quantity, 0) ?? 0;
 
@@ -42,6 +43,10 @@ export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onD
             <span className="min-w-8 text-center font-semibold">{line.quantity}</span>
             <button type="button" className={qtyButton} aria-label={`Más ${line.productName}`}
               disabled={locked || busyLineId === line.lineId} onClick={() => onIncrement(line.lineId)}>+</button>
+            <button type="button" className={button} aria-label={`Nota para ${line.productName}`}
+              disabled={locked || busyLineId === line.lineId} onClick={() => onEditNote(line.lineId, line.note)}>
+              {line.note !== null ? "Editar nota" : "Nota"}
+            </button>
             <span className="grow" />
             <button type="button" className={`${button} text-error`} aria-label={`Quitar línea de ${line.productName}`}
               disabled={locked || busyLineId === line.lineId} onClick={() => onRemove(line.lineId)}>Quitar</button>
