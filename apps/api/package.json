@@ -70,6 +70,7 @@
     "verify:kds-ticket-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-kds-ticket-schema-verification.js",
     "verify:cash-registers-simple-payments-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-cash-registers-simple-payments-schema-verification.js",
     "verify:cash-register-operational-reporting-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-cash-register-operational-reporting-schema-verification.js",
+    "probe:migration:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-migration-rollback-probe.js",
     "verify:menu-catalog:remote": "tsc --project tsconfig.build.json && node dist/operations/run-menu-catalog-tenancy-verification.js",
     "verify:orders-realtime:remote": "tsc --project tsconfig.build.json && node dist/operations/run-orders-realtime-tenancy-verification.js",
     "verify:kds:remote": "tsc --project tsconfig.build.json && node dist/operations/run-kds-tenancy-verification.js",
