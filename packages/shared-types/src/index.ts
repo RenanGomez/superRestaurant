@@ -32,6 +32,7 @@ export * from "./commercial-capture.js";
 export * from "./delivery-instructions.js";
 export * from "./customer-order-history.js";
 export * from "./delivery-quote.js";
+export * from "./delivery-zones.js";
 
 export const MEMBERSHIP_ROLE_CODES = Object.freeze([
   "owner",
