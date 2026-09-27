@@ -89,6 +89,15 @@ import {
   OperationalWorkTrayService,
   PostgresOperationalWorkTray,
 } from "./operational-work-tray.js";
+import { DeliveryZonesController } from "./delivery-zones.controller.js";
+import {
+  DELIVERY_ZONE_LIST_PORT,
+  DELIVERY_ZONE_QUOTE_FACTS_PORT,
+  DELIVERY_ZONE_UPSERT_PORT,
+  DeliveryZoneService,
+  PostgresDeliveryZoneStore,
+} from "./delivery-zones.js";
+import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
 
 @Module({
   controllers: [
@@ -109,6 +118,7 @@ import {
     TableOrderContextController,
     OperationalWorkTrayController,
     SystemOnboardingController,
+    DeliveryZonesController,
   ],
   providers: [
     {
@@ -192,6 +202,12 @@ import {
     PostgresOperationalWorkTray,
     { provide: OPERATIONAL_WORK_TRAY_PORT, useExisting: PostgresOperationalWorkTray },
     OperationalWorkTrayService,
+    { provide: SERVER_CLOCK_PORT, useClass: SystemClock },
+    PostgresDeliveryZoneStore,
+    { provide: DELIVERY_ZONE_LIST_PORT, useExisting: PostgresDeliveryZoneStore },
+    { provide: DELIVERY_ZONE_UPSERT_PORT, useExisting: PostgresDeliveryZoneStore },
+    { provide: DELIVERY_ZONE_QUOTE_FACTS_PORT, useExisting: PostgresDeliveryZoneStore },
+    DeliveryZoneService,
     { provide: SYSTEM_ONBOARDING_AUTH, useFactory: () => createSystemOnboardingAuth(process.env) },
     SystemOnboardingService,
     {

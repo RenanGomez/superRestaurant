@@ -147,6 +147,7 @@ export const RBAC_PERMISSION_CODES = Object.freeze([
   "customers.create",
   "customers.update",
   "customers.validate",
+  "delivery_zones.manage",
 ] as const);
 
 export type RbacPermissionCode = (typeof RBAC_PERMISSION_CODES)[number];
