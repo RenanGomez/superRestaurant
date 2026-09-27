@@ -642,7 +642,7 @@ test("capture selection plan prices every line against the live catalog before p
   };
   const storedPlanConfirmation: CaptureConfirmationPort = {
     ...noConfirmationPort,
-    readSelectionPlan: async () => ({ status: "ok", plan: selectionPlanCommand.plan }),
+    readSelectionPlan: async () => ({ status: "ok", plan: selectionPlanCommand.plan, appliedCaptureVersion: 2 }),
   };
   const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
@@ -702,7 +702,7 @@ test("capture selection plan applied write accepts a follow-up read whose versio
   };
   const storedPlanConfirmation: CaptureConfirmationPort = {
     ...noConfirmationPort,
-    readSelectionPlan: async () => ({ status: "ok", plan: selectionPlanCommand.plan }),
+    readSelectionPlan: async () => ({ status: "ok", plan: selectionPlanCommand.plan, appliedCaptureVersion: 2 }),
   };
   const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
@@ -831,7 +831,7 @@ test("capture selection plan replay returns the stored result even after a later
   };
   const confirmation: CaptureConfirmationPort = {
     ...noConfirmationPort,
-    readSelectionPlan: async () => ({ status: "ok", plan: storedReplayPlan }),
+    readSelectionPlan: async () => ({ status: "ok", plan: storedReplayPlan, appliedCaptureVersion: 2 }),
   };
   const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
@@ -873,6 +873,7 @@ test("capture selection plan replay never 503s, even when the catalog changed si
         lineId: "60a26e69-3ea6-4ef8-8a2b-ad43ba0a0da1", productId: selectionCatalog.products[0]!.productId,
         variantId: null, quantity: 2, modifierGroups: [], note: null,
       }] },
+      appliedCaptureVersion: 2,
     }),
   };
   // The live catalog has since republished under a different catalogVersion (the stored plan's
@@ -920,7 +921,7 @@ test("capture selection plan projection is null when the live catalog moved to a
   };
   const confirmation: CaptureConfirmationPort = {
     ...noConfirmationPort,
-    readSelectionPlan: async () => ({ status: "ok", plan: selectionPlanCommand.plan }),
+    readSelectionPlan: async () => ({ status: "ok", plan: selectionPlanCommand.plan, appliedCaptureVersion: 2 }),
   };
   const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
@@ -963,7 +964,7 @@ test("capture selection plan applied write projects whatever is actually stored,
   };
   const confirmation: CaptureConfirmationPort = {
     ...noConfirmationPort,
-    readSelectionPlan: async () => ({ status: "ok", plan: racedStoredPlan }),
+    readSelectionPlan: async () => ({ status: "ok", plan: racedStoredPlan, appliedCaptureVersion: 3 }),
   };
   const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
@@ -974,6 +975,42 @@ test("capture selection plan applied write projects whatever is actually stored,
   // 5 * 4_500, not selectionPlanCommand's quantity 2.
   assert.equal(result.selectionProjection?.subtotalMinor, 22_500);
   assert.equal(result.selectionProjection?.lines[0]?.quantity, 5);
+});
+
+test("capture selection plan projection is null when the plan read has an appliedCaptureVersion different from the workspace summary", async () => {
+  // Same catalogVersion, same lineCount as the workspace's selectionPlan summary -- but a THIRD
+  // write raced in between readWorkspaceV4 and readSelectionPlan, replacing the row with another
+  // plan that happens to share both. appliedCaptureVersion is the only proof it is the SAME row;
+  // a mismatch there must yield null, never price whatever this unrelated plan turns out to be.
+  const workspaceV4Record = {
+    schemaVersion: 4,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+  };
+  const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "replayed", record: workspaceV4Record.detail }),
+    replaceSelectionPlan: async () => { throw new Error("must not attempt a real write for a replay"); },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => workspaceV4Record,
+  };
+  const confirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    // Same catalogVersion, same lineCount as the summary -- but appliedCaptureVersion is 4, not 2.
+    readSelectionPlan: async () => ({ status: "ok", plan: selectionPlanCommand.plan, appliedCaptureVersion: 4 }),
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, confirmation);
+  const result = await service.replace(principal, selectionPlanCommand);
+  assert.equal(result.selectionPlan?.lineCount, 1);
+  assert.equal(result.selectionProjection, null);
 });
 
 test("capture tray authorizes, binds scope and rejects hostile persistence", async () => {

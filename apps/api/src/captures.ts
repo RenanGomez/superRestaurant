@@ -670,7 +670,7 @@ export class CaptureConfirmationService {
       } catch { throw new CaptureApplicationError("authorization"); }
       let rawSelectionPlan: unknown;
       try { rawSelectionPlan = await this.persistence.readSelectionPlan(actorId, workspaceRequest); } catch { throw unavailable(); }
-      const planEnvelope = exactRecord(rawSelectionPlan, ["status", "plan"]);
+      const planEnvelope = exactRecord(rawSelectionPlan, ["status", "plan", "appliedCaptureVersion"]);
       if (planEnvelope?.status !== "ok") {
         const planStatus = exactRecord(rawSelectionPlan, ["status"]);
         if (planStatus?.status === "denied") throw new CaptureApplicationError("authorization");
@@ -841,8 +841,15 @@ async function projectStoredSelectionPlan(
   if (selectionPlan === null) return null;
   try {
     const rawStoredPlan = await confirmation.readSelectionPlan(actorId, { schemaVersion: 3, scope, captureDraftId });
-    const storedPlanEnvelope = exactRecord(rawStoredPlan, ["status", "plan"]);
+    const storedPlanEnvelope = exactRecord(rawStoredPlan, ["status", "plan", "appliedCaptureVersion"]);
     if (storedPlanEnvelope?.status !== "ok") return null;
+    // catalogVersion and lineCount matching the workspace summary is not enough on its own: a
+    // second write can replace the plan with another one that happens to share both, in the gap
+    // between readWorkspaceV4 and this read. appliedCaptureVersion is bumped by every write
+    // (repeat or selection), so an exact match here proves it is the SAME row the summary read.
+    if (typeof storedPlanEnvelope.appliedCaptureVersion !== "number"
+      || !Number.isInteger(storedPlanEnvelope.appliedCaptureVersion)
+      || storedPlanEnvelope.appliedCaptureVersion !== selectionPlan.appliedCaptureVersion) return null;
     const storedPlan = parseCaptureSelectionPlanV1(storedPlanEnvelope.plan);
     if (storedPlan === undefined || storedPlan.lines.length === 0
       || storedPlan.catalogVersion !== selectionPlan.catalogVersion

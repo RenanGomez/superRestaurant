@@ -667,6 +667,7 @@ declare
   branch uuid;
   capture uuid;
   selected_plan jsonb;
+  applied_version bigint;
 begin
   if p_actor_id is null
     or not app_private.jsonb_has_exact_keys(p_request,array['schemaVersion','scope','captureDraftId'])
@@ -702,7 +703,10 @@ begin
   -- unrelated mutation (fulfillment, customer, attention) that advances draft.version past
   -- applied_capture_version must not turn a perfectly valid selection into 'missing'. Only the
   -- draft's draft status is still required; line/catalog freshness is revalidated by the caller.
-  select plan.selection_plan into selected_plan
+  -- appliedCaptureVersion travels alongside the plan so the caller can prove the plan it just
+  -- read is the SAME row read_capture_workspace_v4 summarized, not a different write that raced
+  -- in between the two separate reads: same catalogVersion/lineCount is not enough on its own.
+  select plan.selection_plan,plan.applied_capture_version into selected_plan,applied_version
   from app.capture_repeat_order_plans plan
   join app.capture_drafts draft on draft.restaurant_id=plan.restaurant_id and draft.branch_id=plan.branch_id
     and draft.id=plan.capture_draft_id and draft.status='draft'
@@ -710,7 +714,7 @@ begin
     and plan.plan_kind='selection';
   if not found then return pg_catalog.jsonb_build_object('status','missing'); end if;
 
-  return pg_catalog.jsonb_build_object('status','ok','plan',selected_plan);
+  return pg_catalog.jsonb_build_object('status','ok','plan',selected_plan,'appliedCaptureVersion',applied_version);
 end
 $function$;
 
