@@ -39,7 +39,8 @@ const REGPROC_SQL = `select
   to_regprocedure('app_private.replace_capture_selection_plan(uuid,jsonb,jsonb)') is not null as "hasReplace",
   to_regprocedure('app_private.read_capture_selection_plan(uuid,jsonb)') is not null as "hasReader",
   to_regprocedure('app_private.confirm_capture_draft_v3(uuid,jsonb,jsonb,jsonb)') is not null as "hasConfirmV3",
-  to_regprocedure('app_private.read_capture_workspace_v3(uuid,jsonb)') is not null as "hasWorkspaceV3"`;
+  to_regprocedure('app_private.read_capture_workspace_v3(uuid,jsonb)') is not null as "hasWorkspaceV3",
+  to_regprocedure('app_private.read_capture_workspace_v4(uuid,jsonb)') is not null as "hasWorkspaceV4"`;
 
 function executable(name: string): string {
   const path = realpathSync(join(binaries, `${name}.exe`));
@@ -119,7 +120,7 @@ try {
     await admin.query(extractMigrationBody(candidateSql));
     migrated = (await admin.query(SUMMARY_SQL)).rows[0];
     const regprocs = (await admin.query(REGPROC_SQL)).rows[0];
-    assert.deepEqual(regprocs, { hasReplace: true, hasReader: true, hasConfirmV3: true, hasWorkspaceV3: true });
+    assert.deepEqual(regprocs, { hasReplace: true, hasReader: true, hasConfirmV3: true, hasWorkspaceV3: true, hasWorkspaceV4: true });
     await admin.query(extractMigrationBody(invariantsSql));
   } catch (error: unknown) {
     migrationFailure = error;
@@ -144,7 +145,7 @@ try {
   assert.deepEqual(baseline, postcheck);
   assert.equal(baseline.securedTables, migrated.securedTables);
   assert.equal(baseline.policies, migrated.policies);
-  assert.equal(migrated.securityDefinerFunctions - baseline.securityDefinerFunctions, 2);
+  assert.equal(migrated.securityDefinerFunctions - baseline.securityDefinerFunctions, 3);
 
   process.stdout.write(`${JSON.stringify({
     stage: "capture_selection_plan_rollback", status: "ok", runId,

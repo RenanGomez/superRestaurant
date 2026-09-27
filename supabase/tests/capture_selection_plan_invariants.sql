@@ -88,7 +88,7 @@ begin
   plan := pg_catalog.jsonb_build_object(
     'schemaVersion',1,'catalogVersion',catalog::text,'lines',pg_catalog.jsonb_build_array(
       pg_catalog.jsonb_build_object(
-        'lineId',line_a::text,'productId',product::text,'quantity',2,'note',null,
+        'lineId',line_a::text,'productId',product::text,'variantId',null,'quantity',2,'note',null,
         'modifierGroups',pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
           'groupId',modifier_group::text,'selections',pg_catalog.jsonb_build_array(
             pg_catalog.jsonb_build_object('optionId',modifier_option::text,'quantity',1)
@@ -110,6 +110,21 @@ begin
     actor,command,plan||pg_catalog.jsonb_build_object('lines',(plan->'lines')||(plan->'lines'))
   )->>'status'<>'rejected' then
     raise exception 'CAPTURE_SELECTION_PLAN_DUPLICATE_LINE_ID_ACCEPTED';
+  end if;
+  -- Line missing the required variantId key is rejected, matching the exact
+  -- shape produced by parseReplaceCaptureSelectionPlanCommandV1.
+  if app_private.replace_capture_selection_plan(
+    actor,command,pg_catalog.jsonb_set(
+      plan,'{lines,0}',(plan#>'{lines,0}')-'variantId'
+    )
+  )->>'status'<>'rejected' then
+    raise exception 'CAPTURE_SELECTION_PLAN_MISSING_VARIANT_ID_KEY_ACCEPTED';
+  end if;
+  -- A non-uuid variantId is rejected.
+  if app_private.replace_capture_selection_plan(
+    actor,command,pg_catalog.jsonb_set(plan,'{lines,0,variantId}','"not-a-uuid"'::jsonb)
+  )->>'status'<>'rejected' then
+    raise exception 'CAPTURE_SELECTION_PLAN_INVALID_VARIANT_ID_ACCEPTED';
   end if;
 
   result := app_private.replace_capture_selection_plan(actor,command,plan);
@@ -161,6 +176,7 @@ begin
     raise exception 'CAPTURE_SELECTION_PLAN_DURABLE_PLAN_REJECTED';
   end if;
 
+  -- V3 stays repeat-plan-only: a selection plan must not surface there.
   execute 'set local role app_api';
   result := app_private.read_capture_workspace_v3(actor,pg_catalog.jsonb_build_object(
     'schemaVersion',3,'scope',pg_catalog.jsonb_build_object(
@@ -168,13 +184,26 @@ begin
     ),'captureDraftId',target_capture::text
   ));
   execute 'reset role';
-  if result->>'schemaVersion'<>'3'
+  if result->>'schemaVersion'<>'3' or not app_private.jsonb_has_exact_keys(
+    result,array['schemaVersion','detail','customerSnapshot','fulfillmentSnapshot','repeatOrderPlan']
+  ) or result->'repeatOrderPlan' is distinct from 'null'::jsonb
+  then raise exception 'CAPTURE_SELECTION_PLAN_V3_UNCHANGED_REJECTED'; end if;
+
+  -- V4 widens V3 with a bounded selection-plan summary (no lines/prices).
+  execute 'set local role app_api';
+  result := app_private.read_capture_workspace_v4(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',4,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',target_capture::text
+  ));
+  execute 'reset role';
+  if result->>'schemaVersion'<>'4'
     or result->'repeatOrderPlan' is distinct from 'null'::jsonb
     or result#>>'{selectionPlan,schemaVersion}'<>'1'
     or result#>>'{selectionPlan,catalogVersion}'<>catalog::text
     or result#>>'{selectionPlan,appliedCaptureVersion}'<>'2'
     or result#>>'{selectionPlan,lineCount}'<>'1'
-    or result#>>'{selectionPlan,plan,lines,0,lineId}'<>line_a::text
+    or result->'selectionPlan' ? 'plan'
   then raise exception 'CAPTURE_SELECTION_PLAN_WORKSPACE_SUMMARY_REJECTED'; end if;
 
   -- Confirm materializes the Order from the selection plan with the same

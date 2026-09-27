@@ -72,7 +72,7 @@ begin
     or not app_private.jsonb_has_exact_keys(p_command,array[
       'schemaVersion','scope','captureDraftId','expectedVersion',
       'attentionLeaseId','eventId','idempotencyKey','deviceId','occurredAt'
-    ])
+    ]) -- keep in sync with parseReplaceCaptureSelectionPlanCommandV1's exact-key contract
     or not app_private.jsonb_has_exact_keys(p_command->'scope',array['restaurantId','branchId'])
     or p_command->'schemaVersion' is distinct from '1'::jsonb
     or not coalesce(p_command->>'expectedVersion' ~ '^[1-9][0-9]*$',false)
@@ -86,9 +86,15 @@ begin
 
   if exists (
     select 1 from pg_catalog.jsonb_array_elements(p_plan->'lines') line(value)
-    where not app_private.jsonb_has_exact_keys(line.value,array['lineId','productId','quantity','modifierGroups','note'])
+    where not app_private.jsonb_has_exact_keys(
+        line.value,array['lineId','productId','variantId','quantity','modifierGroups','note']
+      )
       or not coalesce(line.value->>'lineId' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',false)
       or not coalesce(line.value->>'productId' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',false)
+      or not (
+        pg_catalog.jsonb_typeof(line.value->'variantId')='null'
+        or coalesce(line.value->>'variantId' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',false)
+      )
       or not (case when coalesce(line.value->>'quantity' ~ '^[1-9][0-9]*$',false)
         then (line.value->>'quantity')::numeric<=1000 else false end)
       or not (case when pg_catalog.jsonb_typeof(line.value->'modifierGroups')='array'
@@ -303,8 +309,18 @@ grant execute on function app_private.read_capture_selection_plan(uuid,jsonb) to
 comment on function app_private.read_capture_selection_plan(uuid,jsonb) is
   'Server-only reader for the exact Capture selection-plan lines used during confirmation; never exposed through the client contract.';
 
--- Widens the workspace projection with selectionPlan alongside the existing
--- repeatOrderPlan; only one of the two is ever non-null per capture.
+-- read_capture_workspace_v3 keeps its original schemaVersion-3, five-key
+-- shape (its shared-types parser, `parseCaptureWorkspaceV3`, requires
+-- exactly those keys) so no existing V3 reader breaks. It DOES need one
+-- correctness fix now that a single capture row can hold either plan kind:
+-- the original body built `repeatOrderPlan` from any row in
+-- capture_repeat_order_plans, unconditionally. For a 'selection' row that
+-- produced a non-null object with null customerId/sourceOrderId instead of
+-- the null the V3 contract requires, which parseCaptureWorkspaceV3 (and the
+-- API's uuid-shaped customerId check) then rejects outright. Restricting the
+-- lookup to plan_kind='repeat' restores the original, correct behavior for
+-- every existing repeat-order capture and returns null for a selection-plan
+-- capture, exactly as before this migration existed.
 create or replace function app_private.read_capture_workspace_v3(p_actor_id uuid, p_request jsonb)
 returns jsonb
 language plpgsql
@@ -317,7 +333,6 @@ declare
   branch uuid;
   capture uuid;
   repeat_plan jsonb;
-  selection_plan jsonb;
 begin
   if p_actor_id is null
     or not app_private.jsonb_has_exact_keys(p_request,array['schemaVersion','scope','captureDraftId'])
@@ -340,32 +355,23 @@ begin
   ));
   if app_private.jsonb_has_exact_keys(v2,array['status']) then return v2; end if;
 
-  select
-    case when stored.plan_kind='repeat' then pg_catalog.jsonb_build_object(
-      'schemaVersion',1,
-      'customerId',stored.customer_id::text,
-      'sourceOrderId',stored.source_order_id::text,
-      'catalogVersion',stored.catalog_id::text,
-      'appliedCaptureVersion',stored.applied_capture_version,
-      'lineCount',pg_catalog.jsonb_array_length(stored.selection_plan->'lines')
-    ) end,
-    case when stored.plan_kind='selection' then pg_catalog.jsonb_build_object(
-      'schemaVersion',1,
-      'catalogVersion',stored.catalog_id::text,
-      'appliedCaptureVersion',stored.applied_capture_version,
-      'lineCount',pg_catalog.jsonb_array_length(stored.selection_plan->'lines'),
-      'plan',stored.selection_plan
-    ) end
-  into repeat_plan, selection_plan
+  select pg_catalog.jsonb_build_object(
+    'schemaVersion',1,
+    'customerId',stored.customer_id::text,
+    'sourceOrderId',stored.source_order_id::text,
+    'catalogVersion',stored.catalog_id::text,
+    'appliedCaptureVersion',stored.applied_capture_version,
+    'lineCount',pg_catalog.jsonb_array_length(stored.selection_plan->'lines')
+  ) into repeat_plan
   from app.capture_repeat_order_plans stored
   where stored.restaurant_id=restaurant
     and stored.branch_id=branch
-    and stored.capture_draft_id=capture;
+    and stored.capture_draft_id=capture
+    and stored.plan_kind='repeat';
 
   return (v2-'schemaVersion')||pg_catalog.jsonb_build_object(
     'schemaVersion',3,
-    'repeatOrderPlan',repeat_plan,
-    'selectionPlan',selection_plan
+    'repeatOrderPlan',repeat_plan
   );
 end
 $function$;
@@ -376,7 +382,73 @@ revoke all on function app_private.read_capture_workspace_v3(uuid,jsonb)
 grant execute on function app_private.read_capture_workspace_v3(uuid,jsonb) to app_api;
 
 comment on function app_private.read_capture_workspace_v3(uuid,jsonb) is
-  'Rehydrates Capture V2 facts plus a bounded durable repeat-order OR catalog-selection plan summary; selections remain server-owned.';
+  'Rehydrates Capture V2 facts plus a bounded durable repeat-order intent summary; selections remain server-owned. Only surfaces plan_kind=repeat rows; a selection-plan capture reports repeatOrderPlan=null.';
+
+--
+-- Widens the workspace projection with a bounded selectionPlan summary
+-- alongside the existing repeatOrderPlan; only one of the two is ever
+-- non-null per capture. The full selection-plan projection (resolved
+-- names/prices) is computed by the API from the live catalog and is never
+-- persisted here.
+create function app_private.read_capture_workspace_v4(p_actor_id uuid, p_request jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $function$
+declare
+  v3 jsonb;
+  restaurant uuid;
+  branch uuid;
+  capture uuid;
+  selection_plan jsonb;
+begin
+  if p_actor_id is null
+    or not app_private.jsonb_has_exact_keys(p_request,array['schemaVersion','scope','captureDraftId'])
+    or not app_private.jsonb_has_exact_keys(p_request->'scope',array['restaurantId','branchId'])
+    or p_request->'schemaVersion' is distinct from '4'::jsonb
+  then return pg_catalog.jsonb_build_object('status','rejected'); end if;
+
+  begin
+    restaurant := (p_request#>>'{scope,restaurantId}')::uuid;
+    branch := (p_request#>>'{scope,branchId}')::uuid;
+    capture := (p_request->>'captureDraftId')::uuid;
+  exception when invalid_text_representation then
+    return pg_catalog.jsonb_build_object('status','rejected');
+  end;
+
+  v3 := app_private.read_capture_workspace_v3(p_actor_id,pg_catalog.jsonb_build_object(
+    'schemaVersion',3,
+    'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',capture::text
+  ));
+  if app_private.jsonb_has_exact_keys(v3,array['status']) then return v3; end if;
+
+  select case when stored.plan_kind='selection' then pg_catalog.jsonb_build_object(
+    'schemaVersion',1,
+    'catalogVersion',stored.catalog_id::text,
+    'appliedCaptureVersion',stored.applied_capture_version,
+    'lineCount',pg_catalog.jsonb_array_length(stored.selection_plan->'lines')
+  ) end into selection_plan
+  from app.capture_repeat_order_plans stored
+  where stored.restaurant_id=restaurant
+    and stored.branch_id=branch
+    and stored.capture_draft_id=capture;
+
+  return (v3-'schemaVersion')||pg_catalog.jsonb_build_object(
+    'schemaVersion',4,
+    'selectionPlan',selection_plan
+  );
+end
+$function$;
+
+alter function app_private.read_capture_workspace_v4(uuid,jsonb) owner to postgres;
+revoke all on function app_private.read_capture_workspace_v4(uuid,jsonb)
+  from public,anon,authenticated,service_role,app_api;
+grant execute on function app_private.read_capture_workspace_v4(uuid,jsonb) to app_api;
+
+comment on function app_private.read_capture_workspace_v4(uuid,jsonb) is
+  'Rehydrates Capture V3 facts plus a bounded durable catalog-selection plan summary (no lines/prices); selections remain server-owned and are priced by the API from the live catalog.';
 
 -- Confirm now accepts either plan kind: the per-line catalog/product/option
 -- revalidation loop is generic over {productId, modifierGroups}, which both
