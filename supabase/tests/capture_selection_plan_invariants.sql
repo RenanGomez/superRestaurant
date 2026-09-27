@@ -903,6 +903,102 @@ begin
 end
 $capture_selection_plan_probe_tests$;
 
+-- If the catalog head is republished between the caller's earlier read and this write, the
+-- read+lock inside replace_capture_selection_plan must catch it and fail closed with a typed
+-- conflict, rather than durably storing a plan against a catalogVersion that stopped being the
+-- published one.
+do $capture_selection_plan_catalog_head_conflict_tests$
+declare
+  actor uuid := (select id from auth.users where deleted_at is null order by id limit 1);
+  restaurant uuid := gen_random_uuid();
+  branch uuid := gen_random_uuid();
+  catalog_a uuid := gen_random_uuid();
+  catalog_b uuid := gen_random_uuid();
+  category uuid := gen_random_uuid();
+  product uuid := gen_random_uuid();
+  target_capture uuid := gen_random_uuid();
+  line_a uuid := gen_random_uuid();
+  device uuid := gen_random_uuid();
+  now_at timestamptz := pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp());
+  created jsonb;
+  lease text;
+  command jsonb;
+  plan jsonb;
+  result jsonb;
+begin
+  if actor is null then raise exception 'CAPTURE_SELECTION_PLAN_CATALOG_HEAD_CONFLICT_TEST_ACTOR_REQUIRED'; end if;
+
+  insert into app.restaurants(id,name,time_zone)
+    values(restaurant,'rollback-only Capture selection plan catalog head','America/Hermosillo');
+  insert into app.branches(id,restaurant_id,name) values(branch,restaurant,'rollback-only catalog head branch');
+  insert into app.memberships(id,user_id,restaurant_id,branch_id,granted_by)
+    values(gen_random_uuid(),actor,restaurant,branch,actor);
+  insert into app.membership_role_grants(membership_id,role_code,granted_by)
+    select id,'cashier',actor from app.memberships where restaurant_id=restaurant and branch_id=branch;
+
+  insert into app.menu_catalogs(id,restaurant_id,version,currency,published_by) values
+    (catalog_a,restaurant,1,'MXN',actor),
+    (catalog_b,restaurant,2,'MXN',actor);
+  insert into app.menu_categories(restaurant_id,catalog_id,id,name,active,display_order) values
+    (restaurant,catalog_a,category,'Tacos',true,1),
+    (restaurant,catalog_b,gen_random_uuid(),'Tacos',true,1);
+  insert into app.menu_products(
+    restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor
+  ) values (
+    restaurant,catalog_a,product,category,'Taco vigente','TACO-HEAD-CONFLICT',true,1,'kitchen','piece',4900
+  );
+  -- catalog_a is the published head when the client reads it and builds the plan.
+  insert into app.menu_catalog_heads(restaurant_id,catalog_id,version,updated_at,updated_by)
+    values(restaurant,catalog_a,1,now_at,actor);
+
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',target_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','counter'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_SELECTION_PLAN_CATALOG_HEAD_CONFLICT_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  command := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',target_capture::text,'expectedVersion',1,
+    'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  );
+  plan := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'catalogVersion',catalog_a::text,'lines',pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'lineId',line_a::text,'productId',product::text,'variantId',null,'quantity',1,'note',null,
+        'modifierGroups','[]'::jsonb
+      )
+    )
+  );
+
+  -- The catalog is republished (head moves to catalog_b) between the client's read and this
+  -- write reaching the server -- exactly the race the row lock exists to catch.
+  update app.menu_catalog_heads set catalog_id=catalog_b,version=2,updated_at=now_at,updated_by=actor
+  where restaurant_id=restaurant;
+
+  execute 'set local role app_api';
+  result := app_private.replace_capture_selection_plan(actor,command,plan);
+  execute 'reset role';
+  if result->>'status'<>'conflict' then raise exception 'CAPTURE_SELECTION_PLAN_CATALOG_HEAD_CONFLICT_REJECTED'; end if;
+
+  if exists (
+    select 1 from app.capture_repeat_order_plans stored
+    where stored.restaurant_id=restaurant and stored.branch_id=branch and stored.capture_draft_id=target_capture
+  ) then raise exception 'CAPTURE_SELECTION_PLAN_CATALOG_HEAD_CONFLICT_PERSISTED_ANYWAY'; end if;
+end
+$capture_selection_plan_catalog_head_conflict_tests$;
+
 -- A 0-line selection plan means "no plan": the row is deleted (still
 -- audited by the command event), never persisted with an empty lines array.
 do $capture_selection_plan_empty_tests$

@@ -359,7 +359,7 @@ security definer
 set search_path = ''
 as $function$
 declare
-  restaurant uuid; branch uuid; capture uuid; catalog uuid;
+  restaurant uuid; branch uuid; capture uuid; catalog uuid; catalog_head_id uuid;
   event uuid; device uuid; lease uuid; member uuid;
   expected bigint; occurred timestamptz; observed timestamptz; fingerprint text;
   current_capture app.capture_drafts%rowtype; stored app.capture_command_events%rowtype;
@@ -494,6 +494,15 @@ begin
     or current_capture.attention_status<>'claimed' or current_capture.owner_membership_id is distinct from member
     or current_capture.attention_lease_id is distinct from lease or current_capture.attention_lease_expires_at<=observed
   then return pg_catalog.jsonb_build_object('status','conflict'); end if;
+
+  -- Read and lock the branch's currently published catalog head inside this transaction, the
+  -- same way repeat_customer_order_into_capture/confirm_capture_draft_v3 do: if a catalog was
+  -- republished between this read and now, or the plan targets anything other than the head
+  -- that is actually in effect, fail closed with a typed conflict rather than durably storing a
+  -- plan against a catalog version that is no longer (or was never) the published one.
+  select head.catalog_id into catalog_head_id from app.menu_catalog_heads head
+  where head.restaurant_id=restaurant for share;
+  if catalog_head_id is distinct from catalog then return pg_catalog.jsonb_build_object('status','conflict'); end if;
 
   select result_capture into result_record from app.capture_command_events
   where restaurant_id=restaurant and branch_id=branch and capture_draft_id=capture and result_version=expected;
