@@ -7,11 +7,13 @@ import {
   parseCaptureDeliveryInstructionSuggestionsV1,
   parseCaptureWorkspaceRequestV3,
   parseCaptureWorkspaceV3,
+  parseCaptureWorkspaceV4,
   parseCaptureWorkTrayRequestV1,
   parseCaptureWorkTrayResultV1,
   parseClaimCaptureDraftCommandV1,
   parseConfirmCaptureDraftCommandV2,
   parseCreateCaptureDraftCommandV1,
+  parseReplaceCaptureSelectionPlanCommandV1,
   parseSetCaptureCustomerCommandV1,
   parseSetCaptureFulfillmentCommandV1,
   parseSetCaptureDeliveryInstructionsCommandV1,
@@ -30,8 +32,8 @@ import {
 export type CaptureRequestResult<T> = { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable" };
 export type CaptureOperation = "autosave" | "confirm" | "create" | "claim" | "customer" | "deliveryInstructions"
-  | "deliveryInstructionSuggestions" | "fulfillment" | "assignmentCandidates" | "takeover" | "transfer"
-  | "tray" | "workspace";
+  | "deliveryInstructionSuggestions" | "fulfillment" | "assignmentCandidates" | "selectionPlan" | "takeover"
+  | "transfer" | "tray" | "workspace";
 export interface CaptureKeyValueStore {
   readonly getItem: (key: string) => string | null;
   readonly removeItem: (key: string) => void;
@@ -78,7 +80,7 @@ export function clearPendingCaptureAutosave(
 const paths = { autosave: "/autosave", confirm: "/confirm", create: "", claim: "/claim", customer: "/customer",
   assignmentCandidates: "/assignment-candidates",
   deliveryInstructions: "/delivery-instructions", deliveryInstructionSuggestions: "/delivery-instruction-suggestions",
-  fulfillment: "/fulfillment",
+  fulfillment: "/fulfillment", selectionPlan: "/selection-plan",
   takeover: "/takeover", transfer: "/transfer", tray: "/tray", workspace: "/workspace" } as const;
 const parsers = {
   autosave: parseAutosaveCaptureDraftCommandV1,
@@ -96,11 +98,13 @@ type CaptureResponse = NonNullable<ReturnType<typeof parseCaptureMutationResultV
   | NonNullable<ReturnType<typeof parseCaptureDeliveryInstructionSuggestionsV1>>
   | NonNullable<ReturnType<typeof parseCaptureWorkTrayResultV1>>
   | NonNullable<ReturnType<typeof parseCaptureWorkspaceV3>>
+  | NonNullable<ReturnType<typeof parseCaptureWorkspaceV4>>
   | NonNullable<ReturnType<typeof parseSetCaptureDeliveryInstructionsResultV1>>;
 export async function requestCapture(token: string, baseUrl: string, operation: CaptureOperation, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
   if (operation === "assignmentCandidates") return requestCaptureAssignmentCandidates(token, baseUrl, input);
   if (operation === "tray") return requestCaptureTray(token, baseUrl, input);
   if (operation === "workspace") return requestCaptureWorkspace(token, baseUrl, input);
+  if (operation === "selectionPlan") return requestCaptureSelectionPlan(token, baseUrl, input);
   if (operation === "deliveryInstructionSuggestions") {
     return requestCaptureDeliveryInstructionSuggestions(token, baseUrl, input);
   }
@@ -224,6 +228,30 @@ async function requestCaptureWorkspace(token: string, baseUrl: string, input: un
     const value = parseCaptureWorkspaceV3(await response.json());
     if (value === undefined || value.detail.scope.restaurantId !== command.scope.restaurantId
       || value.detail.scope.branchId !== command.scope.branchId || value.detail.captureDraftId !== command.captureDraftId) {
+      return { ok: false, error: "unavailable" };
+    }
+    return { ok: true, value };
+  } catch { return { ok: false, error: "unavailable" }; }
+}
+
+/**
+ * Replaces the catalog-derived selection plan on a claimed draft and returns the refreshed
+ * CaptureWorkspaceV4 (server-priced `selectionProjection` included); the client only ever sends
+ * ids and quantities via `ReplaceCaptureSelectionPlanCommandV1`, never a price or product name.
+ */
+async function requestCaptureSelectionPlan(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
+  const command = parseReplaceCaptureSelectionPlanCommandV1(input);
+  if (command === undefined) return { ok: false, error: "invalid" };
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/captures${paths.selectionPlan}`, { method: "POST", cache: "no-store",
+      signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(command) });
+    if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
+      : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
+        : response.status === 400 ? "invalid" : "unavailable" };
+    const value = parseCaptureWorkspaceV4(await response.json());
+    if (value === undefined || value.detail.scope.restaurantId !== command.scope.restaurantId
+      || value.detail.scope.branchId !== command.scope.branchId || value.detail.captureDraftId !== command.captureDraftId
+      || value.detail.version !== command.expectedVersion + 1) {
       return { ok: false, error: "unavailable" };
     }
     return { ok: true, value };
