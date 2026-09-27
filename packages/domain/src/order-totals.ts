@@ -54,6 +54,13 @@ export interface OrderDiscountSnapshot extends AppliedDiscountSnapshot {
   readonly allocationStrategy: OrderDiscountAllocationStrategy;
 }
 
+/** One fraction's flavor and its whole-pizza-equivalent price; historical audit fact only. */
+export interface OrderItemFractionBreakdownEntry {
+  readonly fraction: string;
+  readonly flavorOptionId: string;
+  readonly amountMinor: number;
+}
+
 /** Historical catalog facts needed to reproduce an order item. */
 export interface OrderItemPriceSnapshot {
   readonly catalogVersion: string;
@@ -67,6 +74,14 @@ export interface OrderItemPriceSnapshot {
   readonly unitPrice: Money;
   readonly modifiers: readonly ModifierPriceSnapshot[];
   readonly tax?: TaxSnapshot;
+  /**
+   * Optional, additive facts for a configured pizza-fraction line (S5.1 `resolveFractionPricing`
+   * in fraction-pricing.ts). Absent for every other order-item snapshot; never re-derived from
+   * the catalog, and preserved verbatim through calculation so history is never silently dropped.
+   */
+  readonly variantId?: string;
+  readonly geometry?: "whole" | "halves";
+  readonly fractionBreakdown?: readonly OrderItemFractionBreakdownEntry[];
 }
 
 export interface OrderItemPricingInput {
@@ -356,6 +371,16 @@ function normalizePriceSnapshot(value: unknown): OrderItemPriceSnapshot {
   const unitPrice = normalizeNonNegativeMoney(ownData(snapshot, "unitPrice", "unit price"), undefined, "unit price");
   const modifiers = ownDataArray(snapshot, "modifiers", "modifiers").map((modifier) => normalizeModifier(modifier, unitPrice.currency));
   const tax = optionalOwnData(snapshot, "tax", "tax snapshot");
+  const variantId = optionalOwnData(snapshot, "variantId", "variantId");
+  const geometry = optionalOwnData(snapshot, "geometry", "geometry");
+  const fractionBreakdownValue = optionalOwnData(snapshot, "fractionBreakdown", "fractionBreakdown");
+  if (variantId !== undefined) assertText(variantId as string, "variantId");
+  if (geometry !== undefined && geometry !== "whole" && geometry !== "halves") {
+    throw new InvalidSnapshotError("geometry");
+  }
+  const fractionBreakdown = fractionBreakdownValue === undefined
+    ? undefined
+    : asDataArray(fractionBreakdownValue, "fractionBreakdown").map(normalizeFractionBreakdownEntry);
 
   return deepFreeze({
     catalogVersion: catalogVersion as string,
@@ -367,7 +392,23 @@ function normalizePriceSnapshot(value: unknown): OrderItemPriceSnapshot {
     unitPrice,
     modifiers,
     ...(tax === undefined ? {} : { tax: normalizeTaxSnapshot(tax) }),
+    ...(variantId === undefined ? {} : { variantId: variantId as string }),
+    ...(geometry === undefined ? {} : { geometry }),
+    ...(fractionBreakdown === undefined ? {} : { fractionBreakdown }),
   });
+}
+
+function normalizeFractionBreakdownEntry(value: unknown): OrderItemFractionBreakdownEntry {
+  const entry = asPlainRecord(value, "fractionBreakdown entry");
+  const fraction = ownData(entry, "fraction", "fractionBreakdown entry fraction");
+  const flavorOptionId = ownData(entry, "flavorOptionId", "fractionBreakdown entry flavorOptionId");
+  const amountMinor = ownData(entry, "amountMinor", "fractionBreakdown entry amountMinor");
+  assertText(fraction as string, "fractionBreakdown entry fraction");
+  assertText(flavorOptionId as string, "fractionBreakdown entry flavorOptionId");
+  if (!Number.isSafeInteger(amountMinor) || (amountMinor as number) < 0) {
+    throw new InvalidSnapshotError("fractionBreakdown entry amountMinor");
+  }
+  return deepFreeze({ amountMinor: amountMinor as number, flavorOptionId: flavorOptionId as string, fraction: fraction as string });
 }
 
 function normalizeModifier(value: unknown, currency: string): ModifierPriceSnapshot {
@@ -574,6 +615,16 @@ function clonePriceSnapshot(snapshot: OrderItemPriceSnapshot): OrderItemPriceSna
       quantity: modifier.quantity,
     });
   });
+  if (snapshot.variantId !== undefined) {
+    assertText(snapshot.variantId, "variantId");
+  }
+  if (snapshot.geometry !== undefined && snapshot.geometry !== "whole" && snapshot.geometry !== "halves") {
+    throw new InvalidSnapshotError("geometry");
+  }
+  const fractionBreakdown = snapshot.fractionBreakdown === undefined
+    ? undefined
+    : snapshot.fractionBreakdown.map(cloneFractionBreakdownEntry);
+
   return deepFreeze({
     catalogVersion: snapshot.catalogVersion,
     productId: snapshot.productId,
@@ -584,7 +635,20 @@ function clonePriceSnapshot(snapshot: OrderItemPriceSnapshot): OrderItemPriceSna
     unitPrice,
     modifiers,
     ...(snapshot.tax === undefined ? {} : { tax: cloneTaxSnapshot(snapshot.tax) }),
+    ...(snapshot.variantId === undefined ? {} : { variantId: snapshot.variantId }),
+    ...(snapshot.geometry === undefined ? {} : { geometry: snapshot.geometry }),
+    ...(fractionBreakdown === undefined ? {} : { fractionBreakdown }),
   });
+}
+
+function cloneFractionBreakdownEntry(entry: OrderItemFractionBreakdownEntry): OrderItemFractionBreakdownEntry {
+  if (!isRecord(entry)) throw new InvalidSnapshotError("fractionBreakdown entry");
+  assertText(entry.fraction, "fractionBreakdown entry fraction");
+  assertText(entry.flavorOptionId, "fractionBreakdown entry flavorOptionId");
+  if (!Number.isSafeInteger(entry.amountMinor) || entry.amountMinor < 0) {
+    throw new InvalidSnapshotError("fractionBreakdown entry amountMinor");
+  }
+  return deepFreeze({ amountMinor: entry.amountMinor, flavorOptionId: entry.flavorOptionId, fraction: entry.fraction });
 }
 
 function cloneTaxSnapshot(tax: TaxSnapshot): TaxSnapshot {
