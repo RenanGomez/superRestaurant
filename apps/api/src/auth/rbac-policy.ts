@@ -35,6 +35,7 @@ const allPermissions = Object.freeze([
   "customers.create",
   "customers.update",
   "customers.validate",
+  "delivery_zones.manage",
 ] satisfies readonly RbacPermissionCode[]);
 
 const managerPermissions = without(allPermissions, "memberships.manage");
