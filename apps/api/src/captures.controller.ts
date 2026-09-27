@@ -2,10 +2,10 @@ import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException,
   Header, HttpCode, Inject, NotFoundException, Post, Req, ServiceUnavailableException,
 } from "@nestjs/common";
-import type { CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
+import type { CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
-import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureService, CaptureTrayService } from "./captures.js";
+import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureSelectionNoteUnsupportedError, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
 
 @Controller("captures")
 export class CapturesController {
@@ -16,6 +16,7 @@ export class CapturesController {
     @Inject(CaptureFulfillmentService) private readonly fulfillment: CaptureFulfillmentService,
     @Inject(CaptureDeliveryInstructionsService) private readonly deliveryInstructions: CaptureDeliveryInstructionsService,
     @Inject(CaptureConfirmationService) private readonly confirmation: CaptureConfirmationService,
+    @Inject(CaptureSelectionPlanService) private readonly selectionPlan: CaptureSelectionPlanService,
     @Inject(CaptureTrayService) private readonly tray: CaptureTrayService,
     @Inject(CaptureAssignmentDirectoryService) private readonly assignmentDirectory: CaptureAssignmentDirectoryService,
   ) {}
@@ -58,7 +59,7 @@ export class CapturesController {
   @Post("workspace")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
-  public async readWorkspace(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2 | CaptureWorkspaceV3> {
+  public async readWorkspace(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2 | CaptureWorkspaceV3 | CaptureWorkspaceV4> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.captures.readWorkspace(principal, body));
   }
@@ -111,6 +112,13 @@ export class CapturesController {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.confirmation.confirm(principal, body));
   }
+  @Post("selection-plan")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async replaceSelectionPlan(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV4> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.selectionPlan.replace(principal, body));
+  }
   @Post("claim")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
@@ -148,6 +156,9 @@ export class CapturesController {
   }
   private async execute<Result>(action: () => Promise<Result>): Promise<Result> {
     try { return await action(); } catch (error: unknown) {
+      if (error instanceof CaptureSelectionNoteUnsupportedError) {
+        throw new ConflictException({ code: "CAPTURE_SELECTION_NOTE_UNSUPPORTED" });
+      }
       if (error instanceof CaptureApplicationError) {
         if (error.code === "request") throw new BadRequestException({ code: "CAPTURE_REQUEST_REJECTED" });
         if (error.code === "authorization") throw new ForbiddenException({ code: "ACTION_NOT_AUTHORIZED" });

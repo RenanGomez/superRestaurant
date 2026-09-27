@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseConfirmCaptureDraftCommandV2, type MenuCatalogV1 } from "@super-restaurant/shared-types";
+import {
+  parseCaptureSelectionPlanV1,
+  parseConfirmCaptureDraftCommandV2,
+  type MenuCatalogV1,
+} from "@super-restaurant/shared-types";
 
-import { materializeCaptureOrder, parseCaptureRepeatSelectionPlan } from "./capture-repeat-order-plan.js";
+import {
+  materializeCaptureOrder,
+  materializeCaptureSelectionOrder,
+  parseCaptureRepeatSelectionPlan,
+} from "./capture-repeat-order-plan.js";
 
 const ids = {
   actor: "8cc7eb84-af2a-4e84-95de-967c39af86ab",
@@ -125,4 +133,68 @@ test("repeat materialization rejects catalog drift that invalidates the selectio
     ...catalog,
     currency: "USD",
   }));
+});
+
+const secondLineId = "aab5d3a7-0c1f-4f9e-9d3d-8a0f9c5f0c11";
+const selectionPlan = parseCaptureSelectionPlanV1({
+  schemaVersion: 1,
+  catalogVersion: ids.catalog,
+  lines: [
+    {
+      lineId: ids.sourceItem,
+      productId: ids.product,
+      variantId: null,
+      quantity: 2,
+      modifierGroups: [{ groupId: ids.group, selections: [{ optionId: ids.option, quantity: 1 }] }],
+      note: null,
+    },
+    {
+      lineId: secondLineId,
+      productId: ids.product,
+      variantId: null,
+      quantity: 1,
+      modifierGroups: [],
+      note: "sin cebolla",
+    },
+  ],
+});
+assert.ok(selectionPlan);
+
+test("selection materialization snapshots current catalog prices for every line, keyed by lineId", () => {
+  const first = materializeCaptureSelectionOrder(command, ids.actor, "counter", selectionPlan, catalog);
+  const replay = materializeCaptureSelectionOrder(command, ids.actor, "counter", selectionPlan, catalog);
+  assert.deepEqual(replay, first);
+  assert.equal(first.order.items.length, 2);
+  assert.equal(first.order.items[0]?.quantity, 2);
+  assert.equal(first.order.items[0]?.snapshot.unitPrice.amountMinor, 4_500);
+  assert.equal(first.order.items[1]?.quantity, 1);
+  assert.equal(first.order.items[1]?.snapshot.modifiers.length, 0);
+  assert.notEqual(first.order.items[0]?.orderItemId, first.order.items[1]?.orderItemId);
+  assert.match(first.order.items[0]?.orderItemId ?? "", /^[0-9a-f-]{36}$/u);
+});
+
+test("selection materialization rejects a non-null variantId instead of ignoring it", () => {
+  const withVariant = parseCaptureSelectionPlanV1({
+    ...selectionPlan,
+    lines: [{ ...selectionPlan.lines[0]!, variantId: ids.option }],
+  });
+  assert.ok(withVariant);
+  assert.throws(
+    () => materializeCaptureSelectionOrder(command, ids.actor, "counter", withVariant, catalog),
+    /CAPTURE_SELECTION_VARIANT_UNSUPPORTED/u,
+  );
+});
+
+test("selection materialization rejects catalog version drift and currency mismatch", () => {
+  assert.throws(
+    () => materializeCaptureSelectionOrder(command, ids.actor, "counter", selectionPlan, {
+      ...catalog,
+      catalogVersion: ids.sourceOrder,
+    }),
+    /CAPTURE_SELECTION_CATALOG_CONFLICT/u,
+  );
+  assert.throws(
+    () => materializeCaptureSelectionOrder(command, ids.actor, "counter", selectionPlan, null),
+    /CAPTURE_SELECTION_CATALOG_CONFLICT/u,
+  );
 });

@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
-import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkspaceRequestV3, parseCaptureWorkTrayRequestV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1, parseTakeoverCaptureDraftCommandV1, parseTransferCaptureDraftCommandV1, type MembershipRoleCode } from "@super-restaurant/shared-types";
+import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkspaceRequestV3, parseCaptureWorkTrayRequestV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseReplaceCaptureSelectionPlanCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1, parseTakeoverCaptureDraftCommandV1, parseTransferCaptureDraftCommandV1, type MembershipRoleCode, type MenuCatalogV1 } from "@super-restaurant/shared-types";
 
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
 import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureSelectionNoteUnsupportedError, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureSelectionPlanPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
@@ -34,7 +34,13 @@ const record = {
 function serviceFor(creator: CaptureCreationPort, roles: readonly ("cashier" | "viewer")[] = ["cashier"]) {
   return new CaptureService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles, scope: validCommand.scope }),
-  }), creator);
+  }), creator, {
+    probeConfirmation: async () => { throw new Error("must not probe confirmation"); },
+    readRepeatOrderPlan: async () => { throw new Error("must not read repeat order plan"); },
+    readSelectionPlan: async () => { throw new Error("must not read selection plan"); },
+    confirmDraft: async () => { throw new Error("must not confirm"); },
+  }, { read: async () => { throw new Error("must not read catalog"); },
+    save: async () => { throw new Error("must not save a catalog"); } });
 }
 function code(expected: string) {
   return (error: unknown) => error instanceof CaptureApplicationError && error.code === expected;
@@ -375,7 +381,13 @@ test("capture workspace reads only linked immutable snapshots after fresh captur
   let authorizationChecks = 0;
   const revokedBetweenChecks = new CaptureService(new MembershipAuthorizationService({
     findActiveMembership: async () => authorizationChecks++ === 0 ? { roles: ["cashier"], scope: validCommand.scope } : undefined,
-  }), { createDraft: async () => ({}), readWorkspace: async () => { throw new Error("must not read"); } });
+  }), { createDraft: async () => ({}), readWorkspace: async () => { throw new Error("must not read"); } }, {
+    probeConfirmation: async () => { throw new Error("must not probe confirmation"); },
+    readRepeatOrderPlan: async () => { throw new Error("must not read repeat order plan"); },
+    readSelectionPlan: async () => { throw new Error("must not read selection plan"); },
+    confirmDraft: async () => { throw new Error("must not confirm"); },
+  }, { read: async () => { throw new Error("must not read catalog"); },
+    save: async () => { throw new Error("must not save a catalog"); } });
   await assert.rejects(revokedBetweenChecks.readWorkspace(principal, workspaceRequest), code("authorization"));
   assert.equal(authorizationChecks, 2);
   await assert.rejects(serviceFor({ createDraft: async () => ({}), readWorkspace: async () => ({ ...workspace,
@@ -511,18 +523,19 @@ test("capture confirmation probes replay and delegates one atomic persistence co
     timeZone: "America/Hermosillo",
   });
   assert.ok(confirmCommand);
-  const workspaceV3 = { ...workspace, schemaVersion: 3 as const,
+  const workspaceV4 = { ...workspace, schemaVersion: 4 as const,
     detail: { ...fulfillmentRecord.detail, schemaVersion: 2 as const, fulfillmentChannel: "delivery" as const,
-      deliveryInstructions: "Portón lateral" }, repeatOrderPlan: null };
+      deliveryInstructions: "Portón lateral" }, repeatOrderPlan: null, selectionPlan: null };
   const confirmedRecord = { ...autosaveRecord, detail: { ...autosaveRecord.detail, status: "confirmed",
     attentionStatus: "unclaimed", ownerMembershipId: null, attentionLeaseId: null,
     attentionLeaseExpiresAt: null, confirmedOrderId: confirmCommand.orderId } };
   let persisted: { actorId: string; command: unknown; materialization: CaptureOrderMaterialization } | undefined;
   const service = new CaptureConfirmationService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
-  }), { createDraft: async () => ({}), readWorkspaceV3: async () => workspaceV3 }, {
+  }), { createDraft: async () => ({}), readWorkspaceV4: async () => workspaceV4 }, {
     probeConfirmation: async () => ({ status: "pending" }),
     readRepeatOrderPlan: async () => { throw new Error("must not read a repeat plan"); },
+    readSelectionPlan: async () => { throw new Error("must not read a selection plan"); },
     confirmDraft: async (actorId, parsed, materialization) => {
       persisted = { actorId, command: parsed, materialization };
       return { status: "applied", record: confirmedRecord };
@@ -554,6 +567,450 @@ test("capture confirmation probes replay and delegates one atomic persistence co
     status: "applied", record: confirmedRecord,
   });
   await assert.rejects(service.confirm(principal, { ...confirmCommand, tableId: validCommand.captureDraftId }), code("conflict"));
+});
+
+const selectionCatalog: MenuCatalogV1 = {
+  catalogVersion: "47f7f293-b155-42b9-bdc7-f9be3846f44e",
+  currency: "MXN",
+  replayed: false,
+  updatedAt: "2026-09-24T11:59:00.000Z",
+  updatedBy: principal.actorId,
+  version: 3,
+  categories: [{ categoryId: "a409ec59-9f5e-496d-a45d-b83a46b49674", name: "Comida", active: true, displayOrder: 0 }],
+  products: [{
+    productId: "ec5e7c30-edac-4b79-bf8c-e363b041c59f",
+    categoryId: "a409ec59-9f5e-496d-a45d-b83a46b49674",
+    name: "Tacos vigentes", sku: "TACO-1", active: true, displayOrder: 0,
+    stationId: "hot", unit: "piece", unitPriceMinor: 4_500, tax: null,
+  }],
+  modifierGroups: [],
+};
+const selectionPlanCommand = parseReplaceCaptureSelectionPlanCommandV1({
+  schemaVersion: 1,
+  scope: validCommand.scope,
+  captureDraftId: validCommand.captureDraftId,
+  expectedVersion: 1,
+  attentionLeaseId: validCommand.deviceId,
+  eventId: "0438d8ac-a86d-4f5b-8b26-1a35f9d82a39",
+  idempotencyKey: "0e22dfd1-9064-4fa8-86da-8fcce41fe821",
+  deviceId: validCommand.deviceId,
+  occurredAt: "2026-09-24T12:00:00.000Z",
+  plan: {
+    schemaVersion: 1,
+    catalogVersion: selectionCatalog.catalogVersion,
+    lines: [{
+      lineId: "60a26e69-3ea6-4ef8-8a2b-ad43ba0a0da1",
+      productId: selectionCatalog.products[0]!.productId,
+      variantId: null,
+      quantity: 2,
+      modifierGroups: [],
+      note: null,
+    }],
+  },
+});
+assert.ok(selectionPlanCommand);
+
+const noConfirmationPort: CaptureConfirmationPort = {
+  probeConfirmation: async () => { throw new Error("must not probe confirmation"); },
+  readRepeatOrderPlan: async () => { throw new Error("must not read repeat order plan"); },
+  readSelectionPlan: async () => { throw new Error("must not read selection plan"); },
+  confirmDraft: async () => { throw new Error("must not confirm"); },
+};
+
+test("capture selection plan prices every line against the live catalog before persisting", async () => {
+  const workspaceV4Record = {
+    schemaVersion: 4,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+  };
+  let persistedCommand: unknown;
+  const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "pending" }),
+    replaceSelectionPlan: async (actorId, submittedCommand) => {
+      assert.equal(actorId, principal.actorId);
+      persistedCommand = submittedCommand;
+      return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
+    },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => workspaceV4Record,
+  };
+  const storedPlanConfirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    readSelectionPlan: async () => ({ status: "ok", plan: selectionPlanCommand.plan, appliedCaptureVersion: 2 }),
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, storedPlanConfirmation);
+  const result = await service.replace(principal, selectionPlanCommand);
+  assert.deepEqual(persistedCommand, selectionPlanCommand);
+  assert.equal(result.selectionPlan?.lineCount, 1);
+  assert.equal(result.selectionProjection?.subtotalMinor, 9_000);
+  assert.equal(result.selectionProjection?.lines[0]?.productName, "Tacos vigentes");
+  assert.equal(result.selectionProjection?.lines[0]?.unitPriceMinor, 4_500);
+
+  await assert.rejects(new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, {
+    read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: { ...selectionCatalog, catalogVersion: validCommand.deviceId } }),
+    save: async () => { throw new Error("must not save a catalog"); },
+  }, noConfirmationPort).replace(principal, selectionPlanCommand), code("conflict"));
+
+  await assert.rejects(new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["viewer"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => { throw new Error("must not read"); },
+    save: async () => { throw new Error("must not save"); } }, noConfirmationPort).replace(principal, selectionPlanCommand), code("authorization"));
+
+  const variantCommand = parseReplaceCaptureSelectionPlanCommandV1({
+    ...selectionPlanCommand,
+    plan: { ...selectionPlanCommand.plan, lines: [{ ...selectionPlanCommand.plan.lines[0]!, variantId: selectionCatalog.products[0]!.productId }] },
+  });
+  assert.ok(variantCommand);
+  await assert.rejects(new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort).replace(principal, variantCommand), code("conflict"));
+});
+
+test("capture selection plan applied write accepts a follow-up read whose version advanced further still", async () => {
+  // The write's own result proves the draft reached expectedVersion+1 (version 2); a second
+  // connection then advances the draft to version 4 (an unrelated mutation) before the
+  // separate readWorkspaceV4 call following this write observes it. The response must still
+  // be 200 with the fresher version, never unavailable for failing an exact-match comparison.
+  const advancedAfterWriteRecord = {
+    schemaVersion: 4,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 4, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+  };
+  const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "pending" }),
+    replaceSelectionPlan: async () => ({ status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } }),
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => advancedAfterWriteRecord,
+  };
+  const storedPlanConfirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    readSelectionPlan: async () => ({ status: "ok", plan: selectionPlanCommand.plan, appliedCaptureVersion: 2 }),
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, storedPlanConfirmation);
+  const result = await service.replace(principal, selectionPlanCommand);
+  assert.equal(result.detail.version, 4);
+  assert.equal(result.selectionPlan?.lineCount, 1);
+  assert.equal(result.selectionProjection?.subtotalMinor, 9_000);
+
+  // But the write's OWN result never lies: if it claims a version other than expectedVersion+1,
+  // that is not a race to tolerate, it is an inconsistent write result.
+  await assert.rejects(new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), {
+    probeReplaceSelectionPlan: async () => ({ status: "pending" }),
+    replaceSelectionPlan: async () => ({ status: "applied", record: { ...record, detail: { ...record.detail, version: 3 } } }),
+  }, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort)
+    .replace(principal, selectionPlanCommand), code("unavailable"));
+
+  // And a follow-up read that is STALE (behind the write's own proven version) is still rejected.
+  await assert.rejects(new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => ({ ...advancedAfterWriteRecord, detail: { ...advancedAfterWriteRecord.detail, version: 1 } }),
+  }, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort)
+    .replace(principal, selectionPlanCommand), code("unavailable"));
+});
+
+test("capture selection plan with zero lines is treated as no plan, never priced or persisted with an empty line array", async () => {
+  const emptyCommand = parseReplaceCaptureSelectionPlanCommandV1({
+    ...selectionPlanCommand,
+    plan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion, lines: [] },
+  });
+  assert.ok(emptyCommand);
+  const noPlanWorkspaceV4Record = {
+    schemaVersion: 4,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: null,
+  };
+  let persistedPlan: unknown;
+  const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "pending" }),
+    replaceSelectionPlan: async (_actorId, submittedCommand) => {
+      persistedPlan = submittedCommand.plan;
+      return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
+    },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => noPlanWorkspaceV4Record,
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, {
+    read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); },
+  }, noConfirmationPort);
+  const result = await service.replace(principal, emptyCommand);
+  assert.deepEqual(persistedPlan, { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion, lines: [] });
+  assert.equal(result.selectionPlan, null);
+  assert.equal(result.selectionProjection, null);
+});
+
+test("capture selection plan with a line note is rejected: OrderItem has nowhere to store it", async () => {
+  const notedCommand = parseReplaceCaptureSelectionPlanCommandV1({
+    ...selectionPlanCommand,
+    plan: { ...selectionPlanCommand.plan, lines: [{ ...selectionPlanCommand.plan.lines[0]!, note: "Sin cilantro" }] },
+  });
+  assert.ok(notedCommand);
+  const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "pending" }),
+    replaceSelectionPlan: async () => { throw new Error("must not persist a rejected note"); },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => { throw new Error("must not read workspace"); },
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort);
+  await assert.rejects(
+    service.replace(principal, notedCommand),
+    (error: unknown) => error instanceof CaptureSelectionNoteUnsupportedError && error.code === "conflict",
+  );
+});
+
+test("capture selection plan replay returns the stored result even after a later, unrelated mutation", async () => {
+  const advancedWorkspaceV4Record = {
+    schemaVersion: 4,
+    // The draft moved to version 5 through some other mutation after this idempotency key was
+    // first applied at version 2; the replay must not be rejected for failing to match version 2.
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 5, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+  };
+  const persistence: CaptureSelectionPlanPort = {
+    // The probe alone recognizes the replay; the real write must never be attempted for it.
+    probeReplaceSelectionPlan: async () => ({ status: "replayed", record: advancedWorkspaceV4Record.detail }),
+    replaceSelectionPlan: async () => { throw new Error("must not attempt a real write for a replay"); },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => advancedWorkspaceV4Record,
+  };
+  // On replay, the projection must come from whatever is actually stored, never from the
+  // client-echoed command; this stub proves it by returning a *different* (still-consistent)
+  // line than selectionPlanCommand's, and asserting the response reflects THIS one.
+  const storedReplayPlan = {
+    schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+    lines: [{
+      lineId: "0d3f6d0d-7d9a-4f8e-9b1a-1e6c8f9a2b3c",
+      productId: selectionCatalog.products[0]!.productId,
+      variantId: null, quantity: 3, modifierGroups: [], note: null,
+    }],
+  };
+  const confirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    readSelectionPlan: async () => ({ status: "ok", plan: storedReplayPlan, appliedCaptureVersion: 2 }),
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, confirmation);
+  const result = await service.replace(principal, selectionPlanCommand);
+  assert.equal(result.detail.version, 5);
+  assert.equal(result.selectionPlan?.lineCount, 1);
+  // Priced from storedReplayPlan's quantity 3, not selectionPlanCommand's quantity 2.
+  assert.equal(result.selectionProjection?.subtotalMinor, 13_500);
+  assert.equal(result.selectionProjection?.lines[0]?.quantity, 3);
+});
+
+test("capture selection plan replay never 503s, even when the catalog changed since the original apply", async () => {
+  const replayedRecord = {
+    schemaVersion: 4,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+  };
+  const persistence: CaptureSelectionPlanPort = {
+    // The probe answers purely from the idempotency key: it must never even attempt to read
+    // the catalog or price the plan, so a changed/unpublished catalog cannot reject a replay.
+    probeReplaceSelectionPlan: async () => ({ status: "replayed", record: replayedRecord.detail }),
+    replaceSelectionPlan: async () => { throw new Error("must not attempt a real write for a replay"); },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => replayedRecord,
+  };
+  const confirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    readSelectionPlan: async () => ({
+      status: "ok",
+      plan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion, lines: [{
+        lineId: "60a26e69-3ea6-4ef8-8a2b-ad43ba0a0da1", productId: selectionCatalog.products[0]!.productId,
+        variantId: null, quantity: 2, modifierGroups: [], note: null,
+      }] },
+      appliedCaptureVersion: 2,
+    }),
+  };
+  // The live catalog has since republished under a different catalogVersion (the stored plan's
+  // catalog no longer exists) -- this must yield selectionProjection: null, never a rejection.
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, {
+    read: async () => ({
+      schemaVersion: 1, scope: validCommand.scope,
+      catalog: { ...selectionCatalog, catalogVersion: validCommand.deviceId, products: [] },
+    }),
+    save: async () => { throw new Error("must not save a catalog"); },
+  }, confirmation);
+  const result = await service.replace(principal, selectionPlanCommand);
+  assert.equal(result.detail.version, 2);
+  assert.equal(result.selectionPlan?.lineCount, 1);
+  assert.equal(result.selectionProjection, null);
+});
+
+test("capture selection plan projection is null when the live catalog moved to a different catalogVersion, even with the same product ids", async () => {
+  // The stored plan was priced against catalogVersion A; a republish moved the head to
+  // catalogVersion B with the SAME product id but a DIFFERENT unitPriceMinor. Pricing against B
+  // anyway would silently return the wrong price under A's identity -- it must instead be null.
+  const republishedCatalog: MenuCatalogV1 = {
+    ...selectionCatalog,
+    catalogVersion: "5b6a1e3a-df1a-4a34-9a52-9a9a6a2c9b10",
+    products: [{ ...selectionCatalog.products[0]!, unitPriceMinor: 9_900 }],
+  };
+  const replayedRecord = {
+    schemaVersion: 4,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+  };
+  const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "replayed", record: replayedRecord.detail }),
+    replaceSelectionPlan: async () => { throw new Error("must not attempt a real write for a replay"); },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => replayedRecord,
+  };
+  const confirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    readSelectionPlan: async () => ({ status: "ok", plan: selectionPlanCommand.plan, appliedCaptureVersion: 2 }),
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, {
+    read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: republishedCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); },
+  }, confirmation);
+  const result = await service.replace(principal, selectionPlanCommand);
+  assert.equal(result.selectionPlan?.lineCount, 1);
+  assert.equal(result.selectionProjection, null);
+});
+
+test("capture selection plan applied write projects whatever is actually stored, not the submitted command", async () => {
+  // Between the write committing and the follow-up workspace read, a second write races in and
+  // wins: the stored plan now has quantity 5, not this command's quantity 2. The projection in
+  // the response must reflect the STORED plan, never a stale echo of the just-submitted one.
+  const racedWorkspaceV4Record = {
+    schemaVersion: 4,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 3, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 3, lineCount: 1 },
+  };
+  const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "pending" }),
+    replaceSelectionPlan: async () => ({ status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } }),
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => racedWorkspaceV4Record,
+  };
+  const racedStoredPlan = {
+    schemaVersion: 1 as const, catalogVersion: selectionCatalog.catalogVersion,
+    lines: [{
+      lineId: "6c7a2c23-6f6a-4f1a-9c3e-8a2b5e9f7d40", productId: selectionCatalog.products[0]!.productId,
+      variantId: null, quantity: 5, modifierGroups: [], note: null,
+    }],
+  };
+  const confirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    readSelectionPlan: async () => ({ status: "ok", plan: racedStoredPlan, appliedCaptureVersion: 3 }),
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, confirmation);
+  const result = await service.replace(principal, selectionPlanCommand);
+  assert.equal(result.selectionPlan?.lineCount, 1);
+  // 5 * 4_500, not selectionPlanCommand's quantity 2.
+  assert.equal(result.selectionProjection?.subtotalMinor, 22_500);
+  assert.equal(result.selectionProjection?.lines[0]?.quantity, 5);
+});
+
+test("capture selection plan projection is null when the plan read has an appliedCaptureVersion different from the workspace summary", async () => {
+  // Same catalogVersion, same lineCount as the workspace's selectionPlan summary -- but a THIRD
+  // write raced in between readWorkspaceV4 and readSelectionPlan, replacing the row with another
+  // plan that happens to share both. appliedCaptureVersion is the only proof it is the SAME row;
+  // a mismatch there must yield null, never price whatever this unrelated plan turns out to be.
+  const workspaceV4Record = {
+    schemaVersion: 4,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+  };
+  const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "replayed", record: workspaceV4Record.detail }),
+    replaceSelectionPlan: async () => { throw new Error("must not attempt a real write for a replay"); },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => workspaceV4Record,
+  };
+  const confirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    // Same catalogVersion, same lineCount as the summary -- but appliedCaptureVersion is 4, not 2.
+    readSelectionPlan: async () => ({ status: "ok", plan: selectionPlanCommand.plan, appliedCaptureVersion: 4 }),
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, confirmation);
+  const result = await service.replace(principal, selectionPlanCommand);
+  assert.equal(result.selectionPlan?.lineCount, 1);
+  assert.equal(result.selectionProjection, null);
 });
 
 test("capture tray authorizes, binds scope and rejects hostile persistence", async () => {
@@ -640,6 +1097,7 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
     CaptureFulfillmentService,
     CaptureDeliveryInstructionsService,
     CaptureConfirmationService,
+    CaptureSelectionPlanService,
     CaptureTrayService,
     CaptureAssignmentDirectoryService,
     { provide: CAPTURE_CUSTOMER_PORT, useValue: { setCustomer: async () => customerOutcome } },
@@ -653,7 +1111,11 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
     { provide: CAPTURE_CONFIRMATION_PORT, useValue: {
       probeConfirmation: async () => ({ status: "conflict" }),
       readRepeatOrderPlan: async () => ({ status: "missing" }),
+      readSelectionPlan: async () => ({ status: "missing" }),
       confirmDraft: async () => ({ status: "conflict" }),
+    } },
+    { provide: CAPTURE_SELECTION_PLAN_PORT, useValue: {
+      replaceSelectionPlan: async () => ({ status: "conflict" }),
     } },
     { provide: MENU_CATALOG_PORT, useValue: {
       read: async () => "forbidden",

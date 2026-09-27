@@ -6,12 +6,15 @@ import {
   parseCaptureDeliveryInstructionSuggestionsRequestV1,
   parseCaptureDeliveryInstructionSuggestionsV1,
   parseCaptureWorkspaceRequestV3,
+  parseCaptureWorkspaceRequestV4,
   parseCaptureWorkspaceV3,
+  parseCaptureWorkspaceV4,
   parseCaptureWorkTrayRequestV1,
   parseCaptureWorkTrayResultV1,
   parseClaimCaptureDraftCommandV1,
   parseConfirmCaptureDraftCommandV2,
   parseCreateCaptureDraftCommandV1,
+  parseReplaceCaptureSelectionPlanCommandV1,
   parseSetCaptureCustomerCommandV1,
   parseSetCaptureFulfillmentCommandV1,
   parseSetCaptureDeliveryInstructionsCommandV1,
@@ -25,13 +28,15 @@ import {
   type CaptureFulfillmentChannelV1,
   type CaptureFulfillmentSnapshotV1,
   type CaptureRepeatOrderPlanSummaryV1,
+  type CaptureSelectionPlanProjectionV1,
+  type CaptureSelectionPlanSummaryV1,
   type CaptureSourceChannelV1,
 } from "@super-restaurant/shared-types";
 export type CaptureRequestResult<T> = { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable" };
 export type CaptureOperation = "autosave" | "confirm" | "create" | "claim" | "customer" | "deliveryInstructions"
-  | "deliveryInstructionSuggestions" | "fulfillment" | "assignmentCandidates" | "takeover" | "transfer"
-  | "tray" | "workspace";
+  | "deliveryInstructionSuggestions" | "fulfillment" | "assignmentCandidates" | "selectionPlan" | "takeover"
+  | "transfer" | "tray" | "workspace";
 export interface CaptureKeyValueStore {
   readonly getItem: (key: string) => string | null;
   readonly removeItem: (key: string) => void;
@@ -78,7 +83,7 @@ export function clearPendingCaptureAutosave(
 const paths = { autosave: "/autosave", confirm: "/confirm", create: "", claim: "/claim", customer: "/customer",
   assignmentCandidates: "/assignment-candidates",
   deliveryInstructions: "/delivery-instructions", deliveryInstructionSuggestions: "/delivery-instruction-suggestions",
-  fulfillment: "/fulfillment",
+  fulfillment: "/fulfillment", selectionPlan: "/selection-plan",
   takeover: "/takeover", transfer: "/transfer", tray: "/tray", workspace: "/workspace" } as const;
 const parsers = {
   autosave: parseAutosaveCaptureDraftCommandV1,
@@ -96,11 +101,13 @@ type CaptureResponse = NonNullable<ReturnType<typeof parseCaptureMutationResultV
   | NonNullable<ReturnType<typeof parseCaptureDeliveryInstructionSuggestionsV1>>
   | NonNullable<ReturnType<typeof parseCaptureWorkTrayResultV1>>
   | NonNullable<ReturnType<typeof parseCaptureWorkspaceV3>>
+  | NonNullable<ReturnType<typeof parseCaptureWorkspaceV4>>
   | NonNullable<ReturnType<typeof parseSetCaptureDeliveryInstructionsResultV1>>;
 export async function requestCapture(token: string, baseUrl: string, operation: CaptureOperation, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
   if (operation === "assignmentCandidates") return requestCaptureAssignmentCandidates(token, baseUrl, input);
   if (operation === "tray") return requestCaptureTray(token, baseUrl, input);
   if (operation === "workspace") return requestCaptureWorkspace(token, baseUrl, input);
+  if (operation === "selectionPlan") return requestCaptureSelectionPlan(token, baseUrl, input);
   if (operation === "deliveryInstructionSuggestions") {
     return requestCaptureDeliveryInstructionSuggestions(token, baseUrl, input);
   }
@@ -177,12 +184,14 @@ export interface RehydratedCaptureWorkspace {
   readonly fulfillmentChannel: CaptureFulfillmentChannelV1 | null;
   readonly fulfillmentSnapshot: CaptureFulfillmentSnapshotV1 | null;
   readonly repeatOrderPlan: CaptureRepeatOrderPlanSummaryV1 | null;
+  readonly selectionPlan: CaptureSelectionPlanSummaryV1 | null;
+  readonly selectionProjection: CaptureSelectionPlanProjectionV1 | null;
   readonly sourceChannel: CaptureSourceChannelV1;
 }
 
 /** Rehydrates only immutable snapshot facts returned for the Capture; it never accepts a live Customer record. */
 export function rehydrateCaptureWorkspace(value: unknown): RehydratedCaptureWorkspace | undefined {
-  const workspace = parseCaptureWorkspaceV3(value);
+  const workspace = parseCaptureWorkspaceV4(value);
   return workspace === undefined ? undefined : Object.freeze({
     customerSnapshot: workspace.customerSnapshot,
     deliveryInstructions: workspace.detail.deliveryInstructions,
@@ -190,6 +199,8 @@ export function rehydrateCaptureWorkspace(value: unknown): RehydratedCaptureWork
     fulfillmentChannel: workspace.detail.fulfillmentChannel,
     fulfillmentSnapshot: workspace.fulfillmentSnapshot,
     repeatOrderPlan: workspace.repeatOrderPlan,
+    selectionPlan: workspace.selectionPlan,
+    selectionProjection: workspace.selectionProjection,
     sourceChannel: workspace.detail.sourceChannel,
   });
 }
@@ -212,18 +223,52 @@ async function requestCaptureTray(token: string, baseUrl: string, input: unknown
   } catch { return { ok: false, error: "unavailable" }; }
 }
 
+/**
+ * Always requests CaptureWorkspaceV4 (server-priced `selectionProjection` included) so a saved
+ * catalog selection survives a reload; the API still serves V1-V3 for older clients, but this
+ * client accepts only the accepted-scope/captureDraftId-matching V4 shape.
+ */
 async function requestCaptureWorkspace(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
-  const command = parseCaptureWorkspaceRequestV3(input);
-  if (command === undefined) return { ok: false, error: "invalid" };
+  const commandV3 = parseCaptureWorkspaceRequestV3(input);
+  const command = commandV3 === undefined ? undefined
+    : { schemaVersion: 4 as const, scope: commandV3.scope, captureDraftId: commandV3.captureDraftId };
+  if (command === undefined || parseCaptureWorkspaceRequestV4(command) === undefined) return { ok: false, error: "invalid" };
   try {
     const response = await fetch(`${baseUrl}/api/v1/captures${paths.workspace}`, { method: "POST", cache: "no-store",
       signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(command) });
     if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
       : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
         : response.status === 400 ? "invalid" : "unavailable" };
-    const value = parseCaptureWorkspaceV3(await response.json());
+    const value = parseCaptureWorkspaceV4(await response.json());
     if (value === undefined || value.detail.scope.restaurantId !== command.scope.restaurantId
       || value.detail.scope.branchId !== command.scope.branchId || value.detail.captureDraftId !== command.captureDraftId) {
+      return { ok: false, error: "unavailable" };
+    }
+    return { ok: true, value };
+  } catch { return { ok: false, error: "unavailable" }; }
+}
+
+/**
+ * Replaces the catalog-derived selection plan on a claimed draft and returns the refreshed
+ * CaptureWorkspaceV4 (server-priced `selectionProjection` included); the client only ever sends
+ * ids and quantities via `ReplaceCaptureSelectionPlanCommandV1`, never a price or product name.
+ */
+async function requestCaptureSelectionPlan(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
+  const command = parseReplaceCaptureSelectionPlanCommandV1(input);
+  if (command === undefined) return { ok: false, error: "invalid" };
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/captures${paths.selectionPlan}`, { method: "POST", cache: "no-store",
+      signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(command) });
+    if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
+      : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
+        : response.status === 400 ? "invalid" : "unavailable" };
+    const value = parseCaptureWorkspaceV4(await response.json());
+    // The server accepts a replay whose draft has since advanced past expectedVersion+1 through
+    // an unrelated mutation (see CaptureSelectionPlanService.replace), so the client must not
+    // demand an exact match here either: a genuinely successful write is never older than that.
+    if (value === undefined || value.detail.scope.restaurantId !== command.scope.restaurantId
+      || value.detail.scope.branchId !== command.scope.branchId || value.detail.captureDraftId !== command.captureDraftId
+      || value.detail.version < command.expectedVersion + 1) {
       return { ok: false, error: "unavailable" };
     }
     return { ok: true, value };

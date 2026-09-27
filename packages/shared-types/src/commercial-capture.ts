@@ -3,6 +3,7 @@ import type { BranchScope, MembershipRoleCode } from "./index.js";
 export const COMMERCIAL_CAPTURE_SCHEMA_VERSION = 1 as const;
 export const COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION = 2 as const;
 export const COMMERCIAL_CAPTURE_V3_SCHEMA_VERSION = 3 as const;
+export const COMMERCIAL_CAPTURE_V4_SCHEMA_VERSION = 4 as const;
 
 export const CAPTURE_SOURCE_CHANNELS = Object.freeze([
   "phone",
@@ -205,6 +206,10 @@ export interface CaptureWorkspaceRequestV2 extends Omit<CaptureWorkspaceRequestV
 
 export interface CaptureWorkspaceRequestV3 extends Omit<CaptureWorkspaceRequestV1, "schemaVersion"> {
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_V3_SCHEMA_VERSION;
+}
+
+export interface CaptureWorkspaceRequestV4 extends Omit<CaptureWorkspaceRequestV1, "schemaVersion"> {
+  readonly schemaVersion: typeof COMMERCIAL_CAPTURE_V4_SCHEMA_VERSION;
 }
 
 export interface CaptureCustomerSnapshotV1 {
@@ -574,6 +579,15 @@ export function parseCaptureWorkspaceRequestV3(value: unknown): CaptureWorkspace
   return record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_V3_SCHEMA_VERSION
     || scope === undefined || captureDraftId === undefined ? undefined
       : Object.freeze({ captureDraftId, schemaVersion: COMMERCIAL_CAPTURE_V3_SCHEMA_VERSION, scope });
+}
+
+export function parseCaptureWorkspaceRequestV4(value: unknown): CaptureWorkspaceRequestV4 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "captureDraftId"]);
+  const scope = record === undefined ? undefined : parseUuidScope(own(record, "scope"));
+  const captureDraftId = record === undefined ? undefined : uuid(own(record, "captureDraftId"));
+  return record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_V4_SCHEMA_VERSION
+    || scope === undefined || captureDraftId === undefined ? undefined
+      : Object.freeze({ captureDraftId, schemaVersion: COMMERCIAL_CAPTURE_V4_SCHEMA_VERSION, scope });
 }
 
 export function parseCaptureCustomerSnapshotV1(value: unknown): CaptureCustomerSnapshotV1 | undefined {

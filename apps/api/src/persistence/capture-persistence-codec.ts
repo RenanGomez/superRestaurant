@@ -6,12 +6,14 @@ import {
   parseCaptureWorkspaceV1,
   parseCaptureWorkspaceV2,
   parseCaptureWorkspaceV3,
+  parseCaptureWorkspaceV4,
   type BranchScope,
   type CaptureDraftDetailV1,
   type CaptureRecoveryPolicyV1,
   type CaptureWorkspaceV1,
   type CaptureWorkspaceV2,
   type CaptureWorkspaceV3,
+  type CaptureWorkspaceV4,
 } from "@super-restaurant/shared-types";
 
 export interface PersistedCaptureRecordV1 {
@@ -66,6 +68,51 @@ export function decodeCaptureWorkspaceV3(value: unknown, authorizedScope: Branch
   if (scope === undefined || workspace === undefined || workspace.detail.scope.restaurantId !== scope.restaurantId
     || workspace.detail.scope.branchId !== scope.branchId) throw rejected();
   return workspace;
+}
+
+/**
+ * `app_private.read_capture_workspace_v4` never returns `selectionProjection`:
+ * that field is computed by the API from the live catalog, not stored. This
+ * decode augments the raw row with `selectionProjection: null` before
+ * validating the rest of the V4 shape; callers that need a priced
+ * projection replace it afterward via `withCaptureSelectionProjection`.
+ */
+export function decodeCaptureWorkspaceV4(value: unknown, authorizedScope: BranchScope): CaptureWorkspaceV4 {
+  const scope = parseBranchScope(authorizedScope);
+  const augmented = withSelectionProjectionKey(value);
+  const workspace = parseCaptureWorkspaceV4(augmented);
+  if (scope === undefined || workspace === undefined || workspace.detail.scope.restaurantId !== scope.restaurantId
+    || workspace.detail.scope.branchId !== scope.branchId) throw rejected();
+  return workspace;
+}
+
+function withSelectionProjectionKey(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || nodeTypes.isProxy(value)) return value;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return value;
+    const keys = Reflect.ownKeys(value);
+    if (keys.includes("selectionProjection")) return value;
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (typeof key !== "string") return value;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) return value;
+      result[key] = descriptor.value;
+    }
+    result.selectionProjection = null;
+    return result;
+  } catch {
+    return value;
+  }
+}
+
+/** Replaces `selectionProjection` with an API-computed, catalog-priced projection. */
+export function withCaptureSelectionProjection(
+  workspace: CaptureWorkspaceV4,
+  selectionProjection: CaptureWorkspaceV4["selectionProjection"],
+): CaptureWorkspaceV4 {
+  return Object.freeze({ ...workspace, selectionProjection });
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
