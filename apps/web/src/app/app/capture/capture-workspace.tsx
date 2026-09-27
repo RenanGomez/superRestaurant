@@ -251,14 +251,20 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   }
 
   function openProduct(product: MenuProductV1, groups: readonly MenuModifierGroupV1[]): void {
-    if (locked) return;
+    if (locked || selectionBusy) return;
     if (groups.length === 0) {
-      void sendSelectionPlan(applyLineChange(selectionDraftLines(),
-        { type: "add", lineId: crypto.randomUUID(), productId: product.productId, quantity: 1, modifierGroups: [] }));
+      void addDirect(product.productId);
       return;
     }
     setSheetProduct(product);
     setSheetGroups(groups);
+  }
+
+  async function addDirect(productId: string): Promise<void> {
+    setSelectionBusy(true);
+    await sendSelectionPlan(applyLineChange(selectionDraftLines(),
+      { type: "add", lineId: crypto.randomUUID(), productId, quantity: 1, modifierGroups: [] }));
+    setSelectionBusy(false);
   }
 
   async function addFromSheet(quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[]): Promise<void> {
