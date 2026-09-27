@@ -263,9 +263,12 @@ async function requestCaptureSelectionPlan(token: string, baseUrl: string, input
       : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
         : response.status === 400 ? "invalid" : "unavailable" };
     const value = parseCaptureWorkspaceV4(await response.json());
+    // The server accepts a replay whose draft has since advanced past expectedVersion+1 through
+    // an unrelated mutation (see CaptureSelectionPlanService.replace), so the client must not
+    // demand an exact match here either: a genuinely successful write is never older than that.
     if (value === undefined || value.detail.scope.restaurantId !== command.scope.restaurantId
       || value.detail.scope.branchId !== command.scope.branchId || value.detail.captureDraftId !== command.captureDraftId
-      || value.detail.version !== command.expectedVersion + 1) {
+      || value.detail.version < command.expectedVersion + 1) {
       return { ok: false, error: "unavailable" };
     }
     return { ok: true, value };
