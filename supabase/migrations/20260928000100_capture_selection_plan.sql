@@ -44,6 +44,42 @@ alter table app.capture_command_events add constraint capture_events_operation_v
 comment on column app.capture_repeat_order_plans.plan_kind is
   'Discriminates whether selection_plan holds a repeat-order plan (customer/source order derived) or a catalog selection plan (CaptureSelectionPlanV1); exactly one plan of either kind lives per capture row.';
 
+-- A repeat-order plan is derived from the Customer; changing the Customer must invalidate
+-- it. A catalog selection plan carries no Customer dependency at all, so it must survive a
+-- customer change untouched. Leaving draft status still clears either kind: a confirmed,
+-- no-sale or reopened capture has no business keeping either plan attached.
+drop trigger capture_drafts_clear_repeat_order_plan_for_context on app.capture_drafts;
+drop function app_private.clear_capture_repeat_order_plan_for_context();
+
+create function app_private.clear_capture_repeat_order_plan_for_context()
+returns trigger
+language plpgsql
+set search_path = ''
+as $function$
+begin
+  if new.status is distinct from 'draft' then
+    delete from app.capture_repeat_order_plans
+    where restaurant_id=new.restaurant_id and branch_id=new.branch_id and capture_draft_id=new.id;
+  elsif new.customer_id is distinct from old.customer_id then
+    delete from app.capture_repeat_order_plans
+    where restaurant_id=new.restaurant_id and branch_id=new.branch_id and capture_draft_id=new.id
+      and plan_kind='repeat';
+  end if;
+  return new;
+end
+$function$;
+
+create trigger capture_drafts_clear_repeat_order_plan_for_context
+after update of status,customer_id on app.capture_drafts
+for each row execute function app_private.clear_capture_repeat_order_plan_for_context();
+
+alter function app_private.clear_capture_repeat_order_plan_for_context() owner to postgres;
+revoke all on function app_private.clear_capture_repeat_order_plan_for_context()
+  from public,anon,authenticated,service_role,app_api;
+
+comment on function app_private.clear_capture_repeat_order_plan_for_context() is
+  'Clears any stored capture plan when the draft leaves draft status; a repeat-order plan is additionally cleared on a customer change, since it is derived from that Customer -- a catalog selection plan has no such dependency and survives.';
+
 -- Replaces the entire catalog-derived selection plan attached to a claimed
 -- Capture draft. Mirrors repeat_customer_order_into_capture's scope,
 -- membership, lease, CAS and idempotency discipline; unlike that function it

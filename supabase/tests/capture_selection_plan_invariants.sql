@@ -280,6 +280,125 @@ begin
 end
 $capture_selection_plan_tests$;
 
+-- A catalog selection plan has no Customer dependency, unlike a repeat-order plan: the
+-- context-clearing trigger must only delete a 'repeat' row on a customer change, never a
+-- 'selection' row. Leaving draft status still clears either kind (covered by the ON DELETE
+-- RESTRICT/leave-draft path exercised elsewhere; this block isolates the customer-change edge).
+do $capture_selection_plan_trigger_tests$
+declare
+  actor uuid := (select id from auth.users where deleted_at is null order by id limit 1);
+  restaurant uuid := gen_random_uuid();
+  branch uuid := gen_random_uuid();
+  catalog uuid := gen_random_uuid();
+  category uuid := gen_random_uuid();
+  product uuid := gen_random_uuid();
+  customer_a uuid := gen_random_uuid();
+  customer_b uuid := gen_random_uuid();
+  snapshot_a uuid := gen_random_uuid();
+  snapshot_b uuid := gen_random_uuid();
+  source_order uuid := gen_random_uuid();
+  selection_capture uuid := gen_random_uuid();
+  repeat_capture uuid := gen_random_uuid();
+  now_at timestamptz := pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp());
+begin
+  if actor is null then raise exception 'CAPTURE_SELECTION_PLAN_TRIGGER_TEST_ACTOR_REQUIRED'; end if;
+
+  insert into app.restaurants(id,name,time_zone)
+    values(restaurant,'rollback-only Capture plan-context trigger','America/Hermosillo');
+  insert into app.branches(id,restaurant_id,name) values(branch,restaurant,'rollback-only trigger branch');
+  insert into app.memberships(id,user_id,restaurant_id,branch_id,granted_by)
+    values(gen_random_uuid(),actor,restaurant,branch,actor);
+  insert into app.membership_role_grants(membership_id,role_code,granted_by)
+    select id,'cashier',actor from app.memberships where restaurant_id=restaurant and branch_id=branch;
+
+  insert into app.menu_catalogs(id,restaurant_id,version,currency,published_by)
+    values(catalog,restaurant,1,'MXN',actor);
+  insert into app.menu_categories(restaurant_id,catalog_id,id,name,active,display_order)
+    values(restaurant,catalog,category,'Tacos',true,1);
+  insert into app.menu_products(
+    restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor
+  ) values (
+    restaurant,catalog,product,category,'Taco vigente','TACO-TRIGGER',true,1,'kitchen','piece',4900
+  );
+  insert into app.menu_catalog_heads(restaurant_id,catalog_id,version,updated_at,updated_by)
+    values(restaurant,catalog,1,now_at,actor);
+
+  insert into app.customers(id,restaurant_id,display_name,created_by,updated_by) values
+    (customer_a,restaurant,'Rollback trigger customer A',actor,actor),
+    (customer_b,restaurant,'Rollback trigger customer B',actor,actor);
+  insert into app.customer_party_snapshots(
+    id,restaurant_id,customer_id,contact_id,display_name,phone_display_value,phone_normalized_value,created_by
+  ) values
+    (snapshot_a,restaurant,customer_a,gen_random_uuid(),'Rollback trigger customer A','662 200 3001','6622003001',actor),
+    (snapshot_b,restaurant,customer_b,gen_random_uuid(),'Rollback trigger customer B','662 200 3002','6622003002',actor);
+
+  insert into app.orders(
+    id,restaurant_id,branch_id,channel,status,aggregate,version,created_by,updated_by
+  ) values (
+    source_order,restaurant,branch,'delivery','closed',pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'orderId',source_order::text,'restaurantId',restaurant::text,
+      'branchId',branch::text,'channel','delivery','status','closed','currency','MXN',
+      'timeZone','America/Hermosillo','items','[]'::jsonb
+    ),1,actor,actor
+  );
+
+  -- A selection-plan capture with a customer already attached (dine-in/delivery captures can
+  -- have both a customer and a catalog selection at once).
+  insert into app.capture_drafts(
+    id,restaurant_id,branch_id,folio,source_channel,fulfillment_channel,status,attention_status,
+    customer_id,customer_snapshot_id,recovery_expires_at,version,created_by,updated_by
+  ) values (
+    selection_capture,restaurant,branch,'TRIGGER-SELECTION','phone','delivery','draft','unclaimed',
+    customer_a,snapshot_a,now_at+interval '30 days',1,actor,actor
+  );
+  insert into app.capture_repeat_order_plans(
+    restaurant_id,branch_id,capture_draft_id,plan_kind,customer_id,source_order_id,catalog_id,
+    applied_capture_version,selection_plan,updated_at,updated_by
+  ) values (
+    restaurant,branch,selection_capture,'selection',null,null,catalog,2,pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'catalogVersion',catalog::text,'lines','[]'::jsonb
+    ),now_at,actor
+  );
+
+  update app.capture_drafts set customer_id=customer_b,customer_snapshot_id=snapshot_b,
+    updated_at=pg_catalog.clock_timestamp(),updated_by=actor
+  where restaurant_id=restaurant and branch_id=branch and id=selection_capture;
+  if not exists (
+    select 1 from app.capture_repeat_order_plans stored
+    where stored.restaurant_id=restaurant and stored.branch_id=branch and stored.capture_draft_id=selection_capture
+      and stored.plan_kind='selection'
+  ) then raise exception 'CAPTURE_SELECTION_PLAN_TRIGGER_DELETED_SELECTION_ON_CUSTOMER_CHANGE'; end if;
+
+  -- A repeat-order-plan capture, by contrast, must lose its plan the moment the customer changes.
+  insert into app.capture_drafts(
+    id,restaurant_id,branch_id,folio,source_channel,fulfillment_channel,status,attention_status,
+    customer_id,customer_snapshot_id,recovery_expires_at,version,created_by,updated_by
+  ) values (
+    repeat_capture,restaurant,branch,'TRIGGER-REPEAT','phone','delivery','draft','unclaimed',
+    customer_a,snapshot_a,now_at+interval '30 days',1,actor,actor
+  );
+  insert into app.capture_repeat_order_plans(
+    restaurant_id,branch_id,capture_draft_id,plan_kind,customer_id,source_order_id,catalog_id,
+    applied_capture_version,selection_plan,updated_at,updated_by
+  ) values (
+    restaurant,branch,repeat_capture,'repeat',customer_a,source_order,catalog,2,pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'customerId',customer_a::text,'sourceOrderId',source_order::text,
+      'catalogVersion',catalog::text,'lines',pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+        'sourceOrderItemId',gen_random_uuid()::text,'productId',product::text,'quantity',1,'modifierGroups','[]'::jsonb
+      ))
+    ),now_at,actor
+  );
+
+  update app.capture_drafts set customer_id=customer_b,customer_snapshot_id=snapshot_b,
+    updated_at=pg_catalog.clock_timestamp(),updated_by=actor
+  where restaurant_id=restaurant and branch_id=branch and id=repeat_capture;
+  if exists (
+    select 1 from app.capture_repeat_order_plans stored
+    where stored.restaurant_id=restaurant and stored.branch_id=branch and stored.capture_draft_id=repeat_capture
+  ) then raise exception 'CAPTURE_SELECTION_PLAN_TRIGGER_KEPT_REPEAT_ON_CUSTOMER_CHANGE'; end if;
+end
+$capture_selection_plan_trigger_tests$;
+
 -- A 0-line selection plan means "no plan": the row is deleted (still
 -- audited by the command event), never persisted with an empty lines array.
 do $capture_selection_plan_empty_tests$
