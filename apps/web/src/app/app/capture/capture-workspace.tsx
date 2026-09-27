@@ -246,7 +246,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       }
       const modifierGroups: SelectionPlanModifierGroupDraft[] = [...byGroup.entries()]
         .map(([groupId, selections]) => ({ groupId, selections }));
-      return { lineId: line.lineId, productId: line.productId, quantity: line.quantity, modifierGroups };
+      return { lineId: line.lineId, productId: line.productId, quantity: line.quantity, modifierGroups, note: line.note };
     });
   }
 
@@ -282,16 +282,20 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   async function addDirect(productId: string): Promise<void> {
     setSelectionBusy(true);
     await sendSelectionPlan(applyLineChange(selectionDraftLines(),
-      { type: "add", lineId: crypto.randomUUID(), productId, quantity: 1, modifierGroups: [] }));
+      { type: "add", lineId: crypto.randomUUID(), productId, quantity: 1, modifierGroups: [], note: null }));
     setSelectionBusy(false);
   }
 
-  async function addFromSheet(quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[]): Promise<void> {
+  async function addFromSheet(
+    quantity: number,
+    modifierGroups: readonly SelectionPlanModifierGroupDraft[],
+    note: string | null,
+  ): Promise<void> {
     if (sheetProduct === undefined) return;
     const productId = sheetProduct.productId;
     setSelectionBusy(true);
     const projection = await sendSelectionPlan(applyLineChange(selectionDraftLines(),
-      { type: "add", lineId: crypto.randomUUID(), productId, quantity, modifierGroups }));
+      { type: "add", lineId: crypto.randomUUID(), productId, quantity, modifierGroups, note }));
     setSelectionBusy(false);
     if (projection === undefined) return;
     const matched = (projection?.lines ?? []).find((line) => line.productId === productId
@@ -716,7 +720,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       {sheetProduct !== undefined && <ProductSheet product={sheetProduct} groups={sheetGroups}
         currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy} confirmedTotalMinor={sheetConfirmedTotalMinor}
         onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); }}
-        onAdd={(quantity, modifierGroups) => void addFromSheet(quantity, modifierGroups)} />}
+        onAdd={(quantity, modifierGroups, note) => void addFromSheet(quantity, modifierGroups, note)} />}
       {capture.status === "draft" && canManageAssignment && <section className={panel} data-testid="capture-transfer">
         <h2 className="font-heading text-lg font-semibold">Pasar la captura a otro operador</h2>
         <p className="mt-1 text-sm text-text-muted">El otro operador la verá en su bandeja y podrá continuar donde la dejaste.</p>

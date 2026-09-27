@@ -17,14 +17,17 @@ interface ProductSheetProps {
    * was found; a minor-unit amount taken directly from the server's `selectionProjection` line. */
   readonly confirmedTotalMinor?: number | null | undefined;
   readonly onClose: () => void;
-  readonly onAdd: (quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[]) => void;
+  readonly onAdd: (quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[], note: string | null) => void;
 }
+
+const MAX_NOTE_LENGTH = 200;
 
 /** In-app "hoja" for choosing a product's modifier groups; never uses `window.prompt`. */
 export function ProductSheet({ product, groups, currency, busy, confirmedTotalMinor, onClose, onAdd }: ProductSheetProps) {
   const confirmed = confirmedTotalMinor !== undefined;
   const [quantity, setQuantity] = useState(1);
   const [selections, setSelections] = useState<Record<string, readonly string[]>>({});
+  const [note, setNote] = useState("");
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => { closeRef.current?.focus(); }, []);
@@ -88,6 +91,13 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
             })}
           </div>
         </fieldset>)}
+        <div className="grid gap-1">
+          <label htmlFor="product-sheet-note" className="text-sm font-semibold">Nota para cocina</label>
+          <textarea id="product-sheet-note" className="min-h-11 rounded-lg border border-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
+            rows={2} maxLength={MAX_NOTE_LENGTH} disabled={confirmed} placeholder="Ej. sin cebolla, bien cocida"
+            value={note} onChange={(event) => setNote(event.target.value.slice(0, MAX_NOTE_LENGTH))} />
+          <span className="text-xs text-text-muted">{note.length}/{MAX_NOTE_LENGTH}</span>
+        </div>
       </div>
       {confirmed && <p role="status" aria-live="polite" className="mx-4 rounded-lg bg-success-bg px-3 py-2 text-sm font-semibold text-success">
         {confirmedTotalMinor === null ? "Agregado" : `Agregado · ${money(confirmedTotalMinor, currency)}`}
@@ -102,7 +112,7 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
         </div>
         <span className="grow" />
         <button type="button" className={`${button} bg-accent text-white`} disabled={busy || confirmed || !allValid}
-          onClick={() => onAdd(quantity, groupDrafts)}>
+          onClick={() => onAdd(quantity, groupDrafts, note.trim().length === 0 ? null : note.trim())}>
           {busy ? "Calculando…" : confirmed ? (confirmedTotalMinor === null ? "Agregado" : `Agregado · ${money(confirmedTotalMinor, currency)}`)
             : !allValid ? "Completa lo obligatorio" : "Agregar"}
         </button>

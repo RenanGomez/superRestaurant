@@ -35,6 +35,7 @@ export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onD
           {line.modifiers.length > 0 && <span className="text-xs text-text-muted">
             {line.modifiers.map((modifier) => `${modifier.quantity} × ${modifier.name}`).join(" · ")}
           </span>}
+          {line.note !== null && <span className="text-xs font-semibold text-accent">Nota: {line.note}</span>}
           <div className="mt-1 flex items-center gap-2">
             <button type="button" className={qtyButton} aria-label={`Menos ${line.productName}`}
               disabled={locked || busyLineId === line.lineId} onClick={() => onDecrement(line.lineId)}>−</button>
