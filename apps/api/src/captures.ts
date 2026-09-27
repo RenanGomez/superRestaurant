@@ -93,6 +93,19 @@ export class CaptureApplicationError extends Error {
     this.name = "CaptureApplicationError";
   }
 }
+/**
+ * `OrderItem`/`addOrderItem` (packages/domain/src/order.ts) has no note/instruction field, so a
+ * selection-plan line note has nowhere durable to land. Rather than silently dropping it at
+ * materialization, `replace` rejects any non-null line note with this distinguishable 409 instead
+ * of the generic `CaptureApplicationError("conflict")` body; extending the Order domain with a
+ * note field is out of scope for this branch.
+ */
+export class CaptureSelectionNoteUnsupportedError extends CaptureApplicationError {
+  public constructor() {
+    super("conflict");
+    this.name = "CaptureSelectionNoteUnsupportedError";
+  }
+}
 export interface CaptureCreationPort {
   createDraft(actorId: string, command: CreateCaptureDraftCommandV1): Promise<unknown>;
   autosaveDraft?(actorId: string, command: AutosaveCaptureDraftCommandV1): Promise<unknown>;
@@ -746,6 +759,7 @@ function priceSelectionPlan(
   catalog: MenuCatalogV1,
   restaurantId: string,
 ): CaptureSelectionPlanProjectionV1 {
+  if (plan.lines.some((line) => line.note !== null)) throw new CaptureSelectionNoteUnsupportedError();
   if (plan.lines.some((line) => line.variantId !== null)) throw new CaptureApplicationError("conflict");
   const domainCatalog = toDomainMenuCatalog(catalog, restaurantId);
   let subtotalMinor = 0;

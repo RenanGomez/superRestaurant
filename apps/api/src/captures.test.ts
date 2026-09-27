@@ -7,7 +7,7 @@ import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSugg
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
 import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort, type CaptureSelectionPlanPort } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureSelectionNoteUnsupportedError, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort, type CaptureSelectionPlanPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
@@ -701,6 +701,29 @@ test("capture selection plan with zero lines is treated as no plan, never priced
   assert.deepEqual(persistedPlan, { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion, lines: [] });
   assert.equal(result.selectionPlan, null);
   assert.equal(result.selectionProjection, null);
+});
+
+test("capture selection plan with a line note is rejected: OrderItem has nowhere to store it", async () => {
+  const notedCommand = parseReplaceCaptureSelectionPlanCommandV1({
+    ...selectionPlanCommand,
+    plan: { ...selectionPlanCommand.plan, lines: [{ ...selectionPlanCommand.plan.lines[0]!, note: "Sin cilantro" }] },
+  });
+  assert.ok(notedCommand);
+  const persistence: CaptureSelectionPlanPort = {
+    replaceSelectionPlan: async () => { throw new Error("must not persist a rejected note"); },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => { throw new Error("must not read workspace"); },
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } });
+  await assert.rejects(
+    service.replace(principal, notedCommand),
+    (error: unknown) => error instanceof CaptureSelectionNoteUnsupportedError && error.code === "conflict",
+  );
 });
 
 test("capture selection plan replay returns the stored result even after a later, unrelated mutation", async () => {
