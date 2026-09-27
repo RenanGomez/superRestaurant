@@ -22,6 +22,8 @@
     "src/lib/memberships.test.ts",
     "src/lib/dining-layout.ts",
     "src/lib/dining-layout.test.ts",
+    "src/lib/table-position.ts",
+    "src/lib/table-position.test.ts",
     "src/lib/branch-selection.ts",
     "src/lib/branch-selection.test.ts",
     "src/lib/menu-catalog.ts",
