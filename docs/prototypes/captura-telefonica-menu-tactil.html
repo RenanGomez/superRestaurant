@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prototipo · Captura telefónica</title>
+<meta name="description" content="Prototipo HTML navegable de la captura telefónica con menú táctil para superRestaurant. Datos ficticios; no toca el API.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Sora:wght@600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --font-sans:"IBM Plex Sans",system-ui,sans-serif;
+  --font-heading:"Sora",system-ui,sans-serif;
+  --bg:oklch(97% 0.006 240);
+  --surface:oklch(100% 0 0);
+  --surface-2:oklch(95% 0.008 240);
+  --text:oklch(24% 0.02 250);
+  --muted:oklch(48% 0.018 250);
+  --accent:oklch(55% 0.14 230);
+  --accent-hover:oklch(47% 0.14 230);
+  --accent-soft:oklch(93% 0.05 230);
+  --border:oklch(89% 0.008 250);
+  --error:oklch(55% 0.18 25);
+  --error-bg:oklch(96% 0.03 25);
+  --success:oklch(50% 0.14 155);
+  --success-bg:oklch(95% 0.04 155);
+  --warn:oklch(60% 0.15 75);
+  --warn-bg:oklch(96% 0.05 85);
+  --nav:oklch(20% 0.03 250);
+  --nav-text:oklch(92% 0.01 250);
+  --radius:12px;
+  --shadow:0 4px 18px oklch(20% 0.03 250 / .10);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:oklch(17% 0.02 250);--surface:oklch(22% 0.02 250);--surface-2:oklch(27% 0.02 250);
+    --text:oklch(94% 0.01 250);--muted:oklch(70% 0.015 250);--border:oklch(34% 0.015 250);
+    --accent:oklch(70% 0.13 230);--accent-hover:oklch(78% 0.12 230);--accent-soft:oklch(32% 0.06 230);
+    --error-bg:oklch(28% 0.06 25);--success-bg:oklch(28% 0.06 155);--warn-bg:oklch(30% 0.06 85);
+    --nav:oklch(12% 0.02 250);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:oklch(17% 0.02 250);--surface:oklch(22% 0.02 250);--surface-2:oklch(27% 0.02 250);
+  --text:oklch(94% 0.01 250);--muted:oklch(70% 0.015 250);--border:oklch(34% 0.015 250);
+  --accent:oklch(70% 0.13 230);--accent-hover:oklch(78% 0.12 230);--accent-soft:oklch(32% 0.06 230);
+  --error-bg:oklch(28% 0.06 25);--success-bg:oklch(28% 0.06 155);--warn-bg:oklch(30% 0.06 85);
+  --nav:oklch(12% 0.02 250);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:var(--font-sans);background:var(--bg);color:var(--text);font-size:15px;line-height:1.4;display:flex;flex-direction:column;min-height:100dvh}
+h1,h2,h3{font-family:var(--font-heading);margin:0}
+button{font:inherit;color:inherit;cursor:pointer;border:1px solid var(--border);background:var(--surface);border-radius:10px;min-height:44px;min-width:44px;padding:0 14px}
+button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600}
+button.primary:hover{background:var(--accent-hover)}
+button.ghost{background:transparent;border-color:transparent}
+button.danger{color:var(--error);border-color:var(--error)}
+button[disabled]{opacity:.5;cursor:not-allowed}
+input,textarea,select{font:inherit;color:inherit;background:var(--surface);border:1px solid var(--border);border-radius:10px;min-height:44px;padding:8px 12px;width:100%}
+textarea{min-height:72px;resize:vertical}
+label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px;font-weight:500}
+.hint{font-size:12.5px;color:var(--muted)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.grow{flex:1}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 10px;font-size:12.5px;font-weight:500;background:var(--surface-2)}
+.pill.ok{background:var(--success-bg);color:var(--success)}
+.pill.warn{background:var(--warn-bg);color:var(--warn)}
+.pill.err{background:var(--error-bg);color:var(--error)}
+.pill.accent{background:var(--accent-soft);color:var(--accent)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+/* Top status bar (sucursal, turno, caja, conexión, sync) */
+.topbar{background:var(--nav);color:var(--nav-text);display:flex;align-items:center;gap:14px;padding:0 16px;height:52px;flex-shrink:0}
+.topbar .brand{font-family:var(--font-heading);font-weight:700;letter-spacing:.2px}
+.topbar .ctx{display:flex;gap:10px;font-size:12.5px;opacity:.9;flex-wrap:wrap}
+.topbar .ctx span b{font-weight:600}
+.topbar .dot{width:8px;height:8px;border-radius:50%;background:oklch(70% 0.16 150);display:inline-block;margin-right:5px}
+.topbar .right{margin-left:auto;display:flex;gap:8px;align-items:center}
+.topbar button{background:transparent;color:var(--nav-text);border-color:oklch(40% 0.02 250)}
+
+/* Stepper */
+.stepper{display:flex;gap:6px;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--surface);overflow-x:auto;flex-shrink:0}
+.stepper button{display:flex;align-items:center;gap:8px;border-radius:999px;padding:0 14px;font-weight:500;white-space:nowrap}
+.stepper button .n{width:24px;height:24px;border-radius:50%;background:var(--surface-2);display:grid;place-items:center;font-size:12px;font-weight:600}
+.stepper button.active{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.stepper button.active .n{background:var(--accent);color:#fff}
+.stepper button.done .n{background:var(--success);color:#fff}
+.stepper .folio{margin-left:auto;align-self:center;font-size:13px;color:var(--muted);white-space:nowrap}
+
+main{flex:1;display:flex;min-height:0;min-width:0;width:100%;max-width:100vw;overflow-x:hidden}
+.screen{display:none;flex:1;min-height:0;min-width:0;max-width:100%}
+.menu,.products,.content,.cats{min-width:0;max-width:100%}
+.screen.active{display:flex}
+.content{flex:1;overflow:auto;padding:16px}
+.content.narrow{max-width:860px;margin:0 auto;width:100%}
+
+/* Ticket lateral fijo (desktop) / hoja inferior (móvil) */
+.ticket{width:360px;flex-shrink:0;border-left:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;min-height:0}
+.ticket header{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.ticket .lines{flex:1;overflow:auto;padding:8px 14px}
+.line{display:grid;grid-template-columns:1fr auto;gap:4px 10px;padding:10px 0;border-bottom:1px dashed var(--border)}
+.line .name{font-weight:600}
+.line .detail{font-size:12.5px;color:var(--muted);grid-column:1/-1}
+.line .qty{display:flex;align-items:center;gap:4px;grid-column:1/-1}
+.line .qty button{min-width:40px;min-height:40px;padding:0;border-radius:8px}
+.line .qty .num{min-width:28px;text-align:center;font-weight:600}
+.ticket .totals{border-top:1px solid var(--border);padding:12px 14px;font-size:14px;display:grid;gap:4px}
+.totals div{display:flex;justify-content:space-between}
+.totals .grand{font-family:var(--font-heading);font-size:20px;font-weight:700;margin-top:4px}
+.ticket .cta{padding:10px 14px 14px;display:grid;gap:8px}
+.empty{color:var(--muted);text-align:center;padding:24px 12px}
+
+/* Home / bandeja */
+.home-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.draft{display:grid;gap:6px;text-align:left;padding:14px;min-height:96px}
+.draft .f{font-family:var(--font-heading);font-weight:700}
+.big{min-height:96px;font-size:17px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:10px}
+.big.primary{font-size:18px}
+
+/* Cliente */
+.suggest{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--surface);margin-top:6px}
+.suggest button{width:100%;text-align:left;border:0;border-radius:0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 14px}
+.suggest button:last-child{border-bottom:0}
+.suggest button:hover{background:var(--surface-2)}
+.cust{display:grid;grid-template-columns:3fr 2fr;gap:14px}
+.addr{display:grid;gap:8px}
+.addr button{text-align:left;display:grid;gap:2px;padding:10px 14px;min-height:60px}
+.addr button.sel{border-color:var(--accent);background:var(--accent-soft)}
+.addr .tag{font-weight:600}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chips button.sel{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
+
+/* Menú táctil */
+.menu{display:flex;flex:1;min-height:0}
+.cats{width:170px;flex-shrink:0;border-right:1px solid var(--border);background:var(--surface);overflow:auto;padding:8px;display:grid;gap:6px;align-content:start}
+.cats button{width:100%;text-align:left;display:flex;align-items:center;gap:8px;min-height:52px;border-color:transparent;background:transparent}
+.cats button.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.cats .ico{font-size:20px}
+.products{flex:1;overflow:auto;padding:14px}
+.products h2{font-size:18px;margin-bottom:10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
+.prod{padding:0;overflow:hidden;text-align:left;display:grid;grid-template-rows:auto 1fr;min-height:180px;border-radius:14px;position:relative;transition:transform .08s}
+.prod:active{transform:scale(.97)}
+.prod .img{height:96px;display:grid;place-items:center;font-size:40px;background:var(--surface-2)}
+.prod .body{padding:8px 10px;display:grid;gap:2px;align-content:start}
+.prod .pn{font-weight:600;line-height:1.2}
+.prod .pp{color:var(--muted);font-size:13px}
+.prod .badge{position:absolute;top:8px;right:8px}
+.prod .count{position:absolute;top:8px;left:8px;background:var(--accent);color:#fff;border-radius:999px;min-width:26px;height:26px;display:grid;place-items:center;font-size:13px;font-weight:700}
+.prod.off{opacity:.5}
+.search{position:sticky;top:0;background:var(--bg);padding-bottom:10px;z-index:1}
+
+/* Hoja de configuración (modal in-app) */
+.sheet-bg{position:fixed;inset:0;background:oklch(10% 0.02 250 / .45);display:none;align-items:flex-end;justify-content:center;z-index:20}
+.sheet-bg.open{display:flex}
+.sheet{background:var(--surface);width:min(640px,100%);max-height:92dvh;border-radius:18px 18px 0 0;display:flex;flex-direction:column;box-shadow:var(--shadow)}
+@media(min-width:768px){.sheet-bg{align-items:center}.sheet{border-radius:18px;max-height:88dvh}}
+.sheet header{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.sheet header h2{font-size:18px}
+.sheet .sb{flex:1;overflow:auto;padding:14px 16px;display:grid;gap:16px}
+.sheet footer{padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:center}
+.group h3{font-size:14px;margin-bottom:8px;display:flex;justify-content:space-between}
+.group h3 .req{font-size:12px;font-weight:500}
+.opts{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
+.opts button{display:flex;justify-content:space-between;align-items:center;gap:6px;min-height:48px;text-align:left}
+.opts button.sel{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
+.opts button .p{font-size:12.5px;color:var(--muted);font-weight:400}
+.halves{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.halves .half{border:1px dashed var(--border);border-radius:12px;padding:10px}
+.halves .half h4{margin:0 0 6px;font-size:13px;color:var(--muted)}
+.qtybar{display:flex;align-items:center;gap:6px}
+.qtybar button{min-width:44px;padding:0;font-size:20px}
+.qtybar .num{min-width:36px;text-align:center;font-weight:700;font-size:18px}
+
+/* Entrega y cobro */
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.quote{display:grid;gap:6px}
+.quote .big-num{font-family:var(--font-heading);font-size:26px;font-weight:700}
+.pay-methods{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+.pay-methods button{min-height:72px;display:grid;place-items:center;gap:4px;font-weight:600}
+.pay-methods button.sel{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.pay-methods button small{font-weight:400;color:var(--muted)}
+.denoms{display:flex;gap:8px;flex-wrap:wrap}
+.alert{border-radius:10px;padding:10px 12px;font-size:13.5px;display:flex;gap:8px;align-items:flex-start}
+.alert.warn{background:var(--warn-bg);color:var(--warn)}
+.alert.err{background:var(--error-bg);color:var(--error)}
+.alert.ok{background:var(--success-bg);color:var(--success)}
+.alert.info{background:var(--accent-soft);color:var(--accent)}
+
+/* Confirmación */
+.done-wrap{max-width:560px;margin:40px auto;text-align:center;display:grid;gap:14px}
+.done-wrap .check{width:72px;height:72px;border-radius:50%;background:var(--success-bg);color:var(--success);display:grid;place-items:center;margin:0 auto;font-size:36px}
+
+/* Toast */
+.toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:var(--nav);color:var(--nav-text);padding:10px 16px;border-radius:999px;font-size:13.5px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:30;max-width:calc(100vw - 32px)}
+.toast.show{opacity:1}
+
+/* Atajos */
+.kbd{display:inline-block;border:1px solid var(--border);border-bottom-width:2px;border-radius:6px;padding:0 6px;font-size:12px;background:var(--surface)}
+.shortcuts{display:none;position:fixed;right:16px;bottom:16px;z-index:15}
+@media(min-width:1024px){.shortcuts{display:flex;gap:10px;font-size:12.5px;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:6px 12px}}
+
+/* Móvil 390×844 */
+.mticket{display:none}
+@media(max-width:900px){
+  .ticket{display:none}
+  .mticket{display:flex;position:sticky;bottom:0;background:var(--surface);border-top:1px solid var(--border);padding:10px 16px;gap:10px;align-items:center;z-index:5}
+  .mticket .sum{flex:1;display:grid}
+  .mticket .sum b{font-family:var(--font-heading);font-size:18px}
+  .cats{width:100%;display:flex;overflow-x:auto;padding:8px;gap:6px;border-right:0;border-bottom:1px solid var(--border)}
+  .cats button{width:auto;flex:0 0 auto;white-space:nowrap;min-height:44px;background:var(--surface-2)}
+  .cats button.active{background:var(--accent-soft)}
+  .menu{flex-direction:column}
+  .grid{grid-template-columns:repeat(2,1fr)}
+  .cust,.two{grid-template-columns:1fr}
+  .topbar{padding:0 12px;gap:10px}
+  .topbar .ctx{flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
+  .topbar .ctx span:nth-child(n+3){display:none}
+  .stepper{padding:8px 12px}
+  .stepper button{padding:0 10px;gap:0}
+  .stepper button .n{margin-right:0}
+  .stepper button .lbl{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  .stepper button.active .lbl{position:static;width:auto;height:auto;clip:auto;margin-left:8px}
+  .stepper .folio{display:none}
+  .content{padding:12px 16px}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="topbar" role="banner">
+  <span class="brand">superRestaurant</span>
+  <div class="ctx" aria-label="Contexto operativo">
+    <span>🏪 <b>Centro</b></span>
+    <span>🕘 Turno <b>abierto</b> · Caja <b>#3</b></span>
+    <span><span class="dot"></span>En línea · 0 pendientes</span>
+    <span>👤 Ana · cajera</span>
+  </div>
+  <div class="right">
+    <button class="ghost" id="theme-btn" aria-label="Cambiar tema">◐</button>
+  </div>
+</div>
+
+<nav class="stepper" aria-label="Pasos de la captura">
+  <button data-go="home" class="active" aria-label="Bandeja"><span class="n">☰</span><span class="lbl">Bandeja</span></button>
+  <button data-go="customer" aria-label="Cliente"><span class="n">1</span><span class="lbl">Cliente</span></button>
+  <button data-go="menu" aria-label="Menú"><span class="n">2</span><span class="lbl">Menú</span></button>
+  <button data-go="delivery" aria-label="Entrega"><span class="n">3</span><span class="lbl">Entrega</span></button>
+  <button data-go="pay" aria-label="Cobro"><span class="n">4</span><span class="lbl">Cobro</span></button>
+  <span class="folio" id="folio-lbl"></span>
+</nav>
+
+<main>
+
+<!-- ===== BANDEJA ===== -->
+<section class="screen active" id="s-home">
+  <div class="content narrow">
+    <div class="row" style="margin-bottom:14px">
+      <h1 style="font-size:22px">Captura</h1>
+      <span class="pill accent">Teléfono · Sucursal Centro</span>
+    </div>
+    <div class="home-grid" style="margin-bottom:22px">
+      <button class="big primary" id="new-capture">📞 Nueva captura <span class="kbd" style="color:#fff;border-color:#fff8">N</span></button>
+      <button class="big">🧾 Mostrador</button>
+      <button class="big">🪑 Mesa</button>
+    </div>
+    <h2 style="font-size:16px;margin-bottom:8px">Borradores recuperables</h2>
+    <p class="hint" style="margin:0 0 10px">Se guardan solos. Si el navegador se recarga, siguen aquí con el mismo folio.</p>
+    <div class="home-grid">
+      <button class="draft card" data-resume="C-1041"><span class="f">C-1041</span><span>María López · 55 1234 5678</span><span class="hint">Domicilio · 2 líneas · hace 4 min · <b>tuyo</b></span></button>
+      <button class="draft card" data-resume="C-1039"><span class="f">C-1039</span><span>Sin cliente</span><span class="hint">Recoger · 0 líneas · hace 21 min · en espera</span></button>
+      <button class="draft card" data-resume="C-1036"><span class="f">C-1036</span><span>Jorge Ruiz · 55 9988 7766</span><span class="hint">Domicilio · 5 líneas · hace 48 min · <span class="pill warn">de Luis</span></span></button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== CLIENTE ===== -->
+<section class="screen" id="s-customer">
+  <div class="content">
+    <div class="cust">
+      <div style="display:grid;gap:14px;align-content:start">
+        <div class="card">
+          <label for="phone">Teléfono del cliente <span class="kbd">/</span></label>
+          <div class="row">
+            <input id="phone" inputmode="tel" placeholder="55 1234 5678" autocomplete="off" class="grow">
+            <button id="phone-clear" aria-label="Limpiar">✕</button>
+          </div>
+          <div class="suggest" id="suggest" hidden></div>
+          <p class="hint" style="margin:8px 0 0">Escribe 4 dígitos o más. Si no existe, se ofrece el alta rápida.</p>
+        </div>
+
+        <div class="card" id="cust-card" hidden>
+          <div class="row" style="margin-bottom:10px">
+            <h2 style="font-size:18px" id="cust-name">—</h2>
+            <span class="pill ok" id="cust-pill">Cliente existente</span>
+            <span class="grow"></span>
+            <button class="ghost" id="cust-change">Cambiar</button>
+          </div>
+          <div class="hint" id="cust-meta"></div>
+          <h3 style="font-size:14px;margin:14px 0 8px">Direcciones</h3>
+          <div class="addr" id="addr-list"></div>
+          <button class="ghost" style="margin-top:8px" id="addr-new">＋ Nueva dirección</button>
+        </div>
+
+        <div class="card" id="quick-card" hidden>
+          <h2 style="font-size:18px;margin-bottom:10px">Alta rápida</h2>
+          <div class="two">
+            <div><label for="q-name">Nombre</label><input id="q-name" placeholder="Como lo dice el cliente"></div>
+            <div><label>Teléfono</label><input id="q-phone" readonly></div>
+          </div>
+          <div class="two" style="margin-top:10px">
+            <div><label for="q-tag">Etiqueta de dirección</label><input id="q-tag" placeholder="Casa, Oficina, Casa de mamá"></div>
+            <div><label for="q-cp">Código postal</label><input id="q-cp" inputmode="numeric" placeholder="06700"></div>
+          </div>
+          <div style="margin-top:10px"><label for="q-street">Calle y número</label><input id="q-street" placeholder="Av. Insurgentes 123, int. 4"></div>
+          <div style="margin-top:10px"><label for="q-ref">Referencias</label><input id="q-ref" placeholder="Portón negro, timbre 4"></div>
+          <div class="row" style="margin-top:12px">
+            <button class="primary" id="quick-save">Guardar y elegir menú →</button>
+            <button class="ghost" id="quick-cancel">Cancelar</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:grid;gap:14px;align-content:start">
+        <div class="card">
+          <h3 style="font-size:14px;margin-bottom:8px">Origen</h3>
+          <div class="chips" id="src-chips">
+            <button class="sel" data-v="phone">📞 Teléfono</button>
+            <button data-v="whatsapp_manual">💬 WhatsApp</button>
+            <button data-v="counter">🧾 Mostrador</button>
+          </div>
+          <h3 style="font-size:14px;margin:14px 0 8px">Cumplimiento</h3>
+          <div class="chips" id="ful-chips">
+            <button class="sel" data-v="delivery">🛵 Domicilio</button>
+            <button data-v="pickup">🛍️ Recoger</button>
+            <button data-v="counter">🧾 Mostrador</button>
+            <button data-v="dine_in">🪑 Mesa</button>
+          </div>
+        </div>
+        <div class="card" id="recent-card" hidden>
+          <h3 style="font-size:14px;margin-bottom:8px">Pedidos recientes</h3>
+          <div id="recent-list" style="display:grid;gap:8px"></div>
+        </div>
+        <div class="row">
+          <button class="primary grow" id="to-menu" disabled>Elegir productos →</button>
+        </div>
+        <p class="hint">Puedes ir al menú sin cliente y capturarlo después. Para domicilio, el cliente y la dirección son obligatorios antes de confirmar.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== MENÚ ===== -->
+<section class="screen" id="s-menu">
+  <div class="menu">
+    <nav class="cats" id="cats" aria-label="Categorías"></nav>
+    <div class="products">
+      <div class="search">
+        <div class="row">
+          <input id="prod-search" placeholder="Buscar producto  (/)" aria-label="Buscar producto" class="grow">
+          <span class="pill" id="cat-count"></span>
+        </div>
+      </div>
+      <h2 id="cat-title"></h2>
+      <div class="grid" id="grid"></div>
+    </div>
+  </div>
+  <aside class="ticket" aria-label="Resumen del pedido">
+    <header><strong id="t-folio">Pedido</strong><span class="pill" id="t-ful">Domicilio</span><span class="grow"></span><span class="hint" id="t-cust">Sin cliente</span></header>
+    <div class="lines" id="t-lines"></div>
+    <div class="totals" id="t-totals"></div>
+    <div class="cta">
+      <button class="primary" id="t-next" disabled>Entrega y cobro →</button>
+      <div class="row"><button class="ghost grow" id="t-hold">⏸ Dejar en espera</button><button class="ghost danger" id="t-nosale">Sin venta</button></div>
+    </div>
+  </aside>
+</section>
+
+<!-- ===== ENTREGA ===== -->
+<section class="screen" id="s-delivery">
+  <div class="content narrow">
+    <div class="two">
+      <div style="display:grid;gap:14px;align-content:start">
+        <div class="card">
+          <h2 style="font-size:18px;margin-bottom:10px">Entrega</h2>
+          <div class="chips" id="ful-chips-2"></div>
+          <div id="del-addr" style="margin-top:14px"></div>
+          <div style="margin-top:12px"><label for="instr">Instrucciones de entrega</label><textarea id="instr" placeholder="Tocar el timbre 4, dejar en recepción…"></textarea>
+            <div class="chips" style="margin-top:6px" id="instr-sugg"><button>Portón negro, timbre 4</button><button>Llamar al llegar</button></div>
+          </div>
+          <div style="margin-top:12px"><label for="when">¿Cuándo?</label>
+            <div class="chips"><button class="sel">Lo antes posible</button><button>Programar</button></div>
+          </div>
+        </div>
+      </div>
+      <div style="display:grid;gap:14px;align-content:start">
+        <div class="card quote" id="quote-card">
+          <h3 style="font-size:14px">Cotización de entrega</h3>
+          <div id="quote-body"><button class="primary" id="quote-btn">Cotizar entrega</button><p class="hint">Zona por código postal con tarifa fija. La cotización se congela con el pedido.</p></div>
+        </div>
+        <div class="card">
+          <h3 style="font-size:14px;margin-bottom:6px">Resumen</h3>
+          <div id="d-summary" class="hint"></div>
+        </div>
+        <button class="primary" id="d-next">Cobro →</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== COBRO ===== -->
+<section class="screen" id="s-pay">
+  <div class="content narrow">
+    <div class="two">
+      <div style="display:grid;gap:14px;align-content:start">
+        <div class="card">
+          <h2 style="font-size:18px;margin-bottom:4px">¿Con qué pagará?</h2>
+          <p class="hint" style="margin:0 0 10px">Es una intención, no un cobro. El dinero entra a caja cuando el repartidor liquida o en mostrador.</p>
+          <div class="pay-methods" id="pay-methods">
+            <button class="sel" data-v="cash">💵 Efectivo<small>contra entrega</small></button>
+            <button data-v="card_manual">💳 Tarjeta<small>terminal manual</small></button>
+            <button data-v="transfer">🏦 Transferencia<small>pendiente de evidencia</small></button>
+          </div>
+          <div id="cash-box" style="margin-top:14px">
+            <label>¿Paga con?</label>
+            <div class="denoms" id="denoms"></div>
+            <div class="row" style="margin-top:8px"><input id="cash-with" inputmode="numeric" placeholder="Otro monto" class="grow"><span class="hint" id="change-lbl"></span></div>
+          </div>
+          <div style="margin-top:14px"><label for="tip">Propina (separada del total)</label>
+            <div class="chips" id="tip-chips"><button class="sel" data-v="0">Sin propina</button><button data-v="1000">$10</button><button data-v="2000">$20</button><button data-v="5000">$50</button></div>
+          </div>
+        </div>
+      </div>
+      <div style="display:grid;gap:14px;align-content:start">
+        <div class="card"><div class="totals" id="p-totals" style="padding:0;border:0"></div></div>
+        <div class="alert info" id="pay-alert">ℹ️ La orden se crea y se envía a cocina; el cobro queda como obligación pendiente hasta que se liquide.</div>
+        <button class="primary big" id="confirm-btn">✅ Confirmar orden y enviar a cocina</button>
+        <p class="hint">Se registra actor, sucursal, dispositivo y hora. La orden confirmada conserva su historial aunque se cancele después.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== CONFIRMADA ===== -->
+<section class="screen" id="s-done">
+  <div class="content">
+    <div class="done-wrap">
+      <div class="check">✓</div>
+      <h1 style="font-size:24px">Orden <span id="done-order">ORD-0000</span> enviada a cocina</h1>
+      <p class="hint" id="done-meta"></p>
+      <div class="row" style="justify-content:center">
+        <button>🖨️ Reimprimir ticket</button>
+        <button>👀 Ver en cocina</button>
+      </div>
+      <button class="primary big" id="done-new">📞 Nueva captura</button>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ticket móvil -->
+<div class="mticket" id="mticket" hidden>
+  <div class="sum"><span class="hint" id="m-count">0 productos</span><b id="m-total">$0.00</b></div>
+  <button id="m-view">Ver pedido</button>
+  <button class="primary" id="m-next" disabled>Continuar</button>
+</div>
+
+<!-- hoja de configuración -->
+<div class="sheet-bg" id="sheet-bg" role="dialog" aria-modal="true" aria-labelledby="sh-title">
+  <div class="sheet">
+    <header><h2 id="sh-title">Producto</h2><span class="grow"></span><button class="ghost" id="sh-close" aria-label="Cerrar (Esc)">✕</button></header>
+    <div class="sb" id="sh-body"></div>
+    <footer>
+      <div class="qtybar"><button id="sh-minus" aria-label="Menos">−</button><span class="num" id="sh-qty">1</span><button id="sh-plus" aria-label="Más">+</button></div>
+      <span class="grow"></span>
+      <button class="primary" id="sh-add">Agregar · $0.00</button>
+    </footer>
+  </div>
+</div>
+
+<!-- hoja del ticket en móvil -->
+<div class="sheet-bg" id="mt-bg" role="dialog" aria-modal="true">
+  <div class="sheet">
+    <header><h2>Pedido</h2><span class="grow"></span><button class="ghost" id="mt-close" aria-label="Cerrar">✕</button></header>
+    <div class="sb" id="mt-body"></div>
+  </div>
+</div>
+
+<!-- confirmación in-app (nunca confirm()) -->
+<div class="sheet-bg" id="cf-bg" role="dialog" aria-modal="true">
+  <div class="sheet" style="max-width:440px">
+    <header><h2 id="cf-title">Confirmar</h2></header>
+    <div class="sb"><p id="cf-msg" style="margin:0"></p><div id="cf-reason"><label for="cf-input">Motivo (obligatorio)</label><input id="cf-input" placeholder="Cliente colgó, error de captura…"></div></div>
+    <footer><button class="ghost grow" id="cf-no">Volver</button><button class="danger" id="cf-yes">Confirmar</button></footer>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="shortcuts"><span><span class="kbd">N</span> nueva</span><span><span class="kbd">/</span> buscar</span><span><span class="kbd">Esc</span> volver / cerrar</span><span><span class="kbd">F2</span> cobro</span></div>
+
+<script>
+/* ===== Datos ficticios. Dinero en centavos MXN (enteros). Ningún total se calcula así en producción: el API revalida. ===== */
+const MXN = c => (c/100).toLocaleString("es-MX",{style:"currency",currency:"MXN"});
+const CUSTOMERS = [
+  {id:"c1",name:"María López",phone:"5512345678",orders:14,last:"hace 6 días",addresses:[
+    {id:"a1",tag:"Casa",street:"Av. Insurgentes Sur 123, int. 4",cp:"06700",ref:"Portón negro, timbre 4",valid:true},
+    {id:"a2",tag:"Oficina",street:"Reforma 222, piso 9",cp:"06600",ref:"Dejar en recepción",valid:false}],
+   recent:[{when:"hace 6 días",total:41500,lines:["1× Pizza Grande ½ Pepperoni ½ Hawaiana","2× Coca-Cola 600 ml"]},{when:"hace 2 sem",total:18900,lines:["1× Hamburguesa Clásica","1× Papas grandes"]}]},
+  {id:"c2",name:"Jorge Ruiz",phone:"5599887766",orders:3,last:"hace 1 mes",addresses:[
+    {id:"a3",tag:"Casa",street:"Calle 5 de Mayo 40",cp:"09000",ref:"",valid:true}],recent:[]},
+  {id:"c3",name:"Lucía Hernández",phone:"5512349999",orders:1,last:"hace 3 meses",addresses:[],recent:[]},
+];
+const CATS = [
+  {id:"pizzas",name:"Pizzas",ico:"🍕"},{id:"burgers",name:"Hamburguesas",ico:"🍔"},{id:"sides",name:"Complementos",ico:"🍟"},
+  {id:"drinks",name:"Bebidas",ico:"🥤"},{id:"desserts",name:"Postres",ico:"🍰"},{id:"combos",name:"Combos",ico:"🎁"},
+];
+const SIZES=[{id:"ind",name:"Individual",price:12900},{id:"med",name:"Mediana",price:18900},{id:"gde",name:"Grande",price:24900},{id:"fam",name:"Familiar",price:29900}];
+const SPECIALTIES=["Pepperoni","Hawaiana","Mexicana","Vegetariana","4 Quesos","Suprema"];
+const EXTRAS=[{id:"x1",name:"Extra queso",price:2500},{id:"x2",name:"Orilla rellena",price:3500},{id:"x3",name:"Jalapeños",price:1000},{id:"x4",name:"Champiñones",price:1500}];
+const PRODUCTS = [
+  {id:"p1",cat:"pizzas",name:"Pizza especialidad",ico:"🍕",price:12900,from:true,kind:"pizza"},
+  {id:"p2",cat:"pizzas",name:"Pizza mitad y mitad",ico:"🍕",price:12900,from:true,kind:"pizza",halves:true},
+  {id:"p3",cat:"pizzas",name:"Pizza de la casa",ico:"🍕",price:16900,from:true,kind:"pizza"},
+  {id:"p4",cat:"burgers",name:"Hamburguesa Clásica",ico:"🍔",price:11900,kind:"simple",groups:[{name:"Término",req:true,max:1,opts:["Medio","Tres cuartos","Bien cocido"]},{name:"Sin",req:false,max:4,opts:["Cebolla","Jitomate","Lechuga","Pepinillos"]}]},
+  {id:"p5",cat:"burgers",name:"Doble con tocino",ico:"🍔",price:15900,kind:"simple",groups:[{name:"Término",req:true,max:1,opts:["Medio","Tres cuartos","Bien cocido"]}]},
+  {id:"p6",cat:"burgers",name:"De pollo crispy",ico:"🍗",price:12900,kind:"simple",off:true},
+  {id:"p7",cat:"sides",name:"Papas grandes",ico:"🍟",price:6900,kind:"simple"},
+  {id:"p8",cat:"sides",name:"Alitas 10 pzas",ico:"🍗",price:14900,kind:"simple",groups:[{name:"Salsa",req:true,max:2,opts:["BBQ","Búfalo","Mango habanero","Lemon pepper"]}]},
+  {id:"p9",cat:"sides",name:"Aros de cebolla",ico:"🧅",price:5900,kind:"simple"},
+  {id:"p10",cat:"drinks",name:"Coca-Cola 600 ml",ico:"🥤",price:3500,kind:"simple"},
+  {id:"p11",cat:"drinks",name:"Agua natural 1 L",ico:"💧",price:2500,kind:"simple"},
+  {id:"p12",cat:"drinks",name:"Limonada 1 L",ico:"🍋",price:5500,kind:"simple"},
+  {id:"p13",cat:"desserts",name:"Pastel de chocolate",ico:"🍰",price:6500,kind:"simple"},
+  {id:"p14",cat:"desserts",name:"Brownie",ico:"🍫",price:4500,kind:"simple"},
+  {id:"p15",cat:"combos",name:"Combo familiar",ico:"🎁",price:39900,kind:"simple",groups:[{name:"Pizza grande",req:true,max:1,opts:SPECIALTIES},{name:"Refresco 2 L",req:true,max:1,opts:["Coca-Cola","Sprite","Fanta"]}]},
+  {id:"p16",cat:"combos",name:"Combo pareja",ico:"🎁",price:24900,kind:"simple",groups:[{name:"Pizza mediana",req:true,max:1,opts:SPECIALTIES}]},
+];
+const ZONES={"06700":{name:"Roma-Condesa",fee:3500,eta:"35-45 min"},"06600":{name:"Juárez",fee:3500,eta:"35-45 min"},"09000":{name:"Iztapalapa Centro",fee:5500,eta:"50-60 min"}};
+
+/* ===== Estado del borrador ===== */
+let draft = null;
+let folioSeq = 1042;
+function newDraft(folio){ return {folio:folio||("C-"+folioSeq++),source:"phone",fulfillment:"delivery",customer:null,address:null,lines:[],quote:null,pay:"cash",cashWith:null,tip:0,instr:""}; }
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const FUL={delivery:"Domicilio",pickup:"Recoger",counter:"Mostrador",dine_in:"Mesa"};
+
+/* ===== Navegación ===== */
+let current="home";
+function go(id){
+  current=id;
+  $$(".screen").forEach(s=>s.classList.toggle("active",s.id==="s-"+id));
+  const order=["home","customer","menu","delivery","pay"];
+  $$(".stepper button").forEach(b=>{const k=b.dataset.go;b.classList.toggle("active",k===id);b.classList.toggle("done",order.indexOf(k)<order.indexOf(id)&&k!=="home");});
+  $("#mticket").hidden = id!=="menu";
+  $("#folio-lbl").textContent = draft ? `Folio ${draft.folio} · guardado automático` : "";
+  if(id==="menu") renderMenu();
+  if(id==="delivery") renderDelivery();
+  if(id==="pay") renderPay();
+  window.scrollTo(0,0);
+}
+$$(".stepper button").forEach(b=>b.addEventListener("click",()=>{
+  if(b.dataset.go!=="home" && !draft){ toast("Primero crea o retoma una captura (N)"); return; }
+  go(b.dataset.go);
+}));
+function toast(msg){const t=$("#toast");t.textContent=msg;t.classList.add("show");clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show"),2200);}
+
+/* ===== Bandeja ===== */
+$("#new-capture").addEventListener("click",()=>{draft=newDraft();toast(`Borrador ${draft.folio} creado`);go("customer");$("#phone").focus();});
+$$("[data-resume]").forEach(b=>b.addEventListener("click",()=>{
+  draft=newDraft(b.dataset.resume);
+  if(b.dataset.resume==="C-1041"){selectCustomer(CUSTOMERS[0]);draft.address=CUSTOMERS[0].addresses[0];addLine(PRODUCTS[0],2,{size:SIZES[2],spec:"Pepperoni",extras:[]},"");addLine(PRODUCTS[9],2,{},"");}
+  if(b.dataset.resume==="C-1039"){draft.fulfillment="pickup";}
+  if(b.dataset.resume==="C-1036"){selectCustomer(CUSTOMERS[1]);draft.address=CUSTOMERS[1].addresses[0];addLine(PRODUCTS[3],2,{groups:{"Término":["Tres cuartos"]}},"");addLine(PRODUCTS[6],1,{},"");addLine(PRODUCTS[11],2,{},"");}
+  toast(`Borrador ${draft.folio} retomado`);go(draft.lines.length?"menu":"customer");
+}));
+
+/* ===== Cliente ===== */
+const phone=$("#phone"), suggest=$("#suggest");
+phone.addEventListener("input",()=>{
+  const q=phone.value.replace(/\D/g,"");
+  if(q.length<4){suggest.hidden=true;return;}
+  const hits=CUSTOMERS.filter(c=>c.phone.includes(q));
+  suggest.innerHTML = hits.map(c=>`<button data-c="${c.id}"><span><b>${c.name}</b> · ${fmtPhone(c.phone)}</span><span class="hint">${c.orders} pedidos · ${c.last}</span></button>`).join("")
+    + `<button data-new="1"><span>＋ Dar de alta <b>${fmtPhone(q)}</b></span><span class="hint">alta rápida</span></button>`;
+  suggest.hidden=false;
+  suggest.querySelectorAll("[data-c]").forEach(b=>b.addEventListener("click",()=>selectCustomer(CUSTOMERS.find(c=>c.id===b.dataset.c))));
+  suggest.querySelector("[data-new]").addEventListener("click",()=>{suggest.hidden=true;$("#quick-card").hidden=false;$("#cust-card").hidden=true;$("#q-phone").value=fmtPhone(q);$("#q-name").focus();});
+});
+function fmtPhone(p){return p.replace(/(\d{2})(\d{4})(\d{4})/,"$1 $2 $3");}
+function selectCustomer(c){
+  draft.customer=c; draft.address=c.addresses[0]||null;
+  suggest.hidden=true; $("#quick-card").hidden=true; $("#cust-card").hidden=false;
+  phone.value=fmtPhone(c.phone);
+  $("#cust-name").textContent=c.name; $("#cust-meta").textContent=`${c.orders} pedidos · último ${c.last} · ${fmtPhone(c.phone)}`;
+  renderAddresses(); renderRecent(); $("#to-menu").disabled=false;
+}
+function renderAddresses(){
+  const c=draft.customer; const el=$("#addr-list");
+  if(!c.addresses.length){el.innerHTML=`<p class="hint">Sin direcciones. Para domicilio hace falta una.</p>`;return;}
+  el.innerHTML=c.addresses.map(a=>`<button data-a="${a.id}" class="${draft.address&&draft.address.id===a.id?"sel":""}"><span class="tag">${a.tag} <span class="pill ${a.valid?"ok":"warn"}">${a.valid?"validada en Centro":"sin validar aquí"}</span></span><span>${a.street} · CP ${a.cp}</span><span class="hint">${a.ref||"sin referencias"}</span></button>`).join("");
+  el.querySelectorAll("[data-a]").forEach(b=>b.addEventListener("click",()=>{draft.address=c.addresses.find(a=>a.id===b.dataset.a);renderAddresses();}));
+}
+function renderRecent(){
+  const c=draft.customer; const card=$("#recent-card"); card.hidden=!c.recent.length;
+  $("#recent-list").innerHTML=c.recent.map((r,i)=>`<div class="card" style="padding:10px"><div class="row"><b>${r.when}</b><span class="grow"></span><b>${MXN(r.total)}</b></div><div class="hint">${r.lines.join(" · ")}</div><button class="ghost" style="margin-top:6px" data-rep="${i}">↻ Repetir pedido</button></div>`).join("");
+  $("#recent-list").querySelectorAll("[data-rep]").forEach(b=>b.addEventListener("click",()=>{
+    addLine(PRODUCTS[1],1,{size:SIZES[2],half1:"Pepperoni",half2:"Hawaiana",extras:[]},""); addLine(PRODUCTS[9],2,{},"");
+    toast("2 líneas preparadas al precio vigente"); go("menu");
+  }));
+}
+$("#cust-change").addEventListener("click",()=>{draft.customer=null;draft.address=null;$("#cust-card").hidden=true;$("#recent-card").hidden=true;phone.value="";phone.focus();$("#to-menu").disabled=false;});
+$("#phone-clear").addEventListener("click",()=>{phone.value="";suggest.hidden=true;phone.focus();});
+$("#quick-cancel").addEventListener("click",()=>{$("#quick-card").hidden=true;});
+$("#quick-save").addEventListener("click",()=>{
+  const name=$("#q-name").value.trim(); if(!name){toast("Falta el nombre");$("#q-name").focus();return;}
+  const c={id:"new",name,phone:$("#q-phone").value.replace(/\D/g,""),orders:0,last:"nuevo",recent:[],addresses:[]};
+  if($("#q-street").value.trim()) c.addresses.push({id:"an",tag:$("#q-tag").value.trim()||"Casa",street:$("#q-street").value.trim(),cp:$("#q-cp").value.trim()||"06700",ref:$("#q-ref").value.trim(),valid:false});
+  CUSTOMERS.unshift(c); selectCustomer(c); $("#cust-pill").textContent="Cliente nuevo"; $("#cust-pill").className="pill accent"; go("menu");
+});
+$("#to-menu").addEventListener("click",()=>go("menu"));
+phone.addEventListener("input",()=>{ $("#to-menu").disabled=false; });
+function bindChips(sel,key,after){$$(sel+" button").forEach(b=>b.addEventListener("click",()=>{$$(sel+" button").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");draft[key]=b.dataset.v;after&&after();}));}
+bindChips("#src-chips","source"); bindChips("#ful-chips","fulfillment",()=>{syncFul();});
+function syncFul(){$$("#ful-chips button, #ful-chips-2 button").forEach(b=>b.classList.toggle("sel",b.dataset.v===draft.fulfillment));$("#t-ful").textContent=FUL[draft.fulfillment];}
+
+/* ===== Menú ===== */
+let cat="pizzas";
+function renderMenu(){
+  $("#cats").innerHTML=CATS.map(c=>`<button data-cat="${c.id}" class="${c.id===cat?"active":""}"><span class="ico">${c.ico}</span>${c.name}</button>`).join("");
+  $("#cats").querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>{cat=b.dataset.cat;$("#prod-search").value="";renderMenu();}));
+  const q=$("#prod-search").value.trim().toLowerCase();
+  const list=q?PRODUCTS.filter(p=>p.name.toLowerCase().includes(q)):PRODUCTS.filter(p=>p.cat===cat);
+  $("#cat-title").textContent=q?`Resultados para “${q}”`:CATS.find(c=>c.id===cat).name;
+  $("#cat-count").textContent=`${list.length} productos`;
+  $("#grid").innerHTML=list.map(p=>{const n=draft.lines.filter(l=>l.p.id===p.id).reduce((a,l)=>a+l.qty,0);
+    return `<button class="prod ${p.off?"off":""}" data-p="${p.id}" ${p.off?"aria-disabled=true":""}>${n?`<span class="count">${n}</span>`:""}${p.off?`<span class="badge pill err">Agotado</span>`:p.kind==="pizza"?`<span class="badge pill accent">Armar</span>`:""}<div class="img">${p.ico}</div><div class="body"><span class="pn">${p.name}</span><span class="pp">${p.from?"desde ":""}${MXN(p.price)}</span></div></button>`;}).join("");
+  $("#grid").querySelectorAll(".prod").forEach(b=>b.addEventListener("click",()=>{const p=PRODUCTS.find(x=>x.id===b.dataset.p);if(p.off){toast("Producto agotado en esta sucursal");return;}openSheet(p);}));
+  syncFul(); renderTicket();
+}
+$("#prod-search").addEventListener("input",renderMenu);
+
+/* ===== Hoja de configuración ===== */
+let sh=null;
+function openSheet(p){
+  sh={p,qty:1,cfg:{size:SIZES[0],spec:null,half1:null,half2:null,extras:[],groups:{}},note:""};
+  $("#sh-title").textContent=p.name; renderSheet(); $("#sheet-bg").classList.add("open");
+  setTimeout(()=>$("#sh-body button")?.focus(),0);
+}
+function sheetPrice(){const {p,cfg}=sh; if(p.kind==="pizza"){return cfg.size.price+cfg.extras.reduce((a,x)=>a+x.price,0);} return p.price;}
+function sheetValid(){const {p,cfg}=sh; if(p.kind==="pizza"){ if(p.halves) return cfg.half1&&cfg.half2; return !!cfg.spec; }
+  return (p.groups||[]).every(g=>!g.req||(cfg.groups[g.name]||[]).length>0);}
+function renderSheet(){
+  const {p,cfg}=sh; let h="";
+  if(p.kind==="pizza"){
+    h+=`<div class="group"><h3>Tamaño <span class="req pill">obligatorio</span></h3><div class="opts">${SIZES.map(s=>`<button data-size="${s.id}" class="${cfg.size.id===s.id?"sel":""}">${s.name}<span class="p">${MXN(s.price)}</span></button>`).join("")}</div></div>`;
+    if(p.halves){
+      h+=`<div class="group"><h3>Mitades <span class="req pill">elige 2</span></h3><p class="hint" style="margin:0 0 8px">Cada mitad se cobra a la mitad del precio de su especialidad; el sistema lo resuelve en el servidor.</p><div class="halves">
+        <div class="half"><h4>◐ Mitad 1</h4><div class="opts">${SPECIALTIES.map(s=>`<button data-h1="${s}" class="${cfg.half1===s?"sel":""}">${s}</button>`).join("")}</div></div>
+        <div class="half"><h4>◑ Mitad 2</h4><div class="opts">${SPECIALTIES.map(s=>`<button data-h2="${s}" class="${cfg.half2===s?"sel":""}">${s}</button>`).join("")}</div></div></div></div>`;
+    } else {
+      h+=`<div class="group"><h3>Especialidad <span class="req pill">obligatorio</span></h3><div class="opts">${SPECIALTIES.map(s=>`<button data-spec="${s}" class="${cfg.spec===s?"sel":""}">${s}</button>`).join("")}</div></div>`;
+    }
+    h+=`<div class="group"><h3>Extras <span class="req pill">opcional</span></h3><div class="opts">${EXTRAS.map(x=>`<button data-x="${x.id}" class="${cfg.extras.some(e=>e.id===x.id)?"sel":""}">${x.name}<span class="p">+${MXN(x.price)}</span></button>`).join("")}</div></div>`;
+  }
+  (p.groups||[]).forEach(g=>{
+    h+=`<div class="group"><h3>${g.name} <span class="req pill">${g.req?"obligatorio":"opcional"} · máx ${g.max}</span></h3><div class="opts">${g.opts.map(o=>`<button data-g="${g.name}" data-o="${o}" class="${(cfg.groups[g.name]||[]).includes(o)?"sel":""}">${o}</button>`).join("")}</div></div>`;
+  });
+  h+=`<div class="group"><label for="sh-note">Nota para cocina</label><input id="sh-note" placeholder="Sin cebolla, bien cocida…" value="${sh.note.replace(/"/g,"&quot;")}"></div>`;
+  $("#sh-body").innerHTML=h;
+  $("#sh-body").querySelectorAll("[data-size]").forEach(b=>b.onclick=()=>{cfg.size=SIZES.find(s=>s.id===b.dataset.size);renderSheet();});
+  $("#sh-body").querySelectorAll("[data-spec]").forEach(b=>b.onclick=()=>{cfg.spec=b.dataset.spec;renderSheet();});
+  $("#sh-body").querySelectorAll("[data-h1]").forEach(b=>b.onclick=()=>{cfg.half1=b.dataset.h1;renderSheet();});
+  $("#sh-body").querySelectorAll("[data-h2]").forEach(b=>b.onclick=()=>{cfg.half2=b.dataset.h2;renderSheet();});
+  $("#sh-body").querySelectorAll("[data-x]").forEach(b=>b.onclick=()=>{const x=EXTRAS.find(e=>e.id===b.dataset.x);cfg.extras=cfg.extras.some(e=>e.id===x.id)?cfg.extras.filter(e=>e.id!==x.id):[...cfg.extras,x];renderSheet();});
+  $("#sh-body").querySelectorAll("[data-g]").forEach(b=>b.onclick=()=>{const g=p.groups.find(x=>x.name===b.dataset.g);let cur=cfg.groups[g.name]||[];
+    if(cur.includes(b.dataset.o)) cur=cur.filter(o=>o!==b.dataset.o); else if(g.max===1) cur=[b.dataset.o]; else if(cur.length<g.max) cur=[...cur,b.dataset.o]; else {toast(`Máximo ${g.max} en ${g.name}`);return;}
+    cfg.groups[g.name]=cur;renderSheet();});
+  $("#sh-note").oninput=e=>sh.note=e.target.value;
+  $("#sh-qty").textContent=sh.qty;
+  const ok=sheetValid(); $("#sh-add").disabled=!ok; $("#sh-add").textContent=(ok?"Agregar · ":"Completa lo obligatorio · ")+MXN(sheetPrice()*sh.qty);
+}
+$("#sh-minus").onclick=()=>{if(sh.qty>1){sh.qty--;renderSheet();}};
+$("#sh-plus").onclick=()=>{sh.qty++;renderSheet();};
+$("#sh-close").onclick=closeSheet; $("#sheet-bg").addEventListener("click",e=>{if(e.target.id==="sheet-bg")closeSheet();});
+function closeSheet(){$("#sheet-bg").classList.remove("open");sh=null;}
+$("#sh-add").onclick=()=>{addLine(sh.p,sh.qty,sh.cfg,sh.note);toast(`${sh.qty}× ${sh.p.name} agregado`);closeSheet();renderMenu();};
+
+function addLine(p,qty,cfg,note){
+  const unit = p.kind==="pizza" ? (cfg.size||SIZES[0]).price+(cfg.extras||[]).reduce((a,x)=>a+x.price,0) : p.price;
+  const detail=[]; if(cfg.size) detail.push(cfg.size.name); if(cfg.spec) detail.push(cfg.spec); if(cfg.half1) detail.push(`½ ${cfg.half1} · ½ ${cfg.half2}`);
+  (cfg.extras||[]).forEach(x=>detail.push("+ "+x.name)); Object.entries(cfg.groups||{}).forEach(([g,v])=>v.length&&detail.push(`${g}: ${v.join(", ")}`)); if(note) detail.push("✎ "+note);
+  draft.lines.push({id:Math.random().toString(36).slice(2),p,qty,unit,detail:detail.join(" · ")}); renderTicket();
+}
+function totals(){const sub=draft.lines.reduce((a,l)=>a+l.unit*l.qty,0);const fee=draft.fulfillment==="delivery"&&draft.quote?draft.quote.fee:0;return {sub,fee,total:sub+fee};}
+function renderTicket(){
+  const L=$("#t-lines"); $("#t-folio").textContent=draft.folio; $("#t-cust").textContent=draft.customer?draft.customer.name:"Sin cliente";
+  L.innerHTML=draft.lines.length?draft.lines.map(l=>`<div class="line"><span class="name">${l.p.name}</span><span>${MXN(l.unit*l.qty)}</span>${l.detail?`<span class="detail">${l.detail}</span>`:""}<span class="qty"><button data-dec="${l.id}" aria-label="Menos">−</button><span class="num">${l.qty}</span><button data-inc="${l.id}" aria-label="Más">+</button><span class="grow"></span><button class="ghost" data-del="${l.id}" aria-label="Quitar línea">🗑</button></span></div>`).join(""):`<div class="empty">Toca un producto para agregarlo.<br><span class="hint">Las pizzas se arman por toques.</span></div>`;
+  L.querySelectorAll("[data-inc]").forEach(b=>b.onclick=()=>{line(b.dataset.inc).qty++;renderMenu();});
+  L.querySelectorAll("[data-dec]").forEach(b=>b.onclick=()=>{const l=line(b.dataset.dec);if(l.qty>1)l.qty--;else draft.lines=draft.lines.filter(x=>x!==l);renderMenu();});
+  L.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{draft.lines=draft.lines.filter(x=>x.id!==b.dataset.del);renderMenu();});
+  const t=totals(); $("#t-totals").innerHTML=`<div><span>Subtotal</span><span>${MXN(t.sub)}</span></div>${draft.fulfillment==="delivery"?`<div><span>Envío</span><span>${draft.quote?MXN(t.fee):"por cotizar"}</span></div>`:""}<div class="grand"><span>Total</span><span>${MXN(t.total)}</span></div>`;
+  const n=draft.lines.reduce((a,l)=>a+l.qty,0); $("#t-next").disabled=!n; $("#m-next").disabled=!n; $("#m-count").textContent=`${n} producto${n===1?"":"s"}`; $("#m-total").textContent=MXN(t.total);
+}
+const line=id=>draft.lines.find(l=>l.id===id);
+$("#t-next").onclick=()=>go(draft.fulfillment==="delivery"?"delivery":"pay");
+$("#m-next").onclick=()=>go(draft.fulfillment==="delivery"?"delivery":"pay");
+$("#m-view").onclick=()=>{$("#mt-body").innerHTML=$("#t-lines").innerHTML+`<div class="totals">${$("#t-totals").innerHTML}</div>`;$("#mt-bg").classList.add("open");
+  $("#mt-body").querySelectorAll("[data-inc],[data-dec],[data-del]").forEach(b=>b.onclick=()=>{const id=b.dataset.inc||b.dataset.dec||b.dataset.del;const l=line(id);if(b.dataset.inc)l.qty++;else if(b.dataset.dec&&l.qty>1)l.qty--;else draft.lines=draft.lines.filter(x=>x!==l);renderMenu();$("#m-view").onclick();});};
+$("#mt-close").onclick=()=>$("#mt-bg").classList.remove("open");
+$("#t-hold").onclick=()=>{toast(`${draft.folio} en espera; sigue en la bandeja`);draft=null;go("home");};
+$("#t-nosale").onclick=()=>askConfirm("Marcar sin venta",`El borrador ${draft.folio} se cerrará como “sin venta”. Se conserva en el historial.`,true,()=>{toast("Registrado sin venta");draft=null;go("home");});
+
+/* ===== Confirmación in-app ===== */
+function askConfirm(title,msg,needReason,onYes){
+  $("#cf-title").textContent=title;$("#cf-msg").textContent=msg;$("#cf-reason").hidden=!needReason;$("#cf-input").value="";$("#cf-bg").classList.add("open");
+  $("#cf-yes").onclick=()=>{if(needReason&&!$("#cf-input").value.trim()){toast("Escribe el motivo");$("#cf-input").focus();return;}$("#cf-bg").classList.remove("open");onYes();};
+  $("#cf-no").onclick=()=>$("#cf-bg").classList.remove("open");
+}
+
+/* ===== Entrega ===== */
+function renderDelivery(){
+  $("#ful-chips-2").innerHTML=$("#ful-chips").innerHTML; bindChips("#ful-chips-2","fulfillment",()=>{syncFul();draft.quote=null;renderDelivery();}); syncFul();
+  const a=$("#del-addr");
+  if(draft.fulfillment==="delivery"){
+    a.innerHTML=draft.address?`<div class="alert ok">📍 <span><b>${draft.address.tag}</b> · ${draft.address.street} · CP ${draft.address.cp}<br><span class="hint">${draft.address.ref||"sin referencias"}</span></span></div>`
+      :`<div class="alert err">⚠️ <span>Domicilio requiere cliente con dirección. <button class="ghost" style="min-height:36px" data-go-cust>Ir a cliente</button></span></div>`;
+    a.querySelector("[data-go-cust]")?.addEventListener("click",()=>go("customer"));
+    $("#quote-card").hidden=false;
+  } else { a.innerHTML=`<div class="alert info">ℹ️ ${FUL[draft.fulfillment]}: ${draft.fulfillment==="pickup"?"el cliente pasa por su pedido; se le indica el tiempo estimado.":draft.fulfillment==="dine_in"?"se asigna mesa al confirmar.":"se entrega en barra."}</div>`; $("#quote-card").hidden=true; }
+  $("#instr").value=draft.instr; $("#instr").oninput=e=>draft.instr=e.target.value;
+  $$("#instr-sugg button").forEach(b=>b.onclick=()=>{draft.instr=b.textContent;$("#instr").value=draft.instr;});
+  renderQuote(); renderDSummary();
+}
+function renderQuote(){
+  const b=$("#quote-body");
+  if(!draft.address){b.innerHTML=`<p class="hint">Sin dirección no hay cotización.</p>`;return;}
+  if(!draft.quote){b.innerHTML=`<button class="primary" id="quote-btn">Cotizar entrega</button><p class="hint">Zona por código postal con tarifa fija. La cotización se congela con el pedido.</p>`;$("#quote-btn").onclick=()=>{
+    const z=ZONES[draft.address.cp]; if(!z){b.innerHTML=`<div class="alert err">⛔ CP ${draft.address.cp} fuera de cobertura. Ofrece “Recoger” o pide autorización del gerente.</div>`;return;}
+    draft.quote={...z,cp:draft.address.cp};renderQuote();renderDSummary();};return;}
+  b.innerHTML=`<div class="big-num">${MXN(draft.quote.fee)}</div><div>Zona <b>${draft.quote.name}</b> · CP ${draft.quote.cp}</div><div class="hint">Promesa ${draft.quote.eta} · congelada al confirmar</div><button class="ghost" id="requote">↻ Recotizar</button>`;
+  $("#requote").onclick=()=>{draft.quote=null;renderQuote();renderDSummary();};
+}
+function renderDSummary(){const t=totals();const n=draft.lines.reduce((a,l)=>a+l.qty,0);$("#d-summary").innerHTML=`${n} productos · subtotal ${MXN(t.sub)}${draft.fulfillment==="delivery"?` · envío ${draft.quote?MXN(t.fee):"pendiente"}`:""}<br><b style="color:var(--text)">Total ${MXN(t.total)}</b>`;}
+$("#d-next").onclick=()=>{
+  if(draft.fulfillment==="delivery"&&!draft.address){toast("Falta la dirección de entrega");return;}
+  if(draft.fulfillment==="delivery"&&!draft.quote){toast("Cotiza la entrega antes de cobrar");return;}
+  go("pay");
+};
+
+/* ===== Cobro ===== */
+function renderPay(){
+  const t=totals();
+  $("#pay-methods").querySelectorAll("button").forEach(b=>{b.classList.toggle("sel",b.dataset.v===draft.pay);b.onclick=()=>{draft.pay=b.dataset.v;renderPay();};});
+  $("#cash-box").hidden=draft.pay!=="cash";
+  const den=[t.total,Math.ceil(t.total/10000)*10000,Math.ceil(t.total/20000)*20000,Math.ceil(t.total/50000)*50000].filter((v,i,a)=>a.indexOf(v)===i);
+  $("#denoms").innerHTML=den.map(v=>`<button data-d="${v}" class="${draft.cashWith===v?"sel":""}">${v===t.total?"Exacto":MXN(v)}</button>`).join("");
+  $("#denoms").querySelectorAll("button").forEach(b=>b.onclick=()=>{draft.cashWith=+b.dataset.d;$("#cash-with").value="";renderPay();});
+  $("#cash-with").oninput=e=>{const v=Math.round(parseFloat(e.target.value||"0")*100);draft.cashWith=v>0?v:null;$("#change-lbl").textContent=v>0?(v>=t.total?`Cambio ${MXN(v-t.total)}`:"Insuficiente"):"";};
+  $("#change-lbl").textContent=draft.cashWith?(draft.cashWith>=t.total?`Cambio ${MXN(draft.cashWith-t.total)}`:"Insuficiente"):"";
+  $$("#tip-chips button").forEach(b=>{b.classList.toggle("sel",+b.dataset.v===draft.tip);b.onclick=()=>{draft.tip=+b.dataset.v;renderPay();};});
+  $("#p-totals").innerHTML=`<div><span>Subtotal</span><span>${MXN(t.sub)}</span></div>${draft.fulfillment==="delivery"?`<div><span>Envío</span><span>${MXN(t.fee)}</span></div>`:""}<div class="grand"><span>Total</span><span>${MXN(t.total)}</span></div>${draft.tip?`<div><span>Propina (aparte)</span><span>${MXN(draft.tip)}</span></div>`:""}<div class="hint" style="justify-content:flex-start;margin-top:6px">Pagará con ${({cash:"efectivo",card_manual:"tarjeta (terminal manual)",transfer:"transferencia"})[draft.pay]}${draft.pay==="cash"&&draft.cashWith?` · trae ${MXN(draft.cashWith)}`:""}</div>`;
+  const al=$("#pay-alert"); al.className="alert "+(draft.pay==="transfer"?"warn":"info");
+  al.textContent=draft.pay==="transfer"?"⚠️ La transferencia queda pendiente de evidencia; caja la concilia en 24 h. La orden sí sale a cocina.":draft.pay==="card_manual"?"ℹ️ Tarjeta con terminal manual: el repartidor lleva la terminal; el voucher se registra al liquidar.":"ℹ️ La orden se crea y se envía a cocina; el efectivo entra a caja cuando el repartidor liquida.";
+}
+$("#confirm-btn").onclick=()=>{
+  if(draft.fulfillment==="delivery"&&(!draft.address||!draft.quote)){toast("Domicilio requiere dirección y cotización");go("delivery");return;}
+  const t=totals(); const id="ORD-"+(1000+Math.floor(Math.random()*9000));
+  $("#done-order").textContent=id; $("#done-meta").textContent=`Folio ${draft.folio} · ${draft.customer?draft.customer.name:"sin cliente"} · ${FUL[draft.fulfillment]}${draft.quote?" · "+draft.quote.eta:""} · ${MXN(t.total)} · Ana · Centro · ${new Date().toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"})}`;
+  draft=null; go("done"); $("#folio-lbl").textContent="";
+};
+$("#done-new").onclick=()=>{draft=newDraft();go("customer");$("#phone").focus();};
+
+/* ===== Atajos de teclado ===== */
+document.addEventListener("keydown",e=>{
+  const typing=/INPUT|TEXTAREA/.test(document.activeElement.tagName);
+  if(e.key==="Escape"){ if($("#sheet-bg").classList.contains("open"))return closeSheet(); if($("#mt-bg").classList.contains("open"))return $("#mt-bg").classList.remove("open"); if($("#cf-bg").classList.contains("open"))return $("#cf-bg").classList.remove("open");
+    if(typing){document.activeElement.blur();return;} const back={customer:"home",menu:"customer",delivery:"menu",pay:"delivery",done:"home"}[current]; if(back)go(back); return; }
+  if(typing)return;
+  if(e.key==="n"||e.key==="N"){e.preventDefault();$("#new-capture").click();}
+  if(e.key==="/"){e.preventDefault();if(current==="menu")$("#prod-search").focus();else{if(!draft)draft=newDraft();go("customer");$("#phone").focus();}}
+  if(e.key==="F2"&&draft&&draft.lines.length){e.preventDefault();go(draft.fulfillment==="delivery"?"delivery":"pay");}
+});
+$("#theme-btn").onclick=()=>{const r=document.documentElement;const cur=r.dataset.theme||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");r.dataset.theme=cur==="dark"?"light":"dark";};
+</script>
+</body>
+</html>

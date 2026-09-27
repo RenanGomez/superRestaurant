@@ -1,0 +1,180 @@
+import type { MenuCatalogV1, MenuCategoryV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
+
+/** One chosen modifier option and how many units of it apply to a draft line. */
+export interface SelectionPlanModifierSelectionDraft {
+  readonly optionId: string;
+  readonly quantity: number;
+}
+
+/** A modifier group's selections for one draft line. */
+export interface SelectionPlanModifierGroupDraft {
+  readonly groupId: string;
+  readonly selections: readonly SelectionPlanModifierSelectionDraft[];
+}
+
+/**
+ * One catalog-derived line as tracked by the client while building a selection. Carries no
+ * price: the server derives money exclusively from the catalog at read/write time.
+ */
+export interface SelectionPlanLineDraft {
+  readonly lineId: string;
+  readonly productId: string;
+  readonly quantity: number;
+  readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[];
+}
+
+export interface SelectionPlanCommandLineV1 {
+  readonly lineId: string;
+  readonly productId: string;
+  readonly variantId: null;
+  readonly quantity: number;
+  readonly modifierGroups: readonly { readonly groupId: string; readonly selections: readonly { readonly optionId: string; readonly quantity: number }[] }[];
+  readonly note: null;
+}
+
+export interface SelectionPlanCommandV1 {
+  readonly schemaVersion: 1;
+  readonly catalogVersion: string;
+  readonly lines: readonly SelectionPlanCommandLineV1[];
+}
+
+/**
+ * Builds the `plan` payload of `ReplaceCaptureSelectionPlanCommandV1` from the client's working
+ * set of draft lines. `note` is always `null`: this cut never sends a note (the API rejects one
+ * with 409 `CAPTURE_SELECTION_NOTE_UNSUPPORTED`).
+ */
+export function buildSelectionPlan(
+  lines: readonly SelectionPlanLineDraft[],
+  catalogVersion: string,
+): SelectionPlanCommandV1 {
+  return {
+    schemaVersion: 1,
+    catalogVersion,
+    lines: lines.map((line) => ({
+      lineId: line.lineId,
+      productId: line.productId,
+      variantId: null,
+      quantity: line.quantity,
+      modifierGroups: line.modifierGroups.map((group) => ({
+        groupId: group.groupId,
+        selections: group.selections.map((selection) => ({ optionId: selection.optionId, quantity: selection.quantity })),
+      })),
+      note: null,
+    })),
+  };
+}
+
+export type SelectionLineChange =
+  | { readonly type: "add"; readonly lineId: string; readonly productId: string; readonly quantity: number;
+      readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[] }
+  | { readonly type: "increment"; readonly lineId: string }
+  | { readonly type: "decrement"; readonly lineId: string }
+  | { readonly type: "remove"; readonly lineId: string }
+  | { readonly type: "setQuantity"; readonly lineId: string; readonly quantity: number };
+
+const MAX_LINE_QUANTITY = 1_000;
+
+/**
+ * Applies one local change to the working set of draft lines. Adding a product with the same
+ * modifier selection as an existing line merges into it (quantity increases) instead of creating
+ * a duplicate line; adding with a different (or no) selection creates a new line. Quantities are
+ * clamped to `[0, 1000]`; reaching 0 removes the line.
+ */
+export function applyLineChange(
+  lines: readonly SelectionPlanLineDraft[],
+  change: SelectionLineChange,
+): readonly SelectionPlanLineDraft[] {
+  if (change.type === "add") {
+    const existingIndex = lines.findIndex((line) => line.productId === change.productId
+      && sameModifierSelection(line.modifierGroups, change.modifierGroups));
+    if (existingIndex === -1) {
+      return [...lines, { lineId: change.lineId, productId: change.productId,
+        quantity: clampQuantity(change.quantity), modifierGroups: change.modifierGroups }];
+    }
+    return lines.map((line, index) => index === existingIndex
+      ? { ...line, quantity: clampQuantity(line.quantity + change.quantity) }
+      : line);
+  }
+  if (change.type === "increment") {
+    return lines.map((line) => line.lineId === change.lineId
+      ? { ...line, quantity: clampQuantity(line.quantity + 1) }
+      : line);
+  }
+  if (change.type === "decrement") {
+    return lines.flatMap((line) => {
+      if (line.lineId !== change.lineId) return [line];
+      const next = line.quantity - 1;
+      return next <= 0 ? [] : [{ ...line, quantity: next }];
+    });
+  }
+  if (change.type === "remove") return lines.filter((line) => line.lineId !== change.lineId);
+  return lines.flatMap((line) => {
+    if (line.lineId !== change.lineId) return [line];
+    const next = clampQuantity(change.quantity);
+    return next <= 0 ? [] : [{ ...line, quantity: next }];
+  });
+}
+
+function clampQuantity(value: number): number {
+  return Math.max(0, Math.min(MAX_LINE_QUANTITY, Math.trunc(value)));
+}
+
+function sameModifierSelection(
+  left: readonly SelectionPlanModifierGroupDraft[],
+  right: readonly SelectionPlanModifierGroupDraft[],
+): boolean {
+  if (left.length !== right.length) return false;
+  const canonical = (groups: readonly SelectionPlanModifierGroupDraft[]) => [...groups]
+    .map((group) => ({ groupId: group.groupId,
+      selections: [...group.selections].map((s) => `${s.optionId}:${s.quantity}`).sort() }))
+    .sort((a, b) => a.groupId < b.groupId ? -1 : a.groupId > b.groupId ? 1 : 0);
+  const canonicalLeft = canonical(left);
+  const canonicalRight = canonical(right);
+  return canonicalLeft.every((group, index) => group.groupId === canonicalRight[index]?.groupId
+    && group.selections.length === canonicalRight[index]?.selections.length
+    && group.selections.every((s, i) => s === canonicalRight[index]?.selections[i]));
+}
+
+export interface CategoryWithProducts {
+  readonly category: MenuCategoryV1;
+  readonly products: readonly MenuProductV1[];
+}
+
+/** Groups active categories (sorted by `displayOrder`) with their catalog products (sorted by `displayOrder`). */
+export function groupProductsByCategory(catalog: MenuCatalogV1 | null): readonly CategoryWithProducts[] {
+  if (catalog === null) return [];
+  const categories = [...catalog.categories].filter((category) => category.active)
+    .sort((a, b) => a.displayOrder - b.displayOrder);
+  return categories.map((category) => ({
+    category,
+    products: [...catalog.products].filter((product) => product.categoryId === category.categoryId)
+      .sort((a, b) => a.displayOrder - b.displayOrder),
+  }));
+}
+
+export interface ModifierSelectionValidation {
+  readonly valid: boolean;
+  readonly reason?: "min" | "max" | "option_max";
+}
+
+/**
+ * Client-side-only UX validation of a modifier group's selections against its
+ * `minimumQuantity`/`maximumQuantity` and each option's own `maximumQuantity`. The server
+ * revalidates independently; this never authorizes a write.
+ */
+export function validateModifierSelection(
+  group: MenuModifierGroupV1,
+  selections: readonly SelectionPlanModifierSelectionDraft[],
+): ModifierSelectionValidation {
+  const total = selections.reduce((sum, selection) => sum + selection.quantity, 0);
+  for (const selection of selections) {
+    const option = group.options.find((candidate) => candidate.optionId === selection.optionId);
+    if (option?.maximumQuantity !== null && option?.maximumQuantity !== undefined
+      && selection.quantity > option.maximumQuantity) {
+      return { valid: false, reason: "option_max" };
+    }
+  }
+  if (total < group.minimumQuantity) return { valid: false, reason: "min" };
+  if (total > group.maximumQuantity) return { valid: false, reason: "max" };
+  return { valid: true };
+}
