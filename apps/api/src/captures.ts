@@ -728,11 +728,14 @@ export class CaptureSelectionPlanService {
     // On a fresh apply the draft version must be exactly expectedVersion+1 (nothing else could have
     // committed in between). On replay of an already-applied idempotency key, an unrelated mutation
     // may have advanced the draft further since then; the stored plan/catalog match is what matters.
+    // A 0-line plan is "no plan": the row was deleted, so `selectionPlan` reads back null.
     if (workspace.detail.captureDraftId !== command.captureDraftId
       || (envelope.status === "applied" && workspace.detail.version !== command.expectedVersion + 1)
-      || workspace.selectionPlan === null
-      || workspace.selectionPlan.lineCount !== command.plan.lines.length
-      || workspace.selectionPlan.catalogVersion !== command.plan.catalogVersion) throw unavailable();
+      || (command.plan.lines.length === 0
+        ? workspace.selectionPlan !== null
+        : workspace.selectionPlan === null
+          || workspace.selectionPlan.lineCount !== command.plan.lines.length
+          || workspace.selectionPlan.catalogVersion !== command.plan.catalogVersion)) throw unavailable();
     return withCaptureSelectionProjection(workspace, projection);
   }
 }

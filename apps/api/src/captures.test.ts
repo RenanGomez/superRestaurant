@@ -666,6 +666,43 @@ test("capture selection plan prices every line against the live catalog before p
     save: async () => { throw new Error("must not save a catalog"); } }).replace(principal, variantCommand), code("conflict"));
 });
 
+test("capture selection plan with zero lines is treated as no plan, never priced or persisted with an empty line array", async () => {
+  const emptyCommand = parseReplaceCaptureSelectionPlanCommandV1({
+    ...selectionPlanCommand,
+    plan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion, lines: [] },
+  });
+  assert.ok(emptyCommand);
+  const noPlanWorkspaceV4Record = {
+    schemaVersion: 4,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: null,
+  };
+  let persistedPlan: unknown;
+  const persistence: CaptureSelectionPlanPort = {
+    replaceSelectionPlan: async (_actorId, submittedCommand) => {
+      persistedPlan = submittedCommand.plan;
+      return { status: "applied", record: noPlanWorkspaceV4Record.detail };
+    },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => noPlanWorkspaceV4Record,
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, {
+    read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); },
+  });
+  const result = await service.replace(principal, emptyCommand);
+  assert.deepEqual(persistedPlan, { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion, lines: [] });
+  assert.equal(result.selectionPlan, null);
+  assert.equal(result.selectionProjection, null);
+});
+
 test("capture selection plan replay returns the stored result even after a later, unrelated mutation", async () => {
   const advancedWorkspaceV4Record = {
     schemaVersion: 4,

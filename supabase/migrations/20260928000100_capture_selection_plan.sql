@@ -209,15 +209,24 @@ begin
   -- A single row per capture makes the repeat/selection plans mutually
   -- exclusive by construction: replacing one with the other overwrites
   -- whatever was stored, and the audit event below is the record of it.
-  insert into app.capture_repeat_order_plans(
-    restaurant_id,branch_id,capture_draft_id,plan_kind,customer_id,source_order_id,catalog_id,
-    applied_capture_version,selection_plan,updated_at,updated_by
-  ) values (
-    restaurant,branch,capture,'selection',null,null,catalog,expected+1,p_plan,observed,p_actor_id
-  ) on conflict (restaurant_id,branch_id,capture_draft_id) do update set
-    plan_kind='selection',customer_id=null,source_order_id=null,catalog_id=excluded.catalog_id,
-    applied_capture_version=excluded.applied_capture_version,selection_plan=excluded.selection_plan,
-    updated_at=excluded.updated_at,updated_by=excluded.updated_by;
+  -- Zero lines means "no plan": delete the row (still audited by the command
+  -- event below) instead of persisting an empty selection that
+  -- materializeCaptureSelectionOrder/read_capture_workspace_v4 would then
+  -- have to special-case; confirm falls back to the no-lines order route.
+  if pg_catalog.jsonb_array_length(p_plan->'lines')=0 then
+    delete from app.capture_repeat_order_plans
+    where restaurant_id=restaurant and branch_id=branch and capture_draft_id=capture;
+  else
+    insert into app.capture_repeat_order_plans(
+      restaurant_id,branch_id,capture_draft_id,plan_kind,customer_id,source_order_id,catalog_id,
+      applied_capture_version,selection_plan,updated_at,updated_by
+    ) values (
+      restaurant,branch,capture,'selection',null,null,catalog,expected+1,p_plan,observed,p_actor_id
+    ) on conflict (restaurant_id,branch_id,capture_draft_id) do update set
+      plan_kind='selection',customer_id=null,source_order_id=null,catalog_id=excluded.catalog_id,
+      applied_capture_version=excluded.applied_capture_version,selection_plan=excluded.selection_plan,
+      updated_at=excluded.updated_at,updated_by=excluded.updated_by;
+  end if;
 
   update app.capture_drafts set version=expected+1,updated_at=observed,updated_by=p_actor_id
   where restaurant_id=restaurant and branch_id=branch and id=capture and version=expected;
