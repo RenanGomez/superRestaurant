@@ -27,6 +27,7 @@ const minimalPlan = {
 const fullLine = {
   lineId,
   productId,
+  variantId: null,
   quantity: 3,
   modifierGroups: [
     { groupId, selections: [{ optionId, quantity: 2 }] },
@@ -131,6 +132,7 @@ const projection = {
   lines: [{
     lineId,
     productId,
+    variantId: null,
     productName: "Tacos",
     quantity: 2,
     unitPriceMinor: 100,
@@ -148,3 +150,70 @@ expect(parseCaptureSelectionPlanProjectionV1({ ...projection, lineCount: 2 }) ==
   "projection rejects mismatched lineCount");
 expect(parseCaptureSelectionPlanProjectionV1({ ...projection, currency: "mxn" }) === undefined,
   "projection requires uppercase ISO currency");
+
+// variantId: required key, nullable uuid value.
+const withoutKey = <T extends Record<string, unknown>>(record: T, key: keyof T): Record<string, unknown> => {
+  const clone: Record<string, unknown> = { ...record };
+  delete clone[key as string];
+  return clone;
+};
+const variantId = "d1f1b6f6-9b0a-4a1a-8b1a-6a3c1a2b3c4d";
+const fullLineWithoutVariantId = withoutKey(fullLine, "variantId");
+expect(parseCaptureSelectionPlanV1({
+  ...maximalPlan,
+  lines: [fullLineWithoutVariantId],
+}) === undefined, "rejects line missing variantId key");
+expect(parseCaptureSelectionPlanV1({
+  ...maximalPlan,
+  lines: [{ ...fullLine, variantId: null }],
+})?.lines[0]?.variantId === null, "accepts variantId: null");
+const parsedWithVariant = parseCaptureSelectionPlanV1({
+  ...maximalPlan,
+  lines: [{ ...fullLine, variantId }],
+});
+expect(parsedWithVariant?.lines[0]?.variantId === variantId, "accepts and preserves uuid variantId");
+expect(parseCaptureSelectionPlanV1({
+  ...maximalPlan,
+  lines: [{ ...fullLine, variantId: "not-a-uuid" }],
+}) === undefined, "rejects non-uuid variantId");
+expect(parseCaptureSelectionPlanProjectionV1({
+  ...projection,
+  lines: [{ ...projection.lines[0], variantId }],
+})?.lines[0]?.variantId === variantId, "projection accepts and preserves uuid variantId");
+const projectionLineWithoutVariantId = withoutKey({ ...projection.lines[0], variantId }, "variantId");
+expect(parseCaptureSelectionPlanProjectionV1({
+  ...projection,
+  lines: [projectionLineWithoutVariantId],
+}) === undefined, "projection rejects line missing variantId key");
+
+// Arrays: exact own-index elements only, no reliance on iterator protocol.
+const arrayWithHole = [fullLine];
+arrayWithHole.length = 2;
+expect(parseCaptureSelectionPlanV1({ ...maximalPlan, lines: arrayWithHole }) === undefined,
+  "rejects array with a hole");
+
+const arrayWithThrowingGetter: unknown[] = [fullLine];
+Object.defineProperty(arrayWithThrowingGetter, "1", {
+  configurable: true,
+  enumerable: true,
+  get(): unknown {
+    throw new Error("boom");
+  },
+});
+(arrayWithThrowingGetter as { length: number }).length = 2;
+expect(parseCaptureSelectionPlanV1({ ...maximalPlan, lines: arrayWithThrowingGetter }) === undefined,
+  "array with a throwing getter returns undefined instead of propagating");
+
+// A custom iterator (e.g. via a subclass with a shorter Symbol.iterator) can never
+// influence parsing: parsing walks own numeric indices directly, never the iterator
+// protocol. A subclass instance is also rejected outright because its prototype is
+// not exactly `Array.prototype`.
+class ShortIterableArray extends Array<unknown> {
+  override [Symbol.iterator](): IterableIterator<unknown> {
+    return [fullLine].values();
+  }
+}
+const customIteratorArray = new ShortIterableArray(fullLine, { ...fullLine, lineId: catalogVersion });
+expect(customIteratorArray.length === 2, "custom iterator fixture keeps its two own elements");
+expect(parseCaptureSelectionPlanV1({ ...maximalPlan, lines: customIteratorArray }) === undefined,
+  "rejects array subclass instance regardless of its custom iterator");

@@ -29,6 +29,7 @@ export interface CaptureSelectionModifierGroupV1 {
 export interface CaptureSelectionLineV1 {
   readonly lineId: string;
   readonly productId: string;
+  readonly variantId: string | null;
   readonly quantity: number;
   readonly modifierGroups: readonly CaptureSelectionModifierGroupV1[];
   readonly note: string | null;
@@ -67,6 +68,7 @@ export interface CaptureSelectionPlanProjectionModifierV1 {
 export interface CaptureSelectionPlanProjectionLineV1 {
   readonly lineId: string;
   readonly productId: string;
+  readonly variantId: string | null;
   readonly productName: string;
   readonly quantity: number;
   readonly unitPriceMinor: number;
@@ -92,7 +94,7 @@ export function parseCaptureSelectionPlanV1(value: unknown): CaptureSelectionPla
   const record = exactRecord(value, ["schemaVersion", "catalogVersion", "lines"]);
   if (record === undefined || own(record, "schemaVersion") !== CAPTURE_SELECTION_PLAN_SCHEMA_VERSION) return undefined;
   const catalogVersion = uuid(own(record, "catalogVersion"));
-  const rawLines = denseArray(own(record, "lines"), 0, MAX_LINES);
+  const rawLines = exactArray(own(record, "lines"), MAX_LINES);
   if (catalogVersion === undefined || rawLines === undefined) return undefined;
   const lineIds = new Set<string>();
   const lines: CaptureSelectionLineV1[] = [];
@@ -140,7 +142,7 @@ export function parseCaptureSelectionPlanProjectionV1(value: unknown): CaptureSe
   const currency = boundedText(own(record, "currency"), 3, 3);
   const subtotalMinor = integer(own(record, "subtotalMinor"), 0, Number.MAX_SAFE_INTEGER);
   const lineCount = integer(own(record, "lineCount"), 0, Number.MAX_SAFE_INTEGER);
-  const rawLines = denseArray(own(record, "lines"), 0, MAX_LINES);
+  const rawLines = exactArray(own(record, "lines"), MAX_LINES);
   if (catalogVersion === undefined || currency === undefined || !/^[A-Z]{3}$/u.test(currency)
     || subtotalMinor === undefined || lineCount === undefined || rawLines === undefined
     || rawLines.length !== lineCount) {
@@ -163,14 +165,15 @@ export function parseCaptureSelectionPlanProjectionV1(value: unknown): CaptureSe
 }
 
 function parseSelectionLine(value: unknown): CaptureSelectionLineV1 | undefined {
-  const record = exactRecord(value, ["lineId", "productId", "quantity", "modifierGroups", "note"]);
+  const record = exactRecord(value, ["lineId", "productId", "variantId", "quantity", "modifierGroups", "note"]);
   if (record === undefined) return undefined;
   const lineId = uuid(own(record, "lineId"));
   const productId = uuid(own(record, "productId"));
+  const variantId = nullableUuid(own(record, "variantId"));
   const quantity = integer(own(record, "quantity"), 1, MAX_LINE_QUANTITY);
-  const rawGroups = denseArray(own(record, "modifierGroups"), 0, MAX_MODIFIER_GROUPS);
+  const rawGroups = exactArray(own(record, "modifierGroups"), MAX_MODIFIER_GROUPS);
   const note = nullableBoundedText(own(record, "note"), 1, MAX_NOTE_LENGTH);
-  if (lineId === undefined || productId === undefined || quantity === undefined
+  if (lineId === undefined || productId === undefined || variantId === undefined || quantity === undefined
     || rawGroups === undefined || note === undefined) {
     return undefined;
   }
@@ -182,14 +185,14 @@ function parseSelectionLine(value: unknown): CaptureSelectionLineV1 | undefined 
     groupIds.add(group.groupId);
     modifierGroups.push(group);
   }
-  return deepFreeze({ lineId, modifierGroups, note, productId, quantity });
+  return deepFreeze({ lineId, modifierGroups, note, productId, quantity, variantId });
 }
 
 function parseSelectionGroup(value: unknown): CaptureSelectionModifierGroupV1 | undefined {
   const record = exactRecord(value, ["groupId", "selections"]);
   if (record === undefined) return undefined;
   const groupId = uuid(own(record, "groupId"));
-  const rawSelections = denseArray(own(record, "selections"), 0, MAX_MODIFIER_SELECTIONS);
+  const rawSelections = exactArray(own(record, "selections"), MAX_MODIFIER_SELECTIONS);
   if (groupId === undefined || rawSelections === undefined) return undefined;
   const optionIds = new Set<string>();
   const selections: CaptureSelectionModifierSelectionV1[] = [];
@@ -212,19 +215,21 @@ function parseModifierSelection(value: unknown): CaptureSelectionModifierSelecti
 
 function parseProjectionLine(value: unknown): CaptureSelectionPlanProjectionLineV1 | undefined {
   const record = exactRecord(value, [
-    "lineId", "productId", "productName", "quantity", "unitPriceMinor", "lineTotalMinor", "note", "modifiers",
+    "lineId", "productId", "variantId", "productName", "quantity", "unitPriceMinor", "lineTotalMinor", "note", "modifiers",
   ]);
   if (record === undefined) return undefined;
   const lineId = uuid(own(record, "lineId"));
   const productId = uuid(own(record, "productId"));
+  const variantId = nullableUuid(own(record, "variantId"));
   const productName = boundedText(own(record, "productName"), 1, 200);
   const quantity = integer(own(record, "quantity"), 1, MAX_LINE_QUANTITY);
   const unitPriceMinor = integer(own(record, "unitPriceMinor"), 0, Number.MAX_SAFE_INTEGER);
   const lineTotalMinor = integer(own(record, "lineTotalMinor"), 0, Number.MAX_SAFE_INTEGER);
   const note = nullableBoundedText(own(record, "note"), 1, MAX_NOTE_LENGTH);
-  const rawModifiers = denseArray(own(record, "modifiers"), 0, MAX_MODIFIER_GROUPS * MAX_MODIFIER_SELECTIONS);
-  if (lineId === undefined || productId === undefined || productName === undefined || quantity === undefined
-    || unitPriceMinor === undefined || lineTotalMinor === undefined || note === undefined || rawModifiers === undefined) {
+  const rawModifiers = exactArray(own(record, "modifiers"), MAX_MODIFIER_GROUPS * MAX_MODIFIER_SELECTIONS);
+  if (lineId === undefined || productId === undefined || variantId === undefined || productName === undefined
+    || quantity === undefined || unitPriceMinor === undefined || lineTotalMinor === undefined || note === undefined
+    || rawModifiers === undefined) {
     return undefined;
   }
   const modifiers: CaptureSelectionPlanProjectionModifierV1[] = [];
@@ -233,7 +238,7 @@ function parseProjectionLine(value: unknown): CaptureSelectionPlanProjectionLine
     if (modifier === undefined) return undefined;
     modifiers.push(modifier);
   }
-  return deepFreeze({ lineId, lineTotalMinor, modifiers, note, productId, productName, quantity, unitPriceMinor });
+  return deepFreeze({ lineId, lineTotalMinor, modifiers, note, productId, productName, quantity, unitPriceMinor, variantId });
 }
 
 function parseProjectionModifier(value: unknown): CaptureSelectionPlanProjectionModifierV1 | undefined {
@@ -299,12 +304,30 @@ function own(record: PlainRecord, key: string): unknown {
   return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
 }
 
-function denseArray(value: unknown, minimum: number, maximum: number): readonly unknown[] | undefined {
-  return Array.isArray(value) && value.length >= minimum && value.length <= maximum ? value : undefined;
+function exactArray(value: unknown, maximum: number): readonly unknown[] | undefined {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
+  const length = Object.getOwnPropertyDescriptor(value, "length");
+  if (length === undefined || !("value" in length) || !Number.isSafeInteger(length.value)
+    || length.value < 0 || length.value > maximum) {
+    return undefined;
+  }
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key !== "string" || (key !== "length" && !/^(0|[1-9]\d*)$/u.test(key)))) return undefined;
+  const items: unknown[] = [];
+  for (let index = 0; index < length.value; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) return undefined;
+    items.push(descriptor.value);
+  }
+  return items;
 }
 
 function uuid(value: unknown): string | undefined {
   return typeof value === "string" && UUID_PATTERN.test(value) ? value.toLowerCase() : undefined;
+}
+
+function nullableUuid(value: unknown): string | null | undefined {
+  return value === null ? null : uuid(value);
 }
 
 function integer(value: unknown, minimum: number, maximum: number): number | undefined {
