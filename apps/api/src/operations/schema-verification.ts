@@ -117,13 +117,15 @@ export interface RunReadOnlySchemaAuditOptions {
 
 type CertificateLoader = (path: string) => string;
 
-const LOCAL_CLUSTER_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+const LOCAL_CLUSTER_HOSTS = new Set(["127.0.0.1", "::1"]);
 
 /**
  * Loopback-only escape hatch for developer machines that cannot reach a Supabase project:
  * skips the project-ref/TLS-verify-full checks, but only for a connection string whose host is
- * exactly 127.0.0.1/localhost/::1 and which carries no sslmode (plaintext loopback, never a
- * relaxed TLS mode). Never touches, weakens, or is reachable from the remote verification path.
+ * exactly 127.0.0.1/::1 (numeric loopback only -- "localhost" is deliberately rejected, since it
+ * resolves through the hosts file and is not guaranteed to be loopback) and which carries no
+ * sslmode (plaintext loopback, never a relaxed TLS mode). Never touches, weakens, or is reachable
+ * from the remote verification path.
  */
 function readLocalClusterSchemaVerificationConfig(environment: NodeJS.ProcessEnv): SchemaVerificationConfig {
   const confirmation = boundedValue(environment.SCHEMA_VERIFICATION_CONFIRMATION, 64);

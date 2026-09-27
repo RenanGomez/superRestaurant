@@ -96,6 +96,9 @@ test("the loopback local-cluster escape hatch accepts only an unauthenticated pl
     // Never a database other than postgres, nor a role other than postgres.
     { SCHEMA_VERIFICATION_CONFIRMATION: "ROLLBACK_ONLY", SCHEMA_VERIFICATION_DATABASE_URL: "postgresql://postgres@127.0.0.1:54333/other", SCHEMA_VERIFICATION_LOCAL_CLUSTER: "1" },
     { SCHEMA_VERIFICATION_CONFIRMATION: "ROLLBACK_ONLY", SCHEMA_VERIFICATION_DATABASE_URL: "postgresql://app_api@127.0.0.1:54333/postgres", SCHEMA_VERIFICATION_LOCAL_CLUSTER: "1" },
+    // Never the "localhost" hostname -- it resolves through the hosts file and is not
+    // guaranteed to be loopback, so only the numeric loopback addresses are accepted.
+    { SCHEMA_VERIFICATION_CONFIRMATION: "ROLLBACK_ONLY", SCHEMA_VERIFICATION_DATABASE_URL: "postgresql://postgres@localhost:5432/postgres", SCHEMA_VERIFICATION_LOCAL_CLUSTER: "1" },
     // Without the exact opt-in flag, the remote path applies and rejects a loopback URL.
     { SCHEMA_VERIFICATION_CONFIRMATION: "ROLLBACK_ONLY", SCHEMA_VERIFICATION_DATABASE_URL: "postgresql://postgres@127.0.0.1:54333/postgres" },
   ]) {
