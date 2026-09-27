@@ -441,6 +441,27 @@ Reglas:
 - costo por tarea (tokens Codex/OpenRouter según logs y recibos) se anota en HANDOFF.
 - Sin `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` ni `ANTHROPIC_MODEL` en el entorno: Claude Code factura al plan Pro.
 
+### 19.2. Niveles de rigor por tipo de cambio (vigente desde 2026-09-27)
+
+Decisión de Emmanuel del 2026-09-27: el rigor de las secciones 15 y 20 no se aplica de forma uniforme. Cada tarea declara su nivel en el paquete de contexto según el archivo o la capa que toca; si una tarea mezcla niveles, gobierna el más alto para los archivos de ese nivel y no para el resto.
+
+| Nivel | Qué lo activa | Ejecutor | Obligatorio antes de REVIEW | No requerido |
+|---|---|---|---|---|
+| **A · Crítico** | `packages/domain` cuando toca dinero, totales, impuestos, redondeo, estados de Order/OrderItem/Payment/Refund/CashMovement; `supabase/migrations`, `supabase/tests`, funciones `app_private`, RLS; `apps/api/src/auth/**`, RBAC, memberships, tenancy; pagos, caja, refunds; `packages/sync-engine`; cualquier cambio de contrato en `packages/shared-types` que consuman dos apps o más | Claude L1 (`implementer-claude`) | Paquete de contexto; CodeGraph antes y después; unitarias de dominio; integración o verificador PostgreSQL rollback-only; pruebas de aislamiento e idempotencia; revisión doble (Sonnet + `codex exec review`); puertas globales lint/typecheck/test/build | Verificación visual salvo que exponga UI |
+| **B · Estándar** | `apps/api` fuera de auth/dinero (endpoints de lectura, adaptadores, servicios de catálogo, KDS, impresión); `packages/domain` sin dinero ni estados financieros; `packages/printing`; contratos nuevos consumidos por una sola app | Codex L2 o Claude L1 según juicio del orquestador | Paquete de contexto; CodeGraph; unitarias del módulo; contract test si expone HTTP; una revisión (Codex primero; Sonnet sólo si Codex marca P1 o toca autorización); puertas del paquete y typecheck global | Revisión doble; verificador SQL; aislamiento salvo que filtre por scope |
+| **C · Producto** | `apps/web`, `apps/kds`, `apps/mobile`: páginas, componentes, server actions que sólo llaman al API, estilos, textos, atajos, layouts; helpers puros de UI en `src/lib` | Codex L2 | Paquete breve (objetivo, pantalla, criterios visibles, rutas del API que usa); unitarias sólo para helpers puros; lint, typecheck, test y build de la app; verificación en navegador real por el orquestador o por Emmanuel en escritorio y 390×844 con consola limpia; sin `alert/confirm/prompt`; targets de 44 px | Revisión Sonnet; CodeGraph obligatorio; verificador SQL; pruebas de aislamiento (el servidor ya las tiene); paquete completo de plantilla |
+| **D · Documental** | `docs/**`, TODO, HANDOFF, PROJECT_NOTES, `.claude/**`, `tools/agentic/**`, README | Orquestador | `git diff --check`; coherencia con las decisiones registradas | Todo lo demás |
+
+Reglas que no cambian con el nivel:
+
+- ningún cliente calcula dinero ni decide permisos; si una tarea C necesita un cálculo, se pide al API y eso sube la parte del API a nivel B o A;
+- el servidor revalida todo lo que la UI envía; una tarea C nunca toca `apps/api` ni SQL;
+- migraciones remotas, push, credenciales, deploy y datos reales siguen requiriendo autorización explícita en cualquier nivel;
+- una tarea C puede pasar a DONE con aprobación visual de Emmanuel sin revisión de código adicional; una tarea A nunca;
+- el orquestador clasifica cada tarea en el paquete con el nivel y la razón; una clasificación dudosa se resuelve hacia arriba.
+
+Prioridad de producto vigente: la experiencia del operador (captura telefónica con menú táctil, cliente, entrega y cobro) va antes que nuevos módulos de backend. El backend sólo se amplía cuando una pantalla lo necesita.
+
 ---
 
 ## 20. Definition of Done
