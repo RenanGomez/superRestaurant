@@ -400,17 +400,23 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setNoSaleReason("");
   }
 
+  /** Shared success handler for `noSale`, reached from both the first attempt and a later
+   * retry of a `pending` (lost-response) command: either way, a successful close must return
+   * to the tray with the same notice exactly once. */
+  async function afterNoSaleApplied(): Promise<void> {
+    setNoSaleOpen(false);
+    setNoSaleReason("");
+    reset();
+    setNoSaleNotice(true);
+    await run("tray", { schemaVersion: 1, scope, limit: 20 });
+  }
+
   function confirmNoSale(): void {
     const reason = noSaleReason.trim();
     if (capture === undefined || reason.length === 0) return;
     void (async () => {
       const reply = await run("noSale", { ...base(), reason });
-      if (!reply?.ok) return;
-      setNoSaleOpen(false);
-      setNoSaleReason("");
-      reset();
-      setNoSaleNotice(true);
-      await run("tray", { schemaVersion: 1, scope, limit: 20 });
+      if (reply?.ok) await afterNoSaleApplied();
     })();
   }
 
@@ -555,6 +561,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         await run("tray", { schemaVersion: 1, scope, limit: 20 });
         await run("assignmentCandidates", { schemaVersion: 1, scope });
       }
+      if (reply?.ok && pending.operation === "noSale") await afterNoSaleApplied();
     })();
   }
 
