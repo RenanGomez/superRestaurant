@@ -8,7 +8,7 @@ import { getCaptureConfirmationContext } from "../../../lib/capture-confirmation
 import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
 import { getMenuCatalog } from "../../../lib/menu-catalog";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
-import { captureWorkspaceAction } from "./actions";
+import { captureWorkspaceAction, reloadCaptureCatalog } from "./actions";
 import { CaptureWorkspace } from "./capture-workspace";
 
 export const dynamic = "force-dynamic";
@@ -38,7 +38,7 @@ export default async function CapturePage(): Promise<ReactNode> {
     </header>
     {canOperate && catalog !== undefined
       ? <CaptureWorkspace scope={scope} action={captureWorkspaceAction} canManageAssignment={canManageAssignment} catalog={catalog}
-        {...(confirmationContext === undefined ? {} : { confirmationContext })} />
+        reloadCatalog={reloadCaptureCatalog} {...(confirmationContext === undefined ? {} : { confirmationContext })} />
       : canOperate ? <p role="alert" className="rounded-xl border border-border bg-surface p-5">No fue posible leer el catálogo de esta sucursal. Recarga la página.</p>
         : <p role="alert" className="rounded-xl border border-border bg-surface p-5">Tu rol no permite capturar pedidos.</p>}
   </div>;

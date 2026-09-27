@@ -75,15 +75,20 @@ interface CaptureWorkspaceParameters {
   readonly confirmationContext?: CaptureConfirmationContext;
   readonly canManageAssignment: boolean;
   readonly catalog: MenuCatalogStateV1;
+  readonly reloadCatalog: (scope: BranchScope) => Promise<MenuCatalogStateV1 | undefined>;
 }
 type ActionReply = Awaited<ReturnType<CaptureWorkspaceParameters["action"]>>;
 
-export function CaptureWorkspace({ scope, action, confirmationContext, canManageAssignment, catalog }: CaptureWorkspaceParameters): ReactNode {
+export function CaptureWorkspace({ scope, action, confirmationContext, canManageAssignment, catalog: initialCatalog,
+  reloadCatalog }: CaptureWorkspaceParameters): ReactNode {
+  const [catalog, setCatalog] = useState(initialCatalog);
+  const [catalogReloading, setCatalogReloading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [deviceId] = useState(() => captureDeviceId(typeof window === "undefined" ? undefined : window.localStorage,
     () => crypto.randomUUID()));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<keyof typeof messages>();
+  const [errorOperation, setErrorOperation] = useState<CaptureWorkspaceOperation>();
   const [pending, setPending] = useState<{ operation: CaptureWorkspaceOperation; command: unknown }>();
   const [capture, setCapture] = useState<CaptureDraftDetailV1 | CaptureDraftDetailV2>();
   const [tray, setTray] = useState<readonly CaptureDraftSummaryV1[]>([]);
@@ -134,12 +139,14 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       : undefined;
     setBusy(true);
     setError(undefined);
+    setErrorOperation(undefined);
     let reply: ActionReply;
     try { reply = await action(operation, command); }
     catch { reply = { ok: false, error: "unavailable", command }; }
     setBusy(false);
     if (!reply.ok) {
       setError(reply.error);
+      setErrorOperation(operation);
       setPending(reply.error === "unavailable" ? { operation, command: reply.command ?? command } : undefined);
       if (persistedAutosave !== undefined && reply.error !== "unavailable") {
         clearPendingCaptureAutosave(window.localStorage, persistedAutosave);
@@ -274,6 +281,19 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       { type: "add", lineId: crypto.randomUUID(), productId: sheetProduct.productId, quantity, modifierGroups }));
     setSelectionBusy(false);
     if (ok) { setSheetProduct(undefined); setSheetGroups([]); }
+  }
+
+  /** Recovers from a `selectionPlan` conflict caused by a stale `catalogVersion`: re-reads the
+   * catalog (read-only) and the workspace, but never retries the write that failed. */
+  async function reloadMenu(): Promise<void> {
+    if (capture === undefined) return;
+    setCatalogReloading(true);
+    const fresh = await reloadCatalog(scope);
+    if (fresh !== undefined) setCatalog(fresh);
+    setCatalogReloading(false);
+    setError(undefined);
+    setErrorOperation(undefined);
+    await refreshWorkspace(capture.captureDraftId);
   }
 
   async function changeLineQuantity(lineId: string, delta: 1 | -1): Promise<void> {
@@ -498,7 +518,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setRepeatOrderPlan(null);
     setSelectionProjection(null); setSheetProduct(undefined); setSheetGroups([]); setSelectionBusy(false); setSelectionBusyLineId(undefined);
     setRecentOrders(undefined); setRepeatPreview(undefined);
-    setError(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
+    setError(undefined); setErrorOperation(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
     setDeliveryInstructions("");
     setDeliveryInstructionSuggestions([]);
     setSelectedShiftId("");
@@ -533,13 +553,16 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   });
+  const menuConflict = error === "conflict" && errorOperation === "selectionPlan";
   return <div className="flex flex-col gap-4" aria-busy={busy}>
     <div role={error === undefined ? "status" : "alert"} aria-live="polite"
       className={error === undefined ? "text-sm text-text-muted" : "rounded-lg border border-border bg-error-bg p-4 text-sm"}>
       {busy ? "Guardando en el servidor…" : error === undefined ? capture === undefined ? "Crea o recupera un borrador para comenzar."
-        : `Borrador ${capture.folio} · versión ${capture.version}` : messages[error]}
-      {pending !== undefined && <button className={`${button} ml-3`} onClick={retryPending}>Reintentar misma operación</button>}
-      {(error === "conflict" || capture?.status === "confirmed") && <button className={`${button} ml-3`}
+        : `Borrador ${capture.folio} · versión ${capture.version}` : menuConflict ? "El menú cambió; vuelve a cargar." : messages[error]}
+      {menuConflict && <button className={`${button} ml-3`} disabled={busy || catalogReloading}
+        onClick={() => void reloadMenu()}>{catalogReloading ? "Recargando…" : "Recargar menú"}</button>}
+      {!menuConflict && pending !== undefined && <button className={`${button} ml-3`} onClick={retryPending}>Reintentar misma operación</button>}
+      {!menuConflict && (error === "conflict" || capture?.status === "confirmed") && <button className={`${button} ml-3`}
         aria-keyshortcuts={ariaKeyShortcut("reset")} disabled={busy} onClick={reset}>Volver a la bandeja</button>}
     </div>
     {capture === undefined ? <>
