@@ -1,5 +1,13 @@
 # HANDOFF
 
+## Ronda tres del harness: S5.1, S7.1b en subunidades — 2026-09-26 (IN_PROGRESS)
+
+- Integrado en `main` con reviewer `APROBAR` y puertas globales verdes (lint 9/9, typecheck 12/12, test 12/12, build 9/9): `c6d3a1b` S5.1 resolver de precios de fracciones (Claude L1; CORREGIR por pérdida de `fractionBreakdown` en `clonePriceSnapshot` y normalizadores no hostiles → corregido → APROBAR); `1952154` contratos `DeliveryZoneV1`/`Upsert*`/`RequestDeliveryQuoteCommandV1` (S7.1b subunidad 2).
+- S7.1b se dividió en cuatro subunidades después de que el implementador único se declarara BLOCKED por tamaño y por heredar el nivel de razonamiento bajo de la sesión (AGENTS §4). Subunidad 1 (SQL, `claude/s7-1b-sql`, `e50683b`): el reviewer la ejecutó en un PostgreSQL 17 portátil desechable con las 39 migraciones previas (aplican limpio, catálogo pasa) y devolvió CORREGIR: `list_delivery_zones` y `upsert_delivery_zone` no emitían las 12 claves exactas de `DeliveryZoneV1` (faltaban `restaurantId`/`branchId`, `scope` anidado, sobre `{status, record}`), regla de motivo desalineada con el contrato (SQL exigía motivo en toda actualización; contrato sólo al desactivar; se alinea al contrato) y el test de invariantes hacía SELECT directo bajo `app_api`. Corrección en curso con verificación en clúster desechable por el propio implementador. Subunidades 3 (módulo NestJS + endpoints) y 4 (verificador rollback-only + pruebas de aislamiento) arrancan tras integrar la SQL.
+- L3 (DeepSeek) en esta ronda: resumen de seis archivos patrón de la API y del verificador para las subunidades 3-4 (23.573 tokens, $0.0036) y resumen del HANDOFF por slice (162.057 tokens, $0.023). El segundo marcó como no aplicada la migración `20260926000100`, que sí fue aplicada con autorización ese día: los resúmenes L3 orientan la lectura pero no sustituyen las fuentes.
+- Pendiente de Emmanuel sin cambios: login en el navegador para S9.4, reinicio de sesión para agentes nombrados, borrar líneas comentadas con la clave en settings.json; conviene subir el nivel de razonamiento de la sesión antes de las subunidades 3-4.
+- Siguiente acción mínima: cerrar SQL S7.1b (revisión ejecutada + merge), lanzar subunidades 3 y 4 con el resumen L3 en el paquete, luego S6.3 sobre la cola de impresión.
+
 ## Ronda dos del harness: S7.1, cola de impresión y pestaña Agentes — 2026-09-26 (REVIEW)
 
 - Decisiones: Emmanuel aprobó ("continúa") los defaults S5 (8) y S9 (5); constan en `P2_CONFIGURABLE_CATALOG_SLICE.md` §7.1 y `P2_OPERATIONAL_STATION_SLICE.md` §11.1. No queda ninguna decisión de producto abierta en P2.
