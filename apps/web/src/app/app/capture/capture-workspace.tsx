@@ -17,6 +17,7 @@ import type {
   CaptureSourceChannelV1,
   CaptureWorkspaceV3,
   CaptureWorkTrayResultV1,
+  DeliveryQuoteV1,
   CustomerDirectoryDetailV1,
   CustomerDirectorySearchResultV1,
   CustomerRecentOrderListV1,
@@ -29,6 +30,8 @@ import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAuto
   rehydrateCaptureWorkspace } from "../../../lib/capture-workspace";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import { ariaKeyShortcut, dispatchShortcut, type ShortcutTable } from "../../../lib/shortcut-dispatch";
+import { formatDeliveryQuote, quoteMatchesDeliverySnapshot } from "../../../lib/delivery-zones";
+import { deliveryZonesAction } from "../delivery-zones/actions";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -95,6 +98,18 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [deliveryInstructionSuggestions, setDeliveryInstructionSuggestions] = useState<readonly CaptureDeliveryInstructionSuggestionV1[]>([]);
   const [selectedShiftId, setSelectedShiftId] = useState("");
   const [selectedTableId, setSelectedTableId] = useState("");
+  const [scheduledFor, setScheduledFor] = useState("");
+  const [deliveryQuote, setDeliveryQuote] = useState<DeliveryQuoteV1>();
+  const [quoteError, setQuoteError] = useState<string>();
+  const [quoteBusy, setQuoteBusy] = useState(false);
+  const quoteSequence = useRef(0);
+
+  function invalidateQuote(): void {
+    quoteSequence.current += 1;
+    setDeliveryQuote(undefined);
+    setQuoteError(undefined);
+    setQuoteBusy(false);
+  }
 
   async function run(operation: CaptureWorkspaceOperation, command: unknown): Promise<ActionReply | undefined> {
     if (busy) return undefined;
@@ -135,6 +150,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     else if ("customerSnapshot" in value) applyWorkspace(value as CaptureWorkspaceV3);
     else if ("replayed" in value) {
       const mutation = value as CaptureMutationResultV1;
+      if (mutation.detail.captureDraftId !== capture?.captureDraftId
+        || mutation.detail.fulfillmentSnapshotRef !== capture.fulfillmentSnapshotRef) invalidateQuote();
       setCapture(mutation.detail);
       if ("deliveryInstructions" in value) {
         setDeliveryInstructions(typeof value.deliveryInstructions === "string" ? value.deliveryInstructions : "");
@@ -159,6 +176,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       setError("unavailable");
       return;
     }
+    invalidateQuote();
     setCapture(hydrated.detail);
     setCustomerSnapshot(hydrated.customerSnapshot);
     setFulfillmentSnapshot(hydrated.fulfillmentSnapshot);
@@ -267,6 +285,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setFulfillmentChannel(next);
     if (next !== "delivery") setDeliveryInstructions("");
     if (next !== "delivery") setDeliveryInstructionSuggestions([]);
+    invalidateQuote();
     autosave(sourceChannel, next);
   }
 
@@ -276,6 +295,35 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     const normalized = deliveryInstructions.trim();
     const command = { ...base(), deliveryInstructions: normalized === "" ? null : normalized };
     void run("deliveryInstructions", command);
+  }
+
+  async function quoteDelivery(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (capture === undefined || fulfillmentChannel !== "delivery" || fulfillmentSnapshot === null) return;
+    const scheduledDate = scheduledFor === "" ? null : new Date(scheduledFor);
+    if (scheduledDate !== null && !Number.isFinite(scheduledDate.getTime())) {
+      setQuoteError("Introduce una fecha y hora válidas."); return;
+    }
+    const scheduled = scheduledDate?.toISOString() ?? null;
+    const now = Date.now();
+    if (scheduled !== null && (Date.parse(scheduled) - now < 30 * 60_000
+      || Date.parse(scheduled) - now > 7 * 24 * 60 * 60_000)) {
+      setQuoteError("Programa entre 30 minutos y 7 días a partir de ahora."); return;
+    }
+    const requestSequence = ++quoteSequence.current;
+    const requestedDraftId = capture.captureDraftId;
+    const requestedSnapshotRef = fulfillmentSnapshot.snapshotRef;
+    setQuoteBusy(true); setQuoteError(undefined); setDeliveryQuote(undefined);
+    try {
+      const result = await deliveryZonesAction("quote", { schemaVersion: 1, scope,
+        captureDraftId: requestedDraftId, scheduledFor: scheduled });
+      if (quoteSequence.current !== requestSequence) return;
+      if (result.ok && "coverageStatus" in result.value
+        && quoteMatchesDeliverySnapshot(result.value, requestedDraftId, requestedSnapshotRef)) setDeliveryQuote(result.value);
+      else if (result.ok && "coverageStatus" in result.value) return;
+      else setQuoteError(result.ok ? "La cotización no fue válida." : messages[result.error]);
+    } catch { if (quoteSequence.current === requestSequence) setQuoteError(messages.unavailable); }
+    finally { if (quoteSequence.current === requestSequence) setQuoteBusy(false); }
   }
 
   function confirmCapture(): void {
@@ -309,6 +357,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setRepeatPreview(undefined);
     setSelectedContact(contactId);
     setSelectedAddress(undefined);
+    invalidateQuote();
     const command = { ...base(), customerId: customer.customer.customerId, contactId,
       expectedCustomerVersion: customer.customer.version };
     void (async () => {
@@ -320,6 +369,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   function selectAddress(addressId: string, version: number): void {
     if (capture?.customerSnapshotRef === null || capture?.customerSnapshotRef === undefined) return;
     setSelectedAddress(addressId);
+    invalidateQuote();
     const command = { ...base(), customerSnapshotRef: capture.customerSnapshotRef, addressId,
       expectedAddressVersion: version };
     void (async () => {
@@ -362,6 +412,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   }
 
   function reset(): void {
+    invalidateQuote();
     setCapture(undefined); setResults(undefined); setCustomer(undefined); setCustomerSnapshot(null);
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
     setRepeatOrderPlan(null);
@@ -371,6 +422,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setDeliveryInstructionSuggestions([]);
     setSelectedShiftId("");
     setSelectedTableId("");
+    setScheduledFor("");
     setTransferTarget("");
     setTransferConfirmed(false);
   }
@@ -569,6 +621,24 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           <div className="flex items-center justify-between gap-3"><span className="text-xs text-text-muted">{deliveryInstructions.length}/500</span>
             <button className={button} disabled={locked}>Guardar instrucciones</button></div>
         </form>
+      </section>}
+      {fulfillmentChannel === "delivery" && fulfillmentSnapshot !== null && capture.status === "draft" && <section className={panel} data-testid="delivery-quote">
+        <h2 className="font-heading text-lg font-semibold">Cotización de entrega</h2>
+        <p className="mt-1 text-sm text-text-muted">La cobertura, tarifa y promesa se calculan en el servidor para la dirección guardada.</p>
+        <form className="mt-3 grid gap-3" onSubmit={(event) => void quoteDelivery(event)}>
+          <label className="grid gap-1 text-sm" htmlFor="capture-scheduled-for">Programar entrega (opcional)
+            <input id="capture-scheduled-for" type="datetime-local" className={input} value={scheduledFor}
+              onChange={(event) => { setScheduledFor(event.target.value); invalidateQuote(); }} disabled={quoteBusy} /></label>
+          <p className="text-xs text-text-muted">Entre 30 minutos y 7 días. La hora se convierte a ISO al solicitar la cotización.</p>
+          <button type="submit" className={button} disabled={quoteBusy}>{quoteBusy ? "Cotizando…" : "Cotizar entrega"}</button>
+        </form>
+        {quoteError && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{quoteError}</p>}
+        {deliveryQuote && <div role="status" className="mt-3 grid gap-1 rounded-lg border border-border bg-bg p-3 text-sm">
+          <strong>{formatDeliveryQuote(deliveryQuote, "es-MX").status}</strong>
+          <p>Tarifa: {formatDeliveryQuote(deliveryQuote, "es-MX").fee}</p>
+          <p>Ventana prometida: {formatDeliveryQuote(deliveryQuote, "es-MX").window}</p>
+          <p>Expira: {formatDeliveryQuote(deliveryQuote, "es-MX").expiry}</p>
+        </div>}
       </section>}
       <section className={panel}><h2 className="font-heading text-lg font-semibold">1. Buscar cliente</h2>
         <form onSubmit={search} className="mt-3 flex flex-wrap gap-3"><label className="grid gap-1 text-sm" htmlFor="capture-search-mode">Buscar por
