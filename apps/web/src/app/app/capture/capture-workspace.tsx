@@ -14,6 +14,7 @@ import type {
   CaptureFulfillmentSnapshotV1,
   CaptureMutationResultV1,
   CaptureRepeatOrderPlanSummaryV1,
+  CaptureSelectionPlanProjectionV1,
   CaptureSourceChannelV1,
   CaptureWorkspaceV3,
   CaptureWorkTrayResultV1,
@@ -24,15 +25,23 @@ import type {
   CustomerRepeatOrderCaptureResultV1,
   CustomerRepeatOrderPreviewIssueV1,
   CustomerRepeatOrderPreviewV1,
+  MenuCatalogStateV1,
+  MenuModifierGroupV1,
+  MenuProductV1,
 } from "@super-restaurant/shared-types";
 
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
   rehydrateCaptureWorkspace } from "../../../lib/capture-workspace";
+import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
+  type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import { ariaKeyShortcut, dispatchShortcut, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import { formatDeliveryQuote, quoteMatchesDeliverySnapshot } from "../../../lib/delivery-zones";
 import { deliveryZonesAction } from "../delivery-zones/actions";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
+import { CaptureMenu } from "./capture-menu";
+import { CaptureTicket } from "./capture-ticket";
+import { ProductSheet } from "./product-sheet";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
 const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
@@ -65,10 +74,11 @@ interface CaptureWorkspaceParameters {
   readonly action: (operation: CaptureWorkspaceOperation, input: unknown) => Promise<CaptureWorkspaceResult>;
   readonly confirmationContext?: CaptureConfirmationContext;
   readonly canManageAssignment: boolean;
+  readonly catalog: MenuCatalogStateV1;
 }
 type ActionReply = Awaited<ReturnType<CaptureWorkspaceParameters["action"]>>;
 
-export function CaptureWorkspace({ scope, action, confirmationContext, canManageAssignment }: CaptureWorkspaceParameters): ReactNode {
+export function CaptureWorkspace({ scope, action, confirmationContext, canManageAssignment, catalog }: CaptureWorkspaceParameters): ReactNode {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [deviceId] = useState(() => captureDeviceId(typeof window === "undefined" ? undefined : window.localStorage,
     () => crypto.randomUUID()));
@@ -103,6 +113,12 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [quoteError, setQuoteError] = useState<string>();
   const [quoteBusy, setQuoteBusy] = useState(false);
   const quoteSequence = useRef(0);
+  const [selectionProjection, setSelectionProjection] = useState<CaptureSelectionPlanProjectionV1 | null>(null);
+  const [sheetProduct, setSheetProduct] = useState<MenuProductV1>();
+  const [sheetGroups, setSheetGroups] = useState<readonly MenuModifierGroupV1[]>([]);
+  const [selectionBusy, setSelectionBusy] = useState(false);
+  const [selectionBusyLineId, setSelectionBusyLineId] = useState<string>();
+  const productSearchRef = useRef<HTMLInputElement>(null);
 
   function invalidateQuote(): void {
     quoteSequence.current += 1;
@@ -181,6 +197,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setCustomerSnapshot(hydrated.customerSnapshot);
     setFulfillmentSnapshot(hydrated.fulfillmentSnapshot);
     setRepeatOrderPlan(hydrated.repeatOrderPlan);
+    setSelectionProjection(hydrated.selectionProjection);
     setRecentOrders((current) => current?.customerId === hydrated.customerSnapshot?.customerId ? current : undefined);
     setRepeatPreview((current) => current?.customerId === hydrated.customerSnapshot?.customerId ? current : undefined);
     setSelectedContact(hydrated.customerSnapshot?.contactId);
@@ -206,6 +223,63 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     return { schemaVersion: 1, scope, captureDraftId: capture.captureDraftId, expectedVersion: capture.version,
       attentionLeaseId: capture.attentionLeaseId, eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(),
       deviceId, occurredAt: new Date().toISOString() };
+  }
+
+  function selectionDraftLines(): readonly SelectionPlanLineDraft[] {
+    return (selectionProjection?.lines ?? []).map((line) => {
+      const byGroup = new Map<string, SelectionPlanModifierGroupDraft["selections"][number][]>();
+      for (const modifier of line.modifiers) {
+        const existing = byGroup.get(modifier.groupId) ?? [];
+        existing.push({ optionId: modifier.optionId, quantity: modifier.quantity });
+        byGroup.set(modifier.groupId, existing);
+      }
+      const modifierGroups: SelectionPlanModifierGroupDraft[] = [...byGroup.entries()]
+        .map(([groupId, selections]) => ({ groupId, selections }));
+      return { lineId: line.lineId, productId: line.productId, quantity: line.quantity, modifierGroups };
+    });
+  }
+
+  /** Replaces the whole selection plan; on an uncertain transport result it replays exactly once with the same idempotency key. */
+  async function sendSelectionPlan(lines: readonly SelectionPlanLineDraft[]): Promise<boolean> {
+    if (capture === undefined || capture.attentionLeaseId === null || catalog.catalog === null) return false;
+    const command = { ...base(), plan: buildSelectionPlan(lines, catalog.catalog.catalogVersion) };
+    let reply = await run("selectionPlan", command);
+    if (reply !== undefined && !reply.ok && reply.error === "unavailable") {
+      reply = await run("selectionPlan", (reply as { command?: unknown }).command ?? command);
+    }
+    return reply?.ok === true;
+  }
+
+  function openProduct(product: MenuProductV1, groups: readonly MenuModifierGroupV1[]): void {
+    if (locked) return;
+    if (groups.length === 0) {
+      void sendSelectionPlan(applyLineChange(selectionDraftLines(),
+        { type: "add", lineId: crypto.randomUUID(), productId: product.productId, quantity: 1, modifierGroups: [] }));
+      return;
+    }
+    setSheetProduct(product);
+    setSheetGroups(groups);
+  }
+
+  async function addFromSheet(quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[]): Promise<void> {
+    if (sheetProduct === undefined) return;
+    setSelectionBusy(true);
+    const ok = await sendSelectionPlan(applyLineChange(selectionDraftLines(),
+      { type: "add", lineId: crypto.randomUUID(), productId: sheetProduct.productId, quantity, modifierGroups }));
+    setSelectionBusy(false);
+    if (ok) { setSheetProduct(undefined); setSheetGroups([]); }
+  }
+
+  async function changeLineQuantity(lineId: string, delta: 1 | -1): Promise<void> {
+    setSelectionBusyLineId(lineId);
+    await sendSelectionPlan(applyLineChange(selectionDraftLines(), { type: delta === 1 ? "increment" : "decrement", lineId }));
+    setSelectionBusyLineId(undefined);
+  }
+
+  async function removeLine(lineId: string): Promise<void> {
+    setSelectionBusyLineId(lineId);
+    await sendSelectionPlan(applyLineChange(selectionDraftLines(), { type: "remove", lineId }));
+    setSelectionBusyLineId(undefined);
   }
 
   function create(): void {
@@ -416,6 +490,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setCapture(undefined); setResults(undefined); setCustomer(undefined); setCustomerSnapshot(null);
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
     setRepeatOrderPlan(null);
+    setSelectionProjection(null); setSheetProduct(undefined); setSheetGroups([]); setSelectionBusy(false); setSelectionBusyLineId(undefined);
     setRecentOrders(undefined); setRepeatPreview(undefined);
     setError(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
     setDeliveryInstructions("");
@@ -515,6 +590,26 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           <option value="pickup" disabled={fulfillmentSnapshot !== null}>Recoger</option><option value="counter" disabled={fulfillmentSnapshot !== null}>Mostrador</option>
           <option value="dine_in" disabled={fulfillmentSnapshot !== null}>Mesa</option></select></label></div>
       </section>
+      {capture.status === "draft" && <section className={`${panel} flex min-h-[520px] flex-col overflow-hidden p-0`} data-testid="capture-menu-section">
+        <h2 className="sr-only">Menú</h2>
+        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+          <CaptureMenu catalog={catalog.catalog} currency={catalog.catalog?.currency ?? "MXN"}
+            lineQuantities={(selectionProjection?.lines ?? []).reduce(
+              (map, line) => map.set(line.productId, (map.get(line.productId) ?? 0) + line.quantity),
+              new Map<string, number>())}
+            busy={selectionBusy || selectionBusyLineId !== undefined} searchInputRef={productSearchRef}
+            onSelectProduct={openProduct} />
+          <CaptureTicket projection={selectionProjection} busyLineId={selectionBusyLineId} locked={locked}
+            onIncrement={(lineId) => void changeLineQuantity(lineId, 1)}
+            onDecrement={(lineId) => void changeLineQuantity(lineId, -1)}
+            onRemove={(lineId) => void removeLine(lineId)}
+            onHold={reset} />
+        </div>
+      </section>}
+      {sheetProduct !== undefined && <ProductSheet product={sheetProduct} groups={sheetGroups}
+        currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy}
+        onClose={() => { setSheetProduct(undefined); setSheetGroups([]); }}
+        onAdd={(quantity, modifierGroups) => void addFromSheet(quantity, modifierGroups)} />}
       {capture.status === "draft" && canManageAssignment && <section className={panel} data-testid="capture-transfer">
         <h2 className="font-heading text-lg font-semibold">Transferir captura</h2>
         <p className="mt-1 text-sm text-text-muted">El operador destino recibirá un lease nuevo. Esta estación dejará de editar la captura.</p>
