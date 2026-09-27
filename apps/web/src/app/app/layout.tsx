@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { BrandMark } from "../../components/brand-mark";
+import { AppNav } from "./app-nav";
 import { getServerEnv } from "../../env";
 import { canAccessSystemAdministration } from "../../lib/system-onboarding";
 import { createServerSupabaseClient } from "../../lib/supabase-server";
@@ -38,38 +38,7 @@ export default async function AppLayout({ children }: { readonly children: React
 
   return (
     <div className="flex min-h-screen bg-bg">
-      <nav aria-label="Navegación principal" className="flex w-[76px] shrink-0 flex-col items-center gap-7 bg-nav py-5">
-        <BrandMark size={36} />
-        <a href="/app" title="Mesas" aria-label="Mesas" className="flex h-11 w-11 items-center justify-center rounded-xl text-white hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
-          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M8 4v16M16 4v16M3 10h18" />
-          </svg>
-        </a>
-        <a href="/app/menu" title="Menú" aria-label="Menú" className="flex h-11 w-11 items-center justify-center rounded-xl text-white hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
-          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M4 5h16M4 12h16M4 19h10" /><circle cx="18" cy="19" r="2" />
-          </svg>
-        </a>
-        <a href="/app/caja" title="Caja" aria-label="Caja" className="flex h-11 w-11 items-center justify-center rounded-xl text-white hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
-          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 9h10M7 13h3M14 13h3" />
-          </svg>
-        </a>
-        <a href="/app/customers" title="Clientes" aria-label="Clientes" className="flex h-11 w-11 items-center justify-center rounded-xl text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
-          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="8" r="3" /><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6M19 21v-3a6 6 0 0 0-3-5" /></svg>
-        </a>
-        <a href="/app/capture" title="Captura telefónica" aria-label="Captura telefónica" className="flex h-11 w-11 items-center justify-center rounded-xl text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
-          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2Z"/></svg>
-        </a>
-        <a href="/app/delivery-zones" title="Zonas de entrega" aria-label="Zonas de entrega" className="flex h-11 w-11 items-center justify-center rounded-xl text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
-          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8h11v10H3zM14 11h4l3 4v3h-7z"/><circle cx="7" cy="19" r="2"/><circle cx="18" cy="19" r="2"/></svg>
-        </a>
-        {canAccessSystemAdmin ? (
-          <a href="/app/system-admin/restaurants" title="Administración del sistema" aria-label="Administración del sistema" className="flex h-11 w-11 items-center justify-center rounded-xl text-white hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
-            <span aria-hidden="true" className="text-lg">⚙</span>
-          </a>
-        ) : null}
-      </nav>
+      <AppNav canAccessSystemAdmin={canAccessSystemAdmin} />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-[68px] shrink-0 items-center justify-between border-b border-border bg-surface px-3 sm:px-8">
