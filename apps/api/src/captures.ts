@@ -691,6 +691,7 @@ export class CaptureSelectionPlanService {
     @Inject(CAPTURE_SELECTION_PLAN_PORT) private readonly persistence: CaptureSelectionPlanPort,
     @Inject(CAPTURE_CREATION_PORT) private readonly captures: CaptureCreationPort,
     @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
+    @Inject(CAPTURE_CONFIRMATION_PORT) private readonly confirmation: CaptureConfirmationPort,
   ) {}
 
   public async replace(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV4> {
@@ -714,8 +715,11 @@ export class CaptureSelectionPlanService {
 
     // Validate and price every line against the live, published catalog before persisting anything: an
     // inactive product/option or a group outside its configured limits fails closed with 409, never a
-    // silent reprice or a partially-applied plan.
-    const projection = command.plan.lines.length === 0
+    // silent reprice or a partially-applied plan. This projection is provisional: on a genuine
+    // "applied" write it is exactly what gets returned, but on a replay it is only used to fail
+    // fast if the echoed command itself cannot even be priced -- the returned projection is
+    // re-derived below from the actually-stored plan, never trusted from the replayed command.
+    let projection = command.plan.lines.length === 0
       ? null
       : priceSelectionPlan(command.plan, catalog, command.scope.restaurantId);
 
@@ -749,6 +753,28 @@ export class CaptureSelectionPlanService {
         : workspace.selectionPlan === null
           || workspace.selectionPlan.lineCount !== command.plan.lines.length
           || workspace.selectionPlan.catalogVersion !== command.plan.catalogVersion)) throw unavailable();
+
+    // On replay, never price the client-echoed command: re-read whatever is actually stored
+    // (which the idempotency check already guarantees is byte-identical to the original plan)
+    // and price that instead, so the response is never derived from an untrusted echo.
+    if (envelope.status === "replayed") {
+      if (workspace.selectionPlan === null) { projection = null; }
+      else {
+        let rawStoredPlan: unknown;
+        try {
+          rawStoredPlan = await this.confirmation.readSelectionPlan(actorId, {
+            schemaVersion: 3, scope: command.scope, captureDraftId: command.captureDraftId,
+          });
+        } catch { throw unavailable(); }
+        const storedPlanEnvelope = exactRecord(rawStoredPlan, ["status", "plan"]);
+        if (storedPlanEnvelope?.status !== "ok") throw unavailable();
+        const storedPlan = parseCaptureSelectionPlanV1(storedPlanEnvelope.plan);
+        if (storedPlan === undefined || storedPlan.catalogVersion !== workspace.selectionPlan.catalogVersion
+          || storedPlan.lines.length !== workspace.selectionPlan.lineCount) throw unavailable();
+        try { projection = storedPlan.lines.length === 0 ? null : priceSelectionPlan(storedPlan, catalog, command.scope.restaurantId); }
+        catch { throw unavailable(); }
+      }
+    }
     return withCaptureSelectionProjection(workspace, projection);
   }
 }

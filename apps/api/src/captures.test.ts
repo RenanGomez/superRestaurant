@@ -7,7 +7,7 @@ import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSugg
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
 import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureSelectionNoteUnsupportedError, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort, type CaptureSelectionPlanPort } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureSelectionNoteUnsupportedError, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureSelectionPlanPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
@@ -610,6 +610,13 @@ const selectionPlanCommand = parseReplaceCaptureSelectionPlanCommandV1({
 });
 assert.ok(selectionPlanCommand);
 
+const noConfirmationPort: CaptureConfirmationPort = {
+  probeConfirmation: async () => { throw new Error("must not probe confirmation"); },
+  readRepeatOrderPlan: async () => { throw new Error("must not read repeat order plan"); },
+  readSelectionPlan: async () => { throw new Error("must not read selection plan"); },
+  confirmDraft: async () => { throw new Error("must not confirm"); },
+};
+
 test("capture selection plan prices every line against the live catalog before persisting", async () => {
   const workspaceV4Record = {
     schemaVersion: 4,
@@ -635,7 +642,7 @@ test("capture selection plan prices every line against the live catalog before p
   const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
   }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
-    save: async () => { throw new Error("must not save a catalog"); } });
+    save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort);
   const result = await service.replace(principal, selectionPlanCommand);
   assert.deepEqual(persistedCommand, selectionPlanCommand);
   assert.equal(result.selectionPlan?.lineCount, 1);
@@ -648,12 +655,12 @@ test("capture selection plan prices every line against the live catalog before p
   }), persistence, captures, {
     read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: { ...selectionCatalog, catalogVersion: validCommand.deviceId } }),
     save: async () => { throw new Error("must not save a catalog"); },
-  }).replace(principal, selectionPlanCommand), code("conflict"));
+  }, noConfirmationPort).replace(principal, selectionPlanCommand), code("conflict"));
 
   await assert.rejects(new CaptureSelectionPlanService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["viewer"], scope: validCommand.scope }),
   }), persistence, captures, { read: async () => { throw new Error("must not read"); },
-    save: async () => { throw new Error("must not save"); } }).replace(principal, selectionPlanCommand), code("authorization"));
+    save: async () => { throw new Error("must not save"); } }, noConfirmationPort).replace(principal, selectionPlanCommand), code("authorization"));
 
   const variantCommand = parseReplaceCaptureSelectionPlanCommandV1({
     ...selectionPlanCommand,
@@ -663,7 +670,7 @@ test("capture selection plan prices every line against the live catalog before p
   await assert.rejects(new CaptureSelectionPlanService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
   }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
-    save: async () => { throw new Error("must not save a catalog"); } }).replace(principal, variantCommand), code("conflict"));
+    save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort).replace(principal, variantCommand), code("conflict"));
 });
 
 test("capture selection plan with zero lines is treated as no plan, never priced or persisted with an empty line array", async () => {
@@ -696,7 +703,7 @@ test("capture selection plan with zero lines is treated as no plan, never priced
   }), persistence, captures, {
     read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
     save: async () => { throw new Error("must not save a catalog"); },
-  });
+  }, noConfirmationPort);
   const result = await service.replace(principal, emptyCommand);
   assert.deepEqual(persistedPlan, { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion, lines: [] });
   assert.equal(result.selectionPlan, null);
@@ -719,7 +726,7 @@ test("capture selection plan with a line note is rejected: OrderItem has nowhere
   const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
   }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
-    save: async () => { throw new Error("must not save a catalog"); } });
+    save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort);
   await assert.rejects(
     service.replace(principal, notedCommand),
     (error: unknown) => error instanceof CaptureSelectionNoteUnsupportedError && error.code === "conflict",
@@ -745,14 +752,31 @@ test("capture selection plan replay returns the stored result even after a later
     createDraft: async () => { throw new Error("must not create"); },
     readWorkspaceV4: async () => advancedWorkspaceV4Record,
   };
+  // On replay, the projection must come from whatever is actually stored, never from the
+  // client-echoed command; this stub proves it by returning a *different* (still-consistent)
+  // line than selectionPlanCommand's, and asserting the response reflects THIS one.
+  const storedReplayPlan = {
+    schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+    lines: [{
+      lineId: "0d3f6d0d-7d9a-4f8e-9b1a-1e6c8f9a2b3c",
+      productId: selectionCatalog.products[0]!.productId,
+      variantId: null, quantity: 3, modifierGroups: [], note: null,
+    }],
+  };
+  const confirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    readSelectionPlan: async () => ({ status: "ok", plan: storedReplayPlan }),
+  };
   const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
   }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
-    save: async () => { throw new Error("must not save a catalog"); } });
+    save: async () => { throw new Error("must not save a catalog"); } }, confirmation);
   const result = await service.replace(principal, selectionPlanCommand);
   assert.equal(result.detail.version, 5);
   assert.equal(result.selectionPlan?.lineCount, 1);
-  assert.equal(result.selectionProjection?.subtotalMinor, 9_000);
+  // Priced from storedReplayPlan's quantity 3, not selectionPlanCommand's quantity 2.
+  assert.equal(result.selectionProjection?.subtotalMinor, 13_500);
+  assert.equal(result.selectionProjection?.lines[0]?.quantity, 3);
 });
 
 test("capture tray authorizes, binds scope and rejects hostile persistence", async () => {
