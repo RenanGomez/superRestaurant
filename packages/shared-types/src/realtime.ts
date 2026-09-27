@@ -60,6 +60,7 @@ export interface KdsTicketModifierV1 {
 export interface KdsTicketV1 extends RealtimeSubscriptionV1 {
   readonly channel: "counter" | "delivery" | "table" | "takeout";
   readonly modifiers: readonly KdsTicketModifierV1[];
+  readonly note: string | null;
   readonly orderId: string;
   readonly orderItemId: string;
   readonly orderVersion: number;
@@ -215,7 +216,7 @@ export function parseKdsTicketListV1(value: unknown): KdsTicketListV1 | undefine
 export function parseKdsTicketV1(value: unknown): KdsTicketV1 | undefined {
   const record = exactRecord(value, [
     "schemaVersion", "scope", "stationId", "orderId", "orderItemId", "orderVersion",
-    "channel", "tableId", "quantity", "productName", "modifiers", "status", "queuedAt",
+    "channel", "tableId", "quantity", "productName", "modifiers", "note", "status", "queuedAt",
   ]);
   if (record === undefined || ownValue(record, "schemaVersion") !== REALTIME_SCHEMA_VERSION) return undefined;
   const scope = parseScope(ownValue(record, "scope"));
@@ -229,12 +230,14 @@ export function parseKdsTicketV1(value: unknown): KdsTicketV1 | undefined {
   const quantity = parsePositiveInteger(ownValue(record, "quantity"), 1_000);
   const productName = parseDisplayText(ownValue(record, "productName"), 120);
   const rawModifiers = ownValue(record, "modifiers");
+  const rawNote = ownValue(record, "note");
+  const note = rawNote === null ? null : parseDisplayText(rawNote, 200);
   const status = ownValue(record, "status");
   const queuedAt = parseTimestamp(ownValue(record, "queuedAt"));
   if (scope === undefined || stationId === undefined || orderId === undefined || orderItemId === undefined
     || orderVersion === undefined || !isOrderChannel(channel) || tableId === undefined
     || (channel === "table") !== (tableId !== null) || quantity === undefined || productName === undefined
-    || !Array.isArray(rawModifiers) || rawModifiers.length > 200
+    || !Array.isArray(rawModifiers) || rawModifiers.length > 200 || note === undefined
     || (status !== "sent" && status !== "preparing" && status !== "ready") || queuedAt === undefined) return undefined;
   const modifiers: KdsTicketModifierV1[] = [];
   for (const rawModifier of rawModifiers) {
@@ -248,6 +251,7 @@ export function parseKdsTicketV1(value: unknown): KdsTicketV1 | undefined {
   return Object.freeze({
     channel,
     modifiers: Object.freeze(modifiers),
+    note,
     orderId,
     orderItemId,
     orderVersion,

@@ -82,6 +82,7 @@ const ticket = {
   quantity: 2,
   productName: "Hamburguesa",
   modifiers: [{ name: "Sin cebolla", quantity: 1 }],
+  note: "sin cebolla",
   status: "preparing",
   queuedAt: "2026-09-02T22:00:00.100Z",
 };
@@ -91,6 +92,9 @@ expect(parseKdsTicketListV1({ schemaVersion: 1, scope, stationId: "kitchen", tic
 expect(parseKdsTicketListV1({ schemaVersion: 1, scope, stationId: "kitchen", tickets: [{ ...ticket, channel: "counter", tableId: ticket.tableId }], truncated: false }) === undefined, "counter ticket with table fails");
 expect(parseKdsTicketListV1({ schemaVersion: 1, scope, stationId: "kitchen", tickets: [{ ...ticket, orderVersion: 0 }], truncated: false }) === undefined, "non-positive order version fails");
 expect(parseKdsTicketListV1({ schemaVersion: 1, scope, stationId: "kitchen", tickets: [ticket, ticket], truncated: false }) === undefined, "duplicate ticket item fails");
+expect(parseKdsTicketListV1({ schemaVersion: 1, scope, stationId: "kitchen", tickets: [{ ...ticket, note: null }], truncated: false }) !== undefined, "null ticket note parses");
+expect(parseKdsTicketListV1({ schemaVersion: 1, scope, stationId: "kitchen", tickets: [{ ...ticket, note: "" }], truncated: false }) === undefined, "empty ticket note fails");
+expect(parseKdsTicketListV1({ schemaVersion: 1, scope, stationId: "kitchen", tickets: [{ ...ticket, note: "a".repeat(201) }], truncated: false }) === undefined, "oversized ticket note fails");
 
 const accessor = { schemaVersion: 1, scope, stationId: "kitchen" };
 Object.defineProperty(accessor, "stationId", { enumerable: true, get: () => { throw new Error("must not run"); } });
