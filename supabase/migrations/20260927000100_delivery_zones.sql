@@ -163,10 +163,18 @@ create table app.delivery_zone_command_events (
     and ((operation = 'delivery_zone.created') = (expected_version = 0))
   ),
   constraint delivery_zone_events_reason_valid check (
-    (reason is null or (char_length(btrim(reason)) between 1 and 500 and reason !~ '[[:cntrl:]]'))
-    -- Reactivating, or deactivating without touching coverage/fee, always needs an audited motive
-    -- for the operational change (decision 8.1.2-style requirement extended to zone maintenance).
-    and (operation <> 'delivery_zone.updated' or reason is not null)
+    reason is null or (char_length(btrim(reason)) between 1 and 500 and reason !~ '[[:cntrl:]]')
+  ),
+  -- result_zone stores exactly the DeliveryZoneV1 wire shape built by
+  -- app_private.delivery_zone_to_jsonb; this is a cheap belt-and-suspenders shape check, not a
+  -- substitute for the shared-types parser the API applies to the actual response.
+  constraint delivery_zone_events_result_valid check (
+    pg_catalog.jsonb_typeof(result_zone) = 'object'
+    and result_zone ->> 'schemaVersion' = '1'
+    and result_zone ->> 'zoneId' = zone_id::text
+    -- Contract rule (parseUpsertDeliveryZoneCommandV1: "if (!active && reason === null) return
+    -- undefined"): a reason is required exactly when the accepted command deactivated the zone.
+    and (reason is not null or (result_zone ->> 'active')::boolean = true)
   )
 );
 
@@ -179,6 +187,34 @@ comment on table app.delivery_zone_command_events is
 
 -- Roles granted app_private.jsonb_has_exact_keys already exists (menu catalog migration);
 -- reused here unchanged.
+
+-- Single source of truth for the wire shape of one zone: exactly the 12 keys
+-- packages/shared-types/src/delivery-zones.ts DeliveryZoneV1/parseDeliveryZoneV1 require (an
+-- `exactRecord` parse, so an extra or missing key rejects the whole response). Both
+-- app_private.list_delivery_zones and app_private.upsert_delivery_zone must build a zone through
+-- this one function so the two paths can never diverge in shape.
+create function app_private.delivery_zone_to_jsonb(p_zone app.delivery_zones)
+returns jsonb language sql immutable set search_path = '' as $function$
+  select pg_catalog.jsonb_build_object(
+    'schemaVersion', 1,
+    'zoneId', p_zone.id::text,
+    'restaurantId', p_zone.restaurant_id::text,
+    'branchId', p_zone.branch_id::text,
+    'name', p_zone.name,
+    'postalCodes', to_jsonb(p_zone.postal_codes),
+    'localities', to_jsonb(p_zone.localities),
+    'feeMinor', p_zone.fee_minor,
+    'currency', p_zone.currency_code,
+    'active', p_zone.active,
+    'version', p_zone.version,
+    'updatedAt', pg_catalog.to_char(p_zone.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  )
+$function$;
+
+revoke all on function app_private.delivery_zone_to_jsonb(app.delivery_zones) from public, anon, authenticated, service_role, app_api;
+
+comment on function app_private.delivery_zone_to_jsonb(app.delivery_zones) is
+  'Shared zone-row-to-wire-shape constructor: exactly the 12 keys DeliveryZoneV1/parseDeliveryZoneV1 in packages/shared-types/src/delivery-zones.ts require, in the order the codebase already uses. Used by both list_delivery_zones and upsert_delivery_zone so their zone shape can never diverge.';
 
 -- Manager-tier roles allowed to write zones (owner/admin/manager), matching the tier already
 -- used by app_private.create_dining_zone for Branch configuration writes.
@@ -217,24 +253,10 @@ begin
       and g.role_code in ('owner','admin','manager','supervisor','cashier','waiter')
   ) then return pg_catalog.jsonb_build_object('status','denied'); end if;
 
-  select coalesce(pg_catalog.jsonb_agg(z.row_json order by z.name, z.id), '[]'::jsonb)
+  select coalesce(pg_catalog.jsonb_agg(app_private.delivery_zone_to_jsonb(dz) order by dz.name, dz.id), '[]'::jsonb)
   into v_zones
-  from (
-    select dz.id, dz.name, pg_catalog.jsonb_build_object(
-      'schemaVersion', 1,
-      'zoneId', dz.id::text,
-      'name', dz.name,
-      'postalCodes', to_jsonb(dz.postal_codes),
-      'localities', to_jsonb(dz.localities),
-      'feeMinor', dz.fee_minor,
-      'currency', dz.currency_code,
-      'active', dz.active,
-      'version', dz.version,
-      'updatedAt', pg_catalog.to_char(dz.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
-    ) as row_json
-    from app.delivery_zones dz
-    where dz.restaurant_id = v_restaurant and dz.branch_id = v_branch and dz.deleted_at is null
-  ) z;
+  from app.delivery_zones dz
+  where dz.restaurant_id = v_restaurant and dz.branch_id = v_branch and dz.deleted_at is null;
 
   return pg_catalog.jsonb_build_object('schemaVersion', 1,
     'scope', pg_catalog.jsonb_build_object('restaurantId', v_restaurant::text, 'branchId', v_branch::text),
@@ -375,9 +397,12 @@ begin
     or exists (select 1 from pg_catalog.unnest(v_localities) v where v = '' or pg_catalog.char_length(v) > 120 or v ~ '[[:cntrl:]]')
     or pg_catalog.cardinality(v_postal_codes) <> (select count(distinct v) from pg_catalog.unnest(v_postal_codes) v)
     or pg_catalog.cardinality(v_localities) <> (select count(distinct v) from pg_catalog.unnest(v_localities) v)
-    -- Deactivating/soft-touching an existing zone, or reactivating one, is an audited operational
-    -- change and always requires a motive; the very first creation does not.
-    or (v_expected > 0 and v_reason is null)
+    -- Contract rule (packages/shared-types/src/delivery-zones.ts parseUpsertDeliveryZoneCommandV1:
+    -- "if (!active && reason === null) return undefined"): a reason is required exactly when the
+    -- command deactivates a zone (active=false), on creation or update alike (decision 8.1.2
+    -- pattern extended to zone maintenance). It is never required merely because the zone already
+    -- existed; the actor and full command are audited in the journal either way.
+    or (not v_active and v_reason is null)
   then return pg_catalog.jsonb_build_object('status','rejected'); end if;
 
   v_operation := case when v_expected = 0 then 'delivery_zone.created' else 'delivery_zone.updated' end;
@@ -406,7 +431,10 @@ begin
     if v_stored.operation <> v_operation or v_stored.command_fingerprint <> v_fingerprint then
       return pg_catalog.jsonb_build_object('status','conflict');
     end if;
-    return pg_catalog.jsonb_build_object('status','replayed','record',v_stored.result_zone);
+    -- Success envelope matches UpsertDeliveryZoneResultV1 exactly (schemaVersion, zone, replayed):
+    -- no 'status' key here, so the API's rejected/denied/conflict peek never matches a real
+    -- success and the strict exactRecord parse in parseUpsertDeliveryZoneResultV1 succeeds.
+    return pg_catalog.jsonb_build_object('schemaVersion', 1, 'zone', v_stored.result_zone, 'replayed', true);
   end if;
 
   if exists (select 1 from app.delivery_zone_command_events where event_id = v_event) then
@@ -460,19 +488,9 @@ begin
     select * into v_current from app.delivery_zones where restaurant_id = v_restaurant and branch_id = v_branch and id = v_zone;
   end if;
 
-  v_result := pg_catalog.jsonb_build_object(
-    'schemaVersion', 1,
-    'zoneId', v_current.id::text,
-    'scope', pg_catalog.jsonb_build_object('restaurantId', v_restaurant::text, 'branchId', v_branch::text),
-    'name', v_current.name,
-    'postalCodes', to_jsonb(v_current.postal_codes),
-    'localities', to_jsonb(v_current.localities),
-    'feeMinor', v_current.fee_minor,
-    'currency', v_current.currency_code,
-    'active', v_current.active,
-    'version', v_current.version,
-    'updatedAt', pg_catalog.to_char(v_current.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
-  );
+  -- Same constructor as list_delivery_zones (app_private.delivery_zone_to_jsonb), so the two read
+  -- paths can never diverge in shape: exactly the 12 keys DeliveryZoneV1 requires.
+  v_result := app_private.delivery_zone_to_jsonb(v_current);
 
   insert into app.delivery_zone_command_events (
     event_id, restaurant_id, branch_id, zone_id, actor_id, actor_membership_id, device_id,
@@ -484,7 +502,13 @@ begin
     v_occurred, v_observed
   );
 
-  return pg_catalog.jsonb_build_object('status','applied','record',v_result);
+  -- Success envelope matches UpsertDeliveryZoneResultV1 exactly (schemaVersion, zone, replayed).
+  -- Error paths above ('rejected'/'denied'/'conflict') return a disjoint {status: ...} shape
+  -- instead of raising: the API layer peeks `raw.status` first (as apps/api/src/captures.ts
+  -- already does for capture/customer commands) and maps it to its own application errors
+  -- (denied -> authorization, rejected -> request, conflict -> conflict) before attempting the
+  -- strict parseUpsertDeliveryZoneResultV1 decode, which only ever sees a real success/replay.
+  return pg_catalog.jsonb_build_object('schemaVersion', 1, 'zone', v_result, 'replayed', false);
 end
 $function$;
 
@@ -493,6 +517,6 @@ revoke all on function app_private.upsert_delivery_zone(uuid,jsonb) from public,
 grant execute on function app_private.upsert_delivery_zone(uuid,jsonb) to app_api;
 
 comment on function app_private.upsert_delivery_zone(uuid,jsonb) is
-  'Privileged server-only create/update of one delivery zone. Manager-tier only (owner/admin/manager). CAS by expectedVersion; idempotent by (actor, scope, idempotencyKey) fingerprint like app_private.mutate_capture_assignment. Maintains app.delivery_zone_postal_codes so only one active zone can claim a postal code per Branch. Every update beyond creation requires an audited reason.';
+  'Privileged server-only create/update of one delivery zone. Manager-tier only (owner/admin/manager). CAS by expectedVersion; idempotent by (actor, scope, idempotencyKey) fingerprint like app_private.mutate_capture_assignment. Maintains app.delivery_zone_postal_codes so only one active zone can claim a postal code per Branch. A reason is required exactly when the command deactivates a zone (active=false). On success/replay returns exactly UpsertDeliveryZoneResultV1''s shape {schemaVersion, zone, replayed}; on rejection/denial/conflict returns a disjoint {status: "rejected"|"denied"|"conflict"} for the API layer to translate, matching the status-peek convention already used by apps/api/src/captures.ts.';
 
 commit;
