@@ -823,6 +823,8 @@ export class CaptureService {
   public constructor(
     @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
     @Inject(CAPTURE_CREATION_PORT) private readonly creator: CaptureCreationPort,
+    @Inject(CAPTURE_CONFIRMATION_PORT) private readonly confirmation: CaptureConfirmationPort,
+    @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
   ) {}
 
   public async createDraft(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureMutationResultV1> {
@@ -871,17 +873,23 @@ export class CaptureService {
     return result;
   }
 
-  public async readWorkspace(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2 | CaptureWorkspaceV3> {
-    const requestV3 = parseCaptureWorkspaceRequestV3(input);
-    const requestV2 = requestV3 === undefined ? parseCaptureWorkspaceRequestV2(input) : undefined;
-    const request = requestV3 ?? requestV2 ?? parseCaptureWorkspaceRequestV1(input);
+  public async readWorkspace(
+    principal: AuthenticatedPrincipal,
+    input: unknown,
+  ): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2 | CaptureWorkspaceV3 | CaptureWorkspaceV4> {
+    const requestV4 = parseCaptureWorkspaceRequestV4(input);
+    const requestV3 = requestV4 === undefined ? parseCaptureWorkspaceRequestV3(input) : undefined;
+    const requestV2 = requestV4 === undefined && requestV3 === undefined ? parseCaptureWorkspaceRequestV2(input) : undefined;
+    const request = requestV4 ?? requestV3 ?? requestV2 ?? parseCaptureWorkspaceRequestV1(input);
     if (request === undefined) throw new CaptureApplicationError("request");
     let actorId: string;
     try {
       const authorized = await this.authorization.authorizeBranch(principal, request.scope, "captures.read");
       await this.authorization.authorizeBranch(principal, request.scope, "customers.read");
+      if (requestV4 !== undefined) await this.authorization.authorizeBranch(principal, request.scope, "catalog.read");
       actorId = authorized.principal.actorId;
     } catch { throw new CaptureApplicationError("authorization"); }
+    if (requestV4 !== undefined) return this.readWorkspaceV4(actorId, requestV4);
     const reader = requestV3 !== undefined ? this.creator.readWorkspaceV3
       : requestV2 !== undefined ? this.creator.readWorkspaceV2 : this.creator.readWorkspace;
     if (reader === undefined) throw unavailable();
@@ -907,6 +915,45 @@ export class CaptureService {
       if (workspace.detail.captureDraftId !== request.captureDraftId) throw unavailable();
       return workspace;
     } catch { throw unavailable(); }
+  }
+
+  private async readWorkspaceV4(actorId: string, request: CaptureWorkspaceRequestV4): Promise<CaptureWorkspaceV4> {
+    if (this.creator.readWorkspaceV4 === undefined) throw unavailable();
+    let raw: unknown;
+    try { raw = await this.creator.readWorkspaceV4(actorId, request); } catch { throw unavailable(); }
+    const statusOnly = exactRecord(raw, ["status"]);
+    if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
+    if (statusOnly?.status === "missing") throw new CaptureApplicationError("missing");
+    if (statusOnly?.status === "rejected") throw new CaptureApplicationError("request");
+    if (statusOnly !== undefined) throw unavailable();
+    let workspace: CaptureWorkspaceV4;
+    try {
+      workspace = decodeCaptureWorkspaceV4(raw, request.scope);
+      if (workspace.detail.captureDraftId !== request.captureDraftId) throw unavailable();
+    } catch { throw unavailable(); }
+    if (workspace.selectionPlan === null) return withCaptureSelectionProjection(workspace, null);
+    let rawPlan: unknown;
+    try {
+      rawPlan = await this.confirmation.readSelectionPlan(actorId, {
+        schemaVersion: 3, scope: request.scope, captureDraftId: request.captureDraftId,
+      });
+    } catch { throw unavailable(); }
+    const planEnvelope = exactRecord(rawPlan, ["status", "plan"]);
+    if (planEnvelope?.status !== "ok") throw unavailable();
+    const plan = parseCaptureSelectionPlanV1(planEnvelope.plan);
+    if (plan === undefined || plan.catalogVersion !== workspace.selectionPlan.catalogVersion
+      || plan.lines.length !== workspace.selectionPlan.lineCount) throw unavailable();
+    let catalogState;
+    try { catalogState = await this.catalogs.read(actorId, request.scope); } catch { throw unavailable(); }
+    if (catalogState === "forbidden") throw new CaptureApplicationError("authorization");
+    if (catalogState.catalog === null || catalogState.scope.restaurantId !== request.scope.restaurantId
+      || catalogState.scope.branchId !== request.scope.branchId) throw unavailable();
+    // Best-effort: a stale catalog (product retired, group limits changed) must not block reading
+    // the workspace itself, only leave the priced projection unavailable for this read.
+    let projection: CaptureSelectionPlanProjectionV1 | null;
+    try { projection = priceSelectionPlan(plan, catalogState.catalog, request.scope.restaurantId); }
+    catch { projection = null; }
+    return withCaptureSelectionProjection(workspace, projection);
   }
 }
 
