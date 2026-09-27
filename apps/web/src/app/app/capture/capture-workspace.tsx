@@ -573,7 +573,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     return () => window.removeEventListener("keydown", onKeyDown);
   });
   const menuConflict = error === "conflict" && errorOperation === "selectionPlan";
-  return <div className="flex flex-col gap-4" aria-busy={busy}>
+  return <div className={`flex flex-col gap-4 ${capture?.status === "draft" ? "pb-20 sm:pb-0" : ""}`} aria-busy={busy}>
     <div role={error === undefined ? "status" : "alert"} aria-live="polite"
       className={error === undefined ? "text-sm text-text-muted" : "rounded-lg border border-border bg-error-bg p-4 text-sm"}>
       {busy ? "Guardando en el servidor…" : error === undefined ? capture === undefined ? "Crea o recupera un borrador para comenzar."
@@ -862,7 +862,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       <summary className="flex min-h-11 cursor-pointer items-center font-semibold focus-visible:outline-2 focus-visible:outline-accent">Atajos</summary>
       <ul className="mt-2 grid gap-2 text-sm">
         <li><kbd>N</kbd> — Nueva captura desde la bandeja.</li>
-        <li><kbd>/</kbd> — Enfocar la búsqueda de cliente en un borrador editable.</li>
+        <li><kbd>/</kbd> — Enfocar la búsqueda de productos si el menú está visible; si no, la búsqueda de cliente.</li>
         <li><kbd>Esc</kbd> — Volver a la bandeja tras un conflicto o una captura confirmada.</li>
       </ul>
     </details>
