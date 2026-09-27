@@ -35,7 +35,7 @@ import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAuto
 import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
   type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
-import { ariaKeyShortcut, dispatchShortcut, type ShortcutTable } from "../../../lib/shortcut-dispatch";
+import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import { formatDeliveryQuote, quoteMatchesDeliverySnapshot } from "../../../lib/delivery-zones";
 import { deliveryZonesAction } from "../delivery-zones/actions";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
@@ -566,6 +566,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       event.preventDefault();
       if (id === "create") create();
       else if (id === "reset") reset();
+      else if (searchFocusTarget(capture?.status === "draft") === "menu") productSearchRef.current?.focus();
       else searchInputRef.current?.focus();
     }
     window.addEventListener("keydown", onKeyDown);
