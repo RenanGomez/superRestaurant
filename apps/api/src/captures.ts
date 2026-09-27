@@ -745,10 +745,10 @@ export class CaptureSelectionPlanService {
 
     // Validate and price every line against the live, published catalog before persisting anything: an
     // inactive product/option or a group outside its configured limits fails closed with 409, never a
-    // silent reprice or a partially-applied plan.
-    const projection = command.plan.lines.length === 0
-      ? null
-      : priceSelectionPlan(command.plan, catalog, command.scope.restaurantId);
+    // silent reprice or a partially-applied plan. This result is validation-only: the response's
+    // `selectionProjection` is always re-derived below from whatever the write actually produced,
+    // never reused from here, since another write can race in between the persist and the re-read.
+    if (command.plan.lines.length > 0) priceSelectionPlan(command.plan, catalog, command.scope.restaurantId);
 
     let raw: unknown;
     try { raw = await this.persistence.replaceSelectionPlan(actorId, command); } catch { throw unavailable(); }
@@ -783,14 +783,14 @@ export class CaptureSelectionPlanService {
     // read that follows it is a different round trip: another connection may have advanced the
     // draft further in between (an unrelated mutation, or another selection-plan write), so the
     // read is only required to reflect a version at least that fresh, never exactly that one.
-    // A 0-line plan is "no plan": the row was deleted, so `selectionPlan` reads back null.
+    // The stored plan itself is never compared against command.plan either, for the same reason:
+    // if another selection-plan write raced in and won, the response projects THAT plan, not a
+    // stale echo of this one -- see projectStoredSelectionPlan.
     if (workspace.detail.captureDraftId !== command.captureDraftId
-      || workspace.detail.version < appliedRecord.detail.version
-      || (command.plan.lines.length === 0
-        ? workspace.selectionPlan !== null
-        : workspace.selectionPlan === null
-          || workspace.selectionPlan.lineCount !== command.plan.lines.length
-          || workspace.selectionPlan.catalogVersion !== command.plan.catalogVersion)) throw unavailable();
+      || workspace.detail.version < appliedRecord.detail.version) throw unavailable();
+    const projection = await projectStoredSelectionPlan(
+      actorId, command.scope, command.captureDraftId, workspace.selectionPlan, this.confirmation, this.catalogs,
+    );
     return withCaptureSelectionProjection(workspace, projection);
   }
 
@@ -815,30 +815,47 @@ export class CaptureSelectionPlanService {
     let workspace: CaptureWorkspaceV4;
     try { workspace = decodeCaptureWorkspaceV4(rawWorkspace, command.scope); } catch { throw unavailable(); }
     if (workspace.detail.captureDraftId !== command.captureDraftId) throw unavailable();
-    let projection: CaptureSelectionPlanProjectionV1 | null = null;
-    if (workspace.selectionPlan !== null) {
-      try {
-        const rawStoredPlan = await this.confirmation.readSelectionPlan(actorId, {
-          schemaVersion: 3, scope: command.scope, captureDraftId: command.captureDraftId,
-        });
-        const storedPlanEnvelope = exactRecord(rawStoredPlan, ["status", "plan"]);
-        if (storedPlanEnvelope?.status === "ok") {
-          const storedPlan = parseCaptureSelectionPlanV1(storedPlanEnvelope.plan);
-          if (storedPlan !== undefined && storedPlan.lines.length > 0
-            && storedPlan.catalogVersion === workspace.selectionPlan.catalogVersion
-            && storedPlan.lines.length === workspace.selectionPlan.lineCount) {
-            const catalogState = await this.catalogs.read(actorId, command.scope);
-            if (catalogState !== "forbidden" && catalogState.catalog !== null
-              && catalogState.scope.restaurantId === command.scope.restaurantId
-              && catalogState.scope.branchId === command.scope.branchId) {
-              projection = priceSelectionPlan(storedPlan, catalogState.catalog, command.scope.restaurantId);
-            }
-          }
-        }
-      } catch { projection = null; }
-    }
+    const projection = await projectStoredSelectionPlan(
+      actorId, command.scope, command.captureDraftId, workspace.selectionPlan, this.confirmation, this.catalogs,
+    );
     return withCaptureSelectionProjection(workspace, projection);
   }
+}
+
+/**
+ * The one place `selectionProjection` is computed for ANY response (a fresh apply, a replay, or
+ * a plain workspace read): always from the plan actually stored and read alongside this exact
+ * workspace, never from a client-supplied command -- if a different write raced in between,
+ * this projects THAT one, never a stale echo. Fully best-effort: any failure (no stored plan, an
+ * inactive product, or the published catalog having moved to a different catalogVersion since
+ * the plan was stored) yields `null`, never a rejection of the read/write it is attached to.
+ */
+async function projectStoredSelectionPlan(
+  actorId: string,
+  scope: BranchScope,
+  captureDraftId: string,
+  selectionPlan: CaptureWorkspaceV4["selectionPlan"],
+  confirmation: CaptureConfirmationPort,
+  catalogs: MenuCatalogPort,
+): Promise<CaptureSelectionPlanProjectionV1 | null> {
+  if (selectionPlan === null) return null;
+  try {
+    const rawStoredPlan = await confirmation.readSelectionPlan(actorId, { schemaVersion: 3, scope, captureDraftId });
+    const storedPlanEnvelope = exactRecord(rawStoredPlan, ["status", "plan"]);
+    if (storedPlanEnvelope?.status !== "ok") return null;
+    const storedPlan = parseCaptureSelectionPlanV1(storedPlanEnvelope.plan);
+    if (storedPlan === undefined || storedPlan.lines.length === 0
+      || storedPlan.catalogVersion !== selectionPlan.catalogVersion
+      || storedPlan.lines.length !== selectionPlan.lineCount) return null;
+    const catalogState = await catalogs.read(actorId, scope);
+    // The catalogVersion must match the STORED plan's exactly: pricing the same product ids
+    // against a different, later-published catalog can silently return the wrong prices, not
+    // merely a stale-but-consistent one.
+    if (catalogState === "forbidden" || catalogState.catalog === null
+      || catalogState.scope.restaurantId !== scope.restaurantId || catalogState.scope.branchId !== scope.branchId
+      || catalogState.catalog.catalogVersion !== storedPlan.catalogVersion) return null;
+    return priceSelectionPlan(storedPlan, catalogState.catalog, scope.restaurantId);
+  } catch { return null; }
 }
 
 /** Prices every line of a validated selection plan against the live catalog; throws a typed 409 on any mismatch. */
@@ -1039,28 +1056,12 @@ export class CaptureService {
       workspace = decodeCaptureWorkspaceV4(raw, request.scope);
       if (workspace.detail.captureDraftId !== request.captureDraftId) throw unavailable();
     } catch { throw unavailable(); }
-    if (workspace.selectionPlan === null) return withCaptureSelectionProjection(workspace, null);
-    let rawPlan: unknown;
-    try {
-      rawPlan = await this.confirmation.readSelectionPlan(actorId, {
-        schemaVersion: 3, scope: request.scope, captureDraftId: request.captureDraftId,
-      });
-    } catch { throw unavailable(); }
-    const planEnvelope = exactRecord(rawPlan, ["status", "plan"]);
-    if (planEnvelope?.status !== "ok") throw unavailable();
-    const plan = parseCaptureSelectionPlanV1(planEnvelope.plan);
-    if (plan === undefined || plan.catalogVersion !== workspace.selectionPlan.catalogVersion
-      || plan.lines.length !== workspace.selectionPlan.lineCount) throw unavailable();
-    let catalogState;
-    try { catalogState = await this.catalogs.read(actorId, request.scope); } catch { throw unavailable(); }
-    if (catalogState === "forbidden") throw new CaptureApplicationError("authorization");
-    if (catalogState.catalog === null || catalogState.scope.restaurantId !== request.scope.restaurantId
-      || catalogState.scope.branchId !== request.scope.branchId) throw unavailable();
-    // Best-effort: a stale catalog (product retired, group limits changed) must not block reading
-    // the workspace itself, only leave the priced projection unavailable for this read.
-    let projection: CaptureSelectionPlanProjectionV1 | null;
-    try { projection = priceSelectionPlan(plan, catalogState.catalog, request.scope.restaurantId); }
-    catch { projection = null; }
+    // Best-effort, exactly like replace()'s projection: a stale catalog (republished under a
+    // different catalogVersion, a retired product, a changed group limit) must never block
+    // reading the workspace itself, only leave the priced projection null for this read.
+    const projection = await projectStoredSelectionPlan(
+      actorId, request.scope, request.captureDraftId, workspace.selectionPlan, this.confirmation, this.catalogs,
+    );
     return withCaptureSelectionProjection(workspace, projection);
   }
 }
