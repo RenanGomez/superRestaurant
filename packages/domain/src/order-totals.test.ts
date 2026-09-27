@@ -90,6 +90,44 @@ test("line totals use frozen price and modifier snapshots, quantity, and explici
   assert.throws(() => (result.input.snapshot.modifiers as ModifierPriceSnapshot[]).push({} as ModifierPriceSnapshot), TypeError);
 });
 
+test("calculateOrderItemTotals preserves a pizza-fraction snapshot's variantId/geometry/fractionBreakdown bit for bit (S5.1)", () => {
+  const fractionBreakdown = [
+    { fraction: "half-a", flavorOptionId: "flavor-margherita", amountMinor: 10000 },
+    { fraction: "half-b", flavorOptionId: "flavor-pepperoni", amountMinor: 15000 },
+  ];
+  const input = line("fraction-line", {
+    snapshot: {
+      catalogVersion: "menu-v7",
+      productId: "product-pizza",
+      name: "Pizza clasica",
+      stationId: "kitchen",
+      unit: "each",
+      unitPrice: mxn(15000),
+      modifiers: [{ modifierId: "extra:half-a:extra-cheese", name: "Extra cheese", unitPrice: mxn(1000), quantity: 1 }],
+      variantId: "variant-pizza-1",
+      geometry: "halves",
+      fractionBreakdown,
+    },
+  });
+
+  const result = calculateOrderItemTotals(input);
+
+  assert.equal(result.input.snapshot.variantId, "variant-pizza-1");
+  assert.equal(result.input.snapshot.geometry, "halves");
+  assert.deepEqual(result.input.snapshot.fractionBreakdown, fractionBreakdown);
+  assert.equal(Object.isFrozen(result.input.snapshot.fractionBreakdown), true);
+  assert.equal(Object.isFrozen(result.input.snapshot.fractionBreakdown![0]), true);
+  assert.throws(() => {
+    (result.input.snapshot.fractionBreakdown as unknown as { amountMinor: number }[])[0]!.amountMinor = 1;
+  }, TypeError);
+
+  // A snapshot without these optional fields still round-trips with no trace of them (backward compatibility).
+  const plainResult = calculateOrderItemTotals(line("plain-line"));
+  assert.equal(plainResult.input.snapshot.variantId, undefined);
+  assert.equal(plainResult.input.snapshot.geometry, undefined);
+  assert.equal(plainResult.input.snapshot.fractionBreakdown, undefined);
+});
+
 test("calculations clone caller inputs and preserve complete immutable historical facts", () => {
   const input = line("history", {
     quantity: 2,
