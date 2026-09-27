@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode, type FormEvent, t
 import Link from "next/link";
 import type { BranchScope, CustomerDirectoryDetailV1, CustomerDirectoryDetailAddressV1, CustomerDirectorySearchResultV1, CustomerRecentOrderListV1, CustomerPhoneInputV1, CustomerAddressFieldsV1, CustomerSearchModeV1 } from "@super-restaurant/shared-types";
 import { getCustomerAutocompleteRequest, getCustomerDirectorySuggestions, insertCustomerDirectorySuggestion, isCurrentCustomerAutocompleteRequest, type CustomerAutocompleteRequest, type CustomerDirectorySuggestion, type CustomerRequestResult } from "../../../lib/customer-directory";
+import { countOrderArticles } from "../../../lib/customer-order-history";
 
 export type CustomerAction = "search" | "detail" | "profile" | "address" | "validate";
 export type CustomerActionResult = CustomerRequestResult<CustomerDirectorySearchResultV1 | CustomerDirectoryDetailV1> & { readonly command?: unknown };
@@ -234,7 +235,7 @@ function CustomerHistory({ customerId, scope, action }: {
     </div>}
     {state.status === "ready" && state.value.orders.length === 0 && <p className="mt-2 text-sm text-text-muted">Sin pedidos recientes en esta sucursal.</p>}
     {state.status === "ready" && state.value.orders.map(order => <div key={order.orderId} className="mt-3 rounded-lg border border-border p-3 text-sm">
-      <p className="font-semibold">{new Date(order.confirmedAt).toLocaleString("es-MX")} · {order.items.length} artículos</p>
+      <p className="font-semibold">{new Date(order.confirmedAt).toLocaleString("es-MX")} · {countOrderArticles(order.items)} artículos</p>
       <p className="text-text-muted">{order.items.map(item => item.productName).join(" · ")}</p>
     </div>)}
   </section>;
@@ -276,7 +277,7 @@ function AddressForm({ item, branchName, feedback, validating = false, disabled,
     onSave({ ...fields, instructions: item?.address.instructions ?? null, coordinates: item?.address.coordinates ?? null } as unknown as CustomerAddressFieldsV1);
   }}>
     <h3 className="mb-2 font-semibold">{item?.address.label ?? "Nueva dirección"}</h3>
-    {item !== undefined && <p className="mb-3"><span className={`inline-flex min-h-11 items-center rounded-full border px-3 text-sm font-semibold ${item.validatedForRequestedBranch ? "border-success text-text" : "border-border text-text-muted"}`}>{item.validatedForRequestedBranch ? `Validada en ${branchName}` : "Sin validar aquí"}</span>{dirty && <span className="ml-2 text-sm text-text-muted">Cambios sin guardar. Guarda antes de validar.</span>}</p>}
+    {item !== undefined && <p className="mb-3"><span className={`inline-flex min-h-11 items-center rounded-full border px-3 text-sm font-semibold ${!dirty && item.validatedForRequestedBranch ? "border-success text-text" : "border-border text-text-muted"}`}>{dirty ? "Cambios sin guardar · revalidar al guardar" : item.validatedForRequestedBranch ? `Validada en ${branchName}` : "Sin validar aquí"}</span></p>}
     {feedback !== undefined && <p role={feedback.error ? "alert" : "status"} className={`mb-3 rounded-lg border p-3 text-sm ${feedback.error ? "border-error bg-error-bg" : "border-success"}`}>{feedback.message}</p>}
     {validating && <p role="status" className="mb-3 text-sm text-text-muted">Validando esta dirección…</p>}
     <fieldset disabled={disabled} className="grid min-w-0 gap-3 sm:grid-cols-2">
@@ -291,7 +292,7 @@ function AddressForm({ item, branchName, feedback, validating = false, disabled,
       </details>
       <div className="flex flex-wrap gap-2 sm:col-span-2"><button className={buttonClass}>Guardar dirección</button>
         {onCancel !== undefined && <button type="button" className={buttonClass} onClick={onCancel}>Cancelar</button>}
-        {onValidate !== undefined && <button type="button" className={buttonClass} disabled={disabled || dirty || item?.validatedForRequestedBranch === true} onClick={onValidate}>{item?.validatedForRequestedBranch ? "Validada" : validating ? "Validando…" : "Validar para esta sucursal"}</button>}</div>
+        {onValidate !== undefined && <button type="button" className={buttonClass} disabled={disabled || dirty || item?.validatedForRequestedBranch === true} onClick={onValidate}>{dirty ? "Validar para esta sucursal" : item?.validatedForRequestedBranch ? "Validada" : validating ? "Validando…" : "Validar para esta sucursal"}</button>}</div>
     </fieldset>
   </form>;
 }

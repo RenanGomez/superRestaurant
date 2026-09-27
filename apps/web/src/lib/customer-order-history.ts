@@ -6,6 +6,7 @@ import {
   parseCustomerRepeatOrderPreviewV1,
   parseRepeatCustomerOrderIntoCaptureCommandV1,
   type CustomerRecentOrderListV1,
+  type CustomerRecentOrderItemV1,
   type CustomerRepeatOrderCaptureResultV1,
   type CustomerRepeatOrderPreviewV1,
 } from "@super-restaurant/shared-types";
@@ -15,6 +16,10 @@ export type CustomerOrderResult = CustomerRecentOrderListV1 | CustomerRepeatOrde
   | CustomerRepeatOrderPreviewV1;
 export type CustomerOrderRequestResult = Readonly<{ ok: true; value: CustomerOrderResult }>
   | Readonly<{ ok: false; error: "conflict" | "denied" | "invalid" | "missing" | "unavailable" }>;
+
+export function countOrderArticles(items: readonly Pick<CustomerRecentOrderItemV1, "quantity">[]): number {
+  return items.reduce((total, item) => total + item.quantity, 0);
+}
 
 export async function requestCustomerOrder(
   token: string,
