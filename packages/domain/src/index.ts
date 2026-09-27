@@ -392,3 +392,23 @@ export type {
   DeliveryQuoteOverride,
   QuoteDeliveryInput,
 } from "./delivery-quote.js";
+export { resolveFractionPricing } from "./fraction-pricing.js";
+export type {
+  FractionComboSlot,
+  FractionComboSubstitutionOption,
+  FractionExtraOption,
+  FractionFlavorOption,
+  FractionGeometry,
+  FractionIncludedIngredient,
+  FractionOrderItemPriceSnapshot,
+  FractionPriceBreakdownEntry,
+  FractionPricingActorRole,
+  FractionPricingIssue,
+  FractionPricingIssueCode,
+  FractionPricingVariant,
+  PizzaFraction,
+  ResolveFractionComboSubstitutionSelection,
+  ResolveFractionPricingContext,
+  ResolveFractionPricingInput,
+  ResolveFractionSlotSelection,
+} from "./fraction-pricing.js";
