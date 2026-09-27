@@ -5,7 +5,7 @@ import {
 import type { CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
-import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureNoSaleService, CaptureSelectionNoteUnsupportedError, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
+import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
 
 @Controller("captures")
 export class CapturesController {
@@ -164,9 +164,6 @@ export class CapturesController {
   }
   private async execute<Result>(action: () => Promise<Result>): Promise<Result> {
     try { return await action(); } catch (error: unknown) {
-      if (error instanceof CaptureSelectionNoteUnsupportedError) {
-        throw new ConflictException({ code: "CAPTURE_SELECTION_NOTE_UNSUPPORTED" });
-      }
       if (error instanceof CaptureApplicationError) {
         if (error.code === "request") throw new BadRequestException({ code: "CAPTURE_REQUEST_REJECTED" });
         if (error.code === "authorization") throw new ForbiddenException({ code: "ACTION_NOT_AUTHORIZED" });
