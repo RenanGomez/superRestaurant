@@ -725,8 +725,11 @@ export class CaptureSelectionPlanService {
     if (statusOnly !== undefined) throw unavailable();
     let workspace: CaptureWorkspaceV4;
     try { workspace = decodeCaptureWorkspaceV4(rawWorkspace, command.scope); } catch { throw unavailable(); }
+    // On a fresh apply the draft version must be exactly expectedVersion+1 (nothing else could have
+    // committed in between). On replay of an already-applied idempotency key, an unrelated mutation
+    // may have advanced the draft further since then; the stored plan/catalog match is what matters.
     if (workspace.detail.captureDraftId !== command.captureDraftId
-      || workspace.detail.version !== command.expectedVersion + 1
+      || (envelope.status === "applied" && workspace.detail.version !== command.expectedVersion + 1)
       || workspace.selectionPlan === null
       || workspace.selectionPlan.lineCount !== command.plan.lines.length
       || workspace.selectionPlan.catalogVersion !== command.plan.catalogVersion) throw unavailable();

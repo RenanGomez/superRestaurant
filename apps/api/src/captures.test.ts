@@ -34,7 +34,13 @@ const record = {
 function serviceFor(creator: CaptureCreationPort, roles: readonly ("cashier" | "viewer")[] = ["cashier"]) {
   return new CaptureService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles, scope: validCommand.scope }),
-  }), creator);
+  }), creator, {
+    probeConfirmation: async () => { throw new Error("must not probe confirmation"); },
+    readRepeatOrderPlan: async () => { throw new Error("must not read repeat order plan"); },
+    readSelectionPlan: async () => { throw new Error("must not read selection plan"); },
+    confirmDraft: async () => { throw new Error("must not confirm"); },
+  }, { read: async () => { throw new Error("must not read catalog"); },
+    save: async () => { throw new Error("must not save a catalog"); } });
 }
 function code(expected: string) {
   return (error: unknown) => error instanceof CaptureApplicationError && error.code === expected;
@@ -375,7 +381,13 @@ test("capture workspace reads only linked immutable snapshots after fresh captur
   let authorizationChecks = 0;
   const revokedBetweenChecks = new CaptureService(new MembershipAuthorizationService({
     findActiveMembership: async () => authorizationChecks++ === 0 ? { roles: ["cashier"], scope: validCommand.scope } : undefined,
-  }), { createDraft: async () => ({}), readWorkspace: async () => { throw new Error("must not read"); } });
+  }), { createDraft: async () => ({}), readWorkspace: async () => { throw new Error("must not read"); } }, {
+    probeConfirmation: async () => { throw new Error("must not probe confirmation"); },
+    readRepeatOrderPlan: async () => { throw new Error("must not read repeat order plan"); },
+    readSelectionPlan: async () => { throw new Error("must not read selection plan"); },
+    confirmDraft: async () => { throw new Error("must not confirm"); },
+  }, { read: async () => { throw new Error("must not read catalog"); },
+    save: async () => { throw new Error("must not save a catalog"); } });
   await assert.rejects(revokedBetweenChecks.readWorkspace(principal, workspaceRequest), code("authorization"));
   assert.equal(authorizationChecks, 2);
   await assert.rejects(serviceFor({ createDraft: async () => ({}), readWorkspace: async () => ({ ...workspace,
@@ -652,6 +664,35 @@ test("capture selection plan prices every line against the live catalog before p
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
   }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
     save: async () => { throw new Error("must not save a catalog"); } }).replace(principal, variantCommand), code("conflict"));
+});
+
+test("capture selection plan replay returns the stored result even after a later, unrelated mutation", async () => {
+  const advancedWorkspaceV4Record = {
+    schemaVersion: 4,
+    // The draft moved to version 5 through some other mutation after this idempotency key was
+    // first applied at version 2; the replay must not be rejected for failing to match version 2.
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 5, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+  };
+  const persistence: CaptureSelectionPlanPort = {
+    replaceSelectionPlan: async () => ({ status: "replayed", record: advancedWorkspaceV4Record.detail }),
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => advancedWorkspaceV4Record,
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } });
+  const result = await service.replace(principal, selectionPlanCommand);
+  assert.equal(result.detail.version, 5);
+  assert.equal(result.selectionPlan?.lineCount, 1);
+  assert.equal(result.selectionProjection?.subtotalMinor, 9_000);
 });
 
 test("capture tray authorizes, binds scope and rejects hostile persistence", async () => {
