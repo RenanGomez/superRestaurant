@@ -293,14 +293,18 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   ): Promise<void> {
     if (sheetProduct === undefined) return;
     const productId = sheetProduct.productId;
+    const lineId = crypto.randomUUID();
     setSelectionBusy(true);
     const projection = await sendSelectionPlan(applyLineChange(selectionDraftLines(),
-      { type: "add", lineId: crypto.randomUUID(), productId, quantity, modifierGroups, note }));
+      { type: "add", lineId, productId, quantity, modifierGroups, note }));
     setSelectionBusy(false);
     if (projection === undefined) return;
-    const matched = (projection?.lines ?? []).find((line) => line.productId === productId
-      && sameProjectionModifiers(line.modifiers, modifierGroups))
-      ?? (projection?.lines ?? []).find((line) => line.productId === productId);
+    // Match by the freshly generated lineId, never by productId+modifiers: a prior line with the
+    // same product/selection but a different note (or merged by applyLineChange's own note-aware
+    // matching) must not be mistaken for the one just confirmed.
+    const matched = (projection?.lines ?? []).find((line) => line.lineId === lineId)
+      ?? (projection?.lines ?? []).find((line) => line.productId === productId
+        && sameProjectionModifiers(line.modifiers, modifierGroups) && line.note === note);
     setSheetConfirmedTotalMinor(matched?.lineTotalMinor ?? null);
     window.setTimeout(() => {
       setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined);
