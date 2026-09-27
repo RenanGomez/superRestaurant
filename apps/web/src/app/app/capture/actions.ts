@@ -6,8 +6,9 @@ import { requestCapture, type CaptureOperation, type CaptureRequestResult } from
 import { customerOperations, requestCustomerDirectory } from "../../../lib/customer-directory";
 import { requestCustomerOrder, type CustomerOrderOperation } from "../../../lib/customer-order-history";
 import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
+import { getMenuCatalog } from "../../../lib/menu-catalog";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
-import type { CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkTrayResultV1, CustomerDirectoryDetailV1, CustomerDirectorySearchResultV1, CustomerRecentOrderListV1, CustomerRepeatOrderCaptureResultV1, CustomerRepeatOrderPreviewV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
+import type { BranchScope, CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkTrayResultV1, CustomerDirectoryDetailV1, CustomerDirectorySearchResultV1, CustomerRecentOrderListV1, CustomerRepeatOrderCaptureResultV1, CustomerRepeatOrderPreviewV1, MenuCatalogStateV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 export type CaptureWorkspaceOperation=CaptureOperation|CustomerOrderOperation|"search"|"detail";
 export type CaptureWorkspaceResult=CaptureRequestResult<CaptureAssignmentDirectoryV1|CaptureDeliveryInstructionSuggestionsV1|CaptureMutationResultV1|CaptureWorkspaceV3|CaptureWorkspaceV4|CaptureWorkTrayResultV1|SetCaptureDeliveryInstructionsResultV1|CustomerDirectorySearchResultV1|CustomerDirectoryDetailV1|CustomerRecentOrderListV1|CustomerRepeatOrderPreviewV1|CustomerRepeatOrderCaptureResultV1>&{readonly command?:unknown};
 export async function captureWorkspaceAction(operation:CaptureWorkspaceOperation,input:unknown):Promise<CaptureWorkspaceResult>{
@@ -23,4 +24,18 @@ export async function captureWorkspaceAction(operation:CaptureWorkspaceOperation
  }
  const body=typeof input==="object"&&input!==null?input as{scope?:{restaurantId?:string;branchId?:string}}:{};if(!("scope" in body)||body.scope?.restaurantId!==scope.restaurantId||body.scope.branchId!==scope.branchId)return{ok:false,error:"invalid"};
  const result=await requestCapture(session.access_token,env.apiBaseUrl,operation,input);return result.ok?result:{...result,command:result.error==="unavailable"?input:undefined};
+}
+
+/**
+ * Read-only reload of the menu catalog for the caller's currently selected scope; used only to
+ * recover from a `selectionPlan` conflict ("the menu changed"). Never touches Order/Payment/
+ * CashMovement and does not accept a caller-supplied scope: it re-derives one from the session
+ * cookie exactly like every other Capture operation.
+ */
+export async function reloadCaptureCatalog(requestedScope: BranchScope): Promise<MenuCatalogStateV1 | undefined> {
+ const supabase=await createServerSupabaseClient();const {data:{session}}=await supabase.auth.getSession();if(session===null)return undefined;
+ const scope=parseBranchPreference((await cookies()).get(BRANCH_PREFERENCE_COOKIE)?.value);if(scope===undefined)return undefined;
+ if(requestedScope.restaurantId!==scope.restaurantId||requestedScope.branchId!==scope.branchId)return undefined;
+ const env=getServerEnv();const memberships=await listMemberships(session.access_token,env.apiBaseUrl);if(memberships===undefined||findMembership(memberships.memberships,scope)===undefined||await authorizeBranch(session.access_token,env.apiBaseUrl,scope)===undefined)return undefined;
+ return getMenuCatalog(session.access_token,env.apiBaseUrl,scope);
 }

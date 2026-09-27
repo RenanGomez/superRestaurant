@@ -14,6 +14,7 @@ import type {
   CaptureFulfillmentSnapshotV1,
   CaptureMutationResultV1,
   CaptureRepeatOrderPlanSummaryV1,
+  CaptureSelectionPlanProjectionV1,
   CaptureSourceChannelV1,
   CaptureWorkspaceV3,
   CaptureWorkTrayResultV1,
@@ -24,15 +25,23 @@ import type {
   CustomerRepeatOrderCaptureResultV1,
   CustomerRepeatOrderPreviewIssueV1,
   CustomerRepeatOrderPreviewV1,
+  MenuCatalogStateV1,
+  MenuModifierGroupV1,
+  MenuProductV1,
 } from "@super-restaurant/shared-types";
 
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
   rehydrateCaptureWorkspace } from "../../../lib/capture-workspace";
+import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
+  type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import { ariaKeyShortcut, dispatchShortcut, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import { formatDeliveryQuote, quoteMatchesDeliverySnapshot } from "../../../lib/delivery-zones";
 import { deliveryZonesAction } from "../delivery-zones/actions";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
+import { CaptureMenu } from "./capture-menu";
+import { CaptureTicket } from "./capture-ticket";
+import { ProductSheet } from "./product-sheet";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
 const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
@@ -65,15 +74,21 @@ interface CaptureWorkspaceParameters {
   readonly action: (operation: CaptureWorkspaceOperation, input: unknown) => Promise<CaptureWorkspaceResult>;
   readonly confirmationContext?: CaptureConfirmationContext;
   readonly canManageAssignment: boolean;
+  readonly catalog: MenuCatalogStateV1;
+  readonly reloadCatalog: (scope: BranchScope) => Promise<MenuCatalogStateV1 | undefined>;
 }
 type ActionReply = Awaited<ReturnType<CaptureWorkspaceParameters["action"]>>;
 
-export function CaptureWorkspace({ scope, action, confirmationContext, canManageAssignment }: CaptureWorkspaceParameters): ReactNode {
+export function CaptureWorkspace({ scope, action, confirmationContext, canManageAssignment, catalog: initialCatalog,
+  reloadCatalog }: CaptureWorkspaceParameters): ReactNode {
+  const [catalog, setCatalog] = useState(initialCatalog);
+  const [catalogReloading, setCatalogReloading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [deviceId] = useState(() => captureDeviceId(typeof window === "undefined" ? undefined : window.localStorage,
     () => crypto.randomUUID()));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<keyof typeof messages>();
+  const [errorOperation, setErrorOperation] = useState<CaptureWorkspaceOperation>();
   const [pending, setPending] = useState<{ operation: CaptureWorkspaceOperation; command: unknown }>();
   const [capture, setCapture] = useState<CaptureDraftDetailV1 | CaptureDraftDetailV2>();
   const [tray, setTray] = useState<readonly CaptureDraftSummaryV1[]>([]);
@@ -103,6 +118,13 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [quoteError, setQuoteError] = useState<string>();
   const [quoteBusy, setQuoteBusy] = useState(false);
   const quoteSequence = useRef(0);
+  const [selectionProjection, setSelectionProjection] = useState<CaptureSelectionPlanProjectionV1 | null>(null);
+  const [sheetProduct, setSheetProduct] = useState<MenuProductV1>();
+  const [sheetGroups, setSheetGroups] = useState<readonly MenuModifierGroupV1[]>([]);
+  const [sheetConfirmedTotalMinor, setSheetConfirmedTotalMinor] = useState<number | null>();
+  const [selectionBusy, setSelectionBusy] = useState(false);
+  const [selectionBusyLineId, setSelectionBusyLineId] = useState<string>();
+  const productSearchRef = useRef<HTMLInputElement>(null);
 
   function invalidateQuote(): void {
     quoteSequence.current += 1;
@@ -118,12 +140,14 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       : undefined;
     setBusy(true);
     setError(undefined);
+    setErrorOperation(undefined);
     let reply: ActionReply;
     try { reply = await action(operation, command); }
     catch { reply = { ok: false, error: "unavailable", command }; }
     setBusy(false);
     if (!reply.ok) {
       setError(reply.error);
+      setErrorOperation(operation);
       setPending(reply.error === "unavailable" ? { operation, command: reply.command ?? command } : undefined);
       if (persistedAutosave !== undefined && reply.error !== "unavailable") {
         clearPendingCaptureAutosave(window.localStorage, persistedAutosave);
@@ -181,6 +205,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setCustomerSnapshot(hydrated.customerSnapshot);
     setFulfillmentSnapshot(hydrated.fulfillmentSnapshot);
     setRepeatOrderPlan(hydrated.repeatOrderPlan);
+    setSelectionProjection(hydrated.selectionProjection);
     setRecentOrders((current) => current?.customerId === hydrated.customerSnapshot?.customerId ? current : undefined);
     setRepeatPreview((current) => current?.customerId === hydrated.customerSnapshot?.customerId ? current : undefined);
     setSelectedContact(hydrated.customerSnapshot?.contactId);
@@ -206,6 +231,98 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     return { schemaVersion: 1, scope, captureDraftId: capture.captureDraftId, expectedVersion: capture.version,
       attentionLeaseId: capture.attentionLeaseId, eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(),
       deviceId, occurredAt: new Date().toISOString() };
+  }
+
+  function selectionDraftLines(): readonly SelectionPlanLineDraft[] {
+    return (selectionProjection?.lines ?? []).map((line) => {
+      const byGroup = new Map<string, SelectionPlanModifierGroupDraft["selections"][number][]>();
+      for (const modifier of line.modifiers) {
+        const existing = byGroup.get(modifier.groupId) ?? [];
+        existing.push({ optionId: modifier.optionId, quantity: modifier.quantity });
+        byGroup.set(modifier.groupId, existing);
+      }
+      const modifierGroups: SelectionPlanModifierGroupDraft[] = [...byGroup.entries()]
+        .map(([groupId, selections]) => ({ groupId, selections }));
+      return { lineId: line.lineId, productId: line.productId, quantity: line.quantity, modifierGroups };
+    });
+  }
+
+  /**
+   * Replaces the whole selection plan; on an uncertain transport result it replays exactly once
+   * with the same idempotency key. Returns the server-priced projection on success (`null` if the
+   * plan is now empty) so callers can show a confirmed amount without ever summing locally.
+   */
+  async function sendSelectionPlan(
+    lines: readonly SelectionPlanLineDraft[],
+  ): Promise<CaptureSelectionPlanProjectionV1 | null | undefined> {
+    if (capture === undefined || capture.attentionLeaseId === null || catalog.catalog === null) return undefined;
+    const command = { ...base(), plan: buildSelectionPlan(lines, catalog.catalog.catalogVersion) };
+    let reply = await run("selectionPlan", command);
+    if (reply !== undefined && !reply.ok && reply.error === "unavailable") {
+      reply = await run("selectionPlan", (reply as { command?: unknown }).command ?? command);
+    }
+    if (reply?.ok !== true) return undefined;
+    const hydrated = rehydrateCaptureWorkspace(reply.value);
+    return hydrated === undefined ? undefined : hydrated.selectionProjection;
+  }
+
+  function openProduct(product: MenuProductV1, groups: readonly MenuModifierGroupV1[]): void {
+    if (locked || selectionBusy) return;
+    if (groups.length === 0) {
+      void addDirect(product.productId);
+      return;
+    }
+    setSheetProduct(product);
+    setSheetGroups(groups);
+  }
+
+  async function addDirect(productId: string): Promise<void> {
+    setSelectionBusy(true);
+    await sendSelectionPlan(applyLineChange(selectionDraftLines(),
+      { type: "add", lineId: crypto.randomUUID(), productId, quantity: 1, modifierGroups: [] }));
+    setSelectionBusy(false);
+  }
+
+  async function addFromSheet(quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[]): Promise<void> {
+    if (sheetProduct === undefined) return;
+    const productId = sheetProduct.productId;
+    setSelectionBusy(true);
+    const projection = await sendSelectionPlan(applyLineChange(selectionDraftLines(),
+      { type: "add", lineId: crypto.randomUUID(), productId, quantity, modifierGroups }));
+    setSelectionBusy(false);
+    if (projection === undefined) return;
+    const matched = (projection?.lines ?? []).find((line) => line.productId === productId
+      && sameProjectionModifiers(line.modifiers, modifierGroups))
+      ?? (projection?.lines ?? []).find((line) => line.productId === productId);
+    setSheetConfirmedTotalMinor(matched?.lineTotalMinor ?? null);
+    window.setTimeout(() => {
+      setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined);
+    }, 900);
+  }
+
+  /** Recovers from a `selectionPlan` conflict caused by a stale `catalogVersion`: re-reads the
+   * catalog (read-only) and the workspace, but never retries the write that failed. */
+  async function reloadMenu(): Promise<void> {
+    if (capture === undefined) return;
+    setCatalogReloading(true);
+    const fresh = await reloadCatalog(scope);
+    if (fresh !== undefined) setCatalog(fresh);
+    setCatalogReloading(false);
+    setError(undefined);
+    setErrorOperation(undefined);
+    await refreshWorkspace(capture.captureDraftId);
+  }
+
+  async function changeLineQuantity(lineId: string, delta: 1 | -1): Promise<void> {
+    setSelectionBusyLineId(lineId);
+    await sendSelectionPlan(applyLineChange(selectionDraftLines(), { type: delta === 1 ? "increment" : "decrement", lineId }));
+    setSelectionBusyLineId(undefined);
+  }
+
+  async function removeLine(lineId: string): Promise<void> {
+    setSelectionBusyLineId(lineId);
+    await sendSelectionPlan(applyLineChange(selectionDraftLines(), { type: "remove", lineId }));
+    setSelectionBusyLineId(undefined);
   }
 
   function create(): void {
@@ -416,8 +533,10 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setCapture(undefined); setResults(undefined); setCustomer(undefined); setCustomerSnapshot(null);
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
     setRepeatOrderPlan(null);
+    setSelectionProjection(null); setSheetProduct(undefined); setSheetGroups([]); setSelectionBusy(false); setSelectionBusyLineId(undefined);
+    setSheetConfirmedTotalMinor(undefined);
     setRecentOrders(undefined); setRepeatPreview(undefined);
-    setError(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
+    setError(undefined); setErrorOperation(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
     setDeliveryInstructions("");
     setDeliveryInstructionSuggestions([]);
     setSelectedShiftId("");
@@ -452,13 +571,16 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   });
+  const menuConflict = error === "conflict" && errorOperation === "selectionPlan";
   return <div className="flex flex-col gap-4" aria-busy={busy}>
     <div role={error === undefined ? "status" : "alert"} aria-live="polite"
       className={error === undefined ? "text-sm text-text-muted" : "rounded-lg border border-border bg-error-bg p-4 text-sm"}>
       {busy ? "Guardando en el servidor…" : error === undefined ? capture === undefined ? "Crea o recupera un borrador para comenzar."
-        : `Borrador ${capture.folio} · versión ${capture.version}` : messages[error]}
-      {pending !== undefined && <button className={`${button} ml-3`} onClick={retryPending}>Reintentar misma operación</button>}
-      {(error === "conflict" || capture?.status === "confirmed") && <button className={`${button} ml-3`}
+        : `Borrador ${capture.folio} · versión ${capture.version}` : menuConflict ? "El menú cambió; vuelve a cargar." : messages[error]}
+      {menuConflict && <button className={`${button} ml-3`} disabled={busy || catalogReloading}
+        onClick={() => void reloadMenu()}>{catalogReloading ? "Recargando…" : "Recargar menú"}</button>}
+      {!menuConflict && pending !== undefined && <button className={`${button} ml-3`} onClick={retryPending}>Reintentar misma operación</button>}
+      {!menuConflict && (error === "conflict" || capture?.status === "confirmed") && <button className={`${button} ml-3`}
         aria-keyshortcuts={ariaKeyShortcut("reset")} disabled={busy} onClick={reset}>Volver a la bandeja</button>}
     </div>
     {capture === undefined ? <>
@@ -515,6 +637,26 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           <option value="pickup" disabled={fulfillmentSnapshot !== null}>Recoger</option><option value="counter" disabled={fulfillmentSnapshot !== null}>Mostrador</option>
           <option value="dine_in" disabled={fulfillmentSnapshot !== null}>Mesa</option></select></label></div>
       </section>
+      {capture.status === "draft" && <section className={`${panel} flex min-h-[520px] flex-col overflow-hidden p-0`} data-testid="capture-menu-section">
+        <h2 className="sr-only">Menú</h2>
+        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+          <CaptureMenu catalog={catalog.catalog} currency={catalog.catalog?.currency ?? "MXN"}
+            lineQuantities={(selectionProjection?.lines ?? []).reduce(
+              (map, line) => map.set(line.productId, (map.get(line.productId) ?? 0) + line.quantity),
+              new Map<string, number>())}
+            busy={selectionBusy || selectionBusyLineId !== undefined} searchInputRef={productSearchRef}
+            onSelectProduct={openProduct} />
+          <CaptureTicket projection={selectionProjection} busyLineId={selectionBusyLineId} locked={locked}
+            onIncrement={(lineId) => void changeLineQuantity(lineId, 1)}
+            onDecrement={(lineId) => void changeLineQuantity(lineId, -1)}
+            onRemove={(lineId) => void removeLine(lineId)}
+            onHold={reset} />
+        </div>
+      </section>}
+      {sheetProduct !== undefined && <ProductSheet product={sheetProduct} groups={sheetGroups}
+        currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy} confirmedTotalMinor={sheetConfirmedTotalMinor}
+        onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); }}
+        onAdd={(quantity, modifierGroups) => void addFromSheet(quantity, modifierGroups)} />}
       {capture.status === "draft" && canManageAssignment && <section className={panel} data-testid="capture-transfer">
         <h2 className="font-heading text-lg font-semibold">Transferir captura</h2>
         <p className="mt-1 text-sm text-text-muted">El operador destino recibirá un lease nuevo. Esta estación dejará de editar la captura.</p>
@@ -721,6 +863,19 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       </ul>
     </details>
   </div>;
+}
+
+/** Best-effort UI match between a projected line's flat modifiers and the requested draft groups; only used to pick which confirmed amount to show, never to compute money. */
+function sameProjectionModifiers(
+  projected: readonly { readonly groupId: string; readonly optionId: string; readonly quantity: number }[],
+  requested: readonly SelectionPlanModifierGroupDraft[],
+): boolean {
+  const canonical = (entries: readonly { readonly groupId: string; readonly optionId: string; readonly quantity: number }[]) =>
+    [...entries].map((entry) => `${entry.groupId}:${entry.optionId}:${entry.quantity}`).sort();
+  const projectedKeys = canonical(projected);
+  const requestedKeys = canonical(requested.flatMap((group) => group.selections.map((selection) =>
+    ({ groupId: group.groupId, optionId: selection.optionId, quantity: selection.quantity }))));
+  return projectedKeys.length === requestedKeys.length && projectedKeys.every((key, index) => key === requestedKeys[index]);
 }
 
 function money(amountMinor: number, currency: string): string {
