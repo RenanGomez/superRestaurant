@@ -13,12 +13,16 @@ interface ProductSheetProps {
   readonly groups: readonly MenuModifierGroupV1[];
   readonly currency: string;
   readonly busy: boolean;
+  /** `undefined` while nothing was just confirmed; `null` once added if no matching server line
+   * was found; a minor-unit amount taken directly from the server's `selectionProjection` line. */
+  readonly confirmedTotalMinor?: number | null | undefined;
   readonly onClose: () => void;
   readonly onAdd: (quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[]) => void;
 }
 
 /** In-app "hoja" for choosing a product's modifier groups; never uses `window.prompt`. */
-export function ProductSheet({ product, groups, currency, busy, onClose, onAdd }: ProductSheetProps) {
+export function ProductSheet({ product, groups, currency, busy, confirmedTotalMinor, onClose, onAdd }: ProductSheetProps) {
+  const confirmed = confirmedTotalMinor !== undefined;
   const [quantity, setQuantity] = useState(1);
   const [selections, setSelections] = useState<Record<string, readonly string[]>>({});
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -75,7 +79,7 @@ export function ProductSheet({ product, groups, currency, busy, onClose, onAdd }
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {group.options.map((option) => {
               const isSelected = (selections[group.groupId] ?? []).includes(option.optionId);
-              return <button key={option.optionId} type="button" disabled={!option.active}
+              return <button key={option.optionId} type="button" disabled={!option.active || confirmed}
                 className={`${optionButton} ${isSelected ? optionSelected : ""} ${!option.active ? "opacity-50" : ""}`}
                 onClick={() => toggleOption(group, option.optionId)}>
                 <span>{option.name}</span>
@@ -85,18 +89,22 @@ export function ProductSheet({ product, groups, currency, busy, onClose, onAdd }
           </div>
         </fieldset>)}
       </div>
+      {confirmed && <p role="status" aria-live="polite" className="mx-4 rounded-lg bg-success-bg px-3 py-2 text-sm font-semibold text-success">
+        {confirmedTotalMinor === null ? "Agregado" : `Agregado · ${money(confirmedTotalMinor, currency)}`}
+      </p>}
       <footer className="flex flex-wrap items-center gap-3 border-t border-border p-4">
         <div className="flex items-center gap-2">
-          <button type="button" className={`${button} text-xl`} aria-label="Menos" disabled={busy || quantity <= 1}
+          <button type="button" className={`${button} text-xl`} aria-label="Menos" disabled={busy || confirmed || quantity <= 1}
             onClick={() => setQuantity((current) => Math.max(1, current - 1))}>−</button>
           <span className="min-w-9 text-center text-lg font-bold">{quantity}</span>
-          <button type="button" className={`${button} text-xl`} aria-label="Más" disabled={busy}
+          <button type="button" className={`${button} text-xl`} aria-label="Más" disabled={busy || confirmed}
             onClick={() => setQuantity((current) => current + 1)}>+</button>
         </div>
         <span className="grow" />
-        <button type="button" className={`${button} bg-accent text-white`} disabled={busy || !allValid}
+        <button type="button" className={`${button} bg-accent text-white`} disabled={busy || confirmed || !allValid}
           onClick={() => onAdd(quantity, groupDrafts)}>
-          {busy ? "Calculando…" : !allValid ? "Completa lo obligatorio" : "Agregar"}
+          {busy ? "Calculando…" : confirmed ? (confirmedTotalMinor === null ? "Agregado" : `Agregado · ${money(confirmedTotalMinor, currency)}`)
+            : !allValid ? "Completa lo obligatorio" : "Agregar"}
         </button>
       </footer>
     </div>

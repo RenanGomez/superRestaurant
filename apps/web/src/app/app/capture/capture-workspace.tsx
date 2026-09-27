@@ -121,6 +121,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [selectionProjection, setSelectionProjection] = useState<CaptureSelectionPlanProjectionV1 | null>(null);
   const [sheetProduct, setSheetProduct] = useState<MenuProductV1>();
   const [sheetGroups, setSheetGroups] = useState<readonly MenuModifierGroupV1[]>([]);
+  const [sheetConfirmedTotalMinor, setSheetConfirmedTotalMinor] = useState<number | null>();
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [selectionBusyLineId, setSelectionBusyLineId] = useState<string>();
   const productSearchRef = useRef<HTMLInputElement>(null);
@@ -246,15 +247,23 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     });
   }
 
-  /** Replaces the whole selection plan; on an uncertain transport result it replays exactly once with the same idempotency key. */
-  async function sendSelectionPlan(lines: readonly SelectionPlanLineDraft[]): Promise<boolean> {
-    if (capture === undefined || capture.attentionLeaseId === null || catalog.catalog === null) return false;
+  /**
+   * Replaces the whole selection plan; on an uncertain transport result it replays exactly once
+   * with the same idempotency key. Returns the server-priced projection on success (`null` if the
+   * plan is now empty) so callers can show a confirmed amount without ever summing locally.
+   */
+  async function sendSelectionPlan(
+    lines: readonly SelectionPlanLineDraft[],
+  ): Promise<CaptureSelectionPlanProjectionV1 | null | undefined> {
+    if (capture === undefined || capture.attentionLeaseId === null || catalog.catalog === null) return undefined;
     const command = { ...base(), plan: buildSelectionPlan(lines, catalog.catalog.catalogVersion) };
     let reply = await run("selectionPlan", command);
     if (reply !== undefined && !reply.ok && reply.error === "unavailable") {
       reply = await run("selectionPlan", (reply as { command?: unknown }).command ?? command);
     }
-    return reply?.ok === true;
+    if (reply?.ok !== true) return undefined;
+    const hydrated = rehydrateCaptureWorkspace(reply.value);
+    return hydrated === undefined ? undefined : hydrated.selectionProjection;
   }
 
   function openProduct(product: MenuProductV1, groups: readonly MenuModifierGroupV1[]): void {
@@ -276,11 +285,19 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   async function addFromSheet(quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[]): Promise<void> {
     if (sheetProduct === undefined) return;
+    const productId = sheetProduct.productId;
     setSelectionBusy(true);
-    const ok = await sendSelectionPlan(applyLineChange(selectionDraftLines(),
-      { type: "add", lineId: crypto.randomUUID(), productId: sheetProduct.productId, quantity, modifierGroups }));
+    const projection = await sendSelectionPlan(applyLineChange(selectionDraftLines(),
+      { type: "add", lineId: crypto.randomUUID(), productId, quantity, modifierGroups }));
     setSelectionBusy(false);
-    if (ok) { setSheetProduct(undefined); setSheetGroups([]); }
+    if (projection === undefined) return;
+    const matched = (projection?.lines ?? []).find((line) => line.productId === productId
+      && sameProjectionModifiers(line.modifiers, modifierGroups))
+      ?? (projection?.lines ?? []).find((line) => line.productId === productId);
+    setSheetConfirmedTotalMinor(matched?.lineTotalMinor ?? null);
+    window.setTimeout(() => {
+      setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined);
+    }, 900);
   }
 
   /** Recovers from a `selectionPlan` conflict caused by a stale `catalogVersion`: re-reads the
@@ -517,6 +534,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
     setRepeatOrderPlan(null);
     setSelectionProjection(null); setSheetProduct(undefined); setSheetGroups([]); setSelectionBusy(false); setSelectionBusyLineId(undefined);
+    setSheetConfirmedTotalMinor(undefined);
     setRecentOrders(undefined); setRepeatPreview(undefined);
     setError(undefined); setErrorOperation(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
     setDeliveryInstructions("");
@@ -636,8 +654,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         </div>
       </section>}
       {sheetProduct !== undefined && <ProductSheet product={sheetProduct} groups={sheetGroups}
-        currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy}
-        onClose={() => { setSheetProduct(undefined); setSheetGroups([]); }}
+        currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy} confirmedTotalMinor={sheetConfirmedTotalMinor}
+        onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); }}
         onAdd={(quantity, modifierGroups) => void addFromSheet(quantity, modifierGroups)} />}
       {capture.status === "draft" && canManageAssignment && <section className={panel} data-testid="capture-transfer">
         <h2 className="font-heading text-lg font-semibold">Transferir captura</h2>
@@ -845,6 +863,19 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       </ul>
     </details>
   </div>;
+}
+
+/** Best-effort UI match between a projected line's flat modifiers and the requested draft groups; only used to pick which confirmed amount to show, never to compute money. */
+function sameProjectionModifiers(
+  projected: readonly { readonly groupId: string; readonly optionId: string; readonly quantity: number }[],
+  requested: readonly SelectionPlanModifierGroupDraft[],
+): boolean {
+  const canonical = (entries: readonly { readonly groupId: string; readonly optionId: string; readonly quantity: number }[]) =>
+    [...entries].map((entry) => `${entry.groupId}:${entry.optionId}:${entry.quantity}`).sort();
+  const projectedKeys = canonical(projected);
+  const requestedKeys = canonical(requested.flatMap((group) => group.selections.map((selection) =>
+    ({ groupId: group.groupId, optionId: selection.optionId, quantity: selection.quantity }))));
+  return projectedKeys.length === requestedKeys.length && projectedKeys.every((key, index) => key === requestedKeys[index]);
 }
 
 function money(amountMinor: number, currency: string): string {
