@@ -74,6 +74,8 @@ export function materializeCaptureOrder(
   return appendMaterializedItems(base, command, actorId, domainCatalog, plan.lines.map((line) => ({
     identity: line.sourceOrderItemId,
     modifierGroups: line.modifierGroups,
+    // A repeated order never carries forward a prior line's kitchen note.
+    note: null,
     productId: line.productId,
     quantity: line.quantity,
   })), "capture-repeat");
@@ -105,6 +107,7 @@ export function materializeCaptureSelectionOrder(
   return appendMaterializedItems(base, command, actorId, domainCatalog, plan.lines.map((line) => ({
     identity: line.lineId,
     modifierGroups: line.modifierGroups,
+    note: line.note,
     productId: line.productId,
     quantity: line.quantity,
   })), "capture-selection");
@@ -133,6 +136,7 @@ interface MaterializableLine {
     groupId: string;
     selections: readonly Readonly<{ optionId: string; quantity: number }>[];
   }>[];
+  readonly note: string | null;
   readonly productId: string;
   readonly quantity: number;
 }
@@ -157,6 +161,7 @@ function appendMaterializedItems(
       orderItemId: derivedUuid(`${namespace}-item`, command.eventId, line.identity),
       quantity: line.quantity,
       snapshot,
+      note: line.note,
     }, {
       ...audit(command, actorId),
       eventId: derivedUuid(`${namespace}-event`, command.eventId, line.identity),

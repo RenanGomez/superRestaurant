@@ -17,6 +17,7 @@ export {
   InvalidMoneyAmountError,
   InvalidMoneyRoundingModeError,
   InvalidOrderItemTransitionError,
+  InvalidOrderItemNoteError,
   InvalidOrderDiscountAllocationStrategyError,
   InvalidOrderStateError,
   InvalidModifierGroupBoundsError,

@@ -114,6 +114,7 @@ export interface PersistedOrderItemV1 {
   readonly snapshot: PersistedOrderItemPriceSnapshotV1;
   readonly quantity: number;
   readonly lineDiscount?: PersistedDiscountSnapshotV1;
+  readonly note?: string | null;
   readonly restaurantId: string;
   readonly branchId: string;
   readonly status: OrderItem["status"];
@@ -352,6 +353,7 @@ function encodeOrderItem(item: OrderItem): PersistedOrderItemV1 {
     snapshot: encodePriceSnapshot(item.snapshot),
     quantity: item.quantity,
     ...(item.lineDiscount === undefined ? {} : { lineDiscount: encodeDiscount(item.lineDiscount) }),
+    ...(item.note === undefined ? {} : { note: item.note }),
     restaurantId: item.restaurantId,
     branchId: item.branchId,
     status: item.status,
@@ -360,13 +362,16 @@ function encodeOrderItem(item: OrderItem): PersistedOrderItemV1 {
 }
 
 function decodeOrderItem(value: unknown): OrderItem {
-  const record = exactRecord(value, ["orderItemId", "snapshot", "quantity", "restaurantId", "branchId", "status"], ["lineDiscount", "cancellationAudit"], "order item");
+  const record = exactRecord(value, ["orderItemId", "snapshot", "quantity", "restaurantId", "branchId", "status"], ["lineDiscount", "note", "cancellationAudit"], "order item");
   const quantity = safeInteger(data(record, "quantity"), "quantity");
+  const note = optionalData(record, "note");
+  if (note !== undefined && note !== null && typeof note !== "string") fail("note");
   return deepFreeze({
     orderItemId: text(data(record, "orderItemId"), "orderItemId"),
     snapshot: decodePriceSnapshot(data(record, "snapshot")),
     quantity,
     ...(optionalData(record, "lineDiscount") === undefined ? {} : { lineDiscount: decodeDiscount(optionalData(record, "lineDiscount"), "line discount") }),
+    ...(note === undefined ? {} : { note: note as string | null }),
     restaurantId: text(data(record, "restaurantId"), "restaurantId"),
     branchId: text(data(record, "branchId"), "branchId"),
     status: data(record, "status") as OrderItem["status"],

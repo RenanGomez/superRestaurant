@@ -326,7 +326,7 @@ function assertValidOrder(order: Order): void {
     assertOwnDataProperties(
       item,
       ["orderItemId", "snapshot", "quantity", "restaurantId", "branchId", "status"],
-      ["lineDiscount", "cancellationAudit"],
+      ["lineDiscount", "note", "cancellationAudit"],
       "item",
     );
     assertOrderItemPricingFacts(item as unknown as OrderItem);

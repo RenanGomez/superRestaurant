@@ -7,7 +7,7 @@ import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSugg
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
 import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionNoteUnsupportedError, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureNoSalePort, type CaptureSelectionPlanPort } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureNoSalePort, type CaptureSelectionPlanPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
@@ -773,28 +773,44 @@ test("capture selection plan with zero lines is treated as no plan, never priced
   assert.equal(result.selectionProjection, null);
 });
 
-test("capture selection plan with a line note is rejected: OrderItem has nowhere to store it", async () => {
+test("capture selection plan with a line note prices and persists it, carrying the note into the projection", async () => {
   const notedCommand = parseReplaceCaptureSelectionPlanCommandV1({
     ...selectionPlanCommand,
     plan: { ...selectionPlanCommand.plan, lines: [{ ...selectionPlanCommand.plan.lines[0]!, note: "Sin cilantro" }] },
   });
   assert.ok(notedCommand);
+  const workspaceV4Record = {
+    schemaVersion: 4,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+  };
+  let persistedCommand: unknown;
   const persistence: CaptureSelectionPlanPort = {
     probeReplaceSelectionPlan: async () => ({ status: "pending" }),
-    replaceSelectionPlan: async () => { throw new Error("must not persist a rejected note"); },
+    replaceSelectionPlan: async (_actorId, submittedCommand) => {
+      persistedCommand = submittedCommand;
+      return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
+    },
   };
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
-    readWorkspaceV4: async () => { throw new Error("must not read workspace"); },
+    readWorkspaceV4: async () => workspaceV4Record,
+  };
+  const storedPlanConfirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    readSelectionPlan: async () => ({ status: "ok", plan: notedCommand.plan, appliedCaptureVersion: 2 }),
   };
   const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
   }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
-    save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort);
-  await assert.rejects(
-    service.replace(principal, notedCommand),
-    (error: unknown) => error instanceof CaptureSelectionNoteUnsupportedError && error.code === "conflict",
-  );
+    save: async () => { throw new Error("must not save a catalog"); } }, storedPlanConfirmation);
+  const result = await service.replace(principal, notedCommand);
+  assert.deepEqual(persistedCommand, notedCommand);
+  assert.equal(result.selectionProjection?.lines[0]?.note, "Sin cilantro");
 });
 
 test("capture selection plan replay returns the stored result even after a later, unrelated mutation", async () => {

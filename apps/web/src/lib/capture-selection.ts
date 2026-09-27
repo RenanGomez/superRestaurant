@@ -21,6 +21,8 @@ export interface SelectionPlanLineDraft {
   readonly productId: string;
   readonly quantity: number;
   readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[];
+  /** Free-text instruction for the preparation station (1-200 chars), or no note. */
+  readonly note: string | null;
 }
 
 export interface SelectionPlanCommandLineV1 {
@@ -29,7 +31,7 @@ export interface SelectionPlanCommandLineV1 {
   readonly variantId: null;
   readonly quantity: number;
   readonly modifierGroups: readonly { readonly groupId: string; readonly selections: readonly { readonly optionId: string; readonly quantity: number }[] }[];
-  readonly note: null;
+  readonly note: string | null;
 }
 
 export interface SelectionPlanCommandV1 {
@@ -40,8 +42,7 @@ export interface SelectionPlanCommandV1 {
 
 /**
  * Builds the `plan` payload of `ReplaceCaptureSelectionPlanCommandV1` from the client's working
- * set of draft lines. `note` is always `null`: this cut never sends a note (the API rejects one
- * with 409 `CAPTURE_SELECTION_NOTE_UNSUPPORTED`).
+ * set of draft lines, forwarding each line's kitchen note verbatim.
  */
 export function buildSelectionPlan(
   lines: readonly SelectionPlanLineDraft[],
@@ -59,18 +60,19 @@ export function buildSelectionPlan(
         groupId: group.groupId,
         selections: group.selections.map((selection) => ({ optionId: selection.optionId, quantity: selection.quantity })),
       })),
-      note: null,
+      note: line.note,
     })),
   };
 }
 
 export type SelectionLineChange =
   | { readonly type: "add"; readonly lineId: string; readonly productId: string; readonly quantity: number;
-      readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[] }
+      readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[]; readonly note: string | null }
   | { readonly type: "increment"; readonly lineId: string }
   | { readonly type: "decrement"; readonly lineId: string }
   | { readonly type: "remove"; readonly lineId: string }
-  | { readonly type: "setQuantity"; readonly lineId: string; readonly quantity: number };
+  | { readonly type: "setQuantity"; readonly lineId: string; readonly quantity: number }
+  | { readonly type: "setNote"; readonly lineId: string; readonly note: string | null };
 
 const MAX_LINE_QUANTITY = 1_000;
 
@@ -86,10 +88,10 @@ export function applyLineChange(
 ): readonly SelectionPlanLineDraft[] {
   if (change.type === "add") {
     const existingIndex = lines.findIndex((line) => line.productId === change.productId
-      && sameModifierSelection(line.modifierGroups, change.modifierGroups));
+      && sameModifierSelection(line.modifierGroups, change.modifierGroups) && line.note === change.note);
     if (existingIndex === -1) {
       return [...lines, { lineId: change.lineId, productId: change.productId,
-        quantity: clampQuantity(change.quantity), modifierGroups: change.modifierGroups }];
+        quantity: clampQuantity(change.quantity), modifierGroups: change.modifierGroups, note: change.note }];
     }
     return lines.map((line, index) => index === existingIndex
       ? { ...line, quantity: clampQuantity(line.quantity + change.quantity) }
@@ -108,6 +110,9 @@ export function applyLineChange(
     });
   }
   if (change.type === "remove") return lines.filter((line) => line.lineId !== change.lineId);
+  if (change.type === "setNote") {
+    return lines.map((line) => line.lineId === change.lineId ? { ...line, note: change.note } : line);
+  }
   return lines.flatMap((line) => {
     if (line.lineId !== change.lineId) return [line];
     const next = clampQuantity(change.quantity);

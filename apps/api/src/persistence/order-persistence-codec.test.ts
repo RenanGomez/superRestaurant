@@ -107,8 +107,38 @@ function richOrderMutation(): OrderMutation {
       discountRuleVersion: "discount-v1",
       amount: new Money(100, "MXN"),
     },
+    note: "Sin cebolla",
   }, audit("2"));
 }
+
+test("round-trips a null and a text order item note", () => {
+  const created = createOrder({
+    orderId: "order-2",
+    restaurantId: "restaurant-1",
+    branchId: "branch-1",
+    channel: "counter",
+    currency: "MXN",
+    timeZone: "America/Hermosillo",
+  }, audit("5"));
+  const withNullNote = addOrderItem(created.order, {
+    orderItemId: "item-2",
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "catalog-v3",
+      productId: "product-2",
+      name: "Agua",
+      stationId: "bar",
+      unit: "piece",
+      unitPrice: new Money(2_000, "MXN"),
+      modifiers: [],
+    },
+    note: null,
+  }, audit("6"));
+  assert.deepEqual(
+    decodeOrderMutationRecord(JSON.parse(JSON.stringify(encodeOrderMutationRecord(withNullNote))) as unknown),
+    withNullNote,
+  );
+});
 
 test("round-trips an order mutation through a JSON-safe versioned representation", () => {
   const mutation = richOrderMutation();

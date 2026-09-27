@@ -127,6 +127,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [sheetConfirmedTotalMinor, setSheetConfirmedTotalMinor] = useState<number | null>();
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [selectionBusyLineId, setSelectionBusyLineId] = useState<string>();
+  const [noteSheetLineId, setNoteSheetLineId] = useState<string>();
+  const [noteSheetDraft, setNoteSheetDraft] = useState("");
   const productSearchRef = useRef<HTMLInputElement>(null);
 
   function invalidateQuote(): void {
@@ -246,7 +248,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       }
       const modifierGroups: SelectionPlanModifierGroupDraft[] = [...byGroup.entries()]
         .map(([groupId, selections]) => ({ groupId, selections }));
-      return { lineId: line.lineId, productId: line.productId, quantity: line.quantity, modifierGroups };
+      return { lineId: line.lineId, productId: line.productId, quantity: line.quantity, modifierGroups, note: line.note };
     });
   }
 
@@ -282,21 +284,29 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   async function addDirect(productId: string): Promise<void> {
     setSelectionBusy(true);
     await sendSelectionPlan(applyLineChange(selectionDraftLines(),
-      { type: "add", lineId: crypto.randomUUID(), productId, quantity: 1, modifierGroups: [] }));
+      { type: "add", lineId: crypto.randomUUID(), productId, quantity: 1, modifierGroups: [], note: null }));
     setSelectionBusy(false);
   }
 
-  async function addFromSheet(quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[]): Promise<void> {
+  async function addFromSheet(
+    quantity: number,
+    modifierGroups: readonly SelectionPlanModifierGroupDraft[],
+    note: string | null,
+  ): Promise<void> {
     if (sheetProduct === undefined) return;
     const productId = sheetProduct.productId;
+    const lineId = crypto.randomUUID();
     setSelectionBusy(true);
     const projection = await sendSelectionPlan(applyLineChange(selectionDraftLines(),
-      { type: "add", lineId: crypto.randomUUID(), productId, quantity, modifierGroups }));
+      { type: "add", lineId, productId, quantity, modifierGroups, note }));
     setSelectionBusy(false);
     if (projection === undefined) return;
-    const matched = (projection?.lines ?? []).find((line) => line.productId === productId
-      && sameProjectionModifiers(line.modifiers, modifierGroups))
-      ?? (projection?.lines ?? []).find((line) => line.productId === productId);
+    // Match by the freshly generated lineId, never by productId+modifiers: a prior line with the
+    // same product/selection but a different note (or merged by applyLineChange's own note-aware
+    // matching) must not be mistaken for the one just confirmed.
+    const matched = (projection?.lines ?? []).find((line) => line.lineId === lineId)
+      ?? (projection?.lines ?? []).find((line) => line.productId === productId
+        && sameProjectionModifiers(line.modifiers, modifierGroups) && line.note === note);
     setSheetConfirmedTotalMinor(matched?.lineTotalMinor ?? null);
     window.setTimeout(() => {
       setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined);
@@ -326,6 +336,24 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setSelectionBusyLineId(lineId);
     await sendSelectionPlan(applyLineChange(selectionDraftLines(), { type: "remove", lineId }));
     setSelectionBusyLineId(undefined);
+  }
+
+  function openNoteSheet(lineId: string, currentNote: string | null): void {
+    if (locked || selectionBusy) return;
+    setNoteSheetLineId(lineId);
+    setNoteSheetDraft(currentNote ?? "");
+  }
+
+  async function saveLineNote(): Promise<void> {
+    const lineId = noteSheetLineId;
+    if (lineId === undefined) return;
+    const trimmed = noteSheetDraft.trim();
+    setSelectionBusyLineId(lineId);
+    await sendSelectionPlan(applyLineChange(selectionDraftLines(),
+      { type: "setNote", lineId, note: trimmed.length === 0 ? null : trimmed }));
+    setSelectionBusyLineId(undefined);
+    setNoteSheetLineId(undefined);
+    setNoteSheetDraft("");
   }
 
   function create(): void {
@@ -693,9 +721,28 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
             onIncrement={(lineId) => void changeLineQuantity(lineId, 1)}
             onDecrement={(lineId) => void changeLineQuantity(lineId, -1)}
             onRemove={(lineId) => void removeLine(lineId)}
+            onEditNote={openNoteSheet}
             onHold={reset} onNoSale={openNoSale} />
         </div>
       </section>}
+      {noteSheetLineId !== undefined && <div className="fixed inset-0 z-30 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
+        role="dialog" aria-modal="true" aria-labelledby="capture-line-note-title"
+        onClick={(event) => { if (event.target === event.currentTarget) { setNoteSheetLineId(undefined); setNoteSheetDraft(""); } }}>
+        <div className="grid w-full max-w-md gap-3 rounded-t-2xl bg-surface p-4 sm:rounded-2xl">
+          <h2 id="capture-line-note-title" className="font-heading text-lg font-semibold">Nota para cocina</h2>
+          <label className="grid gap-1 text-sm" htmlFor="capture-line-note-text">Instrucción (opcional)
+            <textarea id="capture-line-note-text" className={`${input} min-h-24 resize-y`} maxLength={200}
+              value={noteSheetDraft} onChange={(event) => setNoteSheetDraft(event.target.value.slice(0, 200))} />
+          </label>
+          <span className="text-xs text-text-muted">{noteSheetDraft.length}/200</span>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="min-h-11 min-w-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent"
+              onClick={() => { setNoteSheetLineId(undefined); setNoteSheetDraft(""); }}>Cancelar</button>
+            <button type="button" className="min-h-11 min-w-11 rounded-lg border border-border bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent"
+              disabled={selectionBusyLineId !== undefined} onClick={() => void saveLineNote()}>Guardar</button>
+          </div>
+        </div>
+      </div>}
       {noSaleOpen && <div className="fixed inset-0 z-30 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
         role="dialog" aria-modal="true" aria-labelledby="capture-no-sale-title"
         onClick={(event) => { if (event.target === event.currentTarget) cancelNoSale(); }}>
@@ -716,7 +763,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       {sheetProduct !== undefined && <ProductSheet product={sheetProduct} groups={sheetGroups}
         currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy} confirmedTotalMinor={sheetConfirmedTotalMinor}
         onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); }}
-        onAdd={(quantity, modifierGroups) => void addFromSheet(quantity, modifierGroups)} />}
+        onAdd={(quantity, modifierGroups, note) => void addFromSheet(quantity, modifierGroups, note)} />}
       {capture.status === "draft" && canManageAssignment && <section className={panel} data-testid="capture-transfer">
         <h2 className="font-heading text-lg font-semibold">Pasar la captura a otro operador</h2>
         <p className="mt-1 text-sm text-text-muted">El otro operador la verá en su bandeja y podrá continuar donde la dejaste.</p>

@@ -205,6 +205,7 @@ function KdsBoard({ config, accessToken, subscription, onAccessLost }: {
           <header><span>{channelLabel(ticket)}</span><strong>{ageLabel(ticket.queuedAt, now)}</strong></header>
           <h2><span>{ticket.quantity}×</span> {ticket.productName}</h2>
           {ticket.modifiers.length > 0 && <ul>{ticket.modifiers.map((modifier, index) => <li key={`${modifier.name}:${index}`}>{modifier.quantity > 1 ? `${modifier.quantity}× ` : ""}{modifier.name}</li>)}</ul>}
+          {ticket.note !== null && <p className="note">Nota: {ticket.note}</p>}
           <footer>
             <span className="pill">{statusLabel(ticket.status)}</span>
             {nextKdsAction(ticket.status) !== undefined && <button className="primary action" disabled={busyItem !== undefined} onClick={() => void act(ticket)}>

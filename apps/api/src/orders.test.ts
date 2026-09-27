@@ -112,6 +112,7 @@ const ticketList = parseKdsTicketListV1({
     quantity: 2,
     productName: "Hamburguesa",
     modifiers: [],
+    note: null,
     status: "sent",
     queuedAt: "2026-09-02T22:00:01.000Z",
   }],

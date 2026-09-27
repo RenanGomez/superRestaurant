@@ -19,17 +19,17 @@ const lineId1 = "77777777-7777-4777-8777-777777777777";
 const lineId2 = "88888888-8888-4888-8888-888888888888";
 const lineId3 = "99999999-9999-4999-8999-999999999999";
 
-test("buildSelectionPlan projects draft lines with a null note and null variantId", () => {
+test("buildSelectionPlan projects draft lines with a null variantId and forwards the note", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
     { lineId: lineId1, productId: productA, quantity: 2,
-      modifierGroups: [{ groupId, selections: [{ optionId, quantity: 1 }] }] },
+      modifierGroups: [{ groupId, selections: [{ optionId, quantity: 1 }] }], note: "Sin cebolla" },
   ];
   const plan = buildSelectionPlan(lines, catalogVersion);
   assert.equal(plan.schemaVersion, 1);
   assert.equal(plan.catalogVersion, catalogVersion);
   assert.equal(plan.lines.length, 1);
   assert.equal(plan.lines[0]?.variantId, null);
-  assert.equal(plan.lines[0]?.note, null);
+  assert.equal(plan.lines[0]?.note, "Sin cebolla");
   assert.deepEqual(plan.lines[0]?.modifierGroups, [{ groupId, selections: [{ optionId, quantity: 1 }] }]);
 });
 
@@ -39,9 +39,9 @@ test("buildSelectionPlan on an empty set clears the plan", () => {
 
 test("applyLineChange add without modifiers merges into the existing line by incrementing", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
-    { lineId: lineId1, productId: productA, quantity: 1, modifierGroups: [] },
+    { lineId: lineId1, productId: productA, quantity: 1, modifierGroups: [], note: null },
   ];
-  const next = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, quantity: 1, modifierGroups: [] });
+  const next = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, quantity: 1, modifierGroups: [], note: null });
   assert.equal(next.length, 1);
   assert.equal(next[0]?.quantity, 2);
   assert.equal(next[0]?.lineId, lineId1);
@@ -49,28 +49,28 @@ test("applyLineChange add without modifiers merges into the existing line by inc
 
 test("applyLineChange add with a distinct modifier selection creates a new line", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
-    { lineId: lineId1, productId: productA, quantity: 1, modifierGroups: [{ groupId, selections: [{ optionId, quantity: 1 }] }] },
+    { lineId: lineId1, productId: productA, quantity: 1, modifierGroups: [{ groupId, selections: [{ optionId, quantity: 1 }] }], note: null },
   ];
   const next = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, quantity: 1,
-    modifierGroups: [{ groupId, selections: [{ optionId: optionId2, quantity: 1 }] }] });
+    modifierGroups: [{ groupId, selections: [{ optionId: optionId2, quantity: 1 }] }], note: null });
   assert.equal(next.length, 2);
 });
 
 test("applyLineChange add with the same modifier selection (different order) merges", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
     { lineId: lineId1, productId: productA, quantity: 1,
-      modifierGroups: [{ groupId, selections: [{ optionId, quantity: 1 }, { optionId: optionId2, quantity: 2 }] }] },
+      modifierGroups: [{ groupId, selections: [{ optionId, quantity: 1 }, { optionId: optionId2, quantity: 2 }] }], note: null },
   ];
   const next = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, quantity: 3,
-    modifierGroups: [{ groupId, selections: [{ optionId: optionId2, quantity: 2 }, { optionId, quantity: 1 }] }] });
+    modifierGroups: [{ groupId, selections: [{ optionId: optionId2, quantity: 2 }, { optionId, quantity: 1 }] }], note: null });
   assert.equal(next.length, 1);
   assert.equal(next[0]?.quantity, 4);
 });
 
 test("applyLineChange increment/decrement/remove", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
-    { lineId: lineId1, productId: productA, quantity: 1, modifierGroups: [] },
-    { lineId: lineId2, productId: productB, quantity: 1, modifierGroups: [] },
+    { lineId: lineId1, productId: productA, quantity: 1, modifierGroups: [], note: null },
+    { lineId: lineId2, productId: productB, quantity: 1, modifierGroups: [], note: null },
   ];
   const incremented = applyLineChange(lines, { type: "increment", lineId: lineId1 });
   assert.equal(incremented.find((l) => l.lineId === lineId1)?.quantity, 2);
@@ -85,12 +85,33 @@ test("applyLineChange increment/decrement/remove", () => {
 
 test("applyLineChange clamps quantity to [0, 1000] and setQuantity 0 removes", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
-    { lineId: lineId3, productId: productA, quantity: 999, modifierGroups: [] },
+    { lineId: lineId3, productId: productA, quantity: 999, modifierGroups: [], note: null },
   ];
-  const clamped = applyLineChange(lines, { type: "add", lineId: lineId1, productId: productA, quantity: 50, modifierGroups: [] });
+  const clamped = applyLineChange(lines, { type: "add", lineId: lineId1, productId: productA, quantity: 50, modifierGroups: [], note: null });
   assert.equal(clamped[0]?.quantity, 1000);
   const cleared = applyLineChange(lines, { type: "setQuantity", lineId: lineId3, quantity: 0 });
   assert.deepEqual(cleared, []);
+});
+
+test("applyLineChange add with a distinct note never merges into an otherwise-identical line", () => {
+  const lines: readonly SelectionPlanLineDraft[] = [
+    { lineId: lineId1, productId: productA, quantity: 1, modifierGroups: [], note: "Sin cebolla" },
+  ];
+  const next = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, quantity: 1, modifierGroups: [], note: null });
+  assert.equal(next.length, 2);
+  const merged = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, quantity: 1, modifierGroups: [], note: "Sin cebolla" });
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]?.quantity, 2);
+});
+
+test("applyLineChange setNote updates only the targeted line", () => {
+  const lines: readonly SelectionPlanLineDraft[] = [
+    { lineId: lineId1, productId: productA, quantity: 1, modifierGroups: [], note: null },
+    { lineId: lineId2, productId: productB, quantity: 1, modifierGroups: [], note: null },
+  ];
+  const next = applyLineChange(lines, { type: "setNote", lineId: lineId1, note: "Bien cocida" });
+  assert.equal(next.find((l) => l.lineId === lineId1)?.note, "Bien cocida");
+  assert.equal(next.find((l) => l.lineId === lineId2)?.note, null);
 });
 
 test("groupProductsByCategory returns only active categories sorted by displayOrder, with their products", () => {

@@ -42,6 +42,7 @@ const rawTicket = {
   quantity: 2,
   productName: "Hamburguesa",
   modifiers: [{ name: "Queso", quantity: 1 }],
+  note: "Sin cebolla",
   status: "preparing",
   queuedAt: "2026-09-03T10:00:00.000Z",
 };

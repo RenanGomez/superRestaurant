@@ -4,6 +4,7 @@ import {
   DuplicateOrderItemIdError,
   InvalidQuantityError,
   InvalidOrderDiscountAllocationStrategyError,
+  InvalidOrderItemNoteError,
   InvalidSnapshotError,
   InvalidTaxRateError,
   InvalidTimeZoneError,
@@ -90,6 +91,12 @@ export interface OrderItemPricingInput {
   readonly quantity: number;
   /** An explicit minor-unit reduction applied before that line's tax. */
   readonly lineDiscount?: AppliedDiscountSnapshot;
+  /**
+   * Optional, free-text instruction for the preparation station (e.g. "no onion").
+   * `null` and absent both mean "no note"; frozen with the line and never edited
+   * afterward. The domain rejects malformed text instead of correcting it.
+   */
+  readonly note?: string | null;
 }
 
 export interface OrderPricingInput {
@@ -343,6 +350,7 @@ function normalizeOrderItemPricingInput(value: unknown): OrderItemPricingInput {
   assertPositiveQuantity(quantity as number);
   const snapshot = normalizePriceSnapshot(ownData(input, "snapshot", "snapshot"));
   const lineDiscount = optionalOwnData(input, "lineDiscount", "line discount");
+  const note = normalizeOrderItemNote(optionalOwnData(input, "note", "note"));
 
   return deepFreeze({
     orderItemId: orderItemId as string,
@@ -351,6 +359,7 @@ function normalizeOrderItemPricingInput(value: unknown): OrderItemPricingInput {
     ...(lineDiscount === undefined
       ? {}
       : { lineDiscount: normalizeDiscount(lineDiscount, snapshot.unitPrice.currency, "line discount") }),
+    ...(note === undefined ? {} : { note }),
   });
 }
 
@@ -569,6 +578,7 @@ function cloneOrderPricingInput(input: OrderPricingInput): OrderPricingInput {
 }
 
 function cloneOrderItemInput(input: OrderItemPricingInput, snapshot: OrderItemPriceSnapshot): OrderItemPricingInput {
+  const note = normalizeOrderItemNote(input.note);
   return deepFreeze({
     orderItemId: input.orderItemId,
     snapshot,
@@ -576,6 +586,7 @@ function cloneOrderItemInput(input: OrderItemPricingInput, snapshot: OrderItemPr
     ...(input.lineDiscount === undefined
       ? {}
       : { lineDiscount: cloneDiscount(input.lineDiscount, snapshot.unitPrice.currency, "line discount") }),
+    ...(note === undefined ? {} : { note }),
   });
 }
 
@@ -733,6 +744,18 @@ function assertText(value: string, field: string): void {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new InvalidSnapshotError(field);
   }
+}
+
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001F\u007F]/;
+
+/** Normalizes an optional order-item note, rejecting malformed text instead of correcting it. */
+function normalizeOrderItemNote(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") throw new InvalidOrderItemNoteError();
+  if (value.length < 1 || value.length > 200) throw new InvalidOrderItemNoteError();
+  if (CONTROL_CHARACTER_PATTERN.test(value)) throw new InvalidOrderItemNoteError();
+  return value;
 }
 
 function assertTimeZone(timeZone: string): void {
