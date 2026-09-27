@@ -95,6 +95,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [assignmentCandidates, setAssignmentCandidates] = useState<readonly CaptureAssignmentCandidateV1[]>([]);
   const [transferTarget, setTransferTarget] = useState("");
   const [transferConfirmed, setTransferConfirmed] = useState(false);
+  const [noSaleOpen, setNoSaleOpen] = useState(false);
+  const [noSaleReason, setNoSaleReason] = useState("");
+  const [noSaleNotice, setNoSaleNotice] = useState(false);
   const [takeoverDraftId, setTakeoverDraftId] = useState("");
   const [takeoverReason, setTakeoverReason] = useState("");
   const [takeoverConfirmed, setTakeoverConfirmed] = useState(false);
@@ -326,6 +329,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   }
 
   function create(): void {
+    setNoSaleNotice(false);
     void run("create", { schemaVersion: 1, scope, captureDraftId: crypto.randomUUID(), expectedVersion: 0,
       sourceChannel, fulfillmentChannel, eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), deviceId,
       occurredAt: new Date().toISOString() });
@@ -351,6 +355,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   function recover(item: CaptureDraftSummaryV1): void {
     const command = { schemaVersion: 1, scope, captureDraftId: item.captureDraftId, expectedVersion: item.version,
       eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), deviceId, occurredAt: new Date().toISOString() };
+    setNoSaleNotice(false);
     void (async () => {
       const reply = await run("claim", command);
       if (reply?.ok) await refreshWorkspace(item.captureDraftId);
@@ -381,6 +386,37 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       setTakeoverDraftId(""); setTakeoverReason(""); setTakeoverConfirmed(false);
       await refreshWorkspace(item.captureDraftId);
       await run("tray", { schemaVersion: 1, scope, limit: 20 });
+    })();
+  }
+
+  function openNoSale(): void {
+    if (locked) return;
+    setNoSaleReason("");
+    setNoSaleOpen(true);
+  }
+
+  function cancelNoSale(): void {
+    setNoSaleOpen(false);
+    setNoSaleReason("");
+  }
+
+  /** Shared success handler for `noSale`, reached from both the first attempt and a later
+   * retry of a `pending` (lost-response) command: either way, a successful close must return
+   * to the tray with the same notice exactly once. */
+  async function afterNoSaleApplied(): Promise<void> {
+    setNoSaleOpen(false);
+    setNoSaleReason("");
+    reset();
+    setNoSaleNotice(true);
+    await run("tray", { schemaVersion: 1, scope, limit: 20 });
+  }
+
+  function confirmNoSale(): void {
+    const reason = noSaleReason.trim();
+    if (capture === undefined || reason.length === 0) return;
+    void (async () => {
+      const reply = await run("noSale", { ...base(), reason });
+      if (reply?.ok) await afterNoSaleApplied();
     })();
   }
 
@@ -525,6 +561,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         await run("tray", { schemaVersion: 1, scope, limit: 20 });
         await run("assignmentCandidates", { schemaVersion: 1, scope });
       }
+      if (reply?.ok && pending.operation === "noSale") await afterNoSaleApplied();
     })();
   }
 
@@ -544,6 +581,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setScheduledFor("");
     setTransferTarget("");
     setTransferConfirmed(false);
+    setNoSaleOpen(false);
+    setNoSaleReason("");
   }
 
   const locked = busy || capture?.status !== "draft" || capture?.attentionLeaseId === null
@@ -585,6 +624,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         aria-keyshortcuts={ariaKeyShortcut("reset")} disabled={busy} onClick={reset}>Volver a la bandeja</button>}
     </div>
     {capture === undefined ? <>
+      {noSaleNotice && <div role="status" className="rounded-lg border border-border bg-surface p-3 text-sm">
+        Registrado sin venta.
+      </div>}
       <section className={panel}><h2 className="font-heading text-lg font-semibold">Abrir captura</h2>
         <p className="my-2 text-sm text-text-muted">Crea un borrador durable para una llamada con entrega a domicilio.</p>
         <button className={button} onClick={create} aria-keyshortcuts={ariaKeyShortcut("create")}
@@ -651,9 +693,26 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
             onIncrement={(lineId) => void changeLineQuantity(lineId, 1)}
             onDecrement={(lineId) => void changeLineQuantity(lineId, -1)}
             onRemove={(lineId) => void removeLine(lineId)}
-            onHold={reset} />
+            onHold={reset} onNoSale={openNoSale} />
         </div>
       </section>}
+      {noSaleOpen && <div className="fixed inset-0 z-30 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
+        role="dialog" aria-modal="true" aria-labelledby="capture-no-sale-title"
+        onClick={(event) => { if (event.target === event.currentTarget) cancelNoSale(); }}>
+        <div className="grid w-full max-w-md gap-3 rounded-t-2xl bg-surface p-4 sm:rounded-2xl">
+          <h2 id="capture-no-sale-title" className="font-heading text-lg font-semibold">Cerrar sin venta</h2>
+          <p className="text-sm text-text-muted">El borrador queda en el historial, nunca se borra. Este cierre no se puede deshacer.</p>
+          <label className="grid gap-1 text-sm" htmlFor="capture-no-sale-reason">Motivo obligatorio
+            <textarea id="capture-no-sale-reason" className={`${input} min-h-24 resize-y`} maxLength={500}
+              value={noSaleReason} onChange={(event) => setNoSaleReason(event.target.value)} disabled={busy} autoFocus />
+          </label>
+          <div className="flex justify-end gap-2">
+            <button type="button" className={button} disabled={busy} onClick={cancelNoSale}>Volver</button>
+            <button type="button" className={button} disabled={busy || noSaleReason.trim().length === 0}
+              onClick={confirmNoSale}>Confirmar</button>
+          </div>
+        </div>
+      </div>}
       {sheetProduct !== undefined && <ProductSheet product={sheetProduct} groups={sheetGroups}
         currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy} confirmedTotalMinor={sheetConfirmedTotalMinor}
         onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); }}

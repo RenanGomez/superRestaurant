@@ -14,10 +14,11 @@ interface CaptureTicketProps {
   readonly onDecrement: (lineId: string) => void;
   readonly onRemove: (lineId: string) => void;
   readonly onHold: () => void;
+  readonly onNoSale: () => void;
 }
 
 /** Fixed ticket (desktop sidebar) / bottom sheet (mobile) painting only server-priced amounts. */
-export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onDecrement, onRemove, onHold }: CaptureTicketProps) {
+export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onDecrement, onRemove, onHold, onNoSale }: CaptureTicketProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const lineCount = projection?.lines.reduce((sum, line) => sum + line.quantity, 0) ?? 0;
 
@@ -53,9 +54,7 @@ export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onD
     </div>
     <div className="grid gap-2 p-3 pt-0">
       <button type="button" className={button} disabled={locked} onClick={onHold}>⏸ Dejar en espera</button>
-      {/* No "Sin venta" button here on purpose: there is no API operation to close a capture without a sale yet.
-          A disabled button with a "coming soon" tooltip would only add clutter; "Dejar en espera" already
-          covers leaving the ticket without confirming an order. Add it once the server supports the operation. */}
+      <button type="button" className={`${button} text-error`} disabled={locked} onClick={onNoSale}>Sin venta</button>
     </div>
   </>;
 

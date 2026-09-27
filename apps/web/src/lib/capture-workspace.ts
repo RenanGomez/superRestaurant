@@ -13,6 +13,7 @@ import {
   parseCaptureWorkTrayResultV1,
   parseClaimCaptureDraftCommandV1,
   parseConfirmCaptureDraftCommandV2,
+  parseCloseCaptureNoSaleCommandV1,
   parseCreateCaptureDraftCommandV1,
   parseReplaceCaptureSelectionPlanCommandV1,
   parseSetCaptureCustomerCommandV1,
@@ -35,7 +36,7 @@ import {
 export type CaptureRequestResult<T> = { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable" };
 export type CaptureOperation = "autosave" | "confirm" | "create" | "claim" | "customer" | "deliveryInstructions"
-  | "deliveryInstructionSuggestions" | "fulfillment" | "assignmentCandidates" | "selectionPlan" | "takeover"
+  | "deliveryInstructionSuggestions" | "fulfillment" | "assignmentCandidates" | "noSale" | "selectionPlan" | "takeover"
   | "transfer" | "tray" | "workspace";
 export interface CaptureKeyValueStore {
   readonly getItem: (key: string) => string | null;
@@ -83,7 +84,7 @@ export function clearPendingCaptureAutosave(
 const paths = { autosave: "/autosave", confirm: "/confirm", create: "", claim: "/claim", customer: "/customer",
   assignmentCandidates: "/assignment-candidates",
   deliveryInstructions: "/delivery-instructions", deliveryInstructionSuggestions: "/delivery-instruction-suggestions",
-  fulfillment: "/fulfillment", selectionPlan: "/selection-plan",
+  fulfillment: "/fulfillment", noSale: "/no-sale", selectionPlan: "/selection-plan",
   takeover: "/takeover", transfer: "/transfer", tray: "/tray", workspace: "/workspace" } as const;
 const parsers = {
   autosave: parseAutosaveCaptureDraftCommandV1,
@@ -93,6 +94,7 @@ const parsers = {
   customer: parseSetCaptureCustomerCommandV1,
   deliveryInstructions: parseSetCaptureDeliveryInstructionsCommandV1,
   fulfillment: parseSetCaptureFulfillmentCommandV1,
+  noSale: parseCloseCaptureNoSaleCommandV1,
   takeover: parseTakeoverCaptureDraftCommandV1,
   transfer: parseTransferCaptureDraftCommandV1,
 } as const;
