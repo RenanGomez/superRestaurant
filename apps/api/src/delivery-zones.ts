@@ -288,18 +288,25 @@ export class DeliveryZoneService {
       });
     } catch { throw new DeliveryZoneApplicationError("request"); }
 
-    // Deterministic, fact-derived quoteId (never Math.random/uuid-v4): the same draft, address,
-    // coverage and window always reproduce the same id, while any change to the quoted facts
-    // (zone, fee, promised window, or requested schedule) produces a different one. S7.2 will
-    // decide whether/how a quote is persisted under this id; for now it only identifies the
-    // as-quoted facts for the caller (e.g. to detect a stale quote client-side).
+    // Deterministic, fact-derived quoteId (never Math.random/uuid-v4): every frozen fact the
+    // quote carries goes into the hash, so the same request quoted at the same instant always
+    // reproduces the same id, while any change to ANY of them (including the quoting instant
+    // itself, currency, timeZone or coverage status — not just zone/fee/window) produces a
+    // different one. S7.2 will decide whether/how a quote is persisted under this id; for now it
+    // only identifies the as-quoted facts for the caller (e.g. to detect a stale quote client-side).
     const quoteId = deterministicQuoteId([
       command.captureDraftId,
       workspace.fulfillmentSnapshot.snapshotRef,
+      command.scheduledFor,
+      quote.quotedAt,
+      quote.coverageStatus,
       quote.zoneId,
       quote.feeMinor.amountMinor,
+      quote.currency,
+      quote.timeZone,
       quote.promiseStart,
-      command.scheduledFor,
+      quote.promiseEnd,
+      quote.expiresAt,
     ]);
 
     const result = parseDeliveryQuoteV1({

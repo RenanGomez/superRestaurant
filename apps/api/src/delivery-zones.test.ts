@@ -117,6 +117,7 @@ function serviceFor(options: {
   captures?: CaptureCreationPort;
   catalogs?: MenuCatalogPort;
   branchContext?: BranchOperationalContextPort;
+  clock?: ClockPort;
 } = {}): DeliveryZoneService {
   const roles = options.roles ?? (["cashier"] as const);
   const memberships = options.directoryMemberships ?? [{ roles, scope }];
@@ -132,7 +133,7 @@ function serviceFor(options: {
     options.captures ?? captureCreationDouble(),
     options.catalogs ?? catalogDouble(),
     options.branchContext ?? branchContextDouble(),
-    clock,
+    options.clock ?? clock,
   );
 }
 
@@ -332,6 +333,20 @@ test("quoteForCapture: a different scheduledFor produces a different quoteId", a
   assert.notEqual(asap.quoteId, scheduled.quoteId);
 });
 
+test("quoteForCapture: same request quoted at a different instant produces a different quoteId, even when promiseStart is identical", async () => {
+  // A scheduled (non-ASAP) request freezes promiseStart/promiseEnd/expiresAt at the requested
+  // schedule regardless of quotedAt, so this isolates quotedAt as the only differing fact.
+  const scheduledQuoteInput = { ...quoteInput, scheduledFor: "2026-09-16T13:00:00.000Z" };
+  const earlyClock: ClockPort = { now: () => "2026-09-16T12:00:02.000Z" };
+  const laterClock: ClockPort = { now: () => "2026-09-16T12:05:00.000Z" };
+  const early = await serviceFor({ clock: earlyClock }).quoteForCapture(principal, scheduledQuoteInput);
+  const later = await serviceFor({ clock: laterClock }).quoteForCapture(principal, scheduledQuoteInput);
+  assert.equal(early.promiseStart, later.promiseStart);
+  assert.equal(early.expiresAt, later.expiresAt);
+  assert.notEqual(early.quotedAt, later.quotedAt);
+  assert.notEqual(early.quoteId, later.quoteId);
+});
+
 test("deterministicQuoteId: identical facts produce the identical id, in canonical UUID form", () => {
   const facts = [captureDraftId, "snapshot-ref", zoneId, 2500, "2026-09-16T12:00:02.000Z", null] as const;
   const first = deterministicQuoteId([...facts]);
@@ -344,8 +359,10 @@ test("deterministicQuoteId: any changed fact produces a different id (no Math.ra
   const base = deterministicQuoteId([captureDraftId, "snapshot-ref", zoneId, 2500, "2026-09-16T12:00:02.000Z", null]);
   const feeChanged = deterministicQuoteId([captureDraftId, "snapshot-ref", zoneId, 2600, "2026-09-16T12:00:02.000Z", null]);
   const scheduleChanged = deterministicQuoteId([captureDraftId, "snapshot-ref", zoneId, 2500, "2026-09-16T12:00:02.000Z", "2026-09-16T13:00:00.000Z"]);
+  const quotedAtChanged = deterministicQuoteId([captureDraftId, "snapshot-ref", zoneId, 2500, "2026-09-16T12:05:00.000Z", null]);
   assert.notEqual(base, feeChanged);
   assert.notEqual(base, scheduleChanged);
+  assert.notEqual(base, quotedAtChanged);
 });
 
 test("quoteForCapture: hostile inputs (unknown captureDraftId shape) are rejected as a request error", async () => {
