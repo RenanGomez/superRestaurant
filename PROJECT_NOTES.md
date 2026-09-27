@@ -96,6 +96,11 @@ Contratos Customer/Address V1 (2026-09-16): pertenencia del directorio por Resta
 
 Decisión de implementación 2026-09-16: las direcciones Customer pueden guardarse incompletas y con coordenadas sin quedar validadas. El dominio permite atestación explícita con contexto auditado y snapshot inmutable del cliente/dirección seleccionados; editar ficha reinicia validación. Coordenadas E6 no equivalen a geocodificación verificada o cobertura de reparto. El API futuro debe derivar autorización/actor/timestamp y comprobar Branch, no confiar en evidencia del cliente.
 
+## Zonas de entrega: forma canónica y regla de motivo — 2026-09-26
+
+- `postalCodes`/`localities` viajan y se persisten en forma canónica (sin duplicados, orden ascendente por code units). El contrato `parseUpsertDeliveryZoneCommandV1` y la función SQL `upsert_delivery_zone` rechazan entradas no canónicas; la canonicalización se hace una sola vez en el servicio NestJS antes de llamar a SQL. El SQL es validador estricto, no reparador, coherente con el criterio "parsers exactos que rechazan, nunca corrigen" del repo. Si aparece una vía de escritura distinta al servicio (backfill, corrección), debe canonicalizar antes de insertar.
+- El motivo auditado es obligatorio sólo al desactivar una zona (`active=false`), en creación o actualización; el actor y el fingerprint quedan siempre en `delivery_zone_command_events`. Fuente: §8.1.2 y el CHECK `delivery_zone_events_result_valid`.
+
 ## Decisiones de producto S6/S7/S8 aprobadas — 2026-09-26
 
 - Emmanuel aprobó en bloque las 26 propuestas de Claude para las decisiones abiertas de cambios/cancelaciones (S6, 6), domicilio propio (S7, 10) y cobro (S8, 10). El texto normativo quedó en `docs/architecture/P2_ORDER_CHANGE_CANCELLATION_SLICE.md` §5.1, `P2_OWN_DELIVERY_OPERATION_SLICE.md` §8.1 y `P2_CAPTURE_PAYMENT_OPERATION_SLICE.md` §9.1; esos apartados son la autoridad y no se repiten aquí.
