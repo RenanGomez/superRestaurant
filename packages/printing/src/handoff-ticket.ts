@@ -67,6 +67,7 @@ export function renderHandoffTicket(input: HandoffTicketInput): Uint8Array {
     for (const modifier of item.snapshot.modifiers) {
       encoder.line(`  + ${modifier.quantity} x ${modifier.name}  ${formatMinor(modifier.unitPrice.amountMinor, order.currency)}`);
     }
+    if (item.note !== undefined && item.note !== null) encoder.line(`  Nota: ${item.note}`);
   }
   encoder.line("------------------------")
     .line(`Subtotal: ${formatMinor(totals.subtotalBeforeOrderDiscount.amountMinor, order.currency)}`)

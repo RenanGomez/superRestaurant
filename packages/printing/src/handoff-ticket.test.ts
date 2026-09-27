@@ -89,6 +89,27 @@ test("discount and modifier ticket snapshot uses supplied totals", () => {
   ]));
 });
 
+test("an item note renders under its line with a Nota prefix, and no note omits the line", () => {
+  const notedItem: OrderItem = { ...item, note: "Sin cebolla" };
+  const actual = renderHandoffTicket({ ...base,
+    order: { ...base.order, items: [notedItem] },
+    deliveryInstructions: null,
+  });
+  assert.deepEqual(actual, snapshot([
+    "ENTREGA 12345678", "Canal: delivery", "Fecha: 2026-09-26T12:00:00Z",
+    "Cliente: Ana Ruiz", "Tel: ***9876", "Calle Uno 1 2B", "CDMX, CDMX, 01000",
+    "------------------------", "2 x Pizza  $120.00", "  Nota: Sin cebolla",
+    "------------------------", "Subtotal: $240.00", "Descuento líneas: $0.00",
+    "Descuento orden: $0.00", "Total: $240.00",
+  ]));
+
+  const nullNoteItem: OrderItem = { ...item, note: null };
+  assert.deepEqual(
+    renderHandoffTicket({ ...base, order: { ...base.order, items: [nullNoteItem] }, deliveryInstructions: null }),
+    renderHandoffTicket({ ...base, order: { ...base.order, items: [item] }, deliveryInstructions: null }),
+  );
+});
+
 test("currencies without two minor digits fail with a typed error", () => {
   assert.throws(() => renderHandoffTicket({ ...base,
     order: { ...base.order, currency: "JPY" },
