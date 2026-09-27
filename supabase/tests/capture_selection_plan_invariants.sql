@@ -399,6 +399,200 @@ begin
 end
 $capture_selection_plan_trigger_tests$;
 
+-- repeat_customer_order_into_capture's on-conflict update must fix plan_kind='repeat' (and
+-- null customer_id/source_order_id back in via replace_capture_selection_plan) so a prior
+-- 'selection' row converts cleanly instead of violating capture_repeat_order_plans_payload_valid.
+do $capture_selection_plan_kind_conversion_tests$
+declare
+  actor uuid := (select id from auth.users where deleted_at is null order by id limit 1);
+  restaurant uuid := gen_random_uuid();
+  branch uuid := gen_random_uuid();
+  membership uuid := gen_random_uuid();
+  customer uuid := gen_random_uuid();
+  contact uuid := gen_random_uuid();
+  customer_snapshot uuid := gen_random_uuid();
+  catalog uuid := gen_random_uuid();
+  category uuid := gen_random_uuid();
+  product uuid := gen_random_uuid();
+  source_order uuid := gen_random_uuid();
+  source_item uuid := gen_random_uuid();
+  history_capture uuid := gen_random_uuid();
+  target_capture uuid := gen_random_uuid();
+  device uuid := gen_random_uuid();
+  now_at timestamptz := pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp());
+  created jsonb;
+  lease text;
+  selection_command jsonb;
+  selection_plan jsonb;
+  repeat_command jsonb;
+  repeat_plan jsonb;
+  result jsonb;
+  stored app.capture_repeat_order_plans%rowtype;
+begin
+  if actor is null then raise exception 'CAPTURE_SELECTION_PLAN_KIND_CONVERSION_TEST_ACTOR_REQUIRED'; end if;
+
+  insert into app.restaurants(id,name,time_zone)
+    values(restaurant,'rollback-only Capture plan-kind conversion','America/Hermosillo');
+  insert into app.branches(id,restaurant_id,name) values(branch,restaurant,'rollback-only conversion branch');
+  insert into app.memberships(id,user_id,restaurant_id,branch_id,granted_by)
+    values(membership,actor,restaurant,branch,actor);
+  insert into app.membership_role_grants(membership_id,role_code,granted_by)
+    values(membership,'cashier',actor);
+  insert into app.customers(id,restaurant_id,display_name,created_by,updated_by)
+    values(customer,restaurant,'Rollback conversion customer',actor,actor);
+  insert into app.customer_phones(restaurant_id,customer_id,contact_id,label,display_value,normalized_value)
+    values(restaurant,customer,contact,'Main','662 200 3010','6622003010');
+  insert into app.customer_party_snapshots(
+    id,restaurant_id,customer_id,contact_id,display_name,phone_display_value,phone_normalized_value,created_by
+  ) values (
+    customer_snapshot,restaurant,customer,contact,'Rollback conversion customer','662 200 3010','6622003010',actor
+  );
+
+  insert into app.menu_catalogs(id,restaurant_id,version,currency,published_by)
+    values(catalog,restaurant,1,'MXN',actor);
+  insert into app.menu_categories(restaurant_id,catalog_id,id,name,active,display_order)
+    values(restaurant,catalog,category,'Tacos',true,1);
+  -- No modifier groups on this product: repeat_customer_order_into_capture's per-line group
+  -- coverage check has nothing to satisfy, keeping this fixture focused on plan_kind alone.
+  insert into app.menu_products(
+    restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor
+  ) values (
+    restaurant,catalog,product,category,'Taco vigente','TACO-CONVERSION',true,1,'kitchen','piece',4900
+  );
+  insert into app.menu_catalog_heads(restaurant_id,catalog_id,version,updated_at,updated_by)
+    values(restaurant,catalog,1,now_at,actor);
+
+  insert into app.orders(
+    id,restaurant_id,branch_id,channel,status,aggregate,version,created_by,updated_by
+  ) values (
+    source_order,restaurant,branch,'delivery','closed',pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'orderId',source_order::text,'restaurantId',restaurant::text,
+      'branchId',branch::text,'channel','delivery','status','closed','currency','MXN',
+      'timeZone','America/Hermosillo','items',pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object(
+          'orderItemId',source_item::text,'quantity',2,'status','pending',
+          'snapshot',pg_catalog.jsonb_build_object(
+            'catalogVersion','historical-v1','productId',product::text,
+            'name','Taco histórico','unitPrice',pg_catalog.jsonb_build_object(
+              'amountMinor','3500','currency','MXN'
+            ),'modifiers','[]'::jsonb
+          )
+        )
+      )
+    ),1,actor,actor
+  );
+  insert into app.capture_drafts(
+    id,restaurant_id,branch_id,folio,source_channel,fulfillment_channel,status,
+    attention_status,recovery_expires_at,confirmed_order_id,version,created_by,updated_by
+  ) values (
+    history_capture,restaurant,branch,'CONVERSION-HISTORY','phone','delivery','confirmed',
+    'unclaimed',now_at+interval '30 days',source_order,1,actor,actor
+  );
+  insert into app.order_fulfillment_snapshots(
+    restaurant_id,branch_id,order_id,capture_draft_id,capture_version,customer_id,
+    fulfillment_channel,delivery_instructions,snapshot,confirmed_at,confirmed_by
+  ) values (
+    restaurant,branch,source_order,history_capture,1,customer,'delivery',null,
+    pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'orderId',source_order::text,'captureDraftId',history_capture::text,
+      'captureVersion',1,'fulfillmentChannel','delivery','deliveryInstructions',null
+    ),now_at,actor
+  );
+
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',target_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','delivery'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_SELECTION_PLAN_KIND_CONVERSION_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  -- Step 1: a catalog selection plan (version 1 -> 2, plan_kind='selection').
+  selection_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',target_capture::text,'expectedVersion',1,
+    'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  );
+  selection_plan := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'catalogVersion',catalog::text,'lines',pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'lineId',gen_random_uuid()::text,'productId',product::text,'variantId',null,'quantity',1,'note',null,
+        'modifierGroups','[]'::jsonb
+      )
+    )
+  );
+  execute 'set local role app_api';
+  result := app_private.replace_capture_selection_plan(actor,selection_command,selection_plan);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_SELECTION_PLAN_KIND_CONVERSION_SELECTION_STEP_REJECTED'; end if;
+
+  select * into stored from app.capture_repeat_order_plans
+  where restaurant_id=restaurant and branch_id=branch and capture_draft_id=target_capture;
+  if stored.plan_kind<>'selection' or stored.customer_id is not null or stored.source_order_id is not null then
+    raise exception 'CAPTURE_SELECTION_PLAN_KIND_CONVERSION_SELECTION_SHAPE_REJECTED';
+  end if;
+
+  -- The customer must be attached before a repeat plan can reference them (raw update mirrors
+  -- app_private.set_capture_customer's effect without needing its full snapshot machinery here).
+  update app.capture_drafts set customer_id=customer,customer_snapshot_id=customer_snapshot,
+    updated_at=pg_catalog.clock_timestamp(),updated_by=actor
+  where restaurant_id=restaurant and branch_id=branch and id=target_capture;
+
+  -- Step 2: repeat that historical order onto the SAME capture (version 2 -> 3). The prior
+  -- 'selection' row must convert to 'repeat' instead of violating the payload check.
+  repeat_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'customerId',customer::text,'sourceOrderId',source_order::text,
+    'captureDraftId',target_capture::text,'expectedVersion',2,
+    'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  );
+  repeat_plan := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'customerId',customer::text,'sourceOrderId',source_order::text,
+    'catalogVersion',catalog::text,'lines',pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+      'sourceOrderItemId',source_item::text,'productId',product::text,'quantity',2,'modifierGroups','[]'::jsonb
+    ))
+  );
+  execute 'set local role app_api';
+  result := app_private.repeat_customer_order_into_capture(actor,repeat_command,repeat_plan);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_SELECTION_PLAN_KIND_CONVERSION_REPEAT_STEP_REJECTED'; end if;
+
+  select * into stored from app.capture_repeat_order_plans
+  where restaurant_id=restaurant and branch_id=branch and capture_draft_id=target_capture;
+  if stored.plan_kind<>'repeat' or stored.customer_id<>customer or stored.source_order_id<>source_order then
+    raise exception 'CAPTURE_SELECTION_PLAN_KIND_CONVERSION_REPEAT_SHAPE_REJECTED';
+  end if;
+
+  -- Step 3: replace it with a selection plan again (version 3 -> 4). The prior 'repeat' row
+  -- must convert back to 'selection' with customer_id/source_order_id nulled.
+  execute 'set local role app_api';
+  result := app_private.replace_capture_selection_plan(actor,selection_command||pg_catalog.jsonb_build_object(
+    'expectedVersion',3,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text
+  ),selection_plan);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_SELECTION_PLAN_KIND_CONVERSION_SELECTION_AGAIN_STEP_REJECTED'; end if;
+
+  select * into stored from app.capture_repeat_order_plans
+  where restaurant_id=restaurant and branch_id=branch and capture_draft_id=target_capture;
+  if stored.plan_kind<>'selection' or stored.customer_id is not null or stored.source_order_id is not null then
+    raise exception 'CAPTURE_SELECTION_PLAN_KIND_CONVERSION_SELECTION_AGAIN_SHAPE_REJECTED';
+  end if;
+end
+$capture_selection_plan_kind_conversion_tests$;
+
 -- A 0-line selection plan means "no plan": the row is deleted (still
 -- audited by the command event), never persisted with an empty lines array.
 do $capture_selection_plan_empty_tests$
