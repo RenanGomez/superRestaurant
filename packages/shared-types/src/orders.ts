@@ -216,8 +216,12 @@ export interface OrderDetailV1 {
   readonly tableId: string | null;
   readonly currency: string;
   readonly timeZone: string;
+  /**
+   * Both are `null` today: `OrderPersistencePort.read` returns only the aggregate and its version,
+   * not a row timestamp, so this endpoint does not yet expose either -- never invented client-side.
+   */
   readonly createdAt: string | null;
-  readonly updatedAt: string;
+  readonly updatedAt: string | null;
   readonly version: number;
   readonly items: readonly OrderDetailItemV1[];
   readonly totals: OrderDetailTotalsV1;
@@ -251,7 +255,8 @@ export function parseOrderDetailV1(value: unknown): OrderDetailV1 | undefined {
   const timeZone = text(own(record, "timeZone"), 1, 100);
   const rawCreatedAt = own(record, "createdAt");
   const createdAt = rawCreatedAt === null ? null : timestamp(rawCreatedAt);
-  const updatedAt = timestamp(own(record, "updatedAt"));
+  const rawUpdatedAt = own(record, "updatedAt");
+  const updatedAt = rawUpdatedAt === null ? null : timestamp(rawUpdatedAt);
   const version = integer(own(record, "version"), 1, Number.MAX_SAFE_INTEGER);
   const rawItems = exactDenseArray(own(record, "items"), 1_000);
   const totals = parseDetailTotals(own(record, "totals"));
@@ -281,7 +286,6 @@ export function parseOrderDetailV1(value: unknown): OrderDetailV1 | undefined {
     }
     actions.push(raw as OrderDetailActionV1);
   }
-  if (orderId !== undefined && scope.restaurantId === undefined) return undefined;
   return Object.freeze({
     availableActions: Object.freeze(actions),
     channel: channel as OrderChannelV1,

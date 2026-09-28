@@ -9,6 +9,8 @@ import {
   parseKdsTicketListV1,
   parseOpenOrderCommandV1,
   parseBranchScope,
+  parseOrderDetailRequestV1,
+  parseOrderDetailV1,
   parseRealtimeSubscriptionV1,
   parseTransitionOrderItemCommandV1,
   type BranchScope,
@@ -20,11 +22,14 @@ import {
   type KdsTicketListV1,
   type MenuCatalogV1,
   type OrderAuditInputV1,
+  type OrderDetailActionV1,
+  type OrderDetailV1,
   type OrderMutationSummaryV1,
   type RealtimeSubscriptionV1,
 } from "@super-restaurant/shared-types";
 import {
   addOrderItem,
+  calculateOrderAggregateTotals,
   cancelOrderItem,
   createMenuProductPriceSnapshot,
   createOrder,
@@ -37,7 +42,8 @@ import {
 import { Inject, Injectable } from "@nestjs/common";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
-import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
+import { MembershipAuthorizationService, type MembershipRole } from "./auth/membership-authorization.js";
+import { rolesGrantPermission } from "./auth/rbac-policy.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
@@ -321,6 +327,40 @@ export class OrderService {
     }
   }
 
+  /**
+   * Read-only projection (S9.1 web-order-actions). Reuses the same aggregate `OrderPersistencePort.read`
+   * already scoped by `read_order`, and `calculateOrderAggregateTotals` -- never a second money
+   * calculation. The fulfillment summary is deliberately reduced (see `OrderDetailFulfillmentV1`):
+   * only the Order's own channel/tableId, no customer/address/payment-intent PII, since that
+   * requires a snapshot join not yet wired to this port; a role's `customers.read` grant is
+   * therefore irrelevant to this response today, but the field shapes already anticipate it.
+   * `availableActions` is fully server-computed from the order's own state plus the caller's
+   * granted roles -- the client never infers a permission beyond this list.
+   */
+  public async detail(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderDetailV1> {
+    const request = parseOrderDetailRequestV1(input);
+    if (request === undefined) throw applicationError("request");
+    let actorId: string;
+    let roles: readonly MembershipRole[];
+    try {
+      const authorized = await this.authorization.authorizeBranch(principal, request.scope, "orders.read");
+      actorId = authorized.principal.actorId;
+      roles = authorized.roles;
+    } catch { throw applicationError("authorization"); }
+    let record: StoredOrder;
+    try {
+      const result = await this.orders.read(actorId, request.scope, request.orderId);
+      if (result === "missing") throw applicationError("not_found");
+      record = result;
+    } catch (error: unknown) {
+      if (error instanceof OrderApplicationError) throw error;
+      throw unavailable();
+    }
+    const detail = projectOrderDetail(record, request.scope, roles);
+    if (detail === undefined) throw unavailable();
+    return detail;
+  }
+
   public async recoverKds(
     principal: AuthenticatedPrincipal,
     subscriptionInput: unknown,
@@ -418,6 +458,99 @@ export class OrderService {
     try { return (await this.authorization.authorizeBranch(principal, scope, permission)).principal.actorId; }
     catch { throw applicationError("authorization"); }
   }
+}
+
+/**
+ * Pure projection from the already-scoped, already-authorized aggregate. Totals reuse
+ * `calculateOrderAggregateTotals` -- never a second money calculation -- and cancelled lines are
+ * priced at zero, mirroring that calculator's own exclusion of cancelled lines from the payable
+ * total. `roles` decides `availableActions`; the client is never trusted to infer a permission.
+ */
+function projectOrderDetail(
+  stored: StoredOrder,
+  scope: BranchScope,
+  roles: readonly MembershipRole[],
+): OrderDetailV1 | undefined {
+  const { order, version } = stored;
+  const totals = calculateOrderAggregateTotals(order);
+  const lineTotalsByItemId = new Map(totals.lines.map((line) => [line.input.orderItemId, line]));
+  const items = order.items.map((item) => {
+    const lineTotals = lineTotalsByItemId.get(item.orderItemId);
+    return {
+      lineTotalMinor: lineTotals === undefined ? 0 : lineTotals.totalAfterOrderDiscount.amountMinor,
+      modifiers: item.snapshot.modifiers.map((modifier) => ({
+        modifierId: modifier.modifierId,
+        name: modifier.name,
+        quantity: modifier.quantity,
+        unitPriceMinor: modifier.unitPrice.amountMinor,
+      })),
+      name: item.snapshot.name,
+      note: item.note ?? null,
+      orderItemId: item.orderItemId,
+      quantity: item.quantity,
+      status: item.status,
+      unitPriceMinor: item.snapshot.unitPrice.amountMinor,
+    };
+  });
+  const deliveryChargeMinor = order.deliveryCharge === null ? 0 : order.deliveryCharge.amount.amountMinor;
+  // H31: itemsTotalMinor must come from the items/discount/tax components alone, never
+  // `total - deliveryCharge`, or a tipped order would silently count its tip as part of the items total.
+  const itemsTotalMinor = totals.subtotalBeforeOrderDiscount.amountMinor - totals.orderDiscount.amountMinor;
+  return parseOrderDetailV1({
+    availableActions: computeAvailableActions(order, roles),
+    channel: order.channel,
+    createdAt: null,
+    currency: order.currency,
+    fulfillment: {
+      addressLabel: null,
+      channel: order.channel,
+      customerLabel: null,
+      paymentIntent: null,
+      tableId: order.tableId ?? null,
+    },
+    items,
+    orderId: order.orderId,
+    schemaVersion: 1,
+    scope,
+    status: order.status,
+    tableId: order.tableId ?? null,
+    timeZone: order.timeZone,
+    totals: {
+      currency: totals.total.currency,
+      deliveryChargeMinor,
+      itemsTotalMinor,
+      tipMinor: totals.tip.amountMinor,
+      totalMinor: totals.total.amountMinor,
+    },
+    updatedAt: null,
+    version,
+  });
+}
+
+const FINANCIAL_ROLES: ReadonlySet<MembershipRole> = new Set(["owner", "admin", "manager", "supervisor", "cashier"]);
+
+function computeAvailableActions(order: Order, roles: readonly MembershipRole[]): readonly OrderDetailActionV1[] {
+  const actions: OrderDetailActionV1[] = [];
+  const canUpdate = rolesGrantPermission(roles, "orders.update");
+  const canTransitionKds = rolesGrantPermission(roles, "kds.transition");
+  const canCancelPending = rolesGrantPermission(roles, "orders.cancel.pending");
+  const canCancelSent = rolesGrantPermission(roles, "orders.cancel.sent");
+  const itemMutable = order.status !== "closed" && order.status !== "cancelled";
+  if (canUpdate && order.status === "draft") actions.push("open");
+  if (canUpdate && itemMutable && order.items.some((item) => item.status === "pending")) actions.push("sendToKitchen");
+  if (canTransitionKds && itemMutable && order.items.some((item) => item.status === "sent" || item.status === "preparing")) {
+    actions.push("markReady");
+  }
+  if (canUpdate && itemMutable && order.items.some((item) => item.status === "ready")) actions.push("markDelivered");
+  if (
+    (order.status === "draft" || order.status === "open")
+    && order.items.some((item) => (item.status === "pending" && canCancelPending)
+      || (["sent", "preparing", "ready"].includes(item.status) && canCancelSent))
+  ) actions.push("cancelItem");
+  if ((order.status === "open" || order.status === "partially_paid") && roles.some((role) => FINANCIAL_ROLES.has(role))) {
+    actions.push("checkout");
+  }
+  return Object.freeze(actions);
 }
 
 function orderInput(command: CreateOrderCommandV1 | CreateOrderCommandV2): Parameters<typeof createOrder>[0] {
