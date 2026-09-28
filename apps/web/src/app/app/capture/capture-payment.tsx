@@ -8,7 +8,7 @@ import type {
   CaptureFulfillmentChannelV1,
   DeliveryQuoteV1,
 } from "@super-restaurant/shared-types";
-import { describePaymentMethod, suggestTenderAmounts } from "../../../lib/capture-payment";
+import { describePaymentMethod, parseMoneyInputToMinor, suggestTenderAmounts } from "../../../lib/capture-payment";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
 const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
@@ -61,10 +61,13 @@ export function CapturePayment({ projection, intent, deliveryQuote, fulfillment,
   function handleCustomTender(event: ChangeEvent<HTMLInputElement>): void {
     const raw = event.target.value;
     setCustomTender(raw);
-    const parsed = Number.parseFloat(raw.replace(",", "."));
-    if (raw.trim() === "" || !Number.isFinite(parsed) || parsed < 0) return;
-    onSetIntent(method, Math.round(parsed * 100), tipMinor);
+    if (raw.trim() === "") return;
+    const parsedMinor = parseMoneyInputToMinor(raw);
+    if (parsedMinor === null) return;
+    onSetIntent(method, parsedMinor, tipMinor);
   }
+
+  const customTenderInvalid = customTender.trim() !== "" && parseMoneyInputToMinor(customTender) === null;
 
   const timing = projection?.timing ?? "now";
 
@@ -102,8 +105,12 @@ export function CapturePayment({ projection, intent, deliveryQuote, fulfillment,
       </div>
       <label className="grid gap-1 text-sm" htmlFor="capture-cash-with">Otro monto
         <input id="capture-cash-with" inputMode="decimal" className={input} value={customTender}
-          disabled={busy} placeholder="0.00" onChange={handleCustomTender} />
+          disabled={busy} placeholder="0.00" onChange={handleCustomTender}
+          aria-invalid={customTenderInvalid} aria-describedby={customTenderInvalid ? "capture-cash-with-error" : undefined} />
       </label>
+      {customTenderInvalid && <p id="capture-cash-with-error" role="alert" className="text-sm text-error">
+        Monto inválido
+      </p>}
     </div>}
     <div className="mt-4 grid gap-2">
       <span className="text-sm font-semibold">Propina (separada del total)</span>

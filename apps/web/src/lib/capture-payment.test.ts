@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { describePaymentMethod, suggestTenderAmounts } from "./capture-payment.js";
+import { describePaymentMethod, parseMoneyInputToMinor, suggestTenderAmounts } from "./capture-payment.js";
 
 test("suggestTenderAmounts always includes the exact total plus the next 100/200/500-peso roundings above it", () => {
   assert.deepEqual(suggestTenderAmounts(9_000), [9_000, 10_000, 20_000, 50_000]);
@@ -37,4 +37,26 @@ test("describePaymentMethod describes card_manual and transfer independently of 
     { label: "Transferencia", notice: "Pendiente de evidencia de pago" });
   assert.deepEqual(describePaymentMethod("transfer", "on_fulfillment"),
     { label: "Transferencia", notice: "Pendiente de evidencia de pago" });
+});
+
+test("parseMoneyInputToMinor converts whole pesos and two-decimal amounts with exact integer arithmetic", () => {
+  assert.equal(parseMoneyInputToMinor("10"), 1_000);
+  assert.equal(parseMoneyInputToMinor("10.5"), 1_050);
+});
+
+test("parseMoneyInputToMinor accepts a comma as the decimal separator", () => {
+  assert.equal(parseMoneyInputToMinor("10,50"), 1_050);
+});
+
+test("parseMoneyInputToMinor rejects a numeric prefix followed by non-digit trailing text", () => {
+  assert.equal(parseMoneyInputToMinor("10abc"), null);
+});
+
+test("parseMoneyInputToMinor rejects more than two decimal digits instead of rounding them away", () => {
+  assert.equal(parseMoneyInputToMinor("10.555"), null);
+});
+
+test("parseMoneyInputToMinor rejects an empty or whitespace-only field", () => {
+  assert.equal(parseMoneyInputToMinor(""), null);
+  assert.equal(parseMoneyInputToMinor("   "), null);
 });

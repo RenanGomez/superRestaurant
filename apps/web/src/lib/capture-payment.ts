@@ -1,5 +1,26 @@
 import type { CapturePaymentIntentMethodV1, CapturePaymentIntentTimingV1 } from "@super-restaurant/shared-types";
 
+const moneyInputPattern = /^\d{1,7}([.,]\d{1,2})?$/u;
+
+/**
+ * Parses a free-text cash-tender field into exact minor units, or `null` if it is not a valid
+ * amount. Accepts only whole pesos with up to two optional decimal digits (comma or dot as the
+ * separator) -- never a locale-dependent, partial-prefix parse like `Number.parseFloat`, which
+ * would silently accept `"10abc"` or round away a third decimal digit. All arithmetic here is
+ * integer-only (no float), matching how every other money figure in this app is minor units.
+ */
+export function parseMoneyInputToMinor(text: string): number | null {
+  const trimmed = text.trim();
+  if (!moneyInputPattern.test(trimmed)) return null;
+  const separatorIndex = trimmed.search(/[.,]/u);
+  const wholePart = separatorIndex === -1 ? trimmed : trimmed.slice(0, separatorIndex);
+  const fractionPart = (separatorIndex === -1 ? "" : trimmed.slice(separatorIndex + 1)).padEnd(2, "0");
+  const wholeMinor = Number.parseInt(wholePart, 10) * 100;
+  const fractionMinor = Number.parseInt(fractionPart, 10);
+  const totalMinor = wholeMinor + fractionMinor;
+  return Number.isSafeInteger(totalMinor) ? totalMinor : null;
+}
+
 /**
  * Suggested cash tender amounts for a given authoritative total (minor units): the exact total,
  * plus the next round 100/200/500 (pesos) above it that is strictly greater than the total --
