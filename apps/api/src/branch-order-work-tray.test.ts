@@ -45,6 +45,13 @@ function tableOrder() {
   return created.order;
 }
 
+function counterOrder() {
+  const created = createOrder({
+    orderId, restaurantId, branchId, channel: "counter", currency: "MXN", timeZone: "America/Hermosillo",
+  }, audit);
+  return created.order;
+}
+
 function deliverySnapshot() {
   return {
     schemaVersion: 2, orderId, captureDraftId: capturedId, captureVersion: 1, fulfillmentChannel: "delivery",
@@ -93,7 +100,8 @@ test("service projects a delivery order's totals, masked customer, address and p
   const envelope = {
     schemaVersion: 1, scope, next: null,
     orders: [{
-      orderId, channel: "delivery", status: "draft", version: 1, updatedAt: "2026-09-26T12:05:00.000Z",
+      orderId, channel: "delivery", status: "draft", version: 1, createdAt: "2026-09-26T11:55:00.000Z",
+      updatedAt: "2026-09-26T12:05:00.000Z",
       confirmedAt: "2026-09-26T12:00:00.000Z", order: encodeOrderRecord(deliveryOrder()), snapshot: deliverySnapshot(),
     }],
   };
@@ -116,7 +124,8 @@ test("service projects a table order without a fulfillment snapshot as dine_in w
   const envelope = {
     schemaVersion: 1, scope, next: null,
     orders: [{
-      orderId, channel: "table", status: "draft", version: 1, updatedAt: "2026-09-26T12:05:00.000Z",
+      orderId, channel: "table", status: "draft", version: 1, createdAt: "2026-09-26T11:50:00.000Z",
+      updatedAt: "2026-09-26T12:05:00.000Z",
       confirmedAt: null, order: encodeOrderRecord(tableOrder()), snapshot: null,
     }],
   };
@@ -126,8 +135,28 @@ test("service projects a table order without a fulfillment snapshot as dine_in w
   assert.equal(item?.customerLabel, null);
   assert.equal(item?.addressLabel, null);
   assert.equal(item?.paymentIntent, null);
-  assert.equal(item?.createdAt, item?.updatedAt);
+  assert.equal(item?.createdAt, "2026-09-26T11:50:00.000Z");
   assert.deepEqual(item?.totals, { currency: "MXN", deliveryChargeMinor: 0, itemsTotalMinor: 0, totalMinor: 0 });
+});
+
+test("service projects a counter order with no fulfillment snapshot at all (not table, not delivery)", async () => {
+  const envelope = {
+    schemaVersion: 1, scope, next: null,
+    orders: [{
+      orderId, channel: "counter", status: "draft", version: 1, createdAt: "2026-09-26T11:50:00.000Z",
+      updatedAt: "2026-09-26T12:05:00.000Z",
+      confirmedAt: null, order: encodeOrderRecord(counterOrder()), snapshot: null,
+    }],
+  };
+  const result = await service(envelope).list({ actorId } as never, { cursor: null, limit: 25, schemaVersion: 1, scope });
+  assert.equal(result.items.length, 1);
+  const item = result.items[0];
+  assert.equal(item?.channel, "counter");
+  assert.equal(item?.fulfillmentChannel, null);
+  assert.equal(item?.customerLabel, null);
+  assert.equal(item?.addressLabel, null);
+  assert.equal(item?.paymentIntent, null);
+  assert.equal(item?.createdAt, "2026-09-26T11:50:00.000Z");
 });
 
 test("service fails closed on a denied/rejected outcome, cross-scope envelopes and a scope-mismatched order", async () => {
@@ -143,7 +172,8 @@ test("service fails closed on a denied/rejected outcome, cross-scope envelopes a
   const mismatched = {
     schemaVersion: 1, scope, next: null,
     orders: [{
-      orderId, channel: "delivery", status: "draft", version: 1, updatedAt: "2026-09-26T12:05:00.000Z",
+      orderId, channel: "delivery", status: "draft", version: 1, createdAt: "2026-09-26T11:55:00.000Z",
+      updatedAt: "2026-09-26T12:05:00.000Z",
       confirmedAt: null, order: encodeOrderRecord(deliveryOrder()), snapshot: { ...deliverySnapshot(), orderId: capturedId },
     }],
   };

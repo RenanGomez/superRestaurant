@@ -56,7 +56,7 @@ begin
   ) then return pg_catalog.jsonb_build_object('status','denied'); end if;
 
   with page as materialized (
-    select o.id, o.channel, o.status, o.version, o.updated_at, o.aggregate,
+    select o.id, o.channel, o.status, o.version, o.created_at, o.updated_at, o.aggregate,
       frozen.snapshot, frozen.confirmed_at
     from app.orders o
     left join app.order_fulfillment_snapshots frozen
@@ -72,6 +72,7 @@ begin
   )
   select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
     'orderId', n.id::text, 'channel', n.channel, 'status', n.status, 'version', n.version,
+    'createdAt', pg_catalog.to_char(n.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
     'updatedAt', pg_catalog.to_char(n.updated_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
     'confirmedAt', case when n.confirmed_at is null then null
       else pg_catalog.to_char(n.confirmed_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') end,

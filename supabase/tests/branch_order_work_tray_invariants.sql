@@ -36,19 +36,19 @@ begin
     values(customer,restaurant,'Work Tray Customer',actor,actor);
 
   insert into app.orders(
-    id,restaurant_id,branch_id,channel,status,aggregate,version,created_by,updated_by,updated_at
+    id,restaurant_id,branch_id,channel,status,aggregate,version,created_by,updated_by,created_at,updated_at
   ) values (
     order_with_snapshot,restaurant,branch,'delivery','open',pg_catalog.jsonb_build_object(
       'schemaVersion',1,'orderId',order_with_snapshot::text,'restaurantId',restaurant::text,
       'branchId',branch::text,'channel','delivery','status','open','currency','MXN',
       'timeZone','America/Hermosillo','items','[]'::jsonb
-    ),1,actor,actor,now_at
+    ),1,actor,actor,now_at-interval '5 minutes',now_at
   ), (
     order_without_snapshot,restaurant,branch,'counter','draft',pg_catalog.jsonb_build_object(
       'schemaVersion',1,'orderId',order_without_snapshot::text,'restaurantId',restaurant::text,
       'branchId',branch::text,'channel','counter','status','draft','currency','MXN',
       'timeZone','America/Hermosillo','items','[]'::jsonb
-    ),1,actor,actor,now_at-interval '1 minute'
+    ),1,actor,actor,now_at-interval '10 minutes',now_at-interval '1 minute'
   );
   insert into app.capture_drafts(
     id,restaurant_id,branch_id,folio,source_channel,fulfillment_channel,status,
@@ -91,6 +91,9 @@ begin
     or result#>>'{orders,0,orderId}'<>order_without_snapshot::text
     or result#>'{orders,0,snapshot}' <> 'null'::jsonb
     or result->'next' is distinct from 'null'::jsonb
+    or result#>>'{orders,0,createdAt}'<>pg_catalog.to_char(
+      (now_at-interval '10 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    or result#>>'{orders,0,createdAt}' = result#>>'{orders,0,updatedAt}'
   then raise exception 'BRANCH_ORDER_WORK_TRAY_SECOND_PAGE_OR_SNAPSHOT_NULL_REJECTED'; end if;
 
   result := app_private.list_branch_order_work_items(actor,pg_catalog.jsonb_build_object(

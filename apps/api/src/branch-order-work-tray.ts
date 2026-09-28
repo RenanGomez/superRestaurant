@@ -102,15 +102,17 @@ export class BranchOrderWorkTrayService {
  * to a name plus a masked phone suffix, never the full phone or address text.
  */
 function projectBranchOrderWorkItem(raw: unknown, scope: { restaurantId: string; branchId: string }): BranchOrderWorkItemV1 {
-  const record = exactRecord(raw, ["orderId", "channel", "status", "version", "updatedAt", "confirmedAt", "order", "snapshot"]);
+  const record = exactRecord(raw, ["orderId", "channel", "status", "version", "createdAt", "updatedAt", "confirmedAt", "order", "snapshot"]);
   if (record === undefined) throw unavailable();
   const orderId = own(record, "orderId");
   const channel = own(record, "channel");
   const status = own(record, "status");
+  const createdAt = own(record, "createdAt");
   const updatedAt = own(record, "updatedAt");
   const confirmedAt = own(record, "confirmedAt");
   if (typeof orderId !== "string" || !member(channel, CHANNELS) || !member(status, STATUSES)
-    || typeof updatedAt !== "string" || (confirmedAt !== null && typeof confirmedAt !== "string")) throw unavailable();
+    || typeof createdAt !== "string" || typeof updatedAt !== "string"
+    || (confirmedAt !== null && typeof confirmedAt !== "string")) throw unavailable();
 
   let order: Order;
   try { order = decodeOrderRecord(own(record, "order")); } catch { throw unavailable(); }
@@ -138,7 +140,7 @@ function projectBranchOrderWorkItem(raw: unknown, scope: { restaurantId: string;
   const item = parseBranchOrderWorkItemV1({
     addressLabel: buildAddressLabel(snapshot),
     channel,
-    createdAt: confirmedAt ?? updatedAt,
+    createdAt: confirmedAt ?? createdAt,
     customerLabel: buildCustomerLabel(snapshot),
     fulfillmentChannel,
     hasNotes: order.items.some((entry) => typeof entry.note === "string"),
