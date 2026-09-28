@@ -1512,6 +1512,7 @@ const paymentSelectionConfirmation: CaptureConfirmationPort = {
 test("capture delivery quote recomputes from live zones, freezes it and reports it back in workspace V5", async () => {
   let persistedEnvelope: CaptureDeliveryQuoteEnvelopeV1 | undefined;
   const deliveryQuotePersistence: CaptureDeliveryQuotePort = {
+    probeSetDeliveryQuote: async () => ({ status: "pending" }),
     setCaptureDeliveryQuote: async (actorId, envelope) => {
       assert.equal(actorId, principal.actorId);
       persistedEnvelope = envelope;
@@ -1726,6 +1727,7 @@ test("payment intent replay returns the stored result without recomputing insuff
 
 test("capture delivery quote and payment intent reject a foreign scope before touching any port", async () => {
   const deliveryQuotePersistence: CaptureDeliveryQuotePort = {
+    probeSetDeliveryQuote: async () => { throw new Error("must not probe"); },
     setCaptureDeliveryQuote: async () => { throw new Error("must not persist"); },
   };
   const computation: CaptureDeliveryQuoteComputationPort = {
