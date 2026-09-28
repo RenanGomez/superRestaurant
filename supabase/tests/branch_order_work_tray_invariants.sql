@@ -2,7 +2,9 @@
 -- Exercises app_private.list_branch_order_work_items: keyset pagination, scope isolation,
 -- role authorization, and that both a snapshot-backed (confirmed delivery) Order and a bare
 -- (no fulfillment snapshot, e.g. dine-in) Order are returned with their full aggregate and
--- (nullable) snapshot untouched, so the API can project totals/customer/address from them.
+-- (nullable) snapshot untouched, so the API can project totals/customer/address from them. Uses
+-- a table-less counter Order for the no-snapshot case to avoid a dining-table fixture; the API's
+-- own unit tests exercise the dine-in/table mapping against a domain Order aggregate.
 begin;
 do $branch_order_work_tray_tests$
 declare
@@ -42,9 +44,9 @@ begin
       'timeZone','America/Hermosillo','items','[]'::jsonb
     ),1,actor,actor,now_at
   ), (
-    order_without_snapshot,restaurant,branch,'table','draft',pg_catalog.jsonb_build_object(
+    order_without_snapshot,restaurant,branch,'counter','draft',pg_catalog.jsonb_build_object(
       'schemaVersion',1,'orderId',order_without_snapshot::text,'restaurantId',restaurant::text,
-      'branchId',branch::text,'channel','table','status','draft','currency','MXN',
+      'branchId',branch::text,'channel','counter','status','draft','currency','MXN',
       'timeZone','America/Hermosillo','items','[]'::jsonb
     ),1,actor,actor,now_at-interval '1 minute'
   );
@@ -87,7 +89,7 @@ begin
   ));
   if pg_catalog.jsonb_array_length(result->'orders')<>1
     or result#>>'{orders,0,orderId}'<>order_without_snapshot::text
-    or result#>'{orders,0,snapshot}' is not null
+    or result#>'{orders,0,snapshot}' <> 'null'::jsonb
     or result->'next' is distinct from 'null'::jsonb
   then raise exception 'BRANCH_ORDER_WORK_TRAY_SECOND_PAGE_OR_SNAPSHOT_NULL_REJECTED'; end if;
 
@@ -108,7 +110,8 @@ begin
   then raise exception 'BRANCH_ORDER_WORK_TRAY_REQUEST_ACCEPTED'; end if;
   execute 'reset role';
 
-  update app.memberships set revoked_at=now_at where id=membership;
+  update app.memberships set revoked_at=now_at,revoked_by=actor,revocation_reason='rollback-only test revocation'
+    where id=membership;
   execute 'set local role app_api';
   result := app_private.list_branch_order_work_items(actor,pg_catalog.jsonb_build_object(
     'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(

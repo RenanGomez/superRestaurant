@@ -139,8 +139,11 @@ try {
   } finally { await admin.query("ROLLBACK"); }
 
   if (migrationFailure !== undefined) { stage = "migrated"; throw migrationFailure; }
+  // Unlike most candidate migrations here, this one creates a brand-new SECURITY DEFINER function
+  // (not a `create or replace` of an existing one), so `migrated` legitimately has one more than
+  // `baseline` while still inside the rolled-back transaction; `postcheck` must match `baseline`.
   assert.deepEqual(baseline, postcheck);
-  assert.deepEqual(baseline, migrated);
+  assert.deepEqual(migrated, { ...baseline, securityDefinerFunctions: baseline.securityDefinerFunctions + 1 });
 
   process.stdout.write(`${JSON.stringify({
     stage: "branch_order_work_tray_rollback", status: "ok", runId,
@@ -151,9 +154,13 @@ try {
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
   const localInvariant = typeof error === "object" && error !== null && "message" in error
     && typeof error.message === "string" && /^[A-Z_]+$/u.test(error.message) ? error.message : undefined;
+  const detail = typeof error === "object" && error !== null && "detail" in error ? error.detail : undefined;
+  const constraint = typeof error === "object" && error !== null && "constraint" in error ? error.constraint : undefined;
+  const message = error instanceof Error ? error.message : undefined;
   process.stderr.write(`${JSON.stringify({ stage, status: "failed", code: "LOCAL_BRANCH_ORDER_WORK_TRAY_FAILED",
     ...(typeof code === "string" && /^[0-9A-Z]{5}$/u.test(code) ? { sqlState: code } : {}),
-    ...(localInvariant === undefined ? {} : { invariant: localInvariant }) })}\n`);
+    ...(localInvariant === undefined ? {} : { invariant: localInvariant }),
+    detail, constraint, message })}\n`);
 } finally {
   try { await admin?.end(); } catch { failed = true; }
   if (clusterCreated) {
