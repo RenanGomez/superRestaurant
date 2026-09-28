@@ -143,6 +143,12 @@ function projectBranchOrderWorkItem(
 
   const totals = calculateOrderAggregateTotals(order);
   const deliveryChargeMinor = order.deliveryCharge === null ? 0 : order.deliveryCharge.amount.amountMinor;
+  // H31: `totals.total` already folds in both the frozen delivery charge (added after pricing, see
+  // calculateOrderAggregateTotals) and the tip; itemsTotalMinor must come from the items/discount/tax
+  // components alone (subtotalBeforeOrderDiscount - orderDiscount), never `total - deliveryCharge`,
+  // or a tipped order would silently count its tip as part of the items total.
+  const itemsTotalMinor = totals.subtotalBeforeOrderDiscount.amountMinor - totals.orderDiscount.amountMinor;
+  const tipMinor = totals.tip.amountMinor;
   const paymentIntent = snapshot !== null && "paymentIntent" in snapshot && snapshot.paymentIntent !== null
     ? {
       method: snapshot.paymentIntent.method,
@@ -168,7 +174,8 @@ function projectBranchOrderWorkItem(
     totals: {
       currency: totals.total.currency,
       deliveryChargeMinor,
-      itemsTotalMinor: totals.total.amountMinor - deliveryChargeMinor,
+      itemsTotalMinor,
+      tipMinor,
       totalMinor: totals.total.amountMinor,
     },
     updatedAt,

@@ -41,7 +41,7 @@ const deliveryItem = {
   preparation: "preparing",
   status: "open",
   timeZone: "America/Hermosillo",
-  totals: { currency: "MXN", deliveryChargeMinor: 3000, itemsTotalMinor: 20000, totalMinor: 23000 },
+  totals: { currency: "MXN", deliveryChargeMinor: 3000, itemsTotalMinor: 20000, tipMinor: 0, totalMinor: 23000 },
   updatedAt: "2026-09-26T18:05:00.000Z",
 } as const;
 expect(parseBranchOrderWorkItemV1(deliveryItem) !== undefined, "delivery item parses");
@@ -79,7 +79,13 @@ for (const invalid of [
   { ...deliveryItem, totals: { ...deliveryItem.totals, currency: "mxn" } },
   { ...deliveryItem, paymentIntent: { method: "unknown", tenderedAmountMinor: null, tipMinor: 0 } },
   { ...deliveryItem, orderId: "not-a-uuid" },
+  { ...deliveryItem, totals: { ...deliveryItem.totals, tipMinor: 1000 } },
 ]) expect(parseBranchOrderWorkItemV1(invalid) === undefined, "item rejects malformed facts");
+
+expect(parseBranchOrderWorkItemV1({
+  ...deliveryItem,
+  totals: { currency: "MXN", deliveryChargeMinor: 3000, itemsTotalMinor: 20000, tipMinor: 1500, totalMinor: 24500 },
+}) !== undefined, "totals with a tip parse when items + delivery + tip == total");
 
 const tray = { items: [deliveryItem], nextCursor: null, schemaVersion: 1, scope } as const;
 expect(parseBranchOrderWorkTrayV1(tray) !== undefined, "tray parses");

@@ -31,8 +31,11 @@ export interface BranchOrderWorkCursorV1 {
 
 export interface BranchOrderWorkTotalsV1 {
   readonly currency: string;
+  /** Items after line/order discount and tax -- never delivery or tip. */
   readonly itemsTotalMinor: number;
   readonly deliveryChargeMinor: number;
+  /** Additive: kept separate from itemsTotalMinor so totalMinor === items + delivery + tip. */
+  readonly tipMinor: number;
   readonly totalMinor: number;
 }
 
@@ -146,15 +149,17 @@ export function parseBranchOrderWorkTrayV1(value: unknown): BranchOrderWorkTrayV
 }
 
 function parseTotals(value: unknown): BranchOrderWorkTotalsV1 | undefined {
-  const record = exactRecord(value, ["currency", "itemsTotalMinor", "deliveryChargeMinor", "totalMinor"]);
+  const record = exactRecord(value, ["currency", "itemsTotalMinor", "deliveryChargeMinor", "tipMinor", "totalMinor"]);
   if (record === undefined) return undefined;
   const currency = own(record, "currency");
   const itemsTotalMinor = integer(own(record, "itemsTotalMinor"), 0, Number.MAX_SAFE_INTEGER);
   const deliveryChargeMinor = integer(own(record, "deliveryChargeMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const tipMinor = integer(own(record, "tipMinor"), 0, Number.MAX_SAFE_INTEGER);
   const totalMinor = integer(own(record, "totalMinor"), 0, Number.MAX_SAFE_INTEGER);
   if (typeof currency !== "string" || !/^[A-Z]{3}$/u.test(currency) || itemsTotalMinor === undefined
-    || deliveryChargeMinor === undefined || totalMinor === undefined) return undefined;
-  return Object.freeze({ currency, deliveryChargeMinor, itemsTotalMinor, totalMinor });
+    || deliveryChargeMinor === undefined || tipMinor === undefined || totalMinor === undefined
+    || itemsTotalMinor + deliveryChargeMinor + tipMinor !== totalMinor) return undefined;
+  return Object.freeze({ currency, deliveryChargeMinor, itemsTotalMinor, tipMinor, totalMinor });
 }
 
 function parsePaymentIntent(value: unknown): BranchOrderWorkPaymentIntentV1 | undefined {
