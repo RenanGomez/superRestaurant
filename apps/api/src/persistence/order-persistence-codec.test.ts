@@ -155,6 +155,86 @@ test("round-trips an order mutation through a JSON-safe versioned representation
   });
 });
 
+test("H13: round-trips a frozen delivery charge, and a record persisted before H13 decodes it as null", () => {
+  const created = createOrder({
+    orderId: "order-delivery-1",
+    restaurantId: "restaurant-1",
+    branchId: "branch-1",
+    channel: "delivery",
+    currency: "MXN",
+    timeZone: "America/Hermosillo",
+    deliveryCharge: { amount: new Money(3_000, "MXN"), quoteId: "quote-1" },
+  }, audit("1"));
+
+  const persisted = encodeOrderRecord(created.order);
+  assert.deepEqual(persisted.deliveryCharge, { amount: { amountMinor: 3_000, currency: "MXN" }, quoteId: "quote-1" });
+  const decoded = decodeOrderRecord(JSON.parse(JSON.stringify(persisted)) as unknown);
+  assert.deepEqual(decoded.deliveryCharge, created.order.deliveryCharge);
+
+  // A pre-H13 persisted order never had the key at all; decode must treat that as null, exactly
+  // like an explicit null, rather than rejecting historical records.
+  const withoutKey: Record<string, unknown> = { ...persisted };
+  delete withoutKey["deliveryCharge"];
+  const legacyDecoded = decodeOrderRecord(JSON.parse(JSON.stringify(withoutKey)) as unknown);
+  assert.equal(legacyDecoded.deliveryCharge, null);
+});
+
+test("H23: encodeOrderRecord omits deliveryCharge when null, so persist_order_mutation's byte-equality across mutations holds", () => {
+  const created = createOrder({
+    orderId: "order-no-charge-1",
+    restaurantId: "restaurant-1",
+    branchId: "branch-1",
+    channel: "counter",
+    currency: "MXN",
+    timeZone: "America/Hermosillo",
+  }, audit("1"));
+  assert.equal(created.order.deliveryCharge, null);
+
+  const persisted = encodeOrderRecord(created.order);
+  assert.equal(Object.hasOwn(persisted, "deliveryCharge"), false);
+
+  // A legacy record from before H13 never had the key either: decode -> encode must reproduce
+  // the EXACT same JSON, not silently re-add `deliveryCharge: null` -- that mismatch is exactly
+  // what broke persist_order_mutation's "aggregate outside items/status is byte-identical" check
+  // for a subsequent order.item_added/order.state_changed mutation on any such order.
+  const legacyJson = JSON.stringify(persisted);
+  const roundTripped = encodeOrderRecord(decodeOrderRecord(JSON.parse(legacyJson) as unknown));
+  assert.equal(JSON.stringify(roundTripped), legacyJson);
+
+  // A charge, once set, keeps the key present through the same round trip -- immutable, never
+  // silently dropped either.
+  const withCharge = createOrder({
+    orderId: "order-with-charge-1",
+    restaurantId: "restaurant-1",
+    branchId: "branch-1",
+    channel: "delivery",
+    currency: "MXN",
+    timeZone: "America/Hermosillo",
+    deliveryCharge: { amount: new Money(3_000, "MXN"), quoteId: "quote-1" },
+  }, audit("1"));
+  const chargedJson = JSON.stringify(encodeOrderRecord(withCharge.order));
+  const chargedRoundTripped = encodeOrderRecord(decodeOrderRecord(JSON.parse(chargedJson) as unknown));
+  assert.equal(JSON.stringify(chargedRoundTripped), chargedJson);
+  assert.ok(chargedJson.includes("deliveryCharge"));
+});
+
+test("H13: decoding rejects a negative or malformed delivery charge", () => {
+  const created = createOrder({
+    orderId: "order-delivery-2",
+    restaurantId: "restaurant-1",
+    branchId: "branch-1",
+    channel: "delivery",
+    currency: "MXN",
+    timeZone: "America/Hermosillo",
+    deliveryCharge: { amount: new Money(3_000, "MXN"), quoteId: "quote-1" },
+  }, audit("1"));
+  const persisted = encodeOrderRecord(created.order);
+  const negative = { ...persisted, deliveryCharge: { amount: { amountMinor: -1, currency: "MXN" }, quoteId: "quote-1" } };
+  assert.throws(() => decodeOrderRecord(negative), OrderPersistenceCodecError);
+  const missingQuoteId = { ...persisted, deliveryCharge: { amount: { amountMinor: 3_000, currency: "MXN" } } };
+  assert.throws(() => decodeOrderRecord(missingQuoteId), OrderPersistenceCodecError);
+});
+
 test("round-trips cancellation evidence and verifies its event linkage", () => {
   const added = richOrderMutation();
   const opened = transitionOrderStatus(added.order, "open", audit("3"));

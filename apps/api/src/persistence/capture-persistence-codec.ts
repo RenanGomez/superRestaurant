@@ -7,6 +7,7 @@ import {
   parseCaptureWorkspaceV2,
   parseCaptureWorkspaceV3,
   parseCaptureWorkspaceV4,
+  parseCaptureWorkspaceV5,
   type BranchScope,
   type CaptureDraftDetailV1,
   type CaptureRecoveryPolicyV1,
@@ -14,6 +15,7 @@ import {
   type CaptureWorkspaceV2,
   type CaptureWorkspaceV3,
   type CaptureWorkspaceV4,
+  type CaptureWorkspaceV5,
 } from "@super-restaurant/shared-types";
 
 export interface PersistedCaptureRecordV1 {
@@ -113,6 +115,130 @@ export function withCaptureSelectionProjection(
   selectionProjection: CaptureWorkspaceV4["selectionProjection"],
 ): CaptureWorkspaceV4 {
   return Object.freeze({ ...workspace, selectionProjection });
+}
+
+export interface DecodedCaptureWorkspaceV5 {
+  readonly workspace: CaptureWorkspaceV5;
+  /** Server-only facts `read_capture_workspace_v5` returns alongside the public shape; used
+   * exclusively by the API to decide `paymentProjection.status`, never re-exposed verbatim. */
+  readonly paymentIntentAppliedCaptureVersion: number | null;
+  readonly paymentIntentBasisFingerprint: string | null;
+}
+
+/**
+ * `app_private.read_capture_workspace_v5` returns V4 plus raw `deliveryQuote`/`paymentIntent`
+ * facts and two server-only staleness facts (`paymentIntentAppliedCaptureVersion`,
+ * `paymentIntentBasisFingerprint`) that are not part of the public `CaptureWorkspaceV5` contract.
+ * This strips those two extra keys before validating the public shape (augmented with
+ * `selectionProjection`/`paymentProjection: null`, both API-computed), and returns them
+ * separately for the caller's own staleness computation.
+ */
+export function decodeCaptureWorkspaceV5(value: unknown, authorizedScope: BranchScope): DecodedCaptureWorkspaceV5 {
+  const scope = parseBranchScope(authorizedScope);
+  const extracted = extractPaymentIntentStalenessFacts(value);
+  if (extracted === undefined) throw rejected();
+  const augmented = withSelectionProjectionKey(withPaymentBasisKey(withPaymentProjectionKey(extracted.rest)));
+  const workspace = parseCaptureWorkspaceV5(augmented);
+  if (scope === undefined || workspace === undefined || workspace.detail.scope.restaurantId !== scope.restaurantId
+    || workspace.detail.scope.branchId !== scope.branchId) throw rejected();
+  return Object.freeze({
+    workspace,
+    paymentIntentAppliedCaptureVersion: extracted.paymentIntentAppliedCaptureVersion,
+    paymentIntentBasisFingerprint: extracted.paymentIntentBasisFingerprint,
+  });
+}
+
+function extractPaymentIntentStalenessFacts(value: unknown): {
+  readonly rest: unknown;
+  readonly paymentIntentAppliedCaptureVersion: number | null;
+  readonly paymentIntentBasisFingerprint: string | null;
+} | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || nodeTypes.isProxy(value)) return undefined;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const keys = Reflect.ownKeys(value);
+    if (!keys.includes("paymentIntentAppliedCaptureVersion") || !keys.includes("paymentIntentBasisFingerprint")) return undefined;
+    const rest: Record<string, unknown> = {};
+    let rawVersion: unknown;
+    let rawFingerprint: unknown;
+    for (const key of keys) {
+      if (typeof key !== "string") return undefined;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) return undefined;
+      if (key === "paymentIntentAppliedCaptureVersion") { rawVersion = descriptor.value; continue; }
+      if (key === "paymentIntentBasisFingerprint") { rawFingerprint = descriptor.value; continue; }
+      rest[key] = descriptor.value;
+    }
+    const paymentIntentAppliedCaptureVersion = rawVersion === null ? null
+      : typeof rawVersion === "number" && Number.isSafeInteger(rawVersion) && rawVersion > 0 ? rawVersion : undefined;
+    const paymentIntentBasisFingerprint = rawFingerprint === null ? null
+      : typeof rawFingerprint === "string" && /^[0-9a-f]{64}$/u.test(rawFingerprint) ? rawFingerprint : undefined;
+    if (paymentIntentAppliedCaptureVersion === undefined || paymentIntentBasisFingerprint === undefined
+      || (paymentIntentAppliedCaptureVersion === null) !== (paymentIntentBasisFingerprint === null)) return undefined;
+    return { rest, paymentIntentAppliedCaptureVersion, paymentIntentBasisFingerprint };
+  } catch {
+    return undefined;
+  }
+}
+
+function withPaymentProjectionKey(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || nodeTypes.isProxy(value)) return value;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return value;
+    const keys = Reflect.ownKeys(value);
+    if (keys.includes("paymentProjection")) return value;
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (typeof key !== "string") return value;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) return value;
+      result[key] = descriptor.value;
+    }
+    result.paymentProjection = null;
+    return result;
+  } catch {
+    return value;
+  }
+}
+
+/** H25: same augmentation as `withPaymentProjectionKey`, for the additive `paymentBasis` key. */
+function withPaymentBasisKey(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || nodeTypes.isProxy(value)) return value;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return value;
+    const keys = Reflect.ownKeys(value);
+    if (keys.includes("paymentBasis")) return value;
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (typeof key !== "string") return value;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) return value;
+      result[key] = descriptor.value;
+    }
+    result.paymentBasis = null;
+    return result;
+  } catch {
+    return value;
+  }
+}
+
+/** Replaces `paymentBasis` with an API-computed pricing basis (H25). */
+export function withCapturePaymentBasis(
+  workspace: CaptureWorkspaceV5,
+  paymentBasis: CaptureWorkspaceV5["paymentBasis"],
+): CaptureWorkspaceV5 {
+  return Object.freeze({ ...workspace, paymentBasis });
+}
+
+/** Replaces `paymentProjection` with an API-computed projection. */
+export function withCapturePaymentProjection(
+  workspace: CaptureWorkspaceV5,
+  paymentProjection: CaptureWorkspaceV5["paymentProjection"],
+): CaptureWorkspaceV5 {
+  return Object.freeze({ ...workspace, paymentProjection });
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {

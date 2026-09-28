@@ -66,9 +66,28 @@ import {
   type CaptureSelectionPlanProjectionLineV1,
   type CaptureSelectionPlanProjectionV1,
   type CaptureSelectionPlanV1,
+  type CaptureSelectionLineV1,
   type ReplaceCaptureSelectionPlanCommandV1,
+  parseCaptureWorkspaceRequestV5,
+  parseRequestCaptureDeliveryQuoteCommandV1,
+  parseSetCapturePaymentIntentCommandV1,
+  parseCapturePaymentIntentProjectionV1,
+  parseCapturePaymentBasisV1,
+  type CaptureWorkspaceRequestV5,
+  type CaptureWorkspaceV5,
+  type CaptureFulfillmentChannelV1,
+  type CapturePaymentBasisV1,
+  type CapturePaymentIntentProjectionV1,
+  type DeliveryQuoteV1,
 } from "@super-restaurant/shared-types";
-import { calculateOrderItemTotals, createMenuProductPriceSnapshot } from "@super-restaurant/domain";
+import {
+  buildCapturePaymentIntentProjection,
+  calculateOrderItemTotals,
+  createMenuProductPriceSnapshot,
+  Money,
+  type DeliveryChargeSnapshot,
+} from "@super-restaurant/domain";
+import { createHash } from "node:crypto";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
@@ -77,6 +96,7 @@ import {
   materializeCaptureSelectionOrder,
   parseCaptureRepeatSelectionPlan,
   type CaptureOrderMaterialization,
+  type CaptureRepeatSelectionLine,
   type CaptureRepeatSelectionPlan,
 } from "./capture-repeat-order-plan.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
@@ -84,7 +104,8 @@ import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
 import {
   decodeCaptureRecord, decodeCaptureWorkspace, decodeCaptureWorkspaceV2, decodeCaptureWorkspaceV3,
-  decodeCaptureWorkspaceV4, withCaptureSelectionProjection, type PersistedCaptureRecordV1,
+  decodeCaptureWorkspaceV4, decodeCaptureWorkspaceV5, withCaptureSelectionProjection,
+  withCapturePaymentBasis, withCapturePaymentProjection, type PersistedCaptureRecordV1,
 } from "./persistence/capture-persistence-codec.js";
 import { encodeOrderAuditEventRecord, encodeOrderRecord } from "./persistence/order-persistence-codec.js";
 
@@ -102,6 +123,7 @@ export interface CaptureCreationPort {
   readWorkspaceV2?(actorId: string, request: CaptureWorkspaceRequestV2): Promise<unknown>;
   readWorkspaceV3?(actorId: string, request: CaptureWorkspaceRequestV3): Promise<unknown>;
   readWorkspaceV4?(actorId: string, request: CaptureWorkspaceRequestV4): Promise<unknown>;
+  readWorkspaceV5?(actorId: string, request: CaptureWorkspaceRequestV5): Promise<unknown>;
 }
 export const CAPTURE_CREATION_PORT = Symbol("CAPTURE_CREATION_PORT");
 export type CaptureAttentionOperation = "capture.held" | "capture.claimed" | "capture.resumed"
@@ -150,6 +172,38 @@ export interface CaptureSelectionPlanPort {
   probeReplaceSelectionPlan(actorId: string, command: ReplaceCaptureSelectionPlanCommandV1): Promise<unknown>;
 }
 export const CAPTURE_SELECTION_PLAN_PORT = Symbol("CAPTURE_SELECTION_PLAN_PORT");
+export interface CaptureDeliveryQuoteEnvelopeV1 {
+  readonly attentionLeaseId: string;
+  readonly captureDraftId: string;
+  readonly deviceId: string;
+  readonly eventId: string;
+  readonly expectedVersion: number;
+  readonly idempotencyKey: string;
+  readonly occurredAt: string;
+  readonly schemaVersion: 1;
+  readonly scheduledFor: string | null;
+  readonly scope: BranchScope;
+}
+export interface CaptureDeliveryQuotePort {
+  setCaptureDeliveryQuote(actorId: string, envelope: CaptureDeliveryQuoteEnvelopeV1, quote: DeliveryQuoteV1): Promise<unknown>;
+  probeSetDeliveryQuote(actorId: string, envelope: CaptureDeliveryQuoteEnvelopeV1): Promise<unknown>;
+}
+export const CAPTURE_DELIVERY_QUOTE_PORT = Symbol("CAPTURE_DELIVERY_QUOTE_PORT");
+export interface CapturePaymentIntentPort {
+  setCapturePaymentIntent(actorId: string, envelope: Record<string, unknown>, basisFingerprint: string): Promise<unknown>;
+  probeSetPaymentIntent(actorId: string, envelope: Record<string, unknown>): Promise<unknown>;
+}
+export const CAPTURE_PAYMENT_INTENT_PORT = Symbol("CAPTURE_PAYMENT_INTENT_PORT");
+/**
+ * Deliberately duck-typed against `DeliveryZoneService.quoteForCapture`, never importing that
+ * class here: `delivery-zones.ts` already imports `CAPTURE_CREATION_PORT` from this module, so a
+ * direct class import in the other direction would create an ESM circular import (the decorator
+ * on `CaptureDeliveryQuoteService` would run before `DeliveryZoneService` finished initializing).
+ */
+export interface CaptureDeliveryQuoteComputationPort {
+  quoteForCapture(principal: AuthenticatedPrincipal, input: unknown): Promise<DeliveryQuoteV1>;
+}
+export const CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT = Symbol("CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT");
 export interface CaptureTrayPort { list(actorId: string, request: CaptureWorkTrayRequestV1): Promise<unknown>; }
 export const CAPTURE_TRAY_PORT = Symbol("CAPTURE_TRAY_PORT");
 export interface CaptureAssignmentDirectoryPort {
@@ -159,7 +213,7 @@ export const CAPTURE_ASSIGNMENT_DIRECTORY_PORT = Symbol("CAPTURE_ASSIGNMENT_DIRE
 const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 @Injectable()
-export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAttentionPort, CaptureCustomerPort, CaptureFulfillmentPort, CaptureDeliveryInstructionsPort, CaptureConfirmationPort, CaptureTrayPort, CaptureAssignmentDirectoryPort, CaptureSelectionPlanPort, CaptureNoSalePort {
+export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAttentionPort, CaptureCustomerPort, CaptureFulfillmentPort, CaptureDeliveryInstructionsPort, CaptureConfirmationPort, CaptureTrayPort, CaptureAssignmentDirectoryPort, CaptureSelectionPlanPort, CaptureNoSalePort, CaptureDeliveryQuotePort, CapturePaymentIntentPort {
   public constructor(@Inject(DATABASE_CLIENT) private readonly database: DatabaseClientPort) {}
 
   public async createDraft(actorId: string, input: CreateCaptureDraftCommandV1): Promise<unknown> {
@@ -233,6 +287,75 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     const response = await this.database.query(
       "select app_private.read_capture_workspace_v4($1::uuid, $2::jsonb) as result",
       [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async readWorkspaceV5(actorId: string, input: CaptureWorkspaceRequestV5): Promise<unknown> {
+    const request = parseCaptureWorkspaceRequestV5(input);
+    if (!canonicalUuid.test(actorId) || request === undefined) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.read_capture_workspace_v5($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async setCaptureDeliveryQuote(
+    actorId: string,
+    envelope: CaptureDeliveryQuoteEnvelopeV1,
+    quote: DeliveryQuoteV1,
+  ): Promise<unknown> {
+    if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.set_capture_delivery_quote($1::uuid, $2::jsonb, $3::jsonb) as result",
+      [actorId, JSON.stringify(envelope), JSON.stringify(quote)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async probeSetDeliveryQuote(actorId: string, envelope: CaptureDeliveryQuoteEnvelopeV1): Promise<unknown> {
+    if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.probe_capture_delivery_quote_set($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(envelope)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async setCapturePaymentIntent(
+    actorId: string,
+    envelope: Record<string, unknown>,
+    basisFingerprint: string,
+  ): Promise<unknown> {
+    if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.set_capture_payment_intent($1::uuid, $2::jsonb, $3::text) as result",
+      [actorId, JSON.stringify(envelope), basisFingerprint],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async probeSetPaymentIntent(actorId: string, envelope: Record<string, unknown>): Promise<unknown> {
+    if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.probe_capture_payment_intent_set($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(envelope)],
     );
     if (response.rows.length !== 1) throw unavailable();
     const row = exactRecord(response.rows[0], ["result"]);
@@ -635,6 +758,30 @@ export class CaptureConfirmationService {
       || (detail.fulfillmentChannel === "dine_in") !== (command.tableId !== null)
       || (detail.fulfillmentChannel === "delivery" && (workspace.customerSnapshot === null
         || workspace.fulfillmentSnapshot === null))) throw new CaptureApplicationError("conflict");
+
+    // SQL already refuses (CAS on applied_capture_version) a stale intent at the moment of
+    // confirmation; this is the same guard given a clear, typed message before ever calling it.
+    // H20: a payment intent with no pricing basis at all (both plans cleared/absent, so
+    // buildCapturePaymentProjectionForWorkspace can't even establish a currency) reads
+    // paymentProjection as null, not a "stale" status -- but it is exactly as unconfirmable, and
+    // SQL's own payment_intent_stale check (H16) will refuse it the same way, so this must block
+    // here too rather than silently falling through as "no projection, nothing to check".
+    // H29: SQL's own CAS only compares versions, never recomputes the basis -- it can't catch a
+    // catalog price change on its own. This re-read is the ONLY place that re-prices the intent
+    // before confirming, so a failure here must fail closed (a retryable unavailable) rather than
+    // silently skip the check and let a possibly-insufficient intent freeze into an Order.
+    let v5: CaptureWorkspaceV5;
+    try {
+      v5 = await readCaptureWorkspaceV5WithProjections(
+        actorId, command.scope, command.captureDraftId, this.captures, this.persistence, this.catalogs,
+      );
+    } catch { throw unavailable(); }
+    if (v5.paymentIntent !== null
+      && (v5.paymentProjection === null || v5.paymentProjection.status === "stale"
+        || v5.paymentProjection.status === "insufficient")) {
+      throw new CapturePaymentIntentStaleError();
+    }
+
     const channel = detail.fulfillmentChannel === "dine_in" ? "table"
       : detail.fulfillmentChannel === "pickup" ? "takeout" : detail.fulfillmentChannel;
     let plan: CaptureRepeatSelectionPlan | null = null;
@@ -693,11 +840,19 @@ export class CaptureConfirmationService {
         || catalogState.scope.branchId !== command.scope.branchId) throw new CaptureApplicationError("conflict");
       catalog = catalogState.catalog;
     }
+    // H13: the delivery charge is fixed on the Order from the server's own frozen delivery
+    // quote (read alongside the same v5 workspace already used above for the stale-intent
+    // check), never a client-supplied amount -- confirm_capture_draft_v3 independently
+    // re-checks this against the actually-stored quote and rejects a mismatch as a conflict,
+    // so a stale read here can never under- or over-charge.
+    const deliveryCharge: DeliveryChargeSnapshot | null = channel === "delivery" && v5.deliveryQuote !== null
+      ? { amount: new Money(v5.deliveryQuote.feeMinor, command.currency), quoteId: v5.deliveryQuote.quoteId }
+      : null;
     let materialization: CaptureOrderMaterialization;
     try {
       materialization = selectionPlan !== null
-        ? materializeCaptureSelectionOrder(command, actorId, channel, selectionPlan, catalog)
-        : materializeCaptureOrder(command, actorId, channel, plan, catalog);
+        ? materializeCaptureSelectionOrder(command, actorId, channel, selectionPlan, catalog, deliveryCharge)
+        : materializeCaptureOrder(command, actorId, channel, plan, catalog, deliveryCharge);
     } catch { throw new CaptureApplicationError((plan === null && selectionPlan === null) ? "request" : "conflict"); }
     let raw: unknown;
     try { raw = await this.persistence.confirmDraft(actorId, command, materialization); } catch { throw unavailable(); }
@@ -715,7 +870,7 @@ export class CaptureSelectionPlanService {
     @Inject(CAPTURE_CONFIRMATION_PORT) private readonly confirmation: CaptureConfirmationPort,
   ) {}
 
-  public async replace(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV4> {
+  public async replace(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV5> {
     const command = parseReplaceCaptureSelectionPlanCommandV1(input);
     if (command === undefined) throw new CaptureApplicationError("request");
     let actorId: string;
@@ -777,14 +932,15 @@ export class CaptureSelectionPlanService {
     if (appliedRecord.detail.captureDraftId !== command.captureDraftId
       || appliedRecord.detail.version !== command.expectedVersion + 1) throw unavailable();
 
-    if (this.captures.readWorkspaceV4 === undefined) throw unavailable();
-    const workspaceRequest = { schemaVersion: 4 as const, scope: command.scope, captureDraftId: command.captureDraftId };
+    if (this.captures.readWorkspaceV5 === undefined) throw unavailable();
+    const workspaceRequest = { schemaVersion: 5 as const, scope: command.scope, captureDraftId: command.captureDraftId };
     let rawWorkspace: unknown;
-    try { rawWorkspace = await this.captures.readWorkspaceV4(actorId, workspaceRequest); } catch { throw unavailable(); }
+    try { rawWorkspace = await this.captures.readWorkspaceV5(actorId, workspaceRequest); } catch { throw unavailable(); }
     const statusOnly = exactRecord(rawWorkspace, ["status"]);
     if (statusOnly !== undefined) throw unavailable();
-    let workspace: CaptureWorkspaceV4;
-    try { workspace = decodeCaptureWorkspaceV4(rawWorkspace, command.scope); } catch { throw unavailable(); }
+    let decoded;
+    try { decoded = decodeCaptureWorkspaceV5(rawWorkspace, command.scope); } catch { throw unavailable(); }
+    const workspace = decoded.workspace;
     // This write's own result already proved the draft reached expectedVersion+1. The separate
     // read that follows it is a different round trip: another connection may have advanced the
     // draft further in between (an unrelated mutation, or another selection-plan write), so the
@@ -794,10 +950,18 @@ export class CaptureSelectionPlanService {
     // stale echo of this one -- see projectStoredSelectionPlan.
     if (workspace.detail.captureDraftId !== command.captureDraftId
       || workspace.detail.version < appliedRecord.detail.version) throw unavailable();
-    const projection = await projectStoredSelectionPlan(
+    const selectionProjection = await projectStoredSelectionPlan(
       actorId, command.scope, command.captureDraftId, workspace.selectionPlan, this.confirmation, this.catalogs,
     );
-    return withCaptureSelectionProjection(workspace, projection);
+    const withSelection: CaptureWorkspaceV5 = Object.freeze({ ...workspace, selectionProjection });
+    const paymentProjection = await buildCapturePaymentProjectionForWorkspace(
+      actorId, command.scope, command.captureDraftId, withSelection, decoded.paymentIntentBasisFingerprint,
+      this.confirmation, this.catalogs,
+    );
+    const paymentBasis = await buildCapturePaymentBasisForWorkspace(
+      actorId, command.scope, command.captureDraftId, withSelection, this.confirmation, this.catalogs,
+    );
+    return withCapturePaymentBasis(withCapturePaymentProjection(withSelection, paymentProjection), paymentBasis);
   }
 
   /**
@@ -806,25 +970,17 @@ export class CaptureSelectionPlanService {
    * catalog as a precondition -- a catalog change, or an unrelated mutation that advanced the
    * draft, must never turn an already-applied replay into 409/503. If pricing the stored plan
    * fails for any reason, `selectionProjection` is simply `null`, matching the same fallback
-   * `CaptureService.readWorkspaceV4` already uses for a stale catalog on a plain read.
+   * `CaptureService.readWorkspaceV4` already uses for a stale catalog on a plain read. Always
+   * `CaptureWorkspaceV5` (with `paymentProjection` recomputed against whatever is stored), matching
+   * every other capture mutation's response shape, so a stale payment intent is surfaced here too.
    */
   private async replayedWorkspace(
     actorId: string,
     command: ReplaceCaptureSelectionPlanCommandV1,
-  ): Promise<CaptureWorkspaceV4> {
-    if (this.captures.readWorkspaceV4 === undefined) throw unavailable();
-    const workspaceRequest = { schemaVersion: 4 as const, scope: command.scope, captureDraftId: command.captureDraftId };
-    let rawWorkspace: unknown;
-    try { rawWorkspace = await this.captures.readWorkspaceV4(actorId, workspaceRequest); } catch { throw unavailable(); }
-    const statusOnly = exactRecord(rawWorkspace, ["status"]);
-    if (statusOnly !== undefined) throw unavailable();
-    let workspace: CaptureWorkspaceV4;
-    try { workspace = decodeCaptureWorkspaceV4(rawWorkspace, command.scope); } catch { throw unavailable(); }
-    if (workspace.detail.captureDraftId !== command.captureDraftId) throw unavailable();
-    const projection = await projectStoredSelectionPlan(
-      actorId, command.scope, command.captureDraftId, workspace.selectionPlan, this.confirmation, this.catalogs,
+  ): Promise<CaptureWorkspaceV5> {
+    return readCaptureWorkspaceV5WithProjections(
+      actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
     );
-    return withCaptureSelectionProjection(workspace, projection);
   }
 }
 
@@ -880,6 +1036,7 @@ function priceSelectionPlan(
   if (plan.lines.some((line) => line.variantId !== null)) throw new CaptureApplicationError("conflict");
   const domainCatalog = toDomainMenuCatalog(catalog, restaurantId);
   let subtotalMinor = 0;
+  let itemsTotalMinor = 0;
   const lines: CaptureSelectionPlanProjectionLineV1[] = [];
   for (const line of plan.lines) {
     let snapshot;
@@ -892,6 +1049,9 @@ function priceSelectionPlan(
       orderItemId: line.lineId, quantity: line.quantity, snapshot, note: line.note,
     });
     subtotalMinor += totals.subtotalBeforeTax.amountMinor;
+    // Tax-inclusive: the exact amount the confirmed Order charges for this line, unlike
+    // subtotalBeforeTax above (kept only for the existing read-side contract).
+    itemsTotalMinor += totals.total.amountMinor;
     const modifiers: CaptureSelectionPlanProjectionModifierV1[] = [];
     for (const modifier of snapshot.modifiers) {
       if (modifier.groupId === undefined) throw unavailable();
@@ -918,6 +1078,7 @@ function priceSelectionPlan(
   const projection = parseCaptureSelectionPlanProjectionV1({
     catalogVersion: plan.catalogVersion,
     currency: catalog.currency,
+    itemsTotalMinor,
     lineCount: lines.length,
     lines,
     schemaVersion: 1,
@@ -925,6 +1086,663 @@ function priceSelectionPlan(
   });
   if (projection === undefined) throw unavailable();
   return projection;
+}
+
+/**
+ * Tax-inclusive total of a repeat-order plan's lines, priced against the live catalog exactly
+ * like `materializeCaptureOrder` prices them at confirm time (same `createMenuProductPriceSnapshot`
+ * + `calculateOrderItemTotals` pair) -- the only reliable payment-intent basis for a capture whose
+ * lines come from a repeat plan rather than a selection plan (whose `selectionProjection` is
+ * always `null` for a repeat-order capture).
+ */
+function priceCaptureRepeatSelectionPlan(
+  plan: CaptureRepeatSelectionPlan,
+  catalog: MenuCatalogV1,
+  restaurantId: string,
+): number {
+  const domainCatalog = toDomainMenuCatalog(catalog, restaurantId);
+  let itemsTotalMinor = 0;
+  for (const line of plan.lines) {
+    const snapshot = createMenuProductPriceSnapshot(domainCatalog, {
+      currency: catalog.currency, productId: line.productId, restaurantId,
+    }, line.modifierGroups);
+    const totals = calculateOrderItemTotals({
+      orderItemId: line.sourceOrderItemId, quantity: line.quantity, snapshot, note: null,
+    });
+    itemsTotalMinor += totals.total.amountMinor;
+  }
+  return itemsTotalMinor;
+}
+
+/** Best-effort raw stored plan (no prices), for the payment-intent basis fingerprint only. */
+async function readStoredCaptureSelectionPlanLines(
+  actorId: string,
+  scope: BranchScope,
+  captureDraftId: string,
+  confirmation: CaptureConfirmationPort,
+): Promise<CaptureSelectionPlanV1 | null> {
+  try {
+    const raw = await confirmation.readSelectionPlan(actorId, { schemaVersion: 3, scope, captureDraftId });
+    const envelope = exactRecord(raw, ["status", "plan", "appliedCaptureVersion"]);
+    if (envelope?.status !== "ok") return null;
+    return parseCaptureSelectionPlanV1(envelope.plan) ?? null;
+  } catch { return null; }
+}
+
+/**
+ * The payment-intent basis when the capture's lines come from a repeat-order plan rather than a
+ * selection plan: reads the raw stored plan, revalidates it against the workspace summary exactly
+ * like `readRepeatOrderPlan` does at confirm time (customerId/sourceOrderId/catalogVersion/
+ * lineCount), then prices it against the live catalog. `null` (never a throw) for any mismatch or
+ * pricing failure, matching `projectStoredSelectionPlan`'s best-effort philosophy for reads; the
+ * write path (`CapturePaymentIntentService.setPaymentIntent`) treats a `null` result as a conflict.
+ */
+async function readStoredCaptureRepeatOrderPlanBasis(
+  actorId: string,
+  scope: BranchScope,
+  captureDraftId: string,
+  repeatOrderPlan: CaptureWorkspaceV5["repeatOrderPlan"],
+  confirmation: CaptureConfirmationPort,
+  catalogs: MenuCatalogPort,
+): Promise<{
+  readonly currency: string; readonly itemsTotalMinor: number; readonly lines: readonly CaptureRepeatSelectionLine[];
+} | null> {
+  if (repeatOrderPlan === null) return null;
+  try {
+    const raw = await confirmation.readRepeatOrderPlan(actorId, { schemaVersion: 3, scope, captureDraftId });
+    const envelope = exactRecord(raw, ["status", "plan"]);
+    if (envelope?.status !== "ok") return null;
+    const plan = parseCaptureRepeatSelectionPlan(envelope.plan);
+    if (plan === undefined || plan.customerId !== repeatOrderPlan.customerId
+      || plan.sourceOrderId !== repeatOrderPlan.sourceOrderId
+      || plan.catalogVersion !== repeatOrderPlan.catalogVersion
+      || plan.lines.length !== repeatOrderPlan.lineCount || plan.lines.length === 0) return null;
+    const catalogState = await catalogs.read(actorId, scope);
+    if (catalogState === "forbidden" || catalogState.catalog === null
+      || catalogState.scope.restaurantId !== scope.restaurantId || catalogState.scope.branchId !== scope.branchId
+      || catalogState.catalog.catalogVersion !== plan.catalogVersion) {
+      return null;
+    }
+    const itemsTotalMinor = priceCaptureRepeatSelectionPlan(plan, catalogState.catalog, scope.restaurantId);
+    return { currency: catalogState.catalog.currency, itemsTotalMinor, lines: plan.lines };
+  } catch { return null; }
+}
+
+/**
+ * Canonical, order-independent fingerprint of every fact the authoritative total is derived
+ * from: catalogVersion, the priced lines (id-sorted, never the client's submission order) and
+ * the frozen delivery fee/currency. Any change to any of them changes the fingerprint; comparing
+ * it against a payment intent's stored basis is how staleness is detected, both at read time and
+ * before confirm.
+ */
+/** A selection line and a repeat-order line, normalized to the one shape the fingerprint needs. */
+interface CapturePaymentIntentBasisLine {
+  readonly id: string;
+  readonly modifierGroups: readonly Readonly<{
+    groupId: string;
+    selections: readonly Readonly<{ optionId: string; quantity: number }>[];
+  }>[];
+  readonly note: string | null;
+  readonly productId: string;
+  readonly quantity: number;
+}
+
+function selectionLinesToBasis(lines: readonly CaptureSelectionLineV1[]): CapturePaymentIntentBasisLine[] {
+  return lines.map((line) => ({
+    id: line.lineId, modifierGroups: line.modifierGroups, note: line.note, productId: line.productId,
+    quantity: line.quantity,
+  }));
+}
+
+function repeatLinesToBasis(lines: readonly CaptureRepeatSelectionLine[]): CapturePaymentIntentBasisLine[] {
+  // A repeated order never carries forward a prior line's kitchen note (materializeCaptureOrder).
+  return lines.map((line) => ({
+    id: line.sourceOrderItemId, modifierGroups: line.modifierGroups, note: null, productId: line.productId,
+    quantity: line.quantity,
+  }));
+}
+
+function computeCapturePaymentIntentBasisFingerprint(input: {
+  readonly catalogVersion: string;
+  readonly currency: string;
+  readonly deliveryFeeMinor: number;
+  /**
+   * H19: without this, changing the fulfillment channel after the intent was set (e.g.
+   * counter -> pickup) is invisible to the fingerprint even though it changes the derived
+   * `timing` (and, for delivery, the fee basis) that `buildCapturePaymentIntentProjection` used
+   * -- a read could report "ready" for a channel the intent was never actually priced against,
+   * while confirm's own SQL CAS on the fulfillment/channel facts would still refuse it as stale.
+   * `timing` is included too even though it's a pure function of `fulfillmentChannel` today: it
+   * is the fact that actually changes the money math (cash-on-fulfillment vs. at-counter), so it
+   * stays explicit in the basis rather than implicit through a derivation that could change later.
+   */
+  readonly fulfillmentChannel: string;
+  readonly timing: string;
+  readonly lines: readonly CapturePaymentIntentBasisLine[];
+  /**
+   * The frozen delivery quote's own identity (`null` outside delivery, or before one is frozen).
+   * `deliveryFeeMinor` alone is not enough: a re-quote for the same address/zone can land on an
+   * identical fee while `set_capture_delivery_quote`'s own CAS on `applied_capture_version`
+   * already treats it as a distinct quote -- without quoteId in the basis, a read here would
+   * report "ready" for a fee that SQL's own version check would reject as stale at confirm time.
+   */
+  readonly quoteId: string | null;
+}): string {
+  const canonicalLines = [...input.lines]
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((line) => ({
+      id: line.id,
+      modifierGroups: [...line.modifierGroups]
+        .sort((a, b) => (a.groupId < b.groupId ? -1 : a.groupId > b.groupId ? 1 : 0))
+        .map((group) => ({
+          groupId: group.groupId,
+          selections: [...group.selections]
+            .sort((a, b) => (a.optionId < b.optionId ? -1 : a.optionId > b.optionId ? 1 : 0))
+            .map((selection) => ({ optionId: selection.optionId, quantity: selection.quantity })),
+        })),
+      note: line.note,
+      productId: line.productId,
+      quantity: line.quantity,
+    }));
+  const canonical = JSON.stringify({
+    catalogVersion: input.catalogVersion,
+    currency: input.currency,
+    deliveryFeeMinor: input.deliveryFeeMinor,
+    fulfillmentChannel: input.fulfillmentChannel,
+    lines: canonicalLines,
+    quoteId: input.quoteId,
+    timing: input.timing,
+  });
+  return createHash("sha256").update(canonical).digest("hex");
+}
+
+/**
+ * The one place `paymentProjection` is computed for ANY V5 response (a fresh apply of the
+ * delivery quote or the payment intent, or a plain workspace read): always from the intent, the
+ * priced selection projection and the frozen delivery quote actually stored and read alongside
+ * this exact workspace. `null` when there is no payment intent at all, or best-effort `null` if
+ * the fulfillment channel is not yet chosen (timing cannot be derived) or the currency cannot be
+ * established -- mirroring `projectStoredSelectionPlan`'s best-effort philosophy.
+ */
+interface CapturePaymentBasisComputation {
+  readonly basisCatalogVersion: string;
+  readonly basisLines: readonly CapturePaymentIntentBasisLine[];
+  readonly currency: string;
+  readonly deliveryFeeMinor: number;
+  readonly itemsSubtotalMinor: number;
+  readonly quoteId: string | null;
+  readonly selectionUnpriced: boolean;
+  /**
+   * H26: true when a repeat-order plan exists but its lines currently cannot be priced (a
+   * removed/inactive product, or the catalog having moved on) -- the exact same "plan exists, no
+   * price" gap `selectionUnpriced` already covers for a selection plan. Without this,
+   * `itemsSubtotalMinor` silently reads 0 and, for a delivery capture, `paymentBasis` would show
+   * only the shipping fee as if that were the whole order: never a real total, and never the
+   * write path's own answer (`setPaymentIntent` already refuses this case as a conflict).
+   */
+  readonly repeatUnpriced: boolean;
+}
+
+/**
+ * H25: the shared pricing basis both `paymentProjection` (needs a payment intent) and
+ * `paymentBasis` (H25, needs none) are built from -- tax-inclusive, and derived from whichever
+ * plan actually carries the capture's lines: a selection plan's own priced projection, or a
+ * freshly priced repeat-order plan (whose `selectionProjection` is always null, and whose
+ * currency the delivery quote may not supply either -- a repeat-order capture is not necessarily
+ * delivery). Neither present means no lines at all: `0`/`null`, matching the historical read-side
+ * fallback (the write path in setPaymentIntent refuses this case instead). `null` when the
+ * currency cannot be established (no lines, no quote) -- best-effort, like
+ * `projectStoredSelectionPlan`.
+ *
+ * H8: a selection plan that exists but currently cannot be priced (selectionProjection null -- an
+ * inactive product, or the catalog having moved to a different catalogVersion) must never
+ * silently read as `itemsSubtotalMinor: 0`: the basis fingerprint alone might still match (the
+ * stored plan's identity/catalogVersion is unaffected by a pricing failure), so this can NOT be
+ * relied on to force "stale" the way an actual line change is. `selectionUnpriced` tracks it
+ * explicitly for the caller to force "stale", mirroring the write-side guard in
+ * `CapturePaymentIntentService.setPaymentIntent` (`CapturePaymentIntentUnpricedError`).
+ */
+async function computeCapturePaymentBasis(
+  actorId: string,
+  scope: BranchScope,
+  captureDraftId: string,
+  workspace: CaptureWorkspaceV5,
+  fulfillmentChannel: CaptureFulfillmentChannelV1,
+  confirmation: CaptureConfirmationPort,
+  catalogs: MenuCatalogPort,
+): Promise<CapturePaymentBasisComputation | null> {
+  const selectionUnpriced = workspace.selectionPlan !== null && workspace.selectionProjection === null;
+  let itemsSubtotalMinor = workspace.selectionProjection?.itemsTotalMinor ?? 0;
+  let basisCatalogVersion = "";
+  let basisLines: CapturePaymentIntentBasisLine[] = [];
+  let repeatCurrency: string | undefined;
+  let repeatUnpriced = false;
+  if (workspace.selectionPlan !== null) {
+    const storedPlan = await readStoredCaptureSelectionPlanLines(actorId, scope, captureDraftId, confirmation);
+    basisCatalogVersion = storedPlan?.catalogVersion ?? "";
+    basisLines = selectionLinesToBasis(storedPlan?.lines ?? []);
+  } else if (workspace.repeatOrderPlan !== null) {
+    const repeatBasis = await readStoredCaptureRepeatOrderPlanBasis(
+      actorId, scope, captureDraftId, workspace.repeatOrderPlan, confirmation, catalogs,
+    );
+    repeatUnpriced = repeatBasis === null;
+    itemsSubtotalMinor = repeatBasis?.itemsTotalMinor ?? 0;
+    repeatCurrency = repeatBasis?.currency;
+    basisCatalogVersion = repeatBasis === null ? "" : workspace.repeatOrderPlan.catalogVersion;
+    basisLines = repeatLinesToBasis(repeatBasis?.lines ?? []);
+  }
+  const currency = workspace.selectionProjection?.currency ?? repeatCurrency ?? workspace.deliveryQuote?.currency;
+  if (currency === undefined) return null;
+  const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (workspace.deliveryQuote?.feeMinor ?? 0) : 0;
+  const quoteId = fulfillmentChannel === "delivery" ? (workspace.deliveryQuote?.quoteId ?? null) : null;
+  return {
+    basisCatalogVersion, basisLines, currency, deliveryFeeMinor, itemsSubtotalMinor, quoteId,
+    repeatUnpriced, selectionUnpriced,
+  };
+}
+
+/**
+ * H25: the pricing basis alone (no method, no tender, no tip) -- computed whenever the capture's
+ * lines are priced, whether or not a payment intent exists yet, so the "Cobro" summary and cash
+ * shortcuts can show real numbers before the operator picks a method. `null` on the exact same
+ * best-effort conditions as `paymentProjection` (channel not chosen, currency not established).
+ */
+async function buildCapturePaymentBasisForWorkspace(
+  actorId: string,
+  scope: BranchScope,
+  captureDraftId: string,
+  workspace: CaptureWorkspaceV5,
+  confirmation: CaptureConfirmationPort,
+  catalogs: MenuCatalogPort,
+): Promise<CapturePaymentBasisV1 | null> {
+  const fulfillmentChannel = workspace.detail.fulfillmentChannel;
+  if (fulfillmentChannel === null) return null;
+  const basis = await computeCapturePaymentBasis(
+    actorId, scope, captureDraftId, workspace, fulfillmentChannel, confirmation, catalogs,
+  );
+  // H26: a plan that exists but currently cannot be priced must never read as a real basis with
+  // a 0 subtotal -- for a delivery capture that would show only the shipping fee as if it were
+  // the whole order. Same rule the projection already applies (H8) for a selection plan, extended
+  // here to a repeat-order plan too, and applied to the pricing basis itself, not just the intent.
+  if (basis === null || basis.selectionUnpriced || basis.repeatUnpriced) return null;
+  return parseCapturePaymentBasisV1({
+    currency: basis.currency,
+    deliveryFeeMinor: basis.deliveryFeeMinor,
+    itemsSubtotalMinor: basis.itemsSubtotalMinor,
+    orderTotalMinor: basis.itemsSubtotalMinor + basis.deliveryFeeMinor,
+  }) ?? null;
+}
+
+async function buildCapturePaymentProjectionForWorkspace(
+  actorId: string,
+  scope: BranchScope,
+  captureDraftId: string,
+  workspace: CaptureWorkspaceV5,
+  paymentIntentBasisFingerprint: string | null,
+  confirmation: CaptureConfirmationPort,
+  catalogs: MenuCatalogPort,
+): Promise<CapturePaymentIntentProjectionV1 | null> {
+  if (workspace.paymentIntent === null) return null;
+  const fulfillmentChannel = workspace.detail.fulfillmentChannel;
+  if (fulfillmentChannel === null) return null;
+
+  const basis = await computeCapturePaymentBasis(
+    actorId, scope, captureDraftId, workspace, fulfillmentChannel, confirmation, catalogs,
+  );
+  if (basis === null) return null;
+  const {
+    basisCatalogVersion, basisLines, currency, deliveryFeeMinor, itemsSubtotalMinor, quoteId,
+    repeatUnpriced, selectionUnpriced,
+  } = basis;
+
+  let domainProjection;
+  try {
+    domainProjection = buildCapturePaymentIntentProjection({
+      currency,
+      deliveryFeeMinor,
+      fulfillmentChannel,
+      itemsSubtotalMinor,
+      method: workspace.paymentIntent.method,
+      tenderedAmountMinor: workspace.paymentIntent.tenderedAmountMinor,
+      tipMinor: workspace.paymentIntent.tipMinor,
+    });
+  } catch { return null; }
+
+  const currentFingerprint = computeCapturePaymentIntentBasisFingerprint({
+    catalogVersion: basisCatalogVersion,
+    currency,
+    deliveryFeeMinor,
+    fulfillmentChannel,
+    lines: basisLines,
+    quoteId,
+    timing: domainProjection.timing,
+  });
+  const status = selectionUnpriced || repeatUnpriced || paymentIntentBasisFingerprint !== currentFingerprint
+    ? "stale" : domainProjection.status;
+  const changeDueMinor = status === "ready" ? (domainProjection.changeDueMinor?.amountMinor ?? null) : null;
+
+  return parseCapturePaymentIntentProjectionV1({
+    changeDueMinor,
+    currency,
+    deliveryFeeMinor,
+    itemsSubtotalMinor,
+    method: workspace.paymentIntent.method,
+    orderTotalMinor: domainProjection.orderTotalMinor,
+    status,
+    tenderedAmountMinor: workspace.paymentIntent.tenderedAmountMinor,
+    timing: domainProjection.timing,
+    tipMinor: workspace.paymentIntent.tipMinor,
+  }) ?? null;
+}
+
+/**
+ * The one place `CaptureWorkspaceV5` is fully assembled for ANY response (a fresh apply of the
+ * delivery quote or payment intent, a replay, or a plain workspace read): reads the raw V5 row,
+ * then computes both `selectionProjection` (exactly like V4) and `paymentProjection` from
+ * whatever is actually stored, never from a client-supplied command.
+ */
+async function readCaptureWorkspaceV5WithProjections(
+  actorId: string,
+  scope: BranchScope,
+  captureDraftId: string,
+  captures: CaptureCreationPort,
+  confirmation: CaptureConfirmationPort,
+  catalogs: MenuCatalogPort,
+): Promise<CaptureWorkspaceV5> {
+  if (captures.readWorkspaceV5 === undefined) throw unavailable();
+  const workspaceRequest = { schemaVersion: 5 as const, scope, captureDraftId };
+  let rawWorkspace: unknown;
+  try { rawWorkspace = await captures.readWorkspaceV5(actorId, workspaceRequest); } catch { throw unavailable(); }
+  const statusOnly = exactRecord(rawWorkspace, ["status"]);
+  if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
+  if (statusOnly?.status === "missing") throw new CaptureApplicationError("missing");
+  if (statusOnly?.status === "rejected") throw new CaptureApplicationError("request");
+  if (statusOnly !== undefined) throw unavailable();
+  let decoded;
+  try { decoded = decodeCaptureWorkspaceV5(rawWorkspace, scope); } catch { throw unavailable(); }
+  if (decoded.workspace.detail.captureDraftId !== captureDraftId) throw unavailable();
+
+  const selectionProjection = await projectStoredSelectionPlan(
+    actorId, scope, captureDraftId, decoded.workspace.selectionPlan, confirmation, catalogs,
+  );
+  const withSelection: CaptureWorkspaceV5 = Object.freeze({ ...decoded.workspace, selectionProjection });
+  const paymentProjection = await buildCapturePaymentProjectionForWorkspace(
+    actorId, scope, captureDraftId, withSelection, decoded.paymentIntentBasisFingerprint, confirmation, catalogs,
+  );
+  const paymentBasis = await buildCapturePaymentBasisForWorkspace(
+    actorId, scope, captureDraftId, withSelection, confirmation, catalogs,
+  );
+  return withCapturePaymentBasis(withCapturePaymentProjection(withSelection, paymentProjection), paymentBasis);
+}
+
+@Injectable()
+export class CaptureDeliveryQuoteService {
+  public constructor(
+    @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
+    @Inject(CAPTURE_DELIVERY_QUOTE_PORT) private readonly persistence: CaptureDeliveryQuotePort,
+    @Inject(CAPTURE_CREATION_PORT) private readonly captures: CaptureCreationPort,
+    @Inject(CAPTURE_CONFIRMATION_PORT) private readonly confirmation: CaptureConfirmationPort,
+    @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
+    @Inject(CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT) private readonly deliveryZones: CaptureDeliveryQuoteComputationPort,
+  ) {}
+
+  public async requestQuote(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV5> {
+    const command = parseRequestCaptureDeliveryQuoteCommandV1(input);
+    if (command === undefined) throw new CaptureApplicationError("request");
+    let actorId: string;
+    try { actorId = (await this.authorization.authorizeBranch(principal, command.scope, "captures.update")).principal.actorId; }
+    catch { throw new CaptureApplicationError("authorization"); }
+
+    const envelope: CaptureDeliveryQuoteEnvelopeV1 = {
+      attentionLeaseId: command.attentionLeaseId,
+      captureDraftId: command.captureDraftId,
+      deviceId: command.deviceId,
+      eventId: command.eventId,
+      expectedVersion: command.expectedVersion,
+      idempotencyKey: command.idempotencyKey,
+      occurredAt: command.occurredAt,
+      schemaVersion: 1,
+      scheduledFor: command.scheduledFor,
+      scope: command.scope,
+    };
+
+    // Idempotency is decided purely by actor+scope+idempotencyKey+fingerprint over the command,
+    // entirely independent of the (server-recomputed, always-fresh) quote jsonb. Probing it first
+    // -- before ever calling zones.quoteForCapture -- means a retry with the same idempotencyKey
+    // after a lost response is recognized as the original apply, never recomputes a new
+    // quotedAt/quoteId, and is never turned into a spurious conflict by that recomputation.
+    let rawProbe: unknown;
+    try { rawProbe = await this.persistence.probeSetDeliveryQuote(actorId, envelope); } catch { throw unavailable(); }
+    const probe = exactRecord(rawProbe, ["status", "record"]);
+    if (probe?.status === "replayed") {
+      return readCaptureWorkspaceV5WithProjections(
+        actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
+      );
+    }
+    const probeStatus = exactRecord(rawProbe, ["status"]);
+    if (probeStatus?.status === "denied") throw new CaptureApplicationError("authorization");
+    if (probeStatus?.status === "conflict") throw new CaptureApplicationError("conflict");
+    if (probeStatus?.status === "rejected") throw new CaptureApplicationError("request");
+    if (probeStatus?.status !== "pending") throw unavailable();
+
+    // Recomputed from the live address/zones every time, exactly like a plain
+    // `/delivery-zones/quote` call; never trusted from the client.
+    let quote: DeliveryQuoteV1;
+    try {
+      quote = await this.deliveryZones.quoteForCapture(principal, {
+        schemaVersion: 1, scope: command.scope, captureDraftId: command.captureDraftId, scheduledFor: command.scheduledFor,
+      });
+    } catch (error: unknown) {
+      throw mapDeliveryZoneError(error);
+    }
+
+    let raw: unknown;
+    try { raw = await this.persistence.setCaptureDeliveryQuote(actorId, envelope, quote); } catch { throw unavailable(); }
+    const envelopeResult = exactRecord(raw, ["status", "record"]);
+    if (envelopeResult?.status !== "applied" && envelopeResult?.status !== "replayed") {
+      const statusOnly = exactRecord(raw, ["status"]);
+      if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
+      if (statusOnly?.status === "conflict") throw new CaptureApplicationError("conflict");
+      if (statusOnly?.status === "rejected") throw new CaptureApplicationError("request");
+      throw unavailable();
+    }
+    return readCaptureWorkspaceV5WithProjections(
+      actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
+    );
+  }
+}
+
+function mapDeliveryZoneError(error: unknown): CaptureApplicationError {
+  const code = typeof error === "object" && error !== null && "code" in error ? (error as { code: unknown }).code : undefined;
+  if (code === "authorization") return new CaptureApplicationError("authorization");
+  if (code === "conflict") return new CaptureApplicationError("conflict");
+  if (code === "request") return new CaptureApplicationError("request");
+  if (code === "missing") return new CaptureApplicationError("missing");
+  return unavailable();
+}
+
+/** Typed 409: a stated cash tender does not cover the authoritative total. Never a generic conflict. */
+export class CapturePaymentIntentInsufficientError extends Error {
+  public constructor() {
+    super("CAPTURE_PAYMENT_INTENT_INSUFFICIENT");
+    this.name = "CapturePaymentIntentInsufficientError";
+  }
+}
+
+/** Typed 409: an existing payment intent is stale (lines/fulfillment/quote moved) or insufficient. */
+export class CapturePaymentIntentStaleError extends Error {
+  public constructor() {
+    super("CAPTURE_PAYMENT_INTENT_STALE");
+    this.name = "CapturePaymentIntentStaleError";
+  }
+}
+
+/**
+ * Typed 409: a delivery confirm was refused by confirm_capture_draft_v3 because the frozen quote
+ * is missing, expired, or never covered the address (H10). `reason` carries the SQL-side
+ * `delivery_quote_missing` / `delivery_quote_expired` / `delivery_quote_not_covered` value so the
+ * web layer can surface a precise motive instead of a generic conflict.
+ */
+export class CaptureDeliveryQuoteInvalidError extends Error {
+  public readonly reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered";
+  public constructor(reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered") {
+    super("CAPTURE_DELIVERY_QUOTE_INVALID");
+    this.name = "CaptureDeliveryQuoteInvalidError";
+    this.reason = reason;
+  }
+}
+
+/** Typed 409: setting a payment intent against a capture with no selection or repeat plan at all. */
+export class CapturePaymentIntentNoLinesError extends Error {
+  public constructor() {
+    super("CAPTURE_PAYMENT_INTENT_NO_LINES");
+    this.name = "CapturePaymentIntentNoLinesError";
+  }
+}
+
+/**
+ * Typed 409: a selection plan exists but could not be priced against the live catalog right now
+ * (an inactive product, or the catalog having moved to a different catalogVersion). Never falls
+ * back to a 0 subtotal -- that would silently accept a tender that only covers the delivery fee,
+ * or the wrong currency, as if the order had no items at all.
+ */
+export class CapturePaymentIntentUnpricedError extends Error {
+  public constructor() {
+    super("CAPTURE_PAYMENT_INTENT_UNPRICED");
+    this.name = "CapturePaymentIntentUnpricedError";
+  }
+}
+
+@Injectable()
+export class CapturePaymentIntentService {
+  public constructor(
+    @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
+    @Inject(CAPTURE_PAYMENT_INTENT_PORT) private readonly persistence: CapturePaymentIntentPort,
+    @Inject(CAPTURE_CREATION_PORT) private readonly captures: CaptureCreationPort,
+    @Inject(CAPTURE_CONFIRMATION_PORT) private readonly confirmation: CaptureConfirmationPort,
+    @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
+  ) {}
+
+  public async setPaymentIntent(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV5> {
+    const command = parseSetCapturePaymentIntentCommandV1(input);
+    if (command === undefined) throw new CaptureApplicationError("request");
+    let actorId: string;
+    try { actorId = (await this.authorization.authorizeBranch(principal, command.scope, "captures.update")).principal.actorId; }
+    catch { throw new CaptureApplicationError("authorization"); }
+
+    // The envelope never carries basisFingerprint: it is hashed for idempotency exactly like
+    // this, both here and in the SQL probe/write, so a retry with the same idempotencyKey is
+    // recognized as the original apply regardless of whether repricing produces a different basis.
+    const envelope = {
+      attentionLeaseId: command.attentionLeaseId,
+      captureDraftId: command.captureDraftId,
+      deviceId: command.deviceId,
+      eventId: command.eventId,
+      expectedVersion: command.expectedVersion,
+      idempotencyKey: command.idempotencyKey,
+      method: command.method,
+      occurredAt: command.occurredAt,
+      schemaVersion: 1,
+      scope: command.scope,
+      tenderedAmountMinor: command.tenderedAmountMinor,
+      tipMinor: command.tipMinor,
+    };
+
+    // Idempotency is decided purely by actor+scope+idempotencyKey+fingerprint over the client's
+    // own envelope, entirely independent of the (freshly re-read and repriced) basis fingerprint.
+    // Probing it first -- before ever re-reading the workspace or repricing -- means a retry after
+    // a lost response, or after the lines/quote changed since the original apply, is always
+    // recognized as the original apply, never turned into a spurious insufficient/conflict by a
+    // freshly recomputed basis that no longer matches what was actually stored.
+    let rawProbe: unknown;
+    try { rawProbe = await this.persistence.probeSetPaymentIntent(actorId, envelope); } catch { throw unavailable(); }
+    const probe = exactRecord(rawProbe, ["status", "record"]);
+    if (probe?.status === "replayed") {
+      return readCaptureWorkspaceV5WithProjections(
+        actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
+      );
+    }
+    const probeStatus = exactRecord(rawProbe, ["status"]);
+    if (probeStatus?.status === "denied") throw new CaptureApplicationError("authorization");
+    if (probeStatus?.status === "conflict") throw new CaptureApplicationError("conflict");
+    if (probeStatus?.status === "rejected") throw new CaptureApplicationError("request");
+    if (probeStatus?.status !== "pending") throw unavailable();
+
+    const before = await readCaptureWorkspaceV5WithProjections(
+      actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
+    );
+    // A payment intent priced against zero lines (no selection plan and no repeat plan at all) is
+    // never a legitimate "ready" or "insufficient" intent -- it would silently accept any tender
+    // as covering an order with no items. Refuse it outright, before any other conflict check, and
+    // never fall back to a 0 basis.
+    if (before.selectionPlan === null && before.repeatOrderPlan === null) throw new CapturePaymentIntentNoLinesError();
+
+    const fulfillmentChannel = before.detail.fulfillmentChannel;
+    if (fulfillmentChannel === null) throw new CaptureApplicationError("conflict");
+
+    let itemsSubtotalMinor: number;
+    let basisCatalogVersion: string;
+    let basisLines: CapturePaymentIntentBasisLine[];
+    let repeatCurrency: string | undefined;
+    if (before.selectionPlan !== null) {
+      // selectionProjection is best-effort (see projectStoredSelectionPlan): null whenever the
+      // live catalog cannot presently price the stored plan. Falling back to a 0 subtotal here
+      // would let a tender that only covers the delivery fee (or borrows the quote's currency)
+      // look "ready" for an order that in fact has priced items; fail closed instead.
+      if (before.selectionProjection === null) throw new CapturePaymentIntentUnpricedError();
+      itemsSubtotalMinor = before.selectionProjection.itemsTotalMinor;
+      const storedPlan = await readStoredCaptureSelectionPlanLines(
+        actorId, command.scope, command.captureDraftId, this.confirmation,
+      );
+      basisCatalogVersion = storedPlan?.catalogVersion ?? "";
+      basisLines = selectionLinesToBasis(storedPlan?.lines ?? []);
+    } else if (before.repeatOrderPlan !== null) {
+      const repeatBasis = await readStoredCaptureRepeatOrderPlanBasis(
+        actorId, command.scope, command.captureDraftId, before.repeatOrderPlan, this.confirmation, this.catalogs,
+      );
+      if (repeatBasis === null) throw new CaptureApplicationError("conflict");
+      itemsSubtotalMinor = repeatBasis.itemsTotalMinor;
+      repeatCurrency = repeatBasis.currency;
+      basisCatalogVersion = before.repeatOrderPlan.catalogVersion;
+      basisLines = repeatLinesToBasis(repeatBasis.lines);
+    } else {
+      throw new CapturePaymentIntentNoLinesError();
+    }
+    // A repeat-order capture is not necessarily delivery, so its currency comes from the priced
+    // repeat plan's own catalog when there is no selection projection or delivery quote to supply it.
+    const currency = before.selectionProjection?.currency ?? repeatCurrency ?? before.deliveryQuote?.currency;
+    if (currency === undefined) throw new CaptureApplicationError("conflict");
+    const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (before.deliveryQuote?.feeMinor ?? 0) : 0;
+    const quoteId = fulfillmentChannel === "delivery" ? (before.deliveryQuote?.quoteId ?? null) : null;
+
+    let domainProjection;
+    try {
+      domainProjection = buildCapturePaymentIntentProjection({
+        currency, deliveryFeeMinor, fulfillmentChannel, itemsSubtotalMinor,
+        method: command.method, tenderedAmountMinor: command.tenderedAmountMinor, tipMinor: command.tipMinor,
+      });
+    } catch { throw new CaptureApplicationError("request"); }
+    if (domainProjection.status === "insufficient") throw new CapturePaymentIntentInsufficientError();
+
+    const basisFingerprint = computeCapturePaymentIntentBasisFingerprint({
+      catalogVersion: basisCatalogVersion, currency, deliveryFeeMinor, fulfillmentChannel,
+      lines: basisLines, quoteId, timing: domainProjection.timing,
+    });
+
+    let raw: unknown;
+    try { raw = await this.persistence.setCapturePaymentIntent(actorId, envelope, basisFingerprint); } catch { throw unavailable(); }
+    const envelopeResult = exactRecord(raw, ["status", "record"]);
+    if (envelopeResult?.status !== "applied" && envelopeResult?.status !== "replayed") {
+      const statusOnly = exactRecord(raw, ["status"]);
+      if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
+      if (statusOnly?.status === "conflict") throw new CaptureApplicationError("conflict");
+      if (statusOnly?.status === "rejected") throw new CaptureApplicationError("request");
+      throw unavailable();
+    }
+    return readCaptureWorkspaceV5WithProjections(
+      actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
+    );
+  }
 }
 
 @Injectable()
@@ -1015,19 +1833,28 @@ export class CaptureService {
   public async readWorkspace(
     principal: AuthenticatedPrincipal,
     input: unknown,
-  ): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2 | CaptureWorkspaceV3 | CaptureWorkspaceV4> {
-    const requestV4 = parseCaptureWorkspaceRequestV4(input);
-    const requestV3 = requestV4 === undefined ? parseCaptureWorkspaceRequestV3(input) : undefined;
-    const requestV2 = requestV4 === undefined && requestV3 === undefined ? parseCaptureWorkspaceRequestV2(input) : undefined;
-    const request = requestV4 ?? requestV3 ?? requestV2 ?? parseCaptureWorkspaceRequestV1(input);
+  ): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2 | CaptureWorkspaceV3 | CaptureWorkspaceV4 | CaptureWorkspaceV5> {
+    const requestV5 = parseCaptureWorkspaceRequestV5(input);
+    const requestV4 = requestV5 === undefined ? parseCaptureWorkspaceRequestV4(input) : undefined;
+    const requestV3 = requestV5 === undefined && requestV4 === undefined ? parseCaptureWorkspaceRequestV3(input) : undefined;
+    const requestV2 = requestV5 === undefined && requestV4 === undefined && requestV3 === undefined
+      ? parseCaptureWorkspaceRequestV2(input) : undefined;
+    const request = requestV5 ?? requestV4 ?? requestV3 ?? requestV2 ?? parseCaptureWorkspaceRequestV1(input);
     if (request === undefined) throw new CaptureApplicationError("request");
     let actorId: string;
     try {
       const authorized = await this.authorization.authorizeBranch(principal, request.scope, "captures.read");
       await this.authorization.authorizeBranch(principal, request.scope, "customers.read");
-      if (requestV4 !== undefined) await this.authorization.authorizeBranch(principal, request.scope, "catalog.read");
+      if (requestV4 !== undefined || requestV5 !== undefined) {
+        await this.authorization.authorizeBranch(principal, request.scope, "catalog.read");
+      }
       actorId = authorized.principal.actorId;
     } catch { throw new CaptureApplicationError("authorization"); }
+    if (requestV5 !== undefined) {
+      return readCaptureWorkspaceV5WithProjections(
+        actorId, requestV5.scope, requestV5.captureDraftId, this.creator, this.confirmation, this.catalogs,
+      );
+    }
     if (requestV4 !== undefined) return this.readWorkspaceV4(actorId, requestV4);
     const reader = requestV3 !== undefined ? this.creator.readWorkspaceV3
       : requestV2 !== undefined ? this.creator.readWorkspaceV2 : this.creator.readWorkspace;
@@ -1225,7 +2052,24 @@ function parseConfirmCommand(input: unknown): ConfirmCaptureDraftCommandV2 {
   }
   return command;
 }
+/**
+ * confirm_capture_draft_v3's conflict reasons ('payment_intent_stale', 'delivery_quote_stale')
+ * carry a `reason` alongside `status`, a shape parseOutcome's exact-key checks never recognize
+ * (they only know plain {status} and {status,record}) -- without this, a genuine stale write that
+ * slipped past CaptureConfirmationService's own basisFingerprint pre-check would fall through to
+ * a generic 503 instead of the same typed 409 the pre-check throws. This keeps both guards
+ * -- the API's own fingerprint check and SQL's fact-based CAS -- agreeing on the same outcome.
+ */
 function confirmationResult(raw: unknown, command: ConfirmCaptureDraftCommandV2): CaptureMutationResultV1 {
+  const reasoned = exactRecord(raw, ["status", "reason"]);
+  if (reasoned?.status === "conflict") {
+    if (reasoned.reason === "payment_intent_stale") throw new CapturePaymentIntentStaleError();
+    if (reasoned.reason === "delivery_quote_missing" || reasoned.reason === "delivery_quote_expired"
+      || reasoned.reason === "delivery_quote_not_covered") {
+      throw new CaptureDeliveryQuoteInvalidError(reasoned.reason);
+    }
+    throw new CaptureApplicationError("conflict");
+  }
   const { record, replayed } = parseOutcome(raw, command.scope);
   if (record.detail.captureDraftId !== command.captureDraftId
     || record.detail.version !== command.expectedVersion + 1 || record.detail.status !== "confirmed"

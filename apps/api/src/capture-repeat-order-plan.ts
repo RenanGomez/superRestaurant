@@ -4,6 +4,7 @@ import {
   addOrderItem,
   createMenuProductPriceSnapshot,
   createOrder,
+  type DeliveryChargeSnapshot,
   type Order,
   type OrderAuditContext,
   type OrderAuditEvent,
@@ -64,8 +65,9 @@ export function materializeCaptureOrder(
   channel: "counter" | "delivery" | "table" | "takeout",
   plan: CaptureRepeatSelectionPlan | null,
   catalog: MenuCatalogV1 | null,
+  deliveryCharge: DeliveryChargeSnapshot | null = null,
 ): CaptureOrderMaterialization {
-  const base = createBaseOrder(command, actorId, channel);
+  const base = createBaseOrder(command, actorId, channel, deliveryCharge);
   if (plan === null) return base;
   if (catalog === null || plan.lines.length === 0 || catalog.currency !== command.currency) {
     throw new Error("CAPTURE_REPEAT_CATALOG_CONFLICT");
@@ -94,8 +96,9 @@ export function materializeCaptureSelectionOrder(
   channel: "counter" | "delivery" | "table" | "takeout",
   plan: CaptureSelectionPlanV1,
   catalog: MenuCatalogV1 | null,
+  deliveryCharge: DeliveryChargeSnapshot | null = null,
 ): CaptureOrderMaterialization {
-  const base = createBaseOrder(command, actorId, channel);
+  const base = createBaseOrder(command, actorId, channel, deliveryCharge);
   if (catalog === null || plan.lines.length === 0 || catalog.currency !== command.currency
     || catalog.catalogVersion !== plan.catalogVersion) {
     throw new Error("CAPTURE_SELECTION_CATALOG_CONFLICT");
@@ -117,6 +120,7 @@ function createBaseOrder(
   command: ConfirmCaptureDraftCommandV2,
   actorId: string,
   channel: "counter" | "delivery" | "table" | "takeout",
+  deliveryCharge: DeliveryChargeSnapshot | null = null,
 ): CaptureOrderMaterialization {
   const created = createOrder({
     orderId: command.orderId,
@@ -126,6 +130,7 @@ function createBaseOrder(
     ...(command.tableId === null ? {} : { tableId: command.tableId }),
     currency: command.currency,
     timeZone: command.timeZone,
+    deliveryCharge,
   }, audit(command, actorId));
   return deepFreeze({ auditEvents: [created.auditEvent], order: created.order });
 }

@@ -130,6 +130,19 @@ export type {
   PaymentIntentTiming,
 } from "./payment-intent.js";
 export {
+  CAPTURE_PAYMENT_INTENT_FULFILLMENT_CHANNELS,
+  CAPTURE_PAYMENT_INTENT_STATUSES,
+  InvalidCapturePaymentIntentError,
+  buildCapturePaymentIntentProjection,
+  deriveCapturePaymentIntentTiming,
+} from "./capture-payment-intent.js";
+export type {
+  BuildCapturePaymentIntentProjectionInput,
+  CapturePaymentIntentFulfillmentChannel,
+  CapturePaymentIntentProjection,
+  CapturePaymentIntentStatus,
+} from "./capture-payment-intent.js";
+export {
   InvalidPaymentObligationError,
   derivePaymentObligation,
 } from "./payment-obligation.js";
@@ -259,6 +272,7 @@ export {
 export type {
   AddOrderItemInput,
   CreateOrderInput,
+  DeliveryChargeSnapshot,
   Order,
   OrderCancellationAudit,
   OrderChannel,

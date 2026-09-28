@@ -38,6 +38,8 @@
     "src/lib/capture-workspace.test.ts",
     "src/lib/capture-selection.ts",
     "src/lib/capture-selection.test.ts",
+    "src/lib/capture-payment.ts",
+    "src/lib/capture-payment.test.ts",
     "src/lib/delivery-zones.ts",
     "src/lib/delivery-zones.test.ts",
     "src/lib/shortcut-dispatch.ts",

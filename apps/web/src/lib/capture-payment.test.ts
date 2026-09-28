@@ -1,0 +1,237 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  deliveryQuoteBlocksConfirm, deliveryQuoteScheduledForInputValue, describePaymentMethod, isSwitchingToAnotherCapture,
+  parseMoneyInputToMinor, paymentIntentBlocksConfirm, quoteMatchesRequestedTime, shouldSubmitTender,
+  suggestTenderAmounts,
+} from "./capture-payment.js";
+
+const baseQuote = {
+  schemaVersion: 1 as const, quoteId: "6e4b1f6a-5f0a-4e3f-9c8a-2d3b7a6c9e10",
+  restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955",
+  captureDraftId: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0",
+  addressSnapshotRef: "9b2f1c1e-7f3a-4a2e-9d5e-1a2b3c4d5e6f",
+  address: { postalCode: "83000", locality: "Hermosillo" },
+  currency: "MXN", timeZone: "America/Hermosillo",
+  quotedAt: "2026-09-27T12:00:00.000Z", scheduledFor: null as string | null, version: 1,
+  coverageStatus: "covered" as const, zoneId: "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+  feeMinor: 3000, promiseStart: "2026-09-27T12:00:00.000Z", promiseEnd: "2026-09-27T12:15:00.000Z",
+  expiresAt: "2026-09-27T12:30:00.000Z", override: null,
+};
+
+test("quoteMatchesRequestedTime is vacuously true when there is no frozen quote yet", () => {
+  assert.equal(quoteMatchesRequestedTime(null, ""), true);
+  assert.equal(quoteMatchesRequestedTime(null, "2026-09-27T13:00"), true);
+});
+
+test("quoteMatchesRequestedTime matches an ASAP quote only to an empty scheduled field", () => {
+  assert.equal(quoteMatchesRequestedTime(baseQuote, ""), true);
+  assert.equal(quoteMatchesRequestedTime(baseQuote, "2026-09-27T13:00"), false);
+});
+
+test("quoteMatchesRequestedTime compares the server's scheduledFor to the field's parsed instant, not the raw text", () => {
+  const fieldValue = "2026-09-27T13:00";
+  const matchingInstant = new Date(fieldValue).toISOString();
+  const scheduled = { ...baseQuote, scheduledFor: matchingInstant };
+  assert.equal(quoteMatchesRequestedTime(scheduled, fieldValue), true);
+  const different = { ...baseQuote, scheduledFor: new Date("2026-09-27T14:00").toISOString() };
+  assert.equal(quoteMatchesRequestedTime(different, fieldValue), false);
+});
+
+test("quoteMatchesRequestedTime never matches an unparsable field, so confirm stays blocked", () => {
+  const scheduled = { ...baseQuote, scheduledFor: "2026-09-27T19:00:00.000Z" };
+  assert.equal(quoteMatchesRequestedTime(scheduled, "not-a-date"), false);
+});
+
+test("deliveryQuoteScheduledForInputValue is empty for no quote or an ASAP (null scheduledFor) quote", () => {
+  assert.equal(deliveryQuoteScheduledForInputValue(null), "");
+  assert.equal(deliveryQuoteScheduledForInputValue(baseQuote), "");
+});
+
+test("deliveryQuoteScheduledForInputValue round-trips through quoteMatchesRequestedTime for H15 rehydration", () => {
+  const fieldValue = "2026-09-27T13:05";
+  const scheduled = { ...baseQuote, scheduledFor: new Date(fieldValue).toISOString() };
+  const derived = deliveryQuoteScheduledForInputValue(scheduled);
+  assert.equal(derived, fieldValue);
+  assert.equal(quoteMatchesRequestedTime(scheduled, derived), true);
+});
+
+test("deliveryQuoteScheduledForInputValue is empty for an unparsable scheduledFor", () => {
+  assert.equal(deliveryQuoteScheduledForInputValue({ ...baseQuote, scheduledFor: "not-a-date" }), "");
+});
+
+test("isSwitchingToAnotherCapture is false on initial load and on re-hydrating the same capture", () => {
+  assert.equal(isSwitchingToAnotherCapture(undefined, "capture-1"), false);
+  assert.equal(isSwitchingToAnotherCapture("capture-1", "capture-1"), false);
+});
+
+test("isSwitchingToAnotherCapture is true only when a different capture was already on screen", () => {
+  assert.equal(isSwitchingToAnotherCapture("capture-1", "capture-2"), true);
+});
+
+test("paymentIntentBlocksConfirm is vacuously false when there is no payment intent at all", () => {
+  assert.equal(paymentIntentBlocksConfirm(null, null), false);
+  assert.equal(paymentIntentBlocksConfirm(null, { status: "stale" }), false);
+});
+
+test("paymentIntentBlocksConfirm blocks a stale or insufficient projection", () => {
+  assert.equal(paymentIntentBlocksConfirm({}, { status: "stale" }), true);
+  assert.equal(paymentIntentBlocksConfirm({}, { status: "insufficient" }), true);
+  assert.equal(paymentIntentBlocksConfirm({}, { status: "ready" }), false);
+});
+
+test("H20: paymentIntentBlocksConfirm blocks a set intent with no projection at all (no pricing basis)", () => {
+  assert.equal(paymentIntentBlocksConfirm({}, null), true);
+});
+
+test("deliveryQuoteBlocksConfirm never blocks outside delivery, regardless of quote facts", () => {
+  assert.equal(deliveryQuoteBlocksConfirm("counter", null, "", new Date("2026-09-27T12:00:00Z")), null);
+  assert.equal(deliveryQuoteBlocksConfirm(null, null, "", new Date("2026-09-27T12:00:00Z")), null);
+});
+
+test("H21: deliveryQuoteBlocksConfirm reports missing when there is no frozen quote at all", () => {
+  assert.equal(deliveryQuoteBlocksConfirm("delivery", null, "", new Date("2026-09-27T12:00:00Z")), "missing");
+});
+
+test("H21: deliveryQuoteBlocksConfirm reports not_covered ahead of any expiry/time check", () => {
+  const quote = { ...baseQuote, coverageStatus: "not_covered" as const,
+    expiresAt: "2026-09-27T13:00:00.000Z" };
+  assert.equal(deliveryQuoteBlocksConfirm("delivery", quote, "", new Date("2026-09-27T12:00:00Z")), "not_covered");
+});
+
+test("H21: deliveryQuoteBlocksConfirm reports expired once the client's clock passes expiresAt", () => {
+  const quote = { ...baseQuote, expiresAt: "2026-09-27T12:00:00.000Z" };
+  assert.equal(deliveryQuoteBlocksConfirm("delivery", quote, "", new Date("2026-09-27T12:00:01Z")), "expired");
+  assert.equal(deliveryQuoteBlocksConfirm("delivery", quote, "", new Date("2026-09-27T11:59:59Z")), null);
+});
+
+test("H21: deliveryQuoteBlocksConfirm reports time_mismatch only once covered and unexpired", () => {
+  const quote = { ...baseQuote, expiresAt: "2026-09-27T13:00:00.000Z" };
+  assert.equal(
+    deliveryQuoteBlocksConfirm("delivery", quote, "2026-09-27T13:00", new Date("2026-09-27T12:00:00Z")),
+    "time_mismatch",
+  );
+});
+
+test("H21: deliveryQuoteBlocksConfirm is null for a covered, unexpired quote matching the requested time", () => {
+  const fieldValue = "2026-09-27T13:00";
+  const matchingInstant = new Date(fieldValue).toISOString();
+  const scheduled = { ...baseQuote, scheduledFor: matchingInstant, expiresAt: "2026-09-29T12:00:00.000Z" };
+  assert.equal(
+    deliveryQuoteBlocksConfirm("delivery", scheduled, fieldValue, new Date("2026-09-27T12:00:00Z")),
+    null,
+  );
+  assert.equal(
+    deliveryQuoteBlocksConfirm("delivery", baseQuote, "", new Date("2026-09-27T12:00:00Z")),
+    null,
+  );
+});
+
+test("shouldSubmitTender is false for an unparsable amount, regardless of applied/current state", () => {
+  assert.equal(shouldSubmitTender(null, null, null), false);
+  assert.equal(shouldSubmitTender(null, 5000, 5000), false);
+});
+
+test("H24: shouldSubmitTender is false once the value was already applied by this field", () => {
+  assert.equal(shouldSubmitTender(9000, 9000, null), false);
+});
+
+test("H24: shouldSubmitTender is false when it already matches the server's current intent", () => {
+  // Covers the Enter-then-blur double send: Enter applies 9000 (appliedMinor becomes 9000), the
+  // immediate blur must not resend it.
+  assert.equal(shouldSubmitTender(9000, null, 9000), false);
+  assert.equal(shouldSubmitTender(9000, 9000, 9000), false);
+});
+
+test("H24: shouldSubmitTender is true for a genuinely new amount", () => {
+  assert.equal(shouldSubmitTender(9000, 5000, 5000), true);
+  assert.equal(shouldSubmitTender(9000, null, null), true);
+});
+
+test("H30: a resend of a previously-applied amount succeeds once the server's own tender moved on", () => {
+  // Apply 200 -> aplicar atajo 300 (a different path, e.g. a suggestion chip) -> retype 200. This
+  // pure function alone can't distinguish "appliedMinor is stale because something else changed
+  // the tender" from "appliedMinor is fresh, currentIntentMinor just hasn't caught up yet from
+  // OUR OWN apply" -- both look identical as three numbers (appliedMinor == parsedMinor,
+  // currentIntentMinor != parsedMinor). Disambiguating them is the caller's job: capture-payment.tsx
+  // resyncs appliedTenderMinor to the server's own tenderedAmountMinor on every change, so by the
+  // time "200" is retyped after the 300 chip, the caller already passes appliedMinor=300, not a
+  // stale 200 -- exactly this call shape.
+  assert.equal(shouldSubmitTender(200, 300, 300), true);
+});
+
+test("H30: appliedMinor still guards the immediate same-cycle resend before the server's reply lands", () => {
+  // The narrow case appliedMinor exists for: an immediate resend before the server's reply has
+  // updated currentIntentMinor yet (the brief Enter-then-blur window) -- correctly resyncing
+  // appliedMinor elsewhere (H30) must never reopen this original H24 guard.
+  assert.equal(shouldSubmitTender(200, 200, null), false);
+});
+
+test("suggestTenderAmounts always includes the exact total plus the next 100/200/500-peso roundings above it", () => {
+  assert.deepEqual(suggestTenderAmounts(9_000), [9_000, 10_000, 20_000, 50_000]);
+  assert.deepEqual(suggestTenderAmounts(12_000), [12_000, 20_000, 50_000]);
+});
+
+test("suggestTenderAmounts never duplicates a rounding that already equals the exact total", () => {
+  assert.deepEqual(suggestTenderAmounts(10_000), [10_000, 20_000, 50_000]);
+  assert.deepEqual(suggestTenderAmounts(20_000), [20_000, 50_000]);
+  assert.deepEqual(suggestTenderAmounts(50_000), [50_000, 60_000]);
+});
+
+test("suggestTenderAmounts on a zero total has no distinct rounding above it", () => {
+  assert.deepEqual(suggestTenderAmounts(0), [0]);
+});
+
+test("suggestTenderAmounts rejects negative or non-integer totals with no suggestions", () => {
+  assert.deepEqual(suggestTenderAmounts(-1), []);
+  assert.deepEqual(suggestTenderAmounts(1.5), []);
+  assert.deepEqual(suggestTenderAmounts(Number.NaN), []);
+});
+
+test("describePaymentMethod labels cash by server-derived timing, never by client choice", () => {
+  assert.deepEqual(describePaymentMethod("cash", "on_fulfillment"), { label: "Efectivo", notice: "Cobro contra entrega" });
+  assert.deepEqual(describePaymentMethod("cash", "now"), { label: "Efectivo", notice: "Cobro en mostrador" });
+});
+
+test("describePaymentMethod describes card_manual and transfer independently of timing", () => {
+  assert.deepEqual(describePaymentMethod("card_manual", "now"),
+    { label: "Tarjeta", notice: "Se liquida con terminal manual al entregar" });
+  assert.deepEqual(describePaymentMethod("card_manual", "on_fulfillment"),
+    { label: "Tarjeta", notice: "Se liquida con terminal manual al entregar" });
+  assert.deepEqual(describePaymentMethod("transfer", "now"),
+    { label: "Transferencia", notice: "Pendiente de evidencia de pago" });
+  assert.deepEqual(describePaymentMethod("transfer", "on_fulfillment"),
+    { label: "Transferencia", notice: "Pendiente de evidencia de pago" });
+});
+
+test("parseMoneyInputToMinor converts whole pesos and two-decimal amounts with exact integer arithmetic", () => {
+  assert.equal(parseMoneyInputToMinor("10"), 1_000);
+  assert.equal(parseMoneyInputToMinor("10.5"), 1_050);
+});
+
+// H12: a field with no "." or "," at all (an absent fraction, not merely a short one) must never
+// come out as NaN -- verified directly against Number.isNaN, not just a loose equality, so a
+// regression that reintroduces NaN cannot slip past as some other falsy/incorrect value.
+test("parseMoneyInputToMinor treats a whole-peso amount with no fraction as exactly zero cents, never NaN", () => {
+  const result = parseMoneyInputToMinor("10");
+  assert.equal(Number.isNaN(result), false);
+  assert.equal(result, 1_000);
+  assert.equal(parseMoneyInputToMinor("1234567"), 123_456_700);
+});
+
+test("parseMoneyInputToMinor accepts a comma as the decimal separator", () => {
+  assert.equal(parseMoneyInputToMinor("10,50"), 1_050);
+});
+
+test("parseMoneyInputToMinor rejects a numeric prefix followed by non-digit trailing text", () => {
+  assert.equal(parseMoneyInputToMinor("10abc"), null);
+});
+
+test("parseMoneyInputToMinor rejects more than two decimal digits instead of rounding them away", () => {
+  assert.equal(parseMoneyInputToMinor("10.555"), null);
+});
+
+test("parseMoneyInputToMinor rejects an empty or whitespace-only field", () => {
+  assert.equal(parseMoneyInputToMinor(""), null);
+  assert.equal(parseMoneyInputToMinor("   "), null);
+});

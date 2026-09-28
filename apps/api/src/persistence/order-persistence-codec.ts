@@ -97,6 +97,11 @@ export interface PersistedOrderDiscountSnapshotV1 extends PersistedDiscountSnaps
   readonly allocationStrategy: OrderDiscountSnapshot["allocationStrategy"];
 }
 
+export interface PersistedDeliveryChargeV1 {
+  readonly amount: PersistedMoneyV1;
+  readonly quoteId: string;
+}
+
 export interface PersistedOrderItemPriceSnapshotV1 {
   readonly catalogVersion: string;
   readonly productId: string;
@@ -134,6 +139,13 @@ export interface PersistedOrderV1 {
   readonly items: readonly PersistedOrderItemV1[];
   readonly orderDiscount?: PersistedOrderDiscountSnapshotV1;
   readonly tip?: PersistedMoneyV1;
+  /**
+   * H13: additive, nullable field for the Order's frozen delivery charge. Optional (rather than
+   * always-present) only so records persisted before H13 decode without it; `decodeOrderRecord`
+   * always treats an absent key the same as an explicit `null`, matching the domain's required
+   * (never-`undefined`) `Order.deliveryCharge`.
+   */
+  readonly deliveryCharge?: PersistedDeliveryChargeV1 | null;
   readonly cancellationAudit?: PersistedOrderCancellationAuditV1;
 }
 
@@ -213,6 +225,14 @@ export function encodeOrderRecord(order: Order): PersistedOrderV1 {
     items: order.items.map(encodeOrderItem),
     ...(order.orderDiscount === undefined ? {} : { orderDiscount: encodeOrderDiscount(order.orderDiscount) }),
     ...(order.tip === undefined ? {} : { tip: encodeMoney(order.tip) }),
+    // H23: omit the key entirely when there's no charge (same optional-key pattern as
+    // orderDiscount/tip/note), rather than always writing `deliveryCharge: null` -- confirm's
+    // audit trail (persist_order_mutation) requires the persisted aggregate outside items/status
+    // to stay byte-for-byte identical across mutations, and every order created before this key
+    // existed decodes it back as an OMITTED key (see decodeOrderRecord below), never an explicit
+    // null; always re-adding the key on the very next item add/state change would silently
+    // corrupt that equality check for every one of those pre-existing orders.
+    ...(order.deliveryCharge === null ? {} : { deliveryCharge: encodeDeliveryCharge(order.deliveryCharge) }),
     ...(order.cancellationAudit === undefined
       ? {}
       : { cancellationAudit: encodeOrderCancellationAudit(order.cancellationAudit) }),
@@ -225,7 +245,7 @@ export function decodeOrderRecord(value: unknown): Order {
     assertStableTree(value, "order record", false);
     const record = exactRecord(value, [
       "schemaVersion", "orderId", "restaurantId", "branchId", "channel", "currency", "timeZone", "status", "items",
-    ], ["tableId", "orderDiscount", "tip", "cancellationAudit"], "order record");
+    ], ["tableId", "orderDiscount", "tip", "deliveryCharge", "cancellationAudit"], "order record");
     assertVersion(data(record, "schemaVersion"));
     const order = deepFreeze({
       orderId: text(data(record, "orderId"), "orderId"),
@@ -243,6 +263,9 @@ export function decodeOrderRecord(value: unknown): Order {
         ? {}
         : { orderDiscount: decodeOrderDiscount(optionalData(record, "orderDiscount")) }),
       ...(optionalData(record, "tip") === undefined ? {} : { tip: decodeMoney(optionalData(record, "tip"), "tip") }),
+      deliveryCharge: optionalData(record, "deliveryCharge") === undefined || optionalData(record, "deliveryCharge") === null
+        ? null
+        : decodeDeliveryCharge(optionalData(record, "deliveryCharge")),
       ...(optionalData(record, "cancellationAudit") === undefined
         ? {}
         : { cancellationAudit: decodeOrderCancellationAudit(optionalData(record, "cancellationAudit")) }),
@@ -492,6 +515,18 @@ function decodeOrderDiscount(value: unknown): OrderDiscountSnapshot {
     discountRuleVersion: text(data(record, "discountRuleVersion"), "discountRuleVersion"),
     amount: decodeMoney(data(record, "amount"), "order discount amount"),
     allocationStrategy: data(record, "allocationStrategy") as OrderDiscountSnapshot["allocationStrategy"],
+  });
+}
+
+function encodeDeliveryCharge(charge: NonNullable<Order["deliveryCharge"]>): PersistedDeliveryChargeV1 {
+  return deepFreeze({ amount: encodeMoney(charge.amount), quoteId: charge.quoteId });
+}
+
+function decodeDeliveryCharge(value: unknown): NonNullable<Order["deliveryCharge"]> {
+  const record = exactRecord(value, ["amount", "quoteId"], [], "delivery charge");
+  return deepFreeze({
+    amount: decodeMoney(data(record, "amount"), "delivery charge amount"),
+    quoteId: text(data(record, "quoteId"), "delivery charge quoteId"),
   });
 }
 

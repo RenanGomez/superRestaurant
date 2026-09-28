@@ -13,6 +13,7 @@ import {
   InvalidOrderAggregateError,
   InvalidOrderChannelError,
   InvalidOrderTableAssignmentError,
+  InvalidSnapshotError,
   Money,
   OrderAggregateNotImmutableError,
   OrderCancellationRequiresItemCancellationError,
@@ -431,6 +432,64 @@ function baseInput() {
     timeZone: "America/Mexico_City",
   };
 }
+
+test("Order has no delivery charge by default, and calculateOrderAggregateTotals is unaffected", () => {
+  const order = createOrder(baseInput(), audit()).order;
+  assert.equal(order.deliveryCharge, null);
+  assert.equal(calculateOrderAggregateTotals(order).total.amountMinor, 0);
+});
+
+test("H13: a delivery charge fixed at creation is frozen onto the Order and added to its payable total, untaxed", () => {
+  const order = createOrder({
+    ...baseInput(),
+    channel: "delivery",
+    deliveryCharge: { amount: mxn(3000), quoteId: "quote-1" },
+  }, audit()).order;
+  assert.deepEqual(order.deliveryCharge, { amount: mxn(3000), quoteId: "quote-1" });
+
+  const withItem = added(order, line());
+  const totals = calculateOrderAggregateTotals(withItem);
+  // The item alone (no tax rule attached in this fixture) totals its unit price; the delivery
+  // charge is added on top, exactly, with no additional tax computed on it.
+  assert.equal(totals.total.amountMinor, 10_000 + 3_000);
+});
+
+test("H13: delivery charge is immutable after creation -- there is no operation that edits it", () => {
+  const order = createOrder({
+    ...baseInput(),
+    channel: "delivery",
+    deliveryCharge: { amount: mxn(3000), quoteId: "quote-1" },
+  }, audit()).order;
+  const next = added(order, line());
+  assert.deepEqual(next.deliveryCharge, order.deliveryCharge);
+  assert.equal(Object.isFrozen(next.deliveryCharge), true);
+});
+
+test("H13: createOrder rejects a negative, mismatched-currency, or malformed delivery charge", () => {
+  assert.throws(() => createOrder({
+    ...baseInput(), deliveryCharge: { amount: mxn(-1), quoteId: "quote-1" },
+  }, audit()), InvalidSnapshotError);
+  assert.throws(() => createOrder({
+    ...baseInput(), deliveryCharge: { amount: new Money(100, "USD"), quoteId: "quote-1" },
+  }, audit()), InvalidSnapshotError);
+  assert.throws(() => createOrder({
+    ...baseInput(), deliveryCharge: { amount: mxn(100), quoteId: "" },
+  }, audit()), InvalidSnapshotError);
+  assert.throws(() => createOrder({
+    ...baseInput(), deliveryCharge: { amount: 100, quoteId: "quote-1" } as never,
+  }, audit()), InvalidSnapshotError);
+});
+
+test("H13: a rehydrated order with a forged, non-Money delivery charge amount is rejected", () => {
+  const valid = createOrder({
+    ...baseInput(), channel: "delivery", deliveryCharge: { amount: mxn(3000), quoteId: "quote-1" },
+  }, audit()).order;
+  const forged = freeze({
+    ...valid,
+    deliveryCharge: { amount: { amountMinor: 3000, currency: "MXN" }, quoteId: "quote-1" },
+  }) as unknown as Order;
+  assert.throws(() => calculateOrderAggregateTotals(forged), InvalidOrderAggregateError);
+});
 
 function freeze<T>(value: T, seen = new WeakSet<object>()): T {
   if (value !== null && typeof value === "object" && !seen.has(value)) {

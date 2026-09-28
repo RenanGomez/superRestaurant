@@ -6,9 +6,9 @@ import {
   parseCaptureDeliveryInstructionSuggestionsRequestV1,
   parseCaptureDeliveryInstructionSuggestionsV1,
   parseCaptureWorkspaceRequestV3,
-  parseCaptureWorkspaceRequestV4,
   parseCaptureWorkspaceV3,
   parseCaptureWorkspaceV4,
+  parseCaptureWorkspaceV5,
   parseCaptureWorkTrayRequestV1,
   parseCaptureWorkTrayResultV1,
   parseClaimCaptureDraftCommandV1,
@@ -16,28 +16,34 @@ import {
   parseCloseCaptureNoSaleCommandV1,
   parseCreateCaptureDraftCommandV1,
   parseReplaceCaptureSelectionPlanCommandV1,
+  parseRequestCaptureDeliveryQuoteCommandV1,
   parseSetCaptureCustomerCommandV1,
   parseSetCaptureFulfillmentCommandV1,
   parseSetCaptureDeliveryInstructionsCommandV1,
   parseSetCaptureDeliveryInstructionsResultV1,
+  parseSetCapturePaymentIntentCommandV1,
   parseTakeoverCaptureDraftCommandV1,
   parseTransferCaptureDraftCommandV1,
   type CaptureCustomerSnapshotV1,
   type CaptureDraftDetailV2,
   type AutosaveCaptureDraftCommandV1,
   type BranchScope,
+  type CapturePaymentBasisV1,
+  type CapturePaymentIntentProjectionV1,
+  type CapturePaymentIntentV1,
   type CaptureFulfillmentChannelV1,
   type CaptureFulfillmentSnapshotV1,
   type CaptureRepeatOrderPlanSummaryV1,
   type CaptureSelectionPlanProjectionV1,
   type CaptureSelectionPlanSummaryV1,
   type CaptureSourceChannelV1,
+  type DeliveryQuoteV1,
 } from "@super-restaurant/shared-types";
 export type CaptureRequestResult<T> = { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable" };
+  | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable"; readonly code?: string };
 export type CaptureOperation = "autosave" | "confirm" | "create" | "claim" | "customer" | "deliveryInstructions"
-  | "deliveryInstructionSuggestions" | "fulfillment" | "assignmentCandidates" | "noSale" | "selectionPlan" | "takeover"
-  | "transfer" | "tray" | "workspace";
+  | "deliveryInstructionSuggestions" | "deliveryQuote" | "fulfillment" | "assignmentCandidates" | "noSale"
+  | "paymentIntent" | "selectionPlan" | "takeover" | "transfer" | "tray" | "workspace";
 export interface CaptureKeyValueStore {
   readonly getItem: (key: string) => string | null;
   readonly removeItem: (key: string) => void;
@@ -84,7 +90,8 @@ export function clearPendingCaptureAutosave(
 const paths = { autosave: "/autosave", confirm: "/confirm", create: "", claim: "/claim", customer: "/customer",
   assignmentCandidates: "/assignment-candidates",
   deliveryInstructions: "/delivery-instructions", deliveryInstructionSuggestions: "/delivery-instruction-suggestions",
-  fulfillment: "/fulfillment", noSale: "/no-sale", selectionPlan: "/selection-plan",
+  deliveryQuote: "/delivery-quote", fulfillment: "/fulfillment", noSale: "/no-sale",
+  paymentIntent: "/payment-intent", selectionPlan: "/selection-plan",
   takeover: "/takeover", transfer: "/transfer", tray: "/tray", workspace: "/workspace" } as const;
 const parsers = {
   autosave: parseAutosaveCaptureDraftCommandV1,
@@ -104,12 +111,15 @@ type CaptureResponse = NonNullable<ReturnType<typeof parseCaptureMutationResultV
   | NonNullable<ReturnType<typeof parseCaptureWorkTrayResultV1>>
   | NonNullable<ReturnType<typeof parseCaptureWorkspaceV3>>
   | NonNullable<ReturnType<typeof parseCaptureWorkspaceV4>>
+  | NonNullable<ReturnType<typeof parseCaptureWorkspaceV5>>
   | NonNullable<ReturnType<typeof parseSetCaptureDeliveryInstructionsResultV1>>;
 export async function requestCapture(token: string, baseUrl: string, operation: CaptureOperation, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
   if (operation === "assignmentCandidates") return requestCaptureAssignmentCandidates(token, baseUrl, input);
   if (operation === "tray") return requestCaptureTray(token, baseUrl, input);
   if (operation === "workspace") return requestCaptureWorkspace(token, baseUrl, input);
   if (operation === "selectionPlan") return requestCaptureSelectionPlan(token, baseUrl, input);
+  if (operation === "deliveryQuote") return requestCaptureDeliveryQuote(token, baseUrl, input);
+  if (operation === "paymentIntent") return requestCapturePaymentIntent(token, baseUrl, input);
   if (operation === "deliveryInstructionSuggestions") {
     return requestCaptureDeliveryInstructionSuggestions(token, baseUrl, input);
   }
@@ -118,9 +128,14 @@ export async function requestCapture(token: string, baseUrl: string, operation: 
   try {
     const response = await fetch(`${baseUrl}/api/v1/captures${paths[operation]}`, { method: "POST", cache: "no-store",
       signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(command) });
-    if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
-      : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
-        : response.status === 400 ? "invalid" : "unavailable" };
+    if (!response.ok) {
+      if (response.status === 409) {
+        const code = await conflictResponseCode(response);
+        return { ok: false, error: "conflict", ...(code === undefined ? {} : { code }) };
+      }
+      return { ok: false, error: response.status === 401 || response.status === 403 ? "denied"
+        : response.status === 404 ? "missing" : response.status === 400 ? "invalid" : "unavailable" };
+    }
     const body = await response.json();
     const value = operation === "deliveryInstructions"
       ? parseSetCaptureDeliveryInstructionsResultV1(body)
@@ -182,28 +197,57 @@ async function requestCaptureDeliveryInstructionSuggestions(
 export interface RehydratedCaptureWorkspace {
   readonly customerSnapshot: CaptureCustomerSnapshotV1 | null;
   readonly deliveryInstructions: string | null;
+  readonly deliveryQuote: DeliveryQuoteV1 | null;
   readonly detail: CaptureDraftDetailV2;
   readonly fulfillmentChannel: CaptureFulfillmentChannelV1 | null;
   readonly fulfillmentSnapshot: CaptureFulfillmentSnapshotV1 | null;
+  readonly paymentBasis: CapturePaymentBasisV1 | null;
+  readonly paymentIntent: CapturePaymentIntentV1 | null;
+  readonly paymentProjection: CapturePaymentIntentProjectionV1 | null;
   readonly repeatOrderPlan: CaptureRepeatOrderPlanSummaryV1 | null;
   readonly selectionPlan: CaptureSelectionPlanSummaryV1 | null;
   readonly selectionProjection: CaptureSelectionPlanProjectionV1 | null;
   readonly sourceChannel: CaptureSourceChannelV1;
 }
 
-/** Rehydrates only immutable snapshot facts returned for the Capture; it never accepts a live Customer record. */
+/**
+ * Rehydrates only immutable snapshot facts returned for the Capture; it never accepts a live
+ * Customer record. Accepts either `CaptureWorkspaceV5` (preferred; every operation now serves it)
+ * or, for backward compatibility, a bare `CaptureWorkspaceV4` -- which carries no payment fields
+ * at all, so those are surfaced as `null` rather than treated as an unavailable response.
+ */
 export function rehydrateCaptureWorkspace(value: unknown): RehydratedCaptureWorkspace | undefined {
-  const workspace = parseCaptureWorkspaceV4(value);
-  return workspace === undefined ? undefined : Object.freeze({
-    customerSnapshot: workspace.customerSnapshot,
-    deliveryInstructions: workspace.detail.deliveryInstructions,
-    detail: workspace.detail,
-    fulfillmentChannel: workspace.detail.fulfillmentChannel,
-    fulfillmentSnapshot: workspace.fulfillmentSnapshot,
-    repeatOrderPlan: workspace.repeatOrderPlan,
-    selectionPlan: workspace.selectionPlan,
-    selectionProjection: workspace.selectionProjection,
-    sourceChannel: workspace.detail.sourceChannel,
+  const v5 = parseCaptureWorkspaceV5(value);
+  if (v5 !== undefined) return Object.freeze({
+    customerSnapshot: v5.customerSnapshot,
+    deliveryInstructions: v5.detail.deliveryInstructions,
+    deliveryQuote: v5.deliveryQuote,
+    detail: v5.detail,
+    fulfillmentChannel: v5.detail.fulfillmentChannel,
+    fulfillmentSnapshot: v5.fulfillmentSnapshot,
+    paymentBasis: v5.paymentBasis,
+    paymentIntent: v5.paymentIntent,
+    paymentProjection: v5.paymentProjection,
+    repeatOrderPlan: v5.repeatOrderPlan,
+    selectionPlan: v5.selectionPlan,
+    selectionProjection: v5.selectionProjection,
+    sourceChannel: v5.detail.sourceChannel,
+  });
+  const v4 = parseCaptureWorkspaceV4(value);
+  return v4 === undefined ? undefined : Object.freeze({
+    customerSnapshot: v4.customerSnapshot,
+    deliveryInstructions: v4.detail.deliveryInstructions,
+    deliveryQuote: null,
+    detail: v4.detail,
+    fulfillmentChannel: v4.detail.fulfillmentChannel,
+    fulfillmentSnapshot: v4.fulfillmentSnapshot,
+    paymentBasis: null,
+    paymentIntent: null,
+    paymentProjection: null,
+    repeatOrderPlan: v4.repeatOrderPlan,
+    selectionPlan: v4.selectionPlan,
+    selectionProjection: v4.selectionProjection,
+    sourceChannel: v4.detail.sourceChannel,
   });
 }
 
@@ -226,22 +270,86 @@ async function requestCaptureTray(token: string, baseUrl: string, input: unknown
 }
 
 /**
- * Always requests CaptureWorkspaceV4 (server-priced `selectionProjection` included) so a saved
- * catalog selection survives a reload; the API still serves V1-V3 for older clients, but this
- * client accepts only the accepted-scope/captureDraftId-matching V4 shape.
+ * Always requests CaptureWorkspaceV5 (server-priced `selectionProjection` plus the frozen
+ * `deliveryQuote`/`paymentIntent` and its server-computed `paymentProjection` included) so a
+ * saved catalog selection and any stated payment intent survive a reload; the API still serves
+ * V1-V4 for older clients, but this client accepts only the accepted-scope/captureDraftId-matching
+ * V5 shape.
  */
 async function requestCaptureWorkspace(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
   const commandV3 = parseCaptureWorkspaceRequestV3(input);
   const command = commandV3 === undefined ? undefined
-    : { schemaVersion: 4 as const, scope: commandV3.scope, captureDraftId: commandV3.captureDraftId };
-  if (command === undefined || parseCaptureWorkspaceRequestV4(command) === undefined) return { ok: false, error: "invalid" };
+    : { schemaVersion: 5 as const, scope: commandV3.scope, captureDraftId: commandV3.captureDraftId };
+  if (command === undefined) return { ok: false, error: "invalid" };
   try {
     const response = await fetch(`${baseUrl}/api/v1/captures${paths.workspace}`, { method: "POST", cache: "no-store",
       signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(command) });
     if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
       : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
         : response.status === 400 ? "invalid" : "unavailable" };
-    const value = parseCaptureWorkspaceV4(await response.json());
+    const value = parseCaptureWorkspaceV5(await response.json());
+    if (value === undefined || value.detail.scope.restaurantId !== command.scope.restaurantId
+      || value.detail.scope.branchId !== command.scope.branchId || value.detail.captureDraftId !== command.captureDraftId) {
+      return { ok: false, error: "unavailable" };
+    }
+    return { ok: true, value };
+  } catch { return { ok: false, error: "unavailable" }; }
+}
+
+/**
+ * Requests a fresh, API-computed delivery quote be frozen against a held, delivery-channel
+ * capture, and returns the refreshed CaptureWorkspaceV5. The client never supplies a fee or zone.
+ */
+async function requestCaptureDeliveryQuote(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
+  const command = parseRequestCaptureDeliveryQuoteCommandV1(input);
+  if (command === undefined) return { ok: false, error: "invalid" };
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/captures${paths.deliveryQuote}`, { method: "POST", cache: "no-store",
+      signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(command) });
+    if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
+      : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
+        : response.status === 400 ? "invalid" : "unavailable" };
+    const value = parseCaptureWorkspaceV5(await response.json());
+    if (value === undefined || value.detail.scope.restaurantId !== command.scope.restaurantId
+      || value.detail.scope.branchId !== command.scope.branchId || value.detail.captureDraftId !== command.captureDraftId) {
+      return { ok: false, error: "unavailable" };
+    }
+    return { ok: true, value };
+  } catch { return { ok: false, error: "unavailable" }; }
+}
+
+/** Best-effort read of a 409 body's `code` (e.g. `CAPTURE_PAYMENT_INTENT_INSUFFICIENT`,
+ * `CAPTURE_DELIVERY_QUOTE_INVALID`), so the caller can tell a specific typed conflict apart from a
+ * generic version/lease conflict without ever trusting the body for anything else. */
+async function conflictResponseCode(response: Response): Promise<string | undefined> {
+  try {
+    const body: unknown = await response.json();
+    return typeof body === "object" && body !== null && "code" in body && typeof (body as { code: unknown }).code === "string"
+      ? (body as { code: string }).code
+      : undefined;
+  } catch { return undefined; }
+}
+
+/**
+ * Sets or replaces the capture's stated payment intent (method, an optional cash tender, and a
+ * tip) and returns the refreshed CaptureWorkspaceV5; totals, change and timing are always
+ * server-derived (`paymentProjection`), never computed or trusted from the client.
+ */
+async function requestCapturePaymentIntent(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
+  const command = parseSetCapturePaymentIntentCommandV1(input);
+  if (command === undefined) return { ok: false, error: "invalid" };
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/captures${paths.paymentIntent}`, { method: "POST", cache: "no-store",
+      signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(command) });
+    if (!response.ok) {
+      if (response.status === 409) {
+        const code = await conflictResponseCode(response);
+        return { ok: false, error: "conflict", ...(code === undefined ? {} : { code }) };
+      }
+      return { ok: false, error: response.status === 401 || response.status === 403 ? "denied"
+        : response.status === 404 ? "missing" : response.status === 400 ? "invalid" : "unavailable" };
+    }
+    const value = parseCaptureWorkspaceV5(await response.json());
     if (value === undefined || value.detail.scope.restaurantId !== command.scope.restaurantId
       || value.detail.scope.branchId !== command.scope.branchId || value.detail.captureDraftId !== command.captureDraftId) {
       return { ok: false, error: "unavailable" };
@@ -252,8 +360,10 @@ async function requestCaptureWorkspace(token: string, baseUrl: string, input: un
 
 /**
  * Replaces the catalog-derived selection plan on a claimed draft and returns the refreshed
- * CaptureWorkspaceV4 (server-priced `selectionProjection` included); the client only ever sends
- * ids and quantities via `ReplaceCaptureSelectionPlanCommandV1`, never a price or product name.
+ * CaptureWorkspaceV5 (server-priced `selectionProjection` plus the recomputed `paymentProjection`
+ * included, so a stale payment intent surfaces immediately after the menu changes); the client
+ * only ever sends ids and quantities via `ReplaceCaptureSelectionPlanCommandV1`, never a price or
+ * product name.
  */
 async function requestCaptureSelectionPlan(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
   const command = parseReplaceCaptureSelectionPlanCommandV1(input);
@@ -264,7 +374,7 @@ async function requestCaptureSelectionPlan(token: string, baseUrl: string, input
     if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
       : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
         : response.status === 400 ? "invalid" : "unavailable" };
-    const value = parseCaptureWorkspaceV4(await response.json());
+    const value = parseCaptureWorkspaceV5(await response.json());
     // The server accepts a replay whose draft has since advanced past expectedVersion+1 through
     // an unrelated mutation (see CaptureSelectionPlanService.replace), so the client must not
     // demand an exact match here either: a genuinely successful write is never older than that.

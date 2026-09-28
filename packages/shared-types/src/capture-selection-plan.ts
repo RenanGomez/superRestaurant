@@ -91,6 +91,13 @@ export interface CaptureSelectionPlanProjectionV1 {
   readonly catalogVersion: string;
   readonly currency: string;
   readonly subtotalMinor: number;
+  /**
+   * Tax-inclusive total of every line (unit+modifiers, quantity, line discount, then line tax) --
+   * the exact amount the confirmed Order will charge for these lines, unlike `subtotalMinor`
+   * (tax-exclusive). Additive alongside `subtotalMinor`, never a replacement: existing readers of
+   * `subtotalMinor` are unaffected.
+   */
+  readonly itemsTotalMinor: number;
   readonly lineCount: number;
   readonly lines: readonly CaptureSelectionPlanProjectionLineV1[];
 }
@@ -207,15 +214,18 @@ export function parseReplaceCaptureSelectionPlanCommandV1(
 }
 
 export function parseCaptureSelectionPlanProjectionV1(value: unknown): CaptureSelectionPlanProjectionV1 | undefined {
-  const record = exactRecord(value, ["schemaVersion", "catalogVersion", "currency", "subtotalMinor", "lineCount", "lines"]);
+  const record = exactRecord(value, [
+    "schemaVersion", "catalogVersion", "currency", "subtotalMinor", "itemsTotalMinor", "lineCount", "lines",
+  ]);
   if (record === undefined || own(record, "schemaVersion") !== CAPTURE_SELECTION_PLAN_SCHEMA_VERSION) return undefined;
   const catalogVersion = uuid(own(record, "catalogVersion"));
   const currency = boundedText(own(record, "currency"), 3, 3);
   const subtotalMinor = integer(own(record, "subtotalMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const itemsTotalMinor = integer(own(record, "itemsTotalMinor"), 0, Number.MAX_SAFE_INTEGER);
   const lineCount = integer(own(record, "lineCount"), 0, Number.MAX_SAFE_INTEGER);
   const rawLines = exactArray(own(record, "lines"), MAX_LINES);
   if (catalogVersion === undefined || currency === undefined || !/^[A-Z]{3}$/u.test(currency)
-    || subtotalMinor === undefined || lineCount === undefined || rawLines === undefined
+    || subtotalMinor === undefined || itemsTotalMinor === undefined || lineCount === undefined || rawLines === undefined
     || rawLines.length !== lineCount) {
     return undefined;
   }
@@ -228,6 +238,7 @@ export function parseCaptureSelectionPlanProjectionV1(value: unknown): CaptureSe
   return deepFreeze({
     catalogVersion,
     currency,
+    itemsTotalMinor,
     lineCount,
     lines,
     schemaVersion: CAPTURE_SELECTION_PLAN_SCHEMA_VERSION,

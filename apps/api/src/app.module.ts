@@ -43,7 +43,7 @@ import {
   PostgresCustomerOrderHistory,
   PostgresCustomerOrderRepeatCapture,
 } from "./customer-order-history.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteService, CapturePaymentIntentService, CaptureFulfillmentService, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator } from "./captures.js";
 import { SessionController } from "./session.controller.js";
 import { DiningZonesController } from "./dining-zones.controller.js";
 import {
@@ -157,6 +157,11 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     CaptureNoSaleService,
     { provide: CAPTURE_SELECTION_PLAN_PORT, useExisting: PostgresCaptureCreator },
     CaptureSelectionPlanService,
+    { provide: CAPTURE_DELIVERY_QUOTE_PORT, useExisting: PostgresCaptureCreator },
+    { provide: CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, useExisting: DeliveryZoneService },
+    CaptureDeliveryQuoteService,
+    { provide: CAPTURE_PAYMENT_INTENT_PORT, useExisting: PostgresCaptureCreator },
+    CapturePaymentIntentService,
     { provide: CAPTURE_TRAY_PORT, useExisting: PostgresCaptureCreator },
     CaptureTrayService,
     { provide: CAPTURE_ASSIGNMENT_DIRECTORY_PORT, useExisting: PostgresCaptureCreator },

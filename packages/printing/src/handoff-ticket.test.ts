@@ -27,7 +27,7 @@ const fulfillment: CaptureFulfillmentSnapshotV1 = {
   validatedAt: "2026-09-26T11:00:00Z",
 };
 const base: HandoffTicketInput = {
-  order: { orderId: "order-12345678", channel: "delivery", currency: "MXN", items: [item] },
+  order: { orderId: "order-12345678", channel: "delivery", currency: "MXN", items: [item], deliveryCharge: null },
   totals: { subtotalBeforeOrderDiscount: money(24000), lineDiscountTotal: money(0),
     orderDiscount: money(0), total: money(24000) },
   customer, fulfillment, deliveryInstructions: "Tocar timbre", dateIso: "2026-09-26T12:00:00Z",
@@ -108,6 +108,91 @@ test("an item note renders under its line with a Nota prefix, and no note omits 
     renderHandoffTicket({ ...base, order: { ...base.order, items: [nullNoteItem] }, deliveryInstructions: null }),
     renderHandoffTicket({ ...base, order: { ...base.order, items: [item] }, deliveryInstructions: null }),
   );
+});
+
+test("cash payment intent prints the method and exact change, byte for byte", () => {
+  const actual = renderHandoffTicket({ ...base, deliveryInstructions: null,
+    paymentIntent: { method: "cash", changeDueMinor: 5000 },
+  });
+  assert.deepEqual(actual, snapshot([
+    "ENTREGA 12345678", "Canal: delivery", "Fecha: 2026-09-26T12:00:00Z",
+    "Cliente: Ana Ruiz", "Tel: ***9876", "Calle Uno 1 2B", "CDMX, CDMX, 01000",
+    "------------------------", "2 x Pizza  $120.00", "------------------------",
+    "Subtotal: $240.00", "Descuento líneas: $0.00", "Descuento orden: $0.00",
+    "Total: $240.00", "Pagará con: efectivo · cambio $50.00",
+  ]));
+});
+
+test("cash payment intent with no stated change omits the change suffix", () => {
+  const actual = renderHandoffTicket({ ...base, deliveryInstructions: null,
+    paymentIntent: { method: "cash", changeDueMinor: null },
+  });
+  assert.deepEqual(actual, snapshot([
+    "ENTREGA 12345678", "Canal: delivery", "Fecha: 2026-09-26T12:00:00Z",
+    "Cliente: Ana Ruiz", "Tel: ***9876", "Calle Uno 1 2B", "CDMX, CDMX, 01000",
+    "------------------------", "2 x Pizza  $120.00", "------------------------",
+    "Subtotal: $240.00", "Descuento líneas: $0.00", "Descuento orden: $0.00",
+    "Total: $240.00", "Pagará con: efectivo",
+  ]));
+});
+
+test("card payment intent never prints a change, even if the facts carried one", () => {
+  const actual = renderHandoffTicket({ ...base, deliveryInstructions: null,
+    paymentIntent: { method: "card_manual", changeDueMinor: 100 },
+  });
+  assert.deepEqual(actual, snapshot([
+    "ENTREGA 12345678", "Canal: delivery", "Fecha: 2026-09-26T12:00:00Z",
+    "Cliente: Ana Ruiz", "Tel: ***9876", "Calle Uno 1 2B", "CDMX, CDMX, 01000",
+    "------------------------", "2 x Pizza  $120.00", "------------------------",
+    "Subtotal: $240.00", "Descuento líneas: $0.00", "Descuento orden: $0.00",
+    "Total: $240.00", "Pagará con: tarjeta",
+  ]));
+});
+
+test("transfer payment intent prints its label with no change", () => {
+  const actual = renderHandoffTicket({ ...base, deliveryInstructions: null,
+    paymentIntent: { method: "transfer", changeDueMinor: null },
+  });
+  assert.deepEqual(actual, snapshot([
+    "ENTREGA 12345678", "Canal: delivery", "Fecha: 2026-09-26T12:00:00Z",
+    "Cliente: Ana Ruiz", "Tel: ***9876", "Calle Uno 1 2B", "CDMX, CDMX, 01000",
+    "------------------------", "2 x Pizza  $120.00", "------------------------",
+    "Subtotal: $240.00", "Descuento líneas: $0.00", "Descuento orden: $0.00",
+    "Total: $240.00", "Pagará con: transferencia",
+  ]));
+});
+
+test("no payment intent (null or absent) prints no payment line at all, byte-identical", () => {
+  const withoutField = renderHandoffTicket({ ...base, deliveryInstructions: null });
+  const withNull = renderHandoffTicket({ ...base, deliveryInstructions: null, paymentIntent: null });
+  assert.deepEqual(withoutField, withNull);
+  assert.deepEqual(withoutField, snapshot([
+    "ENTREGA 12345678", "Canal: delivery", "Fecha: 2026-09-26T12:00:00Z",
+    "Cliente: Ana Ruiz", "Tel: ***9876", "Calle Uno 1 2B", "CDMX, CDMX, 01000",
+    "------------------------", "2 x Pizza  $120.00", "------------------------",
+    "Subtotal: $240.00", "Descuento líneas: $0.00", "Descuento orden: $0.00",
+    "Total: $240.00",
+  ]));
+});
+
+test("H13: a delivery charge prints its own Envío line right before Total, byte for byte", () => {
+  const actual = renderHandoffTicket({ ...base, deliveryInstructions: null,
+    order: { ...base.order, deliveryCharge: { amount: money(3000), quoteId: "quote-1" } },
+    totals: { subtotalBeforeOrderDiscount: money(24000), lineDiscountTotal: money(0),
+      orderDiscount: money(0), total: money(27000) },
+  });
+  assert.deepEqual(actual, snapshot([
+    "ENTREGA 12345678", "Canal: delivery", "Fecha: 2026-09-26T12:00:00Z",
+    "Cliente: Ana Ruiz", "Tel: ***9876", "Calle Uno 1 2B", "CDMX, CDMX, 01000",
+    "------------------------", "2 x Pizza  $120.00", "------------------------",
+    "Subtotal: $240.00", "Descuento líneas: $0.00", "Descuento orden: $0.00",
+    "Envío: $30.00", "Total: $270.00",
+  ]));
+});
+
+test("H13: no delivery charge (null) never prints an Envío line", () => {
+  const actual = renderHandoffTicket({ ...base, deliveryInstructions: null });
+  assert.equal(Buffer.from(actual).includes(Buffer.from("Env")), false);
 });
 
 test("currencies without two minor digits fail with a typed error", () => {

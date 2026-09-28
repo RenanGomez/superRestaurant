@@ -10,13 +10,17 @@ import type {
   CaptureDraftDetailV1,
   CaptureDraftDetailV2,
   CaptureDraftSummaryV1,
+  CapturePaymentBasisV1,
+  CapturePaymentIntentMethodV1,
+  CapturePaymentIntentProjectionV1,
+  CapturePaymentIntentV1,
   CaptureFulfillmentChannelV1,
   CaptureFulfillmentSnapshotV1,
   CaptureMutationResultV1,
   CaptureRepeatOrderPlanSummaryV1,
   CaptureSelectionPlanProjectionV1,
   CaptureSourceChannelV1,
-  CaptureWorkspaceV3,
+  CaptureWorkspaceV5,
   CaptureWorkTrayResultV1,
   DeliveryQuoteV1,
   CustomerDirectoryDetailV1,
@@ -36,10 +40,14 @@ import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
   type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
-import { formatDeliveryQuote, quoteMatchesDeliverySnapshot } from "../../../lib/delivery-zones";
-import { deliveryZonesAction } from "../delivery-zones/actions";
+import { formatDeliveryQuote } from "../../../lib/delivery-zones";
+import {
+  deliveryQuoteBlocksConfirm, deliveryQuoteScheduledForInputValue, isSwitchingToAnotherCapture,
+  paymentIntentBlocksConfirm,
+} from "../../../lib/capture-payment";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
 import { CaptureMenu } from "./capture-menu";
+import { CapturePayment } from "./capture-payment";
 import { CaptureTicket } from "./capture-ticket";
 import { ProductSheet } from "./product-sheet";
 
@@ -89,6 +97,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<keyof typeof messages>();
   const [errorOperation, setErrorOperation] = useState<CaptureWorkspaceOperation>();
+  const [errorCode, setErrorCode] = useState<string>();
   const [pending, setPending] = useState<{ operation: CaptureWorkspaceOperation; command: unknown }>();
   const [capture, setCapture] = useState<CaptureDraftDetailV1 | CaptureDraftDetailV2>();
   const [tray, setTray] = useState<readonly CaptureDraftSummaryV1[]>([]);
@@ -117,10 +126,20 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [selectedShiftId, setSelectedShiftId] = useState("");
   const [selectedTableId, setSelectedTableId] = useState("");
   const [scheduledFor, setScheduledFor] = useState("");
-  const [deliveryQuote, setDeliveryQuote] = useState<DeliveryQuoteV1>();
+  const [deliveryQuote, setDeliveryQuote] = useState<DeliveryQuoteV1 | null>(null);
+  const [paymentIntent, setPaymentIntentState] = useState<CapturePaymentIntentV1 | null>(null);
+  const [paymentProjection, setPaymentProjection] = useState<CapturePaymentIntentProjectionV1 | null>(null);
+  // H25: the pricing basis alone (no method/tender/tip), present whenever the lines are priced,
+  // even before any payment intent exists -- lets the "Cobro" summary and cash shortcuts show
+  // real numbers before the operator picks a method.
+  const [paymentBasis, setPaymentBasis] = useState<CapturePaymentBasisV1 | null>(null);
+  const [paymentIntentNotice, setPaymentIntentNotice] = useState<string>();
   const [quoteError, setQuoteError] = useState<string>();
-  const [quoteBusy, setQuoteBusy] = useState(false);
-  const quoteSequence = useRef(0);
+  // True once the scheduled-delivery time has been edited after a quote was already frozen for a
+  // DIFFERENT time: the frozen quote's fee/coverage/promise were computed for the old time, so it
+  // must never be shown as confirmable until a fresh quote replaces it. Never computed locally --
+  // just a flag that the confirm button and a re-quote prompt key off of.
+  const [quoteRequestedForDiffers, setQuoteRequestedForDiffers] = useState(false);
   const [selectionProjection, setSelectionProjection] = useState<CaptureSelectionPlanProjectionV1 | null>(null);
   const [sheetProduct, setSheetProduct] = useState<MenuProductV1>();
   const [sheetGroups, setSheetGroups] = useState<readonly MenuModifierGroupV1[]>([]);
@@ -132,10 +151,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const productSearchRef = useRef<HTMLInputElement>(null);
 
   function invalidateQuote(): void {
-    quoteSequence.current += 1;
-    setDeliveryQuote(undefined);
     setQuoteError(undefined);
-    setQuoteBusy(false);
   }
 
   async function run(operation: CaptureWorkspaceOperation, command: unknown): Promise<ActionReply | undefined> {
@@ -146,6 +162,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setBusy(true);
     setError(undefined);
     setErrorOperation(undefined);
+    setErrorCode(undefined);
     let reply: ActionReply;
     try { reply = await action(operation, command); }
     catch { reply = { ok: false, error: "unavailable", command }; }
@@ -153,6 +170,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     if (!reply.ok) {
       setError(reply.error);
       setErrorOperation(operation);
+      setErrorCode("code" in reply ? reply.code : undefined);
       setPending(reply.error === "unavailable" ? { operation, command: reply.command ?? command } : undefined);
       if (persistedAutosave !== undefined && reply.error !== "unavailable") {
         clearPendingCaptureAutosave(window.localStorage, persistedAutosave);
@@ -176,11 +194,17 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       setDeliveryInstructionSuggestions((value as CaptureDeliveryInstructionSuggestionsV1).items);
     }
     else if ("items" in value) setTray((value as CaptureWorkTrayResultV1).items);
-    else if ("customerSnapshot" in value) applyWorkspace(value as CaptureWorkspaceV3);
+    else if ("customerSnapshot" in value) applyWorkspace(value as CaptureWorkspaceV5);
     else if ("replayed" in value) {
       const mutation = value as CaptureMutationResultV1;
       if (mutation.detail.captureDraftId !== capture?.captureDraftId
-        || mutation.detail.fulfillmentSnapshotRef !== capture.fulfillmentSnapshotRef) invalidateQuote();
+        || mutation.detail.fulfillmentSnapshotRef !== capture.fulfillmentSnapshotRef) {
+        invalidateQuote();
+        setQuoteRequestedForDiffers(false);
+        setDeliveryQuote(null);
+        setPaymentIntentState(null);
+        setPaymentProjection(null);
+      }
       setCapture(mutation.detail);
       if ("deliveryInstructions" in value) {
         setDeliveryInstructions(typeof value.deliveryInstructions === "string" ? value.deliveryInstructions : "");
@@ -199,18 +223,34 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     return reply;
   }
 
-  function applyWorkspace(value: CaptureWorkspaceV3): void {
+  function applyWorkspace(value: CaptureWorkspaceV5): void {
     const hydrated = rehydrateCaptureWorkspace(value);
     if (hydrated === undefined) {
       setError("unavailable");
       return;
     }
-    invalidateQuote();
+    // H17: opening a DIFFERENT capture must never carry over UI state that only ever meant
+    // something for the one just left -- otherwise a scheduled-for time, a stale-quote flag or a
+    // cash-tender notice from the previous capture silently applies to this one before its own
+    // hydration (below) has a chance to establish the truth.
+    if (isSwitchingToAnotherCapture(capture?.captureDraftId, hydrated.detail.captureDraftId)) {
+      setScheduledFor("");
+      setPaymentIntentNotice(undefined);
+      setError(undefined);
+      setErrorOperation(undefined);
+      setErrorCode(undefined);
+    }
+    setQuoteError(undefined);
+    setQuoteRequestedForDiffers(false);
     setCapture(hydrated.detail);
     setCustomerSnapshot(hydrated.customerSnapshot);
     setFulfillmentSnapshot(hydrated.fulfillmentSnapshot);
     setRepeatOrderPlan(hydrated.repeatOrderPlan);
     setSelectionProjection(hydrated.selectionProjection);
+    setDeliveryQuote(hydrated.deliveryQuote);
+    setPaymentIntentState(hydrated.paymentIntent);
+    setPaymentProjection(hydrated.paymentProjection);
+    setPaymentBasis(hydrated.paymentBasis);
     setRecentOrders((current) => current?.customerId === hydrated.customerSnapshot?.customerId ? current : undefined);
     setRepeatPreview((current) => current?.customerId === hydrated.customerSnapshot?.customerId ? current : undefined);
     setSelectedContact(hydrated.customerSnapshot?.contactId);
@@ -218,6 +258,14 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setSourceChannel(hydrated.sourceChannel);
     setFulfillmentChannel(hydrated.fulfillmentChannel);
     setDeliveryInstructions(hydrated.deliveryInstructions ?? "");
+    // H15: a rehydrated capture with a scheduled (non-ASAP) frozen quote must prefill the
+    // scheduled-for field from that quote -- otherwise the field reads "" (ASAP) while
+    // `quoteMatchesRequestedTime` compares against the quote's actual scheduledFor and never
+    // matches, permanently blocking confirm. Never clobbers a value the operator already typed.
+    const rehydratedScheduledFor = deliveryQuoteScheduledForInputValue(hydrated.deliveryQuote);
+    if (rehydratedScheduledFor !== "") {
+      setScheduledFor((current) => (current === "" ? rehydratedScheduledFor : current));
+    }
   }
 
   useEffect(() => { void (async () => {
@@ -478,9 +526,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     void run("deliveryInstructions", command);
   }
 
-  async function quoteDelivery(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (capture === undefined || fulfillmentChannel !== "delivery" || fulfillmentSnapshot === null) return;
+  async function requestDeliveryQuote(): Promise<void> {
+    if (capture === undefined || capture.attentionLeaseId === null || fulfillmentChannel !== "delivery"
+      || fulfillmentSnapshot === null) return;
     const scheduledDate = scheduledFor === "" ? null : new Date(scheduledFor);
     if (scheduledDate !== null && !Number.isFinite(scheduledDate.getTime())) {
       setQuoteError("Introduce una fecha y hora válidas."); return;
@@ -491,20 +539,48 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       || Date.parse(scheduled) - now > 7 * 24 * 60 * 60_000)) {
       setQuoteError("Programa entre 30 minutos y 7 días a partir de ahora."); return;
     }
-    const requestSequence = ++quoteSequence.current;
-    const requestedDraftId = capture.captureDraftId;
-    const requestedSnapshotRef = fulfillmentSnapshot.snapshotRef;
-    setQuoteBusy(true); setQuoteError(undefined); setDeliveryQuote(undefined);
-    try {
-      const result = await deliveryZonesAction("quote", { schemaVersion: 1, scope,
-        captureDraftId: requestedDraftId, scheduledFor: scheduled });
-      if (quoteSequence.current !== requestSequence) return;
-      if (result.ok && "coverageStatus" in result.value
-        && quoteMatchesDeliverySnapshot(result.value, requestedDraftId, requestedSnapshotRef)) setDeliveryQuote(result.value);
-      else if (result.ok && "coverageStatus" in result.value) return;
-      else setQuoteError(result.ok ? "La cotización no fue válida." : messages[result.error]);
-    } catch { if (quoteSequence.current === requestSequence) setQuoteError(messages.unavailable); }
-    finally { if (quoteSequence.current === requestSequence) setQuoteBusy(false); }
+    setQuoteError(undefined);
+    const command = { ...base(), scheduledFor: scheduled };
+    let reply = await run("deliveryQuote", command);
+    if (reply !== undefined && !reply.ok && reply.error === "unavailable") {
+      reply = await run("deliveryQuote", (reply as { command?: unknown }).command ?? command);
+    }
+    if (reply !== undefined && !reply.ok) setQuoteError(messages[reply.error]);
+  }
+
+  /**
+   * Fixes/replaces the stated payment intent. A `CAPTURE_PAYMENT_INTENT_INSUFFICIENT` conflict is
+   * a normal outcome of choosing too small a cash tender, not a lease/version conflict: it must not
+   * lock the workspace or force a return to the tray, only surface a local notice next to the step.
+   */
+  // H27: reports success back to the caller (rather than firing and forgetting) so a rejected
+  // custom cash tender (e.g. insufficient) never gets recorded as "already applied" -- the
+  // operator must be able to immediately retype/resend the same amount once it would actually
+  // cover the total (a later tip change, for instance), instead of it staying stuck as a no-op.
+  async function setPaymentIntent(
+    method: CapturePaymentIntentMethodV1,
+    tenderedAmountMinor: number | null,
+    tipMinor: number,
+  ): Promise<boolean> {
+    if (capture === undefined || capture.attentionLeaseId === null) return false;
+    const command = { ...base(), method, tenderedAmountMinor, tipMinor };
+    let reply = await run("paymentIntent", command);
+    if (reply !== undefined && !reply.ok && reply.error === "unavailable") {
+      reply = await run("paymentIntent", (reply as { command?: unknown }).command ?? command);
+    }
+    if (reply !== undefined && !reply.ok && reply.error === "conflict" && reply.code === "CAPTURE_PAYMENT_INTENT_INSUFFICIENT") {
+      setError(undefined);
+      setErrorOperation(undefined);
+      setPaymentIntentNotice("El monto no cubre el total.");
+      return false;
+    }
+    if (reply?.ok === true) setPaymentIntentNotice(undefined);
+    return reply?.ok === true;
+  }
+
+  function refreshPaymentIntent(): void {
+    if (paymentIntent === null) return;
+    void setPaymentIntent(paymentIntent.method, paymentIntent.tenderedAmountMinor, paymentIntent.tipMinor);
   }
 
   function confirmCapture(): void {
@@ -595,13 +671,16 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   function reset(): void {
     invalidateQuote();
+    setQuoteRequestedForDiffers(false);
+    setDeliveryQuote(null); setPaymentIntentState(null); setPaymentProjection(null); setPaymentBasis(null);
+    setPaymentIntentNotice(undefined);
     setCapture(undefined); setResults(undefined); setCustomer(undefined); setCustomerSnapshot(null);
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
     setRepeatOrderPlan(null);
     setSelectionProjection(null); setSheetProduct(undefined); setSheetGroups([]); setSelectionBusy(false); setSelectionBusyLineId(undefined);
     setSheetConfirmedTotalMinor(undefined);
     setRecentOrders(undefined); setRepeatPreview(undefined);
-    setError(undefined); setErrorOperation(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
+    setError(undefined); setErrorOperation(undefined); setErrorCode(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
     setDeliveryInstructions("");
     setDeliveryInstructionSuggestions([]);
     setSelectedShiftId("");
@@ -615,9 +694,22 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   const locked = busy || capture?.status !== "draft" || capture?.attentionLeaseId === null
     || error === "denied" || error === "conflict";
+  const paymentBlocksConfirm = paymentIntentBlocksConfirm(paymentIntent, paymentProjection);
+  // H21: covers every fact that can make a delivery quote unusable at confirm time -- missing,
+  // never covered, already expired by the client's own clock (a courtesy warning; the server is
+  // still the one that actually enforces expiry, H14), or simply for a different requested time
+  // -- not just the time comparison this used to be limited to. `quoteRequestedForDiffers` is
+  // still OR'd in separately: it is local-only UI state (set the instant the operator edits the
+  // field, before `deliveryQuote` itself changes) that `deliveryQuoteBlocksConfirm`'s pure
+  // comparison against the server's frozen facts can't see, and applyWorkspace clears it on any
+  // unrelated mutation, so it never masks a legitimate re-quote (H11).
+  const quoteBlockReason = deliveryQuoteBlocksConfirm(fulfillmentChannel, deliveryQuote, scheduledFor, new Date());
+  const quoteBlocksConfirm = fulfillmentChannel === "delivery"
+    && (quoteRequestedForDiffers || quoteBlockReason !== null);
   const canConfirm = confirmationContext !== undefined && selectedShiftId !== "" && fulfillmentChannel !== null
     && (fulfillmentChannel !== "dine_in" || selectedTableId !== "")
-    && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null));
+    && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null))
+    && !paymentBlocksConfirm && !quoteBlocksConfirm;
   useEffect(() => {
     const shortcuts: ShortcutTable = busy ? {} : error === "conflict" || capture?.status === "confirmed"
       ? { reset: ariaKeyShortcut("reset") }
@@ -640,14 +732,23 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     return () => window.removeEventListener("keydown", onKeyDown);
   });
   const menuConflict = error === "conflict" && errorOperation === "selectionPlan";
+  // H10: confirm_capture_draft_v3 refused to confirm a delivery order because the frozen quote is
+  // missing, expired, or never covered the address; the fix is always the same -- re-quote.
+  const confirmQuoteInvalid = error === "conflict" && errorOperation === "confirm"
+    && errorCode === "CAPTURE_DELIVERY_QUOTE_INVALID";
   return <div className={`flex flex-col gap-4 ${capture?.status === "draft" ? "pb-20 sm:pb-0" : ""}`} aria-busy={busy}>
     <div role={error === undefined ? "status" : "alert"} aria-live="polite"
       className={error === undefined ? "text-sm text-text-muted" : "rounded-lg border border-border bg-error-bg p-4 text-sm"}>
       {busy ? "Guardando en el servidor…" : error === undefined ? capture === undefined ? "Crea o recupera un borrador para comenzar."
-        : `Borrador ${capture.folio} · versión ${capture.version}` : menuConflict ? "El menú cambió; vuelve a cargar." : messages[error]}
+        : `Borrador ${capture.folio} · versión ${capture.version}`
+        : menuConflict ? "El menú cambió; vuelve a cargar."
+        : confirmQuoteInvalid ? "La cotización de entrega falta, venció o no cubre la dirección"
+        : messages[error]}
       {menuConflict && <button className={`${button} ml-3`} disabled={busy || catalogReloading}
         onClick={() => void reloadMenu()}>{catalogReloading ? "Recargando…" : "Recargar menú"}</button>}
-      {!menuConflict && pending !== undefined && <button className={`${button} ml-3`} onClick={retryPending}>Reintentar misma operación</button>}
+      {confirmQuoteInvalid && <button className={`${button} ml-3`} disabled={busy}
+        onClick={() => void requestDeliveryQuote()}>Cotizar entrega</button>}
+      {!menuConflict && !confirmQuoteInvalid && pending !== undefined && <button className={`${button} ml-3`} onClick={retryPending}>Reintentar misma operación</button>}
       {!menuConflict && (error === "conflict" || capture?.status === "confirmed") && <button className={`${button} ml-3`}
         aria-keyshortcuts={ariaKeyShortcut("reset")} disabled={busy} onClick={reset}>Volver a la bandeja</button>}
     </div>
@@ -877,14 +978,27 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       {fulfillmentChannel === "delivery" && fulfillmentSnapshot !== null && capture.status === "draft" && <section className={panel} data-testid="delivery-quote">
         <h2 className="font-heading text-lg font-semibold">Cotización de entrega</h2>
         <p className="mt-1 text-sm text-text-muted">La cobertura, tarifa y promesa se calculan en el servidor para la dirección guardada.</p>
-        <form className="mt-3 grid gap-3" onSubmit={(event) => void quoteDelivery(event)}>
+        <form className="mt-3 grid gap-3" onSubmit={(event) => { event.preventDefault(); void requestDeliveryQuote(); }}>
           <label className="grid gap-1 text-sm" htmlFor="capture-scheduled-for">Programar entrega (opcional)
             <input id="capture-scheduled-for" type="datetime-local" className={input} value={scheduledFor}
-              onChange={(event) => { setScheduledFor(event.target.value); invalidateQuote(); }} disabled={quoteBusy} /></label>
+              onChange={(event) => {
+                setScheduledFor(event.target.value);
+                invalidateQuote();
+                if (deliveryQuote !== null) setQuoteRequestedForDiffers(true);
+              }} disabled={busy} /></label>
           <p className="text-xs text-text-muted">Entre 30 minutos y 7 días. La hora se convierte a ISO al solicitar la cotización.</p>
-          <button type="submit" className={button} disabled={quoteBusy}>{quoteBusy ? "Cotizando…" : "Cotizar entrega"}</button>
+          <button type="submit" className={button} disabled={busy}>{busy ? "Cotizando…" : "Cotizar entrega"}</button>
         </form>
         {quoteError && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{quoteError}</p>}
+        {quoteBlocksConfirm && <div role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">
+          <p>{quoteBlockReason === "missing" ? "Aún no hay cotización de entrega: cotiza antes de convertir en orden."
+            : quoteBlockReason === "not_covered" ? "La dirección no tiene cobertura de entrega."
+              : quoteBlockReason === "expired" ? "La cotización expiró: vuelve a cotizar antes de convertir en orden."
+                : "La cotización mostrada es de otra hora: vuelve a cotizar antes de convertir en orden."}</p>
+          <button type="button" className={`${button} mt-2`} disabled={busy} onClick={() => void requestDeliveryQuote()}>
+            Cotizar entrega
+          </button>
+        </div>}
         {deliveryQuote && <div role="status" className="mt-3 grid gap-1 rounded-lg border border-border bg-bg p-3 text-sm">
           <strong>{formatDeliveryQuote(deliveryQuote, "es-MX").status}</strong>
           <p>Tarifa: {formatDeliveryQuote(deliveryQuote, "es-MX").fee}</p>
@@ -918,6 +1032,19 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           <span className="block text-xs text-text-muted">{[item.address.streetLine, item.address.neighborhood, item.address.locality].filter(Boolean).join(", ")}</span>
           <span className="text-xs text-accent">{item.validatedForRequestedBranch ? selectedAddress === item.addressId ? "Selección local" : "Validada para esta sucursal" : "Pendiente de validación"}</span>
         </button>)}</div><a href="/app/customers" className="mt-3 inline-block text-sm font-semibold text-accent underline">Editar o validar direcciones en Directorio</a></section>}
+      {capture.status === "draft" && (selectionProjection !== null && selectionProjection.lines.length > 0
+        || repeatOrderPlan !== null) && <>
+        {/* H28: keyed by captureDraftId so React remounts it (and resets its local
+          customTender/appliedTenderMinor) on every capture switch, instead of carrying state from
+          the capture the operator just left onto the one they just opened. */}
+        <CapturePayment key={capture.captureDraftId}
+          projection={paymentProjection} basis={paymentBasis} intent={paymentIntent} deliveryQuote={deliveryQuote}
+          fulfillment={fulfillmentChannel}
+          currency={paymentProjection?.currency ?? paymentBasis?.currency ?? confirmationContext?.currency ?? "MXN"}
+          busy={busy} onSetIntent={setPaymentIntent}
+          onRefreshIntent={refreshPaymentIntent} />
+        {paymentIntentNotice !== undefined && <p role="alert" className="rounded-lg bg-error-bg p-3 text-sm">{paymentIntentNotice}</p>}
+      </>}
       {capture.status === "draft" && <section className={panel} data-testid="capture-confirmation">
         <h2 className="font-heading text-lg font-semibold">4. Convertir en orden</h2>
         {confirmationContext === undefined ? <p role="alert" className="mt-2 text-sm text-text-muted">
@@ -956,6 +1083,11 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           </p>}
           {repeatOrderPlan !== null && <p role="status" className="mt-2 text-sm text-text-muted">
             El servidor volverá a cotizar este pedido con el catálogo vigente. Si algún producto o modificador ya no es válido, la confirmación se detendrá sin crear una orden parcial.
+          </p>}
+          {paymentBlocksConfirm && <p role="alert" className="mt-2 text-sm text-text-muted">
+            {paymentProjection?.status === "stale"
+              ? "Cambió el pedido: confirma de nuevo el cobro antes de convertir la captura en orden."
+              : "El monto no cubre el total: ajusta el cobro antes de convertir la captura en orden."}
           </p>}
           <button type="button" className={`${button} mt-4`} onClick={confirmCapture} disabled={locked || !canConfirm}>
             Convertir captura en orden
