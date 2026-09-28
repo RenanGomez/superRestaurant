@@ -93,6 +93,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<keyof typeof messages>();
   const [errorOperation, setErrorOperation] = useState<CaptureWorkspaceOperation>();
+  const [errorCode, setErrorCode] = useState<string>();
   const [pending, setPending] = useState<{ operation: CaptureWorkspaceOperation; command: unknown }>();
   const [capture, setCapture] = useState<CaptureDraftDetailV1 | CaptureDraftDetailV2>();
   const [tray, setTray] = useState<readonly CaptureDraftSummaryV1[]>([]);
@@ -153,6 +154,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setBusy(true);
     setError(undefined);
     setErrorOperation(undefined);
+    setErrorCode(undefined);
     let reply: ActionReply;
     try { reply = await action(operation, command); }
     catch { reply = { ok: false, error: "unavailable", command }; }
@@ -160,6 +162,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     if (!reply.ok) {
       setError(reply.error);
       setErrorOperation(operation);
+      setErrorCode("code" in reply ? reply.code : undefined);
       setPending(reply.error === "unavailable" ? { operation, command: reply.command ?? command } : undefined);
       if (persistedAutosave !== undefined && reply.error !== "unavailable") {
         clearPendingCaptureAutosave(window.localStorage, persistedAutosave);
@@ -643,7 +646,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setSelectionProjection(null); setSheetProduct(undefined); setSheetGroups([]); setSelectionBusy(false); setSelectionBusyLineId(undefined);
     setSheetConfirmedTotalMinor(undefined);
     setRecentOrders(undefined); setRepeatPreview(undefined);
-    setError(undefined); setErrorOperation(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
+    setError(undefined); setErrorOperation(undefined); setErrorCode(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
     setDeliveryInstructions("");
     setDeliveryInstructionSuggestions([]);
     setSelectedShiftId("");
@@ -691,14 +694,23 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     return () => window.removeEventListener("keydown", onKeyDown);
   });
   const menuConflict = error === "conflict" && errorOperation === "selectionPlan";
+  // H10: confirm_capture_draft_v3 refused to confirm a delivery order because the frozen quote is
+  // missing, expired, or never covered the address; the fix is always the same -- re-quote.
+  const confirmQuoteInvalid = error === "conflict" && errorOperation === "confirm"
+    && errorCode === "CAPTURE_DELIVERY_QUOTE_INVALID";
   return <div className={`flex flex-col gap-4 ${capture?.status === "draft" ? "pb-20 sm:pb-0" : ""}`} aria-busy={busy}>
     <div role={error === undefined ? "status" : "alert"} aria-live="polite"
       className={error === undefined ? "text-sm text-text-muted" : "rounded-lg border border-border bg-error-bg p-4 text-sm"}>
       {busy ? "Guardando en el servidor…" : error === undefined ? capture === undefined ? "Crea o recupera un borrador para comenzar."
-        : `Borrador ${capture.folio} · versión ${capture.version}` : menuConflict ? "El menú cambió; vuelve a cargar." : messages[error]}
+        : `Borrador ${capture.folio} · versión ${capture.version}`
+        : menuConflict ? "El menú cambió; vuelve a cargar."
+        : confirmQuoteInvalid ? "La cotización de entrega falta, venció o no cubre la dirección"
+        : messages[error]}
       {menuConflict && <button className={`${button} ml-3`} disabled={busy || catalogReloading}
         onClick={() => void reloadMenu()}>{catalogReloading ? "Recargando…" : "Recargar menú"}</button>}
-      {!menuConflict && pending !== undefined && <button className={`${button} ml-3`} onClick={retryPending}>Reintentar misma operación</button>}
+      {confirmQuoteInvalid && <button className={`${button} ml-3`} disabled={busy}
+        onClick={() => void requestDeliveryQuote()}>Cotizar entrega</button>}
+      {!menuConflict && !confirmQuoteInvalid && pending !== undefined && <button className={`${button} ml-3`} onClick={retryPending}>Reintentar misma operación</button>}
       {!menuConflict && (error === "conflict" || capture?.status === "confirmed") && <button className={`${button} ml-3`}
         aria-keyshortcuts={ariaKeyShortcut("reset")} disabled={busy} onClick={reset}>Volver a la bandeja</button>}
     </div>

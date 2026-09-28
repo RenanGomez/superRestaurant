@@ -127,9 +127,14 @@ export async function requestCapture(token: string, baseUrl: string, operation: 
   try {
     const response = await fetch(`${baseUrl}/api/v1/captures${paths[operation]}`, { method: "POST", cache: "no-store",
       signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(command) });
-    if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
-      : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
-        : response.status === 400 ? "invalid" : "unavailable" };
+    if (!response.ok) {
+      if (response.status === 409) {
+        const code = await conflictResponseCode(response);
+        return { ok: false, error: "conflict", ...(code === undefined ? {} : { code }) };
+      }
+      return { ok: false, error: response.status === 401 || response.status === 403 ? "denied"
+        : response.status === 404 ? "missing" : response.status === 400 ? "invalid" : "unavailable" };
+    }
     const body = await response.json();
     const value = operation === "deliveryInstructions"
       ? parseSetCaptureDeliveryInstructionsResultV1(body)
@@ -309,10 +314,10 @@ async function requestCaptureDeliveryQuote(token: string, baseUrl: string, input
   } catch { return { ok: false, error: "unavailable" }; }
 }
 
-/** Best-effort read of a 409 body's `code` (e.g. `CAPTURE_PAYMENT_INTENT_INSUFFICIENT`), so the
- * caller can tell "a stated cash tender does not cover the total" apart from a genuine
- * version/lease conflict without ever trusting the body for anything else. */
-async function paymentIntentConflictCode(response: Response): Promise<string | undefined> {
+/** Best-effort read of a 409 body's `code` (e.g. `CAPTURE_PAYMENT_INTENT_INSUFFICIENT`,
+ * `CAPTURE_DELIVERY_QUOTE_INVALID`), so the caller can tell a specific typed conflict apart from a
+ * generic version/lease conflict without ever trusting the body for anything else. */
+async function conflictResponseCode(response: Response): Promise<string | undefined> {
   try {
     const body: unknown = await response.json();
     return typeof body === "object" && body !== null && "code" in body && typeof (body as { code: unknown }).code === "string"
@@ -334,7 +339,7 @@ async function requestCapturePaymentIntent(token: string, baseUrl: string, input
       signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(command) });
     if (!response.ok) {
       if (response.status === 409) {
-        const code = await paymentIntentConflictCode(response);
+        const code = await conflictResponseCode(response);
         return { ok: false, error: "conflict", ...(code === undefined ? {} : { code }) };
       }
       return { ok: false, error: response.status === 401 || response.status === 403 ? "denied"
