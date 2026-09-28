@@ -84,7 +84,7 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
         <div className="mt-4 flex flex-wrap gap-2">
           {hasAction(detail, "open") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
             onClick={() => void runAction("open", () => actions.open(detail.orderId, detail.version))}>
-            {busyAction === "open" ? "Enviando…" : actionLabel("open")}
+            {busyAction === "open" ? "Abriendo…" : actionLabel("open")}
           </button>}
           {hasAction(detail, "sendToKitchen") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
             onClick={() => void runSendToKitchen(detail, actions, runAction)}>

@@ -78,7 +78,7 @@ const ACTION_LABELS: Record<OrderDetailActionV1, string> = {
   checkout: "Cobrar en caja",
   markDelivered: "Marcar entregada",
   markReady: "Marcar lista",
-  open: "Enviar a cocina",
+  open: "Abrir cuenta",
   sendToKitchen: "Enviar a cocina",
 };
 

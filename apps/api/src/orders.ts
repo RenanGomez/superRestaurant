@@ -547,8 +547,14 @@ function computeAvailableActions(order: Order, roles: readonly MembershipRole[])
   const actions: OrderDetailActionV1[] = [];
   const canUpdate = rolesGrantPermission(roles, "orders.update");
   const itemMutable = order.status !== "closed" && order.status !== "cancelled";
-  if (canUpdate && order.status === "draft") actions.push("open");
-  if (canUpdate && itemMutable && order.items.some((item) => item.status === "pending")) actions.push("sendToKitchen");
+  const hasPendingItems = order.items.some((item) => item.status === "pending");
+  // "sendToKitchen" already implies opening the account first when the order is still a draft (the
+  // client sequences open then each item transition); the operator never sees "open" *and*
+  // "sendToKitchen" together for the same pending lines. "open" survives on its own only for a
+  // table draft with nothing pending yet ("Abrir cuenta" before any line exists) -- a
+  // counter/takeout/delivery draft never shows a separate "open the tab" step at all.
+  if (canUpdate && itemMutable && hasPendingItems) actions.push("sendToKitchen");
+  else if (canUpdate && order.status === "draft" && order.channel === "table") actions.push("open");
   if ((order.status === "open" || order.status === "partially_paid") && roles.some((role) => FINANCIAL_ROLES.has(role))) {
     actions.push("checkout");
   }

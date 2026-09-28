@@ -518,7 +518,9 @@ test("order service detail scopes access, reduces PII, and computes actions from
   assert.deepEqual(asKitchen.items.map((item) => item.availableActions), [[], ["markReady"]]);
 
   const asManager = await serviceFor(["manager"], port).detail(principal, detailRequest);
-  assert.deepEqual(asManager.availableActions, ["open", "sendToKitchen"]);
+  // The order already has a pending line, so "sendToKitchen" alone covers it -- "open" is never
+  // offered alongside it for the same draft order.
+  assert.deepEqual(asManager.availableActions, ["sendToKitchen"]);
   assert.deepEqual(asManager.items.map((item) => item.availableActions), [["cancelItem"], ["markReady", "cancelItem"]]);
 
   // A role with only orders.cancel.pending (waiter) never sees cancelItem on a line that already
@@ -529,6 +531,35 @@ test("order service detail scopes access, reduces PII, and computes actions from
   const missingPort: OrderPersistencePort = { ...port, read: async () => "missing" };
   await assertCode(serviceFor(["manager"], missingPort).detail(principal, detailRequest), "not_found");
   await assertCode(serviceFor(["manager"], port).detail(principal, { ...detailRequest, orderId: "not-a-uuid" }), "request");
+});
+
+test("order service detail never offers open and sendToKitchen together for the same draft order", async () => {
+  const tableOrder = createOrder({
+    branchId: scope.branchId, channel: "table", currency: "MXN", orderId,
+    restaurantId: scope.restaurantId, tableId: randomUUID(), timeZone: "America/Mexico_City",
+  }, { ...audit, actorId: principal.actorId }).order;
+  const emptyPort: OrderPersistencePort = {
+    listKdsTickets: async () => "forbidden",
+    persist: async () => ({ status: "conflict" }),
+    read: async () => ({ order: tableOrder, version: 1 }),
+    recoverKds: async () => "forbidden",
+  };
+  const emptyDetail = await serviceFor(["manager"], emptyPort).detail(principal, { orderId, schemaVersion: 1 as const, scope });
+  // A table draft with no lines yet only offers "open" ("Abrir cuenta").
+  assert.deepEqual(emptyDetail.availableActions, ["open"]);
+
+  const withPendingLine = addOrderItem(tableOrder, {
+    orderItemId,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: "Hamburguesa",
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(12_500, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order;
+  const pendingPort: OrderPersistencePort = { ...emptyPort, read: async () => ({ order: withPendingLine, version: 2 }) };
+  const pendingDetail = await serviceFor(["manager"], pendingPort).detail(principal, { orderId, schemaVersion: 1 as const, scope });
+  // Once a line exists, only "sendToKitchen" is offered -- never "open" alongside it.
+  assert.deepEqual(pendingDetail.availableActions, ["sendToKitchen"]);
 });
 
 test("order service detail on a cancelled order with a frozen delivery charge never reports it in totals", async () => {
