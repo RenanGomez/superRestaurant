@@ -155,6 +155,47 @@ test("round-trips an order mutation through a JSON-safe versioned representation
   });
 });
 
+test("H13: round-trips a frozen delivery charge, and a record persisted before H13 decodes it as null", () => {
+  const created = createOrder({
+    orderId: "order-delivery-1",
+    restaurantId: "restaurant-1",
+    branchId: "branch-1",
+    channel: "delivery",
+    currency: "MXN",
+    timeZone: "America/Hermosillo",
+    deliveryCharge: { amount: new Money(3_000, "MXN"), quoteId: "quote-1" },
+  }, audit("1"));
+
+  const persisted = encodeOrderRecord(created.order);
+  assert.deepEqual(persisted.deliveryCharge, { amount: { amountMinor: 3_000, currency: "MXN" }, quoteId: "quote-1" });
+  const decoded = decodeOrderRecord(JSON.parse(JSON.stringify(persisted)) as unknown);
+  assert.deepEqual(decoded.deliveryCharge, created.order.deliveryCharge);
+
+  // A pre-H13 persisted order never had the key at all; decode must treat that as null, exactly
+  // like an explicit null, rather than rejecting historical records.
+  const withoutKey: Record<string, unknown> = { ...persisted };
+  delete withoutKey["deliveryCharge"];
+  const legacyDecoded = decodeOrderRecord(JSON.parse(JSON.stringify(withoutKey)) as unknown);
+  assert.equal(legacyDecoded.deliveryCharge, null);
+});
+
+test("H13: decoding rejects a negative or malformed delivery charge", () => {
+  const created = createOrder({
+    orderId: "order-delivery-2",
+    restaurantId: "restaurant-1",
+    branchId: "branch-1",
+    channel: "delivery",
+    currency: "MXN",
+    timeZone: "America/Hermosillo",
+    deliveryCharge: { amount: new Money(3_000, "MXN"), quoteId: "quote-1" },
+  }, audit("1"));
+  const persisted = encodeOrderRecord(created.order);
+  const negative = { ...persisted, deliveryCharge: { amount: { amountMinor: -1, currency: "MXN" }, quoteId: "quote-1" } };
+  assert.throws(() => decodeOrderRecord(negative), OrderPersistenceCodecError);
+  const missingQuoteId = { ...persisted, deliveryCharge: { amount: { amountMinor: 3_000, currency: "MXN" } } };
+  assert.throws(() => decodeOrderRecord(missingQuoteId), OrderPersistenceCodecError);
+});
+
 test("round-trips cancellation evidence and verifies its event linkage", () => {
   const added = richOrderMutation();
   const opened = transitionOrderStatus(added.order, "open", audit("3"));

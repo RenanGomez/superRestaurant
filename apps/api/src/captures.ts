@@ -81,6 +81,8 @@ import {
   buildCapturePaymentIntentProjection,
   calculateOrderItemTotals,
   createMenuProductPriceSnapshot,
+  Money,
+  type DeliveryChargeSnapshot,
 } from "@super-restaurant/domain";
 import { createHash } from "node:crypto";
 
@@ -822,11 +824,19 @@ export class CaptureConfirmationService {
         || catalogState.scope.branchId !== command.scope.branchId) throw new CaptureApplicationError("conflict");
       catalog = catalogState.catalog;
     }
+    // H13: the delivery charge is fixed on the Order from the server's own frozen delivery
+    // quote (read alongside the same v5 workspace already used above for the stale-intent
+    // check), never a client-supplied amount -- confirm_capture_draft_v3 independently
+    // re-checks this against the actually-stored quote and rejects a mismatch as a conflict,
+    // so a stale read here can never under- or over-charge.
+    const deliveryCharge: DeliveryChargeSnapshot | null = channel === "delivery" && v5?.deliveryQuote != null
+      ? { amount: new Money(v5.deliveryQuote.feeMinor, command.currency), quoteId: v5.deliveryQuote.quoteId }
+      : null;
     let materialization: CaptureOrderMaterialization;
     try {
       materialization = selectionPlan !== null
-        ? materializeCaptureSelectionOrder(command, actorId, channel, selectionPlan, catalog)
-        : materializeCaptureOrder(command, actorId, channel, plan, catalog);
+        ? materializeCaptureSelectionOrder(command, actorId, channel, selectionPlan, catalog, deliveryCharge)
+        : materializeCaptureOrder(command, actorId, channel, plan, catalog, deliveryCharge);
     } catch { throw new CaptureApplicationError((plan === null && selectionPlan === null) ? "request" : "conflict"); }
     let raw: unknown;
     try { raw = await this.persistence.confirmDraft(actorId, command, materialization); } catch { throw unavailable(); }
