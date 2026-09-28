@@ -1446,6 +1446,19 @@ export class CapturePaymentIntentNoLinesError extends Error {
   }
 }
 
+/**
+ * Typed 409: a selection plan exists but could not be priced against the live catalog right now
+ * (an inactive product, or the catalog having moved to a different catalogVersion). Never falls
+ * back to a 0 subtotal -- that would silently accept a tender that only covers the delivery fee,
+ * or the wrong currency, as if the order had no items at all.
+ */
+export class CapturePaymentIntentUnpricedError extends Error {
+  public constructor() {
+    super("CAPTURE_PAYMENT_INTENT_UNPRICED");
+    this.name = "CapturePaymentIntentUnpricedError";
+  }
+}
+
 @Injectable()
 export class CapturePaymentIntentService {
   public constructor(
@@ -1518,7 +1531,12 @@ export class CapturePaymentIntentService {
     let basisLines: CapturePaymentIntentBasisLine[];
     let repeatCurrency: string | undefined;
     if (before.selectionPlan !== null) {
-      itemsSubtotalMinor = before.selectionProjection?.itemsTotalMinor ?? 0;
+      // selectionProjection is best-effort (see projectStoredSelectionPlan): null whenever the
+      // live catalog cannot presently price the stored plan. Falling back to a 0 subtotal here
+      // would let a tender that only covers the delivery fee (or borrows the quote's currency)
+      // look "ready" for an order that in fact has priced items; fail closed instead.
+      if (before.selectionProjection === null) throw new CapturePaymentIntentUnpricedError();
+      itemsSubtotalMinor = before.selectionProjection.itemsTotalMinor;
       const storedPlan = await readStoredCaptureSelectionPlanLines(
         actorId, command.scope, command.captureDraftId, this.confirmation,
       );
