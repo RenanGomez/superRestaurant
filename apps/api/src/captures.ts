@@ -66,9 +66,23 @@ import {
   type CaptureSelectionPlanProjectionLineV1,
   type CaptureSelectionPlanProjectionV1,
   type CaptureSelectionPlanV1,
+  type CaptureSelectionLineV1,
   type ReplaceCaptureSelectionPlanCommandV1,
+  parseCaptureWorkspaceRequestV5,
+  parseRequestCaptureDeliveryQuoteCommandV1,
+  parseSetCapturePaymentIntentCommandV1,
+  parseCapturePaymentIntentProjectionV1,
+  type CaptureWorkspaceRequestV5,
+  type CaptureWorkspaceV5,
+  type CapturePaymentIntentProjectionV1,
+  type DeliveryQuoteV1,
 } from "@super-restaurant/shared-types";
-import { calculateOrderItemTotals, createMenuProductPriceSnapshot } from "@super-restaurant/domain";
+import {
+  buildCapturePaymentIntentProjection,
+  calculateOrderItemTotals,
+  createMenuProductPriceSnapshot,
+} from "@super-restaurant/domain";
+import { createHash } from "node:crypto";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
@@ -84,7 +98,8 @@ import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
 import {
   decodeCaptureRecord, decodeCaptureWorkspace, decodeCaptureWorkspaceV2, decodeCaptureWorkspaceV3,
-  decodeCaptureWorkspaceV4, withCaptureSelectionProjection, type PersistedCaptureRecordV1,
+  decodeCaptureWorkspaceV4, decodeCaptureWorkspaceV5, withCaptureSelectionProjection,
+  withCapturePaymentProjection, type PersistedCaptureRecordV1,
 } from "./persistence/capture-persistence-codec.js";
 import { encodeOrderAuditEventRecord, encodeOrderRecord } from "./persistence/order-persistence-codec.js";
 
@@ -102,6 +117,7 @@ export interface CaptureCreationPort {
   readWorkspaceV2?(actorId: string, request: CaptureWorkspaceRequestV2): Promise<unknown>;
   readWorkspaceV3?(actorId: string, request: CaptureWorkspaceRequestV3): Promise<unknown>;
   readWorkspaceV4?(actorId: string, request: CaptureWorkspaceRequestV4): Promise<unknown>;
+  readWorkspaceV5?(actorId: string, request: CaptureWorkspaceRequestV5): Promise<unknown>;
 }
 export const CAPTURE_CREATION_PORT = Symbol("CAPTURE_CREATION_PORT");
 export type CaptureAttentionOperation = "capture.held" | "capture.claimed" | "capture.resumed"
@@ -150,6 +166,35 @@ export interface CaptureSelectionPlanPort {
   probeReplaceSelectionPlan(actorId: string, command: ReplaceCaptureSelectionPlanCommandV1): Promise<unknown>;
 }
 export const CAPTURE_SELECTION_PLAN_PORT = Symbol("CAPTURE_SELECTION_PLAN_PORT");
+export interface CaptureDeliveryQuoteEnvelopeV1 {
+  readonly attentionLeaseId: string;
+  readonly captureDraftId: string;
+  readonly deviceId: string;
+  readonly eventId: string;
+  readonly expectedVersion: number;
+  readonly idempotencyKey: string;
+  readonly occurredAt: string;
+  readonly schemaVersion: 1;
+  readonly scope: BranchScope;
+}
+export interface CaptureDeliveryQuotePort {
+  setCaptureDeliveryQuote(actorId: string, envelope: CaptureDeliveryQuoteEnvelopeV1, quote: DeliveryQuoteV1): Promise<unknown>;
+}
+export const CAPTURE_DELIVERY_QUOTE_PORT = Symbol("CAPTURE_DELIVERY_QUOTE_PORT");
+export interface CapturePaymentIntentPort {
+  setCapturePaymentIntent(actorId: string, command: Record<string, unknown>): Promise<unknown>;
+}
+export const CAPTURE_PAYMENT_INTENT_PORT = Symbol("CAPTURE_PAYMENT_INTENT_PORT");
+/**
+ * Deliberately duck-typed against `DeliveryZoneService.quoteForCapture`, never importing that
+ * class here: `delivery-zones.ts` already imports `CAPTURE_CREATION_PORT` from this module, so a
+ * direct class import in the other direction would create an ESM circular import (the decorator
+ * on `CaptureDeliveryQuoteService` would run before `DeliveryZoneService` finished initializing).
+ */
+export interface CaptureDeliveryQuoteComputationPort {
+  quoteForCapture(principal: AuthenticatedPrincipal, input: unknown): Promise<DeliveryQuoteV1>;
+}
+export const CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT = Symbol("CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT");
 export interface CaptureTrayPort { list(actorId: string, request: CaptureWorkTrayRequestV1): Promise<unknown>; }
 export const CAPTURE_TRAY_PORT = Symbol("CAPTURE_TRAY_PORT");
 export interface CaptureAssignmentDirectoryPort {
@@ -159,7 +204,7 @@ export const CAPTURE_ASSIGNMENT_DIRECTORY_PORT = Symbol("CAPTURE_ASSIGNMENT_DIRE
 const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 @Injectable()
-export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAttentionPort, CaptureCustomerPort, CaptureFulfillmentPort, CaptureDeliveryInstructionsPort, CaptureConfirmationPort, CaptureTrayPort, CaptureAssignmentDirectoryPort, CaptureSelectionPlanPort, CaptureNoSalePort {
+export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAttentionPort, CaptureCustomerPort, CaptureFulfillmentPort, CaptureDeliveryInstructionsPort, CaptureConfirmationPort, CaptureTrayPort, CaptureAssignmentDirectoryPort, CaptureSelectionPlanPort, CaptureNoSalePort, CaptureDeliveryQuotePort, CapturePaymentIntentPort {
   public constructor(@Inject(DATABASE_CLIENT) private readonly database: DatabaseClientPort) {}
 
   public async createDraft(actorId: string, input: CreateCaptureDraftCommandV1): Promise<unknown> {
@@ -233,6 +278,47 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     const response = await this.database.query(
       "select app_private.read_capture_workspace_v4($1::uuid, $2::jsonb) as result",
       [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async readWorkspaceV5(actorId: string, input: CaptureWorkspaceRequestV5): Promise<unknown> {
+    const request = parseCaptureWorkspaceRequestV5(input);
+    if (!canonicalUuid.test(actorId) || request === undefined) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.read_capture_workspace_v5($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async setCaptureDeliveryQuote(
+    actorId: string,
+    envelope: CaptureDeliveryQuoteEnvelopeV1,
+    quote: DeliveryQuoteV1,
+  ): Promise<unknown> {
+    if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.set_capture_delivery_quote($1::uuid, $2::jsonb, $3::jsonb) as result",
+      [actorId, JSON.stringify(envelope), JSON.stringify(quote)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async setCapturePaymentIntent(actorId: string, command: Record<string, unknown>): Promise<unknown> {
+    if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.set_capture_payment_intent($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(command)],
     );
     if (response.rows.length !== 1) throw unavailable();
     const row = exactRecord(response.rows[0], ["result"]);
@@ -925,6 +1011,312 @@ function priceSelectionPlan(
   });
   if (projection === undefined) throw unavailable();
   return projection;
+}
+
+/** Best-effort raw stored plan (no prices), for the payment-intent basis fingerprint only. */
+async function readStoredCaptureSelectionPlanLines(
+  actorId: string,
+  scope: BranchScope,
+  captureDraftId: string,
+  confirmation: CaptureConfirmationPort,
+): Promise<CaptureSelectionPlanV1 | null> {
+  try {
+    const raw = await confirmation.readSelectionPlan(actorId, { schemaVersion: 3, scope, captureDraftId });
+    const envelope = exactRecord(raw, ["status", "plan", "appliedCaptureVersion"]);
+    if (envelope?.status !== "ok") return null;
+    return parseCaptureSelectionPlanV1(envelope.plan) ?? null;
+  } catch { return null; }
+}
+
+/**
+ * Canonical, order-independent fingerprint of every fact the authoritative total is derived
+ * from: catalogVersion, the priced lines (id-sorted, never the client's submission order) and
+ * the frozen delivery fee/currency. Any change to any of them changes the fingerprint; comparing
+ * it against a payment intent's stored basis is how staleness is detected, both at read time and
+ * before confirm.
+ */
+function computeCapturePaymentIntentBasisFingerprint(input: {
+  readonly catalogVersion: string;
+  readonly currency: string;
+  readonly deliveryFeeMinor: number;
+  readonly lines: readonly CaptureSelectionLineV1[];
+}): string {
+  const canonicalLines = [...input.lines]
+    .sort((a, b) => (a.lineId < b.lineId ? -1 : a.lineId > b.lineId ? 1 : 0))
+    .map((line) => ({
+      lineId: line.lineId,
+      modifierGroups: [...line.modifierGroups]
+        .sort((a, b) => (a.groupId < b.groupId ? -1 : a.groupId > b.groupId ? 1 : 0))
+        .map((group) => ({
+          groupId: group.groupId,
+          selections: [...group.selections]
+            .sort((a, b) => (a.optionId < b.optionId ? -1 : a.optionId > b.optionId ? 1 : 0))
+            .map((selection) => ({ optionId: selection.optionId, quantity: selection.quantity })),
+        })),
+      note: line.note,
+      productId: line.productId,
+      quantity: line.quantity,
+    }));
+  const canonical = JSON.stringify({
+    catalogVersion: input.catalogVersion,
+    currency: input.currency,
+    deliveryFeeMinor: input.deliveryFeeMinor,
+    lines: canonicalLines,
+  });
+  return createHash("sha256").update(canonical).digest("hex");
+}
+
+/**
+ * The one place `paymentProjection` is computed for ANY V5 response (a fresh apply of the
+ * delivery quote or the payment intent, or a plain workspace read): always from the intent, the
+ * priced selection projection and the frozen delivery quote actually stored and read alongside
+ * this exact workspace. `null` when there is no payment intent at all, or best-effort `null` if
+ * the fulfillment channel is not yet chosen (timing cannot be derived) or the currency cannot be
+ * established -- mirroring `projectStoredSelectionPlan`'s best-effort philosophy.
+ */
+async function buildCapturePaymentProjectionForWorkspace(
+  actorId: string,
+  scope: BranchScope,
+  captureDraftId: string,
+  workspace: CaptureWorkspaceV5,
+  paymentIntentBasisFingerprint: string | null,
+  confirmation: CaptureConfirmationPort,
+): Promise<CapturePaymentIntentProjectionV1 | null> {
+  if (workspace.paymentIntent === null) return null;
+  const fulfillmentChannel = workspace.detail.fulfillmentChannel;
+  if (fulfillmentChannel === null) return null;
+  const currency = workspace.selectionProjection?.currency ?? workspace.deliveryQuote?.currency;
+  if (currency === undefined) return null;
+  const itemsSubtotalMinor = workspace.selectionProjection?.subtotalMinor ?? 0;
+  const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (workspace.deliveryQuote?.feeMinor ?? 0) : 0;
+
+  let domainProjection;
+  try {
+    domainProjection = buildCapturePaymentIntentProjection({
+      currency,
+      deliveryFeeMinor,
+      fulfillmentChannel,
+      itemsSubtotalMinor,
+      method: workspace.paymentIntent.method,
+      tenderedAmountMinor: workspace.paymentIntent.tenderedAmountMinor,
+      tipMinor: workspace.paymentIntent.tipMinor,
+    });
+  } catch { return null; }
+
+  const storedPlan = await readStoredCaptureSelectionPlanLines(actorId, scope, captureDraftId, confirmation);
+  const currentFingerprint = computeCapturePaymentIntentBasisFingerprint({
+    catalogVersion: storedPlan?.catalogVersion ?? "",
+    currency,
+    deliveryFeeMinor,
+    lines: storedPlan?.lines ?? [],
+  });
+  const status = paymentIntentBasisFingerprint !== currentFingerprint ? "stale" : domainProjection.status;
+  const changeDueMinor = status === "ready" ? (domainProjection.changeDueMinor?.amountMinor ?? null) : null;
+
+  return parseCapturePaymentIntentProjectionV1({
+    changeDueMinor,
+    currency,
+    deliveryFeeMinor,
+    itemsSubtotalMinor,
+    method: workspace.paymentIntent.method,
+    orderTotalMinor: domainProjection.orderTotalMinor,
+    status,
+    tenderedAmountMinor: workspace.paymentIntent.tenderedAmountMinor,
+    timing: domainProjection.timing,
+    tipMinor: workspace.paymentIntent.tipMinor,
+  }) ?? null;
+}
+
+/**
+ * The one place `CaptureWorkspaceV5` is fully assembled for ANY response (a fresh apply of the
+ * delivery quote or payment intent, a replay, or a plain workspace read): reads the raw V5 row,
+ * then computes both `selectionProjection` (exactly like V4) and `paymentProjection` from
+ * whatever is actually stored, never from a client-supplied command.
+ */
+async function readCaptureWorkspaceV5WithProjections(
+  actorId: string,
+  scope: BranchScope,
+  captureDraftId: string,
+  captures: CaptureCreationPort,
+  confirmation: CaptureConfirmationPort,
+  catalogs: MenuCatalogPort,
+): Promise<CaptureWorkspaceV5> {
+  if (captures.readWorkspaceV5 === undefined) throw unavailable();
+  const workspaceRequest = { schemaVersion: 5 as const, scope, captureDraftId };
+  let rawWorkspace: unknown;
+  try { rawWorkspace = await captures.readWorkspaceV5(actorId, workspaceRequest); } catch { throw unavailable(); }
+  const statusOnly = exactRecord(rawWorkspace, ["status"]);
+  if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
+  if (statusOnly?.status === "missing") throw new CaptureApplicationError("missing");
+  if (statusOnly?.status === "rejected") throw new CaptureApplicationError("request");
+  if (statusOnly !== undefined) throw unavailable();
+  let decoded;
+  try { decoded = decodeCaptureWorkspaceV5(rawWorkspace, scope); } catch { throw unavailable(); }
+  if (decoded.workspace.detail.captureDraftId !== captureDraftId) throw unavailable();
+
+  const selectionProjection = await projectStoredSelectionPlan(
+    actorId, scope, captureDraftId, decoded.workspace.selectionPlan, confirmation, catalogs,
+  );
+  const withSelection: CaptureWorkspaceV5 = Object.freeze({ ...decoded.workspace, selectionProjection });
+  const paymentProjection = await buildCapturePaymentProjectionForWorkspace(
+    actorId, scope, captureDraftId, withSelection, decoded.paymentIntentBasisFingerprint, confirmation,
+  );
+  return withCapturePaymentProjection(withSelection, paymentProjection);
+}
+
+@Injectable()
+export class CaptureDeliveryQuoteService {
+  public constructor(
+    @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
+    @Inject(CAPTURE_DELIVERY_QUOTE_PORT) private readonly persistence: CaptureDeliveryQuotePort,
+    @Inject(CAPTURE_CREATION_PORT) private readonly captures: CaptureCreationPort,
+    @Inject(CAPTURE_CONFIRMATION_PORT) private readonly confirmation: CaptureConfirmationPort,
+    @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
+    @Inject(CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT) private readonly deliveryZones: CaptureDeliveryQuoteComputationPort,
+  ) {}
+
+  public async requestQuote(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV5> {
+    const command = parseRequestCaptureDeliveryQuoteCommandV1(input);
+    if (command === undefined) throw new CaptureApplicationError("request");
+    let actorId: string;
+    try { actorId = (await this.authorization.authorizeBranch(principal, command.scope, "captures.update")).principal.actorId; }
+    catch { throw new CaptureApplicationError("authorization"); }
+
+    // Recomputed from the live address/zones every time, exactly like a plain
+    // `/delivery-zones/quote` call; never trusted from the client.
+    let quote: DeliveryQuoteV1;
+    try {
+      quote = await this.deliveryZones.quoteForCapture(principal, {
+        schemaVersion: 1, scope: command.scope, captureDraftId: command.captureDraftId, scheduledFor: command.scheduledFor,
+      });
+    } catch (error: unknown) {
+      throw mapDeliveryZoneError(error);
+    }
+
+    const envelope: CaptureDeliveryQuoteEnvelopeV1 = {
+      attentionLeaseId: command.attentionLeaseId,
+      captureDraftId: command.captureDraftId,
+      deviceId: command.deviceId,
+      eventId: command.eventId,
+      expectedVersion: command.expectedVersion,
+      idempotencyKey: command.idempotencyKey,
+      occurredAt: command.occurredAt,
+      schemaVersion: 1,
+      scope: command.scope,
+    };
+    let raw: unknown;
+    try { raw = await this.persistence.setCaptureDeliveryQuote(actorId, envelope, quote); } catch { throw unavailable(); }
+    const envelopeResult = exactRecord(raw, ["status", "record"]);
+    if (envelopeResult?.status !== "applied" && envelopeResult?.status !== "replayed") {
+      const statusOnly = exactRecord(raw, ["status"]);
+      if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
+      if (statusOnly?.status === "conflict") throw new CaptureApplicationError("conflict");
+      if (statusOnly?.status === "rejected") throw new CaptureApplicationError("request");
+      throw unavailable();
+    }
+    return readCaptureWorkspaceV5WithProjections(
+      actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
+    );
+  }
+}
+
+function mapDeliveryZoneError(error: unknown): CaptureApplicationError {
+  const code = typeof error === "object" && error !== null && "code" in error ? (error as { code: unknown }).code : undefined;
+  if (code === "authorization") return new CaptureApplicationError("authorization");
+  if (code === "conflict") return new CaptureApplicationError("conflict");
+  if (code === "request") return new CaptureApplicationError("request");
+  if (code === "missing") return new CaptureApplicationError("missing");
+  return unavailable();
+}
+
+/** Typed 409: a stated cash tender does not cover the authoritative total. Never a generic conflict. */
+export class CapturePaymentIntentInsufficientError extends Error {
+  public constructor() {
+    super("CAPTURE_PAYMENT_INTENT_INSUFFICIENT");
+    this.name = "CapturePaymentIntentInsufficientError";
+  }
+}
+
+/** Typed 409: an existing payment intent is stale (lines/fulfillment/quote moved) or insufficient. */
+export class CapturePaymentIntentStaleError extends Error {
+  public constructor() {
+    super("CAPTURE_PAYMENT_INTENT_STALE");
+    this.name = "CapturePaymentIntentStaleError";
+  }
+}
+
+@Injectable()
+export class CapturePaymentIntentService {
+  public constructor(
+    @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
+    @Inject(CAPTURE_PAYMENT_INTENT_PORT) private readonly persistence: CapturePaymentIntentPort,
+    @Inject(CAPTURE_CREATION_PORT) private readonly captures: CaptureCreationPort,
+    @Inject(CAPTURE_CONFIRMATION_PORT) private readonly confirmation: CaptureConfirmationPort,
+    @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
+  ) {}
+
+  public async setPaymentIntent(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV5> {
+    const command = parseSetCapturePaymentIntentCommandV1(input);
+    if (command === undefined) throw new CaptureApplicationError("request");
+    let actorId: string;
+    try { actorId = (await this.authorization.authorizeBranch(principal, command.scope, "captures.update")).principal.actorId; }
+    catch { throw new CaptureApplicationError("authorization"); }
+
+    const before = await readCaptureWorkspaceV5WithProjections(
+      actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
+    );
+    const fulfillmentChannel = before.detail.fulfillmentChannel;
+    if (fulfillmentChannel === null) throw new CaptureApplicationError("conflict");
+    const currency = before.selectionProjection?.currency ?? before.deliveryQuote?.currency;
+    if (currency === undefined) throw new CaptureApplicationError("conflict");
+    const itemsSubtotalMinor = before.selectionProjection?.subtotalMinor ?? 0;
+    const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (before.deliveryQuote?.feeMinor ?? 0) : 0;
+
+    let domainProjection;
+    try {
+      domainProjection = buildCapturePaymentIntentProjection({
+        currency, deliveryFeeMinor, fulfillmentChannel, itemsSubtotalMinor,
+        method: command.method, tenderedAmountMinor: command.tenderedAmountMinor, tipMinor: command.tipMinor,
+      });
+    } catch { throw new CaptureApplicationError("request"); }
+    if (domainProjection.status === "insufficient") throw new CapturePaymentIntentInsufficientError();
+
+    const storedPlan = await readStoredCaptureSelectionPlanLines(
+      actorId, command.scope, command.captureDraftId, this.confirmation,
+    );
+    const basisFingerprint = computeCapturePaymentIntentBasisFingerprint({
+      catalogVersion: storedPlan?.catalogVersion ?? "", currency, deliveryFeeMinor, lines: storedPlan?.lines ?? [],
+    });
+
+    const sqlCommand = {
+      attentionLeaseId: command.attentionLeaseId,
+      basisFingerprint,
+      captureDraftId: command.captureDraftId,
+      deviceId: command.deviceId,
+      eventId: command.eventId,
+      expectedVersion: command.expectedVersion,
+      idempotencyKey: command.idempotencyKey,
+      method: command.method,
+      occurredAt: command.occurredAt,
+      schemaVersion: 1,
+      scope: command.scope,
+      tenderedAmountMinor: command.tenderedAmountMinor,
+      tipMinor: command.tipMinor,
+    };
+    let raw: unknown;
+    try { raw = await this.persistence.setCapturePaymentIntent(actorId, sqlCommand); } catch { throw unavailable(); }
+    const envelopeResult = exactRecord(raw, ["status", "record"]);
+    if (envelopeResult?.status !== "applied" && envelopeResult?.status !== "replayed") {
+      const statusOnly = exactRecord(raw, ["status"]);
+      if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
+      if (statusOnly?.status === "conflict") throw new CaptureApplicationError("conflict");
+      if (statusOnly?.status === "rejected") throw new CaptureApplicationError("request");
+      throw unavailable();
+    }
+    return readCaptureWorkspaceV5WithProjections(
+      actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
+    );
+  }
 }
 
 @Injectable()

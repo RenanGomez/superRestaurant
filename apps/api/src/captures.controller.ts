@@ -2,10 +2,10 @@ import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException,
   Header, HttpCode, Inject, NotFoundException, Post, Req, ServiceUnavailableException,
 } from "@nestjs/common";
-import type { CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
+import type { CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkspaceV5, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
-import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
+import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentService, CapturePaymentIntentStaleError, CaptureFulfillmentService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
 
 @Controller("captures")
 export class CapturesController {
@@ -18,6 +18,8 @@ export class CapturesController {
     @Inject(CaptureConfirmationService) private readonly confirmation: CaptureConfirmationService,
     @Inject(CaptureNoSaleService) private readonly noSale: CaptureNoSaleService,
     @Inject(CaptureSelectionPlanService) private readonly selectionPlan: CaptureSelectionPlanService,
+    @Inject(CaptureDeliveryQuoteService) private readonly deliveryQuote: CaptureDeliveryQuoteService,
+    @Inject(CapturePaymentIntentService) private readonly paymentIntent: CapturePaymentIntentService,
     @Inject(CaptureTrayService) private readonly tray: CaptureTrayService,
     @Inject(CaptureAssignmentDirectoryService) private readonly assignmentDirectory: CaptureAssignmentDirectoryService,
   ) {}
@@ -127,6 +129,20 @@ export class CapturesController {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.selectionPlan.replace(principal, body));
   }
+  @Post("delivery-quote")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async requestDeliveryQuote(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV5> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.deliveryQuote.requestQuote(principal, body));
+  }
+  @Post("payment-intent")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async setPaymentIntent(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV5> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.paymentIntent.setPaymentIntent(principal, body));
+  }
   @Post("claim")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
@@ -164,6 +180,12 @@ export class CapturesController {
   }
   private async execute<Result>(action: () => Promise<Result>): Promise<Result> {
     try { return await action(); } catch (error: unknown) {
+      if (error instanceof CapturePaymentIntentInsufficientError) {
+        throw new ConflictException({ code: "CAPTURE_PAYMENT_INTENT_INSUFFICIENT" });
+      }
+      if (error instanceof CapturePaymentIntentStaleError) {
+        throw new ConflictException({ code: "CAPTURE_PAYMENT_INTENT_STALE" });
+      }
       if (error instanceof CaptureApplicationError) {
         if (error.code === "request") throw new BadRequestException({ code: "CAPTURE_REQUEST_REJECTED" });
         if (error.code === "authorization") throw new ForbiddenException({ code: "ACTION_NOT_AUTHORIZED" });

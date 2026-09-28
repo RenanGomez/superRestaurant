@@ -7,7 +7,7 @@ import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSugg
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
 import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureNoSalePort, type CaptureSelectionPlanPort } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteService, CapturePaymentIntentService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureNoSalePort, type CaptureSelectionPlanPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
@@ -1114,9 +1114,17 @@ test("capture HTTP boundary enforces auth and translates request, replay, denial
     CaptureDeliveryInstructionsService,
     CaptureConfirmationService,
     CaptureSelectionPlanService,
+    CaptureDeliveryQuoteService,
+    CapturePaymentIntentService,
     CaptureTrayService,
     CaptureAssignmentDirectoryService,
     CaptureNoSaleService,
+    { provide: CAPTURE_DELIVERY_QUOTE_PORT, useValue: {
+      setCaptureDeliveryQuote: async () => { throw new Error("must not set delivery quote"); } } },
+    { provide: CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, useValue: {
+      quoteForCapture: async () => { throw new Error("must not quote for capture"); } } },
+    { provide: CAPTURE_PAYMENT_INTENT_PORT, useValue: {
+      setCapturePaymentIntent: async () => { throw new Error("must not set payment intent"); } } },
     { provide: CAPTURE_NO_SALE_PORT, useValue: { closeNoSale: async () => { throw new Error("must not close no-sale"); } } },
     { provide: CAPTURE_CUSTOMER_PORT, useValue: { setCustomer: async () => customerOutcome } },
     { provide: CAPTURE_FULFILLMENT_PORT, useValue: { setFulfillment: async () => fulfillmentOutcome } },
@@ -1383,7 +1391,14 @@ test("capture no-sale HTTP route authorizes, validates and translates every outc
   const module = await Test.createTestingModule({ controllers: [CapturesController], providers: [
     CaptureService, CaptureAttentionService, CaptureCustomerService, CaptureFulfillmentService,
     CaptureDeliveryInstructionsService, CaptureConfirmationService, CaptureSelectionPlanService,
+    CaptureDeliveryQuoteService, CapturePaymentIntentService,
     CaptureTrayService, CaptureAssignmentDirectoryService, CaptureNoSaleService,
+    { provide: CAPTURE_DELIVERY_QUOTE_PORT, useValue: {
+      setCaptureDeliveryQuote: async () => { throw new Error("must not set delivery quote"); } } },
+    { provide: CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, useValue: {
+      quoteForCapture: async () => { throw new Error("must not quote for capture"); } } },
+    { provide: CAPTURE_PAYMENT_INTENT_PORT, useValue: {
+      setCapturePaymentIntent: async () => { throw new Error("must not set payment intent"); } } },
     { provide: CAPTURE_CREATION_PORT, useValue: { createDraft: async () => { throw new Error("must not create"); } } },
     { provide: CAPTURE_ATTENTION_PORT, useValue: { mutateAttention: async () => { throw new Error("must not mutate attention"); } } },
     { provide: CAPTURE_CUSTOMER_PORT, useValue: { setCustomer: async () => { throw new Error("must not set customer"); } } },
