@@ -1,4 +1,4 @@
-# Guía de pruebas del operador — estado al 2026-09-27
+# Guía de pruebas del operador — estado al 2026-09-28
 
 Objetivo: que Emmanuel pueda ejercitar todo lo que ya existe en la consola web antes de aprobar el rediseño. Cada sección dice qué hay, cómo probarlo y qué está incompleto. Nada aquí es una promesa de producto: es el inventario real.
 
@@ -20,7 +20,7 @@ Correo y contraseña de Supabase. Error genérico ante credenciales inválidas. 
 
 ### `/app` · Mesas y selección de sucursal
 - Selector Restaurant/Sucursal; la preferencia se guarda en cookie no autoritativa y el servidor la revalida.
-- Canvas de mesas con creación de mesa y guardado de layout. **Conocido:** arrastrar mesas no funciona; los iconos laterales no marcan la ruta activa.
+- Canvas de mesas con creación, arrastre por puntero o flechas (celda entera) y edición en panel lateral; «Guardar layout» envía la posición. La barra lateral marca la ruta activa. (Corregido el 2026-09-27, REVIEW.)
 
 ### `/app/menu` · Catálogo
 - Categorías, productos, precios en minor units, disponibilidad. Publicación de releases del catálogo.
@@ -28,27 +28,27 @@ Correo y contraseña de Supabase. Error genérico ante credenciales inválidas. 
 
 ### `/app/customers` · Directorio
 - Búsqueda por teléfono o nombre con sugerencias; alta rápida de cliente; teléfonos y direcciones con atestación de validez; historial y "repetir pedido" (desde Captura).
-- **Conocidos:** seleccionar un cliente desde el desplegable no renderiza sus datos; "etiqueta" de dirección sin ejemplo (es el nombre corto: Casa, Oficina); "Validar para esta sucursal" no muestra efecto visible; el alta rápida no ofrece crear orden; columnas pedidas 60/40.
+- Corregido el 2026-09-27 (REVIEW): elegir un cliente abre su ficha e historial; etiqueta con ejemplo; «Validar para esta sucursal» muestra pill y mensaje; alta rápida con «Ir a captura telefónica»; columnas 60/40.
 
 ### `/app/capture` · Captura telefónica
-Aquí nacen las órdenes. Flujo actual:
-1. «Nueva captura telefónica» crea un borrador durable con folio.
-2. Origen (teléfono, mostrador, WhatsApp…) y cumplimiento (domicilio, recoger, mesa).
-3. Buscar cliente, elegir contacto y dirección: quedan congelados como snapshots.
-4. Instrucciones de entrega con sugerencias del mismo cliente.
-5. Pedidos recientes → «Revisar para repetir» → «Preparar N líneas».
-6. «Cotizar entrega» (requiere la migración de zonas aplicada, ver §4).
-7. Turno abierto (y mesa si aplica) → «Convertir captura en orden».
-- Atajos: N nueva captura, / buscar, Esc volver; panel «Atajos» al pie.
-- Bandeja de borradores recuperables; transferencia y apropiación supervisada entre operadores (el mensaje «No hay otro operador activo elegible» significa que nadie más de la sucursal tiene sesión).
-- **Falta lo esencial:** elegir productos del menú dentro de la captura. Hoy sólo se agregan líneas vía "repetir pedido".
+Aquí nacen las órdenes. Flujo actual (rediseñado el 2026-09-27/28 según el prototipo aprobado):
+1. «Nueva captura telefónica» crea un borrador durable con folio. Atajos: N nueva, / buscar (cliente o productos según el paso), Esc volver, F2 cobro.
+2. Origen (teléfono, mostrador, WhatsApp…) y cumplimiento (domicilio, recoger, mostrador, mesa).
+3. Cliente por teléfono: las sugerencias de término completan la búsqueda y las filas de cliente abren la ficha; contacto y dirección quedan congelados.
+4. **Menú táctil**: categorías (rail lateral en escritorio, chips en teléfono), tarjetas con contador, buscador; tocar un producto sin modificadores lo agrega; con modificadores abre la hoja de armado (grupos obligatorios/opcionales, nota para cocina ≤200). El ticket (lateral en escritorio, barra inferior + hoja en teléfono) muestra líneas, ±, quitar, botón «Nota» por línea y totales **calculados por el servidor**. Si el menú cambió, aparece «El menú cambió; vuelve a cargar».
+5. Instrucciones de entrega con sugerencias del mismo cliente; pedidos recientes → «Revisar para repetir» → «Preparar N líneas».
+6. «Cotizar entrega» (domicilio): la cotización se **persiste en el servidor** y sobrevive a recargas; cambiar la dirección o la hora programada la invalida y bloquea confirmar hasta recotizar; expirada o fuera de cobertura también bloquea.
+7. **Cobro**: método (efectivo contra entrega o en mostrador, tarjeta con terminal manual, transferencia pendiente de evidencia), atajos de monto y «Otro monto» (se aplica con Enter/Aplicar/blur), propina aparte; subtotal, envío, total y cambio vienen del servidor. Si cambian líneas, cumplimiento o cotización tras fijar el cobro, aparece «Cambió el pedido: confirma de nuevo el cobro».
+8. Turno abierto (y mesa si aplica) → «Convertir captura en orden»: la Order congela líneas con nota, cargo de envío e intención de pago; no crea Payment ni movimiento de caja.
+- Bandeja de borradores recuperables; «Pasar la captura a otro operador» (si nadie más tiene sesión, «Dejar en espera»); **«Sin venta»** con motivo obligatorio cierra el borrador sin borrarlo.
+- **Conocidos/pendientes:** variantes y mitades de pizza (S5) no se ofrecen aún; mobile no captura nota ni cobro; la verificación visual de todo lo anterior está pendiente (REVIEW).
 
 ### `/app/caja` · Caja
 - Apertura y cierre de caja por turno, pagos simples en efectivo o tarjeta manual sobre órdenes, movimientos auditados. Métodos `transfer`, anticipos y refunds: aún no.
 
 ### `/app/delivery-zones` · Zonas de entrega (gerente)
 - Alta y edición de zonas por códigos postales o localidades con tarifa fija, CAS y motivo al desactivar.
-- **No carga hasta aplicar la migración** `supabase/migrations/20260927000100_delivery_zones.sql` al proyecto remoto (ver §4).
+- Migración `20260927000100` aplicada el 2026-09-27: la página ya carga.
 
 ### `/app/system-admin/restaurants` · Administración
 - Alta de restaurantes y desactivación, sólo para el rol de sistema.
@@ -57,8 +57,8 @@ Aquí nacen las órdenes. Flujo actual:
 - KDS: lista de órdenes por estación con recuperación por cursor y notificación en tiempo real; cancelaciones llegan como evento durable.
 - Mobile: selección de sucursal y turno, mesas, toma de comanda por mesa, envío a cocina; verificado en harness de navegador, no en dispositivo real.
 
-## 4. Migración pendiente de autorización
-`20260927000100_delivery_zones.sql` es candidata. Antes de aplicarla: `pnpm --filter @super-restaurant/api run verify:delivery-zones-schema:rollback` con la configuración `SCHEMA_VERIFICATION_*` del runbook `customer-directory-verification.md`. Aplicarla requiere autorización explícita de Emmanuel y el procedimiento de staging/dry-run registrado en HANDOFF (S9.1b2).
+## 4. Migraciones
+Aplicadas al proyecto remoto con autorización permanente de Emmanuel (2026-09-27/28): `20260927000100` zonas, `20260928000100` líneas de captura, `20260929000100` sin venta, `20260930000100` nota de línea, `20261001000100` cotización congelada, intención de pago y cargo de envío. Procedimiento en `docs/runbooks/migration-apply.md`. Tras cada apply se reinicia el API local con `tmp/start-authorized-local-api.ps1 3000`.
 
 ## 5. Lo que no existe todavía
-Configurador de pizza en UI, selección de productos en captura, S6.3 corrección de producción, S7.2+ programación y despacho, S8.3+ transferencia/anticipos/refunds, impresión Bluetooth real, offline, inventario, reportes, fiscal.
+Configurador de pizza/variantes en UI (S5 productivo), S6.3 corrección de producción, S7.2+ despacho y repartidor, S8.3+ captura real de pagos (checkout con envío ya calcula el saldo), anticipos y refunds, impresión Bluetooth real, offline, inventario, reportes, fiscal.
