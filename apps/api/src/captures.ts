@@ -1177,6 +1177,14 @@ function computeCapturePaymentIntentBasisFingerprint(input: {
   readonly currency: string;
   readonly deliveryFeeMinor: number;
   readonly lines: readonly CapturePaymentIntentBasisLine[];
+  /**
+   * The frozen delivery quote's own identity (`null` outside delivery, or before one is frozen).
+   * `deliveryFeeMinor` alone is not enough: a re-quote for the same address/zone can land on an
+   * identical fee while `set_capture_delivery_quote`'s own CAS on `applied_capture_version`
+   * already treats it as a distinct quote -- without quoteId in the basis, a read here would
+   * report "ready" for a fee that SQL's own version check would reject as stale at confirm time.
+   */
+  readonly quoteId: string | null;
 }): string {
   const canonicalLines = [...input.lines]
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
@@ -1199,6 +1207,7 @@ function computeCapturePaymentIntentBasisFingerprint(input: {
     currency: input.currency,
     deliveryFeeMinor: input.deliveryFeeMinor,
     lines: canonicalLines,
+    quoteId: input.quoteId,
   });
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -1250,6 +1259,7 @@ async function buildCapturePaymentProjectionForWorkspace(
   const currency = workspace.selectionProjection?.currency ?? repeatCurrency ?? workspace.deliveryQuote?.currency;
   if (currency === undefined) return null;
   const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (workspace.deliveryQuote?.feeMinor ?? 0) : 0;
+  const quoteId = fulfillmentChannel === "delivery" ? (workspace.deliveryQuote?.quoteId ?? null) : null;
 
   let domainProjection;
   try {
@@ -1269,6 +1279,7 @@ async function buildCapturePaymentProjectionForWorkspace(
     currency,
     deliveryFeeMinor,
     lines: basisLines,
+    quoteId,
   });
   const status = paymentIntentBasisFingerprint !== currentFingerprint ? "stale" : domainProjection.status;
   const changeDueMinor = status === "ready" ? (domainProjection.changeDueMinor?.amountMinor ?? null) : null;
@@ -1528,6 +1539,7 @@ export class CapturePaymentIntentService {
     const currency = before.selectionProjection?.currency ?? repeatCurrency ?? before.deliveryQuote?.currency;
     if (currency === undefined) throw new CaptureApplicationError("conflict");
     const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (before.deliveryQuote?.feeMinor ?? 0) : 0;
+    const quoteId = fulfillmentChannel === "delivery" ? (before.deliveryQuote?.quoteId ?? null) : null;
 
     let domainProjection;
     try {
@@ -1539,7 +1551,7 @@ export class CapturePaymentIntentService {
     if (domainProjection.status === "insufficient") throw new CapturePaymentIntentInsufficientError();
 
     const basisFingerprint = computeCapturePaymentIntentBasisFingerprint({
-      catalogVersion: basisCatalogVersion, currency, deliveryFeeMinor, lines: basisLines,
+      catalogVersion: basisCatalogVersion, currency, deliveryFeeMinor, lines: basisLines, quoteId,
     });
 
     let raw: unknown;
