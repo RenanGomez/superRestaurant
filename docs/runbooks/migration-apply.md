@@ -8,7 +8,7 @@ Procedimiento verificado para aplicar migraciones SQL nuevas de `supabase/migrat
 $env:SCHEMA_VERIFICATION_CONFIRMATION = "READ_ONLY"
 $env:SCHEMA_VERIFICATION_EXPECTED_PROJECT_REF = "<project-ref>"
 $env:SCHEMA_VERIFICATION_DATABASE_URL = "<url sslmode=verify-full>"
-$env:SCHEMA_VERIFICATION_CA_CERT_PATH = ".certs/prod-ca-2021.crt"
+$env:SCHEMA_VERIFICATION_CA_CERT_PATH = (Resolve-Path ".certs/prod-ca-2021.crt").Path   # absoluta: los scripts corren desde apps/api
 pnpm --filter @super-restaurant/api run preflight:migrations
 ```
 
