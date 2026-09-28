@@ -1099,7 +1099,9 @@ async function readStoredCaptureRepeatOrderPlanBasis(
   repeatOrderPlan: CaptureWorkspaceV5["repeatOrderPlan"],
   confirmation: CaptureConfirmationPort,
   catalogs: MenuCatalogPort,
-): Promise<{ readonly itemsTotalMinor: number; readonly lines: readonly CaptureRepeatSelectionLine[] } | null> {
+): Promise<{
+  readonly currency: string; readonly itemsTotalMinor: number; readonly lines: readonly CaptureRepeatSelectionLine[];
+} | null> {
   if (repeatOrderPlan === null) return null;
   try {
     const raw = await confirmation.readRepeatOrderPlan(actorId, { schemaVersion: 3, scope, captureDraftId });
@@ -1117,7 +1119,7 @@ async function readStoredCaptureRepeatOrderPlanBasis(
       return null;
     }
     const itemsTotalMinor = priceCaptureRepeatSelectionPlan(plan, catalogState.catalog, scope.restaurantId);
-    return { itemsTotalMinor, lines: plan.lines };
+    return { currency: catalogState.catalog.currency, itemsTotalMinor, lines: plan.lines };
   } catch { return null; }
 }
 
@@ -1206,17 +1208,17 @@ async function buildCapturePaymentProjectionForWorkspace(
   if (workspace.paymentIntent === null) return null;
   const fulfillmentChannel = workspace.detail.fulfillmentChannel;
   if (fulfillmentChannel === null) return null;
-  const currency = workspace.selectionProjection?.currency ?? workspace.deliveryQuote?.currency;
-  if (currency === undefined) return null;
-  const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (workspace.deliveryQuote?.feeMinor ?? 0) : 0;
 
   // Tax-inclusive, and derived from whichever plan actually carries the capture's lines: a
   // selection plan's own priced projection, or a freshly priced repeat-order plan (whose
-  // `selectionProjection` is always null). Neither present means no lines at all: `0`, matching
-  // the historical read-side fallback (the write path in setPaymentIntent refuses this case).
+  // `selectionProjection` is always null, and whose currency the delivery quote may not supply
+  // either -- a repeat-order capture is not necessarily delivery). Neither present means no lines
+  // at all: `0`/`null`, matching the historical read-side fallback (the write path in
+  // setPaymentIntent refuses this case instead).
   let itemsSubtotalMinor = workspace.selectionProjection?.itemsTotalMinor ?? 0;
   let basisCatalogVersion = "";
   let basisLines: CapturePaymentIntentBasisLine[] = [];
+  let repeatCurrency: string | undefined;
   if (workspace.selectionPlan !== null) {
     const storedPlan = await readStoredCaptureSelectionPlanLines(actorId, scope, captureDraftId, confirmation);
     basisCatalogVersion = storedPlan?.catalogVersion ?? "";
@@ -1226,9 +1228,13 @@ async function buildCapturePaymentProjectionForWorkspace(
       actorId, scope, captureDraftId, workspace.repeatOrderPlan, confirmation, catalogs,
     );
     itemsSubtotalMinor = repeatBasis?.itemsTotalMinor ?? 0;
+    repeatCurrency = repeatBasis?.currency;
     basisCatalogVersion = repeatBasis === null ? "" : workspace.repeatOrderPlan.catalogVersion;
     basisLines = repeatLinesToBasis(repeatBasis?.lines ?? []);
   }
+  const currency = workspace.selectionProjection?.currency ?? repeatCurrency ?? workspace.deliveryQuote?.currency;
+  if (currency === undefined) return null;
+  const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (workspace.deliveryQuote?.feeMinor ?? 0) : 0;
 
   let domainProjection;
   try {
@@ -1298,7 +1304,7 @@ async function readCaptureWorkspaceV5WithProjections(
   );
   const withSelection: CaptureWorkspaceV5 = Object.freeze({ ...decoded.workspace, selectionProjection });
   const paymentProjection = await buildCapturePaymentProjectionForWorkspace(
-    actorId, scope, captureDraftId, withSelection, decoded.paymentIntentBasisFingerprint, confirmation,
+    actorId, scope, captureDraftId, withSelection, decoded.paymentIntentBasisFingerprint, confirmation, catalogs,
   );
   return withCapturePaymentProjection(withSelection, paymentProjection);
 }
@@ -1404,6 +1410,14 @@ export class CapturePaymentIntentStaleError extends Error {
   }
 }
 
+/** Typed 409: setting a payment intent against a capture with no selection or repeat plan at all. */
+export class CapturePaymentIntentNoLinesError extends Error {
+  public constructor() {
+    super("CAPTURE_PAYMENT_INTENT_NO_LINES");
+    this.name = "CapturePaymentIntentNoLinesError";
+  }
+}
+
 @Injectable()
 export class CapturePaymentIntentService {
   public constructor(
@@ -1424,12 +1438,39 @@ export class CapturePaymentIntentService {
     const before = await readCaptureWorkspaceV5WithProjections(
       actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
     );
+    // A payment intent priced against zero lines (no selection plan and no repeat plan at all) is
+    // never a legitimate "ready" or "insufficient" intent -- it would silently accept any tender
+    // as covering an order with no items. Refuse it outright, before any other conflict check, and
+    // never fall back to a 0 basis.
+    if (before.selectionPlan === null && before.repeatOrderPlan === null) throw new CapturePaymentIntentNoLinesError();
+
     const fulfillmentChannel = before.detail.fulfillmentChannel;
     if (fulfillmentChannel === null) throw new CaptureApplicationError("conflict");
     const currency = before.selectionProjection?.currency ?? before.deliveryQuote?.currency;
     if (currency === undefined) throw new CaptureApplicationError("conflict");
-    const itemsSubtotalMinor = before.selectionProjection?.subtotalMinor ?? 0;
     const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (before.deliveryQuote?.feeMinor ?? 0) : 0;
+
+    let itemsSubtotalMinor: number;
+    let basisCatalogVersion: string;
+    let basisLines: CapturePaymentIntentBasisLine[];
+    if (before.selectionPlan !== null) {
+      itemsSubtotalMinor = before.selectionProjection?.itemsTotalMinor ?? 0;
+      const storedPlan = await readStoredCaptureSelectionPlanLines(
+        actorId, command.scope, command.captureDraftId, this.confirmation,
+      );
+      basisCatalogVersion = storedPlan?.catalogVersion ?? "";
+      basisLines = selectionLinesToBasis(storedPlan?.lines ?? []);
+    } else if (before.repeatOrderPlan !== null) {
+      const repeatBasis = await readStoredCaptureRepeatOrderPlanBasis(
+        actorId, command.scope, command.captureDraftId, before.repeatOrderPlan, this.confirmation, this.catalogs,
+      );
+      if (repeatBasis === null) throw new CaptureApplicationError("conflict");
+      itemsSubtotalMinor = repeatBasis.itemsTotalMinor;
+      basisCatalogVersion = before.repeatOrderPlan.catalogVersion;
+      basisLines = repeatLinesToBasis(repeatBasis.lines);
+    } else {
+      throw new CapturePaymentIntentNoLinesError();
+    }
 
     let domainProjection;
     try {
@@ -1440,11 +1481,8 @@ export class CapturePaymentIntentService {
     } catch { throw new CaptureApplicationError("request"); }
     if (domainProjection.status === "insufficient") throw new CapturePaymentIntentInsufficientError();
 
-    const storedPlan = await readStoredCaptureSelectionPlanLines(
-      actorId, command.scope, command.captureDraftId, this.confirmation,
-    );
     const basisFingerprint = computeCapturePaymentIntentBasisFingerprint({
-      catalogVersion: storedPlan?.catalogVersion ?? "", currency, deliveryFeeMinor, lines: storedPlan?.lines ?? [],
+      catalogVersion: basisCatalogVersion, currency, deliveryFeeMinor, lines: basisLines,
     });
 
     const sqlCommand = {
