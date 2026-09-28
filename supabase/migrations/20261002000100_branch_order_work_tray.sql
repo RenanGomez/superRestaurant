@@ -11,24 +11,28 @@ declare
   v_restaurant uuid;
   v_branch uuid;
   v_limit integer;
+  v_channel text;
   v_after_at timestamptz;
   v_after_id uuid;
   v_rows jsonb;
   v_next jsonb;
 begin
   if p_actor_id is null
-    or not app_private.jsonb_has_exact_keys(p_request, array['schemaVersion','scope','limit','after'])
+    or not app_private.jsonb_has_exact_keys(p_request, array['schemaVersion','scope','limit','after','channel'])
     or not app_private.jsonb_has_exact_keys(p_request -> 'scope', array['restaurantId','branchId'])
     or p_request -> 'schemaVersion' is distinct from '1'::jsonb
     or pg_catalog.jsonb_typeof(p_request -> 'limit') is distinct from 'number'
     or not coalesce(p_request ->> 'limit' ~ '^[1-9][0-9]*$', false)
     or (p_request -> 'after' <> 'null'::jsonb and not app_private.jsonb_has_exact_keys(
       p_request -> 'after', array['updatedAt','orderId']))
+    or (p_request -> 'channel' <> 'null'::jsonb
+      and not (p_request ->> 'channel' in ('table','counter','takeout','delivery')))
   then return pg_catalog.jsonb_build_object('status','rejected'); end if;
   begin
     v_restaurant := (p_request #>> '{scope,restaurantId}')::uuid;
     v_branch := (p_request #>> '{scope,branchId}')::uuid;
     v_limit := (p_request ->> 'limit')::integer;
+    v_channel := p_request ->> 'channel';
     if p_request -> 'after' <> 'null'::jsonb then
       v_after_at := (p_request #>> '{after,updatedAt}')::timestamptz;
       v_after_id := (p_request #>> '{after,orderId}')::uuid;
@@ -63,6 +67,7 @@ begin
       on frozen.restaurant_id=o.restaurant_id and frozen.branch_id=o.branch_id and frozen.order_id=o.id
     where o.restaurant_id=v_restaurant and o.branch_id=v_branch
       and o.status in ('draft','open','partially_paid')
+      and (v_channel is null or o.channel=v_channel)
       and (v_after_at is null or o.updated_at < v_after_at
         or (o.updated_at = v_after_at and o.id > v_after_id))
     order by o.updated_at desc, o.id

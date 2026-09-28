@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { BranchOrderWorkItemV1, BranchOrderWorkTrayV1, BranchScope } from "@super-restaurant/shared-types";
+import type { BranchOrderWorkChannelV1, BranchOrderWorkItemV1, BranchOrderWorkTrayV1, BranchScope } from "@super-restaurant/shared-types";
 import {
   channelLabel,
-  filterBranchOrderWorkItems,
   formatOrderWorkTime,
   formatOrderWorkTotal,
+  isPayableBranchOrderWorkStatus,
   preparationLabel,
   shouldApplyBranchOrderWorkTrayResponse,
   type BranchOrderTrayRequestResult,
@@ -41,11 +41,11 @@ export function OrdersTray({ scope, action }: Props) {
   const cursorRef = useRef<BranchOrderWorkTrayV1["nextCursor"]>(null);
   const requestSeqRef = useRef(0);
 
-  async function load(cursor: BranchOrderWorkTrayV1["nextCursor"], replace: boolean) {
+  async function load(cursor: BranchOrderWorkTrayV1["nextCursor"], replace: boolean, channel: BranchOrderWorkChannelV1 | null) {
     const requestSeq = ++requestSeqRef.current;
     setBusy(true); setError(undefined);
     let result: BranchOrderTrayRequestResult;
-    try { result = await action({ cursor, limit: LIMIT, schemaVersion: 1, scope }); }
+    try { result = await action({ channel, cursor, limit: LIMIT, schemaVersion: 1, scope }); }
     catch { result = { error: "unavailable", ok: false }; }
     if (!shouldApplyBranchOrderWorkTrayResponse({ cursor, replace, requestSeq }, requestSeqRef.current, cursorRef.current)) return;
     if (!result.ok) setError(result.error);
@@ -58,9 +58,9 @@ export function OrdersTray({ scope, action }: Props) {
     setBusy(false);
   }
 
-  function refresh(): void { void load(null, true); }
+  function refresh(): void { void load(null, true, filter === "all" ? null : filter); }
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); }, [filter]);
 
   useEffect(() => {
     function onVisibilityChange(): void { if (document.visibilityState === "visible") refresh(); }
@@ -70,9 +70,7 @@ export function OrdersTray({ scope, action }: Props) {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, []);
-
-  const visible = filterBranchOrderWorkItems(items, filter);
+  }, [filter]);
 
   return <section className={panel}>
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -84,11 +82,12 @@ export function OrdersTray({ scope, action }: Props) {
       <button type="button" className={button} disabled={busy} onClick={refresh}>Actualizar</button>
     </div>
     {error && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{errors[error]}</p>}
-    {!loaded ? <p className="mt-4 text-sm text-text-muted">Cargando órdenes…</p> : visible.length === 0
+    {!loaded ? <p className="mt-4 text-sm text-text-muted">Cargando órdenes…</p> : items.length === 0
       ? <p className="mt-4 text-sm text-text-muted">No hay órdenes activas para este filtro.</p>
-      : <ul className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{visible.map((order) => <OrderCard key={order.orderId} order={order} />)}</ul>}
+      : <ul className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{items.map((order) => <OrderCard key={order.orderId} order={order} />)}</ul>}
     {nextCursor !== null && <div className="mt-4">
-      <button type="button" className={button} disabled={busy} onClick={() => void load(nextCursor, false)}>Cargar más</button>
+      <button type="button" className={button} disabled={busy}
+        onClick={() => void load(nextCursor, false, filter === "all" ? null : filter)}>Cargar más</button>
     </div>}
   </section>;
 }
@@ -110,9 +109,11 @@ function OrderCard({ order }: { readonly order: BranchOrderWorkItemV1 }) {
       {order.paymentIntent !== null && ` · pago ${order.paymentIntent.method === "cash" ? "efectivo" : order.paymentIntent.method === "card_manual" ? "tarjeta" : "transferencia"}`}
     </p>
     <div className="mt-3 flex flex-wrap gap-2">
-      <a href={`/app/caja?orderId=${order.orderId}`} className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent">
-        Cobrar en caja
-      </a>
+      {isPayableBranchOrderWorkStatus(order.status)
+        ? <a href={`/app/caja?orderId=${order.orderId}`} className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent">
+          Cobrar en caja
+        </a>
+        : <span className="flex min-h-11 items-center text-sm text-text-muted">Aún en borrador, sin cuenta que cobrar</span>}
     </div>
   </li>;
 }

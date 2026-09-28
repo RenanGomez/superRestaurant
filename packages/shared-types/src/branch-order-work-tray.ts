@@ -63,6 +63,8 @@ export interface BranchOrderWorkTrayRequestV1 {
   readonly scope: BranchScope;
   readonly cursor: BranchOrderWorkCursorV1 | null;
   readonly limit: number;
+  /** `null` means every channel; filtering happens in SQL, never by discarding a loaded page client-side. */
+  readonly channel: BranchOrderWorkChannelV1 | null;
 }
 
 export interface BranchOrderWorkTrayV1 {
@@ -73,15 +75,17 @@ export interface BranchOrderWorkTrayV1 {
 }
 
 export function parseBranchOrderWorkTrayRequestV1(value: unknown): BranchOrderWorkTrayRequestV1 | undefined {
-  const record = exactRecord(value, ["schemaVersion", "scope", "cursor", "limit"]);
+  const record = exactRecord(value, ["schemaVersion", "scope", "cursor", "limit", "channel"]);
   if (record === undefined || own(record, "schemaVersion") !== BRANCH_ORDER_WORK_TRAY_SCHEMA_VERSION) return undefined;
   const scope = parseScope(own(record, "scope"));
   const rawCursor = own(record, "cursor");
   const cursor = rawCursor === null ? null : parseCursor(rawCursor);
   const limit = integer(own(record, "limit"), 1, 100);
-  return scope === undefined || cursor === undefined || limit === undefined
+  const rawChannel = own(record, "channel");
+  const channel = rawChannel === null ? null : member(rawChannel, BRANCH_ORDER_WORK_CHANNELS);
+  return scope === undefined || cursor === undefined || limit === undefined || channel === undefined
     ? undefined
-    : Object.freeze({ cursor, limit, schemaVersion: BRANCH_ORDER_WORK_TRAY_SCHEMA_VERSION, scope });
+    : Object.freeze({ channel, cursor, limit, schemaVersion: BRANCH_ORDER_WORK_TRAY_SCHEMA_VERSION, scope });
 }
 
 export function parseBranchOrderWorkItemV1(value: unknown): BranchOrderWorkItemV1 | undefined {

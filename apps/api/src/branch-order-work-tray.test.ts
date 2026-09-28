@@ -89,10 +89,10 @@ test("branch order work tray adapter binds actor and forwards the cursor as 'aft
     calls.push([...parameters]);
     return { rows: [{ result: { schemaVersion: 1, scope, orders: [], next: null } }] };
   } });
-  await adapter.list(actorId, { cursor: { orderId, updatedAt: "2026-09-26T12:00:00.000000Z" }, limit: 10, schemaVersion: 1, scope });
+  await adapter.list(actorId, { channel: "delivery", cursor: { orderId, updatedAt: "2026-09-26T12:00:00.000000Z" }, limit: 10, schemaVersion: 1, scope });
   assert.equal(calls[0]?.[0], actorId);
   assert.deepEqual(JSON.parse(calls[0]?.[1] as string), {
-    after: { orderId, updatedAt: "2026-09-26T12:00:00.000000Z" }, limit: 10, schemaVersion: 1, scope,
+    after: { orderId, updatedAt: "2026-09-26T12:00:00.000000Z" }, channel: "delivery", limit: 10, schemaVersion: 1, scope,
   });
 });
 
@@ -105,7 +105,7 @@ test("service projects a delivery order's totals, masked customer, address and p
       confirmedAt: "2026-09-26T12:00:00.000Z", order: encodeOrderRecord(deliveryOrder()), snapshot: deliverySnapshot(),
     }],
   };
-  const result = await service(envelope).list({ actorId } as never, { cursor: null, limit: 25, schemaVersion: 1, scope });
+  const result = await service(envelope).list({ actorId } as never, { channel: null, cursor: null, limit: 25, schemaVersion: 1, scope });
   assert.equal(result.items.length, 1);
   const item = result.items[0];
   assert.equal(item?.orderId, orderId);
@@ -129,7 +129,7 @@ test("service nulls customer/address labels for a role with orders.read but no c
       confirmedAt: "2026-09-26T12:00:00.000Z", order: encodeOrderRecord(deliveryOrder()), snapshot: deliverySnapshot(),
     }],
   };
-  const result = await service(envelope, ["kitchen"]).list({ actorId } as never, { cursor: null, limit: 25, schemaVersion: 1, scope });
+  const result = await service(envelope, ["kitchen"]).list({ actorId } as never, { channel: null, cursor: null, limit: 25, schemaVersion: 1, scope });
   const item = result.items[0];
   assert.equal(item?.customerLabel, null);
   assert.equal(item?.addressLabel, null);
@@ -147,7 +147,7 @@ test("service projects a table order without a fulfillment snapshot as dine_in w
       confirmedAt: null, order: encodeOrderRecord(tableOrder()), snapshot: null,
     }],
   };
-  const result = await service(envelope).list({ actorId } as never, { cursor: null, limit: 25, schemaVersion: 1, scope });
+  const result = await service(envelope).list({ actorId } as never, { channel: null, cursor: null, limit: 25, schemaVersion: 1, scope });
   const item = result.items[0];
   assert.equal(item?.fulfillmentChannel, "dine_in");
   assert.equal(item?.customerLabel, null);
@@ -166,7 +166,7 @@ test("service projects a counter order with no fulfillment snapshot at all (not 
       confirmedAt: null, order: encodeOrderRecord(counterOrder()), snapshot: null,
     }],
   };
-  const result = await service(envelope).list({ actorId } as never, { cursor: null, limit: 25, schemaVersion: 1, scope });
+  const result = await service(envelope).list({ actorId } as never, { channel: null, cursor: null, limit: 25, schemaVersion: 1, scope });
   assert.equal(result.items.length, 1);
   const item = result.items[0];
   assert.equal(item?.channel, "counter");
@@ -178,15 +178,15 @@ test("service projects a counter order with no fulfillment snapshot at all (not 
 });
 
 test("service fails closed on a denied/rejected outcome, cross-scope envelopes and a scope-mismatched order", async () => {
-  await assert.rejects(service({ status: "denied" }).list({ actorId } as never, { cursor: null, limit: 5, schemaVersion: 1, scope }),
+  await assert.rejects(service({ status: "denied" }).list({ actorId } as never, { channel: null, cursor: null, limit: 5, schemaVersion: 1, scope }),
     (error: unknown) => error instanceof BranchOrderWorkTrayError && error.code === "authorization");
-  await assert.rejects(service({ status: "rejected" }).list({ actorId } as never, { cursor: null, limit: 5, schemaVersion: 1, scope }),
+  await assert.rejects(service({ status: "rejected" }).list({ actorId } as never, { channel: null, cursor: null, limit: 5, schemaVersion: 1, scope }),
     (error: unknown) => error instanceof BranchOrderWorkTrayError && error.code === "request");
   await assert.rejects(service(undefined).list({ actorId } as never, "not-an-object"),
     (error: unknown) => error instanceof BranchOrderWorkTrayError && error.code === "request");
   const foreignScope = { restaurantId, branchId: "e74df54b-30a7-449b-a23f-c4ca6f93bda4" };
   await assert.rejects(service({ schemaVersion: 1, scope: foreignScope, orders: [], next: null })
-    .list({ actorId } as never, { cursor: null, limit: 5, schemaVersion: 1, scope }));
+    .list({ actorId } as never, { channel: null, cursor: null, limit: 5, schemaVersion: 1, scope }));
   const mismatched = {
     schemaVersion: 1, scope, next: null,
     orders: [{
@@ -195,12 +195,12 @@ test("service fails closed on a denied/rejected outcome, cross-scope envelopes a
       confirmedAt: null, order: encodeOrderRecord(deliveryOrder()), snapshot: { ...deliverySnapshot(), orderId: capturedId },
     }],
   };
-  await assert.rejects(service(mismatched).list({ actorId } as never, { cursor: null, limit: 5, schemaVersion: 1, scope }));
+  await assert.rejects(service(mismatched).list({ actorId } as never, { channel: null, cursor: null, limit: 5, schemaVersion: 1, scope }));
 });
 
 test("service fails closed when Branch authorization is denied", async () => {
   const authorization = { authorizeBranch: async () => { throw new Error("denied"); } } as never;
   const tray = new BranchOrderWorkTrayService(authorization, port({ schemaVersion: 1, scope, orders: [], next: null }));
-  await assert.rejects(tray.list({ actorId } as never, { cursor: null, limit: 5, schemaVersion: 1, scope }),
+  await assert.rejects(tray.list({ actorId } as never, { channel: null, cursor: null, limit: 5, schemaVersion: 1, scope }),
     (error: unknown) => error instanceof BranchOrderWorkTrayError && error.code === "authorization");
 });

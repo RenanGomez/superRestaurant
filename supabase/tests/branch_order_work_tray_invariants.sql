@@ -19,6 +19,7 @@ declare
   capture_id uuid := gen_random_uuid();
   now_at timestamptz := pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp());
   result jsonb;
+  first_page_next jsonb;
   item jsonb;
 begin
   if actor is null then raise exception 'BRANCH_ORDER_WORK_TRAY_TEST_ACTOR_REQUIRED'; end if;
@@ -73,7 +74,7 @@ begin
   result := app_private.list_branch_order_work_items(actor,pg_catalog.jsonb_build_object(
     'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
       'restaurantId',restaurant::text,'branchId',branch::text
-    ),'limit',1,'after',null
+    ),'limit',1,'after',null,'channel',null
   ));
   if result->>'schemaVersion'<>'1' or pg_catalog.jsonb_array_length(result->'orders')<>1
     or result#>>'{orders,0,orderId}'<>order_with_snapshot::text
@@ -81,11 +82,37 @@ begin
     or result#>>'{orders,0,order,orderId}'<>order_with_snapshot::text
     or result->'next' is null
   then raise exception 'BRANCH_ORDER_WORK_TRAY_FIRST_PAGE_REJECTED'; end if;
+  first_page_next := result->'next';
 
   result := app_private.list_branch_order_work_items(actor,pg_catalog.jsonb_build_object(
     'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
       'restaurantId',restaurant::text,'branchId',branch::text
-    ),'limit',1,'after',result->'next'
+    ),'limit',10,'after',null,'channel','counter'
+  ));
+  if pg_catalog.jsonb_array_length(result->'orders')<>1
+    or result#>>'{orders,0,orderId}'<>order_without_snapshot::text
+  then raise exception 'BRANCH_ORDER_WORK_TRAY_CHANNEL_FILTER_REJECTED'; end if;
+
+  result := app_private.list_branch_order_work_items(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'limit',10,'after',null,'channel','takeout'
+  ));
+  if pg_catalog.jsonb_array_length(result->'orders')<>0
+  then raise exception 'BRANCH_ORDER_WORK_TRAY_CHANNEL_FILTER_LEAKED'; end if;
+
+  result := app_private.list_branch_order_work_items(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'limit',10,'after',null,'channel','not-a-channel'
+  ));
+  if result<>pg_catalog.jsonb_build_object('status','rejected')
+  then raise exception 'BRANCH_ORDER_WORK_TRAY_INVALID_CHANNEL_ACCEPTED'; end if;
+
+  result := app_private.list_branch_order_work_items(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'limit',1,'after',first_page_next,'channel',null
   ));
   if pg_catalog.jsonb_array_length(result->'orders')<>1
     or result#>>'{orders,0,orderId}'<>order_without_snapshot::text
@@ -99,7 +126,7 @@ begin
   result := app_private.list_branch_order_work_items(actor,pg_catalog.jsonb_build_object(
     'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
       'restaurantId',restaurant::text,'branchId',other_branch::text
-    ),'limit',10,'after',null
+    ),'limit',10,'after',null,'channel',null
   ));
   if result<>pg_catalog.jsonb_build_object('status','denied')
   then raise exception 'BRANCH_ORDER_WORK_TRAY_SCOPE_LEAKED'; end if;
@@ -107,7 +134,7 @@ begin
   result := app_private.list_branch_order_work_items(actor,pg_catalog.jsonb_build_object(
     'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
       'restaurantId',restaurant::text,'branchId',branch::text
-    ),'limit',0,'after',null
+    ),'limit',0,'after',null,'channel',null
   ));
   if result<>pg_catalog.jsonb_build_object('status','rejected')
   then raise exception 'BRANCH_ORDER_WORK_TRAY_REQUEST_ACCEPTED'; end if;
@@ -119,7 +146,7 @@ begin
   result := app_private.list_branch_order_work_items(actor,pg_catalog.jsonb_build_object(
     'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
       'restaurantId',restaurant::text,'branchId',branch::text
-    ),'limit',10,'after',null
+    ),'limit',10,'after',null,'channel',null
   ));
   if result<>pg_catalog.jsonb_build_object('status','denied')
   then raise exception 'BRANCH_ORDER_WORK_TRAY_REVOKED_MEMBERSHIP_LEAKED'; end if;

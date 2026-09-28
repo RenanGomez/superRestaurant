@@ -14,16 +14,19 @@ const scope = {
 };
 const orderId = "2ee5f057-7971-468d-b197-f946911743eb";
 
-const request = { cursor: null, limit: 25, schemaVersion: 1, scope } as const;
+const request = { channel: null, cursor: null, limit: 25, schemaVersion: 1, scope } as const;
 expect(parseBranchOrderWorkTrayRequestV1(request) !== undefined, "exact request parses");
 for (const invalid of [
   { ...request, limit: 0 },
   { ...request, limit: 101 },
   { ...request, extra: true },
   { ...request, cursor: { orderId, updatedAt: "" } },
+  { ...request, channel: "unknown" },
 ]) expect(parseBranchOrderWorkTrayRequestV1(invalid) === undefined, "request rejects invalid bounds and shapes");
 expect(parseBranchOrderWorkTrayRequestV1({ ...request, cursor: { orderId, updatedAt: "2026-09-26T18:00:00.000000Z" } }) !== undefined,
   "request accepts a cursor");
+expect(parseBranchOrderWorkTrayRequestV1({ ...request, channel: "delivery" }) !== undefined,
+  "request accepts a single-channel filter");
 
 const deliveryItem = {
   addressLabel: "Casa · Col. Centro",

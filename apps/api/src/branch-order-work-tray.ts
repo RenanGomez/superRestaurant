@@ -45,7 +45,9 @@ export class PostgresBranchOrderWorkTray implements BranchOrderWorkTrayPort {
   public async list(actorId: string, input: BranchOrderWorkTrayRequestV1): Promise<unknown> {
     const request = parseBranchOrderWorkTrayRequestV1(input);
     if (!UUID_PATTERN.test(actorId) || request === undefined) throw unavailable();
-    const sqlRequest = { after: request.cursor, limit: request.limit, schemaVersion: 1, scope: request.scope };
+    const sqlRequest = {
+      after: request.cursor, channel: request.channel, limit: request.limit, schemaVersion: 1, scope: request.scope,
+    };
     let rows: readonly unknown[];
     try {
       rows = (await this.database.query(listSql, [actorId, JSON.stringify(sqlRequest)])).rows;
