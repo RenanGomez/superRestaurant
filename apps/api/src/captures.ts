@@ -1240,6 +1240,16 @@ async function buildCapturePaymentProjectionForWorkspace(
   // either -- a repeat-order capture is not necessarily delivery). Neither present means no lines
   // at all: `0`/`null`, matching the historical read-side fallback (the write path in
   // setPaymentIntent refuses this case instead).
+  //
+  // H8: a selection plan that exists but currently cannot be priced (selectionProjection null --
+  // an inactive product, or the catalog having moved to a different catalogVersion) must never
+  // silently read as `itemsSubtotalMinor: 0`: the basis fingerprint alone might still match (the
+  // stored plan's identity/catalogVersion is unaffected by a pricing failure), so this can NOT be
+  // relied on to force "stale" the way an actual line change is. Track it explicitly and force
+  // "stale" below, mirroring the write-side guard in `CapturePaymentIntentService.setPaymentIntent`
+  // (`CapturePaymentIntentUnpricedError`) -- confirm's own re-check of `paymentProjection.status`
+  // then refuses it too, exactly as it already refuses any other stale intent.
+  const selectionUnpriced = workspace.selectionPlan !== null && workspace.selectionProjection === null;
   let itemsSubtotalMinor = workspace.selectionProjection?.itemsTotalMinor ?? 0;
   let basisCatalogVersion = "";
   let basisLines: CapturePaymentIntentBasisLine[] = [];
@@ -1282,7 +1292,8 @@ async function buildCapturePaymentProjectionForWorkspace(
     lines: basisLines,
     quoteId,
   });
-  const status = paymentIntentBasisFingerprint !== currentFingerprint ? "stale" : domainProjection.status;
+  const status = selectionUnpriced || paymentIntentBasisFingerprint !== currentFingerprint
+    ? "stale" : domainProjection.status;
   const changeDueMinor = status === "ready" ? (domainProjection.changeDueMinor?.amountMinor ?? null) : null;
 
   return parseCapturePaymentIntentProjectionV1({
