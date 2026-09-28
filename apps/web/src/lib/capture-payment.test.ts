@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   deliveryQuoteScheduledForInputValue, describePaymentMethod, isSwitchingToAnotherCapture, parseMoneyInputToMinor,
-  quoteMatchesRequestedTime, suggestTenderAmounts,
+  paymentIntentBlocksConfirm, quoteMatchesRequestedTime, suggestTenderAmounts,
 } from "./capture-payment.js";
 
 const baseQuote = {
@@ -66,6 +66,21 @@ test("isSwitchingToAnotherCapture is false on initial load and on re-hydrating t
 
 test("isSwitchingToAnotherCapture is true only when a different capture was already on screen", () => {
   assert.equal(isSwitchingToAnotherCapture("capture-1", "capture-2"), true);
+});
+
+test("paymentIntentBlocksConfirm is vacuously false when there is no payment intent at all", () => {
+  assert.equal(paymentIntentBlocksConfirm(null, null), false);
+  assert.equal(paymentIntentBlocksConfirm(null, { status: "stale" }), false);
+});
+
+test("paymentIntentBlocksConfirm blocks a stale or insufficient projection", () => {
+  assert.equal(paymentIntentBlocksConfirm({}, { status: "stale" }), true);
+  assert.equal(paymentIntentBlocksConfirm({}, { status: "insufficient" }), true);
+  assert.equal(paymentIntentBlocksConfirm({}, { status: "ready" }), false);
+});
+
+test("H20: paymentIntentBlocksConfirm blocks a set intent with no projection at all (no pricing basis)", () => {
+  assert.equal(paymentIntentBlocksConfirm({}, null), true);
 });
 
 test("suggestTenderAmounts always includes the exact total plus the next 100/200/500-peso roundings above it", () => {

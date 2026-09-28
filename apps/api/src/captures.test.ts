@@ -8,7 +8,7 @@ import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSugg
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
 import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteInvalidError, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureDeliveryQuoteComputationPort, type CaptureDeliveryQuoteEnvelopeV1, type CaptureDeliveryQuotePort, type CaptureNoSalePort, type CapturePaymentIntentPort, type CaptureSelectionPlanPort } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteInvalidError, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentStaleError, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureDeliveryQuoteComputationPort, type CaptureDeliveryQuoteEnvelopeV1, type CaptureDeliveryQuotePort, type CaptureNoSalePort, type CapturePaymentIntentPort, type CaptureSelectionPlanPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
@@ -601,6 +601,59 @@ test("H10: a conflict with a delivery-quote reason maps to CaptureDeliveryQuoteI
       (error: unknown) => error instanceof CaptureDeliveryQuoteInvalidError && error.reason === reason,
     );
   }
+});
+
+test("H20: confirm refuses a payment intent with no pricing basis at all, exactly like a stale one", async () => {
+  // Both plans cleared/absent and non-delivery: buildCapturePaymentProjectionForWorkspace can't
+  // even establish a currency, so the read reports paymentProjection: null, not status "stale" --
+  // but it is exactly as unconfirmable (SQL's own payment_intent_stale check, H16, would refuse
+  // it too), so confirm's pre-check must block it rather than let it fall through as "nothing to
+  // check".
+  const confirmCommand = parseConfirmCaptureDraftCommandV2({
+    ...mutationCommand,
+    schemaVersion: 2,
+    expectedVersion: 2,
+    attentionLeaseId: validCommand.deviceId,
+    orderId: validCommand.deviceId,
+    shiftId: record.detail.ownerMembershipId,
+    tableId: null,
+    currency: "MXN",
+    timeZone: "America/Hermosillo",
+  });
+  assert.ok(confirmCommand);
+  const workspaceV4 = { ...workspace, schemaVersion: 4 as const,
+    detail: { ...fulfillmentRecord.detail, schemaVersion: 2 as const, fulfillmentChannel: "counter" as const,
+      customerSnapshotRef: null, fulfillmentSnapshotRef: null, deliveryInstructions: null },
+    customerSnapshot: null, fulfillmentSnapshot: null, repeatOrderPlan: null, selectionPlan: null };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => workspaceV4,
+    readWorkspaceV5: async () => ({
+      schemaVersion: 5,
+      detail: workspaceV4.detail,
+      customerSnapshot: null,
+      fulfillmentSnapshot: null,
+      repeatOrderPlan: null,
+      selectionPlan: null,
+      deliveryQuote: null,
+      paymentIntent: { schemaVersion: 1, method: "cash", tenderedAmountMinor: 9_000, tipMinor: 0 },
+      paymentIntentAppliedCaptureVersion: 2,
+      paymentIntentBasisFingerprint: "0".repeat(64),
+    }),
+  };
+  const service = new CaptureConfirmationService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), captures, {
+    probeConfirmation: async () => ({ status: "pending" }),
+    readRepeatOrderPlan: async () => { throw new Error("must not read a repeat plan"); },
+    readSelectionPlan: async () => { throw new Error("must not read a selection plan"); },
+    confirmDraft: async () => { throw new Error("must not attempt a doomed confirm"); },
+  }, { read: async () => { throw new Error("must not read a catalog"); },
+    save: async () => { throw new Error("must not save a catalog"); } });
+  await assert.rejects(
+    service.confirm(principal, confirmCommand),
+    (error: unknown) => error instanceof CapturePaymentIntentStaleError,
+  );
 });
 
 const selectionCatalog: MenuCatalogV1 = {

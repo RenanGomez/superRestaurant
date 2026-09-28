@@ -40,7 +40,9 @@ import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import { formatDeliveryQuote } from "../../../lib/delivery-zones";
-import { deliveryQuoteScheduledForInputValue, isSwitchingToAnotherCapture, quoteMatchesRequestedTime } from "../../../lib/capture-payment";
+import {
+  deliveryQuoteScheduledForInputValue, isSwitchingToAnotherCapture, paymentIntentBlocksConfirm, quoteMatchesRequestedTime,
+} from "../../../lib/capture-payment";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
 import { CaptureMenu } from "./capture-menu";
 import { CapturePayment } from "./capture-payment";
@@ -679,8 +681,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   const locked = busy || capture?.status !== "draft" || capture?.attentionLeaseId === null
     || error === "denied" || error === "conflict";
-  const paymentBlocksConfirm = paymentProjection !== null
-    && (paymentProjection.status === "stale" || paymentProjection.status === "insufficient");
+  const paymentBlocksConfirm = paymentIntentBlocksConfirm(paymentIntent, paymentProjection);
   // Derived from the server's own frozen quote.scheduledFor vs. the field's current value -- never
   // from quoteRequestedForDiffers alone, which applyWorkspace clears on any unrelated mutation
   // (e.g. fixing the payment intent), which would otherwise let confirm through with a quote

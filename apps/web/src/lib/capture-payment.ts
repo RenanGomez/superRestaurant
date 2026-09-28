@@ -1,4 +1,6 @@
-import type { CapturePaymentIntentMethodV1, CapturePaymentIntentTimingV1, DeliveryQuoteV1 } from "@super-restaurant/shared-types";
+import type {
+  CapturePaymentIntentMethodV1, CapturePaymentIntentProjectionV1, CapturePaymentIntentTimingV1, DeliveryQuoteV1,
+} from "@super-restaurant/shared-types";
 
 const moneyInputPattern = /^\d{1,7}([.,]\d{1,2})?$/u;
 
@@ -104,6 +106,23 @@ export function isSwitchingToAnotherCapture(
   nextCaptureDraftId: string,
 ): boolean {
   return previousCaptureDraftId !== undefined && previousCaptureDraftId !== nextCaptureDraftId;
+}
+
+/**
+ * H20: true when a payment intent is set but confirm cannot possibly accept it as-is -- either
+ * the server reports it explicitly stale/insufficient, or (both plans cleared/absent, so no
+ * currency/pricing basis can even be established) it reads back as no projection at all. The
+ * latter must block exactly like "stale": the API's own confirm guard and SQL's
+ * payment_intent_stale check both refuse it, so treating a null projection as "nothing to check
+ * yet" would let the operator hit a doomed confirm.
+ */
+export function paymentIntentBlocksConfirm(
+  paymentIntent: unknown,
+  paymentProjection: Pick<CapturePaymentIntentProjectionV1, "status"> | null,
+): boolean {
+  if (paymentIntent === null || paymentIntent === undefined) return false;
+  return paymentProjection === null
+    || paymentProjection.status === "stale" || paymentProjection.status === "insufficient";
 }
 
 export function describePaymentMethod(

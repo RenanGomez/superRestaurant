@@ -758,11 +758,17 @@ export class CaptureConfirmationService {
 
     // SQL already refuses (CAS on applied_capture_version) a stale intent at the moment of
     // confirmation; this is the same guard given a clear, typed message before ever calling it.
+    // H20: a payment intent with no pricing basis at all (both plans cleared/absent, so
+    // buildCapturePaymentProjectionForWorkspace can't even establish a currency) reads
+    // paymentProjection as null, not a "stale" status -- but it is exactly as unconfirmable, and
+    // SQL's own payment_intent_stale check (H16) will refuse it the same way, so this must block
+    // here too rather than silently falling through as "no projection, nothing to check".
     const v5 = await readCaptureWorkspaceV5WithProjections(
       actorId, command.scope, command.captureDraftId, this.captures, this.persistence, this.catalogs,
     ).catch(() => null);
     if (v5 !== null && v5.paymentIntent !== null
-      && (v5.paymentProjection?.status === "stale" || v5.paymentProjection?.status === "insufficient")) {
+      && (v5.paymentProjection === null || v5.paymentProjection.status === "stale"
+        || v5.paymentProjection.status === "insufficient")) {
       throw new CapturePaymentIntentStaleError();
     }
 
@@ -1187,6 +1193,18 @@ function computeCapturePaymentIntentBasisFingerprint(input: {
   readonly catalogVersion: string;
   readonly currency: string;
   readonly deliveryFeeMinor: number;
+  /**
+   * H19: without this, changing the fulfillment channel after the intent was set (e.g.
+   * counter -> pickup) is invisible to the fingerprint even though it changes the derived
+   * `timing` (and, for delivery, the fee basis) that `buildCapturePaymentIntentProjection` used
+   * -- a read could report "ready" for a channel the intent was never actually priced against,
+   * while confirm's own SQL CAS on the fulfillment/channel facts would still refuse it as stale.
+   * `timing` is included too even though it's a pure function of `fulfillmentChannel` today: it
+   * is the fact that actually changes the money math (cash-on-fulfillment vs. at-counter), so it
+   * stays explicit in the basis rather than implicit through a derivation that could change later.
+   */
+  readonly fulfillmentChannel: string;
+  readonly timing: string;
   readonly lines: readonly CapturePaymentIntentBasisLine[];
   /**
    * The frozen delivery quote's own identity (`null` outside delivery, or before one is frozen).
@@ -1217,8 +1235,10 @@ function computeCapturePaymentIntentBasisFingerprint(input: {
     catalogVersion: input.catalogVersion,
     currency: input.currency,
     deliveryFeeMinor: input.deliveryFeeMinor,
+    fulfillmentChannel: input.fulfillmentChannel,
     lines: canonicalLines,
     quoteId: input.quoteId,
+    timing: input.timing,
   });
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -1299,8 +1319,10 @@ async function buildCapturePaymentProjectionForWorkspace(
     catalogVersion: basisCatalogVersion,
     currency,
     deliveryFeeMinor,
+    fulfillmentChannel,
     lines: basisLines,
     quoteId,
+    timing: domainProjection.timing,
   });
   const status = selectionUnpriced || paymentIntentBasisFingerprint !== currentFingerprint
     ? "stale" : domainProjection.status;
@@ -1607,7 +1629,8 @@ export class CapturePaymentIntentService {
     if (domainProjection.status === "insufficient") throw new CapturePaymentIntentInsufficientError();
 
     const basisFingerprint = computeCapturePaymentIntentBasisFingerprint({
-      catalogVersion: basisCatalogVersion, currency, deliveryFeeMinor, lines: basisLines, quoteId,
+      catalogVersion: basisCatalogVersion, currency, deliveryFeeMinor, fulfillmentChannel,
+      lines: basisLines, quoteId, timing: domainProjection.timing,
     });
 
     let raw: unknown;
