@@ -103,6 +103,7 @@ const detail = {
 
 const workspaceBase = {
   customerSnapshot: null,
+  deliveryQuote: null,
   detail,
   fulfillmentSnapshot: null,
   repeatOrderPlan: null,

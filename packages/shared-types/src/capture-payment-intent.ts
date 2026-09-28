@@ -7,6 +7,7 @@ import {
   parseCaptureWorkspaceV4,
   type CaptureWorkspaceV4,
 } from "./capture-selection-plan.js";
+import { parseDeliveryQuoteV1, type DeliveryQuoteV1 } from "./delivery-quote.js";
 
 export const CAPTURE_PAYMENT_INTENT_SCHEMA_VERSION = 1 as const;
 export const CAPTURE_WORKSPACE_V5_SCHEMA_VERSION = 5 as const;
@@ -99,6 +100,7 @@ export interface CapturePaymentIntentProjectionV1 {
  * field existing on V4 changes shape or meaning.
  */
 export interface CaptureWorkspaceV5 extends Omit<CaptureWorkspaceV4, "schemaVersion"> {
+  readonly deliveryQuote: DeliveryQuoteV1 | null;
   readonly paymentIntent: CapturePaymentIntentV1 | null;
   readonly paymentProjection: CapturePaymentIntentProjectionV1 | null;
   readonly schemaVersion: typeof CAPTURE_WORKSPACE_V5_SCHEMA_VERSION;
@@ -185,7 +187,7 @@ export function parseCaptureWorkspaceV5(value: unknown): CaptureWorkspaceV5 | un
   return safely(() => {
     const record = exactRecord(value, [
       "schemaVersion", "detail", "customerSnapshot", "fulfillmentSnapshot", "repeatOrderPlan",
-      "selectionPlan", "selectionProjection", "paymentIntent", "paymentProjection",
+      "selectionPlan", "selectionProjection", "deliveryQuote", "paymentIntent", "paymentProjection",
     ]);
     if (record === undefined || own(record, "schemaVersion") !== CAPTURE_WORKSPACE_V5_SCHEMA_VERSION) return undefined;
     const v4 = parseCaptureWorkspaceV4({
@@ -197,19 +199,22 @@ export function parseCaptureWorkspaceV5(value: unknown): CaptureWorkspaceV5 | un
       selectionPlan: own(record, "selectionPlan"),
       selectionProjection: own(record, "selectionProjection"),
     });
+    const rawDeliveryQuote = own(record, "deliveryQuote");
+    const deliveryQuote = rawDeliveryQuote === null ? null : parseDeliveryQuoteV1(rawDeliveryQuote);
     const rawPaymentIntent = own(record, "paymentIntent");
     const paymentIntent = rawPaymentIntent === null ? null : parseCapturePaymentIntentV1(rawPaymentIntent);
     const rawPaymentProjection = own(record, "paymentProjection");
     const paymentProjection = rawPaymentProjection === null
       ? null
       : parseCapturePaymentIntentProjectionV1(rawPaymentProjection);
-    if (v4 === undefined || paymentIntent === undefined || paymentProjection === undefined
+    if (v4 === undefined || deliveryQuote === undefined || paymentIntent === undefined || paymentProjection === undefined
       || (paymentProjection !== null && paymentIntent === null)
       || (paymentProjection !== null && paymentProjection.tenderedAmountMinor !== paymentIntent?.tenderedAmountMinor)
       || (paymentProjection !== null && paymentProjection.method !== paymentIntent?.method)
       || (paymentProjection !== null && paymentProjection.tipMinor !== paymentIntent?.tipMinor)) return undefined;
     return Object.freeze({
       customerSnapshot: v4.customerSnapshot,
+      deliveryQuote,
       detail: v4.detail,
       fulfillmentSnapshot: v4.fulfillmentSnapshot,
       paymentIntent,
