@@ -1034,7 +1034,11 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         </button>)}</div><a href="/app/customers" className="mt-3 inline-block text-sm font-semibold text-accent underline">Editar o validar direcciones en Directorio</a></section>}
       {capture.status === "draft" && (selectionProjection !== null && selectionProjection.lines.length > 0
         || repeatOrderPlan !== null) && <>
-        <CapturePayment projection={paymentProjection} basis={paymentBasis} intent={paymentIntent} deliveryQuote={deliveryQuote}
+        {/* H28: keyed by captureDraftId so React remounts it (and resets its local
+          customTender/appliedTenderMinor) on every capture switch, instead of carrying state from
+          the capture the operator just left onto the one they just opened. */}
+        <CapturePayment key={capture.captureDraftId}
+          projection={paymentProjection} basis={paymentBasis} intent={paymentIntent} deliveryQuote={deliveryQuote}
           fulfillment={fulfillmentChannel}
           currency={paymentProjection?.currency ?? paymentBasis?.currency ?? confirmationContext?.currency ?? "MXN"}
           busy={busy} onSetIntent={setPaymentIntent}
