@@ -23,6 +23,10 @@ declare
   h14_clock_order uuid := gen_random_uuid();
   h10_not_covered_capture uuid := gen_random_uuid();
   h10_not_covered_order uuid := gen_random_uuid();
+  h13_charge_capture uuid := gen_random_uuid();
+  h13_charge_order uuid := gen_random_uuid();
+  h13_mismatch_capture uuid := gen_random_uuid();
+  h13_mismatch_order uuid := gen_random_uuid();
   catalog uuid := gen_random_uuid();
   category uuid := gen_random_uuid();
   product uuid := gen_random_uuid();
@@ -469,7 +473,11 @@ begin
         'modifiers',pg_catalog.jsonb_build_array()
       ),'quantity',1,'restaurantId',restaurant::text,'branchId',branch::text,'status','pending',
       'note',null
-    ))
+    )),
+    'deliveryCharge',pg_catalog.jsonb_build_object(
+      'amount',pg_catalog.jsonb_build_object('amountMinor',quote->'feeMinor','currency','MXN'),
+      'quoteId',quote->>'quoteId'
+    )
   );
 
   execute 'set local role app_api';
@@ -604,7 +612,7 @@ begin
   order_record := pg_catalog.jsonb_build_object(
     'schemaVersion',1,'orderId',address_change_order::text,'restaurantId',restaurant::text,
     'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
-    'status','draft','items',pg_catalog.jsonb_build_array()
+    'status','draft','items',pg_catalog.jsonb_build_array(),'deliveryCharge',null
   );
 -- H10: a delivery capture with no live quote (the stale one was cleared above by the
   -- re-fulfillment) must be refused at confirm rather than proceeding with no quote at all.
@@ -689,7 +697,7 @@ begin
   order_record := pg_catalog.jsonb_build_object(
     'schemaVersion',1,'orderId',confirmation_command->>'orderId','restaurantId',restaurant::text,
     'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
-    'status','draft','items',pg_catalog.jsonb_build_array()
+    'status','draft','items',pg_catalog.jsonb_build_array(),'deliveryCharge',null
   );
   execute 'set local role app_api';
   result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
@@ -769,7 +777,7 @@ begin
   order_record := pg_catalog.jsonb_build_object(
     'schemaVersion',1,'orderId',stale_order::text,'restaurantId',restaurant::text,
     'branchId',branch::text,'channel','counter','currency','MXN','timeZone','America/Hermosillo',
-    'status','draft','items',pg_catalog.jsonb_build_array()
+    'status','draft','items',pg_catalog.jsonb_build_array(),'deliveryCharge',null
   );
 
   execute 'set local role app_api';
@@ -892,7 +900,8 @@ begin
         ),'quantity',1,'restaurantId',restaurant::text,'branchId',branch::text,'status','pending',
         'note',null
       )
-    )
+    ),
+    'deliveryCharge',null
   );
   order_audits := pg_catalog.jsonb_build_array(
     pg_catalog.jsonb_build_object('operation','order.created'),
@@ -991,7 +1000,7 @@ begin
   order_record := pg_catalog.jsonb_build_object(
     'schemaVersion',1,'orderId',h10_expired_order::text,'restaurantId',restaurant::text,
     'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
-    'status','draft','items',pg_catalog.jsonb_build_array()
+    'status','draft','items',pg_catalog.jsonb_build_array(),'deliveryCharge',null
   );
   execute 'set local role app_api';
   result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
@@ -1082,7 +1091,7 @@ begin
   order_record := pg_catalog.jsonb_build_object(
     'schemaVersion',1,'orderId',h14_clock_order::text,'restaurantId',restaurant::text,
     'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
-    'status','draft','items',pg_catalog.jsonb_build_array()
+    'status','draft','items',pg_catalog.jsonb_build_array(),'deliveryCharge',null
   );
   execute 'set local role app_api';
   result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
@@ -1181,13 +1190,195 @@ begin
   order_record := pg_catalog.jsonb_build_object(
     'schemaVersion',1,'orderId',h10_not_covered_order::text,'restaurantId',restaurant::text,
     'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
-    'status','draft','items',pg_catalog.jsonb_build_array()
+    'status','draft','items',pg_catalog.jsonb_build_array(),'deliveryCharge',null
   );
   execute 'set local role app_api';
   result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
   execute 'reset role';
   if result->>'status'<>'conflict' or result->>'reason'<>'delivery_quote_not_covered'
   then raise exception 'CAPTURE_H10_NOT_COVERED_NOT_REJECTED'; end if;
+
+  ----------------------------------------------------------------------------
+  -- H13: the Order's delivery charge must equal the server's own frozen quote
+  -- exactly (amountMinor === feeMinor, quoteId matches). A charge that
+  -- matches the frozen quote is applied; any mismatch -- wrong amount, wrong
+  -- quoteId, or a charge claimed for a mismatched capture -- is a conflict,
+  -- never silently accepted.
+  ----------------------------------------------------------------------------
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h13_charge_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','delivery'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_H13_CHARGE_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  execute 'set local role app_api';
+  party := app_private.set_capture_customer(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',h13_charge_capture::text,'expectedVersion',1,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'customerId',confirm_customer::text,'contactId',confirm_contact::text,'expectedCustomerVersion',1
+  ));
+  execute 'reset role';
+  if party->>'status'<>'applied' then raise exception 'CAPTURE_H13_CHARGE_CUSTOMER_REJECTED'; end if;
+
+  execute 'set local role app_api';
+  fulfillment := app_private.set_capture_fulfillment(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',h13_charge_capture::text,'expectedVersion',2,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'customerSnapshotRef',party#>>'{record,detail,customerSnapshotRef}',
+    'addressId',confirm_address::text,'expectedAddressVersion',1
+  ));
+  execute 'reset role';
+  if fulfillment->>'status'<>'applied' then raise exception 'CAPTURE_H13_CHARGE_FULFILLMENT_REJECTED'; end if;
+  select capture_drafts.fulfillment_snapshot_id into fulfillment_snapshot_before from app.capture_drafts
+  where restaurant_id=restaurant and branch_id=branch and id=h13_charge_capture;
+
+  insert into app.capture_delivery_quotes(
+    restaurant_id,branch_id,capture_draft_id,quote,applied_capture_version,idempotency_key,command_fingerprint,
+    actor_id,actor_membership_id,device_id,occurred_at,received_at
+  ) values (
+    restaurant,branch,h13_charge_capture,
+    quote||pg_catalog.jsonb_build_object(
+      'captureDraftId',h13_charge_capture::text,'addressSnapshotRef',fulfillment_snapshot_before::text,
+      'feeMinor',4500
+    ),
+    3,gen_random_uuid()::text,pg_catalog.encode(pg_catalog.sha256('fixture-h13-charge'::bytea),'hex'),
+    actor,membership,device,now_at,now_at
+  );
+
+  confirmation_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',2,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h13_charge_capture::text,'expectedVersion',3,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'attentionLeaseId',lease,
+    'orderId',h13_charge_order::text,'shiftId',shift::text,'tableId',null,
+    'currency','MXN','timeZone','America/Hermosillo'
+  );
+  order_audits := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'eventId',confirmation_command->>'eventId',
+    'idempotencyKey',confirmation_command->>'idempotencyKey','restaurantId',restaurant::text,
+    'branchId',branch::text,'orderId',h13_charge_order::text,'actorId',actor::text,
+    'deviceId',device::text,'occurredAt',confirmation_command->>'occurredAt',
+    'operation','order.created','entityType','order','entityId',h13_charge_order::text,'to','draft'
+  ));
+
+  -- A charge that does not equal the frozen quote's feeMinor is a conflict, even though every
+  -- other fact about the capture (quote presence, coverage, expiry) is valid.
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',h13_charge_order::text,'restaurantId',restaurant::text,
+    'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
+    'status','draft','items',pg_catalog.jsonb_build_array(),
+    'deliveryCharge',pg_catalog.jsonb_build_object(
+      'amount',pg_catalog.jsonb_build_object('amountMinor',9999,'currency','MXN'),
+      'quoteId',quote->>'quoteId'
+    )
+  );
+  execute 'set local role app_api';
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'conflict' or result->>'reason'<>'delivery_charge_mismatch'
+  then raise exception 'CAPTURE_H13_WRONG_AMOUNT_NOT_REJECTED'; end if;
+
+  -- Same wrong-quoteId case, amount otherwise exactly right.
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',h13_charge_order::text,'restaurantId',restaurant::text,
+    'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
+    'status','draft','items',pg_catalog.jsonb_build_array(),
+    'deliveryCharge',pg_catalog.jsonb_build_object(
+      'amount',pg_catalog.jsonb_build_object('amountMinor',4500,'currency','MXN'),
+      'quoteId',gen_random_uuid()::text
+    )
+  );
+  execute 'set local role app_api';
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'conflict' or result->>'reason'<>'delivery_charge_mismatch'
+  then raise exception 'CAPTURE_H13_WRONG_QUOTE_ID_NOT_REJECTED'; end if;
+
+  -- The exactly-matching charge is applied, and the placed Order actually carries it.
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',h13_charge_order::text,'restaurantId',restaurant::text,
+    'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
+    'status','draft','items',pg_catalog.jsonb_build_array(),
+    'deliveryCharge',pg_catalog.jsonb_build_object(
+      'amount',pg_catalog.jsonb_build_object('amountMinor',4500,'currency','MXN'),
+      'quoteId',quote->>'quoteId'
+    )
+  );
+  execute 'set local role app_api';
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_H13_MATCHING_CHARGE_NOT_APPLIED'; end if;
+  if not exists (
+    select 1 from app.orders placed
+    where placed.restaurant_id=restaurant and placed.branch_id=branch and placed.id=h13_charge_order
+      and placed.aggregate#>'{deliveryCharge,amount,amountMinor}' = to_jsonb(4500)
+      and placed.aggregate#>>'{deliveryCharge,quoteId}' = quote->>'quoteId'
+  ) then raise exception 'CAPTURE_H13_PERSISTED_CHARGE_MISMATCH'; end if;
+
+  ----------------------------------------------------------------------------
+  -- H13: a non-delivery capture must never carry a delivery charge -- a
+  -- client-supplied non-null charge on a counter/table/takeout order is
+  -- rejected outright.
+  ----------------------------------------------------------------------------
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h13_mismatch_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','pickup'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_H13_NON_DELIVERY_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  confirmation_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',2,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h13_mismatch_capture::text,'expectedVersion',1,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'attentionLeaseId',lease,
+    'orderId',h13_mismatch_order::text,'shiftId',shift::text,'tableId',null,
+    'currency','MXN','timeZone','America/Hermosillo'
+  );
+  order_audits := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'eventId',confirmation_command->>'eventId',
+    'idempotencyKey',confirmation_command->>'idempotencyKey','restaurantId',restaurant::text,
+    'branchId',branch::text,'orderId',h13_mismatch_order::text,'actorId',actor::text,
+    'deviceId',device::text,'occurredAt',confirmation_command->>'occurredAt',
+    'operation','order.created','entityType','order','entityId',h13_mismatch_order::text,'to','draft'
+  ));
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',h13_mismatch_order::text,'restaurantId',restaurant::text,
+    'branchId',branch::text,'channel','takeout','currency','MXN','timeZone','America/Hermosillo',
+    'status','draft','items',pg_catalog.jsonb_build_array(),
+    'deliveryCharge',pg_catalog.jsonb_build_object(
+      'amount',pg_catalog.jsonb_build_object('amountMinor',4500,'currency','MXN'),
+      'quoteId',gen_random_uuid()::text
+    )
+  );
+  execute 'set local role app_api';
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'rejected'
+  then raise exception 'CAPTURE_H13_NON_DELIVERY_CHARGE_NOT_REJECTED'; end if;
 end
 $capture_payment_intent_tests$;
 commit;
