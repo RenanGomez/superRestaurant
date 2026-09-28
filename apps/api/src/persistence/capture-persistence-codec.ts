@@ -137,7 +137,7 @@ export function decodeCaptureWorkspaceV5(value: unknown, authorizedScope: Branch
   const scope = parseBranchScope(authorizedScope);
   const extracted = extractPaymentIntentStalenessFacts(value);
   if (extracted === undefined) throw rejected();
-  const augmented = withSelectionProjectionKey(withPaymentProjectionKey(extracted.rest));
+  const augmented = withSelectionProjectionKey(withPaymentBasisKey(withPaymentProjectionKey(extracted.rest)));
   const workspace = parseCaptureWorkspaceV5(augmented);
   if (scope === undefined || workspace === undefined || workspace.detail.scope.restaurantId !== scope.restaurantId
     || workspace.detail.scope.branchId !== scope.branchId) throw rejected();
@@ -201,6 +201,36 @@ function withPaymentProjectionKey(value: unknown): unknown {
   } catch {
     return value;
   }
+}
+
+/** H25: same augmentation as `withPaymentProjectionKey`, for the additive `paymentBasis` key. */
+function withPaymentBasisKey(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || nodeTypes.isProxy(value)) return value;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return value;
+    const keys = Reflect.ownKeys(value);
+    if (keys.includes("paymentBasis")) return value;
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (typeof key !== "string") return value;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) return value;
+      result[key] = descriptor.value;
+    }
+    result.paymentBasis = null;
+    return result;
+  } catch {
+    return value;
+  }
+}
+
+/** Replaces `paymentBasis` with an API-computed pricing basis (H25). */
+export function withCapturePaymentBasis(
+  workspace: CaptureWorkspaceV5,
+  paymentBasis: CaptureWorkspaceV5["paymentBasis"],
+): CaptureWorkspaceV5 {
+  return Object.freeze({ ...workspace, paymentBasis });
 }
 
 /** Replaces `paymentProjection` with an API-computed projection. */

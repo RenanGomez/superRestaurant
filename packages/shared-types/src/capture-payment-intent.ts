@@ -138,12 +138,28 @@ export interface CapturePaymentIntentProjectionV1 {
 }
 
 /**
+ * H25: the same tax-inclusive basis `paymentProjection` prices against (items subtotal + frozen
+ * delivery fee), but with no method/tender/tip attached -- computed whenever the capture's lines
+ * are priced, whether or not a payment intent has been set yet. Lets the "Cobro" summary and cash
+ * shortcuts show real numbers before the operator picks a method, without the client ever
+ * computing a subtotal or total itself. Change and tip remain exclusively `paymentProjection`'s:
+ * they only mean something once there is an actual intent to project.
+ */
+export interface CapturePaymentBasisV1 {
+  readonly currency: string;
+  readonly deliveryFeeMinor: number;
+  readonly itemsSubtotalMinor: number;
+  readonly orderTotalMinor: number;
+}
+
+/**
  * Additive widening of `CaptureWorkspaceV4`: adds the durable payment intent
- * (facts from storage) and its nullable, server-computed projection. Neither
- * field existing on V4 changes shape or meaning.
+ * (facts from storage), its nullable, server-computed projection, and (H25)
+ * the pricing basis alone. Neither field existing on V4 changes shape or meaning.
  */
 export interface CaptureWorkspaceV5 extends Omit<CaptureWorkspaceV4, "schemaVersion"> {
   readonly deliveryQuote: DeliveryQuoteV1 | null;
+  readonly paymentBasis: CapturePaymentBasisV1 | null;
   readonly paymentIntent: CapturePaymentIntentV1 | null;
   readonly paymentProjection: CapturePaymentIntentProjectionV1 | null;
   readonly schemaVersion: typeof CAPTURE_WORKSPACE_V5_SCHEMA_VERSION;
@@ -226,11 +242,25 @@ export function parseCapturePaymentIntentProjectionV1(value: unknown): CapturePa
   });
 }
 
+export function parseCapturePaymentBasisV1(value: unknown): CapturePaymentBasisV1 | undefined {
+  return safely(() => {
+    const record = exactRecord(value, ["currency", "itemsSubtotalMinor", "deliveryFeeMinor", "orderTotalMinor"]);
+    if (record === undefined) return undefined;
+    const currency = currencyCode(own(record, "currency"));
+    const itemsSubtotalMinor = money(own(record, "itemsSubtotalMinor"), true);
+    const deliveryFeeMinor = money(own(record, "deliveryFeeMinor"), true);
+    const orderTotalMinor = money(own(record, "orderTotalMinor"), true);
+    if (currency === undefined || itemsSubtotalMinor === undefined || deliveryFeeMinor === undefined
+      || orderTotalMinor === undefined || orderTotalMinor !== itemsSubtotalMinor + deliveryFeeMinor) return undefined;
+    return Object.freeze({ currency, deliveryFeeMinor, itemsSubtotalMinor, orderTotalMinor });
+  });
+}
+
 export function parseCaptureWorkspaceV5(value: unknown): CaptureWorkspaceV5 | undefined {
   return safely(() => {
     const record = exactRecord(value, [
       "schemaVersion", "detail", "customerSnapshot", "fulfillmentSnapshot", "repeatOrderPlan",
-      "selectionPlan", "selectionProjection", "deliveryQuote", "paymentIntent", "paymentProjection",
+      "selectionPlan", "selectionProjection", "deliveryQuote", "paymentIntent", "paymentProjection", "paymentBasis",
     ]);
     if (record === undefined || own(record, "schemaVersion") !== CAPTURE_WORKSPACE_V5_SCHEMA_VERSION) return undefined;
     const v4 = parseCaptureWorkspaceV4({
@@ -250,7 +280,10 @@ export function parseCaptureWorkspaceV5(value: unknown): CaptureWorkspaceV5 | un
     const paymentProjection = rawPaymentProjection === null
       ? null
       : parseCapturePaymentIntentProjectionV1(rawPaymentProjection);
+    const rawPaymentBasis = own(record, "paymentBasis");
+    const paymentBasis = rawPaymentBasis === null ? null : parseCapturePaymentBasisV1(rawPaymentBasis);
     if (v4 === undefined || deliveryQuote === undefined || paymentIntent === undefined || paymentProjection === undefined
+      || paymentBasis === undefined
       || (paymentProjection !== null && paymentIntent === null)
       || (paymentProjection !== null && paymentProjection.tenderedAmountMinor !== paymentIntent?.tenderedAmountMinor)
       || (paymentProjection !== null && paymentProjection.method !== paymentIntent?.method)
@@ -260,6 +293,7 @@ export function parseCaptureWorkspaceV5(value: unknown): CaptureWorkspaceV5 | un
       deliveryQuote,
       detail: v4.detail,
       fulfillmentSnapshot: v4.fulfillmentSnapshot,
+      paymentBasis,
       paymentIntent,
       paymentProjection,
       repeatOrderPlan: v4.repeatOrderPlan,

@@ -72,8 +72,11 @@ import {
   parseRequestCaptureDeliveryQuoteCommandV1,
   parseSetCapturePaymentIntentCommandV1,
   parseCapturePaymentIntentProjectionV1,
+  parseCapturePaymentBasisV1,
   type CaptureWorkspaceRequestV5,
   type CaptureWorkspaceV5,
+  type CaptureFulfillmentChannelV1,
+  type CapturePaymentBasisV1,
   type CapturePaymentIntentProjectionV1,
   type DeliveryQuoteV1,
 } from "@super-restaurant/shared-types";
@@ -102,7 +105,7 @@ import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
 import {
   decodeCaptureRecord, decodeCaptureWorkspace, decodeCaptureWorkspaceV2, decodeCaptureWorkspaceV3,
   decodeCaptureWorkspaceV4, decodeCaptureWorkspaceV5, withCaptureSelectionProjection,
-  withCapturePaymentProjection, type PersistedCaptureRecordV1,
+  withCapturePaymentBasis, withCapturePaymentProjection, type PersistedCaptureRecordV1,
 } from "./persistence/capture-persistence-codec.js";
 import { encodeOrderAuditEventRecord, encodeOrderRecord } from "./persistence/order-persistence-codec.js";
 
@@ -948,7 +951,10 @@ export class CaptureSelectionPlanService {
       actorId, command.scope, command.captureDraftId, withSelection, decoded.paymentIntentBasisFingerprint,
       this.confirmation, this.catalogs,
     );
-    return withCapturePaymentProjection(withSelection, paymentProjection);
+    const paymentBasis = await buildCapturePaymentBasisForWorkspace(
+      actorId, command.scope, command.captureDraftId, withSelection, this.confirmation, this.catalogs,
+    );
+    return withCapturePaymentBasis(withCapturePaymentProjection(withSelection, paymentProjection), paymentBasis);
   }
 
   /**
@@ -1251,34 +1257,44 @@ function computeCapturePaymentIntentBasisFingerprint(input: {
  * the fulfillment channel is not yet chosen (timing cannot be derived) or the currency cannot be
  * established -- mirroring `projectStoredSelectionPlan`'s best-effort philosophy.
  */
-async function buildCapturePaymentProjectionForWorkspace(
+interface CapturePaymentBasisComputation {
+  readonly basisCatalogVersion: string;
+  readonly basisLines: readonly CapturePaymentIntentBasisLine[];
+  readonly currency: string;
+  readonly deliveryFeeMinor: number;
+  readonly itemsSubtotalMinor: number;
+  readonly quoteId: string | null;
+  readonly selectionUnpriced: boolean;
+}
+
+/**
+ * H25: the shared pricing basis both `paymentProjection` (needs a payment intent) and
+ * `paymentBasis` (H25, needs none) are built from -- tax-inclusive, and derived from whichever
+ * plan actually carries the capture's lines: a selection plan's own priced projection, or a
+ * freshly priced repeat-order plan (whose `selectionProjection` is always null, and whose
+ * currency the delivery quote may not supply either -- a repeat-order capture is not necessarily
+ * delivery). Neither present means no lines at all: `0`/`null`, matching the historical read-side
+ * fallback (the write path in setPaymentIntent refuses this case instead). `null` when the
+ * currency cannot be established (no lines, no quote) -- best-effort, like
+ * `projectStoredSelectionPlan`.
+ *
+ * H8: a selection plan that exists but currently cannot be priced (selectionProjection null -- an
+ * inactive product, or the catalog having moved to a different catalogVersion) must never
+ * silently read as `itemsSubtotalMinor: 0`: the basis fingerprint alone might still match (the
+ * stored plan's identity/catalogVersion is unaffected by a pricing failure), so this can NOT be
+ * relied on to force "stale" the way an actual line change is. `selectionUnpriced` tracks it
+ * explicitly for the caller to force "stale", mirroring the write-side guard in
+ * `CapturePaymentIntentService.setPaymentIntent` (`CapturePaymentIntentUnpricedError`).
+ */
+async function computeCapturePaymentBasis(
   actorId: string,
   scope: BranchScope,
   captureDraftId: string,
   workspace: CaptureWorkspaceV5,
-  paymentIntentBasisFingerprint: string | null,
+  fulfillmentChannel: CaptureFulfillmentChannelV1,
   confirmation: CaptureConfirmationPort,
   catalogs: MenuCatalogPort,
-): Promise<CapturePaymentIntentProjectionV1 | null> {
-  if (workspace.paymentIntent === null) return null;
-  const fulfillmentChannel = workspace.detail.fulfillmentChannel;
-  if (fulfillmentChannel === null) return null;
-
-  // Tax-inclusive, and derived from whichever plan actually carries the capture's lines: a
-  // selection plan's own priced projection, or a freshly priced repeat-order plan (whose
-  // `selectionProjection` is always null, and whose currency the delivery quote may not supply
-  // either -- a repeat-order capture is not necessarily delivery). Neither present means no lines
-  // at all: `0`/`null`, matching the historical read-side fallback (the write path in
-  // setPaymentIntent refuses this case instead).
-  //
-  // H8: a selection plan that exists but currently cannot be priced (selectionProjection null --
-  // an inactive product, or the catalog having moved to a different catalogVersion) must never
-  // silently read as `itemsSubtotalMinor: 0`: the basis fingerprint alone might still match (the
-  // stored plan's identity/catalogVersion is unaffected by a pricing failure), so this can NOT be
-  // relied on to force "stale" the way an actual line change is. Track it explicitly and force
-  // "stale" below, mirroring the write-side guard in `CapturePaymentIntentService.setPaymentIntent`
-  // (`CapturePaymentIntentUnpricedError`) -- confirm's own re-check of `paymentProjection.status`
-  // then refuses it too, exactly as it already refuses any other stale intent.
+): Promise<CapturePaymentBasisComputation | null> {
   const selectionUnpriced = workspace.selectionPlan !== null && workspace.selectionProjection === null;
   let itemsSubtotalMinor = workspace.selectionProjection?.itemsTotalMinor ?? 0;
   let basisCatalogVersion = "";
@@ -1301,6 +1317,55 @@ async function buildCapturePaymentProjectionForWorkspace(
   if (currency === undefined) return null;
   const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (workspace.deliveryQuote?.feeMinor ?? 0) : 0;
   const quoteId = fulfillmentChannel === "delivery" ? (workspace.deliveryQuote?.quoteId ?? null) : null;
+  return { basisCatalogVersion, basisLines, currency, deliveryFeeMinor, itemsSubtotalMinor, quoteId, selectionUnpriced };
+}
+
+/**
+ * H25: the pricing basis alone (no method, no tender, no tip) -- computed whenever the capture's
+ * lines are priced, whether or not a payment intent exists yet, so the "Cobro" summary and cash
+ * shortcuts can show real numbers before the operator picks a method. `null` on the exact same
+ * best-effort conditions as `paymentProjection` (channel not chosen, currency not established).
+ */
+async function buildCapturePaymentBasisForWorkspace(
+  actorId: string,
+  scope: BranchScope,
+  captureDraftId: string,
+  workspace: CaptureWorkspaceV5,
+  confirmation: CaptureConfirmationPort,
+  catalogs: MenuCatalogPort,
+): Promise<CapturePaymentBasisV1 | null> {
+  const fulfillmentChannel = workspace.detail.fulfillmentChannel;
+  if (fulfillmentChannel === null) return null;
+  const basis = await computeCapturePaymentBasis(
+    actorId, scope, captureDraftId, workspace, fulfillmentChannel, confirmation, catalogs,
+  );
+  if (basis === null) return null;
+  return parseCapturePaymentBasisV1({
+    currency: basis.currency,
+    deliveryFeeMinor: basis.deliveryFeeMinor,
+    itemsSubtotalMinor: basis.itemsSubtotalMinor,
+    orderTotalMinor: basis.itemsSubtotalMinor + basis.deliveryFeeMinor,
+  }) ?? null;
+}
+
+async function buildCapturePaymentProjectionForWorkspace(
+  actorId: string,
+  scope: BranchScope,
+  captureDraftId: string,
+  workspace: CaptureWorkspaceV5,
+  paymentIntentBasisFingerprint: string | null,
+  confirmation: CaptureConfirmationPort,
+  catalogs: MenuCatalogPort,
+): Promise<CapturePaymentIntentProjectionV1 | null> {
+  if (workspace.paymentIntent === null) return null;
+  const fulfillmentChannel = workspace.detail.fulfillmentChannel;
+  if (fulfillmentChannel === null) return null;
+
+  const basis = await computeCapturePaymentBasis(
+    actorId, scope, captureDraftId, workspace, fulfillmentChannel, confirmation, catalogs,
+  );
+  if (basis === null) return null;
+  const { basisCatalogVersion, basisLines, currency, deliveryFeeMinor, itemsSubtotalMinor, quoteId, selectionUnpriced } = basis;
 
   let domainProjection;
   try {
@@ -1376,7 +1441,10 @@ async function readCaptureWorkspaceV5WithProjections(
   const paymentProjection = await buildCapturePaymentProjectionForWorkspace(
     actorId, scope, captureDraftId, withSelection, decoded.paymentIntentBasisFingerprint, confirmation, catalogs,
   );
-  return withCapturePaymentProjection(withSelection, paymentProjection);
+  const paymentBasis = await buildCapturePaymentBasisForWorkspace(
+    actorId, scope, captureDraftId, withSelection, confirmation, catalogs,
+  );
+  return withCapturePaymentBasis(withCapturePaymentProjection(withSelection, paymentProjection), paymentBasis);
 }
 
 @Injectable()

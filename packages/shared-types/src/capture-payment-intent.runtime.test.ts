@@ -1,4 +1,5 @@
 import {
+  parseCapturePaymentBasisV1,
   parseCapturePaymentIntentProjectionV1,
   parseCapturePaymentIntentV1,
   parseCaptureWorkspaceV5,
@@ -102,11 +103,28 @@ const detail = {
   version: 2,
 } as const;
 
+const paymentBasis = {
+  currency: "MXN",
+  deliveryFeeMinor: 3_000,
+  itemsSubtotalMinor: 7_000,
+  orderTotalMinor: 10_000,
+} as const;
+
+expect(parseCapturePaymentBasisV1(paymentBasis) !== undefined, "H25: consistent payment basis parses");
+expect(Object.isFrozen(parseCapturePaymentBasisV1(paymentBasis)), "H25: payment basis parses frozen");
+for (const invalid of [
+  { ...paymentBasis, orderTotalMinor: 10_001 },
+  { ...paymentBasis, itemsSubtotalMinor: -1 },
+  { ...paymentBasis, currency: "mxn" },
+  { ...paymentBasis, extra: true },
+]) expect(parseCapturePaymentBasisV1(invalid) === undefined, "H25: payment basis rejects inconsistent or malformed facts");
+
 const workspaceBase = {
   customerSnapshot: null,
   deliveryQuote: null,
   detail,
   fulfillmentSnapshot: null,
+  paymentBasis: null,
   repeatOrderPlan: null,
   selectionPlan: null,
   selectionProjection: null,
@@ -118,6 +136,13 @@ const workspace = {
   paymentProjection: projection,
   schemaVersion: 5,
 } as const;
+
+expect(parseCaptureWorkspaceV5({ ...workspace, paymentBasis }) !== undefined,
+  "H25: workspace V5 parses with a payment basis alongside the intent/projection");
+expect(parseCaptureWorkspaceV5({ ...workspaceBase, paymentIntent: null, paymentProjection: null, paymentBasis, schemaVersion: 5 }) !== undefined,
+  "H25: workspace V5 parses with a payment basis and no intent at all");
+expect(parseCaptureWorkspaceV5({ ...workspace, paymentBasis: { ...paymentBasis, orderTotalMinor: 1 } }) === undefined,
+  "H25: workspace V5 rejects an internally inconsistent payment basis");
 
 expect(parseCaptureWorkspaceV5(workspace) !== undefined, "workspace V5 parses with a consistent intent and projection");
 expect(parseCaptureWorkspaceV5({ ...workspaceBase, paymentIntent: null, paymentProjection: null, schemaVersion: 5 }) !== undefined,
