@@ -1,6 +1,43 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { describePaymentMethod, parseMoneyInputToMinor, suggestTenderAmounts } from "./capture-payment.js";
+import { describePaymentMethod, parseMoneyInputToMinor, quoteMatchesRequestedTime, suggestTenderAmounts } from "./capture-payment.js";
+
+const baseQuote = {
+  schemaVersion: 1 as const, quoteId: "6e4b1f6a-5f0a-4e3f-9c8a-2d3b7a6c9e10",
+  restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955",
+  captureDraftId: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0",
+  addressSnapshotRef: "9b2f1c1e-7f3a-4a2e-9d5e-1a2b3c4d5e6f",
+  address: { postalCode: "83000", locality: "Hermosillo" },
+  currency: "MXN", timeZone: "America/Hermosillo",
+  quotedAt: "2026-09-27T12:00:00.000Z", scheduledFor: null as string | null, version: 1,
+  coverageStatus: "covered" as const, zoneId: "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+  feeMinor: 3000, promiseStart: "2026-09-27T12:00:00.000Z", promiseEnd: "2026-09-27T12:15:00.000Z",
+  expiresAt: "2026-09-27T12:30:00.000Z", override: null,
+};
+
+test("quoteMatchesRequestedTime is vacuously true when there is no frozen quote yet", () => {
+  assert.equal(quoteMatchesRequestedTime(null, ""), true);
+  assert.equal(quoteMatchesRequestedTime(null, "2026-09-27T13:00"), true);
+});
+
+test("quoteMatchesRequestedTime matches an ASAP quote only to an empty scheduled field", () => {
+  assert.equal(quoteMatchesRequestedTime(baseQuote, ""), true);
+  assert.equal(quoteMatchesRequestedTime(baseQuote, "2026-09-27T13:00"), false);
+});
+
+test("quoteMatchesRequestedTime compares the server's scheduledFor to the field's parsed instant, not the raw text", () => {
+  const fieldValue = "2026-09-27T13:00";
+  const matchingInstant = new Date(fieldValue).toISOString();
+  const scheduled = { ...baseQuote, scheduledFor: matchingInstant };
+  assert.equal(quoteMatchesRequestedTime(scheduled, fieldValue), true);
+  const different = { ...baseQuote, scheduledFor: new Date("2026-09-27T14:00").toISOString() };
+  assert.equal(quoteMatchesRequestedTime(different, fieldValue), false);
+});
+
+test("quoteMatchesRequestedTime never matches an unparsable field, so confirm stays blocked", () => {
+  const scheduled = { ...baseQuote, scheduledFor: "2026-09-27T19:00:00.000Z" };
+  assert.equal(quoteMatchesRequestedTime(scheduled, "not-a-date"), false);
+});
 
 test("suggestTenderAmounts always includes the exact total plus the next 100/200/500-peso roundings above it", () => {
   assert.deepEqual(suggestTenderAmounts(9_000), [9_000, 10_000, 20_000, 50_000]);

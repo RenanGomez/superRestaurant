@@ -1,4 +1,4 @@
-import type { CapturePaymentIntentMethodV1, CapturePaymentIntentTimingV1 } from "@super-restaurant/shared-types";
+import type { CapturePaymentIntentMethodV1, CapturePaymentIntentTimingV1, DeliveryQuoteV1 } from "@super-restaurant/shared-types";
 
 const moneyInputPattern = /^\d{1,7}([.,]\d{1,2})?$/u;
 
@@ -50,6 +50,22 @@ export function suggestTenderAmounts(totalMinor: number): readonly number[] {
 export interface DescribedPaymentMethod {
   readonly label: string;
   readonly notice: string;
+}
+
+/**
+ * True when a frozen `DeliveryQuoteV1` is still the quote for the currently-entered scheduled
+ * delivery time -- a fact derived from the server's own `quote.scheduledFor`, never from local
+ * state that a later, unrelated mutation (e.g. fixing the payment intent) could silently clear.
+ * `scheduledFor` is the raw `datetime-local` input value ("" means "as soon as possible"). A
+ * malformed value never matches: it is treated the same as an actually-different time, so confirm
+ * stays blocked until the operator either fixes the field or re-quotes.
+ */
+export function quoteMatchesRequestedTime(quote: DeliveryQuoteV1 | null, scheduledFor: string): boolean {
+  if (quote === null) return true;
+  if (scheduledFor === "") return quote.scheduledFor === null;
+  const parsed = new Date(scheduledFor);
+  if (!Number.isFinite(parsed.getTime())) return false;
+  return quote.scheduledFor === parsed.toISOString();
 }
 
 export function describePaymentMethod(

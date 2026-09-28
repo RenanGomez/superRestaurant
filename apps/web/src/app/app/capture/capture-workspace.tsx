@@ -40,6 +40,7 @@ import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import { formatDeliveryQuote } from "../../../lib/delivery-zones";
+import { quoteMatchesRequestedTime } from "../../../lib/capture-payment";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
 import { CaptureMenu } from "./capture-menu";
 import { CapturePayment } from "./capture-payment";
@@ -658,9 +659,12 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     || error === "denied" || error === "conflict";
   const paymentBlocksConfirm = paymentProjection !== null
     && (paymentProjection.status === "stale" || paymentProjection.status === "insufficient");
-  // The frozen quote was computed for a scheduledFor the operator has since changed in the form
-  // but not yet re-requested; it must never be treated as still confirmable for the new time.
-  const quoteBlocksConfirm = fulfillmentChannel === "delivery" && quoteRequestedForDiffers;
+  // Derived from the server's own frozen quote.scheduledFor vs. the field's current value -- never
+  // from quoteRequestedForDiffers alone, which applyWorkspace clears on any unrelated mutation
+  // (e.g. fixing the payment intent), which would otherwise let confirm through with a quote
+  // computed for a time the operator has since changed but never re-quoted (H11).
+  const quoteBlocksConfirm = fulfillmentChannel === "delivery"
+    && (quoteRequestedForDiffers || !quoteMatchesRequestedTime(deliveryQuote, scheduledFor));
   const canConfirm = confirmationContext !== undefined && selectedShiftId !== "" && fulfillmentChannel !== null
     && (fulfillmentChannel !== "dine_in" || selectedTableId !== "")
     && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null))
@@ -936,7 +940,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           <button type="submit" className={button} disabled={busy}>{busy ? "Cotizando…" : "Cotizar entrega"}</button>
         </form>
         {quoteError && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{quoteError}</p>}
-        {quoteRequestedForDiffers && <div role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">
+        {quoteBlocksConfirm && <div role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">
           <p>La cotización mostrada es de otra hora: vuelve a cotizar antes de convertir en orden.</p>
           <button type="button" className={`${button} mt-2`} disabled={busy} onClick={() => void requestDeliveryQuote()}>
             Volver a cotizar
