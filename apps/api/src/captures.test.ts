@@ -8,7 +8,7 @@ import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSugg
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
 import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureDeliveryQuoteComputationPort, type CaptureDeliveryQuoteEnvelopeV1, type CaptureDeliveryQuotePort, type CaptureNoSalePort, type CapturePaymentIntentPort, type CaptureSelectionPlanPort } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteInvalidError, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureDeliveryQuoteComputationPort, type CaptureDeliveryQuoteEnvelopeV1, type CaptureDeliveryQuotePort, type CaptureNoSalePort, type CapturePaymentIntentPort, type CaptureSelectionPlanPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
@@ -568,6 +568,39 @@ test("capture confirmation probes replay and delegates one atomic persistence co
     status: "applied", record: confirmedRecord,
   });
   await assert.rejects(service.confirm(principal, { ...confirmCommand, tableId: validCommand.captureDraftId }), code("conflict"));
+});
+
+test("H10: a conflict with a delivery-quote reason maps to CaptureDeliveryQuoteInvalidError, not a generic conflict", async () => {
+  const confirmCommand = parseConfirmCaptureDraftCommandV2({
+    ...mutationCommand,
+    schemaVersion: 2,
+    expectedVersion: 2,
+    attentionLeaseId: validCommand.deviceId,
+    orderId: validCommand.deviceId,
+    shiftId: record.detail.ownerMembershipId,
+    tableId: null,
+    currency: "MXN",
+    timeZone: "America/Hermosillo",
+  });
+  assert.ok(confirmCommand);
+  const workspaceV4 = { ...workspace, schemaVersion: 4 as const,
+    detail: { ...fulfillmentRecord.detail, schemaVersion: 2 as const, fulfillmentChannel: "delivery" as const,
+      deliveryInstructions: "Portón lateral" }, repeatOrderPlan: null, selectionPlan: null };
+  for (const reason of ["delivery_quote_missing", "delivery_quote_expired", "delivery_quote_not_covered"] as const) {
+    const service = new CaptureConfirmationService(new MembershipAuthorizationService({
+      findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+    }), { createDraft: async () => ({}), readWorkspaceV4: async () => workspaceV4 }, {
+      probeConfirmation: async () => ({ status: "pending" }),
+      readRepeatOrderPlan: async () => { throw new Error("must not read a repeat plan"); },
+      readSelectionPlan: async () => { throw new Error("must not read a selection plan"); },
+      confirmDraft: async () => ({ status: "conflict", reason }),
+    }, { read: async () => { throw new Error("must not read a catalog"); },
+      save: async () => { throw new Error("must not save a catalog"); } });
+    await assert.rejects(
+      service.confirm(principal, confirmCommand),
+      (error: unknown) => error instanceof CaptureDeliveryQuoteInvalidError && error.reason === reason,
+    );
+  }
 });
 
 const selectionCatalog: MenuCatalogV1 = {
