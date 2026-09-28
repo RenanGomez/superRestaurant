@@ -130,6 +130,7 @@ const projection = {
   catalogVersion,
   currency: "MXN",
   subtotalMinor: 200,
+  itemsTotalMinor: 232,
   lineCount: 1,
   lines: [{
     lineId,
@@ -148,6 +149,8 @@ expect(parseCaptureSelectionPlanProjectionV1({ ...projection, subtotalMinor: -1 
   "projection rejects negative subtotal");
 expect(parseCaptureSelectionPlanProjectionV1({ ...projection, subtotalMinor: 1.5 }) === undefined,
   "projection rejects float subtotal");
+expect(parseCaptureSelectionPlanProjectionV1({ ...projection, itemsTotalMinor: -1 }) === undefined,
+  "projection rejects negative itemsTotalMinor");
 expect(parseCaptureSelectionPlanProjectionV1({ ...projection, lineCount: 2 }) === undefined,
   "projection rejects mismatched lineCount");
 expect(parseCaptureSelectionPlanProjectionV1({ ...projection, currency: "mxn" }) === undefined,

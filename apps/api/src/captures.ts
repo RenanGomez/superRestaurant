@@ -91,6 +91,7 @@ import {
   materializeCaptureSelectionOrder,
   parseCaptureRepeatSelectionPlan,
   type CaptureOrderMaterialization,
+  type CaptureRepeatSelectionLine,
   type CaptureRepeatSelectionPlan,
 } from "./capture-repeat-order-plan.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
@@ -990,6 +991,7 @@ function priceSelectionPlan(
   if (plan.lines.some((line) => line.variantId !== null)) throw new CaptureApplicationError("conflict");
   const domainCatalog = toDomainMenuCatalog(catalog, restaurantId);
   let subtotalMinor = 0;
+  let itemsTotalMinor = 0;
   const lines: CaptureSelectionPlanProjectionLineV1[] = [];
   for (const line of plan.lines) {
     let snapshot;
@@ -1002,6 +1004,9 @@ function priceSelectionPlan(
       orderItemId: line.lineId, quantity: line.quantity, snapshot, note: line.note,
     });
     subtotalMinor += totals.subtotalBeforeTax.amountMinor;
+    // Tax-inclusive: the exact amount the confirmed Order charges for this line, unlike
+    // subtotalBeforeTax above (kept only for the existing read-side contract).
+    itemsTotalMinor += totals.total.amountMinor;
     const modifiers: CaptureSelectionPlanProjectionModifierV1[] = [];
     for (const modifier of snapshot.modifiers) {
       if (modifier.groupId === undefined) throw unavailable();
@@ -1028,6 +1033,7 @@ function priceSelectionPlan(
   const projection = parseCaptureSelectionPlanProjectionV1({
     catalogVersion: plan.catalogVersion,
     currency: catalog.currency,
+    itemsTotalMinor,
     lineCount: lines.length,
     lines,
     schemaVersion: 1,
@@ -1035,6 +1041,32 @@ function priceSelectionPlan(
   });
   if (projection === undefined) throw unavailable();
   return projection;
+}
+
+/**
+ * Tax-inclusive total of a repeat-order plan's lines, priced against the live catalog exactly
+ * like `materializeCaptureOrder` prices them at confirm time (same `createMenuProductPriceSnapshot`
+ * + `calculateOrderItemTotals` pair) -- the only reliable payment-intent basis for a capture whose
+ * lines come from a repeat plan rather than a selection plan (whose `selectionProjection` is
+ * always `null` for a repeat-order capture).
+ */
+function priceCaptureRepeatSelectionPlan(
+  plan: CaptureRepeatSelectionPlan,
+  catalog: MenuCatalogV1,
+  restaurantId: string,
+): number {
+  const domainCatalog = toDomainMenuCatalog(catalog, restaurantId);
+  let itemsTotalMinor = 0;
+  for (const line of plan.lines) {
+    const snapshot = createMenuProductPriceSnapshot(domainCatalog, {
+      currency: catalog.currency, productId: line.productId, restaurantId,
+    }, line.modifierGroups);
+    const totals = calculateOrderItemTotals({
+      orderItemId: line.sourceOrderItemId, quantity: line.quantity, snapshot, note: null,
+    });
+    itemsTotalMinor += totals.total.amountMinor;
+  }
+  return itemsTotalMinor;
 }
 
 /** Best-effort raw stored plan (no prices), for the payment-intent basis fingerprint only. */
@@ -1053,22 +1085,86 @@ async function readStoredCaptureSelectionPlanLines(
 }
 
 /**
+ * The payment-intent basis when the capture's lines come from a repeat-order plan rather than a
+ * selection plan: reads the raw stored plan, revalidates it against the workspace summary exactly
+ * like `readRepeatOrderPlan` does at confirm time (customerId/sourceOrderId/catalogVersion/
+ * lineCount), then prices it against the live catalog. `null` (never a throw) for any mismatch or
+ * pricing failure, matching `projectStoredSelectionPlan`'s best-effort philosophy for reads; the
+ * write path (`CapturePaymentIntentService.setPaymentIntent`) treats a `null` result as a conflict.
+ */
+async function readStoredCaptureRepeatOrderPlanBasis(
+  actorId: string,
+  scope: BranchScope,
+  captureDraftId: string,
+  repeatOrderPlan: CaptureWorkspaceV5["repeatOrderPlan"],
+  confirmation: CaptureConfirmationPort,
+  catalogs: MenuCatalogPort,
+): Promise<{ readonly itemsTotalMinor: number; readonly lines: readonly CaptureRepeatSelectionLine[] } | null> {
+  if (repeatOrderPlan === null) return null;
+  try {
+    const raw = await confirmation.readRepeatOrderPlan(actorId, { schemaVersion: 3, scope, captureDraftId });
+    const envelope = exactRecord(raw, ["status", "plan"]);
+    if (envelope?.status !== "ok") return null;
+    const plan = parseCaptureRepeatSelectionPlan(envelope.plan);
+    if (plan === undefined || plan.customerId !== repeatOrderPlan.customerId
+      || plan.sourceOrderId !== repeatOrderPlan.sourceOrderId
+      || plan.catalogVersion !== repeatOrderPlan.catalogVersion
+      || plan.lines.length !== repeatOrderPlan.lineCount || plan.lines.length === 0) return null;
+    const catalogState = await catalogs.read(actorId, scope);
+    if (catalogState === "forbidden" || catalogState.catalog === null
+      || catalogState.scope.restaurantId !== scope.restaurantId || catalogState.scope.branchId !== scope.branchId
+      || catalogState.catalog.catalogVersion !== plan.catalogVersion) {
+      return null;
+    }
+    const itemsTotalMinor = priceCaptureRepeatSelectionPlan(plan, catalogState.catalog, scope.restaurantId);
+    return { itemsTotalMinor, lines: plan.lines };
+  } catch { return null; }
+}
+
+/**
  * Canonical, order-independent fingerprint of every fact the authoritative total is derived
  * from: catalogVersion, the priced lines (id-sorted, never the client's submission order) and
  * the frozen delivery fee/currency. Any change to any of them changes the fingerprint; comparing
  * it against a payment intent's stored basis is how staleness is detected, both at read time and
  * before confirm.
  */
+/** A selection line and a repeat-order line, normalized to the one shape the fingerprint needs. */
+interface CapturePaymentIntentBasisLine {
+  readonly id: string;
+  readonly modifierGroups: readonly Readonly<{
+    groupId: string;
+    selections: readonly Readonly<{ optionId: string; quantity: number }>[];
+  }>[];
+  readonly note: string | null;
+  readonly productId: string;
+  readonly quantity: number;
+}
+
+function selectionLinesToBasis(lines: readonly CaptureSelectionLineV1[]): CapturePaymentIntentBasisLine[] {
+  return lines.map((line) => ({
+    id: line.lineId, modifierGroups: line.modifierGroups, note: line.note, productId: line.productId,
+    quantity: line.quantity,
+  }));
+}
+
+function repeatLinesToBasis(lines: readonly CaptureRepeatSelectionLine[]): CapturePaymentIntentBasisLine[] {
+  // A repeated order never carries forward a prior line's kitchen note (materializeCaptureOrder).
+  return lines.map((line) => ({
+    id: line.sourceOrderItemId, modifierGroups: line.modifierGroups, note: null, productId: line.productId,
+    quantity: line.quantity,
+  }));
+}
+
 function computeCapturePaymentIntentBasisFingerprint(input: {
   readonly catalogVersion: string;
   readonly currency: string;
   readonly deliveryFeeMinor: number;
-  readonly lines: readonly CaptureSelectionLineV1[];
+  readonly lines: readonly CapturePaymentIntentBasisLine[];
 }): string {
   const canonicalLines = [...input.lines]
-    .sort((a, b) => (a.lineId < b.lineId ? -1 : a.lineId > b.lineId ? 1 : 0))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map((line) => ({
-      lineId: line.lineId,
+      id: line.id,
       modifierGroups: [...line.modifierGroups]
         .sort((a, b) => (a.groupId < b.groupId ? -1 : a.groupId > b.groupId ? 1 : 0))
         .map((group) => ({
@@ -1105,14 +1201,34 @@ async function buildCapturePaymentProjectionForWorkspace(
   workspace: CaptureWorkspaceV5,
   paymentIntentBasisFingerprint: string | null,
   confirmation: CaptureConfirmationPort,
+  catalogs: MenuCatalogPort,
 ): Promise<CapturePaymentIntentProjectionV1 | null> {
   if (workspace.paymentIntent === null) return null;
   const fulfillmentChannel = workspace.detail.fulfillmentChannel;
   if (fulfillmentChannel === null) return null;
   const currency = workspace.selectionProjection?.currency ?? workspace.deliveryQuote?.currency;
   if (currency === undefined) return null;
-  const itemsSubtotalMinor = workspace.selectionProjection?.subtotalMinor ?? 0;
   const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (workspace.deliveryQuote?.feeMinor ?? 0) : 0;
+
+  // Tax-inclusive, and derived from whichever plan actually carries the capture's lines: a
+  // selection plan's own priced projection, or a freshly priced repeat-order plan (whose
+  // `selectionProjection` is always null). Neither present means no lines at all: `0`, matching
+  // the historical read-side fallback (the write path in setPaymentIntent refuses this case).
+  let itemsSubtotalMinor = workspace.selectionProjection?.itemsTotalMinor ?? 0;
+  let basisCatalogVersion = "";
+  let basisLines: CapturePaymentIntentBasisLine[] = [];
+  if (workspace.selectionPlan !== null) {
+    const storedPlan = await readStoredCaptureSelectionPlanLines(actorId, scope, captureDraftId, confirmation);
+    basisCatalogVersion = storedPlan?.catalogVersion ?? "";
+    basisLines = selectionLinesToBasis(storedPlan?.lines ?? []);
+  } else if (workspace.repeatOrderPlan !== null) {
+    const repeatBasis = await readStoredCaptureRepeatOrderPlanBasis(
+      actorId, scope, captureDraftId, workspace.repeatOrderPlan, confirmation, catalogs,
+    );
+    itemsSubtotalMinor = repeatBasis?.itemsTotalMinor ?? 0;
+    basisCatalogVersion = repeatBasis === null ? "" : workspace.repeatOrderPlan.catalogVersion;
+    basisLines = repeatLinesToBasis(repeatBasis?.lines ?? []);
+  }
 
   let domainProjection;
   try {
@@ -1127,12 +1243,11 @@ async function buildCapturePaymentProjectionForWorkspace(
     });
   } catch { return null; }
 
-  const storedPlan = await readStoredCaptureSelectionPlanLines(actorId, scope, captureDraftId, confirmation);
   const currentFingerprint = computeCapturePaymentIntentBasisFingerprint({
-    catalogVersion: storedPlan?.catalogVersion ?? "",
+    catalogVersion: basisCatalogVersion,
     currency,
     deliveryFeeMinor,
-    lines: storedPlan?.lines ?? [],
+    lines: basisLines,
   });
   const status = paymentIntentBasisFingerprint !== currentFingerprint ? "stale" : domainProjection.status;
   const changeDueMinor = status === "ready" ? (domainProjection.changeDueMinor?.amountMinor ?? null) : null;
