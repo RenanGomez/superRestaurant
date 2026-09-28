@@ -1726,6 +1726,67 @@ test("payment intent totals include the frozen delivery fee for a delivery captu
   assert.equal(result.paymentProjection?.status, "ready");
 });
 
+test("H3: re-quoting with the identical fee but a different quoteId still reports the payment intent stale", async () => {
+  // A re-quote for the same address/zone can land on an IDENTICAL feeMinor while
+  // set_capture_delivery_quote's own CAS on applied_capture_version already treats it as a
+  // distinct quote. The basis must include the quote's own identity, not just the fee, so a read
+  // here agrees with what SQL would reject as stale at confirm time.
+  let capturedBasis = "";
+  let reads = 0;
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => {
+      reads += 1;
+      if (reads === 1) {
+        return makeCaptureV5Fixture({ fulfillmentChannel: "delivery", deliveryQuote: deliveryQuoteFixture,
+          paymentIntent: null, paymentIntentAppliedCaptureVersion: null, paymentIntentBasisFingerprint: null, version: 1 });
+      }
+      return makeCaptureV5Fixture({
+        fulfillmentChannel: "delivery", deliveryQuote: deliveryQuoteFixture,
+        paymentIntent: { schemaVersion: 1, method: "cash", tenderedAmountMinor: 20_000, tipMinor: 0 },
+        paymentIntentAppliedCaptureVersion: 2, paymentIntentBasisFingerprint: capturedBasis, version: 2,
+      });
+    },
+  };
+  const persistence: CapturePaymentIntentPort = {
+    probeSetPaymentIntent: async () => ({ status: "pending" }),
+    setCapturePaymentIntent: async (actorId, envelope, basisFingerprint) => {
+      capturedBasis = basisFingerprint;
+      return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
+    },
+  };
+  const service = new CapturePaymentIntentService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, paymentSelectionConfirmation, paymentCatalogPort);
+  const intentCommand = parseSetCapturePaymentIntentCommandV1({
+    schemaVersion: 1, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId,
+    expectedVersion: 1, attentionLeaseId: validCommand.deviceId,
+    eventId: "12121212-1212-4212-8212-121212121212", idempotencyKey: "13131313-1313-4313-8313-131313131313",
+    deviceId: validCommand.deviceId, occurredAt: "2026-09-24T12:00:00.000Z",
+    method: "cash", tenderedAmountMinor: 20_000, tipMinor: 0,
+  });
+  assert.ok(intentCommand);
+  const applied = await service.setPaymentIntent(principal, intentCommand);
+  assert.equal(applied.paymentProjection?.status, "ready");
+
+  // Same feeMinor (3_000), same everything else, but a DIFFERENT quoteId -- as a genuine re-quote
+  // for the same zone would produce.
+  const requotedFixture = { ...deliveryQuoteFixture, quoteId: "44444444-4444-4444-8444-444444444444" };
+  const readService = new CaptureService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => makeCaptureV5Fixture({
+      fulfillmentChannel: "delivery", deliveryQuote: requotedFixture,
+      paymentIntent: { schemaVersion: 1, method: "cash", tenderedAmountMinor: 20_000, tipMinor: 0 },
+      paymentIntentAppliedCaptureVersion: 2, paymentIntentBasisFingerprint: capturedBasis, version: 3,
+    }),
+  }, paymentSelectionConfirmation, paymentCatalogPort);
+  const workspaceRequest = { schemaVersion: 5, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId };
+  const workspace = await readService.readWorkspace(principal, workspaceRequest) as { paymentProjection?: { status?: string } };
+  assert.equal(workspace.paymentProjection?.status, "stale");
+});
+
 test("payment intent rejects an insufficient cash tender with a typed 409 before touching SQL", async () => {
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
