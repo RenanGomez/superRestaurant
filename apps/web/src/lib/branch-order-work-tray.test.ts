@@ -8,6 +8,7 @@ import {
   formatOrderWorkTotal,
   preparationLabel,
   requestBranchOrderWorkTray,
+  shouldApplyBranchOrderWorkTrayResponse,
 } from "./branch-order-work-tray.js";
 
 const scope = parseBranchScope({ restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" });
@@ -60,6 +61,24 @@ test("branch order tray request sends the scope/cursor/limit and validates the r
     globalThis.fetch = async () => new Response(JSON.stringify({ ...tray, scope: { ...scope, branchId: orderId } }));
     assert.deepEqual(await requestBranchOrderWorkTray("token", "https://api.example", scope, null, 25), { error: "unavailable", ok: false });
   } finally { globalThis.fetch = original; }
+});
+
+test("shouldApplyBranchOrderWorkTrayResponse discards any response that is not the latest issued request", () => {
+  assert.equal(shouldApplyBranchOrderWorkTrayResponse({ cursor: null, replace: true, requestSeq: 1 }, 2, null), false);
+  assert.equal(shouldApplyBranchOrderWorkTrayResponse({ cursor: null, replace: true, requestSeq: 2 }, 2, null), true);
+});
+
+test("shouldApplyBranchOrderWorkTrayResponse always applies a 'replace' (refresh) response when it is latest", () => {
+  const cursor = { orderId: "2ee5f057-7971-468d-b197-f946911743eb", updatedAt: "2026-09-26T18:00:00.000000Z" };
+  assert.equal(shouldApplyBranchOrderWorkTrayResponse({ cursor: null, replace: true, requestSeq: 1 }, 1, cursor), true);
+});
+
+test("shouldApplyBranchOrderWorkTrayResponse only applies 'Cargar más' when its cursor still matches the current one", () => {
+  const requested = { orderId: "2ee5f057-7971-468d-b197-f946911743eb", updatedAt: "2026-09-26T18:00:00.000000Z" };
+  const moved = { orderId: "72371a5f-2056-448d-9ddb-14ab6664a4e8", updatedAt: "2026-09-26T18:05:00.000000Z" };
+  assert.equal(shouldApplyBranchOrderWorkTrayResponse({ cursor: requested, replace: false, requestSeq: 1 }, 1, requested), true);
+  assert.equal(shouldApplyBranchOrderWorkTrayResponse({ cursor: requested, replace: false, requestSeq: 1 }, 1, moved), false);
+  assert.equal(shouldApplyBranchOrderWorkTrayResponse({ cursor: requested, replace: false, requestSeq: 1 }, 1, null), false);
 });
 
 test("branch order tray request maps HTTP status codes and transport failure", async () => {

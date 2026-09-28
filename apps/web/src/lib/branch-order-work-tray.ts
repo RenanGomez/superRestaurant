@@ -63,6 +63,33 @@ export function formatOrderWorkTime(iso: string, timeZone?: string, locale = "es
   return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", ...(timeZone === undefined ? {} : { timeZone }) }).format(new Date(iso));
 }
 
+/**
+ * A focus/visibility refresh, "Actualizar" and "Cargar más" can all be in flight at once; without
+ * this guard, an older response can land after a newer one and clobber it. `requestSeq` numbers
+ * every load attempt monotonically (only the most recently *issued* request's response applies);
+ * additionally, a "Cargar más" (non-replace) response only applies if the cursor it was requested
+ * with still matches the tray's current cursor when it resolves -- otherwise a refresh already
+ * reset the list underneath it and appending would duplicate or reorder items.
+ */
+export interface BranchOrderWorkTrayRequestMeta {
+  readonly requestSeq: number;
+  readonly cursor: BranchOrderWorkCursorV1 | null;
+  readonly replace: boolean;
+}
+
+export function shouldApplyBranchOrderWorkTrayResponse(
+  request: BranchOrderWorkTrayRequestMeta,
+  latestRequestSeq: number,
+  currentCursor: BranchOrderWorkCursorV1 | null,
+): boolean {
+  if (request.requestSeq !== latestRequestSeq) return false;
+  return request.replace || cursorsEqual(request.cursor, currentCursor);
+}
+
+function cursorsEqual(left: BranchOrderWorkCursorV1 | null, right: BranchOrderWorkCursorV1 | null): boolean {
+  return left === null ? right === null : right !== null && left.orderId === right.orderId && left.updatedAt === right.updatedAt;
+}
+
 export type BranchOrderWorkFilter = "all" | "table" | "counter" | "takeout" | "delivery";
 
 export function filterBranchOrderWorkItems(

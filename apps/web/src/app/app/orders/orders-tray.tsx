@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { BranchOrderWorkItemV1, BranchOrderWorkTrayV1, BranchScope } from "@super-restaurant/shared-types";
 import {
   channelLabel,
@@ -8,6 +8,7 @@ import {
   formatOrderWorkTime,
   formatOrderWorkTotal,
   preparationLabel,
+  shouldApplyBranchOrderWorkTrayResponse,
   type BranchOrderTrayRequestResult,
   type BranchOrderWorkFilter,
 } from "../../../lib/branch-order-work-tray";
@@ -37,18 +38,23 @@ export function OrdersTray({ scope, action }: Props) {
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<keyof typeof errors>();
+  const cursorRef = useRef<BranchOrderWorkTrayV1["nextCursor"]>(null);
+  const requestSeqRef = useRef(0);
 
   async function load(cursor: BranchOrderWorkTrayV1["nextCursor"], replace: boolean) {
+    const requestSeq = ++requestSeqRef.current;
     setBusy(true); setError(undefined);
-    try {
-      const result = await action({ cursor, limit: LIMIT, schemaVersion: 1, scope });
-      if (!result.ok) setError(result.error);
-      else {
-        setItems((current) => replace ? result.value.items : [...current, ...result.value.items]);
-        setNextCursor(result.value.nextCursor);
-        setLoaded(true);
-      }
-    } catch { setError("unavailable"); }
+    let result: BranchOrderTrayRequestResult;
+    try { result = await action({ cursor, limit: LIMIT, schemaVersion: 1, scope }); }
+    catch { result = { error: "unavailable", ok: false }; }
+    if (!shouldApplyBranchOrderWorkTrayResponse({ cursor, replace, requestSeq }, requestSeqRef.current, cursorRef.current)) return;
+    if (!result.ok) setError(result.error);
+    else {
+      setItems((current) => replace ? result.value.items : [...current, ...result.value.items]);
+      setNextCursor(result.value.nextCursor);
+      cursorRef.current = result.value.nextCursor;
+      setLoaded(true);
+    }
     setBusy(false);
   }
 
