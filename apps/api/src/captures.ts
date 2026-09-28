@@ -1265,6 +1265,15 @@ interface CapturePaymentBasisComputation {
   readonly itemsSubtotalMinor: number;
   readonly quoteId: string | null;
   readonly selectionUnpriced: boolean;
+  /**
+   * H26: true when a repeat-order plan exists but its lines currently cannot be priced (a
+   * removed/inactive product, or the catalog having moved on) -- the exact same "plan exists, no
+   * price" gap `selectionUnpriced` already covers for a selection plan. Without this,
+   * `itemsSubtotalMinor` silently reads 0 and, for a delivery capture, `paymentBasis` would show
+   * only the shipping fee as if that were the whole order: never a real total, and never the
+   * write path's own answer (`setPaymentIntent` already refuses this case as a conflict).
+   */
+  readonly repeatUnpriced: boolean;
 }
 
 /**
@@ -1300,6 +1309,7 @@ async function computeCapturePaymentBasis(
   let basisCatalogVersion = "";
   let basisLines: CapturePaymentIntentBasisLine[] = [];
   let repeatCurrency: string | undefined;
+  let repeatUnpriced = false;
   if (workspace.selectionPlan !== null) {
     const storedPlan = await readStoredCaptureSelectionPlanLines(actorId, scope, captureDraftId, confirmation);
     basisCatalogVersion = storedPlan?.catalogVersion ?? "";
@@ -1308,6 +1318,7 @@ async function computeCapturePaymentBasis(
     const repeatBasis = await readStoredCaptureRepeatOrderPlanBasis(
       actorId, scope, captureDraftId, workspace.repeatOrderPlan, confirmation, catalogs,
     );
+    repeatUnpriced = repeatBasis === null;
     itemsSubtotalMinor = repeatBasis?.itemsTotalMinor ?? 0;
     repeatCurrency = repeatBasis?.currency;
     basisCatalogVersion = repeatBasis === null ? "" : workspace.repeatOrderPlan.catalogVersion;
@@ -1317,7 +1328,10 @@ async function computeCapturePaymentBasis(
   if (currency === undefined) return null;
   const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (workspace.deliveryQuote?.feeMinor ?? 0) : 0;
   const quoteId = fulfillmentChannel === "delivery" ? (workspace.deliveryQuote?.quoteId ?? null) : null;
-  return { basisCatalogVersion, basisLines, currency, deliveryFeeMinor, itemsSubtotalMinor, quoteId, selectionUnpriced };
+  return {
+    basisCatalogVersion, basisLines, currency, deliveryFeeMinor, itemsSubtotalMinor, quoteId,
+    repeatUnpriced, selectionUnpriced,
+  };
 }
 
 /**
@@ -1339,7 +1353,11 @@ async function buildCapturePaymentBasisForWorkspace(
   const basis = await computeCapturePaymentBasis(
     actorId, scope, captureDraftId, workspace, fulfillmentChannel, confirmation, catalogs,
   );
-  if (basis === null) return null;
+  // H26: a plan that exists but currently cannot be priced must never read as a real basis with
+  // a 0 subtotal -- for a delivery capture that would show only the shipping fee as if it were
+  // the whole order. Same rule the projection already applies (H8) for a selection plan, extended
+  // here to a repeat-order plan too, and applied to the pricing basis itself, not just the intent.
+  if (basis === null || basis.selectionUnpriced || basis.repeatUnpriced) return null;
   return parseCapturePaymentBasisV1({
     currency: basis.currency,
     deliveryFeeMinor: basis.deliveryFeeMinor,
@@ -1365,7 +1383,10 @@ async function buildCapturePaymentProjectionForWorkspace(
     actorId, scope, captureDraftId, workspace, fulfillmentChannel, confirmation, catalogs,
   );
   if (basis === null) return null;
-  const { basisCatalogVersion, basisLines, currency, deliveryFeeMinor, itemsSubtotalMinor, quoteId, selectionUnpriced } = basis;
+  const {
+    basisCatalogVersion, basisLines, currency, deliveryFeeMinor, itemsSubtotalMinor, quoteId,
+    repeatUnpriced, selectionUnpriced,
+  } = basis;
 
   let domainProjection;
   try {
@@ -1389,7 +1410,7 @@ async function buildCapturePaymentProjectionForWorkspace(
     quoteId,
     timing: domainProjection.timing,
   });
-  const status = selectionUnpriced || paymentIntentBasisFingerprint !== currentFingerprint
+  const status = selectionUnpriced || repeatUnpriced || paymentIntentBasisFingerprint !== currentFingerprint
     ? "stale" : domainProjection.status;
   const changeDueMinor = status === "ready" ? (domainProjection.changeDueMinor?.amountMinor ?? null) : null;
 

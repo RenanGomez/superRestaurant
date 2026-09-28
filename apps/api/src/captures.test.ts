@@ -2237,6 +2237,26 @@ function makeRepeatCaptureV5Fixture(overrides: { readonly version: number }) {
   };
 }
 
+test("H26: a repeat-order plan that currently cannot be priced reports no payment basis, never a 0 subtotal", async () => {
+  const deniedRepeatConfirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    readRepeatOrderPlan: async () => ({ status: "denied" }),
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => makeRepeatCaptureV5Fixture({ version: 1 }),
+  };
+  const service = new CaptureService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), captures, deniedRepeatConfirmation, paymentCatalogPort);
+  const workspaceRequest = { schemaVersion: 5, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId };
+  const workspace = await service.readWorkspace(principal, workspaceRequest) as {
+    paymentBasis?: unknown; paymentProjection?: unknown;
+  };
+  assert.equal(workspace.paymentBasis, null);
+  assert.equal(workspace.paymentProjection, null);
+});
+
 test("payment intent basis prices a repeat-order plan's lines against the live catalog", async () => {
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
