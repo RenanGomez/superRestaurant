@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
@@ -1876,6 +1877,37 @@ test("payment intent projection is stale once the lines change after the intent'
   const workspace = await service.readWorkspace(principal, workspaceRequest) as { paymentProjection?: { status?: string } };
   // The stored fingerprint ("0"x64) can never match the live one derived from the actual stored
   // plan/fee/currency, exactly as if the lines had changed after the intent was fixed.
+  assert.equal(workspace.paymentProjection?.status, "stale");
+});
+
+test("H8: reading a workspace whose selection plan cannot presently be priced never reports the payment intent ready", async () => {
+  // Same shape of bug as H5, on the READ side: the stored basis fingerprint happens to still match
+  // (catalogVersion "" + no lines + the frozen quote's identity, exactly what an unpriced plan
+  // produces), so fingerprint comparison alone can't catch this -- itemsSubtotalMinor silently
+  // becomes 0 and the delivery fee alone could look "ready" for a tender that only covers it.
+  const deniedSelectionConfirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    readSelectionPlan: async () => ({ status: "denied" }),
+  };
+  const matchingFingerprint = createHash("sha256").update(JSON.stringify({
+    catalogVersion: "", currency: "MXN", deliveryFeeMinor: 3_000, lines: [], quoteId: deliveryQuoteFixture.quoteId,
+  })).digest("hex");
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => makeCaptureV5Fixture({
+      fulfillmentChannel: "delivery", deliveryQuote: deliveryQuoteFixture,
+      paymentIntent: { schemaVersion: 1, method: "cash", tenderedAmountMinor: 3_000, tipMinor: 0 },
+      paymentIntentAppliedCaptureVersion: 2, paymentIntentBasisFingerprint: matchingFingerprint, version: 3,
+    }),
+  };
+  const service = new CaptureService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), captures, deniedSelectionConfirmation, paymentCatalogPort);
+  const workspaceRequest = { schemaVersion: 5, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId };
+  const workspace = await service.readWorkspace(principal, workspaceRequest) as {
+    selectionProjection?: unknown; paymentProjection?: { status?: string } | null;
+  };
+  assert.equal(workspace.selectionProjection, null);
   assert.equal(workspace.paymentProjection?.status, "stale");
 });
 
