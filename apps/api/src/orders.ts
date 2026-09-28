@@ -492,7 +492,13 @@ function projectOrderDetail(
       unitPriceMinor: item.snapshot.unitPrice.amountMinor,
     };
   });
-  const deliveryChargeMinor = order.deliveryCharge === null ? 0 : order.deliveryCharge.amount.amountMinor;
+  // A cancelled aggregate is never payable: `calculateOrderAggregateTotals` folds in neither the
+  // delivery charge nor a tip for it (see its own `calculateForOrder`), so this projection must not
+  // either -- otherwise itemsTotalMinor(0) + deliveryChargeMinor(frozen, nonzero) + tipMinor(0)
+  // would disagree with totalMinor(0) and the contract's own additive check would reject it.
+  const deliveryChargeMinor = order.status === "cancelled" || order.deliveryCharge === null
+    ? 0
+    : order.deliveryCharge.amount.amountMinor;
   // H31: itemsTotalMinor must come from the items/discount/tax components alone, never
   // `total - deliveryCharge`, or a tipped order would silently count its tip as part of the items total.
   const itemsTotalMinor = totals.subtotalBeforeOrderDiscount.amountMinor - totals.orderDiscount.amountMinor;

@@ -18,7 +18,7 @@ import {
   parseTransitionOrderItemCommandV1,
   type MenuCatalogStateV1,
 } from "@super-restaurant/shared-types";
-import { addOrderItem, createOrder, Money, transitionOrderItemStatus, type OrderMutation } from "@super-restaurant/domain";
+import { addOrderItem, createOrder, Money, transitionOrderItemStatus, transitionOrderStatus, type OrderMutation } from "@super-restaurant/domain";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService, type MembershipLookupPort } from "./auth/membership-authorization.js";
@@ -522,6 +522,31 @@ test("order service detail scopes access, reduces PII, and computes actions from
   const missingPort: OrderPersistencePort = { ...port, read: async () => "missing" };
   await assertCode(serviceFor(["manager"], missingPort).detail(principal, detailRequest), "not_found");
   await assertCode(serviceFor(["manager"], port).detail(principal, { ...detailRequest, orderId: "not-a-uuid" }), "request");
+});
+
+test("order service detail on a cancelled order with a frozen delivery charge never reports it in totals", async () => {
+  const withCharge = createOrder({
+    branchId: scope.branchId,
+    channel: "delivery",
+    currency: "MXN",
+    deliveryCharge: { amount: new Money(4_000, "MXN"), quoteId: randomUUID() },
+    orderId,
+    restaurantId: scope.restaurantId,
+    timeZone: "America/Mexico_City",
+  }, { ...audit, actorId: principal.actorId }).order;
+  const cancelled = transitionOrderStatus(withCharge, "cancelled", {
+    ...audit, actorId: principal.actorId, reason: "Cliente canceló el pedido",
+    authorization: { actorId: principal.actorId, approved: true },
+  }).order;
+  const port: OrderPersistencePort = {
+    listKdsTickets: async () => "forbidden",
+    persist: async () => ({ status: "conflict" }),
+    read: async () => ({ order: cancelled, version: 2 }),
+    recoverKds: async () => "forbidden",
+  };
+  const detail = await serviceFor(["manager"], port).detail(principal, { orderId, schemaVersion: 1 as const, scope });
+  assert.deepEqual(detail.totals, { currency: "MXN", deliveryChargeMinor: 0, itemsTotalMinor: 0, tipMinor: 0, totalMinor: 0 });
+  assert.deepEqual(detail.availableActions, []);
 });
 
 function serviceFor(
