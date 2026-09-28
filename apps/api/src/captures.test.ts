@@ -2007,6 +2007,56 @@ test("H19: changing the fulfillment channel after the intent was fixed reports t
   assert.equal(pickupWorkspace.paymentProjection?.status, "stale");
 });
 
+test("H25: reading a workspace with priced lines but no payment intent yet still reports a payment basis", async () => {
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => makeCaptureV5Fixture({
+      fulfillmentChannel: "counter", deliveryQuote: null, paymentIntent: null,
+      paymentIntentAppliedCaptureVersion: null, paymentIntentBasisFingerprint: null, version: 1,
+    }),
+  };
+  const service = new CaptureService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), captures, paymentSelectionConfirmation, paymentCatalogPort);
+  const workspaceRequest = { schemaVersion: 5, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId };
+  const workspace = await service.readWorkspace(principal, workspaceRequest) as {
+    paymentIntent?: unknown; paymentProjection?: unknown;
+    paymentBasis?: { currency?: string; itemsSubtotalMinor?: number; deliveryFeeMinor?: number; orderTotalMinor?: number };
+  };
+  assert.equal(workspace.paymentIntent, null);
+  assert.equal(workspace.paymentProjection, null);
+  // selectionPlanCommand/selectionCatalog: one line, qty 2 @ 4_500 = 9_000, no delivery fee outside delivery.
+  assert.equal(workspace.paymentBasis?.currency, "MXN");
+  assert.equal(workspace.paymentBasis?.itemsSubtotalMinor, 9_000);
+  assert.equal(workspace.paymentBasis?.deliveryFeeMinor, 0);
+  assert.equal(workspace.paymentBasis?.orderTotalMinor, 9_000);
+});
+
+test("H25: no priced lines and no delivery quote means no established currency, so the basis is null", async () => {
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => ({
+      schemaVersion: 5,
+      detail: { ...record.detail, schemaVersion: 2 as const, version: 1, fulfillmentChannel: "counter",
+        deliveryInstructions: null },
+      customerSnapshot: null,
+      fulfillmentSnapshot: null,
+      repeatOrderPlan: null,
+      selectionPlan: null,
+      deliveryQuote: null,
+      paymentIntent: null,
+      paymentIntentAppliedCaptureVersion: null,
+      paymentIntentBasisFingerprint: null,
+    }),
+  };
+  const service = new CaptureService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), captures, noConfirmationPort, paymentCatalogPort);
+  const workspaceRequest = { schemaVersion: 5, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId };
+  const workspace = await service.readWorkspace(principal, workspaceRequest) as { paymentBasis?: unknown };
+  assert.equal(workspace.paymentBasis, null);
+});
+
 test("H8: reading a workspace whose selection plan cannot presently be priced never reports the payment intent ready", async () => {
   // Same shape of bug as H5, on the READ side: the stored basis fingerprint happens to still match
   // (catalogVersion "" + no lines + the frozen quote's identity, exactly what an unpriced plan

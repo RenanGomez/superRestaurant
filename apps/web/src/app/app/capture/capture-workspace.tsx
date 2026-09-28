@@ -10,6 +10,7 @@ import type {
   CaptureDraftDetailV1,
   CaptureDraftDetailV2,
   CaptureDraftSummaryV1,
+  CapturePaymentBasisV1,
   CapturePaymentIntentMethodV1,
   CapturePaymentIntentProjectionV1,
   CapturePaymentIntentV1,
@@ -128,6 +129,10 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [deliveryQuote, setDeliveryQuote] = useState<DeliveryQuoteV1 | null>(null);
   const [paymentIntent, setPaymentIntentState] = useState<CapturePaymentIntentV1 | null>(null);
   const [paymentProjection, setPaymentProjection] = useState<CapturePaymentIntentProjectionV1 | null>(null);
+  // H25: the pricing basis alone (no method/tender/tip), present whenever the lines are priced,
+  // even before any payment intent exists -- lets the "Cobro" summary and cash shortcuts show
+  // real numbers before the operator picks a method.
+  const [paymentBasis, setPaymentBasis] = useState<CapturePaymentBasisV1 | null>(null);
   const [paymentIntentNotice, setPaymentIntentNotice] = useState<string>();
   const [quoteError, setQuoteError] = useState<string>();
   // True once the scheduled-delivery time has been edited after a quote was already frozen for a
@@ -245,6 +250,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setDeliveryQuote(hydrated.deliveryQuote);
     setPaymentIntentState(hydrated.paymentIntent);
     setPaymentProjection(hydrated.paymentProjection);
+    setPaymentBasis(hydrated.paymentBasis);
     setRecentOrders((current) => current?.customerId === hydrated.customerSnapshot?.customerId ? current : undefined);
     setRepeatPreview((current) => current?.customerId === hydrated.customerSnapshot?.customerId ? current : undefined);
     setSelectedContact(hydrated.customerSnapshot?.contactId);
@@ -661,7 +667,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   function reset(): void {
     invalidateQuote();
     setQuoteRequestedForDiffers(false);
-    setDeliveryQuote(null); setPaymentIntentState(null); setPaymentProjection(null); setPaymentIntentNotice(undefined);
+    setDeliveryQuote(null); setPaymentIntentState(null); setPaymentProjection(null); setPaymentBasis(null);
+    setPaymentIntentNotice(undefined);
     setCapture(undefined); setResults(undefined); setCustomer(undefined); setCustomerSnapshot(null);
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
     setRepeatOrderPlan(null);
@@ -1022,8 +1029,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         </button>)}</div><a href="/app/customers" className="mt-3 inline-block text-sm font-semibold text-accent underline">Editar o validar direcciones en Directorio</a></section>}
       {capture.status === "draft" && (selectionProjection !== null && selectionProjection.lines.length > 0
         || repeatOrderPlan !== null) && <>
-        <CapturePayment projection={paymentProjection} intent={paymentIntent} deliveryQuote={deliveryQuote}
-          fulfillment={fulfillmentChannel} currency={paymentProjection?.currency ?? confirmationContext?.currency ?? "MXN"}
+        <CapturePayment projection={paymentProjection} basis={paymentBasis} intent={paymentIntent} deliveryQuote={deliveryQuote}
+          fulfillment={fulfillmentChannel}
+          currency={paymentProjection?.currency ?? paymentBasis?.currency ?? confirmationContext?.currency ?? "MXN"}
           busy={busy} onSetIntent={(method, tenderedMinor, tipMinor) => void setPaymentIntent(method, tenderedMinor, tipMinor)}
           onRefreshIntent={refreshPaymentIntent} />
         {paymentIntentNotice !== undefined && <p role="alert" className="rounded-lg bg-error-bg p-3 text-sm">{paymentIntentNotice}</p>}

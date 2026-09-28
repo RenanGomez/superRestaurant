@@ -2,6 +2,7 @@
 
 import { useState, type ChangeEvent, type KeyboardEvent } from "react";
 import type {
+  CapturePaymentBasisV1,
   CapturePaymentIntentMethodV1,
   CapturePaymentIntentProjectionV1,
   CapturePaymentIntentV1,
@@ -25,6 +26,10 @@ const tipChips: readonly { readonly label: string; readonly amountMinor: number 
 
 interface CapturePaymentProps {
   readonly projection: CapturePaymentIntentProjectionV1 | null;
+  /** H25: the pricing basis alone (no method/tender/tip), present even before any payment intent
+   * exists. Only ever used for the summary and cash shortcuts once `projection` is null -- change
+   * and tip always come exclusively from `projection`, never computed or inferred here. */
+  readonly basis: CapturePaymentBasisV1 | null;
   readonly intent: CapturePaymentIntentV1 | null;
   readonly deliveryQuote: DeliveryQuoteV1 | null;
   readonly fulfillment: CaptureFulfillmentChannelV1 | null;
@@ -37,7 +42,7 @@ interface CapturePaymentProps {
 /** Step 5, "Cobro": states the payment intent (method, cash tender, tip). Never computes totals,
  * subtotal, shipping or change itself -- every money figure in the summary comes straight from the
  * server-computed `projection`, never from local arithmetic. */
-export function CapturePayment({ projection, intent, deliveryQuote, fulfillment, currency, busy,
+export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfillment, currency, busy,
   onSetIntent, onRefreshIntent }: CapturePaymentProps) {
   const [customTender, setCustomTender] = useState("");
   // H24: the last amount THIS field actually applied, so an Enter-then-blur pair (or repeated
@@ -47,8 +52,13 @@ export function CapturePayment({ projection, intent, deliveryQuote, fulfillment,
   const method = intent?.method ?? "cash";
   const tipMinor = intent?.tipMinor ?? 0;
   const tenderedAmountMinor = intent?.tenderedAmountMinor ?? null;
-  const totalMinor = projection?.orderTotalMinor ?? null;
+  // H25: before any intent exists, projection is always null; the basis alone (no method/tender)
+  // still lets the total-based suggestions and the summary read real numbers instead of dashes.
+  const totalMinor = projection?.orderTotalMinor ?? basis?.orderTotalMinor ?? null;
   const suggestions = totalMinor === null ? [] : suggestTenderAmounts(totalMinor);
+  const itemsSubtotalMinor = projection?.itemsSubtotalMinor ?? basis?.itemsSubtotalMinor ?? null;
+  const deliveryFeeMinor = projection?.deliveryFeeMinor ?? basis?.deliveryFeeMinor ?? null;
+  const summaryCurrency = projection?.currency ?? basis?.currency ?? currency;
 
   function chooseMethod(next: CapturePaymentIntentMethodV1): void {
     setCustomTender("");
@@ -149,11 +159,13 @@ export function CapturePayment({ projection, intent, deliveryQuote, fulfillment,
     </div>
     <div className="mt-4 grid gap-1 rounded-lg border border-border bg-bg p-3 text-sm">
       <div className="flex justify-between"><span>Subtotal</span>
-        <span>{projection === null ? "—" : money(projection.itemsSubtotalMinor, projection.currency)}</span></div>
+        <span>{itemsSubtotalMinor === null ? "—" : money(itemsSubtotalMinor, summaryCurrency)}</span></div>
       {fulfillment === "delivery" && <div className="flex justify-between"><span>Envío</span>
-        <span>{projection === null ? "—" : money(projection.deliveryFeeMinor, projection.currency)}</span></div>}
+        <span>{deliveryFeeMinor === null ? "—" : money(deliveryFeeMinor, summaryCurrency)}</span></div>}
       <div className="flex justify-between font-heading text-base font-bold"><span>Total</span>
-        <span>{projection === null ? "—" : money(projection.orderTotalMinor, projection.currency)}</span></div>
+        <span>{totalMinor === null ? "—" : money(totalMinor, summaryCurrency)}</span></div>
+      {/* H25: tip and change stay exclusively projection's -- they only mean something once there
+        is an actual intent, never inferred from the basis alone. */}
       <div className="flex justify-between"><span>Propina</span>
         <span>{projection === null ? "—" : money(projection.tipMinor, projection.currency)}</span></div>
       {projection?.method === "cash" && <div className="flex justify-between"><span>Cambio</span>

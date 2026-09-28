@@ -28,6 +28,7 @@ import {
   type CaptureDraftDetailV2,
   type AutosaveCaptureDraftCommandV1,
   type BranchScope,
+  type CapturePaymentBasisV1,
   type CapturePaymentIntentProjectionV1,
   type CapturePaymentIntentV1,
   type CaptureFulfillmentChannelV1,
@@ -200,6 +201,7 @@ export interface RehydratedCaptureWorkspace {
   readonly detail: CaptureDraftDetailV2;
   readonly fulfillmentChannel: CaptureFulfillmentChannelV1 | null;
   readonly fulfillmentSnapshot: CaptureFulfillmentSnapshotV1 | null;
+  readonly paymentBasis: CapturePaymentBasisV1 | null;
   readonly paymentIntent: CapturePaymentIntentV1 | null;
   readonly paymentProjection: CapturePaymentIntentProjectionV1 | null;
   readonly repeatOrderPlan: CaptureRepeatOrderPlanSummaryV1 | null;
@@ -223,6 +225,7 @@ export function rehydrateCaptureWorkspace(value: unknown): RehydratedCaptureWork
     detail: v5.detail,
     fulfillmentChannel: v5.detail.fulfillmentChannel,
     fulfillmentSnapshot: v5.fulfillmentSnapshot,
+    paymentBasis: v5.paymentBasis,
     paymentIntent: v5.paymentIntent,
     paymentProjection: v5.paymentProjection,
     repeatOrderPlan: v5.repeatOrderPlan,
@@ -238,6 +241,7 @@ export function rehydrateCaptureWorkspace(value: unknown): RehydratedCaptureWork
     detail: v4.detail,
     fulfillmentChannel: v4.detail.fulfillmentChannel,
     fulfillmentSnapshot: v4.fulfillmentSnapshot,
+    paymentBasis: null,
     paymentIntent: null,
     paymentProjection: null,
     repeatOrderPlan: v4.repeatOrderPlan,
