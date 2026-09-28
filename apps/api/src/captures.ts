@@ -1446,13 +1446,11 @@ export class CapturePaymentIntentService {
 
     const fulfillmentChannel = before.detail.fulfillmentChannel;
     if (fulfillmentChannel === null) throw new CaptureApplicationError("conflict");
-    const currency = before.selectionProjection?.currency ?? before.deliveryQuote?.currency;
-    if (currency === undefined) throw new CaptureApplicationError("conflict");
-    const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (before.deliveryQuote?.feeMinor ?? 0) : 0;
 
     let itemsSubtotalMinor: number;
     let basisCatalogVersion: string;
     let basisLines: CapturePaymentIntentBasisLine[];
+    let repeatCurrency: string | undefined;
     if (before.selectionPlan !== null) {
       itemsSubtotalMinor = before.selectionProjection?.itemsTotalMinor ?? 0;
       const storedPlan = await readStoredCaptureSelectionPlanLines(
@@ -1466,11 +1464,17 @@ export class CapturePaymentIntentService {
       );
       if (repeatBasis === null) throw new CaptureApplicationError("conflict");
       itemsSubtotalMinor = repeatBasis.itemsTotalMinor;
+      repeatCurrency = repeatBasis.currency;
       basisCatalogVersion = before.repeatOrderPlan.catalogVersion;
       basisLines = repeatLinesToBasis(repeatBasis.lines);
     } else {
       throw new CapturePaymentIntentNoLinesError();
     }
+    // A repeat-order capture is not necessarily delivery, so its currency comes from the priced
+    // repeat plan's own catalog when there is no selection projection or delivery quote to supply it.
+    const currency = before.selectionProjection?.currency ?? repeatCurrency ?? before.deliveryQuote?.currency;
+    if (currency === undefined) throw new CaptureApplicationError("conflict");
+    const deliveryFeeMinor = fulfillmentChannel === "delivery" ? (before.deliveryQuote?.feeMinor ?? 0) : 0;
 
     let domainProjection;
     try {
