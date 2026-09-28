@@ -6,6 +6,8 @@ import {
   parseCreateOrderCommandV1,
   parseCreateOrderCommandV2,
   parseOpenOrderCommandV1,
+  parseOrderDetailRequestV1,
+  parseOrderDetailV1,
   parseOrderMutationSummaryV1,
   parseTransitionOrderItemCommandV1,
 } from "./index.js";
@@ -126,3 +128,23 @@ const cancellation={...common,expectedVersion:2,orderItemId:add.orderItemId,reas
 expect(parseCancelOrderItemCommandV1(cancellation)!==undefined,"item cancellation with an explicit reason parses");
 expect(parseCancelOrderItemCommandV1({...cancellation,reason:" "})===undefined,"blank cancellation reason fails");
 expect(parseCancelOrderItemCommandV1({...cancellation,authorization:{approved:true}})===undefined,"client cannot supply authorization evidence");
+
+const detailRequest={schemaVersion:1,scope,orderId:common.orderId};
+expect(parseOrderDetailRequestV1(detailRequest)!==undefined,"order detail request parses");
+expect(parseOrderDetailRequestV1({...detailRequest,orderId:"not-a-uuid"})===undefined,"order detail request rejects a malformed orderId");
+
+const detailItem={orderItemId:add.orderItemId,status:"pending",name:"Tacos al pastor",quantity:2,unitPriceMinor:5000,lineTotalMinor:10000,note:null,modifiers:[]};
+const detail={
+  schemaVersion:1,scope,orderId:common.orderId,status:"open",channel:"table",
+  tableId:"d6f3073e-4d2d-4b9f-90ea-926e5a86ff02",currency:"MXN",timeZone:"America/Mexico_City",
+  createdAt:"2026-09-02T22:00:00.000Z",updatedAt:"2026-09-02T22:05:00.000Z",version:2,
+  items:[detailItem],
+  totals:{currency:"MXN",itemsTotalMinor:10000,deliveryChargeMinor:0,tipMinor:0,totalMinor:10000},
+  fulfillment:{channel:"table",tableId:"d6f3073e-4d2d-4b9f-90ea-926e5a86ff02",customerLabel:null,addressLabel:null,paymentIntent:null},
+  availableActions:["sendToKitchen","cancelItem"],
+};
+expect(parseOrderDetailV1(detail)!==undefined,"order detail parses");
+expect(parseOrderDetailV1({...detail,fulfillment:{...detail.fulfillment,channel:"counter"}})===undefined,"fulfillment.channel must match the order's own channel");
+expect(parseOrderDetailV1({...detail,totals:{...detail.totals,totalMinor:10001}})===undefined,"order detail totals must add up exactly");
+expect(parseOrderDetailV1({...detail,availableActions:["sendToKitchen","sendToKitchen"]})===undefined,"order detail rejects duplicate actions");
+expect(parseOrderDetailV1({...detail,availableActions:["not-an-action"]})===undefined,"order detail rejects an unknown action");
