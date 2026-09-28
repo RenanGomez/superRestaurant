@@ -18,7 +18,7 @@ import {
   parseTransitionOrderItemCommandV1,
   type MenuCatalogStateV1,
 } from "@super-restaurant/shared-types";
-import { createOrder, type OrderMutation } from "@super-restaurant/domain";
+import { addOrderItem, createOrder, Money, transitionOrderItemStatus, type OrderMutation } from "@super-restaurant/domain";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService, type MembershipLookupPort } from "./auth/membership-authorization.js";
@@ -462,8 +462,70 @@ test("order service enforces permission, optimistic version, and domain transiti
   await assertCode(serviceFor(["manager"], port).listKdsTickets(principal, { ...subscription, stationId: " kitchen" }), "request");
 });
 
+test("order service detail scopes access, reduces PII, and computes actions from state and roles", async () => {
+  const secondItemId = "c483b6e7-e102-4cc5-a887-d30712c85e52";
+  const withPendingItem = addOrderItem(domainMutation.order, {
+    orderItemId,
+    quantity: 2,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0",
+      modifiers: [],
+      name: "Hamburguesa",
+      productId,
+      stationId: "kitchen",
+      unit: "piece",
+      unitPrice: new Money(12_500, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order;
+  const withTwoItems = addOrderItem(withPendingItem, {
+    orderItemId: secondItemId,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0",
+      modifiers: [],
+      name: "Refresco",
+      productId,
+      stationId: "kitchen",
+      unit: "piece",
+      unitPrice: new Money(3_000, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order;
+  const sentSecondItem = transitionOrderItemStatus(withTwoItems, secondItemId, "sent", { ...audit, actorId: principal.actorId }).order;
+
+  const port: OrderPersistencePort = {
+    listKdsTickets: async () => "forbidden",
+    persist: async () => ({ status: "conflict" }),
+    read: async () => ({ order: sentSecondItem, version: 4 }),
+    recoverKds: async () => "forbidden",
+  };
+  const detailRequest = { orderId, schemaVersion: 1 as const, scope };
+
+  await assertCode(serviceFor([], port).detail(principal, detailRequest), "authorization");
+
+  const asViewer = await serviceFor(["viewer"], port).detail(principal, detailRequest);
+  assert.deepEqual(asViewer.availableActions, []);
+  assert.equal(asViewer.fulfillment.customerLabel, null);
+  assert.equal(asViewer.fulfillment.addressLabel, null);
+  assert.equal(asViewer.totals.itemsTotalMinor, 28_000);
+  assert.equal(asViewer.totals.totalMinor, 28_000);
+  assert.deepEqual(asViewer.items.map((item) => ({ status: item.status, lineTotalMinor: item.lineTotalMinor })), [
+    { lineTotalMinor: 25_000, status: "pending" },
+    { lineTotalMinor: 3_000, status: "sent" },
+  ]);
+
+  const asKitchen = await serviceFor(["kitchen"], port).detail(principal, detailRequest);
+  assert.deepEqual(asKitchen.availableActions, ["markReady"]);
+
+  const asManager = await serviceFor(["manager"], port).detail(principal, detailRequest);
+  assert.deepEqual(asManager.availableActions, ["open", "sendToKitchen", "markReady", "cancelItem"]);
+
+  const missingPort: OrderPersistencePort = { ...port, read: async () => "missing" };
+  await assertCode(serviceFor(["manager"], missingPort).detail(principal, detailRequest), "not_found");
+  await assertCode(serviceFor(["manager"], port).detail(principal, { ...detailRequest, orderId: "not-a-uuid" }), "request");
+});
+
 function serviceFor(
-  roles: readonly ("manager" | "supervisor" | "viewer" | "waiter")[],
+  roles: readonly ("manager" | "supervisor" | "viewer" | "waiter" | "cashier" | "kitchen")[],
   orders: OrderPersistencePort,
   notifications: RealtimeNotificationPort = { notify: async () => undefined },
 ): OrderService {
