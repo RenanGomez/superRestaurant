@@ -533,7 +533,15 @@ test("capture confirmation probes replay and delegates one atomic persistence co
   let persisted: { actorId: string; command: unknown; materialization: CaptureOrderMaterialization } | undefined;
   const service = new CaptureConfirmationService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
-  }), { createDraft: async () => ({}), readWorkspaceV4: async () => workspaceV4 }, {
+  }), {
+    createDraft: async () => ({}), readWorkspaceV4: async () => workspaceV4,
+    readWorkspaceV5: async () => ({
+      schemaVersion: 5, detail: workspaceV4.detail, customerSnapshot: workspaceV4.customerSnapshot,
+      fulfillmentSnapshot: workspaceV4.fulfillmentSnapshot, repeatOrderPlan: null, selectionPlan: null,
+      deliveryQuote: null, paymentIntent: null, paymentIntentAppliedCaptureVersion: null,
+      paymentIntentBasisFingerprint: null,
+    }),
+  }, {
     probeConfirmation: async () => ({ status: "pending" }),
     readRepeatOrderPlan: async () => { throw new Error("must not read a repeat plan"); },
     readSelectionPlan: async () => { throw new Error("must not read a selection plan"); },
@@ -589,7 +597,18 @@ test("H10: a conflict with a delivery-quote reason maps to CaptureDeliveryQuoteI
   for (const reason of ["delivery_quote_missing", "delivery_quote_expired", "delivery_quote_not_covered"] as const) {
     const service = new CaptureConfirmationService(new MembershipAuthorizationService({
       findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
-    }), { createDraft: async () => ({}), readWorkspaceV4: async () => workspaceV4 }, {
+    }), {
+      createDraft: async () => ({}), readWorkspaceV4: async () => workspaceV4,
+      // H29: confirm now fails closed (unavailable) if this V5 re-price read itself fails, so a
+      // capture port exercising confirm's SQL-conflict paths must supply a benign, no-intent V5
+      // read here (never exercised for pricing in this test) rather than omitting it.
+      readWorkspaceV5: async () => ({
+        schemaVersion: 5, detail: workspaceV4.detail, customerSnapshot: workspaceV4.customerSnapshot,
+        fulfillmentSnapshot: workspaceV4.fulfillmentSnapshot, repeatOrderPlan: null, selectionPlan: null,
+        deliveryQuote: null, paymentIntent: null, paymentIntentAppliedCaptureVersion: null,
+        paymentIntentBasisFingerprint: null,
+      }),
+    }, {
       probeConfirmation: async () => ({ status: "pending" }),
       readRepeatOrderPlan: async () => { throw new Error("must not read a repeat plan"); },
       readSelectionPlan: async () => { throw new Error("must not read a selection plan"); },
@@ -654,6 +673,43 @@ test("H20: confirm refuses a payment intent with no pricing basis at all, exactl
     service.confirm(principal, confirmCommand),
     (error: unknown) => error instanceof CapturePaymentIntentStaleError,
   );
+});
+
+test("H29: confirm fails closed as unavailable when the re-pricing V5 read itself fails, never SQL", async () => {
+  // SQL's own CAS only compares versions, never recomputes the basis (a catalog price change
+  // can't be caught there) -- this re-read is the only place that happens. If it fails outright,
+  // confirm must never silently skip the check and call SQL with a possibly-insufficient intent.
+  const confirmCommand = parseConfirmCaptureDraftCommandV2({
+    ...mutationCommand,
+    schemaVersion: 2,
+    expectedVersion: 2,
+    attentionLeaseId: validCommand.deviceId,
+    orderId: validCommand.deviceId,
+    shiftId: record.detail.ownerMembershipId,
+    tableId: null,
+    currency: "MXN",
+    timeZone: "America/Hermosillo",
+  });
+  assert.ok(confirmCommand);
+  const workspaceV4 = { ...workspace, schemaVersion: 4 as const,
+    detail: { ...fulfillmentRecord.detail, schemaVersion: 2 as const, fulfillmentChannel: "counter" as const,
+      customerSnapshotRef: null, fulfillmentSnapshotRef: null, deliveryInstructions: null },
+    customerSnapshot: null, fulfillmentSnapshot: null, repeatOrderPlan: null, selectionPlan: null };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV4: async () => workspaceV4,
+    readWorkspaceV5: async () => { throw new Error("simulated transient failure"); },
+  };
+  const service = new CaptureConfirmationService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), captures, {
+    probeConfirmation: async () => ({ status: "pending" }),
+    readRepeatOrderPlan: async () => { throw new Error("must not read a repeat plan"); },
+    readSelectionPlan: async () => { throw new Error("must not read a selection plan"); },
+    confirmDraft: async () => { throw new Error("must not attempt a doomed confirm"); },
+  }, { read: async () => { throw new Error("must not read a catalog"); },
+    save: async () => { throw new Error("must not save a catalog"); } });
+  await assert.rejects(service.confirm(principal, confirmCommand), code("unavailable"));
 });
 
 const selectionCatalog: MenuCatalogV1 = {

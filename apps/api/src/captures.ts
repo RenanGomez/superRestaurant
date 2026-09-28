@@ -766,10 +766,17 @@ export class CaptureConfirmationService {
     // paymentProjection as null, not a "stale" status -- but it is exactly as unconfirmable, and
     // SQL's own payment_intent_stale check (H16) will refuse it the same way, so this must block
     // here too rather than silently falling through as "no projection, nothing to check".
-    const v5 = await readCaptureWorkspaceV5WithProjections(
-      actorId, command.scope, command.captureDraftId, this.captures, this.persistence, this.catalogs,
-    ).catch(() => null);
-    if (v5 !== null && v5.paymentIntent !== null
+    // H29: SQL's own CAS only compares versions, never recomputes the basis -- it can't catch a
+    // catalog price change on its own. This re-read is the ONLY place that re-prices the intent
+    // before confirming, so a failure here must fail closed (a retryable unavailable) rather than
+    // silently skip the check and let a possibly-insufficient intent freeze into an Order.
+    let v5: CaptureWorkspaceV5;
+    try {
+      v5 = await readCaptureWorkspaceV5WithProjections(
+        actorId, command.scope, command.captureDraftId, this.captures, this.persistence, this.catalogs,
+      );
+    } catch { throw unavailable(); }
+    if (v5.paymentIntent !== null
       && (v5.paymentProjection === null || v5.paymentProjection.status === "stale"
         || v5.paymentProjection.status === "insufficient")) {
       throw new CapturePaymentIntentStaleError();
@@ -838,7 +845,7 @@ export class CaptureConfirmationService {
     // check), never a client-supplied amount -- confirm_capture_draft_v3 independently
     // re-checks this against the actually-stored quote and rejects a mismatch as a conflict,
     // so a stale read here can never under- or over-charge.
-    const deliveryCharge: DeliveryChargeSnapshot | null = channel === "delivery" && v5?.deliveryQuote != null
+    const deliveryCharge: DeliveryChargeSnapshot | null = channel === "delivery" && v5.deliveryQuote !== null
       ? { amount: new Money(v5.deliveryQuote.feeMinor, command.currency), quoteId: v5.deliveryQuote.quoteId }
       : null;
     let materialization: CaptureOrderMaterialization;
