@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ChangeEvent } from "react";
+import { useState, type ChangeEvent, type KeyboardEvent } from "react";
 import type {
   CapturePaymentIntentMethodV1,
   CapturePaymentIntentProjectionV1,
@@ -58,13 +58,25 @@ export function CapturePayment({ projection, intent, deliveryQuote, fulfillment,
     onSetIntent(method, tenderedAmountMinor, amountMinor);
   }
 
-  function handleCustomTender(event: ChangeEvent<HTMLInputElement>): void {
-    const raw = event.target.value;
-    setCustomTender(raw);
-    if (raw.trim() === "") return;
-    const parsedMinor = parseMoneyInputToMinor(raw);
+  // H22: typing only updates the local field -- it never sends the intent on every valid
+  // keystroke (which used to also flip `busy` mid-edit and lock the input the operator was still
+  // typing into). The intent is only ever sent on blur, Enter, or the explicit "Aplicar" button;
+  // an invalid value shows "Monto inválido" and is never sent regardless of how it's triggered.
+  function handleCustomTenderChange(event: ChangeEvent<HTMLInputElement>): void {
+    setCustomTender(event.target.value);
+  }
+
+  function applyCustomTender(): void {
+    if (customTender.trim() === "") return;
+    const parsedMinor = parseMoneyInputToMinor(customTender);
     if (parsedMinor === null) return;
     onSetIntent(method, parsedMinor, tipMinor);
+  }
+
+  function handleCustomTenderKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    applyCustomTender();
   }
 
   const customTenderInvalid = customTender.trim() !== "" && parseMoneyInputToMinor(customTender) === null;
@@ -103,11 +115,17 @@ export function CapturePayment({ projection, intent, deliveryQuote, fulfillment,
           {totalMinor !== null && amountMinor === totalMinor ? "Exacto" : money(amountMinor, currency)}
         </button>)}
       </div>
-      <label className="grid gap-1 text-sm" htmlFor="capture-cash-with">Otro monto
-        <input id="capture-cash-with" inputMode="decimal" className={input} value={customTender}
-          disabled={busy} placeholder="0.00" onChange={handleCustomTender}
-          aria-invalid={customTenderInvalid} aria-describedby={customTenderInvalid ? "capture-cash-with-error" : undefined} />
-      </label>
+      <div className="grid gap-1 text-sm">
+        <label htmlFor="capture-cash-with">Otro monto</label>
+        <div className="flex flex-wrap gap-2">
+          <input id="capture-cash-with" inputMode="decimal" className={input} value={customTender}
+            disabled={busy} placeholder="0.00" onChange={handleCustomTenderChange}
+            onBlur={applyCustomTender} onKeyDown={handleCustomTenderKeyDown}
+            aria-invalid={customTenderInvalid} aria-describedby={customTenderInvalid ? "capture-cash-with-error" : undefined} />
+          <button type="button" className={button} disabled={busy || customTender.trim() === ""}
+            onMouseDown={(event) => event.preventDefault()} onClick={applyCustomTender}>Aplicar</button>
+        </div>
+      </div>
       {customTenderInvalid && <p id="capture-cash-with-error" role="alert" className="text-sm text-error">
         Monto inválido
       </p>}
