@@ -727,7 +727,7 @@ declare
   repeat_plan app.capture_repeat_order_plans%rowtype;
   stored_quote app.capture_delivery_quotes%rowtype;
   stored_intent app.capture_payment_intents%rowtype;
-  current_fulfillment_snapshot uuid;
+  current_fulfillment_snapshot uuid; current_channel text; occurred timestamptz;
   fulfillment_change_version bigint;
   frozen_quote jsonb; frozen_intent jsonb;
   old_result jsonb; mutation_result jsonb; result_record jsonb; base_order jsonb;
@@ -954,7 +954,8 @@ begin
   end if;
 
   -- Freeze the delivery quote and payment intent, if any.
-  select fulfillment_snapshot_id into current_fulfillment_snapshot from app.capture_drafts
+  select fulfillment_snapshot_id, fulfillment_channel into current_fulfillment_snapshot, current_channel
+  from app.capture_drafts
   where restaurant_id=restaurant and branch_id=branch and id=capture for share;
 
   select * into stored_quote from app.capture_delivery_quotes
@@ -966,6 +967,28 @@ begin
     return pg_catalog.jsonb_build_object('status','conflict','reason','delivery_quote_stale');
   end if;
   frozen_quote := case when found then stored_quote.quote else null end;
+
+  -- H10: a delivery capture can never confirm without a live, coverage-eligible quote. This is
+  -- deliberately stricter than the staleness check above, which only guards against an
+  -- address/snapshot mismatch; here we also require the frozen quote to still be in-date and
+  -- actually cover the address, using the command's own occurredAt as the reference clock (the
+  -- same clock the rest of this function treats as "now").
+  if current_channel = 'delivery' then
+    if frozen_quote is null then
+      return pg_catalog.jsonb_build_object('status','conflict','reason','delivery_quote_missing');
+    end if;
+    begin
+      occurred := (p_command->>'occurredAt')::timestamptz;
+    exception when invalid_text_representation or datetime_field_overflow or invalid_datetime_format then
+      return pg_catalog.jsonb_build_object('status','rejected');
+    end;
+    if occurred is null then return pg_catalog.jsonb_build_object('status','rejected'); end if;
+    if frozen_quote->>'coverageStatus' = 'not_covered' then
+      return pg_catalog.jsonb_build_object('status','conflict','reason','delivery_quote_not_covered');
+    elsif (frozen_quote->>'expiresAt')::timestamptz <= occurred then
+      return pg_catalog.jsonb_build_object('status','conflict','reason','delivery_quote_expired');
+    end if;
+  end if;
 
   -- Staleness is decided from the actual facts that could have invalidated the intent since it
   -- was set, not from whether ANY unrelated mutation (e.g. delivery instructions) advanced the

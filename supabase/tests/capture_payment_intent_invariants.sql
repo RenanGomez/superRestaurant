@@ -17,6 +17,10 @@ declare
   stale_lines_capture uuid := gen_random_uuid();
   address_change_capture uuid := gen_random_uuid();
   quote_mismatch_capture uuid := gen_random_uuid();
+  h10_expired_capture uuid := gen_random_uuid();
+  h10_expired_order uuid := gen_random_uuid();
+  h10_not_covered_capture uuid := gen_random_uuid();
+  h10_not_covered_order uuid := gen_random_uuid();
   catalog uuid := gen_random_uuid();
   category uuid := gen_random_uuid();
   product uuid := gen_random_uuid();
@@ -96,7 +100,7 @@ begin
     'feeMinor',3000,
     'promiseStart',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
     'promiseEnd',pg_catalog.to_char((now_at+interval '15 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    'expiresAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'expiresAt',pg_catalog.to_char((now_at+interval '15 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
     'override',null
   );
   quote_command := pg_catalog.jsonb_build_object(
@@ -600,14 +604,13 @@ begin
     'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
     'status','draft','items',pg_catalog.jsonb_build_array()
   );
+-- H10: a delivery capture with no live quote (the stale one was cleared above by the
+  -- re-fulfillment) must be refused at confirm rather than proceeding with no quote at all.
   execute 'set local role app_api';
   result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
   execute 'reset role';
-  if result->>'status'<>'applied' then raise exception 'CAPTURE_ADDRESS_CHANGE_CONFIRM_REJECTED'; end if;
-  select snapshot.snapshot into frozen from app.order_fulfillment_snapshots snapshot
-  where snapshot.restaurant_id=restaurant and snapshot.branch_id=branch and snapshot.order_id=address_change_order;
-  if frozen#>'{deliveryQuote}' is distinct from 'null'::jsonb
-  then raise exception 'CAPTURE_ADDRESS_CHANGE_CONFIRM_FROZE_STALE_QUOTE'; end if;
+  if result->>'status'<>'conflict' or result->>'reason'<>'delivery_quote_missing'
+  then raise exception 'CAPTURE_ADDRESS_CHANGE_CONFIRM_NOT_REFUSED'; end if;
 
   ----------------------------------------------------------------------------
   -- A synthetically inconsistent stored quote (addressSnapshotRef no longer
@@ -906,6 +909,192 @@ begin
   then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_LINES_NOT_REJECTED'; end if;
   if exists (select 1 from app.orders placed where placed.id=stale_lines_order)
   then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_LINES_ORDER_WAS_CREATED'; end if;
+  ----------------------------------------------------------------------------
+  -- H10: a delivery confirm with an expired frozen quote is refused, even
+  -- though the quote is still address-consistent (not stale) and otherwise
+  -- covered.
+  ----------------------------------------------------------------------------
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h10_expired_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','delivery'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_H10_EXPIRED_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  execute 'set local role app_api';
+  party := app_private.set_capture_customer(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',h10_expired_capture::text,'expectedVersion',1,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'customerId',confirm_customer::text,'contactId',confirm_contact::text,'expectedCustomerVersion',1
+  ));
+  execute 'reset role';
+  if party->>'status'<>'applied' then raise exception 'CAPTURE_H10_EXPIRED_CUSTOMER_REJECTED'; end if;
+
+  execute 'set local role app_api';
+  fulfillment := app_private.set_capture_fulfillment(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',h10_expired_capture::text,'expectedVersion',2,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'customerSnapshotRef',party#>>'{record,detail,customerSnapshotRef}',
+    'addressId',confirm_address::text,'expectedAddressVersion',1
+  ));
+  execute 'reset role';
+  if fulfillment->>'status'<>'applied' then raise exception 'CAPTURE_H10_EXPIRED_FULFILLMENT_REJECTED'; end if;
+  select capture_drafts.fulfillment_snapshot_id into fulfillment_snapshot_before from app.capture_drafts
+  where restaurant_id=restaurant and branch_id=branch and id=h10_expired_capture;
+
+  -- Bypasses set_capture_delivery_quote to synthesize an already-expired quote directly: the API
+  -- never lets a client submit a past expiresAt, so this state can only be reached by time passing
+  -- after a legitimately-set quote, which this fixture simulates directly.
+  insert into app.capture_delivery_quotes(
+    restaurant_id,branch_id,capture_draft_id,quote,applied_capture_version,idempotency_key,command_fingerprint,
+    actor_id,actor_membership_id,device_id,occurred_at,received_at
+  ) values (
+    restaurant,branch,h10_expired_capture,
+    quote||pg_catalog.jsonb_build_object(
+      'captureDraftId',h10_expired_capture::text,'addressSnapshotRef',fulfillment_snapshot_before::text,
+      'expiresAt',pg_catalog.to_char((now_at-interval '5 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    ),
+    3,gen_random_uuid()::text,pg_catalog.encode(pg_catalog.sha256('fixture-h10-expired'::bytea),'hex'),
+    actor,membership,device,now_at,now_at
+  );
+
+  confirmation_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',2,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h10_expired_capture::text,'expectedVersion',3,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'attentionLeaseId',lease,
+    'orderId',h10_expired_order::text,'shiftId',shift::text,'tableId',null,
+    'currency','MXN','timeZone','America/Hermosillo'
+  );
+  order_audits := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'eventId',confirmation_command->>'eventId',
+    'idempotencyKey',confirmation_command->>'idempotencyKey','restaurantId',restaurant::text,
+    'branchId',branch::text,'orderId',h10_expired_order::text,'actorId',actor::text,
+    'deviceId',device::text,'occurredAt',confirmation_command->>'occurredAt',
+    'operation','order.created','entityType','order','entityId',h10_expired_order::text,'to','draft'
+  ));
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',h10_expired_order::text,'restaurantId',restaurant::text,
+    'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
+    'status','draft','items',pg_catalog.jsonb_build_array()
+  );
+  execute 'set local role app_api';
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'conflict' or result->>'reason'<>'delivery_quote_expired'
+  then raise exception 'CAPTURE_H10_EXPIRED_NOT_REJECTED'; end if;
+
+  ----------------------------------------------------------------------------
+  -- H10: a delivery confirm with a frozen quote that never covered the
+  -- address (coverageStatus 'not_covered') is refused, even when it is
+  -- address-consistent and unexpired.
+  ----------------------------------------------------------------------------
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h10_not_covered_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','delivery'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_H10_NOT_COVERED_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  execute 'set local role app_api';
+  party := app_private.set_capture_customer(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',h10_not_covered_capture::text,'expectedVersion',1,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'customerId',confirm_customer::text,'contactId',confirm_contact::text,'expectedCustomerVersion',1
+  ));
+  execute 'reset role';
+  if party->>'status'<>'applied' then raise exception 'CAPTURE_H10_NOT_COVERED_CUSTOMER_REJECTED'; end if;
+
+  execute 'set local role app_api';
+  fulfillment := app_private.set_capture_fulfillment(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',h10_not_covered_capture::text,'expectedVersion',2,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'customerSnapshotRef',party#>>'{record,detail,customerSnapshotRef}',
+    'addressId',confirm_address::text,'expectedAddressVersion',1
+  ));
+  execute 'reset role';
+  if fulfillment->>'status'<>'applied' then raise exception 'CAPTURE_H10_NOT_COVERED_FULFILLMENT_REJECTED'; end if;
+  select capture_drafts.fulfillment_snapshot_id into fulfillment_snapshot_before from app.capture_drafts
+  where restaurant_id=restaurant and branch_id=branch and id=h10_not_covered_capture;
+
+  quote_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h10_not_covered_capture::text,'expectedVersion',3,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'scheduledFor',null
+  );
+  execute 'set local role app_api';
+  result := app_private.set_capture_delivery_quote(
+    actor,quote_command,
+    pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'quoteId',gen_random_uuid()::text,'restaurantId',restaurant::text,
+      'branchId',branch::text,'captureDraftId',h10_not_covered_capture::text,
+      'addressSnapshotRef',fulfillment_snapshot_before::text,
+      'address',pg_catalog.jsonb_build_object('postalCode','83000','locality','Hermosillo'),
+      'currency','MXN','timeZone','America/Hermosillo',
+      'quotedAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+      'scheduledFor',null,'version',1,'coverageStatus','not_covered','zoneId',null,'feeMinor',0,
+      'promiseStart',null,'promiseEnd',null,
+      'expiresAt',pg_catalog.to_char((now_at+interval '15 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+      'override',null
+    )
+  );
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_H10_NOT_COVERED_QUOTE_REJECTED'; end if;
+
+  confirmation_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',2,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h10_not_covered_capture::text,'expectedVersion',4,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'attentionLeaseId',lease,
+    'orderId',h10_not_covered_order::text,'shiftId',shift::text,'tableId',null,
+    'currency','MXN','timeZone','America/Hermosillo'
+  );
+  order_audits := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'eventId',confirmation_command->>'eventId',
+    'idempotencyKey',confirmation_command->>'idempotencyKey','restaurantId',restaurant::text,
+    'branchId',branch::text,'orderId',h10_not_covered_order::text,'actorId',actor::text,
+    'deviceId',device::text,'occurredAt',confirmation_command->>'occurredAt',
+    'operation','order.created','entityType','order','entityId',h10_not_covered_order::text,'to','draft'
+  ));
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',h10_not_covered_order::text,'restaurantId',restaurant::text,
+    'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
+    'status','draft','items',pg_catalog.jsonb_build_array()
+  );
+  execute 'set local role app_api';
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'conflict' or result->>'reason'<>'delivery_quote_not_covered'
+  then raise exception 'CAPTURE_H10_NOT_COVERED_NOT_REJECTED'; end if;
 end
 $capture_payment_intent_tests$;
 commit;

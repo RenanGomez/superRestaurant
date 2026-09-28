@@ -5,7 +5,7 @@ import {
 import type { CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkspaceV5, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
-import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentStaleError, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
+import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteInvalidError, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentStaleError, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
 
 @Controller("captures")
 export class CapturesController {
@@ -191,6 +191,9 @@ export class CapturesController {
       }
       if (error instanceof CapturePaymentIntentUnpricedError) {
         throw new ConflictException({ code: "CAPTURE_PAYMENT_INTENT_UNPRICED" });
+      }
+      if (error instanceof CaptureDeliveryQuoteInvalidError) {
+        throw new ConflictException({ code: "CAPTURE_DELIVERY_QUOTE_INVALID", reason: error.reason });
       }
       if (error instanceof CaptureApplicationError) {
         if (error.code === "request") throw new BadRequestException({ code: "CAPTURE_REQUEST_REJECTED" });

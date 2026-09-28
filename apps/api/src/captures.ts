@@ -1449,6 +1449,21 @@ export class CapturePaymentIntentStaleError extends Error {
   }
 }
 
+/**
+ * Typed 409: a delivery confirm was refused by confirm_capture_draft_v3 because the frozen quote
+ * is missing, expired, or never covered the address (H10). `reason` carries the SQL-side
+ * `delivery_quote_missing` / `delivery_quote_expired` / `delivery_quote_not_covered` value so the
+ * web layer can surface a precise motive instead of a generic conflict.
+ */
+export class CaptureDeliveryQuoteInvalidError extends Error {
+  public readonly reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered";
+  public constructor(reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered") {
+    super("CAPTURE_DELIVERY_QUOTE_INVALID");
+    this.name = "CaptureDeliveryQuoteInvalidError";
+    this.reason = reason;
+  }
+}
+
 /** Typed 409: setting a payment intent against a capture with no selection or repeat plan at all. */
 export class CapturePaymentIntentNoLinesError extends Error {
   public constructor() {
@@ -1920,6 +1935,10 @@ function confirmationResult(raw: unknown, command: ConfirmCaptureDraftCommandV2)
   const reasoned = exactRecord(raw, ["status", "reason"]);
   if (reasoned?.status === "conflict") {
     if (reasoned.reason === "payment_intent_stale") throw new CapturePaymentIntentStaleError();
+    if (reasoned.reason === "delivery_quote_missing" || reasoned.reason === "delivery_quote_expired"
+      || reasoned.reason === "delivery_quote_not_covered") {
+      throw new CaptureDeliveryQuoteInvalidError(reasoned.reason);
+    }
     throw new CaptureApplicationError("conflict");
   }
   const { record, replayed } = parseOutcome(raw, command.scope);
