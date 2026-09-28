@@ -119,17 +119,20 @@ alter table app.capture_command_events add constraint capture_events_operation_v
 ));
 
 -- Mirrors clear_capture_delivery_instructions_for_channel: a quote frozen for delivery has no
--- business surviving a switch away from delivery. Address-snapshot-triggered invalidation is the
--- caller's responsibility (the API recomputes and re-calls set_capture_delivery_quote whenever the
--- address changes); confirm_capture_draft_v3 independently refuses a quote whose
--- addressSnapshotRef no longer matches the capture's current fulfillment snapshot (see below).
+-- business surviving a switch away from delivery, nor surviving a change of the address/fulfillment
+-- snapshot it was quoted against (set_capture_fulfillment updates capture_drafts.fulfillment_snapshot_id
+-- whenever the address changes). confirm_capture_draft_v3 independently refuses a quote whose
+-- addressSnapshotRef no longer matches the capture's current fulfillment snapshot (see below), as
+-- defense in depth against a race between this trigger and a concurrent confirm.
 create function app_private.clear_capture_delivery_quote_for_channel()
 returns trigger
 language plpgsql
 set search_path = ''
 as $function$
 begin
-  if new.fulfillment_channel is distinct from 'delivery' then
+  if new.fulfillment_channel is distinct from 'delivery'
+    or new.fulfillment_snapshot_id is distinct from old.fulfillment_snapshot_id
+  then
     delete from app.capture_delivery_quotes
     where restaurant_id = new.restaurant_id and branch_id = new.branch_id and capture_draft_id = new.id;
   end if;
@@ -144,7 +147,7 @@ end
 $function$;
 
 create trigger capture_drafts_clear_delivery_quote_for_channel
-after update of fulfillment_channel, status on app.capture_drafts
+after update of fulfillment_channel, fulfillment_snapshot_id, status on app.capture_drafts
 for each row execute function app_private.clear_capture_delivery_quote_for_channel();
 
 alter function app_private.clear_capture_delivery_quote_for_channel() owner to postgres;
@@ -152,7 +155,7 @@ revoke all on function app_private.clear_capture_delivery_quote_for_channel()
   from public, anon, authenticated, service_role, app_api;
 
 comment on function app_private.clear_capture_delivery_quote_for_channel() is
-  'Clears the frozen delivery quote when the capture switches away from delivery, and clears both the delivery quote and the payment intent when the capture leaves draft (confirmed/no_sale).';
+  'Clears the frozen delivery quote when the capture switches away from delivery or its address/fulfillment snapshot changes, and clears both the delivery quote and the payment intent when the capture leaves draft (confirmed/no_sale).';
 
 create function app_private.set_capture_delivery_quote(
   p_actor_id uuid,
@@ -225,8 +228,13 @@ begin
   order by g.role_code limit 1 for share of m,b,r,g;
   if member is null then return pg_catalog.jsonb_build_object('status','denied'); end if;
 
+  -- Deliberately hashed over the client's command only, never over p_quote: the quote is
+  -- server-recomputed on every call (fresh quotedAt/quoteId each time), so hashing it would make a
+  -- retry with the same idempotencyKey but a different recomputed quote collide on fingerprint and
+  -- be rejected as a spurious conflict instead of being recognized as the same logical write. This
+  -- must stay identical to the hash probe_capture_delivery_quote_set computes, below.
   fingerprint := pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
-    'capture.delivery_quote_set:'||p_command::text||':'||p_quote::text||':'||p_actor_id::text, 'UTF8'
+    'capture.delivery_quote_set:'||p_command::text||':'||p_actor_id::text, 'UTF8'
   )), 'hex');
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
     'capture-command:'||p_actor_id::text||':'||restaurant::text||':'||branch::text||':'||(p_command->>'idempotencyKey'), 0
@@ -291,6 +299,91 @@ grant execute on function app_private.set_capture_delivery_quote(uuid,jsonb,json
 
 comment on function app_private.set_capture_delivery_quote(uuid,jsonb,jsonb) is
   'Freezes the API-computed delivery quote against a held, delivery-channel capture after lease/CAS revalidation. The quote jsonb is never trusted from the client; the API rebuilds it from zones.quoteForCapture on every call.';
+
+-- Read-only idempotency probe, mirroring probe_capture_selection_plan_replace: recognizes a
+-- replay purely from actor+scope+idempotencyKey+fingerprint BEFORE the API recomputes the
+-- delivery quote (a network round trip and a call to zones.quoteForCapture). Without this, a
+-- retry with the same idempotencyKey after a lost response would recompute a new quotedAt/quoteId
+-- and collide with set_capture_delivery_quote's stored fingerprint, turning a legitimate replay
+-- into a spurious 409 conflict.
+create function app_private.probe_capture_delivery_quote_set(
+  p_actor_id uuid,
+  p_command jsonb
+) returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $function$
+declare
+  restaurant uuid; branch uuid; capture uuid; event uuid; device uuid; lease uuid;
+  expected bigint; occurred timestamptz; fingerprint text;
+  stored app.capture_command_events%rowtype;
+begin
+  if p_actor_id is null
+    or not app_private.jsonb_has_exact_keys(p_command, array[
+      'schemaVersion','scope','captureDraftId','expectedVersion','eventId','idempotencyKey','deviceId','occurredAt',
+      'attentionLeaseId'
+    ])
+    or not app_private.jsonb_has_exact_keys(p_command->'scope', array['restaurantId','branchId'])
+    or p_command->'schemaVersion' is distinct from '1'::jsonb
+    or not coalesce(p_command->>'expectedVersion' ~ '^[1-9][0-9]*$', false)
+    or not coalesce(p_command->>'idempotencyKey' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', false)
+  then return pg_catalog.jsonb_build_object('status','rejected'); end if;
+
+  begin
+    restaurant := (p_command#>>'{scope,restaurantId}')::uuid;
+    branch := (p_command#>>'{scope,branchId}')::uuid;
+    capture := (p_command->>'captureDraftId')::uuid;
+    event := (p_command->>'eventId')::uuid;
+    device := (p_command->>'deviceId')::uuid;
+    lease := (p_command->>'attentionLeaseId')::uuid;
+    expected := (p_command->>'expectedVersion')::bigint;
+    occurred := (p_command->>'occurredAt')::timestamptz;
+  exception when invalid_text_representation or numeric_value_out_of_range or datetime_field_overflow or invalid_datetime_format then
+    return pg_catalog.jsonb_build_object('status','rejected');
+  end;
+  if restaurant is null or branch is null or capture is null or event is null or device is null or lease is null
+    or expected not between 1 and 9007199254740990 or occurred is null
+    or p_command#>>'{scope,restaurantId}' is distinct from restaurant::text
+    or p_command#>>'{scope,branchId}' is distinct from branch::text
+    or p_command->>'occurredAt' is distinct from pg_catalog.to_char(occurred at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  then return pg_catalog.jsonb_build_object('status','rejected'); end if;
+
+  if not exists (
+    select 1
+    from app.memberships m
+    join app.branches b on b.id=m.branch_id and b.restaurant_id=m.restaurant_id
+    join app.restaurants r on r.id=m.restaurant_id
+    join app.membership_role_grants g on g.membership_id=m.id
+    where m.user_id=p_actor_id and m.restaurant_id=restaurant and m.branch_id=branch
+      and m.revoked_at is null and b.disabled_at is null and r.disabled_at is null and g.revoked_at is null
+      and g.role_code in ('owner','admin','manager','supervisor','cashier','waiter')
+  ) then return pg_catalog.jsonb_build_object('status','denied'); end if;
+
+  fingerprint := pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+    'capture.delivery_quote_set:'||p_command::text||':'||p_actor_id::text, 'UTF8'
+  )), 'hex');
+  select * into stored from app.capture_command_events
+  where actor_id=p_actor_id and restaurant_id=restaurant and branch_id=branch
+    and idempotency_key=p_command->>'idempotencyKey';
+  if found then
+    if stored.operation <> 'capture.delivery_quote_set' or stored.command_fingerprint <> fingerprint then
+      return pg_catalog.jsonb_build_object('status','conflict');
+    end if;
+    return pg_catalog.jsonb_build_object('status','replayed','record',stored.result_capture);
+  end if;
+  return pg_catalog.jsonb_build_object('status','pending');
+end
+$function$;
+
+alter function app_private.probe_capture_delivery_quote_set(uuid,jsonb) owner to postgres;
+revoke all on function app_private.probe_capture_delivery_quote_set(uuid,jsonb)
+  from public, anon, authenticated, service_role, app_api;
+grant execute on function app_private.probe_capture_delivery_quote_set(uuid,jsonb) to app_api;
+
+comment on function app_private.probe_capture_delivery_quote_set(uuid,jsonb) is
+  'Read-only idempotency probe for set_capture_delivery_quote: recognizes a replay purely from actor+scope+idempotencyKey+fingerprint before the API recomputes the delivery quote, so a retry after a lost response is never turned into a spurious conflict by a freshly recomputed quotedAt/quoteId.';
 
 create function app_private.set_capture_payment_intent(
   p_actor_id uuid,
@@ -510,6 +603,8 @@ declare
   repeat_plan app.capture_repeat_order_plans%rowtype;
   stored_quote app.capture_delivery_quotes%rowtype;
   stored_intent app.capture_payment_intents%rowtype;
+  current_fulfillment_snapshot uuid;
+  fulfillment_change_version bigint;
   frozen_quote jsonb; frozen_intent jsonb;
   old_result jsonb; mutation_result jsonb; result_record jsonb; base_order jsonb;
   line_record record; item jsonb; expected_snapshot jsonb; expected_modifiers jsonb; expected_note jsonb;
@@ -734,22 +829,41 @@ begin
     end loop;
   end if;
 
-  -- Freeze the delivery quote and payment intent, if any. Staleness reuses the same CAS the
-  -- repeat/selection plan already relies on (repeat_plan.applied_capture_version<>expected,
-  -- above): a payment intent set against an earlier capture version than the one being confirmed
-  -- means lines/fulfillment/quote moved since, and confirm must refuse rather than freeze a
-  -- combination that no longer agrees. This does not require the caller to (re)supply a
-  -- fingerprint, so it never changes ConfirmCaptureDraftCommandV2's contract for existing callers
-  -- with no payment intent at all.
+  -- Freeze the delivery quote and payment intent, if any.
+  select fulfillment_snapshot_id into current_fulfillment_snapshot from app.capture_drafts
+  where restaurant_id=restaurant and branch_id=branch and id=capture for share;
+
   select * into stored_quote from app.capture_delivery_quotes
   where restaurant_id=restaurant and branch_id=branch and capture_draft_id=capture for share;
+  -- Defense in depth: clear_capture_delivery_quote_for_channel already deletes this row the
+  -- instant fulfillment_snapshot_id changes, so this should never actually find a mismatch; it
+  -- exists purely to fail closed rather than freeze an inconsistent quote/address pairing.
+  if found and stored_quote.quote->>'addressSnapshotRef' is distinct from current_fulfillment_snapshot::text then
+    return pg_catalog.jsonb_build_object('status','conflict','reason','delivery_quote_stale');
+  end if;
   frozen_quote := case when found then stored_quote.quote else null end;
+
+  -- Staleness is decided from the actual facts that could have invalidated the intent since it
+  -- was set, not from whether ANY unrelated mutation (e.g. delivery instructions) advanced the
+  -- draft's version: the selection/repeat plan's own applied_capture_version (already
+  -- independently enforced above for plan_kind='repeat', and always current for 'selection'), the
+  -- frozen quote's applied_capture_version, and the version at which the fulfillment/address
+  -- snapshot itself last changed (capture.fulfillment_changed). A payment intent set before any of
+  -- those moved on is still valid, even if the draft's overall version advanced for an unrelated
+  -- reason in between.
+  select max(events.result_version) into fulfillment_change_version
+  from app.capture_command_events events
+  where events.restaurant_id=restaurant and events.branch_id=branch and events.capture_draft_id=capture
+    and events.operation='capture.fulfillment_changed';
 
   select * into stored_intent from app.capture_payment_intents
   where restaurant_id=restaurant and branch_id=branch and capture_draft_id=capture for share;
   if not found then
     frozen_intent := null;
-  elsif stored_intent.applied_capture_version <> expected then
+  elsif coalesce(repeat_plan.applied_capture_version,0) > stored_intent.applied_capture_version
+    or coalesce(stored_quote.applied_capture_version,0) > stored_intent.applied_capture_version
+    or coalesce(fulfillment_change_version,0) > stored_intent.applied_capture_version
+  then
     return pg_catalog.jsonb_build_object('status','conflict','reason','payment_intent_stale');
   else
     frozen_intent := stored_intent.intent;

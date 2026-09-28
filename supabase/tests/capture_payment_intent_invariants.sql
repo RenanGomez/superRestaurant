@@ -14,10 +14,14 @@ declare
   other_capture uuid := gen_random_uuid();
   confirm_capture uuid := gen_random_uuid();
   stale_capture uuid := gen_random_uuid();
+  stale_lines_capture uuid := gen_random_uuid();
+  address_change_capture uuid := gen_random_uuid();
+  quote_mismatch_capture uuid := gen_random_uuid();
   catalog uuid := gen_random_uuid();
   category uuid := gen_random_uuid();
   product uuid := gen_random_uuid();
   line_a uuid := gen_random_uuid();
+  line_b uuid := gen_random_uuid();
   confirm_customer uuid := gen_random_uuid();
   confirm_contact uuid := gen_random_uuid();
   confirm_address uuid := gen_random_uuid();
@@ -27,9 +31,13 @@ declare
   shift uuid := gen_random_uuid();
   confirmed_order uuid := gen_random_uuid();
   stale_order uuid := gen_random_uuid();
+  stale_lines_order uuid := gen_random_uuid();
+  address_change_order uuid := gen_random_uuid();
   confirmation_event uuid := gen_random_uuid();
   item_event uuid := gen_random_uuid();
   item_id uuid := gen_random_uuid();
+  fulfillment_snapshot_before uuid;
+  fulfillment_snapshot_after uuid;
   now_at timestamptz := pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp());
   created jsonb;
   lease text;
@@ -146,6 +154,21 @@ begin
   result := app_private.set_capture_delivery_quote(actor,quote_command,quote);
   execute 'reset role';
   if result->>'status'<>'replayed' then raise exception 'CAPTURE_DELIVERY_QUOTE_REPLAY_REJECTED'; end if;
+
+  -- The probe recognizes the same replay purely from the command (never from a freshly
+  -- recomputed quote jsonb with a different quotedAt/quoteId), and is 'pending' for a brand-new
+  -- idempotencyKey. Both fingerprints are computed over the command only, so a recomputed quote
+  -- never turns a legitimate replay into a spurious conflict.
+  execute 'set local role app_api';
+  result := app_private.probe_capture_delivery_quote_set(actor,quote_command);
+  execute 'reset role';
+  if result->>'status'<>'replayed' then raise exception 'CAPTURE_DELIVERY_QUOTE_PROBE_REPLAY_REJECTED'; end if;
+  execute 'set local role app_api';
+  result := app_private.probe_capture_delivery_quote_set(
+    actor,quote_command||pg_catalog.jsonb_build_object('idempotencyKey',gen_random_uuid()::text)
+  );
+  execute 'reset role';
+  if result->>'status'<>'pending' then raise exception 'CAPTURE_DELIVERY_QUOTE_PROBE_PENDING_REJECTED'; end if;
 
   -- version 3 -> 4: legitimate channel change away from delivery clears the frozen quote.
   autosave_command := autosave_command||pg_catalog.jsonb_build_object(
@@ -298,6 +321,8 @@ begin
   ));
   execute 'reset role';
   if fulfillment->>'status'<>'applied' then raise exception 'CAPTURE_PAYMENT_INTENT_CONFIRM_FULFILLMENT_REJECTED'; end if;
+  select capture_drafts.fulfillment_snapshot_id into fulfillment_snapshot_before from app.capture_drafts
+  where restaurant_id=restaurant and branch_id=branch and id=confirm_capture;
 
   -- version 3 -> 4: catalog selection plan.
   plan_command := pg_catalog.jsonb_build_object(
@@ -321,7 +346,9 @@ begin
   if result->>'status'<>'applied' then raise exception 'CAPTURE_PAYMENT_INTENT_CONFIRM_PLAN_REJECTED'; end if;
 
   -- version 4 -> 5: the frozen delivery quote.
-  quote := quote||pg_catalog.jsonb_build_object('captureDraftId',confirm_capture::text);
+  quote := quote||pg_catalog.jsonb_build_object(
+    'captureDraftId',confirm_capture::text,'addressSnapshotRef',fulfillment_snapshot_before::text
+  );
   quote_command := pg_catalog.jsonb_build_object(
     'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
       'restaurantId',restaurant::text,'branchId',branch::text
@@ -405,8 +432,211 @@ begin
   then raise exception 'CAPTURE_PAYMENT_INTENT_CONFIRM_DID_NOT_FREEZE_BOTH'; end if;
 
   ----------------------------------------------------------------------------
-  -- Confirm rejects a stale payment intent (applied_capture_version behind
-  -- the version being confirmed).
+  -- Changing the fulfillment/address snapshot after quoting deletes the frozen
+  -- quote (clear_capture_delivery_quote_for_channel now also fires on
+  -- fulfillment_snapshot_id, not just channel/status), and confirm proceeds
+  -- with no quote rather than a stale one.
+  ----------------------------------------------------------------------------
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',address_change_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','delivery'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_ADDRESS_CHANGE_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  execute 'set local role app_api';
+  party := app_private.set_capture_customer(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',address_change_capture::text,'expectedVersion',1,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'customerId',confirm_customer::text,'contactId',confirm_contact::text,'expectedCustomerVersion',1
+  ));
+  execute 'reset role';
+  if party->>'status'<>'applied' then raise exception 'CAPTURE_ADDRESS_CHANGE_CUSTOMER_REJECTED'; end if;
+
+  execute 'set local role app_api';
+  fulfillment := app_private.set_capture_fulfillment(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',address_change_capture::text,'expectedVersion',2,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'customerSnapshotRef',party#>>'{record,detail,customerSnapshotRef}',
+    'addressId',confirm_address::text,'expectedAddressVersion',1
+  ));
+  execute 'reset role';
+  if fulfillment->>'status'<>'applied' then raise exception 'CAPTURE_ADDRESS_CHANGE_FULFILLMENT_REJECTED'; end if;
+  select capture_drafts.fulfillment_snapshot_id into fulfillment_snapshot_before from app.capture_drafts
+  where restaurant_id=restaurant and branch_id=branch and id=address_change_capture;
+
+  quote := quote||pg_catalog.jsonb_build_object(
+    'captureDraftId',address_change_capture::text,'addressSnapshotRef',fulfillment_snapshot_before::text
+  );
+  quote_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',address_change_capture::text,'expectedVersion',3,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  );
+  execute 'set local role app_api';
+  result := app_private.set_capture_delivery_quote(actor,quote_command,quote);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_ADDRESS_CHANGE_QUOTE_REJECTED'; end if;
+  if not exists (
+    select 1 from app.capture_delivery_quotes stored
+    where stored.restaurant_id=restaurant and stored.branch_id=branch and stored.capture_draft_id=address_change_capture
+  ) then raise exception 'CAPTURE_ADDRESS_CHANGE_QUOTE_NOT_PERSISTED'; end if;
+
+  -- Re-applying the address (a new party/fulfillment snapshot each time by design) must clear the
+  -- now-stale quote, even though the fulfillment channel itself never changed.
+  execute 'set local role app_api';
+  fulfillment := app_private.set_capture_fulfillment(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',address_change_capture::text,'expectedVersion',4,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'customerSnapshotRef',party#>>'{record,detail,customerSnapshotRef}',
+    'addressId',confirm_address::text,'expectedAddressVersion',1
+  ));
+  execute 'reset role';
+  if fulfillment->>'status'<>'applied' then raise exception 'CAPTURE_ADDRESS_CHANGE_REFULFILLMENT_REJECTED'; end if;
+  select capture_drafts.fulfillment_snapshot_id into fulfillment_snapshot_after from app.capture_drafts
+  where restaurant_id=restaurant and branch_id=branch and id=address_change_capture;
+  if fulfillment_snapshot_after is not distinct from fulfillment_snapshot_before
+  then raise exception 'CAPTURE_ADDRESS_CHANGE_TEST_SNAPSHOT_DID_NOT_CHANGE'; end if;
+  if exists (
+    select 1 from app.capture_delivery_quotes stored
+    where stored.restaurant_id=restaurant and stored.branch_id=branch and stored.capture_draft_id=address_change_capture
+  ) then raise exception 'CAPTURE_ADDRESS_CHANGE_QUOTE_NOT_CLEARED'; end if;
+
+  -- Confirm now proceeds with no quote at all (never a stale one).
+  confirmation_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',2,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',address_change_capture::text,'expectedVersion',5,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'attentionLeaseId',lease,
+    'orderId',address_change_order::text,'shiftId',shift::text,'tableId',null,
+    'currency','MXN','timeZone','America/Hermosillo'
+  );
+  order_audits := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'eventId',confirmation_command->>'eventId',
+    'idempotencyKey',confirmation_command->>'idempotencyKey','restaurantId',restaurant::text,
+    'branchId',branch::text,'orderId',address_change_order::text,'actorId',actor::text,
+    'deviceId',device::text,'occurredAt',confirmation_command->>'occurredAt',
+    'operation','order.created','entityType','order','entityId',address_change_order::text,'to','draft'
+  ));
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',address_change_order::text,'restaurantId',restaurant::text,
+    'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
+    'status','draft','items',pg_catalog.jsonb_build_array()
+  );
+  execute 'set local role app_api';
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_ADDRESS_CHANGE_CONFIRM_REJECTED'; end if;
+  select snapshot.snapshot into frozen from app.order_fulfillment_snapshots snapshot
+  where snapshot.restaurant_id=restaurant and snapshot.branch_id=branch and snapshot.order_id=address_change_order;
+  if frozen#>'{deliveryQuote}' is distinct from 'null'::jsonb
+  then raise exception 'CAPTURE_ADDRESS_CHANGE_CONFIRM_FROZE_STALE_QUOTE'; end if;
+
+  ----------------------------------------------------------------------------
+  -- A synthetically inconsistent stored quote (addressSnapshotRef no longer
+  -- matching the capture's current fulfillment snapshot) is refused at
+  -- confirm, independent of the trigger that normally prevents this state.
+  ----------------------------------------------------------------------------
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',quote_mismatch_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','delivery'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_QUOTE_MISMATCH_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  execute 'set local role app_api';
+  party := app_private.set_capture_customer(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',quote_mismatch_capture::text,'expectedVersion',1,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'customerId',confirm_customer::text,'contactId',confirm_contact::text,'expectedCustomerVersion',1
+  ));
+  execute 'reset role';
+  if party->>'status'<>'applied' then raise exception 'CAPTURE_QUOTE_MISMATCH_CUSTOMER_REJECTED'; end if;
+
+  execute 'set local role app_api';
+  fulfillment := app_private.set_capture_fulfillment(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',quote_mismatch_capture::text,'expectedVersion',2,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'customerSnapshotRef',party#>>'{record,detail,customerSnapshotRef}',
+    'addressId',confirm_address::text,'expectedAddressVersion',1
+  ));
+  execute 'reset role';
+  if fulfillment->>'status'<>'applied' then raise exception 'CAPTURE_QUOTE_MISMATCH_FULFILLMENT_REJECTED'; end if;
+
+  -- Bypasses set_capture_delivery_quote (and therefore the trigger that keeps this row
+  -- consistent) to synthesize the otherwise-unreachable inconsistent state directly, as a
+  -- superuser fixture -- never how the API or a client can reach this table.
+  insert into app.capture_delivery_quotes(
+    restaurant_id,branch_id,capture_draft_id,quote,applied_capture_version,idempotency_key,command_fingerprint,
+    actor_id,actor_membership_id,device_id,occurred_at,received_at
+  ) values (
+    restaurant,branch,quote_mismatch_capture,
+    quote||pg_catalog.jsonb_build_object('captureDraftId',quote_mismatch_capture::text,'addressSnapshotRef',gen_random_uuid()::text),
+    3,gen_random_uuid()::text,pg_catalog.encode(pg_catalog.sha256('fixture-mismatch'::bytea),'hex'),
+    actor,membership,device,now_at,now_at
+  );
+
+  confirmation_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',2,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',quote_mismatch_capture::text,'expectedVersion',3,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'attentionLeaseId',lease,
+    'orderId',gen_random_uuid()::text,'shiftId',shift::text,'tableId',null,
+    'currency','MXN','timeZone','America/Hermosillo'
+  );
+  order_audits := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'eventId',confirmation_command->>'eventId',
+    'idempotencyKey',confirmation_command->>'idempotencyKey','restaurantId',restaurant::text,
+    'branchId',branch::text,'orderId',confirmation_command->>'orderId','actorId',actor::text,
+    'deviceId',device::text,'occurredAt',confirmation_command->>'occurredAt',
+    'operation','order.created','entityType','order','entityId',confirmation_command->>'orderId','to','draft'
+  ));
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',confirmation_command->>'orderId','restaurantId',restaurant::text,
+    'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
+    'status','draft','items',pg_catalog.jsonb_build_array()
+  );
+  execute 'set local role app_api';
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'conflict' or result->>'reason'<>'delivery_quote_stale'
+  then raise exception 'CAPTURE_QUOTE_MISMATCH_NOT_REJECTED'; end if;
+
+  ----------------------------------------------------------------------------
+  -- A benign edit unrelated to lines/fulfillment/quote (e.g. delivery
+  -- instructions or any other autosaved field) after the payment intent was
+  -- set does NOT stale it: confirm succeeds even though the draft's overall
+  -- version advanced past the intent's applied_capture_version.
   ----------------------------------------------------------------------------
   execute 'set local role app_api';
   created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
@@ -436,9 +666,9 @@ begin
   if result->>'status'<>'applied' then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_SET_REJECTED'; end if;
   -- Payment intent's applied_capture_version is now 2 (set at version 1 -> 2).
 
-  -- version 2 -> 3: an unrelated autosave advances the capture past the intent's basis, without
-  -- touching the intent itself, exactly the scenario basis-fingerprint/applied_capture_version
-  -- staleness exists to catch.
+  -- version 2 -> 3: a benign, unrelated autosave (fulfillment channel and every snapshot
+  -- reference identical to before) advances the draft's version without touching lines,
+  -- fulfillment/address or the quote. This must NOT be treated as staling the intent.
   autosave_command := pg_catalog.jsonb_build_object(
     'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
       'restaurantId',restaurant::text,'branchId',branch::text
@@ -478,13 +708,142 @@ begin
 
   execute 'set local role app_api';
   if app_private.confirm_capture_draft_v3(actor,confirmation_command,null,null)->>'status'<>'pending'
-    then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_PROBE_REJECTED'; end if;
+    then raise exception 'CAPTURE_PAYMENT_INTENT_BENIGN_EDIT_PROBE_REJECTED'; end if;
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'applied'
+  then raise exception 'CAPTURE_PAYMENT_INTENT_BENIGN_EDIT_WRONGLY_STALED'; end if;
+  if not exists (select 1 from app.orders placed where placed.id=stale_order)
+  then raise exception 'CAPTURE_PAYMENT_INTENT_BENIGN_EDIT_ORDER_NOT_CREATED'; end if;
+
+  ----------------------------------------------------------------------------
+  -- Confirm rejects a stale payment intent when the selection plan changed
+  -- (a real line change) after the intent's applied_capture_version.
+  ----------------------------------------------------------------------------
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',stale_lines_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','counter'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_LINES_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  -- version 1 -> 2: an initial selection plan.
+  plan_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',stale_lines_capture::text,'expectedVersion',1,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  );
+  plan := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'catalogVersion',catalog::text,'lines',pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'lineId',line_a::text,'productId',product::text,'variantId',null,'quantity',1,'note',null,
+        'modifierGroups',pg_catalog.jsonb_build_array()
+      )
+    )
+  );
+  execute 'set local role app_api';
+  result := app_private.replace_capture_selection_plan(actor,plan_command,plan);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_LINES_PLAN_REJECTED'; end if;
+
+  -- version 2 -> 3: the payment intent, set against this one-line plan.
+  intent_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',stale_lines_capture::text,'expectedVersion',2,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'method','cash','tenderedAmountMinor',5000,'tipMinor',0,
+    'basisFingerprint',pg_catalog.encode(pg_catalog.sha256('fixture-basis-stale-lines'::bytea),'hex')
+  );
+  execute 'set local role app_api';
+  result := app_private.set_capture_payment_intent(actor,intent_command);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_LINES_SET_REJECTED'; end if;
+  -- Payment intent's applied_capture_version is now 3.
+
+  -- version 3 -> 4: the lines actually change (a second line added) after the intent was set.
+  plan_command := plan_command||pg_catalog.jsonb_build_object(
+    'expectedVersion',3,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text
+  );
+  plan := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'catalogVersion',catalog::text,'lines',pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'lineId',line_a::text,'productId',product::text,'variantId',null,'quantity',1,'note',null,
+        'modifierGroups',pg_catalog.jsonb_build_array()
+      ),
+      pg_catalog.jsonb_build_object(
+        'lineId',line_b::text,'productId',product::text,'variantId',null,'quantity',1,'note',null,
+        'modifierGroups',pg_catalog.jsonb_build_array()
+      )
+    )
+  );
+  execute 'set local role app_api';
+  result := app_private.replace_capture_selection_plan(actor,plan_command,plan);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_LINES_REPLAN_REJECTED'; end if;
+
+  confirmation_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',2,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',stale_lines_capture::text,'expectedVersion',4,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'attentionLeaseId',lease,
+    'orderId',stale_lines_order::text,'shiftId',shift::text,'tableId',null,
+    'currency','MXN','timeZone','America/Hermosillo'
+  );
+
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',stale_lines_order::text,'restaurantId',restaurant::text,
+    'branchId',branch::text,'channel','counter','currency','MXN','timeZone','America/Hermosillo',
+    'status','draft','items',pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'orderItemId',item_id::text,'snapshot',pg_catalog.jsonb_build_object(
+          'catalogVersion',catalog::text,'productId',product::text,'name','Taco de confirmacion',
+          'sku','TACO-CONFIRM','stationId','kitchen','unit','piece',
+          'unitPrice',pg_catalog.jsonb_build_object('amountMinor',5000,'currency','MXN'),
+          'modifiers',pg_catalog.jsonb_build_array()
+        ),'quantity',1,'restaurantId',restaurant::text,'branchId',branch::text,'status','pending',
+        'note',null
+      ),
+      pg_catalog.jsonb_build_object(
+        'orderItemId',gen_random_uuid()::text,'snapshot',pg_catalog.jsonb_build_object(
+          'catalogVersion',catalog::text,'productId',product::text,'name','Taco de confirmacion',
+          'sku','TACO-CONFIRM','stationId','kitchen','unit','piece',
+          'unitPrice',pg_catalog.jsonb_build_object('amountMinor',5000,'currency','MXN'),
+          'modifiers',pg_catalog.jsonb_build_array()
+        ),'quantity',1,'restaurantId',restaurant::text,'branchId',branch::text,'status','pending',
+        'note',null
+      )
+    )
+  );
+  order_audits := pg_catalog.jsonb_build_array(
+    pg_catalog.jsonb_build_object('operation','order.created'),
+    pg_catalog.jsonb_build_object('operation','order.item_added'),
+    pg_catalog.jsonb_build_object('operation','order.item_added')
+  );
+
+  execute 'set local role app_api';
+  if app_private.confirm_capture_draft_v3(actor,confirmation_command,null,null)->>'status'<>'pending'
+    then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_LINES_PROBE_REJECTED'; end if;
+  -- The order/items shape matches the (now two-line) selection plan exactly, so the item
+  -- validation loop passes; SQL must still refuse for staleness, before ever persisting anything.
   result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
   execute 'reset role';
   if result->>'status'<>'conflict' or result->>'reason'<>'payment_intent_stale'
-  then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_NOT_REJECTED'; end if;
-  if exists (select 1 from app.orders placed where placed.id=stale_order)
-  then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_ORDER_WAS_CREATED'; end if;
+  then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_LINES_NOT_REJECTED'; end if;
+  if exists (select 1 from app.orders placed where placed.id=stale_lines_order)
+  then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_LINES_ORDER_WAS_CREATED'; end if;
 end
 $capture_payment_intent_tests$;
 commit;
