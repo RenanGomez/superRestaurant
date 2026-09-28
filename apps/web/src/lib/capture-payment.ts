@@ -1,5 +1,6 @@
 import type {
-  CapturePaymentIntentMethodV1, CapturePaymentIntentProjectionV1, CapturePaymentIntentTimingV1, DeliveryQuoteV1,
+  CaptureFulfillmentChannelV1, CapturePaymentIntentMethodV1, CapturePaymentIntentProjectionV1,
+  CapturePaymentIntentTimingV1, DeliveryQuoteV1,
 } from "@super-restaurant/shared-types";
 
 const moneyInputPattern = /^\d{1,7}([.,]\d{1,2})?$/u;
@@ -123,6 +124,35 @@ export function paymentIntentBlocksConfirm(
   if (paymentIntent === null || paymentIntent === undefined) return false;
   return paymentProjection === null
     || paymentProjection.status === "stale" || paymentProjection.status === "insufficient";
+}
+
+export type DeliveryQuoteBlockReason = "missing" | "not_covered" | "expired" | "time_mismatch" | null;
+
+/**
+ * H21: the confirm guard for a delivery capture previously only compared the requested time
+ * (`quoteMatchesRequestedTime`), so an absent, uncovered, or already-expired quote left the
+ * confirm button enabled and let the operator hit a doomed submit. Returns the specific reason
+ * (or `null` when nothing blocks) so the UI can show it and offer "Cotizar entrega":
+ * - `"missing"`: no frozen quote at all yet;
+ * - `"not_covered"`: the server never found coverage for the address;
+ * - `"expired"`: the quote's own `expiresAt` has passed by `now` -- a client-side clock is only
+ *   ever a courtesy warning here; the server is still the one that actually enforces expiry (H14);
+ * - `"time_mismatch"`: the quote is for a different scheduled time than the field currently reads.
+ * Precedence is missing > not_covered > expired > time_mismatch, matching how each fact would
+ * independently be reported by the server if it were the one refusing confirm.
+ */
+export function deliveryQuoteBlocksConfirm(
+  fulfillmentChannel: CaptureFulfillmentChannelV1 | null,
+  quote: DeliveryQuoteV1 | null,
+  scheduledFor: string,
+  now: Date,
+): DeliveryQuoteBlockReason {
+  if (fulfillmentChannel !== "delivery") return null;
+  if (quote === null) return "missing";
+  if (quote.coverageStatus === "not_covered") return "not_covered";
+  if (Date.parse(quote.expiresAt) <= now.getTime()) return "expired";
+  if (!quoteMatchesRequestedTime(quote, scheduledFor)) return "time_mismatch";
+  return null;
 }
 
 export function describePaymentMethod(

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  deliveryQuoteScheduledForInputValue, describePaymentMethod, isSwitchingToAnotherCapture, parseMoneyInputToMinor,
-  paymentIntentBlocksConfirm, quoteMatchesRequestedTime, suggestTenderAmounts,
+  deliveryQuoteBlocksConfirm, deliveryQuoteScheduledForInputValue, describePaymentMethod, isSwitchingToAnotherCapture,
+  parseMoneyInputToMinor, paymentIntentBlocksConfirm, quoteMatchesRequestedTime, suggestTenderAmounts,
 } from "./capture-payment.js";
 
 const baseQuote = {
@@ -81,6 +81,49 @@ test("paymentIntentBlocksConfirm blocks a stale or insufficient projection", () 
 
 test("H20: paymentIntentBlocksConfirm blocks a set intent with no projection at all (no pricing basis)", () => {
   assert.equal(paymentIntentBlocksConfirm({}, null), true);
+});
+
+test("deliveryQuoteBlocksConfirm never blocks outside delivery, regardless of quote facts", () => {
+  assert.equal(deliveryQuoteBlocksConfirm("counter", null, "", new Date("2026-09-27T12:00:00Z")), null);
+  assert.equal(deliveryQuoteBlocksConfirm(null, null, "", new Date("2026-09-27T12:00:00Z")), null);
+});
+
+test("H21: deliveryQuoteBlocksConfirm reports missing when there is no frozen quote at all", () => {
+  assert.equal(deliveryQuoteBlocksConfirm("delivery", null, "", new Date("2026-09-27T12:00:00Z")), "missing");
+});
+
+test("H21: deliveryQuoteBlocksConfirm reports not_covered ahead of any expiry/time check", () => {
+  const quote = { ...baseQuote, coverageStatus: "not_covered" as const,
+    expiresAt: "2026-09-27T13:00:00.000Z" };
+  assert.equal(deliveryQuoteBlocksConfirm("delivery", quote, "", new Date("2026-09-27T12:00:00Z")), "not_covered");
+});
+
+test("H21: deliveryQuoteBlocksConfirm reports expired once the client's clock passes expiresAt", () => {
+  const quote = { ...baseQuote, expiresAt: "2026-09-27T12:00:00.000Z" };
+  assert.equal(deliveryQuoteBlocksConfirm("delivery", quote, "", new Date("2026-09-27T12:00:01Z")), "expired");
+  assert.equal(deliveryQuoteBlocksConfirm("delivery", quote, "", new Date("2026-09-27T11:59:59Z")), null);
+});
+
+test("H21: deliveryQuoteBlocksConfirm reports time_mismatch only once covered and unexpired", () => {
+  const quote = { ...baseQuote, expiresAt: "2026-09-27T13:00:00.000Z" };
+  assert.equal(
+    deliveryQuoteBlocksConfirm("delivery", quote, "2026-09-27T13:00", new Date("2026-09-27T12:00:00Z")),
+    "time_mismatch",
+  );
+});
+
+test("H21: deliveryQuoteBlocksConfirm is null for a covered, unexpired quote matching the requested time", () => {
+  const fieldValue = "2026-09-27T13:00";
+  const matchingInstant = new Date(fieldValue).toISOString();
+  const scheduled = { ...baseQuote, scheduledFor: matchingInstant, expiresAt: "2026-09-29T12:00:00.000Z" };
+  assert.equal(
+    deliveryQuoteBlocksConfirm("delivery", scheduled, fieldValue, new Date("2026-09-27T12:00:00Z")),
+    null,
+  );
+  assert.equal(
+    deliveryQuoteBlocksConfirm("delivery", baseQuote, "", new Date("2026-09-27T12:00:00Z")),
+    null,
+  );
 });
 
 test("suggestTenderAmounts always includes the exact total plus the next 100/200/500-peso roundings above it", () => {

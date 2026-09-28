@@ -41,7 +41,8 @@ import type { CaptureConfirmationContext } from "../../../lib/capture-confirmati
 import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import { formatDeliveryQuote } from "../../../lib/delivery-zones";
 import {
-  deliveryQuoteScheduledForInputValue, isSwitchingToAnotherCapture, paymentIntentBlocksConfirm, quoteMatchesRequestedTime,
+  deliveryQuoteBlocksConfirm, deliveryQuoteScheduledForInputValue, isSwitchingToAnotherCapture,
+  paymentIntentBlocksConfirm,
 } from "../../../lib/capture-payment";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
 import { CaptureMenu } from "./capture-menu";
@@ -682,12 +683,17 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const locked = busy || capture?.status !== "draft" || capture?.attentionLeaseId === null
     || error === "denied" || error === "conflict";
   const paymentBlocksConfirm = paymentIntentBlocksConfirm(paymentIntent, paymentProjection);
-  // Derived from the server's own frozen quote.scheduledFor vs. the field's current value -- never
-  // from quoteRequestedForDiffers alone, which applyWorkspace clears on any unrelated mutation
-  // (e.g. fixing the payment intent), which would otherwise let confirm through with a quote
-  // computed for a time the operator has since changed but never re-quoted (H11).
+  // H21: covers every fact that can make a delivery quote unusable at confirm time -- missing,
+  // never covered, already expired by the client's own clock (a courtesy warning; the server is
+  // still the one that actually enforces expiry, H14), or simply for a different requested time
+  // -- not just the time comparison this used to be limited to. `quoteRequestedForDiffers` is
+  // still OR'd in separately: it is local-only UI state (set the instant the operator edits the
+  // field, before `deliveryQuote` itself changes) that `deliveryQuoteBlocksConfirm`'s pure
+  // comparison against the server's frozen facts can't see, and applyWorkspace clears it on any
+  // unrelated mutation, so it never masks a legitimate re-quote (H11).
+  const quoteBlockReason = deliveryQuoteBlocksConfirm(fulfillmentChannel, deliveryQuote, scheduledFor, new Date());
   const quoteBlocksConfirm = fulfillmentChannel === "delivery"
-    && (quoteRequestedForDiffers || !quoteMatchesRequestedTime(deliveryQuote, scheduledFor));
+    && (quoteRequestedForDiffers || quoteBlockReason !== null);
   const canConfirm = confirmationContext !== undefined && selectedShiftId !== "" && fulfillmentChannel !== null
     && (fulfillmentChannel !== "dine_in" || selectedTableId !== "")
     && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null))
@@ -973,9 +979,12 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         </form>
         {quoteError && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{quoteError}</p>}
         {quoteBlocksConfirm && <div role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">
-          <p>La cotización mostrada es de otra hora: vuelve a cotizar antes de convertir en orden.</p>
+          <p>{quoteBlockReason === "missing" ? "Aún no hay cotización de entrega: cotiza antes de convertir en orden."
+            : quoteBlockReason === "not_covered" ? "La dirección no tiene cobertura de entrega."
+              : quoteBlockReason === "expired" ? "La cotización expiró: vuelve a cotizar antes de convertir en orden."
+                : "La cotización mostrada es de otra hora: vuelve a cotizar antes de convertir en orden."}</p>
           <button type="button" className={`${button} mt-2`} disabled={busy} onClick={() => void requestDeliveryQuote()}>
-            Volver a cotizar
+            Cotizar entrega
           </button>
         </div>}
         {deliveryQuote && <div role="status" className="mt-3 grid gap-1 rounded-lg border border-border bg-bg p-3 text-sm">
