@@ -619,7 +619,11 @@ const noConfirmationPort: CaptureConfirmationPort = {
 
 test("capture selection plan prices every line against the live catalog before persisting", async () => {
   const workspaceV4Record = {
-    schemaVersion: 4,
+    schemaVersion: 5,
+    deliveryQuote: null,
+    paymentIntent: null,
+    paymentIntentAppliedCaptureVersion: null,
+    paymentIntentBasisFingerprint: null,
     detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
     customerSnapshot: null,
     fulfillmentSnapshot: null,
@@ -638,7 +642,7 @@ test("capture selection plan prices every line against the live catalog before p
   };
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
-    readWorkspaceV4: async () => workspaceV4Record,
+    readWorkspaceV5: async () => workspaceV4Record,
   };
   const storedPlanConfirmation: CaptureConfirmationPort = {
     ...noConfirmationPort,
@@ -684,7 +688,11 @@ test("capture selection plan applied write accepts a follow-up read whose versio
   // separate readWorkspaceV4 call following this write observes it. The response must still
   // be 200 with the fresher version, never unavailable for failing an exact-match comparison.
   const advancedAfterWriteRecord = {
-    schemaVersion: 4,
+    schemaVersion: 5,
+    deliveryQuote: null,
+    paymentIntent: null,
+    paymentIntentAppliedCaptureVersion: null,
+    paymentIntentBasisFingerprint: null,
     detail: { ...record.detail, schemaVersion: 2 as const, version: 4, deliveryInstructions: null },
     customerSnapshot: null,
     fulfillmentSnapshot: null,
@@ -698,7 +706,7 @@ test("capture selection plan applied write accepts a follow-up read whose versio
   };
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
-    readWorkspaceV4: async () => advancedAfterWriteRecord,
+    readWorkspaceV5: async () => advancedAfterWriteRecord,
   };
   const storedPlanConfirmation: CaptureConfirmationPort = {
     ...noConfirmationPort,
@@ -729,7 +737,7 @@ test("capture selection plan applied write accepts a follow-up read whose versio
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
   }), persistence, {
     createDraft: async () => { throw new Error("must not create"); },
-    readWorkspaceV4: async () => ({ ...advancedAfterWriteRecord, detail: { ...advancedAfterWriteRecord.detail, version: 1 } }),
+    readWorkspaceV5: async () => ({ ...advancedAfterWriteRecord, detail: { ...advancedAfterWriteRecord.detail, version: 1 } }),
   }, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
     save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort)
     .replace(principal, selectionPlanCommand), code("unavailable"));
@@ -742,7 +750,11 @@ test("capture selection plan with zero lines is treated as no plan, never priced
   });
   assert.ok(emptyCommand);
   const noPlanWorkspaceV4Record = {
-    schemaVersion: 4,
+    schemaVersion: 5,
+    deliveryQuote: null,
+    paymentIntent: null,
+    paymentIntentAppliedCaptureVersion: null,
+    paymentIntentBasisFingerprint: null,
     detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
     customerSnapshot: null,
     fulfillmentSnapshot: null,
@@ -759,7 +771,7 @@ test("capture selection plan with zero lines is treated as no plan, never priced
   };
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
-    readWorkspaceV4: async () => noPlanWorkspaceV4Record,
+    readWorkspaceV5: async () => noPlanWorkspaceV4Record,
   };
   const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
@@ -780,7 +792,11 @@ test("capture selection plan with a line note prices and persists it, carrying t
   });
   assert.ok(notedCommand);
   const workspaceV4Record = {
-    schemaVersion: 4,
+    schemaVersion: 5,
+    deliveryQuote: null,
+    paymentIntent: null,
+    paymentIntentAppliedCaptureVersion: null,
+    paymentIntentBasisFingerprint: null,
     detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
     customerSnapshot: null,
     fulfillmentSnapshot: null,
@@ -798,7 +814,7 @@ test("capture selection plan with a line note prices and persists it, carrying t
   };
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
-    readWorkspaceV4: async () => workspaceV4Record,
+    readWorkspaceV5: async () => workspaceV4Record,
   };
   const storedPlanConfirmation: CaptureConfirmationPort = {
     ...noConfirmationPort,
@@ -815,7 +831,11 @@ test("capture selection plan with a line note prices and persists it, carrying t
 
 test("capture selection plan replay returns the stored result even after a later, unrelated mutation", async () => {
   const advancedWorkspaceV4Record = {
-    schemaVersion: 4,
+    schemaVersion: 5,
+    deliveryQuote: null,
+    paymentIntent: null,
+    paymentIntentAppliedCaptureVersion: null,
+    paymentIntentBasisFingerprint: null,
     // The draft moved to version 5 through some other mutation after this idempotency key was
     // first applied at version 2; the replay must not be rejected for failing to match version 2.
     detail: { ...record.detail, schemaVersion: 2 as const, version: 5, deliveryInstructions: null },
@@ -832,7 +852,7 @@ test("capture selection plan replay returns the stored result even after a later
   };
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
-    readWorkspaceV4: async () => advancedWorkspaceV4Record,
+    readWorkspaceV5: async () => advancedWorkspaceV4Record,
   };
   // On replay, the projection must come from whatever is actually stored, never from the
   // client-echoed command; this stub proves it by returning a *different* (still-consistent)
@@ -863,7 +883,11 @@ test("capture selection plan replay returns the stored result even after a later
 
 test("capture selection plan replay never 503s, even when the catalog changed since the original apply", async () => {
   const replayedRecord = {
-    schemaVersion: 4,
+    schemaVersion: 5,
+    deliveryQuote: null,
+    paymentIntent: null,
+    paymentIntentAppliedCaptureVersion: null,
+    paymentIntentBasisFingerprint: null,
     detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
     customerSnapshot: null,
     fulfillmentSnapshot: null,
@@ -879,7 +903,7 @@ test("capture selection plan replay never 503s, even when the catalog changed si
   };
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
-    readWorkspaceV4: async () => replayedRecord,
+    readWorkspaceV5: async () => replayedRecord,
   };
   const confirmation: CaptureConfirmationPort = {
     ...noConfirmationPort,
@@ -919,7 +943,11 @@ test("capture selection plan projection is null when the live catalog moved to a
     products: [{ ...selectionCatalog.products[0]!, unitPriceMinor: 9_900 }],
   };
   const replayedRecord = {
-    schemaVersion: 4,
+    schemaVersion: 5,
+    deliveryQuote: null,
+    paymentIntent: null,
+    paymentIntentAppliedCaptureVersion: null,
+    paymentIntentBasisFingerprint: null,
     detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
     customerSnapshot: null,
     fulfillmentSnapshot: null,
@@ -933,7 +961,7 @@ test("capture selection plan projection is null when the live catalog moved to a
   };
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
-    readWorkspaceV4: async () => replayedRecord,
+    readWorkspaceV5: async () => replayedRecord,
   };
   const confirmation: CaptureConfirmationPort = {
     ...noConfirmationPort,
@@ -955,7 +983,11 @@ test("capture selection plan applied write projects whatever is actually stored,
   // wins: the stored plan now has quantity 5, not this command's quantity 2. The projection in
   // the response must reflect the STORED plan, never a stale echo of the just-submitted one.
   const racedWorkspaceV4Record = {
-    schemaVersion: 4,
+    schemaVersion: 5,
+    deliveryQuote: null,
+    paymentIntent: null,
+    paymentIntentAppliedCaptureVersion: null,
+    paymentIntentBasisFingerprint: null,
     detail: { ...record.detail, schemaVersion: 2 as const, version: 3, deliveryInstructions: null },
     customerSnapshot: null,
     fulfillmentSnapshot: null,
@@ -969,7 +1001,7 @@ test("capture selection plan applied write projects whatever is actually stored,
   };
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
-    readWorkspaceV4: async () => racedWorkspaceV4Record,
+    readWorkspaceV5: async () => racedWorkspaceV4Record,
   };
   const racedStoredPlan = {
     schemaVersion: 1 as const, catalogVersion: selectionCatalog.catalogVersion,
@@ -993,13 +1025,59 @@ test("capture selection plan applied write projects whatever is actually stored,
   assert.equal(result.selectionProjection?.lines[0]?.quantity, 5);
 });
 
+test("capture selection plan replace responds CaptureWorkspaceV5 and marks an existing payment intent stale", async () => {
+  // H1: selection-plan must respond V5 (not V4) so the web rehydration -- which only ever parses
+  // V5 -- stops rejecting it as unavailable; and since the lines just changed, any previously
+  // fixed payment intent's paymentProjection must recompute to "stale" here too, exactly like
+  // every other capture mutation's response.
+  const v5Record = {
+    schemaVersion: 5,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 2, fulfillmentChannel: "counter" as const,
+      deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+    deliveryQuote: null,
+    paymentIntent: { schemaVersion: 1, method: "cash", tenderedAmountMinor: 100_000, tipMinor: 0 },
+    paymentIntentAppliedCaptureVersion: 1,
+    paymentIntentBasisFingerprint: "a".repeat(64),
+  };
+  const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "pending" }),
+    replaceSelectionPlan: async () => ({ status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } }),
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => v5Record,
+  };
+  const storedPlanConfirmation: CaptureConfirmationPort = {
+    ...noConfirmationPort,
+    readSelectionPlan: async () => ({ status: "ok", plan: selectionPlanCommand.plan, appliedCaptureVersion: 2 }),
+  };
+  const service = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, { read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: selectionCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); } }, storedPlanConfirmation);
+  const result = await service.replace(principal, selectionPlanCommand);
+  assert.equal(result.schemaVersion, 5);
+  assert.equal(result.selectionPlan?.lineCount, 1);
+  assert.equal(result.paymentIntent?.method, "cash");
+  assert.equal(result.paymentProjection?.status, "stale");
+});
+
 test("capture selection plan projection is null when the plan read has an appliedCaptureVersion different from the workspace summary", async () => {
   // Same catalogVersion, same lineCount as the workspace's selectionPlan summary -- but a THIRD
   // write raced in between readWorkspaceV4 and readSelectionPlan, replacing the row with another
   // plan that happens to share both. appliedCaptureVersion is the only proof it is the SAME row;
   // a mismatch there must yield null, never price whatever this unrelated plan turns out to be.
   const workspaceV4Record = {
-    schemaVersion: 4,
+    schemaVersion: 5,
+    deliveryQuote: null,
+    paymentIntent: null,
+    paymentIntentAppliedCaptureVersion: null,
+    paymentIntentBasisFingerprint: null,
     detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
     customerSnapshot: null,
     fulfillmentSnapshot: null,
@@ -1013,7 +1091,7 @@ test("capture selection plan projection is null when the plan read has an applie
   };
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
-    readWorkspaceV4: async () => workspaceV4Record,
+    readWorkspaceV5: async () => workspaceV4Record,
   };
   const confirmation: CaptureConfirmationPort = {
     ...noConfirmationPort,
