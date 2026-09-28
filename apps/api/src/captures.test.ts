@@ -1636,6 +1636,52 @@ test("capture delivery quote recomputes from live zones, freezes it and reports 
     .requestQuote(principal, quoteCommand), code("authorization"));
 });
 
+test("H4: the delivery-quote envelope hashed for idempotency carries scheduledFor, not just the address", async () => {
+  // Two requests with the SAME idempotencyKey but a DIFFERENT scheduledFor must never be treated
+  // as the same logical write: quoteForCapture computes a different promise/coverage for each, so
+  // the probe/write's own SQL fingerprint (hashed over the full envelope) must diverge too. This
+  // asserts the API always forwards scheduledFor into the probed/persisted envelope, which is what
+  // makes that SQL-side divergence possible in the first place.
+  const probedEnvelopes: (CaptureDeliveryQuoteEnvelopeV1 | undefined)[] = [];
+  const persistedEnvelopes: (CaptureDeliveryQuoteEnvelopeV1 | undefined)[] = [];
+  const deliveryQuotePersistence: CaptureDeliveryQuotePort = {
+    probeSetDeliveryQuote: async (actorId, envelope) => { probedEnvelopes.push(envelope); return { status: "pending" }; },
+    setCaptureDeliveryQuote: async (actorId, envelope) => {
+      persistedEnvelopes.push(envelope);
+      return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
+    },
+  };
+  const computation: CaptureDeliveryQuoteComputationPort = {
+    quoteForCapture: async () => deliveryQuoteFixture,
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => makeCaptureV5Fixture({
+      fulfillmentChannel: "delivery", deliveryQuote: deliveryQuoteFixture, paymentIntent: null,
+      paymentIntentAppliedCaptureVersion: null, paymentIntentBasisFingerprint: null, version: 2,
+    }),
+  };
+  const service = new CaptureDeliveryQuoteService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), deliveryQuotePersistence, captures, paymentSelectionConfirmation, paymentCatalogPort, computation);
+  const sameIdempotencyKey = "14141414-1414-4414-8414-141414141414";
+  const asapCommand = parseRequestCaptureDeliveryQuoteCommandV1({
+    schemaVersion: 1, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId,
+    expectedVersion: 1, attentionLeaseId: validCommand.deviceId,
+    eventId: "15151515-1515-4515-8515-151515151515", idempotencyKey: sameIdempotencyKey,
+    deviceId: validCommand.deviceId, occurredAt: "2026-09-24T12:00:00.000Z", scheduledFor: null,
+  });
+  assert.ok(asapCommand);
+  await service.requestQuote(principal, asapCommand);
+  const scheduledCommand = parseRequestCaptureDeliveryQuoteCommandV1({
+    ...asapCommand, scheduledFor: "2026-09-24T18:00:00.000Z",
+  });
+  assert.ok(scheduledCommand);
+  await service.requestQuote(principal, scheduledCommand);
+  assert.deepEqual(probedEnvelopes.map((envelope) => envelope?.scheduledFor), [null, "2026-09-24T18:00:00.000Z"]);
+  assert.deepEqual(persistedEnvelopes.map((envelope) => envelope?.scheduledFor), [null, "2026-09-24T18:00:00.000Z"]);
+});
+
 test("payment intent totals exclude the delivery fee outside delivery, and apply with exact change", async () => {
   let capturedBasis = "";
   let reads = 0;
