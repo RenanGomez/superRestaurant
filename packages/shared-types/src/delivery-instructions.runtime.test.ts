@@ -7,6 +7,8 @@ import {
   parseConfirmCaptureDraftCommandV2,
   parseCustomerAddressFieldsV2,
   parseOrderFulfillmentSnapshotV1,
+  parseOrderFulfillmentSnapshotV1OrV2,
+  parseOrderFulfillmentSnapshotV2,
   parseSetCaptureDeliveryInstructionsCommandV1,
   parseSetCaptureDeliveryInstructionsResultV1,
 } from "./index.js";
@@ -176,6 +178,36 @@ expect(parseOrderFulfillmentSnapshotV1({ ...orderSnapshot, captureVersion: 0 }) 
   "Order snapshot identifies an exact positive Capture version");
 expect(parseOrderFulfillmentSnapshotV1({ ...orderSnapshot, fulfillmentChannel: "pickup" }) === undefined,
   "non-delivery Order cannot inherit delivery instructions or an Address snapshot");
+
+const deliveryQuoteSnapshot = {
+  schemaVersion: 1, quoteId: id, restaurantId: id, branchId: id, captureDraftId: id,
+  addressSnapshotRef: id, address: { postalCode: "83000", locality: "Hermosillo" },
+  currency: "MXN", timeZone: "America/Hermosillo", quotedAt: "2026-09-22T12:00:00.000Z",
+  scheduledFor: null, version: 1, coverageStatus: "covered", zoneId: id, feeMinor: 3_000,
+  promiseStart: "2026-09-22T12:00:00.000Z", promiseEnd: "2026-09-22T12:15:00.000Z",
+  expiresAt: "2026-09-22T12:00:00.000Z", override: null,
+};
+const paymentIntentSnapshot = { schemaVersion: 1, method: "cash", tenderedAmountMinor: 20_000, tipMinor: 0 };
+const orderSnapshotV2 = {
+  ...orderSnapshot, schemaVersion: 2, deliveryQuote: deliveryQuoteSnapshot, paymentIntent: paymentIntentSnapshot,
+};
+const parsedOrderSnapshotV2 = parseOrderFulfillmentSnapshotV2(orderSnapshotV2);
+expect(parsedOrderSnapshotV2 !== undefined && Object.isFrozen(parsedOrderSnapshotV2)
+  && parsedOrderSnapshotV2.deliveryQuote?.feeMinor === 3_000 && parsedOrderSnapshotV2.paymentIntent?.method === "cash",
+  "Order snapshot V2 additively carries the frozen delivery quote and payment intent");
+expect(parseOrderFulfillmentSnapshotV2({ ...orderSnapshotV2, deliveryQuote: null, paymentIntent: null }) !== undefined,
+  "Order snapshot V2 allows both new facts to be absent (no quote/no intent)");
+expect(parseOrderFulfillmentSnapshotV2({
+  ...orderSnapshotV2, fulfillmentChannel: "counter", tableId: null, fulfillmentSnapshot: null,
+}) === undefined, "non-delivery Order snapshot V2 cannot carry a frozen delivery quote");
+expect(parseOrderFulfillmentSnapshotV2(orderSnapshot) === undefined,
+  "a bare V1 payload (missing deliveryQuote/paymentIntent) is not a valid V2 snapshot");
+expect(parseOrderFulfillmentSnapshotV1(orderSnapshotV2) === undefined,
+  "a V2 payload (extra keys) is not a valid V1 snapshot");
+expect(parseOrderFulfillmentSnapshotV1OrV2(orderSnapshot)?.schemaVersion === 1,
+  "the combined parser accepts a historical V1 snapshot");
+expect(parseOrderFulfillmentSnapshotV1OrV2(orderSnapshotV2)?.schemaVersion === 2,
+  "the combined parser accepts the additive V2 snapshot");
 
 const confirmV2 = {
   attentionLeaseId: id,
