@@ -58,6 +58,12 @@ export class OrdersController {
     return this.map(() => this.orders.detail(getAuthenticatedPrincipal(request), body));
   }
 
+  @Post("orders/send-to-kitchen")
+  @Header("Cache-Control", "private, no-store")
+  public sendToKitchen(@Req() request: unknown, @Body() body: unknown): Promise<OrderMutationSummaryV1> {
+    return this.map(() => this.orders.sendToKitchen(getAuthenticatedPrincipal(request), body));
+  }
+
   @Get("kds/events")
   @Header("Cache-Control", "private, no-store")
   public recoverKds(

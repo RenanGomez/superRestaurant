@@ -18,6 +18,10 @@ const GROUP_LABELS: Record<OrderItemStatusGroup, string> = {
 export interface OrderDetailActions {
   readonly detail: (orderId: string) => Promise<{ readonly ok: true; readonly value: OrderDetailV1 } | { readonly ok: false; readonly error: string }>;
   readonly open: (orderId: string, expectedVersion: number, eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
+  /** One server-side operation: opens the order first if it is still a draft, then sends every
+   * currently pending line -- see apps/api's OrderService.sendToKitchen. The client never sequences
+   * open + one transition per line itself, so a lost-response retry always resumes correctly. */
+  readonly sendToKitchen: (orderId: string, expectedVersion: number, eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
   readonly transitionItem: (orderId: string, orderItemId: string, expectedVersion: number, to: "sent" | "preparing" | "ready" | "delivered", eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
   readonly cancelItem: (orderId: string, orderItemId: string, expectedVersion: number, reason: string, eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
 }
@@ -95,12 +99,8 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
           </button>}
           {hasAction(detail, "sendToKitchen") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
             onClick={() => {
-              // One idempotencyKey per pending line, minted once here -- before runAction's
-              // possible retry -- so a retried batch resends each line's own original command
-              // instead of a fresh one, and a partial batch never gets a second distinct attempt
-              // for the lines that already made it through.
-              const attempts = new Map(detail.items.filter((item) => item.status === "pending").map((item) => [item.orderItemId, nextAttempt()]));
-              void runSendToKitchen(detail, actions, attempts, runAction);
+              const attempt = nextAttempt();
+              void runAction("sendToKitchen", () => actions.sendToKitchen(detail.orderId, detail.version, attempt.eventId, attempt.idempotencyKey));
             }}>
             {busyAction === "sendToKitchen" ? "Enviando…" : actionLabel("sendToKitchen")}
           </button>}

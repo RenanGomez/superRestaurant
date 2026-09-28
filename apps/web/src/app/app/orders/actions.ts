@@ -64,6 +64,22 @@ export async function openOrderAction(
   });
 }
 
+export async function sendToKitchenAction(
+  orderId: string,
+  expectedVersion: number,
+  eventId: string,
+  idempotencyKey: string,
+): Promise<OrderMutationRequestResult> {
+  const context = await authorizedOrderContext();
+  if (context === undefined) return { error: "denied", ok: false };
+  if (!isUuid(orderId)) return { error: "invalid", ok: false };
+  const attempt = parseAttemptIds(eventId, idempotencyKey);
+  if (attempt === undefined) return { error: "invalid", ok: false };
+  return postOrderMutation(context.accessToken, context.apiBaseUrl, "orders/send-to-kitchen", {
+    ...(await audit(attempt)), expectedVersion, orderId, schemaVersion: 1, scope: context.scope,
+  });
+}
+
 export async function transitionOrderItemAction(
   orderId: string,
   orderItemId: string,

@@ -18,7 +18,7 @@ import {
   parseTransitionOrderItemCommandV1,
   type MenuCatalogStateV1,
 } from "@super-restaurant/shared-types";
-import { addOrderItem, createOrder, Money, transitionOrderItemStatus, transitionOrderStatus, type OrderMutation } from "@super-restaurant/domain";
+import { addOrderItem, createOrder, Money, transitionOrderItemStatus, transitionOrderStatus, type Order, type OrderMutation } from "@super-restaurant/domain";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService, type MembershipLookupPort } from "./auth/membership-authorization.js";
@@ -30,6 +30,7 @@ import {
   PostgresOrderPersistenceAdapter,
   type OrderPersistencePort,
   type RealtimeNotificationPort,
+  type SavedOrReplayedOrderResult,
 } from "./orders.js";
 
 const principal: AuthenticatedPrincipal = Object.freeze({ actorId: "8cc7eb84-af2a-4e84-95de-967c39af86ab" });
@@ -531,6 +532,115 @@ test("order service detail scopes access, reduces PII, and computes actions from
   const missingPort: OrderPersistencePort = { ...port, read: async () => "missing" };
   await assertCode(serviceFor(["manager"], missingPort).detail(principal, detailRequest), "not_found");
   await assertCode(serviceFor(["manager"], port).detail(principal, { ...detailRequest, orderId: "not-a-uuid" }), "request");
+});
+
+/**
+ * A minimal, in-memory stand-in for the real `persist_order_mutation` SQL function's own semantics:
+ * an idempotencyKey seen before is replayed verbatim (never re-checked against the current version),
+ * exactly like the real function's idempotency lookup running *before* its version CAS.
+ */
+function fakeSendToKitchenPort(initialOrder: Order, initialVersion: number): {
+  readonly port: OrderPersistencePort;
+  readonly currentOrder: () => Order;
+  readonly currentVersion: () => number;
+} {
+  let order = initialOrder;
+  let version = initialVersion;
+  const applied = new Map<string, SavedOrReplayedOrderResult>();
+  const port: OrderPersistencePort = {
+    listKdsTickets: async () => "forbidden",
+    persist: async (_actorId, expectedVersion, mutation) => {
+      const key = mutation.auditEvent.idempotencyKey;
+      const existing = applied.get(key);
+      if (existing !== undefined) return { ...existing, status: "replayed" };
+      if (expectedVersion !== version) return { status: "conflict" };
+      order = mutation.order;
+      version += 1;
+      const saved = Object.freeze({ kdsEvent: null, order, status: "saved" as const, version });
+      applied.set(key, saved);
+      return saved;
+    },
+    read: async () => ({ order, version }),
+    recoverKds: async () => "forbidden",
+  };
+  return { currentOrder: () => order, currentVersion: () => version, port };
+}
+
+function sendToKitchenCommand(orderId: string, expectedVersion: number, eventId: string, idempotencyKey: string) {
+  return { ...audit, eventId, expectedVersion, idempotencyKey, orderId, schemaVersion: 1 as const, scope };
+}
+
+test("sendToKitchen opens a draft order and sends every pending line", async () => {
+  const threeLines = [1, 2, 3].reduce((current, index) => addOrderItem(current, {
+    orderItemId: `1e37ae13-8507-484c-969f-2176f77b70${String(index).padStart(2, "0")}`,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: `Línea ${index}`,
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(1_000 * index, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order, domainMutation.order);
+  const fake = fakeSendToKitchenPort(threeLines, 1);
+  const service = serviceFor(["manager"], fake.port);
+  const command = sendToKitchenCommand(orderId, 1, randomUUID(), "send-to-kitchen-3-lines");
+
+  const summary = await service.sendToKitchen(principal, command);
+  assert.equal(summary.orderStatus, "open");
+  assert.equal(fake.currentOrder().status, "open");
+  assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["sent", "sent", "sent"]);
+  assert.equal(fake.currentVersion(), 5); // 1 (open) + 3 (each line)
+});
+
+test("sendToKitchen resumes a partially-applied batch on retry instead of conflicting", async () => {
+  const twoLines = [1, 2].reduce((current, index) => addOrderItem(current, {
+    orderItemId: `23723e10-c0bf-49fd-9363-4f0e2c60e9${String(index).padStart(2, "0")}`,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: `Línea ${index}`,
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(1_000 * index, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order, domainMutation.order);
+  const fake = fakeSendToKitchenPort(twoLines, 1);
+  const service = serviceFor(["manager"], fake.port);
+  const command = sendToKitchenCommand(orderId, 1, randomUUID(), "send-to-kitchen-resume");
+
+  // The second line's persist call simulates a dropped connection: the client never sees a
+  // response, even though "open" and the first line already committed.
+  let calls = 0;
+  const originalPersist = fake.port.persist.bind(fake.port);
+  fake.port.persist = async (actorId, expectedVersion, mutation, shiftId) => {
+    calls += 1;
+    if (calls === 3) throw new Error("simulated dropped connection");
+    return originalPersist(actorId, expectedVersion, mutation, shiftId);
+  };
+  await assert.rejects(service.sendToKitchen(principal, command), (error: unknown) => error instanceof OrderApplicationError && error.code === "unavailable");
+  assert.equal(fake.currentOrder().status, "open");
+  assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["sent", "pending"]);
+
+  // Retried with the exact same command (same idempotencyKey/eventId): resumes from where it left
+  // off -- "open" and the first line are recognized as already-applied progress (never conflict),
+  // and only the second line is freshly persisted.
+  const summary = await service.sendToKitchen(principal, command);
+  assert.equal(summary.orderStatus, "open");
+  assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["sent", "sent"]);
+});
+
+test("sendToKitchen on an already-open order only transitions its pending lines", async () => {
+  const opened = transitionOrderStatus(addOrderItem(domainMutation.order, {
+    orderItemId,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: "Hamburguesa",
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(12_500, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order, "open", { ...audit, actorId: principal.actorId }).order;
+  const fake = fakeSendToKitchenPort(opened, 2);
+  const service = serviceFor(["manager"], fake.port);
+  const command = sendToKitchenCommand(orderId, 2, randomUUID(), "send-to-kitchen-already-open");
+
+  const summary = await service.sendToKitchen(principal, command);
+  assert.equal(summary.orderStatus, "open");
+  assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["sent"]);
+  assert.equal(fake.currentVersion(), 3); // only the one pending line, no "open" step
 });
 
 test("order service detail never offers open and sendToKitchen together for the same draft order", async () => {

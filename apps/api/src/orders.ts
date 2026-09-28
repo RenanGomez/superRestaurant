@@ -12,6 +12,7 @@ import {
   parseOrderDetailRequestV1,
   parseOrderDetailV1,
   parseRealtimeSubscriptionV1,
+  parseSendOrderToKitchenCommandV1,
   parseTransitionOrderItemCommandV1,
   type BranchScope,
   type CreateOrderCommandV1,
@@ -26,7 +27,9 @@ import {
   type OrderDetailV1,
   type OrderMutationSummaryV1,
   type RealtimeSubscriptionV1,
+  type SendOrderToKitchenCommandV1,
 } from "@super-restaurant/shared-types";
+import { createHash } from "node:crypto";
 import {
   addOrderItem,
   calculateOrderAggregateTotals,
@@ -74,14 +77,16 @@ export interface StoredOrder {
   readonly version: number;
 }
 
+export type SavedOrReplayedOrderResult = Readonly<{
+  readonly kdsEvent: KdsEventV1 | null;
+  readonly order: Order;
+  readonly status: "replayed" | "saved";
+  readonly version: number;
+}>;
+
 export type PersistOrderResult =
   | Readonly<{ readonly status: "conflict" | "forbidden" }>
-  | Readonly<{
-    readonly kdsEvent: KdsEventV1 | null;
-    readonly order: Order;
-    readonly status: "replayed" | "saved";
-    readonly version: number;
-  }>;
+  | SavedOrReplayedOrderResult;
 
 export interface OrderPersistencePort {
   listKdsTickets(actorId: string, subscription: RealtimeSubscriptionV1): Promise<KdsTicketListV1 | "forbidden">;
@@ -423,12 +428,68 @@ export class OrderService {
     }
   }
 
-  private async persist(
+  /**
+   * S9.1 web-order-actions: opens a draft order (if still draft) and sends every currently pending
+   * line, as one operator-facing command instead of a client-side batch of separate open/transition
+   * requests. Each step is persisted with its own `this.persistRaw` call using an eventId/
+   * idempotencyKey *derived* from the command's own (see `derivedUuid`, same technique as capture
+   * materialization's `appendMaterializedItems`): a byte-identical retried step is recognized by
+   * `persist_order_mutation`'s own idempotency lookup (which runs *before* its version check) and
+   * replayed, so a resend after a lost response is never rejected as a version conflict.
+   *
+   * Deliberately does not hard-fail on `command.expectedVersion` against a fresh read: each step
+   * always targets the *current* aggregate (re-read from the previous step's own persisted result),
+   * so a partially-applied batch resumes from wherever it actually left off -- already-sent lines
+   * are simply no longer "pending" and are never revisited -- while an item concurrently touched by
+   * an unrelated actor (e.g. cancelled) is likewise skipped rather than blindly overwritten. Only a
+   * fresh read reporting a version *older* than `expectedVersion` (impossible in normal operation)
+   * is treated as a conflict.
+   */
+  public async sendToKitchen(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
+    const command = parseSendOrderToKitchenCommandV1(input);
+    if (command === undefined) throw applicationError("request");
+    const actorId = await this.authorize(principal, command.scope, "orders.update");
+    let stored: StoredOrder;
+    try {
+      const result = await this.orders.read(actorId, command.scope, command.orderId);
+      if (result === "missing") throw applicationError("not_found");
+      stored = result;
+    } catch (error: unknown) {
+      if (error instanceof OrderApplicationError) throw error;
+      throw unavailable();
+    }
+    if (stored.version < command.expectedVersion) throw applicationError("conflict");
+
+    let lastResult: SavedOrReplayedOrderResult | undefined;
+    if (stored.order.status === "draft") {
+      const mutation = transitionOrderStatus(stored.order, "open", stepAuditContext(command, actorId, "open"));
+      lastResult = await this.persistRaw(actorId, stored.version, mutation);
+      stored = { order: lastResult.order, version: lastResult.version };
+    }
+    for (const item of stored.order.items) {
+      if (item.status !== "pending") continue;
+      const mutation = transitionOrderItemStatus(stored.order, item.orderItemId, "sent", stepAuditContext(command, actorId, item.orderItemId));
+      lastResult = await this.persistRaw(actorId, stored.version, mutation);
+      stored = { order: lastResult.order, version: lastResult.version };
+    }
+
+    if (lastResult === undefined) {
+      const scope = parseBranchScope({ branchId: stored.order.branchId, restaurantId: stored.order.restaurantId });
+      if (scope === undefined) throw unavailable();
+      return Object.freeze({
+        kdsEvent: null, orderId: stored.order.orderId, orderStatus: stored.order.status,
+        replayed: false, schemaVersion: 1, scope, version: stored.version,
+      });
+    }
+    return this.summaryFromResult(lastResult);
+  }
+
+  private async persistRaw(
     actorId: string,
     expectedVersion: number,
     mutation: OrderMutation,
     operationalShiftId?: string,
-  ): Promise<OrderMutationSummaryV1> {
+  ): Promise<SavedOrReplayedOrderResult> {
     let result: PersistOrderResult;
     try { result = await this.orders.persist(actorId, expectedVersion, mutation, operationalShiftId); } catch { throw unavailable(); }
     if (result.status === "forbidden") throw applicationError("authorization");
@@ -437,6 +498,10 @@ export class OrderService {
     if (result.status === "saved" && result.kdsEvent !== null) {
       try { await this.notifications.notify(result.kdsEvent); } catch { /* Durable cursor recovery is authoritative. */ }
     }
+    return result;
+  }
+
+  private summaryFromResult(result: SavedOrReplayedOrderResult): OrderMutationSummaryV1 {
     const scope = parseBranchScope({ branchId: result.order.branchId, restaurantId: result.order.restaurantId });
     if (scope === undefined) throw unavailable();
     return Object.freeze({
@@ -448,6 +513,16 @@ export class OrderService {
       scope,
       version: result.version,
     });
+  }
+
+  private async persist(
+    actorId: string,
+    expectedVersion: number,
+    mutation: OrderMutation,
+    operationalShiftId?: string,
+  ): Promise<OrderMutationSummaryV1> {
+    const result = await this.persistRaw(actorId, expectedVersion, mutation, operationalShiftId);
+    return this.summaryFromResult(result);
   }
 
   private async authorize(
@@ -600,6 +675,27 @@ function auditContext(command: OrderAuditInputV1, actorId: string): OrderAuditCo
     idempotencyKey: command.idempotencyKey,
     occurredAt: command.occurredAt,
   };
+}
+
+/** One derived, deterministic eventId/idempotencyKey pair per step of `sendToKitchen`, from the
+ * command's own eventId/idempotencyKey plus the step's identity ("open" or an orderItemId) -- same
+ * technique as capture materialization's `derivedUuid` in capture-repeat-order-plan.ts. */
+function stepAuditContext(command: SendOrderToKitchenCommandV1, actorId: string, stepIdentity: string): OrderAuditContext {
+  return {
+    actorId,
+    deviceId: command.deviceId,
+    eventId: derivedUuid("send-to-kitchen-event", command.eventId, stepIdentity),
+    idempotencyKey: derivedUuid("send-to-kitchen-idempotency", command.idempotencyKey, stepIdentity),
+    occurredAt: command.occurredAt,
+  };
+}
+
+function derivedUuid(kind: string, namespace: string, identity: string): string {
+  const bytes = createHash("sha256").update(`${kind}:${namespace}:${identity}`, "utf8").digest().subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function singleResult(rows: readonly unknown[]): unknown {

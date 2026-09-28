@@ -68,7 +68,7 @@ export type OrderMutationRequestResult =
 export async function postOrderMutation(
   token: string,
   baseUrl: string,
-  path: "orders/open" | "orders/items/transition" | "orders/items/cancel",
+  path: "orders/open" | "orders/send-to-kitchen" | "orders/items/transition" | "orders/items/cancel",
   body: Readonly<Record<string, unknown>>,
 ): Promise<OrderMutationRequestResult> {
   try {

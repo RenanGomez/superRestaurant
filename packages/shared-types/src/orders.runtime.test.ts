@@ -9,6 +9,7 @@ import {
   parseOrderDetailRequestV1,
   parseOrderDetailV1,
   parseOrderMutationSummaryV1,
+  parseSendOrderToKitchenCommandV1,
   parseTransitionOrderItemCommandV1,
 } from "./index.js";
 
@@ -27,6 +28,8 @@ expect(parsedAdd!==undefined && Object.isFrozen(parsedAdd.modifierGroups) && Obj
 expect(parseAddOrderItemCommandV1({...add,quantity:0})===undefined,"zero quantity fails");
 expect(parseAddOrderItemCommandV1({...add,modifierGroups:[...add.modifierGroups,...add.modifierGroups]})===undefined,"duplicate group fails");
 expect(parseOpenOrderCommandV1({...common,expectedVersion:1})!==undefined,"open command parses");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1})!==undefined,"send-to-kitchen command parses");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:0})===undefined,"send-to-kitchen command requires a positive expectedVersion");
 expect(parseTransitionOrderItemCommandV1({...common,expectedVersion:2,orderItemId:add.orderItemId,to:"ready"})!==undefined,"forward transition parses");
 expect(parseTransitionOrderItemCommandV1({...common,expectedVersion:2,orderItemId:add.orderItemId,to:"cancelled"})===undefined,"sensitive cancellation not exposed by this slice");
 

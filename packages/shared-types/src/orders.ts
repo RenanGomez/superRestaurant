@@ -119,6 +119,19 @@ export interface OpenOrderCommandV1 extends OrderAuditInputV1 {
   readonly scope: BranchScope;
 }
 
+/**
+ * S9.1 web-order-actions: opens a draft order (if still draft) and transitions every currently
+ * pending line to "sent" in one operator-facing command, instead of the client sequencing "open"
+ * then one "transition" request per line itself -- which cannot resume cleanly after a lost
+ * response mid-batch.
+ */
+export interface SendOrderToKitchenCommandV1 extends OrderAuditInputV1 {
+  readonly expectedVersion: number;
+  readonly orderId: string;
+  readonly schemaVersion: typeof ORDER_COMMAND_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+}
+
 export interface TransitionOrderItemCommandV1 extends OrderAuditInputV1 {
   readonly expectedVersion: number;
   readonly orderId: string;
@@ -556,6 +569,17 @@ export function parseOpenOrderCommandV1(value: unknown): OpenOrderCommandV1 | un
   const expectedVersion = integer(own(record,"expectedVersion"),1,Number.MAX_SAFE_INTEGER);
   return common === undefined || scope === undefined || orderId === undefined || expectedVersion === undefined
     ? undefined : Object.freeze({ ...common, expectedVersion, orderId, schemaVersion: 1, scope });
+}
+
+export function parseSendOrderToKitchenCommandV1(value: unknown): SendOrderToKitchenCommandV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion","scope","orderId","expectedVersion","eventId","idempotencyKey","deviceId","occurredAt"]);
+  if (record === undefined || own(record,"schemaVersion") !== ORDER_COMMAND_SCHEMA_VERSION) return undefined;
+  const common = parseCommon(record);
+  const scope = parseScope(own(record,"scope"));
+  const orderId = uuid(own(record,"orderId"));
+  const expectedVersion = integer(own(record,"expectedVersion"),1,Number.MAX_SAFE_INTEGER);
+  return common === undefined || scope === undefined || orderId === undefined || expectedVersion === undefined
+    ? undefined : Object.freeze({ ...common, expectedVersion, orderId, schemaVersion: ORDER_COMMAND_SCHEMA_VERSION, scope });
 }
 
 export function parseTransitionOrderItemCommandV1(value: unknown): TransitionOrderItemCommandV1 | undefined {
