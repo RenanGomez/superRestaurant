@@ -7,7 +7,7 @@ import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSugg
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
 import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureDeliveryQuoteComputationPort, type CaptureDeliveryQuoteEnvelopeV1, type CaptureDeliveryQuotePort, type CaptureNoSalePort, type CapturePaymentIntentPort, type CaptureSelectionPlanPort } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureDeliveryQuoteComputationPort, type CaptureDeliveryQuoteEnvelopeV1, type CaptureDeliveryQuotePort, type CaptureNoSalePort, type CapturePaymentIntentPort, type CaptureSelectionPlanPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
@@ -2056,6 +2056,44 @@ test("payment intent basis prices a repeat-order plan's lines against the live c
   assert.ok(intentCommand);
   await service.setPaymentIntent(principal, intentCommand);
   assert.match(persistedBasis, /^[0-9a-f]{64}$/u);
+});
+
+test("H5: payment intent rejects a selection plan that could not be priced, instead of falling back to a 0 subtotal", async () => {
+  // The stored selection plan is real (lineCount 1), but the live catalog has since republished
+  // under a different catalogVersion: projectStoredSelectionPlan (the same best-effort projection
+  // every read uses) can no longer price it, so selectionProjection comes back null. A naive basis
+  // would silently accept ANY cash tender as covering an order with priced items.
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => makeCaptureV5Fixture({
+      fulfillmentChannel: "counter", deliveryQuote: null, paymentIntent: null,
+      paymentIntentAppliedCaptureVersion: null, paymentIntentBasisFingerprint: null, version: 1,
+    }),
+  };
+  const republishedCatalogPort = {
+    read: async () => ({
+      schemaVersion: 1 as const, scope: validCommand.scope,
+      catalog: { ...selectionCatalog, catalogVersion: validCommand.deviceId },
+    }),
+    save: async () => { throw new Error("must not save a catalog"); },
+  };
+  const persistence: CapturePaymentIntentPort = {
+    probeSetPaymentIntent: async () => ({ status: "pending" }),
+    setCapturePaymentIntent: async () => { throw new Error("must not persist an unpriced intent"); },
+  };
+  const service = new CapturePaymentIntentService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, paymentSelectionConfirmation, republishedCatalogPort);
+  const intentCommand = parseSetCapturePaymentIntentCommandV1({
+    schemaVersion: 1, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId,
+    expectedVersion: 1, attentionLeaseId: validCommand.deviceId,
+    eventId: "16161616-1616-4616-8616-161616161616", idempotencyKey: "17171717-1717-4717-8717-171717171717",
+    deviceId: validCommand.deviceId, occurredAt: "2026-09-24T12:00:00.000Z",
+    method: "cash", tenderedAmountMinor: 1, tipMinor: 0,
+  });
+  assert.ok(intentCommand);
+  await assert.rejects(service.setPaymentIntent(principal, intentCommand),
+    (error: unknown) => error instanceof CapturePaymentIntentUnpricedError);
 });
 
 test("payment intent rejects a capture with no selection or repeat plan at all", async () => {
