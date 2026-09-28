@@ -1670,7 +1670,20 @@ function parseConfirmCommand(input: unknown): ConfirmCaptureDraftCommandV2 {
   }
   return command;
 }
+/**
+ * confirm_capture_draft_v3's conflict reasons ('payment_intent_stale', 'delivery_quote_stale')
+ * carry a `reason` alongside `status`, a shape parseOutcome's exact-key checks never recognize
+ * (they only know plain {status} and {status,record}) -- without this, a genuine stale write that
+ * slipped past CaptureConfirmationService's own basisFingerprint pre-check would fall through to
+ * a generic 503 instead of the same typed 409 the pre-check throws. This keeps both guards
+ * -- the API's own fingerprint check and SQL's fact-based CAS -- agreeing on the same outcome.
+ */
 function confirmationResult(raw: unknown, command: ConfirmCaptureDraftCommandV2): CaptureMutationResultV1 {
+  const reasoned = exactRecord(raw, ["status", "reason"]);
+  if (reasoned?.status === "conflict") {
+    if (reasoned.reason === "payment_intent_stale") throw new CapturePaymentIntentStaleError();
+    throw new CaptureApplicationError("conflict");
+  }
   const { record, replayed } = parseOutcome(raw, command.scope);
   if (record.detail.captureDraftId !== command.captureDraftId
     || record.detail.version !== command.expectedVersion + 1 || record.detail.status !== "confirmed"
