@@ -40,7 +40,7 @@ import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import { formatDeliveryQuote } from "../../../lib/delivery-zones";
-import { deliveryQuoteScheduledForInputValue, quoteMatchesRequestedTime } from "../../../lib/capture-payment";
+import { deliveryQuoteScheduledForInputValue, isSwitchingToAnotherCapture, quoteMatchesRequestedTime } from "../../../lib/capture-payment";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
 import { CaptureMenu } from "./capture-menu";
 import { CapturePayment } from "./capture-payment";
@@ -220,6 +220,17 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     if (hydrated === undefined) {
       setError("unavailable");
       return;
+    }
+    // H17: opening a DIFFERENT capture must never carry over UI state that only ever meant
+    // something for the one just left -- otherwise a scheduled-for time, a stale-quote flag or a
+    // cash-tender notice from the previous capture silently applies to this one before its own
+    // hydration (below) has a chance to establish the truth.
+    if (isSwitchingToAnotherCapture(capture?.captureDraftId, hydrated.detail.captureDraftId)) {
+      setScheduledFor("");
+      setPaymentIntentNotice(undefined);
+      setError(undefined);
+      setErrorOperation(undefined);
+      setErrorCode(undefined);
     }
     setQuoteError(undefined);
     setQuoteRequestedForDiffers(false);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  deliveryQuoteScheduledForInputValue, describePaymentMethod, parseMoneyInputToMinor,
+  deliveryQuoteScheduledForInputValue, describePaymentMethod, isSwitchingToAnotherCapture, parseMoneyInputToMinor,
   quoteMatchesRequestedTime, suggestTenderAmounts,
 } from "./capture-payment.js";
 
@@ -57,6 +57,15 @@ test("deliveryQuoteScheduledForInputValue round-trips through quoteMatchesReques
 
 test("deliveryQuoteScheduledForInputValue is empty for an unparsable scheduledFor", () => {
   assert.equal(deliveryQuoteScheduledForInputValue({ ...baseQuote, scheduledFor: "not-a-date" }), "");
+});
+
+test("isSwitchingToAnotherCapture is false on initial load and on re-hydrating the same capture", () => {
+  assert.equal(isSwitchingToAnotherCapture(undefined, "capture-1"), false);
+  assert.equal(isSwitchingToAnotherCapture("capture-1", "capture-1"), false);
+});
+
+test("isSwitchingToAnotherCapture is true only when a different capture was already on screen", () => {
+  assert.equal(isSwitchingToAnotherCapture("capture-1", "capture-2"), true);
 });
 
 test("suggestTenderAmounts always includes the exact total plus the next 100/200/500-peso roundings above it", () => {

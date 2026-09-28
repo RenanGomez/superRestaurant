@@ -91,6 +91,21 @@ export function deliveryQuoteScheduledForInputValue(quote: DeliveryQuoteV1 | nul
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
+/**
+ * H17: true when a workspace hydration is switching to a DIFFERENT capture than the one
+ * currently on screen (not the initial load, and not a re-hydration of the same capture after
+ * an unrelated mutation) -- the signal `applyWorkspace` uses to clear capture-local-only UI state
+ * (the scheduled-for field, the stale-quote flag, the cash-tender notice, any leftover error)
+ * before applying the new capture's own facts, so nothing from the capture the operator just
+ * left leaks onto the one they just opened.
+ */
+export function isSwitchingToAnotherCapture(
+  previousCaptureDraftId: string | undefined,
+  nextCaptureDraftId: string,
+): boolean {
+  return previousCaptureDraftId !== undefined && previousCaptureDraftId !== nextCaptureDraftId;
+}
+
 export function describePaymentMethod(
   method: CapturePaymentIntentMethodV1,
   timing: CapturePaymentIntentTimingV1,
