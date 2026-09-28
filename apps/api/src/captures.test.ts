@@ -1702,8 +1702,9 @@ test("payment intent totals include the frozen delivery fee for a delivery captu
     },
   };
   const persistence: CapturePaymentIntentPort = {
-    setCapturePaymentIntent: async (actorId, submittedCommand) => {
-      capturedBasis = (submittedCommand as { basisFingerprint: string }).basisFingerprint;
+    probeSetPaymentIntent: async () => ({ status: "pending" }),
+    setCapturePaymentIntent: async (actorId, envelope, basisFingerprint) => {
+      capturedBasis = basisFingerprint;
       return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
     },
   };
@@ -1734,6 +1735,7 @@ test("payment intent rejects an insufficient cash tender with a typed 409 before
     }),
   };
   const persistence: CapturePaymentIntentPort = {
+    probeSetPaymentIntent: async () => ({ status: "pending" }),
     setCapturePaymentIntent: async () => { throw new Error("must not persist an insufficient intent"); },
   };
   const service = new CapturePaymentIntentService(new MembershipAuthorizationService({
@@ -1771,24 +1773,21 @@ test("payment intent projection is stale once the lines change after the intent'
 });
 
 test("payment intent replay returns the stored result without recomputing insufficiency", async () => {
-  let reads = 0;
+  // H2: the probe alone recognizes the replay, purely from actor+scope+idempotencyKey+fingerprint
+  // over the client's envelope; the service must never re-read the workspace to reprice a basis or
+  // attempt the real write for it, so a retry is never turned into a spurious insufficient/conflict
+  // by a since-changed basis.
   const captures: CaptureCreationPort = {
     createDraft: async () => { throw new Error("must not create"); },
-    readWorkspaceV5: async () => {
-      reads += 1;
-      if (reads === 1) {
-        return makeCaptureV5Fixture({ fulfillmentChannel: "counter", deliveryQuote: null, paymentIntent: null,
-          paymentIntentAppliedCaptureVersion: null, paymentIntentBasisFingerprint: null, version: 1 });
-      }
-      return makeCaptureV5Fixture({
-        fulfillmentChannel: "counter", deliveryQuote: null,
-        paymentIntent: { schemaVersion: 1, method: "cash", tenderedAmountMinor: 9_000, tipMinor: 0 },
-        paymentIntentAppliedCaptureVersion: 2, paymentIntentBasisFingerprint: "ab".repeat(32), version: 2,
-      });
-    },
+    readWorkspaceV5: async () => makeCaptureV5Fixture({
+      fulfillmentChannel: "counter", deliveryQuote: null,
+      paymentIntent: { schemaVersion: 1, method: "cash", tenderedAmountMinor: 9_000, tipMinor: 0 },
+      paymentIntentAppliedCaptureVersion: 2, paymentIntentBasisFingerprint: "ab".repeat(32), version: 2,
+    }),
   };
   const persistence: CapturePaymentIntentPort = {
-    setCapturePaymentIntent: async () => ({ status: "replayed", record: { ...record, detail: { ...record.detail, version: 2 } } }),
+    probeSetPaymentIntent: async () => ({ status: "replayed", record: { ...record, detail: { ...record.detail, version: 2 } } }),
+    setCapturePaymentIntent: async () => { throw new Error("must not attempt a real write for a replay"); },
   };
   const service = new CapturePaymentIntentService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
@@ -1864,6 +1863,7 @@ test("payment intent basis uses the tax-inclusive line total, not the tax-exclus
     }),
   };
   const persistence: CapturePaymentIntentPort = {
+    probeSetPaymentIntent: async () => ({ status: "pending" }),
     setCapturePaymentIntent: async () => { throw new Error("must not persist an insufficient intent"); },
   };
   const service = new CapturePaymentIntentService(new MembershipAuthorizationService({
@@ -1928,9 +1928,10 @@ test("payment intent basis prices a repeat-order plan's lines against the live c
   };
   let persistedBasis = "";
   const persistence: CapturePaymentIntentPort = {
-    setCapturePaymentIntent: async (actorId, submittedCommand) => {
+    probeSetPaymentIntent: async () => ({ status: "pending" }),
+    setCapturePaymentIntent: async (actorId, envelope, basisFingerprint) => {
       assert.equal(actorId, principal.actorId);
-      persistedBasis = (submittedCommand as { basisFingerprint: string }).basisFingerprint;
+      persistedBasis = basisFingerprint;
       return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
     },
   };
@@ -1969,6 +1970,7 @@ test("payment intent rejects a capture with no selection or repeat plan at all",
     }),
   };
   const persistence: CapturePaymentIntentPort = {
+    probeSetPaymentIntent: async () => ({ status: "pending" }),
     setCapturePaymentIntent: async () => { throw new Error("must not persist a payment intent with no lines"); },
   };
   const service = new CapturePaymentIntentService(new MembershipAuthorizationService({
@@ -1995,6 +1997,7 @@ test("capture delivery quote and payment intent reject a foreign scope before to
     quoteForCapture: async () => { throw new Error("must not quote"); },
   };
   const paymentPersistence: CapturePaymentIntentPort = {
+    probeSetPaymentIntent: async () => { throw new Error("must not probe"); },
     setCapturePaymentIntent: async () => { throw new Error("must not persist"); },
   };
   const noReadCaptures: CaptureCreationPort = {
