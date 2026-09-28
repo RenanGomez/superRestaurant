@@ -35,7 +35,12 @@ interface CapturePaymentProps {
   readonly fulfillment: CaptureFulfillmentChannelV1 | null;
   readonly currency: string;
   readonly busy: boolean;
-  readonly onSetIntent: (method: CapturePaymentIntentMethodV1, tenderedMinor: number | null, tipMinor: number) => void;
+  /** H27: resolves to whether the server actually accepted the intent (never optimistic) --
+   * `applyCustomTender` only records the tender as "applied" on `true`, so a rejected amount
+   * (e.g. insufficient) stays editable and can be immediately resent, instead of getting stuck. */
+  readonly onSetIntent: (
+    method: CapturePaymentIntentMethodV1, tenderedMinor: number | null, tipMinor: number,
+  ) => Promise<boolean>;
   readonly onRefreshIntent: () => void;
 }
 
@@ -86,8 +91,12 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
     if (customTender.trim() === "") return;
     const parsedMinor = parseMoneyInputToMinor(customTender);
     if (!shouldSubmitTender(parsedMinor, appliedTenderMinor, tenderedAmountMinor)) return;
-    setAppliedTenderMinor(parsedMinor);
-    onSetIntent(method, parsedMinor, tipMinor);
+    void onSetIntent(method, parsedMinor, tipMinor).then((accepted) => {
+      // H27: only record the tender as "applied" once the server actually accepted it -- a
+      // rejection (insufficient) must leave it eligible for an immediate resend once it would
+      // cover a since-changed total, never stuck as a silent no-op.
+      if (accepted) setAppliedTenderMinor(parsedMinor);
+    });
   }
 
   function handleCustomTenderKeyDown(event: KeyboardEvent<HTMLInputElement>): void {

@@ -553,12 +553,16 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
    * a normal outcome of choosing too small a cash tender, not a lease/version conflict: it must not
    * lock the workspace or force a return to the tray, only surface a local notice next to the step.
    */
+  // H27: reports success back to the caller (rather than firing and forgetting) so a rejected
+  // custom cash tender (e.g. insufficient) never gets recorded as "already applied" -- the
+  // operator must be able to immediately retype/resend the same amount once it would actually
+  // cover the total (a later tip change, for instance), instead of it staying stuck as a no-op.
   async function setPaymentIntent(
     method: CapturePaymentIntentMethodV1,
     tenderedAmountMinor: number | null,
     tipMinor: number,
-  ): Promise<void> {
-    if (capture === undefined || capture.attentionLeaseId === null) return;
+  ): Promise<boolean> {
+    if (capture === undefined || capture.attentionLeaseId === null) return false;
     const command = { ...base(), method, tenderedAmountMinor, tipMinor };
     let reply = await run("paymentIntent", command);
     if (reply !== undefined && !reply.ok && reply.error === "unavailable") {
@@ -568,9 +572,10 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       setError(undefined);
       setErrorOperation(undefined);
       setPaymentIntentNotice("El monto no cubre el total.");
-      return;
+      return false;
     }
     if (reply?.ok === true) setPaymentIntentNotice(undefined);
+    return reply?.ok === true;
   }
 
   function refreshPaymentIntent(): void {
@@ -1032,7 +1037,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         <CapturePayment projection={paymentProjection} basis={paymentBasis} intent={paymentIntent} deliveryQuote={deliveryQuote}
           fulfillment={fulfillmentChannel}
           currency={paymentProjection?.currency ?? paymentBasis?.currency ?? confirmationContext?.currency ?? "MXN"}
-          busy={busy} onSetIntent={(method, tenderedMinor, tipMinor) => void setPaymentIntent(method, tenderedMinor, tipMinor)}
+          busy={busy} onSetIntent={setPaymentIntent}
           onRefreshIntent={refreshPaymentIntent} />
         {paymentIntentNotice !== undefined && <p role="alert" className="rounded-lg bg-error-bg p-3 text-sm">{paymentIntentNotice}</p>}
       </>}
