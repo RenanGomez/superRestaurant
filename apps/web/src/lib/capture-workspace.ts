@@ -39,7 +39,7 @@ import {
   type DeliveryQuoteV1,
 } from "@super-restaurant/shared-types";
 export type CaptureRequestResult<T> = { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable" };
+  | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable"; readonly code?: string };
 export type CaptureOperation = "autosave" | "confirm" | "create" | "claim" | "customer" | "deliveryInstructions"
   | "deliveryInstructionSuggestions" | "deliveryQuote" | "fulfillment" | "assignmentCandidates" | "noSale"
   | "paymentIntent" | "selectionPlan" | "takeover" | "transfer" | "tray" | "workspace";
@@ -289,6 +289,18 @@ async function requestCaptureDeliveryQuote(token: string, baseUrl: string, input
   } catch { return { ok: false, error: "unavailable" }; }
 }
 
+/** Best-effort read of a 409 body's `code` (e.g. `CAPTURE_PAYMENT_INTENT_INSUFFICIENT`), so the
+ * caller can tell "a stated cash tender does not cover the total" apart from a genuine
+ * version/lease conflict without ever trusting the body for anything else. */
+async function paymentIntentConflictCode(response: Response): Promise<string | undefined> {
+  try {
+    const body: unknown = await response.json();
+    return typeof body === "object" && body !== null && "code" in body && typeof (body as { code: unknown }).code === "string"
+      ? (body as { code: string }).code
+      : undefined;
+  } catch { return undefined; }
+}
+
 /**
  * Sets or replaces the capture's stated payment intent (method, an optional cash tender, and a
  * tip) and returns the refreshed CaptureWorkspaceV5; totals, change and timing are always
@@ -300,9 +312,14 @@ async function requestCapturePaymentIntent(token: string, baseUrl: string, input
   try {
     const response = await fetch(`${baseUrl}/api/v1/captures${paths.paymentIntent}`, { method: "POST", cache: "no-store",
       signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(command) });
-    if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
-      : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
-        : response.status === 400 ? "invalid" : "unavailable" };
+    if (!response.ok) {
+      if (response.status === 409) {
+        const code = await paymentIntentConflictCode(response);
+        return { ok: false, error: "conflict", ...(code === undefined ? {} : { code }) };
+      }
+      return { ok: false, error: response.status === 401 || response.status === 403 ? "denied"
+        : response.status === 404 ? "missing" : response.status === 400 ? "invalid" : "unavailable" };
+    }
     const value = parseCaptureWorkspaceV5(await response.json());
     if (value === undefined || value.detail.scope.restaurantId !== command.scope.restaurantId
       || value.detail.scope.branchId !== command.scope.branchId || value.detail.captureDraftId !== command.captureDraftId) {

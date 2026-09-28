@@ -1,0 +1,139 @@
+"use client";
+
+import { useState, type ChangeEvent } from "react";
+import type {
+  CapturePaymentIntentMethodV1,
+  CapturePaymentIntentProjectionV1,
+  CapturePaymentIntentV1,
+  CaptureFulfillmentChannelV1,
+  DeliveryQuoteV1,
+} from "@super-restaurant/shared-types";
+import { describePaymentMethod, suggestTenderAmounts } from "../../../lib/capture-payment";
+
+const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
+const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
+const input = "min-h-11 rounded-lg border border-border bg-bg px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-accent";
+const methods: readonly CapturePaymentIntentMethodV1[] = ["cash", "card_manual", "transfer"];
+const tipChips: readonly { readonly label: string; readonly amountMinor: number }[] = [
+  { label: "Sin propina", amountMinor: 0 },
+  { label: "$10", amountMinor: 1000 },
+  { label: "$20", amountMinor: 2000 },
+  { label: "$50", amountMinor: 5000 },
+];
+
+interface CapturePaymentProps {
+  readonly projection: CapturePaymentIntentProjectionV1 | null;
+  readonly intent: CapturePaymentIntentV1 | null;
+  readonly deliveryQuote: DeliveryQuoteV1 | null;
+  readonly fulfillment: CaptureFulfillmentChannelV1 | null;
+  readonly currency: string;
+  readonly busy: boolean;
+  readonly onSetIntent: (method: CapturePaymentIntentMethodV1, tenderedMinor: number | null, tipMinor: number) => void;
+  readonly onRefreshIntent: () => void;
+}
+
+/** Step 5, "Cobro": states the payment intent (method, cash tender, tip). Never computes totals,
+ * subtotal, shipping or change itself -- every money figure in the summary comes straight from the
+ * server-computed `projection`, never from local arithmetic. */
+export function CapturePayment({ projection, intent, deliveryQuote, fulfillment, currency, busy,
+  onSetIntent, onRefreshIntent }: CapturePaymentProps) {
+  const [customTender, setCustomTender] = useState("");
+  const method = intent?.method ?? "cash";
+  const tipMinor = intent?.tipMinor ?? 0;
+  const tenderedAmountMinor = intent?.tenderedAmountMinor ?? null;
+  const totalMinor = projection?.orderTotalMinor ?? null;
+  const suggestions = totalMinor === null ? [] : suggestTenderAmounts(totalMinor);
+
+  function chooseMethod(next: CapturePaymentIntentMethodV1): void {
+    setCustomTender("");
+    onSetIntent(next, next === "cash" ? tenderedAmountMinor : null, tipMinor);
+  }
+
+  function chooseTender(amountMinor: number): void {
+    setCustomTender("");
+    onSetIntent(method, amountMinor, tipMinor);
+  }
+
+  function chooseTip(amountMinor: number): void {
+    onSetIntent(method, tenderedAmountMinor, amountMinor);
+  }
+
+  function handleCustomTender(event: ChangeEvent<HTMLInputElement>): void {
+    const raw = event.target.value;
+    setCustomTender(raw);
+    const parsed = Number.parseFloat(raw.replace(",", "."));
+    if (raw.trim() === "" || !Number.isFinite(parsed) || parsed < 0) return;
+    onSetIntent(method, Math.round(parsed * 100), tipMinor);
+  }
+
+  const timing = projection?.timing ?? "now";
+  const described = describePaymentMethod(method, timing);
+
+  return <section className={panel} data-testid="capture-payment">
+    <h2 className="font-heading text-lg font-semibold">Cobro</h2>
+    <p className="mt-1 text-sm text-text-muted">Es una intención de pago, no un cobro; el dinero entra a caja al liquidar.</p>
+    {projection?.status === "stale" && <div role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">
+      <p>Cambió el pedido: confirma de nuevo el cobro.</p>
+      <button type="button" className={`${button} mt-2`} disabled={busy} onClick={onRefreshIntent}>
+        Confirmar cobro de nuevo
+      </button>
+    </div>}
+    {projection?.status === "insufficient" && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">
+      El monto no cubre el total.
+    </p>}
+    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+      {methods.map((candidate) => {
+        const label = describePaymentMethod(candidate, timing);
+        return <button key={candidate} type="button" disabled={busy}
+          className={`${button} min-h-11 ${method === candidate ? "border-accent bg-bg" : ""}`}
+          aria-pressed={method === candidate} onClick={() => chooseMethod(candidate)}>
+          <span className="block">{label.label}</span>
+          <span className="block text-xs text-text-muted">{label.notice}</span>
+        </button>;
+      })}
+    </div>
+    {method === "cash" && <div className="mt-4 grid gap-2">
+      <span className="text-sm font-semibold">¿Paga con?</span>
+      <div className="flex flex-wrap gap-2">
+        {suggestions.map((amountMinor) => <button key={amountMinor} type="button" disabled={busy}
+          className={`${button} ${tenderedAmountMinor === amountMinor ? "border-accent bg-bg" : ""}`}
+          aria-pressed={tenderedAmountMinor === amountMinor} onClick={() => chooseTender(amountMinor)}>
+          {totalMinor !== null && amountMinor === totalMinor ? "Exacto" : money(amountMinor, currency)}
+        </button>)}
+      </div>
+      <label className="grid gap-1 text-sm" htmlFor="capture-cash-with">Otro monto
+        <input id="capture-cash-with" inputMode="decimal" className={input} value={customTender}
+          disabled={busy} placeholder="0.00" onChange={handleCustomTender} />
+      </label>
+    </div>}
+    <div className="mt-4 grid gap-2">
+      <span className="text-sm font-semibold">Propina (separada del total)</span>
+      <div className="flex flex-wrap gap-2">
+        {tipChips.map((chip) => <button key={chip.amountMinor} type="button" disabled={busy}
+          className={`${button} ${tipMinor === chip.amountMinor ? "border-accent bg-bg" : ""}`}
+          aria-pressed={tipMinor === chip.amountMinor} onClick={() => chooseTip(chip.amountMinor)}>
+          {chip.label}
+        </button>)}
+      </div>
+    </div>
+    <div className="mt-4 grid gap-1 rounded-lg border border-border bg-bg p-3 text-sm">
+      <div className="flex justify-between"><span>Subtotal</span>
+        <span>{projection === null ? "—" : money(projection.itemsSubtotalMinor, projection.currency)}</span></div>
+      {fulfillment === "delivery" && <div className="flex justify-between"><span>Envío</span>
+        <span>{projection === null ? "—" : money(projection.deliveryFeeMinor, projection.currency)}</span></div>}
+      <div className="flex justify-between font-heading text-base font-bold"><span>Total</span>
+        <span>{projection === null ? "—" : money(projection.orderTotalMinor, projection.currency)}</span></div>
+      <div className="flex justify-between"><span>Propina</span>
+        <span>{projection === null ? "—" : money(projection.tipMinor, projection.currency)}</span></div>
+      {projection?.method === "cash" && <div className="flex justify-between"><span>Cambio</span>
+        <span>{projection.changeDueMinor === null ? "—" : money(projection.changeDueMinor, projection.currency)}</span></div>}
+    </div>
+    {fulfillment === "delivery" && deliveryQuote === null && <p className="mt-2 text-xs text-text-muted">
+      Cotiza la entrega antes de confirmar el cobro final.
+    </p>}
+  </section>;
+}
+
+function money(amountMinor: number, currency: string): string {
+  return new Intl.NumberFormat("es-MX", { currency, style: "currency" }).format(amountMinor / 100);
+}

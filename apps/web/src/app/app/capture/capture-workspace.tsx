@@ -10,13 +10,16 @@ import type {
   CaptureDraftDetailV1,
   CaptureDraftDetailV2,
   CaptureDraftSummaryV1,
+  CapturePaymentIntentMethodV1,
+  CapturePaymentIntentProjectionV1,
+  CapturePaymentIntentV1,
   CaptureFulfillmentChannelV1,
   CaptureFulfillmentSnapshotV1,
   CaptureMutationResultV1,
   CaptureRepeatOrderPlanSummaryV1,
   CaptureSelectionPlanProjectionV1,
   CaptureSourceChannelV1,
-  CaptureWorkspaceV3,
+  CaptureWorkspaceV5,
   CaptureWorkTrayResultV1,
   DeliveryQuoteV1,
   CustomerDirectoryDetailV1,
@@ -36,10 +39,10 @@ import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
   type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
-import { formatDeliveryQuote, quoteMatchesDeliverySnapshot } from "../../../lib/delivery-zones";
-import { deliveryZonesAction } from "../delivery-zones/actions";
+import { formatDeliveryQuote } from "../../../lib/delivery-zones";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
 import { CaptureMenu } from "./capture-menu";
+import { CapturePayment } from "./capture-payment";
 import { CaptureTicket } from "./capture-ticket";
 import { ProductSheet } from "./product-sheet";
 
@@ -117,10 +120,11 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [selectedShiftId, setSelectedShiftId] = useState("");
   const [selectedTableId, setSelectedTableId] = useState("");
   const [scheduledFor, setScheduledFor] = useState("");
-  const [deliveryQuote, setDeliveryQuote] = useState<DeliveryQuoteV1>();
+  const [deliveryQuote, setDeliveryQuote] = useState<DeliveryQuoteV1 | null>(null);
+  const [paymentIntent, setPaymentIntentState] = useState<CapturePaymentIntentV1 | null>(null);
+  const [paymentProjection, setPaymentProjection] = useState<CapturePaymentIntentProjectionV1 | null>(null);
+  const [paymentIntentNotice, setPaymentIntentNotice] = useState<string>();
   const [quoteError, setQuoteError] = useState<string>();
-  const [quoteBusy, setQuoteBusy] = useState(false);
-  const quoteSequence = useRef(0);
   const [selectionProjection, setSelectionProjection] = useState<CaptureSelectionPlanProjectionV1 | null>(null);
   const [sheetProduct, setSheetProduct] = useState<MenuProductV1>();
   const [sheetGroups, setSheetGroups] = useState<readonly MenuModifierGroupV1[]>([]);
@@ -132,10 +136,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const productSearchRef = useRef<HTMLInputElement>(null);
 
   function invalidateQuote(): void {
-    quoteSequence.current += 1;
-    setDeliveryQuote(undefined);
     setQuoteError(undefined);
-    setQuoteBusy(false);
   }
 
   async function run(operation: CaptureWorkspaceOperation, command: unknown): Promise<ActionReply | undefined> {
@@ -176,11 +177,16 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       setDeliveryInstructionSuggestions((value as CaptureDeliveryInstructionSuggestionsV1).items);
     }
     else if ("items" in value) setTray((value as CaptureWorkTrayResultV1).items);
-    else if ("customerSnapshot" in value) applyWorkspace(value as CaptureWorkspaceV3);
+    else if ("customerSnapshot" in value) applyWorkspace(value as CaptureWorkspaceV5);
     else if ("replayed" in value) {
       const mutation = value as CaptureMutationResultV1;
       if (mutation.detail.captureDraftId !== capture?.captureDraftId
-        || mutation.detail.fulfillmentSnapshotRef !== capture.fulfillmentSnapshotRef) invalidateQuote();
+        || mutation.detail.fulfillmentSnapshotRef !== capture.fulfillmentSnapshotRef) {
+        invalidateQuote();
+        setDeliveryQuote(null);
+        setPaymentIntentState(null);
+        setPaymentProjection(null);
+      }
       setCapture(mutation.detail);
       if ("deliveryInstructions" in value) {
         setDeliveryInstructions(typeof value.deliveryInstructions === "string" ? value.deliveryInstructions : "");
@@ -199,18 +205,21 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     return reply;
   }
 
-  function applyWorkspace(value: CaptureWorkspaceV3): void {
+  function applyWorkspace(value: CaptureWorkspaceV5): void {
     const hydrated = rehydrateCaptureWorkspace(value);
     if (hydrated === undefined) {
       setError("unavailable");
       return;
     }
-    invalidateQuote();
+    setQuoteError(undefined);
     setCapture(hydrated.detail);
     setCustomerSnapshot(hydrated.customerSnapshot);
     setFulfillmentSnapshot(hydrated.fulfillmentSnapshot);
     setRepeatOrderPlan(hydrated.repeatOrderPlan);
     setSelectionProjection(hydrated.selectionProjection);
+    setDeliveryQuote(hydrated.deliveryQuote);
+    setPaymentIntentState(hydrated.paymentIntent);
+    setPaymentProjection(hydrated.paymentProjection);
     setRecentOrders((current) => current?.customerId === hydrated.customerSnapshot?.customerId ? current : undefined);
     setRepeatPreview((current) => current?.customerId === hydrated.customerSnapshot?.customerId ? current : undefined);
     setSelectedContact(hydrated.customerSnapshot?.contactId);
@@ -480,7 +489,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   async function quoteDelivery(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (capture === undefined || fulfillmentChannel !== "delivery" || fulfillmentSnapshot === null) return;
+    if (capture === undefined || capture.attentionLeaseId === null || fulfillmentChannel !== "delivery"
+      || fulfillmentSnapshot === null) return;
     const scheduledDate = scheduledFor === "" ? null : new Date(scheduledFor);
     if (scheduledDate !== null && !Number.isFinite(scheduledDate.getTime())) {
       setQuoteError("Introduce una fecha y hora válidas."); return;
@@ -491,20 +501,43 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       || Date.parse(scheduled) - now > 7 * 24 * 60 * 60_000)) {
       setQuoteError("Programa entre 30 minutos y 7 días a partir de ahora."); return;
     }
-    const requestSequence = ++quoteSequence.current;
-    const requestedDraftId = capture.captureDraftId;
-    const requestedSnapshotRef = fulfillmentSnapshot.snapshotRef;
-    setQuoteBusy(true); setQuoteError(undefined); setDeliveryQuote(undefined);
-    try {
-      const result = await deliveryZonesAction("quote", { schemaVersion: 1, scope,
-        captureDraftId: requestedDraftId, scheduledFor: scheduled });
-      if (quoteSequence.current !== requestSequence) return;
-      if (result.ok && "coverageStatus" in result.value
-        && quoteMatchesDeliverySnapshot(result.value, requestedDraftId, requestedSnapshotRef)) setDeliveryQuote(result.value);
-      else if (result.ok && "coverageStatus" in result.value) return;
-      else setQuoteError(result.ok ? "La cotización no fue válida." : messages[result.error]);
-    } catch { if (quoteSequence.current === requestSequence) setQuoteError(messages.unavailable); }
-    finally { if (quoteSequence.current === requestSequence) setQuoteBusy(false); }
+    setQuoteError(undefined);
+    const command = { ...base(), scheduledFor: scheduled };
+    let reply = await run("deliveryQuote", command);
+    if (reply !== undefined && !reply.ok && reply.error === "unavailable") {
+      reply = await run("deliveryQuote", (reply as { command?: unknown }).command ?? command);
+    }
+    if (reply !== undefined && !reply.ok) setQuoteError(messages[reply.error]);
+  }
+
+  /**
+   * Fixes/replaces the stated payment intent. A `CAPTURE_PAYMENT_INTENT_INSUFFICIENT` conflict is
+   * a normal outcome of choosing too small a cash tender, not a lease/version conflict: it must not
+   * lock the workspace or force a return to the tray, only surface a local notice next to the step.
+   */
+  async function setPaymentIntent(
+    method: CapturePaymentIntentMethodV1,
+    tenderedAmountMinor: number | null,
+    tipMinor: number,
+  ): Promise<void> {
+    if (capture === undefined || capture.attentionLeaseId === null) return;
+    const command = { ...base(), method, tenderedAmountMinor, tipMinor };
+    let reply = await run("paymentIntent", command);
+    if (reply !== undefined && !reply.ok && reply.error === "unavailable") {
+      reply = await run("paymentIntent", (reply as { command?: unknown }).command ?? command);
+    }
+    if (reply !== undefined && !reply.ok && reply.error === "conflict" && reply.code === "CAPTURE_PAYMENT_INTENT_INSUFFICIENT") {
+      setError(undefined);
+      setErrorOperation(undefined);
+      setPaymentIntentNotice("El monto no cubre el total.");
+      return;
+    }
+    if (reply?.ok === true) setPaymentIntentNotice(undefined);
+  }
+
+  function refreshPaymentIntent(): void {
+    if (paymentIntent === null) return;
+    void setPaymentIntent(paymentIntent.method, paymentIntent.tenderedAmountMinor, paymentIntent.tipMinor);
   }
 
   function confirmCapture(): void {
@@ -595,6 +628,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   function reset(): void {
     invalidateQuote();
+    setDeliveryQuote(null); setPaymentIntentState(null); setPaymentProjection(null); setPaymentIntentNotice(undefined);
     setCapture(undefined); setResults(undefined); setCustomer(undefined); setCustomerSnapshot(null);
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
     setRepeatOrderPlan(null);
@@ -615,9 +649,12 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   const locked = busy || capture?.status !== "draft" || capture?.attentionLeaseId === null
     || error === "denied" || error === "conflict";
+  const paymentBlocksConfirm = paymentProjection !== null
+    && (paymentProjection.status === "stale" || paymentProjection.status === "insufficient");
   const canConfirm = confirmationContext !== undefined && selectedShiftId !== "" && fulfillmentChannel !== null
     && (fulfillmentChannel !== "dine_in" || selectedTableId !== "")
-    && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null));
+    && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null))
+    && !paymentBlocksConfirm;
   useEffect(() => {
     const shortcuts: ShortcutTable = busy ? {} : error === "conflict" || capture?.status === "confirmed"
       ? { reset: ariaKeyShortcut("reset") }
@@ -918,6 +955,14 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           <span className="block text-xs text-text-muted">{[item.address.streetLine, item.address.neighborhood, item.address.locality].filter(Boolean).join(", ")}</span>
           <span className="text-xs text-accent">{item.validatedForRequestedBranch ? selectedAddress === item.addressId ? "Selección local" : "Validada para esta sucursal" : "Pendiente de validación"}</span>
         </button>)}</div><a href="/app/customers" className="mt-3 inline-block text-sm font-semibold text-accent underline">Editar o validar direcciones en Directorio</a></section>}
+      {capture.status === "draft" && (selectionProjection !== null && selectionProjection.lines.length > 0
+        || repeatOrderPlan !== null) && <>
+        <CapturePayment projection={paymentProjection} intent={paymentIntent} deliveryQuote={deliveryQuote}
+          fulfillment={fulfillmentChannel} currency={paymentProjection?.currency ?? confirmationContext?.currency ?? "MXN"}
+          busy={busy} onSetIntent={(method, tenderedMinor, tipMinor) => void setPaymentIntent(method, tenderedMinor, tipMinor)}
+          onRefreshIntent={refreshPaymentIntent} />
+        {paymentIntentNotice !== undefined && <p role="alert" className="rounded-lg bg-error-bg p-3 text-sm">{paymentIntentNotice}</p>}
+      </>}
       {capture.status === "draft" && <section className={panel} data-testid="capture-confirmation">
         <h2 className="font-heading text-lg font-semibold">4. Convertir en orden</h2>
         {confirmationContext === undefined ? <p role="alert" className="mt-2 text-sm text-text-muted">
