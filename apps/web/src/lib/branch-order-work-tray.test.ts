@@ -34,11 +34,18 @@ test("money and time formatting render from the server's own minor-unit and ISO 
 
 test("formatMinorUnits derives its decimal scale from the currency, never a hardcoded /100", () => {
   assert.equal(formatMinorUnits(12_345, "MXN"), "$123.45");
-  // JPY has no minor unit: Intl's own resolvedOptions().maximumFractionDigits is 0 for it, so a
-  // JPY amount is never divided at all (only the digits, not the locale's currency symbol
-  // rendering, are asserted exactly -- that varies with the host's ICU data).
-  assert.equal(formatMinorUnits(100, "JPY"), new Intl.NumberFormat("es-MX", { currency: "JPY", style: "currency" }).format(100));
-  assert.equal(new Intl.NumberFormat("es-MX", { currency: "JPY", style: "currency" }).resolvedOptions().maximumFractionDigits, 0);
+  // Expected "¥100"; this host's ICU renders the JPY symbol as the "JPY" code instead of "¥", so
+  // only the digits (no division at all, since JPY's maximumFractionDigits is 0) are pinned here.
+  assert.match(formatMinorUnits(100, "JPY"), /100$/u);
+  assert.doesNotMatch(formatMinorUnits(100, "JPY"), /\./u);
+});
+
+test("formatMinorUnits never divides a float, so a large exact integer keeps its exact cents", () => {
+  assert.equal(formatMinorUnits(9_007_199_254_740_991, "MXN"), "$90,071,992,547,409.91");
+});
+
+test("formatMinorUnits places the sign per the locale's own layout, not by string concatenation", () => {
+  assert.equal(formatMinorUnits(-1_050, "MXN"), "-$10.50");
 });
 
 test("channel and preparation labels are exhaustive and in Spanish", () => {

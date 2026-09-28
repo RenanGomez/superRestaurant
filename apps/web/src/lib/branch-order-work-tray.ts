@@ -58,14 +58,39 @@ export function preparationLabel(preparation: BranchOrderWorkPreparationStatusV1
 
 /**
  * Converts an exact minor-unit integer to a display string without assuming a two-decimal
- * currency: the exponent comes from `Intl.NumberFormat`'s own `resolvedOptions()` for the
- * currency (e.g. 2 for MXN, 0 for JPY), never a hardcoded `/ 100`. Money is always formatted from
- * its own frozen minor-unit total; never recomputed here.
+ * currency, and without ever dividing a float: `amountMinor / 10 ** digits` silently loses cents
+ * once the integer part exceeds Number's ~15-16 significant digits (e.g. 9007199254740991 -> a
+ * total ending in ".90" instead of ".91"). The exponent still comes from `Intl.NumberFormat`'s own
+ * `resolvedOptions()` for the currency (2 for MXN, 0 for JPY); the integer/fraction split uses
+ * exact BigInt division and modulo, the integer part is grouped by a plain `Intl.NumberFormat`
+ * (which accepts a BigInt directly), and the currency symbol/position/decimal separator/sign
+ * placement are taken verbatim from `formatToParts` of a one-unit sample in the same currency and
+ * sign, so the locale's own layout is preserved exactly. Money is always formatted from its own
+ * frozen minor-unit total; never recomputed here.
  */
 export function formatMinorUnits(amountMinor: number, currency: string, locale = "es-MX"): string {
   const formatter = new Intl.NumberFormat(locale, { currency, style: "currency" });
   const digits = formatter.resolvedOptions().maximumFractionDigits ?? 2;
-  return formatter.format(amountMinor / 10 ** digits);
+  const scale = 10n ** BigInt(digits);
+  const negative = amountMinor < 0;
+  const absoluteMinor = negative ? BigInt(-amountMinor) : BigInt(amountMinor);
+  const integerText = new Intl.NumberFormat(locale).format(absoluteMinor / scale);
+  const fractionText = (absoluteMinor % scale).toString().padStart(digits, "0");
+  let integerUsed = false;
+  let fractionUsed = false;
+  return formatter.formatToParts(negative ? -1 : 1).map((part) => {
+    if (part.type === "integer" || part.type === "group") {
+      if (integerUsed) return "";
+      integerUsed = true;
+      return integerText;
+    }
+    if (part.type === "fraction") {
+      if (fractionUsed) return "";
+      fractionUsed = true;
+      return fractionText;
+    }
+    return part.value;
+  }).join("");
 }
 
 /** `timeZone` is always the Order's own frozen zone, never the viewer's device zone, so this
