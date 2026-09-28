@@ -19,6 +19,8 @@ declare
   quote_mismatch_capture uuid := gen_random_uuid();
   h10_expired_capture uuid := gen_random_uuid();
   h10_expired_order uuid := gen_random_uuid();
+  h14_clock_capture uuid := gen_random_uuid();
+  h14_clock_order uuid := gen_random_uuid();
   h10_not_covered_capture uuid := gen_random_uuid();
   h10_not_covered_order uuid := gen_random_uuid();
   catalog uuid := gen_random_uuid();
@@ -996,6 +998,97 @@ begin
   execute 'reset role';
   if result->>'status'<>'conflict' or result->>'reason'<>'delivery_quote_expired'
   then raise exception 'CAPTURE_H10_EXPIRED_NOT_REJECTED'; end if;
+
+  ----------------------------------------------------------------------------
+  -- H14: expiry is judged by the server's own clock, not the client-supplied
+  -- occurredAt. A command whose occurredAt claims to be well before the
+  -- quote's expiresAt must still be rejected once real (clock_timestamp())
+  -- time has passed the expiry, proving the check isn't fooled by a
+  -- backdated command timestamp.
+  ----------------------------------------------------------------------------
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h14_clock_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','delivery'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_H14_CLOCK_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  execute 'set local role app_api';
+  party := app_private.set_capture_customer(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',h14_clock_capture::text,'expectedVersion',1,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'customerId',confirm_customer::text,'contactId',confirm_contact::text,'expectedCustomerVersion',1
+  ));
+  execute 'reset role';
+  if party->>'status'<>'applied' then raise exception 'CAPTURE_H14_CLOCK_CUSTOMER_REJECTED'; end if;
+
+  execute 'set local role app_api';
+  fulfillment := app_private.set_capture_fulfillment(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'captureDraftId',h14_clock_capture::text,'expectedVersion',2,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'customerSnapshotRef',party#>>'{record,detail,customerSnapshotRef}',
+    'addressId',confirm_address::text,'expectedAddressVersion',1
+  ));
+  execute 'reset role';
+  if fulfillment->>'status'<>'applied' then raise exception 'CAPTURE_H14_CLOCK_FULFILLMENT_REJECTED'; end if;
+  select capture_drafts.fulfillment_snapshot_id into fulfillment_snapshot_before from app.capture_drafts
+  where restaurant_id=restaurant and branch_id=branch and id=h14_clock_capture;
+
+  -- The quote's expiresAt is already in the past relative to the real wall clock
+  -- (clock_timestamp()), but the confirm command's occurredAt is backdated to well
+  -- before expiresAt. Under the pre-H14 bug (comparing expiresAt to occurredAt) this
+  -- would have been accepted as still-valid; the fix must reject it regardless.
+  insert into app.capture_delivery_quotes(
+    restaurant_id,branch_id,capture_draft_id,quote,applied_capture_version,idempotency_key,command_fingerprint,
+    actor_id,actor_membership_id,device_id,occurred_at,received_at
+  ) values (
+    restaurant,branch,h14_clock_capture,
+    quote||pg_catalog.jsonb_build_object(
+      'captureDraftId',h14_clock_capture::text,'addressSnapshotRef',fulfillment_snapshot_before::text,
+      'expiresAt',pg_catalog.to_char((clock_timestamp()-interval '1 second') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    ),
+    3,gen_random_uuid()::text,pg_catalog.encode(pg_catalog.sha256('fixture-h14-clock'::bytea),'hex'),
+    actor,membership,device,now_at,now_at
+  );
+
+  confirmation_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',2,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h14_clock_capture::text,'expectedVersion',3,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char((now_at-interval '1 hour') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'attentionLeaseId',lease,
+    'orderId',h14_clock_order::text,'shiftId',shift::text,'tableId',null,
+    'currency','MXN','timeZone','America/Hermosillo'
+  );
+  order_audits := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'eventId',confirmation_command->>'eventId',
+    'idempotencyKey',confirmation_command->>'idempotencyKey','restaurantId',restaurant::text,
+    'branchId',branch::text,'orderId',h14_clock_order::text,'actorId',actor::text,
+    'deviceId',device::text,'occurredAt',confirmation_command->>'occurredAt',
+    'operation','order.created','entityType','order','entityId',h14_clock_order::text,'to','draft'
+  ));
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',h14_clock_order::text,'restaurantId',restaurant::text,
+    'branchId',branch::text,'channel','delivery','currency','MXN','timeZone','America/Hermosillo',
+    'status','draft','items',pg_catalog.jsonb_build_array()
+  );
+  execute 'set local role app_api';
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'conflict' or result->>'reason'<>'delivery_quote_expired'
+  then raise exception 'CAPTURE_H14_CLOCK_NOT_REJECTED'; end if;
 
   ----------------------------------------------------------------------------
   -- H10: a delivery confirm with a frozen quote that never covered the

@@ -727,7 +727,7 @@ declare
   repeat_plan app.capture_repeat_order_plans%rowtype;
   stored_quote app.capture_delivery_quotes%rowtype;
   stored_intent app.capture_payment_intents%rowtype;
-  current_fulfillment_snapshot uuid; current_channel text; occurred timestamptz;
+  current_fulfillment_snapshot uuid; current_channel text;
   fulfillment_change_version bigint;
   frozen_quote jsonb; frozen_intent jsonb;
   old_result jsonb; mutation_result jsonb; result_record jsonb; base_order jsonb;
@@ -971,21 +971,16 @@ begin
   -- H10: a delivery capture can never confirm without a live, coverage-eligible quote. This is
   -- deliberately stricter than the staleness check above, which only guards against an
   -- address/snapshot mismatch; here we also require the frozen quote to still be in-date and
-  -- actually cover the address, using the command's own occurredAt as the reference clock (the
-  -- same clock the rest of this function treats as "now").
+  -- actually cover the address. H14: expiry is judged against the server's own clock
+  -- (clock_timestamp()), not the client-supplied occurredAt -- a client can't extend a quote's
+  -- life by lying about when its command "occurred".
   if current_channel = 'delivery' then
     if frozen_quote is null then
       return pg_catalog.jsonb_build_object('status','conflict','reason','delivery_quote_missing');
     end if;
-    begin
-      occurred := (p_command->>'occurredAt')::timestamptz;
-    exception when invalid_text_representation or datetime_field_overflow or invalid_datetime_format then
-      return pg_catalog.jsonb_build_object('status','rejected');
-    end;
-    if occurred is null then return pg_catalog.jsonb_build_object('status','rejected'); end if;
     if frozen_quote->>'coverageStatus' = 'not_covered' then
       return pg_catalog.jsonb_build_object('status','conflict','reason','delivery_quote_not_covered');
-    elsif (frozen_quote->>'expiresAt')::timestamptz <= occurred then
+    elsif (frozen_quote->>'expiresAt')::timestamptz <= clock_timestamp() then
       return pg_catalog.jsonb_build_object('status','conflict','reason','delivery_quote_expired');
     end if;
   end if;
