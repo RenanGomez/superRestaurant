@@ -8,6 +8,9 @@ const moneyInputPattern = /^\d{1,7}([.,]\d{1,2})?$/u;
  * separator) -- never a locale-dependent, partial-prefix parse like `Number.parseFloat`, which
  * would silently accept `"10abc"` or round away a third decimal digit. All arithmetic here is
  * integer-only (no float), matching how every other money figure in this app is minor units.
+ * H12 note: an absent fraction (no "." or ",", e.g. "10") must count as ".00", not `NaN` -- the
+ * `padEnd(2, "0")` below turns the empty slice into "00" before parsing, so this already covers
+ * it; the dedicated regression test locks that in explicitly.
  */
 export function parseMoneyInputToMinor(text: string): number | null {
   const trimmed = text.trim();

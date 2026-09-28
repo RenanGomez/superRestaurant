@@ -81,6 +81,16 @@ test("parseMoneyInputToMinor converts whole pesos and two-decimal amounts with e
   assert.equal(parseMoneyInputToMinor("10.5"), 1_050);
 });
 
+// H12: a field with no "." or "," at all (an absent fraction, not merely a short one) must never
+// come out as NaN -- verified directly against Number.isNaN, not just a loose equality, so a
+// regression that reintroduces NaN cannot slip past as some other falsy/incorrect value.
+test("parseMoneyInputToMinor treats a whole-peso amount with no fraction as exactly zero cents, never NaN", () => {
+  const result = parseMoneyInputToMinor("10");
+  assert.equal(Number.isNaN(result), false);
+  assert.equal(result, 1_000);
+  assert.equal(parseMoneyInputToMinor("1234567"), 123_456_700);
+});
+
 test("parseMoneyInputToMinor accepts a comma as the decimal separator", () => {
   assert.equal(parseMoneyInputToMinor("10,50"), 1_050);
 });
