@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { OrderDetailItemV1, OrderDetailV1 } from "@super-restaurant/shared-types";
+import { parseBranchScope, type OrderDetailItemV1, type OrderDetailV1 } from "@super-restaurant/shared-types";
 import { actionLabel, groupItemsByStatus, hasAction } from "./order-detail.js";
+
+const parsedScope = parseBranchScope({ restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" });
+if (parsedScope === undefined) throw new Error("Invalid test scope.");
+const scope = parsedScope;
 
 function item(overrides: Partial<OrderDetailItemV1> = {}): OrderDetailItemV1 {
   return {
@@ -16,8 +20,7 @@ function detail(overrides: Partial<OrderDetailV1> = {}): OrderDetailV1 {
     availableActions: ["sendToKitchen"], channel: "table", createdAt: null,
     currency: "MXN", fulfillment: { addressLabel: null, channel: "table", customerLabel: null, paymentIntent: null, tableId: null },
     items: [item()], orderId: "72371a5f-2056-448d-9ddb-14ab6664a4e8", schemaVersion: 1,
-    scope: { restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" },
-    status: "open", tableId: null, timeZone: "America/Mexico_City",
+    scope, status: "open", tableId: null, timeZone: "America/Mexico_City",
     totals: { currency: "MXN", deliveryChargeMinor: 0, itemsTotalMinor: 10_000, tipMinor: 0, totalMinor: 10_000 },
     updatedAt: null, version: 1, ...overrides,
   };
