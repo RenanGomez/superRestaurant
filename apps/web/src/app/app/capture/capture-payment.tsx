@@ -67,7 +67,6 @@ export function CapturePayment({ projection, intent, deliveryQuote, fulfillment,
   }
 
   const timing = projection?.timing ?? "now";
-  const described = describePaymentMethod(method, timing);
 
   return <section className={panel} data-testid="capture-payment">
     <h2 className="font-heading text-lg font-semibold">Cobro</h2>

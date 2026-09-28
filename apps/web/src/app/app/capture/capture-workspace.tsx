@@ -917,9 +917,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         <form className="mt-3 grid gap-3" onSubmit={(event) => void quoteDelivery(event)}>
           <label className="grid gap-1 text-sm" htmlFor="capture-scheduled-for">Programar entrega (opcional)
             <input id="capture-scheduled-for" type="datetime-local" className={input} value={scheduledFor}
-              onChange={(event) => { setScheduledFor(event.target.value); invalidateQuote(); }} disabled={quoteBusy} /></label>
+              onChange={(event) => { setScheduledFor(event.target.value); invalidateQuote(); }} disabled={busy} /></label>
           <p className="text-xs text-text-muted">Entre 30 minutos y 7 días. La hora se convierte a ISO al solicitar la cotización.</p>
-          <button type="submit" className={button} disabled={quoteBusy}>{quoteBusy ? "Cotizando…" : "Cotizar entrega"}</button>
+          <button type="submit" className={button} disabled={busy}>{busy ? "Cotizando…" : "Cotizar entrega"}</button>
         </form>
         {quoteError && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{quoteError}</p>}
         {deliveryQuote && <div role="status" className="mt-3 grid gap-1 rounded-lg border border-border bg-bg p-3 text-sm">
@@ -1001,6 +1001,11 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           </p>}
           {repeatOrderPlan !== null && <p role="status" className="mt-2 text-sm text-text-muted">
             El servidor volverá a cotizar este pedido con el catálogo vigente. Si algún producto o modificador ya no es válido, la confirmación se detendrá sin crear una orden parcial.
+          </p>}
+          {paymentBlocksConfirm && <p role="alert" className="mt-2 text-sm text-text-muted">
+            {paymentProjection?.status === "stale"
+              ? "Cambió el pedido: confirma de nuevo el cobro antes de convertir la captura en orden."
+              : "El monto no cubre el total: ajusta el cobro antes de convertir la captura en orden."}
           </p>}
           <button type="button" className={`${button} mt-4`} onClick={confirmCapture} disabled={locked || !canConfirm}>
             Convertir captura en orden
