@@ -1,3 +1,4 @@
+import type { BranchScope } from "./index.js";
 import {
   parseHoldCaptureDraftCommandV1,
   type HoldCaptureDraftCommandV1,
@@ -9,6 +10,34 @@ import {
 
 export const CAPTURE_PAYMENT_INTENT_SCHEMA_VERSION = 1 as const;
 export const CAPTURE_WORKSPACE_V5_SCHEMA_VERSION = 5 as const;
+
+/** Read request for `CaptureWorkspaceV5`, mirroring `CaptureWorkspaceRequestV4`'s shape. */
+export interface CaptureWorkspaceRequestV5 {
+  readonly captureDraftId: string;
+  readonly schemaVersion: typeof CAPTURE_WORKSPACE_V5_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+}
+
+export function parseCaptureWorkspaceRequestV5(value: unknown): CaptureWorkspaceRequestV5 | undefined {
+  return safely(() => {
+    const record = exactRecord(value, ["schemaVersion", "scope", "captureDraftId"]);
+    if (record === undefined || own(record, "schemaVersion") !== CAPTURE_WORKSPACE_V5_SCHEMA_VERSION) return undefined;
+    const scope = parseUuidScope(own(record, "scope"));
+    const captureDraftId = uuid(own(record, "captureDraftId"));
+    return scope === undefined || captureDraftId === undefined
+      ? undefined
+      : Object.freeze({ captureDraftId, schemaVersion: CAPTURE_WORKSPACE_V5_SCHEMA_VERSION, scope });
+  });
+}
+
+function parseUuidScope(value: unknown): BranchScope | undefined {
+  const record = exactRecord(value, ["restaurantId", "branchId"]);
+  const restaurantId = record === undefined ? undefined : uuid(own(record, "restaurantId"));
+  const branchId = record === undefined ? undefined : uuid(own(record, "branchId"));
+  return restaurantId === undefined || branchId === undefined
+    ? undefined
+    : Object.freeze({ restaurantId, branchId }) as BranchScope;
+}
 
 export const CAPTURE_PAYMENT_INTENT_METHODS_V1 = Object.freeze(["cash", "card_manual", "transfer"] as const);
 export const CAPTURE_PAYMENT_INTENT_TIMINGS_V1 = Object.freeze(["now", "on_fulfillment"] as const);
@@ -224,3 +253,9 @@ function member<const T extends readonly string[]>(values: T, value: unknown): T
 function safely<T>(operation: () => T | undefined): T | undefined {
   try { return operation(); } catch { return undefined; }
 }
+
+function uuid(value: unknown): string | undefined {
+  return typeof value === "string" && UUID_PATTERN.test(value) ? value.toLowerCase() : undefined;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
