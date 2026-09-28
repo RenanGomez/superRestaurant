@@ -110,6 +110,7 @@ test("service projects a delivery order's totals, masked customer, address and p
   const item = result.items[0];
   assert.equal(item?.orderId, orderId);
   assert.equal(item?.channel, "delivery");
+  assert.equal(item?.timeZone, "America/Hermosillo");
   assert.equal(item?.fulfillmentChannel, "delivery");
   assert.equal(item?.createdAt, "2026-09-26T12:00:00.000Z");
   assert.equal(item?.customerLabel, "Ana Pérez · ****78");

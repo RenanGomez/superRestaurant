@@ -20,7 +20,8 @@ function item(overrides: Partial<BranchOrderWorkItemV1> = {}): BranchOrderWorkIt
   return {
     addressLabel: null, channel: "delivery", createdAt: "2026-09-26T18:00:00.000Z", customerLabel: null,
     fulfillmentChannel: "delivery", hasNotes: false, lineCount: 1, orderId, paymentIntent: null,
-    preparation: "preparing", status: "open", totals: { currency: "MXN", deliveryChargeMinor: 3000, itemsTotalMinor: 10000, totalMinor: 13000 },
+    preparation: "preparing", status: "open", timeZone: "America/Hermosillo",
+    totals: { currency: "MXN", deliveryChargeMinor: 3000, itemsTotalMinor: 10000, totalMinor: 13000 },
     updatedAt: "2026-09-26T18:05:00.000Z", ...overrides,
   };
 }

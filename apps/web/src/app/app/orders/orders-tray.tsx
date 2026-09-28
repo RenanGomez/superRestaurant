@@ -109,7 +109,7 @@ function OrderCard({ order, canCheckout }: { readonly order: BranchOrderWorkItem
     <div className="flex items-start justify-between gap-2">
       <div>
         <strong className="block">{channelLabel(order.channel)}</strong>
-        <span className="block text-xs text-text-muted">{formatOrderWorkTime(order.createdAt)} · {preparationLabel(order.preparation)}</span>
+        <span className="block text-xs text-text-muted">{formatOrderWorkTime(order.createdAt, order.timeZone)} · {preparationLabel(order.preparation)}</span>
       </div>
       <span className="text-right font-semibold">{formatOrderWorkTotal(order.totals.totalMinor, order.totals.currency)}</span>
     </div>

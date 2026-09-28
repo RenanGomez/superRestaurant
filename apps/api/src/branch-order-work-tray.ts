@@ -164,6 +164,7 @@ function projectBranchOrderWorkItem(
     paymentIntent,
     preparation: deriveOrderPreparationStatus(order.items.map((entry) => entry.status)),
     status,
+    timeZone: order.timeZone,
     totals: {
       currency: totals.total.currency,
       deliveryChargeMinor,

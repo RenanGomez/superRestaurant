@@ -50,6 +50,8 @@ export interface BranchOrderWorkItemV1 {
   readonly preparation: BranchOrderWorkPreparationStatusV1;
   readonly createdAt: string;
   readonly updatedAt: string;
+  /** The Order's own frozen IANA zone -- never the viewer's device zone -- so createdAt/updatedAt render identically everywhere. */
+  readonly timeZone: string;
   readonly customerLabel: string | null;
   readonly addressLabel: string | null;
   readonly totals: BranchOrderWorkTotalsV1;
@@ -90,7 +92,7 @@ export function parseBranchOrderWorkTrayRequestV1(value: unknown): BranchOrderWo
 
 export function parseBranchOrderWorkItemV1(value: unknown): BranchOrderWorkItemV1 | undefined {
   const record = exactRecord(value, [
-    "orderId", "channel", "fulfillmentChannel", "status", "preparation", "createdAt", "updatedAt",
+    "orderId", "channel", "fulfillmentChannel", "status", "preparation", "createdAt", "updatedAt", "timeZone",
     "customerLabel", "addressLabel", "totals", "paymentIntent", "lineCount", "hasNotes",
   ]);
   if (record === undefined) return undefined;
@@ -101,6 +103,7 @@ export function parseBranchOrderWorkItemV1(value: unknown): BranchOrderWorkItemV
   const preparation = member(own(record, "preparation"), BRANCH_ORDER_WORK_PREPARATION_STATUSES);
   const createdAt = timestamp(own(record, "createdAt"));
   const updatedAt = timestamp(own(record, "updatedAt"));
+  const timeZone = timeZoneId(own(record, "timeZone"));
   const customerLabel = nullableText(own(record, "customerLabel"), 1, 160);
   const addressLabel = nullableText(own(record, "addressLabel"), 1, 200);
   const totals = parseTotals(own(record, "totals"));
@@ -109,7 +112,7 @@ export function parseBranchOrderWorkItemV1(value: unknown): BranchOrderWorkItemV
   const lineCount = integer(own(record, "lineCount"), 0, 1000);
   const hasNotes = own(record, "hasNotes");
   if (orderId === undefined || channel === undefined || fulfillmentChannel === undefined || status === undefined
-    || preparation === undefined || createdAt === undefined || updatedAt === undefined
+    || preparation === undefined || createdAt === undefined || updatedAt === undefined || timeZone === undefined
     || customerLabel === undefined || addressLabel === undefined || totals === undefined
     || paymentIntent === undefined || lineCount === undefined || typeof hasNotes !== "boolean") return undefined;
   // `fulfillmentChannel` is null whenever the Order has no fulfillment snapshot (e.g. a
@@ -119,7 +122,7 @@ export function parseBranchOrderWorkItemV1(value: unknown): BranchOrderWorkItemV
   if (channel === "table" && fulfillmentChannel !== null && fulfillmentChannel !== "dine_in") return undefined;
   return Object.freeze({
     addressLabel, channel, createdAt, customerLabel, fulfillmentChannel, hasNotes, lineCount,
-    orderId, paymentIntent, preparation, status, totals, updatedAt,
+    orderId, paymentIntent, preparation, status, timeZone, totals, updatedAt,
   });
 }
 
@@ -231,4 +234,14 @@ function timestamp(value: unknown): string | undefined {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)) return undefined;
   const milliseconds = Date.parse(value);
   return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value ? value : undefined;
+}
+
+function timeZoneId(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length < 1 || value.length > 100 || value !== value.trim()) return undefined;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value }).format();
+    return value;
+  } catch {
+    return undefined;
+  }
 }

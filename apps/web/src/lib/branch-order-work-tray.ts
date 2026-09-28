@@ -61,8 +61,10 @@ export function formatOrderWorkTotal(totalMinor: number, currency: string, local
   return new Intl.NumberFormat(locale, { currency, style: "currency" }).format(totalMinor / 100);
 }
 
-export function formatOrderWorkTime(iso: string, timeZone?: string, locale = "es-MX"): string {
-  return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", ...(timeZone === undefined ? {} : { timeZone }) }).format(new Date(iso));
+/** `timeZone` is always the Order's own frozen zone, never the viewer's device zone, so this
+ * renders identically during SSR and after hydration regardless of where either runs. */
+export function formatOrderWorkTime(iso: string, timeZone: string, locale = "es-MX"): string {
+  return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", timeZone }).format(new Date(iso));
 }
 
 /**

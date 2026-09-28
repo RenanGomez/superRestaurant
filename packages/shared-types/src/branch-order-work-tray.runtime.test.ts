@@ -40,10 +40,13 @@ const deliveryItem = {
   paymentIntent: { method: "cash", tenderedAmountMinor: 50000, tipMinor: 1000 },
   preparation: "preparing",
   status: "open",
+  timeZone: "America/Hermosillo",
   totals: { currency: "MXN", deliveryChargeMinor: 3000, itemsTotalMinor: 20000, totalMinor: 23000 },
   updatedAt: "2026-09-26T18:05:00.000Z",
 } as const;
 expect(parseBranchOrderWorkItemV1(deliveryItem) !== undefined, "delivery item parses");
+expect(parseBranchOrderWorkItemV1({ ...deliveryItem, timeZone: "Not/AZone" }) === undefined,
+  "item rejects an invalid IANA time zone");
 
 const tableItem = {
   ...deliveryItem,
