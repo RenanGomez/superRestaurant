@@ -14,6 +14,7 @@ import {
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
+import { rolesGrantPermission } from "./auth/rbac-policy.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import { decodeOrderRecord } from "./persistence/order-persistence-codec.js";
 
@@ -67,8 +68,14 @@ export class BranchOrderWorkTrayService {
     const request = parseBranchOrderWorkTrayRequestV1(input);
     if (request === undefined) throw applicationError("request");
     let actorId: string;
+    let canReadCustomers: boolean;
     try {
-      actorId = (await this.authorization.authorizeBranch(principal, request.scope, "orders.read")).principal.actorId;
+      const authorized = await this.authorization.authorizeBranch(principal, request.scope, "orders.read");
+      actorId = authorized.principal.actorId;
+      // `customers.read` is an optional capability here, not a gate: a role with `orders.read`
+      // alone (e.g. kitchen, viewer, auditor) still sees every active Order, just without the
+      // customer name/phone or street-level address -- never a silent authorization bypass.
+      canReadCustomers = rolesGrantPermission(authorized.roles, "customers.read");
     } catch { throw applicationError("authorization"); }
     let raw: unknown;
     try { raw = await this.tray.list(actorId, request); } catch { throw unavailable(); }
@@ -86,7 +93,7 @@ export class BranchOrderWorkTrayService {
     const rawOrders = own(envelope, "orders");
     if (!Array.isArray(rawOrders) || rawOrders.length > request.limit) throw unavailable();
     const items: BranchOrderWorkItemV1[] = [];
-    for (const rawOrder of rawOrders) items.push(projectBranchOrderWorkItem(rawOrder, request.scope));
+    for (const rawOrder of rawOrders) items.push(projectBranchOrderWorkItem(rawOrder, request.scope, canReadCustomers));
     const result = parseBranchOrderWorkTrayV1({
       items, nextCursor: own(envelope, "next"), schemaVersion: 1, scope: request.scope,
     });
@@ -99,9 +106,15 @@ export class BranchOrderWorkTrayService {
  * Pure server-side projection only. Totals are read from `calculateOrderAggregateTotals` on the
  * order's own frozen aggregate -- never recalculated from the current catalog. The fulfillment
  * snapshot (when present) contributes only customer/address/payment-intent labels; PII is reduced
- * to a name plus a masked phone suffix, never the full phone or address text.
+ * to a name plus a masked phone suffix, never the full phone or address text. `canReadCustomers`
+ * (the caller's own `customers.read` grant, never trusted from the client) additionally nulls out
+ * the customer/address labels for a role that only has `orders.read` (kitchen, viewer, auditor).
  */
-function projectBranchOrderWorkItem(raw: unknown, scope: { restaurantId: string; branchId: string }): BranchOrderWorkItemV1 {
+function projectBranchOrderWorkItem(
+  raw: unknown,
+  scope: { restaurantId: string; branchId: string },
+  canReadCustomers: boolean,
+): BranchOrderWorkItemV1 {
   const record = exactRecord(raw, ["orderId", "channel", "status", "version", "createdAt", "updatedAt", "confirmedAt", "order", "snapshot"]);
   if (record === undefined) throw unavailable();
   const orderId = own(record, "orderId");
@@ -138,10 +151,10 @@ function projectBranchOrderWorkItem(raw: unknown, scope: { restaurantId: string;
   const fulfillmentChannel = snapshot === null ? (channel === "table" ? "dine_in" : null) : snapshot.fulfillmentChannel;
 
   const item = parseBranchOrderWorkItemV1({
-    addressLabel: buildAddressLabel(snapshot),
+    addressLabel: canReadCustomers ? buildAddressLabel(snapshot) : null,
     channel,
     createdAt: confirmedAt ?? createdAt,
-    customerLabel: buildCustomerLabel(snapshot),
+    customerLabel: canReadCustomers ? buildCustomerLabel(snapshot) : null,
     fulfillmentChannel,
     hasNotes: order.items.some((entry) => typeof entry.note === "string"),
     lineCount: order.items.filter((entry) => entry.status !== "cancelled").length,

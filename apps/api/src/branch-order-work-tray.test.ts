@@ -78,8 +78,8 @@ function port(result: unknown): BranchOrderWorkTrayPort {
   return { list: async () => result };
 }
 
-function service(result: unknown): BranchOrderWorkTrayService {
-  const authorization = { authorizeBranch: async () => ({ principal: { actorId } }) } as never;
+function service(result: unknown, roles: readonly string[] = ["owner"]): BranchOrderWorkTrayService {
+  const authorization = { authorizeBranch: async () => ({ principal: { actorId }, roles }) } as never;
   return new BranchOrderWorkTrayService(authorization, port(result));
 }
 
@@ -116,6 +116,24 @@ test("service projects a delivery order's totals, masked customer, address and p
   assert.equal(item?.addressLabel, "Casa · Av. Obregón 123");
   assert.equal(item?.hasNotes, true);
   assert.equal(item?.lineCount, 1);
+  assert.deepEqual(item?.paymentIntent, { method: "cash", tenderedAmountMinor: 20_000, tipMinor: 1_000 });
+  assert.deepEqual(item?.totals, { currency: "MXN", deliveryChargeMinor: 3_000, itemsTotalMinor: 10_000, totalMinor: 13_000 });
+});
+
+test("service nulls customer/address labels for a role with orders.read but no customers.read", async () => {
+  const envelope = {
+    schemaVersion: 1, scope, next: null,
+    orders: [{
+      orderId, channel: "delivery", status: "draft", version: 1, createdAt: "2026-09-26T11:55:00.000Z",
+      updatedAt: "2026-09-26T12:05:00.000Z",
+      confirmedAt: "2026-09-26T12:00:00.000Z", order: encodeOrderRecord(deliveryOrder()), snapshot: deliverySnapshot(),
+    }],
+  };
+  const result = await service(envelope, ["kitchen"]).list({ actorId } as never, { cursor: null, limit: 25, schemaVersion: 1, scope });
+  const item = result.items[0];
+  assert.equal(item?.customerLabel, null);
+  assert.equal(item?.addressLabel, null);
+  // Everything else -- totals, payment intent, preparation -- is still authorized under orders.read.
   assert.deepEqual(item?.paymentIntent, { method: "cash", tenderedAmountMinor: 20_000, tipMinor: 1_000 });
   assert.deepEqual(item?.totals, { currency: "MXN", deliveryChargeMinor: 3_000, itemsTotalMinor: 10_000, totalMinor: 13_000 });
 });
