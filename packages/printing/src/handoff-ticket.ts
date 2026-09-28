@@ -26,7 +26,7 @@ export interface HandoffTicketPaymentIntentInput {
 }
 
 export interface HandoffTicketInput {
-  readonly order: Pick<Order, "orderId" | "channel" | "currency" | "items"> & {
+  readonly order: Pick<Order, "orderId" | "channel" | "currency" | "items" | "deliveryCharge"> & {
     readonly items: readonly OrderItem[];
   };
   /** Caller supplies the persisted monetary snapshot; this renderer never recalculates it. */
@@ -80,8 +80,13 @@ export function renderHandoffTicket(input: HandoffTicketInput): Uint8Array {
   encoder.line("------------------------")
     .line(`Subtotal: ${formatMinor(totals.subtotalBeforeOrderDiscount.amountMinor, order.currency)}`)
     .line(`Descuento líneas: ${formatMinor(totals.lineDiscountTotal.amountMinor, order.currency)}`)
-    .line(`Descuento orden: ${formatMinor(totals.orderDiscount.amountMinor, order.currency)}`)
-    .bold(true)
+    .line(`Descuento orden: ${formatMinor(totals.orderDiscount.amountMinor, order.currency)}`);
+  // H13: the delivery charge is separate from the sale (S8, untaxed) and prints on its own line
+  // right before the total, which already includes it (calculateOrderAggregateTotals adds it).
+  if (order.deliveryCharge !== null) {
+    encoder.line(`Envío: ${formatMinor(order.deliveryCharge.amount.amountMinor, order.currency)}`);
+  }
+  encoder.bold(true)
     .line(`Total: ${formatMinor(totals.total.amountMinor, order.currency)}`)
     .bold(false);
   if (input.paymentIntent) {
