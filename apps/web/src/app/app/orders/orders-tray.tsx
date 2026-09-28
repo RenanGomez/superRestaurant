@@ -29,9 +29,11 @@ const LIMIT = 25;
 interface Props {
   readonly scope: BranchScope;
   readonly action: (input: unknown) => Promise<BranchOrderTrayRequestResult>;
+  /** Server-computed from the actor's own membership roles; the client never decides this. */
+  readonly canCheckout: boolean;
 }
 
-export function OrdersTray({ scope, action }: Props) {
+export function OrdersTray({ scope, action, canCheckout }: Props) {
   const [items, setItems] = useState<readonly BranchOrderWorkItemV1[]>([]);
   const [nextCursor, setNextCursor] = useState<BranchOrderWorkTrayV1["nextCursor"]>(null);
   const [filter, setFilter] = useState<BranchOrderWorkFilter>("all");
@@ -84,7 +86,7 @@ export function OrdersTray({ scope, action }: Props) {
     {error && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{errors[error]}</p>}
     {!loaded ? <p className="mt-4 text-sm text-text-muted">Cargando órdenes…</p> : items.length === 0
       ? <p className="mt-4 text-sm text-text-muted">No hay órdenes activas para este filtro.</p>
-      : <ul className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{items.map((order) => <OrderCard key={order.orderId} order={order} />)}</ul>}
+      : <ul className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{items.map((order) => <OrderCard key={order.orderId} order={order} canCheckout={canCheckout} />)}</ul>}
     {nextCursor !== null && <div className="mt-4">
       <button type="button" className={button} disabled={busy}
         onClick={() => void load(nextCursor, false, filter === "all" ? null : filter)}>Cargar más</button>
@@ -92,7 +94,7 @@ export function OrdersTray({ scope, action }: Props) {
   </section>;
 }
 
-function OrderCard({ order }: { readonly order: BranchOrderWorkItemV1 }) {
+function OrderCard({ order, canCheckout }: { readonly order: BranchOrderWorkItemV1; readonly canCheckout: boolean }) {
   return <li className="rounded-xl border border-border bg-bg p-4">
     <div className="flex items-start justify-between gap-2">
       <div>
@@ -109,11 +111,13 @@ function OrderCard({ order }: { readonly order: BranchOrderWorkItemV1 }) {
       {order.paymentIntent !== null && ` · pago ${order.paymentIntent.method === "cash" ? "efectivo" : order.paymentIntent.method === "card_manual" ? "tarjeta" : "transferencia"}`}
     </p>
     <div className="mt-3 flex flex-wrap gap-2">
-      {isPayableBranchOrderWorkStatus(order.status)
+      {canCheckout && isPayableBranchOrderWorkStatus(order.status)
         ? <a href={`/app/caja?orderId=${order.orderId}`} className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent">
           Cobrar en caja
         </a>
-        : <span className="flex min-h-11 items-center text-sm text-text-muted">Aún en borrador, sin cuenta que cobrar</span>}
+        : <span className="flex min-h-11 items-center text-sm text-text-muted">
+          {isPayableBranchOrderWorkStatus(order.status) ? "Cuenta abierta" : "Aún en borrador, sin cuenta que cobrar"}
+        </span>}
     </div>
   </li>;
 }

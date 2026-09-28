@@ -10,6 +10,10 @@ import { OrdersTray } from "./orders-tray";
 
 export const dynamic = "force-dynamic";
 
+// Mirrors /app/caja's own FINANCIAL_ROLES gate: only these roles can actually check out an order
+// there, so "Cobrar en caja" must not be offered to anyone else here either.
+const FINANCIAL_ROLES = new Set(["owner", "admin", "manager", "supervisor", "cashier"]);
+
 export default async function OrdersPage() {
   const supabase = await createServerSupabaseClient();
   const { data: { session } } = await supabase.auth.getSession();
@@ -27,6 +31,7 @@ export default async function OrdersPage() {
     <header><p className="text-xs font-semibold uppercase tracking-widest text-accent">Operación</p>
       <h1 className="font-heading text-2xl font-bold">Órdenes activas · {membership.restaurantName}</h1>
       <p className="mt-1 text-sm text-text-muted">{membership.branchName} · domicilio, recoger, mostrador y mesa</p></header>
-    <OrdersTray scope={scope} action={branchOrderWorkTrayAction} />
+    <OrdersTray scope={scope} action={branchOrderWorkTrayAction}
+      canCheckout={membership.roles.some((role) => FINANCIAL_ROLES.has(role))} />
   </div>;
 }
