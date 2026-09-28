@@ -16,6 +16,8 @@ No equivale a un nuevo ensayo de login/revocación Supabase Auth. La autoridad A
 
 Requiere el secreto administrativo local ignorado `.env.adr010.local` y la CA `.certs/prod-ca-2021.crt`. Nunca imprimir su contenido. El destino exacto verificado es zwbyiefqeujstyzysydn, pooler de sesión 5432, base postgres, TLS verify-full. Eliminar sslrootcert de la copia de URL sólo evita duplicar el parámetro: la CA se carga/valida y se entrega explícitamente al driver con rejectUnauthorized=true.
 
+`run-capture-schema-verification` fija conteos de catálogo (`SUMMARY_SQL` esperado) que ya no coinciden con el catálogo actual tras las migraciones posteriores; no reproducir el ensayo HTTP con este runner sin actualizar antes sus expectativas. Para inspección de sólo lectura contra el catálogo vigente, usar la sonda genérica `pnpm --filter @super-restaurant/api run probe:migration:rollback` (ver `docs/runbooks/migration-apply.md`) o los nuevos `preflight:migrations`/`postcheck:migrations`.
+
 ```powershell
 npm.cmd run build --prefix apps/api
 node --env-file=.env.adr010.local --input-type=module -e "const u=new URL(process.env.ADR010_DATABASE_URL); u.searchParams.delete('sslrootcert'); process.env.SCHEMA_VERIFICATION_CONFIRMATION='ROLLBACK_ONLY'; process.env.SCHEMA_VERIFICATION_EXPECTED_PROJECT_REF='zwbyiefqeujstyzysydn'; process.env.SCHEMA_VERIFICATION_DATABASE_URL=u.toString(); process.env.SCHEMA_VERIFICATION_CA_CERT_PATH='.certs/prod-ca-2021.crt'; process.env.CUSTOMER_ADAPTER_VERIFICATION='ROLLBACK_ONLY_APP_API_HTTP'; await import('./apps/api/dist/operations/run-capture-schema-verification.js');"
