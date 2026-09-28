@@ -108,7 +108,11 @@ export function parseBranchOrderWorkItemV1(value: unknown): BranchOrderWorkItemV
     || preparation === undefined || createdAt === undefined || updatedAt === undefined
     || customerLabel === undefined || addressLabel === undefined || totals === undefined
     || paymentIntent === undefined || lineCount === undefined || typeof hasNotes !== "boolean") return undefined;
-  if ((channel === "table") !== (fulfillmentChannel === "dine_in" || fulfillmentChannel === null)) return undefined;
+  // `fulfillmentChannel` is null whenever the Order has no fulfillment snapshot (e.g. a
+  // counter/takeout/delivery Order created outside Capture); only a *present* value must agree
+  // with the Order's own channel, never the absence of one.
+  if (fulfillmentChannel === "dine_in" && channel !== "table") return undefined;
+  if (channel === "table" && fulfillmentChannel !== null && fulfillmentChannel !== "dine_in") return undefined;
   return Object.freeze({
     addressLabel, channel, createdAt, customerLabel, fulfillmentChannel, hasNotes, lineCount,
     orderId, paymentIntent, preparation, status, totals, updatedAt,

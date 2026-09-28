@@ -53,6 +53,20 @@ const tableItem = {
 } as const;
 expect(parseBranchOrderWorkItemV1(tableItem) !== undefined, "table item parses without payment intent or address");
 
+const counterItemWithoutSnapshot = {
+  ...deliveryItem,
+  addressLabel: null,
+  channel: "counter",
+  customerLabel: null,
+  fulfillmentChannel: null,
+  paymentIntent: null,
+  totals: { ...deliveryItem.totals, deliveryChargeMinor: 0, totalMinor: 20000 },
+} as const;
+expect(parseBranchOrderWorkItemV1(counterItemWithoutSnapshot) !== undefined,
+  "a counter/takeout/delivery Order with no fulfillment snapshot parses with a null fulfillmentChannel");
+expect(parseBranchOrderWorkItemV1({ ...counterItemWithoutSnapshot, channel: "table" }) !== undefined,
+  "a table Order with no fulfillment snapshot also parses with a null fulfillmentChannel");
+
 for (const invalid of [
   { ...deliveryItem, extra: true },
   { ...deliveryItem, channel: "table", fulfillmentChannel: "delivery" },
