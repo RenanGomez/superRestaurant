@@ -225,7 +225,14 @@ export function encodeOrderRecord(order: Order): PersistedOrderV1 {
     items: order.items.map(encodeOrderItem),
     ...(order.orderDiscount === undefined ? {} : { orderDiscount: encodeOrderDiscount(order.orderDiscount) }),
     ...(order.tip === undefined ? {} : { tip: encodeMoney(order.tip) }),
-    deliveryCharge: order.deliveryCharge === null ? null : encodeDeliveryCharge(order.deliveryCharge),
+    // H23: omit the key entirely when there's no charge (same optional-key pattern as
+    // orderDiscount/tip/note), rather than always writing `deliveryCharge: null` -- confirm's
+    // audit trail (persist_order_mutation) requires the persisted aggregate outside items/status
+    // to stay byte-for-byte identical across mutations, and every order created before this key
+    // existed decodes it back as an OMITTED key (see decodeOrderRecord below), never an explicit
+    // null; always re-adding the key on the very next item add/state change would silently
+    // corrupt that equality check for every one of those pre-existing orders.
+    ...(order.deliveryCharge === null ? {} : { deliveryCharge: encodeDeliveryCharge(order.deliveryCharge) }),
     ...(order.cancellationAudit === undefined
       ? {}
       : { cancellationAudit: encodeOrderCancellationAudit(order.cancellationAudit) }),

@@ -29,6 +29,8 @@ declare
   h13_mismatch_order uuid := gen_random_uuid();
   h16_plan_clear_capture uuid := gen_random_uuid();
   h16_plan_clear_order uuid := gen_random_uuid();
+  h23_omitted_capture uuid := gen_random_uuid();
+  h23_omitted_order uuid := gen_random_uuid();
   catalog uuid := gen_random_uuid();
   category uuid := gen_random_uuid();
   product uuid := gen_random_uuid();
@@ -1488,6 +1490,60 @@ begin
   then raise exception 'CAPTURE_H16_PLAN_CLEAR_NOT_REJECTED'; end if;
   if exists (select 1 from app.orders placed where placed.id=h16_plan_clear_order)
   then raise exception 'CAPTURE_H16_PLAN_CLEAR_ORDER_WAS_CREATED'; end if;
+
+  ----------------------------------------------------------------------------
+  -- H23: a non-delivery p_order that OMITS the deliveryCharge key entirely
+  -- (exactly what the codec now sends, after the optional-key fix) is
+  -- accepted the same as an explicit null -- the shape check's four
+  -- with/without-tableId/deliveryCharge variants must include this one.
+  ----------------------------------------------------------------------------
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h23_omitted_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','counter'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_H23_OMITTED_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  confirmation_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',2,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h23_omitted_capture::text,'expectedVersion',1,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'attentionLeaseId',lease,
+    'orderId',h23_omitted_order::text,'shiftId',shift::text,'tableId',null,
+    'currency','MXN','timeZone','America/Hermosillo'
+  );
+  order_audits := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'eventId',confirmation_command->>'eventId',
+    'idempotencyKey',confirmation_command->>'idempotencyKey','restaurantId',restaurant::text,
+    'branchId',branch::text,'orderId',h23_omitted_order::text,'actorId',actor::text,
+    'deviceId',device::text,'occurredAt',confirmation_command->>'occurredAt',
+    'operation','order.created','entityType','order','entityId',h23_omitted_order::text,'to','draft'
+  ));
+  -- No 'deliveryCharge' key at all -- the exact shape the codec now produces for a null charge.
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',h23_omitted_order::text,'restaurantId',restaurant::text,
+    'branchId',branch::text,'channel','counter','currency','MXN','timeZone','America/Hermosillo',
+    'status','draft','items',pg_catalog.jsonb_build_array()
+  );
+  execute 'set local role app_api';
+  if app_private.confirm_capture_draft_v3(actor,confirmation_command,null,null)->>'status'<>'pending'
+    then raise exception 'CAPTURE_H23_OMITTED_PROBE_REJECTED'; end if;
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_H23_OMITTED_NOT_APPLIED'; end if;
+  if not exists (
+    select 1 from app.orders placed where placed.restaurant_id=restaurant and placed.branch_id=branch
+      and placed.id=h23_omitted_order and not (placed.aggregate ? 'deliveryCharge')
+  ) then raise exception 'CAPTURE_H23_OMITTED_PERSISTED_WITH_KEY'; end if;
 end
 $capture_payment_intent_tests$;
 commit;

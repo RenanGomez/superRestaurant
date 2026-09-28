@@ -804,10 +804,22 @@ begin
   end if;
   if p_order is null then return pg_catalog.jsonb_build_object('status','pending'); end if;
 
+  -- H23: deliveryCharge is an optional key here, exactly like tableId -- the codec omits it
+  -- entirely when null (same optional-key convention as orderDiscount/tip) rather than always
+  -- writing an explicit null, because persist_order_mutation's later item-add/state-change
+  -- mutations require the persisted aggregate outside items/status to stay byte-for-byte
+  -- identical; always re-adding the key here would break that equality against every order
+  -- persisted without it (every non-delivery order, and every order confirmed before H13).
   if pg_catalog.jsonb_typeof(p_order)<>'object' or pg_catalog.jsonb_typeof(p_order_audits)<>'array'
     or not (
       app_private.jsonb_has_exact_keys(p_order,array[
+        'schemaVersion','orderId','restaurantId','branchId','channel','currency','timeZone','status','items'
+      ])
+      or app_private.jsonb_has_exact_keys(p_order,array[
         'schemaVersion','orderId','restaurantId','branchId','channel','currency','timeZone','status','items','deliveryCharge'
+      ])
+      or app_private.jsonb_has_exact_keys(p_order,array[
+        'schemaVersion','orderId','restaurantId','branchId','channel','tableId','currency','timeZone','status','items'
       ])
       or app_private.jsonb_has_exact_keys(p_order,array[
         'schemaVersion','orderId','restaurantId','branchId','channel','tableId','currency','timeZone','status','items','deliveryCharge'
@@ -998,7 +1010,9 @@ begin
     then
       return pg_catalog.jsonb_build_object('status','conflict','reason','delivery_charge_mismatch');
     end if;
-  elsif p_order->'deliveryCharge' is distinct from 'null'::jsonb then
+  -- H23: the key is optional (see the shape check above), so a non-delivery order may omit it
+  -- entirely -- that must be accepted exactly like an explicit null, never rejected.
+  elsif (p_order ? 'deliveryCharge') and p_order->'deliveryCharge' is distinct from 'null'::jsonb then
     return pg_catalog.jsonb_build_object('status','rejected');
   end if;
 
