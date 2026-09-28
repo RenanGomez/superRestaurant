@@ -37,7 +37,22 @@ export interface MigrationPostcheckResult {
   readonly upToDate: boolean;
 }
 
+export type MigrationPostcheckCode =
+  | "MIGRATION_POSTCHECK_VERSIONS_REQUIRED"
+  | "MIGRATION_POSTCHECK_FUNCTION_NAME_REJECTED"
+  | "MIGRATION_POSTCHECK_FUNCTIONS_VALUE_REQUIRED"
+  | "MIGRATION_POSTCHECK_HISTORY_MISMATCH"
+  | "MIGRATION_POSTCHECK_NOT_LATEST"
+  | "MIGRATION_POSTCHECK_HISTORY_ROW_REJECTED"
+  | "MIGRATION_POSTCHECK_FUNCTION_NOT_FOUND"
+  | "MIGRATION_POSTCHECK_SUMMARY_REJECTED"
+  | "MIGRATION_POSTCHECK_SUMMARY_MISSING"
+  | "MIGRATION_POSTCHECK_ROLLBACK_FAILED"
+  | "MIGRATION_POSTCHECK_CLOSE_FAILED"
+  | "MIGRATION_POSTCHECK_FAILED";
+
 export class MigrationPostcheckError extends Error {
+  public readonly code: MigrationPostcheckCode;
   public readonly stage:
     | "configuration"
     | "connect"
@@ -48,9 +63,10 @@ export class MigrationPostcheckError extends Error {
     | "rollback"
     | "close";
 
-  public constructor(stage: MigrationPostcheckError["stage"], message: string) {
-    super(message);
+  public constructor(stage: MigrationPostcheckError["stage"], code: MigrationPostcheckCode) {
+    super(code);
     this.name = "MigrationPostcheckError";
+    this.code = code;
     this.stage = stage;
   }
 }
@@ -136,8 +152,11 @@ export async function runMigrationPostcheck(
     if (history.missingVersions.length > 0 || history.duplicateVersions.length > 0) {
       throw new MigrationPostcheckError("history", "MIGRATION_POSTCHECK_HISTORY_MISMATCH");
     }
+    if (!history.upToDate) {
+      throw new MigrationPostcheckError("history", "MIGRATION_POSTCHECK_NOT_LATEST");
+    }
   } catch (error: unknown) {
-    failure = error instanceof MigrationPostcheckError ? error : toPostcheckError(stage, error);
+    failure = error instanceof MigrationPostcheckError ? error : toPostcheckError(stage);
   } finally {
     try {
       await session.query("ROLLBACK");
@@ -220,9 +239,8 @@ function readCatalogSummary(row: unknown): MigrationPostcheckCatalogSummary {
   });
 }
 
-function toPostcheckError(stage: MigrationPostcheckError["stage"], error: unknown): MigrationPostcheckError {
-  const message = error instanceof Error ? error.message : "MIGRATION_POSTCHECK_FAILED";
-  return new MigrationPostcheckError(stage, message);
+function toPostcheckError(stage: MigrationPostcheckError["stage"]): MigrationPostcheckError {
+  return new MigrationPostcheckError(stage, "MIGRATION_POSTCHECK_FAILED");
 }
 
 function parseCliArguments(argv: readonly string[]): { readonly functionNames: readonly string[]; readonly versions: readonly string[] } {
@@ -255,8 +273,8 @@ async function main(): Promise<void> {
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   main().catch((error: unknown) => {
-    const postcheckError = error instanceof MigrationPostcheckError ? error : toPostcheckError("configuration", error);
-    process.stderr.write(`${JSON.stringify({ stage: postcheckError.stage, status: "failed", message: postcheckError.message })}\n`);
+    const postcheckError = error instanceof MigrationPostcheckError ? error : toPostcheckError("configuration");
+    process.stderr.write(`${JSON.stringify({ code: postcheckError.code, stage: postcheckError.stage, status: "failed", message: postcheckError.message })}\n`);
     process.exitCode = 1;
   });
 }

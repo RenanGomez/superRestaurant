@@ -74,6 +74,19 @@ test("exits with a rejection when a requested version is missing from history, a
   assert.equal(queries.at(-1), "ROLLBACK");
 });
 
+test("exits with MIGRATION_POSTCHECK_NOT_LATEST when the requested versions exist but a newer remote version exists", async () => {
+  const queries: string[] = [];
+  await assert.rejects(
+    runMigrationPostcheck(config, ["20260101000100"], [], () => fakeSession(queries, ["20260101000100", "20260102000100"])),
+    (error: unknown) => {
+      assert.ok(error instanceof MigrationPostcheckError);
+      assert.equal(error.code, "MIGRATION_POSTCHECK_NOT_LATEST");
+      return true;
+    },
+  );
+  assert.equal(queries.at(-1), "ROLLBACK");
+});
+
 test("exits with a rejection when a requested version appears twice in history", async () => {
   const queries: string[] = [];
   await assert.rejects(

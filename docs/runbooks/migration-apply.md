@@ -14,6 +14,8 @@ pnpm --filter @super-restaurant/api run preflight:migrations
 
 Reporta `remoteVersions`, `lastRemote`, `localFiles`, `localMissingInRemote` (candidatas a aplicar) y `remoteMissingLocally` (las cinco migraciones ADR históricas sin archivo local; esperado, no un error). BEGIN READ ONLY / ROLLBACK siempre; exit 1 si falla la conexión o el project ref no coincide.
 
+El script resuelve `supabase/migrations` desde la raíz del workspace (busca `pnpm-workspace.yaml` hacia arriba desde su propio `dist/operations`), no desde el cwd de `pnpm --filter`; funciona igual invocado desde la raíz o desde `apps/api`. Para apuntar a otro directorio, pasar `-- --migrations-dir <ruta>`.
+
 ## 2. Sonda rollback-only por candidata
 
 ```powershell
@@ -41,10 +43,10 @@ Ejecutar el mismo comando sin `--dry-run` sólo con autorización humana explíc
 ## 6. Postcheck
 
 ```powershell
-pnpm --filter @super-restaurant/api run postcheck:migrations -- <version1> <version2> -- --functions fn_a,fn_b
+pnpm --filter @super-restaurant/api run postcheck:migrations -- <version1> <version2> --functions fn_a,fn_b
 ```
 
-Confirma que cada versión aplicada aparece exactamente una vez y que la última del historial es la mayor pedida; reporta el resumen de catálogo y, si se pidieron funciones, `EXECUTE` para `app_api`/`authenticated`/owner. Exit 1 si falta o está duplicada alguna versión.
+Confirma que cada versión aplicada aparece exactamente una vez y que la última del historial es la mayor pedida; reporta el resumen de catálogo y, si se pidieron funciones, `EXECUTE` para `app_api`/`authenticated`/owner. Exit 1 (`MIGRATION_POSTCHECK_HISTORY_MISMATCH`) si falta o está duplicada alguna versión pedida; exit 1 (`MIGRATION_POSTCHECK_NOT_LATEST`) si todas las pedidas están presentes una vez pero el historial remoto ya avanzó a una versión mayor que ninguna de las pedidas cubre (aplicación parcial u orden inesperado).
 
 ## 7. Segundo dry-run y limpieza
 
