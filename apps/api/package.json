@@ -60,6 +60,7 @@
     "verify:capture-selection-plan-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-selection-plan-schema-verification.js --local-disposable-only",
     "verify:capture-no-sale-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-no-sale-schema-verification.js --local-disposable-only",
     "verify:order-item-note-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-order-item-note-schema-verification.js --local-disposable-only",
+    "verify:capture-payment-intent-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-payment-intent-schema-verification.js --local-disposable-only",
     "verify:dining-tables-layout-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-tables-layout-schema-verification.js",
     "verify:dining-tables-layout-lint-fix-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-tables-layout-lint-fix-schema-verification.js",
     "verify:menu-catalog-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-menu-catalog-schema-verification.js",
