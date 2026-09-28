@@ -203,22 +203,42 @@ export interface RehydratedCaptureWorkspace {
   readonly sourceChannel: CaptureSourceChannelV1;
 }
 
-/** Rehydrates only immutable snapshot facts returned for the Capture; it never accepts a live Customer record. */
+/**
+ * Rehydrates only immutable snapshot facts returned for the Capture; it never accepts a live
+ * Customer record. Accepts either `CaptureWorkspaceV5` (preferred; every operation now serves it)
+ * or, for backward compatibility, a bare `CaptureWorkspaceV4` -- which carries no payment fields
+ * at all, so those are surfaced as `null` rather than treated as an unavailable response.
+ */
 export function rehydrateCaptureWorkspace(value: unknown): RehydratedCaptureWorkspace | undefined {
-  const workspace = parseCaptureWorkspaceV5(value);
-  return workspace === undefined ? undefined : Object.freeze({
-    customerSnapshot: workspace.customerSnapshot,
-    deliveryInstructions: workspace.detail.deliveryInstructions,
-    deliveryQuote: workspace.deliveryQuote,
-    detail: workspace.detail,
-    fulfillmentChannel: workspace.detail.fulfillmentChannel,
-    fulfillmentSnapshot: workspace.fulfillmentSnapshot,
-    paymentIntent: workspace.paymentIntent,
-    paymentProjection: workspace.paymentProjection,
-    repeatOrderPlan: workspace.repeatOrderPlan,
-    selectionPlan: workspace.selectionPlan,
-    selectionProjection: workspace.selectionProjection,
-    sourceChannel: workspace.detail.sourceChannel,
+  const v5 = parseCaptureWorkspaceV5(value);
+  if (v5 !== undefined) return Object.freeze({
+    customerSnapshot: v5.customerSnapshot,
+    deliveryInstructions: v5.detail.deliveryInstructions,
+    deliveryQuote: v5.deliveryQuote,
+    detail: v5.detail,
+    fulfillmentChannel: v5.detail.fulfillmentChannel,
+    fulfillmentSnapshot: v5.fulfillmentSnapshot,
+    paymentIntent: v5.paymentIntent,
+    paymentProjection: v5.paymentProjection,
+    repeatOrderPlan: v5.repeatOrderPlan,
+    selectionPlan: v5.selectionPlan,
+    selectionProjection: v5.selectionProjection,
+    sourceChannel: v5.detail.sourceChannel,
+  });
+  const v4 = parseCaptureWorkspaceV4(value);
+  return v4 === undefined ? undefined : Object.freeze({
+    customerSnapshot: v4.customerSnapshot,
+    deliveryInstructions: v4.detail.deliveryInstructions,
+    deliveryQuote: null,
+    detail: v4.detail,
+    fulfillmentChannel: v4.detail.fulfillmentChannel,
+    fulfillmentSnapshot: v4.fulfillmentSnapshot,
+    paymentIntent: null,
+    paymentProjection: null,
+    repeatOrderPlan: v4.repeatOrderPlan,
+    selectionPlan: v4.selectionPlan,
+    selectionProjection: v4.selectionProjection,
+    sourceChannel: v4.detail.sourceChannel,
   });
 }
 
@@ -331,8 +351,10 @@ async function requestCapturePaymentIntent(token: string, baseUrl: string, input
 
 /**
  * Replaces the catalog-derived selection plan on a claimed draft and returns the refreshed
- * CaptureWorkspaceV4 (server-priced `selectionProjection` included); the client only ever sends
- * ids and quantities via `ReplaceCaptureSelectionPlanCommandV1`, never a price or product name.
+ * CaptureWorkspaceV5 (server-priced `selectionProjection` plus the recomputed `paymentProjection`
+ * included, so a stale payment intent surfaces immediately after the menu changes); the client
+ * only ever sends ids and quantities via `ReplaceCaptureSelectionPlanCommandV1`, never a price or
+ * product name.
  */
 async function requestCaptureSelectionPlan(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
   const command = parseReplaceCaptureSelectionPlanCommandV1(input);
@@ -343,7 +365,7 @@ async function requestCaptureSelectionPlan(token: string, baseUrl: string, input
     if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
       : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
         : response.status === 400 ? "invalid" : "unavailable" };
-    const value = parseCaptureWorkspaceV4(await response.json());
+    const value = parseCaptureWorkspaceV5(await response.json());
     // The server accepts a replay whose draft has since advanced past expectedVersion+1 through
     // an unrelated mutation (see CaptureSelectionPlanService.replace), so the client must not
     // demand an exact match here either: a genuinely successful write is never older than that.

@@ -125,7 +125,7 @@ export class CapturesController {
   @Post("selection-plan")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
-  public async replaceSelectionPlan(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV4> {
+  public async replaceSelectionPlan(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV5> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.selectionPlan.replace(principal, body));
   }

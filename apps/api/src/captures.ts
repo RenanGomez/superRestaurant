@@ -826,7 +826,7 @@ export class CaptureSelectionPlanService {
     @Inject(CAPTURE_CONFIRMATION_PORT) private readonly confirmation: CaptureConfirmationPort,
   ) {}
 
-  public async replace(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV4> {
+  public async replace(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV5> {
     const command = parseReplaceCaptureSelectionPlanCommandV1(input);
     if (command === undefined) throw new CaptureApplicationError("request");
     let actorId: string;
@@ -888,14 +888,15 @@ export class CaptureSelectionPlanService {
     if (appliedRecord.detail.captureDraftId !== command.captureDraftId
       || appliedRecord.detail.version !== command.expectedVersion + 1) throw unavailable();
 
-    if (this.captures.readWorkspaceV4 === undefined) throw unavailable();
-    const workspaceRequest = { schemaVersion: 4 as const, scope: command.scope, captureDraftId: command.captureDraftId };
+    if (this.captures.readWorkspaceV5 === undefined) throw unavailable();
+    const workspaceRequest = { schemaVersion: 5 as const, scope: command.scope, captureDraftId: command.captureDraftId };
     let rawWorkspace: unknown;
-    try { rawWorkspace = await this.captures.readWorkspaceV4(actorId, workspaceRequest); } catch { throw unavailable(); }
+    try { rawWorkspace = await this.captures.readWorkspaceV5(actorId, workspaceRequest); } catch { throw unavailable(); }
     const statusOnly = exactRecord(rawWorkspace, ["status"]);
     if (statusOnly !== undefined) throw unavailable();
-    let workspace: CaptureWorkspaceV4;
-    try { workspace = decodeCaptureWorkspaceV4(rawWorkspace, command.scope); } catch { throw unavailable(); }
+    let decoded;
+    try { decoded = decodeCaptureWorkspaceV5(rawWorkspace, command.scope); } catch { throw unavailable(); }
+    const workspace = decoded.workspace;
     // This write's own result already proved the draft reached expectedVersion+1. The separate
     // read that follows it is a different round trip: another connection may have advanced the
     // draft further in between (an unrelated mutation, or another selection-plan write), so the
@@ -905,10 +906,15 @@ export class CaptureSelectionPlanService {
     // stale echo of this one -- see projectStoredSelectionPlan.
     if (workspace.detail.captureDraftId !== command.captureDraftId
       || workspace.detail.version < appliedRecord.detail.version) throw unavailable();
-    const projection = await projectStoredSelectionPlan(
+    const selectionProjection = await projectStoredSelectionPlan(
       actorId, command.scope, command.captureDraftId, workspace.selectionPlan, this.confirmation, this.catalogs,
     );
-    return withCaptureSelectionProjection(workspace, projection);
+    const withSelection: CaptureWorkspaceV5 = Object.freeze({ ...workspace, selectionProjection });
+    const paymentProjection = await buildCapturePaymentProjectionForWorkspace(
+      actorId, command.scope, command.captureDraftId, withSelection, decoded.paymentIntentBasisFingerprint,
+      this.confirmation, this.catalogs,
+    );
+    return withCapturePaymentProjection(withSelection, paymentProjection);
   }
 
   /**
@@ -917,25 +923,17 @@ export class CaptureSelectionPlanService {
    * catalog as a precondition -- a catalog change, or an unrelated mutation that advanced the
    * draft, must never turn an already-applied replay into 409/503. If pricing the stored plan
    * fails for any reason, `selectionProjection` is simply `null`, matching the same fallback
-   * `CaptureService.readWorkspaceV4` already uses for a stale catalog on a plain read.
+   * `CaptureService.readWorkspaceV4` already uses for a stale catalog on a plain read. Always
+   * `CaptureWorkspaceV5` (with `paymentProjection` recomputed against whatever is stored), matching
+   * every other capture mutation's response shape, so a stale payment intent is surfaced here too.
    */
   private async replayedWorkspace(
     actorId: string,
     command: ReplaceCaptureSelectionPlanCommandV1,
-  ): Promise<CaptureWorkspaceV4> {
-    if (this.captures.readWorkspaceV4 === undefined) throw unavailable();
-    const workspaceRequest = { schemaVersion: 4 as const, scope: command.scope, captureDraftId: command.captureDraftId };
-    let rawWorkspace: unknown;
-    try { rawWorkspace = await this.captures.readWorkspaceV4(actorId, workspaceRequest); } catch { throw unavailable(); }
-    const statusOnly = exactRecord(rawWorkspace, ["status"]);
-    if (statusOnly !== undefined) throw unavailable();
-    let workspace: CaptureWorkspaceV4;
-    try { workspace = decodeCaptureWorkspaceV4(rawWorkspace, command.scope); } catch { throw unavailable(); }
-    if (workspace.detail.captureDraftId !== command.captureDraftId) throw unavailable();
-    const projection = await projectStoredSelectionPlan(
-      actorId, command.scope, command.captureDraftId, workspace.selectionPlan, this.confirmation, this.catalogs,
+  ): Promise<CaptureWorkspaceV5> {
+    return readCaptureWorkspaceV5WithProjections(
+      actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
     );
-    return withCaptureSelectionProjection(workspace, projection);
   }
 }
 
