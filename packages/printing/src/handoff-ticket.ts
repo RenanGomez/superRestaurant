@@ -19,6 +19,12 @@ function formatMinor(amountMinor: number, currency: string): string {
   return formatter.format(amountMinor / 100);
 }
 
+/** The frozen payment intent facts a handoff ticket may print; never recalculated here. */
+export interface HandoffTicketPaymentIntentInput {
+  readonly changeDueMinor: number | null;
+  readonly method: "cash" | "card_manual" | "transfer";
+}
+
 export interface HandoffTicketInput {
   readonly order: Pick<Order, "orderId" | "channel" | "currency" | "items"> & {
     readonly items: readonly OrderItem[];
@@ -31,6 +37,8 @@ export interface HandoffTicketInput {
   readonly deliveryInstructions: string | null;
   readonly dateIso: string;
   readonly folio?: string;
+  /** Frozen at confirm (order_fulfillment_snapshots.snapshot.paymentIntent); absent/null prints nothing. */
+  readonly paymentIntent?: HandoffTicketPaymentIntentInput | null;
 }
 
 function maskedPhone(value: string): string {
@@ -76,6 +84,14 @@ export function renderHandoffTicket(input: HandoffTicketInput): Uint8Array {
     .bold(true)
     .line(`Total: ${formatMinor(totals.total.amountMinor, order.currency)}`)
     .bold(false);
+  if (input.paymentIntent) {
+    const label = input.paymentIntent.method === "cash" ? "efectivo"
+      : input.paymentIntent.method === "card_manual" ? "tarjeta" : "transferencia";
+    const change = input.paymentIntent.method === "cash" && input.paymentIntent.changeDueMinor !== null
+      ? ` · cambio ${formatMinor(input.paymentIntent.changeDueMinor, order.currency)}`
+      : "";
+    encoder.line(`Pagará con: ${label}${change}`);
+  }
   if (input.deliveryInstructions) encoder.line(`Instrucciones: ${input.deliveryInstructions}`);
   return encoder.feed(3).cut("partial").bytes();
 }

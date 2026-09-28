@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
-import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkspaceRequestV3, parseCaptureWorkTrayRequestV1, parseCloseCaptureNoSaleCommandV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseReplaceCaptureSelectionPlanCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1, parseTakeoverCaptureDraftCommandV1, parseTransferCaptureDraftCommandV1, type MembershipRoleCode, type MenuCatalogV1 } from "@super-restaurant/shared-types";
+import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkspaceRequestV3, parseCaptureWorkTrayRequestV1, parseCloseCaptureNoSaleCommandV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseReplaceCaptureSelectionPlanCommandV1, parseRequestCaptureDeliveryQuoteCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1, parseSetCapturePaymentIntentCommandV1, parseTakeoverCaptureDraftCommandV1, parseTransferCaptureDraftCommandV1, type MembershipRoleCode, type MenuCatalogV1 } from "@super-restaurant/shared-types";
 
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
 import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteService, CapturePaymentIntentService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureNoSalePort, type CaptureSelectionPlanPort } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentService, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureDeliveryQuoteComputationPort, type CaptureDeliveryQuoteEnvelopeV1, type CaptureDeliveryQuotePort, type CaptureNoSalePort, type CapturePaymentIntentPort, type CaptureSelectionPlanPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
@@ -1452,4 +1452,314 @@ test("capture no-sale HTTP route authorizes, validates and translates every outc
     outcome = {};
     assert.equal((await send(noSaleCommand)).status, 503);
   } finally { await app.close(); }
+});
+
+const deliveryQuoteFixture = {
+  schemaVersion: 1 as const,
+  quoteId: "11111111-1111-4111-8111-111111111111",
+  restaurantId: validCommand.scope.restaurantId,
+  branchId: validCommand.scope.branchId,
+  captureDraftId: validCommand.captureDraftId,
+  addressSnapshotRef: "22222222-2222-4222-8222-222222222222",
+  address: { postalCode: "83000", locality: "Hermosillo" },
+  currency: "MXN",
+  timeZone: "America/Hermosillo",
+  quotedAt: "2026-09-24T12:00:00.000Z",
+  scheduledFor: null,
+  version: 1,
+  coverageStatus: "covered" as const,
+  zoneId: "33333333-3333-4333-8333-333333333333",
+  feeMinor: 3_000,
+  promiseStart: "2026-09-24T12:00:00.000Z",
+  promiseEnd: "2026-09-24T12:15:00.000Z",
+  expiresAt: "2026-09-24T12:00:00.000Z",
+  override: null,
+};
+
+function makeCaptureV5Fixture(overrides: {
+  readonly fulfillmentChannel: "dine_in" | "counter" | "pickup" | "delivery";
+  readonly deliveryQuote: unknown;
+  readonly paymentIntent: unknown;
+  readonly paymentIntentAppliedCaptureVersion: number | null;
+  readonly paymentIntentBasisFingerprint: string | null;
+  readonly version: number;
+}) {
+  return {
+    schemaVersion: 5,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: overrides.version,
+      fulfillmentChannel: overrides.fulfillmentChannel, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion,
+      appliedCaptureVersion: 2, lineCount: 1 },
+    deliveryQuote: overrides.deliveryQuote,
+    paymentIntent: overrides.paymentIntent,
+    paymentIntentAppliedCaptureVersion: overrides.paymentIntentAppliedCaptureVersion,
+    paymentIntentBasisFingerprint: overrides.paymentIntentBasisFingerprint,
+  };
+}
+
+const paymentCatalogPort = {
+  read: async () => ({ schemaVersion: 1 as const, scope: validCommand.scope, catalog: selectionCatalog }),
+  save: async () => { throw new Error("must not save a catalog"); },
+};
+const paymentSelectionConfirmation: CaptureConfirmationPort = {
+  ...noConfirmationPort,
+  readSelectionPlan: async () => ({ status: "ok", plan: selectionPlanCommand.plan, appliedCaptureVersion: 2 }),
+};
+
+test("capture delivery quote recomputes from live zones, freezes it and reports it back in workspace V5", async () => {
+  let persistedEnvelope: CaptureDeliveryQuoteEnvelopeV1 | undefined;
+  const deliveryQuotePersistence: CaptureDeliveryQuotePort = {
+    setCaptureDeliveryQuote: async (actorId, envelope) => {
+      assert.equal(actorId, principal.actorId);
+      persistedEnvelope = envelope;
+      return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
+    },
+  };
+  const computation: CaptureDeliveryQuoteComputationPort = {
+    quoteForCapture: async (suppliedPrincipal, input) => {
+      assert.equal(suppliedPrincipal.actorId, principal.actorId);
+      assert.deepEqual(input, {
+        schemaVersion: 1, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId, scheduledFor: null,
+      });
+      return deliveryQuoteFixture;
+    },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => makeCaptureV5Fixture({
+      fulfillmentChannel: "delivery", deliveryQuote: deliveryQuoteFixture, paymentIntent: null,
+      paymentIntentAppliedCaptureVersion: null, paymentIntentBasisFingerprint: null, version: 2,
+    }),
+  };
+  const service = new CaptureDeliveryQuoteService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), deliveryQuotePersistence, captures, paymentSelectionConfirmation, paymentCatalogPort, computation);
+  const quoteCommand = parseRequestCaptureDeliveryQuoteCommandV1({
+    schemaVersion: 1, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId,
+    expectedVersion: 1, attentionLeaseId: validCommand.deviceId,
+    eventId: "66666666-6666-4666-8666-666666666666", idempotencyKey: "77777777-7777-4777-8777-777777777777",
+    deviceId: validCommand.deviceId, occurredAt: "2026-09-24T12:00:00.000Z", scheduledFor: null,
+  });
+  assert.ok(quoteCommand);
+  const result = await service.requestQuote(principal, quoteCommand);
+  assert.equal(persistedEnvelope?.expectedVersion, 1);
+  assert.equal(persistedEnvelope?.attentionLeaseId, validCommand.deviceId);
+  assert.equal(result.deliveryQuote?.feeMinor, 3_000);
+  assert.equal(result.selectionProjection?.subtotalMinor, 9_000);
+  assert.equal(result.paymentProjection, null);
+
+  await assert.rejects(new CaptureDeliveryQuoteService(new MembershipAuthorizationService({
+    findActiveMembership: async () => undefined,
+  }), deliveryQuotePersistence, captures, paymentSelectionConfirmation, paymentCatalogPort, computation)
+    .requestQuote(principal, quoteCommand), code("authorization"));
+});
+
+test("payment intent totals exclude the delivery fee outside delivery, and apply with exact change", async () => {
+  let capturedBasis = "";
+  let reads = 0;
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => {
+      reads += 1;
+      if (reads === 1) {
+        return makeCaptureV5Fixture({ fulfillmentChannel: "counter", deliveryQuote: null, paymentIntent: null,
+          paymentIntentAppliedCaptureVersion: null, paymentIntentBasisFingerprint: null, version: 1 });
+      }
+      return makeCaptureV5Fixture({
+        fulfillmentChannel: "counter", deliveryQuote: null,
+        paymentIntent: { schemaVersion: 1, method: "cash", tenderedAmountMinor: 9_000, tipMinor: 500 },
+        paymentIntentAppliedCaptureVersion: 2, paymentIntentBasisFingerprint: capturedBasis, version: 2,
+      });
+    },
+  };
+  const persistence: CapturePaymentIntentPort = {
+    setCapturePaymentIntent: async (actorId, submittedCommand) => {
+      assert.equal(actorId, principal.actorId);
+      capturedBasis = (submittedCommand as { basisFingerprint: string }).basisFingerprint;
+      assert.match(capturedBasis, /^[0-9a-f]{64}$/u);
+      return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
+    },
+  };
+  const service = new CapturePaymentIntentService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, paymentSelectionConfirmation, paymentCatalogPort);
+  const intentCommand = parseSetCapturePaymentIntentCommandV1({
+    schemaVersion: 1, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId,
+    expectedVersion: 1, attentionLeaseId: validCommand.deviceId,
+    eventId: "88888888-8888-4888-8888-888888888888", idempotencyKey: "99999999-9999-4999-8999-999999999999",
+    deviceId: validCommand.deviceId, occurredAt: "2026-09-24T12:00:00.000Z",
+    method: "cash", tenderedAmountMinor: 9_000, tipMinor: 500,
+  });
+  assert.ok(intentCommand);
+  const result = await service.setPaymentIntent(principal, intentCommand);
+  assert.equal(result.paymentProjection?.itemsSubtotalMinor, 9_000);
+  assert.equal(result.paymentProjection?.deliveryFeeMinor, 0);
+  assert.equal(result.paymentProjection?.orderTotalMinor, 9_000);
+  assert.equal(result.paymentProjection?.changeDueMinor, 0);
+  assert.equal(result.paymentProjection?.status, "ready");
+});
+
+test("payment intent totals include the frozen delivery fee for a delivery capture", async () => {
+  let capturedBasis = "";
+  let reads = 0;
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => {
+      reads += 1;
+      if (reads === 1) {
+        return makeCaptureV5Fixture({ fulfillmentChannel: "delivery", deliveryQuote: deliveryQuoteFixture,
+          paymentIntent: null, paymentIntentAppliedCaptureVersion: null, paymentIntentBasisFingerprint: null, version: 1 });
+      }
+      return makeCaptureV5Fixture({
+        fulfillmentChannel: "delivery", deliveryQuote: deliveryQuoteFixture,
+        paymentIntent: { schemaVersion: 1, method: "cash", tenderedAmountMinor: 20_000, tipMinor: 0 },
+        paymentIntentAppliedCaptureVersion: 2, paymentIntentBasisFingerprint: capturedBasis, version: 2,
+      });
+    },
+  };
+  const persistence: CapturePaymentIntentPort = {
+    setCapturePaymentIntent: async (actorId, submittedCommand) => {
+      capturedBasis = (submittedCommand as { basisFingerprint: string }).basisFingerprint;
+      return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
+    },
+  };
+  const service = new CapturePaymentIntentService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, paymentSelectionConfirmation, paymentCatalogPort);
+  const intentCommand = parseSetCapturePaymentIntentCommandV1({
+    schemaVersion: 1, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId,
+    expectedVersion: 1, attentionLeaseId: validCommand.deviceId,
+    eventId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", idempotencyKey: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    deviceId: validCommand.deviceId, occurredAt: "2026-09-24T12:00:00.000Z",
+    method: "cash", tenderedAmountMinor: 20_000, tipMinor: 0,
+  });
+  assert.ok(intentCommand);
+  const result = await service.setPaymentIntent(principal, intentCommand);
+  // 9_000 (items) + 3_000 (frozen fee) = 12_000; tendered 20_000 -> change 8_000, tip never enters either.
+  assert.equal(result.paymentProjection?.orderTotalMinor, 12_000);
+  assert.equal(result.paymentProjection?.changeDueMinor, 8_000);
+  assert.equal(result.paymentProjection?.status, "ready");
+});
+
+test("payment intent rejects an insufficient cash tender with a typed 409 before touching SQL", async () => {
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => makeCaptureV5Fixture({
+      fulfillmentChannel: "counter", deliveryQuote: null, paymentIntent: null,
+      paymentIntentAppliedCaptureVersion: null, paymentIntentBasisFingerprint: null, version: 1,
+    }),
+  };
+  const persistence: CapturePaymentIntentPort = {
+    setCapturePaymentIntent: async () => { throw new Error("must not persist an insufficient intent"); },
+  };
+  const service = new CapturePaymentIntentService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, paymentSelectionConfirmation, paymentCatalogPort);
+  const intentCommand = parseSetCapturePaymentIntentCommandV1({
+    schemaVersion: 1, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId,
+    expectedVersion: 1, attentionLeaseId: validCommand.deviceId,
+    eventId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", idempotencyKey: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    deviceId: validCommand.deviceId, occurredAt: "2026-09-24T12:00:00.000Z",
+    method: "cash", tenderedAmountMinor: 1_000, tipMinor: 0,
+  });
+  assert.ok(intentCommand);
+  await assert.rejects(service.setPaymentIntent(principal, intentCommand),
+    (error: unknown) => error instanceof CapturePaymentIntentInsufficientError);
+});
+
+test("payment intent projection is stale once the lines change after the intent's basis was fixed", async () => {
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => makeCaptureV5Fixture({
+      fulfillmentChannel: "counter", deliveryQuote: null,
+      paymentIntent: { schemaVersion: 1, method: "cash", tenderedAmountMinor: 9_000, tipMinor: 0 },
+      paymentIntentAppliedCaptureVersion: 2, paymentIntentBasisFingerprint: "0".repeat(64), version: 3,
+    }),
+  };
+  const service = new CaptureService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), captures, paymentSelectionConfirmation, paymentCatalogPort);
+  const workspaceRequest = { schemaVersion: 5, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId };
+  const workspace = await service.readWorkspace(principal, workspaceRequest) as { paymentProjection?: { status?: string } };
+  // The stored fingerprint ("0"x64) can never match the live one derived from the actual stored
+  // plan/fee/currency, exactly as if the lines had changed after the intent was fixed.
+  assert.equal(workspace.paymentProjection?.status, "stale");
+});
+
+test("payment intent replay returns the stored result without recomputing insufficiency", async () => {
+  let reads = 0;
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => {
+      reads += 1;
+      if (reads === 1) {
+        return makeCaptureV5Fixture({ fulfillmentChannel: "counter", deliveryQuote: null, paymentIntent: null,
+          paymentIntentAppliedCaptureVersion: null, paymentIntentBasisFingerprint: null, version: 1 });
+      }
+      return makeCaptureV5Fixture({
+        fulfillmentChannel: "counter", deliveryQuote: null,
+        paymentIntent: { schemaVersion: 1, method: "cash", tenderedAmountMinor: 9_000, tipMinor: 0 },
+        paymentIntentAppliedCaptureVersion: 2, paymentIntentBasisFingerprint: "ab".repeat(32), version: 2,
+      });
+    },
+  };
+  const persistence: CapturePaymentIntentPort = {
+    setCapturePaymentIntent: async () => ({ status: "replayed", record: { ...record, detail: { ...record.detail, version: 2 } } }),
+  };
+  const service = new CapturePaymentIntentService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, paymentSelectionConfirmation, paymentCatalogPort);
+  const intentCommand = parseSetCapturePaymentIntentCommandV1({
+    schemaVersion: 1, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId,
+    expectedVersion: 1, attentionLeaseId: validCommand.deviceId,
+    eventId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", idempotencyKey: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    deviceId: validCommand.deviceId, occurredAt: "2026-09-24T12:00:00.000Z",
+    method: "cash", tenderedAmountMinor: 9_000, tipMinor: 0,
+  });
+  assert.ok(intentCommand);
+  const result = await service.setPaymentIntent(principal, intentCommand);
+  assert.equal(result.paymentIntent?.tenderedAmountMinor, 9_000);
+});
+
+test("capture delivery quote and payment intent reject a foreign scope before touching any port", async () => {
+  const deliveryQuotePersistence: CaptureDeliveryQuotePort = {
+    setCaptureDeliveryQuote: async () => { throw new Error("must not persist"); },
+  };
+  const computation: CaptureDeliveryQuoteComputationPort = {
+    quoteForCapture: async () => { throw new Error("must not quote"); },
+  };
+  const paymentPersistence: CapturePaymentIntentPort = {
+    setCapturePaymentIntent: async () => { throw new Error("must not persist"); },
+  };
+  const noReadCaptures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => { throw new Error("must not read a foreign scope"); },
+  };
+  const deniedAuthorization = new MembershipAuthorizationService({ findActiveMembership: async () => undefined });
+  const deliveryQuoteService = new CaptureDeliveryQuoteService(
+    deniedAuthorization, deliveryQuotePersistence, noReadCaptures, noConfirmationPort, paymentCatalogPort, computation,
+  );
+  const paymentIntentService = new CapturePaymentIntentService(
+    deniedAuthorization, paymentPersistence, noReadCaptures, noConfirmationPort, paymentCatalogPort,
+  );
+  const quoteCommand = parseRequestCaptureDeliveryQuoteCommandV1({
+    schemaVersion: 1, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId,
+    expectedVersion: 1, attentionLeaseId: validCommand.deviceId,
+    eventId: "12121212-1212-4212-8212-121212121212", idempotencyKey: "13131313-1313-4313-8313-131313131313",
+    deviceId: validCommand.deviceId, occurredAt: "2026-09-24T12:00:00.000Z", scheduledFor: null,
+  });
+  assert.ok(quoteCommand);
+  const intentCommand = parseSetCapturePaymentIntentCommandV1({
+    schemaVersion: 1, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId,
+    expectedVersion: 1, attentionLeaseId: validCommand.deviceId,
+    eventId: "14141414-1414-4414-8414-141414141414", idempotencyKey: "15151515-1515-4515-8515-151515151515",
+    deviceId: validCommand.deviceId, occurredAt: "2026-09-24T12:00:00.000Z",
+    method: "cash", tenderedAmountMinor: 1_000, tipMinor: 0,
+  });
+  assert.ok(intentCommand);
+  await assert.rejects(deliveryQuoteService.requestQuote(principal, quoteCommand), code("authorization"));
+  await assert.rejects(paymentIntentService.setPaymentIntent(principal, intentCommand), code("authorization"));
 });
