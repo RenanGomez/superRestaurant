@@ -116,6 +116,9 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <p className="text-sm font-semibold">{item.quantity} × {item.name}</p>
+                      {item.modifiers.length > 0 && <ul className="mt-1 text-xs text-text-muted">
+                        {item.modifiers.map((modifier) => <li key={modifier.modifierId}>{modifier.name} × {modifier.quantity}</li>)}
+                      </ul>}
                       {item.note !== null && <p className="text-xs text-text-muted">Nota: {item.note}</p>}
                     </div>
                     <span className="text-sm font-semibold">{formatMinorUnits(item.lineTotalMinor, detail.totals.currency)}</span>
@@ -162,26 +165,6 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
       />}
     </div>
   </div>;
-}
-
-async function runSendToKitchen(
-  detail: OrderDetailV1,
-  actions: OrderDetailActions,
-  attempts: ReadonlyMap<string, { readonly eventId: string; readonly idempotencyKey: string }>,
-  runAction: (key: string, run: () => Promise<{ readonly ok: boolean; readonly error?: string }>) => Promise<void>,
-): Promise<void> {
-  const pending = detail.items.filter((item) => item.status === "pending");
-  await runAction("sendToKitchen", async () => {
-    let version = detail.version;
-    for (const item of pending) {
-      const attempt = attempts.get(item.orderItemId);
-      if (attempt === undefined) return { error: "unavailable", ok: false };
-      const result = await actions.transitionItem(detail.orderId, item.orderItemId, version, "sent", attempt.eventId, attempt.idempotencyKey);
-      if (!result.ok) return result;
-      version += 1;
-    }
-    return { ok: true };
-  });
 }
 
 function CancelReasonDialog({ itemName, requiresSupervisor, busy, onCancel, onConfirm }: {

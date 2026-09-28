@@ -10,6 +10,7 @@ import {
   cancelOrderItemAction,
   openOrderAction,
   orderDetailAction,
+  sendToKitchenAction,
   transitionOrderItemAction,
 } from "./actions";
 import { OrdersTray } from "./orders-tray";
@@ -43,6 +44,7 @@ export default async function OrdersPage() {
         cancelItem: cancelOrderItemAction,
         detail: orderDetailAction,
         open: openOrderAction,
+        sendToKitchen: sendToKitchenAction,
         transitionItem: transitionOrderItemAction,
       }} />
   </div>;
