@@ -71,6 +71,26 @@ export function quoteMatchesRequestedTime(quote: DeliveryQuoteV1 | null, schedul
   return quote.scheduledFor === parsed.toISOString();
 }
 
+/**
+ * H15: the `datetime-local` scheduled-for input's expected value ("YYYY-MM-DDTHH:mm", in the
+ * browser's local time zone -- the inverse of `requestDeliveryQuote`'s `new Date(scheduledFor)`)
+ * for a rehydrated capture's frozen delivery quote, or `""` when there is nothing to prefill
+ * (no quote, or an immediate/ASAP quote with `scheduledFor` null). Pure so the rehydration
+ * behavior is unit-testable without mounting the workspace component.
+ */
+export function deliveryQuoteScheduledForInputValue(quote: DeliveryQuoteV1 | null): string {
+  if (quote === null || quote.scheduledFor === null) return "";
+  const parsed = new Date(quote.scheduledFor);
+  if (!Number.isFinite(parsed.getTime())) return "";
+  const pad = (value: number): string => value.toString(10).padStart(2, "0");
+  const year = parsed.getFullYear().toString(10).padStart(4, "0");
+  const month = pad(parsed.getMonth() + 1);
+  const day = pad(parsed.getDate());
+  const hours = pad(parsed.getHours());
+  const minutes = pad(parsed.getMinutes());
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
 export function describePaymentMethod(
   method: CapturePaymentIntentMethodV1,
   timing: CapturePaymentIntentTimingV1,

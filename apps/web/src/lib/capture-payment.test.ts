@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { describePaymentMethod, parseMoneyInputToMinor, quoteMatchesRequestedTime, suggestTenderAmounts } from "./capture-payment.js";
+import {
+  deliveryQuoteScheduledForInputValue, describePaymentMethod, parseMoneyInputToMinor,
+  quoteMatchesRequestedTime, suggestTenderAmounts,
+} from "./capture-payment.js";
 
 const baseQuote = {
   schemaVersion: 1 as const, quoteId: "6e4b1f6a-5f0a-4e3f-9c8a-2d3b7a6c9e10",
@@ -37,6 +40,23 @@ test("quoteMatchesRequestedTime compares the server's scheduledFor to the field'
 test("quoteMatchesRequestedTime never matches an unparsable field, so confirm stays blocked", () => {
   const scheduled = { ...baseQuote, scheduledFor: "2026-09-27T19:00:00.000Z" };
   assert.equal(quoteMatchesRequestedTime(scheduled, "not-a-date"), false);
+});
+
+test("deliveryQuoteScheduledForInputValue is empty for no quote or an ASAP (null scheduledFor) quote", () => {
+  assert.equal(deliveryQuoteScheduledForInputValue(null), "");
+  assert.equal(deliveryQuoteScheduledForInputValue(baseQuote), "");
+});
+
+test("deliveryQuoteScheduledForInputValue round-trips through quoteMatchesRequestedTime for H15 rehydration", () => {
+  const fieldValue = "2026-09-27T13:05";
+  const scheduled = { ...baseQuote, scheduledFor: new Date(fieldValue).toISOString() };
+  const derived = deliveryQuoteScheduledForInputValue(scheduled);
+  assert.equal(derived, fieldValue);
+  assert.equal(quoteMatchesRequestedTime(scheduled, derived), true);
+});
+
+test("deliveryQuoteScheduledForInputValue is empty for an unparsable scheduledFor", () => {
+  assert.equal(deliveryQuoteScheduledForInputValue({ ...baseQuote, scheduledFor: "not-a-date" }), "");
 });
 
 test("suggestTenderAmounts always includes the exact total plus the next 100/200/500-peso roundings above it", () => {

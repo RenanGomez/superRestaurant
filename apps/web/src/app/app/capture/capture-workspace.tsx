@@ -40,7 +40,7 @@ import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import { formatDeliveryQuote } from "../../../lib/delivery-zones";
-import { quoteMatchesRequestedTime } from "../../../lib/capture-payment";
+import { deliveryQuoteScheduledForInputValue, quoteMatchesRequestedTime } from "../../../lib/capture-payment";
 import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./actions";
 import { CaptureMenu } from "./capture-menu";
 import { CapturePayment } from "./capture-payment";
@@ -238,6 +238,14 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setSourceChannel(hydrated.sourceChannel);
     setFulfillmentChannel(hydrated.fulfillmentChannel);
     setDeliveryInstructions(hydrated.deliveryInstructions ?? "");
+    // H15: a rehydrated capture with a scheduled (non-ASAP) frozen quote must prefill the
+    // scheduled-for field from that quote -- otherwise the field reads "" (ASAP) while
+    // `quoteMatchesRequestedTime` compares against the quote's actual scheduledFor and never
+    // matches, permanently blocking confirm. Never clobbers a value the operator already typed.
+    const rehydratedScheduledFor = deliveryQuoteScheduledForInputValue(hydrated.deliveryQuote);
+    if (rehydratedScheduledFor !== "") {
+      setScheduledFor((current) => (current === "" ? rehydratedScheduledFor : current));
+    }
   }
 
   useEffect(() => { void (async () => {
