@@ -125,6 +125,11 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [paymentProjection, setPaymentProjection] = useState<CapturePaymentIntentProjectionV1 | null>(null);
   const [paymentIntentNotice, setPaymentIntentNotice] = useState<string>();
   const [quoteError, setQuoteError] = useState<string>();
+  // True once the scheduled-delivery time has been edited after a quote was already frozen for a
+  // DIFFERENT time: the frozen quote's fee/coverage/promise were computed for the old time, so it
+  // must never be shown as confirmable until a fresh quote replaces it. Never computed locally --
+  // just a flag that the confirm button and a re-quote prompt key off of.
+  const [quoteRequestedForDiffers, setQuoteRequestedForDiffers] = useState(false);
   const [selectionProjection, setSelectionProjection] = useState<CaptureSelectionPlanProjectionV1 | null>(null);
   const [sheetProduct, setSheetProduct] = useState<MenuProductV1>();
   const [sheetGroups, setSheetGroups] = useState<readonly MenuModifierGroupV1[]>([]);
@@ -183,6 +188,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       if (mutation.detail.captureDraftId !== capture?.captureDraftId
         || mutation.detail.fulfillmentSnapshotRef !== capture.fulfillmentSnapshotRef) {
         invalidateQuote();
+        setQuoteRequestedForDiffers(false);
         setDeliveryQuote(null);
         setPaymentIntentState(null);
         setPaymentProjection(null);
@@ -212,6 +218,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       return;
     }
     setQuoteError(undefined);
+    setQuoteRequestedForDiffers(false);
     setCapture(hydrated.detail);
     setCustomerSnapshot(hydrated.customerSnapshot);
     setFulfillmentSnapshot(hydrated.fulfillmentSnapshot);
@@ -487,8 +494,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     void run("deliveryInstructions", command);
   }
 
-  async function quoteDelivery(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
+  async function requestDeliveryQuote(): Promise<void> {
     if (capture === undefined || capture.attentionLeaseId === null || fulfillmentChannel !== "delivery"
       || fulfillmentSnapshot === null) return;
     const scheduledDate = scheduledFor === "" ? null : new Date(scheduledFor);
@@ -628,6 +634,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   function reset(): void {
     invalidateQuote();
+    setQuoteRequestedForDiffers(false);
     setDeliveryQuote(null); setPaymentIntentState(null); setPaymentProjection(null); setPaymentIntentNotice(undefined);
     setCapture(undefined); setResults(undefined); setCustomer(undefined); setCustomerSnapshot(null);
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
@@ -651,10 +658,13 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     || error === "denied" || error === "conflict";
   const paymentBlocksConfirm = paymentProjection !== null
     && (paymentProjection.status === "stale" || paymentProjection.status === "insufficient");
+  // The frozen quote was computed for a scheduledFor the operator has since changed in the form
+  // but not yet re-requested; it must never be treated as still confirmable for the new time.
+  const quoteBlocksConfirm = fulfillmentChannel === "delivery" && quoteRequestedForDiffers;
   const canConfirm = confirmationContext !== undefined && selectedShiftId !== "" && fulfillmentChannel !== null
     && (fulfillmentChannel !== "dine_in" || selectedTableId !== "")
     && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null))
-    && !paymentBlocksConfirm;
+    && !paymentBlocksConfirm && !quoteBlocksConfirm;
   useEffect(() => {
     const shortcuts: ShortcutTable = busy ? {} : error === "conflict" || capture?.status === "confirmed"
       ? { reset: ariaKeyShortcut("reset") }
@@ -914,14 +924,24 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       {fulfillmentChannel === "delivery" && fulfillmentSnapshot !== null && capture.status === "draft" && <section className={panel} data-testid="delivery-quote">
         <h2 className="font-heading text-lg font-semibold">Cotización de entrega</h2>
         <p className="mt-1 text-sm text-text-muted">La cobertura, tarifa y promesa se calculan en el servidor para la dirección guardada.</p>
-        <form className="mt-3 grid gap-3" onSubmit={(event) => void quoteDelivery(event)}>
+        <form className="mt-3 grid gap-3" onSubmit={(event) => { event.preventDefault(); void requestDeliveryQuote(); }}>
           <label className="grid gap-1 text-sm" htmlFor="capture-scheduled-for">Programar entrega (opcional)
             <input id="capture-scheduled-for" type="datetime-local" className={input} value={scheduledFor}
-              onChange={(event) => { setScheduledFor(event.target.value); invalidateQuote(); }} disabled={busy} /></label>
+              onChange={(event) => {
+                setScheduledFor(event.target.value);
+                invalidateQuote();
+                if (deliveryQuote !== null) setQuoteRequestedForDiffers(true);
+              }} disabled={busy} /></label>
           <p className="text-xs text-text-muted">Entre 30 minutos y 7 días. La hora se convierte a ISO al solicitar la cotización.</p>
           <button type="submit" className={button} disabled={busy}>{busy ? "Cotizando…" : "Cotizar entrega"}</button>
         </form>
         {quoteError && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{quoteError}</p>}
+        {quoteRequestedForDiffers && <div role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">
+          <p>La cotización mostrada es de otra hora: vuelve a cotizar antes de convertir en orden.</p>
+          <button type="button" className={`${button} mt-2`} disabled={busy} onClick={() => void requestDeliveryQuote()}>
+            Volver a cotizar
+          </button>
+        </div>}
         {deliveryQuote && <div role="status" className="mt-3 grid gap-1 rounded-lg border border-border bg-bg p-3 text-sm">
           <strong>{formatDeliveryQuote(deliveryQuote, "es-MX").status}</strong>
           <p>Tarifa: {formatDeliveryQuote(deliveryQuote, "es-MX").fee}</p>
