@@ -721,6 +721,17 @@ export class CaptureConfirmationService {
       || (detail.fulfillmentChannel === "dine_in") !== (command.tableId !== null)
       || (detail.fulfillmentChannel === "delivery" && (workspace.customerSnapshot === null
         || workspace.fulfillmentSnapshot === null))) throw new CaptureApplicationError("conflict");
+
+    // SQL already refuses (CAS on applied_capture_version) a stale intent at the moment of
+    // confirmation; this is the same guard given a clear, typed message before ever calling it.
+    const v5 = await readCaptureWorkspaceV5WithProjections(
+      actorId, command.scope, command.captureDraftId, this.captures, this.persistence, this.catalogs,
+    ).catch(() => null);
+    if (v5 !== null && v5.paymentIntent !== null
+      && (v5.paymentProjection?.status === "stale" || v5.paymentProjection?.status === "insufficient")) {
+      throw new CapturePaymentIntentStaleError();
+    }
+
     const channel = detail.fulfillmentChannel === "dine_in" ? "table"
       : detail.fulfillmentChannel === "pickup" ? "takeout" : detail.fulfillmentChannel;
     let plan: CaptureRepeatSelectionPlan | null = null;
@@ -1407,19 +1418,28 @@ export class CaptureService {
   public async readWorkspace(
     principal: AuthenticatedPrincipal,
     input: unknown,
-  ): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2 | CaptureWorkspaceV3 | CaptureWorkspaceV4> {
-    const requestV4 = parseCaptureWorkspaceRequestV4(input);
-    const requestV3 = requestV4 === undefined ? parseCaptureWorkspaceRequestV3(input) : undefined;
-    const requestV2 = requestV4 === undefined && requestV3 === undefined ? parseCaptureWorkspaceRequestV2(input) : undefined;
-    const request = requestV4 ?? requestV3 ?? requestV2 ?? parseCaptureWorkspaceRequestV1(input);
+  ): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2 | CaptureWorkspaceV3 | CaptureWorkspaceV4 | CaptureWorkspaceV5> {
+    const requestV5 = parseCaptureWorkspaceRequestV5(input);
+    const requestV4 = requestV5 === undefined ? parseCaptureWorkspaceRequestV4(input) : undefined;
+    const requestV3 = requestV5 === undefined && requestV4 === undefined ? parseCaptureWorkspaceRequestV3(input) : undefined;
+    const requestV2 = requestV5 === undefined && requestV4 === undefined && requestV3 === undefined
+      ? parseCaptureWorkspaceRequestV2(input) : undefined;
+    const request = requestV5 ?? requestV4 ?? requestV3 ?? requestV2 ?? parseCaptureWorkspaceRequestV1(input);
     if (request === undefined) throw new CaptureApplicationError("request");
     let actorId: string;
     try {
       const authorized = await this.authorization.authorizeBranch(principal, request.scope, "captures.read");
       await this.authorization.authorizeBranch(principal, request.scope, "customers.read");
-      if (requestV4 !== undefined) await this.authorization.authorizeBranch(principal, request.scope, "catalog.read");
+      if (requestV4 !== undefined || requestV5 !== undefined) {
+        await this.authorization.authorizeBranch(principal, request.scope, "catalog.read");
+      }
       actorId = authorized.principal.actorId;
     } catch { throw new CaptureApplicationError("authorization"); }
+    if (requestV5 !== undefined) {
+      return readCaptureWorkspaceV5WithProjections(
+        actorId, requestV5.scope, requestV5.captureDraftId, this.creator, this.confirmation, this.catalogs,
+      );
+    }
     if (requestV4 !== undefined) return this.readWorkspaceV4(actorId, requestV4);
     const reader = requestV3 !== undefined ? this.creator.readWorkspaceV3
       : requestV2 !== undefined ? this.creator.readWorkspaceV2 : this.creator.readWorkspace;

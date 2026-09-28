@@ -62,7 +62,7 @@ export class CapturesController {
   @Post("workspace")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
-  public async readWorkspace(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2 | CaptureWorkspaceV3 | CaptureWorkspaceV4> {
+  public async readWorkspace(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV1 | CaptureWorkspaceV2 | CaptureWorkspaceV3 | CaptureWorkspaceV4 | CaptureWorkspaceV5> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.captures.readWorkspace(principal, body));
   }
