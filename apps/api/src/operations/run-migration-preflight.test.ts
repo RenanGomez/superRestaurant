@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { join, parse } from "node:path";
 import test from "node:test";
 
 import {
   diffMigrationVersions,
   listLocalMigrationVersions,
+  resolveMigrationsDirectory,
   runMigrationPreflight,
+  MigrationPreflightError,
   type MigrationPreflightResult,
 } from "./run-migration-preflight.js";
 import type { SchemaVerificationConfig, SchemaVerificationSession } from "./schema-verification.js";
@@ -33,6 +36,33 @@ function fakeSession(
     async close(): Promise<void> {},
   };
 }
+
+test("resolveMigrationsDirectory prefers an explicit --migrations-dir over any workspace walk", () => {
+  const resolved = resolveMigrationsDirectory("some/explicit/dir", "C:\\ignored\\start", () => {
+    throw new Error("MUST_NOT_STAT");
+  });
+  assert.ok(resolved.endsWith(join("some", "explicit", "dir")));
+});
+
+test("resolveMigrationsDirectory walks up from a dist/operations cwd to the workspace root", () => {
+  const root = parse(process.cwd()).root + "repo";
+  const distOperations = join(root, "apps", "api", "dist", "operations");
+  const existing = new Set([join(root, "pnpm-workspace.yaml")]);
+  const resolved = resolveMigrationsDirectory(undefined, distOperations, (path) => existing.has(path));
+  assert.equal(resolved, join(root, "supabase", "migrations"));
+});
+
+test("resolveMigrationsDirectory rejects when no workspace root marker is found up to the filesystem root", () => {
+  const root = parse(process.cwd()).root + "orphan";
+  assert.throws(
+    () => resolveMigrationsDirectory(undefined, join(root, "some", "deep", "path"), () => false),
+    (error: unknown) => {
+      assert.ok(error instanceof MigrationPreflightError);
+      assert.equal(error.stage, "configuration");
+      return true;
+    },
+  );
+});
 
 test("diffMigrationVersions reports missing versions in both directions", () => {
   const diff = diffMigrationVersions(["20260101000100", "20260102000100"], ["20260101000100", "20250101000100"]);

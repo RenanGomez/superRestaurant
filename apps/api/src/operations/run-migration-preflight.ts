@@ -1,5 +1,5 @@
-import { readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
+import { dirname, join, parse, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -50,6 +50,28 @@ export function listLocalMigrationVersions(
     .map((entry) => entry.slice(0, 14))
     .filter((version) => MIGRATION_VERSION_PATTERN.test(version))
     .sort();
+}
+
+/**
+ * Resolves the `supabase/migrations` directory independent of the process cwd (running via
+ * `pnpm --filter @super-restaurant/api run preflight:migrations` has apps/api as cwd, which has
+ * no `supabase/migrations` of its own). An explicit `--migrations-dir` always wins; otherwise
+ * walks up from `startDirectory` looking for the repo root marker `pnpm-workspace.yaml`.
+ */
+export function resolveMigrationsDirectory(
+  explicitDirectory: string | undefined,
+  startDirectory: string,
+  exists: (path: string) => boolean = existsSync,
+): string {
+  if (explicitDirectory !== undefined) return resolve(explicitDirectory);
+
+  let current = resolve(startDirectory);
+  const { root } = parse(current);
+  for (;;) {
+    if (exists(join(current, "pnpm-workspace.yaml"))) return join(current, "supabase", "migrations");
+    if (current === root) throw new MigrationPreflightError("configuration", "MIGRATION_PREFLIGHT_WORKSPACE_ROOT_NOT_FOUND");
+    current = dirname(current);
+  }
 }
 
 export function diffMigrationVersions(
@@ -153,9 +175,21 @@ function toPreflightError(stage: MigrationPreflightError["stage"], error: unknow
   return new MigrationPreflightError(stage, message);
 }
 
+function parseCliArguments(argv: readonly string[]): { readonly migrationsDirectory: string | undefined } {
+  const index = argv.indexOf("--migrations-dir");
+  if (index === -1) return Object.freeze({ migrationsDirectory: undefined });
+  const value = argv[index + 1];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new MigrationPreflightError("configuration", "MIGRATION_PREFLIGHT_MIGRATIONS_DIR_VALUE_REQUIRED");
+  }
+  return Object.freeze({ migrationsDirectory: value });
+}
+
 async function main(): Promise<void> {
+  const { migrationsDirectory } = parseCliArguments(process.argv.slice(2));
   const config = readReadOnlySchemaVerificationConfig(process.env);
-  const localVersions = listLocalMigrationVersions("supabase/migrations");
+  const migrationsDir = resolveMigrationsDirectory(migrationsDirectory, dirname(fileURLToPath(import.meta.url)));
+  const localVersions = listLocalMigrationVersions(migrationsDir);
   const result = await runMigrationPreflight(config, localVersions);
   process.stdout.write(`${JSON.stringify({ stage: "migration_preflight", ...result })}\n`);
 }
