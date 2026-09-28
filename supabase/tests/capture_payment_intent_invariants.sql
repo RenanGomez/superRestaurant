@@ -27,6 +27,8 @@ declare
   h13_charge_order uuid := gen_random_uuid();
   h13_mismatch_capture uuid := gen_random_uuid();
   h13_mismatch_order uuid := gen_random_uuid();
+  h16_plan_clear_capture uuid := gen_random_uuid();
+  h16_plan_clear_order uuid := gen_random_uuid();
   catalog uuid := gen_random_uuid();
   category uuid := gen_random_uuid();
   product uuid := gen_random_uuid();
@@ -1379,6 +1381,113 @@ begin
   execute 'reset role';
   if result->>'status'<>'rejected'
   then raise exception 'CAPTURE_H13_NON_DELIVERY_CHARGE_NOT_REJECTED'; end if;
+
+  ----------------------------------------------------------------------------
+  -- H16: confirm rejects a stale payment intent when the selection plan was
+  -- cleared to zero lines (which DELETES app.capture_repeat_order_plans'
+  -- single row, rather than merely reducing its applied_capture_version)
+  -- after the intent's own applied_capture_version. Before H16 this read
+  -- repeat_plan.applied_capture_version directly, which becomes null/0 the
+  -- instant the row is deleted -- silently hiding this exact change.
+  ----------------------------------------------------------------------------
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h16_plan_clear_capture::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sourceChannel','phone','fulfillmentChannel','counter'
+  ));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'CAPTURE_H16_PLAN_CLEAR_CREATE_REJECTED'; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+
+  -- version 1 -> 2: an initial one-line selection plan.
+  plan_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h16_plan_clear_capture::text,'expectedVersion',1,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  );
+  plan := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'catalogVersion',catalog::text,'lines',pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'lineId',line_a::text,'productId',product::text,'variantId',null,'quantity',1,'note',null,
+        'modifierGroups',pg_catalog.jsonb_build_array()
+      )
+    )
+  );
+  execute 'set local role app_api';
+  result := app_private.replace_capture_selection_plan(actor,plan_command,plan);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_H16_PLAN_CLEAR_PLAN_REJECTED'; end if;
+
+  -- version 2 -> 3: the payment intent, set against this one-line plan.
+  intent_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h16_plan_clear_capture::text,'expectedVersion',2,'attentionLeaseId',lease,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'method','cash','tenderedAmountMinor',5000,'tipMinor',0
+  );
+  execute 'set local role app_api';
+  result := app_private.set_capture_payment_intent(
+    actor,intent_command,pg_catalog.encode(pg_catalog.sha256('fixture-h16-plan-clear'::bytea),'hex')
+  );
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_H16_PLAN_CLEAR_SET_REJECTED'; end if;
+  -- Payment intent's applied_capture_version is now 3.
+
+  -- version 3 -> 4: the selection is cleared to zero lines, deleting the row entirely.
+  plan_command := plan_command||pg_catalog.jsonb_build_object(
+    'expectedVersion',3,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text
+  );
+  plan := pg_catalog.jsonb_build_object('schemaVersion',1,'catalogVersion',catalog::text,'lines',pg_catalog.jsonb_build_array());
+  execute 'set local role app_api';
+  result := app_private.replace_capture_selection_plan(actor,plan_command,plan);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'CAPTURE_H16_PLAN_CLEAR_REPLAN_REJECTED'; end if;
+  if exists (
+    select 1 from app.capture_repeat_order_plans stored
+    where stored.restaurant_id=restaurant and stored.branch_id=branch and stored.capture_draft_id=h16_plan_clear_capture
+  ) then raise exception 'CAPTURE_H16_PLAN_CLEAR_ROW_NOT_DELETED'; end if;
+
+  confirmation_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',2,'scope',pg_catalog.jsonb_build_object(
+      'restaurantId',restaurant::text,'branchId',branch::text
+    ),'captureDraftId',h16_plan_clear_capture::text,'expectedVersion',4,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'attentionLeaseId',lease,
+    'orderId',h16_plan_clear_order::text,'shiftId',shift::text,'tableId',null,
+    'currency','MXN','timeZone','America/Hermosillo'
+  );
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',h16_plan_clear_order::text,'restaurantId',restaurant::text,
+    'branchId',branch::text,'channel','counter','currency','MXN','timeZone','America/Hermosillo',
+    'status','draft','items',pg_catalog.jsonb_build_array(),'deliveryCharge',null
+  );
+  order_audits := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'eventId',confirmation_command->>'eventId',
+    'idempotencyKey',confirmation_command->>'idempotencyKey','restaurantId',restaurant::text,
+    'branchId',branch::text,'orderId',h16_plan_clear_order::text,'actorId',actor::text,
+    'deviceId',device::text,'occurredAt',confirmation_command->>'occurredAt',
+    'operation','order.created','entityType','order','entityId',h16_plan_clear_order::text,'to','draft'
+  ));
+  execute 'set local role app_api';
+  if app_private.confirm_capture_draft_v3(actor,confirmation_command,null,null)->>'status'<>'pending'
+    then raise exception 'CAPTURE_H16_PLAN_CLEAR_PROBE_REJECTED'; end if;
+  -- item_count=0 matches the (now cleared) plan structurally, so without H16 this would apply.
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'conflict' or result->>'reason'<>'payment_intent_stale'
+  then raise exception 'CAPTURE_H16_PLAN_CLEAR_NOT_REJECTED'; end if;
+  if exists (select 1 from app.orders placed where placed.id=h16_plan_clear_order)
+  then raise exception 'CAPTURE_H16_PLAN_CLEAR_ORDER_WAS_CREATED'; end if;
 end
 $capture_payment_intent_tests$;
 commit;

@@ -728,7 +728,7 @@ declare
   stored_quote app.capture_delivery_quotes%rowtype;
   stored_intent app.capture_payment_intents%rowtype;
   current_fulfillment_snapshot uuid; current_channel text;
-  fulfillment_change_version bigint;
+  fulfillment_change_version bigint; plan_change_version bigint;
   frozen_quote jsonb; frozen_intent jsonb;
   old_result jsonb; mutation_result jsonb; result_record jsonb; base_order jsonb;
   line_record record; item jsonb; expected_snapshot jsonb; expected_modifiers jsonb; expected_note jsonb;
@@ -1004,22 +1004,31 @@ begin
 
   -- Staleness is decided from the actual facts that could have invalidated the intent since it
   -- was set, not from whether ANY unrelated mutation (e.g. delivery instructions) advanced the
-  -- draft's version: the selection/repeat plan's own applied_capture_version (already
-  -- independently enforced above for plan_kind='repeat', and always current for 'selection'), the
-  -- frozen quote's applied_capture_version, and the version at which the fulfillment/address
-  -- snapshot itself last changed (capture.fulfillment_changed). A payment intent set before any of
-  -- those moved on is still valid, even if the draft's overall version advanced for an unrelated
+  -- draft's version: the selection/repeat plan's change history (H16: read from the command
+  -- journal, not repeat_plan.applied_capture_version -- that row is shared by both plan kinds,
+  -- but replace_capture_selection_plan DELETES it outright when the selection is cleared to zero
+  -- lines, which would otherwise silently reset "the plan's version" to null/0 and hide a real,
+  -- intent-invalidating change; capture.selection_replaced/capture.order_repeated are logged
+  -- unconditionally, including on that clearing delete, so this is immune to it), the frozen
+  -- quote's applied_capture_version, and the version at which the fulfillment/address snapshot
+  -- itself last changed (capture.fulfillment_changed). A payment intent set before any of those
+  -- moved on is still valid, even if the draft's overall version advanced for an unrelated
   -- reason in between.
   select max(events.result_version) into fulfillment_change_version
   from app.capture_command_events events
   where events.restaurant_id=restaurant and events.branch_id=branch and events.capture_draft_id=capture
     and events.operation='capture.fulfillment_changed';
 
+  select max(events.result_version) into plan_change_version
+  from app.capture_command_events events
+  where events.restaurant_id=restaurant and events.branch_id=branch and events.capture_draft_id=capture
+    and events.operation in ('capture.selection_replaced','capture.order_repeated');
+
   select * into stored_intent from app.capture_payment_intents
   where restaurant_id=restaurant and branch_id=branch and capture_draft_id=capture for share;
   if not found then
     frozen_intent := null;
-  elsif coalesce(repeat_plan.applied_capture_version,0) > stored_intent.applied_capture_version
+  elsif coalesce(plan_change_version,0) > stored_intent.applied_capture_version
     or coalesce(stored_quote.applied_capture_version,0) > stored_intent.applied_capture_version
     or coalesce(fulfillment_change_version,0) > stored_intent.applied_capture_version
   then
