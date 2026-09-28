@@ -176,6 +176,7 @@ export interface CaptureDeliveryQuoteEnvelopeV1 {
   readonly idempotencyKey: string;
   readonly occurredAt: string;
   readonly schemaVersion: 1;
+  readonly scheduledFor: string | null;
   readonly scope: BranchScope;
 }
 export interface CaptureDeliveryQuotePort {
@@ -1362,6 +1363,7 @@ export class CaptureDeliveryQuoteService {
       idempotencyKey: command.idempotencyKey,
       occurredAt: command.occurredAt,
       schemaVersion: 1,
+      scheduledFor: command.scheduledFor,
       scope: command.scope,
     };
 

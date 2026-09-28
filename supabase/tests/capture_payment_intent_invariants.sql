@@ -104,7 +104,8 @@ begin
       'restaurantId',restaurant::text,'branchId',branch::text
     ),'captureDraftId',target_capture::text,'expectedVersion',1,'attentionLeaseId',lease,
     'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
-    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'scheduledFor',null
   );
 
   -- version 1, channel='counter': rejected (not delivery).
@@ -170,6 +171,26 @@ begin
   );
   execute 'reset role';
   if result->>'status'<>'pending' then raise exception 'CAPTURE_DELIVERY_QUOTE_PROBE_PENDING_REJECTED'; end if;
+
+  -- H4: scheduledFor is part of the hashed command. The SAME idempotencyKey that was applied
+  -- above with scheduledFor=null must never replay for a DIFFERENT scheduledFor -- quoteForCapture
+  -- would compute a different promise/coverage for it, so this must be a conflict, not a replay.
+  execute 'set local role app_api';
+  result := app_private.probe_capture_delivery_quote_set(
+    actor,quote_command||pg_catalog.jsonb_build_object(
+      'scheduledFor',pg_catalog.to_char((now_at+interval '2 hours') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    )
+  );
+  execute 'reset role';
+  if result->>'status'<>'conflict' then raise exception 'CAPTURE_DELIVERY_QUOTE_SCHEDULED_FOR_REPLAY_ACCEPTED'; end if;
+  execute 'set local role app_api';
+  result := app_private.set_capture_delivery_quote(
+    actor,quote_command||pg_catalog.jsonb_build_object(
+      'scheduledFor',pg_catalog.to_char((now_at+interval '2 hours') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    ),quote
+  );
+  execute 'reset role';
+  if result->>'status'<>'conflict' then raise exception 'CAPTURE_DELIVERY_QUOTE_SCHEDULED_FOR_SET_REPLAY_ACCEPTED'; end if;
 
   -- version 3 -> 4: legitimate channel change away from delivery clears the frozen quote.
   autosave_command := autosave_command||pg_catalog.jsonb_build_object(
@@ -380,7 +401,8 @@ begin
       'restaurantId',restaurant::text,'branchId',branch::text
     ),'captureDraftId',confirm_capture::text,'expectedVersion',4,'attentionLeaseId',lease,
     'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
-    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'scheduledFor',null
   );
   execute 'set local role app_api';
   result := app_private.set_capture_delivery_quote(actor,quote_command,quote);
@@ -510,7 +532,8 @@ begin
       'restaurantId',restaurant::text,'branchId',branch::text
     ),'captureDraftId',address_change_capture::text,'expectedVersion',3,'attentionLeaseId',lease,
     'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
-    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'scheduledFor',null
   );
   execute 'set local role app_api';
   result := app_private.set_capture_delivery_quote(actor,quote_command,quote);

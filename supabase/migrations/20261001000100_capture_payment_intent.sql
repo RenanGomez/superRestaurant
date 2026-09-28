@@ -169,13 +169,13 @@ set search_path = ''
 as $function$
 declare
   restaurant uuid; branch uuid; capture uuid; event uuid; device uuid; member uuid; lease uuid;
-  expected bigint; occurred timestamptz; observed timestamptz; fingerprint text; result_record jsonb;
-  current_capture app.capture_drafts%rowtype; stored app.capture_command_events%rowtype;
+  expected bigint; occurred timestamptz; scheduled_for timestamptz; observed timestamptz; fingerprint text;
+  result_record jsonb; current_capture app.capture_drafts%rowtype; stored app.capture_command_events%rowtype;
 begin
   if p_actor_id is null
     or not app_private.jsonb_has_exact_keys(p_command, array[
       'schemaVersion','scope','captureDraftId','expectedVersion','eventId','idempotencyKey','deviceId','occurredAt',
-      'attentionLeaseId'
+      'attentionLeaseId','scheduledFor'
     ])
     or not app_private.jsonb_has_exact_keys(p_command->'scope', array['restaurantId','branchId'])
     or p_command->'schemaVersion' is distinct from '1'::jsonb
@@ -204,6 +204,8 @@ begin
     lease := (p_command->>'attentionLeaseId')::uuid;
     expected := (p_command->>'expectedVersion')::bigint;
     occurred := (p_command->>'occurredAt')::timestamptz;
+    scheduled_for := case when p_command->'scheduledFor' = 'null'::jsonb then null
+      else (p_command->>'scheduledFor')::timestamptz end;
   exception when invalid_text_representation or numeric_value_out_of_range or datetime_field_overflow or invalid_datetime_format then
     return pg_catalog.jsonb_build_object('status','rejected');
   end;
@@ -212,6 +214,8 @@ begin
     or p_command#>>'{scope,restaurantId}' is distinct from restaurant::text
     or p_command#>>'{scope,branchId}' is distinct from branch::text
     or p_command->>'occurredAt' is distinct from pg_catalog.to_char(occurred at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    or (scheduled_for is not null and p_command->>'scheduledFor' is distinct from
+      pg_catalog.to_char(scheduled_for at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
     or p_quote->>'restaurantId' is distinct from restaurant::text
     or p_quote->>'branchId' is distinct from branch::text
     or p_quote->>'captureDraftId' is distinct from capture::text
@@ -231,8 +235,11 @@ begin
   -- Deliberately hashed over the client's command only, never over p_quote: the quote is
   -- server-recomputed on every call (fresh quotedAt/quoteId each time), so hashing it would make a
   -- retry with the same idempotencyKey but a different recomputed quote collide on fingerprint and
-  -- be rejected as a spurious conflict instead of being recognized as the same logical write. This
-  -- must stay identical to the hash probe_capture_delivery_quote_set computes, below.
+  -- be rejected as a spurious conflict instead of being recognized as the same logical write. The
+  -- command DOES include scheduledFor -- it changes what quoteForCapture computes just as much as
+  -- the address does, so the same idempotencyKey with a different scheduledFor must never replay
+  -- the first quote. This must stay identical to the hash probe_capture_delivery_quote_set
+  -- computes, below.
   fingerprint := pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
     'capture.delivery_quote_set:'||p_command::text||':'||p_actor_id::text, 'UTF8'
   )), 'hex');
@@ -317,13 +324,13 @@ set search_path = ''
 as $function$
 declare
   restaurant uuid; branch uuid; capture uuid; event uuid; device uuid; lease uuid;
-  expected bigint; occurred timestamptz; fingerprint text;
+  expected bigint; occurred timestamptz; scheduled_for timestamptz; fingerprint text;
   stored app.capture_command_events%rowtype;
 begin
   if p_actor_id is null
     or not app_private.jsonb_has_exact_keys(p_command, array[
       'schemaVersion','scope','captureDraftId','expectedVersion','eventId','idempotencyKey','deviceId','occurredAt',
-      'attentionLeaseId'
+      'attentionLeaseId','scheduledFor'
     ])
     or not app_private.jsonb_has_exact_keys(p_command->'scope', array['restaurantId','branchId'])
     or p_command->'schemaVersion' is distinct from '1'::jsonb
@@ -340,6 +347,8 @@ begin
     lease := (p_command->>'attentionLeaseId')::uuid;
     expected := (p_command->>'expectedVersion')::bigint;
     occurred := (p_command->>'occurredAt')::timestamptz;
+    scheduled_for := case when p_command->'scheduledFor' = 'null'::jsonb then null
+      else (p_command->>'scheduledFor')::timestamptz end;
   exception when invalid_text_representation or numeric_value_out_of_range or datetime_field_overflow or invalid_datetime_format then
     return pg_catalog.jsonb_build_object('status','rejected');
   end;
@@ -348,6 +357,8 @@ begin
     or p_command#>>'{scope,restaurantId}' is distinct from restaurant::text
     or p_command#>>'{scope,branchId}' is distinct from branch::text
     or p_command->>'occurredAt' is distinct from pg_catalog.to_char(occurred at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    or (scheduled_for is not null and p_command->>'scheduledFor' is distinct from
+      pg_catalog.to_char(scheduled_for at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
   then return pg_catalog.jsonb_build_object('status','rejected'); end if;
 
   if not exists (
