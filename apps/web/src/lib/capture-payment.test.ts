@@ -148,6 +148,25 @@ test("H24: shouldSubmitTender is true for a genuinely new amount", () => {
   assert.equal(shouldSubmitTender(9000, null, null), true);
 });
 
+test("H30: a resend of a previously-applied amount succeeds once the server's own tender moved on", () => {
+  // Apply 200 -> aplicar atajo 300 (a different path, e.g. a suggestion chip) -> retype 200. This
+  // pure function alone can't distinguish "appliedMinor is stale because something else changed
+  // the tender" from "appliedMinor is fresh, currentIntentMinor just hasn't caught up yet from
+  // OUR OWN apply" -- both look identical as three numbers (appliedMinor == parsedMinor,
+  // currentIntentMinor != parsedMinor). Disambiguating them is the caller's job: capture-payment.tsx
+  // resyncs appliedTenderMinor to the server's own tenderedAmountMinor on every change, so by the
+  // time "200" is retyped after the 300 chip, the caller already passes appliedMinor=300, not a
+  // stale 200 -- exactly this call shape.
+  assert.equal(shouldSubmitTender(200, 300, 300), true);
+});
+
+test("H30: appliedMinor still guards the immediate same-cycle resend before the server's reply lands", () => {
+  // The narrow case appliedMinor exists for: an immediate resend before the server's reply has
+  // updated currentIntentMinor yet (the brief Enter-then-blur window) -- correctly resyncing
+  // appliedMinor elsewhere (H30) must never reopen this original H24 guard.
+  assert.equal(shouldSubmitTender(200, 200, null), false);
+});
+
 test("suggestTenderAmounts always includes the exact total plus the next 100/200/500-peso roundings above it", () => {
   assert.deepEqual(suggestTenderAmounts(9_000), [9_000, 10_000, 20_000, 50_000]);
   assert.deepEqual(suggestTenderAmounts(12_000), [12_000, 20_000, 50_000]);

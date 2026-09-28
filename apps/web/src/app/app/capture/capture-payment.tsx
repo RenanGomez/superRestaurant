@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ChangeEvent, type KeyboardEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import type {
   CapturePaymentBasisV1,
   CapturePaymentIntentMethodV1,
@@ -52,11 +52,17 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
   const [customTender, setCustomTender] = useState("");
   // H24: the last amount THIS field actually applied, so an Enter-then-blur pair (or repeated
   // blurs) never resends the identical amount as a redundant version bump that could stomp a
-  // tip/method change made in between.
+  // tip/method change made in between. H30: this must only ever dedupe THAT immediate,
+  // same-cycle double-send -- once the server's own tendered amount has moved on for any other
+  // reason (a suggestion chip, a method switch), it must stop blocking a resend of the same
+  // digits. Syncing it to the server's own value on every change keeps it from going stale: the
+  // only window where it still differs from `tenderedAmountMinor` is the brief gap between this
+  // field's own apply call and the server's reply.
   const [appliedTenderMinor, setAppliedTenderMinor] = useState<number | null>(null);
   const method = intent?.method ?? "cash";
   const tipMinor = intent?.tipMinor ?? 0;
   const tenderedAmountMinor = intent?.tenderedAmountMinor ?? null;
+  useEffect(() => { setAppliedTenderMinor(tenderedAmountMinor); }, [tenderedAmountMinor]);
   // H25: before any intent exists, projection is always null; the basis alone (no method/tender)
   // still lets the total-based suggestions and the summary read real numbers instead of dashes.
   const totalMinor = projection?.orderTotalMinor ?? basis?.orderTotalMinor ?? null;

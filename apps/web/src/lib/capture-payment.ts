@@ -161,6 +161,12 @@ export function deliveryQuoteBlocksConfirm(
  * (a redundant version bump that can stomp a tip/method change made in between). True only when
  * the parsed amount is neither the last amount this field actually applied nor the tender the
  * server's current intent already carries -- either means there is nothing new to send.
+ *
+ * H30: `appliedMinor` is meant to catch ONLY that brief same-cycle double-send, never to
+ * permanently block a since-superseded amount. The caller is responsible for keeping it in sync
+ * with the server's own current tender (e.g. resetting/re-syncing it whenever that tender changes
+ * for any other reason, such as a suggestion chip or a method switch) -- a stale `appliedMinor`
+ * that no longer reflects `currentIntentMinor` must never be trusted to block a resend.
  */
 export function shouldSubmitTender(
   parsedMinor: number | null,
