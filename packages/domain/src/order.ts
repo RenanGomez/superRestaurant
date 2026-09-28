@@ -55,6 +55,17 @@ export interface OrderItem extends OrderItemPricingInput {
   readonly cancellationAudit?: OrderItemCancellationAudit;
 }
 
+/**
+ * H13: a frozen delivery charge, fixed from the server's own congealed delivery quote at order
+ * creation and never editable afterward. Deliberately outside `OrderPricingInput`/line taxation:
+ * per S8, shipping is separate from the sale and carries no tax of its own, so it is added to the
+ * payable total after `calculateOrderTotals` rather than flowing through tax/discount allocation.
+ */
+export interface DeliveryChargeSnapshot {
+  readonly amount: Money;
+  readonly quoteId: string;
+}
+
 /** Pure aggregate boundary for a restaurant order. All contained values are detached and frozen. */
 export interface Order {
   readonly orderId: string;
@@ -68,6 +79,8 @@ export interface Order {
   readonly items: readonly OrderItem[];
   readonly orderDiscount?: OrderDiscountSnapshot;
   readonly tip?: Money;
+  /** Immutable once set by `createOrder`; `null` for a non-delivery order or delivery with no charge. */
+  readonly deliveryCharge: DeliveryChargeSnapshot | null;
   /** Immutable evidence of an aggregate cancellation. Payment settlement remains an application boundary. */
   readonly cancellationAudit?: OrderCancellationAudit;
 }
@@ -82,6 +95,7 @@ export interface CreateOrderInput {
   readonly timeZone: string;
   readonly orderDiscount?: OrderDiscountSnapshot;
   readonly tip?: Money;
+  readonly deliveryCharge?: DeliveryChargeSnapshot | null;
 }
 
 export type AddOrderItemInput = OrderItemPricingInput;
@@ -116,6 +130,7 @@ export function createOrder(
   assertText(input.restaurantId, "restaurantId");
   assertText(input.branchId, "branchId");
   assertChannel(input.channel, input.tableId);
+  const deliveryCharge = normalizeDeliveryCharge(input.deliveryCharge, input.currency);
   const totals = asDomainValidation(() => calculateOrderTotals({
     currency: input.currency,
     timeZone: input.timeZone,
@@ -136,6 +151,7 @@ export function createOrder(
     items: [],
     ...(totals.input.orderDiscount === undefined ? {} : { orderDiscount: totals.input.orderDiscount }),
     ...(totals.input.tip === undefined ? {} : { tip: totals.input.tip }),
+    deliveryCharge,
   });
   return freezeMutation(order, createOrderCreatedAuditEvent(auditScope(order), auditContext));
 }
@@ -285,13 +301,17 @@ function calculateForOrder(order: Order): CalculatedOrderTotals {
       lines: [],
     }), "monetary policy");
   }
-  return asDomainValidation(() => calculateOrderTotals({
+  const totals = asDomainValidation(() => calculateOrderTotals({
     currency: order.currency,
     timeZone: order.timeZone,
     lines: order.items.filter((item) => item.status !== "cancelled"),
     ...(order.orderDiscount === undefined ? {} : { orderDiscount: order.orderDiscount }),
     ...(order.tip === undefined ? {} : { tip: order.tip }),
   }), "monetary policy");
+  // H13: the delivery charge is added to the payable total after all line/order tax and
+  // discount allocation -- it is untaxed shipping (S8), never a taxable or discountable line.
+  if (order.deliveryCharge === null) return totals;
+  return deepFreeze({ ...totals, total: totals.total.add(order.deliveryCharge.amount) });
 }
 
 /** Rehydrated aggregates are accepted only when complete, scoped, and deeply immutable. */
@@ -301,12 +321,17 @@ function assertValidOrder(order: Order): void {
   if (!isDeepFrozen(order)) throw new OrderAggregateNotImmutableError();
   assertOwnDataProperties(
     order,
-    ["orderId", "restaurantId", "branchId", "channel", "currency", "timeZone", "status", "items"],
+    ["orderId", "restaurantId", "branchId", "channel", "currency", "timeZone", "status", "items", "deliveryCharge"],
     ["tableId", "orderDiscount", "tip", "cancellationAudit"],
     "order",
   );
   if (order.orderDiscount !== undefined) assertOrderDiscountFacts(order.orderDiscount);
   if (order.tip !== undefined) assertMoneyFacts(order.tip, "tip");
+  if (order.deliveryCharge !== null) assertDeliveryChargeFacts(order.deliveryCharge);
+  if (order.deliveryCharge !== null
+    && (order.deliveryCharge as unknown as DeliveryChargeSnapshot).amount.currency !== order.currency) {
+    throw new InvalidOrderAggregateError("deliveryCharge");
+  }
   assertText(order.orderId, "orderId");
   assertText(order.restaurantId, "restaurantId");
   assertText(order.branchId, "branchId");
@@ -550,6 +575,31 @@ function assertMoneyFacts(value: unknown, field: string): void {
     throw new InvalidOrderAggregateError(field);
   }
   assertOwnDataProperties(value, ["amountMinor", "currency"], [], field);
+}
+
+/** Validates, currency-matches and detaches an optional delivery charge at order creation. */
+function normalizeDeliveryCharge(
+  value: DeliveryChargeSnapshot | null | undefined,
+  currency: string,
+): DeliveryChargeSnapshot | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)) throw new InvalidSnapshotError("deliveryCharge");
+  assertOwnDataProperties(value, ["amount", "quoteId"], [], "deliveryCharge");
+  assertText(value.quoteId, "deliveryCharge.quoteId");
+  if (!(value.amount instanceof Money)) throw new InvalidSnapshotError("deliveryCharge.amount");
+  if (value.amount.amountMinor < 0) throw new InvalidSnapshotError("deliveryCharge.amount");
+  if (value.amount.currency !== new Money(0, currency).currency) {
+    throw new InvalidSnapshotError("deliveryCharge.amount");
+  }
+  return deepFreeze({ amount: value.amount, quoteId: value.quoteId });
+}
+
+function assertDeliveryChargeFacts(value: unknown): void {
+  if (!isRecord(value)) throw new InvalidOrderAggregateError("deliveryCharge");
+  assertOwnDataProperties(value, ["amount", "quoteId"], [], "deliveryCharge");
+  assertMoneyFacts(value.amount, "deliveryCharge.amount");
+  assertText(value.quoteId, "deliveryCharge.quoteId");
+  if ((value.amount as Money).amountMinor < 0) throw new InvalidOrderAggregateError("deliveryCharge");
 }
 
 function assertOrderAllowsItemMutation(status: OrderState): void {

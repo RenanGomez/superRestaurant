@@ -272,6 +272,7 @@ export {
 export type {
   AddOrderItemInput,
   CreateOrderInput,
+  DeliveryChargeSnapshot,
   Order,
   OrderCancellationAudit,
   OrderChannel,
