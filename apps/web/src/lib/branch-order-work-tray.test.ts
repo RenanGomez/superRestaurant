@@ -4,8 +4,8 @@ import { parseBranchScope, type BranchOrderWorkItemV1, type BranchOrderWorkTrayV
 import {
   channelLabel,
   filterBranchOrderWorkItems,
+  formatMinorUnits,
   formatOrderWorkTime,
-  formatOrderWorkTotal,
   isPayableBranchOrderWorkStatus,
   preparationLabel,
   requestBranchOrderWorkTray,
@@ -27,9 +27,18 @@ function item(overrides: Partial<BranchOrderWorkItemV1> = {}): BranchOrderWorkIt
 }
 
 test("money and time formatting render from the server's own minor-unit and ISO facts", () => {
-  assert.equal(formatOrderWorkTotal(13_000, "MXN"), "$130.00");
+  assert.equal(formatMinorUnits(13_000, "MXN"), "$130.00");
   assert.equal(formatOrderWorkTime("2026-09-26T18:05:00.000Z", "America/Hermosillo"),
     new Intl.DateTimeFormat("es-MX", { hour: "2-digit", minute: "2-digit", timeZone: "America/Hermosillo" }).format(new Date("2026-09-26T18:05:00.000Z")));
+});
+
+test("formatMinorUnits derives its decimal scale from the currency, never a hardcoded /100", () => {
+  assert.equal(formatMinorUnits(12_345, "MXN"), "$123.45");
+  // JPY has no minor unit: Intl's own resolvedOptions().maximumFractionDigits is 0 for it, so a
+  // JPY amount is never divided at all (only the digits, not the locale's currency symbol
+  // rendering, are asserted exactly -- that varies with the host's ICU data).
+  assert.equal(formatMinorUnits(100, "JPY"), new Intl.NumberFormat("es-MX", { currency: "JPY", style: "currency" }).format(100));
+  assert.equal(new Intl.NumberFormat("es-MX", { currency: "JPY", style: "currency" }).resolvedOptions().maximumFractionDigits, 0);
 });
 
 test("channel and preparation labels are exhaustive and in Spanish", () => {

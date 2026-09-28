@@ -5,7 +5,7 @@ import type { BranchOrderWorkChannelV1, BranchOrderWorkItemV1, BranchOrderWorkTr
 import {
   channelLabel,
   formatOrderWorkTime,
-  formatOrderWorkTotal,
+  formatMinorUnits,
   isPayableBranchOrderWorkStatus,
   preparationLabel,
   shouldApplyBranchOrderWorkTrayResponse,
@@ -111,7 +111,7 @@ function OrderCard({ order, canCheckout }: { readonly order: BranchOrderWorkItem
         <strong className="block">{channelLabel(order.channel)}</strong>
         <span className="block text-xs text-text-muted">{formatOrderWorkTime(order.createdAt, order.timeZone)} · {preparationLabel(order.preparation)}</span>
       </div>
-      <span className="text-right font-semibold">{formatOrderWorkTotal(order.totals.totalMinor, order.totals.currency)}</span>
+      <span className="text-right font-semibold">{formatMinorUnits(order.totals.totalMinor, order.totals.currency)}</span>
     </div>
     {order.customerLabel !== null && <p className="mt-2 text-sm">{order.customerLabel}</p>}
     {order.addressLabel !== null && <p className="text-xs text-text-muted">{order.addressLabel}</p>}

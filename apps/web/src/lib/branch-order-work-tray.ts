@@ -56,9 +56,16 @@ export function preparationLabel(preparation: BranchOrderWorkPreparationStatusV1
   return PREPARATION_LABELS[preparation];
 }
 
-/** Money is always formatted from its own frozen minor-unit total; never recomputed here. */
-export function formatOrderWorkTotal(totalMinor: number, currency: string, locale = "es-MX"): string {
-  return new Intl.NumberFormat(locale, { currency, style: "currency" }).format(totalMinor / 100);
+/**
+ * Converts an exact minor-unit integer to a display string without assuming a two-decimal
+ * currency: the exponent comes from `Intl.NumberFormat`'s own `resolvedOptions()` for the
+ * currency (e.g. 2 for MXN, 0 for JPY), never a hardcoded `/ 100`. Money is always formatted from
+ * its own frozen minor-unit total; never recomputed here.
+ */
+export function formatMinorUnits(amountMinor: number, currency: string, locale = "es-MX"): string {
+  const formatter = new Intl.NumberFormat(locale, { currency, style: "currency" });
+  const digits = formatter.resolvedOptions().maximumFractionDigits ?? 2;
+  return formatter.format(amountMinor / 10 ** digits);
 }
 
 /** `timeZone` is always the Order's own frozen zone, never the viewer's device zone, so this
