@@ -45,12 +45,16 @@ export function OrdersTray({ scope, action, canCheckout }: Props) {
 
   async function load(cursor: BranchOrderWorkTrayV1["nextCursor"], replace: boolean, channel: BranchOrderWorkChannelV1 | null) {
     const requestSeq = ++requestSeqRef.current;
+    // A "replace" (filter change or "Actualizar") clears the previous filter's results and cursor
+    // immediately, instead of leaving them on screen -- possibly stale or under the wrong filter --
+    // until the new page (or an error) arrives.
+    if (replace) { setItems([]); setNextCursor(null); cursorRef.current = null; setLoaded(false); }
     setBusy(true); setError(undefined);
     let result: BranchOrderTrayRequestResult;
     try { result = await action({ channel, cursor, limit: LIMIT, schemaVersion: 1, scope }); }
     catch { result = { error: "unavailable", ok: false }; }
     if (!shouldApplyBranchOrderWorkTrayResponse({ cursor, replace, requestSeq }, requestSeqRef.current, cursorRef.current)) return;
-    if (!result.ok) setError(result.error);
+    if (!result.ok) { setError(result.error); if (replace) setLoaded(true); }
     else {
       setItems((current) => replace ? result.value.items : [...current, ...result.value.items]);
       setNextCursor(result.value.nextCursor);
@@ -84,9 +88,15 @@ export function OrdersTray({ scope, action, canCheckout }: Props) {
       <button type="button" className={button} disabled={busy} onClick={refresh}>Actualizar</button>
     </div>
     {error && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{errors[error]}</p>}
-    {!loaded ? <p className="mt-4 text-sm text-text-muted">Cargando órdenes…</p> : items.length === 0
-      ? <p className="mt-4 text-sm text-text-muted">No hay órdenes activas para este filtro.</p>
-      : <ul className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{items.map((order) => <OrderCard key={order.orderId} order={order} canCheckout={canCheckout} />)}</ul>}
+    {!loaded ? <p className="mt-4 text-sm text-text-muted">Cargando órdenes…</p>
+      : items.length === 0 && error !== undefined
+        ? <div className="mt-4 flex flex-wrap items-center gap-3">
+          <p className="text-sm text-text-muted">No se pudieron cargar las órdenes.</p>
+          <button type="button" className={button} onClick={refresh}>Reintentar</button>
+        </div>
+        : items.length === 0
+          ? <p className="mt-4 text-sm text-text-muted">No hay órdenes activas para este filtro.</p>
+          : <ul className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{items.map((order) => <OrderCard key={order.orderId} order={order} canCheckout={canCheckout} />)}</ul>}
     {nextCursor !== null && <div className="mt-4">
       <button type="button" className={button} disabled={busy}
         onClick={() => void load(nextCursor, false, filter === "all" ? null : filter)}>Cargar más</button>
