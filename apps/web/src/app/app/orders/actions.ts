@@ -20,5 +20,5 @@ export async function branchOrderWorkTrayAction(input: unknown): Promise<BranchO
   if (session === null) return { error: "denied", ok: false };
   const env = getServerEnv();
   if (await authorizeBranch(session.access_token, env.apiBaseUrl, scope) === undefined) return { error: "denied", ok: false };
-  return requestBranchOrderWorkTray(session.access_token, env.apiBaseUrl, scope, request.cursor, request.limit);
+  return requestBranchOrderWorkTray(session.access_token, env.apiBaseUrl, scope, request.cursor, request.limit, request.channel);
 }

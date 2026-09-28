@@ -4,6 +4,7 @@ import {
   type BranchOrderWorkCursorV1,
   type BranchOrderWorkItemV1,
   type BranchOrderWorkPreparationStatusV1,
+  type BranchOrderWorkStatusV1,
   type BranchOrderWorkTrayV1,
   type BranchScope,
 } from "@super-restaurant/shared-types";
@@ -18,12 +19,13 @@ export async function requestBranchOrderWorkTray(
   scope: BranchScope,
   cursor: BranchOrderWorkCursorV1 | null,
   limit: number,
+  channel: BranchOrderWorkChannelV1 | null = null,
 ): Promise<BranchOrderTrayRequestResult> {
   try {
     const response = await fetch(`${baseUrl}/api/v1/branch-orders/tray`, {
       method: "POST", cache: "no-store", signal: AbortSignal.timeout(10_000),
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ cursor, limit, schemaVersion: 1, scope }),
+      body: JSON.stringify({ channel, cursor, limit, schemaVersion: 1, scope }),
     });
     if (!response.ok) {
       return { error: response.status === 400 ? "invalid" : response.status === 401 || response.status === 403 ? "denied" : "unavailable", ok: false };
@@ -91,6 +93,13 @@ function cursorsEqual(left: BranchOrderWorkCursorV1 | null, right: BranchOrderWo
 }
 
 export type BranchOrderWorkFilter = "all" | "table" | "counter" | "takeout" | "delivery";
+
+const PAYABLE_STATUSES: readonly BranchOrderWorkStatusV1[] = Object.freeze(["open", "partially_paid"]);
+
+/** A "draft" Order has no cuenta yet; checkout rejects it, so "Cobrar en caja" must never show for it. */
+export function isPayableBranchOrderWorkStatus(status: BranchOrderWorkStatusV1): boolean {
+  return PAYABLE_STATUSES.includes(status);
+}
 
 export function filterBranchOrderWorkItems(
   items: readonly BranchOrderWorkItemV1[],

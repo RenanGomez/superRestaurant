@@ -6,6 +6,7 @@ import {
   filterBranchOrderWorkItems,
   formatOrderWorkTime,
   formatOrderWorkTotal,
+  isPayableBranchOrderWorkStatus,
   preparationLabel,
   requestBranchOrderWorkTray,
   shouldApplyBranchOrderWorkTrayResponse,
@@ -55,12 +56,22 @@ test("branch order tray request sends the scope/cursor/limit and validates the r
       return new Response(JSON.stringify(tray));
     };
     const result = await requestBranchOrderWorkTray("token", "https://api.example", scope, null, 25);
-    assert.deepEqual(sent, { cursor: null, limit: 25, schemaVersion: 1, scope });
+    assert.deepEqual(sent, { channel: null, cursor: null, limit: 25, schemaVersion: 1, scope });
     assert.deepEqual(result, { ok: true, value: tray });
+
+    globalThis.fetch = async (_url, init) => { sent = JSON.parse(String(init?.body)); return new Response(JSON.stringify(tray)); };
+    await requestBranchOrderWorkTray("token", "https://api.example", scope, null, 25, "delivery");
+    assert.deepEqual(sent, { channel: "delivery", cursor: null, limit: 25, schemaVersion: 1, scope });
 
     globalThis.fetch = async () => new Response(JSON.stringify({ ...tray, scope: { ...scope, branchId: orderId } }));
     assert.deepEqual(await requestBranchOrderWorkTray("token", "https://api.example", scope, null, 25), { error: "unavailable", ok: false });
   } finally { globalThis.fetch = original; }
+});
+
+test("isPayableBranchOrderWorkStatus only allows Cobrar en caja for open/partially_paid, never draft", () => {
+  assert.equal(isPayableBranchOrderWorkStatus("open"), true);
+  assert.equal(isPayableBranchOrderWorkStatus("partially_paid"), true);
+  assert.equal(isPayableBranchOrderWorkStatus("draft"), false);
 });
 
 test("shouldApplyBranchOrderWorkTrayResponse discards any response that is not the latest issued request", () => {
