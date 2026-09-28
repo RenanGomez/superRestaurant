@@ -17,9 +17,16 @@ const GROUP_LABELS: Record<OrderItemStatusGroup, string> = {
 
 export interface OrderDetailActions {
   readonly detail: (orderId: string) => Promise<{ readonly ok: true; readonly value: OrderDetailV1 } | { readonly ok: false; readonly error: string }>;
-  readonly open: (orderId: string, expectedVersion: number) => Promise<{ readonly ok: boolean; readonly error?: string }>;
-  readonly transitionItem: (orderId: string, orderItemId: string, expectedVersion: number, to: "sent" | "preparing" | "ready" | "delivered") => Promise<{ readonly ok: boolean; readonly error?: string }>;
-  readonly cancelItem: (orderId: string, orderItemId: string, expectedVersion: number, reason: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
+  readonly open: (orderId: string, expectedVersion: number, eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
+  readonly transitionItem: (orderId: string, orderItemId: string, expectedVersion: number, to: "sent" | "preparing" | "ready" | "delivered", eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
+  readonly cancelItem: (orderId: string, orderItemId: string, expectedVersion: number, reason: string, eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
+}
+
+/** One eventId/idempotencyKey pair per logical operation, minted once by the browser and reused
+ * verbatim on the single retry `runAction` performs -- never regenerated per attempt, or a
+ * lost-response retry would send a distinct command instead of resending the same one. */
+function nextAttempt(): { readonly eventId: string; readonly idempotencyKey: string } {
+  return { eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID() };
 }
 
 interface Props {
@@ -83,11 +90,18 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
         <p className="mt-1 text-sm">Total: <strong>{formatMinorUnits(detail.totals.totalMinor, detail.totals.currency)}</strong></p>
         <div className="mt-4 flex flex-wrap gap-2">
           {hasAction(detail, "open") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
-            onClick={() => void runAction("open", () => actions.open(detail.orderId, detail.version))}>
+            onClick={() => { const attempt = nextAttempt(); void runAction("open", () => actions.open(detail.orderId, detail.version, attempt.eventId, attempt.idempotencyKey)); }}>
             {busyAction === "open" ? "Abriendo…" : actionLabel("open")}
           </button>}
           {hasAction(detail, "sendToKitchen") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
-            onClick={() => void runSendToKitchen(detail, actions, runAction)}>
+            onClick={() => {
+              // One idempotencyKey per pending line, minted once here -- before runAction's
+              // possible retry -- so a retried batch resends each line's own original command
+              // instead of a fresh one, and a partial batch never gets a second distinct attempt
+              // for the lines that already made it through.
+              const attempts = new Map(detail.items.filter((item) => item.status === "pending").map((item) => [item.orderItemId, nextAttempt()]));
+              void runSendToKitchen(detail, actions, attempts, runAction);
+            }}>
             {busyAction === "sendToKitchen" ? "Enviando…" : actionLabel("sendToKitchen")}
           </button>}
           {canCheckout && hasAction(detail, "checkout") && <a href={`/app/caja?orderId=${detail.orderId}`} className={button}>{actionLabel("checkout")}</a>}
@@ -109,12 +123,19 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
                   <div className="mt-2 flex flex-wrap gap-2">
                     {hasItemAction(item, "markReady")
                       && <button type="button" className={button} disabled={busyAction !== undefined}
-                        onClick={() => void runAction(`ready-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, item.status === "sent" ? "preparing" : "ready"))}>
+                        onClick={() => {
+                          const attempt = nextAttempt();
+                          const to = item.status === "sent" ? "preparing" : "ready";
+                          void runAction(`ready-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, to, attempt.eventId, attempt.idempotencyKey));
+                        }}>
                         {busyAction === `ready-${item.orderItemId}` ? "Guardando…" : item.status === "sent" ? "Marcar en preparación" : actionLabel("markReady")}
                       </button>}
                     {hasItemAction(item, "markDelivered")
                       && <button type="button" className={button} disabled={busyAction !== undefined}
-                        onClick={() => void runAction(`delivered-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, "delivered"))}>
+                        onClick={() => {
+                          const attempt = nextAttempt();
+                          void runAction(`delivered-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, "delivered", attempt.eventId, attempt.idempotencyKey));
+                        }}>
                         {busyAction === `delivered-${item.orderItemId}` ? "Guardando…" : actionLabel("markDelivered")}
                       </button>}
                     {hasItemAction(item, "cancelItem")
@@ -134,8 +155,9 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
         onCancel={() => setCancelTarget(undefined)}
         onConfirm={(reason) => {
           const target = cancelTarget;
+          const attempt = nextAttempt();
           setCancelTarget(undefined);
-          void runAction(`cancel-${target.orderItemId}`, () => actions.cancelItem(detail.orderId, target.orderItemId, detail.version, reason));
+          void runAction(`cancel-${target.orderItemId}`, () => actions.cancelItem(detail.orderId, target.orderItemId, detail.version, reason, attempt.eventId, attempt.idempotencyKey));
         }}
       />}
     </div>
@@ -145,13 +167,16 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
 async function runSendToKitchen(
   detail: OrderDetailV1,
   actions: OrderDetailActions,
+  attempts: ReadonlyMap<string, { readonly eventId: string; readonly idempotencyKey: string }>,
   runAction: (key: string, run: () => Promise<{ readonly ok: boolean; readonly error?: string }>) => Promise<void>,
 ): Promise<void> {
   const pending = detail.items.filter((item) => item.status === "pending");
   await runAction("sendToKitchen", async () => {
     let version = detail.version;
     for (const item of pending) {
-      const result = await actions.transitionItem(detail.orderId, item.orderItemId, version, "sent");
+      const attempt = attempts.get(item.orderItemId);
+      if (attempt === undefined) return { error: "unavailable", ok: false };
+      const result = await actions.transitionItem(detail.orderId, item.orderItemId, version, "sent", attempt.eventId, attempt.idempotencyKey);
       if (!result.ok) return result;
       version += 1;
     }

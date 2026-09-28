@@ -40,6 +40,22 @@ export async function requestOrderDetail(
   } catch { return { error: "unavailable", ok: false }; }
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/**
+ * Validates a client-minted `{ eventId, idempotencyKey }` pair for one order-mutation attempt. The
+ * server action never generates these itself: the caller (the detail panel) mints them once per
+ * logical operation and reuses the same pair verbatim on its single retry, so a lost-response retry
+ * resends the same command instead of a distinct one.
+ */
+export function parseAttemptIds(eventId: unknown, idempotencyKey: unknown): { readonly eventId: string; readonly idempotencyKey: string } | undefined {
+  if (typeof eventId !== "string" || !UUID_PATTERN.test(eventId)) return undefined;
+  if (typeof idempotencyKey !== "string" || idempotencyKey.length < 1 || idempotencyKey.length > 200 || idempotencyKey !== idempotencyKey.trim()) {
+    return undefined;
+  }
+  return { eventId: eventId.toLowerCase(), idempotencyKey };
+}
+
 export type OrderMutationRequestResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly error: "invalid" | "denied" | "not_found" | "conflict" | "unavailable" };

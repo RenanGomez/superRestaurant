@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseBranchScope, type OrderDetailItemV1, type OrderDetailV1 } from "@super-restaurant/shared-types";
-import { actionLabel, groupItemsByStatus, hasAction, hasItemAction } from "./order-detail.js";
+import { actionLabel, groupItemsByStatus, hasAction, hasItemAction, parseAttemptIds } from "./order-detail.js";
 
 const parsedScope = parseBranchScope({ restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" });
 if (parsedScope === undefined) throw new Error("Invalid test scope.");
@@ -51,6 +51,16 @@ test("hasItemAction gates per-line actions from the line's own list, never the o
   assert.equal(hasItemAction(sentLine, "cancelItem"), false);
   assert.equal(hasItemAction(pendingLine, "cancelItem"), true);
   assert.equal(hasItemAction(pendingLine, "markReady"), false);
+});
+
+test("parseAttemptIds only accepts a well-formed UUID eventId and a bounded, trimmed idempotencyKey", () => {
+  const eventId = "1e37ae13-8507-484c-969f-2176f77b7000";
+  assert.deepEqual(parseAttemptIds(eventId, "send-line-1"), { eventId, idempotencyKey: "send-line-1" });
+  assert.equal(parseAttemptIds("not-a-uuid", "send-line-1"), undefined);
+  assert.equal(parseAttemptIds(eventId, ""), undefined);
+  assert.equal(parseAttemptIds(eventId, " padded "), undefined);
+  assert.equal(parseAttemptIds(eventId, "x".repeat(201)), undefined);
+  assert.equal(parseAttemptIds(undefined, "send-line-1"), undefined);
 });
 
 test("actionLabel covers every action the server can send", () => {
