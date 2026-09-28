@@ -479,6 +479,16 @@ begin
     or frozen#>>'{paymentIntent,tenderedAmountMinor}'<>'10000'
     or frozen#>>'{paymentIntent,tipMinor}'<>'500'
   then raise exception 'CAPTURE_PAYMENT_INTENT_CONFIRM_DID_NOT_FREEZE_BOTH'; end if;
+  -- H7: merging deliveryQuote/paymentIntent must bump schemaVersion to 2 (shared-types'
+  -- parseOrderFulfillmentSnapshotV1 is an exact-12-key match and would otherwise reject this
+  -- 12-key object claiming schemaVersion 1); it must also carry exactly the 12 V2 keys, no more.
+  if (frozen->>'schemaVersion')::int<>2 then
+    raise exception 'CAPTURE_PAYMENT_INTENT_CONFIRM_SNAPSHOT_NOT_V2';
+  end if;
+  if not app_private.jsonb_has_exact_keys(frozen, array[
+    'schemaVersion','orderId','captureDraftId','captureVersion','fulfillmentChannel','tableId',
+    'partySnapshot','fulfillmentSnapshot','deliveryInstructions','frozenAt','deliveryQuote','paymentIntent'
+  ]) then raise exception 'CAPTURE_PAYMENT_INTENT_CONFIRM_SNAPSHOT_KEYS_DRIFTED'; end if;
 
   ----------------------------------------------------------------------------
   -- Changing the fulfillment/address snapshot after quoting deletes the frozen

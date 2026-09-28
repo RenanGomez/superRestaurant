@@ -9,6 +9,8 @@ import {
   type CaptureFulfillmentSnapshotV1,
   type CaptureVersionedMutationInputV1,
 } from "./commercial-capture.js";
+import { parseCapturePaymentIntentV1, type CapturePaymentIntentV1 } from "./capture-payment-intent.js";
+import { parseDeliveryQuoteV1, type DeliveryQuoteV1 } from "./delivery-quote.js";
 
 export const DELIVERY_INSTRUCTIONS_SCHEMA_VERSION = 1 as const;
 export const DELIVERY_INSTRUCTIONS_MAX_LENGTH = 500 as const;
@@ -71,6 +73,29 @@ export interface OrderFulfillmentSnapshotV1 {
   readonly orderId: string;
   readonly partySnapshot: CaptureCustomerSnapshotV1 | null;
   readonly schemaVersion: typeof DELIVERY_INSTRUCTIONS_SCHEMA_VERSION;
+  readonly tableId: string | null;
+}
+
+export const ORDER_FULFILLMENT_SNAPSHOT_V2_SCHEMA_VERSION = 2 as const;
+
+/**
+ * Additive successor to `OrderFulfillmentSnapshotV1`: adds the frozen `deliveryQuote` and
+ * `paymentIntent` raw facts (both nullable -- present only for a delivery capture that had a
+ * quote frozen, or any capture that had a payment intent set) that `confirm_capture_draft_v3`
+ * now merges into the snapshot at confirm time. Every other field is unchanged from V1.
+ */
+export interface OrderFulfillmentSnapshotV2 {
+  readonly captureDraftId: string;
+  readonly captureVersion: number;
+  readonly deliveryInstructions: string | null;
+  readonly deliveryQuote: DeliveryQuoteV1 | null;
+  readonly frozenAt: string;
+  readonly fulfillmentChannel: CaptureFulfillmentChannelV1;
+  readonly fulfillmentSnapshot: CaptureFulfillmentSnapshotV1 | null;
+  readonly orderId: string;
+  readonly partySnapshot: CaptureCustomerSnapshotV1 | null;
+  readonly paymentIntent: CapturePaymentIntentV1 | null;
+  readonly schemaVersion: typeof ORDER_FULFILLMENT_SNAPSHOT_V2_SCHEMA_VERSION;
   readonly tableId: string | null;
 }
 
@@ -216,6 +241,67 @@ export function parseOrderFulfillmentSnapshotV1(value: unknown): OrderFulfillmen
       schemaVersion: DELIVERY_INSTRUCTIONS_SCHEMA_VERSION,
       tableId,
     });
+}
+
+export function parseOrderFulfillmentSnapshotV2(value: unknown): OrderFulfillmentSnapshotV2 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "orderId", "captureDraftId", "captureVersion", "fulfillmentChannel", "tableId",
+    "partySnapshot", "fulfillmentSnapshot", "deliveryInstructions", "frozenAt", "deliveryQuote", "paymentIntent",
+  ]);
+  if (record === undefined || own(record, "schemaVersion") !== ORDER_FULFILLMENT_SNAPSHOT_V2_SCHEMA_VERSION) return undefined;
+  const orderId = uuid(own(record, "orderId"));
+  const captureDraftId = uuid(own(record, "captureDraftId"));
+  const captureVersion = integer(own(record, "captureVersion"), 1, Number.MAX_SAFE_INTEGER);
+  const fulfillmentChannel = member(own(record, "fulfillmentChannel"), CAPTURE_FULFILLMENT_CHANNELS);
+  const tableId = nullableUuid(own(record, "tableId"));
+  const rawParty = own(record, "partySnapshot");
+  const partySnapshot = rawParty === null ? null : parseCaptureCustomerSnapshotV1(rawParty);
+  const rawFulfillment = own(record, "fulfillmentSnapshot");
+  const fulfillmentSnapshot = rawFulfillment === null ? null : parseCaptureFulfillmentSnapshotV1(rawFulfillment);
+  const deliveryInstructions = nullableInstructions(own(record, "deliveryInstructions"));
+  const frozenAt = timestamp(own(record, "frozenAt"));
+  const rawDeliveryQuote = own(record, "deliveryQuote");
+  const deliveryQuote = rawDeliveryQuote === null ? null : parseDeliveryQuoteV1(rawDeliveryQuote);
+  const rawPaymentIntent = own(record, "paymentIntent");
+  const paymentIntent = rawPaymentIntent === null ? null : parseCapturePaymentIntentV1(rawPaymentIntent);
+  return orderId === undefined || captureDraftId === undefined || captureVersion === undefined
+    || fulfillmentChannel === undefined || tableId === undefined || partySnapshot === undefined
+    || fulfillmentSnapshot === undefined || deliveryInstructions === undefined || frozenAt === undefined
+    || deliveryQuote === undefined || paymentIntent === undefined
+    || (fulfillmentChannel === "dine_in") !== (tableId !== null)
+    || (fulfillmentChannel === "delivery") !== (fulfillmentSnapshot !== null)
+    || (fulfillmentChannel === "delivery" && partySnapshot === null)
+    || (fulfillmentChannel !== "delivery" && deliveryInstructions !== null)
+    || (fulfillmentChannel !== "delivery" && deliveryQuote !== null)
+    || (fulfillmentSnapshot !== null && (fulfillmentSnapshot.customerSnapshotRef !== partySnapshot?.snapshotRef
+      || fulfillmentSnapshot.customerId !== partySnapshot?.customerId))
+    ? undefined
+    : Object.freeze({
+      captureDraftId,
+      captureVersion,
+      deliveryInstructions,
+      deliveryQuote,
+      frozenAt,
+      fulfillmentChannel,
+      fulfillmentSnapshot,
+      orderId,
+      partySnapshot,
+      paymentIntent,
+      schemaVersion: ORDER_FULFILLMENT_SNAPSHOT_V2_SCHEMA_VERSION,
+      tableId,
+    });
+}
+
+/**
+ * Accepts either the historical `OrderFulfillmentSnapshotV1` or the additive V2 (with the frozen
+ * delivery quote/payment intent raw facts): every current and future consumer of the fulfillment
+ * snapshot must go through this, never assume V1 alone, since `confirm_capture_draft_v3` now
+ * writes V2.
+ */
+export function parseOrderFulfillmentSnapshotV1OrV2(
+  value: unknown,
+): OrderFulfillmentSnapshotV1 | OrderFulfillmentSnapshotV2 | undefined {
+  return parseOrderFulfillmentSnapshotV1(value) ?? parseOrderFulfillmentSnapshotV2(value);
 }
 
 function nullableInstructions(value: unknown): string | null | undefined {

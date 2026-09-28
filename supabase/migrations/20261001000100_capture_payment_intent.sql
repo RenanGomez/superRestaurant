@@ -686,6 +686,25 @@ grant execute on function app_private.read_capture_workspace_v5(uuid,jsonb) to a
 comment on function app_private.read_capture_workspace_v5(uuid,jsonb) is
   'Rehydrates Capture V4 facts plus the frozen delivery quote and payment intent (raw facts only); the API computes CapturePaymentIntentProjectionV1 (totals/change/stale) from these and the live selection projection, mirroring how selectionProjection is API-derived from selectionPlan.';
 
+-- H7: order_fulfillment_snapshots_payload_valid (from 20260922000200, applied) pins
+-- snapshot->>'schemaVersion'='1', which the confirm write below can no longer satisfy once it
+-- additively merges deliveryQuote/paymentIntent (shared-types' parseOrderFulfillmentSnapshotV2
+-- contract for the resulting 12-key shape). Relax the check to accept either schemaVersion, purely
+-- additive: every other clause -- object shape, orderId/captureDraftId/captureVersion/
+-- fulfillmentChannel/deliveryInstructions consistency -- is unchanged.
+alter table app.order_fulfillment_snapshots drop constraint order_fulfillment_snapshots_payload_valid;
+alter table app.order_fulfillment_snapshots add constraint order_fulfillment_snapshots_payload_valid check (
+  pg_catalog.jsonb_typeof(snapshot)='object'
+  and snapshot->>'schemaVersion' in ('1','2')
+  and snapshot->>'orderId'=order_id::text
+  and snapshot->>'captureDraftId'=capture_draft_id::text
+  and snapshot->>'captureVersion'=capture_version::text
+  and snapshot->>'fulfillmentChannel'=fulfillment_channel
+  and snapshot->'deliveryInstructions' is not distinct from coalesce(
+    pg_catalog.to_jsonb(delivery_instructions),'null'::jsonb
+  )
+);
+
 -- confirm now freezes deliveryQuote/paymentIntent into the Order's fulfillment snapshot, and
 -- rejects (without relaxing any existing check) when a stored intent's basis_fingerprint no
 -- longer matches the confirming command's current basis -- the caller (API) is responsible for
@@ -1010,9 +1029,14 @@ begin
       end loop;
     end if;
 
+    -- Additive: the stored snapshot is written as schemaVersion 1 (parseOrderFulfillmentSnapshotV1's
+    -- exact key set). Merging deliveryQuote/paymentIntent without also bumping schemaVersion to 2
+    -- would leave an object with 12 keys claiming to be schemaVersion 1, which every V1 parser
+    -- (an exact-keys match) then rejects outright. schemaVersion 2 is parseOrderFulfillmentSnapshotV2's
+    -- contract (shared-types): identical to V1 plus these two nullable fields, nothing else changes.
     update app.order_fulfillment_snapshots
     set snapshot = snapshot || pg_catalog.jsonb_build_object(
-      'deliveryQuote', frozen_quote, 'paymentIntent', frozen_intent
+      'schemaVersion', 2, 'deliveryQuote', frozen_quote, 'paymentIntent', frozen_intent
     )
     where restaurant_id=restaurant and branch_id=branch and order_id=requested_order_id
       and capture_draft_id=capture;
