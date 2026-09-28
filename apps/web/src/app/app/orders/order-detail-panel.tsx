@@ -3,7 +3,7 @@
 import { useEffect, useId, useState } from "react";
 import type { OrderDetailItemV1, OrderDetailV1 } from "@super-restaurant/shared-types";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
-import { actionLabel, groupItemsByStatus, hasAction, type OrderItemStatusGroup } from "../../../lib/order-detail";
+import { actionLabel, groupItemsByStatus, hasAction, hasItemAction, type OrderItemStatusGroup } from "../../../lib/order-detail";
 
 const overlay = "fixed inset-0 z-40 flex items-start justify-center bg-black/40 p-4 sm:items-center";
 const sheet = "max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -107,17 +107,17 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
                     <span className="text-sm font-semibold">{formatMinorUnits(item.lineTotalMinor, detail.totals.currency)}</span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {hasAction(detail, "markReady") && (item.status === "sent" || item.status === "preparing")
+                    {hasItemAction(item, "markReady")
                       && <button type="button" className={button} disabled={busyAction !== undefined}
                         onClick={() => void runAction(`ready-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, item.status === "sent" ? "preparing" : "ready"))}>
                         {busyAction === `ready-${item.orderItemId}` ? "Guardando…" : item.status === "sent" ? "Marcar en preparación" : actionLabel("markReady")}
                       </button>}
-                    {hasAction(detail, "markDelivered") && item.status === "ready"
+                    {hasItemAction(item, "markDelivered")
                       && <button type="button" className={button} disabled={busyAction !== undefined}
                         onClick={() => void runAction(`delivered-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, "delivered"))}>
                         {busyAction === `delivered-${item.orderItemId}` ? "Guardando…" : actionLabel("markDelivered")}
                       </button>}
-                    {hasAction(detail, "cancelItem") && ["pending", "sent", "preparing", "ready"].includes(item.status)
+                    {hasItemAction(item, "cancelItem")
                       && <button type="button" className={button} disabled={busyAction !== undefined} onClick={() => setCancelTarget(item)}>
                         {actionLabel("cancelItem")}
                       </button>}

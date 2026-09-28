@@ -90,6 +90,13 @@ export function hasAction(detail: OrderDetailV1, action: OrderDetailActionV1): b
   return detail.availableActions.includes(action);
 }
 
+/** Per-line gate: `cancelItem`/`markReady`/`markDelivered` only ever come from the line's own
+ * `availableActions` -- never the order-level list, which cannot express that a role with
+ * `orders.cancel.pending` alone must not see cancellation on a line that already reached KDS. */
+export function hasItemAction(item: OrderDetailItemV1, action: OrderDetailActionV1): boolean {
+  return item.availableActions.includes(action);
+}
+
 const STATUS_GROUPS = Object.freeze(["pending", "sent", "preparing", "ready", "delivered", "cancelled"] as const);
 
 export type OrderItemStatusGroup = (typeof STATUS_GROUPS)[number];

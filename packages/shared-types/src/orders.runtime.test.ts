@@ -133,7 +133,7 @@ const detailRequest={schemaVersion:1,scope,orderId:common.orderId};
 expect(parseOrderDetailRequestV1(detailRequest)!==undefined,"order detail request parses");
 expect(parseOrderDetailRequestV1({...detailRequest,orderId:"not-a-uuid"})===undefined,"order detail request rejects a malformed orderId");
 
-const detailItem={orderItemId:add.orderItemId,status:"pending",name:"Tacos al pastor",quantity:2,unitPriceMinor:5000,lineTotalMinor:10000,note:null,modifiers:[]};
+const detailItem={orderItemId:add.orderItemId,status:"pending",name:"Tacos al pastor",quantity:2,unitPriceMinor:5000,lineTotalMinor:10000,note:null,modifiers:[],availableActions:["cancelItem"]};
 const detail={
   schemaVersion:1,scope,orderId:common.orderId,status:"open",channel:"table",
   tableId:"d6f3073e-4d2d-4b9f-90ea-926e5a86ff02",currency:"MXN",timeZone:"America/Mexico_City",
@@ -148,3 +148,6 @@ expect(parseOrderDetailV1({...detail,fulfillment:{...detail.fulfillment,channel:
 expect(parseOrderDetailV1({...detail,totals:{...detail.totals,totalMinor:10001}})===undefined,"order detail totals must add up exactly");
 expect(parseOrderDetailV1({...detail,availableActions:["sendToKitchen","sendToKitchen"]})===undefined,"order detail rejects duplicate actions");
 expect(parseOrderDetailV1({...detail,availableActions:["not-an-action"]})===undefined,"order detail rejects an unknown action");
+const parsedDetail=parseOrderDetailV1(detail);
+expect(parsedDetail!==undefined && parsedDetail.items[0]?.availableActions[0]==="cancelItem","order detail keeps each line's own availableActions");
+expect(parseOrderDetailV1({...detail,items:[{...detailItem,availableActions:["cancelItem","cancelItem"]}]})===undefined,"a line's availableActions rejects duplicates");

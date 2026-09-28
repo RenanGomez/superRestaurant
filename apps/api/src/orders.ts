@@ -477,6 +477,7 @@ function projectOrderDetail(
   const items = order.items.map((item) => {
     const lineTotals = lineTotalsByItemId.get(item.orderItemId);
     return {
+      availableActions: computeItemActions(order, item, roles),
       lineTotalMinor: lineTotals === undefined ? 0 : lineTotals.totalAfterOrderDiscount.amountMinor,
       modifiers: item.snapshot.modifiers.map((modifier) => ({
         modifierId: modifier.modifierId,
@@ -535,26 +536,40 @@ function projectOrderDetail(
 
 const FINANCIAL_ROLES: ReadonlySet<MembershipRole> = new Set(["owner", "admin", "manager", "supervisor", "cashier"]);
 
+/**
+ * Order-wide actions only -- open, send-to-kitchen (which the client fires per pending line, but
+ * whose *offer* is a single order-wide affordance) and checkout. Per-line actions (markReady,
+ * markDelivered, cancelItem) live exclusively on `OrderDetailItemV1.availableActions` below: a role
+ * with `orders.cancel.pending` but not `orders.cancel.sent` must never be offered cancellation on a
+ * line that already reached KDS, and an order-wide flag can't express that distinction.
+ */
 function computeAvailableActions(order: Order, roles: readonly MembershipRole[]): readonly OrderDetailActionV1[] {
   const actions: OrderDetailActionV1[] = [];
   const canUpdate = rolesGrantPermission(roles, "orders.update");
-  const canTransitionKds = rolesGrantPermission(roles, "kds.transition");
-  const canCancelPending = rolesGrantPermission(roles, "orders.cancel.pending");
-  const canCancelSent = rolesGrantPermission(roles, "orders.cancel.sent");
   const itemMutable = order.status !== "closed" && order.status !== "cancelled";
   if (canUpdate && order.status === "draft") actions.push("open");
   if (canUpdate && itemMutable && order.items.some((item) => item.status === "pending")) actions.push("sendToKitchen");
-  if (canTransitionKds && itemMutable && order.items.some((item) => item.status === "sent" || item.status === "preparing")) {
-    actions.push("markReady");
-  }
-  if (canUpdate && itemMutable && order.items.some((item) => item.status === "ready")) actions.push("markDelivered");
-  if (
-    (order.status === "draft" || order.status === "open")
-    && order.items.some((item) => (item.status === "pending" && canCancelPending)
-      || (["sent", "preparing", "ready"].includes(item.status) && canCancelSent))
-  ) actions.push("cancelItem");
   if ((order.status === "open" || order.status === "partially_paid") && roles.some((role) => FINANCIAL_ROLES.has(role))) {
     actions.push("checkout");
+  }
+  return Object.freeze(actions);
+}
+
+/** Per-line actions: `orders.cancel.pending` only ever covers a still-pending line of this very
+ * order; once a line reached KDS ("sent"/"preparing"/"ready"), only `orders.cancel.sent` can offer
+ * cancellation for it, matching the same distinction `OrderService.cancelItem` enforces server-side. */
+function computeItemActions(order: Order, item: Order["items"][number], roles: readonly MembershipRole[]): readonly OrderDetailActionV1[] {
+  const actions: OrderDetailActionV1[] = [];
+  if (order.status === "closed" || order.status === "cancelled") return Object.freeze(actions);
+  const canTransitionKds = rolesGrantPermission(roles, "kds.transition");
+  const canUpdate = rolesGrantPermission(roles, "orders.update");
+  if (canTransitionKds && (item.status === "sent" || item.status === "preparing")) actions.push("markReady");
+  if (canUpdate && item.status === "ready") actions.push("markDelivered");
+  if (order.status === "draft" || order.status === "open") {
+    const canCancel = item.status === "pending"
+      ? rolesGrantPermission(roles, "orders.cancel.pending")
+      : ["sent", "preparing", "ready"].includes(item.status) && rolesGrantPermission(roles, "orders.cancel.sent");
+    if (canCancel) actions.push("cancelItem");
   }
   return Object.freeze(actions);
 }

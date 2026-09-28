@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseBranchScope, type OrderDetailItemV1, type OrderDetailV1 } from "@super-restaurant/shared-types";
-import { actionLabel, groupItemsByStatus, hasAction } from "./order-detail.js";
+import { actionLabel, groupItemsByStatus, hasAction, hasItemAction } from "./order-detail.js";
 
 const parsedScope = parseBranchScope({ restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" });
 if (parsedScope === undefined) throw new Error("Invalid test scope.");
@@ -9,7 +9,7 @@ const scope = parsedScope;
 
 function item(overrides: Partial<OrderDetailItemV1> = {}): OrderDetailItemV1 {
   return {
-    lineTotalMinor: 10_000, modifiers: [], name: "Tacos", note: null,
+    availableActions: [], lineTotalMinor: 10_000, modifiers: [], name: "Tacos", note: null,
     orderItemId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02", quantity: 1, status: "pending", unitPriceMinor: 10_000,
     ...overrides,
   };
@@ -42,6 +42,15 @@ test("hasAction only trusts the server's own availableActions list", () => {
   assert.equal(hasAction(value, "markReady"), true);
   assert.equal(hasAction(value, "open"), false);
   assert.equal(hasAction(value, "checkout"), false);
+});
+
+test("hasItemAction gates per-line actions from the line's own list, never the order-level one", () => {
+  const sentLine = item({ availableActions: ["markReady"], status: "sent" });
+  const pendingLine = item({ availableActions: ["cancelItem"], status: "pending" });
+  assert.equal(hasItemAction(sentLine, "markReady"), true);
+  assert.equal(hasItemAction(sentLine, "cancelItem"), false);
+  assert.equal(hasItemAction(pendingLine, "cancelItem"), true);
+  assert.equal(hasItemAction(pendingLine, "markReady"), false);
 });
 
 test("actionLabel covers every action the server can send", () => {

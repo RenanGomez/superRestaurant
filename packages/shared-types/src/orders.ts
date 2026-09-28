@@ -176,6 +176,14 @@ export interface OrderDetailItemV1 {
   readonly lineTotalMinor: number;
   readonly note: string | null;
   readonly modifiers: readonly OrderDetailModifierV1[];
+  /**
+   * Server-computed per line, from this line's own status plus the caller's granted roles --
+   * `orders.cancel.pending` for a still-pending line vs. `orders.cancel.sent` once it reached KDS.
+   * The order-level `OrderDetailV1.availableActions` only covers order-wide actions (open, send to
+   * kitchen, checkout); a per-line action (cancelItem, markReady, markDelivered) is only ever read
+   * from here, never inferred from the order-level list.
+   */
+  readonly availableActions: readonly OrderDetailActionV1[];
 }
 
 export interface OrderDetailTotalsV1 {
@@ -307,7 +315,7 @@ export function parseOrderDetailV1(value: unknown): OrderDetailV1 | undefined {
 
 function parseDetailItem(value: unknown, currency: string): OrderDetailItemV1 | undefined {
   const record = exactRecord(value, [
-    "orderItemId", "status", "name", "quantity", "unitPriceMinor", "lineTotalMinor", "note", "modifiers",
+    "orderItemId", "status", "name", "quantity", "unitPriceMinor", "lineTotalMinor", "note", "modifiers", "availableActions",
   ]);
   if (record === undefined) return undefined;
   const orderItemId = uuid(own(record, "orderItemId"));
@@ -319,10 +327,11 @@ function parseDetailItem(value: unknown, currency: string): OrderDetailItemV1 | 
   const rawNote = own(record, "note");
   const note = rawNote === null ? null : text(rawNote, 1, 500);
   const rawModifiers = exactDenseArray(own(record, "modifiers"), 5_000);
+  const rawActions = exactDenseArray(own(record, "availableActions"), ORDER_DETAIL_ACTIONS.length);
   if (
     orderItemId === undefined || typeof status !== "string" || !(ORDER_ITEM_STATUSES as readonly string[]).includes(status)
     || name === undefined || quantity === undefined || unitPriceMinor === undefined || lineTotalMinor === undefined
-    || note === undefined || rawModifiers === undefined
+    || note === undefined || rawModifiers === undefined || rawActions === undefined
   ) return undefined;
   const modifiers: OrderDetailModifierV1[] = [];
   for (const raw of rawModifiers) {
@@ -330,10 +339,17 @@ function parseDetailItem(value: unknown, currency: string): OrderDetailItemV1 | 
     if (modifier === undefined) return undefined;
     modifiers.push(modifier);
   }
+  const availableActions: OrderDetailActionV1[] = [];
+  for (const raw of rawActions) {
+    if (typeof raw !== "string" || !(ORDER_DETAIL_ACTIONS as readonly string[]).includes(raw) || availableActions.includes(raw as OrderDetailActionV1)) {
+      return undefined;
+    }
+    availableActions.push(raw as OrderDetailActionV1);
+  }
   void currency;
   return Object.freeze({
-    lineTotalMinor, modifiers: Object.freeze(modifiers), name, note, orderItemId, quantity,
-    status: status as OrderDetailItemV1["status"], unitPriceMinor,
+    availableActions: Object.freeze(availableActions), lineTotalMinor, modifiers: Object.freeze(modifiers),
+    name, note, orderItemId, quantity, status: status as OrderDetailItemV1["status"], unitPriceMinor,
   });
 }
 

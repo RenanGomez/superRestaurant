@@ -508,16 +508,23 @@ test("order service detail scopes access, reduces PII, and computes actions from
   assert.equal(asViewer.fulfillment.addressLabel, null);
   assert.equal(asViewer.totals.itemsTotalMinor, 28_000);
   assert.equal(asViewer.totals.totalMinor, 28_000);
-  assert.deepEqual(asViewer.items.map((item) => ({ status: item.status, lineTotalMinor: item.lineTotalMinor })), [
-    { lineTotalMinor: 25_000, status: "pending" },
-    { lineTotalMinor: 3_000, status: "sent" },
+  assert.deepEqual(asViewer.items.map((item) => ({ availableActions: item.availableActions, lineTotalMinor: item.lineTotalMinor, status: item.status })), [
+    { availableActions: [], lineTotalMinor: 25_000, status: "pending" },
+    { availableActions: [], lineTotalMinor: 3_000, status: "sent" },
   ]);
 
   const asKitchen = await serviceFor(["kitchen"], port).detail(principal, detailRequest);
-  assert.deepEqual(asKitchen.availableActions, ["markReady"]);
+  assert.deepEqual(asKitchen.availableActions, []);
+  assert.deepEqual(asKitchen.items.map((item) => item.availableActions), [[], ["markReady"]]);
 
   const asManager = await serviceFor(["manager"], port).detail(principal, detailRequest);
-  assert.deepEqual(asManager.availableActions, ["open", "sendToKitchen", "markReady", "cancelItem"]);
+  assert.deepEqual(asManager.availableActions, ["open", "sendToKitchen"]);
+  assert.deepEqual(asManager.items.map((item) => item.availableActions), [["cancelItem"], ["markReady", "cancelItem"]]);
+
+  // A role with only orders.cancel.pending (waiter) never sees cancelItem on a line that already
+  // reached KDS, even though the order-level state would otherwise allow it.
+  const asWaiter = await serviceFor(["waiter"], port).detail(principal, detailRequest);
+  assert.deepEqual(asWaiter.items.map((item) => item.availableActions), [["cancelItem"], []]);
 
   const missingPort: OrderPersistencePort = { ...port, read: async () => "missing" };
   await assertCode(serviceFor(["manager"], missingPort).detail(principal, detailRequest), "not_found");
