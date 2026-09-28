@@ -807,10 +807,10 @@ begin
   if pg_catalog.jsonb_typeof(p_order)<>'object' or pg_catalog.jsonb_typeof(p_order_audits)<>'array'
     or not (
       app_private.jsonb_has_exact_keys(p_order,array[
-        'schemaVersion','orderId','restaurantId','branchId','channel','currency','timeZone','status','items'
+        'schemaVersion','orderId','restaurantId','branchId','channel','currency','timeZone','status','items','deliveryCharge'
       ])
       or app_private.jsonb_has_exact_keys(p_order,array[
-        'schemaVersion','orderId','restaurantId','branchId','channel','tableId','currency','timeZone','status','items'
+        'schemaVersion','orderId','restaurantId','branchId','channel','tableId','currency','timeZone','status','items','deliveryCharge'
       ])
     )
     or p_order->>'schemaVersion'<>'1'
@@ -983,6 +983,23 @@ begin
     elsif (frozen_quote->>'expiresAt')::timestamptz <= clock_timestamp() then
       return pg_catalog.jsonb_build_object('status','conflict','reason','delivery_quote_expired');
     end if;
+    -- H13: the Order's frozen delivery charge must be exactly the server's own frozen quote --
+    -- never relaxed to "close enough", and never trusted from the client without this check. The
+    -- API is expected to materialize it from this same quote, but a stale API read (the quote
+    -- moved between the API's workspace read and this transaction) must surface as a conflict,
+    -- not silently persist a mismatched charge.
+    if p_order->'deliveryCharge' is null or pg_catalog.jsonb_typeof(p_order->'deliveryCharge')<>'object'
+      or not app_private.jsonb_has_exact_keys(p_order->'deliveryCharge',array['amount','quoteId'])
+      or pg_catalog.jsonb_typeof(p_order#>'{deliveryCharge,amount}')<>'object'
+      or not app_private.jsonb_has_exact_keys(p_order#>'{deliveryCharge,amount}',array['amountMinor','currency'])
+      or (p_order#>'{deliveryCharge,amount,amountMinor}')::text::numeric is distinct from (frozen_quote->>'feeMinor')::numeric
+      or p_order#>>'{deliveryCharge,amount,currency}' is distinct from p_order->>'currency'
+      or p_order#>>'{deliveryCharge,quoteId}' is distinct from frozen_quote->>'quoteId'
+    then
+      return pg_catalog.jsonb_build_object('status','conflict','reason','delivery_charge_mismatch');
+    end if;
+  elsif p_order->'deliveryCharge' is distinct from 'null'::jsonb then
+    return pg_catalog.jsonb_build_object('status','rejected');
   end if;
 
   -- Staleness is decided from the actual facts that could have invalidated the intent since it
