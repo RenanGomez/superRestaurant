@@ -89,6 +89,12 @@ import {
   OperationalWorkTrayService,
   PostgresOperationalWorkTray,
 } from "./operational-work-tray.js";
+import { BranchOrderWorkTrayController } from "./branch-order-work-tray.controller.js";
+import {
+  BRANCH_ORDER_WORK_TRAY_PORT,
+  BranchOrderWorkTrayService,
+  PostgresBranchOrderWorkTray,
+} from "./branch-order-work-tray.js";
 import { DeliveryZonesController } from "./delivery-zones.controller.js";
 import {
   DELIVERY_ZONE_LIST_PORT,
@@ -117,6 +123,7 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     OperationalShiftsController,
     TableOrderContextController,
     OperationalWorkTrayController,
+    BranchOrderWorkTrayController,
     SystemOnboardingController,
     DeliveryZonesController,
   ],
@@ -211,6 +218,9 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     PostgresOperationalWorkTray,
     { provide: OPERATIONAL_WORK_TRAY_PORT, useExisting: PostgresOperationalWorkTray },
     OperationalWorkTrayService,
+    PostgresBranchOrderWorkTray,
+    { provide: BRANCH_ORDER_WORK_TRAY_PORT, useExisting: PostgresBranchOrderWorkTray },
+    BranchOrderWorkTrayService,
     { provide: SERVER_CLOCK_PORT, useClass: SystemClock },
     PostgresDeliveryZoneStore,
     { provide: DELIVERY_ZONE_LIST_PORT, useExisting: PostgresDeliveryZoneStore },
