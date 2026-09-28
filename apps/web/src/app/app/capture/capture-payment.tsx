@@ -8,7 +8,9 @@ import type {
   CaptureFulfillmentChannelV1,
   DeliveryQuoteV1,
 } from "@super-restaurant/shared-types";
-import { describePaymentMethod, parseMoneyInputToMinor, suggestTenderAmounts } from "../../../lib/capture-payment";
+import {
+  describePaymentMethod, parseMoneyInputToMinor, shouldSubmitTender, suggestTenderAmounts,
+} from "../../../lib/capture-payment";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
 const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
@@ -38,6 +40,10 @@ interface CapturePaymentProps {
 export function CapturePayment({ projection, intent, deliveryQuote, fulfillment, currency, busy,
   onSetIntent, onRefreshIntent }: CapturePaymentProps) {
   const [customTender, setCustomTender] = useState("");
+  // H24: the last amount THIS field actually applied, so an Enter-then-blur pair (or repeated
+  // blurs) never resends the identical amount as a redundant version bump that could stomp a
+  // tip/method change made in between.
+  const [appliedTenderMinor, setAppliedTenderMinor] = useState<number | null>(null);
   const method = intent?.method ?? "cash";
   const tipMinor = intent?.tipMinor ?? 0;
   const tenderedAmountMinor = intent?.tenderedAmountMinor ?? null;
@@ -69,7 +75,8 @@ export function CapturePayment({ projection, intent, deliveryQuote, fulfillment,
   function applyCustomTender(): void {
     if (customTender.trim() === "") return;
     const parsedMinor = parseMoneyInputToMinor(customTender);
-    if (parsedMinor === null) return;
+    if (!shouldSubmitTender(parsedMinor, appliedTenderMinor, tenderedAmountMinor)) return;
+    setAppliedTenderMinor(parsedMinor);
     onSetIntent(method, parsedMinor, tipMinor);
   }
 

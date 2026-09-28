@@ -155,6 +155,21 @@ export function deliveryQuoteBlocksConfirm(
   return null;
 }
 
+/**
+ * H24: "Otro monto" fires on blur, Enter, AND the "Aplicar" button -- pressing Enter already
+ * applies the value, so the blur that immediately follows must not resend the identical amount
+ * (a redundant version bump that can stomp a tip/method change made in between). True only when
+ * the parsed amount is neither the last amount this field actually applied nor the tender the
+ * server's current intent already carries -- either means there is nothing new to send.
+ */
+export function shouldSubmitTender(
+  parsedMinor: number | null,
+  appliedMinor: number | null,
+  currentIntentMinor: number | null,
+): boolean {
+  return parsedMinor !== null && parsedMinor !== appliedMinor && parsedMinor !== currentIntentMinor;
+}
+
 export function describePaymentMethod(
   method: CapturePaymentIntentMethodV1,
   timing: CapturePaymentIntentTimingV1,

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   deliveryQuoteBlocksConfirm, deliveryQuoteScheduledForInputValue, describePaymentMethod, isSwitchingToAnotherCapture,
-  parseMoneyInputToMinor, paymentIntentBlocksConfirm, quoteMatchesRequestedTime, suggestTenderAmounts,
+  parseMoneyInputToMinor, paymentIntentBlocksConfirm, quoteMatchesRequestedTime, shouldSubmitTender,
+  suggestTenderAmounts,
 } from "./capture-payment.js";
 
 const baseQuote = {
@@ -124,6 +125,27 @@ test("H21: deliveryQuoteBlocksConfirm is null for a covered, unexpired quote mat
     deliveryQuoteBlocksConfirm("delivery", baseQuote, "", new Date("2026-09-27T12:00:00Z")),
     null,
   );
+});
+
+test("shouldSubmitTender is false for an unparsable amount, regardless of applied/current state", () => {
+  assert.equal(shouldSubmitTender(null, null, null), false);
+  assert.equal(shouldSubmitTender(null, 5000, 5000), false);
+});
+
+test("H24: shouldSubmitTender is false once the value was already applied by this field", () => {
+  assert.equal(shouldSubmitTender(9000, 9000, null), false);
+});
+
+test("H24: shouldSubmitTender is false when it already matches the server's current intent", () => {
+  // Covers the Enter-then-blur double send: Enter applies 9000 (appliedMinor becomes 9000), the
+  // immediate blur must not resend it.
+  assert.equal(shouldSubmitTender(9000, null, 9000), false);
+  assert.equal(shouldSubmitTender(9000, 9000, 9000), false);
+});
+
+test("H24: shouldSubmitTender is true for a genuinely new amount", () => {
+  assert.equal(shouldSubmitTender(9000, 5000, 5000), true);
+  assert.equal(shouldSubmitTender(9000, null, null), true);
 });
 
 test("suggestTenderAmounts always includes the exact total plus the next 100/200/500-peso roundings above it", () => {
