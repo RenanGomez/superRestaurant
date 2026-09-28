@@ -1655,9 +1655,11 @@ test("payment intent totals exclude the delivery fee outside delivery, and apply
     },
   };
   const persistence: CapturePaymentIntentPort = {
-    setCapturePaymentIntent: async (actorId, submittedCommand) => {
+    probeSetPaymentIntent: async () => ({ status: "pending" }),
+    setCapturePaymentIntent: async (actorId, envelope, basisFingerprint) => {
       assert.equal(actorId, principal.actorId);
-      capturedBasis = (submittedCommand as { basisFingerprint: string }).basisFingerprint;
+      assert.equal((envelope as { basisFingerprint?: unknown }).basisFingerprint, undefined);
+      capturedBasis = basisFingerprint;
       assert.match(capturedBasis, /^[0-9a-f]{64}$/u);
       return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
     },

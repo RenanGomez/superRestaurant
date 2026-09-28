@@ -385,9 +385,14 @@ grant execute on function app_private.probe_capture_delivery_quote_set(uuid,json
 comment on function app_private.probe_capture_delivery_quote_set(uuid,jsonb) is
   'Read-only idempotency probe for set_capture_delivery_quote: recognizes a replay purely from actor+scope+idempotencyKey+fingerprint before the API recomputes the delivery quote, so a retry after a lost response is never turned into a spurious conflict by a freshly recomputed quotedAt/quoteId.';
 
+-- p_command carries only the client-visible envelope (never basisFingerprint): the fingerprint
+-- hashed over it must stay identical to the one probe_capture_payment_intent_set computes, below,
+-- so a retry with the same idempotencyKey is recognized as the original apply regardless of
+-- whether the API's freshly recomputed basisFingerprint (p_basis_fingerprint) still matches.
 create function app_private.set_capture_payment_intent(
   p_actor_id uuid,
-  p_command jsonb
+  p_command jsonb,
+  p_basis_fingerprint text
 ) returns jsonb
 language plpgsql
 volatile
@@ -398,12 +403,11 @@ declare
   restaurant uuid; branch uuid; capture uuid; event uuid; device uuid; member uuid; lease uuid;
   expected bigint; occurred timestamptz; observed timestamptz; fingerprint text; result_record jsonb;
   current_capture app.capture_drafts%rowtype; stored app.capture_command_events%rowtype;
-  basis text;
 begin
   if p_actor_id is null
     or not app_private.jsonb_has_exact_keys(p_command, array[
       'schemaVersion','scope','captureDraftId','expectedVersion','eventId','idempotencyKey','deviceId','occurredAt',
-      'attentionLeaseId','method','tenderedAmountMinor','tipMinor','basisFingerprint'
+      'attentionLeaseId','method','tenderedAmountMinor','tipMinor'
     ])
     or not app_private.jsonb_has_exact_keys(p_command->'scope', array['restaurantId','branchId'])
     or p_command->'schemaVersion' is distinct from '1'::jsonb
@@ -415,7 +419,7 @@ begin
       or (p_command->>'method' = 'cash' and coalesce(p_command->>'tenderedAmountMinor' ~ '^[0-9]+$', false))
     )
     or not coalesce(p_command->>'tipMinor' ~ '^[0-9]+$', false)
-    or not coalesce(p_command->>'basisFingerprint' ~ '^[0-9a-f]{64}$', false)
+    or p_basis_fingerprint is null or p_basis_fingerprint !~ '^[0-9a-f]{64}$'
   then return pg_catalog.jsonb_build_object('status','rejected'); end if;
 
   begin
@@ -479,7 +483,6 @@ begin
     'version',expected+1,
     'updatedAt',pg_catalog.to_char(observed at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
   ));
-  basis := p_command->>'basisFingerprint';
 
   insert into app.capture_payment_intents(
     restaurant_id,branch_id,capture_draft_id,intent,applied_capture_version,basis_fingerprint,
@@ -488,7 +491,7 @@ begin
     restaurant,branch,capture,pg_catalog.jsonb_build_object(
       'schemaVersion',1,'method',p_command->'method','tenderedAmountMinor',p_command->'tenderedAmountMinor',
       'tipMinor',p_command->'tipMinor'
-    ),expected+1,basis,p_command->>'idempotencyKey',fingerprint,p_actor_id,member,device,occurred,observed
+    ),expected+1,p_basis_fingerprint,p_command->>'idempotencyKey',fingerprint,p_actor_id,member,device,occurred,observed
   ) on conflict (restaurant_id,branch_id,capture_draft_id) do update set
     intent=excluded.intent, applied_capture_version=excluded.applied_capture_version,
     basis_fingerprint=excluded.basis_fingerprint, idempotency_key=excluded.idempotency_key,
@@ -510,13 +513,104 @@ begin
 end
 $function$;
 
-alter function app_private.set_capture_payment_intent(uuid,jsonb) owner to postgres;
-revoke all on function app_private.set_capture_payment_intent(uuid,jsonb)
+alter function app_private.set_capture_payment_intent(uuid,jsonb,text) owner to postgres;
+revoke all on function app_private.set_capture_payment_intent(uuid,jsonb,text)
   from public, anon, authenticated, service_role, app_api;
-grant execute on function app_private.set_capture_payment_intent(uuid,jsonb) to app_api;
+grant execute on function app_private.set_capture_payment_intent(uuid,jsonb,text) to app_api;
 
-comment on function app_private.set_capture_payment_intent(uuid,jsonb) is
-  'Freezes the customer''s stated payment intent after lease/CAS revalidation. basisFingerprint is supplied by the API (sha256 of catalogVersion + ordered line facts + delivery fee at set-time) and is compared at read/confirm time to detect staleness; no Payment or CashMovement is implied.';
+comment on function app_private.set_capture_payment_intent(uuid,jsonb,text) is
+  'Freezes the customer''s stated payment intent after lease/CAS revalidation. p_basis_fingerprint is supplied by the API (sha256 of catalogVersion + ordered line facts + delivery fee at set-time) and is compared at read/confirm time to detect staleness; no Payment or CashMovement is implied. p_command never carries the basis, so a retry with the same idempotencyKey is recognized as a replay even if repricing since the original apply produced a different fingerprint.';
+
+-- Read-only idempotency probe, mirroring probe_capture_delivery_quote_set: recognizes a replay
+-- purely from actor+scope+idempotencyKey+fingerprint over the client's own command BEFORE the API
+-- re-reads the workspace and reprices the basis. Without this, a retry with the same
+-- idempotencyKey after the lines changed (or after a lost response) would recompute a different
+-- basisFingerprint and could be rejected as insufficient/conflict instead of being recognized as
+-- the original apply.
+create function app_private.probe_capture_payment_intent_set(
+  p_actor_id uuid,
+  p_command jsonb
+) returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $function$
+declare
+  restaurant uuid; branch uuid; capture uuid; event uuid; device uuid; lease uuid;
+  expected bigint; occurred timestamptz; fingerprint text;
+  stored app.capture_command_events%rowtype;
+begin
+  if p_actor_id is null
+    or not app_private.jsonb_has_exact_keys(p_command, array[
+      'schemaVersion','scope','captureDraftId','expectedVersion','eventId','idempotencyKey','deviceId','occurredAt',
+      'attentionLeaseId','method','tenderedAmountMinor','tipMinor'
+    ])
+    or not app_private.jsonb_has_exact_keys(p_command->'scope', array['restaurantId','branchId'])
+    or p_command->'schemaVersion' is distinct from '1'::jsonb
+    or not coalesce(p_command->>'expectedVersion' ~ '^[1-9][0-9]*$', false)
+    or not coalesce(p_command->>'idempotencyKey' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', false)
+    or p_command->>'method' not in ('cash','card_manual','transfer')
+    or not (
+      p_command->'tenderedAmountMinor' = 'null'::jsonb
+      or (p_command->>'method' = 'cash' and coalesce(p_command->>'tenderedAmountMinor' ~ '^[0-9]+$', false))
+    )
+    or not coalesce(p_command->>'tipMinor' ~ '^[0-9]+$', false)
+  then return pg_catalog.jsonb_build_object('status','rejected'); end if;
+
+  begin
+    restaurant := (p_command#>>'{scope,restaurantId}')::uuid;
+    branch := (p_command#>>'{scope,branchId}')::uuid;
+    capture := (p_command->>'captureDraftId')::uuid;
+    event := (p_command->>'eventId')::uuid;
+    device := (p_command->>'deviceId')::uuid;
+    lease := (p_command->>'attentionLeaseId')::uuid;
+    expected := (p_command->>'expectedVersion')::bigint;
+    occurred := (p_command->>'occurredAt')::timestamptz;
+  exception when invalid_text_representation or numeric_value_out_of_range or datetime_field_overflow or invalid_datetime_format then
+    return pg_catalog.jsonb_build_object('status','rejected');
+  end;
+  if restaurant is null or branch is null or capture is null or event is null or device is null or lease is null
+    or expected not between 1 and 9007199254740990 or occurred is null
+    or p_command#>>'{scope,restaurantId}' is distinct from restaurant::text
+    or p_command#>>'{scope,branchId}' is distinct from branch::text
+    or p_command->>'occurredAt' is distinct from pg_catalog.to_char(occurred at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  then return pg_catalog.jsonb_build_object('status','rejected'); end if;
+
+  if not exists (
+    select 1
+    from app.memberships m
+    join app.branches b on b.id=m.branch_id and b.restaurant_id=m.restaurant_id
+    join app.restaurants r on r.id=m.restaurant_id
+    join app.membership_role_grants g on g.membership_id=m.id
+    where m.user_id=p_actor_id and m.restaurant_id=restaurant and m.branch_id=branch
+      and m.revoked_at is null and b.disabled_at is null and r.disabled_at is null and g.revoked_at is null
+      and g.role_code in ('owner','admin','manager','supervisor','cashier','waiter')
+  ) then return pg_catalog.jsonb_build_object('status','denied'); end if;
+
+  fingerprint := pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+    'capture.payment_intent_set:'||p_command::text||':'||p_actor_id::text, 'UTF8'
+  )), 'hex');
+  select * into stored from app.capture_command_events
+  where actor_id=p_actor_id and restaurant_id=restaurant and branch_id=branch
+    and idempotency_key=p_command->>'idempotencyKey';
+  if found then
+    if stored.operation <> 'capture.payment_intent_set' or stored.command_fingerprint <> fingerprint then
+      return pg_catalog.jsonb_build_object('status','conflict');
+    end if;
+    return pg_catalog.jsonb_build_object('status','replayed','record',stored.result_capture);
+  end if;
+  return pg_catalog.jsonb_build_object('status','pending');
+end
+$function$;
+
+alter function app_private.probe_capture_payment_intent_set(uuid,jsonb) owner to postgres;
+revoke all on function app_private.probe_capture_payment_intent_set(uuid,jsonb)
+  from public, anon, authenticated, service_role, app_api;
+grant execute on function app_private.probe_capture_payment_intent_set(uuid,jsonb) to app_api;
+
+comment on function app_private.probe_capture_payment_intent_set(uuid,jsonb) is
+  'Read-only idempotency probe for set_capture_payment_intent: recognizes a replay purely from actor+scope+idempotencyKey+fingerprint over the client''s command before the API re-reads the workspace and reprices the basis, so a retry after the lines changed (or a lost response) is never turned into a spurious insufficient/conflict by a freshly recomputed basisFingerprint.';
 
 create function app_private.read_capture_workspace_v5(p_actor_id uuid, p_request jsonb)
 returns jsonb

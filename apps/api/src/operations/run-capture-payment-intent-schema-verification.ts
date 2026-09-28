@@ -38,13 +38,15 @@ const SUMMARY_SQL = `select
 const REGPROC_SQL = `select
   to_regprocedure('app_private.set_capture_delivery_quote(uuid,jsonb,jsonb)') is not null as "hasSetDeliveryQuote",
   to_regprocedure('app_private.probe_capture_delivery_quote_set(uuid,jsonb)') is not null as "hasProbeDeliveryQuoteSet",
-  to_regprocedure('app_private.set_capture_payment_intent(uuid,jsonb)') is not null as "hasSetPaymentIntent",
+  to_regprocedure('app_private.set_capture_payment_intent(uuid,jsonb,text)') is not null as "hasSetPaymentIntent",
+  to_regprocedure('app_private.probe_capture_payment_intent_set(uuid,jsonb)') is not null as "hasProbePaymentIntentSet",
   to_regprocedure('app_private.read_capture_workspace_v5(uuid,jsonb)') is not null as "hasReadWorkspaceV5"`;
 
 const REMOVED_REGPROC_SQL = `select
   to_regprocedure('app_private.set_capture_delivery_quote(uuid,jsonb,jsonb)') is null as "setDeliveryQuoteAbsent",
   to_regprocedure('app_private.probe_capture_delivery_quote_set(uuid,jsonb)') is null as "probeDeliveryQuoteSetAbsent",
-  to_regprocedure('app_private.set_capture_payment_intent(uuid,jsonb)') is null as "setPaymentIntentAbsent",
+  to_regprocedure('app_private.set_capture_payment_intent(uuid,jsonb,text)') is null as "setPaymentIntentAbsent",
+  to_regprocedure('app_private.probe_capture_payment_intent_set(uuid,jsonb)') is null as "probePaymentIntentSetAbsent",
   to_regprocedure('app_private.read_capture_workspace_v5(uuid,jsonb)') is null as "readWorkspaceV5Absent"`;
 
 function executable(name: string): string {
@@ -128,7 +130,8 @@ try {
     migrated = (await admin.query(SUMMARY_SQL)).rows[0];
     const regprocs = (await admin.query(REGPROC_SQL)).rows[0];
     assert.deepEqual(regprocs, {
-      hasSetDeliveryQuote: true, hasProbeDeliveryQuoteSet: true, hasSetPaymentIntent: true, hasReadWorkspaceV5: true,
+      hasSetDeliveryQuote: true, hasProbeDeliveryQuoteSet: true, hasSetPaymentIntent: true,
+      hasProbePaymentIntentSet: true, hasReadWorkspaceV5: true,
     });
     await admin.query(extractMigrationBody(invariantsSql));
   } catch (error: unknown) {
@@ -142,7 +145,8 @@ try {
     postcheck = (await admin.query(SUMMARY_SQL)).rows[0];
     const removed = (await admin.query(REMOVED_REGPROC_SQL)).rows[0];
     assert.deepEqual(removed, {
-      setDeliveryQuoteAbsent: true, probeDeliveryQuoteSetAbsent: true, setPaymentIntentAbsent: true, readWorkspaceV5Absent: true,
+      setDeliveryQuoteAbsent: true, probeDeliveryQuoteSetAbsent: true, setPaymentIntentAbsent: true,
+      probePaymentIntentSetAbsent: true, readWorkspaceV5Absent: true,
     });
   } finally { await admin.query("ROLLBACK"); }
 
@@ -150,7 +154,7 @@ try {
   assert.deepEqual(baseline, postcheck);
   assert.equal(baseline.policies, migrated.policies);
   assert.equal(migrated.securedTables - baseline.securedTables, 2);
-  assert.equal(migrated.securityDefinerFunctions - baseline.securityDefinerFunctions, 4);
+  assert.equal(migrated.securityDefinerFunctions - baseline.securityDefinerFunctions, 5);
 
   process.stdout.write(`${JSON.stringify({
     stage: "capture_payment_intent_rollback", status: "ok", runId,

@@ -44,6 +44,7 @@ declare
   quote_command jsonb;
   quote jsonb;
   intent_command jsonb;
+  intent_basis text;
   autosave_command jsonb;
   plan_command jsonb;
   plan jsonb;
@@ -203,15 +204,23 @@ begin
     ),'captureDraftId',target_capture::text,'expectedVersion',4,'attentionLeaseId',lease,
     'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
     'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    'method','cash','tenderedAmountMinor',20000,'tipMinor',1500,
-    'basisFingerprint',pg_catalog.encode(pg_catalog.sha256('fixture-basis'::bytea),'hex')
+    'method','cash','tenderedAmountMinor',20000,'tipMinor',1500
   );
+  intent_basis := pg_catalog.encode(pg_catalog.sha256('fixture-basis'::bytea),'hex');
+
+  -- The probe alone recognizes a replay purely from actor+scope+idempotencyKey+fingerprint over
+  -- the client's own command, before the API ever repriced a basis; a foreign command must never
+  -- be reported as pending.
+  execute 'set local role app_api';
+  result := app_private.probe_capture_payment_intent_set(actor,intent_command);
+  execute 'reset role';
+  if result->>'status'<>'pending' then raise exception 'CAPTURE_PAYMENT_INTENT_PROBE_NOT_PENDING'; end if;
 
   -- Foreign lease is refused.
   execute 'set local role app_api';
   result := app_private.set_capture_payment_intent(actor,intent_command||pg_catalog.jsonb_build_object(
     'attentionLeaseId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text
-  ));
+  ),intent_basis);
   execute 'reset role';
   if result->>'status'<>'conflict' then raise exception 'CAPTURE_PAYMENT_INTENT_FOREIGN_LEASE_ACCEPTED'; end if;
 
@@ -219,13 +228,13 @@ begin
   execute 'set local role app_api';
   result := app_private.set_capture_payment_intent(actor,intent_command||pg_catalog.jsonb_build_object(
     'idempotencyKey',gen_random_uuid()::text,'method','transfer'
-  ));
+  ),intent_basis);
   execute 'reset role';
   if result->>'status'<>'rejected' then raise exception 'CAPTURE_PAYMENT_INTENT_NONCASH_TENDER_ACCEPTED'; end if;
 
   -- version 4 -> 5: apply.
   execute 'set local role app_api';
-  result := app_private.set_capture_payment_intent(actor,intent_command);
+  result := app_private.set_capture_payment_intent(actor,intent_command,intent_basis);
   execute 'reset role';
   if result->>'status'<>'applied' then raise exception 'CAPTURE_PAYMENT_INTENT_APPLY_REJECTED'; end if;
   if not exists (
@@ -238,11 +247,28 @@ begin
     where stored.restaurant_id=restaurant and stored.branch_id=branch and stored.capture_draft_id=other_capture
   ) then raise exception 'CAPTURE_PAYMENT_INTENT_LEAKED_ACROSS_CAPTURES'; end if;
 
-  -- Replay: identical idempotency key returns the same applied record.
+  -- H2: replay after repricing. The lines changed since the original apply, so a naive retry
+  -- would recompute a DIFFERENT basisFingerprint for the same idempotencyKey; the probe must
+  -- still recognize it as the original apply (from the client command alone) and the real write
+  -- path must return the SAME stored record, never insufficient/conflict from the new basis.
   execute 'set local role app_api';
-  result := app_private.set_capture_payment_intent(actor,intent_command);
+  result := app_private.probe_capture_payment_intent_set(actor,intent_command);
+  execute 'reset role';
+  if result->>'status'<>'replayed' then raise exception 'CAPTURE_PAYMENT_INTENT_PROBE_REPLAY_REJECTED'; end if;
+  if (result->'record'->'detail'->>'version')::bigint<>5 then
+    raise exception 'CAPTURE_PAYMENT_INTENT_PROBE_REPLAY_VERSION_MISMATCH';
+  end if;
+  execute 'set local role app_api';
+  result := app_private.set_capture_payment_intent(
+    actor,intent_command,pg_catalog.encode(pg_catalog.sha256('fixture-basis-repriced'::bytea),'hex')
+  );
   execute 'reset role';
   if result->>'status'<>'replayed' then raise exception 'CAPTURE_PAYMENT_INTENT_REPLAY_REJECTED'; end if;
+  if not exists (
+    select 1 from app.capture_payment_intents stored
+    where stored.restaurant_id=restaurant and stored.branch_id=branch and stored.capture_draft_id=target_capture
+      and stored.basis_fingerprint=intent_basis
+  ) then raise exception 'CAPTURE_PAYMENT_INTENT_REPLAY_OVERWROTE_BASIS'; end if;
 
   -- Leaving draft (no_sale, last touch on this capture) clears the payment intent too.
   update app.capture_drafts set status='no_sale',attention_status='unclaimed',
@@ -368,11 +394,12 @@ begin
     ),'captureDraftId',confirm_capture::text,'expectedVersion',5,'attentionLeaseId',lease,
     'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
     'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    'method','cash','tenderedAmountMinor',10000,'tipMinor',500,
-    'basisFingerprint',pg_catalog.encode(pg_catalog.sha256('fixture-basis-confirm'::bytea),'hex')
+    'method','cash','tenderedAmountMinor',10000,'tipMinor',500
   );
   execute 'set local role app_api';
-  result := app_private.set_capture_payment_intent(actor,intent_command);
+  result := app_private.set_capture_payment_intent(
+    actor,intent_command,pg_catalog.encode(pg_catalog.sha256('fixture-basis-confirm'::bytea),'hex')
+  );
   execute 'reset role';
   if result->>'status'<>'applied' then raise exception 'CAPTURE_PAYMENT_INTENT_CONFIRM_INTENT_REJECTED'; end if;
 
@@ -657,11 +684,12 @@ begin
     ),'captureDraftId',stale_capture::text,'expectedVersion',1,'attentionLeaseId',lease,
     'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
     'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    'method','cash','tenderedAmountMinor',5000,'tipMinor',0,
-    'basisFingerprint',pg_catalog.encode(pg_catalog.sha256('fixture-basis-stale'::bytea),'hex')
+    'method','cash','tenderedAmountMinor',5000,'tipMinor',0
   );
   execute 'set local role app_api';
-  result := app_private.set_capture_payment_intent(actor,intent_command);
+  result := app_private.set_capture_payment_intent(
+    actor,intent_command,pg_catalog.encode(pg_catalog.sha256('fixture-basis-stale'::bytea),'hex')
+  );
   execute 'reset role';
   if result->>'status'<>'applied' then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_SET_REJECTED'; end if;
   -- Payment intent's applied_capture_version is now 2 (set at version 1 -> 2).
@@ -761,11 +789,12 @@ begin
     ),'captureDraftId',stale_lines_capture::text,'expectedVersion',2,'attentionLeaseId',lease,
     'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
     'occurredAt',pg_catalog.to_char(now_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    'method','cash','tenderedAmountMinor',5000,'tipMinor',0,
-    'basisFingerprint',pg_catalog.encode(pg_catalog.sha256('fixture-basis-stale-lines'::bytea),'hex')
+    'method','cash','tenderedAmountMinor',5000,'tipMinor',0
   );
   execute 'set local role app_api';
-  result := app_private.set_capture_payment_intent(actor,intent_command);
+  result := app_private.set_capture_payment_intent(
+    actor,intent_command,pg_catalog.encode(pg_catalog.sha256('fixture-basis-stale-lines'::bytea),'hex')
+  );
   execute 'reset role';
   if result->>'status'<>'applied' then raise exception 'CAPTURE_PAYMENT_INTENT_STALE_LINES_SET_REJECTED'; end if;
   -- Payment intent's applied_capture_version is now 3.

@@ -184,7 +184,8 @@ export interface CaptureDeliveryQuotePort {
 }
 export const CAPTURE_DELIVERY_QUOTE_PORT = Symbol("CAPTURE_DELIVERY_QUOTE_PORT");
 export interface CapturePaymentIntentPort {
-  setCapturePaymentIntent(actorId: string, command: Record<string, unknown>): Promise<unknown>;
+  setCapturePaymentIntent(actorId: string, envelope: Record<string, unknown>, basisFingerprint: string): Promise<unknown>;
+  probeSetPaymentIntent(actorId: string, envelope: Record<string, unknown>): Promise<unknown>;
 }
 export const CAPTURE_PAYMENT_INTENT_PORT = Symbol("CAPTURE_PAYMENT_INTENT_PORT");
 /**
@@ -328,11 +329,27 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     return row.result;
   }
 
-  public async setCapturePaymentIntent(actorId: string, command: Record<string, unknown>): Promise<unknown> {
+  public async setCapturePaymentIntent(
+    actorId: string,
+    envelope: Record<string, unknown>,
+    basisFingerprint: string,
+  ): Promise<unknown> {
     if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
     const response = await this.database.query(
-      "select app_private.set_capture_payment_intent($1::uuid, $2::jsonb) as result",
-      [actorId, JSON.stringify(command)],
+      "select app_private.set_capture_payment_intent($1::uuid, $2::jsonb, $3::text) as result",
+      [actorId, JSON.stringify(envelope), basisFingerprint],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async probeSetPaymentIntent(actorId: string, envelope: Record<string, unknown>): Promise<unknown> {
+    if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.probe_capture_payment_intent_set($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(envelope)],
     );
     if (response.rows.length !== 1) throw unavailable();
     const row = exactRecord(response.rows[0], ["result"]);
@@ -1433,6 +1450,44 @@ export class CapturePaymentIntentService {
     try { actorId = (await this.authorization.authorizeBranch(principal, command.scope, "captures.update")).principal.actorId; }
     catch { throw new CaptureApplicationError("authorization"); }
 
+    // The envelope never carries basisFingerprint: it is hashed for idempotency exactly like
+    // this, both here and in the SQL probe/write, so a retry with the same idempotencyKey is
+    // recognized as the original apply regardless of whether repricing produces a different basis.
+    const envelope = {
+      attentionLeaseId: command.attentionLeaseId,
+      captureDraftId: command.captureDraftId,
+      deviceId: command.deviceId,
+      eventId: command.eventId,
+      expectedVersion: command.expectedVersion,
+      idempotencyKey: command.idempotencyKey,
+      method: command.method,
+      occurredAt: command.occurredAt,
+      schemaVersion: 1,
+      scope: command.scope,
+      tenderedAmountMinor: command.tenderedAmountMinor,
+      tipMinor: command.tipMinor,
+    };
+
+    // Idempotency is decided purely by actor+scope+idempotencyKey+fingerprint over the client's
+    // own envelope, entirely independent of the (freshly re-read and repriced) basis fingerprint.
+    // Probing it first -- before ever re-reading the workspace or repricing -- means a retry after
+    // a lost response, or after the lines/quote changed since the original apply, is always
+    // recognized as the original apply, never turned into a spurious insufficient/conflict by a
+    // freshly recomputed basis that no longer matches what was actually stored.
+    let rawProbe: unknown;
+    try { rawProbe = await this.persistence.probeSetPaymentIntent(actorId, envelope); } catch { throw unavailable(); }
+    const probe = exactRecord(rawProbe, ["status", "record"]);
+    if (probe?.status === "replayed") {
+      return readCaptureWorkspaceV5WithProjections(
+        actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
+      );
+    }
+    const probeStatus = exactRecord(rawProbe, ["status"]);
+    if (probeStatus?.status === "denied") throw new CaptureApplicationError("authorization");
+    if (probeStatus?.status === "conflict") throw new CaptureApplicationError("conflict");
+    if (probeStatus?.status === "rejected") throw new CaptureApplicationError("request");
+    if (probeStatus?.status !== "pending") throw unavailable();
+
     const before = await readCaptureWorkspaceV5WithProjections(
       actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
     );
@@ -1487,23 +1542,8 @@ export class CapturePaymentIntentService {
       catalogVersion: basisCatalogVersion, currency, deliveryFeeMinor, lines: basisLines,
     });
 
-    const sqlCommand = {
-      attentionLeaseId: command.attentionLeaseId,
-      basisFingerprint,
-      captureDraftId: command.captureDraftId,
-      deviceId: command.deviceId,
-      eventId: command.eventId,
-      expectedVersion: command.expectedVersion,
-      idempotencyKey: command.idempotencyKey,
-      method: command.method,
-      occurredAt: command.occurredAt,
-      schemaVersion: 1,
-      scope: command.scope,
-      tenderedAmountMinor: command.tenderedAmountMinor,
-      tipMinor: command.tipMinor,
-    };
     let raw: unknown;
-    try { raw = await this.persistence.setCapturePaymentIntent(actorId, sqlCommand); } catch { throw unavailable(); }
+    try { raw = await this.persistence.setCapturePaymentIntent(actorId, envelope, basisFingerprint); } catch { throw unavailable(); }
     const envelopeResult = exactRecord(raw, ["status", "record"]);
     if (envelopeResult?.status !== "applied" && envelopeResult?.status !== "replayed") {
       const statusOnly = exactRecord(raw, ["status"]);
