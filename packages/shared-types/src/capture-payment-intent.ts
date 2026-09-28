@@ -73,6 +73,49 @@ export interface SetCapturePaymentIntentCommandV1 extends HoldCaptureDraftComman
 }
 
 /**
+ * Requests a fresh, API-computed delivery-fee quote be frozen against a held,
+ * delivery-channel capture. Versioned and leased like `SetCaptureFulfillmentCommandV1`;
+ * `scheduledFor` is optional (`null` means "as soon as possible").
+ */
+export interface RequestCaptureDeliveryQuoteCommandV1 extends HoldCaptureDraftCommandV1 {
+  readonly scheduledFor: string | null;
+}
+
+export function parseRequestCaptureDeliveryQuoteCommandV1(value: unknown): RequestCaptureDeliveryQuoteCommandV1 | undefined {
+  return safely(() => {
+    const record = exactRecord(value, [
+      "schemaVersion", "scope", "captureDraftId", "expectedVersion", "eventId", "idempotencyKey", "deviceId",
+      "occurredAt", "attentionLeaseId", "scheduledFor",
+    ]);
+    if (record === undefined) return undefined;
+    const common = parseHoldCaptureDraftCommandV1({
+      schemaVersion: own(record, "schemaVersion"),
+      scope: own(record, "scope"),
+      captureDraftId: own(record, "captureDraftId"),
+      expectedVersion: own(record, "expectedVersion"),
+      eventId: own(record, "eventId"),
+      idempotencyKey: own(record, "idempotencyKey"),
+      deviceId: own(record, "deviceId"),
+      occurredAt: own(record, "occurredAt"),
+      attentionLeaseId: own(record, "attentionLeaseId"),
+    });
+    const rawScheduledFor = own(record, "scheduledFor");
+    const scheduledFor = rawScheduledFor === null ? null : timestamp(rawScheduledFor);
+    if (common === undefined || scheduledFor === undefined) return undefined;
+    return Object.freeze({ ...common, scheduledFor });
+  });
+}
+
+function timestamp(value: unknown): string | undefined {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)) return undefined;
+  try {
+    return new Date(value).toISOString() === value ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Server-computed projection of the capture payment intent against the
  * authoritative total (items subtotal + frozen delivery fee when
  * applicable). The tip is informational and is excluded from

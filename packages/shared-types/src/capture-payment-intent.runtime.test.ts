@@ -2,6 +2,7 @@ import {
   parseCapturePaymentIntentProjectionV1,
   parseCapturePaymentIntentV1,
   parseCaptureWorkspaceV5,
+  parseRequestCaptureDeliveryQuoteCommandV1,
   parseSetCapturePaymentIntentCommandV1,
 } from "./index.js";
 
@@ -130,3 +131,25 @@ expect(parseCaptureWorkspaceV5({
   schemaVersion: 5,
 }) === undefined, "workspace V5 rejects a projection whose method diverges from the intent");
 expect(parseCaptureWorkspaceV5({ ...workspace, schemaVersion: 4 }) === undefined, "workspace V5 requires its own schema version");
+
+const deliveryQuoteCommand = {
+  attentionLeaseId: command.attentionLeaseId,
+  captureDraftId: command.captureDraftId,
+  deviceId: command.deviceId,
+  eventId: command.eventId,
+  expectedVersion: command.expectedVersion,
+  idempotencyKey: command.idempotencyKey,
+  occurredAt: command.occurredAt,
+  schemaVersion: 1,
+  scheduledFor: null,
+  scope: command.scope,
+} as const;
+const parsedDeliveryQuoteCommand = parseRequestCaptureDeliveryQuoteCommandV1(deliveryQuoteCommand);
+expect(parsedDeliveryQuoteCommand !== undefined && Object.isFrozen(parsedDeliveryQuoteCommand),
+  "delivery quote command parses frozen with no scheduledFor");
+expect(parseRequestCaptureDeliveryQuoteCommandV1({ ...deliveryQuoteCommand, scheduledFor: "2026-09-28T12:00:00.000Z" }) !== undefined,
+  "delivery quote command accepts an explicit scheduledFor");
+expect(parseRequestCaptureDeliveryQuoteCommandV1({ ...deliveryQuoteCommand, scheduledFor: "not-a-date" }) === undefined,
+  "delivery quote command rejects a malformed scheduledFor");
+expect(parseRequestCaptureDeliveryQuoteCommandV1({ ...deliveryQuoteCommand, extra: true }) === undefined,
+  "delivery quote command rejects unknown keys");
