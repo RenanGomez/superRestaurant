@@ -1966,6 +1966,47 @@ test("payment intent projection is stale once the lines change after the intent'
   assert.equal(workspace.paymentProjection?.status, "stale");
 });
 
+test("H19: changing the fulfillment channel after the intent was fixed reports the projection stale, same lines and all", async () => {
+  // The exact live fingerprint for fulfillmentChannel "counter" (timing "now"): one line,
+  // qty 2 @ 4_500 = 9_000, no delivery fee/quote, matching selectionPlanCommand/selectionCatalog.
+  const counterFingerprint = createHash("sha256").update(JSON.stringify({
+    catalogVersion: selectionCatalog.catalogVersion, currency: "MXN", deliveryFeeMinor: 0,
+    fulfillmentChannel: "counter",
+    lines: [{
+      id: selectionPlanCommand!.plan.lines[0]!.lineId, modifierGroups: [],
+      note: null, productId: selectionCatalog.products[0]!.productId, quantity: 2,
+    }],
+    quoteId: null, timing: "now",
+  })).digest("hex");
+  const captures = (fulfillmentChannel: "counter" | "pickup"): CaptureCreationPort => ({
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => makeCaptureV5Fixture({
+      fulfillmentChannel, deliveryQuote: null,
+      paymentIntent: { schemaVersion: 1, method: "cash", tenderedAmountMinor: 9_000, tipMinor: 0 },
+      paymentIntentAppliedCaptureVersion: 2, paymentIntentBasisFingerprint: counterFingerprint, version: 3,
+    }),
+  });
+  const counterService = new CaptureService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), captures("counter"), paymentSelectionConfirmation, paymentCatalogPort);
+  const workspaceRequest = { schemaVersion: 5, scope: validCommand.scope, captureDraftId: validCommand.captureDraftId };
+  const counterWorkspace = await counterService.readWorkspace(principal, workspaceRequest) as {
+    paymentProjection?: { status?: string };
+  };
+  assert.equal(counterWorkspace.paymentProjection?.status, "ready");
+
+  // Same stored fingerprint, same lines/tender -- only the fulfillment channel changed
+  // (counter -> pickup, exactly H19's scenario), which changes the derived timing that the
+  // basis is priced against. Before H19 this fingerprint would still match and read "ready".
+  const pickupService = new CaptureService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), captures("pickup"), paymentSelectionConfirmation, paymentCatalogPort);
+  const pickupWorkspace = await pickupService.readWorkspace(principal, workspaceRequest) as {
+    paymentProjection?: { status?: string };
+  };
+  assert.equal(pickupWorkspace.paymentProjection?.status, "stale");
+});
+
 test("H8: reading a workspace whose selection plan cannot presently be priced never reports the payment intent ready", async () => {
   // Same shape of bug as H5, on the READ side: the stored basis fingerprint happens to still match
   // (catalogVersion "" + no lines + the frozen quote's identity, exactly what an unpriced plan
