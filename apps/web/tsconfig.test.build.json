@@ -42,6 +42,8 @@
     "src/lib/capture-payment.test.ts",
     "src/lib/delivery-zones.ts",
     "src/lib/delivery-zones.test.ts",
+    "src/lib/branch-order-work-tray.ts",
+    "src/lib/branch-order-work-tray.test.ts",
     "src/lib/shortcut-dispatch.ts",
     "src/lib/shortcut-dispatch.test.ts",
     "src/lib/system-onboarding.ts",
