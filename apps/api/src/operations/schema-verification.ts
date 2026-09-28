@@ -5,8 +5,11 @@ import { loadAndValidateCaCertificate } from "../database.js";
 const FORBIDDEN_PROJECT_REF = "cxcnnhafchqslvgvkeye";
 const PROJECT_REF_PATTERN = /^[a-z0-9]{20}$/u;
 const CONFIRMATION = "ROLLBACK_ONLY";
+// Reserved for read-only migration preflight/postcheck tooling only (never a mutation path):
+// these never run migration SQL, never open a mutating transaction, and always end in ROLLBACK.
+const READ_ONLY_CONFIRMATION = "READ_ONLY";
 
-const SUMMARY_SQL = `
+export const SUMMARY_SQL = `
 select
   (
     select count(*)::integer
@@ -127,10 +130,15 @@ const LOCAL_CLUSTER_HOSTS = new Set(["127.0.0.1", "::1"]);
  * sslmode (plaintext loopback, never a relaxed TLS mode). Never touches, weakens, or is reachable
  * from the remote verification path.
  */
-function readLocalClusterSchemaVerificationConfig(environment: NodeJS.ProcessEnv): SchemaVerificationConfig {
+function readLocalClusterSchemaVerificationConfig(
+  environment: NodeJS.ProcessEnv,
+  permittedConfirmations: readonly string[],
+): SchemaVerificationConfig {
   const confirmation = boundedValue(environment.SCHEMA_VERIFICATION_CONFIRMATION, 64);
   const rawUrl = boundedValue(environment.SCHEMA_VERIFICATION_DATABASE_URL, 8_192);
-  if (confirmation !== CONFIRMATION || rawUrl === undefined) throw configurationError();
+  if (confirmation === undefined || !permittedConfirmations.includes(confirmation) || rawUrl === undefined) {
+    throw configurationError();
+  }
 
   let parsed: URL;
   try {
@@ -157,9 +165,10 @@ function readLocalClusterSchemaVerificationConfig(environment: NodeJS.ProcessEnv
 export function readSchemaVerificationConfig(
   environment: NodeJS.ProcessEnv,
   certificateLoader: CertificateLoader = loadAndValidateCaCertificate,
+  permittedConfirmations: readonly string[] = [CONFIRMATION],
 ): SchemaVerificationConfig {
   if (environment.SCHEMA_VERIFICATION_LOCAL_CLUSTER === "1") {
-    return readLocalClusterSchemaVerificationConfig(environment);
+    return readLocalClusterSchemaVerificationConfig(environment, permittedConfirmations);
   }
 
   const confirmation = boundedValue(environment.SCHEMA_VERIFICATION_CONFIRMATION, 64);
@@ -168,7 +177,8 @@ export function readSchemaVerificationConfig(
   const certificatePath = boundedValue(environment.SCHEMA_VERIFICATION_CA_CERT_PATH, 1_024);
 
   if (
-    confirmation !== CONFIRMATION ||
+    confirmation === undefined ||
+    !permittedConfirmations.includes(confirmation) ||
     expectedProjectRef === undefined ||
     !PROJECT_REF_PATTERN.test(expectedProjectRef) ||
     expectedProjectRef === FORBIDDEN_PROJECT_REF ||
@@ -212,6 +222,19 @@ export function readSchemaVerificationConfig(
   // Validation happens first; only then is the driver-only copy stripped.
   parsed.search = "";
   return Object.freeze({ caCertificate, connectionString: parsed.toString(), expectedProjectRef });
+}
+
+/**
+ * Config reader for read-only migration preflight/postcheck tooling. Requires
+ * `SCHEMA_VERIFICATION_CONFIRMATION=READ_ONLY` specifically (never `ROLLBACK_ONLY`, which stays
+ * reserved for tooling that executes migration SQL in a rollback-only transaction); everything
+ * else (project ref, TLS verify-full, CA loading, loopback escape hatch) is identical.
+ */
+export function readReadOnlySchemaVerificationConfig(
+  environment: NodeJS.ProcessEnv,
+  certificateLoader: CertificateLoader = loadAndValidateCaCertificate,
+): SchemaVerificationConfig {
+  return readSchemaVerificationConfig(environment, certificateLoader, [READ_ONLY_CONFIRMATION]);
 }
 
 export function extractMigrationBody(migrationSql: string): string {
@@ -400,7 +423,7 @@ class PostgresSchemaVerificationSession implements SchemaVerificationSession {
   }
 }
 
-function createPostgresSchemaVerificationSession(config: SchemaVerificationConfig): SchemaVerificationSession {
+export function createPostgresSchemaVerificationSession(config: SchemaVerificationConfig): SchemaVerificationSession {
   return new PostgresSchemaVerificationSession(config);
 }
 
