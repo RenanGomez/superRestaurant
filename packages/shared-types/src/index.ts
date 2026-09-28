@@ -30,6 +30,7 @@ export * from "./order-item-change-impact.js";
 export * from "./operational-work-tray.js";
 export * from "./commercial-capture.js";
 export * from "./capture-selection-plan.js";
+export * from "./capture-payment-intent.js";
 export * from "./delivery-instructions.js";
 export * from "./customer-order-history.js";
 export * from "./delivery-quote.js";
