@@ -3,7 +3,7 @@
 import { useEffect, useId, useState } from "react";
 import type { OrderDetailItemV1, OrderDetailV1 } from "@super-restaurant/shared-types";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
-import { actionLabel, groupItemsByStatus, hasAction, hasItemAction, pendingOrderItemIds, type OrderItemStatusGroup } from "../../../lib/order-detail";
+import { actionLabel, chunkOrderItemIds, groupItemsByStatus, hasAction, hasItemAction, pendingOrderItemIds, type OrderItemStatusGroup } from "../../../lib/order-detail";
 
 const overlay = "fixed inset-0 z-40 flex items-start justify-center bg-black/40 p-4 sm:items-center";
 const sheet = "max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -15,24 +15,30 @@ const GROUP_LABELS: Record<OrderItemStatusGroup, string> = {
   preparing: "En preparación", ready: "Listas", sent: "Enviadas",
 };
 
+type MutationResult = { readonly ok: true; readonly version: number } | { readonly ok: false; readonly error?: string };
+
 export interface OrderDetailActions {
   readonly detail: (orderId: string) => Promise<{ readonly ok: true; readonly value: OrderDetailV1 } | { readonly ok: false; readonly error: string }>;
-  readonly open: (orderId: string, expectedVersion: number, eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
+  readonly open: (orderId: string, expectedVersion: number, eventId: string, idempotencyKey: string, occurredAt: string) => Promise<MutationResult>;
   /** One server-side operation: opens the order first if it is still a draft, then sends exactly
    * `orderItemIds` -- see apps/api's OrderService.sendToKitchen. The client never sequences
    * open + one transition per line itself, so a lost-response retry always resumes correctly, and a
    * line another actor adds to the order after this list was captured is never swept into the
-   * resend. */
-  readonly sendToKitchen: (orderId: string, expectedVersion: number, orderItemIds: readonly string[], eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
-  readonly transitionItem: (orderId: string, orderItemId: string, expectedVersion: number, to: "sent" | "preparing" | "ready" | "delivered", eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
-  readonly cancelItem: (orderId: string, orderItemId: string, expectedVersion: number, reason: string, eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
+   * resend. The returned `version` chains a batch split into several chunks (see `MAX_SEND_ORDER_TO_
+   * KITCHEN_ITEM_IDS`) against the same order without an extra read. */
+  readonly sendToKitchen: (orderId: string, expectedVersion: number, orderItemIds: readonly string[], eventId: string, idempotencyKey: string, occurredAt: string) => Promise<MutationResult>;
+  readonly transitionItem: (orderId: string, orderItemId: string, expectedVersion: number, to: "sent" | "preparing" | "ready" | "delivered", eventId: string, idempotencyKey: string, occurredAt: string) => Promise<MutationResult>;
+  readonly cancelItem: (orderId: string, orderItemId: string, expectedVersion: number, reason: string, eventId: string, idempotencyKey: string, occurredAt: string) => Promise<MutationResult>;
 }
 
-/** One eventId/idempotencyKey pair per logical operation, minted once by the browser and reused
- * verbatim on the single retry `runAction` performs -- never regenerated per attempt, or a
- * lost-response retry would send a distinct command instead of resending the same one. */
-function nextAttempt(): { readonly eventId: string; readonly idempotencyKey: string } {
-  return { eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID() };
+/** One eventId/idempotencyKey/occurredAt triple per logical operation, minted once by the browser
+ * and reused verbatim on the single retry `runAction`/`runSendToKitchen` performs -- never
+ * regenerated per attempt. `occurredAt` must stay fixed across a retry of the same attempt too: the
+ * server's `persist_order_mutation` only replays an idempotency key it has already seen when the
+ * full submitted payload is byte-identical to the original, so a fresh timestamp on the retry would
+ * make it look like a different, conflicting command instead of the same one resuming. */
+function nextAttempt(): { readonly eventId: string; readonly idempotencyKey: string; readonly occurredAt: string } {
+  return { eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), occurredAt: new Date().toISOString() };
 }
 
 interface Props {
@@ -50,6 +56,18 @@ const errorMessages: Record<string, string> = {
   not_found: "La orden ya no está disponible.",
   unavailable: "No se pudo confirmar el resultado. Intenta de nuevo.",
 };
+
+/**
+ * `open`/`transitionItem`/`cancelItem` are never retried automatically on "unavailable": a replay
+ * that would make a retry safe requires an idempotency-key lookup in `persist_order_mutation` that
+ * runs ahead of its version check -- which exists today, but the *client* can only resend the exact
+ * same payload, and these three mutations are reported to the operator as a single, already-settled
+ * attempt rather than a resumable batch. Reloading the detail is the safe move instead: it reflects
+ * whatever the server actually persisted (applied or not), and the operator's next click starts a
+ * fresh attempt against the reloaded version. Only "send to kitchen" retries, because it is
+ * explicitly resumable -- a retried step just skips whatever its own prior step already sent.
+ */
+const UNAVAILABLE_NO_RETRY_MESSAGE = "No se pudo confirmar el resultado. Se recargó la orden; revisa el estado antes de repetir.";
 
 export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onChanged }: Props) {
   const [detail, setDetail] = useState<OrderDetailV1>();
@@ -75,13 +93,42 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
 
   useEffect(() => { void load(); }, [orderId]);
 
-  async function runAction(key: string, run: () => Promise<{ readonly ok: boolean; readonly error?: string }>): Promise<void> {
+  /** Used for `open`/`transitionItem`/`cancelItem`: never retries, including on "unavailable" (see
+   * `UNAVAILABLE_NO_RETRY_MESSAGE`). Always reloads the detail afterward so the operator's view
+   * reflects whatever the server actually settled on, win or lose. */
+  async function runAction(key: string, run: () => Promise<MutationResult>): Promise<void> {
     setBusyAction(key);
     setActionError(undefined);
-    let result = await run();
-    // A single retry only for a transient "unavailable"; never for a denied/invalid/conflict outcome.
-    if (!result.ok && result.error === "unavailable") result = await run();
-    if (!result.ok) setActionError(errorMessages[result.error ?? "unavailable"] ?? errorMessages.unavailable);
+    const result = await run();
+    if (!result.ok) {
+      setActionError(result.error === "unavailable" ? UNAVAILABLE_NO_RETRY_MESSAGE : errorMessages[result.error ?? "unavailable"] ?? errorMessages.unavailable);
+    }
+    await load();
+    onChanged();
+    setBusyAction(undefined);
+  }
+
+  /** "Send to kitchen" splits `orderItemIds` into chunks bounded by `MAX_SEND_ORDER_TO_KITCHEN_ITEM_
+   * IDS` and sends them in sequence, chaining `expectedVersion` from each chunk's own returned
+   * `version` instead of re-reading the detail between chunks. Each chunk keeps its own attempt ids,
+   * reused verbatim on that chunk's single retry -- resumable because a retried chunk simply skips
+   * whatever its own prior attempt already sent (see `OrdersService.sendToKitchen`). Stops at the
+   * first chunk that still fails after its retry, reloads the detail and reports the error. */
+  async function runSendToKitchen(orderId: string, initialExpectedVersion: number, orderItemIds: readonly string[]): Promise<void> {
+    setBusyAction("sendToKitchen");
+    setActionError(undefined);
+    let expectedVersion = initialExpectedVersion;
+    for (const chunk of chunkOrderItemIds(orderItemIds)) {
+      const attempt = nextAttempt();
+      const run = () => actions.sendToKitchen(orderId, expectedVersion, chunk, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt);
+      let result = await run();
+      if (!result.ok && result.error === "unavailable") result = await run();
+      if (!result.ok) {
+        setActionError(errorMessages[result.error ?? "unavailable"] ?? errorMessages.unavailable);
+        break;
+      }
+      expectedVersion = result.version;
+    }
     await load();
     onChanged();
     setBusyAction(undefined);
@@ -105,15 +152,11 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
         <p className="mt-1 text-sm">Total: <strong>{formatMinorUnits(detail.totals.totalMinor, detail.totals.currency)}</strong></p>
         <div className="mt-4 flex flex-wrap gap-2">
           {hasAction(detail, "open") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
-            onClick={() => { const attempt = nextAttempt(); void runAction("open", () => actions.open(detail.orderId, detail.version, attempt.eventId, attempt.idempotencyKey)); }}>
+            onClick={() => { const attempt = nextAttempt(); void runAction("open", () => actions.open(detail.orderId, detail.version, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt)); }}>
             {busyAction === "open" ? "Abriendo…" : actionLabel("open")}
           </button>}
           {hasAction(detail, "sendToKitchen") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
-            onClick={() => {
-              const attempt = nextAttempt();
-              const orderItemIds = pendingOrderItemIds(detail);
-              void runAction("sendToKitchen", () => actions.sendToKitchen(detail.orderId, detail.version, orderItemIds, attempt.eventId, attempt.idempotencyKey));
-            }}>
+            onClick={() => void runSendToKitchen(detail.orderId, detail.version, pendingOrderItemIds(detail))}>
             {busyAction === "sendToKitchen" ? "Enviando…" : actionLabel("sendToKitchen")}
           </button>}
           {canCheckout && hasAction(detail, "checkout") && <a href={`/app/caja?orderId=${detail.orderId}`} className={button}>{actionLabel("checkout")}</a>}
@@ -141,7 +184,7 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
                         onClick={() => {
                           const attempt = nextAttempt();
                           const to = item.status === "sent" ? "preparing" : "ready";
-                          void runAction(`ready-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, to, attempt.eventId, attempt.idempotencyKey));
+                          void runAction(`ready-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, to, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt));
                         }}>
                         {busyAction === `ready-${item.orderItemId}` ? "Guardando…" : item.status === "sent" ? "Marcar en preparación" : actionLabel("markReady")}
                       </button>}
@@ -149,7 +192,7 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
                       && <button type="button" className={button} disabled={busyAction !== undefined}
                         onClick={() => {
                           const attempt = nextAttempt();
-                          void runAction(`delivered-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, "delivered", attempt.eventId, attempt.idempotencyKey));
+                          void runAction(`delivered-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, "delivered", attempt.eventId, attempt.idempotencyKey, attempt.occurredAt));
                         }}>
                         {busyAction === `delivered-${item.orderItemId}` ? "Guardando…" : actionLabel("markDelivered")}
                       </button>}
@@ -172,7 +215,7 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
           const target = cancelTarget;
           const attempt = nextAttempt();
           setCancelTarget(undefined);
-          void runAction(`cancel-${target.orderItemId}`, () => actions.cancelItem(detail.orderId, target.orderItemId, detail.version, reason, attempt.eventId, attempt.idempotencyKey));
+          void runAction(`cancel-${target.orderItemId}`, () => actions.cancelItem(detail.orderId, target.orderItemId, detail.version, reason, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt));
         }}
       />}
     </div>

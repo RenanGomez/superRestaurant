@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseBranchScope, type OrderDetailItemV1, type OrderDetailV1 } from "@super-restaurant/shared-types";
-import { actionLabel, groupItemsByStatus, hasAction, hasItemAction, parseAttemptIds, parseOrderItemIds, pendingOrderItemIds } from "./order-detail.js";
+import {
+  actionLabel,
+  chunkOrderItemIds,
+  groupItemsByStatus,
+  hasAction,
+  hasItemAction,
+  parseAttemptIds,
+  parseOccurredAt,
+  parseOrderItemIds,
+  pendingOrderItemIds,
+} from "./order-detail.js";
 
 const parsedScope = parseBranchScope({ restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" });
 if (parsedScope === undefined) throw new Error("Invalid test scope.");
@@ -83,6 +93,28 @@ test("parseOrderItemIds requires a non-empty array of distinct UUIDs", () => {
   assert.equal(parseOrderItemIds([id1, "not-a-uuid"]), undefined);
   assert.equal(parseOrderItemIds(undefined), undefined);
   assert.equal(parseOrderItemIds("not-an-array"), undefined);
+});
+
+test("parseOccurredAt accepts a well-formed ISO timestamp within tolerance of the given clock", () => {
+  const now = Date.parse("2026-10-01T12:00:00.000Z");
+  assert.equal(parseOccurredAt("2026-10-01T12:00:00.000Z", now), "2026-10-01T12:00:00.000Z");
+  assert.equal(parseOccurredAt("2026-10-01T11:59:00.000Z", now), "2026-10-01T11:59:00.000Z"); // 1 min in the past
+  assert.equal(parseOccurredAt("2026-10-01T12:04:59.000Z", now), "2026-10-01T12:04:59.000Z"); // just under 5 min ahead
+  assert.equal(parseOccurredAt("2026-10-01T12:06:00.000Z", now), undefined); // more than 5 min ahead
+  assert.equal(parseOccurredAt("2026-09-30T11:59:59.000Z", now), undefined); // more than 24h old
+  assert.equal(parseOccurredAt("not-a-timestamp", now), undefined);
+  assert.equal(parseOccurredAt(undefined, now), undefined);
+});
+
+test("chunkOrderItemIds splits into bounded chunks and leaves a short list whole", () => {
+  const ids = Array.from({ length: 450 }, (_, index) => `id-${String(index)}`);
+  const chunks = chunkOrderItemIds(ids, 200);
+  assert.equal(chunks.length, 3);
+  assert.equal(chunks[0]?.length, 200);
+  assert.equal(chunks[1]?.length, 200);
+  assert.equal(chunks[2]?.length, 50);
+  assert.deepEqual(chunkOrderItemIds(["a", "b"], 200), [["a", "b"]]);
+  assert.deepEqual(chunkOrderItemIds([], 200), []);
 });
 
 test("actionLabel covers every action the server can send", () => {

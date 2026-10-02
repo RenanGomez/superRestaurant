@@ -1,5 +1,7 @@
 import {
+  MAX_SEND_ORDER_TO_KITCHEN_ITEM_IDS,
   parseOrderDetailV1,
+  parseOrderMutationSummaryV1,
   type BranchScope,
   type OrderDetailActionV1,
   type OrderDetailItemV1,
@@ -56,14 +58,48 @@ export function parseAttemptIds(eventId: unknown, idempotencyKey: unknown): { re
   return { eventId: eventId.toLowerCase(), idempotencyKey };
 }
 
+const MAX_OCCURRED_AT_FUTURE_SKEW_MS = 5 * 60 * 1000;
+const MAX_OCCURRED_AT_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Validates a client-minted `occurredAt` for one mutation attempt: a well-formed ISO timestamp, not
+ * more than 5 minutes ahead of the server's own clock (clock skew tolerance) and not older than 24h
+ * (stale retry from a reopened tab). The server action uses this instead of minting its own
+ * `new Date()` on every call, so a retry of the *same* attempt (same eventId/idempotencyKey) submits
+ * the same `occurredAt` too -- otherwise `persist_order_mutation`'s byte-identical replay check would
+ * never match and every retry would look like a brand-new, conflicting command.
+ */
+export function parseOccurredAt(value: unknown, now: number = Date.now()): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== value) return undefined;
+  const skewMs = parsed.getTime() - now;
+  if (skewMs > MAX_OCCURRED_AT_FUTURE_SKEW_MS || skewMs < -MAX_OCCURRED_AT_AGE_MS) return undefined;
+  return value;
+}
+
+/** Splits `orderItemIds` into chunks of at most `MAX_SEND_ORDER_TO_KITCHEN_ITEM_IDS` (the same bound
+ * the server's `SendOrderToKitchenCommandV1` parser enforces), so "send to kitchen" on an order with
+ * more pending lines than that limit still succeeds instead of always failing at the parser. */
+export function chunkOrderItemIds(
+  ids: readonly string[],
+  size: number = MAX_SEND_ORDER_TO_KITCHEN_ITEM_IDS,
+): readonly (readonly string[])[] {
+  if (ids.length === 0) return [];
+  const chunks: string[][] = [];
+  for (let index = 0; index < ids.length; index += size) chunks.push(ids.slice(index, index + size));
+  return chunks;
+}
+
 export type OrderMutationRequestResult =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly version: number }
   | { readonly ok: false; readonly error: "invalid" | "denied" | "not_found" | "conflict" | "unavailable" };
 
 /**
  * A single POST to one of the existing `orders/*` mutation routes, used for open/send-to-kitchen/
  * mark-ready/mark-delivered/cancel from the detail panel. The caller always re-reads the detail
- * afterward instead of trusting a client-side projection of the new state.
+ * afterward instead of trusting a client-side projection of the new state; the returned `version` is
+ * used only to chain multiple "send to kitchen" chunks against the same order without a round trip.
  */
 export async function postOrderMutation(
   token: string,
@@ -77,7 +113,12 @@ export async function postOrderMutation(
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (response.ok) return { ok: true };
+    if (response.ok) {
+      const parsedBody: unknown = await response.json().catch(() => undefined);
+      const summary = parseOrderMutationSummaryV1(parsedBody);
+      if (summary === undefined) return { error: "unavailable", ok: false };
+      return { ok: true, version: summary.version };
+    }
     return {
       error: response.status === 400 ? "invalid"
         : response.status === 401 || response.status === 403 ? "denied"
