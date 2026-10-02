@@ -15,7 +15,7 @@ declare
   other_branch uuid := gen_random_uuid();
   membership uuid := gen_random_uuid();
   other_membership uuid := gen_random_uuid();
-  order_id uuid := gen_random_uuid();
+  test_order_id uuid := gen_random_uuid();
   item1 uuid := gen_random_uuid();
   item2 uuid := gen_random_uuid();
   device uuid := gen_random_uuid();
@@ -59,15 +59,15 @@ begin
     (other_membership,'waiter',actor);
 
   v1 := pg_catalog.jsonb_build_object(
-    'schemaVersion',1,'orderId',order_id::text,'restaurantId',restaurant::text,'branchId',branch::text,
+    'schemaVersion',1,'orderId',test_order_id::text,'restaurantId',restaurant::text,'branchId',branch::text,
     'channel','counter','currency','MXN','timeZone','America/Hermosillo','status','draft','items','[]'::jsonb
   );
   execute 'set local role app_api';
   result := app_private.persist_order_mutation(actor,0,v1,pg_catalog.jsonb_build_object(
     'schemaVersion',1,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
-    'restaurantId',restaurant::text,'branchId',branch::text,'orderId',order_id::text,'actorId',actor::text,
+    'restaurantId',restaurant::text,'branchId',branch::text,'orderId',test_order_id::text,'actorId',actor::text,
     'deviceId',device::text,'occurredAt',now_text,'operation','order.created','entityType','order',
-    'entityId',order_id::text,'to','draft'
+    'entityId',test_order_id::text,'to','draft'
   ));
   if result->>'status'<>'saved' then raise exception 'SEND_ORDER_TO_KITCHEN_SETUP_CREATE_REJECTED'; end if;
 
@@ -77,7 +77,7 @@ begin
   )));
   result := app_private.persist_order_mutation(actor,1,v2,pg_catalog.jsonb_build_object(
     'schemaVersion',1,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
-    'restaurantId',restaurant::text,'branchId',branch::text,'orderId',order_id::text,'actorId',actor::text,
+    'restaurantId',restaurant::text,'branchId',branch::text,'orderId',test_order_id::text,'actorId',actor::text,
     'deviceId',device::text,'occurredAt',now_text,'operation','order.item_added','entityType','order_item',
     'entityId',item1::text,'orderItemId',item1::text
   ));
@@ -89,7 +89,7 @@ begin
   )));
   result := app_private.persist_order_mutation(actor,2,v3,pg_catalog.jsonb_build_object(
     'schemaVersion',1,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
-    'restaurantId',restaurant::text,'branchId',branch::text,'orderId',order_id::text,'actorId',actor::text,
+    'restaurantId',restaurant::text,'branchId',branch::text,'orderId',test_order_id::text,'actorId',actor::text,
     'deviceId',device::text,'occurredAt',now_text,'operation','order.item_added','entityType','order_item',
     'entityId',item2::text,'orderItemId',item2::text
   ));
@@ -99,7 +99,7 @@ begin
   -- order is now version 3: draft, item1 pending, item2 pending.
   command := pg_catalog.jsonb_build_object(
     'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
-    'orderId',order_id::text,'orderItemIds',pg_catalog.jsonb_build_array(item1::text,item2::text),
+    'orderId',test_order_id::text,'orderItemIds',pg_catalog.jsonb_build_array(item1::text,item2::text),
     'expectedVersion',3,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
     'deviceId',device::text,'occurredAt',now_text
   );
@@ -107,15 +107,15 @@ begin
   step_open := pg_catalog.jsonb_build_object('order',pg_catalog.jsonb_set(v3,'{status}','"open"'::jsonb),
     'audit',pg_catalog.jsonb_build_object(
       'schemaVersion',1,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
-      'restaurantId',restaurant::text,'branchId',branch::text,'orderId',order_id::text,'actorId',actor::text,
+      'restaurantId',restaurant::text,'branchId',branch::text,'orderId',test_order_id::text,'actorId',actor::text,
       'deviceId',device::text,'occurredAt',now_text,'operation','order.state_changed','entityType','order',
-      'entityId',order_id::text,'from','draft','to','open'
+      'entityId',test_order_id::text,'from','draft','to','open'
     ));
   step_item1 := pg_catalog.jsonb_build_object(
     'order',pg_catalog.jsonb_set(step_open->'order','{items,0,status}','"sent"'::jsonb),
     'audit',pg_catalog.jsonb_build_object(
       'schemaVersion',1,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
-      'restaurantId',restaurant::text,'branchId',branch::text,'orderId',order_id::text,'actorId',actor::text,
+      'restaurantId',restaurant::text,'branchId',branch::text,'orderId',test_order_id::text,'actorId',actor::text,
       'deviceId',device::text,'occurredAt',now_text,'operation','order_item.state_changed','entityType','order_item',
       'entityId',item1::text,'orderItemId',item1::text,'from','pending','to','sent'
     ));
@@ -123,7 +123,7 @@ begin
     'order',pg_catalog.jsonb_set(step_item1->'order','{items,1,status}','"sent"'::jsonb),
     'audit',pg_catalog.jsonb_build_object(
       'schemaVersion',1,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
-      'restaurantId',restaurant::text,'branchId',branch::text,'orderId',order_id::text,'actorId',actor::text,
+      'restaurantId',restaurant::text,'branchId',branch::text,'orderId',test_order_id::text,'actorId',actor::text,
       'deviceId',device::text,'occurredAt',now_text,'operation','order_item.state_changed','entityType','order_item',
       'entityId',item2::text,'orderItemId',item2::text,'from','pending','to','sent'
     ));
@@ -134,19 +134,19 @@ begin
   -- it -- simulated directly by asserting the real current status is 'pending' and poisoning the
   -- *second* step's 'from' to an impossible value) must roll back everything already applied by
   -- the earlier steps in the same call, including the 'open' transition and item1's send.
-  audit_count_before := (select count(*) from app.order_audit_events where order_id=order_id);
-  command_count := (select count(*) from app.order_command_events where order_id=order_id);
+  audit_count_before := (select count(*) from app.order_audit_events where order_id=test_order_id);
+  command_count := (select count(*) from app.order_command_events where order_id=test_order_id);
   execute 'set local role app_api';
   result := app_private.send_order_to_kitchen(actor,3,
     pg_catalog.jsonb_set(command,'{idempotencyKey}',to_jsonb(gen_random_uuid()::text)),
     pg_catalog.jsonb_set(steps,'{2,audit,from}','"sent"'::jsonb));
   execute 'reset role';
   if result->>'status'<>'conflict' then raise exception 'SEND_ORDER_TO_KITCHEN_ATOMICITY_NOT_REJECTED'; end if;
-  audit_count_after := (select count(*) from app.order_audit_events where order_id=order_id);
+  audit_count_after := (select count(*) from app.order_audit_events where order_id=test_order_id);
   if audit_count_after<>audit_count_before then raise exception 'SEND_ORDER_TO_KITCHEN_ATOMICITY_LEAKED_EVENTS'; end if;
-  if (select count(*) from app.order_command_events where order_id=order_id)<>command_count
+  if (select count(*) from app.order_command_events where order_id=test_order_id)<>command_count
   then raise exception 'SEND_ORDER_TO_KITCHEN_ATOMICITY_LEAKED_COMMAND'; end if;
-  if (select version from app.orders where id=order_id)<>3
+  if (select version from app.orders where id=test_order_id)<>3
   then raise exception 'SEND_ORDER_TO_KITCHEN_ATOMICITY_VERSION_ADVANCED'; end if;
 
   -- A stale expectedVersion is a conflict with zero effects, even with an otherwise well-formed
@@ -157,7 +157,7 @@ begin
     steps);
   execute 'reset role';
   if result->>'status'<>'conflict' then raise exception 'SEND_ORDER_TO_KITCHEN_STALE_VERSION_NOT_REJECTED'; end if;
-  if (select count(*) from app.order_audit_events where order_id=order_id)<>audit_count_before
+  if (select count(*) from app.order_audit_events where order_id=test_order_id)<>audit_count_before
   then raise exception 'SEND_ORDER_TO_KITCHEN_STALE_VERSION_LEAKED_EVENTS'; end if;
 
   -- The real, well-formed batch: version 3 -> 6 (open + 2 sends), one command event recorded.
@@ -167,10 +167,10 @@ begin
   if result->>'status'<>'saved' or (result->>'version')::bigint<>6
     or pg_catalog.jsonb_array_length(result->'kdsEvents')<>3
   then raise exception 'SEND_ORDER_TO_KITCHEN_APPLY_REJECTED'; end if;
-  if (select version from app.orders where id=order_id)<>6
-    or (select status from app.orders where id=order_id)<>'open'
+  if (select version from app.orders where id=test_order_id)<>6
+    or (select status from app.orders where id=test_order_id)<>'open'
   then raise exception 'SEND_ORDER_TO_KITCHEN_APPLY_NOT_PERSISTED'; end if;
-  if (select count(*) from app.order_command_events where order_id=order_id and idempotency_key=command->>'idempotencyKey')<>1
+  if (select count(*) from app.order_command_events where order_id=test_order_id and idempotency_key=command->>'idempotencyKey')<>1
   then raise exception 'SEND_ORDER_TO_KITCHEN_COMMAND_EVENT_MISSING'; end if;
 
   -- Byte-identical retry (same actor/scope/idempotencyKey, same payload) replays the stored result.
@@ -180,7 +180,7 @@ begin
   if replayed->>'status'<>'replayed' or (replayed->>'version')::bigint<>6
     or replayed->'order'<>result->'order'
   then raise exception 'SEND_ORDER_TO_KITCHEN_REPLAY_MISMATCH'; end if;
-  if (select count(*) from app.order_audit_events where order_id=order_id)<>audit_count_before+3
+  if (select count(*) from app.order_audit_events where order_id=test_order_id)<>audit_count_before+3
   then raise exception 'SEND_ORDER_TO_KITCHEN_REPLAY_DUPLICATED_EVENTS'; end if;
 
   -- Same idempotency key, different payload (expectedVersion differs) is a conflict, not a replay.
@@ -193,7 +193,7 @@ begin
 
   -- A principal with no membership at the order's own restaurant/branch never gets more than
   -- conflict/forbidden back, and leaves no new events.
-  audit_count_before := (select count(*) from app.order_audit_events where order_id=order_id);
+  audit_count_before := (select count(*) from app.order_audit_events where order_id=test_order_id);
   execute 'set local role app_api';
   result := app_private.send_order_to_kitchen(other_actor,6,
     pg_catalog.jsonb_set(pg_catalog.jsonb_set(command,'{idempotencyKey}',to_jsonb(gen_random_uuid()::text)),
@@ -202,13 +202,13 @@ begin
       'order',pg_catalog.jsonb_set(result->'order','{status}','"open"'::jsonb),
       'audit',pg_catalog.jsonb_build_object(
         'schemaVersion',1,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
-        'restaurantId',restaurant::text,'branchId',branch::text,'orderId',order_id::text,'actorId',other_actor::text,
+        'restaurantId',restaurant::text,'branchId',branch::text,'orderId',test_order_id::text,'actorId',other_actor::text,
         'deviceId',device::text,'occurredAt',now_text,'operation','order.state_changed','entityType','order',
-        'entityId',order_id::text,'from','open','to','open'
-      )));
+        'entityId',test_order_id::text,'from','open','to','open'
+      ))));
   execute 'reset role';
   if result->>'status' not in ('conflict','forbidden') then raise exception 'SEND_ORDER_TO_KITCHEN_FOREIGN_ACTOR_ACCEPTED'; end if;
-  if (select count(*) from app.order_audit_events where order_id=order_id)<>audit_count_before
+  if (select count(*) from app.order_audit_events where order_id=test_order_id)<>audit_count_before
   then raise exception 'SEND_ORDER_TO_KITCHEN_FOREIGN_ACTOR_LEAKED_EVENTS'; end if;
 
   if pg_catalog.has_function_privilege('authenticated','app_private.send_order_to_kitchen(uuid,bigint,jsonb,jsonb)','EXECUTE')
