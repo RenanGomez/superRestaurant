@@ -32,10 +32,15 @@ export interface CreateOrderCommandV1 extends OrderAuditInputV1 {
   readonly timeZone: string;
 }
 
-/** Additive mobile command: v1 remains valid for existing clients, while v2 binds a new order to an operational shift. */
+/**
+ * Additive mobile command: v1 remains valid for existing clients, while v2 binds a new order to an
+ * operational shift. `shiftId: null` (tables-board) means the operator never picks a shift: the
+ * server resolves the branch's single open operational shift and rejects with a conflict if none
+ * is open, instead of trusting a client-supplied id.
+ */
 export interface CreateOrderCommandV2 extends Omit<CreateOrderCommandV1, "schemaVersion"> {
   readonly schemaVersion: typeof CREATE_ORDER_COMMAND_V2_SCHEMA_VERSION;
-  readonly shiftId: string;
+  readonly shiftId: string | null;
 }
 
 export interface ActiveTableOrderSummaryV1 {
@@ -90,6 +95,85 @@ export interface ActiveTableOrderListV2 {
   readonly schemaVersion: typeof ACTIVE_TABLE_ORDER_LIST_V2_SCHEMA_VERSION;
   readonly scope: BranchScope;
   readonly tableId: string;
+}
+
+export const TABLE_BOARD_SCHEMA_VERSION = 1 as const;
+export const TABLE_BOARD_ORDER_STATUSES = Object.freeze(["draft", "open", "partially_paid"] as const);
+
+export interface TableBoardActiveOrderV1 {
+  readonly openedAt: string;
+  readonly orderId: string;
+  readonly status: (typeof TABLE_BOARD_ORDER_STATUSES)[number];
+  readonly version: number;
+  readonly waiterUserId: string | null;
+}
+
+export interface TableBoardTableV1 {
+  readonly activeOrders: readonly TableBoardActiveOrderV1[];
+  readonly status: "free" | "occupied";
+  readonly tableId: string;
+}
+
+export interface TableBoardV1 {
+  readonly schemaVersion: typeof TABLE_BOARD_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly tables: readonly TableBoardTableV1[];
+}
+
+export function parseTableBoardV1(value: unknown): TableBoardV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "tables"]);
+  if (record === undefined || own(record, "schemaVersion") !== TABLE_BOARD_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const rawTables = exactDenseArray(own(record, "tables"), 500);
+  if (scope === undefined || rawTables === undefined) return undefined;
+  const tables: TableBoardTableV1[] = [];
+  const tableIds = new Set<string>();
+  for (const raw of rawTables) {
+    const table = parseTableBoardTableV1(raw);
+    if (table === undefined || tableIds.has(table.tableId)) return undefined;
+    tableIds.add(table.tableId);
+    tables.push(table);
+  }
+  return Object.freeze({ schemaVersion: TABLE_BOARD_SCHEMA_VERSION, scope, tables: Object.freeze(tables) });
+}
+
+function parseTableBoardTableV1(value: unknown): TableBoardTableV1 | undefined {
+  const record = exactRecord(value, ["tableId", "status", "activeOrders"]);
+  if (record === undefined) return undefined;
+  const tableId = uuid(own(record, "tableId"));
+  const status = own(record, "status");
+  const rawOrders = exactDenseArray(own(record, "activeOrders"), 500);
+  if (
+    tableId === undefined || (status !== "free" && status !== "occupied") || rawOrders === undefined
+    || (status === "free") !== (rawOrders.length === 0)
+  ) return undefined;
+  const activeOrders: TableBoardActiveOrderV1[] = [];
+  const orderIds = new Set<string>();
+  for (const raw of rawOrders) {
+    const order = parseTableBoardActiveOrderV1(raw);
+    if (order === undefined || orderIds.has(order.orderId)) return undefined;
+    orderIds.add(order.orderId);
+    activeOrders.push(order);
+  }
+  return Object.freeze({ activeOrders: Object.freeze(activeOrders), status, tableId });
+}
+
+function parseTableBoardActiveOrderV1(value: unknown): TableBoardActiveOrderV1 | undefined {
+  const record = exactRecord(value, ["orderId", "status", "version", "waiterUserId", "openedAt"]);
+  if (record === undefined) return undefined;
+  const orderId = uuid(own(record, "orderId"));
+  const status = own(record, "status");
+  const version = integer(own(record, "version"), 1, Number.MAX_SAFE_INTEGER);
+  const rawWaiterUserId = own(record, "waiterUserId");
+  const waiterUserId = rawWaiterUserId === null ? null : uuid(rawWaiterUserId);
+  const openedAt = timestamp(own(record, "openedAt"));
+  return orderId === undefined || typeof status !== "string"
+    || !(TABLE_BOARD_ORDER_STATUSES as readonly string[]).includes(status)
+    || version === undefined || waiterUserId === undefined || openedAt === undefined
+    ? undefined
+    : Object.freeze({
+      openedAt, orderId, status: status as TableBoardActiveOrderV1["status"], version, waiterUserId,
+    });
 }
 
 export interface ModifierOptionSelectionV1 {
@@ -150,6 +234,25 @@ export interface CancelOrderItemCommandV1 extends OrderAuditInputV1 {
   readonly reason: string;
   readonly schemaVersion: typeof ORDER_COMMAND_SCHEMA_VERSION;
   readonly scope: BranchScope;
+}
+
+/** tables-board: assigns or clears (`waiterUserId: null`) an order's waiter; the server validates
+ * the waiter's own active membership at this exact branch and audits the change. */
+export interface AssignOrderWaiterCommandV1 extends OrderAuditInputV1 {
+  readonly expectedVersion: number;
+  readonly orderId: string;
+  readonly schemaVersion: typeof ORDER_COMMAND_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly waiterUserId: string | null;
+}
+
+export interface AssignOrderWaiterResultV1 {
+  readonly orderId: string;
+  readonly replayed: boolean;
+  readonly schemaVersion: typeof ORDER_COMMAND_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly version: number;
+  readonly waiterUserId: string | null;
 }
 
 export interface OrderMutationSummaryV1 {
@@ -502,7 +605,8 @@ export function parseCreateOrderCommandV2(value: unknown): CreateOrderCommandV2 
   const common = parseCommon(record);
   const scope = parseScope(own(record,"scope"));
   const orderId = uuid(own(record,"orderId"));
-  const shiftId = uuid(own(record,"shiftId"));
+  const rawShiftId = own(record,"shiftId");
+  const shiftId = rawShiftId === null ? null : uuid(rawShiftId);
   const channel = own(record,"channel");
   const tableValue = own(record,"tableId");
   const tableId = tableValue === null ? null : uuid(tableValue);
@@ -597,6 +701,36 @@ function parseOrderItemIds(value: unknown): readonly string[] | undefined {
     ids.push(id);
   }
   return Object.freeze(ids);
+}
+
+export function parseAssignOrderWaiterCommandV1(value: unknown): AssignOrderWaiterCommandV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion","scope","orderId","expectedVersion","waiterUserId","eventId","idempotencyKey","deviceId","occurredAt"]);
+  if (record === undefined || own(record,"schemaVersion") !== ORDER_COMMAND_SCHEMA_VERSION) return undefined;
+  const common = parseCommon(record);
+  const scope = parseScope(own(record,"scope"));
+  const orderId = uuid(own(record,"orderId"));
+  const expectedVersion = integer(own(record,"expectedVersion"),1,Number.MAX_SAFE_INTEGER);
+  const rawWaiterUserId = own(record,"waiterUserId");
+  const waiterUserId = rawWaiterUserId === null ? null : uuid(rawWaiterUserId);
+  return common === undefined || scope === undefined || orderId === undefined || expectedVersion === undefined
+    || waiterUserId === undefined
+    ? undefined
+    : Object.freeze({ ...common, expectedVersion, orderId, schemaVersion: ORDER_COMMAND_SCHEMA_VERSION, scope, waiterUserId });
+}
+
+export function parseAssignOrderWaiterResultV1(value: unknown): AssignOrderWaiterResultV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion","scope","orderId","version","waiterUserId","replayed"]);
+  if (record === undefined || own(record,"schemaVersion") !== ORDER_COMMAND_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record,"scope"));
+  const orderId = uuid(own(record,"orderId"));
+  const version = integer(own(record,"version"), 1, Number.MAX_SAFE_INTEGER);
+  const rawWaiterUserId = own(record,"waiterUserId");
+  const waiterUserId = rawWaiterUserId === null ? null : uuid(rawWaiterUserId);
+  const replayed = own(record,"replayed");
+  return scope === undefined || orderId === undefined || version === undefined || waiterUserId === undefined
+    || typeof replayed !== "boolean"
+    ? undefined
+    : Object.freeze({ orderId, replayed, schemaVersion: ORDER_COMMAND_SCHEMA_VERSION, scope, version, waiterUserId });
 }
 
 export function parseTransitionOrderItemCommandV1(value: unknown): TransitionOrderItemCommandV1 | undefined {
