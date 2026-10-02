@@ -27,8 +27,8 @@ declare
   wrong_target_path text := restaurant::text || '/products/' || other_product_id::text || '/' || replace(gen_random_uuid()::text,'-','') || '.jpg';
   malformed_path text := restaurant::text || '/products/' || product_id::text || '/not-a-uuid.gif';
   payload jsonb;
-  result jsonb;
-  state jsonb;
+  result_status text;
+  result_state jsonb;
   read_back jsonb;
   product_row jsonb;
   option_row jsonb;
@@ -62,14 +62,13 @@ begin
   );
 
   -- Well-formed imagePath on both a product and an option is saved and read back unchanged.
-  result := app_private.save_menu_catalog(
+  select status, state into result_status, result_state from app_private.save_menu_catalog(
     actor, restaurant, branch, gen_random_uuid(), gen_random_uuid(), device, now_text::timestamptz,
     0, gen_random_uuid(), 'MXN', payload
   );
-  if result->>'status' <> 'saved' then raise exception 'CATALOG_IMAGES_SAVE_WITH_IMAGE_REJECTED: %', result; end if;
-  state := result->'state';
-  product_row := state->'catalog'->'products'->0;
-  option_row := state->'catalog'->'modifierGroups'->0->'options'->0;
+  if result_status <> 'saved' then raise exception 'CATALOG_IMAGES_SAVE_WITH_IMAGE_REJECTED: % %', result_status, result_state; end if;
+  product_row := result_state->'catalog'->'products'->0;
+  option_row := result_state->'catalog'->'modifierGroups'->0->'options'->0;
   if product_row->>'imagePath' is distinct from good_product_path then
     raise exception 'CATALOG_IMAGES_PRODUCT_IMAGE_PATH_MISMATCH: %', product_row;
   end if;
@@ -85,40 +84,40 @@ begin
   -- A null imagePath on both is accepted and read back as null (next published version).
   payload := pg_catalog.jsonb_set(payload, '{products,0,imagePath}', 'null'::jsonb);
   payload := pg_catalog.jsonb_set(payload, '{modifierGroups,0,options,0,imagePath}', 'null'::jsonb);
-  result := app_private.save_menu_catalog(
+  select status, state into result_status, result_state from app_private.save_menu_catalog(
     actor, restaurant, branch, gen_random_uuid(), gen_random_uuid(), device, now_text::timestamptz,
     1, gen_random_uuid(), 'MXN', payload
   );
-  if result->>'status' <> 'saved' then raise exception 'CATALOG_IMAGES_SAVE_WITH_NULL_IMAGE_REJECTED: %', result; end if;
-  if (result->'state'->'catalog'->'products'->0->'imagePath') <> 'null'::jsonb then
-    raise exception 'CATALOG_IMAGES_NULL_IMAGE_NOT_ECHOED: %', result;
+  if result_status <> 'saved' then raise exception 'CATALOG_IMAGES_SAVE_WITH_NULL_IMAGE_REJECTED: % %', result_status, result_state; end if;
+  if (result_state->'catalog'->'products'->0->'imagePath') <> 'null'::jsonb then
+    raise exception 'CATALOG_IMAGES_NULL_IMAGE_NOT_ECHOED: %', result_state;
   end if;
 
   -- A path whose restaurant segment names a different tenant is rejected as a conflict, never a
   -- raw constraint violation escaping to the caller.
   payload := pg_catalog.jsonb_set(payload, '{products,0,imagePath}', pg_catalog.to_jsonb(foreign_restaurant_path));
-  result := app_private.save_menu_catalog(
+  select status, state into result_status, result_state from app_private.save_menu_catalog(
     actor, restaurant, branch, gen_random_uuid(), gen_random_uuid(), device, now_text::timestamptz,
     2, gen_random_uuid(), 'MXN', payload
   );
-  if result->>'status' <> 'conflict' then raise exception 'CATALOG_IMAGES_FOREIGN_RESTAURANT_PATH_ACCEPTED: %', result; end if;
+  if result_status <> 'conflict' then raise exception 'CATALOG_IMAGES_FOREIGN_RESTAURANT_PATH_ACCEPTED: % %', result_status, result_state; end if;
 
   -- A path whose target-id segment names a different product than the row it is attached to is
   -- also rejected.
   payload := pg_catalog.jsonb_set(payload, '{products,0,imagePath}', pg_catalog.to_jsonb(wrong_target_path));
-  result := app_private.save_menu_catalog(
+  select status, state into result_status, result_state from app_private.save_menu_catalog(
     actor, restaurant, branch, gen_random_uuid(), gen_random_uuid(), device, now_text::timestamptz,
     2, gen_random_uuid(), 'MXN', payload
   );
-  if result->>'status' <> 'conflict' then raise exception 'CATALOG_IMAGES_WRONG_TARGET_PATH_ACCEPTED: %', result; end if;
+  if result_status <> 'conflict' then raise exception 'CATALOG_IMAGES_WRONG_TARGET_PATH_ACCEPTED: % %', result_status, result_state; end if;
 
   -- A malformed path shape (no uuid32 filename) is rejected.
   payload := pg_catalog.jsonb_set(payload, '{products,0,imagePath}', pg_catalog.to_jsonb(malformed_path));
-  result := app_private.save_menu_catalog(
+  select status, state into result_status, result_state from app_private.save_menu_catalog(
     actor, restaurant, branch, gen_random_uuid(), gen_random_uuid(), device, now_text::timestamptz,
     2, gen_random_uuid(), 'MXN', payload
   );
-  if result->>'status' <> 'conflict' then raise exception 'CATALOG_IMAGES_MALFORMED_PATH_ACCEPTED: %', result; end if;
+  if result_status <> 'conflict' then raise exception 'CATALOG_IMAGES_MALFORMED_PATH_ACCEPTED: % %', result_status, result_state; end if;
 
   raise notice 'CATALOG_IMAGES_DOMAIN_INVARIANTS_OK';
 end $catalog_images_tests$;
@@ -150,3 +149,4 @@ begin
 
   raise notice 'CATALOG_IMAGES_STORAGE_INVARIANTS_OK';
 end $catalog_images_storage_tests$;
+commit;
