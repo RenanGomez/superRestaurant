@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseBranchScope, type OrderDetailItemV1, type OrderDetailV1 } from "@super-restaurant/shared-types";
-import { actionLabel, groupItemsByStatus, hasAction, hasItemAction, parseAttemptIds } from "./order-detail.js";
+import { actionLabel, groupItemsByStatus, hasAction, hasItemAction, parseAttemptIds, parseOrderItemIds, pendingOrderItemIds } from "./order-detail.js";
 
 const parsedScope = parseBranchScope({ restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" });
 if (parsedScope === undefined) throw new Error("Invalid test scope.");
@@ -61,6 +61,28 @@ test("parseAttemptIds only accepts a well-formed UUID eventId and a bounded, tri
   assert.equal(parseAttemptIds(eventId, " padded "), undefined);
   assert.equal(parseAttemptIds(eventId, "x".repeat(201)), undefined);
   assert.equal(parseAttemptIds(undefined, "send-line-1"), undefined);
+});
+
+test("pendingOrderItemIds only returns the lines the operator is seeing as pending", () => {
+  const value = detail({
+    items: [
+      item({ orderItemId: "1e37ae13-8507-484c-969f-2176f77b7000", status: "pending" }),
+      item({ orderItemId: "23723e10-c0bf-49fd-9363-4f0e2c60e955", status: "sent" }),
+      item({ orderItemId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02", status: "pending" }),
+    ],
+  });
+  assert.deepEqual(pendingOrderItemIds(value), ["1e37ae13-8507-484c-969f-2176f77b7000", "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02"]);
+});
+
+test("parseOrderItemIds requires a non-empty array of distinct UUIDs", () => {
+  const id1 = "1e37ae13-8507-484c-969f-2176f77b7000";
+  const id2 = "23723e10-c0bf-49fd-9363-4f0e2c60e955";
+  assert.deepEqual(parseOrderItemIds([id1, id2]), [id1, id2]);
+  assert.equal(parseOrderItemIds([]), undefined);
+  assert.equal(parseOrderItemIds([id1, id1]), undefined);
+  assert.equal(parseOrderItemIds([id1, "not-a-uuid"]), undefined);
+  assert.equal(parseOrderItemIds(undefined), undefined);
+  assert.equal(parseOrderItemIds("not-an-array"), undefined);
 });
 
 test("actionLabel covers every action the server can send", () => {

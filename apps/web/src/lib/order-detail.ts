@@ -113,6 +113,33 @@ export function hasItemAction(item: OrderDetailItemV1, action: OrderDetailAction
   return item.availableActions.includes(action);
 }
 
+/** The exact set of lines "send to kitchen" offers for this detail: every line the operator is
+ * currently seeing as "pending". Fixed once per attempt by the caller and reused verbatim on its
+ * single retry, so a line another actor adds to the order after this snapshot is never swept into
+ * a resend -- see `OrdersService.sendToKitchen`'s own `orderItemIds` contract. */
+export function pendingOrderItemIds(detail: OrderDetailV1): readonly string[] {
+  return detail.items.filter((item) => item.status === "pending").map((item) => item.orderItemId);
+}
+
+/**
+ * Validates the `orderItemIds` a client submits with "send to kitchen": every entry a well-formed
+ * UUID, at least one entry, no duplicates. The server still re-validates and re-derives permission
+ * from its own read of the order; this only rejects a malformed submission before the request.
+ */
+export function parseOrderItemIds(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string" || !UUID_PATTERN.test(entry)) return undefined;
+    const id = entry.toLowerCase();
+    if (seen.has(id)) return undefined;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
 const STATUS_GROUPS = Object.freeze(["pending", "sent", "preparing", "ready", "delivered", "cancelled"] as const);
 
 export type OrderItemStatusGroup = (typeof STATUS_GROUPS)[number];

@@ -9,6 +9,7 @@ import { requestBranchOrderWorkTray, type BranchOrderTrayRequestResult } from ".
 import { BRANCH_PREFERENCE_COOKIE, parseBranchPreference } from "../../../lib/memberships";
 import {
   parseAttemptIds,
+  parseOrderItemIds,
   postOrderMutation,
   requestOrderDetail,
   type OrderDetailRequestResult,
@@ -67,16 +68,19 @@ export async function openOrderAction(
 export async function sendToKitchenAction(
   orderId: string,
   expectedVersion: number,
+  orderItemIds: readonly unknown[],
   eventId: string,
   idempotencyKey: string,
 ): Promise<OrderMutationRequestResult> {
   const context = await authorizedOrderContext();
   if (context === undefined) return { error: "denied", ok: false };
   if (!isUuid(orderId)) return { error: "invalid", ok: false };
+  const parsedOrderItemIds = parseOrderItemIds(orderItemIds);
+  if (parsedOrderItemIds === undefined) return { error: "invalid", ok: false };
   const attempt = parseAttemptIds(eventId, idempotencyKey);
   if (attempt === undefined) return { error: "invalid", ok: false };
   return postOrderMutation(context.accessToken, context.apiBaseUrl, "orders/send-to-kitchen", {
-    ...(await audit(attempt)), expectedVersion, orderId, schemaVersion: 1, scope: context.scope,
+    ...(await audit(attempt)), expectedVersion, orderId, orderItemIds: parsedOrderItemIds, schemaVersion: 1, scope: context.scope,
   });
 }
 

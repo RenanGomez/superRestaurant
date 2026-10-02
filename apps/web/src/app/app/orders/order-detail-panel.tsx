@@ -3,7 +3,7 @@
 import { useEffect, useId, useState } from "react";
 import type { OrderDetailItemV1, OrderDetailV1 } from "@super-restaurant/shared-types";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
-import { actionLabel, groupItemsByStatus, hasAction, hasItemAction, type OrderItemStatusGroup } from "../../../lib/order-detail";
+import { actionLabel, groupItemsByStatus, hasAction, hasItemAction, pendingOrderItemIds, type OrderItemStatusGroup } from "../../../lib/order-detail";
 
 const overlay = "fixed inset-0 z-40 flex items-start justify-center bg-black/40 p-4 sm:items-center";
 const sheet = "max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -18,10 +18,12 @@ const GROUP_LABELS: Record<OrderItemStatusGroup, string> = {
 export interface OrderDetailActions {
   readonly detail: (orderId: string) => Promise<{ readonly ok: true; readonly value: OrderDetailV1 } | { readonly ok: false; readonly error: string }>;
   readonly open: (orderId: string, expectedVersion: number, eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
-  /** One server-side operation: opens the order first if it is still a draft, then sends every
-   * currently pending line -- see apps/api's OrderService.sendToKitchen. The client never sequences
-   * open + one transition per line itself, so a lost-response retry always resumes correctly. */
-  readonly sendToKitchen: (orderId: string, expectedVersion: number, eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
+  /** One server-side operation: opens the order first if it is still a draft, then sends exactly
+   * `orderItemIds` -- see apps/api's OrderService.sendToKitchen. The client never sequences
+   * open + one transition per line itself, so a lost-response retry always resumes correctly, and a
+   * line another actor adds to the order after this list was captured is never swept into the
+   * resend. */
+  readonly sendToKitchen: (orderId: string, expectedVersion: number, orderItemIds: readonly string[], eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
   readonly transitionItem: (orderId: string, orderItemId: string, expectedVersion: number, to: "sent" | "preparing" | "ready" | "delivered", eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
   readonly cancelItem: (orderId: string, orderItemId: string, expectedVersion: number, reason: string, eventId: string, idempotencyKey: string) => Promise<{ readonly ok: boolean; readonly error?: string }>;
 }
@@ -59,7 +61,13 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
 
   async function load(): Promise<OrderDetailV1 | undefined> {
     const result = await actions.detail(orderId);
-    if (!result.ok) { setLoadError(errorMessages[result.error] ?? errorMessages.unavailable); return undefined; }
+    if (!result.ok) {
+      // Clear any previously shown detail: a stale detail with its actions still enabled must never
+      // remain visible once a reload (initial or after an action) fails to confirm the current state.
+      setDetail(undefined);
+      setLoadError(errorMessages[result.error] ?? errorMessages.unavailable);
+      return undefined;
+    }
     setLoadError(undefined);
     setDetail(result.value);
     return result.value;
@@ -87,7 +95,10 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
         <h2 id={headingId} className="font-heading text-lg font-bold">Detalle de la orden</h2>
         <button type="button" className={button} onClick={onClose} aria-label="Cerrar">Cerrar</button>
       </div>
-      {loadError !== undefined && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{loadError}</p>}
+      {loadError !== undefined && <div role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">
+        <p>{loadError}</p>
+        <button type="button" className={`${button} mt-2`} onClick={() => void load()}>Reintentar</button>
+      </div>}
       {actionError !== undefined && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{actionError}</p>}
       {detail === undefined && loadError === undefined && <p className="mt-4 text-sm text-text-muted">Cargando…</p>}
       {detail !== undefined && <>
@@ -100,7 +111,8 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
           {hasAction(detail, "sendToKitchen") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
             onClick={() => {
               const attempt = nextAttempt();
-              void runAction("sendToKitchen", () => actions.sendToKitchen(detail.orderId, detail.version, attempt.eventId, attempt.idempotencyKey));
+              const orderItemIds = pendingOrderItemIds(detail);
+              void runAction("sendToKitchen", () => actions.sendToKitchen(detail.orderId, detail.version, orderItemIds, attempt.eventId, attempt.idempotencyKey));
             }}>
             {busyAction === "sendToKitchen" ? "Enviando…" : actionLabel("sendToKitchen")}
           </button>}
