@@ -60,6 +60,7 @@ const readOrderSql = "select app_private.read_order($1::uuid, $2::uuid, $3::uuid
 const persistOrderSql = "select app_private.persist_order_mutation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
 const cancelOrderItemSql = "select app_private.persist_order_item_cancellation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
 const createOperationalOrderSql = "select app_private.create_operational_order($1::uuid, $2::uuid, $3::jsonb, $4::jsonb) as result";
+const sendOrderToKitchenSql = "select app_private.send_order_to_kitchen($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
 const recoverKdsSql = "select app_private.recover_kds_events($1::uuid, $2::uuid, $3::uuid, $4::text, $5::bigint, $6::integer) as result";
 const listKdsTicketsSql = "select app_private.list_kds_tickets($1::uuid, $2::uuid, $3::uuid, $4::text) as result";
 
@@ -88,11 +89,31 @@ export type PersistOrderResult =
   | Readonly<{ readonly status: "conflict" | "forbidden" }>
   | SavedOrReplayedOrderResult;
 
+/**
+ * Result of `app_private.send_order_to_kitchen`'s atomic batch (S9.1 r12): the whole batch is
+ * persisted or none of it is, so unlike `PersistOrderResult` there is one `kdsEvents` array (one
+ * entry, possibly null, per step) instead of a single `kdsEvent`.
+ */
+export type SendOrderToKitchenBatchResult =
+  | Readonly<{ readonly status: "conflict" }>
+  | Readonly<{
+    readonly kdsEvents: readonly (KdsEventV1 | null)[];
+    readonly order: Order;
+    readonly status: "replayed" | "saved";
+    readonly version: number;
+  }>;
+
 export interface OrderPersistencePort {
   listKdsTickets(actorId: string, subscription: RealtimeSubscriptionV1): Promise<KdsTicketListV1 | "forbidden">;
   persist(actorId: string, expectedVersion: number, mutation: OrderMutation, operationalShiftId?: string): Promise<PersistOrderResult>;
   read(actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing">;
   recoverKds(actorId: string, subscription: RealtimeSubscriptionV1, after: KdsCursorV1, limit: number): Promise<KdsEventPageV1 | "forbidden">;
+  sendOrderToKitchen(
+    actorId: string,
+    expectedVersion: number,
+    command: SendOrderToKitchenCommandV1,
+    steps: readonly OrderMutation[],
+  ): Promise<SendOrderToKitchenBatchResult>;
 }
 
 export const ORDER_PERSISTENCE_PORT = Symbol("ORDER_PERSISTENCE_PORT");
@@ -199,6 +220,63 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
       ))
     ) throw unavailable();
     return Object.freeze({ kdsEvent: kdsEvent ?? null, order, status, version });
+  }
+
+  public async sendOrderToKitchen(
+    actorId: string,
+    expectedVersion: number,
+    command: SendOrderToKitchenCommandV1,
+    steps: readonly OrderMutation[],
+  ): Promise<SendOrderToKitchenBatchResult> {
+    const encodedCommand = {
+      deviceId: command.deviceId,
+      eventId: command.eventId,
+      expectedVersion: command.expectedVersion,
+      idempotencyKey: command.idempotencyKey,
+      occurredAt: command.occurredAt,
+      orderId: command.orderId,
+      orderItemIds: command.orderItemIds,
+      schemaVersion: command.schemaVersion,
+      scope: command.scope,
+    };
+    const encodedSteps = steps.map((step) => ({
+      audit: encodeOrderAuditEventRecord(step.auditEvent),
+      order: encodeOrderRecord(step.order),
+    }));
+    const result = await this.database.query(sendOrderToKitchenSql, [
+      actorId,
+      expectedVersion,
+      JSON.stringify(encodedCommand),
+      JSON.stringify(encodedSteps),
+    ]);
+    const raw = singleResult(result.rows);
+    const minimal = exactRecord(raw, ["status"]);
+    if (minimal !== undefined) {
+      const status = own(minimal, "status");
+      if (status === "conflict") return Object.freeze({ status });
+      throw unavailable();
+    }
+    const record = exactRecord(raw, ["schemaVersion", "scope", "status", "order", "version", "kdsEvents"]);
+    if (record === undefined || own(record, "schemaVersion") !== 1) throw unavailable();
+    const status = own(record, "status");
+    if (status !== "saved" && status !== "replayed") throw unavailable();
+    const order = decodeOrderRecord(own(record, "order"));
+    const version = positiveInteger(own(record, "version"));
+    const kdsEventsRaw = own(record, "kdsEvents");
+    if (!Array.isArray(kdsEventsRaw)) throw unavailable();
+    const kdsEvents: (KdsEventV1 | null)[] = [];
+    for (const entry of kdsEventsRaw) {
+      if (entry === null) { kdsEvents.push(null); continue; }
+      const parsed = parseKdsEventV1(entry);
+      if (parsed === undefined) throw unavailable();
+      kdsEvents.push(parsed);
+    }
+    if (
+      version === undefined
+      || !sameScopeValues(own(record, "scope"), order.restaurantId, order.branchId)
+      || (status === "saved" && version !== expectedVersion + steps.length)
+    ) throw unavailable();
+    return Object.freeze({ kdsEvents: Object.freeze(kdsEvents), order, status, version });
   }
 
   public async recoverKds(
@@ -429,35 +507,14 @@ export class OrderService {
   }
 
   /**
-   * S9.1 web-order-actions: opens a draft order (if still draft) and sends the lines the operator
-   * actually saw pending, as one operator-facing command instead of a client-side batch of separate
-   * open/transition requests. The set of lines to send is exactly `command.orderItemIds`, fixed by
-   * the first attempt: a retry (same eventId/idempotencyKey) targets the identical set, so a line
-   * another actor adds to the order *after* the original attempt is never swept in by the resend,
-   * and a line *not* listed is never sent by this command even if it is pending. Each step is
-   * persisted with its own `this.persistRaw` call using an eventId/idempotencyKey *derived* from the
-   * command's own (see `derivedUuid`, same technique as capture materialization's
-   * `appendMaterializedItems`): a byte-identical retried step is recognized by
-   * `persist_order_mutation`'s own idempotency lookup (which runs *before* its version check) and
-   * replayed, so a resend after a lost response is never rejected as a version conflict.
-   *
-   * The batch does not "resume" a partial attempt by re-reading forward past `expectedVersion`:
-   * `stored.version` must match `command.expectedVersion` *exactly`, or this is a `conflict` and
-   * nothing is persisted -- a version *older* than expected is impossible in normal operation, and a
-   * version *ahead* of it means something else persisted since the operator's list was captured, with
-   * no way to verify whether that "something else" was this very command's own earlier, lost-response
-   * attempt or a different operator's unrelated action: without the command's payload persisted (deuda
-   * nivel A -- a SQL identity/idempotency-key lookup would resolve this precisely), the server cannot
-   * safely attribute that advanced state to itself, so it never reports `replayed: true` for it. The
-   * client reloads on `conflict` and resends with the fresh version and whatever lines are still
-   * actually pending; if they already reached the kitchen, `sendToKitchen` simply stops being offered
-   * in `availableActions` and nothing is lost. The exact-match path is the only one that can replay:
-   * each step persists against the *current* aggregate, re-read from the previous step's own persisted
-   * result, so a listed line already sent earlier *within this same call* (or no longer pending for
-   * any other reason) is simply skipped, and a byte-identical resend (same eventId/idempotencyKey,
-   * same expectedVersion -- e.g. a double click) is recognized and replayed by
-   * `persist_order_mutation`'s own idempotency lookup per step, never duplicated. Any listed id that
-   * does not belong to this order is `not_found`.
+   * S9.1 r12: the batch is persisted atomically by `app_private.send_order_to_kitchen` -- either
+   * every step (the draft-open transition, if any, plus one "sent" transition per listed
+   * still-pending line) is saved or none is, and the command's own `idempotencyKey` is the replay
+   * identity: a byte-identical retry (same actor/scope/idempotencyKey *and* the identical command
+   * payload) always replays the stored result, no matter what the order's version has done since.
+   * Any other difference under the same key -- a different payload, a stale `expectedVersion`, an
+   * unknown line id, or any step no longer matching the order's current aggregate -- is a
+   * `conflict`/`not_found`, atomically, with zero persisted effects.
    */
   public async sendToKitchen(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
     const command = parseSendOrderToKitchenCommandV1(input);
@@ -472,29 +529,38 @@ export class OrderService {
       if (error instanceof OrderApplicationError) throw error;
       throw unavailable();
     }
-    if (stored.version !== command.expectedVersion) throw applicationError("conflict");
+    if (stored.version !== command.expectedVersion) {
+      // The identity of a replay lives in SQL under the command's own idempotencyKey, not in
+      // whether the order's version still matches: resolve it there instead of guessing from a
+      // version mismatch that could just as well be this very command's own earlier, lost-response
+      // attempt having already succeeded.
+      const batch = await this.sendOrderToKitchenRaw(actorId, command, []);
+      if (batch.status !== "replayed") throw applicationError("conflict");
+      return this.summaryFromBatch(batch);
+    }
     const orderItemIds = new Set(command.orderItemIds);
     const knownOrderItemIds = new Set(stored.order.items.map((item) => item.orderItemId));
     for (const orderItemId of orderItemIds) {
       if (!knownOrderItemIds.has(orderItemId)) throw applicationError("not_found");
     }
-    const hasListedPendingLine = (): boolean => stored.order.items.some((item) => item.status === "pending" && orderItemIds.has(item.orderItemId));
+    const hasListedPendingLine = stored.order.items.some((item) => item.status === "pending" && orderItemIds.has(item.orderItemId));
 
-    let lastResult: SavedOrReplayedOrderResult | undefined;
-    if (stored.order.status === "draft") {
-      if (!hasListedPendingLine()) throw applicationError("conflict");
-      const mutation = transitionOrderStatus(stored.order, "open", stepAuditContext(command, actorId, "open"));
-      lastResult = await this.persistRaw(actorId, stored.version, mutation);
-      stored = { order: lastResult.order, version: lastResult.version };
+    const steps: OrderMutation[] = [];
+    let cursor = stored.order;
+    if (cursor.status === "draft") {
+      if (!hasListedPendingLine) throw applicationError("conflict");
+      const mutation = transitionOrderStatus(cursor, "open", stepAuditContext(command, actorId, "open"));
+      steps.push(mutation);
+      cursor = mutation.order;
     }
-    for (const item of stored.order.items) {
+    for (const item of cursor.items) {
       if (item.status !== "pending" || !orderItemIds.has(item.orderItemId)) continue;
-      const mutation = transitionOrderItemStatus(stored.order, item.orderItemId, "sent", stepAuditContext(command, actorId, item.orderItemId));
-      lastResult = await this.persistRaw(actorId, stored.version, mutation);
-      stored = { order: lastResult.order, version: lastResult.version };
+      const mutation = transitionOrderItemStatus(cursor, item.orderItemId, "sent", stepAuditContext(command, actorId, item.orderItemId));
+      steps.push(mutation);
+      cursor = mutation.order;
     }
 
-    if (lastResult === undefined) {
+    if (steps.length === 0) {
       const scope = parseBranchScope({ branchId: stored.order.branchId, restaurantId: stored.order.restaurantId });
       if (scope === undefined) throw unavailable();
       return Object.freeze({
@@ -502,7 +568,42 @@ export class OrderService {
         replayed: false, schemaVersion: 1, scope, version: stored.version,
       });
     }
-    return this.summaryFromResult(lastResult);
+    const batch = await this.sendOrderToKitchenRaw(actorId, command, steps);
+    if (batch.status !== "saved" && batch.status !== "replayed") throw applicationError("conflict");
+    return this.summaryFromBatch(batch);
+  }
+
+  private async sendOrderToKitchenRaw(
+    actorId: string,
+    command: SendOrderToKitchenCommandV1,
+    steps: readonly OrderMutation[],
+  ): Promise<SendOrderToKitchenBatchResult> {
+    let result: SendOrderToKitchenBatchResult;
+    try { result = await this.orders.sendOrderToKitchen(actorId, command.expectedVersion, command, steps); }
+    catch { throw unavailable(); }
+    if (result.status === "saved") {
+      for (const kdsEvent of result.kdsEvents) {
+        if (kdsEvent === null) continue;
+        try { await this.notifications.notify(kdsEvent); } catch { /* Durable cursor recovery is authoritative. */ }
+      }
+    }
+    return result;
+  }
+
+  private summaryFromBatch(batch: SendOrderToKitchenBatchResult): OrderMutationSummaryV1 {
+    if (batch.status === "conflict") throw applicationError("conflict");
+    const scope = parseBranchScope({ branchId: batch.order.branchId, restaurantId: batch.order.restaurantId });
+    if (scope === undefined) throw unavailable();
+    const lastKdsEvent = batch.kdsEvents.length === 0 ? null : batch.kdsEvents[batch.kdsEvents.length - 1]!;
+    return Object.freeze({
+      kdsEvent: lastKdsEvent,
+      orderId: batch.order.orderId,
+      orderStatus: batch.order.status,
+      replayed: batch.status === "replayed",
+      schemaVersion: 1,
+      scope,
+      version: batch.version,
+    });
   }
 
   private async persistRaw(
