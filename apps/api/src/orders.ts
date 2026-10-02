@@ -447,7 +447,9 @@ export class OrderService {
    * sent by this very command (replayed) or no longer pending for any other reason (e.g. cancelled
    * by an unrelated actor) is simply skipped rather than blindly overwritten. Only a fresh read
    * reporting a version *older* than `expectedVersion` (impossible in normal operation) is treated as
-   * a conflict. Any listed id that does not belong to this order is `not_found`.
+   * a conflict. Any listed id that does not belong to this order is `not_found`. A still-draft order
+   * with none of its listed ids actually pending (e.g. all cancelled by another actor since the
+   * command was built) is also a `conflict`, never opened for nothing.
    */
   public async sendToKitchen(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
     const command = parseSendOrderToKitchenCommandV1(input);
@@ -471,6 +473,8 @@ export class OrderService {
 
     let lastResult: SavedOrReplayedOrderResult | undefined;
     if (stored.order.status === "draft") {
+      const hasListedPendingLine = stored.order.items.some((item) => item.status === "pending" && orderItemIds.has(item.orderItemId));
+      if (!hasListedPendingLine) throw applicationError("conflict");
       const mutation = transitionOrderStatus(stored.order, "open", stepAuditContext(command, actorId, "open"));
       lastResult = await this.persistRaw(actorId, stored.version, mutation);
       stored = { order: lastResult.order, version: lastResult.version };

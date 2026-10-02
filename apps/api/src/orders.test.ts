@@ -18,7 +18,7 @@ import {
   parseTransitionOrderItemCommandV1,
   type MenuCatalogStateV1,
 } from "@super-restaurant/shared-types";
-import { addOrderItem, createOrder, Money, transitionOrderItemStatus, transitionOrderStatus, type Order, type OrderMutation } from "@super-restaurant/domain";
+import { addOrderItem, cancelOrderItem, createOrder, Money, transitionOrderItemStatus, transitionOrderStatus, type Order, type OrderMutation } from "@super-restaurant/domain";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService, type MembershipLookupPort } from "./auth/membership-authorization.js";
@@ -594,6 +594,27 @@ test("sendToKitchen opens a draft order and sends every pending line", async () 
   assert.equal(fake.currentOrder().status, "open");
   assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["sent", "sent", "sent"]);
   assert.equal(fake.currentVersion(), 5); // 1 (open) + 3 (each line)
+});
+
+test("sendToKitchen on a still-draft order reports conflict, never opens the account, when every listed line was cancelled by another actor first", async () => {
+  const withPendingLine = addOrderItem(domainMutation.order, {
+    orderItemId,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: "Hamburguesa",
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(12_500, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order;
+  // Between the operator's detail load and this request, another actor (not this command) cancelled
+  // the only line the command lists -- the draft must not be opened for an empty, obsolete send.
+  const cancelledByAnotherActor = cancelOrderItem(withPendingLine, orderItemId, { ...audit, actorId: randomUUID(), reason: "Cliente canceló el pedido" }).order;
+  const fake = fakeSendToKitchenPort(cancelledByAnotherActor, 1);
+  const service = serviceFor(["manager"], fake.port);
+  const command = sendToKitchenCommand(orderId, 1, randomUUID(), "send-to-kitchen-obsolete-draft", [orderItemId]);
+
+  await assertCode(service.sendToKitchen(principal, command), "conflict");
+  assert.equal(fake.currentOrder().status, "draft");
+  assert.equal(fake.currentVersion(), 1);
 });
 
 test("sendToKitchen resumes a partially-applied batch on retry instead of conflicting", async () => {
