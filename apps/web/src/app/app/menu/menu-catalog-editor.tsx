@@ -228,7 +228,7 @@ function ProductEditor({ canManage, categories, currency, groups, product, onAdd
             {categories.map((category) => <option key={category.categoryId} value={category.categoryId}>{category.name}</option>)}
           </select>
         </label>
-        <TextInput disabled={!canManage} label="SKU (opcional)" maxLength={64} value={product.sku ?? ""} onChange={(sku) => change({ sku: sku.length === 0 ? null : sku })} />
+        <TextInput disabled={!canManage} label="Clave interna (opcional)" help="Código que usas en inventario o en tu impresora; puedes dejarlo vacío" required={false} maxLength={64} value={product.sku ?? ""} onChange={(sku) => change({ sku: sku.trim() === "" ? null : sku })} />
         <NumberInput disabled={!canManage} label={`Precio (${currency || "moneda"}, unidad menor)`} min={0} max={Number.MAX_SAFE_INTEGER} value={product.unitPriceMinor} onChange={(unitPriceMinor) => change({ unitPriceMinor })} />
         <TextInput disabled={!canManage} label="Estación" maxLength={64} value={product.stationId} onChange={(stationId) => change({ stationId })} />
         <TextInput disabled={!canManage} label="Unidad" maxLength={32} value={product.unit} onChange={(unit) => change({ unit })} />
@@ -312,8 +312,8 @@ function SectionHeader({ children, description, title }: { readonly children?: R
   return <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-heading text-[16px] font-semibold">{title}</h2><p className="mt-1 text-[12px] text-text-muted">{description}</p></div>{children}</div>;
 }
 
-function TextInput({ disabled, label, maxLength, onChange, value, width = "w-full" }: { readonly disabled: boolean; readonly label: string; readonly maxLength: number; readonly onChange: (value: string) => void; readonly value: string; readonly width?: string }): ReactNode {
-  return <label className={`flex min-w-0 flex-col gap-1 text-[11px] font-medium ${width}`}>{label}<input required disabled={disabled} maxLength={maxLength} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" /></label>;
+function TextInput({ disabled, help, label, maxLength, onChange, required = true, value, width = "w-full" }: { readonly disabled: boolean; readonly help?: string; readonly label: string; readonly maxLength: number; readonly onChange: (value: string) => void; readonly required?: boolean; readonly value: string; readonly width?: string }): ReactNode {
+  return <label className={`flex min-w-0 flex-col gap-1 text-[11px] font-medium ${width}`}>{label}<input required={required} disabled={disabled} maxLength={maxLength} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" />{help && <span className="text-[11px] font-normal text-text-muted">{help}</span>}</label>;
 }
 
 function NumberInput({ disabled, label, max, min, onChange, value }: { readonly disabled: boolean; readonly label: string; readonly max: number; readonly min: number; readonly onChange: (value: number) => void; readonly value: number }): ReactNode {
