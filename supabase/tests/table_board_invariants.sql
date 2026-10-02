@@ -113,13 +113,13 @@ begin
     order_a,restaurant,branch,table_id,'table','open',
     pg_catalog.jsonb_build_object(
       'schemaVersion',1,'orderId',order_a::text,'restaurantId',restaurant::text,'branchId',branch::text,
-      'channel','table','status','open','items','[]'::jsonb
+      'channel','table','status','open','timeZone','America/Hermosillo','currency','MXN','items','[]'::jsonb
     ),1,actor,actor
   ), (
     order_b,restaurant,branch,table_id,'table','closed',
     pg_catalog.jsonb_build_object(
       'schemaVersion',1,'orderId',order_b::text,'restaurantId',restaurant::text,'branchId',branch::text,
-      'channel','table','status','closed','items','[]'::jsonb
+      'channel','table','status','closed','timeZone','America/Hermosillo','currency','MXN','items','[]'::jsonb
     ),1,actor,actor
   );
 
