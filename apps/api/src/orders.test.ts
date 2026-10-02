@@ -24,6 +24,7 @@ import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService, type MembershipLookupPort } from "./auth/membership-authorization.js";
 import type { DatabaseClientPort } from "./database.js";
 import type { MenuCatalogPort } from "./menu-catalog.js";
+import type { OperationalShiftDirectoryPort } from "./operational-shifts.js";
 import {
   OrderApplicationError,
   OrderService,
@@ -336,6 +337,56 @@ test("order service keeps v1 compatible and binds only v2 creation to an operati
   if (v2 === undefined) throw new Error("TEST_OPERATIONAL_CREATE_COMMAND_INVALID");
   assert.equal((await service.create(principal, v2)).orderStatus, "draft");
   assert.deepEqual(receivedShiftIds, [undefined, shiftId]);
+});
+
+test("order service resolves a null shiftId to the branch's one open shift, and rejects with conflict when none is open", async () => {
+  const resolvedShiftId = randomUUID();
+  const receivedShiftIds: (string | undefined)[] = [];
+  const orders: OrderPersistencePort = {
+    listKdsTickets: async () => ticketList,
+    persist: async (_actorId, expectedVersion, mutation, operationalShiftId) => {
+      receivedShiftIds.push(operationalShiftId);
+      return { kdsEvent: null, order: mutation.order, status: "saved", version: expectedVersion + 1 };
+    },
+    read: async () => ({ order: domainMutation.order, version: 1 }),
+    recoverKds: async () => eventPage,
+    sendOrderToKitchen: notImplementedSendOrderToKitchen,
+  };
+  const openShift = {
+    listActive: async () => ({
+      schemaVersion: 1 as const, scope,
+      shifts: [{
+        name: "Turno", openedAt: "2026-09-05T18:00:00.000Z", openedBy: randomUUID(),
+        schemaVersion: 1 as const, scope, shiftId: resolvedShiftId, status: "open" as const, version: 1,
+      }],
+    }),
+  };
+  const serviceWithOpenShift = serviceFor(["manager"], orders, { notify: async () => undefined }, openShift);
+  const v2 = parseCreateOrderCommandV2({
+    channel: "table", currency: "MXN", deviceId: randomUUID(), eventId: randomUUID(),
+    idempotencyKey: "orders-test-null-shift-resolved", occurredAt: "2026-09-05T20:30:00.000Z",
+    orderId: randomUUID(), schemaVersion: 2, scope, shiftId: null, tableId: randomUUID(),
+    timeZone: "America/Hermosillo",
+  });
+  if (v2 === undefined) throw new Error("TEST_NULL_SHIFT_CREATE_COMMAND_INVALID");
+  assert.equal((await serviceWithOpenShift.create(principal, v2)).orderStatus, "draft");
+  assert.deepEqual(receivedShiftIds, [resolvedShiftId]);
+
+  const serviceWithNoOpenShift = serviceFor(["manager"], orders, { notify: async () => undefined }, {
+    listActive: async () => ({ schemaVersion: 1, scope, shifts: [] }),
+  });
+  const v2NoShift = parseCreateOrderCommandV2({
+    channel: "table", currency: "MXN", deviceId: randomUUID(), eventId: randomUUID(),
+    idempotencyKey: "orders-test-null-shift-conflict", occurredAt: "2026-09-05T20:30:00.000Z",
+    orderId: randomUUID(), schemaVersion: 2, scope, shiftId: null, tableId: randomUUID(),
+    timeZone: "America/Hermosillo",
+  });
+  if (v2NoShift === undefined) throw new Error("TEST_NULL_SHIFT_CREATE_COMMAND_INVALID");
+  await assert.rejects(serviceWithNoOpenShift.create(principal, v2NoShift), (error: unknown) => {
+    assert.ok(error instanceof OrderApplicationError);
+    assert.equal(error.code, "conflict");
+    return true;
+  });
 });
 
 test("order service accepts the mobile handoff sequence through v2 create, item mutations, and open", async () => {
@@ -902,10 +953,11 @@ function serviceFor(
   roles: readonly ("manager" | "supervisor" | "viewer" | "waiter" | "cashier" | "kitchen")[],
   orders: OrderPersistencePort,
   notifications: RealtimeNotificationPort = { notify: async () => undefined },
+  shifts: OperationalShiftDirectoryPort = { listActive: async () => ({ schemaVersion: 1, scope, shifts: [] }) },
 ): OrderService {
   const memberships: MembershipLookupPort = { findActiveMembership: async () => ({ roles, scope }) };
   const catalogs: MenuCatalogPort = { read: async () => menuState, save: async () => ({ status: "conflict" }) };
-  return new OrderService(new MembershipAuthorizationService(memberships), orders, catalogs, notifications);
+  return new OrderService(new MembershipAuthorizationService(memberships), orders, catalogs, notifications, shifts);
 }
 
 const menuState: MenuCatalogStateV1 = (() => {

@@ -72,6 +72,7 @@ import {
 import { OperationalShiftsController } from "./operational-shifts.controller.js";
 import {
   OPERATIONAL_SHIFT_DIRECTORY,
+  OPERATIONAL_SHIFT_WRITER,
   OperationalShiftService,
   PostgresOperationalShiftDirectory,
 } from "./operational-shifts.js";
@@ -211,6 +212,7 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     FinancialService,
     PostgresOperationalShiftDirectory,
     { provide: OPERATIONAL_SHIFT_DIRECTORY, useExisting: PostgresOperationalShiftDirectory },
+    { provide: OPERATIONAL_SHIFT_WRITER, useExisting: PostgresOperationalShiftDirectory },
     OperationalShiftService,
     PostgresTableOrderContextDirectory,
     { provide: TABLE_ORDER_CONTEXT_DIRECTORY, useExisting: PostgresTableOrderContextDirectory },

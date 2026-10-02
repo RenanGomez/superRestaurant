@@ -1,8 +1,12 @@
 import { Inject, Injectable } from "@nestjs/common";
 import {
   parseBranchScope,
+  parseOpenOperationalShiftCommandV1,
+  parseOpenOperationalShiftResultV1,
   parseOperationalShiftListV1,
   type BranchScope,
+  type OpenOperationalShiftCommandV1,
+  type OpenOperationalShiftResultV1,
   type OperationalShiftListV1,
 } from "@super-restaurant/shared-types";
 
@@ -11,8 +15,9 @@ import { MembershipAuthorizationService } from "./auth/membership-authorization.
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 
 const listSql = "select app_private.list_active_operational_shifts($1::uuid, $2::uuid, $3::uuid) as state";
+const openSql = "select app_private.open_operational_shift($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::text, $6::jsonb) as result";
 
-export type OperationalShiftApplicationErrorCode = "authorization" | "request" | "unavailable";
+export type OperationalShiftApplicationErrorCode = "authorization" | "conflict" | "request" | "unavailable";
 
 export class OperationalShiftApplicationError extends Error {
   public constructor(public readonly code: OperationalShiftApplicationErrorCode) {
@@ -27,8 +32,20 @@ export interface OperationalShiftDirectoryPort {
 
 export const OPERATIONAL_SHIFT_DIRECTORY = Symbol("OPERATIONAL_SHIFT_DIRECTORY");
 
+export type OpenOperationalShiftResult =
+  | Readonly<{ status: "conflict" }>
+  | Readonly<{ status: "forbidden" }>
+  | Readonly<{ status: "replayed"; shiftId: string }>
+  | Readonly<{ status: "saved"; shiftId: string }>;
+
+export interface OperationalShiftWriterPort {
+  open(actorId: string, command: OpenOperationalShiftCommandV1): Promise<OpenOperationalShiftResult>;
+}
+
+export const OPERATIONAL_SHIFT_WRITER = Symbol("OPERATIONAL_SHIFT_WRITER");
+
 @Injectable()
-export class PostgresOperationalShiftDirectory implements OperationalShiftDirectoryPort {
+export class PostgresOperationalShiftDirectory implements OperationalShiftDirectoryPort, OperationalShiftWriterPort {
   public constructor(@Inject(DATABASE_CLIENT) private readonly database: DatabaseClientPort) {}
 
   public async listActive(actorId: string, scope: BranchScope): Promise<OperationalShiftListV1 | "forbidden"> {
@@ -45,6 +62,31 @@ export class PostgresOperationalShiftDirectory implements OperationalShiftDirect
     if (parsed === undefined || !sameScope(parsed.scope, scope)) throw unavailable();
     return parsed;
   }
+
+  public async open(actorId: string, command: OpenOperationalShiftCommandV1): Promise<OpenOperationalShiftResult> {
+    const audit = {
+      actorId, branchId: command.scope.branchId, deviceId: command.deviceId, entityId: command.shiftId,
+      entityType: "operational_shift", eventId: command.eventId, idempotencyKey: command.idempotencyKey,
+      occurredAt: command.occurredAt, operation: "operational_shift.opened", restaurantId: command.scope.restaurantId,
+      schemaVersion: 1,
+    };
+    const result = await this.database.query(openSql, [
+      actorId, command.scope.restaurantId, command.scope.branchId, command.shiftId, command.name, JSON.stringify(audit),
+    ]);
+    const raw = result.rows.length === 1 ? result.rows[0] : undefined;
+    const minimal = exactRecord(raw, ["status"]);
+    if (minimal !== undefined) {
+      const status = own(minimal, "status");
+      if (status === "conflict" || status === "forbidden") return Object.freeze({ status });
+      throw unavailable();
+    }
+    const record = exactRecord(raw, ["status", "shiftId"]);
+    const status = record === undefined ? undefined : own(record, "status");
+    if (status !== "saved" && status !== "replayed") throw unavailable();
+    const shiftId = own(record as Readonly<Record<string, unknown>>, "shiftId");
+    if (typeof shiftId !== "string" || shiftId !== command.shiftId) throw unavailable();
+    return Object.freeze({ shiftId, status });
+  }
 }
 
 @Injectable()
@@ -52,6 +94,7 @@ export class OperationalShiftService {
   public constructor(
     @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
     @Inject(OPERATIONAL_SHIFT_DIRECTORY) private readonly shifts: OperationalShiftDirectoryPort,
+    @Inject(OPERATIONAL_SHIFT_WRITER) private readonly writer: OperationalShiftWriterPort,
   ) {}
 
   public async listActive(principal: AuthenticatedPrincipal, input: unknown): Promise<OperationalShiftListV1> {
@@ -69,6 +112,33 @@ export class OperationalShiftService {
       if (error instanceof OperationalShiftApplicationError) throw error;
       throw unavailable();
     }
+  }
+
+  /** `cash-register.manage` is reused here: opening the branch's service period is the same
+   * cashier/manager-level daily-operations action as opening a cash register, and every role that
+   * already opens a register (cashier, supervisor, manager, admin, owner) is who actually opens a
+   * shift on the floor. */
+  public async open(principal: AuthenticatedPrincipal, input: unknown): Promise<OpenOperationalShiftResultV1> {
+    const command = parseOpenOperationalShiftCommandV1(input);
+    if (command === undefined) throw applicationError("request");
+    let actorId: string;
+    try {
+      actorId = (await this.authorization.authorizeBranch(principal, command.scope, "cash-register.manage")).principal.actorId;
+    } catch { throw applicationError("authorization"); }
+    let result: OpenOperationalShiftResult;
+    try {
+      result = await this.writer.open(actorId, command);
+    } catch (error: unknown) {
+      if (error instanceof OperationalShiftApplicationError) throw error;
+      throw unavailable();
+    }
+    if (result.status === "forbidden") throw applicationError("authorization");
+    if (result.status === "conflict") throw applicationError("conflict");
+    const parsed = parseOpenOperationalShiftResultV1({
+      replayed: result.status === "replayed", schemaVersion: 1, scope: command.scope, shiftId: result.shiftId,
+    });
+    if (parsed === undefined) throw unavailable();
+    return parsed;
   }
 }
 

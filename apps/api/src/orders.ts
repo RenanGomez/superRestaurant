@@ -50,6 +50,7 @@ import { rolesGrantPermission } from "./auth/rbac-policy.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
+import { OPERATIONAL_SHIFT_DIRECTORY, type OperationalShiftDirectoryPort } from "./operational-shifts.js";
 import {
   decodeOrderRecord,
   encodeOrderAuditEventRecord,
@@ -309,19 +310,41 @@ export class OrderService {
     @Inject(ORDER_PERSISTENCE_PORT) private readonly orders: OrderPersistencePort,
     @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
     @Inject(REALTIME_NOTIFICATION_PORT) private readonly notifications: RealtimeNotificationPort,
+    @Inject(OPERATIONAL_SHIFT_DIRECTORY) private readonly shifts: OperationalShiftDirectoryPort,
   ) {}
 
+  /**
+   * tables-board: `shiftId: null` means the operator never picked one. The server resolves the
+   * branch's single open operational shift itself (the same invariant `open_operational_shift`
+   * enforces in SQL: at most one `open` row per branch) and rejects with `conflict` if none is
+   * open, instead of trusting a client-supplied id.
+   */
   public async create(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
     const operationalCommand = parseCreateOrderCommandV2(input);
     const command = operationalCommand ?? parseCreateOrderCommandV1(input);
     if (command === undefined) throw applicationError("request");
     const actorId = await this.authorize(principal, command.scope, "orders.create");
+    let shiftId = operationalCommand?.shiftId ?? undefined;
+    if (operationalCommand !== undefined && operationalCommand.shiftId === null) {
+      shiftId = await this.resolveOpenShift(actorId, operationalCommand.scope);
+    }
     return this.persist(
       actorId,
       0,
       createOrder(orderInput(command), auditContext(command, actorId)),
-      operationalCommand?.shiftId,
+      shiftId,
     );
+  }
+
+  private async resolveOpenShift(actorId: string, scope: BranchScope): Promise<string> {
+    let result: Awaited<ReturnType<OperationalShiftDirectoryPort["listActive"]>>;
+    try {
+      result = await this.shifts.listActive(actorId, scope);
+    } catch { throw applicationError("conflict"); }
+    if (result === "forbidden") throw applicationError("conflict");
+    const [shift] = result.shifts;
+    if (shift === undefined) throw applicationError("conflict");
+    return shift.shiftId;
   }
 
   public async addItem(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
