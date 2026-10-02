@@ -5,7 +5,14 @@ import { authorizeBranch } from "../../../lib/branch-selection";
 import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
 import { FocusRevalidate } from "../focus-revalidate";
-import { branchOrderWorkTrayAction } from "./actions";
+import {
+  branchOrderWorkTrayAction,
+  cancelOrderItemAction,
+  openOrderAction,
+  orderDetailAction,
+  sendToKitchenAction,
+  transitionOrderItemAction,
+} from "./actions";
 import { OrdersTray } from "./orders-tray";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +39,13 @@ export default async function OrdersPage() {
       <h1 className="font-heading text-2xl font-bold">Órdenes activas · {membership.restaurantName}</h1>
       <p className="mt-1 text-sm text-text-muted">{membership.branchName} · domicilio, recoger, mostrador y mesa</p></header>
     <OrdersTray scope={scope} action={branchOrderWorkTrayAction}
-      canCheckout={membership.roles.some((role) => FINANCIAL_ROLES.has(role))} />
+      canCheckout={membership.roles.some((role) => FINANCIAL_ROLES.has(role))}
+      detailActions={{
+        cancelItem: cancelOrderItemAction,
+        detail: orderDetailAction,
+        open: openOrderAction,
+        sendToKitchen: sendToKitchenAction,
+        transitionItem: transitionOrderItemAction,
+      }} />
   </div>;
 }

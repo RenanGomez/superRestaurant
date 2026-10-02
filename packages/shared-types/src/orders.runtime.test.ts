@@ -6,7 +6,10 @@ import {
   parseCreateOrderCommandV1,
   parseCreateOrderCommandV2,
   parseOpenOrderCommandV1,
+  parseOrderDetailRequestV1,
+  parseOrderDetailV1,
   parseOrderMutationSummaryV1,
+  parseSendOrderToKitchenCommandV1,
   parseTransitionOrderItemCommandV1,
 } from "./index.js";
 
@@ -25,6 +28,14 @@ expect(parsedAdd!==undefined && Object.isFrozen(parsedAdd.modifierGroups) && Obj
 expect(parseAddOrderItemCommandV1({...add,quantity:0})===undefined,"zero quantity fails");
 expect(parseAddOrderItemCommandV1({...add,modifierGroups:[...add.modifierGroups,...add.modifierGroups]})===undefined,"duplicate group fails");
 expect(parseOpenOrderCommandV1({...common,expectedVersion:1})!==undefined,"open command parses");
+const sendToKitchenItemIds=[add.orderItemId];
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1,orderItemIds:sendToKitchenItemIds})!==undefined,"send-to-kitchen command parses");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:0,orderItemIds:sendToKitchenItemIds})===undefined,"send-to-kitchen command requires a positive expectedVersion");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1,orderItemIds:[]})===undefined,"send-to-kitchen command rejects empty orderItemIds");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1,orderItemIds:[add.orderItemId,add.orderItemId]})===undefined,"send-to-kitchen command rejects duplicate orderItemIds");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1,orderItemIds:["not-a-uuid"]})===undefined,"send-to-kitchen command rejects non-uuid orderItemIds");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1})===undefined,"send-to-kitchen command requires orderItemIds");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1,orderItemIds:sendToKitchenItemIds,extra:true})===undefined,"send-to-kitchen command rejects extra keys");
 expect(parseTransitionOrderItemCommandV1({...common,expectedVersion:2,orderItemId:add.orderItemId,to:"ready"})!==undefined,"forward transition parses");
 expect(parseTransitionOrderItemCommandV1({...common,expectedVersion:2,orderItemId:add.orderItemId,to:"cancelled"})===undefined,"sensitive cancellation not exposed by this slice");
 
@@ -126,3 +137,26 @@ const cancellation={...common,expectedVersion:2,orderItemId:add.orderItemId,reas
 expect(parseCancelOrderItemCommandV1(cancellation)!==undefined,"item cancellation with an explicit reason parses");
 expect(parseCancelOrderItemCommandV1({...cancellation,reason:" "})===undefined,"blank cancellation reason fails");
 expect(parseCancelOrderItemCommandV1({...cancellation,authorization:{approved:true}})===undefined,"client cannot supply authorization evidence");
+
+const detailRequest={schemaVersion:1,scope,orderId:common.orderId};
+expect(parseOrderDetailRequestV1(detailRequest)!==undefined,"order detail request parses");
+expect(parseOrderDetailRequestV1({...detailRequest,orderId:"not-a-uuid"})===undefined,"order detail request rejects a malformed orderId");
+
+const detailItem={orderItemId:add.orderItemId,status:"pending",name:"Tacos al pastor",quantity:2,unitPriceMinor:5000,lineTotalMinor:10000,note:null,modifiers:[],availableActions:["cancelItem"]};
+const detail={
+  schemaVersion:1,scope,orderId:common.orderId,status:"open",channel:"table",
+  tableId:"d6f3073e-4d2d-4b9f-90ea-926e5a86ff02",currency:"MXN",timeZone:"America/Mexico_City",
+  createdAt:"2026-09-02T22:00:00.000Z",updatedAt:"2026-09-02T22:05:00.000Z",version:2,
+  items:[detailItem],
+  totals:{currency:"MXN",itemsTotalMinor:10000,deliveryChargeMinor:0,tipMinor:0,totalMinor:10000},
+  fulfillment:{channel:"table",tableId:"d6f3073e-4d2d-4b9f-90ea-926e5a86ff02",customerLabel:null,addressLabel:null,paymentIntent:null},
+  availableActions:["sendToKitchen","cancelItem"],
+};
+expect(parseOrderDetailV1(detail)!==undefined,"order detail parses");
+expect(parseOrderDetailV1({...detail,fulfillment:{...detail.fulfillment,channel:"counter"}})===undefined,"fulfillment.channel must match the order's own channel");
+expect(parseOrderDetailV1({...detail,totals:{...detail.totals,totalMinor:10001}})===undefined,"order detail totals must add up exactly");
+expect(parseOrderDetailV1({...detail,availableActions:["sendToKitchen","sendToKitchen"]})===undefined,"order detail rejects duplicate actions");
+expect(parseOrderDetailV1({...detail,availableActions:["not-an-action"]})===undefined,"order detail rejects an unknown action");
+const parsedDetail=parseOrderDetailV1(detail);
+expect(parsedDetail!==undefined && parsedDetail.items[0]?.availableActions[0]==="cancelItem","order detail keeps each line's own availableActions");
+expect(parseOrderDetailV1({...detail,items:[{...detailItem,availableActions:["cancelItem","cancelItem"]}]})===undefined,"a line's availableActions rejects duplicates");

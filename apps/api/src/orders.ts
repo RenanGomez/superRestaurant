@@ -9,7 +9,10 @@ import {
   parseKdsTicketListV1,
   parseOpenOrderCommandV1,
   parseBranchScope,
+  parseOrderDetailRequestV1,
+  parseOrderDetailV1,
   parseRealtimeSubscriptionV1,
+  parseSendOrderToKitchenCommandV1,
   parseTransitionOrderItemCommandV1,
   type BranchScope,
   type CreateOrderCommandV1,
@@ -20,11 +23,16 @@ import {
   type KdsTicketListV1,
   type MenuCatalogV1,
   type OrderAuditInputV1,
+  type OrderDetailActionV1,
+  type OrderDetailV1,
   type OrderMutationSummaryV1,
   type RealtimeSubscriptionV1,
+  type SendOrderToKitchenCommandV1,
 } from "@super-restaurant/shared-types";
+import { createHash } from "node:crypto";
 import {
   addOrderItem,
+  calculateOrderAggregateTotals,
   cancelOrderItem,
   createMenuProductPriceSnapshot,
   createOrder,
@@ -37,7 +45,8 @@ import {
 import { Inject, Injectable } from "@nestjs/common";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
-import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
+import { MembershipAuthorizationService, type MembershipRole } from "./auth/membership-authorization.js";
+import { rolesGrantPermission } from "./auth/rbac-policy.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
@@ -51,6 +60,7 @@ const readOrderSql = "select app_private.read_order($1::uuid, $2::uuid, $3::uuid
 const persistOrderSql = "select app_private.persist_order_mutation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
 const cancelOrderItemSql = "select app_private.persist_order_item_cancellation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
 const createOperationalOrderSql = "select app_private.create_operational_order($1::uuid, $2::uuid, $3::jsonb, $4::jsonb) as result";
+const sendOrderToKitchenSql = "select app_private.send_order_to_kitchen($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
 const recoverKdsSql = "select app_private.recover_kds_events($1::uuid, $2::uuid, $3::uuid, $4::text, $5::bigint, $6::integer) as result";
 const listKdsTicketsSql = "select app_private.list_kds_tickets($1::uuid, $2::uuid, $3::uuid, $4::text) as result";
 
@@ -68,10 +78,26 @@ export interface StoredOrder {
   readonly version: number;
 }
 
+export type SavedOrReplayedOrderResult = Readonly<{
+  readonly kdsEvent: KdsEventV1 | null;
+  readonly order: Order;
+  readonly status: "replayed" | "saved";
+  readonly version: number;
+}>;
+
 export type PersistOrderResult =
   | Readonly<{ readonly status: "conflict" | "forbidden" }>
+  | SavedOrReplayedOrderResult;
+
+/**
+ * Result of `app_private.send_order_to_kitchen`'s atomic batch (S9.1 r12): the whole batch is
+ * persisted or none of it is, so unlike `PersistOrderResult` there is one `kdsEvents` array (one
+ * entry, possibly null, per step) instead of a single `kdsEvent`.
+ */
+export type SendOrderToKitchenBatchResult =
+  | Readonly<{ readonly status: "conflict" }>
   | Readonly<{
-    readonly kdsEvent: KdsEventV1 | null;
+    readonly kdsEvents: readonly (KdsEventV1 | null)[];
     readonly order: Order;
     readonly status: "replayed" | "saved";
     readonly version: number;
@@ -82,6 +108,12 @@ export interface OrderPersistencePort {
   persist(actorId: string, expectedVersion: number, mutation: OrderMutation, operationalShiftId?: string): Promise<PersistOrderResult>;
   read(actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing">;
   recoverKds(actorId: string, subscription: RealtimeSubscriptionV1, after: KdsCursorV1, limit: number): Promise<KdsEventPageV1 | "forbidden">;
+  sendOrderToKitchen(
+    actorId: string,
+    expectedVersion: number,
+    command: SendOrderToKitchenCommandV1,
+    steps: readonly OrderMutation[],
+  ): Promise<SendOrderToKitchenBatchResult>;
 }
 
 export const ORDER_PERSISTENCE_PORT = Symbol("ORDER_PERSISTENCE_PORT");
@@ -188,6 +220,63 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
       ))
     ) throw unavailable();
     return Object.freeze({ kdsEvent: kdsEvent ?? null, order, status, version });
+  }
+
+  public async sendOrderToKitchen(
+    actorId: string,
+    expectedVersion: number,
+    command: SendOrderToKitchenCommandV1,
+    steps: readonly OrderMutation[],
+  ): Promise<SendOrderToKitchenBatchResult> {
+    const encodedCommand = {
+      deviceId: command.deviceId,
+      eventId: command.eventId,
+      expectedVersion: command.expectedVersion,
+      idempotencyKey: command.idempotencyKey,
+      occurredAt: command.occurredAt,
+      orderId: command.orderId,
+      orderItemIds: command.orderItemIds,
+      schemaVersion: command.schemaVersion,
+      scope: command.scope,
+    };
+    const encodedSteps = steps.map((step) => ({
+      audit: encodeOrderAuditEventRecord(step.auditEvent),
+      order: encodeOrderRecord(step.order),
+    }));
+    const result = await this.database.query(sendOrderToKitchenSql, [
+      actorId,
+      expectedVersion,
+      JSON.stringify(encodedCommand),
+      JSON.stringify(encodedSteps),
+    ]);
+    const raw = singleResult(result.rows);
+    const minimal = exactRecord(raw, ["status"]);
+    if (minimal !== undefined) {
+      const status = own(minimal, "status");
+      if (status === "conflict") return Object.freeze({ status });
+      throw unavailable();
+    }
+    const record = exactRecord(raw, ["schemaVersion", "scope", "status", "order", "version", "kdsEvents"]);
+    if (record === undefined || own(record, "schemaVersion") !== 1) throw unavailable();
+    const status = own(record, "status");
+    if (status !== "saved" && status !== "replayed") throw unavailable();
+    const order = decodeOrderRecord(own(record, "order"));
+    const version = positiveInteger(own(record, "version"));
+    const kdsEventsRaw = own(record, "kdsEvents");
+    if (!Array.isArray(kdsEventsRaw)) throw unavailable();
+    const kdsEvents: (KdsEventV1 | null)[] = [];
+    for (const entry of kdsEventsRaw) {
+      if (entry === null) { kdsEvents.push(null); continue; }
+      const parsed = parseKdsEventV1(entry);
+      if (parsed === undefined) throw unavailable();
+      kdsEvents.push(parsed);
+    }
+    if (
+      version === undefined
+      || !sameScopeValues(own(record, "scope"), order.restaurantId, order.branchId)
+      || (status === "saved" && version !== expectedVersion + steps.length)
+    ) throw unavailable();
+    return Object.freeze({ kdsEvents: Object.freeze(kdsEvents), order, status, version });
   }
 
   public async recoverKds(
@@ -321,6 +410,40 @@ export class OrderService {
     }
   }
 
+  /**
+   * Read-only projection (S9.1 web-order-actions). Reuses the same aggregate `OrderPersistencePort.read`
+   * already scoped by `read_order`, and `calculateOrderAggregateTotals` -- never a second money
+   * calculation. The fulfillment summary is deliberately reduced (see `OrderDetailFulfillmentV1`):
+   * only the Order's own channel/tableId, no customer/address/payment-intent PII, since that
+   * requires a snapshot join not yet wired to this port; a role's `customers.read` grant is
+   * therefore irrelevant to this response today, but the field shapes already anticipate it.
+   * `availableActions` is fully server-computed from the order's own state plus the caller's
+   * granted roles -- the client never infers a permission beyond this list.
+   */
+  public async detail(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderDetailV1> {
+    const request = parseOrderDetailRequestV1(input);
+    if (request === undefined) throw applicationError("request");
+    let actorId: string;
+    let roles: readonly MembershipRole[];
+    try {
+      const authorized = await this.authorization.authorizeBranch(principal, request.scope, "orders.read");
+      actorId = authorized.principal.actorId;
+      roles = authorized.roles;
+    } catch { throw applicationError("authorization"); }
+    let record: StoredOrder;
+    try {
+      const result = await this.orders.read(actorId, request.scope, request.orderId);
+      if (result === "missing") throw applicationError("not_found");
+      record = result;
+    } catch (error: unknown) {
+      if (error instanceof OrderApplicationError) throw error;
+      throw unavailable();
+    }
+    const detail = projectOrderDetail(record, request.scope, roles);
+    if (detail === undefined) throw unavailable();
+    return detail;
+  }
+
   public async recoverKds(
     principal: AuthenticatedPrincipal,
     subscriptionInput: unknown,
@@ -383,12 +506,108 @@ export class OrderService {
     }
   }
 
-  private async persist(
+  /**
+   * S9.1 r12: the batch is persisted atomically by `app_private.send_order_to_kitchen` -- either
+   * every step (the draft-open transition, if any, plus one "sent" transition per listed
+   * still-pending line) is saved or none is, and the command's own `idempotencyKey` is the replay
+   * identity: a byte-identical retry (same actor/scope/idempotencyKey *and* the identical command
+   * payload) always replays the stored result, no matter what the order's version has done since.
+   * Any other difference under the same key -- a different payload, a stale `expectedVersion`, an
+   * unknown line id, or any step no longer matching the order's current aggregate -- is a
+   * `conflict`/`not_found`, atomically, with zero persisted effects. All listed lines must be
+   * pending.
+   */
+  public async sendToKitchen(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
+    const command = parseSendOrderToKitchenCommandV1(input);
+    if (command === undefined) throw applicationError("request");
+    const actorId = await this.authorize(principal, command.scope, "orders.update");
+    let stored: StoredOrder;
+    try {
+      const result = await this.orders.read(actorId, command.scope, command.orderId);
+      if (result === "missing") throw applicationError("not_found");
+      stored = result;
+    } catch (error: unknown) {
+      if (error instanceof OrderApplicationError) throw error;
+      throw unavailable();
+    }
+    if (stored.version !== command.expectedVersion) {
+      // The identity of a replay lives in SQL under the command's own idempotencyKey, not in
+      // whether the order's version still matches: resolve it there instead of guessing from a
+      // version mismatch that could just as well be this very command's own earlier, lost-response
+      // attempt having already succeeded.
+      const batch = await this.sendOrderToKitchenRaw(actorId, command, []);
+      if (batch.status !== "replayed") throw applicationError("conflict");
+      return this.summaryFromBatch(batch);
+    }
+    const orderItemIds = new Set(command.orderItemIds);
+    const itemsById = new Map(stored.order.items.map((item) => [item.orderItemId, item] as const));
+    for (const orderItemId of orderItemIds) {
+      const item = itemsById.get(orderItemId);
+      if (item === undefined) throw applicationError("not_found");
+      // All listed lines must be pending: at an exact version match, the client listed exactly the
+      // lines it saw pending, so any listed line that is not pending now is already stale -- never
+      // silently skip it and report success for a smaller batch than the client asked for.
+      if (item.status !== "pending") throw applicationError("conflict");
+    }
+
+    const steps: OrderMutation[] = [];
+    let cursor = stored.order;
+    if (cursor.status === "draft") {
+      const mutation = transitionOrderStatus(cursor, "open", stepAuditContext(command, actorId, "open"));
+      steps.push(mutation);
+      cursor = mutation.order;
+    }
+    for (const item of cursor.items) {
+      if (item.status !== "pending" || !orderItemIds.has(item.orderItemId)) continue;
+      const mutation = transitionOrderItemStatus(cursor, item.orderItemId, "sent", stepAuditContext(command, actorId, item.orderItemId));
+      steps.push(mutation);
+      cursor = mutation.order;
+    }
+
+    const batch = await this.sendOrderToKitchenRaw(actorId, command, steps);
+    if (batch.status !== "saved" && batch.status !== "replayed") throw applicationError("conflict");
+    return this.summaryFromBatch(batch);
+  }
+
+  private async sendOrderToKitchenRaw(
+    actorId: string,
+    command: SendOrderToKitchenCommandV1,
+    steps: readonly OrderMutation[],
+  ): Promise<SendOrderToKitchenBatchResult> {
+    let result: SendOrderToKitchenBatchResult;
+    try { result = await this.orders.sendOrderToKitchen(actorId, command.expectedVersion, command, steps); }
+    catch { throw unavailable(); }
+    if (result.status === "saved") {
+      for (const kdsEvent of result.kdsEvents) {
+        if (kdsEvent === null) continue;
+        try { await this.notifications.notify(kdsEvent); } catch { /* Durable cursor recovery is authoritative. */ }
+      }
+    }
+    return result;
+  }
+
+  private summaryFromBatch(batch: SendOrderToKitchenBatchResult): OrderMutationSummaryV1 {
+    if (batch.status === "conflict") throw applicationError("conflict");
+    const scope = parseBranchScope({ branchId: batch.order.branchId, restaurantId: batch.order.restaurantId });
+    if (scope === undefined) throw unavailable();
+    const lastKdsEvent = batch.kdsEvents.length === 0 ? null : batch.kdsEvents[batch.kdsEvents.length - 1]!;
+    return Object.freeze({
+      kdsEvent: lastKdsEvent,
+      orderId: batch.order.orderId,
+      orderStatus: batch.order.status,
+      replayed: batch.status === "replayed",
+      schemaVersion: 1,
+      scope,
+      version: batch.version,
+    });
+  }
+
+  private async persistRaw(
     actorId: string,
     expectedVersion: number,
     mutation: OrderMutation,
     operationalShiftId?: string,
-  ): Promise<OrderMutationSummaryV1> {
+  ): Promise<SavedOrReplayedOrderResult> {
     let result: PersistOrderResult;
     try { result = await this.orders.persist(actorId, expectedVersion, mutation, operationalShiftId); } catch { throw unavailable(); }
     if (result.status === "forbidden") throw applicationError("authorization");
@@ -397,6 +616,10 @@ export class OrderService {
     if (result.status === "saved" && result.kdsEvent !== null) {
       try { await this.notifications.notify(result.kdsEvent); } catch { /* Durable cursor recovery is authoritative. */ }
     }
+    return result;
+  }
+
+  private summaryFromResult(result: SavedOrReplayedOrderResult): OrderMutationSummaryV1 {
     const scope = parseBranchScope({ branchId: result.order.branchId, restaurantId: result.order.restaurantId });
     if (scope === undefined) throw unavailable();
     return Object.freeze({
@@ -410,6 +633,16 @@ export class OrderService {
     });
   }
 
+  private async persist(
+    actorId: string,
+    expectedVersion: number,
+    mutation: OrderMutation,
+    operationalShiftId?: string,
+  ): Promise<OrderMutationSummaryV1> {
+    const result = await this.persistRaw(actorId, expectedVersion, mutation, operationalShiftId);
+    return this.summaryFromResult(result);
+  }
+
   private async authorize(
     principal: AuthenticatedPrincipal,
     scope: BranchScope,
@@ -418,6 +651,126 @@ export class OrderService {
     try { return (await this.authorization.authorizeBranch(principal, scope, permission)).principal.actorId; }
     catch { throw applicationError("authorization"); }
   }
+}
+
+/**
+ * Pure projection from the already-scoped, already-authorized aggregate. Totals reuse
+ * `calculateOrderAggregateTotals` -- never a second money calculation -- and cancelled lines are
+ * priced at zero, mirroring that calculator's own exclusion of cancelled lines from the payable
+ * total. `roles` decides `availableActions`; the client is never trusted to infer a permission.
+ */
+function projectOrderDetail(
+  stored: StoredOrder,
+  scope: BranchScope,
+  roles: readonly MembershipRole[],
+): OrderDetailV1 | undefined {
+  const { order, version } = stored;
+  const totals = calculateOrderAggregateTotals(order);
+  const lineTotalsByItemId = new Map(totals.lines.map((line) => [line.input.orderItemId, line]));
+  const items = order.items.map((item) => {
+    const lineTotals = lineTotalsByItemId.get(item.orderItemId);
+    return {
+      availableActions: computeItemActions(order, item, roles),
+      lineTotalMinor: lineTotals === undefined ? 0 : lineTotals.totalAfterOrderDiscount.amountMinor,
+      modifiers: item.snapshot.modifiers.map((modifier) => ({
+        modifierId: modifier.modifierId,
+        name: modifier.name,
+        quantity: modifier.quantity,
+        unitPriceMinor: modifier.unitPrice.amountMinor,
+      })),
+      name: item.snapshot.name,
+      note: item.note ?? null,
+      orderItemId: item.orderItemId,
+      quantity: item.quantity,
+      status: item.status,
+      unitPriceMinor: item.snapshot.unitPrice.amountMinor,
+    };
+  });
+  // A cancelled aggregate is never payable: `calculateOrderAggregateTotals` folds in neither the
+  // delivery charge nor a tip for it (see its own `calculateForOrder`), so this projection must not
+  // either -- otherwise itemsTotalMinor(0) + deliveryChargeMinor(frozen, nonzero) + tipMinor(0)
+  // would disagree with totalMinor(0) and the contract's own additive check would reject it.
+  const deliveryChargeMinor = order.status === "cancelled" || order.deliveryCharge === null
+    ? 0
+    : order.deliveryCharge.amount.amountMinor;
+  // H31: itemsTotalMinor must come from the items/discount/tax components alone, never
+  // `total - deliveryCharge`, or a tipped order would silently count its tip as part of the items total.
+  const itemsTotalMinor = totals.subtotalBeforeOrderDiscount.amountMinor - totals.orderDiscount.amountMinor;
+  return parseOrderDetailV1({
+    availableActions: computeAvailableActions(order, roles),
+    channel: order.channel,
+    createdAt: null,
+    currency: order.currency,
+    fulfillment: {
+      addressLabel: null,
+      channel: order.channel,
+      customerLabel: null,
+      paymentIntent: null,
+      tableId: order.tableId ?? null,
+    },
+    items,
+    orderId: order.orderId,
+    schemaVersion: 1,
+    scope,
+    status: order.status,
+    tableId: order.tableId ?? null,
+    timeZone: order.timeZone,
+    totals: {
+      currency: totals.total.currency,
+      deliveryChargeMinor,
+      itemsTotalMinor,
+      tipMinor: totals.tip.amountMinor,
+      totalMinor: totals.total.amountMinor,
+    },
+    updatedAt: null,
+    version,
+  });
+}
+
+const FINANCIAL_ROLES: ReadonlySet<MembershipRole> = new Set(["owner", "admin", "manager", "supervisor", "cashier"]);
+
+/**
+ * Order-wide actions only -- open, send-to-kitchen (which the client fires per pending line, but
+ * whose *offer* is a single order-wide affordance) and checkout. Per-line actions (markReady,
+ * markDelivered, cancelItem) live exclusively on `OrderDetailItemV1.availableActions` below: a role
+ * with `orders.cancel.pending` but not `orders.cancel.sent` must never be offered cancellation on a
+ * line that already reached KDS, and an order-wide flag can't express that distinction.
+ */
+function computeAvailableActions(order: Order, roles: readonly MembershipRole[]): readonly OrderDetailActionV1[] {
+  const actions: OrderDetailActionV1[] = [];
+  const canUpdate = rolesGrantPermission(roles, "orders.update");
+  const itemMutable = order.status !== "closed" && order.status !== "cancelled";
+  const hasPendingItems = order.items.some((item) => item.status === "pending");
+  // "sendToKitchen" already implies opening the account first when the order is still a draft (the
+  // client sequences open then each item transition); the operator never sees "open" *and*
+  // "sendToKitchen" together for the same pending lines. "open" survives on its own only for a
+  // table draft with nothing pending yet ("Abrir cuenta" before any line exists) -- a
+  // counter/takeout/delivery draft never shows a separate "open the tab" step at all.
+  if (canUpdate && itemMutable && hasPendingItems) actions.push("sendToKitchen");
+  else if (canUpdate && order.status === "draft" && order.channel === "table") actions.push("open");
+  if ((order.status === "open" || order.status === "partially_paid") && roles.some((role) => FINANCIAL_ROLES.has(role))) {
+    actions.push("checkout");
+  }
+  return Object.freeze(actions);
+}
+
+/** Per-line actions: `orders.cancel.pending` only ever covers a still-pending line of this very
+ * order; once a line reached KDS ("sent"/"preparing"/"ready"), only `orders.cancel.sent` can offer
+ * cancellation for it, matching the same distinction `OrderService.cancelItem` enforces server-side. */
+function computeItemActions(order: Order, item: Order["items"][number], roles: readonly MembershipRole[]): readonly OrderDetailActionV1[] {
+  const actions: OrderDetailActionV1[] = [];
+  if (order.status === "closed" || order.status === "cancelled") return Object.freeze(actions);
+  const canTransitionKds = rolesGrantPermission(roles, "kds.transition");
+  const canUpdate = rolesGrantPermission(roles, "orders.update");
+  if (canTransitionKds && (item.status === "sent" || item.status === "preparing")) actions.push("markReady");
+  if (canUpdate && item.status === "ready") actions.push("markDelivered");
+  if (order.status === "draft" || order.status === "open") {
+    const canCancel = item.status === "pending"
+      ? rolesGrantPermission(roles, "orders.cancel.pending")
+      : ["sent", "preparing", "ready"].includes(item.status) && rolesGrantPermission(roles, "orders.cancel.sent");
+    if (canCancel) actions.push("cancelItem");
+  }
+  return Object.freeze(actions);
 }
 
 function orderInput(command: CreateOrderCommandV1 | CreateOrderCommandV2): Parameters<typeof createOrder>[0] {
@@ -440,6 +793,42 @@ function auditContext(command: OrderAuditInputV1, actorId: string): OrderAuditCo
     idempotencyKey: command.idempotencyKey,
     occurredAt: command.occurredAt,
   };
+}
+
+/**
+ * One derived, deterministic eventId/idempotencyKey pair per step of `sendToKitchen`, from the
+ * command's own eventId/idempotencyKey, the step's identity ("open" or an orderItemId), and a
+ * canonical fingerprint of the whole command (`orderId`, `expectedVersion`, `orderItemIds` sorted)
+ * -- same technique as capture materialization's `derivedUuid` in capture-repeat-order-plan.ts.
+ *
+ * Folding the fingerprint in means a client that resends the same eventId/idempotencyKey with a
+ * *different* `orderItemIds` list never derives the same step keys as the original command: its
+ * steps are fully isolated from the first attempt's, so it cannot replay or otherwise interfere with
+ * steps that belong to a different list.
+ *
+ * Limitación: el payload del comando no se persiste (la deuda de nivel A -- búsqueda por clave de
+ * idempotencia en SQL -- sigue pendiente), así que este reenvío con otra lista no se *rechaza*,
+ * sólo queda aislado: se procesa como un lote nuevo e independiente en vez de compartir pasos con el
+ * original. El cliente web evita el escenario por completo acuñando la clave de intento junto con la
+ * lista en el mismo momento (ver `nextAttempt`/`runSendToKitchen` en order-detail-panel.tsx).
+ */
+function stepAuditContext(command: SendOrderToKitchenCommandV1, actorId: string, stepIdentity: string): OrderAuditContext {
+  const fingerprint = [command.orderId, String(command.expectedVersion), [...command.orderItemIds].sort().join(",")].join("|");
+  return {
+    actorId,
+    deviceId: command.deviceId,
+    eventId: derivedUuid("send-to-kitchen-event", command.eventId, `${fingerprint}:${stepIdentity}`),
+    idempotencyKey: derivedUuid("send-to-kitchen-idempotency", command.idempotencyKey, `${fingerprint}:${stepIdentity}`),
+    occurredAt: command.occurredAt,
+  };
+}
+
+function derivedUuid(kind: string, namespace: string, identity: string): string {
+  const bytes = createHash("sha256").update(`${kind}:${namespace}:${identity}`, "utf8").digest().subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function singleResult(rows: readonly unknown[]): unknown {

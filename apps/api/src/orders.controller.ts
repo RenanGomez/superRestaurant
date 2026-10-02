@@ -13,7 +13,7 @@ import {
   Req,
   ServiceUnavailableException,
 } from "@nestjs/common";
-import type { KdsEventPageV1, KdsTicketListV1, OrderMutationSummaryV1 } from "@super-restaurant/shared-types";
+import type { KdsEventPageV1, KdsTicketListV1, OrderDetailV1, OrderMutationSummaryV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
 import { OrderApplicationError, OrderService } from "./orders.js";
@@ -50,6 +50,18 @@ export class OrdersController {
   @Header("Cache-Control", "private, no-store")
   public cancelItem(@Req() request: unknown, @Body() body: unknown): Promise<OrderMutationSummaryV1> {
     return this.map(() => this.orders.cancelItem(getAuthenticatedPrincipal(request), body));
+  }
+
+  @Post("orders/detail")
+  @Header("Cache-Control", "private, no-store")
+  public detail(@Req() request: unknown, @Body() body: unknown): Promise<OrderDetailV1> {
+    return this.map(() => this.orders.detail(getAuthenticatedPrincipal(request), body));
+  }
+
+  @Post("orders/send-to-kitchen")
+  @Header("Cache-Control", "private, no-store")
+  public sendToKitchen(@Req() request: unknown, @Body() body: unknown): Promise<OrderMutationSummaryV1> {
+    return this.map(() => this.orders.sendToKitchen(getAuthenticatedPrincipal(request), body));
   }
 
   @Get("kds/events")

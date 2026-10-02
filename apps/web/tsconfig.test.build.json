@@ -44,6 +44,8 @@
     "src/lib/delivery-zones.test.ts",
     "src/lib/branch-order-work-tray.ts",
     "src/lib/branch-order-work-tray.test.ts",
+    "src/lib/order-detail.ts",
+    "src/lib/order-detail.test.ts",
     "src/lib/shortcut-dispatch.ts",
     "src/lib/shortcut-dispatch.test.ts",
     "src/lib/system-onboarding.ts",
