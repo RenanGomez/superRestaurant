@@ -7,6 +7,7 @@ import {
   groupItemsByStatus,
   hasAction,
   hasItemAction,
+  nextFocusIndex,
   parseAttemptIds,
   parseOccurredAt,
   parseOrderItemIds,
@@ -115,6 +116,16 @@ test("chunkOrderItemIds splits into bounded chunks and leaves a short list whole
   assert.equal(chunks[2]?.length, 50);
   assert.deepEqual(chunkOrderItemIds(["a", "b"], 200), [["a", "b"]]);
   assert.deepEqual(chunkOrderItemIds([], 200), []);
+});
+
+test("nextFocusIndex wraps a Tab/Shift+Tab cycle at both ends of a fixed-size focusable list", () => {
+  assert.equal(nextFocusIndex(3, 0, false), 1);
+  assert.equal(nextFocusIndex(3, 1, false), 2);
+  assert.equal(nextFocusIndex(3, 2, false), 0); // Tab from the last wraps to the first
+  assert.equal(nextFocusIndex(3, 0, true), 2); // Shift+Tab from the first wraps to the last
+  assert.equal(nextFocusIndex(3, 2, true), 1);
+  assert.equal(nextFocusIndex(1, 0, false), 0); // a single focusable element stays on itself
+  assert.equal(nextFocusIndex(0, 0, false), 0); // nothing to move to
 });
 
 test("actionLabel covers every action the server can send", () => {

@@ -1,10 +1,56 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import type { OrderDetailItemV1, OrderDetailV1 } from "@super-restaurant/shared-types";
 import { captureDeviceId } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
-import { actionLabel, chunkOrderItemIds, groupItemsByStatus, hasAction, hasItemAction, pendingOrderItemIds, type OrderItemStatusGroup } from "../../../lib/order-detail";
+import { actionLabel, chunkOrderItemIds, groupItemsByStatus, hasAction, hasItemAction, nextFocusIndex, pendingOrderItemIds, type OrderItemStatusGroup } from "../../../lib/order-detail";
+
+const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Traps `Tab`/`Shift+Tab` inside `containerRef`'s own subtree (never letting focus escape to the
+ * page behind a modal dialog), moves focus into the container on mount, closes on `Escape`, and
+ * restores focus to whatever had it before the dialog opened once it unmounts -- the "Detalle"/
+ * "Cancelar línea" button that opened it, in `orders-tray.tsx`/the panel itself. `nextFocusIndex` is
+ * the pure wraparound rule this applies to the dialog's own currently focused element.
+ */
+function useFocusTrap(containerRef: RefObject<HTMLElement | null>, onEscape: () => void): void {
+  useEffect(() => {
+    const container = containerRef.current;
+    if (container === null) return undefined;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    container.focus();
+
+    function focusableElements(): readonly HTMLElement[] {
+      return Array.from(container?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? []);
+    }
+
+    function onKeyDown(event: KeyboardEvent): void {
+      // `stopPropagation` matters when a second dialog (the cancel-reason confirmation) is nested
+      // inside this one: without it, a Tab/Escape the inner dialog's own trap already handled would
+      // bubble up and be handled a second time by this outer one.
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onEscape(); return; }
+      if (event.key !== "Tab") return;
+      const elements = focusableElements();
+      if (elements.length === 0) { event.preventDefault(); return; }
+      const currentIndex = elements.indexOf(document.activeElement as HTMLElement);
+      event.preventDefault();
+      event.stopPropagation();
+      if (currentIndex === -1) { (event.shiftKey ? elements[elements.length - 1] : elements[0])?.focus(); return; }
+      elements[nextFocusIndex(elements.length, currentIndex, event.shiftKey)]?.focus();
+    }
+
+    container.addEventListener("keydown", onKeyDown);
+    return () => {
+      container.removeEventListener("keydown", onKeyDown);
+      previouslyFocused?.focus();
+    };
+    // Intentionally runs once per mount only: `containerRef` is a stable ref object, and `onEscape`
+    // is re-created every render by design (it closes over fresh state) -- re-running this effect
+    // for that alone would steal focus back into the dialog on every keystroke elsewhere in it.
+  }, []);
+}
 
 const overlay = "fixed inset-0 z-40 flex items-start justify-center bg-black/40 p-4 sm:items-center";
 const sheet = "max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -83,6 +129,8 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
   const [actionError, setActionError] = useState<string>();
   const [cancelTarget, setCancelTarget] = useState<OrderDetailItemV1>();
   const headingId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, onClose);
 
   async function load(): Promise<OrderDetailV1 | undefined> {
     // `actions.detail` is a Next.js Server Action: a transport failure (e.g. the server process
@@ -162,7 +210,7 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
   const groups = detail === undefined ? undefined : groupItemsByStatus(detail.items);
 
   return <div className={overlay} role="presentation" onClick={onClose}>
-    <div className={sheet} role="dialog" aria-modal="true" aria-labelledby={headingId} onClick={(event) => event.stopPropagation()}>
+    <div ref={dialogRef} className={sheet} role="dialog" aria-modal="true" aria-labelledby={headingId} tabIndex={-1} onClick={(event) => event.stopPropagation()}>
       <div className="flex items-start justify-between gap-2">
         <h2 id={headingId} className="font-heading text-lg font-bold">Detalle de la orden</h2>
         <button type="button" className={button} onClick={onClose} aria-label="Cerrar">Cerrar</button>
@@ -257,8 +305,10 @@ function CancelReasonDialog({ itemName, requiresSupervisor, busy, onCancel, onCo
   const [reason, setReason] = useState("");
   const headingId = useId();
   const trimmed = reason.trim();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, onCancel);
   return <div className={overlay} role="presentation" onClick={onCancel}>
-    <div className={sheet} role="dialog" aria-modal="true" aria-labelledby={headingId} onClick={(event) => event.stopPropagation()}>
+    <div ref={dialogRef} className={sheet} role="dialog" aria-modal="true" aria-labelledby={headingId} tabIndex={-1} onClick={(event) => event.stopPropagation()}>
       <h2 id={headingId} className="font-heading text-lg font-bold">Cancelar «{itemName}»</h2>
       {requiresSupervisor && <p className="mt-2 text-sm text-text-muted">Esta línea ya se envió a cocina: el servidor exigirá autorización de un supervisor.</p>}
       <label className="mt-3 block text-sm font-semibold" htmlFor={`${headingId}-reason`}>Motivo (obligatorio)</label>

@@ -194,3 +194,15 @@ export function groupItemsByStatus(
   for (const item of items) groups.get(item.status)?.push(item);
   return groups;
 }
+
+/**
+ * The index `Tab` (or `Shift+Tab`) should move focus to, trapping it within a fixed-size list of
+ * `count` focusable elements instead of letting it escape to the page behind a modal dialog. Wraps
+ * at both ends: from the last element `Tab` goes to the first, and from the first `Shift+Tab` goes
+ * to the last. `count <= 0` has nothing to move to and returns `0`.
+ */
+export function nextFocusIndex(count: number, index: number, shift: boolean): number {
+  if (count <= 0) return 0;
+  if (shift) return index <= 0 ? count - 1 : index - 1;
+  return index >= count - 1 ? 0 : index + 1;
+}
