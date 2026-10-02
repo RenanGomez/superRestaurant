@@ -617,7 +617,7 @@ test("sendToKitchen on a still-draft order reports conflict, never opens the acc
   assert.equal(fake.currentVersion(), 1);
 });
 
-test("sendToKitchen resumes a partially-applied batch on retry instead of conflicting", async () => {
+test("sendToKitchen on a genuine mid-batch failure reports conflict for a byte-identical retry; the client must reload and resend with the still-pending lines", async () => {
   const twoLines = [1, 2].reduce((current, index) => addOrderItem(current, {
     orderItemId: `23723e10-c0bf-49fd-9363-4f0e2c60e9${String(index).padStart(2, "0")}`,
     quantity: 1,
@@ -626,9 +626,10 @@ test("sendToKitchen resumes a partially-applied batch on retry instead of confli
       productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(1_000 * index, "MXN"),
     },
   }, { ...audit, actorId: principal.actorId }).order, domainMutation.order);
+  const [firstLineId, secondLineId] = twoLines.items.map((item) => item.orderItemId) as [string, string];
   const fake = fakeSendToKitchenPort(twoLines, 1);
   const service = serviceFor(["manager"], fake.port);
-  const command = sendToKitchenCommand(orderId, 1, randomUUID(), "send-to-kitchen-resume", twoLines.items.map((item) => item.orderItemId));
+  const command = sendToKitchenCommand(orderId, 1, randomUUID(), "send-to-kitchen-resume", [firstLineId, secondLineId]);
 
   // The second line's persist call simulates a dropped connection: the client never sees a
   // response, even though "open" and the first line already committed.
@@ -642,12 +643,74 @@ test("sendToKitchen resumes a partially-applied batch on retry instead of confli
   await assert.rejects(service.sendToKitchen(principal, command), (error: unknown) => error instanceof OrderApplicationError && error.code === "unavailable");
   assert.equal(fake.currentOrder().status, "open");
   assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["sent", "pending"]);
+  const versionAfterFailure = fake.currentVersion();
 
-  // Retried with the exact same command (same idempotencyKey/eventId): resumes from where it left
-  // off -- "open" and the first line are recognized as already-applied progress (never conflict),
-  // and only the second line is freshly persisted.
-  const summary = await service.sendToKitchen(principal, command);
+  // A byte-identical retry (same eventId/idempotencyKey/expectedVersion) is no longer silently
+  // resumed: the order's version has moved past `expectedVersion` and a listed line (the second) is
+  // still pending, so this is reported as a conflict instead of guessing it is this command's own
+  // earlier progress.
+  await assertCode(service.sendToKitchen(principal, command), "conflict");
+  assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["sent", "pending"]);
+
+  // The client reloads (fresh version, same two listed ids -- the first is simply no longer pending
+  // and is skipped) and resends: this is a fresh attempt at the current version, so it succeeds.
+  const resendCommand = sendToKitchenCommand(orderId, versionAfterFailure, randomUUID(), "send-to-kitchen-resume-after-reload", [firstLineId, secondLineId]);
+  const summary = await service.sendToKitchen(principal, resendCommand);
   assert.equal(summary.orderStatus, "open");
+  assert.equal(summary.replayed, false);
+  assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["sent", "sent"]);
+});
+
+test("sendToKitchen reports conflict, without sending anything, when a third actor cancels one of two listed lines after the version was captured", async () => {
+  const twoLines = [1, 2].reduce((current, index) => addOrderItem(current, {
+    orderItemId: `6f8a3c71-4e52-4b9d-8e13-7a2c9f6d50${String(index).padStart(2, "0")}`,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: `Línea ${index}`,
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(1_000 * index, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order, domainMutation.order);
+  const opened = transitionOrderStatus(twoLines, "open", { ...audit, actorId: principal.actorId }).order;
+  const [firstLineId, secondLineId] = opened.items.map((item) => item.orderItemId) as [string, string];
+  // The operator captured `expectedVersion` (2, right after opening) listing both lines as pending.
+  // Before the request reaches the server, a third actor cancels the first line, advancing the
+  // version to 3.
+  const cancelledByThirdActor = cancelOrderItem(opened, firstLineId, { ...audit, actorId: randomUUID(), reason: "Cliente canceló esa línea" }).order;
+  const fake = fakeSendToKitchenPort(cancelledByThirdActor, 3);
+  const service = serviceFor(["manager"], fake.port);
+  const command = sendToKitchenCommand(orderId, 2, randomUUID(), "send-to-kitchen-third-actor-cancel", [firstLineId, secondLineId]);
+
+  await assertCode(service.sendToKitchen(principal, command), "conflict");
+  assert.equal(fake.currentVersion(), 3);
+  assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["cancelled", "pending"]);
+});
+
+test("sendToKitchen replays a fully-completed batch (version advanced, nothing listed still pending) without persisting anything new", async () => {
+  const twoLines = [1, 2].reduce((current, index) => addOrderItem(current, {
+    orderItemId: `8b4d6e92-5c73-4a0f-9ed4-8e3a0c7f61${String(index).padStart(2, "0")}`,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: `Línea ${index}`,
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(1_000 * index, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order, domainMutation.order);
+  const [firstLineId, secondLineId] = twoLines.items.map((item) => item.orderItemId) as [string, string];
+  // The order is already fully open and both listed lines already sent -- as if this exact command
+  // had already completed on an earlier, lost-response attempt.
+  const opened = transitionOrderStatus(twoLines, "open", { ...audit, actorId: principal.actorId }).order;
+  const bothSent = [firstLineId, secondLineId].reduce(
+    (current, id) => transitionOrderItemStatus(current, id, "sent", { ...audit, actorId: principal.actorId }).order,
+    opened,
+  );
+  const fake = fakeSendToKitchenPort(bothSent, 4);
+  const service = serviceFor(["manager"], fake.port);
+  const command = sendToKitchenCommand(orderId, 1, randomUUID(), "send-to-kitchen-already-completed", [firstLineId, secondLineId]);
+
+  const summary = await service.sendToKitchen(principal, command);
+  assert.equal(summary.replayed, true);
+  assert.equal(summary.orderStatus, "open");
+  assert.equal(summary.version, 4);
+  assert.equal(fake.currentVersion(), 4);
   assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["sent", "sent"]);
 });
 
@@ -670,7 +733,7 @@ test("sendToKitchen on an already-open order only transitions its pending lines"
   assert.equal(fake.currentVersion(), 3); // only the one pending line, no "open" step
 });
 
-test("sendToKitchen retry never sends a line another actor added after the original attempt", async () => {
+test("sendToKitchen retry never sweeps in a line another actor added after the original attempt; it reports conflict instead of guessing", async () => {
   const twoLines = [1, 2].reduce((current, index) => addOrderItem(current, {
     orderItemId: `3c2b7f10-6a45-4f9e-9cb1-7d2f8e4c90${String(index).padStart(2, "0")}`,
     quantity: 1,
@@ -686,8 +749,10 @@ test("sendToKitchen retry never sends a line another actor added after the origi
   const service = serviceFor(["manager"], fake.port);
   const command = sendToKitchenCommand(orderId, 1, randomUUID(), "send-to-kitchen-fixed-batch", [firstLineId, secondLineId]);
 
-  // The response after "open" is simulated as lost. Before the retry, another actor adds a third
-  // pending line directly against the persisted order (not part of this command's original batch).
+  // The response to the very first ("open") step is simulated as lost. Before the retry, another
+  // actor adds a third pending line directly against the persisted order (not part of this command's
+  // original batch) -- which also advances the order's version past this command's own
+  // `expectedVersion`.
   let calls = 0;
   const originalPersist = fake.port.persist.bind(fake.port);
   fake.port.persist = async (actorId, expectedVersion, mutation, shiftId) => {
@@ -708,12 +773,15 @@ test("sendToKitchen retry never sends a line another actor added after the origi
   }, { ...audit, actorId: randomUUID() }).order;
   fake.applyExternalMutation(withThirdLine);
 
-  const summary = await service.sendToKitchen(principal, command);
-  assert.equal(summary.orderStatus, "open");
+  // A byte-identical retry now reports conflict (the order's own draft/open step never completed,
+  // so this is unconditionally unresolved work) instead of silently resuming across the version gap
+  // and guessing the right lines to send -- the client must reload and resend.
+  await assertCode(service.sendToKitchen(principal, command), "conflict");
   const byId = new Map(fake.currentOrder().items.map((item) => [item.orderItemId, item.status]));
-  assert.equal(byId.get(firstLineId), "sent");
-  assert.equal(byId.get(secondLineId), "sent");
+  assert.equal(byId.get(firstLineId), "pending");
+  assert.equal(byId.get(secondLineId), "pending");
   assert.equal(byId.get(thirdLineId), "pending");
+  assert.equal(fake.currentOrder().status, "draft");
 });
 
 test("sendToKitchen rejects an orderItemId that does not belong to the order", async () => {

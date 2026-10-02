@@ -441,15 +441,23 @@ export class OrderService {
    * `persist_order_mutation`'s own idempotency lookup (which runs *before* its version check) and
    * replayed, so a resend after a lost response is never rejected as a version conflict.
    *
-   * Deliberately does not hard-fail on `command.expectedVersion` against a fresh read: each step
-   * always targets the *current* aggregate (re-read from the previous step's own persisted result),
-   * so a partially-applied batch resumes from wherever it actually left off -- a listed line already
-   * sent by this very command (replayed) or no longer pending for any other reason (e.g. cancelled
-   * by an unrelated actor) is simply skipped rather than blindly overwritten. Only a fresh read
-   * reporting a version *older* than `expectedVersion` (impossible in normal operation) is treated as
-   * a conflict. Any listed id that does not belong to this order is `not_found`. A still-draft order
-   * with none of its listed ids actually pending (e.g. all cancelled by another actor since the
-   * command was built) is also a `conflict`, never opened for nothing.
+   * The batch no longer "resumes" a partial attempt by re-reading forward past `expectedVersion`: a
+   * fresh read reporting a version *older* than `expectedVersion` is still a `conflict` (impossible
+   * in normal operation); a version that matches exactly is the normal, first-attempt path (each step
+   * persists against the *current* aggregate, re-read from the previous step's own persisted result,
+   * so a listed line already sent by this very command inside the same call, or no longer pending for
+   * any other reason, is simply skipped); and a version *ahead* of `expectedVersion` -- meaning
+   * something else persisted since the operator's list was captured -- is resolved without a SQL
+   * identity lookup (deuda nivel A) by looking at *remaining work* instead: if the order is still
+   * `draft`, or any listed line is still `pending`, there is work this exact command has not yet
+   * verifiably done, so it is a `conflict` and nothing is persisted; only when the order is no longer
+   * `draft` and no listed line is `pending` (every one is `sent` or further along, or cancelled) is it
+   * treated as a completed replay of this very command's own earlier, lost-response attempt, and the
+   * current state is reported back with `replayed: true` and no new mutation. A genuine mid-batch
+   * failure is surfaced to the client as `unavailable`; the client reloads and resends with the fresh
+   * version and whatever lines are still actually pending, rather than this method silently guessing
+   * which remaining lines are still "its own" to send. Any listed id that does not belong to this
+   * order is `not_found`.
    */
   public async sendToKitchen(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
     const command = parseSendOrderToKitchenCommandV1(input);
@@ -470,11 +478,21 @@ export class OrderService {
     for (const orderItemId of orderItemIds) {
       if (!knownOrderItemIds.has(orderItemId)) throw applicationError("not_found");
     }
+    const hasListedPendingLine = (): boolean => stored.order.items.some((item) => item.status === "pending" && orderItemIds.has(item.orderItemId));
+
+    if (stored.version > command.expectedVersion) {
+      if (stored.order.status === "draft" || hasListedPendingLine()) throw applicationError("conflict");
+      const scope = parseBranchScope({ branchId: stored.order.branchId, restaurantId: stored.order.restaurantId });
+      if (scope === undefined) throw unavailable();
+      return Object.freeze({
+        kdsEvent: null, orderId: stored.order.orderId, orderStatus: stored.order.status,
+        replayed: true, schemaVersion: 1, scope, version: stored.version,
+      });
+    }
 
     let lastResult: SavedOrReplayedOrderResult | undefined;
     if (stored.order.status === "draft") {
-      const hasListedPendingLine = stored.order.items.some((item) => item.status === "pending" && orderItemIds.has(item.orderItemId));
-      if (!hasListedPendingLine) throw applicationError("conflict");
+      if (!hasListedPendingLine()) throw applicationError("conflict");
       const mutation = transitionOrderStatus(stored.order, "open", stepAuditContext(command, actorId, "open"));
       lastResult = await this.persistRaw(actorId, stored.version, mutation);
       stored = { order: lastResult.order, version: lastResult.version };
