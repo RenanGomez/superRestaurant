@@ -40,7 +40,6 @@ import {
   transitionOrderStatus,
   type Order,
   type OrderAuditContext,
-  type OrderItemState,
   type OrderMutation,
 } from "@super-restaurant/domain";
 import { Inject, Injectable } from "@nestjs/common";
@@ -442,25 +441,23 @@ export class OrderService {
    * `persist_order_mutation`'s own idempotency lookup (which runs *before* its version check) and
    * replayed, so a resend after a lost response is never rejected as a version conflict.
    *
-   * The batch no longer "resumes" a partial attempt by re-reading forward past `expectedVersion`: a
-   * fresh read reporting a version *older* than `expectedVersion` is still a `conflict` (impossible
-   * in normal operation); a version that matches exactly is the normal, first-attempt path (each step
-   * persists against the *current* aggregate, re-read from the previous step's own persisted result,
-   * so a listed line already sent by this very command inside the same call, or no longer pending for
-   * any other reason, is simply skipped); and a version *ahead* of `expectedVersion` -- meaning
-   * something else persisted since the operator's list was captured -- is resolved without a SQL
-   * identity lookup (deuda nivel A) by looking at *remaining work* instead: only when the order is no
-   * longer `draft` and *every* listed line is verifiably sent (`sent`, `preparing`, `ready`, or
-   * `delivered`) is this treated as a completed replay of this very command's own earlier,
-   * lost-response attempt, and the current state is reported back with `replayed: true` and no new
-   * mutation. Any other shape -- the order still `draft`, or any listed line still `pending`, or any
-   * listed line `cancelled` (by this command or a third actor, indistinguishable here) -- means this
-   * command cannot verify it already did its own work, so it is a `conflict` and nothing is persisted;
-   * a command never reports success for work it did not itself verifiably complete. A genuine
-   * mid-batch failure is surfaced to the client as `unavailable`; the client reloads and resends with
-   * the fresh version and whatever lines are still actually pending, rather than this method silently
-   * guessing which remaining lines are still "its own" to send. Any listed id that does not belong to
-   * this order is `not_found`.
+   * The batch does not "resume" a partial attempt by re-reading forward past `expectedVersion`:
+   * `stored.version` must match `command.expectedVersion` *exactly`, or this is a `conflict` and
+   * nothing is persisted -- a version *older* than expected is impossible in normal operation, and a
+   * version *ahead* of it means something else persisted since the operator's list was captured, with
+   * no way to verify whether that "something else" was this very command's own earlier, lost-response
+   * attempt or a different operator's unrelated action: without the command's payload persisted (deuda
+   * nivel A -- a SQL identity/idempotency-key lookup would resolve this precisely), the server cannot
+   * safely attribute that advanced state to itself, so it never reports `replayed: true` for it. The
+   * client reloads on `conflict` and resends with the fresh version and whatever lines are still
+   * actually pending; if they already reached the kitchen, `sendToKitchen` simply stops being offered
+   * in `availableActions` and nothing is lost. The exact-match path is the only one that can replay:
+   * each step persists against the *current* aggregate, re-read from the previous step's own persisted
+   * result, so a listed line already sent earlier *within this same call* (or no longer pending for
+   * any other reason) is simply skipped, and a byte-identical resend (same eventId/idempotencyKey,
+   * same expectedVersion -- e.g. a double click) is recognized and replayed by
+   * `persist_order_mutation`'s own idempotency lookup per step, never duplicated. Any listed id that
+   * does not belong to this order is `not_found`.
    */
   public async sendToKitchen(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
     const command = parseSendOrderToKitchenCommandV1(input);
@@ -475,27 +472,13 @@ export class OrderService {
       if (error instanceof OrderApplicationError) throw error;
       throw unavailable();
     }
-    if (stored.version < command.expectedVersion) throw applicationError("conflict");
+    if (stored.version !== command.expectedVersion) throw applicationError("conflict");
     const orderItemIds = new Set(command.orderItemIds);
     const knownOrderItemIds = new Set(stored.order.items.map((item) => item.orderItemId));
     for (const orderItemId of orderItemIds) {
       if (!knownOrderItemIds.has(orderItemId)) throw applicationError("not_found");
     }
     const hasListedPendingLine = (): boolean => stored.order.items.some((item) => item.status === "pending" && orderItemIds.has(item.orderItemId));
-    const everyListedLineVerifiablySent = (): boolean => {
-      const listedItems = stored.order.items.filter((item) => orderItemIds.has(item.orderItemId));
-      return listedItems.length === orderItemIds.size && listedItems.every((item) => VERIFIABLY_SENT_ORDER_ITEM_STATUSES.has(item.status));
-    };
-
-    if (stored.version > command.expectedVersion) {
-      if (stored.order.status === "draft" || !everyListedLineVerifiablySent()) throw applicationError("conflict");
-      const scope = parseBranchScope({ branchId: stored.order.branchId, restaurantId: stored.order.restaurantId });
-      if (scope === undefined) throw unavailable();
-      return Object.freeze({
-        kdsEvent: null, orderId: stored.order.orderId, orderStatus: stored.order.status,
-        replayed: true, schemaVersion: 1, scope, version: stored.version,
-      });
-    }
 
     let lastResult: SavedOrReplayedOrderResult | undefined;
     if (stored.order.status === "draft") {
@@ -648,10 +631,6 @@ function projectOrderDetail(
 }
 
 const FINANCIAL_ROLES: ReadonlySet<MembershipRole> = new Set(["owner", "admin", "manager", "supervisor", "cashier"]);
-/** `sendToKitchen`'s definition of "verifiably sent" for a version-ahead replay check: `pending`
- * (not sent yet) and `cancelled` (never sent) are deliberately excluded -- only a line that actually
- * reached the kitchen or further counts. */
-const VERIFIABLY_SENT_ORDER_ITEM_STATUSES: ReadonlySet<OrderItemState> = new Set(["sent", "preparing", "ready", "delivered"]);
 
 /**
  * Order-wide actions only -- open, send-to-kitchen (which the client fires per pending line, but
