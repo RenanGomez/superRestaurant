@@ -514,7 +514,8 @@ export class OrderService {
    * payload) always replays the stored result, no matter what the order's version has done since.
    * Any other difference under the same key -- a different payload, a stale `expectedVersion`, an
    * unknown line id, or any step no longer matching the order's current aggregate -- is a
-   * `conflict`/`not_found`, atomically, with zero persisted effects.
+   * `conflict`/`not_found`, atomically, with zero persisted effects. All listed lines must be
+   * pending.
    */
   public async sendToKitchen(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
     const command = parseSendOrderToKitchenCommandV1(input);
@@ -539,16 +540,19 @@ export class OrderService {
       return this.summaryFromBatch(batch);
     }
     const orderItemIds = new Set(command.orderItemIds);
-    const knownOrderItemIds = new Set(stored.order.items.map((item) => item.orderItemId));
+    const itemsById = new Map(stored.order.items.map((item) => [item.orderItemId, item] as const));
     for (const orderItemId of orderItemIds) {
-      if (!knownOrderItemIds.has(orderItemId)) throw applicationError("not_found");
+      const item = itemsById.get(orderItemId);
+      if (item === undefined) throw applicationError("not_found");
+      // All listed lines must be pending: at an exact version match, the client listed exactly the
+      // lines it saw pending, so any listed line that is not pending now is already stale -- never
+      // silently skip it and report success for a smaller batch than the client asked for.
+      if (item.status !== "pending") throw applicationError("conflict");
     }
-    const hasListedPendingLine = stored.order.items.some((item) => item.status === "pending" && orderItemIds.has(item.orderItemId));
 
     const steps: OrderMutation[] = [];
     let cursor = stored.order;
     if (cursor.status === "draft") {
-      if (!hasListedPendingLine) throw applicationError("conflict");
       const mutation = transitionOrderStatus(cursor, "open", stepAuditContext(command, actorId, "open"));
       steps.push(mutation);
       cursor = mutation.order;
@@ -560,14 +564,6 @@ export class OrderService {
       cursor = mutation.order;
     }
 
-    if (steps.length === 0) {
-      const scope = parseBranchScope({ branchId: stored.order.branchId, restaurantId: stored.order.restaurantId });
-      if (scope === undefined) throw unavailable();
-      return Object.freeze({
-        kdsEvent: null, orderId: stored.order.orderId, orderStatus: stored.order.status,
-        replayed: false, schemaVersion: 1, scope, version: stored.version,
-      });
-    }
     const batch = await this.sendOrderToKitchenRaw(actorId, command, steps);
     if (batch.status !== "saved" && batch.status !== "replayed") throw applicationError("conflict");
     return this.summaryFromBatch(batch);

@@ -734,6 +734,51 @@ test("sendToKitchen rejects an orderItemId that does not belong to the order", a
   await assertCode(service.sendToKitchen(principal, command), "not_found");
 });
 
+test("sendToKitchen rejects a listed line that is already sent as a conflict, without calling SQL", async () => {
+  const opened = transitionOrderStatus(addOrderItem(domainMutation.order, {
+    orderItemId,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: "Hamburguesa",
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(12_500, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order, "open", { ...audit, actorId: principal.actorId }).order;
+  const alreadySent = transitionOrderItemStatus(opened, orderItemId, "sent", { ...audit, actorId: principal.actorId }).order;
+  const fake = fakeSendToKitchenPort(alreadySent, 3);
+  let calls = 0;
+  const originalSendOrderToKitchen = fake.port.sendOrderToKitchen.bind(fake.port);
+  fake.port.sendOrderToKitchen = async (...args) => { calls += 1; return originalSendOrderToKitchen(...args); };
+  const service = serviceFor(["manager"], fake.port);
+  const command = sendToKitchenCommand(orderId, 3, randomUUID(), "send-to-kitchen-already-sent-line", [orderItemId]);
+
+  await assertCode(service.sendToKitchen(principal, command), "conflict");
+  assert.equal(calls, 0);
+  assert.equal(fake.currentVersion(), 3);
+});
+
+test("sendToKitchen rejects a listed line that was cancelled as a conflict, without calling SQL", async () => {
+  const withPendingLine = addOrderItem(domainMutation.order, {
+    orderItemId,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: "Hamburguesa",
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(12_500, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order;
+  const cancelled = cancelOrderItem(withPendingLine, orderItemId, { ...audit, actorId: randomUUID(), reason: "Cliente canceló el pedido" }).order;
+  const fake = fakeSendToKitchenPort(cancelled, 1);
+  let calls = 0;
+  const originalSendOrderToKitchen = fake.port.sendOrderToKitchen.bind(fake.port);
+  fake.port.sendOrderToKitchen = async (...args) => { calls += 1; return originalSendOrderToKitchen(...args); };
+  const service = serviceFor(["manager"], fake.port);
+  const command = sendToKitchenCommand(orderId, 1, randomUUID(), "send-to-kitchen-cancelled-line", [orderItemId]);
+
+  await assertCode(service.sendToKitchen(principal, command), "conflict");
+  assert.equal(calls, 0);
+  assert.equal(fake.currentOrder().status, "draft");
+  assert.equal(fake.currentVersion(), 1);
+});
+
 test("sendToKitchen rejects a reused idempotencyKey carrying a different orderItemIds list as a conflict, never as a new batch", async () => {
   const twoLines = [1, 2].reduce((current, index) => addOrderItem(current, {
     orderItemId: `5e4d9f32-8c67-4b1a-9ed3-9f4a0b6c21${String(index).padStart(2, "0")}`,
