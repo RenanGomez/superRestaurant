@@ -543,6 +543,7 @@ function fakeSendToKitchenPort(initialOrder: Order, initialVersion: number): {
   readonly port: OrderPersistencePort;
   readonly currentOrder: () => Order;
   readonly currentVersion: () => number;
+  readonly applyExternalMutation: (next: Order) => void;
 } {
   let order = initialOrder;
   let version = initialVersion;
@@ -563,11 +564,16 @@ function fakeSendToKitchenPort(initialOrder: Order, initialVersion: number): {
     read: async () => ({ order, version }),
     recoverKds: async () => "forbidden",
   };
-  return { currentOrder: () => order, currentVersion: () => version, port };
+  return {
+    applyExternalMutation: (next) => { order = next; version += 1; },
+    currentOrder: () => order,
+    currentVersion: () => version,
+    port,
+  };
 }
 
-function sendToKitchenCommand(orderId: string, expectedVersion: number, eventId: string, idempotencyKey: string) {
-  return { ...audit, eventId, expectedVersion, idempotencyKey, orderId, schemaVersion: 1 as const, scope };
+function sendToKitchenCommand(orderId: string, expectedVersion: number, eventId: string, idempotencyKey: string, orderItemIds: readonly string[]) {
+  return { ...audit, eventId, expectedVersion, idempotencyKey, orderId, orderItemIds, schemaVersion: 1 as const, scope };
 }
 
 test("sendToKitchen opens a draft order and sends every pending line", async () => {
@@ -581,7 +587,7 @@ test("sendToKitchen opens a draft order and sends every pending line", async () 
   }, { ...audit, actorId: principal.actorId }).order, domainMutation.order);
   const fake = fakeSendToKitchenPort(threeLines, 1);
   const service = serviceFor(["manager"], fake.port);
-  const command = sendToKitchenCommand(orderId, 1, randomUUID(), "send-to-kitchen-3-lines");
+  const command = sendToKitchenCommand(orderId, 1, randomUUID(), "send-to-kitchen-3-lines", threeLines.items.map((item) => item.orderItemId));
 
   const summary = await service.sendToKitchen(principal, command);
   assert.equal(summary.orderStatus, "open");
@@ -601,7 +607,7 @@ test("sendToKitchen resumes a partially-applied batch on retry instead of confli
   }, { ...audit, actorId: principal.actorId }).order, domainMutation.order);
   const fake = fakeSendToKitchenPort(twoLines, 1);
   const service = serviceFor(["manager"], fake.port);
-  const command = sendToKitchenCommand(orderId, 1, randomUUID(), "send-to-kitchen-resume");
+  const command = sendToKitchenCommand(orderId, 1, randomUUID(), "send-to-kitchen-resume", twoLines.items.map((item) => item.orderItemId));
 
   // The second line's persist call simulates a dropped connection: the client never sees a
   // response, even though "open" and the first line already committed.
@@ -635,12 +641,74 @@ test("sendToKitchen on an already-open order only transitions its pending lines"
   }, { ...audit, actorId: principal.actorId }).order, "open", { ...audit, actorId: principal.actorId }).order;
   const fake = fakeSendToKitchenPort(opened, 2);
   const service = serviceFor(["manager"], fake.port);
-  const command = sendToKitchenCommand(orderId, 2, randomUUID(), "send-to-kitchen-already-open");
+  const command = sendToKitchenCommand(orderId, 2, randomUUID(), "send-to-kitchen-already-open", [orderItemId]);
 
   const summary = await service.sendToKitchen(principal, command);
   assert.equal(summary.orderStatus, "open");
   assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["sent"]);
   assert.equal(fake.currentVersion(), 3); // only the one pending line, no "open" step
+});
+
+test("sendToKitchen retry never sends a line another actor added after the original attempt", async () => {
+  const twoLines = [1, 2].reduce((current, index) => addOrderItem(current, {
+    orderItemId: `3c2b7f10-6a45-4f9e-9cb1-7d2f8e4c90${String(index).padStart(2, "0")}`,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: `Línea ${index}`,
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(1_000 * index, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order, domainMutation.order);
+  const orderItemIds = twoLines.items.map((item) => item.orderItemId);
+  const firstLineId = orderItemIds[0] as string;
+  const secondLineId = orderItemIds[1] as string;
+  const fake = fakeSendToKitchenPort(twoLines, 1);
+  const service = serviceFor(["manager"], fake.port);
+  const command = sendToKitchenCommand(orderId, 1, randomUUID(), "send-to-kitchen-fixed-batch", [firstLineId, secondLineId]);
+
+  // The response after "open" is simulated as lost. Before the retry, another actor adds a third
+  // pending line directly against the persisted order (not part of this command's original batch).
+  let calls = 0;
+  const originalPersist = fake.port.persist.bind(fake.port);
+  fake.port.persist = async (actorId, expectedVersion, mutation, shiftId) => {
+    calls += 1;
+    if (calls === 1) throw new Error("simulated dropped connection");
+    return originalPersist(actorId, expectedVersion, mutation, shiftId);
+  };
+  await assert.rejects(service.sendToKitchen(principal, command), (error: unknown) => error instanceof OrderApplicationError && error.code === "unavailable");
+
+  const thirdLineId = "4d3c8e21-7b56-4a0f-8dc2-8e3f9d5a1003";
+  const withThirdLine = addOrderItem(fake.currentOrder(), {
+    orderItemId: thirdLineId,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: "Línea de otro actor",
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(3_000, "MXN"),
+    },
+  }, { ...audit, actorId: randomUUID() }).order;
+  fake.applyExternalMutation(withThirdLine);
+
+  const summary = await service.sendToKitchen(principal, command);
+  assert.equal(summary.orderStatus, "open");
+  const byId = new Map(fake.currentOrder().items.map((item) => [item.orderItemId, item.status]));
+  assert.equal(byId.get(firstLineId), "sent");
+  assert.equal(byId.get(secondLineId), "sent");
+  assert.equal(byId.get(thirdLineId), "pending");
+});
+
+test("sendToKitchen rejects an orderItemId that does not belong to the order", async () => {
+  const opened = transitionOrderStatus(addOrderItem(domainMutation.order, {
+    orderItemId,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: "Hamburguesa",
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(12_500, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order, "open", { ...audit, actorId: principal.actorId }).order;
+  const fake = fakeSendToKitchenPort(opened, 2);
+  const service = serviceFor(["manager"], fake.port);
+  const command = sendToKitchenCommand(orderId, 2, randomUUID(), "send-to-kitchen-foreign-id", [randomUUID()]);
+
+  await assertCode(service.sendToKitchen(principal, command), "not_found");
 });
 
 test("order service detail never offers open and sendToKitchen together for the same draft order", async () => {

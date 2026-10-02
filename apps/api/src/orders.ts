@@ -429,21 +429,25 @@ export class OrderService {
   }
 
   /**
-   * S9.1 web-order-actions: opens a draft order (if still draft) and sends every currently pending
-   * line, as one operator-facing command instead of a client-side batch of separate open/transition
-   * requests. Each step is persisted with its own `this.persistRaw` call using an eventId/
-   * idempotencyKey *derived* from the command's own (see `derivedUuid`, same technique as capture
-   * materialization's `appendMaterializedItems`): a byte-identical retried step is recognized by
+   * S9.1 web-order-actions: opens a draft order (if still draft) and sends the lines the operator
+   * actually saw pending, as one operator-facing command instead of a client-side batch of separate
+   * open/transition requests. The set of lines to send is exactly `command.orderItemIds`, fixed by
+   * the first attempt: a retry (same eventId/idempotencyKey) targets the identical set, so a line
+   * another actor adds to the order *after* the original attempt is never swept in by the resend,
+   * and a line *not* listed is never sent by this command even if it is pending. Each step is
+   * persisted with its own `this.persistRaw` call using an eventId/idempotencyKey *derived* from the
+   * command's own (see `derivedUuid`, same technique as capture materialization's
+   * `appendMaterializedItems`): a byte-identical retried step is recognized by
    * `persist_order_mutation`'s own idempotency lookup (which runs *before* its version check) and
    * replayed, so a resend after a lost response is never rejected as a version conflict.
    *
    * Deliberately does not hard-fail on `command.expectedVersion` against a fresh read: each step
    * always targets the *current* aggregate (re-read from the previous step's own persisted result),
-   * so a partially-applied batch resumes from wherever it actually left off -- already-sent lines
-   * are simply no longer "pending" and are never revisited -- while an item concurrently touched by
-   * an unrelated actor (e.g. cancelled) is likewise skipped rather than blindly overwritten. Only a
-   * fresh read reporting a version *older* than `expectedVersion` (impossible in normal operation)
-   * is treated as a conflict.
+   * so a partially-applied batch resumes from wherever it actually left off -- a listed line already
+   * sent by this very command (replayed) or no longer pending for any other reason (e.g. cancelled
+   * by an unrelated actor) is simply skipped rather than blindly overwritten. Only a fresh read
+   * reporting a version *older* than `expectedVersion` (impossible in normal operation) is treated as
+   * a conflict. Any listed id that does not belong to this order is `not_found`.
    */
   public async sendToKitchen(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
     const command = parseSendOrderToKitchenCommandV1(input);
@@ -459,6 +463,11 @@ export class OrderService {
       throw unavailable();
     }
     if (stored.version < command.expectedVersion) throw applicationError("conflict");
+    const orderItemIds = new Set(command.orderItemIds);
+    const knownOrderItemIds = new Set(stored.order.items.map((item) => item.orderItemId));
+    for (const orderItemId of orderItemIds) {
+      if (!knownOrderItemIds.has(orderItemId)) throw applicationError("not_found");
+    }
 
     let lastResult: SavedOrReplayedOrderResult | undefined;
     if (stored.order.status === "draft") {
@@ -467,7 +476,7 @@ export class OrderService {
       stored = { order: lastResult.order, version: lastResult.version };
     }
     for (const item of stored.order.items) {
-      if (item.status !== "pending") continue;
+      if (item.status !== "pending" || !orderItemIds.has(item.orderItemId)) continue;
       const mutation = transitionOrderItemStatus(stored.order, item.orderItemId, "sent", stepAuditContext(command, actorId, item.orderItemId));
       lastResult = await this.persistRaw(actorId, stored.version, mutation);
       stored = { order: lastResult.order, version: lastResult.version };
