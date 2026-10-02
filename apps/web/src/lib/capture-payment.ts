@@ -3,14 +3,18 @@ import type {
   CapturePaymentIntentTimingV1, DeliveryQuoteV1,
 } from "@super-restaurant/shared-types";
 
-const moneyInputPattern = /^\d{1,7}([.,]\d{1,2})?$/u;
+/** Peso-only fallback while a restaurant has no published menu currency. */
+export const DEFAULT_PESO_CURRENCY = "MXN";
+
+const moneyInputPattern = /^\d+([.,]\d{1,2})?$/u;
 
 /**
- * Parses a free-text cash-tender field into exact minor units, or `null` if it is not a valid
+ * Parses a free-text peso field into exact minor units, or `null` if it is not a valid
  * amount. Accepts only whole pesos with up to two optional decimal digits (comma or dot as the
  * separator) -- never a locale-dependent, partial-prefix parse like `Number.parseFloat`, which
  * would silently accept `"10abc"` or round away a third decimal digit. All arithmetic here is
  * integer-only (no float), matching how every other money figure in this app is minor units.
+ * The result must fit in a safe integer because that is the API contract for minor units.
  * H12 note: an absent fraction (no "." or ",", e.g. "10") must count as ".00", not `NaN` -- the
  * `padEnd(2, "0")` below turns the empty slice into "00" before parsing, so this already covers
  * it; the dedicated regression test locks that in explicitly.
@@ -21,10 +25,15 @@ export function parseMoneyInputToMinor(text: string): number | null {
   const separatorIndex = trimmed.search(/[.,]/u);
   const wholePart = separatorIndex === -1 ? trimmed : trimmed.slice(0, separatorIndex);
   const fractionPart = (separatorIndex === -1 ? "" : trimmed.slice(separatorIndex + 1)).padEnd(2, "0");
-  const wholeMinor = Number.parseInt(wholePart, 10) * 100;
-  const fractionMinor = Number.parseInt(fractionPart, 10);
-  const totalMinor = wholeMinor + fractionMinor;
-  return Number.isSafeInteger(totalMinor) ? totalMinor : null;
+  const totalMinor = BigInt(wholePart) * 100n + BigInt(fractionPart);
+  return totalMinor <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(totalMinor) : null;
+}
+
+/** Exact plain peso text for an editable amount, without grouping or a currency symbol. */
+export function formatMinorForMoneyInput(amountMinor: number): string {
+  if (!Number.isSafeInteger(amountMinor) || amountMinor < 0) throw new RangeError("Invalid money amount");
+  const minor = BigInt(amountMinor);
+  return `${minor / 100n}.${(minor % 100n).toString().padStart(2, "0")}`;
 }
 
 /**

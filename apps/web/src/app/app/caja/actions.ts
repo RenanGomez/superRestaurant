@@ -10,6 +10,7 @@ import type { BranchScope } from "@super-restaurant/shared-types";
 
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
+import { DEFAULT_PESO_CURRENCY, parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import {
   closeCashRegister,
   collectPayment,
@@ -19,22 +20,27 @@ import {
   type FinancialApiFailure,
 } from "../../../lib/finance";
 import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
+import { getMenuCatalog } from "../../../lib/menu-catalog";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
 import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } from "./context";
 
 export async function openCashRegisterAction(formData: FormData): Promise<void> {
   const context = await getAuthorizedContext();
+  const openingFloatMinor = parseMoneyInputToMinor(textField(formData, "openingFloatPesos") ?? "");
+  if (openingFloatMinor === null) redirect("/app/caja?cashError=invalid_amount");
+  const catalog = await getMenuCatalog(context.accessToken, context.apiBaseUrl, context.scope);
+  if (catalog === undefined) redirect("/app/caja?cashError=unavailable");
   const cookieStore = await cookies();
   const registerId = getOrCreateUuidCookie(cookieStore, CASH_REGISTER_COOKIE, context.cookiesSecure);
   const deviceId = getOrCreateUuidCookie(cookieStore, DEVICE_COOKIE, context.cookiesSecure);
   const command = {
     cashRegisterSessionId: uuidField(formData, "cashRegisterSessionId"),
-    currency: normalizedCurrency(formData),
+    currency: catalog.catalog?.currency ?? DEFAULT_PESO_CURRENCY,
     deviceId,
     eventId: uuidField(formData, "eventId"),
     idempotencyKey: boundedTextField(formData, "idempotencyKey", 200),
     occurredAt: timestampField(formData, "occurredAt"),
-    openingFloatMinor: nonNegativeIntegerField(formData, "openingFloatMinor"),
+    openingFloatMinor,
     registerId,
     schemaVersion: 1,
     scope: context.scope,
@@ -62,7 +68,8 @@ export async function collectPaymentAction(formData: FormData): Promise<void> {
   });
   if (checkout.status !== "ok") redirect(`/app/caja?orderId=${orderId}&cashError=${errorCode(checkout.status)}`);
   const method = textField(formData, "method");
-  const amountMinor = positiveIntegerField(formData, "amountMinor");
+  const amountMinor = parseMoneyInputToMinor(textField(formData, "amountPesos") ?? "");
+  if (amountMinor === null || amountMinor === 0) redirect(`/app/caja?orderId=${orderId}&cashError=invalid_amount`);
   const provider = boundedTextField(formData, "provider", 120);
   const terminalId = boundedTextField(formData, "terminalId", 100);
   const reference = optionalBoundedTextField(formData, "reference", 200);
@@ -107,7 +114,8 @@ export async function closeCashRegisterAction(formData: FormData): Promise<void>
     cashRegisterSessionId, deviceId, registerId, schemaVersion: 1, scope: context.scope,
   });
   if (report.status !== "ok") redirect(`/app/caja?cashError=${errorCode(report.status)}`);
-  const countedClosingBalanceMinor = nonNegativeIntegerField(formData, "countedClosingBalanceMinor");
+  const countedClosingBalanceMinor = parseMoneyInputToMinor(textField(formData, "countedClosingBalancePesos") ?? "");
+  if (countedClosingBalanceMinor === null) redirect("/app/caja?cashError=invalid_amount");
   const reason = optionalBoundedTextField(formData, "reason", 500);
   const result = await closeCashRegister(context.accessToken, context.apiBaseUrl, {
     cashRegisterExpectedVersion: report.value.register.version,
@@ -182,11 +190,6 @@ function optionalBoundedTextField(formData: FormData, name: string, maximum: num
   return value === "" ? null : value !== undefined && value.length <= maximum && !/[\p{Cc}\p{Cf}]/u.test(value) ? value : undefined;
 }
 
-function normalizedCurrency(formData: FormData): string | undefined {
-  const value = textField(formData, "currency")?.trim().toUpperCase();
-  return value !== undefined && /^[A-Z]{3}$/u.test(value) ? value : undefined;
-}
-
 function uuidField(formData: FormData, name: string): string | undefined {
   const value = textField(formData, name);
   return value !== undefined && UUID_PATTERN.test(value) ? value.toLowerCase() : undefined;
@@ -197,18 +200,6 @@ function timestampField(formData: FormData, name: string): string | undefined {
   if (value === undefined || value.length !== 24) return undefined;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) && new Date(parsed).toISOString() === value ? value : undefined;
-}
-
-function nonNegativeIntegerField(formData: FormData, name: string): number | undefined {
-  const value = textField(formData, name);
-  if (value === undefined || !/^(0|[1-9]\d*)$/u.test(value)) return undefined;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
-}
-
-function positiveIntegerField(formData: FormData, name: string): number | undefined {
-  const value = nonNegativeIntegerField(formData, name);
-  return value !== undefined && value > 0 ? value : undefined;
 }
 
 function errorCode(status: FinancialApiFailure): string {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   deliveryQuoteBlocksConfirm, deliveryQuoteScheduledForInputValue, describePaymentMethod, isSwitchingToAnotherCapture,
-  parseMoneyInputToMinor, paymentIntentBlocksConfirm, quoteMatchesRequestedTime, shouldSubmitTender,
+  formatMinorForMoneyInput, parseMoneyInputToMinor, paymentIntentBlocksConfirm, quoteMatchesRequestedTime, shouldSubmitTender,
   suggestTenderAmounts,
 } from "./capture-payment.js";
 
@@ -207,6 +207,17 @@ test("describePaymentMethod describes card_manual and transfer independently of 
 test("parseMoneyInputToMinor converts whole pesos and two-decimal amounts with exact integer arithmetic", () => {
   assert.equal(parseMoneyInputToMinor("10"), 1_000);
   assert.equal(parseMoneyInputToMinor("10.5"), 1_050);
+  assert.equal(parseMoneyInputToMinor("130.50"), 13_050);
+});
+
+test("money input round trips exact minor units, including the safe integer boundary", () => {
+  for (const amount of [0, 1, 13_050, Number.MAX_SAFE_INTEGER]) {
+    assert.equal(parseMoneyInputToMinor(formatMinorForMoneyInput(amount)), amount);
+  }
+  assert.equal(parseMoneyInputToMinor("90071992547409.92"), null);
+  assert.equal(parseMoneyInputToMinor("-130"), null);
+  assert.equal(parseMoneyInputToMinor("130.123"), null);
+  assert.equal(parseMoneyInputToMinor("130abc"), null);
 });
 
 // H12: a field with no "." or "," at all (an absent fraction, not merely a short one) must never
