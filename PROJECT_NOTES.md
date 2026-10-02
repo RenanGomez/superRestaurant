@@ -1,5 +1,22 @@
 # PROJECT_NOTES
 
+## Veredicto de la prueba visual del 2026-10-01: reglas de interfaz para humanos
+
+Emmanuel probó la consola (menú, clientes, mesas, captura, caja, órdenes) y reportó 25 fallos; su conclusión: «pareciera que estás haciendo el sistema para otra inteligencia artificial en vez de para humanos». Nada pasa a DONE. Reglas que gobiernan todo trabajo de UI desde hoy:
+
+- **Principio rector (Emmanuel, 2026-10-01)**: no se copia la interfaz de Soft Restaurant («está fea»); lo que se exige es que todo esté claro, al alcance y a dos o tres toques de quedar hecho. El operador no tiene tiempo de llenar formularios: sólo direcciones y alguna cantidad se teclean; todo lo demás se elige con un toque (listas, botones grandes, valores por defecto correctos, lo frecuente arriba). Cada paquete de UI declara cuántos toques necesita su flujo principal y se rechaza si pasa de tres sin motivo. Matiz del mismo día: hay dos ritmos. **Operación** (tomar orden, cobrar, mesas, cocina) va a dos o tres toques sin formularios. **Configuración y cierre** (menú y modificadores, zonas, alta de clientes, corte de caja) sí admite formularios, siempre con opciones claras, listas desplegables cuando el valor pertenece a un conjunto conocido, etiquetas en español, ayuda de una línea y sin formatos que haya que adivinar. Cada paquete declara en qué ritmo cae.
+- **Dinero se captura y se muestra en pesos** («$130.00»), nunca en unidades menores ni con «u.m.» o «ISO» a la vista. La moneda la fija el servidor (MXN); la web no la pregunta. Convertir «130» o «130.50» a 13050 centavos es parseo exacto de texto en el cliente (sin float); todo cálculo sigue en el servidor. Bug raíz detectado: los inputs de precio y de fondo de caja tomaban la cifra como centavos (130 → $1.30).
+- **Ningún humano teclea ni lee UUIDs.** Caja cobra eligiendo una orden de la lista de cobrables; borradores y órdenes se identifican por nombre y teléfono del cliente, fecha y folio corto.
+- **Todo en español operativo.** Nada de «SKU», «ISO», «u.m.», «lease», «rendering». Un campo marcado opcional nunca bloquea el guardado.
+- **Opciones predefinidas antes que texto libre**: etiquetas de teléfono (principal, secundario, trabajo, otro) y de dirección (casa, trabajo, otro) como lista.
+- **Toda acción muestra resultado**: éxito, error o conflicto, con texto claro; un botón que vuelve a su estado sin decir nada es un bug.
+- **Orden del flujo telefónico**: identificar cliente → menú → entrega (dirección e instrucciones) → cobro → confirmar. Las instrucciones de entrega no van antes del cliente.
+- **Precio tentativo visible mientras se arma un producto** (la UI muestra la suma de precios que el servidor ya entregó, etiquetada como estimado; el servidor confirma al agregar) y edición de una línea armada sin rehacerla.
+- **Validación visible**: al validar una dirección se muestra zona, cargo y promesa, no sólo «validado».
+- **Fotos de productos e ingredientes** son requisito de producto (módulo Storage pendiente de ADR de buckets y políticas); mientras no existan, la tarjeta muestra iniciales y color de categoría, no un icono genérico.
+- **Decisiones de Emmanuel del 2026-10-01 (segunda ronda)**: la transferencia de captura a otro operador sale del flujo y queda bajo un menú «Más» (el 90 % de los negocios tiene un solo telefonista); «Sin venta» pasa a llamarse «Cancelar» y las capturas cerradas con motivo se listan junto con las órdenes canceladas en una vista «Canceladas» (el registro técnico sigue siendo `close_capture_no_sale`, auditado); fotos de catálogo y mesas operativas se construyen ya, sin nueva autorización: el acceso a Supabase y la autorización de migraciones están vigentes.
+- **Mesas**: el plano solo tiene valor si a cada mesa se le asigna cuenta, mesero y estado; es un corte propio (S9), no una pantalla decorativa.
+
 ## Envío a cocina atómico e idempotencia por comando — 2026-10-01
 
 - `POST /orders/send-to-kitchen` persiste el lote (abrir borrador + `pending→sent` de las líneas listadas) en una sola transacción mediante `app_private.send_order_to_kitchen`; la identidad del comando vive en `app.order_command_events` (única por actor, restaurante, sucursal y `idempotencyKey`). Un reintento byte-idéntico devuelve `replayed` con el resultado almacenado; misma clave con payload distinto, versión distinta a la esperada, línea ajena o línea listada no pendiente son `conflict`/`not_found` sin efecto. Cada paso sigue pasando por `persist_order_mutation`, así que la auditoría por línea se conserva.
