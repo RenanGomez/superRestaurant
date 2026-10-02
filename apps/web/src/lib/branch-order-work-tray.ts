@@ -8,6 +8,7 @@ import {
   type BranchOrderWorkTrayV1,
   type BranchScope,
 } from "@super-restaurant/shared-types";
+import { currencyFractionDigits } from "./money-scale";
 
 export type BranchOrderTrayRequestResult =
   | { readonly ok: true; readonly value: BranchOrderWorkTrayV1 }
@@ -61,7 +62,7 @@ export function preparationLabel(preparation: BranchOrderWorkPreparationStatusV1
  * currency, and without ever dividing a float: `amountMinor / 10 ** digits` silently loses cents
  * once the integer part exceeds Number's ~15-16 significant digits (e.g. 9007199254740991 -> a
  * total ending in ".90" instead of ".91"). The exponent still comes from `Intl.NumberFormat`'s own
- * `resolvedOptions()` for the currency (2 for MXN, 0 for JPY); the integer/fraction split uses
+ * the shared supported-currency scale (2 for MXN, 0 for JPY); the integer/fraction split uses
  * exact BigInt division and modulo, the integer part is grouped by a plain `Intl.NumberFormat`
  * (which accepts a BigInt directly), and the currency symbol/position/decimal separator/sign
  * placement are taken verbatim from `formatToParts` of a one-unit sample in the same currency and
@@ -69,8 +70,9 @@ export function preparationLabel(preparation: BranchOrderWorkPreparationStatusV1
  * frozen minor-unit total; never recomputed here.
  */
 export function formatMinorUnits(amountMinor: number, currency: string, locale = "es-MX"): string {
+  const digits = currencyFractionDigits(currency);
+  if (digits === null) return "Moneda no admitida";
   const formatter = new Intl.NumberFormat(locale, { currency, style: "currency" });
-  const digits = formatter.resolvedOptions().maximumFractionDigits ?? 2;
   const scale = 10n ** BigInt(digits);
   const negative = amountMinor < 0;
   const absoluteMinor = negative ? BigInt(-amountMinor) : BigInt(amountMinor);

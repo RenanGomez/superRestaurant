@@ -6,11 +6,13 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import type { BranchScope } from "@super-restaurant/shared-types";
+import type { BranchOrderWorkCursorV1, BranchScope } from "@super-restaurant/shared-types";
 
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
-import { DEFAULT_PESO_CURRENCY, parseMoneyInputToMinor } from "../../../lib/capture-payment";
+import { isPayableBranchOrderWorkStatus, requestBranchOrderWorkTray } from "../../../lib/branch-order-work-tray";
+import { resolveRegisterCurrency } from "../../../lib/cash-register-currency";
+import { parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import {
   closeCashRegister,
   collectPayment,
@@ -26,16 +28,22 @@ import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } fro
 
 export async function openCashRegisterAction(formData: FormData): Promise<void> {
   const context = await getAuthorizedContext();
-  const openingFloatMinor = parseMoneyInputToMinor(textField(formData, "openingFloatPesos") ?? "");
-  if (openingFloatMinor === null) redirect("/app/caja?cashError=invalid_amount");
-  const catalog = await getMenuCatalog(context.accessToken, context.apiBaseUrl, context.scope);
+  const orderCurrencies = await readPayableOrderCurrencies(context);
+  if (orderCurrencies === undefined) redirect("/app/caja?cashError=unavailable");
+  const catalog = orderCurrencies.length === 0
+    ? await getMenuCatalog(context.accessToken, context.apiBaseUrl, context.scope) : null;
   if (catalog === undefined) redirect("/app/caja?cashError=unavailable");
+  const resolution = resolveRegisterCurrency(orderCurrencies, catalog?.catalog?.currency ?? null);
+  if (resolution.status === "mixed") redirect("/app/caja?cashError=mixed_currency");
+  if (resolution.status === "unsupported") redirect("/app/caja?cashError=unsupported_currency");
+  const openingFloatMinor = parseMoneyInputToMinor(textField(formData, "openingFloatPesos") ?? "", resolution.currency);
+  if (openingFloatMinor === null) redirect("/app/caja?cashError=invalid_amount");
   const cookieStore = await cookies();
   const registerId = getOrCreateUuidCookie(cookieStore, CASH_REGISTER_COOKIE, context.cookiesSecure);
   const deviceId = getOrCreateUuidCookie(cookieStore, DEVICE_COOKIE, context.cookiesSecure);
   const command = {
     cashRegisterSessionId: uuidField(formData, "cashRegisterSessionId"),
-    currency: catalog.catalog?.currency ?? DEFAULT_PESO_CURRENCY,
+    currency: resolution.currency,
     deviceId,
     eventId: uuidField(formData, "eventId"),
     idempotencyKey: boundedTextField(formData, "idempotencyKey", 200),
@@ -68,7 +76,7 @@ export async function collectPaymentAction(formData: FormData): Promise<void> {
   });
   if (checkout.status !== "ok") redirect(`/app/caja?orderId=${orderId}&cashError=${errorCode(checkout.status)}`);
   const method = textField(formData, "method");
-  const amountMinor = parseMoneyInputToMinor(textField(formData, "amountPesos") ?? "");
+  const amountMinor = parseMoneyInputToMinor(textField(formData, "amountPesos") ?? "", checkout.value.currency);
   if (amountMinor === null || amountMinor === 0) redirect(`/app/caja?orderId=${orderId}&cashError=invalid_amount`);
   const provider = boundedTextField(formData, "provider", 120);
   const terminalId = boundedTextField(formData, "terminalId", 100);
@@ -114,7 +122,7 @@ export async function closeCashRegisterAction(formData: FormData): Promise<void>
     cashRegisterSessionId, deviceId, registerId, schemaVersion: 1, scope: context.scope,
   });
   if (report.status !== "ok") redirect(`/app/caja?cashError=${errorCode(report.status)}`);
-  const countedClosingBalanceMinor = parseMoneyInputToMinor(textField(formData, "countedClosingBalancePesos") ?? "");
+  const countedClosingBalanceMinor = parseMoneyInputToMinor(textField(formData, "countedClosingBalancePesos") ?? "", report.value.register.currency);
   if (countedClosingBalanceMinor === null) redirect("/app/caja?cashError=invalid_amount");
   const reason = optionalBoundedTextField(formData, "reason", 500);
   const result = await closeCashRegister(context.accessToken, context.apiBaseUrl, {
@@ -140,6 +148,22 @@ interface AuthorizedFinancialContext {
   readonly apiBaseUrl: string;
   readonly cookiesSecure: boolean;
   readonly scope: BranchScope;
+}
+
+async function readPayableOrderCurrencies(context: AuthorizedFinancialContext): Promise<readonly string[] | undefined> {
+  const currencies = new Set<string>();
+  let cursor: BranchOrderWorkCursorV1 | null = null;
+  // Scan every available page; a bounded failure blocks opening rather than missing a second currency.
+  for (let page = 0; page < 50; page += 1) {
+    const tray = await requestBranchOrderWorkTray(context.accessToken, context.apiBaseUrl, context.scope, cursor, 100);
+    if (!tray.ok) return undefined;
+    for (const order of tray.value.items) {
+      if (isPayableBranchOrderWorkStatus(order.status)) currencies.add(order.totals.currency);
+    }
+    if (currencies.size > 1 || tray.value.nextCursor === null) return [...currencies];
+    cursor = tray.value.nextCursor;
+  }
+  return undefined;
 }
 
 async function getAuthorizedContext(): Promise<AuthorizedFinancialContext> {

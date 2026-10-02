@@ -2,56 +2,67 @@ import type {
   CaptureFulfillmentChannelV1, CapturePaymentIntentMethodV1, CapturePaymentIntentProjectionV1,
   CapturePaymentIntentTimingV1, DeliveryQuoteV1,
 } from "@super-restaurant/shared-types";
+import { currencyFractionDigits } from "./money-scale";
 
 /** Peso-only fallback while a restaurant has no published menu currency. */
 export const DEFAULT_PESO_CURRENCY = "MXN";
 
-const moneyInputPattern = /^\d+([.,]\d{1,2})?$/u;
-
 /**
- * Parses a free-text peso field into exact minor units, or `null` if it is not a valid
- * amount. Accepts only whole pesos with up to two optional decimal digits (comma or dot as the
+ * Parses a free-text amount into exact minor units, or `null` if it is not a valid
+ * amount. Accepts whole units with at most the currency's decimal digits (comma or dot as the
  * separator) -- never a locale-dependent, partial-prefix parse like `Number.parseFloat`, which
  * would silently accept `"10abc"` or round away a third decimal digit. All arithmetic here is
  * integer-only (no float), matching how every other money figure in this app is minor units.
  * The result must fit in a safe integer because that is the API contract for minor units.
- * H12 note: an absent fraction (no "." or ",", e.g. "10") must count as ".00", not `NaN` -- the
- * `padEnd(2, "0")` below turns the empty slice into "00" before parsing, so this already covers
- * it; the dedicated regression test locks that in explicitly.
+ * An absent fraction (e.g. "10") counts as zero minor units; the empty slice is
+ * padded to the selected scale before parsing.
  */
-export function parseMoneyInputToMinor(text: string): number | null {
+export function parseMoneyInputToMinor(text: string, currency: string): number | null {
+  const digits = currencyFractionDigits(currency);
+  if (digits === null) return null;
   const trimmed = text.trim();
-  if (!moneyInputPattern.test(trimmed)) return null;
+  const pattern = digits === 0 ? /^\d+$/u : new RegExp(`^\\d+([.,]\\d{1,${digits}})?$`, "u");
+  if (!pattern.test(trimmed)) return null;
   const separatorIndex = trimmed.search(/[.,]/u);
   const wholePart = separatorIndex === -1 ? trimmed : trimmed.slice(0, separatorIndex);
-  const fractionPart = (separatorIndex === -1 ? "" : trimmed.slice(separatorIndex + 1)).padEnd(2, "0");
-  const totalMinor = BigInt(wholePart) * 100n + BigInt(fractionPart);
+  const fractionPart = (separatorIndex === -1 ? "" : trimmed.slice(separatorIndex + 1)).padEnd(digits, "0");
+  const scale = 10n ** BigInt(digits);
+  const totalMinor = BigInt(wholePart) * scale + BigInt(fractionPart || "0");
   return totalMinor <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(totalMinor) : null;
 }
 
-/** Exact plain peso text for an editable amount, without grouping or a currency symbol. */
-export function formatMinorForMoneyInput(amountMinor: number): string {
+/** Exact plain text for an editable amount, without grouping or a currency symbol. */
+export function formatMinorForMoneyInput(amountMinor: number, currency: string): string | null {
   if (!Number.isSafeInteger(amountMinor) || amountMinor < 0) throw new RangeError("Invalid money amount");
+  const digits = currencyFractionDigits(currency);
+  if (digits === null) return null;
   const minor = BigInt(amountMinor);
-  return `${minor / 100n}.${(minor % 100n).toString().padStart(2, "0")}`;
+  const scale = 10n ** BigInt(digits);
+  return digits === 0 ? minor.toString() : `${minor / scale}.${(minor % scale).toString().padStart(digits, "0")}`;
 }
 
 /**
  * Suggested cash tender amounts for a given authoritative total (minor units): the exact total,
- * plus the next round 100/200/500 (pesos) above it that is strictly greater than the total --
+ * plus the next round 100/200/500 major units above it that is strictly greater than the total --
  * duplicates and non-strictly-greater roundings are dropped, so "Exacto" never repeats among the
  * shortcuts and every shortcut is either the exact total or unambiguously "with change". These
  * are input shortcuts only: the server (`paymentProjection.changeDueMinor`) always computes the
  * actual change, never this helper.
  */
-export function suggestTenderAmounts(totalMinor: number): readonly number[] {
-  if (!Number.isSafeInteger(totalMinor) || totalMinor < 0) return [];
-  const roundings = [10_000, 20_000, 50_000] as const; // 100/200/500 MXN pesos in minor units
+export function suggestTenderAmounts(totalMinor: number, currency: string): readonly number[] {
+  const digits = currencyFractionDigits(currency);
+  if (digits === null || !Number.isSafeInteger(totalMinor) || totalMinor < 0) return [];
+  const scale = 10n ** BigInt(digits);
+  const total = BigInt(totalMinor);
   const suggestions = [totalMinor];
-  for (const rounding of roundings) {
-    const roundedUp = Math.ceil(totalMinor / rounding) * rounding;
+  for (const major of [100n, 200n, 500n]) {
+    const rounding = major * scale;
+    const roundedUp = ((total + rounding - 1n) / rounding) * rounding;
     // A rounding that lands exactly on the total is not a distinct shortcut from "Exacto".
-    if (roundedUp > totalMinor && !suggestions.includes(roundedUp)) suggestions.push(roundedUp);
+    if (roundedUp > total && roundedUp <= BigInt(Number.MAX_SAFE_INTEGER)) {
+      const amount = Number(roundedUp);
+      if (!suggestions.includes(amount)) suggestions.push(amount);
+    }
   }
   return Object.freeze(suggestions);
 }

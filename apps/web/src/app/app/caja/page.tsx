@@ -15,6 +15,7 @@ import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
 import { formatMinorUnits, requestBranchOrderWorkTray, type BranchOrderTrayRequestResult } from "../../../lib/branch-order-work-tray";
 import { formatMinorForMoneyInput } from "../../../lib/capture-payment";
+import { currencyFractionDigits } from "../../../lib/money-scale";
 import { getCashRegisterReport, getCheckoutOrder, type FinancialApiResult } from "../../../lib/finance";
 import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
@@ -35,7 +36,7 @@ interface CashRegisterPageProps {
 
 const FINANCIAL_ROLES = new Set(["owner", "admin", "manager", "supervisor", "cashier"]);
 const KNOWN_ERRORS = new Set([
-  "conflict", "context_invalid", "close_not_confirmed", "invalid_amount", "invalid_input", "not_found", "unauthorized", "unavailable",
+  "conflict", "context_invalid", "close_not_confirmed", "invalid_amount", "invalid_input", "mixed_currency", "not_found", "unauthorized", "unavailable", "unsupported_currency",
 ]);
 const KNOWN_STATUSES = new Set(["opened", "payment_collected", "closed"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -143,7 +144,7 @@ function OpenRegisterPanel(): ReactNode {
         <AuditFields audit={audit} />
         <input type="hidden" name="cashRegisterSessionId" value={randomUUID()} />
         <input type="hidden" name="shiftId" value={randomUUID()} />
-        <MoneyField label="Fondo inicial" name="openingFloatPesos" defaultValue="0.00" />
+        <MoneyField label="Fondo inicial" name="openingFloatPesos" defaultValue="0" />
         <div className="sm:col-span-2"><CashierSubmitButton idle="Abrir caja" pending="Abriendo caja…" /></div>
       </form>
     </section>
@@ -195,7 +196,7 @@ function PaymentPanel({ checkout }: { readonly checkout: CheckoutOrderSummaryV1 
         <input type="hidden" name="cashRegisterSessionId" value={checkout.cashRegisterSessionId} />
         <input type="hidden" name="orderId" value={checkout.orderId} />
         <input type="hidden" name="paymentId" value={randomUUID()} />
-        <MoneyField label="Importe" name="amountPesos" defaultValue={formatMinorForMoneyInput(checkout.remainingBalanceMinor)} positive />
+        <MoneyField label="Importe" name="amountPesos" currency={checkout.currency} defaultValue={formatMinorForMoneyInput(checkout.remainingBalanceMinor, checkout.currency) ?? ""} positive />
         <fieldset className="grid grid-cols-2 gap-3">
           <legend className="mb-2 text-[12px] font-semibold text-text">Método</legend>
           <Choice name="method" value="cash" label="Efectivo" defaultChecked />
@@ -224,7 +225,7 @@ function CloseRegisterPanel({ report }: { readonly report: CashRegisterOperation
       <form action={closeCashRegisterAction} className="grid gap-4">
         <AuditFields audit={audit} />
         <input type="hidden" name="cashRegisterSessionId" value={report.register.cashRegisterSessionId} />
-        <MoneyField label="Efectivo contado" name="countedClosingBalancePesos" defaultValue={formatMinorForMoneyInput(report.register.expectedCashBalanceMinor)} />
+        <MoneyField label="Efectivo contado" name="countedClosingBalancePesos" currency={report.register.currency} defaultValue={formatMinorForMoneyInput(report.register.expectedCashBalanceMinor, report.register.currency) ?? ""} />
         <label className="grid gap-1.5 text-[12px] font-semibold text-text">Motivo de diferencia, si aplica<textarea name="reason" maxLength={500} rows={3} className="rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" /></label>
         <label className="flex min-h-11 items-start gap-3 rounded-xl border border-[oklch(85%_0.06_25)] bg-error-bg p-3 text-[13px]"><input required type="checkbox" name="confirmClose" value="yes" className="mt-1 h-4 w-4" /><span>Confirmo el conteo y entiendo que este cierre es inmutable.</span></label>
         <CashierSubmitButton idle="Cerrar caja" pending="Cerrando caja…" tone="danger" />
@@ -285,15 +286,23 @@ function Field({ className = "", defaultValue, label, required = true, ...input 
   return <label className={`grid gap-1.5 text-[12px] font-semibold text-text ${className}`}>{label}<input {...input} required={required} defaultValue={defaultValue} className="min-h-12 min-w-0 rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" /></label>;
 }
 
-function MoneyField({ defaultValue, label, name, positive = false }: {
+function MoneyField({ currency, defaultValue, label, name, positive = false }: {
+  readonly currency?: string;
   readonly defaultValue: string;
   readonly label: string;
   readonly name: string;
   readonly positive?: boolean;
 }): ReactNode {
+  const digits = currency === undefined ? 2 : currencyFractionDigits(currency);
+  const decimals = digits === 0 ? "sin decimales" : digits === null ? "Moneda no admitida; avisa al administrador." : `máximo ${digits} decimales`;
+  const basePattern = digits === 0 ? "[0-9]+" : digits === null ? "(?!)" : `[0-9]+([.,][0-9]{1,${digits}})?`;
+  const zeroPattern = digits === 0 ? "(?!0+$)" : `(?!0+(?:[.,]0{1,${digits ?? 2}})?$)`;
+  const pattern = positive ? `${zeroPattern}${basePattern}` : basePattern;
   return <label className="grid gap-1.5 text-[12px] font-semibold text-text">{label}
-    <input required name={name} type="text" inputMode="decimal" pattern={positive ? "(?!0+(?:[.,]0{1,2})?$)[0-9]+([.,][0-9]{1,2})?" : "[0-9]+([.,][0-9]{1,2})?"} defaultValue={defaultValue} aria-describedby={`${name}-hint`} className="min-h-12 min-w-0 rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" />
-    <span id={`${name}-hint`} className="text-[11px] font-normal text-text-muted">Pesos; por ejemplo 130 o 130.50. Máximo dos decimales.</span>
+    <input required disabled={digits === null} name={name} type="text" inputMode="decimal" pattern={pattern} defaultValue={defaultValue} aria-describedby={`${name}-hint`} className="min-h-12 min-w-0 rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" />
+    <span id={`${name}-hint`} className="text-[11px] font-normal text-text-muted">{currency === undefined
+      ? "Por ejemplo 130; si la moneda admite centavos, también 130.50."
+      : digits === null ? decimals : `Por ejemplo 130${digits === 0 ? "" : " o 130.50"}; ${decimals}.`}</span>
   </label>;
 }
 
@@ -313,7 +322,9 @@ function ErrorBanner({ code }: { readonly code: string }): ReactNode {
   const message = code === "conflict" ? "El estado cambió en otro intento. Actualiza y vuelve a intentarlo; no se duplicó la operación."
     : code === "close_not_confirmed" ? "Confirma explícitamente el cierre antes de continuar."
       : code === "unauthorized" ? "Tu autorización para esta caja ya no está vigente."
-        : code === "invalid_amount" ? "Escribe un importe en pesos válido, con máximo dos decimales."
+        : code === "mixed_currency" ? "Hay cuentas abiertas en más de una moneda; avisa al administrador."
+          : code === "unsupported_currency" ? "La moneda de las cuentas no está admitida; avisa al administrador."
+          : code === "invalid_amount" ? "Escribe un importe válido; revisa los decimales de la moneda."
           : code === "invalid_input" ? "Hay datos inválidos o incompletos. Revisa importes y evidencia externa."
           : code === "context_invalid" ? "Este dispositivo perdió el contexto de caja. Actualiza para recuperarlo."
             : "No se completó la operación. Actualiza el estado y vuelve a intentarlo.";

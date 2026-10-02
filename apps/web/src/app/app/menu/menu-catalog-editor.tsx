@@ -10,6 +10,7 @@ import type {
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { DEFAULT_PESO_CURRENCY, formatMinorForMoneyInput, parseMoneyInputToMinor } from "../../../lib/capture-payment";
+import { currencyFractionDigits } from "../../../lib/money-scale";
 
 import { saveMenuCatalogAction } from "./actions";
 
@@ -172,7 +173,7 @@ export function MenuCatalogEditor({ canManage, state }: {
       </section>
 
       <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-        <SectionHeader title="Productos y modificadores" description="Captura precios en pesos; los grupos pertenecen a un solo producto.">
+        <SectionHeader title="Productos y modificadores" description="Captura precios en la moneda del restaurante; los grupos pertenecen a un solo producto.">
           {canManage && <AddButton disabled={categories.length === 0} label="Agregar producto" onClick={addProduct} />}
         </SectionHeader>
         {products.length === 0 ? <EmptyText text="No hay productos en este borrador." /> : (
@@ -316,25 +317,29 @@ function MoneyInput({ currency, disabled, onChange, value }: {
   readonly onChange: (value: number) => void;
   readonly value: number;
 }): ReactNode {
-  const [text, setText] = useState(() => formatMinorForMoneyInput(value));
+  const [text, setText] = useState(() => formatMinorForMoneyInput(value, currency) ?? "");
   const hintId = useId();
-  const parsed = parseMoneyInputToMinor(text);
+  const digits = currencyFractionDigits(currency);
+  const parsed = parseMoneyInputToMinor(text, currency);
+  const pattern = digits === 0 ? "[0-9]+" : digits === null ? "(?!)" : `[0-9]+([.,][0-9]{1,${digits}})?`;
+  const errorText = digits === null ? "La moneda de este catálogo no está admitida; avisa al administrador."
+    : `Escribe un precio válido${digits === 0 ? " sin decimales" : ` con máximo ${digits} decimales`}.`;
   return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium">Precio
     <input
-      required disabled={disabled} type="text" inputMode="decimal" pattern="[0-9]+([.,][0-9]{1,2})?"
+      required disabled={disabled} type="text" inputMode="decimal" pattern={pattern}
       value={text} aria-invalid={parsed === null} aria-describedby={hintId}
       onChange={(event) => {
         const next = event.target.value;
         setText(next);
-        const amount = parseMoneyInputToMinor(next);
-        event.target.setCustomValidity(amount === null ? "Escribe un precio válido en pesos, con máximo dos decimales." : "");
+        const amount = parseMoneyInputToMinor(next, currency);
+        event.target.setCustomValidity(amount === null ? errorText : "");
         if (amount !== null) onChange(amount);
       }}
-      onBlur={() => { if (parsed !== null) setText(formatMinorForMoneyInput(parsed)); }}
+      onBlur={() => { if (parsed !== null) setText(formatMinorForMoneyInput(parsed, currency) ?? ""); }}
       className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70"
     />
     <span id={hintId} className={parsed === null ? "text-error" : "text-text-muted"}>
-      {parsed === null ? "Escribe pesos, por ejemplo 130 o 130.50 (máximo dos decimales)." : formatMinorUnits(value, currency)}
+      {parsed === null ? errorText : formatMinorUnits(value, currency)}
     </span>
   </label>;
 }
