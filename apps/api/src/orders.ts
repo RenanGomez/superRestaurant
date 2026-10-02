@@ -686,15 +686,30 @@ function auditContext(command: OrderAuditInputV1, actorId: string): OrderAuditCo
   };
 }
 
-/** One derived, deterministic eventId/idempotencyKey pair per step of `sendToKitchen`, from the
- * command's own eventId/idempotencyKey plus the step's identity ("open" or an orderItemId) -- same
- * technique as capture materialization's `derivedUuid` in capture-repeat-order-plan.ts. */
+/**
+ * One derived, deterministic eventId/idempotencyKey pair per step of `sendToKitchen`, from the
+ * command's own eventId/idempotencyKey, the step's identity ("open" or an orderItemId), and a
+ * canonical fingerprint of the whole command (`orderId`, `expectedVersion`, `orderItemIds` sorted)
+ * -- same technique as capture materialization's `derivedUuid` in capture-repeat-order-plan.ts.
+ *
+ * Folding the fingerprint in means a client that resends the same eventId/idempotencyKey with a
+ * *different* `orderItemIds` list never derives the same step keys as the original command: its
+ * steps are fully isolated from the first attempt's, so it cannot replay or otherwise interfere with
+ * steps that belong to a different list.
+ *
+ * Limitación: el payload del comando no se persiste (la deuda de nivel A -- búsqueda por clave de
+ * idempotencia en SQL -- sigue pendiente), así que este reenvío con otra lista no se *rechaza*,
+ * sólo queda aislado: se procesa como un lote nuevo e independiente en vez de compartir pasos con el
+ * original. El cliente web evita el escenario por completo acuñando la clave de intento junto con la
+ * lista en el mismo momento (ver `nextAttempt`/`runSendToKitchen` en order-detail-panel.tsx).
+ */
 function stepAuditContext(command: SendOrderToKitchenCommandV1, actorId: string, stepIdentity: string): OrderAuditContext {
+  const fingerprint = [command.orderId, String(command.expectedVersion), [...command.orderItemIds].sort().join(",")].join("|");
   return {
     actorId,
     deviceId: command.deviceId,
-    eventId: derivedUuid("send-to-kitchen-event", command.eventId, stepIdentity),
-    idempotencyKey: derivedUuid("send-to-kitchen-idempotency", command.idempotencyKey, stepIdentity),
+    eventId: derivedUuid("send-to-kitchen-event", command.eventId, `${fingerprint}:${stepIdentity}`),
+    idempotencyKey: derivedUuid("send-to-kitchen-idempotency", command.idempotencyKey, `${fingerprint}:${stepIdentity}`),
     occurredAt: command.occurredAt,
   };
 }

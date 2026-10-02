@@ -711,6 +711,43 @@ test("sendToKitchen rejects an orderItemId that does not belong to the order", a
   await assertCode(service.sendToKitchen(principal, command), "not_found");
 });
 
+test("sendToKitchen derives disjoint step keys for a resent idempotencyKey with a different orderItemIds list", async () => {
+  const twoLines = [1, 2].reduce((current, index) => addOrderItem(current, {
+    orderItemId: `5e4d9f32-8c67-4b1a-9ed3-9f4a0b6c21${String(index).padStart(2, "0")}`,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: `Línea ${index}`,
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(1_000 * index, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order, domainMutation.order);
+  const [firstLineId, secondLineId] = twoLines.items.map((item) => item.orderItemId) as [string, string];
+
+  const sharedIdempotencyKey = "send-to-kitchen-reused-key";
+  const sharedEventId = randomUUID();
+  const keysSeenByFirstCommand: string[] = [];
+  const firstFake = fakeSendToKitchenPort(twoLines, 1);
+  const firstPersist = firstFake.port.persist.bind(firstFake.port);
+  firstFake.port.persist = async (actorId, expectedVersion, mutation, shiftId) => {
+    keysSeenByFirstCommand.push(mutation.auditEvent.eventId, mutation.auditEvent.idempotencyKey);
+    return firstPersist(actorId, expectedVersion, mutation, shiftId);
+  };
+  const firstCommand = sendToKitchenCommand(orderId, 1, sharedEventId, sharedIdempotencyKey, [firstLineId]);
+  await serviceFor(["manager"], firstFake.port).sendToKitchen(principal, firstCommand);
+
+  const keysSeenBySecondCommand: string[] = [];
+  const secondFake = fakeSendToKitchenPort(twoLines, 1);
+  const secondPersist = secondFake.port.persist.bind(secondFake.port);
+  secondFake.port.persist = async (actorId, expectedVersion, mutation, shiftId) => {
+    keysSeenBySecondCommand.push(mutation.auditEvent.eventId, mutation.auditEvent.idempotencyKey);
+    return secondPersist(actorId, expectedVersion, mutation, shiftId);
+  };
+  const secondCommand = sendToKitchenCommand(orderId, 1, sharedEventId, sharedIdempotencyKey, [firstLineId, secondLineId]);
+  await serviceFor(["manager"], secondFake.port).sendToKitchen(principal, secondCommand);
+
+  assert.ok(keysSeenByFirstCommand.length > 0 && keysSeenBySecondCommand.length > 0);
+  for (const key of keysSeenBySecondCommand) assert.ok(!keysSeenByFirstCommand.includes(key), `step key ${key} must not be shared across commands with different orderItemIds`);
+});
+
 test("order service detail never offers open and sendToKitchen together for the same draft order", async () => {
   const tableOrder = createOrder({
     branchId: scope.branchId, channel: "table", currency: "MXN", orderId,
