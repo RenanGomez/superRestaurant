@@ -40,6 +40,7 @@ import {
   transitionOrderStatus,
   type Order,
   type OrderAuditContext,
+  type OrderItemState,
   type OrderMutation,
 } from "@super-restaurant/domain";
 import { Inject, Injectable } from "@nestjs/common";
@@ -448,16 +449,18 @@ export class OrderService {
    * so a listed line already sent by this very command inside the same call, or no longer pending for
    * any other reason, is simply skipped); and a version *ahead* of `expectedVersion` -- meaning
    * something else persisted since the operator's list was captured -- is resolved without a SQL
-   * identity lookup (deuda nivel A) by looking at *remaining work* instead: if the order is still
-   * `draft`, or any listed line is still `pending`, there is work this exact command has not yet
-   * verifiably done, so it is a `conflict` and nothing is persisted; only when the order is no longer
-   * `draft` and no listed line is `pending` (every one is `sent` or further along, or cancelled) is it
-   * treated as a completed replay of this very command's own earlier, lost-response attempt, and the
-   * current state is reported back with `replayed: true` and no new mutation. A genuine mid-batch
-   * failure is surfaced to the client as `unavailable`; the client reloads and resends with the fresh
-   * version and whatever lines are still actually pending, rather than this method silently guessing
-   * which remaining lines are still "its own" to send. Any listed id that does not belong to this
-   * order is `not_found`.
+   * identity lookup (deuda nivel A) by looking at *remaining work* instead: only when the order is no
+   * longer `draft` and *every* listed line is verifiably sent (`sent`, `preparing`, `ready`, or
+   * `delivered`) is this treated as a completed replay of this very command's own earlier,
+   * lost-response attempt, and the current state is reported back with `replayed: true` and no new
+   * mutation. Any other shape -- the order still `draft`, or any listed line still `pending`, or any
+   * listed line `cancelled` (by this command or a third actor, indistinguishable here) -- means this
+   * command cannot verify it already did its own work, so it is a `conflict` and nothing is persisted;
+   * a command never reports success for work it did not itself verifiably complete. A genuine
+   * mid-batch failure is surfaced to the client as `unavailable`; the client reloads and resends with
+   * the fresh version and whatever lines are still actually pending, rather than this method silently
+   * guessing which remaining lines are still "its own" to send. Any listed id that does not belong to
+   * this order is `not_found`.
    */
   public async sendToKitchen(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
     const command = parseSendOrderToKitchenCommandV1(input);
@@ -479,9 +482,13 @@ export class OrderService {
       if (!knownOrderItemIds.has(orderItemId)) throw applicationError("not_found");
     }
     const hasListedPendingLine = (): boolean => stored.order.items.some((item) => item.status === "pending" && orderItemIds.has(item.orderItemId));
+    const everyListedLineVerifiablySent = (): boolean => {
+      const listedItems = stored.order.items.filter((item) => orderItemIds.has(item.orderItemId));
+      return listedItems.length === orderItemIds.size && listedItems.every((item) => VERIFIABLY_SENT_ORDER_ITEM_STATUSES.has(item.status));
+    };
 
     if (stored.version > command.expectedVersion) {
-      if (stored.order.status === "draft" || hasListedPendingLine()) throw applicationError("conflict");
+      if (stored.order.status === "draft" || !everyListedLineVerifiablySent()) throw applicationError("conflict");
       const scope = parseBranchScope({ branchId: stored.order.branchId, restaurantId: stored.order.restaurantId });
       if (scope === undefined) throw unavailable();
       return Object.freeze({
@@ -641,6 +648,10 @@ function projectOrderDetail(
 }
 
 const FINANCIAL_ROLES: ReadonlySet<MembershipRole> = new Set(["owner", "admin", "manager", "supervisor", "cashier"]);
+/** `sendToKitchen`'s definition of "verifiably sent" for a version-ahead replay check: `pending`
+ * (not sent yet) and `cancelled` (never sent) are deliberately excluded -- only a line that actually
+ * reached the kitchen or further counts. */
+const VERIFIABLY_SENT_ORDER_ITEM_STATUSES: ReadonlySet<OrderItemState> = new Set(["sent", "preparing", "ready", "delivered"]);
 
 /**
  * Order-wide actions only -- open, send-to-kitchen (which the client fires per pending line, but

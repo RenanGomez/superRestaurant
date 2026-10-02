@@ -685,6 +685,58 @@ test("sendToKitchen reports conflict, without sending anything, when a third act
   assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["cancelled", "pending"]);
 });
 
+test("sendToKitchen reports conflict, never replayed, when a third actor cancelled every listed line after the version was captured", async () => {
+  const twoLines = [1, 2].reduce((current, index) => addOrderItem(current, {
+    orderItemId: `9c1e5f82-6b43-4d9e-8f24-7b3a1d8e72${String(index).padStart(2, "0")}`,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: `Línea ${index}`,
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(1_000 * index, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order, domainMutation.order);
+  const opened = transitionOrderStatus(twoLines, "open", { ...audit, actorId: principal.actorId }).order;
+  const [firstLineId, secondLineId] = opened.items.map((item) => item.orderItemId) as [string, string];
+  // Before the request reaches the server, a third actor cancels *both* listed lines -- the order is
+  // no longer draft, but neither listed line was ever actually sent, so this must not be mistaken for
+  // a completed replay.
+  const bothCancelled = [firstLineId, secondLineId].reduce(
+    (current, id) => cancelOrderItem(current, id, { ...audit, actorId: randomUUID(), reason: "Cliente canceló el pedido" }).order,
+    opened,
+  );
+  const fake = fakeSendToKitchenPort(bothCancelled, 4);
+  const service = serviceFor(["manager"], fake.port);
+  const command = sendToKitchenCommand(orderId, 2, randomUUID(), "send-to-kitchen-all-cancelled-by-third-actor", [firstLineId, secondLineId]);
+
+  await assertCode(service.sendToKitchen(principal, command), "conflict");
+  assert.equal(fake.currentVersion(), 4);
+  assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["cancelled", "cancelled"]);
+});
+
+test("sendToKitchen reports conflict, never replayed, for a mix of one verifiably-sent line and one a third actor cancelled", async () => {
+  const twoLines = [1, 2].reduce((current, index) => addOrderItem(current, {
+    orderItemId: `2a7d4f61-8c35-4e0b-9fd6-3e8a1c7b5${String(index).padStart(3, "0")}`,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: `Línea ${index}`,
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(1_000 * index, "MXN"),
+    },
+  }, { ...audit, actorId: principal.actorId }).order, domainMutation.order);
+  const opened = transitionOrderStatus(twoLines, "open", { ...audit, actorId: principal.actorId }).order;
+  const [firstLineId, secondLineId] = opened.items.map((item) => item.orderItemId) as [string, string];
+  // The first line really was sent (by this command's own earlier attempt); the second was
+  // cancelled by a third actor before this retry -- it was never sent, so this must still be a
+  // conflict, not a replay of a "completed" batch.
+  const firstSent = transitionOrderItemStatus(opened, firstLineId, "sent", { ...audit, actorId: principal.actorId }).order;
+  const secondCancelled = cancelOrderItem(firstSent, secondLineId, { ...audit, actorId: randomUUID(), reason: "Cliente canceló esa línea" }).order;
+  const fake = fakeSendToKitchenPort(secondCancelled, 4);
+  const service = serviceFor(["manager"], fake.port);
+  const command = sendToKitchenCommand(orderId, 2, randomUUID(), "send-to-kitchen-mixed-sent-and-cancelled", [firstLineId, secondLineId]);
+
+  await assertCode(service.sendToKitchen(principal, command), "conflict");
+  assert.equal(fake.currentVersion(), 4);
+  assert.deepEqual(fake.currentOrder().items.map((item) => item.status), ["sent", "cancelled"]);
+});
+
 test("sendToKitchen replays a fully-completed batch (version advanced, nothing listed still pending) without persisting anything new", async () => {
   const twoLines = [1, 2].reduce((current, index) => addOrderItem(current, {
     orderItemId: `8b4d6e92-5c73-4a0f-9ed4-8e3a0c7f61${String(index).padStart(2, "0")}`,
