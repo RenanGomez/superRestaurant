@@ -78,7 +78,11 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
   const headingId = useId();
 
   async function load(): Promise<OrderDetailV1 | undefined> {
-    const result = await actions.detail(orderId);
+    // `actions.detail` is a Next.js Server Action: a transport failure (e.g. the server process
+    // restarting mid-request) rejects the promise instead of resolving to `{ ok: false }`. Treated
+    // the same as any other unreachable outcome, never left to bubble up and strand the panel.
+    let result: Awaited<ReturnType<typeof actions.detail>>;
+    try { result = await actions.detail(orderId); } catch { result = { error: "unavailable", ok: false }; }
     if (!result.ok) {
       // Clear any previously shown detail: a stale detail with its actions still enabled must never
       // remain visible once a reload (initial or after an action) fails to confirm the current state.
@@ -99,13 +103,19 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
   async function runAction(key: string, run: () => Promise<MutationResult>): Promise<void> {
     setBusyAction(key);
     setActionError(undefined);
-    const result = await run();
-    if (!result.ok) {
-      setActionError(result.error === "unavailable" ? UNAVAILABLE_NO_RETRY_MESSAGE : errorMessages[result.error ?? "unavailable"] ?? errorMessages.unavailable);
+    try {
+      // A rejected promise (transport failure, not a typed `{ ok: false }`) is just another
+      // "unavailable" outcome: same message, same reload-and-recover path, never left unhandled.
+      let result: MutationResult;
+      try { result = await run(); } catch { result = { error: "unavailable", ok: false }; }
+      if (!result.ok) {
+        setActionError(result.error === "unavailable" ? UNAVAILABLE_NO_RETRY_MESSAGE : errorMessages[result.error ?? "unavailable"] ?? errorMessages.unavailable);
+      }
+      await load();
+      onChanged();
+    } finally {
+      setBusyAction(undefined);
     }
-    await load();
-    onChanged();
-    setBusyAction(undefined);
   }
 
   /** "Send to kitchen" splits `orderItemIds` into chunks bounded by `MAX_SEND_ORDER_TO_KITCHEN_ITEM_
@@ -117,21 +127,29 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
   async function runSendToKitchen(orderId: string, initialExpectedVersion: number, orderItemIds: readonly string[]): Promise<void> {
     setBusyAction("sendToKitchen");
     setActionError(undefined);
-    let expectedVersion = initialExpectedVersion;
-    for (const chunk of chunkOrderItemIds(orderItemIds)) {
-      const attempt = nextAttempt();
-      const run = () => actions.sendToKitchen(orderId, expectedVersion, chunk, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt);
-      let result = await run();
-      if (!result.ok && result.error === "unavailable") result = await run();
-      if (!result.ok) {
-        setActionError(errorMessages[result.error ?? "unavailable"] ?? errorMessages.unavailable);
-        break;
+    try {
+      let expectedVersion = initialExpectedVersion;
+      for (const chunk of chunkOrderItemIds(orderItemIds)) {
+        const attempt = nextAttempt();
+        // A rejected promise (transport failure) is treated as "unavailable", same as a typed
+        // `{ ok: false, error: "unavailable" }" -- both get the chunk's single retry.
+        const run = async (): Promise<MutationResult> => {
+          try { return await actions.sendToKitchen(orderId, expectedVersion, chunk, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt); }
+          catch { return { error: "unavailable", ok: false }; }
+        };
+        let result = await run();
+        if (!result.ok && result.error === "unavailable") result = await run();
+        if (!result.ok) {
+          setActionError(errorMessages[result.error ?? "unavailable"] ?? errorMessages.unavailable);
+          break;
+        }
+        expectedVersion = result.version;
       }
-      expectedVersion = result.version;
+      await load();
+      onChanged();
+    } finally {
+      setBusyAction(undefined);
     }
-    await load();
-    onChanged();
-    setBusyAction(undefined);
   }
 
   const groups = detail === undefined ? undefined : groupItemsByStatus(detail.items);
