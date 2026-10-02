@@ -110,8 +110,11 @@ begin
     return pg_catalog.jsonb_build_object('status', 'conflict');
   end if;
 
-  if (p_audit -> 'payload' ->> 'from') is distinct from (case when v_current.waiter_user_id is null then null else v_current.waiter_user_id::text end)
-    or (p_audit -> 'payload' ->> 'to') is distinct from (case when p_waiter_user_id is null then null else p_waiter_user_id::text end)
+  -- `payload.to` must match the actual target (the client always knows this); `payload.from` is
+  -- audit-only evidence of what the client believed at read time and is not re-validated against
+  -- the current row here -- `p_expected_version` is the only concurrency gate, exactly like every
+  -- other order mutation in this schema.
+  if (p_audit -> 'payload' ->> 'to') is distinct from (case when p_waiter_user_id is null then null else p_waiter_user_id::text end)
   then
     return pg_catalog.jsonb_build_object('status', 'conflict');
   end if;
