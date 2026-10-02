@@ -22,6 +22,14 @@
   --color-error-bg: oklch(96% 0.03 25);
   --color-success: oklch(62% 0.14 155);
   --color-nav: oklch(20% 0.03 250);
+  --color-category-1: oklch(90% 0.055 20);
+  --color-category-2: oklch(90% 0.055 55);
+  --color-category-3: oklch(90% 0.055 95);
+  --color-category-4: oklch(90% 0.055 140);
+  --color-category-5: oklch(90% 0.055 180);
+  --color-category-6: oklch(90% 0.055 220);
+  --color-category-7: oklch(90% 0.055 270);
+  --color-category-8: oklch(90% 0.055 320);
 }
 
 body {

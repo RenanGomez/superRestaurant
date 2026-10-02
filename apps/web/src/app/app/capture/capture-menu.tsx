@@ -10,6 +10,17 @@ const input = "min-h-11 rounded-lg border border-border bg-bg px-3 py-2 text-sm 
 const productCard = "relative flex min-h-[160px] flex-col overflow-hidden rounded-xl border border-border bg-surface text-left focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60";
 const badge = "absolute right-2 top-2 rounded-full bg-error-bg px-2 py-0.5 text-xs font-semibold text-error";
 const countBadge = "absolute left-2 top-2 flex h-6 min-w-6 items-center justify-center rounded-full bg-accent px-1 text-xs font-bold text-white";
+const categoryColors = ["bg-category-1", "bg-category-2", "bg-category-3", "bg-category-4", "bg-category-5", "bg-category-6", "bg-category-7", "bg-category-8"] as const;
+
+function productInitials(name: string): string {
+  return name.trim().split(/\s+/u).filter(Boolean).slice(0, 2).map(word => [...word][0]?.toLocaleUpperCase("es-MX") ?? "").join("");
+}
+
+function categoryColor(categoryId: string): string {
+  let hash = 0;
+  for (const character of categoryId) hash = (Math.imul(hash, 31) + character.codePointAt(0)!) >>> 0;
+  return categoryColors[hash % categoryColors.length]!;
+}
 
 interface CaptureMenuProps {
   readonly catalog: MenuCatalogV1 | null;
@@ -60,7 +71,7 @@ export function CaptureMenu({ catalog, currency, lineQuantities, busy, searchInp
             aria-disabled={!product.active} onClick={() => onSelectProduct(product, groups)}>
             {count > 0 && <span className={countBadge}>{count}</span>}
             {!product.active && <span className={badge}>Agotado</span>}
-            <span className="flex h-24 items-center justify-center bg-surface-2 text-4xl">🍽️</span>
+            <span aria-hidden="true" className={`flex h-24 items-center justify-center text-3xl font-bold text-text ${categoryColor(product.categoryId)}`}>{productInitials(product.name)}</span>
             <span className="grid gap-0.5 p-2">
               <span className="font-semibold leading-tight">{product.name}</span>
               <span className="text-sm text-text-muted">{money(product.unitPriceMinor, currency)}</span>
