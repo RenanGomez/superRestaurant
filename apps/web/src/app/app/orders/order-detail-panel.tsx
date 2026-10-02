@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useState } from "react";
 import type { OrderDetailItemV1, OrderDetailV1 } from "@super-restaurant/shared-types";
+import { captureDeviceId } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { actionLabel, chunkOrderItemIds, groupItemsByStatus, hasAction, hasItemAction, pendingOrderItemIds, type OrderItemStatusGroup } from "../../../lib/order-detail";
 
@@ -19,16 +20,16 @@ type MutationResult = { readonly ok: true; readonly version: number } | { readon
 
 export interface OrderDetailActions {
   readonly detail: (orderId: string) => Promise<{ readonly ok: true; readonly value: OrderDetailV1 } | { readonly ok: false; readonly error: string }>;
-  readonly open: (orderId: string, expectedVersion: number, eventId: string, idempotencyKey: string, occurredAt: string) => Promise<MutationResult>;
+  readonly open: (orderId: string, expectedVersion: number, eventId: string, idempotencyKey: string, occurredAt: string, deviceId: string) => Promise<MutationResult>;
   /** One server-side operation: opens the order first if it is still a draft, then sends exactly
    * `orderItemIds` -- see apps/api's OrderService.sendToKitchen. The client never sequences
    * open + one transition per line itself, so a lost-response retry always resumes correctly, and a
    * line another actor adds to the order after this list was captured is never swept into the
    * resend. The returned `version` chains a batch split into several chunks (see `MAX_SEND_ORDER_TO_
    * KITCHEN_ITEM_IDS`) against the same order without an extra read. */
-  readonly sendToKitchen: (orderId: string, expectedVersion: number, orderItemIds: readonly string[], eventId: string, idempotencyKey: string, occurredAt: string) => Promise<MutationResult>;
-  readonly transitionItem: (orderId: string, orderItemId: string, expectedVersion: number, to: "sent" | "preparing" | "ready" | "delivered", eventId: string, idempotencyKey: string, occurredAt: string) => Promise<MutationResult>;
-  readonly cancelItem: (orderId: string, orderItemId: string, expectedVersion: number, reason: string, eventId: string, idempotencyKey: string, occurredAt: string) => Promise<MutationResult>;
+  readonly sendToKitchen: (orderId: string, expectedVersion: number, orderItemIds: readonly string[], eventId: string, idempotencyKey: string, occurredAt: string, deviceId: string) => Promise<MutationResult>;
+  readonly transitionItem: (orderId: string, orderItemId: string, expectedVersion: number, to: "sent" | "preparing" | "ready" | "delivered", eventId: string, idempotencyKey: string, occurredAt: string, deviceId: string) => Promise<MutationResult>;
+  readonly cancelItem: (orderId: string, orderItemId: string, expectedVersion: number, reason: string, eventId: string, idempotencyKey: string, occurredAt: string, deviceId: string) => Promise<MutationResult>;
 }
 
 /** One eventId/idempotencyKey/occurredAt triple per logical operation, minted once by the browser
@@ -36,7 +37,9 @@ export interface OrderDetailActions {
  * regenerated per attempt. `occurredAt` must stay fixed across a retry of the same attempt too: the
  * server's `persist_order_mutation` only replays an idempotency key it has already seen when the
  * full submitted payload is byte-identical to the original, so a fresh timestamp on the retry would
- * make it look like a different, conflicting command instead of the same one resuming. */
+ * make it look like a different, conflicting command instead of the same one resuming. `deviceId` is
+ * not minted here: it is the browser's single, stable Capture device identity (see
+ * `captureDeviceId`), read once per panel instance and reused across every attempt and retry. */
 function nextAttempt(): { readonly eventId: string; readonly idempotencyKey: string; readonly occurredAt: string } {
   return { eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), occurredAt: new Date().toISOString() };
 }
@@ -70,6 +73,10 @@ const errorMessages: Record<string, string> = {
 const UNAVAILABLE_NO_RETRY_MESSAGE = "No se pudo confirmar el resultado. Se recargó la orden; revisa el estado antes de repetir.";
 
 export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onChanged }: Props) {
+  // Same device identity Capture's own workspace and the delivery-zones editor use (one stable id
+  // per browser, in localStorage) -- never a second, order-specific device id, or the same browser
+  // would be audited under two different identities depending on which screen it used.
+  const [deviceId] = useState(() => captureDeviceId(typeof window === "undefined" ? undefined : window.localStorage, () => crypto.randomUUID()));
   const [detail, setDetail] = useState<OrderDetailV1>();
   const [loadError, setLoadError] = useState<string>();
   const [busyAction, setBusyAction] = useState<string>();
@@ -134,7 +141,7 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
         // A rejected promise (transport failure) is treated as "unavailable", same as a typed
         // `{ ok: false, error: "unavailable" }" -- both get the chunk's single retry.
         const run = async (): Promise<MutationResult> => {
-          try { return await actions.sendToKitchen(orderId, expectedVersion, chunk, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt); }
+          try { return await actions.sendToKitchen(orderId, expectedVersion, chunk, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt, deviceId); }
           catch { return { error: "unavailable", ok: false }; }
         };
         let result = await run();
@@ -170,7 +177,7 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
         <p className="mt-1 text-sm">Total: <strong>{formatMinorUnits(detail.totals.totalMinor, detail.totals.currency)}</strong></p>
         <div className="mt-4 flex flex-wrap gap-2">
           {hasAction(detail, "open") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
-            onClick={() => { const attempt = nextAttempt(); void runAction("open", () => actions.open(detail.orderId, detail.version, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt)); }}>
+            onClick={() => { const attempt = nextAttempt(); void runAction("open", () => actions.open(detail.orderId, detail.version, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt, deviceId)); }}>
             {busyAction === "open" ? "Abriendo…" : actionLabel("open")}
           </button>}
           {hasAction(detail, "sendToKitchen") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
@@ -202,7 +209,7 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
                         onClick={() => {
                           const attempt = nextAttempt();
                           const to = item.status === "sent" ? "preparing" : "ready";
-                          void runAction(`ready-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, to, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt));
+                          void runAction(`ready-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, to, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt, deviceId));
                         }}>
                         {busyAction === `ready-${item.orderItemId}` ? "Guardando…" : item.status === "sent" ? "Marcar en preparación" : actionLabel("markReady")}
                       </button>}
@@ -210,7 +217,7 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
                       && <button type="button" className={button} disabled={busyAction !== undefined}
                         onClick={() => {
                           const attempt = nextAttempt();
-                          void runAction(`delivered-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, "delivered", attempt.eventId, attempt.idempotencyKey, attempt.occurredAt));
+                          void runAction(`delivered-${item.orderItemId}`, () => actions.transitionItem(detail.orderId, item.orderItemId, detail.version, "delivered", attempt.eventId, attempt.idempotencyKey, attempt.occurredAt, deviceId));
                         }}>
                         {busyAction === `delivered-${item.orderItemId}` ? "Guardando…" : actionLabel("markDelivered")}
                       </button>}
@@ -233,7 +240,7 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
           const target = cancelTarget;
           const attempt = nextAttempt();
           setCancelTarget(undefined);
-          void runAction(`cancel-${target.orderItemId}`, () => actions.cancelItem(detail.orderId, target.orderItemId, detail.version, reason, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt));
+          void runAction(`cancel-${target.orderItemId}`, () => actions.cancelItem(detail.orderId, target.orderItemId, detail.version, reason, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt, deviceId));
         }}
       />}
     </div>

@@ -1,6 +1,5 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { parseBranchOrderWorkTrayRequestV1, type BranchScope } from "@super-restaurant/shared-types";
 import { getServerEnv } from "../../../env";
@@ -17,8 +16,6 @@ import {
   type OrderMutationRequestResult,
 } from "../../../lib/order-detail";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
-
-const DEVICE_COOKIE = "sr-device-id";
 
 export async function branchOrderWorkTrayAction(input: unknown): Promise<BranchOrderTrayRequestResult> {
   const request = parseBranchOrderWorkTrayRequestV1(input);
@@ -43,12 +40,13 @@ export async function orderDetailAction(orderId: string): Promise<OrderDetailReq
 }
 
 /**
- * `eventId`/`idempotencyKey`/`occurredAt` are generated once by the caller (the detail panel, per
- * operation -- see `nextAttempt` in order-detail-panel.tsx) and passed in here unchanged, instead of
- * this action minting a fresh pair (or a fresh `occurredAt`) on every invocation. A lost-response
- * retry must resend the *exact same* command, byte for byte: `persist_order_mutation`'s own replay
- * check compares the full `event_payload` for an idempotency key it has already seen, so a retry
- * that carries a different `occurredAt` than its original attempt would never match and would be
+ * `eventId`/`idempotencyKey`/`occurredAt`/`deviceId` are generated once by the caller (the detail
+ * panel, per operation -- see `nextAttempt` in order-detail-panel.tsx, and `captureDeviceId` for the
+ * device identity, shared with Capture's own workspace and the delivery-zones editor) and passed in
+ * here unchanged, instead of this action minting its own values. A lost-response retry must resend
+ * the *exact same* command, byte for byte: `persist_order_mutation`'s own replay check compares the
+ * full `event_payload` for an idempotency key it has already seen, so a retry that carries a
+ * different `occurredAt` or `deviceId` than its original attempt would never match and would be
  * reported as a conflict instead of being recognized as the same attempt. Same pattern as
  * `capture-workspace.tsx`'s own `base()`.
  */
@@ -58,15 +56,16 @@ export async function openOrderAction(
   eventId: string,
   idempotencyKey: string,
   occurredAt: string,
+  deviceId: string,
 ): Promise<OrderMutationRequestResult> {
   const context = await authorizedOrderContext();
   if (context === undefined) return { error: "denied", ok: false };
   if (!isUuid(orderId)) return { error: "invalid", ok: false };
   const attempt = parseAttemptIds(eventId, idempotencyKey);
   const parsedOccurredAt = parseOccurredAt(occurredAt);
-  if (attempt === undefined || parsedOccurredAt === undefined) return { error: "invalid", ok: false };
+  if (attempt === undefined || parsedOccurredAt === undefined || !isUuid(deviceId)) return { error: "invalid", ok: false };
   return postOrderMutation(context.accessToken, context.apiBaseUrl, "orders/open", {
-    ...(await audit(attempt, parsedOccurredAt)), expectedVersion, orderId, schemaVersion: 1, scope: context.scope,
+    ...audit(attempt, parsedOccurredAt, deviceId), expectedVersion, orderId, schemaVersion: 1, scope: context.scope,
   });
 }
 
@@ -77,6 +76,7 @@ export async function sendToKitchenAction(
   eventId: string,
   idempotencyKey: string,
   occurredAt: string,
+  deviceId: string,
 ): Promise<OrderMutationRequestResult> {
   const context = await authorizedOrderContext();
   if (context === undefined) return { error: "denied", ok: false };
@@ -84,9 +84,11 @@ export async function sendToKitchenAction(
   const parsedOrderItemIds = parseOrderItemIds(orderItemIds);
   const attempt = parseAttemptIds(eventId, idempotencyKey);
   const parsedOccurredAt = parseOccurredAt(occurredAt);
-  if (parsedOrderItemIds === undefined || attempt === undefined || parsedOccurredAt === undefined) return { error: "invalid", ok: false };
+  if (parsedOrderItemIds === undefined || attempt === undefined || parsedOccurredAt === undefined || !isUuid(deviceId)) {
+    return { error: "invalid", ok: false };
+  }
   return postOrderMutation(context.accessToken, context.apiBaseUrl, "orders/send-to-kitchen", {
-    ...(await audit(attempt, parsedOccurredAt)), expectedVersion, orderId, orderItemIds: parsedOrderItemIds, schemaVersion: 1, scope: context.scope,
+    ...audit(attempt, parsedOccurredAt, deviceId), expectedVersion, orderId, orderItemIds: parsedOrderItemIds, schemaVersion: 1, scope: context.scope,
   });
 }
 
@@ -98,15 +100,16 @@ export async function transitionOrderItemAction(
   eventId: string,
   idempotencyKey: string,
   occurredAt: string,
+  deviceId: string,
 ): Promise<OrderMutationRequestResult> {
   const context = await authorizedOrderContext();
   if (context === undefined) return { error: "denied", ok: false };
   if (!isUuid(orderId) || !isUuid(orderItemId)) return { error: "invalid", ok: false };
   const attempt = parseAttemptIds(eventId, idempotencyKey);
   const parsedOccurredAt = parseOccurredAt(occurredAt);
-  if (attempt === undefined || parsedOccurredAt === undefined) return { error: "invalid", ok: false };
+  if (attempt === undefined || parsedOccurredAt === undefined || !isUuid(deviceId)) return { error: "invalid", ok: false };
   return postOrderMutation(context.accessToken, context.apiBaseUrl, "orders/items/transition", {
-    ...(await audit(attempt, parsedOccurredAt)), expectedVersion, orderId, orderItemId, schemaVersion: 1, scope: context.scope, to,
+    ...audit(attempt, parsedOccurredAt, deviceId), expectedVersion, orderId, orderItemId, schemaVersion: 1, scope: context.scope, to,
   });
 }
 
@@ -118,15 +121,16 @@ export async function cancelOrderItemAction(
   eventId: string,
   idempotencyKey: string,
   occurredAt: string,
+  deviceId: string,
 ): Promise<OrderMutationRequestResult> {
   const context = await authorizedOrderContext();
   if (context === undefined) return { error: "denied", ok: false };
   if (!isUuid(orderId) || !isUuid(orderItemId) || reason.trim().length === 0) return { error: "invalid", ok: false };
   const attempt = parseAttemptIds(eventId, idempotencyKey);
   const parsedOccurredAt = parseOccurredAt(occurredAt);
-  if (attempt === undefined || parsedOccurredAt === undefined) return { error: "invalid", ok: false };
+  if (attempt === undefined || parsedOccurredAt === undefined || !isUuid(deviceId)) return { error: "invalid", ok: false };
   return postOrderMutation(context.accessToken, context.apiBaseUrl, "orders/items/cancel", {
-    ...(await audit(attempt, parsedOccurredAt)), expectedVersion, orderId, orderItemId, reason: reason.trim(), schemaVersion: 1, scope: context.scope,
+    ...audit(attempt, parsedOccurredAt, deviceId), expectedVersion, orderId, orderItemId, reason: reason.trim(), schemaVersion: 1, scope: context.scope,
   });
 }
 
@@ -141,25 +145,17 @@ async function authorizedOrderContext(): Promise<{ readonly accessToken: string;
   return { accessToken: session.access_token, apiBaseUrl: env.apiBaseUrl, scope };
 }
 
-async function audit(
+function audit(
   attempt: { readonly eventId: string; readonly idempotencyKey: string },
   occurredAt: string,
-): Promise<{ readonly deviceId: string; readonly eventId: string; readonly idempotencyKey: string; readonly occurredAt: string }> {
+  deviceId: string,
+): { readonly deviceId: string; readonly eventId: string; readonly idempotencyKey: string; readonly occurredAt: string } {
   return {
-    deviceId: await getOrCreateDeviceId(),
+    deviceId: deviceId.toLowerCase(),
     eventId: attempt.eventId,
     idempotencyKey: attempt.idempotencyKey,
     occurredAt,
   };
-}
-
-async function getOrCreateDeviceId(): Promise<string> {
-  const cookieStore = await cookies();
-  const existing = cookieStore.get(DEVICE_COOKIE)?.value;
-  if (existing !== undefined && isUuid(existing)) return existing.toLowerCase();
-  const deviceId = randomUUID();
-  cookieStore.set(DEVICE_COOKIE, deviceId, { httpOnly: true, path: "/", sameSite: "lax", secure: getServerEnv().cookiesSecure });
-  return deviceId;
 }
 
 function isUuid(value: string): boolean {
