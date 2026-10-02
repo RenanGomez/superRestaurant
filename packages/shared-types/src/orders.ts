@@ -5,6 +5,7 @@ export const ORDER_COMMAND_SCHEMA_VERSION = 1 as const;
 export const CREATE_ORDER_COMMAND_V2_SCHEMA_VERSION = 2 as const;
 export const ACTIVE_TABLE_ORDER_LIST_V2_SCHEMA_VERSION = 2 as const;
 export const MAX_ORDER_ITEM_MODIFIER_GROUPS = 50 as const;
+export const MAX_SEND_ORDER_TO_KITCHEN_ITEM_IDS = 200 as const;
 export const ORDER_CHANNELS = Object.freeze(["table", "counter", "takeout", "delivery"] as const);
 export const ORDER_ITEM_FORWARD_STATUSES = Object.freeze(["sent", "preparing", "ready", "delivered"] as const);
 export const ORDER_ITEM_STATUSES = Object.freeze(["pending", "sent", "preparing", "ready", "delivered", "cancelled"] as const);
@@ -128,6 +129,7 @@ export interface OpenOrderCommandV1 extends OrderAuditInputV1 {
 export interface SendOrderToKitchenCommandV1 extends OrderAuditInputV1 {
   readonly expectedVersion: number;
   readonly orderId: string;
+  readonly orderItemIds: readonly string[];
   readonly schemaVersion: typeof ORDER_COMMAND_SCHEMA_VERSION;
   readonly scope: BranchScope;
 }
@@ -572,14 +574,29 @@ export function parseOpenOrderCommandV1(value: unknown): OpenOrderCommandV1 | un
 }
 
 export function parseSendOrderToKitchenCommandV1(value: unknown): SendOrderToKitchenCommandV1 | undefined {
-  const record = exactRecord(value, ["schemaVersion","scope","orderId","expectedVersion","eventId","idempotencyKey","deviceId","occurredAt"]);
+  const record = exactRecord(value, ["schemaVersion","scope","orderId","orderItemIds","expectedVersion","eventId","idempotencyKey","deviceId","occurredAt"]);
   if (record === undefined || own(record,"schemaVersion") !== ORDER_COMMAND_SCHEMA_VERSION) return undefined;
   const common = parseCommon(record);
   const scope = parseScope(own(record,"scope"));
   const orderId = uuid(own(record,"orderId"));
+  const orderItemIds = parseOrderItemIds(own(record,"orderItemIds"));
   const expectedVersion = integer(own(record,"expectedVersion"),1,Number.MAX_SAFE_INTEGER);
-  return common === undefined || scope === undefined || orderId === undefined || expectedVersion === undefined
-    ? undefined : Object.freeze({ ...common, expectedVersion, orderId, schemaVersion: ORDER_COMMAND_SCHEMA_VERSION, scope });
+  return common === undefined || scope === undefined || orderId === undefined || orderItemIds === undefined || expectedVersion === undefined
+    ? undefined : Object.freeze({ ...common, expectedVersion, orderId, orderItemIds, schemaVersion: ORDER_COMMAND_SCHEMA_VERSION, scope });
+}
+
+function parseOrderItemIds(value: unknown): readonly string[] | undefined {
+  const array = exactDenseArray(value, MAX_SEND_ORDER_TO_KITCHEN_ITEM_IDS);
+  if (array === undefined || array.length === 0) return undefined;
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of array) {
+    const id = uuid(entry);
+    if (id === undefined || seen.has(id)) return undefined;
+    seen.add(id);
+    ids.push(id);
+  }
+  return Object.freeze(ids);
 }
 
 export function parseTransitionOrderItemCommandV1(value: unknown): TransitionOrderItemCommandV1 | undefined {

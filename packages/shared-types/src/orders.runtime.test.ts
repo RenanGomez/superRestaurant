@@ -28,8 +28,14 @@ expect(parsedAdd!==undefined && Object.isFrozen(parsedAdd.modifierGroups) && Obj
 expect(parseAddOrderItemCommandV1({...add,quantity:0})===undefined,"zero quantity fails");
 expect(parseAddOrderItemCommandV1({...add,modifierGroups:[...add.modifierGroups,...add.modifierGroups]})===undefined,"duplicate group fails");
 expect(parseOpenOrderCommandV1({...common,expectedVersion:1})!==undefined,"open command parses");
-expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1})!==undefined,"send-to-kitchen command parses");
-expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:0})===undefined,"send-to-kitchen command requires a positive expectedVersion");
+const sendToKitchenItemIds=[add.orderItemId];
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1,orderItemIds:sendToKitchenItemIds})!==undefined,"send-to-kitchen command parses");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:0,orderItemIds:sendToKitchenItemIds})===undefined,"send-to-kitchen command requires a positive expectedVersion");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1,orderItemIds:[]})===undefined,"send-to-kitchen command rejects empty orderItemIds");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1,orderItemIds:[add.orderItemId,add.orderItemId]})===undefined,"send-to-kitchen command rejects duplicate orderItemIds");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1,orderItemIds:["not-a-uuid"]})===undefined,"send-to-kitchen command rejects non-uuid orderItemIds");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1})===undefined,"send-to-kitchen command requires orderItemIds");
+expect(parseSendOrderToKitchenCommandV1({...common,expectedVersion:1,orderItemIds:sendToKitchenItemIds,extra:true})===undefined,"send-to-kitchen command rejects extra keys");
 expect(parseTransitionOrderItemCommandV1({...common,expectedVersion:2,orderItemId:add.orderItemId,to:"ready"})!==undefined,"forward transition parses");
 expect(parseTransitionOrderItemCommandV1({...common,expectedVersion:2,orderItemId:add.orderItemId,to:"cancelled"})===undefined,"sensitive cancellation not exposed by this slice");
 
