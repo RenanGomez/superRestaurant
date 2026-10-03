@@ -75,6 +75,22 @@ test("PostgreSQL directory binds actor and scope and fails closed on malformed s
   }
 });
 
+test("PostgreSQL directory open unwraps the real { result } row and fails closed on the unwrapped shape", async () => {
+  const directoryFor = (rows: readonly unknown[]) => new PostgresOperationalShiftDirectory({ query: async () => ({ rows }) });
+  assert.deepEqual(
+    await directoryFor([{ result: { status: "saved", shiftId: openCommand.shiftId } }]).open(principal.actorId, openCommand),
+    { shiftId: openCommand.shiftId, status: "saved" },
+  );
+  assert.deepEqual(
+    await directoryFor([{ result: { status: "replayed", shiftId: openCommand.shiftId } }]).open(principal.actorId, openCommand),
+    { shiftId: openCommand.shiftId, status: "replayed" },
+  );
+  assert.deepEqual(await directoryFor([{ result: { status: "conflict" } }]).open(principal.actorId, openCommand), { status: "conflict" });
+  assert.deepEqual(await directoryFor([{ result: { status: "forbidden" } }]).open(principal.actorId, openCommand), { status: "forbidden" });
+  await assert.rejects(directoryFor([{ status: "saved", shiftId: openCommand.shiftId }]).open(principal.actorId, openCommand), OperationalShiftApplicationError);
+  await assert.rejects(directoryFor([]).open(principal.actorId, openCommand), OperationalShiftApplicationError);
+});
+
 const openCommand = {
   schemaVersion: 1 as const, scope, shiftId: randomUUID(), name: "Turno de comida",
   eventId: randomUUID(), idempotencyKey: "operational-shift-open-test-1", deviceId: randomUUID(),

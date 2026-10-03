@@ -55,7 +55,10 @@ export class PostgresOrderWaiterAdapter implements OrderWaiterPort {
       actorId, command.expectedVersion, command.orderId, command.scope.restaurantId, command.scope.branchId,
       command.waiterUserId, JSON.stringify(audit),
     ]);
-    const raw = result.rows.length === 1 ? result.rows[0] : undefined;
+    // The SQL is `select fn(...) as result`: the row is `{ result: <jsonb> }`.
+    const row = result.rows.length === 1 ? exactRecord(result.rows[0], ["result"]) : undefined;
+    if (row === undefined) throw unavailable();
+    const raw = own(row, "result");
     const minimal = exactRecord(raw, ["status"]);
     if (minimal !== undefined) {
       const status = own(minimal, "status");

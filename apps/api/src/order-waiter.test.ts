@@ -45,11 +45,31 @@ test("PostgreSQL waiter adapter sends only payload.to; the audit from is derived
   const adapter = new PostgresOrderWaiterAdapter({
     query: async (_sql, parameters) => {
       audit = JSON.parse(String(parameters[6])) as Record<string, unknown>;
-      return { rows: [{ status: "conflict" }] };
+      return { rows: [{ result: { status: "conflict" } }] };
     },
   });
   assert.deepEqual(await adapter.assign(principal.actorId, command), { status: "conflict" });
   assert.deepEqual(audit?.payload, { to: waiterUserId });
+});
+
+test("PostgreSQL waiter adapter unwraps the real { result } row for saved, replayed and malformed outcomes", async () => {
+  const order = (version: number, waiter: string | null) => ({
+    orderId: command.orderId, restaurantId: scope.restaurantId, branchId: scope.branchId, waiterUserId: waiter, version,
+  });
+  const adapterFor = (result: unknown, rows?: readonly unknown[]) =>
+    new PostgresOrderWaiterAdapter({ query: async () => ({ rows: rows ?? [{ result }] }) });
+  assert.deepEqual(
+    await adapterFor({ status: "saved", version: 2, order: order(2, waiterUserId) }).assign(principal.actorId, command),
+    { status: "saved", version: 2, waiterUserId },
+  );
+  assert.deepEqual(
+    await adapterFor({ status: "replayed", version: "2", order: order(2, waiterUserId) }).assign(principal.actorId, command),
+    { status: "replayed", version: 2, waiterUserId },
+  );
+  assert.deepEqual(await adapterFor({ status: "forbidden" }).assign(principal.actorId, command), { status: "forbidden" });
+  // the unwrapped function result as a row (the old, wrong shape) must fail closed, not parse
+  await assert.rejects(adapterFor({ status: "conflict" }, [{ status: "conflict" }]).assign(principal.actorId, command), OrderWaiterApplicationError);
+  await assert.rejects(adapterFor(null, []).assign(principal.actorId, command), OrderWaiterApplicationError);
 });
 
 function serviceFor(roles: readonly ("manager" | "kitchen")[], writer: OrderWaiterPort): OrderWaiterService {
