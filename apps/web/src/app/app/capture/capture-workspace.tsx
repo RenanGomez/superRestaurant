@@ -41,7 +41,6 @@ import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import { formatDeliveryQuote } from "../../../lib/delivery-zones";
-import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import {
   deliveryQuoteBlocksConfirm, deliveryQuoteScheduledForInputValue, isSwitchingToAnotherCapture,
   paymentIntentBlocksConfirm,
@@ -108,6 +107,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [noSaleOpen, setNoSaleOpen] = useState(false);
   const [noSaleReason, setNoSaleReason] = useState("");
   const [noSaleNotice, setNoSaleNotice] = useState(false);
+  const [holdNotice, setHoldNotice] = useState(false);
   const [takeoverDraftId, setTakeoverDraftId] = useState("");
   const [takeoverReason, setTakeoverReason] = useState("");
   const [takeoverConfirmed, setTakeoverConfirmed] = useState(false);
@@ -148,7 +148,6 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [sheetError, setSheetError] = useState<string>();
   const [instructionsFeedback, setInstructionsFeedback] = useState<"saving" | "saved" | string>();
   const instructionsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const [moreOpen, setMoreOpen] = useState(false);
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [selectionBusyLineId, setSelectionBusyLineId] = useState<string>();
   const [noteSheetLineId, setNoteSheetLineId] = useState<string>();
@@ -432,6 +431,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   function create(): void {
     setNoSaleNotice(false);
+    setHoldNotice(false);
     void run("create", { schemaVersion: 1, scope, captureDraftId: crypto.randomUUID(), expectedVersion: 0,
       sourceChannel, fulfillmentChannel, eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), deviceId,
       occurredAt: new Date().toISOString() });
@@ -458,6 +458,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     const command = { schemaVersion: 1, scope, captureDraftId: item.captureDraftId, expectedVersion: item.version,
       eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), deviceId, occurredAt: new Date().toISOString() };
     setNoSaleNotice(false);
+    setHoldNotice(false);
     void (async () => {
       const reply = await run("claim", command);
       if (reply?.ok) await refreshWorkspace(item.captureDraftId);
@@ -495,6 +496,17 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     if (locked) return;
     setNoSaleReason("");
     setNoSaleOpen(true);
+  }
+
+  function holdCapture(): void {
+    if (locked) return;
+    void (async () => {
+      const reply = await run("hold", base());
+      if (!reply?.ok) return;
+      reset();
+      setHoldNotice(true);
+      await run("tray", { schemaVersion: 1, scope, limit: 20 });
+    })();
   }
 
   function cancelNoSale(): void {
@@ -698,6 +710,11 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         await run("assignmentCandidates", { schemaVersion: 1, scope });
       }
       if (reply?.ok && pending.operation === "noSale") await afterNoSaleApplied();
+      if (reply?.ok && pending.operation === "hold") {
+        reset();
+        setHoldNotice(true);
+        await run("tray", { schemaVersion: 1, scope, limit: 20 });
+      }
     })();
   }
 
@@ -788,6 +805,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         aria-keyshortcuts={ariaKeyShortcut("reset")} disabled={busy} onClick={reset}>Volver a la bandeja</button>}
     </div>
     {capture === undefined ? <>
+      {holdNotice && <div role="status" className="rounded-lg border border-border bg-surface p-3 text-sm">Captura guardada para después.</div>}
       {noSaleNotice && <div role="status" className="rounded-lg border border-border bg-surface p-3 text-sm">
         Captura cancelada.
       </div>}
@@ -796,15 +814,15 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         <button className={button} onClick={create} aria-keyshortcuts={ariaKeyShortcut("create")}
           disabled={busy}>Nueva captura telefónica</button></section>
       {tray.length > 0 && <section className={panel}><h2 className="font-heading text-lg font-semibold">Borradores recuperables</h2>
-        <p className="my-2 text-sm text-text-muted">Retoma una captura de esta sucursal. El servidor asignará un lease nuevo antes de editar.</p>
+        <p className="my-2 text-sm text-text-muted">Retoma una captura de esta sucursal para seguir atendiéndola.</p>
         <div className="grid gap-2">{tray.map((item) => <button key={item.captureDraftId} title={item.captureDraftId} className={`${button} text-left`}
           disabled={busy} onClick={() => recover(item)}><strong className="block">Sin cliente</strong>
-          <span className="text-xs text-text-muted">{item.sourceChannel} · {item.fulfillmentChannel ? fulfillmentLabel(item.fulfillmentChannel) : "Sin entrega"} · {formatDate(item.updatedAt, confirmationContext?.timeZone)}</span>
+           <span className="text-xs text-text-muted">{sourceLabel(item.sourceChannel)} · {item.fulfillmentChannel ? fulfillmentLabel(item.fulfillmentChannel) : "Sin entrega"} · {formatDate(item.updatedAt, confirmationContext?.timeZone)}</span>
           {item.ownerMembershipId !== null && <span className="block text-xs text-text-muted">Asignada a {assignmentCandidates.find((candidate) => candidate.membershipId === item.ownerMembershipId)?.displayLabel ?? "otro operador"}</span>}
         </button>)}</div>
         {canManageAssignment && tray.some((item) => item.attentionStatus === "claimed") && <div className="mt-5 border-t border-border pt-4">
           <h3 className="font-heading font-semibold">Apropiación supervisada</h3>
-          <p className="mt-1 text-sm text-text-muted">Úsala sólo cuando otro operador no pueda continuar. El motivo queda auditado y el lease cambia.</p>
+          <p className="mt-1 text-sm text-text-muted">Úsala sólo cuando otro operador no pueda continuar. El motivo queda auditado y la captura pasa a tu atención.</p>
           <div className="mt-3 grid gap-3">
             <label className="grid gap-1 text-sm" htmlFor="capture-takeover-draft">Captura asignada
               <select id="capture-takeover-draft" className={input} value={takeoverDraftId}
@@ -941,7 +959,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
             onDecrement={(lineId) => void changeLineQuantity(lineId, -1)}
             onRemove={(lineId) => void removeLine(lineId)}
             onEditNote={openNoteSheet}
-            onHold={reset} onNoSale={openNoSale} />
+            onHold={holdCapture} onNoSale={openNoSale} />
         </div>
       </section>}
       {noteSheetLineId !== undefined && <div className="fixed inset-0 z-30 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
@@ -1055,16 +1073,17 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           fulfillment={fulfillmentChannel}
           currency={paymentProjection?.currency ?? paymentBasis?.currency ?? confirmationContext?.currency ?? "MXN"}
           busy={busy} onSetIntent={setPaymentIntent}
-          onRefreshIntent={refreshPaymentIntent} />
+          onRefreshIntent={refreshPaymentIntent}
+          errorNotice={paymentIntentNotice ?? (errorOperation === "paymentIntent" && error !== undefined ? messages[error] : undefined)} />
         {paymentIntentNotice !== undefined && <p role="alert" className="rounded-lg bg-error-bg p-3 text-sm">{paymentIntentNotice}</p>}
       </>}
-      <details className={panel}><summary className="min-h-11 cursor-pointer font-semibold">M?s</summary>
+      <details className={panel}><summary className="min-h-11 cursor-pointer font-semibold">Más</summary>
       {capture.status === "draft" && canManageAssignment && <section className={panel} data-testid="capture-transfer">
         <h2 className="font-heading text-lg font-semibold">Pasar la captura a otro operador</h2>
         <p className="mt-1 text-sm text-text-muted">El otro operador la verá en su bandeja y podrá continuar donde la dejaste.</p>
         {assignmentCandidates.length === 0 ? <div className="mt-3 flex flex-wrap items-center gap-3">
             <p className="text-sm">Nadie más de esta sucursal tiene sesión activa ahora. Puedes dejarla en espera y otro operador la retomará desde la bandeja.</p>
-            <button type="button" className={button} disabled={locked} onClick={reset}>Guardar para después</button>
+            <button type="button" className={button} disabled={locked} onClick={holdCapture}>Guardar para después</button>
           </div>
           : <div className="mt-3 grid gap-3">
             <label className="grid gap-1 text-sm" htmlFor="capture-transfer-target">Operador destino
@@ -1078,7 +1097,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
             </label>
             <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="min-h-5 min-w-5 shrink-0 focus-visible:outline-2 focus-visible:outline-accent"
               checked={transferConfirmed} onChange={(event) => setTransferConfirmed(event.target.checked)} disabled={locked || transferTarget === ""} />
-              Confirmo que el operador seleccionado continuará esta captura y que perderé el lease actual.
+              Confirmo que el operador seleccionado continuará esta captura y dejaré de poder editarla.
             </label>
             <button type="button" className={button} onClick={transferCapture}
               disabled={locked || transferTarget === "" || !transferConfirmed}>Transferir de forma segura</button>
@@ -1086,21 +1105,15 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       </section>}
       </details>
       {capture.status === "draft" && <section className={panel} data-testid="capture-confirmation">
-        <h2 className="font-heading text-lg font-semibold">4. Convertir en orden</h2>
+        <h2 className="font-heading text-lg font-semibold">5. Confirmar</h2>
         {confirmationContext === undefined ? <p role="alert" className="mt-2 text-sm text-text-muted">
           No fue posible leer el turno, moneda o zona horaria de esta sucursal. Recarga antes de confirmar.
         </p> : <>
           <p className="mt-2 text-sm text-text-muted">
             La orden usará {confirmationContext.currency} y {confirmationContext.timeZone}, definidos por el servidor.
           </p>
+          {activeShift !== undefined && <p className="mt-2 text-sm">Turno: <strong>{activeShift.name}</strong></p>}
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <label className="grid gap-1 text-sm" htmlFor="capture-shift">Turno abierto
-              <select id="capture-shift" className={input} value={selectedShiftId}
-                onChange={(event) => setSelectedShiftId(event.target.value)} disabled={locked}>
-                <option value="">Selecciona un turno</option>
-                {confirmationContext.shifts.map((shift) => <option key={shift.shiftId} value={shift.shiftId}>{shift.name}</option>)}
-              </select>
-            </label>
             {fulfillmentChannel === "dine_in" && <label className="grid gap-1 text-sm" htmlFor="capture-table">Mesa
               <select id="capture-table" className={input} value={selectedTableId}
                 onChange={(event) => setSelectedTableId(event.target.value)}
@@ -1113,13 +1126,14 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
             </label>}
           </div>
           {confirmationContext.shifts.length === 0 && <p role="alert" className="mt-2 text-sm text-text-muted">
-            No hay turnos abiertos para confirmar la orden.
+            No hay turno abierto. <a href="/app/caja" className="font-semibold text-accent underline">Abrir turno en Caja</a>.
           </p>}
           {fulfillmentChannel === "dine_in" && confirmationContext.tables === null && <p role="alert" className="mt-2 text-sm text-text-muted">
             No fue posible leer el plano de mesas; la confirmación permanece bloqueada.
           </p>}
           {fulfillmentChannel === "delivery" && (customerSnapshot === null || fulfillmentSnapshot === null) && <p className="mt-2 text-sm text-text-muted">
-            Guarda un cliente y una dirección validada antes de confirmar el domicilio.
+            Falta {customerSnapshot === null && fulfillmentSnapshot === null ? "guardar un cliente y una dirección validada"
+              : customerSnapshot === null ? "guardar un cliente" : "guardar una dirección validada"} para confirmar el domicilio.
           </p>}
           {repeatOrderPlan !== null && <p role="status" className="mt-2 text-sm text-text-muted">
             El servidor volverá a cotizar este pedido con el catálogo vigente. Si algún producto o modificador ya no es válido, la confirmación se detendrá sin crear una orden parcial.
@@ -1130,11 +1144,11 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
               : "El monto no cubre el total: ajusta el cobro antes de convertir la captura en orden."}
           </p>}
           <button type="button" className={`${button} mt-4`} onClick={confirmCapture} disabled={locked || !canConfirm}>
-            Convertir captura en orden
+            {activeShift === undefined ? "No hay turno abierto" : "Convertir captura en orden"}
           </button>
         </>}
       </section>}
-      {capture.status === "draft" && <aside className="rounded-xl border border-[oklch(80%_0.08_75)] bg-[oklch(96%_0.03_75)] p-4 text-sm"><strong>Captura abierta.</strong> Los cambios guardados incrementan una versión; recargar exige recuperar un lease nuevo.</aside>}
+      {capture.status === "draft" && <aside className="rounded-xl border border-[oklch(80%_0.08_75)] bg-[oklch(96%_0.03_75)] p-4 text-sm"><strong>Captura abierta.</strong> Los cambios se guardan en el servidor. Si se vence tu tiempo de atención, vuelve a tomarla desde la bandeja.</aside>}
     </>}
     <details className={panel}>
       <summary className="flex min-h-11 cursor-pointer items-center font-semibold focus-visible:outline-2 focus-visible:outline-accent">Atajos</summary>
@@ -1164,12 +1178,16 @@ function money(amountMinor: number, currency: string): string {
   return new Intl.NumberFormat("es-MX", { currency, style: "currency" }).format(amountMinor / 100);
 }
 
-function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+function formatDate(value: string, timeZone?: string): string {
+  return new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short", timeZone }).format(new Date(value));
 }
 
 function fulfillmentLabel(value: CaptureFulfillmentChannelV1): string {
   return { counter: "Mostrador", delivery: "Domicilio", dine_in: "Mesa", pickup: "Para recoger" }[value];
+}
+
+function sourceLabel(value: CaptureSourceChannelV1): string {
+  return { phone: "Teléfono", whatsapp_manual: "WhatsApp", counter: "Mostrador", table: "Mesa", self_service: "Autoservicio", integration: "Integración" }[value];
 }
 
 function orderStatusLabel(value: CustomerRecentOrderListV1["orders"][number]["status"]): string {

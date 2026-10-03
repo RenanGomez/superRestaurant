@@ -139,7 +139,7 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
   const timing = projection?.timing ?? "now";
 
   return <section className={panel} data-testid="capture-payment">
-    <h2 className="font-heading text-lg font-semibold">Cobro</h2>
+    <h2 className="font-heading text-lg font-semibold">4. Cobro</h2>
     <p className="mt-1 text-sm text-text-muted">Es una intención de pago, no un cobro; el dinero entra a caja al liquidar.</p>
     {!currencySupported && <p role="alert" className="mt-2 rounded-lg bg-error-bg p-3 text-sm">Moneda no admitida; avisa al administrador.</p>}
     {projection?.status === "stale" && <div role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">

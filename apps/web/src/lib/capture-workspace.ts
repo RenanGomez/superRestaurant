@@ -15,6 +15,7 @@ import {
   parseConfirmCaptureDraftCommandV2,
   parseCloseCaptureNoSaleCommandV1,
   parseCreateCaptureDraftCommandV1,
+  parseHoldCaptureDraftCommandV1,
   parseReplaceCaptureSelectionPlanCommandV1,
   parseRequestCaptureDeliveryQuoteCommandV1,
   parseSetCaptureCustomerCommandV1,
@@ -41,7 +42,7 @@ import {
 } from "@super-restaurant/shared-types";
 export type CaptureRequestResult<T> = { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable"; readonly code?: string };
-export type CaptureOperation = "autosave" | "confirm" | "create" | "claim" | "customer" | "deliveryInstructions"
+export type CaptureOperation = "autosave" | "confirm" | "create" | "claim" | "customer" | "deliveryInstructions" | "hold"
   | "deliveryInstructionSuggestions" | "deliveryQuote" | "fulfillment" | "assignmentCandidates" | "noSale"
   | "paymentIntent" | "selectionPlan" | "takeover" | "transfer" | "tray" | "workspace";
 export interface CaptureKeyValueStore {
@@ -87,7 +88,7 @@ export function clearPendingCaptureAutosave(
   const current = readPendingCaptureAutosave(store, command.scope);
   if (current?.idempotencyKey === command.idempotencyKey) store.removeItem(pendingKey(command.scope));
 }
-const paths = { autosave: "/autosave", confirm: "/confirm", create: "", claim: "/claim", customer: "/customer",
+const paths = { autosave: "/autosave", confirm: "/confirm", create: "", claim: "/claim", customer: "/customer", hold: "/hold",
   assignmentCandidates: "/assignment-candidates",
   deliveryInstructions: "/delivery-instructions", deliveryInstructionSuggestions: "/delivery-instruction-suggestions",
   deliveryQuote: "/delivery-quote", fulfillment: "/fulfillment", noSale: "/no-sale",
@@ -101,6 +102,7 @@ const parsers = {
   customer: parseSetCaptureCustomerCommandV1,
   deliveryInstructions: parseSetCaptureDeliveryInstructionsCommandV1,
   fulfillment: parseSetCaptureFulfillmentCommandV1,
+  hold: parseHoldCaptureDraftCommandV1,
   noSale: parseCloseCaptureNoSaleCommandV1,
   takeover: parseTakeoverCaptureDraftCommandV1,
   transfer: parseTransferCaptureDraftCommandV1,
