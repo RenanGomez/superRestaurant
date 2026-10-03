@@ -64,6 +64,8 @@ export default async function AppHomePage({ searchParams }: AppHomePageProps): P
   const wasRevoked = preference !== undefined && current === undefined;
 
   if (current !== undefined && !forceChange) {
+    if (resolvedSearchParams.edit !== "1") redirect("/app/tables");
+    if (!current.roles.some((role) => role === "owner" || role === "admin" || role === "manager")) redirect("/app/tables");
     return (
       <>
         <FocusRevalidate />
@@ -101,7 +103,7 @@ function CurrentBranchView({ membership, layout, layoutError, layoutStatus }: {
           <h1 className="break-words font-heading text-[22px] font-bold text-text">{membership.restaurantName} · {membership.branchName}</h1>
           <p className="mt-1 text-[13px] text-text-muted">Plano en cuadrícula de 24 columnas. Los cambios se validan y versionan en el servidor.</p>
         </div>
-        <a href="/app?change=1" className="rounded-lg border border-border bg-surface px-3 py-2 text-[13px] font-medium">Cambiar sucursal</a>
+        <div className="flex gap-2"><a href="/app/tables" className="rounded-lg border border-border bg-surface px-3 py-2 text-[13px] font-medium">Volver a mesas</a><a href="/app?change=1" className="rounded-lg border border-border bg-surface px-3 py-2 text-[13px] font-medium">Cambiar sucursal</a></div>
       </div>
       {layoutError !== undefined && <NoticeBanner text={layoutError === "update_failed" ? "No se guardó el cambio. El plano pudo cambiar en otro dispositivo; recarga e inténtalo de nuevo." : "No se pudo crear la mesa. Revisa los datos y que el nombre sea único."} />}
       {layoutStatus !== undefined && <div role="status" className="rounded-[10px] border border-[oklch(84%_0.08_155)] bg-[oklch(96%_0.03_155)] px-3.5 py-2.5 text-[13px] text-[oklch(38%_0.1_155)]">{layoutStatus === "table_created" ? "Mesa creada." : "Layout guardado."}</div>}
