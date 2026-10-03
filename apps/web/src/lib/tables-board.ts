@@ -16,6 +16,10 @@ export function tableStatusLabel(state: TableBoardTableV1 | null): string {
   return state === null ? "Sin estado" : state.status === "free" ? "Libre" : "Ocupada";
 }
 
+export function orderStatusLabel(status: "draft" | "open" | "partially_paid"): string {
+  return status === "draft" ? "Borrador" : status === "open" ? "Abierta" : "Pago parcial";
+}
+
 export function waiterInitials(name: string | null): string {
   if (name === null || name.trim() === "") return "Sin mesero";
   return name.trim().split(/\s+/u).slice(0, 2).map((part) => part[0]?.toLocaleUpperCase("es-MX") ?? "").join("");

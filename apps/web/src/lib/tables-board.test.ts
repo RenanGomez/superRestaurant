@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gridPlacement, groupBoardByZone, tableStatusLabel, waiterInitials } from "./tables-board.js";
+import { gridPlacement, groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterInitials } from "./tables-board.js";
 import type { DiningLayoutV1, TableBoardV1 } from "@super-restaurant/shared-types";
 
 const scope = { restaurantId: "11111111-1111-4111-8111-111111111111", branchId: "22222222-2222-4222-8222-222222222222" };
@@ -16,6 +16,9 @@ test("board groups state into the layout's zones and preserves positions", () =>
   assert.deepEqual(gridPlacement(table.layout), { gridColumn: "3 / span 4", gridRow: "6 / span 3" });
   assert.equal(tableStatusLabel(grouped[0]?.tables[0]?.state ?? null), "Ocupada");
   assert.equal(tableStatusLabel(null), "Sin estado");
+  assert.equal(orderStatusLabel("draft"), "Borrador");
+  assert.equal(orderStatusLabel("open"), "Abierta");
+  assert.equal(orderStatusLabel("partially_paid"), "Pago parcial");
 });
 
 test("waiter initials show a useful label without leaking an unknown id", () => {
