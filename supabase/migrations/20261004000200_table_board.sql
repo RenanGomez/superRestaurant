@@ -88,7 +88,10 @@ begin
     and idempotency_key = v_idempotency_key;
   if found then
     -- The stored payload carries the server-derived `from`; compare everything the client sent.
-    if (v_existing.event_payload #- '{payload,from}') <> p_audit then
+    if (v_existing.event_payload #- '{payload,from}') <> p_audit
+      or v_existing.expected_order_version <> p_expected_version
+      or v_existing.order_id <> p_order_id
+    then
       return pg_catalog.jsonb_build_object('status', 'conflict');
     end if;
     return pg_catalog.jsonb_build_object(

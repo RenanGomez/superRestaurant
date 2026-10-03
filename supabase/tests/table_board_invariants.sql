@@ -269,6 +269,12 @@ begin
   execute 'reset role';
   if replayed->>'status'<>'replayed' or replayed->'order'<>result->'order' then raise exception 'TABLE_BOARD_ASSIGN_REPLAY_MISMATCH'; end if;
 
+  -- same command (same key + payload) but a different expectedVersion is a conflict, not a replay
+  execute 'set local role app_api';
+  result := app_private.assign_order_waiter(actor,2,order_a,restaurant,branch,waiter,assign_audit);
+  execute 'reset role';
+  if result->>'status'<>'conflict' then raise exception 'TABLE_BOARD_ASSIGN_REPLAY_WITH_DIFFERENT_VERSION_ACCEPTED'; end if;
+
   -- stale expectedVersion
   audit := pg_temp.t_audit(actor,order_a,restaurant,branch,device,now_text,waiter::text);
   execute 'set local role app_api';
