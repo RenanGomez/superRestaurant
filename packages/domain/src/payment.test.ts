@@ -368,3 +368,49 @@ function rehydratedPayment(payment: Payment, overrides: Partial<Payment>): Payme
 function frozenRefund(refund: Refund, overrides: Partial<Refund>): Refund {
   return Object.freeze({ ...refund, ...overrides });
 }
+
+function cashInput(overrides: Partial<CreatePaymentInput> = {}): CreatePaymentInput {
+  const { amount, paymentId, eventId, restaurantId, branchId, orderId, idempotencyKey, evidence: audit } = paymentInput();
+  return { amount, paymentId, eventId, restaurantId, branchId, orderId, idempotencyKey, evidence: audit, method: "cash", ...overrides };
+}
+
+test("cash tender derives change in the domain and never alters the collected amount", () => {
+  const exact = createPayment(cashInput({ tenderedAmount: new Money(500, "MXN") })).payment;
+  assert.equal(exact.amount.amountMinor, 500);
+  assert.equal(exact.change?.amountMinor, 0);
+  const withChange = createPayment(cashInput({ tenderedAmount: new Money(1_000, "MXN"), tip: new Money(50, "MXN") })).payment;
+  assert.equal(withChange.amount.amountMinor, 500);
+  assert.equal(withChange.tenderedAmount?.amountMinor, 1_000);
+  assert.equal(withChange.change?.amountMinor, 500);
+  assert.equal(withChange.tip?.amountMinor, 50);
+  assert.equal(Object.isFrozen(withChange), true);
+  assert.equal(createPayment(cashInput()).payment.change, undefined);
+});
+
+test("cash tender rejects insufficient, non-cash, and foreign-currency tender", () => {
+  assert.throws(() => createPayment(cashInput({ tenderedAmount: new Money(499, "MXN") })), InvalidPaymentFieldError);
+  assert.throws(() => createPayment(cashInput({ tenderedAmount: new Money(600, "USD") })), InvalidPaymentFieldError);
+  assert.throws(() => createPayment(paymentInput({ tenderedAmount: new Money(600, "MXN") })), InvalidPaymentFieldError);
+});
+
+test("tip is a separate positive amount allowed for any method and never part of the bill", () => {
+  const card = createPayment(paymentInput({ tip: new Money(75, "MXN") })).payment;
+  assert.equal(card.amount.amountMinor, 500);
+  assert.equal(card.tip?.amountMinor, 75);
+  assert.throws(() => createPayment(paymentInput({ tip: new Money(0, "MXN") })), InvalidPaymentFieldError);
+  assert.throws(() => createPayment(paymentInput({ tip: new Money(10, "USD") })), InvalidPaymentFieldError);
+});
+
+test("payment replay includes tender and tip in the attempt identity", () => {
+  const input = cashInput({ tenderedAmount: new Money(1_000, "MXN"), tip: new Money(50, "MXN") });
+  const prior = createPayment(input).payment;
+  assert.equal(createOrReplayPayment(input, prior).outcome, "replayed");
+  assert.throws(() => createOrReplayPayment({ ...input, tenderedAmount: new Money(2_000, "MXN") }, prior), PaymentIdempotencyConflictError);
+  assert.throws(() => createOrReplayPayment({ ...input, tip: new Money(60, "MXN") }, prior), PaymentIdempotencyConflictError);
+});
+
+test("rehydrated payments reject inconsistent change", () => {
+  const payment = createPayment(cashInput({ tenderedAmount: new Money(1_000, "MXN") })).payment;
+  assert.throws(() => refundableAmount(rehydratedPayment(payment, { change: new Money(1, "MXN") })), InvalidPaymentFieldError);
+  assert.throws(() => refundableAmount(rehydratedPayment(payment, { tenderedAmount: undefined as never })), InvalidPaymentFieldError);
+});

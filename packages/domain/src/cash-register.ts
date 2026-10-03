@@ -20,7 +20,11 @@ import {
 } from "./errors.js";
 
 export type CashRegisterState = "open" | "closed";
-export type CashMovementType = "cash_sale" | "cash_refund" | "cash_in" | "cash_out" | "cash_adjustment";
+/**
+ * `tip_in` is a cash gratuity left in the till for a payment: it counts toward the expected
+ * cash balance but is reported apart from sales, and it is never part of the bill total.
+ */
+export type CashMovementType ="cash_sale" | "tip_in" | "cash_refund" | "cash_in" | "cash_out" | "cash_adjustment";
 export type CashMovementDirection = "in" | "out";
 
 export interface CashAuditEvidence {
@@ -306,12 +310,12 @@ export function closeCashRegister(
 }
 
 function assertMovementShape(input: AppendCashMovementInput, register: CashRegister): void {
-  const supported: readonly CashMovementType[] = ["cash_sale", "cash_refund", "cash_in", "cash_out", "cash_adjustment"];
+  const supported: readonly CashMovementType[] = ["cash_sale", "tip_in", "cash_refund", "cash_in", "cash_out", "cash_adjustment"];
   if (!supported.includes(input.type)) {
     throw new InvalidCashMovementTypeError(input.type);
   }
 
-  if (input.type === "cash_sale") {
+  if (input.type === "cash_sale" || input.type === "tip_in") {
     if (input.direction !== "in" || input.compensatesMovementId !== undefined || input.source?.type !== "payment" || !hasText(input.source.paymentId)) {
       throw new CashMovementReferenceError();
     }
