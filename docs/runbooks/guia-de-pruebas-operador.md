@@ -62,3 +62,14 @@ Aplicadas al proyecto remoto con autorización permanente de Emmanuel (2026-09-2
 
 ## 5. Lo que no existe todavía
 Configurador de pizza/variantes en UI (S5 productivo), S6.3 corrección de producción, S7.2+ despacho y repartidor, S8.3+ captura real de pagos (checkout con envío ya calcula el saldo), anticipos y refunds, impresión Bluetooth real, offline, inventario, reportes, fiscal.
+
+## 6. Qué probar el 2026-10-03 (lote de corrección tras tus 25 notas)
+
+Servicios: API en `http://localhost:3000` (health `/api/v1/health`), web en `http://localhost:8082`. Probar en escritorio y en 390×844 con la consola abierta; anotar cualquier mensaje rojo.
+
+1. **Menú** (`/app/menu`): el precio se escribe en pesos («130» o «130.50») y se ve «$130.00»; el cero se puede borrar; «Clave interna (opcional)» no bloquea; botón «Foto» en producto y en opción (JPG/PNG/WebP ≤ 2 MB), estado «Subiendo…», miniatura, «Quitar foto»; «Publicar nueva versión» se bloquea con «Esperando fotos…» mientras sube.
+2. **Clientes** (`/app/customers`): etiqueta de teléfono y de dirección como lista con «Otro»; al validar una dirección se muestra «Dirección revisada para <sucursal>» con los datos revisados (zona y cargo se confirman al cotizar en captura; pendiente).
+3. **Captura** (`/app/capture`): pasos Cliente → Menú → Entrega → Cobro → Confirmar; tarjetas con foto o iniciales por categoría; en la hoja de armado «Estimado: $X.XX» en vivo y control «− n +» para ingredientes repetibles; «Editar» una línea armada; guardar instrucciones, elegir método y montos muestran «Guardando…» y «Guardado» o el error; con efectivo ≥ total aparece «Cambio: $X.XX»; «Convertir captura en orden» sin elegir turno («Turno: …» o «No hay turno abierto»); borradores con nombre y teléfono del cliente, canal, hora e «Ítems: $X.XX»; «Guardar para después» y «Cancelar» con motivo; «Transferir» bajo «Más»; el aviso de lease dice «Otra estación tomó esta captura» o «Se venció tu tiempo de atención» con «Retomar», y mientras trabajas se renueva solo.
+4. **Órdenes** (`/app/orders`): «Detalle» → «Enviar a cocina», «Marcar lista/entregada», «Cancelar línea» con motivo; cada acción responde; el diálogo atrapa el foco y cierra con Escape.
+5. **Mesas** (`/app/tables`): plano con libre/ocupada; tocar mesa libre → «Abrir cuenta» (dos toques); «Sin turno abierto» con «Abrir turno»; mesa ocupada → cuentas con total, «Ver cuenta», «Asignarme», «Abrir otra cuenta»; «Editar plano» sólo para gestión.
+6. **Caja** (`/app/caja`): fondo y conteo en pesos, sin «ISO» ni «u.m.»; «Cargar cuenta» es una lista de órdenes cobrables con «Cobrar», sin UUID.
