@@ -2,10 +2,10 @@ import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException,
   Header, HttpCode, Inject, NotFoundException, Post, Req, ServiceUnavailableException,
 } from "@nestjs/common";
-import type { CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkspaceV5, CaptureWorkTrayResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
+import type { CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkspaceV5, CaptureWorkTrayResultV1, CaptureWorkTrayResultV2, RenewCaptureLeaseResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
-import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteInvalidError, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentStaleError, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
+import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteInvalidError, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentStaleError, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureLeaseTakenError, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
 
 @Controller("captures")
 export class CapturesController {
@@ -38,7 +38,7 @@ export class CapturesController {
   @Post("tray")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
-  public async listTray(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkTrayResultV1> {
+  public async listTray(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkTrayResultV1 | CaptureWorkTrayResultV2> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.tray.list(principal, body));
   }
@@ -171,6 +171,13 @@ export class CapturesController {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.attention.mutateAttention(principal, "capture.taken_over", body));
   }
+  @Post("lease/renew")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async renewLease(@Req() request: unknown, @Body() body: unknown): Promise<RenewCaptureLeaseResultV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.attention.renewLease(principal, body));
+  }
   @Post("recovery-preference")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
@@ -180,6 +187,9 @@ export class CapturesController {
   }
   private async execute<Result>(action: () => Promise<Result>): Promise<Result> {
     try { return await action(); } catch (error: unknown) {
+      if (error instanceof CaptureLeaseTakenError) {
+        throw new ConflictException({ code: "CAPTURE_LEASE_TAKEN" });
+      }
       if (error instanceof CapturePaymentIntentInsufficientError) {
         throw new ConflictException({ code: "CAPTURE_PAYMENT_INTENT_INSUFFICIENT" });
       }
