@@ -44,6 +44,10 @@ declare
   board jsonb;
   shift_audit jsonb;
   assign_audit jsonb;
+  reassign_audit jsonb;
+  past_text text;
+  slow_order uuid := gen_random_uuid();
+  closed_order uuid := gen_random_uuid();
   audit jsonb;
   n integer;
 begin
@@ -120,6 +124,41 @@ begin
   result := app_private.open_operational_shift(actor,restaurant,branch,gen_random_uuid(),'Turno 2',audit);
   execute 'reset role';
   if result->>'status'<>'conflict' then raise exception 'TABLE_BOARD_SHIFT_SECOND_OPEN_NOT_REJECTED'; end if;
+
+  -- create_operational_order: membership is the server-side shift state only. A device clock two
+  -- days behind (occurredAt before the shift's server opened_at) still creates the order in the
+  -- open shift; once the shift is closed, creation is rejected.
+  past_text := pg_catalog.to_char((pg_catalog.clock_timestamp() - interval '2 days') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+  execute 'set local role app_api';
+  result := app_private.create_operational_order(actor,v_shift,
+    pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'orderId',slow_order::text,'restaurantId',restaurant::text,'branchId',branch::text,
+      'channel','counter','currency','MXN','timeZone','America/Hermosillo','status','draft','items','[]'::jsonb),
+    pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+      'restaurantId',restaurant::text,'branchId',branch::text,'orderId',slow_order::text,'actorId',actor::text,
+      'deviceId',device::text,'occurredAt',past_text,'operation','order.created','entityType','order',
+      'entityId',slow_order::text,'to','draft'));
+  execute 'reset role';
+  if result->>'status'<>'saved' then raise exception 'TABLE_BOARD_SLOW_CLOCK_ORDER_REJECTED'; end if;
+  select count(*) into n from app.order_operational_shifts where order_id=slow_order and shift_id=v_shift;
+  if n<>1 then raise exception 'TABLE_BOARD_SLOW_CLOCK_ORDER_NOT_LINKED'; end if;
+
+  update app.operational_shifts set status='closed', closed_at=pg_catalog.clock_timestamp(), closed_by=actor
+  where id=v_shift;
+  execute 'set local role app_api';
+  result := app_private.create_operational_order(actor,v_shift,
+    pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'orderId',closed_order::text,'restaurantId',restaurant::text,'branchId',branch::text,
+      'channel','counter','currency','MXN','timeZone','America/Hermosillo','status','draft','items','[]'::jsonb),
+    pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+      'restaurantId',restaurant::text,'branchId',branch::text,'orderId',closed_order::text,'actorId',actor::text,
+      'deviceId',device::text,'occurredAt',now_text,'operation','order.created','entityType','order',
+      'entityId',closed_order::text,'to','draft'));
+  execute 'reset role';
+  if result->>'status'<>'conflict' then raise exception 'TABLE_BOARD_CLOSED_SHIFT_ORDER_ACCEPTED'; end if;
+  if exists (select 1 from app.orders where id=closed_order) then raise exception 'TABLE_BOARD_CLOSED_SHIFT_ORDER_PERSISTED'; end if;
 
   -- Seed orders: order_a open, order_b closed, foreign_order in another restaurant/branch.
   insert into app.orders(id,restaurant_id,branch_id,table_id,channel,status,aggregate,version,created_by,updated_by)
@@ -200,9 +239,9 @@ begin
   if result->>'status'<>'conflict' then raise exception 'TABLE_BOARD_ASSIGN_STALE_VERSION_NOT_REJECTED'; end if;
 
   -- reassign A -> B: audit `from` is server-derived (A)
-  audit := pg_temp.t_audit(actor,order_a,restaurant,branch,device,now_text,waiter_b::text);
+  reassign_audit := pg_temp.t_audit(actor,order_a,restaurant,branch,device,now_text,waiter_b::text);
   execute 'set local role app_api';
-  result := app_private.assign_order_waiter(actor,2,order_a,restaurant,branch,waiter_b,audit);
+  result := app_private.assign_order_waiter(actor,2,order_a,restaurant,branch,waiter_b,reassign_audit);
   execute 'reset role';
   if result->>'status'<>'saved' or (result->>'version')::bigint<>3 then raise exception 'TABLE_BOARD_REASSIGN_REJECTED'; end if;
   if (select event_payload->'payload'->>'from' from app.order_audit_events
@@ -216,6 +255,20 @@ begin
   execute 'reset role';
   if result->>'status'<>'saved' or (select waiter_user_id from app.orders where id=order_a) is not null
   then raise exception 'TABLE_BOARD_ASSIGN_CLEAR_REJECTED'; end if;
+
+  -- waiter_b's membership is revoked afterwards: an identical retry of the already-applied
+  -- command still replays; a brand-new command for the revoked waiter is a conflict.
+  update app.memberships set revoked_at = pg_catalog.clock_timestamp(), revoked_by = actor, revocation_reason = 'rollback-only test'
+  where id = waiter_b_membership;
+  execute 'set local role app_api';
+  replayed := app_private.assign_order_waiter(actor,2,order_a,restaurant,branch,waiter_b,reassign_audit);
+  execute 'reset role';
+  if replayed->>'status'<>'replayed' then raise exception 'TABLE_BOARD_REASSIGN_REPLAY_BLOCKED_BY_REVOKED_MEMBERSHIP'; end if;
+  audit := pg_temp.t_audit(actor,order_a,restaurant,branch,device,now_text,waiter_b::text);
+  execute 'set local role app_api';
+  result := app_private.assign_order_waiter(actor,4,order_a,restaurant,branch,waiter_b,audit);
+  execute 'reset role';
+  if result->>'status'<>'conflict' then raise exception 'TABLE_BOARD_ASSIGN_REVOKED_WAITER_ACCEPTED'; end if;
 
   -- list_table_board: isolation and derived occupancy
   execute 'set local role app_api';

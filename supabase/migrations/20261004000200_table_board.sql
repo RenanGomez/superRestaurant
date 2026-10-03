@@ -81,15 +81,6 @@ begin
     return pg_catalog.jsonb_build_object('status', 'forbidden');
   end if;
 
-  if p_waiter_user_id is not null then
-    select exists (
-      select 1 from app_private.find_active_branch_membership(p_waiter_user_id, p_restaurant_id, p_branch_id)
-    ) into v_has_waiter_membership;
-    if not v_has_waiter_membership then
-      return pg_catalog.jsonb_build_object('status', 'conflict');
-    end if;
-  end if;
-
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('order:' || p_order_id::text, 0));
 
   select * into v_existing from app.order_audit_events
@@ -103,6 +94,18 @@ begin
     return pg_catalog.jsonb_build_object(
       'status', 'replayed', 'version', v_existing.result_order_version, 'order', v_existing.result_order
     );
+  end if;
+
+  -- The waiter's *current* membership is validated only after the command-identity lookup above,
+  -- so a byte-identical retry of an already-applied command still replays even if the waiter's
+  -- membership was revoked in the meantime; a new command is always checked.
+  if p_waiter_user_id is not null then
+    select exists (
+      select 1 from app_private.find_active_branch_membership(p_waiter_user_id, p_restaurant_id, p_branch_id)
+    ) into v_has_waiter_membership;
+    if not v_has_waiter_membership then
+      return pg_catalog.jsonb_build_object('status', 'conflict');
+    end if;
   end if;
 
   select * into v_current from app.orders
@@ -283,6 +286,94 @@ begin
   );
 
   return pg_catalog.jsonb_build_object('status', 'saved', 'shiftId', p_shift_id::text);
+end
+$function$;
+
+-- 2b. Redefine create_operational_order (20260905000200). Shift membership is decided only by the
+-- server-side state of the shift inside this transaction (`status = 'open'`, not closed); the
+-- device's occurredAt stays audit data and never orders anything, so a device with a slow clock
+-- can still create orders in the open shift.
+create or replace function app_private.create_operational_order(
+  p_actor_id uuid,
+  p_shift_id uuid,
+  p_order jsonb,
+  p_audit jsonb
+)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $function$
+declare
+  v_restaurant_id uuid;
+  v_branch_id uuid;
+  v_order_id uuid;
+  v_event_id uuid;
+  v_occurred_at timestamptz;
+  v_result jsonb;
+begin
+  if p_actor_id is null or p_shift_id is null
+    or pg_catalog.jsonb_typeof(p_order) <> 'object'
+    or pg_catalog.jsonb_typeof(p_audit) <> 'object'
+  then
+    return pg_catalog.jsonb_build_object('status', 'conflict');
+  end if;
+
+  begin
+    v_restaurant_id := (p_order ->> 'restaurantId')::uuid;
+    v_branch_id := (p_order ->> 'branchId')::uuid;
+    v_order_id := (p_order ->> 'orderId')::uuid;
+    v_event_id := (p_audit ->> 'eventId')::uuid;
+    v_occurred_at := (p_audit ->> 'occurredAt')::timestamptz;
+  exception when invalid_text_representation or datetime_field_overflow then
+    return pg_catalog.jsonb_build_object('status', 'conflict');
+  end;
+
+  if p_audit ->> 'operation' <> 'order.created'
+    or p_audit ->> 'entityType' <> 'order'
+    or p_audit ->> 'entityId' <> v_order_id::text
+    or p_audit ->> 'eventId' <> v_event_id::text
+    or p_audit ->> 'restaurantId' <> v_restaurant_id::text
+    or p_audit ->> 'branchId' <> v_branch_id::text
+  then
+    return pg_catalog.jsonb_build_object('status', 'conflict');
+  end if;
+
+  perform 1
+  from app.operational_shifts as shift
+  where shift.restaurant_id = v_restaurant_id
+    and shift.branch_id = v_branch_id
+    and shift.id = p_shift_id
+    and shift.status = 'open'
+    and shift.closed_at is null
+  for share;
+  if not found then
+    return pg_catalog.jsonb_build_object('status', 'conflict');
+  end if;
+
+  v_result := app_private.persist_order_mutation(p_actor_id, 0, p_order, p_audit);
+  if v_result ->> 'status' = 'saved' then
+    insert into app.order_operational_shifts (
+      restaurant_id, branch_id, order_id, shift_id, linked_by
+    ) values (
+      v_restaurant_id, v_branch_id, v_order_id, p_shift_id, p_actor_id
+    );
+    return v_result;
+  end if;
+
+  if v_result ->> 'status' = 'replayed' and exists (
+    select 1
+    from app.order_operational_shifts as link
+    where link.restaurant_id = v_restaurant_id
+      and link.branch_id = v_branch_id
+      and link.order_id = v_order_id
+      and link.shift_id = p_shift_id
+  ) then
+    return v_result;
+  end if;
+
+  return pg_catalog.jsonb_build_object('status', 'conflict');
 end
 $function$;
 
