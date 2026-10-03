@@ -19,6 +19,25 @@ export function countModifierSelections(optionIds: readonly string[]): readonly 
   return [...counts].map(([optionId, quantity]) => ({ optionId, quantity }));
 }
 
+/** Restore a server line into the sheet's per-unit selection state. */
+export function expandModifierSelections(selections: readonly SelectionPlanModifierSelectionDraft[]): readonly string[] {
+  return selections.flatMap(({ optionId, quantity }) => Array(quantity).fill(optionId) as string[]);
+}
+
+/** Toggle a single-unit option, or step a repeatable option one unit at a time. */
+export function toggleOrStepOption(
+  selection: readonly string[], optionId: string, delta: -1 | 1, maximumQuantity: number | null,
+): readonly string[] {
+  const selectedCount = selection.filter((id) => id === optionId).length;
+  if (delta === 1) {
+    if (maximumQuantity === 1 && selectedCount > 0) return selection.filter((id) => id !== optionId);
+    if (maximumQuantity !== null && selectedCount >= maximumQuantity) return selection;
+    return [...selection, optionId];
+  }
+  const index = selection.lastIndexOf(optionId);
+  return index < 0 ? selection : selection.filter((_, position) => position !== index);
+}
+
 /**
  * One catalog-derived line as tracked by the client while building a selection. Carries no
  * price: the server derives money exclusively from the catalog at read/write time.

@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
-import { countModifierSelections, estimateSelectionMinor, validateModifierSelection, type SelectionPlanLineDraft, type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
+import { countModifierSelections, estimateSelectionMinor, expandModifierSelections, toggleOrStepOption,
+  validateModifierSelection, type SelectionPlanLineDraft, type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 
 const button = "min-h-11 min-w-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
 const optionButton = "flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-left text-sm hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent";
@@ -31,7 +32,7 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
   const [quantity, setQuantity] = useState(initialLine?.quantity ?? 1);
   const [selections, setSelections] = useState<Record<string, readonly string[]>>(() => Object.fromEntries(
     (initialLine?.modifierGroups ?? []).map((group) => [group.groupId,
-      group.selections.flatMap((selection) => Array(selection.quantity).fill(selection.optionId) as string[])])));
+      expandModifierSelections(group.selections)])));
   const [note, setNote] = useState(initialLine?.note ?? "");
   const closeRef = useRef<HTMLButtonElement>(null);
 
@@ -44,15 +45,14 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  function toggleOption(group: MenuModifierGroupV1, optionId: string): void {
+  function changeOption(group: MenuModifierGroupV1, optionId: string, maximumQuantity: number | null, delta: -1 | 1): void {
     setSelections((current) => {
       const chosen = current[group.groupId] ?? [];
-      if (chosen.includes(optionId)) {
-        return { ...current, [group.groupId]: chosen.filter((id) => id !== optionId) };
+      if (group.maximumQuantity === 1 && delta === 1) {
+        return { ...current, [group.groupId]: chosen.includes(optionId) ? [] : [optionId] };
       }
-      if (group.maximumQuantity === 1) return { ...current, [group.groupId]: [optionId] };
-      if (chosen.length >= group.maximumQuantity) return current;
-      return { ...current, [group.groupId]: [...chosen, optionId] };
+      const next = toggleOrStepOption(chosen, optionId, delta, maximumQuantity);
+      return next.length > group.maximumQuantity || next === chosen ? current : { ...current, [group.groupId]: next };
     });
   }
 
@@ -87,12 +87,28 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
           </legend>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {group.options.map((option) => {
-              const isSelected = (selections[group.groupId] ?? []).includes(option.optionId);
-              return <button key={option.optionId} type="button" disabled={!option.active || confirmed}
-                className={`${optionButton} ${isSelected ? optionSelected : ""} ${!option.active ? "opacity-50" : ""}`}
-                onClick={() => toggleOption(group, option.optionId)}>
-                <span>{option.name}</span>
-                {option.unitPriceMinor > 0 && <span className="text-xs text-text-muted">+{formatMinorUnits(option.unitPriceMinor, currency)}</span>}
+              const chosen = selections[group.groupId] ?? [];
+              const selectedCount = chosen.filter((id) => id === option.optionId).length;
+              const repeatable = group.maximumQuantity > 1 && (option.maximumQuantity === null || option.maximumQuantity > 1);
+              const label = <><span>{option.name}</span>
+                {option.unitPriceMinor > 0 && <span className="text-xs text-text-muted">+{formatMinorUnits(option.unitPriceMinor, currency)}</span>}</>;
+              return repeatable ? <div key={option.optionId} className={`grid gap-2 rounded-lg border border-border bg-surface p-2 text-sm ${selectedCount > 0 ? optionSelected : ""} ${!option.active ? "opacity-50" : ""}`}>
+                <div className="flex min-h-11 flex-wrap items-center justify-between gap-1">{label}</div>
+                <div className="flex items-center justify-between gap-2">
+                  <button type="button" className={button} aria-label={`Quitar una unidad de ${option.name}`}
+                    disabled={!option.active || confirmed || selectedCount === 0}
+                    onClick={() => changeOption(group, option.optionId, option.maximumQuantity, -1)}>−</button>
+                  <span className="min-w-6 text-center font-semibold" aria-label={`${selectedCount} unidades de ${option.name}`}>{selectedCount}</span>
+                  <button type="button" className={button} aria-label={`Agregar una unidad de ${option.name}`}
+                    disabled={!option.active || confirmed || chosen.length >= group.maximumQuantity
+                      || (option.maximumQuantity !== null && selectedCount >= option.maximumQuantity)}
+                    onClick={() => changeOption(group, option.optionId, option.maximumQuantity, 1)}>+</button>
+                </div>
+              </div> : <button key={option.optionId} type="button"
+                disabled={!option.active || confirmed || (group.maximumQuantity > 1 && selectedCount === 0 && chosen.length >= group.maximumQuantity)}
+                className={`${optionButton} ${selectedCount > 0 ? optionSelected : ""} ${!option.active ? "opacity-50" : ""}`}
+                aria-pressed={selectedCount > 0} onClick={() => changeOption(group, option.optionId, option.maximumQuantity, 1)}>
+                {label}
               </button>;
             })}
           </div>

@@ -5,7 +5,9 @@ import {
   buildSelectionPlan,
   countModifierSelections,
   estimateSelectionMinor,
+  expandModifierSelections,
   groupProductsByCategory,
+  toggleOrStepOption,
   validateModifierSelection,
   type SelectionPlanLineDraft,
 } from "./capture-selection.js";
@@ -25,6 +27,26 @@ test("sheet selections preserve quantities without duplicate option IDs", () => 
   assert.deepEqual(countModifierSelections([optionId, optionId2, optionId]), [
     { optionId, quantity: 2 }, { optionId: optionId2, quantity: 1 },
   ]);
+});
+
+test("repeatable modifier steps up, down to zero, and respects its option maximum", () => {
+  const one = toggleOrStepOption([], optionId, 1, 2);
+  const two = toggleOrStepOption(one, optionId, 1, 2);
+  assert.deepEqual(two, [optionId, optionId]);
+  assert.equal(toggleOrStepOption(two, optionId, 1, 2), two);
+  assert.deepEqual(toggleOrStepOption(two, optionId, -1, 2), [optionId]);
+  assert.deepEqual(toggleOrStepOption([optionId], optionId, -1, 2), []);
+  assert.deepEqual(toggleOrStepOption([], optionId, -1, null), []);
+  assert.deepEqual(toggleOrStepOption([optionId], optionId, 1, 1), []);
+});
+
+test("editing initializes repeated modifier counts from the saved line", () => {
+  const initialLine: SelectionPlanLineDraft = { lineId: lineId1, productId: productA, quantity: 1,
+    modifierGroups: [{ groupId, selections: [{ optionId, quantity: 3 }, { optionId: optionId2, quantity: 1 }] }], note: null };
+  const expanded = expandModifierSelections(initialLine.modifierGroups[0]?.selections ?? []);
+  assert.deepEqual(countModifierSelections(expanded), initialLine.modifierGroups[0]?.selections);
+  const edited = toggleOrStepOption(expanded, optionId, -1, null);
+  assert.deepEqual(countModifierSelections(edited), [{ optionId, quantity: 2 }, { optionId: optionId2, quantity: 1 }]);
 });
 
 test("buildSelectionPlan projects draft lines with a null variantId and forwards the note", () => {
