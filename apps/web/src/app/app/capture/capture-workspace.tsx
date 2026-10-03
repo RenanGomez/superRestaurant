@@ -10,6 +10,7 @@ import type {
   CaptureDraftDetailV1,
   CaptureDraftDetailV2,
   CaptureDraftSummaryV1,
+  CaptureTrayItemV2,
   CapturePaymentBasisV1,
   CapturePaymentIntentMethodV1,
   CapturePaymentIntentProjectionV1,
@@ -22,6 +23,7 @@ import type {
   CaptureSourceChannelV1,
   CaptureWorkspaceV5,
   CaptureWorkTrayResultV1,
+  CaptureWorkTrayResultV2,
   DeliveryQuoteV1,
   CustomerDirectoryDetailV1,
   CustomerDirectorySearchResultV1,
@@ -35,7 +37,8 @@ import type {
 } from "@super-restaurant/shared-types";
 
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
-  rehydrateCaptureWorkspace, shortCaptureDraftId } from "../../../lib/capture-workspace";
+  rehydrateCaptureWorkspace, shortCaptureDraftId, shouldRenewLease } from "../../../lib/capture-workspace";
+import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
   type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
@@ -101,7 +104,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [pending, setPending] = useState<{ operation: CaptureWorkspaceOperation; command: unknown }>();
   const [capture, setCapture] = useState<CaptureDraftDetailV1 | CaptureDraftDetailV2>();
   const [leaseClock, setLeaseClock] = useState(() => Date.now());
-  const [tray, setTray] = useState<readonly CaptureDraftSummaryV1[]>([]);
+  const [tray, setTray] = useState<readonly (CaptureDraftSummaryV1 | CaptureTrayItemV2)[]>([]);
+  const lastInteractionAt = useRef(0);
   const [assignmentCandidates, setAssignmentCandidates] = useState<readonly CaptureAssignmentCandidateV1[]>([]);
   const [transferTarget, setTransferTarget] = useState("");
   const [transferConfirmed, setTransferConfirmed] = useState(false);
@@ -166,6 +170,63 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     const timer = window.setInterval(() => setLeaseClock(Date.now()), 10_000);
     return () => window.clearInterval(timer);
   }, [capture?.status, capture?.attentionLeaseExpiresAt]);
+  useEffect(() => {
+    lastInteractionAt.current = Date.now();
+    const interacted = () => { lastInteractionAt.current = Date.now(); };
+    window.addEventListener("pointerdown", interacted);
+    window.addEventListener("keydown", interacted);
+    return () => {
+      window.removeEventListener("pointerdown", interacted);
+      window.removeEventListener("keydown", interacted);
+    };
+  }, []);
+  useEffect(() => {
+    if (capture?.status !== "draft" || capture.attentionLeaseId === null
+      || capture.attentionLeaseExpiresAt === null) return;
+    const captureDraftId = capture.captureDraftId;
+    const attentionLeaseId = capture.attentionLeaseId;
+    let expiresAt = capture.attentionLeaseExpiresAt;
+    let lastAttemptAt = Date.now();
+    let inFlight = false;
+    let active = true;
+    let conflictSeen = false;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      if (inFlight || conflictSeen || now - lastAttemptAt < 90_000
+        || !shouldRenewLease(now, lastInteractionAt.current, document.visibilityState === "visible", expiresAt)) return;
+      lastAttemptAt = now;
+      inFlight = true;
+      void (async () => {
+        let reply: ActionReply;
+        try { reply = await action("renew", { schemaVersion: 1, scope, captureDraftId, attentionLeaseId }); }
+        catch { reply = { ok: false, error: "unavailable" }; }
+        inFlight = false;
+        if (!active) return;
+        if (reply.ok && "attentionLeaseExpiresAt" in reply.value) {
+          expiresAt = reply.value.attentionLeaseExpiresAt;
+          setCapture((current) => current?.captureDraftId === captureDraftId && current.attentionLeaseId === attentionLeaseId
+            ? { ...current, attentionLeaseExpiresAt: expiresAt } : current);
+          setLeaseClock(Date.now());
+        } else if (!reply.ok && reply.error === "conflict") {
+          conflictSeen = true;
+          const code = "code" in reply ? reply.code : undefined;
+          setError("conflict"); setErrorOperation("renew"); setErrorCode(code);
+          if (code === "CAPTURE_CONFLICT") {
+            try {
+              const fresh = await action("workspace", { schemaVersion: 3, scope, captureDraftId });
+              if (active && fresh.ok && "customerSnapshot" in fresh.value) {
+                applyWorkspace(fresh.value as CaptureWorkspaceV5);
+                setError(undefined); setErrorOperation(undefined); setErrorCode(undefined);
+                conflictSeen = false;
+                lastAttemptAt = Date.now();
+              }
+            } catch { /* Keep the conflict visible until the operator returns to the tray. */ }
+          }
+        }
+      })();
+    }, 10_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [capture?.captureDraftId, capture?.attentionLeaseId, capture?.status, action, scope]);
 
   function invalidateQuote(): void {
     setQuoteError(undefined);
@@ -210,7 +271,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     else if ("items" in value && "captureDraftId" in value) {
       setDeliveryInstructionSuggestions((value as CaptureDeliveryInstructionSuggestionsV1).items);
     }
-    else if ("items" in value) setTray((value as CaptureWorkTrayResultV1).items);
+    else if ("items" in value) setTray((value as CaptureWorkTrayResultV1 | CaptureWorkTrayResultV2).items);
     else if ("customerSnapshot" in value) applyWorkspace(value as CaptureWorkspaceV5);
     else if ("replayed" in value) {
       const mutation = value as CaptureMutationResultV1;
@@ -292,7 +353,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       if (replay?.ok) await refreshWorkspace(pendingAutosave.captureDraftId);
       if (replay === undefined || !replay.ok) return;
     }
-    await run("tray", { schemaVersion: 1, scope, limit: 20 });
+    await run("tray", { schemaVersion: 2, scope, limit: 20 });
     if (canManageAssignment) await run("assignmentCandidates", { schemaVersion: 1, scope });
   })(); }, []);
 
@@ -479,7 +540,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     }
   }
 
-  function recover(item: CaptureDraftSummaryV1): void {
+  function recover(item: CaptureDraftSummaryV1 | CaptureTrayItemV2): void {
     const command = { schemaVersion: 1, scope, captureDraftId: item.captureDraftId, expectedVersion: item.version,
       eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), deviceId, occurredAt: new Date().toISOString() };
     setNoSaleNotice(false);
@@ -496,7 +557,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       const reply = await run("transfer", { ...base(), targetMembershipId: transferTarget });
       if (!reply?.ok) return;
       reset();
-      await run("tray", { schemaVersion: 1, scope, limit: 20 });
+      await run("tray", { schemaVersion: 2, scope, limit: 20 });
       await run("assignmentCandidates", { schemaVersion: 1, scope });
     })();
   }
@@ -513,7 +574,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       if (!reply?.ok) return;
       setTakeoverDraftId(""); setTakeoverReason(""); setTakeoverConfirmed(false);
       await refreshWorkspace(item.captureDraftId);
-      await run("tray", { schemaVersion: 1, scope, limit: 20 });
+      await run("tray", { schemaVersion: 2, scope, limit: 20 });
     })();
   }
 
@@ -530,7 +591,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       if (!reply?.ok) return;
       reset();
       setHoldNotice(true);
-      await run("tray", { schemaVersion: 1, scope, limit: 20 });
+      await run("tray", { schemaVersion: 2, scope, limit: 20 });
     })();
   }
 
@@ -547,7 +608,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setNoSaleReason("");
     reset();
     setNoSaleNotice(true);
-    await run("tray", { schemaVersion: 1, scope, limit: 20 });
+    await run("tray", { schemaVersion: 2, scope, limit: 20 });
   }
 
   function confirmNoSale(): void {
@@ -731,14 +792,14 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       }
       if (reply?.ok && pending.operation === "transfer") {
         reset();
-        await run("tray", { schemaVersion: 1, scope, limit: 20 });
+        await run("tray", { schemaVersion: 2, scope, limit: 20 });
         await run("assignmentCandidates", { schemaVersion: 1, scope });
       }
       if (reply?.ok && pending.operation === "noSale") await afterNoSaleApplied();
       if (reply?.ok && pending.operation === "hold") {
         reset();
         setHoldNotice(true);
-        await run("tray", { schemaVersion: 1, scope, limit: 20 });
+        await run("tray", { schemaVersion: 2, scope, limit: 20 });
       }
     })();
   }
@@ -822,6 +883,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         : `Borrador ${capture.folio} · versión ${capture.version}`
         : menuConflict ? "El menú cambió; vuelve a cargar."
         : confirmQuoteInvalid ? "La cotización de entrega falta, venció o no cubre la dirección"
+        : errorOperation === "renew" && errorCode === "CAPTURE_LEASE_TAKEN" ? "Otra estación tomó esta captura"
         : messages[error]}
       {menuConflict && <button className={`${button} ml-3`} disabled={busy || catalogReloading}
         onClick={() => void reloadMenu()}>{catalogReloading ? "Recargando…" : "Recargar menú"}</button>}
@@ -829,14 +891,14 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         onClick={() => void requestDeliveryQuote()}>Cotizar entrega</button>}
       {!menuConflict && !confirmQuoteInvalid && pending !== undefined && <button className={`${button} ml-3`} onClick={retryPending}>Reintentar misma operación</button>}
       {!menuConflict && error === "conflict" && <button className={`${button} ml-3`} disabled={busy}
-        onClick={() => { reset(); void run("tray", { schemaVersion: 1, scope, limit: 20 }); }}>Retomar</button>}
+        onClick={() => { reset(); void run("tray", { schemaVersion: 2, scope, limit: 20 }); }}>{errorCode === "CAPTURE_LEASE_TAKEN" ? "Ver borradores" : "Retomar"}</button>}
       {capture?.status === "confirmed" && <button className={`${button} ml-3`}
         aria-keyshortcuts={ariaKeyShortcut("reset")} disabled={busy} onClick={reset}>Volver a la bandeja</button>}
     </div>
     {leaseExpired && error !== "conflict" && <div role="alert" className="rounded-lg border border-border bg-error-bg p-3 text-sm">
       Se venció tu tiempo de atención; vuelve a tomarla.
       <button type="button" className={`${button} ml-3`} disabled={busy}
-        onClick={() => { reset(); void run("tray", { schemaVersion: 1, scope, limit: 20 }); }}>Retomar</button>
+        onClick={() => { reset(); void run("tray", { schemaVersion: 2, scope, limit: 20 }); }}>Retomar</button>
     </div>}
     {capture === undefined ? <>
       {holdNotice && <div role="status" className="rounded-lg border border-border bg-surface p-3 text-sm">Captura guardada para después.</div>}
@@ -849,9 +911,12 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           disabled={busy}>Nueva captura telefónica</button></section>
       {tray.length > 0 && <section className={panel}><h2 className="font-heading text-lg font-semibold">Borradores recuperables</h2>
         <p className="my-2 text-sm text-text-muted">Retoma una captura de esta sucursal para seguir atendiéndola.</p>
-        <div className="grid gap-2">{tray.map((item) => <button key={item.captureDraftId} title={item.captureDraftId} className={`${button} text-left`}
-          disabled={busy} onClick={() => recover(item)}><strong className="block">Captura {shortCaptureDraftId(item.captureDraftId)}</strong>
-           <span className="text-xs text-text-muted">{sourceLabel(item.sourceChannel)} · {item.fulfillmentChannel ? fulfillmentLabel(item.fulfillmentChannel) : "Sin entrega"} · {formatDate(item.updatedAt, confirmationContext?.timeZone)}</span>
+        <div className="grid gap-2">{tray.map((item) => <button key={item.captureDraftId} title={item.captureDraftId} className={`${button} min-w-0 text-left`}
+          disabled={busy} onClick={() => recover(item)}><strong className="block break-words">{"customer" in item && item.customer !== null ? item.customer.displayName : "Sin cliente"}</strong>
+           {"customer" in item && item.customer !== null && <span className="block break-all text-sm">{item.customer.phone}</span>}
+           <span className="block text-xs text-text-muted">Captura {shortCaptureDraftId(item.captureDraftId)} · {item.folio}</span>
+           <span className="block text-xs text-text-muted">{sourceLabel(item.sourceChannel)} · {item.fulfillmentChannel ? fulfillmentLabel(item.fulfillmentChannel) : "Sin entrega"} · {formatDate(item.updatedAt, confirmationContext?.timeZone)}</span>
+           {"totalMinor" in item && item.totalMinor !== null && item.currency !== null && <span className="block text-sm">Ítems: {formatMinorUnits(item.totalMinor, item.currency)}</span>}
           {item.ownerMembershipId !== null && <span className="block text-xs text-text-muted">Asignada a {assignmentCandidates.find((candidate) => candidate.membershipId === item.ownerMembershipId)?.displayLabel ?? "otro operador"}</span>}
         </button>)}</div>
         {canManageAssignment && tray.some((item) => item.attentionStatus === "claimed") && <div className="mt-5 border-t border-border pt-4">
