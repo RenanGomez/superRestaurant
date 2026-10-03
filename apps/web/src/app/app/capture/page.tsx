@@ -7,6 +7,7 @@ import { authorizeBranch } from "../../../lib/branch-selection";
 import { getCaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
 import { getMenuCatalog } from "../../../lib/menu-catalog";
+import { MenuImageBaseUrlProvider } from "../../../lib/menu-image-url-context";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
 import { captureWorkspaceAction, reloadCaptureCatalog } from "./actions";
 import { CaptureWorkspace } from "./capture-workspace";
@@ -37,8 +38,8 @@ export default async function CapturePage(): Promise<ReactNode> {
       <p className="mt-1 break-words text-sm text-text-muted">{membership.branchName} · conexión requerida · el borrador aún no es una orden</p>
     </header>
     {canOperate && catalog !== undefined
-      ? <CaptureWorkspace scope={scope} action={captureWorkspaceAction} canManageAssignment={canManageAssignment} catalog={catalog}
-        reloadCatalog={reloadCaptureCatalog} {...(confirmationContext === undefined ? {} : { confirmationContext })} />
+      ? <MenuImageBaseUrlProvider url={env.supabaseUrl}><CaptureWorkspace scope={scope} action={captureWorkspaceAction} canManageAssignment={canManageAssignment} catalog={catalog}
+        reloadCatalog={reloadCaptureCatalog} {...(confirmationContext === undefined ? {} : { confirmationContext })} /></MenuImageBaseUrlProvider>
       : canOperate ? <p role="alert" className="rounded-xl border border-border bg-surface p-5">No fue posible leer el catálogo de esta sucursal. Recarga la página.</p>
         : <p role="alert" className="rounded-xl border border-border bg-surface p-5">Tu rol no permite capturar pedidos.</p>}
   </div>;

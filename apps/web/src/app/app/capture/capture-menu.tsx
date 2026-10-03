@@ -3,6 +3,8 @@
 import { useState, type RefObject } from "react";
 import type { MenuCatalogV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
 import { groupProductsByCategory } from "../../../lib/capture-selection";
+import { useMenuImageBaseUrl } from "../../../lib/menu-image-url-context";
+import { menuImagePublicUrl } from "../../../lib/menu-images";
 
 const categoryButton = "flex min-h-11 w-full items-center gap-2 rounded-lg border border-transparent px-3 py-2 text-left text-sm hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent sm:w-auto";
 const categoryActive = "border-accent bg-accent-soft font-semibold text-accent";
@@ -33,6 +35,8 @@ interface CaptureMenuProps {
 
 /** Touch menu: category rail (desktop) / horizontal chips (mobile), search, and a product grid. */
 export function CaptureMenu({ catalog, currency, lineQuantities, busy, searchInputRef, onSelectProduct }: CaptureMenuProps) {
+  const supabaseUrl = useMenuImageBaseUrl();
+  const [failedImages, setFailedImages] = useState<ReadonlySet<string>>(() => new Set());
   const grouped = groupProductsByCategory(catalog);
   const [activeCategoryId, setActiveCategoryId] = useState<string>();
   const [query, setQuery] = useState("");
@@ -67,11 +71,14 @@ export function CaptureMenu({ catalog, currency, lineQuantities, busy, searchInp
         {products.map((product) => {
           const groups = catalog.modifierGroups.filter((group) => group.productId === product.productId && group.active);
           const count = lineQuantities.get(product.productId) ?? 0;
+          const photoUrl = menuImagePublicUrl(supabaseUrl, product.imagePath);
           return <button key={product.productId} type="button" className={productCard} disabled={!product.active || busy}
             aria-disabled={!product.active} onClick={() => onSelectProduct(product, groups)}>
             {count > 0 && <span className={countBadge}>{count}</span>}
             {!product.active && <span className={badge}>Agotado</span>}
-            <span aria-hidden="true" className={`flex h-24 items-center justify-center text-3xl font-bold text-text ${categoryColor(product.categoryId)}`}>{productInitials(product.name)}</span>
+            {photoUrl !== null && !failedImages.has(photoUrl)
+              ? <img src={photoUrl} alt="" loading="lazy" onError={() => setFailedImages((current) => new Set(current).add(photoUrl))} className="h-24 w-full object-cover" />
+              : <span aria-hidden="true" className={`flex h-24 items-center justify-center text-3xl font-bold text-text ${categoryColor(product.categoryId)}`}>{productInitials(product.name)}</span>}
             <span className="grid gap-0.5 p-2">
               <span className="font-semibold leading-tight">{product.name}</span>
               <span className="text-sm text-text-muted">{money(product.unitPriceMinor, currency)}</span>

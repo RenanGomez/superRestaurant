@@ -5,6 +5,8 @@ import type { MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/share
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { countModifierSelections, estimateSelectionMinor, expandModifierSelections, toggleOrStepOption,
   validateModifierSelection, type SelectionPlanLineDraft, type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
+import { useMenuImageBaseUrl } from "../../../lib/menu-image-url-context";
+import { menuImagePublicUrl } from "../../../lib/menu-images";
 
 const button = "min-h-11 min-w-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
 const optionButton = "flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-left text-sm hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent";
@@ -28,6 +30,7 @@ const MAX_NOTE_LENGTH = 200;
 
 /** In-app "hoja" for choosing a product's modifier groups; never uses `window.prompt`. */
 export function ProductSheet({ product, groups, currency, busy, confirmedTotalMinor, initialLine, error, onClose, onAdd }: ProductSheetProps) {
+  const supabaseUrl = useMenuImageBaseUrl();
   const confirmed = confirmedTotalMinor !== undefined;
   const [quantity, setQuantity] = useState(initialLine?.quantity ?? 1);
   const [selections, setSelections] = useState<Record<string, readonly string[]>>(() => Object.fromEntries(
@@ -90,7 +93,10 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
               const chosen = selections[group.groupId] ?? [];
               const selectedCount = chosen.filter((id) => id === option.optionId).length;
               const repeatable = group.maximumQuantity > 1 && (option.maximumQuantity === null || option.maximumQuantity > 1);
-              const label = <><span>{option.name}</span>
+              const label = <><span className="flex min-w-0 items-center gap-2">
+                  <OptionPhoto imagePath={option.imagePath} name={option.name} supabaseUrl={supabaseUrl} />
+                  <span>{option.name}</span>
+                </span>
                 {option.unitPriceMinor > 0 && <span className="text-xs text-text-muted">+{formatMinorUnits(option.unitPriceMinor, currency)}</span>}</>;
               return repeatable ? <div key={option.optionId} className={`grid gap-2 rounded-lg border border-border bg-surface p-2 text-sm ${selectedCount > 0 ? optionSelected : ""} ${!option.active ? "opacity-50" : ""}`}>
                 <div className="flex min-h-11 flex-wrap items-center justify-between gap-1">{label}</div>
@@ -145,4 +151,12 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
       </footer>
     </div>
   </div>;
+}
+
+function OptionPhoto({ imagePath, name, supabaseUrl }: { readonly imagePath: string | null; readonly name: string; readonly supabaseUrl: string }) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const url = menuImagePublicUrl(supabaseUrl, imagePath);
+  return url !== null && failedUrl !== url
+    ? <img src={url} alt="" loading="lazy" onError={() => setFailedUrl(url)} className="h-11 w-11 shrink-0 rounded-lg object-cover" />
+    : <span aria-hidden="true" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-accent-soft font-bold text-accent">{name.trim().charAt(0).toLocaleUpperCase("es-MX")}</span>;
 }
