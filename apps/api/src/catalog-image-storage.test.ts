@@ -64,6 +64,7 @@ test("the fetch adapter authorizes with the secret key and rejects a non-OK resp
     assert.equal(calls[0]?.url, "https://example.supabase.co/storage/v1/object/catalog-images/r/products/p/abc.jpg");
     const headers = calls[0]?.init.headers as Record<string, string>;
     assert.equal(headers.authorization, "Bearer sb_secret_example-key");
+    assert.equal(headers.apikey, "sb_secret_example-key");
     assert.equal(headers["x-upsert"], "false");
   } finally {
     globalThis.fetch = originalFetch;

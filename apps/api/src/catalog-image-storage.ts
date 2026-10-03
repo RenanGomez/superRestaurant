@@ -101,6 +101,7 @@ export class FetchCatalogImageStorageAdapter implements CatalogImageStoragePort 
         {
           body: bytes,
           headers: {
+            apikey: config.secretKey,
             authorization: `Bearer ${config.secretKey}`,
             "content-type": contentType,
             "x-upsert": "false",
