@@ -163,6 +163,7 @@ try {
   assert.deepEqual(baseline, postcheck);
   assert.deepEqual(migrated, {
     ...baseline,
+    securedTables: baseline.securedTables + 1,
     securityDefinerFunctions: baseline.securityDefinerFunctions + 3,
   });
 

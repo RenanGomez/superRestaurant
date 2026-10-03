@@ -43,6 +43,7 @@ declare
   v_has_waiter_membership boolean;
   v_new_version bigint;
   v_result_order jsonb;
+  v_audit_stored jsonb;
 begin
   if p_actor_id is null or p_expected_version is null or p_expected_version < 0
     or p_order_id is null or p_restaurant_id is null or p_branch_id is null
@@ -59,7 +60,7 @@ begin
     or p_audit ->> 'branchId' <> p_branch_id::text
     or p_audit ->> 'actorId' <> p_actor_id::text
     or pg_catalog.jsonb_typeof(p_audit -> 'payload') <> 'object'
-    or not app_private.jsonb_has_exact_keys(p_audit -> 'payload', array['from','to'])
+    or not app_private.jsonb_has_exact_keys(p_audit -> 'payload', array['to'])
   then return pg_catalog.jsonb_build_object('status', 'conflict'); end if;
 
   begin
@@ -95,7 +96,8 @@ begin
   where actor_id = p_actor_id and restaurant_id = p_restaurant_id and branch_id = p_branch_id
     and idempotency_key = v_idempotency_key;
   if found then
-    if v_existing.event_payload <> p_audit then
+    -- The stored payload carries the server-derived `from`; compare everything the client sent.
+    if (v_existing.event_payload #- '{payload,from}') <> p_audit then
       return pg_catalog.jsonb_build_object('status', 'conflict');
     end if;
     return pg_catalog.jsonb_build_object(
@@ -106,18 +108,23 @@ begin
   select * into v_current from app.orders
   where restaurant_id = p_restaurant_id and branch_id = p_branch_id and id = p_order_id
   for update;
-  if not found or v_current.version <> p_expected_version then
+  if not found or v_current.version <> p_expected_version
+    or v_current.status not in ('draft', 'open', 'partially_paid')
+  then
     return pg_catalog.jsonb_build_object('status', 'conflict');
   end if;
 
-  -- `payload.to` must match the actual target (the client always knows this); `payload.from` is
-  -- audit-only evidence of what the client believed at read time and is not re-validated against
-  -- the current row here -- `p_expected_version` is the only concurrency gate, exactly like every
-  -- other order mutation in this schema.
+  -- The client sends only `payload.to` (which must equal the target). `from` is never trusted from
+  -- the client: it is derived here from the row read under FOR UPDATE and written into the stored
+  -- audit evidence.
   if (p_audit -> 'payload' ->> 'to') is distinct from (case when p_waiter_user_id is null then null else p_waiter_user_id::text end)
   then
     return pg_catalog.jsonb_build_object('status', 'conflict');
   end if;
+  v_audit_stored := pg_catalog.jsonb_set(
+    p_audit, '{payload,from}',
+    case when v_current.waiter_user_id is null then 'null'::jsonb else pg_catalog.to_jsonb(v_current.waiter_user_id::text) end
+  );
 
   v_new_version := v_current.version + 1;
   update app.orders set
@@ -142,7 +149,7 @@ begin
   ) values (
     v_event_id, v_idempotency_key, p_restaurant_id, p_branch_id, p_order_id, p_actor_id, v_device_id,
     'order.waiter_assigned', 'order', p_order_id, p_expected_version, v_new_version,
-    p_audit, v_result_order, v_occurred_at
+    v_audit_stored, v_result_order, v_occurred_at
   );
 
   return pg_catalog.jsonb_build_object('status', 'saved', 'version', v_new_version, 'order', v_result_order);
@@ -150,6 +157,33 @@ end
 $function$;
 
 -- 2. Open an operational shift (was missing; `list_active_operational_shifts` had no writer).
+-- Openings are journaled with their idempotency key so a retry replays (same payload) or is a
+-- conflict (same key, different payload).
+create table app.operational_shift_events (
+  event_id uuid primary key,
+  restaurant_id uuid not null,
+  branch_id uuid not null,
+  shift_id uuid not null,
+  actor_id uuid not null references auth.users (id) on delete restrict,
+  device_id uuid not null,
+  idempotency_key text not null,
+  payload jsonb not null,
+  occurred_at timestamptz not null,
+  created_at timestamptz not null default pg_catalog.clock_timestamp(),
+  constraint operational_shift_events_shift_fk foreign key (restaurant_id, branch_id, shift_id)
+    references app.operational_shifts (restaurant_id, branch_id, id) on delete restrict,
+  constraint operational_shift_events_idempotency_unique unique (actor_id, restaurant_id, branch_id, idempotency_key),
+  constraint operational_shift_events_idempotency_valid check (
+    idempotency_key = pg_catalog.btrim(idempotency_key)
+    and pg_catalog.char_length(idempotency_key) between 1 and 200
+    and idempotency_key !~ '[[:cntrl:]]'
+  ),
+  constraint operational_shift_events_payload_valid check (pg_catalog.jsonb_typeof(payload) = 'object')
+);
+alter table app.operational_shift_events enable row level security;
+alter table app.operational_shift_events force row level security;
+revoke all on app.operational_shift_events from public, anon, authenticated, service_role, app_api;
+
 create function app_private.open_operational_shift(
   p_actor_id uuid,
   p_restaurant_id uuid,
@@ -165,7 +199,8 @@ declare
   v_idempotency_key text;
   v_has_membership boolean;
   v_name text;
-  v_existing_same boolean;
+  v_existing_event app.operational_shift_events%rowtype;
+  v_payload jsonb;
 begin
   if p_actor_id is null or p_restaurant_id is null or p_branch_id is null or p_shift_id is null
     or p_name is null
@@ -210,18 +245,21 @@ begin
     pg_catalog.hashtextextended('shift-open:' || p_restaurant_id::text || ':' || p_branch_id::text, 0)
   );
 
+  v_payload := p_audit || pg_catalog.jsonb_build_object('name', v_name);
+  select * into v_existing_event from app.operational_shift_events
+  where actor_id = p_actor_id and restaurant_id = p_restaurant_id and branch_id = p_branch_id
+    and idempotency_key = v_idempotency_key;
+  if found then
+    if v_existing_event.payload <> v_payload then
+      return pg_catalog.jsonb_build_object('status', 'conflict');
+    end if;
+    return pg_catalog.jsonb_build_object('status', 'replayed', 'shiftId', v_existing_event.shift_id::text);
+  end if;
+
   if exists (
     select 1 from app.operational_shifts
     where restaurant_id = p_restaurant_id and branch_id = p_branch_id and id = p_shift_id
   ) then
-    select exists (
-      select 1 from app.operational_shifts
-      where restaurant_id = p_restaurant_id and branch_id = p_branch_id and id = p_shift_id
-        and name = v_name and opened_by = p_actor_id and status = 'open'
-    ) into v_existing_same;
-    if v_existing_same then
-      return pg_catalog.jsonb_build_object('status', 'replayed', 'shiftId', p_shift_id::text);
-    end if;
     return pg_catalog.jsonb_build_object('status', 'conflict');
   end if;
 
@@ -233,7 +271,16 @@ begin
   end if;
 
   insert into app.operational_shifts (id, restaurant_id, branch_id, name, status, opened_at, opened_by)
-  values (p_shift_id, p_restaurant_id, p_branch_id, v_name, 'open', v_occurred_at, p_actor_id);
+  values (p_shift_id, p_restaurant_id, p_branch_id, v_name, 'open', pg_catalog.clock_timestamp(), p_actor_id);
+  -- opened_at is the server clock: a fast device clock must never make
+  -- create_operational_order's `shift.opened_at <= order occurredAt` reject real orders. The
+  -- device's occurredAt is kept only in the journal below.
+
+  insert into app.operational_shift_events (
+    event_id, restaurant_id, branch_id, shift_id, actor_id, device_id, idempotency_key, payload, occurred_at
+  ) values (
+    v_event_id, p_restaurant_id, p_branch_id, p_shift_id, p_actor_id, v_device_id, v_idempotency_key, v_payload, v_occurred_at
+  );
 
   return pg_catalog.jsonb_build_object('status', 'saved', 'shiftId', p_shift_id::text);
 end
@@ -257,6 +304,18 @@ begin
     select 1 from app_private.find_active_branch_membership(p_actor_id, p_restaurant_id, p_branch_id)
   ) into has_membership;
   if not has_membership then return null; end if;
+
+  -- Never truncate silently: above the cap the caller gets an explicit limit_exceeded.
+  if (
+    select pg_catalog.count(*) from (
+      select 1 from app.orders as orders
+      where orders.restaurant_id = p_restaurant_id and orders.branch_id = p_branch_id
+        and orders.table_id is not null and orders.status in ('draft', 'open', 'partially_paid')
+      limit 501
+    ) as capped
+  ) > 500 then
+    return '{"status":"limit_exceeded"}'::jsonb;
+  end if;
 
   select pg_catalog.jsonb_build_object(
     'schemaVersion', 1,
@@ -319,7 +378,7 @@ grant execute on function app_private.list_table_board(uuid,uuid,uuid) to app_ap
 comment on function app_private.assign_order_waiter(uuid,bigint,uuid,uuid,uuid,uuid,jsonb) is
   'Server-only: assigns or clears an order''s waiter, validating the waiter''s own active branch membership, advancing version optimistically, and auditing the change via app.order_audit_events (order.waiter_assigned).';
 comment on function app_private.open_operational_shift(uuid,uuid,uuid,uuid,text,jsonb) is
-  'Server-only: opens the single allowed open operational shift for a branch; idempotent on (actor, restaurant, branch, idempotencyKey) via the audit payload, conflicts if another shift is already open.';
+  'Server-only: opens the single allowed open operational shift for a branch; journals the opening in app.operational_shift_events, replays on the same (actor, restaurant, branch, idempotencyKey) with an identical payload, conflicts on a different payload or when another shift is open.';
 comment on function app_private.list_table_board(uuid,uuid,uuid) is
   'Server-only bounded list of active (draft/open/partially_paid) table orders for one authorized branch scope, keyed by table; money is intentionally not computed here.';
 
