@@ -1,5 +1,14 @@
 # PROJECT_NOTES
 
+## Plan «día operable» aprobado — 2026-10-03
+
+Emmanuel aprobó («adelante apruebo») el plan propuesto para que el avance deje de estancarse en torno al 40 %:
+
+1. **Alcance congelado.** El 100 % se mide contra una lista fija de «día operable» (ver TODO, bloque «Día operable»): tomar pedido telefónico y de mesa, mandar a cocina, cobrar con cambio, cerrar caja con corte legible, despachar y liquidar una entrega, menú con fotos y variantes. El denominador no cambia; lo que no está en la lista va a un backlog aparte.
+2. **Revisión acotada.** Nivel C: una sola ronda de `codex exec review`; nivel B: máximo dos; nivel A conserva revisión doble, pero a partir de la tercera ronda el orquestador decide qué hallazgos se aceptan como deuda documentada en vez de seguir iterando. Esto modifica AGENTS.md §19.2 (ver §19.3).
+3. **Nada nuevo de backend** salvo lo que una pantalla del día operable exija de forma expresa.
+4. **Entrega diaria.** Cada jornada termina con algo que Emmanuel pueda tocar en el navegador y una lista de tres a seis cosas que verificar (sección 6 de `docs/runbooks/guia-de-pruebas-operador.md`), no con informes de rondas.
+
 ## Veredicto de la prueba visual del 2026-10-01: reglas de interfaz para humanos
 
 Emmanuel probó la consola (menú, clientes, mesas, captura, caja, órdenes) y reportó 25 fallos; su conclusión: «pareciera que estás haciendo el sistema para otra inteligencia artificial en vez de para humanos». Nada pasa a DONE. Reglas que gobiernan todo trabajo de UI desde hoy:

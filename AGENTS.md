@@ -460,6 +460,15 @@ Reglas que no cambian con el nivel:
 - una tarea C puede pasar a DONE con aprobación visual de Emmanuel sin revisión de código adicional; una tarea A nunca;
 - el orquestador clasifica cada tarea en el paquete con el nivel y la razón; una clasificación dudosa se resuelve hacia arriba.
 
+### 19.3. Plan «día operable» (vigente desde 2026-10-03)
+
+Aprobado por Emmanuel el 2026-10-03 (detalle en PROJECT_NOTES «Plan “día operable” aprobado»). Ajusta §19.2 así:
+
+- el avance se mide contra la lista fija «Día operable» de TODO.md; nada fuera de ella se inicia sin decisión humana;
+- nivel C: una sola ronda de `codex exec review`; nivel B: máximo dos; nivel A: revisión doble, y desde la tercera ronda el orquestador decide qué hallazgos pasan a deuda documentada en HANDOFF en vez de seguir iterando;
+- no se abre trabajo de backend salvo el que una pantalla de la lista exija expresamente, y se abre junto con esa pantalla;
+- cada jornada cierra con una entrega probable en navegador y una lista corta de verificación para Emmanuel en `docs/runbooks/guia-de-pruebas-operador.md`.
+
 Prioridad de producto vigente: la experiencia del operador (captura telefónica con menú táctil, cliente, entrega y cobro) va antes que nuevos módulos de backend. El backend sólo se amplía cuando una pantalla lo necesita.
 
 ---
