@@ -98,6 +98,7 @@ export interface ActiveTableOrderListV2 {
 }
 
 export const TABLE_BOARD_SCHEMA_VERSION = 1 as const;
+export const MAX_TABLE_BOARD_TABLES = 50_000 as const;
 export const TABLE_BOARD_ORDER_STATUSES = Object.freeze(["draft", "open", "partially_paid"] as const);
 
 export interface TableBoardActiveOrderV1 {
@@ -130,7 +131,8 @@ export function parseTableBoardV1(value: unknown): TableBoardV1 | undefined {
   const record = exactRecord(value, ["schemaVersion", "scope", "tables", "unassignedOrders"]);
   if (record === undefined || own(record, "schemaVersion") !== TABLE_BOARD_SCHEMA_VERSION) return undefined;
   const scope = parseScope(own(record, "scope"));
-  const rawTables = exactDenseArray(own(record, "tables"), 500);
+  // Same ceiling the dining layout contract allows: 100 zones x 500 tables per zone.
+  const rawTables = exactDenseArray(own(record, "tables"), MAX_TABLE_BOARD_TABLES);
   const rawUnassigned = exactDenseArray(own(record, "unassignedOrders"), 500);
   if (scope === undefined || rawTables === undefined || rawUnassigned === undefined) return undefined;
   const unassignedOrders: TableBoardUnassignedOrderV1[] = [];

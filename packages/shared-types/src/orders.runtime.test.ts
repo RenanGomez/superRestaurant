@@ -130,6 +130,11 @@ const tableBoard={
   }],
 };
 expect(parseTableBoardV1(tableBoard)!==undefined,"table board parses");
+const freeTable=(index:number)=>({tableId:`00000000-0000-4000-8000-${String(index).padStart(12,"0")}`,status:"free",activeOrders:[]});
+const manyTables=(count:number)=>Array.from({length:count},(_,index)=>freeTable(index+1));
+expect(parseTableBoardV1({...tableBoard,tables:manyTables(501)})?.tables.length===501,"a board with 501 tables (above the old cap) parses");
+expect(parseTableBoardV1({...tableBoard,tables:manyTables(50_000)})?.tables.length===50_000,"a board at the layout ceiling parses");
+expect(parseTableBoardV1({...tableBoard,tables:manyTables(50_001)})===undefined,"a board above the layout ceiling is rejected");
 expect(parseTableBoardV1(tableBoard)?.unassignedOrders[0]?.tableId==="6d8e0f32-5c4b-4a7e-9b2d-0c3f8e6a4b71","unassigned orders keep their table id");
 expect(parseTableBoardV1({...tableBoard,unassignedOrders:[{...tableBoard.unassignedOrders[0],status:"paid"}]})===undefined,"unassigned orders must be active");
 expect(parseTableBoardV1({schemaVersion:1,scope:operationalScope,tables:[]})===undefined,"unassignedOrders is required");
