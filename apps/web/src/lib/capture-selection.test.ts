@@ -3,7 +3,11 @@ import test from "node:test";
 import {
   applyLineChange,
   buildSelectionPlan,
+  countModifierSelections,
+  estimateSelectionMinor,
+  expandModifierSelections,
   groupProductsByCategory,
+  toggleOrStepOption,
   validateModifierSelection,
   type SelectionPlanLineDraft,
 } from "./capture-selection.js";
@@ -18,6 +22,32 @@ const optionId2 = "66666666-6666-4666-8666-666666666666";
 const lineId1 = "77777777-7777-4777-8777-777777777777";
 const lineId2 = "88888888-8888-4888-8888-888888888888";
 const lineId3 = "99999999-9999-4999-8999-999999999999";
+
+test("sheet selections preserve quantities without duplicate option IDs", () => {
+  assert.deepEqual(countModifierSelections([optionId, optionId2, optionId]), [
+    { optionId, quantity: 2 }, { optionId: optionId2, quantity: 1 },
+  ]);
+});
+
+test("repeatable modifier steps up, down to zero, and respects its option maximum", () => {
+  const one = toggleOrStepOption([], optionId, 1, 2);
+  const two = toggleOrStepOption(one, optionId, 1, 2);
+  assert.deepEqual(two, [optionId, optionId]);
+  assert.equal(toggleOrStepOption(two, optionId, 1, 2), two);
+  assert.deepEqual(toggleOrStepOption(two, optionId, -1, 2), [optionId]);
+  assert.deepEqual(toggleOrStepOption([optionId], optionId, -1, 2), []);
+  assert.deepEqual(toggleOrStepOption([], optionId, -1, null), []);
+  assert.deepEqual(toggleOrStepOption([optionId], optionId, 1, 1), []);
+});
+
+test("editing initializes repeated modifier counts from the saved line", () => {
+  const initialLine: SelectionPlanLineDraft = { lineId: lineId1, productId: productA, quantity: 1,
+    modifierGroups: [{ groupId, selections: [{ optionId, quantity: 3 }, { optionId: optionId2, quantity: 1 }] }], note: null };
+  const expanded = expandModifierSelections(initialLine.modifierGroups[0]?.selections ?? []);
+  assert.deepEqual(countModifierSelections(expanded), initialLine.modifierGroups[0]?.selections);
+  const edited = toggleOrStepOption(expanded, optionId, -1, null);
+  assert.deepEqual(countModifierSelections(edited), [{ optionId, quantity: 2 }, { optionId: optionId2, quantity: 1 }]);
+});
 
 test("buildSelectionPlan projects draft lines with a null variantId and forwards the note", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
@@ -151,4 +181,17 @@ test("validateModifierSelection enforces group min/max and per-option max", () =
   assert.equal(validateModifierSelection(group, [{ optionId, quantity: 1 }]).valid, true);
   assert.equal(validateModifierSelection(group, [{ optionId, quantity: 2 }]).reason, "option_max");
   assert.equal(validateModifierSelection(group, [{ optionId, quantity: 1 }, { optionId: optionId2, quantity: 2 }]).reason, "max");
+});
+
+test("estimateSelectionMinor adds catalog modifier prices in integer minor units", () => {
+  const product = { productId: productA, categoryId: "c1", name: "Pizza", active: true, displayOrder: 1,
+    unit: "pieza", unitPriceMinor: 12550, sku: null, stationId: "s1", tax: null };
+  const group: MenuModifierGroupV1 = { groupId, productId: productA, name: "Tamaño", active: true,
+    displayOrder: 1, minimumQuantity: 0, maximumQuantity: 1,
+    options: [{ optionId, name: "Grande", active: true, unitPriceMinor: 2500, maximumQuantity: 1 }] };
+  assert.equal(estimateSelectionMinor(product, [group], { [groupId]: [optionId] }, 2), 30100);
+  assert.equal(estimateSelectionMinor(product, [group], {}, 1), 12550);
+  assert.equal(estimateSelectionMinor(product, [group], { [groupId]: ["missing"] }, 1), null);
+  const withoutModifierPrice = { ...group, options: [{ ...group.options[0], unitPriceMinor: undefined }] } as unknown as MenuModifierGroupV1;
+  assert.equal(estimateSelectionMinor(product, [withoutModifierPrice], { [groupId]: [optionId] }, 1), null);
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ChangeEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import type {
   CapturePaymentBasisV1,
   CapturePaymentIntentMethodV1,
@@ -37,14 +37,30 @@ interface CapturePaymentProps {
     method: CapturePaymentIntentMethodV1, tenderedMinor: number | null, tipMinor: number,
   ) => Promise<boolean>;
   readonly onRefreshIntent: () => void;
+  readonly errorNotice?: string | undefined;
 }
 
 /** Step 5, "Cobro": states the payment intent (method, cash tender, tip). Never computes totals,
  * subtotal, shipping or change itself -- every money figure in the summary comes straight from the
  * server-computed `projection`, never from local arithmetic. */
 export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfillment, currency, busy,
-  onSetIntent, onRefreshIntent }: CapturePaymentProps) {
+  onSetIntent, onRefreshIntent, errorNotice }: CapturePaymentProps) {
   const [customTender, setCustomTender] = useState("");
+  const [feedback, setFeedback] = useState<{ key: string; state: "saving" | "saved" | "error" }>();
+  const feedbackTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => { if (feedbackTimer.current) clearTimeout(feedbackTimer.current); }, []);
+  async function submit(key: string, method: CapturePaymentIntentMethodV1, tender: number | null, tip: number): Promise<boolean> {
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    setFeedback({ key, state: "saving" });
+    const accepted = await onSetIntent(method, tender, tip);
+    setFeedback({ key, state: accepted ? "saved" : "error" });
+    if (accepted) feedbackTimer.current = setTimeout(() => setFeedback(undefined), 2000);
+    return accepted;
+  }
+  function status(key: string): string | null {
+    return feedback?.key === key ? feedback.state === "saving" ? "Guardando…"
+      : feedback.state === "saved" ? "Guardado" : errorNotice ?? "No se pudo guardar. Reintenta." : null;
+  }
   // H24: the last amount THIS field actually applied, so an Enter-then-blur pair (or repeated
   // blurs) never resends the identical amount as a redundant version bump that could stomp a
   // tip/method change made in between. H30: this must only ever dedupe THAT immediate,
@@ -78,18 +94,18 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
   function chooseMethod(next: CapturePaymentIntentMethodV1): void {
     if (!currencySupported) return;
     setCustomTender("");
-    onSetIntent(next, next === "cash" ? tenderedAmountMinor : null, tipMinor);
+    void submit(`method:${next}`, next, next === "cash" ? tenderedAmountMinor : null, tipMinor);
   }
 
   function chooseTender(amountMinor: number): void {
     if (!currencySupported) return;
     setCustomTender("");
-    onSetIntent(method, amountMinor, tipMinor);
+    void submit(`tender:${amountMinor}`, method, amountMinor, tipMinor);
   }
 
   function chooseTip(amountMinor: number): void {
     if (!currencySupported) return;
-    onSetIntent(method, tenderedAmountMinor, amountMinor);
+    void submit(`tip:${amountMinor}`, method, tenderedAmountMinor, amountMinor);
   }
 
   // H22: typing only updates the local field -- it never sends the intent on every valid
@@ -104,7 +120,7 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
     if (customTender.trim() === "") return;
     const parsedMinor = parseMoneyInputToMinor(customTender, summaryCurrency);
     if (!shouldSubmitTender(parsedMinor, appliedTenderMinor, tenderedAmountMinor)) return;
-    void onSetIntent(method, parsedMinor, tipMinor).then((accepted) => {
+    void submit("custom", method, parsedMinor, tipMinor).then((accepted) => {
       // H27: only record the tender as "applied" once the server actually accepted it -- a
       // rejection (insufficient) must leave it eligible for an immediate resend once it would
       // cover a since-changed total, never stuck as a silent no-op.
@@ -123,7 +139,7 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
   const timing = projection?.timing ?? "now";
 
   return <section className={panel} data-testid="capture-payment">
-    <h2 className="font-heading text-lg font-semibold">Cobro</h2>
+    <h2 className="font-heading text-lg font-semibold">4. Cobro</h2>
     <p className="mt-1 text-sm text-text-muted">Es una intención de pago, no un cobro; el dinero entra a caja al liquidar.</p>
     {!currencySupported && <p role="alert" className="mt-2 rounded-lg bg-error-bg p-3 text-sm">Moneda no admitida; avisa al administrador.</p>}
     {projection?.status === "stale" && <div role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">
@@ -141,20 +157,22 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
         return <button key={candidate} type="button" disabled={busy || !currencySupported}
           className={`${button} min-h-11 ${method === candidate ? "border-accent bg-bg" : ""}`}
           aria-pressed={method === candidate} onClick={() => chooseMethod(candidate)}>
-          <span className="block">{label.label}</span>
+          <span className="block">{label.label}{status(`method:${candidate}`) === "Guardando…" ? " · Guardando…" : ""}</span>
           <span className="block text-xs text-text-muted">{label.notice}</span>
         </button>;
       })}
     </div>
+    {feedback?.key.startsWith("method:") && feedback.state !== "saving" && <p role={feedback.state === "error" ? "alert" : "status"} className="mt-2 text-sm">{status(feedback.key)}</p>}
     {method === "cash" && <div className="mt-4 grid gap-2">
       <span className="text-sm font-semibold">¿Paga con?</span>
       <div className="flex flex-wrap gap-2">
         {suggestions.map((amountMinor) => <button key={amountMinor} type="button" disabled={busy || !currencySupported}
           className={`${button} ${tenderedAmountMinor === amountMinor ? "border-accent bg-bg" : ""}`}
           aria-pressed={tenderedAmountMinor === amountMinor} onClick={() => chooseTender(amountMinor)}>
-          {totalMinor !== null && amountMinor === totalMinor ? "Exacto" : formatMinorUnits(amountMinor, summaryCurrency)}
+          {totalMinor !== null && amountMinor === totalMinor ? "Exacto" : formatMinorUnits(amountMinor, summaryCurrency)}{status(`tender:${amountMinor}`) === "Guardando…" ? " · Guardando…" : ""}
         </button>)}
       </div>
+      {feedback?.key.startsWith("tender:") && feedback.state !== "saving" && <p role={feedback.state === "error" ? "alert" : "status"} className="text-sm">{status(feedback.key)}</p>}
       <div className="grid gap-1 text-sm">
         <label htmlFor="capture-cash-with">Otro monto</label>
         <div className="flex flex-wrap gap-2">
@@ -163,8 +181,9 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
             onBlur={applyCustomTender} onKeyDown={handleCustomTenderKeyDown}
             aria-invalid={customTenderInvalid} aria-describedby={customTenderInvalid ? "capture-cash-with-error" : undefined} />
           <button type="button" className={button} disabled={busy || !currencySupported || customTender.trim() === ""}
-            onMouseDown={(event) => event.preventDefault()} onClick={applyCustomTender}>Aplicar</button>
+            onMouseDown={(event) => event.preventDefault()} onClick={applyCustomTender}>{status("custom") === "Guardando…" ? "Guardando…" : "Aplicar"}</button>
         </div>
+        {feedback?.key === "custom" && feedback.state !== "saving" && <p role={feedback.state === "error" ? "alert" : "status"} className="text-sm">{status("custom")}</p>}
       </div>
       {customTenderInvalid && <p id="capture-cash-with-error" role="alert" className="text-sm text-error">
         Monto inválido
@@ -176,9 +195,10 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
         {tipChips.map((chip) => <button key={chip.amountMinor} type="button" disabled={busy || !currencySupported}
           className={`${button} ${tipMinor === chip.amountMinor ? "border-accent bg-bg" : ""}`}
           aria-pressed={tipMinor === chip.amountMinor} onClick={() => chooseTip(chip.amountMinor)}>
-          {chip.label}
+          {chip.label}{status(`tip:${chip.amountMinor}`) === "Guardando…" ? " · Guardando…" : ""}
         </button>)}
       </div>
+      {feedback?.key.startsWith("tip:") && feedback.state !== "saving" && <p role={feedback.state === "error" ? "alert" : "status"} className="text-sm">{status(feedback.key)}</p>}
     </div>
     <div className="mt-4 grid gap-1 rounded-lg border border-border bg-bg p-3 text-sm">
       <div className="flex justify-between"><span>Subtotal</span>
@@ -191,8 +211,8 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
         is an actual intent, never inferred from the basis alone. */}
       <div className="flex justify-between"><span>Propina</span>
         <span>{projection === null ? "—" : formatMinorUnits(projection.tipMinor, projection.currency)}</span></div>
-      {projection?.method === "cash" && <div className="flex justify-between"><span>Cambio</span>
-        <span>{projection.changeDueMinor === null ? "—" : formatMinorUnits(projection.changeDueMinor, projection.currency)}</span></div>}
+      {projection?.method === "cash" && <div className="flex justify-between"><span>Cambio:</span>
+        <span>{projection.changeDueMinor === null ? "Sin cambio calculado" : formatMinorUnits(projection.changeDueMinor, projection.currency)}</span></div>}
     </div>
     {fulfillment === "delivery" && deliveryQuote === null && <p className="mt-2 text-xs text-text-muted">
       Cotiza la entrega antes de confirmar el cobro final.
