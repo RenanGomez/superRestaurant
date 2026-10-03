@@ -52,6 +52,9 @@ export class PostgresTableBoardAdapter implements TableBoardPort {
     if (row === undefined) throw unavailable();
     const board = dataProperty(row, "board");
     if (board === null) return "forbidden";
+    // Above the SQL cap the function answers limit_exceeded; that is never a complete board.
+    const limit = exactRecord(board, ["status"]);
+    if (limit !== undefined && dataProperty(limit, "status") === "limit_exceeded") throw unavailable();
     const record = exactRecord(board, ["schemaVersion", "scope", "orders"]);
     if (record === undefined || dataProperty(record, "schemaVersion") !== 1 || !sameScope(dataProperty(record, "scope"), scope)) {
       throw unavailable();

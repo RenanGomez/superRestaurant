@@ -31,7 +31,6 @@ export interface OrderWaiterPort {
   assign(
     actorId: string,
     command: AssignOrderWaiterCommandV1,
-    previousWaiterUserId: string | null,
   ): Promise<AssignOrderWaiterWriteResult>;
 }
 
@@ -44,13 +43,12 @@ export class PostgresOrderWaiterAdapter implements OrderWaiterPort {
   public async assign(
     actorId: string,
     command: AssignOrderWaiterCommandV1,
-    previousWaiterUserId: string | null,
   ): Promise<AssignOrderWaiterWriteResult> {
     const audit = {
       actorId, branchId: command.scope.branchId, deviceId: command.deviceId, entityId: command.orderId,
       entityType: "order", eventId: command.eventId, idempotencyKey: command.idempotencyKey,
       occurredAt: command.occurredAt, operation: "order.waiter_assigned", orderId: command.orderId,
-      payload: { from: previousWaiterUserId, to: command.waiterUserId },
+      payload: { to: command.waiterUserId },
       restaurantId: command.scope.restaurantId, schemaVersion: 1,
     };
     const result = await this.database.query(assignSql, [
@@ -96,14 +94,11 @@ export class OrderWaiterService {
     try {
       actorId = (await this.authorization.authorizeBranch(principal, command.scope, "orders.update")).principal.actorId;
     } catch { throw applicationError("authorization"); }
-    // The SQL authority validates `from`/`to` against the order's own current waiter; the API
-    // never trusts a client-supplied "previous" value, so it always derives it from the same
-    // command via a distinct audit.payload.from -- but since this port has no separate read, the
-    // adapter asks the SQL function with `from: null` optimistically and lets it reject a mismatch
-    // as a conflict instead (see the migration's own version/from check).
+    // The audit `from` is never supplied by the client: assign_order_waiter derives it from the
+    // row it reads under FOR UPDATE and stores it in the audit evidence.
     let result: AssignOrderWaiterWriteResult;
     try {
-      result = await this.writer.assign(actorId, command, null);
+      result = await this.writer.assign(actorId, command);
     } catch (error: unknown) {
       if (error instanceof OrderWaiterApplicationError) throw error;
       throw unavailable();

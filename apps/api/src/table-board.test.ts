@@ -5,7 +5,7 @@ import { parseBranchScope } from "@super-restaurant/shared-types";
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService, type MembershipLookupPort } from "./auth/membership-authorization.js";
 import type { DiningTablePort } from "./dining-tables.js";
-import { TableBoardApplicationError, TableBoardService, type TableBoardPort } from "./table-board.js";
+import { PostgresTableBoardAdapter, TableBoardApplicationError, TableBoardService, type TableBoardPort } from "./table-board.js";
 
 const principal: AuthenticatedPrincipal = Object.freeze({ actorId: "8cc7eb84-af2a-4e84-95de-967c39af86ab" });
 const scope = parseBranchScope({ restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" });
@@ -50,6 +50,14 @@ test("table board rejects a non-member and a malformed scope", async () => {
   await assertCode(serviceFor([], tables, board).read(principal, scope), "authorization");
   await assertCode(serviceFor(["manager"], tables, board).read(principal, { ...scope, branchId: "bad" }), "request");
   await assertCode(serviceFor(["manager"], { ...tables, list: async () => "forbidden" }, board).read(principal, scope), "authorization");
+});
+
+test("PostgreSQL board adapter treats limit_exceeded as unavailable, never as a complete board", async () => {
+  const adapter = new PostgresTableBoardAdapter({ query: async () => ({ rows: [{ board: { status: "limit_exceeded" } }] }) });
+  await assert.rejects(adapter.listActiveOrders(principal.actorId, validScope), (error: unknown) =>
+    error instanceof TableBoardApplicationError && error.code === "unavailable");
+  const forbidden = new PostgresTableBoardAdapter({ query: async () => ({ rows: [{ board: null }] }) });
+  assert.equal(await forbidden.listActiveOrders(principal.actorId, validScope), "forbidden");
 });
 
 function serviceFor(roles: readonly "manager"[], tables: DiningTablePort, board: TableBoardPort): TableBoardService {
