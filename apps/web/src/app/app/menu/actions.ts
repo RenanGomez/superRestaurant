@@ -10,7 +10,7 @@ import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
 import { DEFAULT_PESO_CURRENCY } from "../../../lib/capture-payment";
 import { getMenuCatalog, saveMenuCatalog } from "../../../lib/menu-catalog";
-import { isMenuImageContentType } from "../../../lib/menu-images";
+import { isMenuImageContentType, type MenuImageAttempt } from "../../../lib/menu-images";
 import {
   BRANCH_PREFERENCE_COOKIE,
   findMembership,
@@ -25,7 +25,7 @@ const MAXIMUM_DRAFT_LENGTH = 2_000_000;
 export async function uploadMenuImageAction(
   target: "product" | "option",
   targetId: string,
-  file: { readonly contentType: string; readonly dataBase64: string },
+  file: MenuImageAttempt,
 ): Promise<{ readonly imagePath?: string; readonly error?: string }> {
   if (!isMenuImageContentType(file.contentType)) return { error: "Elige una imagen JPG, PNG o WebP." };
   const context = await getAuthorizedContext();
@@ -33,9 +33,9 @@ export async function uploadMenuImageAction(
     contentType: file.contentType,
     dataBase64: file.dataBase64,
     deviceId: await getOrCreateDeviceId(),
-    eventId: randomUUID(),
-    idempotencyKey: randomUUID(),
-    occurredAt: new Date().toISOString(),
+    eventId: file.eventId,
+    idempotencyKey: file.idempotencyKey,
+    occurredAt: file.occurredAt,
     schemaVersion: 1,
     scope: context.scope,
     target,

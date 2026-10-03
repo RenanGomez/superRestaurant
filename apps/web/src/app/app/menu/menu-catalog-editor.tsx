@@ -11,7 +11,7 @@ import { useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } fr
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { DEFAULT_PESO_CURRENCY, formatMinorForMoneyInput, parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import { currencyFractionDigits } from "../../../lib/money-scale";
-import { menuImagePublicUrl, validateMenuImageFile } from "../../../lib/menu-images";
+import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, validateMenuImageFile, type MenuImageAttempt } from "../../../lib/menu-images";
 
 import { saveMenuCatalogAction, uploadMenuImageAction } from "./actions";
 
@@ -327,10 +327,27 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
   readonly onChange: (imagePath: string | null) => void;
 }): ReactNode {
   const fileInput = useRef<HTMLInputElement>(null);
+  const attempt = useRef<MenuImageAttempt | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [failedPath, setFailedPath] = useState<string | null>(null);
   const url = menuImagePublicUrl(supabaseUrl, imagePath);
+
+  const upload = async (selected: MenuImageAttempt): Promise<void> => {
+    setBusy(true);
+    setMessage("Subiendo…");
+    try {
+      const result = await uploadMenuImageAction(target, targetId, selected);
+      if (result.imagePath === undefined) { setMessage(result.error ?? "No se pudo subir la foto."); return; }
+      onChange(result.imagePath);
+      setFailedPath(null);
+      setMessage("Foto lista. Publica la nueva versión para mostrarla en captura.");
+    } catch {
+      setMessage("No se pudo subir la foto. Inténtalo de nuevo.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const choose = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
     const file = event.target.files?.[0];
@@ -338,8 +355,6 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
     if (file === undefined) return;
     const validation = validateMenuImageFile(file);
     if (validation !== null) { setMessage(validation); return; }
-    setBusy(true);
-    setMessage("Subiendo…");
     try {
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -348,16 +363,12 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
         reader.readAsDataURL(file);
       });
       const dataBase64 = dataUrl.split(",", 2)[1];
-      if (dataBase64 === undefined) throw new Error("read");
-      const result = await uploadMenuImageAction(target, targetId, { contentType: file.type, dataBase64 });
-      if (result.imagePath === undefined) { setMessage(result.error ?? "No se pudo subir la foto."); return; }
-      onChange(result.imagePath);
-      setFailedPath(null);
-      setMessage("Foto lista. Publica la nueva versión para mostrarla en captura.");
+      if (dataBase64 === undefined || !isMenuImageContentType(file.type)) throw new Error("read");
+      const selected = menuImageAttempt(attempt.current, { contentType: file.type, dataBase64, fileName: file.name, lastModified: file.lastModified }, () => crypto.randomUUID(), () => new Date().toISOString());
+      attempt.current = selected;
+      await upload(selected);
     } catch {
-      setMessage("No se pudo leer o subir la foto. Inténtalo de nuevo.");
-    } finally {
-      setBusy(false);
+      setMessage("No se pudo leer la foto. Inténtalo de nuevo.");
     }
   };
 
@@ -368,6 +379,7 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
     {canManage && <>
       <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" aria-label={`Foto de ${name}`} onChange={(event) => { void choose(event); }} />
       <button type="button" disabled={busy} onClick={() => fileInput.current?.click()} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60">{busy ? "Subiendo…" : "Foto"}</button>
+      {attempt.current !== null && message !== null && message.startsWith("No se pudo subir") && <button type="button" disabled={busy} onClick={() => { if (attempt.current !== null) void upload(attempt.current); }} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-accent">Reintentar</button>}
       {imagePath !== null && <button type="button" disabled={busy} onClick={() => { onChange(null); setMessage("Foto quitada del borrador."); }} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm focus-visible:outline-2 focus-visible:outline-accent">Quitar foto</button>}
     </>}
     {message !== null && <span role="status" className="min-w-0 basis-full text-xs text-text-muted">{message}</span>}

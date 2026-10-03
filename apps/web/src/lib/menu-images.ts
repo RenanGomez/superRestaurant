@@ -17,3 +17,25 @@ export function menuImagePublicUrl(supabaseUrl: string, imagePath: string | null
   if (imagePath === null || !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)+$/u.test(imagePath) || imagePath.split("/").includes("..")) return null;
   return `${supabaseUrl.replace(/\/$/u, "")}/storage/v1/object/public/catalog-images/${imagePath}`;
 }
+
+export interface MenuImageAttempt {
+  readonly contentType: MenuImageContentTypeV1;
+  readonly dataBase64: string;
+  readonly fileName: string;
+  readonly lastModified: number;
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly occurredAt: string;
+}
+
+/** Selecting the same bytes preserves the upload identity, including after a lost response. */
+export function menuImageAttempt(
+  previous: MenuImageAttempt | null,
+  file: { readonly contentType: MenuImageContentTypeV1; readonly dataBase64: string; readonly fileName: string; readonly lastModified: number },
+  createId: () => string,
+  now: () => string,
+): MenuImageAttempt {
+  if (previous?.contentType === file.contentType && previous.dataBase64 === file.dataBase64
+    && previous.fileName === file.fileName && previous.lastModified === file.lastModified) return previous;
+  return { ...file, eventId: createId(), idempotencyKey: createId(), occurredAt: now() };
+}
