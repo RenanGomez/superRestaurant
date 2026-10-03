@@ -12,6 +12,32 @@ export interface SelectionPlanModifierGroupDraft {
   readonly selections: readonly SelectionPlanModifierSelectionDraft[];
 }
 
+/** The sheet tracks one entry per tap; the API requires one entry per option with its count. */
+export function countModifierSelections(optionIds: readonly string[]): readonly SelectionPlanModifierSelectionDraft[] {
+  const counts = new Map<string, number>();
+  for (const optionId of optionIds) counts.set(optionId, (counts.get(optionId) ?? 0) + 1);
+  return [...counts].map(([optionId, quantity]) => ({ optionId, quantity }));
+}
+
+/** Restore a server line into the sheet's per-unit selection state. */
+export function expandModifierSelections(selections: readonly SelectionPlanModifierSelectionDraft[]): readonly string[] {
+  return selections.flatMap(({ optionId, quantity }) => Array(quantity).fill(optionId) as string[]);
+}
+
+/** Toggle a single-unit option, or step a repeatable option one unit at a time. */
+export function toggleOrStepOption(
+  selection: readonly string[], optionId: string, delta: -1 | 1, maximumQuantity: number | null,
+): readonly string[] {
+  const selectedCount = selection.filter((id) => id === optionId).length;
+  if (delta === 1) {
+    if (maximumQuantity === 1 && selectedCount > 0) return selection.filter((id) => id !== optionId);
+    if (maximumQuantity !== null && selectedCount >= maximumQuantity) return selection;
+    return [...selection, optionId];
+  }
+  const index = selection.lastIndexOf(optionId);
+  return index < 0 ? selection : selection.filter((_, position) => position !== index);
+}
+
 /**
  * One catalog-derived line as tracked by the client while building a selection. Carries no
  * price: the server derives money exclusively from the catalog at read/write time.
@@ -23,6 +49,26 @@ export interface SelectionPlanLineDraft {
   readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[];
   /** Free-text instruction for the preparation station (1-200 chars), or no note. */
   readonly note: string | null;
+}
+
+/** Catalog-only preview. The server remains authoritative for the accepted line price. */
+export function estimateSelectionMinor(
+  product: MenuProductV1,
+  groups: readonly MenuModifierGroupV1[],
+  selections: Readonly<Record<string, readonly string[]>>,
+  quantity: number,
+): number | null {
+  if (!Number.isSafeInteger(quantity) || quantity < 1 || !Number.isSafeInteger(product.unitPriceMinor)) return null;
+  let unit = product.unitPriceMinor;
+  for (const group of groups) {
+    for (const optionId of selections[group.groupId] ?? []) {
+      const option = group.options.find((candidate) => candidate.optionId === optionId);
+      if (option === undefined || !Number.isSafeInteger(option.unitPriceMinor)) return null;
+      unit += option.unitPriceMinor;
+    }
+  }
+  const total = unit * quantity;
+  return Number.isSafeInteger(total) ? total : null;
 }
 
 export interface SelectionPlanCommandLineV1 {

@@ -11,10 +11,15 @@ import {
   parseCaptureWorkspaceV5,
   parseCaptureWorkTrayRequestV1,
   parseCaptureWorkTrayResultV1,
+  parseCaptureWorkTrayRequestV2,
+  parseCaptureWorkTrayResultV2,
+  parseRenewCaptureLeaseCommandV1,
+  parseRenewCaptureLeaseResultV1,
   parseClaimCaptureDraftCommandV1,
   parseConfirmCaptureDraftCommandV2,
   parseCloseCaptureNoSaleCommandV1,
   parseCreateCaptureDraftCommandV1,
+  parseHoldCaptureDraftCommandV1,
   parseReplaceCaptureSelectionPlanCommandV1,
   parseRequestCaptureDeliveryQuoteCommandV1,
   parseSetCaptureCustomerCommandV1,
@@ -41,13 +46,23 @@ import {
 } from "@super-restaurant/shared-types";
 export type CaptureRequestResult<T> = { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable"; readonly code?: string };
-export type CaptureOperation = "autosave" | "confirm" | "create" | "claim" | "customer" | "deliveryInstructions"
+export type CaptureOperation = "autosave" | "confirm" | "create" | "claim" | "customer" | "deliveryInstructions" | "hold"
   | "deliveryInstructionSuggestions" | "deliveryQuote" | "fulfillment" | "assignmentCandidates" | "noSale"
-  | "paymentIntent" | "selectionPlan" | "takeover" | "transfer" | "tray" | "workspace";
+  | "paymentIntent" | "selectionPlan" | "takeover" | "transfer" | "tray" | "renew" | "workspace";
 export interface CaptureKeyValueStore {
   readonly getItem: (key: string) => string | null;
   readonly removeItem: (key: string) => void;
   readonly setItem: (key: string, value: string) => void;
+}
+
+/** Compact identifier for a tray row until its customer label is available. */
+export function shortCaptureDraftId(captureDraftId: string): string {
+  return captureDraftId.slice(-6).toUpperCase();
+}
+export function shouldRenewLease(now: number, lastInteractionAt: number, visible: boolean, expiresAt: string): boolean {
+  const expiry = Date.parse(expiresAt);
+  return visible && Number.isFinite(expiry) && expiry > now && lastInteractionAt <= now
+    && now - lastInteractionAt <= 120_000;
 }
 const deviceKey = "superrestaurant.capture.device.v1";
 const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -87,12 +102,12 @@ export function clearPendingCaptureAutosave(
   const current = readPendingCaptureAutosave(store, command.scope);
   if (current?.idempotencyKey === command.idempotencyKey) store.removeItem(pendingKey(command.scope));
 }
-const paths = { autosave: "/autosave", confirm: "/confirm", create: "", claim: "/claim", customer: "/customer",
+const paths = { autosave: "/autosave", confirm: "/confirm", create: "", claim: "/claim", customer: "/customer", hold: "/hold",
   assignmentCandidates: "/assignment-candidates",
   deliveryInstructions: "/delivery-instructions", deliveryInstructionSuggestions: "/delivery-instruction-suggestions",
   deliveryQuote: "/delivery-quote", fulfillment: "/fulfillment", noSale: "/no-sale",
   paymentIntent: "/payment-intent", selectionPlan: "/selection-plan",
-  takeover: "/takeover", transfer: "/transfer", tray: "/tray", workspace: "/workspace" } as const;
+  takeover: "/takeover", transfer: "/transfer", tray: "/tray", renew: "/lease/renew", workspace: "/workspace" } as const;
 const parsers = {
   autosave: parseAutosaveCaptureDraftCommandV1,
   confirm: parseConfirmCaptureDraftCommandV2,
@@ -101,6 +116,7 @@ const parsers = {
   customer: parseSetCaptureCustomerCommandV1,
   deliveryInstructions: parseSetCaptureDeliveryInstructionsCommandV1,
   fulfillment: parseSetCaptureFulfillmentCommandV1,
+  hold: parseHoldCaptureDraftCommandV1,
   noSale: parseCloseCaptureNoSaleCommandV1,
   takeover: parseTakeoverCaptureDraftCommandV1,
   transfer: parseTransferCaptureDraftCommandV1,
@@ -109,6 +125,8 @@ type CaptureResponse = NonNullable<ReturnType<typeof parseCaptureMutationResultV
   | NonNullable<ReturnType<typeof parseCaptureAssignmentDirectoryV1>>
   | NonNullable<ReturnType<typeof parseCaptureDeliveryInstructionSuggestionsV1>>
   | NonNullable<ReturnType<typeof parseCaptureWorkTrayResultV1>>
+  | NonNullable<ReturnType<typeof parseCaptureWorkTrayResultV2>>
+  | NonNullable<ReturnType<typeof parseRenewCaptureLeaseResultV1>>
   | NonNullable<ReturnType<typeof parseCaptureWorkspaceV3>>
   | NonNullable<ReturnType<typeof parseCaptureWorkspaceV4>>
   | NonNullable<ReturnType<typeof parseCaptureWorkspaceV5>>
@@ -116,6 +134,7 @@ type CaptureResponse = NonNullable<ReturnType<typeof parseCaptureMutationResultV
 export async function requestCapture(token: string, baseUrl: string, operation: CaptureOperation, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
   if (operation === "assignmentCandidates") return requestCaptureAssignmentCandidates(token, baseUrl, input);
   if (operation === "tray") return requestCaptureTray(token, baseUrl, input);
+  if (operation === "renew") return requestCaptureLeaseRenew(token, baseUrl, input);
   if (operation === "workspace") return requestCaptureWorkspace(token, baseUrl, input);
   if (operation === "selectionPlan") return requestCaptureSelectionPlan(token, baseUrl, input);
   if (operation === "deliveryQuote") return requestCaptureDeliveryQuote(token, baseUrl, input);
@@ -252,7 +271,7 @@ export function rehydrateCaptureWorkspace(value: unknown): RehydratedCaptureWork
 }
 
 async function requestCaptureTray(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
-  const command = parseCaptureWorkTrayRequestV1(input);
+  const command = parseCaptureWorkTrayRequestV2(input) ?? parseCaptureWorkTrayRequestV1(input);
   if (command === undefined) return { ok: false, error: "invalid" };
   try {
     const response = await fetch(`${baseUrl}/api/v1/captures${paths.tray}`, { method: "POST", cache: "no-store",
@@ -260,11 +279,33 @@ async function requestCaptureTray(token: string, baseUrl: string, input: unknown
     if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
       : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
         : response.status === 400 ? "invalid" : "unavailable" };
-    const value = parseCaptureWorkTrayResultV1(await response.json());
+    const body: unknown = await response.json();
+    const value = parseCaptureWorkTrayResultV2(body) ?? parseCaptureWorkTrayResultV1(body);
     if (value === undefined || value.items.length > command.limit || value.items.some((item) =>
       item.scope.restaurantId !== command.scope.restaurantId || item.scope.branchId !== command.scope.branchId)) {
       return { ok: false, error: "unavailable" };
     }
+    return { ok: true, value };
+  } catch { return { ok: false, error: "unavailable" }; }
+}
+
+async function requestCaptureLeaseRenew(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
+  const command = parseRenewCaptureLeaseCommandV1(input);
+  if (command === undefined) return { ok: false, error: "invalid" };
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/captures${paths.renew}`, { method: "POST", cache: "no-store",
+      signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(command) });
+    if (!response.ok) {
+      if (response.status === 409) {
+        const code = await conflictResponseCode(response);
+        return { ok: false, error: "conflict", ...(code === undefined ? {} : { code }) };
+      }
+      return { ok: false, error: response.status === 401 || response.status === 403 ? "denied"
+        : response.status === 404 ? "missing" : response.status === 400 ? "invalid" : "unavailable" };
+    }
+    const value = parseRenewCaptureLeaseResultV1(await response.json());
+    if (value === undefined || value.captureDraftId !== command.captureDraftId
+      || value.attentionLeaseId !== command.attentionLeaseId) return { ok: false, error: "unavailable" };
     return { ok: true, value };
   } catch { return { ok: false, error: "unavailable" }; }
 }

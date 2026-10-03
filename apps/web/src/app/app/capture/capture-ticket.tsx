@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { CaptureSelectionPlanProjectionV1 } from "@super-restaurant/shared-types";
+import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 
 const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
 const qtyButton = "min-h-10 min-w-10 rounded-lg border border-border bg-surface text-lg font-bold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
@@ -14,12 +15,13 @@ interface CaptureTicketProps {
   readonly onDecrement: (lineId: string) => void;
   readonly onRemove: (lineId: string) => void;
   readonly onEditNote: (lineId: string, currentNote: string | null) => void;
+  readonly onEdit: (lineId: string) => void;
   readonly onHold: () => void;
   readonly onNoSale: () => void;
 }
 
 /** Fixed ticket (desktop sidebar) / bottom sheet (mobile) painting only server-priced amounts. */
-export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onDecrement, onRemove, onEditNote, onHold, onNoSale }: CaptureTicketProps) {
+export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onDecrement, onRemove, onEditNote, onEdit, onHold, onNoSale }: CaptureTicketProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const lineCount = projection?.lines.reduce((sum, line) => sum + line.quantity, 0) ?? 0;
 
@@ -31,13 +33,15 @@ export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onD
           className="grid gap-1 border-b border-dashed border-border pb-3">
           <div className="flex items-start justify-between gap-2">
             <span className="font-semibold">{line.productName}</span>
-            <span className="whitespace-nowrap font-semibold">{money(line.lineTotalMinor, projection.currency)}</span>
+            <span className="whitespace-nowrap font-semibold">{formatMinorUnits(line.lineTotalMinor, projection.currency)}</span>
           </div>
           {line.modifiers.length > 0 && <span className="text-xs text-text-muted">
             {line.modifiers.map((modifier) => `${modifier.quantity} × ${modifier.name}`).join(" · ")}
           </span>}
           {line.note !== null && <span className="text-xs font-semibold text-accent">Nota: {line.note}</span>}
           <div className="mt-1 flex items-center gap-2">
+            <button type="button" className={button} disabled={locked || busyLineId === line.lineId}
+              onClick={() => onEdit(line.lineId)}>Editar</button>
             <button type="button" className={qtyButton} aria-label={`Menos ${line.productName}`}
               disabled={locked || busyLineId === line.lineId} onClick={() => onDecrement(line.lineId)}>−</button>
             <span className="min-w-8 text-center font-semibold">{line.quantity}</span>
@@ -54,13 +58,13 @@ export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onD
         </li>)}</ul>}
     </div>
     <div className="grid gap-1 border-t border-border p-3 text-sm">
-      <div className="flex justify-between"><span>Subtotal</span><span>{projection === null ? money(0, "MXN") : money(projection.subtotalMinor, projection.currency)}</span></div>
+      <div className="flex justify-between"><span>Subtotal</span><span>{projection === null ? formatMinorUnits(0, "MXN") : formatMinorUnits(projection.subtotalMinor, projection.currency)}</span></div>
       <div className="mt-1 flex justify-between font-heading text-lg font-bold"><span>Total</span>
-        <span>{projection === null ? money(0, "MXN") : money(projection.subtotalMinor, projection.currency)}</span></div>
+        <span>{projection === null ? formatMinorUnits(0, "MXN") : formatMinorUnits(projection.subtotalMinor, projection.currency)}</span></div>
     </div>
     <div className="grid gap-2 p-3 pt-0">
-      <button type="button" className={button} disabled={locked} onClick={onHold}>⏸ Dejar en espera</button>
-      <button type="button" className={`${button} text-error`} disabled={locked} onClick={onNoSale}>Sin venta</button>
+      <button type="button" className={button} disabled={locked} onClick={onHold}>Guardar para después<span className="block text-xs font-normal">Se conserva para retomarla</span></button>
+      <button type="button" className={`${button} text-error`} disabled={locked} onClick={onNoSale}>Cancelar<span className="block text-xs font-normal">Queda registrada como cancelada</span></button>
     </div>
   </>;
 
@@ -71,7 +75,7 @@ export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onD
     <div className="sticky bottom-0 z-[5] flex items-center gap-3 border-t border-border bg-surface p-3 sm:hidden">
       <div className="grid flex-1">
         <span className="text-xs text-text-muted">{lineCount} producto{lineCount === 1 ? "" : "s"}</span>
-        <strong className="font-heading text-lg">{projection === null ? money(0, "MXN") : money(projection.subtotalMinor, projection.currency)}</strong>
+        <strong className="font-heading text-lg">{projection === null ? formatMinorUnits(0, "MXN") : formatMinorUnits(projection.subtotalMinor, projection.currency)}</strong>
       </div>
       <button type="button" className={button} onClick={() => setMobileOpen(true)}>Ver pedido</button>
     </div>
@@ -87,8 +91,4 @@ export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onD
       </div>
     </div>}
   </>;
-}
-
-function money(amountMinor: number, currency: string): string {
-  return new Intl.NumberFormat("es-MX", { currency, style: "currency" }).format(amountMinor / 100);
 }

@@ -2,19 +2,91 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseAutosaveCaptureDraftCommandV1, parseBranchScope } from "@super-restaurant/shared-types";
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
-  rehydrateCaptureWorkspace, requestCapture } from "./capture-workspace.js";
+  rehydrateCaptureWorkspace, requestCapture, shortCaptureDraftId, shouldRenewLease } from "./capture-workspace.js";
 import { getCaptureConfirmationContext } from "./capture-confirmation-context.js";
 const scope={restaurantId:"1e37ae13-8507-484c-969f-2176f77b7000",branchId:"23723e10-c0bf-49fd-9363-4f0e2c60e955"};
 const confirmationScope=parseBranchScope(scope);
 assert.ok(confirmationScope);
 const captureDraftId="ee50f0f6-746f-47cb-8383-ad7834ef3ef0";
+test("short capture ID distinguishes drafts without exposing a full UUID", () => {
+  assert.equal(shortCaptureDraftId(captureDraftId), "EF3EF0");
+  assert.equal(shortCaptureDraftId("ee50f0f6-746f-47cb-8383-ad7834abcdef"), "ABCDEF");
+});
+test("lease renewal requires a visible, recently active workspace with an unexpired lease", () => {
+  const now = Date.parse("2026-10-03T12:00:00.000Z");
+  const expiry = "2026-10-03T12:05:00.000Z";
+  assert.equal(shouldRenewLease(now, now - 120_000, true, expiry), true);
+  assert.equal(shouldRenewLease(now, now - 120_001, true, expiry), false);
+  assert.equal(shouldRenewLease(now, now, false, expiry), false);
+  assert.equal(shouldRenewLease(now, now, true, "2026-10-03T12:00:00.000Z"), false);
+  assert.equal(shouldRenewLease(now, now + 1, true, expiry), false);
+});
 const mutation={schemaVersion:1,scope,captureDraftId,expectedVersion:0,sourceChannel:"phone",fulfillmentChannel:"delivery",eventId:"b2f98c08-e0cd-4819-a2ac-361662b33575",idempotencyKey:"75178249-d01e-4462-8f75-7fe1b777acaf",deviceId:"df0f904e-df39-4c4e-a619-924bc21e59cb",occurredAt:"2026-09-17T12:00:00.000Z"};
 const detail={schemaVersion:1,scope,captureDraftId,folio:"C-1",sourceChannel:"phone",fulfillmentChannel:"delivery",status:"draft",attentionStatus:"claimed",ownerMembershipId:"d6f3073e-4d2d-4b9f-90ea-926e5a86ff02",version:1,updatedAt:"2026-09-17T12:00:00.000Z",attentionLeaseId:"a409ec59-9f5e-496d-a45d-b83a46b49674",attentionLeaseExpiresAt:"2026-09-17T12:05:00.000Z",confirmedOrderId:null,customerSnapshotRef:null,fulfillmentSnapshotRef:null};
 test("capture request uses a protected fixed route and validates output",async()=>{let url="";const old=globalThis.fetch;globalThis.fetch=async input=>{url=String(input);return new Response(JSON.stringify({schemaVersion:1,detail,replayed:false}),{status:200});};try{const result=await requestCapture("token","https://api.example.com","create",mutation);assert.equal(url,"https://api.example.com/api/v1/captures");assert.equal(result.ok,true);}finally{globalThis.fetch=old;}});
 test("capture request rejects malformed commands before transport",async()=>{const old=globalThis.fetch;let called=false;globalThis.fetch=async()=>{called=true;return new Response();};try{assert.deepEqual(await requestCapture("token","https://api.example.com","create",{}),{ok:false,error:"invalid"});assert.equal(called,false);}finally{globalThis.fetch=old;}});
 test("capture request maps bounded failures",async()=>{const old=globalThis.fetch;try{for(const [status,error] of [[400,"invalid"],[403,"denied"],[404,"missing"],[409,"conflict"],[500,"unavailable"]] as const){globalThis.fetch=async()=>new Response("{}",{status});assert.deepEqual(await requestCapture("token","https://api.example.com","create",mutation),{ok:false,error});}}finally{globalThis.fetch=old;}});
 test("capture request rejects a response for another mutation",async()=>{const old=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({schemaVersion:1,detail:{...detail,version:2},replayed:false}),{status:200});try{assert.deepEqual(await requestCapture("token","https://api.example.com","create",mutation),{ok:false,error:"unavailable"});}finally{globalThis.fetch=old;}});
+test("holding a capture calls the leased endpoint and validates its persisted state", async () => {
+  const old = globalThis.fetch;
+  const command = { schemaVersion: 1, scope, captureDraftId, expectedVersion: 1,
+    attentionLeaseId: detail.attentionLeaseId, eventId: mutation.eventId,
+    idempotencyKey: mutation.idempotencyKey, deviceId: mutation.deviceId, occurredAt: mutation.occurredAt };
+  let url = "";
+  try {
+    globalThis.fetch = async (input, init) => {
+      url = String(input);
+      assert.deepEqual(JSON.parse(String(init?.body)), command);
+      return new Response(JSON.stringify({ schemaVersion: 1, replayed: false,
+        detail: { ...detail, attentionStatus: "held", attentionLeaseId: null,
+          attentionLeaseExpiresAt: null, ownerMembershipId: null, version: 2 } }), { status: 200 });
+    };
+    assert.equal((await requestCapture("token", "https://api.example.com", "hold", command)).ok, true);
+    assert.equal(url, "https://api.example.com/api/v1/captures/hold");
+    assert.deepEqual(await requestCapture("token", "https://api.example.com", "hold", { ...command, attentionLeaseId: "bad" }),
+      { ok: false, error: "invalid" });
+  } finally { globalThis.fetch = old; }
+});
 test("capture tray uses the protected route and rejects foreign scope",async()=>{const old=globalThis.fetch;let url="";const request={schemaVersion:1,scope,limit:20};try{globalThis.fetch=async input=>{url=String(input);return new Response(JSON.stringify({schemaVersion:1,items:[{schemaVersion:1,scope,captureDraftId,folio:"C-1",sourceChannel:"phone",fulfillmentChannel:"delivery",status:"draft",attentionStatus:"claimed",ownerMembershipId:detail.ownerMembershipId,version:3,updatedAt:detail.updatedAt}]}),{status:200})};const result=await requestCapture("token","https://api.example.com","tray",request);assert.equal(url,"https://api.example.com/api/v1/captures/tray");assert.equal(result.ok,true);globalThis.fetch=async()=>new Response(JSON.stringify({schemaVersion:1,items:[{schemaVersion:1,scope:{...scope,branchId:captureDraftId},captureDraftId,folio:"C-1",sourceChannel:"phone",fulfillmentChannel:"delivery",status:"draft",attentionStatus:"claimed",ownerMembershipId:detail.ownerMembershipId,version:3,updatedAt:detail.updatedAt}]}),{status:200});assert.deepEqual(await requestCapture("token","https://api.example.com","tray",request),{ok:false,error:"unavailable"});}finally{globalThis.fetch=old;}});
+
+test("V2 tray keeps server customer and item price, with V1 response fallback", async () => {
+  const old = globalThis.fetch;
+  const summary = { schemaVersion: 1, scope, captureDraftId, folio: "C-1", sourceChannel: "phone",
+    fulfillmentChannel: "delivery", status: "draft", attentionStatus: "claimed",
+    ownerMembershipId: detail.ownerMembershipId, version: 3, updatedAt: detail.updatedAt };
+  const request = { schemaVersion: 2, scope, limit: 20 };
+  try {
+    globalThis.fetch = async (_input, init) => {
+      assert.deepEqual(JSON.parse(String(init?.body)), request);
+      return new Response(JSON.stringify({ schemaVersion: 2, items: [{ ...summary, schemaVersion: 2,
+        customer: { displayName: "Ana", phone: "5551234567" }, totalMinor: 12345, currency: "MXN",
+        attentionLeaseExpiresAt: detail.attentionLeaseExpiresAt }] }), { status: 200 });
+    };
+    const enriched = await requestCapture("token", "https://api.example.com", "tray", request);
+    assert.equal(enriched.ok && enriched.value.schemaVersion, 2);
+    globalThis.fetch = async () => new Response(JSON.stringify({ schemaVersion: 1, items: [summary] }), { status: 200 });
+    const legacy = await requestCapture("token", "https://api.example.com", "tray", request);
+    assert.equal(legacy.ok && legacy.value.schemaVersion, 1);
+  } finally { globalThis.fetch = old; }
+});
+
+test("lease renewal validates identity and surfaces a taken lease", async () => {
+  const old = globalThis.fetch;
+  const command = { schemaVersion: 1, scope, captureDraftId, attentionLeaseId: detail.attentionLeaseId };
+  try {
+    globalThis.fetch = async (input, init) => {
+      assert.equal(String(input), "https://api.example.com/api/v1/captures/lease/renew");
+      assert.deepEqual(JSON.parse(String(init?.body)), command);
+      return new Response(JSON.stringify({ schemaVersion: 1, captureDraftId,
+        attentionLeaseId: detail.attentionLeaseId, attentionLeaseExpiresAt: detail.attentionLeaseExpiresAt,
+        version: detail.version }), { status: 200 });
+    };
+    assert.equal((await requestCapture("token", "https://api.example.com", "renew", command)).ok, true);
+    globalThis.fetch = async () => new Response(JSON.stringify({ code: "CAPTURE_LEASE_TAKEN" }), { status: 409 });
+    assert.deepEqual(await requestCapture("token", "https://api.example.com", "renew", command),
+      { ok: false, error: "conflict", code: "CAPTURE_LEASE_TAKEN" });
+  } finally { globalThis.fetch = old; }
+});
 
 test("capture selection plan uses the protected route and validates version, scope and capture id",async()=>{const old=globalThis.fetch;let url="";const catalogVersion="47f7f293-b155-42b9-bdc7-f9be3846f44e";const productId="ec5e7c30-edac-4b79-bf8c-e363b041c59f";const lineId="60a26e69-3ea6-4ef8-8a2b-ad43ba0a0da1";const planCommand={schemaVersion:1,scope,captureDraftId,expectedVersion:1,attentionLeaseId:detail.attentionLeaseId,eventId:mutation.eventId,idempotencyKey:mutation.idempotencyKey,deviceId:mutation.deviceId,occurredAt:mutation.occurredAt,plan:{schemaVersion:1,catalogVersion,lines:[{lineId,productId,variantId:null,quantity:2,modifierGroups:[],note:null}]}};const workspaceV5={schemaVersion:5,detail:{...detail,schemaVersion:2,version:2,deliveryInstructions:null},customerSnapshot:null,fulfillmentSnapshot:null,repeatOrderPlan:null,selectionPlan:{schemaVersion:1,catalogVersion,appliedCaptureVersion:2,lineCount:1},selectionProjection:{schemaVersion:1,catalogVersion,currency:"MXN",subtotalMinor:9000,itemsTotalMinor:9000,lineCount:1,lines:[{lineId,productId,variantId:null,productName:"Tacos vigentes",quantity:2,unitPriceMinor:4500,lineTotalMinor:9000,note:null,modifiers:[]}]},deliveryQuote:null,paymentBasis:null,paymentIntent:null,paymentProjection:null};try{globalThis.fetch=async input=>{url=String(input);return new Response(JSON.stringify(workspaceV5),{status:200});};const result=await requestCapture("token","https://api.example.com","selectionPlan",planCommand);assert.equal(url,"https://api.example.com/api/v1/captures/selection-plan");assert.equal(result.ok,true);assert.deepEqual(await requestCapture("token","https://api.example.com","selectionPlan",{...planCommand,scope:{...scope,branchId:captureDraftId}}),{ok:false,error:"unavailable"});globalThis.fetch=async()=>new Response(JSON.stringify({...workspaceV5,detail:{...workspaceV5.detail,version:1}}),{status:200});assert.deepEqual(await requestCapture("token","https://api.example.com","selectionPlan",planCommand),{ok:false,error:"unavailable"});globalThis.fetch=async()=>new Response(JSON.stringify({...workspaceV5,detail:{...workspaceV5.detail,version:5}}),{status:200});assert.equal((await requestCapture("token","https://api.example.com","selectionPlan",planCommand)).ok,true);globalThis.fetch=async()=>new Response("{}",{status:409});assert.deepEqual(await requestCapture("token","https://api.example.com","selectionPlan",planCommand),{ok:false,error:"conflict"});const legacyV4={schemaVersion:4,detail:workspaceV5.detail,customerSnapshot:null,fulfillmentSnapshot:null,repeatOrderPlan:null,selectionPlan:workspaceV5.selectionPlan,selectionProjection:workspaceV5.selectionProjection};const rehydratedLegacy=rehydrateCaptureWorkspace(legacyV4);assert.equal(rehydratedLegacy?.selectionPlan?.lineCount,1);assert.equal(rehydratedLegacy?.paymentIntent,null);assert.equal(rehydratedLegacy?.paymentProjection,null);assert.equal(rehydratedLegacy?.deliveryQuote,null);const rehydratedV5=rehydrateCaptureWorkspace(workspaceV5);assert.equal(rehydratedV5?.selectionPlan?.lineCount,1);assert.equal(rehydratedV5?.paymentIntent,null);}finally{globalThis.fetch=old;}});
 

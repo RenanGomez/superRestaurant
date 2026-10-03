@@ -3,12 +3,12 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { APP_GUARD } from "@nestjs/core";
 import { Test } from "@nestjs/testing";
-import { parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkspaceRequestV3, parseCaptureWorkTrayRequestV1, parseCloseCaptureNoSaleCommandV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseReplaceCaptureSelectionPlanCommandV1, parseRequestCaptureDeliveryQuoteCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1, parseSetCapturePaymentIntentCommandV1, parseTakeoverCaptureDraftCommandV1, parseTransferCaptureDraftCommandV1, type MembershipRoleCode, type MenuCatalogV1 } from "@super-restaurant/shared-types";
+import { parseCaptureWorkTrayRequestV2, parseRenewCaptureLeaseCommandV1, parseAutosaveCaptureDraftCommandV1, parseCaptureDeliveryInstructionSuggestionsRequestV1, parseCaptureWorkspaceRequestV1, parseCaptureWorkspaceRequestV2, parseCaptureWorkspaceRequestV3, parseCaptureWorkTrayRequestV1, parseCloseCaptureNoSaleCommandV1, parseConfirmCaptureDraftCommandV2, parseCreateCaptureDraftCommandV1, parseHoldCaptureDraftCommandV1, parseReplaceCaptureSelectionPlanCommandV1, parseRequestCaptureDeliveryQuoteCommandV1, parseSetCaptureCustomerCommandV1, parseSetCaptureDeliveryInstructionsCommandV1, parseSetCaptureFulfillmentCommandV1, parseSetCapturePaymentIntentCommandV1, parseTakeoverCaptureDraftCommandV1, parseTransferCaptureDraftCommandV1, type MembershipRoleCode, type MenuCatalogV1 } from "@super-restaurant/shared-types";
 
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
 import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteInvalidError, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentStaleError, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureDeliveryQuoteComputationPort, type CaptureDeliveryQuoteEnvelopeV1, type CaptureDeliveryQuotePort, type CaptureNoSalePort, type CapturePaymentIntentPort, type CaptureSelectionPlanPort } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteInvalidError, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentStaleError, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureLeaseTakenError, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureDeliveryQuoteComputationPort, type CaptureDeliveryQuoteEnvelopeV1, type CaptureDeliveryQuotePort, type CaptureNoSalePort, type CapturePaymentIntentPort, type CaptureSelectionPlanPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
@@ -1250,6 +1250,8 @@ test("capture selection plan projection is null when the plan read has an applie
   assert.equal(result.selectionProjection, null);
 });
 
+const trayCatalogUnused = { read: async () => { throw new Error("must not read a catalog"); },
+  save: async () => { throw new Error("must not save a catalog"); } };
 test("capture tray authorizes, binds scope and rejects hostile persistence", async () => {
   const request = parseCaptureWorkTrayRequestV1({ schemaVersion: 1, scope: validCommand.scope, limit: 20 });
   assert.ok(request);
@@ -1268,15 +1270,15 @@ test("capture tray authorizes, binds scope and rejects hostile persistence", asy
   };
   const service = new CaptureTrayService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
-  }), { list: async () => ({ schemaVersion: 1, items: [summary] }) });
+  }), { list: async () => ({ schemaVersion: 1, items: [summary] }) }, trayCatalogUnused);
   assert.equal((await service.list(principal, request)).items.length, 1);
   await assert.rejects(service.list(principal, { ...request, limit: 51 }), code("request"));
   await assert.rejects(new CaptureTrayService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["viewer"], scope: validCommand.scope }),
-  }), { list: async () => ({}) }).list(principal, request), code("authorization"));
+  }), { list: async () => ({}) }, trayCatalogUnused).list(principal, request), code("authorization"));
   await assert.rejects(new CaptureTrayService(new MembershipAuthorizationService({
     findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
-  }), { list: async () => ({ schemaVersion: 1, items: [{ ...summary, scope: { ...summary.scope, branchId: validCommand.deviceId } }] }) })
+  }), { list: async () => ({ schemaVersion: 1, items: [{ ...summary, scope: { ...summary.scope, branchId: validCommand.deviceId } }] }) }, trayCatalogUnused)
     .list(principal, request), code("unavailable"));
   const calls: unknown[] = [];
   const adapter = new PostgresCaptureCreator({ query: async (sql, parameters) => {
@@ -1287,6 +1289,118 @@ test("capture tray authorizes, binds scope and rejects hostile persistence", asy
     parameters: [principal.actorId, JSON.stringify(request)] }]);
   await assert.rejects(adapter.list("forged-actor", request), code("request"));
   assert.equal(calls.length, 1);
+});
+
+const trayV2Scope = validCommand.scope;
+const trayV2Raw = (extra: Record<string, unknown> = {}) => ({
+  schemaVersion: 1, scope: trayV2Scope, captureDraftId: record.detail.captureDraftId, folio: record.detail.folio,
+  sourceChannel: "phone", fulfillmentChannel: "pickup", status: "draft", attentionStatus: "claimed",
+  ownerMembershipId: record.detail.ownerMembershipId, version: 2, updatedAt: "2026-10-03T12:00:00.000Z",
+  attentionLeaseExpiresAt: "2026-10-03T12:05:00.000Z",
+  customer: { displayName: "Ana Perez", phone: "+52 662 123 4567" },
+  selectionPlan: selectionPlanCommand.plan, ...extra,
+});
+const trayV2Request = { schemaVersion: 2, scope: trayV2Scope, limit: 20 };
+const stubAuth = (roles: readonly string[]) => ({
+  authorizeBranch: async () => ({ principal, roles }),
+}) as unknown as MembershipAuthorizationService;
+const liveCatalog = { read: async () => ({ schemaVersion: 1 as const, scope: trayV2Scope, catalog: selectionCatalog }),
+  save: async () => { throw new Error("must not save a catalog"); } };
+
+test("capture tray V2 adds customer and a server-priced total, reducing PII and money by role", async () => {
+  const port = { list: async () => ({}), listV2: async () => ({ schemaVersion: 2, items: [
+    trayV2Raw(), trayV2Raw({ captureDraftId: validCommand.deviceId, selectionPlan: null, customer: null })] }) };
+  const full = await new CaptureTrayService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: trayV2Scope }),
+  }), port, liveCatalog).list(principal, trayV2Request);
+  assert.equal(full.schemaVersion, 2);
+  const [priced, unpriced] = full.items as readonly { totalMinor: number | null; currency: string | null; customer: unknown }[];
+  assert.equal(priced!.totalMinor, 9_000);
+  assert.equal(priced!.currency, "MXN");
+  assert.deepEqual(priced!.customer, { displayName: "Ana Perez", phone: "+52 662 123 4567" });
+  assert.equal(unpriced!.totalMinor, null);
+  assert.equal(unpriced!.customer, null);
+  // Without customers.read the customer is withheld by the server, the total stays.
+  const noPii = await new CaptureTrayService(stubAuth(["viewer"]), port, liveCatalog).list(principal, trayV2Request);
+  assert.equal((noPii.items[0] as unknown as { customer: unknown }).customer, null);
+  assert.equal((noPii.items[0] as unknown as { totalMinor: number }).totalMinor, 9_000);
+  // Without catalog.read the catalog is never read and no total is returned.
+  const noMoney = await new CaptureTrayService(stubAuth(["kitchen"]), port, trayCatalogUnused).list(principal, trayV2Request);
+  assert.equal((noMoney.items[0] as unknown as { totalMinor: unknown }).totalMinor, null);
+  assert.equal((noMoney.items[0] as unknown as { customer: unknown }).customer, null);
+  // Stale catalogVersion -> null total, never a failure.
+  const stale = await new CaptureTrayService(stubAuth(["cashier"]), port, { ...liveCatalog,
+    read: async () => ({ schemaVersion: 1 as const, scope: trayV2Scope, catalog: { ...selectionCatalog, catalogVersion: validCommand.deviceId } }) })
+    .list(principal, trayV2Request);
+  assert.equal((stale.items[0] as unknown as { totalMinor: unknown }).totalMinor, null);
+  // A V1 request keeps using the V1 reader.
+  let v1Calls = 0;
+  await new CaptureTrayService(stubAuth(["cashier"]), { list: async () => { v1Calls++; return { schemaVersion: 1, items: [] }; },
+    listV2: async () => { throw new Error("must not use V2"); } }, trayCatalogUnused)
+    .list(principal, { schemaVersion: 1, scope: trayV2Scope, limit: 20 });
+  assert.equal(v1Calls, 1);
+});
+
+test("capture tray V2 rejects hostile persistence and binds the branch scope", async () => {
+  const build = (raw: unknown, withV2 = true) => new CaptureTrayService(stubAuth(["cashier"]),
+    withV2 ? { list: async () => ({}), listV2: async () => raw } : { list: async () => ({}) }, liveCatalog);
+  await assert.rejects(build({}, false).list(principal, trayV2Request), code("unavailable"));
+  await assert.rejects(build({ status: "denied" }).list(principal, trayV2Request), code("authorization"));
+  await assert.rejects(build({ schemaVersion: 2, items: [trayV2Raw({ scope: { ...trayV2Scope, branchId: validCommand.deviceId } })] })
+    .list(principal, trayV2Request), code("unavailable"));
+  await assert.rejects(build({ schemaVersion: 2, items: [trayV2Raw({ leaseId: validCommand.deviceId })] })
+    .list(principal, trayV2Request), code("unavailable"));
+  await assert.rejects(build({ schemaVersion: 2, items: [trayV2Raw({ status: "confirmed" })] })
+    .list(principal, trayV2Request), code("unavailable"));
+  const calls: unknown[] = [];
+  const adapter = new PostgresCaptureCreator({ query: async (sql, parameters) => {
+    calls.push({ sql, parameters }); return { rows: [{ result: { schemaVersion: 2, items: [] } }] };
+  } });
+  const parsed = parseCaptureWorkTrayRequestV2(trayV2Request);
+  assert.ok(parsed);
+  await adapter.listV2(principal.actorId, parsed);
+  assert.deepEqual(calls, [{ sql: "select app_private.list_capture_work_tray_v2($1::uuid, $2::jsonb) as result",
+    parameters: [principal.actorId, JSON.stringify(parsed)] }]);
+  await assert.rejects(adapter.listV2("forged-actor", parsed), code("request"));
+});
+
+test("capture lease renewal is scoped, idempotent and reports a lease taken by another station", async () => {
+  const leaseCommand = { schemaVersion: 1, scope: trayV2Scope, captureDraftId: validCommand.captureDraftId,
+    attentionLeaseId: validCommand.deviceId };
+  const renewed = { schemaVersion: 1, captureDraftId: validCommand.captureDraftId, attentionLeaseId: validCommand.deviceId,
+    attentionLeaseExpiresAt: "2026-10-03T12:10:00.000Z", version: 2 };
+  let outcome: unknown = { status: "applied", record: renewed };
+  const calls: unknown[] = [];
+  const service = (roles: readonly MembershipRoleCode[]) => new CaptureAttentionService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles, scope: trayV2Scope }),
+  }), { mutateAttention: async () => { throw new Error("must not mutate"); },
+    renewLease: async (actor: string, command: unknown) => { calls.push({ actor, command }); return outcome; } });
+  assert.deepEqual(await service(["cashier"]).renewLease(principal, leaseCommand), renewed);
+  assert.deepEqual(await service(["cashier"]).renewLease(principal, leaseCommand), renewed);
+  assert.equal(calls.length, 2);
+  outcome = { status: "conflict", reason: "taken" };
+  await assert.rejects(service(["cashier"]).renewLease(principal, leaseCommand), (error) => error instanceof CaptureLeaseTakenError);
+  outcome = { status: "conflict", reason: "not_active" };
+  await assert.rejects(service(["cashier"]).renewLease(principal, leaseCommand), code("conflict"));
+  outcome = { status: "denied" };
+  await assert.rejects(service(["cashier"]).renewLease(principal, leaseCommand), code("authorization"));
+  outcome = { status: "missing" };
+  await assert.rejects(service(["cashier"]).renewLease(principal, leaseCommand), code("missing"));
+  outcome = { status: "applied", record: { ...renewed, attentionLeaseId: validCommand.eventId } };
+  await assert.rejects(service(["cashier"]).renewLease(principal, leaseCommand), code("unavailable"));
+  const before = calls.length;
+  await assert.rejects(service(["viewer"]).renewLease(principal, leaseCommand), code("authorization"));
+  await assert.rejects(service(["cashier"]).renewLease(principal, { ...leaseCommand, expectedVersion: 1 }), code("request"));
+  assert.equal(calls.length, before);
+  const sqlCalls: unknown[] = [];
+  const adapter = new PostgresCaptureCreator({ query: async (sql, parameters) => {
+    sqlCalls.push({ sql, parameters }); return { rows: [{ result: { status: "denied" } }] };
+  } });
+  const parsedCommand = parseRenewCaptureLeaseCommandV1(leaseCommand);
+  assert.ok(parsedCommand);
+  await adapter.renewLease(principal.actorId, parsedCommand);
+  assert.deepEqual(sqlCalls, [{ sql: "select app_private.renew_capture_lease($1::uuid, $2::jsonb) as result",
+    parameters: [principal.actorId, JSON.stringify(parsedCommand)] }]);
 });
 
 test("capture assignment directory is privileged, exact-scope and parameterized", async () => {

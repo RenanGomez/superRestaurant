@@ -29,20 +29,21 @@ const LIMIT = 25;
 
 interface Props {
   readonly scope: BranchScope;
+  readonly initialOrderId: string | undefined;
   readonly action: (input: unknown) => Promise<BranchOrderTrayRequestResult>;
   /** Server-computed from the actor's own membership roles; the client never decides this. */
   readonly canCheckout: boolean;
   readonly detailActions: OrderDetailActions;
 }
 
-export function OrdersTray({ scope, action, canCheckout, detailActions }: Props) {
+export function OrdersTray({ scope, action, canCheckout, detailActions, initialOrderId }: Props) {
   const [items, setItems] = useState<readonly BranchOrderWorkItemV1[]>([]);
   const [nextCursor, setNextCursor] = useState<BranchOrderWorkTrayV1["nextCursor"]>(null);
   const [filter, setFilter] = useState<BranchOrderWorkFilter>("all");
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<keyof typeof errors>();
-  const [openOrderId, setOpenOrderId] = useState<string>();
+  const [openOrderId, setOpenOrderId] = useState<string | undefined>(initialOrderId);
   const cursorRef = useRef<BranchOrderWorkTrayV1["nextCursor"]>(null);
   const requestSeqRef = useRef(0);
 

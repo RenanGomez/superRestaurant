@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import { BrandMark } from "../../components/brand-mark";
 
 const links = [
-  { href: "/app", label: "Mesas", icon: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M8 4v16M16 4v16M3 10h18" /></> },
+  { href: "/app/tables", label: "Mesas", icon: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M8 4v16M16 4v16M3 10h18" /></> },
   { href: "/app/menu", label: "Menú", icon: <><path d="M4 5h16M4 12h16M4 19h10" /><circle cx="18" cy="19" r="2" /></> },
   { href: "/app/caja", label: "Caja", icon: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 9h10M7 13h3M14 13h3" /></> },
   { href: "/app/orders", label: "Órdenes", icon: <><path d="M6 3h9l3 3v15H6z" /><path d="M9 8h6M9 12h6M9 16h4" /></> },
@@ -23,7 +23,7 @@ export function AppNav({ canAccessSystemAdmin }: { readonly canAccessSystemAdmin
     <nav aria-label="Navegación principal" className="flex w-[76px] shrink-0 flex-col items-center gap-7 bg-nav py-5">
       <BrandMark size={36} />
       {links.filter((link) => canAccessSystemAdmin || link.href !== "/app/system-admin/restaurants").map((link) => {
-        const active = pathname === link.href || (link.href !== "/app" && pathname.startsWith(`${link.href}/`));
+        const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
         return (
           <a key={link.href} href={link.href} title={link.label} aria-label={link.label} aria-current={active ? "page" : undefined}
             className={`flex h-11 w-11 items-center justify-center rounded-xl border text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${active ? "border-accent bg-accent" : "border-transparent hover:bg-white/10"}`}>
