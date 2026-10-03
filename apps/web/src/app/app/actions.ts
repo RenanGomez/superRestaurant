@@ -89,9 +89,9 @@ export async function createDiningTableAction(formData: FormData): Promise<void>
     zoneId: textField(formData, "zoneId"),
   };
   const created = await createDiningTable(context.accessToken, context.apiBaseUrl, command);
-  if (created === undefined) redirect("/app?layoutError=create_failed");
-  revalidatePath("/app");
-  redirect("/app?layoutStatus=table_created");
+  if (created === undefined) redirect("/app/tables/edit?layoutError=create_failed");
+  revalidatePath("/app/tables/edit");
+  redirect("/app/tables/edit?layoutStatus=table_created");
 }
 
 export async function updateDiningTableLayoutAction(formData: FormData): Promise<void> {
@@ -107,9 +107,9 @@ export async function updateDiningTableLayoutAction(formData: FormData): Promise
     scope: context.scope,
     tableId: textField(formData, "tableId"),
   });
-  if (updated === undefined) redirect("/app?layoutError=update_failed");
-  revalidatePath("/app");
-  redirect("/app?layoutStatus=layout_saved");
+  if (updated === undefined) redirect("/app/tables/edit?layoutError=update_failed");
+  revalidatePath("/app/tables/edit");
+  redirect("/app/tables/edit?layoutStatus=layout_saved");
 }
 
 async function getAuthorizedContext(): Promise<{ readonly accessToken: string; readonly apiBaseUrl: string; readonly scope: NonNullable<ReturnType<typeof parseEncodedScope>> }> {
