@@ -20,6 +20,9 @@ declare
   group_id uuid := gen_random_uuid();
   option_id uuid := gen_random_uuid();
   device uuid := gen_random_uuid();
+  legacy_event uuid := gen_random_uuid();
+  legacy_key uuid := gen_random_uuid();
+  legacy_catalog uuid := gen_random_uuid();
   now_text text := pg_catalog.to_char(pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp()) at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
   good_product_path text := restaurant::text || '/products/' || product_id::text || '/' || replace(gen_random_uuid()::text,'-','') || '.jpg';
   good_option_path text := restaurant::text || '/options/' || option_id::text || '/' || replace(gen_random_uuid()::text,'-','') || '.png';
@@ -118,6 +121,27 @@ begin
     2, gen_random_uuid(), 'MXN', payload
   );
   if result_status <> 'conflict' then raise exception 'CATALOG_IMAGES_MALFORMED_PATH_ACCEPTED: % %', result_status, result_state; end if;
+
+  -- Pre-migration shape: a save without the imagePath key is accepted (stored as null), and a retry
+  -- of that exact command, now carrying an explicit null (new API), replays instead of conflicting.
+  payload := pg_catalog.jsonb_set(payload, '{products,0}', (payload->'products'->0) - 'imagePath');
+  payload := pg_catalog.jsonb_set(payload, '{modifierGroups,0,options,0}', (payload->'modifierGroups'->0->'options'->0) - 'imagePath');
+  select status, state into result_status, result_state from app_private.save_menu_catalog(
+    actor, restaurant, branch, legacy_event, legacy_key, device, now_text::timestamptz,
+    2, legacy_catalog, 'MXN', payload
+  );
+  if result_status <> 'saved' then raise exception 'CATALOG_IMAGES_LEGACY_SHAPE_REJECTED: % %', result_status, result_state; end if;
+  if (result_state->'catalog'->'products'->0->'imagePath') <> 'null'::jsonb
+    or (result_state->'catalog'->'modifierGroups'->0->'options'->0->'imagePath') <> 'null'::jsonb then
+    raise exception 'CATALOG_IMAGES_LEGACY_SHAPE_NOT_NULL: %', result_state;
+  end if;
+  payload := pg_catalog.jsonb_set(payload, '{products,0,imagePath}', 'null'::jsonb);
+  payload := pg_catalog.jsonb_set(payload, '{modifierGroups,0,options,0,imagePath}', 'null'::jsonb);
+  select status, state into result_status, result_state from app_private.save_menu_catalog(
+    actor, restaurant, branch, legacy_event, legacy_key, device, now_text::timestamptz,
+    2, legacy_catalog, 'MXN', payload
+  );
+  if result_status <> 'replayed' then raise exception 'CATALOG_IMAGES_LEGACY_RETRY_NOT_REPLAYED: % %', result_status, result_state; end if;
 
   raise notice 'CATALOG_IMAGES_DOMAIN_INVARIANTS_OK';
 end $catalog_images_tests$;

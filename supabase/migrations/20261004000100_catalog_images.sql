@@ -127,6 +127,26 @@ begin
   return result;
 end $function$;
 
+-- An absent imagePath and an explicit null are the same catalog: strip null imagePath keys so a
+-- retry of a pre-migration save (stored without the key) replays against the new API (with null).
+create function app_private.normalize_menu_catalog_payload(p_payload jsonb)
+returns jsonb language sql immutable set search_path = '' as $function$
+  select pg_catalog.jsonb_build_object(
+    'categories', p_payload->'categories',
+    'products', coalesce((
+      select pg_catalog.jsonb_agg(case when entry.value->'imagePath' = 'null'::jsonb then entry.value - 'imagePath' else entry.value end order by entry.ord)
+      from pg_catalog.jsonb_array_elements(p_payload->'products') with ordinality as entry(value, ord)
+    ), '[]'::jsonb),
+    'modifierGroups', coalesce((
+      select pg_catalog.jsonb_agg(pg_catalog.jsonb_set(grp.value, '{options}', coalesce((
+        select pg_catalog.jsonb_agg(case when opt.value->'imagePath' = 'null'::jsonb then opt.value - 'imagePath' else opt.value end order by opt.ord)
+        from pg_catalog.jsonb_array_elements(grp.value->'options') with ordinality as opt(value, ord)
+      ), '[]'::jsonb)) order by grp.ord)
+      from pg_catalog.jsonb_array_elements(p_payload->'modifierGroups') with ordinality as grp(value, ord)
+    ), '[]'::jsonb)
+  )
+$function$;
+
 create or replace function app_private.save_menu_catalog(
   p_actor_id uuid, p_restaurant_id uuid, p_branch_id uuid, p_event_id uuid, p_idempotency_key uuid,
   p_device_id uuid, p_occurred_at timestamptz, p_expected_version bigint, p_catalog_id uuid,
@@ -162,9 +182,11 @@ begin
     where not app_private.jsonb_has_exact_keys(entry.value, array['categoryId','name','active','displayOrder'])
   ) or exists (
     select 1 from pg_catalog.jsonb_array_elements(p_payload->'products') as entry(value)
-    where not app_private.jsonb_has_exact_keys(
+    where not (app_private.jsonb_has_exact_keys(
       entry.value, array['productId','categoryId','name','sku','active','displayOrder','stationId','unit','unitPriceMinor','tax','imagePath']
-    ) or (entry.value->'tax' <> 'null'::jsonb and not app_private.jsonb_has_exact_keys(
+    ) or app_private.jsonb_has_exact_keys(
+      entry.value, array['productId','categoryId','name','sku','active','displayOrder','stationId','unit','unitPriceMinor','tax']
+    )) or (entry.value->'tax' <> 'null'::jsonb and not app_private.jsonb_has_exact_keys(
       entry.value->'tax', array['taxId','name','taxRuleVersion','rateNumerator','rateDenominator','inclusion']
     )) or (entry.value->'imagePath' <> 'null'::jsonb and pg_catalog.jsonb_typeof(entry.value->'imagePath') <> 'string')
   ) or exists (
@@ -175,9 +197,11 @@ begin
       or pg_catalog.jsonb_array_length(entry.value->'options') not between 1 and 200
       or exists (
         select 1 from pg_catalog.jsonb_array_elements(entry.value->'options') as option_entry(value)
-        where not app_private.jsonb_has_exact_keys(
+        where not (app_private.jsonb_has_exact_keys(
           option_entry.value, array['optionId','name','unitPriceMinor','active','maximumQuantity','imagePath']
-        ) or (option_entry.value->'imagePath' <> 'null'::jsonb and pg_catalog.jsonb_typeof(option_entry.value->'imagePath') <> 'string')
+        ) or app_private.jsonb_has_exact_keys(
+          option_entry.value, array['optionId','name','unitPriceMinor','active','maximumQuantity']
+        )) or (option_entry.value->'imagePath' <> 'null'::jsonb and pg_catalog.jsonb_typeof(option_entry.value->'imagePath') <> 'string')
       )
   ) then return query select 'conflict', null::jsonb; return; end if;
 
@@ -209,7 +233,8 @@ begin
   if found then
     if existing_audit.event_id <> p_event_id or existing_audit.catalog_id <> p_catalog_id
       or existing_audit.device_id <> p_device_id or existing_audit.expected_version <> p_expected_version
-      or existing_audit.currency <> p_currency or existing_audit.payload_snapshot <> p_payload
+      or existing_audit.currency <> p_currency or app_private.normalize_menu_catalog_payload(existing_audit.payload_snapshot)
+      <> app_private.normalize_menu_catalog_payload(p_payload)
       or existing_audit.occurred_at <> p_occurred_at
     then return query select 'conflict', null::jsonb; return; end if;
     return query select 'replayed', app_private.build_menu_catalog_state(
@@ -300,6 +325,8 @@ begin
   then raise exception 'SECURITY_DEFINER_OWNER_REJECTED'; end if;
 end $security$;
 
+alter function app_private.normalize_menu_catalog_payload(jsonb) owner to postgres;
+revoke all on function app_private.normalize_menu_catalog_payload(jsonb) from public,anon,authenticated,service_role,app_api;
 alter function app_private.build_menu_catalog_state(uuid,uuid,uuid,boolean) owner to postgres;
 alter function app_private.save_menu_catalog(uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,bigint,uuid,text,jsonb) owner to postgres;
 
