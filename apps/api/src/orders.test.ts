@@ -919,7 +919,6 @@ const menuState: MenuCatalogStateV1 = (() => {
         active: true,
         categoryId: "52e0ac1f-555a-4e31-9dd7-155cf2119b6a",
         displayOrder: 0,
-        imagePath: null,
         name: "Hamburguesa",
         productId,
         sku: "HAM-001",

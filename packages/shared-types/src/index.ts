@@ -997,9 +997,9 @@ function parseMenuCategoryV1(value: unknown): MenuCategoryV1 | undefined {
 }
 
 function parseMenuProductV1(value: unknown): MenuProductV1 | undefined {
-  const record = parseExactPlainRecord(value, [
+  const record = parseExactRecordWithOptionalImagePath(value, [
     "productId", "categoryId", "name", "sku", "active", "displayOrder", "stationId",
-    "unit", "unitPriceMinor", "tax", "imagePath",
+    "unit", "unitPriceMinor", "tax",
   ]);
   if (record === undefined) return undefined;
   const productId = parseUuid(ownValue(record, "productId"));
@@ -1014,7 +1014,7 @@ function parseMenuProductV1(value: unknown): MenuProductV1 | undefined {
   const unitPriceMinor = parseBoundedInteger(ownValue(record, "unitPriceMinor"), 0, Number.MAX_SAFE_INTEGER);
   const rawTax = ownValue(record, "tax");
   const tax = rawTax === null ? null : parseMenuTaxV1(rawTax);
-  const imagePath = parseMenuImagePath(ownValue(record, "imagePath"));
+  const imagePath = parseMenuImagePath(record);
   if (
     productId === undefined
     || categoryId === undefined
@@ -1033,7 +1033,14 @@ function parseMenuProductV1(value: unknown): MenuProductV1 | undefined {
   });
 }
 
-function parseMenuImagePath(value: unknown): string | null | undefined {
+/** Input may omit imagePath (older producers); the normalized output always carries it. */
+function parseExactRecordWithOptionalImagePath(value: unknown, keys: readonly string[]): PlainRecord | undefined {
+  return parseExactPlainRecord(value, [...keys, "imagePath"]) ?? parseExactPlainRecord(value, keys);
+}
+
+function parseMenuImagePath(record: PlainRecord): string | null | undefined {
+  if (!Object.hasOwn(record, "imagePath")) return null;
+  const value = ownValue(record, "imagePath");
   if (value === null) return null;
   return typeof value === "string" && MENU_IMAGE_PATH_PATTERN.test(value) ? value : undefined;
 }
@@ -1105,8 +1112,8 @@ function parseMenuModifierGroupV1(value: unknown): MenuModifierGroupV1 | undefin
 }
 
 function parseMenuModifierOptionV1(value: unknown): MenuModifierOptionV1 | undefined {
-  const record = parseExactPlainRecord(value, [
-    "optionId", "name", "unitPriceMinor", "active", "maximumQuantity", "imagePath",
+  const record = parseExactRecordWithOptionalImagePath(value, [
+    "optionId", "name", "unitPriceMinor", "active", "maximumQuantity",
   ]);
   if (record === undefined) return undefined;
   const optionId = parseUuid(ownValue(record, "optionId"));
@@ -1115,7 +1122,7 @@ function parseMenuModifierOptionV1(value: unknown): MenuModifierOptionV1 | undef
   const active = ownValue(record, "active");
   const rawMaximum = ownValue(record, "maximumQuantity");
   const maximumQuantity = rawMaximum === null ? null : parseBoundedInteger(rawMaximum, 1, 1_000);
-  const imagePath = parseMenuImagePath(ownValue(record, "imagePath"));
+  const imagePath = parseMenuImagePath(record);
   if (
     optionId === undefined
     || name === undefined

@@ -49,7 +49,6 @@ const command = parseSaveMenuCatalogCommandV1({
     stationId: "kitchen",
     unit: "piece",
     unitPriceMinor: 12_500,
-    imagePath: null,
     tax: null,
   }],
   modifierGroups: [{
@@ -66,7 +65,6 @@ const command = parseSaveMenuCatalogCommandV1({
       unitPriceMinor: 1_500,
       active: true,
       maximumQuantity: 2,
-      imagePath: null,
     }],
   }],
 });

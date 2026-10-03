@@ -196,7 +196,17 @@ expect(nullImageParsed.products[0]?.imagePath === null, "product imagePath stays
 const missingImagePath = command();
 missingImagePath.products = [{ ...(missingImagePath.products as readonly Record<string, unknown>[])[0] }];
 delete (missingImagePath.products as Record<string, unknown>[])[0]?.imagePath;
-expectRejected(missingImagePath, "imagePath is a required (possibly-null) field, not an omittable one");
+const absentParsed = parseSaveMenuCatalogCommandV1(missingImagePath);
+expectDefined(absentParsed, "an omitted imagePath (older producer) still parses");
+expect(absentParsed.products[0]?.imagePath === null, "an omitted product imagePath normalizes to null");
+const absentOption = command();
+absentOption.modifierGroups = [{
+  ...(absentOption.modifierGroups as readonly Record<string, unknown>[])[0],
+  options: [{ optionId, name: "Queso", unitPriceMinor: 1_500, active: true, maximumQuantity: 2 }],
+}];
+const absentOptionParsed = parseSaveMenuCatalogCommandV1(absentOption);
+expectDefined(absentOptionParsed, "an option without imagePath still parses");
+expect(absentOptionParsed.modifierGroups[0]?.options[0]?.imagePath === null, "an omitted option imagePath normalizes to null");
 
 const malformedImagePath = command();
 malformedImagePath.products = [{
