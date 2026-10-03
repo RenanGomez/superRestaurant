@@ -12,6 +12,13 @@ export interface SelectionPlanModifierGroupDraft {
   readonly selections: readonly SelectionPlanModifierSelectionDraft[];
 }
 
+/** The sheet tracks one entry per tap; the API requires one entry per option with its count. */
+export function countModifierSelections(optionIds: readonly string[]): readonly SelectionPlanModifierSelectionDraft[] {
+  const counts = new Map<string, number>();
+  for (const optionId of optionIds) counts.set(optionId, (counts.get(optionId) ?? 0) + 1);
+  return [...counts].map(([optionId, quantity]) => ({ optionId, quantity }));
+}
+
 /**
  * One catalog-derived line as tracked by the client while building a selection. Carries no
  * price: the server derives money exclusively from the catalog at read/write time.

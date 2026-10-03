@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
-import { estimateSelectionMinor, validateModifierSelection, type SelectionPlanLineDraft, type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
+import { countModifierSelections, estimateSelectionMinor, validateModifierSelection, type SelectionPlanLineDraft, type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 
 const button = "min-h-11 min-w-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
 const optionButton = "flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-left text-sm hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent";
@@ -58,12 +58,12 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
 
   const groupDrafts: readonly SelectionPlanModifierGroupDraft[] = groups.map((group) => ({
     groupId: group.groupId,
-    selections: (selections[group.groupId] ?? []).map((optionId) => ({ optionId, quantity: 1 })),
+    selections: countModifierSelections(selections[group.groupId] ?? []),
   })).filter((group) => group.selections.length > 0);
 
   const validations = groups.map((group) => ({
     group,
-    validation: validateModifierSelection(group, selections[group.groupId]?.map((optionId) => ({ optionId, quantity: 1 })) ?? []),
+    validation: validateModifierSelection(group, countModifierSelections(selections[group.groupId] ?? [])),
   }));
   const allValid = validations.every((entry) => entry.validation.valid);
   const estimatedMinor = estimateSelectionMinor(product, groups, selections, quantity);

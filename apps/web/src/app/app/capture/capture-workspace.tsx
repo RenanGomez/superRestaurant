@@ -100,6 +100,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [errorCode, setErrorCode] = useState<string>();
   const [pending, setPending] = useState<{ operation: CaptureWorkspaceOperation; command: unknown }>();
   const [capture, setCapture] = useState<CaptureDraftDetailV1 | CaptureDraftDetailV2>();
+  const [leaseClock, setLeaseClock] = useState(() => Date.now());
   const [tray, setTray] = useState<readonly CaptureDraftSummaryV1[]>([]);
   const [assignmentCandidates, setAssignmentCandidates] = useState<readonly CaptureAssignmentCandidateV1[]>([]);
   const [transferTarget, setTransferTarget] = useState("");
@@ -149,10 +150,22 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [instructionsFeedback, setInstructionsFeedback] = useState<"saving" | "saved" | string>();
   const instructionsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [selectionBusy, setSelectionBusy] = useState(false);
+  const [selectionFeedback, setSelectionFeedback] = useState<"saving" | "saved" | string>();
+  const selectionFeedbackTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [selectionBusyLineId, setSelectionBusyLineId] = useState<string>();
   const [noteSheetLineId, setNoteSheetLineId] = useState<string>();
   const [noteSheetDraft, setNoteSheetDraft] = useState("");
   const productSearchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => () => {
+    if (selectionFeedbackTimer.current) clearTimeout(selectionFeedbackTimer.current);
+    if (instructionsTimer.current) clearTimeout(instructionsTimer.current);
+  }, []);
+  useEffect(() => {
+    if (capture?.status !== "draft" || capture.attentionLeaseExpiresAt === null) return;
+    const timer = window.setInterval(() => setLeaseClock(Date.now()), 10_000);
+    return () => window.clearInterval(timer);
+  }, [capture?.status, capture?.attentionLeaseExpiresAt]);
 
   function invalidateQuote(): void {
     setQuoteError(undefined);
@@ -313,14 +326,25 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     lines: readonly SelectionPlanLineDraft[],
   ): Promise<CaptureSelectionPlanProjectionV1 | null | undefined> {
     if (capture === undefined || capture.attentionLeaseId === null || catalog.catalog === null) return undefined;
+    if (selectionFeedbackTimer.current) clearTimeout(selectionFeedbackTimer.current);
+    setSelectionFeedback("saving");
     const command = { ...base(), plan: buildSelectionPlan(lines, catalog.catalog.catalogVersion) };
     let reply = await run("selectionPlan", command);
     if (reply !== undefined && !reply.ok && reply.error === "unavailable") {
       reply = await run("selectionPlan", (reply as { command?: unknown }).command ?? command);
     }
-    if (reply?.ok !== true) return undefined;
+    if (reply?.ok !== true) {
+      setSelectionFeedback(reply?.ok === false ? messages[reply.error] : "No se pudo guardar el pedido.");
+      return undefined;
+    }
     const hydrated = rehydrateCaptureWorkspace(reply.value);
-    return hydrated === undefined ? undefined : hydrated.selectionProjection;
+    if (hydrated === undefined) {
+      setSelectionFeedback("No se pudo verificar el pedido guardado.");
+      return undefined;
+    }
+    setSelectionFeedback("saved");
+    selectionFeedbackTimer.current = setTimeout(() => setSelectionFeedback(undefined), 2000);
+    return hydrated.selectionProjection;
   }
 
   function openProduct(product: MenuProductV1, groups: readonly MenuModifierGroupV1[]): void {
@@ -422,9 +446,10 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     if (lineId === undefined) return;
     const trimmed = noteSheetDraft.trim();
     setSelectionBusyLineId(lineId);
-    await sendSelectionPlan(applyLineChange(selectionDraftLines(),
+    const saved = await sendSelectionPlan(applyLineChange(selectionDraftLines(),
       { type: "setNote", lineId, note: trimmed.length === 0 ? null : trimmed }));
     setSelectionBusyLineId(undefined);
+    if (saved === undefined) return;
     setNoteSheetLineId(undefined);
     setNoteSheetDraft("");
   }
@@ -727,6 +752,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
     setRepeatOrderPlan(null);
     setSelectionProjection(null); setSheetProduct(undefined); setSheetGroups([]); setSelectionBusy(false); setSelectionBusyLineId(undefined);
+    if (selectionFeedbackTimer.current) clearTimeout(selectionFeedbackTimer.current);
+    setSelectionFeedback(undefined);
     setSheetConfirmedTotalMinor(undefined);
     setRecentOrders(undefined); setRepeatPreview(undefined);
     setError(undefined); setErrorOperation(undefined); setErrorCode(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
@@ -742,6 +769,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   const locked = busy || capture?.status !== "draft" || capture?.attentionLeaseId === null
     || error === "denied" || error === "conflict";
+  const leaseExpired = capture?.status === "draft" && capture.attentionLeaseExpiresAt !== null
+    && Date.parse(capture.attentionLeaseExpiresAt) <= leaseClock;
   const paymentBlocksConfirm = paymentIntentBlocksConfirm(paymentIntent, paymentProjection);
   const activeShift = confirmationContext?.shifts.toSorted((a, b) =>
     Date.parse(b.openedAt) - Date.parse(a.openedAt))[0];
@@ -804,6 +833,11 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       {capture?.status === "confirmed" && <button className={`${button} ml-3`}
         aria-keyshortcuts={ariaKeyShortcut("reset")} disabled={busy} onClick={reset}>Volver a la bandeja</button>}
     </div>
+    {leaseExpired && error !== "conflict" && <div role="alert" className="rounded-lg border border-border bg-error-bg p-3 text-sm">
+      Se venció tu tiempo de atención; vuelve a tomarla.
+      <button type="button" className={`${button} ml-3`} disabled={busy}
+        onClick={() => { reset(); void run("tray", { schemaVersion: 1, scope, limit: 20 }); }}>Retomar</button>
+    </div>}
     {capture === undefined ? <>
       {holdNotice && <div role="status" className="rounded-lg border border-border bg-surface p-3 text-sm">Captura guardada para después.</div>}
       {noSaleNotice && <div role="status" className="rounded-lg border border-border bg-surface p-3 text-sm">
@@ -946,6 +980,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       </section>}
       {capture.status === "draft" && <section className={`${panel} flex min-h-[520px] flex-col overflow-hidden p-0`} data-testid="capture-menu-section">
         <h2 className="p-4 font-heading text-lg font-semibold">2. Menú</h2>
+        {selectionFeedback !== undefined && <p className="px-4 pb-2 text-sm" role={selectionFeedback === "saving" || selectionFeedback === "saved" ? "status" : "alert"}>
+          {selectionFeedback === "saving" ? "Guardando pedido…" : selectionFeedback === "saved" ? "Pedido guardado" : selectionFeedback}
+        </p>}
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
           <CaptureMenu catalog={catalog.catalog} currency={catalog.catalog?.currency ?? "MXN"}
             lineQuantities={(selectionProjection?.lines ?? []).reduce(
@@ -972,6 +1009,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
               value={noteSheetDraft} onChange={(event) => setNoteSheetDraft(event.target.value.slice(0, 200))} />
           </label>
           <span className="text-xs text-text-muted">{noteSheetDraft.length}/200</span>
+          {selectionFeedback !== undefined && <p role={selectionFeedback === "saving" || selectionFeedback === "saved" ? "status" : "alert"} className="text-sm">
+            {selectionFeedback === "saving" ? "Guardando…" : selectionFeedback === "saved" ? "Guardado" : selectionFeedback}
+          </p>}
           <div className="flex justify-end gap-2">
             <button type="button" className="min-h-11 min-w-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent"
               onClick={() => { setNoteSheetLineId(undefined); setNoteSheetDraft(""); }}>Cancelar</button>

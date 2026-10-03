@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   applyLineChange,
   buildSelectionPlan,
+  countModifierSelections,
   estimateSelectionMinor,
   groupProductsByCategory,
   validateModifierSelection,
@@ -19,6 +20,12 @@ const optionId2 = "66666666-6666-4666-8666-666666666666";
 const lineId1 = "77777777-7777-4777-8777-777777777777";
 const lineId2 = "88888888-8888-4888-8888-888888888888";
 const lineId3 = "99999999-9999-4999-8999-999999999999";
+
+test("sheet selections preserve quantities without duplicate option IDs", () => {
+  assert.deepEqual(countModifierSelections([optionId, optionId2, optionId]), [
+    { optionId, quantity: 2 }, { optionId: optionId2, quantity: 1 },
+  ]);
+});
 
 test("buildSelectionPlan projects draft lines with a null variantId and forwards the note", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
