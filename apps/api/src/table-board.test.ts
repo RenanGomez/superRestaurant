@@ -42,6 +42,24 @@ test("table board derives occupied/free per table from the bounded active-order 
   assert.deepEqual(byId.get(freeTableId)?.activeOrders, []);
   assert.deepEqual(byId.get(occupiedTableId)?.status, "occupied");
   assert.deepEqual(byId.get(occupiedTableId)?.activeOrders[0]?.orderId, orderId);
+  assert.deepEqual(result.unassignedOrders, []);
+});
+
+test("table board keeps active orders of tables missing from the layout as unassigned", async () => {
+  const deletedTableId = "6d8e0f32-5c4b-4a7e-9b2d-0c3f8e6a4b71";
+  const deletedOrderId = "7e9f1a43-6d5c-4b8f-8c3e-1d4a9f7b5c82";
+  const tables: DiningTablePort = { list: async () => layout, create: async () => ({ status: "conflict" }), updateLayout: async () => ({ status: "conflict" }) };
+  const board: TableBoardPort = {
+    listActiveOrders: async () => [Object.freeze({
+      openedAt: "2026-09-01T19:00:00.000Z", orderId: deletedOrderId, status: "open", tableId: deletedTableId,
+      version: 2, waiterUserId: null,
+    })],
+  };
+  const result = await serviceFor(["manager"], tables, board).read(principal, scope);
+  assert.equal(result.unassignedOrders.length, 1);
+  assert.equal(result.unassignedOrders[0]?.orderId, deletedOrderId);
+  assert.equal(result.unassignedOrders[0]?.tableId, deletedTableId);
+  assert.ok(result.tables.every((entry) => entry.status === "free"));
 });
 
 test("table board rejects a non-member and a malformed scope", async () => {

@@ -111,20 +111,28 @@ export class TableBoardService {
       bucket.push(order);
       ordersByTable.set(tableId, bucket);
     }
+    const activeOrder = (order: RawTableBoardOrder) => ({
+      openedAt: order.openedAt, orderId: order.orderId, status: order.status,
+      version: order.version, waiterUserId: order.waiterUserId,
+    });
+    const layoutTables = layout.zones.flatMap((zone) => zone.tables);
+    const layoutTableIds = new Set(layoutTables.map((table) => table.tableId));
+    // Active orders whose table is no longer in the layout (soft-deleted) must stay visible.
+    const unassignedOrders = activeOrders
+      .filter((order) => typeof order.tableId === "string" && !layoutTableIds.has(order.tableId))
+      .map((order) => ({ ...activeOrder(order), tableId: order.tableId }));
     const parsed = parseTableBoardV1({
       schemaVersion: 1,
       scope,
-      tables: layout.zones.flatMap((zone) => zone.tables).map((table) => {
+      tables: layoutTables.map((table) => {
         const tableOrders = ordersByTable.get(table.tableId) ?? [];
         return {
-          activeOrders: tableOrders.map((order) => ({
-            openedAt: order.openedAt, orderId: order.orderId, status: order.status,
-            version: order.version, waiterUserId: order.waiterUserId,
-          })),
+          activeOrders: tableOrders.map(activeOrder),
           status: tableOrders.length === 0 ? "free" : "occupied",
           tableId: table.tableId,
         };
       }),
+      unassignedOrders,
     });
     if (parsed === undefined) throw unavailable();
     return parsed;
