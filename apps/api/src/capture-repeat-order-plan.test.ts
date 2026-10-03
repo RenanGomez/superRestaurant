@@ -83,6 +83,7 @@ const catalog: MenuCatalogV1 = {
     stationId: "hot",
     unit: "piece",
     unitPriceMinor: 4_500,
+    imagePath: null,
     tax: null,
   }],
   modifierGroups: [{
@@ -99,6 +100,7 @@ const catalog: MenuCatalogV1 = {
       unitPriceMinor: 700,
       active: true,
       maximumQuantity: 2,
+      imagePath: null,
     }],
   }],
 };

@@ -4,6 +4,7 @@ import test from "node:test";
 import { Test } from "@nestjs/testing";
 import { AUTH_PRINCIPAL_VERIFIER } from "./auth/authentication.js";
 import { AppModule } from "./app.module.js";
+import { CATALOG_IMAGE_STORAGE_CONFIG } from "./catalog-image-storage.js";
 import { CUSTOMER_DIRECTORY_READER_PORT, CUSTOMER_DIRECTORY_WRITER_PORT } from "./customer-directory.js";
 import { parseBranchScope } from "@super-restaurant/shared-types";
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
@@ -56,6 +57,8 @@ test("customer HTTP boundary authenticates every route and sanitizes persistence
       read: missingRead,
     })
     .overrideProvider(AUTH_PRINCIPAL_VERIFIER).useValue({ verifyAccessToken: async () => principal })
+    .overrideProvider(CATALOG_IMAGE_STORAGE_CONFIG)
+    .useValue({ publicBaseUrl: "https://example.supabase.co", secretKey: "sb_secret_test", supabaseUrl: "https://example.supabase.co" })
     .compile();
   const app = module.createNestApplication({ logger: false });
   app.setGlobalPrefix("api/v1");

@@ -724,7 +724,7 @@ const selectionCatalog: MenuCatalogV1 = {
     productId: "ec5e7c30-edac-4b79-bf8c-e363b041c59f",
     categoryId: "a409ec59-9f5e-496d-a45d-b83a46b49674",
     name: "Tacos vigentes", sku: "TACO-1", active: true, displayOrder: 0,
-    stationId: "hot", unit: "piece", unitPriceMinor: 4_500, tax: null,
+    stationId: "hot", unit: "piece", unitPriceMinor: 4_500, tax: null, imagePath: null,
   }],
   modifierGroups: [],
 };
@@ -2189,6 +2189,7 @@ const taxExcludedCatalog: MenuCatalogV1 = {
     categoryId: "a409ec59-9f5e-496d-a45d-b83a46b49674",
     name: "Pizza con IVA", sku: "PIZZA-1", active: true, displayOrder: 0,
     stationId: "hot", unit: "piece", unitPriceMinor: 10_000,
+    imagePath: null,
     tax: { taxId: "mx-vat", name: "IVA", taxRuleVersion: "mx-v1", rateNumerator: 16, rateDenominator: 100, inclusion: "excluded" },
   }],
   modifierGroups: [],

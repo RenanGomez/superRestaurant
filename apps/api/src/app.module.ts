@@ -55,6 +55,14 @@ import { DiningTablesController } from "./dining-tables.controller.js";
 import { DINING_TABLE_PORT, DiningTableService, PostgresDiningTableAdapter } from "./dining-tables.js";
 import { MenuCatalogController } from "./menu-catalog.controller.js";
 import { MENU_CATALOG_PORT, MenuCatalogService, PostgresMenuCatalogAdapter } from "./menu-catalog.js";
+import { MenuCatalogImagesController } from "./menu-catalog-images.controller.js";
+import { MenuCatalogImageService } from "./menu-catalog-images.js";
+import {
+  CATALOG_IMAGE_STORAGE_CONFIG,
+  CATALOG_IMAGE_STORAGE_PORT,
+  FetchCatalogImageStorageAdapter,
+  readCatalogImageStorageConfig,
+} from "./catalog-image-storage.js";
 import { OrdersController } from "./orders.controller.js";
 import {
   ORDER_PERSISTENCE_PORT,
@@ -118,6 +126,7 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     DiningZonesController,
     DiningTablesController,
     MenuCatalogController,
+    MenuCatalogImagesController,
     OrdersController,
     PaymentsController,
     OperationalShiftsController,
@@ -201,6 +210,13 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     PostgresMenuCatalogAdapter,
     { provide: MENU_CATALOG_PORT, useExisting: PostgresMenuCatalogAdapter },
     MenuCatalogService,
+    {
+      provide: CATALOG_IMAGE_STORAGE_CONFIG,
+      useFactory: () => readCatalogImageStorageConfig(process.env),
+    },
+    FetchCatalogImageStorageAdapter,
+    { provide: CATALOG_IMAGE_STORAGE_PORT, useExisting: FetchCatalogImageStorageAdapter },
+    MenuCatalogImageService,
     PostgresOrderPersistenceAdapter,
     { provide: ORDER_PERSISTENCE_PORT, useExisting: PostgresOrderPersistenceAdapter },
     RealtimeGateway,
