@@ -311,9 +311,10 @@ declare
   v_order_id uuid;
   v_event_id uuid;
   v_occurred_at timestamptz;
+  v_shift_id uuid;
   v_result jsonb;
 begin
-  if p_actor_id is null or p_shift_id is null
+  if p_actor_id is null
     or pg_catalog.jsonb_typeof(p_order) <> 'object'
     or pg_catalog.jsonb_typeof(p_audit) <> 'object'
   then
@@ -340,11 +341,30 @@ begin
     return pg_catalog.jsonb_build_object('status', 'conflict');
   end if;
 
-  perform 1
+  -- Command identity first: a retry of an already-saved create replays what was stored, even if
+  -- the shift has since closed or another one opened. The shift is only resolved for new commands.
+  if exists (
+    select 1 from app.order_audit_events as audit
+    where audit.actor_id = p_actor_id and audit.restaurant_id = v_restaurant_id
+      and audit.branch_id = v_branch_id and audit.idempotency_key = p_audit ->> 'idempotencyKey'
+  ) then
+    v_result := app_private.persist_order_mutation(p_actor_id, 0, p_order, p_audit);
+    if v_result ->> 'status' = 'replayed' and exists (
+      select 1 from app.order_operational_shifts as link
+      where link.restaurant_id = v_restaurant_id and link.branch_id = v_branch_id
+        and link.order_id = v_order_id and (p_shift_id is null or link.shift_id = p_shift_id)
+    ) then
+      return v_result;
+    end if;
+    return pg_catalog.jsonb_build_object('status', 'conflict');
+  end if;
+
+  -- p_shift_id null means "the operator never picks": resolve the branch's single open shift here.
+  select shift.id into v_shift_id
   from app.operational_shifts as shift
   where shift.restaurant_id = v_restaurant_id
     and shift.branch_id = v_branch_id
-    and shift.id = p_shift_id
+    and (p_shift_id is null or shift.id = p_shift_id)
     and shift.status = 'open'
     and shift.closed_at is null
   for share;
@@ -357,7 +377,7 @@ begin
     insert into app.order_operational_shifts (
       restaurant_id, branch_id, order_id, shift_id, linked_by
     ) values (
-      v_restaurant_id, v_branch_id, v_order_id, p_shift_id, p_actor_id
+      v_restaurant_id, v_branch_id, v_order_id, v_shift_id, p_actor_id
     );
     return v_result;
   end if;
@@ -368,7 +388,7 @@ begin
     where link.restaurant_id = v_restaurant_id
       and link.branch_id = v_branch_id
       and link.order_id = v_order_id
-      and link.shift_id = p_shift_id
+      and link.shift_id = v_shift_id
   ) then
     return v_result;
   end if;

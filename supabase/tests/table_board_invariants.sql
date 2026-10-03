@@ -46,6 +46,11 @@ declare
   assign_audit jsonb;
   reassign_audit jsonb;
   past_text text;
+  null_order uuid := gen_random_uuid();
+  null_order_json jsonb;
+  null_audit jsonb;
+  deleted_table uuid := gen_random_uuid();
+  deleted_order uuid := gen_random_uuid();
   slow_order uuid := gen_random_uuid();
   closed_order uuid := gen_random_uuid();
   audit jsonb;
@@ -144,6 +149,22 @@ begin
   select count(*) into n from app.order_operational_shifts where order_id=slow_order and shift_id=v_shift;
   if n<>1 then raise exception 'TABLE_BOARD_SLOW_CLOCK_ORDER_NOT_LINKED'; end if;
 
+  -- p_shift_id null: SQL resolves the single open shift, after the command-identity lookup.
+  null_order_json := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',null_order::text,'restaurantId',restaurant::text,'branchId',branch::text,
+    'channel','counter','currency','MXN','timeZone','America/Hermosillo','status','draft','items','[]'::jsonb);
+  null_audit := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'restaurantId',restaurant::text,'branchId',branch::text,'orderId',null_order::text,'actorId',actor::text,
+    'deviceId',device::text,'occurredAt',now_text,'operation','order.created','entityType','order',
+    'entityId',null_order::text,'to','draft');
+  execute 'set local role app_api';
+  result := app_private.create_operational_order(actor,null,null_order_json,null_audit);
+  execute 'reset role';
+  if result->>'status'<>'saved' then raise exception 'TABLE_BOARD_NULL_SHIFT_ORDER_REJECTED'; end if;
+  select count(*) into n from app.order_operational_shifts where order_id=null_order and shift_id=v_shift;
+  if n<>1 then raise exception 'TABLE_BOARD_NULL_SHIFT_ORDER_NOT_LINKED'; end if;
+
   update app.operational_shifts set status='closed', closed_at=pg_catalog.clock_timestamp(), closed_by=actor
   where id=v_shift;
   execute 'set local role app_api';
@@ -159,6 +180,23 @@ begin
   execute 'reset role';
   if result->>'status'<>'conflict' then raise exception 'TABLE_BOARD_CLOSED_SHIFT_ORDER_ACCEPTED'; end if;
   if exists (select 1 from app.orders where id=closed_order) then raise exception 'TABLE_BOARD_CLOSED_SHIFT_ORDER_PERSISTED'; end if;
+
+  -- Identical retry after the shift closed replays; a new null-shift create with no open shift conflicts.
+  execute 'set local role app_api';
+  replayed := app_private.create_operational_order(actor,null,null_order_json,null_audit);
+  execute 'reset role';
+  if replayed->>'status'<>'replayed' then raise exception 'TABLE_BOARD_NULL_SHIFT_RETRY_NOT_REPLAYED'; end if;
+  execute 'set local role app_api';
+  result := app_private.create_operational_order(actor,null,
+    pg_catalog.jsonb_set(null_order_json,'{orderId}',to_jsonb(closed_order::text)),
+    pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+      'restaurantId',restaurant::text,'branchId',branch::text,'orderId',closed_order::text,'actorId',actor::text,
+      'deviceId',device::text,'occurredAt',now_text,'operation','order.created','entityType','order',
+      'entityId',closed_order::text,'to','draft'));
+  execute 'reset role';
+  if result->>'status'<>'conflict' or exists (select 1 from app.orders where id=closed_order)
+  then raise exception 'TABLE_BOARD_NULL_SHIFT_NO_OPEN_SHIFT_ACCEPTED'; end if;
 
   -- Seed orders: order_a open, order_b closed, foreign_order in another restaurant/branch.
   insert into app.orders(id,restaurant_id,branch_id,table_id,channel,status,aggregate,version,created_by,updated_by)
@@ -286,6 +324,21 @@ begin
   select count(*) into n from pg_catalog.jsonb_array_elements(board->'orders') as entry(value)
     where entry.value->>'orderId' in (order_b::text, foreign_order::text);
   if n<>0 then raise exception 'TABLE_BOARD_LIST_LEAKED_INACTIVE_OR_FOREIGN_ORDER'; end if;
+
+  -- an active order on a soft-deleted table is still returned (the API surfaces it as unassigned)
+  insert into app.dining_tables(
+    id,restaurant_id,branch_id,zone_id,name,capacity,shape,layout_x,layout_y,layout_width,layout_height,created_by,updated_by,deleted_at
+  ) values (deleted_table,restaurant,branch,zone_id,'D1',4,'square',4,4,2,2,actor,actor,pg_catalog.clock_timestamp());
+  insert into app.orders(id,restaurant_id,branch_id,table_id,channel,status,aggregate,version,created_by,updated_by)
+  values (deleted_order,restaurant,branch,deleted_table,'table','open',
+    pg_catalog.jsonb_build_object('schemaVersion',1,'orderId',deleted_order::text,'restaurantId',restaurant::text,'branchId',branch::text,
+      'channel','table','status','open','timeZone','America/Hermosillo','currency','MXN','items','[]'::jsonb),1,actor,actor);
+  execute 'set local role app_api';
+  board := app_private.list_table_board(actor,restaurant,branch);
+  execute 'reset role';
+  select count(*) into n from pg_catalog.jsonb_array_elements(board->'orders') as entry(value)
+    where entry.value->>'orderId' = deleted_order::text and entry.value->>'tableId' = deleted_table::text;
+  if n<>1 then raise exception 'TABLE_BOARD_LIST_DROPPED_DELETED_TABLE_ORDER'; end if;
 
   -- explicit limit_exceeded instead of a silently truncated list (cap is 500 active orders)
   insert into app.orders(id,restaurant_id,branch_id,table_id,channel,status,aggregate,version,created_by,updated_by)
