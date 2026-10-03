@@ -73,7 +73,7 @@ export default async function MenuPage({ searchParams }: MenuPageProps): Promise
           <p className="mt-2 text-[13px] text-text-muted">Vuelve a intentarlo en unos segundos.</p>
         </div>
       ) : (
-        <MenuCatalogEditor canManage={canManage} state={state} />
+        <MenuCatalogEditor canManage={canManage} state={state} supabaseUrl={env.supabaseUrl} />
       )}
     </div>
   );

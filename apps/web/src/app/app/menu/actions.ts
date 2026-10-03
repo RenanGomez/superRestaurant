@@ -4,11 +4,13 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { parseUploadMenuImageCommandV1, type MenuImageUploadResultV1 } from "@super-restaurant/shared-types";
 
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
 import { DEFAULT_PESO_CURRENCY } from "../../../lib/capture-payment";
 import { getMenuCatalog, saveMenuCatalog } from "../../../lib/menu-catalog";
+import { isMenuImageContentType } from "../../../lib/menu-images";
 import {
   BRANCH_PREFERENCE_COOKIE,
   findMembership,
@@ -19,6 +21,52 @@ import { createServerSupabaseClient } from "../../../lib/supabase-server";
 
 const DEVICE_COOKIE = "sr-device-id";
 const MAXIMUM_DRAFT_LENGTH = 2_000_000;
+
+export async function uploadMenuImageAction(
+  target: "product" | "option",
+  targetId: string,
+  file: { readonly contentType: string; readonly dataBase64: string },
+): Promise<{ readonly imagePath?: string; readonly error?: string }> {
+  if (!isMenuImageContentType(file.contentType)) return { error: "Elige una imagen JPG, PNG o WebP." };
+  const context = await getAuthorizedContext();
+  const command = parseUploadMenuImageCommandV1({
+    contentType: file.contentType,
+    dataBase64: file.dataBase64,
+    deviceId: await getOrCreateDeviceId(),
+    eventId: randomUUID(),
+    idempotencyKey: randomUUID(),
+    occurredAt: new Date().toISOString(),
+    schemaVersion: 1,
+    scope: context.scope,
+    target,
+    targetId,
+  });
+  if (command === undefined) return { error: "La imagen no es válida o supera 2 MB." };
+  let response: Response;
+  try {
+    response = await fetch(`${context.apiBaseUrl}/api/v1/menu/images`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { authorization: `Bearer ${context.accessToken}`, "content-type": "application/json" },
+      body: JSON.stringify(command),
+    });
+  } catch {
+    return { error: "No se pudo subir la foto. Revisa la conexión e inténtalo de nuevo." };
+  }
+  let result: unknown;
+  try { result = await response.json(); } catch { return { error: "El servidor devolvió una respuesta inválida." }; }
+  if (!response.ok) {
+    const code = typeof result === "object" && result !== null && "code" in result ? result.code : undefined;
+    return { error: code === "MENU_IMAGES_UNCONFIGURED"
+      ? "El servidor no tiene almacenamiento de fotos configurado; avisa al administrador."
+      : typeof code === "string" ? `No se pudo subir la foto (${code}).` : "No se pudo subir la foto." };
+  }
+  const upload = result as Partial<MenuImageUploadResultV1>;
+  if (upload.schemaVersion !== 1 || typeof upload.imagePath !== "string" || upload.imagePath.length === 0) {
+    return { error: "El servidor devolvió una ruta de foto inválida." };
+  }
+  return { imagePath: upload.imagePath };
+}
 
 export async function saveMenuCatalogAction(formData: FormData): Promise<void> {
   const context = await getAuthorizedContext();
