@@ -31,6 +31,24 @@ begin
       $policy$;
     end if;
 
+    -- Not creating a write policy is not enough: an existing permissive INSERT/UPDATE/DELETE/ALL
+    -- policy on storage.objects for public/anon/authenticated that can reach this bucket would leave
+    -- it client-writable. Criterion: such a policy reaches the bucket unless its qual/with_check
+    -- names bucket_id and never mentions catalog-images (i.e. it is restricted to another bucket).
+    -- Fail the migration rather than leave the bucket writable.
+    if exists (
+      select 1 from pg_catalog.pg_policies as policy
+      where policy.schemaname = 'storage' and policy.tablename = 'objects'
+        and policy.cmd in ('INSERT', 'UPDATE', 'DELETE', 'ALL')
+        and policy.roles && array['public', 'anon', 'authenticated']::name[]
+        and (
+          pg_catalog.strpos(coalesce(policy.qual, '') || coalesce(policy.with_check, ''), 'bucket_id') = 0
+          or pg_catalog.strpos(coalesce(policy.qual, '') || coalesce(policy.with_check, ''), 'catalog-images') > 0
+        )
+    ) then
+      raise exception 'CATALOG_IMAGES_CLIENT_WRITE_POLICY_PRESENT';
+    end if;
+
     -- Deliberately no insert/update/delete policy for anon or authenticated: every write to this
     -- bucket goes through the API's service-role upload, which bypasses RLS entirely. Clients
     -- never receive write access to Storage.

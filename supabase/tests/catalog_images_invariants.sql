@@ -162,8 +162,13 @@ begin
   if exists (
     select 1 from pg_catalog.pg_policies
     where schemaname = 'storage' and tablename = 'objects'
-      and roles && array['anon','authenticated']::name[]
-      and cmd in ('INSERT','UPDATE','DELETE')
+      and roles && array['public','anon','authenticated']::name[]
+      and cmd in ('INSERT','UPDATE','DELETE','ALL')
+      -- same bucket-scoped criterion as the migration: restricted to another bucket is fine
+      and (
+        strpos(coalesce(qual,'') || coalesce(with_check,''), 'bucket_id') = 0
+        or strpos(coalesce(qual,'') || coalesce(with_check,''), 'catalog-images') > 0
+      )
   ) then raise exception 'CATALOG_IMAGES_CLIENT_WRITE_POLICY_PRESENT'; end if;
 
   if not exists (
