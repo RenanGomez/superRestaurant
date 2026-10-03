@@ -1,4 +1,6 @@
 import {
+  parseCashPaymentQuoteV1,
+  parseQuoteCashPaymentRequestV1,
   parseCashRegisterSummaryV1,
   parseCashRegisterOperationalReportV1,
   parseCashRegisterReportQueryV1,
@@ -96,12 +98,53 @@ expect(parsePaymentCollectionSummaryV1({ ...payment, remainingBalanceMinor: 0 })
 const reportQuery = { cashRegisterSessionId, deviceId: audit.deviceId, registerId, schemaVersion: 1, scope };
 expect(parseCashRegisterReportQueryV1(reportQuery) !== undefined, "cash-register report query parses");
 expect(parseCashRegisterReportQueryV1({ ...reportQuery, extra: true }) === undefined, "cash-register report query rejects extras");
+const movement = {
+  amountMinor: 300, direction: "in", movementId: paymentId, note: null,
+  occurredAt: audit.occurredAt, sourcePaymentId: paymentId, sourceRefundId: null, type: "tip_in",
+};
 const operationalReport = {
-  cardManualCapturedMinor: 2_500, cashCapturedMinor: 10_000, nextLocalSequence: 8, paymentCount: 2,
-  register, schemaVersion: 1, scope, totalCapturedMinor: 12_500,
+  cardManualCapturedMinor: 2_500, cashCapturedMinor: 10_000, cashTipsMinor: 300, movementCount: 1,
+  movements: [movement], nextLocalSequence: 8, paymentCount: 2,
+  register, schemaVersion: 1, scope, tipsMinor: 500, totalCapturedMinor: 12_500,
 };
 expect(parseCashRegisterOperationalReportV1(operationalReport) !== undefined, "operational cash-register report parses");
 expect(parseCashRegisterOperationalReportV1({ ...operationalReport, totalCapturedMinor: 12_499 }) === undefined, "tender totals must balance");
+expect(parseCashRegisterOperationalReportV1({ ...operationalReport, cashTipsMinor: 600 }) === undefined, "cash tips cannot exceed all tips");
+expect(parseCashRegisterOperationalReportV1({ ...operationalReport, movements: [{ ...movement, type: "bogus" }] }) === undefined, "unknown movement type fails");
+expect(parseCashRegisterOperationalReportV1({ ...operationalReport, movements: [{ ...movement, amountMinor: 0 }] }) === undefined, "movement amount is positive");
+expect(parseCashRegisterOperationalReportV1({ ...operationalReport, movementCount: 0 }) === undefined, "movement count covers the listed movements");
+expect(parseCashRegisterOperationalReportV1({ ...operationalReport, movements: [{ ...movement, extra: 1 }] }) === undefined, "movement rejects extras");
+
+const tendered = parseCollectPaymentCommandV1({ ...cash, tenderedAmountMinor: 20_000, tipMinor: 500 });
+expect(tendered?.tenderedAmountMinor === 20_000 && tendered.tipMinor === 500, "cash command accepts tender and tip");
+expect(cash !== undefined && !("tenderedAmountMinor" in cash) && !("tipMinor" in cash), "legacy cash command stays without tender keys");
+expect(parseCollectPaymentCommandV1({ ...cash, tenderedAmountMinor: 12_499 }) === undefined, "tender must cover the amount");
+expect(parseCollectPaymentCommandV1({ ...cash, tenderedAmountMinor: 12_500.5 }) === undefined, "tender rejects fractions");
+expect(parseCollectPaymentCommandV1({ ...cash, tipMinor: -1 }) === undefined, "tip rejects negatives");
+expect(parseCollectPaymentCommandV1({ ...cash, tenderedAmountMinor: null, tipMinor: 0 }) !== undefined, "null tender and zero tip parse");
+expect(parseCollectPaymentCommandV1({ ...cardCommand, tenderedAmountMinor: 20_000 }) === undefined, "tender is cash only");
+expect(parseCollectPaymentCommandV1({ ...cardCommand, tipMinor: 100 }) !== undefined, "card accepts a tip");
+
+const cashPayment = { ...payment, remainingBalanceMinor: 0, tenderedAmountMinor: 20_000, changeMinor: 7_500, tipMinor: 0 };
+expect(parsePaymentCollectionSummaryV1(cashPayment) !== undefined, "summary carries tender, change and tip");
+expect(parsePaymentCollectionSummaryV1({ ...cashPayment, changeMinor: 7_499 }) === undefined, "change must equal tender minus amount");
+expect(parsePaymentCollectionSummaryV1({ ...cashPayment, tenderedAmountMinor: null }) === undefined, "tender and change are paired");
+expect(parsePaymentCollectionSummaryV1({ ...cashPayment, tipMinor: undefined }) === undefined, "partial tender triple is rejected");
+const legacySummary = parsePaymentCollectionSummaryV1({ ...payment, remainingBalanceMinor: 0 });
+expect(legacySummary?.tenderedAmountMinor === null && legacySummary.changeMinor === null && legacySummary.tipMinor === 0, "legacy summary reads as no tender");
+expect(parsePaymentCollectionSummaryV1({ ...cashPayment, method: "card_manual", tenderedAmountMinor: 20_000 }) === undefined, "card summary has no tender");
+
+const quoteRequest = {
+  amountMinor: 12_500, cashRegisterSessionId, method: "cash", orderId, schemaVersion: 1, scope,
+  tenderedAmountMinor: 20_000, tipMinor: 100,
+};
+expect(parseQuoteCashPaymentRequestV1(quoteRequest) !== undefined, "quote request parses");
+expect(parseQuoteCashPaymentRequestV1({ ...quoteRequest, tenderedAmountMinor: 100 }) === undefined, "quote tender must cover the amount");
+expect(parseQuoteCashPaymentRequestV1({ ...quoteRequest, method: "card_manual" }) === undefined, "quote tender is cash only");
+const quote = { ...quoteRequest, changeMinor: 7_500, currency: "MXN", remainingAfterMinor: 500, remainingBeforeMinor: 13_000 };
+expect(parseCashPaymentQuoteV1(quote) !== undefined, "quote response parses");
+expect(parseCashPaymentQuoteV1({ ...quote, changeMinor: 7_400 }) === undefined, "quote change must equal tender minus amount");
+expect(parseCashPaymentQuoteV1({ ...quote, remainingAfterMinor: 501 }) === undefined, "quote remaining must reconcile");
 
 const checkoutQuery = { cashRegisterSessionId, deviceId: audit.deviceId, orderId, registerId, schemaVersion: 1, scope };
 expect(parseCheckoutOrderQueryV1(checkoutQuery) !== undefined, "checkout query parses");
