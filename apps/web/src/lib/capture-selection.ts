@@ -25,6 +25,26 @@ export interface SelectionPlanLineDraft {
   readonly note: string | null;
 }
 
+/** Catalog-only preview. The server remains authoritative for the accepted line price. */
+export function estimateSelectionMinor(
+  product: MenuProductV1,
+  groups: readonly MenuModifierGroupV1[],
+  selections: Readonly<Record<string, readonly string[]>>,
+  quantity: number,
+): number | null {
+  if (!Number.isSafeInteger(quantity) || quantity < 1) return null;
+  let unit = product.unitPriceMinor;
+  for (const group of groups) {
+    for (const optionId of selections[group.groupId] ?? []) {
+      const option = group.options.find((candidate) => candidate.optionId === optionId);
+      if (option === undefined) return null;
+      unit += option.unitPriceMinor;
+    }
+  }
+  const total = unit * quantity;
+  return Number.isSafeInteger(total) ? total : null;
+}
+
 export interface SelectionPlanCommandLineV1 {
   readonly lineId: string;
   readonly productId: string;

@@ -41,6 +41,7 @@ import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import { formatDeliveryQuote } from "../../../lib/delivery-zones";
+import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import {
   deliveryQuoteBlocksConfirm, deliveryQuoteScheduledForInputValue, isSwitchingToAnotherCapture,
   paymentIntentBlocksConfirm,
@@ -57,7 +58,7 @@ const input = "min-h-11 rounded-lg border border-border bg-bg px-3 py-2 text-sm 
 const messages = {
   invalid: "Revisa la selección. La dirección debe estar completa y validada para esta sucursal.",
   denied: "Tu sesión o permisos ya no permiten operar esta captura.",
-  conflict: "La captura cambió en otra estación o el lease venció. Recarga la bandeja antes de continuar.",
+  conflict: "Otra estación tomó esta captura o se venció tu tiempo de atención. Vuelve a tomarla.",
   missing: "La captura o ficha ya no está disponible.",
   unavailable: "No se pudo confirmar el resultado. Tu selección local sigue visible; reintenta exactamente la misma operación.",
 } as const;
@@ -123,7 +124,6 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [fulfillmentChannel, setFulfillmentChannel] = useState<CaptureFulfillmentChannelV1 | null>("delivery");
   const [deliveryInstructions, setDeliveryInstructions] = useState("");
   const [deliveryInstructionSuggestions, setDeliveryInstructionSuggestions] = useState<readonly CaptureDeliveryInstructionSuggestionV1[]>([]);
-  const [selectedShiftId, setSelectedShiftId] = useState("");
   const [selectedTableId, setSelectedTableId] = useState("");
   const [scheduledFor, setScheduledFor] = useState("");
   const [deliveryQuote, setDeliveryQuote] = useState<DeliveryQuoteV1 | null>(null);
@@ -144,6 +144,11 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [sheetProduct, setSheetProduct] = useState<MenuProductV1>();
   const [sheetGroups, setSheetGroups] = useState<readonly MenuModifierGroupV1[]>([]);
   const [sheetConfirmedTotalMinor, setSheetConfirmedTotalMinor] = useState<number | null>();
+  const [sheetEditLine, setSheetEditLine] = useState<SelectionPlanLineDraft>();
+  const [sheetError, setSheetError] = useState<string>();
+  const [instructionsFeedback, setInstructionsFeedback] = useState<"saving" | "saved" | string>();
+  const instructionsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [selectionBusyLineId, setSelectionBusyLineId] = useState<string>();
   const [noteSheetLineId, setNoteSheetLineId] = useState<string>();
@@ -327,6 +332,21 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     }
     setSheetProduct(product);
     setSheetGroups(groups);
+    setSheetEditLine(undefined);
+    setSheetError(undefined);
+  }
+
+  function openEditLine(lineId: string): void {
+    if (locked || catalog.catalog === null) return;
+    const line = selectionDraftLines().find((candidate) => candidate.lineId === lineId);
+    const product = catalog.catalog.products.find((candidate) => candidate.productId === line?.productId);
+    if (line === undefined || product === undefined) {
+      setError("invalid"); return;
+    }
+    setSheetEditLine(line);
+    setSheetProduct(product);
+    setSheetGroups(catalog.catalog.modifierGroups.filter((group) => group.productId === product.productId));
+    setSheetError(undefined);
   }
 
   async function addDirect(productId: string): Promise<void> {
@@ -343,12 +363,17 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   ): Promise<void> {
     if (sheetProduct === undefined) return;
     const productId = sheetProduct.productId;
-    const lineId = crypto.randomUUID();
+    const lineId = sheetEditLine?.lineId ?? crypto.randomUUID();
     setSelectionBusy(true);
-    const projection = await sendSelectionPlan(applyLineChange(selectionDraftLines(),
-      { type: "add", lineId, productId, quantity, modifierGroups, note }));
+    const currentLines = selectionDraftLines();
+    // One server replacement of the whole plan keeps the edit atomic and preserves its line ID.
+    const nextLines = sheetEditLine === undefined
+      ? applyLineChange(currentLines, { type: "add", lineId, productId, quantity, modifierGroups, note })
+      : currentLines.map((line) => line.lineId === lineId
+        ? { lineId, productId, quantity, modifierGroups, note } : line);
+    const projection = await sendSelectionPlan(nextLines);
     setSelectionBusy(false);
-    if (projection === undefined) return;
+    if (projection === undefined) { setSheetError(error === "conflict" ? messages.conflict : "No se pudo guardar la línea. Reintenta."); return; }
     // Match by the freshly generated lineId, never by productId+modifiers: a prior line with the
     // same product/selection but a different note (or merged by applyLineChange's own note-aware
     // matching) must not be mistaken for the one just confirmed.
@@ -358,6 +383,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setSheetConfirmedTotalMinor(matched?.lineTotalMinor ?? null);
     window.setTimeout(() => {
       setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined);
+      setSheetEditLine(undefined); setSheetError(undefined);
     }, 900);
   }
 
@@ -518,12 +544,18 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     autosave(sourceChannel, next);
   }
 
-  function saveDeliveryInstructions(event: FormEvent<HTMLFormElement>): void {
+  async function saveDeliveryInstructions(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (capture === undefined || fulfillmentChannel !== "delivery") return;
     const normalized = deliveryInstructions.trim();
     const command = { ...base(), deliveryInstructions: normalized === "" ? null : normalized };
-    void run("deliveryInstructions", command);
+    if (instructionsTimer.current) clearTimeout(instructionsTimer.current);
+    setInstructionsFeedback("saving");
+    const reply = await run("deliveryInstructions", command);
+    if (reply?.ok) {
+      setInstructionsFeedback("saved");
+      instructionsTimer.current = setTimeout(() => setInstructionsFeedback(undefined), 2000);
+    } else setInstructionsFeedback(reply?.ok === false ? messages[reply.error] : "No se pudieron guardar las instrucciones.");
   }
 
   async function requestDeliveryQuote(): Promise<void> {
@@ -585,14 +617,14 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   function confirmCapture(): void {
     if (capture === undefined || capture.status !== "draft" || capture.attentionLeaseId === null
-      || confirmationContext === undefined || fulfillmentChannel === null || selectedShiftId === ""
+      || confirmationContext === undefined || fulfillmentChannel === null || activeShift === undefined
       || (fulfillmentChannel === "dine_in" && selectedTableId === "")
       || (fulfillmentChannel === "delivery" && (customerSnapshot === null || fulfillmentSnapshot === null))) return;
     void run("confirm", {
       ...base(),
       schemaVersion: 2,
       orderId: crypto.randomUUID(),
-      shiftId: selectedShiftId,
+      shiftId: activeShift.shiftId,
       tableId: fulfillmentChannel === "dine_in" ? selectedTableId : null,
       currency: confirmationContext.currency,
       timeZone: confirmationContext.timeZone,
@@ -683,7 +715,6 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     setError(undefined); setErrorOperation(undefined); setErrorCode(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
     setDeliveryInstructions("");
     setDeliveryInstructionSuggestions([]);
-    setSelectedShiftId("");
     setSelectedTableId("");
     setScheduledFor("");
     setTransferTarget("");
@@ -695,6 +726,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const locked = busy || capture?.status !== "draft" || capture?.attentionLeaseId === null
     || error === "denied" || error === "conflict";
   const paymentBlocksConfirm = paymentIntentBlocksConfirm(paymentIntent, paymentProjection);
+  const activeShift = confirmationContext?.shifts.toSorted((a, b) =>
+    Date.parse(b.openedAt) - Date.parse(a.openedAt))[0];
   // H21: covers every fact that can make a delivery quote unusable at confirm time -- missing,
   // never covered, already expired by the client's own clock (a courtesy warning; the server is
   // still the one that actually enforces expiry, H14), or simply for a different requested time
@@ -706,7 +739,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const quoteBlockReason = deliveryQuoteBlocksConfirm(fulfillmentChannel, deliveryQuote, scheduledFor, new Date());
   const quoteBlocksConfirm = fulfillmentChannel === "delivery"
     && (quoteRequestedForDiffers || quoteBlockReason !== null);
-  const canConfirm = confirmationContext !== undefined && selectedShiftId !== "" && fulfillmentChannel !== null
+  const canConfirm = confirmationContext !== undefined && activeShift !== undefined && fulfillmentChannel !== null
     && (fulfillmentChannel !== "dine_in" || selectedTableId !== "")
     && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null))
     && !paymentBlocksConfirm && !quoteBlocksConfirm;
@@ -749,12 +782,14 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       {confirmQuoteInvalid && <button className={`${button} ml-3`} disabled={busy}
         onClick={() => void requestDeliveryQuote()}>Cotizar entrega</button>}
       {!menuConflict && !confirmQuoteInvalid && pending !== undefined && <button className={`${button} ml-3`} onClick={retryPending}>Reintentar misma operación</button>}
-      {!menuConflict && (error === "conflict" || capture?.status === "confirmed") && <button className={`${button} ml-3`}
+      {!menuConflict && error === "conflict" && <button className={`${button} ml-3`} disabled={busy}
+        onClick={() => { reset(); void run("tray", { schemaVersion: 1, scope, limit: 20 }); }}>Retomar</button>}
+      {capture?.status === "confirmed" && <button className={`${button} ml-3`}
         aria-keyshortcuts={ariaKeyShortcut("reset")} disabled={busy} onClick={reset}>Volver a la bandeja</button>}
     </div>
     {capture === undefined ? <>
       {noSaleNotice && <div role="status" className="rounded-lg border border-border bg-surface p-3 text-sm">
-        Registrado sin venta.
+        Captura cancelada.
       </div>}
       <section className={panel}><h2 className="font-heading text-lg font-semibold">Abrir captura</h2>
         <p className="my-2 text-sm text-text-muted">Crea un borrador durable para una llamada con entrega a domicilio.</p>
@@ -762,9 +797,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           disabled={busy}>Nueva captura telefónica</button></section>
       {tray.length > 0 && <section className={panel}><h2 className="font-heading text-lg font-semibold">Borradores recuperables</h2>
         <p className="my-2 text-sm text-text-muted">Retoma una captura de esta sucursal. El servidor asignará un lease nuevo antes de editar.</p>
-        <div className="grid gap-2">{tray.map((item) => <button key={item.captureDraftId} className={`${button} text-left`}
-          disabled={busy} onClick={() => recover(item)}><strong className="block">{item.folio}</strong>
-          <span className="text-xs text-text-muted">{item.sourceChannel} · {item.fulfillmentChannel} · versión {item.version}</span>
+        <div className="grid gap-2">{tray.map((item) => <button key={item.captureDraftId} title={item.captureDraftId} className={`${button} text-left`}
+          disabled={busy} onClick={() => recover(item)}><strong className="block">Sin cliente</strong>
+          <span className="text-xs text-text-muted">{item.sourceChannel} · {item.fulfillmentChannel ? fulfillmentLabel(item.fulfillmentChannel) : "Sin entrega"} · {formatDate(item.updatedAt, confirmationContext?.timeZone)}</span>
           {item.ownerMembershipId !== null && <span className="block text-xs text-text-muted">Asignada a {assignmentCandidates.find((candidate) => candidate.membershipId === item.ownerMembershipId)?.displayLabel ?? "otro operador"}</span>}
         </button>)}</div>
         {canManageAssignment && tray.some((item) => item.attentionStatus === "claimed") && <div className="mt-5 border-t border-border pt-4">
@@ -809,87 +844,26 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           <option value="pickup" disabled={fulfillmentSnapshot !== null}>Recoger</option><option value="counter" disabled={fulfillmentSnapshot !== null}>Mostrador</option>
           <option value="dine_in" disabled={fulfillmentSnapshot !== null}>Mesa</option></select></label></div>
       </section>
-      {capture.status === "draft" && <section className={`${panel} flex min-h-[520px] flex-col overflow-hidden p-0`} data-testid="capture-menu-section">
-        <h2 className="sr-only">Menú</h2>
-        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
-          <CaptureMenu catalog={catalog.catalog} currency={catalog.catalog?.currency ?? "MXN"}
-            lineQuantities={(selectionProjection?.lines ?? []).reduce(
-              (map, line) => map.set(line.productId, (map.get(line.productId) ?? 0) + line.quantity),
-              new Map<string, number>())}
-            busy={selectionBusy || selectionBusyLineId !== undefined} searchInputRef={productSearchRef}
-            onSelectProduct={openProduct} />
-          <CaptureTicket projection={selectionProjection} busyLineId={selectionBusyLineId} locked={locked}
-            onIncrement={(lineId) => void changeLineQuantity(lineId, 1)}
-            onDecrement={(lineId) => void changeLineQuantity(lineId, -1)}
-            onRemove={(lineId) => void removeLine(lineId)}
-            onEditNote={openNoteSheet}
-            onHold={reset} onNoSale={openNoSale} />
-        </div>
-      </section>}
-      {noteSheetLineId !== undefined && <div className="fixed inset-0 z-30 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
-        role="dialog" aria-modal="true" aria-labelledby="capture-line-note-title"
-        onClick={(event) => { if (event.target === event.currentTarget) { setNoteSheetLineId(undefined); setNoteSheetDraft(""); } }}>
-        <div className="grid w-full max-w-md gap-3 rounded-t-2xl bg-surface p-4 sm:rounded-2xl">
-          <h2 id="capture-line-note-title" className="font-heading text-lg font-semibold">Nota para cocina</h2>
-          <label className="grid gap-1 text-sm" htmlFor="capture-line-note-text">Instrucción (opcional)
-            <textarea id="capture-line-note-text" className={`${input} min-h-24 resize-y`} maxLength={200}
-              value={noteSheetDraft} onChange={(event) => setNoteSheetDraft(event.target.value.slice(0, 200))} />
+      <section className={panel}><h2 className="font-heading text-lg font-semibold">1. Cliente</h2>
+        <form onSubmit={search} className="mt-3 flex flex-wrap gap-3"><label className="grid gap-1 text-sm" htmlFor="capture-search-mode">Buscar por
+          <select id="capture-search-mode" name="mode" className={input} disabled={locked}>
+          <option value="phone">Teléfono</option><option value="name">Nombre</option><option value="address">Dirección</option></select>
           </label>
-          <span className="text-xs text-text-muted">{noteSheetDraft.length}/200</span>
-          <div className="flex justify-end gap-2">
-            <button type="button" className="min-h-11 min-w-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent"
-              onClick={() => { setNoteSheetLineId(undefined); setNoteSheetDraft(""); }}>Cancelar</button>
-            <button type="button" className="min-h-11 min-w-11 rounded-lg border border-border bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent"
-              disabled={selectionBusyLineId !== undefined} onClick={() => void saveLineNote()}>Guardar</button>
-          </div>
-        </div>
-      </div>}
-      {noSaleOpen && <div className="fixed inset-0 z-30 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
-        role="dialog" aria-modal="true" aria-labelledby="capture-no-sale-title"
-        onClick={(event) => { if (event.target === event.currentTarget) cancelNoSale(); }}>
-        <div className="grid w-full max-w-md gap-3 rounded-t-2xl bg-surface p-4 sm:rounded-2xl">
-          <h2 id="capture-no-sale-title" className="font-heading text-lg font-semibold">Cerrar sin venta</h2>
-          <p className="text-sm text-text-muted">El borrador queda en el historial, nunca se borra. Este cierre no se puede deshacer.</p>
-          <label className="grid gap-1 text-sm" htmlFor="capture-no-sale-reason">Motivo obligatorio
-            <textarea id="capture-no-sale-reason" className={`${input} min-h-24 resize-y`} maxLength={500}
-              value={noSaleReason} onChange={(event) => setNoSaleReason(event.target.value)} disabled={busy} autoFocus />
+          <label className="grid flex-1 gap-1 text-sm" htmlFor="capture-search-query">Consulta
+            <input id="capture-search-query" ref={searchInputRef} name="query" required maxLength={200}
+              aria-keyshortcuts={ariaKeyShortcut("search")} className={`${input} min-w-48 w-full`}
+              placeholder="Teléfono, nombre o dirección" disabled={locked}/>
           </label>
-          <div className="flex justify-end gap-2">
-            <button type="button" className={button} disabled={busy} onClick={cancelNoSale}>Volver</button>
-            <button type="button" className={button} disabled={busy || noSaleReason.trim().length === 0}
-              onClick={confirmNoSale}>Confirmar</button>
-          </div>
-        </div>
-      </div>}
-      {sheetProduct !== undefined && <ProductSheet product={sheetProduct} groups={sheetGroups}
-        currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy} confirmedTotalMinor={sheetConfirmedTotalMinor}
-        onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); }}
-        onAdd={(quantity, modifierGroups, note) => void addFromSheet(quantity, modifierGroups, note)} />}
-      {capture.status === "draft" && canManageAssignment && <section className={panel} data-testid="capture-transfer">
-        <h2 className="font-heading text-lg font-semibold">Pasar la captura a otro operador</h2>
-        <p className="mt-1 text-sm text-text-muted">El otro operador la verá en su bandeja y podrá continuar donde la dejaste.</p>
-        {assignmentCandidates.length === 0 ? <div className="mt-3 flex flex-wrap items-center gap-3">
-            <p className="text-sm">Nadie más de esta sucursal tiene sesión activa ahora. Puedes dejarla en espera y otro operador la retomará desde la bandeja.</p>
-            <button type="button" className={button} disabled={locked} onClick={reset}>Dejar en espera</button>
-          </div>
-          : <div className="mt-3 grid gap-3">
-            <label className="grid gap-1 text-sm" htmlFor="capture-transfer-target">Operador destino
-              <select id="capture-transfer-target" className={input} value={transferTarget}
-                onChange={(event) => { setTransferTarget(event.target.value); setTransferConfirmed(false); }} disabled={locked}>
-                <option value="">Selecciona un operador</option>
-                {assignmentCandidates.map((candidate) => <option key={candidate.membershipId} value={candidate.membershipId}>
-                  {candidate.displayLabel} · {candidate.roles.join(", ")}
-                </option>)}
-              </select>
-            </label>
-            <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="min-h-5 min-w-5 shrink-0 focus-visible:outline-2 focus-visible:outline-accent"
-              checked={transferConfirmed} onChange={(event) => setTransferConfirmed(event.target.checked)} disabled={locked || transferTarget === ""} />
-              Confirmo que el operador seleccionado continuará esta captura y que perderé el lease actual.
-            </label>
-            <button type="button" className={button} onClick={transferCapture}
-              disabled={locked || transferTarget === "" || !transferConfirmed}>Transferir de forma segura</button>
-          </div>}
-      </section>}
+          <button className={button} disabled={locked}>Buscar</button></form>
+        {results !== undefined && <div className="mt-3 grid gap-2">{results.candidates.length === 0 ? <p className="text-sm">Sin coincidencias.</p>
+          : results.candidates.map((item) => <button key={item.customerId} className={`${button} text-left`} disabled={locked}
+            onClick={() => read(item.customerId)}><strong className="block">{item.displayName}</strong>
+            <span className="text-xs text-text-muted">{item.phones.map((phone) => phone.displayValue).join(" · ")}</span></button>)}</div>}
+      </section>
+      {customer !== undefined && <section className={panel}><h2 className="font-heading text-lg font-semibold">Elegir teléfono · {customer.customer.displayName}</h2>
+        <div className="mt-3 grid gap-2">{customer.customer.phones.map((phone) => <button key={phone.contactId} className={`${button} text-left`}
+          disabled={locked} onClick={() => selectCustomer(phone.contactId)}><span>{phone.label}: {phone.displayValue}</span>
+          {selectedContact === phone.contactId && <span className="ml-2 text-accent">Selección local</span>}</button>)}</div></section>}
       {customerSnapshot !== null && <section className={panel} data-testid="rehydrated-customer-snapshot">
         <h2 className="font-heading text-lg font-semibold">Cliente guardado</h2><p className="mt-2"><strong>{customerSnapshot.displayName}</strong><br />
           {customerSnapshot.phoneDisplayValue}</p>{fulfillmentSnapshot !== null && <p className="mt-2 text-sm">
@@ -952,8 +926,72 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         <p className="mt-2 text-sm">{repeatOrderPlan.lineCount} {repeatOrderPlan.lineCount === 1 ? "línea lista" : "líneas listas"} para esta captura.</p>
         <p className="mt-1 text-xs text-text-muted">La preparación se conserva al recargar. Al confirmar, el servidor validará nuevamente cada selección y usará los precios vigentes.</p>
       </section>}
+      {capture.status === "draft" && <section className={`${panel} flex min-h-[520px] flex-col overflow-hidden p-0`} data-testid="capture-menu-section">
+        <h2 className="p-4 font-heading text-lg font-semibold">2. Menú</h2>
+        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+          <CaptureMenu catalog={catalog.catalog} currency={catalog.catalog?.currency ?? "MXN"}
+            lineQuantities={(selectionProjection?.lines ?? []).reduce(
+              (map, line) => map.set(line.productId, (map.get(line.productId) ?? 0) + line.quantity),
+              new Map<string, number>())}
+            busy={selectionBusy || selectionBusyLineId !== undefined} searchInputRef={productSearchRef}
+            onSelectProduct={openProduct} />
+          <CaptureTicket projection={selectionProjection} busyLineId={selectionBusyLineId} locked={locked}
+            onEdit={openEditLine}
+            onIncrement={(lineId) => void changeLineQuantity(lineId, 1)}
+            onDecrement={(lineId) => void changeLineQuantity(lineId, -1)}
+            onRemove={(lineId) => void removeLine(lineId)}
+            onEditNote={openNoteSheet}
+            onHold={reset} onNoSale={openNoSale} />
+        </div>
+      </section>}
+      {noteSheetLineId !== undefined && <div className="fixed inset-0 z-30 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
+        role="dialog" aria-modal="true" aria-labelledby="capture-line-note-title"
+        onClick={(event) => { if (event.target === event.currentTarget) { setNoteSheetLineId(undefined); setNoteSheetDraft(""); } }}>
+        <div className="grid w-full max-w-md gap-3 rounded-t-2xl bg-surface p-4 sm:rounded-2xl">
+          <h2 id="capture-line-note-title" className="font-heading text-lg font-semibold">Nota para cocina</h2>
+          <label className="grid gap-1 text-sm" htmlFor="capture-line-note-text">Instrucción (opcional)
+            <textarea id="capture-line-note-text" className={`${input} min-h-24 resize-y`} maxLength={200}
+              value={noteSheetDraft} onChange={(event) => setNoteSheetDraft(event.target.value.slice(0, 200))} />
+          </label>
+          <span className="text-xs text-text-muted">{noteSheetDraft.length}/200</span>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="min-h-11 min-w-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent"
+              onClick={() => { setNoteSheetLineId(undefined); setNoteSheetDraft(""); }}>Cancelar</button>
+            <button type="button" className="min-h-11 min-w-11 rounded-lg border border-border bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent"
+              disabled={selectionBusyLineId !== undefined} onClick={() => void saveLineNote()}>Guardar</button>
+          </div>
+        </div>
+      </div>}
+      {noSaleOpen && <div className="fixed inset-0 z-30 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
+        role="dialog" aria-modal="true" aria-labelledby="capture-no-sale-title"
+        onClick={(event) => { if (event.target === event.currentTarget) cancelNoSale(); }}>
+        <div className="grid w-full max-w-md gap-3 rounded-t-2xl bg-surface p-4 sm:rounded-2xl">
+          <h2 id="capture-no-sale-title" className="font-heading text-lg font-semibold">Cancelar captura</h2>
+          <p className="text-sm text-text-muted">Queda registrada como cancelada con el motivo. Esta acción no se puede deshacer.</p>
+          <label className="grid gap-1 text-sm" htmlFor="capture-no-sale-reason">Motivo obligatorio
+            <textarea id="capture-no-sale-reason" className={`${input} min-h-24 resize-y`} maxLength={500}
+              value={noSaleReason} onChange={(event) => setNoSaleReason(event.target.value)} disabled={busy} autoFocus />
+          </label>
+          <div className="flex justify-end gap-2">
+            <button type="button" className={button} disabled={busy} onClick={cancelNoSale}>Volver</button>
+            <button type="button" className={button} disabled={busy || noSaleReason.trim().length === 0}
+              onClick={confirmNoSale}>Confirmar</button>
+          </div>
+        </div>
+      </div>}
+      {sheetProduct !== undefined && <ProductSheet key={`${sheetProduct.productId}:${sheetEditLine?.lineId ?? "new"}`} product={sheetProduct} groups={sheetGroups}
+        currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy} confirmedTotalMinor={sheetConfirmedTotalMinor}
+        initialLine={sheetEditLine} error={sheetError}
+        onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); setSheetEditLine(undefined); setSheetError(undefined); }}
+        onAdd={(quantity, modifierGroups, note) => void addFromSheet(quantity, modifierGroups, note)} />}
+      {customer !== undefined && capture.customerSnapshotRef !== null && <section className={panel}><h2 className="font-heading text-lg font-semibold">3. Entrega · dirección validada</h2>
+        <div className="mt-3 grid gap-2">{customer.addresses.map((item) => <button key={item.addressId} className={`${button} text-left`}
+          disabled={locked || !item.validatedForRequestedBranch} onClick={() => selectAddress(item.addressId, item.version)}><strong className="block">{item.address.label}</strong>
+          <span className="block text-xs text-text-muted">{[item.address.streetLine, item.address.neighborhood, item.address.locality].filter(Boolean).join(", ")}</span>
+          <span className="text-xs text-accent">{item.validatedForRequestedBranch ? selectedAddress === item.addressId ? "Selección local" : "Validada para esta sucursal" : "Pendiente de validación"}</span>
+        </button>)}</div><a href="/app/customers" className="mt-3 inline-block text-sm font-semibold text-accent underline">Editar o validar direcciones en Directorio</a></section>}
       {fulfillmentChannel === "delivery" && <section className={panel}>
-        <h2 className="font-heading text-lg font-semibold">Instrucciones para esta entrega</h2>
+        <h2 className="font-heading text-lg font-semibold">3. Entrega · instrucciones</h2>
         <p className="mt-1 text-sm text-text-muted">Se guardan en esta captura; nunca modifican la dirección del cliente ni se heredan automáticamente.</p>
         {deliveryInstructionSuggestions.length > 0 && <div className="mt-3 rounded-lg border border-border bg-bg p-3">
           <p className="text-sm font-semibold">Usadas antes por este cliente en esta sucursal</p>
@@ -972,11 +1010,12 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
             value={deliveryInstructions} onChange={(event) => setDeliveryInstructions(event.target.value)}
             disabled={locked} placeholder="Ej. Tocar dos veces; no dejar con vigilancia" />
           <div className="flex items-center justify-between gap-3"><span className="text-xs text-text-muted">{deliveryInstructions.length}/500</span>
-            <button className={button} disabled={locked}>Guardar instrucciones</button></div>
+            <button className={button} disabled={locked}>{instructionsFeedback === "saving" ? "Guardando…" : "Guardar instrucciones"}</button></div>
+          {instructionsFeedback !== undefined && instructionsFeedback !== "saving" && <p role={instructionsFeedback === "saved" ? "status" : "alert"} className="text-sm">{instructionsFeedback === "saved" ? "Guardado" : instructionsFeedback}</p>}
         </form>
       </section>}
       {fulfillmentChannel === "delivery" && fulfillmentSnapshot !== null && capture.status === "draft" && <section className={panel} data-testid="delivery-quote">
-        <h2 className="font-heading text-lg font-semibold">Cotización de entrega</h2>
+        <h2 className="font-heading text-lg font-semibold">3. Entrega · cotización</h2>
         <p className="mt-1 text-sm text-text-muted">La cobertura, tarifa y promesa se calculan en el servidor para la dirección guardada.</p>
         <form className="mt-3 grid gap-3" onSubmit={(event) => { event.preventDefault(); void requestDeliveryQuote(); }}>
           <label className="grid gap-1 text-sm" htmlFor="capture-scheduled-for">Programar entrega (opcional)
@@ -1006,32 +1045,6 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           <p>Expira: {formatDeliveryQuote(deliveryQuote, "es-MX").expiry}</p>
         </div>}
       </section>}
-      <section className={panel}><h2 className="font-heading text-lg font-semibold">1. Buscar cliente</h2>
-        <form onSubmit={search} className="mt-3 flex flex-wrap gap-3"><label className="grid gap-1 text-sm" htmlFor="capture-search-mode">Buscar por
-          <select id="capture-search-mode" name="mode" className={input} disabled={locked}>
-          <option value="phone">Teléfono</option><option value="name">Nombre</option><option value="address">Dirección</option></select>
-          </label>
-          <label className="grid flex-1 gap-1 text-sm" htmlFor="capture-search-query">Consulta
-            <input id="capture-search-query" ref={searchInputRef} name="query" required maxLength={200}
-              aria-keyshortcuts={ariaKeyShortcut("search")} className={`${input} min-w-48 w-full`}
-              placeholder="Teléfono, nombre o dirección" disabled={locked}/>
-          </label>
-          <button className={button} disabled={locked}>Buscar</button></form>
-        {results !== undefined && <div className="mt-3 grid gap-2">{results.candidates.length === 0 ? <p className="text-sm">Sin coincidencias.</p>
-          : results.candidates.map((item) => <button key={item.customerId} className={`${button} text-left`} disabled={locked}
-            onClick={() => read(item.customerId)}><strong className="block">{item.displayName}</strong>
-            <span className="text-xs text-text-muted">{item.phones.map((phone) => phone.displayValue).join(" · ")}</span></button>)}</div>}
-      </section>
-      {customer !== undefined && <section className={panel}><h2 className="font-heading text-lg font-semibold">2. Elegir teléfono · {customer.customer.displayName}</h2>
-        <div className="mt-3 grid gap-2">{customer.customer.phones.map((phone) => <button key={phone.contactId} className={`${button} text-left`}
-          disabled={locked} onClick={() => selectCustomer(phone.contactId)}><span>{phone.label}: {phone.displayValue}</span>
-          {selectedContact === phone.contactId && <span className="ml-2 text-accent">Selección local</span>}</button>)}</div></section>}
-      {customer !== undefined && capture.customerSnapshotRef !== null && <section className={panel}><h2 className="font-heading text-lg font-semibold">3. Elegir dirección validada</h2>
-        <div className="mt-3 grid gap-2">{customer.addresses.map((item) => <button key={item.addressId} className={`${button} text-left`}
-          disabled={locked || !item.validatedForRequestedBranch} onClick={() => selectAddress(item.addressId, item.version)}><strong className="block">{item.address.label}</strong>
-          <span className="block text-xs text-text-muted">{[item.address.streetLine, item.address.neighborhood, item.address.locality].filter(Boolean).join(", ")}</span>
-          <span className="text-xs text-accent">{item.validatedForRequestedBranch ? selectedAddress === item.addressId ? "Selección local" : "Validada para esta sucursal" : "Pendiente de validación"}</span>
-        </button>)}</div><a href="/app/customers" className="mt-3 inline-block text-sm font-semibold text-accent underline">Editar o validar direcciones en Directorio</a></section>}
       {capture.status === "draft" && (selectionProjection !== null && selectionProjection.lines.length > 0
         || repeatOrderPlan !== null) && <>
         {/* H28: keyed by captureDraftId so React remounts it (and resets its local
@@ -1045,6 +1058,33 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           onRefreshIntent={refreshPaymentIntent} />
         {paymentIntentNotice !== undefined && <p role="alert" className="rounded-lg bg-error-bg p-3 text-sm">{paymentIntentNotice}</p>}
       </>}
+      <details className={panel}><summary className="min-h-11 cursor-pointer font-semibold">M?s</summary>
+      {capture.status === "draft" && canManageAssignment && <section className={panel} data-testid="capture-transfer">
+        <h2 className="font-heading text-lg font-semibold">Pasar la captura a otro operador</h2>
+        <p className="mt-1 text-sm text-text-muted">El otro operador la verá en su bandeja y podrá continuar donde la dejaste.</p>
+        {assignmentCandidates.length === 0 ? <div className="mt-3 flex flex-wrap items-center gap-3">
+            <p className="text-sm">Nadie más de esta sucursal tiene sesión activa ahora. Puedes dejarla en espera y otro operador la retomará desde la bandeja.</p>
+            <button type="button" className={button} disabled={locked} onClick={reset}>Guardar para después</button>
+          </div>
+          : <div className="mt-3 grid gap-3">
+            <label className="grid gap-1 text-sm" htmlFor="capture-transfer-target">Operador destino
+              <select id="capture-transfer-target" className={input} value={transferTarget}
+                onChange={(event) => { setTransferTarget(event.target.value); setTransferConfirmed(false); }} disabled={locked}>
+                <option value="">Selecciona un operador</option>
+                {assignmentCandidates.map((candidate) => <option key={candidate.membershipId} value={candidate.membershipId}>
+                  {candidate.displayLabel} · {candidate.roles.join(", ")}
+                </option>)}
+              </select>
+            </label>
+            <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="min-h-5 min-w-5 shrink-0 focus-visible:outline-2 focus-visible:outline-accent"
+              checked={transferConfirmed} onChange={(event) => setTransferConfirmed(event.target.checked)} disabled={locked || transferTarget === ""} />
+              Confirmo que el operador seleccionado continuará esta captura y que perderé el lease actual.
+            </label>
+            <button type="button" className={button} onClick={transferCapture}
+              disabled={locked || transferTarget === "" || !transferConfirmed}>Transferir de forma segura</button>
+          </div>}
+      </section>}
+      </details>
       {capture.status === "draft" && <section className={panel} data-testid="capture-confirmation">
         <h2 className="font-heading text-lg font-semibold">4. Convertir en orden</h2>
         {confirmationContext === undefined ? <p role="alert" className="mt-2 text-sm text-text-muted">

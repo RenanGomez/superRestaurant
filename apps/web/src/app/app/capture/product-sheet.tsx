@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
-import { validateModifierSelection, type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
+import { estimateSelectionMinor, validateModifierSelection, type SelectionPlanLineDraft, type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 
 const button = "min-h-11 min-w-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
 const optionButton = "flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-left text-sm hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent";
@@ -17,6 +17,8 @@ interface ProductSheetProps {
   /** `undefined` while nothing was just confirmed; `null` once added if no matching server line
    * was found; a minor-unit amount taken directly from the server's `selectionProjection` line. */
   readonly confirmedTotalMinor?: number | null | undefined;
+  readonly initialLine?: SelectionPlanLineDraft | undefined;
+  readonly error?: string | undefined;
   readonly onClose: () => void;
   readonly onAdd: (quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[], note: string | null) => void;
 }
@@ -24,11 +26,13 @@ interface ProductSheetProps {
 const MAX_NOTE_LENGTH = 200;
 
 /** In-app "hoja" for choosing a product's modifier groups; never uses `window.prompt`. */
-export function ProductSheet({ product, groups, currency, busy, confirmedTotalMinor, onClose, onAdd }: ProductSheetProps) {
+export function ProductSheet({ product, groups, currency, busy, confirmedTotalMinor, initialLine, error, onClose, onAdd }: ProductSheetProps) {
   const confirmed = confirmedTotalMinor !== undefined;
-  const [quantity, setQuantity] = useState(1);
-  const [selections, setSelections] = useState<Record<string, readonly string[]>>({});
-  const [note, setNote] = useState("");
+  const [quantity, setQuantity] = useState(initialLine?.quantity ?? 1);
+  const [selections, setSelections] = useState<Record<string, readonly string[]>>(() => Object.fromEntries(
+    (initialLine?.modifierGroups ?? []).map((group) => [group.groupId,
+      group.selections.flatMap((selection) => Array(selection.quantity).fill(selection.optionId) as string[])])));
+  const [note, setNote] = useState(initialLine?.note ?? "");
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => { closeRef.current?.focus(); }, []);
@@ -62,6 +66,7 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
     validation: validateModifierSelection(group, selections[group.groupId]?.map((optionId) => ({ optionId, quantity: 1 })) ?? []),
   }));
   const allValid = validations.every((entry) => entry.validation.valid);
+  const estimatedMinor = estimateSelectionMinor(product, groups, selections, quantity);
 
   return <div className="fixed inset-0 z-20 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
     role="dialog" aria-modal="true" aria-labelledby="product-sheet-title"
@@ -100,8 +105,12 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
           <span className="text-xs text-text-muted">{note.length}/{MAX_NOTE_LENGTH}</span>
         </div>
       </div>
+      <p className="px-4 py-2 text-sm font-semibold" role="status">
+        Estimado: {estimatedMinor === null ? "No disponible" : formatMinorUnits(estimatedMinor, currency)}
+      </p>
+      {error && <p role="alert" className="mx-4 rounded-lg bg-error-bg p-3 text-sm">{error}</p>}
       {confirmed && <p role="status" aria-live="polite" className="mx-4 rounded-lg bg-success-bg px-3 py-2 text-sm font-semibold text-success">
-        {confirmedTotalMinor === null ? "Agregado" : `Agregado · ${formatMinorUnits(confirmedTotalMinor, currency)}`}
+        {confirmedTotalMinor === null ? (initialLine ? "Guardado" : "Agregado") : `${initialLine ? "Guardado" : "Agregado"} · ${formatMinorUnits(confirmedTotalMinor, currency)}`}
       </p>}
       <footer className="flex flex-wrap items-center gap-3 border-t border-border p-4">
         <div className="flex items-center gap-2">
@@ -112,10 +121,10 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
             onClick={() => setQuantity((current) => current + 1)}>+</button>
         </div>
         <span className="grow" />
-        <button type="button" className={`${button} bg-accent text-white`} disabled={busy || confirmed || !allValid}
+        <button type="button" className="min-h-11 min-w-11 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50" disabled={busy || confirmed || !allValid}
           onClick={() => onAdd(quantity, groupDrafts, note.trim().length === 0 ? null : note.trim())}>
           {busy ? "Calculando…" : confirmed ? (confirmedTotalMinor === null ? "Agregado" : `Agregado · ${formatMinorUnits(confirmedTotalMinor, currency)}`)
-            : !allValid ? "Completa lo obligatorio" : "Agregar"}
+            : !allValid ? "Completa lo obligatorio" : initialLine ? "Guardar cambios" : "Agregar"}
         </button>
       </footer>
     </div>
