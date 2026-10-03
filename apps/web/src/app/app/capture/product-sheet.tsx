@@ -106,7 +106,7 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
         </div>
       </div>
       <p className="px-4 py-2 text-sm font-semibold" role="status">
-        Estimado: {estimatedMinor === null ? "No disponible" : formatMinorUnits(estimatedMinor, currency)}
+        Estimado: {estimatedMinor === null ? "se confirma al agregar" : formatMinorUnits(estimatedMinor, currency)}
       </p>
       {error && <p role="alert" className="mx-4 rounded-lg bg-error-bg p-3 text-sm">{error}</p>}
       {confirmed && <p role="status" aria-live="polite" className="mx-4 rounded-lg bg-success-bg px-3 py-2 text-sm font-semibold text-success">

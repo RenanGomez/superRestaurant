@@ -50,6 +50,11 @@ export interface CaptureKeyValueStore {
   readonly removeItem: (key: string) => void;
   readonly setItem: (key: string, value: string) => void;
 }
+
+/** Compact identifier for a tray row until its customer label is available. */
+export function shortCaptureDraftId(captureDraftId: string): string {
+  return captureDraftId.slice(-6).toUpperCase();
+}
 const deviceKey = "superrestaurant.capture.device.v1";
 const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const pendingKey = (scope: BranchScope) => `superrestaurant.capture.pending-autosave.v1:${scope.restaurantId}:${scope.branchId}`;

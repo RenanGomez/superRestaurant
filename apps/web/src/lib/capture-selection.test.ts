@@ -170,4 +170,6 @@ test("estimateSelectionMinor adds catalog modifier prices in integer minor units
   assert.equal(estimateSelectionMinor(product, [group], { [groupId]: [optionId] }, 2), 30100);
   assert.equal(estimateSelectionMinor(product, [group], {}, 1), 12550);
   assert.equal(estimateSelectionMinor(product, [group], { [groupId]: ["missing"] }, 1), null);
+  const withoutModifierPrice = { ...group, options: [{ ...group.options[0], unitPriceMinor: undefined }] } as unknown as MenuModifierGroupV1;
+  assert.equal(estimateSelectionMinor(product, [withoutModifierPrice], { [groupId]: [optionId] }, 1), null);
 });

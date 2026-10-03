@@ -35,7 +35,7 @@ import type {
 } from "@super-restaurant/shared-types";
 
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
-  rehydrateCaptureWorkspace } from "../../../lib/capture-workspace";
+  rehydrateCaptureWorkspace, shortCaptureDraftId } from "../../../lib/capture-workspace";
 import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
   type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
@@ -772,8 +772,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const leaseExpired = capture?.status === "draft" && capture.attentionLeaseExpiresAt !== null
     && Date.parse(capture.attentionLeaseExpiresAt) <= leaseClock;
   const paymentBlocksConfirm = paymentIntentBlocksConfirm(paymentIntent, paymentProjection);
-  const activeShift = confirmationContext?.shifts.toSorted((a, b) =>
-    Date.parse(b.openedAt) - Date.parse(a.openedAt))[0];
+  const multipleShifts = (confirmationContext?.shifts.length ?? 0) > 1;
+  const activeShift = confirmationContext?.shifts.length === 1 ? confirmationContext.shifts[0] : undefined;
   // H21: covers every fact that can make a delivery quote unusable at confirm time -- missing,
   // never covered, already expired by the client's own clock (a courtesy warning; the server is
   // still the one that actually enforces expiry, H14), or simply for a different requested time
@@ -850,7 +850,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       {tray.length > 0 && <section className={panel}><h2 className="font-heading text-lg font-semibold">Borradores recuperables</h2>
         <p className="my-2 text-sm text-text-muted">Retoma una captura de esta sucursal para seguir atendiéndola.</p>
         <div className="grid gap-2">{tray.map((item) => <button key={item.captureDraftId} title={item.captureDraftId} className={`${button} text-left`}
-          disabled={busy} onClick={() => recover(item)}><strong className="block">Sin cliente</strong>
+          disabled={busy} onClick={() => recover(item)}><strong className="block">Captura {shortCaptureDraftId(item.captureDraftId)}</strong>
            <span className="text-xs text-text-muted">{sourceLabel(item.sourceChannel)} · {item.fulfillmentChannel ? fulfillmentLabel(item.fulfillmentChannel) : "Sin entrega"} · {formatDate(item.updatedAt, confirmationContext?.timeZone)}</span>
           {item.ownerMembershipId !== null && <span className="block text-xs text-text-muted">Asignada a {assignmentCandidates.find((candidate) => candidate.membershipId === item.ownerMembershipId)?.displayLabel ?? "otro operador"}</span>}
         </button>)}</div>
@@ -1168,6 +1168,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
           {confirmationContext.shifts.length === 0 && <p role="alert" className="mt-2 text-sm text-text-muted">
             No hay turno abierto. <a href="/app/caja" className="font-semibold text-accent underline">Abrir turno en Caja</a>.
           </p>}
+          {multipleShifts && <p role="alert" className="mt-2 text-sm text-error">
+            Hay más de un turno abierto; avisa al administrador.
+          </p>}
           {fulfillmentChannel === "dine_in" && confirmationContext.tables === null && <p role="alert" className="mt-2 text-sm text-text-muted">
             No fue posible leer el plano de mesas; la confirmación permanece bloqueada.
           </p>}
@@ -1184,7 +1187,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
               : "El monto no cubre el total: ajusta el cobro antes de convertir la captura en orden."}
           </p>}
           <button type="button" className={`${button} mt-4`} onClick={confirmCapture} disabled={locked || !canConfirm}>
-            {activeShift === undefined ? "No hay turno abierto" : "Convertir captura en orden"}
+            {multipleShifts ? "Hay más de un turno abierto; avisa al administrador"
+              : activeShift === undefined ? "No hay turno abierto" : "Convertir captura en orden"}
           </button>
         </>}
       </section>}

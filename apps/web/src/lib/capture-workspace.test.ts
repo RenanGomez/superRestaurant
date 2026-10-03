@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseAutosaveCaptureDraftCommandV1, parseBranchScope } from "@super-restaurant/shared-types";
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
-  rehydrateCaptureWorkspace, requestCapture } from "./capture-workspace.js";
+  rehydrateCaptureWorkspace, requestCapture, shortCaptureDraftId } from "./capture-workspace.js";
 import { getCaptureConfirmationContext } from "./capture-confirmation-context.js";
 const scope={restaurantId:"1e37ae13-8507-484c-969f-2176f77b7000",branchId:"23723e10-c0bf-49fd-9363-4f0e2c60e955"};
 const confirmationScope=parseBranchScope(scope);
 assert.ok(confirmationScope);
 const captureDraftId="ee50f0f6-746f-47cb-8383-ad7834ef3ef0";
+test("short capture ID distinguishes drafts without exposing a full UUID", () => {
+  assert.equal(shortCaptureDraftId(captureDraftId), "EF3EF0");
+  assert.equal(shortCaptureDraftId("ee50f0f6-746f-47cb-8383-ad7834abcdef"), "ABCDEF");
+});
 const mutation={schemaVersion:1,scope,captureDraftId,expectedVersion:0,sourceChannel:"phone",fulfillmentChannel:"delivery",eventId:"b2f98c08-e0cd-4819-a2ac-361662b33575",idempotencyKey:"75178249-d01e-4462-8f75-7fe1b777acaf",deviceId:"df0f904e-df39-4c4e-a619-924bc21e59cb",occurredAt:"2026-09-17T12:00:00.000Z"};
 const detail={schemaVersion:1,scope,captureDraftId,folio:"C-1",sourceChannel:"phone",fulfillmentChannel:"delivery",status:"draft",attentionStatus:"claimed",ownerMembershipId:"d6f3073e-4d2d-4b9f-90ea-926e5a86ff02",version:1,updatedAt:"2026-09-17T12:00:00.000Z",attentionLeaseId:"a409ec59-9f5e-496d-a45d-b83a46b49674",attentionLeaseExpiresAt:"2026-09-17T12:05:00.000Z",confirmedOrderId:null,customerSnapshotRef:null,fulfillmentSnapshotRef:null};
 test("capture request uses a protected fixed route and validates output",async()=>{let url="";const old=globalThis.fetch;globalThis.fetch=async input=>{url=String(input);return new Response(JSON.stringify({schemaVersion:1,detail,replayed:false}),{status:200});};try{const result=await requestCapture("token","https://api.example.com","create",mutation);assert.equal(url,"https://api.example.com/api/v1/captures");assert.equal(result.ok,true);}finally{globalThis.fetch=old;}});

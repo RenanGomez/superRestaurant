@@ -39,12 +39,12 @@ export function estimateSelectionMinor(
   selections: Readonly<Record<string, readonly string[]>>,
   quantity: number,
 ): number | null {
-  if (!Number.isSafeInteger(quantity) || quantity < 1) return null;
+  if (!Number.isSafeInteger(quantity) || quantity < 1 || !Number.isSafeInteger(product.unitPriceMinor)) return null;
   let unit = product.unitPriceMinor;
   for (const group of groups) {
     for (const optionId of selections[group.groupId] ?? []) {
       const option = group.options.find((candidate) => candidate.optionId === optionId);
-      if (option === undefined) return null;
+      if (option === undefined || !Number.isSafeInteger(option.unitPriceMinor)) return null;
       unit += option.unitPriceMinor;
     }
   }
