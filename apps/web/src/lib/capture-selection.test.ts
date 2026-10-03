@@ -185,10 +185,10 @@ test("validateModifierSelection enforces group min/max and per-option max", () =
 
 test("estimateSelectionMinor adds catalog modifier prices in integer minor units", () => {
   const product = { productId: productA, categoryId: "c1", name: "Pizza", active: true, displayOrder: 1,
-    unit: "pieza", unitPriceMinor: 12550, sku: null, stationId: "s1", tax: null };
+    unit: "pieza", unitPriceMinor: 12550, sku: null, stationId: "s1", tax: null, imagePath: null };
   const group: MenuModifierGroupV1 = { groupId, productId: productA, name: "Tamaño", active: true,
     displayOrder: 1, minimumQuantity: 0, maximumQuantity: 1,
-    options: [{ optionId, name: "Grande", active: true, unitPriceMinor: 2500, maximumQuantity: 1 }] };
+    options: [{ optionId, name: "Grande", active: true, unitPriceMinor: 2500, maximumQuantity: 1, imagePath: null }] };
   assert.equal(estimateSelectionMinor(product, [group], { [groupId]: [optionId] }, 2), 30100);
   assert.equal(estimateSelectionMinor(product, [group], {}, 1), 12550);
   assert.equal(estimateSelectionMinor(product, [group], { [groupId]: ["missing"] }, 1), null);
