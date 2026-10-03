@@ -114,18 +114,33 @@ export interface TableBoardTableV1 {
   readonly tableId: string;
 }
 
+/** An active order whose table is no longer in the layout (soft-deleted): it must stay visible. */
+export interface TableBoardUnassignedOrderV1 extends TableBoardActiveOrderV1 {
+  readonly tableId: string;
+}
+
 export interface TableBoardV1 {
   readonly schemaVersion: typeof TABLE_BOARD_SCHEMA_VERSION;
   readonly scope: BranchScope;
   readonly tables: readonly TableBoardTableV1[];
+  readonly unassignedOrders: readonly TableBoardUnassignedOrderV1[];
 }
 
 export function parseTableBoardV1(value: unknown): TableBoardV1 | undefined {
-  const record = exactRecord(value, ["schemaVersion", "scope", "tables"]);
+  const record = exactRecord(value, ["schemaVersion", "scope", "tables", "unassignedOrders"]);
   if (record === undefined || own(record, "schemaVersion") !== TABLE_BOARD_SCHEMA_VERSION) return undefined;
   const scope = parseScope(own(record, "scope"));
   const rawTables = exactDenseArray(own(record, "tables"), 500);
-  if (scope === undefined || rawTables === undefined) return undefined;
+  const rawUnassigned = exactDenseArray(own(record, "unassignedOrders"), 500);
+  if (scope === undefined || rawTables === undefined || rawUnassigned === undefined) return undefined;
+  const unassignedOrders: TableBoardUnassignedOrderV1[] = [];
+  const unassignedIds = new Set<string>();
+  for (const raw of rawUnassigned) {
+    const order = parseTableBoardUnassignedOrderV1(raw);
+    if (order === undefined || unassignedIds.has(order.orderId)) return undefined;
+    unassignedIds.add(order.orderId);
+    unassignedOrders.push(order);
+  }
   const tables: TableBoardTableV1[] = [];
   const tableIds = new Set<string>();
   for (const raw of rawTables) {
@@ -134,7 +149,10 @@ export function parseTableBoardV1(value: unknown): TableBoardV1 | undefined {
     tableIds.add(table.tableId);
     tables.push(table);
   }
-  return Object.freeze({ schemaVersion: TABLE_BOARD_SCHEMA_VERSION, scope, tables: Object.freeze(tables) });
+  return Object.freeze({
+    schemaVersion: TABLE_BOARD_SCHEMA_VERSION, scope, tables: Object.freeze(tables),
+    unassignedOrders: Object.freeze(unassignedOrders),
+  });
 }
 
 function parseTableBoardTableV1(value: unknown): TableBoardTableV1 | undefined {
@@ -156,6 +174,16 @@ function parseTableBoardTableV1(value: unknown): TableBoardTableV1 | undefined {
     activeOrders.push(order);
   }
   return Object.freeze({ activeOrders: Object.freeze(activeOrders), status, tableId });
+}
+
+function parseTableBoardUnassignedOrderV1(value: unknown): TableBoardUnassignedOrderV1 | undefined {
+  const record = exactRecord(value, ["tableId", "orderId", "status", "version", "waiterUserId", "openedAt"]);
+  if (record === undefined) return undefined;
+  const tableId = uuid(own(record, "tableId"));
+  const { tableId: _ignored, ...rest } = record as Record<string, unknown>;
+  void _ignored;
+  const order = parseTableBoardActiveOrderV1(rest);
+  return tableId === undefined || order === undefined ? undefined : Object.freeze({ ...order, tableId });
 }
 
 function parseTableBoardActiveOrderV1(value: unknown): TableBoardActiveOrderV1 | undefined {

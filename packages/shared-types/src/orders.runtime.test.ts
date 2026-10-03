@@ -105,6 +105,14 @@ expect(parseAssignOrderWaiterResultV1({...assignWaiterResult,waiterUserId:null})
 const tableBoard={
   schemaVersion:1,
   scope:operationalScope,
+  unassignedOrders:[{
+    tableId:"6d8e0f32-5c4b-4a7e-9b2d-0c3f8e6a4b71",
+    orderId:"7e9f1a43-6d5c-4b8f-8c3e-1d4a9f7b5c82",
+    status:"draft",
+    version:1,
+    waiterUserId:null,
+    openedAt:"2026-09-05T19:00:00.000Z",
+  }],
   tables:[{
     tableId:operationalTableId,
     status:"occupied",
@@ -122,6 +130,9 @@ const tableBoard={
   }],
 };
 expect(parseTableBoardV1(tableBoard)!==undefined,"table board parses");
+expect(parseTableBoardV1(tableBoard)?.unassignedOrders[0]?.tableId==="6d8e0f32-5c4b-4a7e-9b2d-0c3f8e6a4b71","unassigned orders keep their table id");
+expect(parseTableBoardV1({...tableBoard,unassignedOrders:[{...tableBoard.unassignedOrders[0],status:"paid"}]})===undefined,"unassigned orders must be active");
+expect(parseTableBoardV1({schemaVersion:1,scope:operationalScope,tables:[]})===undefined,"unassignedOrders is required");
 expect(parseTableBoardV1({...tableBoard,tables:[{...tableBoard.tables[0],status:"free"}]})===undefined,"a free table cannot carry active orders");
 expect(parseTableBoardV1({...tableBoard,tables:[{...tableBoard.tables[1],status:"occupied"}]})===undefined,"an occupied table requires at least one active order");
 
