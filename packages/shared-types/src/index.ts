@@ -1194,10 +1194,14 @@ function compareCodeUnits(left: string, right: string): number {
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 export {
   OPERATIONAL_SHIFT_SCHEMA_VERSION,
+  parseOpenOperationalShiftCommandV1,
+  parseOpenOperationalShiftResultV1,
   parseOperationalShiftListV1,
   parseOperationalShiftSummaryV1,
 } from "./shifts.js";
 export type {
+  OpenOperationalShiftCommandV1,
+  OpenOperationalShiftResultV1,
   OperationalShiftListV1,
   OperationalShiftScopeV1,
   OperationalShiftSummaryV1,

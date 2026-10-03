@@ -2,6 +2,8 @@ import {
   parseActiveTableOrderListV1,
   parseActiveTableOrderListV2,
   parseAddOrderItemCommandV1,
+  parseAssignOrderWaiterCommandV1,
+  parseAssignOrderWaiterResultV1,
   parseCancelOrderItemCommandV1,
   parseCreateOrderCommandV1,
   parseCreateOrderCommandV2,
@@ -10,6 +12,7 @@ import {
   parseOrderDetailV1,
   parseOrderMutationSummaryV1,
   parseSendOrderToKitchenCommandV1,
+  parseTableBoardV1,
   parseTransitionOrderItemCommandV1,
 } from "./index.js";
 
@@ -70,6 +73,73 @@ expect(parseCreateOrderCommandV2(createV2)!==undefined,"operational order v2 par
 expect(parseCreateOrderCommandV1(createV2)===undefined,"v1 rejects the additive shift contract");
 expect(parseCreateOrderCommandV2({...createV2,schemaVersion:1})===undefined,"v2 requires its explicit schema version");
 expect(parseCreateOrderCommandV2({...createV2,shiftId:"invalid"})===undefined,"v2 requires a UUID shift");
+expect(parseCreateOrderCommandV2({...createV2,shiftId:null})!==undefined,"tables-board: null shiftId means server-resolved shift");
+
+const assignWaiterCommand={
+  schemaVersion:1,
+  scope:operationalScope,
+  orderId:createV2.orderId,
+  expectedVersion:1,
+  waiterUserId:"4b2b7e4d-6a2a-4f8f-9a0d-2d6a9f1b7c3e",
+  eventId:"6d4c2b1a-3f9e-4c7d-8b2a-1e5f7c9d3a6b",
+  idempotencyKey:"assign-waiter-attempt-1",
+  deviceId:"3a9f5d20-8c61-4b74-a235-6e1d7c4f9028",
+  occurredAt:"2026-09-05T19:05:00.000Z",
+};
+expect(parseAssignOrderWaiterCommandV1(assignWaiterCommand)!==undefined,"assign waiter command parses");
+expect(parseAssignOrderWaiterCommandV1({...assignWaiterCommand,waiterUserId:null})!==undefined,"assign waiter command accepts null (clear waiter)");
+expect(parseAssignOrderWaiterCommandV1({...assignWaiterCommand,waiterUserId:"invalid"})===undefined,"assign waiter rejects a non-UUID waiter");
+expect(parseAssignOrderWaiterCommandV1({...assignWaiterCommand,expectedVersion:0})===undefined,"assign waiter requires a positive expectedVersion");
+
+const assignWaiterResult={
+  schemaVersion:1,
+  scope:operationalScope,
+  orderId:createV2.orderId,
+  version:2,
+  waiterUserId:assignWaiterCommand.waiterUserId,
+  replayed:false,
+};
+expect(parseAssignOrderWaiterResultV1(assignWaiterResult)!==undefined,"assign waiter result parses");
+expect(parseAssignOrderWaiterResultV1({...assignWaiterResult,waiterUserId:null})!==undefined,"assign waiter result accepts a cleared waiter");
+
+const tableBoard={
+  schemaVersion:1,
+  scope:operationalScope,
+  unassignedOrders:[{
+    tableId:"6d8e0f32-5c4b-4a7e-9b2d-0c3f8e6a4b71",
+    orderId:"7e9f1a43-6d5c-4b8f-8c3e-1d4a9f7b5c82",
+    status:"draft",
+    version:1,
+    waiterUserId:null,
+    openedAt:"2026-09-05T19:00:00.000Z",
+  }],
+  tables:[{
+    tableId:operationalTableId,
+    status:"occupied",
+    activeOrders:[{
+      orderId:createV2.orderId,
+      status:"open",
+      version:2,
+      waiterUserId:assignWaiterCommand.waiterUserId,
+      openedAt:"2026-09-05T19:00:00.000Z",
+    }],
+  },{
+    tableId:"5c7d9e21-4b3a-4f6d-8a1c-9b2e7d5f3a60",
+    status:"free",
+    activeOrders:[],
+  }],
+};
+expect(parseTableBoardV1(tableBoard)!==undefined,"table board parses");
+const freeTable=(index:number)=>({tableId:`00000000-0000-4000-8000-${String(index).padStart(12,"0")}`,status:"free",activeOrders:[]});
+const manyTables=(count:number)=>Array.from({length:count},(_,index)=>freeTable(index+1));
+expect(parseTableBoardV1({...tableBoard,tables:manyTables(501)})?.tables.length===501,"a board with 501 tables (above the old cap) parses");
+expect(parseTableBoardV1({...tableBoard,tables:manyTables(50_000)})?.tables.length===50_000,"a board at the layout ceiling parses");
+expect(parseTableBoardV1({...tableBoard,tables:manyTables(50_001)})===undefined,"a board above the layout ceiling is rejected");
+expect(parseTableBoardV1(tableBoard)?.unassignedOrders[0]?.tableId==="6d8e0f32-5c4b-4a7e-9b2d-0c3f8e6a4b71","unassigned orders keep their table id");
+expect(parseTableBoardV1({...tableBoard,unassignedOrders:[{...tableBoard.unassignedOrders[0],status:"paid"}]})===undefined,"unassigned orders must be active");
+expect(parseTableBoardV1({schemaVersion:1,scope:operationalScope,tables:[]})===undefined,"unassignedOrders is required");
+expect(parseTableBoardV1({...tableBoard,tables:[{...tableBoard.tables[0],status:"free"}]})===undefined,"a free table cannot carry active orders");
+expect(parseTableBoardV1({...tableBoard,tables:[{...tableBoard.tables[1],status:"occupied"}]})===undefined,"an occupied table requires at least one active order");
 
 const activeOrder={
   orderId:createV2.orderId,

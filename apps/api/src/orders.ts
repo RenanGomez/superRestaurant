@@ -105,7 +105,7 @@ export type SendOrderToKitchenBatchResult =
 
 export interface OrderPersistencePort {
   listKdsTickets(actorId: string, subscription: RealtimeSubscriptionV1): Promise<KdsTicketListV1 | "forbidden">;
-  persist(actorId: string, expectedVersion: number, mutation: OrderMutation, operationalShiftId?: string): Promise<PersistOrderResult>;
+  persist(actorId: string, expectedVersion: number, mutation: OrderMutation, operationalShiftId?: string | null): Promise<PersistOrderResult>;
   read(actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing">;
   recoverKds(actorId: string, subscription: RealtimeSubscriptionV1, after: KdsCursorV1, limit: number): Promise<KdsEventPageV1 | "forbidden">;
   sendOrderToKitchen(
@@ -167,7 +167,7 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
     actorId: string,
     expectedVersion: number,
     mutation: OrderMutation,
-    operationalShiftId?: string,
+    operationalShiftId?: string | null,
   ): Promise<PersistOrderResult> {
     const encodedOrder = encodeOrderRecord(mutation.order);
     const encodedAudit = encodeOrderAuditEventRecord(mutation.auditEvent);
@@ -311,6 +311,11 @@ export class OrderService {
     @Inject(REALTIME_NOTIFICATION_PORT) private readonly notifications: RealtimeNotificationPort,
   ) {}
 
+  /**
+   * tables-board: `shiftId: null` means the operator never picked one. It is passed to SQL as null
+   * and `create_operational_order` resolves the branch's single open shift itself, only after its
+   * command-identity lookup, so a retry of an already-saved create replays even if the shift changed.
+   */
   public async create(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderMutationSummaryV1> {
     const operationalCommand = parseCreateOrderCommandV2(input);
     const command = operationalCommand ?? parseCreateOrderCommandV1(input);
@@ -320,7 +325,7 @@ export class OrderService {
       actorId,
       0,
       createOrder(orderInput(command), auditContext(command, actorId)),
-      operationalCommand?.shiftId,
+      operationalCommand === undefined ? undefined : operationalCommand.shiftId,
     );
   }
 
@@ -606,7 +611,7 @@ export class OrderService {
     actorId: string,
     expectedVersion: number,
     mutation: OrderMutation,
-    operationalShiftId?: string,
+    operationalShiftId?: string | null,
   ): Promise<SavedOrReplayedOrderResult> {
     let result: PersistOrderResult;
     try { result = await this.orders.persist(actorId, expectedVersion, mutation, operationalShiftId); } catch { throw unavailable(); }
@@ -637,7 +642,7 @@ export class OrderService {
     actorId: string,
     expectedVersion: number,
     mutation: OrderMutation,
-    operationalShiftId?: string,
+    operationalShiftId?: string | null,
   ): Promise<OrderMutationSummaryV1> {
     const result = await this.persistRaw(actorId, expectedVersion, mutation, operationalShiftId);
     return this.summaryFromResult(result);

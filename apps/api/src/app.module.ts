@@ -63,6 +63,8 @@ import {
   FetchCatalogImageStorageAdapter,
   lazyCatalogImageStorageConfig,
 } from "./catalog-image-storage.js";
+import { OrderWaiterController } from "./order-waiter.controller.js";
+import { ORDER_WAITER_PORT, OrderWaiterService, PostgresOrderWaiterAdapter } from "./order-waiter.js";
 import { OrdersController } from "./orders.controller.js";
 import {
   ORDER_PERSISTENCE_PORT,
@@ -80,6 +82,7 @@ import {
 import { OperationalShiftsController } from "./operational-shifts.controller.js";
 import {
   OPERATIONAL_SHIFT_DIRECTORY,
+  OPERATIONAL_SHIFT_WRITER,
   OperationalShiftService,
   PostgresOperationalShiftDirectory,
 } from "./operational-shifts.js";
@@ -111,6 +114,8 @@ import {
   DeliveryZoneService,
   PostgresDeliveryZoneStore,
 } from "./delivery-zones.js";
+import { TableBoardController } from "./table-board.controller.js";
+import { TABLE_BOARD_PORT, PostgresTableBoardAdapter, TableBoardService } from "./table-board.js";
 import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
 
 @Module({
@@ -135,6 +140,8 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     BranchOrderWorkTrayController,
     SystemOnboardingController,
     DeliveryZonesController,
+    TableBoardController,
+    OrderWaiterController,
   ],
   providers: [
     {
@@ -207,6 +214,12 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     PostgresDiningTableAdapter,
     { provide: DINING_TABLE_PORT, useExisting: PostgresDiningTableAdapter },
     DiningTableService,
+    PostgresTableBoardAdapter,
+    { provide: TABLE_BOARD_PORT, useExisting: PostgresTableBoardAdapter },
+    TableBoardService,
+    PostgresOrderWaiterAdapter,
+    { provide: ORDER_WAITER_PORT, useExisting: PostgresOrderWaiterAdapter },
+    OrderWaiterService,
     PostgresMenuCatalogAdapter,
     { provide: MENU_CATALOG_PORT, useExisting: PostgresMenuCatalogAdapter },
     MenuCatalogService,
@@ -227,6 +240,7 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     FinancialService,
     PostgresOperationalShiftDirectory,
     { provide: OPERATIONAL_SHIFT_DIRECTORY, useExisting: PostgresOperationalShiftDirectory },
+    { provide: OPERATIONAL_SHIFT_WRITER, useExisting: PostgresOperationalShiftDirectory },
     OperationalShiftService,
     PostgresTableOrderContextDirectory,
     { provide: TABLE_ORDER_CONTEXT_DIRECTORY, useExisting: PostgresTableOrderContextDirectory },

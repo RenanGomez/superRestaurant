@@ -22,6 +22,66 @@ export interface OperationalShiftListV1 {
   readonly shifts: readonly OperationalShiftSummaryV1[];
 }
 
+/** tables-board: opens the single allowed open operational shift for a branch. The operator never
+ * picks a shift id by hand; the client generates `shiftId` once as a fresh identity the same way it
+ * generates `eventId`/`idempotencyKey`. */
+export interface OpenOperationalShiftCommandV1 {
+  readonly deviceId: string;
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly name: string;
+  readonly occurredAt: string;
+  readonly schemaVersion: typeof OPERATIONAL_SHIFT_SCHEMA_VERSION;
+  readonly scope: OperationalShiftScopeV1;
+  readonly shiftId: string;
+}
+
+export interface OpenOperationalShiftResultV1 {
+  readonly replayed: boolean;
+  readonly schemaVersion: typeof OPERATIONAL_SHIFT_SCHEMA_VERSION;
+  readonly scope: OperationalShiftScopeV1;
+  readonly shiftId: string;
+}
+
+export function parseOpenOperationalShiftCommandV1(value: unknown): OpenOperationalShiftCommandV1 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "scope", "shiftId", "name", "eventId", "idempotencyKey", "deviceId", "occurredAt",
+  ]);
+  if (record === undefined || own(record, "schemaVersion") !== OPERATIONAL_SHIFT_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const shiftId = uuid(own(record, "shiftId"));
+  const name = displayName(own(record, "name"));
+  const eventId = uuid(own(record, "eventId"));
+  const deviceId = uuid(own(record, "deviceId"));
+  const idempotencyKey = text(own(record, "idempotencyKey"), 1, 200);
+  const occurredAt = timestamp(own(record, "occurredAt"));
+  return scope === undefined || shiftId === undefined || name === undefined || eventId === undefined
+    || deviceId === undefined || idempotencyKey === undefined || occurredAt === undefined
+    ? undefined
+    : Object.freeze({
+      deviceId, eventId, idempotencyKey, name, occurredAt,
+      schemaVersion: OPERATIONAL_SHIFT_SCHEMA_VERSION, scope, shiftId,
+    });
+}
+
+export function parseOpenOperationalShiftResultV1(value: unknown): OpenOperationalShiftResultV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "shiftId", "replayed"]);
+  if (record === undefined || own(record, "schemaVersion") !== OPERATIONAL_SHIFT_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const shiftId = uuid(own(record, "shiftId"));
+  const replayed = own(record, "replayed");
+  return scope === undefined || shiftId === undefined || typeof replayed !== "boolean"
+    ? undefined
+    : Object.freeze({ replayed, schemaVersion: OPERATIONAL_SHIFT_SCHEMA_VERSION, scope, shiftId });
+}
+
+function text(value: unknown, min: number, max: number): string | undefined {
+  return typeof value === "string" && value.length >= min && value.length <= max && value === value.trim()
+    && !/[\u0000-\u001f\u007f]/u.test(value)
+    ? value
+    : undefined;
+}
+
 export function parseOperationalShiftListV1(value: unknown): OperationalShiftListV1 | undefined {
   const record = exactRecord(value, ["schemaVersion", "scope", "shifts"]);
   if (record === undefined || own(record, "schemaVersion") !== OPERATIONAL_SHIFT_SCHEMA_VERSION) return undefined;
