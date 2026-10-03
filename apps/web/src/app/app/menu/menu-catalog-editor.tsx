@@ -8,10 +8,11 @@ import type {
   MenuProductV1,
 } from "@super-restaurant/shared-types";
 import { useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useFormStatus } from "react-dom";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { DEFAULT_PESO_CURRENCY, formatMinorForMoneyInput, parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import { currencyFractionDigits } from "../../../lib/money-scale";
-import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, validateMenuImageFile, type MenuImageAttempt } from "../../../lib/menu-images";
+import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, publishDisabledReason, validateMenuImageFile, type MenuImageAttempt } from "../../../lib/menu-images";
 
 import { saveMenuCatalogAction, uploadMenuImageAction } from "./actions";
 
@@ -49,6 +50,8 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
     })) ?? [],
   );
   const [removal, setRemoval] = useState<Removal | null>(null);
+  const [pendingUploads, setPendingUploads] = useState(0);
+  const onUploadPendingChange = (pending: boolean): void => setPendingUploads((current) => current + (pending ? 1 : -1));
   const expectedVersion = state.catalog?.version ?? 0;
   const draft = useMemo(() => JSON.stringify({ categories, currency, expectedVersion, modifierGroups: groups, products } satisfies Draft), [categories, currency, expectedVersion, groups, products]);
 
@@ -124,7 +127,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
   };
 
   return (
-    <form action={saveMenuCatalogAction} className="flex min-w-0 flex-col gap-5">
+    <form action={saveMenuCatalogAction} onSubmit={(event) => { if (publishDisabledReason(pendingUploads, false) !== null) event.preventDefault(); }} className="flex min-w-0 flex-col gap-5">
       <input type="hidden" name="draft" value={draft} />
       <section className="sticky top-0 z-20 flex flex-wrap items-end justify-between gap-3 rounded-2xl border border-border bg-surface/95 p-4 shadow-sm backdrop-blur">
         <div className="flex flex-wrap items-end gap-4">
@@ -137,9 +140,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
           </p>
         </div>
         {canManage ? (
-          <button type="submit" className="min-h-11 rounded-xl bg-accent px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
-            Publicar nueva versión
-          </button>
+          <PublishButton pendingUploads={pendingUploads} />
         ) : (
           <p className="rounded-lg bg-bg px-3 py-2 text-[12px] text-text-muted">Vista de solo lectura</p>
         )}
@@ -198,6 +199,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
                 onProductImageChange={(imagePath) => setProducts((current) => current.map((entry) => entry.productId === product.productId ? { ...entry, imagePath } : entry))}
                 onOptionImageChange={(groupId, optionId, imagePath) => setGroups((current) => current.map((entry) => entry.groupId === groupId ? { ...entry, options: entry.options.map((option) => option.optionId === optionId ? { ...option, imagePath } : option) } : entry))}
                 onRemove={(request) => setRemoval(request)}
+                onUploadPendingChange={onUploadPendingChange}
               />
             ))}
           </div>
@@ -207,7 +209,16 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
   );
 }
 
-function ProductEditor({ canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove }: {
+function PublishButton({ pendingUploads }: { readonly pendingUploads: number }): ReactNode {
+  const { pending: saving } = useFormStatus();
+  const disabledReason = publishDisabledReason(pendingUploads, saving);
+  return <button type="submit" disabled={disabledReason !== null}
+    className="min-h-11 rounded-xl bg-accent px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-60">
+    {disabledReason ?? "Publicar nueva versión"}
+  </button>;
+}
+
+function ProductEditor({ canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
   readonly canManage: boolean;
   readonly categories: readonly MenuCategoryV1[];
   readonly currency: string;
@@ -221,12 +232,13 @@ function ProductEditor({ canManage, categories, currency, groups, product, supab
   readonly onProductImageChange: (imagePath: string | null) => void;
   readonly onOptionImageChange: (groupId: string, optionId: string, imagePath: string | null) => void;
   readonly onRemove: (removal: Removal) => void;
+  readonly onUploadPendingChange: (pending: boolean) => void;
 }): ReactNode {
   const change = (patch: Partial<MenuProductV1>): void => onProductChange({ ...product, ...patch });
   const tax = product.tax;
   return (
     <article className="min-w-0 rounded-2xl border border-border bg-bg/40 p-3 sm:p-4">
-      <MenuPhoto canManage={canManage} imagePath={product.imagePath} name={product.name} supabaseUrl={supabaseUrl} target="product" targetId={product.productId} onChange={onProductImageChange} />
+      <MenuPhoto canManage={canManage} imagePath={product.imagePath} name={product.name} supabaseUrl={supabaseUrl} target="product" targetId={product.productId} onChange={onProductImageChange} onUploadPendingChange={onUploadPendingChange} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <TextInput disabled={!canManage} label="Producto" maxLength={120} value={product.name} onChange={(name) => change({ name })} />
         <label className="flex flex-col gap-1 text-[11px] font-medium">Categoría
@@ -271,13 +283,13 @@ function ProductEditor({ canManage, categories, currency, groups, product, supab
         {canManage && <AddButton label="Agregar grupo" onClick={onAddGroup} />}
       </div>
       {groups.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin modificadores.</p> : groups.map((group) => (
-        <ModifierGroupEditor key={group.groupId} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl} onAddOption={() => onAddOption(group.groupId)} onChange={(changed) => onGroupsChange((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))} onOptionImageChange={(optionId, imagePath) => onOptionImageChange(group.groupId, optionId, imagePath)} onRemove={onRemove} />
+        <ModifierGroupEditor key={group.groupId} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl} onAddOption={() => onAddOption(group.groupId)} onChange={(changed) => onGroupsChange((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))} onOptionImageChange={(optionId, imagePath) => onOptionImageChange(group.groupId, optionId, imagePath)} onRemove={onRemove} onUploadPendingChange={onUploadPendingChange} />
       ))}
     </article>
   );
 }
 
-function ModifierGroupEditor({ canManage, currency, group, supabaseUrl, onAddOption, onChange, onOptionImageChange, onRemove }: {
+function ModifierGroupEditor({ canManage, currency, group, supabaseUrl, onAddOption, onChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
   readonly canManage: boolean;
   readonly currency: string;
   readonly group: MenuModifierGroupV1;
@@ -286,6 +298,7 @@ function ModifierGroupEditor({ canManage, currency, group, supabaseUrl, onAddOpt
   readonly onChange: (group: MenuModifierGroupV1) => void;
   readonly onOptionImageChange: (optionId: string, imagePath: string | null) => void;
   readonly onRemove: (removal: Removal) => void;
+  readonly onUploadPendingChange: (pending: boolean) => void;
 }): ReactNode {
   const change = (patch: Partial<MenuModifierGroupV1>): void => onChange({ ...group, ...patch });
   return (
@@ -301,7 +314,7 @@ function ModifierGroupEditor({ canManage, currency, group, supabaseUrl, onAddOpt
       <div className="mt-2 grid gap-2 lg:grid-cols-2">
         {group.options.map((option) => (
           <div key={option.optionId} className="grid gap-2 rounded-lg border border-border bg-bg/50 p-2 sm:grid-cols-[1fr_170px_140px_auto]">
-            <div className="sm:col-span-full"><MenuPhoto canManage={canManage} imagePath={option.imagePath} name={option.name} supabaseUrl={supabaseUrl} target="option" targetId={option.optionId} onChange={(imagePath) => onOptionImageChange(option.optionId, imagePath)} /></div>
+            <div className="sm:col-span-full"><MenuPhoto canManage={canManage} imagePath={option.imagePath} name={option.name} supabaseUrl={supabaseUrl} target="option" targetId={option.optionId} onChange={(imagePath) => onOptionImageChange(option.optionId, imagePath)} onUploadPendingChange={onUploadPendingChange} /></div>
             <TextInput disabled={!canManage} label="Opción" maxLength={80} value={option.name} onChange={(name) => changeOption(group, option.optionId, { name }, onChange)} />
             <MoneyInput disabled={!canManage} currency={currency} value={option.unitPriceMinor} onChange={(unitPriceMinor) => changeOption(group, option.optionId, { unitPriceMinor }, onChange)} />
             <NullableNumberInput disabled={!canManage} label="Máximo opcional" min={1} max={1_000} value={option.maximumQuantity} onChange={(maximumQuantity) => changeOption(group, option.optionId, { maximumQuantity }, onChange)} />
@@ -317,7 +330,7 @@ function changeOption(group: MenuModifierGroupV1, optionId: string, patch: Parti
   onChange({ ...group, options: group.options.map((option) => option.optionId === optionId ? { ...option, ...patch } : option) });
 }
 
-function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, onChange }: {
+function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, onChange, onUploadPendingChange }: {
   readonly canManage: boolean;
   readonly imagePath: string | null;
   readonly name: string;
@@ -325,6 +338,7 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
   readonly target: "product" | "option";
   readonly targetId: string;
   readonly onChange: (imagePath: string | null) => void;
+  readonly onUploadPendingChange: (pending: boolean) => void;
 }): ReactNode {
   const fileInput = useRef<HTMLInputElement>(null);
   const attempt = useRef<MenuImageAttempt | null>(null);
@@ -334,7 +348,6 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
   const url = menuImagePublicUrl(supabaseUrl, imagePath);
 
   const upload = async (selected: MenuImageAttempt): Promise<void> => {
-    setBusy(true);
     setMessage("Subiendo…");
     try {
       const result = await uploadMenuImageAction(target, targetId, selected);
@@ -344,8 +357,18 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
       setMessage("Foto lista. Publica la nueva versión para mostrarla en captura.");
     } catch {
       setMessage("No se pudo subir la foto. Inténtalo de nuevo.");
+    }
+  };
+
+  const retry = async (): Promise<void> => {
+    if (attempt.current === null) return;
+    setBusy(true);
+    onUploadPendingChange(true);
+    try {
+      await upload(attempt.current);
     } finally {
       setBusy(false);
+      onUploadPendingChange(false);
     }
   };
 
@@ -355,6 +378,8 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
     if (file === undefined) return;
     const validation = validateMenuImageFile(file);
     if (validation !== null) { setMessage(validation); return; }
+    setBusy(true);
+    onUploadPendingChange(true);
     try {
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -369,6 +394,9 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
       await upload(selected);
     } catch {
       setMessage("No se pudo leer la foto. Inténtalo de nuevo.");
+    } finally {
+      setBusy(false);
+      onUploadPendingChange(false);
     }
   };
 
@@ -379,7 +407,7 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
     {canManage && <>
       <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" aria-label={`Foto de ${name}`} onChange={(event) => { void choose(event); }} />
       <button type="button" disabled={busy} onClick={() => fileInput.current?.click()} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60">{busy ? "Subiendo…" : "Foto"}</button>
-      {attempt.current !== null && message !== null && message.startsWith("No se pudo subir") && <button type="button" disabled={busy} onClick={() => { if (attempt.current !== null) void upload(attempt.current); }} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-accent">Reintentar</button>}
+      {attempt.current !== null && message !== null && message.startsWith("No se pudo subir") && <button type="button" disabled={busy} onClick={() => { void retry(); }} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-accent">Reintentar</button>}
       {imagePath !== null && <button type="button" disabled={busy} onClick={() => { onChange(null); setMessage("Foto quitada del borrador."); }} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm focus-visible:outline-2 focus-visible:outline-accent">Quitar foto</button>}
     </>}
     {message !== null && <span role="status" className="min-w-0 basis-full text-xs text-text-muted">{message}</span>}

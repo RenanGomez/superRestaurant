@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MENU_IMAGE_MAX_DECODED_BYTES } from "@super-restaurant/shared-types";
-import { menuImageAttempt, menuImagePublicUrl, validateMenuImageFile } from "./menu-images.js";
+import { menuImageAttempt, menuImagePublicUrl, publishDisabledReason, validateMenuImageFile } from "./menu-images.js";
 
 test("menu image validation accepts supported images up to 2 MB", () => {
   for (const type of ["image/jpeg", "image/png", "image/webp"]) {
@@ -33,4 +33,12 @@ test("a retry of the same selected bytes reuses all mutation identifiers", () =>
   assert.equal(nextId, 4);
   const third = menuImageAttempt(second, { ...file, fileName: "b.png" }, createId, now);
   assert.notEqual(third.idempotencyKey, second.idempotencyKey);
+});
+
+test("publishing waits for every upload and resumes after success or failure", () => {
+  assert.equal(publishDisabledReason(0, false), null);
+  assert.equal(publishDisabledReason(1, false), "Esperando fotos…");
+  assert.equal(publishDisabledReason(2, false), "Esperando fotos… (2)");
+  assert.equal(publishDisabledReason(0, true), "Publicando…");
+  assert.equal(publishDisabledReason(2, true), "Esperando fotos… (2)");
 });

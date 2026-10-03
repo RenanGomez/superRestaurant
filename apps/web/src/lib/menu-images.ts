@@ -39,3 +39,8 @@ export function menuImageAttempt(
     && previous.fileName === file.fileName && previous.lastModified === file.lastModified) return previous;
   return { ...file, eventId: createId(), idempotencyKey: createId(), occurredAt: now() };
 }
+
+export function publishDisabledReason(pendingUploads: number, saving: boolean): string | null {
+  if (pendingUploads > 0) return pendingUploads === 1 ? "Esperando fotos…" : `Esperando fotos… (${pendingUploads})`;
+  return saving ? "Publicando…" : null;
+}
