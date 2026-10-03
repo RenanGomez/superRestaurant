@@ -124,9 +124,9 @@ test("groupProductsByCategory returns only active categories sorted by displayOr
     ],
     products: [
       { productId: "p1", categoryId: "c1", name: "Pizza", active: true, displayOrder: 1, unit: "pieza",
-        unitPriceMinor: 1000, sku: null, stationId: "s1", tax: null },
+        unitPriceMinor: 1000, sku: null, stationId: "s1", tax: null, imagePath: null },
       { productId: "p2", categoryId: "c2", name: "Refresco", active: false, displayOrder: 1, unit: "pieza",
-        unitPriceMinor: 500, sku: null, stationId: "s1", tax: null },
+        unitPriceMinor: 500, sku: null, stationId: "s1", tax: null, imagePath: null },
     ],
     modifierGroups: [],
   } satisfies MenuCatalogV1;
@@ -143,8 +143,8 @@ test("validateModifierSelection enforces group min/max and per-option max", () =
   const group: MenuModifierGroupV1 = { groupId, productId: "p1", name: "Salsa", active: true, displayOrder: 1,
     minimumQuantity: 1, maximumQuantity: 2,
     options: [
-      { optionId, name: "BBQ", active: true, unitPriceMinor: 0, maximumQuantity: 1 },
-      { optionId: optionId2, name: "Búfalo", active: true, unitPriceMinor: 0, maximumQuantity: null },
+      { optionId, name: "BBQ", active: true, unitPriceMinor: 0, maximumQuantity: 1, imagePath: null },
+      { optionId: optionId2, name: "Búfalo", active: true, unitPriceMinor: 0, maximumQuantity: null, imagePath: null },
     ] };
   assert.equal(validateModifierSelection(group, []).valid, false);
   assert.equal(validateModifierSelection(group, []).reason, "min");

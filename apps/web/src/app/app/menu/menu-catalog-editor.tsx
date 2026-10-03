@@ -65,6 +65,7 @@ export function MenuCatalogEditor({ canManage, state }: {
       active: true,
       categoryId: category.categoryId,
       displayOrder: nextDisplayOrder(current),
+      imagePath: null,
       name: "Nuevo producto",
       productId: crypto.randomUUID(),
       sku: null,
@@ -82,7 +83,7 @@ export function MenuCatalogEditor({ canManage, state }: {
       maximumQuantity: 1,
       minimumQuantity: 0,
       name: "Nuevo grupo",
-      options: [{ active: true, maximumQuantity: null, name: "Nueva opción", optionId: crypto.randomUUID(), unitPriceMinor: 0 }],
+      options: [{ active: true, imagePath: null, maximumQuantity: null, name: "Nueva opción", optionId: crypto.randomUUID(), unitPriceMinor: 0 }],
       productId,
     }]);
   };
@@ -91,6 +92,7 @@ export function MenuCatalogEditor({ canManage, state }: {
       ...group,
       options: [...group.options, {
         active: true,
+        imagePath: null,
         maximumQuantity: null,
         name: "Nueva opción",
         optionId: crypto.randomUUID(),

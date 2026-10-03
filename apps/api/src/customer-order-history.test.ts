@@ -447,13 +447,16 @@ function catalogState(overrides: Partial<NonNullable<MenuCatalogStateV1["catalog
         maximumQuantity: 1,
         minimumQuantity: 0,
         name: "Extras",
-        options: [{ active: true, maximumQuantity: 1, name: "Queso", optionId: modifierId, unitPriceMinor: 600 }],
+        options: [{
+          active: true, imagePath: null, maximumQuantity: 1, name: "Queso", optionId: modifierId, unitPriceMinor: 600,
+        }],
         productId,
       }],
       products: [{
         active: true,
         categoryId,
         displayOrder: 0,
+        imagePath: null,
         name: "Tacos actuales",
         productId,
         sku: "TACO-1",

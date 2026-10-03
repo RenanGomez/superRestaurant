@@ -4,6 +4,7 @@ import {
   parseMenuCatalogStateV1,
   parseMenuCatalogV1,
   parseSaveMenuCatalogCommandV1,
+  parseUploadMenuImageCommandV1,
 } from "./index.js";
 
 const restaurantId = "1e37ae13-8507-484c-969f-2176f77b7000";
@@ -35,6 +36,7 @@ function command(): Record<string, unknown> {
       stationId: "kitchen",
       unit: "piece",
       unitPriceMinor: 12_500,
+      imagePath: `${restaurantId}/products/${productId}/00000000000000000000000000000000.jpg`,
       tax: {
         taxId: "vat",
         name: "IVA",
@@ -52,7 +54,10 @@ function command(): Record<string, unknown> {
       displayOrder: 0,
       minimumQuantity: 0,
       maximumQuantity: 2,
-      options: [{ optionId, name: "Queso", unitPriceMinor: 1_500, active: true, maximumQuantity: 2 }],
+      options: [{
+        optionId, name: "Queso", unitPriceMinor: 1_500, active: true, maximumQuantity: 2,
+        imagePath: `${restaurantId}/options/${optionId}/11111111111111111111111111111111.png`,
+      }],
     }],
   };
 }
@@ -172,6 +177,75 @@ const accessor = command();
 Object.defineProperty(accessor, "currency", { enumerable: true, get: () => "MXN" });
 expectRejected(accessor, "accessor fields are rejected without invocation");
 expectRejected(new Proxy(command(), { ownKeys: () => { throw new Error("hostile"); } }), "hostile proxies fail closed");
+
+expect(parsed.products[0]?.imagePath === `${restaurantId}/products/${productId}/00000000000000000000000000000000.jpg`,
+  "product imagePath round-trips");
+expect(parsed.modifierGroups[0]?.options[0]?.imagePath
+  === `${restaurantId}/options/${optionId}/11111111111111111111111111111111.png`, "option imagePath round-trips");
+
+const nullImagePaths = command();
+nullImagePaths.products = [{ ...(nullImagePaths.products as readonly Record<string, unknown>[])[0], imagePath: null }];
+nullImagePaths.modifierGroups = [{
+  ...(nullImagePaths.modifierGroups as readonly Record<string, unknown>[])[0],
+  options: [{ ...((nullImagePaths.modifierGroups as readonly Record<string, unknown>[])[0]?.options as readonly Record<string, unknown>[])[0], imagePath: null }],
+}];
+const nullImageParsed = parseSaveMenuCatalogCommandV1(nullImagePaths);
+expectDefined(nullImageParsed, "null imagePath is accepted on both product and option");
+expect(nullImageParsed.products[0]?.imagePath === null, "product imagePath stays null");
+
+const missingImagePath = command();
+missingImagePath.products = [{ ...(missingImagePath.products as readonly Record<string, unknown>[])[0] }];
+delete (missingImagePath.products as Record<string, unknown>[])[0]?.imagePath;
+const absentParsed = parseSaveMenuCatalogCommandV1(missingImagePath);
+expectDefined(absentParsed, "an omitted imagePath (older producer) still parses");
+expect(absentParsed.products[0]?.imagePath === null, "an omitted product imagePath normalizes to null");
+const absentOption = command();
+absentOption.modifierGroups = [{
+  ...(absentOption.modifierGroups as readonly Record<string, unknown>[])[0],
+  options: [{ optionId, name: "Queso", unitPriceMinor: 1_500, active: true, maximumQuantity: 2 }],
+}];
+const absentOptionParsed = parseSaveMenuCatalogCommandV1(absentOption);
+expectDefined(absentOptionParsed, "an option without imagePath still parses");
+expect(absentOptionParsed.modifierGroups[0]?.options[0]?.imagePath === null, "an omitted option imagePath normalizes to null");
+
+const malformedImagePath = command();
+malformedImagePath.products = [{
+  ...(malformedImagePath.products as readonly Record<string, unknown>[])[0], imagePath: "../../etc/passwd",
+}];
+expectRejected(malformedImagePath, "a malformed imagePath shape is rejected");
+
+const wrongExtensionImagePath = command();
+wrongExtensionImagePath.products = [{
+  ...(wrongExtensionImagePath.products as readonly Record<string, unknown>[])[0],
+  imagePath: `${restaurantId}/products/${productId}/00000000000000000000000000000000.gif`,
+}];
+expectRejected(wrongExtensionImagePath, "an unsupported image extension is rejected");
+
+function uploadCommand(): Record<string, unknown> {
+  return {
+    schemaVersion: MENU_CATALOG_SCHEMA_VERSION,
+    scope: { restaurantId, branchId },
+    target: "product",
+    targetId: productId,
+    contentType: "image/jpeg",
+    dataBase64: "/9j/4AAQSkZJRgABAQEASABIAAD/",
+    eventId: "9e113c0b-9f7f-4e8d-8d1e-9b6a7c1b0001",
+    idempotencyKey: "9e113c0b-9f7f-4e8d-8d1e-9b6a7c1b0002",
+    deviceId: "9e113c0b-9f7f-4e8d-8d1e-9b6a7c1b0003",
+    occurredAt: "2026-10-04T00:00:00.000Z",
+  };
+}
+
+const uploadParsed = parseUploadMenuImageCommandV1(uploadCommand());
+expectDefined(uploadParsed, "valid upload-menu-image command parses");
+expect(Object.isFrozen(uploadParsed), "upload command is frozen");
+expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), target: "option" }) !== undefined, "option target is accepted");
+expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), target: "ingredient" }) === undefined, "unknown target is rejected");
+expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), contentType: "image/gif" }) === undefined, "unsupported content type is rejected");
+expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), dataBase64: "" }) === undefined, "empty payload is rejected");
+expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), dataBase64: "not base64 at all!" }) === undefined, "non-base64 payload is rejected");
+expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), dataBase64: "A".repeat(3_000_000) }) === undefined, "oversized payload is rejected");
+expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), unexpected: true }) === undefined, "extra upload command field is rejected");
 
 expect(parseMenuCatalogStateV1({ schemaVersion: 1, scope: parsed.scope, catalog: undefined }) === undefined, "undefined catalog state is rejected");
 expect(parseMenuCatalogV1({ ...response, version: 0 }) === undefined, "non-positive response version is rejected");
