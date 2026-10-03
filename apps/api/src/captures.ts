@@ -15,6 +15,16 @@ import {
   parseCaptureRecoveryPreferenceResultV1,
   parseCaptureWorkTrayRequestV1,
   parseCaptureWorkTrayResultV1,
+  parseCaptureWorkTrayRequestV2,
+  parseCaptureWorkTrayResultV2,
+  parseCaptureTrayItemV2,
+  parseRenewCaptureLeaseCommandV1,
+  parseRenewCaptureLeaseResultV1,
+  type CaptureWorkTrayRequestV2,
+  type CaptureWorkTrayResultV2,
+  type CaptureTrayItemV2,
+  type RenewCaptureLeaseCommandV1,
+  type RenewCaptureLeaseResultV1,
   parseCaptureWorkspaceRequestV1,
   parseCaptureWorkspaceRequestV2,
   parseCaptureWorkspaceRequestV3,
@@ -91,6 +101,7 @@ import { createHash } from "node:crypto";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
+import { rolesGrantPermission } from "./auth/rbac-policy.js";
 import {
   materializeCaptureOrder,
   materializeCaptureSelectionOrder,
@@ -134,6 +145,8 @@ export type CaptureAttentionCommand = HoldCaptureDraftCommandV1 | ClaimCaptureDr
   | TakeoverCaptureDraftCommandV1;
 export interface CaptureAttentionPort {
   mutateAttention(actorId: string, operation: CaptureEditOperation, command: CaptureAttentionCommand): Promise<unknown>;
+  /** Optional so existing ports/fakes keep compiling; absent means the heartbeat is unavailable. */
+  renewLease?(actorId: string, command: RenewCaptureLeaseCommandV1): Promise<unknown>;
 }
 export const CAPTURE_ATTENTION_PORT = Symbol("CAPTURE_ATTENTION_PORT");
 export interface CaptureCustomerPort {
@@ -204,7 +217,10 @@ export interface CaptureDeliveryQuoteComputationPort {
   quoteForCapture(principal: AuthenticatedPrincipal, input: unknown): Promise<DeliveryQuoteV1>;
 }
 export const CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT = Symbol("CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT");
-export interface CaptureTrayPort { list(actorId: string, request: CaptureWorkTrayRequestV1): Promise<unknown>; }
+export interface CaptureTrayPort {
+  list(actorId: string, request: CaptureWorkTrayRequestV1): Promise<unknown>;
+  listV2?(actorId: string, request: CaptureWorkTrayRequestV2): Promise<unknown>;
+}
 export const CAPTURE_TRAY_PORT = Symbol("CAPTURE_TRAY_PORT");
 export interface CaptureAssignmentDirectoryPort {
   listAssignmentCandidates(actorId: string, request: CaptureAssignmentDirectoryRequestV1): Promise<unknown>;
@@ -557,6 +573,32 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     if (row === undefined) throw unavailable();
     return row.result;
   }
+
+  public async listV2(actorId: string, input: CaptureWorkTrayRequestV2): Promise<unknown> {
+    const request = parseCaptureWorkTrayRequestV2(input);
+    if (!canonicalUuid.test(actorId) || request === undefined) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.list_capture_work_tray_v2($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async renewLease(actorId: string, input: RenewCaptureLeaseCommandV1): Promise<unknown> {
+    const command = parseRenewCaptureLeaseCommandV1(input);
+    if (!canonicalUuid.test(actorId) || command === undefined) throw new CaptureApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.renew_capture_lease($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(command)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
 }
 
 @Injectable()
@@ -564,8 +606,86 @@ export class CaptureTrayService {
   public constructor(
     @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
     @Inject(CAPTURE_TRAY_PORT) private readonly tray: CaptureTrayPort,
+    @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
   ) {}
-  public async list(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkTrayResultV1> {
+
+  /** V2 (enriched) when the body is a V2 request; V1 stays byte-for-byte what it was. */
+  public async list(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkTrayResultV1 | CaptureWorkTrayResultV2> {
+    const requestV2 = parseCaptureWorkTrayRequestV2(input);
+    if (requestV2 !== undefined) return this.listV2(principal, requestV2);
+    return this.listV1(principal, input);
+  }
+
+  private async listV2(principal: AuthenticatedPrincipal, request: CaptureWorkTrayRequestV2): Promise<CaptureWorkTrayResultV2> {
+    let actorId: string;
+    let canReadCustomers: boolean;
+    let canReadCatalog: boolean;
+    try {
+      const authorized = await this.authorization.authorizeBranch(principal, request.scope, "captures.read");
+      actorId = authorized.principal.actorId;
+      // Optional capabilities, never gates: without them the draft is still listed, but the
+      // customer (PII) or the priced total is withheld by the server.
+      canReadCustomers = rolesGrantPermission(authorized.roles, "customers.read");
+      canReadCatalog = rolesGrantPermission(authorized.roles, "catalog.read");
+    } catch { throw new CaptureApplicationError("authorization"); }
+    if (this.tray.listV2 === undefined) throw unavailable();
+    let raw: unknown;
+    try { raw = await this.tray.listV2(actorId, request); } catch { throw unavailable(); }
+    const statusOnly = exactRecord(raw, ["status"]);
+    if (statusOnly?.status === "denied") throw new CaptureApplicationError("authorization");
+    if (statusOnly !== undefined) throw statusOnly.status === "rejected" ? new CaptureApplicationError("request") : unavailable();
+    const envelope = exactRecord(raw, ["schemaVersion", "items"]);
+    if (envelope === undefined || envelope.schemaVersion !== 2 || !Array.isArray(envelope.items)
+      || envelope.items.length > request.limit) throw unavailable();
+    const rawItems: Record<string, unknown>[] = [];
+    for (const rawItem of envelope.items as unknown[]) {
+      const itemRecord = exactRecord(rawItem, TRAY_V2_RAW_KEYS);
+      if (itemRecord === undefined) throw unavailable();
+      rawItems.push(itemRecord);
+    }
+    const catalog = canReadCatalog && rawItems.some((item) => item.selectionPlan !== null)
+      ? await this.readCatalogBestEffort(actorId, request.scope) : null;
+    const items: CaptureTrayItemV2[] = [];
+    for (const rawItem of rawItems) {
+      const priced = catalog === null ? null : priceTrayDraft(rawItem.selectionPlan, catalog, request.scope);
+      const item = parseCaptureTrayItemV2({
+        attentionLeaseExpiresAt: rawItem.attentionLeaseExpiresAt,
+        attentionStatus: rawItem.attentionStatus,
+        captureDraftId: rawItem.captureDraftId,
+        currency: priced === null ? null : priced.currency,
+        customer: canReadCustomers ? rawItem.customer : null,
+        folio: rawItem.folio,
+        fulfillmentChannel: rawItem.fulfillmentChannel,
+        ownerMembershipId: rawItem.ownerMembershipId,
+        schemaVersion: 2,
+        scope: rawItem.scope,
+        sourceChannel: rawItem.sourceChannel,
+        status: rawItem.status,
+        totalMinor: priced === null ? null : priced.totalMinor,
+        updatedAt: rawItem.updatedAt,
+        version: rawItem.version,
+      });
+      if (item === undefined || item.status !== "draft"
+        || item.scope.restaurantId !== request.scope.restaurantId || item.scope.branchId !== request.scope.branchId) {
+        throw unavailable();
+      }
+      items.push(item);
+    }
+    const result = parseCaptureWorkTrayResultV2({ items, schemaVersion: 2 });
+    if (result === undefined) throw unavailable();
+    return result;
+  }
+
+  private async readCatalogBestEffort(actorId: string, scope: BranchScope): Promise<MenuCatalogV1 | null> {
+    try {
+      const state = await this.catalogs.read(actorId, scope);
+      if (state === "forbidden" || state.catalog === null
+        || state.scope.restaurantId !== scope.restaurantId || state.scope.branchId !== scope.branchId) return null;
+      return state.catalog;
+    } catch { return null; }
+  }
+
+  private async listV1(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkTrayResultV1> {
     const request = parseCaptureWorkTrayRequestV1(input);
     if (request === undefined) throw new CaptureApplicationError("request");
     let actorId: string;
@@ -581,6 +701,30 @@ export class CaptureTrayService {
       || item.scope.restaurantId !== request.scope.restaurantId || item.scope.branchId !== request.scope.branchId)) throw unavailable();
     return result;
   }
+}
+
+const TRAY_V2_RAW_KEYS = [
+  "schemaVersion", "scope", "captureDraftId", "folio", "sourceChannel", "fulfillmentChannel", "status",
+  "attentionStatus", "ownerMembershipId", "version", "updatedAt", "attentionLeaseExpiresAt", "customer", "selectionPlan",
+] as const;
+
+/**
+ * Best-effort tax-inclusive items total of a draft's stored selection plan, priced by the server
+ * with the same pipeline as the workspace projection. Anything stale or unpriceable (no plan, a
+ * catalogVersion that moved on, a retired product) yields `null` and never fails the tray.
+ */
+function priceTrayDraft(
+  rawPlan: unknown,
+  catalog: MenuCatalogV1,
+  scope: BranchScope,
+): { readonly currency: string; readonly totalMinor: number } | null {
+  if (rawPlan === null) return null;
+  try {
+    const plan = parseCaptureSelectionPlanV1(rawPlan);
+    if (plan === undefined || plan.lines.length === 0 || plan.catalogVersion !== catalog.catalogVersion) return null;
+    const projection = priceSelectionPlan(plan, catalog, scope.restaurantId);
+    return { currency: projection.currency, totalMinor: projection.itemsTotalMinor };
+  } catch { return null; }
 }
 
 @Injectable()
@@ -1562,6 +1706,14 @@ function mapDeliveryZoneError(error: unknown): CaptureApplicationError {
 }
 
 /** Typed 409: a stated cash tender does not cover the authoritative total. Never a generic conflict. */
+/** The lease being renewed is held by another station (or was rotated): HTTP 409 `CAPTURE_LEASE_TAKEN`. */
+export class CaptureLeaseTakenError extends Error {
+  public constructor() {
+    super("CAPTURE_LEASE_TAKEN");
+    this.name = "CaptureLeaseTakenError";
+  }
+}
+
 export class CapturePaymentIntentInsufficientError extends Error {
   public constructor() {
     super("CAPTURE_PAYMENT_INTENT_INSUFFICIENT");
@@ -1918,6 +2070,38 @@ export class CaptureAttentionService {
     const { record, replayed } = await this.execute(principal, operation, input);
     const result = parseCaptureMutationResultV1({ schemaVersion: 1, detail: record.detail, replayed });
     if (result === undefined) throw unavailable();
+    return result;
+  }
+
+  /**
+   * Heartbeat for the actor's own lease. Naturally idempotent (the server only moves the expiry
+   * forward), it never bumps the capture version, and a lease owned by another station surfaces as
+   * `CaptureLeaseTakenError` (HTTP 409 `CAPTURE_LEASE_TAKEN`).
+   */
+  public async renewLease(principal: AuthenticatedPrincipal, input: unknown): Promise<RenewCaptureLeaseResultV1> {
+    const command = parseRenewCaptureLeaseCommandV1(input);
+    if (command === undefined) throw new CaptureApplicationError("request");
+    let actorId: string;
+    try { actorId = (await this.authorization.authorizeBranch(principal, command.scope, "captures.update")).principal.actorId; }
+    catch { throw new CaptureApplicationError("authorization"); }
+    if (this.persistence.renewLease === undefined) throw unavailable();
+    let raw: unknown;
+    try { raw = await this.persistence.renewLease(actorId, command); } catch { throw unavailable(); }
+    const outcome = exactRecord(raw, ["status"]);
+    if (outcome?.status === "denied") throw new CaptureApplicationError("authorization");
+    if (outcome?.status === "missing") throw new CaptureApplicationError("missing");
+    if (outcome?.status === "rejected") throw new CaptureApplicationError("request");
+    const conflict = exactRecord(raw, ["status", "reason"]);
+    if (conflict?.status === "conflict") {
+      if (conflict.reason === "taken") throw new CaptureLeaseTakenError();
+      if (conflict.reason === "not_active") throw new CaptureApplicationError("conflict");
+      throw unavailable();
+    }
+    const applied = exactRecord(raw, ["status", "record"]);
+    if (applied?.status !== "applied") throw unavailable();
+    const result = parseRenewCaptureLeaseResultV1(applied.record);
+    if (result === undefined || result.captureDraftId !== command.captureDraftId
+      || result.attentionLeaseId !== command.attentionLeaseId) throw unavailable();
     return result;
   }
 
