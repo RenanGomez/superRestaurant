@@ -26,6 +26,9 @@ export class MenuCatalogImagesController {
     } catch (error: unknown) {
       if (!(error instanceof MenuCatalogImageApplicationError)) throw unavailable();
       if (error.code === "request") throw new BadRequestException({ code: "MENU_CATALOG_IMAGE_REQUEST_REJECTED" });
+      if (error.code === "unconfigured") {
+        throw new ServiceUnavailableException({ code: "MENU_IMAGES_UNCONFIGURED" });
+      }
       if (error.code === "authorization") throw new ForbiddenException({ code: "ACTION_NOT_AUTHORIZED" });
       throw unavailable();
     }

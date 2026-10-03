@@ -5,8 +5,26 @@ export const CATALOG_IMAGE_STORAGE_CONFIG = Symbol("CATALOG_IMAGE_STORAGE_CONFIG
 
 export const CATALOG_IMAGES_BUCKET = "catalog-images";
 
+/** "exists" means an object already lives at that path (a replayed upload); it is not an error. */
+export type CatalogImagePutResult = "created" | "exists";
+
 export interface CatalogImageStoragePort {
-  put(path: string, bytes: Uint8Array, contentType: string): Promise<void>;
+  put(path: string, bytes: Uint8Array, contentType: string): Promise<CatalogImagePutResult>;
+}
+
+/** Resolves the Storage configuration on first use so the API always boots without it. */
+export interface CatalogImageStorageConfigSource {
+  get(): CatalogImageStorageConfig;
+}
+
+export function lazyCatalogImageStorageConfig(environment: NodeJS.ProcessEnv): CatalogImageStorageConfigSource {
+  let cached: CatalogImageStorageConfig | undefined;
+  return {
+    get: () => {
+      cached ??= readCatalogImageStorageConfig(environment);
+      return cached;
+    },
+  };
 }
 
 export interface CatalogImageStorageConfig {
@@ -71,18 +89,19 @@ export class CatalogImageStorageUnavailableError extends Error {
 @Injectable()
 export class FetchCatalogImageStorageAdapter implements CatalogImageStoragePort {
   public constructor(
-    @Inject(CATALOG_IMAGE_STORAGE_CONFIG) private readonly config: CatalogImageStorageConfig,
+    @Inject(CATALOG_IMAGE_STORAGE_CONFIG) private readonly configSource: CatalogImageStorageConfigSource,
   ) {}
 
-  public async put(path: string, bytes: Uint8Array, contentType: string): Promise<void> {
+  public async put(path: string, bytes: Uint8Array, contentType: string): Promise<CatalogImagePutResult> {
+    const config = this.configSource.get();
     let response: Response;
     try {
       response = await fetch(
-        `${this.config.supabaseUrl}/storage/v1/object/${CATALOG_IMAGES_BUCKET}/${path}`,
+        `${config.supabaseUrl}/storage/v1/object/${CATALOG_IMAGES_BUCKET}/${path}`,
         {
           body: bytes,
           headers: {
-            authorization: `Bearer ${this.config.secretKey}`,
+            authorization: `Bearer ${config.secretKey}`,
             "content-type": contentType,
             "x-upsert": "false",
           },
@@ -92,7 +111,21 @@ export class FetchCatalogImageStorageAdapter implements CatalogImageStoragePort 
     } catch {
       throw new CatalogImageStorageUnavailableError();
     }
-    if (!response.ok) throw new CatalogImageStorageUnavailableError();
+    if (response.ok) return "created";
+    if (await isDuplicate(response)) return "exists";
+    throw new CatalogImageStorageUnavailableError();
+  }
+}
+
+/** Storage reports an existing object as 409, or as 400 with a JSON body carrying statusCode 409. */
+async function isDuplicate(response: Response): Promise<boolean> {
+  if (response.status === 409) return true;
+  if (response.status !== 400) return false;
+  try {
+    const body: unknown = await response.json();
+    return typeof body === "object" && body !== null && "statusCode" in body && String(body.statusCode) === "409";
+  } catch {
+    return false;
   }
 }
 

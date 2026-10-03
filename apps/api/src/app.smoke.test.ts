@@ -6,7 +6,6 @@ import { parseBranchAuthorizationV1, parseBranchOperationalContextV1 } from "@su
 
 import { AppModule } from "./app.module.js";
 import { AUTH_PRINCIPAL_VERIFIER } from "./auth/authentication.js";
-import { CATALOG_IMAGE_STORAGE_CONFIG } from "./catalog-image-storage.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 
 const actorId = "8cc7eb84-af2a-4e84-95de-967c39af86ab";
@@ -109,8 +108,6 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
     .useValue({ verifyAccessToken: async () => Object.freeze({ actorId }) })
     .overrideProvider(DATABASE_CLIENT)
     .useValue(database)
-    .overrideProvider(CATALOG_IMAGE_STORAGE_CONFIG)
-    .useValue({ publicBaseUrl: "https://example.supabase.co", secretKey: "sb_secret_test", supabaseUrl: "https://example.supabase.co" })
     .compile();
   const app = moduleRef.createNestApplication({ logger: false });
   try {

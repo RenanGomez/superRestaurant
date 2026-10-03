@@ -5,7 +5,11 @@ import { parseBranchScope } from "@super-restaurant/shared-types";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService, type MembershipLookupPort } from "./auth/membership-authorization.js";
-import type { CatalogImageStorageConfig, CatalogImageStoragePort } from "./catalog-image-storage.js";
+import {
+  CatalogImageStorageConfigurationError,
+  type CatalogImageStorageConfig,
+  type CatalogImageStoragePort,
+} from "./catalog-image-storage.js";
 import { MenuCatalogImageApplicationError, MenuCatalogImageService } from "./menu-catalog-images.js";
 
 const principal: AuthenticatedPrincipal = Object.freeze({ actorId: "8cc7eb84-af2a-4e84-95de-967c39af86ab" });
@@ -39,10 +43,10 @@ function command(overrides: Partial<Record<string, unknown>> = {}): Record<strin
 function serviceFor(
   roles: readonly ("manager" | "owner" | "viewer")[],
   storage: CatalogImageStoragePort,
-  config: CatalogImageStorageConfig = { publicBaseUrl: "https://example.supabase.co", secretKey: "sb_secret_x", supabaseUrl: "https://example.supabase.co" },
+  config: () => CatalogImageStorageConfig = () => ({ publicBaseUrl: "https://example.supabase.co", secretKey: "sb_secret_x", supabaseUrl: "https://example.supabase.co" }),
 ): MenuCatalogImageService {
   const memberships: MembershipLookupPort = { findActiveMembership: async () => ({ roles, scope: validScope }) };
-  return new MenuCatalogImageService(new MembershipAuthorizationService(memberships), storage, config);
+  return new MenuCatalogImageService(new MembershipAuthorizationService(memberships), storage, { get: config });
 }
 
 function code(expected: MenuCatalogImageApplicationError["code"]): (error: unknown) => boolean {
@@ -52,7 +56,7 @@ function code(expected: MenuCatalogImageApplicationError["code"]): (error: unkno
 test("uploads a well-formed JPEG for an authorized manager and returns a scoped path and public URL", async () => {
   const puts: { path: string; contentType: string }[] = [];
   const storage: CatalogImageStoragePort = {
-    put: async (path, _bytes, contentType) => { puts.push({ path, contentType }); },
+    put: async (path, _bytes, contentType) => { puts.push({ path, contentType }); return "created"; },
   };
   const service = serviceFor(["manager"], storage);
   const result = await service.upload(principal, command());
@@ -64,7 +68,7 @@ test("uploads a well-formed JPEG for an authorized manager and returns a scoped 
 });
 
 test("uploads a well-formed PNG for an option target", async () => {
-  const storage: CatalogImageStoragePort = { put: async () => undefined };
+  const storage: CatalogImageStoragePort = { put: async () => "created" };
   const service = serviceFor(["manager"], storage);
   const result = await service.upload(principal, command({
     target: "option", contentType: "image/png", dataBase64: PNG_MAGIC.toString("base64"),
@@ -74,20 +78,20 @@ test("uploads a well-formed PNG for an option target", async () => {
 
 test("rejects an insufficiently privileged role before ever touching storage", async () => {
   let called = false;
-  const storage: CatalogImageStoragePort = { put: async () => { called = true; } };
+  const storage: CatalogImageStoragePort = { put: async () => { called = true; return "created"; } };
   const service = serviceFor(["viewer"], storage);
   await assert.rejects(service.upload(principal, command()), code("authorization"));
   assert.equal(called, false);
 });
 
 test("rejects a malformed command before authorization", async () => {
-  const storage: CatalogImageStoragePort = { put: async () => undefined };
+  const storage: CatalogImageStoragePort = { put: async () => "created" };
   const service = serviceFor(["manager"], storage);
   await assert.rejects(service.upload(principal, { ...command(), unexpected: true }), code("request"));
 });
 
 test("rejects a payload whose magic bytes do not match the declared content type", async () => {
-  const storage: CatalogImageStoragePort = { put: async () => undefined };
+  const storage: CatalogImageStoragePort = { put: async () => "created" };
   const service = serviceFor(["manager"], storage);
   await assert.rejects(
     service.upload(principal, command({ dataBase64: Buffer.from("not an image").toString("base64") })),
@@ -96,7 +100,7 @@ test("rejects a payload whose magic bytes do not match the declared content type
 });
 
 test("rejects a declared PNG whose bytes are actually a JPEG", async () => {
-  const storage: CatalogImageStoragePort = { put: async () => undefined };
+  const storage: CatalogImageStoragePort = { put: async () => "created" };
   const service = serviceFor(["manager"], storage);
   await assert.rejects(
     service.upload(principal, command({ contentType: "image/png", dataBase64: JPEG_MAGIC.toString("base64") })),
@@ -105,7 +109,7 @@ test("rejects a declared PNG whose bytes are actually a JPEG", async () => {
 });
 
 test("rejects an oversized decoded payload", async () => {
-  const storage: CatalogImageStoragePort = { put: async () => undefined };
+  const storage: CatalogImageStoragePort = { put: async () => "created" };
   const service = serviceFor(["manager"], storage);
   const oversized = Buffer.concat([JPEG_MAGIC, Buffer.alloc(2_097_152)]);
   await assert.rejects(
@@ -118,4 +122,33 @@ test("maps a storage adapter failure to an unavailable application error", async
   const storage: CatalogImageStoragePort = { put: async () => { throw new Error("object storage down"); } };
   const service = serviceFor(["manager"], storage);
   await assert.rejects(service.upload(principal, command()), code("unavailable"));
+});
+
+test("a retry of the identical command replays the same path even when Storage reports it exists", async () => {
+  const seen = new Set<string>();
+  const storage: CatalogImageStoragePort = {
+    put: async (path) => { const had = seen.has(path); seen.add(path); return had ? "exists" : "created"; },
+  };
+  const service = serviceFor(["manager"], storage);
+  const first = await service.upload(principal, command());
+  const retry = await service.upload(principal, command());
+  assert.equal(retry.imagePath, first.imagePath);
+  assert.equal(retry.publicUrl, first.publicUrl);
+  assert.equal(seen.size, 1);
+});
+
+test("the same key with a different target or bytes derives a different object, never overwriting the first", async () => {
+  const paths: string[] = [];
+  const storage: CatalogImageStoragePort = { put: async (path) => { paths.push(path); return "created"; } };
+  const service = serviceFor(["manager"], storage);
+  const first = await service.upload(principal, command());
+  const otherTarget = await service.upload(principal, command({ targetId: "c483b6e7-e102-4cc5-a887-d30712c85e52" }));
+  const otherBytes = await service.upload(principal, command({ dataBase64: Buffer.from([0xff, 0xd8, 0xff, 0x01]).toString("base64") }));
+  assert.equal(new Set([first.imagePath, otherTarget.imagePath, otherBytes.imagePath]).size, 3);
+});
+
+test("without Storage configuration the service reports unconfigured instead of failing", async () => {
+  const storage: CatalogImageStoragePort = { put: async () => "created" };
+  const service = serviceFor(["manager"], storage, () => { throw new CatalogImageStorageConfigurationError(); });
+  await assert.rejects(service.upload(principal, command()), code("unconfigured"));
 });

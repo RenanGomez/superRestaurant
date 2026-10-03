@@ -61,7 +61,7 @@ import {
   CATALOG_IMAGE_STORAGE_CONFIG,
   CATALOG_IMAGE_STORAGE_PORT,
   FetchCatalogImageStorageAdapter,
-  readCatalogImageStorageConfig,
+  lazyCatalogImageStorageConfig,
 } from "./catalog-image-storage.js";
 import { OrdersController } from "./orders.controller.js";
 import {
@@ -212,7 +212,7 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     MenuCatalogService,
     {
       provide: CATALOG_IMAGE_STORAGE_CONFIG,
-      useFactory: () => readCatalogImageStorageConfig(process.env),
+      useFactory: () => lazyCatalogImageStorageConfig(process.env),
     },
     FetchCatalogImageStorageAdapter,
     { provide: CATALOG_IMAGE_STORAGE_PORT, useExisting: FetchCatalogImageStorageAdapter },
