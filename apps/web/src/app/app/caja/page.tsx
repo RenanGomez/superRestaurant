@@ -6,12 +6,16 @@ import type { ReactNode } from "react";
 
 import type {
   BranchMembershipSummaryV1,
+  BranchScope,
   CashRegisterOperationalReportV1,
   CheckoutOrderSummaryV1,
 } from "@super-restaurant/shared-types";
 
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
+import { formatMinorUnits, requestBranchOrderWorkTray, type BranchOrderTrayRequestResult } from "../../../lib/branch-order-work-tray";
+import { formatMinorForMoneyInput } from "../../../lib/capture-payment";
+import { currencyFractionDigits } from "../../../lib/money-scale";
 import { getCashRegisterReport, getCheckoutOrder, type FinancialApiResult } from "../../../lib/finance";
 import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
@@ -21,6 +25,7 @@ import {
   openCashRegisterAction,
 } from "./actions";
 import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } from "./context";
+import { PayableOrders } from "./payable-orders";
 import { CashierSubmitButton } from "./submit-button";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +36,7 @@ interface CashRegisterPageProps {
 
 const FINANCIAL_ROLES = new Set(["owner", "admin", "manager", "supervisor", "cashier"]);
 const KNOWN_ERRORS = new Set([
-  "conflict", "context_invalid", "close_not_confirmed", "invalid_input", "not_found", "unauthorized", "unavailable",
+  "conflict", "context_invalid", "close_not_confirmed", "invalid_amount", "invalid_input", "mixed_currency", "not_found", "unauthorized", "unavailable", "unsupported_currency",
 ]);
 const KNOWN_STATUSES = new Set(["opened", "payment_collected", "closed"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -76,6 +81,9 @@ export default async function CashRegisterPage({ searchParams }: CashRegisterPag
       scope,
     })
     : undefined;
+  const tray = report?.status === "ok" && report.value.register.status === "open"
+    ? await requestBranchOrderWorkTray(session.access_token, env.apiBaseUrl, scope, null, 25)
+    : undefined;
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-5 p-4 sm:p-5 lg:p-8">
@@ -95,7 +103,7 @@ export default async function CashRegisterPage({ searchParams }: CashRegisterPag
       ) : report.value.register.status === "closed" ? (
         <ClosedRegisterView report={report.value} />
       ) : (
-        <OpenRegisterView checkout={checkout} orderId={orderId} report={report.value} />
+        <OpenRegisterView checkout={checkout} orderId={orderId} report={report.value} scope={scope} tray={tray} />
       )}
     </div>
   );
@@ -111,7 +119,7 @@ function PageHeader({ membership, report }: {
       <div className="min-w-0">
         <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-accent">Operación financiera</p>
         <h1 className="break-words font-heading text-[22px] font-bold text-text">Caja · {membership.branchName}</h1>
-        <p className="mt-1 text-[13px] text-text-muted">{membership.restaurantName} · Dinero expresado en unidades menores y moneda explícita.</p>
+        <p className="mt-1 text-[13px] text-text-muted">{membership.restaurantName} · Importes en pesos.</p>
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2">
         <span className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${register?.status === "open" ? "bg-[oklch(94%_0.04_155)] text-[oklch(38%_0.1_155)]" : "bg-bg text-text-muted"}`}>
@@ -130,24 +138,25 @@ function OpenRegisterPanel(): ReactNode {
       <div>
         <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Inicio de turno</p>
         <h2 className="mt-1 font-heading text-[18px] font-semibold">Abrir caja en este dispositivo</h2>
-        <p className="mt-2 text-[13px] leading-relaxed text-text-muted">La moneda no tiene valor predeterminado. Captura el código ISO de la orden que atenderá esta caja.</p>
+        <p className="mt-2 text-[13px] leading-relaxed text-text-muted">Cuenta el fondo con el que inicia el turno.</p>
       </div>
       <form action={openCashRegisterAction} className="grid gap-4 sm:grid-cols-2">
         <AuditFields audit={audit} />
         <input type="hidden" name="cashRegisterSessionId" value={randomUUID()} />
         <input type="hidden" name="shiftId" value={randomUUID()} />
-        <Field label="Moneda ISO" name="currency" placeholder="XTS" pattern="[A-Za-z]{3}" autoCapitalize="characters" maxLength={3} />
-        <Field label="Fondo inicial · unidades menores" name="openingFloatMinor" inputMode="numeric" pattern="[0-9]+" defaultValue="0" />
+        <MoneyField label="Fondo inicial" name="openingFloatPesos" defaultValue="0" />
         <div className="sm:col-span-2"><CashierSubmitButton idle="Abrir caja" pending="Abriendo caja…" /></div>
       </form>
     </section>
   );
 }
 
-function OpenRegisterView({ checkout, orderId, report }: {
+function OpenRegisterView({ checkout, orderId, report, scope, tray }: {
   readonly checkout: FinancialApiResult<CheckoutOrderSummaryV1> | undefined;
   readonly orderId: string | undefined;
   readonly report: CashRegisterOperationalReportV1;
+  readonly scope: BranchScope;
+  readonly tray: BranchOrderTrayRequestResult | undefined;
 }): ReactNode {
   const register = report.register;
   return (
@@ -159,14 +168,11 @@ function OpenRegisterView({ checkout, orderId, report }: {
             <div><p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Cobro</p><h2 className="mt-1 font-heading text-[18px] font-semibold">Cargar cuenta</h2></div>
             <span className="rounded-lg bg-bg px-3 py-2 font-mono text-[11px] text-text-muted">Caja {shortId(register.cashRegisterSessionId)}</span>
           </div>
-          <form action="/app/caja" method="get" className="mt-4 flex flex-col gap-3 sm:flex-row">
-            <Field label="ID de la orden" name="orderId" placeholder="UUID de la cuenta" defaultValue={orderId ?? ""} className="flex-1" />
-            <button className="min-h-12 self-end rounded-xl border border-border bg-surface px-4 py-3 text-[14px] font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" type="submit">Cargar</button>
-          </form>
+          <PayableOrders scope={scope} initial={tray} selectedOrderId={orderId} />
           {orderId === undefined ? (
-            <p className="mt-4 rounded-xl bg-bg p-4 text-[13px] text-text-muted">Introduce una orden abierta o parcialmente pagada. El servidor recalculará su total desde snapshots.</p>
+            <p className="mt-4 rounded-xl bg-bg p-4 text-[13px] text-text-muted">Elige una orden abierta o parcialmente pagada para cargar su cuenta.</p>
           ) : checkout?.status !== "ok" ? (
-            <div role="alert" className="mt-4 rounded-xl border border-[oklch(85%_0.06_25)] bg-error-bg p-4 text-[13px] text-[oklch(35%_0.1_25)]">No se pudo cargar una cuenta cobrable con ese ID. Corrige el dato o vuelve a intentar; no se registró ningún pago.</div>
+            <div role="alert" className="mt-4 rounded-xl border border-[oklch(85%_0.06_25)] bg-error-bg p-4 text-[13px] text-[oklch(35%_0.1_25)]">No se pudo cargar esa cuenta. Elige otra orden o actualiza; no se registró ningún pago.</div>
           ) : <PaymentPanel checkout={checkout.value} />}
         </section>
       </div>
@@ -180,9 +186,9 @@ function PaymentPanel({ checkout }: { readonly checkout: CheckoutOrderSummaryV1 
   return (
     <div className="mt-4 grid gap-4">
       <div className="grid grid-cols-2 gap-3 rounded-xl border border-border bg-bg p-4 sm:grid-cols-4">
-        <Metric label="Total" value={money(checkout.orderTotalMinor, checkout.currency)} />
-        <Metric label="Capturado" value={money(checkout.capturedAmountMinor, checkout.currency)} />
-        <Metric label="Pendiente" value={money(checkout.remainingBalanceMinor, checkout.currency)} emphasis />
+        <Metric label="Total" value={formatMinorUnits(checkout.orderTotalMinor, checkout.currency)} />
+        <Metric label="Capturado" value={formatMinorUnits(checkout.capturedAmountMinor, checkout.currency)} />
+        <Metric label="Pendiente" value={formatMinorUnits(checkout.remainingBalanceMinor, checkout.currency)} emphasis />
         <Metric label="Estado" value={checkout.orderStatus === "open" ? "Abierta" : "Pago parcial"} />
       </div>
       <form action={collectPaymentAction} className="grid gap-4">
@@ -190,7 +196,7 @@ function PaymentPanel({ checkout }: { readonly checkout: CheckoutOrderSummaryV1 
         <input type="hidden" name="cashRegisterSessionId" value={checkout.cashRegisterSessionId} />
         <input type="hidden" name="orderId" value={checkout.orderId} />
         <input type="hidden" name="paymentId" value={randomUUID()} />
-        <Field label="Importe · unidades menores" name="amountMinor" inputMode="numeric" pattern="[1-9][0-9]*" defaultValue={String(checkout.remainingBalanceMinor)} />
+        <MoneyField label="Importe" name="amountPesos" currency={checkout.currency} defaultValue={formatMinorForMoneyInput(checkout.remainingBalanceMinor, checkout.currency) ?? ""} positive />
         <fieldset className="grid grid-cols-2 gap-3">
           <legend className="mb-2 text-[12px] font-semibold text-text">Método</legend>
           <Choice name="method" value="cash" label="Efectivo" defaultChecked />
@@ -215,11 +221,11 @@ function CloseRegisterPanel({ report }: { readonly report: CashRegisterOperation
       <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-error">Corte Z · cierre operativo</p>
       <h2 className="mt-1 font-heading text-[18px] font-semibold">Cerrar caja</h2>
       <p className="mt-2 text-[13px] leading-relaxed text-text-muted">El cierre congela esperado, contado y diferencia. No es un comprobante fiscal.</p>
-      <div className="my-4 rounded-xl bg-bg p-4"><Metric label="Efectivo esperado" value={money(report.register.expectedCashBalanceMinor, report.register.currency)} emphasis /></div>
+      <div className="my-4 rounded-xl bg-bg p-4"><Metric label="Efectivo esperado" value={formatMinorUnits(report.register.expectedCashBalanceMinor, report.register.currency)} emphasis /></div>
       <form action={closeCashRegisterAction} className="grid gap-4">
         <AuditFields audit={audit} />
         <input type="hidden" name="cashRegisterSessionId" value={report.register.cashRegisterSessionId} />
-        <Field label="Efectivo contado · unidades menores" name="countedClosingBalanceMinor" inputMode="numeric" pattern="[0-9]+" defaultValue={String(report.register.expectedCashBalanceMinor)} />
+        <MoneyField label="Efectivo contado" name="countedClosingBalancePesos" currency={report.register.currency} defaultValue={formatMinorForMoneyInput(report.register.expectedCashBalanceMinor, report.register.currency) ?? ""} />
         <label className="grid gap-1.5 text-[12px] font-semibold text-text">Motivo de diferencia, si aplica<textarea name="reason" maxLength={500} rows={3} className="rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" /></label>
         <label className="flex min-h-11 items-start gap-3 rounded-xl border border-[oklch(85%_0.06_25)] bg-error-bg p-3 text-[13px]"><input required type="checkbox" name="confirmClose" value="yes" className="mt-1 h-4 w-4" /><span>Confirmo el conteo y entiendo que este cierre es inmutable.</span></label>
         <CashierSubmitButton idle="Cerrar caja" pending="Cerrando caja…" tone="danger" />
@@ -249,17 +255,17 @@ function OperationalReport({ report, title }: { readonly report: CashRegisterOpe
       <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Resumen no fiscal</p><h2 className="mt-1 font-heading text-[18px] font-semibold">{title}</h2></div><a href="/app/caja" className="min-h-10 rounded-lg border border-border px-3 py-2 text-[13px] font-medium">Actualizar</a></div>
       <p className="mt-2 text-[12px] text-text-muted">Lectura autoritativa del turno. No cierra la caja ni genera folio, impresión o efecto fiscal.</p>
       <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Efectivo" value={money(report.cashCapturedMinor, register.currency)} />
-        <Metric label="Tarjeta externa" value={money(report.cardManualCapturedMinor, register.currency)} />
+        <Metric label="Efectivo" value={formatMinorUnits(report.cashCapturedMinor, register.currency)} />
+        <Metric label="Tarjeta externa" value={formatMinorUnits(report.cardManualCapturedMinor, register.currency)} />
         <Metric label="Cobros" value={String(report.paymentCount)} />
-        <Metric label="Total capturado" value={money(report.totalCapturedMinor, register.currency)} emphasis />
+        <Metric label="Total capturado" value={formatMinorUnits(report.totalCapturedMinor, register.currency)} emphasis />
       </div>
       <dl className="mt-4 grid gap-2 border-t border-border pt-4 text-[12px] text-text-muted sm:grid-cols-2">
         <div><dt className="inline font-semibold text-text">Apertura: </dt><dd className="inline">{formatDate(register.openedAt)}</dd></div>
-        <div><dt className="inline font-semibold text-text">Fondo: </dt><dd className="inline">{money(register.openingFloatMinor, register.currency)}</dd></div>
+        <div><dt className="inline font-semibold text-text">Fondo: </dt><dd className="inline">{formatMinorUnits(register.openingFloatMinor, register.currency)}</dd></div>
         {register.closedAt !== null && <div><dt className="inline font-semibold text-text">Cierre: </dt><dd className="inline">{formatDate(register.closedAt)}</dd></div>}
-        {register.countedClosingBalanceMinor !== null && <div><dt className="inline font-semibold text-text">Contado: </dt><dd className="inline">{money(register.countedClosingBalanceMinor, register.currency)}</dd></div>}
-        {register.differenceMinor !== null && <div><dt className="inline font-semibold text-text">Diferencia: </dt><dd className="inline">{money(register.differenceMinor, register.currency)}</dd></div>}
+        {register.countedClosingBalanceMinor !== null && <div><dt className="inline font-semibold text-text">Contado: </dt><dd className="inline">{formatMinorUnits(register.countedClosingBalanceMinor, register.currency)}</dd></div>}
+        {register.differenceMinor !== null && <div><dt className="inline font-semibold text-text">Diferencia: </dt><dd className="inline">{formatMinorUnits(register.differenceMinor, register.currency)}</dd></div>}
       </dl>
     </section>
   );
@@ -280,6 +286,26 @@ function Field({ className = "", defaultValue, label, required = true, ...input 
   return <label className={`grid gap-1.5 text-[12px] font-semibold text-text ${className}`}>{label}<input {...input} required={required} defaultValue={defaultValue} className="min-h-12 min-w-0 rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" /></label>;
 }
 
+function MoneyField({ currency, defaultValue, label, name, positive = false }: {
+  readonly currency?: string;
+  readonly defaultValue: string;
+  readonly label: string;
+  readonly name: string;
+  readonly positive?: boolean;
+}): ReactNode {
+  const digits = currency === undefined ? 2 : currencyFractionDigits(currency);
+  const decimals = digits === 0 ? "sin decimales" : digits === null ? "Moneda no admitida; avisa al administrador." : `máximo ${digits} decimales`;
+  const basePattern = digits === 0 ? "[0-9]+" : digits === null ? "(?!)" : `[0-9]+([.,][0-9]{1,${digits}})?`;
+  const zeroPattern = digits === 0 ? "(?!0+$)" : `(?!0+(?:[.,]0{1,${digits ?? 2}})?$)`;
+  const pattern = positive ? `${zeroPattern}${basePattern}` : basePattern;
+  return <label className="grid gap-1.5 text-[12px] font-semibold text-text">{label}
+    <input required disabled={digits === null} name={name} type="text" inputMode="decimal" pattern={pattern} defaultValue={defaultValue} aria-describedby={`${name}-hint`} className="min-h-12 min-w-0 rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" />
+    <span id={`${name}-hint`} className="text-[11px] font-normal text-text-muted">{currency === undefined
+      ? "Por ejemplo 130; si la moneda admite centavos, también 130.50."
+      : digits === null ? decimals : `Por ejemplo 130${digits === 0 ? "" : " o 130.50"}; ${decimals}.`}</span>
+  </label>;
+}
+
 function Choice({ defaultChecked = false, label, name, value }: { readonly defaultChecked?: boolean; readonly label: string; readonly name: string; readonly value: string }): ReactNode {
   return <label className="flex min-h-12 cursor-pointer items-center gap-3 rounded-xl border border-border bg-surface px-3 py-2.5 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:checked]:border-accent"><input type="radio" name={name} value={value} defaultChecked={defaultChecked} /><span className="text-[13px] font-semibold">{label}</span></label>;
 }
@@ -296,7 +322,10 @@ function ErrorBanner({ code }: { readonly code: string }): ReactNode {
   const message = code === "conflict" ? "El estado cambió en otro intento. Actualiza y vuelve a intentarlo; no se duplicó la operación."
     : code === "close_not_confirmed" ? "Confirma explícitamente el cierre antes de continuar."
       : code === "unauthorized" ? "Tu autorización para esta caja ya no está vigente."
-        : code === "invalid_input" ? "Hay datos inválidos o incompletos. Revisa importes, moneda y evidencia externa."
+        : code === "mixed_currency" ? "Hay cuentas abiertas en más de una moneda; avisa al administrador."
+          : code === "unsupported_currency" ? "La moneda de las cuentas no está admitida; avisa al administrador."
+          : code === "invalid_amount" ? "Escribe un importe válido; revisa los decimales de la moneda."
+          : code === "invalid_input" ? "Hay datos inválidos o incompletos. Revisa importes y evidencia externa."
           : code === "context_invalid" ? "Este dispositivo perdió el contexto de caja. Actualiza para recuperarlo."
             : "No se completó la operación. Actualiza el estado y vuelve a intentarlo.";
   return <div role="alert" className="rounded-[10px] border border-[oklch(85%_0.06_25)] bg-error-bg px-3.5 py-2.5 text-[13px] text-[oklch(35%_0.1_25)]">{message}</div>;
@@ -321,10 +350,6 @@ function scalar(value: string | readonly string[] | undefined): string | undefin
 
 function validUuid(value: string | undefined): string | undefined {
   return value !== undefined && UUID_PATTERN.test(value) ? value.toLowerCase() : undefined;
-}
-
-function money(amountMinor: number, currency: string): string {
-  return `${amountMinor.toLocaleString("es-MX")} u.m. · ${currency}`;
 }
 
 function formatDate(value: string): string {

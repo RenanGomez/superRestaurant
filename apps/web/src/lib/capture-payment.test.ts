@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resolveRegisterCurrency } from "./cash-register-currency.js";
 import {
   deliveryQuoteBlocksConfirm, deliveryQuoteScheduledForInputValue, describePaymentMethod, isSwitchingToAnotherCapture,
-  parseMoneyInputToMinor, paymentIntentBlocksConfirm, quoteMatchesRequestedTime, shouldSubmitTender,
+  formatMinorForMoneyInput, parseMoneyInputToMinor, paymentIntentBlocksConfirm, quoteMatchesRequestedTime, shouldSubmitTender,
   suggestTenderAmounts,
 } from "./capture-payment.js";
 
@@ -168,24 +169,26 @@ test("H30: appliedMinor still guards the immediate same-cycle resend before the 
 });
 
 test("suggestTenderAmounts always includes the exact total plus the next 100/200/500-peso roundings above it", () => {
-  assert.deepEqual(suggestTenderAmounts(9_000), [9_000, 10_000, 20_000, 50_000]);
-  assert.deepEqual(suggestTenderAmounts(12_000), [12_000, 20_000, 50_000]);
+  assert.deepEqual(suggestTenderAmounts(9_000, "MXN"), [9_000, 10_000, 20_000, 50_000]);
+  assert.deepEqual(suggestTenderAmounts(12_000, "MXN"), [12_000, 20_000, 50_000]);
+  assert.deepEqual(suggestTenderAmounts(90, "JPY"), [90, 100, 200, 500]);
 });
 
 test("suggestTenderAmounts never duplicates a rounding that already equals the exact total", () => {
-  assert.deepEqual(suggestTenderAmounts(10_000), [10_000, 20_000, 50_000]);
-  assert.deepEqual(suggestTenderAmounts(20_000), [20_000, 50_000]);
-  assert.deepEqual(suggestTenderAmounts(50_000), [50_000, 60_000]);
+  assert.deepEqual(suggestTenderAmounts(10_000, "MXN"), [10_000, 20_000, 50_000]);
+  assert.deepEqual(suggestTenderAmounts(20_000, "MXN"), [20_000, 50_000]);
+  assert.deepEqual(suggestTenderAmounts(50_000, "MXN"), [50_000, 60_000]);
 });
 
 test("suggestTenderAmounts on a zero total has no distinct rounding above it", () => {
-  assert.deepEqual(suggestTenderAmounts(0), [0]);
+  assert.deepEqual(suggestTenderAmounts(0, "MXN"), [0]);
 });
 
 test("suggestTenderAmounts rejects negative or non-integer totals with no suggestions", () => {
-  assert.deepEqual(suggestTenderAmounts(-1), []);
-  assert.deepEqual(suggestTenderAmounts(1.5), []);
-  assert.deepEqual(suggestTenderAmounts(Number.NaN), []);
+  assert.deepEqual(suggestTenderAmounts(-1, "MXN"), []);
+  assert.deepEqual(suggestTenderAmounts(1.5, "MXN"), []);
+  assert.deepEqual(suggestTenderAmounts(Number.NaN, "MXN"), []);
+  assert.deepEqual(suggestTenderAmounts(100, "ZZZ"), []);
 });
 
 test("describePaymentMethod labels cash by server-derived timing, never by client choice", () => {
@@ -205,33 +208,60 @@ test("describePaymentMethod describes card_manual and transfer independently of 
 });
 
 test("parseMoneyInputToMinor converts whole pesos and two-decimal amounts with exact integer arithmetic", () => {
-  assert.equal(parseMoneyInputToMinor("10"), 1_000);
-  assert.equal(parseMoneyInputToMinor("10.5"), 1_050);
+  assert.equal(parseMoneyInputToMinor("10", "MXN"), 1_000);
+  assert.equal(parseMoneyInputToMinor("10.5", "MXN"), 1_050);
+  assert.equal(parseMoneyInputToMinor("130.50", "MXN"), 13_050);
+});
+
+test("money input round trips exact minor units, including the safe integer boundary", () => {
+  for (const amount of [0, 1, 13_050, Number.MAX_SAFE_INTEGER]) {
+    assert.equal(parseMoneyInputToMinor(formatMinorForMoneyInput(amount, "MXN") ?? "", "MXN"), amount);
+  }
+  assert.equal(parseMoneyInputToMinor("90071992547409.92", "MXN"), null);
+  assert.equal(parseMoneyInputToMinor("-130", "MXN"), null);
+  assert.equal(parseMoneyInputToMinor("130.123", "MXN"), null);
+  assert.equal(parseMoneyInputToMinor("130abc", "MXN"), null);
+});
+
+test("money input uses the supported currency scale and rejects an unknown currency", () => {
+  assert.equal(parseMoneyInputToMinor("130", "JPY"), 130);
+  assert.equal(parseMoneyInputToMinor("130.5", "JPY"), null);
+  assert.equal(formatMinorForMoneyInput(130, "JPY"), "130");
+  assert.equal(parseMoneyInputToMinor("130", "ZZZ"), null);
+  assert.equal(formatMinorForMoneyInput(130, "ZZZ"), null);
+});
+
+test("register currency follows payable orders, detects mixed orders, then falls back", () => {
+  assert.deepEqual(resolveRegisterCurrency(["USD", "USD"], "MXN"), { status: "ok", currency: "USD" });
+  assert.deepEqual(resolveRegisterCurrency(["MXN", "JPY"], "MXN"), { status: "mixed" });
+  assert.deepEqual(resolveRegisterCurrency([], "JPY"), { status: "ok", currency: "JPY" });
+  assert.deepEqual(resolveRegisterCurrency([], null), { status: "ok", currency: "MXN" });
+  assert.deepEqual(resolveRegisterCurrency(["ZZZ"], "MXN"), { status: "unsupported" });
 });
 
 // H12: a field with no "." or "," at all (an absent fraction, not merely a short one) must never
 // come out as NaN -- verified directly against Number.isNaN, not just a loose equality, so a
 // regression that reintroduces NaN cannot slip past as some other falsy/incorrect value.
 test("parseMoneyInputToMinor treats a whole-peso amount with no fraction as exactly zero cents, never NaN", () => {
-  const result = parseMoneyInputToMinor("10");
+  const result = parseMoneyInputToMinor("10", "MXN");
   assert.equal(Number.isNaN(result), false);
   assert.equal(result, 1_000);
-  assert.equal(parseMoneyInputToMinor("1234567"), 123_456_700);
+  assert.equal(parseMoneyInputToMinor("1234567", "MXN"), 123_456_700);
 });
 
 test("parseMoneyInputToMinor accepts a comma as the decimal separator", () => {
-  assert.equal(parseMoneyInputToMinor("10,50"), 1_050);
+  assert.equal(parseMoneyInputToMinor("10,50", "MXN"), 1_050);
 });
 
 test("parseMoneyInputToMinor rejects a numeric prefix followed by non-digit trailing text", () => {
-  assert.equal(parseMoneyInputToMinor("10abc"), null);
+  assert.equal(parseMoneyInputToMinor("10abc", "MXN"), null);
 });
 
 test("parseMoneyInputToMinor rejects more than two decimal digits instead of rounding them away", () => {
-  assert.equal(parseMoneyInputToMinor("10.555"), null);
+  assert.equal(parseMoneyInputToMinor("10.555", "MXN"), null);
 });
 
 test("parseMoneyInputToMinor rejects an empty or whitespace-only field", () => {
-  assert.equal(parseMoneyInputToMinor(""), null);
-  assert.equal(parseMoneyInputToMinor("   "), null);
+  assert.equal(parseMoneyInputToMinor("", "MXN"), null);
+  assert.equal(parseMoneyInputToMinor("   ", "MXN"), null);
 });

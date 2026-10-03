@@ -7,7 +7,8 @@ import { redirect } from "next/navigation";
 
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
-import { saveMenuCatalog } from "../../../lib/menu-catalog";
+import { DEFAULT_PESO_CURRENCY } from "../../../lib/capture-payment";
+import { getMenuCatalog, saveMenuCatalog } from "../../../lib/menu-catalog";
 import {
   BRANCH_PREFERENCE_COOKIE,
   findMembership,
@@ -34,10 +35,13 @@ export async function saveMenuCatalogAction(formData: FormData): Promise<void> {
   }
   if (!isDraftRecord(draft)) redirect("/app/menu?menuError=invalid_draft");
 
+  const current = await getMenuCatalog(context.accessToken, context.apiBaseUrl, context.scope);
+  if (current === undefined) redirect("/app/menu?menuError=save_failed");
+
   const saved = await saveMenuCatalog(context.accessToken, context.apiBaseUrl, {
     catalogVersion: randomUUID(),
     categories: draft.categories,
-    currency: draft.currency,
+    currency: current.catalog?.currency ?? DEFAULT_PESO_CURRENCY,
     deviceId: await getOrCreateDeviceId(),
     eventId: randomUUID(),
     expectedVersion: draft.expectedVersion,

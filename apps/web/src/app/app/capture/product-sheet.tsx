@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
+import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { validateModifierSelection, type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 
 const button = "min-h-11 min-w-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
@@ -86,7 +87,7 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
                 className={`${optionButton} ${isSelected ? optionSelected : ""} ${!option.active ? "opacity-50" : ""}`}
                 onClick={() => toggleOption(group, option.optionId)}>
                 <span>{option.name}</span>
-                {option.unitPriceMinor > 0 && <span className="text-xs text-text-muted">+{money(option.unitPriceMinor, currency)}</span>}
+                {option.unitPriceMinor > 0 && <span className="text-xs text-text-muted">+{formatMinorUnits(option.unitPriceMinor, currency)}</span>}
               </button>;
             })}
           </div>
@@ -100,7 +101,7 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
         </div>
       </div>
       {confirmed && <p role="status" aria-live="polite" className="mx-4 rounded-lg bg-success-bg px-3 py-2 text-sm font-semibold text-success">
-        {confirmedTotalMinor === null ? "Agregado" : `Agregado · ${money(confirmedTotalMinor, currency)}`}
+        {confirmedTotalMinor === null ? "Agregado" : `Agregado · ${formatMinorUnits(confirmedTotalMinor, currency)}`}
       </p>}
       <footer className="flex flex-wrap items-center gap-3 border-t border-border p-4">
         <div className="flex items-center gap-2">
@@ -113,14 +114,10 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
         <span className="grow" />
         <button type="button" className={`${button} bg-accent text-white`} disabled={busy || confirmed || !allValid}
           onClick={() => onAdd(quantity, groupDrafts, note.trim().length === 0 ? null : note.trim())}>
-          {busy ? "Calculando…" : confirmed ? (confirmedTotalMinor === null ? "Agregado" : `Agregado · ${money(confirmedTotalMinor, currency)}`)
+          {busy ? "Calculando…" : confirmed ? (confirmedTotalMinor === null ? "Agregado" : `Agregado · ${formatMinorUnits(confirmedTotalMinor, currency)}`)
             : !allValid ? "Completa lo obligatorio" : "Agregar"}
         </button>
       </footer>
     </div>
   </div>;
-}
-
-function money(amountMinor: number, currency: string): string {
-  return new Intl.NumberFormat("es-MX", { currency, style: "currency" }).format(amountMinor / 100);
 }

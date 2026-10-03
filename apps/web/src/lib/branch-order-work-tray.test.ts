@@ -35,9 +35,10 @@ test("money and time formatting render from the server's own minor-unit and ISO 
 test("formatMinorUnits derives its decimal scale from the currency, never a hardcoded /100", () => {
   assert.equal(formatMinorUnits(12_345, "MXN"), "$123.45");
   // Expected "¥100"; this host's ICU renders the JPY symbol as the "JPY" code instead of "¥", so
-  // only the digits (no division at all, since JPY's maximumFractionDigits is 0) are pinned here.
+  // only the digits (no division at all for JPY) are pinned here.
   assert.match(formatMinorUnits(100, "JPY"), /100$/u);
   assert.doesNotMatch(formatMinorUnits(100, "JPY"), /\./u);
+  assert.equal(formatMinorUnits(100, "ZZZ"), "Moneda no admitida");
 });
 
 test("formatMinorUnits never divides a float, so a large exact integer keeps its exact cents", () => {

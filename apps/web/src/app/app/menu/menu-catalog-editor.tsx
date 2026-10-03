@@ -7,7 +7,10 @@ import type {
   MenuModifierOptionV1,
   MenuProductV1,
 } from "@super-restaurant/shared-types";
-import { useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
+import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
+import { DEFAULT_PESO_CURRENCY, formatMinorForMoneyInput, parseMoneyInputToMinor } from "../../../lib/capture-payment";
+import { currencyFractionDigits } from "../../../lib/money-scale";
 
 import { saveMenuCatalogAction } from "./actions";
 
@@ -30,7 +33,7 @@ export function MenuCatalogEditor({ canManage, state }: {
   readonly canManage: boolean;
   readonly state: MenuCatalogStateV1;
 }): ReactNode {
-  const [currency, setCurrency] = useState(state.catalog?.currency ?? "MXN");
+  const currency = state.catalog?.currency ?? DEFAULT_PESO_CURRENCY;
   const [categories, setCategories] = useState<readonly MenuCategoryV1[]>(() =>
     state.catalog?.categories.map((category) => ({ ...category })) ?? [],
   );
@@ -125,14 +128,6 @@ export function MenuCatalogEditor({ canManage, state }: {
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-text-muted">Versión actual</p>
             <p className="font-heading text-[18px] font-bold">{expectedVersion === 0 ? "Sin publicar" : `v${expectedVersion}`}</p>
           </div>
-          <TextInput
-            disabled={!canManage}
-            label="Moneda ISO"
-            maxLength={3}
-            value={currency}
-            onChange={(value) => setCurrency(value.toUpperCase())}
-            width="w-28"
-          />
           <p className="pb-2 text-[12px] text-text-muted">
             {categories.length} categorías · {products.length} productos · {groups.length} grupos
           </p>
@@ -178,7 +173,7 @@ export function MenuCatalogEditor({ canManage, state }: {
       </section>
 
       <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-        <SectionHeader title="Productos y modificadores" description="Precios exactos en unidad monetaria menor; los grupos pertenecen a un solo producto.">
+        <SectionHeader title="Productos y modificadores" description="Captura precios en la moneda del restaurante; los grupos pertenecen a un solo producto.">
           {canManage && <AddButton disabled={categories.length === 0} label="Agregar producto" onClick={addProduct} />}
         </SectionHeader>
         {products.length === 0 ? <EmptyText text="No hay productos en este borrador." /> : (
@@ -229,7 +224,7 @@ function ProductEditor({ canManage, categories, currency, groups, product, onAdd
           </select>
         </label>
         <TextInput disabled={!canManage} label="Clave interna (opcional)" help="Código que usas en inventario o en tu impresora; puedes dejarlo vacío" required={false} maxLength={64} value={product.sku ?? ""} onChange={(sku) => change({ sku: sku.trim() === "" ? null : sku })} />
-        <NumberInput disabled={!canManage} label={`Precio (${currency || "moneda"}, unidad menor)`} min={0} max={Number.MAX_SAFE_INTEGER} value={product.unitPriceMinor} onChange={(unitPriceMinor) => change({ unitPriceMinor })} />
+        <MoneyInput disabled={!canManage} currency={currency} value={product.unitPriceMinor} onChange={(unitPriceMinor) => change({ unitPriceMinor })} />
         <TextInput disabled={!canManage} label="Estación" maxLength={64} value={product.stationId} onChange={(stationId) => change({ stationId })} />
         <TextInput disabled={!canManage} label="Unidad" maxLength={32} value={product.unit} onChange={(unit) => change({ unit })} />
         <NumberInput disabled={!canManage} label="Orden" min={0} max={1_000_000} value={product.displayOrder} onChange={(displayOrder) => change({ displayOrder })} />
@@ -294,7 +289,7 @@ function ModifierGroupEditor({ canManage, currency, group, onAddOption, onChange
         {group.options.map((option) => (
           <div key={option.optionId} className="grid gap-2 rounded-lg border border-border bg-bg/50 p-2 sm:grid-cols-[1fr_170px_140px_auto]">
             <TextInput disabled={!canManage} label="Opción" maxLength={80} value={option.name} onChange={(name) => changeOption(group, option.optionId, { name }, onChange)} />
-            <NumberInput disabled={!canManage} label={`Precio (${currency || "moneda"})`} min={0} max={Number.MAX_SAFE_INTEGER} value={option.unitPriceMinor} onChange={(unitPriceMinor) => changeOption(group, option.optionId, { unitPriceMinor }, onChange)} />
+            <MoneyInput disabled={!canManage} currency={currency} value={option.unitPriceMinor} onChange={(unitPriceMinor) => changeOption(group, option.optionId, { unitPriceMinor }, onChange)} />
             <NullableNumberInput disabled={!canManage} label="Máximo opcional" min={1} max={1_000} value={option.maximumQuantity} onChange={(maximumQuantity) => changeOption(group, option.optionId, { maximumQuantity }, onChange)} />
             <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={option.active} onChange={(active) => changeOption(group, option.optionId, { active }, onChange)} />{canManage && group.options.length > 1 && <RemoveButton label={`Quitar ${option.name}`} onClick={() => onRemove({ groupId: group.groupId, id: option.optionId, kind: "option", label: option.name })} />}</div>
           </div>
@@ -314,6 +309,39 @@ function SectionHeader({ children, description, title }: { readonly children?: R
 
 function TextInput({ disabled, help, label, maxLength, onChange, required = true, value, width = "w-full" }: { readonly disabled: boolean; readonly help?: string; readonly label: string; readonly maxLength: number; readonly onChange: (value: string) => void; readonly required?: boolean; readonly value: string; readonly width?: string }): ReactNode {
   return <label className={`flex min-w-0 flex-col gap-1 text-[11px] font-medium ${width}`}>{label}<input required={required} disabled={disabled} maxLength={maxLength} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" />{help && <span className="text-[11px] font-normal text-text-muted">{help}</span>}</label>;
+}
+
+function MoneyInput({ currency, disabled, onChange, value }: {
+  readonly currency: string;
+  readonly disabled: boolean;
+  readonly onChange: (value: number) => void;
+  readonly value: number;
+}): ReactNode {
+  const [text, setText] = useState(() => formatMinorForMoneyInput(value, currency) ?? "");
+  const hintId = useId();
+  const digits = currencyFractionDigits(currency);
+  const parsed = parseMoneyInputToMinor(text, currency);
+  const pattern = digits === 0 ? "[0-9]+" : digits === null ? "(?!)" : `[0-9]+([.,][0-9]{1,${digits}})?`;
+  const errorText = digits === null ? "La moneda de este catálogo no está admitida; avisa al administrador."
+    : `Escribe un precio válido${digits === 0 ? " sin decimales" : ` con máximo ${digits} decimales`}.`;
+  return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium">Precio
+    <input
+      required disabled={disabled} type="text" inputMode="decimal" pattern={pattern}
+      value={text} aria-invalid={parsed === null} aria-describedby={hintId}
+      onChange={(event) => {
+        const next = event.target.value;
+        setText(next);
+        const amount = parseMoneyInputToMinor(next, currency);
+        event.target.setCustomValidity(amount === null ? errorText : "");
+        if (amount !== null) onChange(amount);
+      }}
+      onBlur={() => { if (parsed !== null) setText(formatMinorForMoneyInput(parsed, currency) ?? ""); }}
+      className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70"
+    />
+    <span id={hintId} className={parsed === null ? "text-error" : "text-text-muted"}>
+      {parsed === null ? errorText : formatMinorUnits(value, currency)}
+    </span>
+  </label>;
 }
 
 function NumberInput({ disabled, label, max, min, onChange, value }: { readonly disabled: boolean; readonly label: string; readonly max: number; readonly min: number; readonly onChange: (value: number) => void; readonly value: number }): ReactNode {
