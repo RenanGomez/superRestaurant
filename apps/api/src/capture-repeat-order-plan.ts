@@ -31,6 +31,8 @@ export interface CaptureRepeatSelectionLine {
   readonly productId: string;
   readonly quantity: number;
   readonly sourceOrderItemId: string;
+  /** Catalog size reused from the historical line; the key is absent for a product sold without sizes. */
+  readonly variantId?: string;
 }
 
 export interface CaptureOrderMaterialization {
@@ -80,7 +82,7 @@ export function materializeCaptureOrder(
     note: null,
     productId: line.productId,
     quantity: line.quantity,
-    variantId: null,
+    variantId: line.variantId ?? null,
   })), "capture-repeat");
 }
 
@@ -184,8 +186,11 @@ function appendMaterializedItems(
 }
 
 function parseLine(value: unknown): CaptureRepeatSelectionLine | undefined {
-  const record = exactRecord(value, ["sourceOrderItemId", "productId", "quantity", "modifierGroups"]);
+  const lineKeys = ["sourceOrderItemId", "productId", "quantity", "modifierGroups"];
+  const record = exactRecord(value, [...lineKeys, "variantId"]) ?? exactRecord(value, lineKeys);
   if (record === undefined) return undefined;
+  const variantId = Object.hasOwn(record, "variantId") ? uuid(own(record, "variantId")) : undefined;
+  if (Object.hasOwn(record, "variantId") && variantId === undefined) return undefined;
   const sourceOrderItemId = uuid(own(record, "sourceOrderItemId"));
   const productId = uuid(own(record, "productId"));
   const quantity = integer(own(record, "quantity"), 1, 1_000_000);
@@ -204,7 +209,10 @@ function parseLine(value: unknown): CaptureRepeatSelectionLine | undefined {
     groupIds.add(group.groupId);
     modifierGroups.push(group);
   }
-  return deepFreeze({ modifierGroups, productId, quantity, sourceOrderItemId });
+  return deepFreeze({
+    modifierGroups, productId, quantity, sourceOrderItemId,
+    ...(variantId === undefined ? {} : { variantId }),
+  });
 }
 
 function parseGroup(value: unknown): Readonly<{

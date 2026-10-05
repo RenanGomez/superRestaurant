@@ -1247,7 +1247,7 @@ function priceCaptureRepeatSelectionPlan(
   let itemsTotalMinor = 0;
   for (const line of plan.lines) {
     const snapshot = createMenuProductPriceSnapshot(domainCatalog, {
-      currency: catalog.currency, productId: line.productId, restaurantId,
+      currency: catalog.currency, productId: line.productId, restaurantId, variantId: line.variantId ?? null,
     }, line.modifierGroups);
     const totals = calculateOrderItemTotals({
       orderItemId: line.sourceOrderItemId, quantity: line.quantity, snapshot, note: null,

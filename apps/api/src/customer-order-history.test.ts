@@ -518,3 +518,74 @@ function audit(suffix: string) {
 function isError(code: CustomerOrderHistoryError["code"]): (error: unknown) => boolean {
   return (error: unknown) => error instanceof CustomerOrderHistoryError && error.code === code;
 }
+
+const variantSmall = "6a1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8";
+
+function sizedCatalogState(smallActive = true): MenuCatalogStateV1 {
+  const product = catalogState().catalog!.products[0]!;
+  return catalogState({
+    products: [{
+      ...product,
+      variants: [
+        { variantId: variantSmall, name: "Chica", sku: null, unitPriceMinor: 3_000, active: smallActive, displayOrder: 0 },
+        { variantId: "7b2e3d4f-5061-4b72-9c83-a4b5c6d7e8f9", name: "Grande", sku: null, unitPriceMinor: 5_000, active: true, displayOrder: 1 },
+      ],
+    }],
+  });
+}
+
+const sizedHistoricalOrder = addOrderItem(createOrder({
+  branchId, channel: "delivery", currency: "MXN", orderId, restaurantId, timeZone: "America/Hermosillo",
+}, audit("created-sized")).order, {
+  orderItemId,
+  quantity: 1,
+  snapshot: {
+    catalogVersion: "catalog-v1",
+    modifiers: [],
+    name: "Tacos",
+    productId,
+    stationId: "station-1",
+    unit: "piece",
+    unitPrice: new Money(2_800, "MXN"),
+    variantId: variantSmall,
+    variantName: "Chica",
+  },
+}, audit("line-sized")).order;
+
+test("repeat preview blocks only a line that cannot supply a size the product now requires", async () => {
+  const unsized = await previewServiceFor(["waiter"], { read: async () => order },
+    catalogPort(async () => sizedCatalogState())).preview(principal, { branchId, customerId, orderId, restaurantId });
+  assert.equal(unsized.lines[0]?.status, "blocked");
+  assert.equal(unsized.lines[0]?.blockedReason, "variant_required");
+  assert.deepEqual(unsized.lines[0]?.issues.map(({ code, severity }) => [code, severity]), [["variant_required", "blocking"]]);
+  assert.equal(unsized.readyLineCount, 0);
+
+  const retired = await previewServiceFor(["waiter"], { read: async () => sizedHistoricalOrder },
+    catalogPort(async () => sizedCatalogState(false))).preview(principal, { branchId, customerId, orderId, restaurantId });
+  assert.equal(retired.lines[0]?.blockedReason, "variant_required");
+});
+
+test("repeat preview and repeat-to-Capture reuse the historical size while it is still active", async () => {
+  const catalogs = catalogPort(async () => sizedCatalogState());
+  const preview = await previewServiceFor(["waiter"], { read: async () => sizedHistoricalOrder }, catalogs)
+    .preview(principal, { branchId, customerId, orderId, restaurantId });
+  assert.equal(preview.lines[0]?.status, "ready");
+  assert.equal(preview.lines[0]?.blockedReason, null);
+  assert.equal(preview.lines[0]?.currentUnitPriceMinor, 3_000);
+  assert.deepEqual(preview.lines[0]?.issues.map(({ code }) => code), ["product_price_changed"]);
+
+  const plans: CaptureRepeatSelectionPlan[] = [];
+  const persistence: CustomerOrderRepeatCapturePort = { apply: async (_actor, _command, plan) => {
+    plans.push(plan);
+    return { status: "applied", record: captureRecord(8) };
+  } };
+  await repeatCaptureServiceFor(["waiter"], { read: async () => sizedHistoricalOrder }, catalogs, persistence)
+    .apply(principal, repeatCommand, customerId, orderId);
+  assert.equal(plans[0]?.lines[0]?.variantId, variantSmall);
+  // A plain line never carries the key, so legacy plans keep their exact shape.
+  const plainPlans: CaptureRepeatSelectionPlan[] = [];
+  await repeatCaptureServiceFor(["waiter"], { read: async () => order }, catalogPort(async () => catalogState()), {
+    apply: async (_actor, _command, plan) => { plainPlans.push(plan); return { status: "applied", record: captureRecord(8) }; },
+  }).apply(principal, repeatCommand, customerId, orderId);
+  assert.equal(Object.hasOwn(plainPlans[0]!.lines[0]!, "variantId"), false);
+});

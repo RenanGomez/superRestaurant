@@ -237,3 +237,20 @@ test("selection materialization rejects catalog version drift and currency misma
     /CAPTURE_SELECTION_CATALOG_CONFLICT/u,
   );
 });
+
+test("repeat plan lines may carry a size: parsed, priced from the catalog variant, and legacy lines still parse", () => {
+  const withSize = parseCaptureRepeatSelectionPlan({
+    ...plan, lines: [{ ...plan.lines[0]!, variantId: ids.sizeSmall }],
+  });
+  assert.ok(withSize);
+  assert.equal(withSize.lines[0]?.variantId, ids.sizeSmall);
+  const sized = materializeCaptureOrder(command, ids.actor, "delivery", withSize, sizedCatalog);
+  assert.equal(sized.order.items[0]?.snapshot.unitPrice.amountMinor, 3_000);
+  assert.equal(sized.order.items[0]?.snapshot.variantName, "Chica");
+  // A legacy line (no size) against a product that now requires one cannot be materialized.
+  assert.throws(() => materializeCaptureOrder(command, ids.actor, "delivery", plan, sizedCatalog));
+  assert.equal(plan.lines[0] !== undefined && Object.hasOwn(plan.lines[0], "variantId"), false);
+  for (const variantId of ["not-a-uuid", null, 7]) {
+    assert.equal(parseCaptureRepeatSelectionPlan({ ...plan, lines: [{ ...plan.lines[0]!, variantId }] }), undefined);
+  }
+});
