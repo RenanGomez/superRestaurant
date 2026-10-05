@@ -285,3 +285,15 @@ expectRejected(withVariants(Array.from({ length: 13 }, (_, index) => ({
   name: `V${index}`, unitPriceMinor: 1, active: true, displayOrder: index, sku: null,
 }))), "more than 12 variants is rejected");
 expectRejected(withVariants([{ variantId: variantA, name: "A", unitPriceMinor: 1, active: true, displayOrder: 0, sku: null, extra: 1 }]), "extra variant field is rejected");
+
+// Half-and-half configuration of a size: optional on input, normalized to null, groups must belong to the product.
+const fractionConfig = { enabled: true, flavorGroupId: groupId, extraGroupId: null, excludableIngredientIds: ["cebolla"] };
+const baseVariant = { variantId: variantA, name: "Grande", unitPriceMinor: 15_000, active: true, displayOrder: 0, sku: null };
+const parsedFraction = parseSaveMenuCatalogCommandV1(withVariants([{ ...baseVariant, fraction: fractionConfig }]));
+expectDefined(parsedFraction, "variant with fraction config parses");
+expect(parsedFraction.products[0]?.variants?.[0]?.fraction?.flavorGroupId === groupId, "fraction config is preserved");
+expect(parseSaveMenuCatalogCommandV1(withVariants([baseVariant]))?.products[0]?.variants?.[0]?.fraction === null, "fraction defaults to null");
+expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, flavorGroupId: null } }]), "enabled fraction needs a flavor group");
+expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, flavorGroupId: "9a1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8" } }]), "foreign flavor group is rejected");
+expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, extraGroupId: groupId } }]), "same group for flavors and extras is rejected");
+expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, excludableIngredientIds: ["a", "a"] } }]), "duplicate excludable ingredient is rejected");

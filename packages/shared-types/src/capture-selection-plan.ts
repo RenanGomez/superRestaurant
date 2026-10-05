@@ -1,4 +1,5 @@
 import type { BranchScope } from "./index.js";
+import { parseLineFractionV1, type LineFractionV1 } from "./line-fraction.js";
 import {
   COMMERCIAL_CAPTURE_V4_SCHEMA_VERSION,
   parseCaptureWorkspaceV3,
@@ -38,6 +39,8 @@ export interface CaptureSelectionLineV1 {
   readonly quantity: number;
   readonly modifierGroups: readonly CaptureSelectionModifierGroupV1[];
   readonly note: string | null;
+  /** Optional half-and-half split; absent means a whole line. Requires `variantId`. */
+  readonly fraction?: LineFractionV1;
 }
 
 /**
@@ -247,8 +250,12 @@ export function parseCaptureSelectionPlanProjectionV1(value: unknown): CaptureSe
 }
 
 function parseSelectionLine(value: unknown): CaptureSelectionLineV1 | undefined {
-  const record = exactRecord(value, ["lineId", "productId", "variantId", "quantity", "modifierGroups", "note"]);
+  const lineKeys = ["lineId", "productId", "variantId", "quantity", "modifierGroups", "note"];
+  const record = exactRecord(value, lineKeys) ?? exactRecord(value, [...lineKeys, "fraction"]);
   if (record === undefined) return undefined;
+  const rawFraction = Object.hasOwn(record, "fraction") ? own(record, "fraction") : undefined;
+  const fraction = rawFraction === undefined ? undefined : parseLineFractionV1(rawFraction);
+  if (rawFraction !== undefined && fraction === undefined) return undefined;
   const lineId = uuid(own(record, "lineId"));
   const productId = uuid(own(record, "productId"));
   const variantId = nullableUuid(own(record, "variantId"));
@@ -267,7 +274,8 @@ function parseSelectionLine(value: unknown): CaptureSelectionLineV1 | undefined 
     groupIds.add(group.groupId);
     modifierGroups.push(group);
   }
-  return deepFreeze({ lineId, modifierGroups, note, productId, quantity, variantId });
+  if (fraction !== undefined && variantId === null) return undefined;
+  return deepFreeze({ ...(fraction === undefined ? {} : { fraction }), lineId, modifierGroups, note, productId, quantity, variantId });
 }
 
 function parseSelectionGroup(value: unknown): CaptureSelectionModifierGroupV1 | undefined {
