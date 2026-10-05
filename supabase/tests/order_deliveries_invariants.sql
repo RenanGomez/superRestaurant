@@ -84,6 +84,9 @@ declare
   o_cash uuid := gen_random_uuid();
   o_card uuid := gen_random_uuid();
   o_counter uuid := gen_random_uuid();
+  o_early uuid := gen_random_uuid();
+  o_late uuid := gen_random_uuid();
+  pay_4 uuid := gen_random_uuid();
   pay_1 uuid := gen_random_uuid();
   pay_2 uuid := gen_random_uuid();
   pay_3 uuid := gen_random_uuid();
@@ -428,6 +431,28 @@ begin
   then raise exception 'DELIVERY_SETTLED_STILL_LISTED'; end if;
   execute 'reset role';
 
+  -- ---- Card while the trip is not delivered is refused (DELIVERY_NOT_DELIVERED); nothing persists.
+  insert into app.orders(id,restaurant_id,branch_id,channel,status,aggregate,version,created_by,updated_by)
+  values (o_early,restaurant,branch,'delivery','open',pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',o_early::text,'restaurantId',restaurant::text,'branchId',branch::text,'channel','delivery',
+    'status','open','currency','MXN','timeZone','America/Hermosillo','items','[]'::jsonb),1,cashier,cashier);
+  execute 'set local role app_api';
+  result := app_private.assign_delivery(cashier,pg_temp.t_dcmd(restaurant,branch,o_early,0,gen_random_uuid(),'k-e-assign',device,now_text,pg_catalog.jsonb_build_object('courierUserId',courier_a::text)));
+  result := app_private.dispatch_delivery(cashier,pg_temp.t_dcmd(restaurant,branch,o_early,1,gen_random_uuid(),'k-e-dispatch',device,now_text,'{}'));
+  execute 'reset role';
+  select * into sess from app.cash_register_sessions where id=v_session;
+  select * into ord from app.orders where id=o_early;
+  cmd := pg_temp.t_collect(restaurant,branch,v_session,o_early,sess.version,1,gen_random_uuid(),3000,3,gen_random_uuid(),'k-early-card',device,now_text,
+    '{"method":"card_manual","cardManualEvidence":{"externalConfirmed":true,"provider":"Terminal","terminalId":"t-1","reference":null}}');
+  execute 'set local role app_api';
+  result := app_private.collect_simple_payment(cashier,cmd,
+    pg_catalog.jsonb_set(pg_temp.t_pay(restaurant,branch,o_early,(cmd->>'paymentId')::uuid,(cmd->>'eventId')::uuid,'k-early-card',3000,'{}'),'{method}','"card_manual"'),
+    pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),sess.aggregate,3000,0);
+  execute 'reset role';
+  if result->>'status'<>'conflict' or result->>'code'<>'DELIVERY_NOT_DELIVERED' then raise exception 'DELIVERY_CARD_BEFORE_DELIVERED_ACCEPTED'; end if;
+  if (select count(*) from app.payments where order_id=o_early)<>0 or (select state from app.order_deliveries where order_id=o_early)<>'en_route'
+  then raise exception 'DELIVERY_CARD_BEFORE_DELIVERED_PERSISTED'; end if;
+
   -- ---- A card/transfer intent never settles through a delivery: it is collected the normal way.
   execute 'set local role app_api';
   result := app_private.assign_delivery(cashier,pg_temp.t_dcmd(restaurant,branch,o_card,0,gen_random_uuid(),'k-k-assign',device,now_text,pg_catalog.jsonb_build_object('courierUserId',courier_a::text)));
@@ -465,10 +490,41 @@ begin
   result := app_private.collect_simple_payment(cashier,cmd,pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),sess.aggregate,3000,0);
   execute 'reset role';
   if result->>'orderStatus'<>'paid' or result->>'method'<>'card_manual' then raise exception 'DELIVERY_CARD_COLLECT_FAILED'; end if;
+  execute 'set local role app_api';
+  replayed := app_private.collect_simple_payment(cashier,cmd,pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),sess.aggregate,3000,0);
+  execute 'reset role';
+  if replayed->>'replayed'<>'true' or replayed->>'paymentId'<>pay_3::text then raise exception 'DELIVERY_CARD_COLLECT_REPLAY_REFUSED'; end if;
   if (select state from app.order_deliveries where order_id=o_card)<>'settled'
     or (select settled_payment_id from app.order_deliveries where order_id=o_card)<>pay_3
     or (select count(*) from app.order_delivery_events where order_id=o_card and operation='delivery.settled')<>1
   then raise exception 'DELIVERY_CARD_COLLECT_DID_NOT_SETTLE'; end if;
+
+  -- ---- Replay beats the delivery rules: a cash payment applied before the trip existed replays after assignment.
+  insert into app.orders(id,restaurant_id,branch_id,channel,status,aggregate,version,created_by,updated_by)
+  values (o_late,restaurant,branch,'delivery','open',pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',o_late::text,'restaurantId',restaurant::text,'branchId',branch::text,'channel','delivery',
+    'status','open','currency','MXN','timeZone','America/Hermosillo','items','[]'::jsonb),1,cashier,cashier);
+  select * into sess from app.cash_register_sessions where id=v_session;
+  select * into ord from app.orders where id=o_late;
+  select last_sequence+1 into k from app_private.financial_device_sequences where device_id=device and branch_id=branch;
+  reg := pg_catalog.jsonb_set(sess.aggregate,'{movements}',sess.aggregate->'movements'
+    || pg_catalog.jsonb_build_array(pg_temp.t_mv(pay_4,gen_random_uuid(),'k-late',restaurant,branch,v_session,v_register,v_shift,cashier,device,k,'cash_sale',1000,pay_4,now_text)));
+  cmd := pg_temp.t_collect(restaurant,branch,v_session,o_late,sess.version,1,pay_4,1000,k,(reg->'movements'->-1->>'eventId')::uuid,'k-late',device,now_text,'{}');
+  pay := pg_temp.t_pay(restaurant,branch,o_late,pay_4,(cmd->>'eventId')::uuid,'k-late',1000,'{}');
+  execute 'set local role app_api';
+  result := app_private.collect_simple_payment(cashier,cmd,pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"partially_paid"'),reg,3000,0);
+  result := app_private.assign_delivery(cashier,pg_temp.t_dcmd(restaurant,branch,o_late,0,gen_random_uuid(),'k-l-assign',device,now_text,pg_catalog.jsonb_build_object('courierUserId',courier_a::text)));
+  replayed := app_private.collect_simple_payment(cashier,cmd,pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"partially_paid"'),reg,3000,0);
+  execute 'reset role';
+  if replayed->>'replayed'<>'true' or replayed->>'paymentId'<>pay_4::text then raise exception 'DELIVERY_REPLAY_REFUSED_BY_GUARD'; end if;
+  -- A new cash collection on that Order is refused: it has an active delivery now.
+  select * into sess from app.cash_register_sessions where id=v_session;
+  execute 'set local role app_api';
+  result := app_private.collect_simple_payment(cashier,
+    pg_temp.t_collect(restaurant,branch,v_session,o_late,sess.version,2,gen_random_uuid(),500,k+1,gen_random_uuid(),'k-late-2',device,now_text,'{}'),
+    pay,ord.aggregate,sess.aggregate,3000,1000);
+  execute 'reset role';
+  if result->>'code'<>'DELIVERY_SETTLE_REQUIRED' then raise exception 'DELIVERY_LATE_CASH_NOT_GUARDED'; end if;
 
   -- ---- Tables are not reachable by the API role or the Data API.
   begin

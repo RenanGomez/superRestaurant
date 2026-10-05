@@ -505,8 +505,10 @@ $function$;
 --   * active delivery (assigned/en_route/delivered) + cash  => conflict DELIVERY_SETTLE_REQUIRED (settle it);
 --   * active delivery + card_manual that fully pays a DELIVERED trip => collected and the delivery is marked
 --     settled with a journal row in the same transaction;
---   * a card payment while the trip is still assigned/en_route is admitted and leaves the delivery row
---     untouched (known gap: a fully paid Order leaves the list, so that row is closed by a manager);
+--   * active delivery + card_manual while the trip is not yet delivered => conflict DELIVERY_NOT_DELIVERED
+--     (card is collected only after `delivered`, which then closes the delivery);
+--   * a retry whose idempotency key already exists is handed to the core first, so it replays (or conflicts
+--     on a divergent payload) instead of being refused by the delivery rules;
 --   * everything else, including malformed input and non-members, goes straight to the core.
 alter function app_private.collect_simple_payment(uuid,jsonb,jsonb,jsonb,jsonb,bigint,bigint)
   rename to collect_simple_payment_core;
@@ -540,6 +542,14 @@ begin
       p_order_total_minor, p_prior_captured_amount_minor);
   end if;
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('order:' || v_order::text, 0));
+  -- Replay first: an already-applied key is answered by the core regardless of the delivery's current state.
+  if exists (select 1 from app.financial_audit_events fe
+    where fe.actor_id = p_actor_id and fe.restaurant_id = v_restaurant and fe.branch_id = v_branch
+      and fe.idempotency_key = v_key)
+  then
+    return app_private.collect_simple_payment_core(p_actor_id, p_command, p_payment, p_order, p_register,
+      p_order_total_minor, p_prior_captured_amount_minor);
+  end if;
   select * into v_row from app.order_deliveries
   where restaurant_id = v_restaurant and branch_id = v_branch and order_id = v_order for update;
   if not found or v_row.state not in ('assigned','en_route','delivered') then
@@ -548,6 +558,9 @@ begin
   end if;
   if v_method = 'cash' then
     return pg_catalog.jsonb_build_object('status','conflict','code','DELIVERY_SETTLE_REQUIRED');
+  end if;
+  if v_row.state <> 'delivered' then
+    return pg_catalog.jsonb_build_object('status','conflict','code','DELIVERY_NOT_DELIVERED');
   end if;
   v_result := app_private.collect_simple_payment_core(p_actor_id, p_command, p_payment, p_order, p_register,
     p_order_total_minor, p_prior_captured_amount_minor);
