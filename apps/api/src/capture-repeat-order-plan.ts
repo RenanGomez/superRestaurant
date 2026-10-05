@@ -80,15 +80,19 @@ export function materializeCaptureOrder(
     note: null,
     productId: line.productId,
     quantity: line.quantity,
+    variantId: null,
   })), "capture-repeat");
 }
 
 /**
  * Materializes the Order from a catalog-derived `CaptureSelectionPlanV1`
  * (server-owned pricing via `createMenuProductPriceSnapshot`, never a
- * client-supplied price). `variantId` is not supported by the legacy
- * `MenuCatalogV1`/domain snapshot: any non-null `variantId` is rejected here
- * rather than silently ignored, so the gap is explicit instead of silent.
+ * client-supplied price). A line's `variantId` (catalog size) is priced by the domain from the
+ * catalog's variant, never from the client; an unknown/inactive variant, or a sized product without
+ * one, throws and the caller maps it to a conflict.
+ *
+ * Known debt: repeating a past order (`materializeCaptureOrder`, the repeat plan) for a product that now has
+ * active sizes answers 409 `variant_required`; carrying `variantId` into the repeat plan is pending.
  */
 export function materializeCaptureSelectionOrder(
   command: ConfirmCaptureDraftCommandV2,
@@ -103,9 +107,6 @@ export function materializeCaptureSelectionOrder(
     || catalog.catalogVersion !== plan.catalogVersion) {
     throw new Error("CAPTURE_SELECTION_CATALOG_CONFLICT");
   }
-  if (plan.lines.some((line) => line.variantId !== null)) {
-    throw new Error("CAPTURE_SELECTION_VARIANT_UNSUPPORTED");
-  }
   const domainCatalog = toDomainMenuCatalog(catalog, command.scope.restaurantId);
   return appendMaterializedItems(base, command, actorId, domainCatalog, plan.lines.map((line) => ({
     identity: line.lineId,
@@ -113,6 +114,7 @@ export function materializeCaptureSelectionOrder(
     note: line.note,
     productId: line.productId,
     quantity: line.quantity,
+    variantId: line.variantId,
   })), "capture-selection");
 }
 
@@ -144,6 +146,8 @@ interface MaterializableLine {
   readonly note: string | null;
   readonly productId: string;
   readonly quantity: number;
+  /** Catalog size of the line; `null` for a product sold without sizes. */
+  readonly variantId: string | null;
 }
 
 function appendMaterializedItems(
@@ -161,6 +165,7 @@ function appendMaterializedItems(
       currency: command.currency,
       productId: line.productId,
       restaurantId: command.scope.restaurantId,
+      variantId: line.variantId,
     }, line.modifierGroups);
     const added = addOrderItem(order, {
       orderItemId: derivedUuid(`${namespace}-item`, command.eventId, line.identity),

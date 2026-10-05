@@ -212,6 +212,16 @@ function validDomainCatalog(command: SaveMenuCatalogCommandV1): boolean {
         }),
         unit: product.unit,
         unitPrice: new Money(product.unitPriceMinor, command.currency),
+        ...((product.variants ?? []).length === 0 ? {} : {
+          variants: (product.variants ?? []).map((variant) => ({
+            active: variant.active,
+            displayOrder: variant.displayOrder,
+            id: variant.variantId,
+            name: variant.name,
+            ...(variant.sku === null ? {} : { sku: variant.sku }),
+            unitPrice: new Money(variant.unitPriceMinor, command.currency),
+          })),
+        }),
       })),
       restaurantId: command.scope.restaurantId,
     });

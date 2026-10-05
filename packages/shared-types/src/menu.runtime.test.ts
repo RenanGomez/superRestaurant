@@ -249,3 +249,39 @@ expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), unexpected: true }) =
 
 expect(parseMenuCatalogStateV1({ schemaVersion: 1, scope: parsed.scope, catalog: undefined }) === undefined, "undefined catalog state is rejected");
 expect(parseMenuCatalogV1({ ...response, version: 0 }) === undefined, "non-positive response version is rejected");
+
+// Product variants (sizes): optional on input, always present on output.
+expect(Array.isArray(parsed.products[0]?.variants) && parsed.products[0]?.variants?.length === 0, "variants default to []");
+const variantA = "6a1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8";
+const variantB = "7b2e3d4f-5061-4b72-9c83-a4b5c6d7e8f9";
+const sized = command();
+const sizedProduct = (sized.products as Record<string, unknown>[])[0]!;
+sizedProduct.variants = [
+  { variantId: variantB, name: "Grande", unitPriceMinor: 20_000, active: true, displayOrder: 1, sku: null },
+  { variantId: variantA, name: "Chica", unitPriceMinor: 12_000, active: true, displayOrder: 0, sku: "HAM-S" },
+];
+const parsedSized = parseSaveMenuCatalogCommandV1(sized);
+expectDefined(parsedSized, "command with variants parses");
+expect(parsedSized.products[0]?.variants?.map(({ name }) => name).join() === "Chica,Grande", "variants are ordered");
+expect(Object.isFrozen(parsedSized.products[0]?.variants?.[0]), "variant is frozen");
+
+function withVariants(variants: unknown): Record<string, unknown> {
+  const next = command();
+  (next.products as Record<string, unknown>[])[0]!.variants = variants;
+  return next;
+}
+expectRejected(withVariants([
+  { variantId: variantA, name: "Chica", unitPriceMinor: 1, active: true, displayOrder: 0, sku: null },
+  { variantId: variantB, name: " chica".trim().toUpperCase(), unitPriceMinor: 1, active: true, displayOrder: 1, sku: null },
+]), "duplicate variant name is rejected");
+expectRejected(withVariants([
+  { variantId: variantA, name: "A", unitPriceMinor: 1, active: true, displayOrder: 0, sku: null },
+  { variantId: variantA, name: "B", unitPriceMinor: 1, active: true, displayOrder: 1, sku: null },
+]), "duplicate variant id is rejected");
+expectRejected(withVariants([{ variantId: variantA, name: "A", unitPriceMinor: -1, active: true, displayOrder: 0, sku: null }]), "negative variant price is rejected");
+expectRejected(withVariants([{ variantId: variantA, name: "A", unitPriceMinor: 1.5, active: true, displayOrder: 0, sku: null }]), "fractional variant price is rejected");
+expectRejected(withVariants(Array.from({ length: 13 }, (_, index) => ({
+  variantId: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+  name: `V${index}`, unitPriceMinor: 1, active: true, displayOrder: index, sku: null,
+}))), "more than 12 variants is rejected");
+expectRejected(withVariants([{ variantId: variantA, name: "A", unitPriceMinor: 1, active: true, displayOrder: 0, sku: null, extra: 1 }]), "extra variant field is rejected");

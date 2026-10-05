@@ -566,7 +566,7 @@ test("order service detail scopes access, reduces PII, and computes actions from
   const asManager = await serviceFor(["manager"], port).detail(principal, detailRequest);
   // The order already has a pending line, so "sendToKitchen" alone covers it -- "open" is never
   // offered alongside it for the same draft order.
-  assert.deepEqual(asManager.availableActions, ["sendToKitchen"]);
+  assert.deepEqual(asManager.availableActions, ["addItem", "sendToKitchen"]);
   assert.deepEqual(asManager.items.map((item) => item.availableActions), [["cancelItem"], ["markReady", "cancelItem"]]);
 
   // A role with only orders.cancel.pending (waiter) never sees cancelItem on a line that already
@@ -890,7 +890,7 @@ test("order service detail never offers open and sendToKitchen together for the 
   };
   const emptyDetail = await serviceFor(["manager"], emptyPort).detail(principal, { orderId, schemaVersion: 1 as const, scope });
   // A table draft with no lines yet only offers "open" ("Abrir cuenta").
-  assert.deepEqual(emptyDetail.availableActions, ["open"]);
+  assert.deepEqual(emptyDetail.availableActions, ["addItem", "open"]);
 
   const withPendingLine = addOrderItem(tableOrder, {
     orderItemId,
@@ -903,7 +903,7 @@ test("order service detail never offers open and sendToKitchen together for the 
   const pendingPort: OrderPersistencePort = { ...emptyPort, read: async () => ({ order: withPendingLine, version: 2 }) };
   const pendingDetail = await serviceFor(["manager"], pendingPort).detail(principal, { orderId, schemaVersion: 1 as const, scope });
   // Once a line exists, only "sendToKitchen" is offered -- never "open" alongside it.
-  assert.deepEqual(pendingDetail.availableActions, ["sendToKitchen"]);
+  assert.deepEqual(pendingDetail.availableActions, ["addItem", "sendToKitchen"]);
 });
 
 test("order service detail on a cancelled order with a frozen delivery charge never reports it in totals", async () => {
@@ -936,9 +936,10 @@ function serviceFor(
   roles: readonly ("manager" | "supervisor" | "viewer" | "waiter" | "cashier" | "kitchen")[],
   orders: OrderPersistencePort,
   notifications: RealtimeNotificationPort = { notify: async () => undefined },
+  state: MenuCatalogStateV1 = menuState,
 ): OrderService {
   const memberships: MembershipLookupPort = { findActiveMembership: async () => ({ roles, scope }) };
-  const catalogs: MenuCatalogPort = { read: async () => menuState, save: async () => ({ status: "conflict" }) };
+  const catalogs: MenuCatalogPort = { read: async () => state, save: async () => ({ status: "conflict" }) };
   return new OrderService(new MembershipAuthorizationService(memberships), orders, catalogs, notifications);
 }
 
@@ -1007,3 +1008,124 @@ function persistResult(status: "replayed" | "saved", event: typeof kdsEvent | nu
 async function assertCode(promise: Promise<unknown>, code: OrderApplicationError["code"]): Promise<void> {
   await assert.rejects(promise, (error: unknown) => error instanceof OrderApplicationError && error.code === code);
 }
+
+const sizeSmall = "6a1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8";
+const sizeLarge = "7b2e3d4f-5061-4b72-9c83-a4b5c6d7e8f9";
+const sizeRetired = "5a1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8";
+
+const sizedMenuState: MenuCatalogStateV1 = (() => {
+  const catalog = menuState.catalog;
+  if (catalog === null) throw new Error("TEST_MENU_INVALID");
+  const state = parseMenuCatalogStateV1({
+    ...menuState,
+    catalog: {
+      ...catalog,
+      products: [{
+        ...catalog.products[0]!,
+        variants: [
+          { variantId: sizeSmall, name: "Chica", sku: null, unitPriceMinor: 9_000, active: true, displayOrder: 0 },
+          { variantId: sizeLarge, name: "Grande", sku: "HAM-G", unitPriceMinor: 15_000, active: true, displayOrder: 1 },
+          { variantId: sizeRetired, name: "Gigante", sku: null, unitPriceMinor: 30_000, active: false, displayOrder: 2 },
+        ],
+      }],
+    },
+  });
+  if (state === undefined) throw new Error("TEST_SIZED_MENU_INVALID");
+  return state;
+})();
+
+function sizedAddCommand(extra: Record<string, unknown>) {
+  const command = parseAddOrderItemCommandV1({
+    ...audit,
+    eventId: randomUUID(),
+    expectedVersion: 1,
+    idempotencyKey: randomUUID(),
+    modifierGroups: [],
+    orderId,
+    orderItemId,
+    productId,
+    quantity: 1,
+    schemaVersion: 1,
+    scope,
+    ...extra,
+  });
+  if (command === undefined) throw new Error("TEST_SIZED_ADD_INVALID");
+  return command;
+}
+
+function capturingOrders(saved: { order?: Order }): OrderPersistencePort {
+  return {
+    listKdsTickets: async () => ticketList!,
+    persist: async (_actorId, expectedVersion, mutation) => {
+      saved.order = mutation.order;
+      return { kdsEvent: kdsEvent!, order: mutation.order, status: "saved", version: expectedVersion + 1 };
+    },
+    read: async () => ({ order: saved.order ?? domainMutation.order, version: saved.order === undefined ? 1 : 2 }),
+    recoverKds: async () => eventPage!,
+    sendOrderToKitchen: notImplementedSendOrderToKitchen,
+  };
+}
+
+test("addItem freezes the size price, id, name and the line note; detail exposes variantName and addItem", async () => {
+  const saved: { order?: Order } = {};
+  const manager = serviceFor(["manager"], capturingOrders(saved), undefined, sizedMenuState);
+  await manager.addItem(principal, sizedAddCommand({ note: "sin jitomate", variantId: sizeLarge }));
+  const item = saved.order?.items[0];
+  assert.equal(item?.snapshot.unitPrice.amountMinor, 15_000);
+  assert.equal(item?.snapshot.variantId, sizeLarge);
+  assert.equal(item?.snapshot.variantName, "Grande");
+  assert.equal(item?.snapshot.sku, "HAM-G");
+  assert.equal(item?.note, "sin jitomate");
+
+  const request = { orderId, schemaVersion: 1, scope };
+  const detail = await manager.detail(principal, request);
+  assert.equal(detail.items[0]?.variantName, "Grande");
+  assert.equal(detail.items[0]?.unitPriceMinor, 15_000);
+  assert.equal(detail.items[0]?.note, "sin jitomate");
+  assert.ok(detail.availableActions.includes("addItem"));
+  const viewer = await serviceFor(["viewer"], capturingOrders(saved), undefined, sizedMenuState).detail(principal, request);
+  assert.equal(viewer.availableActions.includes("addItem"), false);
+
+  // A plain product keeps no variant keys and a null variantName.
+  const plainSaved: { order?: Order } = {};
+  const plain = serviceFor(["manager"], capturingOrders(plainSaved));
+  await plain.addItem(principal, sizedAddCommand({}));
+  assert.equal(plainSaved.order?.items[0]?.snapshot.variantId, undefined);
+  assert.equal(plainSaved.order?.items[0]?.note, undefined);
+  assert.equal((await plain.detail(principal, request)).items[0]?.variantName, null);
+});
+
+test("addItem answers 409 for a missing, unknown, inactive or unexpected variant and never persists", async () => {
+  let persisted = 0;
+  const base = capturingOrders({});
+  const counting: OrderPersistencePort = { ...base, persist: async (...args) => { persisted += 1; return base.persist(...args); } };
+  const sized = serviceFor(["manager"], counting, undefined, sizedMenuState);
+  await assertCode(sized.addItem(principal, sizedAddCommand({})), "conflict");
+  await assertCode(sized.addItem(principal, sizedAddCommand({ variantId: randomUUID() })), "conflict");
+  await assertCode(sized.addItem(principal, sizedAddCommand({ variantId: sizeRetired })), "conflict");
+  await assertCode(serviceFor(["manager"], counting).addItem(principal, sizedAddCommand({ variantId: sizeSmall })), "conflict");
+  assert.equal(persisted, 0);
+});
+
+test("PostgreSQL order adapter persists and decodes a sized line through the real { result } row", async () => {
+  const saved: { order?: Order } = {};
+  await serviceFor(["manager"], capturingOrders(saved), undefined, sizedMenuState)
+    .addItem(principal, sizedAddCommand({ variantId: sizeSmall }));
+  const mutation = { ...domainMutation, order: saved.order! };
+  let sent: unknown;
+  const database: DatabaseClientPort = {
+    query: async (_sql, parameters) => {
+      sent = JSON.parse(String(parameters[2]));
+      return { rows: [{ result: { ...persistResult("saved", null), order: sent } }] };
+    },
+  };
+  const persisted = await new PostgresOrderPersistenceAdapter(database).persist(principal.actorId, 0, mutation);
+  assert.equal(persisted.status, "saved");
+  const snapshot = (sent as { items: { snapshot: Record<string, unknown> }[] }).items[0]!.snapshot;
+  assert.equal(snapshot.variantId, sizeSmall);
+  assert.equal(snapshot.variantName, "Chica");
+  assert.equal((snapshot.unitPrice as { amountMinor: number }).amountMinor, 9_000);
+  if (persisted.status !== "saved") throw new Error("TEST_PERSIST_NOT_SAVED");
+  assert.equal(persisted.order.items[0]?.snapshot.variantName, "Chica");
+  assert.equal(persisted.order.items[0]?.snapshot.unitPrice.amountMinor, 9_000);
+});

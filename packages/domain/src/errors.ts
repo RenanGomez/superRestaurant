@@ -375,7 +375,7 @@ export class OrderAuditAuthorizationRequiredError extends DomainError {
   public readonly operation: string;
 }
 
-export type MenuEntityKind = "category" | "product" | "modifier group";
+export type MenuEntityKind = "category" | "product" | "modifier group" | "product variant";
 
 export class DuplicateMenuEntityIdError extends DomainError {
   public readonly code = "DUPLICATE_MENU_ENTITY_ID";
@@ -486,6 +486,43 @@ export class MenuProductNotFoundError extends DomainError {
   }
 
   public readonly productId: string;
+}
+
+export class MenuProductVariantRequiredError extends DomainError {
+  public readonly code = "VARIANT_REQUIRED";
+
+  public constructor(productId: string) {
+    super("This product is sold in sizes; a variant must be selected.");
+    this.productId = productId;
+  }
+
+  public readonly productId: string;
+}
+
+export class MenuProductVariantNotFoundError extends DomainError {
+  public readonly code = "MENU_PRODUCT_VARIANT_NOT_FOUND";
+
+  public constructor(productId: string, variantId: string) {
+    super("The selected variant does not exist for this product.");
+    this.productId = productId;
+    this.variantId = variantId;
+  }
+
+  public readonly productId: string;
+  public readonly variantId: string;
+}
+
+export class InactiveMenuProductVariantError extends DomainError {
+  public readonly code = "INACTIVE_MENU_PRODUCT_VARIANT";
+
+  public constructor(productId: string, variantId: string) {
+    super("An inactive product variant cannot produce an order-item snapshot.");
+    this.productId = productId;
+    this.variantId = variantId;
+  }
+
+  public readonly productId: string;
+  public readonly variantId: string;
 }
 
 export class InactiveMenuCategoryError extends DomainError {

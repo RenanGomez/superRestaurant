@@ -225,6 +225,10 @@ export interface AddOrderItemCommandV1 extends OrderAuditInputV1 {
   readonly quantity: number;
   readonly schemaVersion: typeof ORDER_COMMAND_SCHEMA_VERSION;
   readonly scope: BranchScope;
+  /** Optional on input; the parsed output always carries it (`null` when absent). Required by the server for sized products. */
+  readonly variantId?: string | null;
+  /** Optional preparation note frozen with the line (<= 500, no control characters). */
+  readonly note?: string | null;
 }
 
 export interface OpenOrderCommandV1 extends OrderAuditInputV1 {
@@ -297,7 +301,7 @@ export interface OrderMutationSummaryV1 {
 
 export const ORDER_DETAIL_SCHEMA_VERSION = 1 as const;
 export const ORDER_DETAIL_ACTIONS = Object.freeze([
-  "open", "sendToKitchen", "markReady", "markDelivered", "cancelItem", "checkout",
+  "open", "sendToKitchen", "markReady", "markDelivered", "cancelItem", "checkout", "addItem",
 ] as const);
 
 export type OrderDetailActionV1 = (typeof ORDER_DETAIL_ACTIONS)[number];
@@ -319,6 +323,8 @@ export interface OrderDetailItemV1 {
   readonly orderItemId: string;
   readonly status: (typeof ORDER_ITEM_STATUSES)[number];
   readonly name: string;
+  /** Frozen size name for sized products; optional on input (older servers), `null` in normalized output. */
+  readonly variantName?: string | null;
   readonly quantity: number;
   readonly unitPriceMinor: number;
   readonly lineTotalMinor: number;
@@ -462,10 +468,13 @@ export function parseOrderDetailV1(value: unknown): OrderDetailV1 | undefined {
 }
 
 function parseDetailItem(value: unknown, currency: string): OrderDetailItemV1 | undefined {
-  const record = exactRecord(value, [
+  const required = [
     "orderItemId", "status", "name", "quantity", "unitPriceMinor", "lineTotalMinor", "note", "modifiers", "availableActions",
-  ]);
+  ];
+  const record = exactRecord(value, required) ?? exactRecord(value, [...required, "variantName"]);
   if (record === undefined) return undefined;
+  const rawVariantName = Object.hasOwn(record, "variantName") ? own(record, "variantName") : null;
+  const variantName = rawVariantName === null ? null : text(rawVariantName, 1, 200);
   const orderItemId = uuid(own(record, "orderItemId"));
   const status = own(record, "status");
   const name = text(own(record, "name"), 1, 200);
@@ -479,7 +488,7 @@ function parseDetailItem(value: unknown, currency: string): OrderDetailItemV1 | 
   if (
     orderItemId === undefined || typeof status !== "string" || !(ORDER_ITEM_STATUSES as readonly string[]).includes(status)
     || name === undefined || quantity === undefined || unitPriceMinor === undefined || lineTotalMinor === undefined
-    || note === undefined || rawModifiers === undefined || rawActions === undefined
+    || note === undefined || rawModifiers === undefined || rawActions === undefined || variantName === undefined
   ) return undefined;
   const modifiers: OrderDetailModifierV1[] = [];
   for (const raw of rawModifiers) {
@@ -497,7 +506,7 @@ function parseDetailItem(value: unknown, currency: string): OrderDetailItemV1 | 
   void currency;
   return Object.freeze({
     availableActions: Object.freeze(availableActions), lineTotalMinor, modifiers: Object.freeze(modifiers),
-    name, note, orderItemId, quantity, status: status as OrderDetailItemV1["status"], unitPriceMinor,
+    name, note, orderItemId, quantity, status: status as OrderDetailItemV1["status"], unitPriceMinor, variantName,
   });
 }
 
@@ -680,8 +689,14 @@ export function parseCreateOrderCommandV1(value: unknown): CreateOrderCommandV1 
 }
 
 export function parseAddOrderItemCommandV1(value: unknown): AddOrderItemCommandV1 | undefined {
-  const record = exactRecord(value, ["schemaVersion","scope","orderId","expectedVersion","orderItemId","productId","quantity","modifierGroups","eventId","idempotencyKey","deviceId","occurredAt"]);
+  const addKeys = ["schemaVersion","scope","orderId","expectedVersion","orderItemId","productId","quantity","modifierGroups","eventId","idempotencyKey","deviceId","occurredAt"];
+  const record = [[], ["variantId"], ["note"], ["variantId", "note"]]
+    .map((extra) => exactRecord(value, [...addKeys, ...extra])).find((candidate) => candidate !== undefined);
   if (record === undefined || own(record,"schemaVersion") !== 1) return undefined;
+  const rawVariantId = Object.hasOwn(record, "variantId") ? own(record, "variantId") : null;
+  const variantId = rawVariantId === null ? null : uuid(rawVariantId);
+  const rawNote = Object.hasOwn(record, "note") ? own(record, "note") : null;
+  const note = rawNote === null ? null : text(rawNote, 1, 500);
   const common = parseCommon(record);
   const scope = parseScope(own(record,"scope"));
   const orderId = uuid(own(record,"orderId"));
@@ -692,8 +707,9 @@ export function parseAddOrderItemCommandV1(value: unknown): AddOrderItemCommandV
   const modifierGroups = parseGroups(own(record,"modifierGroups"));
   return common === undefined || scope === undefined || orderId === undefined || orderItemId === undefined
     || productId === undefined || expectedVersion === undefined || quantity === undefined || modifierGroups === undefined
+    || variantId === undefined || note === undefined
     ? undefined
-    : Object.freeze({ ...common, expectedVersion, modifierGroups, orderId, orderItemId, productId, quantity, schemaVersion: 1, scope });
+    : Object.freeze({ ...common, expectedVersion, modifierGroups, note, orderId, orderItemId, productId, quantity, schemaVersion: 1, scope, variantId });
 }
 
 export function parseOpenOrderCommandV1(value: unknown): OpenOrderCommandV1 | undefined {

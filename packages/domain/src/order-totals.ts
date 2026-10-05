@@ -81,6 +81,8 @@ export interface OrderItemPriceSnapshot {
    * the catalog, and preserved verbatim through calculation so history is never silently dropped.
    */
   readonly variantId?: string;
+  /** Frozen display name of the chosen size/variant, set together with `variantId` for catalog sizes. */
+  readonly variantName?: string;
   readonly geometry?: "whole" | "halves";
   readonly fractionBreakdown?: readonly OrderItemFractionBreakdownEntry[];
 }
@@ -381,9 +383,11 @@ function normalizePriceSnapshot(value: unknown): OrderItemPriceSnapshot {
   const modifiers = ownDataArray(snapshot, "modifiers", "modifiers").map((modifier) => normalizeModifier(modifier, unitPrice.currency));
   const tax = optionalOwnData(snapshot, "tax", "tax snapshot");
   const variantId = optionalOwnData(snapshot, "variantId", "variantId");
+  const variantName = optionalOwnData(snapshot, "variantName", "variantName");
   const geometry = optionalOwnData(snapshot, "geometry", "geometry");
   const fractionBreakdownValue = optionalOwnData(snapshot, "fractionBreakdown", "fractionBreakdown");
   if (variantId !== undefined) assertText(variantId as string, "variantId");
+  if (variantName !== undefined) assertText(variantName as string, "variantName");
   if (geometry !== undefined && geometry !== "whole" && geometry !== "halves") {
     throw new InvalidSnapshotError("geometry");
   }
@@ -402,6 +406,7 @@ function normalizePriceSnapshot(value: unknown): OrderItemPriceSnapshot {
     modifiers,
     ...(tax === undefined ? {} : { tax: normalizeTaxSnapshot(tax) }),
     ...(variantId === undefined ? {} : { variantId: variantId as string }),
+    ...(variantName === undefined ? {} : { variantName: variantName as string }),
     ...(geometry === undefined ? {} : { geometry }),
     ...(fractionBreakdown === undefined ? {} : { fractionBreakdown }),
   });
@@ -629,6 +634,9 @@ function clonePriceSnapshot(snapshot: OrderItemPriceSnapshot): OrderItemPriceSna
   if (snapshot.variantId !== undefined) {
     assertText(snapshot.variantId, "variantId");
   }
+  if (snapshot.variantName !== undefined) {
+    assertText(snapshot.variantName, "variantName");
+  }
   if (snapshot.geometry !== undefined && snapshot.geometry !== "whole" && snapshot.geometry !== "halves") {
     throw new InvalidSnapshotError("geometry");
   }
@@ -647,6 +655,7 @@ function clonePriceSnapshot(snapshot: OrderItemPriceSnapshot): OrderItemPriceSna
     modifiers,
     ...(snapshot.tax === undefined ? {} : { tax: cloneTaxSnapshot(snapshot.tax) }),
     ...(snapshot.variantId === undefined ? {} : { variantId: snapshot.variantId }),
+    ...(snapshot.variantName === undefined ? {} : { variantName: snapshot.variantName }),
     ...(snapshot.geometry === undefined ? {} : { geometry: snapshot.geometry }),
     ...(fractionBreakdown === undefined ? {} : { fractionBreakdown }),
   });

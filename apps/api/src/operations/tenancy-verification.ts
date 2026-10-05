@@ -38,6 +38,7 @@ import {
   type TenancyVerificationConfig,
   type TenancyVerificationStage,
 } from "./tenancy-verification-config.js";
+import { DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters } from "./menu-variant-cleanup.js";
 import { validateCatalogAuditSql } from "./schema-verification.js";
 import {
   appApiLifecycleAdvisoryLockKey,
@@ -80,6 +81,7 @@ type AppTable =
   | "menu_catalogs"
   | "menu_categories"
   | "menu_products"
+  | "menu_product_variants"
   | "menu_modifier_groups"
   | "menu_modifier_options"
   | "menu_catalog_heads"
@@ -105,6 +107,7 @@ const menuCatalogTables = [
   "menu_catalogs",
   "menu_categories",
   "menu_products",
+  "menu_product_variants",
   "menu_modifier_groups",
   "menu_modifier_options",
   "menu_catalog_heads",
@@ -2232,6 +2235,12 @@ async function cleanupFixtures(
         const created = plan.menuCatalogCreated ? [plan.menuCatalog.commands[0]] : [];
         await deleteRequiredFixtureRows(client, "app.menu_modifier_options", plan.menuCatalog.commands.map((item) => item.optionId), created.map((item) => item.optionId));
         await deleteRequiredFixtureRows(client, "app.menu_modifier_groups", plan.menuCatalog.commands.map((item) => item.groupId), created.map((item) => item.groupId));
+        // Variants (sizes) reference products with ON DELETE RESTRICT; fixtures publish none, so none required.
+        await client.query(DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters(
+          plan.restaurantIds,
+          plan.menuCatalog.commands.map((item) => item.catalogVersion),
+          plan.menuCatalog.commands.map((item) => item.productId),
+        ));
         await deleteRequiredFixtureRows(client, "app.menu_products", plan.menuCatalog.commands.map((item) => item.productId), created.map((item) => item.productId));
         await deleteRequiredFixtureRows(client, "app.menu_categories", plan.menuCatalog.commands.map((item) => item.categoryId), created.map((item) => item.categoryId));
         await deleteRequiredFixtureRows(client, "app.menu_catalog_audit_events", plan.menuCatalog.commands.map((item) => item.eventId), created.map((item) => item.eventId), "event_id");

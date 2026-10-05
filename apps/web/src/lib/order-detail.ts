@@ -133,6 +133,7 @@ export async function postOrderMutation(
 }
 
 const ACTION_LABELS: Record<OrderDetailActionV1, string> = {
+  addItem: "Agregar producto",
   cancelItem: "Cancelar línea",
   checkout: "Cobrar en caja",
   markDelivered: "Marcar entregada",
