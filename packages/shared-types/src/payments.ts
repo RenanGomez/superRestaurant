@@ -90,7 +90,7 @@ export interface PaymentCollectionSummaryV1 {
   readonly replayed: boolean;
   readonly schemaVersion: typeof FINANCIAL_SCHEMA_VERSION;
   readonly scope: BranchScope;
-  /** Server-derived `tendered - amount`; null unless a cash tender was recorded. Never part of the bill. */
+  /** Server-derived `tendered - amount - tip` (a cash tip comes out of the cash handed over); null unless a cash tender was recorded. Never part of the bill. */
   readonly changeMinor: number | null;
   readonly tenderedAmountMinor: number | null;
   readonly tipMinor: number;
@@ -197,7 +197,7 @@ export function parseQuoteCashPaymentRequestV1(value: unknown): QuoteCashPayment
   const tipMinor = integer(own(record, "tipMinor"), 0, Number.MAX_SAFE_INTEGER);
   if (scope === undefined || orderId === undefined || cashRegisterSessionId === undefined || method === undefined
     || amountMinor === undefined || tenderedAmountMinor === undefined || tipMinor === undefined
-    || (tenderedAmountMinor !== null && (method !== "cash" || tenderedAmountMinor < amountMinor))) return undefined;
+    || (tenderedAmountMinor !== null && (method !== "cash" || tenderedAmountMinor < amountMinor + tipMinor))) return undefined;
   return Object.freeze({
     amountMinor, cashRegisterSessionId, method, orderId, schemaVersion: 1, scope, tenderedAmountMinor, tipMinor,
   });
@@ -228,7 +228,7 @@ export function parseCashPaymentQuoteV1(value: unknown): CashPaymentQuoteV1 | un
     || remainingAfterMinor === undefined || remainingBeforeMinor === undefined
     || remainingAfterMinor !== remainingBeforeMinor - request.amountMinor
     || (request.tenderedAmountMinor === null) !== (changeMinor === null)
-    || (changeMinor !== null && changeMinor !== (request.tenderedAmountMinor as number) - request.amountMinor)) return undefined;
+    || (changeMinor !== null && changeMinor !== (request.tenderedAmountMinor as number) - request.amountMinor - request.tipMinor)) return undefined;
   return Object.freeze({ ...request, changeMinor, currency, remainingAfterMinor, remainingBeforeMinor });
 }
 
@@ -281,7 +281,7 @@ export function parseCollectPaymentCommandV1(value: unknown): CollectPaymentComm
     || paymentId === undefined || amountMinor === undefined || localSequence === undefined || method === undefined
     || cardManualEvidence === undefined || (method === "cash") !== (cardManualEvidence === null)
     || (hasTendered && tenderedAmountMinor === undefined) || (hasTip && tipMinor === undefined)
-    || (typeof tenderedAmountMinor === "number" && (method !== "cash" || tenderedAmountMinor < amountMinor))) return undefined;
+    || (typeof tenderedAmountMinor === "number" && (method !== "cash" || tenderedAmountMinor < amountMinor + (tipMinor ?? 0)))) return undefined;
   return Object.freeze({
     ...common, amountMinor, cardManualEvidence, cashRegisterExpectedVersion, cashRegisterSessionId,
     localSequence, method, orderExpectedVersion, orderId, paymentId, schemaVersion: 1, scope,
@@ -394,7 +394,7 @@ export function parsePaymentCollectionSummaryV1(value: unknown): PaymentCollecti
     || (orderStatus === "paid") !== (remainingBalanceMinor === 0)
     || tenderedAmountMinor === undefined || changeMinor === undefined || tipMinor === undefined
     || (tenderedAmountMinor === null) !== (changeMinor === null)
-    || (tenderedAmountMinor !== null && (method !== "cash" || changeMinor !== tenderedAmountMinor - amountMinor))) return undefined;
+    || (tenderedAmountMinor !== null && (method !== "cash" || changeMinor !== tenderedAmountMinor - amountMinor - tipMinor))) return undefined;
   return Object.freeze({
     amountMinor, cashRegisterSessionId, cashRegisterVersion, changeMinor, currency, method, orderId, orderStatus,
     orderVersion, paymentId, paymentState, remainingBalanceMinor, replayed, schemaVersion: 1, scope,
