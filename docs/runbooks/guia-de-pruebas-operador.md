@@ -73,3 +73,13 @@ Servicios: API en `http://localhost:3000` (health `/api/v1/health`), web en `htt
 4. **Órdenes** (`/app/orders`): «Detalle» → «Enviar a cocina», «Marcar lista/entregada», «Cancelar línea» con motivo; cada acción responde; el diálogo atrapa el foco y cierra con Escape.
 5. **Mesas** (`/app/tables`): plano con libre/ocupada; tocar mesa libre → «Abrir cuenta» (dos toques); «Sin turno abierto» con «Abrir turno»; mesa ocupada → cuentas con total, «Ver cuenta», «Asignarme», «Abrir otra cuenta»; «Editar plano» sólo para gestión.
 6. **Caja** (`/app/caja`): fondo y conteo en pesos, sin «ISO» ni «u.m.»; «Cargar cuenta» es una lista de órdenes cobrables con «Cobrar», sin UUID.
+
+## 7. Qué probar el 2026-10-05 (día operable: caja, entregas, tamaños, agregar a cuenta)
+
+Antes: añadir `RECEIPT_COOKIE_SECRET=<32+ caracteres aleatorios>` a `apps/web/.env.local` y reiniciar el web dev (sin eso el recibo dice «Recibo no disponible», el cobro sí se registra).
+
+1. **Caja** (`/app/caja`): abrir caja en pesos; «Cargar cuenta» desde la lista; Efectivo → «$200» → ver «Cambio después de propina» → propina opcional → «Cobrar» (3-4 toques); recibo con cobrado, cambio, propina y saldo que sobrevive a recargar; «Cobrar parcial» editando el importe y segundo cobro con Tarjeta externa (terminal y referencia ≥ 6); Corte X con fondo, ventas por método, propinas, esperado y lista de movimientos en español; cerrar caja con conteo distinto → exige motivo.
+2. **Entregas** (`/app/deliveries`): con un usuario con rol `courier` en la sucursal (asignarlo en Accesos), «Por asignar» → tocar repartidor (2 toques) → «Salió» → «Entregada» → «Liquidar» con recibido precargado desde la intención y cambio del servidor; «No se pudo» con motivo y reasignar; una orden con intención de tarjeta remite a Caja; entrar como repartidor y ver sólo lo suyo.
+3. **Tamaños** (`/app/menu` y `/app/capture`): en un producto «Añadir tamaño» → nombre → precio (×2), publicar; en captura la tarjeta dice «desde $X», la hoja exige tamaño antes de Agregar, el ticket muestra «Pizza · Grande»; repetir un pedido anterior de ese producto muestra la línea bloqueada «requiere tamaño».
+4. **Mesas** (`/app/tables`): mesa libre → «Abrir cuenta» → «Agregar producto» → producto (con tamaño y nota) → Agregar (4 toques); la línea aparece en la cuenta; «Enviar a cocina».
+5. Todo en escritorio y 390×844 con consola abierta.
