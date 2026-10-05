@@ -417,6 +417,10 @@ begin
     or p_collect -> 'orderExpectedVersion' is distinct from p_command -> 'orderExpectedVersion'
     or p_collect -> 'cashRegisterExpectedVersion' is distinct from p_command -> 'cashRegisterExpectedVersion'
     or p_collect ->> 'method' is distinct from 'cash'
+    or (p_command -> 'tenderedAmountMinor' is distinct from 'null'::jsonb
+      and p_collect -> 'tenderedAmountMinor' is distinct from p_command -> 'tenderedAmountMinor')
+    or (p_command -> 'tipMinor' is distinct from 'null'::jsonb
+      and p_collect -> 'tipMinor' is distinct from p_command -> 'tipMinor')
     or p_order_total_minor not between 1 and 9007199254740991
     or p_prior_captured_amount_minor not between 0 and 9007199254740991
     or v_amount is distinct from p_order_total_minor - p_prior_captured_amount_minor
@@ -432,6 +436,7 @@ begin
   where actor_id = p_actor_id and restaurant_id = v_restaurant and branch_id = v_branch and idempotency_key = v_key;
   if found then
     if v_existing.operation <> 'delivery.settled' or v_existing.command_payload <> p_command
+      or v_existing.result_payload -> 'collect' is distinct from p_collect
       or v_existing.event_id <> v_event
     then return pg_catalog.jsonb_build_object('status','conflict'); end if;
     return pg_catalog.jsonb_build_object('status','replayed','replayed',true,
@@ -459,7 +464,7 @@ begin
   then return pg_catalog.jsonb_build_object('status','conflict'); end if;
 
   begin
-    v_collected := app_private.collect_simple_payment(
+    v_collected := app_private.collect_simple_payment_core(
       p_actor_id, p_collect, p_payment, p_order, p_register, p_order_total_minor, p_prior_captured_amount_minor);
     if v_collected ->> 'status' in ('conflict','forbidden') then
       v_status := v_collected ->> 'status';
@@ -486,7 +491,7 @@ begin
       idempotency_key, expected_version, result_version, from_state, to_state, command_payload, result_payload, occurred_at)
     values (v_event, v_restaurant, v_branch, v_order, p_actor_id, v_device, 'delivery.settled', v_key, v_expected,
       v_row.version, 'delivered', 'settled', p_command,
-      pg_catalog.jsonb_build_object('delivery', v_view, 'payment', v_collected), v_occurred);
+      pg_catalog.jsonb_build_object('delivery', v_view, 'payment', v_collected, 'collect', p_collect), v_occurred);
   exception when sqlstate 'P5100' then
     return pg_catalog.jsonb_build_object('status', v_status);
   end;
@@ -495,7 +500,82 @@ begin
 end
 $function$;
 
+-- 5b. /payments/collect must not strand a delivery. The existing authority becomes
+-- collect_simple_payment_core (only settle_delivery and the guard call it); the public name is a guard:
+--   * active delivery (assigned/en_route/delivered) + cash  => conflict DELIVERY_SETTLE_REQUIRED (settle it);
+--   * active delivery + card_manual that fully pays a DELIVERED trip => collected and the delivery is marked
+--     settled with a journal row in the same transaction;
+--   * a card payment while the trip is still assigned/en_route is admitted and leaves the delivery row
+--     untouched (known gap: a fully paid Order leaves the list, so that row is closed by a manager);
+--   * everything else, including malformed input and non-members, goes straight to the core.
+alter function app_private.collect_simple_payment(uuid,jsonb,jsonb,jsonb,jsonb,bigint,bigint)
+  rename to collect_simple_payment_core;
+revoke all on function app_private.collect_simple_payment_core(uuid,jsonb,jsonb,jsonb,jsonb,bigint,bigint)
+  from public, anon, authenticated, service_role, app_api;
+
+create function app_private.collect_simple_payment(
+  p_actor_id uuid, p_command jsonb, p_payment jsonb, p_order jsonb, p_register jsonb,
+  p_order_total_minor bigint, p_prior_captured_amount_minor bigint
+) returns jsonb language plpgsql volatile security definer set search_path = '' as $function$
+declare
+  v_restaurant uuid; v_branch uuid; v_order uuid; v_method text; v_device uuid; v_occurred timestamptz; v_key text;
+  v_row app.order_deliveries%rowtype; v_result jsonb; v_view jsonb;
+begin
+  begin
+    v_restaurant := (p_command #>> '{scope,restaurantId}')::uuid;
+    v_branch := (p_command #>> '{scope,branchId}')::uuid;
+    v_order := (p_command ->> 'orderId')::uuid;
+    v_method := p_command ->> 'method';
+    v_device := (p_command ->> 'deviceId')::uuid;
+    v_occurred := (p_command ->> 'occurredAt')::timestamptz;
+    v_key := p_command ->> 'idempotencyKey';
+  exception when others then
+    return app_private.collect_simple_payment_core(p_actor_id, p_command, p_payment, p_order, p_register,
+      p_order_total_minor, p_prior_captured_amount_minor);
+  end;
+  if p_actor_id is null or v_restaurant is null or v_branch is null or v_order is null or v_key is null
+    or not exists (select 1 from app_private.find_active_branch_membership(p_actor_id, v_restaurant, v_branch))
+  then
+    return app_private.collect_simple_payment_core(p_actor_id, p_command, p_payment, p_order, p_register,
+      p_order_total_minor, p_prior_captured_amount_minor);
+  end if;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('order:' || v_order::text, 0));
+  select * into v_row from app.order_deliveries
+  where restaurant_id = v_restaurant and branch_id = v_branch and order_id = v_order for update;
+  if not found or v_row.state not in ('assigned','en_route','delivered') then
+    return app_private.collect_simple_payment_core(p_actor_id, p_command, p_payment, p_order, p_register,
+      p_order_total_minor, p_prior_captured_amount_minor);
+  end if;
+  if v_method = 'cash' then
+    return pg_catalog.jsonb_build_object('status','conflict','code','DELIVERY_SETTLE_REQUIRED');
+  end if;
+  v_result := app_private.collect_simple_payment_core(p_actor_id, p_command, p_payment, p_order, p_register,
+    p_order_total_minor, p_prior_captured_amount_minor);
+  if v_result ->> 'paymentId' is not null and (v_result ->> 'replayed')::boolean is false
+    and v_result ->> 'orderStatus' = 'paid' and v_row.state = 'delivered'
+  then
+    update app.order_deliveries set state = 'settled', settled_payment_id = (v_result ->> 'paymentId')::uuid,
+      settled_at = pg_catalog.clock_timestamp(), version = version + 1,
+      updated_at = pg_catalog.clock_timestamp(), updated_by = p_actor_id
+    where restaurant_id = v_restaurant and branch_id = v_branch and order_id = v_order
+    returning * into v_row;
+    v_view := app_private.delivery_view(v_row);
+    insert into app.order_delivery_events (event_id, restaurant_id, branch_id, order_id, actor_id, device_id, operation,
+      idempotency_key, expected_version, result_version, from_state, to_state, command_payload, result_payload, occurred_at)
+    values (pg_catalog.gen_random_uuid(), v_restaurant, v_branch, v_order, p_actor_id, v_device, 'delivery.settled',
+      pg_catalog.left(v_key, 190) || ':delivery', v_row.version - 1, v_row.version, 'delivered', 'settled', p_command,
+      pg_catalog.jsonb_build_object('delivery', v_view, 'payment', v_result), v_occurred);
+  end if;
+  return v_result;
+end
+$function$;
+
 -- 6. Readers (raw facts; the API projects PII and totals with domain code).
+-- Visibility: managers (owner/admin/manager/supervisor/cashier) see every active delivery Order of the
+-- branch; a courier-only actor sees ONLY the deliveries assigned to them (rows are filtered here, never
+-- in the UI). The raw snapshot is returned for those rows so the API can give the assigned courier the
+-- minimal customer projection (name, phone, full address, delivery instructions) needed to deliver;
+-- every other role still needs customers.read. A courier never sees another courier's rows.
 create function app_private.list_branch_deliveries(p_actor_id uuid, p_restaurant_id uuid, p_branch_id uuid)
 returns jsonb language plpgsql stable security definer set search_path = '' as $function$
 declare
@@ -514,7 +594,9 @@ begin
       'courierName', case when d.order_id is null then null else app_private.member_display_name(d.courier_user_id) end,
       'orderStatus', o.status,
       'order', o.aggregate,
-      'snapshot', frozen.snapshot
+      'snapshot', frozen.snapshot,
+      'capturedMinor', (select coalesce(pg_catalog.sum(pay.amount_minor), 0) from app.payments pay
+        where pay.restaurant_id = o.restaurant_id and pay.branch_id = o.branch_id and pay.order_id = o.id and pay.state = 'captured')
     ) order by o.created_at, o.id), '[]'::jsonb) into v_items
   from (
     select o.* from app.orders o
@@ -612,6 +694,7 @@ end
 $owner$;
 
 alter function app_private.reject_order_delivery_event_change() owner to postgres;
+alter function app_private.collect_simple_payment(uuid,jsonb,jsonb,jsonb,jsonb,bigint,bigint) owner to postgres;
 alter function app_private.delivery_view(app.order_deliveries) owner to postgres;
 alter function app_private.pending_delivery_view(uuid,uuid,uuid) owner to postgres;
 alter function app_private.member_display_name(uuid) owner to postgres;
@@ -642,6 +725,9 @@ revoke all on function app_private.list_branch_deliveries(uuid,uuid,uuid) from p
 revoke all on function app_private.read_order_delivery_context(uuid,uuid,uuid,uuid) from public, anon, authenticated, service_role, app_api;
 revoke all on function app_private.list_branch_members(uuid,uuid,uuid,text[]) from public, anon, authenticated, service_role, app_api;
 
+revoke all on function app_private.collect_simple_payment(uuid,jsonb,jsonb,jsonb,jsonb,bigint,bigint)
+  from public, anon, authenticated, service_role, app_api;
+grant execute on function app_private.collect_simple_payment(uuid,jsonb,jsonb,jsonb,jsonb,bigint,bigint) to app_api;
 grant execute on function app_private.assign_delivery(uuid,jsonb) to app_api;
 grant execute on function app_private.dispatch_delivery(uuid,jsonb) to app_api;
 grant execute on function app_private.complete_delivery(uuid,jsonb) to app_api;

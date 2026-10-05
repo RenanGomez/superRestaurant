@@ -36,6 +36,7 @@ const SUMMARY_SQL = `select
     where n.nspname in ('app_rls','app_private') and p.prosecdef) as "securityDefinerFunctions"`;
 
 const ENTRY_POINTS = [
+  'app_private.collect_simple_payment(uuid,jsonb,jsonb,jsonb,jsonb,bigint,bigint)',
   'app_private.assign_delivery(uuid,jsonb)',
   'app_private.dispatch_delivery(uuid,jsonb)',
   'app_private.complete_delivery(uuid,jsonb)',
@@ -49,6 +50,7 @@ const ENTRY_POINTS = [
 const PRIVATE_HELPERS = [
   'app_private.apply_delivery_transition(uuid,text,jsonb)',
   'app_private.member_display_name(uuid)',
+  'app_private.collect_simple_payment_core(uuid,jsonb,jsonb,jsonb,jsonb,bigint,bigint)',
   'app_private.reject_order_delivery_event_change()',
 ] as const;
 const PRIVILEGE_SQL = `select
@@ -155,11 +157,11 @@ try {
   } finally { await admin.query("ROLLBACK"); }
 
   if (migrationFailure !== undefined) { stage = "migrated"; throw migrationFailure; }
-  // The candidate adds two forced-RLS tables and eleven SECURITY DEFINER functions, and no policy.
+  // The candidate adds two forced-RLS tables and twelve SECURITY DEFINER functions (the collect guard included), and no policy.
   assert.deepEqual(baseline, postcheck);
   assert.deepEqual(migrated, {
     securedTables: baseline.securedTables + 2, policies: baseline.policies,
-    securityDefinerFunctions: baseline.securityDefinerFunctions + 11,
+    securityDefinerFunctions: baseline.securityDefinerFunctions + 12,
   });
 
   process.stdout.write(`${JSON.stringify({

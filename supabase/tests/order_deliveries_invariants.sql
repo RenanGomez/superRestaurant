@@ -318,6 +318,16 @@ begin
   result := app_private.assign_delivery(cashier,pg_temp.t_dcmd(restaurant,branch,o_cash,0,gen_random_uuid(),'k-c-assign',device,now_text,pg_catalog.jsonb_build_object('courierUserId',courier_a::text)));
   result := app_private.dispatch_delivery(courier_a,pg_temp.t_dcmd(restaurant,branch,o_cash,1,gen_random_uuid(),'k-c-dispatch',device,now_text,'{}'));
   execute 'reset role';
+  execute 'set local role app_api';
+  result := app_private.list_branch_deliveries(courier_a,restaurant,branch);
+  if pg_catalog.jsonb_array_length(result->'deliveries')<>1 or result->'deliveries'->0->'delivery'->>'orderId'<>o_cash::text
+    or result->'deliveries'->0->'snapshot'->'paymentIntent'->>'method'<>'cash'
+    or (result->'deliveries'->0->>'capturedMinor')::bigint<>0
+  then raise exception 'DELIVERY_COURIER_OWN_ROW_WRONG'; end if;
+  result := app_private.list_branch_deliveries(courier_b,restaurant,branch);
+  if exists (select 1 from pg_catalog.jsonb_array_elements(result->'deliveries') d where d->'delivery'->>'orderId'=o_cash::text)
+  then raise exception 'DELIVERY_COURIER_SAW_OTHER_COURIER_ROW'; end if;
+  execute 'reset role';
   select * into sess from app.cash_register_sessions where id=v_session;
   select * into ord from app.orders where id=o_cash;
   -- Not delivered yet (en_route): refused.
@@ -353,6 +363,11 @@ begin
   -- Partial balance (no partial delivery): collect amount below the remaining balance.
   if (app_private.settle_delivery(cashier,cmd,pg_catalog.jsonb_set(collect,'{amountMinor}','4000'),pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),reg,5000,0))->>'status'<>'conflict'
   then raise exception 'DELIVERY_PARTIAL_SETTLEMENT_ACCEPTED'; end if;
+  -- Tender or tip of the collect command that differ from the settlement command are refused.
+  if (app_private.settle_delivery(cashier,cmd,pg_catalog.jsonb_set(collect,'{tenderedAmountMinor}','7000'),pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),reg,5000,0))->>'status'<>'conflict'
+  then raise exception 'DELIVERY_COLLECT_TENDER_DIVERGED_ACCEPTED'; end if;
+  if (app_private.settle_delivery(cashier,cmd,pg_catalog.jsonb_set(collect,'{tipMinor}','300'),pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),reg,5000,0))->>'status'<>'conflict'
+  then raise exception 'DELIVERY_COLLECT_TIP_DIVERGED_ACCEPTED'; end if;
   -- Collect command that does not restate the settlement.
   if (app_private.settle_delivery(cashier,cmd,pg_catalog.jsonb_set(collect,'{paymentId}',to_jsonb(gen_random_uuid()::text)),pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),reg,5000,0))->>'status'<>'conflict'
   then raise exception 'DELIVERY_MISMATCHED_COLLECT_ACCEPTED'; end if;
@@ -431,6 +446,29 @@ begin
   execute 'reset role';
   if result->>'status'<>'conflict' then raise exception 'DELIVERY_CARD_INTENT_SETTLED_AS_CASH'; end if;
   if (select count(*) from app.payments where order_id=o_card)<>0 then raise exception 'DELIVERY_CARD_INTENT_PERSISTED_PAYMENT'; end if;
+  -- Cash through the public collect authority is refused while the delivery is active: it must be settled.
+  execute 'set local role app_api';
+  result := app_private.collect_simple_payment(cashier,
+    pg_temp.t_collect(restaurant,branch,v_session,o_card,sess.version,1,pay_3,3000,3,gen_random_uuid(),'k-guard',device,now_text,'{}'),
+    pg_temp.t_pay(restaurant,branch,o_card,pay_3,gen_random_uuid(),'k-guard',3000,'{}'),
+    pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),reg,3000,0);
+  execute 'reset role';
+  if result->>'status'<>'conflict' or result->>'code'<>'DELIVERY_SETTLE_REQUIRED' then raise exception 'DELIVERY_CASH_COLLECT_NOT_GUARDED'; end if;
+  if (select count(*) from app.payments where order_id=o_card)<>0 or (select state from app.order_deliveries where order_id=o_card)<>'delivered'
+  then raise exception 'DELIVERY_GUARD_PERSISTED'; end if;
+  -- A card payment that fully pays a delivered trip is collected and settles the delivery with a journal row.
+  cmd := pg_temp.t_collect(restaurant,branch,v_session,o_card,sess.version,1,pay_3,3000,3,gen_random_uuid(),'k-card-pay',device,now_text,
+    '{"method":"card_manual","cardManualEvidence":{"externalConfirmed":true,"provider":"Terminal","terminalId":"t-1","reference":null}}');
+  pay := pg_catalog.jsonb_set(pg_temp.t_pay(restaurant,branch,o_card,pay_3,(cmd->>'eventId')::uuid,'k-card-pay',3000,
+    '{"cardManualEvidence":{"externalConfirmed":true,"provider":"Terminal","terminalId":"t-1"}}'),'{method}','"card_manual"');
+  execute 'set local role app_api';
+  result := app_private.collect_simple_payment(cashier,cmd,pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),sess.aggregate,3000,0);
+  execute 'reset role';
+  if result->>'orderStatus'<>'paid' or result->>'method'<>'card_manual' then raise exception 'DELIVERY_CARD_COLLECT_FAILED'; end if;
+  if (select state from app.order_deliveries where order_id=o_card)<>'settled'
+    or (select settled_payment_id from app.order_deliveries where order_id=o_card)<>pay_3
+    or (select count(*) from app.order_delivery_events where order_id=o_card and operation='delivery.settled')<>1
+  then raise exception 'DELIVERY_CARD_COLLECT_DID_NOT_SETTLE'; end if;
 
   -- ---- Tables are not reachable by the API role or the Data API.
   begin
