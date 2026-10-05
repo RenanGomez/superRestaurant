@@ -1,4 +1,4 @@
-import type { DiningLayoutV1, TableBoardTableV1, TableBoardV1 } from "@super-restaurant/shared-types";
+import type { BranchMemberV1, DiningLayoutV1, TableBoardTableV1, TableBoardV1 } from "@super-restaurant/shared-types";
 
 export function groupBoardByZone(layout: DiningLayoutV1, board: TableBoardV1) {
   const states = new Map(board.tables.map((table) => [table.tableId, table]));
@@ -23,4 +23,11 @@ export function orderStatusLabel(status: "draft" | "open" | "partially_paid"): s
 export function waiterInitials(name: string | null): string {
   if (name === null || name.trim() === "") return "Sin mesero";
   return name.trim().split(/\s+/u).slice(0, 2).map((part) => part[0]?.toLocaleUpperCase("es-MX") ?? "").join("");
+}
+
+export function waiterLabel(members: readonly Pick<BranchMemberV1, "displayName" | "userId">[], userId: string | null, actorId?: string): string {
+  if (userId === null) return "Sin mesero";
+  const name = members.find((member) => member.userId === userId)?.displayName?.trim();
+  if (name) return name;
+  return userId === actorId ? "Yo" : `Mesero ${userId.slice(0, 4).toLocaleUpperCase("es-MX")}`;
 }

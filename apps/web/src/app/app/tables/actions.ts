@@ -3,12 +3,13 @@
 import { cookies } from "next/headers";
 import {
   parseAssignOrderWaiterResultV1, parseBranchOperationalContextV1, parseOpenOperationalShiftResultV1, parseOperationalShiftListV1, parseOrderMutationSummaryV1,
-  parseTableBoardV1, type DiningLayoutV1, type OperationalShiftSummaryV1,
+  parseTableBoardV1, type BranchMemberV1, type DiningLayoutV1, type OperationalShiftSummaryV1,
   type TableBoardV1,
 } from "@super-restaurant/shared-types";
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
 import { getCaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
+import { listBranchMembers } from "../../../lib/deliveries";
 import { getDiningLayout } from "../../../lib/dining-layout";
 import { BRANCH_PREFERENCE_COOKIE, parseBranchPreference } from "../../../lib/memberships";
 import { parseAttemptIds, parseOccurredAt, requestOrderDetail } from "../../../lib/order-detail";
@@ -77,10 +78,10 @@ export async function tableOrderDetailAction(orderId: string) {
   return requestOrderDetail(ctx.token, ctx.base, ctx.scope, orderId);
 }
 
-export async function createTableOrderAction(tableId: string, orderId: string, attempt: Attempt, assignSelf: boolean): Promise<{ readonly ok: true; readonly orderId: string; readonly waiterAssigned: boolean } | Failure> {
+export async function createTableOrderAction(tableId: string, orderId: string, attempt: Attempt, waiterUserId: string | null): Promise<{ readonly ok: true; readonly orderId: string; readonly waiterAssigned: boolean } | Failure> {
   const ctx = await context();
   if (ctx === undefined) return { ok: false, error: "denied" };
-  if (!uuid.test(tableId) || !uuid.test(orderId) || !validAttempt(attempt)) return { ok: false, error: "invalid" };
+  if (!uuid.test(tableId) || !uuid.test(orderId) || !validAttempt(attempt) || (waiterUserId !== null && !uuid.test(waiterUserId))) return { ok: false, error: "invalid" };
   const facts = await getCaptureConfirmationContext(ctx.token, ctx.base, ctx.scope);
   if (facts === undefined || facts.tables === null) return { ok: false, error: "unavailable" };
   if (!facts.tables.some((table) => table.tableId === tableId)) return { ok: false, error: "invalid" };
@@ -91,23 +92,23 @@ export async function createTableOrderAction(tableId: string, orderId: string, a
   try {
     const created = parseOrderMutationSummaryV1(await response.json());
     if (created === undefined || created.orderId !== orderId || created.scope.restaurantId !== ctx.scope.restaurantId || created.scope.branchId !== ctx.scope.branchId) return { ok: false, error: "unavailable" };
-    if (!assignSelf) return { ok: true, orderId, waiterAssigned: false };
+    if (waiterUserId === null) return { ok: true, orderId, waiterAssigned: false };
     const assigned = await request(ctx.token, ctx.base, "orders/assign-waiter", { ...attempt, eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(),
-      schemaVersion: 1, scope: ctx.scope, orderId, expectedVersion: created.version, waiterUserId: ctx.actorId });
+      schemaVersion: 1, scope: ctx.scope, orderId, expectedVersion: created.version, waiterUserId });
     const value = assigned?.ok ? parseAssignOrderWaiterResultV1(await assigned.json().catch(() => undefined)) : undefined;
-    return { ok: true, orderId, waiterAssigned: value?.waiterUserId === ctx.actorId };
+    return { ok: true, orderId, waiterAssigned: value?.waiterUserId === waiterUserId };
   } catch { return { ok: false, error: "unavailable" }; }
 }
 
-export async function assignWaiterAction(orderId: string, expectedVersion: number, attempt: Attempt): Promise<{ readonly ok: true } | Failure> {
+export async function assignWaiterAction(orderId: string, expectedVersion: number, attempt: Attempt, waiterUserId: string): Promise<{ readonly ok: true } | Failure> {
   const ctx = await context();
   if (ctx === undefined) return { ok: false, error: "denied" };
-  if (!uuid.test(orderId) || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1 || !validAttempt(attempt)) return { ok: false, error: "invalid" };
+  if (!uuid.test(orderId) || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1 || !validAttempt(attempt) || !uuid.test(waiterUserId)) return { ok: false, error: "invalid" };
   const response = await request(ctx.token, ctx.base, "orders/assign-waiter", { ...attempt, schemaVersion: 1, scope: ctx.scope,
-    orderId, expectedVersion, waiterUserId: ctx.actorId });
+    orderId, expectedVersion, waiterUserId });
   if (response === undefined || !response.ok) return failure(response);
   const value = parseAssignOrderWaiterResultV1(await response.json().catch(() => undefined));
-  return value?.orderId === orderId && value.waiterUserId === ctx.actorId && value.scope.restaurantId === ctx.scope.restaurantId && value.scope.branchId === ctx.scope.branchId
+  return value?.orderId === orderId && value.waiterUserId === waiterUserId && value.scope.restaurantId === ctx.scope.restaurantId && value.scope.branchId === ctx.scope.branchId
     ? { ok: true } : { ok: false, error: "unavailable" };
 }
 
@@ -120,4 +121,12 @@ export async function openShiftAction(shiftId: string, attempt: Attempt): Promis
   const value = parseOpenOperationalShiftResultV1(await response.json().catch(() => undefined));
   return value?.shiftId === shiftId && value.scope.restaurantId === ctx.scope.restaurantId && value.scope.branchId === ctx.scope.branchId
     ? { ok: true } : { ok: false, error: "unavailable" };
+}
+
+export async function listWaitersAction(): Promise<{ readonly ok: true; readonly members: readonly BranchMemberV1[] } | Failure> {
+  const ctx = await context();
+  if (ctx === undefined) return { ok: false, error: "denied" };
+  const result = await listBranchMembers(ctx.token, ctx.base, ctx.scope, "waiter");
+  return result.status === "ok" ? { ok: true, members: result.value }
+    : { ok: false, error: result.status === "unauthorized" ? "denied" : "unavailable" };
 }

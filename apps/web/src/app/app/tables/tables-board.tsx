@@ -2,10 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { BranchScope, DiningLayoutV1, OperationalShiftSummaryV1, OrderDetailV1, TableBoardActiveOrderV1, TableBoardV1 } from "@super-restaurant/shared-types";
+import type { BranchScope, DiningLayoutV1, BranchMemberV1, OperationalShiftSummaryV1, OrderDetailV1, TableBoardActiveOrderV1, TableBoardV1 } from "@super-restaurant/shared-types";
 import { captureDeviceId } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
-import { gridPlacement, groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterInitials } from "../../../lib/tables-board";
+import { gridPlacement, groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterLabel } from "../../../lib/tables-board";
 
 type ErrorCode = "invalid" | "denied" | "conflict" | "no_shift" | "unavailable";
 type Failure = { readonly ok: false; readonly error: ErrorCode };
@@ -20,13 +20,13 @@ interface Props {
   readonly branchName: string;
   readonly restaurantName: string;
   readonly actorId: string;
-  readonly actorName: string | null;
   readonly canManage: boolean;
   readonly canOpenShift: boolean;
   readonly actions: {
     readonly read: () => Promise<Snapshot | Failure>;
-    readonly create: (tableId: string, orderId: string, attempt: Attempt, assignSelf: boolean) => Promise<{ readonly ok: true; readonly orderId: string; readonly waiterAssigned: boolean } | Failure>;
-    readonly assign: (orderId: string, expectedVersion: number, attempt: Attempt) => Promise<{ readonly ok: true } | Failure>;
+    readonly create: (tableId: string, orderId: string, attempt: Attempt, waiterUserId: string | null) => Promise<{ readonly ok: true; readonly orderId: string; readonly waiterAssigned: boolean } | Failure>;
+    readonly assign: (orderId: string, expectedVersion: number, attempt: Attempt, waiterUserId: string) => Promise<{ readonly ok: true } | Failure>;
+    readonly waiters: () => Promise<{ readonly ok: true; readonly members: readonly BranchMemberV1[] } | Failure>;
     readonly openShift: (shiftId: string, attempt: Attempt) => Promise<{ readonly ok: true } | Failure>;
     readonly detail: (orderId: string) => Promise<{ readonly ok: true; readonly value: OrderDetailV1 } | { readonly ok: false; readonly error: string }>;
   };
@@ -47,7 +47,27 @@ function message(error: ErrorCode) {
     : error === "denied" ? "Tu rol o sesión ya no permite esta acción." : error === "invalid" ? "No se pudo enviar la acción." : "No se pudo confirmar el resultado. Actualiza antes de intentar otra acción.";
 }
 
-export function TablesBoard({ scope, branchName, restaurantName, actorId, actorName, canManage, canOpenShift, actions }: Props) {
+function WaiterPicker({ members, actorId, current, disabled, allowNone, onPick }: {
+  readonly members: readonly BranchMemberV1[] | null; readonly actorId: string; readonly current: string | null; readonly disabled: boolean;
+  readonly allowNone: boolean; readonly onPick: (userId: string | null) => void;
+}) {
+  const others = (members ?? []).filter((member) => member.userId !== actorId);
+  const option = (id: string | null, label: string) => <button key={id ?? "none"} type="button" className={`${current === id ? primary : button} min-h-11 min-w-24`}
+    aria-pressed={current === id} disabled={disabled || (!allowNone && current === id)} onClick={() => onPick(id)}>{label}</button>;
+  return <div>
+    <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Elegir mesero">
+      {allowNone && option(null, "Sin mesero")}
+      {option(actorId, "Yo")}
+      {others.map((member) => option(member.userId, waiterLabel(members ?? [], member.userId)))}
+    </div>
+    {members !== null && others.length === 0 && <p className="mt-2 text-xs text-text-muted">Asigna el rol mesero en Accesos para ver más opciones.</p>}
+  </div>;
+}
+
+export function TablesBoard({ scope, branchName, restaurantName, actorId, canManage, canOpenShift, actions }: Props) {
+  const [waiters, setWaiters] = useState<readonly BranchMemberV1[] | null>(null);
+  const [pickOrder, setPickOrder] = useState<string | null>(null);
+  const waiterSeq = useRef(0);
   const router = useRouter();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [selected, setSelected] = useState<Selected | null>(null);
@@ -57,7 +77,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, actorN
   const [error, setError] = useState<ErrorCode | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeOrderId, setNoticeOrderId] = useState<string | null>(null);
-  const [assignSelf, setAssignSelf] = useState(false);
+  const [newWaiter, setNewWaiter] = useState<string | null>(null);
   const seq = useRef(0);
   const detailSeq = useRef(0);
   const selectedRef = useRef<Selected | null>(null);
@@ -101,17 +121,24 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, actorN
     return result;
   }
 
-  useEffect(() => { void refresh(); }, [scope.branchId, scope.restaurantId]);
+  async function loadWaiters() {
+    const current = ++waiterSeq.current;
+    let result: Awaited<ReturnType<Props["actions"]["waiters"]>>;
+    try { result = await actions.waiters(); } catch { result = { ok: false, error: "unavailable" }; }
+    if (current === waiterSeq.current) setWaiters(result.ok ? result.members : null);
+  }
+
+  useEffect(() => { void refresh(); void loadWaiters(); }, [scope.branchId, scope.restaurantId]);
   useEffect(() => {
-    const onFocus = () => { void refresh(); };
-    const onVisible = () => { if (document.visibilityState === "visible") void refresh(); };
+    const onFocus = () => { void refresh(); void loadWaiters(); };
+    const onVisible = () => { if (document.visibilityState === "visible") { void refresh(); void loadWaiters(); } };
     window.addEventListener("focus", onFocus); document.addEventListener("visibilitychange", onVisible);
     return () => { window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVisible); };
   }, [scope.branchId, scope.restaurantId]);
 
   async function select(tableId: string, name: string, orders: readonly TableBoardActiveOrderV1[]) {
     selectedRef.current = { tableId, name, orders };
-    setSelected(selectedRef.current); setError(null); setNotice(null); setNoticeOrderId(null); setAssignSelf(false);
+    setSelected(selectedRef.current); setError(null); setNotice(null); setNoticeOrderId(null); setNewWaiter(null); setPickOrder(null);
     loadDetails(orders);
   }
 
@@ -138,7 +165,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, actorN
     setBusy(true); setError(null); setNotice(null); setNoticeOrderId(null);
     const orderId = crypto.randomUUID();
     let result: Awaited<ReturnType<Props["actions"]["create"]>>;
-    try { result = await actions.create(selected.tableId, orderId, attempt(), assignSelf); }
+    try { result = await actions.create(selected.tableId, orderId, attempt(), newWaiter); }
     catch { result = { ok: false, error: "unavailable" }; }
     if (!result.ok) {
       setError(result.error);
@@ -154,7 +181,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, actorN
       setBusy(false);
       return;
     }
-    if (assignSelf && !result.waiterAssigned) {
+    if (newWaiter !== null && !result.waiterAssigned) {
       setNotice("Cuenta abierta, pero no se pudo asignar el mesero. Verifica la cuenta antes de intentarlo de nuevo.");
       setNoticeOrderId(orderId);
       await refresh(true);
@@ -166,17 +193,18 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, actorN
     router.push(`/app/orders?orderId=${result.orderId}&addItem=1`);
   }
 
-  async function assign(order: TableBoardActiveOrderV1) {
+  async function assign(order: TableBoardActiveOrderV1, waiterUserId: string) {
     if (busy) return;
+    setPickOrder(null);
     setBusy(true); setError(null); setNotice(null);
     let result: Awaited<ReturnType<Props["actions"]["assign"]>>;
-    try { result = await actions.assign(order.orderId, order.version, attempt()); }
+    try { result = await actions.assign(order.orderId, order.version, attempt(), waiterUserId); }
     catch { result = { ok: false, error: "unavailable" }; }
     if (!result.ok) {
       if (result.error === "conflict" || result.error === "unavailable") {
         const latest = await refresh(true);
         const currentOrder = latest?.board.tables.flatMap((table) => table.activeOrders).find((entry) => entry.orderId === order.orderId);
-        if (result.error === "unavailable" && currentOrder?.waiterUserId === actorId) {
+        if (result.error === "unavailable" && currentOrder?.waiterUserId === waiterUserId) {
           setNotice("Mesero asignado."); setBusy(false); return;
         }
       }
@@ -229,13 +257,13 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, actorN
               className={`z-10 flex min-h-11 min-w-11 flex-col items-center justify-center overflow-hidden border-2 px-1 text-center text-xs font-semibold focus-visible:outline-2 focus-visible:outline-accent ${table.state === null ? "border-border bg-bg text-text-muted" : table.state.status === "occupied" ? "border-accent bg-accent text-white" : "border-success bg-surface text-text"} ${table.shape === "round" ? "rounded-full" : "rounded-lg"}`}
               aria-label={`${table.name}, ${table.capacity} personas, ${tableStatusLabel(table.state)}`}>
               <span className="w-full truncate">{table.name}</span><span className="text-[10px]">{table.capacity} pers.</span>
-              {table.state?.status === "occupied" && <span className="truncate text-[10px]">{time(table.state.activeOrders[0]!.openedAt, snapshot.timeZone)} · {table.state.activeOrders[0]!.waiterUserId === actorId ? waiterInitials(actorName) : table.state.activeOrders[0]!.waiterUserId === null ? "Sin mesero" : "Mesero asignado"}</span>}
+              {table.state?.status === "occupied" && <span className="truncate text-[10px]">{time(table.state.activeOrders[0]!.openedAt, snapshot.timeZone)} · {waiterLabel(waiters ?? [], table.state.activeOrders[0]!.waiterUserId, actorId)}</span>}
             </button>)}
           </div>
         </div>
       </section>)}
     {snapshot !== null && snapshot.board.unassignedOrders.length > 0 && <section className="rounded-xl border border-border bg-surface p-4"><h2 className="font-heading font-semibold">Mesas eliminadas</h2>
-      <ul className="mt-3 grid gap-2">{snapshot.board.unassignedOrders.map((order) => <li key={order.orderId} className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-2 text-sm"><span>Cuenta {order.orderId.slice(0, 8)} · {time(order.openedAt, snapshot.timeZone)} · {orderStatusLabel(order.status)} · Mesero: {order.waiterUserId === null ? "Sin mesero" : order.waiterUserId === actorId ? waiterInitials(actorName) : "Asignado"}</span><a className={button} href={`/app/orders?orderId=${order.orderId}`}>Ver cuenta</a></li>)}</ul></section>}
+      <ul className="mt-3 grid gap-2">{snapshot.board.unassignedOrders.map((order) => <li key={order.orderId} className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-2 text-sm"><span>Cuenta {order.orderId.slice(0, 8)} · {time(order.openedAt, snapshot.timeZone)} · {orderStatusLabel(order.status)} · Mesero: {waiterLabel(waiters ?? [], order.waiterUserId, actorId)}</span><a className={button} href={`/app/orders?orderId=${order.orderId}`}>Ver cuenta</a></li>)}</ul></section>}
     {selected !== null && <div className="fixed inset-0 z-40 flex items-end bg-black/40" onClick={() => { if (!busy) { selectedRef.current = null; setSelected(null); } }}>
       <section role="dialog" aria-modal="true" aria-label={`${selected.name}: cuentas`} ref={dialogRef} tabIndex={-1} onKeyDown={dialogKeys} onClick={(event) => event.stopPropagation()}
         className="max-h-[85vh] w-full overflow-y-auto rounded-t-2xl border border-border bg-surface p-5 shadow-xl sm:mx-auto sm:max-w-xl">
@@ -243,13 +271,15 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, actorN
         {error !== null && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm text-error">{message(error)} {error === "no_shift" && canOpenShift && <button className={button} disabled={busy} onClick={() => void openShift()}>Abrir turno</button>}</p>}
         {notice !== null && <p role="status" className="mt-3 rounded-lg border border-success p-3 text-sm">{notice} {noticeOrderId !== null && <a className="inline-flex min-h-11 items-center px-2 font-semibold underline" href={`/app/orders?orderId=${noticeOrderId}`}>Ver cuenta</a>}</p>}
         {selected.orders.length > 0 && <ul className="mt-4 grid gap-3">{selected.orders.map((order) => <li key={order.orderId} className="rounded-lg border border-border p-3 text-sm">
-          <p className="font-semibold">{orderStatusLabel(order.status)} · {time(order.openedAt, snapshot?.timeZone)}</p><p>Mesero: {order.waiterUserId === actorId ? waiterInitials(actorName) : order.waiterUserId === null ? "Sin mesero" : "Asignado"}</p>
+          <p className="font-semibold">{orderStatusLabel(order.status)} · {time(order.openedAt, snapshot?.timeZone)}</p><p>Mesero: {waiterLabel(waiters ?? [], order.waiterUserId, actorId)}</p>
           <p>{totalLabel(details[order.orderId])}</p>
           <div className="mt-2 flex flex-wrap gap-2"><a className={primary} href={`/app/orders?orderId=${order.orderId}`}>Ver cuenta</a>
-            <button type="button" className={button} disabled={busy || order.waiterUserId === actorId} onClick={() => void assign(order)} aria-label="Cambiar mesero: asignarme">{busy ? "Guardando…" : "Asignarme"}</button></div>
+            <button type="button" className={button} disabled={busy} aria-expanded={pickOrder === order.orderId} onClick={() => setPickOrder(pickOrder === order.orderId ? null : order.orderId)}>{busy ? "Guardando…" : "Cambiar mesero"}</button></div>
+          {pickOrder === order.orderId && <WaiterPicker members={waiters} actorId={actorId} current={order.waiterUserId} disabled={busy} allowNone={false} onPick={(id) => { if (id !== null) void assign(order, id); }} />}
         </li>)}</ul>}
         {selected.orders.length === 0 && <p className="mt-3 text-sm text-text-muted">Mesa libre.</p>}
-        <div className="mt-4 border-t border-border pt-4"><label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={assignSelf} onChange={(event) => setAssignSelf(event.target.checked)} />Asignarme como mesero</label>
+        <div className="mt-4 border-t border-border pt-4"><p className="mb-2 text-sm font-semibold">Mesero (opcional)</p>
+          <WaiterPicker members={waiters} actorId={actorId} current={newWaiter} disabled={busy} allowNone onPick={setNewWaiter} />
           <button type="button" className={`${primary} mt-2 w-full`} disabled={busy} onClick={() => void create()}>{busy ? "Guardando…" : selected.orders.length ? "Abrir otra cuenta" : "Abrir cuenta"}</button></div>
       </section>
     </div>}

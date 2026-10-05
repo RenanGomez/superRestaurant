@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gridPlacement, groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterInitials } from "./tables-board.js";
+import { gridPlacement, groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterInitials, waiterLabel } from "./tables-board.js";
 import type { DiningLayoutV1, TableBoardV1 } from "@super-restaurant/shared-types";
 
 const scope = { restaurantId: "11111111-1111-4111-8111-111111111111", branchId: "22222222-2222-4222-8222-222222222222" };
@@ -24,4 +24,12 @@ test("board groups state into the layout's zones and preserves positions", () =>
 test("waiter initials show a useful label without leaking an unknown id", () => {
   assert.equal(waiterInitials("Ana Pérez"), "AP");
   assert.equal(waiterInitials(null), "Sin mesero");
+});
+
+test("waiterLabel resolves names and falls back without exposing the full id", () => {
+  const members = [{ userId: "aaaa1111-1111-4111-8111-111111111111", displayName: "Ana Pérez" }, { userId: "bbbb2222-2222-4222-8222-222222222222", displayName: null }];
+  assert.equal(waiterLabel(members, "aaaa1111-1111-4111-8111-111111111111"), "Ana Pérez");
+  assert.equal(waiterLabel(members, "bbbb2222-2222-4222-8222-222222222222"), "Mesero BBBB");
+  assert.equal(waiterLabel(members, "cccc3333-3333-4333-8333-333333333333", "cccc3333-3333-4333-8333-333333333333"), "Yo");
+  assert.equal(waiterLabel(members, null), "Sin mesero");
 });
