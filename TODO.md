@@ -7,8 +7,8 @@
 | D1 | Tomar pedido telefónico completo (cliente, menú con fotos, entrega, cobro, confirmar) | REVIEW, pendiente de prueba de Emmanuel | 70 |
 | D2 | Tomar pedido de mesa (plano, abrir cuenta, agregar líneas, mesero) | REVIEW; falta agregar líneas desde la cuenta de mesa y asignar a otros meseros | 50 |
 | D3 | Mandar a cocina y seguir la orden (enviar, lista, entregada, cancelar línea, KDS) | REVIEW, pendiente de prueba | 70 |
-| D4 | Cobrar con cambio desde caja (efectivo, tarjeta externa, transferencia) y ver el saldo | caja cobra pero sin cambio visible ni cobro desde la intención | 40 |
-| D5 | Cerrar caja con corte legible (esperado, contado, diferencia, movimientos) | corte X/Z existe en «u.m.»; falta legibilidad y movimientos | 40 |
+| D4 | Cobrar con cambio desde caja (efectivo, tarjeta externa, transferencia) y ver el saldo | API integrado en main `4b8a03f` (2026-10-04; cambio = entregado − cobro − propina, propina aparte con `tip_in`, `POST /payments/quote`; migración `20261006000100` aplicada, postcheck 53/44/5/78; Codex 2 rondas + Sonnet APROBAR); pantalla de caja en Codex; `transfer` sigue fuera del CHECK de pagos (deuda) | 65 |
+| D5 | Cerrar caja con corte legible (esperado, contado, diferencia, movimientos) | reporte con `movements` (máx 200), `tipsMinor`, `cashTipsMinor` en el mismo API; pantalla en Codex | 60 |
 | D6 | Despachar y liquidar una entrega (repartidor, en ruta, entregado, efectivo contra entrega) | sólo cotización congelada; sin viaje ni liquidación | 10 |
 | D7 | Menú con fotos y variantes/mitades de pizza | fotos listas; variantes S5 sin pantalla ni confirmación | 45 |
 

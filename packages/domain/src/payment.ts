@@ -167,7 +167,7 @@ export function createPayment(input: CreatePaymentInput): PaymentMutation {
     ...(input.cardManualEvidence === undefined ? {} : { cardManualEvidence: input.cardManualEvidence }),
     ...(input.tenderedAmount === undefined
       ? {}
-      : { tenderedAmount: input.tenderedAmount, change: input.tenderedAmount.subtract(input.amount) }),
+      : { tenderedAmount: input.tenderedAmount, change: cashChange(input.amount, input.tenderedAmount, input.tip) }),
     ...(input.tip === undefined ? {} : { tip: input.tip }),
     idempotencyKey: input.idempotencyKey,
     state: "initiated",
@@ -322,7 +322,7 @@ function assertPaymentIntegrity(payment: Payment): void {
   assertTenderAndTip(payment.method, payment.amount, payment.tenderedAmount, payment.tip, "payment");
   if ((payment.tenderedAmount === undefined) !== (payment.change === undefined) ||
     (payment.tenderedAmount !== undefined && payment.change !== undefined &&
-      !payment.change.equals(payment.tenderedAmount.subtract(payment.amount)))) {
+      !payment.change.equals(cashChange(payment.amount, payment.tenderedAmount, payment.tip)))) {
     throw new InvalidPaymentFieldError("payment.change");
   }
   if (!states.has(payment.state)) {
@@ -450,7 +450,20 @@ function assertPaymentInput(input: CreatePaymentInput): void {
 }
 
 /**
- * Tender (cash handed over) exists only for cash and must cover the amount; a tip is a
+ * Cash change rule: a cash tip comes out of the same cash handed over, so
+ * `change = tendered - amount - tip` (tendered must cover amount + tip). The till then keeps
+ * exactly amount + tip, matching the `cash_sale` + `tip_in` movements.
+ */
+export function cashChange(amount: Money, tendered: Money, tip?: Money): Money {
+  const kept = tip === undefined ? amount : amount.add(tip);
+  if (tendered.compare(kept) < 0) {
+    throw new InvalidPaymentFieldError("payment.tenderedAmount");
+  }
+  return tendered.subtract(kept);
+}
+
+/**
+ * Tender (cash handed over) exists only for cash and must cover amount + tip; a tip is a
  * positive gratuity for any method. Both are separate from the bill amount.
  */
 function assertTenderAndTip(
@@ -466,7 +479,7 @@ function assertTenderAndTip(
     }
     if (!(tendered instanceof Money) || !isFrozenDataObject(tendered, Money.prototype) ||
       !Number.isSafeInteger(tendered.amountMinor) || tendered.currency !== amount.currency ||
-      tendered.amountMinor < amount.amountMinor) {
+      tendered.amountMinor < amount.amountMinor + (tip?.amountMinor ?? 0)) {
       throw new InvalidPaymentFieldError(`${kind}.tenderedAmount`);
     }
   }

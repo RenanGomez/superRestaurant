@@ -140,6 +140,12 @@ begin
   exception when check_violation then null; end;
   begin
     insert into app.payments(id,restaurant_id,branch_id,order_id,cash_register_session_id,method,amount_minor,currency,state,
+      aggregate,captured_at,captured_by,tendered_amount_minor,change_minor,tip_minor)
+    values(gen_random_uuid(),restaurant,branch,order_1,v_session,'cash',200,'MXN','captured','{}'::jsonb,now(),actor,220,20,50);
+    raise exception 'CASH_COLLECT_TENDER_BELOW_AMOUNT_PLUS_TIP_ROW_ACCEPTED';
+  exception when check_violation then null; end;
+  begin
+    insert into app.payments(id,restaurant_id,branch_id,order_id,cash_register_session_id,method,amount_minor,currency,state,
       aggregate,captured_at,captured_by,tip_minor)
     values(gen_random_uuid(),restaurant,branch,order_1,v_session,'cash',200,'MXN','captured','{}'::jsonb,now(),actor,-1);
     raise exception 'CASH_COLLECT_NEGATIVE_TIP_ACCEPTED';
@@ -186,6 +192,14 @@ begin
   result := app_private.collect_simple_payment(actor,cmd,pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"partially_paid"'),reg,5000,0);
   execute 'reset role';
   if result->>'status'<>'conflict' then raise exception 'CASH_COLLECT_WRONG_CHANGE_NOT_REJECTED'; end if;
+  -- tender covers the amount but not amount + tip (the cash tip comes out of the same cash)
+  cmd := pg_temp.t_cmd(restaurant,branch,v_session,order_1,1,1,pay_x,2000,'cash',1,event_x,'k-x',device,now_text,'{"tenderedAmountMinor":2200,"tipMinor":300}');
+  pay := pg_temp.t_pay(restaurant,branch,order_1,pay_x,event_x,'k-x',2000,'cash',
+    '{"tenderedAmount":{"amountMinor":2200,"currency":"MXN"},"change":{"amountMinor":200,"currency":"MXN"},"tip":{"amountMinor":300,"currency":"MXN"}}');
+  execute 'set local role app_api';
+  result := app_private.collect_simple_payment(actor,cmd,pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"partially_paid"'),reg,5000,0);
+  execute 'reset role';
+  if result->>'status'<>'conflict' then raise exception 'CASH_COLLECT_TENDER_BELOW_AMOUNT_PLUS_TIP_NOT_REJECTED'; end if;
   -- cash tip without its tip_in movement in the register
   cmd := pg_temp.t_cmd(restaurant,branch,v_session,order_1,1,1,pay_x,2000,'cash',1,event_x,'k-x',device,now_text,'{"tipMinor":300}');
   pay := pg_temp.t_pay(restaurant,branch,order_1,pay_x,event_x,'k-x',2000,'cash','{"tip":{"amountMinor":300,"currency":"MXN"}}');
@@ -239,17 +253,17 @@ begin
   cmd := pg_temp.t_cmd(restaurant,branch,v_session,order_1,3,2,pay_b,3000,'cash',3,event_b,'k-b',device,now_text,
     '{"tenderedAmountMinor":5000,"tipMinor":500}');
   pay := pg_temp.t_pay(restaurant,branch,order_1,pay_b,event_b,'k-b',3000,'cash',
-    '{"tenderedAmount":{"amountMinor":5000,"currency":"MXN"},"change":{"amountMinor":2000,"currency":"MXN"},"tip":{"amountMinor":500,"currency":"MXN"}}');
+    '{"tenderedAmount":{"amountMinor":5000,"currency":"MXN"},"change":{"amountMinor":1500,"currency":"MXN"},"tip":{"amountMinor":500,"currency":"MXN"}}');
   execute 'set local role app_api';
   result := app_private.collect_simple_payment(actor,cmd,pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),reg,5000,2000);
   execute 'reset role';
   if result->>'orderStatus'<>'paid' or (result->>'remainingBalanceMinor')::bigint<>0
-    or (result->>'tenderedAmountMinor')::bigint<>5000 or (result->>'changeMinor')::bigint<>2000
+    or (result->>'tenderedAmountMinor')::bigint<>5000 or (result->>'changeMinor')::bigint<>1500
     or (result->>'tipMinor')::bigint<>500 or (result->>'amountMinor')::bigint<>3000
   then raise exception 'CASH_COLLECT_CHANGE_AND_TIP_REJECTED'; end if;
   if (select amount_minor from app.payments where id=pay_b)<>3000
     or (select tendered_amount_minor from app.payments where id=pay_b)<>5000
-    or (select change_minor from app.payments where id=pay_b)<>2000
+    or (select change_minor from app.payments where id=pay_b)<>1500
     or (select tip_minor from app.payments where id=pay_b)<>500
   then raise exception 'CASH_COLLECT_PAYMENT_COLUMNS_WRONG'; end if;
   select count(*) into n from app.cash_movements where cash_register_session_id=v_session and movement_type='tip_in'
@@ -264,7 +278,7 @@ begin
   execute 'set local role app_api';
   replayed := app_private.collect_simple_payment(actor,cmd,pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),reg,5000,2000);
   execute 'reset role';
-  if replayed->>'replayed'<>'true' or (replayed->>'changeMinor')::bigint<>2000 or (replayed->>'tipMinor')::bigint<>500
+  if replayed->>'replayed'<>'true' or (replayed->>'changeMinor')::bigint<>1500 or (replayed->>'tipMinor')::bigint<>500
     or replayed->>'paymentId'<>pay_b::text then raise exception 'CASH_COLLECT_REPLAY_DIFFERS'; end if;
   select count(*) into n from app.payments where restaurant_id=restaurant;
   if n<>3 then raise exception 'CASH_COLLECT_REPLAY_DUPLICATED_PAYMENT'; end if;
