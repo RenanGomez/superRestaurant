@@ -37,3 +37,6 @@ Descuentos, impuestos distintos del snapshot, cotización de la cuenta completa.
 
 ## Formato de salida
 Resumen, archivos y hashes, puertas, riesgos.
+
+## Ronda 2 (web, 2026-10-05) — adaptar al contrato corregido
+Tu trabajo ya está commiteado por L0 en `codex/web-capture-line-quote` (`e4b5a56`) y la rama recibió el merge `6158d75` con el fix de la API `59c69ad` (P1 de revisión: con impuesto excluido el total era el subtotal). Contrato nuevo de `CaptureLineQuoteResultV1` (`packages/shared-types/src/capture-line-quote.ts`): `lineTotalMinor` es ahora el **monto cobrable con impuesto**, y se añadieron `subtotalMinor` y `taxMinor` obligatorios (`subtotalMinor + taxMinor = lineTotalMinor`); el límite de cantidad es `CAPTURE_SELECTION_LINE_MAX_QUANTITY` (1 000). Ajusta `apps/web/src/lib/capture-quote.ts` y la hoja: «Estimado del servidor» muestra `lineTotalMinor` (cobrable) y, si `taxMinor > 0`, una línea pequeña «Incluye IVA $X»; actualiza las pruebas del helper (fixture con impuesto excluido: subtotal 10 000, impuesto 1 600, total 11 600). Verifica que el estimado local siga etiquetado «Estimado» y que una respuesta `409 catalog_version_mismatch` dispare recarga del catálogo o muestre «El menú cambió, recarga» sin bloquear «Agregar». Puertas web lint/typecheck/test/build. No commitees; deja los archivos modificados e informa archivos y salida literal.

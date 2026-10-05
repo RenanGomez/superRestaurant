@@ -36,3 +36,6 @@ Programados, override de gerente, geocodificación.
 
 ## Formato de salida
 Resumen, archivos y hashes, puertas, riesgos.
+
+## Ronda 2 (web, 2026-10-05) — corregir y nada más
+Tu commit `a013990` ya está en `codex/web-delivery-zones-match` (L0 lo commiteó). `codex exec review` marcó un P2 en `apps/web/src/app/app/customers/customer-editor.tsx:118-123`: tras validar, si el operador edita código postal o localidad, el resumen de zona/cargo/promesa sigue visible describiendo la dirección vieja, y una respuesta en vuelo puede restaurar un resultado obsoleto. Corrige: limpiar o invalidar `addressFeedback` cuando cambie cualquier campo de la dirección (mostrar «Vuelve a validar» o nada) y descartar respuestas de match cuya dirección ya no coincide con la actual (token/secuencia de petición). Aplica lo mismo en el paso de entrega de la captura si tiene el mismo patrón. Añade prueba al helper puro si la invalidación es pura. Puertas web lint/typecheck/test/build. No commitees (no puedes); deja los archivos modificados e informa archivos y salida literal.
