@@ -42,6 +42,7 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
   const [addingAddress, setAddingAddress] = useState(false);
   const [createdCustomerId, setCreatedCustomerId] = useState<string>();
   const [addressFeedback, setAddressFeedback] = useState<{ addressId: string; message: string; error: boolean }>();
+  const feedbackSequence = useRef(0);
   const [pending, setPending] = useState<{ operation: CustomerAction; command: unknown }>();
   const [search, setSearch] = useState<{ mode: CustomerSearchModeV1; query: string }>();
   const [searchMode, setSearchMode] = useState<CustomerSearchModeV1>("phone");
@@ -86,6 +87,7 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
 
   async function run(operation: CustomerAction, command: unknown): Promise<void> {
     if (busy) return;
+    const sequence = ++feedbackSequence.current;
     setBusy(true); setBusyOperation(operation); setError(undefined); setNotice("");
     if (operation === "validate" && typeof command === "object" && command !== null && "addressId" in command && typeof command.addressId === "string") setValidatingAddressId(command.addressId);
     if (operation === "address" || operation === "detail") setAddressFeedback(undefined);
@@ -95,7 +97,7 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
     setBusy(false); setBusyOperation(undefined); setValidatingAddressId(undefined);
     if (!reply.ok) {
       setError(reply.error);
-      if (operation === "validate" && typeof command === "object" && command !== null && "addressId" in command && typeof command.addressId === "string")
+      if (sequence === feedbackSequence.current && operation === "validate" && typeof command === "object" && command !== null && "addressId" in command && typeof command.addressId === "string")
         setAddressFeedback({ addressId: command.addressId, message: messages[reply.error], error: true });
       setSuggestionsOpen(false);
       if (reply.error === "unavailable" && ["profile", "address", "validate"].includes(operation)) setPending({ operation, command: reply.command ?? command });
@@ -120,7 +122,7 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
             if (match.ok) message = `${formatDeliveryMatch(match.value, "es-MX")}. Consulta informativa; cotiza sobre la captura antes de confirmar.`;
           } catch { /* The address review succeeded even if this read-only lookup failed. */ }
         }
-        setAddressFeedback({ addressId, message, error: false });
+        if (sequence === feedbackSequence.current) setAddressFeedback({ addressId, message, error: false });
       }
       if (operation !== "detail") setNotice(operation === "validate" ? `Revisión registrada para ${branchName}.` : "Ficha guardada. Las direcciones editadas requieren validación nuevamente.");
     }
@@ -234,6 +236,7 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
       <p className="mt-1 text-sm text-text-muted">Guarda datos incompletos durante la llamada. Validar registra que la sucursal revisó esta dirección; no geocodifica ni garantiza por sí solo la zona de reparto. Cada edición elimina la validación anterior.</p>
       {detail.addressesTruncated && <p role="status" className="mt-2 text-sm">Se muestran las primeras 20 direcciones. Hay más direcciones en la ficha.</p>}
       <div className="mt-4 flex flex-col gap-4">{detail.addresses.map(address => <AddressForm key={`${address.addressId}/${address.version}`} item={address} branchName={branchName} feedback={addressFeedback?.addressId === address.addressId ? addressFeedback : undefined} validating={validatingAddressId === address.addressId} disabled={locked}
+        onEdit={() => { feedbackSequence.current += 1; setAddressFeedback(current => current?.addressId === address.addressId ? undefined : current); }}
         onSave={fields => void run("address", { ...base(detail.customer.customerId, address.version), addressId: address.addressId, address: fields })}
         onValidate={() => void run("validate", { ...base(detail.customer.customerId, address.version), addressId: address.addressId })} />)}
         {addingAddress && <AddressForm key={`new/${detail.customer.customerId}/${detail.addresses.length}`} disabled={locked} onCancel={() => setAddingAddress(false)}
@@ -311,21 +314,22 @@ function ProfileForm({ customer, disabled, onSave }: {
 const primaryAddressLabels = { streetLine: "Calle y número", unit: "Interior", neighborhood: "Colonia", references: "Referencias" } as const;
 const additionalAddressLabels = { locality: "Localidad", region: "Estado o región", countryCode: "País (código de dos letras)", postalCode: "Código postal" } as const;
 const addressLabels = { ...primaryAddressLabels, ...additionalAddressLabels } as const;
-function AddressForm({ item, branchName, feedback, validating = false, disabled, onSave, onValidate, onCancel }: {
+function AddressForm({ item, branchName, feedback, validating = false, disabled, onSave, onValidate, onCancel, onEdit }: {
   readonly item?: CustomerDirectoryDetailAddressV1; readonly disabled: boolean;
   readonly branchName?: string; readonly feedback?: { message: string; error: boolean } | undefined; readonly validating?: boolean;
   readonly onSave: (fields: CustomerAddressFieldsV1) => void; readonly onValidate?: () => void; readonly onCancel?: () => void;
+  readonly onEdit?: () => void;
 }): ReactNode {
   const [dirty, setDirty] = useState(false);
   const [addressLabel, setAddressLabel] = useState(item?.address.label ?? "Casa");
-  return <form className="rounded-lg border border-border p-3" onChange={() => setDirty(true)} onSubmit={event => {
+  return <form className="rounded-lg border border-border p-3" onChange={() => { setDirty(true); onEdit?.(); }} onSubmit={event => {
     event.preventDefault(); const data = new FormData(event.currentTarget);
     const fields = Object.fromEntries(Object.keys(addressLabels).map(key => { const value = String(data.get(key) ?? "").trim(); return [key, value === "" ? null : key === "countryCode" ? value.toUpperCase() : value]; }));
     onSave({ ...fields, label: addressLabel.trim(), instructions: item?.address.instructions ?? null, coordinates: item?.address.coordinates ?? null } as unknown as CustomerAddressFieldsV1);
   }}>
     <h3 className="mb-2 font-semibold">{item?.address.label ?? "Nueva dirección"}</h3>
     {item !== undefined && <div className="mb-3"><span className={`inline-flex min-h-11 items-center rounded-full border px-3 text-sm font-semibold ${!dirty && item.validatedForRequestedBranch ? "border-success text-text" : "border-border text-text-muted"}`}>{dirty ? "Cambios sin guardar · revalidar al guardar" : item.validatedForRequestedBranch ? `Dirección revisada para ${branchName}` : "Sin revisar en esta sucursal"}</span>{!dirty && item.validatedForRequestedBranch && <p className="mt-2 break-words text-xs text-text-muted">Datos revisados: {[item.address.streetLine, item.address.locality, item.address.postalCode].filter(Boolean).join(", ")}. Cotiza en captura antes de confirmar.</p>}</div>}
-    {feedback !== undefined && <p role={feedback.error ? "alert" : "status"} className={`mb-3 rounded-lg border p-3 text-sm ${feedback.error ? "border-error bg-error-bg" : "border-success"}`}>{feedback.message}</p>}
+    {!dirty && feedback !== undefined && <p role={feedback.error ? "alert" : "status"} className={`mb-3 rounded-lg border p-3 text-sm ${feedback.error ? "border-error bg-error-bg" : "border-success"}`}>{feedback.message}</p>}
     {validating && <p role="status" className="mb-3 text-sm text-text-muted">Validando esta dirección…</p>}
     <fieldset disabled={disabled} className="grid min-w-0 gap-3 sm:grid-cols-2">
       <div className="flex min-w-0 flex-col gap-2"><label className="flex flex-col gap-1 text-sm">Etiqueta de dirección<select className={inputClass} value={addressLabelOptions.includes(addressLabel as typeof addressLabelOptions[number]) ? addressLabel : "Otro"} onChange={event => setAddressLabel(event.target.value === "Otro" ? "" : event.target.value)}>{addressLabelOptions.map(label => <option key={label}>{label}</option>)}<option>Otro</option></select></label>{!addressLabelOptions.includes(addressLabel as typeof addressLabelOptions[number]) && <label className="flex flex-col gap-1 text-sm">Otra etiqueta<input required maxLength={40} className={inputClass} value={addressLabel} onChange={event => setAddressLabel(event.target.value)} /></label>}<span className="text-xs text-text-muted">Nombre corto para reconocer la dirección.</span></div>

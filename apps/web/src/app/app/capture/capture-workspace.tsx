@@ -1166,7 +1166,8 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         <h2 className="font-heading text-lg font-semibold">3. Entrega · cotización</h2>
         <p className="mt-1 text-sm text-text-muted">La cobertura, tarifa y promesa se calculan en el servidor para la dirección guardada.</p>
         <p role="status" className="mt-3 rounded-lg border border-border bg-bg p-3 text-sm">
-          {addressMatch?.snapshotRef !== fulfillmentSnapshot.snapshotRef ? "Consultando cobertura para esta dirección…"
+          {(selectedAddress !== undefined && selectedAddress !== fulfillmentSnapshot.addressId)
+            || addressMatch?.snapshotRef !== fulfillmentSnapshot.snapshotRef ? "Consultando cobertura para esta dirección…"
             : addressMatch.value === null ? "No se pudo consultar la cobertura. Puedes cotizar sobre el borrador."
               : `${formatDeliveryMatch(addressMatch.value, "es-MX")}. Consulta informativa; cotiza para confirmar.`}
         </p>
