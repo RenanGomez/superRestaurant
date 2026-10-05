@@ -53,7 +53,12 @@ import { Inject, Injectable, Optional } from "@nestjs/common";
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService, type MembershipRole } from "./auth/membership-authorization.js";
 import { rolesGrantPermission } from "./auth/rbac-policy.js";
-import { buildAddressLabel, buildCustomerLabel } from "./branch-order-work-tray.js";
+import {
+  buildAddressLabel,
+  buildCourierAddressLabel,
+  buildCourierCustomerLabel,
+  buildCustomerLabel,
+} from "./branch-order-work-tray.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
@@ -69,6 +74,7 @@ import {
 } from "./persistence/order-persistence-codec.js";
 
 const readOrderSql = "select app_private.read_order($1::uuid, $2::uuid, $3::uuid, $4::uuid) as result";
+const readAssignedCourierOrderSql = "select app_private.read_courier_delivery_order($1::uuid, $2::uuid, $3::uuid, $4::uuid) as result";
 const persistOrderSql = "select app_private.persist_order_mutation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
 const cancelOrderItemSql = "select app_private.persist_order_item_cancellation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
 const createOperationalOrderSql = "select app_private.create_operational_order($1::uuid, $2::uuid, $3::jsonb, $4::jsonb) as result";
@@ -119,6 +125,11 @@ export interface OrderPersistencePort {
   listKdsTickets(actorId: string, subscription: RealtimeSubscriptionV1): Promise<KdsTicketListV1 | "forbidden">;
   persist(actorId: string, expectedVersion: number, mutation: OrderMutation, operationalShiftId?: string | null): Promise<PersistOrderResult>;
   read(actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing">;
+  /**
+   * The Order of a delivery assigned to `actorId` (a courier). Ownership is decided in SQL; anything that is
+   * not the actor's own assigned delivery is the same `"missing"`, so a foreign Order's existence is not revealed.
+   */
+  readAssignedToCourier(actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing">;
   recoverKds(actorId: string, subscription: RealtimeSubscriptionV1, after: KdsCursorV1, limit: number): Promise<KdsEventPageV1 | "forbidden">;
   sendOrderToKitchen(
     actorId: string,
@@ -129,6 +140,11 @@ export interface OrderPersistencePort {
 }
 
 export const ORDER_PERSISTENCE_PORT = Symbol("ORDER_PERSISTENCE_PORT");
+
+/** How the actor of `OrderService.readDetailForActor` reached the Order; the caller already authorized it. */
+export type OrderDetailAccess =
+  | { readonly kind: "assigned_courier" }
+  | { readonly kind: "branch"; readonly roles: readonly MembershipRole[] };
 
 export interface RealtimeNotificationPort {
   notify(event: KdsEventV1): Promise<void>;
@@ -159,7 +175,15 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
   }
 
   public async read(actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing"> {
-    const result = await this.database.query(readOrderSql, [actorId, scope.restaurantId, scope.branchId, orderId]);
+    return this.readWith(readOrderSql, actorId, scope, orderId);
+  }
+
+  public async readAssignedToCourier(actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing"> {
+    return this.readWith(readAssignedCourierOrderSql, actorId, scope, orderId);
+  }
+
+  private async readWith(sql: string, actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing"> {
+    const result = await this.database.query(sql, [actorId, scope.restaurantId, scope.branchId, orderId]);
     const raw = singleResult(result.rows);
     if (raw === null) return "missing";
     const record = exactRecord(raw, ["schemaVersion", "scope", "order", "version", "updatedAt"]);
@@ -460,17 +484,32 @@ export class OrderService {
   public async detail(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderDetailV1> {
     const request = parseOrderDetailRequestV1(input);
     if (request === undefined) throw applicationError("request");
-    let actorId: string;
-    let roles: readonly MembershipRole[];
-    try {
-      const authorized = await this.authorization.authorizeBranch(principal, request.scope, "orders.read");
-      actorId = authorized.principal.actorId;
-      roles = authorized.roles;
-    } catch { throw applicationError("authorization"); }
+    const { actorId, roles } = await this.authorizeWithRoles(principal, request.scope, "orders.read");
+    return this.readDetailForActor(actorId, request.scope, request.orderId, { kind: "branch", roles });
+  }
+
+  /**
+   * Internal detail read for an actor the CALLER has already authorized (this method never checks `orders.read`).
+   * `branch`: the normal `orders.read` read. `assigned_courier`: the courier of that very delivery -- ownership is
+   * enforced twice, in SQL (`read_courier_delivery_order`) and against the frozen delivery's `courierUserId`;
+   * anything else is an `authorization` error (never `not_found`, so a foreign Order's existence is not
+   * revealed). A courier gets no `availableActions` (their moves live in deliveries) and, only because the
+   * delivery is theirs, the full customer/address labels.
+   */
+  public async readDetailForActor(
+    actorId: string,
+    scope: BranchScope,
+    orderId: string,
+    access: OrderDetailAccess,
+  ): Promise<OrderDetailV1> {
+    const courier = access.kind === "assigned_courier";
+    if (courier && this.deliveryContext === undefined) throw unavailable();
     let record: StoredOrder;
     try {
-      const result = await this.orders.read(actorId, request.scope, request.orderId);
-      if (result === "missing") throw applicationError("not_found");
+      const result = courier
+        ? await this.orders.readAssignedToCourier(actorId, scope, orderId)
+        : await this.orders.read(actorId, scope, orderId);
+      if (result === "missing") throw applicationError(courier ? "authorization" : "not_found");
       record = result;
     } catch (error: unknown) {
       if (error instanceof OrderApplicationError) throw error;
@@ -480,7 +519,7 @@ export class OrderService {
     let context: OrderDeliveryContext | undefined;
     if (this.deliveryContext !== undefined) {
       try {
-        const read = await this.deliveryContext.read(actorId, request.scope, request.orderId);
+        const read = await this.deliveryContext.read(actorId, scope, orderId);
         if (read === "forbidden") throw applicationError("authorization");
         if (read !== "missing") context = read;
       } catch (error: unknown) {
@@ -488,7 +527,10 @@ export class OrderService {
         throw unavailable();
       }
     }
-    const detail = projectOrderDetail(record, request.scope, roles, context);
+    if (courier && (context?.delivery == null || context.delivery.courierUserId !== actorId)) {
+      throw applicationError("authorization");
+    }
+    const detail = projectOrderDetail(record, scope, access.kind === "branch" ? access.roles : [], context, courier);
     if (detail === undefined) throw unavailable();
     return detail;
   }
@@ -697,8 +739,18 @@ export class OrderService {
     scope: BranchScope,
     permission: "kds.read" | "kds.transition" | "orders.cancel.pending" | "orders.cancel.sent" | "orders.create" | "orders.read" | "orders.update",
   ): Promise<string> {
-    try { return (await this.authorization.authorizeBranch(principal, scope, permission)).principal.actorId; }
-    catch { throw applicationError("authorization"); }
+    return (await this.authorizeWithRoles(principal, scope, permission)).actorId;
+  }
+
+  private async authorizeWithRoles(
+    principal: AuthenticatedPrincipal,
+    scope: BranchScope,
+    permission: "kds.read" | "kds.transition" | "orders.cancel.pending" | "orders.cancel.sent" | "orders.create" | "orders.read" | "orders.update",
+  ): Promise<{ readonly actorId: string; readonly roles: readonly MembershipRole[] }> {
+    try {
+      const authorized = await this.authorization.authorizeBranch(principal, scope, permission);
+      return { actorId: authorized.principal.actorId, roles: authorized.roles };
+    } catch { throw applicationError("authorization"); }
   }
 }
 
@@ -713,6 +765,7 @@ function projectOrderDetail(
   scope: BranchScope,
   roles: readonly MembershipRole[],
   context?: OrderDeliveryContext,
+  courierView = false,
 ): OrderDetailV1 | undefined {
   const { order, version } = stored;
   const snapshot = context?.snapshot ?? null;
@@ -774,10 +827,12 @@ function projectOrderDetail(
     currency: order.currency,
     ...(context === undefined ? {} : { delivery: context.delivery }),
     fulfillment: {
-      addressLabel: canReadCustomers ? buildAddressLabel(snapshot) : null,
+      // `courierView` is set only after ownership of this very delivery was proven; it grants no other PII.
+      addressLabel: canReadCustomers ? buildAddressLabel(snapshot) : courierView ? buildCourierAddressLabel(snapshot) : null,
       channel: order.channel,
-      customerLabel: canReadCustomers ? buildCustomerLabel(snapshot) : null,
+      customerLabel: canReadCustomers ? buildCustomerLabel(snapshot) : courierView ? buildCourierCustomerLabel(snapshot) : null,
       paymentIntent,
+      ...(courierView ? { deliveryInstructions: snapshot?.deliveryInstructions ?? null } : {}),
       ...(context === undefined ? {} : { quote }),
       tableId: order.tableId ?? null,
     },

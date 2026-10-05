@@ -8,6 +8,7 @@ import {
   parseFailDeliveryCommandV1,
   parseOrderDeliveryResultV1,
   parseOrderDeliveryV1,
+  parseOrderDetailRequestV1,
   parseOrderFulfillmentSnapshotV1OrV2,
   parsePaymentCollectionSummaryV1,
   parseSettleDeliveryCommandV1,
@@ -17,8 +18,7 @@ import {
   type BranchScope,
   type OrderDeliveryResultV1,
   type OrderDeliveryV1,
-  type OrderFulfillmentSnapshotV1,
-  type OrderFulfillmentSnapshotV2,
+  type OrderDetailV1,
   type PaymentCollectionSummaryV1,
   type RbacPermissionCode,
   type SettleDeliveryCommandV1,
@@ -30,12 +30,18 @@ import { Inject, Injectable } from "@nestjs/common";
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { rolesGrantPermission } from "./auth/rbac-policy.js";
-import { buildAddressLabel, buildCustomerLabel } from "./branch-order-work-tray.js";
+import {
+  buildAddressLabel,
+  buildCourierAddressLabel,
+  buildCourierCustomerLabel,
+  buildCustomerLabel,
+} from "./branch-order-work-tray.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import {
   ORDER_DELIVERY_CONTEXT_PORT,
   type OrderDeliveryContextPort,
 } from "./order-delivery-context.js";
+import { OrderApplicationError, OrderService } from "./orders.js";
 import { FinancialApplicationError, FinancialService, type PersistPaymentInput } from "./payments.js";
 import {
   encodeCashRegisterRecord,
@@ -149,7 +155,30 @@ export class DeliveryService {
     @Inject(DELIVERY_PORT) private readonly deliveries: DeliveryPort,
     @Inject(ORDER_DELIVERY_CONTEXT_PORT) private readonly context: OrderDeliveryContextPort,
     @Inject(FinancialService) private readonly finances: FinancialService,
+    @Inject(OrderService) private readonly orders: OrderService,
   ) {}
+
+  /**
+   * The Order behind a delivery card. A role with `orders.read` gets the normal detail (delegated, same
+   * rules). A courier without it gets the detail ONLY of a delivery assigned to them: ownership is verified by
+   * the server (SQL reader plus the frozen delivery), a foreign or unassigned Order is a 403 -- never a 404 that
+   * would reveal it exists -- and the courier sees no order actions and the customer data only because the
+   * delivery is theirs. A settled delivery stays readable by its courier (their history of the day).
+   */
+  public async orderDetail(principal: AuthenticatedPrincipal, input: unknown): Promise<OrderDetailV1> {
+    const request = parseOrderDetailRequestV1(input);
+    if (request === undefined) throw applicationError("request");
+    const { actorId, roles } = await this.authorize(principal, request.scope, "deliveries.read");
+    try {
+      if (rolesGrantPermission(roles, "orders.read")) return await this.orders.detail(principal, request);
+      if (!roles.includes("courier")) throw applicationError("authorization");
+      return await this.orders.readDetailForActor(actorId, request.scope, request.orderId, { kind: "assigned_courier" });
+    } catch (error: unknown) {
+      if (error instanceof DeliveryApplicationError) throw error;
+      if (error instanceof OrderApplicationError) throw applicationError(error.code);
+      throw unavailable();
+    }
+  }
 
   public async list(principal: AuthenticatedPrincipal, input: unknown): Promise<BranchDeliveriesV1> {
     const request = parseBranchDeliveriesRequestV1(input);
@@ -352,13 +381,13 @@ function projectItem(
     }
     : null;
   const item = parseBranchDeliveriesItem({
-    addressLabel: canReadCustomers ? buildAddressLabel(snapshot) : assignedCourier ? fullAddress(snapshot) : null,
+    addressLabel: canReadCustomers ? buildAddressLabel(snapshot) : assignedCourier ? buildCourierAddressLabel(snapshot) : null,
     capturedMinor,
     // A label the contract cannot carry (empty or hostile) degrades to "unknown" rather than failing the list.
     courierLabel: rawName === null ? null : rawName.length >= 1 && rawName.length <= 120 && rawName === rawName.trim()
       && !/[\p{Cc}\p{Cf}]/u.test(rawName) ? rawName : null,
     currency,
-    customerLabel: canReadCustomers ? buildCustomerLabel(snapshot) : assignedCourier ? fullCustomer(snapshot) : null,
+    customerLabel: canReadCustomers ? buildCustomerLabel(snapshot) : assignedCourier ? buildCourierCustomerLabel(snapshot) : null,
     delivery,
     deliveryInstructions: sees ? snapshot?.deliveryInstructions ?? null : null,
     orderStatus,
@@ -370,23 +399,6 @@ function projectItem(
   });
   if (item === undefined) throw unavailable();
   return item;
-}
-
-function fullCustomer(snapshot: OrderFulfillmentSnapshotV1 | OrderFulfillmentSnapshotV2 | null): string | null {
-  const party = snapshot?.partySnapshot ?? null;
-  return party === null ? null : bounded(`${party.displayName} · ${party.phoneDisplayValue}`, 160);
-}
-
-function fullAddress(snapshot: OrderFulfillmentSnapshotV1 | OrderFulfillmentSnapshotV2 | null): string | null {
-  const address = snapshot?.fulfillmentSnapshot ?? null;
-  if (address === null) return null;
-  const parts = [address.streetLine, address.neighborhood, address.locality, address.postalCode]
-    .filter((part): part is string => typeof part === "string" && part.length > 0);
-  return bounded(`${address.label} · ${parts.join(", ")}`, 200);
-}
-
-function bounded(value: string, max: number): string {
-  return (value.length > max ? `${value.slice(0, max - 1)}…` : value).trim();
 }
 
 function parseBranchDeliveriesItem(value: unknown): BranchDeliveryItemV1 | undefined {

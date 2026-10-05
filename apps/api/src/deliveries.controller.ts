@@ -14,6 +14,7 @@ import {
 import type {
   BranchDeliveriesV1,
   OrderDeliveryResultV1,
+  OrderDetailV1,
   SettleDeliveryResultV1,
 } from "@super-restaurant/shared-types";
 
@@ -28,6 +29,12 @@ export class DeliveriesController {
   @Header("Cache-Control", "private, no-store")
   public list(@Req() request: unknown, @Body() body: unknown): Promise<BranchDeliveriesV1> {
     return this.map(() => this.deliveries.list(getAuthenticatedPrincipal(request), body));
+  }
+
+  @Post("order-detail")
+  @Header("Cache-Control", "private, no-store")
+  public orderDetail(@Req() request: unknown, @Body() body: unknown): Promise<OrderDetailV1> {
+    return this.map(() => this.deliveries.orderDetail(getAuthenticatedPrincipal(request), body));
   }
 
   @Post("assign")

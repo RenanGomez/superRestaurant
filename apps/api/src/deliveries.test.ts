@@ -19,6 +19,7 @@ import {
 } from "./deliveries.js";
 import type { OrderDeliveryContext, OrderDeliveryContextPort } from "./order-delivery-context.js";
 import { PostgresOrderDeliveryContextAdapter } from "./order-delivery-context.js";
+import type { OrderService } from "./orders.js";
 import { FinancialApplicationError, type FinancialService, type PersistPaymentInput } from "./payments.js";
 
 const principal: AuthenticatedPrincipal = Object.freeze({ actorId: randomUUID() });
@@ -232,7 +233,7 @@ function serviceFor(
   finances: FinancialService = financesStub(25_000, async () => fakePersistInput()),
 ): DeliveryService {
   const memberships: MembershipLookupPort = { findActiveMembership: async () => ({ roles: roles as never, scope: validScope }) };
-  return new DeliveryService(new MembershipAuthorizationService(memberships), port, context, finances);
+  return new DeliveryService(new MembershipAuthorizationService(memberships), port, context, finances, {} as OrderService);
 }
 
 function portWith(overrides: Partial<DeliveryPort>): DeliveryPort {

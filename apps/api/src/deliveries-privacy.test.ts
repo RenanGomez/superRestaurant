@@ -82,7 +82,7 @@ function deliveryService(roles: readonly string[], row: unknown): DeliveryServic
   } as unknown as DeliveryPort;
   const memberships = { findActiveMembership: async () => ({ roles: roles as never, scope: validScope }) };
   return new DeliveryService(
-    new MembershipAuthorizationService(memberships), port, {} as OrderDeliveryContextPort, {} as FinancialService,
+    new MembershipAuthorizationService(memberships), port, {} as OrderDeliveryContextPort, {} as FinancialService, {} as OrderService,
   );
 }
 

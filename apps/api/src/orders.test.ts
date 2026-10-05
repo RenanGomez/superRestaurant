@@ -195,6 +195,7 @@ test("order service creates, snapshots catalog items, transitions, and only noti
     },
     read: async () => ({ order: storedOrder, version: storedVersion }),
     recoverKds: async () => eventPage,
+    readAssignedToCourier: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const service = serviceFor(["manager"], orders, {
@@ -232,6 +233,7 @@ test("order service creates, snapshots catalog items, transitions, and only noti
     },
     read: async () => ({ order: pendingOrder, version: 2 }),
     recoverKds: async () => eventPage,
+    readAssignedToCourier: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const pendingCancelCommand = parseCancelOrderItemCommandV1({
@@ -313,6 +315,7 @@ test("order service keeps v1 compatible and binds only v2 creation to an operati
     },
     read: async () => ({ order: domainMutation.order, version: 1 }),
     recoverKds: async () => eventPage,
+    readAssignedToCourier: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const service = serviceFor(["manager"], orders);
@@ -351,6 +354,7 @@ test("order service passes a null shiftId to SQL untouched; SQL resolves the shi
     },
     read: async () => ({ order: domainMutation.order, version: 1 }),
     recoverKds: async () => eventPage,
+    readAssignedToCourier: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const service = serviceFor(["manager"], orders);
@@ -401,6 +405,7 @@ test("order service accepts the mobile handoff sequence through v2 create, item 
       return stored !== undefined && receivedOrderId === stored.order.orderId ? stored : "missing";
     },
     recoverKds: async () => eventPage,
+    readAssignedToCourier: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const service = serviceFor(["waiter"], orders);
@@ -484,6 +489,7 @@ test("order service enforces permission, optimistic version, and domain transiti
     persist: async () => ({ status: "conflict" }),
     read: async () => ({ order: domainMutation.order, version: 1 }),
     recoverKds: async () => "forbidden",
+    readAssignedToCourier: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   await assertCode(serviceFor(["viewer"], port).create(principal, createCommand), "authorization");
@@ -542,6 +548,7 @@ test("order service detail scopes access, reduces PII, and computes actions from
     persist: async () => ({ status: "conflict" }),
     read: async () => ({ order: sentSecondItem, version: 4 }),
     recoverKds: async () => "forbidden",
+    readAssignedToCourier: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const detailRequest = { orderId, schemaVersion: 1 as const, scope };
@@ -601,6 +608,7 @@ function fakeSendToKitchenPort(initialOrder: Order, initialVersion: number): {
     persist: async () => { throw new Error("persist is not used by sendToKitchen's atomic port method"); },
     read: async () => ({ order, version }),
     recoverKds: async () => "forbidden",
+    readAssignedToCourier: async () => "missing" as const,
     sendOrderToKitchen: async (_actorId, expectedVersion, command, steps) => {
       const existing = commandsByKey.get(command.idempotencyKey);
       if (existing !== undefined) {
@@ -886,6 +894,7 @@ test("order service detail never offers open and sendToKitchen together for the 
     persist: async () => ({ status: "conflict" }),
     read: async () => ({ order: tableOrder, version: 1 }),
     recoverKds: async () => "forbidden",
+    readAssignedToCourier: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const emptyDetail = await serviceFor(["manager"], emptyPort).detail(principal, { orderId, schemaVersion: 1 as const, scope });
@@ -925,6 +934,7 @@ test("order service detail on a cancelled order with a frozen delivery charge ne
     persist: async () => ({ status: "conflict" }),
     read: async () => ({ order: cancelled, version: 2 }),
     recoverKds: async () => "forbidden",
+    readAssignedToCourier: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const detail = await serviceFor(["manager"], port).detail(principal, { orderId, schemaVersion: 1 as const, scope });
@@ -1062,6 +1072,7 @@ function capturingOrders(saved: { order?: Order }): OrderPersistencePort {
     },
     read: async () => ({ order: saved.order ?? domainMutation.order, version: saved.order === undefined ? 1 : 2 }),
     recoverKds: async () => eventPage!,
+    readAssignedToCourier: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
 }
