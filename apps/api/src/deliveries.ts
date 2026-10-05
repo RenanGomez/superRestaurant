@@ -49,6 +49,7 @@ const SQL = {
   dispatch: "select app_private.dispatch_delivery($1::uuid, $2::jsonb) as result",
   fail: "select app_private.fail_delivery($1::uuid, $2::jsonb) as result",
   list: "select app_private.list_branch_deliveries($1::uuid, $2::uuid, $3::uuid) as result",
+  settlePrepaid: "select app_private.settle_prepaid_delivery($1::uuid, $2::jsonb) as result",
   replaySettle: "select app_private.replay_delivery_settlement($1::uuid, $2::jsonb) as result",
   settle: "select app_private.settle_delivery($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::bigint, $8::bigint) as result",
 } as const;
@@ -69,6 +70,7 @@ export interface DeliveryPort {
   list(actorId: string, scope: BranchScope): Promise<unknown>;
   replaySettle(actorId: string, command: SettleDeliveryCommandV1): Promise<DeliveryWriteResult<SettleDeliveryResultV1> | "missing">;
   settle(actorId: string, command: SettleDeliveryCommandV1, input: PersistPaymentInput): Promise<DeliveryWriteResult<SettleDeliveryResultV1>>;
+  settlePrepaid(actorId: string, command: SettleDeliveryCommandV1): Promise<DeliveryWriteResult<SettleDeliveryResultV1>>;
   transition(actorId: string, kind: DeliveryTransitionKind, command: unknown): Promise<DeliveryWriteResult<OrderDeliveryResultV1>>;
 }
 
@@ -125,6 +127,10 @@ export class PostgresDeliveryAdapter implements DeliveryPort {
       input.priorCapturedAmountMinor,
     ]);
     return parseSettlement(raw);
+  }
+
+  public async settlePrepaid(actorId: string, command: SettleDeliveryCommandV1): Promise<DeliveryWriteResult<SettleDeliveryResultV1>> {
+    return parseSettlement(await this.call(SQL.settlePrepaid, [actorId, JSON.stringify(command)]));
   }
 
   private async call(sql: string, parameters: readonly unknown[]): Promise<unknown> {
@@ -225,13 +231,21 @@ export class DeliveryService {
       if (error instanceof DeliveryApplicationError) throw error;
       throw unavailable();
     }
-    // Only cash settles through a delivery; card/transfer intents are collected the normal way.
-    if (intent !== null && intent.method !== "cash") throw applicationError("conflict");
-
     let amountMinor: number;
     try {
       amountMinor = await this.finances.remainingBalance(actorId, command.scope, command.orderId, command.cashRegisterSessionId);
     } catch (error: unknown) { throw fromFinancial(error); }
+    if (amountMinor === 0) {
+      // Prepaid Order (already paid before the trip): nothing is collected, so no tender or tip can be stated.
+      if (command.tenderedAmountMinor !== null || command.tipMinor !== null) throw applicationError("request");
+      let closed: DeliveryWriteResult<SettleDeliveryResultV1>;
+      try { closed = await this.deliveries.settlePrepaid(actorId, command); } catch { throw unavailable(); }
+      if (closed === "forbidden") throw applicationError("authorization");
+      if (closed === "conflict") throw applicationError("conflict");
+      return closed;
+    }
+    // Only cash settles through a delivery; card/transfer intents are collected the normal way.
+    if (intent !== null && intent.method !== "cash") throw applicationError("conflict");
     const tip = command.tipMinor ?? intent?.tipMinor ?? 0;
     let tender = command.tenderedAmountMinor ?? intent?.tenderedAmountMinor ?? null;
     // Policy (documented P3): an intent tender that does not cover balance + tip is treated as exact cash
@@ -306,7 +320,7 @@ function projectItem(
   const orderStatus = own(record, "orderStatus");
   const rawName = own(record, "courierName");
   if (delivery === undefined || delivery.scope.restaurantId !== scope.restaurantId
-    || delivery.scope.branchId !== scope.branchId || (orderStatus !== "open" && orderStatus !== "partially_paid")
+    || delivery.scope.branchId !== scope.branchId || (orderStatus !== "open" && orderStatus !== "partially_paid" && orderStatus !== "paid")
     || (rawName !== null && typeof rawName !== "string")) throw unavailable();
   let order;
   try { order = decodeOrderRecord(own(record, "order")); } catch { throw unavailable(); }
@@ -390,7 +404,8 @@ function parseSettlement(raw: unknown): DeliveryWriteResult<SettleDeliveryResult
   const record = exactRecord(raw, ["status", "replayed", "delivery", "payment"]);
   const status = record === undefined ? undefined : own(record, "status");
   if (record === undefined || (status !== "saved" && status !== "replayed")) throw unavailable();
-  const payment: PaymentCollectionSummaryV1 | undefined = parsePaymentCollectionSummaryV1(own(record, "payment"));
+  const rawPayment = own(record, "payment");
+  const payment: PaymentCollectionSummaryV1 | null | undefined = rawPayment === null ? null : parsePaymentCollectionSummaryV1(rawPayment);
   const parsed = parseSettleDeliveryResultV1({
     delivery: own(record, "delivery"), payment, replayed: own(record, "replayed"), schemaVersion: 1,
   });

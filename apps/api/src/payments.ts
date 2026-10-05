@@ -375,7 +375,8 @@ export class FinancialService {
     let totalMinor: number;
     try { totalMinor = calculateOrderAggregateTotals(storedOrder.order).total.amountMinor; } catch { throw applicationError("request"); }
     const remaining = totalMinor - storedRegister.capturedAmountMinor;
-    if (!Number.isSafeInteger(remaining) || remaining <= 0) throw applicationError("conflict");
+    // 0 is valid: a prepaid Order has nothing left to collect (settle_prepaid_delivery).
+    if (!Number.isSafeInteger(remaining) || remaining < 0) throw applicationError("conflict");
     return remaining;
   }
 

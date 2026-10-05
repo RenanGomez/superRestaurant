@@ -118,7 +118,7 @@ test("settlement result rows parse with the payment summary and replay marks", a
   const replayed = await adapterFor({
     status: "replayed", replayed: true, delivery: settledView, payment: { ...payment, replayed: true },
   }).replaySettle(principal.actorId, settleCommand);
-  assert.ok(typeof replayed === "object" && replayed.payment.changeMinor === 4_000 && replayed.replayed);
+  assert.ok(typeof replayed === "object" && replayed.payment?.changeMinor === 4_000 && replayed.replayed);
   assert.equal(await adapterFor({ status: "conflict" }).replaySettle(principal.actorId, settleCommand), "conflict");
   await assert.rejects(adapterFor({ status: "saved", replayed: false, delivery: settledView }).replaySettle(principal.actorId, settleCommand), DeliveryApplicationError);
 });
@@ -240,6 +240,7 @@ function portWith(overrides: Partial<DeliveryPort>): DeliveryPort {
     list: async () => { throw new Error("unexpected list"); },
     replaySettle: async () => { throw new Error("unexpected replaySettle"); },
     settle: async () => { throw new Error("unexpected settle"); },
+    settlePrepaid: async () => { throw new Error("unexpected settlePrepaid"); },
     transition: async () => { throw new Error("unexpected transition"); },
     ...overrides,
   };
@@ -271,3 +272,31 @@ function fakePersistInput(command?: CollectPaymentCommandV1): PersistPaymentInpu
 async function assertCode(promise: Promise<unknown>, code: DeliveryApplicationError["code"]): Promise<void> {
   await assert.rejects(promise, (error: unknown) => error instanceof DeliveryApplicationError && error.code === code);
 }
+
+test("settle of a prepaid Order (balance 0) closes the delivery without building a collection", async () => {
+  const closed: SettleDeliveryResultV1 = { delivery: { ...settledView, settledPaymentId: null } as never, payment: null, replayed: false, schemaVersion: 1 };
+  let prepared = 0;
+  const finances = financesStub(0, async () => { prepared += 1; throw new Error("not reached"); });
+  const port = portWith({ replaySettle: async () => "missing", settlePrepaid: async () => closed });
+  // A card intent is fine here: the Order was paid before the trip, nothing is collected.
+  const service = serviceFor(["cashier"], port, contextWith("card_manual"), finances);
+  assert.equal(await service.settle(principal, settleCommand), closed);
+  assert.equal(prepared, 0);
+  // No tender or tip can be stated when nothing is collected.
+  await assertCode(service.settle(principal, { ...settleCommand, tipMinor: 100 }), "request");
+  await assertCode(service.settle(principal, { ...settleCommand, tenderedAmountMinor: 100 }), "request");
+  const refused = serviceFor(["cashier"], portWith({ replaySettle: async () => "missing", settlePrepaid: async () => "conflict" }), contextWith("cash"), finances);
+  await assertCode(refused.settle(principal, settleCommand), "conflict");
+});
+
+test("adapter reads the prepaid settlement row with a null payment, and a list over the bound is unavailable", async () => {
+  const adapterFor = (result: unknown) => new PostgresDeliveryAdapter({ query: async () => ({ rows: [{ result }] }) });
+  const prepaid = await adapterFor({ status: "saved", replayed: false, delivery: { ...settledView, settledPaymentId: null }, payment: null })
+    .settlePrepaid(principal.actorId, settleCommand);
+  assert.ok(typeof prepaid === "object" && prepaid.payment === null && !prepaid.replayed);
+  const replayed = await adapterFor({ status: "replayed", replayed: true, delivery: { ...settledView, settledPaymentId: null }, payment: null })
+    .replaySettle(principal.actorId, settleCommand);
+  assert.ok(typeof replayed === "object" && replayed.payment === null && replayed.replayed);
+  const overLimit = serviceFor(["cashier"], portWith({ list: async () => ({ status: "limit_exceeded" }) }));
+  await assertCode(overLimit.list(principal, { schemaVersion: 1, scope }), "unavailable");
+});
