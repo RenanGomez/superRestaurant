@@ -656,10 +656,12 @@ function exactRecord(value: unknown, keys: readonly string[]): Readonly<Record<s
 }
 
 function normalizeOperationalReportTimestamps(value: unknown): unknown {
-  const report = exactRecord(value, [
+  const reportKeys = [
     "schemaVersion", "scope", "register", "paymentCount", "cashCapturedMinor", "cardManualCapturedMinor",
     "totalCapturedMinor", "nextLocalSequence", "tipsMinor", "cashTipsMinor", "movementCount", "movements",
-  ]);
+  ];
+  // `transferCapturedMinor` is additive: accept the report with or without it (the parser defaults it to 0).
+  const report = exactRecord(value, [...reportKeys, "transferCapturedMinor"]) ?? exactRecord(value, reportKeys);
   if (report === undefined) return value;
   const register = exactRecord(own(report, "register"), [
     "schemaVersion", "scope", "cashRegisterSessionId", "registerId", "shiftId", "cashierId", "currency", "status",

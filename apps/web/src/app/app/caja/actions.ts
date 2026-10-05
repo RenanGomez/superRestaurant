@@ -69,7 +69,7 @@ export async function quotePaymentAction(input: {
   readonly amountPesos: string;
   readonly receivedPesos: string;
   readonly tipPesos: string;
-  readonly method: "cash" | "card_manual";
+  readonly method: "cash" | "card_manual" | "transfer";
 }): Promise<{ status: string; value?: ReturnType<typeof parseCashPaymentQuoteV1> }> {
   const context = await getAuthorizedContext();
   const cookieStore = await cookies();
@@ -143,6 +143,9 @@ export async function collectPaymentAction(formData: FormData): Promise<{ status
   const terminalId = boundedTextField(formData, "terminalId", 100);
   const reference = optionalBoundedTextField(formData, "reference", 200);
   if (method === "card_manual" && (terminalId === undefined || reference === undefined || reference === null || reference.length < 6)) return { status: "invalid_input" };
+  // A transfer carries only an optional bank reference (<= 64); the server validates and decides everything else.
+  const transferReference = method === "transfer" ? optionalBoundedTextField(formData, "transferReference", 64) : null;
+  if (transferReference === undefined) return { status: "invalid_input" };
   const cardManualEvidence = method === "card_manual"
     ? { externalConfirmed: true, provider, reference, terminalId }
     : null;
@@ -164,6 +167,7 @@ export async function collectPaymentAction(formData: FormData): Promise<{ status
     scope: context.scope,
     tenderedAmountMinor,
     tipMinor,
+    ...(transferReference === null ? {} : { transferReference }),
   });
   if (result.status !== "ok") return { status: errorCode(result.status) };
   cookieStore.set(CASH_REGISTER_SESSION_COOKIE, cashRegisterSessionId, cookieOptions(context.cookiesSecure));

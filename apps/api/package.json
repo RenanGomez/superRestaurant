@@ -66,6 +66,7 @@
     "verify:branch-order-work-tray-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-branch-order-work-tray-schema-verification.js --local-disposable-only",
     "verify:branch-order-work-tray-delivery-state-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-branch-order-work-tray-delivery-state-schema-verification.js --local-disposable-only",
     "verify:order-deliveries-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-order-deliveries-schema-verification.js --local-disposable-only",
+    "verify:cash-transfer-method-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-cash-transfer-method-schema-verification.js --local-disposable-only",
     "verify:cash-collect-change-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-cash-collect-change-schema-verification.js --local-disposable-only",
     "verify:dining-tables-layout-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-tables-layout-schema-verification.js",
     "verify:dining-tables-layout-lint-fix-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-tables-layout-lint-fix-schema-verification.js",
