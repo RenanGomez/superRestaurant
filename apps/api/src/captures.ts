@@ -70,6 +70,9 @@ import {
   parseCaptureSelectionPlanV1,
   parseCaptureSelectionPlanProjectionV1,
   parseReplaceCaptureSelectionPlanCommandV1,
+  parseCaptureLineQuoteRequestV1,
+  parseCaptureLineQuoteResultV1,
+  type CaptureLineQuoteResultV1,
   type CaptureWorkspaceRequestV4,
   type CaptureWorkspaceV4,
   type CaptureSelectionPlanProjectionModifierV1,
@@ -1739,6 +1742,15 @@ export class CapturePaymentIntentStaleError extends Error {
  * `delivery_quote_missing` / `delivery_quote_expired` / `delivery_quote_not_covered` value so the
  * web layer can surface a precise motive instead of a generic conflict.
  */
+export class CaptureLineQuoteRejectedError extends Error {
+  public readonly reason: "catalog_version_mismatch" | "line_invalid";
+  public constructor(reason: "catalog_version_mismatch" | "line_invalid") {
+    super("CAPTURE_LINE_QUOTE_REJECTED");
+    this.name = "CaptureLineQuoteRejectedError";
+    this.reason = reason;
+  }
+}
+
 export class CaptureDeliveryQuoteInvalidError extends Error {
   public readonly reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered";
   public constructor(reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered") {
@@ -1963,6 +1975,56 @@ export class CaptureService {
       if (result === undefined) throw unavailable();
       return result;
     } catch { throw unavailable(); }
+  }
+
+  /**
+   * Read-only price estimate for a line still being assembled. Prices through the very same
+   * `priceSelectionPlan` that a stored selection plan uses, so the quote can never diverge from
+   * the projection; nothing is persisted and nothing is frozen.
+   */
+  public async quoteLinePrice(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureLineQuoteResultV1> {
+    const request = parseCaptureLineQuoteRequestV1(input);
+    if (request === undefined) throw new CaptureApplicationError("request");
+    let actorId: string;
+    try { actorId = (await this.authorization.authorizeBranch(principal, request.scope, "captures.read")).principal.actorId; }
+    catch { throw new CaptureApplicationError("authorization"); }
+    let catalogState;
+    try { catalogState = await this.catalogs.read(actorId, request.scope); } catch { throw unavailable(); }
+    if (catalogState === "forbidden") throw new CaptureApplicationError("authorization");
+    if (catalogState.catalog === null || catalogState.scope.restaurantId !== request.scope.restaurantId
+      || catalogState.scope.branchId !== request.scope.branchId
+      || catalogState.catalog.catalogVersion !== request.catalogVersion) {
+      throw new CaptureLineQuoteRejectedError("catalog_version_mismatch");
+    }
+    let projection;
+    try {
+      projection = priceSelectionPlan({
+        catalogVersion: request.catalogVersion,
+        lines: [{
+          lineId: "00000000-0000-4000-8000-000000000001", modifierGroups: request.modifierGroups, note: null,
+          productId: request.productId, quantity: request.quantity, variantId: request.variantId,
+          ...(request.fraction === null ? {} : { fraction: request.fraction }),
+        }],
+        schemaVersion: 1,
+      }, catalogState.catalog, request.scope.restaurantId);
+    } catch (error: unknown) {
+      if (error instanceof CaptureApplicationError && error.code === "conflict") throw new CaptureLineQuoteRejectedError("line_invalid");
+      throw error;
+    }
+    const line = projection.lines[0];
+    if (line === undefined) throw unavailable();
+    const result = parseCaptureLineQuoteResultV1({
+      catalogVersion: projection.catalogVersion,
+      currency: projection.currency,
+      fractionBreakdown: line.halves ?? [],
+      geometry: line.halves === undefined ? "whole" : "halves",
+      lineTotalMinor: line.lineTotalMinor,
+      modifiers: line.modifiers,
+      schemaVersion: 1,
+      unitPriceMinor: line.unitPriceMinor,
+    });
+    if (result === undefined) throw unavailable();
+    return result;
   }
 
   public async autosaveDraft(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureMutationResultV1> {
