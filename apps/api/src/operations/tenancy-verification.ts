@@ -80,6 +80,7 @@ type AppTable =
   | "menu_catalogs"
   | "menu_categories"
   | "menu_products"
+  | "menu_product_variants"
   | "menu_modifier_groups"
   | "menu_modifier_options"
   | "menu_catalog_heads"
@@ -105,6 +106,7 @@ const menuCatalogTables = [
   "menu_catalogs",
   "menu_categories",
   "menu_products",
+  "menu_product_variants",
   "menu_modifier_groups",
   "menu_modifier_options",
   "menu_catalog_heads",
@@ -2232,6 +2234,8 @@ async function cleanupFixtures(
         const created = plan.menuCatalogCreated ? [plan.menuCatalog.commands[0]] : [];
         await deleteRequiredFixtureRows(client, "app.menu_modifier_options", plan.menuCatalog.commands.map((item) => item.optionId), created.map((item) => item.optionId));
         await deleteRequiredFixtureRows(client, "app.menu_modifier_groups", plan.menuCatalog.commands.map((item) => item.groupId), created.map((item) => item.groupId));
+        // Variants (sizes) reference products with ON DELETE RESTRICT; fixtures publish none, so none required.
+        await deleteRequiredFixtureRows(client, "app.menu_product_variants", plan.menuCatalog.commands.map((item) => item.productId), [], "product_id");
         await deleteRequiredFixtureRows(client, "app.menu_products", plan.menuCatalog.commands.map((item) => item.productId), created.map((item) => item.productId));
         await deleteRequiredFixtureRows(client, "app.menu_categories", plan.menuCatalog.commands.map((item) => item.categoryId), created.map((item) => item.categoryId));
         await deleteRequiredFixtureRows(client, "app.menu_catalog_audit_events", plan.menuCatalog.commands.map((item) => item.eventId), created.map((item) => item.eventId), "event_id");
@@ -2339,7 +2343,7 @@ async function deleteRequiredFixtureRows(
   table: string,
   allowedIds: readonly string[],
   requiredIds: readonly string[],
-  idColumn: "event_id" | "id" | "restaurant_id" = "id",
+  idColumn: "event_id" | "id" | "product_id" | "restaurant_id" = "id",
 ): Promise<void> {
   const result = await client.query<{ id: string }>(
     `delete from ${table} where ${idColumn} = any($1::uuid[]) returning ${idColumn}::text as id`,
@@ -2347,7 +2351,7 @@ async function deleteRequiredFixtureRows(
   );
   const returned = new Set(result.rows.map((row) => row.id));
   if (
-    result.rowCount !== returned.size
+    (idColumn !== "product_id" && result.rowCount !== returned.size)
     || [...returned].some((id) => !allowedIds.includes(id))
     || requiredIds.some((id) => !returned.has(id))
   ) throw new TenancyVerificationError("cleanup", "TENANCY_VERIFICATION_CLEANUP_FAILED");

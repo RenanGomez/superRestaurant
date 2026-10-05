@@ -90,6 +90,9 @@ export function materializeCaptureOrder(
  * client-supplied price). A line's `variantId` (catalog size) is priced by the domain from the
  * catalog's variant, never from the client; an unknown/inactive variant, or a sized product without
  * one, throws and the caller maps it to a conflict.
+ *
+ * Known debt: repeating a past order (`materializeCaptureOrder`, the repeat plan) for a product that now has
+ * active sizes answers 409 `variant_required`; carrying `variantId` into the repeat plan is pending.
  */
 export function materializeCaptureSelectionOrder(
   command: ConfirmCaptureDraftCommandV2,
