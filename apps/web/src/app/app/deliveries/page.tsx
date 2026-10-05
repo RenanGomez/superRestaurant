@@ -41,6 +41,7 @@ import {
   failDeliveryAction,
   settleDeliveryAction,
 } from "./actions";
+import { CourierOrderDetail } from "./courier-order-detail";
 
 export const dynamic = "force-dynamic";
 
@@ -173,7 +174,7 @@ export default async function DeliveriesPage({ searchParams }: DeliveriesPagePro
         )}
         <Column id="assigned" count={columns.assigned.length}>
           {columns.assigned.length === 0 ? <ColumnEmpty /> : columns.assigned.map((item) => (
-            <DeliveryCard key={item.delivery.orderId} item={item} timeZone={timeZone}>
+            <DeliveryCard key={item.delivery.orderId} item={item} timeZone={timeZone} showCourierDetail={isCourier}>
               <TransitionButton action={dispatchDeliveryAction} item={item} idle="Salió" pending="Guardando…" />
               <FailLink orderId={item.delivery.orderId} />
             </DeliveryCard>
@@ -181,7 +182,7 @@ export default async function DeliveriesPage({ searchParams }: DeliveriesPagePro
         </Column>
         <Column id="en_route" count={columns.en_route.length}>
           {columns.en_route.length === 0 ? <ColumnEmpty /> : columns.en_route.map((item) => (
-            <DeliveryCard key={item.delivery.orderId} item={item} timeZone={timeZone}>
+            <DeliveryCard key={item.delivery.orderId} item={item} timeZone={timeZone} showCourierDetail={isCourier}>
               <TransitionButton action={completeDeliveryAction} item={item} idle="Entregada" pending="Guardando…" />
               <FailLink orderId={item.delivery.orderId} />
             </DeliveryCard>
@@ -189,7 +190,7 @@ export default async function DeliveriesPage({ searchParams }: DeliveriesPagePro
         </Column>
         <Column id="to_settle" count={columns.to_settle.length}>
           {columns.to_settle.length === 0 ? <ColumnEmpty /> : columns.to_settle.map((item) => (
-            <DeliveryCard key={item.delivery.orderId} item={item} timeZone={timeZone}>
+            <DeliveryCard key={item.delivery.orderId} item={item} timeZone={timeZone} showCourierDetail={isCourier}>
               {canManage
                 ? <a href={`/app/deliveries?settle=${item.delivery.orderId}`} className="inline-flex min-h-11 items-center rounded-xl bg-accent px-4 text-[14px] font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Liquidar</a>
                 : <p className="text-[12px] text-text-muted">Pendiente de liquidar en caja.</p>}
@@ -198,7 +199,7 @@ export default async function DeliveriesPage({ searchParams }: DeliveriesPagePro
         </Column>
         <Column id="failed" count={columns.failed.length}>
           {columns.failed.length === 0 ? <ColumnEmpty /> : columns.failed.map((item) => (
-            <DeliveryCard key={item.delivery.orderId} item={item} timeZone={timeZone}>
+            <DeliveryCard key={item.delivery.orderId} item={item} timeZone={timeZone} showCourierDetail={isCourier}>
               {item.delivery.failedReason !== null && <p className="text-[12px] text-text-muted">Motivo: {item.delivery.failedReason}</p>}
               {canManage && canReassign(item, MAX_DELIVERY_ATTEMPTS)
                 ? <CourierPicker orderId={item.delivery.orderId} version={item.delivery.version} couriers={courierList} label="Reasignar a" />
@@ -254,7 +255,7 @@ function Card({ children, courier, meta, payment, subtitle, title, total }: {
   );
 }
 
-function DeliveryCard({ children, item, timeZone }: { readonly children: ReactNode; readonly item: BranchDeliveryItemV1; readonly timeZone: string }): ReactNode {
+function DeliveryCard({ children, item, timeZone, showCourierDetail }: { readonly children: ReactNode; readonly item: BranchDeliveryItemV1; readonly timeZone: string; readonly showCourierDetail: boolean }): ReactNode {
   const promise = item.promiseEnd ?? item.promiseStart;
   const intent = item.paymentIntent;
   return (
@@ -266,6 +267,7 @@ function DeliveryCard({ children, item, timeZone }: { readonly children: ReactNo
       payment={item.orderStatus === "paid" ? "Ya pagada" : intent === null ? "Sin definir" : intentText(intent.method, intent.tenderedAmountMinor, item.currency)}
       courier={item.courierLabel ?? "Repartidor"}>
       {item.deliveryInstructions !== null && <p className="w-full break-words text-[12px] text-text-muted">Indicaciones: {item.deliveryInstructions}</p>}
+      {showCourierDetail && <CourierOrderDetail orderId={item.delivery.orderId} />}
       {children}
     </Card>
   );

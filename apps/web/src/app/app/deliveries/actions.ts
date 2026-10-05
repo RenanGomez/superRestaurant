@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import type { BranchScope } from "@super-restaurant/shared-types";
+import type { BranchScope, OrderDetailV1 } from "@super-restaurant/shared-types";
 
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
@@ -15,6 +15,7 @@ import {
   settleDelivery,
   transitionDelivery,
   listDeliveries,
+  readDeliveryOrderDetail,
   type DeliveryApiFailure,
   type DeliveryTransitionKind,
 } from "../../../lib/deliveries";
@@ -25,6 +26,24 @@ import { createServerSupabaseClient } from "../../../lib/supabase-server";
 import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } from "../caja/context";
 
 const BOARD = "/app/deliveries";
+
+export type CourierOrderDetailResult =
+  | { readonly ok: true; readonly detail: OrderDetailV1; readonly capturedMinor: number; readonly remainingMinor: number }
+  | { readonly ok: false; readonly error: DeliveryApiFailure };
+
+export async function courierOrderDetailAction(orderId: string): Promise<CourierOrderDetailResult> {
+  if (!UUID_PATTERN.test(orderId)) return { ok: false, error: "invalid" };
+  const context = await authorizedContext();
+  const detail = await readDeliveryOrderDetail(context.accessToken, context.apiBaseUrl, context.scope, orderId);
+  if (detail.status !== "ok") return { ok: false, error: detail.status };
+  const list = await listDeliveries(context.accessToken, context.apiBaseUrl, context.scope);
+  if (list.status !== "ok") return { ok: false, error: list.status };
+  const item = list.value.items.find((entry) => entry.delivery.orderId === orderId);
+  if (item === undefined || item.currency !== detail.value.totals.currency || item.totalMinor !== detail.value.totals.totalMinor) {
+    return { ok: false, error: "conflict" };
+  }
+  return { ok: true, detail: detail.value, capturedMinor: item.capturedMinor, remainingMinor: item.remainingMinor };
+}
 
 export async function assignDeliveryAction(formData: FormData): Promise<void> {
   const courierUserId = uuidField(formData, "courierUserId");

@@ -10,6 +10,8 @@ import {
   parseDispatchDeliveryCommandV1,
   parseFailDeliveryCommandV1,
   parseOrderDeliveryResultV1,
+  parseOrderDetailRequestV1,
+  parseOrderDetailV1,
   parseQuoteCashPaymentRequestV1,
   parseSettleDeliveryCommandV1,
   parseSettleDeliveryResultV1,
@@ -18,6 +20,7 @@ import {
   type BranchScope,
   type CashPaymentQuoteV1,
   type OrderDeliveryResultV1,
+  type OrderDetailV1,
   type SettleDeliveryResultV1,
 } from "@super-restaurant/shared-types";
 
@@ -32,6 +35,17 @@ export function listDeliveries(token: string, baseUrl: string, scope: BranchScop
   return post(token, `${baseUrl}/api/v1/deliveries/list`, body, (raw) => {
     const value = parseBranchDeliveriesV1(raw);
     return value !== undefined && value.scope.restaurantId === scope.restaurantId && value.scope.branchId === scope.branchId ? value : undefined;
+  });
+}
+
+/** The API checks courier ownership in the requested branch before reading any Order data. */
+export function readDeliveryOrderDetail(token: string, baseUrl: string, scope: BranchScope, orderId: string): Promise<DeliveryApiResult<OrderDetailV1>> {
+  const body = parseOrderDetailRequestV1({ schemaVersion: 1, scope, orderId });
+  if (body === undefined) return Promise.resolve(failure("invalid"));
+  return post(token, `${baseUrl}/api/v1/deliveries/order-detail`, body, (raw) => {
+    const value = parseOrderDetailV1(raw);
+    return value !== undefined && value.orderId === orderId && value.scope.restaurantId === scope.restaurantId
+      && value.scope.branchId === scope.branchId ? value : undefined;
   });
 }
 
