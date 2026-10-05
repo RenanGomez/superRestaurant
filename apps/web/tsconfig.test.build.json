@@ -54,6 +54,8 @@
     "src/lib/shortcut-dispatch.test.ts",
     "src/lib/system-onboarding.ts",
     "src/lib/system-onboarding.test.ts",
+    "src/lib/delivery-board.ts",
+    "src/lib/delivery-board.test.ts",
     "src/lib/finance.ts",
     "src/lib/finance.test.ts",
     "src/proxy.ts",
