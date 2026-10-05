@@ -3,6 +3,8 @@
 import { useState, type RefObject } from "react";
 import type { MenuCatalogV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
 import { groupProductsByCategory } from "../../../lib/capture-selection";
+import { menuProductPriceLabel } from "../../../lib/menu-variants";
+import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { useMenuImageBaseUrl } from "../../../lib/menu-image-url-context";
 import { menuImagePublicUrl } from "../../../lib/menu-images";
 
@@ -81,7 +83,7 @@ export function CaptureMenu({ catalog, currency, lineQuantities, busy, searchInp
               : <span aria-hidden="true" className={`flex h-24 items-center justify-center text-3xl font-bold text-text ${categoryColor(product.categoryId)}`}>{productInitials(product.name)}</span>}
             <span className="grid gap-0.5 p-2">
               <span className="font-semibold leading-tight">{product.name}</span>
-              <span className="text-sm text-text-muted">{money(product.unitPriceMinor, currency)}</span>
+              <span className="text-sm text-text-muted">{menuProductPriceLabel(product, (price) => formatMinorUnits(price, currency))}</span>
             </span>
           </button>;
         })}
@@ -89,8 +91,4 @@ export function CaptureMenu({ catalog, currency, lineQuantities, busy, searchInp
       </div>
     </div>
   </div>;
-}
-
-function money(amountMinor: number, currency: string): string {
-  return new Intl.NumberFormat("es-MX", { currency, style: "currency" }).format(amountMinor / 100);
 }

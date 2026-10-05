@@ -23,7 +23,7 @@ interface ProductSheetProps {
   readonly initialLine?: SelectionPlanLineDraft | undefined;
   readonly error?: string | undefined;
   readonly onClose: () => void;
-  readonly onAdd: (quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[], note: string | null) => void;
+  readonly onAdd: (quantity: number, variantId: string | null, modifierGroups: readonly SelectionPlanModifierGroupDraft[], note: string | null) => void;
 }
 
 const MAX_NOTE_LENGTH = 200;
@@ -33,6 +33,10 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
   const supabaseUrl = useMenuImageBaseUrl();
   const confirmed = confirmedTotalMinor !== undefined;
   const [quantity, setQuantity] = useState(initialLine?.quantity ?? 1);
+  const [variantId, setVariantId] = useState<string | null>(() => product.variants?.some((variant) =>
+    variant.active && variant.variantId === initialLine?.variantId) ? initialLine?.variantId ?? null : null);
+  const activeVariants = product.variants?.filter((variant) => variant.active).sort((a, b) => a.displayOrder - b.displayOrder) ?? [];
+  const sizeMissing = activeVariants.length > 0 && !activeVariants.some((variant) => variant.variantId === variantId);
   const [selections, setSelections] = useState<Record<string, readonly string[]>>(() => Object.fromEntries(
     (initialLine?.modifierGroups ?? []).map((group) => [group.groupId,
       expandModifierSelections(group.selections)])));
@@ -69,7 +73,7 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
     validation: validateModifierSelection(group, countModifierSelections(selections[group.groupId] ?? [])),
   }));
   const allValid = validations.every((entry) => entry.validation.valid);
-  const estimatedMinor = estimateSelectionMinor(product, groups, selections, quantity);
+  const estimatedMinor = estimateSelectionMinor(product, groups, selections, quantity, variantId);
 
   return <div className="fixed inset-0 z-20 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
     role="dialog" aria-modal="true" aria-labelledby="product-sheet-title"
@@ -81,6 +85,17 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
         <button ref={closeRef} type="button" className={`${button}`} aria-label="Cerrar (Esc)" onClick={onClose}>✕</button>
       </header>
       <div className="grid flex-1 gap-4 overflow-auto p-4">
+        {activeVariants.length > 0 && <fieldset className="grid gap-2">
+          <legend className="text-sm font-semibold">Tamaño · obligatorio</legend>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {activeVariants.map((variant) => <button key={variant.variantId} type="button"
+              disabled={busy || confirmed} aria-pressed={variantId === variant.variantId}
+              className={`${optionButton} min-w-0 ${variantId === variant.variantId ? optionSelected : ""}`}
+              onClick={() => setVariantId(variant.variantId)}>
+              <span className="min-w-0 break-words">{variant.name}</span><span className="shrink-0">{formatMinorUnits(variant.unitPriceMinor, currency)}</span>
+            </button>)}
+          </div>
+        </fieldset>}
         {groups.map((group) => <fieldset key={group.groupId} className="grid gap-2">
           <legend className="flex w-full items-center justify-between text-sm font-semibold">
             <span>{group.name}</span>
@@ -143,10 +158,10 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
             onClick={() => setQuantity((current) => current + 1)}>+</button>
         </div>
         <span className="grow" />
-        <button type="button" className="min-h-11 min-w-11 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50" disabled={busy || confirmed || !allValid}
-          onClick={() => onAdd(quantity, groupDrafts, note.trim().length === 0 ? null : note.trim())}>
+        <button type="button" className="min-h-11 min-w-11 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50" disabled={busy || confirmed || !allValid || sizeMissing}
+          onClick={() => onAdd(quantity, variantId, groupDrafts, note.trim().length === 0 ? null : note.trim())}>
           {busy ? "Calculando…" : confirmed ? (confirmedTotalMinor === null ? "Agregado" : `Agregado · ${formatMinorUnits(confirmedTotalMinor, currency)}`)
-            : !allValid ? "Completa lo obligatorio" : initialLine ? "Guardar cambios" : "Agregar"}
+            : sizeMissing ? "Elige un tamaño" : !allValid ? "Completa lo obligatorio" : initialLine ? "Guardar cambios" : "Agregar"}
         </button>
       </footer>
     </div>

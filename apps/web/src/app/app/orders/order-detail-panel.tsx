@@ -243,7 +243,7 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
                 {lines.map((item) => <li key={item.orderItemId} className="rounded-lg border border-border p-3">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <p className="text-sm font-semibold">{item.quantity} × {item.name}</p>
+                      <p className="text-sm font-semibold">{item.quantity} × {item.name}{item.variantName ? ` · ${item.variantName}` : ""}</p>
                       {item.modifiers.length > 0 && <ul className="mt-1 text-xs text-text-muted">
                         {item.modifiers.map((modifier) => <li key={modifier.modifierId}>{modifier.name} × {modifier.quantity}</li>)}
                       </ul>}
