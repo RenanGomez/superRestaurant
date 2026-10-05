@@ -126,16 +126,17 @@ export default async function DeliveriesPage({ searchParams }: DeliveriesPagePro
     listDeliveries(session.access_token, env.apiBaseUrl, scope),
     readBranchTimeZone(session.access_token, env.apiBaseUrl, scope),
     canManage ? listCouriers(session.access_token, env.apiBaseUrl, scope) : Promise.resolve(undefined),
-    canManage ? requestBranchOrderWorkTray(session.access_token, env.apiBaseUrl, scope, null, 100, "delivery") : Promise.resolve(undefined),
+    canManage ? requestBranchOrderWorkTray(session.access_token, env.apiBaseUrl, scope, null, 100, "delivery", true) : Promise.resolve(undefined),
   ]);
   if (list.status !== "ok" || timeZone === undefined) {
     return shell(<Empty title="No se pudo cargar la lista" body="El estado no está disponible. No se registró ningún cambio." action={<a href="/app/deliveries" className="inline-flex min-h-11 items-center rounded-xl bg-accent px-4 text-[14px] font-semibold text-white">Reintentar</a>} />);
   }
   const items = list.value.items;
   const columns = groupDeliveriesByState(items);
-  const known = new Set(items.map((entry) => entry.delivery.orderId));
+  // The server decides what is unassigned (prepaid included). A `failed` delivery is shown in its own column,
+  // which carries the row version and the attempt cap the reassign action needs, so it is not repeated here.
   const unassigned: readonly BranchOrderWorkItemV1[] = tray !== undefined && tray.ok
-    ? tray.value.items.filter((order) => order.channel === "delivery" && (order.status === "open" || order.status === "partially_paid") && !known.has(order.orderId))
+    ? tray.value.items.filter((order) => order.deliveryState === null)
     : [];
   const courierList: readonly BranchMemberV1[] = couriers?.status === "ok" ? couriers.value : [];
   const settleItem = canManage && settleId !== undefined ? items.find((entry) => entry.delivery.orderId === settleId && entry.delivery.state === "delivered") : undefined;
@@ -163,7 +164,7 @@ export default async function DeliveriesPage({ searchParams }: DeliveriesPagePro
                 title={order.customerLabel ?? "—"} subtitle={order.addressLabel ?? "—"}
                 meta={`Pedido ${formatOrderWorkTime(order.createdAt, order.timeZone)}`}
                 total={formatMinorUnits(order.totals.totalMinor, order.totals.currency)}
-                payment={order.paymentIntent === null ? null : intentText(order.paymentIntent.method, order.paymentIntent.tenderedAmountMinor, order.totals.currency)}
+                payment={order.status === "paid" ? "Pagada" : order.paymentIntent === null ? null : intentText(order.paymentIntent.method, order.paymentIntent.tenderedAmountMinor, order.totals.currency)}
                 courier={null}>
                 <CourierPicker orderId={order.orderId} version={0} couriers={courierList} />
               </Card>

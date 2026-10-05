@@ -19,7 +19,7 @@ const orderId = "2ee5f057-7971-468d-b197-f946911743eb";
 function item(overrides: Partial<BranchOrderWorkItemV1> = {}): BranchOrderWorkItemV1 {
   return {
     addressLabel: null, channel: "delivery", createdAt: "2026-09-26T18:00:00.000Z", customerLabel: null,
-    fulfillmentChannel: "delivery", hasNotes: false, lineCount: 1, orderId, paymentIntent: null,
+    deliveryState: null, fulfillmentChannel: "delivery", hasNotes: false, lineCount: 1, orderId, paymentIntent: null,
     preparation: "preparing", status: "open", timeZone: "America/Hermosillo",
     totals: { currency: "MXN", deliveryChargeMinor: 3000, itemsTotalMinor: 10000, tipMinor: 0, totalMinor: 13000 },
     updatedAt: "2026-09-26T18:05:00.000Z", ...overrides,
@@ -80,6 +80,10 @@ test("branch order tray request sends the scope/cursor/limit and validates the r
     globalThis.fetch = async (_url, init) => { sent = JSON.parse(String(init?.body)); return new Response(JSON.stringify(tray)); };
     await requestBranchOrderWorkTray("token", "https://api.example", scope, null, 25, "delivery");
     assert.deepEqual(sent, { channel: "delivery", cursor: null, limit: 25, schemaVersion: 1, scope });
+
+    globalThis.fetch = async (_url, init) => { sent = JSON.parse(String(init?.body)); return new Response(JSON.stringify(tray)); };
+    await requestBranchOrderWorkTray("token", "https://api.example", scope, null, 100, null, true);
+    assert.deepEqual(sent, { channel: null, cursor: null, limit: 100, schemaVersion: 1, scope, unassignedDeliveriesOnly: true });
 
     globalThis.fetch = async () => new Response(JSON.stringify({ ...tray, scope: { ...scope, branchId: orderId } }));
     assert.deepEqual(await requestBranchOrderWorkTray("token", "https://api.example", scope, null, 25), { error: "unavailable", ok: false });
