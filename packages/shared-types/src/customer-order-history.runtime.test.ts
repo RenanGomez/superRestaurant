@@ -221,6 +221,27 @@ expect(parseCustomerRepeatOrderPreviewV1({ ...preview, lines: [{
   ...preview.lines[0], issues: [{ ...warning, severity: "blocking" }],
 }, preview.lines[1]] }) === undefined, "price changes cannot be mislabeled as blocking");
 
+const variantBlocking = { ...blocking, code: "variant_required" };
+const variantBlockedLine = {
+  ...preview.lines[1],
+  blockedReason: "variant_required",
+  currentName: null,
+  historicalName: "Pizza sin tamano",
+  issues: [variantBlocking],
+};
+const variantPreview = { ...preview, lines: [preview.lines[0], variantBlockedLine] };
+const parsedVariantPreview = parseCustomerRepeatOrderPreviewV1(variantPreview);
+expect(parsedVariantPreview?.lines[1]?.blockedReason === "variant_required"
+  && parsedVariantPreview.lines[0]?.blockedReason === null
+  && parsedPreview?.lines[1]?.blockedReason === null,
+"repeat preview carries blockedReason, normalized to null when absent");
+expect(parseCustomerRepeatOrderPreviewV1({ ...variantPreview, lines: [preview.lines[0], {
+  ...variantBlockedLine, issues: [blocking],
+}] }) === undefined, "blockedReason must match a blocking issue of the line");
+expect(parseCustomerRepeatOrderPreviewV1({ ...variantPreview, lines: [{
+  ...preview.lines[0], blockedReason: "variant_required",
+}, preview.lines[1]] }) === undefined, "a ready line cannot carry a blockedReason");
+
 const repeatCommand = parseRepeatCustomerOrderIntoCaptureCommandV1({
   attentionLeaseId: "10000000-0000-4000-8000-000000000001",
   captureDraftId: "10000000-0000-4000-8000-000000000002",
