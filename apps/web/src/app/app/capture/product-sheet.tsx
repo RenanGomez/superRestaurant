@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { BranchScope, CaptureLineQuoteRequestV1, CaptureLineQuoteResultV1, LineFractionHalfV1, LineFractionV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
+import { CAPTURE_SELECTION_LINE_MAX_QUANTITY, type BranchScope, type CaptureLineQuoteRequestV1, type CaptureLineQuoteResultV1, type LineFractionHalfV1, type LineFractionV1, type MenuModifierGroupV1, type MenuProductV1 } from "@super-restaurant/shared-types";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { visibleLineEstimate } from "../../../lib/capture-quote";
 import type { CaptureRequestResult } from "../../../lib/capture-workspace";
@@ -63,6 +63,7 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
   const [halves, setHalves] = useState<HalvesDraft>(() => halvesDraftFromFraction(initialLine?.fraction));
   const closeRef = useRef<HTMLButtonElement>(null);
   const [serverEstimate, setServerEstimate] = useState<{ readonly key: string; readonly value: CaptureLineQuoteResultV1 } | null>(null);
+  const [catalogConflictKey, setCatalogConflictKey] = useState<string | null>(null);
 
   useEffect(() => { closeRef.current?.focus(); }, []);
   useEffect(() => {
@@ -121,7 +122,7 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
   const estimatedMinor = halvesActive ? (halvesUnitMinor === null ? null : halvesUnitMinor * quantity) : wholeEstimateMinor;
   const halvesMissing = halvesActive && !halvesValidation.valid;
   const quoteRequest: CaptureLineQuoteRequestV1 | null = scope !== undefined && catalogVersion != null && quoteLine !== undefined && allValid && !sizeMissing && !halvesMissing
-    && estimatedMinor !== null && quantity <= 99
+    && estimatedMinor !== null && quantity <= CAPTURE_SELECTION_LINE_MAX_QUANTITY
     ? { schemaVersion: 1, scope, catalogVersion, productId: product.productId, variantId,
       modifierGroups: groupDrafts, fraction: lineFraction, quantity }
     : null;
@@ -134,7 +135,14 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
     const timer = window.setTimeout(() => {
       const request = JSON.parse(quoteKey) as CaptureLineQuoteRequestV1;
       void quoteLine(request).then((result) => {
-        if (active && result.ok) setServerEstimate({ key: quoteKey, value: result.value });
+        if (!active) return;
+        if (result.ok) {
+          setServerEstimate({ key: quoteKey, value: result.value });
+          setCatalogConflictKey(null);
+        } else if (result.error === "conflict" && result.code === "catalog_version_mismatch") {
+          setServerEstimate(null);
+          setCatalogConflictKey(quoteKey);
+        }
       }).catch(() => { /* Local estimate stays visible when the server is unavailable. */ });
     }, 300);
     return () => { active = false; window.clearTimeout(timer); };
@@ -224,9 +232,12 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
           <span className="text-xs text-text-muted">{note.length}/{MAX_NOTE_LENGTH}</span>
         </div>}
       </div>
-      <p className="px-4 py-2 text-sm font-semibold" role="status">
-        {visibleEstimate.label}: {visibleEstimate.minor === null ? "se confirma al agregar" : formatMinorUnits(visibleEstimate.minor, currency)}
-      </p>
+      <div className="px-4 py-2" role="status">
+        <p className="text-sm font-semibold">{visibleEstimate.label}: {visibleEstimate.minor === null ? "se confirma al agregar" : formatMinorUnits(visibleEstimate.minor, currency)}</p>
+        {visibleEstimate.taxMinor !== null && visibleEstimate.taxMinor > 0 &&
+          <p className="text-xs text-text-muted">Incluye IVA {formatMinorUnits(visibleEstimate.taxMinor, currency)}</p>}
+        {quoteKey !== null && catalogConflictKey === quoteKey && <p className="text-xs text-error">El menú cambió, recarga.</p>}
+      </div>
       {error && <p role="alert" className="mx-4 rounded-lg bg-error-bg p-3 text-sm">{error}</p>}
       {confirmed && <p role="status" aria-live="polite" className="mx-4 rounded-lg bg-success-bg px-3 py-2 text-sm font-semibold text-success">
         {confirmedTotalMinor === null ? (initialLine ? "Guardado" : "Agregado") : `${initialLine ? "Guardado" : "Agregado"} · ${formatMinorUnits(confirmedTotalMinor, currency)}`}
@@ -236,8 +247,8 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
           <button type="button" className={`${button} text-xl`} aria-label="Menos" disabled={busy || confirmed || lockSelection || quantity <= 1}
             onClick={() => setQuantity((current) => Math.max(1, current - 1))}>−</button>
           <span className="min-w-9 text-center text-lg font-bold">{quantity}</span>
-          <button type="button" className={`${button} text-xl`} aria-label="Más" disabled={busy || confirmed || lockSelection || quantity >= 99}
-            onClick={() => setQuantity((current) => Math.min(99, current + 1))}>+</button>
+          <button type="button" className={`${button} text-xl`} aria-label="Más" disabled={busy || confirmed || lockSelection || quantity >= CAPTURE_SELECTION_LINE_MAX_QUANTITY}
+            onClick={() => setQuantity((current) => Math.min(CAPTURE_SELECTION_LINE_MAX_QUANTITY, current + 1))}>+</button>
         </div>
         <span className="grow" />
         <button type="button" className="min-h-11 min-w-11 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50" disabled={busy || confirmed || !allValid || sizeMissing || halvesMissing}

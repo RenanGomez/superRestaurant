@@ -7,21 +7,23 @@ const quote: CaptureLineQuoteResultV1 = {
   schemaVersion: 1,
   catalogVersion: "11111111-1111-4111-8111-111111111111",
   currency: "MXN",
-  unitPriceMinor: 12001,
-  lineTotalMinor: 24002,
+  unitPriceMinor: 10000,
+  subtotalMinor: 10000,
+  taxMinor: 1600,
+  lineTotalMinor: 11600,
   modifiers: [],
   geometry: "whole",
   fractionBreakdown: [],
 };
 
 test("server estimate appears only for the current selection; pending and failed reads keep the local estimate", () => {
-  assert.deepEqual(visibleLineEstimate(24000, "selection-a", null), { label: "Estimado", minor: 24000 });
-  assert.deepEqual(visibleLineEstimate(24000, "selection-a", { key: "selection-a", value: quote }),
-    { label: "Estimado del servidor", minor: 24002 });
+  assert.deepEqual(visibleLineEstimate(10000, "selection-a", null), { label: "Estimado", minor: 10000, taxMinor: null });
+  assert.deepEqual(visibleLineEstimate(10000, "selection-a", { key: "selection-a", value: quote }),
+    { label: "Estimado del servidor", minor: 11600, taxMinor: 1600 });
   assert.deepEqual(visibleLineEstimate(12000, "selection-b", { key: "selection-a", value: quote }),
-    { label: "Estimado", minor: 12000 });
+    { label: "Estimado", minor: 12000, taxMinor: null });
   assert.deepEqual(visibleLineEstimate(null, null, { key: "selection-a", value: quote }),
-    { label: "Estimado", minor: null });
+    { label: "Estimado", minor: null, taxMinor: null });
 });
 
 test("line quote uses the scoped read endpoint and rejects a stale catalog response", async () => {
@@ -40,6 +42,9 @@ test("line quote uses the scoped read endpoint and rejects a stale catalog respo
     assert.deepEqual(await quoteLinePrice("token", "https://api.example", request), { ok: true, value: quote });
     globalThis.fetch = async () => Response.json({ ...quote, catalogVersion: "55555555-5555-4555-8555-555555555555" });
     assert.deepEqual(await quoteLinePrice("token", "https://api.example", request), { ok: false, error: "unavailable" });
+    globalThis.fetch = async () => Response.json({ code: "CAPTURE_LINE_QUOTE_REJECTED", reason: "catalog_version_mismatch" }, { status: 409 });
+    assert.deepEqual(await quoteLinePrice("token", "https://api.example", request),
+      { ok: false, error: "conflict", code: "catalog_version_mismatch" });
     globalThis.fetch = async () => new Response(null, { status: 409 });
     assert.deepEqual(await quoteLinePrice("token", "https://api.example", request), { ok: false, error: "conflict" });
   } finally { globalThis.fetch = originalFetch; }
