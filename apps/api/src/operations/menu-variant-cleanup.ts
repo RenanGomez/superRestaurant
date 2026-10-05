@@ -1,0 +1,17 @@
+/**
+ * Fixture cleanup for `app.menu_product_variants`. The table references `app.menu_products` with
+ * ON DELETE RESTRICT, so a fixture product with sizes cannot be deleted first. The delete is bound to
+ * the verified fixtures' exact restaurant, release and product ids (all three predicates), so it can
+ * never touch another release or another restaurant's variants. Fixtures publish none, so no row
+ * count is required.
+ */
+export const DELETE_MENU_PRODUCT_VARIANTS_SQL =
+  "delete from app.menu_product_variants where restaurant_id = any($1::uuid[]) and catalog_id = any($2::uuid[]) and product_id = any($3::uuid[])";
+
+export function menuProductVariantDeleteParameters(
+  restaurantIds: readonly string[],
+  catalogIds: readonly string[],
+  productIds: readonly string[],
+): [string[], string[], string[]] {
+  return [[...restaurantIds], [...catalogIds], [...productIds]];
+}
