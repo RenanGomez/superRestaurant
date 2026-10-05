@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Test } from "@nestjs/testing";
 import type { BranchScope, MembershipRoleCode } from "@super-restaurant/shared-types";
+
+import { AppModule } from "./app.module.js";
+import { AUTH_PRINCIPAL_VERIFIER } from "./auth/authentication.js";
+import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
+import { MENU_CATALOG_PORT } from "./menu-catalog.js";
+import { BRANCH_OPERATIONAL_CONTEXT_PORT } from "./branch-operational-context.js";
 
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import type { MembershipDirectoryPort } from "./auth/membership-directory.js";
@@ -9,6 +16,8 @@ import {
   deterministicQuoteId,
   DeliveryZoneApplicationError,
   DeliveryZoneService,
+  DELIVERY_ZONE_QUOTE_FACTS_PORT,
+  PostgresDeliveryZoneStore,
   type DeliveryZoneListPort,
   type DeliveryZoneQuoteFactsPort,
   type DeliveryZoneUpsertPort,
@@ -368,4 +377,136 @@ test("deterministicQuoteId: any changed fact produces a different id (no Math.ra
 test("quoteForCapture: hostile inputs (unknown captureDraftId shape) are rejected as a request error", async () => {
   const service = serviceFor();
   await assert.rejects(service.quoteForCapture(principal, { ...quoteInput, captureDraftId: "not-a-uuid" }), code("request"));
+});
+
+// --- matchAddress ------------------------------------------------------------
+
+const matchInput = (address: { postalCode: string | null; locality: string }) => ({
+  schemaVersion: 1, restaurantId: scope.restaurantId, branchId: scope.branchId, address,
+});
+
+test("matchAddress: covered by postal code returns zone, fee in minor units and the ASAP window", async () => {
+  const result = await serviceFor().matchAddress(principal, matchInput({ postalCode: "83000", locality: "Otra" }));
+  assert.deepEqual(result, {
+    schemaVersion: 1, coverageStatus: "covered", zoneId, zoneName: "Centro", feeMinor: 2500, currency: "MXN",
+    promiseMinutes: 15, promiseStart: "2026-09-16T12:00:02.000Z", promiseEnd: "2026-09-16T12:15:02.000Z",
+    evaluatedAt: "2026-09-16T12:00:02.000Z",
+  });
+});
+
+test("matchAddress: covered by locality when the postal code does not match", async () => {
+  const result = await serviceFor().matchAddress(principal, matchInput({ postalCode: null, locality: "Hermosillo" }));
+  assert.equal(result.coverageStatus, "covered");
+  assert.equal(result.zoneId, zoneId);
+});
+
+test("matchAddress: uncovered address is not_covered with fee 0 and no zone", async () => {
+  const result = await serviceFor().matchAddress(principal, matchInput({ postalCode: "99999", locality: "Lejos" }));
+  assert.equal(result.coverageStatus, "not_covered");
+  assert.equal(result.zoneId, null);
+  assert.equal(result.zoneName, null);
+  assert.equal(result.feeMinor, 0);
+});
+
+test("matchAddress: zones of another branch never apply and the facts query uses the authorized scope", async () => {
+  const queried: string[] = [];
+  const service = serviceFor({
+    quoteFactsPort: { listActiveZonesForQuote: async (restaurantId, branchId) => {
+      queried.push(`${restaurantId}/${branchId}`);
+      return { schemaVersion: 1, scope, zones: [] };
+    } },
+  });
+  const result = await service.matchAddress(principal, matchInput({ postalCode: "83000", locality: "Hermosillo" }));
+  assert.equal(result.coverageStatus, "not_covered");
+  assert.deepEqual(queried, [`${scope.restaurantId}/${scope.branchId}`]);
+  const foreign = { ...matchInput({ postalCode: "83000", locality: "Hermosillo" }), branchId: "00000000-0000-4000-8000-000000000000" };
+  await assert.rejects(service.matchAddress(principal, foreign), code("authorization"));
+  assert.equal(queried.length, 1);
+});
+
+test("matchAddress: a zone row from another branch makes the read unavailable instead of leaking", async () => {
+  const service = serviceFor({
+    quoteFactsPort: { listActiveZonesForQuote: async () => ({ schemaVersion: 1, scope, zones: [{
+      zoneId, restaurantId: scope.restaurantId, branchId: "00000000-0000-4000-8000-000000000000",
+      name: "Ajena", postalCodes: ["83000"], localities: [], feeMinor: 100, currency: "MXN" }] }) },
+  });
+  await assert.rejects(service.matchAddress(principal, matchInput({ postalCode: "83000", locality: "X" })), code("unavailable"));
+});
+
+test("matchAddress: a cashier is authorized; a role with neither captures.read nor customers.read is denied", async () => {
+  const customersOnly = serviceFor({ roles: ["cashier"] });
+  assert.equal((await customersOnly.matchAddress(principal, matchInput({ postalCode: "83000", locality: "X" }))).coverageStatus, "covered");
+  await assert.rejects(
+    serviceFor({ roles: ["kitchen"] }).matchAddress(principal, matchInput({ postalCode: "83000", locality: "X" })),
+    code("authorization"),
+  );
+});
+
+test("matchAddress: hostile bodies are request errors", async () => {
+  const service = serviceFor();
+  await assert.rejects(service.matchAddress(principal, {}), code("request"));
+  await assert.rejects(service.matchAddress(principal, { ...matchInput({ postalCode: "83000", locality: "X" }), scheduledFor: null }), code("request"));
+});
+
+test("PostgresDeliveryZoneStore.listActiveZonesForQuote: real `{ result }` row feeds matchAddress", async () => {
+  const database: DatabaseClientPort = {
+    query: async () => ({ rows: [{ result: {
+      schemaVersion: 1, scope, zones: [{ zoneId, restaurantId: scope.restaurantId, branchId: scope.branchId,
+        name: "Centro", postalCodes: ["83000"], localities: [], feeMinor: 3500, currency: "MXN" }],
+    } }] }),
+  } as unknown as DatabaseClientPort;
+  const store = new PostgresDeliveryZoneStore(database);
+  const service = serviceFor({ quoteFactsPort: store });
+  const result = await service.matchAddress(principal, matchInput({ postalCode: "83000", locality: "X" }));
+  assert.equal(result.feeMinor, 3500);
+  const broken = new PostgresDeliveryZoneStore({ query: async () => ({ rows: [{ result: 1, extra: 2 }] }) } as unknown as DatabaseClientPort);
+  await assert.rejects(broken.listActiveZonesForQuote(scope.restaurantId, scope.branchId), code("unavailable"));
+});
+
+test("POST /delivery-zones/match: HTTP contract (401, 400, 200 no-store, 403, 503 sanitized)", async () => {
+  let roles: readonly MembershipRoleCode[] = ["cashier"];
+  let facts: () => Promise<unknown> = async () => ({ schemaVersion: 1, scope, zones: [{
+    zoneId, restaurantId: scope.restaurantId, branchId: scope.branchId,
+    name: "Centro", postalCodes: ["83000"], localities: [], feeMinor: 2500, currency: "MXN" }] });
+  const queries: string[] = [];
+  const module = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(DATABASE_CLIENT).useValue({ query: async (sql: string) => { queries.push(sql); throw new Error("unexpected database call"); } })
+    .overrideProvider(MembershipAuthorizationService).useValue(authorizationFor([{ get roles() { return roles; }, scope }]))
+    .overrideProvider(DELIVERY_ZONE_QUOTE_FACTS_PORT).useValue({ listActiveZonesForQuote: () => facts() })
+    .overrideProvider(MENU_CATALOG_PORT).useValue(catalogDouble())
+    .overrideProvider(BRANCH_OPERATIONAL_CONTEXT_PORT).useValue(branchContextDouble())
+    .overrideProvider(AUTH_PRINCIPAL_VERIFIER).useValue({ verifyAccessToken: async () => principal })
+    .compile();
+  const app = module.createNestApplication({ logger: false });
+  app.setGlobalPrefix("api/v1");
+  await app.listen(0, "127.0.0.1");
+  const url = `${await app.getUrl()}/api/v1/delivery-zones/match`;
+  const send = (body: unknown, authenticated = true) => fetch(url, {
+    method: "POST", body: JSON.stringify(body),
+    headers: { "content-type": "application/json", ...(authenticated ? { authorization: "Bearer delivery-match-fixture-token" } : {}) },
+  });
+  try {
+    const body = matchInput({ postalCode: "83000", locality: "Hermosillo" });
+    assert.equal((await send(body, false)).status, 401);
+    assert.equal((await send({})).status, 400);
+    const ok = await send(body);
+    assert.equal(ok.status, 200);
+    assert.equal(ok.headers.get("cache-control"), "private, no-store");
+    const json = await ok.json() as { coverageStatus: string; feeMinor: number; zoneName: string };
+    assert.equal(json.coverageStatus, "covered");
+    assert.equal(json.feeMinor, 2500);
+    assert.equal(json.zoneName, "Centro");
+    roles = ["kitchen"];
+    const denied = await send(body);
+    assert.equal(denied.status, 403);
+    assert.deepEqual(await denied.json(), { code: "ACTION_NOT_AUTHORIZED" });
+    roles = ["cashier"];
+    facts = async () => { throw new Error("secret connection string"); };
+    const down = await send(body);
+    assert.equal(down.status, 503);
+    assert.deepEqual(await down.json(), { code: "DELIVERY_ZONE_UNAVAILABLE" });
+    assert.deepEqual(queries, [], "match never reaches the database client directly (no capture_delivery_quotes write)");
+  } finally {
+    await app.close();
+  }
 });

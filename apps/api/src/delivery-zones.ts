@@ -3,6 +3,9 @@ import { types as nodeTypes } from "node:util";
 import { Inject, Injectable } from "@nestjs/common";
 import {
   parseDeliveryZoneListV1,
+  parseDeliveryZoneMatchRequestV1,
+  parseDeliveryZoneMatchResultV1,
+  type DeliveryZoneMatchResultV1,
   parseListDeliveryZonesQueryV1,
   parseRequestDeliveryQuoteCommandV1,
   parseUpsertDeliveryZoneCommandV1,
@@ -329,6 +332,78 @@ export class DeliveryZoneService {
       promiseEnd: quote.promiseEnd,
       expiresAt: quote.expiresAt,
       override: null,
+    });
+    if (result === undefined) throw unavailable();
+    return result;
+  }
+
+  /**
+   * Read-only coverage check for an address: zone, fee and ASAP promise window. Persists nothing
+   * and never touches capture_delivery_quotes; the binding quote remains `quoteForCapture`.
+   * Either `captures.read` (capture screen) or `customers.read` (customer screen) authorizes it.
+   */
+  public async matchAddress(principal: AuthenticatedPrincipal, input: unknown): Promise<DeliveryZoneMatchResultV1> {
+    const request = parseDeliveryZoneMatchRequestV1(input);
+    if (request === undefined) throw new DeliveryZoneApplicationError("request");
+    const requestedScope: DeliveryZoneBranchScopeV1 = { restaurantId: request.restaurantId, branchId: request.branchId };
+    let actorId: string;
+    let authorizedScope: BranchScope;
+    try {
+      let authorized;
+      try { authorized = await this.authorization.authorizeBranch(principal, requestedScope, "captures.read"); }
+      catch { authorized = await this.authorization.authorizeBranch(principal, requestedScope, "customers.read"); }
+      actorId = authorized.principal.actorId;
+      authorizedScope = authorized.scope;
+    } catch { throw new DeliveryZoneApplicationError("authorization"); }
+
+    let catalogState;
+    try { catalogState = await this.catalogs.read(actorId, authorizedScope); } catch { throw unavailable(); }
+    if (catalogState === "forbidden") throw new DeliveryZoneApplicationError("authorization");
+    if (catalogState.catalog === null) throw new DeliveryZoneApplicationError("conflict");
+    const currency = catalogState.catalog.currency;
+
+    const context = await this.branchContext.select(actorId, authorizedScope);
+    if (context === "forbidden") throw new DeliveryZoneApplicationError("authorization");
+
+    let rawZones: unknown;
+    try { rawZones = await this.quoteFactsPort.listActiveZonesForQuote(authorizedScope.restaurantId, authorizedScope.branchId); }
+    catch { throw unavailable(); }
+    if (exactRecord(rawZones, ["status"]) !== undefined) throw unavailable();
+    const zoneFacts = parseActiveQuoteZoneFacts(rawZones, authorizedScope);
+    if (zoneFacts === undefined) throw unavailable();
+
+    const zones: DeliveryZone[] = [];
+    for (const fact of zoneFacts) {
+      try {
+        zones.push(createDeliveryZone({
+          zoneId: fact.zoneId, restaurantId: fact.restaurantId, branchId: fact.branchId, name: fact.name,
+          feeMinor: new Money(fact.feeMinor, fact.currency), postalCodes: fact.postalCodes, localities: fact.localities,
+        }));
+      } catch { throw unavailable(); }
+    }
+
+    const evaluatedAt = this.clock.now();
+    let quote;
+    try {
+      quote = quoteDelivery({
+        quoteId: "match", restaurantId: authorizedScope.restaurantId, branchId: authorizedScope.branchId,
+        captureDraftId: "match", addressSnapshotRef: "match", address: request.address, zones,
+        currency, timeZone: context.timeZone, quotedAt: evaluatedAt, scheduledFor: null, version: 1,
+      });
+    } catch { throw unavailable(); }
+    const matched = quote.zoneId === null ? undefined : zones.find((zone) => zone.zoneId === quote.zoneId);
+
+    const result = parseDeliveryZoneMatchResultV1({
+      schemaVersion: 1,
+      coverageStatus: quote.coverageStatus,
+      zoneId: quote.zoneId,
+      zoneName: matched?.name ?? null,
+      feeMinor: quote.feeMinor.amountMinor,
+      currency: quote.currency,
+      promiseMinutes: (new Date(quote.promiseEnd).getTime() - new Date(quote.promiseStart).getTime()) / 60_000,
+      promiseStart: quote.promiseStart,
+      promiseEnd: quote.promiseEnd,
+      evaluatedAt,
     });
     if (result === undefined) throw unavailable();
     return result;
