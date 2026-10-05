@@ -7,8 +7,17 @@ import { customerOperations, requestCustomerDirectory } from "../../../lib/custo
 import { requestCustomerOrder, type CustomerOrderOperation } from "../../../lib/customer-order-history";
 import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
 import { getMenuCatalog } from "../../../lib/menu-catalog";
+import { quoteLinePrice } from "../../../lib/capture-quote";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
-import type { BranchScope, CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkspaceV5, CaptureWorkTrayResultV1, CaptureWorkTrayResultV2, RenewCaptureLeaseResultV1, CustomerDirectoryDetailV1, CustomerDirectorySearchResultV1, CustomerRecentOrderListV1, CustomerRepeatOrderCaptureResultV1, CustomerRepeatOrderPreviewV1, MenuCatalogStateV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
+import { parseCaptureLineQuoteRequestV1, type BranchScope, type CaptureLineQuoteResultV1, type CaptureAssignmentDirectoryV1, type CaptureDeliveryInstructionSuggestionsV1, type CaptureMutationResultV1, type CaptureWorkspaceV3, type CaptureWorkspaceV4, type CaptureWorkspaceV5, type CaptureWorkTrayResultV1, type CaptureWorkTrayResultV2, type RenewCaptureLeaseResultV1, type CustomerDirectoryDetailV1, type CustomerDirectorySearchResultV1, type CustomerRecentOrderListV1, type CustomerRepeatOrderCaptureResultV1, type CustomerRepeatOrderPreviewV1, type MenuCatalogStateV1, type SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
+
+export async function quoteCaptureLineAction(input: unknown): Promise<CaptureRequestResult<CaptureLineQuoteResultV1>> {
+ const request=parseCaptureLineQuoteRequestV1(input);if(request===undefined)return{ok:false,error:"invalid"};
+ const supabase=await createServerSupabaseClient();const {data:{session}}=await supabase.auth.getSession();if(session===null)return{ok:false,error:"denied"};
+ const scope=parseBranchPreference((await cookies()).get(BRANCH_PREFERENCE_COOKIE)?.value);if(scope===undefined||request.scope.restaurantId!==scope.restaurantId||request.scope.branchId!==scope.branchId)return{ok:false,error:"denied"};
+ const env=getServerEnv();const memberships=await listMemberships(session.access_token,env.apiBaseUrl);if(memberships===undefined||findMembership(memberships.memberships,scope)===undefined||await authorizeBranch(session.access_token,env.apiBaseUrl,scope)===undefined)return{ok:false,error:"denied"};
+ return quoteLinePrice(session.access_token,env.apiBaseUrl,request);
+}
 export type CaptureWorkspaceOperation=CaptureOperation|CustomerOrderOperation|"search"|"detail";
 export type CaptureWorkspaceResult=CaptureRequestResult<CaptureAssignmentDirectoryV1|CaptureDeliveryInstructionSuggestionsV1|CaptureMutationResultV1|CaptureWorkspaceV3|CaptureWorkspaceV4|CaptureWorkspaceV5|CaptureWorkTrayResultV1|CaptureWorkTrayResultV2|RenewCaptureLeaseResultV1|SetCaptureDeliveryInstructionsResultV1|CustomerDirectorySearchResultV1|CustomerDirectoryDetailV1|CustomerRecentOrderListV1|CustomerRepeatOrderPreviewV1|CustomerRepeatOrderCaptureResultV1>&{readonly command?:unknown};
 export async function captureWorkspaceAction(operation:CaptureWorkspaceOperation,input:unknown):Promise<CaptureWorkspaceResult>{

@@ -8,7 +8,7 @@ import { parseCaptureWorkTrayRequestV2, parseRenewCaptureLeaseCommandV1, parseAu
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { AUTH_PRINCIPAL_VERIFIER, SupabaseAuthGuard } from "./auth/authentication.js";
 import type { CaptureOrderMaterialization } from "./capture-repeat-order-plan.js";
-import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteInvalidError, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentStaleError, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureLeaseTakenError, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureDeliveryQuoteComputationPort, type CaptureDeliveryQuoteEnvelopeV1, type CaptureDeliveryQuotePort, type CaptureNoSalePort, type CapturePaymentIntentPort, type CaptureSelectionPlanPort } from "./captures.js";
+import { CAPTURE_ASSIGNMENT_DIRECTORY_PORT, CAPTURE_ATTENTION_PORT, CAPTURE_CONFIRMATION_PORT, CAPTURE_CREATION_PORT, CAPTURE_CUSTOMER_PORT, CAPTURE_DELIVERY_INSTRUCTIONS_PORT, CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, CAPTURE_DELIVERY_QUOTE_PORT, CAPTURE_FULFILLMENT_PORT, CAPTURE_NO_SALE_PORT, CAPTURE_PAYMENT_INTENT_PORT, CAPTURE_SELECTION_PLAN_PORT, CAPTURE_TRAY_PORT, CaptureAssignmentDirectoryService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteInvalidError, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentStaleError, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureLeaseTakenError, CaptureLineQuoteRejectedError, CaptureApplicationError, CaptureAttentionService, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService, PostgresCaptureCreator, type CaptureCreationPort, type CaptureConfirmationPort, type CaptureCustomerPort, type CaptureAttentionPort, type CaptureDeliveryQuoteComputationPort, type CaptureDeliveryQuoteEnvelopeV1, type CaptureDeliveryQuotePort, type CaptureNoSalePort, type CapturePaymentIntentPort, type CaptureSelectionPlanPort } from "./captures.js";
 import { CapturesController } from "./captures.controller.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
 
@@ -2681,4 +2681,215 @@ test("capture delivery quote and payment intent reject a foreign scope before to
   assert.ok(intentCommand);
   await assert.rejects(deliveryQuoteService.requestQuote(principal, quoteCommand), code("authorization"));
   await assert.rejects(paymentIntentService.setPaymentIntent(principal, intentCommand), code("authorization"));
+});
+
+const quoteSauceGroup = "8c3f4e50-6172-4c83-8d94-b5c6d7e8f9a0";
+const quoteSauceOption = "9d405f61-7283-4d94-9ea5-c6d7e8f90b01";
+const quotePlainProductId = "ec5e7c30-edac-4b79-bf8c-e363b041c600";
+const lineQuoteCatalog: MenuCatalogV1 = {
+  ...halvesCatalog,
+  products: [...halvesCatalog.products, { ...selectionCatalog.products[0]!, productId: quotePlainProductId, name: "Tacos simples", sku: "TACO-2", displayOrder: 1 }],
+  modifierGroups: [...halvesCatalog.modifierGroups, {
+    active: true, displayOrder: 2, groupId: quoteSauceGroup, maximumQuantity: 5, minimumQuantity: 0, name: "Salsas", productId: quotePlainProductId,
+    options: [{ active: true, imagePath: null, maximumQuantity: null, name: "Salsa roja", optionId: quoteSauceOption, unitPriceMinor: 700 }],
+  }],
+};
+
+function lineQuoteRequest(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 1, scope: validCommand.scope, catalogVersion: lineQuoteCatalog.catalogVersion,
+    productId: overrides.variantId === undefined || overrides.variantId === null ? quotePlainProductId : halvesProductId,
+    variantId: null, modifierGroups: [], fraction: null, quantity: 1, ...overrides,
+  };
+}
+const halvesFraction = (flavorB: string, extrasA: string[] = [], excludedA: string[] = []) => ({
+  geometry: "halves",
+  slots: [
+    { excludedIngredientIds: excludedA, extraOptionIds: extrasA, flavorOptionId: halvesFlavorA, fraction: "half-a" },
+    { excludedIngredientIds: [], extraOptionIds: [], flavorOptionId: flavorB, fraction: "half-b" },
+  ],
+});
+
+function lineQuoteService(roles: readonly MembershipRoleCode[] = ["cashier"], catalog: MenuCatalogV1 = lineQuoteCatalog) {
+  let reads = 0;
+  const service = new CaptureService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles, scope: validCommand.scope }),
+  }), { createDraft: async () => { throw new Error("must not create"); } }, noConfirmationPort, {
+    read: async () => { reads += 1; return { schemaVersion: 1, scope: validCommand.scope, catalog }; },
+    save: async () => { throw new Error("must not save a catalog"); },
+  });
+  return { service, reads: () => reads };
+}
+
+test("capture line quote prices whole lines with modifiers, a size, and halves exactly like the server", async () => {
+  const { service } = lineQuoteService();
+  const modifiers = await service.quoteLinePrice(principal, lineQuoteRequest({
+    quantity: 3, modifierGroups: [{ groupId: quoteSauceGroup, selections: [{ optionId: quoteSauceOption, quantity: 2 }] }],
+  }));
+  assert.equal(modifiers.currency, "MXN");
+  assert.equal(modifiers.geometry, "whole");
+  assert.equal(modifiers.unitPriceMinor, 4_500);
+  assert.equal(modifiers.lineTotalMinor, 3 * (4_500 + 2 * 700));
+  assert.deepEqual(modifiers.modifiers, [
+    { groupId: quoteSauceGroup, name: "Salsa roja", optionId: quoteSauceOption, quantity: 2, unitPriceMinor: 700 },
+  ]);
+  assert.deepEqual(modifiers.fractionBreakdown, []);
+
+  const sized = await service.quoteLinePrice(principal, lineQuoteRequest({ variantId: halvesVariantId, quantity: 2 }));
+  assert.equal(sized.unitPriceMinor, 15_000);
+  assert.equal(sized.lineTotalMinor, 30_000);
+
+  const halves = await service.quoteLinePrice(principal, lineQuoteRequest({
+    variantId: halvesVariantId, quantity: 2, fraction: halvesFraction(halvesFlavorB, [halvesExtra], ["cebolla"]),
+  }));
+  // greater half 17_000 + one extra on half A at 50 % rounded up (2_501 -> 1_251).
+  assert.equal(halves.geometry, "halves");
+  assert.equal(halves.unitPriceMinor, 17_000);
+  assert.equal(halves.lineTotalMinor, 2 * (17_000 + 1_251));
+  assert.deepEqual(halves.fractionBreakdown.map((half) => [half.fraction, half.flavorName, half.amountMinor, half.extras, half.exclusions]), [
+    ["half-a", "Pepperoni", 15_000, ["Queso extra"], ["cebolla"]],
+    ["half-b", "Hawaiana", 17_000, [], []],
+  ]);
+  assert.deepEqual(halves.modifiers, []);
+});
+
+test("capture line quote returns the chargeable tax-inclusive total for a tax-excluded product and admits plan-sized quantities", async () => {
+  const { service } = lineQuoteService(["cashier"], taxExcludedCatalog);
+  const taxed = await service.quoteLinePrice(principal, {
+    ...lineQuoteRequest({ catalogVersion: taxExcludedCatalog.catalogVersion }), productId: taxExcludedCatalog.products[0]!.productId,
+  });
+  assert.equal(taxed.subtotalMinor, 10_000);
+  assert.equal(taxed.taxMinor, 1_600);
+  assert.equal(taxed.lineTotalMinor, 11_600);
+  const bulk = await service.quoteLinePrice(principal, {
+    ...lineQuoteRequest({ catalogVersion: taxExcludedCatalog.catalogVersion, quantity: 500 }),
+    productId: taxExcludedCatalog.products[0]!.productId,
+  });
+  assert.equal(bulk.subtotalMinor, 5_000_000);
+  assert.equal(bulk.lineTotalMinor, 5_800_000);
+});
+
+test("capture line quote answers 409 for a stale catalogVersion or an invalid line, 403 without permission, 400 for a bad body", async () => {
+  const { service, reads } = lineQuoteService();
+  const rejected = (reason: string) => (error: unknown) => error instanceof CaptureLineQuoteRejectedError && error.reason === reason;
+  await assert.rejects(service.quoteLinePrice(principal, lineQuoteRequest({ catalogVersion: validCommand.deviceId })),
+    rejected("catalog_version_mismatch"));
+  await assert.rejects(service.quoteLinePrice(principal, lineQuoteRequest({ variantId: halvesExtra })), rejected("line_invalid"));
+  await assert.rejects(service.quoteLinePrice(principal, lineQuoteRequest({ variantId: halvesVariantId,
+    fraction: halvesFraction(halvesFlavorOff) })), rejected("line_invalid"));
+  await assert.rejects(service.quoteLinePrice(principal, lineQuoteRequest({ productId: validCommand.deviceId })), rejected("line_invalid"));
+  const readsBefore = reads();
+
+  const denied = lineQuoteService(["kitchen"]);
+  await assert.rejects(denied.service.quoteLinePrice(principal, lineQuoteRequest()), code("authorization"));
+  assert.equal(denied.reads(), 0);
+  await assert.rejects(service.quoteLinePrice(principal, lineQuoteRequest({ quantity: 0 })), code("request"));
+  await assert.rejects(service.quoteLinePrice(principal, { ...lineQuoteRequest(), extra: true }), code("request"));
+  assert.equal(reads(), readsBefore);
+});
+
+test("capture line quote returns the same figures as the selection plan projection for the same line", async () => {
+  const { service } = lineQuoteService();
+  const lines = [
+    { quantity: 3, variantId: null, fraction: null,
+      modifierGroups: [{ groupId: quoteSauceGroup, selections: [{ optionId: quoteSauceOption, quantity: 2 }] }] },
+    { quantity: 2, variantId: halvesVariantId, fraction: null, modifierGroups: [] },
+    { quantity: 2, variantId: halvesVariantId, fraction: halvesFraction(halvesFlavorB, [halvesExtra], ["cebolla"]), modifierGroups: [] },
+  ];
+  for (const line of lines) {
+    const quote = await service.quoteLinePrice(principal, lineQuoteRequest(line));
+    const { fraction, ...rest } = line;
+    const plan = parseReplaceCaptureSelectionPlanCommandV1({
+      ...selectionPlanCommand!,
+      plan: { ...selectionPlanCommand!.plan, catalogVersion: lineQuoteCatalog.catalogVersion, lines: [{
+        lineId: selectionPlanCommand!.plan.lines[0]!.lineId, note: null, ...rest,
+        productId: line.variantId === null ? quotePlainProductId : halvesProductId,
+        ...(fraction === null ? {} : { fraction }),
+      }] },
+    });
+    assert.ok(plan);
+    const workspaceRecord = {
+      schemaVersion: 5, deliveryQuote: null, paymentIntent: null, paymentIntentAppliedCaptureVersion: null,
+      paymentIntentBasisFingerprint: null, detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
+      customerSnapshot: null, fulfillmentSnapshot: null, repeatOrderPlan: null,
+      selectionPlan: { schemaVersion: 1, catalogVersion: lineQuoteCatalog.catalogVersion, appliedCaptureVersion: 2, lineCount: 1 },
+    };
+    const planService = new CaptureSelectionPlanService(new MembershipAuthorizationService({
+      findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+    }), {
+      probeReplaceSelectionPlan: async () => ({ status: "pending" }),
+      replaceSelectionPlan: async () => ({ status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } }),
+    }, { createDraft: async () => { throw new Error("must not create"); }, readWorkspaceV5: async () => workspaceRecord }, {
+      read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: lineQuoteCatalog }),
+      save: async () => { throw new Error("must not save a catalog"); },
+    }, { ...noConfirmationPort, readSelectionPlan: async () => ({ status: "ok", plan: plan.plan, appliedCaptureVersion: 2 }) });
+    const projection = (await planService.replace(principal, plan)).selectionProjection;
+    const projected = projection?.lines[0];
+    assert.ok(projection && projected);
+    assert.equal(quote.unitPriceMinor, projected.unitPriceMinor);
+    assert.equal(quote.subtotalMinor, projected.lineTotalMinor);
+    assert.equal(quote.lineTotalMinor, projection.itemsTotalMinor);
+    assert.equal(quote.subtotalMinor + quote.taxMinor, quote.lineTotalMinor);
+    assert.deepEqual(quote.modifiers, projected.modifiers);
+    assert.deepEqual(quote.fractionBreakdown, projected.halves ?? []);
+  }
+});
+
+test("capture line quote HTTP route validates, authorizes, prices and maps 409 without any write", async () => {
+  let role: MembershipRoleCode = "cashier";
+  // Nest probes lifecycle hooks on providers, so unused ports are plain empty objects: any call would throw.
+  const unused = { useValue: {} };
+  const module = await Test.createTestingModule({ controllers: [CapturesController], providers: [
+    CaptureService, CaptureAttentionService, CaptureCustomerService, CaptureFulfillmentService,
+    CaptureDeliveryInstructionsService, CaptureConfirmationService, CaptureSelectionPlanService,
+    CaptureDeliveryQuoteService, CapturePaymentIntentService, CaptureTrayService, CaptureAssignmentDirectoryService, CaptureNoSaleService,
+    { provide: CAPTURE_DELIVERY_QUOTE_PORT, ...unused },
+    { provide: CAPTURE_DELIVERY_QUOTE_COMPUTATION_PORT, ...unused },
+    { provide: CAPTURE_PAYMENT_INTENT_PORT, ...unused },
+    { provide: CAPTURE_CREATION_PORT, ...unused },
+    { provide: CAPTURE_ATTENTION_PORT, ...unused },
+    { provide: CAPTURE_CUSTOMER_PORT, ...unused },
+    { provide: CAPTURE_FULFILLMENT_PORT, ...unused },
+    { provide: CAPTURE_DELIVERY_INSTRUCTIONS_PORT, ...unused },
+    { provide: CAPTURE_CONFIRMATION_PORT, ...unused },
+    { provide: CAPTURE_SELECTION_PLAN_PORT, ...unused },
+    { provide: CAPTURE_TRAY_PORT, ...unused },
+    { provide: CAPTURE_ASSIGNMENT_DIRECTORY_PORT, ...unused },
+    { provide: CAPTURE_NO_SALE_PORT, ...unused },
+    { provide: MENU_CATALOG_PORT, useValue: {
+      read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: lineQuoteCatalog }),
+      save: async () => { throw new Error("must not save a catalog"); } } },
+    { provide: MembershipAuthorizationService, useValue: new MembershipAuthorizationService({
+      findActiveMembership: async () => ({ roles: [role], scope: validCommand.scope }),
+    }) },
+    { provide: AUTH_PRINCIPAL_VERIFIER, useValue: { verifyAccessToken: async () => principal } },
+    { provide: APP_GUARD, useClass: SupabaseAuthGuard },
+  ] }).compile();
+  const app = module.createNestApplication({ logger: false });
+  app.setGlobalPrefix("api/v1");
+  await app.listen(0, "127.0.0.1");
+  const url = `${await app.getUrl()}/api/v1/captures/line-quote`;
+  const send = (body: unknown, authenticated = true) => fetch(url, { method: "POST", body: JSON.stringify(body),
+    headers: { "content-type": "application/json", ...(authenticated ? { authorization: "Bearer test-capture-access-token" } : {}) } });
+  try {
+    assert.equal((await send(lineQuoteRequest(), false)).status, 401);
+    assert.equal((await send(lineQuoteRequest({ quantity: 1_001 }))).status, 400);
+    const ok = await send(lineQuoteRequest({ quantity: 2 }));
+    assert.equal(ok.status, 200);
+    assert.equal(ok.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await ok.json(), {
+      schemaVersion: 1, catalogVersion: lineQuoteCatalog.catalogVersion, currency: "MXN", unitPriceMinor: 4_500,
+      lineTotalMinor: 9_000, subtotalMinor: 9_000, taxMinor: 0, modifiers: [], geometry: "whole", fractionBreakdown: [],
+    });
+    const stale = await send(lineQuoteRequest({ catalogVersion: validCommand.deviceId }));
+    assert.equal(stale.status, 409);
+    assert.deepEqual(await stale.json(), { code: "CAPTURE_LINE_QUOTE_REJECTED", reason: "catalog_version_mismatch" });
+    const invalid = await send(lineQuoteRequest({ variantId: halvesExtra }));
+    assert.equal(invalid.status, 409);
+    assert.deepEqual(await invalid.json(), { code: "CAPTURE_LINE_QUOTE_REJECTED", reason: "line_invalid" });
+    role = "kitchen";
+    const denied = await send(lineQuoteRequest());
+    assert.equal(denied.status, 403);
+    assert.deepEqual(await denied.json(), { code: "ACTION_NOT_AUTHORIZED" });
+  } finally { await app.close(); }
 });

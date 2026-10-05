@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { LineFractionHalfV1, LineFractionV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
+import { CAPTURE_SELECTION_LINE_MAX_QUANTITY, type BranchScope, type CaptureLineQuoteRequestV1, type CaptureLineQuoteResultV1, type LineFractionHalfV1, type LineFractionV1, type MenuModifierGroupV1, type MenuProductV1 } from "@super-restaurant/shared-types";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
+import { visibleLineEstimate } from "../../../lib/capture-quote";
+import type { CaptureRequestResult } from "../../../lib/capture-workspace";
 import { buildLineFraction, estimateHalvesUnitMinor, halfExtraPriceMinor, halfLabel, halvesDraftFromFraction,
   HALF_MAX_EXTRAS, pickHalfFlavor, toggleHalfEntry, validateHalvesDraft, variantAllowsHalves,
   type HalvesDraft } from "../../../lib/line-halves";
@@ -17,6 +19,9 @@ const optionSelected = "border-accent bg-accent-soft font-semibold text-accent";
 
 interface ProductSheetProps {
   readonly product: MenuProductV1;
+  readonly scope?: BranchScope;
+  readonly catalogVersion?: string | null;
+  readonly quoteLine?: (input: CaptureLineQuoteRequestV1) => Promise<CaptureRequestResult<CaptureLineQuoteResultV1>>;
   readonly groups: readonly MenuModifierGroupV1[];
   readonly currency: string;
   readonly busy: boolean;
@@ -39,7 +44,7 @@ interface ProductSheetProps {
 const MAX_NOTE_LENGTH = 200;
 
 /** In-app "hoja" for choosing a product's modifier groups; never uses `window.prompt`. */
-export function ProductSheet({ product, groups, currency, busy, busyLabel = "Calculando…", addLabel, lockSelection = false, closeDisabled = false, showNote = true, showVariants = false, confirmedTotalMinor, initialLine, initialVariantId, error, onClose, onAdd }: ProductSheetProps) {
+export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups, currency, busy, busyLabel = "Calculando…", addLabel, lockSelection = false, closeDisabled = false, showNote = true, showVariants = false, confirmedTotalMinor, initialLine, initialVariantId, error, onClose, onAdd }: ProductSheetProps) {
   const supabaseUrl = useMenuImageBaseUrl();
   const confirmed = confirmedTotalMinor !== undefined;
   const [quantity, setQuantity] = useState(initialLine?.quantity ?? 1);
@@ -57,6 +62,8 @@ export function ProductSheet({ product, groups, currency, busy, busyLabel = "Cal
   const [splitChosen, setSplitChosen] = useState(initialLine?.fraction !== undefined);
   const [halves, setHalves] = useState<HalvesDraft>(() => halvesDraftFromFraction(initialLine?.fraction));
   const closeRef = useRef<HTMLButtonElement>(null);
+  const [serverEstimate, setServerEstimate] = useState<{ readonly key: string; readonly value: CaptureLineQuoteResultV1 } | null>(null);
+  const [catalogConflictKey, setCatalogConflictKey] = useState<string | null>(null);
 
   useEffect(() => { closeRef.current?.focus(); }, []);
   useEffect(() => {
@@ -114,6 +121,32 @@ export function ProductSheet({ product, groups, currency, busy, busyLabel = "Cal
     : null;
   const estimatedMinor = halvesActive ? (halvesUnitMinor === null ? null : halvesUnitMinor * quantity) : wholeEstimateMinor;
   const halvesMissing = halvesActive && !halvesValidation.valid;
+  const quoteRequest: CaptureLineQuoteRequestV1 | null = scope !== undefined && catalogVersion != null && quoteLine !== undefined && allValid && !sizeMissing && !halvesMissing
+    && estimatedMinor !== null && quantity <= CAPTURE_SELECTION_LINE_MAX_QUANTITY
+    ? { schemaVersion: 1, scope, catalogVersion, productId: product.productId, variantId,
+      modifierGroups: groupDrafts, fraction: lineFraction, quantity }
+    : null;
+  const quoteKey = quoteRequest === null ? null : JSON.stringify(quoteRequest);
+  const visibleEstimate = visibleLineEstimate(estimatedMinor, quoteKey, serverEstimate);
+
+  useEffect(() => {
+    if (quoteKey === null || quoteLine === undefined) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      const request = JSON.parse(quoteKey) as CaptureLineQuoteRequestV1;
+      void quoteLine(request).then((result) => {
+        if (!active) return;
+        if (result.ok) {
+          setServerEstimate({ key: quoteKey, value: result.value });
+          setCatalogConflictKey(null);
+        } else if (result.error === "conflict" && result.code === "catalog_version_mismatch") {
+          setServerEstimate(null);
+          setCatalogConflictKey(quoteKey);
+        }
+      }).catch(() => { /* Local estimate stays visible when the server is unavailable. */ });
+    }, 300);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [quoteKey, quoteLine]);
 
   return <div className="fixed inset-0 z-20 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
     role="dialog" aria-modal="true" aria-labelledby="product-sheet-title"
@@ -199,9 +232,12 @@ export function ProductSheet({ product, groups, currency, busy, busyLabel = "Cal
           <span className="text-xs text-text-muted">{note.length}/{MAX_NOTE_LENGTH}</span>
         </div>}
       </div>
-      <p className="px-4 py-2 text-sm font-semibold" role="status">
-        Estimado: {estimatedMinor === null ? "se confirma al agregar" : formatMinorUnits(estimatedMinor, currency)}
-      </p>
+      <div className="px-4 py-2" role="status">
+        <p className="text-sm font-semibold">{visibleEstimate.label}: {visibleEstimate.minor === null ? "se confirma al agregar" : formatMinorUnits(visibleEstimate.minor, currency)}</p>
+        {visibleEstimate.taxMinor !== null && visibleEstimate.taxMinor > 0 &&
+          <p className="text-xs text-text-muted">Incluye IVA {formatMinorUnits(visibleEstimate.taxMinor, currency)}</p>}
+        {quoteKey !== null && catalogConflictKey === quoteKey && <p className="text-xs text-error">El menú cambió, recarga.</p>}
+      </div>
       {error && <p role="alert" className="mx-4 rounded-lg bg-error-bg p-3 text-sm">{error}</p>}
       {confirmed && <p role="status" aria-live="polite" className="mx-4 rounded-lg bg-success-bg px-3 py-2 text-sm font-semibold text-success">
         {confirmedTotalMinor === null ? (initialLine ? "Guardado" : "Agregado") : `${initialLine ? "Guardado" : "Agregado"} · ${formatMinorUnits(confirmedTotalMinor, currency)}`}
@@ -211,8 +247,8 @@ export function ProductSheet({ product, groups, currency, busy, busyLabel = "Cal
           <button type="button" className={`${button} text-xl`} aria-label="Menos" disabled={busy || confirmed || lockSelection || quantity <= 1}
             onClick={() => setQuantity((current) => Math.max(1, current - 1))}>−</button>
           <span className="min-w-9 text-center text-lg font-bold">{quantity}</span>
-          <button type="button" className={`${button} text-xl`} aria-label="Más" disabled={busy || confirmed || lockSelection}
-            onClick={() => setQuantity((current) => current + 1)}>+</button>
+          <button type="button" className={`${button} text-xl`} aria-label="Más" disabled={busy || confirmed || lockSelection || quantity >= CAPTURE_SELECTION_LINE_MAX_QUANTITY}
+            onClick={() => setQuantity((current) => Math.min(CAPTURE_SELECTION_LINE_MAX_QUANTITY, current + 1))}>+</button>
         </div>
         <span className="grow" />
         <button type="button" className="min-h-11 min-w-11 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50" disabled={busy || confirmed || !allValid || sizeMissing || halvesMissing}

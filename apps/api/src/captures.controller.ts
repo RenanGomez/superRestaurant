@@ -2,10 +2,10 @@ import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException,
   Header, HttpCode, Inject, NotFoundException, Post, Req, ServiceUnavailableException,
 } from "@nestjs/common";
-import type { CaptureAssignmentDirectoryV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkspaceV5, CaptureWorkTrayResultV1, CaptureWorkTrayResultV2, RenewCaptureLeaseResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
+import type { CaptureAssignmentDirectoryV1, CaptureLineQuoteResultV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkspaceV5, CaptureWorkTrayResultV1, CaptureWorkTrayResultV2, RenewCaptureLeaseResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
-import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteInvalidError, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentStaleError, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureLeaseTakenError, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
+import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteInvalidError, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentStaleError, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureLeaseTakenError, CaptureLineQuoteRejectedError, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
 
 @Controller("captures")
 export class CapturesController {
@@ -136,6 +136,13 @@ export class CapturesController {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.deliveryQuote.requestQuote(principal, body));
   }
+  @Post("line-quote")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async quoteLinePrice(@Req() request: unknown, @Body() body: unknown): Promise<CaptureLineQuoteResultV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.captures.quoteLinePrice(principal, body));
+  }
   @Post("payment-intent")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
@@ -201,6 +208,9 @@ export class CapturesController {
       }
       if (error instanceof CapturePaymentIntentUnpricedError) {
         throw new ConflictException({ code: "CAPTURE_PAYMENT_INTENT_UNPRICED" });
+      }
+      if (error instanceof CaptureLineQuoteRejectedError) {
+        throw new ConflictException({ code: "CAPTURE_LINE_QUOTE_REJECTED", reason: error.reason });
       }
       if (error instanceof CaptureDeliveryQuoteInvalidError) {
         throw new ConflictException({ code: "CAPTURE_DELIVERY_QUOTE_INVALID", reason: error.reason });

@@ -46,6 +46,8 @@
     "src/lib/capture-workspace.test.ts",
     "src/lib/capture-selection.ts",
     "src/lib/capture-selection.test.ts",
+    "src/lib/capture-quote.ts",
+    "src/lib/capture-quote.test.ts",
     "src/lib/line-halves.ts",
     "src/lib/line-halves.test.ts",
     "src/lib/capture-payment.ts",
