@@ -67,7 +67,8 @@ const collectPaymentSql = "select app_private.collect_simple_payment($1::uuid,$2
 const closeRegisterSql = "select app_private.close_cash_register($1::uuid,$2::jsonb,$3::jsonb) as result";
 const replayFinancialCommandSql = "select app_private.replay_financial_command($1::uuid,$2::text,$3::jsonb) as result";
 
-export type FinancialApplicationErrorCode = "authorization" | "conflict" | "not_found" | "request" | "unavailable";
+export type FinancialApplicationErrorCode =
+  | "authorization" | "conflict" | "delivery_settle_required" | "not_found" | "request" | "unavailable";
 
 export class FinancialApplicationError extends Error {
   public constructor(public readonly code: FinancialApplicationErrorCode) {
@@ -148,8 +149,9 @@ export interface PersistPaymentInput {
   readonly register: CashRegister;
 }
 
-export type FinancialMutationResult<T> = T | "conflict" | "forbidden";
-export type FinancialReplayResult<T> = FinancialMutationResult<T> | "missing";
+/** `delivery_settle_required`: the Order has an active delivery, so cash must be settled through /deliveries/settle. */
+export type FinancialMutationResult<T> = T | "conflict" | "delivery_settle_required" | "forbidden";
+export type FinancialReplayResult<T> = T | "conflict" | "forbidden" | "missing";
 export type FinancialReadResult<T> = FinancialReplayResult<T>;
 
 export interface FinancialPersistencePort {
@@ -270,7 +272,9 @@ export class PostgresFinancialPersistenceAdapter implements FinancialPersistence
   ): Promise<FinancialReplayResult<T>> {
     const raw = await this.call(replayFinancialCommandSql, [actorId, operation, JSON.stringify(command)]);
     if (raw === null) return "missing";
-    return parseMutation(raw, parser);
+    const parsed = parseMutation(raw, parser);
+    if (parsed === "delivery_settle_required") throw unavailable();
+    return parsed;
   }
 
   private async call(sql: string, parameters: readonly unknown[]): Promise<unknown> {
@@ -575,6 +579,7 @@ export class FinancialService {
     let result: FinancialMutationResult<T>;
     try { result = await operation(); } catch { throw unavailable(); }
     if (result === "forbidden") throw applicationError("authorization");
+    if (result === "delivery_settle_required") throw applicationError("delivery_settle_required");
     if (result === "conflict") throw applicationError("conflict");
     return result;
   }
@@ -608,6 +613,11 @@ function auditContext(command: CollectPaymentCommandV1, actorId: string) {
 type FinancialAuditCommand = OpenCashRegisterCommandV1 | CollectPaymentCommandV1 | CloseCashRegisterCommandV1;
 
 function parseMutation<T>(raw: unknown, parser: (value: unknown) => T | undefined): FinancialMutationResult<T> {
+  const coded = exactRecord(raw, ["status", "code"]);
+  if (coded !== undefined) {
+    if (own(coded, "status") === "conflict" && own(coded, "code") === "DELIVERY_SETTLE_REQUIRED") return "delivery_settle_required";
+    throw unavailable();
+  }
   const minimal = exactRecord(raw, ["status"]);
   if (minimal !== undefined) {
     const status = own(minimal, "status");

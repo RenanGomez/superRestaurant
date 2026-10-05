@@ -65,6 +65,8 @@ export class BranchMembersService {
     if (request === undefined) throw new BranchMembersError("request");
     let actorId: string;
     try {
+      // memberships.read is enforced here only (documented P3): the SQL reader requires an active branch
+      // membership and trusts this permission gate, like the other read-only branch directories.
       actorId = (await this.authorization.authorizeBranch(principal, request.scope, "memberships.read")).principal.actorId;
     } catch { throw new BranchMembersError("authorization"); }
     let raw: unknown;

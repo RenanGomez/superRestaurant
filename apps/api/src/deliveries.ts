@@ -17,6 +17,8 @@ import {
   type BranchScope,
   type OrderDeliveryResultV1,
   type OrderDeliveryV1,
+  type OrderFulfillmentSnapshotV1,
+  type OrderFulfillmentSnapshotV2,
   type PaymentCollectionSummaryV1,
   type RbacPermissionCode,
   type SettleDeliveryCommandV1,
@@ -159,7 +161,9 @@ export class DeliveryService {
       throw unavailable();
     }
     const items: BranchDeliveryItemV1[] = [];
-    for (const row of rows) items.push(projectItem(row, request.scope, canReadCustomers));
+    // P3 (documented): an actor that is both courier and a customers.read role keeps the masked projection of
+    // customers.read; the full courier projection applies only to a courier-only actor on their own rows.
+    for (const row of rows) items.push(projectItem(row, request.scope, canReadCustomers, actorId, roles.includes("courier")));
     const parsed = parseBranchDeliveriesV1({ items, schemaVersion: 1, scope: request.scope });
     if (parsed === undefined) throw unavailable();
     return parsed;
@@ -230,6 +234,8 @@ export class DeliveryService {
     } catch (error: unknown) { throw fromFinancial(error); }
     const tip = command.tipMinor ?? intent?.tipMinor ?? 0;
     let tender = command.tenderedAmountMinor ?? intent?.tenderedAmountMinor ?? null;
+    // Policy (documented P3): an intent tender that does not cover balance + tip is treated as exact cash
+    // (no change) instead of failing the settlement; an explicit command tender is always validated.
     // A stale or exact intent tender (0, or below the balance) means "exact cash"; an explicit one is validated.
     if (command.tenderedAmountMinor === null && tender !== null && tender < amountMinor + tip) tender = null;
     if (tender === 0) tender = null;
@@ -287,8 +293,14 @@ export class DeliveryService {
   }
 }
 
-function projectItem(raw: unknown, scope: BranchScope, canReadCustomers: boolean): BranchDeliveryItemV1 {
-  const record = exactRecord(raw, ["delivery", "courierName", "orderStatus", "order", "snapshot"]);
+function projectItem(
+  raw: unknown,
+  scope: BranchScope,
+  canReadCustomers: boolean,
+  actorId: string,
+  actorIsCourier: boolean,
+): BranchDeliveryItemV1 {
+  const record = exactRecord(raw, ["delivery", "courierName", "orderStatus", "order", "snapshot", "capturedMinor"]);
   if (record === undefined) throw unavailable();
   const delivery = parseOrderDeliveryV1(own(record, "delivery"));
   const orderStatus = own(record, "orderStatus");
@@ -309,6 +321,14 @@ function projectItem(raw: unknown, scope: BranchScope, canReadCustomers: boolean
     totalMinor = totals.total.amountMinor;
     currency = totals.total.currency;
   } catch { throw unavailable(); }
+  const capturedMinor = own(record, "capturedMinor");
+  // The balance is derived here from the domain total; it is the same figure the settlement charges.
+  if (typeof capturedMinor !== "number" || !Number.isSafeInteger(capturedMinor) || capturedMinor < 0
+    || capturedMinor > totalMinor) throw unavailable();
+  // Minimal courier projection: the courier assigned to THIS delivery (and nobody else without
+  // customers.read) receives name, phone, full address and delivery instructions to be able to deliver.
+  const assignedCourier = !canReadCustomers && actorIsCourier && delivery.courierUserId === actorId;
+  const sees = canReadCustomers || assignedCourier;
   const quote = snapshot !== null && "deliveryQuote" in snapshot ? snapshot.deliveryQuote : null;
   const intent = snapshot !== null && "paymentIntent" in snapshot && snapshot.paymentIntent !== null
     ? {
@@ -318,21 +338,41 @@ function projectItem(raw: unknown, scope: BranchScope, canReadCustomers: boolean
     }
     : null;
   const item = parseBranchDeliveriesItem({
-    addressLabel: canReadCustomers ? buildAddressLabel(snapshot) : null,
+    addressLabel: canReadCustomers ? buildAddressLabel(snapshot) : assignedCourier ? fullAddress(snapshot) : null,
+    capturedMinor,
     // A label the contract cannot carry (empty or hostile) degrades to "unknown" rather than failing the list.
     courierLabel: rawName === null ? null : rawName.length >= 1 && rawName.length <= 120 && rawName === rawName.trim()
       && !/[\p{Cc}\p{Cf}]/u.test(rawName) ? rawName : null,
     currency,
-    customerLabel: canReadCustomers ? buildCustomerLabel(snapshot) : null,
+    customerLabel: canReadCustomers ? buildCustomerLabel(snapshot) : assignedCourier ? fullCustomer(snapshot) : null,
     delivery,
+    deliveryInstructions: sees ? snapshot?.deliveryInstructions ?? null : null,
     orderStatus,
     paymentIntent: intent,
     promiseEnd: quote?.promiseEnd ?? null,
     promiseStart: quote?.promiseStart ?? null,
+    remainingMinor: totalMinor - capturedMinor,
     totalMinor,
   });
   if (item === undefined) throw unavailable();
   return item;
+}
+
+function fullCustomer(snapshot: OrderFulfillmentSnapshotV1 | OrderFulfillmentSnapshotV2 | null): string | null {
+  const party = snapshot?.partySnapshot ?? null;
+  return party === null ? null : bounded(`${party.displayName} · ${party.phoneDisplayValue}`, 160);
+}
+
+function fullAddress(snapshot: OrderFulfillmentSnapshotV1 | OrderFulfillmentSnapshotV2 | null): string | null {
+  const address = snapshot?.fulfillmentSnapshot ?? null;
+  if (address === null) return null;
+  const parts = [address.streetLine, address.neighborhood, address.locality, address.postalCode]
+    .filter((part): part is string => typeof part === "string" && part.length > 0);
+  return bounded(`${address.label} · ${parts.join(", ")}`, 200);
+}
+
+function bounded(value: string, max: number): string {
+  return (value.length > max ? `${value.slice(0, max - 1)}…` : value).trim();
 }
 
 function parseBranchDeliveriesItem(value: unknown): BranchDeliveryItemV1 | undefined {
@@ -359,7 +399,8 @@ function parseSettlement(raw: unknown): DeliveryWriteResult<SettleDeliveryResult
 }
 
 function fromFinancial(error: unknown): DeliveryApplicationError {
-  return error instanceof FinancialApplicationError ? applicationError(error.code) : unavailable();
+  if (!(error instanceof FinancialApplicationError)) return unavailable();
+  return applicationError(error.code === "delivery_settle_required" ? "conflict" : error.code);
 }
 
 function refusal(status: unknown): "conflict" | "forbidden" {
