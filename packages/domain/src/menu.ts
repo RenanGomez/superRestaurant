@@ -8,6 +8,7 @@ import {
   InactiveMenuProductError,
   InactiveMenuProductVariantError,
   InvalidSnapshotError,
+  MenuFractionSelectionInvalidError,
   MenuCatalogRestaurantMismatchError,
   MenuCatalogVersionMismatchError,
   MenuModifierGroupNotAllowedError,
@@ -26,6 +27,11 @@ import {
   type ModifierOptionSelection,
   type ValidatedModifierGroupCatalog,
 } from "./modifiers.js";
+import {
+  resolveFractionPricing,
+  type FractionPricingVariant,
+  type PizzaFraction,
+} from "./fraction-pricing.js";
 import { Money } from "./money.js";
 import {
   calculateOrderItemTotals,
@@ -42,6 +48,19 @@ export interface MenuCategoryCatalog {
   readonly displayOrder: number;
 }
 
+/**
+ * Half-and-half configuration of one size. Flavors are the options of `flavorGroupId` (an option
+ * priced at zero falls back to the size price) and extras the options of `extraGroupId`; both groups
+ * belong to the product and are resolved only through the fraction rules while a line is split.
+ */
+export interface MenuVariantFractionConfig {
+  readonly enabled: boolean;
+  readonly flavorGroupId: string | null;
+  readonly extraGroupId: string | null;
+  /** Labels of ingredients that may be excluded on a half; the label is the frozen exclusion name. */
+  readonly excludableIngredientIds: readonly string[];
+}
+
 /** A size of one product ("Chica", "Grande") with its own whole-unit price. */
 export interface MenuProductVariantCatalog {
   readonly id: string;
@@ -50,6 +69,20 @@ export interface MenuProductVariantCatalog {
   readonly active: boolean;
   readonly displayOrder: number;
   readonly unitPrice: Money;
+  readonly fraction?: MenuVariantFractionConfig;
+}
+
+export interface MenuFractionSlotSelection {
+  readonly fraction: Exclude<PizzaFraction, "whole">;
+  readonly flavorOptionId: string;
+  readonly extraOptionIds: readonly string[];
+  readonly excludedIngredientIds: readonly string[];
+}
+
+/** A two-halves selection; the server prices it, the client never supplies amounts. */
+export interface MenuFractionSelection {
+  readonly geometry: "halves";
+  readonly slots: readonly MenuFractionSlotSelection[];
 }
 
 export interface MenuProductCatalog {
@@ -96,6 +129,8 @@ export interface MenuProductSelectionContext {
   readonly currency: string;
   /** Required when the product has active variants; rejected when the product has no such variant. */
   readonly variantId?: string | null | undefined;
+  /** Optional half-and-half selection; requires a variant with fractions enabled. */
+  readonly fraction?: MenuFractionSelection | null | undefined;
 }
 
 export interface MenuModifierGroupSelection {
@@ -205,6 +240,7 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
       const variantPrice = new Money(variant.unitPrice.amountMinor, variant.unitPrice.currency);
       if (variantPrice.amountMinor < 0) throw new NegativeMoneyAmountError("menu product variant unit price");
       assertCurrencyMatches(catalogCurrency, variantPrice);
+      const fraction = variant.fraction === undefined ? undefined : validateFractionConfig(variant.fraction, product.modifierGroupIds);
       return deepFreeze({
         id: variant.id,
         name: variant.name,
@@ -212,6 +248,7 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
         active: variant.active,
         displayOrder: variant.displayOrder,
         unitPrice: variantPrice,
+        ...(fraction === undefined ? {} : { fraction }),
       });
     }).sort(compareMenuDisplayOrder);
 
@@ -305,9 +342,37 @@ function createMenuProductPriceSnapshotCanonical(
     throw new MenuProductVariantRequiredError(product.id);
   }
 
+  const fractionSelection = context.fraction ?? null;
+  const fractionConfig = variant?.fraction;
+  if (fractionSelection !== null && (variant === undefined || fractionConfig?.enabled !== true)) {
+    throw new MenuFractionSelectionInvalidError(product.id, ["fraction_not_enabled"]);
+  }
+  // Same slot order the SQL requires: half-a first, half-b second.
+  if (
+    fractionSelection !== null
+    && fractionSelection.slots.length === 2
+    && (fractionSelection.slots[0]?.fraction !== "half-a"
+      || fractionSelection.slots[1]?.fraction !== "half-b")
+  ) {
+    throw new MenuFractionSelectionInvalidError(product.id, ["fraction_slot_order"]);
+  }
+  // While a line is split, the flavor and extra groups are priced only by the fraction rules.
+  const fractionGroupIds = new Set<string>(
+    fractionSelection === null || fractionConfig === undefined
+      ? []
+      : [fractionConfig.flavorGroupId, fractionConfig.extraGroupId].filter((id): id is string => id !== null),
+  );
+
   const selectionsByGroup = new Map<string, readonly ModifierOptionSelection[]>();
   for (const selection of selections) {
     assertText(selection.groupId, "selected modifier group id");
+    if (fractionGroupIds.has(selection.groupId)) {
+      // Callers list every product group; the fraction pair must simply stay empty.
+      if (selection.selections.length > 0) {
+        throw new MenuFractionSelectionInvalidError(product.id, ["fraction_group_selection_forbidden"]);
+      }
+      continue;
+    }
     if (selectionsByGroup.has(selection.groupId)) {
       throw new DuplicateMenuModifierGroupSelectionError(selection.groupId);
     }
@@ -318,7 +383,7 @@ function createMenuProductPriceSnapshotCanonical(
   }
 
   const groupsById = new Map(catalog.modifierGroups.map((group) => [group.id, group]));
-  const modifiers = product.modifierGroupIds.flatMap((groupId) => {
+  const modifiers = product.modifierGroupIds.filter((groupId) => !fractionGroupIds.has(groupId)).flatMap((groupId) => {
     const group = groupsById.get(groupId);
     if (group === undefined) throw new MenuProductModifierGroupNotFoundError(product.id, groupId);
     return createModifierSelectionSnapshot(
@@ -327,6 +392,47 @@ function createMenuProductPriceSnapshotCanonical(
       selectionsByGroup.get(groupId) ?? [],
     ).modifiers;
   });
+
+  if (fractionSelection !== null && variant !== undefined) {
+    const resolved = resolveFractionPricing(
+      catalogVariantToFractionVariant(catalog, product.id, variant.id),
+      {
+        catalogVersion: product.catalogVersion,
+        comboSubstitutions: [],
+        geometry: fractionSelection.geometry,
+        restaurantId: context.restaurantId,
+        slots: fractionSelection.slots,
+        variantId: variant.id,
+      },
+      { actorId: "menu-selection", actorRole: "staff" },
+    );
+    if (Array.isArray(resolved)) {
+      throw new MenuFractionSelectionInvalidError(
+        product.id,
+        (resolved as readonly { readonly code: string }[]).map((issue) => issue.code),
+      );
+    }
+    const priced = resolved as Exclude<typeof resolved, readonly unknown[]>;
+    return calculateOrderItemTotals({
+      orderItemId: product.id,
+      quantity: 1,
+      snapshot: {
+        catalogVersion: priced.catalogVersion,
+        fractionBreakdown: priced.fractionBreakdown,
+        geometry: priced.geometry,
+        modifiers: [...modifiers, ...priced.modifiers],
+        name: priced.name,
+        productId: priced.productId,
+        ...(priced.sku === undefined ? {} : { sku: priced.sku }),
+        stationId: priced.stationId,
+        ...(priced.tax === undefined ? {} : { tax: priced.tax }),
+        unit: priced.unit,
+        unitPrice: priced.unitPrice,
+        variantId: variant.id,
+        variantName: variant.name,
+      },
+    }).input.snapshot;
+  }
 
   return calculateOrderItemTotals({
     orderItemId: product.id,
@@ -346,6 +452,61 @@ function createMenuProductPriceSnapshotCanonical(
       ...(variant === undefined ? {} : { variantId: variant.id, variantName: variant.name }),
     },
   }).input.snapshot;
+}
+
+/**
+ * Builds the fraction-pricing view of one half-and-half size from a validated menu release.
+ * A flavor option priced at zero takes the size price; an option is selectable only while both
+ * its group and the option are active.
+ */
+export function catalogVariantToFractionVariant(
+  catalog: ValidatedMenuCatalog,
+  productId: string,
+  variantId: string,
+): FractionPricingVariant {
+  const product = catalog.products.find(({ id }) => id === productId);
+  if (product === undefined) throw new MenuProductNotFoundError(productId);
+  const variant = (product.variants ?? []).find(({ id }) => id === variantId);
+  if (variant === undefined) throw new MenuProductVariantNotFoundError(productId, variantId);
+  const config = variant.fraction;
+  if (config === undefined || !config.enabled || config.flavorGroupId === null) {
+    throw new MenuFractionSelectionInvalidError(productId, ["fraction_not_enabled"]);
+  }
+  const groupsById = new Map(catalog.modifierGroups.map((group) => [group.id, group]));
+  const flavorGroup = groupsById.get(config.flavorGroupId);
+  if (flavorGroup === undefined) throw new MenuProductModifierGroupNotFoundError(productId, config.flavorGroupId);
+  const extraGroup = config.extraGroupId === null ? undefined : groupsById.get(config.extraGroupId);
+  if (config.extraGroupId !== null && extraGroup === undefined) {
+    throw new MenuProductModifierGroupNotFoundError(productId, config.extraGroupId);
+  }
+  const sku = variant.sku ?? product.sku;
+  return deepFreeze({
+    active: variant.active && product.active,
+    catalogVersion: product.catalogVersion,
+    comboSlots: [],
+    currency: catalog.currency,
+    extras: (extraGroup?.options ?? []).map((option) => ({
+      active: extraGroup!.active && option.active,
+      name: option.name,
+      optionId: option.id,
+      priceMinor: option.unitPrice.amountMinor,
+    })),
+    flavors: flavorGroup.options.map((option) => ({
+      active: flavorGroup.active && option.active,
+      name: option.name,
+      optionId: option.id,
+      priceMinor: option.unitPrice.amountMinor === 0 ? variant.unitPrice.amountMinor : option.unitPrice.amountMinor,
+    })),
+    includedIngredients: config.excludableIngredientIds.map((label) => ({ ingredientId: label, name: label })),
+    name: product.name,
+    productId: product.id,
+    restaurantId: catalog.restaurantId,
+    ...(sku === undefined ? {} : { sku }),
+    stationId: product.stationId,
+    ...(product.tax === undefined ? {} : { tax: product.tax }),
+    unit: product.unit,
+    variantId: variant.id,
+  });
 }
 
 function normalizeMenuCatalog(value: unknown): MenuCatalog {
@@ -434,6 +595,7 @@ function normalizeMenuProduct(value: unknown): MenuProductCatalog {
 function normalizeMenuProductVariant(value: unknown): MenuProductVariantCatalog {
   const variant = asPlainRecord(value, "menu product variant");
   const sku = optionalOwnData(variant, "sku", "menu product variant sku");
+  const fractionValue = optionalOwnData(variant, "fraction", "menu product variant fraction");
   return Object.freeze({
     id: ownData(variant, "id", "menu product variant id") as string,
     name: ownData(variant, "name", "menu product variant name") as string,
@@ -441,16 +603,77 @@ function normalizeMenuProductVariant(value: unknown): MenuProductVariantCatalog 
     active: ownData(variant, "active", "menu product variant active") as boolean,
     displayOrder: ownData(variant, "displayOrder", "menu product variant displayOrder") as number,
     unitPrice: normalizeMoney(ownData(variant, "unitPrice", "menu product variant unit price"), "menu product variant unit price"),
+    ...(fractionValue === undefined ? {} : { fraction: normalizeFractionConfig(fractionValue) }),
+  });
+}
+
+function normalizeFractionConfig(value: unknown): MenuVariantFractionConfig {
+  const config = asPlainRecord(value, "menu variant fraction");
+  return Object.freeze({
+    enabled: ownData(config, "enabled", "menu variant fraction enabled") as boolean,
+    flavorGroupId: ownData(config, "flavorGroupId", "menu variant fraction flavorGroupId") as string | null,
+    extraGroupId: ownData(config, "extraGroupId", "menu variant fraction extraGroupId") as string | null,
+    excludableIngredientIds: Object.freeze(
+      ownDataArray(config, "excludableIngredientIds", "menu variant fraction excludableIngredientIds").map((id) => id as string),
+    ),
+  });
+}
+
+function validateFractionConfig(
+  config: MenuVariantFractionConfig,
+  productGroupIds: readonly string[],
+): MenuVariantFractionConfig {
+  assertBoolean(config.enabled, "menu variant fraction enabled");
+  for (const [field, groupId] of [["flavorGroupId", config.flavorGroupId], ["extraGroupId", config.extraGroupId]] as const) {
+    if (groupId === null) continue;
+    assertText(groupId, `menu variant fraction ${field}`);
+    if (!productGroupIds.includes(groupId)) throw new InvalidSnapshotError(`menu variant fraction ${field}`);
+  }
+  if (config.enabled && config.flavorGroupId === null) throw new InvalidSnapshotError("menu variant fraction flavorGroupId");
+  if (config.flavorGroupId !== null && config.flavorGroupId === config.extraGroupId) {
+    throw new InvalidSnapshotError("menu variant fraction groups");
+  }
+  const labels = new Set<string>();
+  for (const label of config.excludableIngredientIds) {
+    assertText(label, "menu variant fraction excludableIngredientId");
+    if (labels.has(label)) throw new InvalidSnapshotError("menu variant fraction excludableIngredientIds");
+    labels.add(label);
+  }
+  return Object.freeze({
+    enabled: config.enabled,
+    excludableIngredientIds: Object.freeze([...config.excludableIngredientIds]),
+    extraGroupId: config.extraGroupId,
+    flavorGroupId: config.flavorGroupId,
+  });
+}
+
+function normalizeMenuFractionSelection(value: unknown): MenuFractionSelection {
+  const selection = asPlainRecord(value, "menu fraction selection");
+  const geometry = ownData(selection, "geometry", "menu fraction geometry");
+  if (geometry !== "halves") throw new InvalidSnapshotError("menu fraction geometry");
+  return deepFreeze({
+    geometry: "halves" as const,
+    slots: ownDataArray(selection, "slots", "menu fraction slots").map((entry) => {
+      const slot = asPlainRecord(entry, "menu fraction slot");
+      return {
+        excludedIngredientIds: ownDataArray(slot, "excludedIngredientIds", "menu fraction excludedIngredientIds").map((id) => id as string),
+        extraOptionIds: ownDataArray(slot, "extraOptionIds", "menu fraction extraOptionIds").map((id) => id as string),
+        flavorOptionId: ownData(slot, "flavorOptionId", "menu fraction flavorOptionId") as string,
+        fraction: ownData(slot, "fraction", "menu fraction fraction") as MenuFractionSlotSelection["fraction"],
+      };
+    }),
   });
 }
 
 function normalizeMenuProductSelectionContext(value: unknown): MenuProductSelectionContext {
   const context = asPlainRecord(value, "menu product selection context");
+  const fractionValue = optionalOwnData(context, "fraction", "selected menu fraction");
   return Object.freeze({
     restaurantId: ownData(context, "restaurantId", "selected menu restaurantId") as string,
     productId: ownData(context, "productId", "selected menu productId") as string,
     currency: ownData(context, "currency", "selected menu currency") as string,
     variantId: optionalOwnData(context, "variantId", "selected menu variantId") as string | null | undefined,
+    fraction: fractionValue === undefined || fractionValue === null ? null : normalizeMenuFractionSelection(fractionValue),
   });
 }
 

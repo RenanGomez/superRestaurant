@@ -59,6 +59,8 @@ export interface OrderDiscountSnapshot extends AppliedDiscountSnapshot {
 export interface OrderItemFractionBreakdownEntry {
   readonly fraction: string;
   readonly flavorOptionId: string;
+  /** Frozen flavor display name; absent on snapshots written before it was recorded. */
+  readonly flavorName?: string;
   readonly amountMinor: number;
 }
 
@@ -419,10 +421,17 @@ function normalizeFractionBreakdownEntry(value: unknown): OrderItemFractionBreak
   const amountMinor = ownData(entry, "amountMinor", "fractionBreakdown entry amountMinor");
   assertText(fraction as string, "fractionBreakdown entry fraction");
   assertText(flavorOptionId as string, "fractionBreakdown entry flavorOptionId");
+  const flavorName = optionalOwnData(entry, "flavorName", "fractionBreakdown entry flavorName");
+  if (flavorName !== undefined) assertText(flavorName as string, "fractionBreakdown entry flavorName");
   if (!Number.isSafeInteger(amountMinor) || (amountMinor as number) < 0) {
     throw new InvalidSnapshotError("fractionBreakdown entry amountMinor");
   }
-  return deepFreeze({ amountMinor: amountMinor as number, flavorOptionId: flavorOptionId as string, fraction: fraction as string });
+  return deepFreeze({
+    amountMinor: amountMinor as number,
+    ...(flavorName === undefined ? {} : { flavorName: flavorName as string }),
+    flavorOptionId: flavorOptionId as string,
+    fraction: fraction as string,
+  });
 }
 
 function normalizeModifier(value: unknown, currency: string): ModifierPriceSnapshot {
@@ -668,7 +677,13 @@ function cloneFractionBreakdownEntry(entry: OrderItemFractionBreakdownEntry): Or
   if (!Number.isSafeInteger(entry.amountMinor) || entry.amountMinor < 0) {
     throw new InvalidSnapshotError("fractionBreakdown entry amountMinor");
   }
-  return deepFreeze({ amountMinor: entry.amountMinor, flavorOptionId: entry.flavorOptionId, fraction: entry.fraction });
+  if (entry.flavorName !== undefined) assertText(entry.flavorName, "fractionBreakdown entry flavorName");
+  return deepFreeze({
+    amountMinor: entry.amountMinor,
+    ...(entry.flavorName === undefined ? {} : { flavorName: entry.flavorName }),
+    flavorOptionId: entry.flavorOptionId,
+    fraction: entry.fraction,
+  });
 }
 
 function cloneTaxSnapshot(tax: TaxSnapshot): TaxSnapshot {

@@ -23,6 +23,7 @@ export const SYSTEM_ONBOARDING_SCHEMA_VERSION = 1 as const;
 
 export * from "./realtime.js";
 export * from "./orders.js";
+export * from "./line-fraction.js";
 export * from "./payments.js";
 export * from "./payment-intent.js";
 export * from "./payment-obligation.js";
@@ -292,10 +293,23 @@ export interface MenuCategoryV1 {
   readonly name: string;
 }
 
+/**
+ * Half-and-half setup of one size: flavors are the options of `flavorGroupId` (an option priced at
+ * zero uses the size price) and extras the options of `extraGroupId`; both are groups of the product.
+ */
+export interface MenuVariantFractionV1 {
+  readonly enabled: boolean;
+  readonly excludableIngredientIds: readonly string[];
+  readonly extraGroupId: string | null;
+  readonly flavorGroupId: string | null;
+}
+
 /** A size of a product ("Chica", "Grande") with its own whole-unit price. */
 export interface MenuProductVariantV1 {
   readonly active: boolean;
   readonly displayOrder: number;
+  /** Optional on input (older producers); the normalized output always carries it, `null` when absent. */
+  readonly fraction?: MenuVariantFractionV1 | null;
   readonly name: string;
   readonly sku: string | null;
   readonly unitPriceMinor: number;
@@ -303,6 +317,7 @@ export interface MenuProductVariantV1 {
 }
 
 export const MENU_PRODUCT_MAX_VARIANTS = 12;
+export const MENU_VARIANT_MAX_EXCLUDABLE_INGREDIENTS = 40;
 
 export interface MenuProductV1 {
   readonly active: boolean;
@@ -971,6 +986,15 @@ function parseMenuCatalogPayload(record: PlainRecord): MenuCatalogPayloadV1 | un
   if (categoryIds.size !== definedCategories.length || productIds.size !== definedProducts.length) return undefined;
   if (definedProducts.some(({ categoryId }) => !categoryIds.has(categoryId))) return undefined;
 
+  const groupProductById = new Map(definedModifierGroups.map((group) => [group.groupId, group.productId]));
+  for (const product of definedProducts) {
+    for (const variant of product.variants ?? []) {
+      for (const groupId of [variant.fraction?.flavorGroupId, variant.fraction?.extraGroupId]) {
+        if (groupId !== undefined && groupId !== null && groupProductById.get(groupId) !== product.productId) return undefined;
+      }
+    }
+  }
+
   const skus = new Set<string>();
   for (const { sku } of definedProducts) {
     if (sku === null) continue;
@@ -1082,8 +1106,10 @@ function parseMenuProductVariantsV1(record: PlainRecord): readonly MenuProductVa
 }
 
 function parseMenuProductVariantV1(value: unknown): MenuProductVariantV1 | undefined {
-  const record = parseExactPlainRecord(value, ["variantId", "name", "unitPriceMinor", "active", "displayOrder", "sku"]);
+  const requiredKeys = ["variantId", "name", "unitPriceMinor", "active", "displayOrder", "sku"];
+  const record = parseExactPlainRecord(value, [...requiredKeys, "fraction"]) ?? parseExactPlainRecord(value, requiredKeys);
   if (record === undefined) return undefined;
+  const fraction = Object.hasOwn(record, "fraction") ? parseMenuVariantFractionV1(ownValue(record, "fraction")) : null;
   const variantId = parseUuid(ownValue(record, "variantId"));
   const name = parseDisplayName(ownValue(record, "name"), 80);
   const unitPriceMinor = parseBoundedInteger(ownValue(record, "unitPriceMinor"), 0, Number.MAX_SAFE_INTEGER);
@@ -1093,9 +1119,36 @@ function parseMenuProductVariantV1(value: unknown): MenuProductVariantV1 | undef
   const sku = rawSku === null ? null : parseDisplayName(rawSku, 64);
   if (
     variantId === undefined || name === undefined || unitPriceMinor === undefined
-    || typeof active !== "boolean" || displayOrder === undefined || sku === undefined
+    || typeof active !== "boolean" || displayOrder === undefined || sku === undefined || fraction === undefined
   ) return undefined;
-  return Object.freeze({ active, displayOrder, name, sku, unitPriceMinor, variantId });
+  return Object.freeze({ active, displayOrder, fraction, name, sku, unitPriceMinor, variantId });
+}
+
+function parseMenuVariantFractionV1(value: unknown): MenuVariantFractionV1 | null | undefined {
+  if (value === null) return null;
+  const record = parseExactPlainRecord(value, ["enabled", "flavorGroupId", "extraGroupId", "excludableIngredientIds"]);
+  if (record === undefined) return undefined;
+  const enabled = ownValue(record, "enabled");
+  const rawFlavor = ownValue(record, "flavorGroupId");
+  const rawExtra = ownValue(record, "extraGroupId");
+  const flavorGroupId = rawFlavor === null ? null : parseUuid(rawFlavor);
+  const extraGroupId = rawExtra === null ? null : parseUuid(rawExtra);
+  const rawLabels = parseExactArray(ownValue(record, "excludableIngredientIds"), MENU_VARIANT_MAX_EXCLUDABLE_INGREDIENTS);
+  if (typeof enabled !== "boolean" || flavorGroupId === undefined || extraGroupId === undefined || rawLabels === undefined) {
+    return undefined;
+  }
+  const labels = rawLabels.map((label) => parseDisplayName(label, 80));
+  if (labels.some(isUndefined)) return undefined;
+  const excludableIngredientIds = labels as string[];
+  if (new Set(excludableIngredientIds).size !== excludableIngredientIds.length) return undefined;
+  if (enabled && flavorGroupId === null) return undefined;
+  if (flavorGroupId !== null && flavorGroupId === extraGroupId) return undefined;
+  return Object.freeze({
+    enabled,
+    excludableIngredientIds: Object.freeze(excludableIngredientIds),
+    extraGroupId,
+    flavorGroupId,
+  });
 }
 
 /** Exact keys plus any subset of the optional ones (all subsets are tried; at most two keys here). */

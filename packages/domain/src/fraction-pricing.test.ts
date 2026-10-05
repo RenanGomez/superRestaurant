@@ -165,7 +165,8 @@ test("excluding an included ingredient does not reduce the price and carries a z
   const snapshot = expectSnapshot(resolveFractionPricing(baseVariant(), input, STAFF_CONTEXT));
   assert.deepEqual(snapshot.unitPrice, new Money(10000, CURRENCY));
   const exclusionLine = snapshot.modifiers.find((modifier) => modifier.modifierId === "exclude:whole:cheese");
-  assert.equal(exclusionLine?.quantity, 0);
+  assert.equal(exclusionLine?.quantity, 1);
+  assert.equal(exclusionLine?.unitPrice.amountMinor, 0);
 });
 
 test("combo substitution within the same group is free; outside the group carries an explicit surcharge", () => {

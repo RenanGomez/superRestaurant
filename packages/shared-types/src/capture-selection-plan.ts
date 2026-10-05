@@ -1,5 +1,11 @@
 import type { BranchScope } from "./index.js";
 import {
+  parseLineFractionV1,
+  parseOrderDetailFractionHalfV1,
+  type LineFractionV1,
+  type OrderDetailFractionHalfV1,
+} from "./line-fraction.js";
+import {
   COMMERCIAL_CAPTURE_V4_SCHEMA_VERSION,
   parseCaptureWorkspaceV3,
   type CaptureVersionedMutationInputV1,
@@ -38,6 +44,8 @@ export interface CaptureSelectionLineV1 {
   readonly quantity: number;
   readonly modifierGroups: readonly CaptureSelectionModifierGroupV1[];
   readonly note: string | null;
+  /** Optional half-and-half split; absent means a whole line. Requires `variantId`. */
+  readonly fraction?: LineFractionV1;
 }
 
 /**
@@ -80,6 +88,8 @@ export interface CaptureSelectionPlanProjectionLineV1 {
   readonly lineTotalMinor: number;
   readonly note: string | null;
   readonly modifiers: readonly CaptureSelectionPlanProjectionModifierV1[];
+  /** Half-and-half line only: the two priced halves (flavor, extras, exclusions); absent for whole lines. */
+  readonly halves?: readonly OrderDetailFractionHalfV1[];
 }
 
 /**
@@ -247,8 +257,12 @@ export function parseCaptureSelectionPlanProjectionV1(value: unknown): CaptureSe
 }
 
 function parseSelectionLine(value: unknown): CaptureSelectionLineV1 | undefined {
-  const record = exactRecord(value, ["lineId", "productId", "variantId", "quantity", "modifierGroups", "note"]);
+  const lineKeys = ["lineId", "productId", "variantId", "quantity", "modifierGroups", "note"];
+  const record = exactRecord(value, lineKeys) ?? exactRecord(value, [...lineKeys, "fraction"]);
   if (record === undefined) return undefined;
+  const rawFraction = Object.hasOwn(record, "fraction") ? own(record, "fraction") : undefined;
+  const fraction = rawFraction === undefined ? undefined : parseLineFractionV1(rawFraction);
+  if (rawFraction !== undefined && fraction === undefined) return undefined;
   const lineId = uuid(own(record, "lineId"));
   const productId = uuid(own(record, "productId"));
   const variantId = nullableUuid(own(record, "variantId"));
@@ -267,7 +281,8 @@ function parseSelectionLine(value: unknown): CaptureSelectionLineV1 | undefined 
     groupIds.add(group.groupId);
     modifierGroups.push(group);
   }
-  return deepFreeze({ lineId, modifierGroups, note, productId, quantity, variantId });
+  if (fraction !== undefined && variantId === null) return undefined;
+  return deepFreeze({ ...(fraction === undefined ? {} : { fraction }), lineId, modifierGroups, note, productId, quantity, variantId });
 }
 
 function parseSelectionGroup(value: unknown): CaptureSelectionModifierGroupV1 | undefined {
@@ -296,10 +311,16 @@ function parseModifierSelection(value: unknown): CaptureSelectionModifierSelecti
 }
 
 function parseProjectionLine(value: unknown): CaptureSelectionPlanProjectionLineV1 | undefined {
-  const record = exactRecord(value, [
+  const projectionKeys = [
     "lineId", "productId", "variantId", "productName", "quantity", "unitPriceMinor", "lineTotalMinor", "note", "modifiers",
-  ]);
+  ];
+  const record = exactRecord(value, projectionKeys) ?? exactRecord(value, [...projectionKeys, "halves"]);
   if (record === undefined) return undefined;
+  const rawHalves = Object.hasOwn(record, "halves") ? exactArray(own(record, "halves"), 2) : undefined;
+  const halves = rawHalves?.map(parseOrderDetailFractionHalfV1);
+  if (Object.hasOwn(record, "halves") && (halves === undefined || halves.length !== 2 || halves.some((half) => half === undefined))) {
+    return undefined;
+  }
   const lineId = uuid(own(record, "lineId"));
   const productId = uuid(own(record, "productId"));
   const variantId = nullableUuid(own(record, "variantId"));
@@ -320,7 +341,10 @@ function parseProjectionLine(value: unknown): CaptureSelectionPlanProjectionLine
     if (modifier === undefined) return undefined;
     modifiers.push(modifier);
   }
-  return deepFreeze({ lineId, lineTotalMinor, modifiers, note, productId, productName, quantity, unitPriceMinor, variantId });
+  return deepFreeze({
+    ...(halves === undefined ? {} : { halves: halves as OrderDetailFractionHalfV1[] }),
+    lineId, lineTotalMinor, modifiers, note, productId, productName, quantity, unitPriceMinor, variantId,
+  });
 }
 
 function parseProjectionModifier(value: unknown): CaptureSelectionPlanProjectionModifierV1 | undefined {

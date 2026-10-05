@@ -124,6 +124,8 @@ export interface FractionPricingIssue {
 export interface FractionPriceBreakdownEntry {
   readonly fraction: PizzaFraction;
   readonly flavorOptionId: string;
+  /** Frozen display name of the flavor, so kitchen tickets never re-read the catalog. */
+  readonly flavorName: string;
   readonly amountMinor: number;
 }
 
@@ -194,7 +196,7 @@ export function resolveFractionPricing(
       issues.push({ code: "flavor_inactive", fraction: slot.fraction, detail: `flavor ${slot.flavorOptionId} is unavailable for its branch` });
       continue;
     }
-    fractionBreakdown.push({ amountMinor: flavor.priceMinor, flavorOptionId: flavor.optionId, fraction: slot.fraction });
+    fractionBreakdown.push({ amountMinor: flavor.priceMinor, flavorName: flavor.name, flavorOptionId: flavor.optionId, fraction: slot.fraction });
 
     if (new Set(slot.extraOptionIds).size !== slot.extraOptionIds.length) {
       issues.push({ code: "extra_duplicate", fraction: slot.fraction, detail: "an extra was selected more than once on the same fraction" });
@@ -246,7 +248,8 @@ export function resolveFractionPricing(
         groupName: `exclude:${slot.fraction}`,
         modifierId: `exclude:${slot.fraction}:${ingredientId}`,
         name: `Sin ${ingredientId}`,
-        quantity: 0,
+        // Quantity 1 at a zero price: order-item snapshots reject non-positive quantities.
+        quantity: 1,
         unitPrice: new Money(0, variant.currency),
       }));
     }

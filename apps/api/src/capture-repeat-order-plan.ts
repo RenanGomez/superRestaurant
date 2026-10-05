@@ -9,7 +9,7 @@ import {
   type OrderAuditContext,
   type OrderAuditEvent,
 } from "@super-restaurant/domain";
-import type { CaptureSelectionPlanV1, ConfirmCaptureDraftCommandV2, MenuCatalogV1 } from "@super-restaurant/shared-types";
+import type { CaptureSelectionPlanV1, ConfirmCaptureDraftCommandV2, LineFractionV1, MenuCatalogV1 } from "@super-restaurant/shared-types";
 
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
 
@@ -117,6 +117,7 @@ export function materializeCaptureSelectionOrder(
     productId: line.productId,
     quantity: line.quantity,
     variantId: line.variantId,
+    fraction: line.fraction ?? null,
   })), "capture-selection");
 }
 
@@ -150,6 +151,8 @@ interface MaterializableLine {
   readonly quantity: number;
   /** Catalog size of the line; `null` for a product sold without sizes. */
   readonly variantId: string | null;
+  /** Half-and-half split priced by the server; absent/`null` for whole lines (repeat plans never split). */
+  readonly fraction?: LineFractionV1 | null;
 }
 
 function appendMaterializedItems(
@@ -168,6 +171,7 @@ function appendMaterializedItems(
       productId: line.productId,
       restaurantId: command.scope.restaurantId,
       variantId: line.variantId,
+      fraction: line.fraction ?? null,
     }, line.modifierGroups);
     const added = addOrderItem(order, {
       orderItemId: derivedUuid(`${namespace}-item`, command.eventId, line.identity),

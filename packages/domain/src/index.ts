@@ -52,6 +52,7 @@ export {
   InactiveMenuCategoryError,
   InactiveMenuProductError,
   InactiveMenuProductVariantError,
+  MenuFractionSelectionInvalidError,
   MenuCatalogRestaurantMismatchError,
   MenuCatalogVersionMismatchError,
   MenuModifierGroupNotAllowedError,
@@ -354,6 +355,7 @@ export type {
   CalculatedOrderTotals,
   ExactRatio,
   ModifierPriceSnapshot,
+  OrderItemFractionBreakdownEntry,
   OrderItemPriceSnapshot,
   OrderItemPricingInput,
   OrderDiscountAllocationStrategy,
@@ -361,10 +363,13 @@ export type {
   OrderPricingInput,
   TaxSnapshot,
 } from "./order-totals.js";
-export { createMenuProductPriceSnapshot, validateMenuCatalog } from "./menu.js";
+export { catalogVariantToFractionVariant, createMenuProductPriceSnapshot, validateMenuCatalog } from "./menu.js";
 export type {
   MenuCatalog,
   MenuCategoryCatalog,
+  MenuFractionSelection,
+  MenuFractionSlotSelection,
+  MenuVariantFractionConfig,
   MenuModifierGroupSelection,
   MenuProductCatalog,
   MenuProductSelectionContext,

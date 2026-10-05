@@ -5,6 +5,7 @@ import {
   type ConfiguredCatalogRelease,
   type ConfiguredProductSelectionInput,
   type MenuCatalog,
+  type MenuVariantFractionConfig,
   type ModifierConstraint,
 } from "@super-restaurant/domain";
 import {
@@ -16,6 +17,7 @@ import {
   type ConfiguredModifierConstraintV2,
   type ResolveConfiguredProductSelectionV2,
   type MenuCatalogV1,
+  type MenuVariantFractionV1,
 } from "@super-restaurant/shared-types";
 
 /** Converts an already validated transport catalog into the pure domain model. */
@@ -81,10 +83,21 @@ export function toDomainMenuCatalog(catalog: MenuCatalogV1, restaurantId: string
           name: variant.name,
           ...(variant.sku === null ? {} : { sku: variant.sku }),
           unitPrice: new Money(variant.unitPriceMinor, catalog.currency),
+          ...(variant.fraction === undefined || variant.fraction === null ? {} : { fraction: toDomainFraction(variant.fraction) }),
         })),
       }),
     })),
     restaurantId,
+  };
+}
+
+/** Half-and-half setup of a size, as the domain catalog models it. */
+export function toDomainFraction(fraction: MenuVariantFractionV1): MenuVariantFractionConfig {
+  return {
+    enabled: fraction.enabled,
+    excludableIngredientIds: [...fraction.excludableIngredientIds],
+    extraGroupId: fraction.extraGroupId,
+    flavorGroupId: fraction.flavorGroupId,
   };
 }
 
