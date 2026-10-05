@@ -116,7 +116,7 @@ import {
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
-import { describeHalves, isFractionModifier } from "./fraction-halves.js";
+import { describeHalvesWithIds, isFractionModifier } from "./fraction-halves.js";
 import {
   decodeCaptureRecord, decodeCaptureWorkspace, decodeCaptureWorkspaceV2, decodeCaptureWorkspaceV3,
   decodeCaptureWorkspaceV4, decodeCaptureWorkspaceV5, withCaptureSelectionProjection,
@@ -1223,7 +1223,7 @@ function priceSelectionPlan(
       quantity: line.quantity,
       unitPriceMinor: snapshot.unitPrice.amountMinor,
       variantId: line.variantId,
-      ...(snapshot.geometry === "halves" ? { halves: describeHalves(snapshot) } : {}),
+      ...(snapshot.geometry === "halves" ? { halves: describeHalvesWithIds(snapshot, line.fraction ?? null) } : {}),
     });
   }
   const projection = parseCaptureSelectionPlanProjectionV1({

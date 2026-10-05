@@ -2750,6 +2750,10 @@ test("capture line quote prices whole lines with modifiers, a size, and halves e
     ["half-a", "Pepperoni", 15_000, ["Queso extra"], ["cebolla"]],
     ["half-b", "Hawaiana", 17_000, [], []],
   ]);
+  assert.deepEqual(halves.fractionBreakdown.map((half) => [half.fraction, half.flavorOptionId, half.extraOptionIds, half.excludedIngredientIds]), [
+    ["half-a", halvesFlavorA, [halvesExtra], ["cebolla"]],
+    ["half-b", halvesFlavorB, [], []],
+  ]);
   assert.deepEqual(halves.modifiers, []);
 });
 
@@ -2832,6 +2836,7 @@ test("capture line quote returns the same figures as the selection plan projecti
     assert.equal(quote.subtotalMinor + quote.taxMinor, quote.lineTotalMinor);
     assert.deepEqual(quote.modifiers, projected.modifiers);
     assert.deepEqual(quote.fractionBreakdown, projected.halves ?? []);
+    for (const half of projected.halves ?? []) assert.ok(half.flavorOptionId !== undefined && half.extraOptionIds !== undefined && half.excludedIngredientIds !== undefined, "projection halves carry ids");
   }
 });
 
