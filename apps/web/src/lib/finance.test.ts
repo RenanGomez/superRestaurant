@@ -33,6 +33,7 @@ test("financial client reads exact scoped report and checkout endpoints", async 
     return urls.length === 1
       ? new Response(JSON.stringify({
         cardManualCapturedMinor: 3_000, cashCapturedMinor: 10_000, nextLocalSequence: 4,
+        cashTipsMinor: 0, movementCount: 0, movements: [], tipsMinor: 0,
         paymentCount: 2, register, schemaVersion: 1, scope, totalCapturedMinor: 13_000,
       }))
       : new Response(JSON.stringify({
@@ -69,6 +70,19 @@ test("financial client validates before sending and maps recoverable failures", 
       schemaVersion: 1, scope,
     })).status, "conflict");
     assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("financial client rejects a pre-tender report that lacks tips and movements", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    cardManualCapturedMinor: 3_000, cashCapturedMinor: 10_000, nextLocalSequence: 4,
+    paymentCount: 2, register, schemaVersion: 1, scope, totalCapturedMinor: 13_000,
+  }));
+  try {
+    assert.notEqual((await getCashRegisterReport("token", "https://api.test", query)).status, "ok");
   } finally {
     globalThis.fetch = originalFetch;
   }
