@@ -309,6 +309,39 @@ begin
     ) then raise exception 'CATALOG_VARIANTS_REJECTED_ORDER_PERSISTED'; end if;
   end loop;
 
+  -- ---------------------------------------------------------------- 2b. repeat plan lines may carry a size
+  -- The repeat-into-capture function validates the plan shape before touching any row: a line with a
+  -- well-formed variantId passes validation (later steps decide), a malformed one or an unknown key is
+  -- rejected, and the legacy 4-key line keeps working.
+  command := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch::text),
+    'customerId',gen_random_uuid()::text,'sourceOrderId',gen_random_uuid()::text,
+    'captureDraftId',gen_random_uuid()::text,'expectedVersion',1,'attentionLeaseId',gen_random_uuid()::text,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,'occurredAt',stamp
+  );
+  for scenario in select value from pg_catalog.jsonb_array_elements(pg_catalog.jsonb_build_array(
+    pg_catalog.jsonb_build_object('label','legacy','extra','{}'::jsonb,'rejected',false),
+    pg_catalog.jsonb_build_object('label','variant','extra',pg_catalog.jsonb_build_object('variantId',v_small::text),'rejected',false),
+    pg_catalog.jsonb_build_object('label','bad_variant','extra',pg_catalog.jsonb_build_object('variantId','not-a-uuid'),'rejected',true),
+    pg_catalog.jsonb_build_object('label','null_variant','extra',pg_catalog.jsonb_build_object('variantId',null),'rejected',true),
+    pg_catalog.jsonb_build_object('label','unknown_key','extra',pg_catalog.jsonb_build_object('variantName','Chica'),'rejected',true)
+  )) loop
+    plan := pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'customerId',command->>'customerId','sourceOrderId',command->>'sourceOrderId',
+      'catalogVersion',catalog::text,'lines',pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object(
+          'sourceOrderItemId',gen_random_uuid()::text,'productId',pizza::text,'quantity',1,'modifierGroups',pg_catalog.jsonb_build_array()
+        ) || (scenario->'extra')
+      )
+    );
+    execute 'set local role app_api';
+    result := app_private.repeat_customer_order_into_capture(actor,command,plan);
+    execute 'reset role';
+    if (result->>'status'='rejected') is distinct from (scenario->>'rejected')::boolean then
+      raise exception 'CATALOG_VARIANTS_REPEAT_PLAN_%',upper(scenario->>'label');
+    end if;
+  end loop;
+
   -- ---------------------------------------------------------------- 3. table invariants
   begin
     insert into app.menu_product_variants(restaurant_id,catalog_id,product_id,id,name,unit_price_minor,active,display_order)
