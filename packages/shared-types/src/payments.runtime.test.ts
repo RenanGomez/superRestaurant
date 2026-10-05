@@ -114,6 +114,11 @@ expect(parseCashRegisterOperationalReportV1({ ...operationalReport, movements: [
 expect(parseCashRegisterOperationalReportV1({ ...operationalReport, movements: [{ ...movement, amountMinor: 0 }] }) === undefined, "movement amount is positive");
 expect(parseCashRegisterOperationalReportV1({ ...operationalReport, movementCount: 0 }) === undefined, "movement count covers the listed movements");
 expect(parseCashRegisterOperationalReportV1({ ...operationalReport, movements: [{ ...movement, extra: 1 }] }) === undefined, "movement rejects extras");
+expect(parseCashRegisterOperationalReportV1(operationalReport)?.transferCapturedMinor === 0, "a report without transfers reads as zero transfers");
+const transferReport = { ...operationalReport, transferCapturedMinor: 4_000, totalCapturedMinor: 16_500 };
+expect(parseCashRegisterOperationalReportV1(transferReport)?.transferCapturedMinor === 4_000, "report carries the transfer total");
+expect(parseCashRegisterOperationalReportV1({ ...transferReport, totalCapturedMinor: 12_500 }) === undefined, "transfers count toward the balanced total");
+expect(parseCashRegisterOperationalReportV1({ ...operationalReport, transferCapturedMinor: -1 }) === undefined, "transfer total is not negative");
 const legacyReport: Record<string, unknown> = { ...operationalReport };
 for (const key of ["tipsMinor", "cashTipsMinor", "movementCount", "movements"]) delete legacyReport[key];
 expect(parseCashRegisterOperationalReportV1(legacyReport) === undefined, "pre-tender report without tips and movements is rejected explicitly");
@@ -129,6 +134,23 @@ expect(parseCollectPaymentCommandV1({ ...cash, tipMinor: -1 }) === undefined, "t
 expect(parseCollectPaymentCommandV1({ ...cash, tenderedAmountMinor: null, tipMinor: 0 }) !== undefined, "null tender and zero tip parse");
 expect(parseCollectPaymentCommandV1({ ...cardCommand, tenderedAmountMinor: 20_000 }) === undefined, "tender is cash only");
 expect(parseCollectPaymentCommandV1({ ...cardCommand, tipMinor: 100 }) !== undefined, "card accepts a tip");
+
+const transferCommand = { ...cash, method: "transfer" };
+const transfer = parseCollectPaymentCommandV1(transferCommand);
+expect(transfer !== undefined && !("transferReference" in transfer), "transfer command parses without a reference");
+expect(parseCollectPaymentCommandV1({ ...transferCommand, transferReference: "SPEI-0001", tipMinor: 50 })?.transferReference === "SPEI-0001",
+  "transfer accepts a reference and a tip");
+expect(parseCollectPaymentCommandV1({ ...transferCommand, transferReference: null }) !== undefined, "transfer accepts a null reference");
+expect(parseCollectPaymentCommandV1({ ...transferCommand, transferReference: "x".repeat(65) }) === undefined, "transfer reference caps at 64");
+expect(parseCollectPaymentCommandV1({ ...transferCommand, transferReference: "" }) === undefined, "transfer reference is not empty");
+expect(parseCollectPaymentCommandV1({ ...transferCommand, transferReference: " SPEI " }) === undefined, "transfer reference is trimmed");
+expect(parseCollectPaymentCommandV1({ ...transferCommand, transferReference: 7 }) === undefined, "transfer reference is a string");
+expect(parseCollectPaymentCommandV1({ ...transferCommand, tenderedAmountMinor: 20_000 }) === undefined, "transfer has no tender");
+expect(parseCollectPaymentCommandV1({ ...transferCommand, cardManualEvidence: cardCommand.cardManualEvidence }) === undefined,
+  "transfer has no terminal evidence");
+expect(parseCollectPaymentCommandV1({ ...cash, transferReference: "SPEI-1" }) === undefined, "a reference belongs to transfers only");
+expect(parseCollectPaymentCommandV1({ ...cardCommand, transferReference: "SPEI-1" }) === undefined, "card carries no transfer reference");
+expect(parseCollectPaymentCommandV1({ ...cardCommand, cardManualEvidence: null }) === undefined, "card requires its evidence");
 
 const cashPayment = { ...payment, remainingBalanceMinor: 0, tenderedAmountMinor: 20_000, changeMinor: 7_500, tipMinor: 0 };
 expect(parsePaymentCollectionSummaryV1(cashPayment) !== undefined, "summary carries tender, change and tip");
@@ -149,6 +171,10 @@ expect(parseQuoteCashPaymentRequestV1(quoteRequest) !== undefined, "quote reques
 expect(parseQuoteCashPaymentRequestV1({ ...quoteRequest, tenderedAmountMinor: 100 }) === undefined, "quote tender must cover the amount");
 expect(parseQuoteCashPaymentRequestV1({ ...quoteRequest, tenderedAmountMinor: 12_599, tipMinor: 100 }) === undefined, "quote tender must cover amount plus tip");
 expect(parseQuoteCashPaymentRequestV1({ ...quoteRequest, method: "card_manual" }) === undefined, "quote tender is cash only");
+expect(parseQuoteCashPaymentRequestV1({ ...quoteRequest, method: "transfer", tenderedAmountMinor: null }) !== undefined, "transfer quote parses without tender");
+expect(parseQuoteCashPaymentRequestV1({ ...quoteRequest, method: "transfer" }) === undefined, "transfer quote has no tender");
+expect(parsePaymentCollectionSummaryV1({ ...payment, method: "transfer", remainingBalanceMinor: 0, tipMinor: 0, tenderedAmountMinor: null, changeMinor: null })?.method === "transfer",
+  "transfer summary parses with no tender or change");
 const quote = { ...quoteRequest, changeMinor: 7_400, currency: "MXN", remainingAfterMinor: 500, remainingBeforeMinor: 13_000 };
 expect(parseCashPaymentQuoteV1(quote) !== undefined, "quote response parses");
 expect(parseCashPaymentQuoteV1({ ...quote, changeMinor: 7_500 }) === undefined, "quote change must equal tender minus amount minus tip");

@@ -1,7 +1,7 @@
 import type { BranchScope } from "./index.js";
 
 export const FINANCIAL_SCHEMA_VERSION = 1 as const;
-export const SIMPLE_PAYMENT_METHODS = Object.freeze(["cash", "card_manual"] as const);
+export const SIMPLE_PAYMENT_METHODS = Object.freeze(["cash", "card_manual", "transfer"] as const);
 
 export type SimplePaymentMethodV1 = (typeof SIMPLE_PAYMENT_METHODS)[number];
 
@@ -45,6 +45,8 @@ export interface CollectPaymentCommandV1 extends FinancialAuditInputV1 {
   readonly tenderedAmountMinor?: number | null;
   /** Additive. Gratuity recorded apart from `amountMinor`; any method; 0 means none. */
   readonly tipMinor?: number;
+  /** Additive. Transfer only: optional bank reference (1..64 characters). The terminal evidence stays null. */
+  readonly transferReference?: string | null;
 }
 
 export interface CloseCashRegisterCommandV1 extends FinancialAuditInputV1 {
@@ -127,6 +129,8 @@ export interface CashRegisterOperationalReportV1 {
   /** Tips left in the till in cash; they count toward the expected cash balance, apart from sales. */
   readonly cashTipsMinor: number;
   readonly cashCapturedMinor: number;
+  /** Captured by bank transfer; apart from cash and card, never part of the expected cash balance. */
+  readonly transferCapturedMinor: number;
   readonly movementCount: number;
   readonly movements: readonly CashRegisterMovementV1[];
   readonly nextLocalSequence: number;
@@ -256,7 +260,7 @@ export function parseCollectPaymentCommandV1(value: unknown): CollectPaymentComm
     "schemaVersion", "scope", "cashRegisterSessionId", "cashRegisterExpectedVersion", "orderId",
     "orderExpectedVersion", "paymentId", "amountMinor", "method", "cardManualEvidence", "localSequence",
     "eventId", "idempotencyKey", "deviceId", "occurredAt",
-  ], ["tenderedAmountMinor", "tipMinor"]);
+  ], ["tenderedAmountMinor", "tipMinor", "transferReference"]);
   if (record === undefined || own(record, "schemaVersion") !== FINANCIAL_SCHEMA_VERSION) return undefined;
   const common = parseCommon(record);
   const scope = parseScope(own(record, "scope"));
@@ -276,10 +280,14 @@ export function parseCollectPaymentCommandV1(value: unknown): CollectPaymentComm
     ? rawTendered === null ? null : undefined : integer(rawTendered, 1, Number.MAX_SAFE_INTEGER);
   const hasTip = Object.hasOwn(record, "tipMinor");
   const tipMinor = hasTip ? integer(own(record, "tipMinor"), 0, Number.MAX_SAFE_INTEGER) : undefined;
+  const hasReference = Object.hasOwn(record, "transferReference");
+  const rawReference = own(record, "transferReference");
+  const transferReference = !hasReference ? undefined : rawReference === null ? null : text(rawReference, 1, 64);
   if (common === undefined || scope === undefined || cashRegisterSessionId === undefined
     || cashRegisterExpectedVersion === undefined || orderId === undefined || orderExpectedVersion === undefined
     || paymentId === undefined || amountMinor === undefined || localSequence === undefined || method === undefined
-    || cardManualEvidence === undefined || (method === "cash") !== (cardManualEvidence === null)
+    || cardManualEvidence === undefined || (method === "card_manual") !== (cardManualEvidence !== null)
+    || (hasReference && (transferReference === undefined || method !== "transfer"))
     || (hasTendered && tenderedAmountMinor === undefined) || (hasTip && tipMinor === undefined)
     || (typeof tenderedAmountMinor === "number" && (method !== "cash" || tenderedAmountMinor < amountMinor + (tipMinor ?? 0)))) return undefined;
   return Object.freeze({
@@ -287,6 +295,7 @@ export function parseCollectPaymentCommandV1(value: unknown): CollectPaymentComm
     localSequence, method, orderExpectedVersion, orderId, paymentId, schemaVersion: 1, scope,
     ...(hasTendered && tenderedAmountMinor !== undefined ? { tenderedAmountMinor } : {}),
     ...(hasTip && tipMinor !== undefined ? { tipMinor } : {}),
+    ...(hasReference && transferReference !== undefined ? { transferReference } : {}),
   });
 }
 
@@ -416,10 +425,11 @@ export function parseCashRegisterReportQueryV1(value: unknown): CashRegisterRepo
 }
 
 export function parseCashRegisterOperationalReportV1(value: unknown): CashRegisterOperationalReportV1 | undefined {
-  const record = exactRecord(value, [
+  // `transferCapturedMinor` is additive: a report from before transfers reads as zero transfers.
+  const record = exactRecordWithOptional(value, [
     "schemaVersion", "scope", "register", "paymentCount", "cashCapturedMinor", "cardManualCapturedMinor",
     "totalCapturedMinor", "nextLocalSequence", "tipsMinor", "cashTipsMinor", "movementCount", "movements",
-  ]);
+  ], ["transferCapturedMinor"]);
   if (record === undefined || own(record, "schemaVersion") !== FINANCIAL_SCHEMA_VERSION) return undefined;
   const tipsMinor = integer(own(record, "tipsMinor"), 0, Number.MAX_SAFE_INTEGER);
   const cashTipsMinor = integer(own(record, "cashTipsMinor"), 0, Number.MAX_SAFE_INTEGER);
@@ -437,15 +447,18 @@ export function parseCashRegisterOperationalReportV1(value: unknown): CashRegist
   const cardManualCapturedMinor = integer(own(record, "cardManualCapturedMinor"), 0, Number.MAX_SAFE_INTEGER);
   const totalCapturedMinor = integer(own(record, "totalCapturedMinor"), 0, Number.MAX_SAFE_INTEGER);
   const nextLocalSequence = integer(own(record, "nextLocalSequence"), 1, Number.MAX_SAFE_INTEGER);
+  const transferCapturedMinor = Object.hasOwn(record, "transferCapturedMinor")
+    ? integer(own(record, "transferCapturedMinor"), 0, Number.MAX_SAFE_INTEGER) : 0;
   const tenderTotal = cashCapturedMinor === undefined || cardManualCapturedMinor === undefined
-    ? undefined : cashCapturedMinor + cardManualCapturedMinor;
+    || transferCapturedMinor === undefined
+    ? undefined : cashCapturedMinor + cardManualCapturedMinor + transferCapturedMinor;
   if (scope === undefined || register === undefined || paymentCount === undefined || cashCapturedMinor === undefined
-    || cardManualCapturedMinor === undefined || totalCapturedMinor === undefined || nextLocalSequence === undefined
+    || cardManualCapturedMinor === undefined || transferCapturedMinor === undefined || totalCapturedMinor === undefined || nextLocalSequence === undefined
     || !Number.isSafeInteger(tenderTotal) || tenderTotal !== totalCapturedMinor || !sameScope(register.scope, scope)) return undefined;
   return Object.freeze({
     cardManualCapturedMinor, cashCapturedMinor, cashTipsMinor, movementCount,
     movements: Object.freeze(movements as CashRegisterMovementV1[]), nextLocalSequence, paymentCount, register,
-    schemaVersion: 1, scope, tipsMinor, totalCapturedMinor,
+    schemaVersion: 1, scope, tipsMinor, totalCapturedMinor, transferCapturedMinor,
   });
 }
 
