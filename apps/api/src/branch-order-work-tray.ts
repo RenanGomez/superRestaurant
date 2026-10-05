@@ -21,7 +21,9 @@ import { decodeOrderRecord } from "./persistence/order-persistence-codec.js";
 const listSql = "select app_private.list_branch_order_work_items($1::uuid, $2::jsonb) as result";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const CHANNELS = ["table", "counter", "takeout", "delivery"] as const;
-const STATUSES = ["draft", "open", "partially_paid"] as const;
+const STATUSES = ["draft", "open", "partially_paid", "paid"] as const;
+const DELIVERY_STATES = ["assigned", "en_route", "delivered", "failed", "settled"] as const;
+const ITEM_KEYS = ["orderId", "channel", "status", "version", "createdAt", "updatedAt", "confirmedAt", "order", "snapshot"] as const;
 
 export type BranchOrderWorkTrayErrorCode = "authorization" | "request" | "unavailable";
 
@@ -45,8 +47,10 @@ export class PostgresBranchOrderWorkTray implements BranchOrderWorkTrayPort {
   public async list(actorId: string, input: BranchOrderWorkTrayRequestV1): Promise<unknown> {
     const request = parseBranchOrderWorkTrayRequestV1(input);
     if (!UUID_PATTERN.test(actorId) || request === undefined) throw unavailable();
+    // The flag is always sent (false by default) so the SQL reader sees one stable request shape.
     const sqlRequest = {
       after: request.cursor, channel: request.channel, limit: request.limit, schemaVersion: 1, scope: request.scope,
+      unassignedDeliveriesOnly: request.unassignedDeliveriesOnly === true,
     };
     let rows: readonly unknown[];
     try {
@@ -95,7 +99,15 @@ export class BranchOrderWorkTrayService {
     const rawOrders = own(envelope, "orders");
     if (!Array.isArray(rawOrders) || rawOrders.length > request.limit) throw unavailable();
     const items: BranchOrderWorkItemV1[] = [];
-    for (const rawOrder of rawOrders) items.push(projectBranchOrderWorkItem(rawOrder, request.scope, canReadCustomers));
+    for (const rawOrder of rawOrders) {
+      const item = projectBranchOrderWorkItem(rawOrder, request.scope, canReadCustomers);
+      // Defence in depth over the SQL filter: `paid` only makes sense for the "por asignar" request, and that
+      // request must never carry a non-delivery or already-dispatched Order.
+      if (request.unassignedDeliveriesOnly === true
+        ? item.channel !== "delivery" || (item.deliveryState !== null && item.deliveryState !== "failed")
+        : item.status === "paid") throw unavailable();
+      items.push(item);
+    }
     const result = parseBranchOrderWorkTrayV1({
       items, nextCursor: own(envelope, "next"), schemaVersion: 1, scope: request.scope,
     });
@@ -117,8 +129,11 @@ function projectBranchOrderWorkItem(
   scope: { restaurantId: string; branchId: string },
   canReadCustomers: boolean,
 ): BranchOrderWorkItemV1 {
-  const record = exactRecord(raw, ["orderId", "channel", "status", "version", "createdAt", "updatedAt", "confirmedAt", "order", "snapshot"]);
+  // `deliveryState` is emitted by migration 20261007000100; a reader without it (key absent) means "no delivery".
+  const record = exactRecord(raw, [...ITEM_KEYS, "deliveryState"]) ?? exactRecord(raw, ITEM_KEYS);
   if (record === undefined) throw unavailable();
+  const deliveryState = own(record, "deliveryState") ?? null;
+  if (deliveryState !== null && !member(deliveryState, DELIVERY_STATES)) throw unavailable();
   const orderId = own(record, "orderId");
   const channel = own(record, "channel");
   const status = own(record, "status");
@@ -163,6 +178,7 @@ function projectBranchOrderWorkItem(
     channel,
     createdAt: confirmedAt ?? createdAt,
     customerLabel: canReadCustomers ? buildCustomerLabel(snapshot) : null,
+    deliveryState,
     fulfillmentChannel,
     hasNotes: order.items.some((entry) => typeof entry.note === "string"),
     lineCount: order.items.filter((entry) => entry.status !== "cancelled").length,

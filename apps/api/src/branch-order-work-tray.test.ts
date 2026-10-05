@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { Money, addOrderItem, createOrder } from "@super-restaurant/domain";
+import { Money, addOrderItem, createOrder, transitionOrderStatus } from "@super-restaurant/domain";
 import { parseBranchScope } from "@super-restaurant/shared-types";
 
 import { encodeOrderRecord } from "./persistence/order-persistence-codec.js";
@@ -108,7 +108,80 @@ test("branch order work tray adapter binds actor and forwards the cursor as 'aft
   assert.equal(calls[0]?.[0], actorId);
   assert.deepEqual(JSON.parse(calls[0]?.[1] as string), {
     after: { orderId, updatedAt: "2026-09-26T12:00:00.000000Z" }, channel: "delivery", limit: 10, schemaVersion: 1, scope,
+    unassignedDeliveriesOnly: false,
   });
+});
+
+test("adapter forwards unassignedDeliveriesOnly to the SQL request jsonb", async () => {
+  const calls: unknown[][] = [];
+  const adapter = new PostgresBranchOrderWorkTray({ query: async (_sql, parameters) => {
+    calls.push([...parameters]);
+    return { rows: [{ result: { schemaVersion: 1, scope, orders: [], next: null } }] };
+  } });
+  await adapter.list(actorId, { channel: null, cursor: null, limit: 100, schemaVersion: 1, scope, unassignedDeliveriesOnly: true });
+  assert.deepEqual(JSON.parse(calls[0]?.[1] as string), {
+    after: null, channel: null, limit: 100, schemaVersion: 1, scope, unassignedDeliveriesOnly: true,
+  });
+});
+
+function prepaidDeliveryRow(deliveryState?: string, channel = "delivery") {
+  const open = transitionOrderStatus(deliveryOrder(), "open", audit).order;
+  const order = transitionOrderStatus(open, "paid", audit).order;
+  return {
+    orderId, channel, status: "paid", version: 3, createdAt: "2026-09-26T11:55:00.000Z",
+    updatedAt: "2026-09-26T12:05:00.000Z", confirmedAt: "2026-09-26T12:00:00.000Z",
+    order: encodeOrderRecord(order), snapshot: deliverySnapshot(),
+    ...(deliveryState === undefined ? {} : { deliveryState }),
+  };
+}
+
+// The adapter and service run together over the real `{ result }` row shape SQL returns.
+function trayOverRow(row: unknown): BranchOrderWorkTrayService {
+  const authorization = { authorizeBranch: async () => ({ principal: { actorId }, roles: ["cashier"] }) } as never;
+  const adapter = new PostgresBranchOrderWorkTray({ query: async () => ({
+    rows: [{ result: { schemaVersion: 1, scope, orders: [row], next: null } }],
+  }) });
+  return new BranchOrderWorkTrayService(authorization, adapter);
+}
+const unassignedRequest = { channel: null, cursor: null, limit: 100, schemaVersion: 1, scope, unassignedDeliveriesOnly: true } as const;
+
+test("a prepaid (paid) delivery Order with no delivery appears in the unassigned tray", async () => {
+  const result = await trayOverRow({ ...prepaidDeliveryRow(), deliveryState: null }).list({ actorId } as never, unassignedRequest);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0]?.status, "paid");
+  assert.equal(result.items[0]?.deliveryState, null);
+  assert.equal(result.items[0]?.totals.totalMinor, 13_000);
+  const legacyKeyAbsent = await trayOverRow(prepaidDeliveryRow()).list({ actorId } as never, unassignedRequest);
+  assert.equal(legacyKeyAbsent.items[0]?.deliveryState, null);
+});
+
+test("a failed delivery stays assignable and projects its deliveryState", async () => {
+  const result = await trayOverRow(prepaidDeliveryRow("failed")).list({ actorId } as never, unassignedRequest);
+  assert.equal(result.items[0]?.deliveryState, "failed");
+});
+
+test("the unassigned tray fails closed on Orders that SQL must have excluded", async () => {
+  for (const state of ["assigned", "en_route", "delivered", "settled"]) {
+    await assert.rejects(trayOverRow(prepaidDeliveryRow(state)).list({ actorId } as never, unassignedRequest),
+      (error: unknown) => error instanceof BranchOrderWorkTrayError && error.code === "unavailable");
+  }
+  await assert.rejects(trayOverRow(prepaidDeliveryRow(undefined, "counter")).list({ actorId } as never, unassignedRequest),
+    (error: unknown) => error instanceof BranchOrderWorkTrayError && error.code === "unavailable");
+  await assert.rejects(trayOverRow(prepaidDeliveryRow("teleported")).list({ actorId } as never, unassignedRequest),
+    (error: unknown) => error instanceof BranchOrderWorkTrayError && error.code === "unavailable");
+});
+
+test("a paid Order never appears in the default tray", async () => {
+  await assert.rejects(
+    trayOverRow(prepaidDeliveryRow()).list({ actorId } as never, { channel: null, cursor: null, limit: 25, schemaVersion: 1, scope }),
+    (error: unknown) => error instanceof BranchOrderWorkTrayError && error.code === "unavailable");
+});
+
+test("the adapter rejects a malformed unassignedDeliveriesOnly before touching the database", async () => {
+  let queried = false;
+  const adapter = new PostgresBranchOrderWorkTray({ query: async () => { queried = true; return { rows: [] }; } });
+  await assert.rejects(adapter.list(actorId, { ...unassignedRequest, unassignedDeliveriesOnly: "yes" } as never));
+  assert.equal(queried, false);
 });
 
 test("service projects a delivery order's totals, masked customer, address and payment intent", async () => {
