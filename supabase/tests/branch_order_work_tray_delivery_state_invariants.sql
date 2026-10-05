@@ -23,6 +23,7 @@ declare
   o_draft uuid := gen_random_uuid();
   o_cancelled uuid := gen_random_uuid();
   o_other_branch uuid := gen_random_uuid();
+  o_old_paid uuid := gen_random_uuid();
   now_at timestamptz := pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp());
   scope jsonb;
   result jsonb;
@@ -58,6 +59,7 @@ begin
       (o_counter,      branch,       'counter', 'open',           9),
       (o_draft,        branch,       'delivery','draft',         10),
       (o_cancelled,    branch,       'delivery','cancelled',     11),
+      (o_old_paid,     branch,       'delivery','paid',          12),
       (o_other_branch, other_branch, 'delivery','open',           0)
     ) as t(id,branch_id,channel,status,minutes_ago)
   loop
@@ -71,6 +73,9 @@ begin
       ),1,actor,actor,now_at-(rec.minutes_ago+20)*interval '1 minute',now_at-rec.minutes_ago*interval '1 minute'
     );
   end loop;
+
+  -- A prepaid Order with no delivery created 3 days ago is outside the 2-day window.
+  update app.orders set created_at=now_at-interval '3 days' where id=o_old_paid;
 
   insert into app.order_deliveries(restaurant_id,branch_id,order_id,courier_user_id,state,attempt_count,
       assigned_at,dispatched_at,delivered_at,failed_reason,settled_at,created_by,updated_by) values
@@ -117,6 +122,7 @@ begin
     'schemaVersion',1,'scope',scope,'limit',100,'after',null,'channel',null,'unassignedDeliveriesOnly',true));
   select array_agg(e->>'orderId' order by ord) into ids
     from pg_catalog.jsonb_array_elements(result->'orders') with ordinality as x(e,ord);
+  if o_old_paid::text = any(ids) then raise exception 'WORK_TRAY_DELIVERY_STATE_OLD_PREPAID_NOT_WINDOWED'; end if;
   if ids is distinct from array[o_open::text,o_partial::text,o_prepaid::text,o_failed::text]
     or result->'next' is distinct from 'null'::jsonb
   then raise exception 'WORK_TRAY_DELIVERY_STATE_UNASSIGNED_SET_REJECTED'; end if;

@@ -8,7 +8,9 @@ begin;
 --   * the request accepts an optional boolean `unassignedDeliveriesOnly`. When true the reader forces
 --     channel = 'delivery', admits status open|partially_paid|paid (prepaid Orders included) and keeps only
 --     Orders with no delivery row or a `failed` one (a failed trip is assignable again). The filter runs
---     before the keyset limit so pagination stays exact. Without it the behaviour is unchanged.
+--     before the keyset limit so pagination stays exact. A `paid` Order with no delivery row only counts while
+--     it was created within the last 2 days (same window as the deliveries list), so historic prepaid Orders
+--     never linger; open/partially_paid have no window. Without it the behaviour is unchanged.
 -- Read-only: no new money, no new state, no writes to order_deliveries.
 create or replace function app_private.list_branch_order_work_items(p_actor_id uuid, p_request jsonb)
 returns jsonb language plpgsql stable security definer set search_path = '' as $function$
@@ -82,7 +84,8 @@ begin
     where o.restaurant_id=v_restaurant and o.branch_id=v_branch
       and (case when v_unassigned then o.status in ('open','partially_paid','paid')
         else o.status in ('draft','open','partially_paid') end)
-      and (not v_unassigned or delivery.state is null or delivery.state = 'failed')
+      and (not v_unassigned or delivery.state = 'failed' or (delivery.state is null
+        and (o.status <> 'paid' or o.created_at > pg_catalog.clock_timestamp() - interval '2 days')))
       and (v_channel is null or o.channel=v_channel)
       and (v_after_at is null or o.updated_at < v_after_at
         or (o.updated_at = v_after_at and o.id > v_after_id))
