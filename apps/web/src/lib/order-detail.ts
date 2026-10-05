@@ -3,6 +3,7 @@ import {
   parseOrderDetailV1,
   parseOrderMutationSummaryV1,
   type BranchScope,
+  type LineFractionV1,
   type AddOrderItemCommandV1,
   type OrderDetailActionV1,
   type OrderDetailItemV1,
@@ -176,6 +177,8 @@ export function buildAddOrderItemCommand(input: {
   readonly quantity: number;
   readonly note: string | null;
   readonly variantId: string | null;
+  /** Half-and-half split; omitted or `null` for a whole line. */
+  readonly fraction?: LineFractionV1 | null;
   readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[];
   readonly eventId: string;
   readonly idempotencyKey: string;
@@ -187,6 +190,7 @@ export function buildAddOrderItemCommand(input: {
     expectedVersion: input.expectedVersion, orderItemId: input.orderItemId,
     productId: input.productId, quantity: input.quantity,
     note: input.note, variantId: input.variantId,
+    ...(input.fraction === undefined || input.fraction === null ? {} : { fraction: input.fraction }),
     modifierGroups: input.modifierGroups.map((group) => ({ groupId: group.groupId,
       selections: group.selections.map((selection) => ({ optionId: selection.optionId, quantity: selection.quantity })) })),
     eventId: input.eventId, idempotencyKey: input.idempotencyKey,

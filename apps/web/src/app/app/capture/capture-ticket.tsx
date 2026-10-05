@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { CaptureSelectionPlanProjectionV1, MenuCatalogV1 } from "@super-restaurant/shared-types";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
+import { halfTicketLines } from "../../../lib/line-halves";
 import { variantNameFor } from "../../../lib/menu-variants";
 
 const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
@@ -37,6 +38,14 @@ export function CaptureTicket({ projection, catalog, busyLineId, locked, onIncre
             <span className="font-semibold">{line.productName}{line.variantId === null ? "" : ` · ${variantNameFor(catalog, line.productId, line.variantId)}`}</span>
             <span className="whitespace-nowrap font-semibold">{formatMinorUnits(line.lineTotalMinor, projection.currency)}</span>
           </div>
+          {(line.halves ?? []).length > 0 && <ul className="grid gap-1 text-sm" aria-label="Mitades">
+            {(line.halves ?? []).map((half) => {
+              const lines = halfTicketLines(half);
+              return <li key={half.fraction}><span className="font-semibold">{lines.title}</span>
+                {lines.details.length > 0 && <ul className="text-xs text-text-muted">{lines.details.map((detail) => <li key={detail}>{detail}</li>)}</ul>}
+              </li>;
+            })}
+          </ul>}
           {line.modifiers.length > 0 && <span className="text-xs text-text-muted">
             {line.modifiers.map((modifier) => `${modifier.quantity} × ${modifier.name}`).join(" · ")}
           </span>}

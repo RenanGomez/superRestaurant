@@ -31,6 +31,7 @@ import type {
   CustomerRepeatOrderCaptureResultV1,
   CustomerRepeatOrderPreviewIssueV1,
   CustomerRepeatOrderPreviewV1,
+  LineFractionV1,
   MenuCatalogStateV1,
   MenuModifierGroupV1,
   MenuProductV1,
@@ -39,6 +40,7 @@ import type {
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
   rehydrateCaptureWorkspace, shortCaptureDraftId, shouldRenewLease } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
+import { restoreLineFraction } from "../../../lib/line-halves";
 import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
   type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
@@ -375,7 +377,11 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       }
       const modifierGroups: SelectionPlanModifierGroupDraft[] = [...byGroup.entries()]
         .map(([groupId, selections]) => ({ groupId, selections }));
-      return { lineId: line.lineId, productId: line.productId, variantId: line.variantId, quantity: line.quantity, modifierGroups, note: line.note };
+      // The projection names the halves; the ids are resolved from the catalog so re-sending the plan keeps them.
+      const variant = catalog.catalog?.products.find((product) => product.productId === line.productId)?.variants?.find((entry) => entry.variantId === line.variantId);
+      const fraction = restoreLineFraction(line.halves, variant?.fraction, catalog.catalog?.modifierGroups.filter((group) => group.productId === line.productId) ?? []);
+      return { lineId: line.lineId, productId: line.productId, variantId: line.variantId, quantity: line.quantity, modifierGroups, note: line.note,
+        ...(fraction === undefined ? {} : { fraction }) };
     });
   }
 
@@ -446,6 +452,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     modifierGroups: readonly SelectionPlanModifierGroupDraft[],
     note: string | null,
     variantId: string | null,
+    fraction: LineFractionV1 | null = null,
   ): Promise<void> {
     if (sheetProduct === undefined) return;
     const productId = sheetProduct.productId;
@@ -454,9 +461,10 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     const currentLines = selectionDraftLines();
     // One server replacement of the whole plan keeps the edit atomic and preserves its line ID.
     const nextLines = sheetEditLine === undefined
-      ? applyLineChange(currentLines, { type: "add", lineId, productId, variantId, quantity, modifierGroups, note })
+      ? applyLineChange(currentLines, { type: "add", lineId, productId, variantId, quantity, modifierGroups, note,
+        ...(fraction === null ? {} : { fraction }) })
       : currentLines.map((line) => line.lineId === lineId
-        ? { lineId, productId, variantId, quantity, modifierGroups, note } : line);
+        ? { lineId, productId, variantId, quantity, modifierGroups, note, ...(fraction === null ? {} : { fraction }) } : line);
     const projection = await sendSelectionPlan(nextLines);
     setSelectionBusy(false);
     if (projection === undefined) { setSheetError(error === "conflict" ? messages.conflict : "No se pudo guardar la línea. Reintenta."); return; }
@@ -1108,7 +1116,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy} confirmedTotalMinor={sheetConfirmedTotalMinor}
         initialLine={sheetEditLine} error={sheetError} showVariants
         onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); setSheetEditLine(undefined); setSheetError(undefined); }}
-        onAdd={(quantity, modifierGroups, note, variantId) => void addFromSheet(quantity, modifierGroups, note, variantId)} />}
+        onAdd={(quantity, modifierGroups, note, variantId, fraction) => void addFromSheet(quantity, modifierGroups, note, variantId, fraction)} />}
       {customer !== undefined && capture.customerSnapshotRef !== null && <section className={panel}><h2 className="font-heading text-lg font-semibold">3. Entrega · dirección validada</h2>
         <div className="mt-3 grid gap-2">{customer.addresses.map((item) => <button key={item.addressId} className={`${button} text-left`}
           disabled={locked || !item.validatedForRequestedBranch} onClick={() => selectAddress(item.addressId, item.version)}><strong className="block">{item.address.label}</strong>
