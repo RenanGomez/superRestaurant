@@ -759,3 +759,34 @@ test("PostgreSQL adapter parses the real { result } rows for tender, change, tip
   const missingAdapter = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: missing }] }) });
   await assertCode(missingAdapter.readReport(actorId, reportQuery(sessionId)), "unavailable");
 });
+
+test("collect on an Order with an active delivery maps the SQL conflict code to delivery_settle_required", async () => {
+  const register = openRegister();
+  const database: DatabaseClientPort = {
+    query: async () => ({ rows: [{ result: { status: "conflict", code: "DELIVERY_SETTLE_REQUIRED" } }] }),
+  };
+  const adapter = new PostgresFinancialPersistenceAdapter(database);
+  const finances = financialPort({
+    read: async () => storedRegister(register, 1, 0),
+    collect: (actor, input) => adapter.collect(actor, input),
+  });
+  await assertCode(
+    serviceFor(["cashier"], finances, orderPort(payableOrder(), 1)).collect(
+      principal, collectCommand({ amountMinor: 5_000, method: "cash", cardManualEvidence: null }),
+    ),
+    "delivery_settle_required",
+  );
+  const notDelivered = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: { status: "conflict", code: "DELIVERY_NOT_DELIVERED" } }] }) });
+  await assertCode(
+    serviceFor(["cashier"], financialPort({ read: async () => storedRegister(register, 1, 0), collect: (actor, input) => notDelivered.collect(actor, input) }), orderPort(payableOrder(), 1)).collect(
+      principal, collectCommand({ amountMinor: 5_000, method: "cash", cardManualEvidence: null }),
+    ),
+    "delivery_not_delivered",
+  );
+  // Any other extra-key shape from SQL fails closed instead of being read as a plain conflict.
+  const odd = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: { status: "conflict", code: "OTHER" } }] }) });
+  await assert.rejects(odd.collect(actorId, {
+    command: collectCommand({ amountMinor: 5_000, method: "cash", cardManualEvidence: null }) as never,
+    order: payableOrder(), orderTotalMinor: 10_000, payment: undefined as never, priorCapturedAmountMinor: 0, register,
+  }));
+});

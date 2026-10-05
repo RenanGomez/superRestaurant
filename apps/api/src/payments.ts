@@ -67,7 +67,8 @@ const collectPaymentSql = "select app_private.collect_simple_payment($1::uuid,$2
 const closeRegisterSql = "select app_private.close_cash_register($1::uuid,$2::jsonb,$3::jsonb) as result";
 const replayFinancialCommandSql = "select app_private.replay_financial_command($1::uuid,$2::text,$3::jsonb) as result";
 
-export type FinancialApplicationErrorCode = "authorization" | "conflict" | "not_found" | "request" | "unavailable";
+export type FinancialApplicationErrorCode =
+  | "authorization" | "conflict" | "delivery_not_delivered" | "delivery_settle_required" | "not_found" | "request" | "unavailable";
 
 export class FinancialApplicationError extends Error {
   public constructor(public readonly code: FinancialApplicationErrorCode) {
@@ -148,8 +149,12 @@ export interface PersistPaymentInput {
   readonly register: CashRegister;
 }
 
-export type FinancialMutationResult<T> = T | "conflict" | "forbidden";
-export type FinancialReplayResult<T> = FinancialMutationResult<T> | "missing";
+/**
+ * `delivery_settle_required`: the Order has an active delivery, so cash must be settled through /deliveries/settle.
+ * `delivery_not_delivered`: a card collection is only admitted once the delivery is `delivered`.
+ */
+export type FinancialMutationResult<T> = T | "conflict" | "delivery_not_delivered" | "delivery_settle_required" | "forbidden";
+export type FinancialReplayResult<T> = T | "conflict" | "forbidden" | "missing";
 export type FinancialReadResult<T> = FinancialReplayResult<T>;
 
 export interface FinancialPersistencePort {
@@ -270,7 +275,9 @@ export class PostgresFinancialPersistenceAdapter implements FinancialPersistence
   ): Promise<FinancialReplayResult<T>> {
     const raw = await this.call(replayFinancialCommandSql, [actorId, operation, JSON.stringify(command)]);
     if (raw === null) return "missing";
-    return parseMutation(raw, parser);
+    const parsed = parseMutation(raw, parser);
+    if (parsed === "delivery_settle_required" || parsed === "delivery_not_delivered") throw unavailable();
+    return parsed;
   }
 
   private async call(sql: string, parameters: readonly unknown[]): Promise<unknown> {
@@ -357,6 +364,24 @@ export class FinancialService {
     const actorId = await this.authorize(principal, command.scope, "payments.collect");
     const replay = await this.replay(() => this.finances.replayCollect(actorId, command));
     if (replay !== "missing") return replay;
+    const prepared = await this.prepareCollection(actorId, command);
+    return this.mutation(() => this.finances.collect(actorId, prepared));
+  }
+
+  /** The Order's remaining balance (total from packages/domain minus captured), for full-balance settlements. */
+  public async remainingBalance(actorId: string, scope: BranchScope, orderId: string, cashRegisterSessionId: string): Promise<number> {
+    const storedOrder = await this.readOrder(actorId, scope, orderId);
+    const storedRegister = await this.readRegister(actorId, scope, cashRegisterSessionId, orderId);
+    let totalMinor: number;
+    try { totalMinor = calculateOrderAggregateTotals(storedOrder.order).total.amountMinor; } catch { throw applicationError("request"); }
+    const remaining = totalMinor - storedRegister.capturedAmountMinor;
+    // 0 is valid: a prepaid Order has nothing left to collect (settle_prepaid_delivery).
+    if (!Number.isSafeInteger(remaining) || remaining < 0) throw applicationError("conflict");
+    return remaining;
+  }
+
+  /** Builds every aggregate a collection persists (Payment, Order, register) with domain rules; no writes. */
+  public async prepareCollection(actorId: string, command: CollectPaymentCommandV1): Promise<PersistPaymentInput> {
     const storedOrder = await this.readOrder(actorId, command.scope, command.orderId);
     const storedRegister = await this.readRegister(actorId, command.scope, command.cashRegisterSessionId, command.orderId);
     if (storedRegister.version !== command.cashRegisterExpectedVersion || storedOrder.version !== command.orderExpectedVersion) {
@@ -455,10 +480,10 @@ export class FinancialService {
       }
     } catch { throw applicationError("request"); }
 
-    return this.mutation(() => this.finances.collect(actorId, {
+    return {
       command, order: resultingOrder, orderTotalMinor: totalMinor, payment,
       priorCapturedAmountMinor: storedRegister.capturedAmountMinor, register: resultingRegister,
-    }));
+    };
   }
 
   public async close(principal: AuthenticatedPrincipal, input: unknown): Promise<CashRegisterSummaryV1> {
@@ -558,6 +583,8 @@ export class FinancialService {
     let result: FinancialMutationResult<T>;
     try { result = await operation(); } catch { throw unavailable(); }
     if (result === "forbidden") throw applicationError("authorization");
+    if (result === "delivery_settle_required") throw applicationError("delivery_settle_required");
+    if (result === "delivery_not_delivered") throw applicationError("delivery_not_delivered");
     if (result === "conflict") throw applicationError("conflict");
     return result;
   }
@@ -591,6 +618,12 @@ function auditContext(command: CollectPaymentCommandV1, actorId: string) {
 type FinancialAuditCommand = OpenCashRegisterCommandV1 | CollectPaymentCommandV1 | CloseCashRegisterCommandV1;
 
 function parseMutation<T>(raw: unknown, parser: (value: unknown) => T | undefined): FinancialMutationResult<T> {
+  const coded = exactRecord(raw, ["status", "code"]);
+  if (coded !== undefined) {
+    if (own(coded, "status") === "conflict" && own(coded, "code") === "DELIVERY_SETTLE_REQUIRED") return "delivery_settle_required";
+    if (own(coded, "status") === "conflict" && own(coded, "code") === "DELIVERY_NOT_DELIVERED") return "delivery_not_delivered";
+    throw unavailable();
+  }
   const minimal = exactRecord(raw, ["status"]);
   if (minimal !== undefined) {
     const status = own(minimal, "status");

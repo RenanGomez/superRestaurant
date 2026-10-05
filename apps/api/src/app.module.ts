@@ -74,6 +74,10 @@ import {
 } from "./orders.js";
 import { RealtimeGateway } from "./realtime.gateway.js";
 import { PaymentsController } from "./payments.controller.js";
+import { DeliveriesController } from "./deliveries.controller.js";
+import { DELIVERY_PORT, DeliveryService, PostgresDeliveryAdapter } from "./deliveries.js";
+import { BRANCH_MEMBERS_PORT, BranchMembersController, BranchMembersService, PostgresBranchMembersAdapter } from "./branch-members.js";
+import { ORDER_DELIVERY_CONTEXT_PORT, PostgresOrderDeliveryContextAdapter } from "./order-delivery-context.js";
 import {
   FINANCIAL_PERSISTENCE_PORT,
   FinancialService,
@@ -142,6 +146,8 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     DeliveryZonesController,
     TableBoardController,
     OrderWaiterController,
+    DeliveriesController,
+    BranchMembersController,
   ],
   providers: [
     {
@@ -238,6 +244,14 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     PostgresFinancialPersistenceAdapter,
     { provide: FINANCIAL_PERSISTENCE_PORT, useExisting: PostgresFinancialPersistenceAdapter },
     FinancialService,
+    PostgresOrderDeliveryContextAdapter,
+    { provide: ORDER_DELIVERY_CONTEXT_PORT, useExisting: PostgresOrderDeliveryContextAdapter },
+    PostgresDeliveryAdapter,
+    { provide: DELIVERY_PORT, useExisting: PostgresDeliveryAdapter },
+    DeliveryService,
+    PostgresBranchMembersAdapter,
+    { provide: BRANCH_MEMBERS_PORT, useExisting: PostgresBranchMembersAdapter },
+    BranchMembersService,
     PostgresOperationalShiftDirectory,
     { provide: OPERATIONAL_SHIFT_DIRECTORY, useExisting: PostgresOperationalShiftDirectory },
     { provide: OPERATIONAL_SHIFT_WRITER, useExisting: PostgresOperationalShiftDirectory },

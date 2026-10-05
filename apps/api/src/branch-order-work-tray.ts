@@ -184,7 +184,7 @@ function projectBranchOrderWorkItem(
   return item;
 }
 
-function buildCustomerLabel(snapshot: OrderFulfillmentSnapshotV1 | OrderFulfillmentSnapshotV2 | null): string | null {
+export function buildCustomerLabel(snapshot: OrderFulfillmentSnapshotV1 | OrderFulfillmentSnapshotV2 | null): string | null {
   const party = snapshot?.partySnapshot ?? null;
   if (party === null) return null;
   const digits = party.phoneDisplayValue.replaceAll(/\D/gu, "");
@@ -192,7 +192,7 @@ function buildCustomerLabel(snapshot: OrderFulfillmentSnapshotV1 | OrderFulfillm
   return `${party.displayName} · ****${suffix}`;
 }
 
-function buildAddressLabel(snapshot: OrderFulfillmentSnapshotV1 | OrderFulfillmentSnapshotV2 | null): string | null {
+export function buildAddressLabel(snapshot: OrderFulfillmentSnapshotV1 | OrderFulfillmentSnapshotV2 | null): string | null {
   const address = snapshot?.fulfillmentSnapshot ?? null;
   if (address === null) return null;
   const street = address.streetLine.length > 40 ? `${address.streetLine.slice(0, 40)}…` : address.streetLine;
