@@ -512,6 +512,19 @@ export class MenuProductVariantNotFoundError extends DomainError {
   public readonly variantId: string;
 }
 
+export class MenuFractionSelectionInvalidError extends DomainError {
+  public readonly code = "MENU_FRACTION_SELECTION_INVALID";
+
+  public constructor(productId: string, issueCodes: readonly string[]) {
+    super("The half-and-half selection is not valid for this product size.");
+    this.productId = productId;
+    this.issueCodes = Object.freeze([...issueCodes]);
+  }
+
+  public readonly productId: string;
+  public readonly issueCodes: readonly string[];
+}
+
 export class InactiveMenuProductVariantError extends DomainError {
   public readonly code = "INACTIVE_MENU_PRODUCT_VARIANT";
 
