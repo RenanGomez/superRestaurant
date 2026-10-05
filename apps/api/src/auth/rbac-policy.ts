@@ -36,6 +36,10 @@ const allPermissions = Object.freeze([
   "customers.update",
   "customers.validate",
   "delivery_zones.manage",
+  "deliveries.read",
+  "deliveries.update.own",
+  "deliveries.manage",
+  "memberships.read",
 ] satisfies readonly RbacPermissionCode[]);
 
 const managerPermissions = without(allPermissions, "memberships.manage");
@@ -64,6 +68,10 @@ const supervisorPermissions = permissions(
   "customers.create",
   "customers.update",
   "customers.validate",
+  "deliveries.read",
+  "deliveries.update.own",
+  "deliveries.manage",
+  "memberships.read",
 );
 
 export const RBAC_ROLE_PERMISSIONS_V1 = Object.freeze({
@@ -89,6 +97,10 @@ export const RBAC_ROLE_PERMISSIONS_V1 = Object.freeze({
     "customers.create",
     "customers.update",
     "customers.validate",
+    "deliveries.read",
+    "deliveries.update.own",
+    "deliveries.manage",
+    "memberships.read",
   ),
   waiter: permissions(
     "branch.select",
@@ -108,6 +120,7 @@ export const RBAC_ROLE_PERMISSIONS_V1 = Object.freeze({
     "customers.update",
     "customers.validate",
   ),
+  courier: permissions("branch.select", "deliveries.read", "deliveries.update.own"),
   kitchen: permissions("branch.select", "orders.read", "kds.read", "kds.transition"),
   viewer: permissions("branch.select", "catalog.read", "tables.read", "orders.read", "kds.read", "reports.read"),
   auditor: permissions("branch.select", "catalog.read", "tables.read", "orders.read", "kds.read", "reports.read"),

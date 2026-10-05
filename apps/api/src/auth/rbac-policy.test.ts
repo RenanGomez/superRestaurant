@@ -69,3 +69,22 @@ test("customer directory permissions stay operational and exclude non-capture ro
   assert.equal(rolesGrantPermission(["viewer", "waiter"], "customers.read"), true);
   assert.equal(rolesGrantPermission(["viewer", "kitchen"], "customers.read"), false);
 });
+
+test("courier sees and moves only deliveries; dispatch and settlement belong to branch operators", () => {
+  assert.deepEqual([...RBAC_ROLE_PERMISSIONS_V1.courier], ["branch.select", "deliveries.read", "deliveries.update.own"]);
+  assert.equal(rolesGrantPermission(["courier"], "orders.read"), false);
+  assert.equal(rolesGrantPermission(["courier"], "payments.collect"), false);
+  assert.equal(rolesGrantPermission(["courier"], "customers.read"), false);
+  assert.equal(rolesGrantPermission(["courier"], "deliveries.manage"), false);
+  assert.equal(rolesGrantPermission(["courier"], "memberships.read"), false);
+  for (const role of ["owner", "admin", "manager", "supervisor", "cashier"]) {
+    for (const permission of ["deliveries.read", "deliveries.update.own", "deliveries.manage", "memberships.read"]) {
+      assert.equal(rolesGrantPermission([role], permission), true, `${role}: ${permission}`);
+    }
+  }
+  for (const role of ["waiter", "kitchen", "viewer", "auditor"]) {
+    for (const permission of ["deliveries.read", "deliveries.manage", "memberships.read"]) {
+      assert.equal(rolesGrantPermission([role], permission), false, `${role}: ${permission}`);
+    }
+  }
+});
