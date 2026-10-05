@@ -517,6 +517,25 @@ function append(register: CashRegister, overrides: MovementOverrides = {}): Retu
   }));
 }
 
+test("tip_in is a cash-in movement sourced from a payment and counts toward the expected balance", () => {
+  let register = openCashRegister(openInput()).register;
+  register = append(register, { type: "cash_sale", direction: "in", source: { type: "payment", paymentId: "payment-1" }, amount: 2_500, localSequence: 1 }).register;
+  register = append(register, { type: "tip_in", direction: "in", source: { type: "payment", paymentId: "payment-1" }, amount: 300, localSequence: 2 }).register;
+  assert.equal(register.movements.at(-1)?.type, "tip_in");
+  assert.equal(expectedCashBalance(register).amountMinor, 12_800);
+  const closed = closeCashRegister(register, {
+    eventId: "close-event-tip", idempotencyKey: "close-key-tip", countedClosingBalance: new Money(12_800, "MXN"), evidence: evidence(),
+  }).register;
+  assert.equal(closed.difference?.amountMinor, 0);
+});
+
+test("tip_in requires a payment source and direction in", () => {
+  const register = openCashRegister(openInput()).register;
+  assert.throws(() => append(register, { type: "tip_in", direction: "in" }), CashMovementReferenceError);
+  assert.throws(() => append(register, { type: "tip_in", direction: "out", source: { type: "payment", paymentId: "p" } }), CashMovementReferenceError);
+  assert.throws(() => append(register, { type: "tip_in", direction: "in", source: { type: "refund", refundId: "r", paymentId: "p" } }), CashMovementReferenceError);
+});
+
 function evidence(overrides: Partial<CashAuditEvidence> = {}): CashAuditEvidence {
   return { actorId: "cashier-1", branchId: "branch-1", deviceId: "device-1", occurredAt: "2026-08-27T12:00:00Z", ...overrides };
 }

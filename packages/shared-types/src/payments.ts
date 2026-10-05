@@ -41,6 +41,10 @@ export interface CollectPaymentCommandV1 extends FinancialAuditInputV1 {
   readonly paymentId: string;
   readonly schemaVersion: typeof FINANCIAL_SCHEMA_VERSION;
   readonly scope: BranchScope;
+  /** Additive. Cash only: what the customer handed over; must cover `amountMinor`. Change is server-derived. */
+  readonly tenderedAmountMinor?: number | null;
+  /** Additive. Gratuity recorded apart from `amountMinor`; any method; 0 means none. */
+  readonly tipMinor?: number;
 }
 
 export interface CloseCashRegisterCommandV1 extends FinancialAuditInputV1 {
@@ -86,6 +90,28 @@ export interface PaymentCollectionSummaryV1 {
   readonly replayed: boolean;
   readonly schemaVersion: typeof FINANCIAL_SCHEMA_VERSION;
   readonly scope: BranchScope;
+  /** Server-derived `tendered - amount - tip` (a cash tip comes out of the cash handed over); null unless a cash tender was recorded. Never part of the bill. */
+  readonly changeMinor: number | null;
+  readonly tenderedAmountMinor: number | null;
+  readonly tipMinor: number;
+}
+
+export const CASH_REGISTER_MOVEMENT_TYPES_V1 = Object.freeze([
+  "cash_sale", "tip_in", "cash_refund", "cash_in", "cash_out", "cash_adjustment",
+] as const);
+export type CashRegisterMovementTypeV1 = (typeof CASH_REGISTER_MOVEMENT_TYPES_V1)[number];
+/** The report lists at most this many movements, newest first; `movementCount` is the true total. */
+export const CASH_REGISTER_REPORT_MOVEMENT_LIMIT_V1 = 200 as const;
+
+export interface CashRegisterMovementV1 {
+  readonly amountMinor: number;
+  readonly direction: "in" | "out";
+  readonly movementId: string;
+  readonly note: string | null;
+  readonly occurredAt: string;
+  readonly sourcePaymentId: string | null;
+  readonly sourceRefundId: string | null;
+  readonly type: CashRegisterMovementTypeV1;
 }
 
 export interface CashRegisterReportQueryV1 {
@@ -98,8 +124,14 @@ export interface CashRegisterReportQueryV1 {
 
 export interface CashRegisterOperationalReportV1 {
   readonly cardManualCapturedMinor: number;
+  /** Tips left in the till in cash; they count toward the expected cash balance, apart from sales. */
+  readonly cashTipsMinor: number;
   readonly cashCapturedMinor: number;
+  readonly movementCount: number;
+  readonly movements: readonly CashRegisterMovementV1[];
   readonly nextLocalSequence: number;
+  /** Every tip recorded in the session (cash and card), never included in the captured totals. */
+  readonly tipsMinor: number;
   readonly paymentCount: number;
   readonly register: CashRegisterSummaryV1;
   readonly schemaVersion: typeof FINANCIAL_SCHEMA_VERSION;
@@ -131,6 +163,75 @@ export interface CheckoutOrderSummaryV1 {
   readonly scope: BranchScope;
 }
 
+/** Read-only preview of a collection; the server derives change from the live order and register. */
+export interface QuoteCashPaymentRequestV1 {
+  readonly amountMinor: number;
+  readonly cashRegisterSessionId: string;
+  readonly method: SimplePaymentMethodV1;
+  readonly orderId: string;
+  readonly schemaVersion: typeof FINANCIAL_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly tenderedAmountMinor: number | null;
+  readonly tipMinor: number;
+}
+
+export interface CashPaymentQuoteV1 extends QuoteCashPaymentRequestV1 {
+  readonly changeMinor: number | null;
+  readonly currency: string;
+  readonly remainingAfterMinor: number;
+  readonly remainingBeforeMinor: number;
+}
+
+export function parseQuoteCashPaymentRequestV1(value: unknown): QuoteCashPaymentRequestV1 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "scope", "orderId", "cashRegisterSessionId", "method", "amountMinor", "tenderedAmountMinor", "tipMinor",
+  ]);
+  if (record === undefined || own(record, "schemaVersion") !== FINANCIAL_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const orderId = uuid(own(record, "orderId"));
+  const cashRegisterSessionId = uuid(own(record, "cashRegisterSessionId"));
+  const method = paymentMethod(own(record, "method"));
+  const amountMinor = integer(own(record, "amountMinor"), 1, Number.MAX_SAFE_INTEGER);
+  const rawTendered = own(record, "tenderedAmountMinor");
+  const tenderedAmountMinor = rawTendered === null ? null : integer(rawTendered, 1, Number.MAX_SAFE_INTEGER);
+  const tipMinor = integer(own(record, "tipMinor"), 0, Number.MAX_SAFE_INTEGER);
+  if (scope === undefined || orderId === undefined || cashRegisterSessionId === undefined || method === undefined
+    || amountMinor === undefined || tenderedAmountMinor === undefined || tipMinor === undefined
+    || (tenderedAmountMinor !== null && (method !== "cash" || tenderedAmountMinor < amountMinor + tipMinor))) return undefined;
+  return Object.freeze({
+    amountMinor, cashRegisterSessionId, method, orderId, schemaVersion: 1, scope, tenderedAmountMinor, tipMinor,
+  });
+}
+
+export function parseCashPaymentQuoteV1(value: unknown): CashPaymentQuoteV1 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "scope", "orderId", "cashRegisterSessionId", "method", "amountMinor", "tenderedAmountMinor",
+    "tipMinor", "changeMinor", "currency", "remainingAfterMinor", "remainingBeforeMinor",
+  ]);
+  if (record === undefined) return undefined;
+  const request = parseQuoteCashPaymentRequestV1({
+    amountMinor: own(record, "amountMinor"),
+    cashRegisterSessionId: own(record, "cashRegisterSessionId"),
+    method: own(record, "method"),
+    orderId: own(record, "orderId"),
+    schemaVersion: own(record, "schemaVersion"),
+    scope: own(record, "scope"),
+    tenderedAmountMinor: own(record, "tenderedAmountMinor"),
+    tipMinor: own(record, "tipMinor"),
+  });
+  const rawChange = own(record, "changeMinor");
+  const changeMinor = rawChange === null ? null : integer(rawChange, 0, Number.MAX_SAFE_INTEGER);
+  const currency = currencyCode(own(record, "currency"));
+  const remainingAfterMinor = integer(own(record, "remainingAfterMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const remainingBeforeMinor = integer(own(record, "remainingBeforeMinor"), 1, Number.MAX_SAFE_INTEGER);
+  if (request === undefined || changeMinor === undefined || currency === undefined
+    || remainingAfterMinor === undefined || remainingBeforeMinor === undefined
+    || remainingAfterMinor !== remainingBeforeMinor - request.amountMinor
+    || (request.tenderedAmountMinor === null) !== (changeMinor === null)
+    || (changeMinor !== null && changeMinor !== (request.tenderedAmountMinor as number) - request.amountMinor - request.tipMinor)) return undefined;
+  return Object.freeze({ ...request, changeMinor, currency, remainingAfterMinor, remainingBeforeMinor });
+}
+
 export function parseOpenCashRegisterCommandV1(value: unknown): OpenCashRegisterCommandV1 | undefined {
   const record = exactRecord(value, [
     "schemaVersion", "scope", "cashRegisterSessionId", "registerId", "shiftId", "openingFloatMinor", "currency",
@@ -151,11 +252,11 @@ export function parseOpenCashRegisterCommandV1(value: unknown): OpenCashRegister
 }
 
 export function parseCollectPaymentCommandV1(value: unknown): CollectPaymentCommandV1 | undefined {
-  const record = exactRecord(value, [
+  const record = exactRecordWithOptional(value, [
     "schemaVersion", "scope", "cashRegisterSessionId", "cashRegisterExpectedVersion", "orderId",
     "orderExpectedVersion", "paymentId", "amountMinor", "method", "cardManualEvidence", "localSequence",
     "eventId", "idempotencyKey", "deviceId", "occurredAt",
-  ]);
+  ], ["tenderedAmountMinor", "tipMinor"]);
   if (record === undefined || own(record, "schemaVersion") !== FINANCIAL_SCHEMA_VERSION) return undefined;
   const common = parseCommon(record);
   const scope = parseScope(own(record, "scope"));
@@ -169,13 +270,23 @@ export function parseCollectPaymentCommandV1(value: unknown): CollectPaymentComm
   const method = paymentMethod(own(record, "method"));
   const rawCard = own(record, "cardManualEvidence");
   const cardManualEvidence = rawCard === null ? null : parseCardManualEvidenceV1(rawCard);
+  const hasTendered = Object.hasOwn(record, "tenderedAmountMinor");
+  const rawTendered = own(record, "tenderedAmountMinor");
+  const tenderedAmountMinor = !hasTendered || rawTendered === null
+    ? rawTendered === null ? null : undefined : integer(rawTendered, 1, Number.MAX_SAFE_INTEGER);
+  const hasTip = Object.hasOwn(record, "tipMinor");
+  const tipMinor = hasTip ? integer(own(record, "tipMinor"), 0, Number.MAX_SAFE_INTEGER) : undefined;
   if (common === undefined || scope === undefined || cashRegisterSessionId === undefined
     || cashRegisterExpectedVersion === undefined || orderId === undefined || orderExpectedVersion === undefined
     || paymentId === undefined || amountMinor === undefined || localSequence === undefined || method === undefined
-    || cardManualEvidence === undefined || (method === "cash") !== (cardManualEvidence === null)) return undefined;
+    || cardManualEvidence === undefined || (method === "cash") !== (cardManualEvidence === null)
+    || (hasTendered && tenderedAmountMinor === undefined) || (hasTip && tipMinor === undefined)
+    || (typeof tenderedAmountMinor === "number" && (method !== "cash" || tenderedAmountMinor < amountMinor + (tipMinor ?? 0)))) return undefined;
   return Object.freeze({
     ...common, amountMinor, cardManualEvidence, cashRegisterExpectedVersion, cashRegisterSessionId,
     localSequence, method, orderExpectedVersion, orderId, paymentId, schemaVersion: 1, scope,
+    ...(hasTendered && tenderedAmountMinor !== undefined ? { tenderedAmountMinor } : {}),
+    ...(hasTip && tipMinor !== undefined ? { tipMinor } : {}),
   });
 }
 
@@ -246,12 +357,22 @@ export function parseCashRegisterSummaryV1(value: unknown): CashRegisterSummaryV
 }
 
 export function parsePaymentCollectionSummaryV1(value: unknown): PaymentCollectionSummaryV1 | undefined {
-  const record = exactRecord(value, [
+  // Replays of pre-tender payments return the stored result, which lacks the tender triple; read them as no tender.
+  const record = exactRecordWithOptional(value, [
     "schemaVersion", "scope", "cashRegisterSessionId", "cashRegisterVersion", "paymentId", "orderId",
     "method", "amountMinor", "currency", "paymentState", "orderStatus", "orderVersion",
     "remainingBalanceMinor", "replayed",
-  ]);
+  ], ["tenderedAmountMinor", "changeMinor", "tipMinor"]);
   if (record === undefined || own(record, "schemaVersion") !== 1) return undefined;
+  const tenderKeys = ["tenderedAmountMinor", "changeMinor", "tipMinor"].filter((key) => Object.hasOwn(record, key));
+  if (tenderKeys.length !== 0 && tenderKeys.length !== 3) return undefined;
+  const rawTendered = own(record, "tenderedAmountMinor");
+  const rawChange = own(record, "changeMinor");
+  const tenderedAmountMinor = tenderKeys.length === 0 || rawTendered === null
+    ? null : integer(rawTendered, 1, Number.MAX_SAFE_INTEGER);
+  const changeMinor = tenderKeys.length === 0 || rawChange === null
+    ? null : integer(rawChange, 0, Number.MAX_SAFE_INTEGER);
+  const tipMinor = tenderKeys.length === 0 ? 0 : integer(own(record, "tipMinor"), 0, Number.MAX_SAFE_INTEGER);
   const scope = parseScope(own(record, "scope"));
   const cashRegisterSessionId = uuid(own(record, "cashRegisterSessionId"));
   const cashRegisterVersion = integer(own(record, "cashRegisterVersion"), 1, Number.MAX_SAFE_INTEGER);
@@ -270,10 +391,14 @@ export function parsePaymentCollectionSummaryV1(value: unknown): PaymentCollecti
     || currency === undefined || paymentState !== "captured"
     || (orderStatus !== "partially_paid" && orderStatus !== "paid") || orderVersion === undefined
     || remainingBalanceMinor === undefined || typeof replayed !== "boolean"
-    || (orderStatus === "paid") !== (remainingBalanceMinor === 0)) return undefined;
+    || (orderStatus === "paid") !== (remainingBalanceMinor === 0)
+    || tenderedAmountMinor === undefined || changeMinor === undefined || tipMinor === undefined
+    || (tenderedAmountMinor === null) !== (changeMinor === null)
+    || (tenderedAmountMinor !== null && (method !== "cash" || changeMinor !== tenderedAmountMinor - amountMinor - tipMinor))) return undefined;
   return Object.freeze({
-    amountMinor, cashRegisterSessionId, cashRegisterVersion, currency, method, orderId, orderStatus,
+    amountMinor, cashRegisterSessionId, cashRegisterVersion, changeMinor, currency, method, orderId, orderStatus,
     orderVersion, paymentId, paymentState, remainingBalanceMinor, replayed, schemaVersion: 1, scope,
+    tenderedAmountMinor, tipMinor,
   });
 }
 
@@ -293,9 +418,18 @@ export function parseCashRegisterReportQueryV1(value: unknown): CashRegisterRepo
 export function parseCashRegisterOperationalReportV1(value: unknown): CashRegisterOperationalReportV1 | undefined {
   const record = exactRecord(value, [
     "schemaVersion", "scope", "register", "paymentCount", "cashCapturedMinor", "cardManualCapturedMinor",
-    "totalCapturedMinor", "nextLocalSequence",
+    "totalCapturedMinor", "nextLocalSequence", "tipsMinor", "cashTipsMinor", "movementCount", "movements",
   ]);
   if (record === undefined || own(record, "schemaVersion") !== FINANCIAL_SCHEMA_VERSION) return undefined;
+  const tipsMinor = integer(own(record, "tipsMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const cashTipsMinor = integer(own(record, "cashTipsMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const movementCount = integer(own(record, "movementCount"), 0, Number.MAX_SAFE_INTEGER);
+  const rawMovements = own(record, "movements");
+  const movements = Array.isArray(rawMovements) && rawMovements.length <= CASH_REGISTER_REPORT_MOVEMENT_LIMIT_V1
+    ? rawMovements.map(parseCashRegisterMovementV1) : undefined;
+  if (tipsMinor === undefined || cashTipsMinor === undefined || movementCount === undefined || movements === undefined
+    || movements.some((movement) => movement === undefined) || cashTipsMinor > tipsMinor
+    || movements.length > movementCount) return undefined;
   const scope = parseScope(own(record, "scope"));
   const register = parseCashRegisterSummaryV1(own(record, "register"));
   const paymentCount = integer(own(record, "paymentCount"), 0, Number.MAX_SAFE_INTEGER);
@@ -309,9 +443,33 @@ export function parseCashRegisterOperationalReportV1(value: unknown): CashRegist
     || cardManualCapturedMinor === undefined || totalCapturedMinor === undefined || nextLocalSequence === undefined
     || !Number.isSafeInteger(tenderTotal) || tenderTotal !== totalCapturedMinor || !sameScope(register.scope, scope)) return undefined;
   return Object.freeze({
-    cardManualCapturedMinor, cashCapturedMinor, nextLocalSequence, paymentCount, register,
-    schemaVersion: 1, scope, totalCapturedMinor,
+    cardManualCapturedMinor, cashCapturedMinor, cashTipsMinor, movementCount,
+    movements: Object.freeze(movements as CashRegisterMovementV1[]), nextLocalSequence, paymentCount, register,
+    schemaVersion: 1, scope, tipsMinor, totalCapturedMinor,
   });
+}
+
+export function parseCashRegisterMovementV1(value: unknown): CashRegisterMovementV1 | undefined {
+  const record = exactRecord(value, [
+    "movementId", "type", "direction", "amountMinor", "occurredAt", "sourcePaymentId", "sourceRefundId", "note",
+  ]);
+  if (record === undefined) return undefined;
+  const movementId = uuid(own(record, "movementId"));
+  const type = (CASH_REGISTER_MOVEMENT_TYPES_V1 as readonly unknown[]).includes(own(record, "type"))
+    ? own(record, "type") as CashRegisterMovementTypeV1 : undefined;
+  const direction = own(record, "direction");
+  const amountMinor = integer(own(record, "amountMinor"), 1, Number.MAX_SAFE_INTEGER);
+  const occurredAt = timestamp(own(record, "occurredAt"));
+  const rawPayment = own(record, "sourcePaymentId");
+  const sourcePaymentId = rawPayment === null ? null : uuid(rawPayment);
+  const rawRefund = own(record, "sourceRefundId");
+  const sourceRefundId = rawRefund === null ? null : uuid(rawRefund);
+  const rawNote = own(record, "note");
+  const note = rawNote === null ? null : text(rawNote, 1, 500);
+  if (movementId === undefined || type === undefined || (direction !== "in" && direction !== "out")
+    || amountMinor === undefined || occurredAt === undefined || sourcePaymentId === undefined
+    || sourceRefundId === undefined || note === undefined) return undefined;
+  return Object.freeze({ amountMinor, direction, movementId, note, occurredAt, sourcePaymentId, sourceRefundId, type });
 }
 
 export function parseCheckoutOrderQueryV1(value: unknown): CheckoutOrderQueryV1 | undefined {
@@ -379,6 +537,18 @@ function parseScope(value: unknown): BranchScope | undefined {
 
 function sameScope(left: BranchScope, right: BranchScope): boolean {
   return left.restaurantId === right.restaurantId && left.branchId === right.branchId;
+}
+
+function exactRecordWithOptional(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[],
+): Readonly<Record<string, unknown>> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  try {
+    const present = optional.filter((key) => Object.hasOwn(value, key));
+    return exactRecord(value, [...required, ...present]);
+  } catch { return undefined; }
 }
 
 function exactRecord(value: unknown, keys: readonly string[]): Readonly<Record<string, unknown>> | undefined {

@@ -143,6 +143,9 @@ export function encodePaymentRecord(payment: Payment): Readonly<Record<string, u
     amount: encodeMoney(payment.amount),
     method: payment.method,
     ...(payment.cardManualEvidence === undefined ? {} : { cardManualEvidence: { ...payment.cardManualEvidence } }),
+    ...(payment.tenderedAmount === undefined ? {} : { tenderedAmount: encodeMoney(payment.tenderedAmount) }),
+    ...(payment.change === undefined ? {} : { change: encodeMoney(payment.change) }),
+    ...(payment.tip === undefined ? {} : { tip: encodeMoney(payment.tip) }),
     idempotencyKey: payment.idempotencyKey,
     state: payment.state,
     transitions: payment.transitions.map((transition) => ({

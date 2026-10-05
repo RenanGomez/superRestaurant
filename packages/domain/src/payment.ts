@@ -62,6 +62,12 @@ export interface Payment {
   readonly amount: Money;
   readonly method: PaymentMethod;
   readonly cardManualEvidence?: CardManualEvidence;
+  /** Cash only: what the customer handed over. Audit data; `amount` stays what the bill collected. */
+  readonly tenderedAmount?: Money;
+  /** Cash only: `tenderedAmount - amount`, derived by the domain, never part of the bill total. */
+  readonly change?: Money;
+  /** Gratuity recorded apart from the bill; never included in `amount` or the order total. */
+  readonly tip?: Money;
   readonly idempotencyKey: string;
   readonly state: PaymentState;
   readonly transitions: readonly PaymentTransition[];
@@ -90,6 +96,8 @@ export interface CreatePaymentInput {
   readonly amount: Money;
   readonly method: PaymentMethod;
   readonly cardManualEvidence?: CardManualEvidence;
+  readonly tenderedAmount?: Money;
+  readonly tip?: Money;
   readonly idempotencyKey: string;
   readonly evidence: PaymentAuditEvidence;
 }
@@ -157,6 +165,10 @@ export function createPayment(input: CreatePaymentInput): PaymentMutation {
     amount: input.amount,
     method: input.method,
     ...(input.cardManualEvidence === undefined ? {} : { cardManualEvidence: input.cardManualEvidence }),
+    ...(input.tenderedAmount === undefined
+      ? {}
+      : { tenderedAmount: input.tenderedAmount, change: cashChange(input.amount, input.tenderedAmount, input.tip) }),
+    ...(input.tip === undefined ? {} : { tip: input.tip }),
     idempotencyKey: input.idempotencyKey,
     state: "initiated",
     transitions: [Object.freeze({ eventId: input.eventId, idempotencyKey: input.idempotencyKey, from: null, to: "initiated" as const, evidence })],
@@ -307,6 +319,12 @@ function assertPaymentIntegrity(payment: Payment): void {
     throw new InvalidPaymentMethodError(payment.method);
   }
   assertCardManualEvidence(payment.method, payment.cardManualEvidence, "payment.cardManualEvidence", true);
+  assertTenderAndTip(payment.method, payment.amount, payment.tenderedAmount, payment.tip, "payment");
+  if ((payment.tenderedAmount === undefined) !== (payment.change === undefined) ||
+    (payment.tenderedAmount !== undefined && payment.change !== undefined &&
+      !payment.change.equals(cashChange(payment.amount, payment.tenderedAmount, payment.tip)))) {
+    throw new InvalidPaymentFieldError("payment.change");
+  }
   if (!states.has(payment.state)) {
     throw new InvalidPaymentFieldError("payment.state");
   }
@@ -427,7 +445,50 @@ function assertPaymentInput(input: CreatePaymentInput): void {
     throw new InvalidPaymentMethodError(input.method);
   }
   assertCardManualEvidence(input.method, input.cardManualEvidence, "cardManualEvidence", true);
+  assertTenderAndTip(input.method, input.amount, input.tenderedAmount, input.tip, "payment");
   assertEvidence(input.evidence, input.branchId);
+}
+
+/**
+ * Cash change rule: a cash tip comes out of the same cash handed over, so
+ * `change = tendered - amount - tip` (tendered must cover amount + tip). The till then keeps
+ * exactly amount + tip, matching the `cash_sale` + `tip_in` movements.
+ */
+export function cashChange(amount: Money, tendered: Money, tip?: Money): Money {
+  const kept = tip === undefined ? amount : amount.add(tip);
+  if (tendered.compare(kept) < 0) {
+    throw new InvalidPaymentFieldError("payment.tenderedAmount");
+  }
+  return tendered.subtract(kept);
+}
+
+/**
+ * Tender (cash handed over) exists only for cash and must cover amount + tip; a tip is a
+ * positive gratuity for any method. Both are separate from the bill amount.
+ */
+function assertTenderAndTip(
+  method: PaymentMethod,
+  amount: Money,
+  tendered: Money | undefined,
+  tip: Money | undefined,
+  kind: string,
+): void {
+  if (tendered !== undefined) {
+    if (method !== "cash") {
+      throw new InvalidPaymentFieldError(`${kind}.tenderedAmount`);
+    }
+    if (!(tendered instanceof Money) || !isFrozenDataObject(tendered, Money.prototype) ||
+      !Number.isSafeInteger(tendered.amountMinor) || tendered.currency !== amount.currency ||
+      tendered.amountMinor < amount.amountMinor + (tip?.amountMinor ?? 0)) {
+      throw new InvalidPaymentFieldError(`${kind}.tenderedAmount`);
+    }
+  }
+  if (tip !== undefined) {
+    if (!(tip instanceof Money) || !isFrozenDataObject(tip, Money.prototype) ||
+      !Number.isSafeInteger(tip.amountMinor) || tip.currency !== amount.currency || tip.amountMinor <= 0) {
+      throw new InvalidPaymentFieldError(`${kind}.tip`);
+    }
+  }
 }
 
 function assertRefundInput(input: CreateRefundInput): void {
@@ -466,6 +527,8 @@ function assertSamePaymentAttempt(payment: Payment, input: CreatePaymentInput): 
     !payment.amount.equals(input.amount) ||
     payment.method !== input.method ||
     !sameCardManualEvidence(payment.cardManualEvidence, input.cardManualEvidence) ||
+    !sameOptionalMoney(payment.tenderedAmount, input.tenderedAmount) ||
+    !sameOptionalMoney(payment.tip, input.tip) ||
     !sameEvidence(payment.transitions[0]?.evidence, input.evidence)
   ) {
     throw new PaymentIdempotencyConflictError(input.idempotencyKey);
@@ -595,6 +658,10 @@ function sameEvidence(left: PaymentAuditEvidence | undefined, right: PaymentAudi
   );
 }
 
+function sameOptionalMoney(left: Money | undefined, right: Money | undefined): boolean {
+  return left === undefined || right === undefined ? left === right : left.equals(right);
+}
+
 function sameCardManualEvidence(left: CardManualEvidence | undefined, right: CardManualEvidence | undefined): boolean {
   return left?.externalConfirmed === right?.externalConfirmed
     && left?.provider === right?.provider
@@ -661,6 +728,8 @@ function snapshotCreatePaymentInput(input: CreatePaymentInput): CreatePaymentInp
     ...(record.cardManualEvidence === undefined
       ? {}
       : { cardManualEvidence: snapshotCardManualEvidence(record.cardManualEvidence, "cardManualEvidence", false) }),
+    ...(record.tenderedAmount === undefined ? {} : { tenderedAmount: record.tenderedAmount as Money }),
+    ...(record.tip === undefined ? {} : { tip: record.tip as Money }),
     idempotencyKey: record.idempotencyKey as string,
     evidence: snapshotEvidence(record.evidence, "evidence", false),
   });

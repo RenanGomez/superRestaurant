@@ -14,6 +14,7 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import type {
+  CashPaymentQuoteV1,
   CashRegisterOperationalReportV1,
   CashRegisterSummaryV1,
   CheckoutOrderSummaryV1,
@@ -37,6 +38,12 @@ export class PaymentsController {
   @Header("Cache-Control", "private, no-store")
   public collect(@Req() request: unknown, @Body() body: unknown): Promise<PaymentCollectionSummaryV1> {
     return this.map(() => this.finances.collect(getAuthenticatedPrincipal(request), body));
+  }
+
+  @Post("payments/quote")
+  @Header("Cache-Control", "private, no-store")
+  public quote(@Req() request: unknown, @Body() body: unknown): Promise<CashPaymentQuoteV1> {
+    return this.map(() => this.finances.quote(getAuthenticatedPrincipal(request), body));
   }
 
   @Post("cash-registers/close")

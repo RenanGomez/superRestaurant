@@ -3,7 +3,9 @@ import {
   parseCashRegisterReportQueryV1,
   parseCashRegisterSummaryV1,
   parseCloseCashRegisterCommandV1,
+  parseCashPaymentQuoteV1,
   parseCollectPaymentCommandV1,
+  parseQuoteCashPaymentRequestV1,
   parseCheckoutOrderQueryV1,
   parseCheckoutOrderSummaryV1,
   parseOpenCashRegisterCommandV1,
@@ -13,6 +15,7 @@ import {
   parseProjectPaymentObligationRequestV1,
   parseQuotePaymentIntentRequestV1,
   type BranchScope,
+  type CashPaymentQuoteV1,
   type CashRegisterOperationalReportV1,
   type CashRegisterReportQueryV1,
   type CashRegisterSummaryV1,
@@ -25,11 +28,13 @@ import {
   type PaymentObligationProjectionV1,
 } from "@super-restaurant/shared-types";
 import {
+  InvalidPaymentFieldError,
   InvalidPaymentIntentError,
   InvalidPaymentObligationError,
   Money,
   appendCashMovement,
   calculateOrderAggregateTotals,
+  cashChange,
   closeCashRegister,
   createPayment,
   buildPaymentIntentQuote,
@@ -42,6 +47,7 @@ import {
   type Payment,
 } from "@super-restaurant/domain";
 import { Inject, Injectable } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
@@ -366,6 +372,7 @@ export class FinancialService {
     const remaining = totalMinor - storedRegister.capturedAmountMinor;
     if (!Number.isSafeInteger(remaining) || remaining <= 0 || command.amountMinor > remaining) throw applicationError("conflict");
     const resultingStatus = command.amountMinor === remaining ? "paid" : "partially_paid";
+    const tipMinor = command.tipMinor ?? 0;
     const audit = evidence(command, actorId);
     let payment: Payment;
     let resultingOrder: Order;
@@ -387,6 +394,10 @@ export class FinancialService {
             ...(command.cardManualEvidence.reference === null ? {} : { reference: command.cardManualEvidence.reference }),
           },
         }),
+        ...(command.tenderedAmountMinor === undefined || command.tenderedAmountMinor === null ? {} : {
+          tenderedAmount: new Money(command.tenderedAmountMinor, order.currency),
+        }),
+        ...(tipMinor === 0 ? {} : { tip: new Money(tipMinor, order.currency) }),
         idempotencyKey: command.idempotencyKey,
         evidence: audit,
       }).payment;
@@ -420,6 +431,27 @@ export class FinancialService {
           sequenceContext: { deviceId: command.deviceId, expectedNextSequence: command.localSequence },
           source: { type: "payment", paymentId: command.paymentId },
         }).register;
+        if (tipMinor > 0) {
+          // A cash tip stays in the till: its own immutable movement, reported apart from the sale.
+          resultingRegister = appendCashMovement(resultingRegister, {
+            movementId: randomUUID(),
+            eventId: randomUUID(),
+            idempotencyKey: `${command.idempotencyKey}:tip`,
+            restaurantId: register.restaurantId,
+            branchId: register.branchId,
+            cashRegisterId: register.cashRegisterId,
+            registerId: register.registerId,
+            shiftId: register.shiftId,
+            cashierId: register.cashierId,
+            localSequence: command.localSequence + 1,
+            type: "tip_in",
+            direction: "in",
+            amount: new Money(tipMinor, order.currency),
+            evidence: audit,
+            sequenceContext: { deviceId: command.deviceId, expectedNextSequence: command.localSequence + 1 },
+            source: { type: "payment", paymentId: command.paymentId },
+          }).register;
+        }
       }
     } catch { throw applicationError("request"); }
 
@@ -447,6 +479,45 @@ export class FinancialService {
       }).register;
     } catch { throw applicationError("request"); }
     return this.mutation(() => this.finances.close(actorId, command, register));
+  }
+
+  /** Read-only preview: change and remaining balance come from the live order/register, never the client. */
+  public async quote(principal: AuthenticatedPrincipal, input: unknown): Promise<CashPaymentQuoteV1> {
+    const request = parseQuoteCashPaymentRequestV1(input);
+    if (request === undefined) throw applicationError("request");
+    const actorId = await this.authorize(principal, request.scope, "payments.collect");
+    const storedOrder = await this.readOrder(actorId, request.scope, request.orderId);
+    const storedRegister = await this.readRegister(actorId, request.scope, request.cashRegisterSessionId, request.orderId);
+    const order = storedOrder.order;
+    if ((order.status !== "open" && order.status !== "partially_paid") || storedRegister.register.status !== "open"
+      || storedRegister.register.currency !== order.currency) throw applicationError("conflict");
+    let totalMinor: number;
+    try { totalMinor = calculateOrderAggregateTotals(order).total.amountMinor; } catch { throw applicationError("request"); }
+    try {
+      const planned = new Money(request.amountMinor, order.currency);
+      const tendered = request.tenderedAmountMinor === null ? null : new Money(request.tenderedAmountMinor, order.currency);
+      const quote = buildPaymentIntentQuote({
+        capturedAmount: new Money(storedRegister.capturedAmountMinor, order.currency),
+        method: request.method,
+        orderTotal: new Money(totalMinor, order.currency),
+        plannedAmount: planned,
+        tenderedAmount: tendered,
+        timing: "now",
+      });
+      const result = parseCashPaymentQuoteV1({
+        ...request,
+        changeMinor: tendered === null ? null : cashChange(planned, tendered, request.tipMinor === 0 ? undefined : new Money(request.tipMinor, order.currency)).amountMinor,
+        currency: order.currency,
+        remainingAfterMinor: quote.remainingAfterPlan.amountMinor,
+        remainingBeforeMinor: quote.remainingBeforePlan.amountMinor,
+      });
+      if (result === undefined) throw unavailable();
+      return result;
+    } catch (error: unknown) {
+      if (error instanceof FinancialApplicationError) throw error;
+      if (error instanceof InvalidPaymentIntentError || error instanceof InvalidPaymentFieldError) throw applicationError("request");
+      throw unavailable();
+    }
   }
 
   private async readOrder(actorId: string, scope: BranchScope, orderId: string) {
@@ -554,7 +625,7 @@ function exactRecord(value: unknown, keys: readonly string[]): Readonly<Record<s
 function normalizeOperationalReportTimestamps(value: unknown): unknown {
   const report = exactRecord(value, [
     "schemaVersion", "scope", "register", "paymentCount", "cashCapturedMinor", "cardManualCapturedMinor",
-    "totalCapturedMinor", "nextLocalSequence",
+    "totalCapturedMinor", "nextLocalSequence", "tipsMinor", "cashTipsMinor", "movementCount", "movements",
   ]);
   if (report === undefined) return value;
   const register = exactRecord(own(report, "register"), [
