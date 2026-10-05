@@ -5,6 +5,8 @@ import Link from "next/link";
 import type { BranchScope, CustomerDirectoryDetailV1, CustomerDirectoryDetailAddressV1, CustomerDirectorySearchResultV1, CustomerRecentOrderListV1, CustomerPhoneInputV1, CustomerAddressFieldsV1, CustomerSearchModeV1 } from "@super-restaurant/shared-types";
 import { getCustomerAutocompleteRequest, getCustomerDirectorySuggestions, insertCustomerDirectorySuggestion, isCurrentCustomerAutocompleteRequest, type CustomerAutocompleteRequest, type CustomerDirectorySuggestion, type CustomerRequestResult } from "../../../lib/customer-directory";
 import { countOrderArticles } from "../../../lib/customer-order-history";
+import { formatDeliveryMatch } from "../../../lib/delivery-zones";
+import { matchDeliveryAddress } from "../delivery-match-action";
 
 export type CustomerAction = "search" | "detail" | "profile" | "address" | "validate";
 export type CustomerActionResult = CustomerRequestResult<CustomerDirectorySearchResultV1 | CustomerDirectoryDetailV1> & { readonly command?: unknown };
@@ -102,7 +104,26 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
     }
     setPending(undefined);
     if ("candidates" in reply.value) { setResult(reply.value); setDetail(undefined); setCreating(false); setCreatedCustomerId(undefined); setAddingAddress(false); setActiveSuggestion(-1); setSuggestionsOpen(document.activeElement === searchInputRef.current); }
-    else { setDetail(reply.value); if (operation === "profile" && creating) setCreatedCustomerId(reply.value.customer.customerId); setCreating(false); if (operation === "detail" || operation === "address") setAddingAddress(false); if (operation === "validate" && typeof command === "object" && command !== null && "addressId" in command && typeof command.addressId === "string") setAddressFeedback({ addressId: command.addressId, message: `Revisión de dirección registrada para ${branchName}. Zona, cargo y tiempo se confirman al cotizar la entrega en captura.`, error: false }); if (operation !== "detail") setNotice(operation === "validate" ? `Revisión registrada para ${branchName}. La cobertura se confirma al cotizar la entrega.` : "Ficha guardada. Las direcciones editadas requieren validación nuevamente."); }
+    else {
+      setDetail(reply.value);
+      if (operation === "profile" && creating) setCreatedCustomerId(reply.value.customer.customerId);
+      setCreating(false);
+      if (operation === "detail" || operation === "address") setAddingAddress(false);
+      if (operation === "validate" && typeof command === "object" && command !== null && "addressId" in command && typeof command.addressId === "string") {
+        const addressId = command.addressId;
+        const address = reply.value.addresses.find(item => item.addressId === addressId);
+        let message = `Revisión registrada para ${branchName}. No se pudo consultar la cobertura; cotiza en captura.`;
+        if (address !== undefined) {
+          try {
+            const match = await matchDeliveryAddress({ schemaVersion: 1, ...scope,
+              address: { postalCode: address.address.postalCode, locality: address.address.locality } });
+            if (match.ok) message = `${formatDeliveryMatch(match.value, "es-MX")}. Consulta informativa; cotiza sobre la captura antes de confirmar.`;
+          } catch { /* The address review succeeded even if this read-only lookup failed. */ }
+        }
+        setAddressFeedback({ addressId, message, error: false });
+      }
+      if (operation !== "detail") setNotice(operation === "validate" ? `Revisión registrada para ${branchName}.` : "Ficha guardada. Las direcciones editadas requieren validación nuevamente.");
+    }
   }
   function base(customerId: string, expectedVersion: number) {
     return { schemaVersion: 1, scope, customerId, expectedVersion, deviceId,
@@ -303,7 +324,7 @@ function AddressForm({ item, branchName, feedback, validating = false, disabled,
     onSave({ ...fields, label: addressLabel.trim(), instructions: item?.address.instructions ?? null, coordinates: item?.address.coordinates ?? null } as unknown as CustomerAddressFieldsV1);
   }}>
     <h3 className="mb-2 font-semibold">{item?.address.label ?? "Nueva dirección"}</h3>
-    {item !== undefined && <div className="mb-3"><span className={`inline-flex min-h-11 items-center rounded-full border px-3 text-sm font-semibold ${!dirty && item.validatedForRequestedBranch ? "border-success text-text" : "border-border text-text-muted"}`}>{dirty ? "Cambios sin guardar · revalidar al guardar" : item.validatedForRequestedBranch ? `Dirección revisada para ${branchName}` : "Sin revisar en esta sucursal"}</span>{!dirty && item.validatedForRequestedBranch && <p className="mt-2 break-words text-xs text-text-muted">Datos revisados: {[item.address.streetLine, item.address.locality, item.address.postalCode].filter(Boolean).join(", ")}. La zona, el cargo y el tiempo se confirman al cotizar en captura.</p>}</div>}
+    {item !== undefined && <div className="mb-3"><span className={`inline-flex min-h-11 items-center rounded-full border px-3 text-sm font-semibold ${!dirty && item.validatedForRequestedBranch ? "border-success text-text" : "border-border text-text-muted"}`}>{dirty ? "Cambios sin guardar · revalidar al guardar" : item.validatedForRequestedBranch ? `Dirección revisada para ${branchName}` : "Sin revisar en esta sucursal"}</span>{!dirty && item.validatedForRequestedBranch && <p className="mt-2 break-words text-xs text-text-muted">Datos revisados: {[item.address.streetLine, item.address.locality, item.address.postalCode].filter(Boolean).join(", ")}. Cotiza en captura antes de confirmar.</p>}</div>}
     {feedback !== undefined && <p role={feedback.error ? "alert" : "status"} className={`mb-3 rounded-lg border p-3 text-sm ${feedback.error ? "border-error bg-error-bg" : "border-success"}`}>{feedback.message}</p>}
     {validating && <p role="status" className="mb-3 text-sm text-text-muted">Validando esta dirección…</p>}
     <fieldset disabled={disabled} className="grid min-w-0 gap-3 sm:grid-cols-2">

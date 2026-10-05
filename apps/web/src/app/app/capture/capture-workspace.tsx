@@ -25,6 +25,7 @@ import type {
   CaptureWorkTrayResultV1,
   CaptureWorkTrayResultV2,
   DeliveryQuoteV1,
+  DeliveryZoneMatchResultV1,
   CustomerDirectoryDetailV1,
   CustomerDirectorySearchResultV1,
   CustomerRecentOrderListV1,
@@ -45,7 +46,8 @@ import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
   type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
 import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
-import { formatDeliveryQuote } from "../../../lib/delivery-zones";
+import { formatDeliveryMatch, formatDeliveryQuote } from "../../../lib/delivery-zones";
+import { matchDeliveryAddress } from "../delivery-match-action";
 import {
   deliveryQuoteBlocksConfirm, deliveryQuoteScheduledForInputValue, isSwitchingToAnotherCapture,
   paymentIntentBlocksConfirm,
@@ -123,6 +125,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   const [customer, setCustomer] = useState<CustomerDirectoryDetailV1>();
   const [customerSnapshot, setCustomerSnapshot] = useState<CaptureCustomerSnapshotV1 | null>(null);
   const [fulfillmentSnapshot, setFulfillmentSnapshot] = useState<CaptureFulfillmentSnapshotV1 | null>(null);
+  const [addressMatch, setAddressMatch] = useState<{ snapshotRef: string; value: DeliveryZoneMatchResultV1 | null }>();
   const [repeatOrderPlan, setRepeatOrderPlan] = useState<CaptureRepeatOrderPlanSummaryV1 | null>(null);
   const [recentOrders, setRecentOrders] = useState<CustomerRecentOrderListV1>();
   const [repeatPreview, setRepeatPreview] = useState<CustomerRepeatOrderPreviewV1>();
@@ -168,6 +171,16 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     if (selectionFeedbackTimer.current) clearTimeout(selectionFeedbackTimer.current);
     if (instructionsTimer.current) clearTimeout(instructionsTimer.current);
   }, []);
+  useEffect(() => {
+    if (fulfillmentSnapshot === null || fulfillmentChannel !== "delivery") return;
+    const snapshotRef = fulfillmentSnapshot.snapshotRef;
+    let active = true;
+    void matchDeliveryAddress({ schemaVersion: 1, ...scope,
+      address: { postalCode: fulfillmentSnapshot.postalCode, locality: fulfillmentSnapshot.locality } })
+      .then(reply => { if (active) setAddressMatch({ snapshotRef, value: reply.ok ? reply.value : null }); })
+      .catch(() => { if (active) setAddressMatch({ snapshotRef, value: null }); });
+    return () => { active = false; };
+  }, [fulfillmentSnapshot, fulfillmentChannel, scope]);
   useEffect(() => {
     if (capture?.status !== "draft" || capture.attentionLeaseExpiresAt === null) return;
     const timer = window.setInterval(() => setLeaseClock(Date.now()), 10_000);
@@ -1152,6 +1165,11 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       {fulfillmentChannel === "delivery" && fulfillmentSnapshot !== null && capture.status === "draft" && <section className={panel} data-testid="delivery-quote">
         <h2 className="font-heading text-lg font-semibold">3. Entrega · cotización</h2>
         <p className="mt-1 text-sm text-text-muted">La cobertura, tarifa y promesa se calculan en el servidor para la dirección guardada.</p>
+        <p role="status" className="mt-3 rounded-lg border border-border bg-bg p-3 text-sm">
+          {addressMatch?.snapshotRef !== fulfillmentSnapshot.snapshotRef ? "Consultando cobertura para esta dirección…"
+            : addressMatch.value === null ? "No se pudo consultar la cobertura. Puedes cotizar sobre el borrador."
+              : `${formatDeliveryMatch(addressMatch.value, "es-MX")}. Consulta informativa; cotiza para confirmar.`}
+        </p>
         <form className="mt-3 grid gap-3" onSubmit={(event) => { event.preventDefault(); void requestDeliveryQuote(); }}>
           <label className="grid gap-1 text-sm" htmlFor="capture-scheduled-for">Programar entrega (opcional)
             <input id="capture-scheduled-for" type="datetime-local" className={input} value={scheduledFor}

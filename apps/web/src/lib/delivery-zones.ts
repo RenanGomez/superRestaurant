@@ -1,10 +1,18 @@
-import { parseDeliveryQuoteV1, parseDeliveryZoneListV1, parseListDeliveryZonesQueryV1,
+import { parseDeliveryQuoteV1, parseDeliveryZoneListV1, parseDeliveryZoneMatchRequestV1, parseDeliveryZoneMatchResultV1, parseListDeliveryZonesQueryV1,
   parseRequestDeliveryQuoteCommandV1, parseUpsertDeliveryZoneCommandV1, parseUpsertDeliveryZoneResultV1,
-  type DeliveryQuoteV1, type DeliveryZoneListV1, type UpsertDeliveryZoneResultV1 } from "@super-restaurant/shared-types";
+  type DeliveryQuoteV1, type DeliveryZoneListV1, type DeliveryZoneMatchResultV1, type UpsertDeliveryZoneResultV1 } from "@super-restaurant/shared-types";
 
 export type DeliveryRequestResult<T> = { readonly ok: true; readonly value: T } |
   { readonly ok: false; readonly error: "invalid" | "denied" | "missing" | "conflict" | "unavailable" };
 export type DeliveryOperation = "list" | "upsert" | "quote";
+
+export function formatDeliveryMatch(match: DeliveryZoneMatchResultV1, locale: string): string {
+  if (match.coverageStatus === "not_covered") return "Fuera de cobertura";
+  const fee = new Intl.NumberFormat(locale, { style: "currency", currency: match.currency }).format(match.feeMinor / 100);
+  const startMinutes = Math.round((Date.parse(match.promiseStart) - Date.parse(match.evaluatedAt)) / 60_000);
+  const endMinutes = Math.round((Date.parse(match.promiseEnd) - Date.parse(match.evaluatedAt)) / 60_000);
+  return `Zona ${match.zoneName} · Envío ${fee} · ${startMinutes}-${endMinutes} min`;
+}
 
 function canonicalize(input: string, maxLength: number): string[] {
   if (typeof input !== "string") return [];
@@ -45,12 +53,15 @@ export function quoteMatchesDeliverySnapshot(
     && quote.captureDraftId === captureDraftId && quote.addressSnapshotRef === fulfillmentSnapshotRef;
 }
 
-export async function requestDelivery(token: string, baseUrl: string, operation: DeliveryOperation, input: unknown):
-  Promise<DeliveryRequestResult<DeliveryZoneListV1 | UpsertDeliveryZoneResultV1 | DeliveryQuoteV1>> {
+export function requestDelivery(token: string, baseUrl: string, operation: "match", input: unknown): Promise<DeliveryRequestResult<DeliveryZoneMatchResultV1>>;
+export function requestDelivery(token: string, baseUrl: string, operation: DeliveryOperation, input: unknown): Promise<DeliveryRequestResult<DeliveryZoneListV1 | UpsertDeliveryZoneResultV1 | DeliveryQuoteV1>>;
+export async function requestDelivery(token: string, baseUrl: string, operation: DeliveryOperation | "match", input: unknown):
+  Promise<DeliveryRequestResult<DeliveryZoneListV1 | UpsertDeliveryZoneResultV1 | DeliveryQuoteV1 | DeliveryZoneMatchResultV1>> {
   const listCommand = operation === "list" ? parseListDeliveryZonesQueryV1(input) : undefined;
   const upsertCommand = operation === "upsert" ? parseUpsertDeliveryZoneCommandV1(input) : undefined;
   const quoteCommand = operation === "quote" ? parseRequestDeliveryQuoteCommandV1(input) : undefined;
-  const command = listCommand ?? upsertCommand ?? quoteCommand;
+  const matchCommand = operation === "match" ? parseDeliveryZoneMatchRequestV1(input) : undefined;
+  const command = listCommand ?? upsertCommand ?? quoteCommand ?? matchCommand;
   if (command === undefined) return { ok: false, error: "invalid" };
   try {
     const response = await fetch(`${baseUrl}/api/v1/delivery-zones/${operation}`, {
@@ -74,6 +85,10 @@ export async function requestDelivery(token: string, baseUrl: string, operation:
         || value.zone.restaurantId !== upsertCommand.scope.restaurantId || value.zone.branchId !== upsertCommand.scope.branchId
         || value.zone.version !== upsertCommand.expectedVersion + 1) return { ok: false, error: "unavailable" };
       return { ok: true, value };
+    }
+    if (operation === "match") {
+      const value = parseDeliveryZoneMatchResultV1(body);
+      return value === undefined ? { ok: false, error: "unavailable" } : { ok: true, value };
     }
     const value = parseDeliveryQuoteV1(body);
     if (value === undefined || quoteCommand === undefined || value.restaurantId !== quoteCommand.scope.restaurantId
