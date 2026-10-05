@@ -79,7 +79,7 @@ test("buildAddOrderItemCommand carries the exact attempt and counted modifier se
   assert.equal(command.quantity, 2);
   assert.deepEqual(command.modifierGroups[0]?.selections, [{ optionId: "23723e10-c0bf-49fd-9363-4f0e2c60e955", quantity: 2 }]);
   assert.equal(command.idempotencyKey, "attempt-1");
-  assert.deepEqual(parseAddOrderItemCommandV1(command), command);
+  assert.deepEqual(parseAddOrderItemCommandV1(command), { ...command, fraction: null });
   assert.equal(command.note, "Sin cebolla");
   assert.equal(command.variantId, "1e37ae13-8507-484c-969f-2176f77b7000");
 });
