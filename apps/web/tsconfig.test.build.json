@@ -54,6 +54,8 @@
     "src/lib/capture-payment.test.ts",
     "src/lib/delivery-zones.ts",
     "src/lib/delivery-zones.test.ts",
+    "src/lib/deliveries.ts",
+    "src/lib/deliveries.test.ts",
     "src/lib/branch-order-work-tray.ts",
     "src/lib/branch-order-work-tray.test.ts",
     "src/lib/order-detail.ts",
