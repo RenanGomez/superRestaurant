@@ -341,7 +341,7 @@ begin
   collect := pg_temp.t_collect(restaurant,branch,v_session,o_cash,1,1,pay_1,5000,1,(cmd->>'eventId')::uuid,'k-s-1',device,now_text,
     '{"tenderedAmountMinor":6000,"tipMinor":200}');
   pay := pg_temp.t_pay(restaurant,branch,o_cash,pay_1,(cmd->>'eventId')::uuid,'k-s-1',5000,
-    '{"tenderedAmount":{"amountMinor":6000,"currency":"MXN"},"change":{"amountMinor":1000,"currency":"MXN"},"tip":{"amountMinor":200,"currency":"MXN"}}');
+    '{"tenderedAmount":{"amountMinor":6000,"currency":"MXN"},"change":{"amountMinor":800,"currency":"MXN"},"tip":{"amountMinor":200,"currency":"MXN"}}');
   reg := pg_catalog.jsonb_set(sess.aggregate,'{movements}',sess.aggregate->'movements'
     || pg_catalog.jsonb_build_array(
       pg_temp.t_mv(pay_1,(cmd->>'eventId')::uuid,'k-s-1',restaurant,branch,v_session,v_register,v_shift,cashier,device,1,'cash_sale',5000,pay_1,now_text),
@@ -372,16 +372,16 @@ begin
     or (select status from app.orders where id=o_cash)<>'open'
   then raise exception 'DELIVERY_FAILED_SETTLEMENT_PERSISTED'; end if;
 
-  -- Successful settlement: cash 5000, tender 6000 (change 1000), cash tip 200.
+  -- Successful settlement: cash 5000, tender 6000 (change 800), cash tip 200.
   execute 'set local role app_api';
   result := app_private.settle_delivery(cashier,cmd,collect,pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),reg,5000,0);
   execute 'reset role';
   if result->>'status'<>'saved' or result->'delivery'->>'state'<>'settled' or (result->'delivery'->>'version')::bigint<>4
-    or result->'delivery'->>'settledPaymentId'<>pay_1::text or (result->'payment'->>'changeMinor')::bigint<>1000
+    or result->'delivery'->>'settledPaymentId'<>pay_1::text or (result->'payment'->>'changeMinor')::bigint<>800
     or (result->'payment'->>'tipMinor')::bigint<>200 or result->'payment'->>'orderStatus'<>'paid'
     or (result->'payment'->>'remainingBalanceMinor')::bigint<>0 or result->'payment'->>'replayed'<>'false'
   then raise exception 'DELIVERY_SETTLE_FAILED'; end if;
-  if (select amount_minor from app.payments where id=pay_1)<>5000 or (select change_minor from app.payments where id=pay_1)<>1000
+  if (select amount_minor from app.payments where id=pay_1)<>5000 or (select change_minor from app.payments where id=pay_1)<>800
     or (select cash_to_collect_minor from app.order_deliveries where order_id=o_cash)<>5000
     or (select count(*) from app.cash_movements where cash_register_session_id=v_session and source_payment_id=pay_1)<>2
     or (select status from app.orders where id=o_cash)<>'paid'
@@ -393,7 +393,7 @@ begin
     or replayed->'payment'->>'replayed'<>'true' or replayed->'payment'->>'paymentId'<>pay_1::text
   then raise exception 'DELIVERY_SETTLE_REPLAY_HELPER_WRONG'; end if;
   replayed := app_private.settle_delivery(cashier,cmd,collect,pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),reg,5000,0);
-  if replayed->>'status'<>'replayed' or replayed->'payment'->>'changeMinor'<>'1000' then raise exception 'DELIVERY_SETTLE_REPLAY_DIFFERS'; end if;
+  if replayed->>'status'<>'replayed' or replayed->'payment'->>'changeMinor'<>'800' then raise exception 'DELIVERY_SETTLE_REPLAY_DIFFERS'; end if;
   if (app_private.replay_delivery_settlement(cashier,pg_catalog.jsonb_set(cmd,'{tipMinor}','300')))->>'status'<>'conflict'
   then raise exception 'DELIVERY_SETTLE_DIVERGENT_REPLAY_ACCEPTED'; end if;
   if app_private.replay_delivery_settlement(cashier,pg_temp.t_settle(restaurant,branch,o_cash,3,v_session,1,1,pay_1,1,gen_random_uuid(),'k-unknown',device,now_text,'null'::jsonb,'null'::jsonb)) is not null

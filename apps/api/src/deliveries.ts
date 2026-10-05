@@ -231,7 +231,7 @@ export class DeliveryService {
     const tip = command.tipMinor ?? intent?.tipMinor ?? 0;
     let tender = command.tenderedAmountMinor ?? intent?.tenderedAmountMinor ?? null;
     // A stale or exact intent tender (0, or below the balance) means "exact cash"; an explicit one is validated.
-    if (command.tenderedAmountMinor === null && tender !== null && tender < amountMinor) tender = null;
+    if (command.tenderedAmountMinor === null && tender !== null && tender < amountMinor + tip) tender = null;
     if (tender === 0) tender = null;
     const collect = parseCollectPaymentCommandV1({
       amountMinor,

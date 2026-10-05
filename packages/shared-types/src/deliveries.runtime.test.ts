@@ -94,7 +94,7 @@ expect(parseOrderDeliveryResultV1({ delivery, replayed: "no", schemaVersion: 1 }
 
 const payment = {
   amountMinor: 25_000, cashRegisterSessionId: settle.cashRegisterSessionId, cashRegisterVersion: 4,
-  changeMinor: 5_000, currency: "MXN", method: "cash", orderId, orderStatus: "paid", orderVersion: 6,
+  changeMinor: 4_000, currency: "MXN", method: "cash", orderId, orderStatus: "paid", orderVersion: 6,
   paymentId: settle.paymentId, paymentState: "captured", remainingBalanceMinor: 0, replayed: false,
   schemaVersion: 1, scope, tenderedAmountMinor: 30_000, tipMinor: 1_000,
 };

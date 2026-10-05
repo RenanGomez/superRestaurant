@@ -40,7 +40,7 @@ const deliveryView = (state: string, version: number) => ({
 });
 const payment = {
   amountMinor: 25_000, cashRegisterSessionId: settleCommand.cashRegisterSessionId, cashRegisterVersion: 3,
-  changeMinor: 5_000, currency: "MXN", method: "cash", orderId, orderStatus: "paid", orderVersion: 6,
+  changeMinor: 4_000, currency: "MXN", method: "cash", orderId, orderStatus: "paid", orderVersion: 6,
   paymentId: settleCommand.paymentId, paymentState: "captured", remainingBalanceMinor: 0, replayed: false,
   schemaVersion: 1, scope, tenderedAmountMinor: 30_000, tipMinor: 1_000,
 };
@@ -118,7 +118,7 @@ test("settlement result rows parse with the payment summary and replay marks", a
   const replayed = await adapterFor({
     status: "replayed", replayed: true, delivery: settledView, payment: { ...payment, replayed: true },
   }).replaySettle(principal.actorId, settleCommand);
-  assert.ok(typeof replayed === "object" && replayed.payment.changeMinor === 5_000 && replayed.replayed);
+  assert.ok(typeof replayed === "object" && replayed.payment.changeMinor === 4_000 && replayed.replayed);
   assert.equal(await adapterFor({ status: "conflict" }).replaySettle(principal.actorId, settleCommand), "conflict");
   await assert.rejects(adapterFor({ status: "saved", replayed: false, delivery: settledView }).replaySettle(principal.actorId, settleCommand), DeliveryApplicationError);
 });
