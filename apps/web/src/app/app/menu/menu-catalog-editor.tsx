@@ -1,11 +1,13 @@
 "use client";
 
+import { MENU_PRODUCT_MAX_VARIANTS } from "@super-restaurant/shared-types";
 import type {
   MenuCategoryV1,
   MenuCatalogStateV1,
   MenuModifierGroupV1,
   MenuModifierOptionV1,
   MenuProductV1,
+  MenuProductVariantV1,
 } from "@super-restaurant/shared-types";
 import { useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
@@ -13,6 +15,7 @@ import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { DEFAULT_PESO_CURRENCY, formatMinorForMoneyInput, parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import { currencyFractionDigits } from "../../../lib/money-scale";
 import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, publishDisabledReason, validateMenuImageFile, type MenuImageAttempt } from "../../../lib/menu-images";
+import { variantValidationError } from "../../../lib/menu-variants";
 
 import { saveMenuCatalogAction, uploadMenuImageAction } from "./actions";
 
@@ -27,7 +30,7 @@ interface Draft {
 type Removal = Readonly<{
   groupId?: string;
   id: string;
-  kind: "category" | "group" | "option" | "product";
+  kind: "category" | "group" | "option" | "product" | "variant";
   label: string;
 }>;
 
@@ -41,7 +44,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
     state.catalog?.categories.map((category) => ({ ...category })) ?? [],
   );
   const [products, setProducts] = useState<readonly MenuProductV1[]>(() =>
-    state.catalog?.products.map((product) => ({ ...product, tax: product.tax === null ? null : { ...product.tax } })) ?? [],
+    state.catalog?.products.map((product) => ({ ...product, variants: product.variants?.map((variant) => ({ ...variant })) ?? [], tax: product.tax === null ? null : { ...product.tax } })) ?? [],
   );
   const [groups, setGroups] = useState<readonly MenuModifierGroupV1[]>(() =>
     state.catalog?.modifierGroups.map((group) => ({
@@ -50,6 +53,8 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
     })) ?? [],
   );
   const [removal, setRemoval] = useState<Removal | null>(null);
+  const variantIssue = products.map((product) => variantValidationError(product.productId, product.variants ?? [])).find((issue) => issue !== null) ?? null;
+  const variantError = variantIssue === null ? null : `${products.find((product) => product.productId === variantIssue.productId)?.name || "Producto sin nombre"}: ${variantIssue.message}`;
   const [pendingUploads, setPendingUploads] = useState(0);
   const onUploadPendingChange = (pending: boolean): void => setPendingUploads((current) => current + (pending ? 1 : -1));
   const expectedVersion = state.catalog?.version ?? 0;
@@ -78,6 +83,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
       tax: null,
       unit: "pieza",
       unitPriceMinor: 0,
+      variants: [],
     }]);
   };
   const addGroup = (productId: string): void => {
@@ -118,6 +124,9 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
       setGroups((current) => current.filter((group) => group.productId !== removal.id));
     } else if (removal.kind === "group") {
       setGroups((current) => current.filter((group) => group.groupId !== removal.id));
+    } else if (removal.kind === "variant" && removal.groupId !== undefined) {
+      setProducts((current) => current.map((product) => product.productId === removal.groupId
+        ? { ...product, variants: product.variants?.filter((variant) => variant.variantId !== removal.id) ?? [] } : product));
     } else if (removal.groupId !== undefined) {
       setGroups((current) => current.map((group) => group.groupId === removal.groupId
         ? { ...group, options: group.options.filter((option) => option.optionId !== removal.id) }
@@ -127,7 +136,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
   };
 
   return (
-    <form action={saveMenuCatalogAction} onSubmit={(event) => { if (publishDisabledReason(pendingUploads, false) !== null) event.preventDefault(); }} className="flex min-w-0 flex-col gap-5">
+    <form action={saveMenuCatalogAction} onSubmit={(event) => { if (publishDisabledReason(pendingUploads, false) !== null || variantError !== null) event.preventDefault(); }} className="flex min-w-0 flex-col gap-5">
       <input type="hidden" name="draft" value={draft} />
       <section className="sticky top-0 z-20 flex flex-wrap items-end justify-between gap-3 rounded-2xl border border-border bg-surface/95 p-4 shadow-sm backdrop-blur">
         <div className="flex flex-wrap items-end gap-4">
@@ -140,11 +149,12 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
           </p>
         </div>
         {canManage ? (
-          <PublishButton pendingUploads={pendingUploads} />
+          <PublishButton pendingUploads={pendingUploads} variantError={variantError} />
         ) : (
           <p className="rounded-lg bg-bg px-3 py-2 text-[12px] text-text-muted">Vista de solo lectura</p>
         )}
       </section>
+      {variantError !== null && <p role="alert" className="text-sm text-error">{variantError}</p>}
 
       {removal !== null && (
         <section role="alertdialog" aria-labelledby="remove-title" className="rounded-xl border border-[oklch(80%_0.09_45)] bg-[oklch(97%_0.025_70)] p-4">
@@ -184,7 +194,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
         {products.length === 0 ? <EmptyText text="No hay productos en este borrador." /> : (
           <div className="mt-4 flex flex-col gap-4">
             {products.map((product) => (
-              <ProductEditor
+              <ProductEditor variantInvalid={variantIssue?.productId === product.productId}
                 key={product.productId}
                 canManage={canManage}
                 categories={categories}
@@ -209,16 +219,17 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
   );
 }
 
-function PublishButton({ pendingUploads }: { readonly pendingUploads: number }): ReactNode {
+function PublishButton({ pendingUploads, variantError }: { readonly pendingUploads: number; readonly variantError: string | null }): ReactNode {
   const { pending: saving } = useFormStatus();
-  const disabledReason = publishDisabledReason(pendingUploads, saving);
+  const disabledReason = variantError ?? publishDisabledReason(pendingUploads, saving);
   return <button type="submit" disabled={disabledReason !== null}
     className="min-h-11 rounded-xl bg-accent px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-60">
     {disabledReason ?? "Publicar nueva versión"}
   </button>;
 }
 
-function ProductEditor({ canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+function ProductEditor({ variantInvalid, canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+  readonly variantInvalid: boolean;
   readonly canManage: boolean;
   readonly categories: readonly MenuCategoryV1[];
   readonly currency: string;
@@ -236,6 +247,9 @@ function ProductEditor({ canManage, categories, currency, groups, product, supab
 }): ReactNode {
   const change = (patch: Partial<MenuProductV1>): void => onProductChange({ ...product, ...patch });
   const tax = product.tax;
+  const variants = product.variants ?? [];
+  const changeVariant = (variantId: string, patch: Partial<MenuProductVariantV1>): void =>
+    change({ variants: variants.map((variant) => variant.variantId === variantId ? { ...variant, ...patch } : variant) });
   return (
     <article className="min-w-0 rounded-2xl border border-border bg-bg/40 p-3 sm:p-4">
       <MenuPhoto canManage={canManage} imagePath={product.imagePath} name={product.name} supabaseUrl={supabaseUrl} target="product" targetId={product.productId} onChange={onProductImageChange} onUploadPendingChange={onUploadPendingChange} />
@@ -256,6 +270,32 @@ function ProductEditor({ canManage, categories, currency, groups, product, supab
           {canManage && <RemoveButton label={`Quitar ${product.name}`} onClick={() => onRemove({ id: product.productId, kind: "product", label: product.name })} />}
         </div>
       </div>
+
+      <section className="mt-3 rounded-xl border border-border bg-surface p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div><h3 className="font-heading text-[13px] font-semibold">Tamaños</h3>
+            <p className="text-[12px] text-text-muted">Cada tamaño tiene su propio precio.</p></div>
+          {canManage && <AddButton label="Añadir tamaño" disabled={variants.length >= MENU_PRODUCT_MAX_VARIANTS} onClick={() => change({ variants: [...variants, {
+            active: true, displayOrder: nextDisplayOrder(variants), name: "", sku: null,
+            unitPriceMinor: 0, variantId: crypto.randomUUID(),
+          }] })} />}
+        </div>
+        {variants.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin tamaños; se usa el precio del producto.</p> :
+          <div className="mt-3 grid gap-3">{variants.map((variant) => <div key={variant.variantId}
+            className="grid min-w-0 gap-3 rounded-lg border border-border bg-bg/50 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_100px_auto]">
+            <TextInput disabled={!canManage} invalid={variantInvalid} label="Nombre del tamaño" maxLength={80} value={variant.name}
+              onChange={(name) => changeVariant(variant.variantId, { name })} />
+            <MoneyInput key={variant.variantId} label="Precio del tamaño" disabled={!canManage} currency={currency}
+              value={variant.unitPriceMinor} onChange={(unitPriceMinor) => changeVariant(variant.variantId, { unitPriceMinor })} />
+            <NumberInput disabled={!canManage} label="Orden" min={0} max={1_000_000} value={variant.displayOrder}
+              onChange={(displayOrder) => changeVariant(variant.variantId, { displayOrder })} />
+            <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={variant.active}
+              onChange={(active) => changeVariant(variant.variantId, { active })} />
+              {canManage && <RemoveButton label={`Quitar tamaño ${variant.name || "nuevo"}`}
+                onClick={() => onRemove({ id: variant.variantId, groupId: product.productId, kind: "variant", label: variant.name || "tamaño nuevo" })} />}
+            </div>
+          </div>)}</div>}
+      </section>
 
       <div className="mt-3 rounded-xl border border-border bg-surface p-3">
         <label className="inline-flex min-h-10 items-center gap-2 text-[12px] font-semibold">
@@ -418,13 +458,14 @@ function SectionHeader({ children, description, title }: { readonly children?: R
   return <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-heading text-[16px] font-semibold">{title}</h2><p className="mt-1 text-[12px] text-text-muted">{description}</p></div>{children}</div>;
 }
 
-function TextInput({ disabled, help, label, maxLength, onChange, required = true, value, width = "w-full" }: { readonly disabled: boolean; readonly help?: string; readonly label: string; readonly maxLength: number; readonly onChange: (value: string) => void; readonly required?: boolean; readonly value: string; readonly width?: string }): ReactNode {
-  return <label className={`flex min-w-0 flex-col gap-1 text-[11px] font-medium ${width}`}>{label}<input required={required} disabled={disabled} maxLength={maxLength} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" />{help && <span className="text-[11px] font-normal text-text-muted">{help}</span>}</label>;
+function TextInput({ disabled, help, invalid = false, label, maxLength, onChange, required = true, value, width = "w-full" }: { readonly disabled: boolean; readonly help?: string; readonly invalid?: boolean; readonly label: string; readonly maxLength: number; readonly onChange: (value: string) => void; readonly required?: boolean; readonly value: string; readonly width?: string }): ReactNode {
+  return <label className={`flex min-w-0 flex-col gap-1 text-[11px] font-medium ${width}`}>{label}<input required={required} aria-invalid={invalid || undefined} disabled={disabled} maxLength={maxLength} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" />{help && <span className="text-[11px] font-normal text-text-muted">{help}</span>}</label>;
 }
 
-function MoneyInput({ currency, disabled, onChange, value }: {
+function MoneyInput({ currency, disabled, label = "Precio", onChange, value }: {
   readonly currency: string;
   readonly disabled: boolean;
+  readonly label?: string;
   readonly onChange: (value: number) => void;
   readonly value: number;
 }): ReactNode {
@@ -435,7 +476,7 @@ function MoneyInput({ currency, disabled, onChange, value }: {
   const pattern = digits === 0 ? "[0-9]+" : digits === null ? "(?!)" : `[0-9]+([.,][0-9]{1,${digits}})?`;
   const errorText = digits === null ? "La moneda de este catálogo no está admitida; avisa al administrador."
     : `Escribe un precio válido${digits === 0 ? " sin decimales" : ` con máximo ${digits} decimales`}.`;
-  return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium">Precio
+  return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium">{label}
     <input
       required disabled={disabled} type="text" inputMode="decimal" pattern={pattern}
       value={text} aria-invalid={parsed === null} aria-describedby={hintId}
@@ -468,7 +509,7 @@ function ActiveInput({ checked, disabled, onChange }: { readonly checked: boolea
 }
 
 function AddButton({ disabled = false, label, onClick }: { readonly disabled?: boolean; readonly label: string; readonly onClick: () => void }): ReactNode {
-  return <button type="button" disabled={disabled} onClick={onClick} className="min-h-10 rounded-lg border border-accent px-3 py-2 text-[12px] font-semibold text-accent disabled:cursor-not-allowed disabled:opacity-40">+ {label}</button>;
+  return <button type="button" disabled={disabled} onClick={onClick} className="min-h-11 rounded-lg border border-accent px-3 py-2 text-[12px] font-semibold text-accent disabled:cursor-not-allowed disabled:opacity-40">+ {label}</button>;
 }
 
 function RemoveButton({ label, onClick }: { readonly label: string; readonly onClick: () => void }): ReactNode {

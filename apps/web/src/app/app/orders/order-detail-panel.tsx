@@ -1,12 +1,23 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
-import type { OrderDetailItemV1, OrderDetailV1 } from "@super-restaurant/shared-types";
+import { createPortal } from "react-dom";
+import type { AddOrderItemCommandV1, MenuCatalogStateV1, MenuModifierGroupV1, MenuProductV1, OrderDetailItemV1, OrderDetailV1 } from "@super-restaurant/shared-types";
 import { captureDeviceId } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
-import { actionLabel, chunkOrderItemIds, groupItemsByStatus, hasAction, hasItemAction, nextFocusIndex, pendingOrderItemIds, type OrderItemStatusGroup } from "../../../lib/order-detail";
+import type { SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
+import { actionLabel, buildAddOrderItemCommand, canAddItems, chunkOrderItemIds, groupItemsByStatus, hasAction, hasItemAction, nextFocusIndex, pendingOrderItemIds, resolvePendingAdd, type OrderItemStatusGroup } from "../../../lib/order-detail";
+import { CaptureMenu } from "../capture/capture-menu";
+import { ProductSheet } from "../capture/product-sheet";
 
 const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+interface OrderSelectionDraft {
+  readonly quantity: number;
+  readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[];
+  readonly note: string | null;
+  readonly variantId: string | null;
+}
 
 /**
  * Traps `Tab`/`Shift+Tab` inside `containerRef`'s own subtree (never letting focus escape to the
@@ -16,6 +27,8 @@ const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]
  * the pure wraparound rule this applies to the dialog's own currently focused element.
  */
 function useFocusTrap(containerRef: RefObject<HTMLElement | null>, onEscape: () => void): void {
+  const onEscapeRef = useRef(onEscape);
+  onEscapeRef.current = onEscape;
   useEffect(() => {
     const container = containerRef.current;
     if (container === null) return undefined;
@@ -30,7 +43,7 @@ function useFocusTrap(containerRef: RefObject<HTMLElement | null>, onEscape: () 
       // `stopPropagation` matters when a second dialog (the cancel-reason confirmation) is nested
       // inside this one: without it, a Tab/Escape the inner dialog's own trap already handled would
       // bubble up and be handled a second time by this outer one.
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onEscape(); return; }
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onEscapeRef.current(); return; }
       if (event.key !== "Tab") return;
       const elements = focusableElements();
       if (elements.length === 0) { event.preventDefault(); return; }
@@ -52,6 +65,77 @@ function useFocusTrap(containerRef: RefObject<HTMLElement | null>, onEscape: () 
   }, []);
 }
 
+function OrderMenuDialog({ detail, catalogState, loading, loadError, addSuccess, busy, selectedProduct, addError,
+  selectionDraft, confirmingAdd, onRetry, onRetryRead, onClose, onSelect, onBack, onAdd }: {
+  readonly detail: OrderDetailV1;
+  readonly catalogState: MenuCatalogStateV1 | undefined;
+  readonly loading: boolean;
+  readonly loadError: boolean;
+  readonly addSuccess: boolean;
+  readonly busy: boolean;
+  readonly selectedProduct: { readonly product: MenuProductV1; readonly groups: readonly MenuModifierGroupV1[] } | undefined;
+  readonly addError: string | undefined;
+  readonly selectionDraft: OrderSelectionDraft | undefined;
+  readonly confirmingAdd: boolean;
+  readonly onRetry: () => void;
+  readonly onRetryRead: () => void;
+  readonly onClose: () => void;
+  readonly onSelect: (product: MenuProductV1, groups: readonly MenuModifierGroupV1[]) => void;
+  readonly onBack: () => void;
+  readonly onAdd: (quantity: number, groups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null) => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const headingId = useId();
+  useFocusTrap(dialogRef, onClose);
+  return <div className="fixed inset-0 z-50 flex justify-end bg-black/40" role="presentation" onClick={onClose}>
+    <div ref={dialogRef} className="flex h-[100dvh] w-full min-w-0 flex-col bg-surface shadow-xl sm:max-w-4xl"
+      role="dialog" aria-modal="true" aria-labelledby={headingId} tabIndex={-1} onClick={(event) => event.stopPropagation()}>
+      <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border p-4">
+        <h2 id={headingId} className="font-heading text-lg font-bold">Agregar producto</h2>
+        <button type="button" className={button} onClick={onClose} disabled={busy || confirmingAdd}>Volver a la cuenta</button>
+      </header>
+      {confirmingAdd && <div role="status" className="m-4 rounded-lg bg-accent-soft p-4 text-sm">
+        <p>Confirmando el último producto…</p>
+        <button type="button" className={`${button} mt-2`} disabled={busy} onClick={onRetryRead}>Reintentar lectura</button>
+      </div>}
+      {addSuccess && <p role="status" className="m-3 rounded-lg bg-success-bg p-3 text-sm">Producto agregado a la cuenta. Puedes seguir agregando.</p>}
+      {confirmingAdd ? null : loading ? <p role="status" className="p-4 text-sm">Cargando menú…</p>
+        : loadError ? <div role="alert" className="m-4 rounded-lg bg-error-bg p-3 text-sm">No se pudo cargar el menú.
+          <button type="button" className={`${button} ml-2`} onClick={onRetry}>Reintentar</button></div>
+          : catalogState?.catalog === null ? <p className="p-4 text-sm">No hay productos en el menú de esta sucursal.</p>
+            : <CaptureMenu catalog={catalogState?.catalog ?? null} currency={detail.currency}
+              lineQuantities={new Map()} busy={busy} onSelectProduct={onSelect} />}
+      {selectedProduct !== undefined && !confirmingAdd && createPortal(<OrderProductDialog
+        product={selectedProduct.product} groups={selectedProduct.groups} currency={detail.currency}
+        busy={busy} error={addError} selectionDraft={selectionDraft} onClose={onBack} onAdd={onAdd}
+      />, document.body)}
+    </div>
+  </div>;
+}
+
+function OrderProductDialog({ product, groups, currency, busy, error, selectionDraft, onClose, onAdd }: {
+  readonly product: MenuProductV1;
+  readonly groups: readonly MenuModifierGroupV1[];
+  readonly currency: string;
+  readonly busy: boolean;
+  readonly error: string | undefined;
+  readonly selectionDraft: OrderSelectionDraft | undefined;
+  readonly onClose: () => void;
+  readonly onAdd: (quantity: number, groups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null) => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, onClose);
+  return <div ref={dialogRef} className="fixed inset-0 z-[60]" tabIndex={-1}>
+    <ProductSheet product={product} groups={groups} currency={currency} busy={busy} busyLabel="Agregando…" addLabel="Agregar" closeDisabled={busy}
+      showVariants error={error} onClose={onClose} onAdd={onAdd}
+      {...(selectionDraft === undefined ? {} : {
+        initialLine: { lineId: product.productId, productId: product.productId,
+          variantId: selectionDraft.variantId, quantity: selectionDraft.quantity, modifierGroups: selectionDraft.modifierGroups, note: selectionDraft.note },
+        initialVariantId: selectionDraft.variantId,
+      })} />
+  </div>;
+}
+
 const overlay = "fixed inset-0 z-40 flex items-start justify-center bg-black/40 p-4 sm:items-center";
 const sheet = "max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-surface p-4 sm:p-5";
 const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
@@ -66,6 +150,8 @@ type MutationResult = { readonly ok: true; readonly version: number } | { readon
 
 export interface OrderDetailActions {
   readonly detail: (orderId: string) => Promise<{ readonly ok: true; readonly value: OrderDetailV1 } | { readonly ok: false; readonly error: string }>;
+  readonly menuCatalog: () => Promise<MenuCatalogStateV1 | undefined>;
+  readonly addItem: (command: AddOrderItemCommandV1) => Promise<MutationResult>;
   readonly open: (orderId: string, expectedVersion: number, eventId: string, idempotencyKey: string, occurredAt: string, deviceId: string) => Promise<MutationResult>;
   /** One server-side operation: opens the order first if it is still a draft, then sends exactly
    * `orderItemIds` -- see apps/api's OrderService.sendToKitchen. The client never sequences
@@ -92,6 +178,7 @@ function nextAttempt(): { readonly eventId: string; readonly idempotencyKey: str
 
 interface Props {
   readonly orderId: string;
+  readonly autoOpenMenu?: boolean;
   readonly actions: OrderDetailActions;
   readonly canCheckout: boolean;
   readonly onClose: () => void;
@@ -118,16 +205,29 @@ const errorMessages: Record<string, string> = {
  */
 const UNAVAILABLE_NO_RETRY_MESSAGE = "No se pudo confirmar el resultado. Se recargó la orden; revisa el estado antes de repetir.";
 
-export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onChanged }: Props) {
+export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCheckout, onClose, onChanged }: Props) {
   // Same device identity Capture's own workspace and the delivery-zones editor use (one stable id
   // per browser, in localStorage) -- never a second, order-specific device id, or the same browser
   // would be audited under two different identities depending on which screen it used.
   const [deviceId] = useState(() => captureDeviceId(typeof window === "undefined" ? undefined : window.localStorage, () => crypto.randomUUID()));
   const [detail, setDetail] = useState<OrderDetailV1>();
+  const lastDetailRef = useRef<OrderDetailV1 | undefined>(undefined);
   const [loadError, setLoadError] = useState<string>();
   const [busyAction, setBusyAction] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const [cancelTarget, setCancelTarget] = useState<OrderDetailItemV1>();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [catalogState, setCatalogState] = useState<MenuCatalogStateV1>();
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<{ readonly product: MenuProductV1; readonly groups: readonly MenuModifierGroupV1[] }>();
+  const [selectionDraft, setSelectionDraft] = useState<OrderSelectionDraft>();
+  const [addBusy, setAddBusy] = useState(false);
+  const [pendingAddCommand, setPendingAddCommand] = useState<AddOrderItemCommandV1>();
+  const [confirmingAdd, setConfirmingAdd] = useState(false);
+  const [retryOrderItemId, setRetryOrderItemId] = useState<string>();
+  const [addError, setAddError] = useState<string>();
+  const [addSuccess, setAddSuccess] = useState(false);
   const headingId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   useFocusTrap(dialogRef, onClose);
@@ -146,11 +246,14 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
       return undefined;
     }
     setLoadError(undefined);
+    lastDetailRef.current = result.value;
     setDetail(result.value);
     return result.value;
   }
 
-  useEffect(() => { void load(); }, [orderId]);
+  useEffect(() => { void load().then((loaded) => {
+    if (autoOpenMenu && loaded !== undefined && canAddItems(loaded)) void openMenu(loaded);
+  }); }, [orderId]);
 
   /** Used for `open`/`transitionItem`/`cancelItem`: never retries, including on "unavailable" (see
    * `UNAVAILABLE_NO_RETRY_MESSAGE`). Always reloads the detail afterward so the operator's view
@@ -207,6 +310,75 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
     }
   }
 
+  async function openMenu(currentDetail: OrderDetailV1 | undefined = detail): Promise<void> {
+    setMenuOpen(true);
+    setAddSuccess(false);
+    if (catalogState !== undefined) return;
+    setCatalogLoading(true);
+    setCatalogError(false);
+    let result: MenuCatalogStateV1 | undefined;
+    try { result = await actions.menuCatalog(); } catch { result = undefined; }
+    if (result === undefined || currentDetail === undefined || result.scope.restaurantId !== currentDetail.scope.restaurantId
+      || result.scope.branchId !== currentDetail.scope.branchId) setCatalogError(true);
+    else setCatalogState(result);
+    setCatalogLoading(false);
+  }
+
+  function settleAddRead(reloaded: OrderDetailV1 | undefined, command: AddOrderItemCommandV1): void {
+    const resolution = resolvePendingAdd(reloaded, command);
+    if (resolution === "applied") {
+      setPendingAddCommand(undefined);
+      setConfirmingAdd(false);
+      setRetryOrderItemId(undefined);
+      setSelectedProduct(undefined);
+      setSelectionDraft(undefined);
+      setAddSuccess(true);
+      setAddError(undefined);
+    } else if (resolution === "retry") {
+      setPendingAddCommand(undefined);
+      setConfirmingAdd(false);
+      setRetryOrderItemId(command.orderItemId);
+      setAddError("La cuenta está actualizada y la línea no aparece. Toca Agregar para intentar de nuevo.");
+    } else {
+      setPendingAddCommand(command);
+      setConfirmingAdd(true);
+      setAddError(undefined);
+    }
+  }
+
+  async function retryAddRead(): Promise<void> {
+    if (pendingAddCommand === undefined || addBusy) return;
+    setAddBusy(true);
+    try {
+      const reloaded = await load();
+      onChanged();
+      settleAddRead(reloaded, pendingAddCommand);
+    } finally { setAddBusy(false); }
+  }
+
+  async function addSelected(quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null): Promise<void> {
+    if (selectedProduct === undefined || addBusy || pendingAddCommand !== undefined) return;
+    if (detail === undefined || !canAddItems(detail)) {
+      setAddError("Esta cuenta ya no permite agregar productos. Vuelve al detalle para revisar el estado.");
+      return;
+    }
+    const attempt = nextAttempt();
+    const command = buildAddOrderItemCommand({ scope: detail.scope, orderId: detail.orderId,
+      expectedVersion: detail.version, orderItemId: retryOrderItemId ?? crypto.randomUUID(), productId: selectedProduct.product.productId,
+      quantity, modifierGroups, note, variantId, ...attempt, deviceId });
+    setSelectionDraft({ quantity, modifierGroups, note, variantId });
+    setPendingAddCommand(command);
+    setRetryOrderItemId(undefined);
+    setAddBusy(true);
+    setAddError(undefined);
+    try {
+      try { await actions.addItem(command); } catch { /* A detail read resolves uncertain transport outcomes. */ }
+      const reloaded = await load();
+      onChanged();
+      settleAddRead(reloaded, command);
+    } finally { setAddBusy(false); }
+  }
+
   const groups = detail === undefined ? undefined : groupItemsByStatus(detail.items);
 
   return <div className={overlay} role="presentation" onClick={onClose}>
@@ -224,6 +396,8 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
       {detail !== undefined && <>
         <p className="mt-1 text-sm">Total: <strong>{formatMinorUnits(detail.totals.totalMinor, detail.totals.currency)}</strong></p>
         <div className="mt-4 flex flex-wrap gap-2">
+          {canAddItems(detail) && <button type="button" className={primaryButton} disabled={busyAction !== undefined || addBusy}
+            onClick={() => void openMenu()}>Agregar producto</button>}
           {hasAction(detail, "open") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
             onClick={() => { const attempt = nextAttempt(); void runAction("open", () => actions.open(detail.orderId, detail.version, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt, deviceId)); }}>
             {busyAction === "open" ? "Abriendo…" : actionLabel("open")}
@@ -243,7 +417,7 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
                 {lines.map((item) => <li key={item.orderItemId} className="rounded-lg border border-border p-3">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <p className="text-sm font-semibold">{item.quantity} × {item.name}</p>
+                      <p className="text-sm font-semibold">{item.quantity} × {item.name}{item.variantName ? ` · ${item.variantName}` : ""}</p>
                       {item.modifiers.length > 0 && <ul className="mt-1 text-xs text-text-muted">
                         {item.modifiers.map((modifier) => <li key={modifier.modifierId}>{modifier.name} × {modifier.quantity}</li>)}
                       </ul>}
@@ -291,6 +465,15 @@ export function OrderDetailPanel({ orderId, actions, canCheckout, onClose, onCha
           void runAction(`cancel-${target.orderItemId}`, () => actions.cancelItem(detail.orderId, target.orderItemId, detail.version, reason, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt, deviceId));
         }}
       />}
+      {menuOpen && (detail ?? (pendingAddCommand === undefined ? undefined : lastDetailRef.current)) !== undefined && typeof document !== "undefined" && createPortal(<OrderMenuDialog
+        detail={(detail ?? lastDetailRef.current)!} catalogState={catalogState} loading={catalogLoading} loadError={catalogError}
+        addSuccess={addSuccess} busy={addBusy} selectedProduct={selectedProduct} selectionDraft={selectionDraft} addError={addError}
+        confirmingAdd={confirmingAdd} onRetryRead={() => void retryAddRead()}
+        onRetry={() => void openMenu()} onClose={() => { if (!addBusy && pendingAddCommand === undefined) { setMenuOpen(false); setSelectedProduct(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined); } }}
+        onSelect={(product, groups) => { setAddSuccess(false); setAddError(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined); setSelectedProduct({ product, groups }); }}
+        onBack={() => { if (!addBusy && pendingAddCommand === undefined) { setSelectedProduct(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined); setAddError(undefined); } }}
+        onAdd={(quantity, groups, note, variantId) => void addSelected(quantity, groups, note, variantId)}
+      />, document.body)}
     </div>
   </div>;
 }

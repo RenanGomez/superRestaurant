@@ -45,6 +45,7 @@ export function toggleOrStepOption(
 export interface SelectionPlanLineDraft {
   readonly lineId: string;
   readonly productId: string;
+  readonly variantId: string | null;
   readonly quantity: number;
   readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[];
   /** Free-text instruction for the preparation station (1-200 chars), or no note. */
@@ -57,9 +58,13 @@ export function estimateSelectionMinor(
   groups: readonly MenuModifierGroupV1[],
   selections: Readonly<Record<string, readonly string[]>>,
   quantity: number,
+  variantId: string | null = null,
 ): number | null {
   if (!Number.isSafeInteger(quantity) || quantity < 1 || !Number.isSafeInteger(product.unitPriceMinor)) return null;
-  let unit = product.unitPriceMinor;
+  const activeVariants = product.variants?.filter((variant) => variant.active) ?? [];
+  const selectedVariant = activeVariants.find((variant) => variant.variantId === variantId);
+  if ((activeVariants.length > 0 && selectedVariant === undefined) || (activeVariants.length === 0 && variantId !== null)) return null;
+  let unit = selectedVariant?.unitPriceMinor ?? product.unitPriceMinor;
   for (const group of groups) {
     for (const optionId of selections[group.groupId] ?? []) {
       const option = group.options.find((candidate) => candidate.optionId === optionId);
@@ -74,7 +79,7 @@ export function estimateSelectionMinor(
 export interface SelectionPlanCommandLineV1 {
   readonly lineId: string;
   readonly productId: string;
-  readonly variantId: null;
+  readonly variantId: string | null;
   readonly quantity: number;
   readonly modifierGroups: readonly { readonly groupId: string; readonly selections: readonly { readonly optionId: string; readonly quantity: number }[] }[];
   readonly note: string | null;
@@ -100,7 +105,7 @@ export function buildSelectionPlan(
     lines: lines.map((line) => ({
       lineId: line.lineId,
       productId: line.productId,
-      variantId: null,
+      variantId: line.variantId,
       quantity: line.quantity,
       modifierGroups: line.modifierGroups.map((group) => ({
         groupId: group.groupId,
@@ -113,7 +118,7 @@ export function buildSelectionPlan(
 
 export type SelectionLineChange =
   | { readonly type: "add"; readonly lineId: string; readonly productId: string; readonly quantity: number;
-      readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[]; readonly note: string | null }
+      readonly variantId: string | null; readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[]; readonly note: string | null }
   | { readonly type: "increment"; readonly lineId: string }
   | { readonly type: "decrement"; readonly lineId: string }
   | { readonly type: "remove"; readonly lineId: string }
@@ -133,10 +138,10 @@ export function applyLineChange(
   change: SelectionLineChange,
 ): readonly SelectionPlanLineDraft[] {
   if (change.type === "add") {
-    const existingIndex = lines.findIndex((line) => line.productId === change.productId
+    const existingIndex = lines.findIndex((line) => line.productId === change.productId && line.variantId === change.variantId
       && sameModifierSelection(line.modifierGroups, change.modifierGroups) && line.note === change.note);
     if (existingIndex === -1) {
-      return [...lines, { lineId: change.lineId, productId: change.productId,
+      return [...lines, { lineId: change.lineId, productId: change.productId, variantId: change.variantId,
         quantity: clampQuantity(change.quantity), modifierGroups: change.modifierGroups, note: change.note }];
     }
     return lines.map((line, index) => index === existingIndex

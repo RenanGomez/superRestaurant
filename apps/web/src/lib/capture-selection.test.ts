@@ -12,6 +12,7 @@ import {
   type SelectionPlanLineDraft,
 } from "./capture-selection.js";
 import type { MenuCatalogV1, MenuModifierGroupV1 } from "@super-restaurant/shared-types";
+import { menuProductPriceLabel, variantNameFor, variantValidationError } from "./menu-variants.js";
 
 const catalogVersion = "11111111-1111-4111-8111-111111111111";
 const productA = "22222222-2222-4222-8222-222222222222";
@@ -22,6 +23,42 @@ const optionId2 = "66666666-6666-4666-8666-666666666666";
 const lineId1 = "77777777-7777-4777-8777-777777777777";
 const lineId2 = "88888888-8888-4888-8888-888888888888";
 const lineId3 = "99999999-9999-4999-8999-999999999999";
+const variantA = "aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const variantB = "bbbbbbb2-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+test("sizes validate names and count, and the card shows the lowest active price", () => {
+  const product = { productId: productA, categoryId: "c1", name: "Pizza", active: true, displayOrder: 1,
+    unit: "pieza", unitPriceMinor: 10_000, sku: null, stationId: "s1", tax: null, imagePath: null,
+    variants: [
+      { variantId: variantA, name: "Chica", active: true, displayOrder: 0, unitPriceMinor: 12_000, sku: null },
+      { variantId: variantB, name: "Grande", active: true, displayOrder: 1, unitPriceMinor: 20_000, sku: null },
+    ] };
+  assert.equal(variantValidationError(productA, product.variants), null);
+  assert.equal(variantNameFor({ products: [product] }, productA, variantB), "Grande");
+  assert.equal(variantNameFor({ products: [product] }, productA, lineId3), "Tamaño seleccionado");
+  assert.equal(variantNameFor({ products: [product] }, productA, null), null);
+  assert.equal(variantNameFor(null, productA, variantA), "Tamaño seleccionado");
+  const formatPrice = (minor: number) => `$${(minor / 100).toFixed(2)}`;
+  assert.equal(menuProductPriceLabel(product, formatPrice), "desde $120.00");
+  assert.equal(menuProductPriceLabel({ ...product, variants: product.variants.map((v) => ({ ...v, active: false })) }, formatPrice), "$100.00");
+  const repeated = variantValidationError(productA, [...product.variants, { ...product.variants[0]!, variantId: lineId3, name: "chica" }]);
+  assert.equal(repeated?.productId, productA);
+  assert.match(repeated?.message ?? "", /distinto/);
+  assert.match(variantValidationError(productA, [{ ...product.variants[0]!, name: " " }])?.message ?? "", /nombre/);
+  assert.match(variantValidationError(productA, Array.from({ length: 13 }, (_, index) => ({ ...product.variants[0]!, variantId: String(index), name: String(index) })))?.message ?? "", /12/);
+  assert.equal(estimateSelectionMinor(product, [], {}, 2, variantB), 40_000);
+  assert.equal(estimateSelectionMinor(product, [], {}, 1, null), null);
+  assert.equal(estimateSelectionMinor(product, [], {}, 1, "missing"), null);
+});
+
+test("capture plan keeps each size separate and forwards its variantId", () => {
+  const base: SelectionPlanLineDraft = { lineId: lineId1, productId: productA, variantId: variantA, quantity: 1, modifierGroups: [], note: null };
+  const changed = applyLineChange([base], { type: "add", lineId: lineId2, productId: productA, variantId: variantB,
+    quantity: 1, modifierGroups: [], note: null });
+  assert.equal(changed.length, 2);
+  assert.deepEqual(buildSelectionPlan(changed, catalogVersion).lines.map((line) => line.variantId), [variantA, variantB]);
+});
+
 
 test("sheet selections preserve quantities without duplicate option IDs", () => {
   assert.deepEqual(countModifierSelections([optionId, optionId2, optionId]), [
@@ -41,7 +78,7 @@ test("repeatable modifier steps up, down to zero, and respects its option maximu
 });
 
 test("editing initializes repeated modifier counts from the saved line", () => {
-  const initialLine: SelectionPlanLineDraft = { lineId: lineId1, productId: productA, quantity: 1,
+  const initialLine: SelectionPlanLineDraft = { lineId: lineId1, productId: productA, variantId: null, quantity: 1,
     modifierGroups: [{ groupId, selections: [{ optionId, quantity: 3 }, { optionId: optionId2, quantity: 1 }] }], note: null };
   const expanded = expandModifierSelections(initialLine.modifierGroups[0]?.selections ?? []);
   assert.deepEqual(countModifierSelections(expanded), initialLine.modifierGroups[0]?.selections);
@@ -51,7 +88,7 @@ test("editing initializes repeated modifier counts from the saved line", () => {
 
 test("buildSelectionPlan projects draft lines with a null variantId and forwards the note", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
-    { lineId: lineId1, productId: productA, quantity: 2,
+    { lineId: lineId1, productId: productA, variantId: null, quantity: 2,
       modifierGroups: [{ groupId, selections: [{ optionId, quantity: 1 }] }], note: "Sin cebolla" },
   ];
   const plan = buildSelectionPlan(lines, catalogVersion);
@@ -69,9 +106,9 @@ test("buildSelectionPlan on an empty set clears the plan", () => {
 
 test("applyLineChange add without modifiers merges into the existing line by incrementing", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
-    { lineId: lineId1, productId: productA, quantity: 1, modifierGroups: [], note: null },
+    { lineId: lineId1, productId: productA, variantId: null, quantity: 1, modifierGroups: [], note: null },
   ];
-  const next = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, quantity: 1, modifierGroups: [], note: null });
+  const next = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, variantId: null, quantity: 1, modifierGroups: [], note: null });
   assert.equal(next.length, 1);
   assert.equal(next[0]?.quantity, 2);
   assert.equal(next[0]?.lineId, lineId1);
@@ -79,19 +116,19 @@ test("applyLineChange add without modifiers merges into the existing line by inc
 
 test("applyLineChange add with a distinct modifier selection creates a new line", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
-    { lineId: lineId1, productId: productA, quantity: 1, modifierGroups: [{ groupId, selections: [{ optionId, quantity: 1 }] }], note: null },
+    { lineId: lineId1, productId: productA, variantId: null, quantity: 1, modifierGroups: [{ groupId, selections: [{ optionId, quantity: 1 }] }], note: null },
   ];
-  const next = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, quantity: 1,
+  const next = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, variantId: null, quantity: 1,
     modifierGroups: [{ groupId, selections: [{ optionId: optionId2, quantity: 1 }] }], note: null });
   assert.equal(next.length, 2);
 });
 
 test("applyLineChange add with the same modifier selection (different order) merges", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
-    { lineId: lineId1, productId: productA, quantity: 1,
+    { lineId: lineId1, productId: productA, variantId: null, quantity: 1,
       modifierGroups: [{ groupId, selections: [{ optionId, quantity: 1 }, { optionId: optionId2, quantity: 2 }] }], note: null },
   ];
-  const next = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, quantity: 3,
+  const next = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, variantId: null, quantity: 3,
     modifierGroups: [{ groupId, selections: [{ optionId: optionId2, quantity: 2 }, { optionId, quantity: 1 }] }], note: null });
   assert.equal(next.length, 1);
   assert.equal(next[0]?.quantity, 4);
@@ -99,8 +136,8 @@ test("applyLineChange add with the same modifier selection (different order) mer
 
 test("applyLineChange increment/decrement/remove", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
-    { lineId: lineId1, productId: productA, quantity: 1, modifierGroups: [], note: null },
-    { lineId: lineId2, productId: productB, quantity: 1, modifierGroups: [], note: null },
+    { lineId: lineId1, productId: productA, variantId: null, quantity: 1, modifierGroups: [], note: null },
+    { lineId: lineId2, productId: productB, variantId: null, quantity: 1, modifierGroups: [], note: null },
   ];
   const incremented = applyLineChange(lines, { type: "increment", lineId: lineId1 });
   assert.equal(incremented.find((l) => l.lineId === lineId1)?.quantity, 2);
@@ -115,9 +152,9 @@ test("applyLineChange increment/decrement/remove", () => {
 
 test("applyLineChange clamps quantity to [0, 1000] and setQuantity 0 removes", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
-    { lineId: lineId3, productId: productA, quantity: 999, modifierGroups: [], note: null },
+    { lineId: lineId3, productId: productA, variantId: null, quantity: 999, modifierGroups: [], note: null },
   ];
-  const clamped = applyLineChange(lines, { type: "add", lineId: lineId1, productId: productA, quantity: 50, modifierGroups: [], note: null });
+  const clamped = applyLineChange(lines, { type: "add", lineId: lineId1, productId: productA, variantId: null, quantity: 50, modifierGroups: [], note: null });
   assert.equal(clamped[0]?.quantity, 1000);
   const cleared = applyLineChange(lines, { type: "setQuantity", lineId: lineId3, quantity: 0 });
   assert.deepEqual(cleared, []);
@@ -125,19 +162,19 @@ test("applyLineChange clamps quantity to [0, 1000] and setQuantity 0 removes", (
 
 test("applyLineChange add with a distinct note never merges into an otherwise-identical line", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
-    { lineId: lineId1, productId: productA, quantity: 1, modifierGroups: [], note: "Sin cebolla" },
+    { lineId: lineId1, productId: productA, variantId: null, quantity: 1, modifierGroups: [], note: "Sin cebolla" },
   ];
-  const next = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, quantity: 1, modifierGroups: [], note: null });
+  const next = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, variantId: null, quantity: 1, modifierGroups: [], note: null });
   assert.equal(next.length, 2);
-  const merged = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, quantity: 1, modifierGroups: [], note: "Sin cebolla" });
+  const merged = applyLineChange(lines, { type: "add", lineId: lineId2, productId: productA, variantId: null, quantity: 1, modifierGroups: [], note: "Sin cebolla" });
   assert.equal(merged.length, 1);
   assert.equal(merged[0]?.quantity, 2);
 });
 
 test("applyLineChange setNote updates only the targeted line", () => {
   const lines: readonly SelectionPlanLineDraft[] = [
-    { lineId: lineId1, productId: productA, quantity: 1, modifierGroups: [], note: null },
-    { lineId: lineId2, productId: productB, quantity: 1, modifierGroups: [], note: null },
+    { lineId: lineId1, productId: productA, variantId: null, quantity: 1, modifierGroups: [], note: null },
+    { lineId: lineId2, productId: productB, variantId: null, quantity: 1, modifierGroups: [], note: null },
   ];
   const next = applyLineChange(lines, { type: "setNote", lineId: lineId1, note: "Bien cocida" });
   assert.equal(next.find((l) => l.lineId === lineId1)?.note, "Bien cocida");

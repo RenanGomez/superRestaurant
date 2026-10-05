@@ -1,14 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import type { CaptureSelectionPlanProjectionV1 } from "@super-restaurant/shared-types";
+import type { CaptureSelectionPlanProjectionV1, MenuCatalogV1 } from "@super-restaurant/shared-types";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
+import { variantNameFor } from "../../../lib/menu-variants";
 
 const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
 const qtyButton = "min-h-10 min-w-10 rounded-lg border border-border bg-surface text-lg font-bold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
 
 interface CaptureTicketProps {
   readonly projection: CaptureSelectionPlanProjectionV1 | null;
+  readonly catalog: MenuCatalogV1 | null;
   readonly busyLineId: string | undefined;
   readonly locked: boolean;
   readonly onIncrement: (lineId: string) => void;
@@ -21,7 +23,7 @@ interface CaptureTicketProps {
 }
 
 /** Fixed ticket (desktop sidebar) / bottom sheet (mobile) painting only server-priced amounts. */
-export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onDecrement, onRemove, onEditNote, onEdit, onHold, onNoSale }: CaptureTicketProps) {
+export function CaptureTicket({ projection, catalog, busyLineId, locked, onIncrement, onDecrement, onRemove, onEditNote, onEdit, onHold, onNoSale }: CaptureTicketProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const lineCount = projection?.lines.reduce((sum, line) => sum + line.quantity, 0) ?? 0;
 
@@ -32,7 +34,7 @@ export function CaptureTicket({ projection, busyLineId, locked, onIncrement, onD
         : <ul className="grid gap-3">{projection.lines.map((line) => <li key={line.lineId}
           className="grid gap-1 border-b border-dashed border-border pb-3">
           <div className="flex items-start justify-between gap-2">
-            <span className="font-semibold">{line.productName}</span>
+            <span className="font-semibold">{line.productName}{line.variantId === null ? "" : ` · ${variantNameFor(catalog, line.productId, line.variantId)}`}</span>
             <span className="whitespace-nowrap font-semibold">{formatMinorUnits(line.lineTotalMinor, projection.currency)}</span>
           </div>
           {line.modifiers.length > 0 && <span className="text-xs text-text-muted">

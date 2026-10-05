@@ -375,7 +375,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       }
       const modifierGroups: SelectionPlanModifierGroupDraft[] = [...byGroup.entries()]
         .map(([groupId, selections]) => ({ groupId, selections }));
-      return { lineId: line.lineId, productId: line.productId, quantity: line.quantity, modifierGroups, note: line.note };
+      return { lineId: line.lineId, productId: line.productId, variantId: line.variantId, quantity: line.quantity, modifierGroups, note: line.note };
     });
   }
 
@@ -411,7 +411,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   function openProduct(product: MenuProductV1, groups: readonly MenuModifierGroupV1[]): void {
     if (locked || selectionBusy) return;
-    if (groups.length === 0) {
+    if (groups.length === 0 && !product.variants?.some((variant) => variant.active)) {
       void addDirect(product.productId);
       return;
     }
@@ -437,7 +437,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   async function addDirect(productId: string): Promise<void> {
     setSelectionBusy(true);
     await sendSelectionPlan(applyLineChange(selectionDraftLines(),
-      { type: "add", lineId: crypto.randomUUID(), productId, quantity: 1, modifierGroups: [], note: null }));
+      { type: "add", lineId: crypto.randomUUID(), productId, variantId: null, quantity: 1, modifierGroups: [], note: null }));
     setSelectionBusy(false);
   }
 
@@ -445,6 +445,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     quantity: number,
     modifierGroups: readonly SelectionPlanModifierGroupDraft[],
     note: string | null,
+    variantId: string | null,
   ): Promise<void> {
     if (sheetProduct === undefined) return;
     const productId = sheetProduct.productId;
@@ -453,9 +454,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     const currentLines = selectionDraftLines();
     // One server replacement of the whole plan keeps the edit atomic and preserves its line ID.
     const nextLines = sheetEditLine === undefined
-      ? applyLineChange(currentLines, { type: "add", lineId, productId, quantity, modifierGroups, note })
+      ? applyLineChange(currentLines, { type: "add", lineId, productId, variantId, quantity, modifierGroups, note })
       : currentLines.map((line) => line.lineId === lineId
-        ? { lineId, productId, quantity, modifierGroups, note } : line);
+        ? { lineId, productId, variantId, quantity, modifierGroups, note } : line);
     const projection = await sendSelectionPlan(nextLines);
     setSelectionBusy(false);
     if (projection === undefined) { setSheetError(error === "conflict" ? messages.conflict : "No se pudo guardar la línea. Reintenta."); return; }
@@ -464,7 +465,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     // matching) must not be mistaken for the one just confirmed.
     const matched = (projection?.lines ?? []).find((line) => line.lineId === lineId)
       ?? (projection?.lines ?? []).find((line) => line.productId === productId
-        && sameProjectionModifiers(line.modifiers, modifierGroups) && line.note === note);
+        && line.variantId === variantId && sameProjectionModifiers(line.modifiers, modifierGroups) && line.note === note);
     setSheetConfirmedTotalMinor(matched?.lineTotalMinor ?? null);
     window.setTimeout(() => {
       setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined);
@@ -1056,7 +1057,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
               new Map<string, number>())}
             busy={selectionBusy || selectionBusyLineId !== undefined} searchInputRef={productSearchRef}
             onSelectProduct={openProduct} />
-          <CaptureTicket projection={selectionProjection} busyLineId={selectionBusyLineId} locked={locked}
+          <CaptureTicket projection={selectionProjection} catalog={catalog.catalog} busyLineId={selectionBusyLineId} locked={locked}
             onEdit={openEditLine}
             onIncrement={(lineId) => void changeLineQuantity(lineId, 1)}
             onDecrement={(lineId) => void changeLineQuantity(lineId, -1)}
@@ -1105,9 +1106,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       </div>}
       {sheetProduct !== undefined && <ProductSheet key={`${sheetProduct.productId}:${sheetEditLine?.lineId ?? "new"}`} product={sheetProduct} groups={sheetGroups}
         currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy} confirmedTotalMinor={sheetConfirmedTotalMinor}
-        initialLine={sheetEditLine} error={sheetError}
+        initialLine={sheetEditLine} error={sheetError} showVariants
         onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); setSheetEditLine(undefined); setSheetError(undefined); }}
-        onAdd={(quantity, modifierGroups, note) => void addFromSheet(quantity, modifierGroups, note)} />}
+        onAdd={(quantity, modifierGroups, note, variantId) => void addFromSheet(quantity, modifierGroups, note, variantId)} />}
       {customer !== undefined && capture.customerSnapshotRef !== null && <section className={panel}><h2 className="font-heading text-lg font-semibold">3. Entrega · dirección validada</h2>
         <div className="mt-3 grid gap-2">{customer.addresses.map((item) => <button key={item.addressId} className={`${button} text-left`}
           disabled={locked || !item.validatedForRequestedBranch} onClick={() => selectAddress(item.addressId, item.version)}><strong className="block">{item.address.label}</strong>

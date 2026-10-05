@@ -147,7 +147,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, actorN
         if (latest !== null) {
           const created = latest.board.tables.some((table) => table.activeOrders.some((order) => order.orderId === orderId))
             || latest.board.unassignedOrders.some((order) => order.orderId === orderId);
-          if (created) { setBusy(false); router.push(`/app/orders?orderId=${orderId}`); return; }
+          if (created) { setBusy(false); router.push(`/app/orders?orderId=${orderId}&addItem=1`); return; }
           if (result.error === "conflict" && latest.shift === null) setError("no_shift");
         }
       }
@@ -163,7 +163,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, actorN
     }
     await refresh(true);
     setBusy(false);
-    router.push(`/app/orders?orderId=${result.orderId}`);
+    router.push(`/app/orders?orderId=${result.orderId}&addItem=1`);
   }
 
   async function assign(order: TableBoardActiveOrderV1) {
