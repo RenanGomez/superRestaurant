@@ -147,6 +147,14 @@ test("invalid fraction selections are rejected with domain issue codes", () => {
   );
 });
 
+test("halves must list half-a first and half-b second", () => {
+  const ordered = halves();
+  assert.throws(
+    () => createMenuProductPriceSnapshot(pizzaCatalog(), context({ geometry: "halves", slots: [ordered.slots[1]!, ordered.slots[0]!] })),
+    (error) => error instanceof MenuFractionSelectionInvalidError && error.issueCodes[0] === "fraction_slot_order",
+  );
+});
+
 test("fraction requires an enabled size and forbids selecting the fraction groups as ordinary modifiers", () => {
   const disabled = pizzaCatalog({
     fraction: { enabled: false, excludableIngredientIds: [], extraGroupId: null, flavorGroupId: null },

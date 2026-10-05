@@ -113,7 +113,7 @@ import {
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
-import { describeHalves } from "./fraction-halves.js";
+import { describeHalves, isFractionModifier } from "./fraction-halves.js";
 import {
   decodeCaptureRecord, decodeCaptureWorkspace, decodeCaptureWorkspaceV2, decodeCaptureWorkspaceV3,
   decodeCaptureWorkspaceV4, decodeCaptureWorkspaceV5, withCaptureSelectionProjection,
@@ -1201,7 +1201,7 @@ function priceSelectionPlan(
     for (const modifier of snapshot.modifiers) {
       if (modifier.groupId === undefined) throw unavailable();
       // Half-and-half extras/exclusions are reported per half in `halves`, not as catalog modifiers.
-      if (modifier.groupId === "fraction-extra" || modifier.groupId === "fraction-exclusion") continue;
+      if (isFractionModifier(modifier)) continue;
       modifiers.push({
         groupId: modifier.groupId,
         name: modifier.name,

@@ -1220,6 +1220,10 @@ test("addItem answers 409 for an inactive or foreign flavor, an unknown exclusio
   await assertCode(service.addItem(principal, sizedAddCommand({ fraction: halvesFraction({ flavorB: extraCheese }), variantId: sizeLarge })), "conflict");
   await assertCode(service.addItem(principal, sizedAddCommand({ fraction: halvesFraction({ excludedA: ["jamon"] }), variantId: sizeLarge })), "conflict");
   await assertCode(service.addItem(principal, sizedAddCommand({ fraction: halvesFraction(), variantId: sizeSmall })), "conflict");
+  // The transport parser normalizes slot order (half-a first), so the strict domain check never sees half-b first from HTTP.
+  const reversedSlots = halvesFraction().slots.reverse();
+  const normalized = sizedAddCommand({ fraction: { geometry: "halves", slots: reversedSlots }, variantId: sizeLarge });
+  assert.deepEqual(normalized.fraction?.slots.map((slot) => slot.fraction), ["half-a", "half-b"]);
   assert.equal(persisted, 0);
 });
 

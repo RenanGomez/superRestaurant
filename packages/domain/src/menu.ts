@@ -347,6 +347,15 @@ function createMenuProductPriceSnapshotCanonical(
   if (fractionSelection !== null && (variant === undefined || fractionConfig?.enabled !== true)) {
     throw new MenuFractionSelectionInvalidError(product.id, ["fraction_not_enabled"]);
   }
+  // Same slot order the SQL requires: half-a first, half-b second.
+  if (
+    fractionSelection !== null
+    && fractionSelection.slots.length === 2
+    && (fractionSelection.slots[0]?.fraction !== "half-a"
+      || fractionSelection.slots[1]?.fraction !== "half-b")
+  ) {
+    throw new MenuFractionSelectionInvalidError(product.id, ["fraction_slot_order"]);
+  }
   // While a line is split, the flavor and extra groups are priced only by the fraction rules.
   const fractionGroupIds = new Set<string>(
     fractionSelection === null || fractionConfig === undefined
