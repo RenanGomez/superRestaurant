@@ -215,6 +215,28 @@ export function buildAddressLabel(snapshot: OrderFulfillmentSnapshotV1 | OrderFu
   return `${address.label} · ${street}`;
 }
 
+/**
+ * Full name and phone of the customer. Only for the courier assigned to that very delivery (the callers decide
+ * ownership); everybody else gets the masked `buildCustomerLabel` or nothing.
+ */
+export function buildCourierCustomerLabel(snapshot: OrderFulfillmentSnapshotV1 | OrderFulfillmentSnapshotV2 | null): string | null {
+  const party = snapshot?.partySnapshot ?? null;
+  return party === null ? null : bounded(`${party.displayName} · ${party.phoneDisplayValue}`, 160);
+}
+
+/** Full delivery address; same ownership rule as `buildCourierCustomerLabel`. */
+export function buildCourierAddressLabel(snapshot: OrderFulfillmentSnapshotV1 | OrderFulfillmentSnapshotV2 | null): string | null {
+  const address = snapshot?.fulfillmentSnapshot ?? null;
+  if (address === null) return null;
+  const parts = [address.streetLine, address.neighborhood, address.locality, address.postalCode]
+    .filter((part): part is string => typeof part === "string" && part.length > 0);
+  return bounded(`${address.label} · ${parts.join(", ")}`, 200);
+}
+
+function bounded(value: string, max: number): string {
+  return (value.length > max ? `${value.slice(0, max - 1)}…` : value).trim();
+}
+
 function member<const T extends readonly string[]>(value: unknown, values: T): value is T[number] {
   return typeof value === "string" && (values as readonly string[]).includes(value);
 }

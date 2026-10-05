@@ -500,6 +500,7 @@ function orderPortFrom(read: () => { readonly order: Order; readonly version: nu
     persist: async () => ({ status: "conflict" }),
     read: async () => read(),
     recoverKds: async () => "forbidden",
+    readAssignedToCourier: async () => "missing" as const,
     sendOrderToKitchen: async () => { throw new Error("sendOrderToKitchen not implemented by this fake"); },
   };
 }
