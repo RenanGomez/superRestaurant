@@ -21,12 +21,13 @@ export async function requestBranchOrderWorkTray(
   cursor: BranchOrderWorkCursorV1 | null,
   limit: number,
   channel: BranchOrderWorkChannelV1 | null = null,
+  unassignedDeliveriesOnly = false,
 ): Promise<BranchOrderTrayRequestResult> {
   try {
     const response = await fetch(`${baseUrl}/api/v1/branch-orders/tray`, {
       method: "POST", cache: "no-store", signal: AbortSignal.timeout(10_000),
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ channel, cursor, limit, schemaVersion: 1, scope }),
+      body: JSON.stringify({ channel, cursor, limit, schemaVersion: 1, scope, ...(unassignedDeliveriesOnly ? { unassignedDeliveriesOnly: true } : {}) }),
     });
     if (!response.ok) {
       return { error: response.status === 400 ? "invalid" : response.status === 401 || response.status === 403 ? "denied" : "unavailable", ok: false };

@@ -15,13 +15,19 @@ import type { BranchScope } from "./index.js";
  */
 export const BRANCH_ORDER_WORK_TRAY_SCHEMA_VERSION = 1 as const;
 export const BRANCH_ORDER_WORK_CHANNELS = Object.freeze(["table", "counter", "takeout", "delivery"] as const);
-export const BRANCH_ORDER_WORK_STATUSES = Object.freeze(["draft", "open", "partially_paid"] as const);
+/** `paid` only appears when the request sets `unassignedDeliveriesOnly` (prepaid delivery Orders awaiting a courier). */
+export const BRANCH_ORDER_WORK_STATUSES = Object.freeze(["draft", "open", "partially_paid", "paid"] as const);
+/** State of the Order's `order_deliveries` row; `null` on the item means the Order has no delivery yet. */
+export const BRANCH_ORDER_WORK_DELIVERY_STATES = Object.freeze([
+  "assigned", "en_route", "delivered", "failed", "settled",
+] as const);
 export const BRANCH_ORDER_WORK_PREPARATION_STATUSES = Object.freeze([
   "not_sent", "queued", "preparing", "partially_ready", "ready", "cancelled",
 ] as const);
 
 export type BranchOrderWorkChannelV1 = (typeof BRANCH_ORDER_WORK_CHANNELS)[number];
 export type BranchOrderWorkStatusV1 = (typeof BRANCH_ORDER_WORK_STATUSES)[number];
+export type BranchOrderWorkDeliveryStateV1 = (typeof BRANCH_ORDER_WORK_DELIVERY_STATES)[number];
 export type BranchOrderWorkPreparationStatusV1 = (typeof BRANCH_ORDER_WORK_PREPARATION_STATUSES)[number];
 
 export interface BranchOrderWorkCursorV1 {
@@ -61,6 +67,8 @@ export interface BranchOrderWorkItemV1 {
   readonly paymentIntent: BranchOrderWorkPaymentIntentV1 | null;
   readonly lineCount: number;
   readonly hasNotes: boolean;
+  /** Additive: `null` when the Order has no delivery row (also the default when a producer omits the key). */
+  readonly deliveryState: BranchOrderWorkDeliveryStateV1 | null;
 }
 
 export interface BranchOrderWorkTrayRequestV1 {
@@ -70,6 +78,11 @@ export interface BranchOrderWorkTrayRequestV1 {
   readonly limit: number;
   /** `null` means every channel; filtering happens in SQL, never by discarding a loaded page client-side. */
   readonly channel: BranchOrderWorkChannelV1 | null;
+  /**
+   * Additive and optional. When `true` the server forces the delivery channel and returns Orders with no
+   * delivery or a `failed` one, prepaid (`paid`) Orders included; the filter runs before the page limit.
+   */
+  readonly unassignedDeliveriesOnly?: boolean;
 }
 
 export interface BranchOrderWorkTrayV1 {
@@ -80,7 +93,7 @@ export interface BranchOrderWorkTrayV1 {
 }
 
 export function parseBranchOrderWorkTrayRequestV1(value: unknown): BranchOrderWorkTrayRequestV1 | undefined {
-  const record = exactRecord(value, ["schemaVersion", "scope", "cursor", "limit", "channel"]);
+  const record = exactRecord(value, ["schemaVersion", "scope", "cursor", "limit", "channel"], ["unassignedDeliveriesOnly"]);
   if (record === undefined || own(record, "schemaVersion") !== BRANCH_ORDER_WORK_TRAY_SCHEMA_VERSION) return undefined;
   const scope = parseScope(own(record, "scope"));
   const rawCursor = own(record, "cursor");
@@ -88,16 +101,21 @@ export function parseBranchOrderWorkTrayRequestV1(value: unknown): BranchOrderWo
   const limit = integer(own(record, "limit"), 1, 100);
   const rawChannel = own(record, "channel");
   const channel = rawChannel === null ? null : member(rawChannel, BRANCH_ORDER_WORK_CHANNELS);
-  return scope === undefined || cursor === undefined || limit === undefined || channel === undefined
-    ? undefined
-    : Object.freeze({ channel, cursor, limit, schemaVersion: BRANCH_ORDER_WORK_TRAY_SCHEMA_VERSION, scope });
+  const hasFlag = Object.hasOwn(record, "unassignedDeliveriesOnly");
+  const unassignedDeliveriesOnly = own(record, "unassignedDeliveriesOnly");
+  if (scope === undefined || cursor === undefined || limit === undefined || channel === undefined
+    || (hasFlag && typeof unassignedDeliveriesOnly !== "boolean")) return undefined;
+  return Object.freeze({
+    channel, cursor, limit, schemaVersion: BRANCH_ORDER_WORK_TRAY_SCHEMA_VERSION, scope,
+    ...(hasFlag ? { unassignedDeliveriesOnly: unassignedDeliveriesOnly as boolean } : {}),
+  });
 }
 
 export function parseBranchOrderWorkItemV1(value: unknown): BranchOrderWorkItemV1 | undefined {
   const record = exactRecord(value, [
     "orderId", "channel", "fulfillmentChannel", "status", "preparation", "createdAt", "updatedAt", "timeZone",
     "customerLabel", "addressLabel", "totals", "paymentIntent", "lineCount", "hasNotes",
-  ]);
+  ], ["deliveryState"]);
   if (record === undefined) return undefined;
   const orderId = uuid(own(record, "orderId"));
   const channel = member(own(record, "channel"), BRANCH_ORDER_WORK_CHANNELS);
@@ -114,17 +132,19 @@ export function parseBranchOrderWorkItemV1(value: unknown): BranchOrderWorkItemV
   const paymentIntent = rawPaymentIntent === null ? null : parsePaymentIntent(rawPaymentIntent);
   const lineCount = integer(own(record, "lineCount"), 0, 1000);
   const hasNotes = own(record, "hasNotes");
+  const deliveryState = nullableMember(own(record, "deliveryState") ?? null, BRANCH_ORDER_WORK_DELIVERY_STATES);
   if (orderId === undefined || channel === undefined || fulfillmentChannel === undefined || status === undefined
     || preparation === undefined || createdAt === undefined || updatedAt === undefined || timeZone === undefined
     || customerLabel === undefined || addressLabel === undefined || totals === undefined
-    || paymentIntent === undefined || lineCount === undefined || typeof hasNotes !== "boolean") return undefined;
+    || paymentIntent === undefined || lineCount === undefined || typeof hasNotes !== "boolean"
+    || deliveryState === undefined) return undefined;
   // `fulfillmentChannel` is null whenever the Order has no fulfillment snapshot (e.g. a
   // counter/takeout/delivery Order created outside Capture); only a *present* value must agree
   // with the Order's own channel, never the absence of one.
   if (fulfillmentChannel === "dine_in" && channel !== "table") return undefined;
   if (channel === "table" && fulfillmentChannel !== null && fulfillmentChannel !== "dine_in") return undefined;
   return Object.freeze({
-    addressLabel, channel, createdAt, customerLabel, fulfillmentChannel, hasNotes, lineCount,
+    addressLabel, channel, createdAt, customerLabel, deliveryState, fulfillmentChannel, hasNotes, lineCount,
     orderId, paymentIntent, preparation, status, timeZone, totals, updatedAt,
   });
 }
@@ -192,12 +212,13 @@ function parseScope(value: unknown): BranchScope | undefined {
 
 type PlainRecord = Record<string, unknown>;
 
-function exactRecord(value: unknown, keys: readonly string[]): PlainRecord | undefined {
+function exactRecord(value: unknown, keys: readonly string[], optionalKeys: readonly string[] = []): PlainRecord | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
     return undefined;
   }
   const ownKeys = Reflect.ownKeys(value);
-  return ownKeys.length === keys.length && ownKeys.every((key) => typeof key === "string" && keys.includes(key))
+  return ownKeys.every((key) => typeof key === "string" && (keys.includes(key) || optionalKeys.includes(key)))
+    && keys.every((key) => ownKeys.includes(key))
     ? value as PlainRecord : undefined;
 }
 
