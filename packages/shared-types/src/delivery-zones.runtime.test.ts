@@ -1,5 +1,7 @@
 import {
   parseDeliveryZoneListV1,
+  parseDeliveryZoneMatchRequestV1,
+  parseDeliveryZoneMatchResultV1,
   parseDeliveryZoneV1,
   parseListDeliveryZonesQueryV1,
   parseRequestDeliveryQuoteCommandV1,
@@ -246,3 +248,48 @@ expect(
   parseRequestDeliveryQuoteCommandV1(new Proxy(baseQuoteCommand, { ownKeys: () => { throw new Error("hostile"); } })) === undefined,
   "quote request hostile proxy fails closed",
 );
+
+// --- DeliveryZoneMatchRequestV1 / DeliveryZoneMatchResultV1 ---
+
+const matchRequest = { schemaVersion: 1, restaurantId, branchId, address: { postalCode: "06000", locality: "Centro Historico" } };
+expect(parseDeliveryZoneMatchRequestV1(matchRequest) !== undefined, "match request parses");
+expect(
+  parseDeliveryZoneMatchRequestV1({ ...matchRequest, address: { postalCode: null, locality: "Centro" } }) !== undefined,
+  "match request accepts a null postal code",
+);
+expect(parseDeliveryZoneMatchRequestV1({ ...matchRequest, extra: 1 }) === undefined, "match request rejects extra keys");
+expect(parseDeliveryZoneMatchRequestV1({ ...matchRequest, schemaVersion: 2 }) === undefined, "match request rejects version 2");
+expect(parseDeliveryZoneMatchRequestV1({ ...matchRequest, branchId: "nope" }) === undefined, "match request rejects bad branch id");
+expect(
+  parseDeliveryZoneMatchRequestV1({ ...matchRequest, address: { postalCode: "06000", locality: " " } }) === undefined,
+  "match request rejects blank locality",
+);
+expect(
+  parseDeliveryZoneMatchRequestV1({ ...matchRequest, address: { postalCode: "06000" } }) === undefined,
+  "match request rejects a missing locality",
+);
+expect(
+  parseDeliveryZoneMatchRequestV1(new Proxy(matchRequest, { ownKeys: () => { throw new Error("hostile"); } })) === undefined,
+  "match request hostile proxy fails closed",
+);
+
+const coveredMatch = {
+  schemaVersion: 1, coverageStatus: "covered", zoneId, zoneName: "Centro", feeMinor: 3_500, currency: "MXN",
+  promiseMinutes: 15, promiseStart: "2026-10-05T18:00:00.000Z", promiseEnd: "2026-10-05T18:15:00.000Z",
+  evaluatedAt: "2026-10-05T18:00:00.000Z",
+};
+const notCoveredMatch = { ...coveredMatch, coverageStatus: "not_covered", zoneId: null, zoneName: null, feeMinor: 0 };
+expect(parseDeliveryZoneMatchResultV1(coveredMatch) !== undefined, "covered match result parses");
+expect(parseDeliveryZoneMatchResultV1(notCoveredMatch) !== undefined, "not_covered match result parses");
+expect(parseDeliveryZoneMatchResultV1({ ...notCoveredMatch, feeMinor: 100 }) === undefined, "not_covered with a fee is rejected");
+expect(parseDeliveryZoneMatchResultV1({ ...notCoveredMatch, zoneId }) === undefined, "not_covered with a zone is rejected");
+expect(parseDeliveryZoneMatchResultV1({ ...coveredMatch, zoneId: null }) === undefined, "covered without a zone is rejected");
+expect(parseDeliveryZoneMatchResultV1({ ...coveredMatch, feeMinor: 35.5 }) === undefined, "fractional fee is rejected");
+expect(parseDeliveryZoneMatchResultV1({ ...coveredMatch, feeMinor: -1 }) === undefined, "negative fee is rejected");
+expect(parseDeliveryZoneMatchResultV1({ ...coveredMatch, promiseMinutes: 30 }) === undefined, "window must match promiseMinutes");
+expect(
+  parseDeliveryZoneMatchResultV1({ ...coveredMatch, evaluatedAt: "2026-10-05T18:00:01.000Z" }) === undefined,
+  "promise cannot start before evaluation",
+);
+expect(parseDeliveryZoneMatchResultV1({ ...coveredMatch, coverageStatus: "maybe" }) === undefined, "unknown coverage status is rejected");
+expect(parseDeliveryZoneMatchResultV1({ ...coveredMatch, quoteId: zoneId }) === undefined, "match result rejects extra keys");

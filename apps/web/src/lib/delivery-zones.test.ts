@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canonicalizePostalCodes, formatDeliveryQuote, parseDeliveryFeeMinor,
+import { canonicalizePostalCodes, formatDeliveryMatch, formatDeliveryQuote, parseDeliveryFeeMinor,
   quoteMatchesDeliverySnapshot, requestDelivery } from "./delivery-zones.js";
 import type { DeliveryQuoteV1 } from "@super-restaurant/shared-types";
 
@@ -35,6 +35,33 @@ test("quote formatting uses server fee and promise with locale", () => {
   assert.equal(formatted.expiry, new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short",
     timeZone: quote.timeZone }).format(new Date(quote.expiresAt)));
   assert.equal(formatDeliveryQuote({ ...quote, coverageStatus: "not_covered", zoneId: null, feeMinor: 0 }, "es-MX").status, "Fuera de cobertura");
+});
+
+test("match formatting uses the server fee and coverage", () => {
+  const match = { schemaVersion: 1 as const, coverageStatus: "covered" as const, zoneId, zoneName: "Centro",
+    feeMinor: 3500, currency: "MXN", promiseMinutes: 15,
+    promiseStart: "2026-09-26T12:00:00.000Z", promiseEnd: "2026-09-26T12:15:00.000Z",
+    evaluatedAt: "2026-09-26T12:00:00.000Z" };
+  assert.equal(formatDeliveryMatch(match, "es-MX"), `Zona Centro · Envío ${new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(35)} · 0-15 min`);
+  assert.equal(formatDeliveryMatch({ ...match, coverageStatus: "not_covered", zoneId: null, zoneName: null, feeMinor: 0 }, "es-MX"), "Fuera de cobertura");
+});
+
+test("match request sends address and accepts only a valid result", async () => {
+  const original = globalThis.fetch;
+  const command = { schemaVersion: 1, ...scope, address: { postalCode: "85000", locality: "Navojoa" } };
+  const result = { schemaVersion: 1, coverageStatus: "covered", zoneId, zoneName: "Centro", feeMinor: 3500,
+    currency: "MXN", promiseMinutes: 15, promiseStart: "2026-09-26T12:00:00.000Z",
+    promiseEnd: "2026-09-26T12:15:00.000Z", evaluatedAt: "2026-09-26T12:00:00.000Z" };
+  try {
+    globalThis.fetch = async (url, init) => {
+      assert.equal(String(url), "https://api.example/api/v1/delivery-zones/match");
+      assert.deepEqual(JSON.parse(String(init?.body)), command);
+      return new Response(JSON.stringify(result));
+    };
+    assert.deepEqual(await requestDelivery("token", "https://api.example", "match", command), { ok: true, value: result });
+    globalThis.fetch = async () => new Response(JSON.stringify({ ...result, feeMinor: 12.5 }));
+    assert.deepEqual(await requestDelivery("token", "https://api.example", "match", command), { ok: false, error: "unavailable" });
+  } finally { globalThis.fetch = original; }
 });
 
 test("a delivery quote is accepted only for the current draft and address snapshot", () => {

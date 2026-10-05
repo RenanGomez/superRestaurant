@@ -2,7 +2,7 @@ import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException,
   Header, HttpCode, Inject, NotFoundException, Post, Req, ServiceUnavailableException,
 } from "@nestjs/common";
-import type { DeliveryQuoteV1, DeliveryZoneListV1, UpsertDeliveryZoneResultV1 } from "@super-restaurant/shared-types";
+import type { DeliveryQuoteV1, DeliveryZoneListV1, DeliveryZoneMatchResultV1, UpsertDeliveryZoneResultV1 } from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
 import { DeliveryZoneApplicationError, DeliveryZoneService } from "./delivery-zones.js";
@@ -35,6 +35,14 @@ export class DeliveryZonesController {
   public async quote(@Req() request: unknown, @Body() body: unknown): Promise<DeliveryQuoteV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.zones.quoteForCapture(principal, body));
+  }
+
+  @Post("match")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async match(@Req() request: unknown, @Body() body: unknown): Promise<DeliveryZoneMatchResultV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.zones.matchAddress(principal, body));
   }
 
   private async execute<Result>(action: () => Promise<Result>): Promise<Result> {

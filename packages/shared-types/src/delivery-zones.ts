@@ -1,3 +1,5 @@
+import type { DeliveryAddressFactsV1 } from "./delivery-quote.js";
+
 export const DELIVERY_ZONE_SCHEMA_VERSION = 1 as const;
 
 const MAX_ZONE_NAME_LENGTH = 80;
@@ -106,6 +108,103 @@ export interface RequestDeliveryQuoteCommandV1 {
   readonly scope: DeliveryZoneBranchScopeV1;
   readonly captureDraftId: string;
   readonly scheduledFor: string | null;
+}
+
+/**
+ * Read-only coverage check for one address and Branch. It carries no draft,
+ * quote id, override or schedule: the server answers zone, fee and the ASAP
+ * promise from the server clock and persists nothing. The binding quote is
+ * still `RequestDeliveryQuoteCommandV1` over the draft at confirmation.
+ */
+export interface DeliveryZoneMatchRequestV1 {
+  readonly schemaVersion: typeof DELIVERY_ZONE_SCHEMA_VERSION;
+  readonly restaurantId: string;
+  readonly branchId: string;
+  readonly address: DeliveryAddressFactsV1;
+}
+
+/**
+ * `covered` carries zone and fee; `not_covered` carries `zoneId`/`zoneName`
+ * null and `feeMinor` 0. `promiseMinutes` is the length of the promise window.
+ */
+export interface DeliveryZoneMatchResultV1 {
+  readonly schemaVersion: typeof DELIVERY_ZONE_SCHEMA_VERSION;
+  readonly coverageStatus: "covered" | "not_covered";
+  readonly zoneId: string | null;
+  readonly zoneName: string | null;
+  readonly feeMinor: number;
+  readonly currency: string;
+  readonly promiseMinutes: number;
+  readonly promiseStart: string;
+  readonly promiseEnd: string;
+  readonly evaluatedAt: string;
+}
+
+export function parseDeliveryZoneMatchRequestV1(value: unknown): DeliveryZoneMatchRequestV1 | undefined {
+  return safely(() => {
+    const record = exactRecord(value, ["schemaVersion", "restaurantId", "branchId", "address"]);
+    if (record === undefined || own(record, "schemaVersion") !== DELIVERY_ZONE_SCHEMA_VERSION) return undefined;
+    const restaurantId = uuid(own(record, "restaurantId"));
+    const branchId = uuid(own(record, "branchId"));
+    const address = parseMatchAddress(own(record, "address"));
+    if (restaurantId === undefined || branchId === undefined || address === undefined) return undefined;
+    return Object.freeze({ schemaVersion: DELIVERY_ZONE_SCHEMA_VERSION, restaurantId, branchId, address });
+  });
+}
+
+export function parseDeliveryZoneMatchResultV1(value: unknown): DeliveryZoneMatchResultV1 | undefined {
+  return safely(() => {
+    const record = exactRecord(value, [
+      "schemaVersion", "coverageStatus", "zoneId", "zoneName", "feeMinor", "currency",
+      "promiseMinutes", "promiseStart", "promiseEnd", "evaluatedAt",
+    ]);
+    if (record === undefined || own(record, "schemaVersion") !== DELIVERY_ZONE_SCHEMA_VERSION) return undefined;
+    const coverageStatus = own(record, "coverageStatus");
+    const rawZoneId = own(record, "zoneId");
+    const rawZoneName = own(record, "zoneName");
+    const feeMinor = money(own(record, "feeMinor"));
+    const currency = currencyCode(own(record, "currency"));
+    const promiseMinutes = integer(own(record, "promiseMinutes"), 1, 1_440);
+    const promiseStart = timestamp(own(record, "promiseStart"));
+    const promiseEnd = timestamp(own(record, "promiseEnd"));
+    const evaluatedAt = timestamp(own(record, "evaluatedAt"));
+    if (
+      (coverageStatus !== "covered" && coverageStatus !== "not_covered")
+      || feeMinor === undefined || currency === undefined || promiseMinutes === undefined
+      || promiseStart === undefined || promiseEnd === undefined || evaluatedAt === undefined
+    ) return undefined;
+    let zoneId: string | null;
+    let zoneName: string | null;
+    if (coverageStatus === "covered") {
+      const coveredId = uuid(rawZoneId);
+      const coveredName = boundedText(rawZoneName, 1, MAX_ZONE_NAME_LENGTH);
+      if (coveredId === undefined || coveredName === undefined) return undefined;
+      zoneId = coveredId;
+      zoneName = coveredName;
+    } else {
+      if (rawZoneId !== null || rawZoneName !== null || feeMinor !== 0) return undefined;
+      zoneId = null;
+      zoneName = null;
+    }
+    if (new Date(promiseEnd).getTime() - new Date(promiseStart).getTime() !== promiseMinutes * 60_000) return undefined;
+    if (new Date(promiseStart).getTime() < new Date(evaluatedAt).getTime()) return undefined;
+
+    return Object.freeze({
+      schemaVersion: DELIVERY_ZONE_SCHEMA_VERSION,
+      coverageStatus, zoneId, zoneName, feeMinor, currency,
+      promiseMinutes, promiseStart, promiseEnd, evaluatedAt,
+    });
+  });
+}
+
+function parseMatchAddress(value: unknown): DeliveryAddressFactsV1 | undefined {
+  const record = exactRecord(value, ["postalCode", "locality"]);
+  if (record === undefined) return undefined;
+  const rawPostalCode = own(record, "postalCode");
+  const postalCode = rawPostalCode === null ? null : boundedText(rawPostalCode, 1, MAX_POSTAL_CODE_LENGTH);
+  const locality = boundedText(own(record, "locality"), 1, MAX_LOCALITY_LENGTH);
+  if (postalCode === undefined || locality === undefined) return undefined;
+  return Object.freeze({ postalCode, locality });
 }
 
 export function parseListDeliveryZonesQueryV1(value: unknown): ListDeliveryZonesQueryV1 | undefined {
