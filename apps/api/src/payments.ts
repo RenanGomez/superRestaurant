@@ -355,6 +355,23 @@ export class FinancialService {
     const actorId = await this.authorize(principal, command.scope, "payments.collect");
     const replay = await this.replay(() => this.finances.replayCollect(actorId, command));
     if (replay !== "missing") return replay;
+    const prepared = await this.prepareCollection(actorId, command);
+    return this.mutation(() => this.finances.collect(actorId, prepared));
+  }
+
+  /** The Order's remaining balance (total from packages/domain minus captured), for full-balance settlements. */
+  public async remainingBalance(actorId: string, scope: BranchScope, orderId: string, cashRegisterSessionId: string): Promise<number> {
+    const storedOrder = await this.readOrder(actorId, scope, orderId);
+    const storedRegister = await this.readRegister(actorId, scope, cashRegisterSessionId, orderId);
+    let totalMinor: number;
+    try { totalMinor = calculateOrderAggregateTotals(storedOrder.order).total.amountMinor; } catch { throw applicationError("request"); }
+    const remaining = totalMinor - storedRegister.capturedAmountMinor;
+    if (!Number.isSafeInteger(remaining) || remaining <= 0) throw applicationError("conflict");
+    return remaining;
+  }
+
+  /** Builds every aggregate a collection persists (Payment, Order, register) with domain rules; no writes. */
+  public async prepareCollection(actorId: string, command: CollectPaymentCommandV1): Promise<PersistPaymentInput> {
     const storedOrder = await this.readOrder(actorId, command.scope, command.orderId);
     const storedRegister = await this.readRegister(actorId, command.scope, command.cashRegisterSessionId, command.orderId);
     if (storedRegister.version !== command.cashRegisterExpectedVersion || storedOrder.version !== command.orderExpectedVersion) {
@@ -453,10 +470,10 @@ export class FinancialService {
       }
     } catch { throw applicationError("request"); }
 
-    return this.mutation(() => this.finances.collect(actorId, {
+    return {
       command, order: resultingOrder, orderTotalMinor: totalMinor, payment,
       priorCapturedAmountMinor: storedRegister.capturedAmountMinor, register: resultingRegister,
-    }));
+    };
   }
 
   public async close(principal: AuthenticatedPrincipal, input: unknown): Promise<CashRegisterSummaryV1> {

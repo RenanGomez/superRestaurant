@@ -117,6 +117,7 @@ const expectedRoleCodes = [
   "admin",
   "auditor",
   "cashier",
+  "courier",
   "kitchen",
   "manager",
   "owner",

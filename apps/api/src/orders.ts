@@ -42,14 +42,20 @@ import {
   type OrderAuditContext,
   type OrderMutation,
 } from "@super-restaurant/domain";
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService, type MembershipRole } from "./auth/membership-authorization.js";
 import { rolesGrantPermission } from "./auth/rbac-policy.js";
+import { buildAddressLabel, buildCustomerLabel } from "./branch-order-work-tray.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
+import {
+  ORDER_DELIVERY_CONTEXT_PORT,
+  type OrderDeliveryContext,
+  type OrderDeliveryContextPort,
+} from "./order-delivery-context.js";
 import {
   decodeOrderRecord,
   encodeOrderAuditEventRecord,
@@ -309,6 +315,7 @@ export class OrderService {
     @Inject(ORDER_PERSISTENCE_PORT) private readonly orders: OrderPersistencePort,
     @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
     @Inject(REALTIME_NOTIFICATION_PORT) private readonly notifications: RealtimeNotificationPort,
+    @Optional() @Inject(ORDER_DELIVERY_CONTEXT_PORT) private readonly deliveryContext?: OrderDeliveryContextPort,
   ) {}
 
   /**
@@ -444,7 +451,19 @@ export class OrderService {
       if (error instanceof OrderApplicationError) throw error;
       throw unavailable();
     }
-    const detail = projectOrderDetail(record, request.scope, roles);
+    // Frozen snapshot and delivery facts: customer/address only for roles with `customers.read`.
+    let context: OrderDeliveryContext | undefined;
+    if (this.deliveryContext !== undefined) {
+      try {
+        const read = await this.deliveryContext.read(actorId, request.scope, request.orderId);
+        if (read === "forbidden") throw applicationError("authorization");
+        if (read !== "missing") context = read;
+      } catch (error: unknown) {
+        if (error instanceof OrderApplicationError) throw error;
+        throw unavailable();
+      }
+    }
+    const detail = projectOrderDetail(record, request.scope, roles, context);
     if (detail === undefined) throw unavailable();
     return detail;
   }
@@ -668,8 +687,26 @@ function projectOrderDetail(
   stored: StoredOrder,
   scope: BranchScope,
   roles: readonly MembershipRole[],
+  context?: OrderDeliveryContext,
 ): OrderDetailV1 | undefined {
   const { order, version } = stored;
+  const snapshot = context?.snapshot ?? null;
+  const canReadCustomers = rolesGrantPermission(roles, "customers.read");
+  const quote = snapshot !== null && "deliveryQuote" in snapshot && snapshot.deliveryQuote !== null
+    ? {
+      feeMinor: snapshot.deliveryQuote.feeMinor,
+      promiseEnd: snapshot.deliveryQuote.promiseEnd,
+      promiseStart: snapshot.deliveryQuote.promiseStart,
+      zoneId: snapshot.deliveryQuote.zoneId,
+    }
+    : null;
+  const paymentIntent = snapshot !== null && "paymentIntent" in snapshot && snapshot.paymentIntent !== null
+    ? {
+      method: snapshot.paymentIntent.method,
+      tenderedAmountMinor: snapshot.paymentIntent.tenderedAmountMinor,
+      tipMinor: snapshot.paymentIntent.tipMinor,
+    }
+    : null;
   const totals = calculateOrderAggregateTotals(order);
   const lineTotalsByItemId = new Map(totals.lines.map((line) => [line.input.orderItemId, line]));
   const items = order.items.map((item) => {
@@ -706,11 +743,13 @@ function projectOrderDetail(
     channel: order.channel,
     createdAt: null,
     currency: order.currency,
+    ...(context === undefined ? {} : { delivery: context.delivery }),
     fulfillment: {
-      addressLabel: null,
+      addressLabel: canReadCustomers ? buildAddressLabel(snapshot) : null,
       channel: order.channel,
-      customerLabel: null,
-      paymentIntent: null,
+      customerLabel: canReadCustomers ? buildCustomerLabel(snapshot) : null,
+      paymentIntent,
+      ...(context === undefined ? {} : { quote }),
       tableId: order.tableId ?? null,
     },
     items,
