@@ -1,5 +1,11 @@
 # PROJECT_NOTES
 
+## Entregas: decisiones de liquidación y PII del repartidor — 2026-10-04
+
+- El repartidor (rol `courier`) ve nombre, teléfono, dirección e instrucciones **sólo de las entregas que tiene asignadas**, aunque no tenga `customers.read`; es la excepción mínima a la regla «PII sólo con `customers.read`» que exige la entrega física, acotada en SQL a sus filas. Otro repartidor o cualquier rol sin ese permiso sigue sin ver nada.
+- Una orden de entrega con entrega activa no se cobra en efectivo por caja (`DELIVERY_SETTLE_REQUIRED`): el efectivo contra entrega se liquida con `settle_delivery`, que cobra el saldo completo con la regla `cambio = recibido − cobro − propina` en la misma transacción y marca la entrega `settled`. Un cobro con tarjeta o transferencia sólo se admite cuando la entrega ya está `delivered` (`DELIVERY_NOT_DELIVERED` antes), y entonces cierra la entrega. Intención congelada de tarjeta o transferencia ⇒ la liquidación remite a caja.
+- La propina en efectivo entra a caja como movimiento `tip_in` y se reporta aparte; el esperado del corte la incluye.
+
 ## Plan «día operable» aprobado — 2026-10-03
 
 Emmanuel aprobó («adelante apruebo») el plan propuesto para que el avance deje de estancarse en torno al 40 %:
