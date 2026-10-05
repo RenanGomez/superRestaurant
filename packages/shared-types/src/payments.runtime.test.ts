@@ -175,6 +175,14 @@ expect(parseQuoteCashPaymentRequestV1({ ...quoteRequest, method: "transfer", ten
 expect(parseQuoteCashPaymentRequestV1({ ...quoteRequest, method: "transfer" }) === undefined, "transfer quote has no tender");
 expect(parsePaymentCollectionSummaryV1({ ...payment, method: "transfer", remainingBalanceMinor: 0, tipMinor: 0, tenderedAmountMinor: null, changeMinor: null })?.method === "transfer",
   "transfer summary parses with no tender or change");
+const transferSummary = { ...payment, method: "transfer", remainingBalanceMinor: 0, tipMinor: 0, tenderedAmountMinor: null, changeMinor: null };
+expect(parsePaymentCollectionSummaryV1(transferSummary)?.transferReference === null, "summary without a reference reads as null");
+expect(parsePaymentCollectionSummaryV1({ ...transferSummary, transferReference: "SPEI-0001" })?.transferReference === "SPEI-0001", "transfer summary carries its reference");
+expect(parsePaymentCollectionSummaryV1({ ...transferSummary, transferReference: null })?.transferReference === null, "transfer summary accepts a null reference");
+expect(parsePaymentCollectionSummaryV1({ ...transferSummary, transferReference: "" }) === undefined, "summary reference is not empty");
+expect(parsePaymentCollectionSummaryV1({ ...transferSummary, transferReference: "x".repeat(65) }) === undefined, "summary reference caps at 64");
+expect(parsePaymentCollectionSummaryV1({ ...transferSummary, transferReference: 7 }) === undefined, "summary reference is a string");
+expect(parsePaymentCollectionSummaryV1({ ...payment, remainingBalanceMinor: 0, transferReference: "SPEI-1" }) === undefined, "a reference belongs to transfer summaries only");
 const quote = { ...quoteRequest, changeMinor: 7_400, currency: "MXN", remainingAfterMinor: 500, remainingBeforeMinor: 13_000 };
 expect(parseCashPaymentQuoteV1(quote) !== undefined, "quote response parses");
 expect(parseCashPaymentQuoteV1({ ...quote, changeMinor: 7_500 }) === undefined, "quote change must equal tender minus amount minus tip");
