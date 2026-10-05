@@ -32,7 +32,8 @@ test("financial client reads exact scoped report and checkout endpoints", async 
     assert.equal(new Headers(init?.headers).get("authorization"), "Bearer token");
     return urls.length === 1
       ? new Response(JSON.stringify({
-        cardManualCapturedMinor: 3_000, cashCapturedMinor: 10_000, nextLocalSequence: 4,
+        cardManualCapturedMinor: 3_000, cashCapturedMinor: 10_000, cashTipsMinor: 0, tipsMinor: 0,
+        movementCount: 0, movements: [], nextLocalSequence: 4,
         paymentCount: 2, register, schemaVersion: 1, scope, totalCapturedMinor: 13_000,
       }))
       : new Response(JSON.stringify({

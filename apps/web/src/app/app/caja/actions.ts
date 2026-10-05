@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import type { BranchOrderWorkCursorV1, BranchScope } from "@super-restaurant/shared-types";
+import { parseCashPaymentQuoteV1, type BranchOrderWorkCursorV1, type BranchScope } from "@super-restaurant/shared-types";
 
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
@@ -61,7 +61,57 @@ export async function openCashRegisterAction(formData: FormData): Promise<void> 
   redirect("/app/caja?cashStatus=opened");
 }
 
-export async function collectPaymentAction(formData: FormData): Promise<void> {
+export async function quotePaymentAction(input: {
+  readonly cashRegisterSessionId: string;
+  readonly orderId: string;
+  readonly amountPesos: string;
+  readonly receivedPesos: string;
+  readonly tipPesos: string;
+  readonly method: "cash" | "card_manual";
+}): Promise<{ status: string; value?: ReturnType<typeof parseCashPaymentQuoteV1> }> {
+  const context = await getAuthorizedContext();
+  const cookieStore = await cookies();
+  const registerId = readUuidCookie(cookieStore, CASH_REGISTER_COOKIE);
+  const deviceId = readUuidCookie(cookieStore, DEVICE_COOKIE);
+  if (registerId === undefined || deviceId === undefined || !validUuid(input.cashRegisterSessionId) || !validUuid(input.orderId)) return { status: "context_invalid" };
+  const checkout = await getCheckoutOrder(context.accessToken, context.apiBaseUrl, {
+    cashRegisterSessionId: input.cashRegisterSessionId, deviceId, orderId: input.orderId, registerId, schemaVersion: 1, scope: context.scope,
+  });
+  if (checkout.status !== "ok") return { status: errorCode(checkout.status) };
+  const currency = checkout.value.currency;
+  const enteredAmount = parseMoneyInputToMinor(input.amountPesos, currency);
+  const received = input.method === "cash" ? parseMoneyInputToMinor(input.receivedPesos, currency) : null;
+  const tipMinor = input.tipPesos.trim() === "" ? 0 : parseMoneyInputToMinor(input.tipPesos, currency);
+  if (enteredAmount === null || enteredAmount <= 0 || tipMinor === null || (input.method === "cash" && (received === null || received <= 0))) return { status: "invalid_amount" };
+  // For an insufficient tender, quote a partial amount. The server then returns the unpaid balance.
+  const insufficient = received !== null && received < enteredAmount;
+  const request = {
+    amountMinor: insufficient ? received : enteredAmount,
+    cashRegisterSessionId: input.cashRegisterSessionId,
+    method: input.method,
+    orderId: input.orderId,
+    schemaVersion: 1,
+    scope: context.scope,
+    tenderedAmountMinor: insufficient ? null : received,
+    tipMinor,
+  };
+  try {
+    const response = await fetch(`${context.apiBaseUrl}/api/v1/payments/quote`, {
+      method: "POST", cache: "no-store",
+      headers: { authorization: `Bearer ${context.accessToken}`, "content-type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) return { status: response.status === 409 ? "conflict" : response.status === 400 ? "invalid_amount" : "unavailable" };
+    const value = parseCashPaymentQuoteV1(await response.json());
+    return value === undefined || value.orderId !== input.orderId || value.cashRegisterSessionId !== input.cashRegisterSessionId
+      || value.scope.restaurantId !== context.scope.restaurantId || value.scope.branchId !== context.scope.branchId
+      || value.amountMinor !== request.amountMinor || value.tipMinor !== tipMinor || value.method !== input.method
+      || value.tenderedAmountMinor !== request.tenderedAmountMinor
+      ? { status: "unavailable" } : { status: "ok", value };
+  } catch { return { status: "unavailable" }; }
+}
+
+export async function collectPaymentAction(formData: FormData): Promise<{ status: string; value?: import("@super-restaurant/shared-types").PaymentCollectionSummaryV1 }> {
   const context = await getAuthorizedContext();
   const cookieStore = await cookies();
   const registerId = readUuidCookie(cookieStore, CASH_REGISTER_COOKIE);
@@ -77,10 +127,14 @@ export async function collectPaymentAction(formData: FormData): Promise<void> {
   if (checkout.status !== "ok") redirect(`/app/caja?orderId=${orderId}&cashError=${errorCode(checkout.status)}`);
   const method = textField(formData, "method");
   const amountMinor = parseMoneyInputToMinor(textField(formData, "amountPesos") ?? "", checkout.value.currency);
-  if (amountMinor === null || amountMinor === 0) redirect(`/app/caja?orderId=${orderId}&cashError=invalid_amount`);
-  const provider = boundedTextField(formData, "provider", 120);
+  const tenderedAmountMinor = method === "cash" ? parseMoneyInputToMinor(textField(formData, "receivedPesos") ?? "", checkout.value.currency) : null;
+  const tipText = textField(formData, "tipPesos") ?? "";
+  const tipMinor = tipText.trim() === "" ? 0 : parseMoneyInputToMinor(tipText, checkout.value.currency);
+  if (amountMinor === null || amountMinor === 0 || tipMinor === null || (method === "cash" && (tenderedAmountMinor === null || tenderedAmountMinor < amountMinor))) return { status: "invalid_amount" };
+  const provider = method === "card_manual" ? "Terminal externa" : undefined;
   const terminalId = boundedTextField(formData, "terminalId", 100);
   const reference = optionalBoundedTextField(formData, "reference", 200);
+  if (method === "card_manual" && (terminalId === undefined || reference === undefined || reference === null || reference.length < 6)) return { status: "invalid_input" };
   const cardManualEvidence = method === "card_manual"
     ? { externalConfirmed: true, provider, reference, terminalId }
     : null;
@@ -100,12 +154,13 @@ export async function collectPaymentAction(formData: FormData): Promise<void> {
     paymentId: uuidField(formData, "paymentId"),
     schemaVersion: 1,
     scope: context.scope,
+    tenderedAmountMinor,
+    tipMinor,
   });
-  if (result.status !== "ok") redirect(`/app/caja?orderId=${orderId}&cashError=${errorCode(result.status)}`);
+  if (result.status !== "ok") return { status: errorCode(result.status) };
   cookieStore.set(CASH_REGISTER_SESSION_COOKIE, cashRegisterSessionId, cookieOptions(context.cookiesSecure));
   revalidatePath("/app/caja");
-  const nextOrder = result.value.remainingBalanceMinor === 0 ? "" : `&orderId=${orderId}`;
-  redirect(`/app/caja?cashStatus=payment_collected${nextOrder}`);
+  return { status: "ok", value: result.value };
 }
 
 export async function closeCashRegisterAction(formData: FormData): Promise<void> {
@@ -125,6 +180,9 @@ export async function closeCashRegisterAction(formData: FormData): Promise<void>
   const countedClosingBalanceMinor = parseMoneyInputToMinor(textField(formData, "countedClosingBalancePesos") ?? "", report.value.register.currency);
   if (countedClosingBalanceMinor === null) redirect("/app/caja?cashError=invalid_amount");
   const reason = optionalBoundedTextField(formData, "reason", 500);
+  if (countedClosingBalanceMinor !== report.value.register.expectedCashBalanceMinor && (reason === null || reason === undefined)) {
+    redirect("/app/caja?cashError=reason_required");
+  }
   const result = await closeCashRegister(context.accessToken, context.apiBaseUrl, {
     cashRegisterExpectedVersion: report.value.register.version,
     cashRegisterSessionId,
@@ -231,3 +289,4 @@ function errorCode(status: FinancialApiFailure): string {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+function validUuid(value: string): boolean { return UUID_PATTERN.test(value); }

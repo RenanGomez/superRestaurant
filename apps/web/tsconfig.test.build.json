@@ -12,6 +12,8 @@
     "types": ["node"]
   },
   "include": [
+    "src/app/app/caja/caja-helpers.ts",
+    "src/app/app/caja/caja-helpers.test.ts",
     "src/env.ts",
     "src/env.test.ts",
     "src/lib/auth-callback.ts",

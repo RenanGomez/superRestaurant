@@ -51,7 +51,7 @@ export function PayableOrders({ initial, scope, selectedOrderId }: Props) {
           <p className="break-words text-[13px] font-semibold">{item.customerLabel ?? `Orden ${item.orderId.slice(0, 8)}`}</p>
           <p className="break-words text-[12px] text-text-muted">{channelLabel(item.channel)} · {formatOrderWorkTime(item.createdAt, item.timeZone)} · {formatMinorUnits(item.totals.totalMinor, item.totals.currency)}</p>
         </div>
-        <a href={`/app/caja?orderId=${encodeURIComponent(item.orderId)}`} className="inline-flex min-h-11 items-center rounded-lg bg-accent px-4 text-[13px] font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Cobrar</a>
+        <a href={`/app/caja?orderId=${encodeURIComponent(item.orderId)}#cobrar`} className="inline-flex min-h-11 items-center rounded-lg bg-accent px-4 text-[13px] font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Cobrar</a>
       </li>)}
     </ul>
     {cursor !== null && <button type="button" onClick={() => void load(false)} disabled={busy} className="mt-3 min-h-11 rounded-lg border border-border px-4 text-[13px] font-semibold disabled:opacity-50">{busy ? "Cargando…" : "Cargar más"}</button>}
