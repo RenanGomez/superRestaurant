@@ -91,3 +91,32 @@ const tray = { items: [deliveryItem], nextCursor: null, schemaVersion: 1, scope 
 expect(parseBranchOrderWorkTrayV1(tray) !== undefined, "tray parses");
 expect(parseBranchOrderWorkTrayV1({ ...tray, items: [deliveryItem, deliveryItem] }) === undefined,
   "tray rejects duplicate order ids");
+
+// deliveries-unassigned-tray: additive `unassignedDeliveriesOnly` request flag and `deliveryState` item field.
+const flagged = parseBranchOrderWorkTrayRequestV1({ ...request, channel: "delivery", unassignedDeliveriesOnly: true });
+expect(flagged?.unassignedDeliveriesOnly === true, "request keeps the unassignedDeliveriesOnly flag");
+expect(parseBranchOrderWorkTrayRequestV1({ ...request, unassignedDeliveriesOnly: false })?.unassignedDeliveriesOnly === false,
+  "request keeps an explicit false flag");
+const unflagged = parseBranchOrderWorkTrayRequestV1(request);
+expect(unflagged !== undefined && !Object.hasOwn(unflagged, "unassignedDeliveriesOnly"),
+  "a request without the flag stays without it");
+for (const invalid of ["true", 1, null, undefined]) {
+  expect(parseBranchOrderWorkTrayRequestV1({ ...request, unassignedDeliveriesOnly: invalid }) === undefined,
+    "request rejects a non-boolean unassignedDeliveriesOnly (fail closed)");
+}
+
+expect(parseBranchOrderWorkItemV1(deliveryItem)?.deliveryState === null, "an item without deliveryState defaults it to null");
+for (const state of ["assigned", "en_route", "delivered", "failed", "settled"]) {
+  expect(parseBranchOrderWorkItemV1({ ...deliveryItem, deliveryState: state })?.deliveryState === state,
+    `item accepts deliveryState ${state}`);
+}
+expect(parseBranchOrderWorkItemV1({ ...deliveryItem, deliveryState: null })?.deliveryState === null,
+  "item accepts null deliveryState");
+for (const invalid of ["pending", "ASSIGNED", 1, ""]) {
+  expect(parseBranchOrderWorkItemV1({ ...deliveryItem, deliveryState: invalid }) === undefined,
+    "item rejects an unknown deliveryState (fail closed)");
+}
+expect(parseBranchOrderWorkItemV1({ ...deliveryItem, status: "paid", deliveryState: null })?.status === "paid",
+  "item accepts a prepaid (paid) delivery Order");
+expect(parseBranchOrderWorkItemV1({ ...deliveryItem, status: "cancelled" }) === undefined,
+  "item still rejects other statuses");
