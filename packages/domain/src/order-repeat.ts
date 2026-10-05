@@ -23,6 +23,7 @@ export const REPEAT_ORDER_ISSUE_CODES = Object.freeze([
   "modifier_group_requirements_changed",
   "product_price_changed",
   "modifier_price_changed",
+  "variant_required",
 ] as const);
 
 export type RepeatOrderIssueCode = (typeof REPEAT_ORDER_ISSUE_CODES)[number];
@@ -39,6 +40,8 @@ export interface RepeatOrderIssue {
 
 export interface RepeatOrderSelection {
   readonly productId: string;
+  /** Catalog size reused from the historical line when it is still active; `null` for a product sold without sizes. */
+  readonly variantId: string | null;
   readonly modifierGroups: readonly MenuModifierGroupSelection[];
 }
 
@@ -49,6 +52,8 @@ export interface RepeatOrderLinePlan {
   readonly currentName: string | null;
   readonly quantity: number;
   readonly status: "ready" | "blocked";
+  /** Code of the first blocking issue (for example `variant_required`); `null` for a ready line. */
+  readonly blockedReason: RepeatOrderIssueCode | null;
   readonly selection: RepeatOrderSelection | null;
   /** Current catalog facts only. Historical prices remain evidence, never a new sale input. */
   readonly currentSnapshot: OrderItemPriceSnapshot | null;
@@ -125,6 +130,18 @@ function reconcileLine(item: OrderItem, catalog: ValidatedMenuCatalog): RepeatOr
     }
   }
 
+  // Sizes: reuse the historical variant while it is still an active size of this product; a product that
+  // now requires a size the historical line cannot supply blocks only this line (`variant_required`).
+  let variantId: string | null = null;
+  if (product !== undefined && product.active) {
+    const activeVariants = (product.variants ?? []).filter(({ active }) => active);
+    const historicalVariant = item.snapshot.variantId === undefined
+      ? undefined
+      : activeVariants.find(({ id }) => id === item.snapshot.variantId);
+    if (historicalVariant !== undefined) variantId = historicalVariant.id;
+    else if (activeVariants.length > 0) addIssue(issues, { code: "variant_required", severity: "blocking" });
+  }
+
   const grouped = groupHistoricalModifiers(item.snapshot.modifiers, issues);
   const selections = product === undefined ? [] : reconcileModifierSelections(product.modifierGroupIds, grouped, catalog, issues);
 
@@ -136,6 +153,7 @@ function reconcileLine(item: OrderItem, catalog: ValidatedMenuCatalog): RepeatOr
       currentName: product?.name ?? null,
       quantity: item.quantity,
       status: "blocked",
+      blockedReason: issues.find(({ severity }) => severity === "blocking")?.code ?? null,
       selection: null,
       currentSnapshot: null,
       issues,
@@ -146,6 +164,7 @@ function reconcileLine(item: OrderItem, catalog: ValidatedMenuCatalog): RepeatOr
     restaurantId: catalog.restaurantId,
     productId: product.id,
     currency: catalog.currency,
+    variantId,
   }, selections);
   appendPriceChanges(item.snapshot, currentSnapshot, issues);
 
@@ -156,7 +175,8 @@ function reconcileLine(item: OrderItem, catalog: ValidatedMenuCatalog): RepeatOr
     currentName: product.name,
     quantity: item.quantity,
     status: "ready",
-    selection: { productId: product.id, modifierGroups: selections },
+    blockedReason: null,
+    selection: { productId: product.id, variantId, modifierGroups: selections },
     currentSnapshot,
     issues,
   });

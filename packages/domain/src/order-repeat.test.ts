@@ -127,6 +127,7 @@ test("repeat plan rebuilds a ready line exclusively from the current catalog", (
   assert.equal(plan.hasPriceChanges, false);
   assert.deepEqual(plan.lines[0]?.selection, {
     productId: "burger",
+    variantId: null,
     modifierGroups: [{ groupId: "toppings", selections: [{ optionId: "cheese", quantity: 1 }] }],
   });
   assert.deepEqual(plan.lines[0]?.issues, []);
@@ -208,4 +209,76 @@ test("repeat plan rejects cross-restaurant and cross-currency reconstruction", (
     () => buildRepeatOrderPlan(historicalOrder(), catalog({ currency: "USD" })),
     CurrencyMismatchError,
   );
+});
+
+function sizedCatalog(options: { readonly smallActive?: boolean; readonly removeSmall?: boolean; readonly smallPriceMinor?: number } = {}): MenuCatalog {
+  const base = catalog();
+  return {
+    ...base,
+    products: base.products.map((product) => ({
+      ...product,
+      variants: [
+        ...(options.removeSmall ? [] : [{
+          id: "small", name: "Chica", active: options.smallActive ?? true, displayOrder: 0,
+          unitPrice: new Money(options.smallPriceMinor ?? 12_000, "MXN"),
+        }]),
+        { id: "large", name: "Grande", active: true, displayOrder: 1, unitPrice: new Money(20_000, "MXN") },
+      ],
+    })),
+  };
+}
+
+function historicalSizedOrder(lines: readonly (string | null)[]): Order {
+  let order = createOrder({
+    orderId: "order-1",
+    restaurantId: "restaurant-1",
+    branchId: "branch-1",
+    channel: "counter",
+    currency: "MXN",
+    timeZone: "America/Hermosillo",
+  }, audit).order;
+  lines.forEach((variantId, index) => {
+    const source = variantId === null ? catalog() : sizedCatalog();
+    const snapshot = createMenuProductPriceSnapshot(source, {
+      restaurantId: "restaurant-1", productId: "burger", currency: "MXN", variantId,
+    }, [{ groupId: "toppings", selections: [{ optionId: "cheese", quantity: 1 }] }]);
+    order = addOrderItem(order, { orderItemId: `line-${index + 1}`, snapshot, quantity: 1 }, {
+      ...audit, eventId: `event-sized-${index}`, idempotencyKey: `idempotency-sized-${index}`,
+    }).order;
+  });
+  return order;
+}
+
+test("repeat plan reuses the historical size while it is still active and re-prices it from the catalog", () => {
+  const plan = buildRepeatOrderPlan(historicalSizedOrder(["small"]), sizedCatalog({ smallPriceMinor: 13_000 }));
+  const line = plan.lines[0];
+  assert.equal(line?.status, "ready");
+  assert.equal(line?.blockedReason, null);
+  assert.equal(line?.selection?.variantId, "small");
+  assert.equal(line?.currentSnapshot?.unitPrice.amountMinor, 13_000);
+  assert.equal(line?.currentSnapshot?.variantName, "Chica");
+  assert.deepEqual(line?.issues.map(({ code }) => code), ["product_price_changed"]);
+});
+
+test("repeat plan blocks only the line that cannot supply a size the product now requires", () => {
+  const plan = buildRepeatOrderPlan(historicalSizedOrder(["small", null]), sizedCatalog());
+  assert.equal(plan.readyLineCount, 1);
+  assert.equal(plan.blockedLineCount, 1);
+  assert.equal(plan.lines[0]?.status, "ready");
+  const blocked = plan.lines[1];
+  assert.equal(blocked?.status, "blocked");
+  assert.equal(blocked?.blockedReason, "variant_required");
+  assert.equal(blocked?.selection, null);
+  assert.deepEqual(blocked?.issues.map(({ code, severity }) => [code, severity]), [["variant_required", "blocking"]]);
+});
+
+test("repeat plan blocks a line whose historical size is now inactive or removed, and keeps plain products ready", () => {
+  for (const options of [{ smallActive: false }, { removeSmall: true }]) {
+    const plan = buildRepeatOrderPlan(historicalSizedOrder(["small"]), sizedCatalog(options));
+    assert.equal(plan.lines[0]?.status, "blocked");
+    assert.equal(plan.lines[0]?.blockedReason, "variant_required");
+  }
+  const plain = buildRepeatOrderPlan(historicalSizedOrder([null]), catalog());
+  assert.equal(plain.lines[0]?.status, "ready");
+  assert.equal(plain.lines[0]?.selection?.variantId, null);
 });
