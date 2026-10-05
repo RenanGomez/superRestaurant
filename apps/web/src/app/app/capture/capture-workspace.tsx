@@ -7,6 +7,7 @@ import type {
   CaptureDeliveryInstructionSuggestionV1,
   CaptureDeliveryInstructionSuggestionsV1,
   CaptureCustomerSnapshotV1,
+  CaptureLineQuoteResultV1,
   CaptureDraftDetailV1,
   CaptureDraftDetailV2,
   CaptureDraftSummaryV1,
@@ -39,6 +40,7 @@ import type {
 
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
   rehydrateCaptureWorkspace, shortCaptureDraftId, shouldRenewLease } from "../../../lib/capture-workspace";
+import type { CaptureRequestResult } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { draftLinesFromProjection, splitLostMessage } from "../../../lib/line-halves";
 import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
@@ -86,6 +88,7 @@ const issueLabels: Record<CustomerRepeatOrderPreviewIssueV1["code"], string> = {
 interface CaptureWorkspaceParameters {
   readonly scope: BranchScope;
   readonly action: (operation: CaptureWorkspaceOperation, input: unknown) => Promise<CaptureWorkspaceResult>;
+  readonly quoteLine: (input: unknown) => Promise<CaptureRequestResult<CaptureLineQuoteResultV1>>;
   readonly confirmationContext?: CaptureConfirmationContext;
   readonly canManageAssignment: boolean;
   readonly catalog: MenuCatalogStateV1;
@@ -93,7 +96,7 @@ interface CaptureWorkspaceParameters {
 }
 type ActionReply = Awaited<ReturnType<CaptureWorkspaceParameters["action"]>>;
 
-export function CaptureWorkspace({ scope, action, confirmationContext, canManageAssignment, catalog: initialCatalog,
+export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext, canManageAssignment, catalog: initialCatalog,
   reloadCatalog }: CaptureWorkspaceParameters): ReactNode {
   const [catalog, setCatalog] = useState(initialCatalog);
   const [catalogReloading, setCatalogReloading] = useState(false);
@@ -1115,6 +1118,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         </div>
       </div>}
       {sheetProduct !== undefined && <ProductSheet key={`${sheetProduct.productId}:${sheetEditLine?.lineId ?? "new"}`} product={sheetProduct} groups={sheetGroups}
+        scope={scope} catalogVersion={catalog.catalog?.catalogVersion ?? null} quoteLine={quoteLine}
         currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy} confirmedTotalMinor={sheetConfirmedTotalMinor}
         initialLine={sheetEditLine} error={sheetError} showVariants
         onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); setSheetEditLine(undefined); setSheetError(undefined); }}
