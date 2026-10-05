@@ -1248,3 +1248,13 @@ test("PostgreSQL order adapter persists and decodes a halves line through the re
   assert.equal(decoded?.unitPrice.amountMinor, 17_000);
   assert.equal(decoded?.fractionBreakdown?.[1]?.flavorName, "Hawaiana");
 });
+
+test("addItem replay of the same halves command freezes an identical snapshot (idempotent pricing)", async () => {
+  const command = sizedAddCommand({ fraction: halvesFraction({ extrasA: [extraCheese] }), variantId: sizeLarge });
+  const first: { order?: Order } = {};
+  const second: { order?: Order } = {};
+  await serviceFor(["manager"], capturingOrders(first), undefined, halvesMenuState).addItem(principal, command);
+  await serviceFor(["manager"], capturingOrders(second), undefined, halvesMenuState).addItem(principal, command);
+  assert.deepEqual(first.order?.items[0]?.snapshot, second.order?.items[0]?.snapshot);
+  assert.equal(first.order?.items[0]?.snapshot.fractionBreakdown?.length, 2);
+});

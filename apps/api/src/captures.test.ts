@@ -825,6 +825,114 @@ test("capture selection plan prices every line against the live catalog before p
     save: async () => { throw new Error("must not save a catalog"); } }, noConfirmationPort).replace(principal, variantCommand), code("conflict"));
 });
 
+const halvesProductId = "ec5e7c30-edac-4b79-bf8c-e363b041c59f";
+const halvesVariantId = "7b2e3d4f-5061-4b72-9c83-a4b5c6d7e8f9";
+const halvesFlavorGroup = "8c3f4e50-6172-4c83-8d94-b5c6d7e8f900";
+const halvesExtraGroup = "8c3f4e50-6172-4c83-8d94-b5c6d7e8f901";
+const halvesFlavorA = "9d405f61-7283-4d94-9ea5-c6d7e8f90a10";
+const halvesFlavorB = "9d405f61-7283-4d94-9ea5-c6d7e8f90a11";
+const halvesFlavorOff = "9d405f61-7283-4d94-9ea5-c6d7e8f90a12";
+const halvesExtra = "9d405f61-7283-4d94-9ea5-c6d7e8f90a13";
+const halvesCatalog: MenuCatalogV1 = {
+  ...selectionCatalog,
+  modifierGroups: [
+    {
+      active: true, displayOrder: 0, groupId: halvesFlavorGroup, maximumQuantity: 2, minimumQuantity: 0, name: "Sabor", productId: halvesProductId,
+      options: [
+        { active: true, imagePath: null, maximumQuantity: null, name: "Pepperoni", optionId: halvesFlavorA, unitPriceMinor: 0 },
+        { active: true, imagePath: null, maximumQuantity: null, name: "Hawaiana", optionId: halvesFlavorB, unitPriceMinor: 17_000 },
+        { active: false, imagePath: null, maximumQuantity: null, name: "Agotada", optionId: halvesFlavorOff, unitPriceMinor: 19_000 },
+      ],
+    },
+    {
+      active: true, displayOrder: 1, groupId: halvesExtraGroup, maximumQuantity: 5, minimumQuantity: 0, name: "Extras", productId: halvesProductId,
+      options: [{ active: true, imagePath: null, maximumQuantity: null, name: "Queso extra", optionId: halvesExtra, unitPriceMinor: 2_501 }],
+    },
+  ],
+  products: [{
+    ...selectionCatalog.products[0]!,
+    variants: [{
+      active: true, displayOrder: 0, name: "Grande", sku: null, unitPriceMinor: 15_000, variantId: halvesVariantId,
+      fraction: { enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId: halvesExtraGroup, flavorGroupId: halvesFlavorGroup },
+    }],
+  }],
+};
+
+function halvesPlanCommand(flavorB: string, extrasA: string[] = [], excludedA: string[] = []) {
+  const command = parseReplaceCaptureSelectionPlanCommandV1({
+    ...selectionPlanCommand!,
+    plan: {
+      ...selectionPlanCommand!.plan,
+      lines: [{
+        ...selectionPlanCommand!.plan.lines[0]!,
+        quantity: 2,
+        variantId: halvesVariantId,
+        fraction: {
+          geometry: "halves",
+          slots: [
+            { excludedIngredientIds: excludedA, extraOptionIds: extrasA, flavorOptionId: halvesFlavorA, fraction: "half-a" },
+            { excludedIngredientIds: [], extraOptionIds: [], flavorOptionId: flavorB, fraction: "half-b" },
+          ],
+        },
+      }],
+    },
+  });
+  assert.ok(command);
+  return command;
+}
+
+test("capture selection plan prices a halves line at the greater flavor plus half-priced extras, or answers 409", async () => {
+  const workspaceRecord = {
+    schemaVersion: 5,
+    deliveryQuote: null,
+    paymentIntent: null,
+    paymentIntentAppliedCaptureVersion: null,
+    paymentIntentBasisFingerprint: null,
+    detail: { ...record.detail, schemaVersion: 2 as const, version: 2, deliveryInstructions: null },
+    customerSnapshot: null,
+    fulfillmentSnapshot: null,
+    repeatOrderPlan: null,
+    selectionPlan: { schemaVersion: 1, catalogVersion: selectionCatalog.catalogVersion, appliedCaptureVersion: 2, lineCount: 1 },
+  };
+  let persisted = 0;
+  const persistence: CaptureSelectionPlanPort = {
+    probeReplaceSelectionPlan: async () => ({ status: "pending" }),
+    replaceSelectionPlan: async () => {
+      persisted += 1;
+      return { status: "applied", record: { ...record, detail: { ...record.detail, version: 2 } } };
+    },
+  };
+  const captures: CaptureCreationPort = {
+    createDraft: async () => { throw new Error("must not create"); },
+    readWorkspaceV5: async () => workspaceRecord,
+  };
+  const serviceFor = (command: ReturnType<typeof halvesPlanCommand>) => new CaptureSelectionPlanService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), persistence, captures, {
+    read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: halvesCatalog }),
+    save: async () => { throw new Error("must not save a catalog"); },
+  }, { ...noConfirmationPort, readSelectionPlan: async () => ({ status: "ok", plan: command.plan, appliedCaptureVersion: 2 }) });
+
+  const priced = halvesPlanCommand(halvesFlavorB, [halvesExtra], ["cebolla"]);
+  const result = await serviceFor(priced).replace(principal, priced);
+  const line = result.selectionProjection?.lines[0];
+  // greater half 17_000 + one extra on half A at 50 % rounded up (2_501 -> 1_251) = 18_251 per unit.
+  assert.equal(line?.unitPriceMinor, 17_000);
+  assert.equal(line?.lineTotalMinor, 2 * (17_000 + 1_251));
+  assert.equal(result.selectionProjection?.subtotalMinor, 2 * (17_000 + 1_251));
+  assert.deepEqual(line?.halves?.map((half) => [half.fraction, half.flavorName, half.amountMinor, half.extras, half.exclusions]), [
+    ["half-a", "Pepperoni", 15_000, ["Queso extra"], ["cebolla"]],
+    ["half-b", "Hawaiana", 17_000, [], []],
+  ]);
+  assert.deepEqual(line?.modifiers, []);
+  assert.equal(persisted, 1);
+
+  for (const bad of [halvesPlanCommand(halvesFlavorOff), halvesPlanCommand(halvesExtra), halvesPlanCommand(halvesFlavorB, [], ["jamon"])]) {
+    await assert.rejects(serviceFor(bad).replace(principal, bad), code("conflict"));
+  }
+  assert.equal(persisted, 1);
+});
+
 test("capture selection plan applied write accepts a follow-up read whose version advanced further still", async () => {
   // The write's own result proves the draft reached expectedVersion+1 (version 2); a second
   // connection then advances the draft to version 4 (an unrelated mutation) before the
