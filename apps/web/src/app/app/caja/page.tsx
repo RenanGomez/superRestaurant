@@ -172,7 +172,7 @@ function OpenRegisterView({ checkout, orderId, report, scope, tray }: {
             <p className="mt-4 rounded-xl bg-bg p-4 text-[13px] text-text-muted">Elige una orden abierta o parcialmente pagada para cargar su cuenta.</p>
           ) : checkout?.status !== "ok" ? (
             <div role="alert" className="mt-4 rounded-xl border border-[oklch(85%_0.06_25)] bg-error-bg p-4 text-[13px] text-[oklch(35%_0.1_25)]">No se pudo cargar esa cuenta. Elige otra orden o actualiza; no se registró ningún pago.</div>
-          ) : <PaymentPanel checkout={checkout.value} audit={{ ...newAudit(), paymentId: randomUUID() }} />}
+          ) : <PaymentPanel key={`${checkout.value.orderId}:${checkout.value.orderVersion}`} checkout={checkout.value} audit={{ ...newAudit(), paymentId: randomUUID() }} />}
         </section>
         <OperationalReport report={report} title="Corte X · vista operativa" />
       </div>

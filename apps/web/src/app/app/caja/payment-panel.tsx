@@ -5,13 +5,14 @@ import type { CashPaymentQuoteV1, CheckoutOrderSummaryV1, PaymentCollectionSumma
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { formatMinorForMoneyInput, parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import { collectPaymentAction, quotePaymentAction } from "./actions";
-import { canCollectPayment, quickCashAmounts, requiredCashTenderMinor } from "./caja-helpers";
+import { canCollectPayment, paymentAmountBounds, quickCashAmounts, requiredCashTenderMinor } from "./caja-helpers";
 
 export function PaymentPanel({ checkout, audit }: {
   readonly checkout: CheckoutOrderSummaryV1;
   readonly audit: { readonly eventId: string; readonly idempotencyKey: string; readonly occurredAt: string; readonly paymentId: string };
 }) {
   const [method, setMethod] = useState<"cash" | "card_manual">("cash");
+  const [amountPesos, setAmountPesos] = useState(() => formatMinorForMoneyInput(checkout.remainingBalanceMinor, checkout.currency) ?? "");
   const [receivedPesos, setReceivedPesos] = useState("");
   const [tipPesos, setTipPesos] = useState("");
   const [terminalId, setTerminalId] = useState("");
@@ -22,16 +23,17 @@ export function PaymentPanel({ checkout, audit }: {
   const [busy, setBusy] = useState(false);
   const [collected, setCollected] = useState<PaymentCollectionSummaryV1 | null>(null);
   const latest = useRef(0);
-  const amountPesos = formatMinorForMoneyInput(checkout.remainingBalanceMinor, checkout.currency) ?? "";
+  const amountMinor = parseMoneyInputToMinor(amountPesos, checkout.currency);
+  const validAmount = paymentAmountBounds(checkout.remainingBalanceMinor, amountMinor);
   const receivedMinor = parseMoneyInputToMinor(receivedPesos, checkout.currency);
   const tipMinor = tipPesos.trim() === "" ? 0 : parseMoneyInputToMinor(tipPesos, checkout.currency);
-  const requiredCashMinor = tipMinor === null ? null : requiredCashTenderMinor(checkout.remainingBalanceMinor, tipMinor);
+  const requiredCashMinor = !validAmount || tipMinor === null ? null : requiredCashTenderMinor(amountMinor, tipMinor);
 
   useEffect(() => {
     const request = ++latest.current;
     setQuote(null);
     setQuoteError("");
-    if (collected !== null || tipMinor === null || (method === "cash" && (receivedMinor === null || receivedMinor <= 0))) return;
+    if (collected !== null || !validAmount || tipMinor === null || (method === "cash" && (receivedMinor === null || receivedMinor <= 0))) return;
     const timer = setTimeout(() => {
       void quotePaymentAction({
         cashRegisterSessionId: checkout.cashRegisterSessionId, orderId: checkout.orderId,
@@ -43,10 +45,10 @@ export function PaymentPanel({ checkout, audit }: {
       }).catch(() => { if (request === latest.current) setQuoteError("No se pudo consultar el cambio. Actualiza e intenta de nuevo."); });
     }, 250);
     return () => { clearTimeout(timer); latest.current += 1; };
-  }, [amountPesos, checkout.cashRegisterSessionId, checkout.orderId, collected, method, receivedMinor, receivedPesos, tipMinor, tipPesos]);
+  }, [amountPesos, checkout.cashRegisterSessionId, checkout.orderId, collected, method, receivedMinor, receivedPesos, tipMinor, tipPesos, validAmount]);
 
   async function collect(formData: FormData) {
-    if (!canCollectPayment({ quote, balanceMinor: checkout.remainingBalanceMinor, method, receivedMinor, tipMinor, terminalId, reference, busy })) return;
+    if (!canCollectPayment({ quote, remainingMinor: checkout.remainingBalanceMinor, amountMinor, method, receivedMinor, tipMinor, terminalId, reference, busy })) return;
     setBusy(true);
     setCollectError("");
     try {
@@ -59,11 +61,13 @@ export function PaymentPanel({ checkout, audit }: {
 
   if (collected !== null) return <div id="cobrar" role="status" className="mt-4 grid gap-4 rounded-xl border border-[oklch(84%_0.08_155)] bg-[oklch(96%_0.03_155)] p-5">
     <h3 className="font-heading text-lg font-semibold">Cobro registrado</h3>
-    <p>Cobrado {formatMinorUnits(collected.amountMinor, collected.currency)} · Cambio {formatMinorUnits(collected.changeMinor ?? 0, collected.currency)} · Propina {formatMinorUnits(collected.tipMinor, collected.currency)} · Saldo {formatMinorUnits(collected.remainingBalanceMinor, collected.currency)}</p>
+    <p>Cobrado {formatMinorUnits(collected.amountMinor, collected.currency)} · Cambio {formatMinorUnits(collected.changeMinor ?? 0, collected.currency)} · Propina {formatMinorUnits(collected.tipMinor, collected.currency)}</p>
+    <p className="font-heading text-lg font-semibold">Saldo restante {formatMinorUnits(collected.remainingBalanceMinor, collected.currency)}</p>
+    {collected.remainingBalanceMinor > 0 && <a href={`/app/caja?orderId=${encodeURIComponent(collected.orderId)}#cobrar`} className="inline-flex min-h-11 items-center justify-center rounded-xl bg-accent px-4 text-sm font-semibold text-white">Cobrar saldo restante</a>}
     <a href="/app/caja" className="inline-flex min-h-11 items-center justify-center rounded-xl bg-accent px-4 text-sm font-semibold text-white">Cobrar otra cuenta</a>
   </div>;
 
-  const canCollect = canCollectPayment({ quote, balanceMinor: checkout.remainingBalanceMinor, method, receivedMinor, tipMinor, terminalId, reference, busy });
+  const canCollect = canCollectPayment({ quote, remainingMinor: checkout.remainingBalanceMinor, amountMinor, method, receivedMinor, tipMinor, terminalId, reference, busy });
   const insufficient = method === "cash" && receivedMinor !== null && receivedMinor > 0
     && requiredCashMinor !== null && receivedMinor < requiredCashMinor;
   return <div id="cobrar" className="mt-4 grid min-w-0 gap-4 scroll-mt-4">
@@ -79,7 +83,11 @@ export function PaymentPanel({ checkout, audit }: {
       <input type="hidden" name="eventId" value={audit.eventId} />
       <input type="hidden" name="idempotencyKey" value={audit.idempotencyKey} />
       <input type="hidden" name="occurredAt" value={audit.occurredAt} />
-      <input type="hidden" name="amountPesos" value={amountPesos} />
+      <label className="grid gap-1 text-sm font-semibold">A cobrar en pesos
+        <input name="amountPesos" value={amountPesos} onChange={(event) => setAmountPesos(event.target.value)} inputMode="decimal" className="min-h-12 min-w-0 rounded-xl border border-border px-3 text-base" aria-describedby="amount-hint" />
+        <span id="amount-hint" className="text-xs font-normal text-text-muted">Saldo precargado. Toca para cobrar sólo una parte.</span>
+      </label>
+      {!validAmount && <p role="alert" className="text-sm text-error">Escribe un importe entre {formatMinorUnits(1, checkout.currency)} y {formatMinorUnits(checkout.remainingBalanceMinor, checkout.currency)}.</p>}
       <input type="hidden" name="method" value={method} />
       <fieldset className="grid grid-cols-3 gap-2">
         <legend className="mb-2 text-sm font-semibold">Método</legend>
@@ -92,9 +100,9 @@ export function PaymentPanel({ checkout, audit }: {
         <label className="grid gap-1 text-sm font-semibold">Recibido en pesos<input name="receivedPesos" value={receivedPesos} onChange={(event) => setReceivedPesos(event.target.value)} inputMode="decimal" placeholder="0.00" className="min-h-12 min-w-0 rounded-xl border border-border px-3 text-base" /></label>
         <div className="grid grid-cols-4 gap-2">
           <QuickAmount label="Exacto" disabled={requiredCashMinor === null} onClick={() => setReceivedPesos(formatMinorForMoneyInput(requiredCashMinor ?? 0, checkout.currency) ?? "")} />
-          {[10_000, 20_000, 50_000].map((amount) => <QuickAmount key={amount} label={formatMinorUnits(amount, checkout.currency).replace(/\.00$/u, "")} disabled={tipMinor === null || !quickCashAmounts(checkout.remainingBalanceMinor, tipMinor).includes(amount)} onClick={() => setReceivedPesos(formatMinorForMoneyInput(amount, checkout.currency) ?? "")} />)}
+          {[10_000, 20_000, 50_000].map((amount) => <QuickAmount key={amount} label={formatMinorUnits(amount, checkout.currency).replace(/\.00$/u, "")} disabled={!validAmount || tipMinor === null || !quickCashAmounts(amountMinor, tipMinor).includes(amount)} onClick={() => setReceivedPesos(formatMinorForMoneyInput(amount, checkout.currency) ?? "")} />)}
         </div>
-        {insufficient && quote !== null && <p role="status" className="font-heading text-lg font-semibold text-error">Falta {formatMinorUnits(quote.remainingAfterMinor, checkout.currency)}</p>}
+        {insufficient && quote !== null && <p role="status" className="font-heading text-lg font-semibold text-error">{amountMinor === checkout.remainingBalanceMinor ? `Falta ${formatMinorUnits(quote.remainingAfterMinor, checkout.currency)}` : "El recibido no cubre este cobro y la propina."}</p>}
         {!insufficient && quote !== null && <p role="status" className="font-heading text-lg font-semibold text-accent">Cambio después de propina: {formatMinorUnits(quote.changeMinor ?? 0, checkout.currency)}</p>}
         {receivedMinor !== null && receivedMinor > 0 && quote === null && quoteError === "" && <p role="status" className="text-sm text-text-muted">Calculando cambio…</p>}
       </div> : <div className="grid gap-3 rounded-xl bg-bg p-3">

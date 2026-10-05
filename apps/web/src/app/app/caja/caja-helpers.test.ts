@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CashPaymentQuoteV1 } from "@super-restaurant/shared-types";
-import { canCollectPayment, movementLabel, quickCashAmounts, requiredCashTenderMinor } from "./caja-helpers.js";
+import { canCollectPayment, movementLabel, paymentAmountBounds, quickCashAmounts, requiredCashTenderMinor } from "./caja-helpers.js";
 
 test("movement labels are operator-facing Spanish", () => {
   assert.equal(movementLabel("cash_sale"), "Venta en efectivo");
@@ -20,11 +20,24 @@ test("quick notes never offer less than the balance", () => {
   assert.equal(requiredCashTenderMinor(12_500, 300), 12_800);
 });
 
+test("paymentAmountBounds accepts one cent through the full remaining balance", () => {
+  assert.equal(paymentAmountBounds(12_500, 1), true);
+  assert.equal(paymentAmountBounds(12_500, 5_000), true);
+  assert.equal(paymentAmountBounds(12_500, 12_500), true);
+  assert.equal(paymentAmountBounds(12_500, 0), false);
+  assert.equal(paymentAmountBounds(12_500, 12_501), false);
+  assert.equal(paymentAmountBounds(12_500, null), false);
+});
+
 test("collect requires a current server quote and enough tender or card evidence", () => {
   const quote = { amountMinor: 12_500, tipMinor: 0, method: "cash", tenderedAmountMinor: 20_000, changeMinor: 7_500 } as CashPaymentQuoteV1;
-  const input = { quote, balanceMinor: 12_500, method: "cash" as const, receivedMinor: 20_000, tipMinor: 0, terminalId: "", reference: "", busy: false };
+  const input = { quote, remainingMinor: 12_500, amountMinor: 12_500, method: "cash" as const, receivedMinor: 20_000, tipMinor: 0, terminalId: "", reference: "", busy: false };
   assert.equal(canCollectPayment(input), true);
   assert.equal(canCollectPayment({ ...input, receivedMinor: 10_000 }), false);
+  const partialQuote = { ...quote, amountMinor: 5_000, tenderedAmountMinor: 10_000, changeMinor: 5_000 } as CashPaymentQuoteV1;
+  assert.equal(canCollectPayment({ ...input, quote: partialQuote, amountMinor: 5_000, receivedMinor: 10_000 }), true);
+  assert.equal(canCollectPayment({ ...input, quote: partialQuote, amountMinor: 5_001, receivedMinor: 10_000 }), false);
+  assert.equal(canCollectPayment({ ...input, quote: partialQuote, amountMinor: 12_501 }), false);
   const tippedQuote = { ...quote, tipMinor: 300, changeMinor: 0, tenderedAmountMinor: 12_800 } as CashPaymentQuoteV1;
   assert.equal(canCollectPayment({ ...input, quote: tippedQuote, tipMinor: 300, receivedMinor: 12_800 }), true);
   assert.equal(canCollectPayment({ ...input, quote: tippedQuote, tipMinor: 300, receivedMinor: 12_799 }), false);

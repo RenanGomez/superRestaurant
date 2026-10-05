@@ -23,9 +23,17 @@ export function quickCashAmounts(balanceMinor: number, tipMinor = 0): readonly n
   return required === null ? [] : [10_000, 20_000, 50_000].filter((amount) => amount >= required);
 }
 
+/** The entered payment may cover any positive part of the authoritative remaining balance. */
+export function paymentAmountBounds(remainingMinor: number, typedMinor: number | null): typedMinor is number {
+  return Number.isSafeInteger(remainingMinor) && remainingMinor > 0
+    && typedMinor !== null && Number.isSafeInteger(typedMinor)
+    && typedMinor >= 1 && typedMinor <= remainingMinor;
+}
+
 export function canCollectPayment(input: {
   readonly quote: CashPaymentQuoteV1 | null;
-  readonly balanceMinor: number;
+  readonly remainingMinor: number;
+  readonly amountMinor: number | null;
   readonly method: "cash" | "card_manual";
   readonly receivedMinor: number | null;
   readonly tipMinor: number | null;
@@ -33,10 +41,11 @@ export function canCollectPayment(input: {
   readonly reference: string;
   readonly busy: boolean;
 }): boolean {
-  const { quote, balanceMinor, method, receivedMinor, tipMinor, terminalId, reference, busy } = input;
-  if (busy || quote === null || tipMinor === null || quote.amountMinor !== balanceMinor || quote.tipMinor !== tipMinor || quote.method !== method) return false;
+  const { quote, remainingMinor, amountMinor, method, receivedMinor, tipMinor, terminalId, reference, busy } = input;
+  if (busy || quote === null || tipMinor === null || !paymentAmountBounds(remainingMinor, amountMinor)
+    || quote.amountMinor !== amountMinor || quote.tipMinor !== tipMinor || quote.method !== method) return false;
   if (method === "cash") {
-    const required = requiredCashTenderMinor(balanceMinor, tipMinor);
+    const required = requiredCashTenderMinor(amountMinor, tipMinor);
     return required !== null && receivedMinor !== null && receivedMinor >= required
       && quote.tenderedAmountMinor === receivedMinor && quote.changeMinor !== null;
   }

@@ -25,7 +25,7 @@ import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchP
 import { getMenuCatalog } from "../../../lib/menu-catalog";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
 import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } from "./context";
-import { requiredCashTenderMinor } from "./caja-helpers";
+import { paymentAmountBounds, requiredCashTenderMinor } from "./caja-helpers";
 
 export async function openCashRegisterAction(formData: FormData): Promise<void> {
   const context = await getAuthorizedContext();
@@ -83,7 +83,8 @@ export async function quotePaymentAction(input: {
   const enteredAmount = parseMoneyInputToMinor(input.amountPesos, currency);
   const received = input.method === "cash" ? parseMoneyInputToMinor(input.receivedPesos, currency) : null;
   const tipMinor = input.tipPesos.trim() === "" ? 0 : parseMoneyInputToMinor(input.tipPesos, currency);
-  if (enteredAmount === null || enteredAmount <= 0 || tipMinor === null || (input.method === "cash" && (received === null || received <= 0))) return { status: "invalid_amount" };
+  if (!paymentAmountBounds(checkout.value.remainingBalanceMinor, enteredAmount) || tipMinor === null
+    || (input.method === "cash" && (received === null || received <= 0))) return { status: "invalid_amount" };
   const required = requiredCashTenderMinor(enteredAmount, tipMinor);
   if (required === null) return { status: "invalid_amount" };
   // For an insufficient tender, quote the portion available after tip. The server returns the unpaid balance.
@@ -135,7 +136,7 @@ export async function collectPaymentAction(formData: FormData): Promise<{ status
   const tipText = textField(formData, "tipPesos") ?? "";
   const tipMinor = tipText.trim() === "" ? 0 : parseMoneyInputToMinor(tipText, checkout.value.currency);
   const required = amountMinor === null || tipMinor === null ? null : requiredCashTenderMinor(amountMinor, tipMinor);
-  if (amountMinor === null || amountMinor === 0 || tipMinor === null || required === null
+  if (!paymentAmountBounds(checkout.value.remainingBalanceMinor, amountMinor) || tipMinor === null || required === null
     || (method === "cash" && (tenderedAmountMinor === null || tenderedAmountMinor < required))) return { status: "invalid_amount" };
   const provider = method === "card_manual" ? "Terminal externa" : undefined;
   const terminalId = boundedTextField(formData, "terminalId", 100);
