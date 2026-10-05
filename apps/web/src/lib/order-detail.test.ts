@@ -14,6 +14,7 @@ import {
   parseOccurredAt,
   parseOrderItemIds,
   pendingOrderItemIds,
+  resolvePendingAdd,
 } from "./order-detail.js";
 
 const parsedScope = parseBranchScope({ restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" });
@@ -57,22 +58,19 @@ test("hasAction only trusts the server's own availableActions list", () => {
   assert.equal(hasAction(value, "checkout"), false);
 });
 
-test("canAddItems gates editable orders by a server-provided action", () => {
-  for (const status of ["draft", "open", "partially_paid"] as const) {
-    assert.equal(canAddItems(detail({ status, availableActions: ["open"] })), true);
-    assert.equal(canAddItems(detail({ status, availableActions: ["markReady"] })), true);
-    assert.equal(canAddItems(detail({ status, availableActions: [] })), false);
-  }
-  for (const status of ["paid", "closed", "cancelled"] as const) {
-    assert.equal(canAddItems(detail({ status, availableActions: ["sendToKitchen"] })), false);
-  }
+test("canAddItems trusts only the server's addItem action, including an open order with no pending lines", () => {
+  assert.equal(canAddItems(detail({ status: "open", items: [], availableActions: ["addItem"] })), true);
+  assert.equal(canAddItems(detail({ status: "partially_paid", availableActions: ["addItem"] })), true);
+  assert.equal(canAddItems(detail({ status: "open", availableActions: ["sendToKitchen", "open", "markReady"] })), false);
+  assert.equal(canAddItems(detail({ status: "paid", availableActions: [] })), false);
 });
 
 test("buildAddOrderItemCommand carries the exact attempt and counted modifier selection", () => {
   const command = buildAddOrderItemCommand({
     scope, orderId: detail().orderId, expectedVersion: 4,
     orderItemId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02", productId: "23723e10-c0bf-49fd-9363-4f0e2c60e955",
-    quantity: 2, modifierGroups: [{ groupId: "1e37ae13-8507-484c-969f-2176f77b7000",
+    quantity: 2, note: "Sin cebolla", variantId: "1e37ae13-8507-484c-969f-2176f77b7000",
+    modifierGroups: [{ groupId: "1e37ae13-8507-484c-969f-2176f77b7000",
       selections: [{ optionId: "23723e10-c0bf-49fd-9363-4f0e2c60e955", quantity: 2 }] }],
     eventId: "1e37ae13-8507-484c-969f-2176f77b7000", idempotencyKey: "attempt-1",
     occurredAt: "2026-10-04T00:00:00.000Z", deviceId: "23723e10-c0bf-49fd-9363-4f0e2c60e955",
@@ -82,8 +80,22 @@ test("buildAddOrderItemCommand carries the exact attempt and counted modifier se
   assert.deepEqual(command.modifierGroups[0]?.selections, [{ optionId: "23723e10-c0bf-49fd-9363-4f0e2c60e955", quantity: 2 }]);
   assert.equal(command.idempotencyKey, "attempt-1");
   assert.deepEqual(parseAddOrderItemCommandV1(command), command);
-  assert.equal("note" in command, false);
-  assert.equal("variantId" in command, false);
+  assert.equal(command.note, "Sin cebolla");
+  assert.equal(command.variantId, "1e37ae13-8507-484c-969f-2176f77b7000");
+});
+
+test("resolvePendingAdd waits for an exact detail read before releasing the line ID", () => {
+  const attempt = buildAddOrderItemCommand({
+    scope, orderId: detail().orderId, expectedVersion: 3,
+    orderItemId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02", productId: "23723e10-c0bf-49fd-9363-4f0e2c60e955",
+    quantity: 1, note: null, variantId: null, modifierGroups: [],
+    eventId: "1e37ae13-8507-484c-969f-2176f77b7000", idempotencyKey: "attempt-1",
+    occurredAt: "2026-10-04T00:00:00.000Z", deviceId: "23723e10-c0bf-49fd-9363-4f0e2c60e955",
+  });
+  assert.equal(resolvePendingAdd(undefined, attempt), "confirming");
+  assert.equal(resolvePendingAdd(detail({ orderId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" }), attempt), "confirming");
+  assert.equal(resolvePendingAdd(detail(), attempt), "applied");
+  assert.equal(resolvePendingAdd(detail({ items: [] }), attempt), "retry");
 });
 
 test("hasItemAction gates per-line actions from the line's own list, never the order-level one", () => {

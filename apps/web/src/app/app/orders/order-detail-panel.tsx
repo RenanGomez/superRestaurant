@@ -6,11 +6,18 @@ import type { AddOrderItemCommandV1, MenuCatalogStateV1, MenuModifierGroupV1, Me
 import { captureDeviceId } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import type { SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
-import { actionLabel, buildAddOrderItemCommand, canAddItems, chunkOrderItemIds, groupItemsByStatus, hasAction, hasItemAction, nextFocusIndex, pendingOrderItemIds, type OrderItemStatusGroup } from "../../../lib/order-detail";
+import { actionLabel, buildAddOrderItemCommand, canAddItems, chunkOrderItemIds, groupItemsByStatus, hasAction, hasItemAction, nextFocusIndex, pendingOrderItemIds, resolvePendingAdd, type OrderItemStatusGroup } from "../../../lib/order-detail";
 import { CaptureMenu } from "../capture/capture-menu";
 import { ProductSheet } from "../capture/product-sheet";
 
 const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+interface OrderSelectionDraft {
+  readonly quantity: number;
+  readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[];
+  readonly note: string | null;
+  readonly variantId: string | null;
+}
 
 /**
  * Traps `Tab`/`Shift+Tab` inside `containerRef`'s own subtree (never letting focus escape to the
@@ -59,7 +66,7 @@ function useFocusTrap(containerRef: RefObject<HTMLElement | null>, onEscape: () 
 }
 
 function OrderMenuDialog({ detail, catalogState, loading, loadError, addSuccess, busy, selectedProduct, addError,
-  retryPending, onRetry, onClose, onSelect, onBack, onAdd }: {
+  selectionDraft, confirmingAdd, onRetry, onRetryRead, onClose, onSelect, onBack, onAdd }: {
   readonly detail: OrderDetailV1;
   readonly catalogState: MenuCatalogStateV1 | undefined;
   readonly loading: boolean;
@@ -68,12 +75,14 @@ function OrderMenuDialog({ detail, catalogState, loading, loadError, addSuccess,
   readonly busy: boolean;
   readonly selectedProduct: { readonly product: MenuProductV1; readonly groups: readonly MenuModifierGroupV1[] } | undefined;
   readonly addError: string | undefined;
-  readonly retryPending: boolean;
+  readonly selectionDraft: OrderSelectionDraft | undefined;
+  readonly confirmingAdd: boolean;
   readonly onRetry: () => void;
+  readonly onRetryRead: () => void;
   readonly onClose: () => void;
   readonly onSelect: (product: MenuProductV1, groups: readonly MenuModifierGroupV1[]) => void;
   readonly onBack: () => void;
-  readonly onAdd: (quantity: number, groups: readonly SelectionPlanModifierGroupDraft[]) => void;
+  readonly onAdd: (quantity: number, groups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null) => void;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const headingId = useId();
@@ -83,39 +92,47 @@ function OrderMenuDialog({ detail, catalogState, loading, loadError, addSuccess,
       role="dialog" aria-modal="true" aria-labelledby={headingId} tabIndex={-1} onClick={(event) => event.stopPropagation()}>
       <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border p-4">
         <h2 id={headingId} className="font-heading text-lg font-bold">Agregar producto</h2>
-        <button type="button" className={button} onClick={onClose} disabled={busy || retryPending}>Volver a la cuenta</button>
+        <button type="button" className={button} onClick={onClose} disabled={busy || confirmingAdd}>Volver a la cuenta</button>
       </header>
+      {confirmingAdd && <div role="status" className="m-4 rounded-lg bg-accent-soft p-4 text-sm">
+        <p>Confirmando el último producto…</p>
+        <button type="button" className={`${button} mt-2`} disabled={busy} onClick={onRetryRead}>Reintentar lectura</button>
+      </div>}
       {addSuccess && <p role="status" className="m-3 rounded-lg bg-success-bg p-3 text-sm">Producto agregado a la cuenta. Puedes seguir agregando.</p>}
-      {loading ? <p role="status" className="p-4 text-sm">Cargando menú…</p>
+      {confirmingAdd ? null : loading ? <p role="status" className="p-4 text-sm">Cargando menú…</p>
         : loadError ? <div role="alert" className="m-4 rounded-lg bg-error-bg p-3 text-sm">No se pudo cargar el menú.
           <button type="button" className={`${button} ml-2`} onClick={onRetry}>Reintentar</button></div>
           : catalogState?.catalog === null ? <p className="p-4 text-sm">No hay productos en el menú de esta sucursal.</p>
             : <CaptureMenu catalog={catalogState?.catalog ?? null} currency={detail.currency}
               lineQuantities={new Map()} busy={busy} onSelectProduct={onSelect} />}
-      {selectedProduct !== undefined && createPortal(<OrderProductDialog
+      {selectedProduct !== undefined && !confirmingAdd && createPortal(<OrderProductDialog
         product={selectedProduct.product} groups={selectedProduct.groups} currency={detail.currency}
-        busy={busy} error={addError} retryPending={retryPending} onClose={onBack} onAdd={onAdd}
+        busy={busy} error={addError} selectionDraft={selectionDraft} onClose={onBack} onAdd={onAdd}
       />, document.body)}
     </div>
   </div>;
 }
 
-function OrderProductDialog({ product, groups, currency, busy, error, retryPending, onClose, onAdd }: {
+function OrderProductDialog({ product, groups, currency, busy, error, selectionDraft, onClose, onAdd }: {
   readonly product: MenuProductV1;
   readonly groups: readonly MenuModifierGroupV1[];
   readonly currency: string;
   readonly busy: boolean;
   readonly error: string | undefined;
-  readonly retryPending: boolean;
+  readonly selectionDraft: OrderSelectionDraft | undefined;
   readonly onClose: () => void;
-  readonly onAdd: (quantity: number, groups: readonly SelectionPlanModifierGroupDraft[]) => void;
+  readonly onAdd: (quantity: number, groups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null) => void;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   useFocusTrap(dialogRef, onClose);
   return <div ref={dialogRef} className="fixed inset-0 z-[60]" tabIndex={-1}>
-    <ProductSheet product={product} groups={groups} currency={currency} busy={busy} busyLabel="Agregando…"
-      showNote={false} lockSelection={retryPending} closeDisabled={retryPending} {...(retryPending ? { addLabel: "Reintentar" } : {})}
-      error={error} onClose={onClose} onAdd={(quantity, modifierGroups) => onAdd(quantity, modifierGroups)} />
+    <ProductSheet product={product} groups={groups} currency={currency} busy={busy} busyLabel="Agregando…" addLabel="Agregar" closeDisabled={busy}
+      showVariants error={error} onClose={onClose} onAdd={onAdd}
+      {...(selectionDraft === undefined ? {} : {
+        initialLine: { lineId: product.productId, productId: product.productId,
+          quantity: selectionDraft.quantity, modifierGroups: selectionDraft.modifierGroups, note: selectionDraft.note },
+        initialVariantId: selectionDraft.variantId,
+      })} />
   </div>;
 }
 
@@ -204,8 +221,11 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<{ readonly product: MenuProductV1; readonly groups: readonly MenuModifierGroupV1[] }>();
+  const [selectionDraft, setSelectionDraft] = useState<OrderSelectionDraft>();
   const [addBusy, setAddBusy] = useState(false);
   const [pendingAddCommand, setPendingAddCommand] = useState<AddOrderItemCommandV1>();
+  const [confirmingAdd, setConfirmingAdd] = useState(false);
+  const [retryOrderItemId, setRetryOrderItemId] = useState<string>();
   const [addError, setAddError] = useState<string>();
   const [addSuccess, setAddSuccess] = useState(false);
   const headingId = useId();
@@ -304,37 +324,58 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
     setCatalogLoading(false);
   }
 
-  async function addSelected(quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[]): Promise<void> {
-    if (selectedProduct === undefined || addBusy) return;
-    if (pendingAddCommand === undefined && (detail === undefined || !canAddItems(detail))) {
+  function settleAddRead(reloaded: OrderDetailV1 | undefined, command: AddOrderItemCommandV1): void {
+    const resolution = resolvePendingAdd(reloaded, command);
+    if (resolution === "applied") {
+      setPendingAddCommand(undefined);
+      setConfirmingAdd(false);
+      setRetryOrderItemId(undefined);
+      setSelectedProduct(undefined);
+      setSelectionDraft(undefined);
+      setAddSuccess(true);
+      setAddError(undefined);
+    } else if (resolution === "retry") {
+      setPendingAddCommand(undefined);
+      setConfirmingAdd(false);
+      setRetryOrderItemId(command.orderItemId);
+      setAddError("La cuenta está actualizada y la línea no aparece. Toca Agregar para intentar de nuevo.");
+    } else {
+      setPendingAddCommand(command);
+      setConfirmingAdd(true);
+      setAddError(undefined);
+    }
+  }
+
+  async function retryAddRead(): Promise<void> {
+    if (pendingAddCommand === undefined || addBusy) return;
+    setAddBusy(true);
+    try {
+      const reloaded = await load();
+      onChanged();
+      settleAddRead(reloaded, pendingAddCommand);
+    } finally { setAddBusy(false); }
+  }
+
+  async function addSelected(quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null): Promise<void> {
+    if (selectedProduct === undefined || addBusy || pendingAddCommand !== undefined) return;
+    if (detail === undefined || !canAddItems(detail)) {
       setAddError("Esta cuenta ya no permite agregar productos. Vuelve al detalle para revisar el estado.");
       return;
     }
     const attempt = nextAttempt();
-    const currentDetail = detail ?? lastDetailRef.current;
-    if (currentDetail === undefined) return;
-    const command = pendingAddCommand ?? buildAddOrderItemCommand({ scope: currentDetail.scope, orderId: currentDetail.orderId,
-      expectedVersion: currentDetail.version, orderItemId: crypto.randomUUID(), productId: selectedProduct.product.productId,
-      quantity, modifierGroups, ...attempt, deviceId });
+    const command = buildAddOrderItemCommand({ scope: detail.scope, orderId: detail.orderId,
+      expectedVersion: detail.version, orderItemId: retryOrderItemId ?? crypto.randomUUID(), productId: selectedProduct.product.productId,
+      quantity, modifierGroups, note, variantId, ...attempt, deviceId });
+    setSelectionDraft({ quantity, modifierGroups, note, variantId });
+    setPendingAddCommand(command);
+    setRetryOrderItemId(undefined);
     setAddBusy(true);
     setAddError(undefined);
     try {
-      let result: MutationResult;
-      try { result = await actions.addItem(command); } catch { result = { error: "unavailable", ok: false }; }
+      try { await actions.addItem(command); } catch { /* A detail read resolves uncertain transport outcomes. */ }
       const reloaded = await load();
       onChanged();
-      if (reloaded?.items.some((item) => item.orderItemId === command.orderItemId)) {
-        setPendingAddCommand(undefined);
-        setSelectedProduct(undefined);
-        setAddSuccess(true);
-      } else {
-        const errorCode = result.ok ? undefined : result.error;
-        setPendingAddCommand(result.ok || errorCode === "unavailable" ? command : undefined);
-        setAddError(errorCode === "conflict"
-          ? "La orden cambió. Revisamos la cuenta; toca Agregar para intentar de nuevo."
-          : errorCode === "unavailable" || result.ok ? "No se pudo confirmar la línea. Reintentar conserva exactamente el mismo intento."
-            : errorMessages[errorCode ?? "unavailable"] ?? errorMessages.unavailable);
-      }
+      settleAddRead(reloaded, command);
     } finally { setAddBusy(false); }
   }
 
@@ -376,7 +417,7 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
                 {lines.map((item) => <li key={item.orderItemId} className="rounded-lg border border-border p-3">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <p className="text-sm font-semibold">{item.quantity} × {item.name}</p>
+                      <p className="text-sm font-semibold">{item.quantity} × {item.name}{item.variantName ? ` · ${item.variantName}` : ""}</p>
                       {item.modifiers.length > 0 && <ul className="mt-1 text-xs text-text-muted">
                         {item.modifiers.map((modifier) => <li key={modifier.modifierId}>{modifier.name} × {modifier.quantity}</li>)}
                       </ul>}
@@ -426,12 +467,12 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
       />}
       {menuOpen && (detail ?? (pendingAddCommand === undefined ? undefined : lastDetailRef.current)) !== undefined && typeof document !== "undefined" && createPortal(<OrderMenuDialog
         detail={(detail ?? lastDetailRef.current)!} catalogState={catalogState} loading={catalogLoading} loadError={catalogError}
-        addSuccess={addSuccess} busy={addBusy} selectedProduct={selectedProduct} addError={addError}
-        retryPending={pendingAddCommand !== undefined}
-        onRetry={() => void openMenu()} onClose={() => { if (!addBusy && pendingAddCommand === undefined) { setMenuOpen(false); setSelectedProduct(undefined); } }}
-        onSelect={(product, groups) => { setAddSuccess(false); setAddError(undefined); setSelectedProduct({ product, groups }); }}
-        onBack={() => { if (!addBusy && pendingAddCommand === undefined) { setSelectedProduct(undefined); setAddError(undefined); } }}
-        onAdd={(quantity, groups) => void addSelected(quantity, groups)}
+        addSuccess={addSuccess} busy={addBusy} selectedProduct={selectedProduct} selectionDraft={selectionDraft} addError={addError}
+        confirmingAdd={confirmingAdd} onRetryRead={() => void retryAddRead()}
+        onRetry={() => void openMenu()} onClose={() => { if (!addBusy && pendingAddCommand === undefined) { setMenuOpen(false); setSelectedProduct(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined); } }}
+        onSelect={(product, groups) => { setAddSuccess(false); setAddError(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined); setSelectedProduct({ product, groups }); }}
+        onBack={() => { if (!addBusy && pendingAddCommand === undefined) { setSelectedProduct(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined); setAddError(undefined); } }}
+        onAdd={(quantity, groups, note, variantId) => void addSelected(quantity, groups, note, variantId)}
       />, document.body)}
     </div>
   </div>;
