@@ -124,7 +124,11 @@ expect(
   parseBranchDeliveriesV1({ items: [{ ...item, delivery: { ...delivery, scope: { branchId: restaurantId, restaurantId } } }], schemaVersion: 1, scope }) === undefined,
   "items outside the envelope scope rejected",
 );
-expect(parseBranchDeliveriesV1({ items: [{ ...item, orderStatus: "paid" }], schemaVersion: 1, scope }) === undefined, "settled orders are not listed");
+expect(parseBranchDeliveriesV1({ items: [{ ...item, orderStatus: "closed" }], schemaVersion: 1, scope }) === undefined, "closed orders are not listed");
+expect(parseBranchDeliveriesV1({ items: [{ ...item, orderStatus: "paid", capturedMinor: 25_000, remainingMinor: 0 }], schemaVersion: 1, scope }) !== undefined, "prepaid orders are listed");
+expect(parseOrderDeliveryV1({ ...settledDelivery, settledPaymentId: null }) !== undefined, "prepaid settlement has no payment id");
+expect(parseOrderDeliveryV1({ ...delivery, settledPaymentId: settle.paymentId }) === undefined, "only settled deliveries carry a payment id");
+expect(parseSettleDeliveryResultV1({ delivery: { ...settledDelivery, settledPaymentId: null }, payment: null, replayed: false, schemaVersion: 1 }) !== undefined, "prepaid settle result has a null payment");
 
 expect(parseBranchMembersRequestV1({ roles: ["courier"], schemaVersion: 1, scope }) !== undefined, "members request parses");
 expect(parseBranchMembersRequestV1({ roles: null, schemaVersion: 1, scope }) !== undefined, "members request accepts all roles");

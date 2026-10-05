@@ -80,7 +80,8 @@ export interface OrderDeliveryResultV1 {
 }
 
 export interface SettleDeliveryResultV1 extends OrderDeliveryResultV1 {
-  readonly payment: PaymentCollectionSummaryV1;
+  /** `null` when a prepaid Order was closed without collecting anything. */
+  readonly payment: PaymentCollectionSummaryV1 | null;
 }
 
 export interface BranchDeliveriesRequestV1 {
@@ -103,7 +104,8 @@ export interface BranchDeliveryItemV1 {
   readonly delivery: OrderDeliveryV1;
   /** Only the assigned courier (or a `customers.read` role) receives the frozen delivery instructions. */
   readonly deliveryInstructions: string | null;
-  readonly orderStatus: "open" | "partially_paid";
+  /** `paid` only for prepaid Orders whose trip is still being dispatched or closed. */
+  readonly orderStatus: "open" | "partially_paid" | "paid";
   readonly paymentIntent: {
     readonly method: (typeof DELIVERY_PAYMENT_METHODS)[number];
     readonly tenderedAmountMinor: number | null;
@@ -205,7 +207,7 @@ export function parseOrderDeliveryV1(value: unknown): OrderDeliveryV1 | undefine
     || dispatchedAt === undefined || deliveredAt === undefined || failedReason === undefined
     || settledPaymentId === undefined || settledAt === undefined
     || (state === "pending") !== (version === 0) || (state === "pending" && courierUserId !== null)
-    || (state === "settled") !== (settledPaymentId !== null) || (settledPaymentId === null) !== (settledAt === null)
+    || (state === "settled") !== (settledAt !== null) || (settledPaymentId !== null && state !== "settled")
     || (state === "failed") !== (failedReason !== null)) return undefined;
   return Object.freeze({
     assignedAt, attemptCount, courierUserId, deliveredAt, dispatchedAt, failedReason, orderId,
@@ -228,7 +230,8 @@ export function parseSettleDeliveryResultV1(value: unknown): SettleDeliveryResul
   if (record === undefined || own(record, "schemaVersion") !== DELIVERY_SCHEMA_VERSION) return undefined;
   const delivery = parseOrderDeliveryV1(own(record, "delivery"));
   const replayed = own(record, "replayed");
-  const payment = parsePaymentCollectionSummaryV1(own(record, "payment"));
+  const rawPayment = own(record, "payment");
+  const payment = rawPayment === null ? null : parsePaymentCollectionSummaryV1(rawPayment);
   return delivery === undefined || typeof replayed !== "boolean" || payment === undefined
     ? undefined : Object.freeze({ delivery, payment, replayed, schemaVersion: DELIVERY_SCHEMA_VERSION });
 }
@@ -259,7 +262,7 @@ export function parseBranchDeliveryItemV1(value: unknown): BranchDeliveryItemV1 
     ? undefined : integer(own(intentRecord, "tipMinor"), 0, Number.MAX_SAFE_INTEGER);
   const promiseStart = nullable(own(record, "promiseStart"), timestamp);
   const promiseEnd = nullable(own(record, "promiseEnd"), timestamp);
-  if (delivery === undefined || (orderStatus !== "open" && orderStatus !== "partially_paid") || currency === undefined
+  if (delivery === undefined || (orderStatus !== "open" && orderStatus !== "partially_paid" && orderStatus !== "paid") || currency === undefined
     || totalMinor === undefined || customerLabel === undefined || addressLabel === undefined
     || courierLabel === undefined || intentRecord === undefined || promiseStart === undefined
     || promiseEnd === undefined || capturedMinor === undefined || remainingMinor === undefined
