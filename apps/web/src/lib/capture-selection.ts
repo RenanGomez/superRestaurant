@@ -1,4 +1,4 @@
-import type { MenuCatalogV1, MenuCategoryV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
+import type { LineFractionV1, MenuCatalogV1, MenuCategoryV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
 
 /** One chosen modifier option and how many units of it apply to a draft line. */
 export interface SelectionPlanModifierSelectionDraft {
@@ -50,6 +50,8 @@ export interface SelectionPlanLineDraft {
   readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[];
   /** Free-text instruction for the preparation station (1-200 chars), or no note. */
   readonly note: string | null;
+  /** Half-and-half split ("mitad y mitad"); absent for a whole line. */
+  readonly fraction?: LineFractionV1;
 }
 
 /** Catalog-only preview. The server remains authoritative for the accepted line price. */
@@ -83,6 +85,7 @@ export interface SelectionPlanCommandLineV1 {
   readonly quantity: number;
   readonly modifierGroups: readonly { readonly groupId: string; readonly selections: readonly { readonly optionId: string; readonly quantity: number }[] }[];
   readonly note: string | null;
+  readonly fraction?: LineFractionV1;
 }
 
 export interface SelectionPlanCommandV1 {
@@ -112,13 +115,15 @@ export function buildSelectionPlan(
         selections: group.selections.map((selection) => ({ optionId: selection.optionId, quantity: selection.quantity })),
       })),
       note: line.note,
+      ...(line.fraction === undefined ? {} : { fraction: line.fraction }),
     })),
   };
 }
 
 export type SelectionLineChange =
   | { readonly type: "add"; readonly lineId: string; readonly productId: string; readonly quantity: number;
-      readonly variantId: string | null; readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[]; readonly note: string | null }
+      readonly variantId: string | null; readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[]; readonly note: string | null;
+      readonly fraction?: LineFractionV1 }
   | { readonly type: "increment"; readonly lineId: string }
   | { readonly type: "decrement"; readonly lineId: string }
   | { readonly type: "remove"; readonly lineId: string }
@@ -126,6 +131,15 @@ export type SelectionLineChange =
   | { readonly type: "setNote"; readonly lineId: string; readonly note: string | null };
 
 const MAX_LINE_QUANTITY = 1_000;
+
+/** Whether two fractions describe the same split (order of extras and exclusions ignored). */
+export function sameLineFraction(left: LineFractionV1 | undefined, right: LineFractionV1 | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  const canonical = (fraction: LineFractionV1): string => JSON.stringify(fraction.slots.map((slot) => [
+    slot.fraction, slot.flavorOptionId, [...slot.extraOptionIds].sort(), [...slot.excludedIngredientIds].sort(),
+  ]));
+  return canonical(left) === canonical(right);
+}
 
 /**
  * Applies one local change to the working set of draft lines. Adding a product with the same
@@ -139,10 +153,12 @@ export function applyLineChange(
 ): readonly SelectionPlanLineDraft[] {
   if (change.type === "add") {
     const existingIndex = lines.findIndex((line) => line.productId === change.productId && line.variantId === change.variantId
-      && sameModifierSelection(line.modifierGroups, change.modifierGroups) && line.note === change.note);
+      && sameModifierSelection(line.modifierGroups, change.modifierGroups) && line.note === change.note
+      && sameLineFraction(line.fraction, change.fraction));
     if (existingIndex === -1) {
       return [...lines, { lineId: change.lineId, productId: change.productId, variantId: change.variantId,
-        quantity: clampQuantity(change.quantity), modifierGroups: change.modifierGroups, note: change.note }];
+        quantity: clampQuantity(change.quantity), modifierGroups: change.modifierGroups, note: change.note,
+        ...(change.fraction === undefined ? {} : { fraction: change.fraction }) }];
     }
     return lines.map((line, index) => index === existingIndex
       ? { ...line, quantity: clampQuantity(line.quantity + change.quantity) }

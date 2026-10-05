@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
+import type { LineFractionHalfV1, LineFractionV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
+import { buildLineFraction, estimateHalvesUnitMinor, halfExtraPriceMinor, halfLabel, halvesDraftFromFraction,
+  HALF_MAX_EXTRAS, pickHalfFlavor, toggleHalfEntry, validateHalvesDraft, variantAllowsHalves,
+  type HalvesDraft } from "../../../lib/line-halves";
 import { countModifierSelections, estimateSelectionMinor, expandModifierSelections, toggleOrStepOption,
   validateModifierSelection, type SelectionPlanLineDraft, type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import { useMenuImageBaseUrl } from "../../../lib/menu-image-url-context";
@@ -30,7 +33,7 @@ interface ProductSheetProps {
   readonly initialVariantId?: string | null;
   readonly error?: string | undefined;
   readonly onClose: () => void;
-  readonly onAdd: (quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null) => void;
+  readonly onAdd: (quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null, fraction: LineFractionV1 | null) => void;
 }
 
 const MAX_NOTE_LENGTH = 200;
@@ -51,6 +54,8 @@ export function ProductSheet({ product, groups, currency, busy, busyLabel = "Cal
     (initialLine?.modifierGroups ?? []).map((group) => [group.groupId,
       expandModifierSelections(group.selections)])));
   const [note, setNote] = useState(initialLine?.note ?? "");
+  const [splitChosen, setSplitChosen] = useState(initialLine?.fraction !== undefined);
+  const [halves, setHalves] = useState<HalvesDraft>(() => halvesDraftFromFraction(initialLine?.fraction));
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => { closeRef.current?.focus(); }, []);
@@ -73,22 +78,47 @@ export function ProductSheet({ product, groups, currency, busy, busyLabel = "Cal
     });
   }
 
-  const groupDrafts: readonly SelectionPlanModifierGroupDraft[] = groups.map((group) => ({
+  function chooseVariant(nextId: string): void {
+    const previous = activeVariants.find((variant) => variant.variantId === variantId)?.fraction;
+    const next = activeVariants.find((variant) => variant.variantId === nextId)?.fraction;
+    // Flavors and extras belong to a size's own groups: another setup invalidates the picks.
+    if (previous?.flavorGroupId !== next?.flavorGroupId || previous?.extraGroupId !== next?.extraGroupId) setHalves(halvesDraftFromFraction(undefined));
+    setVariantId(nextId);
+  }
+
+  const selectedVariant = activeVariants.find((variant) => variant.variantId === variantId);
+  const fractionSetup = variantAllowsHalves(selectedVariant?.fraction) ? selectedVariant?.fraction : undefined;
+  const halvesActive = fractionSetup !== undefined && splitChosen;
+  const flavorGroup = groups.find((group) => group.groupId === fractionSetup?.flavorGroupId);
+  const extraGroup = groups.find((group) => group.groupId === fractionSetup?.extraGroupId);
+  // With halves the flavor and extra groups live in the two columns, not in the ordinary list.
+  const listedGroups = halvesActive ? groups.filter((group) => group.groupId !== flavorGroup?.groupId && group.groupId !== extraGroup?.groupId) : groups;
+  const halvesValidation = validateHalvesDraft(halves);
+  const lineFraction = halvesActive ? buildLineFraction(halves) : null;
+
+  const groupDrafts: readonly SelectionPlanModifierGroupDraft[] = listedGroups.map((group) => ({
     groupId: group.groupId,
     selections: countModifierSelections(selections[group.groupId] ?? []),
   })).filter((group) => group.selections.length > 0);
 
-  const validations = groups.map((group) => ({
+  const validations = listedGroups.map((group) => ({
     group,
     validation: validateModifierSelection(group, countModifierSelections(selections[group.groupId] ?? [])),
   }));
   const allValid = validations.every((entry) => entry.validation.valid);
-  const estimatedMinor = estimateSelectionMinor(product, groups, selections, quantity, variantId);
+  const wholeEstimateMinor = estimateSelectionMinor(product, listedGroups, selections, quantity, variantId);
+  const wholeUnitMinor = estimateSelectionMinor(product, listedGroups, selections, 1, variantId);
+  const halvesUnitMinor = halvesActive && selectedVariant !== undefined && wholeUnitMinor !== null
+    ? estimateHalvesUnitMinor({ variantPriceMinor: selectedVariant.unitPriceMinor, flavorGroup, extraGroup, draft: halves,
+      otherModifiersMinor: wholeUnitMinor - selectedVariant.unitPriceMinor })
+    : null;
+  const estimatedMinor = halvesActive ? (halvesUnitMinor === null ? null : halvesUnitMinor * quantity) : wholeEstimateMinor;
+  const halvesMissing = halvesActive && !halvesValidation.valid;
 
   return <div className="fixed inset-0 z-20 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
     role="dialog" aria-modal="true" aria-labelledby="product-sheet-title"
     onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="flex max-h-[92dvh] w-full max-w-xl flex-col rounded-t-2xl bg-surface shadow-xl sm:rounded-2xl">
+    <div className={`flex max-h-[92dvh] w-full ${halvesActive ? "max-w-3xl" : "max-w-xl"} flex-col rounded-t-2xl bg-surface shadow-xl sm:rounded-2xl`}>
       <header className="flex items-center gap-2 border-b border-border p-4">
         <h2 id="product-sheet-title" className="font-heading text-lg font-semibold">{product.name}</h2>
         <span className="grow" />
@@ -101,12 +131,29 @@ export function ProductSheet({ product, groups, currency, busy, busyLabel = "Cal
             {activeVariants.map((variant) => <button key={variant.variantId} type="button"
               disabled={busy || confirmed || lockSelection} aria-pressed={variantId === variant.variantId}
               className={`${optionButton} min-w-0 ${variantId === variant.variantId ? optionSelected : ""}`}
-              onClick={() => setVariantId(variant.variantId)}>
+              onClick={() => chooseVariant(variant.variantId)}>
               <span className="min-w-0 break-words">{variant.name}</span><span className="shrink-0">{formatMinorUnits(variant.unitPriceMinor, currency)}</span>
             </button>)}
           </div>
         </fieldset>}
-        {groups.map((group) => <fieldset key={group.groupId} className="grid gap-2">
+        {fractionSetup !== undefined && <fieldset className="grid gap-2">
+          <legend className="text-sm font-semibold">¿Cómo la quieres?</legend>
+          <div className="grid grid-cols-2 gap-2">
+            {([["Entera", false], ["Mitad y mitad", true]] as const).map(([label, split]) => <button key={label} type="button"
+              disabled={busy || confirmed || lockSelection} aria-pressed={splitChosen === split}
+              className={`${optionButton} justify-center ${splitChosen === split ? optionSelected : ""}`}
+              onClick={() => setSplitChosen(split)}>{label}</button>)}
+          </div>
+        </fieldset>}
+        {halvesActive && <div className="grid gap-3 sm:grid-cols-2" aria-label="Mitad y mitad">
+          {(["half-a", "half-b"] as const).map((half) => <HalfColumn key={half} half={half} draft={half === "half-a" ? halves.a : halves.b}
+            flavorGroup={flavorGroup} extraGroup={extraGroup} excludable={fractionSetup?.excludableIngredientIds ?? []}
+            currency={currency} variantPriceMinor={selectedVariant?.unitPriceMinor ?? 0}
+            disabled={busy || confirmed || lockSelection}
+            onFlavor={(optionId) => setHalves((current) => pickHalfFlavor(current, half, optionId))}
+            onEntry={(list, id) => setHalves((current) => toggleHalfEntry(current, half, list, id))} />)}
+        </div>}
+        {listedGroups.map((group) => <fieldset key={group.groupId} className="grid gap-2">
           <legend className="flex w-full items-center justify-between text-sm font-semibold">
             <span>{group.name}</span>
             <span className="text-xs font-normal text-text-muted">
@@ -168,14 +215,70 @@ export function ProductSheet({ product, groups, currency, busy, busyLabel = "Cal
             onClick={() => setQuantity((current) => current + 1)}>+</button>
         </div>
         <span className="grow" />
-        <button type="button" className="min-h-11 min-w-11 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50" disabled={busy || confirmed || !allValid || sizeMissing}
-          onClick={() => onAdd(quantity, groupDrafts, note.trim().length === 0 ? null : note.trim(), variantId)}>
+        <button type="button" className="min-h-11 min-w-11 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50" disabled={busy || confirmed || !allValid || sizeMissing || halvesMissing}
+          onClick={() => onAdd(quantity, groupDrafts, note.trim().length === 0 ? null : note.trim(), variantId, lineFraction)}>
           {busy ? busyLabel : confirmed ? (confirmedTotalMinor === null ? "Agregado" : `Agregado · ${formatMinorUnits(confirmedTotalMinor, currency)}`)
-            : sizeMissing ? "Elige un tamaño" : !allValid ? "Completa lo obligatorio" : addLabel ?? (initialLine ? "Guardar cambios" : "Agregar")}
+            : sizeMissing ? "Elige un tamaño" : halvesMissing ? (halvesValidation.message ?? "Elige los dos sabores") : !allValid ? "Completa lo obligatorio" : addLabel ?? (initialLine ? "Guardar cambios" : "Agregar")}
         </button>
       </footer>
     </div>
   </div>;
+}
+
+interface HalfColumnProps {
+  readonly half: LineFractionHalfV1;
+  readonly draft: HalvesDraft["a"];
+  readonly flavorGroup: MenuModifierGroupV1 | undefined;
+  readonly extraGroup: MenuModifierGroupV1 | undefined;
+  readonly excludable: readonly string[];
+  readonly currency: string;
+  readonly variantPriceMinor: number;
+  readonly disabled: boolean;
+  readonly onFlavor: (optionId: string) => void;
+  readonly onEntry: (list: "extraOptionIds" | "excludedIngredientIds", id: string) => void;
+}
+
+/** One half of a "mitad y mitad" line: flavor buttons first, then optional extras and exclusions. */
+function HalfColumn({ half, draft, flavorGroup, extraGroup, excludable, currency, variantPriceMinor, disabled, onFlavor, onEntry }: HalfColumnProps) {
+  const title = halfLabel(half);
+  const chip = "flex min-h-11 items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-left text-sm hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
+  return <section className="grid content-start gap-3 rounded-xl border border-border p-3" aria-label={title}>
+    <h3 className="font-heading text-base font-semibold">{title}</h3>
+    <fieldset className="grid gap-2">
+      <legend className="text-sm font-semibold">Sabor</legend>
+      {(flavorGroup?.options ?? []).filter((option) => option.active).map((option) => <button key={option.optionId} type="button"
+        disabled={disabled} aria-pressed={draft.flavorOptionId === option.optionId}
+        className={`${chip} text-base ${draft.flavorOptionId === option.optionId ? optionSelected : ""}`}
+        onClick={() => onFlavor(option.optionId)}>
+        <span>{option.name}</span>
+        <span className="text-xs text-text-muted">{formatMinorUnits(option.unitPriceMinor === 0 ? variantPriceMinor : option.unitPriceMinor, currency)}</span>
+      </button>)}
+    </fieldset>
+    {extraGroup !== undefined && extraGroup.options.some((option) => option.active) && <fieldset className="grid gap-2">
+      <legend className="text-sm font-semibold">Extras · media porción</legend>
+      {extraGroup.options.filter((option) => option.active).map((option) => {
+        const chosen = draft.extraOptionIds.includes(option.optionId);
+        return <button key={option.optionId} type="button" aria-pressed={chosen}
+          disabled={disabled || (!chosen && draft.extraOptionIds.length >= HALF_MAX_EXTRAS)}
+          className={`${chip} ${chosen ? optionSelected : ""}`} onClick={() => onEntry("extraOptionIds", option.optionId)}>
+          <span>{option.name}</span>
+          {option.unitPriceMinor > 0 && <span className="text-xs text-text-muted">+{formatMinorUnits(halfExtraPriceMinor(option.unitPriceMinor), currency)}</span>}
+        </button>;
+      })}
+    </fieldset>}
+    {excludable.length > 0 && <fieldset className="grid gap-2">
+      <legend className="text-sm font-semibold">Quitar ingredientes</legend>
+      <div className="flex flex-wrap gap-2">
+        {excludable.map((ingredient) => {
+          const chosen = draft.excludedIngredientIds.includes(ingredient);
+          return <button key={ingredient} type="button" aria-pressed={chosen} disabled={disabled}
+            className={`${chip} ${chosen ? optionSelected : ""}`} onClick={() => onEntry("excludedIngredientIds", ingredient)}>
+            Sin {ingredient}
+          </button>;
+        })}
+      </div>
+    </fieldset>}
+  </section>;
 }
 
 function OptionPhoto({ imagePath, name, supabaseUrl }: { readonly imagePath: string | null; readonly name: string; readonly supabaseUrl: string }) {

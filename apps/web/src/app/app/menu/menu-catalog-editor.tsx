@@ -1,6 +1,6 @@
 "use client";
 
-import { MENU_PRODUCT_MAX_VARIANTS } from "@super-restaurant/shared-types";
+import { MENU_PRODUCT_MAX_VARIANTS, MENU_VARIANT_MAX_EXCLUDABLE_INGREDIENTS } from "@super-restaurant/shared-types";
 import type {
   MenuCategoryV1,
   MenuCatalogStateV1,
@@ -8,6 +8,7 @@ import type {
   MenuModifierOptionV1,
   MenuProductV1,
   MenuProductVariantV1,
+  MenuVariantFractionV1,
 } from "@super-restaurant/shared-types";
 import { useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
@@ -53,7 +54,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
     })) ?? [],
   );
   const [removal, setRemoval] = useState<Removal | null>(null);
-  const variantIssue = products.map((product) => variantValidationError(product.productId, product.variants ?? [])).find((issue) => issue !== null) ?? null;
+  const variantIssue = products.map((product) => variantValidationError(product.productId, product.variants ?? [], new Set(groups.filter((group) => group.productId === product.productId).map((group) => group.groupId)))).find((issue) => issue !== null) ?? null;
   const variantError = variantIssue === null ? null : `${products.find((product) => product.productId === variantIssue.productId)?.name || "Producto sin nombre"}: ${variantIssue.message}`;
   const [pendingUploads, setPendingUploads] = useState(0);
   const onUploadPendingChange = (pending: boolean): void => setPendingUploads((current) => current + (pending ? 1 : -1));
@@ -294,6 +295,8 @@ function ProductEditor({ variantInvalid, canManage, categories, currency, groups
               {canManage && <RemoveButton label={`Quitar tamaño ${variant.name || "nuevo"}`}
                 onClick={() => onRemove({ id: variant.variantId, groupId: product.productId, kind: "variant", label: variant.name || "tamaño nuevo" })} />}
             </div>
+            <FractionEditor canManage={canManage} groups={groups} variant={variant}
+              onChange={(fraction) => changeVariant(variant.variantId, { fraction })} />
           </div>)}</div>}
       </section>
 
@@ -327,6 +330,75 @@ function ProductEditor({ variantInvalid, canManage, categories, currency, groups
       ))}
     </article>
   );
+}
+
+const EMPTY_FRACTION: MenuVariantFractionV1 = { enabled: false, excludableIngredientIds: [], extraGroupId: null, flavorGroupId: null };
+
+/** "Permitir mitades" for one size: switch, flavor group, extras group and removable ingredients. */
+function FractionEditor({ canManage, groups, variant, onChange }: {
+  readonly canManage: boolean;
+  readonly groups: readonly MenuModifierGroupV1[];
+  readonly variant: MenuProductVariantV1;
+  readonly onChange: (fraction: MenuVariantFractionV1) => void;
+}): ReactNode {
+  const [draft, setDraft] = useState("");
+  const fraction = variant.fraction ?? EMPTY_FRACTION;
+  const label = variant.name || "este tamaño";
+  const update = (patch: Partial<MenuVariantFractionV1>): void => onChange({ ...fraction, ...patch });
+  const ingredients = fraction.excludableIngredientIds;
+  const addIngredient = (): void => {
+    const name = draft.trim();
+    if (name.length === 0 || name.length > 80 || ingredients.length >= MENU_VARIANT_MAX_EXCLUDABLE_INGREDIENTS
+      || ingredients.some((entry) => entry.toLowerCase() === name.toLowerCase())) return;
+    update({ excludableIngredientIds: [...ingredients, name] });
+    setDraft("");
+  };
+  const select = "min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70";
+  return <div className="grid gap-3 border-t border-border pt-3 sm:col-span-full">
+    <label className="inline-flex min-h-11 items-center gap-2 text-[13px] font-semibold">
+      <input type="checkbox" className="h-5 w-5" disabled={!canManage} checked={fraction.enabled}
+        onChange={(event) => update({ enabled: event.target.checked })} />
+      Permitir mitades
+      <span className="text-[12px] font-normal text-text-muted">El operador podrá armar {label} mitad y mitad.</span>
+    </label>
+    {fraction.enabled && <div className="grid gap-3 sm:grid-cols-2">
+      {groups.length === 0 && <p role="status" className="text-[12px] text-text-muted sm:col-span-2">Primero crea un grupo con los sabores en «Modificadores» de este producto.</p>}
+      <label className="flex flex-col gap-1 text-[11px] font-medium">Grupo de sabores
+        <select className={select} disabled={!canManage} value={fraction.flavorGroupId ?? ""}
+          onChange={(event) => update({ flavorGroupId: event.target.value === "" ? null : event.target.value })}>
+          <option value="">Elige un grupo</option>
+          {groups.filter((group) => group.groupId !== fraction.extraGroupId).map((group) => <option key={group.groupId} value={group.groupId}>{group.name || "Grupo sin nombre"}</option>)}
+        </select>
+      </label>
+      <label className="flex flex-col gap-1 text-[11px] font-medium">Grupo de extras (opcional)
+        <select className={select} disabled={!canManage} value={fraction.extraGroupId ?? ""}
+          onChange={(event) => update({ extraGroupId: event.target.value === "" ? null : event.target.value })}>
+          <option value="">Sin extras</option>
+          {groups.filter((group) => group.groupId !== fraction.flavorGroupId).map((group) => <option key={group.groupId} value={group.groupId}>{group.name || "Grupo sin nombre"}</option>)}
+        </select>
+      </label>
+      <div className="grid gap-2 sm:col-span-2">
+        <span className="text-[11px] font-medium">Ingredientes que se pueden quitar</span>
+        {ingredients.length > 0 && <ul className="flex flex-wrap gap-2" aria-label="Ingredientes que se pueden quitar">
+          {ingredients.map((ingredient) => <li key={ingredient}>
+            <button type="button" disabled={!canManage} aria-label={`Quitar ingrediente ${ingredient} de la lista`}
+              className="min-h-11 rounded-lg border border-border bg-surface px-3 text-[13px] hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60"
+              onClick={() => update({ excludableIngredientIds: ingredients.filter((entry) => entry !== ingredient) })}>
+              {ingredient} ✕
+            </button>
+          </li>)}
+        </ul>}
+        {canManage && <div className="flex gap-2">
+          <input aria-label="Nuevo ingrediente" maxLength={80} value={draft} placeholder="Ej. cebolla"
+            className="min-h-11 min-w-0 grow rounded-lg border border-border bg-surface px-3 text-[13px] focus-visible:outline-2 focus-visible:outline-accent"
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addIngredient(); } }} />
+          <button type="button" onClick={addIngredient} disabled={draft.trim().length === 0}
+            className="min-h-11 rounded-lg border border-accent px-3 text-[12px] font-semibold text-accent disabled:opacity-40">+ Ingrediente</button>
+        </div>}
+      </div>
+    </div>}
+  </div>;
 }
 
 function ModifierGroupEditor({ canManage, currency, group, supabaseUrl, onAddOption, onChange, onOptionImageChange, onRemove, onUploadPendingChange }: {

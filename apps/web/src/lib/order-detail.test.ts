@@ -84,6 +84,23 @@ test("buildAddOrderItemCommand carries the exact attempt and counted modifier se
   assert.equal(command.variantId, "1e37ae13-8507-484c-969f-2176f77b7000");
 });
 
+test("buildAddOrderItemCommand sends the half-and-half split only when present", () => {
+  const input = {
+    scope, orderId: detail().orderId, expectedVersion: 4,
+    orderItemId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02", productId: "23723e10-c0bf-49fd-9363-4f0e2c60e955",
+    quantity: 1, note: null, variantId: "1e37ae13-8507-484c-969f-2176f77b7000", modifierGroups: [],
+    eventId: "1e37ae13-8507-484c-969f-2176f77b7000", idempotencyKey: "attempt-1",
+    occurredAt: "2026-10-04T00:00:00.000Z", deviceId: "23723e10-c0bf-49fd-9363-4f0e2c60e955",
+  };
+  const fraction = { geometry: "halves" as const, slots: [
+    { excludedIngredientIds: [], extraOptionIds: [], flavorOptionId: "aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaaaa", fraction: "half-a" as const },
+    { excludedIngredientIds: ["cebolla"], extraOptionIds: [], flavorOptionId: "bbbbbbb2-bbbb-4bbb-8bbb-bbbbbbbbbbbb", fraction: "half-b" as const },
+  ] };
+  const split = buildAddOrderItemCommand({ ...input, fraction });
+  assert.deepEqual(parseAddOrderItemCommandV1(split)?.fraction, fraction);
+  assert.equal(Object.hasOwn(buildAddOrderItemCommand({ ...input, fraction: null }), "fraction"), false);
+});
+
 test("resolvePendingAdd waits for an exact detail read before releasing the line ID", () => {
   const attempt = buildAddOrderItemCommand({
     scope, orderId: detail().orderId, expectedVersion: 3,

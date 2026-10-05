@@ -31,6 +31,7 @@ import type {
   CustomerRepeatOrderCaptureResultV1,
   CustomerRepeatOrderPreviewIssueV1,
   CustomerRepeatOrderPreviewV1,
+  LineFractionV1,
   MenuCatalogStateV1,
   MenuModifierGroupV1,
   MenuProductV1,
@@ -39,6 +40,7 @@ import type {
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
   rehydrateCaptureWorkspace, shortCaptureDraftId, shouldRenewLease } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
+import { draftLinesFromProjection, splitLostMessage } from "../../../lib/line-halves";
 import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
   type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
@@ -365,18 +367,13 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       deviceId, occurredAt: new Date().toISOString() };
   }
 
-  function selectionDraftLines(): readonly SelectionPlanLineDraft[] {
-    return (selectionProjection?.lines ?? []).map((line) => {
-      const byGroup = new Map<string, SelectionPlanModifierGroupDraft["selections"][number][]>();
-      for (const modifier of line.modifiers) {
-        const existing = byGroup.get(modifier.groupId) ?? [];
-        existing.push({ optionId: modifier.optionId, quantity: modifier.quantity });
-        byGroup.set(modifier.groupId, existing);
-      }
-      const modifierGroups: SelectionPlanModifierGroupDraft[] = [...byGroup.entries()]
-        .map(([groupId, selections]) => ({ groupId, selections }));
-      return { lineId: line.lineId, productId: line.productId, variantId: line.variantId, quantity: line.quantity, modifierGroups, note: line.note };
-    });
+  /** Draft lines of the saved plan, or `undefined` (with a visible notice) if a split line cannot be kept. */
+  function selectionDraftLines(): readonly SelectionPlanLineDraft[] | undefined {
+    const result = draftLinesFromProjection(selectionProjection?.lines ?? [], catalog.catalog);
+    if (result.ok) return result.lines;
+    if (selectionFeedbackTimer.current) clearTimeout(selectionFeedbackTimer.current);
+    setSelectionFeedback(splitLostMessage(result.lineName));
+    return undefined;
   }
 
   /**
@@ -423,7 +420,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   function openEditLine(lineId: string): void {
     if (locked || catalog.catalog === null) return;
-    const line = selectionDraftLines().find((candidate) => candidate.lineId === lineId);
+    const draftLines = selectionDraftLines();
+    if (draftLines === undefined) return;
+    const line = draftLines.find((candidate) => candidate.lineId === lineId);
     const product = catalog.catalog.products.find((candidate) => candidate.productId === line?.productId);
     if (line === undefined || product === undefined) {
       setError("invalid"); return;
@@ -435,8 +434,10 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   }
 
   async function addDirect(productId: string): Promise<void> {
+    const currentLines = selectionDraftLines();
+    if (currentLines === undefined) return;
     setSelectionBusy(true);
-    await sendSelectionPlan(applyLineChange(selectionDraftLines(),
+    await sendSelectionPlan(applyLineChange(currentLines,
       { type: "add", lineId: crypto.randomUUID(), productId, variantId: null, quantity: 1, modifierGroups: [], note: null }));
     setSelectionBusy(false);
   }
@@ -446,17 +447,20 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     modifierGroups: readonly SelectionPlanModifierGroupDraft[],
     note: string | null,
     variantId: string | null,
+    fraction: LineFractionV1 | null = null,
   ): Promise<void> {
     if (sheetProduct === undefined) return;
     const productId = sheetProduct.productId;
     const lineId = sheetEditLine?.lineId ?? crypto.randomUUID();
-    setSelectionBusy(true);
     const currentLines = selectionDraftLines();
+    if (currentLines === undefined) { setSheetError("No se pudo conservar una línea dividida del pedido; recarga el menú."); return; }
+    setSelectionBusy(true);
     // One server replacement of the whole plan keeps the edit atomic and preserves its line ID.
     const nextLines = sheetEditLine === undefined
-      ? applyLineChange(currentLines, { type: "add", lineId, productId, variantId, quantity, modifierGroups, note })
+      ? applyLineChange(currentLines, { type: "add", lineId, productId, variantId, quantity, modifierGroups, note,
+        ...(fraction === null ? {} : { fraction }) })
       : currentLines.map((line) => line.lineId === lineId
-        ? { lineId, productId, variantId, quantity, modifierGroups, note } : line);
+        ? { lineId, productId, variantId, quantity, modifierGroups, note, ...(fraction === null ? {} : { fraction }) } : line);
     const projection = await sendSelectionPlan(nextLines);
     setSelectionBusy(false);
     if (projection === undefined) { setSheetError(error === "conflict" ? messages.conflict : "No se pudo guardar la línea. Reintenta."); return; }
@@ -487,14 +491,18 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   }
 
   async function changeLineQuantity(lineId: string, delta: 1 | -1): Promise<void> {
+    const currentLines = selectionDraftLines();
+    if (currentLines === undefined) return;
     setSelectionBusyLineId(lineId);
-    await sendSelectionPlan(applyLineChange(selectionDraftLines(), { type: delta === 1 ? "increment" : "decrement", lineId }));
+    await sendSelectionPlan(applyLineChange(currentLines, { type: delta === 1 ? "increment" : "decrement", lineId }));
     setSelectionBusyLineId(undefined);
   }
 
   async function removeLine(lineId: string): Promise<void> {
+    const currentLines = selectionDraftLines();
+    if (currentLines === undefined) return;
     setSelectionBusyLineId(lineId);
-    await sendSelectionPlan(applyLineChange(selectionDraftLines(), { type: "remove", lineId }));
+    await sendSelectionPlan(applyLineChange(currentLines, { type: "remove", lineId }));
     setSelectionBusyLineId(undefined);
   }
 
@@ -508,8 +516,10 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     const lineId = noteSheetLineId;
     if (lineId === undefined) return;
     const trimmed = noteSheetDraft.trim();
+    const currentLines = selectionDraftLines();
+    if (currentLines === undefined) return;
     setSelectionBusyLineId(lineId);
-    const saved = await sendSelectionPlan(applyLineChange(selectionDraftLines(),
+    const saved = await sendSelectionPlan(applyLineChange(currentLines,
       { type: "setNote", lineId, note: trimmed.length === 0 ? null : trimmed }));
     setSelectionBusyLineId(undefined);
     if (saved === undefined) return;
@@ -1108,7 +1118,7 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
         currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy} confirmedTotalMinor={sheetConfirmedTotalMinor}
         initialLine={sheetEditLine} error={sheetError} showVariants
         onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); setSheetEditLine(undefined); setSheetError(undefined); }}
-        onAdd={(quantity, modifierGroups, note, variantId) => void addFromSheet(quantity, modifierGroups, note, variantId)} />}
+        onAdd={(quantity, modifierGroups, note, variantId, fraction) => void addFromSheet(quantity, modifierGroups, note, variantId, fraction)} />}
       {customer !== undefined && capture.customerSnapshotRef !== null && <section className={panel}><h2 className="font-heading text-lg font-semibold">3. Entrega · dirección validada</h2>
         <div className="mt-3 grid gap-2">{customer.addresses.map((item) => <button key={item.addressId} className={`${button} text-left`}
           disabled={locked || !item.validatedForRequestedBranch} onClick={() => selectAddress(item.addressId, item.version)}><strong className="block">{item.address.label}</strong>

@@ -1,12 +1,12 @@
 import { MENU_PRODUCT_MAX_VARIANTS, type MenuCatalogV1, type MenuProductV1, type MenuProductVariantV1 } from "@super-restaurant/shared-types";
 
 /** Client-side publishing guidance; the API validates the catalog again. */
-export function variantValidationError(productId: string, variants: readonly MenuProductVariantV1[]): { readonly productId: string; readonly message: string } | null {
-  const message = variantMessage(variants);
+export function variantValidationError(productId: string, variants: readonly MenuProductVariantV1[], groupIds?: ReadonlySet<string>): { readonly productId: string; readonly message: string } | null {
+  const message = variantMessage(variants, groupIds);
   return message === null ? null : { productId, message };
 }
 
-function variantMessage(variants: readonly MenuProductVariantV1[]): string | null {
+function variantMessage(variants: readonly MenuProductVariantV1[], groupIds?: ReadonlySet<string>): string | null {
   if (variants.length > MENU_PRODUCT_MAX_VARIANTS) return `Máximo ${MENU_PRODUCT_MAX_VARIANTS} tamaños por producto.`;
   const names = new Set<string>();
   for (const variant of variants) {
@@ -17,6 +17,14 @@ function variantMessage(variants: readonly MenuProductVariantV1[]): string | nul
     names.add(key);
     if (!Number.isSafeInteger(variant.unitPriceMinor) || variant.unitPriceMinor < 0) return "Escribe un precio válido.";
     if (!Number.isSafeInteger(variant.displayOrder) || variant.displayOrder < 0 || variant.displayOrder > 1_000_000) return "Escribe un orden válido.";
+    const fraction = variant.fraction;
+    if (fraction !== null && fraction !== undefined && fraction.enabled) {
+      if (fraction.flavorGroupId === null) return `Elige el grupo de sabores para las mitades de «${name}».`;
+      if (fraction.flavorGroupId === fraction.extraGroupId) return `Sabores y extras de «${name}» deben ser grupos distintos.`;
+      if (groupIds !== undefined && [fraction.flavorGroupId, fraction.extraGroupId].some((id) => id !== null && !groupIds.has(id))) {
+        return `El grupo de mitades de «${name}» ya no existe; elige otro.`;
+      }
+    }
   }
   return null;
 }

@@ -2,10 +2,11 @@
 
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import type { AddOrderItemCommandV1, MenuCatalogStateV1, MenuModifierGroupV1, MenuProductV1, OrderDetailItemV1, OrderDetailV1 } from "@super-restaurant/shared-types";
+import type { AddOrderItemCommandV1, LineFractionV1, MenuCatalogStateV1, MenuModifierGroupV1, MenuProductV1, OrderDetailItemV1, OrderDetailV1 } from "@super-restaurant/shared-types";
 import { captureDeviceId } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import type { SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
+import { halfTicketLines } from "../../../lib/line-halves";
 import { actionLabel, buildAddOrderItemCommand, canAddItems, chunkOrderItemIds, groupItemsByStatus, hasAction, hasItemAction, nextFocusIndex, pendingOrderItemIds, resolvePendingAdd, type OrderItemStatusGroup } from "../../../lib/order-detail";
 import { CaptureMenu } from "../capture/capture-menu";
 import { ProductSheet } from "../capture/product-sheet";
@@ -17,6 +18,7 @@ interface OrderSelectionDraft {
   readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[];
   readonly note: string | null;
   readonly variantId: string | null;
+  readonly fraction: LineFractionV1 | null;
 }
 
 /**
@@ -82,7 +84,7 @@ function OrderMenuDialog({ detail, catalogState, loading, loadError, addSuccess,
   readonly onClose: () => void;
   readonly onSelect: (product: MenuProductV1, groups: readonly MenuModifierGroupV1[]) => void;
   readonly onBack: () => void;
-  readonly onAdd: (quantity: number, groups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null) => void;
+  readonly onAdd: (quantity: number, groups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null, fraction: LineFractionV1 | null) => void;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const headingId = useId();
@@ -121,7 +123,7 @@ function OrderProductDialog({ product, groups, currency, busy, error, selectionD
   readonly error: string | undefined;
   readonly selectionDraft: OrderSelectionDraft | undefined;
   readonly onClose: () => void;
-  readonly onAdd: (quantity: number, groups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null) => void;
+  readonly onAdd: (quantity: number, groups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null, fraction: LineFractionV1 | null) => void;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   useFocusTrap(dialogRef, onClose);
@@ -130,7 +132,8 @@ function OrderProductDialog({ product, groups, currency, busy, error, selectionD
       showVariants error={error} onClose={onClose} onAdd={onAdd}
       {...(selectionDraft === undefined ? {} : {
         initialLine: { lineId: product.productId, productId: product.productId,
-          variantId: selectionDraft.variantId, quantity: selectionDraft.quantity, modifierGroups: selectionDraft.modifierGroups, note: selectionDraft.note },
+          variantId: selectionDraft.variantId, quantity: selectionDraft.quantity, modifierGroups: selectionDraft.modifierGroups, note: selectionDraft.note,
+          ...(selectionDraft.fraction === null ? {} : { fraction: selectionDraft.fraction }) },
         initialVariantId: selectionDraft.variantId,
       })} />
   </div>;
@@ -356,7 +359,7 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
     } finally { setAddBusy(false); }
   }
 
-  async function addSelected(quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null): Promise<void> {
+  async function addSelected(quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null, fraction: LineFractionV1 | null): Promise<void> {
     if (selectedProduct === undefined || addBusy || pendingAddCommand !== undefined) return;
     if (detail === undefined || !canAddItems(detail)) {
       setAddError("Esta cuenta ya no permite agregar productos. Vuelve al detalle para revisar el estado.");
@@ -365,8 +368,8 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
     const attempt = nextAttempt();
     const command = buildAddOrderItemCommand({ scope: detail.scope, orderId: detail.orderId,
       expectedVersion: detail.version, orderItemId: retryOrderItemId ?? crypto.randomUUID(), productId: selectedProduct.product.productId,
-      quantity, modifierGroups, note, variantId, ...attempt, deviceId });
-    setSelectionDraft({ quantity, modifierGroups, note, variantId });
+      quantity, modifierGroups, note, variantId, fraction, ...attempt, deviceId });
+    setSelectionDraft({ quantity, modifierGroups, note, variantId, fraction });
     setPendingAddCommand(command);
     setRetryOrderItemId(undefined);
     setAddBusy(true);
@@ -418,6 +421,14 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <p className="text-sm font-semibold">{item.quantity} × {item.name}{item.variantName ? ` · ${item.variantName}` : ""}</p>
+                      {(item.fractionBreakdown ?? []).length > 0 && <ul className="mt-1 grid gap-1 text-sm" aria-label="Mitades">
+                        {(item.fractionBreakdown ?? []).map((half) => {
+                          const lines = halfTicketLines(half);
+                          return <li key={half.fraction}><span className="font-semibold">{lines.title}</span>
+                            {lines.details.length > 0 && <ul className="text-xs text-text-muted">{lines.details.map((detailLine) => <li key={detailLine}>{detailLine}</li>)}</ul>}
+                          </li>;
+                        })}
+                      </ul>}
                       {item.modifiers.length > 0 && <ul className="mt-1 text-xs text-text-muted">
                         {item.modifiers.map((modifier) => <li key={modifier.modifierId}>{modifier.name} × {modifier.quantity}</li>)}
                       </ul>}
@@ -472,7 +483,7 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
         onRetry={() => void openMenu()} onClose={() => { if (!addBusy && pendingAddCommand === undefined) { setMenuOpen(false); setSelectedProduct(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined); } }}
         onSelect={(product, groups) => { setAddSuccess(false); setAddError(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined); setSelectedProduct({ product, groups }); }}
         onBack={() => { if (!addBusy && pendingAddCommand === undefined) { setSelectedProduct(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined); setAddError(undefined); } }}
-        onAdd={(quantity, groups, note, variantId) => void addSelected(quantity, groups, note, variantId)}
+        onAdd={(quantity, groups, note, variantId, fraction) => void addSelected(quantity, groups, note, variantId, fraction)}
       />, document.body)}
     </div>
   </div>;
