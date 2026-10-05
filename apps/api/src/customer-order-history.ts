@@ -314,6 +314,7 @@ function captureSelectionPlan(plan: RepeatOrderPlan, customerId: string): Captur
   const lines = plan.lines.filter((line) => line.status === "ready").map((line) => {
     if (line.selection === null) throw unavailable();
     return Object.freeze({
+      ...(line.selection.variantId === null ? {} : { variantId: line.selection.variantId }),
       modifierGroups: Object.freeze(line.selection.modifierGroups.map((group) => Object.freeze({
         groupId: group.groupId,
         selections: Object.freeze(group.selections.map((selection) => Object.freeze({
@@ -439,6 +440,7 @@ function publicPreview(
     customerId: query.customerId,
     hasPriceChanges: plan.hasPriceChanges,
     lines: plan.lines.map((line) => ({
+      blockedReason: line.blockedReason,
       currentName: line.currentName,
       currentUnitPriceMinor: line.currentSnapshot?.unitPrice.amountMinor ?? null,
       historicalName: line.historicalName,

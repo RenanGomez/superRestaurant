@@ -14,6 +14,7 @@ import {
   DuplicateMenuProductSkuError,
   InactiveMenuCategoryError,
   InactiveMenuProductError,
+  InactiveMenuProductVariantError,
   InvalidSnapshotError,
   MenuCatalogRestaurantMismatchError,
   MenuCatalogVersionMismatchError,
@@ -21,6 +22,8 @@ import {
   MenuProductCategoryNotFoundError,
   MenuProductModifierGroupNotFoundError,
   MenuProductNotFoundError,
+  MenuProductVariantNotFoundError,
+  MenuProductVariantRequiredError,
   ModifierGroupMinimumNotMetError,
   ModifierGroupProductMismatchError,
   Money,
@@ -373,4 +376,85 @@ test("menu group ownership mismatch remains a domain error", () => {
     product.id === "archived-product" ? { ...product, modifierGroupIds: ["toppings"] } : product
   )) as never;
   assert.throws(() => validateMenuCatalog(input), ModifierGroupProductMismatchError);
+});
+
+function sizedMenuCatalog() {
+  const input = menuCatalog();
+  input.products = input.products.map((product) => (
+    product.id === "burger"
+      ? {
+        ...product,
+        variants: [
+          { id: "large", name: "Grande", active: true, displayOrder: 1, unitPrice: new Money(20_000, "MXN") },
+          { id: "small", name: "Chica", sku: "BRG-S", active: true, displayOrder: 0, unitPrice: new Money(12_000, "MXN") },
+          { id: "retired", name: "Gigante", active: false, displayOrder: 2, unitPrice: new Money(30_000, "MXN") },
+        ],
+      }
+      : product
+  )) as never;
+  return input;
+}
+
+test("a sized product freezes the variant price, id and name in the snapshot", () => {
+  const snapshot = createMenuProductPriceSnapshot(
+    sizedMenuCatalog(),
+    { ...burgerContext, variantId: "small" },
+    burgerSelections,
+  );
+  assert.equal(snapshot.unitPrice.amountMinor, 12_000);
+  assert.equal(snapshot.variantId, "small");
+  assert.equal(snapshot.variantName, "Chica");
+  assert.equal(snapshot.sku, "BRG-S");
+
+  const large = createMenuProductPriceSnapshot(
+    sizedMenuCatalog(),
+    { ...burgerContext, variantId: "large" },
+    burgerSelections,
+  );
+  assert.equal(large.unitPrice.amountMinor, 20_000);
+  assert.equal(large.sku, "BRG-001");
+  const line = calculateOrderItemTotals({ orderItemId: "line-1", quantity: 2, snapshot: large });
+  assert.equal(line.input.snapshot.variantName, "Grande");
+  assert.equal(line.grossBeforeLineDiscount.amountMinor, 2 * (20_000 + 175));
+});
+
+test("variant rules: required with active sizes, unknown and inactive rejected, none on plain products", () => {
+  assert.throws(
+    () => createMenuProductPriceSnapshot(sizedMenuCatalog(), burgerContext, burgerSelections),
+    MenuProductVariantRequiredError,
+  );
+  assert.throws(
+    () => createMenuProductPriceSnapshot(sizedMenuCatalog(), { ...burgerContext, variantId: "nope" }, burgerSelections),
+    MenuProductVariantNotFoundError,
+  );
+  assert.throws(
+    () => createMenuProductPriceSnapshot(sizedMenuCatalog(), { ...burgerContext, variantId: "retired" }, burgerSelections),
+    InactiveMenuProductVariantError,
+  );
+  assert.throws(
+    () => createMenuProductPriceSnapshot(menuCatalog(), { ...burgerContext, variantId: "small" }, burgerSelections),
+    MenuProductVariantNotFoundError,
+  );
+  const plain = createMenuProductPriceSnapshot(menuCatalog(), { ...burgerContext, variantId: null }, burgerSelections);
+  assert.equal(plain.unitPrice.amountMinor, 10_000);
+  assert.equal(plain.variantId, undefined);
+});
+
+test("variant catalog validation rejects duplicate names and foreign currency, and orders sizes", () => {
+  const duplicate = sizedMenuCatalog();
+  duplicate.products = duplicate.products.map((product) => (
+    product.id === "burger"
+      ? { ...product, variants: [{ id: "small", name: "Chica", active: true, displayOrder: 0, unitPrice: new Money(1, "MXN") }, { id: "dup", name: " chica ", active: true, displayOrder: 5, unitPrice: new Money(1, "MXN") }] }
+      : product
+  )) as never;
+  assert.throws(() => validateMenuCatalog(duplicate), DuplicateMenuEntityIdError);
+
+  const foreign = sizedMenuCatalog();
+  foreign.products = foreign.products.map((product) => (
+    product.id === "burger"
+      ? { ...product, variants: [{ id: "usd", name: "USD", active: true, displayOrder: 0, unitPrice: new Money(1, "USD") }] }
+      : product
+  )) as never;
+  assert.throws(() => validateMenuCatalog(foreign), CurrencyMismatchError);
+  assert.deepEqual(validateMenuCatalog(sizedMenuCatalog()).products[0]!.variants!.map(({ id }) => id), ["small", "large", "retired"]);
 });

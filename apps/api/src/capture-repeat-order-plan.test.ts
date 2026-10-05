@@ -31,6 +31,8 @@ const ids = {
   shift: "4107e340-b079-490d-8a36-988d540f5544",
   sourceItem: "60a26e69-3ea6-4ef8-8a2b-ad43ba0a0da1",
   sourceOrder: "dfc75888-413a-4460-8125-461ee8f50462",
+  sizeRetired: "5a1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8",
+  sizeSmall: "6a1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8",
 };
 
 const command = parseConfirmCaptureDraftCommandV2({
@@ -175,15 +177,50 @@ test("selection materialization snapshots current catalog prices for every line,
   assert.match(first.order.items[0]?.orderItemId ?? "", /^[0-9a-f-]{36}$/u);
 });
 
-test("selection materialization rejects a non-null variantId instead of ignoring it", () => {
-  const withVariant = parseCaptureSelectionPlanV1({
+const sizedCatalog: MenuCatalogV1 = {
+  ...catalog,
+  products: [{
+    ...catalog.products[0]!,
+    variants: [
+      { variantId: ids.sizeSmall, name: "Chica", sku: null, unitPriceMinor: 3_000, active: true, displayOrder: 0 },
+      { variantId: ids.sizeRetired, name: "Gigante", sku: null, unitPriceMinor: 9_000, active: false, displayOrder: 1 },
+    ],
+  }],
+};
+
+function planWithVariant(variantId: string | null) {
+  const parsed = parseCaptureSelectionPlanV1({
     ...selectionPlan,
-    lines: [{ ...selectionPlan.lines[0]!, variantId: ids.option }],
+    lines: [{ ...selectionPlan!.lines[0]!, variantId }],
   });
-  assert.ok(withVariant);
-  assert.throws(
-    () => materializeCaptureSelectionOrder(command, ids.actor, "counter", withVariant, catalog),
-    /CAPTURE_SELECTION_VARIANT_UNSUPPORTED/u,
+  assert.ok(parsed);
+  return parsed;
+}
+
+test("selection materialization prices and freezes the catalog variant, never the client price", () => {
+  const sized = materializeCaptureSelectionOrder(command, ids.actor, "counter", planWithVariant(ids.sizeSmall), sizedCatalog);
+  const snapshot = sized.order.items[0]?.snapshot;
+  assert.equal(snapshot?.unitPrice.amountMinor, 3_000);
+  assert.equal(snapshot?.variantId, ids.sizeSmall);
+  assert.equal(snapshot?.variantName, "Chica");
+  // Same plan on a catalog whose size later changed price: the new publish re-prices (confirm runs
+  // against the current head); the already-confirmed order keeps its frozen snapshot.
+  const repriced = materializeCaptureSelectionOrder(command, ids.actor, "counter", planWithVariant(ids.sizeSmall), {
+    ...sizedCatalog,
+    products: [{ ...sizedCatalog.products[0]!, variants: [{ ...sizedCatalog.products[0]!.variants![0]!, unitPriceMinor: 3_500 }] }],
+  });
+  assert.equal(repriced.order.items[0]?.snapshot.unitPrice.amountMinor, 3_500);
+  assert.equal(sized.order.items[0]?.snapshot.unitPrice.amountMinor, 3_000);
+});
+
+test("selection materialization rejects unknown, inactive, missing and unexpected variants", () => {
+  assert.throws(() => materializeCaptureSelectionOrder(command, ids.actor, "counter", planWithVariant(ids.sizeRetired), sizedCatalog));
+  assert.throws(() => materializeCaptureSelectionOrder(command, ids.actor, "counter", planWithVariant(ids.option), sizedCatalog));
+  assert.throws(() => materializeCaptureSelectionOrder(command, ids.actor, "counter", planWithVariant(null), sizedCatalog));
+  assert.throws(() => materializeCaptureSelectionOrder(command, ids.actor, "counter", planWithVariant(ids.sizeSmall), catalog));
+  assert.equal(
+    materializeCaptureSelectionOrder(command, ids.actor, "counter", planWithVariant(null), catalog).order.items[0]?.snapshot.variantId,
+    undefined,
   );
 });
 
@@ -199,4 +236,21 @@ test("selection materialization rejects catalog version drift and currency misma
     () => materializeCaptureSelectionOrder(command, ids.actor, "counter", selectionPlan, null),
     /CAPTURE_SELECTION_CATALOG_CONFLICT/u,
   );
+});
+
+test("repeat plan lines may carry a size: parsed, priced from the catalog variant, and legacy lines still parse", () => {
+  const withSize = parseCaptureRepeatSelectionPlan({
+    ...plan, lines: [{ ...plan.lines[0]!, variantId: ids.sizeSmall }],
+  });
+  assert.ok(withSize);
+  assert.equal(withSize.lines[0]?.variantId, ids.sizeSmall);
+  const sized = materializeCaptureOrder(command, ids.actor, "delivery", withSize, sizedCatalog);
+  assert.equal(sized.order.items[0]?.snapshot.unitPrice.amountMinor, 3_000);
+  assert.equal(sized.order.items[0]?.snapshot.variantName, "Chica");
+  // A legacy line (no size) against a product that now requires one cannot be materialized.
+  assert.throws(() => materializeCaptureOrder(command, ids.actor, "delivery", plan, sizedCatalog));
+  assert.equal(plan.lines[0] !== undefined && Object.hasOwn(plan.lines[0], "variantId"), false);
+  for (const variantId of ["not-a-uuid", null, 7]) {
+    assert.equal(parseCaptureRepeatSelectionPlan({ ...plan, lines: [{ ...plan.lines[0]!, variantId }] }), undefined);
+  }
 });

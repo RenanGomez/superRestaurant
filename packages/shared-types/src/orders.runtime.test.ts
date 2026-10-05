@@ -1,6 +1,7 @@
 import {
   parseActiveTableOrderListV1,
   parseActiveTableOrderListV2,
+  ORDER_DETAIL_ACTIONS,
   parseAddOrderItemCommandV1,
   parseAssignOrderWaiterCommandV1,
   parseAssignOrderWaiterResultV1,
@@ -230,3 +231,15 @@ expect(parseOrderDetailV1({...detail,availableActions:["not-an-action"]})===unde
 const parsedDetail=parseOrderDetailV1(detail);
 expect(parsedDetail!==undefined && parsedDetail.items[0]?.availableActions[0]==="cancelItem","order detail keeps each line's own availableActions");
 expect(parseOrderDetailV1({...detail,items:[{...detailItem,availableActions:["cancelItem","cancelItem"]}]})===undefined,"a line's availableActions rejects duplicates");
+
+const variantUuid="6a1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8";
+expect(parsedAdd!==undefined && parsedAdd.variantId===null && parsedAdd.note===null,"add item normalizes absent variantId and note to null");
+const parsedSized=parseAddOrderItemCommandV1({...add,variantId:variantUuid,note:"sin cebolla"});
+expect(parsedSized!==undefined && parsedSized.variantId===variantUuid && parsedSized.note==="sin cebolla","add item accepts variantId and note");
+expect(parseAddOrderItemCommandV1({...add,variantId:variantUuid})?.note===null,"variantId alone parses");
+expect(parseAddOrderItemCommandV1({...add,note:null,variantId:null})!==undefined,"explicit nulls parse");
+expect(parseAddOrderItemCommandV1({...add,variantId:"not-a-uuid"})===undefined,"bad variantId fails");
+expect(parseAddOrderItemCommandV1({...add,note:"x".repeat(501)})===undefined,"long note fails");
+expect(parseAddOrderItemCommandV1({...add,note:"line"+String.fromCharCode(10)+"break"})===undefined,"control characters in note fail");
+expect(parseAddOrderItemCommandV1({...add,note:""})===undefined,"empty note fails");
+expect((ORDER_DETAIL_ACTIONS as readonly string[]).includes("addItem"),"addItem is a detail action");

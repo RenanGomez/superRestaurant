@@ -73,6 +73,16 @@ export function toDomainMenuCatalog(catalog: MenuCatalogV1, restaurantId: string
       } }),
       unit: product.unit,
       unitPrice: new Money(product.unitPriceMinor, catalog.currency),
+      ...((product.variants ?? []).length === 0 ? {} : {
+        variants: (product.variants ?? []).map((variant) => ({
+          active: variant.active,
+          displayOrder: variant.displayOrder,
+          id: variant.variantId,
+          name: variant.name,
+          ...(variant.sku === null ? {} : { sku: variant.sku }),
+          unitPrice: new Money(variant.unitPriceMinor, catalog.currency),
+        })),
+      }),
     })),
     restaurantId,
   };

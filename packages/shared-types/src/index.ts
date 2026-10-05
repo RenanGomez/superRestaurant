@@ -292,6 +292,18 @@ export interface MenuCategoryV1 {
   readonly name: string;
 }
 
+/** A size of a product ("Chica", "Grande") with its own whole-unit price. */
+export interface MenuProductVariantV1 {
+  readonly active: boolean;
+  readonly displayOrder: number;
+  readonly name: string;
+  readonly sku: string | null;
+  readonly unitPriceMinor: number;
+  readonly variantId: string;
+}
+
+export const MENU_PRODUCT_MAX_VARIANTS = 12;
+
 export interface MenuProductV1 {
   readonly active: boolean;
   readonly categoryId: string;
@@ -304,6 +316,8 @@ export interface MenuProductV1 {
   readonly tax: MenuTaxV1 | null;
   readonly unit: string;
   readonly unitPriceMinor: number;
+  /** Optional on input (older producers); the normalized output always carries it, `[]` when none. */
+  readonly variants?: readonly MenuProductVariantV1[];
 }
 
 export interface MenuModifierOptionV1 {
@@ -1005,11 +1019,12 @@ function parseMenuCategoryV1(value: unknown): MenuCategoryV1 | undefined {
 }
 
 function parseMenuProductV1(value: unknown): MenuProductV1 | undefined {
-  const record = parseExactRecordWithOptionalImagePath(value, [
+  const record = parseExactRecordWithOptionalKeys(value, [
     "productId", "categoryId", "name", "sku", "active", "displayOrder", "stationId",
     "unit", "unitPriceMinor", "tax",
-  ]);
+  ], ["imagePath", "variants"]);
   if (record === undefined) return undefined;
+  const variants = parseMenuProductVariantsV1(record);
   const productId = parseUuid(ownValue(record, "productId"));
   const categoryId = parseUuid(ownValue(record, "categoryId"));
   const name = parseDisplayName(ownValue(record, "name"), 120);
@@ -1035,10 +1050,67 @@ function parseMenuProductV1(value: unknown): MenuProductV1 | undefined {
     || unitPriceMinor === undefined
     || tax === undefined
     || imagePath === undefined
+    || variants === undefined
   ) return undefined;
   return Object.freeze({
-    active, categoryId, displayOrder, imagePath, name, productId, sku, stationId, tax, unit, unitPriceMinor,
+    active, categoryId, displayOrder, imagePath, name, productId, sku, stationId, tax, unit, unitPriceMinor, variants,
   });
+}
+
+function parseMenuProductVariantsV1(record: PlainRecord): readonly MenuProductVariantV1[] | undefined {
+  if (!Object.hasOwn(record, "variants")) return Object.freeze([]);
+  const raw = ownValue(record, "variants");
+  if (!Array.isArray(raw) || Object.getPrototypeOf(raw) !== Array.prototype || raw.length > MENU_PRODUCT_MAX_VARIANTS) {
+    return undefined;
+  }
+  const variants: MenuProductVariantV1[] = [];
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  for (let index = 0; index < raw.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(raw, String(index));
+    if (descriptor === undefined || !("value" in descriptor)) return undefined;
+    const variant = parseMenuProductVariantV1(descriptor.value);
+    if (variant === undefined) return undefined;
+    const nameKey = variant.name.toLowerCase();
+    if (ids.has(variant.variantId) || names.has(nameKey)) return undefined;
+    ids.add(variant.variantId);
+    names.add(nameKey);
+    variants.push(variant);
+  }
+  variants.sort((left, right) => left.displayOrder - right.displayOrder || compareCodeUnits(left.variantId, right.variantId));
+  return Object.freeze(variants);
+}
+
+function parseMenuProductVariantV1(value: unknown): MenuProductVariantV1 | undefined {
+  const record = parseExactPlainRecord(value, ["variantId", "name", "unitPriceMinor", "active", "displayOrder", "sku"]);
+  if (record === undefined) return undefined;
+  const variantId = parseUuid(ownValue(record, "variantId"));
+  const name = parseDisplayName(ownValue(record, "name"), 80);
+  const unitPriceMinor = parseBoundedInteger(ownValue(record, "unitPriceMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const active = ownValue(record, "active");
+  const displayOrder = parseBoundedInteger(ownValue(record, "displayOrder"), 0, 1_000_000);
+  const rawSku = ownValue(record, "sku");
+  const sku = rawSku === null ? null : parseDisplayName(rawSku, 64);
+  if (
+    variantId === undefined || name === undefined || unitPriceMinor === undefined
+    || typeof active !== "boolean" || displayOrder === undefined || sku === undefined
+  ) return undefined;
+  return Object.freeze({ active, displayOrder, name, sku, unitPriceMinor, variantId });
+}
+
+/** Exact keys plus any subset of the optional ones (all subsets are tried; at most two keys here). */
+function parseExactRecordWithOptionalKeys(
+  value: unknown,
+  keys: readonly string[],
+  optional: readonly string[],
+): PlainRecord | undefined {
+  const subsets: string[][] = [[]];
+  for (const key of optional) subsets.push(...subsets.map((subset) => [...subset, key]));
+  for (const subset of subsets) {
+    const record = parseExactPlainRecord(value, [...keys, ...subset]);
+    if (record !== undefined) return record;
+  }
+  return undefined;
 }
 
 /** Input may omit imagePath (older producers); the normalized output always carries it. */

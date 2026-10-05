@@ -78,6 +78,7 @@ const issueLabels: Record<CustomerRepeatOrderPreviewIssueV1["code"], string> = {
   modifier_group_requirements_changed: "Cambiaron los requisitos de selección de modificadores.",
   product_price_changed: "Cambió el precio del producto.",
   modifier_price_changed: "Cambió el precio de un modificador.",
+  variant_required: "El producto ahora se vende por tamaño; agrégalo de nuevo eligiendo el tamaño.",
 };
 
 interface CaptureWorkspaceParameters {

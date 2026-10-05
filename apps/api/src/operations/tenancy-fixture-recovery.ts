@@ -16,6 +16,7 @@ import {
   tenancyMainRestaurantSuffixes,
   type TenancyFixtureKey,
 } from "./tenancy-fixture-markers.js";
+import { DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters } from "./menu-variant-cleanup.js";
 import {
   TenancyFixtureRecoveryError,
   type TenancyFixtureRecoveryConfig,
@@ -654,6 +655,12 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
       removed += await deleteKdsCursorsExactly(client, validated.kdsCursorScopes);
       removed += await deleteExactly(client, "app.menu_modifier_options", validated.menuModifierOptionIds);
       removed += await deleteExactly(client, "app.menu_modifier_groups", validated.menuModifierGroupIds);
+      // Sizes reference products with ON DELETE RESTRICT; fixtures publish none, so no exact count is expected.
+      if (validated.menuProductIds.length > 0) {
+        await client.query(DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters(
+          validated.restaurantIds, validated.menuCatalogIds, validated.menuProductIds,
+        ));
+      }
       removed += await deleteExactly(client, "app.menu_products", validated.menuProductIds);
       removed += await deleteExactly(client, "app.menu_categories", validated.menuCategoryIds);
       removed += await deleteExactly(client, "app.menu_catalog_audit_events", validated.menuCatalogAuditEventIds, "event_id");

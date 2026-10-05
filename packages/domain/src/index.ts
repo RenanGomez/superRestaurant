@@ -51,12 +51,15 @@ export {
   InvalidOrderAuditContextError,
   InactiveMenuCategoryError,
   InactiveMenuProductError,
+  InactiveMenuProductVariantError,
   MenuCatalogRestaurantMismatchError,
   MenuCatalogVersionMismatchError,
   MenuModifierGroupNotAllowedError,
   MenuProductCategoryNotFoundError,
   MenuProductModifierGroupNotFoundError,
   MenuProductNotFoundError,
+  MenuProductVariantNotFoundError,
+  MenuProductVariantRequiredError,
   OrderAuditAuthorizationRequiredError,
   OrderAuditReasonRequiredError,
 } from "./errors.js";
@@ -365,6 +368,7 @@ export type {
   MenuModifierGroupSelection,
   MenuProductCatalog,
   MenuProductSelectionContext,
+  MenuProductVariantCatalog,
   ValidatedMenuCatalog,
 } from "./menu.js";
 export {

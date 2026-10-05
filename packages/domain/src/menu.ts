@@ -6,6 +6,7 @@ import {
   DuplicateMenuProductSkuError,
   InactiveMenuCategoryError,
   InactiveMenuProductError,
+  InactiveMenuProductVariantError,
   InvalidSnapshotError,
   MenuCatalogRestaurantMismatchError,
   MenuCatalogVersionMismatchError,
@@ -13,6 +14,8 @@ import {
   MenuProductCategoryNotFoundError,
   MenuProductModifierGroupNotFoundError,
   MenuProductNotFoundError,
+  MenuProductVariantNotFoundError,
+  MenuProductVariantRequiredError,
   ModifierGroupProductMismatchError,
   NegativeMoneyAmountError,
 } from "./errors.js";
@@ -39,6 +42,16 @@ export interface MenuCategoryCatalog {
   readonly displayOrder: number;
 }
 
+/** A size of one product ("Chica", "Grande") with its own whole-unit price. */
+export interface MenuProductVariantCatalog {
+  readonly id: string;
+  readonly name: string;
+  readonly sku?: string;
+  readonly active: boolean;
+  readonly displayOrder: number;
+  readonly unitPrice: Money;
+}
+
 export interface MenuProductCatalog {
   readonly id: string;
   readonly restaurantId: string;
@@ -54,6 +67,8 @@ export interface MenuProductCatalog {
   readonly tax?: TaxSnapshot;
   /** Ordered allowlist of groups that may be resolved for this product. */
   readonly modifierGroupIds: readonly string[];
+  /** Optional sizes; absent or empty means the product is sold at `unitPrice`. */
+  readonly variants?: readonly MenuProductVariantCatalog[];
 }
 
 /** One coherent, restaurant-owned menu release. Branch/time availability is deliberately outside this neutral slice. */
@@ -79,6 +94,8 @@ export interface MenuProductSelectionContext {
   readonly restaurantId: string;
   readonly productId: string;
   readonly currency: string;
+  /** Required when the product has active variants; rejected when the product has no such variant. */
+  readonly variantId?: string | null | undefined;
 }
 
 export interface MenuModifierGroupSelection {
@@ -172,6 +189,32 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
       groupIds.add(groupId);
     }
 
+    const variantIds = new Set<string>();
+    const variantNames = new Set<string>();
+    const variants = (product.variants ?? []).map((variant) => {
+      assertText(variant.id, "menu product variant id");
+      assertText(variant.name, "menu product variant name");
+      assertBoolean(variant.active, "menu product variant active");
+      assertDisplayOrder(variant.displayOrder, "menu product variant displayOrder");
+      if (variant.sku !== undefined) assertText(variant.sku, "menu product variant sku");
+      if (variantIds.has(variant.id)) throw new DuplicateMenuEntityIdError("product variant", variant.id);
+      variantIds.add(variant.id);
+      const nameKey = variant.name.trim().toLowerCase();
+      if (variantNames.has(nameKey)) throw new DuplicateMenuEntityIdError("product variant", variant.name);
+      variantNames.add(nameKey);
+      const variantPrice = new Money(variant.unitPrice.amountMinor, variant.unitPrice.currency);
+      if (variantPrice.amountMinor < 0) throw new NegativeMoneyAmountError("menu product variant unit price");
+      assertCurrencyMatches(catalogCurrency, variantPrice);
+      return deepFreeze({
+        id: variant.id,
+        name: variant.name,
+        ...(variant.sku === undefined ? {} : { sku: variant.sku }),
+        active: variant.active,
+        displayOrder: variant.displayOrder,
+        unitPrice: variantPrice,
+      });
+    }).sort(compareMenuDisplayOrder);
+
     return deepFreeze({
       id: product.id,
       restaurantId: product.restaurantId,
@@ -186,6 +229,7 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
       unitPrice,
       ...(product.tax === undefined ? {} : { tax: product.tax }),
       modifierGroupIds: [...product.modifierGroupIds],
+      ...(variants.length === 0 ? {} : { variants }),
     });
   }).sort(compareMenuDisplayOrder);
 
@@ -250,6 +294,17 @@ function createMenuProductPriceSnapshotCanonical(
   if (category === undefined) throw new MenuProductCategoryNotFoundError(product.id, product.categoryId);
   if (!category.active) throw new InactiveMenuCategoryError(category.id);
 
+  const variants = product.variants ?? [];
+  let variant: MenuProductVariantCatalog | undefined;
+  if (context.variantId !== undefined && context.variantId !== null) {
+    assertText(context.variantId, "selected menu variantId");
+    variant = variants.find(({ id }) => id === context.variantId);
+    if (variant === undefined) throw new MenuProductVariantNotFoundError(product.id, context.variantId);
+    if (!variant.active) throw new InactiveMenuProductVariantError(product.id, variant.id);
+  } else if (variants.some(({ active }) => active)) {
+    throw new MenuProductVariantRequiredError(product.id);
+  }
+
   const selectionsByGroup = new Map<string, readonly ModifierOptionSelection[]>();
   for (const selection of selections) {
     assertText(selection.groupId, "selected modifier group id");
@@ -280,12 +335,15 @@ function createMenuProductPriceSnapshotCanonical(
       catalogVersion: product.catalogVersion,
       productId: product.id,
       name: product.name,
-      ...(product.sku === undefined ? {} : { sku: product.sku }),
+      ...(variant?.sku !== undefined
+        ? { sku: variant.sku }
+        : product.sku === undefined ? {} : { sku: product.sku }),
       stationId: product.stationId,
       unit: product.unit,
-      unitPrice: product.unitPrice,
+      unitPrice: variant === undefined ? product.unitPrice : variant.unitPrice,
       modifiers,
       ...(product.tax === undefined ? {} : { tax: product.tax }),
+      ...(variant === undefined ? {} : { variantId: variant.id, variantName: variant.name }),
     },
   }).input.snapshot;
 }
@@ -336,6 +394,10 @@ function normalizeMenuProduct(value: unknown): MenuProductCatalog {
   const tax = optionalOwnData(product, "tax", "menu product tax");
   const modifierGroupIds = ownDataArray(product, "modifierGroupIds", "menu product modifierGroupIds")
     .map((groupId) => groupId as string);
+  const variantsValue = optionalOwnData(product, "variants", "menu product variants");
+  const variants = variantsValue === undefined
+    ? []
+    : asDataArray(variantsValue, "menu product variants").map(normalizeMenuProductVariant);
   const normalizedSnapshot = calculateOrderItemTotals({
     orderItemId: id as string,
     quantity: 1,
@@ -365,6 +427,20 @@ function normalizeMenuProduct(value: unknown): MenuProductCatalog {
     unitPrice: normalizedSnapshot.unitPrice,
     ...(normalizedSnapshot.tax === undefined ? {} : { tax: normalizedSnapshot.tax }),
     modifierGroupIds,
+    ...(variants.length === 0 ? {} : { variants }),
+  });
+}
+
+function normalizeMenuProductVariant(value: unknown): MenuProductVariantCatalog {
+  const variant = asPlainRecord(value, "menu product variant");
+  const sku = optionalOwnData(variant, "sku", "menu product variant sku");
+  return Object.freeze({
+    id: ownData(variant, "id", "menu product variant id") as string,
+    name: ownData(variant, "name", "menu product variant name") as string,
+    ...(sku === undefined ? {} : { sku: sku as string }),
+    active: ownData(variant, "active", "menu product variant active") as boolean,
+    displayOrder: ownData(variant, "displayOrder", "menu product variant displayOrder") as number,
+    unitPrice: normalizeMoney(ownData(variant, "unitPrice", "menu product variant unit price"), "menu product variant unit price"),
   });
 }
 
@@ -374,6 +450,7 @@ function normalizeMenuProductSelectionContext(value: unknown): MenuProductSelect
     restaurantId: ownData(context, "restaurantId", "selected menu restaurantId") as string,
     productId: ownData(context, "productId", "selected menu productId") as string,
     currency: ownData(context, "currency", "selected menu currency") as string,
+    variantId: optionalOwnData(context, "variantId", "selected menu variantId") as string | null | undefined,
   });
 }
 

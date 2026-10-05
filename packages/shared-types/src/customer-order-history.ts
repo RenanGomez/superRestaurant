@@ -19,6 +19,7 @@ export const REPEAT_ORDER_PREVIEW_ISSUE_CODES = Object.freeze([
   "modifier_group_requirements_changed",
   "product_price_changed",
   "modifier_price_changed",
+  "variant_required",
 ] as const);
 
 export interface CustomerRecentOrdersQueryV1 {
@@ -81,6 +82,8 @@ export interface CustomerRepeatOrderPreviewIssueV1 {
 }
 
 export interface CustomerRepeatOrderPreviewLineV1 {
+  /** Code of the first blocking issue of a blocked line (e.g. `variant_required`); optional on input, `null` when ready. */
+  readonly blockedReason?: (typeof REPEAT_ORDER_PREVIEW_ISSUE_CODES)[number] | null;
   readonly currentName: string | null;
   readonly currentUnitPriceMinor: number | null;
   readonly historicalName: string;
@@ -266,11 +269,14 @@ export function parseCustomerRepeatOrderCaptureResultV1(
 }
 
 function parsePreviewLine(value: unknown): CustomerRepeatOrderPreviewLineV1 | undefined {
-  const record = exactRecord(value, [
+  const lineKeys = [
     "sourceOrderItemId", "productId", "historicalName", "currentName", "quantity", "status",
     "currentUnitPriceMinor", "issues",
-  ]);
+  ];
+  const record = exactRecord(value, [...lineKeys, "blockedReason"]) ?? exactRecord(value, lineKeys);
   if (record === undefined) return undefined;
+  const rawBlockedReason = Object.hasOwn(record, "blockedReason") ? own(record, "blockedReason") : null;
+  const blockedReason = rawBlockedReason === null ? null : member(rawBlockedReason, REPEAT_ORDER_PREVIEW_ISSUE_CODES);
   const sourceOrderItemId = uuid(own(record, "sourceOrderItemId"));
   const productId = uuid(own(record, "productId"));
   const historicalName = text(own(record, "historicalName"), 1, 120);
@@ -285,7 +291,7 @@ function parsePreviewLine(value: unknown): CustomerRepeatOrderPreviewLineV1 | un
   const rawIssues = denseArray(own(record, "issues"), 50);
   if (sourceOrderItemId === undefined || productId === undefined || historicalName === undefined
     || currentName === undefined || quantity === undefined || status === undefined
-    || currentUnitPriceMinor === undefined || rawIssues === undefined) return undefined;
+    || currentUnitPriceMinor === undefined || rawIssues === undefined || blockedReason === undefined) return undefined;
   const issues: CustomerRepeatOrderPreviewIssueV1[] = [];
   const keys = new Set<string>();
   for (const rawIssue of rawIssues) {
@@ -297,8 +303,11 @@ function parsePreviewLine(value: unknown): CustomerRepeatOrderPreviewLineV1 | un
   }
   const hasBlocking = issues.some(({ severity }) => severity === "blocking");
   if ((status === "ready" && (hasBlocking || currentName === null || currentUnitPriceMinor === null))
-    || (status === "blocked" && (!hasBlocking || currentUnitPriceMinor !== null))) return undefined;
+    || (status === "blocked" && (!hasBlocking || currentUnitPriceMinor !== null))
+    || (blockedReason !== null && (status !== "blocked"
+      || !issues.some(({ code, severity }) => code === blockedReason && severity === "blocking")))) return undefined;
   return Object.freeze({
+    blockedReason,
     currentName,
     currentUnitPriceMinor,
     historicalName,
