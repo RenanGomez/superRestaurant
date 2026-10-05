@@ -643,11 +643,11 @@ test("cash payment with tender records server-derived change and a separate tip_
     principal,
     collectCommand({ amountMinor: 5_000, cardManualEvidence: null, method: "cash", tenderedAmountMinor: 10_000, tipMinor: 300 }),
   );
-  assert.equal(summary.changeMinor, 5_000);
+  assert.equal(summary.changeMinor, 4_700);
   assert.equal(summary.tenderedAmountMinor, 10_000);
   assert.equal(summary.tipMinor, 300);
   assert.equal(persisted?.payment.amount.amountMinor, 5_000);
-  assert.equal(persisted?.payment.change?.amountMinor, 5_000);
+  assert.equal(persisted?.payment.change?.amountMinor, 4_700);
   assert.equal(persisted?.orderTotalMinor, 12_500);
   const [sale, tip] = persisted?.register.movements ?? [];
   assert.equal(sale?.type, "cash_sale");
@@ -703,12 +703,13 @@ test("payment quote derives change and remaining balance from the live order and
     scope, tenderedAmountMinor: 10_000, tipMinor: 200,
   };
   const quote = await service.quote(principal, base);
-  assert.equal(quote.changeMinor, 5_000);
+  assert.equal(quote.changeMinor, 4_800);
   assert.equal(quote.remainingBeforeMinor, 10_000);
   assert.equal(quote.remainingAfterMinor, 5_000);
   assert.equal(quote.currency, "MXN");
   assert.equal((await service.quote(principal, { ...base, tenderedAmountMinor: null })).changeMinor, null);
   await assertCode(service.quote(principal, { ...base, tenderedAmountMinor: 4_999 }), "request");
+  await assertCode(service.quote(principal, { ...base, tenderedAmountMinor: 5_199 }), "request");
   await assertCode(service.quote(principal, { ...base, amountMinor: 10_001, tenderedAmountMinor: 20_000 }), "request");
   await assertCode(serviceFor(["viewer"], finances).quote(principal, base), "authorization");
 });
@@ -717,14 +718,14 @@ test("PostgreSQL adapter parses the real { result } rows for tender, change, tip
   const register = openRegister();
   const input = await capturedInput(payableOrder(), register);
   const wire = {
-    amountMinor: 5_000, cashRegisterSessionId: sessionId, cashRegisterVersion: 2, changeMinor: 5_000,
+    amountMinor: 5_000, cashRegisterSessionId: sessionId, cashRegisterVersion: 2, changeMinor: 4_700,
     currency: "MXN", method: "cash", orderId, orderStatus: "partially_paid", orderVersion: 2, paymentId,
     paymentState: "captured", remainingBalanceMinor: 7_500, replayed: false, schemaVersion: 1, scope,
     tenderedAmountMinor: 10_000, tipMinor: 300,
   };
   const adapter = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: wire }] }) });
   const collected = await adapter.collect(actorId, input);
-  assert.equal(typeof collected === "string" ? 0 : collected.changeMinor, 5_000);
+  assert.equal(typeof collected === "string" ? 0 : collected.changeMinor, 4_700);
   const replay = await adapter.replayCollect(actorId, parseCollectPaymentCommandV1(collectCommand({
     amountMinor: 5_000, cardManualEvidence: null, method: "cash", tenderedAmountMinor: 10_000, tipMinor: 300,
   })) ?? input.command);

@@ -97,6 +97,7 @@ export type { MoneyRoundingMode } from "./money.js";
 export {
   createOrReplayPayment,
   createPayment,
+  cashChange,
   refundableAmount,
   refundPayment,
   transitionPayment,

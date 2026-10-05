@@ -5,7 +5,7 @@ import type { CashPaymentQuoteV1, CheckoutOrderSummaryV1, PaymentCollectionSumma
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { formatMinorForMoneyInput, parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import { collectPaymentAction, quotePaymentAction } from "./actions";
-import { canCollectPayment, quickCashAmounts } from "./caja-helpers";
+import { canCollectPayment, quickCashAmounts, requiredCashTenderMinor } from "./caja-helpers";
 
 export function PaymentPanel({ checkout, audit }: {
   readonly checkout: CheckoutOrderSummaryV1;
@@ -25,6 +25,7 @@ export function PaymentPanel({ checkout, audit }: {
   const amountPesos = formatMinorForMoneyInput(checkout.remainingBalanceMinor, checkout.currency) ?? "";
   const receivedMinor = parseMoneyInputToMinor(receivedPesos, checkout.currency);
   const tipMinor = tipPesos.trim() === "" ? 0 : parseMoneyInputToMinor(tipPesos, checkout.currency);
+  const requiredCashMinor = tipMinor === null ? null : requiredCashTenderMinor(checkout.remainingBalanceMinor, tipMinor);
 
   useEffect(() => {
     const request = ++latest.current;
@@ -63,7 +64,8 @@ export function PaymentPanel({ checkout, audit }: {
   </div>;
 
   const canCollect = canCollectPayment({ quote, balanceMinor: checkout.remainingBalanceMinor, method, receivedMinor, tipMinor, terminalId, reference, busy });
-  const insufficient = method === "cash" && receivedMinor !== null && receivedMinor > 0 && receivedMinor < checkout.remainingBalanceMinor;
+  const insufficient = method === "cash" && receivedMinor !== null && receivedMinor > 0
+    && requiredCashMinor !== null && receivedMinor < requiredCashMinor;
   return <div id="cobrar" className="mt-4 grid min-w-0 gap-4 scroll-mt-4">
     <div className="grid grid-cols-3 gap-2 rounded-xl bg-bg p-4 text-center">
       <Metric label="Total" value={formatMinorUnits(checkout.orderTotalMinor, checkout.currency)} />
@@ -89,11 +91,11 @@ export function PaymentPanel({ checkout, audit }: {
       {method === "cash" ? <div className="grid gap-2">
         <label className="grid gap-1 text-sm font-semibold">Recibido en pesos<input name="receivedPesos" value={receivedPesos} onChange={(event) => setReceivedPesos(event.target.value)} inputMode="decimal" placeholder="0.00" className="min-h-12 min-w-0 rounded-xl border border-border px-3 text-base" /></label>
         <div className="grid grid-cols-4 gap-2">
-          <QuickAmount label="Exacto" onClick={() => setReceivedPesos(amountPesos)} />
-          {[10_000, 20_000, 50_000].map((amount) => <QuickAmount key={amount} label={formatMinorUnits(amount, checkout.currency).replace(/\.00$/u, "")} disabled={!quickCashAmounts(checkout.remainingBalanceMinor).includes(amount)} onClick={() => setReceivedPesos(formatMinorForMoneyInput(amount, checkout.currency) ?? "")} />)}
+          <QuickAmount label="Exacto" disabled={requiredCashMinor === null} onClick={() => setReceivedPesos(formatMinorForMoneyInput(requiredCashMinor ?? 0, checkout.currency) ?? "")} />
+          {[10_000, 20_000, 50_000].map((amount) => <QuickAmount key={amount} label={formatMinorUnits(amount, checkout.currency).replace(/\.00$/u, "")} disabled={tipMinor === null || !quickCashAmounts(checkout.remainingBalanceMinor, tipMinor).includes(amount)} onClick={() => setReceivedPesos(formatMinorForMoneyInput(amount, checkout.currency) ?? "")} />)}
         </div>
         {insufficient && quote !== null && <p role="status" className="font-heading text-lg font-semibold text-error">Falta {formatMinorUnits(quote.remainingAfterMinor, checkout.currency)}</p>}
-        {!insufficient && quote !== null && <p role="status" className="font-heading text-lg font-semibold text-accent">Cambio: {formatMinorUnits(quote.changeMinor ?? 0, checkout.currency)}</p>}
+        {!insufficient && quote !== null && <p role="status" className="font-heading text-lg font-semibold text-accent">Cambio después de propina: {formatMinorUnits(quote.changeMinor ?? 0, checkout.currency)}</p>}
         {receivedMinor !== null && receivedMinor > 0 && quote === null && quoteError === "" && <p role="status" className="text-sm text-text-muted">Calculando cambio…</p>}
       </div> : <div className="grid gap-3 rounded-xl bg-bg p-3">
         <p className="text-xs text-text-muted">Registra sólo una operación ya confirmada en la terminal externa. No captures datos de tarjeta.</p>
@@ -119,6 +121,7 @@ function Metric({ label, value }: { readonly label: string; readonly value: stri
 }
 function errorText(status: string): string {
   if (status === "invalid_amount") return "Importe inválido o recibido insuficiente. Revisa los pesos y centavos.";
+  if (status === "insufficient") return "El recibido no alcanza para cubrir el cobro y la propina.";
   if (status === "mixed_currency") return "La cuenta y caja usan monedas distintas.";
   if (status === "unsupported_currency") return "La moneda de esta cuenta no está admitida.";
   if (status === "conflict") return "La cuenta cambió. Actualiza antes de cobrar otra vez.";

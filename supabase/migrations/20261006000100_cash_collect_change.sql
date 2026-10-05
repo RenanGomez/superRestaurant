@@ -6,8 +6,9 @@ begin;
 --
 -- Rules (mirrored by packages/domain; SQL is only the second line of defence):
 --   * `amount_minor` stays what the bill collected. Tender and change are immutable audit columns of
---     a cash payment: `change = tendered - amount`, `tendered >= amount`. Change is the same cash the
---     customer handed over, so it never moves the expected cash balance (the `cash_sale` movement is
+--     a cash payment: `change = tendered - amount - tip`, `tendered >= amount + tip` (a cash tip comes out of
+--     the same cash handed over). Change is the cash the
+--     customer gets back, so the till keeps exactly amount + tip (the `cash_sale` movement is
 --     still `amount_minor`).
 --   * `tip_minor` is never part of the order total or `amount_minor`. A tip left in the till in cash
 --     is a second, immutable `tip_in` movement sourced from the payment (it counts toward the expected
@@ -29,8 +30,8 @@ alter table app.payments
     (tendered_amount_minor is null and change_minor is null)
     or (
       method = 'cash'
-      and tendered_amount_minor between amount_minor and 9007199254740991
-      and change_minor = tendered_amount_minor - amount_minor
+      and tendered_amount_minor between amount_minor + tip_minor and 9007199254740991
+      and change_minor = tendered_amount_minor - amount_minor - tip_minor
     )
   ),
   add constraint payments_tip_valid check (tip_minor between 0 and 9007199254740991);
@@ -120,7 +121,7 @@ begin
     or p_order_total_minor not between 1 and 9007199254740991
     or p_prior_captured_amount_minor not between 0 and 9007199254740991
     or v_tip not between 0 and 9007199254740991
-    or (v_tendered is not null and (v_method<>'cash' or v_tendered not between v_amount and 9007199254740991))
+    or (v_tendered is not null and (v_method<>'cash' or v_tendered not between v_amount+v_tip and 9007199254740991))
     or p_payment->>'paymentId'<>v_payment_id::text or p_payment->>'eventId'<>v_event_id::text
     or p_payment->>'restaurantId'<>v_restaurant_id::text or p_payment->>'branchId'<>v_branch_id::text
     or p_payment->>'orderId'<>v_order_id::text or p_payment->>'idempotencyKey'<>v_idempotency_key
@@ -137,7 +138,7 @@ begin
     if p_payment ? 'tenderedAmount' or p_payment ? 'change' then
       return pg_catalog.jsonb_build_object('status','conflict'); end if;
   else
-    v_change := v_tendered - v_amount;
+    v_change := v_tendered - v_amount - v_tip;
     if p_payment->'tenderedAmount'->>'amountMinor' is distinct from v_tendered::text
       or p_payment->'change'->>'amountMinor' is distinct from v_change::text
       or p_payment->'tenderedAmount'->>'currency' is distinct from p_payment->'amount'->>'currency'

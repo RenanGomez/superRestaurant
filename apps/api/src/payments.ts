@@ -28,11 +28,13 @@ import {
   type PaymentObligationProjectionV1,
 } from "@super-restaurant/shared-types";
 import {
+  InvalidPaymentFieldError,
   InvalidPaymentIntentError,
   InvalidPaymentObligationError,
   Money,
   appendCashMovement,
   calculateOrderAggregateTotals,
+  cashChange,
   closeCashRegister,
   createPayment,
   buildPaymentIntentQuote,
@@ -492,17 +494,19 @@ export class FinancialService {
     let totalMinor: number;
     try { totalMinor = calculateOrderAggregateTotals(order).total.amountMinor; } catch { throw applicationError("request"); }
     try {
+      const planned = new Money(request.amountMinor, order.currency);
+      const tendered = request.tenderedAmountMinor === null ? null : new Money(request.tenderedAmountMinor, order.currency);
       const quote = buildPaymentIntentQuote({
         capturedAmount: new Money(storedRegister.capturedAmountMinor, order.currency),
         method: request.method,
         orderTotal: new Money(totalMinor, order.currency),
-        plannedAmount: new Money(request.amountMinor, order.currency),
-        tenderedAmount: request.tenderedAmountMinor === null ? null : new Money(request.tenderedAmountMinor, order.currency),
+        plannedAmount: planned,
+        tenderedAmount: tendered,
         timing: "now",
       });
       const result = parseCashPaymentQuoteV1({
         ...request,
-        changeMinor: quote.changeDue?.amountMinor ?? null,
+        changeMinor: tendered === null ? null : cashChange(planned, tendered, request.tipMinor === 0 ? undefined : new Money(request.tipMinor, order.currency)).amountMinor,
         currency: order.currency,
         remainingAfterMinor: quote.remainingAfterPlan.amountMinor,
         remainingBeforeMinor: quote.remainingBeforePlan.amountMinor,
@@ -511,7 +515,7 @@ export class FinancialService {
       return result;
     } catch (error: unknown) {
       if (error instanceof FinancialApplicationError) throw error;
-      if (error instanceof InvalidPaymentIntentError) throw applicationError("request");
+      if (error instanceof InvalidPaymentIntentError || error instanceof InvalidPaymentFieldError) throw applicationError("request");
       throw unavailable();
     }
   }

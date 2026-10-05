@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CashPaymentQuoteV1 } from "@super-restaurant/shared-types";
-import { canCollectPayment, movementLabel, quickCashAmounts } from "./caja-helpers.js";
+import { canCollectPayment, movementLabel, quickCashAmounts, requiredCashTenderMinor } from "./caja-helpers.js";
 
 test("movement labels are operator-facing Spanish", () => {
   assert.equal(movementLabel("cash_sale"), "Venta en efectivo");
@@ -16,13 +16,18 @@ test("quick notes never offer less than the balance", () => {
   assert.deepEqual(quickCashAmounts(12_500), [20_000, 50_000]);
   assert.deepEqual(quickCashAmounts(50_001), []);
   assert.deepEqual(quickCashAmounts(10_000), [10_000, 20_000, 50_000]);
+  assert.deepEqual(quickCashAmounts(9_900, 200), [20_000, 50_000]);
+  assert.equal(requiredCashTenderMinor(12_500, 300), 12_800);
 });
 
 test("collect requires a current server quote and enough tender or card evidence", () => {
-  const quote = { amountMinor: 12_500, tipMinor: 0, method: "cash", tenderedAmountMinor: 20_000 } as CashPaymentQuoteV1;
+  const quote = { amountMinor: 12_500, tipMinor: 0, method: "cash", tenderedAmountMinor: 20_000, changeMinor: 7_500 } as CashPaymentQuoteV1;
   const input = { quote, balanceMinor: 12_500, method: "cash" as const, receivedMinor: 20_000, tipMinor: 0, terminalId: "", reference: "", busy: false };
   assert.equal(canCollectPayment(input), true);
   assert.equal(canCollectPayment({ ...input, receivedMinor: 10_000 }), false);
+  const tippedQuote = { ...quote, tipMinor: 300, changeMinor: 0, tenderedAmountMinor: 12_800 } as CashPaymentQuoteV1;
+  assert.equal(canCollectPayment({ ...input, quote: tippedQuote, tipMinor: 300, receivedMinor: 12_800 }), true);
+  assert.equal(canCollectPayment({ ...input, quote: tippedQuote, tipMinor: 300, receivedMinor: 12_799 }), false);
   assert.equal(canCollectPayment({ ...input, tipMinor: 100 }), false);
   assert.equal(canCollectPayment({ ...input, busy: true }), false);
   assert.equal(canCollectPayment({ ...input, quote: { ...quote, method: "card_manual" } }), false);

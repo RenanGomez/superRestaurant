@@ -11,9 +11,16 @@ export function movementLabel(type: CashRegisterMovementTypeV1): string {
   }[type];
 }
 
-/** Fixed peso notes that can cover this balance. Exacto is offered separately. */
-export function quickCashAmounts(balanceMinor: number): readonly number[] {
-  return [10_000, 20_000, 50_000].filter((amount) => amount >= balanceMinor);
+/** This sum is only an input gate; the server computes and returns the change. */
+export function requiredCashTenderMinor(balanceMinor: number, tipMinor: number): number | null {
+  const required = balanceMinor + tipMinor;
+  return Number.isSafeInteger(required) && required > 0 ? required : null;
+}
+
+/** Fixed peso notes that cover the balance and chosen tip. Exacto is offered separately. */
+export function quickCashAmounts(balanceMinor: number, tipMinor = 0): readonly number[] {
+  const required = requiredCashTenderMinor(balanceMinor, tipMinor);
+  return required === null ? [] : [10_000, 20_000, 50_000].filter((amount) => amount >= required);
 }
 
 export function canCollectPayment(input: {
@@ -28,6 +35,10 @@ export function canCollectPayment(input: {
 }): boolean {
   const { quote, balanceMinor, method, receivedMinor, tipMinor, terminalId, reference, busy } = input;
   if (busy || quote === null || tipMinor === null || quote.amountMinor !== balanceMinor || quote.tipMinor !== tipMinor || quote.method !== method) return false;
-  if (method === "cash") return receivedMinor !== null && receivedMinor >= balanceMinor && quote.tenderedAmountMinor === receivedMinor;
+  if (method === "cash") {
+    const required = requiredCashTenderMinor(balanceMinor, tipMinor);
+    return required !== null && receivedMinor !== null && receivedMinor >= required
+      && quote.tenderedAmountMinor === receivedMinor && quote.changeMinor !== null;
+  }
   return quote.tenderedAmountMinor === null && terminalId.trim().length > 0 && reference.trim().length >= 6;
 }

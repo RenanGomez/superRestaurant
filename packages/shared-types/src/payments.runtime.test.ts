@@ -114,11 +114,16 @@ expect(parseCashRegisterOperationalReportV1({ ...operationalReport, movements: [
 expect(parseCashRegisterOperationalReportV1({ ...operationalReport, movements: [{ ...movement, amountMinor: 0 }] }) === undefined, "movement amount is positive");
 expect(parseCashRegisterOperationalReportV1({ ...operationalReport, movementCount: 0 }) === undefined, "movement count covers the listed movements");
 expect(parseCashRegisterOperationalReportV1({ ...operationalReport, movements: [{ ...movement, extra: 1 }] }) === undefined, "movement rejects extras");
+const legacyReport: Record<string, unknown> = { ...operationalReport };
+for (const key of ["tipsMinor", "cashTipsMinor", "movementCount", "movements"]) delete legacyReport[key];
+expect(parseCashRegisterOperationalReportV1(legacyReport) === undefined, "pre-tender report without tips and movements is rejected explicitly");
 
 const tendered = parseCollectPaymentCommandV1({ ...cash, tenderedAmountMinor: 20_000, tipMinor: 500 });
 expect(tendered?.tenderedAmountMinor === 20_000 && tendered.tipMinor === 500, "cash command accepts tender and tip");
 expect(cash !== undefined && !("tenderedAmountMinor" in cash) && !("tipMinor" in cash), "legacy cash command stays without tender keys");
 expect(parseCollectPaymentCommandV1({ ...cash, tenderedAmountMinor: 12_499 }) === undefined, "tender must cover the amount");
+expect(parseCollectPaymentCommandV1({ ...cash, tenderedAmountMinor: 12_999, tipMinor: 500 }) === undefined, "tender must cover amount plus tip");
+expect(parseCollectPaymentCommandV1({ ...cash, tenderedAmountMinor: 13_000, tipMinor: 500 }) !== undefined, "tender covering amount plus tip parses");
 expect(parseCollectPaymentCommandV1({ ...cash, tenderedAmountMinor: 12_500.5 }) === undefined, "tender rejects fractions");
 expect(parseCollectPaymentCommandV1({ ...cash, tipMinor: -1 }) === undefined, "tip rejects negatives");
 expect(parseCollectPaymentCommandV1({ ...cash, tenderedAmountMinor: null, tipMinor: 0 }) !== undefined, "null tender and zero tip parse");
@@ -128,6 +133,8 @@ expect(parseCollectPaymentCommandV1({ ...cardCommand, tipMinor: 100 }) !== undef
 const cashPayment = { ...payment, remainingBalanceMinor: 0, tenderedAmountMinor: 20_000, changeMinor: 7_500, tipMinor: 0 };
 expect(parsePaymentCollectionSummaryV1(cashPayment) !== undefined, "summary carries tender, change and tip");
 expect(parsePaymentCollectionSummaryV1({ ...cashPayment, changeMinor: 7_499 }) === undefined, "change must equal tender minus amount");
+expect(parsePaymentCollectionSummaryV1({ ...cashPayment, tipMinor: 500, changeMinor: 7_000 }) !== undefined, "change excludes the cash tip");
+expect(parsePaymentCollectionSummaryV1({ ...cashPayment, tipMinor: 500 }) === undefined, "change must subtract the tip");
 expect(parsePaymentCollectionSummaryV1({ ...cashPayment, tenderedAmountMinor: null }) === undefined, "tender and change are paired");
 expect(parsePaymentCollectionSummaryV1({ ...cashPayment, tipMinor: undefined }) === undefined, "partial tender triple is rejected");
 const legacySummary = parsePaymentCollectionSummaryV1({ ...payment, remainingBalanceMinor: 0 });
@@ -140,10 +147,11 @@ const quoteRequest = {
 };
 expect(parseQuoteCashPaymentRequestV1(quoteRequest) !== undefined, "quote request parses");
 expect(parseQuoteCashPaymentRequestV1({ ...quoteRequest, tenderedAmountMinor: 100 }) === undefined, "quote tender must cover the amount");
+expect(parseQuoteCashPaymentRequestV1({ ...quoteRequest, tenderedAmountMinor: 12_599, tipMinor: 100 }) === undefined, "quote tender must cover amount plus tip");
 expect(parseQuoteCashPaymentRequestV1({ ...quoteRequest, method: "card_manual" }) === undefined, "quote tender is cash only");
-const quote = { ...quoteRequest, changeMinor: 7_500, currency: "MXN", remainingAfterMinor: 500, remainingBeforeMinor: 13_000 };
+const quote = { ...quoteRequest, changeMinor: 7_400, currency: "MXN", remainingAfterMinor: 500, remainingBeforeMinor: 13_000 };
 expect(parseCashPaymentQuoteV1(quote) !== undefined, "quote response parses");
-expect(parseCashPaymentQuoteV1({ ...quote, changeMinor: 7_400 }) === undefined, "quote change must equal tender minus amount");
+expect(parseCashPaymentQuoteV1({ ...quote, changeMinor: 7_500 }) === undefined, "quote change must equal tender minus amount minus tip");
 expect(parseCashPaymentQuoteV1({ ...quote, remainingAfterMinor: 501 }) === undefined, "quote remaining must reconcile");
 
 const checkoutQuery = { cashRegisterSessionId, deviceId: audit.deviceId, orderId, registerId, schemaVersion: 1, scope };

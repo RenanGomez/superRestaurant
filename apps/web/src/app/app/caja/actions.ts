@@ -25,6 +25,7 @@ import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchP
 import { getMenuCatalog } from "../../../lib/menu-catalog";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
 import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } from "./context";
+import { requiredCashTenderMinor } from "./caja-helpers";
 
 export async function openCashRegisterAction(formData: FormData): Promise<void> {
   const context = await getAuthorizedContext();
@@ -83,10 +84,13 @@ export async function quotePaymentAction(input: {
   const received = input.method === "cash" ? parseMoneyInputToMinor(input.receivedPesos, currency) : null;
   const tipMinor = input.tipPesos.trim() === "" ? 0 : parseMoneyInputToMinor(input.tipPesos, currency);
   if (enteredAmount === null || enteredAmount <= 0 || tipMinor === null || (input.method === "cash" && (received === null || received <= 0))) return { status: "invalid_amount" };
-  // For an insufficient tender, quote a partial amount. The server then returns the unpaid balance.
-  const insufficient = received !== null && received < enteredAmount;
+  const required = requiredCashTenderMinor(enteredAmount, tipMinor);
+  if (required === null) return { status: "invalid_amount" };
+  // For an insufficient tender, quote the portion available after tip. The server returns the unpaid balance.
+  const insufficient = received !== null && received < required;
+  if (insufficient && received <= tipMinor) return { status: "insufficient" };
   const request = {
-    amountMinor: insufficient ? received : enteredAmount,
+    amountMinor: insufficient ? (received as number) - tipMinor : enteredAmount,
     cashRegisterSessionId: input.cashRegisterSessionId,
     method: input.method,
     orderId: input.orderId,
@@ -130,7 +134,9 @@ export async function collectPaymentAction(formData: FormData): Promise<{ status
   const tenderedAmountMinor = method === "cash" ? parseMoneyInputToMinor(textField(formData, "receivedPesos") ?? "", checkout.value.currency) : null;
   const tipText = textField(formData, "tipPesos") ?? "";
   const tipMinor = tipText.trim() === "" ? 0 : parseMoneyInputToMinor(tipText, checkout.value.currency);
-  if (amountMinor === null || amountMinor === 0 || tipMinor === null || (method === "cash" && (tenderedAmountMinor === null || tenderedAmountMinor < amountMinor))) return { status: "invalid_amount" };
+  const required = amountMinor === null || tipMinor === null ? null : requiredCashTenderMinor(amountMinor, tipMinor);
+  if (amountMinor === null || amountMinor === 0 || tipMinor === null || required === null
+    || (method === "cash" && (tenderedAmountMinor === null || tenderedAmountMinor < required))) return { status: "invalid_amount" };
   const provider = method === "card_manual" ? "Terminal externa" : undefined;
   const terminalId = boundedTextField(formData, "terminalId", 100);
   const reference = optionalBoundedTextField(formData, "reference", 200);
