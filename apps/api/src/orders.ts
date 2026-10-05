@@ -30,12 +30,14 @@ import {
   type SendOrderToKitchenCommandV1,
 } from "@super-restaurant/shared-types";
 import { createHash } from "node:crypto";
+import { describeHalves, isFractionModifier } from "./fraction-halves.js";
 import {
   addOrderItem,
   canAddOrderItem,
   InactiveMenuProductVariantError,
   MenuProductVariantNotFoundError,
   MenuProductVariantRequiredError,
+  MenuFractionSelectionInvalidError,
   calculateOrderAggregateTotals,
   cancelOrderItem,
   createMenuProductPriceSnapshot,
@@ -355,6 +357,7 @@ export class OrderService {
           productId: command.productId,
           restaurantId: command.scope.restaurantId,
           variantId: command.variantId ?? null,
+          fraction: command.fraction ?? null,
         },
         command.modifierGroups,
       );
@@ -371,6 +374,7 @@ export class OrderService {
         error instanceof MenuProductVariantRequiredError
         || error instanceof MenuProductVariantNotFoundError
         || error instanceof InactiveMenuProductVariantError
+        || error instanceof MenuFractionSelectionInvalidError
       ) throw applicationError("conflict");
       throw applicationError("request");
     }
@@ -735,7 +739,8 @@ function projectOrderDetail(
     return {
       availableActions: computeItemActions(order, item, roles),
       lineTotalMinor: lineTotals === undefined ? 0 : lineTotals.totalAfterOrderDiscount.amountMinor,
-      modifiers: item.snapshot.modifiers.map((modifier) => ({
+      // Half-and-half extras/exclusions are reported per half in `fractionBreakdown`.
+      modifiers: item.snapshot.modifiers.filter((modifier) => !isFractionModifier(modifier)).map((modifier) => ({
         modifierId: modifier.modifierId,
         name: modifier.name,
         quantity: modifier.quantity,
@@ -748,6 +753,8 @@ function projectOrderDetail(
       status: item.status,
       unitPriceMinor: item.snapshot.unitPrice.amountMinor,
       variantName: item.snapshot.variantName ?? null,
+      geometry: item.snapshot.geometry === "halves" ? ("halves" as const) : null,
+      fractionBreakdown: describeHalves(item.snapshot),
     };
   });
   // A cancelled aggregate is never payable: `calculateOrderAggregateTotals` folds in neither the

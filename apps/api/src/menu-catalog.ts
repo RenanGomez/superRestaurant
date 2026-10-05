@@ -12,6 +12,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
+import { toDomainFraction } from "./menu-catalog-domain.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const readCatalogSql = "select app_private.get_menu_catalog($1::uuid, $2::uuid, $3::uuid) as state";
@@ -220,6 +221,7 @@ function validDomainCatalog(command: SaveMenuCatalogCommandV1): boolean {
             name: variant.name,
             ...(variant.sku === null ? {} : { sku: variant.sku }),
             unitPrice: new Money(variant.unitPriceMinor, command.currency),
+            ...(variant.fraction === undefined || variant.fraction === null ? {} : { fraction: toDomainFraction(variant.fraction) }),
           })),
         }),
       })),

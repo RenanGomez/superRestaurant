@@ -16,6 +16,7 @@ import {
   type OrderDiscountSnapshot,
   type OrderItem,
   type OrderItemCancellationAudit,
+  type OrderItemFractionBreakdownEntry,
   type OrderItemPriceSnapshot,
   type OrderMutation,
   type TaxSnapshot,
@@ -115,6 +116,16 @@ export interface PersistedOrderItemPriceSnapshotV1 {
   /** Catalog size frozen with the line; absent for orders created before product variants. */
   readonly variantId?: string;
   readonly variantName?: string;
+  /** Half-and-half line: frozen geometry and per-half flavor/price; absent for whole lines. */
+  readonly geometry?: "whole" | "halves";
+  readonly fractionBreakdown?: readonly PersistedFractionBreakdownEntryV1[];
+}
+
+export interface PersistedFractionBreakdownEntryV1 {
+  readonly fraction: string;
+  readonly flavorOptionId: string;
+  readonly flavorName?: string;
+  readonly amountMinor: number;
 }
 
 export interface PersistedOrderItemV1 {
@@ -418,11 +429,20 @@ function encodePriceSnapshot(snapshot: OrderItemPriceSnapshot): PersistedOrderIt
     ...(snapshot.tax === undefined ? {} : { tax: encodeTax(snapshot.tax) }),
     ...(snapshot.variantId === undefined ? {} : { variantId: snapshot.variantId }),
     ...(snapshot.variantName === undefined ? {} : { variantName: snapshot.variantName }),
+    ...(snapshot.geometry === undefined ? {} : { geometry: snapshot.geometry }),
+    ...(snapshot.fractionBreakdown === undefined ? {} : {
+      fractionBreakdown: snapshot.fractionBreakdown.map((entry) => ({
+        amountMinor: entry.amountMinor,
+        ...(entry.flavorName === undefined ? {} : { flavorName: entry.flavorName }),
+        flavorOptionId: entry.flavorOptionId,
+        fraction: entry.fraction,
+      })),
+    }),
   });
 }
 
 function decodePriceSnapshot(value: unknown): OrderItemPriceSnapshot {
-  const record = exactRecord(value, ["catalogVersion", "productId", "name", "stationId", "unit", "unitPrice", "modifiers"], ["sku", "tax", "variantId", "variantName"], "price snapshot");
+  const record = exactRecord(value, ["catalogVersion", "productId", "name", "stationId", "unit", "unitPrice", "modifiers"], ["sku", "tax", "variantId", "variantName", "geometry", "fractionBreakdown"], "price snapshot");
   return deepFreeze({
     catalogVersion: text(data(record, "catalogVersion"), "catalogVersion"),
     productId: text(data(record, "productId"), "productId"),
@@ -435,6 +455,29 @@ function decodePriceSnapshot(value: unknown): OrderItemPriceSnapshot {
     ...(optionalData(record, "tax") === undefined ? {} : { tax: decodeTax(optionalData(record, "tax")) }),
     ...(optionalData(record, "variantId") === undefined ? {} : { variantId: text(optionalData(record, "variantId"), "variantId") }),
     ...(optionalData(record, "variantName") === undefined ? {} : { variantName: text(optionalData(record, "variantName"), "variantName") }),
+    ...(optionalData(record, "geometry") === undefined ? {} : { geometry: decodeGeometry(optionalData(record, "geometry")) }),
+    ...(optionalData(record, "fractionBreakdown") === undefined ? {} : {
+      fractionBreakdown: dataArray(optionalData(record, "fractionBreakdown"), "fractionBreakdown").map(decodeFractionBreakdownEntry),
+    }),
+  });
+}
+
+function decodeGeometry(value: unknown): "whole" | "halves" {
+  if (value !== "whole" && value !== "halves") fail("geometry");
+  return value;
+}
+
+function decodeFractionBreakdownEntry(value: unknown): OrderItemFractionBreakdownEntry {
+  const record = exactRecord(value, ["fraction", "flavorOptionId", "amountMinor"], ["flavorName"], "fractionBreakdown entry");
+  const amountMinor = data(record, "amountMinor");
+  if (typeof amountMinor !== "number" || !Number.isSafeInteger(amountMinor) || amountMinor < 0) {
+    fail("fractionBreakdown amountMinor");
+  }
+  return deepFreeze({
+    amountMinor,
+    ...(optionalData(record, "flavorName") === undefined ? {} : { flavorName: text(optionalData(record, "flavorName"), "flavorName") }),
+    flavorOptionId: text(data(record, "flavorOptionId"), "flavorOptionId"),
+    fraction: text(data(record, "fraction"), "fraction"),
   });
 }
 

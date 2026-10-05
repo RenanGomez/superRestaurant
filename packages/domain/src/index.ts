@@ -355,6 +355,7 @@ export type {
   CalculatedOrderTotals,
   ExactRatio,
   ModifierPriceSnapshot,
+  OrderItemFractionBreakdownEntry,
   OrderItemPriceSnapshot,
   OrderItemPricingInput,
   OrderDiscountAllocationStrategy,

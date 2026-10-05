@@ -113,6 +113,7 @@ import {
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
+import { describeHalves } from "./fraction-halves.js";
 import {
   decodeCaptureRecord, decodeCaptureWorkspace, decodeCaptureWorkspaceV2, decodeCaptureWorkspaceV3,
   decodeCaptureWorkspaceV4, decodeCaptureWorkspaceV5, withCaptureSelectionProjection,
@@ -1186,6 +1187,7 @@ function priceSelectionPlan(
     try {
       snapshot = createMenuProductPriceSnapshot(domainCatalog, {
         currency: catalog.currency, productId: line.productId, restaurantId, variantId: line.variantId,
+        fraction: line.fraction ?? null,
       }, line.modifierGroups);
     } catch { throw new CaptureApplicationError("conflict"); }
     const totals = calculateOrderItemTotals({
@@ -1198,6 +1200,8 @@ function priceSelectionPlan(
     const modifiers: CaptureSelectionPlanProjectionModifierV1[] = [];
     for (const modifier of snapshot.modifiers) {
       if (modifier.groupId === undefined) throw unavailable();
+      // Half-and-half extras/exclusions are reported per half in `halves`, not as catalog modifiers.
+      if (modifier.groupId === "fraction-extra" || modifier.groupId === "fraction-exclusion") continue;
       modifiers.push({
         groupId: modifier.groupId,
         name: modifier.name,
@@ -1216,6 +1220,7 @@ function priceSelectionPlan(
       quantity: line.quantity,
       unitPriceMinor: snapshot.unitPrice.amountMinor,
       variantId: line.variantId,
+      ...(snapshot.geometry === "halves" ? { halves: describeHalves(snapshot) } : {}),
     });
   }
   const projection = parseCaptureSelectionPlanProjectionV1({

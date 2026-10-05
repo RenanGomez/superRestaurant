@@ -1129,3 +1129,122 @@ test("PostgreSQL order adapter persists and decodes a sized line through the rea
   assert.equal(persisted.order.items[0]?.snapshot.variantName, "Chica");
   assert.equal(persisted.order.items[0]?.snapshot.unitPrice.amountMinor, 9_000);
 });
+
+const flavorGroupId = "8c3f4e50-6172-4c83-8d94-b5c6d7e8f900";
+const extraGroupId = "8c3f4e50-6172-4c83-8d94-b5c6d7e8f901";
+const flavorPepperoni = "9d405f61-7283-4d94-9ea5-c6d7e8f90a10";
+const flavorHawaiana = "9d405f61-7283-4d94-9ea5-c6d7e8f90a11";
+const flavorSoldOut = "9d405f61-7283-4d94-9ea5-c6d7e8f90a12";
+const extraCheese = "9d405f61-7283-4d94-9ea5-c6d7e8f90a13";
+
+const halvesMenuState: MenuCatalogStateV1 = (() => {
+  const catalog = sizedMenuState.catalog;
+  if (catalog === null) throw new Error("TEST_MENU_INVALID");
+  const state = parseMenuCatalogStateV1({
+    ...sizedMenuState,
+    catalog: {
+      ...catalog,
+      modifierGroups: [
+        ...catalog.modifierGroups,
+        {
+          active: true, displayOrder: 50, groupId: flavorGroupId, maximumQuantity: 2, minimumQuantity: 0, name: "Sabor", productId,
+          options: [
+            { active: true, imagePath: null, maximumQuantity: null, name: "Pepperoni", optionId: flavorPepperoni, unitPriceMinor: 0 },
+            { active: true, imagePath: null, maximumQuantity: null, name: "Hawaiana", optionId: flavorHawaiana, unitPriceMinor: 17_000 },
+            { active: false, imagePath: null, maximumQuantity: null, name: "Agotada", optionId: flavorSoldOut, unitPriceMinor: 19_000 },
+          ],
+        },
+        {
+          active: true, displayOrder: 51, groupId: extraGroupId, maximumQuantity: 5, minimumQuantity: 0, name: "Extras", productId,
+          options: [{ active: true, imagePath: null, maximumQuantity: null, name: "Queso extra", optionId: extraCheese, unitPriceMinor: 2_501 }],
+        },
+      ],
+      products: [{
+        ...catalog.products[0]!,
+        variants: catalog.products[0]!.variants!.map((variant) => variant.variantId === sizeLarge
+          ? { ...variant, fraction: { enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId, flavorGroupId } }
+          : variant),
+      }],
+    },
+  });
+  if (state === undefined) throw new Error("TEST_HALVES_MENU_INVALID");
+  return state;
+})();
+
+function halvesFraction(overrides: { readonly flavorB?: string; readonly extrasA?: string[]; readonly excludedA?: string[] } = {}) {
+  return {
+    geometry: "halves",
+    slots: [
+      { excludedIngredientIds: overrides.excludedA ?? [], extraOptionIds: overrides.extrasA ?? [], flavorOptionId: flavorPepperoni, fraction: "half-a" },
+      { excludedIngredientIds: [], extraOptionIds: [], flavorOptionId: overrides.flavorB ?? flavorHawaiana, fraction: "half-b" },
+    ],
+  };
+}
+
+test("addItem prices a halves line at the greater flavor plus half-priced extras and detail exposes the breakdown", async () => {
+  const saved: { order?: Order } = {};
+  const manager = serviceFor(["manager"], capturingOrders(saved), undefined, halvesMenuState);
+  await manager.addItem(principal, sizedAddCommand({
+    fraction: halvesFraction({ excludedA: ["cebolla"], extrasA: [extraCheese] }), variantId: sizeLarge,
+  }));
+  const snapshot = saved.order?.items[0]?.snapshot;
+  assert.equal(snapshot?.unitPrice.amountMinor, 17_000);
+  assert.equal(snapshot?.geometry, "halves");
+  assert.deepEqual(snapshot?.fractionBreakdown?.map((entry) => [entry.fraction, entry.flavorName, entry.amountMinor]), [
+    ["half-a", "Pepperoni", 15_000],
+    ["half-b", "Hawaiana", 17_000],
+  ]);
+  assert.equal(snapshot?.modifiers.find((modifier) => modifier.modifierId === `extra:half-a:${extraCheese}`)?.unitPrice.amountMinor, 1_251);
+
+  const detail = await manager.detail(principal, { orderId, schemaVersion: 1, scope });
+  const item = detail.items[0];
+  assert.equal(item?.geometry, "halves");
+  assert.deepEqual(item?.fractionBreakdown?.map((half) => [half.fraction, half.flavorName, half.extras, half.exclusions]), [
+    ["half-a", "Pepperoni", ["Queso extra"], ["cebolla"]],
+    ["half-b", "Hawaiana", [], []],
+  ]);
+  const wholeSaved: { order?: Order } = {};
+  const wholeService = serviceFor(["manager"], capturingOrders(wholeSaved), undefined, halvesMenuState);
+  await wholeService.addItem(principal, sizedAddCommand({ variantId: sizeLarge, fraction: null }));
+  const whole = await wholeService.detail(principal, { orderId, schemaVersion: 1, scope });
+  assert.equal(whole.items[0]?.geometry, null);
+  assert.deepEqual(whole.items[0]?.fractionBreakdown, []);
+});
+
+test("addItem answers 409 for an inactive or foreign flavor, an unknown exclusion, or halves on a size without them", async () => {
+  let persisted = 0;
+  const base = capturingOrders({});
+  const counting: OrderPersistencePort = { ...base, persist: async (...args) => { persisted += 1; return base.persist(...args); } };
+  const service = serviceFor(["manager"], counting, undefined, halvesMenuState);
+  await assertCode(service.addItem(principal, sizedAddCommand({ fraction: halvesFraction({ flavorB: flavorSoldOut }), variantId: sizeLarge })), "conflict");
+  await assertCode(service.addItem(principal, sizedAddCommand({ fraction: halvesFraction({ flavorB: extraCheese }), variantId: sizeLarge })), "conflict");
+  await assertCode(service.addItem(principal, sizedAddCommand({ fraction: halvesFraction({ excludedA: ["jamon"] }), variantId: sizeLarge })), "conflict");
+  await assertCode(service.addItem(principal, sizedAddCommand({ fraction: halvesFraction(), variantId: sizeSmall })), "conflict");
+  assert.equal(persisted, 0);
+});
+
+test("PostgreSQL order adapter persists and decodes a halves line through the real { result } row", async () => {
+  const saved: { order?: Order } = {};
+  await serviceFor(["manager"], capturingOrders(saved), undefined, halvesMenuState)
+    .addItem(principal, sizedAddCommand({ fraction: halvesFraction({ extrasA: [extraCheese] }), variantId: sizeLarge }));
+  const mutation = { ...domainMutation, order: saved.order! };
+  let sent: unknown;
+  const database: DatabaseClientPort = {
+    query: async (_sql, parameters) => {
+      sent = JSON.parse(String(parameters[2]));
+      return { rows: [{ result: { ...persistResult("saved", null), order: sent } }] };
+    },
+  };
+  const persisted = await new PostgresOrderPersistenceAdapter(database).persist(principal.actorId, 0, mutation);
+  assert.equal(persisted.status, "saved");
+  const snapshot = (sent as { items: { snapshot: Record<string, unknown> }[] }).items[0]!.snapshot;
+  assert.equal(snapshot.geometry, "halves");
+  assert.deepEqual(snapshot.fractionBreakdown, [
+    { amountMinor: 15_000, flavorName: "Pepperoni", flavorOptionId: flavorPepperoni, fraction: "half-a" },
+    { amountMinor: 17_000, flavorName: "Hawaiana", flavorOptionId: flavorHawaiana, fraction: "half-b" },
+  ]);
+  if (persisted.status !== "saved") throw new Error("TEST_PERSIST_NOT_SAVED");
+  const decoded = persisted.order.items[0]?.snapshot;
+  assert.equal(decoded?.unitPrice.amountMinor, 17_000);
+  assert.equal(decoded?.fractionBreakdown?.[1]?.flavorName, "Hawaiana");
+});
