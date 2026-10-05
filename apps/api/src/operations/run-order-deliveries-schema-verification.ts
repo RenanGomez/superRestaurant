@@ -37,6 +37,7 @@ const SUMMARY_SQL = `select
 
 const ENTRY_POINTS = [
   'app_private.collect_simple_payment(uuid,jsonb,jsonb,jsonb,jsonb,bigint,bigint)',
+  'app_private.settle_prepaid_delivery(uuid,jsonb)',
   'app_private.assign_delivery(uuid,jsonb)',
   'app_private.dispatch_delivery(uuid,jsonb)',
   'app_private.complete_delivery(uuid,jsonb)',
@@ -157,11 +158,11 @@ try {
   } finally { await admin.query("ROLLBACK"); }
 
   if (migrationFailure !== undefined) { stage = "migrated"; throw migrationFailure; }
-  // The candidate adds two forced-RLS tables and twelve SECURITY DEFINER functions (the collect guard included), and no policy.
+  // The candidate adds two forced-RLS tables and thirteen SECURITY DEFINER functions (the collect guard included), and no policy.
   assert.deepEqual(baseline, postcheck);
   assert.deepEqual(migrated, {
     securedTables: baseline.securedTables + 2, policies: baseline.policies,
-    securityDefinerFunctions: baseline.securityDefinerFunctions + 12,
+    securityDefinerFunctions: baseline.securityDefinerFunctions + 13,
   });
 
   process.stdout.write(`${JSON.stringify({

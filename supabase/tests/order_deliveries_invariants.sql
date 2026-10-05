@@ -86,6 +86,7 @@ declare
   o_counter uuid := gen_random_uuid();
   o_early uuid := gen_random_uuid();
   o_late uuid := gen_random_uuid();
+  o_pre uuid := gen_random_uuid();
   pay_4 uuid := gen_random_uuid();
   pay_1 uuid := gen_random_uuid();
   pay_2 uuid := gen_random_uuid();
@@ -525,6 +526,45 @@ begin
     pay,ord.aggregate,sess.aggregate,3000,1000);
   execute 'reset role';
   if result->>'code'<>'DELIVERY_SETTLE_REQUIRED' then raise exception 'DELIVERY_LATE_CASH_NOT_GUARDED'; end if;
+
+  -- ---- Prepaid (already paid) Order: assign, dispatch, deliver and close without collecting anything.
+  insert into app.orders(id,restaurant_id,branch_id,channel,status,aggregate,version,created_by,updated_by)
+  values (o_pre,restaurant,branch,'delivery','paid',pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',o_pre::text,'restaurantId',restaurant::text,'branchId',branch::text,'channel','delivery',
+    'status','paid','currency','MXN','timeZone','America/Hermosillo','items','[]'::jsonb),3,cashier,cashier);
+  execute 'set local role app_api';
+  result := app_private.list_branch_deliveries(cashier,restaurant,branch);
+  if not exists (select 1 from pg_catalog.jsonb_array_elements(result->'deliveries') d
+    where d->'delivery'->>'orderId'=o_pre::text and d->>'orderStatus'='paid')
+  then raise exception 'DELIVERY_PREPAID_NOT_LISTED'; end if;
+  result := app_private.assign_delivery(cashier,pg_temp.t_dcmd(restaurant,branch,o_pre,0,gen_random_uuid(),'k-p-assign',device,now_text,pg_catalog.jsonb_build_object('courierUserId',courier_a::text)));
+  if result->>'status'<>'saved' then raise exception 'DELIVERY_PREPAID_ASSIGN_REFUSED'; end if;
+  result := app_private.dispatch_delivery(courier_a,pg_temp.t_dcmd(restaurant,branch,o_pre,1,gen_random_uuid(),'k-p-dispatch',device,now_text,'{}'));
+  result := app_private.complete_delivery(courier_a,pg_temp.t_dcmd(restaurant,branch,o_pre,2,gen_random_uuid(),'k-p-complete',device,now_text,'{}'));
+  if result->'delivery'->>'state'<>'delivered' then raise exception 'DELIVERY_PREPAID_NOT_DELIVERED'; end if;
+  -- Settlement must carry no tender or tip, and does not need a payment.
+  cmd := pg_temp.t_settle(restaurant,branch,o_pre,3,v_session,1,3,gen_random_uuid(),1,gen_random_uuid(),'k-p-settle',device,now_text,'null'::jsonb,'null'::jsonb);
+  if (app_private.settle_prepaid_delivery(cashier,pg_catalog.jsonb_set(cmd,'{tipMinor}','100')))->>'status'<>'conflict'
+  then raise exception 'DELIVERY_PREPAID_SETTLE_WITH_TIP_ACCEPTED'; end if;
+  if (app_private.settle_prepaid_delivery(courier_a,cmd))->>'status'<>'forbidden' then raise exception 'DELIVERY_PREPAID_COURIER_SETTLED'; end if;
+  result := app_private.settle_prepaid_delivery(cashier,cmd);
+  if result->>'status'<>'saved' or result->'delivery'->>'state'<>'settled' or result->'delivery'->'settledPaymentId'<>'null'::jsonb
+    or result->'payment'<>'null'::jsonb then raise exception 'DELIVERY_PREPAID_SETTLE_FAILED'; end if;
+  replayed := app_private.settle_prepaid_delivery(cashier,cmd);
+  if replayed->>'status'<>'replayed' or replayed->'payment'<>'null'::jsonb then raise exception 'DELIVERY_PREPAID_REPLAY_FAILED'; end if;
+  replayed := app_private.replay_delivery_settlement(cashier,cmd);
+  if replayed->>'status'<>'replayed' or replayed->'payment'<>'null'::jsonb then raise exception 'DELIVERY_PREPAID_REPLAY_HELPER_FAILED'; end if;
+  -- A cash settlement of an unpaid-balance path is not used for a paid Order.
+  execute 'reset role';
+  if (select count(*) from app.payments where order_id=o_pre)<>0 or (select state from app.order_deliveries where order_id=o_pre)<>'settled'
+  then raise exception 'DELIVERY_PREPAID_ROWS_WRONG'; end if;
+  -- Closed or cancelled Orders never accept delivery transitions.
+  update app.orders set status='closed', aggregate=pg_catalog.jsonb_set(aggregate,'{status}','"closed"') where id=o_fail;
+  execute 'set local role app_api';
+  if (app_private.assign_delivery(cashier,pg_temp.t_dcmd(restaurant,branch,o_fail,8,gen_random_uuid(),'k-closed',device,now_text,pg_catalog.jsonb_build_object('courierUserId',courier_a::text))))->>'status'<>'conflict'
+  then raise exception 'DELIVERY_CLOSED_ORDER_ACCEPTED'; end if;
+  execute 'reset role';
+  update app.orders set status='open', aggregate=pg_catalog.jsonb_set(aggregate,'{status}','"open"') where id=o_fail;
 
   -- ---- Tables are not reachable by the API role or the Data API.
   begin

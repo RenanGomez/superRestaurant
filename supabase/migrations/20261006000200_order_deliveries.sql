@@ -1,6 +1,10 @@
 begin;
 
 -- order-deliveries (D6): dispatch and cash settlement of `delivery`-channel Orders.
+-- Prepaid Orders (already `paid` by card/transfer before the trip) are dispatched and delivered like any other
+-- and closed with settle_prepaid_delivery, which collects nothing (balance 0) and journals the settlement; a
+-- delivery marked settled that way has no settled_payment_id. Card/transfer collection while the trip is still
+-- assigned/en_route and the Order unpaid is refused (DELIVERY_NOT_DELIVERED).
 --
 -- Rules (mirrored by packages/shared-types; SQL is the authority that protects the invariants):
 --   * Order and OrderItem state machines are untouched. A delivery has its own small state machine
@@ -60,8 +64,8 @@ create table app.order_deliveries (
       and pg_catalog.char_length(failed_reason) between 1 and 300 and failed_reason !~ '[[:cntrl:]]'))
   ),
   constraint order_deliveries_settled_valid check (
-    (state = 'settled') = (settled_payment_id is not null)
-    and (settled_payment_id is null) = (settled_at is null)
+    (state = 'settled') = (settled_at is not null)
+    and (settled_payment_id is null or state = 'settled')
     and (cash_to_collect_minor is null or (state = 'settled' and cash_to_collect_minor between 1 and 9007199254740991))
   )
 );
@@ -241,7 +245,7 @@ begin
 
   select * into v_order_row from app.orders
   where restaurant_id = v_restaurant and branch_id = v_branch and id = v_order for update;
-  if not found or v_order_row.channel <> 'delivery' or v_order_row.status not in ('open','partially_paid') then
+  if not found or v_order_row.channel <> 'delivery' or v_order_row.status not in ('open','partially_paid','paid') then
     return pg_catalog.jsonb_build_object('status','conflict');
   end if;
 
@@ -358,7 +362,8 @@ begin
   then return pg_catalog.jsonb_build_object('status','conflict'); end if;
   return pg_catalog.jsonb_build_object('status','replayed','replayed',true,
     'delivery', v_existing.result_payload -> 'delivery',
-    'payment', pg_catalog.jsonb_set(v_existing.result_payload -> 'payment', '{replayed}', 'true'::jsonb, true));
+    'payment', case when v_existing.result_payload -> 'payment' = 'null'::jsonb then 'null'::jsonb
+      else pg_catalog.jsonb_set(v_existing.result_payload -> 'payment', '{replayed}', 'true'::jsonb, true) end);
 end
 $function$;
 
@@ -441,7 +446,8 @@ begin
     then return pg_catalog.jsonb_build_object('status','conflict'); end if;
     return pg_catalog.jsonb_build_object('status','replayed','replayed',true,
       'delivery', v_existing.result_payload -> 'delivery',
-      'payment', pg_catalog.jsonb_set(v_existing.result_payload -> 'payment', '{replayed}', 'true'::jsonb, true));
+      'payment', case when v_existing.result_payload -> 'payment' = 'null'::jsonb then 'null'::jsonb
+      else pg_catalog.jsonb_set(v_existing.result_payload -> 'payment', '{replayed}', 'true'::jsonb, true) end);
   end if;
   if exists (select 1 from app.order_delivery_events where event_id = v_event) then
     return pg_catalog.jsonb_build_object('status','conflict');
@@ -583,6 +589,80 @@ begin
 end
 $function$;
 
+-- 5c. Prepaid settlement: the Order is already `paid` (card/transfer confirmed before the trip), so nothing is
+-- collected; the delivered trip is closed and journaled. The collect-side fields of the command stay null.
+create function app_private.settle_prepaid_delivery(p_actor_id uuid, p_command jsonb) returns jsonb
+language plpgsql volatile security definer set search_path = '' as $function$
+declare
+  v_restaurant uuid; v_branch uuid; v_order uuid; v_expected bigint; v_event uuid; v_device uuid;
+  v_occurred timestamptz; v_key text; v_roles text[]; v_existing app.order_delivery_events%rowtype;
+  v_order_row app.orders%rowtype; v_row app.order_deliveries%rowtype; v_view jsonb;
+begin
+  if p_actor_id is null or pg_catalog.jsonb_typeof(p_command) <> 'object'
+    or not app_private.jsonb_has_exact_keys(p_command, array[
+      'schemaVersion','scope','orderId','expectedVersion','eventId','idempotencyKey','deviceId','occurredAt',
+      'orderExpectedVersion','cashRegisterSessionId','cashRegisterExpectedVersion','paymentId','localSequence',
+      'tenderedAmountMinor','tipMinor'])
+    or p_command -> 'schemaVersion' is distinct from '1'::jsonb
+    or pg_catalog.jsonb_typeof(p_command -> 'scope') <> 'object'
+    or not app_private.jsonb_has_exact_keys(p_command -> 'scope', array['restaurantId','branchId'])
+    or pg_catalog.jsonb_typeof(p_command -> 'expectedVersion') <> 'number'
+    or p_command -> 'tenderedAmountMinor' is distinct from 'null'::jsonb
+    or p_command -> 'tipMinor' is distinct from 'null'::jsonb
+  then return pg_catalog.jsonb_build_object('status','conflict'); end if;
+  begin
+    v_restaurant := (p_command #>> '{scope,restaurantId}')::uuid;
+    v_branch := (p_command #>> '{scope,branchId}')::uuid;
+    v_order := (p_command ->> 'orderId')::uuid;
+    v_expected := (p_command ->> 'expectedVersion')::bigint;
+    v_event := (p_command ->> 'eventId')::uuid;
+    v_device := (p_command ->> 'deviceId')::uuid;
+    v_occurred := (p_command ->> 'occurredAt')::timestamptz;
+  exception when invalid_text_representation or datetime_field_overflow or numeric_value_out_of_range then
+    return pg_catalog.jsonb_build_object('status','conflict');
+  end;
+  v_key := p_command ->> 'idempotencyKey';
+  if v_key is null or v_key <> pg_catalog.btrim(v_key) or pg_catalog.char_length(v_key) not between 1 and 200
+    or v_key ~ '[[:cntrl:]]' or v_expected < 1
+  then return pg_catalog.jsonb_build_object('status','conflict'); end if;
+  select m.roles into v_roles from app_private.find_active_branch_membership(p_actor_id, v_restaurant, v_branch) m;
+  if v_roles is null or not (v_roles && array['owner','admin','manager','supervisor','cashier'])
+  then return pg_catalog.jsonb_build_object('status','forbidden'); end if;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('order:' || v_order::text, 0));
+  select * into v_existing from app.order_delivery_events
+  where actor_id = p_actor_id and restaurant_id = v_restaurant and branch_id = v_branch and idempotency_key = v_key;
+  if found then
+    if v_existing.operation <> 'delivery.settled' or v_existing.command_payload <> p_command
+      or v_existing.event_id <> v_event
+    then return pg_catalog.jsonb_build_object('status','conflict'); end if;
+    return pg_catalog.jsonb_build_object('status','replayed','replayed',true,
+      'delivery', v_existing.result_payload -> 'delivery', 'payment', 'null'::jsonb);
+  end if;
+  if exists (select 1 from app.order_delivery_events where event_id = v_event) then
+    return pg_catalog.jsonb_build_object('status','conflict');
+  end if;
+  select * into v_order_row from app.orders
+  where restaurant_id = v_restaurant and branch_id = v_branch and id = v_order for update;
+  if not found or v_order_row.channel <> 'delivery' or v_order_row.status <> 'paid'
+  then return pg_catalog.jsonb_build_object('status','conflict'); end if;
+  select * into v_row from app.order_deliveries
+  where restaurant_id = v_restaurant and branch_id = v_branch and order_id = v_order for update;
+  if not found or v_row.version <> v_expected or v_row.state <> 'delivered'
+  then return pg_catalog.jsonb_build_object('status','conflict'); end if;
+  update app.order_deliveries set state = 'settled', settled_at = pg_catalog.clock_timestamp(), version = version + 1,
+    updated_at = pg_catalog.clock_timestamp(), updated_by = p_actor_id
+  where restaurant_id = v_restaurant and branch_id = v_branch and order_id = v_order
+  returning * into v_row;
+  v_view := app_private.delivery_view(v_row);
+  insert into app.order_delivery_events (event_id, restaurant_id, branch_id, order_id, actor_id, device_id, operation,
+    idempotency_key, expected_version, result_version, from_state, to_state, command_payload, result_payload, occurred_at)
+  values (v_event, v_restaurant, v_branch, v_order, p_actor_id, v_device, 'delivery.settled', v_key, v_expected,
+    v_row.version, 'delivered', 'settled', p_command,
+    pg_catalog.jsonb_build_object('delivery', v_view, 'payment', 'null'::jsonb, 'collect', null), v_occurred);
+  return pg_catalog.jsonb_build_object('status','saved','replayed',false,'delivery',v_view,'payment','null'::jsonb);
+end
+$function$;
+
 -- 6. Readers (raw facts; the API projects PII and totals with domain code).
 -- Visibility: managers (owner/admin/manager/supervisor/cashier) see every active delivery Order of the
 -- branch; a courier-only actor sees ONLY the deliveries assigned to them (rows are filtered here, never
@@ -592,7 +672,7 @@ $function$;
 create function app_private.list_branch_deliveries(p_actor_id uuid, p_restaurant_id uuid, p_branch_id uuid)
 returns jsonb language plpgsql stable security definer set search_path = '' as $function$
 declare
-  v_roles text[]; v_manager boolean; v_items jsonb;
+  v_roles text[]; v_manager boolean; v_items jsonb; v_count bigint;
 begin
   if p_actor_id is null or p_restaurant_id is null or p_branch_id is null
   then return pg_catalog.jsonb_build_object('status','forbidden'); end if;
@@ -610,20 +690,24 @@ begin
       'snapshot', frozen.snapshot,
       'capturedMinor', (select coalesce(pg_catalog.sum(pay.amount_minor), 0) from app.payments pay
         where pay.restaurant_id = o.restaurant_id and pay.branch_id = o.branch_id and pay.order_id = o.id and pay.state = 'captured')
-    ) order by o.created_at, o.id), '[]'::jsonb) into v_items
+    ) order by o.created_at, o.id), '[]'::jsonb), pg_catalog.count(*) into v_items, v_count
   from (
     select o.* from app.orders o
     left join app.order_deliveries d2 on d2.restaurant_id = o.restaurant_id and d2.branch_id = o.branch_id and d2.order_id = o.id
     where o.restaurant_id = p_restaurant_id and o.branch_id = p_branch_id and o.channel = 'delivery'
-      and o.status in ('open','partially_paid')
+      and (o.status in ('open','partially_paid')
+        or (o.status = 'paid' and (d2.state in ('assigned','en_route','delivered','failed')
+          or (d2.order_id is null and o.created_at > pg_catalog.clock_timestamp() - interval '2 days'))))
       and (v_manager or d2.courier_user_id = p_actor_id)
     order by o.created_at, o.id
-    limit 200
+    limit 201
   ) o
   left join app.order_deliveries d on d.restaurant_id = o.restaurant_id and d.branch_id = o.branch_id and d.order_id = o.id
   left join app.order_fulfillment_snapshots frozen
     on frozen.restaurant_id = o.restaurant_id and frozen.branch_id = o.branch_id and frozen.order_id = o.id;
 
+  -- Bounded like list_table_board: more than 200 active deliveries is reported, never silently truncated.
+  if v_count > 200 then return pg_catalog.jsonb_build_object('status','limit_exceeded'); end if;
   return pg_catalog.jsonb_build_object('schemaVersion', 1,
     'scope', pg_catalog.jsonb_build_object('restaurantId', p_restaurant_id::text, 'branchId', p_branch_id::text),
     'deliveries', v_items);
@@ -707,6 +791,7 @@ end
 $owner$;
 
 alter function app_private.reject_order_delivery_event_change() owner to postgres;
+alter function app_private.settle_prepaid_delivery(uuid,jsonb) owner to postgres;
 alter function app_private.collect_simple_payment(uuid,jsonb,jsonb,jsonb,jsonb,bigint,bigint) owner to postgres;
 alter function app_private.delivery_view(app.order_deliveries) owner to postgres;
 alter function app_private.pending_delivery_view(uuid,uuid,uuid) owner to postgres;
@@ -728,6 +813,8 @@ revoke all on function app_private.pending_delivery_view(uuid,uuid,uuid) from pu
 revoke all on function app_private.member_display_name(uuid) from public, anon, authenticated, service_role, app_api;
 revoke all on function app_private.apply_delivery_transition(uuid,text,jsonb) from public, anon, authenticated, service_role, app_api;
 revoke all on function app_private.assign_delivery(uuid,jsonb) from public, anon, authenticated, service_role, app_api;
+revoke all on function app_private.settle_prepaid_delivery(uuid,jsonb) from public, anon, authenticated, service_role, app_api;
+grant execute on function app_private.settle_prepaid_delivery(uuid,jsonb) to app_api;
 revoke all on function app_private.dispatch_delivery(uuid,jsonb) from public, anon, authenticated, service_role, app_api;
 revoke all on function app_private.complete_delivery(uuid,jsonb) from public, anon, authenticated, service_role, app_api;
 revoke all on function app_private.fail_delivery(uuid,jsonb) from public, anon, authenticated, service_role, app_api;
