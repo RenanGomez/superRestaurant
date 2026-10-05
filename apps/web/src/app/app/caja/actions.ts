@@ -169,7 +169,9 @@ export async function collectPaymentAction(formData: FormData): Promise<{ status
   cookieStore.set(CASH_REGISTER_SESSION_COOKIE, cashRegisterSessionId, cookieOptions(context.cookiesSecure));
   const receiptHref = buildReceiptHref(result.value.paymentId, result.value.orderId);
   if (receiptHref === null) return { status: "unavailable" };
-  cookieStore.set(CASH_RECEIPT_COOKIE, encodeReceiptCookie(result.value, context.userId), { ...cookieOptions(context.cookiesSecure), maxAge: 3_600 });
+  if (context.receiptSecret !== undefined) {
+    cookieStore.set(CASH_RECEIPT_COOKIE, encodeReceiptCookie(result.value, context.userId, context.receiptSecret), { ...cookieOptions(context.cookiesSecure), maxAge: 3_600 });
+  }
   revalidatePath("/app/caja");
   redirect(receiptHref);
 }
@@ -217,6 +219,7 @@ interface AuthorizedFinancialContext {
   readonly apiBaseUrl: string;
   readonly cookiesSecure: boolean;
   readonly userId: string;
+  readonly receiptSecret: string | undefined;
   readonly scope: BranchScope;
 }
 
@@ -249,7 +252,7 @@ async function getAuthorizedContext(): Promise<AuthorizedFinancialContext> {
     || await authorizeBranch(session.access_token, env.apiBaseUrl, scope) === undefined) {
     redirect("/app?branchError=not_authorized");
   }
-  return { accessToken: session.access_token, apiBaseUrl: env.apiBaseUrl, cookiesSecure: env.cookiesSecure, scope, userId: session.user.id };
+  return { accessToken: session.access_token, apiBaseUrl: env.apiBaseUrl, cookiesSecure: env.cookiesSecure, receiptSecret: env.receiptCookieSecret, scope, userId: session.user.id };
 }
 
 function getOrCreateUuidCookie(store: Awaited<ReturnType<typeof cookies>>, name: string, secure: boolean): string {

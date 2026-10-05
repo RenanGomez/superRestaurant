@@ -16,6 +16,8 @@ export interface WebServerEnv {
   readonly webOrigin: string;
   /** Whether auth cookies must be marked Secure for this origin. */
   readonly cookiesSecure: boolean;
+  /** Optional server secret (>= 32 chars) that signs the cash receipt cookie; absent disables the receipt. */
+  readonly receiptCookieSecret?: string;
 }
 
 export class WebConfigurationError extends Error {
@@ -32,11 +34,14 @@ export function readWebServerEnv(environment: Readonly<Record<string, string | u
   const supabasePublishableKey = readPublishableKey(environment.SUPABASE_PUBLISHABLE_KEY);
   const apiBaseUrl = readHttpsOrLocalDevUrl(environment.API_BASE_URL, "API_BASE_URL", isProduction).url;
   const { origin, cookiesSecure } = readWebOrigin(environment.WEB_ORIGIN);
+  const rawReceiptSecret = environment.RECEIPT_COOKIE_SECRET?.trim();
+  const receiptCookieSecret = rawReceiptSecret !== undefined && rawReceiptSecret.length >= 32 ? rawReceiptSecret : undefined;
 
   return Object.freeze({
     apiBaseUrl,
     cookiesSecure,
     supabasePublishableKey,
+    ...(receiptCookieSecret === undefined ? {} : { receiptCookieSecret }),
     supabaseUrl,
     webOrigin: origin,
   });
