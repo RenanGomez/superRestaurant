@@ -442,6 +442,7 @@ function collectCommand(overrides: {
   readonly tenderedAmountMinor?: number | null;
   readonly tipMinor?: number;
   readonly paymentId?: string;
+  readonly transferReference?: string | null;
 }): Readonly<Record<string, unknown>> {
   return {
     amountMinor: overrides.amountMinor,
@@ -461,6 +462,7 @@ function collectCommand(overrides: {
     scope,
     ...(overrides.tenderedAmountMinor === undefined ? {} : { tenderedAmountMinor: overrides.tenderedAmountMinor }),
     ...(overrides.tipMinor === undefined ? {} : { tipMinor: overrides.tipMinor }),
+    ...(overrides.transferReference === undefined ? {} : { transferReference: overrides.transferReference }),
   };
 }
 
@@ -534,6 +536,7 @@ function operationalReport(register: CashRegister, nextLocalSequence: number, ca
     schemaVersion: 1 as const,
     scope,
     totalCapturedMinor: cashCapturedMinor + cardManualCapturedMinor,
+    transferCapturedMinor: 0,
   });
 }
 
@@ -693,6 +696,93 @@ test("card payment records a tip on the payment only, with no cash movement", as
   assert.equal(persisted?.payment.tip?.amountMinor, 1_000);
   assert.equal(persisted?.payment.amount.amountMinor, 12_500);
   assert.equal(persisted?.register.movements.length, 0);
+});
+
+test("transfer collects the exact amount with an optional reference, a tip, and no cash movement", async () => {
+  const persisted: PersistPaymentInput[] = [];
+  const finances = financialPort({
+    read: async () => storedRegister(openRegister(), 1, 0),
+    collect: async (_actor, input) => {
+      persisted.push(input);
+      return paymentSummary(input, 2, 2, 0);
+    },
+  });
+  const service = serviceFor(["cashier"], finances, orderPort(payableOrder(), 1));
+  const summary = await service.collect(principal, collectCommand({
+    amountMinor: 12_500, cardManualEvidence: null, method: "transfer", tipMinor: 500, transferReference: "SPEI-0001",
+  }));
+  assert.equal(summary.method, "transfer");
+  assert.equal(summary.tipMinor, 500);
+  assert.equal(summary.changeMinor, null);
+  assert.equal(summary.tenderedAmountMinor, null);
+  assert.equal(persisted[0]?.register.movements.length, 0);
+  assert.equal(persisted[0]?.payment.method, "transfer");
+  assert.equal(persisted[0]?.payment.cardManualEvidence, undefined);
+  assert.equal((persisted[0]?.command as { transferReference?: string }).transferReference, "SPEI-0001");
+  // No reference is valid too.
+  await service.collect(principal, collectCommand({ amountMinor: 12_500, cardManualEvidence: null, method: "transfer" }));
+  // Invalid shapes are request errors: tender, terminal evidence, reference on another method, over-long reference.
+  await assertCode(service.collect(principal, collectCommand({
+    amountMinor: 5_000, cardManualEvidence: null, method: "transfer", tenderedAmountMinor: 6_000,
+  })), "request");
+  await assertCode(service.collect(principal, collectCommand({
+    amountMinor: 5_000, method: "transfer",
+    cardManualEvidence: { externalConfirmed: true, provider: "terminal externo", reference: null, terminalId: "caja-1" },
+  })), "request");
+  await assertCode(service.collect(principal, collectCommand({
+    amountMinor: 5_000, cardManualEvidence: null, method: "cash", transferReference: "SPEI-1",
+  })), "request");
+  await assertCode(service.collect(principal, collectCommand({
+    amountMinor: 5_000, cardManualEvidence: null, method: "transfer", transferReference: "x".repeat(65),
+  })), "request");
+});
+
+test("transfer quote has zero change and refuses a tender; adapter reads the real { result } rows", async () => {
+  const finances = financialPort({ read: async () => storedRegister(openRegister(), 1, 2_500) });
+  const service = serviceFor(["cashier"], finances, orderPort(payableOrder(), 1));
+  const base = {
+    amountMinor: 5_000, cashRegisterSessionId: sessionId, method: "transfer", orderId, schemaVersion: 1,
+    scope, tenderedAmountMinor: null, tipMinor: 200,
+  };
+  const quote = await service.quote(principal, base);
+  assert.equal(quote.changeMinor, null);
+  assert.equal(quote.remainingAfterMinor, 5_000);
+  await assertCode(service.quote(principal, { ...base, tenderedAmountMinor: 6_000 }), "request");
+
+  const register = openRegister();
+  const input = await capturedInput(payableOrder(), register);
+  const wire = {
+    amountMinor: 5_000, cashRegisterSessionId: sessionId, cashRegisterVersion: 2, currency: "MXN", method: "transfer",
+    orderId, orderStatus: "partially_paid", orderVersion: 2, paymentId, paymentState: "captured",
+    remainingBalanceMinor: 7_500, replayed: false, schemaVersion: 1, scope, tenderedAmountMinor: null, changeMinor: null, tipMinor: 200,
+  };
+  const adapter = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: wire }] }) });
+  const collected = await adapter.collect(actorId, input);
+  assert.equal(typeof collected === "string" ? "" : collected.method, "transfer");
+  // A replay (idempotent) returns the stored row flagged as replayed.
+  const replayAdapter = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: { ...wire, replayed: true } }] }) });
+  const replayed = await replayAdapter.collect(actorId, input);
+  assert.equal(typeof replayed === "string" ? false : replayed.replayed, true);
+  // A SQL conflict (invalid shape) maps to 409.
+  const conflict = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: { status: "conflict" } }] }) });
+  assert.equal(await conflict.collect(actorId, input), "conflict");
+  // A transfer row carrying change is corrupt.
+  const corrupt = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: { ...wire, tenderedAmountMinor: 6_000, changeMinor: 800 } }] }) });
+  await assertCode(corrupt.collect(actorId, input), "unavailable");
+
+  const report = { ...operationalReport(register, 3, 0, 0), transferCapturedMinor: 5_000, totalCapturedMinor: 5_000, paymentCount: 1 };
+  const reportAdapter = new PostgresFinancialPersistenceAdapter({
+    query: async () => ({ rows: [{ result: { ...report, register: { ...report.register, openedAt: "2026-09-03T12:00:00+00:00" } } }] }),
+  });
+  const read = await reportAdapter.readReport(actorId, reportQuery(sessionId));
+  assert.equal(typeof read === "string" ? -1 : read.transferCapturedMinor, 5_000);
+  // A report from before transfers (no key) still reads as zero.
+  const cashOnly = operationalReport(register, 3, 5_000, 0);
+  const legacy: Record<string, unknown> = { ...cashOnly, register: { ...cashOnly.register, openedAt: "2026-09-03T12:00:00+00:00" } };
+  delete legacy.transferCapturedMinor;
+  const legacyAdapter = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: legacy }] }) });
+  const legacyRead = await legacyAdapter.readReport(actorId, reportQuery(sessionId));
+  assert.equal(typeof legacyRead === "string" ? -1 : legacyRead.transferCapturedMinor, 0);
 });
 
 test("payment quote derives change and remaining balance from the live order and rejects bad tender", async () => {
