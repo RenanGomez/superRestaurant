@@ -109,11 +109,16 @@ expect(parseSettleDeliveryResultV1({ delivery: settledDelivery, replayed: false,
 expect(parseBranchDeliveriesRequestV1({ schemaVersion: 1, scope }) !== undefined, "list request parses");
 expect(parseBranchDeliveriesRequestV1({ schemaVersion: 1, scope, extra: true }) === undefined, "list request is exact");
 const item = {
-  addressLabel: null, courierLabel: null, currency: "MXN", customerLabel: null, delivery, orderStatus: "open",
+  addressLabel: null, capturedMinor: 5_000, courierLabel: null, currency: "MXN", customerLabel: null, delivery,
+  deliveryInstructions: null, remainingMinor: 20_000, orderStatus: "open",
   paymentIntent: { method: "cash", tenderedAmountMinor: null, tipMinor: 0 },
   promiseEnd: null, promiseStart: null, totalMinor: 25_000,
 };
 expect(parseBranchDeliveriesV1({ items: [item], schemaVersion: 1, scope }) !== undefined, "branch deliveries parse");
+expect(parseBranchDeliveriesV1({ items: [{ ...item, remainingMinor: 1 }], schemaVersion: 1, scope }) === undefined, "captured plus remaining must equal the total");
+expect(parseBranchDeliveriesV1({ items: [{ ...item, capturedMinor: -1, remainingMinor: 25_001 }], schemaVersion: 1, scope }) === undefined, "negative captured rejected");
+expect(parseBranchDeliveriesV1({ items: [{ ...item, deliveryInstructions: "Porton negro" }], schemaVersion: 1, scope }) !== undefined, "instructions parse");
+expect(parseBranchDeliveriesV1({ items: [{ ...item, deliveryInstructions: "" }], schemaVersion: 1, scope }) === undefined, "empty instructions rejected");
 expect(parseBranchDeliveriesV1({ items: [item, item], schemaVersion: 1, scope }) === undefined, "duplicate orders rejected");
 expect(
   parseBranchDeliveriesV1({ items: [{ ...item, delivery: { ...delivery, scope: { branchId: restaurantId, restaurantId } } }], schemaVersion: 1, scope }) === undefined,
@@ -139,6 +144,8 @@ const detail = {
   updatedAt: null, version: 1,
 };
 expect(parseOrderDetailV1(detail) !== undefined, "detail without the additive keys still parses");
+expect(parseOrderDetailV1({ ...detail, fulfillment: { ...detail.fulfillment, deliveryInstructions: "Porton negro" } }) !== undefined, "detail accepts instructions");
+expect(parseOrderDetailV1({ ...detail, fulfillment: { ...detail.fulfillment, deliveryInstructions: "" } }) === undefined, "detail rejects empty instructions");
 expect(parseOrderDetailV1({ ...detail, delivery: null }) !== undefined, "detail accepts delivery null");
 expect(parseOrderDetailV1({ ...detail, delivery }) !== undefined, "detail accepts a delivery");
 expect(parseOrderDetailV1({ ...detail, delivery: { ...delivery, orderId: courierId } }) === undefined, "detail delivery must match the order");

@@ -365,6 +365,8 @@ export interface OrderDetailDeliveryQuoteV1 {
  */
 export interface OrderDetailFulfillmentV1 {
   readonly quote?: OrderDetailDeliveryQuoteV1 | null;
+  /** Additive. Only for `customers.read` roles or the courier assigned to the delivery. */
+  readonly deliveryInstructions?: string | null;
   readonly channel: OrderChannelV1;
   readonly tableId: string | null;
   readonly customerLabel: string | null;
@@ -550,13 +552,17 @@ function parseDetailTotals(value: unknown): OrderDetailTotalsV1 | undefined {
 
 function parseDetailFulfillment(value: unknown, channel: unknown): OrderDetailFulfillmentV1 | undefined {
   const record = exactRecordWithOptional(
-    value, ["channel", "tableId", "customerLabel", "addressLabel", "paymentIntent"], ["quote"],
+    value, ["channel", "tableId", "customerLabel", "addressLabel", "paymentIntent"], ["quote", "deliveryInstructions"],
   );
   if (record === undefined || own(record, "channel") !== channel) return undefined;
   const hasQuote = Object.hasOwn(record, "quote");
   const rawQuote = own(record, "quote");
   const quote = !hasQuote || rawQuote === null ? null : parseDetailQuote(rawQuote);
   if (quote === undefined) return undefined;
+  const hasInstructions = Object.hasOwn(record, "deliveryInstructions");
+  const rawInstructions = own(record, "deliveryInstructions");
+  const deliveryInstructions = !hasInstructions || rawInstructions === null ? null : text(rawInstructions, 1, 500);
+  if (deliveryInstructions === undefined) return undefined;
   const rawTableId = own(record, "tableId");
   const tableId = rawTableId === null ? null : uuid(rawTableId);
   const rawCustomerLabel = own(record, "customerLabel");
@@ -571,7 +577,7 @@ function parseDetailFulfillment(value: unknown, channel: unknown): OrderDetailFu
   ) return undefined;
   return Object.freeze({
     addressLabel, channel: channel as OrderChannelV1, customerLabel, paymentIntent,
-    ...(hasQuote ? { quote } : {}), tableId,
+    ...(hasInstructions ? { deliveryInstructions } : {}), ...(hasQuote ? { quote } : {}), tableId,
   });
 }
 

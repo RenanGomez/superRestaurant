@@ -89,12 +89,20 @@ export interface BranchDeliveriesRequestV1 {
 }
 
 export interface BranchDeliveryItemV1 {
-  /** Only for roles with `customers.read`; masked phone suffix, never the full phone. */
+  /**
+   * Roles with `customers.read`: street-level label. The courier assigned to this delivery gets the full
+   * address. Everyone else gets `null`.
+   */
   readonly addressLabel: string | null;
+  /** Money already captured for the Order and what is left, both derived on the server (never client money). */
+  readonly capturedMinor: number;
   readonly courierLabel: string | null;
   readonly currency: string;
+  /** Masked phone suffix for `customers.read` roles; name and full phone only for the assigned courier. */
   readonly customerLabel: string | null;
   readonly delivery: OrderDeliveryV1;
+  /** Only the assigned courier (or a `customers.read` role) receives the frozen delivery instructions. */
+  readonly deliveryInstructions: string | null;
   readonly orderStatus: "open" | "partially_paid";
   readonly paymentIntent: {
     readonly method: (typeof DELIVERY_PAYMENT_METHODS)[number];
@@ -103,6 +111,7 @@ export interface BranchDeliveryItemV1 {
   } | null;
   readonly promiseEnd: string | null;
   readonly promiseStart: string | null;
+  readonly remainingMinor: number;
   readonly totalMinor: number;
 }
 
@@ -227,9 +236,12 @@ export function parseSettleDeliveryResultV1(value: unknown): SettleDeliveryResul
 export function parseBranchDeliveryItemV1(value: unknown): BranchDeliveryItemV1 | undefined {
   const record = exactRecord(value, [
     "delivery", "orderStatus", "currency", "totalMinor", "customerLabel", "addressLabel", "courierLabel",
-    "paymentIntent", "promiseStart", "promiseEnd",
+    "paymentIntent", "promiseStart", "promiseEnd", "capturedMinor", "remainingMinor", "deliveryInstructions",
   ]);
   if (record === undefined) return undefined;
+  const capturedMinor = integer(own(record, "capturedMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const remainingMinor = integer(own(record, "remainingMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const deliveryInstructions = nullable(own(record, "deliveryInstructions"), (raw) => boundedText(raw, 1, 500));
   const delivery = parseOrderDeliveryV1(own(record, "delivery"));
   const orderStatus = own(record, "orderStatus");
   const currency = typeof own(record, "currency") === "string" && /^[A-Z]{3}$/u.test(own(record, "currency") as string)
@@ -250,7 +262,8 @@ export function parseBranchDeliveryItemV1(value: unknown): BranchDeliveryItemV1 
   if (delivery === undefined || (orderStatus !== "open" && orderStatus !== "partially_paid") || currency === undefined
     || totalMinor === undefined || customerLabel === undefined || addressLabel === undefined
     || courierLabel === undefined || intentRecord === undefined || promiseStart === undefined
-    || promiseEnd === undefined) return undefined;
+    || promiseEnd === undefined || capturedMinor === undefined || remainingMinor === undefined
+    || deliveryInstructions === undefined || capturedMinor + remainingMinor !== totalMinor) return undefined;
   let paymentIntent: BranchDeliveryItemV1["paymentIntent"] = null;
   if (intentRecord !== null) {
     if (typeof method !== "string" || !(DELIVERY_PAYMENT_METHODS as readonly string[]).includes(method)
@@ -260,8 +273,8 @@ export function parseBranchDeliveryItemV1(value: unknown): BranchDeliveryItemV1 
     });
   }
   return Object.freeze({
-    addressLabel, courierLabel, currency, customerLabel, delivery, orderStatus, paymentIntent, promiseEnd,
-    promiseStart, totalMinor,
+    addressLabel, capturedMinor, courierLabel, currency, customerLabel, delivery, deliveryInstructions,
+    orderStatus, paymentIntent, promiseEnd, promiseStart, remainingMinor, totalMinor,
   });
 }
 
