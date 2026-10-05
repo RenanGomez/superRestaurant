@@ -11,7 +11,8 @@ export function PaymentPanel({ checkout, audit }: {
   readonly checkout: CheckoutOrderSummaryV1;
   readonly audit: { readonly eventId: string; readonly idempotencyKey: string; readonly occurredAt: string; readonly paymentId: string };
 }) {
-  const [method, setMethod] = useState<"cash" | "card_manual">("cash");
+  const [method, setMethod] = useState<"cash" | "card_manual" | "transfer">("cash");
+  const [transferReference, setTransferReference] = useState("");
   const [amountPesos, setAmountPesos] = useState(() => formatMinorForMoneyInput(checkout.remainingBalanceMinor, checkout.currency) ?? "");
   const [receivedPesos, setReceivedPesos] = useState("");
   const [tipPesos, setTipPesos] = useState("");
@@ -83,9 +84,8 @@ export function PaymentPanel({ checkout, audit }: {
         <legend className="mb-2 text-sm font-semibold">Método</legend>
         <Method selected={method === "cash"} label="Efectivo" onClick={() => setMethod("cash")} />
         <Method selected={method === "card_manual"} label="Tarjeta externa" onClick={() => setMethod("card_manual")} />
-        <button type="button" disabled title="La API de caja aún no admite transferencias" className="min-h-12 rounded-xl border border-border bg-bg p-2 text-xs font-semibold opacity-60">Transferencia</button>
+        <Method selected={method === "transfer"} label="Transferencia" onClick={() => setMethod("transfer")} />
       </fieldset>
-      <p className="text-xs text-text-muted">Transferencia estará disponible cuando la API de caja permita registrarla y separarla en el corte.</p>
       {method === "cash" ? <div className="grid gap-2">
         <label className="grid gap-1 text-sm font-semibold">Recibido en pesos<input name="receivedPesos" value={receivedPesos} onChange={(event) => setReceivedPesos(event.target.value)} inputMode="decimal" placeholder="0.00" className="min-h-12 min-w-0 rounded-xl border border-border px-3 text-base" /></label>
         <div className="grid grid-cols-4 gap-2">
@@ -95,6 +95,9 @@ export function PaymentPanel({ checkout, audit }: {
         {insufficient && quote !== null && <p role="status" className="font-heading text-lg font-semibold text-error">{amountMinor === checkout.remainingBalanceMinor ? `Falta ${formatMinorUnits(quote.remainingAfterMinor, checkout.currency)}` : "El recibido no cubre este cobro y la propina."}</p>}
         {!insufficient && quote !== null && <p role="status" className="font-heading text-lg font-semibold text-accent">Cambio después de propina: {formatMinorUnits(quote.changeMinor ?? 0, checkout.currency)}</p>}
         {receivedMinor !== null && receivedMinor > 0 && quote === null && quoteError === "" && <p role="status" className="text-sm text-text-muted">Calculando cambio…</p>}
+      </div> : method === "transfer" ? <div className="grid gap-3 rounded-xl bg-bg p-3">
+        <p className="text-xs text-text-muted">Sin cambio ni terminal. Confirma que el depósito ya llegó antes de cobrar; no cuenta en el efectivo de la caja.</p>
+        <label className="grid gap-1 text-sm font-semibold">Referencia (opcional)<input name="transferReference" maxLength={64} value={transferReference} onChange={(event) => setTransferReference(event.target.value)} className="min-h-12 min-w-0 rounded-xl border border-border px-3" /></label>
       </div> : <div className="grid gap-3 rounded-xl bg-bg p-3">
         <p className="text-xs text-text-muted">Registra sólo una operación ya confirmada en la terminal externa. No captures datos de tarjeta.</p>
         <label className="grid gap-1 text-sm font-semibold">Terminal<input name="terminalId" required value={terminalId} onChange={(event) => setTerminalId(event.target.value)} className="min-h-12 min-w-0 rounded-xl border border-border px-3" /></label>

@@ -47,6 +47,12 @@ test("collect requires a current server quote and enough tender or card evidence
   const card = { ...quote, method: "card_manual", tenderedAmountMinor: null } as CashPaymentQuoteV1;
   assert.equal(canCollectPayment({ ...input, quote: card, method: "card_manual", terminalId: "T1", reference: "ABC123" }), true);
   assert.equal(canCollectPayment({ ...input, quote: card, method: "card_manual", terminalId: "T1", reference: "ABC" }), false);
+  // Transfer: no terminal, no reference required, no change; the quote must agree.
+  const transfer = { ...quote, method: "transfer", tenderedAmountMinor: null, changeMinor: null } as CashPaymentQuoteV1;
+  assert.equal(canCollectPayment({ ...input, quote: transfer, method: "transfer", receivedMinor: null, terminalId: "", reference: "" }), true);
+  assert.equal(canCollectPayment({ ...input, quote: { ...transfer, changeMinor: 100 }, method: "transfer", receivedMinor: null }), false);
+  assert.equal(canCollectPayment({ ...input, quote: { ...transfer, tenderedAmountMinor: 12_800 }, method: "transfer", receivedMinor: null }), false);
+  assert.equal(canCollectPayment({ ...input, quote: transfer, method: "cash" }), false);
 });
 
 test("receipt href round-trips and rejects malformed ids", () => {

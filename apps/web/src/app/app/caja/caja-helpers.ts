@@ -52,7 +52,7 @@ export function canCollectPayment(input: {
   readonly quote: CashPaymentQuoteV1 | null;
   readonly remainingMinor: number;
   readonly amountMinor: number | null;
-  readonly method: "cash" | "card_manual";
+  readonly method: "cash" | "card_manual" | "transfer";
   readonly receivedMinor: number | null;
   readonly tipMinor: number | null;
   readonly terminalId: string;
@@ -67,5 +67,6 @@ export function canCollectPayment(input: {
     return required !== null && receivedMinor !== null && receivedMinor >= required
       && quote.tenderedAmountMinor === receivedMinor && quote.changeMinor !== null;
   }
+  if (method === "transfer") return quote.tenderedAmountMinor === null && quote.changeMinor === null;
   return quote.tenderedAmountMinor === null && terminalId.trim().length > 0 && reference.trim().length >= 6;
 }

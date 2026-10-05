@@ -166,7 +166,7 @@ function ReceiptCard({ receipt }: { readonly receipt: PaymentCollectionSummaryV1
     <div id="cobrar" role="status" className="mt-4 grid gap-4 rounded-xl border border-[oklch(84%_0.08_155)] bg-[oklch(96%_0.03_155)] p-5">
       <h3 className="font-heading text-lg font-semibold">Cobro registrado</h3>
       <p>
-        {receipt.method === "cash" ? "Efectivo" : "Tarjeta externa"} · Cobrado {formatMinorUnits(receipt.amountMinor, receipt.currency)}
+        {receipt.method === "cash" ? "Efectivo" : receipt.method === "transfer" ? "Transferencia" : "Tarjeta externa"} · Cobrado {formatMinorUnits(receipt.amountMinor, receipt.currency)}
         {receipt.tenderedAmountMinor !== null && <> · Recibido {formatMinorUnits(receipt.tenderedAmountMinor, receipt.currency)}</>}
         {" "}· Cambio {formatMinorUnits(receipt.changeMinor ?? 0, receipt.currency)} · Propina {formatMinorUnits(receipt.tipMinor, receipt.currency)}
       </p>
@@ -261,7 +261,7 @@ function OperationalReport({ report, title }: { readonly report: CashRegisterOpe
         <Metric label="Fondo inicial" value={formatMinorUnits(register.openingFloatMinor, register.currency)} />
         <Metric label="Ventas en efectivo" value={formatMinorUnits(report.cashCapturedMinor, register.currency)} />
         <Metric label="Tarjeta externa" value={formatMinorUnits(report.cardManualCapturedMinor, register.currency)} />
-        <Metric label="Transferencias" value="No disponible" />
+        <Metric label="Transferencias" value={formatMinorUnits(report.transferCapturedMinor, register.currency)} />
         <Metric label="Propinas" value={formatMinorUnits(report.tipsMinor, register.currency)} />
         <Metric label="Cobros" value={String(report.paymentCount)} />
         <Metric label="Efectivo esperado" value={formatMinorUnits(register.expectedCashBalanceMinor, register.currency)} emphasis />
