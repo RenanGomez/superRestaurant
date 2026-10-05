@@ -68,7 +68,7 @@ const closeRegisterSql = "select app_private.close_cash_register($1::uuid,$2::js
 const replayFinancialCommandSql = "select app_private.replay_financial_command($1::uuid,$2::text,$3::jsonb) as result";
 
 export type FinancialApplicationErrorCode =
-  | "authorization" | "conflict" | "delivery_settle_required" | "not_found" | "request" | "unavailable";
+  | "authorization" | "conflict" | "delivery_not_delivered" | "delivery_settle_required" | "not_found" | "request" | "unavailable";
 
 export class FinancialApplicationError extends Error {
   public constructor(public readonly code: FinancialApplicationErrorCode) {
@@ -149,8 +149,11 @@ export interface PersistPaymentInput {
   readonly register: CashRegister;
 }
 
-/** `delivery_settle_required`: the Order has an active delivery, so cash must be settled through /deliveries/settle. */
-export type FinancialMutationResult<T> = T | "conflict" | "delivery_settle_required" | "forbidden";
+/**
+ * `delivery_settle_required`: the Order has an active delivery, so cash must be settled through /deliveries/settle.
+ * `delivery_not_delivered`: a card collection is only admitted once the delivery is `delivered`.
+ */
+export type FinancialMutationResult<T> = T | "conflict" | "delivery_not_delivered" | "delivery_settle_required" | "forbidden";
 export type FinancialReplayResult<T> = T | "conflict" | "forbidden" | "missing";
 export type FinancialReadResult<T> = FinancialReplayResult<T>;
 
@@ -273,7 +276,7 @@ export class PostgresFinancialPersistenceAdapter implements FinancialPersistence
     const raw = await this.call(replayFinancialCommandSql, [actorId, operation, JSON.stringify(command)]);
     if (raw === null) return "missing";
     const parsed = parseMutation(raw, parser);
-    if (parsed === "delivery_settle_required") throw unavailable();
+    if (parsed === "delivery_settle_required" || parsed === "delivery_not_delivered") throw unavailable();
     return parsed;
   }
 
@@ -580,6 +583,7 @@ export class FinancialService {
     try { result = await operation(); } catch { throw unavailable(); }
     if (result === "forbidden") throw applicationError("authorization");
     if (result === "delivery_settle_required") throw applicationError("delivery_settle_required");
+    if (result === "delivery_not_delivered") throw applicationError("delivery_not_delivered");
     if (result === "conflict") throw applicationError("conflict");
     return result;
   }
@@ -616,6 +620,7 @@ function parseMutation<T>(raw: unknown, parser: (value: unknown) => T | undefine
   const coded = exactRecord(raw, ["status", "code"]);
   if (coded !== undefined) {
     if (own(coded, "status") === "conflict" && own(coded, "code") === "DELIVERY_SETTLE_REQUIRED") return "delivery_settle_required";
+    if (own(coded, "status") === "conflict" && own(coded, "code") === "DELIVERY_NOT_DELIVERED") return "delivery_not_delivered";
     throw unavailable();
   }
   const minimal = exactRecord(raw, ["status"]);

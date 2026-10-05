@@ -99,6 +99,7 @@ export class PaymentsController {
       if (error.code === "request") throw new BadRequestException({ code: "FINANCIAL_REQUEST_REJECTED" });
       if (error.code === "authorization") throw new ForbiddenException({ code: "ACTION_NOT_AUTHORIZED" });
       if (error.code === "not_found") throw new NotFoundException({ code: "FINANCIAL_RESOURCE_NOT_FOUND" });
+      if (error.code === "delivery_not_delivered") throw new ConflictException({ code: "DELIVERY_NOT_DELIVERED" });
       if (error.code === "delivery_settle_required") throw new ConflictException({ code: "DELIVERY_SETTLE_REQUIRED" });
       if (error.code === "conflict") throw new ConflictException({ code: "FINANCIAL_CONFLICT" });
       throw unavailable();

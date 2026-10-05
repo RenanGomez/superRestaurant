@@ -776,6 +776,13 @@ test("collect on an Order with an active delivery maps the SQL conflict code to 
     ),
     "delivery_settle_required",
   );
+  const notDelivered = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: { status: "conflict", code: "DELIVERY_NOT_DELIVERED" } }] }) });
+  await assertCode(
+    serviceFor(["cashier"], financialPort({ read: async () => storedRegister(register, 1, 0), collect: (actor, input) => notDelivered.collect(actor, input) }), orderPort(payableOrder(), 1)).collect(
+      principal, collectCommand({ amountMinor: 5_000, method: "cash", cardManualEvidence: null }),
+    ),
+    "delivery_not_delivered",
+  );
   // Any other extra-key shape from SQL fails closed instead of being read as a plain conflict.
   const odd = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: { status: "conflict", code: "OTHER" } }] }) });
   await assert.rejects(odd.collect(actorId, {

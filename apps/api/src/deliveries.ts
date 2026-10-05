@@ -400,7 +400,7 @@ function parseSettlement(raw: unknown): DeliveryWriteResult<SettleDeliveryResult
 
 function fromFinancial(error: unknown): DeliveryApplicationError {
   if (!(error instanceof FinancialApplicationError)) return unavailable();
-  return applicationError(error.code === "delivery_settle_required" ? "conflict" : error.code);
+  return applicationError(error.code === "delivery_settle_required" || error.code === "delivery_not_delivered" ? "conflict" : error.code);
 }
 
 function refusal(status: unknown): "conflict" | "forbidden" {
