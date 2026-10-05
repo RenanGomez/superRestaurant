@@ -439,6 +439,8 @@ function collectCommand(overrides: {
   readonly localSequence?: number;
   readonly method: string;
   readonly orderExpectedVersion?: number;
+  readonly tenderedAmountMinor?: number | null;
+  readonly tipMinor?: number;
   readonly paymentId?: string;
 }): Readonly<Record<string, unknown>> {
   return {
@@ -457,6 +459,8 @@ function collectCommand(overrides: {
     paymentId: overrides.paymentId ?? paymentId,
     schemaVersion: 1,
     scope,
+    ...(overrides.tenderedAmountMinor === undefined ? {} : { tenderedAmountMinor: overrides.tenderedAmountMinor }),
+    ...(overrides.tipMinor === undefined ? {} : { tipMinor: overrides.tipMinor }),
   };
 }
 
@@ -520,7 +524,11 @@ function operationalReport(register: CashRegister, nextLocalSequence: number, ca
   return Object.freeze({
     cardManualCapturedMinor,
     cashCapturedMinor,
+    cashTipsMinor: 0,
+    movementCount: 0,
+    movements: Object.freeze([]),
     nextLocalSequence,
+    tipsMinor: 0,
     paymentCount: Number(cashCapturedMinor > 0) + Number(cardManualCapturedMinor > 0),
     register: registerSummary(register, 3),
     schemaVersion: 1 as const,
@@ -591,8 +599,11 @@ function paymentSummary(input: PersistPaymentInput, cashRegisterVersion: number,
     amountMinor: input.payment.amount.amountMinor,
     cashRegisterSessionId: input.register.cashRegisterId,
     cashRegisterVersion,
+    changeMinor: input.payment.change?.amountMinor ?? null,
     currency: input.payment.amount.currency,
     method: input.command.method,
+    tenderedAmountMinor: input.payment.tenderedAmount?.amountMinor ?? null,
+    tipMinor: input.payment.tip?.amountMinor ?? 0,
     orderId: input.order.orderId,
     orderStatus: input.order.status as "partially_paid" | "paid",
     orderVersion,
@@ -618,3 +629,132 @@ function readRegisterResult(register: CashRegister, version: number, capturedAmo
 async function assertCode(promise: Promise<unknown>, code: FinancialApplicationError["code"]): Promise<void> {
   await assert.rejects(promise, (error: unknown) => error instanceof FinancialApplicationError && error.code === code);
 }
+
+test("cash payment with tender records server-derived change and a separate tip_in movement", async () => {
+  let persisted: PersistPaymentInput | undefined;
+  const finances = financialPort({
+    read: async () => storedRegister(openRegister(), 1, 0),
+    collect: async (_actor, input) => {
+      persisted = input;
+      return paymentSummary(input, 2, 2, 7_500);
+    },
+  });
+  const summary = await serviceFor(["cashier"], finances, orderPort(payableOrder(), 1)).collect(
+    principal,
+    collectCommand({ amountMinor: 5_000, cardManualEvidence: null, method: "cash", tenderedAmountMinor: 10_000, tipMinor: 300 }),
+  );
+  assert.equal(summary.changeMinor, 5_000);
+  assert.equal(summary.tenderedAmountMinor, 10_000);
+  assert.equal(summary.tipMinor, 300);
+  assert.equal(persisted?.payment.amount.amountMinor, 5_000);
+  assert.equal(persisted?.payment.change?.amountMinor, 5_000);
+  assert.equal(persisted?.orderTotalMinor, 12_500);
+  const [sale, tip] = persisted?.register.movements ?? [];
+  assert.equal(sale?.type, "cash_sale");
+  assert.equal(sale?.amount.amountMinor, 5_000);
+  assert.equal(tip?.type, "tip_in");
+  assert.equal(tip?.amount.amountMinor, 300);
+  assert.equal(tip?.localSequence, 2);
+  assert.equal(tip?.source?.type, "payment");
+  assert.notEqual(tip?.movementId, sale?.movementId);
+  assert.equal(expectedCashBalance(persisted?.register ?? openRegister()).amountMinor, 2_000 + 5_000 + 300);
+});
+
+test("tender below the amount, tender with a card, and a stale tender are rejected as request errors", async () => {
+  const finances = financialPort({ read: async () => storedRegister(openRegister(), 1, 0) });
+  const service = serviceFor(["cashier"], finances, orderPort(payableOrder(), 1));
+  await assertCode(service.collect(principal, collectCommand({
+    amountMinor: 5_000, cardManualEvidence: null, method: "cash", tenderedAmountMinor: 4_999,
+  })), "request");
+  await assertCode(service.collect(principal, collectCommand({
+    amountMinor: 5_000, method: "card_manual", tenderedAmountMinor: 6_000,
+    cardManualEvidence: { externalConfirmed: true, provider: "terminal externo", reference: null, terminalId: "caja-1" },
+  })), "request");
+  await assertCode(service.collect(principal, collectCommand({
+    amountMinor: 5_000, cardManualEvidence: null, method: "cash", tipMinor: -1,
+  })), "request");
+});
+
+test("card payment records a tip on the payment only, with no cash movement", async () => {
+  let persisted: PersistPaymentInput | undefined;
+  const finances = financialPort({
+    read: async () => storedRegister(openRegister(), 1, 0),
+    collect: async (_actor, input) => {
+      persisted = input;
+      return paymentSummary(input, 2, 2, 0);
+    },
+  });
+  const summary = await serviceFor(["cashier"], finances, orderPort(payableOrder(), 1)).collect(principal, collectCommand({
+    amountMinor: 12_500, method: "card_manual", tipMinor: 1_000,
+    cardManualEvidence: { externalConfirmed: true, provider: "terminal externo", reference: null, terminalId: "caja-1" },
+  }));
+  assert.equal(summary.tipMinor, 1_000);
+  assert.equal(summary.changeMinor, null);
+  assert.equal(persisted?.payment.tip?.amountMinor, 1_000);
+  assert.equal(persisted?.payment.amount.amountMinor, 12_500);
+  assert.equal(persisted?.register.movements.length, 0);
+});
+
+test("payment quote derives change and remaining balance from the live order and rejects bad tender", async () => {
+  const finances = financialPort({ read: async () => storedRegister(openRegister(), 1, 2_500) });
+  const service = serviceFor(["cashier"], finances, orderPort(payableOrder(), 1));
+  const base = {
+    amountMinor: 5_000, cashRegisterSessionId: sessionId, method: "cash", orderId, schemaVersion: 1,
+    scope, tenderedAmountMinor: 10_000, tipMinor: 200,
+  };
+  const quote = await service.quote(principal, base);
+  assert.equal(quote.changeMinor, 5_000);
+  assert.equal(quote.remainingBeforeMinor, 10_000);
+  assert.equal(quote.remainingAfterMinor, 5_000);
+  assert.equal(quote.currency, "MXN");
+  assert.equal((await service.quote(principal, { ...base, tenderedAmountMinor: null })).changeMinor, null);
+  await assertCode(service.quote(principal, { ...base, tenderedAmountMinor: 4_999 }), "request");
+  await assertCode(service.quote(principal, { ...base, amountMinor: 10_001, tenderedAmountMinor: 20_000 }), "request");
+  await assertCode(serviceFor(["viewer"], finances).quote(principal, base), "authorization");
+});
+
+test("PostgreSQL adapter parses the real { result } rows for tender, change, tip and report movements", async () => {
+  const register = openRegister();
+  const input = await capturedInput(payableOrder(), register);
+  const wire = {
+    amountMinor: 5_000, cashRegisterSessionId: sessionId, cashRegisterVersion: 2, changeMinor: 5_000,
+    currency: "MXN", method: "cash", orderId, orderStatus: "partially_paid", orderVersion: 2, paymentId,
+    paymentState: "captured", remainingBalanceMinor: 7_500, replayed: false, schemaVersion: 1, scope,
+    tenderedAmountMinor: 10_000, tipMinor: 300,
+  };
+  const adapter = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: wire }] }) });
+  const collected = await adapter.collect(actorId, input);
+  assert.equal(typeof collected === "string" ? 0 : collected.changeMinor, 5_000);
+  const replay = await adapter.replayCollect(actorId, parseCollectPaymentCommandV1(collectCommand({
+    amountMinor: 5_000, cardManualEvidence: null, method: "cash", tenderedAmountMinor: 10_000, tipMinor: 300,
+  })) ?? input.command);
+  assert.equal(typeof replay === "string" ? 0 : replay.tenderedAmountMinor, 10_000);
+  const legacy: Record<string, unknown> = { ...wire };
+  for (const key of ["changeMinor", "tenderedAmountMinor", "tipMinor"]) delete legacy[key];
+  const legacyAdapter = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: legacy }] }) });
+  const legacyResult = await legacyAdapter.collect(actorId, input);
+  assert.equal(typeof legacyResult === "string" ? 0 : legacyResult.tipMinor, 0);
+  // A change that does not equal tender minus amount is a corrupt row, never a result.
+  const corrupt = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: { ...wire, changeMinor: 1 } }] }) });
+  await assertCode(corrupt.collect(actorId, input), "unavailable");
+
+  const movement = {
+    amountMinor: 300, direction: "in", movementId: "b1c4a3a0-5a6a-4a58-9a3f-3d5a6f0a1111", note: null,
+    occurredAt: "2026-09-03T12:01:00.000Z", sourcePaymentId: paymentId, sourceRefundId: null, type: "tip_in",
+  };
+  const report = { ...operationalReport(register, 3, 5_000, 0), cashTipsMinor: 300, movementCount: 1, movements: [movement], tipsMinor: 300 };
+  const reportAdapter = new PostgresFinancialPersistenceAdapter({
+    query: async () => ({ rows: [{ result: { ...report, register: { ...report.register, openedAt: "2026-09-03T12:00:00+00:00" } } }] }),
+  });
+  const read = await reportAdapter.readReport(actorId, reportQuery(sessionId));
+  assert.notEqual(typeof read, "string");
+  if (typeof read !== "string") {
+    assert.equal(read.tipsMinor, 300);
+    assert.equal(read.movements[0]?.type, "tip_in");
+    assert.equal(read.register.openedAt, "2026-09-03T12:00:00.000Z");
+  }
+  const missing: Record<string, unknown> = { ...report };
+  delete missing.movements;
+  const missingAdapter = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: missing }] }) });
+  await assertCode(missingAdapter.readReport(actorId, reportQuery(sessionId)), "unavailable");
+});
