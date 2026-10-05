@@ -9,6 +9,7 @@ import type {
   BranchScope,
   CashRegisterOperationalReportV1,
   CheckoutOrderSummaryV1,
+  PaymentCollectionSummaryV1,
 } from "@super-restaurant/shared-types";
 
 import { getServerEnv } from "../../../env";
@@ -23,7 +24,8 @@ import {
   openCashRegisterAction,
 } from "./actions";
 import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } from "./context";
-import { movementLabel } from "./caja-helpers";
+import { movementLabel, parseReceiptQuery } from "./caja-helpers";
+import { CASH_RECEIPT_COOKIE, decodeReceiptCookie } from "./receipt";
 import { PaymentPanel } from "./payment-panel";
 import { PayableOrders } from "./payable-orders";
 import { CashierSubmitButton } from "./submit-button";
@@ -71,7 +73,14 @@ export default async function CashRegisterPage({ searchParams }: CashRegisterPag
       scope,
     })
     : undefined;
-  const checkout = report?.status === "ok" && report.value.register.status === "open" && orderId !== undefined
+  const receiptQuery = parseReceiptQuery(params);
+  const decoded = receiptQuery === null ? undefined
+    : decodeReceiptCookie(cookieStore.get(CASH_RECEIPT_COOKIE)?.value, session.user.id);
+  const receipt = decoded !== undefined && receiptQuery !== null
+    && decoded.paymentId === receiptQuery.paymentId && decoded.orderId === receiptQuery.orderId
+    && decoded.scope.restaurantId === scope.restaurantId && decoded.scope.branchId === scope.branchId
+    ? decoded : undefined;
+  const checkout = receipt === undefined && report?.status === "ok" && report.value.register.status === "open" && orderId !== undefined
     ? await getCheckoutOrder(session.access_token, env.apiBaseUrl, {
       cashRegisterSessionId: report.value.register.cashRegisterSessionId,
       deviceId,
@@ -103,7 +112,7 @@ export default async function CashRegisterPage({ searchParams }: CashRegisterPag
       ) : report.value.register.status === "closed" ? (
         <ClosedRegisterView report={report.value} />
       ) : (
-        <OpenRegisterView checkout={checkout} orderId={orderId} report={report.value} scope={scope} tray={tray} />
+        <OpenRegisterView checkout={checkout} orderId={orderId} receipt={receipt} report={report.value} scope={scope} tray={tray} />
       )}
     </div>
   );
@@ -151,7 +160,26 @@ function OpenRegisterPanel(): ReactNode {
   );
 }
 
-function OpenRegisterView({ checkout, orderId, report, scope, tray }: {
+function ReceiptCard({ receipt }: { readonly receipt: PaymentCollectionSummaryV1 }): ReactNode {
+  return (
+    <div id="cobrar" role="status" className="mt-4 grid gap-4 rounded-xl border border-[oklch(84%_0.08_155)] bg-[oklch(96%_0.03_155)] p-5">
+      <h3 className="font-heading text-lg font-semibold">Cobro registrado</h3>
+      <p>
+        {receipt.method === "cash" ? "Efectivo" : "Tarjeta externa"} · Cobrado {formatMinorUnits(receipt.amountMinor, receipt.currency)}
+        {receipt.tenderedAmountMinor !== null && <> · Recibido {formatMinorUnits(receipt.tenderedAmountMinor, receipt.currency)}</>}
+        {" "}· Cambio {formatMinorUnits(receipt.changeMinor ?? 0, receipt.currency)} · Propina {formatMinorUnits(receipt.tipMinor, receipt.currency)}
+      </p>
+      <p className="font-heading text-lg font-semibold">
+        {receipt.remainingBalanceMinor > 0 ? `Saldo restante ${formatMinorUnits(receipt.remainingBalanceMinor, receipt.currency)}` : "Cuenta pagada por completo"}
+      </p>
+      {receipt.remainingBalanceMinor > 0 && <a href={`/app/caja?orderId=${encodeURIComponent(receipt.orderId)}#cobrar`} className="inline-flex min-h-11 items-center justify-center rounded-xl bg-accent px-4 text-sm font-semibold text-white">Seguir cobrando esta cuenta</a>}
+      <a href="/app/caja" className="inline-flex min-h-11 items-center justify-center rounded-xl bg-accent px-4 text-sm font-semibold text-white">Cobrar otra cuenta</a>
+    </div>
+  );
+}
+
+function OpenRegisterView({ checkout, orderId, receipt, report, scope, tray }: {
+  readonly receipt: PaymentCollectionSummaryV1 | undefined;
   readonly checkout: FinancialApiResult<CheckoutOrderSummaryV1> | undefined;
   readonly orderId: string | undefined;
   readonly report: CashRegisterOperationalReportV1;
@@ -168,7 +196,7 @@ function OpenRegisterView({ checkout, orderId, report, scope, tray }: {
             <span className="rounded-lg bg-bg px-3 py-2 font-mono text-[11px] text-text-muted">Caja {shortId(register.cashRegisterSessionId)}</span>
           </div>
           <PayableOrders scope={scope} initial={tray} selectedOrderId={orderId} />
-          {orderId === undefined ? (
+          {receipt !== undefined ? <ReceiptCard receipt={receipt} /> : orderId === undefined ? (
             <p className="mt-4 rounded-xl bg-bg p-4 text-[13px] text-text-muted">Elige una orden abierta o parcialmente pagada para cargar su cuenta.</p>
           ) : checkout?.status !== "ok" ? (
             <div role="alert" className="mt-4 rounded-xl border border-[oklch(85%_0.06_25)] bg-error-bg p-4 text-[13px] text-[oklch(35%_0.1_25)]">No se pudo cargar esa cuenta. Elige otra orden o actualiza; no se registró ningún pago.</div>

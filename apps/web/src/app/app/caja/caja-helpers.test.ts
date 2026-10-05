@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CashPaymentQuoteV1 } from "@super-restaurant/shared-types";
-import { canCollectPayment, movementLabel, paymentAmountBounds, quickCashAmounts, requiredCashTenderMinor } from "./caja-helpers.js";
+import { buildReceiptHref, parseReceiptQuery, canCollectPayment, movementLabel, paymentAmountBounds, quickCashAmounts, requiredCashTenderMinor } from "./caja-helpers.js";
 
 test("movement labels are operator-facing Spanish", () => {
   assert.equal(movementLabel("cash_sale"), "Venta en efectivo");
@@ -47,4 +47,16 @@ test("collect requires a current server quote and enough tender or card evidence
   const card = { ...quote, method: "card_manual", tenderedAmountMinor: null } as CashPaymentQuoteV1;
   assert.equal(canCollectPayment({ ...input, quote: card, method: "card_manual", terminalId: "T1", reference: "ABC123" }), true);
   assert.equal(canCollectPayment({ ...input, quote: card, method: "card_manual", terminalId: "T1", reference: "ABC" }), false);
+});
+
+test("receipt href round-trips and rejects malformed ids", () => {
+  const paymentId = "11111111-1111-4111-8111-111111111111";
+  const orderId = "22222222-2222-4222-8222-222222222222";
+  const href = buildReceiptHref(paymentId, orderId);
+  assert.equal(href, `/app/caja?receipt=${paymentId}&orderId=${orderId}`);
+  const params = Object.fromEntries(new URL(href ?? "", "http://x").searchParams);
+  assert.deepEqual(parseReceiptQuery(params), { paymentId, orderId });
+  assert.equal(buildReceiptHref("x", orderId), null);
+  assert.equal(parseReceiptQuery({ receipt: paymentId }), null);
+  assert.equal(parseReceiptQuery({ receipt: [paymentId], orderId }), null);
 });

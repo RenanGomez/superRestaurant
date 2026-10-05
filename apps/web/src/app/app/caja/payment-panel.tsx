@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { CashPaymentQuoteV1, CheckoutOrderSummaryV1, PaymentCollectionSummaryV1 } from "@super-restaurant/shared-types";
+import type { CashPaymentQuoteV1, CheckoutOrderSummaryV1 } from "@super-restaurant/shared-types";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { formatMinorForMoneyInput, parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import { collectPaymentAction, quotePaymentAction } from "./actions";
@@ -21,7 +21,6 @@ export function PaymentPanel({ checkout, audit }: {
   const [quoteError, setQuoteError] = useState("");
   const [collectError, setCollectError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [collected, setCollected] = useState<PaymentCollectionSummaryV1 | null>(null);
   const latest = useRef(0);
   const amountMinor = parseMoneyInputToMinor(amountPesos, checkout.currency);
   const validAmount = paymentAmountBounds(checkout.remainingBalanceMinor, amountMinor);
@@ -33,7 +32,7 @@ export function PaymentPanel({ checkout, audit }: {
     const request = ++latest.current;
     setQuote(null);
     setQuoteError("");
-    if (collected !== null || !validAmount || tipMinor === null || (method === "cash" && (receivedMinor === null || receivedMinor <= 0))) return;
+    if (!validAmount || tipMinor === null || (method === "cash" && (receivedMinor === null || receivedMinor <= 0))) return;
     const timer = setTimeout(() => {
       void quotePaymentAction({
         cashRegisterSessionId: checkout.cashRegisterSessionId, orderId: checkout.orderId,
@@ -45,7 +44,7 @@ export function PaymentPanel({ checkout, audit }: {
       }).catch(() => { if (request === latest.current) setQuoteError("No se pudo consultar el cambio. Actualiza e intenta de nuevo."); });
     }, 250);
     return () => { clearTimeout(timer); latest.current += 1; };
-  }, [amountPesos, checkout.cashRegisterSessionId, checkout.orderId, collected, method, receivedMinor, receivedPesos, tipMinor, tipPesos, validAmount]);
+  }, [amountPesos, checkout.cashRegisterSessionId, checkout.orderId, method, receivedMinor, receivedPesos, tipMinor, tipPesos, validAmount]);
 
   async function collect(formData: FormData) {
     if (!canCollectPayment({ quote, remainingMinor: checkout.remainingBalanceMinor, amountMinor, method, receivedMinor, tipMinor, terminalId, reference, busy })) return;
@@ -53,19 +52,10 @@ export function PaymentPanel({ checkout, audit }: {
     setCollectError("");
     try {
       const result = await collectPaymentAction(formData);
-      if (result.status === "ok" && result.value !== undefined) setCollected(result.value);
-      else setCollectError(errorText(result.status));
+      if (result.status !== "ok") setCollectError(errorText(result.status));
     } catch { setCollectError("No se pudo confirmar el cobro. Actualiza la caja antes de volver a intentar."); }
     finally { setBusy(false); }
   }
-
-  if (collected !== null) return <div id="cobrar" role="status" className="mt-4 grid gap-4 rounded-xl border border-[oklch(84%_0.08_155)] bg-[oklch(96%_0.03_155)] p-5">
-    <h3 className="font-heading text-lg font-semibold">Cobro registrado</h3>
-    <p>Cobrado {formatMinorUnits(collected.amountMinor, collected.currency)} · Cambio {formatMinorUnits(collected.changeMinor ?? 0, collected.currency)} · Propina {formatMinorUnits(collected.tipMinor, collected.currency)}</p>
-    <p className="font-heading text-lg font-semibold">Saldo restante {formatMinorUnits(collected.remainingBalanceMinor, collected.currency)}</p>
-    {collected.remainingBalanceMinor > 0 && <a href={`/app/caja?orderId=${encodeURIComponent(collected.orderId)}#cobrar`} className="inline-flex min-h-11 items-center justify-center rounded-xl bg-accent px-4 text-sm font-semibold text-white">Cobrar saldo restante</a>}
-    <a href="/app/caja" className="inline-flex min-h-11 items-center justify-center rounded-xl bg-accent px-4 text-sm font-semibold text-white">Cobrar otra cuenta</a>
-  </div>;
 
   const canCollect = canCollectPayment({ quote, remainingMinor: checkout.remainingBalanceMinor, amountMinor, method, receivedMinor, tipMinor, terminalId, reference, busy });
   const insufficient = method === "cash" && receivedMinor !== null && receivedMinor > 0

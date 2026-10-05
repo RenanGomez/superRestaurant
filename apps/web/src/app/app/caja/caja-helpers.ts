@@ -1,5 +1,23 @@
 import type { CashPaymentQuoteV1, CashRegisterMovementTypeV1 } from "@super-restaurant/shared-types";
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+export function buildReceiptHref(paymentId: string, orderId: string): string | null {
+  if (!UUID_PATTERN.test(paymentId) || !UUID_PATTERN.test(orderId)) return null;
+  return `/app/caja?receipt=${encodeURIComponent(paymentId)}&orderId=${encodeURIComponent(orderId)}`;
+}
+
+export function parseReceiptQuery(params: Readonly<Record<string, string | readonly string[] | undefined>>): {
+  readonly paymentId: string;
+  readonly orderId: string;
+} | null {
+  const paymentId = params.receipt;
+  const orderId = params.orderId;
+  return typeof paymentId === "string" && typeof orderId === "string"
+    && UUID_PATTERN.test(paymentId) && UUID_PATTERN.test(orderId)
+    ? { paymentId: paymentId.toLowerCase(), orderId: orderId.toLowerCase() } : null;
+}
+
 export function movementLabel(type: CashRegisterMovementTypeV1): string {
   return {
     cash_sale: "Venta en efectivo",

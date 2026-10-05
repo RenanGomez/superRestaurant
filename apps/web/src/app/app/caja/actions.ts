@@ -25,7 +25,8 @@ import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchP
 import { getMenuCatalog } from "../../../lib/menu-catalog";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
 import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } from "./context";
-import { paymentAmountBounds, requiredCashTenderMinor } from "./caja-helpers";
+import { buildReceiptHref, paymentAmountBounds, requiredCashTenderMinor } from "./caja-helpers";
+import { CASH_RECEIPT_COOKIE, encodeReceiptCookie } from "./receipt";
 
 export async function openCashRegisterAction(formData: FormData): Promise<void> {
   const context = await getAuthorizedContext();
@@ -116,7 +117,7 @@ export async function quotePaymentAction(input: {
   } catch { return { status: "unavailable" }; }
 }
 
-export async function collectPaymentAction(formData: FormData): Promise<{ status: string; value?: import("@super-restaurant/shared-types").PaymentCollectionSummaryV1 }> {
+export async function collectPaymentAction(formData: FormData): Promise<{ status: string }> {
   const context = await getAuthorizedContext();
   const cookieStore = await cookies();
   const registerId = readUuidCookie(cookieStore, CASH_REGISTER_COOKIE);
@@ -166,8 +167,11 @@ export async function collectPaymentAction(formData: FormData): Promise<{ status
   });
   if (result.status !== "ok") return { status: errorCode(result.status) };
   cookieStore.set(CASH_REGISTER_SESSION_COOKIE, cashRegisterSessionId, cookieOptions(context.cookiesSecure));
+  const receiptHref = buildReceiptHref(result.value.paymentId, result.value.orderId);
+  if (receiptHref === null) return { status: "unavailable" };
+  cookieStore.set(CASH_RECEIPT_COOKIE, encodeReceiptCookie(result.value, context.userId), { ...cookieOptions(context.cookiesSecure), maxAge: 3_600 });
   revalidatePath("/app/caja");
-  return { status: "ok", value: result.value };
+  redirect(receiptHref);
 }
 
 export async function closeCashRegisterAction(formData: FormData): Promise<void> {
@@ -212,6 +216,7 @@ interface AuthorizedFinancialContext {
   readonly accessToken: string;
   readonly apiBaseUrl: string;
   readonly cookiesSecure: boolean;
+  readonly userId: string;
   readonly scope: BranchScope;
 }
 
@@ -244,7 +249,7 @@ async function getAuthorizedContext(): Promise<AuthorizedFinancialContext> {
     || await authorizeBranch(session.access_token, env.apiBaseUrl, scope) === undefined) {
     redirect("/app?branchError=not_authorized");
   }
-  return { accessToken: session.access_token, apiBaseUrl: env.apiBaseUrl, cookiesSecure: env.cookiesSecure, scope };
+  return { accessToken: session.access_token, apiBaseUrl: env.apiBaseUrl, cookiesSecure: env.cookiesSecure, scope, userId: session.user.id };
 }
 
 function getOrCreateUuidCookie(store: Awaited<ReturnType<typeof cookies>>, name: string, secure: boolean): string {
