@@ -1177,7 +1177,6 @@ function priceSelectionPlan(
   catalog: MenuCatalogV1,
   restaurantId: string,
 ): CaptureSelectionPlanProjectionV1 {
-  if (plan.lines.some((line) => line.variantId !== null)) throw new CaptureApplicationError("conflict");
   const domainCatalog = toDomainMenuCatalog(catalog, restaurantId);
   let subtotalMinor = 0;
   let itemsTotalMinor = 0;
@@ -1186,7 +1185,7 @@ function priceSelectionPlan(
     let snapshot;
     try {
       snapshot = createMenuProductPriceSnapshot(domainCatalog, {
-        currency: catalog.currency, productId: line.productId, restaurantId,
+        currency: catalog.currency, productId: line.productId, restaurantId, variantId: line.variantId,
       }, line.modifierGroups);
     } catch { throw new CaptureApplicationError("conflict"); }
     const totals = calculateOrderItemTotals({

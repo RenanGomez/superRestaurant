@@ -32,6 +32,10 @@ import {
 import { createHash } from "node:crypto";
 import {
   addOrderItem,
+  canAddOrderItem,
+  InactiveMenuProductVariantError,
+  MenuProductVariantNotFoundError,
+  MenuProductVariantRequiredError,
   calculateOrderAggregateTotals,
   cancelOrderItem,
   createMenuProductPriceSnapshot,
@@ -339,11 +343,28 @@ export class OrderService {
     try {
       const snapshot = createMenuProductPriceSnapshot(
         toDomainMenuCatalog(catalog, command.scope.restaurantId),
-        { currency: stored.order.currency, productId: command.productId, restaurantId: command.scope.restaurantId },
+        {
+          currency: stored.order.currency,
+          productId: command.productId,
+          restaurantId: command.scope.restaurantId,
+          variantId: command.variantId ?? null,
+        },
         command.modifierGroups,
       );
-      mutation = addOrderItem(stored.order, { orderItemId: command.orderItemId, quantity: command.quantity, snapshot }, auditContext(command, actorId));
-    } catch {
+      mutation = addOrderItem(stored.order, {
+        orderItemId: command.orderItemId,
+        quantity: command.quantity,
+        snapshot,
+        ...(command.note === undefined || command.note === null ? {} : { note: command.note }),
+      }, auditContext(command, actorId));
+    } catch (error: unknown) {
+      // A size that does not exist, is inactive, is missing on a sized product or is sent for a plain
+      // product is a state conflict with the live catalog (409), not a malformed request.
+      if (
+        error instanceof MenuProductVariantRequiredError
+        || error instanceof MenuProductVariantNotFoundError
+        || error instanceof InactiveMenuProductVariantError
+      ) throw applicationError("conflict");
       throw applicationError("request");
     }
     return this.persist(actorId, command.expectedVersion, mutation);
@@ -689,6 +710,7 @@ function projectOrderDetail(
       quantity: item.quantity,
       status: item.status,
       unitPriceMinor: item.snapshot.unitPrice.amountMinor,
+      variantName: item.snapshot.variantName ?? null,
     };
   });
   // A cancelled aggregate is never payable: `calculateOrderAggregateTotals` folds in neither the
@@ -746,6 +768,10 @@ function computeAvailableActions(order: Order, roles: readonly MembershipRole[])
   const canUpdate = rolesGrantPermission(roles, "orders.update");
   const itemMutable = order.status !== "closed" && order.status !== "cancelled";
   const hasPendingItems = order.items.some((item) => item.status === "pending");
+  // Server-side mirror of `OrderService.addItem`: the domain's own rule for accepting a new line.
+  if (canUpdate && canAddOrderItem(order)) {
+    actions.push("addItem");
+  }
   // "sendToKitchen" already implies opening the account first when the order is still a draft (the
   // client sequences open then each item transition); the operator never sees "open" *and*
   // "sendToKitchen" together for the same pending lines. "open" survives on its own only for a

@@ -112,6 +112,9 @@ export interface PersistedOrderItemPriceSnapshotV1 {
   readonly unitPrice: PersistedMoneyV1;
   readonly modifiers: readonly PersistedModifierPriceSnapshotV1[];
   readonly tax?: PersistedTaxSnapshotV1;
+  /** Catalog size frozen with the line; absent for orders created before product variants. */
+  readonly variantId?: string;
+  readonly variantName?: string;
 }
 
 export interface PersistedOrderItemV1 {
@@ -413,11 +416,13 @@ function encodePriceSnapshot(snapshot: OrderItemPriceSnapshot): PersistedOrderIt
     unitPrice: encodeMoney(snapshot.unitPrice),
     modifiers: snapshot.modifiers.map(encodeModifier),
     ...(snapshot.tax === undefined ? {} : { tax: encodeTax(snapshot.tax) }),
+    ...(snapshot.variantId === undefined ? {} : { variantId: snapshot.variantId }),
+    ...(snapshot.variantName === undefined ? {} : { variantName: snapshot.variantName }),
   });
 }
 
 function decodePriceSnapshot(value: unknown): OrderItemPriceSnapshot {
-  const record = exactRecord(value, ["catalogVersion", "productId", "name", "stationId", "unit", "unitPrice", "modifiers"], ["sku", "tax"], "price snapshot");
+  const record = exactRecord(value, ["catalogVersion", "productId", "name", "stationId", "unit", "unitPrice", "modifiers"], ["sku", "tax", "variantId", "variantName"], "price snapshot");
   return deepFreeze({
     catalogVersion: text(data(record, "catalogVersion"), "catalogVersion"),
     productId: text(data(record, "productId"), "productId"),
@@ -428,6 +433,8 @@ function decodePriceSnapshot(value: unknown): OrderItemPriceSnapshot {
     unitPrice: decodeMoney(data(record, "unitPrice"), "unit price"),
     modifiers: dataArray(data(record, "modifiers"), "modifiers").map(decodeModifier),
     ...(optionalData(record, "tax") === undefined ? {} : { tax: decodeTax(optionalData(record, "tax")) }),
+    ...(optionalData(record, "variantId") === undefined ? {} : { variantId: text(optionalData(record, "variantId"), "variantId") }),
+    ...(optionalData(record, "variantName") === undefined ? {} : { variantName: text(optionalData(record, "variantName"), "variantName") }),
   });
 }
 

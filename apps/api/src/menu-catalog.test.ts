@@ -225,3 +225,50 @@ async function assertCode(promise: Promise<unknown>, code: MenuCatalogApplicatio
     (error: unknown) => error instanceof MenuCatalogApplicationError && error.code === code,
   );
 }
+
+const sizedProducts = [{
+  ...command.products[0]!,
+  variants: [
+    { variantId: "6a1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8", name: "Chica", sku: null, unitPriceMinor: 9_000, active: true, displayOrder: 0 },
+    { variantId: "7b2e3d4f-5061-4b72-9c83-a4b5c6d7e8f9", name: "Grande", sku: "HAM-G", unitPriceMinor: 15_000, active: true, displayOrder: 1 },
+  ],
+}];
+
+test("menu catalog carries product variants through the PostgreSQL adapter's real { status, state } row", async () => {
+  const sized = parseSaveMenuCatalogCommandV1({ ...command, products: sizedProducts });
+  if (sized === undefined) throw new Error("TEST_SIZED_COMMAND_INVALID");
+  assert.equal(sized.products[0]?.variants?.length, 2);
+  const sizedState = stateFor(sized, false);
+  let payload: unknown;
+  const database: DatabaseClientPort = {
+    query: async (_sql, parameters) => {
+      payload = JSON.parse(String(parameters[10]));
+      return { rows: [{ status: "saved", state: sizedState }] };
+    },
+  };
+  const result = await new PostgresMenuCatalogAdapter(database).save(principal.actorId, sized);
+  assert.equal(result.status, "saved");
+  const products = (payload as { products: { variants: { name: string; unitPriceMinor: number }[] }[] }).products;
+  assert.deepEqual(products[0]?.variants.map(({ name, unitPriceMinor }) => [name, unitPriceMinor]), [["Chica", 9_000], ["Grande", 15_000]]);
+  assert.equal(sizedState.catalog?.products[0]?.variants?.[1]?.sku, "HAM-G");
+  // A row whose variants differ from the command is ambiguous and fails closed.
+  const tampered = stateFor(parseSaveMenuCatalogCommandV1({
+    ...command,
+    products: [{ ...sizedProducts[0]!, variants: [{ ...sizedProducts[0]!.variants[0]!, unitPriceMinor: 1 }] }],
+  })!, false);
+  const mismatching: DatabaseClientPort = { query: async () => ({ rows: [{ status: "saved", state: tampered }] }) };
+  await assert.rejects(new PostgresMenuCatalogAdapter(mismatching).save(principal.actorId, sized));
+});
+
+test("menu publication rejects duplicate size names and negative size prices before reaching SQL", async () => {
+  let saved = 0;
+  const port: MenuCatalogPort = { read: async () => "forbidden", save: async () => { saved += 1; return { status: "conflict" }; } };
+  const service = serviceFor(["manager"], port);
+  const dup = { ...command, products: [{ ...sizedProducts[0]!, variants: [
+    sizedProducts[0]!.variants[0]!, { ...sizedProducts[0]!.variants[1]!, name: "chica" },
+  ] }] };
+  await assert.rejects(service.save(principal, dup), (error: unknown) => error instanceof MenuCatalogApplicationError && error.code === "request");
+  const negative = { ...command, products: [{ ...sizedProducts[0]!, variants: [{ ...sizedProducts[0]!.variants[0]!, unitPriceMinor: -1 }] }] };
+  await assert.rejects(service.save(principal, negative), (error: unknown) => error instanceof MenuCatalogApplicationError && error.code === "request");
+  assert.equal(saved, 0);
+});
