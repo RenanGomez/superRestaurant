@@ -30,13 +30,14 @@ const LIMIT = 25;
 interface Props {
   readonly scope: BranchScope;
   readonly initialOrderId: string | undefined;
+  readonly autoOpenMenu: boolean;
   readonly action: (input: unknown) => Promise<BranchOrderTrayRequestResult>;
   /** Server-computed from the actor's own membership roles; the client never decides this. */
   readonly canCheckout: boolean;
   readonly detailActions: OrderDetailActions;
 }
 
-export function OrdersTray({ scope, action, canCheckout, detailActions, initialOrderId }: Props) {
+export function OrdersTray({ scope, action, canCheckout, detailActions, initialOrderId, autoOpenMenu }: Props) {
   const [items, setItems] = useState<readonly BranchOrderWorkItemV1[]>([]);
   const [nextCursor, setNextCursor] = useState<BranchOrderWorkTrayV1["nextCursor"]>(null);
   const [filter, setFilter] = useState<BranchOrderWorkFilter>("all");
@@ -107,6 +108,7 @@ export function OrdersTray({ scope, action, canCheckout, detailActions, initialO
     </div>}
     {openOrderId !== undefined && <OrderDetailPanel
       orderId={openOrderId}
+      autoOpenMenu={autoOpenMenu && openOrderId === initialOrderId}
       actions={detailActions}
       canCheckout={canCheckout}
       onClose={() => setOpenOrderId(undefined)}

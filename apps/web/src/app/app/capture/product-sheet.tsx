@@ -17,6 +17,11 @@ interface ProductSheetProps {
   readonly groups: readonly MenuModifierGroupV1[];
   readonly currency: string;
   readonly busy: boolean;
+  readonly showNote?: boolean;
+  readonly busyLabel?: string;
+  readonly addLabel?: string;
+  readonly lockSelection?: boolean;
+  readonly closeDisabled?: boolean;
   /** `undefined` while nothing was just confirmed; `null` once added if no matching server line
    * was found; a minor-unit amount taken directly from the server's `selectionProjection` line. */
   readonly confirmedTotalMinor?: number | null | undefined;
@@ -29,7 +34,7 @@ interface ProductSheetProps {
 const MAX_NOTE_LENGTH = 200;
 
 /** In-app "hoja" for choosing a product's modifier groups; never uses `window.prompt`. */
-export function ProductSheet({ product, groups, currency, busy, confirmedTotalMinor, initialLine, error, onClose, onAdd }: ProductSheetProps) {
+export function ProductSheet({ product, groups, currency, busy, busyLabel = "Calculando…", addLabel, lockSelection = false, closeDisabled = false, showNote = true, confirmedTotalMinor, initialLine, error, onClose, onAdd }: ProductSheetProps) {
   const supabaseUrl = useMenuImageBaseUrl();
   const confirmed = confirmedTotalMinor !== undefined;
   const [quantity, setQuantity] = useState(initialLine?.quantity ?? 1);
@@ -78,7 +83,7 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
       <header className="flex items-center gap-2 border-b border-border p-4">
         <h2 id="product-sheet-title" className="font-heading text-lg font-semibold">{product.name}</h2>
         <span className="grow" />
-        <button ref={closeRef} type="button" className={`${button}`} aria-label="Cerrar (Esc)" onClick={onClose}>✕</button>
+        <button ref={closeRef} type="button" className={`${button}`} aria-label="Cerrar (Esc)" disabled={closeDisabled} onClick={onClose}>✕</button>
       </header>
       <div className="grid flex-1 gap-4 overflow-auto p-4">
         {groups.map((group) => <fieldset key={group.groupId} className="grid gap-2">
@@ -102,16 +107,16 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
                 <div className="flex min-h-11 flex-wrap items-center justify-between gap-1">{label}</div>
                 <div className="flex items-center justify-between gap-2">
                   <button type="button" className={button} aria-label={`Quitar una unidad de ${option.name}`}
-                    disabled={!option.active || confirmed || selectedCount === 0}
+                    disabled={!option.active || confirmed || lockSelection || selectedCount === 0}
                     onClick={() => changeOption(group, option.optionId, option.maximumQuantity, -1)}>−</button>
                   <span className="min-w-6 text-center font-semibold" aria-label={`${selectedCount} unidades de ${option.name}`}>{selectedCount}</span>
                   <button type="button" className={button} aria-label={`Agregar una unidad de ${option.name}`}
-                    disabled={!option.active || confirmed || chosen.length >= group.maximumQuantity
+                    disabled={!option.active || confirmed || lockSelection || chosen.length >= group.maximumQuantity
                       || (option.maximumQuantity !== null && selectedCount >= option.maximumQuantity)}
                     onClick={() => changeOption(group, option.optionId, option.maximumQuantity, 1)}>+</button>
                 </div>
               </div> : <button key={option.optionId} type="button"
-                disabled={!option.active || confirmed || (group.maximumQuantity > 1 && selectedCount === 0 && chosen.length >= group.maximumQuantity)}
+                disabled={!option.active || confirmed || lockSelection || (group.maximumQuantity > 1 && selectedCount === 0 && chosen.length >= group.maximumQuantity)}
                 className={`${optionButton} ${selectedCount > 0 ? optionSelected : ""} ${!option.active ? "opacity-50" : ""}`}
                 aria-pressed={selectedCount > 0} onClick={() => changeOption(group, option.optionId, option.maximumQuantity, 1)}>
                 {label}
@@ -119,13 +124,13 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
             })}
           </div>
         </fieldset>)}
-        <div className="grid gap-1">
+        {showNote && <div className="grid gap-1">
           <label htmlFor="product-sheet-note" className="text-sm font-semibold">Nota para cocina</label>
           <textarea id="product-sheet-note" className="min-h-11 rounded-lg border border-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
             rows={2} maxLength={MAX_NOTE_LENGTH} disabled={confirmed} placeholder="Ej. sin cebolla, bien cocida"
             value={note} onChange={(event) => setNote(event.target.value.slice(0, MAX_NOTE_LENGTH))} />
           <span className="text-xs text-text-muted">{note.length}/{MAX_NOTE_LENGTH}</span>
-        </div>
+        </div>}
       </div>
       <p className="px-4 py-2 text-sm font-semibold" role="status">
         Estimado: {estimatedMinor === null ? "se confirma al agregar" : formatMinorUnits(estimatedMinor, currency)}
@@ -136,17 +141,17 @@ export function ProductSheet({ product, groups, currency, busy, confirmedTotalMi
       </p>}
       <footer className="flex flex-wrap items-center gap-3 border-t border-border p-4">
         <div className="flex items-center gap-2">
-          <button type="button" className={`${button} text-xl`} aria-label="Menos" disabled={busy || confirmed || quantity <= 1}
+          <button type="button" className={`${button} text-xl`} aria-label="Menos" disabled={busy || confirmed || lockSelection || quantity <= 1}
             onClick={() => setQuantity((current) => Math.max(1, current - 1))}>−</button>
           <span className="min-w-9 text-center text-lg font-bold">{quantity}</span>
-          <button type="button" className={`${button} text-xl`} aria-label="Más" disabled={busy || confirmed}
+          <button type="button" className={`${button} text-xl`} aria-label="Más" disabled={busy || confirmed || lockSelection}
             onClick={() => setQuantity((current) => current + 1)}>+</button>
         </div>
         <span className="grow" />
         <button type="button" className="min-h-11 min-w-11 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50" disabled={busy || confirmed || !allValid}
           onClick={() => onAdd(quantity, groupDrafts, note.trim().length === 0 ? null : note.trim())}>
-          {busy ? "Calculando…" : confirmed ? (confirmedTotalMinor === null ? "Agregado" : `Agregado · ${formatMinorUnits(confirmedTotalMinor, currency)}`)
-            : !allValid ? "Completa lo obligatorio" : initialLine ? "Guardar cambios" : "Agregar"}
+          {busy ? busyLabel : confirmed ? (confirmedTotalMinor === null ? "Agregado" : `Agregado · ${formatMinorUnits(confirmedTotalMinor, currency)}`)
+            : !allValid ? "Completa lo obligatorio" : addLabel ?? (initialLine ? "Guardar cambios" : "Agregar")}
         </button>
       </footer>
     </div>

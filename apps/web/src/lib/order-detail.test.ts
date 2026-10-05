@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseBranchScope, type OrderDetailItemV1, type OrderDetailV1 } from "@super-restaurant/shared-types";
+import { parseAddOrderItemCommandV1, parseBranchScope, type OrderDetailItemV1, type OrderDetailV1 } from "@super-restaurant/shared-types";
 import {
   actionLabel,
+  buildAddOrderItemCommand,
+  canAddItems,
   chunkOrderItemIds,
   groupItemsByStatus,
   hasAction,
@@ -53,6 +55,35 @@ test("hasAction only trusts the server's own availableActions list", () => {
   assert.equal(hasAction(value, "markReady"), true);
   assert.equal(hasAction(value, "open"), false);
   assert.equal(hasAction(value, "checkout"), false);
+});
+
+test("canAddItems gates editable orders by a server-provided action", () => {
+  for (const status of ["draft", "open", "partially_paid"] as const) {
+    assert.equal(canAddItems(detail({ status, availableActions: ["open"] })), true);
+    assert.equal(canAddItems(detail({ status, availableActions: ["markReady"] })), true);
+    assert.equal(canAddItems(detail({ status, availableActions: [] })), false);
+  }
+  for (const status of ["paid", "closed", "cancelled"] as const) {
+    assert.equal(canAddItems(detail({ status, availableActions: ["sendToKitchen"] })), false);
+  }
+});
+
+test("buildAddOrderItemCommand carries the exact attempt and counted modifier selection", () => {
+  const command = buildAddOrderItemCommand({
+    scope, orderId: detail().orderId, expectedVersion: 4,
+    orderItemId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02", productId: "23723e10-c0bf-49fd-9363-4f0e2c60e955",
+    quantity: 2, modifierGroups: [{ groupId: "1e37ae13-8507-484c-969f-2176f77b7000",
+      selections: [{ optionId: "23723e10-c0bf-49fd-9363-4f0e2c60e955", quantity: 2 }] }],
+    eventId: "1e37ae13-8507-484c-969f-2176f77b7000", idempotencyKey: "attempt-1",
+    occurredAt: "2026-10-04T00:00:00.000Z", deviceId: "23723e10-c0bf-49fd-9363-4f0e2c60e955",
+  });
+  assert.equal(command.expectedVersion, 4);
+  assert.equal(command.quantity, 2);
+  assert.deepEqual(command.modifierGroups[0]?.selections, [{ optionId: "23723e10-c0bf-49fd-9363-4f0e2c60e955", quantity: 2 }]);
+  assert.equal(command.idempotencyKey, "attempt-1");
+  assert.deepEqual(parseAddOrderItemCommandV1(command), command);
+  assert.equal("note" in command, false);
+  assert.equal("variantId" in command, false);
 });
 
 test("hasItemAction gates per-line actions from the line's own list, never the order-level one", () => {
