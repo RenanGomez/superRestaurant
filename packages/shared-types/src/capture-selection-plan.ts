@@ -1,9 +1,9 @@
 import type { BranchScope } from "./index.js";
 import {
   parseLineFractionV1,
-  parseOrderDetailFractionHalfV1,
+  parseFractionHalfProjectionV1,
   type LineFractionV1,
-  type OrderDetailFractionHalfV1,
+  type FractionHalfProjectionV1,
 } from "./line-fraction.js";
 import {
   COMMERCIAL_CAPTURE_V4_SCHEMA_VERSION,
@@ -91,7 +91,7 @@ export interface CaptureSelectionPlanProjectionLineV1 {
   readonly note: string | null;
   readonly modifiers: readonly CaptureSelectionPlanProjectionModifierV1[];
   /** Half-and-half line only: the two priced halves (flavor, extras, exclusions); absent for whole lines. */
-  readonly halves?: readonly OrderDetailFractionHalfV1[];
+  readonly halves?: readonly FractionHalfProjectionV1[];
 }
 
 /**
@@ -319,7 +319,7 @@ function parseProjectionLine(value: unknown): CaptureSelectionPlanProjectionLine
   const record = exactRecord(value, projectionKeys) ?? exactRecord(value, [...projectionKeys, "halves"]);
   if (record === undefined) return undefined;
   const rawHalves = Object.hasOwn(record, "halves") ? exactArray(own(record, "halves"), 2) : undefined;
-  const halves = rawHalves?.map(parseOrderDetailFractionHalfV1);
+  const halves = rawHalves?.map(parseFractionHalfProjectionV1);
   if (Object.hasOwn(record, "halves") && (halves === undefined || halves.length !== 2 || halves.some((half) => half === undefined))) {
     return undefined;
   }
@@ -344,7 +344,7 @@ function parseProjectionLine(value: unknown): CaptureSelectionPlanProjectionLine
     modifiers.push(modifier);
   }
   return deepFreeze({
-    ...(halves === undefined ? {} : { halves: halves as OrderDetailFractionHalfV1[] }),
+    ...(halves === undefined ? {} : { halves: halves as FractionHalfProjectionV1[] }),
     lineId, lineTotalMinor, modifiers, note, productId, productName, quantity, unitPriceMinor, variantId,
   });
 }

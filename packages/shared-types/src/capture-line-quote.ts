@@ -1,5 +1,5 @@
 import type { BranchScope } from "./index.js";
-import { type LineFractionV1, type OrderDetailFractionHalfV1, parseOrderDetailFractionHalfV1 } from "./line-fraction.js";
+import { type LineFractionV1, type FractionHalfProjectionV1, parseFractionHalfProjectionV1 } from "./line-fraction.js";
 import {
   CAPTURE_SELECTION_LINE_MAX_QUANTITY,
   parseCaptureSelectionPlanV1,
@@ -50,7 +50,7 @@ export interface CaptureLineQuoteResultV1 {
   readonly modifiers: readonly CaptureLineQuoteModifierV1[];
   readonly geometry: "whole" | "halves";
   /** Two priced halves for a half-and-half line; empty for a whole line. */
-  readonly fractionBreakdown: readonly OrderDetailFractionHalfV1[];
+  readonly fractionBreakdown: readonly FractionHalfProjectionV1[];
 }
 
 export function parseCaptureLineQuoteRequestV1(value: unknown): CaptureLineQuoteRequestV1 | undefined {
@@ -131,13 +131,13 @@ export function parseCaptureLineQuoteResultV1(value: unknown): CaptureLineQuoteR
       || name.length > 200 || modifierQuantity === undefined || modifierPrice === undefined) return undefined;
     modifiers.push({ groupId, name, optionId, quantity: modifierQuantity, unitPriceMinor: modifierPrice });
   }
-  const halves = rawHalves.map(parseOrderDetailFractionHalfV1);
+  const halves = rawHalves.map(parseFractionHalfProjectionV1);
   if (halves.some((half) => half === undefined)
     || (geometry === "halves" ? halves.length !== 2 : halves.length !== 0)) return undefined;
   return deepFreeze({
     catalogVersion,
     currency,
-    fractionBreakdown: halves as OrderDetailFractionHalfV1[],
+    fractionBreakdown: halves as FractionHalfProjectionV1[],
     geometry,
     lineTotalMinor,
     modifiers,
