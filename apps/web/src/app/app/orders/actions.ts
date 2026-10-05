@@ -1,11 +1,12 @@
 "use server";
 
 import { cookies } from "next/headers";
-import { parseBranchOrderWorkTrayRequestV1, type BranchScope } from "@super-restaurant/shared-types";
+import { parseAddOrderItemCommandV1, parseBranchOrderWorkTrayRequestV1, type BranchScope, type MenuCatalogStateV1 } from "@super-restaurant/shared-types";
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
 import { requestBranchOrderWorkTray, type BranchOrderTrayRequestResult } from "../../../lib/branch-order-work-tray";
 import { BRANCH_PREFERENCE_COOKIE, parseBranchPreference } from "../../../lib/memberships";
+import { getMenuCatalog } from "../../../lib/menu-catalog";
 import {
   parseAttemptIds,
   parseOccurredAt,
@@ -37,6 +38,23 @@ export async function orderDetailAction(orderId: string): Promise<OrderDetailReq
   if (context === undefined) return { error: "denied", ok: false };
   if (!isUuid(orderId)) return { error: "invalid", ok: false };
   return requestOrderDetail(context.accessToken, context.apiBaseUrl, context.scope, orderId);
+}
+
+export async function orderMenuCatalogAction(): Promise<MenuCatalogStateV1 | undefined> {
+  const context = await authorizedOrderContext();
+  if (context === undefined) return undefined;
+  return getMenuCatalog(context.accessToken, context.apiBaseUrl, context.scope);
+}
+
+export async function addOrderItemAction(input: unknown): Promise<OrderMutationRequestResult> {
+  const command = parseAddOrderItemCommandV1(input);
+  if (command === undefined) return { error: "invalid", ok: false };
+  const context = await authorizedOrderContext();
+  if (context === undefined) return { error: "denied", ok: false };
+  if (command.scope.restaurantId !== context.scope.restaurantId || command.scope.branchId !== context.scope.branchId) {
+    return { error: "denied", ok: false };
+  }
+  return postOrderMutation(context.accessToken, context.apiBaseUrl, "orders/items", command);
 }
 
 /**

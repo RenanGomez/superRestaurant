@@ -12,7 +12,7 @@ import {
   type SelectionPlanLineDraft,
 } from "./capture-selection.js";
 import type { MenuCatalogV1, MenuModifierGroupV1 } from "@super-restaurant/shared-types";
-import { menuProductPriceLabel, variantValidationError } from "./menu-variants.js";
+import { menuProductPriceLabel, variantNameFor, variantValidationError } from "./menu-variants.js";
 
 const catalogVersion = "11111111-1111-4111-8111-111111111111";
 const productA = "22222222-2222-4222-8222-222222222222";
@@ -33,13 +33,19 @@ test("sizes validate names and count, and the card shows the lowest active price
       { variantId: variantA, name: "Chica", active: true, displayOrder: 0, unitPriceMinor: 12_000, sku: null },
       { variantId: variantB, name: "Grande", active: true, displayOrder: 1, unitPriceMinor: 20_000, sku: null },
     ] };
-  assert.equal(variantValidationError(product.variants), null);
+  assert.equal(variantValidationError(productA, product.variants), null);
+  assert.equal(variantNameFor({ products: [product] }, productA, variantB), "Grande");
+  assert.equal(variantNameFor({ products: [product] }, productA, lineId3), "Tamaño seleccionado");
+  assert.equal(variantNameFor({ products: [product] }, productA, null), null);
+  assert.equal(variantNameFor(null, productA, variantA), "Tamaño seleccionado");
   const formatPrice = (minor: number) => `$${(minor / 100).toFixed(2)}`;
   assert.equal(menuProductPriceLabel(product, formatPrice), "desde $120.00");
   assert.equal(menuProductPriceLabel({ ...product, variants: product.variants.map((v) => ({ ...v, active: false })) }, formatPrice), "$100.00");
-  assert.match(variantValidationError([...product.variants, { ...product.variants[0]!, variantId: lineId3, name: "chica" }]) ?? "", /distinto/);
-  assert.match(variantValidationError([{ ...product.variants[0]!, name: " " }]) ?? "", /nombre/);
-  assert.match(variantValidationError(Array.from({ length: 13 }, (_, index) => ({ ...product.variants[0]!, variantId: String(index), name: String(index) }))) ?? "", /12/);
+  const repeated = variantValidationError(productA, [...product.variants, { ...product.variants[0]!, variantId: lineId3, name: "chica" }]);
+  assert.equal(repeated?.productId, productA);
+  assert.match(repeated?.message ?? "", /distinto/);
+  assert.match(variantValidationError(productA, [{ ...product.variants[0]!, name: " " }])?.message ?? "", /nombre/);
+  assert.match(variantValidationError(productA, Array.from({ length: 13 }, (_, index) => ({ ...product.variants[0]!, variantId: String(index), name: String(index) })))?.message ?? "", /12/);
   assert.equal(estimateSelectionMinor(product, [], {}, 2, variantB), 40_000);
   assert.equal(estimateSelectionMinor(product, [], {}, 1, null), null);
   assert.equal(estimateSelectionMinor(product, [], {}, 1, "missing"), null);

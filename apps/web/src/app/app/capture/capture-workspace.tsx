@@ -442,9 +442,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   async function addFromSheet(
     quantity: number,
-    variantId: string | null,
     modifierGroups: readonly SelectionPlanModifierGroupDraft[],
     note: string | null,
+    variantId: string | null,
   ): Promise<void> {
     if (sheetProduct === undefined) return;
     const productId = sheetProduct.productId;
@@ -1105,9 +1105,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       </div>}
       {sheetProduct !== undefined && <ProductSheet key={`${sheetProduct.productId}:${sheetEditLine?.lineId ?? "new"}`} product={sheetProduct} groups={sheetGroups}
         currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy} confirmedTotalMinor={sheetConfirmedTotalMinor}
-        initialLine={sheetEditLine} error={sheetError}
+        initialLine={sheetEditLine} error={sheetError} showVariants
         onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); setSheetEditLine(undefined); setSheetError(undefined); }}
-        onAdd={(quantity, variantId, modifierGroups, note) => void addFromSheet(quantity, variantId, modifierGroups, note)} />}
+        onAdd={(quantity, modifierGroups, note, variantId) => void addFromSheet(quantity, modifierGroups, note, variantId)} />}
       {customer !== undefined && capture.customerSnapshotRef !== null && <section className={panel}><h2 className="font-heading text-lg font-semibold">3. Entrega · dirección validada</h2>
         <div className="mt-3 grid gap-2">{customer.addresses.map((item) => <button key={item.addressId} className={`${button} text-left`}
           disabled={locked || !item.validatedForRequestedBranch} onClick={() => selectAddress(item.addressId, item.version)}><strong className="block">{item.address.label}</strong>

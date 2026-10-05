@@ -9,6 +9,7 @@ import {
   type TenancyFixtureRecoveryDatabasePort,
   validateTenancyFixtureRecoverySnapshot,
 } from "./tenancy-fixture-recovery.js";
+import { DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters } from "./menu-variant-cleanup.js";
 import { TenancyFixtureRecoveryError } from "./tenancy-fixture-recovery-config.js";
 
 const runId = "11111111-1111-4111-8111-111111111111";
@@ -504,3 +505,15 @@ function required<T>(value: T | undefined): T {
   if (value === undefined) throw new Error("TEST_FIXTURE_MISSING");
   return value;
 }
+
+test("menu variant cleanup is bound to restaurant, release and product ids together", () => {
+  for (const predicate of [
+    "restaurant_id = any($1::uuid[])",
+    "catalog_id = any($2::uuid[])",
+    "product_id = any($3::uuid[])",
+  ]) {
+    assert.ok(DELETE_MENU_PRODUCT_VARIANTS_SQL.includes(predicate), predicate);
+  }
+  assert.match(DELETE_MENU_PRODUCT_VARIANTS_SQL, /^delete from app\.menu_product_variants where .* and .* and /u);
+  assert.deepEqual(menuProductVariantDeleteParameters(["r"], ["c"], ["p"]), [["r"], ["c"], ["p"]]);
+});

@@ -53,7 +53,8 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
     })) ?? [],
   );
   const [removal, setRemoval] = useState<Removal | null>(null);
-  const variantError = products.map((product) => variantValidationError(product.variants ?? [])).find((error) => error !== null) ?? null;
+  const variantIssue = products.map((product) => variantValidationError(product.productId, product.variants ?? [])).find((issue) => issue !== null) ?? null;
+  const variantError = variantIssue === null ? null : `${products.find((product) => product.productId === variantIssue.productId)?.name || "Producto sin nombre"}: ${variantIssue.message}`;
   const [pendingUploads, setPendingUploads] = useState(0);
   const onUploadPendingChange = (pending: boolean): void => setPendingUploads((current) => current + (pending ? 1 : -1));
   const expectedVersion = state.catalog?.version ?? 0;
@@ -193,7 +194,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
         {products.length === 0 ? <EmptyText text="No hay productos en este borrador." /> : (
           <div className="mt-4 flex flex-col gap-4">
             {products.map((product) => (
-              <ProductEditor
+              <ProductEditor variantInvalid={variantIssue?.productId === product.productId}
                 key={product.productId}
                 canManage={canManage}
                 categories={categories}
@@ -227,7 +228,8 @@ function PublishButton({ pendingUploads, variantError }: { readonly pendingUploa
   </button>;
 }
 
-function ProductEditor({ canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+function ProductEditor({ variantInvalid, canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+  readonly variantInvalid: boolean;
   readonly canManage: boolean;
   readonly categories: readonly MenuCategoryV1[];
   readonly currency: string;
@@ -281,7 +283,7 @@ function ProductEditor({ canManage, categories, currency, groups, product, supab
         {variants.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin tamaños; se usa el precio del producto.</p> :
           <div className="mt-3 grid gap-3">{variants.map((variant) => <div key={variant.variantId}
             className="grid min-w-0 gap-3 rounded-lg border border-border bg-bg/50 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_100px_auto]">
-            <TextInput disabled={!canManage} label="Nombre del tamaño" maxLength={80} value={variant.name}
+            <TextInput disabled={!canManage} invalid={variantInvalid} label="Nombre del tamaño" maxLength={80} value={variant.name}
               onChange={(name) => changeVariant(variant.variantId, { name })} />
             <MoneyInput key={variant.variantId} label="Precio del tamaño" disabled={!canManage} currency={currency}
               value={variant.unitPriceMinor} onChange={(unitPriceMinor) => changeVariant(variant.variantId, { unitPriceMinor })} />
@@ -456,8 +458,8 @@ function SectionHeader({ children, description, title }: { readonly children?: R
   return <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-heading text-[16px] font-semibold">{title}</h2><p className="mt-1 text-[12px] text-text-muted">{description}</p></div>{children}</div>;
 }
 
-function TextInput({ disabled, help, label, maxLength, onChange, required = true, value, width = "w-full" }: { readonly disabled: boolean; readonly help?: string; readonly label: string; readonly maxLength: number; readonly onChange: (value: string) => void; readonly required?: boolean; readonly value: string; readonly width?: string }): ReactNode {
-  return <label className={`flex min-w-0 flex-col gap-1 text-[11px] font-medium ${width}`}>{label}<input required={required} disabled={disabled} maxLength={maxLength} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" />{help && <span className="text-[11px] font-normal text-text-muted">{help}</span>}</label>;
+function TextInput({ disabled, help, invalid = false, label, maxLength, onChange, required = true, value, width = "w-full" }: { readonly disabled: boolean; readonly help?: string; readonly invalid?: boolean; readonly label: string; readonly maxLength: number; readonly onChange: (value: string) => void; readonly required?: boolean; readonly value: string; readonly width?: string }): ReactNode {
+  return <label className={`flex min-w-0 flex-col gap-1 text-[11px] font-medium ${width}`}>{label}<input required={required} aria-invalid={invalid || undefined} disabled={disabled} maxLength={maxLength} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" />{help && <span className="text-[11px] font-normal text-text-muted">{help}</span>}</label>;
 }
 
 function MoneyInput({ currency, disabled, label = "Precio", onChange, value }: {

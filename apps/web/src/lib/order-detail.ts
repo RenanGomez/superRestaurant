@@ -3,10 +3,12 @@ import {
   parseOrderDetailV1,
   parseOrderMutationSummaryV1,
   type BranchScope,
+  type AddOrderItemCommandV1,
   type OrderDetailActionV1,
   type OrderDetailItemV1,
   type OrderDetailV1,
 } from "@super-restaurant/shared-types";
+import type { SelectionPlanModifierGroupDraft } from "./capture-selection.js";
 
 export type OrderDetailRequestResult =
   | { readonly ok: true; readonly value: OrderDetailV1 }
@@ -104,8 +106,8 @@ export type OrderMutationRequestResult =
 export async function postOrderMutation(
   token: string,
   baseUrl: string,
-  path: "orders/open" | "orders/send-to-kitchen" | "orders/items/transition" | "orders/items/cancel",
-  body: Readonly<Record<string, unknown>>,
+  path: "orders/open" | "orders/items" | "orders/send-to-kitchen" | "orders/items/transition" | "orders/items/cancel",
+  body: Readonly<object>,
 ): Promise<OrderMutationRequestResult> {
   try {
     const response = await fetch(`${baseUrl}/api/v1/${path}`, {
@@ -146,6 +148,50 @@ export function actionLabel(action: OrderDetailActionV1): string {
 
 export function hasAction(detail: OrderDetailV1, action: OrderDetailActionV1): boolean {
   return detail.availableActions.includes(action);
+}
+
+export function canAddItems(detail: OrderDetailV1): boolean {
+  return hasAction(detail, "addItem");
+}
+
+/** A read, not a mutation response, settles an uncertain add. */
+export function resolvePendingAdd(
+  detail: OrderDetailV1 | undefined,
+  attempt: AddOrderItemCommandV1,
+): "confirming" | "applied" | "retry" {
+  if (detail === undefined || detail.orderId !== attempt.orderId
+    || detail.scope.restaurantId !== attempt.scope.restaurantId || detail.scope.branchId !== attempt.scope.branchId) {
+    return "confirming";
+  }
+  return detail.items.some((item) => item.orderItemId === attempt.orderItemId) ? "applied" : "retry";
+}
+
+/** Single construction point for the server's add-item contract. */
+export function buildAddOrderItemCommand(input: {
+  readonly scope: BranchScope;
+  readonly orderId: string;
+  readonly expectedVersion: number;
+  readonly orderItemId: string;
+  readonly productId: string;
+  readonly quantity: number;
+  readonly note: string | null;
+  readonly variantId: string | null;
+  readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[];
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly occurredAt: string;
+  readonly deviceId: string;
+}): AddOrderItemCommandV1 {
+  return {
+    schemaVersion: 1, scope: input.scope, orderId: input.orderId,
+    expectedVersion: input.expectedVersion, orderItemId: input.orderItemId,
+    productId: input.productId, quantity: input.quantity,
+    note: input.note, variantId: input.variantId,
+    modifierGroups: input.modifierGroups.map((group) => ({ groupId: group.groupId,
+      selections: group.selections.map((selection) => ({ optionId: selection.optionId, quantity: selection.quantity })) })),
+    eventId: input.eventId, idempotencyKey: input.idempotencyKey,
+    occurredAt: input.occurredAt, deviceId: input.deviceId,
+  };
 }
 
 /** Per-line gate: `cancelItem`/`markReady`/`markDelivered` only ever come from the line's own
