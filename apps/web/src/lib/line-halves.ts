@@ -1,10 +1,13 @@
 import type {
+  CaptureSelectionPlanProjectionLineV1,
   LineFractionHalfV1,
   LineFractionV1,
+  MenuCatalogV1,
   MenuModifierGroupV1,
   MenuVariantFractionV1,
   OrderDetailFractionHalfV1,
 } from "@super-restaurant/shared-types";
+import type { SelectionPlanLineDraft } from "./capture-selection.js";
 
 /** What the operator has chosen for one half while arming a "mitad y mitad" line. */
 export interface HalfDraft {
@@ -122,33 +125,87 @@ export function halvesDraftFromFraction(fraction: LineFractionV1 | undefined): H
   return { a: half("half-a"), b: half("half-b") };
 }
 
+export type RestoreFractionResult =
+  | { readonly ok: true; readonly fraction: LineFractionV1 }
+  | { readonly ok: false; readonly reason: "missing-halves" | "no-setup" | "flavor" | "extra" };
+
+/** The single active option with this exact name; `undefined` when absent or ambiguous. */
+function uniqueActiveByName(group: MenuModifierGroupV1 | undefined, name: string): string | undefined {
+  const matches = (group?.options ?? []).filter((option) => option.active && option.name === name);
+  return matches.length === 1 ? matches[0]?.optionId : undefined;
+}
+
 /**
  * The saved selection projection only names the flavors and extras, so re-sending the plan (to
- * change a quantity or edit another line) needs their ids back. Resolves them by name inside the
- * size's own flavor and extra groups; `undefined` when the catalog no longer matches.
+ * change a quantity or edit another line) needs their ids back. Resolves them by unique name among
+ * the active options of the size's own flavor and extra groups. Any miss or ambiguity is an error:
+ * the caller must not send the line as a whole one.
  */
 export function restoreLineFraction(
   halves: readonly OrderDetailFractionHalfV1[] | undefined,
   setup: MenuVariantFractionV1 | null | undefined,
   groups: readonly MenuModifierGroupV1[],
-): LineFractionV1 | undefined {
-  if (halves === undefined || halves.length !== 2 || setup === null || setup === undefined) return undefined;
+): RestoreFractionResult {
+  if (halves === undefined || halves.length !== 2) return { ok: false, reason: "missing-halves" };
+  if (setup === null || setup === undefined) return { ok: false, reason: "no-setup" };
   const flavorGroup = groups.find((group) => group.groupId === setup.flavorGroupId);
   const extraGroup = groups.find((group) => group.groupId === setup.extraGroupId);
-  const slots = (["half-a", "half-b"] as const).map((fractionName) => {
+  const slots: LineFractionV1["slots"][number][] = [];
+  for (const fractionName of ["half-a", "half-b"] as const) {
     const half = halves.find((candidate) => candidate.fraction === fractionName);
-    const flavor = flavorGroup?.options.find((option) => option.name === half?.flavorName);
-    if (half === undefined || flavor === undefined) return undefined;
+    if (half === undefined) return { ok: false, reason: "missing-halves" };
+    const flavorOptionId = uniqueActiveByName(flavorGroup, half.flavorName);
+    if (flavorOptionId === undefined) return { ok: false, reason: "flavor" };
     const extraOptionIds: string[] = [];
     for (const name of half.extras) {
-      const extra = extraGroup?.options.find((option) => option.name === name);
-      if (extra === undefined) return undefined;
-      extraOptionIds.push(extra.optionId);
+      const extraId = uniqueActiveByName(extraGroup, name);
+      if (extraId === undefined) return { ok: false, reason: "extra" };
+      extraOptionIds.push(extraId);
     }
-    return { excludedIngredientIds: [...half.exclusions], extraOptionIds, flavorOptionId: flavor.optionId, fraction: fractionName };
-  });
-  const [first, second] = slots;
-  return first === undefined || second === undefined ? undefined : { geometry: "halves", slots: [first, second] };
+    slots.push({ excludedIngredientIds: [...half.exclusions], extraOptionIds, flavorOptionId, fraction: fractionName });
+  }
+  return { ok: true, fraction: { geometry: "halves", slots } };
+}
+
+export type DraftLinesResult =
+  | { readonly ok: true; readonly lines: readonly SelectionPlanLineDraft[] }
+  | { readonly ok: false; readonly lineName: string };
+
+/**
+ * Rebuilds the plan's draft lines from the saved projection. A split line that cannot be restored
+ * fails the whole rebuild (naming the line) so it is never re-sent as a whole one.
+ */
+export function draftLinesFromProjection(
+  lines: readonly CaptureSelectionPlanProjectionLineV1[],
+  catalog: Pick<MenuCatalogV1, "products" | "modifierGroups"> | null,
+): DraftLinesResult {
+  const drafts: SelectionPlanLineDraft[] = [];
+  for (const line of lines) {
+    const byGroup = new Map<string, { optionId: string; quantity: number }[]>();
+    for (const modifier of line.modifiers) {
+      const existing = byGroup.get(modifier.groupId) ?? [];
+      existing.push({ optionId: modifier.optionId, quantity: modifier.quantity });
+      byGroup.set(modifier.groupId, existing);
+    }
+    const modifierGroups = [...byGroup.entries()].map(([groupId, selections]) => ({ groupId, selections }));
+    let fraction: LineFractionV1 | undefined;
+    if (line.halves !== undefined && line.halves.length > 0) {
+      const variant = catalog?.products.find((product) => product.productId === line.productId)?.variants
+        ?.find((entry) => entry.variantId === line.variantId);
+      const restored = restoreLineFraction(line.halves, variant?.fraction,
+        catalog?.modifierGroups.filter((group) => group.productId === line.productId) ?? []);
+      if (!restored.ok) return { ok: false, lineName: line.productName };
+      fraction = restored.fraction;
+    }
+    drafts.push({ lineId: line.lineId, productId: line.productId, variantId: line.variantId, quantity: line.quantity,
+      modifierGroups, note: line.note, ...(fraction === undefined ? {} : { fraction }) });
+  }
+  return { ok: true, lines: drafts };
+}
+
+/** Message shown in the ticket when a split line cannot be kept; nothing is sent. */
+export function splitLostMessage(lineName: string): string {
+  return `No se pudo conservar la división de "${lineName}"; recarga el menú`;
 }
 
 /** Ticket and detail text for one frozen half: a headline and the extras/exclusions under it. */

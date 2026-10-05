@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { MenuModifierGroupV1, MenuVariantFractionV1, OrderDetailFractionHalfV1 } from "@super-restaurant/shared-types";
+import type { MenuCatalogV1, MenuModifierGroupV1, MenuVariantFractionV1, OrderDetailFractionHalfV1 } from "@super-restaurant/shared-types";
 import {
   buildLineFraction,
+  draftLinesFromProjection,
+  splitLostMessage,
   emptyHalvesDraft,
   estimateHalvesUnitMinor,
   halfLabel,
@@ -91,11 +93,40 @@ test("a saved projection is turned back into ids so re-sending the plan keeps th
     { amountMinor: 18_000, exclusions: ["cebolla"], extras: [], flavorName: "Pepperoni", fraction: "half-b" },
   ];
   const restored = restoreLineFraction(halves, setup, [flavors, extras]);
-  assert.deepEqual(restored?.slots.map((slot) => [slot.fraction, slot.flavorOptionId, slot.extraOptionIds, slot.excludedIngredientIds]),
+  assert.ok(restored.ok);
+  assert.deepEqual(restored.ok ? restored.fraction.slots.map((slot) => [slot.fraction, slot.flavorOptionId, slot.extraOptionIds, slot.excludedIngredientIds]) : [],
     [["half-a", margarita, [queso], []], ["half-b", pepperoni, [], ["cebolla"]]]);
-  assert.equal(restoreLineFraction(halves, setup, [extras]), undefined, "flavor group gone");
-  assert.equal(restoreLineFraction(undefined, setup, [flavors, extras]), undefined);
-  assert.equal(restoreLineFraction(halves, null, [flavors, extras]), undefined);
+  assert.deepEqual(restoreLineFraction(halves, setup, [extras]), { ok: false, reason: "flavor" }, "flavor group gone");
+  assert.equal(restoreLineFraction(undefined, setup, [flavors, extras]).ok, false);
+  assert.equal(restoreLineFraction(halves, null, [flavors, extras]).ok, false);
+  const renamed = halves.map((half) => ({ ...half, flavorName: "Hawaiana" }));
+  assert.deepEqual(restoreLineFraction(renamed, setup, [flavors, extras]), { ok: false, reason: "flavor" }, "name absent");
+  const duplicated = { ...flavors, options: [...flavors.options, option("eeeeeee5-eeee-4eee-8eee-eeeeeeeeeeee", "Margarita", 0)] };
+  assert.deepEqual(restoreLineFraction(halves, setup, [duplicated, extras]), { ok: false, reason: "flavor" }, "duplicate name");
+  const inactive = { ...flavors, options: flavors.options.map((entry) => ({ ...entry, active: false })) };
+  assert.equal(restoreLineFraction(halves, setup, [inactive, extras]).ok, false, "inactive options");
+  const extraMissing = { ...extras, options: [] };
+  assert.deepEqual(restoreLineFraction(halves, setup, [flavors, extraMissing]), { ok: false, reason: "extra" });
+});
+
+test("a split line that cannot be restored never becomes a whole line in the rebuilt plan", () => {
+  const halves: OrderDetailFractionHalfV1[] = [
+    { amountMinor: 15_000, exclusions: [], extras: [], flavorName: "Margarita", fraction: "half-a" },
+    { amountMinor: 18_000, exclusions: [], extras: [], flavorName: "Pepperoni", fraction: "half-b" },
+  ];
+  const line = (lineId: string, withHalves: boolean) => ({ lineId, productId: "p", variantId: "v1", productName: "Pizza", quantity: 1,
+    unitPriceMinor: 18_000, lineTotalMinor: 18_000, note: null, modifiers: [], ...(withHalves ? { halves } : {}) });
+  const variant = { active: true, displayOrder: 0, fraction: setup, name: "Grande", sku: null, unitPriceMinor: 15_000, variantId: "v1" };
+  const catalog = (groups: MenuModifierGroupV1[]) => ({ modifierGroups: groups,
+    products: [{ productId: "p", variants: [variant] }] as unknown as MenuCatalogV1["products"] });
+  const ok = draftLinesFromProjection([line("l1", true), line("l2", false)], catalog([flavors, extras]));
+  assert.ok(ok.ok);
+  assert.equal(ok.ok ? ok.lines[0]?.fraction?.slots.length : 0, 2);
+  assert.equal(ok.ok ? ok.lines[1]?.fraction : "x", undefined);
+  const noCatalog = draftLinesFromProjection([line("l1", true), line("l2", false)], null);
+  assert.deepEqual(noCatalog, { ok: false, lineName: "Pizza" });
+  assert.deepEqual(draftLinesFromProjection([line("l1", true)], catalog([extras])), { ok: false, lineName: "Pizza" });
+  assert.equal(splitLostMessage("Pizza"), 'No se pudo conservar la división de "Pizza"; recarga el menú');
 });
 
 test("selection plan lines carry fraction and only merge when the split is identical", () => {

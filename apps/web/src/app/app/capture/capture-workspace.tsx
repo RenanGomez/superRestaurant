@@ -40,7 +40,7 @@ import type {
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
   rehydrateCaptureWorkspace, shortCaptureDraftId, shouldRenewLease } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
-import { restoreLineFraction } from "../../../lib/line-halves";
+import { draftLinesFromProjection, splitLostMessage } from "../../../lib/line-halves";
 import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
   type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
@@ -367,22 +367,13 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
       deviceId, occurredAt: new Date().toISOString() };
   }
 
-  function selectionDraftLines(): readonly SelectionPlanLineDraft[] {
-    return (selectionProjection?.lines ?? []).map((line) => {
-      const byGroup = new Map<string, SelectionPlanModifierGroupDraft["selections"][number][]>();
-      for (const modifier of line.modifiers) {
-        const existing = byGroup.get(modifier.groupId) ?? [];
-        existing.push({ optionId: modifier.optionId, quantity: modifier.quantity });
-        byGroup.set(modifier.groupId, existing);
-      }
-      const modifierGroups: SelectionPlanModifierGroupDraft[] = [...byGroup.entries()]
-        .map(([groupId, selections]) => ({ groupId, selections }));
-      // The projection names the halves; the ids are resolved from the catalog so re-sending the plan keeps them.
-      const variant = catalog.catalog?.products.find((product) => product.productId === line.productId)?.variants?.find((entry) => entry.variantId === line.variantId);
-      const fraction = restoreLineFraction(line.halves, variant?.fraction, catalog.catalog?.modifierGroups.filter((group) => group.productId === line.productId) ?? []);
-      return { lineId: line.lineId, productId: line.productId, variantId: line.variantId, quantity: line.quantity, modifierGroups, note: line.note,
-        ...(fraction === undefined ? {} : { fraction }) };
-    });
+  /** Draft lines of the saved plan, or `undefined` (with a visible notice) if a split line cannot be kept. */
+  function selectionDraftLines(): readonly SelectionPlanLineDraft[] | undefined {
+    const result = draftLinesFromProjection(selectionProjection?.lines ?? [], catalog.catalog);
+    if (result.ok) return result.lines;
+    if (selectionFeedbackTimer.current) clearTimeout(selectionFeedbackTimer.current);
+    setSelectionFeedback(splitLostMessage(result.lineName));
+    return undefined;
   }
 
   /**
@@ -429,7 +420,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
 
   function openEditLine(lineId: string): void {
     if (locked || catalog.catalog === null) return;
-    const line = selectionDraftLines().find((candidate) => candidate.lineId === lineId);
+    const draftLines = selectionDraftLines();
+    if (draftLines === undefined) return;
+    const line = draftLines.find((candidate) => candidate.lineId === lineId);
     const product = catalog.catalog.products.find((candidate) => candidate.productId === line?.productId);
     if (line === undefined || product === undefined) {
       setError("invalid"); return;
@@ -441,8 +434,10 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   }
 
   async function addDirect(productId: string): Promise<void> {
+    const currentLines = selectionDraftLines();
+    if (currentLines === undefined) return;
     setSelectionBusy(true);
-    await sendSelectionPlan(applyLineChange(selectionDraftLines(),
+    await sendSelectionPlan(applyLineChange(currentLines,
       { type: "add", lineId: crypto.randomUUID(), productId, variantId: null, quantity: 1, modifierGroups: [], note: null }));
     setSelectionBusy(false);
   }
@@ -457,8 +452,9 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     if (sheetProduct === undefined) return;
     const productId = sheetProduct.productId;
     const lineId = sheetEditLine?.lineId ?? crypto.randomUUID();
-    setSelectionBusy(true);
     const currentLines = selectionDraftLines();
+    if (currentLines === undefined) { setSheetError("No se pudo conservar una línea dividida del pedido; recarga el menú."); return; }
+    setSelectionBusy(true);
     // One server replacement of the whole plan keeps the edit atomic and preserves its line ID.
     const nextLines = sheetEditLine === undefined
       ? applyLineChange(currentLines, { type: "add", lineId, productId, variantId, quantity, modifierGroups, note,
@@ -495,14 +491,18 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
   }
 
   async function changeLineQuantity(lineId: string, delta: 1 | -1): Promise<void> {
+    const currentLines = selectionDraftLines();
+    if (currentLines === undefined) return;
     setSelectionBusyLineId(lineId);
-    await sendSelectionPlan(applyLineChange(selectionDraftLines(), { type: delta === 1 ? "increment" : "decrement", lineId }));
+    await sendSelectionPlan(applyLineChange(currentLines, { type: delta === 1 ? "increment" : "decrement", lineId }));
     setSelectionBusyLineId(undefined);
   }
 
   async function removeLine(lineId: string): Promise<void> {
+    const currentLines = selectionDraftLines();
+    if (currentLines === undefined) return;
     setSelectionBusyLineId(lineId);
-    await sendSelectionPlan(applyLineChange(selectionDraftLines(), { type: "remove", lineId }));
+    await sendSelectionPlan(applyLineChange(currentLines, { type: "remove", lineId }));
     setSelectionBusyLineId(undefined);
   }
 
@@ -516,8 +516,10 @@ export function CaptureWorkspace({ scope, action, confirmationContext, canManage
     const lineId = noteSheetLineId;
     if (lineId === undefined) return;
     const trimmed = noteSheetDraft.trim();
+    const currentLines = selectionDraftLines();
+    if (currentLines === undefined) return;
     setSelectionBusyLineId(lineId);
-    const saved = await sendSelectionPlan(applyLineChange(selectionDraftLines(),
+    const saved = await sendSelectionPlan(applyLineChange(currentLines,
       { type: "setNote", lineId, note: trimmed.length === 0 ? null : trimmed }));
     setSelectionBusyLineId(undefined);
     if (saved === undefined) return;
