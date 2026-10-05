@@ -17,7 +17,9 @@ export const CAPTURE_SELECTION_PLAN_SCHEMA_VERSION = 1 as const;
 const MAX_MODIFIER_SELECTIONS = 50;
 const MAX_MODIFIER_GROUPS = 50;
 const MAX_LINES = 200;
-const MAX_LINE_QUANTITY = 1_000;
+/** Largest quantity a single selection line (and a line quote) may carry. */
+export const CAPTURE_SELECTION_LINE_MAX_QUANTITY = 1_000;
+const MAX_LINE_QUANTITY = CAPTURE_SELECTION_LINE_MAX_QUANTITY;
 const MAX_MODIFIER_QUANTITY = 100;
 const MAX_NOTE_LENGTH = 200;
 

@@ -2753,6 +2753,22 @@ test("capture line quote prices whole lines with modifiers, a size, and halves e
   assert.deepEqual(halves.modifiers, []);
 });
 
+test("capture line quote returns the chargeable tax-inclusive total for a tax-excluded product and admits plan-sized quantities", async () => {
+  const { service } = lineQuoteService(["cashier"], taxExcludedCatalog);
+  const taxed = await service.quoteLinePrice(principal, {
+    ...lineQuoteRequest({ catalogVersion: taxExcludedCatalog.catalogVersion }), productId: taxExcludedCatalog.products[0]!.productId,
+  });
+  assert.equal(taxed.subtotalMinor, 10_000);
+  assert.equal(taxed.taxMinor, 1_600);
+  assert.equal(taxed.lineTotalMinor, 11_600);
+  const bulk = await service.quoteLinePrice(principal, {
+    ...lineQuoteRequest({ catalogVersion: taxExcludedCatalog.catalogVersion, quantity: 500 }),
+    productId: taxExcludedCatalog.products[0]!.productId,
+  });
+  assert.equal(bulk.subtotalMinor, 5_000_000);
+  assert.equal(bulk.lineTotalMinor, 5_800_000);
+});
+
 test("capture line quote answers 409 for a stale catalogVersion or an invalid line, 403 without permission, 400 for a bad body", async () => {
   const { service, reads } = lineQuoteService();
   const rejected = (reason: string) => (error: unknown) => error instanceof CaptureLineQuoteRejectedError && error.reason === reason;
@@ -2807,10 +2823,13 @@ test("capture line quote returns the same figures as the selection plan projecti
       read: async () => ({ schemaVersion: 1, scope: validCommand.scope, catalog: lineQuoteCatalog }),
       save: async () => { throw new Error("must not save a catalog"); },
     }, { ...noConfirmationPort, readSelectionPlan: async () => ({ status: "ok", plan: plan.plan, appliedCaptureVersion: 2 }) });
-    const projected = (await planService.replace(principal, plan)).selectionProjection?.lines[0];
-    assert.ok(projected);
+    const projection = (await planService.replace(principal, plan)).selectionProjection;
+    const projected = projection?.lines[0];
+    assert.ok(projection && projected);
     assert.equal(quote.unitPriceMinor, projected.unitPriceMinor);
-    assert.equal(quote.lineTotalMinor, projected.lineTotalMinor);
+    assert.equal(quote.subtotalMinor, projected.lineTotalMinor);
+    assert.equal(quote.lineTotalMinor, projection.itemsTotalMinor);
+    assert.equal(quote.subtotalMinor + quote.taxMinor, quote.lineTotalMinor);
     assert.deepEqual(quote.modifiers, projected.modifiers);
     assert.deepEqual(quote.fractionBreakdown, projected.halves ?? []);
   }
@@ -2854,13 +2873,13 @@ test("capture line quote HTTP route validates, authorizes, prices and maps 409 w
     headers: { "content-type": "application/json", ...(authenticated ? { authorization: "Bearer test-capture-access-token" } : {}) } });
   try {
     assert.equal((await send(lineQuoteRequest(), false)).status, 401);
-    assert.equal((await send(lineQuoteRequest({ quantity: 100 }))).status, 400);
+    assert.equal((await send(lineQuoteRequest({ quantity: 1_001 }))).status, 400);
     const ok = await send(lineQuoteRequest({ quantity: 2 }));
     assert.equal(ok.status, 200);
     assert.equal(ok.headers.get("cache-control"), "private, no-store");
     assert.deepEqual(await ok.json(), {
       schemaVersion: 1, catalogVersion: lineQuoteCatalog.catalogVersion, currency: "MXN", unitPriceMinor: 4_500,
-      lineTotalMinor: 9_000, modifiers: [], geometry: "whole", fractionBreakdown: [],
+      lineTotalMinor: 9_000, subtotalMinor: 9_000, taxMinor: 0, modifiers: [], geometry: "whole", fractionBreakdown: [],
     });
     const stale = await send(lineQuoteRequest({ catalogVersion: validCommand.deviceId }));
     assert.equal(stale.status, 409);

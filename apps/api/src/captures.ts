@@ -2018,9 +2018,12 @@ export class CaptureService {
       currency: projection.currency,
       fractionBreakdown: line.halves ?? [],
       geometry: line.halves === undefined ? "whole" : "halves",
-      lineTotalMinor: line.lineTotalMinor,
+      // One-line plan: the projection aggregates are this line's tax-inclusive total and pre-tax subtotal.
+      lineTotalMinor: projection.itemsTotalMinor,
       modifiers: line.modifiers,
       schemaVersion: 1,
+      subtotalMinor: projection.subtotalMinor,
+      taxMinor: projection.itemsTotalMinor - projection.subtotalMinor,
       unitPriceMinor: line.unitPriceMinor,
     });
     if (result === undefined) throw unavailable();
