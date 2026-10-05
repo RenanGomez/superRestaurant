@@ -37,6 +37,8 @@ export * from "./delivery-instructions.js";
 export * from "./customer-order-history.js";
 export * from "./delivery-quote.js";
 export * from "./delivery-zones.js";
+export * from "./deliveries.js";
+export * from "./branch-members.js";
 
 export const MEMBERSHIP_ROLE_CODES = Object.freeze([
   "owner",
@@ -46,6 +48,7 @@ export const MEMBERSHIP_ROLE_CODES = Object.freeze([
   "cashier",
   "waiter",
   "kitchen",
+  "courier",
   "viewer",
   "auditor",
 ] as const);
@@ -152,6 +155,10 @@ export const RBAC_PERMISSION_CODES = Object.freeze([
   "customers.update",
   "customers.validate",
   "delivery_zones.manage",
+  "deliveries.read",
+  "deliveries.update.own",
+  "deliveries.manage",
+  "memberships.read",
 ] as const);
 
 export type RbacPermissionCode = (typeof RBAC_PERMISSION_CODES)[number];

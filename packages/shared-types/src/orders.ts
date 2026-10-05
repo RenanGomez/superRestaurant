@@ -1,4 +1,5 @@
 import type { BranchScope } from "./index.js";
+import { parseOrderDeliveryV1, type OrderDeliveryV1 } from "./deliveries.js";
 import { parseKdsEventV1 } from "./realtime.js";
 
 export const ORDER_COMMAND_SCHEMA_VERSION = 1 as const;
@@ -349,13 +350,21 @@ export interface OrderDetailPaymentIntentV1 {
   readonly tipMinor: number;
 }
 
+/** The delivery quote frozen when the capture was confirmed; never recomputed from current zones. */
+export interface OrderDetailDeliveryQuoteV1 {
+  readonly feeMinor: number;
+  readonly promiseEnd: string | null;
+  readonly promiseStart: string | null;
+  readonly zoneId: string | null;
+}
+
 /**
- * Deliberately reduced: the fulfillment snapshot (customer/address/payment-intent PII) is not yet
- * joined here -- only the Order's own channel/tableId are read from `OrderPersistencePort.read`, so
- * this endpoint ships without new SQL (see the context packet's "sin SQL nuevo si el puerto de
- * persistencia basta"). `customerLabel`/`addressLabel`/`paymentIntent` are always `null` for now.
+ * Projected from the frozen fulfillment snapshot. `customerLabel`/`addressLabel` are `null` unless
+ * the caller holds `customers.read` (server-decided). `paymentIntent`/`quote` are `null` when the
+ * Order has no V2 snapshot. `quote` is additive and optional for older producers.
  */
 export interface OrderDetailFulfillmentV1 {
+  readonly quote?: OrderDetailDeliveryQuoteV1 | null;
   readonly channel: OrderChannelV1;
   readonly tableId: string | null;
   readonly customerLabel: string | null;
@@ -382,6 +391,8 @@ export interface OrderDetailV1 {
   readonly items: readonly OrderDetailItemV1[];
   readonly totals: OrderDetailTotalsV1;
   readonly fulfillment: OrderDetailFulfillmentV1;
+  /** Additive: dispatch/settlement facts of a delivery Order; `null` for other channels or before assignment. */
+  readonly delivery?: OrderDeliveryV1 | null;
   readonly availableActions: readonly OrderDetailActionV1[];
 }
 
@@ -396,10 +407,10 @@ export function parseOrderDetailRequestV1(value: unknown): OrderDetailRequestV1 
 }
 
 export function parseOrderDetailV1(value: unknown): OrderDetailV1 | undefined {
-  const record = exactRecord(value, [
+  const record = exactRecordWithOptional(value, [
     "schemaVersion", "scope", "orderId", "status", "channel", "tableId", "currency", "timeZone",
     "createdAt", "updatedAt", "version", "items", "totals", "fulfillment", "availableActions",
-  ]);
+  ], ["delivery"]);
   if (record === undefined || own(record, "schemaVersion") !== ORDER_DETAIL_SCHEMA_VERSION) return undefined;
   const scope = parseScope(own(record, "scope"));
   const orderId = uuid(own(record, "orderId"));
@@ -418,8 +429,15 @@ export function parseOrderDetailV1(value: unknown): OrderDetailV1 | undefined {
   const totals = parseDetailTotals(own(record, "totals"));
   const fulfillment = parseDetailFulfillment(own(record, "fulfillment"), channel);
   const rawActions = exactDenseArray(own(record, "availableActions"), ORDER_DETAIL_ACTIONS.length);
+  const hasDelivery = Object.hasOwn(record, "delivery");
+  const rawDelivery = own(record, "delivery");
+  const delivery = !hasDelivery || rawDelivery === null ? null : parseOrderDeliveryV1(rawDelivery);
   if (
-    scope === undefined || orderId === undefined || typeof status !== "string"
+    delivery === undefined
+    || (delivery !== null && (scope === undefined || orderId === undefined || delivery.orderId !== orderId
+      || delivery.scope.restaurantId !== scope.restaurantId || delivery.scope.branchId !== scope.branchId
+      || channel !== "delivery"))
+    || scope === undefined || orderId === undefined || typeof status !== "string"
     || !(ORDER_STATUSES as readonly string[]).includes(status) || typeof channel !== "string"
     || !(ORDER_CHANNELS as readonly string[]).includes(channel) || tableId === undefined
     || (channel === "table") !== (tableId !== null) || currency === undefined || timeZone === undefined
@@ -447,6 +465,7 @@ export function parseOrderDetailV1(value: unknown): OrderDetailV1 | undefined {
     channel: channel as OrderChannelV1,
     createdAt,
     currency,
+    ...(hasDelivery ? { delivery } : {}),
     fulfillment,
     items: Object.freeze(items),
     orderId,
@@ -530,8 +549,14 @@ function parseDetailTotals(value: unknown): OrderDetailTotalsV1 | undefined {
 }
 
 function parseDetailFulfillment(value: unknown, channel: unknown): OrderDetailFulfillmentV1 | undefined {
-  const record = exactRecord(value, ["channel", "tableId", "customerLabel", "addressLabel", "paymentIntent"]);
+  const record = exactRecordWithOptional(
+    value, ["channel", "tableId", "customerLabel", "addressLabel", "paymentIntent"], ["quote"],
+  );
   if (record === undefined || own(record, "channel") !== channel) return undefined;
+  const hasQuote = Object.hasOwn(record, "quote");
+  const rawQuote = own(record, "quote");
+  const quote = !hasQuote || rawQuote === null ? null : parseDetailQuote(rawQuote);
+  if (quote === undefined) return undefined;
   const rawTableId = own(record, "tableId");
   const tableId = rawTableId === null ? null : uuid(rawTableId);
   const rawCustomerLabel = own(record, "customerLabel");
@@ -545,8 +570,35 @@ function parseDetailFulfillment(value: unknown, channel: unknown): OrderDetailFu
     || tableId === undefined || customerLabel === undefined || addressLabel === undefined || paymentIntent === undefined
   ) return undefined;
   return Object.freeze({
-    addressLabel, channel: channel as OrderChannelV1, customerLabel, paymentIntent, tableId,
+    addressLabel, channel: channel as OrderChannelV1, customerLabel, paymentIntent,
+    ...(hasQuote ? { quote } : {}), tableId,
   });
+}
+
+function parseDetailQuote(value: unknown): OrderDetailDeliveryQuoteV1 | undefined {
+  const record = exactRecord(value, ["zoneId", "feeMinor", "promiseStart", "promiseEnd"]);
+  if (record === undefined) return undefined;
+  const rawZone = own(record, "zoneId");
+  const zoneId = rawZone === null ? null : uuid(rawZone);
+  const feeMinor = integer(own(record, "feeMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const rawStart = own(record, "promiseStart");
+  const promiseStart = rawStart === null ? null : timestamp(rawStart);
+  const rawEnd = own(record, "promiseEnd");
+  const promiseEnd = rawEnd === null ? null : timestamp(rawEnd);
+  return zoneId === undefined || feeMinor === undefined || promiseStart === undefined || promiseEnd === undefined
+    ? undefined : Object.freeze({ feeMinor, promiseEnd, promiseStart, zoneId });
+}
+
+function exactRecordWithOptional(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[],
+): Readonly<Record<string, unknown>> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  try {
+    const present = optional.filter((key) => Object.hasOwn(value, key));
+    return exactRecord(value, [...required, ...present]);
+  } catch { return undefined; }
 }
 
 function parseDetailPaymentIntent(value: unknown): OrderDetailPaymentIntentV1 | undefined {
