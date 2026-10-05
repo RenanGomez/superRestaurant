@@ -83,3 +83,11 @@ Antes: añadir `RECEIPT_COOKIE_SECRET=<32+ caracteres aleatorios>` a `apps/web/.
 3. **Tamaños** (`/app/menu` y `/app/capture`): en un producto «Añadir tamaño» → nombre → precio (×2), publicar; en captura la tarjeta dice «desde $X», la hoja exige tamaño antes de Agregar, el ticket muestra «Pizza · Grande»; repetir un pedido anterior de ese producto muestra la línea bloqueada «requiere tamaño».
 4. **Mesas** (`/app/tables`): mesa libre → «Abrir cuenta» → «Agregar producto» → producto (con tamaño y nota) → Agregar (4 toques); la línea aparece en la cuenta; «Enviar a cocina».
 5. Todo en escritorio y 390×844 con consola abierta.
+
+## 8. Qué probar el 2026-10-05 (tarde): mitad y mitad de pizza
+
+1. **Editor** (`/app/menu`): en un producto con tamaños, activar «Permitir mitades» en un tamaño → elegir «Grupo de sabores» → «Grupo de extras» (3 toques); opcionalmente marcar ingredientes que se pueden quitar; publicar. Si el grupo de sabores no existe o no pertenece al producto, debe verse el error, no un guardado silencioso.
+2. **Hoja de armado** (`/app/capture`): elegir el tamaño con mitades → «Mitad y mitad» → sabor de la Mitad A → sabor de la Mitad B → Agregar (5 toques). «Agregar» debe decir «Elige los dos sabores» hasta tener ambos. El estimado debe ser el sabor más caro más cada extra de media pizza al 50 % redondeado arriba; el precio del ticket es el del servidor y debe coincidir.
+3. **Ticket y detalle**: la línea muestra «Mitad A: <sabor>» / «Mitad B: <sabor>» con extras y exclusiones debajo; al editar la línea los sabores vienen preseleccionados; cambiar la cantidad de otra línea no convierte la pizza partida en entera (si el menú cambió, aparece «No se pudo conservar la división…» y no se envía nada).
+4. **Cocina** (KDS): el ticket lista cada mitad por separado con sus extras.
+5. En 390×844 las dos mitades se apilan; consola limpia.
