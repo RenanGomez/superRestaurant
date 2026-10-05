@@ -358,7 +358,11 @@ function createMenuProductPriceSnapshotCanonical(
   for (const selection of selections) {
     assertText(selection.groupId, "selected modifier group id");
     if (fractionGroupIds.has(selection.groupId)) {
-      throw new MenuFractionSelectionInvalidError(product.id, ["fraction_group_selection_forbidden"]);
+      // Callers list every product group; the fraction pair must simply stay empty.
+      if (selection.selections.length > 0) {
+        throw new MenuFractionSelectionInvalidError(product.id, ["fraction_group_selection_forbidden"]);
+      }
+      continue;
     }
     if (selectionsByGroup.has(selection.groupId)) {
       throw new DuplicateMenuModifierGroupSelectionError(selection.groupId);
