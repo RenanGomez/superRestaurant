@@ -48,6 +48,10 @@ declare
   pay_1 uuid := gen_random_uuid();
   pay_2 uuid := gen_random_uuid();
   pay_x uuid := gen_random_uuid();
+  o_a uuid := gen_random_uuid();
+  o_e uuid := gen_random_uuid();
+  o_d uuid := gen_random_uuid();
+  pay_d uuid := gen_random_uuid();
   event_1 uuid := gen_random_uuid();
   event_2 uuid := gen_random_uuid();
   event_x uuid := gen_random_uuid();
@@ -251,5 +255,46 @@ begin
   report := app_private.read_cash_register_operational_report(actor,other_restaurant,other_branch,v_register,v_session,device);
   execute 'reset role';
   if report->>'status' is distinct from 'forbidden' then raise exception 'CASH_TRANSFER_REPORT_CROSS_TENANT_ACCEPTED'; end if;
+
+  -- ---- Delivery guard: a transfer is collected only after `delivered`, which then settles the delivery.
+  insert into app.orders(id,restaurant_id,branch_id,channel,status,aggregate,version,created_by,updated_by)
+  select o,restaurant,branch,'delivery','open',pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',o::text,'restaurantId',restaurant::text,'branchId',branch::text,'channel','delivery',
+    'status','open','currency','MXN','timeZone','America/Hermosillo','items','[]'::jsonb),1,actor,actor
+  from (values (o_a),(o_e),(o_d)) as t(o);
+  insert into app.order_deliveries(restaurant_id,branch_id,order_id,courier_user_id,state,attempt_count,assigned_at,dispatched_at,delivered_at,created_by,updated_by)
+  values
+    (restaurant,branch,o_a,foreign_actor,'assigned',0,now(),null,null,actor,actor),
+    (restaurant,branch,o_e,foreign_actor,'en_route',1,now(),now(),null,actor,actor),
+    (restaurant,branch,o_d,foreign_actor,'delivered',1,now(),now(),now(),actor,actor);
+  -- assigned and en_route: refused with DELIVERY_NOT_DELIVERED, nothing persists.
+  foreach cmd in array array[pg_catalog.jsonb_build_object('o',o_a::text),pg_catalog.jsonb_build_object('o',o_e::text)] loop
+    select * into sess from app.cash_register_sessions where id=v_session;
+    select * into ord from app.orders where id=(cmd->>'o')::uuid;
+    pay := pg_temp.tt_cmd(restaurant,branch,v_session,(cmd->>'o')::uuid,sess.version,1,pay_x,3000,'transfer',3,event_x,'k-dlv-'||(cmd->>'o'),device,now_text,'{}');
+    execute 'set local role app_api';
+    result := app_private.collect_simple_payment(actor,pay,
+      pg_temp.tt_pay(restaurant,branch,(cmd->>'o')::uuid,pay_x,event_x,'k-dlv-'||(cmd->>'o'),3000,'transfer','{}'),
+      pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),sess.aggregate,3000,0);
+    execute 'reset role';
+    if result->>'status'<>'conflict' or result->>'code'<>'DELIVERY_NOT_DELIVERED' then raise exception 'CASH_TRANSFER_BEFORE_DELIVERED_ACCEPTED'; end if;
+  end loop;
+  if (select count(*) from app.payments where order_id in (o_a,o_e))<>0
+    or (select count(*) from app.order_deliveries where order_id in (o_a,o_e) and state in ('assigned','en_route'))<>2
+  then raise exception 'CASH_TRANSFER_BEFORE_DELIVERED_PERSISTED'; end if;
+  -- delivered: a total transfer pays the order and settles the delivery with its journal row.
+  select * into sess from app.cash_register_sessions where id=v_session;
+  select * into ord from app.orders where id=o_d;
+  cmd := pg_temp.tt_cmd(restaurant,branch,v_session,o_d,sess.version,1,pay_d,3000,'transfer',3,gen_random_uuid(),'k-dlv-d',device,now_text,
+    '{"transferReference":"SPEI-D"}');
+  pay := pg_temp.tt_pay(restaurant,branch,o_d,pay_d,(cmd->>'eventId')::uuid,'k-dlv-d',3000,'transfer','{}');
+  execute 'set local role app_api';
+  result := app_private.collect_simple_payment(actor,cmd,pay,pg_catalog.jsonb_set(ord.aggregate,'{status}','"paid"'),sess.aggregate,3000,0);
+  execute 'reset role';
+  if result->>'orderStatus'<>'paid' or result->>'method'<>'transfer' then raise exception 'CASH_TRANSFER_DELIVERED_COLLECT_FAILED'; end if;
+  if (select state from app.order_deliveries where order_id=o_d)<>'settled'
+    or (select settled_payment_id from app.order_deliveries where order_id=o_d)<>pay_d
+    or (select count(*) from app.order_delivery_events where order_id=o_d and operation='delivery.settled')<>1
+  then raise exception 'CASH_TRANSFER_DELIVERY_NOT_SETTLED'; end if;
 end $cash_transfer_method_tests$;
 commit;
