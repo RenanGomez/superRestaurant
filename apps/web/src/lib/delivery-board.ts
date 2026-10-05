@@ -46,6 +46,18 @@ export function paymentMethodLabel(method: "cash" | "card_manual" | "transfer"):
   return method === "cash" ? "Efectivo" : method === "card_manual" ? "Tarjeta" : "Transferencia";
 }
 
+/** Names the next payment location without treating a card or transfer balance as courier cash. */
+export function courierCollectionMessage(method: "cash" | "card_manual" | "transfer" | null, remainingMinor: number): {
+  readonly kind: "paid" | "cash" | "caja" | "undefined";
+  readonly label: string;
+} {
+  if (remainingMinor === 0) return { kind: "paid", label: "Pagado" };
+  if (method === "cash") return { kind: "cash", label: "Cobrar en efectivo" };
+  if (method === "card_manual") return { kind: "caja", label: "Pago pendiente en Caja (tarjeta)" };
+  if (method === "transfer") return { kind: "caja", label: "Pago pendiente en Caja (transferencia)" };
+  return { kind: "undefined", label: "Pago pendiente por definir" };
+}
+
 /** Up to two uppercase initials; `?` when the courier has no display name. */
 export function courierInitials(label: string | null): string {
   const words = (label ?? "").trim().split(/\s+/u).filter((word) => word.length > 0);

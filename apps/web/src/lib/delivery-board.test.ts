@@ -4,7 +4,7 @@ import test from "node:test";
 import type { BranchDeliveryItemV1 } from "@super-restaurant/shared-types";
 
 import {
-  canReassign, courierInitials, groupDeliveriesByState, paymentMethodLabel, prefillTenderedMinor, prefillTipMinor, settlesInCaja,
+  canReassign, courierCollectionMessage, courierInitials, groupDeliveriesByState, paymentMethodLabel, prefillTenderedMinor, prefillTipMinor, settlesInCaja,
 } from "./delivery-board.js";
 
 function item(state: string, extra: Partial<BranchDeliveryItemV1> = {}, attemptCount = 0): BranchDeliveryItemV1 {
@@ -25,6 +25,15 @@ test("paymentMethodLabel names every method", () => {
   assert.equal(paymentMethodLabel("cash"), "Efectivo");
   assert.equal(paymentMethodLabel("card_manual"), "Tarjeta");
   assert.equal(paymentMethodLabel("transfer"), "Transferencia");
+});
+
+test("courier collection message reserves cash collection for positive cash intent only", () => {
+  assert.deepEqual(courierCollectionMessage("cash", 8_000), { kind: "cash", label: "Cobrar en efectivo" });
+  assert.deepEqual(courierCollectionMessage("card_manual", 8_000), { kind: "caja", label: "Pago pendiente en Caja (tarjeta)" });
+  assert.deepEqual(courierCollectionMessage("transfer", 8_000), { kind: "caja", label: "Pago pendiente en Caja (transferencia)" });
+  assert.deepEqual(courierCollectionMessage("cash", 0), { kind: "paid", label: "Pagado" });
+  assert.deepEqual(courierCollectionMessage("card_manual", 0), { kind: "paid", label: "Pagado" });
+  assert.deepEqual(courierCollectionMessage(null, 8_000), { kind: "undefined", label: "Pago pendiente por definir" });
 });
 
 test("courierInitials uses up to two words and a placeholder without a name", () => {
