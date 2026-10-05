@@ -1,13 +1,14 @@
 import type { BranchScope } from "./index.js";
 import { type LineFractionV1, type OrderDetailFractionHalfV1, parseOrderDetailFractionHalfV1 } from "./line-fraction.js";
 import {
+  CAPTURE_SELECTION_LINE_MAX_QUANTITY,
   parseCaptureSelectionPlanV1,
   type CaptureSelectionModifierGroupV1,
 } from "./capture-selection-plan.js";
 
 export const CAPTURE_LINE_QUOTE_SCHEMA_VERSION = 1 as const;
 
-const MAX_QUOTE_QUANTITY = 99;
+const MAX_QUOTE_QUANTITY = CAPTURE_SELECTION_LINE_MAX_QUANTITY;
 const MAX_MODIFIERS = 2_500;
 /** Fixed placeholder id so the request can reuse the selection-line validator verbatim. */
 const QUOTE_LINE_ID = "00000000-0000-4000-8000-000000000001";
@@ -41,8 +42,11 @@ export interface CaptureLineQuoteResultV1 {
   readonly catalogVersion: string;
   readonly currency: string;
   readonly unitPriceMinor: number;
-  /** Pre-tax line total, the same figure the selection projection reports as `lineTotalMinor`. */
+  /** Chargeable, tax-inclusive line total: `subtotalMinor + taxMinor`, the plan's payment basis for this line. */
   readonly lineTotalMinor: number;
+  /** Pre-tax line subtotal (unit plus modifiers, times quantity). */
+  readonly subtotalMinor: number;
+  readonly taxMinor: number;
   readonly modifiers: readonly CaptureLineQuoteModifierV1[];
   readonly geometry: "whole" | "halves";
   /** Two priced halves for a half-and-half line; empty for a whole line. */
@@ -95,14 +99,17 @@ export function parseCaptureLineQuoteRequestV1(value: unknown): CaptureLineQuote
 
 export function parseCaptureLineQuoteResultV1(value: unknown): CaptureLineQuoteResultV1 | undefined {
   const record = exactRecord(value, [
-    "schemaVersion", "catalogVersion", "currency", "unitPriceMinor", "lineTotalMinor", "modifiers", "geometry",
-    "fractionBreakdown",
+    "schemaVersion", "catalogVersion", "currency", "unitPriceMinor", "lineTotalMinor", "subtotalMinor", "taxMinor",
+    "modifiers", "geometry", "fractionBreakdown",
   ]);
   if (record === undefined || own(record, "schemaVersion") !== CAPTURE_LINE_QUOTE_SCHEMA_VERSION) return undefined;
   const catalogVersion = uuid(own(record, "catalogVersion"));
   const currency = own(record, "currency");
   const unitPriceMinor = integer(own(record, "unitPriceMinor"), 0, Number.MAX_SAFE_INTEGER);
   const lineTotalMinor = integer(own(record, "lineTotalMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const subtotalMinor = integer(own(record, "subtotalMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const taxMinor = integer(own(record, "taxMinor"), 0, Number.MAX_SAFE_INTEGER);
+  if (subtotalMinor === undefined || taxMinor === undefined || subtotalMinor + taxMinor !== lineTotalMinor) return undefined;
   const geometry = own(record, "geometry");
   const rawModifiers = exactArray(own(record, "modifiers"), MAX_MODIFIERS);
   const rawHalves = exactArray(own(record, "fractionBreakdown"), 2);
@@ -135,6 +142,8 @@ export function parseCaptureLineQuoteResultV1(value: unknown): CaptureLineQuoteR
     lineTotalMinor,
     modifiers,
     schemaVersion: CAPTURE_LINE_QUOTE_SCHEMA_VERSION,
+    subtotalMinor,
+    taxMinor,
     unitPriceMinor,
   });
 }

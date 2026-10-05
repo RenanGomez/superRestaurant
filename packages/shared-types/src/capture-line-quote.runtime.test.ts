@@ -48,8 +48,9 @@ expect(parseCaptureLineQuoteRequestV1({ ...request, fraction: halves }) === unde
 
 const bad = (patch: Record<string, unknown>): unknown => parseCaptureLineQuoteRequestV1({ ...request, ...patch });
 expect(bad({ quantity: 0 }) === undefined, "quantity 0 rejected");
-expect(bad({ quantity: 100 }) === undefined, "quantity above 99 rejected");
-expect(parseCaptureLineQuoteRequestV1({ ...request, quantity: 99 })?.quantity === 99, "quantity 99 accepted");
+expect(bad({ quantity: 1_001 }) === undefined, "quantity above the plan limit rejected");
+expect(parseCaptureLineQuoteRequestV1({ ...request, quantity: 500 })?.quantity === 500, "quantity 500 accepted");
+expect(parseCaptureLineQuoteRequestV1({ ...request, quantity: 1_000 })?.quantity === 1_000, "plan-sized quantity accepted");
 expect(bad({ quantity: 1.5 }) === undefined, "fractional quantity rejected");
 expect(bad({ schemaVersion: 2 }) === undefined, "unknown schemaVersion rejected");
 expect(bad({ catalogVersion: "not-a-uuid" }) === undefined, "bad catalogVersion rejected");
@@ -66,6 +67,8 @@ const result = {
   currency: "MXN",
   unitPriceMinor: 12_000,
   lineTotalMinor: 37_000,
+  subtotalMinor: 32_000,
+  taxMinor: 5_000,
   modifiers: [{ groupId, optionId, name: "Queso extra", quantity: 2, unitPriceMinor: 500 }],
   geometry: "whole",
   fractionBreakdown: [],
@@ -74,6 +77,8 @@ const parsedResult = parseCaptureLineQuoteResultV1(result);
 expect(parsedResult?.lineTotalMinor === 37_000 && parsedResult.modifiers.length === 1, "result parses");
 expect(parseCaptureLineQuoteResultV1({ ...result, unitPriceMinor: 1.5 }) === undefined, "float price rejected");
 expect(parseCaptureLineQuoteResultV1({ ...result, lineTotalMinor: -1 }) === undefined, "negative total rejected");
+expect(parseCaptureLineQuoteResultV1({ ...result, taxMinor: 4_999 }) === undefined, "subtotal plus tax must equal the total");
+expect(parseCaptureLineQuoteResultV1({ ...result, taxMinor: 1.5 }) === undefined, "float tax rejected");
 expect(parseCaptureLineQuoteResultV1({ ...result, currency: "mxn" }) === undefined, "lowercase currency rejected");
 expect(parseCaptureLineQuoteResultV1({ ...result, geometry: "halves" }) === undefined, "halves geometry needs two halves");
 expect(parseCaptureLineQuoteResultV1({ ...result, extra: 1 }) === undefined, "result unknown key rejected");
