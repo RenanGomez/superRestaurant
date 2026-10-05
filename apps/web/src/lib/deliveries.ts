@@ -35,8 +35,12 @@ export function listDeliveries(token: string, baseUrl: string, scope: BranchScop
   });
 }
 
-export async function listCouriers(token: string, baseUrl: string, scope: BranchScope): Promise<DeliveryApiResult<readonly BranchMemberV1[]>> {
-  const body = parseBranchMembersRequestV1({ roles: ["courier"], schemaVersion: 1, scope });
+export function listCouriers(token: string, baseUrl: string, scope: BranchScope): Promise<DeliveryApiResult<readonly BranchMemberV1[]>> {
+  return listBranchMembers(token, baseUrl, scope, "courier");
+}
+
+export async function listBranchMembers(token: string, baseUrl: string, scope: BranchScope, role: "courier" | "waiter"): Promise<DeliveryApiResult<readonly BranchMemberV1[]>> {
+  const body = parseBranchMembersRequestV1({ roles: [role], schemaVersion: 1, scope });
   if (body === undefined) return failure("invalid");
   const result = await post(token, `${baseUrl}/api/v1/access/branch-members`, body, (raw) => {
     const value = parseBranchMembersV1(raw);

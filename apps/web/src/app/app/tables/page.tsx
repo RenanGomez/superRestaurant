@@ -5,7 +5,7 @@ import { authorizeBranch } from "../../../lib/branch-selection";
 import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
 import { TablesBoard } from "./tables-board";
-import { assignWaiterAction, createTableOrderAction, openShiftAction, readTablesBoardAction, tableOrderDetailAction } from "./actions";
+import { assignWaiterAction, createTableOrderAction, listWaitersAction, openShiftAction, readTablesBoardAction, tableOrderDetailAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +23,6 @@ export default async function TablesPage() {
   const canManage = authorized.roles.some((role) => role === "owner" || role === "admin" || role === "manager");
   const canOpenShift = authorized.roles.some((role) => role === "owner" || role === "admin" || role === "manager" || role === "supervisor" || role === "cashier");
   return <TablesBoard scope={scope} branchName={membership.branchName} restaurantName={membership.restaurantName}
-    actorId={session.user.id} actorName={session.user.email ?? null} canManage={canManage} canOpenShift={canOpenShift}
-    actions={{ read: readTablesBoardAction, create: createTableOrderAction, assign: assignWaiterAction, openShift: openShiftAction, detail: tableOrderDetailAction }} />;
+    actorId={session.user.id} canManage={canManage} canOpenShift={canOpenShift}
+    actions={{ read: readTablesBoardAction, create: createTableOrderAction, assign: assignWaiterAction, waiters: listWaitersAction, openShift: openShiftAction, detail: tableOrderDetailAction }} />;
 }
