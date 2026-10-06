@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { BranchMemberV1, BranchOrderWorkItemV1, BranchOrderWorkTrayV1, BranchScope } from "@super-restaurant/shared-types";
 import { formatMinorUnits, formatOrderWorkTime, shouldApplyBranchOrderWorkTrayResponse, type BranchOrderTrayRequestResult } from "../../../lib/branch-order-work-tray";
 import { courierInitials, mergeUnassignedDeliveryPages, paymentMethodLabel, shouldContinueUnassignedDeliveryLoad } from "../../../lib/delivery-board";
+import { CashierSubmitButton } from "../caja/submit-button";
 
 type Cursor = BranchOrderWorkTrayV1["nextCursor"];
 const button = "inline-flex min-h-11 items-center rounded-xl border border-border bg-surface px-4 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50";
@@ -88,7 +89,7 @@ export function UnassignedDeliveries({ action, assignAction, couriers, scope }: 
             <input type="hidden" name="eventId" /><input type="hidden" name="idempotencyKey" /><input type="hidden" name="occurredAt" />
             <input type="hidden" name="orderId" value={order.orderId} /><input type="hidden" name="expectedVersion" value="0" />
             <input type="hidden" name="courierUserId" value={courier.userId} />
-            <button type="submit" className={button}>{courierInitials(name)} · {name}</button>
+            <CashierSubmitButton idle={`${courierInitials(name)} · ${name}`} pending="Guardando…" tone="secondary" />
           </form>;
         })}</div></div>}
     </article>)}

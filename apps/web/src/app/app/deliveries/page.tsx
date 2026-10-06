@@ -154,7 +154,7 @@ export default async function DeliveriesPage({ searchParams }: DeliveriesPagePro
       )}
       <div className="grid min-w-0 gap-5 lg:grid-cols-2 2xl:grid-cols-3">
         {canManage && (
-          <UnassignedDeliveries action={unassignedDeliveriesAction} assignAction={assignDeliveryAction} couriers={courierList} scope={scope} />
+          <UnassignedDeliveries key={validUuid(scalar(params.refresh)) ?? "initial"} action={unassignedDeliveriesAction} assignAction={assignDeliveryAction} couriers={courierList} scope={scope} />
         )}
         <Column id="assigned" count={columns.assigned.length}>
           {columns.assigned.length === 0 ? <ColumnEmpty /> : columns.assigned.map((item) => (

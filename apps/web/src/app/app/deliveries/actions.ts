@@ -169,7 +169,10 @@ async function runTransition(kind: DeliveryTransitionKind, formData: FormData, e
     redirect(`${BOARD}?${failedSheet}error=${errorCode(result.status)}`);
   }
   revalidatePath(BOARD);
-  redirect(`${BOARD}?status=${kind}`);
+  // A unique URL key remounts the client tray after assign, so its local page cache cannot
+  // keep showing an order that has moved to the assigned column.
+  const refresh = kind === "assign" ? `&refresh=${encodeURIComponent(textField(formData, "eventId") ?? "")}` : "";
+  redirect(`${BOARD}?status=${kind}${refresh}`);
 }
 
 function audit(formData: FormData, deviceId: string, scope: BranchScope, orderId: string, expectedVersion: number) {
