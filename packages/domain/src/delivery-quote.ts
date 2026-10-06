@@ -16,6 +16,10 @@ import { Money } from "./money.js";
 const PROMISE_WINDOW_MS = 15 * 60 * 1000;
 /** Decisión 8.1.4: cutoff de 30 minutos antes del inicio de la ventana. */
 const SCHEDULE_CUTOFF_MS = 30 * 60 * 1000;
+/** Tiempo de preparación de un pedido ASAP: la ventana prometida inicia a quotedAt + 30 minutos. */
+export const DELIVERY_ASAP_PREPARATION_MS = SCHEDULE_CUTOFF_MS;
+/** Vigencia de una cotización ASAP desde quotedAt: 15 minutos (política `asap_ttl`). */
+export const DELIVERY_ASAP_QUOTE_TTL_MS = 15 * 60 * 1000;
 /** Decisión 8.1.4: horizonte de 7 días para pedidos programados. */
 const SCHEDULE_HORIZON_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -28,6 +32,8 @@ const SCHEDULE_HORIZON_MS = 7 * 24 * 60 * 60 * 1000;
  * that would require a distinct named policy, not a silent change here.
  */
 export const DELIVERY_QUOTE_EXPIRY_POLICY = "promise_start" as const;
+/** Política de expiración de cotizaciones ASAP: quotedAt + 15 minutos (la promesa inicia después). */
+export const DELIVERY_ASAP_QUOTE_EXPIRY_POLICY = "quoted_at_ttl" as const;
 
 const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 
@@ -122,6 +128,8 @@ export function quoteDelivery(input: QuoteDeliveryInput): DeliveryQuote {
   const quotedAtMs = parseTimestamp(input.quotedAt, "quotedAt");
   const promiseStartMs = resolvePromiseStartMs(quotedAtMs, input.scheduledFor);
   const promiseEndMs = promiseStartMs + PROMISE_WINDOW_MS;
+  // ASAP: vigencia propia desde quotedAt; programada: expira cuando inicia la ventana prometida.
+  const expiresAtMs = input.scheduledFor === null ? quotedAtMs + DELIVERY_ASAP_QUOTE_TTL_MS : promiseStartMs;
 
   const zone = findDeliveryZone(input.zones, input.address);
   const coverageStatus: DeliveryQuoteCoverageStatus = zone === undefined ? "not_covered" : "covered";
@@ -141,8 +149,8 @@ export function quoteDelivery(input: QuoteDeliveryInput): DeliveryQuote {
     promiseEnd: serializeTimestamp(promiseEndMs, "promiseEnd"),
     timeZone: input.timeZone,
     quotedAt: input.quotedAt,
-    // DELIVERY_QUOTE_EXPIRY_POLICY === "promise_start": the quote expires when its promised window begins.
-    expiresAt: serializeTimestamp(promiseStartMs, "expiresAt"),
+    // Programada: DELIVERY_QUOTE_EXPIRY_POLICY ("promise_start"); ASAP: DELIVERY_ASAP_QUOTE_EXPIRY_POLICY.
+    expiresAt: serializeTimestamp(expiresAtMs, "expiresAt"),
     version: input.version,
     override: null,
   });
@@ -188,7 +196,7 @@ export function applyDeliveryQuoteOverride(
 }
 
 function resolvePromiseStartMs(quotedAtMs: number, scheduledFor: string | null): number {
-  if (scheduledFor === null) return quotedAtMs;
+  if (scheduledFor === null) return quotedAtMs + DELIVERY_ASAP_PREPARATION_MS;
 
   const scheduledMs = parseTimestamp(scheduledFor, "scheduledFor");
   if (scheduledMs <= quotedAtMs) {
