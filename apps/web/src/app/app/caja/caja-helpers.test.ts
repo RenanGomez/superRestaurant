@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CashPaymentQuoteV1 } from "@super-restaurant/shared-types";
-import { buildReceiptHref, parseReceiptQuery, canCollectPayment, movementLabel, paymentAmountBounds, quickCashAmounts, requiredCashTenderMinor } from "./caja-helpers.js";
+import { buildReceiptHref, parseReceiptQuery, canCollectPayment, movementLabel, paymentAmountBounds, paymentMethodLabel, quickCashAmounts, requiredCashTenderMinor } from "./caja-helpers.js";
+
+test("receipt labels show a transfer reference only when one exists", () => {
+  assert.equal(paymentMethodLabel({ method: "transfer", transferReference: "ABC123" }), "Transferencia · Ref. ABC123");
+  assert.equal(paymentMethodLabel({ method: "transfer", transferReference: null }), "Transferencia");
+  assert.equal(paymentMethodLabel({ method: "cash", transferReference: null }), "Efectivo");
+  assert.equal(paymentMethodLabel({ method: "card_manual", transferReference: null }), "Tarjeta externa");
+});
 
 test("movement labels are operator-facing Spanish", () => {
   assert.equal(movementLabel("cash_sale"), "Venta en efectivo");

@@ -363,9 +363,9 @@ export class FinancialService {
     if (command === undefined) throw applicationError("request");
     const actorId = await this.authorize(principal, command.scope, "payments.collect");
     const replay = await this.replay(() => this.finances.replayCollect(actorId, command));
-    if (replay !== "missing") return replay;
+    if (replay !== "missing") return withTransferReference(replay, command);
     const prepared = await this.prepareCollection(actorId, command);
-    return this.mutation(() => this.finances.collect(actorId, prepared));
+    return withTransferReference(await this.mutation(() => this.finances.collect(actorId, prepared)), command);
   }
 
   /** The Order's remaining balance (total from packages/domain minus captured), for full-balance settlements. */
@@ -702,6 +702,16 @@ function positiveInteger(value: unknown): number | undefined {
 
 function nonNegativeInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * The stored collection result carries no reference; the payment's `manual_reference` is the command's
+ * `transferReference` (the SQL core refuses a replay whose command differs), so both the first call and the
+ * replay project it from the command. Only transfers carry one.
+ */
+function withTransferReference(summary: PaymentCollectionSummaryV1, command: CollectPaymentCommandV1): PaymentCollectionSummaryV1 {
+  const transferReference = summary.method === "transfer" ? command.transferReference ?? null : null;
+  return Object.freeze({ ...summary, transferReference });
 }
 
 function applicationError(code: FinancialApplicationErrorCode): FinancialApplicationError {

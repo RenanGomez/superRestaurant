@@ -96,6 +96,8 @@ export interface PaymentCollectionSummaryV1 {
   readonly changeMinor: number | null;
   readonly tenderedAmountMinor: number | null;
   readonly tipMinor: number;
+  /** Additive. Transfer only: the bank reference the operator recorded; null for other methods or when none was given. Absent in stored results, read as null. */
+  readonly transferReference: string | null;
 }
 
 export const CASH_REGISTER_MOVEMENT_TYPES_V1 = Object.freeze([
@@ -371,7 +373,7 @@ export function parsePaymentCollectionSummaryV1(value: unknown): PaymentCollecti
     "schemaVersion", "scope", "cashRegisterSessionId", "cashRegisterVersion", "paymentId", "orderId",
     "method", "amountMinor", "currency", "paymentState", "orderStatus", "orderVersion",
     "remainingBalanceMinor", "replayed",
-  ], ["tenderedAmountMinor", "changeMinor", "tipMinor"]);
+  ], ["tenderedAmountMinor", "changeMinor", "tipMinor", "transferReference"]);
   if (record === undefined || own(record, "schemaVersion") !== 1) return undefined;
   const tenderKeys = ["tenderedAmountMinor", "changeMinor", "tipMinor"].filter((key) => Object.hasOwn(record, key));
   if (tenderKeys.length !== 0 && tenderKeys.length !== 3) return undefined;
@@ -382,6 +384,8 @@ export function parsePaymentCollectionSummaryV1(value: unknown): PaymentCollecti
   const changeMinor = tenderKeys.length === 0 || rawChange === null
     ? null : integer(rawChange, 0, Number.MAX_SAFE_INTEGER);
   const tipMinor = tenderKeys.length === 0 ? 0 : integer(own(record, "tipMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const rawReference = own(record, "transferReference");
+  const transferReference = rawReference === undefined || rawReference === null ? null : text(rawReference, 1, 64);
   const scope = parseScope(own(record, "scope"));
   const cashRegisterSessionId = uuid(own(record, "cashRegisterSessionId"));
   const cashRegisterVersion = integer(own(record, "cashRegisterVersion"), 1, Number.MAX_SAFE_INTEGER);
@@ -402,12 +406,13 @@ export function parsePaymentCollectionSummaryV1(value: unknown): PaymentCollecti
     || remainingBalanceMinor === undefined || typeof replayed !== "boolean"
     || (orderStatus === "paid") !== (remainingBalanceMinor === 0)
     || tenderedAmountMinor === undefined || changeMinor === undefined || tipMinor === undefined
+    || transferReference === undefined || (transferReference !== null && method !== "transfer")
     || (tenderedAmountMinor === null) !== (changeMinor === null)
     || (tenderedAmountMinor !== null && (method !== "cash" || changeMinor !== tenderedAmountMinor - amountMinor - tipMinor))) return undefined;
   return Object.freeze({
     amountMinor, cashRegisterSessionId, cashRegisterVersion, changeMinor, currency, method, orderId, orderStatus,
     orderVersion, paymentId, paymentState, remainingBalanceMinor, replayed, schemaVersion: 1, scope,
-    tenderedAmountMinor, tipMinor,
+    tenderedAmountMinor, tipMinor, transferReference,
   });
 }
 
