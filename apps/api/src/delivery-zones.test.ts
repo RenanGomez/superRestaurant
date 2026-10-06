@@ -307,11 +307,19 @@ test("quoteForCapture: address outside every zone is not_covered with a zero fee
   assert.equal(quote.feeMinor, 0);
 });
 
-test("quoteForCapture: expires exactly at promiseStart (15-minute window)", async () => {
+test("quoteForCapture: ASAP quote lives 15 minutes from quotedAt and promises from quotedAt + 30 minutes", async () => {
   const service = serviceFor();
   const quote = await service.quoteForCapture(principal, quoteInput);
-  assert.equal(quote.expiresAt, quote.promiseStart);
+  const quotedAtMs = new Date(quote.quotedAt).getTime();
+  assert.equal(new Date(quote.expiresAt).getTime() - quotedAtMs, 15 * 60 * 1000);
+  assert.equal(new Date(quote.promiseStart).getTime() - quotedAtMs, 30 * 60 * 1000);
   assert.equal(new Date(quote.promiseEnd).getTime() - new Date(quote.promiseStart).getTime(), 15 * 60 * 1000);
+});
+
+test("quoteForCapture: a scheduled quote still expires exactly at promiseStart", async () => {
+  const service = serviceFor();
+  const quote = await service.quoteForCapture(principal, { ...quoteInput, scheduledFor: "2026-09-16T13:00:00.000Z" });
+  assert.equal(quote.expiresAt, quote.promiseStart);
 });
 
 test("quoteForCapture: draft without a fulfillment snapshot is a conflict, not a crash", async () => {
@@ -389,7 +397,7 @@ test("matchAddress: covered by postal code returns zone, fee in minor units and 
   const result = await serviceFor().matchAddress(principal, matchInput({ postalCode: "83000", locality: "Otra" }));
   assert.deepEqual(result, {
     schemaVersion: 1, coverageStatus: "covered", zoneId, zoneName: "Centro", feeMinor: 2500, currency: "MXN",
-    promiseMinutes: 15, promiseStart: "2026-09-16T12:00:02.000Z", promiseEnd: "2026-09-16T12:15:02.000Z",
+    promiseMinutes: 15, promiseStart: "2026-09-16T12:30:02.000Z", promiseEnd: "2026-09-16T12:45:02.000Z",
     evaluatedAt: "2026-09-16T12:00:02.000Z",
   });
 });
