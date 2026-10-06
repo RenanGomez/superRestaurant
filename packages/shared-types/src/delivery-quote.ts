@@ -147,12 +147,15 @@ export function parseDeliveryQuoteV1(value: unknown): DeliveryQuoteV1 | undefine
     // ASAP: the window starts at quotedAt + 30 minutes and the quote expires 15 minutes after quotedAt;
     // scheduled: the window starts at the requested schedule and the quote expires when it begins.
     const quotedAtMs = toMillis(request.quotedAt);
-    const expectedStart = request.scheduledFor ?? new Date(quotedAtMs + ASAP_PREPARATION_MS).toISOString();
-    const expectedExpiry = request.scheduledFor === null
-      ? new Date(quotedAtMs + ASAP_QUOTE_TTL_MS).toISOString()
-      : request.scheduledFor;
-    if (promiseStart !== expectedStart) return undefined;
-    if (expiresAt !== expectedExpiry) return undefined;
+    if (request.scheduledFor === null) {
+      const current = promiseStart === new Date(quotedAtMs + ASAP_PREPARATION_MS).toISOString()
+        && expiresAt === new Date(quotedAtMs + ASAP_QUOTE_TTL_MS).toISOString();
+      // Legacy ASAP quotes already frozen in orders/captures: window and expiry both at quotedAt.
+      const legacy = promiseStart === request.quotedAt && expiresAt === request.quotedAt;
+      if (!current && !legacy) return undefined;
+    } else if (promiseStart !== request.scheduledFor || expiresAt !== request.scheduledFor) {
+      return undefined;
+    }
 
     return Object.freeze({
       ...request,

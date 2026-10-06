@@ -102,6 +102,19 @@ for (const invalid of [
   { ...coveredQuote, feeMinor: 1.5 },
 ]) expect(parseDeliveryQuoteV1(invalid) === undefined, `quote rejects inconsistent facts: ${JSON.stringify(invalid)}`);
 
+// Legacy ASAP quotes frozen before the 15-minute TTL (window and expiry at quotedAt) keep parsing.
+const legacyAsapQuote = {
+  ...coveredQuote,
+  promiseStart: baseRequest.quotedAt,
+  promiseEnd: "2026-09-26T18:15:00.000Z",
+  expiresAt: baseRequest.quotedAt,
+} as const;
+expect(parseDeliveryQuoteV1(legacyAsapQuote) !== undefined, "a legacy ASAP quote still parses");
+expect(
+  parseDeliveryQuoteV1({ ...legacyAsapQuote, expiresAt: "2026-09-26T18:10:00.000Z" }) === undefined,
+  "an invented ASAP expiry (quotedAt + 10 min) is rejected",
+);
+
 // A scheduled quote's promise window must start at the requested schedule, not at quotedAt.
 const scheduledQuote = {
   ...coveredQuote,
