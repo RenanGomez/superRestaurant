@@ -8,14 +8,13 @@ import {
   MAX_DELIVERY_ATTEMPTS,
   type BranchDeliveryItemV1,
   type BranchMemberV1,
-  type BranchOrderWorkItemV1,
   type BranchScope,
   type CashPaymentQuoteV1,
 } from "@super-restaurant/shared-types";
 
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
-import { formatMinorUnits, formatOrderWorkTime, requestBranchOrderWorkTray } from "../../../lib/branch-order-work-tray";
+import { formatMinorUnits, formatOrderWorkTime } from "../../../lib/branch-order-work-tray";
 import { formatMinorForMoneyInput, suggestTenderAmounts } from "../../../lib/capture-payment";
 import {
   DELIVERY_COLUMN_LABELS,
@@ -36,12 +35,14 @@ import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } fro
 import { FocusRevalidate } from "../focus-revalidate";
 import {
   assignDeliveryAction,
+  unassignedDeliveriesAction,
   completeDeliveryAction,
   dispatchDeliveryAction,
   failDeliveryAction,
   settleDeliveryAction,
 } from "./actions";
 import { CourierOrderDetail } from "./courier-order-detail";
+import { UnassignedDeliveries } from "./unassigned-deliveries";
 
 export const dynamic = "force-dynamic";
 
@@ -123,22 +124,16 @@ export default async function DeliveriesPage({ searchParams }: DeliveriesPagePro
     return shell(<Empty title="Sin permiso de entregas" body="Tu rol actual no ve ni mueve entregas en esta sucursal." />);
   }
 
-  const [list, timeZone, couriers, tray] = await Promise.all([
+  const [list, timeZone, couriers] = await Promise.all([
     listDeliveries(session.access_token, env.apiBaseUrl, scope),
     readBranchTimeZone(session.access_token, env.apiBaseUrl, scope),
     canManage ? listCouriers(session.access_token, env.apiBaseUrl, scope) : Promise.resolve(undefined),
-    canManage ? requestBranchOrderWorkTray(session.access_token, env.apiBaseUrl, scope, null, 100, "delivery", true) : Promise.resolve(undefined),
   ]);
   if (list.status !== "ok" || timeZone === undefined) {
     return shell(<Empty title="No se pudo cargar la lista" body="El estado no está disponible. No se registró ningún cambio." action={<a href="/app/deliveries" className="inline-flex min-h-11 items-center rounded-xl bg-accent px-4 text-[14px] font-semibold text-white">Reintentar</a>} />);
   }
   const items = list.value.items;
   const columns = groupDeliveriesByState(items);
-  // The server decides what is unassigned (prepaid included). A `failed` delivery is shown in its own column,
-  // which carries the row version and the attempt cap the reassign action needs, so it is not repeated here.
-  const unassigned: readonly BranchOrderWorkItemV1[] = tray !== undefined && tray.ok
-    ? tray.value.items.filter((order) => order.deliveryState === null)
-    : [];
   const courierList: readonly BranchMemberV1[] = couriers?.status === "ok" ? couriers.value : [];
   const settleItem = canManage && settleId !== undefined ? items.find((entry) => entry.delivery.orderId === settleId && entry.delivery.state === "delivered") : undefined;
   const failItem = failId !== undefined ? items.find((entry) => entry.delivery.orderId === failId && (entry.delivery.state === "assigned" || entry.delivery.state === "en_route")) : undefined;
@@ -159,18 +154,7 @@ export default async function DeliveriesPage({ searchParams }: DeliveriesPagePro
       )}
       <div className="grid min-w-0 gap-5 lg:grid-cols-2 2xl:grid-cols-3">
         {canManage && (
-          <Column id="unassigned" count={unassigned.length}>
-            {unassigned.length === 0 ? <ColumnEmpty /> : unassigned.map((order) => (
-              <Card key={order.orderId}
-                title={order.customerLabel ?? "—"} subtitle={order.addressLabel ?? "—"}
-                meta={`Pedido ${formatOrderWorkTime(order.createdAt, order.timeZone)}`}
-                total={formatMinorUnits(order.totals.totalMinor, order.totals.currency)}
-                payment={order.status === "paid" ? "Pagada" : order.paymentIntent === null ? null : intentText(order.paymentIntent.method, order.paymentIntent.tenderedAmountMinor, order.totals.currency)}
-                courier={null}>
-                <CourierPicker orderId={order.orderId} version={0} couriers={courierList} />
-              </Card>
-            ))}
-          </Column>
+          <UnassignedDeliveries action={unassignedDeliveriesAction} assignAction={assignDeliveryAction} couriers={courierList} scope={scope} />
         )}
         <Column id="assigned" count={columns.assigned.length}>
           {columns.assigned.length === 0 ? <ColumnEmpty /> : columns.assigned.map((item) => (

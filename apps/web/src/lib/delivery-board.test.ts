@@ -4,8 +4,25 @@ import test from "node:test";
 import type { BranchDeliveryItemV1 } from "@super-restaurant/shared-types";
 
 import {
-  canReassign, courierCollectionMessage, courierInitials, groupDeliveriesByState, paymentMethodLabel, prefillTenderedMinor, prefillTipMinor, settlesInCaja,
+  canReassign, courierCollectionMessage, courierInitials, groupDeliveriesByState, mergeUnassignedDeliveryPages, paymentMethodLabel, prefillTenderedMinor, prefillTipMinor, settlesInCaja, shouldContinueUnassignedDeliveryLoad,
 } from "./delivery-board.js";
+
+test("unassigned tray pages skip failed and duplicate order IDs", () => {
+  const order = (orderId: string, deliveryState: null | "failed") => ({ orderId, deliveryState }) as never;
+  const first = mergeUnassignedDeliveryPages([], [order("a", null), order("f", "failed")]);
+  const second = mergeUnassignedDeliveryPages(first, [order("a", null), order("b", null), order("b", null)]);
+  assert.deepEqual(second.map((entry) => entry.orderId), ["a", "b"]);
+});
+
+test("unassigned tray continues until 20 visible or exhausted and stops on repeated cursor", () => {
+  const cursor = { orderId: "a", updatedAt: "2026-10-05T12:00:00Z" };
+  const next = { orderId: "b", updatedAt: cursor.updatedAt };
+  assert.equal(shouldContinueUnassignedDeliveryLoad(19, cursor, null), true);
+  assert.equal(shouldContinueUnassignedDeliveryLoad(19, next, cursor), true);
+  assert.equal(shouldContinueUnassignedDeliveryLoad(20, next, cursor), false);
+  assert.equal(shouldContinueUnassignedDeliveryLoad(0, null, cursor), false);
+  assert.equal(shouldContinueUnassignedDeliveryLoad(0, cursor, cursor), false);
+});
 
 function item(state: string, extra: Partial<BranchDeliveryItemV1> = {}, attemptCount = 0): BranchDeliveryItemV1 {
   return { delivery: { state, attemptCount }, orderStatus: "open", paymentIntent: null, ...extra } as unknown as BranchDeliveryItemV1;
