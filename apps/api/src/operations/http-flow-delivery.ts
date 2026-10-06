@@ -39,6 +39,11 @@ export async function deliveryFlow(): Promise<void> {
     assert.equal(projection.orderTotalMinor, totalMinor);
     assert.equal(projection.deliveryFeeMinor, feeMinor);
     context.check("phone_capture_confirmed_with_delivery_fee");
+    const frozenQuote = record(captured.workspace.deliveryQuote);
+    const quotedAtMs = Date.parse(frozenQuote.quotedAt as string);
+    assert.equal(Date.parse(frozenQuote.promiseStart as string), quotedAtMs + 30 * 60_000, `promiseStart: ${JSON.stringify(frozenQuote)}`);
+    assert.equal(Date.parse(frozenQuote.expiresAt as string), quotedAtMs + 15 * 60_000, `expiresAt: ${JSON.stringify(frozenQuote)}`);
+    context.check("asap_quote_confirms_without_schedule");
 
     await sendOrderToKitchen(context, orderId);
     const tray = ok(await context.send("cashier", "POST", "/branch-orders/tray", { schemaVersion: 1, scope, cursor: null, limit: 50, channel: null, unassignedDeliveriesOnly: true }), "tray");

@@ -81,8 +81,8 @@ export interface CapturedOrder { readonly captureDraftId: string; readonly order
 /**
  * Phone capture end to end through the real endpoints: draft -> customer -> (delivery: address, quote) ->
 
- * selection plan -> payment intent -> confirm. The quote is scheduled 45 min ahead: an ASAP quote (scheduledFor null) expires at
- * its own quotedAt (expiresAt = promise start), so the server rejects confirming it (DELIVERY_QUOTE_EXPIRED); product gap. Every mutation reads the version from the previous response.
+ * selection plan -> payment intent -> confirm. The quote is ASAP (scheduledFor null): valid 15 min from
+ * quotedAt, promising [quotedAt+30, +15 min]. Every mutation reads the version from the previous response.
  */
 export async function captureAndConfirm(context: HttpFlowContext, input: {
   readonly catalogVersion: string; readonly customer?: CustomerWithAddress; readonly lines: readonly CaptureLine[];
@@ -107,7 +107,7 @@ export async function captureAndConfirm(context: HttpFlowContext, input: {
     plan: { schemaVersion: 1, catalogVersion: input.catalogVersion, lines: input.lines.map((line) => ({ modifierGroups: [], note: null, ...line })) } }), "capture_selection_plan");
   detail = record(workspace.detail);
   if (delivery) {
-    workspace = ok(await context.send("cashier", "POST", "/captures/delivery-quote", { ...command(), scheduledFor: new Date(Date.now() + 45 * 60_000).toISOString() }), "capture_delivery_quote");
+    workspace = ok(await context.send("cashier", "POST", "/captures/delivery-quote", { ...command(), scheduledFor: null }), "capture_delivery_quote");
     detail = record(workspace.detail);
   }
   if (input.paymentIntent !== undefined) {
