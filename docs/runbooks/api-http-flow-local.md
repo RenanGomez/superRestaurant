@@ -32,6 +32,16 @@ La autenticación se sustituye únicamente en `AUTH_PRINCIPAL_VERIFIER` (token d
 membresías y la autorización se leen de la base real. Soporte: `apps/api/src/operations/local-postgres.ts`,
 `http-test-fixtures.ts` y `http-test-app.ts`.
 
+## Flujos adicionales (segunda iteración)
+
+Cada flujo arranca su propio cluster (runId y cleanup propios, unos 30 s cada uno; las migraciones se aplican desde cero cada vez):
+
+- Entrega: zona con CP cubierto, cliente con dirección validada, captura telefónica con cuota programada a 45 min, confirmar, enviar a cocina, bandeja `unassignedDeliveriesOnly`, asignar, despachar, detalle del repartidor (200 propio, 403 otro), completar, liquidar en efectivo con cambio y corte X.
+- Mitad y mitad: `line-quote` y plan de selección dan el mismo precio (sabor mayor + extra de media al 50 % redondeado hacia arriba) y `GET /kds/tickets` muestra «Mitad A/B».
+- Tarjeta externa y transferencia: cobro parcial `card_manual` + resto `transfer`, corte X con `transferCapturedMinor` y sin cambio; transferencia sobre entrega `en_route` devuelve 409 `DELIVERY_NOT_DELIVERED`.
+
+Brechas de producto observadas (no corregidas aquí): una cuota ASAP (`scheduledFor: null`) vence en su propio `quotedAt` y `confirm` responde 409 `delivery_quote_expired`; la orden confirmada nace `draft` y sólo entra a las bandejas de entrega tras enviarla a cocina.
+
 ## Fuera de alcance
 
-Entregas, mitades, CI remoto y cobertura (segunda iteración).
+CI remoto y cobertura.
