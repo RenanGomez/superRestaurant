@@ -6,9 +6,10 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import type { BranchScope, OrderDetailV1 } from "@super-restaurant/shared-types";
+import { parseBranchOrderWorkTrayRequestV1, type BranchScope, type OrderDetailV1 } from "@super-restaurant/shared-types";
 
 import { getServerEnv } from "../../../env";
+import { requestBranchOrderWorkTray, type BranchOrderTrayRequestResult } from "../../../lib/branch-order-work-tray";
 import { authorizeBranch } from "../../../lib/branch-selection";
 import { parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import {
@@ -26,6 +27,27 @@ import { createServerSupabaseClient } from "../../../lib/supabase-server";
 import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } from "../caja/context";
 
 const BOARD = "/app/deliveries";
+const MANAGER_ROLES = new Set(["owner", "admin", "manager", "supervisor", "cashier"]);
+
+export async function unassignedDeliveriesAction(input: unknown): Promise<BranchOrderTrayRequestResult> {
+  const request = parseBranchOrderWorkTrayRequestV1(input);
+  if (request === undefined || request.channel !== "delivery" || request.limit !== 100) return { error: "invalid", ok: false };
+  const scope = parseBranchPreference((await cookies()).get(BRANCH_PREFERENCE_COOKIE)?.value);
+  if (scope === undefined || request.scope.restaurantId !== scope.restaurantId || request.scope.branchId !== scope.branchId) {
+    return { error: "invalid", ok: false };
+  }
+  const supabase = await createServerSupabaseClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session === null) return { error: "denied", ok: false };
+  const env = getServerEnv();
+  const memberships = await listMemberships(session.access_token, env.apiBaseUrl);
+  const membership = memberships === undefined ? undefined : findMembership(memberships.memberships, scope);
+  if (membership === undefined || !membership.roles.some((role) => MANAGER_ROLES.has(role))
+    || await authorizeBranch(session.access_token, env.apiBaseUrl, scope) === undefined) {
+    return { error: "denied", ok: false };
+  }
+  return requestBranchOrderWorkTray(session.access_token, env.apiBaseUrl, scope, request.cursor, 100, "delivery", true);
+}
 
 export type CourierOrderDetailResult =
   | { readonly ok: true; readonly detail: OrderDetailV1; readonly capturedMinor: number; readonly remainingMinor: number }
@@ -147,7 +169,10 @@ async function runTransition(kind: DeliveryTransitionKind, formData: FormData, e
     redirect(`${BOARD}?${failedSheet}error=${errorCode(result.status)}`);
   }
   revalidatePath(BOARD);
-  redirect(`${BOARD}?status=${kind}`);
+  // A unique URL key remounts the client tray after assign, so its local page cache cannot
+  // keep showing an order that has moved to the assigned column.
+  const refresh = kind === "assign" ? `&refresh=${encodeURIComponent(textField(formData, "eventId") ?? "")}` : "";
+  redirect(`${BOARD}?status=${kind}${refresh}`);
 }
 
 function audit(formData: FormData, deviceId: string, scope: BranchScope, orderId: string, expectedVersion: number) {

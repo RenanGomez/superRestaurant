@@ -1,4 +1,26 @@
-import type { BranchDeliveryItemV1, DeliveryStateV1 } from "@super-restaurant/shared-types";
+import type { BranchDeliveryItemV1, BranchOrderWorkCursorV1, BranchOrderWorkItemV1, DeliveryStateV1 } from "@super-restaurant/shared-types";
+
+/** Keep only orders without a delivery; failed deliveries have their own versioned column. */
+export function mergeUnassignedDeliveryPages(
+  current: readonly BranchOrderWorkItemV1[], page: readonly BranchOrderWorkItemV1[],
+): readonly BranchOrderWorkItemV1[] {
+  const seen = new Set(current.map((item) => item.orderId));
+  const merged = [...current];
+  for (const item of page) {
+    if (item.deliveryState !== null || seen.has(item.orderId)) continue;
+    seen.add(item.orderId);
+    merged.push(item);
+  }
+  return merged;
+}
+
+export function shouldContinueUnassignedDeliveryLoad(
+  visibleCount: number, nextCursor: BranchOrderWorkCursorV1 | null,
+  previousCursor: BranchOrderWorkCursorV1 | null,
+): boolean {
+  return visibleCount < 20 && nextCursor !== null
+    && (previousCursor === null || nextCursor.orderId !== previousCursor.orderId || nextCursor.updatedAt !== previousCursor.updatedAt);
+}
 
 /** Board columns, in operating order. `unassigned` is filled from the order tray, never from the delivery list. */
 export type DeliveryColumnId = "unassigned" | "assigned" | "en_route" | "to_settle" | "failed";
