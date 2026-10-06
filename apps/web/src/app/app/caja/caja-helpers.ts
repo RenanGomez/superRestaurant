@@ -1,6 +1,12 @@
-import type { CashPaymentQuoteV1, CashRegisterMovementTypeV1 } from "@super-restaurant/shared-types";
+import type { CashPaymentQuoteV1, CashRegisterMovementTypeV1, PaymentCollectionSummaryV1 } from "@super-restaurant/shared-types";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+export function paymentMethodLabel(receipt: Pick<PaymentCollectionSummaryV1, "method" | "transferReference">): string {
+  if (receipt.method === "transfer") return receipt.transferReference === null
+    ? "Transferencia" : `Transferencia · Ref. ${receipt.transferReference}`;
+  return receipt.method === "cash" ? "Efectivo" : "Tarjeta externa";
+}
 
 export function buildReceiptHref(paymentId: string, orderId: string): string | null {
   if (!UUID_PATTERN.test(paymentId) || !UUID_PATTERN.test(orderId)) return null;
