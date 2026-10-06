@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { MenuCatalogV1, MenuModifierGroupV1, MenuVariantFractionV1, OrderDetailFractionHalfV1 } from "@super-restaurant/shared-types";
+import type { FractionHalfProjectionV1, MenuCatalogV1, MenuModifierGroupV1, MenuVariantFractionV1, OrderDetailFractionHalfV1 } from "@super-restaurant/shared-types";
 import {
   buildLineFraction,
   draftLinesFromProjection,
@@ -109,6 +109,30 @@ test("a saved projection is turned back into ids so re-sending the plan keeps th
   assert.deepEqual(restoreLineFraction(halves, setup, [flavors, extraMissing]), { ok: false, reason: "extra" });
 });
 
+test("projected ids preserve both halves after flavor and extra names change", () => {
+  const halves: FractionHalfProjectionV1[] = [
+    { amountMinor: 15_000, exclusions: [], extras: ["Queso extra"], flavorName: "Margarita",
+      fraction: "half-a", flavorOptionId: margarita, extraOptionIds: [queso], excludedIngredientIds: [] },
+    { amountMinor: 18_000, exclusions: ["cebolla"], extras: [], flavorName: "Pepperoni",
+      fraction: "half-b", flavorOptionId: pepperoni, extraOptionIds: [], excludedIngredientIds: ["cebolla"] },
+  ];
+  const renamedFlavors = { ...flavors, options: flavors.options.map((entry) => ({ ...entry, name: "Nuevo sabor" })) };
+  const renamedExtras = { ...extras, options: extras.options.map((entry) => ({ ...entry, name: "Nuevo extra" })) };
+  const restored = restoreLineFraction(halves, setup, [renamedFlavors, renamedExtras]);
+  assert.ok(restored.ok);
+  assert.deepEqual(restored.ok ? restored.fraction.slots : [], [
+    { fraction: "half-a", flavorOptionId: margarita, extraOptionIds: [queso], excludedIngredientIds: [] },
+    { fraction: "half-b", flavorOptionId: pepperoni, extraOptionIds: [], excludedIngredientIds: ["cebolla"] },
+  ]);
+  assert.deepEqual(restoreLineFraction(halves, setup, [renamedExtras]), { ok: false, reason: "flavor" });
+  assert.deepEqual(restoreLineFraction(halves, setup, [renamedFlavors]), { ok: false, reason: "extra" });
+  assert.deepEqual(restoreLineFraction([{ ...halves[0]!, flavorOptionId: pepperoni }, halves[1]!], setup,
+    [{ ...renamedFlavors, options: renamedFlavors.options.filter((entry) => entry.optionId !== pepperoni) }, renamedExtras]),
+    { ok: false, reason: "flavor" });
+  assert.deepEqual(restoreLineFraction(halves, { ...setup, excludableIngredientIds: [] }, [renamedFlavors, renamedExtras]),
+    { ok: false, reason: "extra" });
+});
+
 test("a split line that cannot be restored never becomes a whole line in the rebuilt plan", () => {
   const halves: OrderDetailFractionHalfV1[] = [
     { amountMinor: 15_000, exclusions: [], extras: [], flavorName: "Margarita", fraction: "half-a" },
@@ -127,6 +151,33 @@ test("a split line that cannot be restored never becomes a whole line in the reb
   assert.deepEqual(noCatalog, { ok: false, lineName: "Pizza" });
   assert.deepEqual(draftLinesFromProjection([line("l1", true)], catalog([extras])), { ok: false, lineName: "Pizza" });
   assert.equal(splitLostMessage("Pizza"), 'No se pudo conservar la división de "Pizza"; recarga el menú');
+});
+
+test("changing another line's quantity keeps projected half ids in the replacement plan", () => {
+  const halves: FractionHalfProjectionV1[] = [
+    { amountMinor: 15_000, exclusions: [], extras: ["Queso extra"], flavorName: "Margarita",
+      fraction: "half-a", flavorOptionId: margarita, extraOptionIds: [queso], excludedIngredientIds: [] },
+    { amountMinor: 18_000, exclusions: ["cebolla"], extras: [], flavorName: "Pepperoni",
+      fraction: "half-b", flavorOptionId: pepperoni, extraOptionIds: [], excludedIngredientIds: ["cebolla"] },
+  ];
+  const variant = { active: true, displayOrder: 0, fraction: setup, name: "Grande", sku: null, unitPriceMinor: 15_000, variantId: "v1" };
+  const catalog = { modifierGroups: [
+    { ...flavors, options: flavors.options.map((entry) => ({ ...entry, name: "Renombrado" })) },
+    { ...extras, options: extras.options.map((entry) => ({ ...entry, name: "Extra renombrado" })) },
+  ], products: [{ productId: "p", variants: [variant] }] as unknown as MenuCatalogV1["products"] };
+  const line = (lineId: string, withHalves: boolean) => ({ lineId, productId: "p", variantId: "v1", productName: "Pizza",
+    quantity: 1, unitPriceMinor: 18_000, lineTotalMinor: 18_000, note: null, modifiers: [],
+    ...(withHalves ? { halves } : {}) });
+  const restored = draftLinesFromProjection([line("split", true), line("other", false)], catalog);
+  assert.ok(restored.ok);
+  if (!restored.ok) return;
+  const updated = applyLineChange(restored.lines, { type: "increment", lineId: "other" });
+  const plan = buildSelectionPlan(updated, flavorGroupId);
+  assert.equal(plan.lines.find((entry) => entry.lineId === "other")?.quantity, 2);
+  assert.deepEqual(plan.lines.find((entry) => entry.lineId === "split")?.fraction?.slots, [
+    { fraction: "half-a", flavorOptionId: margarita, extraOptionIds: [queso], excludedIngredientIds: [] },
+    { fraction: "half-b", flavorOptionId: pepperoni, extraOptionIds: [], excludedIngredientIds: ["cebolla"] },
+  ]);
 });
 
 test("selection plan lines carry fraction and only merge when the split is identical", () => {
