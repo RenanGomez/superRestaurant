@@ -184,8 +184,8 @@ const deliveryQuoteSnapshot = {
   addressSnapshotRef: id, address: { postalCode: "83000", locality: "Hermosillo" },
   currency: "MXN", timeZone: "America/Hermosillo", quotedAt: "2026-09-22T12:00:00.000Z",
   scheduledFor: null, version: 1, coverageStatus: "covered", zoneId: id, feeMinor: 3_000,
-  promiseStart: "2026-09-22T12:00:00.000Z", promiseEnd: "2026-09-22T12:15:00.000Z",
-  expiresAt: "2026-09-22T12:00:00.000Z", override: null,
+  promiseStart: "2026-09-22T12:30:00.000Z", promiseEnd: "2026-09-22T12:45:00.000Z",
+  expiresAt: "2026-09-22T12:15:00.000Z", override: null,
 };
 const paymentIntentSnapshot = { schemaVersion: 1, method: "cash", tenderedAmountMinor: 20_000, tipMinor: 0 };
 const orderSnapshotV2 = {

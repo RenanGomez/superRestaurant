@@ -50,8 +50,9 @@ test("quoteDelivery covers a matching address with a frozen 15-minute promise wi
   assert.equal(quote.coverageStatus, "covered");
   assert.equal(quote.zoneId, "zone-1");
   assert.deepEqual(quote.feeMinor, new Money(2_500, "MXN"));
-  assert.equal(quote.promiseStart, "2026-09-26T18:00:00.000Z");
-  assert.equal(quote.promiseEnd, "2026-09-26T18:15:00.000Z");
+  assert.equal(quote.promiseStart, "2026-09-26T18:30:00.000Z");
+  assert.equal(quote.promiseEnd, "2026-09-26T18:45:00.000Z");
+  assert.equal(quote.expiresAt, "2026-09-26T18:15:00.000Z");
   assert.equal(quote.override, null);
   assert.equal(Object.isFrozen(quote), true);
 });
@@ -73,6 +74,18 @@ test("quoteDelivery accepts a scheduled order within the 7-day horizon and past 
   const quote = quoteDelivery(baseInput({ scheduledFor: "2026-09-27T12:00:00.000Z" }));
   assert.equal(quote.promiseStart, "2026-09-27T12:00:00.000Z");
   assert.equal(quote.promiseEnd, "2026-09-27T12:15:00.000Z");
+  // Programada: expira cuando inicia la ventana prometida (política promise_start).
+  assert.equal(quote.expiresAt, quote.promiseStart);
+});
+
+test("quoteDelivery ASAP: vigente 14 minutos después de quotedAt y vencida a los 16", () => {
+  const quote = quoteDelivery(baseInput());
+  const quotedAtMs = Date.parse(quote.quotedAt);
+  const expiresAtMs = Date.parse(quote.expiresAt);
+  assert.equal(expiresAtMs - quotedAtMs, 15 * 60 * 1000);
+  assert.equal(quotedAtMs + 14 * 60 * 1000 < expiresAtMs, true);
+  assert.equal(quotedAtMs + 16 * 60 * 1000 <= expiresAtMs, false);
+  assert.equal(Date.parse(quote.promiseStart) - quotedAtMs, 30 * 60 * 1000);
 });
 
 test("quoteDelivery rejects a scheduled window in the past", () => {
@@ -111,11 +124,12 @@ test("quoteDelivery keeps the promise window, horizon, and cutoff exact in UTC a
     timeZone: "America/Chicago",
     quotedAt: quotedAtBeforeTransition,
   }));
-  assert.equal(asapQuote.promiseStart, "2026-11-01T06:59:00.000Z");
+  assert.equal(asapQuote.promiseStart, "2026-11-01T07:29:00.000Z");
   // 07:14:00Z is 01:14:00 CST local — apparently "earlier" than the 01:59
   // CDT quotedAt on a naive wall-clock reading, proving the 15-minute
   // window is computed on the UTC instant, not local time.
-  assert.equal(asapQuote.promiseEnd, "2026-11-01T07:14:00.000Z");
+  assert.equal(asapQuote.promiseEnd, "2026-11-01T07:44:00.000Z");
+  assert.equal(asapQuote.expiresAt, "2026-11-01T07:14:00.000Z");
   assert.equal(
     Date.parse(asapQuote.promiseEnd) - Date.parse(asapQuote.promiseStart),
     15 * 60 * 1000,

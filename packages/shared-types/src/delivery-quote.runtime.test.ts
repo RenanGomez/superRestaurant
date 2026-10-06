@@ -62,9 +62,9 @@ const coveredQuote = {
   coverageStatus: "covered",
   zoneId: "66666666-6666-4666-8666-666666666666",
   feeMinor: 2_500,
-  promiseStart: "2026-09-26T18:00:00.000Z",
-  promiseEnd: "2026-09-26T18:15:00.000Z",
-  expiresAt: "2026-09-26T18:00:00.000Z",
+  promiseStart: "2026-09-26T18:30:00.000Z",
+  promiseEnd: "2026-09-26T18:45:00.000Z",
+  expiresAt: "2026-09-26T18:15:00.000Z",
   override: null,
 } as const;
 const parsedCoveredQuote = parseDeliveryQuoteV1(coveredQuote);
@@ -76,9 +76,9 @@ const notCoveredQuote = {
   coverageStatus: "not_covered",
   zoneId: null,
   feeMinor: 0,
-  promiseStart: "2026-09-26T18:00:00.000Z",
-  promiseEnd: "2026-09-26T18:15:00.000Z",
-  expiresAt: "2026-09-26T18:00:00.000Z",
+  promiseStart: "2026-09-26T18:30:00.000Z",
+  promiseEnd: "2026-09-26T18:45:00.000Z",
+  expiresAt: "2026-09-26T18:15:00.000Z",
   override: null,
 } as const;
 expect(parseDeliveryQuoteV1(notCoveredQuote) !== undefined, "a not_covered quote with a null zone and zero fee parses");
@@ -91,15 +91,29 @@ for (const invalid of [
   // covered must carry a non-null zoneId.
   { ...coveredQuote, zoneId: null },
   // the promise window must be exactly 15 minutes.
-  { ...coveredQuote, promiseEnd: "2026-09-26T18:20:00.000Z" },
-  { ...coveredQuote, promiseEnd: "2026-09-26T18:10:00.000Z" },
-  // expiresAt must equal promiseStart.
-  { ...coveredQuote, expiresAt: "2026-09-26T18:15:00.000Z" },
-  // promiseStart must equal quotedAt for an ASAP (unscheduled) quote.
+  { ...coveredQuote, promiseEnd: "2026-09-26T18:50:00.000Z" },
+  { ...coveredQuote, promiseEnd: "2026-09-26T18:40:00.000Z" },
+  // ASAP expiresAt must equal quotedAt + 15 minutes (not promiseStart, not quotedAt).
+  { ...coveredQuote, expiresAt: "2026-09-26T18:30:00.000Z" },
+  { ...coveredQuote, expiresAt: "2026-09-26T18:00:00.000Z" },
+  // promiseStart must equal quotedAt + 30 minutes for an ASAP (unscheduled) quote.
   { ...coveredQuote, promiseStart: "2026-09-26T19:00:00.000Z", promiseEnd: "2026-09-26T19:15:00.000Z" },
   { ...coveredQuote, feeMinor: -1 },
   { ...coveredQuote, feeMinor: 1.5 },
 ]) expect(parseDeliveryQuoteV1(invalid) === undefined, `quote rejects inconsistent facts: ${JSON.stringify(invalid)}`);
+
+// Legacy ASAP quotes frozen before the 15-minute TTL (window and expiry at quotedAt) keep parsing.
+const legacyAsapQuote = {
+  ...coveredQuote,
+  promiseStart: baseRequest.quotedAt,
+  promiseEnd: "2026-09-26T18:15:00.000Z",
+  expiresAt: baseRequest.quotedAt,
+} as const;
+expect(parseDeliveryQuoteV1(legacyAsapQuote) !== undefined, "a legacy ASAP quote still parses");
+expect(
+  parseDeliveryQuoteV1({ ...legacyAsapQuote, expiresAt: "2026-09-26T18:10:00.000Z" }) === undefined,
+  "an invented ASAP expiry (quotedAt + 10 min) is rejected",
+);
 
 // A scheduled quote's promise window must start at the requested schedule, not at quotedAt.
 const scheduledQuote = {
@@ -185,12 +199,12 @@ const dstAsapQuote = {
   coverageStatus: "covered",
   zoneId: coveredQuote.zoneId,
   feeMinor: coveredQuote.feeMinor,
-  promiseStart: "2026-11-01T06:59:00.000Z",
-  // 07:14:00Z reads as 01:14:00 CST local, nominally "before" the 01:59 CDT
-  // quotedAt on a naive wall-clock comparison — proof the 15-minute window
-  // is validated on the UTC instant, not local time.
-  promiseEnd: "2026-11-01T07:14:00.000Z",
-  expiresAt: "2026-11-01T06:59:00.000Z",
+  promiseStart: "2026-11-01T07:29:00.000Z",
+  // 07:14:00Z (expiresAt) reads as 01:14:00 CST local, nominally "before" the 01:59 CDT
+  // quotedAt on a naive wall-clock comparison — proof the window is
+  // validated on the UTC instant, not local time.
+  promiseEnd: "2026-11-01T07:44:00.000Z",
+  expiresAt: "2026-11-01T07:14:00.000Z",
   override: null,
 } as const;
 expect(

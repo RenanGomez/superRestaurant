@@ -1913,9 +1913,9 @@ const deliveryQuoteFixture = {
   coverageStatus: "covered" as const,
   zoneId: "33333333-3333-4333-8333-333333333333",
   feeMinor: 3_000,
-  promiseStart: "2026-09-24T12:00:00.000Z",
-  promiseEnd: "2026-09-24T12:15:00.000Z",
-  expiresAt: "2026-09-24T12:00:00.000Z",
+  promiseStart: "2026-09-24T12:30:00.000Z",
+  promiseEnd: "2026-09-24T12:45:00.000Z",
+  expiresAt: "2026-09-24T12:15:00.000Z",
   override: null,
 };
 

@@ -409,7 +409,14 @@ export {
   InvalidDeliveryQuoteFieldError,
   InvalidDeliveryTimestampError,
 } from "./errors.js";
-export { applyDeliveryQuoteOverride, DELIVERY_QUOTE_EXPIRY_POLICY, quoteDelivery } from "./delivery-quote.js";
+export {
+  applyDeliveryQuoteOverride,
+  DELIVERY_ASAP_PREPARATION_MS,
+  DELIVERY_ASAP_QUOTE_EXPIRY_POLICY,
+  DELIVERY_ASAP_QUOTE_TTL_MS,
+  DELIVERY_QUOTE_EXPIRY_POLICY,
+  quoteDelivery,
+} from "./delivery-quote.js";
 export type {
   ApplyDeliveryQuoteOverrideInput,
   DeliveryQuote,

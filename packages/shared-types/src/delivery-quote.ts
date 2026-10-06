@@ -5,6 +5,9 @@ export type DeliveryQuoteCoverageStatusV1 = (typeof DELIVERY_QUOTE_COVERAGE_STAT
 
 const PROMISE_WINDOW_MS = 15 * 60 * 1000;
 const SCHEDULE_CUTOFF_MS = 30 * 60 * 1000;
+/** ASAP: la ventana prometida inicia a quotedAt + preparacion; la cotizacion vive 15 minutos desde quotedAt. */
+const ASAP_PREPARATION_MS = 30 * 60 * 1000;
+const ASAP_QUOTE_TTL_MS = 15 * 60 * 1000;
 const SCHEDULE_HORIZON_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** The address facts a coverage lookup matches against; never re-geocoded. */
@@ -141,11 +144,18 @@ export function parseDeliveryQuoteV1(value: unknown): DeliveryQuoteV1 | undefine
     if (coverageStatus === "covered" && zoneId === null) return undefined;
     // The promise window is always exactly 15 minutes, frozen from the window start (decision 8.1.3).
     if (toMillis(promiseEnd) - toMillis(promiseStart) !== PROMISE_WINDOW_MS) return undefined;
-    // The quote expires once its promised window begins.
-    if (expiresAt !== promiseStart) return undefined;
-    // The window start is the quotedAt instant for ASAP orders, or the requested schedule otherwise.
-    const expectedStart = request.scheduledFor ?? request.quotedAt;
-    if (promiseStart !== expectedStart) return undefined;
+    // ASAP: the window starts at quotedAt + 30 minutes and the quote expires 15 minutes after quotedAt;
+    // scheduled: the window starts at the requested schedule and the quote expires when it begins.
+    const quotedAtMs = toMillis(request.quotedAt);
+    if (request.scheduledFor === null) {
+      const current = promiseStart === new Date(quotedAtMs + ASAP_PREPARATION_MS).toISOString()
+        && expiresAt === new Date(quotedAtMs + ASAP_QUOTE_TTL_MS).toISOString();
+      // Legacy ASAP quotes already frozen in orders/captures: window and expiry both at quotedAt.
+      const legacy = promiseStart === request.quotedAt && expiresAt === request.quotedAt;
+      if (!current && !legacy) return undefined;
+    } else if (promiseStart !== request.scheduledFor || expiresAt !== request.scheduledFor) {
+      return undefined;
+    }
 
     return Object.freeze({
       ...request,
