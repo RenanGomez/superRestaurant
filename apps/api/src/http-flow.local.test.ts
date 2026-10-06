@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 
 import { deliveryFlow } from "./operations/http-flow-delivery.js";
+import { halvesFlow } from "./operations/http-flow-halves.js";
 import { bootstrapHttpApp } from "./operations/http-test-app.js";
 import { HTTP_TEST_ACTORS, provisionHttpFixtures, type HttpTestActorName } from "./operations/http-test-fixtures.js";
 import { assertLocalConfirmation, listMigrationNames, LocalPostgres } from "./operations/local-postgres.js";
@@ -174,3 +175,5 @@ test("http flow: cash register, order, kitchen, cash payment with change and tip
 });
 
 test("http flow: phone delivery, courier ownership, cash settle with change and X cut", async () => { await deliveryFlow(); });
+
+test("http flow: half-and-half line quote, selection plan and kitchen ticket", async () => { await halvesFlow(); });
