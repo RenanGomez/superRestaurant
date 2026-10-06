@@ -22,3 +22,6 @@ Sin tocar apps/api ni SQL; el servidor sigue filtrando; sin push.
 
 ## Formato de salida
 Resumen (toques), archivos, salida literal, riesgos.
+
+## Ronda 2 (2026-10-05) — corregir y nada más
+Tu trabajo está commiteado por L0 en `codex/web-deliveries-load-more` (`3024dbc`). `codex exec review` marcó en `apps/web/src/app/app/deliveries/unassigned-deliveries.tsx`: **P1** (50-61) tras asignar, `assignDeliveryAction` revalida la página pero el componente cliente conserva `items`; la orden sigue en «Por asignar» y aparece en «Asignadas» a la vez, y reasignar da conflicto. Recarga la bandeja tras una asignación exitosa (clave de remount ligada a la navegación o recarga explícita de la primera página al completar la acción) y muestra el resultado. **P2** (89) el botón de asignar permite doble envío con ids nuevos: usa el botón consciente de `pending` que ya usan las otras acciones de entregas. Pruebas de helper si aplica. Puertas web lint/typecheck/test/build. No commitees; deja los archivos modificados e informa archivos y salida literal.

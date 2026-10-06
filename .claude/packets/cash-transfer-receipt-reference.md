@@ -31,3 +31,6 @@ Montos intactos; contrato aditivo; no registrar la referencia en logs; sin SQL; 
 
 ## Formato de salida
 Resumen, hashes, puertas, riesgos.
+
+## Nota para la unidad web (2026-10-05)
+La API está en `claude/cash-transfer-receipt-reference` (`aecd5ab`, `4bb1a94`). `transferReference` es obligatorio en el tipo `PaymentCollectionSummaryV1` (`string | null`) y opcional al parsear: la fixture de `apps/web/src/app/app/caja/receipt.test.ts:9` rompe el typecheck hasta que le añadas `transferReference: null`. El recibo de `/deliveries/settle` no trae referencia (queda `null`), no lo toques.

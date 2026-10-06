@@ -1,5 +1,10 @@
 # PROJECT_NOTES
 
+## Cotización de entrega ASAP: validez de 15 minutos — 2026-10-05
+
+- Bug encontrado por el flujo HTTP local y confirmado por lectura: con `scheduledFor = null` el dominio fijaba `promiseStart = quotedAt` y, por la política `promise_start`, `expiresAt = quotedAt`; `confirm_capture_draft_v3` compara `expiresAt <= clock_timestamp()`, así que ninguna captura telefónica a domicilio ASAP podía confirmarse (409 `delivery_quote_expired`).
+- Decisión de L0 (pendiente de que Emmanuel la ratifique en su prueba): una cotización **ASAP** vale **15 minutos desde `quotedAt`** y promete `[quotedAt + 30 min de preparación, +15 min]`; una cotización **programada** conserva `expiresAt = promiseStart`. El SQL no cambia. Si Emmanuel prefiere otra validez o un tiempo de preparación por zona, es un cambio de constante en `packages/domain/src/delivery-quote.ts`.
+
 ## Entregas: decisiones de liquidación y PII del repartidor — 2026-10-04
 
 - El repartidor (rol `courier`) ve nombre, teléfono, dirección e instrucciones **sólo de las entregas que tiene asignadas**, aunque no tenga `customers.read`; es la excepción mínima a la regla «PII sólo con `customers.read`» que exige la entrega física, acotada en SQL a sus filas. Otro repartidor o cualquier rol sin ese permiso sigue sin ver nada.
