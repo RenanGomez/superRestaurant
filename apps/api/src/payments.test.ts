@@ -617,6 +617,7 @@ function paymentSummary(input: PersistPaymentInput, cashRegisterVersion: number,
     replayed: false,
     schemaVersion: 1 as const,
     scope,
+    transferReference: null,
   });
 }
 
@@ -716,6 +717,7 @@ test("transfer collects the exact amount with an optional reference, a tip, and 
   assert.equal(summary.tipMinor, 500);
   assert.equal(summary.changeMinor, null);
   assert.equal(summary.tenderedAmountMinor, null);
+  assert.equal(summary.transferReference, "SPEI-0001");
   assert.equal(persisted[0]?.register.movements.length, 0);
   assert.equal(persisted[0]?.payment.method, "transfer");
   assert.equal(persisted[0]?.payment.cardManualEvidence, undefined);
@@ -760,6 +762,21 @@ test("transfer quote has zero change and refuses a tender; adapter reads the rea
   const adapter = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: wire }] }) });
   const collected = await adapter.collect(actorId, input);
   assert.equal(typeof collected === "string" ? "" : collected.method, "transfer");
+  assert.equal(typeof collected === "string" ? "" : collected.transferReference, null, "the stored row carries no reference");
+  // Real { result } rows through the service: first call and replay both project the command's reference.
+  const rowFinances = financialPort({
+    read: async () => storedRegister(openRegister(), 1, 0),
+    collect: async () => adapter.collect(actorId, input),
+  });
+  const rowService = serviceFor(["cashier"], rowFinances, orderPort(payableOrder(), 1));
+  const withRef = collectCommand({ amountMinor: 5_000, cardManualEvidence: null, method: "transfer", tipMinor: 200, transferReference: "SPEI-0001" });
+  assert.equal((await rowService.collect(principal, withRef)).transferReference, "SPEI-0001");
+  const noRef = collectCommand({ amountMinor: 5_000, cardManualEvidence: null, method: "transfer", tipMinor: 200 });
+  assert.equal((await rowService.collect(principal, noRef)).transferReference, null);
+  const replayFinances = financialPort({ replayCollect: async () => new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: { ...wire, replayed: true } }] }) }).replayCollect(actorId, input.command) });
+  const replayService = serviceFor(["cashier"], replayFinances, orderPort(payableOrder(), 1));
+  const replayedRef = await replayService.collect(principal, withRef);
+  assert.equal(replayedRef.transferReference, "SPEI-0001");
   // A replay (idempotent) returns the stored row flagged as replayed.
   const replayAdapter = new PostgresFinancialPersistenceAdapter({ query: async () => ({ rows: [{ result: { ...wire, replayed: true } }] }) });
   const replayed = await replayAdapter.collect(actorId, input);
