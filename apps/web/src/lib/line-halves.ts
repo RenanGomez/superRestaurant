@@ -2,6 +2,7 @@ import type {
   CaptureSelectionPlanProjectionLineV1,
   LineFractionHalfV1,
   LineFractionV1,
+  FractionHalfProjectionV1,
   MenuCatalogV1,
   MenuModifierGroupV1,
   MenuVariantFractionV1,
@@ -136,13 +137,12 @@ function uniqueActiveByName(group: MenuModifierGroupV1 | undefined, name: string
 }
 
 /**
- * The saved selection projection only names the flavors and extras, so re-sending the plan (to
- * change a quantity or edit another line) needs their ids back. Resolves them by unique name among
- * the active options of the size's own flavor and extra groups. Any miss or ambiguity is an error:
- * the caller must not send the line as a whole one.
+ * Restores ids from the saved projection. Older projections carry only names, which are resolved
+ * among active options. Every id must still be valid in the current catalog before re-sending.
+ * A miss is an error: the caller must not send the line as a whole one.
  */
 export function restoreLineFraction(
-  halves: readonly OrderDetailFractionHalfV1[] | undefined,
+  halves: readonly FractionHalfProjectionV1[] | undefined,
   setup: MenuVariantFractionV1 | null | undefined,
   groups: readonly MenuModifierGroupV1[],
 ): RestoreFractionResult {
@@ -150,19 +150,23 @@ export function restoreLineFraction(
   if (setup === null || setup === undefined) return { ok: false, reason: "no-setup" };
   const flavorGroup = groups.find((group) => group.groupId === setup.flavorGroupId);
   const extraGroup = groups.find((group) => group.groupId === setup.extraGroupId);
+  const activeOption = (group: MenuModifierGroupV1 | undefined, id: string) =>
+    group?.options.some((option) => option.active && option.optionId === id) ?? false;
   const slots: LineFractionV1["slots"][number][] = [];
   for (const fractionName of ["half-a", "half-b"] as const) {
     const half = halves.find((candidate) => candidate.fraction === fractionName);
     if (half === undefined) return { ok: false, reason: "missing-halves" };
-    const flavorOptionId = uniqueActiveByName(flavorGroup, half.flavorName);
-    if (flavorOptionId === undefined) return { ok: false, reason: "flavor" };
-    const extraOptionIds: string[] = [];
-    for (const name of half.extras) {
-      const extraId = uniqueActiveByName(extraGroup, name);
-      if (extraId === undefined) return { ok: false, reason: "extra" };
-      extraOptionIds.push(extraId);
+    const hasIds = half.flavorOptionId !== undefined && half.extraOptionIds !== undefined
+      && half.excludedIngredientIds !== undefined;
+    const flavorOptionId = hasIds ? half.flavorOptionId : uniqueActiveByName(flavorGroup, half.flavorName);
+    if (flavorOptionId === undefined || !activeOption(flavorGroup, flavorOptionId)) return { ok: false, reason: "flavor" };
+    const extraOptionIds = hasIds ? [...half.extraOptionIds!] : half.extras.map((name) => uniqueActiveByName(extraGroup, name));
+    if (extraOptionIds.some((id) => id === undefined || !activeOption(extraGroup, id))) return { ok: false, reason: "extra" };
+    const excludedIngredientIds = hasIds ? half.excludedIngredientIds! : half.exclusions;
+    if (hasIds && excludedIngredientIds.some((id) => !setup.excludableIngredientIds.includes(id))) {
+      return { ok: false, reason: "extra" };
     }
-    slots.push({ excludedIngredientIds: [...half.exclusions], extraOptionIds, flavorOptionId, fraction: fractionName });
+    slots.push({ excludedIngredientIds: [...excludedIngredientIds], extraOptionIds: extraOptionIds as string[], flavorOptionId, fraction: fractionName });
   }
   return { ok: true, fraction: { geometry: "halves", slots } };
 }

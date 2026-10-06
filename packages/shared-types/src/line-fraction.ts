@@ -31,6 +31,17 @@ export interface OrderDetailFractionHalfV1 {
   readonly fraction: LineFractionHalfV1;
 }
 
+/**
+ * A priced half in a plan projection or line quote: the display half plus the ids of its flavor,
+ * extras and exclusions. The ids are optional when parsing so projections stored before they were
+ * emitted still parse; the API always emits them.
+ */
+export interface FractionHalfProjectionV1 extends OrderDetailFractionHalfV1 {
+  readonly excludedIngredientIds?: readonly string[];
+  readonly extraOptionIds?: readonly string[];
+  readonly flavorOptionId?: string;
+}
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 /** Parses the optional `fraction` property: `null`/absent mean a whole (not split) line. */
@@ -93,6 +104,27 @@ export function parseOrderDetailFractionHalfV1(value: unknown): OrderDetailFract
     extras: Object.freeze(extras as string[]),
     flavorName,
     fraction,
+  });
+}
+
+/** Parses a projection half: the strict display half plus all-or-none ids (flavor, extras, exclusions). */
+export function parseFractionHalfProjectionV1(value: unknown): FractionHalfProjectionV1 | undefined {
+  const base = ["fraction", "flavorName", "amountMinor", "extras", "exclusions"];
+  const withIds = exactRecord(value, [...base, "flavorOptionId", "extraOptionIds", "excludedIngredientIds"]);
+  if (withIds === undefined) return parseOrderDetailFractionHalfV1(value);
+  const half = parseOrderDetailFractionHalfV1(Object.fromEntries(base.map((key) => [key, own(withIds, key)])));
+  const flavorOptionId = uuid(own(withIds, "flavorOptionId"));
+  const rawExtras = denseArray(own(withIds, "extraOptionIds"), LINE_FRACTION_MAX_EXTRAS);
+  const rawExclusions = denseArray(own(withIds, "excludedIngredientIds"), LINE_FRACTION_MAX_EXCLUSIONS);
+  if (half === undefined || flavorOptionId === undefined || rawExtras === undefined || rawExclusions === undefined) return undefined;
+  const extraOptionIds = rawExtras.map(uuid);
+  const excludedIngredientIds = rawExclusions.map(label);
+  if (extraOptionIds.some((id) => id === undefined) || excludedIngredientIds.some((id) => id === undefined)) return undefined;
+  return Object.freeze({
+    ...half,
+    excludedIngredientIds: Object.freeze(excludedIngredientIds as string[]),
+    extraOptionIds: Object.freeze(extraOptionIds as string[]),
+    flavorOptionId,
   });
 }
 

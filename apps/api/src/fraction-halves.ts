@@ -1,5 +1,5 @@
 import type { ModifierPriceSnapshot, OrderItemPriceSnapshot } from "@super-restaurant/domain";
-import type { OrderDetailFractionHalfV1 } from "@super-restaurant/shared-types";
+import type { FractionHalfProjectionV1, LineFractionV1, OrderDetailFractionHalfV1 } from "@super-restaurant/shared-types";
 
 /** Modifier groups written by the fraction pricing rules; they are shown per half, never as catalog modifiers. */
 export function isFractionModifier(modifier: Pick<ModifierPriceSnapshot, "groupId">): boolean {
@@ -31,4 +31,26 @@ export function describeHalves(snapshot: OrderItemPriceSnapshot): readonly Order
     });
   }
   return halves;
+}
+
+/**
+ * Same per-half view as `describeHalves` plus the ids of each half's flavor, extras and exclusions,
+ * taken from the stored `fraction` of the plan line (never resolved from names). Used by the plan
+ * projection and the line quote; order detail keeps the id-free `describeHalves`.
+ */
+export function describeHalvesWithIds(
+  snapshot: OrderItemPriceSnapshot,
+  fraction: LineFractionV1 | null,
+): readonly FractionHalfProjectionV1[] {
+  const slots = new Map((fraction?.slots ?? []).map((slot) => [slot.fraction, slot] as const));
+  return describeHalves(snapshot).map((half) => {
+    const slot = slots.get(half.fraction);
+    if (slot === undefined) return half;
+    return {
+      ...half,
+      excludedIngredientIds: [...slot.excludedIngredientIds],
+      extraOptionIds: [...slot.extraOptionIds],
+      flavorOptionId: slot.flavorOptionId,
+    };
+  });
 }
