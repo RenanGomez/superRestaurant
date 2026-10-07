@@ -1,5 +1,9 @@
 # PROJECT_NOTES
 
+## Bloque «turno completo» aprobado — 2026-10-06
+
+Emmanuel aprobó («adelante con el plan») ampliar la lista del día operable con cuatro filas, antes de hacer una prueba única: (T1) comanda y ticket imprimibles desde el navegador, sin hardware, con corte por estación y ticket de cliente; el adaptador ESC/POS queda para cuando haya impresora; (T2) vista «Canceladas» (capturas cerradas con motivo + órdenes canceladas) y cancelar una orden completa con motivo y autorización; (T3) resumen del día (ventas por canal y método, propinas, entregas liquidadas, cancelaciones, diferencias de caja por turno); (T4) KDS operable (tiempos por ticket, orden por antigüedad, «listo» por lote). Mobile y offline siguen fuera. Las reglas de §19.3 (rigor por nivel, nada de backend que una pantalla no exija) siguen vigentes.
+
 ## Cotización de entrega ASAP: validez de 15 minutos — 2026-10-05
 
 - Bug encontrado por el flujo HTTP local y confirmado por lectura: con `scheduledFor = null` el dominio fijaba `promiseStart = quotedAt` y, por la política `promise_start`, `expiresAt = quotedAt`; `confirm_capture_draft_v3` compara `expiresAt <= clock_timestamp()`, así que ninguna captura telefónica a domicilio ASAP podía confirmarse (409 `delivery_quote_expired`).
