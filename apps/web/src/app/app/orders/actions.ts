@@ -1,7 +1,14 @@
 "use server";
 
 import { cookies } from "next/headers";
-import { parseAddOrderItemCommandV1, parseBranchOrderWorkTrayRequestV1, type BranchScope, type MenuCatalogStateV1 } from "@super-restaurant/shared-types";
+import { parseAddOrderItemCommandV1, parseBranchOrderWorkTrayRequestV1, parseCancelOrderCommandV1, parseCancelledWorkTrayRequestV1, type BranchScope, type MenuCatalogStateV1 } from "@super-restaurant/shared-types";
+import {
+  buildCancelOrderCommand,
+  postCancelOrder,
+  requestCancelledWorkTray,
+  type CancelledTrayRequestResult,
+  type CancelOrderRequestResult,
+} from "../../../lib/order-cancellation";
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
 import { requestBranchOrderWorkTray, type BranchOrderTrayRequestResult } from "../../../lib/branch-order-work-tray";
@@ -150,6 +157,40 @@ export async function cancelOrderItemAction(
   return postOrderMutation(context.accessToken, context.apiBaseUrl, "orders/items/cancel", {
     ...audit(attempt, parsedOccurredAt, deviceId), expectedVersion, orderId, orderItemId, reason: reason.trim(), schemaVersion: 1, scope: context.scope,
   });
+}
+
+/** Whole-order cancellation; same caller-minted attempt triple as every other order mutation. */
+export async function cancelOrderAction(
+  orderId: string,
+  expectedVersion: number,
+  reason: string,
+  eventId: string,
+  idempotencyKey: string,
+  occurredAt: string,
+  deviceId: string,
+): Promise<CancelOrderRequestResult> {
+  const context = await authorizedOrderContext();
+  if (context === undefined) return { error: "denied", ok: false };
+  const attempt = parseAttemptIds(eventId, idempotencyKey);
+  const parsedOccurredAt = parseOccurredAt(occurredAt);
+  if (!isUuid(orderId) || !isUuid(deviceId) || attempt === undefined || parsedOccurredAt === undefined) return { error: "invalid", ok: false };
+  const command = parseCancelOrderCommandV1(buildCancelOrderCommand({
+    deviceId, eventId: attempt.eventId, expectedVersion, idempotencyKey: attempt.idempotencyKey,
+    occurredAt: parsedOccurredAt, orderId, reason, scope: context.scope,
+  }));
+  if (command === undefined) return { error: "invalid", ok: false };
+  return postCancelOrder(context.accessToken, context.apiBaseUrl, command);
+}
+
+export async function cancelledWorkTrayAction(input: unknown): Promise<CancelledTrayRequestResult> {
+  const request = parseCancelledWorkTrayRequestV1(input);
+  if (request === undefined) return { error: "invalid", ok: false };
+  const context = await authorizedOrderContext();
+  if (context === undefined) return { error: "denied", ok: false };
+  if (request.scope.restaurantId !== context.scope.restaurantId || request.scope.branchId !== context.scope.branchId) {
+    return { error: "invalid", ok: false };
+  }
+  return requestCancelledWorkTray(context.accessToken, context.apiBaseUrl, context.scope, request.cursor, request.limit);
 }
 
 async function authorizedOrderContext(): Promise<{ readonly accessToken: string; readonly apiBaseUrl: string; readonly scope: BranchScope } | undefined> {

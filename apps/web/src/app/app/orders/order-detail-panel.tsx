@@ -10,6 +10,8 @@ import { halfTicketLines } from "../../../lib/line-halves";
 import { buildCustomerTicket, buildKitchenDocuments, type PrintDocument, type PrintHeader } from "../../../lib/print-documents";
 import { PrintPreview } from "../print-preview";
 import { actionLabel, buildAddOrderItemCommand, canAddItems, chunkOrderItemIds, groupItemsByStatus, hasAction, hasItemAction, nextFocusIndex, pendingOrderItemIds, resolvePendingAdd, type OrderItemStatusGroup } from "../../../lib/order-detail";
+import { cancelOrderErrorMessage, cancelOrderResultMessage, cancelOrderWarning, validCancelReason, type CancelOrderRequestResult } from "../../../lib/order-cancellation";
+import { ORDER_CANCELLATION_REASON_MAX_LENGTH } from "@super-restaurant/shared-types";
 import { CaptureMenu } from "../capture/capture-menu";
 import { ProductSheet } from "../capture/product-sheet";
 
@@ -167,6 +169,8 @@ export interface OrderDetailActions {
   readonly sendToKitchen: (orderId: string, expectedVersion: number, orderItemIds: readonly string[], eventId: string, idempotencyKey: string, occurredAt: string, deviceId: string) => Promise<MutationResult>;
   readonly transitionItem: (orderId: string, orderItemId: string, expectedVersion: number, to: "sent" | "preparing" | "ready" | "delivered", eventId: string, idempotencyKey: string, occurredAt: string, deviceId: string) => Promise<MutationResult>;
   readonly cancelItem: (orderId: string, orderItemId: string, expectedVersion: number, reason: string, eventId: string, idempotencyKey: string, occurredAt: string, deviceId: string) => Promise<MutationResult>;
+  /** Whole-order cancellation; resolves to the server's result so the refund obligation can be shown. */
+  readonly cancelOrder: (orderId: string, expectedVersion: number, reason: string, eventId: string, idempotencyKey: string, occurredAt: string, deviceId: string) => Promise<CancelOrderRequestResult>;
 }
 
 /** One eventId/idempotencyKey/occurredAt triple per logical operation, minted once by the browser
@@ -223,6 +227,8 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
   const [busyAction, setBusyAction] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const [cancelTarget, setCancelTarget] = useState<OrderDetailItemV1>();
+  const [cancelOrderOpen, setCancelOrderOpen] = useState(false);
+  const [orderNotice, setOrderNotice] = useState<string>();
   const [menuOpen, setMenuOpen] = useState(false);
   const [catalogState, setCatalogState] = useState<MenuCatalogStateV1>();
   const [catalogLoading, setCatalogLoading] = useState(false);
@@ -289,6 +295,28 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
       if (!result.ok) {
         setActionError(result.error === "unavailable" ? UNAVAILABLE_NO_RETRY_MESSAGE : errorMessages[result.error ?? "unavailable"] ?? errorMessages.unavailable);
       }
+      await load();
+      onChanged();
+    } finally {
+      setBusyAction(undefined);
+    }
+  }
+
+  /** Whole-order cancellation: one attempt, never auto-retried; the detail is always reloaded so the
+   * operator sees what the server settled on, and the server's refund obligation is shown verbatim. */
+  async function runCancelOrder(current: OrderDetailV1, reason: string): Promise<void> {
+    const attempt = nextAttempt();
+    setCancelOrderOpen(false);
+    setBusyAction("cancelOrder");
+    setActionError(undefined);
+    setOrderNotice(undefined);
+    try {
+      let result: CancelOrderRequestResult;
+      try {
+        result = await actions.cancelOrder(current.orderId, current.version, reason, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt, deviceId);
+      } catch { result = { error: "unavailable", ok: false }; }
+      if (result.ok) setOrderNotice(cancelOrderResultMessage(result.value));
+      else setActionError(cancelOrderErrorMessage(result.error));
       await load();
       onChanged();
     } finally {
@@ -412,6 +440,7 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
         <button type="button" className={`${button} mt-2`} onClick={() => void load()}>Reintentar</button>
       </div>}
       {actionError !== undefined && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{actionError}</p>}
+      {orderNotice !== undefined && <p role="status" className="mt-3 rounded-lg border border-border bg-bg p-3 text-sm font-semibold">{orderNotice}</p>}
       {detail === undefined && loadError === undefined && <p className="mt-4 text-sm text-text-muted">Cargando…</p>}
       {detail !== undefined && <>
         <p className="mt-1 text-sm">Total: <strong>{formatMinorUnits(detail.totals.totalMinor, detail.totals.currency)}</strong></p>
@@ -427,6 +456,10 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
             {busyAction === "sendToKitchen" ? "Enviando…" : actionLabel("sendToKitchen")}
           </button>}
           {canCheckout && hasAction(detail, "checkout") && <a href={`/app/caja?orderId=${detail.orderId}`} className={button}>{actionLabel("checkout")}</a>}
+          {hasAction(detail, "cancelOrder") && <button type="button" className={`${button} text-error`} disabled={busyAction !== undefined}
+            onClick={() => setCancelOrderOpen(true)}>
+            {busyAction === "cancelOrder" ? "Cancelando…" : actionLabel("cancelOrder")}
+          </button>}
           <button type="button" className={button} disabled={buildKitchenDocuments(detail).length === 0}
             aria-keyshortcuts="P" onClick={() => setPrintDocuments(buildKitchenDocuments(detail))}>Imprimir comanda</button>
           <button type="button" className={button} onClick={() => setPrintDocuments([buildCustomerTicket(detail, [], printHeader)])}>Imprimir ticket</button>
@@ -496,6 +529,13 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
           void runAction(`cancel-${target.orderItemId}`, () => actions.cancelItem(detail.orderId, target.orderItemId, detail.version, reason, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt, deviceId));
         }}
       />}
+      {cancelOrderOpen && detail !== undefined && hasAction(detail, "cancelOrder") && <CancelOrderDialog
+        warning={cancelOrderWarning(detail)}
+        hasSentLines={detail.items.some((item) => item.status === "sent" || item.status === "preparing" || item.status === "ready")}
+        busy={busyAction !== undefined}
+        onCancel={() => setCancelOrderOpen(false)}
+        onConfirm={(reason) => void runCancelOrder(detail, reason)}
+      />}
       {menuOpen && (detail ?? (pendingAddCommand === undefined ? undefined : lastDetailRef.current)) !== undefined && typeof document !== "undefined" && createPortal(<OrderMenuDialog
         detail={(detail ?? lastDetailRef.current)!} catalogState={catalogState} loading={catalogLoading} loadError={catalogError}
         addSuccess={addSuccess} busy={addBusy} selectedProduct={selectedProduct} selectionDraft={selectionDraft} addError={addError}
@@ -533,6 +573,36 @@ function CancelReasonDialog({ itemName, requiresSupervisor, busy, onCancel, onCo
         <button type="button" className={button} onClick={onCancel} disabled={busy}>Volver</button>
         <button type="button" className={primaryButton} disabled={busy || trimmed.length === 0} onClick={() => onConfirm(trimmed)}>
           Confirmar cancelación
+        </button>
+      </div>
+    </div>
+  </div>;
+}
+
+function CancelOrderDialog({ warning, hasSentLines, busy, onCancel, onConfirm }: {
+  readonly warning: string | undefined;
+  readonly hasSentLines: boolean;
+  readonly busy: boolean;
+  readonly onCancel: () => void;
+  readonly onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const headingId = useId();
+  const valid = validCancelReason(reason);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, onCancel);
+  return <div className={overlay} role="presentation" onClick={onCancel}>
+    <div ref={dialogRef} className={sheet} role="dialog" aria-modal="true" aria-labelledby={headingId} tabIndex={-1} onClick={(event) => event.stopPropagation()}>
+      <h2 id={headingId} className="font-heading text-lg font-bold">Cancelar orden</h2>
+      <p className="mt-2 text-sm text-text-muted">Se cancelan todas las líneas y queda registrada con el motivo. Esta acción no se puede deshacer.{hasSentLines ? " Cocina recibirá el aviso de cancelación de lo ya enviado." : ""}</p>
+      {warning !== undefined && <p role="note" className="mt-3 rounded-lg border border-border bg-bg p-3 text-sm font-semibold">{warning}</p>}
+      <label className="mt-3 block text-sm font-semibold" htmlFor={`${headingId}-reason`}>Motivo (obligatorio)</label>
+      <textarea id={`${headingId}-reason`} className="mt-1 min-h-24 w-full rounded-lg border border-border bg-bg p-2 text-sm"
+        value={reason} onChange={(event) => setReason(event.target.value)} maxLength={ORDER_CANCELLATION_REASON_MAX_LENGTH} autoFocus />
+      <div className="mt-4 flex justify-end gap-2">
+        <button type="button" className={button} onClick={onCancel} disabled={busy}>Volver</button>
+        <button type="button" className={primaryButton} disabled={busy || valid === undefined} onClick={() => { if (valid !== undefined) onConfirm(valid); }}>
+          Cancelar orden
         </button>
       </div>
     </div>
