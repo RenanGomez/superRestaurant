@@ -1016,6 +1016,22 @@ test("order detail projects createdAt, shortFolio and captured payments from the
   assert.deepEqual(missing.payments, []);
 });
 
+test("order detail emits payments only to financial roles; waiter and kitchen keep folio and date", async () => {
+  const request = { orderId, schemaVersion: 1 as const, scope };
+  const receipt = {
+    createdAt: "2026-10-06T12:00:00.123Z", payments: [receiptPaymentRow, receiptTransferRow], schemaVersion: 1, shortFolio: "EE50F0F6",
+  };
+  for (const role of ["waiter", "kitchen"] as const) {
+    const detail = await serviceFor([role], receiptPort(receipt)).detail(principal, request);
+    assert.deepEqual(detail.payments, [], role);
+    assert.equal(detail.shortFolio, "EE50F0F6");
+    assert.equal(detail.createdAt, "2026-10-06T12:00:00.123Z");
+  }
+  for (const role of ["cashier", "manager", "viewer"] as const) {
+    assert.equal((await serviceFor([role], receiptPort(receipt)).detail(principal, request)).payments.length, 2, role);
+  }
+});
+
 test("order detail fails closed (503) when the receipt reader throws", async () => {
   const request = { orderId, schemaVersion: 1 as const, scope };
   const port = { ...receiptPort(null), readReceiptData: async () => { throw new Error("secret connection string"); } };

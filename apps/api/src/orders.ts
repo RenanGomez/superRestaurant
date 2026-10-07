@@ -979,6 +979,8 @@ function projectOrderDetail(
   const { order, version } = stored;
   const snapshot = context?.snapshot ?? null;
   const canReadCustomers = rolesGrantPermission(roles, "customers.read");
+  const canSeePayments = courierView || rolesGrantPermission(roles, "payments.collect")
+    || rolesGrantPermission(roles, "cash-register.manage") || rolesGrantPermission(roles, "reports.read");
   const quote = snapshot !== null && "deliveryQuote" in snapshot && snapshot.deliveryQuote !== null
     ? {
       feeMinor: snapshot.deliveryQuote.feeMinor,
@@ -1048,7 +1050,8 @@ function projectOrderDetail(
     },
     items,
     orderId: order.orderId,
-    payments: receipt?.payments ?? [],
+    // Data minimization: payments (and the transfer reference) only for financial roles or the assigned courier.
+    payments: canSeePayments ? receipt?.payments ?? [] : [],
     schemaVersion: 1,
     scope,
     shortFolio: receipt?.shortFolio ?? null,
