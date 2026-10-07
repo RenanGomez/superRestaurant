@@ -310,7 +310,7 @@ export interface OrderMutationSummaryV1 {
 
 export const ORDER_DETAIL_SCHEMA_VERSION = 1 as const;
 export const ORDER_DETAIL_ACTIONS = Object.freeze([
-  "open", "sendToKitchen", "markReady", "markDelivered", "cancelItem", "checkout", "addItem",
+  "open", "sendToKitchen", "markReady", "markDelivered", "cancelItem", "checkout", "addItem", "cancelOrder",
 ] as const);
 
 export type OrderDetailActionV1 = (typeof ORDER_DETAIL_ACTIONS)[number];

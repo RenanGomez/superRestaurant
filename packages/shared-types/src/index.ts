@@ -23,6 +23,7 @@ export const SYSTEM_ONBOARDING_SCHEMA_VERSION = 1 as const;
 
 export * from "./realtime.js";
 export * from "./orders.js";
+export * from "./order-cancellation.js";
 export * from "./line-fraction.js";
 export * from "./payments.js";
 export * from "./payment-intent.js";
@@ -140,6 +141,7 @@ export const RBAC_PERMISSION_CODES = Object.freeze([
   "orders.update",
   "orders.cancel.pending",
   "orders.cancel.sent",
+  "orders.cancel.order",
   "kds.read",
   "kds.transition",
   "payments.collect",
