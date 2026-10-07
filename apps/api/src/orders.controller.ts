@@ -13,14 +13,25 @@ import {
   Req,
   ServiceUnavailableException,
 } from "@nestjs/common";
-import type { KdsEventPageV1, KdsTicketListV1, OrderDetailV1, OrderMutationSummaryV1 } from "@super-restaurant/shared-types";
+import type {
+  CancelOrderResultV1,
+  CancelledWorkTrayV1,
+  KdsEventPageV1,
+  KdsTicketListV1,
+  OrderDetailV1,
+  OrderMutationSummaryV1,
+} from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
-import { OrderApplicationError, OrderService } from "./orders.js";
+import { CancelledWorkTrayService } from "./cancelled-work-tray.js";
+import { OrderApplicationError, OrderDeliveryActiveError, OrderService } from "./orders.js";
 
 @Controller()
 export class OrdersController {
-  public constructor(@Inject(OrderService) private readonly orders: OrderService) {}
+  public constructor(
+    @Inject(OrderService) private readonly orders: OrderService,
+    @Inject(CancelledWorkTrayService) private readonly cancelled: CancelledWorkTrayService,
+  ) {}
 
   @Post("orders")
   @Header("Cache-Control", "private, no-store")
@@ -50,6 +61,18 @@ export class OrdersController {
   @Header("Cache-Control", "private, no-store")
   public cancelItem(@Req() request: unknown, @Body() body: unknown): Promise<OrderMutationSummaryV1> {
     return this.map(() => this.orders.cancelItem(getAuthenticatedPrincipal(request), body));
+  }
+
+  @Post("orders/cancel")
+  @Header("Cache-Control", "private, no-store")
+  public cancelOrder(@Req() request: unknown, @Body() body: unknown): Promise<CancelOrderResultV1> {
+    return this.map(() => this.orders.cancelOrder(getAuthenticatedPrincipal(request), body));
+  }
+
+  @Post("orders/cancelled")
+  @Header("Cache-Control", "private, no-store")
+  public listCancelled(@Req() request: unknown, @Body() body: unknown): Promise<CancelledWorkTrayV1> {
+    return this.map(() => this.cancelled.list(getAuthenticatedPrincipal(request), body));
   }
 
   @Post("orders/detail")
@@ -103,6 +126,7 @@ export class OrdersController {
       if (error.code === "request") throw new BadRequestException({ code: "ORDER_REQUEST_REJECTED" });
       if (error.code === "authorization") throw new ForbiddenException({ code: "ACTION_NOT_AUTHORIZED" });
       if (error.code === "not_found") throw new NotFoundException({ code: "ORDER_NOT_FOUND" });
+      if (error instanceof OrderDeliveryActiveError) throw new ConflictException({ code: "DELIVERY_ACTIVE" });
       if (error.code === "conflict") throw new ConflictException({ code: "ORDER_CONFLICT" });
       throw unavailable();
     }

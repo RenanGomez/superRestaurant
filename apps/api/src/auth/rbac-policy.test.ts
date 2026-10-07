@@ -27,6 +27,12 @@ test("keeps privileged and operational permissions explicit without role inherit
   assert.equal(rolesGrantPermission(["manager"], "catalog.manage"), true);
   assert.equal(rolesGrantPermission(["supervisor"], "orders.cancel.sent"), true);
   assert.equal(rolesGrantPermission(["cashier"], "orders.cancel.sent"), false);
+  for (const role of ["owner", "admin", "manager", "supervisor"]) {
+    assert.equal(rolesGrantPermission([role], "orders.cancel.order"), true, role);
+  }
+  for (const role of ["cashier", "waiter", "courier", "kitchen", "viewer", "auditor"]) {
+    assert.equal(rolesGrantPermission([role], "orders.cancel.order"), false, role);
+  }
   assert.equal(rolesGrantPermission(["kitchen"], "kds.transition"), true);
   assert.equal(rolesGrantPermission(["viewer"], "orders.create"), false);
   assert.equal(rolesGrantPermission(["auditor"], "reports.read"), true);

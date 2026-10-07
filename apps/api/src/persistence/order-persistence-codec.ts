@@ -61,7 +61,7 @@ export interface PersistedCancellationAuditV1 {
 export interface PersistedOrderCancellationAuditV1 {
   readonly eventId: string;
   readonly idempotencyKey: string;
-  readonly from: "draft" | "open";
+  readonly from: "draft" | "open" | "partially_paid" | "paid";
   readonly actorId: string;
   readonly branchId: string;
   readonly deviceId: string;
@@ -327,7 +327,9 @@ export function decodeOrderAuditEventRecord(value: unknown): OrderAuditEvent {
       }
       const from = data(operationRecord, "from") as Order["status"];
       const to = data(operationRecord, "to") as Order["status"];
-      transitionOrder(from, to);
+      // The persisted aggregate does not carry the refund obligation (it lives in order_cancellations): a
+      // cancellation out of a monetary state is structurally valid here and the obligation proof is SQL + domain.
+      transitionOrder(from, to, { refundObligation: "pending", ...(typeof optionalData(operationRecord, "reason") === "string" ? { reason: optionalData(operationRecord, "reason") as string } : {}) });
       const automaticallyCancelledOrderItemIds = uniqueTexts(
         dataArray(data(operationRecord, "automaticallyCancelledOrderItemIds"), "automaticallyCancelledOrderItemIds"),
         "automaticallyCancelledOrderItemIds",
@@ -618,7 +620,7 @@ function encodeOrderCancellationAudit(audit: OrderCancellationAudit): PersistedO
 function decodeOrderCancellationAudit(value: unknown): OrderCancellationAudit {
   const record = exactRecord(value, ["eventId", "idempotencyKey", "from", "actorId", "branchId", "deviceId", "occurredAt", "reason", "authorization"], [], "order cancellation audit");
   const from = data(record, "from") as OrderCancellationAudit["from"];
-  transitionOrder(from, "cancelled");
+  transitionOrder(from, "cancelled", { refundObligation: "pending", reason: text(data(record, "reason"), "reason") });
   return deepFreeze({
     eventId: text(data(record, "eventId"), "eventId"),
     idempotencyKey: text(data(record, "idempotencyKey"), "idempotencyKey"),

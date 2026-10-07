@@ -104,6 +104,7 @@ import {
   OperationalWorkTrayService,
   PostgresOperationalWorkTray,
 } from "./operational-work-tray.js";
+import { CancelledWorkTrayService, CANCELLED_WORK_TRAY_PORT, PostgresCancelledWorkTray } from "./cancelled-work-tray.js";
 import { BranchOrderWorkTrayController } from "./branch-order-work-tray.controller.js";
 import {
   BRANCH_ORDER_WORK_TRAY_PORT,
@@ -265,6 +266,9 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     PostgresBranchOrderWorkTray,
     { provide: BRANCH_ORDER_WORK_TRAY_PORT, useExisting: PostgresBranchOrderWorkTray },
     BranchOrderWorkTrayService,
+    PostgresCancelledWorkTray,
+    { provide: CANCELLED_WORK_TRAY_PORT, useExisting: PostgresCancelledWorkTray },
+    CancelledWorkTrayService,
     { provide: SERVER_CLOCK_PORT, useClass: SystemClock },
     PostgresDeliveryZoneStore,
     { provide: DELIVERY_ZONE_LIST_PORT, useExisting: PostgresDeliveryZoneStore },
