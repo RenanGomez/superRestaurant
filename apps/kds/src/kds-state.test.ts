@@ -59,6 +59,20 @@ test("groups lines by order with oldest active orders first and ready orders las
   assert.deepEqual(planBatchTransition(groups[0]!, "ready").map((ticket) => ticket.orderItemId), ["o2"]);
 });
 
+test("uses pending line age for mixed orders and oldest line for all-ready orders", () => {
+  const input = [
+    { ...base, orderId: "mixed", orderItemId: "ready-old", status: "ready", queuedAt: "2026-09-03T09:00:00.000Z" },
+    { ...base, orderId: "mixed", orderItemId: "pending-new", status: "sent", queuedAt: "2026-09-03T10:10:00.000Z" },
+    { ...base, orderId: "pending-older", orderItemId: "pending-old", status: "preparing", queuedAt: "2026-09-03T10:05:00.000Z" },
+    { ...base, orderId: "all-ready", orderItemId: "ready-new", status: "ready", queuedAt: "2026-09-03T10:20:00.000Z" },
+    { ...base, orderId: "all-ready", orderItemId: "ready-earlier", status: "ready", queuedAt: "2026-09-03T09:30:00.000Z" },
+  ] as unknown as readonly KdsTicketV1[];
+  const groups = groupTicketsByOrder(input);
+  assert.deepEqual(groups.map((group) => group.orderId), ["pending-older", "mixed", "all-ready"]);
+  assert.equal(groups[1]?.queuedAt, "2026-09-03T10:10:00.000Z");
+  assert.equal(groups[2]?.queuedAt, "2026-09-03T09:30:00.000Z");
+});
+
 test("chains three batch versions sequentially", async () => {
   const lines = ["one", "two", "three"].map((orderItemId) => ({ ...base, orderItemId, status: "preparing" })) as unknown as KdsTicketV1[];
   const seen: Array<[string, number]> = [];

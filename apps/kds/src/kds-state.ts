@@ -36,11 +36,15 @@ export function groupTicketsByOrder(tickets: readonly KdsTicketV1[]): readonly K
     group.push(ticket);
     groups.set(ticket.orderId, group);
   }
-  return [...groups].map(([orderId, lines]) => ({
-    orderId,
-    queuedAt: lines.reduce((first, line) => line.queuedAt < first ? line.queuedAt : first, lines[0]!.queuedAt),
-    tickets: orderTicketsForDisplay(lines),
-  })).sort((left, right) => {
+  return [...groups].map(([orderId, lines]) => {
+    const active = lines.filter((line) => line.status !== "ready");
+    const ageLines = active.length > 0 ? active : lines;
+    return {
+      orderId,
+      queuedAt: ageLines.reduce((first, line) => line.queuedAt < first ? line.queuedAt : first, ageLines[0]!.queuedAt),
+      tickets: orderTicketsForDisplay(lines),
+    };
+  }).sort((left, right) => {
     const leftReady = left.tickets.every((line) => line.status === "ready");
     const rightReady = right.tickets.every((line) => line.status === "ready");
     return Number(leftReady) - Number(rightReady) || left.queuedAt.localeCompare(right.queuedAt) || left.orderId.localeCompare(right.orderId);
