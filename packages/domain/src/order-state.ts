@@ -66,8 +66,8 @@ export interface OrderItemTransition {
 const orderTransitions: Readonly<Record<OrderState, readonly OrderState[]>> = {
   draft: ["open", "cancelled"],
   open: ["partially_paid", "paid", "cancelled"],
-  partially_paid: ["paid"],
-  paid: ["closed"],
+  partially_paid: ["paid", "cancelled"],
+  paid: ["closed", "cancelled"],
   closed: [],
   cancelled: [],
 };
@@ -99,10 +99,36 @@ export function assertOrderAcceptsNewLines(state: OrderState): void {
   }
 }
 
+/** Whether captured money must be returned to the customer after the order is cancelled. */
+export type OrderRefundObligation = "none" | "pending";
+
+/**
+ * Facts the caller must prove to leave a monetary state for `cancelled`. Money already captured is never
+ * silently dropped: cancelling a `partially_paid`/`paid` order is allowed only together with a pending refund
+ * obligation (S6 §5.1 decision 6) and a non-empty reason. Without both, the transition is rejected.
+ */
+export interface OrderTransitionContext {
+  readonly refundObligation?: OrderRefundObligation;
+  readonly reason?: string;
+}
+
+const refundGatedCancellationOrigins: ReadonlySet<OrderState> = new Set<OrderState>(["partially_paid", "paid"]);
+
 /** Returns the next state; it never mutates an order. */
-export function transitionOrder(from: OrderState, to: OrderState): OrderState {
+export function transitionOrder(
+  from: OrderState,
+  to: OrderState,
+  context: OrderTransitionContext = {},
+): OrderState {
   if (!isOrderState(from) || !isOrderState(to) || !orderTransitions[from].includes(to)) {
     throw new InvalidOrderTransitionError(from, to);
+  }
+  if (to === "cancelled" && refundGatedCancellationOrigins.has(from)) {
+    const reason: unknown = context === null || typeof context !== "object" ? undefined : context.reason;
+    const obligation: unknown = context === null || typeof context !== "object" ? undefined : context.refundObligation;
+    if (obligation !== "pending" || typeof reason !== "string" || reason.trim().length === 0) {
+      throw new InvalidOrderTransitionError(from, to);
+    }
   }
 
   return to;

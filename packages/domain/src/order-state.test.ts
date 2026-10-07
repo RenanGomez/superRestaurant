@@ -29,9 +29,23 @@ test("Order transitions follow the declared payment and closing lifecycle", () =
 test("Order rejects skipped, backwards, and terminal-state transitions", () => {
   assert.throws(() => transitionOrder("draft", "paid"), InvalidOrderTransitionError);
   assert.throws(() => transitionOrder("partially_paid", "cancelled"), InvalidOrderTransitionError);
+  assert.throws(() => transitionOrder("paid", "cancelled"), InvalidOrderTransitionError);
+  assert.throws(() => transitionOrder("closed", "cancelled", { refundObligation: "pending", reason: "x" }), InvalidOrderTransitionError);
   assert.throws(() => transitionOrder("paid", "open"), InvalidOrderTransitionError);
   assert.throws(() => transitionOrder("closed", "open"), InvalidOrderTransitionError);
   assert.throws(() => transitionOrder("cancelled", "open"), InvalidOrderTransitionError);
+});
+
+test("Cancelling a partially_paid or paid order needs a pending refund obligation and a reason", () => {
+  for (const from of ["partially_paid", "paid"] as const) {
+    assert.equal(transitionOrder(from, "cancelled", { refundObligation: "pending", reason: "Error de captura" }), "cancelled");
+    assert.throws(() => transitionOrder(from, "cancelled", { refundObligation: "none", reason: "x" }), InvalidOrderTransitionError);
+    assert.throws(() => transitionOrder(from, "cancelled", { refundObligation: "pending" }), InvalidOrderTransitionError);
+    assert.throws(() => transitionOrder(from, "cancelled", { refundObligation: "pending", reason: "  " }), InvalidOrderTransitionError);
+    assert.throws(() => transitionOrder(from, "cancelled", null as never), InvalidOrderTransitionError);
+  }
+  assert.equal(transitionOrder("open", "cancelled"), "cancelled");
+  assert.equal(transitionOrder("paid", "closed"), "closed");
 });
 
 test("Only paid, closed, and cancelled orders reject new lines", () => {

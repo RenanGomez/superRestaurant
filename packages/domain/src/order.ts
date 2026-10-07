@@ -29,6 +29,7 @@ import {
   type CancellationAuthorization,
   type OrderItemCancellationAudit,
   type OrderItemState,
+  type OrderRefundObligation,
   type OrderState,
 } from "./order-state.js";
 import { Money } from "./money.js";
@@ -104,7 +105,7 @@ export type AddOrderItemInput = OrderItemPricingInput;
 export interface OrderCancellationAudit {
   readonly eventId: string;
   readonly idempotencyKey: string;
-  readonly from: "draft" | "open";
+  readonly from: "draft" | "open" | "partially_paid" | "paid";
   readonly actorId: string;
   readonly branchId: string;
   readonly deviceId: string;
@@ -202,10 +203,14 @@ export function transitionOrderStatus(
   order: Order,
   to: OrderState,
   auditContext: OrderAuditContext,
+  options: { readonly refundObligation?: OrderRefundObligation } = {},
 ): OrderMutation<OrderStateChangedAuditEvent> {
   assertValidOrder(order);
   const from = order.status;
-  const status = transitionOrder(from, to);
+  const status = transitionOrder(from, to, {
+    ...(options.refundObligation === undefined ? {} : { refundObligation: options.refundObligation }),
+    ...(typeof auditContext?.reason === "string" ? { reason: auditContext.reason } : {}),
+  });
   if (status === "closed") {
     assertOrderCanBeClosed(order);
     const nextOrder = freezeOrder({ ...order, status });
@@ -284,6 +289,74 @@ export function cancelOrderItem(
   auditContext: OrderAuditContext,
 ): OrderMutation<OrderItemStateChangedAuditEvent> {
   return transitionOrderItemStatus(order, orderItemId, "cancelled", auditContext);
+}
+
+/** Per-line identity for a line cancelled as part of a whole-order cancellation (KDS needs one audit event per line). */
+export interface CancelOrderLineContext {
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+}
+
+export interface CancelOrderInput {
+  /** Order-level event: reason and the cancelling supervisor's authorization are mandatory. */
+  readonly auditContext: OrderAuditContext;
+  /** One identity per `sent|preparing|ready` line, keyed by orderItemId. Pending lines ride on the order event. */
+  readonly lineContexts: Readonly<Record<string, CancelOrderLineContext>>;
+  /** Derived by the server from captured payments; `pending` is mandatory when the order was `partially_paid|paid`. */
+  readonly refundObligation: OrderRefundObligation;
+}
+
+/**
+ * Whole-order cancellation as an ordered, atomic-by-contract sequence of mutations: first every line already sent to
+ * the kitchen (`sent|preparing|ready`) is cancelled with its own audit event so KDS gets a correction per line, then
+ * the order moves to `cancelled` (its `pending` lines are auto-cancelled by that last event, as in
+ * `transitionOrderStatus`). A delivered line makes the whole cancellation impossible: nothing is returned. The
+ * persistence layer must commit every returned mutation, in order, or none.
+ */
+export function cancelOrder(order: Order, input: CancelOrderInput): readonly OrderMutation[] {
+  assertValidOrder(order);
+  assertRecord(input, "cancel order input");
+  const delivered = order.items.find((item) => item.status === "delivered");
+  if (delivered !== undefined) {
+    throw new OrderCancellationRequiresItemCancellationError(delivered.orderItemId, delivered.status);
+  }
+  const mutations: OrderMutation[] = [];
+  let current = order;
+  for (const item of order.items) {
+    if (item.status !== "sent" && item.status !== "preparing" && item.status !== "ready") continue;
+    const line = input.lineContexts[item.orderItemId];
+    if (line === undefined || !Object.hasOwn(input.lineContexts, item.orderItemId)) {
+      throw new OrderItemNotFoundError(item.orderItemId);
+    }
+    const mutation = cancelOrderItem(current, item.orderItemId, {
+      ...input.auditContext,
+      eventId: line.eventId,
+      idempotencyKey: line.idempotencyKey,
+    });
+    mutations.push(mutation);
+    current = mutation.order;
+  }
+  mutations.push(transitionOrderStatus(current, "cancelled", input.auditContext, {
+    refundObligation: input.refundObligation,
+  }));
+  return Object.freeze(mutations);
+}
+
+/**
+ * Historical worth of a cancelled order: what its frozen lines, discount, tip and delivery charge added up to before
+ * cancellation. It is information for reports (never payable, never a refund amount) and never reads the catalog.
+ */
+export function calculateCancelledOrderOriginalTotal(order: Order): Money {
+  assertValidOrder(order);
+  if (order.status !== "cancelled") throw new InvalidOrderAggregateError("status");
+  const totals = asDomainValidation(() => calculateOrderTotals({
+    currency: order.currency,
+    timeZone: order.timeZone,
+    lines: order.items,
+    ...(order.orderDiscount === undefined ? {} : { orderDiscount: order.orderDiscount }),
+    ...(order.tip === undefined ? {} : { tip: order.tip }),
+  }), "monetary policy");
+  return order.deliveryCharge === null ? totals.total : totals.total.add(order.deliveryCharge.amount);
 }
 
 /** Uses the existing calculator and deliberately excludes cancelled lines from the payable amount. */
@@ -464,7 +537,7 @@ function orderCancellationAuditFromEvent(
   return deepFreeze({
     eventId: event.eventId,
     idempotencyKey: event.idempotencyKey,
-    from: event.from as "draft" | "open",
+    from: event.from as OrderCancellationAudit["from"],
     actorId: event.actorId,
     branchId: event.branchId,
     deviceId: event.deviceId,
@@ -490,7 +563,7 @@ function assertOrderCancellationAudit(
     [],
     "cancellation audit",
   );
-  if (audit.from !== "draft" && audit.from !== "open") {
+  if (audit.from !== "draft" && audit.from !== "open" && audit.from !== "partially_paid" && audit.from !== "paid") {
     throw new InvalidOrderAggregateError("cancellation audit");
   }
   const event = createOrderStateChangedAuditEvent(
