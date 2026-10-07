@@ -11,6 +11,7 @@ export const HTTP_TEST_ACTORS = Object.freeze({
   cashier: { restaurant: "A", role: "cashier" },
   courier: { restaurant: "A", role: "courier" },
   courier_other: { restaurant: "A", role: "courier" },
+  viewer: { restaurant: "A", role: "viewer" },
   other_restaurant_manager: { restaurant: "B", role: "manager" },
 } as const);
 

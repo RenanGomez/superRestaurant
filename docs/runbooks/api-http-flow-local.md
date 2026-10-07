@@ -40,6 +40,13 @@ Cada flujo arranca su propio cluster (runId y cleanup propios, unos 30 s cada un
 - Mitad y mitad: `line-quote` y plan de selección dan el mismo precio (sabor mayor + extra de media al 50 % redondeado hacia arriba) y `GET /kds/tickets` muestra «Mitad A/B».
 - Tarjeta externa y transferencia: cobro parcial `card_manual` + resto `transfer`, corte X con `transferCapturedMinor` y sin cambio; transferencia sobre entrega `en_route` devuelve 409 `DELIVERY_NOT_DELIVERED`.
 
+## Flujos adicionales (tercera iteración)
+
+- Cancelación: orden de mostrador con dos líneas en cocina cancelada por el gerente (sin obligación, 2 eventos KDS; cajero 403; replay idéntico `replayed`); orden con cobro parcial en efectivo cancelada (obligación `pending` con lo capturado); entrega `en_route` devuelve 409 `DELIVERY_ACTIVE`; `POST /orders/cancelled` lista ambas con motivo y KDS ya no muestra sus líneas.
+- Resumen del día: tras efectivo con cambio y propina, tarjeta + transferencia, entrega liquidada y una cancelación, `POST /reports/day-summary` de hoy (zona del restaurante) coincide con los pagos capturados por método y canal, propinas, envío, entregas liquidadas, canceladas y turno con fondo/esperado; viewer 201, cajero 403; mañana en ceros. Se añadió el actor `viewer` a `http-test-fixtures.ts`.
+
+Brecha observada: el resumen de un día sin pagos (mañana) aún lista el turno que sigue abierto, con sus movimientos de caja acumulados; no se corrigió. Los POST de lectura responden 201.
+
 Brechas de producto observadas (no corregidas aquí): una cuota ASAP (`scheduledFor: null`) vence en su propio `quotedAt` y `confirm` responde 409 `delivery_quote_expired`; la orden confirmada nace `draft` y sólo entra a las bandejas de entrega tras enviarla a cocina.
 
 ## Fuera de alcance
