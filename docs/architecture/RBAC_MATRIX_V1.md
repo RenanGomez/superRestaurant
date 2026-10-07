@@ -18,32 +18,42 @@ además motivo, evidencia y autorización de supervisor en el flujo de dominio.
 
 _Generada desde `apps/api/src/auth/rbac-policy.ts` el 2026-10-06 (incluye `courier`, `captures.*`, `customers.*`, `deliveries.*`, `orders.cancel.order`); regenerar al cambiar la política._
 
-| Permiso | cashier | waiter | courier | kitchen | viewer | auditor |
-| --- | :---: | :---: | :---: | :---: | :---: | :---: |
-| `branch.select` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `catalog.read` | ✓ | ✓ |  |  | ✓ | ✓ |
-| `tables.read` | ✓ | ✓ |  |  | ✓ | ✓ |
-| `orders.read` | ✓ | ✓ |  | ✓ | ✓ | ✓ |
-| `orders.create` | ✓ | ✓ |  |  |  |  |
-| `orders.update` | ✓ | ✓ |  |  |  |  |
-| `orders.cancel.pending` | ✓ | ✓ |  |  |  |  |
-| `payments.collect` | ✓ |  |  |  |  |  |
-| `cash-register.manage` | ✓ |  |  |  |  |  |
-| `captures.read` | ✓ | ✓ |  |  |  |  |
-| `captures.create` | ✓ | ✓ |  |  |  |  |
-| `captures.update` | ✓ | ✓ |  |  |  |  |
-| `captures.claim` | ✓ | ✓ |  |  |  |  |
-| `customers.read` | ✓ | ✓ |  |  |  |  |
-| `customers.create` | ✓ | ✓ |  |  |  |  |
-| `customers.update` | ✓ | ✓ |  |  |  |  |
-| `customers.validate` | ✓ | ✓ |  |  |  |  |
-| `deliveries.read` | ✓ |  | ✓ |  |  |  |
-| `deliveries.update.own` | ✓ |  | ✓ |  |  |  |
-| `deliveries.manage` | ✓ |  |  |  |  |  |
-| `memberships.read` | ✓ |  |  |  |  |  |
-| `kds.read` |  | ✓ |  | ✓ | ✓ | ✓ |
-| `kds.transition` |  |  |  | ✓ |  |  |
-| `reports.read` |  |  |  |  | ✓ | ✓ |
+| Permiso | owner | admin | manager | supervisor | cashier | waiter | courier | kitchen | viewer | auditor |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `branch.select` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `branch.settings.manage` | ✓ | ✓ | ✓ |  |  |  |  |  |  |  |
+| `memberships.manage` | ✓ | ✓ |  |  |  |  |  |  |  |  |
+| `catalog.read` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  | ✓ | ✓ |
+| `catalog.manage` | ✓ | ✓ | ✓ |  |  |  |  |  |  |  |
+| `tables.read` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  | ✓ | ✓ |
+| `tables.manage` | ✓ | ✓ | ✓ |  |  |  |  |  |  |  |
+| `orders.read` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ |
+| `orders.create` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| `orders.update` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| `orders.cancel.pending` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| `orders.cancel.sent` | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |  |
+| `orders.cancel.order` | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |  |
+| `kds.read` | ✓ | ✓ | ✓ | ✓ |  | ✓ |  | ✓ | ✓ | ✓ |
+| `kds.transition` | ✓ | ✓ | ✓ | ✓ |  |  |  | ✓ |  |  |
+| `payments.collect` | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |
+| `refunds.create` | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |  |
+| `cash-register.manage` | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |
+| `reports.read` | ✓ | ✓ | ✓ | ✓ |  |  |  |  | ✓ | ✓ |
+| `captures.read` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| `captures.create` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| `captures.update` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| `captures.claim` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| `captures.transfer` | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |  |
+| `captures.takeover` | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |  |
+| `customers.read` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| `customers.create` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| `customers.update` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| `customers.validate` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| `delivery_zones.manage` | ✓ | ✓ | ✓ |  |  |  |  |  |  |  |
+| `deliveries.read` | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  |  |
+| `deliveries.update.own` | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ |  |  |  |
+| `deliveries.manage` | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |
+| `memberships.read` | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |
 
 ## Reglas de evolución
 
