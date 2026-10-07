@@ -5,6 +5,8 @@ import {
   actionLabel,
   buildAddOrderItemCommand,
   canAddItems,
+  captureKitchenResultText,
+  captureKitchenSend,
   chunkOrderItemIds,
   groupItemsByStatus,
   hasAction,
@@ -39,6 +41,20 @@ function detail(overrides: Partial<OrderDetailV1> = {}): OrderDetailV1 {
     updatedAt: null, version: 1, ...overrides,
   };
 }
+
+test("Capture sends only pending lines from an authorized order detail and reports the outcome", () => {
+  const pending = item();
+  const sent = item({ orderItemId: "23723e10-c0bf-49fd-9363-4f0e2c60e955", status: "sent" });
+  const snapshot = detail({ items: [pending, sent], version: 4 });
+  assert.deepEqual(captureKitchenSend(snapshot), {
+    orderId: snapshot.orderId, expectedVersion: 4, orderItemIds: [pending.orderItemId],
+  });
+  assert.equal(captureKitchenSend(detail({ ...snapshot, availableActions: [] })), undefined);
+  assert.equal(captureKitchenSend(detail({ ...snapshot, items: [sent] })), undefined);
+  assert.equal(captureKitchenResultText(1), "Enviada a cocina · 1 línea");
+  assert.equal(captureKitchenResultText(4), "Enviada a cocina · 4 líneas");
+  assert.match(captureKitchenResultText(0, "conflict"), /orden cambió|línea ya se envió/);
+});
 
 test("groupItemsByStatus buckets every forward and terminal status, always in the same order", () => {
   const groups = groupItemsByStatus([
