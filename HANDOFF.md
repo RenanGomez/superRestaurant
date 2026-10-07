@@ -1,5 +1,11 @@
 # HANDOFF
 
+## Últimas deudas y «Enviar a cocina» tras confirmar — 2026-10-06 (REVIEW)
+
+- Emmanuel: «continua». Sin abrir fase nueva del plan maestro (requiere su decisión), L0 cerró lo que quedaba dentro del día operable: `small-debts-20261006` (U1 ids por mitad en el detalle de orden, `6d55d1e` → `e0760d8`, Codex limpio; U2 resultó deuda falsa: `settle_delivery` es sólo efectivo por diseño, prueba `1a316b7` → `ec23ba7`) y la brecha que mostró el flujo HTTP: la Order confirmada nace `draft` y la web no ofrecía enviarla a cocina. Researcher la confirmó (`capture-workspace.tsx:749`; PROJECT_NOTES 2026-10-01: envío explícito, no automático) → paquete `web-capture-confirm-send-kitchen` (nivel C, Codex `4e79e2a`, review limpio) → `653c238`: tras confirmar, «Enviar a cocina» en un toque con la acción atómica existente, resultado visible, «Nueva captura» (N) y «Ver orden».
+- Puertas globales 9/12/12/9 (`tmp/gates-20261006-batch.log`). API (3000) y web dev (8082) reiniciados con `main` `653c238` (`tmp/local-api-20261006a.out.log`, `tmp/local-web-20261006a.out.log`).
+- Estado: **nada abierto del día operable**. Todo en REVIEW a falta de la prueba única de Emmanuel (guía §7 y §8, ahora 11 puntos) y de ratificar los 15/30 min de la cotización ASAP. Lo siguiente es la fase posterior del plan maestro: requiere decisión humana de alcance (candidatos: segunda ronda de hallazgos de la prueba, offline/sync Fase 3, impresión ESC/POS, mobile).
+
 ## Cierre de deuda del día operable y bug de la cotización ASAP — 2026-10-05 tarde (REVIEW)
 
 - Emmanuel: «continua con la siguiente fase». L0 abrió en paralelo las cuatro deudas restantes (paquetes `.claude/packets/`): `capture-halves-ids-projection` (B/C), `cash-transfer-receipt-reference` (B/C), `web-deliveries-load-more` (C) y `api-http-flow-iteration-2` (B). Una caída de red (ENOTFOUND) tumbó tres implementadores dos veces; se reanudaron por mensaje (uno no pudo reanudarse porque su worktree quedó redirigido y se relanzó sobre los cambios sin commitear). Codex no puede escribir el `.git` compartido: L0 commiteó sus archivos en cada ronda.
