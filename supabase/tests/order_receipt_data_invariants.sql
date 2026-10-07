@@ -1,0 +1,114 @@
+-- Test-only fixtures. The schema verifier executes this body inside its rollback transaction.
+-- Exercises app_private.read_order_receipt_data: createdAt/shortFolio/captured payments for an actor that passes
+-- read_order (manager) or read_courier_delivery_order (the assigned courier); NULL for everyone else.
+begin;
+do $order_receipt_data_tests$
+declare
+  creator uuid := (select id from auth.users where deleted_at is null order by id limit 1);
+  manager uuid := gen_random_uuid();
+  courier_a uuid := gen_random_uuid();
+  courier_b uuid := gen_random_uuid();
+  foreign_manager uuid := gen_random_uuid();
+  restaurant uuid := gen_random_uuid();
+  branch uuid := gen_random_uuid();
+  other_restaurant uuid := gen_random_uuid();
+  other_branch uuid := gen_random_uuid();
+  m_manager uuid := gen_random_uuid();
+  m_a uuid := gen_random_uuid();
+  m_b uuid := gen_random_uuid();
+  m_foreign uuid := gen_random_uuid();
+  v_session uuid := gen_random_uuid();
+  v_register uuid := gen_random_uuid();
+  v_shift uuid := gen_random_uuid();
+  o_none uuid := gen_random_uuid();
+  o_two uuid := gen_random_uuid();
+  o_delivery uuid := gen_random_uuid();
+  p_cash uuid := gen_random_uuid();
+  p_transfer uuid := gen_random_uuid();
+  p_card uuid := gen_random_uuid();
+  t0 timestamptz := timestamptz '2026-10-06 12:00:00.123+00';
+  result jsonb;
+begin
+  if creator is null then raise exception 'RECEIPT_TEST_ACTOR_REQUIRED'; end if;
+  insert into app.restaurants(id,name,time_zone) values
+    (restaurant,'rollback-only receipt','America/Hermosillo'),
+    (other_restaurant,'rollback-only receipt foreign','America/Hermosillo');
+  insert into app.branches(id,restaurant_id,name) values
+    (branch,restaurant,'rollback-only receipt branch'),
+    (other_branch,other_restaurant,'rollback-only receipt foreign branch');
+  insert into auth.users(id,email) values
+    (manager,'local-receipt-manager@invalid.test'),(courier_a,'local-receipt-a@invalid.test'),
+    (courier_b,'local-receipt-b@invalid.test'),(foreign_manager,'local-receipt-foreign@invalid.test');
+  insert into app.memberships(id,user_id,restaurant_id,branch_id,granted_by) values
+    (m_manager,manager,restaurant,branch,creator),(m_a,courier_a,restaurant,branch,creator),
+    (m_b,courier_b,restaurant,branch,creator),(m_foreign,foreign_manager,other_restaurant,other_branch,creator);
+  insert into app.membership_role_grants(membership_id,role_code,granted_by) values
+    (m_manager,'manager',creator),(m_a,'courier',creator),(m_b,'courier',creator),(m_foreign,'manager',creator);
+
+  insert into app.orders(id,restaurant_id,branch_id,channel,status,aggregate,version,created_at,created_by,updated_by)
+  select o,restaurant,branch,ch,'open',pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',o::text,'restaurantId',restaurant::text,'branchId',branch::text,'channel',ch,
+    'status','open','currency','MXN','timeZone','America/Hermosillo','items','[]'::jsonb
+  ),3,t0,creator,creator
+  from (values (o_none,'counter'),(o_two,'counter'),(o_delivery,'delivery')) as t(o,ch);
+  insert into app.order_deliveries(restaurant_id,branch_id,order_id,courier_user_id,state,assigned_at,created_by,updated_by)
+  values (restaurant,branch,o_delivery,courier_a,'assigned',now(),creator,creator);
+
+  insert into app.cash_register_sessions(
+    id,restaurant_id,branch_id,register_id,shift_id,cashier_id,currency,status,opening_float_minor,aggregate,version,opened_at,opened_by
+  ) values (
+    v_session,restaurant,branch,v_register,v_shift,creator,'MXN','open',0,pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'cashRegisterId',v_session::text,'restaurantId',restaurant::text,'branchId',branch::text,
+      'registerId',v_register::text,'shiftId',v_shift::text,'cashierId',creator::text,'currency','MXN','status','open',
+      'openingFloat',pg_catalog.jsonb_build_object('amountMinor',0,'currency','MXN'),
+      'openedByActorId',creator::text,'openedAt','2026-10-06T12:00:00.000Z','openedDeviceId',gen_random_uuid()::text,
+      'movements','[]'::jsonb),
+    1,pg_catalog.clock_timestamp(),creator);
+  -- Two captured payments of o_two (cash with tender/change/tip, then a transfer with reference) and one card
+  -- payment of the delivery Order; inserted newest first to prove the ordering is by captured_at.
+  insert into app.payments(id,restaurant_id,branch_id,order_id,cash_register_session_id,method,amount_minor,currency,state,
+    manual_provider,manual_terminal_id,manual_reference,aggregate,captured_at,captured_by,tip_minor,tendered_amount_minor,change_minor)
+  values
+    (p_transfer,restaurant,branch,o_two,v_session,'transfer',1500,'MXN','captured',null,null,'SPEI-123','{}'::jsonb,t0 + interval '2 minutes',creator,0,null,null),
+    (p_cash,restaurant,branch,o_two,v_session,'cash',3000,'MXN','captured',null,null,null,'{}'::jsonb,t0 + interval '1 minute',creator,200,5000,1800),
+    (p_card,restaurant,branch,o_delivery,v_session,'card_manual',900,'MXN','captured','terminal-x','T-1',null,'{}'::jsonb,t0 + interval '3 minutes',creator,0,null,null);
+  update app.payments set aggregate = pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'paymentId',id::text,'restaurantId',restaurant_id::text,'branchId',branch_id::text,'orderId',order_id::text,
+    'method',method,'state',state,'amount',pg_catalog.jsonb_build_object('amountMinor',amount_minor,'currency',currency))
+  where order_id in (o_two,o_delivery);
+
+  execute 'set local role app_api';
+  -- No payments: createdAt from the row, folio from the id, empty list.
+  result := app_private.read_order_receipt_data(manager,restaurant,branch,o_none);
+  if result is null or result->>'schemaVersion'<>'1' or result->>'createdAt'<>'2026-10-06T12:00:00.123Z'
+    or result->>'shortFolio'<>upper(left(o_none::text,8)) or result->'payments'<>'[]'::jsonb
+  then raise exception 'RECEIPT_NO_PAYMENTS_WRONG %',result; end if;
+  -- Two payments, oldest first, exact shape; the transfer reference only on the transfer.
+  result := app_private.read_order_receipt_data(manager,restaurant,branch,o_two);
+  if pg_catalog.jsonb_array_length(result->'payments')<>2
+    or result#>>'{payments,0,paymentId}'<>p_cash::text or result#>>'{payments,0,method}'<>'cash'
+    or (result#>>'{payments,0,amountMinor}')::bigint<>3000 or (result#>>'{payments,0,tipMinor}')::bigint<>200
+    or (result#>>'{payments,0,tenderedAmountMinor}')::bigint<>5000 or (result#>>'{payments,0,changeMinor}')::bigint<>1800
+    or result#>'{payments,0,transferReference}'<>'null'::jsonb
+    or result#>>'{payments,0,capturedAt}'<>'2026-10-06T12:01:00.123Z'
+    or result#>>'{payments,1,paymentId}'<>p_transfer::text or result#>>'{payments,1,method}'<>'transfer'
+    or (result#>>'{payments,1,amountMinor}')::bigint<>1500 or result#>'{payments,1,tenderedAmountMinor}'<>'null'::jsonb
+    or result#>'{payments,1,changeMinor}'<>'null'::jsonb or result#>>'{payments,1,transferReference}'<>'SPEI-123'
+  then raise exception 'RECEIPT_TWO_PAYMENTS_WRONG %',result; end if;
+  -- The assigned courier reads their delivery (card payment, no reference); the other courier never does.
+  result := app_private.read_order_receipt_data(courier_a,restaurant,branch,o_delivery);
+  if result is null or pg_catalog.jsonb_array_length(result->'payments')<>1 or result#>>'{payments,0,method}'<>'card_manual'
+    or result#>'{payments,0,transferReference}'<>'null'::jsonb
+  then raise exception 'RECEIPT_COURIER_WRONG %',result; end if;
+  if app_private.read_order_receipt_data(courier_b,restaurant,branch,o_delivery) is not null then raise exception 'RECEIPT_OTHER_COURIER_READ'; end if;
+  if app_private.read_order_receipt_data(courier_a,restaurant,branch,o_two) is not null then raise exception 'RECEIPT_COURIER_FOREIGN_ORDER_READ'; end if;
+  -- Isolation: another tenant's manager, wrong scope, missing Order and null arguments are the same NULL.
+  if app_private.read_order_receipt_data(foreign_manager,restaurant,branch,o_two) is not null then raise exception 'RECEIPT_FOREIGN_READ'; end if;
+  if app_private.read_order_receipt_data(manager,other_restaurant,other_branch,o_two) is not null then raise exception 'RECEIPT_WRONG_SCOPE_READ'; end if;
+  if app_private.read_order_receipt_data(manager,restaurant,other_branch,o_two) is not null then raise exception 'RECEIPT_WRONG_BRANCH_READ'; end if;
+  if app_private.read_order_receipt_data(manager,restaurant,branch,gen_random_uuid()) is not null then raise exception 'RECEIPT_MISSING_NOT_NULL'; end if;
+  if app_private.read_order_receipt_data(null,restaurant,branch,o_two) is not null then raise exception 'RECEIPT_NULL_ACTOR_READ'; end if;
+  execute 'reset role';
+end
+$order_receipt_data_tests$;
+commit;
