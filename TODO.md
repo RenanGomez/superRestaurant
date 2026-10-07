@@ -15,7 +15,7 @@
 | T1 | Comanda y ticket imprimibles desde el navegador (sin hardware) | TODO (aprobado 2026-10-06, bloque «turno completo») | 0 |
 | T2 | Cancelar orden completa con motivo y vista «Canceladas» | TODO (aprobado 2026-10-06) | 0 |
 | T3 | Resumen del día (ventas, propinas, entregas, cancelaciones, caja por turno) | TODO (aprobado 2026-10-06) | 0 |
-| T4 | KDS operable (tiempos, antigüedad, «listo» por lote) | TODO (aprobado 2026-10-06) | 0 |
+| T4 | KDS operable (tiempos, antigüedad, «listo» por lote) | Codex `6dfde0c` + fix P2 antigüedad `76f0bcd` (tarjetas por orden, umbrales 10/20 min, «Empezar/Listo todo» en serie con versión encadenada, estación persistente, «Nuevo», sonido opcional); integrado en main `db2eeb2`; puertas kds verdes. REVIEW | 85 |
 
 Overall día operable al 2026-10-05 (tarde): ~82 % (D4 al 90 % con transferencia, D6 al 85 % con «Por asignar» del servidor y «Ver pedido» del repartidor, D7 al 90 % con mitades; pendiente de la prueba de Emmanuel; nada en DONE).
 

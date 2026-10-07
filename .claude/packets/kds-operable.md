@@ -30,3 +30,6 @@ Folio corto y nombre de cliente en el ticket (requieren contrato), impresión, b
 
 ## Formato de salida
 Resumen (toques), archivos, salida literal, riesgos.
+
+## Ronda 2 (2026-10-06) — corregir y nada más
+Tu trabajo está commiteado por L0 en `codex/kds-operable` (`6dfde0c`). `codex exec review` marcó P2 en `apps/kds/src/kds-state.ts:41`: la antigüedad del grupo usa el `queuedAt` más viejo incluyendo líneas `ready`, así que una orden con una línea lista antigua y una línea nueva se muestra vencida y se ordena antes que trabajo pendiente más viejo. Calcula la antigüedad operativa del grupo sólo con líneas `sent|preparing` cuando existan, con respaldo al mínimo global cuando todas están `ready`; añade la prueba en `kds-state.test.ts`. Puertas kds lint/typecheck/test/build. No commitees; deja los archivos modificados e informa archivos y salida literal.

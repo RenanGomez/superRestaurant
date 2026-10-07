@@ -27,3 +27,6 @@ ESC/POS, Bluetooth, impresión automática, logo.
 
 ## Formato de salida
 Resumen (toques), archivos, salida literal, riesgos.
+
+## Ronda 2 (2026-10-06) — corregir y nada más
+Tu trabajo está commiteado por L0 en `codex/web-print-tickets` (`80df622`). `codex exec review` marcó en `apps/web/src/lib/print-documents.ts`: **P1** (29-30) `OrderDetailItemV1` no trae `stationId` y la prueba lo enmascara con un cast: una unidad de API en paralelo lo añadirá como campo opcional `stationId: string | null`; deja el código preparado para usarlo cuando exista (ya lo haces) y **corrige la prueba** para no castear: usa un fixture que pase por `parseOrderDetailV1` real con `stationId` ausente y verifica el agrupado «Sin estación asignada», más un caso de helper puro que reciba items ya tipados con estación. **P2** (27-29) la comanda incluye líneas `pending` no enviadas: filtra a estados ya enviados a cocina (`sent|preparing|ready|delivered`) y excluye `pending` y `cancelled`; añade prueba. **P2** (64-66) el ticket omite la propina capturada: imprime «Propina» por pago desde `tipMinor` y ajusta «Recibido»/«Cambio» para que cuadren (cambio = recibido − cobro − propina, ya lo da el servidor). Puertas web lint/typecheck/test/build. No commitees; deja los archivos modificados e informa archivos y salida literal.
