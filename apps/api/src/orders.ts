@@ -13,6 +13,7 @@ import {
   parseBranchScope,
   parseOrderDetailRequestV1,
   parseOrderDetailV1,
+  parseOrderReceiptDataV1,
   parseRealtimeSubscriptionV1,
   parseSendOrderToKitchenCommandV1,
   parseTransitionOrderItemCommandV1,
@@ -30,6 +31,7 @@ import {
   type OrderDetailActionV1,
   type OrderDetailV1,
   type OrderMutationSummaryV1,
+  type OrderReceiptDataV1,
   type RealtimeSubscriptionV1,
   type SendOrderToKitchenCommandV1,
 } from "@super-restaurant/shared-types";
@@ -80,6 +82,7 @@ import {
 } from "./persistence/order-persistence-codec.js";
 
 const readOrderSql = "select app_private.read_order($1::uuid, $2::uuid, $3::uuid, $4::uuid) as result";
+const readReceiptDataSql = "select app_private.read_order_receipt_data($1::uuid, $2::uuid, $3::uuid, $4::uuid) as result";
 const readAssignedCourierOrderSql = "select app_private.read_courier_delivery_order($1::uuid, $2::uuid, $3::uuid, $4::uuid) as result";
 const persistOrderSql = "select app_private.persist_order_mutation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
 const cancelOrderItemSql = "select app_private.persist_order_item_cancellation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
@@ -172,6 +175,11 @@ export interface OrderPersistencePort {
    * not the actor's own assigned delivery is the same `"missing"`, so a foreign Order's existence is not revealed.
    */
   readAssignedToCourier(actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing">;
+  /**
+   * Ticket facts the aggregate does not carry (row `createdAt`, `shortFolio`, captured payments). The SQL reader
+   * re-applies the detail authorization (`read_order` or the assigned courier); anything else is `"missing"`.
+   */
+  readReceiptData(actorId: string, scope: BranchScope, orderId: string): Promise<OrderReceiptDataV1 | "missing">;
   recoverKds(actorId: string, subscription: RealtimeSubscriptionV1, after: KdsCursorV1, limit: number): Promise<KdsEventPageV1 | "forbidden">;
   sendOrderToKitchen(
     actorId: string,
@@ -222,6 +230,15 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
 
   public async readAssignedToCourier(actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing"> {
     return this.readWith(readAssignedCourierOrderSql, actorId, scope, orderId);
+  }
+
+  public async readReceiptData(actorId: string, scope: BranchScope, orderId: string): Promise<OrderReceiptDataV1 | "missing"> {
+    const result = await this.database.query(readReceiptDataSql, [actorId, scope.restaurantId, scope.branchId, orderId]);
+    const raw = singleResult(result.rows);
+    if (raw === null) return "missing";
+    const data = parseOrderReceiptDataV1(raw);
+    if (data === undefined) throw unavailable();
+    return data;
   }
 
   private async readWith(sql: string, actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing"> {
@@ -697,6 +714,15 @@ export class OrderService {
       if (error instanceof OrderApplicationError) throw error;
       throw unavailable();
     }
+    // Ticket facts (row createdAt, folio, captured payments); the SQL reader re-checks the same authorization.
+    let receipt: OrderReceiptDataV1 | undefined;
+    try {
+      const data = await this.orders.readReceiptData(actorId, scope, orderId);
+      if (data !== "missing") receipt = data;
+    } catch (error: unknown) {
+      if (error instanceof OrderApplicationError) throw error;
+      throw unavailable();
+    }
     // Frozen snapshot and delivery facts: customer/address only for roles with `customers.read`.
     let context: OrderDeliveryContext | undefined;
     if (this.deliveryContext !== undefined) {
@@ -712,7 +738,7 @@ export class OrderService {
     if (courier && (context?.delivery == null || context.delivery.courierUserId !== actorId)) {
       throw applicationError("authorization");
     }
-    const detail = projectOrderDetail(record, scope, access.kind === "branch" ? access.roles : [], context, courier);
+    const detail = projectOrderDetail(record, scope, access.kind === "branch" ? access.roles : [], context, courier, receipt);
     if (detail === undefined) throw unavailable();
     return detail;
   }
@@ -948,6 +974,7 @@ function projectOrderDetail(
   roles: readonly MembershipRole[],
   context?: OrderDeliveryContext,
   courierView = false,
+  receipt?: OrderReceiptDataV1,
 ): OrderDetailV1 | undefined {
   const { order, version } = stored;
   const snapshot = context?.snapshot ?? null;
@@ -1006,7 +1033,7 @@ function projectOrderDetail(
   return parseOrderDetailV1({
     availableActions: computeAvailableActions(order, roles, context?.delivery?.state === undefined || context.delivery.state === "pending" ? null : context.delivery.state),
     channel: order.channel,
-    createdAt: null,
+    createdAt: receipt?.createdAt ?? null,
     currency: order.currency,
     ...(context === undefined ? {} : { delivery: context.delivery }),
     fulfillment: {
@@ -1021,8 +1048,10 @@ function projectOrderDetail(
     },
     items,
     orderId: order.orderId,
+    payments: receipt?.payments ?? [],
     schemaVersion: 1,
     scope,
+    shortFolio: receipt?.shortFolio ?? null,
     status: order.status,
     tableId: order.tableId ?? null,
     timeZone: order.timeZone,

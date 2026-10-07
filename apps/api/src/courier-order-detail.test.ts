@@ -73,6 +73,16 @@ function deliveryView(courierUserId: string, state = "assigned") {
   };
 }
 
+const receiptData = {
+  createdAt: "2026-10-06T12:00:00.000Z",
+  payments: [{
+    amountMinor: 13_000, capturedAt: "2026-10-06T12:30:00.000Z", changeMinor: 7_000, method: "cash",
+    paymentId: "5d1c2c3e-4f50-4a61-8b72-93a4b5c6d7e8", tenderedAmountMinor: 20_000, tipMinor: 0, transferReference: null,
+  }],
+  schemaVersion: 1,
+  shortFolio: "11111111",
+};
+
 interface Harness {
   readonly service: DeliveryService;
   readonly calls: string[];
@@ -89,6 +99,11 @@ function harness(roles: readonly string[], owner: string | null, view: unknown =
       calls.push("readAssignedToCourier");
       return owner === id ? { order: deliveryOrder(), version: 4 } : "missing";
     },
+    // The SQL receipt reader applies the same ownership: only the assigned courier gets the ticket facts.
+    readReceiptData: async (id: string) => {
+      calls.push("readReceiptData");
+      return owner === id ? receiptData : "missing";
+    },
   } as unknown as OrderPersistencePort;
   const context: OrderDeliveryContextPort = { read: async () => ({ delivery: view as never, snapshot: snapshot() as never }) };
   const orderService = new OrderService(authorization, orders, {} as never, {} as never, context);
@@ -102,7 +117,10 @@ async function code(promise: Promise<unknown>, expected: string): Promise<void> 
 test("courier with the assigned delivery reads lines, total, intent, address and instructions, with no actions", async () => {
   const { service, calls } = harness(["courier"], actorId);
   const detail = await service.orderDetail(principal, request);
-  assert.deepEqual(calls, ["readAssignedToCourier"], "the courier never goes through the orders.read reader");
+  assert.deepEqual(calls, ["readAssignedToCourier", "readReceiptData"], "the courier never goes through the orders.read reader");
+  assert.equal(detail.createdAt, "2026-10-06T12:00:00.000Z");
+  assert.equal(detail.shortFolio, "11111111");
+  assert.deepEqual(detail.payments.map((payment) => [payment.method, payment.amountMinor, payment.changeMinor]), [["cash", 13_000, 7_000]]);
   assert.equal(detail.items.length, 1);
   assert.equal(detail.items[0]?.name, "Tacos");
   assert.equal(detail.items[0]?.quantity, 2);
@@ -140,7 +158,7 @@ test("a settled delivery stays readable by its own courier (documented decision:
 test("a manager delegates to the normal detail (orders.read path), unchanged", async () => {
   const { service, calls } = harness(["manager"], null);
   const detail = await service.orderDetail(principal, request);
-  assert.deepEqual(calls, ["read"]);
+  assert.deepEqual(calls, ["read", "readReceiptData"]);
   assert.ok(detail.availableActions.length > 0);
   assert.equal(detail.fulfillment.customerLabel, "Ana Pérez · ****78");
   assert.equal(detail.fulfillment.deliveryInstructions ?? null, null);
@@ -177,6 +195,7 @@ test("POST /deliveries/order-detail: HTTP contract (401, 400, 201 no-store, 403,
       if (broken) throw new Error("secret connection string");
       return owner === id ? { order: deliveryOrder(), version: 4 } : "missing";
     },
+    readReceiptData: async () => receiptData,
   };
   const context = { read: async () => ({ delivery: deliveryView(actorId), snapshot: snapshot() }) };
   const module = await Test.createTestingModule({ imports: [AppModule] })
