@@ -13,6 +13,7 @@ import {
   type BranchOrderWorkFilter,
 } from "../../../lib/branch-order-work-tray";
 import { OrderDetailPanel, type OrderDetailActions } from "./order-detail-panel";
+import type { PrintHeader } from "../../../lib/print-documents";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
 const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
@@ -34,10 +35,11 @@ interface Props {
   readonly action: (input: unknown) => Promise<BranchOrderTrayRequestResult>;
   /** Server-computed from the actor's own membership roles; the client never decides this. */
   readonly canCheckout: boolean;
+  readonly printHeader: PrintHeader;
   readonly detailActions: OrderDetailActions;
 }
 
-export function OrdersTray({ scope, action, canCheckout, detailActions, initialOrderId, autoOpenMenu }: Props) {
+export function OrdersTray({ scope, action, canCheckout, detailActions, initialOrderId, autoOpenMenu, printHeader }: Props) {
   const [items, setItems] = useState<readonly BranchOrderWorkItemV1[]>([]);
   const [nextCursor, setNextCursor] = useState<BranchOrderWorkTrayV1["nextCursor"]>(null);
   const [filter, setFilter] = useState<BranchOrderWorkFilter>("all");
@@ -111,6 +113,7 @@ export function OrdersTray({ scope, action, canCheckout, detailActions, initialO
       autoOpenMenu={autoOpenMenu && openOrderId === initialOrderId}
       actions={detailActions}
       canCheckout={canCheckout}
+      printHeader={printHeader}
       onClose={() => setOpenOrderId(undefined)}
       onChanged={refresh}
     />}

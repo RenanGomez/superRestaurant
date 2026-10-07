@@ -1,5 +1,8 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
+
+import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../lib/memberships";
 
 import { AppNav } from "./app-nav";
 import { getServerEnv } from "../../env";
@@ -8,6 +11,8 @@ import { createServerSupabaseClient } from "../../lib/supabase-server";
 import { logoutAction } from "./actions";
 
 export const dynamic = "force-dynamic";
+
+const REPORT_ROLES = new Set(["owner", "admin", "manager", "supervisor", "viewer", "auditor"]);
 
 /**
  * Protected shell for FE-0. The authoritative gate — Supabase `getUser()`
@@ -36,9 +41,15 @@ export default async function AppLayout({ children }: { readonly children: React
   const canAccessSystemAdmin = session !== null
     && await canAccessSystemAdministration(session.access_token, getServerEnv().apiBaseUrl);
 
+  // Menu hint only (mirrors the RBAC policy's `reports.read` roles); the API decides.
+  const scope = parseBranchPreference((await cookies()).get(BRANCH_PREFERENCE_COOKIE)?.value);
+  const memberships = session !== null && scope !== undefined ? await listMemberships(session.access_token, getServerEnv().apiBaseUrl) : undefined;
+  const membership = memberships === undefined || scope === undefined ? undefined : findMembership(memberships.memberships, scope);
+  const canReadReports = membership?.roles.some((role) => REPORT_ROLES.has(role)) ?? false;
+
   return (
     <div className="flex min-h-screen bg-bg">
-      <AppNav canAccessSystemAdmin={canAccessSystemAdmin} />
+      <AppNav canAccessSystemAdmin={canAccessSystemAdmin} canReadReports={canReadReports} />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-[68px] shrink-0 items-center justify-between border-b border-border bg-surface px-3 sm:px-8">

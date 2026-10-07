@@ -121,6 +121,8 @@ import {
 } from "./delivery-zones.js";
 import { TableBoardController } from "./table-board.controller.js";
 import { TABLE_BOARD_PORT, PostgresTableBoardAdapter, TableBoardService } from "./table-board.js";
+import { ReportsController } from "./reports.controller.js";
+import { BRANCH_DAY_SUMMARY_PORT, PostgresBranchDaySummary, ReportsService } from "./reports.js";
 import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
 
 @Module({
@@ -143,6 +145,7 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     TableOrderContextController,
     OperationalWorkTrayController,
     BranchOrderWorkTrayController,
+    ReportsController,
     SystemOnboardingController,
     DeliveryZonesController,
     TableBoardController,
@@ -265,6 +268,9 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     OperationalWorkTrayService,
     PostgresBranchOrderWorkTray,
     { provide: BRANCH_ORDER_WORK_TRAY_PORT, useExisting: PostgresBranchOrderWorkTray },
+    PostgresBranchDaySummary,
+    { provide: BRANCH_DAY_SUMMARY_PORT, useExisting: PostgresBranchDaySummary },
+    ReportsService,
     BranchOrderWorkTrayService,
     PostgresCancelledWorkTray,
     { provide: CANCELLED_WORK_TRAY_PORT, useExisting: PostgresCancelledWorkTray },

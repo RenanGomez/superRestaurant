@@ -924,6 +924,39 @@ test("order service detail never offers open and sendToKitchen together for the 
   assert.deepEqual(pendingDetail.availableActions, ["addItem", "sendToKitchen", "cancelOrder"]);
 });
 
+test("order service detail reports the frozen line tax as taxMinor", async () => {
+  const draft = createOrder({
+    branchId: scope.branchId,
+    channel: "delivery",
+    currency: "MXN",
+    deliveryCharge: { amount: new Money(4_000, "MXN"), quoteId: randomUUID() },
+    orderId,
+    restaurantId: scope.restaurantId,
+    timeZone: "America/Mexico_City",
+  }, { ...audit, actorId: principal.actorId }).order;
+  const taxed = addOrderItem(draft, {
+    orderItemId,
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0", modifiers: [], name: "Hamburguesa",
+      productId, stationId: "kitchen", unit: "piece", unitPrice: new Money(10_000, "MXN"),
+      tax: { taxId: randomUUID(), name: "IVA", taxRuleVersion: "mx-2026", rate: { numerator: 16n, denominator: 100n }, inclusion: "excluded" },
+    },
+  }, { ...audit, actorId: principal.actorId }).order;
+  const port: OrderPersistencePort = {
+    listKdsTickets: async () => "forbidden",
+    persist: async () => ({ status: "conflict" }),
+    read: async () => ({ order: taxed, version: 2 }),
+    recoverKds: async () => "forbidden",
+    readAssignedToCourier: async () => "missing" as const,
+    sendOrderToKitchen: notImplementedSendOrderToKitchen,
+  };
+  const detail = await serviceFor(["manager"], port).detail(principal, { orderId, schemaVersion: 1 as const, scope });
+  assert.equal(detail.totals.taxMinor, 1_600);
+  assert.equal(detail.totals.itemsTotalMinor, 11_600);
+  assert.equal(detail.items[0]?.stationId, "kitchen");
+});
+
 test("order service detail on a cancelled order with a frozen delivery charge never reports it in totals", async () => {
   const withCharge = createOrder({
     branchId: scope.branchId,
@@ -948,7 +981,7 @@ test("order service detail on a cancelled order with a frozen delivery charge ne
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const detail = await serviceFor(["manager"], port).detail(principal, { orderId, schemaVersion: 1 as const, scope });
-  assert.deepEqual(detail.totals, { currency: "MXN", deliveryChargeMinor: 0, itemsTotalMinor: 0, tipMinor: 0, totalMinor: 0 });
+  assert.deepEqual(detail.totals, { currency: "MXN", deliveryChargeMinor: 0, itemsTotalMinor: 0, taxMinor: 0, tipMinor: 0, totalMinor: 0 });
   assert.deepEqual(detail.availableActions, []);
 });
 
@@ -1102,6 +1135,7 @@ test("addItem freezes the size price, id, name and the line note; detail exposes
   const request = { orderId, schemaVersion: 1, scope };
   const detail = await manager.detail(principal, request);
   assert.equal(detail.items[0]?.variantName, "Grande");
+  assert.equal(detail.items[0]?.stationId, "kitchen");
   assert.equal(detail.items[0]?.unitPriceMinor, 15_000);
   assert.equal(detail.items[0]?.note, "sin jitomate");
   assert.ok(detail.availableActions.includes("addItem"));
