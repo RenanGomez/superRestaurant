@@ -301,3 +301,13 @@ test("adapter reads the prepaid settlement row with a null payment, and a list o
   const overLimit = serviceFor(["cashier"], portWith({ list: async () => ({ status: "limit_exceeded" }) }));
   await assertCode(overLimit.list(principal, { schemaVersion: 1, scope }), "unavailable");
 });
+
+test("settle is cash-only, so its real { result } row projects transferReference null on replay", async () => {
+  const adapterFor = (result: unknown) => new PostgresDeliveryAdapter({ query: async () => ({ rows: [{ result }] }) });
+  const first = await adapterFor({ status: "replayed", replayed: true, delivery: settledView, payment: { ...payment, replayed: true } })
+    .replaySettle(principal.actorId, settleCommand);
+  assert.ok(typeof first === "object" && first.payment !== null && first.payment.method === "cash" && first.payment.transferReference === null);
+  // a reference on a cash row is impossible and fails closed instead of leaking into a cash receipt
+  await assert.rejects(adapterFor({ status: "replayed", replayed: true, delivery: settledView, payment: { ...payment, transferReference: "SPEI-1" } })
+    .replaySettle(principal.actorId, settleCommand), DeliveryApplicationError);
+});
