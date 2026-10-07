@@ -12,6 +12,7 @@ import {
   parseOrderDetailRequestV1,
   parseOrderDetailV1,
   parseOrderMutationSummaryV1,
+  parseOrderReceiptDataV1,
   parseSendOrderToKitchenCommandV1,
   parseTableBoardV1,
   parseTransitionOrderItemCommandV1,
@@ -249,3 +250,18 @@ expect(parseAddOrderItemCommandV1({...add,note:"x".repeat(501)})===undefined,"lo
 expect(parseAddOrderItemCommandV1({...add,note:"line"+String.fromCharCode(10)+"break"})===undefined,"control characters in note fail");
 expect(parseAddOrderItemCommandV1({...add,note:""})===undefined,"empty note fails");
 expect((ORDER_DETAIL_ACTIONS as readonly string[]).includes("addItem"),"addItem is a detail action");
+
+const receiptPayment={paymentId:"5d1c2c3e-4f50-4a61-8b72-93a4b5c6d7e8",method:"cash",amountMinor:3000,tipMinor:200,tenderedAmountMinor:5000,changeMinor:1800,transferReference:null,capturedAt:"2026-10-06T12:01:00.123Z"};
+const receiptTransfer={...receiptPayment,paymentId:"6d1c2c3e-4f50-4a61-8b72-93a4b5c6d7e8",method:"transfer",tipMinor:0,tenderedAmountMinor:null,changeMinor:null,transferReference:"SPEI-123"};
+const withPayments=parseOrderDetailV1({...detail,shortFolio:"EE50F0F6",payments:[receiptPayment,receiptTransfer]});
+expect(withPayments!==undefined && withPayments.shortFolio==="EE50F0F6" && withPayments.payments.length===2,"detail carries shortFolio and payments");
+expect(parsedDetail!==undefined && parsedDetail.shortFolio===null && parsedDetail.payments.length===0,"detail without receipt keys reads null folio and no payments");
+expect(parseOrderDetailV1({...detail,payments:[{...receiptPayment,method:"card_manual"}]})===undefined,"a card payment cannot carry a cash tender");
+expect(parseOrderDetailV1({...detail,payments:[{...receiptPayment,transferReference:"X"}]})===undefined,"only a transfer carries a reference");
+expect(parseOrderDetailV1({...detail,payments:[{...receiptPayment,amountMinor:1.5}]})===undefined,"a payment amount must be an integer");
+expect(parseOrderDetailV1({...detail,payments:[{...receiptPayment,extra:1}]})===undefined,"a payment rejects unknown keys");
+expect(parseOrderDetailV1({...detail,payments:[{...receiptPayment,changeMinor:null}]})===undefined,"tender and change come together");
+expect(parseOrderReceiptDataV1({schemaVersion:1,createdAt:"2026-10-06T12:00:00.123Z",shortFolio:"EE50F0F6",payments:[]})!==undefined,"receipt data without payments parses");
+expect(parseOrderReceiptDataV1({schemaVersion:1,createdAt:"2026-10-06T12:00:00.123Z",shortFolio:"EE50F0F6",payments:[receiptPayment,receiptTransfer]})?.payments[1]?.transferReference==="SPEI-123","receipt data keeps the transfer reference");
+expect(parseOrderReceiptDataV1({schemaVersion:1,createdAt:null,shortFolio:"EE50F0F6",payments:[]})===undefined,"receipt data requires createdAt");
+expect(parseOrderReceiptDataV1({schemaVersion:2,createdAt:"2026-10-06T12:00:00.123Z",shortFolio:"EE50F0F6",payments:[]})===undefined,"receipt data rejects another schema version");
