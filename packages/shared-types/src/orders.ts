@@ -332,6 +332,8 @@ export interface OrderDetailItemV1 {
   readonly orderItemId: string;
   readonly status: (typeof ORDER_ITEM_STATUSES)[number];
   readonly name: string;
+  /** Frozen station of the line (price snapshot); additive, `null` when an older server omits it. */
+  readonly stationId?: string | null;
   /** Frozen size name for sized products; optional on input (older servers), `null` in normalized output. */
   readonly variantName?: string | null;
   /** `"halves"` for a half-and-half line; optional on input (older servers), `null` in normalized output. */
@@ -357,6 +359,8 @@ export interface OrderDetailTotalsV1 {
   readonly currency: string;
   /** Items after line/order discount and tax -- never delivery or tip. */
   readonly itemsTotalMinor: number;
+  /** Additive. Tax already contained in `itemsTotalMinor` (from the domain calculator); never added again. */
+  readonly taxMinor?: number;
   readonly deliveryChargeMinor: number;
   readonly tipMinor: number;
   readonly totalMinor: number;
@@ -504,8 +508,11 @@ function parseDetailItem(value: unknown, currency: string): OrderDetailItemV1 | 
   const required = [
     "orderItemId", "status", "name", "quantity", "unitPriceMinor", "lineTotalMinor", "note", "modifiers", "availableActions",
   ];
-  const record = exactRecordWithOptional(value, required, ["variantName", "geometry", "fractionBreakdown"]);
+  const record = exactRecordWithOptional(value, required, ["variantName", "geometry", "fractionBreakdown", "stationId"]);
   if (record === undefined) return undefined;
+  const rawStationId = Object.hasOwn(record, "stationId") ? own(record, "stationId") : null;
+  const stationId = rawStationId === null ? null : text(rawStationId, 1, 200);
+  if (stationId === undefined) return undefined;
   const rawVariantName = Object.hasOwn(record, "variantName") ? own(record, "variantName") : null;
   const variantName = rawVariantName === null ? null : text(rawVariantName, 1, 200);
   const rawGeometry = Object.hasOwn(record, "geometry") ? own(record, "geometry") : null;
@@ -546,7 +553,7 @@ function parseDetailItem(value: unknown, currency: string): OrderDetailItemV1 | 
   return Object.freeze({
     availableActions: Object.freeze(availableActions), fractionBreakdown: Object.freeze(halves as FractionHalfProjectionV1[]),
     geometry, lineTotalMinor, modifiers: Object.freeze(modifiers),
-    name, note, orderItemId, quantity, status: status as OrderDetailItemV1["status"], unitPriceMinor, variantName,
+    name, note, orderItemId, quantity, stationId, status: status as OrderDetailItemV1["status"], unitPriceMinor, variantName,
   });
 }
 
@@ -563,8 +570,11 @@ function parseDetailModifier(value: unknown): OrderDetailModifierV1 | undefined 
 }
 
 function parseDetailTotals(value: unknown): OrderDetailTotalsV1 | undefined {
-  const record = exactRecord(value, ["currency", "itemsTotalMinor", "deliveryChargeMinor", "tipMinor", "totalMinor"]);
+  const record = exactRecordWithOptional(value, ["currency", "itemsTotalMinor", "deliveryChargeMinor", "tipMinor", "totalMinor"], ["taxMinor"]);
   if (record === undefined) return undefined;
+  const hasTax = Object.hasOwn(record, "taxMinor");
+  const taxMinor = hasTax ? integer(own(record, "taxMinor"), 0, Number.MAX_SAFE_INTEGER) : undefined;
+  if (hasTax && taxMinor === undefined) return undefined;
   const currency = text(own(record, "currency"), 3, 3);
   const itemsTotalMinor = integer(own(record, "itemsTotalMinor"), 0, Number.MAX_SAFE_INTEGER);
   const deliveryChargeMinor = integer(own(record, "deliveryChargeMinor"), 0, Number.MAX_SAFE_INTEGER);
@@ -574,8 +584,9 @@ function parseDetailTotals(value: unknown): OrderDetailTotalsV1 | undefined {
     currency === undefined || !/^[A-Z]{3}$/u.test(currency) || itemsTotalMinor === undefined
     || deliveryChargeMinor === undefined || tipMinor === undefined || totalMinor === undefined
     || itemsTotalMinor + deliveryChargeMinor + tipMinor !== totalMinor
+    || (taxMinor !== undefined && taxMinor > itemsTotalMinor)
   ) return undefined;
-  return Object.freeze({ currency, deliveryChargeMinor, itemsTotalMinor, tipMinor, totalMinor });
+  return Object.freeze({ currency, deliveryChargeMinor, itemsTotalMinor, ...(taxMinor === undefined ? {} : { taxMinor }), tipMinor, totalMinor });
 }
 
 function parseDetailFulfillment(value: unknown, channel: unknown): OrderDetailFulfillmentV1 | undefined {
