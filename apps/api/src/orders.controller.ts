@@ -24,7 +24,7 @@ import type {
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
 import { CancelledWorkTrayService } from "./cancelled-work-tray.js";
-import { OrderApplicationError, OrderDeliveryActiveError, OrderService } from "./orders.js";
+import { OrderApplicationError, OrderDeliveryActiveError, OrderPaymentInFlightError, OrderService } from "./orders.js";
 
 @Controller()
 export class OrdersController {
@@ -126,6 +126,7 @@ export class OrdersController {
       if (error.code === "request") throw new BadRequestException({ code: "ORDER_REQUEST_REJECTED" });
       if (error.code === "authorization") throw new ForbiddenException({ code: "ACTION_NOT_AUTHORIZED" });
       if (error.code === "not_found") throw new NotFoundException({ code: "ORDER_NOT_FOUND" });
+      if (error instanceof OrderPaymentInFlightError) throw new ConflictException({ code: "PAYMENT_IN_FLIGHT" });
       if (error instanceof OrderDeliveryActiveError) throw new ConflictException({ code: "DELIVERY_ACTIVE" });
       if (error.code === "conflict") throw new ConflictException({ code: "ORDER_CONFLICT" });
       throw unavailable();

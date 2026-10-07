@@ -29,6 +29,7 @@ import { OrdersController } from "./orders.controller.js";
 import {
   OrderApplicationError,
   OrderDeliveryActiveError,
+  OrderPaymentInFlightError,
   OrderService,
   PostgresOrderPersistenceAdapter,
   type CancelWholeOrderResult,
@@ -161,6 +162,7 @@ test("cancelOrder maps SQL outcomes: DELIVERY_ACTIVE, forbidden and conflict, an
   const run = (result: CancelWholeOrderResult, version = 5) =>
     serviceFor(["supervisor"], fakePort(paidOrder(), version, () => result, recorder), recorder).cancelOrder(principal, command);
   await assert.rejects(run({ status: "delivery_active" }), (e: unknown) => e instanceof OrderDeliveryActiveError);
+  await assert.rejects(run({ reason: "payment_in_flight", status: "conflict" }), (e: unknown) => e instanceof OrderPaymentInFlightError);
   await assert.rejects(run({ status: "forbidden" }), (e: unknown) => e instanceof OrderApplicationError && e.code === "authorization");
   await assert.rejects(run({ status: "conflict" }), (e: unknown) => e instanceof OrderApplicationError && e.code === "conflict");
   // Stale version: no steps are built, SQL decides (replay or conflict).
@@ -197,6 +199,8 @@ test("controller answers 409 DELIVERY_ACTIVE, 403 and 409 ORDER_CONFLICT for can
   const call = (error: unknown) => failing(error).cancelOrder(request, command);
   await assert.rejects(call(new OrderDeliveryActiveError()), (e: unknown) => e instanceof ConflictException
     && JSON.stringify(e.getResponse()).includes("DELIVERY_ACTIVE"));
+  await assert.rejects(call(new OrderPaymentInFlightError()), (e: unknown) => e instanceof ConflictException
+    && JSON.stringify(e.getResponse()).includes("PAYMENT_IN_FLIGHT"));
   await assert.rejects(call(new OrderApplicationError("authorization")), (e: unknown) => e instanceof ForbiddenException);
   await assert.rejects(call(new OrderApplicationError("conflict")), (e: unknown) => e instanceof ConflictException
     && JSON.stringify(e.getResponse()).includes("ORDER_CONFLICT"));
@@ -225,7 +229,9 @@ test("PostgreSQL adapter binds app_private.cancel_order and decodes the real { r
     next = { status };
     assert.deepEqual(await adapter.cancelWholeOrder(principal.actorId, command, []), { status });
   }
-  for (const malformed of [{ status: "weird" }, { status: "saved" }, { schemaVersion: 1, extra: 1 }, null]) {
+  next = { reason: "payment_in_flight", status: "conflict" };
+  assert.deepEqual(await adapter.cancelWholeOrder(principal.actorId, command, []), { reason: "payment_in_flight", status: "conflict" });
+  for (const malformed of [{ reason: "other", status: "conflict" }, { status: "weird" }, { status: "saved" }, { schemaVersion: 1, extra: 1 }, null]) {
     next = malformed;
     await assert.rejects(adapter.cancelWholeOrder(principal.actorId, command, []), (e: unknown) => e instanceof OrderApplicationError);
   }

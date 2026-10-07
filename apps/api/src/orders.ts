@@ -106,6 +106,14 @@ export class OrderDeliveryActiveError extends OrderApplicationError {
   }
 }
 
+/** A conflict because the order has a non-terminal payment; the controller answers 409 `PAYMENT_IN_FLIGHT`. */
+export class OrderPaymentInFlightError extends OrderApplicationError {
+  public constructor() {
+    super("conflict");
+    this.name = "OrderPaymentInFlightError";
+  }
+}
+
 export interface StoredOrder {
   readonly order: Order;
   readonly version: number;
@@ -141,7 +149,7 @@ export type SendOrderToKitchenBatchResult =
  * courier must mark it failed or it must be settled first); `forbidden` is the SQL re-check of the supervisor role.
  */
 export type CancelWholeOrderResult =
-  | Readonly<{ readonly status: "conflict" | "delivery_active" | "forbidden" }>
+  | Readonly<{ readonly status: "conflict" | "delivery_active" | "forbidden"; readonly reason?: "payment_in_flight" }>
   | Readonly<{
     readonly kdsEvents: readonly KdsEventV1[];
     readonly order: Order;
@@ -375,6 +383,13 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
       JSON.stringify(encodedSteps),
     ]);
     const raw = singleResult(result.rows);
+    const inFlight = exactRecord(raw, ["status", "reason"]);
+    if (inFlight !== undefined) {
+      if (own(inFlight, "status") === "conflict" && own(inFlight, "reason") === "payment_in_flight") {
+        return Object.freeze({ reason: "payment_in_flight" as const, status: "conflict" as const });
+      }
+      throw unavailable();
+    }
     const minimal = exactRecord(raw, ["status"]);
     if (minimal !== undefined) {
       const status = own(minimal, "status");
@@ -617,7 +632,7 @@ export class OrderService {
     try { result = await this.orders.cancelWholeOrder(actorId, command, steps); } catch { throw unavailable(); }
     if (result.status === "forbidden") throw applicationError("authorization");
     if (result.status === "delivery_active") throw new OrderDeliveryActiveError();
-    if (result.status === "conflict") throw applicationError("conflict");
+    if (result.status === "conflict") throw result.reason === "payment_in_flight" ? new OrderPaymentInFlightError() : applicationError("conflict");
     if (result.status !== "saved" && result.status !== "replayed") throw unavailable();
     if (result.status === "saved") {
       for (const kdsEvent of result.kdsEvents) {

@@ -120,6 +120,7 @@ declare
   o_closed uuid := gen_random_uuid();
   o_delivered uuid := gen_random_uuid();
   o_atomic uuid := gen_random_uuid();
+  o_flight uuid := gen_random_uuid();
   capture uuid := gen_random_uuid();
   lease uuid;
   cmd jsonb;
@@ -160,6 +161,7 @@ begin
   perform pg_temp.mk_order(restaurant,branch,o_failed,'open','delivery',items_pending,actor);
   perform pg_temp.mk_order(restaurant,branch,o_closed,'closed','counter',pg_catalog.jsonb_build_array(pg_temp.item(restaurant,branch,'delivered')),actor);
   perform pg_temp.mk_order(restaurant,branch,o_delivered,'paid','counter',pg_catalog.jsonb_build_array(pg_temp.item(restaurant,branch,'delivered'),pg_temp.item(restaurant,branch,'pending')),actor);
+  perform pg_temp.mk_order(restaurant,branch,o_flight,'open','counter',items_pending,actor);
   perform pg_temp.mk_order(restaurant,branch,o_atomic,'open','counter',items_kitchen,actor);
 
   insert into app.cash_register_sessions(
@@ -255,6 +257,20 @@ begin
   cmd := pg_temp.cmd(restaurant,branch,o_atomic,9,now_text,'version vieja');
   if app_private.cancel_order(actor,cmd,pg_temp.build(o_atomic,actor,device,cmd))->>'status'<>'conflict'
   then raise exception 'CANCEL_ORDER_STALE_VERSION_ACCEPTED'; end if;
+
+  -- 7b. A non-terminal payment blocks with payment_in_flight (the state check is lifted inside this rollback only).
+  execute 'reset role';
+  alter table app.payments drop constraint payments_state_valid;
+  insert into app.payments(id,restaurant_id,branch_id,order_id,cash_register_session_id,method,amount_minor,currency,state,aggregate,captured_at,captured_by)
+  values (gen_random_uuid(),restaurant,branch,o_flight,v_session,'cash',100,'MXN','pending','{}'::jsonb,now(),actor);
+  execute 'set local role app_api';
+  cmd := pg_temp.cmd(restaurant,branch,o_flight,1,now_text,'pago en vuelo');
+  result := app_private.cancel_order(actor,cmd,pg_temp.build(o_flight,actor,device,cmd));
+  if result->>'status'<>'conflict' or result->>'reason'<>'payment_in_flight' then raise exception 'CANCEL_ORDER_PAYMENT_IN_FLIGHT_ACCEPTED %',result; end if;
+  execute 'reset role';
+  if (select status from app.orders where id=o_flight)<>'open' or exists (select 1 from app.order_cancellations where order_id=o_flight)
+  then raise exception 'CANCEL_ORDER_PAYMENT_IN_FLIGHT_PERSISTED'; end if;
+  execute 'set local role app_api';
 
   -- 8. Atomicity: a poisoned final step rolls back the kitchen-line steps already applied.
   cmd := pg_temp.cmd(restaurant,branch,o_atomic,1,now_text,'prueba atomica');

@@ -176,6 +176,11 @@ begin
     return pg_catalog.jsonb_build_object('status','delivery_active');
   end if;
 
+  -- A payment that is not terminal (anything but `captured`) could still be captured after the cancellation: refuse.
+  if exists (select 1 from app.payments where restaurant_id = v_restaurant and branch_id = v_branch
+    and order_id = v_order_id and state <> 'captured')
+  then return pg_catalog.jsonb_build_object('status','conflict','reason','payment_in_flight'); end if;
+
   select coalesce(pg_catalog.sum(amount_minor),0)::bigint, coalesce(pg_catalog.sum(tip_minor),0)::bigint
     into v_captured, v_captured_tip
   from app.payments
