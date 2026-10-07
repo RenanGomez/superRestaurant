@@ -1,4 +1,4 @@
-import type { OrderDetailV1, PaymentCollectionSummaryV1 } from "@super-restaurant/shared-types";
+import type { OrderDetailV1, OrderPaymentV1, PaymentCollectionSummaryV1 } from "@super-restaurant/shared-types";
 import { formatMinorUnits } from "./branch-order-work-tray";
 import { halfTicketLines } from "./line-halves";
 
@@ -7,14 +7,21 @@ export interface PrintDocument {
   readonly lines: readonly string[];
 }
 
+type PrintedPayment = Pick<
+  OrderPaymentV1,
+  "method" | "amountMinor" | "tipMinor" | "tenderedAmountMinor" | "changeMinor" | "transferReference"
+>;
+
 export interface PrintHeader {
   readonly restaurantName: string;
   readonly branchName: string;
 }
 
-const shortFolio = (id: string) => id.slice(0, 8).toUpperCase();
+/** The server's `shortFolio` when present (same first-8-characters rule), else the same derivation from the id. */
+const shortFolio = (order: OrderDetailV1) => order.shortFolio ?? order.orderId.slice(0, 8).toUpperCase();
+const METHOD_LABELS = { cash: "Efectivo", transfer: "Transferencia", card_manual: "Tarjeta" } as const;
 const context = (order: OrderDetailV1): string[] => [
-  `Orden ${shortFolio(order.orderId)}`,
+  `Orden ${shortFolio(order)}`,
   `Canal: ${order.fulfillment.channel}`,
   ...(order.tableId === null ? [] : [`Mesa: ${order.tableId}`]),
   ...(order.fulfillment.customerLabel === null ? [] : [`Cliente: ${order.fulfillment.customerLabel}`]),
@@ -59,17 +66,22 @@ export function buildCustomerTicket(
   if (order.totals.deliveryChargeMinor !== 0) lines.push(`Envío: ${money(order.totals.deliveryChargeMinor)}`);
   if (order.totals.tipMinor !== 0) lines.push(`Propina: ${money(order.totals.tipMinor)}`);
   lines.push(`Total: ${money(order.totals.totalMinor)}`);
-  for (const payment of payments.filter((entry) => entry.orderId === order.orderId && entry.scope.branchId === order.scope.branchId && entry.scope.restaurantId === order.scope.restaurantId)) {
-    const method = payment.method === "cash" ? "Efectivo" : payment.method === "transfer" ? "Transferencia" : "Tarjeta";
-    lines.push(`${method}: ${money(payment.amountMinor)}`);
+  const ofOrder = payments.filter((entry) => entry.orderId === order.orderId && entry.scope.branchId === order.scope.branchId && entry.scope.restaurantId === order.scope.restaurantId);
+  // The just-collected receipt (it carries the server balance) wins; otherwise the detail's own captured payments.
+  const listed: readonly PrintedPayment[] = ofOrder.length > 0 ? ofOrder : order.payments;
+  for (const payment of listed) {
+    lines.push(`${METHOD_LABELS[payment.method]}: ${money(payment.amountMinor)}`);
     if (payment.tipMinor > 0) lines.push(`Propina del pago: ${money(payment.tipMinor)}`);
     if (payment.tenderedAmountMinor !== null) lines.push(`Recibido: ${money(payment.tenderedAmountMinor)}`);
     if (payment.changeMinor !== null) lines.push(`Cambio: ${money(payment.changeMinor)}`);
     if (payment.transferReference) lines.push(`Referencia: ${payment.transferReference}`);
   }
-  const latest = payments.findLast((entry) => entry.orderId === order.orderId && entry.scope.branchId === order.scope.branchId && entry.scope.restaurantId === order.scope.restaurantId);
+  // The balance is only ever the server's figure; the detail's payments carry none, so none is derived here.
+  const latest = ofOrder.at(-1);
   if (latest !== undefined) lines.push(`Saldo: ${money(latest.remainingBalanceMinor)}`);
-  else lines.push("Pagos y saldo no disponibles en este detalle");
+  else if (order.payments.length === 0) {
+    lines.push(order.shortFolio === null ? "Pagos y saldo no disponibles en este detalle" : "Sin pagos registrados");
+  }
   lines.push("", "Gracias");
   return { title: "Ticket de cliente", lines };
 }

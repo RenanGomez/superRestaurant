@@ -72,3 +72,45 @@ test("customer ticket prints captured tip alongside server-provided cash tender 
   assert.match(text, /Saldo: \$54\.50/u);
   assert.doesNotMatch(text, /Cancelada/u);
 });
+
+test("ticket from the detail prints folio, date and the real captured payments without deriving a balance", () => {
+  const detail = parseOrderDetailV1({
+    ...order, shortFolio: "AB12CD34", createdAt: "2026-10-06T18:30:00.000Z",
+    payments: [
+      { paymentId: "63f7c434-f655-4885-9261-690d0208fb31", method: "cash", amountMinor: 10000, tipMinor: 1000, tenderedAmountMinor: 12000, changeMinor: 1000, transferReference: null, capturedAt: "2026-10-06T18:40:00.000Z" },
+      { paymentId: "73f7c434-f655-4885-9261-690d0208fb31", method: "transfer", amountMinor: 5450, tipMinor: 0, tenderedAmountMinor: null, changeMinor: null, transferReference: "SPEI-123", capturedAt: "2026-10-06T18:41:00.000Z" },
+    ],
+  });
+  assert.ok(detail);
+  const text = buildCustomerTicket(detail, [], { restaurantName: "Restaurante", branchName: "Centro" }).lines.join("\n");
+  assert.match(text, /Orden AB12CD34/u);
+  assert.match(text, /Hora: .*2026|Hora: .*26/u);
+  assert.match(text, /Efectivo: \$100\.00\nPropina del pago: \$10\.00\nRecibido: \$120\.00\nCambio: \$10\.00\nTransferencia: \$54\.50\nReferencia: SPEI-123/u);
+  assert.doesNotMatch(text, /Saldo|no disponibles|Sin pagos/u);
+  assert.match(buildKitchenDocuments(detail)[0]!.lines.join("\n"), /Orden AB12CD34/u);
+});
+
+test("ticket from a detail with receipt data and no payments says so; without receipt data it keeps the old notice", () => {
+  const empty = parseOrderDetailV1({ ...order, shortFolio: "AB12CD34", payments: [] });
+  assert.ok(empty);
+  assert.match(buildCustomerTicket(empty, [], { restaurantName: "R", branchName: "C" }).lines.join("\n"), /Sin pagos registrados/u);
+  assert.match(buildCustomerTicket(order, [], { restaurantName: "R", branchName: "C" }).lines.join("\n"), /Orden EE50F0F6[\s\S]*Pagos y saldo no disponibles/u);
+});
+
+test("a just-collected receipt (server balance) wins over the detail payments", () => {
+  const detail = parseOrderDetailV1({
+    ...order, shortFolio: "AB12CD34",
+    payments: [{ paymentId: "63f7c434-f655-4885-9261-690d0208fb31", method: "cash", amountMinor: 10000, tipMinor: 0, tenderedAmountMinor: null, changeMinor: null, transferReference: null, capturedAt: "2026-10-06T18:40:00.000Z" }],
+  });
+  assert.ok(detail);
+  const collected: PaymentCollectionSummaryV1 = {
+    schemaVersion: 1, scope: detail.scope, orderId, paymentId: "63f7c434-f655-4885-9261-690d0208fb31",
+    cashRegisterSessionId: "c3adc0d4-0c27-4450-bbfb-c858105f4c71", cashRegisterVersion: 2,
+    currency: "MXN", method: "cash", orderStatus: "partially_paid", orderVersion: 3,
+    paymentState: "captured", replayed: false, amountMinor: 10000, tipMinor: 0,
+    tenderedAmountMinor: null, changeMinor: null, remainingBalanceMinor: 5450, transferReference: null,
+  };
+  const text = buildCustomerTicket(detail, [collected], { restaurantName: "R", branchName: "C" }).lines.join("\n");
+  assert.equal(text.match(/Efectivo:/gu)?.length, 1);
+  assert.match(text, /Saldo: \$54\.50/u);
+});

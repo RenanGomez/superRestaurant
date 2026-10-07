@@ -35,8 +35,8 @@ function detail(overrides: Partial<OrderDetailV1> = {}): OrderDetailV1 {
   return {
     availableActions: ["sendToKitchen"], channel: "table", createdAt: null,
     currency: "MXN", fulfillment: { addressLabel: null, channel: "table", customerLabel: null, paymentIntent: null, tableId: null },
-    items: [item()], orderId: "72371a5f-2056-448d-9ddb-14ab6664a4e8", schemaVersion: 1,
-    scope, status: "open", tableId: null, timeZone: "America/Mexico_City",
+    items: [item()], orderId: "72371a5f-2056-448d-9ddb-14ab6664a4e8", payments: [], schemaVersion: 1,
+    scope, shortFolio: null, status: "open", tableId: null, timeZone: "America/Mexico_City",
     totals: { currency: "MXN", deliveryChargeMinor: 0, itemsTotalMinor: 10_000, tipMinor: 0, totalMinor: 10_000 },
     updatedAt: null, version: 1, ...overrides,
   };
