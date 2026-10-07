@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { KdsTicketV1 } from "@super-restaurant/shared-types";
 
-import { nextKdsAction, orderTicketsForDisplay } from "./kds-state.js";
+import { BatchTransitionError, ageBucket, groupTicketsByOrder, nextKdsAction, orderTicketsForDisplay, planBatchTransition, runBatchTransition } from "./kds-state.js";
 
 const base = {
   schemaVersion: 1,
@@ -35,4 +35,62 @@ test("orders active work before ready pickup without mutating input", () => {
   ] as unknown as readonly KdsTicketV1[];
   assert.deepEqual(orderTicketsForDisplay(input).map(({ status }) => status), ["preparing", "sent", "ready"]);
   assert.equal(input[0]?.status, "ready");
+});
+
+test("age thresholds switch at 10 and after 20 minutes", () => {
+  const queuedAt = "2026-09-03T10:00:00.000Z";
+  assert.equal(ageBucket(queuedAt, Date.parse(queuedAt) + 9 * 60_000), "green");
+  assert.equal(ageBucket(queuedAt, Date.parse(queuedAt) + 10 * 60_000), "amber");
+  assert.equal(ageBucket(queuedAt, Date.parse(queuedAt) + 20 * 60_000), "amber");
+  assert.equal(ageBucket(queuedAt, Date.parse(queuedAt) + 20 * 60_000 + 1), "red");
+});
+
+test("groups lines by order with oldest active orders first and ready orders last", () => {
+  const input = [
+    { ...base, orderId: "ready", orderItemId: "r", status: "ready", queuedAt: "2026-09-03T09:00:00.000Z" },
+    { ...base, orderId: "new", orderItemId: "n", status: "preparing", queuedAt: "2026-09-03T10:10:00.000Z" },
+    { ...base, orderId: "old", orderItemId: "o1", status: "sent", queuedAt: "2026-09-03T10:00:00.000Z" },
+    { ...base, orderId: "old", orderItemId: "o2", status: "preparing", queuedAt: "2026-09-03T10:01:00.000Z" },
+  ] as unknown as readonly KdsTicketV1[];
+  const groups = groupTicketsByOrder(input);
+  assert.deepEqual(groups.map((group) => group.orderId), ["old", "new", "ready"]);
+  assert.deepEqual(groups[0]?.tickets.map((ticket) => ticket.orderItemId), ["o2", "o1"]);
+  assert.deepEqual(planBatchTransition(groups[0]!, "preparing").map((ticket) => ticket.orderItemId), ["o1"]);
+  assert.deepEqual(planBatchTransition(groups[0]!, "ready").map((ticket) => ticket.orderItemId), ["o2"]);
+});
+
+test("uses pending line age for mixed orders and oldest line for all-ready orders", () => {
+  const input = [
+    { ...base, orderId: "mixed", orderItemId: "ready-old", status: "ready", queuedAt: "2026-09-03T09:00:00.000Z" },
+    { ...base, orderId: "mixed", orderItemId: "pending-new", status: "sent", queuedAt: "2026-09-03T10:10:00.000Z" },
+    { ...base, orderId: "pending-older", orderItemId: "pending-old", status: "preparing", queuedAt: "2026-09-03T10:05:00.000Z" },
+    { ...base, orderId: "all-ready", orderItemId: "ready-new", status: "ready", queuedAt: "2026-09-03T10:20:00.000Z" },
+    { ...base, orderId: "all-ready", orderItemId: "ready-earlier", status: "ready", queuedAt: "2026-09-03T09:30:00.000Z" },
+  ] as unknown as readonly KdsTicketV1[];
+  const groups = groupTicketsByOrder(input);
+  assert.deepEqual(groups.map((group) => group.orderId), ["pending-older", "mixed", "all-ready"]);
+  assert.equal(groups[1]?.queuedAt, "2026-09-03T10:10:00.000Z");
+  assert.equal(groups[2]?.queuedAt, "2026-09-03T09:30:00.000Z");
+});
+
+test("chains three batch versions sequentially", async () => {
+  const lines = ["one", "two", "three"].map((orderItemId) => ({ ...base, orderItemId, status: "preparing" })) as unknown as KdsTicketV1[];
+  const seen: Array<[string, number]> = [];
+  const completed = await runBatchTransition(lines, async (ticket) => {
+    seen.push([ticket.orderItemId, ticket.orderVersion]);
+    return { version: ticket.orderVersion + 1 };
+  });
+  assert.equal(completed, 3);
+  assert.deepEqual(seen, [["one", 3], ["two", 4], ["three", 5]]);
+});
+
+test("stops batch on intermediate conflict", async () => {
+  const lines = ["one", "two", "three"].map((orderItemId) => ({ ...base, orderItemId, status: "preparing" })) as unknown as KdsTicketV1[];
+  const seen: string[] = [];
+  await assert.rejects(runBatchTransition(lines, async (ticket) => {
+    seen.push(ticket.orderItemId);
+    if (ticket.orderItemId === "two") throw new Error("409");
+    return { version: 4 };
+  }), (error: unknown) => error instanceof BatchTransitionError && error.completed === 1);
+  assert.deepEqual(seen, ["one", "two"]);
 });

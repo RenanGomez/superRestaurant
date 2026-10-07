@@ -17,7 +17,7 @@ import {
 
 import type { KdsConfig } from "./config.js";
 import { KdsRequestError, listKdsTickets, listMemberships, recoverKdsEvents, transitionKdsTicket } from "./kds-client.js";
-import { nextKdsAction, orderTicketsForDisplay } from "./kds-state.js";
+import { BatchTransitionError, NEW_FOR_SECONDS, ageBucket, groupTicketsByOrder, nextKdsAction, orderTicketsForDisplay, planBatchTransition, runBatchTransition, type KdsAction, type KdsOrderGroup } from "./kds-state.js";
 
 export function App({ config, supabase }: {
   readonly config: KdsConfig;
@@ -73,7 +73,8 @@ function Workspace({ config, session, onLogout }: {
 }): React.JSX.Element {
   const [memberships, setMemberships] = useState<readonly BranchMembershipSummaryV1[]>([]);
   const [selected, setSelected] = useState("");
-  const [station, setStation] = useState("kitchen");
+  const [station, setStation] = useState(readStation);
+  const [soundEnabled, setSoundEnabled] = useState(false);
   const [error, setError] = useState(false);
 
   useEffect(() => {
@@ -87,6 +88,7 @@ function Workspace({ config, session, onLogout }: {
   }, [config, session.access_token]);
 
   const membership = memberships.find((candidate) => membershipKey(candidate) === selected);
+  useEffect(() => { try { window.localStorage.setItem("superRestaurant.kds.station", station); } catch { /* Storage may be unavailable. */ } }, [station]);
   const subscription = useMemo(() => membership === undefined ? undefined : parseRealtimeSubscriptionV1({
     schemaVersion: 1, scope: membership.scope, stationId: station,
   }), [membership, station]);
@@ -99,31 +101,37 @@ function Workspace({ config, session, onLogout }: {
           {memberships.map((item) => <option key={membershipKey(item)} value={membershipKey(item)}>{item.restaurantName} · {item.branchName}</option>)}
         </select></label>
         <label>Estación<input value={station} maxLength={64} onChange={(event) => setStation(event.target.value)} /></label>
+        <button className="ghost" type="button" aria-pressed={soundEnabled} onClick={() => setSoundEnabled((enabled) => !enabled)}>Sonido: {soundEnabled ? "sí" : "no"}</button>
         <button className="ghost" onClick={() => void onLogout()}>Salir</button>
       </div>
     </header>
     {error && <section className="banner error" role="alert">No fue posible cargar tus sucursales.</section>}
     {subscription === undefined
       ? <section className="empty"><h2>Selecciona una estación válida</h2><p>Usa el identificador configurado en el menú, por ejemplo “kitchen”.</p></section>
-      : <KdsBoard key={`${selected}:${station}`} config={config} accessToken={session.access_token} subscription={subscription} onAccessLost={() => void onLogout()} />}
+      : <KdsBoard key={`${selected}:${station}`} config={config} accessToken={session.access_token} subscription={subscription} soundEnabled={soundEnabled} onAccessLost={() => void onLogout()} />}
   </main>;
 }
 
-function KdsBoard({ config, accessToken, subscription, onAccessLost }: {
+function KdsBoard({ config, accessToken, subscription, soundEnabled, onAccessLost }: {
   readonly config: KdsConfig;
   readonly accessToken: string;
   readonly subscription: RealtimeSubscriptionV1;
+  readonly soundEnabled: boolean;
   readonly onAccessLost: () => void;
 }): React.JSX.Element {
   const [tickets, setTickets] = useState<readonly KdsTicketV1[]>([]);
   const [connection, setConnection] = useState<"connecting" | "live" | "reconnecting" | "error">("connecting");
   const [message, setMessage] = useState("");
   const [busyItem, setBusyItem] = useState<string | undefined>(undefined);
+  const [busyOrder, setBusyOrder] = useState<string | undefined>(undefined);
   const [truncated, setTruncated] = useState(false);
   const [now, setNow] = useState(Date.now());
   const cursor = useRef<KdsCursorV1>(KDS_INITIAL_CURSOR);
   const refreshChain = useRef<Promise<void>>(Promise.resolve());
   const deviceId = useMemo(readDeviceId, []);
+  const seenItems = useRef<Set<string> | undefined>(undefined);
+  const soundEnabledRef = useRef(soundEnabled);
+  useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
 
   const refresh = useCallback(async (): Promise<void> => {
     let hasMore = true;
@@ -133,12 +141,14 @@ function KdsBoard({ config, accessToken, subscription, onAccessLost }: {
       hasMore = page.hasMore;
     }
     const result = await listKdsTickets(config, accessToken, subscription);
+    const nextIds = new Set(result.tickets.map((ticket) => ticket.orderItemId));
+    if (soundEnabledRef.current && seenItems.current !== undefined && result.tickets.some((ticket) => !seenItems.current!.has(ticket.orderItemId))) playArrivalSound();
+    seenItems.current = nextIds;
     setTickets(orderTicketsForDisplay(result.tickets));
     setTruncated(result.truncated);
-    setMessage("");
   }, [accessToken, config, subscription]);
 
-  const enqueueRefresh = useCallback(() => {
+  const enqueueRefresh = useCallback((): Promise<void> => {
     const run = async (): Promise<void> => {
       try { await refresh(); setConnection("live"); }
       catch (error: unknown) {
@@ -147,6 +157,7 @@ function KdsBoard({ config, accessToken, subscription, onAccessLost }: {
       }
     };
     refreshChain.current = refreshChain.current.then(run, run);
+    return refreshChain.current;
   }, [onAccessLost, refresh]);
 
   useEffect(() => {
@@ -191,27 +202,45 @@ function KdsBoard({ config, accessToken, subscription, onAccessLost }: {
     } finally { setBusyItem(undefined); }
   };
 
+  const actOrder = async (group: KdsOrderGroup, target: KdsAction): Promise<void> => {
+    const lines = planBatchTransition(group, target);
+    if (lines.length === 0) return;
+    setBusyOrder(group.orderId); setMessage("");
+    try {
+      const completed = await runBatchTransition(lines, (line) => transitionKdsTicket(config, accessToken, line, target, deviceId));
+      setMessage(`${completed} ${completed === 1 ? "línea" : "líneas"} ${target === "ready" ? completed === 1 ? "lista" : "listas" : completed === 1 ? "iniciada" : "iniciadas"}.`);
+      await enqueueRefresh();
+    } catch (failure: unknown) {
+      const error = failure instanceof BatchTransitionError ? failure.cause : failure;
+      const completed = failure instanceof BatchTransitionError ? failure.completed : 0;
+      if (error instanceof KdsRequestError && (error.status === 401 || error.status === 403)) onAccessLost();
+      else if (error instanceof KdsRequestError && error.status === 409) { setMessage("La orden cambió, vuelve a intentar."); await enqueueRefresh(); }
+      else { setMessage(`${completed} de ${lines.length} líneas guardadas. No se pudo completar la orden; actualiza y revisa antes de reintentar.`); await enqueueRefresh(); }
+    } finally { setBusyOrder(undefined); }
+  };
+
+  const groups = groupTicketsByOrder(tickets);
+
   return <>
     <section className={`status ${connection}`} aria-live="polite">
       <span className="dot" />{connectionLabel(connection)} · {subscription.stationId}
       <button className="inline" onClick={enqueueRefresh}>Actualizar</button>
     </section>
-    {message && <section className="banner error" role="alert">{message}</section>}
+    {message && <section className="banner" role="status">{message}</section>}
     {truncated && <section className="banner warning" role="alert">Hay más de 500 partidas activas. Filtra la carga operativa antes de continuar.</section>}
     {tickets.length === 0
       ? <section className="empty"><h2>Sin comandas activas</h2><p>La pantalla se actualizará al recibir nuevos platillos.</p></section>
       : <section className="ticket-grid" aria-label="Comandas activas">
-        {tickets.map((ticket) => <article className={`ticket ${ticket.status}`} key={ticket.orderItemId}>
-          <header><span>{channelLabel(ticket)}</span><strong>{ageLabel(ticket.queuedAt, now)}</strong></header>
-          <h2><span>{ticket.quantity}×</span> {ticket.productName}</h2>
-          {ticket.modifiers.length > 0 && <ul>{ticket.modifiers.map((modifier, index) => <li key={`${modifier.name}:${index}`}>{modifier.quantity > 1 ? `${modifier.quantity}× ` : ""}{modifier.name}</li>)}</ul>}
-          {ticket.note !== null && <p className="note">Nota: {ticket.note}</p>}
-          <footer>
-            <span className="pill">{statusLabel(ticket.status)}</span>
-            {nextKdsAction(ticket.status) !== undefined && <button className="primary action" disabled={busyItem !== undefined} onClick={() => void act(ticket)}>
-              {busyItem === ticket.orderItemId ? "Guardando…" : ticket.status === "sent" ? "Iniciar" : "Marcar listo"}
-            </button>}
-          </footer>
+        {groups.map((group) => <article className={`ticket age-${ageBucket(group.queuedAt, now)}`} key={group.orderId}>
+          <header className="order-header"><div><h2>{channelLabel(group.tickets[0]!)}</h2><small>Llegó {arrivalLabel(group.queuedAt)}</small></div><div className="order-time"><strong>{ageLabel(group.queuedAt, now)}</strong>{now - Date.parse(group.queuedAt) >= 0 && now - Date.parse(group.queuedAt) < NEW_FOR_SECONDS * 1_000 && <span className="new-pill">Nuevo</span>}</div></header>
+          <div className="order-lines">{group.tickets.map((ticket) => <section className="order-line" key={ticket.orderItemId}>
+            <div className="line-heading"><h3><span>{ticket.quantity}×</span> {ticket.productName}</h3><div className="line-meta"><span className={`age-chip age-${ageBucket(ticket.queuedAt, now)}`}>{ageLabel(ticket.queuedAt, now)}</span><span className="pill">{statusLabel(ticket.status)}</span></div></div>
+            {now - Date.parse(ticket.queuedAt) >= 0 && now - Date.parse(ticket.queuedAt) < NEW_FOR_SECONDS * 1_000 && <span className="new-pill">Nuevo</span>}
+            {ticket.modifiers.length > 0 && <ul>{ticket.modifiers.map((modifier, index) => <li key={`${modifier.name}:${index}`}>{modifier.quantity > 1 ? `${modifier.quantity}× ` : ""}{modifier.name}</li>)}</ul>}
+            {ticket.note !== null && <p className="note">Nota: {ticket.note}</p>}
+            {nextKdsAction(ticket.status) !== undefined && <button className="ghost line-action" disabled={busyItem !== undefined || busyOrder !== undefined} onClick={() => void act(ticket)}>{busyItem === ticket.orderItemId ? "Guardando…" : ticket.status === "sent" ? "Iniciar línea" : "Listo línea"}</button>}
+          </section>)}</div>
+          <footer className="order-actions">{planBatchTransition(group, "preparing").length > 0 && <button className="primary action" disabled={busyItem !== undefined || busyOrder !== undefined} onClick={() => void actOrder(group, "preparing")}>{busyOrder === group.orderId ? "Guardando…" : `Empezar todo (${planBatchTransition(group, "preparing").length})`}</button>}{planBatchTransition(group, "ready").length > 0 && <button className="primary action" disabled={busyItem !== undefined || busyOrder !== undefined} onClick={() => void actOrder(group, "ready")}>{busyOrder === group.orderId ? "Guardando…" : `Listo todo (${planBatchTransition(group, "ready").length})`}</button>}</footer>
         </article>)}
       </section>}
   </>;
@@ -230,6 +259,23 @@ function readDeviceId(): string {
   } catch { return crypto.randomUUID(); }
 }
 
+function readStation(): string {
+  try { return window.localStorage.getItem("superRestaurant.kds.station") || "kitchen"; } catch { return "kitchen"; }
+}
+
+function playArrivalSound(): void {
+  try {
+    const context = new AudioContext();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.value = 660;
+    gain.gain.value = 0.05;
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start(); oscillator.stop(context.currentTime + 0.12);
+    oscillator.onended = () => { void context.close(); };
+  } catch { /* Audio is optional. */ }
+}
+
 function sameSubscription(value: RealtimeSubscriptionV1, expected: RealtimeSubscriptionV1): boolean {
   return value.stationId === expected.stationId && value.scope.restaurantId === expected.scope.restaurantId
     && value.scope.branchId === expected.scope.branchId;
@@ -241,8 +287,9 @@ function connectionLabel(value: "connecting" | "live" | "reconnecting" | "error"
 function statusLabel(value: KdsTicketV1["status"]): string { return { sent: "Nueva", preparing: "En preparación", ready: "Lista" }[value]; }
 function channelLabel(ticket: KdsTicketV1): string {
   if (ticket.channel === "table") return `Mesa ${ticket.tableId?.slice(0, 6) ?? ""}`;
-  return { counter: "Mostrador", delivery: "Delivery", takeout: "Para llevar" }[ticket.channel];
+  return { counter: "Mostrador", delivery: "Entrega", takeout: "Para llevar" }[ticket.channel];
 }
+function arrivalLabel(queuedAt: string): string { return new Date(queuedAt).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }); }
 function ageLabel(queuedAt: string, now: number): string {
   const minutes = Math.max(0, Math.floor((now - Date.parse(queuedAt)) / 60_000));
   return minutes < 1 ? "Ahora" : `${minutes} min`;
