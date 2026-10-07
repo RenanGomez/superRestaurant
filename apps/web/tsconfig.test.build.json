@@ -60,6 +60,8 @@
     "src/lib/branch-order-work-tray.test.ts",
     "src/lib/order-detail.ts",
     "src/lib/order-detail.test.ts",
+    "src/lib/print-documents.ts",
+    "src/lib/print-documents.test.ts",
     "src/lib/shortcut-dispatch.ts",
     "src/lib/shortcut-dispatch.test.ts",
     "src/lib/system-onboarding.ts",

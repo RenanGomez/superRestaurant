@@ -7,6 +7,8 @@ import { captureDeviceId } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import type { SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import { halfTicketLines } from "../../../lib/line-halves";
+import { buildCustomerTicket, buildKitchenDocuments, type PrintDocument, type PrintHeader } from "../../../lib/print-documents";
+import { PrintPreview } from "../print-preview";
 import { actionLabel, buildAddOrderItemCommand, canAddItems, chunkOrderItemIds, groupItemsByStatus, hasAction, hasItemAction, nextFocusIndex, pendingOrderItemIds, resolvePendingAdd, type OrderItemStatusGroup } from "../../../lib/order-detail";
 import { CaptureMenu } from "../capture/capture-menu";
 import { ProductSheet } from "../capture/product-sheet";
@@ -184,6 +186,7 @@ interface Props {
   readonly autoOpenMenu?: boolean;
   readonly actions: OrderDetailActions;
   readonly canCheckout: boolean;
+  readonly printHeader: PrintHeader;
   readonly onClose: () => void;
   readonly onChanged: () => void;
 }
@@ -208,12 +211,13 @@ const errorMessages: Record<string, string> = {
  */
 const UNAVAILABLE_NO_RETRY_MESSAGE = "No se pudo confirmar el resultado. Se recargó la orden; revisa el estado antes de repetir.";
 
-export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCheckout, onClose, onChanged }: Props) {
+export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCheckout, printHeader, onClose, onChanged }: Props) {
   // Same device identity Capture's own workspace and the delivery-zones editor use (one stable id
   // per browser, in localStorage) -- never a second, order-specific device id, or the same browser
   // would be audited under two different identities depending on which screen it used.
   const [deviceId] = useState(() => captureDeviceId(typeof window === "undefined" ? undefined : window.localStorage, () => crypto.randomUUID()));
   const [detail, setDetail] = useState<OrderDetailV1>();
+  const [printDocuments, setPrintDocuments] = useState<readonly PrintDocument[]>();
   const lastDetailRef = useRef<OrderDetailV1 | undefined>(undefined);
   const [loadError, setLoadError] = useState<string>();
   const [busyAction, setBusyAction] = useState<string>();
@@ -234,6 +238,19 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
   const headingId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   useFocusTrap(dialogRef, onClose);
+
+  useEffect(() => {
+    const onPrintShortcut = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "p" || event.altKey || event.ctrlKey || event.metaKey || event.repeat
+        || printDocuments !== undefined || menuOpen || detail === undefined || event.target instanceof HTMLInputElement
+        || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement
+        || (event.target instanceof HTMLElement && event.target.isContentEditable)) return;
+      const documents = buildKitchenDocuments(detail);
+      if (documents.length > 0) { event.preventDefault(); setPrintDocuments(documents); }
+    };
+    document.addEventListener("keydown", onPrintShortcut);
+    return () => document.removeEventListener("keydown", onPrintShortcut);
+  }, [detail, menuOpen, printDocuments]);
 
   async function load(): Promise<OrderDetailV1 | undefined> {
     // `actions.detail` is a Next.js Server Action: a transport failure (e.g. the server process
@@ -410,6 +427,9 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
             {busyAction === "sendToKitchen" ? "Enviando…" : actionLabel("sendToKitchen")}
           </button>}
           {canCheckout && hasAction(detail, "checkout") && <a href={`/app/caja?orderId=${detail.orderId}`} className={button}>{actionLabel("checkout")}</a>}
+          <button type="button" className={button} disabled={buildKitchenDocuments(detail).length === 0}
+            aria-keyshortcuts="P" onClick={() => setPrintDocuments(buildKitchenDocuments(detail))}>Imprimir comanda</button>
+          <button type="button" className={button} onClick={() => setPrintDocuments([buildCustomerTicket(detail, [], printHeader)])}>Imprimir ticket</button>
         </div>
         <div className="mt-4 space-y-4">
           {groups !== undefined && ([...groups.entries()] as readonly [OrderItemStatusGroup, readonly OrderDetailItemV1[]][])
@@ -485,6 +505,7 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
         onBack={() => { if (!addBusy && pendingAddCommand === undefined) { setSelectedProduct(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined); setAddError(undefined); } }}
         onAdd={(quantity, groups, note, variantId, fraction) => void addSelected(quantity, groups, note, variantId, fraction)}
       />, document.body)}
+      {printDocuments !== undefined && <PrintPreview documents={printDocuments} onClose={() => setPrintDocuments(undefined)} />}
     </div>
   </div>;
 }
