@@ -104,7 +104,7 @@ export async function daySummaryFlow(): Promise<void> {
     assert.deepEqual(summary.deliveryFees, { orderCount: 1, amountMinor: feeMinor });
     assert.deepEqual(summary.deliveriesSettled, { count: 1, cashCollectedMinor: deliveryTotalMinor });
     assert.deepEqual(summary.ordersPaid, { count: 3, amountMinor: totalSales });
-    assert.deepEqual(summary.cancellations, { orders: 1, captures: 0 });
+    assert.deepEqual(summary.cancellations, { captures: 0, orders: 1, refundPendingMinor: 0 });
     const shift = record((summary.shifts as Json[])[0]);
     const summaryRegister = record((shift.registers as Json[])[0]);
     assert.equal(summaryRegister.openingFloatMinor, openingFloatMinor);
@@ -118,9 +118,11 @@ export async function daySummaryFlow(): Promise<void> {
     const empty = ok(await context.send("manager", "POST", "/reports/day-summary", request(dateIn(TIME_ZONE, 1))), "day_summary_tomorrow");
     assert.equal(record(empty.totals).salesMinor, 0);
     assert.equal(record(empty.totals).paymentCount, 0);
-    assert.deepEqual(empty.cancellations, { orders: 0, captures: 0 });
+    assert.deepEqual(empty.cancellations, { captures: 0, orders: 0, refundPendingMinor: 0 });
     assert.deepEqual(empty.ordersPaid, { count: 0, amountMinor: 0 });
     // Product observation: a shift still open from today also appears on tomorrow's summary (with its running cash movements).
+    // Comportamiento actual: el turno abierto sigue apareciendo mañana.
+    assert.ok((empty.shifts as Json[]).length >= 1);
     assert.ok((empty.shifts as Json[]).every((candidate) => candidate.status === "open"));
     context.check("day_summary_tomorrow_is_zeros");
     return { totalSales, cashSales };
