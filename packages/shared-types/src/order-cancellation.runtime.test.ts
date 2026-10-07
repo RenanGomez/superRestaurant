@@ -39,7 +39,7 @@ for (const invalid of [
   { ...command, schemaVersion: 2 },
 ]) expect(parseCancelOrderCommandV1(invalid) === undefined, `cancel command rejects ${JSON.stringify(invalid)}`);
 expect(parseCancelOrderCommandV1({ ...command, reason: "x".repeat(200) }) !== undefined, "200 character reason is allowed");
-const { reason: _reason, ...withoutReason } = command;
+const withoutReason = Object.fromEntries(Object.entries(command).filter(([key]) => key !== "reason"));
 expect(parseCancelOrderCommandV1(withoutReason) === undefined, "reason is mandatory");
 expect(
   parseCancelOrderCommandV1(new Proxy(command, { ownKeys: () => { throw new Error("hostile"); } })) === undefined,

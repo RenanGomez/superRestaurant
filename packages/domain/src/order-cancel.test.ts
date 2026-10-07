@@ -48,8 +48,7 @@ function audit(overrides: Partial<OrderAuditContext> = {}): OrderAuditContext {
 }
 
 function withoutAuthorization(): OrderAuditContext {
-  const { authorization: _authorization, ...rest } = audit();
-  return rest;
+  return Object.fromEntries(Object.entries(audit()).filter(([key]) => key !== "authorization")) as unknown as OrderAuditContext;
 }
 
 function changedOrder(order: Order, to: OrderState): Order {
