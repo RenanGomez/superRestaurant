@@ -1214,6 +1214,10 @@ test("addItem prices a halves line at the greater flavor plus half-priced extras
     ["half-a", "Pepperoni", ["Queso extra"], ["cebolla"]],
     ["half-b", "Hawaiana", [], []],
   ]);
+  assert.deepEqual(item?.fractionBreakdown?.map((half) => [half.fraction, half.flavorOptionId, half.extraOptionIds, half.excludedIngredientIds]), [
+    ["half-a", flavorPepperoni, [extraCheese], ["cebolla"]],
+    ["half-b", flavorHawaiana, [], []],
+  ]);
   const wholeSaved: { order?: Order } = {};
   const wholeService = serviceFor(["manager"], capturingOrders(wholeSaved), undefined, halvesMenuState);
   await wholeService.addItem(principal, sizedAddCommand({ variantId: sizeLarge, fraction: null }));

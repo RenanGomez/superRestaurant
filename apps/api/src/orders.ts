@@ -30,7 +30,7 @@ import {
   type SendOrderToKitchenCommandV1,
 } from "@super-restaurant/shared-types";
 import { createHash } from "node:crypto";
-import { describeHalves, isFractionModifier } from "./fraction-halves.js";
+import { describeHalvesFromSnapshot, isFractionModifier } from "./fraction-halves.js";
 import {
   addOrderItem,
   canAddOrderItem,
@@ -807,7 +807,7 @@ function projectOrderDetail(
       unitPriceMinor: item.snapshot.unitPrice.amountMinor,
       variantName: item.snapshot.variantName ?? null,
       geometry: item.snapshot.geometry === "halves" ? ("halves" as const) : null,
-      fractionBreakdown: describeHalves(item.snapshot),
+      fractionBreakdown: describeHalvesFromSnapshot(item.snapshot),
     };
   });
   // A cancelled aggregate is never payable: `calculateOrderAggregateTotals` folds in neither the
