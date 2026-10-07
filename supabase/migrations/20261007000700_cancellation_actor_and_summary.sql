@@ -7,7 +7,7 @@ begin;
 --     (`app_private.member_display_name`: auth.users.raw_user_meta_data full_name|name, sanitized, max 120).
 --     When the actor has no name the value is NULL; the e-mail is deliberately never exposed (data minimization).
 --     The actor id stays in the payload for audit.
--- (b) app_private.read_branch_day_summary counts cancelled Orders by `app.order_cancellations.occurred_at` falling in
+-- (b) app_private.read_branch_day_summary counts cancelled Orders by `app.order_cancellations.received_at` (server time, like every other figure; the device `occurred_at` is informative only) falling in
 --     the restaurant-zone day [start, end) (the cancellation journal), no longer by `orders.updated_at`, and exposes
 --     `cancellations.refundPendingMinor`: the sum of the refund obligations still `pending` of those cancellations
 --     (captured amount + captured tip, i.e. everything the customer paid and is owed back). Obligations in a currency
@@ -234,7 +234,7 @@ begin
   where od.restaurant_id=v_restaurant and od.branch_id=v_branch and od.state='settled'
     and od.settled_at >= v_start and od.settled_at < v_end;
 
-  -- Cancelled Orders of the day come from the cancellation journal (its occurred_at), which the immutable
+  -- Cancelled Orders of the day come from the cancellation journal (its server-side received_at), which the immutable
   -- order_cancellations row records once per Order; pending obligations are summed in the day's single currency.
   select pg_catalog.count(*),
     coalesce(pg_catalog.sum(c.captured_minor + c.captured_tip_minor)
@@ -243,7 +243,7 @@ begin
   into v_cancelled_orders, v_refund_pending, v_refund_foreign
   from app.order_cancellations c
   where c.restaurant_id=v_restaurant and c.branch_id=v_branch
-    and c.occurred_at >= v_start and c.occurred_at < v_end;
+    and c.received_at >= v_start and c.received_at < v_end;
   if v_refund_foreign > 0 then return pg_catalog.jsonb_build_object('status','conflict'); end if;
   select pg_catalog.count(*) into v_no_sale from app.capture_drafts cd
   where cd.restaurant_id=v_restaurant and cd.branch_id=v_branch and cd.status='no_sale'
@@ -327,6 +327,6 @@ grant execute on function app_private.read_branch_day_summary(uuid,jsonb) to app
 comment on function app_private.list_cancelled_work_items(uuid,jsonb) is
   'Server-only, Branch-scoped keyset page of cancelled orders (with recorded refund obligation) and no-sale captures for the Canceladas view, with the cancelling actor display name (null when unnamed); never derives money.';
 comment on function app_private.read_branch_day_summary(uuid,jsonb) is
-  'Read-only day summary of one Branch (captured payments, tips, deliveries, cancellations by journal occurred_at with pending refund obligations, shifts); reports.read roles only.';
+  'Read-only day summary of one Branch (captured payments, tips, deliveries, cancellations by journal received_at with pending refund obligations, shifts); reports.read roles only.';
 
 commit;
