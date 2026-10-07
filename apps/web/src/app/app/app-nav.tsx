@@ -14,16 +14,17 @@ const links = [
   { href: "/app/customers", label: "Clientes", icon: <><circle cx="9" cy="8" r="3" /><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6M19 21v-3a6 6 0 0 0-3-5" /></> },
   { href: "/app/capture", label: "Captura telefónica", icon: <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2Z" /> },
   { href: "/app/delivery-zones", label: "Zonas de entrega", icon: <><path d="M12 21s7-6.2 7-11a7 7 0 0 0-14 0c0 4.8 7 11 7 11Z" /><circle cx="12" cy="10" r="2.5" /></> },
+  { href: "/app/reports/day", label: "Resumen del día", icon: <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></> },
   { href: "/app/system-admin/restaurants", label: "Administración del sistema", icon: <text x="4" y="19" stroke="none" fill="currentColor" fontSize="20">⚙</text> },
 ] as const;
 
-export function AppNav({ canAccessSystemAdmin }: { readonly canAccessSystemAdmin: boolean }): ReactNode {
+export function AppNav({ canAccessSystemAdmin, canReadReports }: { readonly canAccessSystemAdmin: boolean; readonly canReadReports: boolean }): ReactNode {
   const pathname = usePathname();
 
   return (
     <nav aria-label="Navegación principal" className="flex w-[76px] shrink-0 flex-col items-center gap-7 bg-nav py-5">
       <BrandMark size={36} />
-      {links.filter((link) => canAccessSystemAdmin || link.href !== "/app/system-admin/restaurants").map((link) => {
+      {links.filter((link) => (canAccessSystemAdmin || link.href !== "/app/system-admin/restaurants") && (canReadReports || link.href !== "/app/reports/day")).map((link) => {
         const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
         return (
           <a key={link.href} href={link.href} title={link.label} aria-label={link.label} aria-current={active ? "page" : undefined}

@@ -70,6 +70,8 @@
     "src/lib/delivery-board.test.ts",
     "src/lib/finance.ts",
     "src/lib/finance.test.ts",
+    "src/lib/day-summary.ts",
+    "src/lib/day-summary.test.ts",
     "src/proxy.ts",
     "src/proxy.test.ts",
     "src/test-doubles/supabase-ssr.ts"
