@@ -7,7 +7,7 @@ import { buildDaySummaryView, isCalendarDate, todayInZone } from "./day-summary"
 
 const id = "11111111-1111-4111-8111-111111111111";
 const summary = {
-  cancellations: { captures: 1, orders: 2 },
+  cancellations: { captures: 1, orders: 2, refundPendingMinor: 5500 },
   currency: "MXN",
   date: "2026-10-06",
   deliveriesSettled: { cashCollectedMinor: 30000, count: 1 },
@@ -46,6 +46,7 @@ test("the view shows the server's figures in pesos without recomputing", () => {
   assert.equal(view.salesTotal, "$1,200.00");
   assert.deepEqual(view.cards.map((card) => card.value), ["$1,200.00", "$50.00", "$35.00", "2 órdenes"]);
   assert.deepEqual(view.channels.map((row) => row.label), ["Mesa", "Mostrador", "Para llevar", "Entrega a domicilio"]);
+  assert.equal(view.cards[3]?.detail, "1 captura cerrada · Devoluciones pendientes $55.00");
   assert.equal(view.methods[1]?.amount, "$200.00");
   assert.equal(view.methods[1]?.label, "Tarjeta");
   const shift = view.shifts[0];
@@ -58,7 +59,7 @@ test("the view shows the server's figures in pesos without recomputing", () => {
 });
 
 test("an empty day is flagged", () => {
-  const empty = { ...summary, cancellations: { captures: 0, orders: 0 }, shifts: [], totals: { cashTipsMinor: 0, paymentCount: 0, salesMinor: 0, tipsMinor: 0 } } as unknown as BranchDaySummaryV1;
+  const empty = { ...summary, cancellations: { captures: 0, orders: 0, refundPendingMinor: 0 }, shifts: [], totals: { cashTipsMinor: 0, paymentCount: 0, salesMinor: 0, tipsMinor: 0 } } as unknown as BranchDaySummaryV1;
   assert.equal(buildDaySummaryView(empty).empty, true);
 });
 

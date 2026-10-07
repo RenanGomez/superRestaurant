@@ -7,6 +7,7 @@ import {
   cancelOrderResultMessage,
   cancelOrderWarning,
   cancelledItemKey,
+  cancelledItemActorLabel,
   cancelledItemRefundLabel,
   cancelledItemTitle,
   cancelledItemTotalLabel,
@@ -76,19 +77,21 @@ test("cancelOrderResultMessage distinguishes a replay and includes the obligatio
 });
 
 const orderItem: CancelledWorkItemV1 = {
-  cancelledAt: "2026-10-06T21:30:00.000Z", cancelledByActorId: ACTOR, channel: "delivery", customerLabel: null,
+  cancelledAt: "2026-10-06T21:30:00.000Z", cancelledByActorId: ACTOR, cancelledByName: "Ana Gerente", channel: "delivery", customerLabel: null,
   fromStatus: "paid", kind: "order", lineCount: 2, orderId: ORDER_ID, reason: "Duplicada",
   refundObligation: { capturedMinor: 30_000, capturedTipMinor: 0, currency: "MXN", status: "pending" },
   timeZone: "America/Mexico_City", totalMinor: 30_000, version: 6,
 };
 const captureItem: CancelledWorkItemV1 = {
-  cancelledAt: "2026-10-06T20:00:00.000Z", cancelledByActorId: ACTOR, captureDraftId: "7a1a1e5c-2f3b-4c0e-8a55-3b9a0d1c2e44",
+  cancelledAt: "2026-10-06T20:00:00.000Z", cancelledByActorId: ACTOR, cancelledByName: null, captureDraftId: "7a1a1e5c-2f3b-4c0e-8a55-3b9a0d1c2e44",
   folio: "C-0012", fulfillmentChannel: "delivery", kind: "capture", reason: "No contestó", sourceChannel: "phone",
 };
 
 test("cancelled list labels cover orders and captures", () => {
   assert.equal(cancelledItemTitle(orderItem), "Orden · Domicilio");
   assert.equal(cancelledItemTitle(captureItem), "Captura C-0012 · Teléfono");
+  assert.equal(cancelledItemActorLabel(orderItem), "Canceló: Ana Gerente");
+  assert.equal(cancelledItemActorLabel(captureItem), "Canceló: usuario sin nombre");
   assert.match(cancelledItemRefundLabel(orderItem) ?? "", /^Devolución pendiente .*300\.00$/u);
   assert.equal(cancelledItemRefundLabel(captureItem), undefined);
   assert.equal(cancelledItemRefundLabel({ ...orderItem, fromStatus: "open", refundObligation: { capturedMinor: 0, capturedTipMinor: 0, currency: "MXN", status: "none" } }), undefined);

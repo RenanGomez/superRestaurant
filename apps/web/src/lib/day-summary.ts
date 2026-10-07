@@ -60,7 +60,9 @@ export function buildDaySummaryView(summary: BranchDaySummaryV1): DaySummaryView
       { detail: `${plural(totals.paymentCount, "pago", "pagos")} · ${plural(summary.ordersPaid.count, "orden pagada", "órdenes pagadas")}`, key: "sales", label: "Ventas", value: money(totals.salesMinor) },
       { detail: `En efectivo: ${money(totals.cashTipsMinor)}`, key: "tips", label: "Propinas", value: money(totals.tipsMinor) },
       { detail: `${plural(summary.deliveryFees.orderCount, "orden con envío", "órdenes con envío")} · ${plural(summary.deliveriesSettled.count, "entrega liquidada", "entregas liquidadas")}`, key: "delivery", label: "Envíos", value: money(summary.deliveryFees.amountMinor) },
-      { detail: plural(cancellations.captures, "captura cerrada", "capturas cerradas"), key: "cancelled", label: "Canceladas", value: plural(cancellations.orders, "orden", "órdenes") },
+      { detail: cancellations.refundPendingMinor > 0
+        ? `${plural(cancellations.captures, "captura cerrada", "capturas cerradas")} · Devoluciones pendientes ${money(cancellations.refundPendingMinor)}`
+        : plural(cancellations.captures, "captura cerrada", "capturas cerradas"), key: "cancelled", label: "Canceladas", value: plural(cancellations.orders, "orden", "órdenes") },
     ],
     channels: summary.salesByChannel.map((entry) => row(entry.channel, CHANNEL_LABELS[entry.channel], entry)),
     empty: totals.paymentCount === 0 && summary.shifts.length === 0 && cancellations.orders === 0 && cancellations.captures === 0,

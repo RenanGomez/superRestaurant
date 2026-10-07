@@ -290,6 +290,15 @@ test("cancelled tray projects orders and captures, masks the customer without cu
   assert.equal(first.kind === "order" && first.refundObligation.capturedMinor, 15_500);
   assert.equal(first.kind === "order" && first.customerLabel, null);
   assert.deepEqual(tray.nextCursor, { at: "2026-10-06T21:00:00.123456Z", id: orderId });
+  // Rows without the key (older reader) read as null; rows with it carry the name through.
+  assert.equal(tray.items.every((item) => item.cancelledByName === null), true);
+  payload = { items: [{ ...orderRow, cancelledByName: "Ana Gerente" }, { ...captureRow, cancelledByName: null }],
+    next: null, schemaVersion: 1, scope };
+  const named = await service.list(principal, { cursor: null, limit: 20, schemaVersion: 1, scope });
+  assert.deepEqual(named.items.map((item) => item.cancelledByName), ["Ana Gerente", null]);
+  payload = { items: [{ ...orderRow, cancelledByName: "  " }], next: null, schemaVersion: 1, scope };
+  await assert.rejects(service.list(principal, { cursor: null, limit: 20, schemaVersion: 1, scope }), (e: unknown) => e instanceof OrderApplicationError);
+  payload = { items: [orderRow, captureRow], next: null, schemaVersion: 1, scope };
   for (const bad of [
     { status: "denied" }, { status: "rejected" },
     { items: [{ ...orderRow, id: "99999999-9999-4999-8999-999999999999" }], next: null, schemaVersion: 1, scope },
