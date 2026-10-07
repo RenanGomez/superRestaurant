@@ -213,6 +213,25 @@ export function pendingOrderItemIds(detail: OrderDetailV1): readonly string[] {
   return detail.items.filter((item) => item.status === "pending").map((item) => item.orderItemId);
 }
 
+/** Capture uses the same server-owned action gate and pending-line snapshot as Orders. */
+export function captureKitchenSend(detail: OrderDetailV1): {
+  readonly orderId: string; readonly expectedVersion: number; readonly orderItemIds: readonly string[];
+} | undefined {
+  const orderItemIds = pendingOrderItemIds(detail);
+  return hasAction(detail, "sendToKitchen") && orderItemIds.length > 0
+    ? { orderId: detail.orderId, expectedVersion: detail.version, orderItemIds } : undefined;
+}
+
+export function captureKitchenResultText(sentLines: number, error?: Extract<OrderMutationRequestResult, { ok: false }>["error"]): string {
+  if (sentLines > 0 && error === undefined) return `Enviada a cocina · ${sentLines} ${sentLines === 1 ? "línea" : "líneas"}`;
+  const partial = sentLines > 0 ? `${sentLines} ${sentLines === 1 ? "línea enviada" : "líneas enviadas"}. ` : "";
+  if (error === "conflict") return `${partial}La orden cambió o alguna línea ya se envió. Abre la orden para revisar lo pendiente.`;
+  if (error === "denied") return `${partial}Tu sesión o permisos ya no permiten enviar esta orden a cocina.`;
+  if (error === "not_found") return `${partial}La orden ya no está disponible. Abre Órdenes para revisar.`;
+  if (error === "invalid") return `${partial}No se pudo enviar la orden. Abre la orden para revisar sus líneas.`;
+  return `${partial}No se pudo confirmar el envío a cocina. Abre la orden para comprobar su estado.`;
+}
+
 /**
  * Validates the `orderItemIds` a client submits with "send to kitchen": every entry a well-formed
  * UUID, at least one entry, no duplicates. The server still re-validates and re-derives permission

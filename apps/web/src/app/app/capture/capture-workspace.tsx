@@ -37,12 +37,14 @@ import type {
   MenuCatalogStateV1,
   MenuModifierGroupV1,
   MenuProductV1,
+  OrderDetailV1,
 } from "@super-restaurant/shared-types";
 
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
   rehydrateCaptureWorkspace, shortCaptureDraftId, shouldRenewLease } from "../../../lib/capture-workspace";
 import type { CaptureRequestResult } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
+import { captureKitchenResultText, captureKitchenSend, chunkOrderItemIds, type OrderDetailRequestResult, type OrderMutationRequestResult } from "../../../lib/order-detail";
 import { draftLinesFromProjection, splitLostMessage } from "../../../lib/line-halves";
 import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
   type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
@@ -95,11 +97,14 @@ interface CaptureWorkspaceParameters {
   readonly canManageAssignment: boolean;
   readonly catalog: MenuCatalogStateV1;
   readonly reloadCatalog: (scope: BranchScope) => Promise<MenuCatalogStateV1 | undefined>;
+  readonly orderDetail: (orderId: string) => Promise<OrderDetailRequestResult>;
+  readonly sendToKitchen: (orderId: string, expectedVersion: number, orderItemIds: readonly string[], eventId: string,
+    idempotencyKey: string, occurredAt: string, deviceId: string) => Promise<OrderMutationRequestResult>;
 }
 type ActionReply = Awaited<ReturnType<CaptureWorkspaceParameters["action"]>>;
 
 export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext, canManageAssignment, catalog: initialCatalog,
-  reloadCatalog }: CaptureWorkspaceParameters): ReactNode {
+  reloadCatalog, orderDetail, sendToKitchen }: CaptureWorkspaceParameters): ReactNode {
   const [catalog, setCatalog] = useState(initialCatalog);
   const [catalogReloading, setCatalogReloading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -111,6 +116,12 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   const [errorCode, setErrorCode] = useState<string>();
   const [pending, setPending] = useState<{ operation: CaptureWorkspaceOperation; command: unknown }>();
   const [capture, setCapture] = useState<CaptureDraftDetailV1 | CaptureDraftDetailV2>();
+  const [kitchenDetail, setKitchenDetail] = useState<OrderDetailV1>();
+  const [kitchenLoading, setKitchenLoading] = useState(false);
+  const [kitchenSending, setKitchenSending] = useState(false);
+  const [kitchenNotice, setKitchenNotice] = useState<string>();
+  const [kitchenSent, setKitchenSent] = useState(false);
+  const kitchenInFlight = useRef(false);
   const [leaseClock, setLeaseClock] = useState(() => Date.now());
   const [tray, setTray] = useState<readonly (CaptureDraftSummaryV1 | CaptureTrayItemV2)[]>([]);
   const lastInteractionAt = useRef(0);
@@ -551,6 +562,14 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       occurredAt: new Date().toISOString() });
   }
 
+  function createAfterConfirmation(): void {
+    if (kitchenSending) return;
+    reset();
+    void run("create", { schemaVersion: 1, scope, captureDraftId: crypto.randomUUID(), expectedVersion: 0,
+      sourceChannel: "phone", fulfillmentChannel: "delivery", eventId: crypto.randomUUID(),
+      idempotencyKey: crypto.randomUUID(), deviceId, occurredAt: new Date().toISOString() });
+  }
+
   async function refreshWorkspace(captureDraftId: string): Promise<void> {
     const reply = await run("workspace", { schemaVersion: 3, scope, captureDraftId });
     if (!reply?.ok || !("customerSnapshot" in reply.value) || reply.value.customerSnapshot === null) {
@@ -757,6 +776,58 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     });
   }
 
+  useEffect(() => {
+    const orderId = capture?.status === "confirmed" ? capture.confirmedOrderId : null;
+    if (orderId === null) return;
+    let active = true;
+    setKitchenDetail(undefined);
+    setKitchenNotice(undefined);
+    setKitchenSent(false);
+    setKitchenLoading(true);
+    void orderDetail(orderId).then((reply) => {
+      if (!active) return;
+      if (reply.ok) setKitchenDetail(reply.value);
+      else setKitchenNotice("No se pudo leer la orden para enviarla a cocina. Puedes verla en Órdenes.");
+    }).catch(() => {
+      if (active) setKitchenNotice("No se pudo leer la orden para enviarla a cocina. Puedes verla en Órdenes.");
+    }).finally(() => { if (active) setKitchenLoading(false); });
+    return () => { active = false; };
+  }, [capture?.status, capture?.confirmedOrderId, orderDetail]);
+
+  async function sendConfirmedOrder(): Promise<void> {
+    const command = kitchenDetail === undefined ? undefined : captureKitchenSend(kitchenDetail);
+    if (command === undefined || kitchenInFlight.current || kitchenSent) return;
+    kitchenInFlight.current = true;
+    setKitchenSending(true);
+    setKitchenNotice(undefined);
+    let expectedVersion = command.expectedVersion;
+    let sentLines = 0;
+    try {
+      for (const itemIds of chunkOrderItemIds(command.orderItemIds)) {
+        const attempt = { eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), occurredAt: new Date().toISOString() };
+        const send = async (): Promise<OrderMutationRequestResult> => {
+          try { return await sendToKitchen(command.orderId, expectedVersion, itemIds, attempt.eventId,
+            attempt.idempotencyKey, attempt.occurredAt, deviceId); }
+          catch { return { ok: false, error: "unavailable" }; }
+        };
+        let reply = await send();
+        if (!reply.ok && reply.error === "unavailable") reply = await send();
+        if (!reply.ok) {
+          setKitchenNotice(captureKitchenResultText(sentLines, reply.error));
+          setKitchenDetail(undefined);
+          return;
+        }
+        sentLines += itemIds.length;
+        expectedVersion = reply.version;
+      }
+      setKitchenNotice(captureKitchenResultText(sentLines));
+      setKitchenSent(true);
+    } finally {
+      kitchenInFlight.current = false;
+      setKitchenSending(false);
+    }
+  }
+
   function search(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -833,6 +904,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   }
 
   function reset(): void {
+    setKitchenDetail(undefined); setKitchenNotice(undefined); setKitchenSent(false); setKitchenLoading(false);
     invalidateQuote();
     setQuoteRequestedForDiffers(false);
     setDeliveryQuote(null); setPaymentIntentState(null); setPaymentProjection(null); setPaymentBasis(null);
@@ -879,7 +951,9 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null))
     && !paymentBlocksConfirm && !quoteBlocksConfirm;
   useEffect(() => {
-    const shortcuts: ShortcutTable = busy ? {} : error === "conflict" || capture?.status === "confirmed"
+    const shortcuts: ShortcutTable = busy || kitchenSending ? {} : capture?.status === "confirmed"
+      ? { create: ariaKeyShortcut("create"), reset: ariaKeyShortcut("reset") }
+      : error === "conflict"
       ? { reset: ariaKeyShortcut("reset") }
       : capture === undefined ? { create: ariaKeyShortcut("create") }
         : locked ? {} : { search: ariaKeyShortcut("search") };
@@ -891,7 +965,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
         targetIsEditable: target instanceof HTMLElement && target.isContentEditable }, shortcuts);
       if (id === undefined) return;
       event.preventDefault();
-      if (id === "create") create();
+      if (id === "create") { if (capture?.status === "confirmed") createAfterConfirmation(); else create(); }
       else if (id === "reset") reset();
       else if (searchFocusTarget(capture?.status === "draft") === "menu") productSearchRef.current?.focus();
       else searchInputRef.current?.focus();
@@ -920,8 +994,6 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       {!menuConflict && !confirmQuoteInvalid && pending !== undefined && <button className={`${button} ml-3`} onClick={retryPending}>Reintentar misma operación</button>}
       {!menuConflict && error === "conflict" && <button className={`${button} ml-3`} disabled={busy}
         onClick={() => { reset(); void run("tray", { schemaVersion: 2, scope, limit: 20 }); }}>{errorCode === "CAPTURE_LEASE_TAKEN" ? "Ver borradores" : "Retomar"}</button>}
-      {capture?.status === "confirmed" && <button className={`${button} ml-3`}
-        aria-keyshortcuts={ariaKeyShortcut("reset")} disabled={busy} onClick={reset}>Volver a la bandeja</button>}
     </div>
     {leaseExpired && error !== "conflict" && <div role="alert" className="rounded-lg border border-border bg-error-bg p-3 text-sm">
       Se venció tu tiempo de atención; vuelve a tomarla.
@@ -977,8 +1049,18 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     </> : <>
       {capture.status === "confirmed" && <section className={panel} data-testid="confirmed-capture">
         <h2 className="font-heading text-lg font-semibold">Captura convertida en orden</h2>
-        <p className="mt-2 text-sm">La captura quedó cerrada y ya no admite cambios.</p>
-        <p className="mt-1 break-all text-xs text-text-muted">Orden: {capture.confirmedOrderId}</p>
+        <p className="mt-2 text-sm">Orden creada. Envíala a cocina para que aparezca en preparación.</p>
+        {kitchenLoading && <p role="status" className="mt-3 text-sm">Preparando envío a cocina…</p>}
+        {kitchenNotice && <p role={kitchenSent ? "status" : "alert"} className={`mt-3 rounded-lg p-3 text-sm ${kitchenSent ? "bg-success-bg" : "bg-error-bg"}`}>{kitchenNotice}</p>}
+        {!kitchenLoading && !kitchenSent && kitchenDetail !== undefined && captureKitchenSend(kitchenDetail) !== undefined &&
+          <button type="button" className="mt-4 min-h-11 w-full rounded-lg bg-accent px-5 py-3 text-base font-bold text-white focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 sm:w-auto"
+            disabled={kitchenSending} onClick={() => void sendConfirmedOrder()}>{kitchenSending ? "Enviando…" : "Enviar a cocina"}</button>}
+        {!kitchenLoading && kitchenNotice === undefined && kitchenDetail !== undefined && captureKitchenSend(kitchenDetail) === undefined &&
+          <p role="status" className="mt-3 text-sm">No hay líneas pendientes que puedas enviar a cocina.</p>}
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button type="button" className={button} aria-keyshortcuts={ariaKeyShortcut("create")} disabled={kitchenSending || busy} onClick={createAfterConfirmation}>Nueva captura</button>
+          <a className={`${button} inline-flex items-center`} href={`/app/orders?orderId=${capture.confirmedOrderId}`}>Ver orden</a>
+        </div>
       </section>}
       <section className={panel}><h2 className="font-heading text-lg font-semibold">Canal y cumplimiento</h2>
         <div className="mt-3 flex flex-wrap gap-3"><label className="text-sm">Origen <select value={sourceChannel} onChange={changeSource}

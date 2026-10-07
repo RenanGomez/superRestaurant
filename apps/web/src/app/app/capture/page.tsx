@@ -9,6 +9,7 @@ import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchP
 import { getMenuCatalog } from "../../../lib/menu-catalog";
 import { MenuImageBaseUrlProvider } from "../../../lib/menu-image-url-context";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
+import { orderDetailAction, sendToKitchenAction } from "../orders/actions";
 import { captureWorkspaceAction, quoteCaptureLineAction, reloadCaptureCatalog } from "./actions";
 import { CaptureWorkspace } from "./capture-workspace";
 
@@ -39,7 +40,8 @@ export default async function CapturePage(): Promise<ReactNode> {
     </header>
     {canOperate && catalog !== undefined
       ? <MenuImageBaseUrlProvider url={env.supabaseUrl}><CaptureWorkspace scope={scope} action={captureWorkspaceAction} quoteLine={quoteCaptureLineAction} canManageAssignment={canManageAssignment} catalog={catalog}
-        reloadCatalog={reloadCaptureCatalog} {...(confirmationContext === undefined ? {} : { confirmationContext })} /></MenuImageBaseUrlProvider>
+        reloadCatalog={reloadCaptureCatalog} orderDetail={orderDetailAction} sendToKitchen={sendToKitchenAction}
+        {...(confirmationContext === undefined ? {} : { confirmationContext })} /></MenuImageBaseUrlProvider>
       : canOperate ? <p role="alert" className="rounded-xl border border-border bg-surface p-5">No fue posible leer el catálogo de esta sucursal. Recarga la página.</p>
         : <p role="alert" className="rounded-xl border border-border bg-surface p-5">Tu rol no permite capturar pedidos.</p>}
   </div>;
