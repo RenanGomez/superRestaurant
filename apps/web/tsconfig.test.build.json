@@ -58,6 +58,8 @@
     "src/lib/deliveries.test.ts",
     "src/lib/branch-order-work-tray.ts",
     "src/lib/branch-order-work-tray.test.ts",
+    "src/lib/order-cancellation.ts",
+    "src/lib/order-cancellation.test.ts",
     "src/lib/order-detail.ts",
     "src/lib/order-detail.test.ts",
     "src/lib/print-documents.ts",

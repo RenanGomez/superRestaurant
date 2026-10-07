@@ -9,7 +9,9 @@ import { FocusRevalidate } from "../focus-revalidate";
 import {
   branchOrderWorkTrayAction,
   addOrderItemAction,
+  cancelOrderAction,
   cancelOrderItemAction,
+  cancelledWorkTrayAction,
   openOrderAction,
   orderDetailAction,
   orderMenuCatalogAction,
@@ -42,15 +44,17 @@ export default async function OrdersPage({ searchParams }: { readonly searchPara
   return <div className="flex min-w-0 flex-1 flex-col gap-5 p-4 sm:p-5 lg:p-8">
     <FocusRevalidate />
     <header><p className="text-xs font-semibold uppercase tracking-widest text-accent">Operación</p>
-      <h1 className="font-heading text-2xl font-bold">Órdenes activas · {membership.restaurantName}</h1>
+      <h1 className="font-heading text-2xl font-bold">Órdenes · {membership.restaurantName}</h1>
       <p className="mt-1 text-sm text-text-muted">{membership.branchName} · domicilio, recoger, mostrador y mesa</p></header>
     <MenuImageBaseUrlProvider url={env.supabaseUrl}><OrdersTray scope={scope} action={branchOrderWorkTrayAction} initialOrderId={initialOrderId}
       autoOpenMenu={params.addItem === "1"}
       canCheckout={membership.roles.some((role) => FINANCIAL_ROLES.has(role))}
       printHeader={{ restaurantName: membership.restaurantName, branchName: membership.branchName }}
+      cancelledAction={cancelledWorkTrayAction}
       detailActions={{
         addItem: addOrderItemAction,
         cancelItem: cancelOrderItemAction,
+        cancelOrder: cancelOrderAction,
         detail: orderDetailAction,
         menuCatalog: orderMenuCatalogAction,
         open: openOrderAction,

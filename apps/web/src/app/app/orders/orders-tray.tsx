@@ -12,7 +12,9 @@ import {
   type BranchOrderTrayRequestResult,
   type BranchOrderWorkFilter,
 } from "../../../lib/branch-order-work-tray";
+import { CancelledTray } from "./cancelled-tray";
 import { OrderDetailPanel, type OrderDetailActions } from "./order-detail-panel";
+import type { CancelledTrayRequestResult } from "../../../lib/order-cancellation";
 import type { PrintHeader } from "../../../lib/print-documents";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -37,12 +39,14 @@ interface Props {
   readonly canCheckout: boolean;
   readonly printHeader: PrintHeader;
   readonly detailActions: OrderDetailActions;
+  readonly cancelledAction: (input: unknown) => Promise<CancelledTrayRequestResult>;
 }
 
-export function OrdersTray({ scope, action, canCheckout, detailActions, initialOrderId, autoOpenMenu, printHeader }: Props) {
+export function OrdersTray({ scope, action, cancelledAction, canCheckout, detailActions, initialOrderId, autoOpenMenu, printHeader }: Props) {
   const [items, setItems] = useState<readonly BranchOrderWorkItemV1[]>([]);
   const [nextCursor, setNextCursor] = useState<BranchOrderWorkTrayV1["nextCursor"]>(null);
   const [filter, setFilter] = useState<BranchOrderWorkFilter>("all");
+  const [view, setView] = useState<"active" | "cancelled">("active");
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<keyof typeof errors>();
@@ -86,6 +90,13 @@ export function OrdersTray({ scope, action, canCheckout, detailActions, initialO
   }, [filter]);
 
   return <section className={panel}>
+    <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="Vista de órdenes">
+      {([["active", "Activas"], ["cancelled", "Canceladas"]] as const).map(([value, label]) => <button key={value} type="button"
+        className={`${chip} ${view === value ? "border-accent bg-accent text-white" : ""}`}
+        aria-pressed={view === value} onClick={() => setView(value)}>{label}</button>)}
+    </div>
+    {view === "cancelled" && <CancelledTray scope={scope} action={cancelledAction} onOpenDetail={setOpenOrderId} />}
+    {view === "active" && <>
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap gap-2" role="group" aria-label="Filtrar por canal">
         {filters.map((entry) => <button key={entry.value} type="button"
@@ -108,6 +119,7 @@ export function OrdersTray({ scope, action, canCheckout, detailActions, initialO
       <button type="button" className={button} disabled={busy}
         onClick={() => void load(nextCursor, false, filter === "all" ? null : filter)}>Cargar más</button>
     </div>}
+    </>}
     {openOrderId !== undefined && <OrderDetailPanel
       orderId={openOrderId}
       autoOpenMenu={autoOpenMenu && openOrderId === initialOrderId}
