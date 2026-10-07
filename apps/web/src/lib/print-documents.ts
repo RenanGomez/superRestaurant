@@ -25,7 +25,7 @@ const context = (order: OrderDetailV1): string[] => [
 export function buildKitchenDocuments(order: OrderDetailV1): readonly PrintDocument[] {
   const groups = new Map<string, string[]>();
   for (const item of order.items) {
-    if (item.status === "cancelled") continue;
+    if (item.status !== "sent" && item.status !== "preparing" && item.status !== "ready" && item.status !== "delivered") continue;
     const stationId = "stationId" in item && typeof item.stationId === "string" ? item.stationId : "Sin estación asignada";
     const lines = groups.get(stationId) ?? [];
     lines.push(`${item.quantity} × ${item.name}${item.variantName ? ` · ${item.variantName}` : ""}`);
@@ -62,6 +62,7 @@ export function buildCustomerTicket(
   for (const payment of payments.filter((entry) => entry.orderId === order.orderId && entry.scope.branchId === order.scope.branchId && entry.scope.restaurantId === order.scope.restaurantId)) {
     const method = payment.method === "cash" ? "Efectivo" : payment.method === "transfer" ? "Transferencia" : "Tarjeta";
     lines.push(`${method}: ${money(payment.amountMinor)}`);
+    if (payment.tipMinor > 0) lines.push(`Propina del pago: ${money(payment.tipMinor)}`);
     if (payment.tenderedAmountMinor !== null) lines.push(`Recibido: ${money(payment.tenderedAmountMinor)}`);
     if (payment.changeMinor !== null) lines.push(`Cambio: ${money(payment.changeMinor)}`);
     if (payment.transferReference) lines.push(`Referencia: ${payment.transferReference}`);

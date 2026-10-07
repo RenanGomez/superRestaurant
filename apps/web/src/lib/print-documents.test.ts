@@ -1,37 +1,74 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { OrderDetailV1, PaymentCollectionSummaryV1 } from "@super-restaurant/shared-types";
+import { parseOrderDetailV1, type OrderDetailItemV1, type PaymentCollectionSummaryV1 } from "@super-restaurant/shared-types";
 import { buildCustomerTicket, buildKitchenDocuments } from "./print-documents.js";
 
-const scope = { restaurantId: "restaurant", branchId: "branch" };
-const order = {
-  orderId: "12345678-aaaa-bbbb-cccc-dddddddddddd", scope, currency: "MXN", timeZone: "America/Mexico_City",
-  channel: "counter", tableId: null, createdAt: "2026-10-06T12:00:00.000Z",
-  fulfillment: { channel: "counter", tableId: null, customerLabel: "Ana", addressLabel: null },
-  totals: { itemsTotalMinor: 15450, deliveryChargeMinor: 0, tipMinor: 0, totalMinor: 15450, currency: "MXN" },
-  items: [
-    { orderItemId: "a", status: "sent", stationId: "horno", quantity: 2, name: "Pizza", variantName: "Grande", note: "Bien cocida", lineTotalMinor: 15450,
-      modifiers: [], fractionBreakdown: [{ fraction: "half-a", flavorName: "Queso", extras: ["Aceitunas"], exclusions: ["Cebolla"] }] },
-    { orderItemId: "b", status: "sent", stationId: "barra", quantity: 1, name: "Agua", variantName: null, note: null, lineTotalMinor: 1000, modifiers: [], fractionBreakdown: [] },
-    { orderItemId: "c", status: "cancelled", stationId: "horno", quantity: 1, name: "Cancelada", variantName: null, note: null, lineTotalMinor: 0, modifiers: [], fractionBreakdown: [] },
-  ],
-} as unknown as OrderDetailV1;
-
-test("kitchen documents use historical station when projected and omit cancelled lines", () => {
-  const documents = buildKitchenDocuments(order);
-  assert.equal(documents.length, 2);
-  assert.match(documents[0]!.title, /horno/u);
-  assert.match(documents[0]!.lines.join(" "), /Mitad A: Queso.*Aceitunas.*Sin Cebolla.*Bien cocida/u);
-  assert.doesNotMatch(documents.flatMap((document) => document.lines).join(" "), /Cancelada/u);
+const scope = {
+  restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000",
+  branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955",
+};
+const orderId = "ee50f0f6-746f-47cb-8383-ad7834ef3ef0";
+const item = (orderItemId: string, status: OrderDetailItemV1["status"], name: string) => ({
+  orderItemId, status, name, quantity: 1, unitPriceMinor: 1000, lineTotalMinor: 1000,
+  note: null, modifiers: [], availableActions: [],
 });
 
-test("customer ticket uses server amounts and receipt balance", () => {
-  const payment = { orderId: order.orderId, scope, method: "cash", amountMinor: 10000, tenderedAmountMinor: 12000,
-    changeMinor: 2000, remainingBalanceMinor: 5450, transferReference: null } as PaymentCollectionSummaryV1;
+// This goes through the current public parser, which does not yet expose stationId.
+const order = parseOrderDetailV1({
+  schemaVersion: 1, scope, orderId, status: "open", channel: "counter", tableId: null,
+  currency: "MXN", timeZone: "America/Mexico_City", createdAt: "2026-10-06T12:00:00.000Z",
+  updatedAt: "2026-10-06T12:00:00.000Z", version: 2,
+  items: [
+    item("9544c299-d25b-44ce-98ed-d30116610887", "sent", "Pizza"),
+    item("d6f3073e-4d2d-4b9f-90ea-926e5a86ff02", "preparing", "Agua"),
+    item("a409ec59-9f5e-496d-a45d-b83a46b49674", "pending", "Sin enviar"),
+    item("c483b6e7-e102-4cc5-a887-d30712c85e52", "cancelled", "Cancelada"),
+  ],
+  totals: { currency: "MXN", itemsTotalMinor: 15450, deliveryChargeMinor: 0, tipMinor: 0, totalMinor: 15450 },
+  fulfillment: { channel: "counter", tableId: null, customerLabel: "Ana", addressLabel: null, paymentIntent: null },
+  availableActions: [],
+});
+assert.ok(order, "the legacy order detail fixture must parse");
+
+test("legacy detail groups sent lines under an explicit unassigned station", () => {
+  const documents = buildKitchenDocuments(order);
+  assert.equal(documents.length, 1);
+  assert.match(documents[0]!.title, /Sin estación asignada/u);
+  assert.match(documents[0]!.lines.join(" "), /Pizza.*Agua/u);
+  assert.doesNotMatch(documents[0]!.lines.join(" "), /Sin enviar|Cancelada/u);
+});
+
+test("typed historical stations separate documents and preserve halves and notes", () => {
+  const stationedItems: readonly (OrderDetailItemV1 & { readonly stationId: string | null })[] = order.items.map((entry, index) => ({
+    ...entry,
+    stationId: index === 0 ? "horno" : "barra",
+    ...(index === 0 ? {
+      note: "Bien cocida",
+      geometry: "halves" as const,
+      fractionBreakdown: [
+        { fraction: "half-a" as const, flavorName: "Queso", amountMinor: 1000, extras: ["Aceitunas"], exclusions: ["Cebolla"] },
+        { fraction: "half-b" as const, flavorName: "Jamón", amountMinor: 1000, extras: [], exclusions: [] },
+      ],
+    } : {}),
+  }));
+  const documents = buildKitchenDocuments({ ...order, items: stationedItems });
+  assert.deepEqual(documents.map((document) => document.title), ["Comanda · horno", "Comanda · barra"]);
+  assert.match(documents[0]!.lines.join(" "), /Mitad A: Queso.*Aceitunas.*Sin Cebolla.*Mitad B: Jamón.*Bien cocida/u);
+  assert.doesNotMatch(documents.flatMap((document) => document.lines).join(" "), /Sin enviar|Cancelada/u);
+});
+
+test("customer ticket prints captured tip alongside server-provided cash tender and change", () => {
+  const payment: PaymentCollectionSummaryV1 = {
+    schemaVersion: 1, scope: order.scope, orderId, paymentId: "63f7c434-f655-4885-9261-690d0208fb31",
+    cashRegisterSessionId: "c3adc0d4-0c27-4450-bbfb-c858105f4c71", cashRegisterVersion: 2,
+    currency: "MXN", method: "cash", orderStatus: "partially_paid", orderVersion: 3,
+    paymentState: "captured", replayed: false, amountMinor: 10000, tipMinor: 1000,
+    tenderedAmountMinor: 12000, changeMinor: 1000, remainingBalanceMinor: 5450, transferReference: null,
+  };
   const ticket = buildCustomerTicket(order, [payment], { restaurantName: "Restaurante", branchName: "Centro" });
   const text = ticket.lines.join("\n");
   assert.match(text, /Total: \$154\.50/u);
-  assert.match(text, /Recibido: \$120\.00/u);
+  assert.match(text, /Efectivo: \$100\.00\nPropina del pago: \$10\.00\nRecibido: \$120\.00\nCambio: \$10\.00/u);
   assert.match(text, /Saldo: \$54\.50/u);
   assert.doesNotMatch(text, /Cancelada/u);
 });
