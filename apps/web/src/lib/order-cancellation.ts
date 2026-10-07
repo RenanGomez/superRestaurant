@@ -171,6 +171,11 @@ export function cancelledItemRefundLabel(item: CancelledWorkItemV1): string | un
   return `Devolución pendiente ${formatMinorUnits(capturedMinor + capturedTipMinor, currency)}`;
 }
 
+/** `Canceló: <nombre>`; without a profile name it says so instead of showing an id. */
+export function cancelledItemActorLabel(item: CancelledWorkItemV1): string {
+  return `Canceló: ${item.cancelledByName ?? "usuario sin nombre"}`;
+}
+
 export function cancelledItemTotalLabel(item: CancelledWorkItemV1): string | undefined {
   return item.kind === "order" && item.totalMinor !== null ? formatMinorUnits(item.totalMinor, item.refundObligation.currency) : undefined;
 }

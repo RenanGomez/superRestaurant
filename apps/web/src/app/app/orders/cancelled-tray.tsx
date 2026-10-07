@@ -5,6 +5,7 @@ import type { BranchScope, CancelledWorkCursorV1, CancelledWorkItemV1 } from "@s
 import {
   CANCELLED_TRAY_LIMIT,
   cancelledItemKey,
+  cancelledItemActorLabel,
   cancelledItemRefundLabel,
   cancelledItemTime,
   cancelledItemTitle,
@@ -93,7 +94,7 @@ function CancelledCard({ item, timeZone, onOpenDetail }: {
     </div>
     {item.kind === "order" && item.customerLabel !== null && <p className="mt-2 text-sm">{item.customerLabel}</p>}
     <p className="mt-2 text-sm"><span className="font-semibold">Motivo:</span> {item.reason}</p>
-    <p className="mt-1 text-xs text-text-muted">Canceló: {item.cancelledByActorId.slice(0, 8)}</p>
+    <p className="mt-1 text-xs text-text-muted">{cancelledItemActorLabel(item)}</p>
     {item.kind === "order" && <p className="mt-1 text-xs text-text-muted">{item.lineCount} {item.lineCount === 1 ? "línea" : "líneas"}</p>}
     {refund !== undefined && <p role="status" className="mt-2 rounded-lg border border-border bg-surface p-2 text-sm font-semibold">{refund}</p>}
     {item.kind === "order" && <div className="mt-3">
