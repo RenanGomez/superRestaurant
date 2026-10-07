@@ -228,7 +228,8 @@ const printable=parseOrderDetailV1({...detail,items:[{...detailItem,stationId:"k
 expect(printable?.items[0]?.stationId==="kitchen"&&printable.totals.taxMinor===1379,"order detail keeps additive stationId and taxMinor");
 expect(parseOrderDetailV1(detail)?.items[0]?.stationId===null,"older detail without stationId normalizes to null");
 expect(parseOrderDetailV1({...detail,items:[{...detailItem,stationId:""}]})===undefined,"blank stationId is rejected");
-expect(parseOrderDetailV1({...detail,totals:{...detail.totals,taxMinor:10001}})===undefined,"tax cannot exceed the items total");
+expect(parseOrderDetailV1({...detail,totals:{...detail.totals,taxMinor:10001}})?.totals.taxMinor===10001,"line tax before a large order discount may exceed itemsTotalMinor");
+expect(parseOrderDetailV1({...detail,totals:{...detail.totals,taxMinor:-1}})===undefined,"negative tax is rejected");
 expect(parseOrderDetailV1({...detail,fulfillment:{...detail.fulfillment,channel:"counter"}})===undefined,"fulfillment.channel must match the order's own channel");
 expect(parseOrderDetailV1({...detail,totals:{...detail.totals,totalMinor:10001}})===undefined,"order detail totals must add up exactly");
 expect(parseOrderDetailV1({...detail,availableActions:["sendToKitchen","sendToKitchen"]})===undefined,"order detail rejects duplicate actions");

@@ -359,7 +359,10 @@ export interface OrderDetailTotalsV1 {
   readonly currency: string;
   /** Items after line/order discount and tax -- never delivery or tip. */
   readonly itemsTotalMinor: number;
-  /** Additive. Tax already contained in `itemsTotalMinor` (from the domain calculator); never added again. */
+  /**
+   * Additive. Tax of the lines before any order-level discount (domain `taxTotal`); informational for printing,
+   * never added to the total, and may exceed `itemsTotalMinor` when a large order discount applies.
+   */
   readonly taxMinor?: number;
   readonly deliveryChargeMinor: number;
   readonly tipMinor: number;
@@ -584,7 +587,6 @@ function parseDetailTotals(value: unknown): OrderDetailTotalsV1 | undefined {
     currency === undefined || !/^[A-Z]{3}$/u.test(currency) || itemsTotalMinor === undefined
     || deliveryChargeMinor === undefined || tipMinor === undefined || totalMinor === undefined
     || itemsTotalMinor + deliveryChargeMinor + tipMinor !== totalMinor
-    || (taxMinor !== undefined && taxMinor > itemsTotalMinor)
   ) return undefined;
   return Object.freeze({ currency, deliveryChargeMinor, itemsTotalMinor, ...(taxMinor === undefined ? {} : { taxMinor }), tipMinor, totalMinor });
 }
