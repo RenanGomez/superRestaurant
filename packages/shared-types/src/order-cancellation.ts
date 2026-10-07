@@ -74,6 +74,8 @@ export interface CancelledOrderWorkItemV1 {
   readonly cancelledAt: string;
   readonly reason: string;
   readonly cancelledByActorId: string;
+  /** Profile name of the actor; `null` when the actor has no name (the e-mail is never exposed). */
+  readonly cancelledByName: string | null;
   readonly refundObligation: OrderRefundObligationV1;
   /** What the order was worth before cancellation (historical, never payable); `null` when unavailable. */
   readonly totalMinor: number | null;
@@ -92,6 +94,8 @@ export interface CancelledCaptureWorkItemV1 {
   readonly cancelledAt: string;
   readonly reason: string;
   readonly cancelledByActorId: string;
+  /** Profile name of the actor; `null` when the actor has no name (the e-mail is never exposed). */
+  readonly cancelledByName: string | null;
 }
 
 export type CancelledWorkItemV1 = CancelledOrderWorkItemV1 | CancelledCaptureWorkItemV1;
@@ -178,13 +182,15 @@ export function parseCancelledWorkTrayRequestV1(value: unknown): CancelledWorkTr
     : Object.freeze({ cursor, limit, schemaVersion: ORDER_CANCELLATION_SCHEMA_VERSION, scope });
 }
 
-export function parseCancelledWorkItemV1(value: unknown): CancelledWorkItemV1 | undefined {
+export function parseCancelledWorkItemV1(raw: unknown): CancelledWorkItemV1 | undefined {
+  // Additive field: producers older than 20261007000700 omit `cancelledByName`; it then reads as null.
+  const value = withDefault(raw, "cancelledByName", null);
   if (value === null || typeof value !== "object") return undefined;
   const kind = own(value as Readonly<Record<string, unknown>>, "kind");
   if (kind === "order") {
     const record = exactRecord(value, [
       "kind", "orderId", "channel", "fromStatus", "version", "cancelledAt", "reason", "cancelledByActorId",
-      "refundObligation", "totalMinor", "lineCount", "customerLabel", "timeZone",
+      "cancelledByName", "refundObligation", "totalMinor", "lineCount", "customerLabel", "timeZone",
     ]);
     if (record === undefined) return undefined;
     const orderId = uuid(own(record, "orderId"));
@@ -194,6 +200,7 @@ export function parseCancelledWorkItemV1(value: unknown): CancelledWorkItemV1 | 
     const cancelledAt = timestamp(own(record, "cancelledAt"));
     const reason = text(own(record, "reason"), 1, ORDER_CANCELLATION_REASON_MAX_LENGTH);
     const actor = uuid(own(record, "cancelledByActorId"));
+    const actorName = parseActorName(own(record, "cancelledByName"));
     const refundObligation = parseOrderRefundObligationV1(own(record, "refundObligation"));
     const rawTotal = own(record, "totalMinor");
     const totalMinor = rawTotal === null ? null : integer(rawTotal, 0, Number.MAX_SAFE_INTEGER);
@@ -204,11 +211,11 @@ export function parseCancelledWorkItemV1(value: unknown): CancelledWorkItemV1 | 
     if (orderId === undefined || typeof channel !== "string" || !(WORK_CHANNELS as readonly string[]).includes(channel)
       || typeof fromStatus !== "string" || !(CANCELLED_FROM_STATUSES as readonly string[]).includes(fromStatus)
       || version === undefined || cancelledAt === undefined || reason === undefined || actor === undefined
-      || refundObligation === undefined || totalMinor === undefined || lineCount === undefined
+      || actorName === undefined || refundObligation === undefined || totalMinor === undefined || lineCount === undefined
       || customerLabel === undefined || timeZone === undefined
       || ((fromStatus === "partially_paid" || fromStatus === "paid") && refundObligation.status !== "pending")) return undefined;
     return Object.freeze({
-      cancelledAt, cancelledByActorId: actor, channel: channel as CancelledOrderWorkItemV1["channel"],
+      cancelledAt, cancelledByActorId: actor, cancelledByName: actorName, channel: channel as CancelledOrderWorkItemV1["channel"],
       customerLabel, fromStatus: fromStatus as CancelledOrderWorkItemV1["fromStatus"], kind: "order" as const,
       lineCount, orderId, reason, refundObligation, timeZone, totalMinor, version,
     });
@@ -216,6 +223,7 @@ export function parseCancelledWorkItemV1(value: unknown): CancelledWorkItemV1 | 
   if (kind === "capture") {
     const record = exactRecord(value, [
       "kind", "captureDraftId", "folio", "sourceChannel", "fulfillmentChannel", "cancelledAt", "reason", "cancelledByActorId",
+      "cancelledByName",
     ]);
     if (record === undefined) return undefined;
     const captureDraftId = uuid(own(record, "captureDraftId"));
@@ -225,13 +233,14 @@ export function parseCancelledWorkItemV1(value: unknown): CancelledWorkItemV1 | 
     const cancelledAt = timestamp(own(record, "cancelledAt"));
     const reason = text(own(record, "reason"), 1, 500);
     const actor = uuid(own(record, "cancelledByActorId"));
+    const actorName = parseActorName(own(record, "cancelledByName"));
     if (captureDraftId === undefined || folio === undefined || typeof sourceChannel !== "string"
       || !(CAPTURE_SOURCE_CHANNELS as readonly string[]).includes(sourceChannel)
       || !(rawFulfillment === null || (typeof rawFulfillment === "string"
         && (CAPTURE_FULFILLMENT_CHANNELS_LOCAL as readonly string[]).includes(rawFulfillment)))
-      || cancelledAt === undefined || reason === undefined || actor === undefined) return undefined;
+      || cancelledAt === undefined || reason === undefined || actor === undefined || actorName === undefined) return undefined;
     return Object.freeze({
-      cancelledAt, cancelledByActorId: actor, captureDraftId,
+      cancelledAt, cancelledByActorId: actor, cancelledByName: actorName, captureDraftId,
       fulfillmentChannel: rawFulfillment as CancelledCaptureWorkItemV1["fulfillmentChannel"], folio,
       kind: "capture" as const, reason, sourceChannel: sourceChannel as CancelledCaptureWorkItemV1["sourceChannel"],
     });
@@ -274,6 +283,29 @@ function parseScope(value: unknown): BranchScope | undefined {
   const restaurantId = uuid(own(record, "restaurantId"));
   const branchId = uuid(own(record, "branchId"));
   return restaurantId === undefined || branchId === undefined ? undefined : Object.freeze({ branchId, restaurantId }) as BranchScope;
+}
+
+/** Name of the actor (profile full_name|name); `null` when the actor has none. Never an e-mail. */
+function parseActorName(value: unknown): string | null | undefined {
+  return value === null ? null : text(value, 1, 120);
+}
+
+/** Adds `key: fallback` to a plain data-only record that lacks it; anything else is returned untouched (and rejected later). */
+function withDefault(value: unknown, key: string, fallback: unknown): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+  try {
+    if (![Object.prototype, null].includes(Object.getPrototypeOf(value))) return value;
+    const keys = Reflect.ownKeys(value);
+    if (keys.includes(key)) return value;
+    const copy: Record<string, unknown> = {};
+    for (const entry of keys) {
+      const descriptor = typeof entry === "string" ? Object.getOwnPropertyDescriptor(value, entry) : undefined;
+      if (typeof entry !== "string" || descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) return value;
+      copy[entry] = descriptor.value;
+    }
+    copy[key] = fallback;
+    return copy;
+  } catch { return value; }
 }
 
 function exactRecord(value: unknown, keys: readonly string[]): Readonly<Record<string, unknown>> | undefined {

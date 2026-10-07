@@ -94,7 +94,13 @@ export interface BranchDaySummaryV1 {
   /** Frozen delivery charge of those paid Orders. */
   readonly deliveryFees: { readonly orderCount: number; readonly amountMinor: number };
   readonly deliveriesSettled: { readonly count: number; readonly cashCollectedMinor: number };
-  readonly cancellations: { readonly orders: number; readonly captures: number };
+  /**
+   * `orders` are Orders cancelled in the day (cancellation journal `occurred_at`, not `updated_at`); `refundPendingMinor`
+   * is the sum of their still-pending refund obligations (captured + tip) in `currency`; absent from older producers = 0.
+   */
+  readonly cancellations: {
+    readonly orders: number; readonly captures: number; readonly refundPendingMinor: number;
+  };
   readonly shifts: readonly BranchDaySummaryShiftV1[];
 }
 
@@ -124,7 +130,7 @@ export function parseBranchDaySummaryV1(value: unknown): BranchDaySummaryV1 | un
   const ordersPaid = parsePair(own(record, "ordersPaid"), "count", "amountMinor");
   const deliveryFees = parsePair(own(record, "deliveryFees"), "orderCount", "amountMinor");
   const deliveriesSettled = parsePair(own(record, "deliveriesSettled"), "count", "cashCollectedMinor");
-  const cancellations = parsePair(own(record, "cancellations"), "orders", "captures");
+  const cancellations = parseCancellations(own(record, "cancellations"));
   const rawShifts = denseArray(own(record, "shifts"), BRANCH_DAY_SUMMARY_MAX_SHIFTS);
   const shifts = rawShifts?.map(parseShift);
   if (scope === undefined || date === undefined || timeZone === undefined || currency === undefined
@@ -145,7 +151,9 @@ export function parseBranchDaySummaryV1(value: unknown): BranchDaySummaryV1 | un
     || deliveryFees.first > ordersPaid.first
     || (ordersPaid.first > 0 && ordersPaid.second < 1)) return undefined;
   return Object.freeze({
-    cancellations: Object.freeze({ captures: cancellations.second, orders: cancellations.first }),
+    cancellations: Object.freeze({
+      captures: cancellations.captures, orders: cancellations.orders, refundPendingMinor: cancellations.refundPendingMinor,
+    }),
     currency, date,
     deliveriesSettled: Object.freeze({ cashCollectedMinor: deliveriesSettled.second, count: deliveriesSettled.first }),
     deliveryFees: Object.freeze({ amountMinor: deliveryFees.second, orderCount: deliveryFees.first }),
@@ -192,6 +200,19 @@ function parsePair(value: unknown, first: string, second: string): { first: numb
   const a = record === undefined ? undefined : money(own(record, first));
   const b = record === undefined ? undefined : money(own(record, second));
   return a === undefined || b === undefined ? undefined : { first: a, second: b };
+}
+
+/** `refundPendingMinor` is additive: a producer older than 20261007000700 omits it and it reads as 0. */
+function parseCancellations(value: unknown): { orders: number; captures: number; refundPendingMinor: number } | undefined {
+  const withAmount = value !== null && typeof value === "object" && !Array.isArray(value)
+    && Reflect.ownKeys(value).length === 3 && Reflect.ownKeys(value).includes("refundPendingMinor");
+  const record = exactRecord(value, withAmount ? ["orders", "captures", "refundPendingMinor"] : ["orders", "captures"]);
+  const orders = record === undefined ? undefined : money(own(record, "orders"));
+  const captures = record === undefined ? undefined : money(own(record, "captures"));
+  const refundPendingMinor = record === undefined ? undefined : withAmount ? money(own(record, "refundPendingMinor")) : 0;
+  return orders === undefined || captures === undefined || refundPendingMinor === undefined
+    // An obligation can only exist when at least one Order was cancelled in the day.
+    || (refundPendingMinor > 0 && orders < 1) ? undefined : { captures, orders, refundPendingMinor };
 }
 
 function parseShift(value: unknown): BranchDaySummaryShiftV1 | undefined {

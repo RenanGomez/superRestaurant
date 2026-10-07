@@ -93,6 +93,19 @@ const captureItem = {
   fulfillmentChannel: null, cancelledAt: "2026-10-06T11:00:00.000Z", reason: "Cliente colgo", cancelledByActorId: other,
 };
 expect(parseCancelledWorkItemV1(orderItem) !== undefined && parseCancelledWorkItemV1(captureItem) !== undefined, "both kinds parse");
+// `cancelledByName` is additive: absent reads as null; a name or an explicit null is kept; anything else is rejected.
+expect(parseCancelledWorkItemV1(orderItem)?.cancelledByName === null
+  && parseCancelledWorkItemV1(captureItem)?.cancelledByName === null, "missing cancelledByName reads as null");
+expect(parseCancelledWorkItemV1({ ...orderItem, cancelledByName: "Ana Gerente" })?.cancelledByName === "Ana Gerente"
+  && parseCancelledWorkItemV1({ ...captureItem, cancelledByName: "Ana Gerente" })?.cancelledByName === "Ana Gerente"
+  && parseCancelledWorkItemV1({ ...orderItem, cancelledByName: null })?.cancelledByName === null, "name and null are kept");
+for (const badName of ["", " Ana", "A".repeat(121), "Ana\nGerente", 7, undefined]) {
+  expect(parseCancelledWorkItemV1({ ...orderItem, cancelledByName: badName }) === undefined
+    && parseCancelledWorkItemV1({ ...captureItem, cancelledByName: badName }) === undefined,
+  `cancelledByName rejects ${JSON.stringify(badName)}`);
+}
+const accessorItem = Object.defineProperty({ ...orderItem }, "reason", { enumerable: true, get: () => "x" });
+expect(parseCancelledWorkItemV1(accessorItem) === undefined, "accessor properties are still rejected when adding the default");
 for (const invalid of [
   { ...orderItem, refundObligation: { ...obligation, status: "none", capturedMinor: 0, capturedTipMinor: 0 } },
   { ...orderItem, fromStatus: "closed" }, { ...orderItem, totalMinor: -1 }, { ...orderItem, customerLabel: "" },

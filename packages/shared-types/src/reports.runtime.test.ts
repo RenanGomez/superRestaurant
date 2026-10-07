@@ -53,7 +53,7 @@ const openRegister = {
   openedAt: "2026-10-05T15:00:00.000Z", openingFloatMinor: 5000, registerId: id("05"), status: "open",
 };
 const summary = {
-  cancellations: { captures: 1, orders: 1 },
+  cancellations: { captures: 1, orders: 1, refundPendingMinor: 5500 },
   currency: "MXN",
   date: "2026-10-05",
   deliveriesSettled: { cashCollectedMinor: 3500, count: 1 },
@@ -78,11 +78,21 @@ expect(parsed !== undefined, "coherent summary parses");
 expect(parsed?.totals.salesMinor === 24600 && parsed.shifts.length === 2 && parsed.cancellations.orders === 1,
   "parsed summary keeps the figures");
 expect(Object.isFrozen(parsed) && Object.isFrozen(parsed?.salesByChannel), "parsed summary is frozen");
+expect(parsed?.cancellations.refundPendingMinor === 5500, "pending refund obligations are kept");
+// Additive field: an older producer omits it and it reads as zero.
+const legacy = parseBranchDaySummaryV1({ ...summary, cancellations: { captures: 1, orders: 1 } });
+expect(legacy?.cancellations.refundPendingMinor === 0 && legacy.cancellations.orders === 1, "missing refundPendingMinor reads as 0");
+for (const bad of [
+  { captures: 1, orders: 1, refundPendingMinor: -1 }, { captures: 1, orders: 1, refundPendingMinor: 1.5 },
+  { captures: 1, orders: 1, refundPendingMinor: 2 ** 53 }, { captures: 1, orders: 1, refundPendingMinor: "5500" },
+  { captures: 1, orders: 0, refundPendingMinor: 100 }, { captures: 1, orders: 1, refundPendingMinor: 1, extra: 1 },
+  { captures: 1, orders: 1, extra: 1 },
+]) expect(parseBranchDaySummaryV1({ ...summary, cancellations: bad }) === undefined, `cancellations reject ${JSON.stringify(bad)}`);
 
 // An empty day is all zeros, never null.
 const empty = {
   ...summary,
-  cancellations: { captures: 0, orders: 0 },
+  cancellations: { captures: 0, orders: 0, refundPendingMinor: 0 },
   deliveriesSettled: { cashCollectedMinor: 0, count: 0 },
   deliveryFees: { amountMinor: 0, orderCount: 0 },
   ordersPaid: { amountMinor: 0, count: 0 },
