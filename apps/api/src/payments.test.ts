@@ -496,6 +496,7 @@ function orderPort(order: Order, version: number): OrderPersistencePort {
 
 function orderPortFrom(read: () => { readonly order: Order; readonly version: number }): OrderPersistencePort {
   return {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => "forbidden",
     persist: async () => ({ status: "conflict" }),
     read: async () => read(),

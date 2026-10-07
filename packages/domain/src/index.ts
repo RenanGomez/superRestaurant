@@ -243,7 +243,9 @@ export type {
   OrderItemState,
   OrderItemTransition,
   OrderItemTransitionContext,
+  OrderRefundObligation,
   OrderState,
+  OrderTransitionContext,
 } from "./order-state.js";
 export {
   InvalidOrderItemChangeImpactError,
@@ -267,8 +269,10 @@ export {
 } from "./order-totals.js";
 export {
   addOrderItem,
+  calculateCancelledOrderOriginalTotal,
   calculateOrderAggregateTotals,
   canAddOrderItem,
+  cancelOrder,
   cancelOrderItem,
   createOrder,
   transitionOrderItemStatus,
@@ -276,6 +280,8 @@ export {
 } from "./order.js";
 export type {
   AddOrderItemInput,
+  CancelOrderInput,
+  CancelOrderLineContext,
   CreateOrderInput,
   DeliveryChargeSnapshot,
   Order,
@@ -284,6 +290,17 @@ export type {
   OrderItem,
   OrderMutation,
 } from "./order.js";
+export {
+  InvalidOrderCancellationAssessmentError,
+  ORDER_CANCELLATION_DELIVERY_STATES,
+  assessOrderCancellation,
+} from "./order-cancellation.js";
+export type {
+  AssessOrderCancellationInput,
+  OrderCancellationAssessment,
+  OrderCancellationBlockReason,
+  OrderCancellationDeliveryState,
+} from "./order-cancellation.js";
 export { ORDER_AUDIT_SCHEMA_VERSION } from "./order-audit.js";
 export type {
   OrderAuditContext,

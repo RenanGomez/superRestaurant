@@ -184,6 +184,7 @@ test("order service creates, snapshots catalog items, transitions, and only noti
   let storedOrder = storedMutation.order;
   let storedVersion = 1;
   const orders: OrderPersistencePort = {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => ticketList,
     persist: async (_actorId, _expectedVersion, mutation) => {
       storedOrder = mutation.order;
@@ -226,6 +227,7 @@ test("order service creates, snapshots catalog items, transitions, and only noti
   const pendingOrder = storedOrder;
   let pendingCancellation: OrderMutation | undefined;
   const pendingOrders: OrderPersistencePort = {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => ticketList,
     persist: async (_actorId, expectedVersion, mutation) => {
       pendingCancellation = mutation;
@@ -308,6 +310,7 @@ test("order service creates, snapshots catalog items, transitions, and only noti
 test("order service keeps v1 compatible and binds only v2 creation to an operational shift", async () => {
   const receivedShiftIds: (string | null | undefined)[] = [];
   const orders: OrderPersistencePort = {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => ticketList,
     persist: async (_actorId, expectedVersion, mutation, operationalShiftId) => {
       receivedShiftIds.push(operationalShiftId);
@@ -345,6 +348,7 @@ test("order service passes a null shiftId to SQL untouched; SQL resolves the shi
   const receivedShiftIds: (string | null | undefined)[] = [];
   let outcome: "saved" | "conflict" = "saved";
   const orders: OrderPersistencePort = {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => ticketList,
     persist: async (_actorId, expectedVersion, mutation, operationalShiftId) => {
       receivedShiftIds.push(operationalShiftId);
@@ -388,6 +392,7 @@ test("order service accepts the mobile handoff sequence through v2 create, item 
   }[] = [];
   let stored: { readonly order: OrderMutation["order"]; readonly version: number } | undefined;
   const orders: OrderPersistencePort = {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => ticketList,
     persist: async (_actorId, expectedVersion, mutation, shiftId) => {
       assert.equal(expectedVersion, stored?.version ?? 0);
@@ -485,6 +490,7 @@ test("order service accepts the mobile handoff sequence through v2 create, item 
 
 test("order service enforces permission, optimistic version, and domain transitions", async () => {
   const port: OrderPersistencePort = {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => "forbidden",
     persist: async () => ({ status: "conflict" }),
     read: async () => ({ order: domainMutation.order, version: 1 }),
@@ -544,6 +550,7 @@ test("order service detail scopes access, reduces PII, and computes actions from
   const sentSecondItem = transitionOrderItemStatus(withTwoItems, secondItemId, "sent", { ...audit, actorId: principal.actorId }).order;
 
   const port: OrderPersistencePort = {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => "forbidden",
     persist: async () => ({ status: "conflict" }),
     read: async () => ({ order: sentSecondItem, version: 4 }),
@@ -573,7 +580,7 @@ test("order service detail scopes access, reduces PII, and computes actions from
   const asManager = await serviceFor(["manager"], port).detail(principal, detailRequest);
   // The order already has a pending line, so "sendToKitchen" alone covers it -- "open" is never
   // offered alongside it for the same draft order.
-  assert.deepEqual(asManager.availableActions, ["addItem", "sendToKitchen"]);
+  assert.deepEqual(asManager.availableActions, ["addItem", "sendToKitchen", "cancelOrder"]);
   assert.deepEqual(asManager.items.map((item) => item.availableActions), [["cancelItem"], ["markReady", "cancelItem"]]);
 
   // A role with only orders.cancel.pending (waiter) never sees cancelItem on a line that already
@@ -604,6 +611,7 @@ function fakeSendToKitchenPort(initialOrder: Order, initialVersion: number): {
   let version = initialVersion;
   const commandsByKey = new Map<string, { readonly payload: unknown; readonly result: SendOrderToKitchenBatchResult }>();
   const port: OrderPersistencePort = {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => "forbidden",
     persist: async () => { throw new Error("persist is not used by sendToKitchen's atomic port method"); },
     read: async () => ({ order, version }),
@@ -890,6 +898,7 @@ test("order service detail never offers open and sendToKitchen together for the 
     restaurantId: scope.restaurantId, tableId: randomUUID(), timeZone: "America/Mexico_City",
   }, { ...audit, actorId: principal.actorId }).order;
   const emptyPort: OrderPersistencePort = {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => "forbidden",
     persist: async () => ({ status: "conflict" }),
     read: async () => ({ order: tableOrder, version: 1 }),
@@ -899,7 +908,7 @@ test("order service detail never offers open and sendToKitchen together for the 
   };
   const emptyDetail = await serviceFor(["manager"], emptyPort).detail(principal, { orderId, schemaVersion: 1 as const, scope });
   // A table draft with no lines yet only offers "open" ("Abrir cuenta").
-  assert.deepEqual(emptyDetail.availableActions, ["addItem", "open"]);
+  assert.deepEqual(emptyDetail.availableActions, ["addItem", "open", "cancelOrder"]);
 
   const withPendingLine = addOrderItem(tableOrder, {
     orderItemId,
@@ -912,7 +921,7 @@ test("order service detail never offers open and sendToKitchen together for the 
   const pendingPort: OrderPersistencePort = { ...emptyPort, read: async () => ({ order: withPendingLine, version: 2 }) };
   const pendingDetail = await serviceFor(["manager"], pendingPort).detail(principal, { orderId, schemaVersion: 1 as const, scope });
   // Once a line exists, only "sendToKitchen" is offered -- never "open" alongside it.
-  assert.deepEqual(pendingDetail.availableActions, ["addItem", "sendToKitchen"]);
+  assert.deepEqual(pendingDetail.availableActions, ["addItem", "sendToKitchen", "cancelOrder"]);
 });
 
 test("order service detail reports the frozen line tax as taxMinor", async () => {
@@ -935,6 +944,7 @@ test("order service detail reports the frozen line tax as taxMinor", async () =>
     },
   }, { ...audit, actorId: principal.actorId }).order;
   const port: OrderPersistencePort = {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => "forbidden",
     persist: async () => ({ status: "conflict" }),
     read: async () => ({ order: taxed, version: 2 }),
@@ -963,6 +973,7 @@ test("order service detail on a cancelled order with a frozen delivery charge ne
     authorization: { actorId: principal.actorId, approved: true },
   }).order;
   const port: OrderPersistencePort = {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => "forbidden",
     persist: async () => ({ status: "conflict" }),
     read: async () => ({ order: cancelled, version: 2 }),
@@ -1098,6 +1109,7 @@ function sizedAddCommand(extra: Record<string, unknown>) {
 
 function capturingOrders(saved: { order?: Order }): OrderPersistencePort {
   return {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => ticketList!,
     persist: async (_actorId, expectedVersion, mutation) => {
       saved.order = mutation.order;

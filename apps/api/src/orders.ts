@@ -1,5 +1,6 @@
 import {
   parseAddOrderItemCommandV1,
+  parseCancelOrderCommandV1,
   parseCancelOrderItemCommandV1,
   parseCreateOrderCommandV1,
   parseCreateOrderCommandV2,
@@ -8,6 +9,7 @@ import {
   parseKdsEventV1,
   parseKdsTicketListV1,
   parseOpenOrderCommandV1,
+  parseOrderRefundObligationV1,
   parseBranchScope,
   parseOrderDetailRequestV1,
   parseOrderDetailV1,
@@ -15,6 +17,8 @@ import {
   parseSendOrderToKitchenCommandV1,
   parseTransitionOrderItemCommandV1,
   type BranchScope,
+  type CancelOrderCommandV1,
+  type CancelOrderResultV1,
   type CreateOrderCommandV1,
   type CreateOrderCommandV2,
   type KdsCursorV1,
@@ -33,7 +37,9 @@ import { createHash } from "node:crypto";
 import { describeHalvesFromSnapshot, isFractionModifier } from "./fraction-halves.js";
 import {
   addOrderItem,
+  assessOrderCancellation,
   canAddOrderItem,
+  cancelOrder as cancelWholeOrder,
   InactiveMenuProductVariantError,
   MenuProductVariantNotFoundError,
   MenuProductVariantRequiredError,
@@ -79,6 +85,7 @@ const persistOrderSql = "select app_private.persist_order_mutation($1::uuid, $2:
 const cancelOrderItemSql = "select app_private.persist_order_item_cancellation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
 const createOperationalOrderSql = "select app_private.create_operational_order($1::uuid, $2::uuid, $3::jsonb, $4::jsonb) as result";
 const sendOrderToKitchenSql = "select app_private.send_order_to_kitchen($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
+const cancelWholeOrderSql = "select app_private.cancel_order($1::uuid, $2::jsonb, $3::jsonb) as result";
 const recoverKdsSql = "select app_private.recover_kds_events($1::uuid, $2::uuid, $3::uuid, $4::text, $5::bigint, $6::integer) as result";
 const listKdsTicketsSql = "select app_private.list_kds_tickets($1::uuid, $2::uuid, $3::uuid, $4::text) as result";
 
@@ -88,6 +95,22 @@ export class OrderApplicationError extends Error {
   public constructor(public readonly code: OrderApplicationErrorCode) {
     super(`ORDER_${code.toUpperCase()}`);
     this.name = "OrderApplicationError";
+  }
+}
+
+/** A conflict because the order's delivery is `assigned|en_route`; the controller answers 409 `DELIVERY_ACTIVE`. */
+export class OrderDeliveryActiveError extends OrderApplicationError {
+  public constructor() {
+    super("conflict");
+    this.name = "OrderDeliveryActiveError";
+  }
+}
+
+/** A conflict because the order has a non-terminal payment; the controller answers 409 `PAYMENT_IN_FLIGHT`. */
+export class OrderPaymentInFlightError extends OrderApplicationError {
+  public constructor() {
+    super("conflict");
+    this.name = "OrderPaymentInFlightError";
   }
 }
 
@@ -121,7 +144,26 @@ export type SendOrderToKitchenBatchResult =
     readonly version: number;
   }>;
 
+/**
+ * Result of `app_private.cancel_order`. `delivery_active` means the order's delivery is `assigned|en_route` (the
+ * courier must mark it failed or it must be settled first); `forbidden` is the SQL re-check of the supervisor role.
+ */
+export type CancelWholeOrderResult =
+  | Readonly<{ readonly status: "conflict" | "delivery_active" | "forbidden"; readonly reason?: "payment_in_flight" }>
+  | Readonly<{
+    readonly kdsEvents: readonly KdsEventV1[];
+    readonly order: Order;
+    readonly refundObligation: CancelOrderResultV1["refundObligation"];
+    readonly status: "replayed" | "saved";
+    readonly version: number;
+  }>;
+
 export interface OrderPersistencePort {
+  cancelWholeOrder(
+    actorId: string,
+    command: CancelOrderCommandV1,
+    steps: readonly OrderMutation[],
+  ): Promise<CancelWholeOrderResult>;
   listKdsTickets(actorId: string, subscription: RealtimeSubscriptionV1): Promise<KdsTicketListV1 | "forbidden">;
   persist(actorId: string, expectedVersion: number, mutation: OrderMutation, operationalShiftId?: string | null): Promise<PersistOrderResult>;
   read(actorId: string, scope: BranchScope, orderId: string): Promise<StoredOrder | "missing">;
@@ -315,6 +357,71 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
     return Object.freeze({ kdsEvents: Object.freeze(kdsEvents), order, status, version });
   }
 
+  public async cancelWholeOrder(
+    actorId: string,
+    command: CancelOrderCommandV1,
+    steps: readonly OrderMutation[],
+  ): Promise<CancelWholeOrderResult> {
+    const encodedCommand = {
+      deviceId: command.deviceId,
+      eventId: command.eventId,
+      expectedVersion: command.expectedVersion,
+      idempotencyKey: command.idempotencyKey,
+      occurredAt: command.occurredAt,
+      orderId: command.orderId,
+      reason: command.reason,
+      schemaVersion: command.schemaVersion,
+      scope: command.scope,
+    };
+    const encodedSteps = steps.map((step) => ({
+      audit: encodeOrderAuditEventRecord(step.auditEvent),
+      order: encodeOrderRecord(step.order),
+    }));
+    const result = await this.database.query(cancelWholeOrderSql, [
+      actorId,
+      JSON.stringify(encodedCommand),
+      JSON.stringify(encodedSteps),
+    ]);
+    const raw = singleResult(result.rows);
+    const inFlight = exactRecord(raw, ["status", "reason"]);
+    if (inFlight !== undefined) {
+      if (own(inFlight, "status") === "conflict" && own(inFlight, "reason") === "payment_in_flight") {
+        return Object.freeze({ reason: "payment_in_flight" as const, status: "conflict" as const });
+      }
+      throw unavailable();
+    }
+    const minimal = exactRecord(raw, ["status"]);
+    if (minimal !== undefined) {
+      const status = own(minimal, "status");
+      if (status === "conflict" || status === "forbidden" || status === "delivery_active") return Object.freeze({ status });
+      throw unavailable();
+    }
+    const record = exactRecord(raw, ["schemaVersion", "scope", "status", "order", "version", "refundObligation", "kdsEvents"]);
+    if (record === undefined || own(record, "schemaVersion") !== 1) throw unavailable();
+    const status = own(record, "status");
+    if (status !== "saved" && status !== "replayed") throw unavailable();
+    const order = decodeOrderRecord(own(record, "order"));
+    const version = positiveInteger(own(record, "version"));
+    const refundObligation = parseOrderRefundObligationV1(own(record, "refundObligation"));
+    const rawEvents = own(record, "kdsEvents");
+    if (
+      version === undefined || refundObligation === undefined || !Array.isArray(rawEvents)
+      || order.status !== "cancelled" || order.orderId !== command.orderId
+      || order.restaurantId !== command.scope.restaurantId || order.branchId !== command.scope.branchId
+      || !sameScopeValues(own(record, "scope"), order.restaurantId, order.branchId)
+      || (status === "saved" && (version < command.expectedVersion + 1 || order.cancellationAudit === undefined
+        || order.cancellationAudit.eventId !== command.eventId || order.cancellationAudit.reason !== command.reason))
+    ) throw unavailable();
+    const kdsEvents: KdsEventV1[] = [];
+    for (const entry of rawEvents) {
+      const parsed = parseKdsEventV1(entry);
+      if (parsed === undefined || parsed.status !== "cancelled" || parsed.orderId !== order.orderId
+        || parsed.scope.restaurantId !== order.restaurantId || parsed.scope.branchId !== order.branchId) throw unavailable();
+      kdsEvents.push(parsed);
+    }
+    return Object.freeze({ kdsEvents: Object.freeze(kdsEvents), order, refundObligation, status, version });
+  }
+
   public async recoverKds(
     actorId: string,
     subscription: RealtimeSubscriptionV1,
@@ -469,6 +576,81 @@ export class OrderService {
       if (error instanceof OrderApplicationError) throw error;
       throw applicationError("request");
     }
+  }
+
+  /**
+   * T2: whole-order cancellation by owner/admin/manager/supervisor (`orders.cancel.order`). The domain computes the
+   * ordered steps (one correction per kitchen line, then the order); SQL re-verifies them, blocks an active delivery
+   * (409 `DELIVERY_ACTIVE`), records an immutable pending refund obligation when money was captured and persists
+   * everything atomically under the command's idempotency key. The client never sends an approval.
+   */
+  public async cancelOrder(principal: AuthenticatedPrincipal, input: unknown): Promise<CancelOrderResultV1> {
+    const command = parseCancelOrderCommandV1(input);
+    if (command === undefined) throw applicationError("request");
+    const actorId = await this.authorize(principal, command.scope, "orders.cancel.order");
+    let stored: StoredOrder;
+    try {
+      const result = await this.orders.read(actorId, command.scope, command.orderId);
+      if (result === "missing") throw applicationError("not_found");
+      stored = result;
+    } catch (error: unknown) {
+      if (error instanceof OrderApplicationError) throw error;
+      throw unavailable();
+    }
+    let steps: readonly OrderMutation[] = [];
+    if (stored.version === command.expectedVersion) {
+      // Delivery state and captured money live in SQL, which has the final word (DELIVERY_ACTIVE, obligation).
+      const assessment = assessOrderCancellation({
+        capturedAmountMinor: 0,
+        deliveryStatus: null,
+        items: stored.order.items.map((item) => ({ orderItemId: item.orderItemId, status: item.status })),
+        orderStatus: stored.order.status,
+      });
+      if (!assessment.eligible) throw applicationError("conflict");
+      try {
+        steps = cancelWholeOrder(stored.order, {
+          auditContext: {
+            actorId,
+            authorization: { actorId, approved: true as const },
+            deviceId: command.deviceId,
+            eventId: command.eventId,
+            idempotencyKey: command.idempotencyKey,
+            occurredAt: command.occurredAt,
+            reason: command.reason,
+          },
+          lineContexts: Object.fromEntries(assessment.itemsNeedingKitchenCorrection.map((orderItemId) => [orderItemId, {
+            eventId: derivedUuid("cancel-order-event", command.eventId, `${command.orderId}:${command.expectedVersion}:${orderItemId}`),
+            idempotencyKey: derivedUuid("cancel-order-idempotency", command.idempotencyKey, `${command.orderId}:${command.expectedVersion}:${orderItemId}`),
+          }])),
+          refundObligation: stored.order.status === "partially_paid" || stored.order.status === "paid" ? "pending" : "none",
+        });
+      } catch { throw applicationError("conflict"); }
+    }
+    // A stale version sends no steps: SQL still resolves an identical retry as a replay (the stored result), and
+    // anything else under that key or version is a conflict with no effects.
+    let result: CancelWholeOrderResult;
+    try { result = await this.orders.cancelWholeOrder(actorId, command, steps); } catch { throw unavailable(); }
+    if (result.status === "forbidden") throw applicationError("authorization");
+    if (result.status === "delivery_active") throw new OrderDeliveryActiveError();
+    if (result.status === "conflict") throw result.reason === "payment_in_flight" ? new OrderPaymentInFlightError() : applicationError("conflict");
+    if (result.status !== "saved" && result.status !== "replayed") throw unavailable();
+    if (result.status === "saved") {
+      for (const kdsEvent of result.kdsEvents) {
+        try { await this.notifications.notify(kdsEvent); } catch { /* Durable cursor recovery is authoritative. */ }
+      }
+    }
+    const scope = parseBranchScope({ branchId: result.order.branchId, restaurantId: result.order.restaurantId });
+    if (scope === undefined) throw unavailable();
+    return Object.freeze({
+      kdsEvents: result.kdsEvents,
+      orderId: result.order.orderId,
+      orderStatus: "cancelled" as const,
+      refundObligation: result.refundObligation,
+      replayed: result.status === "replayed",
+      schemaVersion: 1,
+      scope,
+      version: result.version,
+    });
   }
 
   /**
@@ -737,7 +919,7 @@ export class OrderService {
   private async authorize(
     principal: AuthenticatedPrincipal,
     scope: BranchScope,
-    permission: "kds.read" | "kds.transition" | "orders.cancel.pending" | "orders.cancel.sent" | "orders.create" | "orders.read" | "orders.update",
+    permission: "kds.read" | "kds.transition" | "orders.cancel.order" | "orders.cancel.pending" | "orders.cancel.sent" | "orders.create" | "orders.read" | "orders.update",
   ): Promise<string> {
     return (await this.authorizeWithRoles(principal, scope, permission)).actorId;
   }
@@ -745,7 +927,7 @@ export class OrderService {
   private async authorizeWithRoles(
     principal: AuthenticatedPrincipal,
     scope: BranchScope,
-    permission: "kds.read" | "kds.transition" | "orders.cancel.pending" | "orders.cancel.sent" | "orders.create" | "orders.read" | "orders.update",
+    permission: "kds.read" | "kds.transition" | "orders.cancel.order" | "orders.cancel.pending" | "orders.cancel.sent" | "orders.create" | "orders.read" | "orders.update",
   ): Promise<{ readonly actorId: string; readonly roles: readonly MembershipRole[] }> {
     try {
       const authorized = await this.authorization.authorizeBranch(principal, scope, permission);
@@ -822,7 +1004,7 @@ function projectOrderDetail(
   // `total - deliveryCharge`, or a tipped order would silently count its tip as part of the items total.
   const itemsTotalMinor = totals.subtotalBeforeOrderDiscount.amountMinor - totals.orderDiscount.amountMinor;
   return parseOrderDetailV1({
-    availableActions: computeAvailableActions(order, roles),
+    availableActions: computeAvailableActions(order, roles, context?.delivery?.state === undefined || context.delivery.state === "pending" ? null : context.delivery.state),
     channel: order.channel,
     createdAt: null,
     currency: order.currency,
@@ -866,7 +1048,11 @@ const FINANCIAL_ROLES: ReadonlySet<MembershipRole> = new Set(["owner", "admin", 
  * with `orders.cancel.pending` but not `orders.cancel.sent` must never be offered cancellation on a
  * line that already reached KDS, and an order-wide flag can't express that distinction.
  */
-function computeAvailableActions(order: Order, roles: readonly MembershipRole[]): readonly OrderDetailActionV1[] {
+function computeAvailableActions(
+  order: Order,
+  roles: readonly MembershipRole[],
+  deliveryState: "assigned" | "en_route" | "delivered" | "failed" | "settled" | null = null,
+): readonly OrderDetailActionV1[] {
   const actions: OrderDetailActionV1[] = [];
   const canUpdate = rolesGrantPermission(roles, "orders.update");
   const itemMutable = order.status !== "closed" && order.status !== "cancelled";
@@ -885,6 +1071,14 @@ function computeAvailableActions(order: Order, roles: readonly MembershipRole[])
   if ((order.status === "open" || order.status === "partially_paid") && roles.some((role) => FINANCIAL_ROLES.has(role))) {
     actions.push("checkout");
   }
+  // T2: the whole-order cancel is offered only to roles with `orders.cancel.order`, in a cancellable state and with no
+  // active delivery. SQL re-checks all of it; this list only decides what the screen offers.
+  if (rolesGrantPermission(roles, "orders.cancel.order") && assessOrderCancellation({
+    capturedAmountMinor: 0,
+    deliveryStatus: deliveryState,
+    items: order.items.map((item) => ({ orderItemId: item.orderItemId, status: item.status })),
+    orderStatus: order.status,
+  }).eligible) actions.push("cancelOrder");
   return Object.freeze(actions);
 }
 
