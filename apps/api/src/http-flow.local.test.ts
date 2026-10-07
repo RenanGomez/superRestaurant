@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 
+import { cancellationFlow } from "./operations/http-flow-cancellation.js";
 import { cardTransferFlow } from "./operations/http-flow-card-transfer.js";
+import { daySummaryFlow } from "./operations/http-flow-day-summary.js";
 import { deliveryFlow } from "./operations/http-flow-delivery.js";
 import { halvesFlow } from "./operations/http-flow-halves.js";
 import { bootstrapHttpApp } from "./operations/http-test-app.js";
@@ -180,3 +182,7 @@ test("http flow: phone delivery, courier ownership, cash settle with change and 
 test("http flow: half-and-half line quote, selection plan and kitchen ticket", async () => { await halvesFlow(); });
 
 test("http flow: card terminal plus transfer split tender and transfer refused on a delivery in transit", async () => { await cardTransferFlow(); });
+
+test("http flow: whole-order cancellation, refund obligation, active delivery guard and cancelled tray", async () => { await cancellationFlow(); });
+
+test("http flow: branch day summary equals captured payments, role gates and empty day", async () => { await daySummaryFlow(); });
