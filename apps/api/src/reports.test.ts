@@ -55,6 +55,14 @@ test("service returns the parsed summary over a real row", async () => {
   assert.equal(result.salesByChannel.length, 4);
 });
 
+test("service projects refundPendingMinor from a real { result } row, and reads it as 0 from an older reader", async () => {
+  const withRefund = await serviceOver(summary({ cancellations: { captures: 0, orders: 2, refundPendingMinor: 5500 } }))
+    .daySummary(principal, request);
+  assert.equal(withRefund.cancellations.refundPendingMinor, 5500);
+  const older = await serviceOver(summary()).daySummary(principal, request);
+  assert.equal(older.cancellations.refundPendingMinor, 0);
+});
+
 test("service maps SQL statuses and malformed answers to closed errors", async () => {
   const codeOf = async (raw: unknown, input: unknown = request): Promise<string> => {
     try { await serviceOver(raw).daySummary(principal, input); return "ok"; } catch (error) {

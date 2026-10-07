@@ -21,7 +21,7 @@ import { decodeOrderRecord } from "./persistence/order-persistence-codec.js";
 const listSql = "select app_private.list_cancelled_work_items($1::uuid, $2::jsonb) as result";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const ITEM_KEYS = [
-  "kind", "id", "at", "occurredAt", "reason", "actorId", "refundObligationStatus", "capturedMinor", "capturedTipMinor",
+  "kind", "id", "at", "occurredAt", "reason", "actorId", "cancelledByName", "refundObligationStatus", "capturedMinor", "capturedTipMinor",
   "currency", "fromStatus", "version", "channel", "order", "snapshot", "folio", "fulfillmentChannel", "sourceChannel",
 ] as const;
 
@@ -98,10 +98,15 @@ function projectItem(
   scope: { readonly restaurantId: string; readonly branchId: string },
   canReadCustomers: boolean,
 ): CancelledWorkItemV1 | undefined {
-  const record = exactRecord(raw, ITEM_KEYS);
+  // `cancelledByName` is additive: a reader older than 20261007000700 omits it and it reads as null.
+  const record = exactRecord(raw, ITEM_KEYS) ?? exactRecord(raw, ITEM_KEYS.filter((key) => key !== "cancelledByName"));
   if (record === undefined) return undefined;
   const id = own(record, "id");
-  const base = { cancelledAt: own(record, "at"), cancelledByActorId: own(record, "actorId"), reason: own(record, "reason") };
+  const base = {
+    cancelledAt: own(record, "at"), cancelledByActorId: own(record, "actorId"),
+    cancelledByName: Object.hasOwn(record, "cancelledByName") ? own(record, "cancelledByName") : null,
+    reason: own(record, "reason"),
+  };
   if (own(record, "kind") === "capture") {
     return parseCancelledWorkItemV1({
       ...base, captureDraftId: id, folio: own(record, "folio"), fulfillmentChannel: own(record, "fulfillmentChannel"),
