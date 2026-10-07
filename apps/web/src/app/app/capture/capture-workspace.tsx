@@ -60,6 +60,8 @@ import type { CaptureWorkspaceOperation, CaptureWorkspaceResult } from "./action
 import { CaptureMenu } from "./capture-menu";
 import { CapturePayment } from "./capture-payment";
 import { CaptureTicket } from "./capture-ticket";
+import { buildKitchenDocuments, type PrintDocument } from "../../../lib/print-documents";
+import { PrintPreview } from "../print-preview";
 import { ProductSheet } from "./product-sheet";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -117,6 +119,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   const [pending, setPending] = useState<{ operation: CaptureWorkspaceOperation; command: unknown }>();
   const [capture, setCapture] = useState<CaptureDraftDetailV1 | CaptureDraftDetailV2>();
   const [kitchenDetail, setKitchenDetail] = useState<OrderDetailV1>();
+  const [printDocuments, setPrintDocuments] = useState<readonly PrintDocument[]>();
   const [kitchenLoading, setKitchenLoading] = useState(false);
   const [kitchenSending, setKitchenSending] = useState(false);
   const [kitchenNotice, setKitchenNotice] = useState<string>();
@@ -822,6 +825,10 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       }
       setKitchenNotice(captureKitchenResultText(sentLines));
       setKitchenSent(true);
+      try {
+        const printed = await orderDetail(command.orderId);
+        if (printed.ok) setKitchenDetail(printed.value);
+      } catch { /* The kitchen send succeeded; the print button can use the confirmed detail. */ }
     } finally {
       kitchenInFlight.current = false;
       setKitchenSending(false);
@@ -1055,6 +1062,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
         {!kitchenLoading && !kitchenSent && kitchenDetail !== undefined && captureKitchenSend(kitchenDetail) !== undefined &&
           <button type="button" className="mt-4 min-h-11 w-full rounded-lg bg-accent px-5 py-3 text-base font-bold text-white focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 sm:w-auto"
             disabled={kitchenSending} onClick={() => void sendConfirmedOrder()}>{kitchenSending ? "Enviando…" : "Enviar a cocina"}</button>}
+        {kitchenSent && kitchenDetail !== undefined && <button type="button" className={`${button} mt-3`} onClick={() => setPrintDocuments(buildKitchenDocuments(kitchenDetail))}>Imprimir comanda</button>}
         {!kitchenLoading && kitchenNotice === undefined && kitchenDetail !== undefined && captureKitchenSend(kitchenDetail) === undefined &&
           <p role="status" className="mt-3 text-sm">No hay líneas pendientes que puedas enviar a cocina.</p>}
         <div className="mt-4 flex flex-wrap gap-3">
@@ -1062,6 +1070,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
           <a className={`${button} inline-flex items-center`} href={`/app/orders?orderId=${capture.confirmedOrderId}`}>Ver orden</a>
         </div>
       </section>}
+      {printDocuments !== undefined && <PrintPreview documents={printDocuments} onClose={() => setPrintDocuments(undefined)} />}
       <section className={panel}><h2 className="font-heading text-lg font-semibold">Canal y cumplimiento</h2>
         <div className="mt-3 flex flex-wrap gap-3"><label className="text-sm">Origen <select value={sourceChannel} onChange={changeSource}
           className={`${input} ml-2`} disabled={locked}><option value="phone">Teléfono</option><option value="whatsapp_manual">WhatsApp manual</option>

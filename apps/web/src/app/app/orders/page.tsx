@@ -47,6 +47,7 @@ export default async function OrdersPage({ searchParams }: { readonly searchPara
     <MenuImageBaseUrlProvider url={env.supabaseUrl}><OrdersTray scope={scope} action={branchOrderWorkTrayAction} initialOrderId={initialOrderId}
       autoOpenMenu={params.addItem === "1"}
       canCheckout={membership.roles.some((role) => FINANCIAL_ROLES.has(role))}
+      printHeader={{ restaurantName: membership.restaurantName, branchName: membership.branchName }}
       detailActions={{
         addItem: addOrderItemAction,
         cancelItem: cancelOrderItemAction,

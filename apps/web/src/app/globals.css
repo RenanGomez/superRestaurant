@@ -53,3 +53,18 @@ a:hover {
     scroll-behavior: auto !important;
   }
 }
+
+.print-document { width: 80mm; max-width: 100%; }
+.print-documents-58 .print-document { width: 58mm; }
+@media print {
+  @page { margin: 0; }
+  body * { visibility: hidden !important; }
+  .print-preview-overlay, .print-preview-overlay .print-documents, .print-preview-overlay .print-document,
+  .print-preview-overlay .print-document * { visibility: visible !important; }
+  .print-preview-overlay { position: absolute !important; inset: 0 !important; overflow: visible !important; padding: 0 !important; background: white !important; }
+  .print-preview-overlay > div { width: auto !important; max-width: none !important; padding: 0 !important; }
+  .print-controls { display: none !important; }
+  .print-document { margin: 0 !important; padding: 3mm !important; box-shadow: none !important; break-after: page; page-break-after: always; }
+  .print-document:last-child { break-after: auto; page-break-after: auto; }
+  .print-documents-58 .print-document { width: 58mm; }
+}
