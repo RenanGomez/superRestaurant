@@ -34,6 +34,25 @@ export function describeHalves(snapshot: OrderItemPriceSnapshot): readonly Order
 }
 
 /**
+ * Per-half view with ids recovered from the frozen snapshot alone (order detail has no stored
+ * `fraction`): the flavor id is the breakdown entry's `flavorOptionId`, extra ids come from
+ * `extra:<half>:<id>` modifier ids and exclusions are already the ids carried by `describeHalves`.
+ * A half whose ids cannot be recovered completely is returned without ids.
+ */
+export function describeHalvesFromSnapshot(snapshot: OrderItemPriceSnapshot): readonly FractionHalfProjectionV1[] {
+  const flavorIds = new Map((snapshot.fractionBreakdown ?? []).map((entry) => [entry.fraction, entry.flavorOptionId] as const));
+  return describeHalves(snapshot).map((half) => {
+    const flavorOptionId = flavorIds.get(half.fraction);
+    const prefix = `extra:${half.fraction}:`;
+    const extraOptionIds = snapshot.modifiers
+      .filter((modifier) => modifier.groupId === "fraction-extra" && modifier.modifierId.startsWith(prefix))
+      .map((modifier) => modifier.modifierId.slice(prefix.length));
+    if (flavorOptionId === undefined || extraOptionIds.length !== half.extras.length) return half;
+    return { ...half, excludedIngredientIds: [...half.exclusions], extraOptionIds, flavorOptionId };
+  });
+}
+
+/**
  * Same per-half view as `describeHalves` plus the ids of each half's flavor, extras and exclusions,
  * taken from the stored `fraction` of the plan line (never resolved from names). Used by the plan
  * projection and the line quote; order detail keeps the id-free `describeHalves`.

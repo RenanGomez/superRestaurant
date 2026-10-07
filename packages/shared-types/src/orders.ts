@@ -3,9 +3,9 @@ import { parseOrderDeliveryV1, type OrderDeliveryV1 } from "./deliveries.js";
 import { parseKdsEventV1 } from "./realtime.js";
 import {
   parseLineFractionV1,
-  parseOrderDetailFractionHalfV1,
+  parseFractionHalfProjectionV1,
   type LineFractionV1,
-  type OrderDetailFractionHalfV1,
+  type FractionHalfProjectionV1,
 } from "./line-fraction.js";
 
 export const ORDER_COMMAND_SCHEMA_VERSION = 1 as const;
@@ -337,7 +337,7 @@ export interface OrderDetailItemV1 {
   /** `"halves"` for a half-and-half line; optional on input (older servers), `null` in normalized output. */
   readonly geometry?: "halves" | null;
   /** Frozen per-half flavor, price and modifiers for a half-and-half line; empty otherwise. */
-  readonly fractionBreakdown?: readonly OrderDetailFractionHalfV1[];
+  readonly fractionBreakdown?: readonly FractionHalfProjectionV1[];
   readonly quantity: number;
   readonly unitPriceMinor: number;
   readonly lineTotalMinor: number;
@@ -511,7 +511,7 @@ function parseDetailItem(value: unknown, currency: string): OrderDetailItemV1 | 
   const rawGeometry = Object.hasOwn(record, "geometry") ? own(record, "geometry") : null;
   const geometry = rawGeometry === null || rawGeometry === "halves" ? rawGeometry : undefined;
   const rawHalves = Object.hasOwn(record, "fractionBreakdown") ? exactDenseArray(own(record, "fractionBreakdown"), 2) : [];
-  const halves = rawHalves?.map(parseOrderDetailFractionHalfV1);
+  const halves = rawHalves?.map(parseFractionHalfProjectionV1);
   if (geometry === undefined || halves === undefined || halves.some((half) => half === undefined)) return undefined;
   if ((geometry === "halves") !== (halves.length === 2)) return undefined;
   const orderItemId = uuid(own(record, "orderItemId"));
@@ -544,7 +544,7 @@ function parseDetailItem(value: unknown, currency: string): OrderDetailItemV1 | 
   }
   void currency;
   return Object.freeze({
-    availableActions: Object.freeze(availableActions), fractionBreakdown: Object.freeze(halves as OrderDetailFractionHalfV1[]),
+    availableActions: Object.freeze(availableActions), fractionBreakdown: Object.freeze(halves as FractionHalfProjectionV1[]),
     geometry, lineTotalMinor, modifiers: Object.freeze(modifiers),
     name, note, orderItemId, quantity, status: status as OrderDetailItemV1["status"], unitPriceMinor, variantName,
   });
