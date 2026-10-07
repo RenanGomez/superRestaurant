@@ -944,6 +944,7 @@ test("order service detail reports the frozen line tax as taxMinor", async () =>
     },
   }, { ...audit, actorId: principal.actorId }).order;
   const port: OrderPersistencePort = {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
     listKdsTickets: async () => "forbidden",
     persist: async () => ({ status: "conflict" }),
     read: async () => ({ order: taxed, version: 2 }),
