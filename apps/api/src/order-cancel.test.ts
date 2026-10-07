@@ -102,6 +102,7 @@ function fakePort(stored: Order, version: number, result: (steps: number) => Can
     persist: async () => ({ status: "conflict" }),
     read: async () => ({ order: stored, version }),
     readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => "missing" as const,
     recoverKds: async () => "forbidden",
     sendOrderToKitchen: async () => { throw new Error("not used"); },
   };

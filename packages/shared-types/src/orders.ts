@@ -1,5 +1,6 @@
 import type { BranchScope } from "./index.js";
 import { parseOrderDeliveryV1, type OrderDeliveryV1 } from "./deliveries.js";
+import { SIMPLE_PAYMENT_METHODS, type SimplePaymentMethodV1 } from "./payments.js";
 import { parseKdsEventV1 } from "./realtime.js";
 import {
   parseLineFractionV1,
@@ -409,8 +410,8 @@ export interface OrderDetailV1 {
   readonly currency: string;
   readonly timeZone: string;
   /**
-   * Both are `null` today: `OrderPersistencePort.read` returns only the aggregate and its version,
-   * not a row timestamp, so this endpoint does not yet expose either -- never invented client-side.
+   * `createdAt` is the Order row's own timestamp (server-read for the printed ticket); `null` only when the
+   * receipt facts were unavailable. `updatedAt` is still `null`. Never invented client-side.
    */
   readonly createdAt: string | null;
   readonly updatedAt: string | null;
@@ -421,6 +422,79 @@ export interface OrderDetailV1 {
   /** Additive: dispatch/settlement facts of a delivery Order; `null` for other channels or before assignment. */
   readonly delivery?: OrderDeliveryV1 | null;
   readonly availableActions: readonly OrderDetailActionV1[];
+  /** Additive. Server-derived reading aid (first 8 characters of the Order id, upper case); not a unique key. `null` when absent. */
+  readonly shortFolio: string | null;
+  /** Additive. Captured payments of the Order, oldest first, for the printed ticket; `[]` when absent or none. */
+  readonly payments: readonly OrderPaymentV1[];
+}
+
+/** One captured payment as printed on the ticket. Minor units only; `transferReference` only for a transfer. */
+export interface OrderPaymentV1 {
+  readonly paymentId: string;
+  readonly method: SimplePaymentMethodV1;
+  readonly amountMinor: number;
+  readonly tipMinor: number;
+  readonly tenderedAmountMinor: number | null;
+  readonly changeMinor: number | null;
+  readonly transferReference: string | null;
+  readonly capturedAt: string;
+}
+
+export const ORDER_RECEIPT_DATA_SCHEMA_VERSION = 1 as const;
+export const MAX_ORDER_RECEIPT_PAYMENTS = 200 as const;
+
+/** The SQL `read_order_receipt_data` result. */
+export interface OrderReceiptDataV1 {
+  readonly schemaVersion: typeof ORDER_RECEIPT_DATA_SCHEMA_VERSION;
+  readonly createdAt: string;
+  readonly shortFolio: string;
+  readonly payments: readonly OrderPaymentV1[];
+}
+
+export function parseOrderPaymentV1(value: unknown): OrderPaymentV1 | undefined {
+  const record = exactRecord(value, [
+    "paymentId", "method", "amountMinor", "tipMinor", "tenderedAmountMinor", "changeMinor", "transferReference", "capturedAt",
+  ]);
+  if (record === undefined) return undefined;
+  const paymentId = uuid(own(record, "paymentId"));
+  const method = own(record, "method");
+  const amountMinor = integer(own(record, "amountMinor"), 1, Number.MAX_SAFE_INTEGER);
+  const tipMinor = integer(own(record, "tipMinor"), 0, Number.MAX_SAFE_INTEGER);
+  const rawTendered = own(record, "tenderedAmountMinor");
+  const tenderedAmountMinor = rawTendered === null ? null : integer(rawTendered, 1, Number.MAX_SAFE_INTEGER);
+  const rawChange = own(record, "changeMinor");
+  const changeMinor = rawChange === null ? null : integer(rawChange, 0, Number.MAX_SAFE_INTEGER);
+  const rawReference = own(record, "transferReference");
+  const transferReference = rawReference === null ? null : text(rawReference, 1, 64);
+  const capturedAt = timestamp(own(record, "capturedAt"));
+  if (
+    paymentId === undefined || typeof method !== "string" || !(SIMPLE_PAYMENT_METHODS as readonly string[]).includes(method)
+    || amountMinor === undefined || tipMinor === undefined || tenderedAmountMinor === undefined || changeMinor === undefined
+    || transferReference === undefined || capturedAt === undefined
+    || (transferReference !== null && method !== "transfer")
+    || (tenderedAmountMinor === null) !== (changeMinor === null)
+    || (tenderedAmountMinor !== null && method !== "cash")
+  ) return undefined;
+  return Object.freeze({
+    amountMinor, capturedAt, changeMinor, method: method as SimplePaymentMethodV1, paymentId, tenderedAmountMinor,
+    tipMinor, transferReference,
+  });
+}
+
+export function parseOrderReceiptDataV1(value: unknown): OrderReceiptDataV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "createdAt", "shortFolio", "payments"]);
+  if (record === undefined || own(record, "schemaVersion") !== ORDER_RECEIPT_DATA_SCHEMA_VERSION) return undefined;
+  const createdAt = timestamp(own(record, "createdAt"));
+  const shortFolio = text(own(record, "shortFolio"), 1, 16);
+  const raw = exactDenseArray(own(record, "payments"), MAX_ORDER_RECEIPT_PAYMENTS);
+  if (createdAt === undefined || shortFolio === undefined || raw === undefined) return undefined;
+  const payments: OrderPaymentV1[] = [];
+  for (const entry of raw) {
+    const payment = parseOrderPaymentV1(entry);
+    if (payment === undefined) return undefined;
+    payments.push(payment);
+  }
+  return Object.freeze({ createdAt, payments: Object.freeze(payments), schemaVersion: ORDER_RECEIPT_DATA_SCHEMA_VERSION, shortFolio });
 }
 
 export function parseOrderDetailRequestV1(value: unknown): OrderDetailRequestV1 | undefined {
@@ -437,10 +511,14 @@ export function parseOrderDetailV1(value: unknown): OrderDetailV1 | undefined {
   const record = exactRecordWithOptional(value, [
     "schemaVersion", "scope", "orderId", "status", "channel", "tableId", "currency", "timeZone",
     "createdAt", "updatedAt", "version", "items", "totals", "fulfillment", "availableActions",
-  ], ["delivery"]);
+  ], ["delivery", "shortFolio", "payments"]);
   if (record === undefined || own(record, "schemaVersion") !== ORDER_DETAIL_SCHEMA_VERSION) return undefined;
   const scope = parseScope(own(record, "scope"));
   const orderId = uuid(own(record, "orderId"));
+  const rawShortFolio = Object.hasOwn(record, "shortFolio") ? own(record, "shortFolio") : null;
+  const shortFolio = rawShortFolio === null ? null : text(rawShortFolio, 1, 16);
+  const rawPayments = Object.hasOwn(record, "payments") ? exactDenseArray(own(record, "payments"), MAX_ORDER_RECEIPT_PAYMENTS) : [];
+  const parsedPayments = rawPayments?.map(parseOrderPaymentV1);
   const status = own(record, "status");
   const channel = own(record, "channel");
   const rawTableId = own(record, "tableId");
@@ -468,6 +546,7 @@ export function parseOrderDetailV1(value: unknown): OrderDetailV1 | undefined {
     || !(ORDER_STATUSES as readonly string[]).includes(status) || typeof channel !== "string"
     || !(ORDER_CHANNELS as readonly string[]).includes(channel) || tableId === undefined
     || (channel === "table") !== (tableId !== null) || currency === undefined || timeZone === undefined
+    || shortFolio === undefined || parsedPayments === undefined || parsedPayments.some((payment) => payment === undefined)
     || createdAt === undefined || updatedAt === undefined || version === undefined || rawItems === undefined
     || totals === undefined || fulfillment === undefined || rawActions === undefined
   ) return undefined;
@@ -496,8 +575,10 @@ export function parseOrderDetailV1(value: unknown): OrderDetailV1 | undefined {
     fulfillment,
     items: Object.freeze(items),
     orderId,
+    payments: Object.freeze(parsedPayments as OrderPaymentV1[]),
     schemaVersion: ORDER_DETAIL_SCHEMA_VERSION,
     scope,
+    shortFolio,
     status: status as OrderDetailV1["status"],
     tableId,
     timeZone,

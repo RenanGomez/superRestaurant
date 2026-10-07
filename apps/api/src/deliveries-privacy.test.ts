@@ -118,7 +118,7 @@ test("list for customers.read roles keeps the masked projection and rejects an i
 test("order detail without customers.read nulls the labels and instructions; with it they appear", async () => {
   const detailFor = async (roles: readonly string[]) => {
     const memberships = { findActiveMembership: async () => ({ roles: roles as never, scope: validScope }) };
-    const orders = { read: async () => ({ order: deliveryOrder(), version: 1 }) };
+    const orders = { read: async () => ({ order: deliveryOrder(), version: 1 }), readReceiptData: async () => "missing" as const };
     const context: OrderDeliveryContextPort = {
       read: async () => ({ delivery: null, snapshot: snapshot() as never }),
     };

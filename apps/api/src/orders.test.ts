@@ -197,6 +197,7 @@ test("order service creates, snapshots catalog items, transitions, and only noti
     read: async () => ({ order: storedOrder, version: storedVersion }),
     recoverKds: async () => eventPage,
     readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const service = serviceFor(["manager"], orders, {
@@ -236,6 +237,7 @@ test("order service creates, snapshots catalog items, transitions, and only noti
     read: async () => ({ order: pendingOrder, version: 2 }),
     recoverKds: async () => eventPage,
     readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const pendingCancelCommand = parseCancelOrderItemCommandV1({
@@ -319,6 +321,7 @@ test("order service keeps v1 compatible and binds only v2 creation to an operati
     read: async () => ({ order: domainMutation.order, version: 1 }),
     recoverKds: async () => eventPage,
     readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const service = serviceFor(["manager"], orders);
@@ -359,6 +362,7 @@ test("order service passes a null shiftId to SQL untouched; SQL resolves the shi
     read: async () => ({ order: domainMutation.order, version: 1 }),
     recoverKds: async () => eventPage,
     readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const service = serviceFor(["manager"], orders);
@@ -411,6 +415,7 @@ test("order service accepts the mobile handoff sequence through v2 create, item 
     },
     recoverKds: async () => eventPage,
     readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const service = serviceFor(["waiter"], orders);
@@ -496,6 +501,7 @@ test("order service enforces permission, optimistic version, and domain transiti
     read: async () => ({ order: domainMutation.order, version: 1 }),
     recoverKds: async () => "forbidden",
     readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   await assertCode(serviceFor(["viewer"], port).create(principal, createCommand), "authorization");
@@ -556,6 +562,7 @@ test("order service detail scopes access, reduces PII, and computes actions from
     read: async () => ({ order: sentSecondItem, version: 4 }),
     recoverKds: async () => "forbidden",
     readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const detailRequest = { orderId, schemaVersion: 1 as const, scope };
@@ -617,6 +624,7 @@ function fakeSendToKitchenPort(initialOrder: Order, initialVersion: number): {
     read: async () => ({ order, version }),
     recoverKds: async () => "forbidden",
     readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => "missing" as const,
     sendOrderToKitchen: async (_actorId, expectedVersion, command, steps) => {
       const existing = commandsByKey.get(command.idempotencyKey);
       if (existing !== undefined) {
@@ -904,6 +912,7 @@ test("order service detail never offers open and sendToKitchen together for the 
     read: async () => ({ order: tableOrder, version: 1 }),
     recoverKds: async () => "forbidden",
     readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const emptyDetail = await serviceFor(["manager"], emptyPort).detail(principal, { orderId, schemaVersion: 1 as const, scope });
@@ -950,12 +959,103 @@ test("order service detail reports the frozen line tax as taxMinor", async () =>
     read: async () => ({ order: taxed, version: 2 }),
     recoverKds: async () => "forbidden",
     readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const detail = await serviceFor(["manager"], port).detail(principal, { orderId, schemaVersion: 1 as const, scope });
   assert.equal(detail.totals.taxMinor, 1_600);
   assert.equal(detail.totals.itemsTotalMinor, 11_600);
   assert.equal(detail.items[0]?.stationId, "kitchen");
+});
+
+const receiptPaymentRow = {
+  amountMinor: 3_000, capturedAt: "2026-10-06T12:01:00.123Z", changeMinor: 1_800, method: "cash",
+  paymentId: "5d1c2c3e-4f50-4a61-8b72-93a4b5c6d7e8", tenderedAmountMinor: 5_000, tipMinor: 200, transferReference: null,
+};
+const receiptTransferRow = {
+  amountMinor: 1_500, capturedAt: "2026-10-06T12:02:00.123Z", changeMinor: null, method: "transfer",
+  paymentId: "6d1c2c3e-4f50-4a61-8b72-93a4b5c6d7e8", tenderedAmountMinor: null, tipMinor: 0, transferReference: "SPEI-123",
+};
+
+function receiptPort(receipt: unknown): OrderPersistencePort {
+  const draft = createOrder({
+    branchId: scope.branchId, channel: "counter", currency: "MXN", orderId, restaurantId: scope.restaurantId,
+    timeZone: "America/Mexico_City",
+  }, { ...audit, actorId: principal.actorId }).order;
+  return {
+    cancelWholeOrder: () => Promise.resolve({ status: "conflict" as const }),
+    listKdsTickets: async () => "forbidden",
+    persist: async () => ({ status: "conflict" }),
+    read: async () => ({ order: draft, version: 2 }),
+    readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => receipt as never,
+    recoverKds: async () => "forbidden",
+    sendOrderToKitchen: notImplementedSendOrderToKitchen,
+  };
+}
+
+test("order detail projects createdAt, shortFolio and captured payments from the receipt reader", async () => {
+  const request = { orderId, schemaVersion: 1 as const, scope };
+  const none = await serviceFor(["manager"], receiptPort({
+    createdAt: "2026-10-06T12:00:00.123Z", payments: [], schemaVersion: 1, shortFolio: "EE50F0F6",
+  })).detail(principal, request);
+  assert.equal(none.createdAt, "2026-10-06T12:00:00.123Z");
+  assert.equal(none.shortFolio, "EE50F0F6");
+  assert.deepEqual(none.payments, []);
+  const two = await serviceFor(["manager"], receiptPort({
+    createdAt: "2026-10-06T12:00:00.123Z", payments: [receiptPaymentRow, receiptTransferRow], schemaVersion: 1, shortFolio: "EE50F0F6",
+  })).detail(principal, request);
+  assert.deepEqual(two.payments.map((payment) => [payment.method, payment.amountMinor, payment.transferReference]), [
+    ["cash", 3_000, null], ["transfer", 1_500, "SPEI-123"],
+  ]);
+  assert.equal(two.payments[0]?.changeMinor, 1_800);
+  // The reader answering "missing" never invents facts: null folio/date and no payments.
+  const missing = await serviceFor(["manager"], receiptPort("missing")).detail(principal, request);
+  assert.equal(missing.createdAt, null);
+  assert.equal(missing.shortFolio, null);
+  assert.deepEqual(missing.payments, []);
+});
+
+test("order detail emits payments only to financial roles; waiter and kitchen keep folio and date", async () => {
+  const request = { orderId, schemaVersion: 1 as const, scope };
+  const receipt = {
+    createdAt: "2026-10-06T12:00:00.123Z", payments: [receiptPaymentRow, receiptTransferRow], schemaVersion: 1, shortFolio: "EE50F0F6",
+  };
+  for (const role of ["waiter", "kitchen"] as const) {
+    const detail = await serviceFor([role], receiptPort(receipt)).detail(principal, request);
+    assert.deepEqual(detail.payments, [], role);
+    assert.equal(detail.shortFolio, "EE50F0F6");
+    assert.equal(detail.createdAt, "2026-10-06T12:00:00.123Z");
+  }
+  for (const role of ["cashier", "manager", "viewer"] as const) {
+    assert.equal((await serviceFor([role], receiptPort(receipt)).detail(principal, request)).payments.length, 2, role);
+  }
+});
+
+test("order detail fails closed (503) when the receipt reader throws", async () => {
+  const request = { orderId, schemaVersion: 1 as const, scope };
+  const port = { ...receiptPort(null), readReceiptData: async () => { throw new Error("secret connection string"); } };
+  await assertCode(serviceFor(["manager"], port).detail(principal, request), "unavailable");
+});
+
+test("the Postgres receipt reader parses a real { result } row and rejects anything malformed", async () => {
+  const sqls: string[] = [];
+  const params: unknown[][] = [];
+  const row = { createdAt: "2026-10-06T12:00:00.123Z", payments: [receiptPaymentRow], schemaVersion: 1, shortFolio: "EE50F0F6" };
+  const adapter = new PostgresOrderPersistenceAdapter({
+    query: async (sql: string, values: unknown[]) => { sqls.push(sql); params.push(values); return { rows: [{ result: row }] }; },
+  } as never);
+  const data = await adapter.readReceiptData(principal.actorId, scope, orderId);
+  assert.notEqual(data, "missing");
+  assert.equal(data === "missing" ? "" : data.shortFolio, "EE50F0F6");
+  assert.match(sqls[0] ?? "", /app_private\.read_order_receipt_data/u);
+  assert.deepEqual(params[0], [principal.actorId, scope.restaurantId, scope.branchId, orderId]);
+  const none = new PostgresOrderPersistenceAdapter({ query: async () => ({ rows: [{ result: null }] }) } as never);
+  assert.equal(await none.readReceiptData(principal.actorId, scope, orderId), "missing");
+  const bare = new PostgresOrderPersistenceAdapter({ query: async () => ({ rows: [row] }) } as never);
+  await assert.rejects(bare.readReceiptData(principal.actorId, scope, orderId));
+  const bad = new PostgresOrderPersistenceAdapter({ query: async () => ({ rows: [{ result: { ...row, shortFolio: "" } }] }) } as never);
+  await assert.rejects(bad.readReceiptData(principal.actorId, scope, orderId));
 });
 
 test("order service detail on a cancelled order with a frozen delivery charge never reports it in totals", async () => {
@@ -979,6 +1079,7 @@ test("order service detail on a cancelled order with a frozen delivery charge ne
     read: async () => ({ order: cancelled, version: 2 }),
     recoverKds: async () => "forbidden",
     readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
   const detail = await serviceFor(["manager"], port).detail(principal, { orderId, schemaVersion: 1 as const, scope });
@@ -1118,6 +1219,7 @@ function capturingOrders(saved: { order?: Order }): OrderPersistencePort {
     read: async () => ({ order: saved.order ?? domainMutation.order, version: saved.order === undefined ? 1 : 2 }),
     recoverKds: async () => eventPage!,
     readAssignedToCourier: async () => "missing" as const,
+    readReceiptData: async () => "missing" as const,
     sendOrderToKitchen: notImplementedSendOrderToKitchen,
   };
 }
