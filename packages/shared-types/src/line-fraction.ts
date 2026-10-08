@@ -1,7 +1,8 @@
 /**
  * Half-and-half ("mitad y mitad") selection carried by a capture selection line or an add-item
- * command. It holds ids and labels only: the server prices it from the catalog (greater flavor
- * price plus halved extras) and freezes the result with the per-half breakdown.
+ * command. It holds ids and labels only: the server prices it from the catalog (greater half base
+ * price plus halved extras/ingredients) and freezes the result with the per-half breakdown. A slot
+ * whose `flavorOptionId` is null is a half built ingredient by ingredient.
  */
 export const LINE_FRACTION_MAX_EXTRAS = 20 as const;
 export const LINE_FRACTION_MAX_EXCLUSIONS = 40 as const;
@@ -11,8 +12,10 @@ export type LineFractionHalfV1 = (typeof LINE_FRACTION_HALVES)[number];
 
 export interface LineFractionSlotV1 {
   readonly excludedIngredientIds: readonly string[];
+  /** Ingredients (options of the product's ingredient group) of this half. */
   readonly extraOptionIds: readonly string[];
-  readonly flavorOptionId: string;
+  /** `null` is a half built ingredient by ingredient; at least one half of a line must name a flavor. */
+  readonly flavorOptionId: string | null;
   readonly fraction: LineFractionHalfV1;
 }
 
@@ -39,7 +42,8 @@ export interface OrderDetailFractionHalfV1 {
 export interface FractionHalfProjectionV1 extends OrderDetailFractionHalfV1 {
   readonly excludedIngredientIds?: readonly string[];
   readonly extraOptionIds?: readonly string[];
-  readonly flavorOptionId?: string;
+  /** `null` for a half built ingredient by ingredient. */
+  readonly flavorOptionId?: string | null;
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -53,6 +57,8 @@ export function parseLineFractionV1(value: unknown): LineFractionV1 | undefined 
   const slots = rawSlots.map(parseSlot);
   if (slots.some((slot) => slot === undefined)) return undefined;
   const parsed = slots as LineFractionSlotV1[];
+  // Two halves built ingredient by ingredient are a whole pizza built with ordinary modifiers.
+  if (parsed.every((slot) => slot.flavorOptionId === null)) return undefined;
   const ordered = [...parsed].sort((left, right) => (left.fraction === "half-a" ? -1 : right.fraction === "half-a" ? 1 : 0));
   if (ordered[0]?.fraction !== "half-a" || ordered[1]?.fraction !== "half-b") return undefined;
   return Object.freeze({ geometry: "halves" as const, slots: Object.freeze(ordered) });
@@ -62,7 +68,7 @@ function parseSlot(value: unknown): LineFractionSlotV1 | undefined {
   const record = exactRecord(value, ["fraction", "flavorOptionId", "extraOptionIds", "excludedIngredientIds"]);
   if (record === undefined) return undefined;
   const fraction = own(record, "fraction");
-  const flavorOptionId = uuid(own(record, "flavorOptionId"));
+  const flavorOptionId = nullableUuid(own(record, "flavorOptionId"));
   const rawExtras = denseArray(own(record, "extraOptionIds"), LINE_FRACTION_MAX_EXTRAS);
   const rawExclusions = denseArray(own(record, "excludedIngredientIds"), LINE_FRACTION_MAX_EXCLUSIONS);
   if (
@@ -113,7 +119,7 @@ export function parseFractionHalfProjectionV1(value: unknown): FractionHalfProje
   const withIds = exactRecord(value, [...base, "flavorOptionId", "extraOptionIds", "excludedIngredientIds"]);
   if (withIds === undefined) return parseOrderDetailFractionHalfV1(value);
   const half = parseOrderDetailFractionHalfV1(Object.fromEntries(base.map((key) => [key, own(withIds, key)])));
-  const flavorOptionId = uuid(own(withIds, "flavorOptionId"));
+  const flavorOptionId = nullableUuid(own(withIds, "flavorOptionId"));
   const rawExtras = denseArray(own(withIds, "extraOptionIds"), LINE_FRACTION_MAX_EXTRAS);
   const rawExclusions = denseArray(own(withIds, "excludedIngredientIds"), LINE_FRACTION_MAX_EXCLUSIONS);
   if (half === undefined || flavorOptionId === undefined || rawExtras === undefined || rawExclusions === undefined) return undefined;
@@ -158,6 +164,11 @@ function own(record: Readonly<Record<string, unknown>>, key: string): unknown {
 
 function uuid(value: unknown): string | undefined {
   return typeof value === "string" && UUID_PATTERN.test(value) ? value.toLowerCase() : undefined;
+}
+
+/** A flavor id: a UUID, or `null` for a half built ingredient by ingredient; `undefined` when invalid. */
+function nullableUuid(value: unknown): string | null | undefined {
+  return value === null ? null : uuid(value);
 }
 
 /** An ingredient label: trimmed, 1-80 characters, no control characters. */

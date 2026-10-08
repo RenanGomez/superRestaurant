@@ -283,7 +283,6 @@ function parseSelectionLine(value: unknown): CaptureSelectionLineV1 | undefined 
     groupIds.add(group.groupId);
     modifierGroups.push(group);
   }
-  if (fraction !== undefined && variantId === null) return undefined;
   return deepFreeze({ ...(fraction === undefined ? {} : { fraction }), lineId, modifierGroups, note, productId, quantity, variantId });
 }
 

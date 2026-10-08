@@ -67,7 +67,7 @@ export function parseCaptureLineQuoteRequestV1(value: unknown): CaptureLineQuote
     return undefined;
   }
   const rawFraction = own(record, "fraction");
-  // Delegate the line shape (uuids, modifier groups, halves, variant required for halves) to the plan parser.
+  // Delegate the line shape (uuids, modifier groups, halves; the size is optional because halves are configured on the product) to the plan parser.
   const plan = parseCaptureSelectionPlanV1({
     schemaVersion: 1,
     catalogVersion: own(record, "catalogVersion"),

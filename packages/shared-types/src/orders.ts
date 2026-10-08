@@ -880,7 +880,6 @@ export function parseAddOrderItemCommandV1(value: unknown): AddOrderItemCommandV
   return common === undefined || scope === undefined || orderId === undefined || orderItemId === undefined
     || productId === undefined || expectedVersion === undefined || quantity === undefined || modifierGroups === undefined
     || variantId === undefined || note === undefined || fraction === undefined
-    || (fraction !== null && variantId === null)
     ? undefined
     : Object.freeze({ ...common, expectedVersion, fraction, modifierGroups, note, orderId, orderItemId, productId, quantity, schemaVersion: 1, scope, variantId });
 }
