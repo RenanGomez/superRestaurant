@@ -39,7 +39,7 @@ export function AppNav({ canAccessSystemAdmin, canReadReports, branchName }: { r
         const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
         return (
           <a key={link.href} href={link.href} title={link.label} aria-label={link.label} aria-current={active ? "page" : undefined}
-            className={`flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl border px-1 py-1 text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white lg:flex-row lg:justify-start lg:gap-3 lg:px-3 ${active ? "border-accent bg-accent" : "border-transparent hover:bg-white/10"}`}>
+            className={`flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl border px-1 py-1 !text-white hover:!text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white lg:flex-row lg:justify-start lg:gap-3 lg:px-3 ${active ? "border-white/40 bg-accent-hover font-semibold" : "border-transparent hover:bg-white/10"}`}>
             <svg aria-hidden="true" className="shrink-0" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{link.icon}</svg>
             <span className="max-w-full truncate text-[10px] font-medium leading-tight lg:text-sm">{SHORT_LABELS[link.href] ?? link.label}</span>
           </a>
