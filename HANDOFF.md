@@ -6,7 +6,9 @@
 - Diagnóstico L0 (CodeGraph): `AppNav` usa `<a>` (recarga completa por clic); layout + página + proxy repiten `getSession`/`listMemberships`/`authorizeBranch` en serie; `FocusRevalidate` y `TablesBoard` refrescan en `focus` y `visibilitychange` (el «Rendering» es el indicador de `next dev`); `planCanvasStyle` limita el ancho a 70vh×proporción; el editor sólo guarda con el formulario «Guardar layout»; `CreateTableForm` es un `<details>` sin cancelar; la capacidad es independiente del tamaño en SQL (`capacity between 1 and 50`) pero no hay comando para editarla.
 - Delegado en paralelo (Codex falla por entorno: `helper_unknown_error`; desviación §19.1 como en la ronda anterior): implementer-claude `web-tables-smoke-r2` (C, sonnet) y implementer-claude `dining-table-details-api` (A, sonnet). Archivos disjuntos; la UI programa contra el contrato fijado en el paquete A.
 - La tarea de menú `web-menu-smoke-fixes` (Codex) murió por el mismo error de entorno sin cambios en su worktree; sigue pendiente.
-- Siguiente: revisar ambos diffs (Sonnet para A + Codex review si vuelve; una ronda para C), integrar, aplicar la migración `20261008000100` con el runbook previa autorización de Emmanuel, verificación visual de Emmanuel. Decisión abierta: unir mesas.
+- Resultado: ambas ramas integradas en main (web `f9e7c3e`; API y `e861ef0` en `5f93de3`). Puertas web lint/typecheck/test/build, shared-types y api verdes con Node 24.19.0 (`C:\Users\Emmanuel G\AppData\Local\Programs\node24`; invocar pnpm con la ruta entre comillas). Verificador SQL de detalles verde 3/5 con catálogo 96→97→96 funciones; los fallos son timeouts del arnés. Codex review no corre (`helper_unknown_error`), sólo Sonnet. CodeGraph se desconectó a mitad de sesión; el análisis posterior se cubrió con typecheck y pruebas.
+- Decisión de Emmanuel: unir mesas «al abrir cuenta» (PROJECT_NOTES). Siguiente tarea `tables-join-on-open` (A).
+- Siguiente: autorización de Emmanuel para aplicar `20261008000100` con el runbook; reiniciar web dev (8082) y API local; prueba visual de Emmanuel.
 
 ## Menú, segunda ronda del smoke — 2026-10-07 tarde (IN_PROGRESS)
 
