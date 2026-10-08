@@ -12,7 +12,7 @@ import type {
 } from "@super-restaurant/shared-types";
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
-import { CheckField, Field, FieldHint, LabelText } from "../../../components/field-hint";
+import { CheckField, Field, FieldHint } from "../../../components/field-hint";
 import { MENU_DEFAULT_UNIT, MENU_OTHER_STATION, MENU_STATION_MAX_LENGTH, stationValues, unitOptions } from "../../../lib/menu-fields";
 import { shrinkMenuImage } from "../../../lib/menu-image-resize";
 import { applyRemoval, removalNeedsConfirmation, type Removal } from "../../../lib/menu-removal";
@@ -318,8 +318,8 @@ function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct
       </section>
 
       <div className="mt-3 rounded-xl border border-border bg-surface p-3">
-        <CheckField className="inline-flex min-h-10 items-center gap-2 text-[12px] font-semibold" hint="Marca si este producto causa IVA u otro impuesto. El impuesto se calcula siempre en el servidor con la regla indicada aquí." label="Aplicar impuesto">{(id) =>
-          <input id={id} disabled={!canManage} type="checkbox" checked={product.tax !== null} onChange={(event) => change({ tax: event.target.checked ? { inclusion: "included", name: "IVA", rateDenominator: 100, rateNumerator: 16, taxId: "iva", taxRuleVersion: "1" } : null })} />}</CheckField>
+        <CheckField labelClassName="flex min-h-11 items-center" className="inline-flex min-h-11 items-center gap-2 text-[12px] font-semibold" hint="Marca si este producto causa IVA u otro impuesto. El impuesto se calcula siempre en el servidor con la regla indicada aquí." label="Aplicar impuesto">{(id) =>
+          <input id={id} disabled={!canManage} type="checkbox" className="h-5 w-5" checked={product.tax !== null} onChange={(event) => change({ tax: event.target.checked ? { inclusion: "included", name: "IVA", rateDenominator: 100, rateNumerator: 16, taxId: "iva", taxRuleVersion: "1" } : null })} />}</CheckField>
         {tax !== null && (
           <div className="mt-2 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
             <TextInput disabled={!canManage} hint="Identificador corto del impuesto, por ejemplo iva. Sirve para agrupar impuestos en reportes." label="Clave" maxLength={64} value={tax.taxId} onChange={(taxId) => change({ tax: { ...tax, taxId } })} />
@@ -379,7 +379,7 @@ function FractionEditor({ canManage, fraction, groups, notice, productName, onCh
   };
   const select = "min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70";
   return <div className="grid gap-3 border-t border-border pt-3 sm:col-span-full">
-    <CheckField className="inline-flex min-h-11 flex-wrap items-center gap-2 text-[13px] font-semibold" label="Permitir mitades"
+    <CheckField labelClassName="flex min-h-11 items-center" className="inline-flex min-h-11 flex-wrap items-center gap-2 text-[13px] font-semibold" label="Permitir mitades"
       hint="Cada mitad lleva un sabor del grupo de sabores; una de las dos puede armarse con ingredientes si eliges un grupo de ingredientes. Aplica a todos los tamaños.">{(id) =>
       <input id={id} type="checkbox" className="h-5 w-5" disabled={!canManage} checked={fraction.enabled}
         onChange={(event) => update({ enabled: event.target.checked })} />}</CheckField>
@@ -455,7 +455,7 @@ function ModifierGroupEditor({ siblingCount, siblingIndex, onMoveGroup, canManag
         <ReorderControls count={siblingCount} disabled={!canManage} index={siblingIndex} label={group.name} listKey={`groups-${group.productId}`} onMove={onMoveGroup} />
         <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={group.active} onChange={(active) => change({ active })} />{canManage && <RemoveButton label={`Quitar ${group.name}`} onClick={() => onRemove({ id: group.groupId, kind: "group", label: group.name })} />}</div>
       </div>
-      <div className="mt-3 flex items-center justify-between gap-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted"><LabelText hint="Cada opción es una alternativa del grupo (por ejemplo Pepperoni) con su precio extra, que puede ser 0.">Opciones</LabelText></p>{canManage && <AddButton label="Agregar opción" onClick={onAddOption} />}</div>
+      <div className="mt-3 flex items-center justify-between gap-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted"><span className="inline-flex flex-wrap items-center gap-1.5">Opciones<FieldHint label="Opciones" text="Cada opción es una alternativa del grupo (por ejemplo Pepperoni) con su precio extra, que puede ser 0." /></span></p>{canManage && <AddButton label="Agregar opción" onClick={onAddOption} />}</div>
       <div className="mt-2 grid gap-2 lg:grid-cols-2">
         {group.options.map((option) => (
           <div key={option.optionId} className="grid gap-2 rounded-lg border border-border bg-bg/50 p-2 sm:grid-cols-[1fr_170px_140px_auto]">
@@ -651,7 +651,7 @@ function NullableNumberInput({ disabled, hint, label, max, min, onChange, value 
 }
 
 function ActiveInput({ checked, disabled, onChange }: { readonly checked: boolean; readonly disabled: boolean; readonly onChange: (value: boolean) => void }): ReactNode {
-  return <CheckField className="inline-flex min-h-10 items-center gap-1.5 whitespace-nowrap text-[11px] font-medium" hint={ACTIVE_HINT} label="Activo">{(id) => <input id={id} type="checkbox" disabled={disabled} checked={checked} onChange={(event) => onChange(event.target.checked)} />}</CheckField>;
+  return <CheckField labelClassName="flex min-h-11 items-center" className="inline-flex min-h-11 items-center gap-1.5 whitespace-nowrap text-[11px] font-medium" hint={ACTIVE_HINT} label="Activo">{(id) => <input id={id} type="checkbox" className="h-5 w-5" disabled={disabled} checked={checked} onChange={(event) => onChange(event.target.checked)} />}</CheckField>;
 }
 
 function AddButton({ disabled = false, label, onClick }: { readonly disabled?: boolean; readonly label: string; readonly onClick: () => void }): ReactNode {

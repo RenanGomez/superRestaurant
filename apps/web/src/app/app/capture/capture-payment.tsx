@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
-import { LabelText } from "../../../components/field-hint";
+import { FieldLabel } from "../../../components/field-hint";
 import type {
   CapturePaymentBasisV1,
   CapturePaymentIntentMethodV1,
@@ -175,7 +175,7 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
       </div>
       {feedback?.key.startsWith("tender:") && feedback.state !== "saving" && <p role={feedback.state === "error" ? "alert" : "status"} className="text-sm">{status(feedback.key)}</p>}
       <div className="grid gap-1 text-sm">
-        <label htmlFor="capture-cash-with"><LabelText hint="Billete o monto exacto con el que paga el cliente, para calcular el cambio que lleva el repartidor.">Otro monto</LabelText></label>
+        <FieldLabel htmlFor="capture-cash-with" hint="Billete o monto exacto con el que paga el cliente, para calcular el cambio que lleva el repartidor." label="Otro monto" />
         <div className="flex flex-wrap gap-2">
           <input id="capture-cash-with" inputMode="decimal" className={input} value={customTender}
             disabled={busy || !currencySupported} placeholder={formatMinorForMoneyInput(0, summaryCurrency) ?? ""} onChange={handleCustomTenderChange}

@@ -42,7 +42,7 @@ import type {
 
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
   rehydrateCaptureWorkspace, shortCaptureDraftId, shouldRenewLease } from "../../../lib/capture-workspace";
-import { LabelText } from "../../../components/field-hint";
+import { Field, FieldLabel } from "../../../components/field-hint";
 import type { CaptureRequestResult } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { captureKitchenResultText, captureKitchenSend, chunkOrderItemIds, type OrderDetailRequestResult, type OrderMutationRequestResult } from "../../../lib/order-detail";
@@ -1031,18 +1031,16 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
           <h3 className="font-heading font-semibold">Apropiación supervisada</h3>
           <p className="mt-1 text-sm text-text-muted">Úsala sólo cuando otro operador no pueda continuar. El motivo queda auditado y la captura pasa a tu atención.</p>
           <div className="mt-3 grid gap-3">
-            <label className="grid gap-1 text-sm" htmlFor="capture-takeover-draft"><LabelText hint="Captura de otro operador que vas a tomar para continuarla tú.">Captura asignada</LabelText>
-              <select id="capture-takeover-draft" className={input} value={takeoverDraftId}
+            <Field className="grid gap-1 text-sm" hint="Captura de otro operador que vas a tomar para continuarla tú." id="capture-takeover-draft" label="Captura asignada">{() => <><select id="capture-takeover-draft" className={input} value={takeoverDraftId}
                 onChange={(event) => setTakeoverDraftId(event.target.value)} disabled={busy}>
                 <option value="">Selecciona una captura</option>
                 {tray.filter((item) => item.attentionStatus === "claimed").map((item) => <option
                   key={item.captureDraftId} value={item.captureDraftId}>{item.folio} · versión {item.version}</option>)}
               </select>
-            </label>
-            <label className="grid gap-1 text-sm" htmlFor="capture-takeover-reason"><LabelText hint="Por qué tomas esta captura; queda registrado en la auditoría.">Motivo obligatorio</LabelText>
-              <textarea id="capture-takeover-reason" className={`${input} min-h-24 resize-y`} maxLength={500}
+            </>}</Field>
+            <Field className="grid gap-1 text-sm" hint="Por qué tomas esta captura; queda registrado en la auditoría." id="capture-takeover-reason" label="Motivo obligatorio">{() => <><textarea id="capture-takeover-reason" className={`${input} min-h-24 resize-y`} maxLength={500}
                 value={takeoverReason} onChange={(event) => setTakeoverReason(event.target.value)} disabled={busy} />
-            </label>
+            </>}</Field>
             <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="min-h-5 min-w-5 shrink-0 focus-visible:outline-2 focus-visible:outline-accent"
               checked={takeoverConfirmed} onChange={(event) => setTakeoverConfirmed(event.target.checked)} disabled={busy} />
               Confirmo que el operador actual no puede continuar y que esta reasignación quedará auditada.
@@ -1073,24 +1071,22 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       </section>}
       {printDocuments !== undefined && <PrintPreview documents={printDocuments} onClose={() => setPrintDocuments(undefined)} />}
       <section className={panel}><h2 className="font-heading text-lg font-semibold">Canal y cumplimiento</h2>
-        <div className="mt-3 flex flex-wrap gap-3"><label className="text-sm"><LabelText hint="Por dónde llegó el pedido: teléfono, WhatsApp, mostrador, mesa o autoservicio. Sirve para reportes.">Origen</LabelText> <select value={sourceChannel} onChange={changeSource}
+        <div className="mt-3 flex flex-wrap gap-3"><Field className="text-sm" hint="Por dónde llegó el pedido: teléfono, WhatsApp, mostrador, mesa o autoservicio. Sirve para reportes." label="Origen">{(id) => <><select id={id} value={sourceChannel} onChange={changeSource}
           className={`${input} ml-2`} disabled={locked}><option value="phone">Teléfono</option><option value="whatsapp_manual">WhatsApp manual</option>
-          <option value="counter">Mostrador</option><option value="table">Mesa</option><option value="self_service">Autoservicio</option></select></label>
-        <label className="text-sm"><LabelText hint="Cómo se entrega el pedido: a domicilio, para recoger o en mostrador. Domicilio pide cliente y dirección.">Cumplimiento</LabelText> <select value={fulfillmentChannel ?? ""} onChange={changeFulfillment}
+          <option value="counter">Mostrador</option><option value="table">Mesa</option><option value="self_service">Autoservicio</option></select></>}</Field>
+        <Field className="text-sm" hint="Cómo se entrega el pedido: a domicilio, para recoger o en mostrador. Domicilio pide cliente y dirección." label="Cumplimiento">{(id) => <><select id={id} value={fulfillmentChannel ?? ""} onChange={changeFulfillment}
           className={`${input} ml-2`} disabled={locked || fulfillmentSnapshot !== null}><option value="">Sin definir</option><option value="delivery">Domicilio</option>
           <option value="pickup" disabled={fulfillmentSnapshot !== null}>Recoger</option><option value="counter" disabled={fulfillmentSnapshot !== null}>Mostrador</option>
-          <option value="dine_in" disabled={fulfillmentSnapshot !== null}>Mesa</option></select></label></div>
+          <option value="dine_in" disabled={fulfillmentSnapshot !== null}>Mesa</option></select></>}</Field></div>
       </section>
       <section className={panel}><h2 className="font-heading text-lg font-semibold">1. Cliente</h2>
-        <form onSubmit={search} className="mt-3 flex flex-wrap gap-3"><label className="grid gap-1 text-sm" htmlFor="capture-search-mode"><LabelText hint="Dato con el que buscas al cliente: teléfono, nombre o dirección.">Buscar por</LabelText>
-          <select id="capture-search-mode" name="mode" className={input} disabled={locked}>
+        <form onSubmit={search} className="mt-3 flex flex-wrap gap-3"><Field className="grid gap-1 text-sm" hint="Dato con el que buscas al cliente: teléfono, nombre o dirección." id="capture-search-mode" label="Buscar por">{() => <><select id="capture-search-mode" name="mode" className={input} disabled={locked}>
           <option value="phone">Teléfono</option><option value="name">Nombre</option><option value="address">Dirección</option></select>
-          </label>
-          <label className="grid flex-1 gap-1 text-sm" htmlFor="capture-search-query"><LabelText hint="Escribe el teléfono, nombre o dirección a buscar.">Consulta</LabelText>
-            <input id="capture-search-query" ref={searchInputRef} name="query" required maxLength={200}
+          </>}</Field>
+          <Field className="grid flex-1 gap-1 text-sm" hint="Escribe el teléfono, nombre o dirección a buscar." id="capture-search-query" label="Consulta">{() => <><input id="capture-search-query" ref={searchInputRef} name="query" required maxLength={200}
               aria-keyshortcuts={ariaKeyShortcut("search")} className={`${input} min-w-48 w-full`}
               placeholder="Teléfono, nombre o dirección" disabled={locked}/>
-          </label>
+          </>}</Field>
           <button className={button} disabled={locked}>Buscar</button></form>
         {results !== undefined && <div className="mt-3 grid gap-2">{results.candidates.length === 0 ? <p className="text-sm">Sin coincidencias.</p>
           : results.candidates.map((item) => <button key={item.customerId} className={`${button} text-left`} disabled={locked}
@@ -1189,10 +1185,9 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
         onClick={(event) => { if (event.target === event.currentTarget) { setNoteSheetLineId(undefined); setNoteSheetDraft(""); } }}>
         <div className="grid w-full max-w-md gap-3 rounded-t-2xl bg-surface p-4 sm:rounded-2xl">
           <h2 id="capture-line-note-title" className="font-heading text-lg font-semibold">Nota para cocina</h2>
-          <label className="grid gap-1 text-sm" htmlFor="capture-line-note-text"><LabelText hint="Indicación para cocina sobre este producto, por ejemplo sin cebolla. Aparece en la comanda.">Instrucción (opcional)</LabelText>
-            <textarea id="capture-line-note-text" className={`${input} min-h-24 resize-y`} maxLength={200}
+          <Field className="grid gap-1 text-sm" hint="Indicación para cocina sobre este producto, por ejemplo sin cebolla. Aparece en la comanda." id="capture-line-note-text" label="Instrucción (opcional)">{() => <><textarea id="capture-line-note-text" className={`${input} min-h-24 resize-y`} maxLength={200}
               value={noteSheetDraft} onChange={(event) => setNoteSheetDraft(event.target.value.slice(0, 200))} />
-          </label>
+          </>}</Field>
           <span className="text-xs text-text-muted">{noteSheetDraft.length}/200</span>
           {selectionFeedback !== undefined && <p role={selectionFeedback === "saving" || selectionFeedback === "saved" ? "status" : "alert"} className="text-sm">
             {selectionFeedback === "saving" ? "Guardando…" : selectionFeedback === "saved" ? "Guardado" : selectionFeedback}
@@ -1211,10 +1206,9 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
         <div className="grid w-full max-w-md gap-3 rounded-t-2xl bg-surface p-4 sm:rounded-2xl">
           <h2 id="capture-no-sale-title" className="font-heading text-lg font-semibold">Cancelar captura</h2>
           <p className="text-sm text-text-muted">Queda registrada como cancelada con el motivo. Esta acción no se puede deshacer.</p>
-          <label className="grid gap-1 text-sm" htmlFor="capture-no-sale-reason"><LabelText hint="Por qué se descarta esta captura sin venta (cliente colgó, se arrepintió, error). Queda registrado.">Motivo obligatorio</LabelText>
-            <textarea id="capture-no-sale-reason" className={`${input} min-h-24 resize-y`} maxLength={500}
+          <Field className="grid gap-1 text-sm" hint="Por qué se descarta esta captura sin venta (cliente colgó, se arrepintió, error). Queda registrado." id="capture-no-sale-reason" label="Motivo obligatorio">{() => <><textarea id="capture-no-sale-reason" className={`${input} min-h-24 resize-y`} maxLength={500}
               value={noSaleReason} onChange={(event) => setNoSaleReason(event.target.value)} disabled={busy} autoFocus />
-          </label>
+          </>}</Field>
           <div className="flex justify-end gap-2">
             <button type="button" className={button} disabled={busy} onClick={cancelNoSale}>Volver</button>
             <button type="button" className={button} disabled={busy || noSaleReason.trim().length === 0}
@@ -1249,7 +1243,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
           </li>)}</ul>
         </div>}
         <form className="mt-3 grid gap-3" onSubmit={saveDeliveryInstructions}>
-          <label className="grid gap-1 text-sm" htmlFor="capture-delivery-instructions"><LabelText hint="Notas para el repartidor: portón, timbre, a quién preguntar. Se imprimen en la hoja de entrega.">Indicaciones opcionales</LabelText></label>
+          <FieldLabel htmlFor="capture-delivery-instructions" hint="Notas para el repartidor: portón, timbre, a quién preguntar. Se imprimen en la hoja de entrega." label="Indicaciones opcionales" />
           <textarea id="capture-delivery-instructions" maxLength={500} rows={3} className={`${input} min-h-24 resize-y`}
             value={deliveryInstructions} onChange={(event) => setDeliveryInstructions(event.target.value)}
             disabled={locked} placeholder="Ej. Tocar dos veces; no dejar con vigilancia" />
@@ -1268,13 +1262,12 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
               : `${formatDeliveryMatch(addressMatch.value, "es-MX")}. Consulta informativa; cotiza para confirmar.`}
         </p>
         <form className="mt-3 grid gap-3" onSubmit={(event) => { event.preventDefault(); void requestDeliveryQuote(); }}>
-          <label className="grid gap-1 text-sm" htmlFor="capture-scheduled-for"><LabelText hint="Fecha y hora en que el cliente quiere recibir el pedido. Vacío = lo antes posible.">Programar entrega (opcional)</LabelText>
-            <input id="capture-scheduled-for" type="datetime-local" className={input} value={scheduledFor}
+          <Field className="grid gap-1 text-sm" hint="Fecha y hora en que el cliente quiere recibir el pedido. Vacío = lo antes posible." id="capture-scheduled-for" label="Programar entrega (opcional)">{() => <><input id="capture-scheduled-for" type="datetime-local" className={input} value={scheduledFor}
               onChange={(event) => {
                 setScheduledFor(event.target.value);
                 invalidateQuote();
                 if (deliveryQuote !== null) setQuoteRequestedForDiffers(true);
-              }} disabled={busy} /></label>
+              }} disabled={busy} /></>}</Field>
           <p className="text-xs text-text-muted">Entre 30 minutos y 7 días. La hora se convierte a ISO al solicitar la cotización.</p>
           <button type="submit" className={button} disabled={busy}>{busy ? "Cotizando…" : "Cotizar entrega"}</button>
         </form>
@@ -1318,15 +1311,14 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
             <button type="button" className={button} disabled={locked} onClick={holdCapture}>Guardar para después</button>
           </div>
           : <div className="mt-3 grid gap-3">
-            <label className="grid gap-1 text-sm" htmlFor="capture-transfer-target"><LabelText hint="Operador que continuará esta captura; tú dejarás de poder editarla.">Operador destino</LabelText>
-              <select id="capture-transfer-target" className={input} value={transferTarget}
+            <Field className="grid gap-1 text-sm" hint="Operador que continuará esta captura; tú dejarás de poder editarla." id="capture-transfer-target" label="Operador destino">{() => <><select id="capture-transfer-target" className={input} value={transferTarget}
                 onChange={(event) => { setTransferTarget(event.target.value); setTransferConfirmed(false); }} disabled={locked}>
                 <option value="">Selecciona un operador</option>
                 {assignmentCandidates.map((candidate) => <option key={candidate.membershipId} value={candidate.membershipId}>
                   {candidate.displayLabel} · {candidate.roles.join(", ")}
                 </option>)}
               </select>
-            </label>
+            </>}</Field>
             <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="min-h-5 min-w-5 shrink-0 focus-visible:outline-2 focus-visible:outline-accent"
               checked={transferConfirmed} onChange={(event) => setTransferConfirmed(event.target.checked)} disabled={locked || transferTarget === ""} />
               Confirmo que el operador seleccionado continuará esta captura y dejaré de poder editarla.
@@ -1346,8 +1338,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
           </p>
           {activeShift !== undefined && <p className="mt-2 text-sm">Turno: <strong>{activeShift.name}</strong></p>}
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            {fulfillmentChannel === "dine_in" && <label className="grid gap-1 text-sm" htmlFor="capture-table"><LabelText hint="Mesa a la que se asigna la orden; sólo se ofrecen las del plano de la sucursal.">Mesa</LabelText>
-              <select id="capture-table" className={input} value={selectedTableId}
+            {fulfillmentChannel === "dine_in" && <Field className="grid gap-1 text-sm" hint="Mesa a la que se asigna la orden; sólo se ofrecen las del plano de la sucursal." id="capture-table" label="Mesa">{() => <><select id="capture-table" className={input} value={selectedTableId}
                 onChange={(event) => setSelectedTableId(event.target.value)}
                 disabled={locked || confirmationContext.tables === null}>
                 <option value="">Selecciona una mesa</option>
@@ -1355,7 +1346,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
                   {table.name} · {table.capacity} personas
                 </option>)}
               </select>
-            </label>}
+            </>}</Field>}
           </div>
           {confirmationContext.shifts.length === 0 && <p role="alert" className="mt-2 text-sm text-text-muted">
             No hay turno abierto. <a href="/app/caja" className="font-semibold text-accent underline">Abrir turno en Caja</a>.
