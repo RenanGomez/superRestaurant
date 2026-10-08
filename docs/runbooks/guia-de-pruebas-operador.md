@@ -122,7 +122,7 @@ En `http://localhost:8082` (desactiva Grammarly en localhost):
 
 ## 11. Qué probar el 2026-10-08: Menú, segunda ronda
 
-Todo se ve en `http://localhost:8082/app/menu`, pero **publicar el menú y capturar requieren aplicada la migración `20261008000200` y el API reiniciado** (la web nueva envía las mitades en el producto y el API viejo las rechaza). Te aviso cuando esté; antes de eso, mira sin publicar.
+En `http://localhost:8082/app/menu` (migración `20261008000200` aplicada y API/web reiniciados el 2026-10-08). Si una pizza que tenía mitades distintas por tamaño aparece sin mitades, vuelve a configurarla en el producto.
 
 1. Arrastra una categoría, un producto, un tamaño o un grupo por el asidero ⋮⋮: la fila se levanta, aparece una línea donde caerá y se mueve al soltar. Esc cancela.
 2. Pasa el mouse (o toca) el «?» junto a cualquier etiqueta, en Menú y en las demás secciones: explica el campo. En 390×844 no se sale de la pantalla y se cierra tocando fuera.
