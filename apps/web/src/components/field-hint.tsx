@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { cloneElement, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
 
 const VIEWPORT_MARGIN = 8;
 
@@ -88,7 +88,8 @@ export function FieldLabel({ className, hint, htmlFor, label }: {
  * just the label text. `children` receives the id to put on the control.
  */
 export function Field({ children, className, hint, id: fixedId, label }: {
-  readonly children: (id: string) => ReactNode;
+  /** A render function (client components) or a single element that receives the id (server components cannot pass functions). */
+  readonly children: ReactElement<{ id?: string }> | ((id: string) => ReactNode);
   readonly className: string;
   readonly hint?: string | undefined;
   /** Existing control id to keep (tests, aria references); generated when omitted. */
@@ -99,20 +100,20 @@ export function Field({ children, className, hint, id: fixedId, label }: {
   const id = fixedId ?? generatedId;
   return <div className={className}>
     <span className="inline-flex flex-wrap items-center gap-1.5"><label htmlFor={id}>{label}</label>{hint === undefined ? null : <FieldHint label={label} text={hint} />}</span>
-    {children(id)}
+    {typeof children === "function" ? children(id) : cloneElement(children, { id })}
   </div>;
 }
 
 /** Checkbox row with its hint outside the label (see `Field`). `children` receives the id of the checkbox. */
 export function CheckField({ children, className, hint, label }: {
-  readonly children: (id: string) => ReactNode;
+  readonly children: ReactElement<{ id?: string }> | ((id: string) => ReactNode);
   readonly className: string;
   readonly hint: string;
   readonly label: string;
 }): ReactNode {
   const id = useId();
   return <span className={className}>
-    {children(id)}
+    {typeof children === "function" ? children(id) : cloneElement(children, { id })}
     <label htmlFor={id}>{label}</label>
     <FieldHint label={label} text={hint} />
   </span>;

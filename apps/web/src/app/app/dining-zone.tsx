@@ -5,6 +5,7 @@ import { unstable_rethrow, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
+import { Field, FieldHint } from "../../components/field-hint";
 import { mergeByVersion, validateTableDetails } from "../../lib/dining-editor";
 import { clampTablePosition, firstFreeSlot, moveTableByKeyboard, resizeTableCells, savedTablePosition, type TablePosition } from "../../lib/table-position";
 import { createDiningTableAction, saveDiningTableLayoutAction, updateDiningTableDetailsAction, type DiningActionResult } from "./actions";
@@ -218,7 +219,8 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
             <h3 className="text-sm font-semibold text-text">{selected.name} · {selected.capacity} {selected.capacity === 1 ? "persona" : "personas"}</h3>
             <p role="status" aria-live="polite" className={`mt-1 min-h-5 text-sm ${selectedStatus?.kind === "conflict" || selectedStatus?.kind === "error" ? "font-semibold text-error" : "text-text-muted"}`}>{selectedStatus?.text ?? ""}</p>
             {canManage && <>
-              <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Tamaño de la mesa">
+              <div className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-medium"><span aria-hidden="true">Tamaño</span><FieldHint label="Tamaño de la mesa" text="Ancho y alto de la mesa en el plano, en celdas. Usa los botones para hacerla más grande o más chica; no cambia la capacidad." /></div>
+              <div className="mt-1 flex flex-wrap gap-2" role="group" aria-label="Tamaño de la mesa">
                 <button type="button" className={button} disabled={!limits.wider} onClick={() => nudgeSize(selected, 1, 0)}>Más ancha</button>
                 <button type="button" className={button} disabled={!limits.narrower} onClick={() => nudgeSize(selected, -1, 0)}>Más angosta</button>
                 <button type="button" className={button} disabled={!limits.taller} onClick={() => nudgeSize(selected, 0, 1)}>Más alta</button>
@@ -353,10 +355,10 @@ function TableDetailsForm({ table, busy, onResult }: {
 
   return (
     <form onSubmit={(event) => void submit(event)} className="mt-3 grid max-w-[420px] grid-cols-2 gap-2" aria-label="Datos de la mesa">
-      <label className="col-span-2 text-[12px] font-medium">Nombre<input name="name" type="text" required maxLength={40} value={name} onChange={(event) => setName(event.target.value)} className={input} /></label>
-      <label className="text-[12px] font-medium">Capacidad (personas)<input name="capacity" type="text" inputMode="numeric" required value={capacity} onChange={(event) => setCapacity(event.target.value)} className={input} /></label>
-      <label className="text-[12px] font-medium">Forma<select name="shape" value={shape} onChange={(event) => setShape(event.target.value)} className={input}>
-        <option value="round">Redonda</option><option value="square">Cuadrada</option><option value="rectangle">Rectangular</option></select></label>
+      <Field className="col-span-2 text-[12px] font-medium" hint="Cómo se llama la mesa en el plano y al tomar pedidos, por ejemplo Mesa 4 o Terraza 2. Debe ser única en la sucursal." label="Nombre">{(id) => <input id={id} name="name" type="text" required maxLength={40} value={name} onChange={(event) => setName(event.target.value)} className={input} />}</Field>
+      <Field className="text-[12px] font-medium" hint="Cuántas personas caben; se usa para sugerir mesa, no limita la cuenta." label="Capacidad (personas)">{(id) => <input id={id} name="capacity" type="text" inputMode="numeric" required value={capacity} onChange={(event) => setCapacity(event.target.value)} className={input} />}</Field>
+      <Field className="text-[12px] font-medium" hint="Cómo se dibuja la mesa en el plano. Es sólo visual; no cambia la capacidad." label="Forma">{(id) => <select id={id} name="shape" value={shape} onChange={(event) => setShape(event.target.value)} className={input}>
+        <option value="round">Redonda</option><option value="square">Cuadrada</option><option value="rectangle">Rectangular</option></select>}</Field>
       {problem !== null && <p role="alert" className="col-span-2 rounded-lg bg-error-bg p-2 text-sm text-error">{problem}</p>}
       <button type="submit" className={`${primary} col-span-2`} disabled={saving || busy}>{saving ? "Guardando…" : "Guardar datos"}</button>
     </form>
@@ -432,10 +434,10 @@ function CreateTableDialog({ zoneId, tableCount, occupied, onCreated }: {
           </div>
           <form onSubmit={(event) => void submit(event)} className="flex min-h-0 flex-1 flex-col">
             <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto p-4">
-              <label className="text-[12px] font-medium">Nombre<input ref={nameField} name="name" type="text" required maxLength={40} value={name} onChange={(event) => setName(event.target.value)} className={input} /></label>
-              <label className="text-[12px] font-medium">Capacidad (personas)<input name="capacity" type="text" inputMode="numeric" required value={capacity} onChange={(event) => setCapacity(event.target.value)} className={input} /></label>
-              <label className="text-[12px] font-medium">Forma<select name="shape" value={shape} onChange={(event) => setShape(event.target.value)} className={input}>
-                <option value="round">Redonda</option><option value="square">Cuadrada</option><option value="rectangle">Rectangular</option></select></label>
+              <Field className="text-[12px] font-medium" hint="Cómo se llama la mesa en el plano y al tomar pedidos, por ejemplo Mesa 4 o Terraza 2. Debe ser única en la sucursal." label="Nombre">{(id) => <input id={id} ref={nameField} name="name" type="text" required maxLength={40} value={name} onChange={(event) => setName(event.target.value)} className={input} />}</Field>
+              <Field className="text-[12px] font-medium" hint="Cuántas personas caben; se usa para sugerir mesa, no limita la cuenta." label="Capacidad (personas)">{(id) => <input id={id} name="capacity" type="text" inputMode="numeric" required value={capacity} onChange={(event) => setCapacity(event.target.value)} className={input} />}</Field>
+              <Field className="text-[12px] font-medium" hint="Cómo se dibuja la mesa en el plano. Es sólo visual; no cambia la capacidad." label="Forma">{(id) => <select id={id} name="shape" value={shape} onChange={(event) => setShape(event.target.value)} className={input}>
+                <option value="round">Redonda</option><option value="square">Cuadrada</option><option value="rectangle">Rectangular</option></select>}</Field>
               <p className="text-xs text-text-muted">La mesa se coloca en el primer espacio libre del plano; después puedes arrastrarla y cambiar su tamaño.</p>
               {problem !== null && <p role="alert" className="rounded-lg bg-error-bg p-2 text-sm text-error">{problem}</p>}
             </div>

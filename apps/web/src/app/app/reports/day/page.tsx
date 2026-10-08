@@ -46,9 +46,7 @@ export default async function DaySummaryPage({ searchParams }: PageProps): Promi
           <h1 className="break-words font-heading text-[22px] font-bold text-text">Resumen del día · {membership.branchName}</h1>
         </div>
         <form action={selectSummaryDateAction} className="flex items-end gap-2">
-          <Field className="flex flex-col gap-1 text-[12px] font-semibold text-text-muted" hint="Día del que quieres ver el resumen de ventas, en la zona horaria del restaurante." label="Fecha">{(id) => <>
-            <input id={id} type="date" name="date" required defaultValue={date ?? ""} className={`min-h-11 rounded-xl border border-border bg-surface px-3 text-[14px] text-text ${FOCUS}`} />
-          </>}</Field>
+          <Field className="flex flex-col gap-1 text-[12px] font-semibold text-text-muted" hint="Día del que quieres ver el resumen de ventas, en la zona horaria del restaurante." label="Fecha"><input type="date" name="date" required defaultValue={date ?? ""} className={`min-h-11 rounded-xl border border-border bg-surface px-3 text-[14px] text-text ${FOCUS}`} /></Field>
           <button type="submit" className={`min-h-11 rounded-xl bg-accent px-4 text-[14px] font-semibold text-white ${FOCUS}`}>Ver</button>
         </form>
       </div>

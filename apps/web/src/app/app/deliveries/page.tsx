@@ -326,8 +326,7 @@ function FailSheet({ item }: { readonly item: BranchDeliveryItemV1 }): ReactNode
         <AuditFields />
         <input type="hidden" name="orderId" value={item.delivery.orderId} />
         <input type="hidden" name="expectedVersion" value={item.delivery.version} />
-        <Field className="grid gap-1.5 text-[12px] font-semibold" hint="Por qué se registra esta acción sobre la entrega (no entregada, cliente ausente, etc.). Queda en la auditoría." label="Motivo">{(id) => <><textarea id={id} required name="reason" maxLength={300} rows={3} className="rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" />
-        </>}</Field>
+        <Field className="grid gap-1.5 text-[12px] font-semibold" hint="Por qué se registra esta acción sobre la entrega (no entregada, cliente ausente, etc.). Queda en la auditoría." label="Motivo"><textarea required name="reason" maxLength={300} rows={3} className="rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" /></Field>
         <div className="flex flex-wrap gap-2">
           <CashierSubmitButton idle="Marcar como no entregada" pending="Guardando…" tone="danger" />
           <a href="/app/deliveries" className="inline-flex min-h-12 items-center rounded-xl border border-border bg-surface px-4 text-[14px] font-semibold">Cancelar</a>
@@ -457,10 +456,9 @@ function MoneyField({ currency, defaultValue, label, name, required }: {
   readonly required: boolean;
 }): ReactNode {
   return (
-    <Field className="grid gap-1.5 text-[12px] font-semibold" hint={name === "tipPesos" ? "Propina que deja el cliente al repartidor; se registra aparte del total." : "Efectivo que entrega el cliente. Si lo dejas vacío se toma el pago exacto y no hay cambio."} label={label}>{(id) => <><input id={id} name={name} type="text" inputMode="decimal" required={required} defaultValue={defaultValue}
+    <Field className="grid gap-1.5 text-[12px] font-semibold" hint={name === "tipPesos" ? "Propina que deja el cliente al repartidor; se registra aparte del total." : "Efectivo que entrega el cliente. Si lo dejas vacío se toma el pago exacto y no hay cambio."} label={label}><input name={name} type="text" inputMode="decimal" required={required} defaultValue={defaultValue}
         pattern="[0-9]*([.,][0-9]+)?" aria-label={`${label} en ${currency}`}
-        className="min-h-12 min-w-0 rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" />
-    </>}</Field>
+        className="min-h-12 min-w-0 rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" /></Field>
   );
 }
 
