@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
+import { LabelText } from "../../../components/field-hint";
 
 import {
   MAX_DELIVERY_ATTEMPTS,
@@ -325,7 +326,7 @@ function FailSheet({ item }: { readonly item: BranchDeliveryItemV1 }): ReactNode
         <AuditFields />
         <input type="hidden" name="orderId" value={item.delivery.orderId} />
         <input type="hidden" name="expectedVersion" value={item.delivery.version} />
-        <label className="grid gap-1.5 text-[12px] font-semibold">Motivo
+        <label className="grid gap-1.5 text-[12px] font-semibold"><LabelText hint="Por qué se registra esta acción sobre la entrega (no entregada, cliente ausente, etc.). Queda en la auditoría.">Motivo</LabelText>
           <textarea required name="reason" maxLength={300} rows={3} className="rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" />
         </label>
         <div className="flex flex-wrap gap-2">
@@ -457,7 +458,7 @@ function MoneyField({ currency, defaultValue, label, name, required }: {
   readonly required: boolean;
 }): ReactNode {
   return (
-    <label className="grid gap-1.5 text-[12px] font-semibold">{label}
+    <label className="grid gap-1.5 text-[12px] font-semibold"><LabelText hint={name === "tipPesos" ? "Propina que deja el cliente al repartidor; se registra aparte del total." : "Efectivo que entrega el cliente. Si lo dejas vacío se toma el pago exacto y no hay cambio."}>{label}</LabelText>
       <input name={name} type="text" inputMode="decimal" required={required} defaultValue={defaultValue}
         pattern="[0-9]*([.,][0-9]+)?" aria-label={`${label} en ${currency}`}
         className="min-h-12 min-w-0 rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" />
