@@ -8,11 +8,11 @@ import type {
   MenuModifierOptionV1,
   MenuProductV1,
   MenuProductVariantV1,
-  MenuVariantFractionV1,
+  MenuProductFractionV1,
 } from "@super-restaurant/shared-types";
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
-import { FieldHint, LabelText } from "../../../components/field-hint";
+import { CheckField, Field, FieldHint, LabelText } from "../../../components/field-hint";
 import { MENU_DEFAULT_UNIT, MENU_OTHER_STATION, MENU_STATION_MAX_LENGTH, stationValues, unitOptions } from "../../../lib/menu-fields";
 import { shrinkMenuImage } from "../../../lib/menu-image-resize";
 import { applyRemoval, removalNeedsConfirmation, type Removal } from "../../../lib/menu-removal";
@@ -20,6 +20,7 @@ import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { DEFAULT_PESO_CURRENCY, formatMinorForMoneyInput, parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import { currencyFractionDigits } from "../../../lib/money-scale";
 import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, publishDisabledReason, shouldDownscaleMenuImage, validateMenuImageFile, type MenuImageAttempt } from "../../../lib/menu-images";
+import { editorProductFraction, legacyFractionNotice, migrateLegacyFraction } from "../../../lib/menu-fraction";
 import { variantValidationError } from "../../../lib/menu-variants";
 import { reorder, reorderSubset } from "../../../lib/menu-reorder";
 import { ReorderControls, reorderRowProps } from "./reorder-controls";
@@ -53,12 +54,14 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
     })) ?? [],
   );
   const [removal, setRemoval] = useState<Removal | null>(null);
-  const variantIssue = products.map((product) => variantValidationError(product.productId, product.variants ?? [], new Set(groups.filter((group) => group.productId === product.productId).map((group) => group.groupId)))).find((issue) => issue !== null) ?? null;
+  // Legacy per-size halves move to the product on save (the server rejects both at once); validate and send that shape.
+  const savedProducts = useMemo(() => products.map(migrateLegacyFraction), [products]);
+  const variantIssue = savedProducts.map((product) => variantValidationError(product.productId, product.variants ?? [], new Set(groups.filter((group) => group.productId === product.productId).map((group) => group.groupId)), product.fraction)).find((issue) => issue !== null) ?? null;
   const variantError = variantIssue === null ? null : `${products.find((product) => product.productId === variantIssue.productId)?.name || "Producto sin nombre"}: ${variantIssue.message}`;
   const [pendingUploads, setPendingUploads] = useState(0);
   const onUploadPendingChange = (pending: boolean): void => setPendingUploads((current) => current + (pending ? 1 : -1));
   const expectedVersion = state.catalog?.version ?? 0;
-  const draft = useMemo(() => JSON.stringify({ categories, currency, expectedVersion, modifierGroups: groups, products } satisfies Draft), [categories, currency, expectedVersion, groups, products]);
+  const draft = useMemo(() => JSON.stringify({ categories, currency, expectedVersion, modifierGroups: groups, products: savedProducts } satisfies Draft), [categories, currency, expectedVersion, groups, savedProducts]);
 
   const addCategory = (): void => {
     setCategories((current) => [...current, {
@@ -208,8 +211,9 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
  * list scrolled down the «×» seemed to do nothing: the question was open but off screen.
  */
 function RemovalDialog({ removal, onCancel, onConfirm }: { readonly removal: Removal; readonly onCancel: () => void; readonly onConfirm: () => void }): ReactNode {
-  const confirmButton = useRef<HTMLButtonElement>(null);
-  useEffect(() => { confirmButton.current?.focus(); }, [removal]);
+  // Initial focus on the safe choice: an accidental Enter cancels instead of removing.
+  const cancelButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => { cancelButton.current?.focus(); }, [removal]);
   return (
     <section role="alertdialog" aria-labelledby="remove-title" aria-describedby="remove-description"
       onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}
@@ -217,8 +221,8 @@ function RemovalDialog({ removal, onCancel, onConfirm }: { readonly removal: Rem
       <h2 id="remove-title" className="font-heading text-[14px] font-semibold">¿Quitar “{removal.label}” del borrador?</h2>
       <p id="remove-description" className="mt-1 text-[12px] text-text-muted">La publicación anterior seguirá intacta. Si contiene elementos dependientes, también se quitarán de esta nueva versión.</p>
       <div className="mt-3 flex gap-2">
-        <button ref={confirmButton} type="button" onClick={onConfirm} className="min-h-11 rounded-lg bg-error px-4 py-2 text-[13px] font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Sí, quitar</button>
-        <button type="button" onClick={onCancel} className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-accent">Cancelar</button>
+        <button type="button" onClick={onConfirm} className="min-h-11 rounded-lg bg-error px-4 py-2 text-[13px] font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Sí, quitar</button>
+        <button ref={cancelButton} type="button" onClick={onCancel} className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-accent">Cancelar</button>
       </div>
     </section>
   );
@@ -264,19 +268,17 @@ function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct
       <MenuPhoto canManage={canManage} imagePath={product.imagePath} name={product.name} supabaseUrl={supabaseUrl} target="product" targetId={product.productId} onChange={onProductImageChange} onUploadPendingChange={onUploadPendingChange} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <TextInput disabled={!canManage} hint="Nombre que ve el operador al tomar el pedido y que se imprime en la comanda." label="Producto" maxLength={120} value={product.name} onChange={(name) => change({ name })} />
-        <label className="flex flex-col gap-1 text-[11px] font-medium"><LabelText hint="Sección de la carta donde aparece este producto; el operador navega por categorías.">Categoría</LabelText>
-          <select disabled={!canManage} value={product.categoryId} onChange={(event) => change({ categoryId: event.target.value })} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70">
+        <Field className="flex flex-col gap-1 text-[11px] font-medium" hint="Sección de la carta donde aparece este producto; el operador navega por categorías." label="Categoría">{(id) =>
+          <select id={id} disabled={!canManage} value={product.categoryId} onChange={(event) => change({ categoryId: event.target.value })} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70">
             {categories.map((category) => <option key={category.categoryId} value={category.categoryId}>{category.name}</option>)}
-          </select>
-        </label>
+          </select>}</Field>
         <TextInput disabled={!canManage} hint="Código corto propio (SKU) para inventario o reportes. Puedes dejarlo vacío." label="Clave interna (opcional)" help="Código que usas en inventario o en tu impresora; puedes dejarlo vacío" required={false} maxLength={64} value={product.sku ?? ""} onChange={(sku) => change({ sku: sku.trim() === "" ? null : sku })} />
         <MoneyInput hint="Precio de venta por unidad en la moneda del restaurante. Si el producto tiene tamaños, cada tamaño usa su propio precio." disabled={!canManage} currency={currency} value={product.unitPriceMinor} onChange={(unitPriceMinor) => change({ unitPriceMinor })} />
         <StationSelect disabled={!canManage} usedStations={usedStations} value={product.stationId} onChange={(stationId) => change({ stationId })} />
-        <label className="flex flex-col gap-1 text-[11px] font-medium"><LabelText hint="Cómo se mide o se sirve el producto (pieza, porción, g, ml…). Sólo informativa en el ticket.">Unidad</LabelText>
-          <select disabled={!canManage} value={product.unit} onChange={(event) => change({ unit: event.target.value })} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70">
+        <Field className="flex flex-col gap-1 text-[11px] font-medium" hint="Cómo se mide o se sirve el producto (pieza, porción, g, ml…). Sólo informativa en el ticket." label="Unidad">{(id) =>
+          <select id={id} disabled={!canManage} value={product.unit} onChange={(event) => change({ unit: event.target.value })} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70">
             {unitOptions(product.unit).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-        </label>
+          </select>}</Field>
         <ReorderControls count={siblingCount} disabled={!canManage} index={siblingIndex} label={product.name} listKey={`products-${product.categoryId}`} onMove={onMoveProduct} />
         <div className="flex items-end gap-2 pb-1">
           <ActiveInput disabled={!canManage} checked={product.active} onChange={(active) => change({ active })} />
@@ -307,16 +309,17 @@ function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct
               {canManage && <RemoveButton label={`Quitar tamaño ${variant.name || "nuevo"}`}
                 onClick={() => onRemove({ id: variant.variantId, groupId: product.productId, kind: "variant", label: variant.name || "tamaño nuevo", unnamed: variant.name.trim() === "" })} />}
             </div>
-            <FractionEditor canManage={canManage} groups={groups} variant={variant}
-              onChange={(fraction) => changeVariant(variant.variantId, { fraction })} />
           </div>)}</div>}
       </section>
 
+      <section className="mt-3 rounded-xl border border-border bg-surface p-3">
+        <FractionEditor canManage={canManage} groups={groups} notice={legacyFractionNotice(product)} productName={product.name}
+          fraction={editorProductFraction(product)} onChange={(fraction) => change({ fraction })} />
+      </section>
+
       <div className="mt-3 rounded-xl border border-border bg-surface p-3">
-        <label className="inline-flex min-h-10 items-center gap-2 text-[12px] font-semibold">
-          <input disabled={!canManage} type="checkbox" checked={product.tax !== null} onChange={(event) => change({ tax: event.target.checked ? { inclusion: "included", name: "IVA", rateDenominator: 100, rateNumerator: 16, taxId: "iva", taxRuleVersion: "1" } : null })} />
-          <LabelText hint="Marca si este producto causa IVA u otro impuesto. El impuesto se calcula siempre en el servidor con la regla indicada aquí.">Aplicar impuesto</LabelText>
-        </label>
+        <CheckField className="inline-flex min-h-10 items-center gap-2 text-[12px] font-semibold" hint="Marca si este producto causa IVA u otro impuesto. El impuesto se calcula siempre en el servidor con la regla indicada aquí." label="Aplicar impuesto">{(id) =>
+          <input id={id} disabled={!canManage} type="checkbox" checked={product.tax !== null} onChange={(event) => change({ tax: event.target.checked ? { inclusion: "included", name: "IVA", rateDenominator: 100, rateNumerator: 16, taxId: "iva", taxRuleVersion: "1" } : null })} />}</CheckField>
         {tax !== null && (
           <div className="mt-2 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
             <TextInput disabled={!canManage} hint="Identificador corto del impuesto, por ejemplo iva. Sirve para agrupar impuestos en reportes." label="Clave" maxLength={64} value={tax.taxId} onChange={(taxId) => change({ tax: { ...tax, taxId } })} />
@@ -324,11 +327,10 @@ function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct
             <TextInput disabled={!canManage} hint="Versión de la regla de cálculo. Cámbiala sólo si el impuesto cambia; las ventas anteriores conservan la suya." label="Versión regla" maxLength={64} value={tax.taxRuleVersion} onChange={(taxRuleVersion) => change({ tax: { ...tax, taxRuleVersion } })} />
             <NumberInput disabled={!canManage} hint="Parte de arriba de la tasa como fracción. Para 16 % escribe 16." label="Numerador" min={0} max={1_000_000} value={tax.rateNumerator} onChange={(rateNumerator) => change({ tax: { ...tax, rateNumerator } })} />
             <NumberInput disabled={!canManage} hint="Parte de abajo de la tasa como fracción. Para 16 % escribe 100." label="Denominador" min={1} max={1_000_000} value={tax.rateDenominator} onChange={(rateDenominator) => change({ tax: { ...tax, rateDenominator } })} />
-            <label className="flex flex-col gap-1 text-[11px] font-medium"><LabelText hint="Incluido: el precio ya trae el impuesto. Adicional: el impuesto se suma al precio al cobrar.">Tratamiento</LabelText>
-              <select disabled={!canManage} value={tax.inclusion} onChange={(event) => change({ tax: { ...tax, inclusion: event.target.value as "excluded" | "included" } })} className="min-h-10 rounded-lg border border-border bg-surface px-2 text-[13px]">
+            <Field className="flex flex-col gap-1 text-[11px] font-medium" hint="Incluido: el precio ya trae el impuesto. Adicional: el impuesto se suma al precio al cobrar." label="Tratamiento">{(id) =>
+              <select id={id} disabled={!canManage} value={tax.inclusion} onChange={(event) => change({ tax: { ...tax, inclusion: event.target.value as "excluded" | "included" } })} className="min-h-10 rounded-lg border border-border bg-surface px-2 text-[13px]">
                 <option value="included">Incluido</option><option value="excluded">Adicional</option>
-              </select>
-            </label>
+              </select>}</Field>
           </div>
         )}
       </div>
@@ -344,19 +346,29 @@ function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct
   );
 }
 
-const EMPTY_FRACTION: MenuVariantFractionV1 = { enabled: false, excludableIngredientIds: [], extraGroupId: null, flavorGroupId: null };
+const GROUP_CHOICE_HINTS = {
+  flavors: "Cada opción del grupo es un sabor: una combinación ya definida con su precio fijo (por ejemplo Hawaiana). El operador elige un sabor por mitad.",
+  ingredients: "Sus opciones sirven para armar una mitad ingrediente por ingrediente y como extras de una mitad con sabor; cada ingrediente cuesta media porción. Déjalo vacío si no ofreces armar ni extras.",
+} as const;
 
-/** "Permitir mitades" for one size: switch, flavor group, extras group and removable ingredients. */
-function FractionEditor({ canManage, groups, variant, onChange }: {
+/**
+ * «Permitir mitades» once per product (every size, or the product itself without sizes): switch, flavor group,
+ * ingredient group (to build a half and for extras) and removable ingredients.
+ */
+function FractionEditor({ canManage, fraction, groups, notice, productName, onChange }: {
   readonly canManage: boolean;
+  readonly fraction: MenuProductFractionV1;
   readonly groups: readonly MenuModifierGroupV1[];
-  readonly variant: MenuProductVariantV1;
-  readonly onChange: (fraction: MenuVariantFractionV1) => void;
+  readonly notice: string | null;
+  readonly productName: string;
+  readonly onChange: (fraction: MenuProductFractionV1) => void;
 }): ReactNode {
   const [draft, setDraft] = useState("");
-  const fraction = variant.fraction ?? EMPTY_FRACTION;
-  const label = variant.name || "este tamaño";
-  const update = (patch: Partial<MenuVariantFractionV1>): void => onChange({ ...fraction, ...patch });
+  const label = productName.trim() === "" ? "este producto" : productName;
+  const update = (patch: Partial<MenuProductFractionV1>): void => onChange({ ...fraction, ...patch });
+  const groupName = (group: MenuModifierGroupV1): string => group.name || "Grupo sin nombre";
+  const flavorEligible = groups.filter((group) => group.groupId !== fraction.extraGroupId);
+  const usedAsIngredients = groups.find((group) => group.groupId === fraction.extraGroupId);
   const ingredients = fraction.excludableIngredientIds;
   const addIngredient = (): void => {
     const name = draft.trim();
@@ -367,28 +379,34 @@ function FractionEditor({ canManage, groups, variant, onChange }: {
   };
   const select = "min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70";
   return <div className="grid gap-3 border-t border-border pt-3 sm:col-span-full">
-    <label className="inline-flex min-h-11 items-center gap-2 text-[13px] font-semibold">
-      <input type="checkbox" className="h-5 w-5" disabled={!canManage} checked={fraction.enabled}
-        onChange={(event) => update({ enabled: event.target.checked })} />
-      Permitir mitades
-      <span className="text-[12px] font-normal text-text-muted">El operador podrá armar {label} mitad y mitad.</span>
-    </label>
+    <CheckField className="inline-flex min-h-11 flex-wrap items-center gap-2 text-[13px] font-semibold" label="Permitir mitades"
+      hint="Cada mitad lleva un sabor del grupo de sabores; una de las dos puede armarse con ingredientes si eliges un grupo de ingredientes. Aplica a todos los tamaños.">{(id) =>
+      <input id={id} type="checkbox" className="h-5 w-5" disabled={!canManage} checked={fraction.enabled}
+        onChange={(event) => update({ enabled: event.target.checked })} />}</CheckField>
+    <p className="-mt-2 text-[12px] text-text-muted">El operador podrá armar {label} mitad y mitad, en cualquier tamaño o sin tamaños.</p>
+    {notice !== null && <p role="status" className="rounded-lg bg-accent-soft px-3 py-2 text-[12px]">{notice}</p>}
     {fraction.enabled && <div className="grid gap-3 sm:grid-cols-2">
       {groups.length === 0 && <p role="status" className="text-[12px] text-text-muted sm:col-span-2">Primero crea un grupo con los sabores en «Modificadores» de este producto.</p>}
-      <label className="flex flex-col gap-1 text-[11px] font-medium">Grupo de sabores
-        <select className={select} disabled={!canManage} value={fraction.flavorGroupId ?? ""}
+      <Field className="flex flex-col gap-1 text-[11px] font-medium" hint={GROUP_CHOICE_HINTS.flavors} label="Grupo de sabores">{(id) => <>
+        <select id={id} className={select} disabled={!canManage} value={fraction.flavorGroupId ?? ""}
           onChange={(event) => update({ flavorGroupId: event.target.value === "" ? null : event.target.value })}>
           <option value="">Elige un grupo</option>
-          {groups.filter((group) => group.groupId !== fraction.extraGroupId).map((group) => <option key={group.groupId} value={group.groupId}>{group.name || "Grupo sin nombre"}</option>)}
+          {groups.map((group) => {
+            const taken = group.groupId === fraction.extraGroupId;
+            return <option key={group.groupId} value={group.groupId} disabled={taken}>{groupName(group)}{taken ? " (ya usado como ingredientes)" : ""}</option>;
+          })}
         </select>
-      </label>
-      <label className="flex flex-col gap-1 text-[11px] font-medium">Grupo de extras (opcional)
-        <select className={select} disabled={!canManage} value={fraction.extraGroupId ?? ""}
+        {flavorEligible.length === 0 && usedAsIngredients !== undefined && <span role="status" className="text-[12px] font-normal text-text-muted">
+          “{groupName(usedAsIngredients)}” ya está usado como ingredientes; crea un grupo de sabores en Modificadores.</span>}</>}</Field>
+      <Field className="flex flex-col gap-1 text-[11px] font-medium" hint={GROUP_CHOICE_HINTS.ingredients} label="Grupo de ingredientes (para armar y extras, opcional)">{(id) =>
+        <select id={id} className={select} disabled={!canManage} value={fraction.extraGroupId ?? ""}
           onChange={(event) => update({ extraGroupId: event.target.value === "" ? null : event.target.value })}>
-          <option value="">Sin extras</option>
-          {groups.filter((group) => group.groupId !== fraction.flavorGroupId).map((group) => <option key={group.groupId} value={group.groupId}>{group.name || "Grupo sin nombre"}</option>)}
-        </select>
-      </label>
+          <option value="">Sin ingredientes</option>
+          {groups.map((group) => {
+            const taken = group.groupId === fraction.flavorGroupId;
+            return <option key={group.groupId} value={group.groupId} disabled={taken}>{groupName(group)}{taken ? " (ya usado como sabores)" : ""}</option>;
+          })}
+        </select>}</Field>
       <div className="grid gap-2 sm:col-span-2">
         <span className="text-[11px] font-medium">Ingredientes que se pueden quitar</span>
         {ingredients.length > 0 && <ul className="flex flex-wrap gap-2" aria-label="Ingredientes que se pueden quitar">
@@ -565,25 +583,28 @@ const ACTIVE_HINT = "Si lo desmarcas, deja de aparecer en la captura de pedidos 
 function StationSelect({ disabled, onChange, usedStations, value }: { readonly disabled: boolean; readonly onChange: (value: string) => void; readonly usedStations: readonly string[]; readonly value: string }): ReactNode {
   const [other, setOther] = useState(false);
   const [draft, setDraft] = useState("");
+  // The station the product had before «Otra estación…»: an emptied field goes back to it instead of leaving a stray value.
+  const [before, setBefore] = useState(value);
   const values = stationValues(usedStations, value);
   const field = "min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70";
   return <div className="flex min-w-0 flex-col gap-1">
-    <label className="flex flex-col gap-1 text-[11px] font-medium"><LabelText hint="Pantalla de cocina (KDS) donde aparece este producto al enviarlo a preparar; p. ej. cocina, barra, pizzas.">Estación</LabelText>
-      <select disabled={disabled} value={other ? MENU_OTHER_STATION : value}
-        onChange={(event) => { if (event.target.value === MENU_OTHER_STATION) setOther(true); else { setOther(false); setDraft(""); onChange(event.target.value); } }}
+    <Field className="flex flex-col gap-1 text-[11px] font-medium" hint="Pantalla de cocina (KDS) donde aparece este producto al enviarlo a preparar; p. ej. cocina, barra, pizzas." label="Estación">{(id) =>
+      <select id={id} disabled={disabled} value={other ? MENU_OTHER_STATION : value}
+        onChange={(event) => { if (event.target.value === MENU_OTHER_STATION) { setBefore(value); setOther(true); } else { setOther(false); setDraft(""); onChange(event.target.value); } }}
         className={field}>
         {values.map((station) => <option key={station} value={station}>{station}</option>)}
         <option value={MENU_OTHER_STATION}>Otra estación…</option>
-      </select>
-    </label>
+      </select>}</Field>
     {other && <input aria-label="Nombre de la nueva estación" autoFocus required disabled={disabled} maxLength={MENU_STATION_MAX_LENGTH} placeholder="Ej. pizzas"
       value={draft}
-      onChange={(event) => { setDraft(event.target.value); if (event.target.value.trim() !== "") onChange(event.target.value.trim()); }} className={field} />}
+      onChange={(event) => { setDraft(event.target.value); onChange(event.target.value.trim() === "" ? before : event.target.value.trim()); }} className={field} />}
   </div>;
 }
 
 function TextInput({ disabled, help, hint, invalid = false, label, maxLength, onChange, required = true, value, width = "w-full" }: { readonly disabled: boolean; readonly help?: string; readonly hint?: string; readonly invalid?: boolean; readonly label: string; readonly maxLength: number; readonly onChange: (value: string) => void; readonly required?: boolean; readonly value: string; readonly width?: string }): ReactNode {
-  return <label className={`flex min-w-0 flex-col gap-1 text-[11px] font-medium ${width}`}>{hint === undefined ? label : <LabelText hint={hint}>{label}</LabelText>}<input required={required} aria-invalid={invalid || undefined} disabled={disabled} maxLength={maxLength} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" />{help && <span className="text-[11px] font-normal text-text-muted">{help}</span>}</label>;
+  return <Field className={`flex min-w-0 flex-col gap-1 text-[11px] font-medium ${width}`} hint={hint} label={label}>{(id) => <>
+    <input id={id} required={required} aria-invalid={invalid || undefined} disabled={disabled} maxLength={maxLength} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" />
+    {help && <span className="text-[11px] font-normal text-text-muted">{help}</span>}</>}</Field>;
 }
 
 function MoneyInput({ currency, disabled, hint, label = "Precio", onChange, value }: {
@@ -601,9 +622,9 @@ function MoneyInput({ currency, disabled, hint, label = "Precio", onChange, valu
   const pattern = digits === 0 ? "[0-9]+" : digits === null ? "(?!)" : `[0-9]+([.,][0-9]{1,${digits}})?`;
   const errorText = digits === null ? "La moneda de este catálogo no está admitida; avisa al administrador."
     : `Escribe un precio válido${digits === 0 ? " sin decimales" : ` con máximo ${digits} decimales`}.`;
-  return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium">{hint === undefined ? label : <LabelText hint={hint}>{label}</LabelText>}
+  return <Field className="flex min-w-0 flex-col gap-1 text-[11px] font-medium" hint={hint} label={label}>{(id) => <>
     <input
-      required disabled={disabled} type="text" inputMode="decimal" pattern={pattern}
+      id={id} required disabled={disabled} type="text" inputMode="decimal" pattern={pattern}
       value={text} aria-invalid={parsed === null} aria-describedby={hintId}
       onChange={(event) => {
         const next = event.target.value;
@@ -617,21 +638,20 @@ function MoneyInput({ currency, disabled, hint, label = "Precio", onChange, valu
     />
     <span id={hintId} className={parsed === null ? "text-error" : "text-text-muted"}>
       {parsed === null ? errorText : formatMinorUnits(value, currency)}
-    </span>
-  </label>;
+    </span></>}</Field>;
 }
 
 function NumberInput({ disabled, hint, label, max, min, onChange, value }: { readonly disabled: boolean; readonly hint: string; readonly label: string; readonly max: number; readonly min: number; readonly onChange: (value: number) => void; readonly value: number }): ReactNode {
-  return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium"><LabelText hint={hint}>{label}</LabelText><input required disabled={disabled} type="number" min={min} max={max} step="1" value={value} onChange={(event) => onChange(integerFrom(event.target.value, min, max))} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" /></label>;
+  return <Field className="flex min-w-0 flex-col gap-1 text-[11px] font-medium" hint={hint} label={label}>{(id) => <input id={id} required disabled={disabled} type="number" min={min} max={max} step="1" value={value} onChange={(event) => onChange(integerFrom(event.target.value, min, max))} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" />}</Field>;
 }
 
 
 function NullableNumberInput({ disabled, hint, label, max, min, onChange, value }: { readonly disabled: boolean; readonly hint: string; readonly label: string; readonly max: number; readonly min: number; readonly onChange: (value: number | null) => void; readonly value: number | null }): ReactNode {
-  return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium"><LabelText hint={hint}>{label}</LabelText><input disabled={disabled} type="number" min={min} max={max} step="1" value={value ?? ""} onChange={(event) => onChange(event.target.value === "" ? null : integerFrom(event.target.value, min, max))} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" /></label>;
+  return <Field className="flex min-w-0 flex-col gap-1 text-[11px] font-medium" hint={hint} label={label}>{(id) => <input id={id} disabled={disabled} type="number" min={min} max={max} step="1" value={value ?? ""} onChange={(event) => onChange(event.target.value === "" ? null : integerFrom(event.target.value, min, max))} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" />}</Field>;
 }
 
 function ActiveInput({ checked, disabled, onChange }: { readonly checked: boolean; readonly disabled: boolean; readonly onChange: (value: boolean) => void }): ReactNode {
-  return <label className="inline-flex min-h-10 items-center gap-1.5 whitespace-nowrap text-[11px] font-medium"><input type="checkbox" disabled={disabled} checked={checked} onChange={(event) => onChange(event.target.checked)} /><LabelText hint={ACTIVE_HINT}>Activo</LabelText></label>;
+  return <CheckField className="inline-flex min-h-10 items-center gap-1.5 whitespace-nowrap text-[11px] font-medium" hint={ACTIVE_HINT} label="Activo">{(id) => <input id={id} type="checkbox" disabled={disabled} checked={checked} onChange={(event) => onChange(event.target.checked)} />}</CheckField>;
 }
 
 function AddButton({ disabled = false, label, onClick }: { readonly disabled?: boolean; readonly label: string; readonly onClick: () => void }): ReactNode {

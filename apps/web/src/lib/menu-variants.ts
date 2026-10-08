@@ -1,9 +1,19 @@
-import { MENU_PRODUCT_MAX_VARIANTS, type MenuCatalogV1, type MenuProductV1, type MenuProductVariantV1 } from "@super-restaurant/shared-types";
+import { MENU_PRODUCT_MAX_VARIANTS, type MenuCatalogV1, type MenuProductFractionV1, type MenuProductV1, type MenuProductVariantV1 } from "@super-restaurant/shared-types";
 
 /** Client-side publishing guidance; the API validates the catalog again. */
-export function variantValidationError(productId: string, variants: readonly MenuProductVariantV1[], groupIds?: ReadonlySet<string>): { readonly productId: string; readonly message: string } | null {
-  const message = variantMessage(variants, groupIds);
+export function variantValidationError(productId: string, variants: readonly MenuProductVariantV1[], groupIds?: ReadonlySet<string>, productFraction?: MenuProductFractionV1 | null): { readonly productId: string; readonly message: string } | null {
+  const message = variantMessage(variants, groupIds) ?? productFractionMessage(productFraction, groupIds);
   return message === null ? null : { productId, message };
+}
+
+function productFractionMessage(fraction: MenuProductFractionV1 | null | undefined, groupIds?: ReadonlySet<string>): string | null {
+  if (fraction === null || fraction === undefined || !fraction.enabled) return null;
+  if (fraction.flavorGroupId === null) return "Elige el grupo de sabores para las mitades.";
+  if (fraction.flavorGroupId === fraction.extraGroupId) return "Sabores e ingredientes de las mitades deben ser grupos distintos.";
+  if (groupIds !== undefined && [fraction.flavorGroupId, fraction.extraGroupId].some((id) => id !== null && !groupIds.has(id))) {
+    return "El grupo de las mitades ya no existe; elige otro.";
+  }
+  return null;
 }
 
 function variantMessage(variants: readonly MenuProductVariantV1[], groupIds?: ReadonlySet<string>): string | null {
