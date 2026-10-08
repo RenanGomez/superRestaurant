@@ -119,3 +119,18 @@ En `http://localhost:8082` (desactiva Grammarly en localhost):
 7. Selecciona una mesa y arrastra el asidero de la esquina inferior derecha (o usa «Más ancha / Más alta…»): cambia de tamaño y se guarda solo.
 8. En el panel de la mesa cambia nombre (máx. 40), capacidad y forma → «Guardar datos». La capacidad no cambia al cambiar el tamaño.
 9. «Nueva mesa»: se cierra con Cancelar, con ✕, con Esc y tocando fuera; al crear, la mesa aparece en un hueco libre.
+
+## 11. Qué probar el 2026-10-08: Menú, segunda ronda
+
+Todo se ve en `http://localhost:8082/app/menu`, pero **publicar el menú y capturar requieren aplicada la migración `20261008000200` y el API reiniciado** (la web nueva envía las mitades en el producto y el API viejo las rechaza). Te aviso cuando esté; antes de eso, mira sin publicar.
+
+1. Arrastra una categoría, un producto, un tamaño o un grupo por el asidero ⋮⋮: la fila se levanta, aparece una línea donde caerá y se mueve al soltar. Esc cancela.
+2. Pasa el mouse (o toca) el «?» junto a cualquier etiqueta, en Menú y en las demás secciones: explica el campo. En 390×844 no se sale de la pantalla y se cierra tocando fuera.
+3. Unidad y Estación son listas. «Otra estación…» permite escribir una nueva; si la dejas vacía vuelve a la anterior.
+4. «+ Añadir tamaño» y luego ✕: un tamaño sin nombre se quita al instante; uno con nombre pide confirmación abajo, con el foco en «Cancelar».
+5. Sube una foto a un producto y a una opción de modificador. Si falla, el mensaje dice la causa (permiso, formato, almacenamiento o código HTTP). Una foto de más de 2 MB se reduce sola antes de subirse.
+6. «Permitir mitades» aparece una vez por producto, aunque no tenga tamaños. Elige «Grupo de sabores» e «Grupo de ingredientes»: un grupo usado en uno aparece deshabilitado en el otro con «(ya usado como …)».
+7. Publica el menú con una pizza con mitades y vuelve a cargar: sigue configurada (sin error de conflicto).
+8. Captura → pizza → «Mitad y mitad»: Mitad A con un sabor, Mitad B con «Armar con ingredientes» y 2 ingredientes. El estimado del servidor aparece; no deja armar las dos mitades.
+9. Agrega la línea, ábrela de nuevo para editar: conserva la mitad armada.
+10. Ticket y detalle de la orden muestran «Mitad B: Armada (ingrediente, ingrediente)»; el KDS muestra la mitad «Armada».
