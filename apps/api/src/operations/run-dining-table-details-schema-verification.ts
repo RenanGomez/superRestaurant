@@ -45,8 +45,8 @@ function executable(name: string): string {
   if (!path.toLowerCase().startsWith(`${realpathSync(cache).toLowerCase()}\\`)) throw new Error("LOCAL_BINARY_PATH_REJECTED");
   return path;
 }
-function run(name: string, args: readonly string[]): void {
-  const result = spawnSync(executable(name), [...args], { windowsHide: true, timeout: 60_000, stdio: "ignore" });
+function run(name: string, args: readonly string[], timeout = 60_000): void {
+  const result = spawnSync(executable(name), [...args], { windowsHide: true, timeout, stdio: "ignore" });
   if (result.status !== 0 || result.error !== undefined) throw new Error("LOCAL_PROCESS_FAILED");
 }
 async function availablePort(): Promise<number> {
@@ -68,7 +68,7 @@ try {
   const port = await availablePort();
   stage = "initdb";
   run("initdb", ["-D", data, "-U", "postgres", "--auth-host=scram-sha-256", "--auth-local=scram-sha-256",
-    "--pwfile", passwordFile, "--encoding=UTF8", "--locale=C"]);
+    "--pwfile", passwordFile, "--encoding=UTF8", "--locale=C", "--no-sync"], 300_000);
   clusterCreated = true;
   unlinkSync(passwordFile);
   stage = "start";
