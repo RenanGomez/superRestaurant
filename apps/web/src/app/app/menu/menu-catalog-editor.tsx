@@ -12,7 +12,7 @@ import type {
 } from "@super-restaurant/shared-types";
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
-import { CheckField, Field, FieldHint, LabelText } from "../../../components/field-hint";
+import { CheckField, Field, FieldHint } from "../../../components/field-hint";
 import { MENU_DEFAULT_UNIT, MENU_OTHER_STATION, MENU_STATION_MAX_LENGTH, stationValues, unitOptions } from "../../../lib/menu-fields";
 import { shrinkMenuImage } from "../../../lib/menu-image-resize";
 import { applyRemoval, removalNeedsConfirmation, type Removal } from "../../../lib/menu-removal";
@@ -455,7 +455,7 @@ function ModifierGroupEditor({ siblingCount, siblingIndex, onMoveGroup, canManag
         <ReorderControls count={siblingCount} disabled={!canManage} index={siblingIndex} label={group.name} listKey={`groups-${group.productId}`} onMove={onMoveGroup} />
         <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={group.active} onChange={(active) => change({ active })} />{canManage && <RemoveButton label={`Quitar ${group.name}`} onClick={() => onRemove({ id: group.groupId, kind: "group", label: group.name })} />}</div>
       </div>
-      <div className="mt-3 flex items-center justify-between gap-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted"><LabelText hint="Cada opción es una alternativa del grupo (por ejemplo Pepperoni) con su precio extra, que puede ser 0.">Opciones</LabelText></p>{canManage && <AddButton label="Agregar opción" onClick={onAddOption} />}</div>
+      <div className="mt-3 flex items-center justify-between gap-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted"><span className="inline-flex flex-wrap items-center gap-1.5">Opciones<FieldHint label="Opciones" text="Cada opción es una alternativa del grupo (por ejemplo Pepperoni) con su precio extra, que puede ser 0." /></span></p>{canManage && <AddButton label="Agregar opción" onClick={onAddOption} />}</div>
       <div className="mt-2 grid gap-2 lg:grid-cols-2">
         {group.options.map((option) => (
           <div key={option.optionId} className="grid gap-2 rounded-lg border border-border bg-bg/50 p-2 sm:grid-cols-[1fr_170px_140px_auto]">

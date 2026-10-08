@@ -12,7 +12,7 @@ import type {
   PaymentCollectionSummaryV1,
 } from "@super-restaurant/shared-types";
 
-import { LabelText } from "../../../components/field-hint";
+import { Field } from "../../../components/field-hint";
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
 import { formatMinorUnits, requestBranchOrderWorkTray, type BranchOrderTrayRequestResult } from "../../../lib/branch-order-work-tray";
@@ -238,7 +238,7 @@ function CloseRegisterPanel({ report }: { readonly report: CashRegisterOperation
         <AuditFields audit={audit} />
         <input type="hidden" name="cashRegisterSessionId" value={report.register.cashRegisterSessionId} />
         <MoneyField hint="Efectivo que realmente hay en la caja al cerrar. El sistema lo compara con el esperado y guarda la diferencia." label="Efectivo contado" name="countedClosingBalancePesos" currency={report.register.currency} defaultValue="" />
-        <label className="grid gap-1.5 text-[12px] font-semibold text-text"><LabelText hint="Si el efectivo contado no coincide con el esperado, explica por qué (faltante, sobrante, error de cambio). Queda en la auditoría.">Motivo de diferencia, si aplica</LabelText><textarea name="reason" maxLength={500} rows={3} className="rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" /></label>
+        <Field className="grid gap-1.5 text-[12px] font-semibold text-text" hint="Si el efectivo contado no coincide con el esperado, explica por qué (faltante, sobrante, error de cambio). Queda en la auditoría." label="Motivo de diferencia, si aplica">{(id) => <><textarea id={id} name="reason" maxLength={500} rows={3} className="rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" /></>}</Field>
         <label className="flex min-h-11 items-start gap-3 rounded-xl border border-[oklch(85%_0.06_25)] bg-error-bg p-3 text-[13px]"><input required type="checkbox" name="confirmClose" value="yes" className="mt-1 h-4 w-4" /><span>Este cierre es definitivo. Confirmo el efectivo contado.</span></label>
         <CashierSubmitButton idle="Cerrar caja" pending="Guardando cierre…" tone="danger" />
       </form>
@@ -309,12 +309,11 @@ function MoneyField({ currency, defaultValue, hint, label, name, positive = fals
   const basePattern = digits === 0 ? "[0-9]+" : digits === null ? "(?!)" : `[0-9]+([.,][0-9]{1,${digits}})?`;
   const zeroPattern = digits === 0 ? "(?!0+$)" : `(?!0+(?:[.,]0{1,${digits ?? 2}})?$)`;
   const pattern = positive ? `${zeroPattern}${basePattern}` : basePattern;
-  return <label className="grid gap-1.5 text-[12px] font-semibold text-text"><LabelText hint={hint}>{label}</LabelText>
-    <input required disabled={digits === null} name={name} type="text" inputMode="decimal" pattern={pattern} defaultValue={defaultValue} aria-describedby={`${name}-hint`} className="min-h-12 min-w-0 rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" />
+  return <Field className="grid gap-1.5 text-[12px] font-semibold text-text" hint={hint} label={label}>{(id) => <><input id={id} required disabled={digits === null} name={name} type="text" inputMode="decimal" pattern={pattern} defaultValue={defaultValue} aria-describedby={`${name}-hint`} className="min-h-12 min-w-0 rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" />
     <span id={`${name}-hint`} className="text-[11px] font-normal text-text-muted">{currency === undefined
       ? "Por ejemplo 130; si la moneda admite centavos, también 130.50."
       : digits === null ? decimals : `Por ejemplo 130${digits === 0 ? "" : " o 130.50"}; ${decimals}.`}</span>
-  </label>;
+  </>}</Field>;
 }
 
 function Metric({ emphasis = false, label, value }: { readonly emphasis?: boolean; readonly label: string; readonly value: string }): ReactNode {

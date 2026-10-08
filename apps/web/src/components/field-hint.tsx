@@ -71,25 +71,32 @@ export function FieldHint({ label, text }: { readonly label?: string | undefined
 }
 
 /**
- * Label text followed by its hint; use as the text part of a label so the hint stays a single flex/grid
- * item. The hint is named after the text. NOTE: inside a `<label>` the hint button still lands in the
- * control's accessible name; prefer `Field` / `CheckField`, which keep the hint outside the label.
+ * Label for a control that lives elsewhere in the markup (`htmlFor` = its id), with the hint beside it,
+ * not inside it. Use `Field` when the label and the control are siblings.
  */
-export function LabelText({ children, hint }: { readonly children: ReactNode; readonly hint: string }): ReactNode {
-  return <span className="inline-flex flex-wrap items-center gap-1.5">{children}<FieldHint label={typeof children === "string" ? children : undefined} text={hint} /></span>;
+export function FieldLabel({ className, hint, htmlFor, label }: {
+  readonly className?: string | undefined;
+  readonly hint: string;
+  readonly htmlFor: string;
+  readonly label: string;
+}): ReactNode {
+  return <span className={`inline-flex flex-wrap items-center gap-1.5${className === undefined ? "" : ` ${className}`}`}><label htmlFor={htmlFor}>{label}</label><FieldHint label={label} text={hint} /></span>;
 }
 
 /**
  * A labelled control with its hint beside the label, not inside it: the control's accessible name is
  * just the label text. `children` receives the id to put on the control.
  */
-export function Field({ children, className, hint, label }: {
+export function Field({ children, className, hint, id: fixedId, label }: {
   readonly children: (id: string) => ReactNode;
   readonly className: string;
   readonly hint?: string | undefined;
+  /** Existing control id to keep (tests, aria references); generated when omitted. */
+  readonly id?: string | undefined;
   readonly label: string;
 }): ReactNode {
-  const id = useId();
+  const generatedId = useId();
+  const id = fixedId ?? generatedId;
   return <div className={className}>
     <span className="inline-flex flex-wrap items-center gap-1.5"><label htmlFor={id}>{label}</label>{hint === undefined ? null : <FieldHint label={label} text={hint} />}</span>
     {children(id)}
