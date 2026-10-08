@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
@@ -31,18 +32,19 @@ export function AppNav({ canAccessSystemAdmin, canReadReports, branchName }: { r
     <nav aria-label="Navegación principal" className="flex w-[76px] shrink-0 flex-col items-stretch gap-2 bg-nav px-2 py-4 lg:w-56">
       {branchName !== undefined && initial !== "" ? (
         <div className="mb-3 flex flex-col items-center gap-1 lg:flex-row lg:gap-3" title={`Sucursal activa: ${branchName}`}>
-          <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-base font-bold text-white">{initial}</span>
+          <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/15 text-base font-bold text-white">{initial}</span>
           <span className="line-clamp-2 break-words text-center text-[10px] font-semibold leading-tight text-white lg:text-left lg:text-sm"><span className="sr-only">Sucursal activa: </span>{branchName}</span>
         </div>
       ) : <div className="mb-3 flex justify-center lg:justify-start"><BrandMark size={36} /></div>}
       {links.filter((link) => (canAccessSystemAdmin || link.href !== "/app/system-admin/restaurants") && (canReadReports || link.href !== "/app/reports/day")).map((link) => {
         const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
         return (
-          <a key={link.href} href={link.href} title={link.label} aria-label={link.label} aria-current={active ? "page" : undefined}
-            className={`flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl border px-1 py-1 !text-white hover:!text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white lg:flex-row lg:justify-start lg:gap-3 lg:px-3 ${active ? "border-white/40 bg-accent-hover font-semibold" : "border-transparent hover:bg-white/10"}`}>
+          <Link key={link.href} href={link.href} prefetch title={link.label} aria-label={link.label} aria-current={active ? "page" : undefined}
+            className={`nav-link relative flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl px-1 py-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white lg:flex-row lg:justify-start lg:gap-3 lg:px-3 ${active ? "bg-white/15 font-semibold" : "hover:bg-white/10"}`}>
+            {active && <span aria-hidden="true" className="absolute inset-y-2 left-0 w-1 rounded-r bg-white" />}
             <svg aria-hidden="true" className="shrink-0" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{link.icon}</svg>
             <span className="max-w-full truncate text-[10px] font-medium leading-tight lg:text-sm">{SHORT_LABELS[link.href] ?? link.label}</span>
-          </a>
+          </Link>
         );
       })}
     </nav>

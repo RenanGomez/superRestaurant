@@ -105,3 +105,17 @@ Antes: añadir `RECEIPT_COOKIE_SECRET=<32+ caracteres aleatorios>` a `apps/web/.
 3. **Resumen del día** (`/app/reports/day`, roles con `reports.read`): hoy por defecto; tarjetas de ventas, propinas, envíos y canceladas; tablas por canal, por método y turnos con fondo, esperado, contado y diferencia; cambiar de fecha; día vacío en ceros.
 4. **KDS**: tarjetas por orden con tiempo en verde/ámbar/rojo (10 y 20 min), más viejas primero y listas al final; «Empezar todo» / «Listo todo» marcan todas las líneas; la estación elegida se recuerda al recargar; «Nuevo» en tickets recientes; sonido opcional apagado por defecto.
 5. **Cotización ASAP**: una captura a domicilio sin hora programada se confirma y promete entre 30 y 45 minutos; dime si prefieres otros tiempos.
+
+## 10. Qué probar el 2026-10-08: Mesas, segunda ronda
+
+En `http://localhost:8082` (desactiva Grammarly en localhost):
+
+1. Cambia entre Mesas, Órdenes, Caja y Menú desde la barra lateral: no debe recargarse la página entera y debe sentirse más rápido.
+2. Cambia de pestaña menos de 15 s y regresa: no debe aparecer «Rendering». Tras más de 15 s oculta puede actualizarse una vez.
+3. Mesas: el plano ocupa todo el ancho; al tocar una mesa el diálogo se ve completo (cabecera y «Abrir cuenta») en tu pantalla y a 390×844.
+4. Barra lateral: iconos y textos blancos; la sección activa con fondo claro translúcido y una barra blanca a la izquierda, sin azul.
+5. «Cambiar sucursal» ya no está en Mesas: aparece arriba, junto a «Cerrar sesión» (sólo si tienes más de una sucursal).
+6. Editar plano: arrastra una mesa y suéltala → «Guardando…» → «Guardado». Vuelve a Mesas: está donde la dejaste.
+7. Selecciona una mesa y arrastra el asidero de la esquina inferior derecha (o usa «Más ancha / Más alta…»): cambia de tamaño y se guarda solo.
+8. En el panel de la mesa cambia nombre (máx. 40), capacidad y forma → «Guardar datos». La capacidad no cambia al cambiar el tamaño.
+9. «Nueva mesa»: se cierra con Cancelar, con ✕, con Esc y tocando fuera; al crear, la mesa aparece en un hueco libre.

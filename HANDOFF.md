@@ -1,5 +1,24 @@
 # HANDOFF
 
+## Mesas, segunda ronda del smoke — 2026-10-07 noche (REVIEW)
+
+- Emmanuel reportó 11 hallazgos en Mesas (sin imágenes adjuntas en la sesión; se trabajó con su descripción).
+- Diagnóstico L0 (CodeGraph): `AppNav` usa `<a>` (recarga completa por clic); layout + página + proxy repiten `getSession`/`listMemberships`/`authorizeBranch` en serie; `FocusRevalidate` y `TablesBoard` refrescan en `focus` y `visibilitychange` (el «Rendering» es el indicador de `next dev`); `planCanvasStyle` limita el ancho a 70vh×proporción; el editor sólo guarda con el formulario «Guardar layout»; `CreateTableForm` es un `<details>` sin cancelar; la capacidad es independiente del tamaño en SQL (`capacity between 1 and 50`) pero no hay comando para editarla.
+- Delegado en paralelo (Codex falla por entorno: `helper_unknown_error`; desviación §19.1 como en la ronda anterior): implementer-claude `web-tables-smoke-r2` (C, sonnet) y implementer-claude `dining-table-details-api` (A, sonnet). Archivos disjuntos; la UI programa contra el contrato fijado en el paquete A.
+- La tarea de menú `web-menu-smoke-fixes` (Codex) murió por el mismo error de entorno sin cambios en su worktree; sigue pendiente.
+- Resultado: ambas ramas integradas en main (web `f9e7c3e`; API y `e861ef0` en `5f93de3`). Puertas web lint/typecheck/test/build, shared-types y api verdes con Node 24.19.0 (`C:\Users\Emmanuel G\AppData\Local\Programs\node24`; invocar pnpm con la ruta entre comillas). Verificador SQL de detalles verde 3/5 con catálogo 96→97→96 funciones; los fallos son timeouts del arnés. Codex review no corre (`helper_unknown_error`), sólo Sonnet. CodeGraph se desconectó a mitad de sesión; el análisis posterior se cubrió con typecheck y pruebas.
+- Decisión de Emmanuel: unir mesas «al abrir cuenta» (PROJECT_NOTES). Siguiente tarea `tables-join-on-open` (A).
+- Emmanuel autorizó («autorizo») y se aplicó `20261008000100` con el runbook: preflight (sólo esa candidata más la histórica `20260908000100` excluida), sonda rollback-only 6 sentencias, staging 64 archivos sin diferencias de hash, dry-run exacto, apply exit 0, postcheck 48/5/97 con EXECUTE sólo `app_api`, segundo dry-run `upToDate`, staging borrado. API local reiniciado en 3000 (`tmp/local-api-20261008.*.log`); web dev 8082 sigue con HMR.
+- Siguiente: prueba visual de Emmanuel (guía §10); después `tables-join-on-open` (A).
+
+## Menú, segunda ronda del smoke — 2026-10-07 tarde (IN_PROGRESS)
+
+- Emmanuel reportó 7 hallazgos del editor de menú. L0 respondió el punto 3 antes de cambiar (sabores vs. extras; el dominio rechaza el mismo grupo en ambos, `menu.ts:633`) y Emmanuel lo aceptó; para el punto 4 eligió B (mitades en el producto) y dictó las reglas de pizza (PROJECT_NOTES «Smoke 2026-10-07»).
+- Diagnóstico L0: arrastre funciona sólo al soltar y sin señal visual; borrado de tamaño correcto en `confirmRemoval` (causa por reproducir); foto: bucket `catalog-images` verificado por GET read-only (200, público, 2 MB, jpeg/png/webp), API devuelve siempre `code`, así que el mensaje genérico viene de una respuesta sin código o de que la server action lanzó; no se pudo reproducir en navegador porque el login es remoto.
+- Delegado en paralelo: Codex `web-menu-smoke-fixes` (C, medium; worktree `C:\tmp\sr-wt\web-menu-smoke-fixes`) puntos 0/1/2/5/6; implementer-claude `menu-halves-product-level` (A) dominio + contratos compatibles + SQL + API.
+- Codex `web-menu-smoke-fixes` falló sin tocar archivos (`helper_unknown_error: setup refresh had errors`, segunda vez tras su actualización); la tarea pasó a implementer-claude (rama `claude/web-menu-smoke-fixes`), desviación §19.1 registrada. Revisar el entorno de Codex antes de volver a delegarle.
+- Siguiente: revisar ambos diffs (Codex review para C; Sonnet + Codex review para A), integrar, U3 (editor de mitades en producto + mensaje de grupo ya usado + mitad armada en la hoja de captura), aplicar la migración con el runbook (si incluye migración de datos de `variant.fraction`, pedir autorización explícita según PROJECT_NOTES 2026-09-27).
+
 ## Bloque técnico previo al smoke — 2026-10-06 noche (REVIEW)
 
 - Emmanuel preguntó cuándo conviene el smoke; L0 recomendó hacerlo ya tras un bloque técnico sin pantallas nuevas, y Emmanuel aprobó («arranca»). Tres unidades en paralelo (implementer-claude; Codex sigue sin cuota hasta el 7 de octubre 00:20; todas las revisiones por Sonnet, desviación §19.1): U1 datos del recibo en el detalle (A), U2 nombre de quien cancela + resumen por `received_at` (A), U3 flujos HTTP de cancelación y resumen (B). Detalle, hashes, decisiones y deuda en la fila `tech-block-20261006` de TODO.
