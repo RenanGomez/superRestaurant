@@ -1,3 +1,4 @@
+import { FRACTION_CUSTOM_FLAVOR_ID } from "@super-restaurant/domain";
 import type { ModifierPriceSnapshot, OrderItemPriceSnapshot } from "@super-restaurant/domain";
 import type { FractionHalfProjectionV1, LineFractionV1, OrderDetailFractionHalfV1 } from "@super-restaurant/shared-types";
 
@@ -40,7 +41,11 @@ export function describeHalves(snapshot: OrderItemPriceSnapshot): readonly Order
  * A half whose ids cannot be recovered completely is returned without ids.
  */
 export function describeHalvesFromSnapshot(snapshot: OrderItemPriceSnapshot): readonly FractionHalfProjectionV1[] {
-  const flavorIds = new Map((snapshot.fractionBreakdown ?? []).map((entry) => [entry.fraction, entry.flavorOptionId] as const));
+  // A half built ingredient by ingredient is frozen with the sentinel id; the projection exposes it as null.
+  const flavorIds = new Map((snapshot.fractionBreakdown ?? []).map((entry) => [
+    entry.fraction,
+    entry.flavorOptionId === FRACTION_CUSTOM_FLAVOR_ID ? null : entry.flavorOptionId,
+  ] as const));
   return describeHalves(snapshot).map((half) => {
     const flavorOptionId = flavorIds.get(half.fraction);
     const prefix = `extra:${half.fraction}:`;

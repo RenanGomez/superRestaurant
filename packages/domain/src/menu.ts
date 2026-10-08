@@ -49,9 +49,12 @@ export interface MenuCategoryCatalog {
 }
 
 /**
- * Half-and-half configuration of one size. Flavors are the options of `flavorGroupId` (an option
- * priced at zero falls back to the size price) and extras the options of `extraGroupId`; both groups
- * belong to the product and are resolved only through the fraction rules while a line is split.
+ * Half-and-half configuration. It lives on the product (all sizes, or the product without sizes);
+ * the same shape on a size is the legacy source, used only while the product carries none.
+ * Flavors are the options of `flavorGroupId` (an option priced at zero falls back to the size price,
+ * or the product price when it has no sizes). `extraGroupId` is the ingredient group: its options
+ * are the extras of a flavor half and the ingredients of a half built ingredient by ingredient. Both
+ * groups belong to the product and are resolved only through the fraction rules while a line is split.
  */
 export interface MenuVariantFractionConfig {
   readonly enabled: boolean;
@@ -60,6 +63,8 @@ export interface MenuVariantFractionConfig {
   /** Labels of ingredients that may be excluded on a half; the label is the frozen exclusion name. */
   readonly excludableIngredientIds: readonly string[];
 }
+
+export type MenuProductFractionConfig = MenuVariantFractionConfig;
 
 /** A size of one product ("Chica", "Grande") with its own whole-unit price. */
 export interface MenuProductVariantCatalog {
@@ -74,7 +79,8 @@ export interface MenuProductVariantCatalog {
 
 export interface MenuFractionSlotSelection {
   readonly fraction: Exclude<PizzaFraction, "whole">;
-  readonly flavorOptionId: string;
+  /** `null` is a half built ingredient by ingredient (needs an ingredient group; not both halves). */
+  readonly flavorOptionId: string | null;
   readonly extraOptionIds: readonly string[];
   readonly excludedIngredientIds: readonly string[];
 }
@@ -102,6 +108,8 @@ export interface MenuProductCatalog {
   readonly modifierGroupIds: readonly string[];
   /** Optional sizes; absent or empty means the product is sold at `unitPrice`. */
   readonly variants?: readonly MenuProductVariantCatalog[];
+  /** Half-and-half setup for every size of the product (or the product itself when it has no sizes). */
+  readonly fraction?: MenuProductFractionConfig;
 }
 
 /** One coherent, restaurant-owned menu release. Branch/time availability is deliberately outside this neutral slice. */
@@ -129,7 +137,7 @@ export interface MenuProductSelectionContext {
   readonly currency: string;
   /** Required when the product has active variants; rejected when the product has no such variant. */
   readonly variantId?: string | null | undefined;
-  /** Optional half-and-half selection; requires a variant with fractions enabled. */
+  /** Optional half-and-half selection; requires fractions enabled on the product (or, legacy, on the size). */
   readonly fraction?: MenuFractionSelection | null | undefined;
 }
 
@@ -252,6 +260,10 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
       });
     }).sort(compareMenuDisplayOrder);
 
+    const productFraction = product.fraction === undefined
+      ? undefined
+      : validateFractionConfig(product.fraction, product.modifierGroupIds);
+
     return deepFreeze({
       id: product.id,
       restaurantId: product.restaurantId,
@@ -267,6 +279,7 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
       ...(product.tax === undefined ? {} : { tax: product.tax }),
       modifierGroupIds: [...product.modifierGroupIds],
       ...(variants.length === 0 ? {} : { variants }),
+      ...(productFraction === undefined ? {} : { fraction: productFraction }),
     });
   }).sort(compareMenuDisplayOrder);
 
@@ -343,8 +356,8 @@ function createMenuProductPriceSnapshotCanonical(
   }
 
   const fractionSelection = context.fraction ?? null;
-  const fractionConfig = variant?.fraction;
-  if (fractionSelection !== null && (variant === undefined || fractionConfig?.enabled !== true)) {
+  const fractionConfig = effectiveFractionConfig(product, variant);
+  if (fractionSelection !== null && fractionConfig?.enabled !== true) {
     throw new MenuFractionSelectionInvalidError(product.id, ["fraction_not_enabled"]);
   }
   // Same slot order the SQL requires: half-a first, half-b second.
@@ -393,16 +406,16 @@ function createMenuProductPriceSnapshotCanonical(
     ).modifiers;
   });
 
-  if (fractionSelection !== null && variant !== undefined) {
+  if (fractionSelection !== null) {
     const resolved = resolveFractionPricing(
-      catalogVariantToFractionVariant(catalog, product.id, variant.id),
+      catalogVariantToFractionVariant(catalog, product.id, variant?.id ?? null),
       {
         catalogVersion: product.catalogVersion,
         comboSubstitutions: [],
         geometry: fractionSelection.geometry,
         restaurantId: context.restaurantId,
         slots: fractionSelection.slots,
-        variantId: variant.id,
+        variantId: variant?.id ?? product.id,
       },
       { actorId: "menu-selection", actorRole: "staff" },
     );
@@ -428,8 +441,7 @@ function createMenuProductPriceSnapshotCanonical(
         ...(priced.tax === undefined ? {} : { tax: priced.tax }),
         unit: priced.unit,
         unitPrice: priced.unitPrice,
-        variantId: variant.id,
-        variantName: variant.name,
+        ...(variant === undefined ? {} : { variantId: variant.id, variantName: variant.name }),
       },
     }).input.snapshot;
   }
@@ -455,20 +467,34 @@ function createMenuProductPriceSnapshotCanonical(
 }
 
 /**
- * Builds the fraction-pricing view of one half-and-half size from a validated menu release.
- * A flavor option priced at zero takes the size price; an option is selectable only while both
- * its group and the option are active.
+ * The half-and-half setup in force for a selection: the product's own when it carries one (even a
+ * disabled one), otherwise the legacy per-size setup of the chosen size.
+ */
+function effectiveFractionConfig(
+  product: Readonly<MenuProductCatalog>,
+  variant: MenuProductVariantCatalog | undefined,
+): MenuVariantFractionConfig | undefined {
+  return product.fraction ?? variant?.fraction;
+}
+
+/**
+ * Builds the fraction-pricing view of one half-and-half size (or of the product itself when
+ * `variantId` is null) from a validated menu release. A flavor option priced at zero takes the size
+ * price, or the product price without sizes; an option is selectable only while both its group and
+ * the option are active. A half built ingredient by ingredient costs the same base price and is
+ * offered only when the setup has an ingredient group.
  */
 export function catalogVariantToFractionVariant(
   catalog: ValidatedMenuCatalog,
   productId: string,
-  variantId: string,
+  variantId: string | null,
 ): FractionPricingVariant {
   const product = catalog.products.find(({ id }) => id === productId);
   if (product === undefined) throw new MenuProductNotFoundError(productId);
-  const variant = (product.variants ?? []).find(({ id }) => id === variantId);
-  if (variant === undefined) throw new MenuProductVariantNotFoundError(productId, variantId);
-  const config = variant.fraction;
+  const variant = variantId === null ? undefined : (product.variants ?? []).find(({ id }) => id === variantId);
+  if (variantId !== null && variant === undefined) throw new MenuProductVariantNotFoundError(productId, variantId);
+  const config = effectiveFractionConfig(product, variant);
+  const basePriceMinor = (variant?.unitPrice ?? product.unitPrice).amountMinor;
   if (config === undefined || !config.enabled || config.flavorGroupId === null) {
     throw new MenuFractionSelectionInvalidError(productId, ["fraction_not_enabled"]);
   }
@@ -479,12 +505,13 @@ export function catalogVariantToFractionVariant(
   if (config.extraGroupId !== null && extraGroup === undefined) {
     throw new MenuProductModifierGroupNotFoundError(productId, config.extraGroupId);
   }
-  const sku = variant.sku ?? product.sku;
+  const sku = variant?.sku ?? product.sku;
   return deepFreeze({
-    active: variant.active && product.active,
+    active: (variant?.active ?? true) && product.active,
     catalogVersion: product.catalogVersion,
     comboSlots: [],
     currency: catalog.currency,
+    ...(config.extraGroupId === null ? {} : { customHalfPriceMinor: basePriceMinor }),
     extras: (extraGroup?.options ?? []).map((option) => ({
       active: extraGroup!.active && option.active,
       name: option.name,
@@ -495,7 +522,7 @@ export function catalogVariantToFractionVariant(
       active: flavorGroup.active && option.active,
       name: option.name,
       optionId: option.id,
-      priceMinor: option.unitPrice.amountMinor === 0 ? variant.unitPrice.amountMinor : option.unitPrice.amountMinor,
+      priceMinor: option.unitPrice.amountMinor === 0 ? basePriceMinor : option.unitPrice.amountMinor,
     })),
     includedIngredients: config.excludableIngredientIds.map((label) => ({ ingredientId: label, name: label })),
     name: product.name,
@@ -505,7 +532,8 @@ export function catalogVariantToFractionVariant(
     stationId: product.stationId,
     ...(product.tax === undefined ? {} : { tax: product.tax }),
     unit: product.unit,
-    variantId: variant.id,
+    // A product without sizes uses its own id as the (internal) size id of the pricing view.
+    variantId: variant?.id ?? product.id,
   });
 }
 
@@ -559,6 +587,7 @@ function normalizeMenuProduct(value: unknown): MenuProductCatalog {
   const variants = variantsValue === undefined
     ? []
     : asDataArray(variantsValue, "menu product variants").map(normalizeMenuProductVariant);
+  const fractionValue = optionalOwnData(product, "fraction", "menu product fraction");
   const normalizedSnapshot = calculateOrderItemTotals({
     orderItemId: id as string,
     quantity: 1,
@@ -589,6 +618,7 @@ function normalizeMenuProduct(value: unknown): MenuProductCatalog {
     ...(normalizedSnapshot.tax === undefined ? {} : { tax: normalizedSnapshot.tax }),
     modifierGroupIds,
     ...(variants.length === 0 ? {} : { variants }),
+    ...(fractionValue === undefined ? {} : { fraction: normalizeFractionConfig(fractionValue) }),
   });
 }
 
@@ -658,7 +688,7 @@ function normalizeMenuFractionSelection(value: unknown): MenuFractionSelection {
       return {
         excludedIngredientIds: ownDataArray(slot, "excludedIngredientIds", "menu fraction excludedIngredientIds").map((id) => id as string),
         extraOptionIds: ownDataArray(slot, "extraOptionIds", "menu fraction extraOptionIds").map((id) => id as string),
-        flavorOptionId: ownData(slot, "flavorOptionId", "menu fraction flavorOptionId") as string,
+        flavorOptionId: ownData(slot, "flavorOptionId", "menu fraction flavorOptionId") as string | null,
         fraction: ownData(slot, "fraction", "menu fraction fraction") as MenuFractionSlotSelection["fraction"],
       };
     }),

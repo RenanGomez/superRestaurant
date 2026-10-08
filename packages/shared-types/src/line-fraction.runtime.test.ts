@@ -4,7 +4,7 @@ const FLAVOR_A = "11111111-1111-4111-8111-111111111111";
 const FLAVOR_B = "22222222-2222-4222-8222-222222222222";
 const EXTRA = "33333333-3333-4333-8333-333333333333";
 
-const slot = (fraction: string, flavorOptionId: string, extras: string[] = [], excluded: string[] = []) => ({
+const slot = (fraction: string, flavorOptionId: string | null, extras: string[] = [], excluded: string[] = []) => ({
   excludedIngredientIds: excluded, extraOptionIds: extras, flavorOptionId, fraction,
 });
 
@@ -22,7 +22,7 @@ const slot = (fraction: string, flavorOptionId: string, extras: string[] = [], e
   expect(parseLineFractionV1({ geometry: "halves", slots: [slot("half-a", "nope"), slot("half-b", FLAVOR_B)], extra: 1 }) === undefined, "rejected");
 }
 
-{ // add-item command accepts an optional fraction only together with a variant
+{ // add-item command accepts an optional fraction (with or without a size)
   const base = {
     deviceId: "44444444-4444-4444-8444-444444444444",
     eventId: "55555555-5555-4555-8555-555555555555",
@@ -41,8 +41,20 @@ const slot = (fraction: string, flavorOptionId: string, extras: string[] = [], e
   const variantId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
   expect(parseAddOrderItemCommandV1(base)?.fraction === null, "fraction defaults to null");
   expect(parseAddOrderItemCommandV1({ ...base, fraction, variantId })?.fraction?.geometry === "halves", "fraction parsed");
-  expect(parseAddOrderItemCommandV1({ ...base, fraction }) === undefined, "rejected");
+  // Halves are configured on the product, so a product without sizes may be split too.
+  expect(parseAddOrderItemCommandV1({ ...base, fraction })?.fraction?.geometry === "halves", "fraction without a size parsed");
   expect(parseAddOrderItemCommandV1({ ...base, fraction: { geometry: "halves", slots: [] }, variantId }) === undefined, "rejected");
+}
+{ // a half built ingredient by ingredient has a null flavor; both halves custom is rejected
+  const custom = parseLineFractionV1({ geometry: "halves", slots: [slot("half-a", null, [EXTRA]), slot("half-b", FLAVOR_B)] });
+  expect(custom?.slots[0]?.flavorOptionId === null && custom.slots[0].extraOptionIds.join() === EXTRA, "custom half parses");
+  expect(custom?.slots[1]?.flavorOptionId === FLAVOR_B, "flavor half keeps its id");
+  expect(parseLineFractionV1({ geometry: "halves", slots: [slot("half-a", FLAVOR_A), slot("half-b", null)] })?.slots[1]?.flavorOptionId === null, "custom second half parses");
+  expect(parseLineFractionV1({ geometry: "halves", slots: [slot("half-a", null), slot("half-b", null)] }) === undefined, "two custom halves rejected");
+  expect(parseLineFractionV1({ geometry: "halves", slots: [slot("half-a", "custom"), slot("half-b", FLAVOR_B)] }) === undefined, "sentinel text rejected");
+  const half = { amountMinor: 100, exclusions: [], extras: ["Queso"], flavorName: "Armada", fraction: "half-a" };
+  const projected = parseFractionHalfProjectionV1({ ...half, excludedIngredientIds: [], extraOptionIds: [EXTRA], flavorOptionId: null });
+  expect(projected?.flavorOptionId === null && projected.extraOptionIds?.join() === EXTRA, "custom projection half keeps null id");
 }
 { // projection halves: ids are optional (old projections) but all-or-none and validated
   const half = { amountMinor: 100, exclusions: ["cebolla"], extras: ["Queso"], flavorName: "Hawaiana", fraction: "half-a" };

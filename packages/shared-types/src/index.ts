@@ -298,8 +298,12 @@ export interface MenuCategoryV1 {
 }
 
 /**
- * Half-and-half setup of one size: flavors are the options of `flavorGroupId` (an option priced at
- * zero uses the size price) and extras the options of `extraGroupId`; both are groups of the product.
+ * Half-and-half setup. It lives on the product (`MenuProductV1.fraction`: every size, or the product
+ * itself when it has no sizes); the same shape on a size is the legacy source, used only while the
+ * product carries none. Flavors are the options of `flavorGroupId` (an option priced at zero uses the
+ * size price, or the product price without sizes). `extraGroupId` is the ingredient group: its options
+ * are the extras of a flavor half and the ingredients of a half built ingredient by ingredient.
+ * Both are groups of the product.
  */
 export interface MenuVariantFractionV1 {
   readonly enabled: boolean;
@@ -307,6 +311,8 @@ export interface MenuVariantFractionV1 {
   readonly extraGroupId: string | null;
   readonly flavorGroupId: string | null;
 }
+
+export type MenuProductFractionV1 = MenuVariantFractionV1;
 
 /** A size of a product ("Chica", "Grande") with its own whole-unit price. */
 export interface MenuProductVariantV1 {
@@ -337,6 +343,8 @@ export interface MenuProductV1 {
   readonly unitPriceMinor: number;
   /** Optional on input (older producers); the normalized output always carries it, `[]` when none. */
   readonly variants?: readonly MenuProductVariantV1[];
+  /** Optional on input (older producers); the normalized output always carries it, `null` when absent. */
+  readonly fraction?: MenuProductFractionV1 | null;
 }
 
 export interface MenuModifierOptionV1 {
@@ -1014,8 +1022,9 @@ function parseMenuCatalogPayload(record: PlainRecord): MenuCatalogPayloadV1 | un
 
   const groupProductById = new Map(definedModifierGroups.map((group) => [group.groupId, group.productId]));
   for (const product of definedProducts) {
-    for (const variant of product.variants ?? []) {
-      for (const groupId of [variant.fraction?.flavorGroupId, variant.fraction?.extraGroupId]) {
+    const configs = [product.fraction, ...(product.variants ?? []).map((variant) => variant.fraction)];
+    for (const config of configs) {
+      for (const groupId of [config?.flavorGroupId, config?.extraGroupId]) {
         if (groupId !== undefined && groupId !== null && groupProductById.get(groupId) !== product.productId) return undefined;
       }
     }
@@ -1072,9 +1081,10 @@ function parseMenuProductV1(value: unknown): MenuProductV1 | undefined {
   const record = parseExactRecordWithOptionalKeys(value, [
     "productId", "categoryId", "name", "sku", "active", "displayOrder", "stationId",
     "unit", "unitPriceMinor", "tax",
-  ], ["imagePath", "variants"]);
+  ], ["imagePath", "variants", "fraction"]);
   if (record === undefined) return undefined;
   const variants = parseMenuProductVariantsV1(record);
+  const fraction = Object.hasOwn(record, "fraction") ? parseMenuVariantFractionV1(ownValue(record, "fraction")) : null;
   const productId = parseUuid(ownValue(record, "productId"));
   const categoryId = parseUuid(ownValue(record, "categoryId"));
   const name = parseDisplayName(ownValue(record, "name"), 120);
@@ -1101,9 +1111,10 @@ function parseMenuProductV1(value: unknown): MenuProductV1 | undefined {
     || tax === undefined
     || imagePath === undefined
     || variants === undefined
+    || fraction === undefined
   ) return undefined;
   return Object.freeze({
-    active, categoryId, displayOrder, imagePath, name, productId, sku, stationId, tax, unit, unitPriceMinor, variants,
+    active, categoryId, displayOrder, fraction, imagePath, name, productId, sku, stationId, tax, unit, unitPriceMinor, variants,
   });
 }
 
@@ -1177,7 +1188,7 @@ function parseMenuVariantFractionV1(value: unknown): MenuVariantFractionV1 | nul
   });
 }
 
-/** Exact keys plus any subset of the optional ones (all subsets are tried; at most two keys here). */
+/** Exact keys plus any subset of the optional ones (all subsets are tried; at most three keys here). */
 function parseExactRecordWithOptionalKeys(
   value: unknown,
   keys: readonly string[],

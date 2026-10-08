@@ -386,6 +386,7 @@ export type {
   MenuCategoryCatalog,
   MenuFractionSelection,
   MenuFractionSlotSelection,
+  MenuProductFractionConfig,
   MenuVariantFractionConfig,
   MenuModifierGroupSelection,
   MenuProductCatalog,
@@ -441,7 +442,7 @@ export type {
   DeliveryQuoteOverride,
   QuoteDeliveryInput,
 } from "./delivery-quote.js";
-export { resolveFractionPricing } from "./fraction-pricing.js";
+export { FRACTION_CUSTOM_FLAVOR_ID, FRACTION_CUSTOM_FLAVOR_NAME, resolveFractionPricing } from "./fraction-pricing.js";
 export type {
   FractionComboSlot,
   FractionComboSubstitutionOption,

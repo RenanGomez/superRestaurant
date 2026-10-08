@@ -44,7 +44,7 @@ expect(parsed?.modifierGroups[0]?.selections[0]?.quantity === 2, "modifier quant
 
 const half = parseCaptureLineQuoteRequestV1({ ...request, variantId, fraction: halves });
 expect(half?.fraction?.geometry === "halves" && half.variantId === variantId, "half-and-half request parses");
-expect(parseCaptureLineQuoteRequestV1({ ...request, fraction: halves }) === undefined, "halves require a variant");
+expect(parseCaptureLineQuoteRequestV1({ ...request, fraction: halves })?.fraction?.geometry === "halves", "halves of a product without sizes parse");
 
 const bad = (patch: Record<string, unknown>): unknown => parseCaptureLineQuoteRequestV1({ ...request, ...patch });
 expect(bad({ quantity: 0 }) === undefined, "quantity 0 rejected");

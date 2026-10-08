@@ -159,7 +159,10 @@ export function restoreLineFraction(
     const hasIds = half.flavorOptionId !== undefined && half.extraOptionIds !== undefined
       && half.excludedIngredientIds !== undefined;
     const flavorOptionId = hasIds ? half.flavorOptionId : uniqueActiveByName(flavorGroup, half.flavorName);
-    if (flavorOptionId === undefined || !activeOption(flavorGroup, flavorOptionId)) return { ok: false, reason: "flavor" };
+    // A half built ingredient by ingredient (null id) is not editable in this sheet yet: fail closed.
+    if (flavorOptionId === undefined || flavorOptionId === null || !activeOption(flavorGroup, flavorOptionId)) {
+      return { ok: false, reason: "flavor" };
+    }
     const extraOptionIds = hasIds ? [...half.extraOptionIds!] : half.extras.map((name) => uniqueActiveByName(extraGroup, name));
     if (extraOptionIds.some((id) => id === undefined || !activeOption(extraGroup, id))) return { ok: false, reason: "extra" };
     const excludedIngredientIds = hasIds ? half.excludedIngredientIds! : half.exclusions;

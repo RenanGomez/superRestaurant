@@ -297,3 +297,22 @@ expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, fl
 expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, flavorGroupId: "9a1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8" } }]), "foreign flavor group is rejected");
 expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, extraGroupId: groupId } }]), "same group for flavors and extras is rejected");
 expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, excludableIngredientIds: ["a", "a"] } }]), "duplicate excludable ingredient is rejected");
+
+// Half-and-half configuration of the product: optional on input, normalized to null, groups must belong to the product.
+function withProductFraction(fraction: unknown): Record<string, unknown> {
+  const next = command();
+  (next.products as Record<string, unknown>[])[0]!.fraction = fraction;
+  return next;
+}
+const parsedProductFraction = parseSaveMenuCatalogCommandV1(withProductFraction(fractionConfig));
+expectDefined(parsedProductFraction, "product with fraction config parses");
+expect(parsedProductFraction.products[0]?.fraction?.flavorGroupId === groupId, "product fraction config is preserved");
+expect(Object.isFrozen(parsedProductFraction.products[0]?.fraction), "product fraction is frozen");
+expect(parseSaveMenuCatalogCommandV1(withProductFraction(null))?.products[0]?.fraction === null, "explicit null product fraction parses");
+expect(parseSaveMenuCatalogCommandV1(command())?.products[0]?.fraction === null, "product fraction defaults to null");
+expect(parsedProductFraction.products[0]?.variants?.length === 0, "a product without sizes keeps its fraction");
+expectRejected(withProductFraction({ ...fractionConfig, flavorGroupId: null }), "enabled product fraction needs a flavor group");
+expectRejected(withProductFraction({ ...fractionConfig, flavorGroupId: "9a1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8" }), "foreign product flavor group is rejected");
+expectRejected(withProductFraction({ ...fractionConfig, extraGroupId: groupId }), "same group for product flavors and ingredients is rejected");
+expectRejected(withProductFraction({ ...fractionConfig, excludableIngredientIds: ["a", "a"] }), "duplicate product excludable ingredient is rejected");
+expectRejected(withProductFraction({ ...fractionConfig, extra: 1 }), "extra product fraction field is rejected");

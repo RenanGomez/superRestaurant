@@ -157,6 +157,9 @@ export class MenuCatalogService {
 }
 
 function validDomainCatalog(command: SaveMenuCatalogCommandV1): boolean {
+  // One source of truth: an enabled product-level setup cannot coexist with an enabled legacy size one.
+  if (command.products.some((product) => product.fraction?.enabled === true
+    && (product.variants ?? []).some((variant) => variant.fraction?.enabled === true))) return false;
   try {
     validateMenuCatalog({
       catalogVersion: command.catalogVersion,
@@ -224,6 +227,7 @@ function validDomainCatalog(command: SaveMenuCatalogCommandV1): boolean {
             ...(variant.fraction === undefined || variant.fraction === null ? {} : { fraction: toDomainFraction(variant.fraction) }),
           })),
         }),
+        ...(product.fraction === undefined || product.fraction === null ? {} : { fraction: toDomainFraction(product.fraction) }),
       })),
       restaurantId: command.scope.restaurantId,
     });

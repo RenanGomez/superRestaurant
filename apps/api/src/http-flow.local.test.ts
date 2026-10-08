@@ -7,6 +7,7 @@ import { cardTransferFlow } from "./operations/http-flow-card-transfer.js";
 import { daySummaryFlow } from "./operations/http-flow-day-summary.js";
 import { deliveryFlow } from "./operations/http-flow-delivery.js";
 import { halvesFlow } from "./operations/http-flow-halves.js";
+import { halvesProductLevelFlow } from "./operations/http-flow-halves-product-level.js";
 import { bootstrapHttpApp } from "./operations/http-test-app.js";
 import { HTTP_TEST_ACTORS, provisionHttpFixtures, type HttpTestActorName } from "./operations/http-test-fixtures.js";
 import { assertLocalConfirmation, listMigrationNames, LocalPostgres } from "./operations/local-postgres.js";
@@ -180,6 +181,8 @@ test("http flow: cash register, order, kitchen, cash payment with change and tip
 test("http flow: phone delivery, courier ownership, cash settle with change and X cut", async () => { await deliveryFlow(); });
 
 test("http flow: half-and-half line quote, selection plan and kitchen ticket", async () => { await halvesFlow(); });
+
+test("http flow: product-level halves without sizes, ingredient-built half and single setup source", async () => { await halvesProductLevelFlow(); });
 
 test("http flow: card terminal plus transfer split tender and transfer refused on a delivery in transit", async () => { await cardTransferFlow(); });
 
