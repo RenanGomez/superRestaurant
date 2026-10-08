@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type FormEvent, type KeyboardEvent } from "react";
 import Link from "next/link";
 import type { BranchScope, CustomerDirectoryDetailV1, CustomerDirectoryDetailAddressV1, CustomerDirectorySearchResultV1, CustomerRecentOrderListV1, CustomerPhoneInputV1, CustomerAddressFieldsV1, CustomerSearchModeV1 } from "@super-restaurant/shared-types";
+import { LabelText } from "../../../components/field-hint";
 import { getCustomerAutocompleteRequest, getCustomerDirectorySuggestions, insertCustomerDirectorySuggestion, isCurrentCustomerAutocompleteRequest, type CustomerAutocompleteRequest, type CustomerDirectorySuggestion, type CustomerRequestResult } from "../../../lib/customer-directory";
 import { countOrderArticles } from "../../../lib/customer-order-history";
 import { formatDeliveryMatch } from "../../../lib/delivery-zones";
@@ -179,8 +180,8 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
     <section className={panelClass} aria-labelledby="customer-search-title">
       <h2 id="customer-search-title" className="mb-3 font-heading text-lg font-semibold">Buscar cliente</h2>
       <form onSubmit={searchSubmit} className="flex flex-wrap items-end gap-3">
-        <label className="flex min-w-0 flex-col gap-1 text-sm">Buscar por<select name="mode" className={inputClass} disabled={locked} value={searchMode} onChange={event => { setSearchMode(event.target.value as CustomerSearchModeV1); setActiveSuggestion(-1); setSuggestionsOpen(false); }}><option value="phone">Teléfono</option><option value="name">Nombre o alias</option><option value="address">Dirección o referencia</option></select></label>
-        <label className="relative flex min-w-0 flex-1 basis-48 flex-col gap-1 text-sm">Dato de búsqueda
+        <label className="flex min-w-0 flex-col gap-1 text-sm"><LabelText hint="Elige con qué dato quieres encontrar al cliente: teléfono, nombre o alias, o dirección.">Buscar por</LabelText><select name="mode" className={inputClass} disabled={locked} value={searchMode} onChange={event => { setSearchMode(event.target.value as CustomerSearchModeV1); setActiveSuggestion(-1); setSuggestionsOpen(false); }}><option value="phone">Teléfono</option><option value="name">Nombre o alias</option><option value="address">Dirección o referencia</option></select></label>
+        <label className="relative flex min-w-0 flex-1 basis-48 flex-col gap-1 text-sm"><LabelText hint="Escribe parte del teléfono, nombre o dirección; aparecen sugerencias mientras escribes.">Dato de búsqueda</LabelText>
           <input ref={searchInputRef} name="query" required maxLength={200} className={inputClass} disabled={locked} autoComplete="off"
             role="combobox" aria-autocomplete="list" aria-expanded={suggestionsOpen && optionCount > 0} aria-controls="customer-search-suggestions"
             aria-activedescendant={suggestionsOpen && activeSuggestion >= 0 ? activeSuggestion < suggestions.length
@@ -298,10 +299,10 @@ function ProfileForm({ customer, disabled, onSave }: {
   return <section className={panelClass}><h2 className="mb-3 font-heading text-lg font-semibold">{customer === undefined ? "Alta rápida" : "Ficha del cliente"}</h2>
     <form onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget); onSave(String(data.get("displayName") ?? "").trim(), phones.map(phone => ({ ...phone, label: phone.label.trim(), displayValue: phone.displayValue.trim() }))); }}>
       <fieldset disabled={disabled} className="flex min-w-0 flex-col gap-3">
-        <label className="flex flex-col gap-1 text-sm">Nombre o alias<input name="displayName" required maxLength={120} defaultValue={customer?.displayName ?? ""} className={inputClass} autoComplete="off" /></label>
+        <label className="flex flex-col gap-1 text-sm"><LabelText hint="Cómo identificas al cliente al tomar el pedido; puede ser su nombre o un apodo.">Nombre o alias</LabelText><input name="displayName" required maxLength={120} defaultValue={customer?.displayName ?? ""} className={inputClass} autoComplete="off" /></label>
         {phones.map((phone, index) => <div key={phone.contactId} className="flex min-w-0 flex-wrap items-end gap-2">
-          <div className="flex min-w-0 flex-1 basis-28 flex-col gap-2"><label className="flex flex-col gap-1 text-sm">Etiqueta de teléfono {index + 1}<select className={inputClass} value={phoneLabels.includes(phone.label as typeof phoneLabels[number]) ? phone.label : "Otro"} onChange={event => setPhones(phones.map(item => item.contactId === phone.contactId ? { ...item, label: event.target.value === "Otro" ? "" : event.target.value } : item))}>{phoneLabels.map(label => <option key={label}>{label}</option>)}<option>Otro</option></select></label>{!phoneLabels.includes(phone.label as typeof phoneLabels[number]) && <label className="flex flex-col gap-1 text-sm">Otra etiqueta<input required maxLength={40} className={inputClass} value={phone.label} onChange={event => setPhones(phones.map(item => item.contactId === phone.contactId ? { ...item, label: event.target.value } : item))} /></label>}</div>
-          <label className="flex min-w-0 flex-1 basis-40 flex-col gap-1 text-sm">Teléfono {index + 1}<input type="tel" required maxLength={80} className={inputClass} value={phone.displayValue} onChange={event => setPhones(phones.map(item => item.contactId === phone.contactId ? { ...item, displayValue: event.target.value } : item))} /></label>
+          <div className="flex min-w-0 flex-1 basis-28 flex-col gap-2"><label className="flex flex-col gap-1 text-sm"><LabelText hint="Tipo de teléfono (casa, celular, trabajo) para saber a cuál llamar.">Etiqueta de teléfono {index + 1}</LabelText><select className={inputClass} value={phoneLabels.includes(phone.label as typeof phoneLabels[number]) ? phone.label : "Otro"} onChange={event => setPhones(phones.map(item => item.contactId === phone.contactId ? { ...item, label: event.target.value === "Otro" ? "" : event.target.value } : item))}>{phoneLabels.map(label => <option key={label}>{label}</option>)}<option>Otro</option></select></label>{!phoneLabels.includes(phone.label as typeof phoneLabels[number]) && <label className="flex flex-col gap-1 text-sm"><LabelText hint="Escribe cómo quieres llamar a este teléfono, por ejemplo Oficina.">Otra etiqueta</LabelText><input required maxLength={40} className={inputClass} value={phone.label} onChange={event => setPhones(phones.map(item => item.contactId === phone.contactId ? { ...item, label: event.target.value } : item))} /></label>}</div>
+          <label className="flex min-w-0 flex-1 basis-40 flex-col gap-1 text-sm"><LabelText hint="Número con el que se encuentra al cliente la próxima vez. Escríbelo tal como lo marcarías.">Teléfono {index + 1}</LabelText><input type="tel" required maxLength={80} className={inputClass} value={phone.displayValue} onChange={event => setPhones(phones.map(item => item.contactId === phone.contactId ? { ...item, displayValue: event.target.value } : item))} /></label>
           <button type="button" className={buttonClass} aria-label={`Quitar teléfono ${index + 1} de la ficha`} onClick={() => setPhones(phones.filter(item => item.contactId !== phone.contactId))}>Quitar</button>
         </div>)}
         <div className="flex flex-wrap gap-2"><button type="button" className={buttonClass} disabled={phones.length >= 20} onClick={() => setPhones([...phones, { contactId: crypto.randomUUID(), label: "Principal", displayValue: "" }])}>Añadir teléfono</button>
@@ -314,6 +315,16 @@ function ProfileForm({ customer, disabled, onSave }: {
 const primaryAddressLabels = { streetLine: "Calle y número", unit: "Interior", neighborhood: "Colonia", references: "Referencias" } as const;
 const additionalAddressLabels = { locality: "Localidad", region: "Estado o región", countryCode: "País (código de dos letras)", postalCode: "Código postal" } as const;
 const addressLabels = { ...primaryAddressLabels, ...additionalAddressLabels } as const;
+const addressHints = {
+  streetLine: "Calle y número exterior donde se entrega.",
+  unit: "Número de departamento, piso o interior, si aplica.",
+  neighborhood: "Colonia o barrio; ayuda a validar la zona de entrega.",
+  references: "Indicaciones para el repartidor: entre qué calles, color de la casa, portón, etc.",
+  locality: "Ciudad o municipio; se usa para validar la zona de entrega.",
+  region: "Estado o región de la dirección.",
+  countryCode: "Código ISO de dos letras, por ejemplo MX.",
+  postalCode: "Código postal; se usa para validar la zona de entrega.",
+} as const satisfies Record<keyof typeof addressLabels, string>;
 function AddressForm({ item, branchName, feedback, validating = false, disabled, onSave, onValidate, onCancel, onEdit }: {
   readonly item?: CustomerDirectoryDetailAddressV1; readonly disabled: boolean;
   readonly branchName?: string; readonly feedback?: { message: string; error: boolean } | undefined; readonly validating?: boolean;
@@ -332,12 +343,12 @@ function AddressForm({ item, branchName, feedback, validating = false, disabled,
     {!dirty && feedback !== undefined && <p role={feedback.error ? "alert" : "status"} className={`mb-3 rounded-lg border p-3 text-sm ${feedback.error ? "border-error bg-error-bg" : "border-success"}`}>{feedback.message}</p>}
     {validating && <p role="status" className="mb-3 text-sm text-text-muted">Validando esta dirección…</p>}
     <fieldset disabled={disabled} className="grid min-w-0 gap-3 sm:grid-cols-2">
-      <div className="flex min-w-0 flex-col gap-2"><label className="flex flex-col gap-1 text-sm">Etiqueta de dirección<select className={inputClass} value={addressLabelOptions.includes(addressLabel as typeof addressLabelOptions[number]) ? addressLabel : "Otro"} onChange={event => setAddressLabel(event.target.value === "Otro" ? "" : event.target.value)}>{addressLabelOptions.map(label => <option key={label}>{label}</option>)}<option>Otro</option></select></label>{!addressLabelOptions.includes(addressLabel as typeof addressLabelOptions[number]) && <label className="flex flex-col gap-1 text-sm">Otra etiqueta<input required maxLength={40} className={inputClass} value={addressLabel} onChange={event => setAddressLabel(event.target.value)} /></label>}<span className="text-xs text-text-muted">Nombre corto para reconocer la dirección.</span></div>
-      {Object.entries(primaryAddressLabels).map(([key, label]) => <label key={key} className={`flex min-w-0 flex-col gap-1 text-sm ${key === "references" ? "sm:col-span-2" : ""}`}>{label}
+      <div className="flex min-w-0 flex-col gap-2"><label className="flex flex-col gap-1 text-sm"><LabelText hint="Nombre corto para reconocer la dirección: Casa, Oficina, etc.">Etiqueta de dirección</LabelText><select className={inputClass} value={addressLabelOptions.includes(addressLabel as typeof addressLabelOptions[number]) ? addressLabel : "Otro"} onChange={event => setAddressLabel(event.target.value === "Otro" ? "" : event.target.value)}>{addressLabelOptions.map(label => <option key={label}>{label}</option>)}<option>Otro</option></select></label>{!addressLabelOptions.includes(addressLabel as typeof addressLabelOptions[number]) && <label className="flex flex-col gap-1 text-sm"><LabelText hint="Escribe cómo quieres llamar a esta dirección.">Otra etiqueta</LabelText><input required maxLength={40} className={inputClass} value={addressLabel} onChange={event => setAddressLabel(event.target.value)} /></label>}<span className="text-xs text-text-muted">Nombre corto para reconocer la dirección.</span></div>
+      {Object.entries(primaryAddressLabels).map(([key, label]) => <label key={key} className={`flex min-w-0 flex-col gap-1 text-sm ${key === "references" ? "sm:col-span-2" : ""}`}><LabelText hint={addressHints[key as keyof typeof addressHints]}>{label}</LabelText>
         <input name={key} maxLength={key === "references" ? 500 : 200} defaultValue={item?.address[key as keyof typeof primaryAddressLabels] ?? ""} autoComplete="off" className={inputClass} />
       </label>)}
       <details className="sm:col-span-2"><summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold">Datos adicionales</summary>
-        <div className="grid min-w-0 gap-3 sm:grid-cols-2">{Object.entries(additionalAddressLabels).map(([key, label]) => <label key={key} className="flex min-w-0 flex-col gap-1 text-sm">{label}
+        <div className="grid min-w-0 gap-3 sm:grid-cols-2">{Object.entries(additionalAddressLabels).map(([key, label]) => <label key={key} className="flex min-w-0 flex-col gap-1 text-sm"><LabelText hint={addressHints[key as keyof typeof addressHints]}>{label}</LabelText>
           <input name={key} maxLength={key === "countryCode" ? 2 : 200} defaultValue={item?.address[key as keyof typeof additionalAddressLabels] ?? ""} autoComplete="off" className={inputClass} />
         </label>)}</div>
       </details>

@@ -3,6 +3,7 @@
 import type { DiningLayoutV1, DiningTableV1 } from "@super-restaurant/shared-types";
 import { useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 
+import { LabelText } from "../../components/field-hint";
 import { clampTablePosition, moveTableByKeyboard, savedTablePosition, type TablePosition } from "../../lib/table-position";
 import { createDiningTableAction, updateDiningTableLayoutAction } from "./actions";
 
@@ -186,8 +187,16 @@ function TableCard({ table, draft, selected, canManage, canvas, onSelect, onMove
 }
 
 function CreateTableForm({ zoneId }: { readonly zoneId: string }): ReactNode {
-  return <details className="relative"><summary className="flex min-h-11 cursor-pointer items-center rounded-lg bg-accent px-3 py-2 text-[12px] font-semibold text-white">Nueva mesa</summary><form action={createDiningTableAction} className="absolute right-0 z-30 mt-2 grid w-[300px] grid-cols-2 gap-2 rounded-xl border border-border bg-surface p-3 shadow-xl"><input type="hidden" name="zoneId" value={zoneId} /><Field name="name" label="Nombre" defaultValue="Mesa nueva" type="text" /><Field name="capacity" label="Capacidad" defaultValue={4} /><label className="col-span-2 text-[11px] font-medium">Forma<select name="shape" className="mt-1 min-h-11 w-full rounded border border-border p-2"><option value="round">Redonda</option><option value="square">Cuadrada</option><option value="rectangle">Rectangular</option></select></label><Field name="x" label="Columna" defaultValue={0} /><Field name="y" label="Fila" defaultValue={0} /><Field name="width" label="Ancho" defaultValue={4} /><Field name="height" label="Alto" defaultValue={4} /><button className="col-span-2 min-h-11 rounded bg-accent px-3 py-2 text-[12px] font-semibold text-white" type="submit">Crear mesa</button></form></details>;
+  return <details className="relative"><summary className="flex min-h-11 cursor-pointer items-center rounded-lg bg-accent px-3 py-2 text-[12px] font-semibold text-white">Nueva mesa</summary><form action={createDiningTableAction} className="absolute right-0 z-30 mt-2 grid w-[300px] grid-cols-2 gap-2 rounded-xl border border-border bg-surface p-3 shadow-xl"><input type="hidden" name="zoneId" value={zoneId} /><Field name="name" label="Nombre" defaultValue="Mesa nueva" type="text" /><Field name="capacity" label="Capacidad" defaultValue={4} /><label className="col-span-2 text-[11px] font-medium"><LabelText hint="Figura con la que se dibuja la mesa en el plano; no cambia la capacidad.">Forma</LabelText><select name="shape" className="mt-1 min-h-11 w-full rounded border border-border p-2"><option value="round">Redonda</option><option value="square">Cuadrada</option><option value="rectangle">Rectangular</option></select></label><Field name="x" label="Columna" defaultValue={0} /><Field name="y" label="Fila" defaultValue={0} /><Field name="width" label="Ancho" defaultValue={4} /><Field name="height" label="Alto" defaultValue={4} /><button className="col-span-2 min-h-11 rounded bg-accent px-3 py-2 text-[12px] font-semibold text-white" type="submit">Crear mesa</button></form></details>;
 }
+const TABLE_FIELD_HINTS: Readonly<Record<string, string>> = {
+  name: "Nombre o número con el que el equipo identifica la mesa, por ejemplo Mesa 5.",
+  capacity: "Número de comensales que caben en la mesa.",
+  x: "Posición horizontal de la mesa en el plano, contada en columnas desde la izquierda.",
+  y: "Posición vertical de la mesa en el plano, contada en filas desde arriba.",
+  width: "Ancho de la mesa en el plano, en casillas.",
+  height: "Alto de la mesa en el plano, en casillas.",
+};
 function Field({ name, label, defaultValue, value, onChange, type = "number" }: { readonly name: string; readonly label: string; readonly defaultValue?: number | string; readonly value?: number | string; readonly onChange?: (value: string) => void; readonly type?: string }): ReactNode {
-  return <label className="text-[11px] font-medium">{label}<input required name={name} type={type} defaultValue={defaultValue} value={value} onChange={onChange === undefined ? undefined : (event) => onChange(event.target.value)} className="mt-1 min-h-11 w-full rounded border border-border p-1.5" /></label>;
+  return <label className="text-[11px] font-medium"><LabelText hint={TABLE_FIELD_HINTS[name] ?? label}>{label}</LabelText><input required name={name} type={type} defaultValue={defaultValue} value={value} onChange={onChange === undefined ? undefined : (event) => onChange(event.target.value)} className="mt-1 min-h-11 w-full rounded border border-border p-1.5" /></label>;
 }
