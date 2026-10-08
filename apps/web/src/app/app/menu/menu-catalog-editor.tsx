@@ -17,6 +17,8 @@ import { DEFAULT_PESO_CURRENCY, formatMinorForMoneyInput, parseMoneyInputToMinor
 import { currencyFractionDigits } from "../../../lib/money-scale";
 import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, publishDisabledReason, validateMenuImageFile, type MenuImageAttempt } from "../../../lib/menu-images";
 import { variantValidationError } from "../../../lib/menu-variants";
+import { reorder, reorderSubset } from "../../../lib/menu-reorder";
+import { ReorderControls, reorderRowProps } from "./reorder-controls";
 
 import { saveMenuCatalogAction, uploadMenuImageAction } from "./actions";
 
@@ -174,10 +176,10 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
         </SectionHeader>
         {categories.length === 0 ? <EmptyText text="Agrega una categoría para comenzar el menú." /> : (
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            {categories.map((category) => (
-              <article key={category.categoryId} className="grid gap-3 rounded-xl border border-border bg-bg/50 p-3 sm:grid-cols-[1fr_110px_auto]">
+            {categories.map((category, index) => (
+              <article key={category.categoryId} {...reorderRowProps("categories", index)} className="grid gap-3 rounded-xl border border-border bg-bg/50 p-3 sm:grid-cols-[1fr_auto_auto]">
                 <TextInput disabled={!canManage} label="Nombre" maxLength={80} value={category.name} onChange={(name) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, name } : entry))} />
-                <NumberInput disabled={!canManage} label="Orden" min={0} max={1_000_000} value={category.displayOrder} onChange={(displayOrder) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, displayOrder } : entry))} />
+                <ReorderControls count={categories.length} disabled={!canManage} index={index} label={category.name} listKey="categories" onMove={(from, to) => setCategories((current) => reorder(current, from, to))} />
                 <div className="flex items-end gap-2 pb-1">
                   <ActiveInput disabled={!canManage} checked={category.active} onChange={(active) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, active } : entry))} />
                   {canManage && <RemoveButton label={`Quitar ${category.name}`} onClick={() => setRemoval({ id: category.categoryId, kind: "category", label: category.name })} />}
@@ -195,7 +197,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
         {products.length === 0 ? <EmptyText text="No hay productos en este borrador." /> : (
           <div className="mt-4 flex flex-col gap-4">
             {products.map((product) => (
-              <ProductEditor variantInvalid={variantIssue?.productId === product.productId}
+              <ProductEditor siblingCount={products.filter((entry) => entry.categoryId === product.categoryId).length} siblingIndex={products.filter((entry) => entry.categoryId === product.categoryId).findIndex((entry) => entry.productId === product.productId)} onMoveProduct={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.categoryId === product.categoryId, from, to))} variantInvalid={variantIssue?.productId === product.productId}
                 key={product.productId}
                 canManage={canManage}
                 categories={categories}
@@ -229,7 +231,10 @@ function PublishButton({ pendingUploads, variantError }: { readonly pendingUploa
   </button>;
 }
 
-function ProductEditor({ variantInvalid, canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+function ProductEditor({ siblingCount, siblingIndex, onMoveProduct, variantInvalid, canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+  readonly siblingCount: number;
+  readonly siblingIndex: number;
+  readonly onMoveProduct: (from: number, to: number) => void;
   readonly variantInvalid: boolean;
   readonly canManage: boolean;
   readonly categories: readonly MenuCategoryV1[];
@@ -252,7 +257,7 @@ function ProductEditor({ variantInvalid, canManage, categories, currency, groups
   const changeVariant = (variantId: string, patch: Partial<MenuProductVariantV1>): void =>
     change({ variants: variants.map((variant) => variant.variantId === variantId ? { ...variant, ...patch } : variant) });
   return (
-    <article className="min-w-0 rounded-2xl border border-border bg-bg/40 p-3 sm:p-4">
+    <article {...reorderRowProps(`products-${product.categoryId}`, siblingIndex)} className="min-w-0 rounded-2xl border border-border bg-bg/40 p-3 sm:p-4">
       <MenuPhoto canManage={canManage} imagePath={product.imagePath} name={product.name} supabaseUrl={supabaseUrl} target="product" targetId={product.productId} onChange={onProductImageChange} onUploadPendingChange={onUploadPendingChange} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <TextInput disabled={!canManage} label="Producto" maxLength={120} value={product.name} onChange={(name) => change({ name })} />
@@ -265,7 +270,7 @@ function ProductEditor({ variantInvalid, canManage, categories, currency, groups
         <MoneyInput disabled={!canManage} currency={currency} value={product.unitPriceMinor} onChange={(unitPriceMinor) => change({ unitPriceMinor })} />
         <TextInput disabled={!canManage} label="Estación" maxLength={64} value={product.stationId} onChange={(stationId) => change({ stationId })} />
         <TextInput disabled={!canManage} label="Unidad" maxLength={32} value={product.unit} onChange={(unit) => change({ unit })} />
-        <NumberInput disabled={!canManage} label="Orden" min={0} max={1_000_000} value={product.displayOrder} onChange={(displayOrder) => change({ displayOrder })} />
+        <ReorderControls count={siblingCount} disabled={!canManage} index={siblingIndex} label={product.name} listKey={`products-${product.categoryId}`} onMove={onMoveProduct} />
         <div className="flex items-end gap-2 pb-1">
           <ActiveInput disabled={!canManage} checked={product.active} onChange={(active) => change({ active })} />
           {canManage && <RemoveButton label={`Quitar ${product.name}`} onClick={() => onRemove({ id: product.productId, kind: "product", label: product.name })} />}
@@ -282,14 +287,14 @@ function ProductEditor({ variantInvalid, canManage, categories, currency, groups
           }] })} />}
         </div>
         {variants.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin tamaños; se usa el precio del producto.</p> :
-          <div className="mt-3 grid gap-3">{variants.map((variant) => <div key={variant.variantId}
-            className="grid min-w-0 gap-3 rounded-lg border border-border bg-bg/50 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_100px_auto]">
+          <div className="mt-3 grid gap-3">{variants.map((variant, variantIndex) => <div key={variant.variantId} {...reorderRowProps(`variants-${product.productId}`, variantIndex)}
+            className="grid min-w-0 gap-3 rounded-lg border border-border bg-bg/50 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)auto_auto]">
             <TextInput disabled={!canManage} invalid={variantInvalid} label="Nombre del tamaño" maxLength={80} value={variant.name}
               onChange={(name) => changeVariant(variant.variantId, { name })} />
             <MoneyInput key={variant.variantId} label="Precio del tamaño" disabled={!canManage} currency={currency}
               value={variant.unitPriceMinor} onChange={(unitPriceMinor) => changeVariant(variant.variantId, { unitPriceMinor })} />
-            <NumberInput disabled={!canManage} label="Orden" min={0} max={1_000_000} value={variant.displayOrder}
-              onChange={(displayOrder) => changeVariant(variant.variantId, { displayOrder })} />
+            <ReorderControls count={variants.length} disabled={!canManage} index={variantIndex} label={variant.name || "tamaño nuevo"} listKey={`variants-${product.productId}`}
+              onMove={(from, to) => change({ variants: reorder(variants, from, to) })} />
             <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={variant.active}
               onChange={(active) => changeVariant(variant.variantId, { active })} />
               {canManage && <RemoveButton label={`Quitar tamaño ${variant.name || "nuevo"}`}
@@ -325,8 +330,8 @@ function ProductEditor({ variantInvalid, canManage, categories, currency, groups
         <h3 className="font-heading text-[13px] font-semibold">Grupos de modificadores</h3>
         {canManage && <AddButton label="Agregar grupo" onClick={onAddGroup} />}
       </div>
-      {groups.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin modificadores.</p> : groups.map((group) => (
-        <ModifierGroupEditor key={group.groupId} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl} onAddOption={() => onAddOption(group.groupId)} onChange={(changed) => onGroupsChange((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))} onOptionImageChange={(optionId, imagePath) => onOptionImageChange(group.groupId, optionId, imagePath)} onRemove={onRemove} onUploadPendingChange={onUploadPendingChange} />
+      {groups.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin modificadores.</p> : groups.map((group, groupIndex) => (
+        <ModifierGroupEditor key={group.groupId} siblingCount={groups.length} siblingIndex={groupIndex} onMoveGroup={(from, to) => onGroupsChange((current) => reorderSubset(current, (entry) => entry.productId === product.productId, from, to))} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl} onAddOption={() => onAddOption(group.groupId)} onChange={(changed) => onGroupsChange((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))} onOptionImageChange={(optionId, imagePath) => onOptionImageChange(group.groupId, optionId, imagePath)} onRemove={onRemove} onUploadPendingChange={onUploadPendingChange} />
       ))}
     </article>
   );
@@ -401,7 +406,10 @@ function FractionEditor({ canManage, groups, variant, onChange }: {
   </div>;
 }
 
-function ModifierGroupEditor({ canManage, currency, group, supabaseUrl, onAddOption, onChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+function ModifierGroupEditor({ siblingCount, siblingIndex, onMoveGroup, canManage, currency, group, supabaseUrl, onAddOption, onChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+  readonly siblingCount: number;
+  readonly siblingIndex: number;
+  readonly onMoveGroup: (from: number, to: number) => void;
   readonly canManage: boolean;
   readonly currency: string;
   readonly group: MenuModifierGroupV1;
@@ -414,12 +422,12 @@ function ModifierGroupEditor({ canManage, currency, group, supabaseUrl, onAddOpt
 }): ReactNode {
   const change = (patch: Partial<MenuModifierGroupV1>): void => onChange({ ...group, ...patch });
   return (
-    <section className="mt-3 min-w-0 rounded-xl border border-border bg-surface p-3">
+    <section {...reorderRowProps(`groups-${group.productId}`, siblingIndex)} className="mt-3 min-w-0 rounded-xl border border-border bg-surface p-3">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <TextInput disabled={!canManage} label="Grupo" maxLength={80} value={group.name} onChange={(name) => change({ name })} />
         <NumberInput disabled={!canManage} label="Mínimo total" min={0} max={1_000} value={group.minimumQuantity} onChange={(minimumQuantity) => change({ minimumQuantity })} />
         <NumberInput disabled={!canManage} label="Máximo total" min={0} max={1_000} value={group.maximumQuantity} onChange={(maximumQuantity) => change({ maximumQuantity })} />
-        <NumberInput disabled={!canManage} label="Orden" min={0} max={1_000_000} value={group.displayOrder} onChange={(displayOrder) => change({ displayOrder })} />
+        <ReorderControls count={siblingCount} disabled={!canManage} index={siblingIndex} label={group.name} listKey={`groups-${group.productId}`} onMove={onMoveGroup} />
         <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={group.active} onChange={(active) => change({ active })} />{canManage && <RemoveButton label={`Quitar ${group.name}`} onClick={() => onRemove({ id: group.groupId, kind: "group", label: group.name })} />}</div>
       </div>
       <div className="mt-3 flex items-center justify-between gap-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Opciones</p>{canManage && <AddButton label="Agregar opción" onClick={onAddOption} />}</div>
@@ -572,6 +580,7 @@ function NumberInput({ disabled, label, max, min, onChange, value }: { readonly 
   return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium">{label}<input required disabled={disabled} type="number" min={min} max={max} step="1" value={value} onChange={(event) => onChange(integerFrom(event.target.value, min, max))} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" /></label>;
 }
 
+
 function NullableNumberInput({ disabled, label, max, min, onChange, value }: { readonly disabled: boolean; readonly label: string; readonly max: number; readonly min: number; readonly onChange: (value: number | null) => void; readonly value: number | null }): ReactNode {
   return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium">{label}<input disabled={disabled} type="number" min={min} max={max} step="1" value={value ?? ""} onChange={(event) => onChange(event.target.value === "" ? null : integerFrom(event.target.value, min, max))} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" /></label>;
 }
@@ -598,5 +607,5 @@ function integerFrom(value: string, minimum: number, maximum: number): number {
 }
 
 function nextDisplayOrder(values: readonly { readonly displayOrder: number }[]): number {
-  return values.reduce((maximum, value) => Math.max(maximum, value.displayOrder), -1) + 1;
+  return values.reduce((maximum, value) => Math.max(maximum, value.displayOrder), 0) + 1;
 }
