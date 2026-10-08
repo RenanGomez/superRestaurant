@@ -27,10 +27,10 @@ export type TableDetailsCheck =
   | { readonly ok: true; readonly name: string; readonly capacity: number; readonly shape: "round" | "square" | "rectangle" }
   | { readonly ok: false; readonly message: string };
 
-/** Client-side check only; the server revalidates. Name 1..60 characters, capacity an integer 1..50. */
+/** Client-side check only; the server revalidates. Name 1..40 characters, capacity an integer 1..50. */
 export function validateTableDetails(input: TableDetailsInput): TableDetailsCheck {
   const name = input.name.trim();
-  if (name.length < 1 || name.length > 60) return { ok: false, message: "El nombre debe tener entre 1 y 60 caracteres." };
+  if (name.length < 1 || name.length > 40) return { ok: false, message: "El nombre debe tener entre 1 y 40 caracteres." };
   if (!/^\d{1,3}$/u.test(input.capacity.trim())) return { ok: false, message: "La capacidad debe ser un número entre 1 y 50." };
   const capacity = Number(input.capacity.trim());
   if (capacity < 1 || capacity > 50) return { ok: false, message: "La capacidad debe ser un número entre 1 y 50." };

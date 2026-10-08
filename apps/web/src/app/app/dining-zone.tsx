@@ -1,7 +1,7 @@
 "use client";
 
 import type { DiningLayoutV1, DiningTableV1 } from "@super-restaurant/shared-types";
-import { useRouter } from "next/navigation";
+import { unstable_rethrow, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
@@ -107,7 +107,7 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
         attempts.current.set(key, attempt);
         let result: DiningActionResult;
         try { result = await saveDiningTableLayoutAction({ tableId: id, expectedVersion: table.version, layout: geometry, attempt }); }
-        catch { result = { ok: false, error: "unavailable" }; }
+        catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
         if (result.ok) {
           attempts.current.delete(key);
           applyServerTable(result.table);
@@ -342,7 +342,7 @@ function TableDetailsForm({ table, busy, onResult }: {
     let result: DiningActionResult;
     try {
       result = await updateDiningTableDetailsAction({ tableId: table.tableId, expectedVersion: table.version, name: check.name, capacity: check.capacity, shape: check.shape, attempt: attempt.current.value });
-    } catch { result = { ok: false, error: "unavailable" }; }
+    } catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
     setSaving(false);
     if (result.ok) { attempt.current = null; onResult({ kind: "saved", text: "Datos guardados" }, result.table); return; }
     if (result.error === "conflict" || result.error === "invalid") attempt.current = null;
@@ -353,7 +353,7 @@ function TableDetailsForm({ table, busy, onResult }: {
 
   return (
     <form onSubmit={(event) => void submit(event)} className="mt-3 grid max-w-[420px] grid-cols-2 gap-2" aria-label="Datos de la mesa">
-      <label className="col-span-2 text-[12px] font-medium">Nombre<input name="name" type="text" required maxLength={60} value={name} onChange={(event) => setName(event.target.value)} className={input} /></label>
+      <label className="col-span-2 text-[12px] font-medium">Nombre<input name="name" type="text" required maxLength={40} value={name} onChange={(event) => setName(event.target.value)} className={input} /></label>
       <label className="text-[12px] font-medium">Capacidad (personas)<input name="capacity" type="text" inputMode="numeric" required value={capacity} onChange={(event) => setCapacity(event.target.value)} className={input} /></label>
       <label className="text-[12px] font-medium">Forma<select name="shape" value={shape} onChange={(event) => setShape(event.target.value)} className={input}>
         <option value="round">Redonda</option><option value="square">Cuadrada</option><option value="rectangle">Rectangular</option></select></label>
@@ -411,9 +411,9 @@ function CreateTableDialog({ zoneId, tableCount, occupied, onCreated }: {
     let result: DiningActionResult;
     try {
       result = await createDiningTableAction({ tableId: attempt.current.tableId, zoneId, name: check.name, capacity: check.capacity, shape: check.shape, layout: { x: slot.x, y: slot.y, width: 4, height: 4 }, attempt: attempt.current.value });
-    } catch { result = { ok: false, error: "unavailable" }; }
+    } catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
     setSaving(false);
-    if (result.ok) { attempt.current = null; setOpen(false); onCreated(result.table); return; }
+    if (result.ok) { attempt.current = null; setOpen(false); opener.current?.focus(); onCreated(result.table); return; }
     if (result.error !== "unavailable") attempt.current = null;
     setProblem(result.error === "conflict" ? "Ya existe una mesa con ese nombre. Elige otro nombre."
       : result.error === "denied" ? "Tu rol o sesión ya no permite crear mesas."
@@ -432,7 +432,7 @@ function CreateTableDialog({ zoneId, tableCount, occupied, onCreated }: {
           </div>
           <form onSubmit={(event) => void submit(event)} className="flex min-h-0 flex-1 flex-col">
             <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto p-4">
-              <label className="text-[12px] font-medium">Nombre<input ref={nameField} name="name" type="text" required maxLength={60} value={name} onChange={(event) => setName(event.target.value)} className={input} /></label>
+              <label className="text-[12px] font-medium">Nombre<input ref={nameField} name="name" type="text" required maxLength={40} value={name} onChange={(event) => setName(event.target.value)} className={input} /></label>
               <label className="text-[12px] font-medium">Capacidad (personas)<input name="capacity" type="text" inputMode="numeric" required value={capacity} onChange={(event) => setCapacity(event.target.value)} className={input} /></label>
               <label className="text-[12px] font-medium">Forma<select name="shape" value={shape} onChange={(event) => setShape(event.target.value)} className={input}>
                 <option value="round">Redonda</option><option value="square">Cuadrada</option><option value="rectangle">Rectangular</option></select></label>

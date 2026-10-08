@@ -21,7 +21,8 @@ test("tables added or removed on the server show up in the merge", () => {
 test("table details are checked before they are sent", () => {
   assert.deepEqual(validateTableDetails({ name: "  Mesa 7 ", capacity: "6", shape: "round" }), { ok: true, name: "Mesa 7", capacity: 6, shape: "round" });
   assert.equal(validateTableDetails({ name: "   ", capacity: "4", shape: "round" }).ok, false);
-  assert.equal(validateTableDetails({ name: "x".repeat(61), capacity: "4", shape: "round" }).ok, false);
+  assert.equal(validateTableDetails({ name: " " + "x".repeat(40) + " ", capacity: "4", shape: "round" }).ok, true);
+  assert.equal(validateTableDetails({ name: "x".repeat(41), capacity: "4", shape: "round" }).ok, false);
   assert.equal(validateTableDetails({ name: "A", capacity: "0", shape: "round" }).ok, false);
   assert.equal(validateTableDetails({ name: "A", capacity: "51", shape: "round" }).ok, false);
   assert.equal(validateTableDetails({ name: "A", capacity: "2.5", shape: "round" }).ok, false);

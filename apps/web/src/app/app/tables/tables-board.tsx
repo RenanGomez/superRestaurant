@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { unstable_rethrow, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import type { BranchScope, DiningLayoutV1, BranchMemberV1, OperationalShiftSummaryV1, OrderDetailV1, TableBoardActiveOrderV1, TableBoardV1 } from "@super-restaurant/shared-types";
 import { captureDeviceId } from "../../../lib/capture-workspace";
@@ -102,7 +102,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
     const current = ++seq.current;
     setLoading(true);
     let result: Snapshot | Failure;
-    try { result = await actions.read(); } catch { result = { ok: false, error: "unavailable" }; }
+    try { result = await actions.read(); } catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
     if (current !== seq.current) return null;
     setLoading(false);
     if (!result.ok) {
@@ -128,7 +128,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
   async function loadWaiters() {
     const current = ++waiterSeq.current;
     let result: Awaited<ReturnType<Props["actions"]["waiters"]>>;
-    try { result = await actions.waiters(); } catch { result = { ok: false, error: "unavailable" }; }
+    try { result = await actions.waiters(); } catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
     if (current === waiterSeq.current) setWaiters(result.ok ? result.members : null);
   }
 
@@ -167,7 +167,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
     const orderId = crypto.randomUUID();
     let result: Awaited<ReturnType<Props["actions"]["create"]>>;
     try { result = await actions.create(selected.tableId, orderId, attempt(), newWaiter); }
-    catch { result = { ok: false, error: "unavailable" }; }
+    catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
     if (!result.ok) {
       setError(result.error);
       if (result.error === "conflict" || result.error === "unavailable") {
@@ -200,7 +200,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
     setBusy(true); setError(null); setNotice(null);
     let result: Awaited<ReturnType<Props["actions"]["assign"]>>;
     try { result = await actions.assign(order.orderId, order.version, attempt(), waiterUserId); }
-    catch { result = { ok: false, error: "unavailable" }; }
+    catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
     if (!result.ok) {
       if (result.error === "conflict" || result.error === "unavailable") {
         const latest = await refresh(true);
@@ -221,7 +221,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
     const shiftId = crypto.randomUUID();
     let result: Awaited<ReturnType<Props["actions"]["openShift"]>>;
     try { result = await actions.openShift(shiftId, attempt()); }
-    catch { result = { ok: false, error: "unavailable" }; }
+    catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
     if (!result.ok) {
       if (result.error === "conflict" || result.error === "unavailable") {
         const latest = await refresh(true);
