@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import type { BranchScope, DiningLayoutV1, BranchMemberV1, OperationalShiftSummaryV1, OrderDetailV1, TableBoardActiveOrderV1, TableBoardV1 } from "@super-restaurant/shared-types";
 import { captureDeviceId } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
-import { gridPlacement, groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterLabel } from "../../../lib/tables-board";
+import { planCanvasStyle, planPlacement, planViewBox } from "../../../lib/floor-plan";
+import { groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterLabel, waiterOptions } from "../../../lib/tables-board";
 
 type ErrorCode = "invalid" | "denied" | "conflict" | "no_shift" | "unavailable";
 type Failure = { readonly ok: false; readonly error: ErrorCode };
@@ -51,14 +52,14 @@ function WaiterPicker({ members, actorId, current, disabled, allowNone, onPick }
   readonly members: readonly BranchMemberV1[] | null; readonly actorId: string; readonly current: string | null; readonly disabled: boolean;
   readonly allowNone: boolean; readonly onPick: (userId: string | null) => void;
 }) {
-  const others = (members ?? []).filter((member) => member.userId !== actorId);
+  const others = waiterOptions(members ?? [], actorId);
   const option = (id: string | null, label: string) => <button key={id ?? "none"} type="button" className={`${current === id ? primary : button} min-h-11 min-w-24`}
     aria-pressed={current === id} disabled={disabled || (!allowNone && current === id)} onClick={() => onPick(id)}>{label}</button>;
   return <div>
     <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Elegir mesero">
       {allowNone && option(null, "Sin mesero")}
       {option(actorId, "Yo")}
-      {others.map((member) => option(member.userId, waiterLabel(members ?? [], member.userId)))}
+      {waiterOptions(members ?? [], actorId).map((entry) => option(entry.userId, entry.label))}
     </div>
     {members !== null && others.length === 0 && <p className="mt-2 text-xs text-text-muted">Asigna el rol mesero en Accesos para ver más opciones.</p>}
   </div>;
@@ -247,27 +248,31 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
     {notice !== null && <p role="status" className="rounded-lg border border-success bg-surface p-3 text-sm">{notice} {noticeOrderId !== null && <a className="inline-flex min-h-11 items-center px-2 font-semibold underline" href={`/app/orders?orderId=${noticeOrderId}`}>Ver cuenta</a>}</p>}
     {snapshot === null ? <p className="text-sm text-text-muted">{loading ? "Cargando plano…" : "Plano no disponible. Pulsa Actualizar para reintentar."}</p>
       : zones.length === 0 ? <p className="text-sm text-text-muted">No hay zonas configuradas.</p>
-      : zones.map((zone) => <section key={zone.zoneId} className="min-w-0 rounded-xl border border-border bg-surface p-3 sm:p-4">
+      : zones.map((zone) => {
+        const box = planViewBox(zone.tables.map((table) => table.layout));
+        return <section key={zone.zoneId} className="min-w-0 rounded-xl border border-border bg-surface p-3 sm:p-4">
         <h2 className="mb-3 font-heading text-base font-semibold">{zone.name} · {zone.tables.length} mesas</h2>
-        <div className="max-h-[min(65vh,520px)] max-w-full overflow-auto rounded-lg border border-border" aria-label={`Plano de ${zone.name}`}>
-          <div className="grid h-[2308px] w-[584px] grid-cols-[repeat(24,23px)] grid-rows-[repeat(100,22px)] gap-px bg-bg p-1">
-            {zone.tables.map((table) => <button key={table.tableId} type="button" style={gridPlacement(table.layout)}
+        <div className="max-w-full overflow-x-auto rounded-lg border border-border bg-bg p-2" role="group" aria-label={`Plano de ${zone.name}`}>
+          <div className="relative mx-auto" style={planCanvasStyle(box)}>
+            {zone.tables.map((table) => <button key={table.tableId} type="button" style={{ position: "absolute", ...planPlacement(table.layout, box) }}
               onClick={() => { if (table.state !== null) void select(table.tableId, table.name, table.state.activeOrders); }}
               disabled={table.state === null}
-              className={`z-10 flex min-h-11 min-w-11 flex-col items-center justify-center overflow-hidden border-2 px-1 text-center text-xs font-semibold focus-visible:outline-2 focus-visible:outline-accent ${table.state === null ? "border-border bg-bg text-text-muted" : table.state.status === "occupied" ? "border-accent bg-accent text-white" : "border-success bg-surface text-text"} ${table.shape === "round" ? "rounded-full" : "rounded-lg"}`}
+              className={`z-10 flex min-h-11 min-w-11 flex-col items-center justify-center overflow-hidden border-2 p-1 text-center text-xs font-semibold leading-tight focus-visible:outline-2 focus-visible:outline-accent ${table.state === null ? "border-border bg-bg text-text-muted" : table.state.status === "occupied" ? "border-accent bg-accent text-white" : "border-success bg-surface text-text"} ${table.shape === "round" ? "rounded-full" : "rounded-lg"}`}
               aria-label={`${table.name}, ${table.capacity} personas, ${tableStatusLabel(table.state)}`}>
-              <span className="w-full truncate">{table.name}</span><span className="text-[10px]">{table.capacity} pers.</span>
+              <span className="line-clamp-2 w-full break-words">{table.name}</span><span className="text-[10px]">{table.capacity} pers.</span>
               {table.state?.status === "occupied" && <span className="truncate text-[10px]">{time(table.state.activeOrders[0]!.openedAt, snapshot.timeZone)} · {waiterLabel(waiters ?? [], table.state.activeOrders[0]!.waiterUserId, actorId)}</span>}
             </button>)}
           </div>
         </div>
-      </section>)}
+      </section>;
+      })}
     {snapshot !== null && snapshot.board.unassignedOrders.length > 0 && <section className="rounded-xl border border-border bg-surface p-4"><h2 className="font-heading font-semibold">Mesas eliminadas</h2>
       <ul className="mt-3 grid gap-2">{snapshot.board.unassignedOrders.map((order) => <li key={order.orderId} className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-2 text-sm"><span>Cuenta {order.orderId.slice(0, 8)} · {time(order.openedAt, snapshot.timeZone)} · {orderStatusLabel(order.status)} · Mesero: {waiterLabel(waiters ?? [], order.waiterUserId, actorId)}</span><a className={button} href={`/app/orders?orderId=${order.orderId}`}>Ver cuenta</a></li>)}</ul></section>}
-    {selected !== null && <div className="fixed inset-0 z-40 flex items-end bg-black/40" onClick={() => { if (!busy) { selectedRef.current = null; setSelected(null); } }}>
+    {selected !== null && <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={() => { if (!busy) { selectedRef.current = null; setSelected(null); } }}>
       <section role="dialog" aria-modal="true" aria-label={`${selected.name}: cuentas`} ref={dialogRef} tabIndex={-1} onKeyDown={dialogKeys} onClick={(event) => event.stopPropagation()}
-        className="max-h-[85vh] w-full overflow-y-auto rounded-t-2xl border border-border bg-surface p-5 shadow-xl sm:mx-auto sm:max-w-xl">
-        <div className="flex items-center justify-between gap-2"><h2 className="font-heading text-xl font-bold">{selected.name}</h2><button type="button" className={button} disabled={busy} onClick={() => { selectedRef.current = null; setSelected(null); }}>Cerrar</button></div>
+        className="flex max-h-[95dvh] w-full flex-col rounded-t-2xl border border-border bg-surface shadow-xl sm:max-h-[90vh] sm:max-w-xl sm:rounded-2xl">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border p-4 sm:px-5"><h2 className="font-heading text-xl font-bold">{selected.name}</h2><button type="button" className={button} disabled={busy} onClick={() => { selectedRef.current = null; setSelected(null); }}>Cerrar</button></div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:px-5">
         {error !== null && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm text-error">{message(error)} {error === "no_shift" && canOpenShift && <button className={button} disabled={busy} onClick={() => void openShift()}>Abrir turno</button>}</p>}
         {notice !== null && <p role="status" className="mt-3 rounded-lg border border-success p-3 text-sm">{notice} {noticeOrderId !== null && <a className="inline-flex min-h-11 items-center px-2 font-semibold underline" href={`/app/orders?orderId=${noticeOrderId}`}>Ver cuenta</a>}</p>}
         {selected.orders.length > 0 && <ul className="mt-4 grid gap-3">{selected.orders.map((order) => <li key={order.orderId} className="rounded-lg border border-border p-3 text-sm">
@@ -279,8 +284,10 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
         </li>)}</ul>}
         {selected.orders.length === 0 && <p className="mt-3 text-sm text-text-muted">Mesa libre.</p>}
         <div className="mt-4 border-t border-border pt-4"><p className="mb-2 text-sm font-semibold">Mesero (opcional)</p>
-          <WaiterPicker members={waiters} actorId={actorId} current={newWaiter} disabled={busy} allowNone onPick={setNewWaiter} />
-          <button type="button" className={`${primary} mt-2 w-full`} disabled={busy} onClick={() => void create()}>{busy ? "Guardando…" : selected.orders.length ? "Abrir otra cuenta" : "Abrir cuenta"}</button></div>
+          <WaiterPicker members={waiters} actorId={actorId} current={newWaiter} disabled={busy} allowNone onPick={setNewWaiter} /></div>
+        </div>
+        <div className="shrink-0 border-t border-border bg-surface p-4 sm:px-5">
+          <button type="button" className={`${primary} w-full`} disabled={busy} onClick={() => void create()}>{busy ? "Guardando…" : selected.orders.length ? "Abrir otra cuenta" : "Abrir cuenta"}</button></div>
       </section>
     </div>}
   </div>;
