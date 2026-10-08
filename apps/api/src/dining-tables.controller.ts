@@ -27,6 +27,12 @@ export class DiningTablesController {
     return this.map(() => this.tables.updateLayout(getAuthenticatedPrincipal(request), body));
   }
 
+  @Patch("tables/details")
+  @Header("Cache-Control", "private, no-store")
+  public updateDetails(@Req() request: unknown, @Body() body: unknown): Promise<DiningTableV1> {
+    return this.map(() => this.tables.updateDetails(getAuthenticatedPrincipal(request), body));
+  }
+
   private async map<T>(operation: () => Promise<T>): Promise<T> {
     try { return await operation(); } catch (error: unknown) {
       if (!(error instanceof DiningTableApplicationError)) throw new ServiceUnavailableException({ code: "DINING_TABLE_UNAVAILABLE" });
