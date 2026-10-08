@@ -42,7 +42,10 @@ test("the product's own setup wins and enabled size setups are switched off", ()
   assert.deepEqual(migrated.fraction, own.fraction);
   assert.equal(migrated.variants?.[0]?.fraction?.enabled, false);
   const disabledOwn = product({ fraction: setup({ enabled: false }), variants: [variant("Chica", 1, setup())] });
-  assert.equal(migrateLegacyFraction(disabledOwn), disabledOwn, "a disabled product setup does not clash with the server");
+  const turnedOff = migrateLegacyFraction(disabledOwn);
+  assert.equal(turnedOff.fraction?.enabled, false, "switching halves off at the product keeps them off");
+  assert.equal(turnedOff.variants?.[0]?.fraction?.enabled, false, "and the old size setup cannot bring them back");
+  assert.equal(migrateLegacyFraction(product({ fraction: setup() })).fraction?.enabled, true, "nothing to move: unchanged");
 });
 
 test("product-level guidance rejects an enabled setup without a usable flavor group", () => {

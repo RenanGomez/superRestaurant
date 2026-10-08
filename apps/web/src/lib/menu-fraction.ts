@@ -52,9 +52,9 @@ export function legacyFractionNotice(product: Pick<MenuProductV1, "fraction" | "
  */
 export function migrateLegacyFraction(product: MenuProductV1): MenuProductV1 {
   const source = legacyFractionSource(product);
-  const fraction = source?.fraction ?? product.fraction ?? null;
-  const productEnabled = fraction !== null && fraction.enabled;
-  if (source === null && !(productEnabled && enabledVariants(product).length > 0)) return product;
+  // A product that carries its own setup (even switched off) is the only authority: sizes' own setups go off.
+  const hasOwn = product.fraction !== null && product.fraction !== undefined;
+  if (source === null && !(hasOwn && enabledVariants(product).length > 0)) return product;
   return {
     ...product,
     fraction: source === null ? product.fraction ?? null : { ...source.fraction, excludableIngredientIds: [...source.fraction.excludableIngredientIds] },
