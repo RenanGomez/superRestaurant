@@ -1,11 +1,12 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
+import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { getServerEnv } from "../../env";
 import type { BranchMembershipSummaryV1, DiningLayoutV1 } from "@super-restaurant/shared-types";
-import { BRANCH_PREFERENCE_COOKIE, encodeScope, findMembership, listMemberships, parseBranchPreference } from "../../lib/memberships";
-import { createServerSupabaseClient } from "../../lib/supabase-server";
+import { BRANCH_PREFERENCE_COOKIE, encodeScope, findMembership, parseBranchPreference } from "../../lib/memberships";
+import { getRequestMemberships, getRequestSession } from "../../lib/request-context";
 import { getDiningLayout } from "../../lib/dining-layout";
 import { selectBranchAction } from "./actions";
 import { FocusRevalidate } from "./focus-revalidate";
@@ -36,14 +37,13 @@ export default async function AppHomePage({ searchParams }: AppHomePageProps): P
   const branchError = typeof rawBranchError === "string" && KNOWN_BRANCH_ERRORS.has(rawBranchError) ? rawBranchError : undefined;
   const forceChange = resolvedSearchParams.change === "1";
 
-  const supabase = await createServerSupabaseClient();
-  const { data: { session } } = await supabase.auth.getSession();
+  const session = await getRequestSession();
   if (session === null) {
     redirect("/login");
   }
 
   const env = getServerEnv();
-  const memberships = await listMemberships(session.access_token, env.apiBaseUrl);
+  const memberships = await getRequestMemberships(session.access_token);
 
   if (memberships === undefined) {
     return <NoticeState title="No se pudo verificar tu acceso" body="No fue posible confirmar tus sucursales autorizadas en este momento. Vuelve a intentarlo en unos segundos." />;
@@ -103,7 +103,7 @@ function CurrentBranchView({ membership, layout, layoutError, layoutStatus }: {
           <h1 className="break-words font-heading text-[22px] font-bold text-text">{membership.restaurantName} · {membership.branchName}</h1>
           <p className="mt-1 text-[13px] text-text-muted">Plano en cuadrícula de 24 columnas. Los cambios se validan y versionan en el servidor.</p>
         </div>
-        <div className="flex gap-2"><a href="/app/tables" className="rounded-lg border border-border bg-surface px-3 py-2 text-[13px] font-medium">Volver a mesas</a><a href="/app?change=1" className="rounded-lg border border-border bg-surface px-3 py-2 text-[13px] font-medium">Cambiar sucursal</a></div>
+        <div className="flex gap-2"><Link href="/app/tables" prefetch className="inline-flex min-h-11 items-center rounded-lg border border-border bg-surface px-3 py-2 text-[13px] font-medium link-text">Volver a mesas</Link></div>
       </div>
       {layoutError !== undefined && <NoticeBanner text={layoutError === "update_failed" ? "No se guardó el cambio. El plano pudo cambiar en otro dispositivo; recarga e inténtalo de nuevo." : "No se pudo crear la mesa. Revisa los datos y que el nombre sea único."} />}
       {layoutStatus !== undefined && <div role="status" className="rounded-[10px] border border-[oklch(84%_0.08_155)] bg-[oklch(96%_0.03_155)] px-3.5 py-2.5 text-[13px] text-[oklch(38%_0.1_155)]">{layoutStatus === "table_created" ? "Mesa creada." : "Layout guardado."}</div>}

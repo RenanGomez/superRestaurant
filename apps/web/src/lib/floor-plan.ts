@@ -32,8 +32,10 @@ export function planPlacement(rect: PlanRect, box: PlanViewBox): { left: string;
   return { left: fmt(left), top: fmt(top), width: fmt(width), height: fmt(height) };
 }
 
-/** Canvas sizing: fills the container width but never grows taller than `maxHeightVh` of the viewport. */
-export function planCanvasStyle(box: PlanViewBox, maxHeightVh = 70, minCellPx = 14): { aspectRatio: string; width: string; minWidth: string } {
-  const ratio = box.cols / box.rows;
-  return { aspectRatio: `${box.cols} / ${box.rows}`, width: `min(100%, ${Math.round(maxHeightVh * ratio * 1000) / 1000}vh)`, minWidth: `${Math.ceil(box.cols * minCellPx)}px` };
+/**
+ * Canvas sizing: always fills the container width; the height follows from the plan proportion.
+ * A very tall room is handled by the wrapper (internal vertical scroll), never by narrowing the canvas.
+ */
+export function planCanvasStyle(box: PlanViewBox, minCellPx = 14): { aspectRatio: string; width: string; minWidth: string } {
+  return { aspectRatio: `${box.cols} / ${box.rows}`, width: "100%", minWidth: `${Math.ceil(box.cols * minCellPx)}px` };
 }

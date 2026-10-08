@@ -44,6 +44,12 @@ a {
 a:hover {
   color: var(--color-accent-hover);
 }
+/*
+ * The unlayered `a` rules above beat Tailwind's layered utilities, so links that must not be blue
+ * (sidebar, neutral buttons) opt out with these classes instead of fighting with `!important`.
+ */
+a.nav-link, a.nav-link:hover, a.nav-link:visited, a.link-white, a.link-white:hover, a.link-white:visited { color: #fff; }
+a.link-text, a.link-text:hover, a.link-text:visited { color: var(--color-text); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
