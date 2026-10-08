@@ -134,3 +134,4 @@ En `http://localhost:8082/app/menu` (migración `20261008000200` aplicada y API/
 8. Captura → pizza → «Mitad y mitad»: Mitad A con un sabor, Mitad B con «Armar con ingredientes» y 2 ingredientes. El estimado del servidor aparece; no deja armar las dos mitades.
 9. Agrega la línea, ábrela de nuevo para editar: conserva la mitad armada.
 10. Ticket y detalle de la orden muestran «Mitad B: Armada (ingrediente, ingrediente)»; el KDS muestra la mitad «Armada».
+11. Editor de mesas («Editar plano»): nombre, capacidad, forma y tamaño tienen «?»; en «Nueva mesa» también. Caja, Entregas, Reporte del día y Administración cargan sin error y sus «?» funcionan; la casilla «Este cierre es definitivo» se marca tocando toda la fila.
