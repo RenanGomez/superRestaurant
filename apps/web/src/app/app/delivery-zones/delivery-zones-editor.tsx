@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import type { BranchScope, DeliveryZoneV1, UpsertDeliveryZoneCommandV1 } from "@super-restaurant/shared-types";
+import { LabelText } from "../../../components/field-hint";
 import { captureDeviceId } from "../../../lib/capture-workspace";
 import { canonicalizeLocalities, canonicalizePostalCodes, parseDeliveryFeeMinor } from "../../../lib/delivery-zones";
 import type { DeliveryActionResult } from "./actions";
@@ -111,12 +112,12 @@ export function DeliveryZonesEditor({ scope, currency, action }: Props) {
       {error && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{errors[error]}</p>}
       {pending && <button type="button" className={`${button} mt-3`} disabled={busy} onClick={() => void save(pending)}>Reintentar mismo comando</button>}
       <form onSubmit={submit} className="mt-4 grid gap-3">
-        <label className="grid gap-1 text-sm">Nombre<input className={input} value={name} maxLength={80} required onChange={(event) => setName(event.target.value)} /></label>
-        <label className="grid gap-1 text-sm">Códigos postales, separados por coma o línea<textarea className={`${input} min-h-24`} value={postalCodes} onChange={(event) => setPostalCodes(event.target.value)} /></label>
-        <label className="grid gap-1 text-sm">Localidades, separadas por coma o línea<textarea className={`${input} min-h-24`} value={localities} onChange={(event) => setLocalities(event.target.value)} /></label>
-        <label className="grid gap-1 text-sm">Tarifa ({currency})<input className={input} inputMode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" value={fee} required onChange={(event) => setFee(event.target.value)} /></label>
-        <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="h-5 w-5" checked={active} onChange={(event) => { setActive(event.target.checked); setConfirmDeactivate(false); }} />Zona activa</label>
-        {!active && <><label className="grid gap-1 text-sm">Motivo de desactivación<textarea className={`${input} min-h-24`} maxLength={500} required value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+        <label className="grid gap-1 text-sm"><LabelText hint="Nombre de la zona de entrega, por ejemplo Centro o Zona norte.">Nombre</LabelText><input className={input} value={name} maxLength={80} required onChange={(event) => setName(event.target.value)} /></label>
+        <label className="grid gap-1 text-sm"><LabelText hint="Códigos postales que cubre esta zona. Una dirección con alguno de ellos recibe la tarifa de la zona.">Códigos postales, separados por coma o línea</LabelText><textarea className={`${input} min-h-24`} value={postalCodes} onChange={(event) => setPostalCodes(event.target.value)} /></label>
+        <label className="grid gap-1 text-sm"><LabelText hint="Ciudades, municipios o colonias que cubre la zona, para direcciones sin código postal conocido.">Localidades, separadas por coma o línea</LabelText><textarea className={`${input} min-h-24`} value={localities} onChange={(event) => setLocalities(event.target.value)} /></label>
+        <label className="grid gap-1 text-sm"><LabelText hint="Costo de envío que se cobra por entregar en esta zona, en la moneda del restaurante. 0 si el envío es gratis.">Tarifa ({currency})</LabelText><input className={input} inputMode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" value={fee} required onChange={(event) => setFee(event.target.value)} /></label>
+        <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="h-5 w-5" checked={active} onChange={(event) => { setActive(event.target.checked); setConfirmDeactivate(false); }} /><LabelText hint="Una zona inactiva deja de ofrecerse al capturar entregas, pero conserva su historial.">Zona activa</LabelText></label>
+        {!active && <><label className="grid gap-1 text-sm"><LabelText hint="Por qué se desactiva la zona; queda registrado en la auditoría.">Motivo de desactivación</LabelText><textarea className={`${input} min-h-24`} maxLength={500} required value={reason} onChange={(event) => setReason(event.target.value)} /></label>
           <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="h-5 w-5" checked={confirmDeactivate} onChange={(event) => setConfirmDeactivate(event.target.checked)} />Confirmo la desactivación de esta zona</label></>}
         <div className="flex flex-wrap gap-2"><button className={button} disabled={busy}>Guardar zona</button>
           {editing && <button type="button" className={button} onClick={() => select()} disabled={busy}>Nueva zona</button>}</div>

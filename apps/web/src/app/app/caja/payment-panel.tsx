@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { CashPaymentQuoteV1, CheckoutOrderSummaryV1 } from "@super-restaurant/shared-types";
+import { LabelText } from "../../../components/field-hint";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { formatMinorForMoneyInput, parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import { collectPaymentAction, quotePaymentAction } from "./actions";
@@ -74,20 +75,20 @@ export function PaymentPanel({ checkout, audit }: {
       <input type="hidden" name="eventId" value={audit.eventId} />
       <input type="hidden" name="idempotencyKey" value={audit.idempotencyKey} />
       <input type="hidden" name="occurredAt" value={audit.occurredAt} />
-      <label className="grid gap-1 text-sm font-semibold">A cobrar en pesos
+      <label className="grid gap-1 text-sm font-semibold"><LabelText hint="Importe de este cobro. Viene el saldo completo; bájalo si el cliente paga sólo una parte y el resto queda pendiente.">A cobrar en pesos</LabelText>
         <input name="amountPesos" value={amountPesos} onChange={(event) => setAmountPesos(event.target.value)} inputMode="decimal" className="min-h-12 min-w-0 rounded-xl border border-border px-3 text-base" aria-describedby="amount-hint" />
         <span id="amount-hint" className="text-xs font-normal text-text-muted">Saldo precargado. Toca para cobrar sólo una parte.</span>
       </label>
       {!validAmount && <p role="alert" className="text-sm text-error">Escribe un importe entre {formatMinorUnits(1, checkout.currency)} y {formatMinorUnits(checkout.remainingBalanceMinor, checkout.currency)}.</p>}
       <input type="hidden" name="method" value={method} />
       <fieldset className="grid grid-cols-3 gap-2">
-        <legend className="mb-2 text-sm font-semibold">Método</legend>
+        <legend className="mb-2 text-sm font-semibold"><LabelText hint="Cómo paga el cliente. Efectivo calcula el cambio; tarjeta externa y transferencia sólo registran una operación ya confirmada.">Método</LabelText></legend>
         <Method selected={method === "cash"} label="Efectivo" onClick={() => setMethod("cash")} />
         <Method selected={method === "card_manual"} label="Tarjeta externa" onClick={() => setMethod("card_manual")} />
         <Method selected={method === "transfer"} label="Transferencia" onClick={() => setMethod("transfer")} />
       </fieldset>
       {method === "cash" ? <div className="grid gap-2">
-        <label className="grid gap-1 text-sm font-semibold">Recibido en pesos<input name="receivedPesos" value={receivedPesos} onChange={(event) => setReceivedPesos(event.target.value)} inputMode="decimal" placeholder="0.00" className="min-h-12 min-w-0 rounded-xl border border-border px-3 text-base" /></label>
+        <label className="grid gap-1 text-sm font-semibold"><LabelText hint="Dinero que entrega el cliente. Con él se calcula el cambio; usa los botones de abajo para montos comunes.">Recibido en pesos</LabelText><input name="receivedPesos" value={receivedPesos} onChange={(event) => setReceivedPesos(event.target.value)} inputMode="decimal" placeholder="0.00" className="min-h-12 min-w-0 rounded-xl border border-border px-3 text-base" /></label>
         <div className="grid grid-cols-4 gap-2">
           <QuickAmount label="Exacto" disabled={requiredCashMinor === null} onClick={() => setReceivedPesos(formatMinorForMoneyInput(requiredCashMinor ?? 0, checkout.currency) ?? "")} />
           {[10_000, 20_000, 50_000].map((amount) => <QuickAmount key={amount} label={formatMinorUnits(amount, checkout.currency).replace(/\.00$/u, "")} disabled={!validAmount || tipMinor === null || !quickCashAmounts(amountMinor, tipMinor).includes(amount)} onClick={() => setReceivedPesos(formatMinorForMoneyInput(amount, checkout.currency) ?? "")} />)}
@@ -97,13 +98,13 @@ export function PaymentPanel({ checkout, audit }: {
         {receivedMinor !== null && receivedMinor > 0 && quote === null && quoteError === "" && <p role="status" className="text-sm text-text-muted">Calculando cambio…</p>}
       </div> : method === "transfer" ? <div className="grid gap-3 rounded-xl bg-bg p-3">
         <p className="text-xs text-text-muted">Sin cambio ni terminal. Confirma que el depósito ya llegó antes de cobrar; no cuenta en el efectivo de la caja.</p>
-        <label className="grid gap-1 text-sm font-semibold">Referencia (opcional)<input name="transferReference" maxLength={64} value={transferReference} onChange={(event) => setTransferReference(event.target.value)} className="min-h-12 min-w-0 rounded-xl border border-border px-3" /></label>
+        <label className="grid gap-1 text-sm font-semibold"><LabelText hint="Folio o clave de rastreo de la transferencia, para conciliarla después. Puedes dejarla vacía.">Referencia (opcional)</LabelText><input name="transferReference" maxLength={64} value={transferReference} onChange={(event) => setTransferReference(event.target.value)} className="min-h-12 min-w-0 rounded-xl border border-border px-3" /></label>
       </div> : <div className="grid gap-3 rounded-xl bg-bg p-3">
         <p className="text-xs text-text-muted">Registra sólo una operación ya confirmada en la terminal externa. No captures datos de tarjeta.</p>
-        <label className="grid gap-1 text-sm font-semibold">Terminal<input name="terminalId" required value={terminalId} onChange={(event) => setTerminalId(event.target.value)} className="min-h-12 min-w-0 rounded-xl border border-border px-3" /></label>
-        <label className="grid gap-1 text-sm font-semibold">Referencia (mínimo 6 caracteres)<input name="reference" required minLength={6} value={reference} onChange={(event) => setReference(event.target.value)} className="min-h-12 min-w-0 rounded-xl border border-border px-3" /></label>
+        <label className="grid gap-1 text-sm font-semibold"><LabelText hint="Nombre o número de la terminal bancaria donde se cobró, por ejemplo Terminal 1.">Terminal</LabelText><input name="terminalId" required value={terminalId} onChange={(event) => setTerminalId(event.target.value)} className="min-h-12 min-w-0 rounded-xl border border-border px-3" /></label>
+        <label className="grid gap-1 text-sm font-semibold"><LabelText hint="Folio o autorización que imprime la terminal; sirve para localizar la operación. Nunca captures datos de la tarjeta.">Referencia (mínimo 6 caracteres)</LabelText><input name="reference" required minLength={6} value={reference} onChange={(event) => setReference(event.target.value)} className="min-h-12 min-w-0 rounded-xl border border-border px-3" /></label>
       </div>}
-      <label className="grid gap-1 text-sm font-semibold">Propina en pesos (opcional)<input name="tipPesos" value={tipPesos} onChange={(event) => setTipPesos(event.target.value)} inputMode="decimal" placeholder="0.00" className="min-h-12 min-w-0 rounded-xl border border-border px-3" /></label>
+      <label className="grid gap-1 text-sm font-semibold"><LabelText hint="Propina voluntaria que deja el cliente además de la cuenta. Se registra aparte y no cambia el total de la orden.">Propina en pesos (opcional)</LabelText><input name="tipPesos" value={tipPesos} onChange={(event) => setTipPesos(event.target.value)} inputMode="decimal" placeholder="0.00" className="min-h-12 min-w-0 rounded-xl border border-border px-3" /></label>
       {quoteError && <p role="alert" className="rounded-xl bg-error-bg p-3 text-sm">{quoteError}</p>}
       {collectError && <p role="alert" className="rounded-xl bg-error-bg p-3 text-sm">{collectError}</p>}
       <button disabled={!canCollect} type="submit" className="min-h-12 rounded-xl bg-accent px-4 py-3 text-base font-semibold text-white disabled:opacity-50">{busy ? "Guardando…" : "Cobrar"}</button>

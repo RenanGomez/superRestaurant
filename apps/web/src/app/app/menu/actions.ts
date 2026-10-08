@@ -10,7 +10,7 @@ import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
 import { DEFAULT_PESO_CURRENCY } from "../../../lib/capture-payment";
 import { getMenuCatalog, saveMenuCatalog } from "../../../lib/menu-catalog";
-import { isMenuImageContentType, type MenuImageAttempt } from "../../../lib/menu-images";
+import { isMenuImageContentType, isNextRedirectError, menuUploadErrorMessage, type MenuImageAttempt } from "../../../lib/menu-images";
 import {
   BRANCH_PREFERENCE_COOKIE,
   findMembership,
@@ -23,6 +23,21 @@ const DEVICE_COOKIE = "sr-device-id";
 const MAXIMUM_DRAFT_LENGTH = 2_000_000;
 
 export async function uploadMenuImageAction(
+  target: "product" | "option",
+  targetId: string,
+  file: MenuImageAttempt,
+): Promise<{ readonly imagePath?: string; readonly error?: string }> {
+  try {
+    return await uploadMenuImage(target, targetId, file);
+  } catch (error: unknown) {
+    // redirect() (login, branch selection) is implemented by throwing and must keep working.
+    if (isNextRedirectError(error)) throw error;
+    console.error("menu image upload failed unexpectedly", error instanceof Error ? error.name : typeof error);
+    return { error: "No se pudo subir la foto por un error inesperado del servidor. Inténtalo de nuevo." };
+  }
+}
+
+async function uploadMenuImage(
   target: "product" | "option",
   targetId: string,
   file: MenuImageAttempt,
@@ -51,15 +66,18 @@ export async function uploadMenuImageAction(
       body: JSON.stringify(command),
     });
   } catch {
-    return { error: "No se pudo subir la foto. Revisa la conexión e inténtalo de nuevo." };
+    console.error("menu image upload: API unreachable");
+    return { error: "No se pudo subir la foto: el servidor no responde. Revisa la conexión e inténtalo de nuevo." };
   }
   let result: unknown;
-  try { result = await response.json(); } catch { return { error: "El servidor devolvió una respuesta inválida." }; }
+  try { result = await response.json(); } catch {
+    console.error(`menu image upload: non-JSON response status=${response.status}`);
+    return { error: `El servidor devolvió una respuesta inválida (HTTP ${response.status}).` };
+  }
   if (!response.ok) {
     const code = typeof result === "object" && result !== null && "code" in result ? result.code : undefined;
-    return { error: code === "MENU_IMAGES_UNCONFIGURED"
-      ? "El servidor no tiene almacenamiento de fotos configurado; avisa al administrador."
-      : typeof code === "string" ? `No se pudo subir la foto (${code}).` : "No se pudo subir la foto." };
+    console.error(`menu image upload rejected status=${response.status} code=${typeof code === "string" ? code : "none"}`);
+    return { error: menuUploadErrorMessage(response.status, code) };
   }
   const upload = result as Partial<MenuImageUploadResultV1>;
   if (upload.schemaVersion !== 1 || typeof upload.imagePath !== "string" || upload.imagePath.length === 0) {

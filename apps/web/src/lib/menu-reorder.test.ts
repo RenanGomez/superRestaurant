@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reorder, reorderSubset } from "./menu-reorder.js";
+import { dropIndicatorSide, parseReorderIndex, reorder, reorderSubset } from "./menu-reorder.js";
+
+test("parseReorderIndex accepts only non-negative integers", () => {
+  assert.equal(parseReorderIndex("0"), 0);
+  assert.equal(parseReorderIndex("12"), 12);
+  for (const bad of [null, undefined, "", "-1", "1.5", "x"]) assert.equal(parseReorderIndex(bad), null);
+});
+
+test("dropIndicatorSide puts the line after the target when moving down and before when moving up", () => {
+  assert.equal(dropIndicatorSide(0, 2), "after");
+  assert.equal(dropIndicatorSide(3, 1), "before");
+  assert.equal(dropIndicatorSide(2, 2), null);
+  assert.equal(dropIndicatorSide(2, null), null);
+});
 
 const item = (id: string, displayOrder: number, group = "a") => ({ displayOrder, group, id });
 const pairs = (list: readonly { id: string; displayOrder: number }[]) => list.map((entry) => [entry.id, entry.displayOrder]);

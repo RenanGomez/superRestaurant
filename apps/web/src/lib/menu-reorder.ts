@@ -13,6 +13,18 @@ export function reorder<T extends Positioned>(list: readonly T[], fromIndex: num
   return next.map((item, index) => ({ ...item, displayOrder: index + 1 }));
 }
 
+/** Reads the drop-row index from its data attribute; null when absent or not a non-negative integer. */
+export function parseReorderIndex(value: string | null | undefined): number | null {
+  if (value === null || value === undefined || !/^\d+$/u.test(value)) return null;
+  return Number(value);
+}
+
+/** Where the insertion line shows on the row under the pointer: after it when dragging down, before it when dragging up. */
+export function dropIndicatorSide(fromIndex: number, targetIndex: number | null): "after" | "before" | null {
+  if (targetIndex === null || targetIndex === fromIndex) return null;
+  return targetIndex > fromIndex ? "after" : "before";
+}
+
 /** Reorders only the members of a sublist (same category, same product) inside a flat list, keeping other items in place. */
 export function reorderSubset<T extends Positioned>(all: readonly T[], isMember: (item: T) => boolean, fromIndex: number, toIndex: number): T[] {
   const members = all.filter(isMember);

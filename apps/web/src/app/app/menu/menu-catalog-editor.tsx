@@ -10,12 +10,16 @@ import type {
   MenuProductVariantV1,
   MenuVariantFractionV1,
 } from "@super-restaurant/shared-types";
-import { useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
+import { FieldHint, LabelText } from "../../../components/field-hint";
+import { MENU_DEFAULT_UNIT, MENU_OTHER_STATION, MENU_STATION_MAX_LENGTH, stationValues, unitOptions } from "../../../lib/menu-fields";
+import { shrinkMenuImage } from "../../../lib/menu-image-resize";
+import { applyRemoval, removalNeedsConfirmation, type Removal } from "../../../lib/menu-removal";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { DEFAULT_PESO_CURRENCY, formatMinorForMoneyInput, parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import { currencyFractionDigits } from "../../../lib/money-scale";
-import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, publishDisabledReason, validateMenuImageFile, type MenuImageAttempt } from "../../../lib/menu-images";
+import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, publishDisabledReason, shouldDownscaleMenuImage, validateMenuImageFile, type MenuImageAttempt } from "../../../lib/menu-images";
 import { variantValidationError } from "../../../lib/menu-variants";
 import { reorder, reorderSubset } from "../../../lib/menu-reorder";
 import { ReorderControls, reorderRowProps } from "./reorder-controls";
@@ -29,13 +33,6 @@ interface Draft {
   readonly modifierGroups: readonly MenuModifierGroupV1[];
   readonly products: readonly MenuProductV1[];
 }
-
-type Removal = Readonly<{
-  groupId?: string;
-  id: string;
-  kind: "category" | "group" | "option" | "product" | "variant";
-  label: string;
-}>;
 
 export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
   readonly canManage: boolean;
@@ -84,7 +81,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
       sku: null,
       stationId: "general",
       tax: null,
-      unit: "pieza",
+      unit: MENU_DEFAULT_UNIT,
       unitPriceMinor: 0,
       variants: [],
     }]);
@@ -115,26 +112,19 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
     } : group));
   };
 
+  const performRemoval = (target: Removal): void => {
+    const next = applyRemoval({ categories, groups, products }, target);
+    setCategories(next.categories);
+    setProducts(next.products);
+    setGroups(next.groups);
+  };
+  const requestRemoval = (request: Removal): void => {
+    if (removalNeedsConfirmation(request)) setRemoval(request);
+    else performRemoval(request);
+  };
   const confirmRemoval = (): void => {
     if (removal === null) return;
-    if (removal.kind === "category") {
-      const removedProducts = new Set(products.filter((product) => product.categoryId === removal.id).map((product) => product.productId));
-      setCategories((current) => current.filter((category) => category.categoryId !== removal.id));
-      setProducts((current) => current.filter((product) => !removedProducts.has(product.productId)));
-      setGroups((current) => current.filter((group) => !removedProducts.has(group.productId)));
-    } else if (removal.kind === "product") {
-      setProducts((current) => current.filter((product) => product.productId !== removal.id));
-      setGroups((current) => current.filter((group) => group.productId !== removal.id));
-    } else if (removal.kind === "group") {
-      setGroups((current) => current.filter((group) => group.groupId !== removal.id));
-    } else if (removal.kind === "variant" && removal.groupId !== undefined) {
-      setProducts((current) => current.map((product) => product.productId === removal.groupId
-        ? { ...product, variants: product.variants?.filter((variant) => variant.variantId !== removal.id) ?? [] } : product));
-    } else if (removal.groupId !== undefined) {
-      setGroups((current) => current.map((group) => group.groupId === removal.groupId
-        ? { ...group, options: group.options.filter((option) => option.optionId !== removal.id) }
-        : group));
-    }
+    performRemoval(removal);
     setRemoval(null);
   };
 
@@ -159,16 +149,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
       </section>
       {variantError !== null && <p role="alert" className="text-sm text-error">{variantError}</p>}
 
-      {removal !== null && (
-        <section role="alertdialog" aria-labelledby="remove-title" className="rounded-xl border border-[oklch(80%_0.09_45)] bg-[oklch(97%_0.025_70)] p-4">
-          <h2 id="remove-title" className="font-heading text-[14px] font-semibold">¿Quitar “{removal.label}” del borrador?</h2>
-          <p className="mt-1 text-[12px] text-text-muted">La publicación anterior seguirá intacta. Si contiene elementos dependientes, también se quitarán de esta nueva versión.</p>
-          <div className="mt-3 flex gap-2">
-            <button type="button" onClick={confirmRemoval} className="rounded-lg bg-error px-3 py-2 text-[12px] font-semibold text-white">Sí, quitar</button>
-            <button type="button" onClick={() => setRemoval(null)} className="rounded-lg border border-border bg-surface px-3 py-2 text-[12px] font-semibold">Cancelar</button>
-          </div>
-        </section>
-      )}
+      {removal !== null && <RemovalDialog removal={removal} onCancel={() => setRemoval(null)} onConfirm={confirmRemoval} />}
 
       <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
         <SectionHeader title="Categorías" description="Organizan la carta y controlan su orden de aparición.">
@@ -178,7 +159,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
             {categories.map((category, index) => (
               <article key={category.categoryId} {...reorderRowProps("categories", index)} className="grid gap-3 rounded-xl border border-border bg-bg/50 p-3 sm:grid-cols-[1fr_auto_auto]">
-                <TextInput disabled={!canManage} label="Nombre" maxLength={80} value={category.name} onChange={(name) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, name } : entry))} />
+                <TextInput disabled={!canManage} hint="Nombre de la sección de la carta, por ejemplo Pizzas o Bebidas. El operador navega por estas categorías." label="Nombre" maxLength={80} value={category.name} onChange={(name) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, name } : entry))} />
                 <ReorderControls count={categories.length} disabled={!canManage} index={index} label={category.name} listKey="categories" onMove={(from, to) => setCategories((current) => reorder(current, from, to))} />
                 <div className="flex items-end gap-2 pb-1">
                   <ActiveInput disabled={!canManage} checked={category.active} onChange={(active) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, active } : entry))} />
@@ -197,7 +178,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
         {products.length === 0 ? <EmptyText text="No hay productos en este borrador." /> : (
           <div className="mt-4 flex flex-col gap-4">
             {products.map((product) => (
-              <ProductEditor siblingCount={products.filter((entry) => entry.categoryId === product.categoryId).length} siblingIndex={products.filter((entry) => entry.categoryId === product.categoryId).findIndex((entry) => entry.productId === product.productId)} onMoveProduct={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.categoryId === product.categoryId, from, to))} variantInvalid={variantIssue?.productId === product.productId}
+              <ProductEditor usedStations={products.map((entry) => entry.stationId)} siblingCount={products.filter((entry) => entry.categoryId === product.categoryId).length} siblingIndex={products.filter((entry) => entry.categoryId === product.categoryId).findIndex((entry) => entry.productId === product.productId)} onMoveProduct={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.categoryId === product.categoryId, from, to))} variantInvalid={variantIssue?.productId === product.productId}
                 key={product.productId}
                 canManage={canManage}
                 categories={categories}
@@ -211,7 +192,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
                 onProductChange={(changed) => setProducts((current) => current.map((entry) => entry.productId === changed.productId ? changed : entry))}
                 onProductImageChange={(imagePath) => setProducts((current) => current.map((entry) => entry.productId === product.productId ? { ...entry, imagePath } : entry))}
                 onOptionImageChange={(groupId, optionId, imagePath) => setGroups((current) => current.map((entry) => entry.groupId === groupId ? { ...entry, options: entry.options.map((option) => option.optionId === optionId ? { ...option, imagePath } : option) } : entry))}
-                onRemove={(request) => setRemoval(request)}
+                onRemove={requestRemoval}
                 onUploadPendingChange={onUploadPendingChange}
               />
             ))}
@@ -219,6 +200,27 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
         )}
       </section>
     </form>
+  );
+}
+
+/**
+ * Confirmation pinned to the bottom of the viewport. It used to render at the top of the form, so with the
+ * list scrolled down the «×» seemed to do nothing: the question was open but off screen.
+ */
+function RemovalDialog({ removal, onCancel, onConfirm }: { readonly removal: Removal; readonly onCancel: () => void; readonly onConfirm: () => void }): ReactNode {
+  const confirmButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => { confirmButton.current?.focus(); }, [removal]);
+  return (
+    <section role="alertdialog" aria-labelledby="remove-title" aria-describedby="remove-description"
+      onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}
+      className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-lg rounded-xl border border-[oklch(80%_0.09_45)] bg-[oklch(97%_0.025_70)] p-4 shadow-xl">
+      <h2 id="remove-title" className="font-heading text-[14px] font-semibold">¿Quitar “{removal.label}” del borrador?</h2>
+      <p id="remove-description" className="mt-1 text-[12px] text-text-muted">La publicación anterior seguirá intacta. Si contiene elementos dependientes, también se quitarán de esta nueva versión.</p>
+      <div className="mt-3 flex gap-2">
+        <button ref={confirmButton} type="button" onClick={onConfirm} className="min-h-11 rounded-lg bg-error px-4 py-2 text-[13px] font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Sí, quitar</button>
+        <button type="button" onClick={onCancel} className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-accent">Cancelar</button>
+      </div>
+    </section>
   );
 }
 
@@ -231,7 +233,8 @@ function PublishButton({ pendingUploads, variantError }: { readonly pendingUploa
   </button>;
 }
 
-function ProductEditor({ siblingCount, siblingIndex, onMoveProduct, variantInvalid, canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct, variantInvalid, canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+  readonly usedStations: readonly string[];
   readonly siblingCount: number;
   readonly siblingIndex: number;
   readonly onMoveProduct: (from: number, to: number) => void;
@@ -260,16 +263,20 @@ function ProductEditor({ siblingCount, siblingIndex, onMoveProduct, variantInval
     <article {...reorderRowProps(`products-${product.categoryId}`, siblingIndex)} className="min-w-0 rounded-2xl border border-border bg-bg/40 p-3 sm:p-4">
       <MenuPhoto canManage={canManage} imagePath={product.imagePath} name={product.name} supabaseUrl={supabaseUrl} target="product" targetId={product.productId} onChange={onProductImageChange} onUploadPendingChange={onUploadPendingChange} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <TextInput disabled={!canManage} label="Producto" maxLength={120} value={product.name} onChange={(name) => change({ name })} />
-        <label className="flex flex-col gap-1 text-[11px] font-medium">Categoría
+        <TextInput disabled={!canManage} hint="Nombre que ve el operador al tomar el pedido y que se imprime en la comanda." label="Producto" maxLength={120} value={product.name} onChange={(name) => change({ name })} />
+        <label className="flex flex-col gap-1 text-[11px] font-medium"><LabelText hint="Sección de la carta donde aparece este producto; el operador navega por categorías.">Categoría</LabelText>
           <select disabled={!canManage} value={product.categoryId} onChange={(event) => change({ categoryId: event.target.value })} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70">
             {categories.map((category) => <option key={category.categoryId} value={category.categoryId}>{category.name}</option>)}
           </select>
         </label>
-        <TextInput disabled={!canManage} label="Clave interna (opcional)" help="Código que usas en inventario o en tu impresora; puedes dejarlo vacío" required={false} maxLength={64} value={product.sku ?? ""} onChange={(sku) => change({ sku: sku.trim() === "" ? null : sku })} />
-        <MoneyInput disabled={!canManage} currency={currency} value={product.unitPriceMinor} onChange={(unitPriceMinor) => change({ unitPriceMinor })} />
-        <TextInput disabled={!canManage} label="Estación" maxLength={64} value={product.stationId} onChange={(stationId) => change({ stationId })} />
-        <TextInput disabled={!canManage} label="Unidad" maxLength={32} value={product.unit} onChange={(unit) => change({ unit })} />
+        <TextInput disabled={!canManage} hint="Código corto propio (SKU) para inventario o reportes. Puedes dejarlo vacío." label="Clave interna (opcional)" help="Código que usas en inventario o en tu impresora; puedes dejarlo vacío" required={false} maxLength={64} value={product.sku ?? ""} onChange={(sku) => change({ sku: sku.trim() === "" ? null : sku })} />
+        <MoneyInput hint="Precio de venta por unidad en la moneda del restaurante. Si el producto tiene tamaños, cada tamaño usa su propio precio." disabled={!canManage} currency={currency} value={product.unitPriceMinor} onChange={(unitPriceMinor) => change({ unitPriceMinor })} />
+        <StationSelect disabled={!canManage} usedStations={usedStations} value={product.stationId} onChange={(stationId) => change({ stationId })} />
+        <label className="flex flex-col gap-1 text-[11px] font-medium"><LabelText hint="Cómo se mide o se sirve el producto (pieza, porción, g, ml…). Sólo informativa en el ticket.">Unidad</LabelText>
+          <select disabled={!canManage} value={product.unit} onChange={(event) => change({ unit: event.target.value })} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70">
+            {unitOptions(product.unit).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
         <ReorderControls count={siblingCount} disabled={!canManage} index={siblingIndex} label={product.name} listKey={`products-${product.categoryId}`} onMove={onMoveProduct} />
         <div className="flex items-end gap-2 pb-1">
           <ActiveInput disabled={!canManage} checked={product.active} onChange={(active) => change({ active })} />
@@ -279,7 +286,7 @@ function ProductEditor({ siblingCount, siblingIndex, onMoveProduct, variantInval
 
       <section className="mt-3 rounded-xl border border-border bg-surface p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div><h3 className="font-heading text-[13px] font-semibold">Tamaños</h3>
+          <div><h3 className="flex items-center gap-1.5 font-heading text-[13px] font-semibold">Tamaños<FieldHint text="Presentaciones del mismo producto (chica, mediana, grande), cada una con su precio. Si no hay tamaños se cobra el precio del producto." /></h3>
             <p className="text-[12px] text-text-muted">Cada tamaño tiene su propio precio.</p></div>
           {canManage && <AddButton label="Añadir tamaño" disabled={variants.length >= MENU_PRODUCT_MAX_VARIANTS} onClick={() => change({ variants: [...variants, {
             active: true, displayOrder: nextDisplayOrder(variants), name: "", sku: null,
@@ -289,16 +296,16 @@ function ProductEditor({ siblingCount, siblingIndex, onMoveProduct, variantInval
         {variants.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin tamaños; se usa el precio del producto.</p> :
           <div className="mt-3 grid gap-3">{variants.map((variant, variantIndex) => <div key={variant.variantId} {...reorderRowProps(`variants-${product.productId}`, variantIndex)}
             className="grid min-w-0 gap-3 rounded-lg border border-border bg-bg/50 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)auto_auto]">
-            <TextInput disabled={!canManage} invalid={variantInvalid} label="Nombre del tamaño" maxLength={80} value={variant.name}
+            <TextInput disabled={!canManage} hint="Cómo se llama esta presentación, por ejemplo Chica, Mediana o Familiar. No se puede repetir en el mismo producto." invalid={variantInvalid} label="Nombre del tamaño" maxLength={80} value={variant.name}
               onChange={(name) => changeVariant(variant.variantId, { name })} />
-            <MoneyInput key={variant.variantId} label="Precio del tamaño" disabled={!canManage} currency={currency}
+            <MoneyInput key={variant.variantId} hint="Precio de venta de este tamaño." label="Precio del tamaño" disabled={!canManage} currency={currency}
               value={variant.unitPriceMinor} onChange={(unitPriceMinor) => changeVariant(variant.variantId, { unitPriceMinor })} />
             <ReorderControls count={variants.length} disabled={!canManage} index={variantIndex} label={variant.name || "tamaño nuevo"} listKey={`variants-${product.productId}`}
               onMove={(from, to) => change({ variants: reorder(variants, from, to) })} />
             <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={variant.active}
               onChange={(active) => changeVariant(variant.variantId, { active })} />
               {canManage && <RemoveButton label={`Quitar tamaño ${variant.name || "nuevo"}`}
-                onClick={() => onRemove({ id: variant.variantId, groupId: product.productId, kind: "variant", label: variant.name || "tamaño nuevo" })} />}
+                onClick={() => onRemove({ id: variant.variantId, groupId: product.productId, kind: "variant", label: variant.name || "tamaño nuevo", unnamed: variant.name.trim() === "" })} />}
             </div>
             <FractionEditor canManage={canManage} groups={groups} variant={variant}
               onChange={(fraction) => changeVariant(variant.variantId, { fraction })} />
@@ -308,16 +315,16 @@ function ProductEditor({ siblingCount, siblingIndex, onMoveProduct, variantInval
       <div className="mt-3 rounded-xl border border-border bg-surface p-3">
         <label className="inline-flex min-h-10 items-center gap-2 text-[12px] font-semibold">
           <input disabled={!canManage} type="checkbox" checked={product.tax !== null} onChange={(event) => change({ tax: event.target.checked ? { inclusion: "included", name: "IVA", rateDenominator: 100, rateNumerator: 16, taxId: "iva", taxRuleVersion: "1" } : null })} />
-          Aplicar impuesto
+          <LabelText hint="Marca si este producto causa IVA u otro impuesto. El impuesto se calcula siempre en el servidor con la regla indicada aquí.">Aplicar impuesto</LabelText>
         </label>
         {tax !== null && (
           <div className="mt-2 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-            <TextInput disabled={!canManage} label="Clave" maxLength={64} value={tax.taxId} onChange={(taxId) => change({ tax: { ...tax, taxId } })} />
-            <TextInput disabled={!canManage} label="Nombre fiscal" maxLength={80} value={tax.name} onChange={(name) => change({ tax: { ...tax, name } })} />
-            <TextInput disabled={!canManage} label="Versión regla" maxLength={64} value={tax.taxRuleVersion} onChange={(taxRuleVersion) => change({ tax: { ...tax, taxRuleVersion } })} />
-            <NumberInput disabled={!canManage} label="Numerador" min={0} max={1_000_000} value={tax.rateNumerator} onChange={(rateNumerator) => change({ tax: { ...tax, rateNumerator } })} />
-            <NumberInput disabled={!canManage} label="Denominador" min={1} max={1_000_000} value={tax.rateDenominator} onChange={(rateDenominator) => change({ tax: { ...tax, rateDenominator } })} />
-            <label className="flex flex-col gap-1 text-[11px] font-medium">Tratamiento
+            <TextInput disabled={!canManage} hint="Identificador corto del impuesto, por ejemplo iva. Sirve para agrupar impuestos en reportes." label="Clave" maxLength={64} value={tax.taxId} onChange={(taxId) => change({ tax: { ...tax, taxId } })} />
+            <TextInput disabled={!canManage} hint="Nombre que se imprime en el ticket, por ejemplo IVA." label="Nombre fiscal" maxLength={80} value={tax.name} onChange={(name) => change({ tax: { ...tax, name } })} />
+            <TextInput disabled={!canManage} hint="Versión de la regla de cálculo. Cámbiala sólo si el impuesto cambia; las ventas anteriores conservan la suya." label="Versión regla" maxLength={64} value={tax.taxRuleVersion} onChange={(taxRuleVersion) => change({ tax: { ...tax, taxRuleVersion } })} />
+            <NumberInput disabled={!canManage} hint="Parte de arriba de la tasa como fracción. Para 16 % escribe 16." label="Numerador" min={0} max={1_000_000} value={tax.rateNumerator} onChange={(rateNumerator) => change({ tax: { ...tax, rateNumerator } })} />
+            <NumberInput disabled={!canManage} hint="Parte de abajo de la tasa como fracción. Para 16 % escribe 100." label="Denominador" min={1} max={1_000_000} value={tax.rateDenominator} onChange={(rateDenominator) => change({ tax: { ...tax, rateDenominator } })} />
+            <label className="flex flex-col gap-1 text-[11px] font-medium"><LabelText hint="Incluido: el precio ya trae el impuesto. Adicional: el impuesto se suma al precio al cobrar.">Tratamiento</LabelText>
               <select disabled={!canManage} value={tax.inclusion} onChange={(event) => change({ tax: { ...tax, inclusion: event.target.value as "excluded" | "included" } })} className="min-h-10 rounded-lg border border-border bg-surface px-2 text-[13px]">
                 <option value="included">Incluido</option><option value="excluded">Adicional</option>
               </select>
@@ -327,7 +334,7 @@ function ProductEditor({ siblingCount, siblingIndex, onMoveProduct, variantInval
       </div>
 
       <div className="mt-3 flex items-center justify-between gap-3">
-        <h3 className="font-heading text-[13px] font-semibold">Grupos de modificadores</h3>
+        <h3 className="flex items-center gap-1.5 font-heading text-[13px] font-semibold">Grupos de modificadores<FieldHint text="Listas de opciones que el cliente puede elegir para este producto: sabores, extras, término de cocción, etc." /></h3>
         {canManage && <AddButton label="Agregar grupo" onClick={onAddGroup} />}
       </div>
       {groups.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin modificadores.</p> : groups.map((group, groupIndex) => (
@@ -424,20 +431,20 @@ function ModifierGroupEditor({ siblingCount, siblingIndex, onMoveGroup, canManag
   return (
     <section {...reorderRowProps(`groups-${group.productId}`, siblingIndex)} className="mt-3 min-w-0 rounded-xl border border-border bg-surface p-3">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <TextInput disabled={!canManage} label="Grupo" maxLength={80} value={group.name} onChange={(name) => change({ name })} />
-        <NumberInput disabled={!canManage} label="Mínimo total" min={0} max={1_000} value={group.minimumQuantity} onChange={(minimumQuantity) => change({ minimumQuantity })} />
-        <NumberInput disabled={!canManage} label="Máximo total" min={0} max={1_000} value={group.maximumQuantity} onChange={(maximumQuantity) => change({ maximumQuantity })} />
+        <TextInput disabled={!canManage} hint="Nombre de la lista de opciones, por ejemplo Sabores o Extras." label="Grupo" maxLength={80} value={group.name} onChange={(name) => change({ name })} />
+        <NumberInput disabled={!canManage} hint="Cuántas opciones debe elegir el operador como mínimo en este grupo. 0 = la elección es opcional." label="Mínimo total" min={0} max={1_000} value={group.minimumQuantity} onChange={(minimumQuantity) => change({ minimumQuantity })} />
+        <NumberInput disabled={!canManage} hint="Cuántas opciones puede elegir como máximo en total, contando repeticiones de una misma opción." label="Máximo total" min={0} max={1_000} value={group.maximumQuantity} onChange={(maximumQuantity) => change({ maximumQuantity })} />
         <ReorderControls count={siblingCount} disabled={!canManage} index={siblingIndex} label={group.name} listKey={`groups-${group.productId}`} onMove={onMoveGroup} />
         <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={group.active} onChange={(active) => change({ active })} />{canManage && <RemoveButton label={`Quitar ${group.name}`} onClick={() => onRemove({ id: group.groupId, kind: "group", label: group.name })} />}</div>
       </div>
-      <div className="mt-3 flex items-center justify-between gap-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Opciones</p>{canManage && <AddButton label="Agregar opción" onClick={onAddOption} />}</div>
+      <div className="mt-3 flex items-center justify-between gap-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted"><LabelText hint="Cada opción es una alternativa del grupo (por ejemplo Pepperoni) con su precio extra, que puede ser 0.">Opciones</LabelText></p>{canManage && <AddButton label="Agregar opción" onClick={onAddOption} />}</div>
       <div className="mt-2 grid gap-2 lg:grid-cols-2">
         {group.options.map((option) => (
           <div key={option.optionId} className="grid gap-2 rounded-lg border border-border bg-bg/50 p-2 sm:grid-cols-[1fr_170px_140px_auto]">
             <div className="sm:col-span-full"><MenuPhoto canManage={canManage} imagePath={option.imagePath} name={option.name} supabaseUrl={supabaseUrl} target="option" targetId={option.optionId} onChange={(imagePath) => onOptionImageChange(option.optionId, imagePath)} onUploadPendingChange={onUploadPendingChange} /></div>
-            <TextInput disabled={!canManage} label="Opción" maxLength={80} value={option.name} onChange={(name) => changeOption(group, option.optionId, { name }, onChange)} />
-            <MoneyInput disabled={!canManage} currency={currency} value={option.unitPriceMinor} onChange={(unitPriceMinor) => changeOption(group, option.optionId, { unitPriceMinor }, onChange)} />
-            <NullableNumberInput disabled={!canManage} label="Máximo opcional" min={1} max={1_000} value={option.maximumQuantity} onChange={(maximumQuantity) => changeOption(group, option.optionId, { maximumQuantity }, onChange)} />
+            <TextInput disabled={!canManage} hint="Nombre de la opción tal como la ve el operador." label="Opción" maxLength={80} value={option.name} onChange={(name) => changeOption(group, option.optionId, { name }, onChange)} />
+            <MoneyInput hint="Cargo adicional por elegir esta opción; 0 si no cuesta extra." disabled={!canManage} currency={currency} value={option.unitPriceMinor} onChange={(unitPriceMinor) => changeOption(group, option.optionId, { unitPriceMinor }, onChange)} />
+            <NullableNumberInput hint="Cantidad máxima de veces que se puede elegir esta misma opción (por ejemplo 2 porciones de queso). Vacío = sin límite propio." disabled={!canManage} label="Máximo opcional" min={1} max={1_000} value={option.maximumQuantity} onChange={(maximumQuantity) => changeOption(group, option.optionId, { maximumQuantity }, onChange)} />
             <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={option.active} onChange={(active) => changeOption(group, option.optionId, { active }, onChange)} />{canManage && group.options.length > 1 && <RemoveButton label={`Quitar ${option.name}`} onClick={() => onRemove({ groupId: group.groupId, id: option.optionId, kind: "option", label: option.name })} />}</div>
           </div>
         ))}
@@ -475,8 +482,13 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
       onChange(result.imagePath);
       setFailedPath(null);
       setMessage("Foto lista. Publica la nueva versión para mostrarla en captura.");
-    } catch {
-      setMessage("No se pudo subir la foto. Inténtalo de nuevo.");
+    } catch (error: unknown) {
+      // The action itself never throws; reaching here means the request did not complete (offline, server restart, body too large).
+      const offline = typeof navigator !== "undefined" && !navigator.onLine;
+      const detail = error instanceof Error && error.message.length > 0 ? ` (${error.message.slice(0, 120)})` : "";
+      setMessage(offline
+        ? "No se pudo subir la foto: sin conexión a internet. Revisa la red e inténtalo de nuevo."
+        : `No se pudo subir la foto: el servidor no respondió${detail}. Inténtalo de nuevo.`);
     }
   };
 
@@ -501,15 +513,24 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
     setBusy(true);
     onUploadPendingChange(true);
     try {
+      let source: Blob = file;
+      let contentType: string = file.type;
+      if (shouldDownscaleMenuImage(file.size)) {
+        setMessage("Reduciendo el tamaño de la foto…");
+        const shrunk = await shrinkMenuImage(file);
+        if (shrunk === null) { setMessage("La foto es demasiado grande y no se pudo reducir a menos de 2 MB. Prueba con otra imagen."); return; }
+        source = shrunk.blob;
+        contentType = shrunk.contentType;
+      }
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("read"));
         reader.onerror = () => reject(new Error("read"));
-        reader.readAsDataURL(file);
+        reader.readAsDataURL(source);
       });
       const dataBase64 = dataUrl.split(",", 2)[1];
-      if (dataBase64 === undefined || !isMenuImageContentType(file.type)) throw new Error("read");
-      const selected = menuImageAttempt(attempt.current, { contentType: file.type, dataBase64, fileName: file.name, lastModified: file.lastModified }, () => crypto.randomUUID(), () => new Date().toISOString());
+      if (dataBase64 === undefined || !isMenuImageContentType(contentType)) throw new Error("read");
+      const selected = menuImageAttempt(attempt.current, { contentType, dataBase64, fileName: file.name, lastModified: file.lastModified }, () => crypto.randomUUID(), () => new Date().toISOString());
       attempt.current = selected;
       await upload(selected);
     } catch {
@@ -527,6 +548,7 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
     {canManage && <>
       <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" aria-label={`Foto de ${name}`} onChange={(event) => { void choose(event); }} />
       <button type="button" disabled={busy} onClick={() => fileInput.current?.click()} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60">{busy ? "Subiendo…" : "Foto"}</button>
+      <FieldHint text="Imagen que se muestra en la captura de pedidos. JPG, PNG o WebP; si pesa más de 2 MB se reduce sola. Publica la nueva versión para que se vea." />
       {attempt.current !== null && message !== null && message.startsWith("No se pudo subir") && <button type="button" disabled={busy} onClick={() => { void retry(); }} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-accent">Reintentar</button>}
       {imagePath !== null && <button type="button" disabled={busy} onClick={() => { onChange(null); setMessage("Foto quitada del borrador."); }} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm focus-visible:outline-2 focus-visible:outline-accent">Quitar foto</button>}
     </>}
@@ -538,13 +560,36 @@ function SectionHeader({ children, description, title }: { readonly children?: R
   return <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-heading text-[16px] font-semibold">{title}</h2><p className="mt-1 text-[12px] text-text-muted">{description}</p></div>{children}</div>;
 }
 
-function TextInput({ disabled, help, invalid = false, label, maxLength, onChange, required = true, value, width = "w-full" }: { readonly disabled: boolean; readonly help?: string; readonly invalid?: boolean; readonly label: string; readonly maxLength: number; readonly onChange: (value: string) => void; readonly required?: boolean; readonly value: string; readonly width?: string }): ReactNode {
-  return <label className={`flex min-w-0 flex-col gap-1 text-[11px] font-medium ${width}`}>{label}<input required={required} aria-invalid={invalid || undefined} disabled={disabled} maxLength={maxLength} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" />{help && <span className="text-[11px] font-normal text-text-muted">{help}</span>}</label>;
+const ACTIVE_HINT = "Si lo desmarcas, deja de aparecer en la captura de pedidos pero se conserva en el menú para volver a activarlo.";
+
+function StationSelect({ disabled, onChange, usedStations, value }: { readonly disabled: boolean; readonly onChange: (value: string) => void; readonly usedStations: readonly string[]; readonly value: string }): ReactNode {
+  const [other, setOther] = useState(false);
+  const [draft, setDraft] = useState("");
+  const values = stationValues(usedStations, value);
+  const field = "min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70";
+  return <div className="flex min-w-0 flex-col gap-1">
+    <label className="flex flex-col gap-1 text-[11px] font-medium"><LabelText hint="Pantalla de cocina (KDS) donde aparece este producto al enviarlo a preparar; p. ej. cocina, barra, pizzas.">Estación</LabelText>
+      <select disabled={disabled} value={other ? MENU_OTHER_STATION : value}
+        onChange={(event) => { if (event.target.value === MENU_OTHER_STATION) setOther(true); else { setOther(false); setDraft(""); onChange(event.target.value); } }}
+        className={field}>
+        {values.map((station) => <option key={station} value={station}>{station}</option>)}
+        <option value={MENU_OTHER_STATION}>Otra estación…</option>
+      </select>
+    </label>
+    {other && <input aria-label="Nombre de la nueva estación" autoFocus required disabled={disabled} maxLength={MENU_STATION_MAX_LENGTH} placeholder="Ej. pizzas"
+      value={draft}
+      onChange={(event) => { setDraft(event.target.value); if (event.target.value.trim() !== "") onChange(event.target.value.trim()); }} className={field} />}
+  </div>;
 }
 
-function MoneyInput({ currency, disabled, label = "Precio", onChange, value }: {
+function TextInput({ disabled, help, hint, invalid = false, label, maxLength, onChange, required = true, value, width = "w-full" }: { readonly disabled: boolean; readonly help?: string; readonly hint?: string; readonly invalid?: boolean; readonly label: string; readonly maxLength: number; readonly onChange: (value: string) => void; readonly required?: boolean; readonly value: string; readonly width?: string }): ReactNode {
+  return <label className={`flex min-w-0 flex-col gap-1 text-[11px] font-medium ${width}`}>{hint === undefined ? label : <LabelText hint={hint}>{label}</LabelText>}<input required={required} aria-invalid={invalid || undefined} disabled={disabled} maxLength={maxLength} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" />{help && <span className="text-[11px] font-normal text-text-muted">{help}</span>}</label>;
+}
+
+function MoneyInput({ currency, disabled, hint, label = "Precio", onChange, value }: {
   readonly currency: string;
   readonly disabled: boolean;
+  readonly hint?: string;
   readonly label?: string;
   readonly onChange: (value: number) => void;
   readonly value: number;
@@ -556,7 +601,7 @@ function MoneyInput({ currency, disabled, label = "Precio", onChange, value }: {
   const pattern = digits === 0 ? "[0-9]+" : digits === null ? "(?!)" : `[0-9]+([.,][0-9]{1,${digits}})?`;
   const errorText = digits === null ? "La moneda de este catálogo no está admitida; avisa al administrador."
     : `Escribe un precio válido${digits === 0 ? " sin decimales" : ` con máximo ${digits} decimales`}.`;
-  return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium">{label}
+  return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium">{hint === undefined ? label : <LabelText hint={hint}>{label}</LabelText>}
     <input
       required disabled={disabled} type="text" inputMode="decimal" pattern={pattern}
       value={text} aria-invalid={parsed === null} aria-describedby={hintId}
@@ -576,17 +621,17 @@ function MoneyInput({ currency, disabled, label = "Precio", onChange, value }: {
   </label>;
 }
 
-function NumberInput({ disabled, label, max, min, onChange, value }: { readonly disabled: boolean; readonly label: string; readonly max: number; readonly min: number; readonly onChange: (value: number) => void; readonly value: number }): ReactNode {
-  return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium">{label}<input required disabled={disabled} type="number" min={min} max={max} step="1" value={value} onChange={(event) => onChange(integerFrom(event.target.value, min, max))} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" /></label>;
+function NumberInput({ disabled, hint, label, max, min, onChange, value }: { readonly disabled: boolean; readonly hint: string; readonly label: string; readonly max: number; readonly min: number; readonly onChange: (value: number) => void; readonly value: number }): ReactNode {
+  return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium"><LabelText hint={hint}>{label}</LabelText><input required disabled={disabled} type="number" min={min} max={max} step="1" value={value} onChange={(event) => onChange(integerFrom(event.target.value, min, max))} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" /></label>;
 }
 
 
-function NullableNumberInput({ disabled, label, max, min, onChange, value }: { readonly disabled: boolean; readonly label: string; readonly max: number; readonly min: number; readonly onChange: (value: number | null) => void; readonly value: number | null }): ReactNode {
-  return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium">{label}<input disabled={disabled} type="number" min={min} max={max} step="1" value={value ?? ""} onChange={(event) => onChange(event.target.value === "" ? null : integerFrom(event.target.value, min, max))} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" /></label>;
+function NullableNumberInput({ disabled, hint, label, max, min, onChange, value }: { readonly disabled: boolean; readonly hint: string; readonly label: string; readonly max: number; readonly min: number; readonly onChange: (value: number | null) => void; readonly value: number | null }): ReactNode {
+  return <label className="flex min-w-0 flex-col gap-1 text-[11px] font-medium"><LabelText hint={hint}>{label}</LabelText><input disabled={disabled} type="number" min={min} max={max} step="1" value={value ?? ""} onChange={(event) => onChange(event.target.value === "" ? null : integerFrom(event.target.value, min, max))} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70" /></label>;
 }
 
 function ActiveInput({ checked, disabled, onChange }: { readonly checked: boolean; readonly disabled: boolean; readonly onChange: (value: boolean) => void }): ReactNode {
-  return <label className="inline-flex min-h-10 items-center gap-1.5 whitespace-nowrap text-[11px] font-medium"><input type="checkbox" disabled={disabled} checked={checked} onChange={(event) => onChange(event.target.checked)} />Activo</label>;
+  return <label className="inline-flex min-h-10 items-center gap-1.5 whitespace-nowrap text-[11px] font-medium"><input type="checkbox" disabled={disabled} checked={checked} onChange={(event) => onChange(event.target.checked)} /><LabelText hint={ACTIVE_HINT}>Activo</LabelText></label>;
 }
 
 function AddButton({ disabled = false, label, onClick }: { readonly disabled?: boolean; readonly label: string; readonly onClick: () => void }): ReactNode {

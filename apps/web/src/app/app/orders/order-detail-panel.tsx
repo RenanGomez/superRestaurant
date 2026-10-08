@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import { LabelText } from "../../../components/field-hint";
 import type { AddOrderItemCommandV1, LineFractionV1, MenuCatalogStateV1, MenuModifierGroupV1, MenuProductV1, OrderDetailItemV1, OrderDetailV1 } from "@super-restaurant/shared-types";
 import { captureDeviceId } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
@@ -566,7 +567,7 @@ function CancelReasonDialog({ itemName, requiresSupervisor, busy, onCancel, onCo
     <div ref={dialogRef} className={sheet} role="dialog" aria-modal="true" aria-labelledby={headingId} tabIndex={-1} onClick={(event) => event.stopPropagation()}>
       <h2 id={headingId} className="font-heading text-lg font-bold">Cancelar «{itemName}»</h2>
       {requiresSupervisor && <p className="mt-2 text-sm text-text-muted">Esta línea ya se envió a cocina: el servidor exigirá autorización de un supervisor.</p>}
-      <label className="mt-3 block text-sm font-semibold" htmlFor={`${headingId}-reason`}>Motivo (obligatorio)</label>
+      <label className="mt-3 block text-sm font-semibold" htmlFor={`${headingId}-reason`}><LabelText hint="Explica por qué se hace esta acción sobre la orden. Queda en la auditoría junto con tu usuario.">Motivo (obligatorio)</LabelText></label>
       <textarea id={`${headingId}-reason`} className="mt-1 min-h-24 w-full rounded-lg border border-border bg-bg p-2 text-sm"
         value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} />
       <div className="mt-4 flex justify-end gap-2">
@@ -596,7 +597,7 @@ function CancelOrderDialog({ warning, hasSentLines, busy, onCancel, onConfirm }:
       <h2 id={headingId} className="font-heading text-lg font-bold">Cancelar orden</h2>
       <p className="mt-2 text-sm text-text-muted">Se cancelan todas las líneas y queda registrada con el motivo. Esta acción no se puede deshacer.{hasSentLines ? " Cocina recibirá el aviso de cancelación de lo ya enviado." : ""}</p>
       {warning !== undefined && <p role="note" className="mt-3 rounded-lg border border-border bg-bg p-3 text-sm font-semibold">{warning}</p>}
-      <label className="mt-3 block text-sm font-semibold" htmlFor={`${headingId}-reason`}>Motivo (obligatorio)</label>
+      <label className="mt-3 block text-sm font-semibold" htmlFor={`${headingId}-reason`}><LabelText hint="Explica por qué se hace esta acción sobre la orden. Queda en la auditoría junto con tu usuario.">Motivo (obligatorio)</LabelText></label>
       <textarea id={`${headingId}-reason`} className="mt-1 min-h-24 w-full rounded-lg border border-border bg-bg p-2 text-sm"
         value={reason} onChange={(event) => setReason(event.target.value)} maxLength={ORDER_CANCELLATION_REASON_MAX_LENGTH} autoFocus />
       <div className="mt-4 flex justify-end gap-2">

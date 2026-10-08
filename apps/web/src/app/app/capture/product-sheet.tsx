@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CAPTURE_SELECTION_LINE_MAX_QUANTITY, type BranchScope, type CaptureLineQuoteRequestV1, type CaptureLineQuoteResultV1, type LineFractionHalfV1, type LineFractionV1, type MenuModifierGroupV1, type MenuProductV1 } from "@super-restaurant/shared-types";
+import { LabelText } from "../../../components/field-hint";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { visibleLineEstimate } from "../../../lib/capture-quote";
 import type { CaptureRequestResult } from "../../../lib/capture-workspace";
@@ -225,7 +226,7 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
           </div>
         </fieldset>)}
         {showNote && <div className="grid gap-1">
-          <label htmlFor="product-sheet-note" className="text-sm font-semibold">Nota para cocina</label>
+          <label htmlFor="product-sheet-note" className="text-sm font-semibold"><LabelText hint="Indicación extra para este producto, por ejemplo término de cocción o sin picante. Aparece en la comanda.">Nota para cocina</LabelText></label>
           <textarea id="product-sheet-note" className="min-h-11 rounded-lg border border-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
             rows={2} maxLength={MAX_NOTE_LENGTH} disabled={busy || confirmed || lockSelection} placeholder="Ej. sin cebolla, bien cocida"
             value={note} onChange={(event) => setNote(event.target.value.slice(0, MAX_NOTE_LENGTH))} />
