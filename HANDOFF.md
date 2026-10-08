@@ -1,6 +1,6 @@
 # HANDOFF
 
-## Mesas, segunda ronda del smoke — 2026-10-07 noche (IN_PROGRESS)
+## Mesas, segunda ronda del smoke — 2026-10-07 noche (REVIEW)
 
 - Emmanuel reportó 11 hallazgos en Mesas (sin imágenes adjuntas en la sesión; se trabajó con su descripción).
 - Diagnóstico L0 (CodeGraph): `AppNav` usa `<a>` (recarga completa por clic); layout + página + proxy repiten `getSession`/`listMemberships`/`authorizeBranch` en serie; `FocusRevalidate` y `TablesBoard` refrescan en `focus` y `visibilitychange` (el «Rendering» es el indicador de `next dev`); `planCanvasStyle` limita el ancho a 70vh×proporción; el editor sólo guarda con el formulario «Guardar layout»; `CreateTableForm` es un `<details>` sin cancelar; la capacidad es independiente del tamaño en SQL (`capacity between 1 and 50`) pero no hay comando para editarla.
@@ -8,7 +8,8 @@
 - La tarea de menú `web-menu-smoke-fixes` (Codex) murió por el mismo error de entorno sin cambios en su worktree; sigue pendiente.
 - Resultado: ambas ramas integradas en main (web `f9e7c3e`; API y `e861ef0` en `5f93de3`). Puertas web lint/typecheck/test/build, shared-types y api verdes con Node 24.19.0 (`C:\Users\Emmanuel G\AppData\Local\Programs\node24`; invocar pnpm con la ruta entre comillas). Verificador SQL de detalles verde 3/5 con catálogo 96→97→96 funciones; los fallos son timeouts del arnés. Codex review no corre (`helper_unknown_error`), sólo Sonnet. CodeGraph se desconectó a mitad de sesión; el análisis posterior se cubrió con typecheck y pruebas.
 - Decisión de Emmanuel: unir mesas «al abrir cuenta» (PROJECT_NOTES). Siguiente tarea `tables-join-on-open` (A).
-- Siguiente: autorización de Emmanuel para aplicar `20261008000100` con el runbook; reiniciar web dev (8082) y API local; prueba visual de Emmanuel.
+- Emmanuel autorizó («autorizo») y se aplicó `20261008000100` con el runbook: preflight (sólo esa candidata más la histórica `20260908000100` excluida), sonda rollback-only 6 sentencias, staging 64 archivos sin diferencias de hash, dry-run exacto, apply exit 0, postcheck 48/5/97 con EXECUTE sólo `app_api`, segundo dry-run `upToDate`, staging borrado. API local reiniciado en 3000 (`tmp/local-api-20261008.*.log`); web dev 8082 sigue con HMR.
+- Siguiente: prueba visual de Emmanuel (guía §10); después `tables-join-on-open` (A).
 
 ## Menú, segunda ronda del smoke — 2026-10-07 tarde (IN_PROGRESS)
 
