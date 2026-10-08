@@ -43,45 +43,72 @@ const TABLE_SQL = `select
 const SEED_LEGACY_SQL = `do $seed$
 declare
   r uuid := gen_random_uuid(); c uuid := gen_random_uuid(); cat uuid := gen_random_uuid();
-  p_sized uuid := gen_random_uuid(); p_plain uuid := gen_random_uuid();
-  gf uuid := gen_random_uuid(); ge uuid := gen_random_uuid(); gf2 uuid := gen_random_uuid();
-  v_off uuid := gen_random_uuid(); v_first uuid := gen_random_uuid(); v_second uuid := gen_random_uuid();
-  v_plain uuid := gen_random_uuid();
+  b uuid := gen_random_uuid(); m uuid := gen_random_uuid(); actor uuid := (select id from auth.users order by id limit 1);
+  p_same uuid := gen_random_uuid(); p_diff uuid := gen_random_uuid(); p_plain uuid := gen_random_uuid();
+  gf uuid := gen_random_uuid(); ge uuid := gen_random_uuid();
+  gd1 uuid := gen_random_uuid(); gd2 uuid := gen_random_uuid();
+  gp uuid := gen_random_uuid();
 begin
   insert into app.restaurants(id,name,time_zone) values(r,'rollback-only legacy halves','America/Hermosillo');
-  insert into app.menu_catalogs(id,restaurant_id,version,currency,published_by)
-    values(c,r,1,'MXN',(select id from auth.users order by id limit 1));
+  insert into app.branches(id,restaurant_id,name) values(b,r,'rollback-only legacy halves branch');
+  insert into app.memberships(id,user_id,restaurant_id,branch_id,granted_by) values(m,actor,r,b,actor);
+  insert into app.membership_role_grants(membership_id,role_code,granted_by) values(m,'manager',actor);
+  insert into app.menu_catalogs(id,restaurant_id,version,currency,published_by) values(c,r,1,'MXN',actor);
   insert into app.menu_categories(restaurant_id,catalog_id,id,name,active,display_order) values(r,c,cat,'Comida',true,0);
   insert into app.menu_products(restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor)
-    values (r,c,p_sized,cat,'Sized',null,true,0,'kitchen','piece',0),(r,c,p_plain,cat,'Plain',null,true,1,'kitchen','piece',100);
+    values (r,c,p_same,cat,'Same',null,true,0,'kitchen','piece',0),(r,c,p_diff,cat,'Diff',null,true,1,'kitchen','piece',0),
+      (r,c,p_plain,cat,'Plain',null,true,2,'kitchen','piece',100);
   insert into app.menu_modifier_groups(restaurant_id,catalog_id,id,product_id,name,active,display_order,minimum_quantity,maximum_quantity)
-    values (r,c,gf,p_sized,'Sabor',true,0,0,2),(r,c,ge,p_sized,'Extras',true,1,0,5),(r,c,gf2,p_sized,'Otro',true,2,0,2);
+    values (r,c,gf,p_same,'Sabor',true,0,0,2),(r,c,ge,p_same,'Extras',true,1,0,5),
+      (r,c,gd1,p_diff,'Sabor',true,0,0,2),(r,c,gd2,p_diff,'Otro',true,1,0,2),(r,c,gp,p_plain,'Notas',true,0,0,1);
+  insert into app.menu_modifier_options(restaurant_id,catalog_id,group_id,id,name,unit_price_minor,active)
+    select r,c,g,gen_random_uuid(),'Op',0,true from unnest(array[gf,ge,gd1,gd2,gp]) as g;
   insert into app.menu_product_variants(restaurant_id,catalog_id,product_id,id,name,sku,unit_price_minor,active,display_order,
     fraction_enabled,fraction_flavor_group_id,fraction_extra_group_id,fraction_excludable_ingredient_ids) values
-    (r,c,p_sized,v_off,'Chica',null,10000,true,0,false,null,null,'{}'),
-    (r,c,p_sized,v_second,'Familiar',null,30000,true,2,true,gf2,null,array['z']),
-    (r,c,p_sized,v_first,'Grande',null,20000,true,1,true,gf,ge,array['cebolla','piña']),
-    (r,c,p_plain,v_plain,'Unica',null,100,true,0,false,null,null,'{}');
-  create temp table legacy_seed(sized uuid, plain uuid, flavor uuid, extra uuid) on commit drop;
-  insert into legacy_seed values (p_sized, p_plain, gf, ge);
+    (r,c,p_same,gen_random_uuid(),'Chica',null,10000,true,0,false,null,null,'{}'),
+    (r,c,p_same,gen_random_uuid(),'Familiar',null,30000,true,2,true,gf,ge,array['cebolla','piña']),
+    (r,c,p_same,gen_random_uuid(),'Grande',null,20000,true,1,true,gf,ge,array['cebolla','piña']),
+    (r,c,p_diff,gen_random_uuid(),'Chica',null,10000,true,0,true,gd1,null,array['z']),
+    (r,c,p_diff,gen_random_uuid(),'Grande',null,20000,true,1,true,gd2,null,array['z']),
+    (r,c,p_plain,gen_random_uuid(),'Unica',null,100,true,0,false,null,null,'{}');
+  insert into app.menu_catalog_heads(restaurant_id,catalog_id,version,updated_at,updated_by) values(r,c,1,now(),actor);
+  create temp table legacy_seed(restaurant uuid, branch uuid, catalog uuid, actor uuid, same uuid, diff uuid, plain uuid,
+    flavor uuid, extra uuid, diff_flavor uuid) on commit drop;
+  insert into legacy_seed values (r, b, c, actor, p_same, p_diff, p_plain, gf, ge, gd1);
 end $seed$`;
 
 const CHECK_LEGACY_SQL = `do $check$
-declare seed legacy_seed%rowtype;
+declare seed legacy_seed%rowtype; st jsonb; payload jsonb; save_status text;
 begin
   select * into seed from legacy_seed;
   if not exists (
     select 1 from app.menu_products p
-    where p.id = seed.sized and p.fraction_enabled and p.fraction_flavor_group_id = seed.flavor
+    where p.id = seed.same and p.fraction_enabled and p.fraction_flavor_group_id = seed.flavor
       and p.fraction_extra_group_id = seed.extra and p.fraction_excludable_ingredient_ids = array['cebolla','piña']
-  ) then raise exception 'LEGACY_FRACTION_NOT_LIFTED_FROM_FIRST_ENABLED_SIZE'; end if;
+  ) then raise exception 'LEGACY_FRACTION_NOT_LIFTED_FROM_SIZES'; end if;
+  -- Lifted sizes are disabled (one source) but keep their group columns.
+  if exists (select 1 from app.menu_product_variants v where v.product_id = seed.same and v.fraction_enabled)
+    or not exists (select 1 from app.menu_product_variants v where v.product_id = seed.same and v.fraction_flavor_group_id = seed.flavor)
+  then raise exception 'LIFTED_SIZES_NOT_DISABLED_OR_COLUMNS_LOST'; end if;
+  -- Sizes with differing setups stay untouched on legacy.
+  if not exists (
+    select 1 from app.menu_products p where p.id = seed.diff and not p.fraction_enabled and p.fraction_flavor_group_id is null
+  ) or (select pg_catalog.count(*) from app.menu_product_variants v where v.product_id = seed.diff and v.fraction_enabled) <> 2
+  then raise exception 'DIFFERING_SIZES_WERE_MIGRATED'; end if;
+  -- Round trip: read the migrated state and save it as-is; it must be accepted.
+  st := app_private.build_menu_catalog_state(seed.restaurant, seed.branch, seed.catalog, false);
+  payload := pg_catalog.jsonb_build_object('categories', st#>'{catalog,categories}',
+    'products', st#>'{catalog,products}', 'modifierGroups', st#>'{catalog,modifierGroups}');
+  execute 'set local role app_api';
+  select s.status into save_status from app_private.save_menu_catalog(seed.actor, seed.restaurant, seed.branch,
+    gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), now(), 1, gen_random_uuid(), 'MXN', payload) s;
+  execute 'reset role';
+  if save_status is distinct from 'saved' then raise exception 'MIGRATED_STATE_SAVE_AS_IS_REJECTED_%', save_status; end if;
   if not exists (
     select 1 from app.menu_products p
     where p.id = seed.plain and not p.fraction_enabled and p.fraction_flavor_group_id is null
       and p.fraction_extra_group_id is null and pg_catalog.cardinality(p.fraction_excludable_ingredient_ids) = 0
   ) then raise exception 'PRODUCT_WITHOUT_LEGACY_FRACTION_CHANGED'; end if;
-  if (select pg_catalog.count(*) from app.menu_product_variants v where v.fraction_enabled) <> 2
-  then raise exception 'LEGACY_SIZE_COLUMNS_CHANGED'; end if;
 end $check$`;
 
 function executable(name: string): string {
@@ -136,11 +163,11 @@ try {
     CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS 'SELECT NULL::uuid';`);
   const migrations = join(root, "supabase", "migrations");
   const names = readdirSync(migrations).filter((name) => /^\d{14}_[a-z0-9_]+\.sql$/u.test(name)).sort();
-  const candidateName = "20261007000800_catalog_halves_product_level.sql";
+  const candidateName = "20261008000200_catalog_halves_product_level.sql";
   const candidateIndex = names.indexOf(candidateName);
   if (candidateIndex < 1) throw new Error("LOCAL_CANDIDATE_MIGRATION_REJECTED");
   const priorNames = names.slice(0, candidateIndex);
-  if (names[candidateIndex - 1] !== "20261007000700_cancellation_actor_and_summary.sql") throw new Error("LOCAL_MIGRATION_SET_REJECTED");
+  if (names[candidateIndex - 1] !== "20261008000100_dining_table_details.sql") throw new Error("LOCAL_MIGRATION_SET_REJECTED");
   const actorId = randomUUID();
   stage = "apply_prior_migrations";
   for (const name of priorNames) await admin.query(readFileSync(join(migrations, name), "utf8"));

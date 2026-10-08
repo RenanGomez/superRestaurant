@@ -6,7 +6,8 @@ begin;
 --     setup uses it for every size and for the product without sizes; a product without one falls
 --     back to the legacy per-size setup of the chosen size, which keeps working untouched.
 --   * Existing data: the first enabled size of each product (display order, then id) donates its
---     setup to the product. The size columns are left as they are (legacy, never dropped here).
+--     setup to the product when all enabled sizes share ONE setup (otherwise a NOTICE counts them and
+--     they stay on legacy); lifted products' sizes are then disabled (columns kept, never dropped).
 --   * save_menu_catalog accepts `fraction` on a product and rejects (conflict) a product whose own
 --     setup is enabled while one of its sizes also has an enabled setup: one source of truth.
 --   * confirm_capture_draft_v3 recomputes the snapshot with the effective setup. A line `fraction`
@@ -31,23 +32,50 @@ alter table app.menu_products
     and pg_catalog.array_position(fraction_excludable_ingredient_ids, null) is null
   );
 
-update app.menu_products as product set
-  fraction_enabled = donor.fraction_enabled,
-  fraction_flavor_group_id = donor.fraction_flavor_group_id,
-  fraction_extra_group_id = donor.fraction_extra_group_id,
-  fraction_excludable_ingredient_ids = donor.fraction_excludable_ingredient_ids
-from (
+do $lift$
+declare skipped integer;
+begin
+  -- Only products whose enabled sizes all share ONE setup are lifted; the others stay on legacy.
+  create temporary table lift_donor on commit drop as
   select distinct on (variant.restaurant_id, variant.catalog_id, variant.product_id)
-    variant.restaurant_id, variant.catalog_id, variant.product_id, variant.fraction_enabled,
-    variant.fraction_flavor_group_id, variant.fraction_extra_group_id, variant.fraction_excludable_ingredient_ids
+    variant.restaurant_id, variant.catalog_id, variant.product_id,
+    variant.fraction_flavor_group_id as flavor_group,
+    variant.fraction_extra_group_id as extra_group,
+    variant.fraction_excludable_ingredient_ids as labels,
+    (select pg_catalog.count(distinct (other.fraction_flavor_group_id, other.fraction_extra_group_id,
+        other.fraction_excludable_ingredient_ids))
+      from app.menu_product_variants as other
+      where other.restaurant_id = variant.restaurant_id and other.catalog_id = variant.catalog_id
+        and other.product_id = variant.product_id and other.fraction_enabled
+        and other.fraction_flavor_group_id is not null) as configs
   from app.menu_product_variants as variant
   where variant.fraction_enabled and variant.fraction_flavor_group_id is not null
-  order by variant.restaurant_id, variant.catalog_id, variant.product_id, variant.display_order, variant.id
-) as donor
-where product.restaurant_id = donor.restaurant_id and product.catalog_id = donor.catalog_id
-  and product.id = donor.product_id and not product.fraction_enabled
-  and product.fraction_flavor_group_id is null and product.fraction_extra_group_id is null
-  and pg_catalog.cardinality(product.fraction_excludable_ingredient_ids) = 0;
+  order by variant.restaurant_id, variant.catalog_id, variant.product_id, variant.display_order, variant.id;
+
+  select pg_catalog.count(*) into skipped from lift_donor where configs <> 1;
+  if skipped > 0 then
+    raise notice 'catalog_halves_product_level: % product(s) have sizes with differing half-and-half setups and stay on the legacy per-size setup', skipped;
+  end if;
+
+  update app.menu_products as product set
+    fraction_enabled = true,
+    fraction_flavor_group_id = donor.flavor_group,
+    fraction_extra_group_id = donor.extra_group,
+    fraction_excludable_ingredient_ids = donor.labels
+  from lift_donor as donor
+  where donor.configs = 1
+    and product.restaurant_id = donor.restaurant_id and product.catalog_id = donor.catalog_id
+    and product.id = donor.product_id and not product.fraction_enabled
+    and product.fraction_flavor_group_id is null and product.fraction_extra_group_id is null
+    and pg_catalog.cardinality(product.fraction_excludable_ingredient_ids) = 0;
+
+  -- One source of truth: the lifted products' sizes stop being enabled (their group columns stay).
+  update app.menu_product_variants as variant set fraction_enabled = false
+  from lift_donor as donor
+  where donor.configs = 1 and variant.fraction_enabled
+    and variant.restaurant_id = donor.restaurant_id and variant.catalog_id = donor.catalog_id
+    and variant.product_id = donor.product_id;
+end $lift$;
 
 create or replace function app_private.build_menu_catalog_state(
   p_restaurant_id uuid, p_branch_id uuid, p_catalog_id uuid, p_replayed boolean

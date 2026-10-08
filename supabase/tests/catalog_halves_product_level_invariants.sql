@@ -1,5 +1,5 @@
 -- Test-only fixtures. The schema verifier executes this body inside its rollback transaction.
--- Exercises 20261007000800_catalog_halves_product_level.sql:
+-- Exercises 20261008000200_catalog_halves_product_level.sql:
 --   1. save_menu_catalog / build_menu_catalog_state round-trip a product-level `fraction` (also on a
 --      product without sizes), replay a null product fraction as absent, and reject: fraction groups of
 --      another product, an enabled product setup next to an enabled legacy size setup, a bad shape.
