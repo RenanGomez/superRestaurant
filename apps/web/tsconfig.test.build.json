@@ -38,6 +38,8 @@
     "src/lib/menu-catalog.test.ts",
     "src/lib/menu-images.ts",
     "src/lib/menu-images.test.ts",
+    "src/lib/menu-reorder.ts",
+    "src/lib/menu-reorder.test.ts",
     "src/lib/customer-directory.ts",
     "src/lib/customer-directory.test.ts",
     "src/lib/customer-order-history.ts",
