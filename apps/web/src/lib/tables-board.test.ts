@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gridPlacement, groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterInitials, waiterLabel } from "./tables-board.js";
+import { gridPlacement, groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterInitials, waiterLabel, waiterOptionLabel, waiterOptions } from "./tables-board.js";
 import type { DiningLayoutV1, TableBoardV1 } from "@super-restaurant/shared-types";
 
 const scope = { restaurantId: "11111111-1111-4111-8111-111111111111", branchId: "22222222-2222-4222-8222-222222222222" };
@@ -32,4 +32,19 @@ test("waiterLabel resolves names and falls back without exposing the full id", (
   assert.equal(waiterLabel(members, "bbbb2222-2222-4222-8222-222222222222"), "Mesero BBBB");
   assert.equal(waiterLabel(members, "cccc3333-3333-4333-8333-333333333333", "cccc3333-3333-4333-8333-333333333333"), "Yo");
   assert.equal(waiterLabel(members, null), "Sin mesero");
+});
+
+test("waiter options never produce an empty label and skip the actor and duplicates", () => {
+  const actor = "aaaa1111-1111-4111-8111-111111111111";
+  const members = [
+    { userId: actor, displayName: "Yo mismo" },
+    { userId: "bbbb2222-2222-4222-8222-222222222222", displayName: "  ​ " },
+    { userId: "bbbb2222-2222-4222-8222-222222222222", displayName: "Duplicado" },
+    { userId: "cccc3333-3333-4333-8333-333333333333", displayName: " Luis " },
+  ];
+  assert.deepEqual(waiterOptions(members, actor), [
+    { userId: "bbbb2222-2222-4222-8222-222222222222", label: "Mesero sin nombre (BBBB)" },
+    { userId: "cccc3333-3333-4333-8333-333333333333", label: "Luis" },
+  ]);
+  assert.equal(waiterOptionLabel({ userId: "dddd4444", displayName: null }), "Mesero sin nombre (DDDD)");
 });

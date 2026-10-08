@@ -49,7 +49,7 @@ export default async function AppLayout({ children }: { readonly children: React
 
   return (
     <div className="flex min-h-screen bg-bg">
-      <AppNav canAccessSystemAdmin={canAccessSystemAdmin} canReadReports={canReadReports} />
+      <AppNav canAccessSystemAdmin={canAccessSystemAdmin} canReadReports={canReadReports} branchName={membership?.branchName} />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-[68px] shrink-0 items-center justify-between border-b border-border bg-surface px-3 sm:px-8">

@@ -30,6 +30,8 @@
     "src/lib/table-position.test.ts",
     "src/lib/tables-board.ts",
     "src/lib/tables-board.test.ts",
+    "src/lib/floor-plan.ts",
+    "src/lib/floor-plan.test.ts",
     "src/lib/branch-selection.ts",
     "src/lib/branch-selection.test.ts",
     "src/lib/menu-catalog.ts",

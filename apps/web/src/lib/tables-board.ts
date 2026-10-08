@@ -25,6 +25,26 @@ export function waiterInitials(name: string | null): string {
   return name.trim().split(/\s+/u).slice(0, 2).map((part) => part[0]?.toLocaleUpperCase("es-MX") ?? "").join("");
 }
 
+const INVISIBLE = /[​-‍⁠﻿]/gu;
+
+/** Label for a waiter button: name, or an explicit fallback. Never empty. */
+export function waiterOptionLabel(member: Pick<BranchMemberV1, "displayName" | "userId">): string {
+  const name = member.displayName?.replace(INVISIBLE, "").trim();
+  return name ? name : `Mesero sin nombre (${member.userId.slice(0, 4).toLocaleUpperCase("es-MX")})`;
+}
+
+/** Waiter options other than the actor, one per user, each with a visible label. */
+export function waiterOptions(members: readonly Pick<BranchMemberV1, "displayName" | "userId">[], actorId: string): { userId: string; label: string }[] {
+  const seen = new Set<string>([actorId]);
+  const options: { userId: string; label: string }[] = [];
+  for (const member of members) {
+    if (seen.has(member.userId)) continue;
+    seen.add(member.userId);
+    options.push({ userId: member.userId, label: waiterOptionLabel(member) });
+  }
+  return options;
+}
+
 export function waiterLabel(members: readonly Pick<BranchMemberV1, "displayName" | "userId">[], userId: string | null, actorId?: string): string {
   if (userId === null) return "Sin mesero";
   const name = members.find((member) => member.userId === userId)?.displayName?.trim();
