@@ -4,11 +4,13 @@ import {
   parseCreateDiningTableCommandV1,
   parseDiningLayoutV1,
   parseDiningTableV1,
+  parseUpdateDiningTableDetailsCommandV1,
   parseUpdateDiningTableLayoutCommandV1,
   type BranchScope,
   type CreateDiningTableCommandV1,
   type DiningLayoutV1,
   type DiningTableV1,
+  type UpdateDiningTableDetailsCommandV1,
   type UpdateDiningTableLayoutCommandV1,
 } from "@super-restaurant/shared-types";
 import { Inject, Injectable } from "@nestjs/common";
@@ -31,6 +33,12 @@ select * from app_private.update_dining_table_layout(
   $9::bigint, $10::integer, $11::integer, $12::integer, $13::integer
 )`;
 
+const updateDetailsSql = `
+select * from app_private.update_dining_table_details(
+  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid, $8::timestamptz,
+  $9::bigint, $10::text, $11::integer, $12::text
+)`;
+
 export type DiningTableApplicationErrorCode = "authorization" | "conflict" | "request" | "unavailable";
 
 export class DiningTableApplicationError extends Error {
@@ -49,6 +57,7 @@ type MutationResult = Readonly<{ status: "conflict" }>
 export interface DiningTablePort {
   create(actorId: string, command: CreateDiningTableCommandV1): Promise<MutationResult>;
   list(actorId: string, scope: BranchScope): Promise<DiningLayoutV1 | "forbidden">;
+  updateDetails(actorId: string, command: UpdateDiningTableDetailsCommandV1): Promise<MutationResult>;
   updateLayout(actorId: string, command: UpdateDiningTableLayoutCommandV1): Promise<MutationResult>;
 }
 
@@ -87,6 +96,15 @@ export class PostgresDiningTableAdapter implements DiningTablePort {
     ]);
     return parseMutationResult(result.rows);
   }
+
+  public async updateDetails(actorId: string, command: UpdateDiningTableDetailsCommandV1): Promise<MutationResult> {
+    const result = await this.database.query(updateDetailsSql, [
+      actorId, command.scope.restaurantId, command.scope.branchId, command.tableId, command.eventId,
+      command.idempotencyKey, command.deviceId, command.occurredAt, command.expectedVersion,
+      command.name, command.capacity, command.shape,
+    ]);
+    return parseMutationResult(result.rows);
+  }
 }
 
 @Injectable()
@@ -122,6 +140,13 @@ export class DiningTableService {
     if (command === undefined) throw applicationError("request");
     const actorId = await this.authorize(principal, command.scope, "tables.manage");
     return this.mutate(() => this.tables.updateLayout(actorId, command));
+  }
+
+  public async updateDetails(principal: AuthenticatedPrincipal, input: unknown): Promise<DiningTableV1> {
+    const command = parseUpdateDiningTableDetailsCommandV1(input);
+    if (command === undefined) throw applicationError("request");
+    const actorId = await this.authorize(principal, command.scope, "tables.manage");
+    return this.mutate(() => this.tables.updateDetails(actorId, command));
   }
 
   private async authorize(principal: AuthenticatedPrincipal, scope: BranchScope, permission: "tables.read" | "tables.manage"): Promise<string> {

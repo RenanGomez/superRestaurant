@@ -28,7 +28,7 @@ const layout = Object.freeze({
 });
 
 test("table board derives occupied/free per table from the bounded active-order list", async () => {
-  const tables: DiningTablePort = { list: async () => layout, create: async () => ({ status: "conflict" }), updateLayout: async () => ({ status: "conflict" }) };
+  const tables: DiningTablePort = { list: async () => layout, create: async () => ({ status: "conflict" }), updateLayout: async () => ({ status: "conflict" }), updateDetails: async () => ({ status: "conflict" }) };
   const board: TableBoardPort = {
     listActiveOrders: async () => [Object.freeze({
       openedAt: "2026-09-01T19:00:00.000Z", orderId, status: "open", tableId: occupiedTableId,
@@ -48,7 +48,7 @@ test("table board derives occupied/free per table from the bounded active-order 
 test("table board keeps active orders of tables missing from the layout as unassigned", async () => {
   const deletedTableId = "6d8e0f32-5c4b-4a7e-9b2d-0c3f8e6a4b71";
   const deletedOrderId = "7e9f1a43-6d5c-4b8f-8c3e-1d4a9f7b5c82";
-  const tables: DiningTablePort = { list: async () => layout, create: async () => ({ status: "conflict" }), updateLayout: async () => ({ status: "conflict" }) };
+  const tables: DiningTablePort = { list: async () => layout, create: async () => ({ status: "conflict" }), updateLayout: async () => ({ status: "conflict" }), updateDetails: async () => ({ status: "conflict" }) };
   const board: TableBoardPort = {
     listActiveOrders: async () => [Object.freeze({
       openedAt: "2026-09-01T19:00:00.000Z", orderId: deletedOrderId, status: "open", tableId: deletedTableId,
@@ -63,7 +63,7 @@ test("table board keeps active orders of tables missing from the layout as unass
 });
 
 test("table board rejects a non-member and a malformed scope", async () => {
-  const tables: DiningTablePort = { list: async () => layout, create: async () => ({ status: "conflict" }), updateLayout: async () => ({ status: "conflict" }) };
+  const tables: DiningTablePort = { list: async () => layout, create: async () => ({ status: "conflict" }), updateLayout: async () => ({ status: "conflict" }), updateDetails: async () => ({ status: "conflict" }) };
   const board: TableBoardPort = { listActiveOrders: async () => [] };
   await assertCode(serviceFor([], tables, board).read(principal, scope), "authorization");
   await assertCode(serviceFor(["manager"], tables, board).read(principal, { ...scope, branchId: "bad" }), "request");

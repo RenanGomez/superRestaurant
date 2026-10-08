@@ -9,6 +9,7 @@ import {
   parseCreateDiningTableCommandV1,
   parseDiningLayoutV1,
   parseDiningTableV1,
+  parseUpdateDiningTableDetailsCommandV1,
   parseUpdateDiningTableLayoutCommandV1,
   parseBranchAuthorizationV1,
   parseBranchOperationalContextV1,
@@ -329,6 +330,44 @@ expectDefined(parseUpdateDiningTableLayoutCommandV1({
   expectedVersion: 1,
   layout: { x: 4, y: 5, width: 4, height: 4 },
 }), "layout update command parses");
+const detailsCommand = {
+  schemaVersion: 1,
+  scope: { restaurantId, branchId },
+  tableId: tableCommand.tableId,
+  eventId: "5ed22a92-a93d-4034-9661-4df2b523517b",
+  idempotencyKey: "72371a5f-2056-448d-9ddb-14ab6664a4e8",
+  deviceId: tableCommand.deviceId,
+  occurredAt: "2026-09-01T18:05:00.000Z",
+  expectedVersion: 2,
+  name: "Terraza 1",
+  capacity: 6,
+  shape: "rectangle",
+};
+const parsedDetails = parseUpdateDiningTableDetailsCommandV1(detailsCommand);
+expectDefined(parsedDetails, "table details command parses");
+expect(Object.isFrozen(parsedDetails), "table details command is frozen");
+for (const invalid of [
+  { ...detailsCommand, schemaVersion: 2 },
+  { ...detailsCommand, expectedVersion: 0 },
+  { ...detailsCommand, expectedVersion: 1.5 },
+  { ...detailsCommand, name: "" },
+  { ...detailsCommand, name: " Terraza" },
+  { ...detailsCommand, name: "x".repeat(41) },
+  { ...detailsCommand, name: "Te	rraza" },
+  { ...detailsCommand, capacity: 0 },
+  { ...detailsCommand, capacity: 51 },
+  { ...detailsCommand, capacity: 4.5 },
+  { ...detailsCommand, capacity: "4" },
+  { ...detailsCommand, shape: "oval" },
+  { ...detailsCommand, tableId: "not-a-uuid" },
+  { ...detailsCommand, occurredAt: "yesterday" },
+  { ...detailsCommand, layout: { x: 0, y: 0, width: 2, height: 2 } },
+  { ...detailsCommand, extra: true },
+  { ...detailsCommand, scope: { restaurantId, branchId: "nope" } },
+  null,
+  "details",
+])  expectUndefined(parseUpdateDiningTableDetailsCommandV1(invalid), "table details command rejects invalid input");
+expectUndefined(parseUpdateDiningTableDetailsCommandV1({ ...detailsCommand, shape: undefined }), "table details command requires every field");
 expectDefined(parseDiningLayoutV1({
   schemaVersion: 1,
   scope: { restaurantId, branchId },

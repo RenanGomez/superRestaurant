@@ -13,6 +13,7 @@ import {
   parseMenuCatalogStateV1,
   parseMenuCatalogV1,
   parseSaveMenuCatalogCommandV1,
+  parseUpdateDiningTableDetailsCommandV1,
   parseUpdateDiningTableLayoutCommandV1,
   parseRbacPermissionCode,
   parseBranchAuthorizationV1,
@@ -32,6 +33,7 @@ import {
   type CreateDiningTableCommandV1,
   type DiningLayoutV1,
   type DiningTableV1,
+  type UpdateDiningTableDetailsCommandV1,
   type MenuCatalogStateV1,
   type MenuCatalogV1,
   type SaveMenuCatalogCommandV1,
@@ -116,6 +118,8 @@ const parsedTableCommand: CreateDiningTableCommandV1 | undefined = parseCreateDi
 const parsedTable: DiningTableV1 | undefined = parseDiningTableV1({ schemaVersion: DINING_LAYOUT_SCHEMA_VERSION });
 const parsedLayout: DiningLayoutV1 | undefined = parseDiningLayoutV1({ schemaVersion: DINING_LAYOUT_SCHEMA_VERSION });
 const parsedLayoutUpdate: UpdateDiningTableLayoutCommandV1 | undefined = parseUpdateDiningTableLayoutCommandV1({ schemaVersion: DINING_LAYOUT_SCHEMA_VERSION });
+const parsedDetailsUpdate: UpdateDiningTableDetailsCommandV1 | undefined = parseUpdateDiningTableDetailsCommandV1({ schemaVersion: DINING_LAYOUT_SCHEMA_VERSION });
+void parsedDetailsUpdate;
 void parsedTableCommand;
 void parsedTable;
 void parsedLayout;
