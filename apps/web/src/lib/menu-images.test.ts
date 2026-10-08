@@ -1,14 +1,46 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MENU_IMAGE_MAX_DECODED_BYTES } from "@super-restaurant/shared-types";
-import { menuImageAttempt, menuImagePublicUrl, publishDisabledReason, validateMenuImageFile } from "./menu-images.js";
+import {
+  fitMenuImageWithin, isNextRedirectError, menuImageAttempt, menuImagePublicUrl, menuUploadErrorMessage, publishDisabledReason,
+  shouldDownscaleMenuImage, validateMenuImageFile,
+} from "./menu-images.js";
 
-test("menu image validation accepts supported images up to 2 MB", () => {
+test("only photos above the 2 MB server limit are shrunk", () => {
+  assert.equal(shouldDownscaleMenuImage(MENU_IMAGE_MAX_DECODED_BYTES), false);
+  assert.equal(shouldDownscaleMenuImage(MENU_IMAGE_MAX_DECODED_BYTES + 1), true);
+});
+
+test("fitMenuImageWithin caps the longest side, keeps ratio and never enlarges", () => {
+  assert.deepEqual(fitMenuImageWithin(4000, 3000, 1600), { height: 1200, width: 1600 });
+  assert.deepEqual(fitMenuImageWithin(3000, 4000, 1600), { height: 1600, width: 1200 });
+  assert.deepEqual(fitMenuImageWithin(800, 600, 1600), { height: 600, width: 800 });
+  assert.deepEqual(fitMenuImageWithin(10000, 1, 1600), { height: 1, width: 1600 });
+});
+
+test("upload errors map known API codes to Spanish and always expose the HTTP status otherwise", () => {
+  assert.match(menuUploadErrorMessage(400, "MENU_CATALOG_IMAGE_REQUEST_REJECTED"), /no es válida/);
+  assert.match(menuUploadErrorMessage(403, "ACTION_NOT_AUTHORIZED"), /permiso/);
+  assert.match(menuUploadErrorMessage(503, "MENU_CATALOG_IMAGE_UNAVAILABLE"), /no respondió/);
+  assert.match(menuUploadErrorMessage(503, "MENU_IMAGES_UNCONFIGURED"), /administrador/);
+  assert.equal(menuUploadErrorMessage(413, undefined), "No se pudo subir la foto (HTTP 413).");
+  assert.equal(menuUploadErrorMessage(500, { nested: true }), "No se pudo subir la foto (HTTP 500).");
+  assert.equal(menuUploadErrorMessage(502, "SOMETHING_NEW"), "No se pudo subir la foto (SOMETHING_NEW, HTTP 502).");
+});
+
+test("only Next.js redirect errors are treated as redirects", () => {
+  assert.equal(isNextRedirectError(Object.assign(new Error("NEXT_REDIRECT"), { digest: "NEXT_REDIRECT;replace;/login;307;" })), true);
+  assert.equal(isNextRedirectError(new Error("boom")), false);
+  assert.equal(isNextRedirectError(null), false);
+});
+
+test("menu image validation accepts supported images and leaves big ones to the browser shrink step", () => {
   for (const type of ["image/jpeg", "image/png", "image/webp"]) {
     assert.equal(validateMenuImageFile({ type, size: MENU_IMAGE_MAX_DECODED_BYTES }), null);
   }
+  assert.equal(validateMenuImageFile({ type: "image/png", size: MENU_IMAGE_MAX_DECODED_BYTES + 1 }), null);
   assert.match(validateMenuImageFile({ type: "image/gif", size: 100 }) ?? "", /JPG/);
-  assert.match(validateMenuImageFile({ type: "image/png", size: MENU_IMAGE_MAX_DECODED_BYTES + 1 }) ?? "", /2 MB/);
+  assert.match(validateMenuImageFile({ type: "image/png", size: 26 * 1024 * 1024 }) ?? "", /25 MB/);
   assert.match(validateMenuImageFile({ type: "image/png", size: 0 }) ?? "", /vacía/);
 });
 
