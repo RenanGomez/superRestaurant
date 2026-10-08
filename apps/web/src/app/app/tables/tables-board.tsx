@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { unstable_rethrow, useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
 import type { BranchScope, DiningLayoutV1, BranchMemberV1, OperationalShiftSummaryV1, OrderDetailV1, TableBoardActiveOrderV1, TableBoardV1 } from "@super-restaurant/shared-types";
 import { captureDeviceId } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
+import { watchTabReturn } from "../../../lib/revalidate-on-return";
 import { planCanvasStyle, planPlacement, planViewBox } from "../../../lib/floor-plan";
 import { groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterLabel, waiterOptions } from "../../../lib/tables-board";
 
@@ -99,7 +102,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
     const current = ++seq.current;
     setLoading(true);
     let result: Snapshot | Failure;
-    try { result = await actions.read(); } catch { result = { ok: false, error: "unavailable" }; }
+    try { result = await actions.read(); } catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
     if (current !== seq.current) return null;
     setLoading(false);
     if (!result.ok) {
@@ -125,17 +128,14 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
   async function loadWaiters() {
     const current = ++waiterSeq.current;
     let result: Awaited<ReturnType<Props["actions"]["waiters"]>>;
-    try { result = await actions.waiters(); } catch { result = { ok: false, error: "unavailable" }; }
+    try { result = await actions.waiters(); } catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
     if (current === waiterSeq.current) setWaiters(result.ok ? result.members : null);
   }
 
   useEffect(() => { void refresh(); void loadWaiters(); }, [scope.branchId, scope.restaurantId]);
-  useEffect(() => {
-    const onFocus = () => { void refresh(); void loadWaiters(); };
-    const onVisible = () => { if (document.visibilityState === "visible") { void refresh(); void loadWaiters(); } };
-    window.addEventListener("focus", onFocus); document.addEventListener("visibilitychange", onVisible);
-    return () => { window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVisible); };
-  }, [scope.branchId, scope.restaurantId]);
+  // One re-read per real return to the tab (hidden >= 15 s, at most every 30 s). Reads go through server
+  // actions, so no router.refresh() (which would re-render the whole route) is needed here.
+  useEffect(() => watchTabReturn(() => { void refresh(); void loadWaiters(); }), [scope.branchId, scope.restaurantId]);
 
   async function select(tableId: string, name: string, orders: readonly TableBoardActiveOrderV1[]) {
     selectedRef.current = { tableId, name, orders };
@@ -167,7 +167,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
     const orderId = crypto.randomUUID();
     let result: Awaited<ReturnType<Props["actions"]["create"]>>;
     try { result = await actions.create(selected.tableId, orderId, attempt(), newWaiter); }
-    catch { result = { ok: false, error: "unavailable" }; }
+    catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
     if (!result.ok) {
       setError(result.error);
       if (result.error === "conflict" || result.error === "unavailable") {
@@ -200,7 +200,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
     setBusy(true); setError(null); setNotice(null);
     let result: Awaited<ReturnType<Props["actions"]["assign"]>>;
     try { result = await actions.assign(order.orderId, order.version, attempt(), waiterUserId); }
-    catch { result = { ok: false, error: "unavailable" }; }
+    catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
     if (!result.ok) {
       if (result.error === "conflict" || result.error === "unavailable") {
         const latest = await refresh(true);
@@ -221,7 +221,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
     const shiftId = crypto.randomUUID();
     let result: Awaited<ReturnType<Props["actions"]["openShift"]>>;
     try { result = await actions.openShift(shiftId, attempt()); }
-    catch { result = { ok: false, error: "unavailable" }; }
+    catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
     if (!result.ok) {
       if (result.error === "conflict" || result.error === "unavailable") {
         const latest = await refresh(true);
@@ -239,21 +239,21 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
       <div><p className="text-xs font-semibold uppercase tracking-widest text-accent">Mesas · {restaurantName}</p>
         <h1 className="font-heading text-2xl font-bold">{branchName}</h1>
         <p className="mt-1 text-sm text-text-muted">{snapshot?.shift ? `Turno abierto desde ${time(snapshot.shift.openedAt, snapshot.timeZone)}` : "Sin turno abierto"}</p></div>
-      <div className="flex flex-wrap gap-2"><a href="/app?change=1" className={button}>Cambiar sucursal</a>
-        {canManage && <a href="/app/tables/edit" className={button}>Editar plano</a>}
+      <div className="flex flex-wrap gap-2">
+        {canManage && <Link href="/app/tables/edit" prefetch className={`${button} inline-flex items-center link-text`}>Editar plano</Link>}
         <button type="button" className={button} disabled={loading} onClick={() => void refresh()}>{loading ? "Actualizando…" : "Actualizar"}</button>
         {snapshot !== null && snapshot.shift === null && canOpenShift && <button type="button" className={primary} disabled={busy} onClick={() => void openShift()}>{busy ? "Guardando…" : "Abrir turno"}</button>}</div>
     </header>
     {error !== null && <div role="alert" className="rounded-lg bg-error-bg p-3 text-sm text-error">{message(error)} {error === "no_shift" && canOpenShift && <button className={button} onClick={() => void openShift()} disabled={busy}>Abrir turno</button>}</div>}
-    {notice !== null && <p role="status" className="rounded-lg border border-success bg-surface p-3 text-sm">{notice} {noticeOrderId !== null && <a className="inline-flex min-h-11 items-center px-2 font-semibold underline" href={`/app/orders?orderId=${noticeOrderId}`}>Ver cuenta</a>}</p>}
+    {notice !== null && <p role="status" className="rounded-lg border border-success bg-surface p-3 text-sm">{notice} {noticeOrderId !== null && <Link className="inline-flex min-h-11 items-center px-2 font-semibold underline" href={`/app/orders?orderId=${noticeOrderId}`}>Ver cuenta</Link>}</p>}
     {snapshot === null ? <p className="text-sm text-text-muted">{loading ? "Cargando plano…" : "Plano no disponible. Pulsa Actualizar para reintentar."}</p>
       : zones.length === 0 ? <p className="text-sm text-text-muted">No hay zonas configuradas.</p>
       : zones.map((zone) => {
         const box = planViewBox(zone.tables.map((table) => table.layout));
         return <section key={zone.zoneId} className="min-w-0 rounded-xl border border-border bg-surface p-3 sm:p-4">
         <h2 className="mb-3 font-heading text-base font-semibold">{zone.name} · {zone.tables.length} mesas</h2>
-        <div className="max-w-full overflow-x-auto rounded-lg border border-border bg-bg p-2" role="group" aria-label={`Plano de ${zone.name}`}>
-          <div className="relative mx-auto" style={planCanvasStyle(box)}>
+        <div className="max-h-[75vh] max-w-full overflow-auto rounded-lg border border-border bg-bg p-2" role="group" aria-label={`Plano de ${zone.name}`}>
+          <div className="relative" style={planCanvasStyle(box)}>
             {zone.tables.map((table) => <button key={table.tableId} type="button" style={{ position: "absolute", ...planPlacement(table.layout, box) }}
               onClick={() => { if (table.state !== null) void select(table.tableId, table.name, table.state.activeOrders); }}
               disabled={table.state === null}
@@ -267,10 +267,10 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
       </section>;
       })}
     {snapshot !== null && snapshot.board.unassignedOrders.length > 0 && <section className="rounded-xl border border-border bg-surface p-4"><h2 className="font-heading font-semibold">Mesas eliminadas</h2>
-      <ul className="mt-3 grid gap-2">{snapshot.board.unassignedOrders.map((order) => <li key={order.orderId} className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-2 text-sm"><span>Cuenta {order.orderId.slice(0, 8)} · {time(order.openedAt, snapshot.timeZone)} · {orderStatusLabel(order.status)} · Mesero: {waiterLabel(waiters ?? [], order.waiterUserId, actorId)}</span><a className={button} href={`/app/orders?orderId=${order.orderId}`}>Ver cuenta</a></li>)}</ul></section>}
-    {selected !== null && <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={() => { if (!busy) { selectedRef.current = null; setSelected(null); } }}>
+      <ul className="mt-3 grid gap-2">{snapshot.board.unassignedOrders.map((order) => <li key={order.orderId} className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-2 text-sm"><span>Cuenta {order.orderId.slice(0, 8)} · {time(order.openedAt, snapshot.timeZone)} · {orderStatusLabel(order.status)} · Mesero: {waiterLabel(waiters ?? [], order.waiterUserId, actorId)}</span><Link className={`${button} inline-flex items-center link-text`} href={`/app/orders?orderId=${order.orderId}`}>Ver cuenta</Link></li>)}</ul></section>}
+    {selected !== null && typeof document !== "undefined" && createPortal(<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" onClick={() => { if (!busy) { selectedRef.current = null; setSelected(null); } }}>
       <section role="dialog" aria-modal="true" aria-label={`${selected.name}: cuentas`} ref={dialogRef} tabIndex={-1} onKeyDown={dialogKeys} onClick={(event) => event.stopPropagation()}
-        className="flex max-h-[95dvh] w-full flex-col rounded-t-2xl border border-border bg-surface shadow-xl sm:max-h-[90vh] sm:max-w-xl sm:rounded-2xl">
+        className="flex max-h-full w-full flex-col rounded-2xl border border-border bg-surface shadow-xl sm:max-w-xl">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border p-4 sm:px-5"><h2 className="font-heading text-xl font-bold">{selected.name}</h2><button type="button" className={button} disabled={busy} onClick={() => { selectedRef.current = null; setSelected(null); }}>Cerrar</button></div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:px-5">
         {error !== null && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm text-error">{message(error)} {error === "no_shift" && canOpenShift && <button className={button} disabled={busy} onClick={() => void openShift()}>Abrir turno</button>}</p>}
@@ -278,7 +278,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
         {selected.orders.length > 0 && <ul className="mt-4 grid gap-3">{selected.orders.map((order) => <li key={order.orderId} className="rounded-lg border border-border p-3 text-sm">
           <p className="font-semibold">{orderStatusLabel(order.status)} · {time(order.openedAt, snapshot?.timeZone)}</p><p>Mesero: {waiterLabel(waiters ?? [], order.waiterUserId, actorId)}</p>
           <p>{totalLabel(details[order.orderId])}</p>
-          <div className="mt-2 flex flex-wrap gap-2"><a className={primary} href={`/app/orders?orderId=${order.orderId}`}>Ver cuenta</a>
+          <div className="mt-2 flex flex-wrap gap-2"><Link className={`${primary} inline-flex items-center link-white`} href={`/app/orders?orderId=${order.orderId}`}>Ver cuenta</Link>
             <button type="button" className={button} disabled={busy} aria-expanded={pickOrder === order.orderId} onClick={() => setPickOrder(pickOrder === order.orderId ? null : order.orderId)}>{busy ? "Guardando…" : "Cambiar mesero"}</button></div>
           {pickOrder === order.orderId && <WaiterPicker members={waiters} actorId={actorId} current={order.waiterUserId} disabled={busy} allowNone={false} onPick={(id) => { if (id !== null) void assign(order, id); }} />}
         </li>)}</ul>}
@@ -289,6 +289,6 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
         <div className="shrink-0 border-t border-border bg-surface p-4 sm:px-5">
           <button type="button" className={`${primary} w-full`} disabled={busy} onClick={() => void create()}>{busy ? "Guardando…" : selected.orders.length ? "Abrir otra cuenta" : "Abrir cuenta"}</button></div>
       </section>
-    </div>}
+    </div>, document.body)}
   </div>;
 }

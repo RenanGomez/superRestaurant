@@ -30,9 +30,10 @@ test("placement is clamped so no table leaves the canvas", () => {
   assert.equal(placement.height, "40%");
 });
 
-test("canvas keeps the plan proportion, fills the width and caps the height", () => {
+test("canvas keeps the plan proportion and always fills the container width", () => {
   const style = planCanvasStyle({ x: 0, y: 0, cols: 20, rows: 10 });
   assert.equal(style.aspectRatio, "20 / 10");
-  assert.equal(style.width, "min(100%, 140vh)");
+  assert.equal(style.width, "100%");
   assert.equal(style.minWidth, "280px");
+  assert.equal(planCanvasStyle({ x: 0, y: 0, cols: 8, rows: 40 }).width, "100%");
 });

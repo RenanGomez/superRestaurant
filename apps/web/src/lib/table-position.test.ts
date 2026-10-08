@@ -1,6 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clampTablePosition, moveTableByKeyboard, savedTablePosition } from "./table-position.js";
+import { clampTablePosition, firstFreeSlot, moveTableByKeyboard, resizeTableCells, savedTablePosition } from "./table-position.js";
+
+test("resizing moves in whole cells and stays within 2..8 and inside the grid", () => {
+  assert.deepEqual(resizeTableCells({ x: 0, y: 0, width: 4, height: 4 }, 1.6, -1.4), { width: 6, height: 3 });
+  assert.deepEqual(resizeTableCells({ x: 0, y: 0, width: 4, height: 4 }, 40, 40), { width: 8, height: 8 });
+  assert.deepEqual(resizeTableCells({ x: 0, y: 0, width: 4, height: 4 }, -40, -40), { width: 2, height: 2 });
+  assert.deepEqual(resizeTableCells({ x: 20, y: 96, width: 4, height: 4 }, 3, 3), { width: 4, height: 4 });
+  assert.deepEqual(resizeTableCells({ x: 22, y: 98, width: 2, height: 2 }, 5, 5), { width: 2, height: 2 });
+});
+
+test("a new table goes in the first free 4 by 4 slot, row by row", () => {
+  assert.deepEqual(firstFreeSlot([]), { x: 0, y: 0 });
+  assert.deepEqual(firstFreeSlot([{ x: 0, y: 0, width: 4, height: 4 }]), { x: 4, y: 0 });
+  assert.deepEqual(firstFreeSlot([{ x: 1, y: 0, width: 2, height: 2 }]), { x: 3, y: 0 });
+  const fullRow = Array.from({ length: 6 }, (_, index) => ({ x: index * 4, y: 0, width: 4, height: 4 }));
+  assert.deepEqual(firstFreeSlot(fullRow), { x: 0, y: 4 });
+  const full = Array.from({ length: 25 }, (_, row) => ({ x: 0, y: row * 4, width: 24, height: 4 }));
+  assert.equal(firstFreeSlot(full), undefined);
+});
 
 test("movement stays within the 24 by 100 canvas, accounting for table size", () => {
   assert.deepEqual(clampTablePosition({ x: -2, y: 120 }, 4, 6), { x: 0, y: 94 });
