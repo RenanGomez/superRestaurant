@@ -30,7 +30,7 @@ export function PrintPreview({ documents, onClose }: { readonly documents: reado
       <div className="print-controls mb-4 flex flex-wrap gap-2">
         <button id="print-preview-print" type="button" className="min-h-11 rounded-lg bg-accent px-4 text-white focus-visible:outline-2" onClick={() => window.print()}>Imprimir</button>
         <button type="button" className="min-h-11 rounded-lg border px-4 focus-visible:outline-2" onClick={onClose}>Cerrar</button>
-        <CheckField className="flex min-h-11 items-center gap-2" hint="Reduce el ancho del ticket en la vista previa para papel angosto de 58 mm." label="Papel 58 mm">{(id) => <input id={id} type="checkbox" checked={narrow} onChange={(event) => setNarrow(event.target.checked)} />}</CheckField>
+        <CheckField className="flex min-h-11 items-center gap-2" labelClassName="flex min-h-11 items-center" hint="Reduce el ancho del ticket en la vista previa para papel angosto de 58 mm." label="Papel 58 mm">{(id) => <input id={id} type="checkbox" className="h-5 w-5" checked={narrow} onChange={(event) => setNarrow(event.target.checked)} />}</CheckField>
       </div>
       <div className={`print-documents ${narrow ? "print-documents-58" : ""}`}>
         {documents.map((document, index) => <article key={`${document.title}-${index}`} className="print-document mx-auto mb-4 bg-white p-3 font-mono text-xs leading-relaxed text-black shadow" aria-label={document.title}>

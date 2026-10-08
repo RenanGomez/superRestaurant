@@ -105,16 +105,18 @@ export function Field({ children, className, hint, id: fixedId, label }: {
 }
 
 /** Checkbox row with its hint outside the label (see `Field`). `children` receives the id of the checkbox. */
-export function CheckField({ children, className, hint, label }: {
+export function CheckField({ children, className, hint, label, labelClassName }: {
   readonly children: ReactElement<{ id?: string }> | ((id: string) => ReactNode);
   readonly className: string;
   readonly hint: string;
   readonly label: string;
+  /** Classes for the label, e.g. to make it cover the whole row as the 44 px tap target. */
+  readonly labelClassName?: string | undefined;
 }): ReactNode {
   const id = useId();
   return <span className={className}>
     {typeof children === "function" ? children(id) : cloneElement(children, { id })}
-    <label htmlFor={id}>{label}</label>
+    <label htmlFor={id} className={labelClassName}>{label}</label>
     <FieldHint label={label} text={hint} />
   </span>;
 }
