@@ -86,6 +86,7 @@ export function toDomainMenuCatalog(catalog: MenuCatalogV1, restaurantId: string
           ...(variant.fraction === undefined || variant.fraction === null ? {} : { fraction: toDomainFraction(variant.fraction) }),
         })),
       }),
+      ...(product.fraction === undefined || product.fraction === null ? {} : { fraction: toDomainFraction(product.fraction) }),
     })),
     restaurantId,
   };

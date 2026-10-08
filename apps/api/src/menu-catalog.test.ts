@@ -272,3 +272,48 @@ test("menu publication rejects duplicate size names and negative size prices bef
   await assert.rejects(service.save(principal, negative), (error: unknown) => error instanceof MenuCatalogApplicationError && error.code === "request");
   assert.equal(saved, 0);
 });
+
+const productFraction = {
+  enabled: true,
+  excludableIngredientIds: ["cebolla"],
+  extraGroupId: null,
+  flavorGroupId: "a409ec59-9f5e-496d-a45d-b83a46b49674",
+};
+
+test("menu catalog carries a product-level half-and-half setup through the PostgreSQL adapter", async () => {
+  const withFraction = parseSaveMenuCatalogCommandV1({ ...command, products: [{ ...command.products[0]!, fraction: productFraction }] });
+  if (withFraction === undefined) throw new Error("TEST_PRODUCT_FRACTION_COMMAND_INVALID");
+  const state = stateFor(withFraction, false);
+  let payload: unknown;
+  const database: DatabaseClientPort = {
+    query: async (_sql, parameters) => {
+      payload = JSON.parse(String(parameters[10]));
+      return { rows: [{ status: "saved", state }] };
+    },
+  };
+  const result = await new PostgresMenuCatalogAdapter(database).save(principal.actorId, withFraction);
+  assert.equal(result.status, "saved");
+  assert.deepEqual((payload as { products: { fraction: unknown }[] }).products[0]?.fraction, productFraction);
+  // A row that drops the product setup is ambiguous and fails closed.
+  const dropped: DatabaseClientPort = { query: async () => ({ rows: [{ status: "saved", state: stateFor(command, false) }] }) };
+  await assert.rejects(new PostgresMenuCatalogAdapter(dropped).save(principal.actorId, withFraction));
+});
+
+test("menu publication accepts a product-level setup and rejects it next to an enabled legacy size setup before SQL", async () => {
+  let saved = 0;
+  const port: MenuCatalogPort = { read: async () => "forbidden", save: async () => { saved += 1; return { status: "conflict" }; } };
+  const service = serviceFor(["manager"], port);
+  const accepted = { ...command, products: [{ ...command.products[0]!, fraction: productFraction }] };
+  await assert.rejects(service.save(principal, accepted), (error: unknown) => error instanceof MenuCatalogApplicationError && error.code === "conflict");
+  assert.equal(saved, 1, "a valid product-level setup reaches SQL");
+  const bothEnabled = { ...command, products: [{ ...sizedProducts[0]!, fraction: productFraction, variants: [
+    { ...sizedProducts[0]!.variants[0]!, fraction: productFraction }, sizedProducts[0]!.variants[1]!,
+  ] }] };
+  await assert.rejects(service.save(principal, bothEnabled), (error: unknown) => error instanceof MenuCatalogApplicationError && error.code === "request");
+  assert.equal(saved, 1, "two enabled sources never reach SQL");
+  const legacyDisabled = { ...command, products: [{ ...sizedProducts[0]!, fraction: productFraction, variants: [
+    { ...sizedProducts[0]!.variants[0]!, fraction: { ...productFraction, enabled: false, flavorGroupId: null } }, sizedProducts[0]!.variants[1]!,
+  ] }] };
+  await assert.rejects(service.save(principal, legacyDisabled), (error: unknown) => error instanceof MenuCatalogApplicationError && error.code === "conflict");
+  assert.equal(saved, 2, "a disabled legacy setup next to the product one reaches SQL");
+});
