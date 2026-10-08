@@ -9,6 +9,13 @@ export type FractionPricingActorRole = "staff" | "manager";
 
 const MAX_EXTRAS_PER_FRACTION = 5;
 
+/**
+ * A half "built ingredient by ingredient" has no flavor option. The frozen breakdown entry keeps the
+ * non-empty text shape older snapshots use, so it carries this sentinel id and display name instead.
+ */
+export const FRACTION_CUSTOM_FLAVOR_ID = "custom";
+export const FRACTION_CUSTOM_FLAVOR_NAME = "Armada";
+
 export interface FractionFlavorOption {
   readonly optionId: string;
   readonly name: string;
@@ -61,6 +68,11 @@ export interface FractionPricingVariant {
   /** Branch supervisor availability flag for the whole variant. */
   readonly active: boolean;
   readonly flavors: readonly FractionFlavorOption[];
+  /**
+   * Base price of a half built ingredient by ingredient (the size price, or the product price when
+   * it has no sizes). Absent means the product allows no custom half: a null flavor is rejected.
+   */
+  readonly customHalfPriceMinor?: number;
   readonly extras: readonly FractionExtraOption[];
   readonly includedIngredients: readonly FractionIncludedIngredient[];
   readonly comboSlots: readonly FractionComboSlot[];
@@ -69,7 +81,8 @@ export interface FractionPricingVariant {
 
 export interface ResolveFractionSlotSelection {
   readonly fraction: PizzaFraction;
-  readonly flavorOptionId: string;
+  /** `null` is a half built ingredient by ingredient; at least one half of a pizza must name a flavor. */
+  readonly flavorOptionId: string | null;
   readonly extraOptionIds: readonly string[];
   readonly excludedIngredientIds: readonly string[];
 }
@@ -98,6 +111,8 @@ export interface ResolveFractionPricingContext {
 export type FractionPricingIssueCode =
   | "invalid_geometry"
   | "slot_mismatch"
+  | "fraction_both_custom"
+  | "custom_half_unavailable"
   | "variant_scope_mismatch"
   | "variant_inactive"
   | "flavor_not_found"
@@ -169,6 +184,11 @@ export function resolveFractionPricing(
     return deepFreeze(issues);
   }
 
+  if (input.geometry === "halves" && input.slots.every((slot) => slot.flavorOptionId === null)) {
+    issues.push({ code: "fraction_both_custom", detail: "at least one half must be a flavor; two custom halves are a whole pizza built with ordinary modifiers" });
+    return deepFreeze(issues);
+  }
+
   if (variant.restaurantId !== input.restaurantId || variant.catalogVersion !== input.catalogVersion || variant.variantId !== input.variantId) {
     issues.push({ code: "variant_scope_mismatch", detail: "the selection does not match the variant's restaurant, catalogVersion, and variantId" });
     return deepFreeze(issues);
@@ -187,16 +207,29 @@ export function resolveFractionPricing(
   const fractionBreakdown: FractionPriceBreakdownEntry[] = [];
 
   for (const slot of input.slots) {
-    const flavor = flavorsById.get(slot.flavorOptionId);
-    if (flavor === undefined) {
-      issues.push({ code: "flavor_not_found", fraction: slot.fraction, detail: `flavor ${slot.flavorOptionId} does not exist on this variant` });
-      continue;
+    if (slot.flavorOptionId === null) {
+      if (slot.fraction === "whole" || variant.customHalfPriceMinor === undefined) {
+        issues.push({ code: "custom_half_unavailable", fraction: slot.fraction, detail: "a half built ingredient by ingredient needs a half-and-half product with an ingredient group" });
+        continue;
+      }
+      fractionBreakdown.push({
+        amountMinor: variant.customHalfPriceMinor,
+        flavorName: FRACTION_CUSTOM_FLAVOR_NAME,
+        flavorOptionId: FRACTION_CUSTOM_FLAVOR_ID,
+        fraction: slot.fraction,
+      });
+    } else {
+      const flavor = flavorsById.get(slot.flavorOptionId);
+      if (flavor === undefined) {
+        issues.push({ code: "flavor_not_found", fraction: slot.fraction, detail: `flavor ${slot.flavorOptionId} does not exist on this variant` });
+        continue;
+      }
+      if (!flavor.active) {
+        issues.push({ code: "flavor_inactive", fraction: slot.fraction, detail: `flavor ${slot.flavorOptionId} is unavailable for its branch` });
+        continue;
+      }
+      fractionBreakdown.push({ amountMinor: flavor.priceMinor, flavorName: flavor.name, flavorOptionId: flavor.optionId, fraction: slot.fraction });
     }
-    if (!flavor.active) {
-      issues.push({ code: "flavor_inactive", fraction: slot.fraction, detail: `flavor ${slot.flavorOptionId} is unavailable for its branch` });
-      continue;
-    }
-    fractionBreakdown.push({ amountMinor: flavor.priceMinor, flavorName: flavor.name, flavorOptionId: flavor.optionId, fraction: slot.fraction });
 
     if (new Set(slot.extraOptionIds).size !== slot.extraOptionIds.length) {
       issues.push({ code: "extra_duplicate", fraction: slot.fraction, detail: "an extra was selected more than once on the same fraction" });
@@ -338,6 +371,7 @@ function normalizeVariant(value: unknown): FractionPricingVariant {
     const currencyValue = ownData(record, "currency", "variant currency");
     const active = ownData(record, "active", "variant active");
     const tax = optionalOwnData(record, "tax", "variant tax");
+    const customHalfPrice = optionalOwnData(record, "customHalfPriceMinor", "variant customHalfPriceMinor");
     assertText(restaurantId as string, "variant restaurantId");
     assertText(catalogVersion as string, "variant catalogVersion");
     assertText(variantId as string, "variant variantId");
@@ -348,6 +382,11 @@ function normalizeVariant(value: unknown): FractionPricingVariant {
     assertText(unit as string, "variant unit");
     const currency = new Money(0, currencyValue as string).currency;
     if (typeof active !== "boolean") throw new InvalidSnapshotError("variant active");
+
+    const customHalfPriceMinor = customHalfPrice === undefined
+      ? undefined
+      : new Money(customHalfPrice as number, currency).amountMinor;
+    if (customHalfPriceMinor !== undefined && customHalfPriceMinor < 0) throw new InvalidSnapshotError("variant customHalfPriceMinor");
 
     const flavors = ownDataArray(record, "flavors", "variant flavors").map((flavor) => normalizeFlavor(flavor, currency));
     if (flavors.length === 0) throw new InvalidSnapshotError("variant flavors");
@@ -369,6 +408,7 @@ function normalizeVariant(value: unknown): FractionPricingVariant {
       catalogVersion: catalogVersion as string,
       comboSlots,
       currency,
+      ...(customHalfPriceMinor === undefined ? {} : { customHalfPriceMinor }),
       extras,
       flavors,
       includedIngredients,
@@ -493,7 +533,7 @@ function normalizeSlotSelection(value: unknown): ResolveFractionSlotSelection {
   if (fraction !== "whole" && fraction !== "half-a" && fraction !== "half-b") {
     throw new InvalidSnapshotError("slot fraction");
   }
-  assertText(flavorOptionId as string, "slot flavorOptionId");
+  if (flavorOptionId !== null) assertText(flavorOptionId as string, "slot flavorOptionId");
   const extraOptionIds = ownDataArray(record, "extraOptionIds", "slot extraOptionIds")
     .map((id) => assertTextReturn(id, "slot extraOptionId"));
   const excludedIngredientIds = ownDataArray(record, "excludedIngredientIds", "slot excludedIngredientIds")
@@ -501,7 +541,7 @@ function normalizeSlotSelection(value: unknown): ResolveFractionSlotSelection {
   return deepFreeze({
     excludedIngredientIds,
     extraOptionIds,
-    flavorOptionId: flavorOptionId as string,
+    flavorOptionId: flavorOptionId as string | null,
     fraction,
   });
 }
