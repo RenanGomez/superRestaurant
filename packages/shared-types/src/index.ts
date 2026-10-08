@@ -486,6 +486,13 @@ export interface UpdateDiningTableLayoutCommandV1 extends DiningTableMutationCom
   readonly layout: DiningTableGeometryV1;
 }
 
+export interface UpdateDiningTableDetailsCommandV1 extends DiningTableMutationCommandV1 {
+  readonly expectedVersion: number;
+  readonly name: string;
+  readonly capacity: number;
+  readonly shape: DiningTableShape;
+}
+
 export function parseSaveMenuCatalogCommandV1(value: unknown): SaveMenuCatalogCommandV1 | undefined {
   const record = parseExactPlainRecord(value, [
     "schemaVersion", "scope", "eventId", "idempotencyKey", "deviceId", "occurredAt",
@@ -654,6 +661,21 @@ export function parseUpdateDiningTableLayoutCommandV1(value: unknown): UpdateDin
   const layout = parseDiningTableGeometryV1(ownValue(record, "layout"));
   if (common === undefined || expectedVersion === undefined || layout === undefined) return undefined;
   return Object.freeze({ ...common, expectedVersion, layout });
+}
+
+export function parseUpdateDiningTableDetailsCommandV1(value: unknown): UpdateDiningTableDetailsCommandV1 | undefined {
+  const record = parseExactPlainRecord(value, [
+    "schemaVersion", "scope", "tableId", "eventId", "idempotencyKey", "deviceId", "occurredAt",
+    "expectedVersion", "name", "capacity", "shape",
+  ]);
+  if (record === undefined || ownValue(record, "schemaVersion") !== DINING_LAYOUT_SCHEMA_VERSION) return undefined;
+  const common = parseDiningTableMutation(record);
+  const expectedVersion = parseBoundedInteger(ownValue(record, "expectedVersion"), 1, Number.MAX_SAFE_INTEGER);
+  const name = parseDisplayName(ownValue(record, "name"), 40);
+  const capacity = parseBoundedInteger(ownValue(record, "capacity"), 1, 50);
+  const shape = parseDiningTableShape(ownValue(record, "shape"));
+  if (common === undefined || expectedVersion === undefined || name === undefined || capacity === undefined || shape === undefined) return undefined;
+  return Object.freeze({ ...common, capacity, expectedVersion, name, shape });
 }
 
 export function parseDiningTableV1(value: unknown): DiningTableV1 | undefined {
