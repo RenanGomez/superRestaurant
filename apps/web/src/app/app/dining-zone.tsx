@@ -6,8 +6,8 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type M
 import { createPortal } from "react-dom";
 
 import { Field, FieldHint } from "../../components/field-hint";
-import { applyDraftShape, draftChanges, draftFromTable, mergeByVersion, validateTableDetails, type TableDraft, type TableGeometry } from "../../lib/dining-editor";
-import { clampPan, clampTablePosition, firstFreeSlot, moveTableByKeyboard, resizeTableCells, savedTablePosition, type TablePosition } from "../../lib/table-position";
+import { applyDraftShape, draftChanges, draftFromTable, draftIsStale, mergeByVersion, validateTableDetails, type TableDraft, type TableGeometry } from "../../lib/dining-editor";
+import { clampPan, clampTablePosition, firstFreeSlot, moveTableByKeyboard, resizeSquareCells, resizeTableCells, savedTablePosition, type TablePosition } from "../../lib/table-position";
 import { tableShapeClass } from "../../lib/table-shape";
 import { createDiningTableAction, saveDiningTableLayoutAction, updateDiningTableDetailsAction, type DiningActionResult } from "./actions";
 
@@ -17,7 +17,7 @@ interface Attempt { readonly eventId: string; readonly idempotencyKey: string; r
 type StatusKind = "saved" | "conflict" | "error";
 interface Status { readonly tableId: string; readonly kind: StatusKind; readonly text: string }
 /** The one table with unsaved changes in this zone; a new table (isNew) only exists here until «Guardar cambios». */
-interface Edit { readonly tableId: string; readonly isNew: boolean; readonly draft: TableDraft }
+interface Edit { readonly tableId: string; readonly isNew: boolean; readonly baseVersion: number; readonly draft: TableDraft }
 /** What the plan draws for a table: the server table with its draft applied, or a table that does not exist yet. */
 interface Entry { readonly tableId: string; readonly isNew: boolean; readonly saved: DiningTableV1 | undefined; readonly draft: TableDraft }
 
@@ -111,7 +111,8 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
   }
   function setDraft(entry: Entry, draft: TableDraft): void {
     if (saving) return;
-    setEdit({ tableId: entry.tableId, isNew: entry.isNew, draft });
+    const baseVersion = entry.isNew ? 0 : edit?.tableId === entry.tableId ? edit.baseVersion : entry.saved?.version ?? 0;
+    setEdit({ tableId: entry.tableId, isNew: entry.isNew, baseVersion, draft });
     setProblem(null);
     setStatus(null);
   }
@@ -120,17 +121,18 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
     setDraft(entry, { ...entry.draft, ...clampTablePosition(position, entry.draft.width, entry.draft.height) });
   }
   function resizeTo(entry: Entry, size: { width: number; height: number }): void { setDraft(entry, { ...entry.draft, ...size }); }
+  const square = selected?.draft.shape === "square";
   /** Drag, key or button ends on whole cells: the draft is what «Guardar cambios» will send. */
   function snapDraft(entry: Entry): void { setDraft(entry, snapped(entry.draft)); }
   function nudgeSize(entry: Entry, deltaCols: number, deltaRows: number): void {
     const base = snapped(entry.draft);
-    setDraft(entry, { ...base, ...resizeTableCells(base, deltaCols, deltaRows) });
+    setDraft(entry, { ...base, ...(base.shape === "square" ? resizeSquareCells(base, deltaCols, deltaRows) : resizeTableCells(base, deltaCols, deltaRows)) });
   }
   function startNew(name: string, capacity: string, shape: string): string | undefined {
     const slot = firstFreeSlot(entries.map((entry) => entry.draft));
     if (slot === undefined) return "No hay espacio libre en el plano para una mesa de 4×4.";
     const tableId = crypto.randomUUID();
-    setEdit({ tableId, isNew: true, draft: applyDraftShape({ name, capacity, shape: "rectangle", x: slot.x, y: slot.y, width: 4, height: 4 }, shape) });
+    setEdit({ tableId, isNew: true, baseVersion: 0, draft: applyDraftShape({ name, capacity, shape: "rectangle", x: slot.x, y: slot.y, width: 4, height: 4 }, shape) });
     setSelectedId(tableId);
     clearFeedback();
     return undefined;
@@ -187,21 +189,30 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
       }
       let current = tablesRef.current[edit.tableId];
       if (current === undefined) return;
+      // The draft was made on baseVersion: if the server table moved on, nothing is sent and the server copy wins.
+      if (draftIsStale(edit.baseVersion, current.version)) {
+        setEdit(null);
+        report({ tableId: edit.tableId, kind: "conflict", text: CONFLICT_TEXT });
+        router.refresh();
+        return;
+      }
+      let version = edit.baseVersion;
       const pendingChanges = draftChanges(current, draft);
       if (pendingChanges.layout) {
-        const key = `${current.tableId}:${current.version}:layout:${geometryKey}`;
+        const key = `${current.tableId}:${version}:layout:${geometryKey}`;
         let result: DiningActionResult;
-        try { result = await saveDiningTableLayoutAction({ tableId: current.tableId, expectedVersion: current.version, layout: geometry, attempt: attemptFor(key) }); }
+        try { result = await saveDiningTableLayoutAction({ tableId: current.tableId, expectedVersion: version, layout: geometry, attempt: attemptFor(key) }); }
         catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
         if (!result.ok) { failed(result, key); return; }
         attempts.current.delete(key);
         applyServerTable(result.table);
         current = result.table;
+        version = result.table.version;
       }
       if (pendingChanges.details) {
-        const key = `${current.tableId}:${current.version}:details:${check.name}|${check.capacity}|${check.shape}`;
+        const key = `${current.tableId}:${version}:details:${check.name}|${check.capacity}|${check.shape}`;
         let result: DiningActionResult;
-        try { result = await updateDiningTableDetailsAction({ tableId: current.tableId, expectedVersion: current.version, name: check.name, capacity: check.capacity, shape: check.shape, attempt: attemptFor(key) }); }
+        try { result = await updateDiningTableDetailsAction({ tableId: current.tableId, expectedVersion: version, name: check.name, capacity: check.capacity, shape: check.shape, attempt: attemptFor(key) }); }
         catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
         if (!result.ok) { failed(result, key); return; }
         attempts.current.delete(key);
@@ -247,7 +258,10 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
 
   const limits = selected === undefined ? undefined : (() => {
     const base = snapped(selected.draft);
+    const bigger = resizeSquareCells(base, 1, 1).width !== base.width;
+    const smaller = resizeSquareCells(base, -1, -1).width !== base.width;
     return {
+      bigger, smaller,
       wider: resizeTableCells(base, 1, 0).width !== base.width, narrower: resizeTableCells(base, -1, 0).width !== base.width,
       taller: resizeTableCells(base, 0, 1).height !== base.height, shorter: resizeTableCells(base, 0, -1).height !== base.height,
     };
@@ -285,6 +299,12 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
               {canManage && <>
                 <div className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-medium"><span aria-hidden="true">Tamaño</span><FieldHint label="Tamaño de la mesa" text="Ancho y largo de la mesa en el plano, en celdas. Usa los botones para hacerla más grande o más chica; no cambia la capacidad." /></div>
                 <div className="mt-1 grid gap-2" role="group" aria-label="Tamaño de la mesa">
+                  {square ? (
+                    <div className="flex justify-center gap-2">
+                      <button type="button" className={button} disabled={saving || !limits.smaller} onClick={() => nudgeSize(selected, -1, -1)}>Más chica</button>
+                      <button type="button" className={button} disabled={saving || !limits.bigger} onClick={() => nudgeSize(selected, 1, 1)}>Más grande</button>
+                    </div>
+                  ) : <>
                   <div role="group" aria-label="Ancho"><p className="text-[12px] font-medium text-text-muted">Ancho</p>
                     <div className="mt-1 flex justify-center gap-2">
                       <button type="button" className={button} disabled={saving || !limits.narrower} onClick={() => nudgeSize(selected, -1, 0)}>Más angosta</button>
@@ -295,6 +315,7 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
                       <button type="button" className={button} disabled={saving || !limits.shorter} onClick={() => nudgeSize(selected, 0, -1)}>Más corta</button>
                       <button type="button" className={button} disabled={saving || !limits.taller} onClick={() => nudgeSize(selected, 0, 1)}>Más larga</button>
                     </div></div>
+                  </>}
                 </div>
                 <form onSubmit={(event) => { event.preventDefault(); void save(); }} className="mt-3 grid gap-2" aria-label="Datos de la mesa">
                   <Field className="text-[12px] font-medium" hint="Cómo se llama la mesa en el plano y al tomar pedidos, por ejemplo Mesa 4 o Terraza 2. Debe ser única en la sucursal." label="Nombre">{(id) => <input id={id} name="name" type="text" required maxLength={40} value={selected.draft.name} onChange={(event) => setDraft(selected, { ...selected.draft, name: event.target.value })} className={input} />}</Field>
@@ -375,7 +396,9 @@ function TableCard({ entry, status, selected, canManage, canvas, onSelect, onMov
     const current = resize.current;
     if (current === null || current.pointerId !== event.pointerId) return;
     event.stopPropagation();
-    onResize(resizeTableCells(current.start, (event.clientX - current.clientX) / current.step.x, (event.clientY - current.clientY) / current.step.y));
+    const deltaCols = (event.clientX - current.clientX) / current.step.x;
+    const deltaRows = (event.clientY - current.clientY) / current.step.y;
+    onResize(draft.shape === "square" ? resizeSquareCells(current.start, deltaCols, deltaRows) : resizeTableCells(current.start, deltaCols, deltaRows));
   }
   function endResize(event: PointerEvent<HTMLElement>, save: boolean): void {
     const current = resize.current;

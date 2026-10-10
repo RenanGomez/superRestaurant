@@ -55,6 +55,11 @@ export function applyDraftShape(draft: TableDraft, shape: string): TableDraft {
   return { ...draft, shape, width: side, height: side };
 }
 
+/** A draft is stale when the server table moved past the version it was started from: saving it would overwrite silently. */
+export function draftIsStale(baseVersion: number, serverVersion: number): boolean {
+  return baseVersion !== serverVersion;
+}
+
 export interface DraftChanges { readonly layout: boolean; readonly details: boolean }
 
 /** What differs between the saved table and its draft; layout and details are saved by different endpoints. */

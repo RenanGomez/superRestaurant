@@ -45,6 +45,16 @@ export function resizeTableCells(rect: TableRect, deltaCols: number, deltaRows: 
   };
 }
 
+/**
+ * Resize of a square table: both sides change together by the larger of the two deltas (by
+ * magnitude), staying in 2..8 and inside the grid, so the table never stops being square.
+ */
+export function resizeSquareCells(rect: TableRect, deltaCols: number, deltaRows: number): { width: number; height: number } {
+  const delta = Math.abs(deltaCols) >= Math.abs(deltaRows) ? deltaCols : deltaRows;
+  const side = clampCells(rect.width + delta, Math.min(24 - rect.x, 100 - rect.y));
+  return { width: side, height: side };
+}
+
 /** First free spot (row by row, left to right) for a new table, or undefined when the plan is full. */
 export function firstFreeSlot(occupied: readonly TableRect[], width = 4, height = 4): TablePosition | undefined {
   for (let y = 0; y <= 100 - height; y += 1) {
