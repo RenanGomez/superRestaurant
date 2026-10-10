@@ -6,7 +6,8 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type M
 import { createPortal } from "react-dom";
 
 import { Field, FieldHint } from "../../components/field-hint";
-import { applyDraftShape, draftChanges, draftFromTable, draftIsStale, mergeByVersion, validateTableDetails, type TableDraft, type TableGeometry } from "../../lib/dining-editor";
+import { applyDraftShape, draftFromTable, draftIsStale, mergeByVersion, validateTableDetails, type TableDraft, type TableGeometry } from "../../lib/dining-editor";
+import { applyPlanOutcome, clampPlanMove, commitPlanMove, layoutAttemptKey, movePlanTable, panelChanges, panelLayout, pendingMoveIds, planSaveCommands, rebasePlanMove, rebaseVersion, withoutMove, type PlanDraft } from "../../lib/plan-draft";
 import { clampPan, clampTablePosition, firstFreeSlot, moveTableByKeyboard, resizeSquareCells, resizeTableCells, savedTablePosition, type TablePosition } from "../../lib/table-position";
 import { tableShapeClass } from "../../lib/table-shape";
 import { createDiningTableAction, saveDiningTableLayoutAction, updateDiningTableDetailsAction, type DiningActionResult } from "./actions";
@@ -16,10 +17,11 @@ type Geometry = TableGeometry;
 interface Attempt { readonly eventId: string; readonly idempotencyKey: string; readonly occurredAt: string }
 type StatusKind = "saved" | "conflict" | "error";
 interface Status { readonly tableId: string; readonly kind: StatusKind; readonly text: string }
-/** The one table with unsaved changes in this zone; a new table (isNew) only exists here until «Guardar cambios». */
+/** Panel draft: size and details of the ONE selected table (the position of a created table lives in the plan draft); a new table (isNew) only exists here until «Guardar cambios». */
 interface Edit { readonly tableId: string; readonly isNew: boolean; readonly baseVersion: number; readonly draft: TableDraft }
-/** What the plan draws for a table: the server table with its draft applied, or a table that does not exist yet. */
-interface Entry { readonly tableId: string; readonly isNew: boolean; readonly saved: DiningTableV1 | undefined; readonly draft: TableDraft }
+/** What the plan draws for a table: `draft` is the panel draft, `view` is what is drawn (panel size with the pending plan position), or a table that does not exist yet. */
+interface Entry { readonly tableId: string; readonly isNew: boolean; readonly saved: DiningTableV1 | undefined; readonly draft: TableDraft; readonly view: TableDraft; readonly pending: boolean }
+interface PlanIssue { readonly tableId: string; readonly text: string }
 
 const SAVED_VISIBLE_MS = 3000;
 const CONFLICT_TEXT = "La mesa cambió en otro dispositivo; se recargó.";
@@ -63,6 +65,10 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
   const [problem, setProblem] = useState<string | null>(null);
   const [blocked, setBlocked] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [plan, setPlan] = useState<PlanDraft>({});
+  const [planSaving, setPlanSaving] = useState(false);
+  const [planIssues, setPlanIssues] = useState<readonly PlanIssue[]>([]);
+  const busy = saving || planSaving;
 
   const tablesRef = useRef(tables);
   const attempts = useRef(new Map<string, Attempt>());
@@ -77,11 +83,16 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
     setCreatedIds((current) => new Set([...current].filter((id) => !zone.tables.some((table) => table.tableId === id))));
   }, [zone.tables, createdIds]);
 
-  const entries: Entry[] = list.map((table) => ({ tableId: table.tableId, isNew: false, saved: table, draft: edit?.tableId === table.tableId && !edit.isNew ? edit.draft : draftFromTable(table) }));
-  if (edit?.isNew) entries.push({ tableId: edit.tableId, isNew: true, saved: undefined, draft: edit.draft });
+  const pendingIds = pendingMoveIds(plan, merged);
+  const entries: Entry[] = list.map((table) => {
+    const draft = edit?.tableId === table.tableId && !edit.isNew ? edit.draft : draftFromTable(table);
+    const move = pendingIds.includes(table.tableId) ? plan[table.tableId] : undefined;
+    return { tableId: table.tableId, isNew: false, saved: table, draft, view: { ...draft, x: move?.x ?? table.layout.x, y: move?.y ?? table.layout.y }, pending: move !== undefined };
+  });
+  if (edit?.isNew) entries.push({ tableId: edit.tableId, isNew: true, saved: undefined, draft: edit.draft, view: edit.draft, pending: false });
   const selected = selectedId === null ? undefined : entries.find((entry) => entry.tableId === selectedId);
   const editedSaved = edit === null || edit.isNew ? undefined : merged[edit.tableId];
-  const changes = edit === null ? undefined : edit.isNew ? { layout: true, details: true } : editedSaved === undefined ? undefined : draftChanges(editedSaved, edit.draft);
+  const changes = edit === null ? undefined : edit.isNew ? { layout: true, details: true } : editedSaved === undefined ? undefined : panelChanges(editedSaved, edit.draft);
   const dirty = edit !== null && changes !== undefined && (changes.layout || changes.details);
   const blockedBy = edit === null ? "" : (edit.draft.name.trim() === "" ? editedSaved?.name ?? "la mesa" : edit.draft.name.trim());
 
@@ -110,26 +121,55 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
     return false;
   }
   function setDraft(entry: Entry, draft: TableDraft): void {
-    if (saving) return;
+    if (busy) return;
     const baseVersion = entry.isNew ? 0 : edit?.tableId === entry.tableId ? edit.baseVersion : entry.saved?.version ?? 0;
     setEdit({ tableId: entry.tableId, isNew: entry.isNew, baseVersion, draft });
     setProblem(null);
     setStatus(null);
   }
 
+  /** Dragging or arrows: a created table accumulates in the plan draft; a new table moves inside its own panel draft. */
   function move(entry: Entry, position: TablePosition): void {
-    setDraft(entry, { ...entry.draft, ...clampTablePosition(position, entry.draft.width, entry.draft.height) });
+    if (busy) return;
+    if (entry.isNew || entry.saved === undefined) {
+      setDraft(entry, { ...entry.draft, ...clampTablePosition(position, entry.draft.width, entry.draft.height) });
+      return;
+    }
+    const table = entry.saved;
+    setPlan((current) => movePlanTable(current, table, position, entry.view.width, entry.view.height));
+    setPlanIssues([]);
+    setStatus(null);
   }
-  function resizeTo(entry: Entry, size: { width: number; height: number }): void { setDraft(entry, { ...entry.draft, ...size }); }
+  /** A new size is a panel change; a pending position of the same table is kept inside the grid for it. */
+  function resizeTo(entry: Entry, size: { width: number; height: number }): void {
+    if (busy) return;
+    setDraft(entry, { ...entry.draft, ...size });
+    if (!entry.isNew) setPlan((current) => clampPlanMove(current, entry.tableId, size.width, size.height));
+  }
   const square = selected?.draft.shape === "square";
-  /** Drag, key or button ends on whole cells: the draft is what «Guardar cambios» will send. */
-  function snapDraft(entry: Entry): void { setDraft(entry, snapped(entry.draft)); }
+  /** A drag or key press ends on whole cells; a pending position equal to the saved one leaves the plan draft. */
+  function commitMove(entry: Entry): void {
+    if (entry.isNew || entry.saved === undefined) { setDraft(entry, snapped(entry.draft)); return; }
+    const table = entry.saved;
+    setPlan((current) => commitPlanMove(current, table, entry.view.width, entry.view.height));
+  }
+  /** A size drag or button ends on whole cells. */
+  function commitResize(entry: Entry): void {
+    const base = snapped(entry.view);
+    setDraft(entry, { ...entry.draft, width: base.width, height: base.height, ...(entry.isNew ? { x: base.x, y: base.y } : {}) });
+  }
   function nudgeSize(entry: Entry, deltaCols: number, deltaRows: number): void {
-    const base = snapped(entry.draft);
-    setDraft(entry, { ...base, ...(base.shape === "square" ? resizeSquareCells(base, deltaCols, deltaRows) : resizeTableCells(base, deltaCols, deltaRows)) });
+    const base = snapped(entry.view);
+    resizeTo(entry, base.shape === "square" ? resizeSquareCells(base, deltaCols, deltaRows) : resizeTableCells(base, deltaCols, deltaRows));
+  }
+  function changeShape(entry: Entry, shape: string): void {
+    if (busy) return;
+    const shaped = applyDraftShape(entry.view, shape);
+    setDraft(entry, { ...entry.draft, shape: shaped.shape, width: shaped.width, height: shaped.height });
+    if (!entry.isNew) setPlan((current) => clampPlanMove(current, entry.tableId, shaped.width, shaped.height));
   }
   function startNew(name: string, capacity: string, shape: string): string | undefined {
-    const slot = firstFreeSlot(entries.map((entry) => entry.draft));
+    const slot = firstFreeSlot(entries.map((entry) => entry.view));
     if (slot === undefined) return "No hay espacio libre en el plano para una mesa de 4×4.";
     const tableId = crypto.randomUUID();
     setEdit({ tableId, isNew: true, baseVersion: 0, draft: applyDraftShape({ name, capacity, shape: "rectangle", x: slot.x, y: slot.y, width: 4, height: 4 }, shape) });
@@ -138,10 +178,21 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
     return undefined;
   }
   function cancel(): void {
-    if (saving || edit === null) return;
+    if (busy || edit === null) return;
     if (edit.isNew) setSelectedId(null);
     setEdit(null);
     clearFeedback();
+  }
+  function cancelPlan(): void {
+    if (busy) return;
+    setPlan({});
+    setPlanIssues([]);
+  }
+
+  /** This editor's own save moved a table between versions: drafts based on the old one follow it instead of turning into conflicts. */
+  function followOwnSave(tableId: string, fromVersion: number, toVersion: number): void {
+    setPlan((current) => rebasePlanMove(current, tableId, fromVersion, toVersion));
+    setEdit((current) => current !== null && current.tableId === tableId && !current.isNew ? { ...current, baseVersion: rebaseVersion(current.baseVersion, fromVersion, toVersion) } : current);
   }
 
   function failed(result: Exclude<DiningActionResult, { ok: true }>, key: string): void {
@@ -163,16 +214,16 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
   }
 
   async function save(): Promise<void> {
-    if (saving || edit === null || !dirty) return;
+    if (busy || edit === null || !dirty) return;
     const check = validateTableDetails(edit.draft);
     if (!check.ok) { setProblem(check.message); return; }
     const draft = snapped(edit.draft);
-    const geometry: Geometry = { x: draft.x, y: draft.y, width: draft.width, height: draft.height };
-    const geometryKey = `${geometry.x}:${geometry.y}:${geometry.width}:${geometry.height}`;
     setProblem(null);
     setSaving(true);
     try {
       if (edit.isNew) {
+        const geometry: Geometry = { x: draft.x, y: draft.y, width: draft.width, height: draft.height };
+        const geometryKey = `${geometry.x}:${geometry.y}:${geometry.width}:${geometry.height}`;
         // One attempt per draft content: retrying after a network error replays the same table id and attempt.
         const key = `new:${edit.tableId}|${zone.zoneId}|${check.name}|${check.capacity}|${check.shape}|${geometryKey}`;
         let result: DiningActionResult;
@@ -197,15 +248,18 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
         return;
       }
       let version = edit.baseVersion;
-      const pendingChanges = draftChanges(current, draft);
+      const pendingChanges = panelChanges(current, draft);
       if (pendingChanges.layout) {
-        const key = `${current.tableId}:${version}:layout:${geometryKey}`;
+        // Only the size changes here: the position sent is the SAVED one, never a pending plan position.
+        const geometry = panelLayout(current.layout, draft);
+        const key = `${current.tableId}:${version}:layout:${geometry.x}:${geometry.y}:${geometry.width}:${geometry.height}`;
         let result: DiningActionResult;
         try { result = await saveDiningTableLayoutAction({ tableId: current.tableId, expectedVersion: version, layout: geometry, attempt: attemptFor(key) }); }
         catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
         if (!result.ok) { failed(result, key); return; }
         attempts.current.delete(key);
         applyServerTable(result.table);
+        followOwnSave(current.tableId, version, result.table.version);
         current = result.table;
         version = result.table.version;
       }
@@ -217,10 +271,58 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
         if (!result.ok) { failed(result, key); return; }
         attempts.current.delete(key);
         applyServerTable(result.table);
+        followOwnSave(current.tableId, version, result.table.version);
       }
       setEdit(null);
       report({ tableId: edit.tableId, kind: "saved", text: "Cambios guardados" });
     } finally { setSaving(false); }
+  }
+
+  /** «Guardar plano»: one layout command per moved table, in sequence; failures stay pending with their reason. */
+  async function savePlan(): Promise<void> {
+    if (busy) return;
+    const { commands, conflicts } = planSaveCommands(plan, tablesRef.current);
+    if (commands.length === 0 && conflicts.length === 0) return;
+    const nameOf = (tableId: string): string => tablesRef.current[tableId]?.name ?? "La mesa";
+    const issues: PlanIssue[] = [];
+    let remaining = plan;
+    let refresh = false;
+    setPlanIssues([]);
+    setPlanSaving(true);
+    try {
+      for (const tableId of conflicts) {
+        remaining = applyPlanOutcome(remaining, tableId, "conflict");
+        issues.push({ tableId, text: `${nameOf(tableId)}: cambió en otro dispositivo; se restauró su posición.` });
+        refresh = true;
+      }
+      for (const command of commands) {
+        const key = layoutAttemptKey(command);
+        let result: DiningActionResult;
+        try { result = await saveDiningTableLayoutAction({ tableId: command.tableId, expectedVersion: command.expectedVersion, layout: command.layout, attempt: attemptFor(key) }); }
+        catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
+        if (result.ok) {
+          attempts.current.delete(key);
+          applyServerTable(result.table);
+          followOwnSave(command.tableId, command.expectedVersion, result.table.version);
+          remaining = applyPlanOutcome(remaining, command.tableId, "saved");
+          continue;
+        }
+        if (result.error !== "unavailable") attempts.current.delete(key);
+        if (result.error === "conflict") {
+          remaining = applyPlanOutcome(remaining, command.tableId, "conflict");
+          issues.push({ tableId: command.tableId, text: `${nameOf(command.tableId)}: cambió en otro dispositivo; se restauró su posición.` });
+          refresh = true;
+          continue;
+        }
+        issues.push({ tableId: command.tableId, text: `${nameOf(command.tableId)}: ${failureText(result.error)}` });
+        // Without a session or a connection the rest would fail the same way; they stay pending untouched.
+        if (result.error === "denied" || result.error === "unavailable") break;
+      }
+      setPlan((current) => Object.keys(current).reduce((next, tableId) => remaining[tableId] === undefined ? withoutMove(next, tableId) : next, current));
+      setPlanIssues(issues);
+      if (issues.length === 0) report({ tableId: "", kind: "saved", text: "Plano guardado" });
+      if (refresh) router.refresh();
+    } finally { setPlanSaving(false); }
   }
 
   function onPanDown(event: PointerEvent<HTMLDivElement>): void {
@@ -257,7 +359,7 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
   }
 
   const limits = selected === undefined ? undefined : (() => {
-    const base = snapped(selected.draft);
+    const base = snapped(selected.view);
     const bigger = resizeSquareCells(base, 1, 1).width !== base.width;
     const smaller = resizeSquareCells(base, -1, -1).width !== base.width;
     return {
@@ -276,16 +378,29 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
       </div>
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start lg:gap-4">
         <div className="min-w-0">
+          {(pendingIds.length > 0 || planIssues.length > 0 || planSaving) && (
+            <div className="mb-2 rounded-xl border border-border bg-bg p-2" aria-label="Cambios del plano">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p role="status" aria-live="polite" className="text-sm font-semibold text-text">{planSaving ? "Guardando plano…" : `${pendingIds.length} mesa${pendingIds.length === 1 ? "" : "s"} movida${pendingIds.length === 1 ? "" : "s"} sin guardar`}</p>
+                <div className="flex gap-2">
+                  <button type="button" className={primary} disabled={busy || pendingIds.length === 0} onClick={() => void savePlan()}>Guardar plano</button>
+                  <button type="button" className={button} disabled={busy || pendingIds.length === 0} onClick={cancelPlan}>Cancelar</button>
+                </div>
+              </div>
+              {planIssues.length > 0 && <ul role="alert" className="mt-2 grid gap-1 rounded-lg bg-error-bg p-2 text-sm text-error">{planIssues.map((issue) => <li key={issue.tableId}>{issue.text}</li>)}</ul>}
+            </div>
+          )}
+          {status?.tableId === "" && <p role="status" aria-live="polite" className="mb-2 text-sm text-text-muted">{status.text}</p>}
           <div ref={viewport} onScroll={onViewportScroll} className="relative h-[420px] overflow-hidden rounded-xl border border-border lg:h-[640px]" role="group" aria-label={`Plano de ${zone.name}`}>
             <div ref={canvas} onPointerDown={onPanDown} onPointerMove={onPanMove} onPointerUp={onPanEnd} onPointerCancel={onPanEnd}
               style={{ transform: `translate(${pan.x}px, ${pan.y}px)` }}
               className={`grid h-[2100px] w-full min-w-[520px] touch-none select-none grid-cols-[repeat(24,minmax(20px,1fr))] grid-rows-[repeat(100,20px)] gap-px bg-[linear-gradient(to_right,var(--color-border)_1px,transparent_1px),linear-gradient(to_bottom,var(--color-border)_1px,transparent_1px)] bg-[size:calc(100%/24)_21px] p-2 ${panning ? "cursor-grabbing" : "cursor-grab"}`}>
               {entries.map((entry) => <TableCard key={entry.tableId} entry={entry} status={status?.tableId === entry.tableId ? status : undefined} selected={selectedId === entry.tableId} canManage={canManage} canvas={canvas}
                 onSelect={() => select(entry.tableId)} onMove={(position) => move(entry, position)} onResize={(size) => resizeTo(entry, size)}
-                onCommit={() => snapDraft(entry)} />)}
+                onCommitMove={() => commitMove(entry)} onCommitResize={() => commitResize(entry)} />)}
             </div>
           </div>
-          {canManage && <p className="mt-2 text-xs text-text-muted">Arrastra para mover, usa la esquina para cambiar el tamaño y pulsa Guardar cambios. Con una mesa seleccionada también puedes usar las flechas (Mayús + flecha: cuatro celdas). Arrastra el fondo para desplazar el plano.</p>}
+          {canManage && <p className="mt-2 text-xs text-text-muted">Arrastra para mover varias mesas y pulsa Guardar plano; el tamaño y los datos de una mesa se guardan aparte con Guardar cambios. Con una mesa seleccionada también puedes usar las flechas (Mayús + flecha: cuatro celdas). Arrastra el fondo para desplazar el plano.</p>}
         </div>
         <aside className="mt-3 rounded-xl border border-border bg-bg p-3 lg:sticky lg:top-4 lg:mt-0" aria-label="Mesa seleccionada">
           {selected === undefined || limits === undefined ? (
@@ -294,6 +409,7 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
             <div className="mx-auto w-full max-w-[320px] text-center">
               <h3 className="break-words text-sm font-semibold text-text">{selected.draft.name} · {selected.draft.capacity} {selected.draft.capacity.trim() === "1" ? "persona" : "personas"}</h3>
               {dirty && <p className="mt-1 text-sm font-semibold text-text">{selected.isNew ? "Mesa nueva sin guardar" : "Cambios sin guardar"}</p>}
+              {selected.pending && <p className="mt-1 text-[12px] text-text-muted">Posición pendiente: se guarda con «Guardar plano».</p>}
               <p role="status" aria-live="polite" className={`mt-1 min-h-5 text-sm ${selectedStatus?.kind === "conflict" || selectedStatus?.kind === "error" ? "font-semibold text-error" : "text-text-muted"}`}>{selectedStatus?.text ?? ""}</p>
               {blocked !== null && <p role="alert" className="mt-1 rounded-lg bg-error-bg p-2 text-sm text-error">{blocked}</p>}
               {canManage && <>
@@ -301,30 +417,30 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
                 <div className="mt-1 grid gap-2" role="group" aria-label="Tamaño de la mesa">
                   {square ? (
                     <div className="flex justify-center gap-2">
-                      <button type="button" className={button} disabled={saving || !limits.smaller} onClick={() => nudgeSize(selected, -1, -1)}>Más chica</button>
-                      <button type="button" className={button} disabled={saving || !limits.bigger} onClick={() => nudgeSize(selected, 1, 1)}>Más grande</button>
+                      <button type="button" className={button} disabled={busy || !limits.smaller} onClick={() => nudgeSize(selected, -1, -1)}>Más chica</button>
+                      <button type="button" className={button} disabled={busy || !limits.bigger} onClick={() => nudgeSize(selected, 1, 1)}>Más grande</button>
                     </div>
                   ) : <>
                   <div role="group" aria-label="Ancho"><p className="text-[12px] font-medium text-text-muted">Ancho</p>
                     <div className="mt-1 flex justify-center gap-2">
-                      <button type="button" className={button} disabled={saving || !limits.narrower} onClick={() => nudgeSize(selected, -1, 0)}>Más angosta</button>
-                      <button type="button" className={button} disabled={saving || !limits.wider} onClick={() => nudgeSize(selected, 1, 0)}>Más ancha</button>
+                      <button type="button" className={button} disabled={busy || !limits.narrower} onClick={() => nudgeSize(selected, -1, 0)}>Más angosta</button>
+                      <button type="button" className={button} disabled={busy || !limits.wider} onClick={() => nudgeSize(selected, 1, 0)}>Más ancha</button>
                     </div></div>
                   <div role="group" aria-label="Largo"><p className="text-[12px] font-medium text-text-muted">Largo</p>
                     <div className="mt-1 flex justify-center gap-2">
-                      <button type="button" className={button} disabled={saving || !limits.shorter} onClick={() => nudgeSize(selected, 0, -1)}>Más corta</button>
-                      <button type="button" className={button} disabled={saving || !limits.taller} onClick={() => nudgeSize(selected, 0, 1)}>Más larga</button>
+                      <button type="button" className={button} disabled={busy || !limits.shorter} onClick={() => nudgeSize(selected, 0, -1)}>Más corta</button>
+                      <button type="button" className={button} disabled={busy || !limits.taller} onClick={() => nudgeSize(selected, 0, 1)}>Más larga</button>
                     </div></div>
                   </>}
                 </div>
                 <form onSubmit={(event) => { event.preventDefault(); void save(); }} className="mt-3 grid gap-2" aria-label="Datos de la mesa">
                   <Field className="text-[12px] font-medium" hint="Cómo se llama la mesa en el plano y al tomar pedidos, por ejemplo Mesa 4 o Terraza 2. Debe ser única en la sucursal." label="Nombre">{(id) => <input id={id} name="name" type="text" required maxLength={40} value={selected.draft.name} onChange={(event) => setDraft(selected, { ...selected.draft, name: event.target.value })} className={input} />}</Field>
                   <Field className="text-[12px] font-medium" hint="Cuántas personas caben; se usa para sugerir mesa, no limita la cuenta." label="Capacidad (personas)">{(id) => <input id={id} name="capacity" type="text" inputMode="numeric" required value={selected.draft.capacity} onChange={(event) => setDraft(selected, { ...selected.draft, capacity: event.target.value })} className={input} />}</Field>
-                  <Field className="text-[12px] font-medium" hint="Cómo se dibuja la mesa en el plano. Es sólo visual; no cambia la capacidad. Cuadrada iguala el largo al ancho." label="Forma">{(id) => <select id={id} name="shape" value={selected.draft.shape} onChange={(event) => setDraft(selected, applyDraftShape(selected.draft, event.target.value))} className={input}>
+                  <Field className="text-[12px] font-medium" hint="Cómo se dibuja la mesa en el plano. Es sólo visual; no cambia la capacidad. Cuadrada iguala el largo al ancho." label="Forma">{(id) => <select id={id} name="shape" value={selected.draft.shape} onChange={(event) => changeShape(selected, event.target.value)} className={input}>
                     <option value="round">Redonda</option><option value="square">Cuadrada</option><option value="rectangle">Rectangular</option></select>}</Field>
                   {problem !== null && <p role="alert" className="rounded-lg bg-error-bg p-2 text-sm text-error">{problem}</p>}
-                  <button type="submit" className={primary} disabled={saving || !dirty}>{saving ? "Guardando…" : "Guardar cambios"}</button>
-                  <button type="button" className={button} disabled={saving || !dirty} onClick={cancel}>Cancelar</button>
+                  <button type="submit" className={primary} disabled={busy || !dirty}>{saving ? "Guardando…" : "Guardar cambios"}</button>
+                  <button type="button" className={button} disabled={busy || !dirty} onClick={cancel}>Cancelar</button>
                 </form>
               </>}
             </div>
@@ -335,15 +451,15 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
   );
 }
 
-function TableCard({ entry, status, selected, canManage, canvas, onSelect, onMove, onResize, onCommit }: {
+function TableCard({ entry, status, selected, canManage, canvas, onSelect, onMove, onResize, onCommitMove, onCommitResize }: {
   readonly entry: Entry; readonly status: Status | undefined; readonly selected: boolean; readonly canManage: boolean;
   readonly canvas: RefObject<HTMLDivElement | null>; readonly onSelect: () => boolean; readonly onMove: (position: TablePosition) => void;
-  readonly onResize: (size: { width: number; height: number }) => void; readonly onCommit: () => void;
+  readonly onResize: (size: { width: number; height: number }) => void; readonly onCommitMove: () => void; readonly onCommitResize: () => void;
 }): ReactNode {
   const [step, setStep] = useState({ x: 21, y: 21 });
   const drag = useRef<{ pointerId: number; clientX: number; clientY: number; start: TablePosition; step: { x: number; y: number }; moved: boolean } | null>(null);
   const resize = useRef<{ pointerId: number; clientX: number; clientY: number; start: Geometry; step: { x: number; y: number } } | null>(null);
-  const { draft } = entry;
+  const draft = entry.view;
   const { width, height } = draft;
   const position = { x: draft.x, y: draft.y };
   const round = draft.shape === "round";
@@ -372,7 +488,7 @@ function TableCard({ entry, status, selected, canManage, canvas, onSelect, onMov
     if (current?.pointerId !== event.pointerId) return;
     drag.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    if (save && current.moved) onCommit();
+    if (save && current.moved) onCommitMove();
   }
   function onKeyDown(event: KeyboardEvent<HTMLElement>): void {
     if (event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey) return;
@@ -406,7 +522,7 @@ function TableCard({ entry, status, selected, canManage, canvas, onSelect, onMov
     event.stopPropagation();
     resize.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    if (save) onCommit();
+    if (save) onCommitResize();
   }
   function stop(event: MouseEvent<HTMLElement>): void { event.stopPropagation(); }
 
@@ -414,10 +530,11 @@ function TableCard({ entry, status, selected, canManage, canvas, onSelect, onMov
     <article role="button" tabIndex={0} aria-pressed={selected} aria-label={`Mesa ${draft.name}, ${draft.capacity} personas. Enter para seleccionar.${canManage ? " Flechas para mover." : ""}`}
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={(event) => endDrag(event, true)} onPointerCancel={(event) => endDrag(event, false)} onKeyDown={onKeyDown}
       style={{ gridColumn: `${Math.floor(position.x) + 1} / span ${width}`, gridRow: `${Math.floor(position.y) + 1} / span ${height}`, transform: `translate(${(position.x % 1) * step.x}px, ${(position.y % 1) * step.y}px)`, ...(selected ? { boxShadow: "0 0 0 3px var(--color-selected)" } : {}) }}
-      className={`relative z-10 flex min-h-0 min-w-0 flex-col items-center justify-center overflow-hidden bg-[oklch(95%_0.025_230)] p-0.5 text-center focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent ${selected ? "border-[3px] border-selected" : "border-2 border-accent"} ${canManage ? "cursor-grab touch-none active:cursor-grabbing" : "cursor-pointer"} ${tableShapeClass(draft.shape)}`}>
+      className={`relative z-10 flex min-h-0 min-w-0 flex-col items-center justify-center overflow-hidden bg-[oklch(95%_0.025_230)] p-0.5 text-center focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent ${selected ? "border-[3px] border-selected" : "border-2 border-accent"} ${entry.pending ? "border-dashed" : ""}${canManage ? "cursor-grab touch-none active:cursor-grabbing" : "cursor-pointer"} ${tableShapeClass(draft.shape)}`}>
       <strong className="w-full truncate text-[11px] leading-tight">{draft.name}</strong>
       <span className="text-[10px] leading-tight text-text-muted">{draft.capacity} pers.</span>
       {entry.isNew ? <span className="w-full truncate text-[9px] leading-tight text-text-muted">Sin guardar</span>
+        : entry.pending ? <span className="w-full truncate text-[9px] leading-tight font-semibold text-text-muted">Movida</span>
         : status !== undefined && <span className={`w-full truncate text-[9px] leading-tight ${status.kind === "conflict" || status.kind === "error" ? "font-semibold text-error" : "text-text-muted"}`}>{status.kind === "conflict" || status.kind === "error" ? "Sin guardar" : status.text}</span>}
       {canManage && selected && <span aria-hidden="true" onPointerDown={onHandleDown} onPointerMove={onHandleMove} onPointerUp={(event) => endResize(event, true)} onPointerCancel={(event) => endResize(event, false)} onClick={stop}
         className={`absolute h-7 w-7 cursor-nwse-resize touch-none after:absolute after:bottom-1 after:right-1 after:h-3 after:w-3 after:border-b-[3px] after:border-r-[3px] after:border-accent-hover ${round ? "bottom-[14%] right-[14%]" : "bottom-0 right-0"}`} />}
