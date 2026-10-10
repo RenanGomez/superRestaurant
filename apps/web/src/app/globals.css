@@ -21,6 +21,7 @@
   --color-error: oklch(55% 0.18 25);
   --color-error-bg: oklch(96% 0.03 25);
   --color-success: oklch(62% 0.14 155);
+  --color-selected: oklch(80% 0.17 85);
   --color-nav: oklch(20% 0.03 250);
   --color-category-1: oklch(90% 0.055 20);
   --color-category-2: oklch(90% 0.055 55);
