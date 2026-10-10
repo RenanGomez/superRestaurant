@@ -55,3 +55,15 @@ export function firstFreeSlot(occupied: readonly TableRect[], width = 4, height 
   }
   return undefined;
 }
+
+export interface PanSize { readonly width: number; readonly height: number }
+
+/**
+ * Pan offset of the plan canvas inside its viewport (the translate applied to the content, so it is
+ * never positive). Each axis stays between "content flush with the far edge" and "content at the
+ * origin"; content smaller than the viewport cannot move.
+ */
+export function clampPan(offset: TablePosition, viewport: PanSize, content: PanSize): TablePosition {
+  const axis = (value: number, view: number, size: number): number => Math.min(0, Math.max(Math.min(0, view - size), value));
+  return { x: axis(offset.x, viewport.width, content.width), y: axis(offset.y, viewport.height, content.height) };
+}

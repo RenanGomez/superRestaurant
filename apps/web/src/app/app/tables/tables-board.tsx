@@ -9,6 +9,7 @@ import { captureDeviceId } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { watchTabReturn } from "../../../lib/revalidate-on-return";
 import { planCanvasStyle, planPlacement, planViewBox } from "../../../lib/floor-plan";
+import { tableShapeClass } from "../../../lib/table-shape";
 import { groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterLabel, waiterOptions } from "../../../lib/tables-board";
 
 type ErrorCode = "invalid" | "denied" | "conflict" | "no_shift" | "unavailable";
@@ -257,7 +258,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
             {zone.tables.map((table) => <button key={table.tableId} type="button" style={{ position: "absolute", ...planPlacement(table.layout, box) }}
               onClick={() => { if (table.state !== null) void select(table.tableId, table.name, table.state.activeOrders); }}
               disabled={table.state === null}
-              className={`z-10 flex min-h-11 min-w-11 flex-col items-center justify-center overflow-hidden border-2 p-1 text-center text-xs font-semibold leading-tight focus-visible:outline-2 focus-visible:outline-accent ${table.state === null ? "border-border bg-bg text-text-muted" : table.state.status === "occupied" ? "border-accent bg-accent text-white" : "border-success bg-surface text-text"} ${table.shape === "round" ? "rounded-full" : "rounded-lg"}`}
+              className={`z-10 flex min-h-11 min-w-11 flex-col items-center justify-center overflow-hidden border-2 p-1 text-center text-xs font-semibold leading-tight focus-visible:outline-2 focus-visible:outline-accent ${table.state === null ? "border-border bg-bg text-text-muted" : table.state.status === "occupied" ? "border-accent bg-accent text-white" : "border-success bg-surface text-text"} ${tableShapeClass(table.shape)}`}
               aria-label={`${table.name}, ${table.capacity} personas, ${tableStatusLabel(table.state)}`}>
               <span className="line-clamp-2 w-full break-words">{table.name}</span><span className="text-[10px]">{table.capacity} pers.</span>
               {table.state?.status === "occupied" && <span className="truncate text-[10px]">{time(table.state.activeOrders[0]!.openedAt, snapshot.timeZone)} · {waiterLabel(waiters ?? [], table.state.activeOrders[0]!.waiterUserId, actorId)}</span>}
