@@ -83,3 +83,24 @@ test("ui variants never conflict and selected options read white on accent", () 
   assert.ok(idle.includes("bg-surface") && idle.includes("text-text") && !idle.includes("text-white"));
   assert.ok(uiButton("secondary", "px-2 text-xs").includes("px-2") && !uiButton("secondary", "px-2 text-xs").includes("px-4"));
 });
+
+/** Interpolations in a className template that touch the neighbouring utility without a space (`${a}${b}`, `${a}cursor-grab`) fuse two classes into one invalid name. */
+function findFusedInterpolations(source: string): string[] {
+  const found: string[] = [];
+  for (const match of source.matchAll(/className=\{`([^`]*)`\}/g)) {
+    const template = match[1] ?? "";
+    if (/\}\$\{|\}[A-Za-z[-]|[A-Za-z\]]\$\{/.test(template)) found.push(template);
+  }
+  return found;
+}
+
+test("no className template fuses an interpolation with the next or previous utility", () => {
+  const failures = sourceFiles(join(process.cwd(), "src")).flatMap((file) => findFusedInterpolations(readFileSync(file, "utf8")).map((template) => `${file}: ${template}`));
+  assert.deepEqual(failures, []);
+});
+
+test("negative case: a conditional glued to the next utility is reported, spaced ones are not", () => {
+  assert.equal(findFusedInterpolations('<a className={`x ${on ? "border-dashed" : ""}${m ? "cursor-grab" : ""}`} />').length, 1);
+  assert.equal(findFusedInterpolations('<a className={`x ${on ? "a" : ""}cursor-grab`} />').length, 1);
+  assert.equal(findFusedInterpolations('<a className={`x ${on ? "a" : ""} cursor-grab ${m}`} />').length, 0);
+});

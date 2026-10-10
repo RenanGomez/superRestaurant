@@ -38,6 +38,8 @@
     "src/lib/revalidate-on-return.test.ts",
     "src/lib/dining-editor.ts",
     "src/lib/dining-editor.test.ts",
+    "src/lib/plan-draft.ts",
+    "src/lib/plan-draft.test.ts",
     "src/lib/branch-selection.ts",
     "src/lib/branch-selection.test.ts",
     "src/lib/menu-catalog.ts",
