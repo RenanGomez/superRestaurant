@@ -1,6 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clampTablePosition, firstFreeSlot, moveTableByKeyboard, resizeTableCells, savedTablePosition } from "./table-position.js";
+import { clampPan, clampTablePosition, firstFreeSlot, moveTableByKeyboard, resizeSquareCells, resizeTableCells, savedTablePosition } from "./table-position.js";
+
+test("pan never leaves the content: flush with the origin or the far edge, fixed when it fits", () => {
+  const viewport = { width: 500, height: 400 };
+  const content = { width: 600, height: 2100 };
+  assert.deepEqual(clampPan({ x: 30, y: 12 }, viewport, content), { x: 0, y: 0 });
+  assert.deepEqual(clampPan({ x: -40, y: -300 }, viewport, content), { x: -40, y: -300 });
+  assert.deepEqual(clampPan({ x: -900, y: -9000 }, viewport, content), { x: -100, y: -1700 });
+  assert.deepEqual(clampPan({ x: -50, y: -50 }, viewport, { width: 400, height: 300 }), { x: 0, y: 0 });
+});
+
+test("square resize keeps both sides equal, follows the larger delta and stays in 2..8 and the grid", () => {
+  const rect = { x: 0, y: 0, width: 4, height: 4 };
+  assert.deepEqual(resizeSquareCells(rect, 1, 1), { width: 5, height: 5 });
+  assert.deepEqual(resizeSquareCells(rect, 1, -3), { width: 2, height: 2 });
+  assert.deepEqual(resizeSquareCells(rect, -1, 2.4), { width: 6, height: 6 });
+  assert.deepEqual(resizeSquareCells(rect, 40, 40), { width: 8, height: 8 });
+  assert.deepEqual(resizeSquareCells(rect, -40, -40), { width: 2, height: 2 });
+  assert.deepEqual(resizeSquareCells({ x: 20, y: 96, width: 4, height: 4 }, 3, 3), { width: 4, height: 4 });
+});
 
 test("resizing moves in whole cells and stays within 2..8 and inside the grid", () => {
   assert.deepEqual(resizeTableCells({ x: 0, y: 0, width: 4, height: 4 }, 1.6, -1.4), { width: 6, height: 3 });

@@ -8,9 +8,9 @@
  * Use the variants from `ui-classes.ts` instead of layering colors over a base.
  */
 
-const THEME_COLORS: ReadonlySet<string> = new Set([
+export const THEME_COLORS: ReadonlySet<string> = new Set([
   "bg", "surface", "text", "text-muted", "accent", "accent-hover", "accent-soft", "border", "error", "error-bg",
-  "success", "nav", "white", "black", "transparent", "current", "inherit",
+  "success", "success-bg", "selected", "nav", "white", "black", "transparent", "current", "inherit",
   "category-1", "category-2", "category-3", "category-4", "category-5", "category-6", "category-7", "category-8",
 ]);
 

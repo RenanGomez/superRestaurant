@@ -28,6 +28,8 @@
     "src/lib/dining-layout.test.ts",
     "src/lib/table-position.ts",
     "src/lib/table-position.test.ts",
+    "src/lib/table-shape.ts",
+    "src/lib/table-shape.test.ts",
     "src/lib/tables-board.ts",
     "src/lib/tables-board.test.ts",
     "src/lib/floor-plan.ts",

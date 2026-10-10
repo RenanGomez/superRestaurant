@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { classGroup, conflictsIn, findClassConflicts } from "./class-conflicts.js";
+import { THEME_COLORS, classGroup, conflictsIn, findClassConflicts } from "./class-conflicts.js";
 import { uiButton, uiChip, uiOption, uiVariants, type UiVariant } from "./ui-classes.js";
 
 function sourceFiles(directory: string): string[] {
@@ -47,6 +47,19 @@ test("negative case: two text colors, two text sizes and hover-variant clashes i
 test("negative case: composing a color over an unresolved base is reported", () => {
   const found = findClassConflicts("const p = `${imported} bg-accent text-white`;");
   assert.deepEqual(found.map((entry) => entry.kind), ["unresolved-base"]);
+});
+
+test("THEME_COLORS covers every --color-* token defined in globals.css", () => {
+  const css = readFileSync(join(process.cwd(), "src", "app", "globals.css"), "utf8");
+  const tokens = [...css.matchAll(/--color-([a-z0-9-]+)\s*:/g)].map((match) => match[1] ?? "");
+  assert.ok(tokens.length > 10, "the theme tokens must be found");
+  assert.deepEqual(tokens.filter((token) => !THEME_COLORS.has(token)), []);
+});
+
+test("negative case: success-bg, accent-soft and selected are themed colors that conflict", () => {
+  assert.deepEqual(conflictsIn("bg-surface bg-success-bg").map((entry) => entry.group), ["bg-color"]);
+  assert.deepEqual(conflictsIn("bg-bg bg-accent-soft").map((entry) => entry.group), ["bg-color"]);
+  assert.deepEqual(conflictsIn("border-border border-selected").map((entry) => entry.group), ["border-color"]);
 });
 
 test("valid compositions are accepted", () => {

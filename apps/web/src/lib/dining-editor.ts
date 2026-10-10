@@ -37,3 +37,34 @@ export function validateTableDetails(input: TableDetailsInput): TableDetailsChec
   if (input.shape !== "round" && input.shape !== "square" && input.shape !== "rectangle") return { ok: false, message: "Elige una forma válida." };
   return { ok: true, name, capacity, shape: input.shape };
 }
+
+export interface TableGeometry { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
+/** Local draft of one table: everything the panel can change, with text fields as typed. */
+export interface TableDraft extends TableGeometry { readonly name: string; readonly capacity: string; readonly shape: string }
+interface SavedTable { readonly name: string; readonly capacity: number; readonly shape: string; readonly layout: TableGeometry }
+
+export function draftFromTable(table: SavedTable): TableDraft {
+  const { x, y, width, height } = table.layout;
+  return { name: table.name, capacity: String(table.capacity), shape: table.shape, x, y, width, height };
+}
+
+/** Choosing «Cuadrada» makes the height equal to the width (shrunk only when the grid's bottom edge forces it). */
+export function applyDraftShape(draft: TableDraft, shape: string): TableDraft {
+  if (shape !== "square") return { ...draft, shape };
+  const side = Math.max(2, Math.min(draft.width, 100 - draft.y, 24 - draft.x));
+  return { ...draft, shape, width: side, height: side };
+}
+
+/** A draft is stale when the server table moved past the version it was started from: saving it would overwrite silently. */
+export function draftIsStale(baseVersion: number, serverVersion: number): boolean {
+  return baseVersion !== serverVersion;
+}
+
+export interface DraftChanges { readonly layout: boolean; readonly details: boolean }
+
+/** What differs between the saved table and its draft; layout and details are saved by different endpoints. */
+export function draftChanges(saved: SavedTable, draft: TableDraft): DraftChanges {
+  const layout = saved.layout.x !== draft.x || saved.layout.y !== draft.y || saved.layout.width !== draft.width || saved.layout.height !== draft.height;
+  const details = saved.name !== draft.name.trim() || String(saved.capacity) !== draft.capacity.trim() || saved.shape !== draft.shape;
+  return { layout, details };
+}
