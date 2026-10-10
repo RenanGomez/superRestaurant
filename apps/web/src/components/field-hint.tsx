@@ -64,7 +64,7 @@ export function FieldHint({ label, text }: { readonly label?: string | undefined
         role="tooltip"
         hidden={!open}
         style={{ left: shift }}
-        className="absolute top-full z-40 mt-1.5 w-60 max-w-[calc(100vw-16px)] rounded-lg border border-border bg-surface p-2.5 text-left text-[12px] font-normal normal-case leading-snug tracking-normal text-text shadow-lg"
+        className="absolute top-full z-40 mt-1.5 w-60 min-w-60 shrink-0 max-w-[calc(100vw-16px)] whitespace-normal break-words [overflow-wrap:anywhere] rounded-lg border border-border bg-surface p-2.5 text-left text-[12px] font-normal normal-case leading-snug tracking-normal text-text shadow-lg"
       >{text}</span>
     </span>
   );

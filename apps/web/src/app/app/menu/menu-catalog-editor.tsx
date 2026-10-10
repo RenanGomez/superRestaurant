@@ -23,7 +23,7 @@ import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, publishDi
 import { editorProductFraction, legacyFractionNotice, migrateLegacyFraction } from "../../../lib/menu-fraction";
 import { variantValidationError } from "../../../lib/menu-variants";
 import { reorder, reorderSubset } from "../../../lib/menu-reorder";
-import { ReorderControls, reorderRowProps } from "./reorder-controls";
+import { ReorderButtons, ReorderHandle, reorderRowProps } from "./reorder-controls";
 
 import { saveMenuCatalogAction, uploadMenuImageAction } from "./actions";
 
@@ -159,14 +159,17 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
           {canManage && <AddButton label="Agregar categoría" onClick={addCategory} />}
         </SectionHeader>
         {categories.length === 0 ? <EmptyText text="Agrega una categoría para comenzar el menú." /> : (
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          <div className="mt-4 flex flex-col gap-3">
             {categories.map((category, index) => (
-              <article key={category.categoryId} {...reorderRowProps("categories", index)} className="grid gap-3 rounded-xl border border-border bg-bg/50 p-3 sm:grid-cols-[1fr_auto_auto]">
-                <TextInput disabled={!canManage} hint="Nombre de la sección de la carta, por ejemplo Pizzas o Bebidas. El operador navega por estas categorías." label="Nombre" maxLength={80} value={category.name} onChange={(name) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, name } : entry))} />
-                <ReorderControls count={categories.length} disabled={!canManage} index={index} label={category.name} listKey="categories" onMove={(from, to) => setCategories((current) => reorder(current, from, to))} />
-                <div className="flex items-end gap-2 pb-1">
-                  <ActiveInput disabled={!canManage} checked={category.active} onChange={(active) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, active } : entry))} />
-                  {canManage && <RemoveButton label={`Quitar ${category.name}`} onClick={() => setRemoval({ id: category.categoryId, kind: "category", label: category.name })} />}
+              <article key={category.categoryId} {...reorderRowProps("categories", index)} className="flex min-w-0 items-center gap-3 rounded-xl border border-border bg-bg/50 p-3">
+                <ReorderHandle count={categories.length} disabled={!canManage} index={index} listKey="categories" onMove={(from, to) => setCategories((current) => reorder(current, from, to))} />
+                <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-[1fr_auto_auto]">
+                  <TextInput disabled={!canManage} hint="Nombre de la sección de la carta, por ejemplo Pizzas o Bebidas. El operador navega por estas categorías." label="Nombre" maxLength={80} value={category.name} onChange={(name) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, name } : entry))} />
+                  <div className="flex items-end"><ReorderButtons count={categories.length} disabled={!canManage} index={index} label={category.name} onMove={(from, to) => setCategories((current) => reorder(current, from, to))} /></div>
+                  <div className="flex items-end gap-2 pb-1">
+                    <ActiveInput disabled={!canManage} checked={category.active} onChange={(active) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, active } : entry))} />
+                    {canManage && <RemoveButton label={`Quitar ${category.name}`} onClick={() => setRemoval({ id: category.categoryId, kind: "category", label: category.name })} />}
+                  </div>
                 </div>
               </article>
             ))}
@@ -264,7 +267,9 @@ function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct
   const changeVariant = (variantId: string, patch: Partial<MenuProductVariantV1>): void =>
     change({ variants: variants.map((variant) => variant.variantId === variantId ? { ...variant, ...patch } : variant) });
   return (
-    <article {...reorderRowProps(`products-${product.categoryId}`, siblingIndex)} className="min-w-0 rounded-2xl border border-border bg-bg/40 p-3 sm:p-4">
+    <article {...reorderRowProps(`products-${product.categoryId}`, siblingIndex)} className="flex min-w-0 items-start gap-3 rounded-2xl border border-border bg-bg/40 p-3 sm:p-4">
+      <ReorderHandle align="start" count={siblingCount} disabled={!canManage} index={siblingIndex} listKey={`products-${product.categoryId}`} onMove={onMoveProduct} />
+      <div className="min-w-0 flex-1">
       <MenuPhoto canManage={canManage} imagePath={product.imagePath} name={product.name} supabaseUrl={supabaseUrl} target="product" targetId={product.productId} onChange={onProductImageChange} onUploadPendingChange={onUploadPendingChange} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <TextInput disabled={!canManage} hint="Nombre que ve el operador al tomar el pedido y que se imprime en la comanda." label="Producto" maxLength={120} value={product.name} onChange={(name) => change({ name })} />
@@ -279,7 +284,7 @@ function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct
           <select id={id} disabled={!canManage} value={product.unit} onChange={(event) => change({ unit: event.target.value })} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70">
             {unitOptions(product.unit).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>}</Field>
-        <ReorderControls count={siblingCount} disabled={!canManage} index={siblingIndex} label={product.name} listKey={`products-${product.categoryId}`} onMove={onMoveProduct} />
+        <div className="flex items-end"><ReorderButtons count={siblingCount} disabled={!canManage} index={siblingIndex} label={product.name} onMove={onMoveProduct} /></div>
         <div className="flex items-end gap-2 pb-1">
           <ActiveInput disabled={!canManage} checked={product.active} onChange={(active) => change({ active })} />
           {canManage && <RemoveButton label={`Quitar ${product.name}`} onClick={() => onRemove({ id: product.productId, kind: "product", label: product.name })} />}
@@ -297,17 +302,21 @@ function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct
         </div>
         {variants.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin tamaños; se usa el precio del producto.</p> :
           <div className="mt-3 grid gap-3">{variants.map((variant, variantIndex) => <div key={variant.variantId} {...reorderRowProps(`variants-${product.productId}`, variantIndex)}
-            className="grid min-w-0 gap-3 rounded-lg border border-border bg-bg/50 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)auto_auto]">
+            className="flex min-w-0 items-center gap-3 rounded-lg border border-border bg-bg/50 p-3">
+            <ReorderHandle count={variants.length} disabled={!canManage} index={variantIndex} listKey={`variants-${product.productId}`}
+              onMove={(from, to) => change({ variants: reorder(variants, from, to) })} />
+            <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)auto_auto]">
             <TextInput disabled={!canManage} hint="Cómo se llama esta presentación, por ejemplo Chica, Mediana o Familiar. No se puede repetir en el mismo producto." invalid={variantInvalid} label="Nombre del tamaño" maxLength={80} value={variant.name}
               onChange={(name) => changeVariant(variant.variantId, { name })} />
             <MoneyInput key={variant.variantId} hint="Precio de venta de este tamaño." label="Precio del tamaño" disabled={!canManage} currency={currency}
               value={variant.unitPriceMinor} onChange={(unitPriceMinor) => changeVariant(variant.variantId, { unitPriceMinor })} />
-            <ReorderControls count={variants.length} disabled={!canManage} index={variantIndex} label={variant.name || "tamaño nuevo"} listKey={`variants-${product.productId}`}
-              onMove={(from, to) => change({ variants: reorder(variants, from, to) })} />
+            <div className="flex items-end"><ReorderButtons count={variants.length} disabled={!canManage} index={variantIndex} label={variant.name || "tamaño nuevo"}
+              onMove={(from, to) => change({ variants: reorder(variants, from, to) })} /></div>
             <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={variant.active}
               onChange={(active) => changeVariant(variant.variantId, { active })} />
               {canManage && <RemoveButton label={`Quitar tamaño ${variant.name || "nuevo"}`}
                 onClick={() => onRemove({ id: variant.variantId, groupId: product.productId, kind: "variant", label: variant.name || "tamaño nuevo", unnamed: variant.name.trim() === "" })} />}
+            </div>
             </div>
           </div>)}</div>}
       </section>
@@ -342,6 +351,7 @@ function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct
       {groups.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin modificadores.</p> : groups.map((group, groupIndex) => (
         <ModifierGroupEditor key={group.groupId} siblingCount={groups.length} siblingIndex={groupIndex} onMoveGroup={(from, to) => onGroupsChange((current) => reorderSubset(current, (entry) => entry.productId === product.productId, from, to))} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl} onAddOption={() => onAddOption(group.groupId)} onChange={(changed) => onGroupsChange((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))} onOptionImageChange={(optionId, imagePath) => onOptionImageChange(group.groupId, optionId, imagePath)} onRemove={onRemove} onUploadPendingChange={onUploadPendingChange} />
       ))}
+      </div>
     </article>
   );
 }
@@ -447,12 +457,14 @@ function ModifierGroupEditor({ siblingCount, siblingIndex, onMoveGroup, canManag
 }): ReactNode {
   const change = (patch: Partial<MenuModifierGroupV1>): void => onChange({ ...group, ...patch });
   return (
-    <section {...reorderRowProps(`groups-${group.productId}`, siblingIndex)} className="mt-3 min-w-0 rounded-xl border border-border bg-surface p-3">
+    <section {...reorderRowProps(`groups-${group.productId}`, siblingIndex)} className="mt-3 flex min-w-0 items-start gap-3 rounded-xl border border-border bg-surface p-3">
+      <ReorderHandle align="start" count={siblingCount} disabled={!canManage} index={siblingIndex} listKey={`groups-${group.productId}`} onMove={onMoveGroup} />
+      <div className="min-w-0 flex-1">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <TextInput disabled={!canManage} hint="Nombre de la lista de opciones, por ejemplo Sabores o Extras." label="Grupo" maxLength={80} value={group.name} onChange={(name) => change({ name })} />
         <NumberInput disabled={!canManage} hint="Cuántas opciones debe elegir el operador como mínimo en este grupo. 0 = la elección es opcional." label="Mínimo total" min={0} max={1_000} value={group.minimumQuantity} onChange={(minimumQuantity) => change({ minimumQuantity })} />
         <NumberInput disabled={!canManage} hint="Cuántas opciones puede elegir como máximo en total, contando repeticiones de una misma opción." label="Máximo total" min={0} max={1_000} value={group.maximumQuantity} onChange={(maximumQuantity) => change({ maximumQuantity })} />
-        <ReorderControls count={siblingCount} disabled={!canManage} index={siblingIndex} label={group.name} listKey={`groups-${group.productId}`} onMove={onMoveGroup} />
+        <div className="flex items-end"><ReorderButtons count={siblingCount} disabled={!canManage} index={siblingIndex} label={group.name} onMove={onMoveGroup} /></div>
         <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={group.active} onChange={(active) => change({ active })} />{canManage && <RemoveButton label={`Quitar ${group.name}`} onClick={() => onRemove({ id: group.groupId, kind: "group", label: group.name })} />}</div>
       </div>
       <div className="mt-3 flex items-center justify-between gap-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted"><span className="inline-flex flex-wrap items-center gap-1.5">Opciones<FieldHint label="Opciones" text="Cada opción es una alternativa del grupo (por ejemplo Pepperoni) con su precio extra, que puede ser 0." /></span></p>{canManage && <AddButton label="Agregar opción" onClick={onAddOption} />}</div>
@@ -466,6 +478,7 @@ function ModifierGroupEditor({ siblingCount, siblingIndex, onMoveGroup, canManag
             <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={option.active} onChange={(active) => changeOption(group, option.optionId, { active }, onChange)} />{canManage && group.options.length > 1 && <RemoveButton label={`Quitar ${option.name}`} onClick={() => onRemove({ groupId: group.groupId, id: option.optionId, kind: "option", label: option.name })} />}</div>
           </div>
         ))}
+      </div>
       </div>
     </section>
   );

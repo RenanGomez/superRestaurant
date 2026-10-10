@@ -1,8 +1,10 @@
 import "reflect-metadata";
 
+import type { NestExpressApplication } from "@nestjs/platform-express";
 import { Test } from "@nestjs/testing";
 import { Pool, type QueryResultRow } from "pg";
 
+import { configureApiApp } from "../app-setup.js";
 import { AppModule } from "../app.module.js";
 import { AUTH_PRINCIPAL_VERIFIER, AccessTokenRejectedError, type AuthenticatedPrincipal } from "../auth/authentication.js";
 import { DATABASE_CLIENT, guardPostgresPool, type DatabaseClientPort } from "../database.js";
@@ -46,8 +48,8 @@ export async function bootstrapHttpApp(appApiUrl: string, principals: ReadonlyMa
     .overrideProvider(DATABASE_CLIENT).useValue(database)
     .overrideProvider(AUTH_PRINCIPAL_VERIFIER).useValue(verifier)
     .compile();
-  const app = module.createNestApplication({ logger: false });
-  app.setGlobalPrefix("api/v1");
+  const app = module.createNestApplication<NestExpressApplication>({ logger: false });
+  configureApiApp(app);
   await app.listen(0, "127.0.0.1");
   const baseUrl = `${await app.getUrl()}/api/v1`;
   return {
