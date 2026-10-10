@@ -76,7 +76,7 @@ export function ReorderControls({ count, disabled, index, label, listKey, onMove
     <div className="flex items-center gap-1" role="group" aria-label={`Posición de ${label}`}>
       <span role="img" aria-label="Arrastrar para reordenar" title="Arrastrar para reordenar"
         onPointerDown={start} onPointerMove={move} onPointerUp={finish} onPointerCancel={end}
-        className={`inline-flex min-h-11 min-w-11 select-none items-center justify-center gap-1.5 rounded-lg border px-2 text-text-muted [touch-action:none] ${dragging ? "cursor-grabbing border-accent bg-accent-soft text-accent" : "cursor-grab border-border bg-surface hover:border-accent hover:text-accent"}`}>
+        className={`inline-flex min-h-11 min-w-11 select-none items-center justify-center gap-1.5 rounded-lg border px-2 [touch-action:none] ${dragging ? "cursor-grabbing border-accent bg-accent-soft text-accent-hover" : "cursor-grab border-border bg-surface text-text-muted hover:border-accent hover:text-accent"}`}>
         <span aria-hidden="true" className="text-[18px] leading-none">⋮⋮</span>
         <span aria-hidden="true" className="hidden text-[11px] font-semibold sm:inline">Arrastrar</span>
       </span>

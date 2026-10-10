@@ -13,10 +13,14 @@ import { countModifierSelections, estimateSelectionMinor, expandModifierSelectio
   validateModifierSelection, type SelectionPlanLineDraft, type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import { useMenuImageBaseUrl } from "../../../lib/menu-image-url-context";
 import { menuImagePublicUrl } from "../../../lib/menu-images";
+import { uiButton, uiOption } from "../../../lib/ui-classes";
 
-const button = "min-h-11 min-w-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
-const optionButton = "flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-left text-sm hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent";
-const optionSelected = "border-accent bg-accent-soft font-semibold text-accent";
+const button = uiButton("secondary", "min-w-11");
+const bigButton = uiButton("secondary", "min-w-11 text-xl");
+/** Full-width option row; the selected state is a complete variant (white on accent), never layered over surface. */
+const optionButton = (selected: boolean, extra = "") => uiOption(selected, `flex w-full items-center justify-between gap-2 px-3 text-left${extra === "" ? "" : ` ${extra}`}`);
+const optionChip = (selected: boolean, extra = "") => uiOption(selected, `flex items-center justify-between gap-2 px-3 text-left${extra === "" ? "" : ` ${extra}`}`);
+const optionCard = (selected: boolean, inactive: boolean) => `grid gap-2 rounded-lg border p-2 text-sm ${selected ? "border-accent bg-accent text-white" : "border-border bg-surface text-text"}${inactive ? " opacity-50" : ""}`;
 
 interface ProductSheetProps {
   readonly product: MenuProductV1;
@@ -158,7 +162,7 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
       <header className="flex items-center gap-2 border-b border-border p-4">
         <h2 id="product-sheet-title" className="font-heading text-lg font-semibold">{product.name}</h2>
         <span className="grow" />
-        <button ref={closeRef} type="button" className={`${button}`} aria-label="Cerrar (Esc)" disabled={closeDisabled} onClick={onClose}>✕</button>
+        <button ref={closeRef} type="button" className={button} aria-label="Cerrar (Esc)" disabled={closeDisabled} onClick={onClose}>✕</button>
       </header>
       <div className="grid flex-1 gap-4 overflow-auto p-4">
         {variantRequired && <fieldset className="grid gap-2">
@@ -166,7 +170,7 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {activeVariants.map((variant) => <button key={variant.variantId} type="button"
               disabled={busy || confirmed || lockSelection} aria-pressed={variantId === variant.variantId}
-              className={`${optionButton} min-w-0 ${variantId === variant.variantId ? optionSelected : ""}`}
+              className={optionButton(variantId === variant.variantId, "min-w-0")}
               onClick={() => chooseVariant(variant.variantId)}>
               <span className="min-w-0 break-words">{variant.name}</span><span className="shrink-0">{formatMinorUnits(variant.unitPriceMinor, currency)}</span>
             </button>)}
@@ -177,7 +181,7 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
           <div className="grid grid-cols-2 gap-2">
             {([["Entera", false], ["Mitad y mitad", true]] as const).map(([label, split]) => <button key={label} type="button"
               disabled={busy || confirmed || lockSelection} aria-pressed={splitChosen === split}
-              className={`${optionButton} justify-center ${splitChosen === split ? optionSelected : ""}`}
+              className={optionButton(splitChosen === split, "justify-center")}
               onClick={() => setSplitChosen(split)}>{label}</button>)}
           </div>
         </fieldset>}
@@ -209,8 +213,8 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
                   <OptionPhoto imagePath={option.imagePath} name={option.name} supabaseUrl={supabaseUrl} />
                   <span>{option.name}</span>
                 </span>
-                {option.unitPriceMinor > 0 && <span className="text-xs text-text-muted">+{formatMinorUnits(option.unitPriceMinor, currency)}</span>}</>;
-              return repeatable ? <div key={option.optionId} className={`grid gap-2 rounded-lg border border-border bg-surface p-2 text-sm ${selectedCount > 0 ? optionSelected : ""} ${!option.active ? "opacity-50" : ""}`}>
+                {option.unitPriceMinor > 0 && <span className="text-xs font-normal">+{formatMinorUnits(option.unitPriceMinor, currency)}</span>}</>;
+              return repeatable ? <div key={option.optionId} className={optionCard(selectedCount > 0, !option.active)}>
                 <div className="flex min-h-11 flex-wrap items-center justify-between gap-1">{label}</div>
                 <div className="flex items-center justify-between gap-2">
                   <button type="button" className={button} aria-label={`Quitar una unidad de ${option.name}`}
@@ -224,7 +228,7 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
                 </div>
               </div> : <button key={option.optionId} type="button"
                 disabled={!option.active || busy || confirmed || lockSelection || (group.maximumQuantity > 1 && selectedCount === 0 && chosen.length >= group.maximumQuantity)}
-                className={`${optionButton} ${selectedCount > 0 ? optionSelected : ""} ${!option.active ? "opacity-50" : ""}`}
+                className={optionButton(selectedCount > 0, option.active ? "" : "opacity-50")}
                 aria-pressed={selectedCount > 0} onClick={() => changeOption(group, option.optionId, option.maximumQuantity, 1)}>
                 {label}
               </button>;
@@ -244,15 +248,15 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
         {quoteKey !== null && catalogConflictKey === quoteKey && <p className="text-xs text-error">El menú cambió, recarga.</p>}
       </div>
       {error && <p role="alert" className="mx-4 rounded-lg bg-error-bg p-3 text-sm">{error}</p>}
-      {confirmed && <p role="status" aria-live="polite" className="mx-4 rounded-lg bg-success-bg px-3 py-2 text-sm font-semibold text-success">
+      {confirmed && <p role="status" aria-live="polite" className="mx-4 rounded-lg bg-success-bg px-3 py-2 text-sm font-semibold text-text">
         {confirmedTotalMinor === null ? (initialLine ? "Guardado" : "Agregado") : `${initialLine ? "Guardado" : "Agregado"} · ${formatMinorUnits(confirmedTotalMinor, currency)}`}
       </p>}
       <footer className="flex flex-wrap items-center gap-3 border-t border-border p-4">
         <div className="flex items-center gap-2">
-          <button type="button" className={`${button} text-xl`} aria-label="Menos" disabled={busy || confirmed || lockSelection || quantity <= 1}
+          <button type="button" className={bigButton} aria-label="Menos" disabled={busy || confirmed || lockSelection || quantity <= 1}
             onClick={() => setQuantity((current) => Math.max(1, current - 1))}>−</button>
           <span className="min-w-9 text-center text-lg font-bold">{quantity}</span>
-          <button type="button" className={`${button} text-xl`} aria-label="Más" disabled={busy || confirmed || lockSelection || quantity >= CAPTURE_SELECTION_LINE_MAX_QUANTITY}
+          <button type="button" className={bigButton} aria-label="Más" disabled={busy || confirmed || lockSelection || quantity >= CAPTURE_SELECTION_LINE_MAX_QUANTITY}
             onClick={() => setQuantity((current) => Math.min(CAPTURE_SELECTION_LINE_MAX_QUANTITY, current + 1))}>+</button>
         </div>
         <span className="grow" />
@@ -287,7 +291,6 @@ interface HalfColumnProps {
  */
 function HalfColumn({ half, draft, flavorGroup, extraGroup, excludable, currency, variantPriceMinor, disabled, otherHalfBuilt, onBuilt, onFlavor, onEntry }: HalfColumnProps) {
   const title = halfLabel(half);
-  const chip = "flex min-h-11 items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-left text-sm hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
   const activeIngredients = (extraGroup?.options ?? []).filter((option) => option.active);
   const canBuild = extraGroup !== undefined && activeIngredients.length > 0;
   const limit = draft.built ? builtHalfIngredientLimit(extraGroup) : HALF_MAX_EXTRAS;
@@ -297,16 +300,16 @@ function HalfColumn({ half, draft, flavorGroup, extraGroup, excludable, currency
       <legend className="text-sm font-semibold">Sabor</legend>
       {(flavorGroup?.options ?? []).filter((option) => option.active).map((option) => <button key={option.optionId} type="button"
         disabled={disabled} aria-pressed={draft.flavorOptionId === option.optionId}
-        className={`${chip} text-base ${draft.flavorOptionId === option.optionId ? optionSelected : ""}`}
+        className={optionChip(draft.flavorOptionId === option.optionId, "text-base")}
         onClick={() => onFlavor(option.optionId)}>
         <span>{option.name}</span>
-        <span className="text-xs text-text-muted">{formatMinorUnits(option.unitPriceMinor === 0 ? variantPriceMinor : option.unitPriceMinor, currency)}</span>
+        <span className="text-xs font-normal">{formatMinorUnits(option.unitPriceMinor === 0 ? variantPriceMinor : option.unitPriceMinor, currency)}</span>
       </button>)}
       {canBuild && <button type="button" disabled={disabled || (otherHalfBuilt && !draft.built)} aria-pressed={draft.built}
         aria-describedby={otherHalfBuilt && !draft.built ? `${half}-built-note` : undefined}
-        className={`${chip} text-base ${draft.built ? optionSelected : ""}`} onClick={() => onBuilt(!draft.built)}>
+        className={optionChip(draft.built, "text-base")} onClick={() => onBuilt(!draft.built)}>
         <span>Armar con ingredientes</span>
-        <span className="text-xs text-text-muted">{formatMinorUnits(variantPriceMinor, currency)}</span>
+        <span className="text-xs font-normal">{formatMinorUnits(variantPriceMinor, currency)}</span>
       </button>}
       {canBuild && otherHalfBuilt && !draft.built &&
         <p id={`${half}-built-note`} className="text-xs text-text-muted">La otra mitad ya es armada; aquí elige un sabor.</p>}
@@ -317,9 +320,9 @@ function HalfColumn({ half, draft, flavorGroup, extraGroup, excludable, currency
         const chosen = draft.extraOptionIds.includes(option.optionId);
         return <button key={option.optionId} type="button" aria-pressed={chosen}
           disabled={disabled || (!chosen && draft.extraOptionIds.length >= limit)}
-          className={`${chip} ${chosen ? optionSelected : ""}`} onClick={() => onEntry("extraOptionIds", option.optionId, limit)}>
+          className={optionChip(chosen)} onClick={() => onEntry("extraOptionIds", option.optionId, limit)}>
           <span>{option.name}</span>
-          {option.unitPriceMinor > 0 && <span className="text-xs text-text-muted">+{formatMinorUnits(halfExtraPriceMinor(option.unitPriceMinor), currency)}</span>}
+          {option.unitPriceMinor > 0 && <span className="text-xs font-normal">+{formatMinorUnits(halfExtraPriceMinor(option.unitPriceMinor), currency)}</span>}
         </button>;
       })}
     </fieldset>}
@@ -329,9 +332,9 @@ function HalfColumn({ half, draft, flavorGroup, extraGroup, excludable, currency
         const chosen = draft.extraOptionIds.includes(option.optionId);
         return <button key={option.optionId} type="button" aria-pressed={chosen}
           disabled={disabled || (!chosen && draft.extraOptionIds.length >= HALF_MAX_EXTRAS)}
-          className={`${chip} ${chosen ? optionSelected : ""}`} onClick={() => onEntry("extraOptionIds", option.optionId)}>
+          className={optionChip(chosen)} onClick={() => onEntry("extraOptionIds", option.optionId)}>
           <span>{option.name}</span>
-          {option.unitPriceMinor > 0 && <span className="text-xs text-text-muted">+{formatMinorUnits(halfExtraPriceMinor(option.unitPriceMinor), currency)}</span>}
+          {option.unitPriceMinor > 0 && <span className="text-xs font-normal">+{formatMinorUnits(halfExtraPriceMinor(option.unitPriceMinor), currency)}</span>}
         </button>;
       })}
     </fieldset>}
@@ -341,7 +344,7 @@ function HalfColumn({ half, draft, flavorGroup, extraGroup, excludable, currency
         {excludable.map((ingredient) => {
           const chosen = draft.excludedIngredientIds.includes(ingredient);
           return <button key={ingredient} type="button" aria-pressed={chosen} disabled={disabled}
-            className={`${chip} ${chosen ? optionSelected : ""}`} onClick={() => onEntry("excludedIngredientIds", ingredient)}>
+            className={optionChip(chosen)} onClick={() => onEntry("excludedIngredientIds", ingredient)}>
             Sin {ingredient}
           </button>;
         })}
@@ -355,5 +358,5 @@ function OptionPhoto({ imagePath, name, supabaseUrl }: { readonly imagePath: str
   const url = menuImagePublicUrl(supabaseUrl, imagePath);
   return url !== null && failedUrl !== url
     ? <img src={url} alt="" loading="lazy" onError={() => setFailedUrl(url)} className="h-11 w-11 shrink-0 rounded-lg object-cover" />
-    : <span aria-hidden="true" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-accent-soft font-bold text-accent">{name.trim().charAt(0).toLocaleUpperCase("es-MX")}</span>;
+    : <span aria-hidden="true" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-surface font-bold text-accent">{name.trim().charAt(0).toLocaleUpperCase("es-MX")}</span>;
 }

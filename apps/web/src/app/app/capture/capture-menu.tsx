@@ -8,8 +8,7 @@ import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { useMenuImageBaseUrl } from "../../../lib/menu-image-url-context";
 import { menuImagePublicUrl } from "../../../lib/menu-images";
 
-const categoryButton = "flex min-h-11 w-full items-center gap-2 rounded-lg border border-transparent px-3 py-2 text-left text-sm hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent sm:w-auto";
-const categoryActive = "border-accent bg-accent-soft font-semibold text-accent";
+const categoryButton = (active: boolean) => `flex min-h-11 w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-accent sm:w-auto ${active ? "border-accent bg-accent-soft font-semibold text-accent-hover" : "border-transparent text-text hover:bg-bg"}`;
 const input = "min-h-11 rounded-lg border border-border bg-bg px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-accent";
 const productCard = "relative flex min-h-[160px] flex-col overflow-hidden rounded-xl border border-border bg-surface text-left focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60";
 const badge = "absolute right-2 top-2 rounded-full bg-error-bg px-2 py-0.5 text-xs font-semibold text-error";
@@ -55,7 +54,7 @@ export function CaptureMenu({ catalog, currency, lineQuantities, busy, searchInp
   return <div className="flex min-h-0 flex-1 flex-col sm:flex-row" data-testid="capture-menu">
     <nav aria-label="Categorías" className="flex shrink-0 gap-2 overflow-x-auto border-b border-border p-2 sm:w-44 sm:flex-col sm:overflow-visible sm:border-b-0 sm:border-r sm:p-3">
       {grouped.map((entry) => <button key={entry.category.categoryId} type="button"
-        className={`${categoryButton} ${(activeCategory?.category.categoryId === entry.category.categoryId && normalizedQuery === "") ? categoryActive : ""}`}
+        className={categoryButton(activeCategory?.category.categoryId === entry.category.categoryId && normalizedQuery === "")}
         onClick={() => { setActiveCategoryId(entry.category.categoryId); setQuery(""); }}>
         {entry.category.name}
       </button>)}

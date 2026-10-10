@@ -8,6 +8,7 @@ import { getCustomerAutocompleteRequest, getCustomerDirectorySuggestions, insert
 import { countOrderArticles } from "../../../lib/customer-order-history";
 import { formatDeliveryMatch } from "../../../lib/delivery-zones";
 import { matchDeliveryAddress } from "../delivery-match-action";
+import { uiButton } from "../../../lib/ui-classes";
 
 export type CustomerAction = "search" | "detail" | "profile" | "address" | "validate";
 export type CustomerActionResult = CustomerRequestResult<CustomerDirectorySearchResultV1 | CustomerDirectoryDetailV1> & { readonly command?: unknown };
@@ -18,7 +19,7 @@ export interface CustomerEditorProps {
   readonly historyAction: (input: unknown) => Promise<{ ok: true; value: CustomerRecentOrderListV1 } | { ok: false }>;
 }
 const inputClass = "min-h-11 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-accent";
-const buttonClass = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
+const buttonClass = uiButton();
 const panelClass = "min-w-0 rounded-xl border border-border bg-surface p-4 sm:p-5";
 const phoneLabels = ["Principal", "Secundario", "Trabajo"] as const;
 const addressLabelOptions = ["Casa", "Trabajo"] as const;

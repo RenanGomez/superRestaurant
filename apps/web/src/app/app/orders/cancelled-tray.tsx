@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { BranchScope, CancelledWorkCursorV1, CancelledWorkItemV1 } from "@super-restaurant/shared-types";
+import { uiButton } from "../../../lib/ui-classes";
 import {
   CANCELLED_TRAY_LIMIT,
   cancelledItemKey,
@@ -14,7 +15,7 @@ import {
   type CancelledTrayRequestResult,
 } from "../../../lib/order-cancellation";
 
-const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
+const button = uiButton();
 const errors = {
   denied: "Tu sesión o rol ya no permite ver las canceladas de esta sucursal.",
   invalid: "No se pudo leer la sucursal seleccionada.",
