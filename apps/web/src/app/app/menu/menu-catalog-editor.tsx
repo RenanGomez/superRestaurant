@@ -562,7 +562,7 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
   return <div className="flex min-w-0 flex-wrap items-center gap-2 py-2">
     {url !== null && failedPath !== imagePath
       ? <img key={url} src={url} alt="" loading="lazy" onError={() => setFailedPath(imagePath)} className="h-14 w-14 rounded-lg border border-border object-cover" />
-      : <span aria-hidden="true" className="flex h-14 w-14 items-center justify-center rounded-lg bg-accent-soft text-lg font-bold text-accent">{name.trim().charAt(0).toLocaleUpperCase("es-MX")}</span>}
+      : <span aria-hidden="true" className="flex h-14 w-14 items-center justify-center rounded-lg bg-accent-soft text-lg font-bold text-accent-hover">{name.trim().charAt(0).toLocaleUpperCase("es-MX")}</span>}
     {canManage && <>
       <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" aria-label={`Foto de ${name}`} onChange={(event) => { void choose(event); }} />
       <button type="button" disabled={busy} onClick={() => fileInput.current?.click()} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60">{busy ? "Subiendo…" : "Foto"}</button>

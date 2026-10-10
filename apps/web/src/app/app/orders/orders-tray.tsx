@@ -16,10 +16,10 @@ import { CancelledTray } from "./cancelled-tray";
 import { OrderDetailPanel, type OrderDetailActions } from "./order-detail-panel";
 import type { CancelledTrayRequestResult } from "../../../lib/order-cancellation";
 import type { PrintHeader } from "../../../lib/print-documents";
+import { uiButton, uiChip } from "../../../lib/ui-classes";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
-const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
-const chip = "min-h-11 rounded-full border border-border px-4 py-2 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-accent";
+const button = uiButton();
 const errors = { denied: "Tu sesión o rol ya no permite ver las órdenes de esta sucursal.",
   invalid: "No se pudo leer la sucursal seleccionada.", unavailable: "No se pudo confirmar el resultado. Intenta actualizar." } as const;
 
@@ -92,7 +92,7 @@ export function OrdersTray({ scope, action, cancelledAction, canCheckout, detail
   return <section className={panel}>
     <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="Vista de órdenes">
       {([["active", "Activas"], ["cancelled", "Canceladas"]] as const).map(([value, label]) => <button key={value} type="button"
-        className={`${chip} ${view === value ? "border-accent bg-accent text-white" : ""}`}
+        className={uiChip(view === value)}
         aria-pressed={view === value} onClick={() => setView(value)}>{label}</button>)}
     </div>
     {view === "cancelled" && <CancelledTray scope={scope} action={cancelledAction} onOpenDetail={setOpenOrderId} />}
@@ -100,7 +100,7 @@ export function OrdersTray({ scope, action, cancelledAction, canCheckout, detail
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap gap-2" role="group" aria-label="Filtrar por canal">
         {filters.map((entry) => <button key={entry.value} type="button"
-          className={`${chip} ${filter === entry.value ? "border-accent bg-accent text-white" : ""}`}
+          className={uiChip(filter === entry.value)}
           aria-pressed={filter === entry.value} onClick={() => setFilter(entry.value)}>{entry.label}</button>)}
       </div>
       <button type="button" className={button} disabled={busy} onClick={refresh}>Actualizar</button>

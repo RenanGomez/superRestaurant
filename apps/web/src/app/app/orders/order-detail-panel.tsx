@@ -15,6 +15,7 @@ import { cancelOrderErrorMessage, cancelOrderResultMessage, cancelOrderWarning, 
 import { ORDER_CANCELLATION_REASON_MAX_LENGTH } from "@super-restaurant/shared-types";
 import { CaptureMenu } from "../capture/capture-menu";
 import { ProductSheet } from "../capture/product-sheet";
+import { uiButton } from "../../../lib/ui-classes";
 
 const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -146,8 +147,9 @@ function OrderProductDialog({ product, groups, currency, busy, error, selectionD
 
 const overlay = "fixed inset-0 z-40 flex items-start justify-center bg-black/40 p-4 sm:items-center";
 const sheet = "max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-surface p-4 sm:p-5";
-const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
-const primaryButton = `${button} border-accent bg-accent text-white hover:bg-accent`;
+const button = uiButton();
+const primaryButton = uiButton("primary");
+const dangerButton = uiButton("danger");
 
 const GROUP_LABELS: Record<OrderItemStatusGroup, string> = {
   cancelled: "Canceladas", delivered: "Entregadas", pending: "Pendientes",
@@ -457,7 +459,7 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
             {busyAction === "sendToKitchen" ? "Enviando…" : actionLabel("sendToKitchen")}
           </button>}
           {canCheckout && hasAction(detail, "checkout") && <a href={`/app/caja?orderId=${detail.orderId}`} className={button}>{actionLabel("checkout")}</a>}
-          {hasAction(detail, "cancelOrder") && <button type="button" className={`${button} text-error`} disabled={busyAction !== undefined}
+          {hasAction(detail, "cancelOrder") && <button type="button" className={dangerButton} disabled={busyAction !== undefined}
             onClick={() => setCancelOrderOpen(true)}>
             {busyAction === "cancelOrder" ? "Cancelando…" : actionLabel("cancelOrder")}
           </button>}

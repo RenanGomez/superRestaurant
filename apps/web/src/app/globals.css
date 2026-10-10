@@ -15,12 +15,14 @@
   --color-surface: oklch(100% 0 0);
   --color-text: oklch(24% 0.02 250);
   --color-text-muted: oklch(48% 0.018 250);
-  --color-accent: oklch(55% 0.14 230);
+  --color-accent: oklch(53% 0.14 230);
   --color-accent-hover: oklch(47% 0.14 230);
+  --color-accent-soft: oklch(95% 0.02 230);
   --color-border: oklch(90% 0.008 250);
   --color-error: oklch(55% 0.18 25);
   --color-error-bg: oklch(96% 0.03 25);
   --color-success: oklch(62% 0.14 155);
+  --color-success-bg: oklch(95% 0.04 155);
   --color-selected: oklch(80% 0.17 85);
   --color-nav: oklch(20% 0.03 250);
   --color-category-1: oklch(90% 0.055 20);
@@ -38,16 +40,23 @@ body {
   color: var(--color-text);
 }
 
-a {
-  color: var(--color-accent);
-  text-decoration: none;
-}
-a:hover {
-  color: var(--color-accent-hover);
+/*
+ * Default link color lives in the base layer so Tailwind utilities (`text-white` on a `bg-accent` link,
+ * `text-text` on a neutral button link) win over it. When this rule was unlayered it beat every layered
+ * utility and links styled as buttons rendered accent text on accent backgrounds.
+ */
+@layer base {
+  a {
+    color: var(--color-accent);
+    text-decoration: none;
+  }
+  a:hover {
+    color: var(--color-accent-hover);
+  }
 }
 /*
- * The unlayered `a` rules above beat Tailwind's layered utilities, so links that must not be blue
- * (sidebar, neutral buttons) opt out with these classes instead of fighting with `!important`.
+ * Unlayered opt-outs for links that must keep a fixed color even when a utility says otherwise
+ * (sidebar, neutral buttons).
  */
 a.nav-link, a.nav-link:hover, a.nav-link:visited, a.link-white, a.link-white:hover, a.link-white:visited { color: #fff; }
 a.link-text, a.link-text:hover, a.link-text:visited { color: var(--color-text); }

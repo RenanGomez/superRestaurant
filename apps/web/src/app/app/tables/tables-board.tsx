@@ -9,6 +9,7 @@ import { captureDeviceId } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { watchTabReturn } from "../../../lib/revalidate-on-return";
 import { planCanvasStyle, planPlacement, planViewBox } from "../../../lib/floor-plan";
+import { uiButton, uiOption } from "../../../lib/ui-classes";
 import { tableShapeClass } from "../../../lib/table-shape";
 import { groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterLabel, waiterOptions } from "../../../lib/tables-board";
 
@@ -17,8 +18,8 @@ type Failure = { readonly ok: false; readonly error: ErrorCode };
 type Attempt = { readonly eventId: string; readonly idempotencyKey: string; readonly occurredAt: string; readonly deviceId: string };
 type Snapshot = { readonly ok: true; readonly board: TableBoardV1; readonly layout: DiningLayoutV1; readonly shift: OperationalShiftSummaryV1 | null; readonly timeZone: string };
 type Selected = { readonly tableId: string; readonly name: string; readonly orders: readonly TableBoardActiveOrderV1[] };
-const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
-const primary = `${button} border-accent bg-accent text-white`;
+const button = uiButton();
+const primary = uiButton("primary");
 
 interface Props {
   readonly scope: BranchScope;
@@ -57,7 +58,7 @@ function WaiterPicker({ members, actorId, current, disabled, allowNone, onPick }
   readonly allowNone: boolean; readonly onPick: (userId: string | null) => void;
 }) {
   const others = waiterOptions(members ?? [], actorId);
-  const option = (id: string | null, label: string) => <button key={id ?? "none"} type="button" className={`${current === id ? primary : button} min-h-11 min-w-24`}
+  const option = (id: string | null, label: string) => <button key={id ?? "none"} type="button" className={uiOption(current === id, "min-w-24")}
     aria-pressed={current === id} disabled={disabled || (!allowNone && current === id)} onClick={() => onPick(id)}>{label}</button>;
   return <div>
     <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Elegir mesero">

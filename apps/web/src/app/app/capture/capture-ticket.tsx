@@ -5,8 +5,10 @@ import type { CaptureSelectionPlanProjectionV1, MenuCatalogV1 } from "@super-res
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { halfTicketLines } from "../../../lib/line-halves";
 import { variantNameFor } from "../../../lib/menu-variants";
+import { uiButton } from "../../../lib/ui-classes";
 
-const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
+const button = uiButton();
+const dangerButton = uiButton("danger");
 const qtyButton = "min-h-10 min-w-10 rounded-lg border border-border bg-surface text-lg font-bold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
 
 interface CaptureTicketProps {
@@ -63,7 +65,7 @@ export function CaptureTicket({ projection, catalog, busyLineId, locked, onIncre
               {line.note !== null ? "Editar nota" : "Nota"}
             </button>
             <span className="grow" />
-            <button type="button" className={`${button} text-error`} aria-label={`Quitar línea de ${line.productName}`}
+            <button type="button" className={dangerButton} aria-label={`Quitar línea de ${line.productName}`}
               disabled={locked || busyLineId === line.lineId} onClick={() => onRemove(line.lineId)}>Quitar</button>
           </div>
         </li>)}</ul>}
@@ -75,7 +77,7 @@ export function CaptureTicket({ projection, catalog, busyLineId, locked, onIncre
     </div>
     <div className="grid gap-2 p-3 pt-0">
       <button type="button" className={button} disabled={locked} onClick={onHold}>Guardar para después<span className="block text-xs font-normal">Se conserva para retomarla</span></button>
-      <button type="button" className={`${button} text-error`} disabled={locked} onClick={onNoSale}>Cancelar<span className="block text-xs font-normal">Queda registrada como cancelada</span></button>
+      <button type="button" className={dangerButton} disabled={locked} onClick={onNoSale}>Cancelar<span className="block text-xs font-normal">Queda registrada como cancelada</span></button>
     </div>
   </>;
 

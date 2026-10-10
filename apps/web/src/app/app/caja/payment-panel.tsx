@@ -115,7 +115,7 @@ export function PaymentPanel({ checkout, audit }: {
 }
 
 function Method({ label, selected, onClick }: { readonly label: string; readonly selected: boolean; readonly onClick: () => void }) {
-  return <button type="button" onClick={onClick} aria-pressed={selected} className={`min-h-12 rounded-xl border p-2 text-xs font-semibold ${selected ? "border-accent bg-accent-soft text-accent" : "border-border bg-surface"}`}>{label}</button>;
+  return <button type="button" onClick={onClick} aria-pressed={selected} className={`min-h-12 rounded-xl border p-2 text-xs font-semibold ${selected ? "border-accent bg-accent-soft text-accent-hover" : "border-border bg-surface"}`}>{label}</button>;
 }
 function QuickAmount({ label, onClick, disabled = false }: { readonly label: string; readonly onClick: () => void; readonly disabled?: boolean }) {
   return <button type="button" onClick={onClick} disabled={disabled} className="min-h-12 rounded-xl border border-border bg-surface px-1 text-sm font-semibold disabled:opacity-40">{label}</button>;

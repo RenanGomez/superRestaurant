@@ -6,9 +6,10 @@ import { CheckField, Field } from "../../../components/field-hint";
 import { captureDeviceId } from "../../../lib/capture-workspace";
 import { canonicalizeLocalities, canonicalizePostalCodes, parseDeliveryFeeMinor } from "../../../lib/delivery-zones";
 import type { DeliveryActionResult } from "./actions";
+import { uiButton } from "../../../lib/ui-classes";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
-const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
+const button = uiButton();
 const input = "min-h-11 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-accent";
 const errors = { invalid: "Revisa los datos de la zona.", denied: "Tu sesión o rol ya no permite administrar zonas.",
   missing: "La zona ya no existe.", conflict: "La zona cambió en otro dispositivo. Actualiza la lista antes de guardar.",

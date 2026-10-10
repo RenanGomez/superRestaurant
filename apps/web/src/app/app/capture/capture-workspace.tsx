@@ -64,9 +64,10 @@ import { CaptureTicket } from "./capture-ticket";
 import { buildKitchenDocuments, type PrintDocument } from "../../../lib/print-documents";
 import { PrintPreview } from "../print-preview";
 import { ProductSheet } from "./product-sheet";
+import { uiButton } from "../../../lib/ui-classes";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
-const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
+const button = uiButton();
 const input = "min-h-11 rounded-lg border border-border bg-bg px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-accent";
 const messages = {
   invalid: "Revisa la selección. La dirección debe estar completa y validada para esta sucursal.",

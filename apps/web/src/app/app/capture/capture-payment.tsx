@@ -15,9 +15,10 @@ import {
 } from "../../../lib/capture-payment";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { currencyFractionDigits } from "../../../lib/money-scale";
+import { uiButton, uiOption } from "../../../lib/ui-classes";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
-const button = "min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
+const button = uiButton();
 const input = "min-h-11 rounded-lg border border-border bg-bg px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-accent";
 const methods: readonly CapturePaymentIntentMethodV1[] = ["cash", "card_manual", "transfer"];
 interface CapturePaymentProps {
@@ -156,10 +157,10 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
       {methods.map((candidate) => {
         const label = describePaymentMethod(candidate, timing);
         return <button key={candidate} type="button" disabled={busy || !currencySupported}
-          className={`${button} min-h-11 ${method === candidate ? "border-accent bg-bg" : ""}`}
+          className={uiOption(method === candidate)}
           aria-pressed={method === candidate} onClick={() => chooseMethod(candidate)}>
           <span className="block">{label.label}{status(`method:${candidate}`) === "Guardando…" ? " · Guardando…" : ""}</span>
-          <span className="block text-xs text-text-muted">{label.notice}</span>
+          <span className="block text-xs font-normal">{label.notice}</span>
         </button>;
       })}
     </div>
@@ -168,7 +169,7 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
       <span className="text-sm font-semibold">¿Paga con?</span>
       <div className="flex flex-wrap gap-2">
         {suggestions.map((amountMinor) => <button key={amountMinor} type="button" disabled={busy || !currencySupported}
-          className={`${button} ${tenderedAmountMinor === amountMinor ? "border-accent bg-bg" : ""}`}
+          className={uiOption(tenderedAmountMinor === amountMinor)}
           aria-pressed={tenderedAmountMinor === amountMinor} onClick={() => chooseTender(amountMinor)}>
           {totalMinor !== null && amountMinor === totalMinor ? "Exacto" : formatMinorUnits(amountMinor, summaryCurrency)}{status(`tender:${amountMinor}`) === "Guardando…" ? " · Guardando…" : ""}
         </button>)}
@@ -194,7 +195,7 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
       <span className="text-sm font-semibold">Propina (separada del total)</span>
       <div className="flex flex-wrap gap-2">
         {tipChips.map((chip) => <button key={chip.amountMinor} type="button" disabled={busy || !currencySupported}
-          className={`${button} ${tipMinor === chip.amountMinor ? "border-accent bg-bg" : ""}`}
+          className={uiOption(tipMinor === chip.amountMinor)}
           aria-pressed={tipMinor === chip.amountMinor} onClick={() => chooseTip(chip.amountMinor)}>
           {chip.label}{status(`tip:${chip.amountMinor}`) === "Guardando…" ? " · Guardando…" : ""}
         </button>)}

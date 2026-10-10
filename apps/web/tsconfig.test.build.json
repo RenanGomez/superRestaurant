@@ -91,6 +91,9 @@
     "src/lib/finance.test.ts",
     "src/lib/day-summary.ts",
     "src/lib/day-summary.test.ts",
+    "src/lib/ui-classes.ts",
+    "src/lib/class-conflicts.ts",
+    "src/lib/class-conflicts.test.ts",
     "src/proxy.ts",
     "src/proxy.test.ts",
     "src/test-doubles/supabase-ssr.ts"
