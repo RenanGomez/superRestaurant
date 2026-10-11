@@ -13,6 +13,8 @@
     "types": ["node"]
   },
   "include": [
+    "src/app/app/caja/caja-view.ts",
+    "src/app/app/caja/caja-view.test.ts",
     "src/app/app/caja/caja-helpers.ts",
     "src/app/app/caja/caja-helpers.test.ts",
     "src/app/app/caja/receipt.ts",

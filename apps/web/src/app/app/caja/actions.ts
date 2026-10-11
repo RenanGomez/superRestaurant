@@ -181,24 +181,24 @@ export async function collectPaymentAction(formData: FormData): Promise<{ status
 }
 
 export async function closeCashRegisterAction(formData: FormData): Promise<void> {
-  if (textField(formData, "confirmClose") !== "yes") redirect("/app/caja?cashError=close_not_confirmed");
+  if (textField(formData, "confirmClose") !== "yes") redirect("/app/caja/corte?cashError=close_not_confirmed");
   const context = await getAuthorizedContext();
   const cookieStore = await cookies();
   const registerId = readUuidCookie(cookieStore, CASH_REGISTER_COOKIE);
   const deviceId = readUuidCookie(cookieStore, DEVICE_COOKIE);
   const cashRegisterSessionId = uuidField(formData, "cashRegisterSessionId");
   if (registerId === undefined || deviceId === undefined || cashRegisterSessionId === undefined) {
-    redirect("/app/caja?cashError=context_invalid");
+    redirect("/app/caja/corte?cashError=context_invalid");
   }
   const report = await getCashRegisterReport(context.accessToken, context.apiBaseUrl, {
     cashRegisterSessionId, deviceId, registerId, schemaVersion: 1, scope: context.scope,
   });
-  if (report.status !== "ok") redirect(`/app/caja?cashError=${errorCode(report.status)}`);
+  if (report.status !== "ok") redirect(`/app/caja/corte?cashError=${errorCode(report.status)}`);
   const countedClosingBalanceMinor = parseMoneyInputToMinor(textField(formData, "countedClosingBalancePesos") ?? "", report.value.register.currency);
-  if (countedClosingBalanceMinor === null) redirect("/app/caja?cashError=invalid_amount");
+  if (countedClosingBalanceMinor === null) redirect("/app/caja/corte?cashError=invalid_amount");
   const reason = optionalBoundedTextField(formData, "reason", 500);
   if (countedClosingBalanceMinor !== report.value.register.expectedCashBalanceMinor && (reason === null || reason === undefined)) {
-    redirect("/app/caja?cashError=reason_required");
+    redirect("/app/caja/corte?cashError=reason_required");
   }
   const result = await closeCashRegister(context.accessToken, context.apiBaseUrl, {
     cashRegisterExpectedVersion: report.value.register.version,
@@ -212,10 +212,11 @@ export async function closeCashRegisterAction(formData: FormData): Promise<void>
     schemaVersion: 1,
     scope: context.scope,
   });
-  if (result.status !== "ok") redirect(`/app/caja?cashError=${errorCode(result.status)}`);
+  if (result.status !== "ok") redirect(`/app/caja/corte?cashError=${errorCode(result.status)}`);
   cookieStore.set(CASH_REGISTER_SESSION_COOKIE, cashRegisterSessionId, cookieOptions(context.cookiesSecure));
+  revalidatePath("/app/caja/corte");
   revalidatePath("/app/caja");
-  redirect("/app/caja?cashStatus=closed");
+  redirect("/app/caja/corte?cashStatus=closed");
 }
 
 interface AuthorizedFinancialContext {
