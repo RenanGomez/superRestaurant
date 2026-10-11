@@ -311,9 +311,15 @@ export function OrderDetailPanel({ orderId, adding, onAddingChange, menuSlot, ac
   // falls back to the detail view; otherwise the catalog is loaded the first time the panel shows.
   useEffect(() => {
     if (!adding || detail === undefined) return;
-    if (!canAddItems(detail)) { onAddingChange(false); return; }
+    if (!canAddItems(detail)) {
+      setSelectedProduct(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined);
+      setPendingAddCommand(undefined); setConfirmingAdd(false);
+      setOrderNotice("La cuenta ya no permite agregar productos; se cerró «Agregar producto».");
+      onAddingChange(false);
+      return;
+    }
     if (catalogState === undefined && !catalogLoading && !catalogError) void loadCatalog(detail);
-  }, [adding, detail === undefined, catalogState === undefined]);
+  }, [adding, detail === undefined, detail !== undefined && canAddItems(detail), catalogState === undefined]);
 
   /** Used for `open`/`transitionItem`/`cancelItem`: never retries, including on "unavailable" (see
    * `UNAVAILABLE_NO_RETRY_MESSAGE`). Always reloads the detail afterward so the operator's view
