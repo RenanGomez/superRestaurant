@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
+import Link from "next/link";
 import { createPortal } from "react-dom";
 import { FieldLabel } from "../../../components/field-hint";
 import type { AddOrderItemCommandV1, LineFractionV1, MenuCatalogStateV1, MenuModifierGroupV1, MenuProductV1, OrderDetailItemV1, OrderDetailV1 } from "@super-restaurant/shared-types";
@@ -92,15 +93,17 @@ function OrderMenuDialog({ detail, catalogState, loading, loadError, addSuccess,
   readonly onBack: () => void;
   readonly onAdd: (quantity: number, groups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null, fraction: LineFractionV1 | null) => void;
 }) {
-  const dialogRef = useRef<HTMLDivElement>(null);
   const headingId = useId();
-  useFocusTrap(dialogRef, onClose);
-  return <div className="fixed inset-0 z-50 flex justify-end bg-black/40" role="presentation" onClick={onClose}>
-    <div ref={dialogRef} className="flex h-[100dvh] w-full min-w-0 flex-col bg-surface shadow-xl sm:max-w-4xl"
-      role="dialog" aria-modal="true" aria-labelledby={headingId} tabIndex={-1} onClick={(event) => event.stopPropagation()}>
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { headingRef.current?.focus(); }, []);
+  // In-page panel (right column on desktop, whole screen on mobile): no overlay and no dialog trap.
+  return <section className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-surface" aria-labelledby={headingId}>
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col">
       <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border p-4">
-        <h2 id={headingId} className="font-heading text-lg font-bold">Agregar producto</h2>
-        <button type="button" className={button} onClick={onClose} disabled={busy || confirmingAdd}>Volver a la cuenta</button>
+        <h2 id={headingId} ref={headingRef} tabIndex={-1} className="font-heading text-lg font-bold focus:outline-none">Agregar producto</h2>
+        <button type="button" className={button} onClick={onClose} disabled={busy || confirmingAdd} aria-label="Volver a la cuenta">
+          <span className="lg:hidden" aria-hidden="true">← Cuenta</span><span className="hidden lg:inline" aria-hidden="true">Volver a la cuenta</span>
+        </button>
       </header>
       {confirmingAdd && <div role="status" className="m-4 rounded-lg bg-accent-soft p-4 text-sm">
         <p>Confirmando el último producto…</p>
@@ -118,7 +121,7 @@ function OrderMenuDialog({ detail, catalogState, loading, loadError, addSuccess,
         busy={busy} error={addError} selectionDraft={selectionDraft} onClose={onBack} onAdd={onAdd}
       />, document.body)}
     </div>
-  </div>;
+  </section>;
 }
 
 function OrderProductDialog({ product, groups, currency, busy, error, selectionDraft, onClose, onAdd }: {
@@ -190,7 +193,11 @@ function nextAttempt(): { readonly eventId: string; readonly idempotencyKey: str
 
 interface Props {
   readonly orderId: string;
-  readonly autoOpenMenu?: boolean;
+  /** "Agregar producto" is open; owned by the URL (`&addItem=1`), see `orders-view.ts`. */
+  readonly adding: boolean;
+  readonly onAddingChange: (adding: boolean) => void;
+  /** Element in the page layout (right column) that hosts the "Agregar producto" panel. */
+  readonly menuSlot: HTMLElement | null;
   readonly actions: OrderDetailActions;
   readonly canCheckout: boolean;
   readonly printHeader: PrintHeader;
@@ -218,7 +225,7 @@ const errorMessages: Record<string, string> = {
  */
 const UNAVAILABLE_NO_RETRY_MESSAGE = "No se pudo confirmar el resultado. Se recargó la orden; revisa el estado antes de repetir.";
 
-export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCheckout, printHeader, onClose, onChanged }: Props) {
+export function OrderDetailPanel({ orderId, adding, onAddingChange, menuSlot, actions, canCheckout, printHeader, onClose, onChanged }: Props) {
   // Same device identity Capture's own workspace and the delivery-zones editor use (one stable id
   // per browser, in localStorage) -- never a second, order-specific device id, or the same browser
   // would be audited under two different identities depending on which screen it used.
@@ -232,7 +239,7 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
   const [cancelTarget, setCancelTarget] = useState<OrderDetailItemV1>();
   const [cancelOrderOpen, setCancelOrderOpen] = useState(false);
   const [orderNotice, setOrderNotice] = useState<string>();
-  const [menuOpen, setMenuOpen] = useState(false);
+  const menuOpen = adding;
   const [catalogState, setCatalogState] = useState<MenuCatalogStateV1>();
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState(false);
@@ -245,8 +252,26 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
   const [addError, setAddError] = useState<string>();
   const [addSuccess, setAddSuccess] = useState(false);
   const headingId = useId();
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(dialogRef, onClose);
+  const closeAddingRef = useRef<() => void>(() => undefined);
+  const escapeBlockedRef = useRef(false);
+  escapeBlockedRef.current = printDocuments !== undefined || cancelTarget !== undefined || cancelOrderOpen || selectedProduct !== undefined;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const addingRef = useRef(adding);
+  addingRef.current = adding;
+
+  // The panel is no longer a modal dialog, so Escape is wired at document level: the nested dialogs
+  // (cancel reason, product sheet, print preview) own it while open; otherwise it closes
+  // "Agregar producto" first and the detail second.
+  useEffect(() => {
+    function onEscape(event: KeyboardEvent): void {
+      if (event.key !== "Escape" || event.defaultPrevented || escapeBlockedRef.current) return;
+      event.preventDefault();
+      if (addingRef.current) closeAddingRef.current(); else onCloseRef.current();
+    }
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, []);
 
   useEffect(() => {
     const onPrintShortcut = (event: KeyboardEvent) => {
@@ -280,9 +305,15 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
     return result.value;
   }
 
-  useEffect(() => { void load().then((loaded) => {
-    if (autoOpenMenu && loaded !== undefined && canAddItems(loaded)) void openMenu(loaded);
-  }); }, [orderId]);
+  useEffect(() => { void load(); }, [orderId]);
+
+  // `adding` comes from the URL: once the detail is known, an order that no longer accepts new lines
+  // falls back to the detail view; otherwise the catalog is loaded the first time the panel shows.
+  useEffect(() => {
+    if (!adding || detail === undefined) return;
+    if (!canAddItems(detail)) { onAddingChange(false); return; }
+    if (catalogState === undefined && !catalogLoading && !catalogError) void loadCatalog(detail);
+  }, [adding, detail === undefined, catalogState === undefined]);
 
   /** Used for `open`/`transitionItem`/`cancelItem`: never retries, including on "unavailable" (see
    * `UNAVAILABLE_NO_RETRY_MESSAGE`). Always reloads the detail afterward so the operator's view
@@ -361,9 +392,19 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
     }
   }
 
-  async function openMenu(currentDetail: OrderDetailV1 | undefined = detail): Promise<void> {
-    setMenuOpen(true);
+  function openMenu(): void {
     setAddSuccess(false);
+    onAddingChange(true);
+  }
+
+  function closeAdding(): void {
+    if (addBusy || pendingAddCommand !== undefined) return;
+    setSelectedProduct(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined);
+    onAddingChange(false);
+  }
+  closeAddingRef.current = closeAdding;
+
+  async function loadCatalog(currentDetail: OrderDetailV1 | undefined = detail): Promise<void> {
     if (catalogState !== undefined) return;
     setCatalogLoading(true);
     setCatalogError(false);
@@ -432,12 +473,14 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
 
   const groups = detail === undefined ? undefined : groupItemsByStatus(detail.items);
 
-  return <div className={overlay} role="presentation" onClick={onClose}>
-    <div ref={dialogRef} className={sheet} role="dialog" aria-modal="true" aria-labelledby={headingId} tabIndex={-1} onClick={(event) => event.stopPropagation()}>
-      <div className="flex items-start justify-between gap-2">
-        <h2 id={headingId} className="font-heading text-lg font-bold">Detalle de la orden</h2>
-        <button type="button" className={button} onClick={onClose} aria-label="Cerrar">Cerrar</button>
-      </div>
+  return <section className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-surface" aria-labelledby={headingId}>
+    <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border p-4">
+      <h2 id={headingId} className="font-heading text-lg font-bold">Detalle de la orden</h2>
+      <button type="button" className={button} onClick={onClose} aria-label="Cerrar detalle">
+        <span className="lg:hidden" aria-hidden="true">← Órdenes</span><span className="hidden lg:inline" aria-hidden="true">Cerrar detalle</span>
+      </button>
+    </header>
+    <div className="min-h-0 flex-1 overflow-y-auto p-4">
       {loadError !== undefined && <div role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">
         <p>{loadError}</p>
         <button type="button" className={`${button} mt-2`} onClick={() => void load()}>Reintentar</button>
@@ -449,7 +492,7 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
         <p className="mt-1 text-sm">Total: <strong>{formatMinorUnits(detail.totals.totalMinor, detail.totals.currency)}</strong></p>
         <div className="mt-4 flex flex-wrap gap-2">
           {canAddItems(detail) && <button type="button" className={primaryButton} disabled={busyAction !== undefined || addBusy}
-            onClick={() => void openMenu()}>Agregar producto</button>}
+            onClick={openMenu}>Agregar producto</button>}
           {hasAction(detail, "open") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
             onClick={() => { const attempt = nextAttempt(); void runAction("open", () => actions.open(detail.orderId, detail.version, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt, deviceId)); }}>
             {busyAction === "open" ? "Abriendo…" : actionLabel("open")}
@@ -458,7 +501,7 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
             onClick={() => void runSendToKitchen(detail.orderId, detail.version, pendingOrderItemIds(detail))}>
             {busyAction === "sendToKitchen" ? "Enviando…" : actionLabel("sendToKitchen")}
           </button>}
-          {canCheckout && hasAction(detail, "checkout") && <a href={`/app/caja?orderId=${detail.orderId}`} className={button}>{actionLabel("checkout")}</a>}
+          {canCheckout && hasAction(detail, "checkout") && <Link href={`/app/caja?orderId=${detail.orderId}`} className={button}>{actionLabel("checkout")}</Link>}
           {hasAction(detail, "cancelOrder") && <button type="button" className={dangerButton} disabled={busyAction !== undefined}
             onClick={() => setCancelOrderOpen(true)}>
             {busyAction === "cancelOrder" ? "Cancelando…" : actionLabel("cancelOrder")}
@@ -539,18 +582,18 @@ export function OrderDetailPanel({ orderId, autoOpenMenu = false, actions, canCh
         onCancel={() => setCancelOrderOpen(false)}
         onConfirm={(reason) => void runCancelOrder(detail, reason)}
       />}
-      {menuOpen && (detail ?? (pendingAddCommand === undefined ? undefined : lastDetailRef.current)) !== undefined && typeof document !== "undefined" && createPortal(<OrderMenuDialog
+      {menuOpen && menuSlot !== null && (detail ?? (pendingAddCommand === undefined ? undefined : lastDetailRef.current)) !== undefined && createPortal(<OrderMenuDialog
         detail={(detail ?? lastDetailRef.current)!} catalogState={catalogState} loading={catalogLoading} loadError={catalogError}
         addSuccess={addSuccess} busy={addBusy} selectedProduct={selectedProduct} selectionDraft={selectionDraft} addError={addError}
         confirmingAdd={confirmingAdd} onRetryRead={() => void retryAddRead()}
-        onRetry={() => void openMenu()} onClose={() => { if (!addBusy && pendingAddCommand === undefined) { setMenuOpen(false); setSelectedProduct(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined); } }}
+        onRetry={() => void loadCatalog()} onClose={closeAdding}
         onSelect={(product, groups) => { setAddSuccess(false); setAddError(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined); setSelectedProduct({ product, groups }); }}
         onBack={() => { if (!addBusy && pendingAddCommand === undefined) { setSelectedProduct(undefined); setSelectionDraft(undefined); setRetryOrderItemId(undefined); setAddError(undefined); } }}
         onAdd={(quantity, groups, note, variantId, fraction) => void addSelected(quantity, groups, note, variantId, fraction)}
-      />, document.body)}
+      />, menuSlot)}
       {printDocuments !== undefined && <PrintPreview documents={printDocuments} onClose={() => setPrintDocuments(undefined)} />}
     </div>
-  </div>;
+  </section>;
 }
 
 function CancelReasonDialog({ itemName, requiresSupervisor, busy, onCancel, onConfirm }: {

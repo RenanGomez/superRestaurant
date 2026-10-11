@@ -81,6 +81,8 @@
     "src/lib/order-cancellation.test.ts",
     "src/lib/order-detail.ts",
     "src/lib/order-detail.test.ts",
+    "src/lib/orders-view.ts",
+    "src/lib/orders-view.test.ts",
     "src/lib/print-documents.ts",
     "src/lib/print-documents.test.ts",
     "src/lib/shortcut-dispatch.ts",

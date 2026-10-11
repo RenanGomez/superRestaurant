@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { BranchOrderWorkChannelV1, BranchOrderWorkItemV1, BranchOrderWorkTrayV1, BranchScope } from "@super-restaurant/shared-types";
 import {
@@ -16,6 +18,7 @@ import { CancelledTray } from "./cancelled-tray";
 import { OrderDetailPanel, type OrderDetailActions } from "./order-detail-panel";
 import type { CancelledTrayRequestResult } from "../../../lib/order-cancellation";
 import type { PrintHeader } from "../../../lib/print-documents";
+import { ordersHref, ordersOrderId, ordersView } from "../../../lib/orders-view";
 import { uiButton, uiChip } from "../../../lib/ui-classes";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -32,8 +35,6 @@ const LIMIT = 25;
 
 interface Props {
   readonly scope: BranchScope;
-  readonly initialOrderId: string | undefined;
-  readonly autoOpenMenu: boolean;
   readonly action: (input: unknown) => Promise<BranchOrderTrayRequestResult>;
   /** Server-computed from the actor's own membership roles; the client never decides this. */
   readonly canCheckout: boolean;
@@ -42,7 +43,7 @@ interface Props {
   readonly cancelledAction: (input: unknown) => Promise<CancelledTrayRequestResult>;
 }
 
-export function OrdersTray({ scope, action, cancelledAction, canCheckout, detailActions, initialOrderId, autoOpenMenu, printHeader }: Props) {
+export function OrdersTray({ scope, action, cancelledAction, canCheckout, detailActions, printHeader }: Props) {
   const [items, setItems] = useState<readonly BranchOrderWorkItemV1[]>([]);
   const [nextCursor, setNextCursor] = useState<BranchOrderWorkTrayV1["nextCursor"]>(null);
   const [filter, setFilter] = useState<BranchOrderWorkFilter>("all");
@@ -50,7 +51,18 @@ export function OrdersTray({ scope, action, cancelledAction, canCheckout, detail
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<keyof typeof errors>();
-  const [openOrderId, setOpenOrderId] = useState<string | undefined>(initialOrderId);
+  // The view lives in the URL (?orderId=…&addItem=1). Changes use history.replaceState, which Next
+  // syncs into useSearchParams without a server round trip and without growing the history, so
+  // Back still leaves Órdenes.
+  const searchParams = useSearchParams();
+  const openOrderId = ordersOrderId(searchParams);
+  const currentView = ordersView(searchParams);
+  const [menuSlot, setMenuSlot] = useState<HTMLElement | null>(null);
+  function navigate(orderId: string | undefined, adding: boolean): void {
+    window.history.replaceState(null, "", ordersHref(orderId, adding));
+  }
+  const open = openOrderId !== undefined;
+  const adding = currentView === "adding";
   const cursorRef = useRef<BranchOrderWorkTrayV1["nextCursor"]>(null);
   const requestSeqRef = useRef(0);
 
@@ -89,13 +101,13 @@ export function OrdersTray({ scope, action, cancelledAction, canCheckout, detail
     };
   }, [filter]);
 
-  return <section className={panel}>
+  const listPanel = <section className={`${panel} ${open ? "lg:h-full lg:overflow-y-auto" : ""}`}>
     <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="Vista de órdenes">
       {([["active", "Activas"], ["cancelled", "Canceladas"]] as const).map(([value, label]) => <button key={value} type="button"
         className={uiChip(view === value)}
         aria-pressed={view === value} onClick={() => setView(value)}>{label}</button>)}
     </div>
-    {view === "cancelled" && <CancelledTray scope={scope} action={cancelledAction} onOpenDetail={setOpenOrderId} />}
+    {view === "cancelled" && <CancelledTray scope={scope} action={cancelledAction} onOpenDetail={(id) => navigate(id, false)} compact={open} selectedOrderId={openOrderId} />}
     {view === "active" && <>
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap gap-2" role="group" aria-label="Filtrar por canal">
@@ -114,30 +126,45 @@ export function OrdersTray({ scope, action, cancelledAction, canCheckout, detail
         </div>
         : items.length === 0
           ? <p className="mt-4 text-sm text-text-muted">No hay órdenes activas para este filtro.</p>
-          : <ul className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{items.map((order) => <OrderCard key={order.orderId} order={order} canCheckout={canCheckout} onOpenDetail={() => setOpenOrderId(order.orderId)} />)}</ul>}
+          : <ul className={`mt-4 grid gap-3 ${open ? "" : "sm:grid-cols-2 xl:grid-cols-3"}`}>{items.map((order) => <OrderCard key={order.orderId} order={order} canCheckout={canCheckout}
+            selected={order.orderId === openOrderId} compact={open} onOpenDetail={() => navigate(order.orderId, false)} />)}</ul>}
     {nextCursor !== null && <div className="mt-4">
       <button type="button" className={button} disabled={busy}
         onClick={() => void load(nextCursor, false, filter === "all" ? null : filter)}>Cargar más</button>
     </div>}
     </>}
-    {openOrderId !== undefined && <OrderDetailPanel
-      orderId={openOrderId}
-      autoOpenMenu={autoOpenMenu && openOrderId === initialOrderId}
-      actions={detailActions}
-      canCheckout={canCheckout}
-      printHeader={printHeader}
-      onClose={() => setOpenOrderId(undefined)}
-      onChanged={refresh}
-    />}
   </section>;
+
+  if (!open) return listPanel;
+  return <div className="flex flex-col gap-4 lg:grid lg:h-[calc(100dvh-15rem)] lg:min-h-[28rem] lg:grid-cols-[2fr_3fr]">
+    <div className={`min-h-0 ${adding ? "hidden lg:block" : ""} lg:h-full`}>
+      <OrderDetailPanel
+        key={openOrderId}
+        orderId={openOrderId}
+        adding={adding}
+        onAddingChange={(next) => navigate(openOrderId, next)}
+        menuSlot={menuSlot}
+        actions={detailActions}
+        canCheckout={canCheckout}
+        printHeader={printHeader}
+        onClose={() => navigate(undefined, false)}
+        onChanged={refresh}
+      />
+    </div>
+    {adding
+      ? <div ref={setMenuSlot} className="h-[calc(100dvh-9rem)] min-h-0 lg:h-full" />
+      : <div className="hidden min-h-0 lg:block lg:h-full">{listPanel}</div>}
+  </div>;
 }
 
-function OrderCard({ order, canCheckout, onOpenDetail }: {
+function OrderCard({ order, canCheckout, selected, compact, onOpenDetail }: {
   readonly order: BranchOrderWorkItemV1;
   readonly canCheckout: boolean;
+  readonly selected: boolean;
+  readonly compact: boolean;
   readonly onOpenDetail: () => void;
 }) {
-  return <li className="rounded-xl border border-border bg-bg p-4">
+  return <li className={`rounded-xl ${selected ? "border-2 border-selected bg-surface" : "border border-border bg-bg"} ${compact ? "p-3" : "p-4"}`} aria-current={selected ? "true" : undefined}>
     <div className="flex items-start justify-between gap-2">
       <div>
         <strong className="block">{channelLabel(order.channel)}</strong>
@@ -153,13 +180,13 @@ function OrderCard({ order, canCheckout, onOpenDetail }: {
       {order.paymentIntent !== null && ` · pago ${order.paymentIntent.method === "cash" ? "efectivo" : order.paymentIntent.method === "card_manual" ? "tarjeta" : "transferencia"}`}
     </p>
     <div className="mt-3 flex flex-wrap gap-2">
-      <button type="button" className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent" onClick={onOpenDetail}>
+      <button type="button" className={uiButton()} onClick={onOpenDetail}>
         Detalle
       </button>
       {canCheckout && isPayableBranchOrderWorkStatus(order.status)
-        ? <a href={`/app/caja?orderId=${order.orderId}`} className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent">
+        ? <Link href={`/app/caja?orderId=${order.orderId}`} className={uiButton()}>
           Cobrar en caja
-        </a>
+        </Link>
         : <span className="flex min-h-11 items-center text-sm text-text-muted">
           {isPayableBranchOrderWorkStatus(order.status) ? "Cuenta abierta" : "Aún en borrador, sin cuenta que cobrar"}
         </span>}

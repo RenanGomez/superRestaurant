@@ -26,10 +26,13 @@ interface Props {
   readonly scope: BranchScope;
   readonly action: (input: unknown) => Promise<CancelledTrayRequestResult>;
   readonly onOpenDetail: (orderId: string) => void;
+  /** Single narrow column while an order detail is open beside the list. */
+  readonly compact?: boolean;
+  readonly selectedOrderId?: string | undefined;
 }
 
 /** "Canceladas": cancelled orders and closed captures, newest first, paged by the server's cursor. */
-export function CancelledTray({ scope, action, onOpenDetail }: Props) {
+export function CancelledTray({ scope, action, onOpenDetail, compact = false, selectedOrderId }: Props) {
   const [items, setItems] = useState<readonly CancelledWorkItemV1[]>([]);
   const [nextCursor, setNextCursor] = useState<CancelledWorkCursorV1 | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -70,22 +73,23 @@ export function CancelledTray({ scope, action, onOpenDetail }: Props) {
             <button type="button" className={button} onClick={() => void load(null, true)}>Reintentar</button>
           </div>
           : <p className="mt-4 text-sm text-text-muted">No hay órdenes ni capturas canceladas.</p>
-        : <ul className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{items.map((item) => <CancelledCard key={cancelledItemKey(item)}
-          item={item} timeZone={timeZone} onOpenDetail={onOpenDetail} />)}</ul>}
+        : <ul className={`mt-4 grid gap-3 ${compact ? "" : "sm:grid-cols-2 xl:grid-cols-3"}`}>{items.map((item) => <CancelledCard key={cancelledItemKey(item)}
+          item={item} timeZone={timeZone} onOpenDetail={onOpenDetail} selected={item.kind === "order" && item.orderId === selectedOrderId} />)}</ul>}
     {nextCursor !== null && <div className="mt-4">
       <button type="button" className={button} disabled={busy} onClick={() => void load(nextCursor, false)}>Cargar más</button>
     </div>}
   </div>;
 }
 
-function CancelledCard({ item, timeZone, onOpenDetail }: {
+function CancelledCard({ item, timeZone, onOpenDetail, selected }: {
+  readonly selected: boolean;
   readonly item: CancelledWorkItemV1;
   readonly timeZone: string;
   readonly onOpenDetail: (orderId: string) => void;
 }) {
   const refund = cancelledItemRefundLabel(item);
   const total = cancelledItemTotalLabel(item);
-  return <li className="rounded-xl border border-border bg-bg p-4">
+  return <li className={`rounded-xl p-4 ${selected ? "border-2 border-selected bg-surface" : "border border-border bg-bg"}`} aria-current={selected ? "true" : undefined}>
     <div className="flex items-start justify-between gap-2">
       <div>
         <strong className="block">{cancelledItemTitle(item)}</strong>
