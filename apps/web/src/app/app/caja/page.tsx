@@ -1,95 +1,59 @@
 import { randomUUID } from "node:crypto";
 
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import type {
-  BranchMembershipSummaryV1,
-  BranchScope,
-  CashRegisterOperationalReportV1,
   CheckoutOrderSummaryV1,
+  OrderDetailV1,
   PaymentCollectionSummaryV1,
 } from "@super-restaurant/shared-types";
 
-import { CheckField, Field } from "../../../components/field-hint";
-import { getServerEnv } from "../../../env";
-import { authorizeBranch } from "../../../lib/branch-selection";
-import { formatMinorUnits, requestBranchOrderWorkTray, type BranchOrderTrayRequestResult } from "../../../lib/branch-order-work-tray";
-import { currencyFractionDigits } from "../../../lib/money-scale";
-import { getCashRegisterReport, getCheckoutOrder, type FinancialApiResult } from "../../../lib/finance";
-import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
-import { createServerSupabaseClient } from "../../../lib/supabase-server";
-import {
-  closeCashRegisterAction,
-  openCashRegisterAction,
-} from "./actions";
-import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } from "./context";
-import { movementLabel, parseReceiptQuery, paymentMethodLabel } from "./caja-helpers";
-import { CASH_RECEIPT_COOKIE, decodeReceiptCookie } from "./receipt";
-import { PaymentPanel } from "./payment-panel";
-import { PayableOrders } from "./payable-orders";
-import { CashierSubmitButton } from "./submit-button";
+import { formatMinorUnits, requestBranchOrderWorkTray } from "../../../lib/branch-order-work-tray";
+import { getCheckoutOrder, type FinancialApiResult } from "../../../lib/finance";
+import { uiButton } from "../../../lib/ui-classes";
 import { orderDetailAction } from "../orders/actions";
+import { openCashRegisterAction } from "./actions";
+import { paymentMethodLabel, parseReceiptQuery } from "./caja-helpers";
+import {
+  AuditFields, CajaHeader, EmptyState, ErrorBanner, KNOWN_ERRORS, KNOWN_STATUSES, MoneyField, SuccessBanner,
+  loadCajaContext, newAudit, scalar, shortId, validUuid, type SearchParams,
+} from "./caja-shared";
+import { COBRAR_PATH, CORTE_PATH, cobrarHref, cobrarView, registerState } from "./caja-view";
+import { PayableOrders } from "./payable-orders";
+import { PaymentPanel } from "./payment-panel";
 import { ReceiptPrintButton } from "./receipt-print-button";
+import { CASH_RECEIPT_COOKIE, decodeReceiptCookie } from "./receipt";
+import { CashierSubmitButton } from "./submit-button";
 
 export const dynamic = "force-dynamic";
 
-interface CashRegisterPageProps {
-  readonly searchParams: Promise<Readonly<Record<string, string | readonly string[] | undefined>>>;
-}
+const PANEL = "rounded-2xl border border-border bg-surface p-5 shadow-[0_8px_30px_oklch(20%_0.02_250_/_0.04)]";
 
-const FINANCIAL_ROLES = new Set(["owner", "admin", "manager", "supervisor", "cashier"]);
-const KNOWN_ERRORS = new Set([
-  "conflict", "context_invalid", "close_not_confirmed", "invalid_amount", "invalid_input", "mixed_currency", "not_found", "reason_required", "unauthorized", "unavailable", "unsupported_currency",
-]);
-const KNOWN_STATUSES = new Set(["opened", "payment_collected", "closed"]);
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-
-export default async function CashRegisterPage({ searchParams }: CashRegisterPageProps): Promise<ReactNode> {
-  const supabase = await createServerSupabaseClient();
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session === null) redirect("/login");
-  const cookieStore = await cookies();
-  const scope = parseBranchPreference(cookieStore.get(BRANCH_PREFERENCE_COOKIE)?.value);
-  if (scope === undefined) redirect("/app");
-  const env = getServerEnv();
-  const memberships = await listMemberships(session.access_token, env.apiBaseUrl);
-  const membership = memberships === undefined ? undefined : findMembership(memberships.memberships, scope);
-  if (membership === undefined || await authorizeBranch(session.access_token, env.apiBaseUrl, scope) === undefined) {
-    redirect("/app?branchError=not_authorized");
-  }
-  const params = await searchParams;
+export default async function CollectPaymentPage({ searchParams }: { readonly searchParams: SearchParams }): Promise<ReactNode> {
+  const context = await loadCajaContext(searchParams);
+  const { accessToken, canOperate, cookieStore, deviceId, env, membership, params, registerId, report, scope, userId } = context;
   const error = scalar(params.cashError);
   const status = scalar(params.cashStatus);
   const orderId = validUuid(scalar(params.orderId));
-  const canOperate = membership.roles.some((role) => FINANCIAL_ROLES.has(role));
-  const registerId = validUuid(cookieStore.get(CASH_REGISTER_COOKIE)?.value);
-  const deviceId = validUuid(cookieStore.get(DEVICE_COOKIE)?.value);
-  const sessionId = validUuid(cookieStore.get(CASH_REGISTER_SESSION_COOKIE)?.value);
-  const report = canOperate && registerId !== undefined && deviceId !== undefined
-    ? await getCashRegisterReport(session.access_token, env.apiBaseUrl, {
-      cashRegisterSessionId: sessionId ?? null,
-      deviceId,
-      registerId,
-      schemaVersion: 1,
-      scope,
-    })
-    : undefined;
+  const register = registerState(report);
   const receiptQuery = parseReceiptQuery(params);
+  const view = cobrarView({ canOperate, register, orderId, hasReceipt: receiptQuery !== null });
+  const openReport = report?.status === "ok" && report.value.register.status === "open" ? report.value : undefined;
+
   const decoded = receiptQuery === null || env.receiptCookieSecret === undefined ? undefined
-    : decodeReceiptCookie(cookieStore.get(CASH_RECEIPT_COOKIE)?.value, session.user.id, env.receiptCookieSecret);
+    : decodeReceiptCookie(cookieStore.get(CASH_RECEIPT_COOKIE)?.value, userId, env.receiptCookieSecret);
   const receipt = decoded !== undefined && receiptQuery !== null
     && decoded.paymentId === receiptQuery.paymentId && decoded.orderId === receiptQuery.orderId
     && decoded.scope.restaurantId === scope.restaurantId && decoded.scope.branchId === scope.branchId
     ? decoded : undefined;
   const receiptUnavailable = receiptQuery !== null && receipt === undefined;
-  const receiptOrderResult = receipt === undefined ? undefined : await orderDetailAction(receipt.orderId);
-  const receiptOrder = receiptOrderResult?.ok && receiptOrderResult.value.scope.restaurantId === scope.restaurantId
-    && receiptOrderResult.value.scope.branchId === scope.branchId ? receiptOrderResult.value : undefined;
-  const checkout = receiptQuery === null && report?.status === "ok" && report.value.register.status === "open" && orderId !== undefined
-    ? await getCheckoutOrder(session.access_token, env.apiBaseUrl, {
-      cashRegisterSessionId: report.value.register.cashRegisterSessionId,
+  const detailOrderId = view !== "order" ? undefined : receipt !== undefined ? receipt.orderId : orderId;
+  const detailResult = detailOrderId === undefined ? undefined : await orderDetailAction(detailOrderId);
+  const detail = detailResult?.ok && detailResult.value.scope.restaurantId === scope.restaurantId
+    && detailResult.value.scope.branchId === scope.branchId ? detailResult.value : undefined;
+  const checkout = view === "order" && receiptQuery === null && openReport !== undefined && orderId !== undefined && deviceId !== undefined && registerId !== undefined
+    ? await getCheckoutOrder(accessToken, env.apiBaseUrl, {
+      cashRegisterSessionId: openReport.register.cashRegisterSessionId,
       deviceId,
       orderId,
       registerId,
@@ -97,77 +61,154 @@ export default async function CashRegisterPage({ searchParams }: CashRegisterPag
       scope,
     })
     : undefined;
-  const tray = report?.status === "ok" && report.value.register.status === "open"
-    ? await requestBranchOrderWorkTray(session.access_token, env.apiBaseUrl, scope, null, 25)
-    : undefined;
+  const tray = view === "list" ? await requestBranchOrderWorkTray(accessToken, env.apiBaseUrl, scope, null, 25) : undefined;
+  const printHeader = { restaurantName: membership.restaurantName, branchName: membership.branchName };
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-5 p-4 sm:p-5 lg:p-8">
-      <PageHeader membership={membership} report={report} />
+      <CajaHeader active="cobrar" membership={membership} registerStatus={register === "open" || register === "closed" ? register : "none"} />
       {error !== undefined && KNOWN_ERRORS.has(error) && <ErrorBanner code={error} />}
       {status !== undefined && KNOWN_STATUSES.has(status) && <SuccessBanner code={status} />}
-      {!canOperate ? (
+      {view === "no_permission" ? (
         <EmptyState title="Sin permiso de caja" body="Tu rol actual no permite abrir, cobrar o cerrar una caja en esta sucursal." />
-      ) : report === undefined || report.status === "not_found" ? (
-        <OpenRegisterPanel />
-      ) : report.status !== "ok" ? (
+      ) : view === "unavailable" ? (
         <EmptyState
           title="No se pudo recuperar la caja"
           body="El estado autoritativo no está disponible. No se realizó ningún cobro ni cierre."
-          action={<a href="/app/caja" className="min-h-11 rounded-xl bg-accent px-4 py-3 text-[14px] font-semibold text-white">Reintentar</a>}
+          action={<a href={COBRAR_PATH} className={uiButton("primary", "inline-flex items-center px-4 text-[14px]")}>Reintentar</a>}
         />
-      ) : report.value.register.status === "closed" ? (
-        <ClosedRegisterView report={report.value} />
+      ) : view === "open_register" ? (
+        <OpenRegisterPanel closed={register === "closed"} />
+      ) : view === "list" ? (
+        <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+          <section className={PANEL}>
+            <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Cobro</p>
+            <h2 className="mt-1 font-heading text-[18px] font-semibold">Órdenes por cobrar</h2>
+            <PayableOrders scope={scope} initial={tray} selectedOrderId={undefined} />
+          </section>
+          <section className={`self-start ${PANEL}`}>
+            <h2 className="font-heading text-[18px] font-semibold">Cuenta a cobrar</h2>
+            <p className="mt-3 rounded-xl bg-bg p-4 text-[13px] text-text-muted">Elige una orden de la lista para ver su cuenta y cobrarla.</p>
+          </section>
+        </div>
       ) : (
-        <OpenRegisterView checkout={checkout} orderId={orderId} receipt={receipt} receiptOrder={receiptOrder} printHeader={{ restaurantName: membership.restaurantName, branchName: membership.branchName }} receiptUnavailable={receiptUnavailable} report={report.value} scope={scope} tray={tray} />
+        <OrderView
+          checkout={checkout}
+          detail={detail}
+          header={printHeader}
+          orderId={orderId}
+          receipt={receipt}
+          receiptUnavailable={receiptUnavailable}
+          sessionId={openReport?.register.cashRegisterSessionId}
+        />
       )}
     </div>
   );
 }
 
-function PageHeader({ membership, report }: {
-  readonly membership: BranchMembershipSummaryV1;
-  readonly report: FinancialApiResult<CashRegisterOperationalReportV1> | undefined;
-}): ReactNode {
-  const register = report?.status === "ok" ? report.value.register : undefined;
-  return (
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0">
-        <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-accent">Operación financiera</p>
-        <h1 className="break-words font-heading text-[22px] font-bold text-text">Caja · {membership.branchName}</h1>
-        <p className="mt-1 text-[13px] text-text-muted">{membership.restaurantName} · Importes en pesos.</p>
-      </div>
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <span className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${register?.status === "open" ? "bg-[oklch(94%_0.04_155)] text-[oklch(38%_0.1_155)]" : "bg-bg text-text-muted"}`}>
-          {register?.status === "open" ? "Caja abierta" : register?.status === "closed" ? "Caja cerrada" : "Sin caja"}
-        </span>
-        <a href="/app?change=1" className="min-h-10 rounded-lg border border-border bg-surface px-3 py-2 text-[13px] font-medium">Cambiar sucursal</a>
-      </div>
-    </div>
-  );
-}
-
-function OpenRegisterPanel(): ReactNode {
+function OpenRegisterPanel({ closed }: { readonly closed: boolean }): ReactNode {
   const audit = newAudit();
   return (
-    <section className="mx-auto grid w-full max-w-3xl gap-5 rounded-2xl border border-border bg-surface p-5 shadow-[0_8px_30px_oklch(20%_0.02_250_/_0.05)] sm:p-6">
+    <section className={`mx-auto grid w-full max-w-xl gap-4 ${PANEL}`}>
       <div>
         <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Inicio de turno</p>
-        <h2 className="mt-1 font-heading text-[18px] font-semibold">Abrir caja en este dispositivo</h2>
-        <p className="mt-2 text-[13px] leading-relaxed text-text-muted">Cuenta el fondo con el que inicia el turno.</p>
+        <h2 className="mt-1 font-heading text-[18px] font-semibold">Abre la caja para cobrar</h2>
+        <p className="mt-2 text-[13px] leading-relaxed text-text-muted">
+          {closed ? "La caja anterior está cerrada; su corte sigue disponible en Corte de caja. " : ""}Cuenta el fondo con el que inicia el turno.
+        </p>
       </div>
-      <form action={openCashRegisterAction} className="grid gap-4 sm:grid-cols-2">
+      <form action={openCashRegisterAction} className="grid gap-4">
         <AuditFields audit={audit} />
         <input type="hidden" name="cashRegisterSessionId" value={randomUUID()} />
         <input type="hidden" name="shiftId" value={randomUUID()} />
         <MoneyField hint="Efectivo con el que abres la caja (cambio inicial). Cuéntalo físicamente antes de empezar a cobrar." label="Fondo inicial" name="openingFloatPesos" defaultValue="0" />
-        <div className="sm:col-span-2"><CashierSubmitButton idle="Abrir caja" pending="Guardando apertura…" /></div>
+        <CashierSubmitButton idle="Abrir caja" pending="Guardando apertura…" />
       </form>
+      {closed && <a href={CORTE_PATH} className={uiButton("secondary", "inline-flex items-center justify-center px-4 text-[14px]")}>Ver el corte anterior</a>}
     </section>
   );
 }
 
-function ReceiptCard({ receipt, order, header }: { readonly receipt: PaymentCollectionSummaryV1; readonly order: import("@super-restaurant/shared-types").OrderDetailV1 | undefined; readonly header: { readonly restaurantName: string; readonly branchName: string } }): ReactNode {
+function OrderView({ checkout, detail, header, orderId, receipt, receiptUnavailable, sessionId }: {
+  readonly checkout: FinancialApiResult<CheckoutOrderSummaryV1> | undefined;
+  readonly detail: OrderDetailV1 | undefined;
+  readonly header: { readonly restaurantName: string; readonly branchName: string };
+  readonly orderId: string | undefined;
+  readonly receipt: PaymentCollectionSummaryV1 | undefined;
+  readonly receiptUnavailable: boolean;
+  readonly sessionId: string | undefined;
+}): ReactNode {
+  return (
+    <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(340px,1.1fr)]">
+      <OrderSummary detail={detail} checkout={checkout?.status === "ok" ? checkout.value : undefined} />
+      <section className={`min-w-0 self-start ${PANEL}`}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div><p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Cobro</p><h2 className="mt-1 font-heading text-[18px] font-semibold">Cobrar cuenta</h2></div>
+          {sessionId !== undefined && <span className="rounded-lg bg-bg px-3 py-2 font-mono text-[11px] text-text-muted">Caja {shortId(sessionId)}</span>}
+        </div>
+        {receipt !== undefined ? <ReceiptCard receipt={receipt} order={detail} header={header} /> : receiptUnavailable ? (
+          <div id="cobrar" role="status" className="mt-4 grid gap-3 rounded-xl bg-bg p-4 text-[13px]">
+            <h3 className="font-heading text-lg font-semibold">Recibo no disponible</h3>
+            <p className="text-text-muted">Si acabas de cobrar, el pago quedó registrado; consulta el corte de caja para confirmarlo.</p>
+            <a href={CORTE_PATH} className={uiButton("secondary", "inline-flex items-center justify-center px-4 text-[14px]")}>Ver corte de caja</a>
+            <BackLinks />
+          </div>
+        ) : orderId === undefined || checkout?.status !== "ok" ? (
+          <div role="alert" className="mt-4 grid gap-3 rounded-xl border border-[oklch(85%_0.06_25)] bg-error-bg p-4 text-[13px] text-[oklch(35%_0.1_25)]">
+            <p>No se pudo cargar esa cuenta. Elige otra orden o actualiza; no se registró ningún pago.</p>
+            <BackLinks />
+          </div>
+        ) : (
+          <>
+            <PaymentPanel key={`${checkout.value.orderId}:${checkout.value.orderVersion}`} checkout={checkout.value} audit={{ ...newAudit(), paymentId: randomUUID() }} />
+            <div className="mt-4"><BackLinks /></div>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function BackLinks(): ReactNode {
+  return (
+    <div className="flex flex-wrap gap-2">
+      <a href="/app/orders" className={uiButton("secondary", "inline-flex items-center justify-center px-4 text-[14px]")}>Volver a órdenes</a>
+      <a href={COBRAR_PATH} className={uiButton("secondary", "inline-flex items-center justify-center px-4 text-[14px]")}>Cobrar otra cuenta</a>
+    </div>
+  );
+}
+
+function OrderSummary({ checkout, detail }: { readonly checkout: CheckoutOrderSummaryV1 | undefined; readonly detail: OrderDetailV1 | undefined }): ReactNode {
+  const currency = detail?.currency ?? checkout?.currency;
+  return (
+    <section className={`min-w-0 self-start ${PANEL}`}>
+      <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Cuenta</p>
+      <h2 className="mt-1 font-heading text-[18px] font-semibold">{detail?.shortFolio === null || detail?.shortFolio === undefined ? "Resumen de la orden" : `Orden ${detail.shortFolio}`}</h2>
+      {detail === undefined || currency === undefined ? (
+        <p className="mt-3 rounded-xl bg-bg p-4 text-[13px] text-text-muted">El detalle de la orden no está disponible. El cobro usa el saldo que calcula el servidor.</p>
+      ) : (
+        <ul className="mt-3 grid gap-2">
+          {detail.items.filter((item) => item.status !== "cancelled").map((item) => (
+            <li key={item.orderItemId} className="flex min-w-0 items-start justify-between gap-3 rounded-xl bg-bg p-3 text-[13px]">
+              <div className="min-w-0">
+                <p className="break-words font-semibold">{item.quantity} × {item.name}{item.variantName === null || item.variantName === undefined ? "" : ` · ${item.variantName}`}</p>
+                {item.note !== null && <p className="break-words text-[12px] text-text-muted">{item.note}</p>}
+              </div>
+              <span className="shrink-0 font-semibold">{formatMinorUnits(item.lineTotalMinor, currency)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {checkout !== undefined && (
+        <p className="mt-4 flex items-baseline justify-between gap-3 border-t border-border pt-4 font-heading text-[16px] font-semibold">
+          <span>Total de la cuenta</span><span>{formatMinorUnits(checkout.orderTotalMinor, checkout.currency)}</span>
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ReceiptCard({ receipt, order, header }: { readonly receipt: PaymentCollectionSummaryV1; readonly order: OrderDetailV1 | undefined; readonly header: { readonly restaurantName: string; readonly branchName: string } }): ReactNode {
   return (
     <div id="cobrar" role="status" className="mt-4 grid gap-4 rounded-xl border border-[oklch(84%_0.08_155)] bg-[oklch(96%_0.03_155)] p-5">
       <h3 className="font-heading text-lg font-semibold">Cobro registrado</h3>
@@ -179,194 +220,9 @@ function ReceiptCard({ receipt, order, header }: { readonly receipt: PaymentColl
       <p className="font-heading text-lg font-semibold">
         {receipt.remainingBalanceMinor > 0 ? `Saldo restante ${formatMinorUnits(receipt.remainingBalanceMinor, receipt.currency)}` : "Cuenta pagada por completo"}
       </p>
-      {receipt.remainingBalanceMinor > 0 && <a href={`/app/caja?orderId=${encodeURIComponent(receipt.orderId)}#cobrar`} className="inline-flex min-h-11 items-center justify-center rounded-xl bg-accent px-4 text-sm font-semibold text-white">Seguir cobrando esta cuenta</a>}
+      {receipt.remainingBalanceMinor > 0 && <a href={cobrarHref(receipt.orderId)} className={uiButton("primary", "inline-flex items-center justify-center px-4 text-sm")}>Seguir cobrando esta cuenta</a>}
       {order !== undefined && <ReceiptPrintButton order={order} payment={receipt} header={header} />}
-      <a href="/app/caja" className="inline-flex min-h-11 items-center justify-center rounded-xl bg-accent px-4 text-sm font-semibold text-white">Cobrar otra cuenta</a>
+      <BackLinks />
     </div>
   );
-}
-
-function OpenRegisterView({ checkout, orderId, receipt, receiptOrder, printHeader, receiptUnavailable, report, scope, tray }: {
-  readonly receiptUnavailable: boolean;
-  readonly receipt: PaymentCollectionSummaryV1 | undefined;
-  readonly receiptOrder: import("@super-restaurant/shared-types").OrderDetailV1 | undefined;
-  readonly printHeader: { readonly restaurantName: string; readonly branchName: string };
-  readonly checkout: FinancialApiResult<CheckoutOrderSummaryV1> | undefined;
-  readonly orderId: string | undefined;
-  readonly report: CashRegisterOperationalReportV1;
-  readonly scope: BranchScope;
-  readonly tray: BranchOrderTrayRequestResult | undefined;
-}): ReactNode {
-  const register = report.register;
-  return (
-    <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-      <div className="grid min-w-0 gap-5">
-        <section className="rounded-2xl border border-border bg-surface p-5 shadow-[0_8px_30px_oklch(20%_0.02_250_/_0.04)]">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div><p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Cobro</p><h2 className="mt-1 font-heading text-[18px] font-semibold">Cargar cuenta</h2></div>
-            <span className="rounded-lg bg-bg px-3 py-2 font-mono text-[11px] text-text-muted">Caja {shortId(register.cashRegisterSessionId)}</span>
-          </div>
-          <PayableOrders scope={scope} initial={tray} selectedOrderId={orderId} />
-          {receipt !== undefined ? <ReceiptCard receipt={receipt} order={receiptOrder} header={printHeader} /> : receiptUnavailable ? (
-            <div id="cobrar" role="status" className="mt-4 grid gap-3 rounded-xl bg-bg p-4 text-[13px]">
-              <h3 className="font-heading text-lg font-semibold">Recibo no disponible</h3>
-              <p className="text-text-muted">Si acabas de cobrar, el pago quedó registrado; consulta el corte X para confirmarlo.</p>
-              <a href="/app/caja" className="inline-flex min-h-11 items-center justify-center rounded-xl bg-accent px-4 text-sm font-semibold text-white">Cobrar otra cuenta</a>
-            </div>
-          ) : orderId === undefined ? (
-            <p className="mt-4 rounded-xl bg-bg p-4 text-[13px] text-text-muted">Elige una orden abierta o parcialmente pagada para cargar su cuenta.</p>
-          ) : checkout?.status !== "ok" ? (
-            <div role="alert" className="mt-4 rounded-xl border border-[oklch(85%_0.06_25)] bg-error-bg p-4 text-[13px] text-[oklch(35%_0.1_25)]">No se pudo cargar esa cuenta. Elige otra orden o actualiza; no se registró ningún pago.</div>
-          ) : <PaymentPanel key={`${checkout.value.orderId}:${checkout.value.orderVersion}`} checkout={checkout.value} audit={{ ...newAudit(), paymentId: randomUUID() }} />}
-        </section>
-        <OperationalReport report={report} title="Corte X · vista operativa" />
-      </div>
-      <CloseRegisterPanel report={report} />
-    </div>
-  );
-}
-
-function CloseRegisterPanel({ report }: { readonly report: CashRegisterOperationalReportV1 }): ReactNode {
-  const audit = newAudit();
-  return (
-    <aside className="self-start rounded-2xl border border-border bg-surface p-5 shadow-[0_8px_30px_oklch(20%_0.02_250_/_0.04)] xl:sticky xl:top-5">
-      <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-error">Corte Z · cierre operativo</p>
-      <h2 className="mt-1 font-heading text-[18px] font-semibold">Cerrar caja</h2>
-      <p className="mt-2 text-[13px] leading-relaxed text-text-muted">El cierre congela esperado, contado y diferencia. No es un comprobante fiscal.</p>
-      <div className="my-4 rounded-xl bg-bg p-4"><Metric label="Efectivo esperado" value={formatMinorUnits(report.register.expectedCashBalanceMinor, report.register.currency)} emphasis /></div>
-      <form action={closeCashRegisterAction} className="grid gap-4">
-        <AuditFields audit={audit} />
-        <input type="hidden" name="cashRegisterSessionId" value={report.register.cashRegisterSessionId} />
-        <MoneyField hint="Efectivo que realmente hay en la caja al cerrar. El sistema lo compara con el esperado y guarda la diferencia." label="Efectivo contado" name="countedClosingBalancePesos" currency={report.register.currency} defaultValue="" />
-        <Field className="grid gap-1.5 text-[12px] font-semibold text-text" hint="Si el efectivo contado no coincide con el esperado, explica por qué (faltante, sobrante, error de cambio). Queda en la auditoría." label="Motivo de diferencia, si aplica"><textarea name="reason" maxLength={500} rows={3} className="rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" /></Field>
-        <CheckField className="flex items-center gap-3 rounded-xl border border-[oklch(85%_0.06_25)] bg-error-bg px-3 text-[13px]" labelClassName="flex min-h-11 flex-1 items-center py-2" hint="El cierre queda registrado y no se puede deshacer; revisa el efectivo contado antes de confirmar." label="Este cierre es definitivo. Confirmo el efectivo contado."><input required type="checkbox" name="confirmClose" value="yes" className="h-5 w-5 shrink-0" /></CheckField>
-        <CashierSubmitButton idle="Cerrar caja" pending="Guardando cierre…" tone="danger" />
-      </form>
-    </aside>
-  );
-}
-
-function ClosedRegisterView({ report }: { readonly report: CashRegisterOperationalReportV1 }): ReactNode {
-  return (
-    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
-      <OperationalReport report={report} title="Corte Z · caja cerrada" />
-      <section className="rounded-2xl border border-border bg-surface p-5">
-        <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Siguiente turno</p>
-        <h2 className="mt-1 font-heading text-[18px] font-semibold">Abrir una caja nueva</h2>
-        <p className="mt-2 text-[13px] text-text-muted">El cierre anterior permanece disponible en esta vista. Una nueva apertura tendrá otra sesión y otro turno.</p>
-        <div className="mt-5"><OpenRegisterPanel /></div>
-      </section>
-    </div>
-  );
-}
-
-function OperationalReport({ report, title }: { readonly report: CashRegisterOperationalReportV1; readonly title: string }): ReactNode {
-  const register = report.register;
-  return (
-    <section className="rounded-2xl border border-border bg-surface p-5 shadow-[0_8px_30px_oklch(20%_0.02_250_/_0.04)]">
-      <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Resumen no fiscal</p><h2 className="mt-1 font-heading text-[18px] font-semibold">{title}</h2></div><a href="/app/caja" className="min-h-10 rounded-lg border border-border px-3 py-2 text-[13px] font-medium">Actualizar</a></div>
-      <p className="mt-2 text-[12px] text-text-muted">Lectura autoritativa del turno. No cierra la caja ni genera folio, impresión o efecto fiscal.</p>
-      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Fondo inicial" value={formatMinorUnits(register.openingFloatMinor, register.currency)} />
-        <Metric label="Ventas en efectivo" value={formatMinorUnits(report.cashCapturedMinor, register.currency)} />
-        <Metric label="Tarjeta externa" value={formatMinorUnits(report.cardManualCapturedMinor, register.currency)} />
-        <Metric label="Transferencias" value={formatMinorUnits(report.transferCapturedMinor, register.currency)} />
-        <Metric label="Propinas" value={formatMinorUnits(report.tipsMinor, register.currency)} />
-        <Metric label="Cobros" value={String(report.paymentCount)} />
-        <Metric label="Efectivo esperado" value={formatMinorUnits(register.expectedCashBalanceMinor, register.currency)} emphasis />
-      </div>
-      <dl className="mt-4 grid gap-2 border-t border-border pt-4 text-[12px] text-text-muted sm:grid-cols-2">
-        <div><dt className="inline font-semibold text-text">Apertura: </dt><dd className="inline">{formatDate(register.openedAt)}</dd></div>
-        <div><dt className="inline font-semibold text-text">Fondo: </dt><dd className="inline">{formatMinorUnits(register.openingFloatMinor, register.currency)}</dd></div>
-        {register.closedAt !== null && <div><dt className="inline font-semibold text-text">Cierre: </dt><dd className="inline">{formatDate(register.closedAt)}</dd></div>}
-        {register.countedClosingBalanceMinor !== null && <div><dt className="inline font-semibold text-text">Contado: </dt><dd className="inline">{formatMinorUnits(register.countedClosingBalanceMinor, register.currency)}</dd></div>}
-        {register.differenceMinor !== null && <div><dt className="inline font-semibold text-text">Diferencia: </dt><dd className="inline">{formatMinorUnits(register.differenceMinor, register.currency)}</dd></div>}
-      </dl>
-      <div className="mt-5 border-t border-border pt-4">
-        <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-heading text-base font-semibold">Movimientos</h3><span className="text-xs text-text-muted">{report.movementCount} en el turno</span></div>
-        {report.movements.length === 0 ? <p className="mt-3 text-sm text-text-muted">Todavía no hay movimientos de efectivo.</p> : <ul className="mt-3 grid gap-2">
-          {report.movements.map((movement) => <li key={movement.movementId} className="flex min-w-0 items-start justify-between gap-3 rounded-xl bg-bg p-3 text-sm">
-            <div className="min-w-0"><p className="font-semibold">{movementLabel(movement.type)}</p><p className="text-xs text-text-muted">{formatTime(movement.occurredAt)}{movement.sourcePaymentId !== null ? ` · Cobro ${shortId(movement.sourcePaymentId)}` : ""}</p></div>
-            <span className="shrink-0 font-semibold">{movement.direction === "in" ? "+" : "−"}{formatMinorUnits(movement.amountMinor, register.currency)}</span>
-          </li>)}
-        </ul>}
-        {report.movementCount > report.movements.length && <p className="mt-2 text-xs text-text-muted">Se muestran los {report.movements.length} movimientos más recientes.</p>}
-      </div>
-    </section>
-  );
-}
-
-function MoneyField({ currency, defaultValue, hint, label, name, positive = false }: {
-  readonly hint: string;
-  readonly currency?: string;
-  readonly defaultValue: string;
-  readonly label: string;
-  readonly name: string;
-  readonly positive?: boolean;
-}): ReactNode {
-  const digits = currency === undefined ? 2 : currencyFractionDigits(currency);
-  const decimals = digits === 0 ? "sin decimales" : digits === null ? "Moneda no admitida; avisa al administrador." : `máximo ${digits} decimales`;
-  const basePattern = digits === 0 ? "[0-9]+" : digits === null ? "(?!)" : `[0-9]+([.,][0-9]{1,${digits}})?`;
-  const zeroPattern = digits === 0 ? "(?!0+$)" : `(?!0+(?:[.,]0{1,${digits ?? 2}})?$)`;
-  const pattern = positive ? `${zeroPattern}${basePattern}` : basePattern;
-  return <div className="grid gap-1.5 text-[12px] font-semibold text-text"><Field className="grid gap-1.5" hint={hint} label={label}><input required disabled={digits === null} name={name} type="text" inputMode="decimal" pattern={pattern} defaultValue={defaultValue} aria-describedby={`${name}-hint`} className="min-h-12 min-w-0 rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" /></Field>
-    <span id={`${name}-hint`} className="text-[11px] font-normal text-text-muted">{currency === undefined
-      ? "Por ejemplo 130; si la moneda admite centavos, también 130.50."
-      : digits === null ? decimals : `Por ejemplo 130${digits === 0 ? "" : " o 130.50"}; ${decimals}.`}</span>
-  </div>;
-}
-
-function Metric({ emphasis = false, label, value }: { readonly emphasis?: boolean; readonly label: string; readonly value: string }): ReactNode {
-  return <div className="min-w-0"><p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">{label}</p><p className={`mt-1 break-words font-heading text-[15px] ${emphasis ? "text-accent" : "text-text"}`}>{value}</p></div>;
-}
-
-function EmptyState({ action, body, title }: { readonly action?: ReactNode; readonly body: string; readonly title: string }): ReactNode {
-  return <div className="flex flex-1 items-center justify-center p-4"><div className="flex max-w-md flex-col items-center gap-3 rounded-2xl border border-border bg-surface p-6 text-center"><h2 className="font-heading text-[18px] font-semibold">{title}</h2><p className="text-[13px] leading-relaxed text-text-muted">{body}</p>{action}</div></div>;
-}
-
-function ErrorBanner({ code }: { readonly code: string }): ReactNode {
-  const message = code === "conflict" ? "El estado cambió en otro intento. Actualiza y vuelve a intentarlo; no se duplicó la operación."
-    : code === "close_not_confirmed" ? "Confirma explícitamente el cierre antes de continuar."
-    : code === "reason_required" ? "Si el efectivo contado difiere del esperado, escribe el motivo antes de cerrar."
-      : code === "unauthorized" ? "Tu autorización para esta caja ya no está vigente."
-        : code === "mixed_currency" ? "Hay cuentas abiertas en más de una moneda; avisa al administrador."
-          : code === "unsupported_currency" ? "La moneda de las cuentas no está admitida; avisa al administrador."
-          : code === "invalid_amount" ? "Escribe un importe válido; revisa los decimales de la moneda."
-          : code === "invalid_input" ? "Hay datos inválidos o incompletos. Revisa importes y evidencia externa."
-          : code === "context_invalid" ? "Este dispositivo perdió el contexto de caja. Actualiza para recuperarlo."
-            : "No se completó la operación. Actualiza el estado y vuelve a intentarlo.";
-  return <div role="alert" className="rounded-[10px] border border-[oklch(85%_0.06_25)] bg-error-bg px-3.5 py-2.5 text-[13px] text-[oklch(35%_0.1_25)]">{message}</div>;
-}
-
-function SuccessBanner({ code }: { readonly code: string }): ReactNode {
-  const message = code === "opened" ? "Caja abierta y lista para cobrar." : code === "closed" ? "Caja cerrada. El corte operativo quedó congelado." : "Cobro registrado sin duplicados.";
-  return <div role="status" className="rounded-[10px] border border-[oklch(84%_0.08_155)] bg-[oklch(96%_0.03_155)] px-3.5 py-2.5 text-[13px] text-[oklch(38%_0.1_155)]">{message}</div>;
-}
-
-function AuditFields({ audit }: { readonly audit: ReturnType<typeof newAudit> }): ReactNode {
-  return <><input type="hidden" name="eventId" value={audit.eventId} /><input type="hidden" name="idempotencyKey" value={audit.idempotencyKey} /><input type="hidden" name="occurredAt" value={audit.occurredAt} /></>;
-}
-
-function newAudit() {
-  return Object.freeze({ eventId: randomUUID(), idempotencyKey: randomUUID(), occurredAt: new Date().toISOString() });
-}
-
-function scalar(value: string | readonly string[] | undefined): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function validUuid(value: string | undefined): string | undefined {
-  return value !== undefined && UUID_PATTERN.test(value) ? value.toLowerCase() : undefined;
-}
-
-function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
-}
-
-function formatTime(value: string): string {
-  return new Intl.DateTimeFormat("es-MX", { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-}
-
-function shortId(value: string): string {
-  return value.slice(0, 8).toUpperCase();
 }
