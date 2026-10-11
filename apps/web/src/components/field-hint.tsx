@@ -1,6 +1,6 @@
 "use client";
 
-import { cloneElement, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 const VIEWPORT_MARGIN = 8;
 
@@ -87,36 +87,42 @@ export function FieldLabel({ className, hint, htmlFor, label }: {
  * A labelled control with its hint beside the label, not inside it: the control's accessible name is
  * just the label text. `children` receives the id to put on the control.
  */
-export function Field({ children, className, hint, id: fixedId, label }: {
-  /** A render function (client components) or a single element that receives the id (server components cannot pass functions). */
-  readonly children: ReactElement<{ id?: string }> | ((id: string) => ReactNode);
+export function Field({ children, className, hint, id: fixedId, label }: FieldControl & {
   readonly className: string;
   readonly hint?: string | undefined;
-  /** Existing control id to keep (tests, aria references); generated when omitted. */
-  readonly id?: string | undefined;
   readonly label: string;
 }): ReactNode {
   const generatedId = useId();
   const id = fixedId ?? generatedId;
   return <div className={className}>
     <span className="inline-flex flex-wrap items-center gap-1.5"><label htmlFor={id}>{label}</label>{hint === undefined ? null : <FieldHint label={label} text={hint} />}</span>
-    {typeof children === "function" ? children(id) : cloneElement(children, { id })}
+    {typeof children === "function" ? children(id) : children}
   </div>;
 }
 
 /** Checkbox row with its hint outside the label (see `Field`). `children` receives the id of the checkbox. */
-export function CheckField({ children, className, hint, label, labelClassName }: {
-  readonly children: ReactElement<{ id?: string }> | ((id: string) => ReactNode);
+export function CheckField({ children, className, hint, id: fixedId, label, labelClassName }: FieldControl & {
   readonly className: string;
   readonly hint: string;
   readonly label: string;
   /** Classes for the label, e.g. to make it cover the whole row as the 44 px tap target. */
   readonly labelClassName?: string | undefined;
 }): ReactNode {
-  const id = useId();
+  const generatedId = useId();
+  const id = fixedId ?? generatedId;
   return <span className={className}>
-    {typeof children === "function" ? children(id) : cloneElement(children, { id })}
+    {typeof children === "function" ? children(id) : children}
     <label htmlFor={id} className={labelClassName}>{label}</label>
     <FieldHint label={label} text={hint} />
   </span>;
 }
+
+/**
+ * How a Field or CheckField receives its control. Client components pass a render function that gets the
+ * generated id. Server components cannot pass functions, and the element they pass arrives as an opaque
+ * RSC node that must not be cloned (cloneElement on it makes the server render fail with «Element type is
+ * invalid ... undefined»), so they pass the control as is, with the same `id` on the Field and on the control.
+ */
+export type FieldControl =
+  | { readonly children: (id: string) => ReactNode; readonly id?: string | undefined }
+  | { readonly children: ReactNode; readonly id: string };
