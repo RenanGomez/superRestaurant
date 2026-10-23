@@ -4,7 +4,7 @@ import { createExponentialBackoff } from "./backoff.js";
 import { DeviceSyncEngine, createRandomIdGenerator, type EnqueueInput, type SyncEngineOptions, type SyncTransportPort } from "./engine.js";
 import { SyncEngineError, SyncTransportError } from "./errors.js";
 import { InMemorySyncStorage } from "./in-memory-storage.js";
-import { DEVICE, FakeClock, FakeServer, SCOPE_A1, SCOPE_A2, SCOPE_B1, SequentialIds, id, orderInput } from "./testkit.test.js";
+import { DEVICE, FakeClock, FakeServer, SCOPE_A1, SCOPE_A2, SCOPE_B1, SequentialIds, id, orderInput } from "./testkit.js";
 
 interface Rig {
   readonly storage: InMemorySyncStorage;
@@ -412,6 +412,54 @@ test("envelopes, snapshots y estado hidratado quedan profundamente congelados", 
     assert.equal(Object.isFrozen(frozen), true);
   }
   assert.throws(() => { (hydrated as { retryCount: number }).retryCount = 9; }, TypeError);
+});
+
+test("sync devuelve el resultado del push y pull revoked cuando el propio push revoco el scope", async () => {
+  const { engine, server } = rig();
+  await engine.enqueue(orderInput(SCOPE_A1, "sync-rev"));
+  server.pushError = new SyncTransportError("DEVICE_REVOKED", false);
+  const outcome = await engine.sync(SCOPE_A1);
+  assert.equal(outcome.push.revoked, true);
+  assert.equal(outcome.push.sent, 1);
+  assert.deepEqual([outcome.pull.status, outcome.pull.code], ["revoked", "DEVICE_REVOKED"]);
+  assert.equal(server.pullRequests.length, 0);
+});
+
+test("un create rechazado deja la replica sin la entidad y permite crear de nuevo", async () => {
+  const { engine, server } = rig();
+  const created = await engine.enqueue(orderInput(SCOPE_A1, "rej-create"));
+  assert.equal((await engine.listReplica(SCOPE_A1)).length, 1);
+  server.pushCodeOverride.set(created.eventId, { status: "rejected", code: "VALIDATION_FAILED" });
+  await engine.push(SCOPE_A1);
+  assert.deepEqual(await engine.listReplica(SCOPE_A1), []);
+  const again = await engine.enqueue({ ...orderInput(SCOPE_A1, "rej-create-2"), entityId: created.entityId });
+  assert.equal((await engine.getReplicaEntity(SCOPE_A1, "Order", created.entityId))?.pendingEventId, again.eventId);
+});
+
+test("un update rechazado restaura el snapshot previo y limpia pendingEventId", async () => {
+  const { engine, server } = rig();
+  const entityId = id(0x8001);
+  server.inject(SCOPE_A1, { entityType: "Order", entityId, canonicalVersion: 1, tombstone: false, snapshot: { note: "orig" } });
+  await engine.pull(SCOPE_A1);
+  const update = await engine.enqueue({ ...orderInput(SCOPE_A1, "rej-update"), entityId, operation: "update", payload: { note: "opt" } });
+  assert.deepEqual((await engine.getReplicaEntity(SCOPE_A1, "Order", entityId))?.snapshot, { note: "opt" });
+  server.pushCodeOverride.set(update.eventId, { status: "rejected", code: "VALIDATION_FAILED" });
+  await engine.push(SCOPE_A1);
+  const entity = await engine.getReplicaEntity(SCOPE_A1, "Order", entityId);
+  assert.deepEqual([entity?.snapshot, entity?.canonicalVersion, entity?.pendingEventId], [{ note: "orig" }, 1, null]);
+});
+
+test("conflict conserva el snapshot optimista y una nueva intencion puede reemplazar la entidad", async () => {
+  const { engine, server } = rig();
+  const created = await engine.enqueue({ ...orderInput(SCOPE_A1, "conf-create"), payload: { note: "mine" } });
+  server.conflictEntities.add(created.entityId);
+  await engine.push(SCOPE_A1);
+  assert.equal((await engine.getOutbox(SCOPE_A1))[0]?.localState, "conflict");
+  const kept = await engine.getReplicaEntity(SCOPE_A1, "Order", created.entityId);
+  assert.deepEqual([kept?.snapshot, kept?.pendingEventId], [{ note: "mine" }, created.eventId]);
+  const replacement = await engine.enqueue({ ...orderInput(SCOPE_A1, "conf-create-2"), entityId: created.entityId, payload: { note: "retry" } });
+  const replaced = await engine.getReplicaEntity(SCOPE_A1, "Order", created.entityId);
+  assert.deepEqual([replaced?.snapshot, replaced?.pendingEventId], [{ note: "retry" }, replacement.eventId]);
 });
 
 test("el generador por defecto produce UUID distintos y el motor funciona sin ids inyectados", async () => {

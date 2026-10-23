@@ -185,6 +185,24 @@ function replaceScope(state: DurableSyncState, scope: SyncScopeInput, patch: Par
   return { ...state, scopes: state.scopes.map((item) => (item === existing ? { ...item, ...patch } : item)) };
 }
 
+/**
+ * A rejected event never took effect on the server: undo its optimistic replica write. Entities whose
+ * latest pending event is a different one are left alone (that newer write still stands).
+ */
+function revertRejected(replica: readonly ReplicaEntity[], scope: SyncScopeInput, rejected: ReadonlySet<string>): ReplicaEntity[] {
+  const result: ReplicaEntity[] = [];
+  for (const entity of replica) {
+    if (!sameScope(entity, scope) || entity.pendingEventId === null || !rejected.has(entity.pendingEventId)) {
+      result.push(entity);
+    } else if (entity.revertTo === null) {
+      result.push({ ...entity, pendingEventId: null });
+    } else if (entity.revertTo.existed) {
+      result.push({ ...entity, snapshot: entity.revertTo.snapshot, canonicalVersion: entity.revertTo.canonicalVersion, pendingEventId: null, revertTo: null });
+    } // else: a rejected create leaves no entity behind
+  }
+  return result;
+}
+
 /** Marks the scope revoked and moves pending financial events to manual review. */
 function revokeScope(state: DurableSyncState, scope: SyncScopeInput, code: string, nowMs: number): DurableSyncState {
   const revoked = replaceScope(state, scope, { status: "revoked" });
@@ -351,6 +369,11 @@ export class DeviceSyncEngine {
   /** Push one batch, then pull. Push never advances the cursor; only the pull does. */
   public async sync(scopeInput: SyncScopeInput): Promise<{ readonly push: PushOutcome; readonly pull: PullOutcome }> {
     const push = await this.push(scopeInput);
+    if (push.revoked) {
+      // The push itself revoked the scope: report it instead of throwing and losing the push outcome.
+      const pull: PullOutcome = Object.freeze({ status: "revoked", pages: 0, applied: 0, code: push.failureCode ?? "SCOPE_REVOKED", retryable: false });
+      return { push, pull };
+    }
     const pull = await this.pull(scopeInput);
     return { push, pull };
   }
@@ -444,7 +467,13 @@ export class DeviceSyncEngine {
       return { state, result: duplicate };
     }
     if (existing?.tombstone === true) throw new SyncEngineError("ENTITY_TOMBSTONED");
-    if (existing !== undefined && probe.operation === "create") throw new SyncEngineError("ENTITY_EXISTS");
+    // A create may replace an entity whose optimistic write is stuck behind a conflict/manual review.
+    const stuckBy = existing?.pendingEventId === null || existing === undefined
+      ? undefined
+      : state.outbox.find((item) => item.eventId === existing.pendingEventId);
+    if (existing !== undefined && probe.operation === "create" && (stuckBy === undefined || !isBlockingState(stuckBy.localState))) {
+      throw new SyncEngineError("ENTITY_EXISTS");
+    }
 
     let snapshot: JsonObject | null = null;
     if (probe.operation !== "delete") {
@@ -459,6 +488,10 @@ export class DeviceSyncEngine {
     const entity: ReplicaEntity = {
       restaurantId: scope.restaurantId, branchId: scope.branchId, entityType: probe.entityType, entityId: probe.entityId,
       canonicalVersion: existing?.canonicalVersion ?? 0, tombstone: false, snapshot, pendingEventId: eventId,
+      // Keep the oldest pre-pending content so a rejection restores the last confirmed state.
+      revertTo: existing?.pendingEventId !== null && existing?.revertTo !== null && existing !== undefined
+        ? existing.revertTo
+        : { existed: existing !== undefined, snapshot: existing?.snapshot ?? null, canonicalVersion: existing?.canonicalVersion ?? 0 },
     };
     const registered = state.scopes.some((item) => sameScope(item, scope));
     const next: DurableSyncState = {
@@ -543,7 +576,8 @@ export class DeviceSyncEngine {
       if (next.localState === "accepted" || next.localState === "duplicate") pullRecommended = true;
       return next;
     });
-    let next: DurableSyncState = { ...state, outbox };
+    const rejected = new Set(events.filter((event) => event.state === "rejected").map((event) => event.eventId));
+    let next: DurableSyncState = rejected.size === 0 ? { ...state, outbox } : { ...state, outbox, replica: revertRejected(state.replica, scope, rejected) };
     if (revokedCode !== null) {
       next = revokeScope(next, scope, revokedCode, nowMs);
     }
@@ -667,10 +701,12 @@ export class DeviceSyncEngine {
         continue; // equal or older version never overwrites
       }
       const pending = existing?.pendingEventId ?? null;
+      const keepPending = !(change.tombstone || pending === null || terminalEvents.has(pending));
       const entity: ReplicaEntity = {
         restaurantId: scope.restaurantId, branchId: scope.branchId, entityType: change.entityType, entityId: change.entityId,
         canonicalVersion: change.canonicalVersion, tombstone: change.tombstone, snapshot: change.tombstone ? null : change.snapshot,
-        pendingEventId: change.tombstone || pending === null || terminalEvents.has(pending) ? null : pending,
+        pendingEventId: keepPending ? pending : null,
+        revertTo: keepPending ? (existing?.revertTo ?? null) : null,
       };
       if (position === undefined) {
         index.set(key, replica.length);

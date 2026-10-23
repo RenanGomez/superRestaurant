@@ -25,6 +25,15 @@ export interface ReplicaEntity {
   readonly snapshot: JsonObject | null;
   /** Outbox event whose optimistic local write is still reflected in `snapshot`. */
   readonly pendingEventId: string | null;
+  /** Replica content before the first still-pending optimistic write; restored if that event is rejected. */
+  readonly revertTo: ReplicaRevert | null;
+}
+
+export interface ReplicaRevert {
+  /** False when the entity did not exist locally before the optimistic write (a create). */
+  readonly existed: boolean;
+  readonly snapshot: JsonObject | null;
+  readonly canonicalVersion: number;
 }
 
 export interface DurableSyncState {
@@ -62,7 +71,7 @@ function parseScopeState(value: unknown): ParseResult<ScopeState> {
 
 function parseReplicaEntity(value: unknown): ParseResult<ReplicaEntity> {
   const record = asPlainRecord(value);
-  const keys = ["restaurantId", "branchId", "entityType", "entityId", "canonicalVersion", "tombstone", "snapshot", "pendingEventId"];
+  const keys = ["restaurantId", "branchId", "entityType", "entityId", "canonicalVersion", "tombstone", "snapshot", "pendingEventId", "revertTo"];
   if (record === undefined || hasExactKeys(record, keys) !== undefined) return fail("STATE_CORRUPT", "replica");
   const scope = parseSyncScope({ restaurantId: record["restaurantId"], branchId: record["branchId"] });
   const { entityType, entityId, canonicalVersion, tombstone, snapshot, pendingEventId } = record;
@@ -71,14 +80,27 @@ function parseReplicaEntity(value: unknown): ParseResult<ReplicaEntity> {
   if (!(pendingEventId === null || isSyncId(pendingEventId))) return fail("STATE_CORRUPT", "replica");
   let parsedSnapshot: JsonObject | null = null;
   if (snapshot !== null) {
-    const checked = checkPayload(snapshot);
+    const checked = checkPayload(snapshot, "inbound");
     if (!checked.ok) return fail("STATE_CORRUPT", "snapshot");
     parsedSnapshot = checked.value;
   }
+  const revert = parseRevert(record["revertTo"]);
+  if (!revert.ok) return revert;
   return ok({
     restaurantId: scope.value.restaurantId, branchId: scope.value.branchId, entityType, entityId,
-    canonicalVersion, tombstone, snapshot: parsedSnapshot, pendingEventId,
+    canonicalVersion, tombstone, snapshot: parsedSnapshot, pendingEventId, revertTo: revert.value,
   });
+}
+
+function parseRevert(value: unknown): ParseResult<ReplicaRevert | null> {
+  if (value === null) return ok(null);
+  const record = asPlainRecord(value);
+  if (record === undefined || hasExactKeys(record, ["existed", "snapshot", "canonicalVersion"]) !== undefined) return fail("STATE_CORRUPT", "revertTo");
+  const { existed, snapshot, canonicalVersion } = record;
+  if (typeof existed !== "boolean" || !isSafeNonNegativeInteger(canonicalVersion)) return fail("STATE_CORRUPT", "revertTo");
+  if (snapshot === null) return ok({ existed, snapshot: null, canonicalVersion });
+  const checked = checkPayload(snapshot, "inbound");
+  return checked.ok ? ok({ existed, snapshot: checked.value, canonicalVersion }) : fail("STATE_CORRUPT", "revertTo");
 }
 
 function parseList<T>(value: unknown, parse: (item: unknown) => ParseResult<T>, field: string): ParseResult<readonly T[]> {

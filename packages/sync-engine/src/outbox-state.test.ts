@@ -3,7 +3,7 @@ import test from "node:test";
 import { OUTBOX_STATES, parseOutboxEntry, type OutboxEntry, type OutboxState } from "./contract.js";
 import { SyncEngineError } from "./errors.js";
 import { OUTBOX_TRANSITIONS, canTransition, isBlockingState, isTerminalState, transitionOutboxState, type OutboxEvent } from "./outbox-state.js";
-import { ACTOR, DEVICE, id } from "./testkit.test.js";
+import { ACTOR, DEVICE, id } from "./testkit.js";
 
 function entryIn(state: OutboxState): OutboxEntry {
   const sending = state === "sending";

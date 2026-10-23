@@ -2,7 +2,7 @@ import { parseBranchScope, type BranchScope } from "@super-restaurant/shared-typ
 import { fail, ok, type ParseResult } from "./errors.js";
 import { deepFreeze } from "./freeze.js";
 import { asPlainRecord, hasExactKeys, isSafeNonNegativeInteger, type JsonObject } from "./json.js";
-import { checkPayload } from "./payload-guard.js";
+import { checkPayload, type PayloadMode } from "./payload-guard.js";
 
 export const SYNC_PROTOCOL_VERSION = 1;
 export const SYNC_SCHEMA_VERSION = "1";
@@ -99,7 +99,7 @@ export const ENVELOPE_KEYS = [
   "retryCount", "localState",
 ] as const;
 
-export function parseSyncEnvelope(value: unknown): ParseResult<SyncEnvelope> {
+export function parseSyncEnvelope(value: unknown, mode: PayloadMode = "strict"): ParseResult<SyncEnvelope> {
   const record = asPlainRecord(value);
   if (record === undefined) return fail("ENVELOPE_INVALID", "envelope");
   const badKey = hasExactKeys(record, ENVELOPE_KEYS);
@@ -132,7 +132,7 @@ export function parseSyncEnvelope(value: unknown): ParseResult<SyncEnvelope> {
   if (!isSafeNonNegativeInteger(retryCount)) return fail("ENVELOPE_INVALID", "retryCount");
   const localState = record["localState"];
   if (typeof localState !== "string" || !(OUTBOX_STATES as readonly string[]).includes(localState)) return fail("ENVELOPE_INVALID", "localState");
-  const payload = checkPayload(record["payload"]);
+  const payload = checkPayload(record["payload"], mode);
   if (!payload.ok) return payload;
 
   return ok(deepFreeze({
@@ -214,7 +214,8 @@ export function parseOutboxEntry(value: unknown): ParseResult<OutboxEntry> {
   if (badKey !== undefined) return fail("STATE_CORRUPT", badKey);
   const envelopeSource: Record<string, unknown> = {};
   for (const key of ENVELOPE_KEYS) envelopeSource[key] = record[key];
-  const envelope = parseSyncEnvelope(envelopeSource);
+  // Hydration trusts what strict enqueue already validated: shape, depth and size only.
+  const envelope = parseSyncEnvelope(envelopeSource, "inbound");
   if (!envelope.ok) return fail("STATE_CORRUPT", envelope.field);
   const outcome = parseOutcome(record["outcome"]);
   if (!outcome.ok) return outcome;
@@ -313,7 +314,7 @@ function parseChange(value: unknown): ParseResult<SyncPullChange> {
   if (!isSafeNonNegativeInteger(canonicalVersion) || typeof tombstone !== "boolean") return fail("PULL_RESPONSE_INVALID", "version");
   let parsedSnapshot: JsonObject | null = null;
   if (snapshot !== null && snapshot !== undefined) {
-    const checked = checkPayload(snapshot);
+    const checked = checkPayload(snapshot, "inbound");
     if (!checked.ok) return fail("PULL_RESPONSE_INVALID", "snapshot");
     parsedSnapshot = checked.value;
   }

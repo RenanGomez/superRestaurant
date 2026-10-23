@@ -3,7 +3,7 @@ import test from "node:test";
 import { DeviceSyncEngine } from "./engine.js";
 import { SyncEngineError, SyncTransportError } from "./errors.js";
 import { InMemorySyncStorage } from "./in-memory-storage.js";
-import { DEVICE, FakeClock, FakeServer, SCOPE_A1, SCOPE_A2, SCOPE_B1, SequentialIds, id, orderInput } from "./testkit.test.js";
+import { DEVICE, FakeClock, FakeServer, SCOPE_A1, SCOPE_A2, SCOPE_B1, SequentialIds, id, orderInput } from "./testkit.js";
 
 function rig(options: { readonly pullLimit?: number; readonly maxPagesPerSync?: number } = {}): {
   readonly storage: InMemorySyncStorage;
@@ -200,11 +200,54 @@ test("aislamiento en pull: dos restaurantes y sucursales no comparten replica ni
   assert.equal((await engine.getStatusSummary(SCOPE_A2)).scopeStatus, "unregistered");
 });
 
-test("un snapshot con datos sensibles invalida el lote de pull", async () => {
+test("un snapshot del servidor con claves como tokenCount se aplica, avanza el cursor y sobrevive al reinicio", async () => {
+  const { engine, server, storage, clock } = rig();
+  server.inject(SCOPE_A1, { ...change(0x9a0, 1, "x"), snapshot: { tokenCount: 3, passwordChangedAt: "2026-01-01T00:00:00Z" } });
+  const outcome = await engine.pull(SCOPE_A1);
+  assert.deepEqual([outcome.status, outcome.applied], ["complete", 1]);
+  assert.notEqual(await engine.getPullCursor(SCOPE_A1), null);
+  const restarted = new DeviceSyncEngine({ deviceId: DEVICE, storage, transport: server, ids: new SequentialIds(), clock });
+  assert.deepEqual((await restarted.getReplicaEntity(SCOPE_A1, "Order", id(0x9a0)))?.snapshot, { tokenCount: 3, passwordChangedAt: "2026-01-01T00:00:00Z" });
+});
+
+test("un snapshot demasiado profundo sigue invalidando el lote de pull", async () => {
   const { engine, server } = rig();
-  server.inject(SCOPE_A1, { ...change(0x9a0, 1, "x"), snapshot: { note: "4111111111111111" } });
+  let deep: Record<string, unknown> = { leaf: 1 };
+  for (let level = 0; level < 9; level += 1) deep = { child: deep };
+  server.pullOverride = (request) => ({
+    scope: request.scope, nextCursor: "x", hasMore: false,
+    changes: [{ ...change(0x9a1, 1, "x"), restaurantId: SCOPE_A1.restaurantId, branchId: SCOPE_A1.branchId, snapshot: deep }],
+  });
   await expectCode(engine.pull(SCOPE_A1), "PULL_RESPONSE_INVALID");
   assert.equal(await engine.getPullCursor(SCOPE_A1), null);
+});
+
+test("un error a mitad de paginacion conserva el cursor de la ultima pagina aplicada", async () => {
+  const { engine, server } = rig();
+  let calls = 0;
+  server.pullOverride = (request) => {
+    calls += 1;
+    if (calls === 2) throw new SyncTransportError("UNAVAILABLE", true);
+    return {
+      scope: request.scope, nextCursor: "page-1", hasMore: true,
+      changes: [{ ...change(0x9b0, 1, "p1"), restaurantId: SCOPE_A1.restaurantId, branchId: SCOPE_A1.branchId }],
+    };
+  };
+  const outcome = await engine.pull(SCOPE_A1);
+  assert.deepEqual([outcome.status, outcome.pages, outcome.applied, outcome.code, outcome.retryable], ["failed", 1, 1, "UNAVAILABLE", true]);
+  assert.equal(await engine.getPullCursor(SCOPE_A1), "page-1");
+  assert.equal((await engine.listReplica(SCOPE_A1)).length, 1);
+});
+
+test("una revocacion recibida por pull revoca el scope y manda pagos pendientes a manual_review", async () => {
+  const { engine, server } = rig();
+  const payment = await engine.enqueue({ ...orderInput(SCOPE_A1, "pull-rev-pay"), entityType: "Payment" });
+  server.pullError = new SyncTransportError("DEVICE_REVOKED", false);
+  const outcome = await engine.pull(SCOPE_A1);
+  assert.deepEqual([outcome.status, outcome.code], ["revoked", "DEVICE_REVOKED"]);
+  assert.equal((await engine.getOutbox(SCOPE_A1)).find((entry) => entry.eventId === payment.eventId)?.localState, "manual_review");
+  assert.equal((await engine.getStatusSummary(SCOPE_A1)).scopeStatus, "revoked");
+  await expectCode(engine.enqueue(orderInput(SCOPE_A1, "after-revoke")), "SCOPE_REVOKED");
 });
 
 test("el pull aplicado limpia la marca pendiente de un evento ya aceptado y el estado sobrevive al reinicio", async () => {

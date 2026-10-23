@@ -71,6 +71,26 @@ test("tipos no serializables y claves peligrosas se rechazan", () => {
   assert.equal(codeOf(JSON.parse('{"__proto__": {"x": 1}}')), "PAYLOAD_INVALID");
 });
 
+test("un PAN numerico que pasa Luhn se rechaza y un epoch de 13 digitos que no pasa se acepta", () => {
+  assert.equal(codeOf({ ref: 4111111111111111 }), "PAYLOAD_SENSITIVE_DATA");
+  assert.equal(codeOf({ refs: [4111111111111111] }), "PAYLOAD_SENSITIVE_DATA");
+  assert.equal(passesLuhn("1760000000000"), false);
+  assert.equal(codeOf({ epochMs: 1760000000000 }), "ok");
+  assert.equal(codeOf({ amountMinor: 4111111111111111, currency: "MXN" }), "ok", "money-keyed minor units are exempt");
+});
+
+test("el modo inbound valida solo forma, profundidad y tamano", () => {
+  const inbound = (value: unknown): string => {
+    const result = checkPayload(value, "inbound");
+    return result.ok ? "ok" : result.code;
+  };
+  assert.equal(inbound({ tokenCount: 3, passwordChangedAt: "2026-01-01", cvv: "x", total: 1.5, note: "4111111111111111" }), "ok");
+  assert.equal(checkPayload({ tokenCount: 3 }).ok, false, "strict stays the default");
+  assert.equal(inbound(nested(9)), "PAYLOAD_TOO_DEEP");
+  assert.equal(inbound({ blob: "a".repeat(65 * 1024) }), "PAYLOAD_TOO_LARGE");
+  assert.equal(inbound({ when: new Date() }), "PAYLOAD_INVALID");
+});
+
 test("el resultado es una copia profundamente congelada", () => {
   const source = { lines: [{ qty: 1 }] };
   const safe = assertSafePayload(source);

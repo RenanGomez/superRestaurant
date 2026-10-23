@@ -1,5 +1,4 @@
-// Shared fixtures for the sync-engine tests. Not a test file itself: no test is registered here and
-// the package test script never runs it directly (the `.test.ts` suffix only keeps it out of dist).
+// Shared fixtures for the sync-engine tests (excluded from the build via tsconfig.build.json).
 import { parseBranchScope, type BranchScope } from "@super-restaurant/shared-types";
 import type { ClockPort, EnqueueInput, IdGeneratorPort, SyncTransportPort } from "./engine.js";
 import type { SyncEnvelope, SyncPullChange, SyncPullRequest, SyncPushRequest } from "./contract.js";

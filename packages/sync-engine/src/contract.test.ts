@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parsePullResponse, parsePushResponse, parseSyncEnvelope, parseSyncScope, isRfc3339Utc } from "./contract.js";
-import { ACTOR, DEVICE, id } from "./testkit.test.js";
+import { ACTOR, DEVICE, id } from "./testkit.js";
 
 function validEnvelope(): Record<string, unknown> {
   return {

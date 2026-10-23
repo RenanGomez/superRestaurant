@@ -47,22 +47,33 @@ function utf8ByteLength(text: string): number {
   return bytes;
 }
 
-type Walk =ParseResult<JsonValue>;
+type Walk = ParseResult<JsonValue>;
 
-function walk(value: unknown, depth: number, key: string): Walk {
+/**
+ * `strict` (enqueue) also rejects PAN, secrets and invalid money. `inbound` (pull snapshots and
+ * hydration) only checks shape, depth and size, so server data such as `tokenCount` is accepted.
+ */
+export type PayloadMode = "strict" | "inbound";
+
+function walk(value: unknown, depth: number, key: string, strict: boolean, moneyKey = false): Walk {
   if (value === null || typeof value === "boolean") return ok(value);
   if (typeof value === "string") {
-    return looksLikePan(value) ? fail("PAYLOAD_SENSITIVE_DATA", key) : ok(value);
+    return strict && looksLikePan(value) ? fail("PAYLOAD_SENSITIVE_DATA", key) : ok(value);
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return fail("PAYLOAD_INVALID", key);
+    // Integer PAN-shaped numbers; money-keyed amounts are exempt (they are minor units).
+    if (strict && !moneyKey && Number.isInteger(value)) {
+      const digits = String(Math.abs(value));
+      if (/^\d{13,19}$/u.test(digits) && passesLuhn(digits)) return fail("PAYLOAD_SENSITIVE_DATA", key);
+    }
     return ok(value);
   }
   if (Array.isArray(value)) {
     if (depth + 1 > MAX_PAYLOAD_DEPTH) return fail("PAYLOAD_TOO_DEEP", key);
     const items: JsonValue[] = [];
     for (const item of value as readonly unknown[]) {
-      const child = walk(item, depth + 1, key);
+      const child = walk(item, depth + 1, key, strict);
       if (!child.ok) return child;
       items.push(child.value);
     }
@@ -71,27 +82,28 @@ function walk(value: unknown, depth: number, key: string): Walk {
   const record = asPlainRecord(value);
   if (record === undefined) return fail("PAYLOAD_INVALID", key);
   if (depth + 1 > MAX_PAYLOAD_DEPTH) return fail("PAYLOAD_TOO_DEEP", key);
-  return walkRecord(record, depth + 1, key);
+  return walkRecord(record, depth + 1, key, strict);
 }
 
-function walkRecord(record: Readonly<Record<string, unknown>>, depth: number, path: string): Walk {
+function walkRecord(record: Readonly<Record<string, unknown>>, depth: number, path: string, strict: boolean): Walk {
   const copy: Record<string, JsonValue> = {};
   for (const name of Object.keys(record)) {
     const fieldPath = path === "" ? name : `${path}.${name}`;
     if (name === "__proto__") return fail("PAYLOAD_INVALID", fieldPath);
-    if (SENSITIVE_KEY.test(name) || PAN_KEY.test(name)) return fail("PAYLOAD_SENSITIVE_DATA", fieldPath);
+    if (strict && (SENSITIVE_KEY.test(name) || PAN_KEY.test(name))) return fail("PAYLOAD_SENSITIVE_DATA", fieldPath);
     const raw = record[name];
-    if (MONEY_KEY.test(name)) {
+    const moneyKey = MONEY_KEY.test(name);
+    if (strict && moneyKey) {
       if (typeof raw === "number" && !Number.isSafeInteger(raw)) return fail("PAYLOAD_MONEY_INVALID", fieldPath);
       if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && !isMoney(raw)) {
         return fail("PAYLOAD_MONEY_INVALID", fieldPath);
       }
     }
-    const child = walk(raw, depth, fieldPath);
+    const child = walk(raw, depth, fieldPath, strict, moneyKey);
     if (!child.ok) return child;
     copy[name] = child.value;
   }
-  if (Object.hasOwn(copy, "amountMinor") && !isMoney(copy)) return fail("PAYLOAD_MONEY_INVALID", path);
+  if (strict && Object.hasOwn(copy, "amountMinor") && !isMoney(copy)) return fail("PAYLOAD_MONEY_INVALID", path);
   return ok(copy);
 }
 
@@ -108,10 +120,10 @@ function isMoney(value: unknown): boolean {
  * Validates a payload against section 12 and returns a deep-frozen clone, so callers
  * can keep mutating their own object without touching durable state.
  */
-export function checkPayload(value: unknown): ParseResult<JsonObject> {
+export function checkPayload(value: unknown, mode: PayloadMode = "strict"): ParseResult<JsonObject> {
   const record = asPlainRecord(value);
   if (record === undefined) return fail("PAYLOAD_INVALID", "payload");
-  const walked = walkRecord(record, 1, "");
+  const walked = walkRecord(record, 1, "", mode === "strict");
   if (!walked.ok) return walked;
   if (utf8ByteLength(JSON.stringify(walked.value)) > MAX_PAYLOAD_BYTES) {
     return fail("PAYLOAD_TOO_LARGE", "payload");
