@@ -77,3 +77,10 @@ Thumbs.db
 # Claude Code local worktrees
 .claude/worktrees/
 .claude/runs/
+
+# Web E2E (Playwright, buttonmash)
+apps/web/playwright/.auth/
+apps/web/playwright-report/
+apps/web/test-results/
+apps/web/buttonmash-report/
+apps/web/e2e-report/

@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "allowImportingTsExtensions": true,
+    "plugins": [],
+    "types": ["node"]
+  },
+  "include": ["e2e/**/*.ts", "playwright.config.ts", "buttonmash.config.ts"],
+  "exclude": []
+}
