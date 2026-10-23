@@ -32,3 +32,5 @@ Si una ruta sólo muestra «No tienes autorización…» para la cuenta guardada
 
 El crawl salta controles destructivos (cobrar, guardar, cancelar, enviar a cocina, etc.), enlaces externos,
 logout e inputs de archivo. Úsalo sólo con datos de prueba.
+
+El crawl excluye los enlaces de la navegación principal y «Cerrar sesión» salvo en `/app` (donde se pulsan una vez), y «Cambiar sucursal» fuera de `/app` (descarta el alcance). Tras cada regreso con `goto` espera `main` + `networkidle` y reafirma la sucursal; si un índice ya no existe lo marca «ya no existe». Cierra los diálogos abiertos con «Cerrar»/«Cancelar» (`closedDialog: true`). El resumen `[dom]` incluye `skippedByReason` y se guarda en `e2e-report/dom-skipped-by-reason-<proyecto>.json`.

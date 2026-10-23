@@ -63,7 +63,8 @@ export interface BranchSelection {
 }
 
 const ACTIVE_BRANCH = /Sucursal activa/;
-const MAIN_NAV = 'nav[aria-label="Navegación principal"]';
+export const MAIN_NAV_SELECTOR = 'nav[aria-label="Navegación principal"]';
+const MAIN_NAV = MAIN_NAV_SELECTOR;
 
 async function readBranchLabel(page: Page): Promise<string | null> {
   const text = await page.locator(MAIN_NAV).first().innerText({ timeout: 2_000 }).catch(() => "");
@@ -141,5 +142,22 @@ export async function assertBranchState(page: Page, path: string): Promise<numbe
   return mainText.length;
 }
 
-export const NEXT_DEVTOOLS =/Next\.js Dev Tools/i;
+/** Cierra un diálogo abierto pulsando «Cerrar», «Cancelar» o aria-label="Cerrar". Devuelve true si pulsó alguno. */
+export async function closeOpenDialog(page: Page): Promise<boolean> {
+  const dialog = page.locator('[role="dialog"]:visible').first();
+  if ((await dialog.count()) === 0) return false;
+  const closer = dialog
+    .locator('button[aria-label="Cerrar"]')
+    .or(dialog.getByRole("button", { name: /^(cerrar|cancelar)$/i }))
+    .first();
+  if ((await closer.count()) === 0) return false;
+  try {
+    await closer.click({ timeout: 2_000, noWaitAfter: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const NEXT_DEVTOOLS = /Next\.js Dev Tools/i;
 export const SAFE_NAMES: readonly RegExp[] = [/^confirmar sucursal$/i];

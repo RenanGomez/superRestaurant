@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { assertBranchState, attachDiagnostics, detectUnauthorized, ensureBranchSelected, expectAuthenticated, expectFinalRoute, hasNextErrorOverlay, isDestructive, NEXT_DEVTOOLS, SAFE_NAMES } from "./helpers.ts";
+import { assertBranchState, attachDiagnostics, closeOpenDialog, detectUnauthorized, ensureBranchSelected, expectAuthenticated, expectFinalRoute, hasNextErrorOverlay, isDestructive, MAIN_NAV_SELECTOR, NEXT_DEVTOOLS, SAFE_NAMES } from "./helpers.ts";
 import { APP_ROUTES } from "./routes.ts";
 
 const SELECTOR =
@@ -18,6 +18,7 @@ interface ElementRecord {
   result: "clicked" | "filled" | "skipped" | "error";
   reason?: string;
   navigatedTo?: string;
+  closedDialog?: boolean;
   pageErrorsAfter: number;
   mainTextLength: number;
 }
@@ -33,8 +34,8 @@ function fillValueFor(type: string): string {
   return "prueba e2e";
 }
 
-async function describe(el: Locator): Promise<{ tag: string; name: string; href: string | null; type: string; inNextPortal: boolean }> {
-  return el.evaluate((node) => {
+async function describe(el: Locator): Promise<{ tag: string; name: string; href: string | null; type: string; inNextPortal: boolean; inMainNav: boolean }> {
+  return el.evaluate((node, navSelector) => {
     const e = node as HTMLElement;
     const input = node as HTMLInputElement;
     const name =
@@ -45,8 +46,15 @@ async function describe(el: Locator): Promise<{ tag: string; name: string; href:
       href: e.getAttribute("href"),
       type: (input.type ?? "").toLowerCase(),
       inNextPortal: node.closest("nextjs-portal") !== null,
+      inMainNav: node.closest(navSelector) !== null,
     };
-  });
+  }, MAIN_NAV_SELECTOR);
+}
+
+async function settle(page: Page, path: string): Promise<void> {
+  await page.locator("main").first().waitFor({ state: "visible", timeout: 15_000 });
+  await page.waitForLoadState("networkidle").catch(() => undefined);
+  await ensureBranchSelected(page, path);
 }
 
 for (const route of APP_ROUTES) {
@@ -78,7 +86,16 @@ for (const route of APP_ROUTES) {
       const el = page.locator(SELECTOR).nth(i);
       const record: ElementRecord = { route: route.path, index: i, tag: "?", name: "", href: null, result: "skipped", pageErrorsAfter: 0, mainTextLength };
       try {
-        if (!(await el.isVisible()) || !(await el.isEnabled())) {
+        if ((await el.count()) === 0) {
+          await el.waitFor({ state: "attached", timeout: 5_000 }).catch(() => undefined);
+        }
+        const exists = (await el.count()) > 0;
+        if (exists && !(await el.isVisible())) {
+          await el.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => undefined);
+        }
+        if (!exists) {
+          record.reason = "ya no existe";
+        } else if (!(await el.isVisible()) || !(await el.isEnabled())) {
           record.reason = "no visible o deshabilitado";
         } else {
           const info = await describe(el);
@@ -87,8 +104,13 @@ for (const route of APP_ROUTES) {
           record.href = info.href;
           const externalHref = info.href !== null && /^(mailto:|tel:)/i.test(info.href);
           const otherOrigin = info.href !== null && /^https?:/i.test(info.href) && new URL(info.href).origin !== origin;
+          const navLike = info.inMainNav || (info.tag === "button" && /cerrar sesi[oó]n/i.test(info.name));
           if (info.inNextPortal || NEXT_DEVTOOLS.test(info.name)) {
             record.reason = "herramienta de Next";
+          } else if (navLike && route.path !== "/app") {
+            record.reason = "navegación principal";
+          } else if (route.path !== "/app" && /^cambiar sucursal$/i.test(info.name)) {
+            record.reason = "cambio de sucursal (descarta el alcance)";
           } else if (!SAFE_NAMES.some((re) => re.test(info.name)) && (isDestructive(info.name) || (info.href !== null && isDestructive(info.href)))) {
             record.reason = "destructivo";
           } else if (externalHref || otherOrigin || (info.href?.includes("/logout") ?? false)) {
@@ -116,11 +138,13 @@ for (const route of APP_ROUTES) {
             await el.click({ timeout: 3_000, noWaitAfter: true });
             await page.waitForTimeout(300);
             await page.keyboard.press("Escape");
+            if (await closeOpenDialog(page)) record.closedDialog = true;
             record.result = "clicked";
             if (page.url() !== before) {
               record.navigatedTo = page.url();
               await page.goto(route.path);
               await page.waitForLoadState("domcontentloaded");
+              await settle(page, route.path);
             }
           }
         }
@@ -133,16 +157,24 @@ for (const route of APP_ROUTES) {
     }
 
     const count = (r: ElementRecord["result"]) => records.filter((x) => x.result === r).length;
+    const skippedByReason: Record<string, number> = {};
+    for (const r of records) {
+      if (r.result === "skipped") skippedByReason[r.reason ?? "?"] = (skippedByReason[r.reason ?? "?"] ?? 0) + 1;
+    }
     console.log(
-      `[dom] ${route.path}: encontrados=${found} pulsados=${count("clicked")} llenados=${count("filled")} saltados=${count("skipped")} errores=${count("error")} mainTextLength=${mainTextLength} sucursal="${branch}"`,
+      `[dom] ${route.path}: encontrados=${found} pulsados=${count("clicked")} llenados=${count("filled")} saltados=${count("skipped")} errores=${count("error")} mainTextLength=${mainTextLength} sucursal="${branch}" skippedByReason=${JSON.stringify(skippedByReason)}`,
     );
 
     const project = testInfo.project.name;
     const file = `e2e-report/dom-coverage-${project}.json`;
     mkdirSync("e2e-report", { recursive: true });
     const accumulated: Record<string, ElementRecord[]> = existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as Record<string, ElementRecord[]>) : {};
+    const summaryFile = `e2e-report/dom-skipped-by-reason-${project}.json`;
+    const accumulatedSummary: Record<string, Record<string, number>> = existsSync(summaryFile) ? (JSON.parse(readFileSync(summaryFile, "utf8")) as Record<string, Record<string, number>>) : {};
     accumulated[route.path] = records;
+    accumulatedSummary[route.path] = skippedByReason;
     writeFileSync(file, JSON.stringify(accumulated, null, 2));
+    writeFileSync(summaryFile, JSON.stringify(accumulatedSummary, null, 2));
     await testInfo.attach(`dom-coverage-${project}.json`, { body: JSON.stringify(records, null, 2), contentType: "application/json" });
 
     expect.soft(diagnostics.pageErrors, "pageerror").toEqual([]);
