@@ -5,7 +5,8 @@ Corre contra servidores locales ya levantados: web `http://localhost:8082` y API
 
 ## Sesión
 `pnpm e2e:auth` abre Chrome en `/login`; inicia sesión a mano. Al llegar a `/app` guarda la sesión en
-`playwright/.auth/user.json` (ignorado por git). Ningún script escribe credenciales. Sin ese archivo los
+`playwright/.auth/user.json` (ignorado por git). El login debe terminar con la sucursal confirmada («Elige tu sucursal» → «Confirmar sucursal»); si la cuenta no tiene
+membresías el script sale con error. Ningún script escribe credenciales. Sin ese archivo los
 tests autenticados fallan con «Sin sesión: ejecuta pnpm e2e:auth».
 
 ## Scripts
@@ -16,6 +17,7 @@ tests autenticados fallan con «Sin sesión: ejecuta pnpm e2e:auth».
 - `pnpm e2e:mash:dry` / `pnpm e2e:mash`: buttonmash (monkey tester), configurado en `buttonmash.config.ts`.
   Requiere una vez `pnpm exec playwright install chromium` (~170 MB, decisión del humano).
 - `E2E_MAX_ELEMENTS` (default 150) limita los elementos por ruta en el crawl; `E2E_BASE_URL` cambia el destino.
+- `E2E_BRANCH`: texto de la etiqueta de la sucursal que los tests eligen si aparece «Elige tu sucursal» (por defecto la primera).
 
 ## Reportes
 - `playwright-report/`: HTML con trazas y capturas de los fallos.

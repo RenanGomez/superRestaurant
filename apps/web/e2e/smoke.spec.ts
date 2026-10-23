@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { attachDiagnostics, expectAuthenticated, hasNextErrorOverlay } from "./helpers.ts";
+import { attachDiagnostics, ensureBranchSelected, expectAuthenticated, expectFinalRoute, hasNextErrorOverlay } from "./helpers.ts";
 import { APP_ROUTES, PUBLIC_ROUTES } from "./routes.ts";
 
 for (const route of APP_ROUTES) {
@@ -8,6 +8,8 @@ for (const route of APP_ROUTES) {
     const diagnostics = attachDiagnostics(page, testInfo);
     await page.goto(route.path);
     expectAuthenticated(page, route.path);
+    await ensureBranchSelected(page, route.path);
+    expectFinalRoute(page, route.path);
     await page.waitForLoadState("networkidle").catch(() => undefined);
     expect(await hasNextErrorOverlay(page), "overlay de error de Next").toBe(false);
     await testInfo.attach("diagnostics.json", { body: JSON.stringify(diagnostics, null, 2), contentType: "application/json" });

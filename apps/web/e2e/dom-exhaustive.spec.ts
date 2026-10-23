@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 
 import { expect, test, type Locator } from "@playwright/test";
 
-import { attachDiagnostics, expectAuthenticated, hasNextErrorOverlay, isDestructive } from "./helpers.ts";
+import { attachDiagnostics, ensureBranchSelected, expectAuthenticated, expectFinalRoute, hasNextErrorOverlay, isDestructive, NEXT_DEVTOOLS, SAFE_NAMES } from "./helpers.ts";
 import { APP_ROUTES } from "./routes.ts";
 
 const SELECTOR =
@@ -32,7 +32,7 @@ function fillValueFor(type: string): string {
   return "prueba e2e";
 }
 
-async function describe(el: Locator): Promise<{ tag: string; name: string; href: string | null; type: string }> {
+async function describe(el: Locator): Promise<{ tag: string; name: string; href: string | null; type: string; inNextPortal: boolean }> {
   return el.evaluate((node) => {
     const e = node as HTMLElement;
     const input = node as HTMLInputElement;
@@ -43,6 +43,7 @@ async function describe(el: Locator): Promise<{ tag: string; name: string; href:
       name: (name !== "" ? name : (input.name ?? "") || (input.placeholder ?? "")).replace(/\s+/g, " ").trim().slice(0, 60),
       href: e.getAttribute("href"),
       type: (input.type ?? "").toLowerCase(),
+      inNextPortal: node.closest("nextjs-portal") !== null,
     };
   });
 }
@@ -53,6 +54,8 @@ for (const route of APP_ROUTES) {
     const diagnostics = attachDiagnostics(page, testInfo);
     await page.goto(route.path);
     expectAuthenticated(page, route.path);
+    await ensureBranchSelected(page, route.path);
+    expectFinalRoute(page, route.path);
     await page.waitForLoadState("networkidle").catch(() => undefined);
 
     const origin = new URL(baseURL ?? "http://localhost:8082").origin;
@@ -60,6 +63,7 @@ for (const route of APP_ROUTES) {
     const found = await all.count();
     const total = Math.min(found, MAX_ELEMENTS);
     const records: ElementRecord[] = [];
+    const branch = await page.locator("header").first().innerText({ timeout: 2_000 }).then((t) => t.replace(/\s+/g, " ").trim().slice(0, 80)).catch(() => "?");
 
     for (let i = 0; i < total; i += 1) {
       const el = page.locator(SELECTOR).nth(i);
@@ -74,7 +78,9 @@ for (const route of APP_ROUTES) {
           record.href = info.href;
           const externalHref = info.href !== null && /^(mailto:|tel:)/i.test(info.href);
           const otherOrigin = info.href !== null && /^https?:/i.test(info.href) && new URL(info.href).origin !== origin;
-          if (isDestructive(info.name) || (info.href !== null && isDestructive(info.href))) {
+          if (info.inNextPortal || NEXT_DEVTOOLS.test(info.name)) {
+            record.reason = "herramienta de Next";
+          } else if (!SAFE_NAMES.some((re) => re.test(info.name)) && (isDestructive(info.name) || (info.href !== null && isDestructive(info.href)))) {
             record.reason = "destructivo";
           } else if (externalHref || otherOrigin || (info.href?.includes("/logout") ?? false)) {
             record.reason = "href externo o logout";
@@ -119,8 +125,10 @@ for (const route of APP_ROUTES) {
 
     const count = (r: ElementRecord["result"]) => records.filter((x) => x.result === r).length;
     console.log(
-      `[dom] ${route.path}: encontrados=${found} pulsados=${count("clicked")} llenados=${count("filled")} saltados=${count("skipped")} errores=${count("error")}`,
+      `[dom] ${route.path}: encontrados=${found} pulsados=${count("clicked")} llenados=${count("filled")} saltados=${count("skipped")} errores=${count("error")} sucursal="${branch}"`,
     );
+
+    if (route.path !== "/app") expect(found, "elementos interactivos encontrados").toBeGreaterThan(12);
 
     const project = testInfo.project.name;
     const file = `e2e-report/dom-coverage-${project}.json`;

@@ -53,3 +53,42 @@ export const DESTRUCTIVE =
 export function isDestructive(text: string): boolean {
   return DESTRUCTIVE.test(text.normalize("NFD").replace(/\p{M}/gu, ""));
 }
+
+export const SIN_SUCURSAL_TEXT = "Sin sucursales asignadas";
+export const ELIGE_SUCURSAL_TEXT = "Elige tu sucursal";
+
+/** Si la app pide elegir sucursal, elige una, confirma y vuelve a la ruta pedida. Falla si no hay sucursal utilizable. */
+export async function ensureBranchSelected(page: Page, path: string): Promise<void> {
+  const chooser = page.getByText(ELIGE_SUCURSAL_TEXT, { exact: false }).first();
+  const empty = page.getByText(SIN_SUCURSAL_TEXT, { exact: false }).first();
+  if (await empty.isVisible().catch(() => false)) {
+    throw new Error(`Sin sucursal: ${SIN_SUCURSAL_TEXT}`);
+  }
+  if (await chooser.isVisible().catch(() => false)) {
+    const wanted = process.env.E2E_BRANCH;
+    const radios = page.locator('input[name="scope"]');
+    const radio = wanted === undefined || wanted === "" ? radios.first() : page.getByLabel(wanted).first();
+    await radio.check({ timeout: 5_000 });
+    await page.getByRole("button", { name: "Confirmar sucursal" }).click({ noWaitAfter: false, timeout: 5_000 });
+    await page.waitForLoadState("networkidle").catch(() => undefined);
+    await page.goto(path);
+    await page.waitForLoadState("networkidle").catch(() => undefined);
+    if (await page.getByText(ELIGE_SUCURSAL_TEXT, { exact: false }).first().isVisible().catch(() => false)) {
+      throw new Error(`Sin sucursal: sigue visible «${ELIGE_SUCURSAL_TEXT}» tras confirmar`);
+    }
+    if (await page.getByText(SIN_SUCURSAL_TEXT, { exact: false }).first().isVisible().catch(() => false)) {
+      throw new Error(`Sin sucursal: ${SIN_SUCURSAL_TEXT}`);
+    }
+  }
+}
+
+/** Falla si la ruta final no es la pedida (salvo /app). */
+export function expectFinalRoute(page: Page, path: string): void {
+  const finalPath = new URL(page.url()).pathname;
+  if (path !== "/app" && finalPath !== path) {
+    throw new Error(`La ruta ${path} redirigió a ${finalPath}`);
+  }
+}
+
+export const NEXT_DEVTOOLS = /Next\.js Dev Tools/i;
+export const SAFE_NAMES: readonly RegExp[] = [/^confirmar sucursal$/i];

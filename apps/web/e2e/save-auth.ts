@@ -17,6 +17,21 @@ try {
   const page = await context.newPage();
   await page.goto("/login");
   await page.waitForURL(/\/app(\/|\?|$)/, { timeout: 10 * 60_000 });
+  await page.waitForLoadState("networkidle").catch(() => undefined);
+  const limit = { timeout: 10 * 60_000 };
+  if (await page.getByText("Sin sucursales asignadas").first().isVisible().catch(() => false)) {
+    console.error("La cuenta no tiene membresía en ninguna sucursal; entra con otra cuenta");
+    process.exitCode = 1;
+    throw new Error("sin membresía");
+  }
+  if (await page.getByText("Elige tu sucursal").first().isVisible().catch(() => false)) {
+    console.log("Elige tu sucursal y pulsa Confirmar sucursal en la ventana de Chrome");
+    await page.waitForFunction(
+      () => !document.body.innerText.includes("Elige tu sucursal") || !/^\/app\/?$/.test(location.pathname),
+      undefined,
+      limit,
+    );
+  }
   await context.storageState({ path: AUTH_FILE });
   console.log(`Sesión guardada en apps/web/${AUTH_FILE} (ignorada por git).`);
 } finally {
