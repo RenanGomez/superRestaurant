@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 
 import { expect, test, type Locator } from "@playwright/test";
 
-import { attachDiagnostics, detectUnauthorized, ensureBranchSelected, expectAuthenticated, expectFinalRoute, hasNextErrorOverlay, isDestructive, NEXT_DEVTOOLS, SAFE_NAMES } from "./helpers.ts";
+import { assertBranchState, attachDiagnostics, detectUnauthorized, ensureBranchSelected, expectAuthenticated, expectFinalRoute, hasNextErrorOverlay, isDestructive, NEXT_DEVTOOLS, SAFE_NAMES } from "./helpers.ts";
 import { APP_ROUTES } from "./routes.ts";
 
 const SELECTOR =
@@ -19,6 +19,7 @@ interface ElementRecord {
   reason?: string;
   navigatedTo?: string;
   pageErrorsAfter: number;
+  mainTextLength: number;
 }
 
 function todayIso(): string {
@@ -67,18 +68,15 @@ for (const route of APP_ROUTES) {
 
     const origin = new URL(baseURL ?? "http://localhost:8082").origin;
     const all = page.locator(SELECTOR);
-    let found = await all.count();
-    if (found <= 12) {
-      await page.waitForTimeout(2_000);
-      found = await all.count();
-    }
+    const found = await all.count();
+    const mainTextLength = await assertBranchState(page, route.path);
     const total = Math.min(found, MAX_ELEMENTS);
     const records: ElementRecord[] = [];
     const branch = await page.locator("header").first().innerText({ timeout: 2_000 }).then((t) => t.replace(/\s+/g, " ").trim().slice(0, 80)).catch(() => "?");
 
     for (let i = 0; i < total; i += 1) {
       const el = page.locator(SELECTOR).nth(i);
-      const record: ElementRecord = { route: route.path, index: i, tag: "?", name: "", href: null, result: "skipped", pageErrorsAfter: 0 };
+      const record: ElementRecord = { route: route.path, index: i, tag: "?", name: "", href: null, result: "skipped", pageErrorsAfter: 0, mainTextLength };
       try {
         if (!(await el.isVisible()) || !(await el.isEnabled())) {
           record.reason = "no visible o deshabilitado";
@@ -136,10 +134,8 @@ for (const route of APP_ROUTES) {
 
     const count = (r: ElementRecord["result"]) => records.filter((x) => x.result === r).length;
     console.log(
-      `[dom] ${route.path}: encontrados=${found} pulsados=${count("clicked")} llenados=${count("filled")} saltados=${count("skipped")} errores=${count("error")} sucursal="${branch}"`,
+      `[dom] ${route.path}: encontrados=${found} pulsados=${count("clicked")} llenados=${count("filled")} saltados=${count("skipped")} errores=${count("error")} mainTextLength=${mainTextLength} sucursal="${branch}"`,
     );
-
-    if (route.path !== "/app") expect(found, "elementos interactivos encontrados").toBeGreaterThan(12);
 
     const project = testInfo.project.name;
     const file = `e2e-report/dom-coverage-${project}.json`;

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { attachDiagnostics, detectUnauthorized, ensureBranchSelected, expectAuthenticated, expectFinalRoute, hasNextErrorOverlay } from "./helpers.ts";
+import { assertBranchState, attachDiagnostics, detectUnauthorized, ensureBranchSelected, expectAuthenticated, expectFinalRoute, hasNextErrorOverlay } from "./helpers.ts";
 import { APP_ROUTES, PUBLIC_ROUTES } from "./routes.ts";
 
 for (const route of APP_ROUTES) {
@@ -17,6 +17,7 @@ for (const route of APP_ROUTES) {
       console.log(`[dom] ${route.path}: sin autorización para esta cuenta`);
       test.skip(true, unauthorized);
     }
+    await assertBranchState(page, route.path);
     expect(await hasNextErrorOverlay(page), "overlay de error de Next").toBe(false);
     await testInfo.attach("diagnostics.json", { body: JSON.stringify(diagnostics, null, 2), contentType: "application/json" });
     expect.soft(diagnostics.pageErrors, "pageerror").toEqual([]);

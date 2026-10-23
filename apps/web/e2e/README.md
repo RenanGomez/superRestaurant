@@ -19,6 +19,8 @@ tests autenticados fallan con «Sin sesión: ejecuta pnpm e2e:auth».
 - `E2E_MAX_ELEMENTS` (default 150) limita los elementos por ruta en el crawl; `E2E_BASE_URL` cambia el destino.
 - `E2E_BRANCH`: texto de la etiqueta de la sucursal que los tests eligen si aparece «Elige tu sucursal» (por defecto la primera).
 
+La guarda es de estado, no de cantidad: el test falla si el nav no muestra «Sucursal activa» (salvo `/app`), si `main` muestra «Elige tu sucursal» o «Sin sucursales asignadas», o si `main` tiene menos de 20 caracteres. `encontrados` y `mainTextLength` son datos informativos (resumen `[dom]` y JSON de cobertura).
+
 Si una ruta sólo muestra «No tienes autorización…» para la cuenta guardada, el test se salta con la anotación `sin-autorizacion` (no cuenta como cobertura).
 
 ## Reportes

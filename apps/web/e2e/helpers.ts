@@ -125,5 +125,21 @@ export function expectFinalRoute(page: Page, path: string): void {
   }
 }
 
-export const NEXT_DEVTOOLS = /Next\.js Dev Tools/i;
+export const MIN_MAIN_TEXT = 20;
+
+/** Guarda de estado (no de cantidad): sucursal activa, sin pantallas de selección y main con contenido. Devuelve la longitud del texto de main. */
+export async function assertBranchState(page: Page, path: string): Promise<number> {
+  const mainText = (await page.locator("main").first().innerText({ timeout: 5_000 }).catch(() => "")).trim();
+  const problems: string[] = [];
+  if (path !== "/app" && !(await page.locator(MAIN_NAV).getByText(ACTIVE_BRANCH).first().isVisible().catch(() => false))) {
+    problems.push("el nav no muestra «Sucursal activa»");
+  }
+  if (mainText.includes(ELIGE_SUCURSAL_TEXT)) problems.push(`main muestra «${ELIGE_SUCURSAL_TEXT}»`);
+  if (mainText.includes(SIN_SUCURSAL_TEXT)) problems.push(`main muestra «${SIN_SUCURSAL_TEXT}»`);
+  if (mainText.length < MIN_MAIN_TEXT) problems.push(`main casi vacío (${mainText.length} caracteres)`);
+  if (problems.length > 0) throw new Error(`Estado inválido en ${path}: ${problems.join("; ")}`);
+  return mainText.length;
+}
+
+export const NEXT_DEVTOOLS =/Next\.js Dev Tools/i;
 export const SAFE_NAMES: readonly RegExp[] = [/^confirmar sucursal$/i];
