@@ -28,7 +28,7 @@ async function consumeCallback(browser: AuthCallbackBrowser): Promise<boolean> {
     const refreshToken = params.get("refresh_token");
     const type = params.get("type");
     if ((type !== null && type !== "recovery" && type !== "invite")
-      || !isToken(accessToken) || !isToken(refreshToken)) return false;
+      || !isAccessToken(accessToken) || !isRefreshToken(refreshToken)) return false;
 
     const response = await browser.fetch("/auth/callback/session", {
       method: "POST",
@@ -44,6 +44,14 @@ async function consumeCallback(browser: AuthCallbackBrowser): Promise<boolean> {
   }
 }
 
-function isToken(value: string | null): value is string {
-  return value !== null && value.length >= 20 && value.length <= 8_192 && !/\s/u.test(value);
+/** Supabase access tokens are JWTs: three non-empty dot-separated segments. */
+export function isAccessToken(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 20 && value.length <= 8_192
+    && !/\s/u.test(value) && /^[^.]+\.[^.]+\.[^.]+$/u.test(value);
+}
+
+/** Refresh tokens are opaque; current Supabase projects issue 12 lowercase alphanumerics. */
+export function isRefreshToken(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 8 && value.length <= 512
+    && /^[A-Za-z0-9._~-]+$/u.test(value);
 }

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { isAccessToken, isRefreshToken } from "../../../../lib/auth-callback";
 import { createServerSupabaseClient } from "../../../../lib/supabase-server";
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -24,9 +25,5 @@ export async function POST(request: Request): Promise<NextResponse> {
 function isCallbackBody(value: unknown): value is { readonly accessToken: string; readonly refreshToken: string } {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
-  return isToken(record.accessToken) && isToken(record.refreshToken);
-}
-
-function isToken(value: unknown): value is string {
-  return typeof value === "string" && value.length >= 20 && value.length <= 8_192 && !/\s/u.test(value);
+  return isAccessToken(record.accessToken) && isRefreshToken(record.refreshToken);
 }

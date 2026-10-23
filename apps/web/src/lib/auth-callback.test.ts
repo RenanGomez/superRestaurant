@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createAuthCallbackConsumer } from "./auth-callback.js";
+import { createAuthCallbackConsumer, isAccessToken, isRefreshToken } from "./auth-callback.js";
 
-const accessToken = "synthetic-access-token-for-local-tests";
+const accessToken = "eyJhbGciOiJIUzI1NiJ9.synthetic-payload.synthetic-signature";
 const refreshToken = "synthetic-refresh-token-for-local-tests";
 const completeTokens = `access_token=${accessToken}&refresh_token=${refreshToken}`;
 
@@ -129,4 +129,31 @@ test("separate mounted callbacks do not retain another attempt's result", async 
   const second = browserWith("");
   assert.equal(await createAuthCallbackConsumer()(second.browser), false);
   assert.equal(second.requests.length, 0);
+});
+
+test("callback accepts the 12 character refresh token Supabase issues today", async () => {
+  const { browser, requests } = browserWith(`#access_token=${accessToken}&refresh_token=pemezsdik2mw&type=recovery`);
+  assert.equal(await createAuthCallbackConsumer()(browser), true);
+  assert.equal(requests.length, 1);
+});
+
+test("callback rejects short, spaced and non-JWT tokens without a request", async () => {
+  for (const hash of [
+    `#access_token=${accessToken}&refresh_token=abcdefg`,
+    `#access_token=${accessToken}&refresh_token=abcdefgh%20ijkl`,
+    `#access_token=not-a-jwt-but-long-enough-text&refresh_token=pemezsdik2mw`,
+  ]) {
+    const { browser, requests } = browserWith(hash);
+    assert.equal(await createAuthCallbackConsumer()(browser), false);
+    assert.equal(requests.length, 0);
+  }
+});
+
+test("exported validators apply the same rules the session route uses", () => {
+  assert.equal(isAccessToken(accessToken), true);
+  assert.equal(isAccessToken(undefined), false);
+  assert.equal(isRefreshToken("pemezsdik2mw"), true);
+  assert.equal(isRefreshToken("x".repeat(513)), false);
+  assert.equal(isRefreshToken(""), false);
+  assert.equal(isRefreshToken(42), false);
 });
