@@ -1,0 +1,28 @@
+{
+  "name": "@super-restaurant/sync-engine",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "dependencies": {
+    "@super-restaurant/shared-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@super-restaurant/config": "workspace:*",
+    "@types/node": "26.3.0"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "lint": "eslint --max-warnings=0 --config ../../eslint.config.mjs src",
+    "test": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc --project tsconfig.test.build.json && node --test .test-dist/contract.test.js .test-dist/payload-guard.test.js .test-dist/outbox-state.test.js .test-dist/engine-outbox.test.js .test-dist/engine-pull.test.js && node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\"",
+    "typecheck": "tsc --noEmit --project tsconfig.json"
+  }
+}
