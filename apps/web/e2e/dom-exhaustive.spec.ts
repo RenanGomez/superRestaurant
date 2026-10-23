@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 
 import { expect, test, type Locator } from "@playwright/test";
 
-import { attachDiagnostics, ensureBranchSelected, expectAuthenticated, expectFinalRoute, hasNextErrorOverlay, isDestructive, NEXT_DEVTOOLS, SAFE_NAMES } from "./helpers.ts";
+import { attachDiagnostics, detectUnauthorized, ensureBranchSelected, expectAuthenticated, expectFinalRoute, hasNextErrorOverlay, isDestructive, NEXT_DEVTOOLS, SAFE_NAMES } from "./helpers.ts";
 import { APP_ROUTES } from "./routes.ts";
 
 const SELECTOR =
@@ -56,11 +56,22 @@ for (const route of APP_ROUTES) {
     expectAuthenticated(page, route.path);
     await ensureBranchSelected(page, route.path);
     expectFinalRoute(page, route.path);
+    await page.locator("main").first().waitFor({ state: "visible", timeout: 15_000 });
     await page.waitForLoadState("networkidle").catch(() => undefined);
+    const unauthorized = await detectUnauthorized(page);
+    if (unauthorized !== null) {
+      testInfo.annotations.push({ type: "sin-autorizacion", description: unauthorized });
+      console.log(`[dom] ${route.path}: sin autorización para esta cuenta`);
+      test.skip(true, unauthorized);
+    }
 
     const origin = new URL(baseURL ?? "http://localhost:8082").origin;
     const all = page.locator(SELECTOR);
-    const found = await all.count();
+    let found = await all.count();
+    if (found <= 12) {
+      await page.waitForTimeout(2_000);
+      found = await all.count();
+    }
     const total = Math.min(found, MAX_ELEMENTS);
     const records: ElementRecord[] = [];
     const branch = await page.locator("header").first().innerText({ timeout: 2_000 }).then((t) => t.replace(/\s+/g, " ").trim().slice(0, 80)).catch(() => "?");

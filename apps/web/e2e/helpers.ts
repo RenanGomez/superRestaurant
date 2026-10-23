@@ -57,29 +57,64 @@ export function isDestructive(text: string): boolean {
 export const SIN_SUCURSAL_TEXT = "Sin sucursales asignadas";
 export const ELIGE_SUCURSAL_TEXT = "Elige tu sucursal";
 
+export interface BranchSelection {
+  readonly selected: boolean;
+  readonly branchLabel: string | null;
+}
+
+const ACTIVE_BRANCH = /Sucursal activa/;
+const MAIN_NAV = 'nav[aria-label="Navegación principal"]';
+
+async function readBranchLabel(page: Page): Promise<string | null> {
+  const text = await page.locator(MAIN_NAV).first().innerText({ timeout: 2_000 }).catch(() => "");
+  const label = text.replace(/\s+/g, " ").trim().slice(0, 80);
+  return label === "" ? null : label;
+}
+
 /** Si la app pide elegir sucursal, elige una, confirma y vuelve a la ruta pedida. Falla si no hay sucursal utilizable. */
-export async function ensureBranchSelected(page: Page, path: string): Promise<void> {
+export async function ensureBranchSelected(page: Page, path: string): Promise<BranchSelection> {
   const chooser = page.getByText(ELIGE_SUCURSAL_TEXT, { exact: false }).first();
+  const active = page.locator(MAIN_NAV).getByText(ACTIVE_BRANCH).first();
   const empty = page.getByText(SIN_SUCURSAL_TEXT, { exact: false }).first();
+  await chooser.or(empty).or(active).first().waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
   if (await empty.isVisible().catch(() => false)) {
     throw new Error(`Sin sucursal: ${SIN_SUCURSAL_TEXT}`);
   }
-  if (await chooser.isVisible().catch(() => false)) {
-    const wanted = process.env.E2E_BRANCH;
-    const radios = page.locator('input[name="scope"]');
-    const radio = wanted === undefined || wanted === "" ? radios.first() : page.getByLabel(wanted).first();
-    await radio.check({ timeout: 5_000 });
-    await page.getByRole("button", { name: "Confirmar sucursal" }).click({ noWaitAfter: false, timeout: 5_000 });
-    await page.waitForLoadState("networkidle").catch(() => undefined);
+  if (!(await chooser.isVisible().catch(() => false))) {
+    return { selected: false, branchLabel: await readBranchLabel(page) };
+  }
+  const wanted = process.env.E2E_BRANCH;
+  const radios = page.locator('input[name="scope"]');
+  const radio = wanted === undefined || wanted === "" ? radios.first() : page.getByLabel(wanted).first();
+  await radio.check({ timeout: 5_000 });
+  await Promise.all([
+    page.waitForURL(() => true, { timeout: 15_000 }).catch(() => undefined),
+    page.getByRole("button", { name: "Confirmar sucursal" }).click({ noWaitAfter: false, timeout: 5_000 }),
+  ]);
+  await page.locator(MAIN_NAV).getByText(ACTIVE_BRANCH).first().waitFor({ state: "visible", timeout: 15_000 });
+  await page.waitForLoadState("networkidle").catch(() => undefined);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     await page.goto(path);
     await page.waitForLoadState("networkidle").catch(() => undefined);
-    if (await page.getByText(ELIGE_SUCURSAL_TEXT, { exact: false }).first().isVisible().catch(() => false)) {
-      throw new Error(`Sin sucursal: sigue visible «${ELIGE_SUCURSAL_TEXT}» tras confirmar`);
-    }
     if (await page.getByText(SIN_SUCURSAL_TEXT, { exact: false }).first().isVisible().catch(() => false)) {
       throw new Error(`Sin sucursal: ${SIN_SUCURSAL_TEXT}`);
     }
+    if (!(await page.getByText(ELIGE_SUCURSAL_TEXT, { exact: false }).first().isVisible().catch(() => false))) {
+      return { selected: true, branchLabel: await readBranchLabel(page) };
+    }
   }
+  throw new Error("Sin sucursal: la selección no persistió tras confirmar");
+}
+
+/** Devuelve el texto del aviso «No tienes autorización…» si el main lo muestra para esta cuenta. */
+export async function detectUnauthorized(page: Page): Promise<string | null> {
+  const alerts = page.locator('main [role="alert"]');
+  const total = await alerts.count().catch(() => 0);
+  for (let i = 0; i < total; i += 1) {
+    const text = (await alerts.nth(i).innerText({ timeout: 2_000 }).catch(() => "")).replace(/\s+/g, " ").trim();
+    if (text.startsWith("No tienes autorización")) return text;
+  }
+  return null;
 }
 
 /** Falla si la ruta final no es la pedida (salvo /app). */
