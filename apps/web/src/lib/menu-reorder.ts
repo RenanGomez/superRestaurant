@@ -32,3 +32,14 @@ export function reorderSubset<T extends Positioned>(all: readonly T[], isMember:
   let cursor = 0;
   return all.map((item) => isMember(item) ? (reordered[cursor++] ?? item) : item);
 }
+
+/** Attribute selector for a reorder list. Pure (no browser CSS.escape), so it is safe during SSR. */
+export function reorderListSelector(listKey: string): string {
+  const escaped = listKey.replace(/[\\"\n\r\f]/g, (char) => {
+    if (char === "\n") return "\\a ";
+    if (char === "\r") return "\\d ";
+    if (char === "\f") return "\\c ";
+    return `\\${char}`;
+  });
+  return `[data-reorder-list="${escaped}"]`;
+}

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 
-import { dropIndicatorSide, parseReorderIndex } from "../../../lib/menu-reorder";
+import { dropIndicatorSide, parseReorderIndex, reorderListSelector } from "../../../lib/menu-reorder";
 
 /** Row attributes that make an element a drop target for ReorderHandle in the same list. */
 export function reorderRowProps(listKey: string, index: number): { readonly "data-reorder-index": number; readonly "data-reorder-list": string } {
@@ -31,7 +31,7 @@ export function ReorderHandle({ align = "center", count, disabled, index, listKe
   const [dragging, setDragging] = useState(false);
   const active = useRef(false);
   const stopKeys = useRef<(() => void) | null>(null);
-  const selector = `[data-reorder-list="${CSS.escape(listKey)}"]`;
+  const selector = reorderListSelector(listKey);
 
   useEffect(() => () => { stopKeys.current?.(); clearDragMarks(); }, []);
   if (disabled || count < 2) return null;

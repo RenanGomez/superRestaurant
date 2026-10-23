@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dropIndicatorSide, parseReorderIndex, reorder, reorderSubset } from "./menu-reorder.js";
+import { dropIndicatorSide, parseReorderIndex, reorder, reorderListSelector, reorderSubset } from "./menu-reorder.js";
 
 test("parseReorderIndex accepts only non-negative integers", () => {
   assert.equal(parseReorderIndex("0"), 0);
@@ -34,4 +34,13 @@ test("reorderSubset reorders only members and leaves the rest untouched", () => 
   assert.deepEqual(result.map((entry) => entry.id), ["a2", "b1", "a3", "a1"]);
   assert.deepEqual(result.filter((entry) => entry.group === "a").map((entry) => entry.displayOrder), [1, 2, 3]);
   assert.deepEqual(result[1], all[1]);
+});
+
+test("reorderListSelector escapes quotes, backslashes and newlines without CSS", () => {
+  assert.equal(reorderListSelector("categories"), '[data-reorder-list="categories"]');
+  assert.equal(reorderListSelector("products-abc-123"), '[data-reorder-list="products-abc-123"]');
+  assert.equal(reorderListSelector('a"b'), '[data-reorder-list="a\\"b"]');
+  assert.equal(reorderListSelector("a\\b"), '[data-reorder-list="a\\\\b"]');
+  assert.equal(reorderListSelector("a\nb"), '[data-reorder-list="a\\a b"]');
+  assert.equal(reorderListSelector('x"y\\z'), reorderListSelector('x"y\\z'));
 });
