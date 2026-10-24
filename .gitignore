@@ -84,3 +84,5 @@ apps/web/playwright-report/
 apps/web/test-results/
 apps/web/buttonmash-report/
 apps/web/e2e-report/
+
+.harness/runs/

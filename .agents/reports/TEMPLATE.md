@@ -1,0 +1,6 @@
+# SUB-001 — [hecha | bloqueada]
+Cambios: [Resumen conciso en 1 a 3 líneas del trabajo efectuado]
+Archivos: [Lista de rutas creadas o modificadas]
+Verificación: `<comando de verificación>` → [pasa | falla: detalle breve]
+Riesgos/pendientes: [Ninguno | Detalle específico si algo quedó pendiente]
+Notas: [Sugerencias o consideraciones arquitectónicas fuera del alcance del brief]

@@ -1,0 +1,20 @@
+{
+  "paths": {
+    "brief":  ".agents/briefs/{id}.md",
+    "result": ".agents/reports/{id}.md",
+    "log":    ".harness/runs/{id}/log.txt"
+  },
+  "resultFormat": "Al terminar, entrega tu reporte EXACTAMENTE con la plantilla de AGENTS.md §10 (máximo 15 líneas).",
+  "codex": {
+    "models": { "fast": "", "default": "", "strong": "" },
+    "note": "Vacío = el modelo de ~/.codex/config.toml. Esfuerzo con -Effort low|medium|high (§3)."
+  },
+  "gemini": {
+    "models": { "fast": "flash_lite", "default": "flash", "strong": "pro" },
+    "note": "Vía Antigravity agentapi (cuenta Google AI Pro). Requiere Antigravity abierto."
+  },
+  "claude": {
+    "models": { "fast": "haiku", "default": "sonnet", "strong": "opus" }
+  },
+  "resultMaxLines": 15
+}

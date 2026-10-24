@@ -471,6 +471,14 @@ Aprobado por Emmanuel el 2026-10-03 (detalle en PROJECT_NOTES «Plan “día ope
 
 Prioridad de producto vigente: la experiencia del operador (captura telefónica con menú táctil, cliente, entrega y cobro) va antes que nuevos módulos de backend. El backend sólo se amplía cuando una pantalla lo necesita.
 
+### 19.4. Orquestación multi-motor y lanzador común (vigente desde 2026-10-23)
+
+Las reglas de orquestación entre Claude, Codex y Gemini viven en `.harness/ORCHESTRATOR.md`: rol del orquestador, canales de ejecución, matriz de complejidad, revisión cruzada, cuota y fallback, plantillas de brief y reporte. Ese documento complementa a éste y, en caso de conflicto, gana `AGENTS.md`.
+
+- El flujo L0/L1/L2 de §19.1 y los niveles de rigor de §19.2 no cambian: `implementer-claude` con paquete de contexto (`docs/templates/CONTEXT_PACKET.md`) sigue siendo el único escritor Claude, y el hook `guard-orchestrator-writes.js` sigue vigente.
+- `.harness/bin/agent.ps1` es una **vía adicional** para lanzar Codex (`-Engine codex`) y Gemini vía Antigravity (`-Engine gemini`) a partir de un brief en `.agents/briefs/<id>.md`, con reporte en `.agents/reports/<id>.md`. No sustituye a `tools/agentic/codex-task.ps1` ni a los sub-agentes de `.claude/agents/`.
+- `.agents/plan.md` y `.agents/context.md` no son el tablero del proyecto; el estado sigue en `TODO.md` y `HANDOFF.md`. Las notas `.agents/notes/legacy_*` son copias del 2026-10-21 de `TODO.md` y `PROJECT_NOTES.md` y pueden borrarse.
+
 ---
 
 ## 20. Definition of Done
