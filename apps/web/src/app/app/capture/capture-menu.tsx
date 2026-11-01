@@ -60,11 +60,14 @@ export function CaptureMenu({ catalog, currency, lineQuantities, busy, searchInp
 
   return <div className="flex min-h-0 flex-1 flex-col sm:flex-row" data-testid="capture-menu">
     <nav aria-label="Categorías" className="flex shrink-0 gap-2 overflow-x-auto border-b border-border p-2 sm:w-44 sm:flex-col sm:overflow-visible sm:border-b-0 sm:border-r sm:p-3">
-      {grouped.map((entry) => <button key={entry.category.categoryId} type="button"
-        className={categoryButton(activeCategory?.category.categoryId === entry.category.categoryId && normalizedQuery === "", entry.category.color)}
+      {grouped.map((entry) => {
+        const selected = activeCategory?.category.categoryId === entry.category.categoryId && normalizedQuery === "";
+        return <button key={entry.category.categoryId} type="button" aria-pressed={selected}
+        className={categoryButton(selected, entry.category.color)}
         onClick={() => { setActiveCategoryId(entry.category.categoryId); setQuery(""); }}>
         {entry.category.name}
-      </button>)}
+      </button>;
+      })}
     </nav>
     <div className="flex min-h-0 flex-1 flex-col overflow-auto p-3">
       <div className="sticky top-0 z-[1] bg-bg pb-3">

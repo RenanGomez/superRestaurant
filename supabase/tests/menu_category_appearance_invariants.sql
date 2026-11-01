@@ -154,4 +154,4 @@ begin
   update app.menu_categories set color='lilac', image_path=good_path where restaurant_id=restaurant_a and id=category;
 end
 $menu_category_appearance_tests$;
-commit;
+rollback;

@@ -45,8 +45,18 @@ test("a draft saved before category colours existed reads back with null colour 
   });
   assert.deepEqual(parseMenuDraft(legacy, 2)?.categories, [{ active: true, categoryId: "c1", color: null, displayOrder: 1, imagePath: null, name: "Pizzas" }]);
   const styled = JSON.stringify({
-    categories: [{ active: true, categoryId: "c1", color: "sky", displayOrder: 1, imagePath: "x/categories/y/z.png", name: "Pizzas" }],
+    categories: [{ active: true, categoryId: "c1", color: "sky", displayOrder: 1, imagePath: "11111111-1111-4111-8111-111111111111/categories/c1/0123456789abcdef0123456789abcdef.png", name: "Pizzas" }],
     expectedVersion: 2, groups: parts.groups, products: parts.products,
   });
   assert.equal(parseMenuDraft(styled, 2)?.categories[0]?.color, "sky");
+});
+
+test("a draft with an invalid or foreign category image or colour is rejected", () => {
+  const draft = (category: Record<string, unknown>): string => JSON.stringify({
+    categories: [{ active: true, categoryId: "c1", displayOrder: 1, name: "Pizzas", ...category }],
+    expectedVersion: 2, groups: parts.groups, products: parts.products,
+  });
+  assert.equal(parseMenuDraft(draft({ imagePath: "x/categories/y/z.png" }), 2), null);
+  assert.equal(parseMenuDraft(draft({ imagePath: "11111111-1111-4111-8111-111111111111/categories/c2/0123456789abcdef0123456789abcdef.png" }), 2), null);
+  assert.equal(parseMenuDraft(draft({ color: "#fff" }), 2), null);
 });

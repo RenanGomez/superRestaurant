@@ -123,7 +123,11 @@ try {
     migrated =(await admin.query(SUMMARY_SQL)).rows[0];
     categoryShape = (await admin.query(TABLE_SQL)).rows[0];
     assert.deepEqual(categoryShape, { categoryColumns: 2, categoryChecks: 2 });
-    await admin.query(extractMigrationBody(invariantsSql));
+    // The invariants file opens with BEGIN and ends with ROLLBACK; the outer transaction is ours.
+    if (!/^\s*(--[^\n]*\n\s*)*begin;/iu.test(invariantsSql) || !/rollback;\s*$/iu.test(invariantsSql) || /commit;/iu.test(invariantsSql)) {
+      throw new Error("LOCAL_INVARIANTS_SHAPE_REJECTED");
+    }
+    await admin.query(invariantsSql.replace(/^(\s*(?:--[^\n]*\n\s*)*)begin;/iu, "$1").replace(/rollback;\s*$/iu, ""));
   } catch (error: unknown) {
     migrationFailure = error;
   } finally { await admin.query("ROLLBACK"); }

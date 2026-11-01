@@ -1,3 +1,4 @@
+import { parseMenuCategoryAppearanceV1 } from "@super-restaurant/shared-types";
 import type { MenuCategoryV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
 
 export interface LocalMenuDraft {
@@ -45,9 +46,14 @@ export function parseMenuDraft(raw: string | null, expectedVersion: number): Loc
   const { categories, groups, products } = value;
   if (!allHaveString(categories, "categoryId") || !allHaveString(products, "productId") || !allHaveString(groups, "groupId")) return null;
   if (!(groups as readonly Record<string, unknown>[]).every((group) => Array.isArray(group.options))) return null;
-  // Drafts saved before category colours/images existed lack both fields; read them as «none».
-  const normalized = (categories as readonly Record<string, unknown>[]).map((entry) => ({ ...entry, color: entry.color ?? null, imagePath: entry.imagePath ?? null }));
-  return { categories: normalized as unknown as readonly MenuCategoryV1[], expectedVersion, groups: groups as readonly MenuModifierGroupV1[], products: products as readonly MenuProductV1[] };
+  // Drafts saved before category colours/images existed lack both fields (read as null); present values must be valid.
+  const normalized: MenuCategoryV1[] = [];
+  for (const entry of categories as readonly Record<string, unknown>[]) {
+    const appearance = parseMenuCategoryAppearanceV1(entry, entry.categoryId as string);
+    if (appearance === undefined) return null;
+    normalized.push({ ...(entry as unknown as Omit<MenuCategoryV1, "color" | "imagePath">), ...appearance });
+  }
+  return { categories: normalized, expectedVersion, groups: groups as readonly MenuModifierGroupV1[], products: products as readonly MenuProductV1[] };
 }
 
 /** Keys of this branch's drafts for versions other than the current one; they can never be recovered. */
