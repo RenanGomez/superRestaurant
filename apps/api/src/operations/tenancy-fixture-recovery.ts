@@ -16,7 +16,7 @@ import {
   tenancyMainRestaurantSuffixes,
   type TenancyFixtureKey,
 } from "./tenancy-fixture-markers.js";
-import { DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters } from "./menu-variant-cleanup.js";
+import { DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL, DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters } from "./menu-variant-cleanup.js";
 import {
   TenancyFixtureRecoveryError,
   type TenancyFixtureRecoveryConfig,
@@ -653,6 +653,15 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
       removed += await deleteExactly(client, "app.orders", validated.orderIds);
       removed += await deleteExactly(client, "app.operational_shifts", validated.operationalShiftIds);
       removed += await deleteKdsCursorsExactly(client, validated.kdsCursorScopes);
+      // Shared-group assignments reference groups and products with ON DELETE RESTRICT; delete them first.
+      const assignments = await client.query<{ present: boolean }>(
+        "select pg_catalog.to_regclass('app.menu_product_modifier_groups') is not null as present",
+      );
+      if (assignments.rows[0]?.present === true && validated.menuModifierGroupIds.length > 0) {
+        await client.query(DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL, menuProductVariantDeleteParameters(
+          validated.restaurantIds, validated.menuCatalogIds, validated.menuModifierGroupIds,
+        ));
+      }
       removed += await deleteExactly(client, "app.menu_modifier_options", validated.menuModifierOptionIds);
       removed += await deleteExactly(client, "app.menu_modifier_groups", validated.menuModifierGroupIds);
       // Sizes reference products with ON DELETE RESTRICT; fixtures publish none, so no exact count is expected.

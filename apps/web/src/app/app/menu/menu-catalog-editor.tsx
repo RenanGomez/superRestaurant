@@ -52,7 +52,7 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
     state.catalog?.categories.map((category) => ({ ...category })) ?? [],
   );
   const [products, setProducts] = useState<readonly MenuProductV1[]>(() =>
-    state.catalog?.products.map((product) => ({ ...product, variants: product.variants?.map((variant) => ({ ...variant })) ?? [], tax: product.tax === null ? null : { ...product.tax } })) ?? [],
+    withDerivedAssignments(state.catalog?.products ?? [], state.catalog?.modifierGroups ?? []).map((product) => ({ ...product, variants: product.variants?.map((variant) => ({ ...variant })) ?? [], tax: product.tax === null ? null : { ...product.tax } })) ?? [],
   );
   const [groups, setGroups] = useState<readonly MenuModifierGroupV1[]>(() =>
     state.catalog?.modifierGroups.map((group) => ({
@@ -453,7 +453,7 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
         <GroupMultiSelect canManage={canManage} catalogGroups={catalogGroups} product={product}
           onChange={(groupId, assigned) => onProductChange(assigned
-            ? toggleGroupAssignment(product, groupId, true)
+            ? toggleGroupAssignment(product, groupId, true, catalogGroups)
             // Unassigning a group that the halves setup points at must not leave a dangling reference.
             : unassignGroup(product, groupId))} />
         <CheckField labelClassName="flex min-h-11 items-center" className={switchClass} label="Permitir mitades"

@@ -69,8 +69,14 @@ export function duplicateGroup(group: MenuModifierGroupV1, newId: () => string, 
 }
 
 /** Adds or removes a group from one product's ordered list. */
-export function toggleGroupAssignment(product: MenuProductV1, groupId: string, assigned: boolean): MenuProductV1 {
-  const current = product.modifierGroupIds ?? [];
+export function toggleGroupAssignment(
+  product: MenuProductV1,
+  groupId: string,
+  assigned: boolean,
+  groups: readonly MenuModifierGroupV1[] = [],
+): MenuProductV1 {
+  // A product without a list still offers its legacy groups: keep them instead of dropping them.
+  const current = product.modifierGroupIds ?? groupsForProduct(product, groups).map((group) => group.groupId);
   const next = assigned
     ? (current.includes(groupId) ? current : [...current, groupId])
     : current.filter((id) => id !== groupId);

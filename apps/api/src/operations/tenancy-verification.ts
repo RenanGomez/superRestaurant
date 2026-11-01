@@ -38,7 +38,7 @@ import {
   type TenancyVerificationConfig,
   type TenancyVerificationStage,
 } from "./tenancy-verification-config.js";
-import { DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters } from "./menu-variant-cleanup.js";
+import { DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL, DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters } from "./menu-variant-cleanup.js";
 import { validateCatalogAuditSql } from "./schema-verification.js";
 import {
   appApiLifecycleAdvisoryLockKey,
@@ -2234,6 +2234,17 @@ async function cleanupFixtures(
       if (plan.menuCatalogEnabled) {
         await verifyMenuCatalogFixtureOwnership(client, plan);
         const created = plan.menuCatalogCreated ? [plan.menuCatalog.commands[0]] : [];
+        // Shared-group assignments reference groups and products with ON DELETE RESTRICT; none required.
+        const assignmentsTable = await client.query<{ present: boolean }>(
+          "select pg_catalog.to_regclass('app.menu_product_modifier_groups') is not null as present",
+        );
+        if (assignmentsTable.rows[0]?.present === true) {
+          await client.query(DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL, menuProductVariantDeleteParameters(
+            plan.restaurantIds,
+            plan.menuCatalog.commands.map((item) => item.catalogVersion),
+            plan.menuCatalog.commands.map((item) => item.groupId),
+          ));
+        }
         await deleteRequiredFixtureRows(client, "app.menu_modifier_options", plan.menuCatalog.commands.map((item) => item.optionId), created.map((item) => item.optionId));
         await deleteRequiredFixtureRows(client, "app.menu_modifier_groups", plan.menuCatalog.commands.map((item) => item.groupId), created.map((item) => item.groupId));
         // Variants (sizes) reference products with ON DELETE RESTRICT; fixtures publish none, so none required.

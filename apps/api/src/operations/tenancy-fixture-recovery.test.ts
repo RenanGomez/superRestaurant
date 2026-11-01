@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import { tenancyDiningTableSuffixes, tenancyFixtureEmail, tenancyFixtureName } from "./tenancy-fixture-markers.js";
 import {
@@ -9,7 +10,7 @@ import {
   type TenancyFixtureRecoveryDatabasePort,
   validateTenancyFixtureRecoverySnapshot,
 } from "./tenancy-fixture-recovery.js";
-import { DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters } from "./menu-variant-cleanup.js";
+import { DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL, DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters } from "./menu-variant-cleanup.js";
 import { TenancyFixtureRecoveryError } from "./tenancy-fixture-recovery-config.js";
 
 const runId = "11111111-1111-4111-8111-111111111111";
@@ -516,4 +517,20 @@ test("menu variant cleanup is bound to restaurant, release and product ids toget
   }
   assert.match(DELETE_MENU_PRODUCT_VARIANTS_SQL, /^delete from app\.menu_product_variants where .* and .* and /u);
   assert.deepEqual(menuProductVariantDeleteParameters(["r"], ["c"], ["p"]), [["r"], ["c"], ["p"]]);
+});
+
+test("shared-group assignments are deleted bound to restaurant, release and group ids, before groups and products", () => {
+  for (const predicate of [
+    "restaurant_id = any($1::uuid[])",
+    "catalog_id = any($2::uuid[])",
+    "group_id = any($3::uuid[])",
+  ]) {
+    assert.ok(DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL.includes(predicate), predicate);
+  }
+  assert.match(DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL, /^delete from app\.menu_product_modifier_groups where /u);
+  const source = readFileSync(new URL("../../src/operations/tenancy-fixture-recovery.ts", import.meta.url), "utf8");
+  const assignmentsAt = source.indexOf("DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL, menuProductVariantDeleteParameters");
+  assert.ok(assignmentsAt > 0);
+  assert.ok(assignmentsAt < source.indexOf('"app.menu_modifier_groups", validated'));
+  assert.ok(assignmentsAt < source.indexOf('"app.menu_products", validated'));
 });

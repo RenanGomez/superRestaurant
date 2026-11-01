@@ -68,3 +68,10 @@ test("toggling an assignment never duplicates an id and never mutates the produc
   assert.deepEqual(original.modifierGroupIds, ["g1"]);
   assert.deepEqual(toggleGroupAssignment(product("p9"), "g1", true).modifierGroupIds, ["g1"]);
 });
+
+test("toggling on a product without a list keeps its legacy groups", () => {
+  const groups = [group("g1", "p1"), group("g2", null), group("g3", "p2")];
+  assert.deepEqual(toggleGroupAssignment(product("p1"), "g2", true, groups).modifierGroupIds, ["g1", "g2"]);
+  assert.deepEqual(toggleGroupAssignment(product("p1"), "g2", false, groups).modifierGroupIds, ["g1"]);
+  assert.deepEqual(toggleGroupAssignment(product("p1"), "g1", false, groups).modifierGroupIds, []);
+});
