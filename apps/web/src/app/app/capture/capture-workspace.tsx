@@ -178,6 +178,9 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   const [sheetError, setSheetError] = useState<string>();
   const [instructionsFeedback, setInstructionsFeedback] = useState<"saving" | "saved" | string>();
   const instructionsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const instructionsDebounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const instructionsDirty = useRef(false);
+  const instructionsSaver = useRef<(text: string) => Promise<void>>(async () => undefined);
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [selectionFeedback, setSelectionFeedback] = useState<"saving" | "saved" | string>();
   const selectionFeedbackTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -189,6 +192,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   useEffect(() => () => {
     if (selectionFeedbackTimer.current) clearTimeout(selectionFeedbackTimer.current);
     if (instructionsTimer.current) clearTimeout(instructionsTimer.current);
+    if (instructionsDebounce.current) clearTimeout(instructionsDebounce.current);
   }, []);
   useEffect(() => {
     if (fulfillmentSnapshot === null || fulfillmentChannel !== "delivery") return;
@@ -694,10 +698,23 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     autosave(sourceChannel, next);
   }
 
-  async function saveDeliveryInstructions(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
+  function changeDeliveryInstructions(text: string): void {
+    setDeliveryInstructions(text);
+    instructionsDirty.current = true;
+    if (instructionsDebounce.current) clearTimeout(instructionsDebounce.current);
+    instructionsDebounce.current = setTimeout(() => { void instructionsSaver.current(text); }, 700);
+  }
+
+  function flushDeliveryInstructions(): void {
+    if (!instructionsDirty.current) return;
+    if (instructionsDebounce.current) clearTimeout(instructionsDebounce.current);
+    void instructionsSaver.current(deliveryInstructions);
+  }
+
+  async function saveDeliveryInstructions(text: string): Promise<void> {
     if (capture === undefined || fulfillmentChannel !== "delivery") return;
-    const normalized = deliveryInstructions.trim();
+    instructionsDirty.current = false;
+    const normalized = text.trim();
     const command = { ...base(), deliveryInstructions: normalized === "" ? null : normalized };
     if (instructionsTimer.current) clearTimeout(instructionsTimer.current);
     setInstructionsFeedback("saving");
@@ -705,8 +722,12 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     if (reply?.ok) {
       setInstructionsFeedback("saved");
       instructionsTimer.current = setTimeout(() => setInstructionsFeedback(undefined), 2000);
-    } else setInstructionsFeedback(reply?.ok === false ? messages[reply.error] : "No se pudieron guardar las instrucciones.");
+    } else {
+      instructionsDirty.current = true;
+      setInstructionsFeedback(reply?.ok === false ? messages[reply.error] : "No se pudieron guardar las instrucciones.");
+    }
   }
+  instructionsSaver.current = saveDeliveryInstructions;
 
   async function requestDeliveryQuote(): Promise<void> {
     if (capture === undefined || capture.attentionLeaseId === null || fulfillmentChannel !== "delivery"
@@ -1237,21 +1258,21 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
           <p className="mt-1 text-xs text-text-muted">Últimos 180 días, máximo cinco. Elige una para copiarla; no se aplica ni guarda sola.</p>
           <ul className="mt-2 grid gap-2">{deliveryInstructionSuggestions.map((suggestion) => <li key={suggestion.deliveryInstructions}>
             <button type="button" className={`${button} w-full text-left`} disabled={locked}
-              onClick={() => setDeliveryInstructions(suggestion.deliveryInstructions)}>
+              onClick={() => changeDeliveryInstructions(suggestion.deliveryInstructions)}>
               <span className="block">{suggestion.deliveryInstructions}</span>
               <span className="block text-xs text-text-muted">Usada {suggestion.usageCount} {suggestion.usageCount === 1 ? "vez" : "veces"} · última {suggestion.lastUsedAt.slice(0, 10)}</span>
             </button>
           </li>)}</ul>
         </div>}
-        <form className="mt-3 grid gap-3" onSubmit={saveDeliveryInstructions}>
+        <div className="mt-3 grid gap-3">
           <FieldLabel htmlFor="capture-delivery-instructions" hint="Notas para el repartidor: portón, timbre, a quién preguntar. Se imprimen en la hoja de entrega." label="Indicaciones opcionales" />
           <textarea id="capture-delivery-instructions" maxLength={500} rows={3} className={`${input} min-h-24 resize-y`}
-            value={deliveryInstructions} onChange={(event) => setDeliveryInstructions(event.target.value)}
-            disabled={locked} placeholder="Ej. Tocar dos veces; no dejar con vigilancia" />
+            value={deliveryInstructions} onChange={(event) => changeDeliveryInstructions(event.target.value)}
+            onBlur={flushDeliveryInstructions} disabled={locked} placeholder="Ej. Tocar dos veces; no dejar con vigilancia" />
           <div className="flex items-center justify-between gap-3"><span className="text-xs text-text-muted">{deliveryInstructions.length}/500</span>
-            <button className={button} disabled={locked}>{instructionsFeedback === "saving" ? "Guardando…" : "Guardar instrucciones"}</button></div>
+            <span role="status" className="text-sm text-text-muted">{instructionsFeedback === "saving" ? "Guardando…" : "Se guardan solas"}</span></div>
           {instructionsFeedback !== undefined && instructionsFeedback !== "saving" && <p role={instructionsFeedback === "saved" ? "status" : "alert"} className="text-sm">{instructionsFeedback === "saved" ? "Guardado" : instructionsFeedback}</p>}
-        </form>
+        </div>
       </section>}
       {fulfillmentChannel === "delivery" && fulfillmentSnapshot !== null && capture.status === "draft" && <section className={panel} data-testid="delivery-quote">
         <h2 className="font-heading text-lg font-semibold">3. Entrega · cotización</h2>

@@ -136,6 +136,10 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
     applyCustomTender();
   }
 
+  const customTenderMinor = customTender.trim() === "" ? null : parseMoneyInputToMinor(customTender, summaryCurrency);
+  // A preset is marked only while the typed amount is empty or equals that preset (compared in minor units).
+  const presetSelected = (amountMinor: number): boolean => tenderedAmountMinor === amountMinor
+    && (customTender.trim() === "" || customTenderMinor === amountMinor);
   const customTenderInvalid = customTender.trim() !== "" && parseMoneyInputToMinor(customTender, summaryCurrency) === null;
 
   const timing = projection?.timing ?? "now";
@@ -169,8 +173,8 @@ export function CapturePayment({ projection, basis, intent, deliveryQuote, fulfi
       <span className="text-sm font-semibold">¿Paga con?</span>
       <div className="flex flex-wrap gap-2">
         {suggestions.map((amountMinor) => <button key={amountMinor} type="button" disabled={busy || !currencySupported}
-          className={uiOption(tenderedAmountMinor === amountMinor)}
-          aria-pressed={tenderedAmountMinor === amountMinor} onClick={() => chooseTender(amountMinor)}>
+          className={uiOption(presetSelected(amountMinor))}
+          aria-pressed={presetSelected(amountMinor)} onClick={() => chooseTender(amountMinor)}>
           {totalMinor !== null && amountMinor === totalMinor ? "Exacto" : formatMinorUnits(amountMinor, summaryCurrency)}{status(`tender:${amountMinor}`) === "Guardando…" ? " · Guardando…" : ""}
         </button>)}
       </div>

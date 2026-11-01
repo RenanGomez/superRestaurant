@@ -38,7 +38,7 @@ export function CaptureTicket({ projection, catalog, busyLineId, locked, onIncre
           className="grid gap-1 border-b border-dashed border-border pb-3">
           <div className="flex items-start justify-between gap-2">
             <span className="font-semibold">{line.productName}{line.variantId === null ? "" : ` · ${variantNameFor(catalog, line.productId, line.variantId)}`}</span>
-            <span className="whitespace-nowrap font-semibold">{formatMinorUnits(line.lineTotalMinor, projection.currency)}</span>
+            <span className="shrink-0 whitespace-nowrap font-semibold">{formatMinorUnits(line.lineTotalMinor, projection.currency)}</span>
           </div>
           {(line.halves ?? []).length > 0 && <ul className="grid gap-1 text-sm" aria-label="Mitades">
             {(line.halves ?? []).map((half) => {
@@ -52,7 +52,7 @@ export function CaptureTicket({ projection, catalog, busyLineId, locked, onIncre
             {line.modifiers.map((modifier) => `${modifier.quantity} × ${modifier.name}`).join(" · ")}
           </span>}
           {line.note !== null && <span className="text-xs font-semibold text-accent">Nota: {line.note}</span>}
-          <div className="mt-1 flex items-center gap-2">
+          <div className="mt-1 flex flex-wrap items-center gap-2">
             <button type="button" className={button} disabled={locked || busyLineId === line.lineId}
               onClick={() => onEdit(line.lineId)}>Editar</button>
             <button type="button" className={qtyButton} aria-label={`Menos ${line.productName}`}
@@ -64,7 +64,7 @@ export function CaptureTicket({ projection, catalog, busyLineId, locked, onIncre
               disabled={locked || busyLineId === line.lineId} onClick={() => onEditNote(line.lineId, line.note)}>
               {line.note !== null ? "Editar nota" : "Nota"}
             </button>
-            <span className="grow" />
+            <span className="grow basis-0" />
             <button type="button" className={dangerButton} aria-label={`Quitar línea de ${line.productName}`}
               disabled={locked || busyLineId === line.lineId} onClick={() => onRemove(line.lineId)}>Quitar</button>
           </div>
@@ -97,7 +97,7 @@ export function CaptureTicket({ projection, catalog, busyLineId, locked, onIncre
       <div className="flex max-h-[80dvh] w-full flex-col rounded-t-2xl bg-surface">
         <header className="flex items-center gap-2 border-b border-border p-4">
           <h2 className="font-heading text-lg font-semibold">Pedido</h2>
-          <span className="grow" />
+          <span className="grow basis-0" />
           <button type="button" className={button} aria-label="Cerrar" onClick={() => setMobileOpen(false)}>✕</button>
         </header>
         {body}
