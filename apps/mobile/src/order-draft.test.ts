@@ -586,3 +586,32 @@ test("the draft state never touches money: no amount or currency is read at all"
     assert.equal(source.includes(forbidden), false, `order-draft.ts references ${forbidden}`);
   }
 });
+
+test("a modifier group shared by two products is offered by both; catalogs without modifierGroupIds fall back to the legacy owner", () => {
+  const sharedCatalog = {
+    ...catalog,
+    modifierGroups: catalog.modifierGroups.map((group) => (
+      group.groupId === FIXTURE_GROUP_EXTRAS ? { ...group, productId: null } : group
+    )),
+    products: catalog.products.map((product) => (
+      product.productId === FIXTURE_PRODUCT_DRINK
+        ? { ...product, modifierGroupIds: [FIXTURE_GROUP_EXTRAS] }
+        : { ...product, modifierGroupIds: [...(product.modifierGroupIds ?? []), FIXTURE_GROUP_EXTRAS] }
+    )),
+  };
+  for (const productId of [FIXTURE_PRODUCT_MAIN, FIXTURE_PRODUCT_DRINK]) {
+    assert.ok(
+      activeProductGroups(sharedCatalog, productId).some((group) => group.groupId === FIXTURE_GROUP_EXTRAS),
+      `${productId} offers the shared group`,
+    );
+  }
+  // An older server omits modifierGroupIds entirely: the legacy productId decides.
+  const legacyCatalog = {
+    ...catalog,
+    products: catalog.products.map(({ modifierGroupIds: _ids, ...product }) => product),
+  };
+  assert.deepEqual(
+    activeProductGroups(legacyCatalog, FIXTURE_PRODUCT_MAIN).map((group) => group.groupId),
+    activeProductGroups(catalog, FIXTURE_PRODUCT_MAIN).map((group) => group.groupId),
+  );
+});

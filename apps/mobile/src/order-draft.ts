@@ -364,6 +364,17 @@ export function orderableCategories(
 }
 
 /**
+ * The modifier groups assigned to a product (groups may be shared between products). Catalogs from
+ * older servers carry no `modifierGroupIds`; then the legacy single owner (`productId`) decides.
+ */
+export function productModifierGroups(catalog: MenuCatalogV1, productId: string): readonly MenuModifierGroupV1[] {
+  const assigned = catalog.products.find((product) => product.productId === productId)?.modifierGroupIds;
+  if (assigned === undefined) return catalog.modifierGroups.filter((group) => group.productId === productId);
+  const ids = new Set(assigned);
+  return catalog.modifierGroups.filter((group) => ids.has(group.groupId));
+}
+
+/**
  * **Every** active modifier group of a product, with every active option, in
  * catalog order and deliberately **not** truncated.
  *
@@ -375,8 +386,8 @@ export function orderableCategories(
  * Presentation truncates; validation never does.
  */
 export function activeProductGroups(catalog: MenuCatalogV1, productId: string): readonly MenuModifierGroupV1[] {
-  return Object.freeze(catalog.modifierGroups
-    .filter((group) => group.productId === productId && group.active)
+  return Object.freeze(productModifierGroups(catalog, productId)
+    .filter((group) => group.active)
     .slice()
     .sort(byDisplayOrder)
     .map((group) => Object.freeze({
