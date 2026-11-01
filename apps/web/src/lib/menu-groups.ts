@@ -1,25 +1,26 @@
 import type { MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
 
-interface GroupSource {
-  readonly modifierGroups: readonly MenuModifierGroupV1[];
-  readonly products: readonly MenuProductV1[];
-}
-
 /**
  * The modifier groups a product offers. Groups belong to the restaurant catalog and may be shared;
  * `product.modifierGroupIds` is the relation. A catalog from an older server has no list, then the
  * legacy single owner (`group.productId`) decides. Order follows the catalog's group order.
  */
-export function productGroups(source: GroupSource, productId: string): readonly MenuModifierGroupV1[] {
-  const assigned = source.products.find((product) => product.productId === productId)?.modifierGroupIds;
-  if (assigned === undefined) return source.modifierGroups.filter((group) => group.productId === productId);
+export function groupsForProduct(
+  product: MenuProductV1,
+  groups: readonly MenuModifierGroupV1[],
+): readonly MenuModifierGroupV1[] {
+  const assigned = product.modifierGroupIds;
+  if (assigned === undefined) return groups.filter((group) => group.productId === product.productId);
   const ids = new Set(assigned);
-  return source.modifierGroups.filter((group) => ids.has(group.groupId));
+  return groups.filter((group) => ids.has(group.groupId));
 }
 
 /** Number of products that currently offer a group. */
-export function groupAssignmentCount(products: readonly MenuProductV1[], groupId: string): number {
-  return products.filter((product) => product.modifierGroupIds?.includes(groupId) === true).length;
+export function groupAssignmentCount(
+  products: readonly MenuProductV1[],
+  group: MenuModifierGroupV1,
+): number {
+  return products.filter((product) => groupsForProduct(product, [group]).length === 1).length;
 }
 
 /**
@@ -32,7 +33,7 @@ export function withLegacyOwners(
   groups: readonly MenuModifierGroupV1[],
 ): readonly MenuModifierGroupV1[] {
   return groups.map((group) => {
-    const owners = products.filter((product) => product.modifierGroupIds?.includes(group.groupId) === true);
+    const owners = products.filter((product) => groupsForProduct(product, [group]).length === 1);
     return { ...group, productId: owners.length === 1 ? owners[0]!.productId : null };
   });
 }
@@ -44,7 +45,7 @@ export function withDerivedAssignments(
 ): readonly MenuProductV1[] {
   return products.map((product) => product.modifierGroupIds !== undefined ? product : {
     ...product,
-    modifierGroupIds: groups.filter((group) => group.productId === product.productId).map((group) => group.groupId),
+    modifierGroupIds: groupsForProduct(product, groups).map((group) => group.groupId),
   });
 }
 

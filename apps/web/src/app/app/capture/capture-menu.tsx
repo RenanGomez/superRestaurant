@@ -4,7 +4,7 @@ import { useState, type RefObject } from "react";
 import type { MenuCatalogV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
 import { groupProductsByCategory } from "../../../lib/capture-selection";
 import { menuProductPriceLabel } from "../../../lib/menu-variants";
-import { productGroups } from "../../../lib/menu-groups";
+import { groupsForProduct } from "../../../lib/menu-groups";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { useMenuImageBaseUrl } from "../../../lib/menu-image-url-context";
 import { menuImagePublicUrl } from "../../../lib/menu-images";
@@ -81,7 +81,7 @@ export function CaptureMenu({ catalog, currency, lineQuantities, busy, searchInp
       </h2>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         {products.map((product) => {
-          const groups = productGroups(catalog, product.productId).filter((group) => group.active);
+          const groups = groupsForProduct(product, catalog.modifierGroups).filter((group) => group.active);
           const count = lineQuantities.get(product.productId) ?? 0;
           const photoUrl = menuImagePublicUrl(supabaseUrl, product.imagePath);
           return <button key={product.productId} type="button" className={productCard} disabled={!product.active || busy}

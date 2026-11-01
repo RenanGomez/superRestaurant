@@ -37,6 +37,15 @@ function allHaveString(values: unknown, field: string): boolean {
   return Array.isArray(values) && values.every((entry) => isRecord(entry) && typeof entry[field] === "string");
 }
 
+function validModifierGroupIds(products: readonly Record<string, unknown>[], groupIds: ReadonlySet<string>): boolean {
+  return products.every((product) => {
+    const ids = product.modifierGroupIds;
+    if (ids === undefined) return true;
+    return Array.isArray(ids) && ids.every((id) => typeof id === "string" && groupIds.has(id))
+      && new Set(ids).size === ids.length;
+  });
+}
+
 /** Parses a stored draft; `null` for anything that is not a draft of `expectedVersion` (the server revalidates on publish). */
 export function parseMenuDraft(raw: string | null, expectedVersion: number): LocalMenuDraft | null {
   if (raw === null) return null;
@@ -46,6 +55,8 @@ export function parseMenuDraft(raw: string | null, expectedVersion: number): Loc
   const { categories, groups, products } = value;
   if (!allHaveString(categories, "categoryId") || !allHaveString(products, "productId") || !allHaveString(groups, "groupId")) return null;
   if (!(groups as readonly Record<string, unknown>[]).every((group) => Array.isArray(group.options))) return null;
+  const groupIds = new Set((groups as readonly Record<string, unknown>[]).map((group) => group.groupId as string));
+  if (!validModifierGroupIds(products as readonly Record<string, unknown>[], groupIds)) return null;
   // Drafts saved before category colours/images existed lack both fields (read as null); present values must be valid.
   const normalized: MenuCategoryV1[] = [];
   for (const entry of categories as readonly Record<string, unknown>[]) {

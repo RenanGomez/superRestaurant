@@ -3,15 +3,6 @@ import test from "node:test";
 import type { MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
 import { applyRemoval, removalNeedsConfirmation, unassignGroup, type MenuDraftParts } from "./menu-removal.js";
 
-test("unassigning one group from a product keeps the others and empties a halves setup that used it", () => {
-  const base = { ...product("p1", "c1", ["g1", "g3"]), fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: "g3", flavorGroupId: "g1" } };
-  const result = unassignGroup(base, "g3");
-  assert.deepEqual(result.modifierGroupIds, ["g1"]);
-  assert.equal(result.fraction?.extraGroupId, null);
-  assert.equal(result.fraction?.flavorGroupId, "g1");
-  assert.deepEqual(base.modifierGroupIds, ["g1", "g3"]);
-});
-
 const variant = (variantId: string, name: string) => ({ active: true, displayOrder: 1, name, sku: null, unitPriceMinor: 0, variantId });
 const product = (productId: string, categoryId: string, groupIds: readonly string[] = [], variants: readonly ReturnType<typeof variant>[] = []): MenuProductV1 => ({
   active: true, categoryId, displayOrder: 1, imagePath: null, modifierGroupIds: groupIds, name: productId, productId, sku: null, stationId: "general",
@@ -29,6 +20,15 @@ const draft: MenuDraftParts = {
   groups: [group("g1", "p1", ["o1", "o2"]), group("g2", "p2", ["o3"]), group("g3", null, ["o4"])],
   products: [product("p1", "c1", ["g1", "g3"], [variant("v1", ""), variant("v2", "Grande")]), product("p2", "c2", ["g2", "g3"])],
 };
+
+test("unassigning one group from a product keeps the others and empties a halves setup that used it", () => {
+  const base = { ...product("p1", "c1", ["g1", "g3"]), fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: "g3", flavorGroupId: "g1" } };
+  const result = unassignGroup(base, "g3");
+  assert.deepEqual(result.modifierGroupIds, ["g1"]);
+  assert.equal(result.fraction?.extraGroupId, null);
+  assert.equal(result.fraction?.flavorGroupId, "g1");
+  assert.deepEqual(base.modifierGroupIds, ["g1", "g3"]);
+});
 
 test("removing a freshly added size drops exactly that variant and nothing else", () => {
   const result = applyRemoval(draft, { groupId: "p1", id: "v1", kind: "variant", label: "tamaño nuevo", unnamed: true });

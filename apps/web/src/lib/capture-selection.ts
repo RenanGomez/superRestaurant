@@ -1,4 +1,5 @@
 import type { LineFractionV1, MenuCatalogV1, MenuCategoryV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
+import { groupsForProduct } from "./menu-groups.js";
 
 /** One chosen modifier option and how many units of it apply to a draft line. */
 export interface SelectionPlanModifierSelectionDraft {
@@ -67,7 +68,7 @@ export function estimateSelectionMinor(
   const selectedVariant = activeVariants.find((variant) => variant.variantId === variantId);
   if ((activeVariants.length > 0 && selectedVariant === undefined) || (activeVariants.length === 0 && variantId !== null)) return null;
   let unit = selectedVariant?.unitPriceMinor ?? product.unitPriceMinor;
-  for (const group of groups) {
+  for (const group of groupsForProduct(product, groups)) {
     for (const optionId of selections[group.groupId] ?? []) {
       const option = group.options.find((candidate) => candidate.optionId === optionId);
       if (option === undefined || !Number.isSafeInteger(option.unitPriceMinor)) return null;

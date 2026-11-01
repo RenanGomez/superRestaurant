@@ -24,7 +24,7 @@ import { editorProductFraction, legacyFractionNotice, migrateLegacyFraction } fr
 import { variantValidationError } from "../../../lib/menu-variants";
 import { reorder, reorderSubset } from "../../../lib/menu-reorder";
 import { duplicateProduct } from "../../../lib/menu-duplicate";
-import { duplicateGroup, groupAssignmentCount, productGroups, toggleGroupAssignment, withDerivedAssignments, withLegacyOwners } from "../../../lib/menu-groups";
+import { duplicateGroup, groupAssignmentCount, groupsForProduct, toggleGroupAssignment, withDerivedAssignments, withLegacyOwners } from "../../../lib/menu-groups";
 import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys, type LocalMenuDraft } from "../../../lib/menu-draft-storage";
 import { MENU_CATEGORY_COLOR_LABELS, menuCategoryColorClasses } from "../../../lib/menu-category-color";
 import { collectUsedImagePaths, imagePathsOfEntity, retainImagePaths } from "../../../lib/menu-used-images";
@@ -62,7 +62,7 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
   );
   const [removal, setRemoval] = useState<Removal | null>(null);
   // Legacy per-size halves move to the product on save (the server rejects both at once); validate and send that shape.
-  const savedProducts = useMemo(() => products.map(migrateLegacyFraction), [products]);
+  const savedProducts = useMemo(() => products.map((product) => migrateLegacyFraction(product, groups)), [products, groups]);
   // Older clients read the legacy single owner: send it only while exactly one product offers the group.
   const savedGroups = useMemo(() => withLegacyOwners(savedProducts, groups), [savedProducts, groups]);
   const variantIssue = savedProducts.map((product) => variantValidationError(product.productId, product.variants ?? [], new Set(product.modifierGroupIds ?? []), product.fraction)).find((issue) => issue !== null) ?? null;
@@ -294,7 +294,7 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
           <div className="mt-4 flex flex-col gap-1">
             {groups.map((group, groupIndex) => (
               <ModifierGroupEditor key={group.groupId} siblingCount={groups.length} siblingIndex={groupIndex} usedImagePaths={usedImagePaths}
-                assignedCount={groupAssignmentCount(products, group.groupId)}
+                assignedCount={groupAssignmentCount(products, group)}
                 onMoveGroup={(from, to) => setGroups((current) => reorder(current, from, to))} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl}
                 onAddOption={() => addOption(group.groupId)} onChange={(changed) => setGroups((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))}
                 onDuplicate={() => copyGroup(group.groupId)}
@@ -326,7 +326,7 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
                 categories={categories}
                 currency={currency}
                 catalogGroups={groups}
-                groups={productGroups({ modifierGroups: groups, products }, product.productId)}
+                groups={groupsForProduct(product, groups)}
                 product={product}
                 supabaseUrl={supabaseUrl}
                 onDuplicate={() => copyProduct(product.productId)}
@@ -615,31 +615,44 @@ function GroupMultiSelect({ canManage, catalogGroups, product, onChange }: {
   readonly onChange: (groupId: string, assigned: boolean) => void;
 }): ReactNode {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const panelId = useId();
   const container = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  const assigned = new Set(product.modifierGroupIds ?? []);
+  const assigned = new Set(groupsForProduct(product, catalogGroups).map((group) => group.groupId));
   const summary = assigned.size === 0 ? "Sin grupos" : assigned.size === 1 ? "1 grupo" : `${assigned.size} grupos`;
+  const normalizedQuery = query.trim().toLocaleLowerCase("es-MX");
+  const visibleGroups = normalizedQuery === "" ? catalogGroups : catalogGroups.filter((group) => group.name.toLocaleLowerCase("es-MX").includes(normalizedQuery));
+  const close = (): void => { setOpen(false); setQuery(""); };
   useEffect(() => {
     if (!open) return;
-    const close = (event: PointerEvent): void => { if (container.current !== null && !container.current.contains(event.target as Node)) setOpen(false); };
-    document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
+    const closeOutside = (event: PointerEvent): void => {
+      if (container.current !== null && !container.current.contains(event.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
   }, [open]);
   return (
     <div ref={container} className="relative inline-flex"
-      onKeyDown={(event) => { if (event.key === "Escape" && open) { event.stopPropagation(); setOpen(false); trigger.current?.focus(); } }}>
+      onKeyDown={(event) => { if (event.key === "Escape" && open) { event.stopPropagation(); close(); trigger.current?.focus(); } }}>
       <button ref={trigger} type="button" disabled={!canManage && assigned.size === 0} aria-haspopup="menu" aria-expanded={open} aria-controls={panelId}
         aria-label={`Grupos de modificadores de ${product.name.trim() === "" ? "este producto" : product.name}: ${summary}`}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => { if (open) close(); else setOpen(true); }}
         className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-[12px] font-semibold hover:border-accent focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60">
         Grupos de modificadores · {summary} <span aria-hidden="true">▾</span>
       </button>
       {open && <div id={panelId} role="menu" aria-label="Grupos de modificadores del catálogo" aria-multiselectable="true"
         className="absolute left-0 top-full z-30 mt-1 flex max-h-72 w-72 max-w-[85vw] flex-col overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-xl">
+        {catalogGroups.length > 8 && <input type="search" autoFocus aria-label="Buscar grupo de modificadores" value={query}
+          onChange={(event) => setQuery(event.target.value)} placeholder="Buscar grupo…"
+          className="mb-1 min-h-11 rounded-lg border border-border bg-bg px-3 text-[13px] focus-visible:outline-2 focus-visible:outline-accent" />}
         {catalogGroups.length === 0
           ? <p role="status" className="p-3 text-[12px] text-text-muted">Aún no hay grupos. Créalos en la sección «Grupos de modificadores».</p>
-          : catalogGroups.map((group) => {
+          : visibleGroups.length === 0 ? <p role="status" className="p-3 text-[12px] text-text-muted">No hay grupos que coincidan.</p>
+            : visibleGroups.map((group) => {
             const checked = assigned.has(group.groupId);
             return <button key={group.groupId} type="button" role="menuitemcheckbox" aria-checked={checked} disabled={!canManage}
               onClick={() => onChange(group.groupId, !checked)}

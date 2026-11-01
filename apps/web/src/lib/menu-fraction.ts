@@ -1,4 +1,5 @@
-import type { MenuProductFractionV1, MenuProductV1, MenuProductVariantV1, MenuVariantFractionV1 } from "@super-restaurant/shared-types";
+import type { MenuModifierGroupV1, MenuProductFractionV1, MenuProductV1, MenuProductVariantV1, MenuVariantFractionV1 } from "@super-restaurant/shared-types";
+import { groupsForProduct } from "./menu-groups.js";
 
 /** A product with halves off: nothing chosen yet. */
 export const EMPTY_PRODUCT_FRACTION: MenuProductFractionV1 = Object.freeze({
@@ -50,14 +51,25 @@ export function legacyFractionNotice(product: Pick<MenuProductV1, "fraction" | "
  * Moves a legacy per-size setup to the product and switches the sizes' own setups off, so the server
  * (which rejects a product setup together with an enabled size setup) accepts the draft. Idempotent.
  */
-export function migrateLegacyFraction(product: MenuProductV1): MenuProductV1 {
+export function migrateLegacyFraction(product: MenuProductV1, groups: readonly MenuModifierGroupV1[]): MenuProductV1 {
   const source = legacyFractionSource(product);
   // A product that carries its own setup (even switched off) is the only authority: sizes' own setups go off.
   const hasOwn = product.fraction !== null && product.fraction !== undefined;
-  if (source === null && !(hasOwn && enabledVariants(product).length > 0)) return product;
+  const assigned = new Set(groupsForProduct(product, groups).map((group) => group.groupId));
+  const candidate = source?.fraction ?? product.fraction;
+  const fraction = candidate === null || candidate === undefined ? candidate : {
+    ...candidate,
+    excludableIngredientIds: [...candidate.excludableIngredientIds],
+    extraGroupId: candidate.extraGroupId !== null && assigned.has(candidate.extraGroupId) ? candidate.extraGroupId : null,
+    flavorGroupId: candidate.flavorGroupId !== null && assigned.has(candidate.flavorGroupId) ? candidate.flavorGroupId : null,
+  };
+  if (source === null && !(hasOwn && enabledVariants(product).length > 0)) {
+    if (candidate === null || candidate === undefined || fraction === undefined || fraction === candidate) return product;
+    return { ...product, fraction };
+  }
   return {
     ...product,
-    fraction: source === null ? product.fraction ?? null : { ...source.fraction, excludableIngredientIds: [...source.fraction.excludableIngredientIds] },
+    fraction: fraction ?? null,
     variants: (product.variants ?? []).map((variant) => variant.fraction?.enabled === true
       ? { ...variant, fraction: { ...variant.fraction, enabled: false } } : variant),
   };

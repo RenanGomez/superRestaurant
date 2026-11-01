@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys } from "./menu-draft-storage.js";
+import { withDerivedAssignments } from "./menu-groups.js";
 
 const parts = {
   categories: [{ active: true, categoryId: "c1", color: null, displayOrder: 1, imagePath: null, name: "Pizzas" }],
@@ -18,12 +19,26 @@ test("a serialized draft round-trips only for the same version", () => {
   assert.equal(parseMenuDraft(raw, 5), null);
 });
 
+test("an old draft without modifierGroupIds is recovered through its legacy owners", () => {
+  const parsed = parseMenuDraft(serializeMenuDraft({ ...parts, expectedVersion: 4 }), 4);
+  assert.ok(parsed !== null);
+  assert.deepEqual(withDerivedAssignments(parsed.products, parsed.groups)[0]?.modifierGroupIds, ["g1"]);
+});
+
+test("a new draft preserves canonical modifierGroupIds", () => {
+  const modern = { ...parts, products: [{ ...parts.products[0]!, modifierGroupIds: ["g1"] }] };
+  const parsed = parseMenuDraft(serializeMenuDraft({ ...modern, expectedVersion: 4 }), 4);
+  assert.deepEqual(parsed?.products[0]?.modifierGroupIds, ["g1"]);
+});
+
 test("garbage and malformed drafts are ignored", () => {
   assert.equal(parseMenuDraft(null, 1), null);
   assert.equal(parseMenuDraft("{not json", 1), null);
   assert.equal(parseMenuDraft("[]", 1), null);
   assert.equal(parseMenuDraft(JSON.stringify({ categories: [{}], expectedVersion: 1, groups: [], products: [] }), 1), null);
   assert.equal(parseMenuDraft(JSON.stringify({ categories: [], expectedVersion: 1, groups: [{ groupId: "g" }], products: [] }), 1), null);
+  assert.equal(parseMenuDraft(JSON.stringify({ ...parts, expectedVersion: 1, products: [{ ...parts.products[0], modifierGroupIds: ["missing"] }] }), 1), null);
+  assert.equal(parseMenuDraft(JSON.stringify({ ...parts, expectedVersion: 1, products: [{ ...parts.products[0], modifierGroupIds: ["g1", "g1"] }] }), 1), null);
 });
 
 test("snapshot changes with any edit and ignores the version", () => {

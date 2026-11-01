@@ -1,5 +1,5 @@
 import type { MenuCategoryV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
-import { withLegacyOwners } from "./menu-groups.js";
+import { groupsForProduct, withLegacyOwners } from "./menu-groups.js";
 
 /** One pending removal from the menu draft. For a variant, groupId carries the owning product id. */
 export type Removal = Readonly<{
@@ -64,7 +64,7 @@ export function applyRemoval(draft: MenuDraftParts, removal: Removal): MenuDraft
   }
   if (removal.kind === "groups") {
     const target = draft.products.find((product) => product.productId === removal.id);
-    const gone = new Set(target?.modifierGroupIds ?? []);
+    const gone = new Set(target === undefined ? [] : groupsForProduct(target, draft.groups).map((group) => group.groupId));
     const products = draft.products.map((product) => (
       product.productId === removal.id ? cleanProduct({ ...product, modifierGroupIds: [] }, gone) : product
     ));

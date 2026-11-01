@@ -1,7 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
-import { duplicateGroup, groupAssignmentCount, productGroups, toggleGroupAssignment, withDerivedAssignments, withLegacyOwners } from "./menu-groups.js";
+import { duplicateGroup, groupAssignmentCount, groupsForProduct, toggleGroupAssignment, withDerivedAssignments, withLegacyOwners } from "./menu-groups.js";
+
+const product = (productId: string, modifierGroupIds?: readonly string[]): MenuProductV1 => ({
+  active: true, categoryId: "c", displayOrder: 1, imagePath: null, name: productId, productId, sku: null, stationId: "s",
+  tax: null, unit: "u", unitPriceMinor: 1, ...(modifierGroupIds === undefined ? {} : { modifierGroupIds }),
+});
+const group = (groupId: string, productId: string | null = null): MenuModifierGroupV1 => ({
+  active: true, displayOrder: 1, groupId, maximumQuantity: 1, minimumQuantity: 0, name: groupId, options: [], productId,
+});
+
+test("groupsForProduct uses the canonical ids in catalog order", () => {
+  const groups = [group("g1"), group("g2"), group("g3")];
+  assert.deepEqual(groupsForProduct(product("p1", ["g3", "g1"]), groups).map((entry) => entry.groupId), ["g1", "g3"]);
+  assert.equal(groupAssignmentCount([product("p1", ["g1"]), product("p2", ["g1"])], groups[0]!), 2);
+  assert.equal(groupAssignmentCount([product("p1", ["g1"])], groups[1]!), 0);
+});
+
+test("groupsForProduct falls back to the legacy owner when canonical ids are absent", () => {
+  assert.deepEqual(groupsForProduct(product("p1"), [group("g1", "p1"), group("g2", "p2")]).map((entry) => entry.groupId), ["g1"]);
+});
+
+test("groupsForProduct lets canonical ids win when both relationships exist", () => {
+  assert.deepEqual(groupsForProduct(product("p1", ["g2"]), [group("g1", "p1"), group("g2", null)]).map((entry) => entry.groupId), ["g2"]);
+});
+
+test("groupsForProduct treats a canonical empty list as no assignments", () => {
+  assert.deepEqual(groupsForProduct(product("p1", []), [group("g1", "p1")]), []);
+});
 
 test("duplicating a group gives fresh ids, no owner, no photos and a name that fits", () => {
   let n = 0;
@@ -24,28 +51,6 @@ test("duplicating a group gives fresh ids, no owner, no photos and a name that f
 test("old drafts without lists get them derived from the legacy owner", () => {
   const products = withDerivedAssignments([product("p1"), product("p2", ["gx"])], [group("g1", "p1"), group("g2", "p1"), group("gx", "p2")]);
   assert.deepEqual(products.map((entry) => entry.modifierGroupIds), [["g1", "g2"], ["gx"]]);
-});
-
-const product = (productId: string, modifierGroupIds?: readonly string[]): MenuProductV1 => ({
-  active: true, categoryId: "c", displayOrder: 1, imagePath: null, name: productId, productId, sku: null, stationId: "s",
-  tax: null, unit: "u", unitPriceMinor: 1, ...(modifierGroupIds === undefined ? {} : { modifierGroupIds }),
-});
-const group = (groupId: string, productId: string | null = null): MenuModifierGroupV1 => ({
-  active: true, displayOrder: 1, groupId, maximumQuantity: 1, minimumQuantity: 0, name: groupId, options: [], productId,
-});
-
-test("a shared group is offered by every product that lists it, in catalog order", () => {
-  const source = { modifierGroups: [group("g1"), group("g2"), group("g3")], products: [product("p1", ["g3", "g1"]), product("p2", ["g1"])] };
-  assert.deepEqual(productGroups(source, "p1").map((entry) => entry.groupId), ["g1", "g3"]);
-  assert.deepEqual(productGroups(source, "p2").map((entry) => entry.groupId), ["g1"]);
-  assert.equal(groupAssignmentCount(source.products, "g1"), 2);
-  assert.equal(groupAssignmentCount(source.products, "g2"), 0);
-});
-
-test("catalogs from older servers fall back to the legacy owner", () => {
-  const source = { modifierGroups: [group("g1", "p1"), group("g2", "p2")], products: [product("p1"), product("p2")] };
-  assert.deepEqual(productGroups(source, "p1").map((entry) => entry.groupId), ["g1"]);
-  assert.deepEqual(productGroups({ ...source, products: [] }, "p2").map((entry) => entry.groupId), ["g2"]);
 });
 
 test("the legacy owner is kept only while exactly one product offers the group", () => {

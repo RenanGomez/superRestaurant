@@ -11,7 +11,7 @@ import type {
   OrderDetailFractionHalfV1,
 } from "@super-restaurant/shared-types";
 import type { SelectionPlanLineDraft } from "./capture-selection.js";
-import { productGroups } from "./menu-groups.js";
+import { groupsForProduct } from "./menu-groups.js";
 
 /** What the operator has chosen for one half while arming a "mitad y mitad" line. */
 export interface HalfDraft {
@@ -266,7 +266,7 @@ export function draftLinesFromProjection(
       const product = catalog?.products.find((entry) => entry.productId === line.productId);
       const variant = product?.variants?.find((entry) => entry.variantId === line.variantId);
       const restored = restoreLineFraction(line.halves, product?.fraction ?? variant?.fraction,
-        catalog === undefined || catalog === null ? [] : productGroups(catalog, line.productId));
+        product === undefined || catalog === null ? [] : groupsForProduct(product, catalog.modifierGroups));
       if (!restored.ok) return { ok: false, lineName: line.productName };
       fraction = restored.fraction;
     }
