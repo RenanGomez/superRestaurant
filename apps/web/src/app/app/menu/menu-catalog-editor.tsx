@@ -30,7 +30,7 @@ import { MENU_CATEGORY_COLOR_LABELS, menuCategoryColorClasses } from "../../../l
 import { collectUsedImagePaths, imagePathsOfEntity, retainImagePaths } from "../../../lib/menu-used-images";
 import { DragReorderList, ReorderButtons, ReorderHandle, reorderRowProps } from "./reorder-controls";
 
-import { saveMenuCatalogAction, uploadMenuImageAction } from "./actions";
+import { copyMenuImageAction, saveMenuCatalogAction, uploadMenuImageAction } from "./actions";
 
 interface Draft {
   readonly categories: readonly MenuCategoryV1[];
@@ -136,14 +136,26 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
     card.scrollIntoView({ block: "center" });
     card.querySelector<HTMLInputElement>("input[type=text]")?.focus({ preventScroll: true });
   }, [products]);
-  const copyProduct = (productId: string): void => {
+  const copyProduct = async (productId: string): Promise<void> => {
     const source = products.find((entry) => entry.productId === productId);
     if (source === undefined) return;
-    // The copy lists the same shared groups; no group is cloned.
+    // The copy lists the same shared groups; no group is cloned, so only the product's own photo is copied.
     const copy = duplicateProduct(source, () => crypto.randomUUID(), nextDisplayOrder(products.filter((entry) => entry.categoryId === source.categoryId)));
     focusAfterCopy.current = copy.product.productId;
-    setCopiedProductIds((current) => [...current, copy.product.productId]);
     setProducts((current) => [...current, copy.product]);
+    if (source.imagePath === null) return;
+    onUploadPendingChange(true);
+    try {
+      const result = await copyMenuImageAction("product", copy.product.productId, source.imagePath);
+      if (result.imagePath !== undefined) {
+        const copiedPath = result.imagePath;
+        setProducts((current) => current.map((entry) => entry.productId === copy.product.productId ? { ...entry, imagePath: copiedPath } : entry));
+      } else {
+        setCopiedProductIds((current) => current.includes(copy.product.productId) ? current : [...current, copy.product.productId]);
+      }
+    } finally {
+      onUploadPendingChange(false);
+    }
   };
   const copyGroup = (groupId: string): void => {
     const source = groups.find((entry) => entry.groupId === groupId);
@@ -321,7 +333,7 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
                     label={`Productos de ${category.name}`}
                     onMove={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.categoryId === category.categoryId, from, to))}
                     renderRow={(product, _index, handle) => (
-              <ProductEditor handle={handle} copyNotice={copiedProductIds.includes(product.productId) && product.imagePath === null}usedStations={products.map((entry) => entry.stationId)} usedImagePaths={usedImagePaths} variantInvalid={variantIssue?.productId === product.productId}
+              <ProductEditor handle={handle} copyNotice={copiedProductIds.includes(product.productId)} usedStations={products.map((entry) => entry.stationId)} usedImagePaths={usedImagePaths} variantInvalid={variantIssue?.productId === product.productId}
                 canManage={canManage}
                 categories={categories}
                 currency={currency}
@@ -329,7 +341,7 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
                 groups={groupsForProduct(product, groups)}
                 product={product}
                 supabaseUrl={supabaseUrl}
-                onDuplicate={() => copyProduct(product.productId)}
+                onDuplicate={() => { void copyProduct(product.productId); }}
                 onProductChange={(changed) => setProducts((current) => current.map((entry) => entry.productId === changed.productId ? changed : entry))}
                 onProductImageChange={(imagePath) => setProducts((current) => current.map((entry) => entry.productId === product.productId ? { ...entry, imagePath } : entry))}
                 onRemove={requestRemoval}
@@ -723,7 +735,8 @@ function changeOption(group: MenuModifierGroupV1, optionId: string, patch: Parti
 /**
  * Round photo thumbnail that is itself the control. Without a photo, a click opens the file picker; with one it opens
  * a modal (blurred page behind) with the big photo and «Reemplazar», «Quitar» and «Cancelar». Both show the photos
- * already used in this menu so a removed one can be picked again without uploading it. Choosing one only assigns its path.
+ * already used in this menu so a removed one can be picked again without uploading it. A path owned by another entity is
+ * copied on the server before the new target path is assigned.
  */
 function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, usedImagePaths, onChange, onUploadPendingChange }: {
   readonly canManage: boolean;
@@ -745,8 +758,8 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
   const url = menuImagePublicUrl(supabaseUrl, imagePath);
   const entityWord = target === "product" ? "producto" : target === "category" ? "categoría" : "opción";
   const label = `Foto de ${name.trim() === "" ? `${entityWord} sin nombre` : name}`;
-  // Only this entity's own removed photos: the database rejects a path that embeds another entity's id.
-  const otherPaths = imagePathsOfEntity(usedImagePaths, targetId).filter((path) => path !== imagePath);
+  const removedPaths = imagePathsOfEntity(usedImagePaths, targetId).filter((path) => path !== imagePath);
+  const menuPaths = usedImagePaths.filter((path) => path !== imagePath);
   const showsPhoto = url !== null && failedPath !== imagePath;
 
   // A success note fades after a few seconds; errors stay until the next action.
@@ -829,6 +842,33 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
     else setPanel("photo");
   };
   const assign = (path: string | null, note: string): void => { onChange(path); setFailedPath(null); setPanel(null); setMessage(note); };
+  const pickUsed = async (path: string): Promise<void> => {
+    if (imagePathsOfEntity([path], targetId).length > 0) {
+      assign(path, "Foto elegida. Publica la nueva versión para mostrarla en captura.");
+      return;
+    }
+    setBusy(true);
+    onUploadPendingChange(true);
+    setPanel(null);
+    setMessage("Copiando la foto…");
+    try {
+      const result = await copyMenuImageAction(target, targetId, path);
+      if (result.imagePath === undefined) {
+        setMessage(result.error ?? "No se pudo copiar la foto.");
+        return;
+      }
+      assign(result.imagePath, "Foto copiada. Publica la nueva versión para mostrarla en captura.");
+    } catch (error: unknown) {
+      const offline = typeof navigator !== "undefined" && !navigator.onLine;
+      const detail = error instanceof Error && error.message.length > 0 ? ` (${error.message.slice(0, 120)})` : "";
+      setMessage(offline
+        ? "No se pudo copiar la foto: sin conexión a internet. Revisa la red e inténtalo de nuevo."
+        : `No se pudo copiar la foto: el servidor no respondió${detail}. Inténtalo de nuevo.`);
+    } finally {
+      setBusy(false);
+      onUploadPendingChange(false);
+    }
+  };
   const thumb = "inline-flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border";
 
   return <div className="relative flex min-w-0 flex-col items-start gap-1">
@@ -840,20 +880,21 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
           : <span aria-hidden="true" className="text-lg font-bold text-accent-hover">{name.trim() === "" ? "+" : name.trim().charAt(0).toLocaleUpperCase("es-MX")}</span>}
     </button>
     {canManage && <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" tabIndex={-1} aria-hidden="true" className="sr-only" onChange={(event) => { void choose(event); }} />}
-    {canManage && imagePath === null && otherPaths.length > 0 && !busy &&
-      <button type="button" onClick={() => setPanel("used")} className="min-h-6 text-[11px] font-medium text-accent underline focus-visible:outline-2 focus-visible:outline-accent">Fotos quitadas</button>}
+    {canManage && imagePath === null && menuPaths.length > 0 && !busy &&
+      <button type="button" onClick={() => setPanel("used")} className="min-h-11 rounded-lg px-1 text-[11px] font-medium text-accent underline focus-visible:outline-2 focus-visible:outline-accent">Fotos del menú</button>}
     {message !== null && <div role="status" className="absolute left-0 top-full z-30 mt-1 w-56 rounded-lg border border-border bg-surface p-2 text-[12px] text-text-muted shadow-lg">
       <p>{message}</p>
       {attempt.current !== null && message.startsWith("No se pudo subir") && <button type="button" disabled={busy} onClick={() => { void retry(); }} className="mt-1 min-h-11 rounded-lg border border-border bg-surface px-3 text-[13px] font-semibold text-text focus-visible:outline-2 focus-visible:outline-accent">Reintentar</button>}
     </div>}
-    {panel !== null && <PhotoDialog title={panel === "photo" ? label : `Fotos quitadas de este ${entityWord}`} onClose={() => setPanel(null)}>
+    {panel !== null && <PhotoDialog title={panel === "photo" ? label : "Fotos ya usadas en este menú"} onClose={() => setPanel(null)}>
       {panel === "photo" && url !== null && <img src={url} alt={label} className="max-h-[55vh] w-full rounded-xl border border-border bg-bg object-contain" />}
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={() => { setPanel(null); openPicker(); }} className="min-h-11 rounded-lg bg-accent px-4 py-2 text-[13px] font-semibold text-white hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">{panel === "photo" ? "Reemplazar" : "Subir una foto nueva"}</button>
         {panel === "photo" && <button type="button" onClick={() => assign(null, "Foto quitada del borrador.")} className="min-h-11 rounded-lg border border-[oklch(85%_0.06_25)] px-4 py-2 text-[13px] font-semibold text-error focus-visible:outline-2 focus-visible:outline-accent">Quitar</button>}
         <button type="button" autoFocus onClick={() => setPanel(null)} className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-accent">Cancelar</button>
       </div>
-      <UsedPhotos title={`Fotos quitadas de este ${entityWord}`} paths={otherPaths} supabaseUrl={supabaseUrl} onPick={(path) => assign(path, "Foto elegida. Publica la nueva versión para mostrarla en captura.")} />
+      <UsedPhotos title={`Fotos quitadas de este ${entityWord}`} paths={removedPaths} supabaseUrl={supabaseUrl} onPick={(path) => { void pickUsed(path); }} />
+      <UsedPhotos title="Fotos ya usadas en este menú" paths={menuPaths} supabaseUrl={supabaseUrl} onPick={(path) => { void pickUsed(path); }} />
     </PhotoDialog>}
   </div>;
 }

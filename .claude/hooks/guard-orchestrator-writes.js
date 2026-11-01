@@ -8,7 +8,7 @@ const path = require("node:path");
 
 const WRITER_AGENTS = new Set(["implementer-claude"]);
 const ALLOWED_FILES = new Set(["TODO.md", "HANDOFF.md", "PROJECT_NOTES.md", "AGENTS.md", "README.md", ".gitignore", ".mcp.json"]);
-const ALLOWED_PREFIXES = ["docs/", ".claude/", "tools/agentic/"];
+const ALLOWED_PREFIXES = ["docs/", ".claude/", "tools/agentic/", ".agents/briefs/", ".agents/reports/", ".harness/"];
 
 let raw = "";
 process.stdin.setEncoding("utf8");

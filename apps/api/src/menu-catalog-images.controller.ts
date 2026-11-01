@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   Header,
   Inject,
+  NotFoundException,
   Post,
   Req,
   ServiceUnavailableException,
@@ -26,6 +27,23 @@ export class MenuCatalogImagesController {
     } catch (error: unknown) {
       if (!(error instanceof MenuCatalogImageApplicationError)) throw unavailable();
       if (error.code === "request") throw new BadRequestException({ code: "MENU_CATALOG_IMAGE_REQUEST_REJECTED" });
+      if (error.code === "unconfigured") {
+        throw new ServiceUnavailableException({ code: "MENU_IMAGES_UNCONFIGURED" });
+      }
+      if (error.code === "authorization") throw new ForbiddenException({ code: "ACTION_NOT_AUTHORIZED" });
+      throw unavailable();
+    }
+  }
+
+  @Post("copy")
+  @Header("Cache-Control", "private, no-store")
+  public async copy(@Req() request: unknown, @Body() body: unknown): Promise<MenuImageUploadResultV1> {
+    try {
+      return await this.images.copy(getAuthenticatedPrincipal(request), body);
+    } catch (error: unknown) {
+      if (!(error instanceof MenuCatalogImageApplicationError)) throw unavailable();
+      if (error.code === "request") throw new BadRequestException({ code: "MENU_CATALOG_IMAGE_REQUEST_REJECTED" });
+      if (error.code === "not_found") throw new NotFoundException({ code: "MENU_CATALOG_IMAGE_SOURCE_NOT_FOUND" });
       if (error.code === "unconfigured") {
         throw new ServiceUnavailableException({ code: "MENU_IMAGES_UNCONFIGURED" });
       }

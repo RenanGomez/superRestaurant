@@ -85,9 +85,15 @@ Antes de delegar, L0 clasifica la subtarea y elige el canal y esfuerzo mínimos 
 | **Compleja** | Arquitectura, concurrencia, seguridad, refactors masivos, diseño de contratos | `implementer-claude` con revisión doble, u `opus` para diseño | `-Effort high` | `-Model strong` (diseño y segunda opinión) |
 
 Reglas:
+0. **Codex y Gemini primero, siempre** (Emmanuel, 2026-11-01; `AGENTS.md` §19.4). Antes de lanzar cualquier
+   sub-agente Claude, L0 intenta el canal pagado: Codex para implementar y revisar (todos los niveles, `-Effort`
+   según la fila), Gemini para investigar, armar paquetes, parsear logs y segunda opinión. Claude sólo como
+   fallback documentado (cuota, sesión, sandbox, dos intentos fallidos) o como segunda familia de la revisión
+   cruzada de nivel A. La frase «nivel A siempre» de la fila L1 de §2 queda sustituida por: Codex implementa el
+   nivel A con `-Effort high`, Claude lo revisa.
 1. Menor esfuerzo suficiente; reservar el modelo del orquestador para planificar, revisar e integrar.
 2. Escalar tras dos intentos fallidos en el mismo nivel; si falla en «Compleja», L0 re-divide la tarea.
-3. Preferir las cuotas ya pagadas (Codex, Gemini) para lo mecánico y la exploración; Claude L1 para lo crítico.
+3. Preferir las cuotas ya pagadas (Codex, Gemini) para lo mecánico y la exploración; Claude L1 sólo como fallback.
 
 ### 3.1 Cuota, autenticación y fallback
 - Ninguna CLI expone saldo; la disponibilidad se detecta por código de salida y mensajes como `Rate limit`,

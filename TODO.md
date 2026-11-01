@@ -117,11 +117,11 @@ Reglas: una ronda de revisión en nivel C, dos en B, revisión doble en A con co
 - [ ] **REVIEW · C** — `capture-customer-address-r1` (en `main`, 7994b7b; dirección de prueba resultó fuera de cobertura, revisar zona): elegir cliente en un paso, ver y usar su dirección, agregar/validar dirección sin salir de la captura (desbloquea «Confirmar» en domicilio). Tras integrar `capture-ux-r1`.
 - [ ] **REVIEW · C** — `menu-products-ui-r1` (en `main`, a135a7f; sin verificación en navegador): foto por clic con diálogo, disposición en tres filas con secciones plegadas, duplicar producto, fotos ya usadas, borrador local e indicador de cambios sin publicar. Tras integrar `menu-categories-r1`.
 - [ ] **REVIEW · A** — `menu-category-appearance` (en `main` ec9f104; migración `20261101000100` aplicada en Supabase; sin verificación visual): color pastel e imagen de categoría.
-- [ ] **IN_PROGRESS · A** — `menu-shared-modifier-groups` (P1 de menu-modifier-model-v2): grupos compartidos por restaurante con asignación múltiple; migración aditiva con backfill determinista (aplicar en remoto requiere autorización explícita).
+- [ ] **IN_PROGRESS · A** — `menu-shared-modifier-groups` (P1; capas contratos/dominio/SQL/API/mobile commiteadas por implementer-claude en `claude/menu-shared-modifier-groups`, sonda remota rollback-only 30 sentencias ok; capa web la termina Codex): grupos compartidos por restaurante con asignación múltiple; migración aditiva con backfill determinista (aplicar en remoto requiere autorización explícita).
 - [ ] **BLOCKED · A** — `menu-locked-ingredients` (P2): el campo real es `excludableIngredientIds` (etiquetas); requiere dry-run de mapeo etiqueta→opción y autorización del paso de datos. Tras P1.
 - [ ] **BLOCKED · A** — `menu-specialties` (P3): decisión pendiente de Emmanuel sobre la regla de precio de mitades con especialidades y el destino de los grupos de sabores actuales. Ver `.claude/packets/menu-modifier-model-v2-research.md`.
 - [ ] **TODO · A** — `menu-photo-focus`: posición y zoom de la foto.
-- [ ] **TODO · B** — `menu-photo-copy`: copiar una foto a otro producto/opción desde el servidor (la restricción `image_path` exige el id de la propia entidad); habilita «fotos ya usadas» entre productos y copiar foto al duplicar.
+- [ ] **REVIEW · B** — `menu-photo-copy` (Codex L2; en `main` 84f55a0; revisión Sonnet APROBAR; sin verificación visual): copiar una foto a otro producto/opción desde el servidor (la restricción `image_path` exige el id de la propia entidad); habilita «fotos ya usadas» entre productos y copiar foto al duplicar.
 - [ ] **TODO · B** — `order-account-name`: nombre opcional de la cuenta de mesa.
 
 Última actualización: 2026-11-01
