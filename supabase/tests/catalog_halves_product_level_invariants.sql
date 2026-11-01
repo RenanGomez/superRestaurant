@@ -11,6 +11,10 @@
 --      'Armada', ingredients at half price rounded up), and conflicts on any drift.
 --   4. list_kds_tickets prints 'Mitad A: Armada' for the custom half.
 --   5. table invariants: CHECKs on the product fraction columns.
+--   6. a flavor/extra group SHARED by two products (null legacy owner, assigned through
+--      app.menu_product_modifier_groups) quotes and confirms halves at exactly the prices of the same
+--      group with a legacy owner (22000 / 12000 + 1251), and the confirmed snapshot does not change
+--      when the shared options are repriced afterwards.
 begin;
 do $catalog_halves_product_level_tests$
 declare
@@ -38,6 +42,16 @@ declare
   o_haw_s uuid := gen_random_uuid();
   o_queso_s uuid := gen_random_uuid();
   v_large uuid := gen_random_uuid();
+  shared_pizza uuid := gen_random_uuid();
+  shared_pizza_2 uuid := gen_random_uuid();
+  g_flavor_sh uuid := gen_random_uuid();
+  g_extra_sh uuid := gen_random_uuid();
+  o_pep_sh uuid := gen_random_uuid();
+  o_haw_sh uuid := gen_random_uuid();
+  o_queso_sh uuid := gen_random_uuid();
+  shared_orders uuid[] := array[]::uuid[];
+  shared_snaps jsonb := '[]'::jsonb;
+  shared_order uuid;
   device uuid := gen_random_uuid();
   shift uuid := gen_random_uuid();
   now_at timestamptz := pg_catalog.date_trunc('milliseconds',pg_catalog.clock_timestamp());
@@ -197,6 +211,30 @@ begin
   insert into app.menu_product_variants(
     restaurant_id,catalog_id,product_id,id,name,sku,unit_price_minor,active,display_order
   ) values (restaurant,catalog,sized_pizza,v_large,'Grande',null,20000,true,0);
+  -- Shared groups: product_id null, offered to two products through the assignment table.
+  insert into app.menu_products(
+    restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor,
+    fraction_enabled,fraction_flavor_group_id,fraction_extra_group_id,fraction_excludable_ingredient_ids
+  ) values
+    (restaurant,catalog,shared_pizza,category,'Pizza compartida',null,true,3,'kitchen','piece',12000,true,g_flavor_sh,g_extra_sh,array['cebolla']),
+    (restaurant,catalog,shared_pizza_2,category,'Calzone compartido',null,true,4,'kitchen','piece',5000,false,null,null,array[]::text[]);
+  insert into app.menu_modifier_groups(
+    restaurant_id,catalog_id,id,product_id,name,active,display_order,minimum_quantity,maximum_quantity
+  ) values
+    (restaurant,catalog,g_flavor_sh,null,'Sabor',true,2,0,2),
+    (restaurant,catalog,g_extra_sh,null,'Ingredientes',true,3,0,5);
+  insert into app.menu_product_modifier_groups(restaurant_id,catalog_id,product_id,group_id,display_order)
+    values
+    (restaurant,catalog,shared_pizza,g_flavor_sh,0),(restaurant,catalog,shared_pizza,g_extra_sh,1),
+    (restaurant,catalog,shared_pizza_2,g_flavor_sh,0),(restaurant,catalog,shared_pizza_2,g_extra_sh,1);
+  insert into app.menu_modifier_options(restaurant_id,catalog_id,group_id,id,name,unit_price_minor,active)
+    values
+    (restaurant,catalog,g_flavor_sh,o_pep_sh,'Pepperoni',0,true),
+    (restaurant,catalog,g_flavor_sh,o_haw_sh,'Hawaiana',22000,true),
+    (restaurant,catalog,g_extra_sh,o_queso_sh,'Queso',2501,true);
+  if (select pg_catalog.count(*) from app.menu_modifier_groups where catalog_id=catalog and product_id is null)<>2
+    or (select pg_catalog.count(*) from app.menu_product_modifier_groups where catalog_id=catalog and group_id=g_flavor_sh)<>2
+  then raise exception 'CATALOG_HALVES_PL_SHARED_FIXTURE'; end if;
   insert into app.menu_catalog_heads(restaurant_id,catalog_id,version,updated_at,updated_by)
     values(restaurant,catalog,1,now_at,actor);
   insert into app.operational_shifts(id,restaurant_id,branch_id,name,status,opened_at,opened_by)
@@ -258,6 +296,38 @@ begin
         pg_catalog.jsonb_set(bd_custom_s,'{flavorOptionId}',pg_catalog.to_jsonb(o_pep_s::text))||pg_catalog.jsonb_build_object('flavorName','Pepperoni'),
         pg_catalog.jsonb_build_object('fraction','half-b','flavorOptionId',o_pep_s::text,'flavorName','Pepperoni','amountMinor',20000)),
       'expect','applied')
+  );
+
+  -- Same quotes as the legacy-owner scenarios nosize_flavors_ok / nosize_custom_ok, with shared groups.
+  scenarios := scenarios || pg_catalog.jsonb_build_array(
+    pg_catalog.jsonb_build_object('label','shared_flavors_ok','name','Pizza compartida','shared',true,
+      'product',shared_pizza,'variant',null,'groups',pg_catalog.jsonb_build_array(g_flavor_sh,g_extra_sh),
+      'slots',pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_set(slot_pep,'{flavorOptionId}',pg_catalog.to_jsonb(o_pep_sh::text)),
+        pg_catalog.jsonb_set(slot_haw,'{flavorOptionId}',pg_catalog.to_jsonb(o_haw_sh::text))),
+      'unit',22000,'mods',pg_catalog.jsonb_build_array(),
+      'breakdown',pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_set(bd_pep,'{flavorOptionId}',pg_catalog.to_jsonb(o_pep_sh::text)),
+        pg_catalog.jsonb_set(bd_haw,'{flavorOptionId}',pg_catalog.to_jsonb(o_haw_sh::text))),'expect','applied'),
+    pg_catalog.jsonb_build_object('label','shared_custom_ok','name','Pizza compartida','shared',true,
+      'product',shared_pizza,'variant',null,'groups',pg_catalog.jsonb_build_array(g_flavor_sh,g_extra_sh),
+      'slots',pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_set(slot_custom_cheese,'{extraOptionIds}',pg_catalog.jsonb_build_array(o_queso_sh::text)),
+        pg_catalog.jsonb_set(pg_catalog.jsonb_set(slot_pep,'{fraction}','"half-b"'),'{flavorOptionId}',pg_catalog.to_jsonb(o_pep_sh::text))),
+      'unit',12000,'mods',pg_catalog.jsonb_build_array(pg_catalog.jsonb_set(mod_cheese,'{modifierId}',
+        pg_catalog.to_jsonb('extra:half-a:'||o_queso_sh::text))),
+      'breakdown',pg_catalog.jsonb_build_array(bd_custom,
+        pg_catalog.jsonb_set(pg_catalog.jsonb_set(bd_pep,'{fraction}','"half-b"'),'{flavorOptionId}',pg_catalog.to_jsonb(o_pep_sh::text))),
+      'expect','applied'),
+    pg_catalog.jsonb_build_object('label','shared_wrong_price','name','Pizza compartida',
+      'product',shared_pizza,'variant',null,'groups',pg_catalog.jsonb_build_array(g_flavor_sh,g_extra_sh),
+      'slots',pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_set(slot_pep,'{flavorOptionId}',pg_catalog.to_jsonb(o_pep_sh::text)),
+        pg_catalog.jsonb_set(slot_haw,'{flavorOptionId}',pg_catalog.to_jsonb(o_haw_sh::text))),
+      'unit',12000,'mods',pg_catalog.jsonb_build_array(),
+      'breakdown',pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_set(bd_pep,'{flavorOptionId}',pg_catalog.to_jsonb(o_pep_sh::text)),
+        pg_catalog.jsonb_set(bd_haw,'{flavorOptionId}',pg_catalog.to_jsonb(o_haw_sh::text))),'expect','conflict')
   );
 
   for scenario in select value from pg_catalog.jsonb_array_elements(scenarios) loop
@@ -330,7 +400,7 @@ begin
     );
     snap := pg_catalog.jsonb_build_object(
       'catalogVersion',catalog::text,'productId',scenario->>'product',
-      'name',case when (scenario->>'product')::uuid=pizza then 'Pizza' else 'Pizza grande' end,
+      'name',coalesce(scenario->>'name',case when (scenario->>'product')::uuid=pizza then 'Pizza' else 'Pizza grande' end),
       'stationId','kitchen','unit','piece',
       'unitPrice',pg_catalog.jsonb_build_object('amountMinor',(scenario->>'unit')::bigint,'currency','MXN'),
       'modifiers',scenario->'mods','geometry','halves'
@@ -359,6 +429,10 @@ begin
       where placed.restaurant_id=restaurant and placed.branch_id=branch and placed.id=confirmed_order
         and placed.aggregate#>'{items,0,snapshot}' = snap
     ) then raise exception 'CATALOG_HALVES_PL_SNAPSHOT_NOT_PERSISTED'; end if;
+    if scenario->>'shared'='true' then
+      shared_orders := shared_orders || confirmed_order;
+      shared_snaps := shared_snaps || pg_catalog.jsonb_build_array(snap);
+    end if;
     if scenario->>'expect'<>'applied' and exists (
       select 1 from app.orders placed
       where placed.restaurant_id=restaurant and placed.branch_id=branch and placed.id=confirmed_order
@@ -378,6 +452,20 @@ begin
         'Mitad A: Armada','Mitad B: Pepperoni','Mitad A: + Queso')
       then raise exception 'CATALOG_HALVES_PL_KDS_LINES_%',ticket_names::text; end if;
     end if;
+  end loop;
+
+  -- ---------------------------------------------------------------- 6. frozen snapshots of shared groups
+  if pg_catalog.cardinality(shared_orders)<>2 then raise exception 'CATALOG_HALVES_PL_SHARED_ORDERS_%',pg_catalog.cardinality(shared_orders); end if;
+  update app.menu_modifier_options set unit_price_minor=unit_price_minor+7000
+  where restaurant_id=restaurant and catalog_id=catalog and group_id in (g_flavor_sh,g_extra_sh);
+  update app.menu_products set unit_price_minor=unit_price_minor+500
+  where restaurant_id=restaurant and catalog_id=catalog and id=shared_pizza;
+  for shared_order in select unnest(shared_orders) loop
+    if not exists (
+      select 1 from app.orders placed
+      where placed.restaurant_id=restaurant and placed.branch_id=branch and placed.id=shared_order
+        and placed.aggregate#>'{items,0,snapshot}' = shared_snaps->(pg_catalog.array_position(shared_orders,shared_order)-1)
+    ) then raise exception 'CATALOG_HALVES_PL_SHARED_SNAPSHOT_CHANGED'; end if;
   end loop;
 
   -- ---------------------------------------------------------------- 5. table invariants

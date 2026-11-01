@@ -57,6 +57,8 @@
     "src/lib/menu-removal.test.ts",
     "src/lib/menu-duplicate.ts",
     "src/lib/menu-duplicate.test.ts",
+    "src/lib/menu-groups.ts",
+    "src/lib/menu-groups.test.ts",
     "src/lib/menu-used-images.ts",
     "src/lib/menu-used-images.test.ts",
     "src/lib/menu-draft-storage.ts",

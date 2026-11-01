@@ -1320,6 +1320,7 @@ const halvesMenuState: MenuCatalogStateV1 = (() => {
       ],
       products: [{
         ...catalog.products[0]!,
+        modifierGroupIds: [...(catalog.products[0]!.modifierGroupIds ?? []), flavorGroupId, extraGroupId],
         variants: catalog.products[0]!.variants!.map((variant) => variant.variantId === sizeLarge
           ? { ...variant, fraction: { enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId, flavorGroupId } }
           : variant),

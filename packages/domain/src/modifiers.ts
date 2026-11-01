@@ -28,8 +28,11 @@ export interface ModifierGroupCatalog {
   readonly name: string;
   /** Version of the allowlist from which this group was resolved. */
   readonly catalogVersion: string;
-  /** Product that alone is permitted to use this group. */
-  readonly productId: string;
+  /**
+   * Legacy single owner. `null` or absent marks a shared group: the menu catalog then validates
+   * which products may use it through their `modifierGroupIds` allowlist.
+   */
+  readonly productId?: string | null;
   readonly active: boolean;
   readonly minimumQuantity: number;
   readonly maximumQuantity: number;
@@ -62,7 +65,7 @@ export interface ValidatedModifierGroupCatalog {
   readonly restaurantId: string;
   readonly name: string;
   readonly catalogVersion: string;
-  readonly productId: string;
+  readonly productId: string | null;
   readonly active: boolean;
   readonly minimumQuantity: number;
   readonly maximumQuantity: number;
@@ -100,7 +103,7 @@ function validateModifierGroupCatalogCanonical(group: ModifierGroupCatalog): Val
   assertText(group.restaurantId, "modifier group restaurantId");
   assertText(group.name, "modifier group name");
   assertText(group.catalogVersion, "modifier group catalogVersion");
-  assertText(group.productId, "modifier group productId");
+  if (group.productId !== undefined && group.productId !== null) assertText(group.productId, "modifier group productId");
   assertBoolean(group.active, "modifier group active");
   assertBounds(group);
   if (group.options.length === 0) {
@@ -146,7 +149,7 @@ function validateModifierGroupCatalogCanonical(group: ModifierGroupCatalog): Val
     restaurantId: group.restaurantId,
     name: group.name,
     catalogVersion: group.catalogVersion,
-    productId: group.productId,
+    productId: group.productId ?? null,
     active: group.active,
     minimumQuantity: group.minimumQuantity,
     maximumQuantity: group.maximumQuantity,
@@ -184,7 +187,7 @@ function createModifierSelectionSnapshotCanonical(
   if (catalog.restaurantId !== context.restaurantId) {
     throw new ModifierGroupRestaurantMismatchError(catalog.id, catalog.restaurantId, context.restaurantId);
   }
-  if (catalog.productId !== context.productId) {
+  if (catalog.productId !== null && catalog.productId !== context.productId) {
     throw new ModifierGroupProductMismatchError(catalog.id, catalog.productId, context.productId);
   }
   if (!catalog.active) {
@@ -260,7 +263,7 @@ function normalizeModifierGroupCatalog(value: unknown): ModifierGroupCatalog {
   const restaurantId = ownData(group, "restaurantId", "modifier group restaurantId");
   const name = ownData(group, "name", "modifier group name");
   const catalogVersion = ownData(group, "catalogVersion", "modifier group catalogVersion");
-  const productId = ownData(group, "productId", "modifier group productId");
+  const productId = optionalOwnData(group, "productId", "modifier group productId");
   const active = ownData(group, "active", "modifier group active");
   const minimumQuantity = ownData(group, "minimumQuantity", "modifier group minimumQuantity");
   const maximumQuantity = ownData(group, "maximumQuantity", "modifier group maximumQuantity");
@@ -271,7 +274,7 @@ function normalizeModifierGroupCatalog(value: unknown): ModifierGroupCatalog {
     restaurantId: restaurantId as string,
     name: name as string,
     catalogVersion: catalogVersion as string,
-    productId: productId as string,
+    productId: (productId ?? null) as string | null,
     active: active as boolean,
     minimumQuantity: minimumQuantity as number,
     maximumQuantity: maximumQuantity as number,

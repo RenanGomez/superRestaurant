@@ -7,6 +7,7 @@ import type {
   MenuProductV1,
 } from "@super-restaurant/shared-types";
 
+import { productModifierGroups } from "../order-draft.js";
 import { renderMinorAmount } from "../money.js";
 import { failureMessage, type MobileResource } from "../mobile-state.js";
 import { Banner, Body, Caption, Card, LoadingBlock, StateBlock, Subheading } from "./components.js";
@@ -67,7 +68,7 @@ function CategorySection({ catalog, category }: {
       ? <Body>Esta categoría no tiene productos publicados.</Body>
       : products.map((product) => <ProductCard
         currency={catalog.currency}
-        groups={catalog.modifierGroups.filter((group) => group.productId === product.productId)}
+        groups={productModifierGroups(catalog, product.productId)}
         key={product.productId}
         product={product}
       />)}

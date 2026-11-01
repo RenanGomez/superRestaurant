@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { MenuProductV1, MenuVariantFractionV1 } from "@super-restaurant/shared-types";
+import type { MenuModifierGroupV1, MenuProductV1, MenuVariantFractionV1 } from "@super-restaurant/shared-types";
 import { EMPTY_PRODUCT_FRACTION, editorProductFraction, legacyFractionNotice, legacyFractionSource, migrateLegacyFraction } from "./menu-fraction.js";
 import { variantValidationError } from "./menu-variants.js";
 
@@ -11,8 +11,12 @@ const setup = (extra: Partial<MenuVariantFractionV1> = {}): MenuVariantFractionV
 const variant = (name: string, displayOrder: number, fraction: MenuVariantFractionV1 | null) =>
   ({ active: true, displayOrder, fraction, name, sku: null, unitPriceMinor: 100, variantId: `v-${name}` });
 const product = (overrides: Partial<MenuProductV1>): MenuProductV1 => ({
-  active: true, categoryId: "c", displayOrder: 1, imagePath: null, name: "Pizza", productId: "p", sku: null,
+  active: true, categoryId: "c", displayOrder: 1, imagePath: null, modifierGroupIds: [flavors, ingredients], name: "Pizza", productId: "p", sku: null,
   stationId: "general", tax: null, unit: "pieza", unitPriceMinor: 100, variants: [], ...overrides });
+const group = (groupId: string): MenuModifierGroupV1 => ({
+  active: true, displayOrder: 1, groupId, maximumQuantity: 1, minimumQuantity: 0, name: groupId, options: [], productId: null,
+});
+const groups = [group(flavors), group(ingredients)];
 
 test("a product without any setup shows the empty one", () => {
   assert.equal(editorProductFraction(product({})), EMPTY_PRODUCT_FRACTION);
@@ -23,29 +27,37 @@ test("legacy size setups are shown as the product's and moved to it on save", ()
   const legacy = product({ variants: [variant("Chica", 1, setup()), variant("Grande", 2, setup())] });
   assert.deepEqual(editorProductFraction(legacy), setup());
   assert.equal(legacyFractionNotice(legacy), null, "identical setups raise no warning");
-  const migrated = migrateLegacyFraction(legacy);
+  const migrated = migrateLegacyFraction(legacy, groups);
   assert.deepEqual(migrated.fraction, setup());
   assert.deepEqual(migrated.variants?.map((entry) => entry.fraction?.enabled), [false, false]);
-  assert.deepEqual(migrateLegacyFraction(migrated), migrated, "idempotent");
+  assert.deepEqual(migrateLegacyFraction(migrated, groups), migrated, "idempotent");
 });
 
 test("different legacy setups warn, use the first size by order, and are not lost silently", () => {
   const legacy = product({ variants: [variant("Grande", 2, setup({ excludableIngredientIds: [] })), variant("Chica", 1, setup())] });
   assert.equal(legacyFractionNotice(legacy), "Los tamaños tienen mitades configuradas distinto; al guardar se usará la de Chica.");
-  assert.deepEqual(migrateLegacyFraction(legacy).fraction, setup());
+  assert.deepEqual(migrateLegacyFraction(legacy, groups).fraction, setup());
 });
 
 test("the product's own setup wins and enabled size setups are switched off", () => {
   const own = product({ fraction: setup({ excludableIngredientIds: [] }), variants: [variant("Chica", 1, setup())] });
   assert.equal(legacyFractionNotice(own), null);
-  const migrated = migrateLegacyFraction(own);
+  const migrated = migrateLegacyFraction(own, groups);
   assert.deepEqual(migrated.fraction, own.fraction);
   assert.equal(migrated.variants?.[0]?.fraction?.enabled, false);
   const disabledOwn = product({ fraction: setup({ enabled: false }), variants: [variant("Chica", 1, setup())] });
-  const turnedOff = migrateLegacyFraction(disabledOwn);
+  const turnedOff = migrateLegacyFraction(disabledOwn, groups);
   assert.equal(turnedOff.fraction?.enabled, false, "switching halves off at the product keeps them off");
   assert.equal(turnedOff.variants?.[0]?.fraction?.enabled, false, "and the old size setup cannot bring them back");
-  assert.equal(migrateLegacyFraction(product({ fraction: setup() })).fraction?.enabled, true, "nothing to move: unchanged");
+  assert.equal(migrateLegacyFraction(product({ fraction: setup() }), groups).fraction?.enabled, true, "nothing to move: unchanged");
+});
+
+test("migrating legacy halves clears references to groups not assigned to the product", () => {
+  const legacy = product({ modifierGroupIds: [ingredients], variants: [variant("Grande", 1, setup())] });
+  const migrated = migrateLegacyFraction(legacy, groups);
+  assert.equal(migrated.fraction?.flavorGroupId, null);
+  assert.equal(migrated.fraction?.extraGroupId, ingredients);
+  assert.equal(migrated.variants?.[0]?.fraction?.enabled, false);
 });
 
 test("product-level guidance rejects an enabled setup without a usable flavor group", () => {

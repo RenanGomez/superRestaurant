@@ -62,6 +62,7 @@
     "verify:order-item-note-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-order-item-note-schema-verification.js --local-disposable-only",
     "verify:catalog-variants-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-catalog-variants-schema-verification.js --local-disposable-only",
     "verify:catalog-halves-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-catalog-halves-schema-verification.js --local-disposable-only",
+    "verify:menu-shared-modifier-groups-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-menu-shared-modifier-groups-schema-verification.js --local-disposable-only",
     "verify:catalog-halves-product-level-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-catalog-halves-product-level-schema-verification.js --local-disposable-only",
     "verify:menu-category-appearance-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-menu-category-appearance-schema-verification.js --local-disposable-only",
     "verify:capture-payment-intent-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-payment-intent-schema-verification.js --local-disposable-only",

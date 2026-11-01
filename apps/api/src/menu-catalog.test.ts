@@ -342,3 +342,60 @@ test("menu publication accepts a product-level setup and rejects it next to an e
   await assert.rejects(service.save(principal, legacyDisabled), (error: unknown) => error instanceof MenuCatalogApplicationError && error.code === "conflict");
   assert.equal(saved, 2, "a disabled legacy setup next to the product one reaches SQL");
 });
+
+const wrapId = "72371a5f-2056-448d-9ddb-14ab6664a4e8";
+
+const baseCommand: SaveMenuCatalogCommandV1 = command;
+
+function sharedGroupCommand() {
+  const burger = baseCommand.products[0]!;
+  const group = baseCommand.modifierGroups[0]!;
+  return {
+    ...baseCommand,
+    products: [
+      { ...burger, modifierGroupIds: [group.groupId] },
+      { ...burger, productId: wrapId, sku: "WRP-001", displayOrder: 1, modifierGroupIds: [group.groupId] },
+    ],
+    modifierGroups: [{ ...group, productId: null }],
+  };
+}
+
+test("a modifier group shared by two products reaches SQL once and is mapped to both products in the domain", async () => {
+  const shared = parseSaveMenuCatalogCommandV1(sharedGroupCommand());
+  if (shared === undefined) throw new Error("TEST_SHARED_GROUP_COMMAND_INVALID");
+  const state = stateFor(shared, false);
+  let payload: { modifierGroups: { productId: unknown }[]; products: { modifierGroupIds: string[] }[] } | undefined;
+  const database: DatabaseClientPort = {
+    query: async (_sql, parameters) => {
+      payload = JSON.parse(String(parameters[10]));
+      return { rows: [{ status: "saved", state }] };
+    },
+  };
+  const result = await new PostgresMenuCatalogAdapter(database).save(principal.actorId, shared);
+  assert.equal(result.status, "saved");
+  assert.equal(payload?.modifierGroups.length, 1);
+  assert.equal(payload?.modifierGroups[0]?.productId, null);
+  assert.deepEqual(payload?.products.map((product) => product.modifierGroupIds), [
+    [command.modifierGroups[0]!.groupId], [command.modifierGroups[0]!.groupId],
+  ]);
+  // A row that lost the assignment of one product is ambiguous and fails closed.
+  const lossy = parseSaveMenuCatalogCommandV1({
+    ...sharedGroupCommand(),
+    products: sharedGroupCommand().products.map((product, index) => (index === 1 ? { ...product, modifierGroupIds: [] } : product)),
+  });
+  if (lossy === undefined) throw new Error("TEST_LOSSY_COMMAND_INVALID");
+  const dropped: DatabaseClientPort = { query: async () => ({ rows: [{ status: "saved", state: stateFor(lossy, false) }] }) };
+  await assert.rejects(new PostgresMenuCatalogAdapter(dropped).save(principal.actorId, shared));
+});
+
+test("menu publication rejects a shared group assigned to a product outside the catalog before SQL", async () => {
+  let saved = 0;
+  const port: MenuCatalogPort = { read: async () => "forbidden", save: async () => { saved += 1; return { status: "conflict" }; } };
+  const service = serviceFor(["manager"], port);
+  const base = sharedGroupCommand();
+  const ghost = { ...base, products: [{ ...base.products[0]!, modifierGroupIds: ["b509ec59-9f5e-496d-a45d-b83a46b49675"] }, base.products[1]!] };
+  await assert.rejects(service.save(principal, ghost), (error: unknown) => error instanceof MenuCatalogApplicationError && error.code === "request");
+  const ownerShared = { ...base, modifierGroups: [{ ...base.modifierGroups[0]!, productId: base.products[0]!.productId }] };
+  await assert.rejects(service.save(principal, ownerShared), (error: unknown) => error instanceof MenuCatalogApplicationError && error.code === "request");
+  assert.equal(saved, 0);
+});

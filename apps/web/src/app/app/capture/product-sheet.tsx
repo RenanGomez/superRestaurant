@@ -13,6 +13,7 @@ import { countModifierSelections, estimateSelectionMinor, expandModifierSelectio
   validateModifierSelection, type SelectionPlanLineDraft, type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import { useMenuImageBaseUrl } from "../../../lib/menu-image-url-context";
 import { menuImagePublicUrl } from "../../../lib/menu-images";
+import { groupsForProduct } from "../../../lib/menu-groups";
 import { uiButton, uiOption } from "../../../lib/ui-classes";
 
 const button = uiButton("secondary", "min-w-11");
@@ -69,6 +70,7 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
   const closeRef = useRef<HTMLButtonElement>(null);
   const [serverEstimate, setServerEstimate] = useState<{ readonly key: string; readonly value: CaptureLineQuoteResultV1 } | null>(null);
   const [catalogConflictKey, setCatalogConflictKey] = useState<string | null>(null);
+  const assignedGroups = groupsForProduct(product, groups);
 
   useEffect(() => { closeRef.current?.focus(); }, []);
   useEffect(() => {
@@ -103,10 +105,10 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
   const fractionSetup = effectiveHalvesSetup(product, selectedVariant);
   const basePriceMinor = selectedVariant?.unitPriceMinor ?? product.unitPriceMinor;
   const halvesActive = fractionSetup !== undefined && splitChosen;
-  const flavorGroup = groups.find((group) => group.groupId === fractionSetup?.flavorGroupId);
-  const extraGroup = groups.find((group) => group.groupId === fractionSetup?.extraGroupId);
+  const flavorGroup = assignedGroups.find((group) => group.groupId === fractionSetup?.flavorGroupId);
+  const extraGroup = assignedGroups.find((group) => group.groupId === fractionSetup?.extraGroupId);
   // With halves the flavor and extra groups live in the two columns, not in the ordinary list.
-  const listedGroups = halvesActive ? groups.filter((group) => group.groupId !== flavorGroup?.groupId && group.groupId !== extraGroup?.groupId) : groups;
+  const listedGroups = halvesActive ? assignedGroups.filter((group) => group.groupId !== flavorGroup?.groupId && group.groupId !== extraGroup?.groupId) : assignedGroups;
   const halvesValidation = validateHalvesDraft(halves);
   const lineFraction = halvesActive ? buildLineFraction(halves) : null;
 

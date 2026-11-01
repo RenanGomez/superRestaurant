@@ -15,7 +15,7 @@ import { useFormStatus } from "react-dom";
 import { CheckField, Field, FieldHint } from "../../../components/field-hint";
 import { MENU_DEFAULT_UNIT, MENU_OTHER_STATION, MENU_STATION_MAX_LENGTH, stationValues, unitOptions } from "../../../lib/menu-fields";
 import { shrinkMenuImage } from "../../../lib/menu-image-resize";
-import { applyRemoval, removalNeedsConfirmation, type Removal } from "../../../lib/menu-removal";
+import { applyRemoval, removalNeedsConfirmation, unassignGroup, type Removal } from "../../../lib/menu-removal";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { DEFAULT_PESO_CURRENCY, formatMinorForMoneyInput, parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import { currencyFractionDigits } from "../../../lib/money-scale";
@@ -24,6 +24,7 @@ import { editorProductFraction, legacyFractionNotice, migrateLegacyFraction } fr
 import { variantValidationError } from "../../../lib/menu-variants";
 import { reorder, reorderSubset } from "../../../lib/menu-reorder";
 import { duplicateProduct } from "../../../lib/menu-duplicate";
+import { duplicateGroup, groupAssignmentCount, groupsForProduct, toggleGroupAssignment, withDerivedAssignments, withLegacyOwners } from "../../../lib/menu-groups";
 import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys, type LocalMenuDraft } from "../../../lib/menu-draft-storage";
 import { MENU_CATEGORY_COLOR_LABELS, menuCategoryColorClasses } from "../../../lib/menu-category-color";
 import { collectUsedImagePaths, imagePathsOfEntity, retainImagePaths } from "../../../lib/menu-used-images";
@@ -51,7 +52,7 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
     state.catalog?.categories.map((category) => ({ ...category })) ?? [],
   );
   const [products, setProducts] = useState<readonly MenuProductV1[]>(() =>
-    state.catalog?.products.map((product) => ({ ...product, variants: product.variants?.map((variant) => ({ ...variant })) ?? [], tax: product.tax === null ? null : { ...product.tax } })) ?? [],
+    withDerivedAssignments(state.catalog?.products ?? [], state.catalog?.modifierGroups ?? []).map((product) => ({ ...product, variants: product.variants?.map((variant) => ({ ...variant })) ?? [], tax: product.tax === null ? null : { ...product.tax } })) ?? [],
   );
   const [groups, setGroups] = useState<readonly MenuModifierGroupV1[]>(() =>
     state.catalog?.modifierGroups.map((group) => ({
@@ -61,13 +62,15 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
   );
   const [removal, setRemoval] = useState<Removal | null>(null);
   // Legacy per-size halves move to the product on save (the server rejects both at once); validate and send that shape.
-  const savedProducts = useMemo(() => products.map(migrateLegacyFraction), [products]);
-  const variantIssue = savedProducts.map((product) => variantValidationError(product.productId, product.variants ?? [], new Set(groups.filter((group) => group.productId === product.productId).map((group) => group.groupId)), product.fraction)).find((issue) => issue !== null) ?? null;
+  const savedProducts = useMemo(() => products.map((product) => migrateLegacyFraction(product, groups)), [products, groups]);
+  // Older clients read the legacy single owner: send it only while exactly one product offers the group.
+  const savedGroups = useMemo(() => withLegacyOwners(savedProducts, groups), [savedProducts, groups]);
+  const variantIssue = savedProducts.map((product) => variantValidationError(product.productId, product.variants ?? [], new Set(product.modifierGroupIds ?? []), product.fraction)).find((issue) => issue !== null) ?? null;
   const variantError = variantIssue === null ? null : `${products.find((product) => product.productId === variantIssue.productId)?.name || "Producto sin nombre"}: ${variantIssue.message}`;
   const [pendingUploads, setPendingUploads] = useState(0);
   const onUploadPendingChange = (pending: boolean): void => setPendingUploads((current) => current + (pending ? 1 : -1));
   const expectedVersion = state.catalog?.version ?? 0;
-  const draft = useMemo(() => JSON.stringify({ categories, currency, expectedVersion, modifierGroups: groups, products: savedProducts } satisfies Draft), [categories, currency, expectedVersion, groups, savedProducts]);
+  const draft = useMemo(() => JSON.stringify({ categories, currency, expectedVersion, modifierGroups: savedGroups, products: savedProducts } satisfies Draft), [categories, currency, expectedVersion, savedGroups, savedProducts]);
 
   // Local draft: edits are kept in this browser (never published automatically) and offered back after a reload.
   const storageKey = menuDraftKey(restaurantId, branchId, expectedVersion);
@@ -107,7 +110,7 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
   const recoverDraft = (): void => {
     if (recovery === null) return;
     setCategories(recovery.categories);
-    setProducts(recovery.products);
+    setProducts(withDerivedAssignments(recovery.products, recovery.groups));
     setGroups(recovery.groups);
     setRecovery(null);
   };
@@ -136,49 +139,28 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
   const copyProduct = async (productId: string): Promise<void> => {
     const source = products.find((entry) => entry.productId === productId);
     if (source === undefined) return;
-    const sourceGroups = groups.filter((group) => group.productId === source.productId);
-    const copy = duplicateProduct(source, groups, () => crypto.randomUUID(), nextDisplayOrder(products.filter((entry) => entry.categoryId === source.categoryId)));
+    // The copy lists the same shared groups; no group is cloned, so only the product's own photo is copied.
+    const copy = duplicateProduct(source, () => crypto.randomUUID(), nextDisplayOrder(products.filter((entry) => entry.categoryId === source.categoryId)));
     focusAfterCopy.current = copy.product.productId;
     setProducts((current) => [...current, copy.product]);
-    setGroups((current) => [...current, ...copy.groups]);
-    const photos: { readonly optionId?: string; readonly sourceImagePath: string; readonly target: "option" | "product"; readonly targetId: string }[] = [];
-    if (source.imagePath !== null) photos.push({ sourceImagePath: source.imagePath, target: "product", targetId: copy.product.productId });
-    sourceGroups.forEach((sourceGroup, groupIndex) => {
-      const copiedGroup = copy.groups[groupIndex];
-      if (copiedGroup === undefined) return;
-      sourceGroup.options.forEach((sourceOption, optionIndex) => {
-        const copiedOption = copiedGroup.options[optionIndex];
-        if (sourceOption.imagePath !== null && copiedOption !== undefined) {
-          photos.push({ optionId: copiedOption.optionId, sourceImagePath: sourceOption.imagePath, target: "option", targetId: copiedOption.optionId });
-        }
-      });
-    });
-    if (photos.length === 0) return;
+    if (source.imagePath === null) return;
     onUploadPendingChange(true);
     try {
-      const results = await Promise.all(photos.map(async (photo) => ({
-        ...photo,
-        result: await copyMenuImageAction(photo.target, photo.targetId, photo.sourceImagePath),
-      })));
-      const productImagePath = results.find((entry) => entry.target === "product")?.result.imagePath;
-      if (productImagePath !== undefined) {
-        setProducts((current) => current.map((entry) => entry.productId === copy.product.productId ? { ...entry, imagePath: productImagePath } : entry));
-      }
-      const optionImages = new Map(results.flatMap((entry) => entry.optionId !== undefined && entry.result.imagePath !== undefined
-        ? [[entry.optionId, entry.result.imagePath] as const]
-        : []));
-      if (optionImages.size > 0) {
-        setGroups((current) => current.map((group) => group.productId !== copy.product.productId ? group : {
-          ...group,
-          options: group.options.map((option) => ({ ...option, imagePath: optionImages.get(option.optionId) ?? option.imagePath })),
-        }));
-      }
-      if (results.some((entry) => entry.result.imagePath === undefined)) {
+      const result = await copyMenuImageAction("product", copy.product.productId, source.imagePath);
+      if (result.imagePath !== undefined) {
+        const copiedPath = result.imagePath;
+        setProducts((current) => current.map((entry) => entry.productId === copy.product.productId ? { ...entry, imagePath: copiedPath } : entry));
+      } else {
         setCopiedProductIds((current) => current.includes(copy.product.productId) ? current : [...current, copy.product.productId]);
       }
     } finally {
       onUploadPendingChange(false);
     }
+  };
+  const copyGroup = (groupId: string): void => {
+    const source = groups.find((entry) => entry.groupId === groupId);
+    if (source === undefined) return;
+    setGroups((current) => [...current, duplicateGroup(source, () => crypto.randomUUID(), nextDisplayOrder(current))]);
   };
 
   const addCategory = (): void => {
@@ -199,6 +181,7 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
       categoryId: category.categoryId,
       displayOrder: nextDisplayOrder(current),
       imagePath: null,
+      modifierGroupIds: [],
       name: "Nuevo producto",
       productId: crypto.randomUUID(),
       sku: null,
@@ -209,16 +192,16 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
       variants: [],
     }]);
   };
-  const addGroup = (productId: string): void => {
+  const addGroup = (): void => {
     setGroups((current) => [...current, {
       active: true,
-      displayOrder: nextDisplayOrder(current.filter((group) => group.productId === productId)),
+      displayOrder: nextDisplayOrder(current),
       groupId: crypto.randomUUID(),
       maximumQuantity: 1,
       minimumQuantity: 0,
       name: "Nuevo grupo",
       options: [{ active: true, imagePath: null, maximumQuantity: null, name: "Nueva opción", optionId: crypto.randomUUID(), unitPriceMinor: 0 }],
-      productId,
+      productId: null,
     }]);
   };
   const addOption = (groupId: string): void => {
@@ -316,7 +299,26 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
       </section>
 
       <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-        <SectionHeader title="Productos y modificadores" description="Captura precios en la moneda del restaurante; los grupos pertenecen a un solo producto.">
+        <SectionHeader title="Grupos de modificadores" description="Listas de opciones (sabores, extras, término…) que se crean una vez y se asignan a uno o varios productos desde la tarjeta del producto.">
+          {canManage && <AddButton label="Agregar grupo" onClick={addGroup} />}
+        </SectionHeader>
+        {groups.length === 0 ? <EmptyText text="Aún no hay grupos de modificadores. Crea uno y asígnalo a tus productos." /> : (
+          <div className="mt-4 flex flex-col gap-1">
+            {groups.map((group, groupIndex) => (
+              <ModifierGroupEditor key={group.groupId} siblingCount={groups.length} siblingIndex={groupIndex} usedImagePaths={usedImagePaths}
+                assignedCount={groupAssignmentCount(products, group)}
+                onMoveGroup={(from, to) => setGroups((current) => reorder(current, from, to))} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl}
+                onAddOption={() => addOption(group.groupId)} onChange={(changed) => setGroups((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))}
+                onDuplicate={() => copyGroup(group.groupId)}
+                onOptionImageChange={(optionId, imagePath) => setGroups((current) => current.map((entry) => entry.groupId === group.groupId ? { ...entry, options: entry.options.map((option) => option.optionId === optionId ? { ...option, imagePath } : option) } : entry))}
+                onRemove={requestRemoval} onUploadPendingChange={onUploadPendingChange} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+        <SectionHeader title="Productos" description="Captura precios en la moneda del restaurante y elige qué grupos de modificadores ofrece cada producto.">
           {canManage && <AddButton disabled={categories.length === 0} label="Agregar producto" onClick={addProduct} />}
         </SectionHeader>
         {products.length === 0 ? <EmptyText text="No hay productos en este borrador." /> : (
@@ -335,16 +337,13 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
                 canManage={canManage}
                 categories={categories}
                 currency={currency}
-                groups={groups.filter((group) => group.productId === product.productId)}
+                catalogGroups={groups}
+                groups={groupsForProduct(product, groups)}
                 product={product}
                 supabaseUrl={supabaseUrl}
-                onAddGroup={() => addGroup(product.productId)}
-                onAddOption={addOption}
                 onDuplicate={() => { void copyProduct(product.productId); }}
-                onGroupsChange={setGroups}
                 onProductChange={(changed) => setProducts((current) => current.map((entry) => entry.productId === changed.productId ? changed : entry))}
                 onProductImageChange={(imagePath) => setProducts((current) => current.map((entry) => entry.productId === product.productId ? { ...entry, imagePath } : entry))}
-                onOptionImageChange={(groupId, optionId, imagePath) => setGroups((current) => current.map((entry) => entry.groupId === groupId ? { ...entry, options: entry.options.map((option) => option.optionId === optionId ? { ...option, imagePath } : option) } : entry))}
                 onRemove={requestRemoval}
                 onUploadPendingChange={onUploadPendingChange}
               />
@@ -372,7 +371,7 @@ function RemovalDialog({ removal, onCancel, onConfirm }: { readonly removal: Rem
       onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}
       className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-lg rounded-xl border border-[oklch(80%_0.09_45)] bg-[oklch(97%_0.025_70)] p-4 shadow-xl">
       <h2 id="remove-title" className="font-heading text-[14px] font-semibold">¿Quitar “{removal.label}” del borrador?</h2>
-      <p id="remove-description" className="mt-1 text-[12px] text-text-muted">La publicación anterior seguirá intacta. Si contiene elementos dependientes, también se quitarán de esta nueva versión.</p>
+      <p id="remove-description" className="mt-1 text-[12px] text-text-muted">La publicación anterior seguirá intacta. {removal.kind === "group" ? "El grupo también dejará de ofrecerse en todos los productos que lo tienen asignado." : "Si contiene elementos dependientes, también se quitarán de esta nueva versión."}</p>
       <div className="mt-3 flex gap-2">
         <button type="button" onClick={onConfirm} className="min-h-11 rounded-lg bg-error px-4 py-2 text-[13px] font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Sí, quitar</button>
         <button ref={cancelButton} type="button" onClick={onCancel} className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-accent">Cancelar</button>
@@ -408,7 +407,7 @@ function taxNote(tax: MenuProductV1["tax"], formattedPrice: string): string | un
  * (3) switches for modifier groups, halves and tax plus «+ Añadir tamaño». Each section shows only while its
  * switch is on (or it already has data), so a plain product takes three rows.
  */
-function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, variantInvalid, canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onDuplicate, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, variantInvalid, canManage, categories, currency, catalogGroups, groups, product, supabaseUrl, onDuplicate, onProductChange, onProductImageChange, onRemove, onUploadPendingChange }: {
   readonly copyNotice: boolean;
   readonly handle: ReactNode;
   readonly usedStations: readonly string[];
@@ -417,16 +416,15 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
   readonly canManage: boolean;
   readonly categories: readonly MenuCategoryV1[];
   readonly currency: string;
+  /** Every group of the restaurant catalog (the multiselect lists them all). */
+  readonly catalogGroups: readonly MenuModifierGroupV1[];
+  /** The groups this product currently offers. */
   readonly groups: readonly MenuModifierGroupV1[];
   readonly product: MenuProductV1;
   readonly supabaseUrl: string;
-  readonly onAddGroup: () => void;
-  readonly onAddOption: (groupId: string) => void;
   readonly onDuplicate: () => void;
-  readonly onGroupsChange: (updater: (current: readonly MenuModifierGroupV1[]) => readonly MenuModifierGroupV1[]) => void;
   readonly onProductChange: (product: MenuProductV1) => void;
   readonly onProductImageChange: (imagePath: string | null) => void;
-  readonly onOptionImageChange: (groupId: string, optionId: string, imagePath: string | null) => void;
   readonly onRemove: (removal: Removal) => void;
   readonly onUploadPendingChange: (pending: boolean) => void;
 }): ReactNode {
@@ -434,9 +432,6 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
   const tax = product.tax;
   const variants = product.variants ?? [];
   const fraction = editorProductFraction(product);
-  // The groups switch is open by choice or because the product already has groups (cancelling a removal keeps them visible).
-  const [groupsOpen, setGroupsOpen] = useState(false);
-  const showGroups = groupsOpen || groups.length > 0;
   const changeVariant = (variantId: string, patch: Partial<MenuProductVariantV1>): void =>
     change({ variants: variants.map((variant) => variant.variantId === variantId ? { ...variant, ...patch } : variant) });
   const switchClass = "inline-flex min-h-11 items-center gap-2 text-[12px] font-semibold";
@@ -468,13 +463,11 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
       </div>
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
-        <CheckField labelClassName="flex min-h-11 items-center" className={switchClass} hint="Listas de opciones que el cliente puede elegir para este producto: sabores, extras, término de cocción, etc." label="Grupos de modificadores">{(id) =>
-          <input id={id} disabled={!canManage} type="checkbox" className="h-5 w-5" checked={showGroups}
-            onChange={(event) => {
-              if (event.target.checked) { setGroupsOpen(true); return; }
-              setGroupsOpen(false);
-              if (groups.length > 0) onRemove({ id: product.productId, kind: "groups", label: `todos los grupos de modificadores de ${product.name.trim() === "" ? "este producto" : product.name}` });
-            }} />}</CheckField>
+        <GroupMultiSelect canManage={canManage} catalogGroups={catalogGroups} product={product}
+          onChange={(groupId, assigned) => onProductChange(assigned
+            ? toggleGroupAssignment(product, groupId, true, catalogGroups)
+            // Unassigning a group that the halves setup points at must not leave a dangling reference.
+            : unassignGroup(product, groupId))} />
         <CheckField labelClassName="flex min-h-11 items-center" className={switchClass} label="Permitir mitades"
           hint="Cada mitad lleva un sabor del grupo de sabores; una de las dos puede armarse con ingredientes si eliges un grupo de ingredientes. Aplica a todos los tamaños.">{(id) =>
           <input id={id} type="checkbox" className="h-5 w-5" disabled={!canManage} checked={fraction.enabled}
@@ -536,15 +529,6 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
         </div>
       </section>}
 
-      {showGroups && <section className="rounded-xl border border-border bg-surface p-3">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="flex items-center gap-1.5 font-heading text-[13px] font-semibold">Grupos de modificadores<FieldHint text="Listas de opciones que el cliente puede elegir para este producto: sabores, extras, término de cocción, etc." /></h3>
-          {canManage && <AddButton label="Agregar grupo" onClick={onAddGroup} />}
-        </div>
-        {groups.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin modificadores.</p> : groups.map((group, groupIndex) => (
-          <ModifierGroupEditor key={group.groupId} siblingCount={groups.length} siblingIndex={groupIndex} usedImagePaths={usedImagePaths} onMoveGroup={(from, to) => onGroupsChange((current) => reorderSubset(current, (entry) => entry.productId === product.productId, from, to))} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl} onAddOption={() => onAddOption(group.groupId)} onChange={(changed) => onGroupsChange((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))} onOptionImageChange={(optionId, imagePath) => onOptionImageChange(group.groupId, optionId, imagePath)} onRemove={onRemove} onUploadPendingChange={onUploadPendingChange} />
-        ))}
-      </section>}
       </div>
     </article>
   );
@@ -587,7 +571,7 @@ function FractionEditor({ canManage, fraction, groups, notice, productName, onCh
     <p className="-mt-2 text-[12px] text-text-muted">El operador podrá armar {label} mitad y mitad, en cualquier tamaño o sin tamaños.</p>
     {notice !== null && <p role="status" className="rounded-lg bg-accent-soft px-3 py-2 text-[12px]">{notice}</p>}
     {fraction.enabled && <div className="grid gap-3 sm:grid-cols-2">
-      {groups.length === 0 && <p role="status" className="text-[12px] text-text-muted sm:col-span-2">Primero marca «Grupos de modificadores» y crea un grupo con los sabores.</p>}
+      {groups.length === 0 && <p role="status" className="text-[12px] text-text-muted sm:col-span-2">Primero asigna a este producto un grupo con los sabores (campo «Grupos de modificadores»).</p>}
       <Field className="flex flex-col gap-1 text-[11px] font-medium" hint={GROUP_CHOICE_HINTS.flavors} label="Grupo de sabores">{(id) => <>
         <select id={id} className={select} disabled={!canManage} value={fraction.flavorGroupId ?? ""}
           onChange={(event) => update({ flavorGroupId: event.target.value === "" ? null : event.target.value })}>
@@ -632,7 +616,71 @@ function FractionEditor({ canManage, fraction, groups, notice, productName, onCh
   </div>;
 }
 
-function ModifierGroupEditor({ siblingCount, siblingIndex, usedImagePaths, onMoveGroup, canManage, currency, group, supabaseUrl, onAddOption, onChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+/**
+ * «Grupos de modificadores» of a product: a button that opens a checklist of every group of the catalog. Each row is a
+ * 44 px `menuitemcheckbox`; the choice is applied immediately to the draft (nothing is published until «Publicar»).
+ */
+function GroupMultiSelect({ canManage, catalogGroups, product, onChange }: {
+  readonly canManage: boolean;
+  readonly catalogGroups: readonly MenuModifierGroupV1[];
+  readonly product: MenuProductV1;
+  readonly onChange: (groupId: string, assigned: boolean) => void;
+}): ReactNode {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const panelId = useId();
+  const container = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const assigned = new Set(groupsForProduct(product, catalogGroups).map((group) => group.groupId));
+  const summary = assigned.size === 0 ? "Sin grupos" : assigned.size === 1 ? "1 grupo" : `${assigned.size} grupos`;
+  const normalizedQuery = query.trim().toLocaleLowerCase("es-MX");
+  const visibleGroups = normalizedQuery === "" ? catalogGroups : catalogGroups.filter((group) => group.name.toLocaleLowerCase("es-MX").includes(normalizedQuery));
+  const close = (): void => { setOpen(false); setQuery(""); };
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent): void => {
+      if (container.current !== null && !container.current.contains(event.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [open]);
+  return (
+    <div ref={container} className="relative inline-flex"
+      onKeyDown={(event) => { if (event.key === "Escape" && open) { event.stopPropagation(); close(); trigger.current?.focus(); } }}>
+      <button ref={trigger} type="button" disabled={!canManage && assigned.size === 0} aria-haspopup="menu" aria-expanded={open} aria-controls={panelId}
+        aria-label={`Grupos de modificadores de ${product.name.trim() === "" ? "este producto" : product.name}: ${summary}`}
+        onClick={() => { if (open) close(); else setOpen(true); }}
+        className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-[12px] font-semibold hover:border-accent focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60">
+        Grupos de modificadores · {summary} <span aria-hidden="true">▾</span>
+      </button>
+      {open && <div id={panelId} role="menu" aria-label="Grupos de modificadores del catálogo" aria-multiselectable="true"
+        className="absolute left-0 top-full z-30 mt-1 flex max-h-72 w-72 max-w-[85vw] flex-col overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-xl">
+        {catalogGroups.length > 8 && <input type="search" autoFocus aria-label="Buscar grupo de modificadores" value={query}
+          onChange={(event) => setQuery(event.target.value)} placeholder="Buscar grupo…"
+          className="mb-1 min-h-11 rounded-lg border border-border bg-bg px-3 text-[13px] focus-visible:outline-2 focus-visible:outline-accent" />}
+        {catalogGroups.length === 0
+          ? <p role="status" className="p-3 text-[12px] text-text-muted">Aún no hay grupos. Créalos en la sección «Grupos de modificadores».</p>
+          : visibleGroups.length === 0 ? <p role="status" className="p-3 text-[12px] text-text-muted">No hay grupos que coincidan.</p>
+            : visibleGroups.map((group) => {
+            const checked = assigned.has(group.groupId);
+            return <button key={group.groupId} type="button" role="menuitemcheckbox" aria-checked={checked} disabled={!canManage}
+              onClick={() => onChange(group.groupId, !checked)}
+              className="flex min-h-11 items-center gap-2 rounded-lg px-3 text-left text-[13px] hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60">
+              <span aria-hidden="true" className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${checked ? "border-accent bg-accent text-white" : "border-border bg-surface"}`}>{checked ? "✓" : ""}</span>
+              <span className="min-w-0 flex-1 truncate">{group.name.trim() === "" ? "Grupo sin nombre" : group.name}{group.active ? "" : " (inactivo)"}</span>
+            </button>;
+          })}
+      </div>}
+    </div>
+  );
+}
+
+function ModifierGroupEditor({ assignedCount, siblingCount, siblingIndex, usedImagePaths, onMoveGroup, canManage, currency, group, supabaseUrl, onAddOption, onChange, onDuplicate, onOptionImageChange, onRemove, onUploadPendingChange }: {
+  readonly assignedCount: number;
+  readonly onDuplicate: () => void;
   readonly siblingCount: number;
   readonly siblingIndex: number;
   readonly usedImagePaths: readonly string[];
@@ -649,16 +697,20 @@ function ModifierGroupEditor({ siblingCount, siblingIndex, usedImagePaths, onMov
 }): ReactNode {
   const change = (patch: Partial<MenuModifierGroupV1>): void => onChange({ ...group, ...patch });
   return (
-    <section {...reorderRowProps(`groups-${group.productId}`, siblingIndex)} className="mt-3 flex min-w-0 items-start gap-3 rounded-xl border border-border bg-surface p-3">
-      <ReorderHandle align="start" count={siblingCount} disabled={!canManage} index={siblingIndex} listKey={`groups-${group.productId}`} onMove={onMoveGroup} />
+    <section {...reorderRowProps("groups-catalog", siblingIndex)} className="mt-3 flex min-w-0 items-start gap-3 rounded-xl border border-border bg-bg/40 p-3">
+      <ReorderHandle align="start" count={siblingCount} disabled={!canManage} index={siblingIndex} listKey="groups-catalog" onMove={onMoveGroup} />
       <div className="min-w-0 flex-1">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <TextInput disabled={!canManage} hint="Nombre de la lista de opciones, por ejemplo Sabores o Extras." label="Grupo" maxLength={80} value={group.name} onChange={(name) => change({ name })} />
         <NumberInput disabled={!canManage} hint="Cuántas opciones debe elegir el operador como mínimo en este grupo. 0 = la elección es opcional." label="Mínimo total" min={0} max={1_000} value={group.minimumQuantity} onChange={(minimumQuantity) => change({ minimumQuantity })} />
         <NumberInput disabled={!canManage} hint="Cuántas opciones puede elegir como máximo en total, contando repeticiones de una misma opción." label="Máximo total" min={0} max={1_000} value={group.maximumQuantity} onChange={(maximumQuantity) => change({ maximumQuantity })} />
         <div className="flex items-end"><ReorderButtons count={siblingCount} disabled={!canManage} index={siblingIndex} label={group.name} onMove={onMoveGroup} /></div>
-        <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={group.active} onChange={(active) => change({ active })} />{canManage && <RemoveButton label={`Quitar ${group.name}`} onClick={() => onRemove({ id: group.groupId, kind: "group", label: group.name })} />}</div>
+        <div className="flex items-end gap-2 pb-1"><ActiveInput disabled={!canManage} checked={group.active} onChange={(active) => change({ active })} />
+          {canManage && <button type="button" onClick={onDuplicate} aria-label={`Duplicar ${group.name}`} title={`Crear una copia de ${group.name}`}
+            className="min-h-11 rounded-lg border border-border bg-surface px-3 py-2 text-[12px] font-semibold hover:border-accent focus-visible:outline-2 focus-visible:outline-accent">Duplicar</button>}
+          {canManage && <RemoveButton label={`Quitar ${group.name}`} onClick={() => onRemove({ id: group.groupId, kind: "group", label: group.name })} />}</div>
       </div>
+      <p role="status" className="mt-2 text-[12px] text-text-muted">{assignedCount === 0 ? "Sin asignar: no se ofrece en ningún producto." : assignedCount === 1 ? "Asignado a 1 producto." : `Asignado a ${assignedCount} productos.`}</p>
       <div className="mt-3 flex items-center justify-between gap-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted"><span className="inline-flex flex-wrap items-center gap-1.5">Opciones<FieldHint label="Opciones" text="Cada opción es una alternativa del grupo (por ejemplo Pepperoni) con su precio extra, que puede ser 0." /></span></p>{canManage && <AddButton label="Agregar opción" onClick={onAddOption} />}</div>
       <div className="mt-2 grid gap-2 lg:grid-cols-2">
         {group.options.map((option) => (

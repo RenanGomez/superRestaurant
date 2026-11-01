@@ -997,3 +997,27 @@ test("menu category appearance migration mirrors the TypeScript palette and scop
     "save_menu_catalog(uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,bigint,uuid,text,jsonb)",
   ]) assert.ok(sql.includes(`alter function app_private.${signature} owner to postgres;`), signature);
 });
+
+test("shared modifier groups migration keeps every foreign key scoped, adds no legacy-column drop and is LF", () => {
+  const sql = readFileSync(new URL("../../../supabase/migrations/20261101000200_menu_shared_modifier_groups.sql", import.meta.url), "utf8");
+  assert.equal(sql.includes("\r"), false);
+  assert.match(sql, /foreign key \(restaurant_id, catalog_id, product_id\)\s+references app\.menu_products \(restaurant_id, catalog_id, id\)/u);
+  assert.match(sql, /foreign key \(restaurant_id, catalog_id, group_id\)\s+references app\.menu_modifier_groups \(restaurant_id, catalog_id, id\)/u);
+  assert.match(sql, /force row level security/u);
+  assert.match(sql, /alter column product_id drop not null/u);
+  assert.equal(/drop column|drop table/iu.test(sql), false);
+  assert.equal(/catalog_group\.product_id\s*=/u.test(sql), false, "no product lookup may bypass the assignment table");
+  assert.equal(/\bcommit;\s*$/u.test(sql.trim()), true);
+  for (const signature of [
+    "build_menu_catalog_state(uuid,uuid,uuid,boolean)",
+    "normalize_menu_catalog_payload(jsonb)",
+    "save_menu_catalog(uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,bigint,uuid,text,jsonb)",
+    "confirm_capture_draft_v3(uuid,jsonb,jsonb,jsonb)",
+    "repeat_customer_order_into_capture(uuid,jsonb,jsonb)",
+  ]) assert.ok(sql.includes(`alter function app_private.${signature} owner to postgres;`), signature);
+  const verifier = readFileSync(new URL("../../../supabase/tests/menu_shared_modifier_groups_invariants.sql", import.meta.url), "utf8");
+  assert.match(verifier, /^-- Test-only fixtures/mu);
+  assert.match(verifier, /\nbegin;\n/u);
+  assert.match(verifier, /rollback;\s*$/u);
+  assert.equal(/\bcommit\b/iu.test(verifier.replace(/--.*$/gmu, "")), false);
+});
