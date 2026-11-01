@@ -117,7 +117,9 @@ Reglas: una ronda de revisión en nivel C, dos en B, revisión doble en A con co
 - [ ] **REVIEW · C** — `capture-customer-address-r1` (en `main`, 7994b7b; dirección de prueba resultó fuera de cobertura, revisar zona): elegir cliente en un paso, ver y usar su dirección, agregar/validar dirección sin salir de la captura (desbloquea «Confirmar» en domicilio). Tras integrar `capture-ux-r1`.
 - [ ] **REVIEW · C** — `menu-products-ui-r1` (en `main`, a135a7f; sin verificación en navegador): foto por clic con diálogo, disposición en tres filas con secciones plegadas, duplicar producto, fotos ya usadas, borrador local e indicador de cambios sin publicar. Tras integrar `menu-categories-r1`.
 - [ ] **REVIEW · A** — `menu-category-appearance` (en `main` ec9f104; migración `20261101000100` aplicada en Supabase; sin verificación visual): color pastel e imagen de categoría.
-- [ ] **TODO · A** — `menu-modifier-model-v2`: grupos de modificadores compartidos con asignación múltiple, productos «especialidad» como sabores de mitades, ingredientes bloqueados en vez de removibles.
+- [ ] **IN_PROGRESS · A** — `menu-shared-modifier-groups` (P1 de menu-modifier-model-v2): grupos compartidos por restaurante con asignación múltiple; migración aditiva con backfill determinista (aplicar en remoto requiere autorización explícita).
+- [ ] **BLOCKED · A** — `menu-locked-ingredients` (P2): el campo real es `excludableIngredientIds` (etiquetas); requiere dry-run de mapeo etiqueta→opción y autorización del paso de datos. Tras P1.
+- [ ] **BLOCKED · A** — `menu-specialties` (P3): decisión pendiente de Emmanuel sobre la regla de precio de mitades con especialidades y el destino de los grupos de sabores actuales. Ver `.claude/packets/menu-modifier-model-v2-research.md`.
 - [ ] **TODO · A** — `menu-photo-focus`: posición y zoom de la foto.
 - [ ] **TODO · B** — `menu-photo-copy`: copiar una foto a otro producto/opción desde el servidor (la restricción `image_path` exige el id de la propia entidad); habilita «fotos ya usadas» entre productos y copiar foto al duplicar.
 - [ ] **TODO · B** — `order-account-name`: nombre opcional de la cuenta de mesa.
