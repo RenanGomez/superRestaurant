@@ -608,7 +608,11 @@ test("a modifier group shared by two products is offered by both; catalogs witho
   // An older server omits modifierGroupIds entirely: the legacy productId decides.
   const legacyCatalog = {
     ...catalog,
-    products: catalog.products.map(({ modifierGroupIds: _ids, ...product }) => product),
+    products: catalog.products.map((product) => {
+      const legacyProduct: Record<string, unknown> = { ...product };
+      delete legacyProduct["modifierGroupIds"];
+      return legacyProduct as unknown as typeof product;
+    }),
   };
   assert.deepEqual(
     activeProductGroups(legacyCatalog, FIXTURE_PRODUCT_MAIN).map((group) => group.groupId),
