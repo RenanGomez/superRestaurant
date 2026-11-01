@@ -11,7 +11,8 @@ export interface ShortcutKey {
 
 export type ShortcutTable = Readonly<Partial<Record<CaptureShortcutId, string>>>;
 
-/** ARIA `aria-keyshortcuts` strings: Alt+N creates, Ctrl+K searches, Escape or Alt+R resets. */
+/** ARIA `aria-keyshortcuts` strings: Alt+N creates, Ctrl+K searches, Escape or Alt+R resets.
+ *  Alt+N matches on `event.key`; on macOS Option+N yields a dead key, not "n", so it does not match there. */
 const shortcuts: Readonly<Record<CaptureShortcutId, string>> = {
   create: "Alt+N",
   search: "Control+K",

@@ -181,6 +181,9 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   const instructionsDebounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const instructionsDirty = useRef(false);
   const instructionsSaver = useRef<(text: string) => Promise<void>>(async () => undefined);
+  const instructionsInFlight = useRef(false);
+  const instructionsPending = useRef<string | null>(null);
+  const instructionsLatest = useRef("");
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [selectionFeedback, setSelectionFeedback] = useState<"saving" | "saved" | string>();
   const selectionFeedbackTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -194,6 +197,13 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     if (instructionsTimer.current) clearTimeout(instructionsTimer.current);
     if (instructionsDebounce.current) clearTimeout(instructionsDebounce.current);
   }, []);
+  // Flush unsaved instructions when the capture changes or the workspace unmounts. Cleanups run before
+  // the no-deps effect below reassigns the saver, so the ref still holds the previous capture's saver.
+  const flushDraftId = capture?.captureDraftId;
+  useEffect(() => () => {
+    if (instructionsDebounce.current) clearTimeout(instructionsDebounce.current);
+    if (flushDraftId !== undefined && instructionsDirty.current) void instructionsSaver.current(instructionsLatest.current);
+  }, [flushDraftId]);
   useEffect(() => {
     if (fulfillmentSnapshot === null || fulfillmentChannel !== "delivery") return;
     const snapshotRef = fulfillmentSnapshot.snapshotRef;
@@ -700,6 +710,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
 
   function changeDeliveryInstructions(text: string): void {
     setDeliveryInstructions(text);
+    instructionsLatest.current = text;
     instructionsDirty.current = true;
     if (instructionsDebounce.current) clearTimeout(instructionsDebounce.current);
     instructionsDebounce.current = setTimeout(() => { void instructionsSaver.current(text); }, 700);
@@ -708,17 +719,23 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   function flushDeliveryInstructions(): void {
     if (!instructionsDirty.current) return;
     if (instructionsDebounce.current) clearTimeout(instructionsDebounce.current);
-    void instructionsSaver.current(deliveryInstructions);
+    void instructionsSaver.current(instructionsLatest.current);
   }
 
   async function saveDeliveryInstructions(text: string): Promise<void> {
     if (capture === undefined || fulfillmentChannel !== "delivery") return;
+    if (instructionsInFlight.current) { instructionsPending.current = text; return; }
+    instructionsInFlight.current = true;
     instructionsDirty.current = false;
     const normalized = text.trim();
     const command = { ...base(), deliveryInstructions: normalized === "" ? null : normalized };
     if (instructionsTimer.current) clearTimeout(instructionsTimer.current);
     setInstructionsFeedback("saving");
     const reply = await run("deliveryInstructions", command);
+    instructionsInFlight.current = false;
+    const queued = instructionsPending.current;
+    instructionsPending.current = null;
+    if (queued !== null) { await saveDeliveryInstructions(queued); return; }
     if (reply?.ok) {
       setInstructionsFeedback("saved");
       instructionsTimer.current = setTimeout(() => setInstructionsFeedback(undefined), 2000);
@@ -727,7 +744,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       setInstructionsFeedback(reply?.ok === false ? messages[reply.error] : "No se pudieron guardar las instrucciones.");
     }
   }
-  instructionsSaver.current = saveDeliveryInstructions;
+  useEffect(() => { instructionsSaver.current = saveDeliveryInstructions; });
 
   async function requestDeliveryQuote(): Promise<void> {
     if (capture === undefined || capture.attentionLeaseId === null || fulfillmentChannel !== "delivery"
@@ -1270,8 +1287,11 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
             value={deliveryInstructions} onChange={(event) => changeDeliveryInstructions(event.target.value)}
             onBlur={flushDeliveryInstructions} disabled={locked} placeholder="Ej. Tocar dos veces; no dejar con vigilancia" />
           <div className="flex items-center justify-between gap-3"><span className="text-xs text-text-muted">{deliveryInstructions.length}/500</span>
-            <span role="status" className="text-sm text-text-muted">{instructionsFeedback === "saving" ? "Guardando…" : "Se guardan solas"}</span></div>
-          {instructionsFeedback !== undefined && instructionsFeedback !== "saving" && <p role={instructionsFeedback === "saved" ? "status" : "alert"} className="text-sm">{instructionsFeedback === "saved" ? "Guardado" : instructionsFeedback}</p>}
+            <span role="status" className="text-sm text-text-muted">{instructionsFeedback === "saving" ? "Guardando…" : instructionsFeedback === "saved" ? "Guardado" : "Se guardan solas"}</span></div>
+          {instructionsFeedback !== undefined && instructionsFeedback !== "saving" && instructionsFeedback !== "saved" && <div className="flex flex-wrap items-center gap-2">
+            <p role="alert" className="text-sm">{instructionsFeedback}</p>
+            <button type="button" className={button} disabled={locked}
+              onClick={() => { void instructionsSaver.current(instructionsLatest.current); }}>Reintentar</button></div>}
         </div>
       </section>}
       {fulfillmentChannel === "delivery" && fulfillmentSnapshot !== null && capture.status === "draft" && <section className={panel} data-testid="delivery-quote">
