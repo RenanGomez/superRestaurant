@@ -20,6 +20,7 @@ test("fitMenuImageWithin caps the longest side, keeps ratio and never enlarges",
 
 test("upload errors map known API codes to Spanish and always expose the HTTP status otherwise", () => {
   assert.match(menuUploadErrorMessage(400, "MENU_CATALOG_IMAGE_REQUEST_REJECTED"), /no es válida/);
+assert.match(menuUploadErrorMessage(404, "MENU_CATALOG_IMAGE_SOURCE_NOT_FOUND"), /ya no existe/);
   assert.match(menuUploadErrorMessage(403, "ACTION_NOT_AUTHORIZED"), /permiso/);
   assert.match(menuUploadErrorMessage(503, "MENU_CATALOG_IMAGE_UNAVAILABLE"), /no respondió/);
   assert.match(menuUploadErrorMessage(503, "MENU_IMAGES_UNCONFIGURED"), /administrador/);

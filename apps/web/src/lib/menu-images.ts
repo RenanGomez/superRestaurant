@@ -32,6 +32,7 @@ export function menuUploadErrorMessage(status: number, code: unknown): string {
   switch (code) {
     case "MENU_IMAGES_UNCONFIGURED": return "El servidor no tiene almacenamiento de fotos configurado; avisa al administrador.";
     case "MENU_CATALOG_IMAGE_REQUEST_REJECTED": return "La imagen no es válida (formato o tamaño).";
+    case "MENU_CATALOG_IMAGE_SOURCE_NOT_FOUND": return "La foto elegida ya no existe; elige otra.";
     case "ACTION_NOT_AUTHORIZED": return "No tienes permiso para cambiar fotos del menú.";
     case "MENU_CATALOG_IMAGE_UNAVAILABLE": return "El almacenamiento de fotos no respondió; inténtalo de nuevo.";
     case "AUTHENTICATION_REQUIRED": return "Tu sesión expiró; vuelve a iniciar sesión e inténtalo de nuevo.";

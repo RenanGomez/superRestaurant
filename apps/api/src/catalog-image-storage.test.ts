@@ -59,10 +59,13 @@ test("the fetch adapter authorizes with the secret key and rejects a non-OK resp
   }) as typeof fetch;
   try {
     const adapter = new FetchCatalogImageStorageAdapter({ get: () => config });
+    assert.deepEqual(await adapter.get("r/products/p/abc.jpg"), new Uint8Array());
     assert.equal(await adapter.put("r/products/p/abc.jpg", new Uint8Array([1, 2, 3]), "image/jpeg"), "created");
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, "https://example.supabase.co/storage/v1/object/catalog-images/r/products/p/abc.jpg");
-    const headers = calls[0]?.init.headers as Record<string, string>;
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.url, "https://example.supabase.co/storage/v1/object/authenticated/catalog-images/r/products/p/abc.jpg");
+    assert.equal(calls[0]?.init.method, "GET");
+    assert.equal(calls[1]?.url, "https://example.supabase.co/storage/v1/object/catalog-images/r/products/p/abc.jpg");
+    const headers = calls[1]?.init.headers as Record<string, string>;
     assert.equal(headers.authorization, "Bearer sb_secret_example-key");
     assert.equal(headers.apikey, "sb_secret_example-key");
     assert.equal(headers["x-upsert"], "false");
@@ -85,6 +88,22 @@ test("the fetch adapter maps a failed upload and a network failure to the same u
       new FetchCatalogImageStorageAdapter({ get: () => config }).put("r/products/p/abc.jpg", new Uint8Array(), "image/jpeg"),
       CatalogImageStorageUnavailableError,
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("the fetch adapter downloads an object and distinguishes a missing source", async () => {
+  const config = readCatalogImageStorageConfig(validEnvironment);
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => new Response(new Uint8Array([1, 2, 3]), { status: 200 })) as typeof fetch;
+    const adapter = new FetchCatalogImageStorageAdapter({ get: () => config });
+    assert.deepEqual(await adapter.get("r/products/p/abc.jpg"), new Uint8Array([1, 2, 3]));
+    globalThis.fetch = (async () => new Response(null, { status: 404 })) as typeof fetch;
+    assert.equal(await adapter.get("r/products/p/missing.jpg"), undefined);
+    globalThis.fetch = (async () => new Response(null, { status: 500 })) as typeof fetch;
+    await assert.rejects(adapter.get("r/products/p/abc.jpg"), CatalogImageStorageUnavailableError);
   } finally {
     globalThis.fetch = originalFetch;
   }
