@@ -30,7 +30,8 @@ export function duplicateProduct(product: MenuProductV1, groups: readonly MenuMo
   const copiedGroups = source.map((group): MenuModifierGroupV1 => ({
     ...group,
     groupId: groupIds.get(group.groupId) ?? newId(),
-    options: group.options.map((option) => ({ ...option, optionId: newId() })),
+    // Photo paths embed the owner's id (a database constraint), so a copy never inherits them.
+    options: group.options.map((option) => ({ ...option, imagePath: null, optionId: newId() })),
     productId,
   }));
   const variants = (product.variants ?? []).map((variant): MenuProductVariantV1 => ({
@@ -41,6 +42,7 @@ export function duplicateProduct(product: MenuProductV1, groups: readonly MenuMo
   const copied: MenuProductV1 = {
     ...product,
     displayOrder,
+    imagePath: null,
     ...(product.fraction === null || product.fraction === undefined ? {} : { fraction: remap(product.fraction, groupIds) }),
     name: copyName(product.name),
     productId,

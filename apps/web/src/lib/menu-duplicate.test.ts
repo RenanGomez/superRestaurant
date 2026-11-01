@@ -7,13 +7,13 @@ const counter = (): (() => string) => { let n = 0; return () => `new-${++n}`; };
 const group = (groupId: string, productId: string): MenuModifierGroupV1 => ({
   active: true, displayOrder: 1, groupId, maximumQuantity: 2, minimumQuantity: 0, name: groupId, productId,
   options: [
-    { active: true, imagePath: "r/b/a.png", maximumQuantity: null, name: "A", optionId: `${groupId}-o1`, unitPriceMinor: 10 },
+    { active: true, imagePath: "11111111-1111-4111-8111-111111111111/options/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/0123456789abcdef0123456789abcdef.png", maximumQuantity: null, name: "A", optionId: `${groupId}-o1`, unitPriceMinor: 10 },
     { active: false, imagePath: null, maximumQuantity: 2, name: "B", optionId: `${groupId}-o2`, unitPriceMinor: 0 },
   ],
 });
 const product: MenuProductV1 = {
   active: true, categoryId: "c1", displayOrder: 3, fraction: { enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId: "g2", flavorGroupId: "g1" },
-  imagePath: "r/b/p.png", name: "Pizza", productId: "p1", sku: "PZ-1", stationId: "horno",
+  imagePath: "11111111-1111-4111-8111-111111111111/products/22222222-2222-4222-8222-222222222222/0123456789abcdef0123456789abcdef.png", name: "Pizza", productId: "p1", sku: "PZ-1", stationId: "horno",
   tax: { inclusion: "included", name: "IVA", rateDenominator: 100, rateNumerator: 16, taxId: "iva", taxRuleVersion: "1" }, unit: "pieza", unitPriceMinor: 15000,
   variants: [{ active: true, displayOrder: 1, name: "Grande", sku: null, unitPriceMinor: 20000, variantId: "v1" }],
 };
@@ -25,7 +25,8 @@ test("duplicate gets fresh ids, copy name, no sku and the given display order", 
   assert.equal(copy.name, "Pizza (copia)");
   assert.equal(copy.sku, null);
   assert.equal(copy.displayOrder, 7);
-  assert.equal(copy.imagePath, "r/b/p.png");
+  assert.equal(copy.imagePath, null);
+  assert.ok(copiedGroups.every((entry) => entry.options.every((option) => option.imagePath === null)));
   assert.equal(copy.variants?.[0]?.variantId === "v1", false);
   assert.equal(copy.variants?.[0]?.unitPriceMinor, 20000);
   assert.equal(copiedGroups.length, 2);

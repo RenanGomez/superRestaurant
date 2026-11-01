@@ -9,6 +9,14 @@ export function collectUsedImagePaths(products: readonly Pick<MenuProductV1, "im
 }
 
 /**
+ * Paths that belong to one product or option. The database only accepts `{restaurantId}/products|options/{entityId}/file`
+ * with the entity's own id, so a photo of another entity can never be assigned.
+ */
+export function imagePathsOfEntity(paths: readonly string[], entityId: string): readonly string[] {
+  return paths.filter((path) => path.split("/")[2] === entityId);
+}
+
+/**
  * Adds the current paths to the ones remembered during the session, so a photo that was removed by mistake
  * stays selectable until the page reloads. Returns `previous` itself when nothing is new.
  */

@@ -25,7 +25,7 @@ import { variantValidationError } from "../../../lib/menu-variants";
 import { reorder, reorderSubset } from "../../../lib/menu-reorder";
 import { duplicateProduct } from "../../../lib/menu-duplicate";
 import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys, type LocalMenuDraft } from "../../../lib/menu-draft-storage";
-import { collectUsedImagePaths, retainImagePaths } from "../../../lib/menu-used-images";
+import { collectUsedImagePaths, imagePathsOfEntity, retainImagePaths } from "../../../lib/menu-used-images";
 import { DragReorderList, ReorderButtons, ReorderHandle, reorderRowProps } from "./reorder-controls";
 
 import { saveMenuCatalogAction, uploadMenuImageAction } from "./actions";
@@ -121,6 +121,7 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
   useEffect(() => { setRetainedImagePaths((previous) => retainImagePaths(previous, currentImagePaths)); }, [currentImagePaths]);
   const usedImagePaths = useMemo(() => retainImagePaths(retainedImagePaths, currentImagePaths), [retainedImagePaths, currentImagePaths]);
 
+  const [copiedProductIds, setCopiedProductIds] = useState<readonly string[]>([]);
   const focusAfterCopy = useRef<string | null>(null);
   useEffect(() => {
     const productId = focusAfterCopy.current;
@@ -136,6 +137,7 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
     if (source === undefined) return;
     const copy = duplicateProduct(source, groups, () => crypto.randomUUID(), nextDisplayOrder(products.filter((entry) => entry.categoryId === source.categoryId)));
     focusAfterCopy.current = copy.product.productId;
+    setCopiedProductIds((current) => [...current, copy.product.productId]);
     setProducts((current) => [...current, copy.product]);
     setGroups((current) => [...current, ...copy.groups]);
   };
@@ -285,7 +287,7 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
                     label={`Productos de ${category.name}`}
                     onMove={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.categoryId === category.categoryId, from, to))}
                     renderRow={(product, _index, handle) => (
-              <ProductEditor handle={handle} usedStations={products.map((entry) => entry.stationId)} usedImagePaths={usedImagePaths} variantInvalid={variantIssue?.productId === product.productId}
+              <ProductEditor handle={handle} copyNotice={copiedProductIds.includes(product.productId) && product.imagePath === null}usedStations={products.map((entry) => entry.stationId)} usedImagePaths={usedImagePaths} variantInvalid={variantIssue?.productId === product.productId}
                 canManage={canManage}
                 categories={categories}
                 currency={currency}
@@ -362,7 +364,8 @@ function taxNote(tax: MenuProductV1["tax"], formattedPrice: string): string | un
  * (3) switches for modifier groups, halves and tax plus «+ Añadir tamaño». Each section shows only while its
  * switch is on (or it already has data), so a plain product takes three rows.
  */
-function ProductEditor({ handle, usedStations, usedImagePaths, variantInvalid, canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onDuplicate, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, variantInvalid, canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onDuplicate, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+  readonly copyNotice: boolean;
   readonly handle: ReactNode;
   readonly usedStations: readonly string[];
   readonly usedImagePaths: readonly string[];
@@ -441,6 +444,8 @@ function ProductEditor({ handle, usedStations, usedImagePaths, variantInvalid, c
         {canManage && <button type="button" onClick={onDuplicate} title={`Crear una copia de ${product.name}`} aria-label={`Duplicar ${product.name}`}
           className="min-h-11 rounded-lg border border-border bg-surface px-3 py-2 text-[12px] font-semibold hover:border-accent focus-visible:outline-2 focus-visible:outline-accent sm:ml-auto">Duplicar</button>}
       </div>
+
+      {copyNotice && <p role="status" className="rounded-lg bg-accent-soft px-3 py-2 text-[12px]">Copia de otro producto. La foto no se copia; súbela de nuevo.</p>}
 
       {variants.length > 0 && <section className="rounded-xl border border-border bg-surface p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -655,7 +660,9 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
   const [panel, setPanel] = useState<"photo" | "used" | null>(null);
   const url = menuImagePublicUrl(supabaseUrl, imagePath);
   const label = `Foto de ${name.trim() === "" ? "producto sin nombre" : name}`;
-  const otherPaths = usedImagePaths.filter((path) => path !== imagePath);
+  // Only this entity's own removed photos: the database rejects a path that embeds another entity's id.
+  const otherPaths = imagePathsOfEntity(usedImagePaths, targetId).filter((path) => path !== imagePath);
+  const entityWord = target === "product" ? "producto" : "opción";
   const showsPhoto = url !== null && failedPath !== imagePath;
 
   // A success note fades after a few seconds; errors stay until the next action.
@@ -750,19 +757,19 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
     </button>
     {canManage && <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" tabIndex={-1} aria-hidden="true" className="sr-only" onChange={(event) => { void choose(event); }} />}
     {canManage && imagePath === null && otherPaths.length > 0 && !busy &&
-      <button type="button" onClick={() => setPanel("used")} className="min-h-6 text-[11px] font-medium text-accent underline focus-visible:outline-2 focus-visible:outline-accent">Ya usadas</button>}
+      <button type="button" onClick={() => setPanel("used")} className="min-h-6 text-[11px] font-medium text-accent underline focus-visible:outline-2 focus-visible:outline-accent">Fotos quitadas</button>}
     {message !== null && <div role="status" className="absolute left-0 top-full z-30 mt-1 w-56 rounded-lg border border-border bg-surface p-2 text-[12px] text-text-muted shadow-lg">
       <p>{message}</p>
       {attempt.current !== null && message.startsWith("No se pudo subir") && <button type="button" disabled={busy} onClick={() => { void retry(); }} className="mt-1 min-h-11 rounded-lg border border-border bg-surface px-3 text-[13px] font-semibold text-text focus-visible:outline-2 focus-visible:outline-accent">Reintentar</button>}
     </div>}
-    {panel !== null && <PhotoDialog title={panel === "photo" ? label : "Elegir una foto ya usada"} onClose={() => setPanel(null)}>
+    {panel !== null && <PhotoDialog title={panel === "photo" ? label : `Fotos quitadas de este ${entityWord}`} onClose={() => setPanel(null)}>
       {panel === "photo" && url !== null && <img src={url} alt={label} className="max-h-[55vh] w-full rounded-xl border border-border bg-bg object-contain" />}
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={() => { setPanel(null); openPicker(); }} className="min-h-11 rounded-lg bg-accent px-4 py-2 text-[13px] font-semibold text-white hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">{panel === "photo" ? "Reemplazar" : "Subir una foto nueva"}</button>
         {panel === "photo" && <button type="button" onClick={() => assign(null, "Foto quitada del borrador.")} className="min-h-11 rounded-lg border border-[oklch(85%_0.06_25)] px-4 py-2 text-[13px] font-semibold text-error focus-visible:outline-2 focus-visible:outline-accent">Quitar</button>}
         <button type="button" autoFocus onClick={() => setPanel(null)} className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-accent">Cancelar</button>
       </div>
-      <UsedPhotos paths={otherPaths} supabaseUrl={supabaseUrl} onPick={(path) => assign(path, "Foto elegida. Publica la nueva versión para mostrarla en captura.")} />
+      <UsedPhotos title={`Fotos quitadas de este ${entityWord}`} paths={otherPaths} supabaseUrl={supabaseUrl} onPick={(path) => assign(path, "Foto elegida. Publica la nueva versión para mostrarla en captura.")} />
     </PhotoDialog>}
   </div>;
 }
@@ -779,10 +786,10 @@ function PhotoDialog({ children, title, onClose }: { readonly children: ReactNod
   </dialog>;
 }
 
-function UsedPhotos({ onPick, paths, supabaseUrl }: { readonly onPick: (path: string) => void; readonly paths: readonly string[]; readonly supabaseUrl: string }): ReactNode {
+function UsedPhotos({ onPick, paths, supabaseUrl, title }: { readonly onPick: (path: string) => void; readonly paths: readonly string[]; readonly supabaseUrl: string; readonly title: string }): ReactNode {
   if (paths.length === 0) return null;
-  return <section aria-label="Fotos ya usadas en este menú" className="border-t border-border pt-3">
-    <h3 className="text-[12px] font-semibold">Fotos ya usadas en este menú</h3>
+  return <section aria-label={title} className="border-t border-border pt-3">
+    <h3 className="text-[12px] font-semibold">{title}</h3>
     <ul className="mt-2 flex flex-wrap gap-2">
       {paths.map((path, index) => {
         const source = menuImagePublicUrl(supabaseUrl, path);

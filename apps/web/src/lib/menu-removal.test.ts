@@ -60,5 +60,8 @@ test("removing all groups of a product keeps other products and clears dangling 
   assert.equal(result.products[0]?.fraction?.flavorGroupId, null);
   assert.equal(result.products[0]?.fraction?.enabled, true);
   assert.equal(result.products[1], withHalves.products[1]);
+  const sizeSetup = { enabled: true, excludableIngredientIds: [], extraGroupId: "g1", flavorGroupId: null };
+  const legacy = applyRemoval({ ...draft, products: [{ ...product("p1", "c1", [{ ...variant("v1", "Grande"), fraction: sizeSetup } as ReturnType<typeof variant>]), fraction: null }] }, { id: "p1", kind: "groups", label: "x" });
+  assert.equal(legacy.products[0]?.variants?.[0]?.fraction?.extraGroupId, null);
   assert.equal(removalNeedsConfirmation({ id: "p1", kind: "groups", label: "x" }), true);
 });

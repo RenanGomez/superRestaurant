@@ -45,9 +45,17 @@ export function applyRemoval(draft: MenuDraftParts, removal: Removal): MenuDraft
       ...draft,
       groups: draft.groups.filter((group) => group.productId !== removal.id),
       // Halves that pointed at a removed group would be invalid; leave the setup empty instead of dangling.
-      products: draft.products.map((product) => product.productId === removal.id && product.fraction !== null && product.fraction !== undefined
-        && (dangling(product.fraction.flavorGroupId) || dangling(product.fraction.extraGroupId))
-        ? { ...product, fraction: { ...product.fraction, extraGroupId: dangling(product.fraction.extraGroupId) ? null : product.fraction.extraGroupId, flavorGroupId: dangling(product.fraction.flavorGroupId) ? null : product.fraction.flavorGroupId } } : product),
+      products: draft.products.map((product) => {
+        if (product.productId !== removal.id) return product;
+        const clean = <T extends { readonly extraGroupId: string | null; readonly flavorGroupId: string | null }>(fraction: T): T => ({
+          ...fraction, extraGroupId: dangling(fraction.extraGroupId) ? null : fraction.extraGroupId, flavorGroupId: dangling(fraction.flavorGroupId) ? null : fraction.flavorGroupId,
+        });
+        return {
+          ...product,
+          ...(product.fraction === null || product.fraction === undefined ? {} : { fraction: clean(product.fraction) }),
+          variants: (product.variants ?? []).map((variant) => variant.fraction === null || variant.fraction === undefined ? variant : { ...variant, fraction: clean(variant.fraction) }),
+        };
+      }),
     };
   }
   if (removal.kind === "group") return { ...draft, groups: draft.groups.filter((group) => group.groupId !== removal.id) };
