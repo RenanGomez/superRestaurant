@@ -4,7 +4,8 @@ import type { MenuCategoryV1, MenuModifierGroupV1, MenuProductV1 } from "@super-
 export type Removal = Readonly<{
   groupId?: string;
   id: string;
-  kind: "category" | "group" | "option" | "product" | "variant";
+  /** `groups` removes every modifier group of the product whose id is `id`. */
+  kind: "category" | "group" | "groups" | "option" | "product" | "variant";
   label: string;
   /** A variant that has no name yet (just added) can be dropped without asking. */
   unnamed?: boolean;
@@ -35,6 +36,26 @@ export function applyRemoval(draft: MenuDraftParts, removal: Removal): MenuDraft
       ...draft,
       groups: draft.groups.filter((group) => group.productId !== removal.id),
       products: draft.products.filter((product) => product.productId !== removal.id),
+    };
+  }
+  if (removal.kind === "groups") {
+    const gone = new Set(draft.groups.filter((group) => group.productId === removal.id).map((group) => group.groupId));
+    const dangling = (id: string | null): boolean => id !== null && gone.has(id);
+    return {
+      ...draft,
+      groups: draft.groups.filter((group) => group.productId !== removal.id),
+      // Halves that pointed at a removed group would be invalid; leave the setup empty instead of dangling.
+      products: draft.products.map((product) => {
+        if (product.productId !== removal.id) return product;
+        const clean = <T extends { readonly extraGroupId: string | null; readonly flavorGroupId: string | null }>(fraction: T): T => ({
+          ...fraction, extraGroupId: dangling(fraction.extraGroupId) ? null : fraction.extraGroupId, flavorGroupId: dangling(fraction.flavorGroupId) ? null : fraction.flavorGroupId,
+        });
+        return {
+          ...product,
+          ...(product.fraction === null || product.fraction === undefined ? {} : { fraction: clean(product.fraction) }),
+          variants: (product.variants ?? []).map((variant) => variant.fraction === null || variant.fraction === undefined ? variant : { ...variant, fraction: clean(variant.fraction) }),
+        };
+      }),
     };
   }
   if (removal.kind === "group") return { ...draft, groups: draft.groups.filter((group) => group.groupId !== removal.id) };
