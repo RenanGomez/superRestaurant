@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ordersHref, ordersOrderId, ordersView } from "./orders-view.js";
+import { ordersHref, ordersOrderId, ordersView, tableLabel } from "./orders-view.js";
 
 const ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
 
@@ -26,4 +26,13 @@ test("ordersHref round-trips through ordersView", () => {
     const query = ordersHref(ID, adding).split("?")[1]!;
     assert.equal(ordersView(new URLSearchParams(query)), adding ? "adding" : "detail");
   }
+});
+
+test("tableLabel returns the configured name or the generic Mesa", () => {
+  const names = new Map([[ID, "  Mesa 4  "], ["other", ""]]);
+  assert.equal(tableLabel(ID, names), "Mesa 4");
+  assert.equal(tableLabel("other", names), "Mesa");
+  assert.equal(tableLabel("missing", names), "Mesa");
+  assert.equal(tableLabel(ID, undefined), "Mesa");
+  assert.equal(tableLabel(null, names), "Mesa");
 });

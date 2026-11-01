@@ -114,3 +114,14 @@ test("a just-collected receipt (server balance) wins over the detail payments", 
   assert.equal(text.match(/Efectivo:/gu)?.length, 1);
   assert.match(text, /Saldo: \$54\.50/u);
 });
+
+test("the table name reaches kitchen and ticket documents, and the fallback never prints the table id", () => {
+  const tableId = "5b7f0c1e-2a4d-4e8b-9c3f-1d2e3f4a5b6c";
+  const onTable = { ...order, tableId };
+  const header = { restaurantName: "R", branchName: "S" };
+  assert.ok(buildKitchenDocuments(onTable, "Mesa 4")[0]!.lines.includes("Mesa: Mesa 4"));
+  assert.ok(buildCustomerTicket(onTable, [], header, "Mesa 4").lines.includes("Mesa: Mesa 4"));
+  const unnamed = [...buildKitchenDocuments(onTable)[0]!.lines, ...buildCustomerTicket(onTable, [], header).lines];
+  assert.ok(unnamed.includes("Mesa: Mesa"));
+  assert.ok(!unnamed.some((line) => line.includes(tableId)));
+});
