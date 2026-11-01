@@ -53,6 +53,8 @@ import type { CaptureConfirmationContext } from "../../../lib/capture-confirmati
 import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import { formatDeliveryMatch, formatDeliveryQuote } from "../../../lib/delivery-zones";
 import { matchDeliveryAddress } from "../delivery-match-action";
+import { customerDirectoryAction } from "../customers/actions";
+import { CaptureCustomerCard } from "./capture-customer";
 import {
   deliveryQuoteBlocksConfirm, deliveryQuoteScheduledForInputValue, isSwitchingToAnotherCapture,
   paymentIntentBlocksConfirm,
@@ -882,33 +884,53 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       query: String(data.get("query") ?? "").trim(), limit: 20, cursor: null });
   }
 
-  function read(customerId: string): void { void run("detail", { schemaVersion: 1, scope, customerId }); }
+  function read(customerId: string): void {
+    void (async () => {
+      const reply = await run("detail", { schemaVersion: 1, scope, customerId });
+      if (!reply?.ok || !("customer" in reply.value)) return;
+      const detail = reply.value as CustomerDirectoryDetailV1;
+      const only = detail.customer.phones.length === 1 ? detail.customer.phones[0] : undefined;
+      // `run` already cleared `busy`; this closure still sees the pre-request value (false), so the
+      // follow-up `run("customer")` is not discarded. `detail` is passed explicitly because the
+      // `customer` state is not yet updated in this closure.
+      if (only !== undefined) selectCustomer(only.contactId, detail);
+    })();
+  }
 
-  function selectCustomer(contactId: string): void {
-    if (customer === undefined || capture === undefined) return;
+  function selectCustomer(contactId: string, loaded?: CustomerDirectoryDetailV1): void {
+    const chosen = loaded ?? customer;
+    if (chosen === undefined || capture === undefined) return;
     setRecentOrders(undefined);
     setRepeatPreview(undefined);
     setSelectedContact(contactId);
     setSelectedAddress(undefined);
     invalidateQuote();
-    const command = { ...base(), customerId: customer.customer.customerId, contactId,
-      expectedCustomerVersion: customer.customer.version };
+    const command = { ...base(), customerId: chosen.customer.customerId, contactId,
+      expectedCustomerVersion: chosen.customer.version };
     void (async () => {
       const reply = await run("customer", command);
       if (reply?.ok) await refreshWorkspace(capture.captureDraftId);
     })();
   }
 
-  function selectAddress(addressId: string, version: number): void {
-    if (capture?.customerSnapshotRef === null || capture?.customerSnapshotRef === undefined) return;
+  async function selectAddress(addressId: string, version: number): Promise<"ok" | "busy" | "error"> {
+    if (capture?.customerSnapshotRef === null || capture?.customerSnapshotRef === undefined) return "error";
     setSelectedAddress(addressId);
     invalidateQuote();
     const command = { ...base(), customerSnapshotRef: capture.customerSnapshotRef, addressId,
       expectedAddressVersion: version };
-    void (async () => {
-      const reply = await run("fulfillment", command);
-      if (reply?.ok) await refreshWorkspace(capture.captureDraftId);
-    })();
+    const reply = await run("fulfillment", command);
+    if (reply === undefined) return "busy"; // run() discards the call while another operation is in flight
+    if (reply.ok) await refreshWorkspace(capture.captureDraftId);
+    return reply.ok ? "ok" : "error";
+  }
+
+  function goToCustomer(): void {
+    const target = document.getElementById("capture-customer-section");
+    if (target === null) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+    target.focus({ preventScroll: true });
   }
 
   function previewOrder(orderId: string): void {
@@ -1118,7 +1140,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
           <option value="pickup" disabled={fulfillmentSnapshot !== null}>Recoger</option><option value="counter" disabled={fulfillmentSnapshot !== null}>Mostrador</option>
           <option value="dine_in" disabled={fulfillmentSnapshot !== null}>Mesa</option></select></>}</Field></div>
       </section>
-      <section className={panel}><h2 className="font-heading text-lg font-semibold">1. Cliente</h2>
+      <section id="capture-customer-section" tabIndex={-1} className={`${panel} scroll-mt-20 focus-visible:outline-2 focus-visible:outline-accent`}><h2 className="font-heading text-lg font-semibold">1. Cliente</h2>
         <form onSubmit={search} className="mt-3 flex flex-wrap gap-3"><Field className="grid gap-1 text-sm" hint="Dato con el que buscas al cliente: teléfono, nombre o dirección." id="capture-search-mode" label="Buscar por">{() => <><select id="capture-search-mode" name="mode" className={input} disabled={locked}>
           <option value="phone">Teléfono</option><option value="name">Nombre</option><option value="address">Dirección</option></select>
           </>}</Field>
@@ -1131,11 +1153,12 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
           : results.candidates.map((item) => <button key={item.customerId} className={`${button} text-left`} disabled={locked}
             onClick={() => read(item.customerId)}><strong className="block">{item.displayName}</strong>
             <span className="text-xs text-text-muted">{item.phones.map((phone) => phone.displayValue).join(" · ")}</span></button>)}</div>}
+        {customer !== undefined && <CaptureCustomerCard scope={scope} deviceId={deviceId} locked={locked} detail={customer}
+          selectedContact={selectedContact} selectedAddress={selectedAddress}
+          customerSaved={customerSnapshot !== null && customerSnapshot.customerId === customer.customer.customerId}
+          directoryAction={customerDirectoryAction} onDetail={setCustomer}
+          onSelectPhone={(contactId) => selectCustomer(contactId)} onUseAddress={selectAddress} />}
       </section>
-      {customer !== undefined && <section className={panel}><h2 className="font-heading text-lg font-semibold">Elegir teléfono · {customer.customer.displayName}</h2>
-        <div className="mt-3 grid gap-2">{customer.customer.phones.map((phone) => <button key={phone.contactId} className={`${button} text-left`}
-          disabled={locked} onClick={() => selectCustomer(phone.contactId)}><span>{phone.label}: {phone.displayValue}</span>
-          {selectedContact === phone.contactId && <span className="ml-2 text-accent">Selección local</span>}</button>)}</div></section>}
       {customerSnapshot !== null && <section className={panel} data-testid="rehydrated-customer-snapshot">
         <h2 className="font-heading text-lg font-semibold">Cliente guardado</h2><p className="mt-2"><strong>{customerSnapshot.displayName}</strong><br />
           {customerSnapshot.phoneDisplayValue}</p>{fulfillmentSnapshot !== null && <p className="mt-2 text-sm">
@@ -1261,12 +1284,6 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
         initialLine={sheetEditLine} error={sheetError} showVariants
         onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); setSheetEditLine(undefined); setSheetError(undefined); }}
         onAdd={(quantity, modifierGroups, note, variantId, fraction) => void addFromSheet(quantity, modifierGroups, note, variantId, fraction)} />}
-      {customer !== undefined && capture.customerSnapshotRef !== null && <section className={panel}><h2 className="font-heading text-lg font-semibold">3. Entrega · dirección validada</h2>
-        <div className="mt-3 grid gap-2">{customer.addresses.map((item) => <button key={item.addressId} className={`${button} text-left`}
-          disabled={locked || !item.validatedForRequestedBranch} onClick={() => selectAddress(item.addressId, item.version)}><strong className="block">{item.address.label}</strong>
-          <span className="block text-xs text-text-muted">{[item.address.streetLine, item.address.neighborhood, item.address.locality].filter(Boolean).join(", ")}</span>
-          <span className="text-xs text-accent">{item.validatedForRequestedBranch ? selectedAddress === item.addressId ? "Selección local" : "Validada para esta sucursal" : "Pendiente de validación"}</span>
-        </button>)}</div><a href="/app/customers" className="mt-3 inline-block text-sm font-semibold text-accent underline">Editar o validar direcciones en Directorio</a></section>}
       {fulfillmentChannel === "delivery" && <section className={panel}>
         <h2 className="font-heading text-lg font-semibold">3. Entrega · instrucciones</h2>
         <p className="mt-1 text-sm text-text-muted">Se guardan en esta captura; nunca modifican la dirección del cliente ni se heredan automáticamente.</p>
@@ -1402,6 +1419,8 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
           {fulfillmentChannel === "delivery" && (customerSnapshot === null || fulfillmentSnapshot === null) && <p className="mt-2 text-sm text-text-muted">
             Falta {customerSnapshot === null && fulfillmentSnapshot === null ? "guardar un cliente y una dirección validada"
               : customerSnapshot === null ? "guardar un cliente" : "guardar una dirección validada"} para confirmar el domicilio.
+            <button type="button" className={`${button} ml-2`} onClick={goToCustomer}>Ir a la dirección</button>
+            <a href="/app/customers" className="ml-3 text-sm text-accent underline">Directorio</a>
           </p>}
           {repeatOrderPlan !== null && <p role="status" className="mt-2 text-sm text-text-muted">
             El servidor volverá a cotizar este pedido con el catálogo vigente. Si algún producto o modificador ya no es válido, la confirmación se detendrá sin crear una orden parcial.
