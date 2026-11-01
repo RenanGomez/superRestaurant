@@ -106,12 +106,19 @@ test("rejects duplicate variant identities, SKUs and instantiated group identiti
     ...source,
     variants: [source.variants[0]!, { ...source.variants[1]!, sku: "PIZZA-LARGE" }],
   }));
-  assert.throws(() => validateConfiguredCatalogRelease({
+  // Shared modifier groups: two variants may bind the same group id (uniqueness is per variant).
+  assert.doesNotThrow(() => validateConfiguredCatalogRelease({
     ...source,
     variants: [source.variants[0]!, {
       ...source.variants[1]!,
       modifierGroups: source.variants[0]!.modifierGroups,
     }],
+  }));
+  // ...but one variant still cannot bind the same group twice.
+  const repeated = source.variants[0]!.modifierGroups[0]!;
+  assert.throws(() => validateConfiguredCatalogRelease({
+    ...source,
+    variants: [{ ...source.variants[0]!, modifierGroups: [repeated, repeated] }, source.variants[1]!],
   }));
 });
 

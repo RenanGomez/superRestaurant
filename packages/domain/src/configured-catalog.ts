@@ -139,7 +139,6 @@ function validateVariants(
   const productIds = new Set(products.map((product) => product.id));
   const ids = new Set<string>();
   const skus = new Set<string>();
-  const groupIds = new Set<string>();
   return release.variants.map((value) => {
     const variant = instantiateProductVariantCatalog(templates, value);
     if (
@@ -154,9 +153,12 @@ function validateVariants(
       skus.add(variant.sku);
     }
     new Money(0, currency).add(variant.unitPrice);
+    // Shared modifier groups may be bound by several variants; `instantiateProductVariantCatalog`
+    // already rejects a group id repeated inside one variant.
+    const variantGroupIds = new Set<string>();
     for (const group of variant.modifierGroups) {
-      if (groupIds.has(group.id)) throw new InvalidSnapshotError("configured modifier group id");
-      groupIds.add(group.id);
+      if (variantGroupIds.has(group.id)) throw new InvalidSnapshotError("configured modifier group id");
+      variantGroupIds.add(group.id);
     }
     return variant;
   }).sort(compareDisplayOrder);

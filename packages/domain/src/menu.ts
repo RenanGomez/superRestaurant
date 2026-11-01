@@ -295,10 +295,14 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
     }
     if (groupIds.has(group.id)) throw new DuplicateMenuEntityIdError("modifier group", group.id);
     groupIds.add(group.id);
-    const product = productsById.get(group.productId);
-    if (product === undefined) throw new MenuProductModifierGroupNotFoundError(group.productId, group.id);
-    if (!product.modifierGroupIds.includes(group.id)) {
-      throw new MenuModifierGroupNotAllowedError(product.id, group.id);
+    // A shared group (`productId` null) belongs to the restaurant catalog; products opt in through
+    // their allowlist. A legacy owner must still exist and list its own group.
+    if (group.productId !== null) {
+      const product = productsById.get(group.productId);
+      if (product === undefined) throw new MenuProductModifierGroupNotFoundError(group.productId, group.id);
+      if (!product.modifierGroupIds.includes(group.id)) {
+        throw new MenuModifierGroupNotAllowedError(product.id, group.id);
+      }
     }
     for (const option of group.options) assertCurrencyMatches(catalogCurrency, option.unitPrice);
     return group;
@@ -309,7 +313,7 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
     for (const groupId of product.modifierGroupIds) {
       const group = groupsById.get(groupId);
       if (group === undefined) throw new MenuProductModifierGroupNotFoundError(product.id, groupId);
-      if (group.productId !== product.id) {
+      if (group.productId !== null && group.productId !== product.id) {
         throw new ModifierGroupProductMismatchError(group.id, group.productId, product.id);
       }
     }

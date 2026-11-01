@@ -59,7 +59,7 @@ test("instantiates one reusable template into detached product-specific modifier
 
   const snapshot = createModifierSelectionSnapshot(
     large,
-    { productId: large.productId, restaurantId: large.restaurantId },
+    { productId: large.productId as string, restaurantId: large.restaurantId },
     large.defaultSelections,
   );
   assert.equal(snapshot.modifiers[0]?.modifierId, "thin");

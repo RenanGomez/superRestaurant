@@ -382,7 +382,15 @@ export interface MenuProductV1 {
   readonly variants?: readonly MenuProductVariantV1[];
   /** Optional on input (older producers); the normalized output always carries it, `null` when absent. */
   readonly fraction?: MenuProductFractionV1 | null;
+  /**
+   * Ordered ids of the restaurant-level modifier groups this product offers (a group may be shared by
+   * several products). Optional on input: when absent it is derived from the groups whose legacy
+   * `productId` is this product. The normalized output always carries it.
+   */
+  readonly modifierGroupIds?: readonly string[];
 }
+
+export const MENU_PRODUCT_MAX_MODIFIER_GROUPS = 200;
 
 export interface MenuModifierOptionV1 {
   readonly active: boolean;
@@ -406,7 +414,12 @@ export interface MenuModifierGroupV1 {
   readonly minimumQuantity: number;
   readonly name: string;
   readonly options: readonly MenuModifierOptionV1[];
-  readonly productId: string;
+  /**
+   * Legacy single owner: set only while the group is used by exactly that product (older clients read
+   * it). Optional on input; the normalized output always carries it, `null` for a shared or unassigned
+   * group. The canonical relation is `MenuProductV1.modifierGroupIds`.
+   */
+  readonly productId?: string | null;
 }
 
 interface MenuCatalogPayloadV1 {
@@ -1057,12 +1070,42 @@ function parseMenuCatalogPayload(record: PlainRecord): MenuCatalogPayloadV1 | un
   if (categoryIds.size !== definedCategories.length || productIds.size !== definedProducts.length) return undefined;
   if (definedProducts.some(({ categoryId }) => !categoryIds.has(categoryId))) return undefined;
 
-  const groupProductById = new Map(definedModifierGroups.map((group) => [group.groupId, group.productId]));
+  const groupIds = new Set<string>();
+  for (const group of definedModifierGroups) {
+    if (groupIds.has(group.groupId)) return undefined;
+    groupIds.add(group.groupId);
+    if (group.productId !== undefined && group.productId !== null && !productIds.has(group.productId)) return undefined;
+  }
+
+  // Canonical relation: product.modifierGroupIds. Older producers omit it; derive it from the legacy owner.
+  const legacyGroupsByProduct = new Map<string, string[]>();
+  for (const group of [...definedModifierGroups].sort(compareModifierGroupOrder)) {
+    if (group.productId === undefined || group.productId === null) continue;
+    legacyGroupsByProduct.set(group.productId, [...(legacyGroupsByProduct.get(group.productId) ?? []), group.groupId]);
+  }
+  for (let index = 0; index < definedProducts.length; index += 1) {
+    const product = definedProducts[index]!;
+    const listed = product.modifierGroupIds ?? legacyGroupsByProduct.get(product.productId) ?? [];
+    if (listed.some((groupId) => !groupIds.has(groupId))) return undefined;
+    definedProducts[index] = Object.freeze({ ...product, modifierGroupIds: Object.freeze([...listed]) });
+  }
+  const groupsById = new Map(definedModifierGroups.map((group) => [group.groupId, group]));
+  for (const product of definedProducts) {
+    for (const groupId of product.modifierGroupIds ?? []) {
+      const owner = groupsById.get(groupId)?.productId;
+      if (owner !== undefined && owner !== null && owner !== product.productId) return undefined;
+    }
+  }
+  for (const group of definedModifierGroups) {
+    if (group.productId === undefined || group.productId === null) continue;
+    const owner = definedProducts.find(({ productId }) => productId === group.productId);
+    if (owner?.modifierGroupIds?.includes(group.groupId) !== true) return undefined;
+  }
   for (const product of definedProducts) {
     const configs = [product.fraction, ...(product.variants ?? []).map((variant) => variant.fraction)];
     for (const config of configs) {
       for (const groupId of [config?.flavorGroupId, config?.extraGroupId]) {
-        if (groupId !== undefined && groupId !== null && groupProductById.get(groupId) !== product.productId) return undefined;
+        if (groupId !== undefined && groupId !== null && product.modifierGroupIds?.includes(groupId) !== true) return undefined;
       }
     }
   }
@@ -1074,25 +1117,18 @@ function parseMenuCatalogPayload(record: PlainRecord): MenuCatalogPayloadV1 | un
     skus.add(sku);
   }
 
-  const groupIds = new Set<string>();
-  const requiredGroupCounts = new Map<string, number>();
-  for (const group of definedModifierGroups) {
-    if (!productIds.has(group.productId) || groupIds.has(group.groupId)) return undefined;
-    groupIds.add(group.groupId);
-    if (group.active && group.minimumQuantity > 0) {
-      const count = (requiredGroupCounts.get(group.productId) ?? 0) + 1;
-      if (count > MAX_ORDER_ITEM_MODIFIER_GROUPS) return undefined;
-      requiredGroupCounts.set(group.productId, count);
+  for (const product of definedProducts) {
+    let required = 0;
+    for (const groupId of product.modifierGroupIds ?? []) {
+      const group = groupsById.get(groupId)!;
+      if (group.active && group.minimumQuantity > 0) required += 1;
     }
+    if (required > MAX_ORDER_ITEM_MODIFIER_GROUPS) return undefined;
   }
 
   definedCategories.sort(compareMenuEntityOrder);
   definedProducts.sort(compareMenuEntityOrder);
-  definedModifierGroups.sort((left, right) => (
-    compareCodeUnits(left.productId, right.productId)
-    || left.displayOrder - right.displayOrder
-    || compareCodeUnits(left.groupId, right.groupId)
-  ));
+  definedModifierGroups.sort(compareModifierGroupOrder);
   return Object.freeze({
     catalogVersion,
     categories: Object.freeze(definedCategories),
@@ -1100,6 +1136,12 @@ function parseMenuCatalogPayload(record: PlainRecord): MenuCatalogPayloadV1 | un
     modifierGroups: Object.freeze(definedModifierGroups),
     products: Object.freeze(definedProducts),
   });
+}
+
+function compareModifierGroupOrder(left: MenuModifierGroupV1, right: MenuModifierGroupV1): number {
+  return compareCodeUnits(left.productId ?? "", right.productId ?? "")
+    || left.displayOrder - right.displayOrder
+    || compareCodeUnits(left.groupId, right.groupId);
 }
 
 function parseMenuCategoryV1(value: unknown): MenuCategoryV1 | undefined {
@@ -1137,8 +1179,9 @@ function parseMenuProductV1(value: unknown): MenuProductV1 | undefined {
   const record = parseExactRecordWithOptionalKeys(value, [
     "productId", "categoryId", "name", "sku", "active", "displayOrder", "stationId",
     "unit", "unitPriceMinor", "tax",
-  ], ["imagePath", "variants", "fraction"]);
+  ], ["imagePath", "variants", "fraction", "modifierGroupIds"]);
   if (record === undefined) return undefined;
+  const modifierGroupIds = parseMenuProductModifierGroupIdsV1(record);
   const variants = parseMenuProductVariantsV1(record);
   const fraction = Object.hasOwn(record, "fraction") ? parseMenuVariantFractionV1(ownValue(record, "fraction")) : null;
   const productId = parseUuid(ownValue(record, "productId"));
@@ -1168,10 +1211,25 @@ function parseMenuProductV1(value: unknown): MenuProductV1 | undefined {
     || imagePath === undefined
     || variants === undefined
     || fraction === undefined
+    || modifierGroupIds === undefined
   ) return undefined;
   return Object.freeze({
     active, categoryId, displayOrder, fraction, imagePath, name, productId, sku, stationId, tax, unit, unitPriceMinor, variants,
+    // Left out when absent so the payload parser can derive it from the legacy group owner.
+    ...(modifierGroupIds === null ? {} : { modifierGroupIds }),
   });
+}
+
+/** `null` when the key is absent (derive later); otherwise a frozen list of distinct UUIDs. */
+function parseMenuProductModifierGroupIdsV1(record: PlainRecord): readonly string[] | null | undefined {
+  if (!Object.hasOwn(record, "modifierGroupIds")) return null;
+  const raw = parseExactArray(ownValue(record, "modifierGroupIds"), MENU_PRODUCT_MAX_MODIFIER_GROUPS);
+  if (raw === undefined) return undefined;
+  const ids = raw.map(parseUuid);
+  if (ids.some(isUndefined)) return undefined;
+  const defined = ids as string[];
+  if (new Set(defined).size !== defined.length) return undefined;
+  return Object.freeze(defined);
 }
 
 function parseMenuProductVariantsV1(record: PlainRecord): readonly MenuProductVariantV1[] | undefined {
@@ -1294,13 +1352,14 @@ function parseMenuTaxV1(value: unknown): MenuTaxV1 | undefined {
 }
 
 function parseMenuModifierGroupV1(value: unknown): MenuModifierGroupV1 | undefined {
-  const record = parseExactPlainRecord(value, [
-    "groupId", "productId", "name", "active", "displayOrder", "minimumQuantity",
+  const record = parseExactRecordWithOptionalKeys(value, [
+    "groupId", "name", "active", "displayOrder", "minimumQuantity",
     "maximumQuantity", "options",
-  ]);
+  ], ["productId"]);
   if (record === undefined) return undefined;
   const groupId = parseUuid(ownValue(record, "groupId"));
-  const productId = parseUuid(ownValue(record, "productId"));
+  const rawProductId = Object.hasOwn(record, "productId") ? ownValue(record, "productId") : null;
+  const productId = rawProductId === null ? null : parseUuid(rawProductId);
   const name = parseDisplayName(ownValue(record, "name"), 80);
   const active = ownValue(record, "active");
   const displayOrder = parseBoundedInteger(ownValue(record, "displayOrder"), 0, 1_000_000);
