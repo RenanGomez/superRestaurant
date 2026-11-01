@@ -15,6 +15,7 @@ import {
   openOrderAction,
   orderDetailAction,
   orderMenuCatalogAction,
+  tableNamesAction,
   sendToKitchenAction,
   transitionOrderItemAction,
 } from "./actions";
@@ -47,6 +48,7 @@ export default async function OrdersPage() {
       canCheckout={membership.roles.some((role) => FINANCIAL_ROLES.has(role))}
       printHeader={{ restaurantName: membership.restaurantName, branchName: membership.branchName }}
       cancelledAction={cancelledWorkTrayAction}
+      tableNamesAction={tableNamesAction}
       detailActions={{
         addItem: addOrderItemAction,
         cancelItem: cancelOrderItemAction,

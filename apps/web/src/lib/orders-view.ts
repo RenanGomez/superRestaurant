@@ -26,3 +26,10 @@ export function ordersHref(orderId: string | undefined, adding: boolean): string
   if (orderId === undefined) return "/app/orders";
   return `/app/orders?orderId=${encodeURIComponent(orderId)}${adding ? "&addItem=1" : ""}`;
 }
+
+/** Name of a dining table for display; falls back to the generic «Mesa» when the name is unknown. */
+export function tableLabel(tableId: string | null, names: ReadonlyMap<string, string> | undefined): string {
+  if (tableId === null || names === undefined) return "Mesa";
+  const name = names.get(tableId)?.trim();
+  return name === undefined || name === "" ? "Mesa" : name;
+}

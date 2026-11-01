@@ -41,9 +41,11 @@ interface Props {
   readonly printHeader: PrintHeader;
   readonly detailActions: OrderDetailActions;
   readonly cancelledAction: (input: unknown) => Promise<CancelledTrayRequestResult>;
+  /** Read once per page load to name table orders; any failure keeps the generic «Mesa». */
+  readonly tableNamesAction: () => Promise<readonly { readonly tableId: string; readonly name: string }[] | undefined>;
 }
 
-export function OrdersTray({ scope, action, cancelledAction, canCheckout, detailActions, printHeader }: Props) {
+export function OrdersTray({ scope, action, cancelledAction, tableNamesAction, canCheckout, detailActions, printHeader }: Props) {
   const [items, setItems] = useState<readonly BranchOrderWorkItemV1[]>([]);
   const [nextCursor, setNextCursor] = useState<BranchOrderWorkTrayV1["nextCursor"]>(null);
   const [filter, setFilter] = useState<BranchOrderWorkFilter>("all");
@@ -58,6 +60,15 @@ export function OrdersTray({ scope, action, cancelledAction, canCheckout, detail
   const openOrderId = ordersOrderId(searchParams);
   const currentView = ordersView(searchParams);
   const [menuSlot, setMenuSlot] = useState<HTMLElement | null>(null);
+  const [tableNames, setTableNames] = useState<ReadonlyMap<string, string>>();
+  // One read of the floor plan per page load; failure leaves the generic «Mesa».
+  useEffect(() => {
+    let cancelled = false;
+    void tableNamesAction().then((entries) => {
+      if (!cancelled && entries !== undefined) setTableNames(new Map(entries.map((entry) => [entry.tableId, entry.name])));
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
   function navigate(orderId: string | undefined, adding: boolean): void {
     window.history.replaceState(null, "", ordersHref(orderId, adding));
   }
@@ -141,6 +152,7 @@ export function OrdersTray({ scope, action, cancelledAction, canCheckout, detail
       <OrderDetailPanel
         key={openOrderId}
         orderId={openOrderId}
+        tableNames={tableNames}
         adding={adding}
         onAddingChange={(next) => navigate(openOrderId, next)}
         menuSlot={menuSlot}

@@ -10,6 +10,7 @@ import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import type { SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import { halfTicketLines } from "../../../lib/line-halves";
 import { buildCustomerTicket, buildKitchenDocuments, type PrintDocument, type PrintHeader } from "../../../lib/print-documents";
+import { tableLabel } from "../../../lib/orders-view";
 import { PrintPreview } from "../print-preview";
 import { actionLabel, buildAddOrderItemCommand, canAddItems, chunkOrderItemIds, groupItemsByStatus, hasAction, hasItemAction, nextFocusIndex, pendingOrderItemIds, resolvePendingAdd, type OrderItemStatusGroup } from "../../../lib/order-detail";
 import { cancelOrderErrorMessage, cancelOrderResultMessage, cancelOrderWarning, validCancelReason, type CancelOrderRequestResult } from "../../../lib/order-cancellation";
@@ -193,6 +194,8 @@ function nextAttempt(): { readonly eventId: string; readonly idempotencyKey: str
 
 interface Props {
   readonly orderId: string;
+  /** tableId → configured name, read once per page load; absent or incomplete falls back to «Mesa». */
+  readonly tableNames?: ReadonlyMap<string, string> | undefined;
   /** "Agregar producto" is open; owned by the URL (`&addItem=1`), see `orders-view.ts`. */
   readonly adding: boolean;
   readonly onAddingChange: (adding: boolean) => void;
@@ -225,7 +228,7 @@ const errorMessages: Record<string, string> = {
  */
 const UNAVAILABLE_NO_RETRY_MESSAGE = "No se pudo confirmar el resultado. Se recargó la orden; revisa el estado antes de repetir.";
 
-export function OrderDetailPanel({ orderId, adding, onAddingChange, menuSlot, actions, canCheckout, printHeader, onClose, onChanged }: Props) {
+export function OrderDetailPanel({ orderId, tableNames, adding, onAddingChange, menuSlot, actions, canCheckout, printHeader, onClose, onChanged }: Props) {
   // Same device identity Capture's own workspace and the delivery-zones editor use (one stable id
   // per browser, in localStorage) -- never a second, order-specific device id, or the same browser
   // would be audited under two different identities depending on which screen it used.
@@ -279,12 +282,16 @@ export function OrderDetailPanel({ orderId, adding, onAddingChange, menuSlot, ac
         || printDocuments !== undefined || menuOpen || detail === undefined || event.target instanceof HTMLInputElement
         || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement
         || (event.target instanceof HTMLElement && event.target.isContentEditable)) return;
-      const documents = buildKitchenDocuments(detail);
+      const documents = buildKitchenDocuments(detail, knownTableName(detail));
       if (documents.length > 0) { event.preventDefault(); setPrintDocuments(documents); }
     };
     document.addEventListener("keydown", onPrintShortcut);
     return () => document.removeEventListener("keydown", onPrintShortcut);
-  }, [detail, menuOpen, printDocuments]);
+  }, [detail, menuOpen, printDocuments, tableNames]);
+
+  function knownTableName(order: OrderDetailV1): string | undefined {
+    return order.tableId === null ? undefined : tableNames?.get(order.tableId);
+  }
 
   async function load(): Promise<OrderDetailV1 | undefined> {
     // `actions.detail` is a Next.js Server Action: a transport failure (e.g. the server process
@@ -495,11 +502,12 @@ export function OrderDetailPanel({ orderId, adding, onAddingChange, menuSlot, ac
       {orderNotice !== undefined && <p role="status" className="mt-3 rounded-lg border border-border bg-bg p-3 text-sm font-semibold">{orderNotice}</p>}
       {detail === undefined && loadError === undefined && <p className="mt-4 text-sm text-text-muted">Cargando…</p>}
       {detail !== undefined && <>
+        {detail.channel === "table" && <p className="mt-1 text-sm font-semibold">{tableLabel(detail.tableId, tableNames)}</p>}
         <p className="mt-1 text-sm">Total: <strong>{formatMinorUnits(detail.totals.totalMinor, detail.totals.currency)}</strong></p>
         <div className="mt-4 flex flex-wrap gap-2">
           {canAddItems(detail) && <button type="button" className={primaryButton} disabled={busyAction !== undefined || addBusy}
             onClick={openMenu}>Agregar producto</button>}
-          {hasAction(detail, "open") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
+          {hasAction(detail, "open") && !menuOpen && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
             onClick={() => { const attempt = nextAttempt(); void runAction("open", () => actions.open(detail.orderId, detail.version, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt, deviceId)); }}>
             {busyAction === "open" ? "Abriendo…" : actionLabel("open")}
           </button>}
@@ -512,9 +520,9 @@ export function OrderDetailPanel({ orderId, adding, onAddingChange, menuSlot, ac
             onClick={() => setCancelOrderOpen(true)}>
             {busyAction === "cancelOrder" ? "Cancelando…" : actionLabel("cancelOrder")}
           </button>}
-          <button type="button" className={button} disabled={buildKitchenDocuments(detail).length === 0}
-            aria-keyshortcuts="P" onClick={() => setPrintDocuments(buildKitchenDocuments(detail))}>Imprimir comanda</button>
-          <button type="button" className={button} onClick={() => setPrintDocuments([buildCustomerTicket(detail, [], printHeader)])}>Imprimir ticket</button>
+          <button type="button" className={button} disabled={buildKitchenDocuments(detail, knownTableName(detail)).length === 0}
+            aria-keyshortcuts="P" onClick={() => setPrintDocuments(buildKitchenDocuments(detail, knownTableName(detail)))}>Imprimir comanda</button>
+          <button type="button" className={button} onClick={() => setPrintDocuments([buildCustomerTicket(detail, [], printHeader, knownTableName(detail))])}>Imprimir ticket</button>
         </div>
         <div className="mt-4 space-y-4">
           {groups !== undefined && ([...groups.entries()] as readonly [OrderItemStatusGroup, readonly OrderDetailItemV1[]][])

@@ -13,6 +13,7 @@ import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
 import { requestBranchOrderWorkTray, type BranchOrderTrayRequestResult } from "../../../lib/branch-order-work-tray";
 import { BRANCH_PREFERENCE_COOKIE, parseBranchPreference } from "../../../lib/memberships";
+import { getDiningLayout } from "../../../lib/dining-layout";
 import { getMenuCatalog } from "../../../lib/menu-catalog";
 import {
   parseAttemptIds,
@@ -191,6 +192,15 @@ export async function cancelledWorkTrayAction(input: unknown): Promise<Cancelled
     return { error: "invalid", ok: false };
   }
   return requestCancelledWorkTray(context.accessToken, context.apiBaseUrl, context.scope, request.cursor, request.limit);
+}
+
+/** Table names of the selected branch for labeling table orders; `undefined` when unavailable (the UI falls back to «Mesa»). */
+export async function tableNamesAction(): Promise<readonly { readonly tableId: string; readonly name: string }[] | undefined> {
+  const context = await authorizedOrderContext();
+  if (context === undefined) return undefined;
+  const layout = await getDiningLayout(context.accessToken, context.apiBaseUrl, context.scope);
+  if (layout === undefined || layout.scope.restaurantId !== context.scope.restaurantId || layout.scope.branchId !== context.scope.branchId) return undefined;
+  return layout.zones.flatMap((zone) => zone.tables.map((table) => ({ name: table.name, tableId: table.tableId })));
 }
 
 async function authorizedOrderContext(): Promise<{ readonly accessToken: string; readonly apiBaseUrl: string; readonly scope: BranchScope } | undefined> {
