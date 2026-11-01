@@ -47,6 +47,7 @@ import type { CaptureRequestResult } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { captureKitchenResultText, captureKitchenSend, chunkOrderItemIds, type OrderDetailRequestResult, type OrderMutationRequestResult } from "../../../lib/order-detail";
 import { draftLinesFromProjection, splitLostMessage } from "../../../lib/line-halves";
+import { productGroups } from "../../../lib/menu-groups";
 import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
   type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
@@ -477,7 +478,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     }
     setSheetEditLine(line);
     setSheetProduct(product);
-    setSheetGroups(catalog.catalog.modifierGroups.filter((group) => group.productId === product.productId));
+    setSheetGroups(productGroups(catalog.catalog, product.productId));
     setSheetError(undefined);
   }
 
