@@ -116,7 +116,7 @@ Reglas: una ronda de revisión en nivel C, dos en B, revisión doble en A con co
 - [ ] **REVIEW · B** — `orders-tray-table-id` (en `main`, c0a0d69; falta ver «Mesa N» en tarjetas): `tableId` en la bandeja de órdenes para nombrar la mesa en las tarjetas.
 - [ ] **REVIEW · C** — `capture-customer-address-r1` (en `main`, 7994b7b; dirección de prueba resultó fuera de cobertura, revisar zona): elegir cliente en un paso, ver y usar su dirección, agregar/validar dirección sin salir de la captura (desbloquea «Confirmar» en domicilio). Tras integrar `capture-ux-r1`.
 - [ ] **REVIEW · C** — `menu-products-ui-r1` (en `main`, a135a7f; sin verificación en navegador): foto por clic con diálogo, disposición en tres filas con secciones plegadas, duplicar producto, fotos ya usadas, borrador local e indicador de cambios sin publicar. Tras integrar `menu-categories-r1`.
-- [ ] **TODO · A** — `menu-category-appearance`: color pastel e imagen de categoría (contrato, SQL, API, UI). Ver `.claude/packets/menu-model-v2-backlog.md`.
+- [ ] **REVIEW · A** — `menu-category-appearance` (en `main` ec9f104; migración `20261101000100` aplicada en Supabase; sin verificación visual): color pastel e imagen de categoría.
 - [ ] **TODO · A** — `menu-modifier-model-v2`: grupos de modificadores compartidos con asignación múltiple, productos «especialidad» como sabores de mitades, ingredientes bloqueados en vez de removibles.
 - [ ] **TODO · A** — `menu-photo-focus`: posición y zoom de la foto.
 - [ ] **TODO · B** — `menu-photo-copy`: copiar una foto a otro producto/opción desde el servidor (la restricción `image_path` exige el id de la propia entidad); habilita «fotos ya usadas» entre productos y copiar foto al duplicar.
