@@ -58,8 +58,8 @@ Notas del lanzador común (`.harness/bin/agent.ps1`):
   `.harness/runs/<id>/log.txt` (ignorado por git). Alias de modelos en `.harness/config.json`.
 - `-Engine gemini` requiere la app Antigravity abierta y tarda 1 a 2 minutos; cada run aparece como conversación
   «harness <id>» en Antigravity. Probado en este repo el 2026-10-23: funciona.
-- `-Engine codex` requiere `codex login` vigente. Probado el 2026-10-23: falla sólo por sesión cerrada; pendiente
-  repetir la prueba con una tarea trivial de sólo lectura cuando la sesión esté abierta.
+- `-Engine codex` requiere `codex login` vigente. Probado el 2026-11-01 con `.agents/briefs/codex-smoke.md` (sólo
+  lectura, `-Effort low`): funciona, 26 s, reporte correcto en `.agents/reports/codex-smoke.md`.
 - Sin `-Write` el sub-agente es de sólo lectura. Lanzar en segundo plano; tareas independientes en paralelo (§4).
 - Si quien orquesta es Gemini en Antigravity, puede usar `invoke_subagent` en lugar de `-Engine gemini`; si es
   Claude Code, usa su herramienta Agent para los sub-agentes Claude.
