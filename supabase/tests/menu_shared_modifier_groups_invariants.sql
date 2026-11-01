@@ -9,7 +9,9 @@
 --      not list its own group;
 --   5. the legacy-owner trigger assigns a group inserted with a product_id, and product_id may be null;
 --   6. the half-and-half pricing rules are exercised by catalog_halves_product_level_invariants.sql,
---      which inserts groups with the legacy owner and therefore runs through the assignment table.
+--      which inserts groups with the legacy owner and therefore runs through the assignment table, and
+--      by its shared-group scenarios (null owner, two products);
+--   7. backfill simulation: unassigned legacy groups get their owner, counts match, repeating is a no-op.
 begin;
 do $menu_shared_modifier_groups_tests$
 declare
@@ -100,7 +102,7 @@ begin
   -- 3. legacy shape saves; replay with the normalized shape matches
   legacy := pg_catalog.jsonb_build_object(
     'categories',payload->'categories',
-    'products',pg_catalog.jsonb_build_array(payload#>'{products,0}' - 'modifierGroupIds',payload#>'{products,1}' - 'modifierGroupIds'),
+    'products',pg_catalog.jsonb_build_array((payload#>'{products,0}')::jsonb - 'modifierGroupIds'::text,(payload#>'{products,1}')::jsonb - 'modifierGroupIds'::text),
     'modifierGroups',pg_catalog.jsonb_build_array(
       (payload#>'{modifierGroups,0}') || pg_catalog.jsonb_build_object('productId',p2::text),
       payload#>'{modifierGroups,1}')
@@ -195,6 +197,78 @@ begin
       raise exception 'SHARED_GROUPS_CROSS_SCOPE_ACCEPTED';
     exception when foreign_key_violation then null;
     end;
+  end;
+
+  -- 6. backfill simulation: legacy groups that exist WITHOUT an assignment (the state before the migration)
+  -- get exactly their original owner from the migration's backfill statement, and repeating it is a no-op.
+  declare
+    sim_restaurant uuid := gen_random_uuid();
+    sim_catalog uuid := gen_random_uuid();
+    sim_category uuid := gen_random_uuid();
+    sim_p1 uuid := gen_random_uuid();
+    sim_p2 uuid := gen_random_uuid();
+    sim_g1 uuid := gen_random_uuid();
+    sim_g2 uuid := gen_random_uuid();
+    sim_g3 uuid := gen_random_uuid();
+    sim_shared uuid := gen_random_uuid();
+    legacy_before bigint;
+    assigned_before bigint;
+    assigned_after bigint;
+    assigned_again bigint;
+    unassigned_after bigint;
+  begin
+    insert into app.restaurants(id,name,time_zone) values(sim_restaurant,'rollback-only backfill simulation','America/Hermosillo');
+    insert into app.menu_catalogs(id,restaurant_id,version,currency,published_by) values(sim_catalog,sim_restaurant,1,'MXN',actor);
+    insert into app.menu_categories(restaurant_id,catalog_id,id,name,active,display_order)
+      values(sim_restaurant,sim_catalog,sim_category,'Comida',true,0);
+    insert into app.menu_products(restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor)
+      values(sim_restaurant,sim_catalog,sim_p1,sim_category,'Uno',null,true,0,'kitchen','piece',100),
+            (sim_restaurant,sim_catalog,sim_p2,sim_category,'Dos',null,true,1,'kitchen','piece',100);
+    -- Disable the compatibility trigger only for this block so the groups start unassigned.
+    alter table app.menu_modifier_groups disable trigger menu_modifier_groups_assign_legacy_owner;
+    insert into app.menu_modifier_groups(restaurant_id,catalog_id,id,product_id,name,active,display_order,minimum_quantity,maximum_quantity)
+      values(sim_restaurant,sim_catalog,sim_g1,sim_p1,'A',true,0,0,1),
+            (sim_restaurant,sim_catalog,sim_g2,sim_p1,'B',true,1,0,1),
+            (sim_restaurant,sim_catalog,sim_g3,sim_p2,'C',true,0,0,1),
+            (sim_restaurant,sim_catalog,sim_shared,null,'Compartido',true,2,0,1);
+    alter table app.menu_modifier_groups enable trigger menu_modifier_groups_assign_legacy_owner;
+
+    select pg_catalog.count(*) into legacy_before from app.menu_modifier_groups g
+    where g.restaurant_id=sim_restaurant and g.product_id is not null;
+    select pg_catalog.count(*) into assigned_before from app.menu_product_modifier_groups a where a.restaurant_id=sim_restaurant;
+    if legacy_before<>3 or assigned_before<>0 then raise exception 'SHARED_GROUPS_BACKFILL_SETUP_%_%',legacy_before,assigned_before; end if;
+
+    -- The migration's backfill statement, scoped to the simulated restaurant.
+    insert into app.menu_product_modifier_groups (restaurant_id, catalog_id, product_id, group_id, display_order)
+    select modifier_group.restaurant_id, modifier_group.catalog_id, modifier_group.product_id,
+      modifier_group.id, modifier_group.display_order
+    from app.menu_modifier_groups as modifier_group
+    where modifier_group.product_id is not null and modifier_group.restaurant_id=sim_restaurant
+    on conflict (restaurant_id, catalog_id, product_id, group_id) do nothing;
+    select pg_catalog.count(*) into assigned_after from app.menu_product_modifier_groups a where a.restaurant_id=sim_restaurant;
+    select pg_catalog.count(*) into unassigned_after from app.menu_modifier_groups g
+    where g.restaurant_id=sim_restaurant and g.product_id is not null and not exists (
+      select 1 from app.menu_product_modifier_groups a
+      where a.restaurant_id=g.restaurant_id and a.catalog_id=g.catalog_id and a.product_id=g.product_id and a.group_id=g.id);
+    if assigned_after<>legacy_before or unassigned_after<>0 then
+      raise exception 'SHARED_GROUPS_BACKFILL_COUNT_%_%_%',legacy_before,assigned_after,unassigned_after;
+    end if;
+    -- Display order is preserved and the shared group stays unassigned.
+    if (select pg_catalog.count(*) from app.menu_product_modifier_groups a
+        join app.menu_modifier_groups g on g.restaurant_id=a.restaurant_id and g.catalog_id=a.catalog_id and g.id=a.group_id
+        where a.restaurant_id=sim_restaurant and a.display_order<>g.display_order)<>0
+      or exists (select 1 from app.menu_product_modifier_groups a where a.restaurant_id=sim_restaurant and a.group_id=sim_shared)
+    then raise exception 'SHARED_GROUPS_BACKFILL_SHAPE'; end if;
+
+    -- Idempotent: repeating the statement changes nothing.
+    insert into app.menu_product_modifier_groups (restaurant_id, catalog_id, product_id, group_id, display_order)
+    select modifier_group.restaurant_id, modifier_group.catalog_id, modifier_group.product_id,
+      modifier_group.id, modifier_group.display_order
+    from app.menu_modifier_groups as modifier_group
+    where modifier_group.product_id is not null and modifier_group.restaurant_id=sim_restaurant
+    on conflict (restaurant_id, catalog_id, product_id, group_id) do nothing;
+    select pg_catalog.count(*) into assigned_again from app.menu_product_modifier_groups a where a.restaurant_id=sim_restaurant;
+    if assigned_again<>assigned_after then raise exception 'SHARED_GROUPS_BACKFILL_NOT_IDEMPOTENT'; end if;
   end;
 end
 $menu_shared_modifier_groups_tests$;
