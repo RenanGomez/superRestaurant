@@ -18,7 +18,7 @@ import { CancelledTray } from "./cancelled-tray";
 import { OrderDetailPanel, type OrderDetailActions } from "./order-detail-panel";
 import type { CancelledTrayRequestResult } from "../../../lib/order-cancellation";
 import type { PrintHeader } from "../../../lib/print-documents";
-import { ordersHref, ordersOrderId, ordersView } from "../../../lib/orders-view";
+import { ordersHref, ordersOrderId, ordersView, tableLabel } from "../../../lib/orders-view";
 import { uiButton, uiChip } from "../../../lib/ui-classes";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -137,7 +137,7 @@ export function OrdersTray({ scope, action, cancelledAction, tableNamesAction, c
         </div>
         : items.length === 0
           ? <p className="mt-4 text-sm text-text-muted">No hay órdenes activas para este filtro.</p>
-          : <ul className={`mt-4 grid gap-3 ${open ? "" : "sm:grid-cols-2 xl:grid-cols-3"}`}>{items.map((order) => <OrderCard key={order.orderId} order={order} canCheckout={canCheckout}
+          : <ul className={`mt-4 grid gap-3 ${open ? "" : "sm:grid-cols-2 xl:grid-cols-3"}`}>{items.map((order) => <OrderCard key={order.orderId} order={order} canCheckout={canCheckout} tableNames={tableNames}
             selected={order.orderId === openOrderId} compact={open} onOpenDetail={() => navigate(order.orderId, false)} />)}</ul>}
     {nextCursor !== null && <div className="mt-4">
       <button type="button" className={button} disabled={busy}
@@ -169,8 +169,9 @@ export function OrdersTray({ scope, action, cancelledAction, tableNamesAction, c
   </div>;
 }
 
-function OrderCard({ order, canCheckout, selected, compact, onOpenDetail }: {
+function OrderCard({ order, canCheckout, tableNames, selected, compact, onOpenDetail }: {
   readonly order: BranchOrderWorkItemV1;
+  readonly tableNames: ReadonlyMap<string, string> | undefined;
   readonly canCheckout: boolean;
   readonly selected: boolean;
   readonly compact: boolean;
@@ -179,7 +180,7 @@ function OrderCard({ order, canCheckout, selected, compact, onOpenDetail }: {
   return <li className={`rounded-xl ${selected ? "border-2 border-selected bg-surface" : "border border-border bg-bg"} ${compact ? "p-3" : "p-4"}`} aria-current={selected ? "true" : undefined}>
     <div className="flex items-start justify-between gap-2">
       <div>
-        <strong className="block">{channelLabel(order.channel)}</strong>
+        <strong className="block">{order.channel === "table" ? tableLabel(order.tableId, tableNames) : channelLabel(order.channel)}</strong>
         <span className="block text-xs text-text-muted">{formatOrderWorkTime(order.createdAt, order.timeZone)} · {preparationLabel(order.preparation)}</span>
       </div>
       <span className="text-right font-semibold">{formatMinorUnits(order.totals.totalMinor, order.totals.currency)}</span>

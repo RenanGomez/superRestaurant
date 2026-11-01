@@ -120,3 +120,17 @@ expect(parseBranchOrderWorkItemV1({ ...deliveryItem, status: "paid", deliverySta
   "item accepts a prepaid (paid) delivery Order");
 expect(parseBranchOrderWorkItemV1({ ...deliveryItem, status: "cancelled" }) === undefined,
   "item still rejects other statuses");
+
+// orders-tray-table-id: additive `tableId`, defaulting to null and only valid on a table Order.
+const tableUuid = "c3a1e2d4-5b6f-4a78-9c0d-1e2f3a4b5c6d";
+expect(parseBranchOrderWorkItemV1(deliveryItem)?.tableId === null, "an item without tableId defaults it to null");
+expect(parseBranchOrderWorkItemV1({ ...counterItemWithoutSnapshot, channel: "table", tableId: tableUuid })?.tableId === tableUuid,
+  "a table item keeps its tableId");
+expect(parseBranchOrderWorkItemV1({ ...counterItemWithoutSnapshot, channel: "table", tableId: null })?.tableId === null,
+  "a table item accepts a null tableId");
+expect(parseBranchOrderWorkItemV1({ ...counterItemWithoutSnapshot, tableId: tableUuid }) === undefined,
+  "a non-table item rejects a tableId");
+for (const invalid of ["table-1", "", 1, false]) {
+  expect(parseBranchOrderWorkItemV1({ ...counterItemWithoutSnapshot, channel: "table", tableId: invalid }) === undefined,
+    "item rejects a malformed tableId (fail closed)");
+}

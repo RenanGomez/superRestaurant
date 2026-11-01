@@ -69,6 +69,8 @@ export interface BranchOrderWorkItemV1 {
   readonly hasNotes: boolean;
   /** Additive: `null` when the Order has no delivery row (also the default when a producer omits the key). */
   readonly deliveryState: BranchOrderWorkDeliveryStateV1 | null;
+  /** Additive: the Order's table, `null` unless the channel is `table` (also the default when a producer omits the key). */
+  readonly tableId: string | null;
 }
 
 export interface BranchOrderWorkTrayRequestV1 {
@@ -115,7 +117,7 @@ export function parseBranchOrderWorkItemV1(value: unknown): BranchOrderWorkItemV
   const record = exactRecord(value, [
     "orderId", "channel", "fulfillmentChannel", "status", "preparation", "createdAt", "updatedAt", "timeZone",
     "customerLabel", "addressLabel", "totals", "paymentIntent", "lineCount", "hasNotes",
-  ], ["deliveryState"]);
+  ], ["deliveryState", "tableId"]);
   if (record === undefined) return undefined;
   const orderId = uuid(own(record, "orderId"));
   const channel = member(own(record, "channel"), BRANCH_ORDER_WORK_CHANNELS);
@@ -133,11 +135,15 @@ export function parseBranchOrderWorkItemV1(value: unknown): BranchOrderWorkItemV
   const lineCount = integer(own(record, "lineCount"), 0, 1000);
   const hasNotes = own(record, "hasNotes");
   const deliveryState = nullableMember(own(record, "deliveryState") ?? null, BRANCH_ORDER_WORK_DELIVERY_STATES);
+  const rawTableId = own(record, "tableId") ?? null;
+  const tableId = rawTableId === null ? null : uuid(rawTableId);
   if (orderId === undefined || channel === undefined || fulfillmentChannel === undefined || status === undefined
     || preparation === undefined || createdAt === undefined || updatedAt === undefined || timeZone === undefined
     || customerLabel === undefined || addressLabel === undefined || totals === undefined
     || paymentIntent === undefined || lineCount === undefined || typeof hasNotes !== "boolean"
-    || deliveryState === undefined) return undefined;
+    || deliveryState === undefined || tableId === undefined) return undefined;
+  // A table id only belongs to a table Order; its absence is tolerated (older producers omit the key).
+  if (tableId !== null && channel !== "table") return undefined;
   // `fulfillmentChannel` is null whenever the Order has no fulfillment snapshot (e.g. a
   // counter/takeout/delivery Order created outside Capture); only a *present* value must agree
   // with the Order's own channel, never the absence of one.
@@ -145,7 +151,7 @@ export function parseBranchOrderWorkItemV1(value: unknown): BranchOrderWorkItemV
   if (channel === "table" && fulfillmentChannel !== null && fulfillmentChannel !== "dine_in") return undefined;
   return Object.freeze({
     addressLabel, channel, createdAt, customerLabel, deliveryState, fulfillmentChannel, hasNotes, lineCount,
-    orderId, paymentIntent, preparation, status, timeZone, totals, updatedAt,
+    orderId, paymentIntent, preparation, status, tableId, timeZone, totals, updatedAt,
   });
 }
 

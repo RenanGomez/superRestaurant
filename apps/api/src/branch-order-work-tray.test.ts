@@ -19,7 +19,8 @@ if (scope === undefined) throw new Error("Invalid test scope.");
 const actorId = "aa9a25b7-3c6a-4c0e-8f2e-9e4c5a6b7c8d";
 const orderId = "2ee5f057-7971-468d-b197-f946911743eb";
 const capturedId = "72371a5f-2056-448d-9ddb-14ab6664a4e8";
-const customerId = "5b25f2b9-6c1e-4d3d-9c3d-1f2a3b4c5d6e";
+const tableId = "c3a1e2d4-5b6f-4a78-9c0d-1e2f3a4b5c6d";
+const customerId ="5b25f2b9-6c1e-4d3d-9c3d-1f2a3b4c5d6e";
 
 const audit = { eventId: "event-1", idempotencyKey: "idem-1", actorId, deviceId: "device-1", occurredAt: "2026-09-26T12:00:00.000Z" };
 
@@ -55,7 +56,7 @@ function deliveryOrderWithTip() {
 
 function tableOrder() {
   const created = createOrder({
-    orderId, restaurantId, branchId, channel: "table", tableId: "table-1", currency: "MXN", timeZone: "America/Hermosillo",
+    orderId, restaurantId, branchId, channel: "table", tableId, currency: "MXN", timeZone: "America/Hermosillo",
   }, audit);
   return created.order;
 }
@@ -254,6 +255,7 @@ test("service projects a table order without a fulfillment snapshot as dine_in w
   const result = await service(envelope).list({ actorId } as never, { channel: null, cursor: null, limit: 25, schemaVersion: 1, scope });
   const item = result.items[0];
   assert.equal(item?.fulfillmentChannel, "dine_in");
+  assert.equal(item?.tableId, tableId);
   assert.equal(item?.customerLabel, null);
   assert.equal(item?.addressLabel, null);
   assert.equal(item?.paymentIntent, null);
