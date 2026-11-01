@@ -186,7 +186,7 @@ function validDomainCatalog(command: SaveMenuCatalogCommandV1): boolean {
           name: option.name,
           unitPrice: new Money(option.unitPriceMinor, command.currency),
         })),
-        productId: group.productId,
+        productId: group.productId ?? null,
         restaurantId: command.scope.restaurantId,
       })),
       products: command.products.map((product) => ({
@@ -195,9 +195,11 @@ function validDomainCatalog(command: SaveMenuCatalogCommandV1): boolean {
         categoryId: product.categoryId,
         displayOrder: product.displayOrder,
         id: product.productId,
-        modifierGroupIds: command.modifierGroups
-          .filter(({ productId }) => productId === product.productId)
-          .map(({ groupId }) => groupId),
+        modifierGroupIds: product.modifierGroupIds !== undefined
+          ? [...product.modifierGroupIds]
+          : command.modifierGroups
+            .filter(({ productId }) => productId === product.productId)
+            .map(({ groupId }) => groupId),
         name: product.name,
         restaurantId: command.scope.restaurantId,
         ...(product.sku === null ? {} : { sku: product.sku }),

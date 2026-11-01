@@ -47,7 +47,7 @@ export function toDomainMenuCatalog(catalog: MenuCatalogV1, restaurantId: string
         name: option.name,
         unitPrice: new Money(option.unitPriceMinor, catalog.currency),
       })),
-      productId: group.productId,
+      productId: group.productId ?? null,
       restaurantId,
     })),
     products: catalog.products.map((product) => ({
@@ -56,9 +56,12 @@ export function toDomainMenuCatalog(catalog: MenuCatalogV1, restaurantId: string
       categoryId: product.categoryId,
       displayOrder: product.displayOrder,
       id: product.productId,
-      modifierGroupIds: catalog.modifierGroups
-        .filter((group) => group.productId === product.productId)
-        .map((group) => group.groupId),
+      // The parser always normalizes the list; the legacy owner is the fallback for hand-built values.
+      modifierGroupIds: product.modifierGroupIds !== undefined
+        ? [...product.modifierGroupIds]
+        : catalog.modifierGroups
+          .filter((group) => group.productId === product.productId)
+          .map((group) => group.groupId),
       name: product.name,
       restaurantId,
       ...(product.sku === null ? {} : { sku: product.sku }),
