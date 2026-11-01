@@ -325,7 +325,7 @@ const addressHints = {
   countryCode: "Código ISO de dos letras, por ejemplo MX.",
   postalCode: "Código postal; se usa para validar la zona de entrega.",
 } as const satisfies Record<keyof typeof addressLabels, string>;
-function AddressForm({ item, branchName, feedback, validating = false, disabled, onSave, onValidate, onCancel, onEdit }: {
+export function AddressForm({ item, branchName, feedback, validating = false, disabled, onSave, onValidate, onCancel, onEdit }: {
   readonly item?: CustomerDirectoryDetailAddressV1; readonly disabled: boolean;
   readonly branchName?: string; readonly feedback?: { message: string; error: boolean } | undefined; readonly validating?: boolean;
   readonly onSave: (fields: CustomerAddressFieldsV1) => void; readonly onValidate?: () => void; readonly onCancel?: () => void;
