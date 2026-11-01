@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent, type ReactNode } from "react";
 
 import { dropIndicatorSide, hoverIndexAt, parseReorderIndex, reorderListSelector, tentativeOrder, type RowBounds } from "../../../lib/menu-reorder";
 
@@ -98,6 +98,8 @@ interface DragReorderListProps<T> {
   readonly disabled: boolean;
   readonly getKey: (item: T) => string;
   readonly items: readonly T[];
+  /** Name of an item, used in the handle's accessible label («Arrastrar Pizzas para reordenar»). */
+  readonly itemLabel: (item: T) => string;
   readonly label: string;
   readonly onMove: (fromIndex: number, toIndex: number) => void;
   /** `handle` is null when the list cannot be reordered (read-only or fewer than two items). */
@@ -111,7 +113,7 @@ interface DragReorderListProps<T> {
  * The handle also reorders with ArrowUp/ArrowDown. Rows keep their DOM position (the dragged one just leaves the flow)
  * so pointer capture is never lost.
  */
-export function DragReorderList<T>({ className, disabled, getKey, items, label, onMove, renderRow }: DragReorderListProps<T>): ReactNode {
+export function DragReorderList<T>({ className, disabled, getKey, itemLabel, items, label, onMove, renderRow }: DragReorderListProps<T>): ReactNode {
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const wrappers = useRef(new Map<string, HTMLDivElement>());
@@ -120,19 +122,24 @@ export function DragReorderList<T>({ className, disabled, getKey, items, label, 
   const stopListeners = useRef<(() => void) | null>(null);
   const reorderable = !disabled && items.length >= 2;
 
-  const cleanup = (): void => {
+  /** Frees listeners, pointer capture and the body mark; touches no React state, so it is safe on unmount. */
+  const release = useCallback((): void => {
     stopListeners.current?.();
     stopListeners.current = null;
     const held = captured.current;
     captured.current = null;
-    if (held?.element.hasPointerCapture(held.pointerId) === true) held.element.releasePointerCapture(held.pointerId);
+    if (held?.element.isConnected === true && held.element.hasPointerCapture(held.pointerId)) held.element.releasePointerCapture(held.pointerId);
     dragRef.current = null;
     document.body.removeAttribute("data-reorder-dragging");
+  }, []);
+  const cleanup = (): void => {
+    release();
     setDrag(null);
   };
-  useEffect(() => () => { stopListeners.current?.(); document.body.removeAttribute("data-reorder-dragging"); }, []);
+  useEffect(() => release, [release]);
 
   const begin = (event: PointerEvent<HTMLSpanElement>, index: number): void => {
+    if (dragRef.current !== null) return;
     if (event.button !== 0 && event.pointerType === "mouse") return;
     const source = items[index];
     const wrapper = source === undefined ? undefined : wrappers.current.get(getKey(source));
@@ -185,8 +192,9 @@ export function DragReorderList<T>({ className, disabled, getKey, items, label, 
     if (!reorderable) return null;
     const key = getKey(item);
     const dragging = drag?.from === index;
+    const name = itemLabel(item).trim();
     return (
-      <span role="button" tabIndex={0} aria-label="Arrastrar para reordenar" title="Arrastrar para reordenar (o usa las flechas arriba y abajo)"
+      <span role="button" tabIndex={0} aria-label={`Arrastrar ${name === "" ? "elemento" : name} para reordenar`} title="Arrastrar para reordenar (o usa las flechas arriba y abajo)"
         data-reorder-handle={key}
         onPointerDown={(event) => begin(event, index)} onPointerMove={move} onPointerUp={finish} onPointerCancel={cleanup}
         onKeyDown={(event) => keyMove(event, index, key)}

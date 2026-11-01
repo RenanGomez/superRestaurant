@@ -23,6 +23,9 @@ import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, publishDi
 import { editorProductFraction, legacyFractionNotice, migrateLegacyFraction } from "../../../lib/menu-fraction";
 import { variantValidationError } from "../../../lib/menu-variants";
 import { reorder, reorderSubset } from "../../../lib/menu-reorder";
+import { duplicateProduct } from "../../../lib/menu-duplicate";
+import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys, type LocalMenuDraft } from "../../../lib/menu-draft-storage";
+import { collectUsedImagePaths, retainImagePaths } from "../../../lib/menu-used-images";
 import { DragReorderList, ReorderButtons, ReorderHandle, reorderRowProps } from "./reorder-controls";
 
 import { saveMenuCatalogAction, uploadMenuImageAction } from "./actions";
@@ -35,8 +38,10 @@ interface Draft {
   readonly products: readonly MenuProductV1[];
 }
 
-export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
+export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, supabaseUrl }: {
+  readonly branchId: string;
   readonly canManage: boolean;
+  readonly restaurantId: string;
   readonly state: MenuCatalogStateV1;
   readonly supabaseUrl: string;
 }): ReactNode {
@@ -62,6 +67,78 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
   const onUploadPendingChange = (pending: boolean): void => setPendingUploads((current) => current + (pending ? 1 : -1));
   const expectedVersion = state.catalog?.version ?? 0;
   const draft = useMemo(() => JSON.stringify({ categories, currency, expectedVersion, modifierGroups: groups, products: savedProducts } satisfies Draft), [categories, currency, expectedVersion, groups, savedProducts]);
+
+  // Local draft: edits are kept in this browser (never published automatically) and offered back after a reload.
+  const storageKey = menuDraftKey(restaurantId, branchId, expectedVersion);
+  const snapshot = useMemo(() => menuDraftSnapshot({ categories, groups, products }), [categories, groups, products]);
+  const [baseline, setBaseline] = useState(snapshot);
+  const dirty = snapshot !== baseline;
+  const [recovery, setRecovery] = useState<LocalMenuDraft | null>(null);
+  const [storageReady, setStorageReady] = useState(false);
+  const [storageFailed, setStorageFailed] = useState(false);
+  const latest = useRef({ baseline, snapshot });
+  const knownVersion = useRef<number | null>(null);
+  useEffect(() => { latest.current = { baseline, snapshot }; }, [baseline, snapshot]);
+  useEffect(() => {
+    const published = knownVersion.current !== null && knownVersion.current !== expectedVersion;
+    knownVersion.current = expectedVersion;
+    try {
+      for (const key of staleMenuDraftKeys(Object.keys(window.localStorage), restaurantId, branchId, expectedVersion)) window.localStorage.removeItem(key);
+      const stored = published ? null : parseMenuDraft(window.localStorage.getItem(storageKey), expectedVersion);
+      if (stored !== null && menuDraftSnapshot(stored) !== latest.current.baseline) setRecovery(stored);
+      else if (stored !== null) window.localStorage.removeItem(storageKey);
+    } catch { setStorageFailed(true); }
+    // A new published version makes the current edits the new baseline.
+    if (published) setBaseline(latest.current.snapshot);
+    setStorageReady(true);
+  }, [branchId, expectedVersion, restaurantId, storageKey]);
+  useEffect(() => {
+    if (!storageReady || recovery !== null || !canManage) return;
+    const timer = window.setTimeout(() => {
+      try {
+        if (snapshot === baseline) window.localStorage.removeItem(storageKey);
+        else window.localStorage.setItem(storageKey, serializeMenuDraft({ categories, expectedVersion, groups, products }));
+        setStorageFailed(false);
+      } catch { setStorageFailed(true); }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [baseline, canManage, categories, expectedVersion, groups, products, recovery, snapshot, storageKey, storageReady]);
+  const recoverDraft = (): void => {
+    if (recovery === null) return;
+    setCategories(recovery.categories);
+    setProducts(recovery.products);
+    setGroups(recovery.groups);
+    setRecovery(null);
+  };
+  const discardRecovery = (): void => {
+    try { window.localStorage.removeItem(storageKey); } catch { setStorageFailed(true); }
+    setRecovery(null);
+  };
+
+  // Photos in use now plus the ones removed during this session, so a mistaken «Quitar» can be undone.
+  const currentImagePaths = useMemo(() => collectUsedImagePaths(products, groups), [products, groups]);
+  const [retainedImagePaths, setRetainedImagePaths] = useState<readonly string[]>([]);
+  useEffect(() => { setRetainedImagePaths((previous) => retainImagePaths(previous, currentImagePaths)); }, [currentImagePaths]);
+  const usedImagePaths = useMemo(() => retainImagePaths(retainedImagePaths, currentImagePaths), [retainedImagePaths, currentImagePaths]);
+
+  const focusAfterCopy = useRef<string | null>(null);
+  useEffect(() => {
+    const productId = focusAfterCopy.current;
+    if (productId === null) return;
+    const card = document.querySelector<HTMLElement>(`[data-product-id="${CSS.escape(productId)}"]`);
+    if (card === null) return;
+    focusAfterCopy.current = null;
+    card.scrollIntoView({ block: "center" });
+    card.querySelector<HTMLInputElement>("input[type=text]")?.focus({ preventScroll: true });
+  }, [products]);
+  const copyProduct = (productId: string): void => {
+    const source = products.find((entry) => entry.productId === productId);
+    if (source === undefined) return;
+    const copy = duplicateProduct(source, groups, () => crypto.randomUUID(), nextDisplayOrder(products.filter((entry) => entry.categoryId === source.categoryId)));
+    focusAfterCopy.current = copy.product.productId;
+    setProducts((current) => [...current, copy.product]);
+    setGroups((current) => [...current, ...copy.groups]);
+  };
 
   const addCategory = (): void => {
     setCategories((current) => [...current, {
@@ -145,12 +222,26 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
           </p>
         </div>
         {canManage ? (
-          <PublishButton pendingUploads={pendingUploads} variantError={variantError} />
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <p role="status" className={`text-[12px] ${dirty ? "font-semibold text-accent-hover" : "text-text-muted"}`}>
+              {dirty ? (storageFailed ? "Cambios sin publicar · no se pudieron guardar en este navegador" : "Cambios sin publicar · guardados localmente") : "Todo publicado"}
+            </p>
+            <PublishButton dirty={dirty} pendingUploads={pendingUploads} variantError={variantError} />
+          </div>
         ) : (
           <p className="rounded-lg bg-bg px-3 py-2 text-[12px] text-text-muted">Vista de solo lectura</p>
         )}
       </section>
       {variantError !== null && <p role="alert" className="text-sm text-error">{variantError}</p>}
+      {recovery !== null && canManage && (
+        <section role="status" aria-label="Cambios sin publicar" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-accent bg-accent-soft p-4">
+          <p className="min-w-0 text-[13px]">Hay cambios sin publicar de una sesión anterior guardados en este navegador. Aún no se han publicado.</p>
+          <div className="flex gap-2">
+            <button type="button" onClick={recoverDraft} className="min-h-11 rounded-lg bg-accent px-4 py-2 text-[13px] font-semibold text-white hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Recuperar cambios sin publicar</button>
+            <button type="button" onClick={discardRecovery} className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-accent">Descartar</button>
+          </div>
+        </section>
+      )}
 
       {removal !== null && <RemovalDialog removal={removal} onCancel={() => setRemoval(null)} onConfirm={confirmRemoval} />}
 
@@ -159,7 +250,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
           {canManage && <AddButton label="Agregar categoría" onClick={addCategory} />}
         </SectionHeader>
         {categories.length === 0 ? <EmptyText text="Agrega una categoría para comenzar el menú." /> : (
-          <DragReorderList className="mt-4 flex flex-col gap-3" disabled={!canManage} getKey={(category) => category.categoryId} items={categories} label="Categorías" onMove={(from, to) => setCategories((current) => reorder(current, from, to))}
+          <DragReorderList className="mt-4 flex flex-col gap-3" disabled={!canManage} getKey={(category) => category.categoryId} items={categories} itemLabel={(category) => category.name} label="Categorías" onMove={(from, to) => setCategories((current) => reorder(current, from, to))}
             renderRow={(category, _index, handle) => (
               <article className="flex min-w-0 items-center gap-3 rounded-xl border border-border bg-bg/50 p-3">
                 {handle}
@@ -183,10 +274,18 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
           {canManage && <AddButton disabled={categories.length === 0} label="Agregar producto" onClick={addProduct} />}
         </SectionHeader>
         {products.length === 0 ? <EmptyText text="No hay productos en este borrador." /> : (
-          <div className="mt-4 flex flex-col gap-4">
-            {products.map((product) => (
-              <ProductEditor usedStations={products.map((entry) => entry.stationId)} siblingCount={products.filter((entry) => entry.categoryId === product.categoryId).length} siblingIndex={products.filter((entry) => entry.categoryId === product.categoryId).findIndex((entry) => entry.productId === product.productId)} onMoveProduct={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.categoryId === product.categoryId, from, to))} variantInvalid={variantIssue?.productId === product.productId}
-                key={product.productId}
+          <div className="mt-4 flex flex-col gap-5">
+            {categories.map((category) => {
+              const inCategory = products.filter((entry) => entry.categoryId === category.categoryId);
+              if (inCategory.length === 0) return null;
+              return (
+                <div key={category.categoryId} className="flex min-w-0 flex-col gap-2">
+                  <h3 className="font-heading text-[13px] font-semibold text-text-muted">{category.name.trim() === "" ? "Categoría sin nombre" : category.name}</h3>
+                  <DragReorderList className="flex flex-col gap-4" disabled={!canManage} getKey={(entry) => entry.productId} items={inCategory} itemLabel={(entry) => entry.name}
+                    label={`Productos de ${category.name}`}
+                    onMove={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.categoryId === category.categoryId, from, to))}
+                    renderRow={(product, _index, handle) => (
+              <ProductEditor handle={handle} usedStations={products.map((entry) => entry.stationId)} usedImagePaths={usedImagePaths} variantInvalid={variantIssue?.productId === product.productId}
                 canManage={canManage}
                 categories={categories}
                 currency={currency}
@@ -195,6 +294,7 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
                 supabaseUrl={supabaseUrl}
                 onAddGroup={() => addGroup(product.productId)}
                 onAddOption={addOption}
+                onDuplicate={() => copyProduct(product.productId)}
                 onGroupsChange={setGroups}
                 onProductChange={(changed) => setProducts((current) => current.map((entry) => entry.productId === changed.productId ? changed : entry))}
                 onProductImageChange={(imagePath) => setProducts((current) => current.map((entry) => entry.productId === product.productId ? { ...entry, imagePath } : entry))}
@@ -202,7 +302,10 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
                 onRemove={requestRemoval}
                 onUploadPendingChange={onUploadPendingChange}
               />
-            ))}
+                    )} />
+                </div>
+              );
+            })}
           </div>
         )}
       </section>
@@ -232,20 +335,37 @@ function RemovalDialog({ removal, onCancel, onConfirm }: { readonly removal: Rem
   );
 }
 
-function PublishButton({ pendingUploads, variantError }: { readonly pendingUploads: number; readonly variantError: string | null }): ReactNode {
+function PublishButton({ dirty, pendingUploads, variantError }: { readonly dirty: boolean; readonly pendingUploads: number; readonly variantError: string | null }): ReactNode {
   const { pending: saving } = useFormStatus();
   const disabledReason = variantError ?? publishDisabledReason(pendingUploads, saving);
-  return <button type="submit" disabled={disabledReason !== null}
-    className="min-h-11 rounded-xl bg-accent px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-60">
-    {disabledReason ?? "Publicar nueva versión"}
-  </button>;
+  return <span className="relative inline-flex">
+    {/* Pulsing ring only while there are unpublished changes; it does not animate with reduced motion. */}
+    {dirty && <span aria-hidden="true" data-testid="publish-pulse" className="pointer-events-none absolute -inset-1 rounded-2xl ring-2 ring-accent/60 motion-safe:animate-pulse" />}
+    <button type="submit" disabled={disabledReason !== null}
+      className="relative min-h-11 rounded-xl bg-accent px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-60">
+      {disabledReason ?? "Publicar nueva versión"}
+    </button>
+  </span>;
 }
 
-function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct, variantInvalid, canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+function taxNote(tax: MenuProductV1["tax"], formattedPrice: string): string | undefined {
+  if (tax === null) return undefined;
+  const percent = (tax.rateNumerator * 100) / tax.rateDenominator;
+  const rate = Number.isInteger(percent) ? `${percent} %` : `${percent.toFixed(2)} %`;
+  const name = tax.name.trim() === "" ? "Impuesto" : tax.name.trim();
+  // Display only: the server computes taxes and totals when the order is charged.
+  return tax.inclusion === "included" ? `Total con ${name} (${rate}) incluido: ${formattedPrice}` : `${formattedPrice} + ${name} ${rate}; se calcula al cobrar`;
+}
+
+/**
+ * Product card in three rows: (1) photo, name, price, unit, active, remove; (2) category, internal key, station;
+ * (3) switches for modifier groups, halves and tax plus «+ Añadir tamaño». Each section shows only while its
+ * switch is on (or it already has data), so a plain product takes three rows.
+ */
+function ProductEditor({ handle, usedStations, usedImagePaths, variantInvalid, canManage, categories, currency, groups, product, supabaseUrl, onAddGroup, onAddOption, onDuplicate, onGroupsChange, onProductChange, onProductImageChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+  readonly handle: ReactNode;
   readonly usedStations: readonly string[];
-  readonly siblingCount: number;
-  readonly siblingIndex: number;
-  readonly onMoveProduct: (from: number, to: number) => void;
+  readonly usedImagePaths: readonly string[];
   readonly variantInvalid: boolean;
   readonly canManage: boolean;
   readonly categories: readonly MenuCategoryV1[];
@@ -255,6 +375,7 @@ function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct
   readonly supabaseUrl: string;
   readonly onAddGroup: () => void;
   readonly onAddOption: (groupId: string) => void;
+  readonly onDuplicate: () => void;
   readonly onGroupsChange: (updater: (current: readonly MenuModifierGroupV1[]) => readonly MenuModifierGroupV1[]) => void;
   readonly onProductChange: (product: MenuProductV1) => void;
   readonly onProductImageChange: (imagePath: string | null) => void;
@@ -265,44 +386,68 @@ function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct
   const change = (patch: Partial<MenuProductV1>): void => onProductChange({ ...product, ...patch });
   const tax = product.tax;
   const variants = product.variants ?? [];
+  const fraction = editorProductFraction(product);
+  // The groups switch is open by choice or because the product already has groups (cancelling a removal keeps them visible).
+  const [groupsOpen, setGroupsOpen] = useState(false);
+  const showGroups = groupsOpen || groups.length > 0;
   const changeVariant = (variantId: string, patch: Partial<MenuProductVariantV1>): void =>
     change({ variants: variants.map((variant) => variant.variantId === variantId ? { ...variant, ...patch } : variant) });
+  const switchClass = "inline-flex min-h-11 items-center gap-2 text-[12px] font-semibold";
   return (
-    <article {...reorderRowProps(`products-${product.categoryId}`, siblingIndex)} className="flex min-w-0 items-start gap-3 rounded-2xl border border-border bg-bg/40 p-3 sm:p-4">
-      <ReorderHandle align="start" count={siblingCount} disabled={!canManage} index={siblingIndex} listKey={`products-${product.categoryId}`} onMove={onMoveProduct} />
-      <div className="min-w-0 flex-1">
-      <MenuPhoto canManage={canManage} imagePath={product.imagePath} name={product.name} supabaseUrl={supabaseUrl} target="product" targetId={product.productId} onChange={onProductImageChange} onUploadPendingChange={onUploadPendingChange} />
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <article data-product-id={product.productId} className="flex min-w-0 items-start gap-3 rounded-2xl border border-border bg-bg/40 p-3 sm:p-4">
+      {handle}
+      <div className="flex min-w-0 flex-1 flex-col gap-3">
+      <div className="grid items-end gap-3 lg:grid-cols-[auto_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto_auto]">
+        <MenuPhoto canManage={canManage} imagePath={product.imagePath} name={product.name} supabaseUrl={supabaseUrl} target="product" targetId={product.productId} usedImagePaths={usedImagePaths} onChange={onProductImageChange} onUploadPendingChange={onUploadPendingChange} />
         <TextInput disabled={!canManage} hint="Nombre que ve el operador al tomar el pedido y que se imprime en la comanda." label="Producto" maxLength={120} value={product.name} onChange={(name) => change({ name })} />
-        <Field className="flex flex-col gap-1 text-[11px] font-medium" hint="Sección de la carta donde aparece este producto; el operador navega por categorías." label="Categoría">{(id) =>
-          <select id={id} disabled={!canManage} value={product.categoryId} onChange={(event) => change({ categoryId: event.target.value })} className="min-h-10 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70">
-            {categories.map((category) => <option key={category.categoryId} value={category.categoryId}>{category.name}</option>)}
-          </select>}</Field>
-        <TextInput disabled={!canManage} hint="Código corto propio (SKU) para inventario o reportes. Puedes dejarlo vacío." label="Clave interna (opcional)" help="Código que usas en inventario o en tu impresora; puedes dejarlo vacío" required={false} maxLength={64} value={product.sku ?? ""} onChange={(sku) => change({ sku: sku.trim() === "" ? null : sku })} />
-        <MoneyInput hint="Precio de venta por unidad en la moneda del restaurante. Si el producto tiene tamaños, cada tamaño usa su propio precio." disabled={!canManage} currency={currency} value={product.unitPriceMinor} onChange={(unitPriceMinor) => change({ unitPriceMinor })} />
-        <StationSelect disabled={!canManage} usedStations={usedStations} value={product.stationId} onChange={(stationId) => change({ stationId })} />
-        <Field className="flex flex-col gap-1 text-[11px] font-medium" hint="Cómo se mide o se sirve el producto (pieza, porción, g, ml…). Sólo informativa en el ticket." label="Unidad">{(id) =>
+        <MoneyInput hint="Precio de venta por unidad en la moneda del restaurante. Si el producto tiene tamaños, cada tamaño usa su propio precio." disabled={!canManage} currency={currency} note={taxNote(tax, formatMinorUnits(product.unitPriceMinor, currency))} value={product.unitPriceMinor} onChange={(unitPriceMinor) => change({ unitPriceMinor })} />
+        <Field className="flex min-w-0 flex-col gap-1 text-[11px] font-medium" hint="Cómo se mide o se sirve el producto (pieza, porción, g, ml…). Sólo informativa en el ticket." label="Unidad">{(id) =>
           <select id={id} disabled={!canManage} value={product.unit} onChange={(event) => change({ unit: event.target.value })} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70">
             {unitOptions(product.unit).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>}</Field>
-        <div className="flex items-end"><ReorderButtons count={siblingCount} disabled={!canManage} index={siblingIndex} label={product.name} onMove={onMoveProduct} /></div>
         <div className="flex items-end gap-2 pb-1">
           <ActiveInput disabled={!canManage} checked={product.active} onChange={(active) => change({ active })} />
           {canManage && <RemoveButton label={`Quitar ${product.name}`} onClick={() => onRemove({ id: product.productId, kind: "product", label: product.name })} />}
         </div>
       </div>
 
-      <section className="mt-3 rounded-xl border border-border bg-surface p-3">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Field className="flex min-w-0 flex-col gap-1 text-[11px] font-medium" hint="Sección de la carta donde aparece este producto; el operador navega por categorías." label="Categoría">{(id) =>
+          <select id={id} disabled={!canManage} value={product.categoryId} onChange={(event) => change({ categoryId: event.target.value })} className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70">
+            {categories.map((category) => <option key={category.categoryId} value={category.categoryId}>{category.name}</option>)}
+          </select>}</Field>
+        <TextInput disabled={!canManage} hint="Código corto propio (SKU) para inventario o reportes. Puedes dejarlo vacío." label="Clave interna (opcional)" help="Código que usas en inventario o en tu impresora; puedes dejarlo vacío" required={false} maxLength={64} value={product.sku ?? ""} onChange={(sku) => change({ sku: sku.trim() === "" ? null : sku })} />
+        <StationSelect disabled={!canManage} usedStations={usedStations} value={product.stationId} onChange={(stationId) => change({ stationId })} />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+        <CheckField labelClassName="flex min-h-11 items-center" className={switchClass} hint="Listas de opciones que el cliente puede elegir para este producto: sabores, extras, término de cocción, etc." label="Grupos de modificadores">{(id) =>
+          <input id={id} disabled={!canManage} type="checkbox" className="h-5 w-5" checked={showGroups}
+            onChange={(event) => {
+              if (event.target.checked) { setGroupsOpen(true); return; }
+              setGroupsOpen(false);
+              if (groups.length > 0) onRemove({ id: product.productId, kind: "groups", label: `todos los grupos de modificadores de ${product.name.trim() === "" ? "este producto" : product.name}` });
+            }} />}</CheckField>
+        <CheckField labelClassName="flex min-h-11 items-center" className={switchClass} label="Permitir mitades"
+          hint="Cada mitad lleva un sabor del grupo de sabores; una de las dos puede armarse con ingredientes si eliges un grupo de ingredientes. Aplica a todos los tamaños.">{(id) =>
+          <input id={id} type="checkbox" className="h-5 w-5" disabled={!canManage} checked={fraction.enabled}
+            onChange={(event) => change({ fraction: { ...fraction, enabled: event.target.checked } })} />}</CheckField>
+        <CheckField labelClassName="flex min-h-11 items-center" className={switchClass} hint="Marca si este producto causa IVA u otro impuesto. El impuesto se calcula siempre en el servidor con la regla indicada aquí." label="Aplicar impuesto">{(id) =>
+          <input id={id} disabled={!canManage} type="checkbox" className="h-5 w-5" checked={tax !== null} onChange={(event) => change({ tax: event.target.checked ? { inclusion: "included", name: "IVA", rateDenominator: 100, rateNumerator: 16, taxId: "iva", taxRuleVersion: "1" } : null })} />}</CheckField>
+        {canManage && <AddButton label="Añadir tamaño" disabled={variants.length >= MENU_PRODUCT_MAX_VARIANTS} onClick={() => change({ variants: [...variants, {
+          active: true, displayOrder: nextDisplayOrder(variants), name: "", sku: null,
+          unitPriceMinor: 0, variantId: crypto.randomUUID(),
+        }] })} />}
+        {canManage && <button type="button" onClick={onDuplicate} title={`Crear una copia de ${product.name}`} aria-label={`Duplicar ${product.name}`}
+          className="min-h-11 rounded-lg border border-border bg-surface px-3 py-2 text-[12px] font-semibold hover:border-accent focus-visible:outline-2 focus-visible:outline-accent sm:ml-auto">Duplicar</button>}
+      </div>
+
+      {variants.length > 0 && <section className="rounded-xl border border-border bg-surface p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div><h3 className="flex items-center gap-1.5 font-heading text-[13px] font-semibold">Tamaños<FieldHint text="Presentaciones del mismo producto (chica, mediana, grande), cada una con su precio. Si no hay tamaños se cobra el precio del producto." /></h3>
             <p className="text-[12px] text-text-muted">Cada tamaño tiene su propio precio.</p></div>
-          {canManage && <AddButton label="Añadir tamaño" disabled={variants.length >= MENU_PRODUCT_MAX_VARIANTS} onClick={() => change({ variants: [...variants, {
-            active: true, displayOrder: nextDisplayOrder(variants), name: "", sku: null,
-            unitPriceMinor: 0, variantId: crypto.randomUUID(),
-          }] })} />}
         </div>
-        {variants.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin tamaños; se usa el precio del producto.</p> :
-          <div className="mt-3 grid gap-3">{variants.map((variant, variantIndex) => <div key={variant.variantId} {...reorderRowProps(`variants-${product.productId}`, variantIndex)}
+        <div className="mt-3 grid gap-3">{variants.map((variant, variantIndex) => <div key={variant.variantId} {...reorderRowProps(`variants-${product.productId}`, variantIndex)}
             className="flex min-w-0 items-center gap-3 rounded-lg border border-border bg-bg/50 p-3">
             <ReorderHandle count={variants.length} disabled={!canManage} index={variantIndex} listKey={`variants-${product.productId}`}
               onMove={(from, to) => change({ variants: reorder(variants, from, to) })} />
@@ -319,39 +464,38 @@ function ProductEditor({ usedStations, siblingCount, siblingIndex, onMoveProduct
                 onClick={() => onRemove({ id: variant.variantId, groupId: product.productId, kind: "variant", label: variant.name || "tamaño nuevo", unnamed: variant.name.trim() === "" })} />}
             </div>
             </div>
-          </div>)}</div>}
-      </section>
+          </div>)}</div>
+      </section>}
 
-      <section className="mt-3 rounded-xl border border-border bg-surface p-3">
+      {fraction.enabled && <section className="rounded-xl border border-border bg-surface p-3">
         <FractionEditor canManage={canManage} groups={groups} notice={legacyFractionNotice(product)} productName={product.name}
-          fraction={editorProductFraction(product)} onChange={(fraction) => change({ fraction })} />
-      </section>
+          fraction={fraction} onChange={(next) => change({ fraction: next })} />
+      </section>}
 
-      <div className="mt-3 rounded-xl border border-border bg-surface p-3">
-        <CheckField labelClassName="flex min-h-11 items-center" className="inline-flex min-h-11 items-center gap-2 text-[12px] font-semibold" hint="Marca si este producto causa IVA u otro impuesto. El impuesto se calcula siempre en el servidor con la regla indicada aquí." label="Aplicar impuesto">{(id) =>
-          <input id={id} disabled={!canManage} type="checkbox" className="h-5 w-5" checked={product.tax !== null} onChange={(event) => change({ tax: event.target.checked ? { inclusion: "included", name: "IVA", rateDenominator: 100, rateNumerator: 16, taxId: "iva", taxRuleVersion: "1" } : null })} />}</CheckField>
-        {tax !== null && (
-          <div className="mt-2 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-            <TextInput disabled={!canManage} hint="Identificador corto del impuesto, por ejemplo iva. Sirve para agrupar impuestos en reportes." label="Clave" maxLength={64} value={tax.taxId} onChange={(taxId) => change({ tax: { ...tax, taxId } })} />
-            <TextInput disabled={!canManage} hint="Nombre que se imprime en el ticket, por ejemplo IVA." label="Nombre fiscal" maxLength={80} value={tax.name} onChange={(name) => change({ tax: { ...tax, name } })} />
-            <TextInput disabled={!canManage} hint="Versión de la regla de cálculo. Cámbiala sólo si el impuesto cambia; las ventas anteriores conservan la suya." label="Versión regla" maxLength={64} value={tax.taxRuleVersion} onChange={(taxRuleVersion) => change({ tax: { ...tax, taxRuleVersion } })} />
-            <NumberInput disabled={!canManage} hint="Parte de arriba de la tasa como fracción. Para 16 % escribe 16." label="Numerador" min={0} max={1_000_000} value={tax.rateNumerator} onChange={(rateNumerator) => change({ tax: { ...tax, rateNumerator } })} />
-            <NumberInput disabled={!canManage} hint="Parte de abajo de la tasa como fracción. Para 16 % escribe 100." label="Denominador" min={1} max={1_000_000} value={tax.rateDenominator} onChange={(rateDenominator) => change({ tax: { ...tax, rateDenominator } })} />
-            <Field className="flex flex-col gap-1 text-[11px] font-medium" hint="Incluido: el precio ya trae el impuesto. Adicional: el impuesto se suma al precio al cobrar." label="Tratamiento">{(id) =>
-              <select id={id} disabled={!canManage} value={tax.inclusion} onChange={(event) => change({ tax: { ...tax, inclusion: event.target.value as "excluded" | "included" } })} className="min-h-10 rounded-lg border border-border bg-surface px-2 text-[13px]">
-                <option value="included">Incluido</option><option value="excluded">Adicional</option>
-              </select>}</Field>
-          </div>
-        )}
-      </div>
+      {tax !== null && <section className="rounded-xl border border-border bg-surface p-3">
+        <h3 className="mb-2 font-heading text-[13px] font-semibold">Impuesto</h3>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+          <TextInput disabled={!canManage} hint="Identificador corto del impuesto, por ejemplo iva. Sirve para agrupar impuestos en reportes." label="Clave" maxLength={64} value={tax.taxId} onChange={(taxId) => change({ tax: { ...tax, taxId } })} />
+          <TextInput disabled={!canManage} hint="Nombre que se imprime en el ticket, por ejemplo IVA." label="Nombre fiscal" maxLength={80} value={tax.name} onChange={(name) => change({ tax: { ...tax, name } })} />
+          <TextInput disabled={!canManage} hint="Versión de la regla de cálculo. Cámbiala sólo si el impuesto cambia; las ventas anteriores conservan la suya." label="Versión regla" maxLength={64} value={tax.taxRuleVersion} onChange={(taxRuleVersion) => change({ tax: { ...tax, taxRuleVersion } })} />
+          <NumberInput disabled={!canManage} hint="Parte de arriba de la tasa como fracción. Para 16 % escribe 16." label="Numerador" min={0} max={1_000_000} value={tax.rateNumerator} onChange={(rateNumerator) => change({ tax: { ...tax, rateNumerator } })} />
+          <NumberInput disabled={!canManage} hint="Parte de abajo de la tasa como fracción. Para 16 % escribe 100." label="Denominador" min={1} max={1_000_000} value={tax.rateDenominator} onChange={(rateDenominator) => change({ tax: { ...tax, rateDenominator } })} />
+          <Field className="flex flex-col gap-1 text-[11px] font-medium" hint="Incluido: el precio ya trae el impuesto. Adicional: el impuesto se suma al precio al cobrar." label="Tratamiento">{(id) =>
+            <select id={id} disabled={!canManage} value={tax.inclusion} onChange={(event) => change({ tax: { ...tax, inclusion: event.target.value as "excluded" | "included" } })} className="min-h-11 rounded-lg border border-border bg-surface px-2 text-[13px]">
+              <option value="included">Incluido</option><option value="excluded">Adicional</option>
+            </select>}</Field>
+        </div>
+      </section>}
 
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <h3 className="flex items-center gap-1.5 font-heading text-[13px] font-semibold">Grupos de modificadores<FieldHint text="Listas de opciones que el cliente puede elegir para este producto: sabores, extras, término de cocción, etc." /></h3>
-        {canManage && <AddButton label="Agregar grupo" onClick={onAddGroup} />}
-      </div>
-      {groups.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin modificadores.</p> : groups.map((group, groupIndex) => (
-        <ModifierGroupEditor key={group.groupId} siblingCount={groups.length} siblingIndex={groupIndex} onMoveGroup={(from, to) => onGroupsChange((current) => reorderSubset(current, (entry) => entry.productId === product.productId, from, to))} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl} onAddOption={() => onAddOption(group.groupId)} onChange={(changed) => onGroupsChange((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))} onOptionImageChange={(optionId, imagePath) => onOptionImageChange(group.groupId, optionId, imagePath)} onRemove={onRemove} onUploadPendingChange={onUploadPendingChange} />
-      ))}
+      {showGroups && <section className="rounded-xl border border-border bg-surface p-3">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="flex items-center gap-1.5 font-heading text-[13px] font-semibold">Grupos de modificadores<FieldHint text="Listas de opciones que el cliente puede elegir para este producto: sabores, extras, término de cocción, etc." /></h3>
+          {canManage && <AddButton label="Agregar grupo" onClick={onAddGroup} />}
+        </div>
+        {groups.length === 0 ? <p className="mt-2 text-[12px] text-text-muted">Sin modificadores.</p> : groups.map((group, groupIndex) => (
+          <ModifierGroupEditor key={group.groupId} siblingCount={groups.length} siblingIndex={groupIndex} usedImagePaths={usedImagePaths} onMoveGroup={(from, to) => onGroupsChange((current) => reorderSubset(current, (entry) => entry.productId === product.productId, from, to))} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl} onAddOption={() => onAddOption(group.groupId)} onChange={(changed) => onGroupsChange((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))} onOptionImageChange={(optionId, imagePath) => onOptionImageChange(group.groupId, optionId, imagePath)} onRemove={onRemove} onUploadPendingChange={onUploadPendingChange} />
+        ))}
+      </section>}
       </div>
     </article>
   );
@@ -390,14 +534,11 @@ function FractionEditor({ canManage, fraction, groups, notice, productName, onCh
   };
   const select = "min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70";
   return <div className="grid gap-3 border-t border-border pt-3 sm:col-span-full">
-    <CheckField labelClassName="flex min-h-11 items-center" className="inline-flex min-h-11 flex-wrap items-center gap-2 text-[13px] font-semibold" label="Permitir mitades"
-      hint="Cada mitad lleva un sabor del grupo de sabores; una de las dos puede armarse con ingredientes si eliges un grupo de ingredientes. Aplica a todos los tamaños.">{(id) =>
-      <input id={id} type="checkbox" className="h-5 w-5" disabled={!canManage} checked={fraction.enabled}
-        onChange={(event) => update({ enabled: event.target.checked })} />}</CheckField>
+    <h3 className="font-heading text-[13px] font-semibold">Mitades</h3>
     <p className="-mt-2 text-[12px] text-text-muted">El operador podrá armar {label} mitad y mitad, en cualquier tamaño o sin tamaños.</p>
     {notice !== null && <p role="status" className="rounded-lg bg-accent-soft px-3 py-2 text-[12px]">{notice}</p>}
     {fraction.enabled && <div className="grid gap-3 sm:grid-cols-2">
-      {groups.length === 0 && <p role="status" className="text-[12px] text-text-muted sm:col-span-2">Primero crea un grupo con los sabores en «Modificadores» de este producto.</p>}
+      {groups.length === 0 && <p role="status" className="text-[12px] text-text-muted sm:col-span-2">Primero marca «Grupos de modificadores» y crea un grupo con los sabores.</p>}
       <Field className="flex flex-col gap-1 text-[11px] font-medium" hint={GROUP_CHOICE_HINTS.flavors} label="Grupo de sabores">{(id) => <>
         <select id={id} className={select} disabled={!canManage} value={fraction.flavorGroupId ?? ""}
           onChange={(event) => update({ flavorGroupId: event.target.value === "" ? null : event.target.value })}>
@@ -442,9 +583,10 @@ function FractionEditor({ canManage, fraction, groups, notice, productName, onCh
   </div>;
 }
 
-function ModifierGroupEditor({ siblingCount, siblingIndex, onMoveGroup, canManage, currency, group, supabaseUrl, onAddOption, onChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
+function ModifierGroupEditor({ siblingCount, siblingIndex, usedImagePaths, onMoveGroup, canManage, currency, group, supabaseUrl, onAddOption, onChange, onOptionImageChange, onRemove, onUploadPendingChange }: {
   readonly siblingCount: number;
   readonly siblingIndex: number;
+  readonly usedImagePaths: readonly string[];
   readonly onMoveGroup: (from: number, to: number) => void;
   readonly canManage: boolean;
   readonly currency: string;
@@ -471,8 +613,8 @@ function ModifierGroupEditor({ siblingCount, siblingIndex, onMoveGroup, canManag
       <div className="mt-3 flex items-center justify-between gap-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted"><span className="inline-flex flex-wrap items-center gap-1.5">Opciones<FieldHint label="Opciones" text="Cada opción es una alternativa del grupo (por ejemplo Pepperoni) con su precio extra, que puede ser 0." /></span></p>{canManage && <AddButton label="Agregar opción" onClick={onAddOption} />}</div>
       <div className="mt-2 grid gap-2 lg:grid-cols-2">
         {group.options.map((option) => (
-          <div key={option.optionId} className="grid gap-2 rounded-lg border border-border bg-bg/50 p-2 sm:grid-cols-[1fr_170px_140px_auto]">
-            <div className="sm:col-span-full"><MenuPhoto canManage={canManage} imagePath={option.imagePath} name={option.name} supabaseUrl={supabaseUrl} target="option" targetId={option.optionId} onChange={(imagePath) => onOptionImageChange(option.optionId, imagePath)} onUploadPendingChange={onUploadPendingChange} /></div>
+          <div key={option.optionId} className="grid items-end gap-2 rounded-lg border border-border bg-bg/50 p-2 sm:grid-cols-[auto_minmax(0,1fr)_170px_140px_auto]">
+            <MenuPhoto canManage={canManage} imagePath={option.imagePath} name={option.name} supabaseUrl={supabaseUrl} target="option" targetId={option.optionId} usedImagePaths={usedImagePaths} onChange={(imagePath) => onOptionImageChange(option.optionId, imagePath)} onUploadPendingChange={onUploadPendingChange} />
             <TextInput disabled={!canManage} hint="Nombre de la opción tal como la ve el operador." label="Opción" maxLength={80} value={option.name} onChange={(name) => changeOption(group, option.optionId, { name }, onChange)} />
             <MoneyInput hint="Cargo adicional por elegir esta opción; 0 si no cuesta extra." disabled={!canManage} currency={currency} value={option.unitPriceMinor} onChange={(unitPriceMinor) => changeOption(group, option.optionId, { unitPriceMinor }, onChange)} />
             <NullableNumberInput hint="Cantidad máxima de veces que se puede elegir esta misma opción (por ejemplo 2 porciones de queso). Vacío = sin límite propio." disabled={!canManage} label="Máximo opcional" min={1} max={1_000} value={option.maximumQuantity} onChange={(maximumQuantity) => changeOption(group, option.optionId, { maximumQuantity }, onChange)} />
@@ -489,13 +631,19 @@ function changeOption(group: MenuModifierGroupV1, optionId: string, patch: Parti
   onChange({ ...group, options: group.options.map((option) => option.optionId === optionId ? { ...option, ...patch } : option) });
 }
 
-function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, onChange, onUploadPendingChange }: {
+/**
+ * Round photo thumbnail that is itself the control. Without a photo, a click opens the file picker; with one it opens
+ * a modal (blurred page behind) with the big photo and «Reemplazar», «Quitar» and «Cancelar». Both show the photos
+ * already used in this menu so a removed one can be picked again without uploading it. Choosing one only assigns its path.
+ */
+function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, usedImagePaths, onChange, onUploadPendingChange }: {
   readonly canManage: boolean;
   readonly imagePath: string | null;
   readonly name: string;
   readonly supabaseUrl: string;
   readonly target: "product" | "option";
   readonly targetId: string;
+  readonly usedImagePaths: readonly string[];
   readonly onChange: (imagePath: string | null) => void;
   readonly onUploadPendingChange: (pending: boolean) => void;
 }): ReactNode {
@@ -504,7 +652,18 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [failedPath, setFailedPath] = useState<string | null>(null);
+  const [panel, setPanel] = useState<"photo" | "used" | null>(null);
   const url = menuImagePublicUrl(supabaseUrl, imagePath);
+  const label = `Foto de ${name.trim() === "" ? "producto sin nombre" : name}`;
+  const otherPaths = usedImagePaths.filter((path) => path !== imagePath);
+  const showsPhoto = url !== null && failedPath !== imagePath;
+
+  // A success note fades after a few seconds; errors stay until the next action.
+  useEffect(() => {
+    if (message === null || message.startsWith("No se pudo") || message === "Subiendo…" || message.startsWith("Reduciendo")) return;
+    const timer = window.setTimeout(() => setMessage(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [message]);
 
   const upload = async (selected: MenuImageAttempt): Promise<void> => {
     setMessage("Subiendo…");
@@ -573,19 +732,69 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
     }
   };
 
-  return <div className="flex min-w-0 flex-wrap items-center gap-2 py-2">
-    {url !== null && failedPath !== imagePath
-      ? <img key={url} src={url} alt="" loading="lazy" onError={() => setFailedPath(imagePath)} className="h-14 w-14 rounded-lg border border-border object-cover" />
-      : <span aria-hidden="true" className="flex h-14 w-14 items-center justify-center rounded-lg bg-accent-soft text-lg font-bold text-accent-hover">{name.trim().charAt(0).toLocaleUpperCase("es-MX")}</span>}
-    {canManage && <>
-      <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" aria-label={`Foto de ${name}`} onChange={(event) => { void choose(event); }} />
-      <button type="button" disabled={busy} onClick={() => fileInput.current?.click()} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60">{busy ? "Subiendo…" : "Foto"}</button>
-      <FieldHint text="Imagen que se muestra en la captura de pedidos. JPG, PNG o WebP; si pesa más de 2 MB se reduce sola. Publica la nueva versión para que se vea." />
-      {attempt.current !== null && message !== null && message.startsWith("No se pudo subir") && <button type="button" disabled={busy} onClick={() => { void retry(); }} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-accent">Reintentar</button>}
-      {imagePath !== null && <button type="button" disabled={busy} onClick={() => { onChange(null); setMessage("Foto quitada del borrador."); }} className="min-h-11 rounded-lg border border-border bg-surface px-3 text-sm focus-visible:outline-2 focus-visible:outline-accent">Quitar foto</button>}
-    </>}
-    {message !== null && <span role="status" className="min-w-0 basis-full text-xs text-text-muted">{message}</span>}
+  const openPicker = (): void => { setMessage(null); fileInput.current?.click(); };
+  const onThumbnail = (): void => {
+    if (imagePath === null || !showsPhoto) openPicker();
+    else setPanel("photo");
+  };
+  const assign = (path: string | null, note: string): void => { onChange(path); setFailedPath(null); setPanel(null); setMessage(note); };
+  const thumb = "inline-flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border";
+
+  return <div className="relative flex min-w-0 flex-col items-start gap-1">
+    <button type="button" disabled={!canManage || busy} aria-label={label} title={imagePath === null ? "Tocar para subir una foto" : "Tocar para ver o cambiar la foto"} onClick={onThumbnail}
+      className={`${thumb} min-h-11 min-w-11 bg-accent-soft focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default disabled:opacity-70 ${canManage ? "hover:border-accent" : ""}`}>
+      {showsPhoto
+        ? <img key={url} src={url} alt="" loading="lazy" onError={() => setFailedPath(imagePath)} className="size-full object-cover" />
+        : busy ? <span aria-hidden="true" className="text-[10px] font-semibold text-accent-hover">…</span>
+          : <span aria-hidden="true" className="text-lg font-bold text-accent-hover">{name.trim() === "" ? "+" : name.trim().charAt(0).toLocaleUpperCase("es-MX")}</span>}
+    </button>
+    {canManage && <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" tabIndex={-1} aria-hidden="true" className="sr-only" onChange={(event) => { void choose(event); }} />}
+    {canManage && imagePath === null && otherPaths.length > 0 && !busy &&
+      <button type="button" onClick={() => setPanel("used")} className="min-h-6 text-[11px] font-medium text-accent underline focus-visible:outline-2 focus-visible:outline-accent">Ya usadas</button>}
+    {message !== null && <div role="status" className="absolute left-0 top-full z-30 mt-1 w-56 rounded-lg border border-border bg-surface p-2 text-[12px] text-text-muted shadow-lg">
+      <p>{message}</p>
+      {attempt.current !== null && message.startsWith("No se pudo subir") && <button type="button" disabled={busy} onClick={() => { void retry(); }} className="mt-1 min-h-11 rounded-lg border border-border bg-surface px-3 text-[13px] font-semibold text-text focus-visible:outline-2 focus-visible:outline-accent">Reintentar</button>}
+    </div>}
+    {panel !== null && <PhotoDialog title={panel === "photo" ? label : "Elegir una foto ya usada"} onClose={() => setPanel(null)}>
+      {panel === "photo" && url !== null && <img src={url} alt={label} className="max-h-[55vh] w-full rounded-xl border border-border bg-bg object-contain" />}
+      <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={() => { setPanel(null); openPicker(); }} className="min-h-11 rounded-lg bg-accent px-4 py-2 text-[13px] font-semibold text-white hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">{panel === "photo" ? "Reemplazar" : "Subir una foto nueva"}</button>
+        {panel === "photo" && <button type="button" onClick={() => assign(null, "Foto quitada del borrador.")} className="min-h-11 rounded-lg border border-[oklch(85%_0.06_25)] px-4 py-2 text-[13px] font-semibold text-error focus-visible:outline-2 focus-visible:outline-accent">Quitar</button>}
+        <button type="button" autoFocus onClick={() => setPanel(null)} className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-accent">Cancelar</button>
+      </div>
+      <UsedPhotos paths={otherPaths} supabaseUrl={supabaseUrl} onPick={(path) => assign(path, "Foto elegida. Publica la nueva versión para mostrarla en captura.")} />
+    </PhotoDialog>}
   </div>;
+}
+
+/** Modal `<dialog>`: the page behind is blurred and inert, Escape closes. */
+function PhotoDialog({ children, title, onClose }: { readonly children: ReactNode; readonly title: string; readonly onClose: () => void }): ReactNode {
+  return <dialog aria-label={title} onClose={onClose} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
+    ref={(element) => { if (element !== null && !element.open) element.showModal(); }}
+    className="m-auto w-[min(34rem,calc(100vw-1.5rem))] rounded-2xl border border-border bg-surface p-0 text-text shadow-2xl backdrop:bg-black/40 backdrop:backdrop-blur-md">
+    <div className="flex max-h-[calc(100vh-2rem)] flex-col gap-3 overflow-y-auto p-4">
+      <h2 className="break-words font-heading text-[14px] font-semibold">{title}</h2>
+      {children}
+    </div>
+  </dialog>;
+}
+
+function UsedPhotos({ onPick, paths, supabaseUrl }: { readonly onPick: (path: string) => void; readonly paths: readonly string[]; readonly supabaseUrl: string }): ReactNode {
+  if (paths.length === 0) return null;
+  return <section aria-label="Fotos ya usadas en este menú" className="border-t border-border pt-3">
+    <h3 className="text-[12px] font-semibold">Fotos ya usadas en este menú</h3>
+    <ul className="mt-2 flex flex-wrap gap-2">
+      {paths.map((path, index) => {
+        const source = menuImagePublicUrl(supabaseUrl, path);
+        return <li key={path}>
+          <button type="button" aria-label={`Usar la foto ${index + 1}`} onClick={() => onPick(path)}
+            className="inline-flex size-14 min-h-11 min-w-11 items-center justify-center overflow-hidden rounded-xl border border-border bg-bg hover:border-accent focus-visible:outline-2 focus-visible:outline-accent">
+            {source === null ? <span aria-hidden="true" className="text-[11px] text-text-muted">?</span> : <img src={source} alt="" loading="lazy" className="size-full object-cover" />}
+          </button>
+        </li>;
+      })}
+    </ul>
+  </section>;
 }
 
 function SectionHeader({ children, description, title }: { readonly children?: ReactNode; readonly description: string; readonly title: string }): ReactNode {
@@ -621,11 +830,13 @@ function TextInput({ disabled, help, hint, invalid = false, label, maxLength, on
     {help && <span className="text-[11px] font-normal text-text-muted">{help}</span>}</>}</Field>;
 }
 
-function MoneyInput({ currency, disabled, hint, label = "Precio", onChange, value }: {
+function MoneyInput({ currency, disabled, hint, label = "Precio", note, onChange, value }: {
   readonly currency: string;
   readonly disabled: boolean;
   readonly hint?: string;
   readonly label?: string;
+  /** Replaces the formatted amount shown under the field (for example the tax treatment). */
+  readonly note?: string | undefined;
   readonly onChange: (value: number) => void;
   readonly value: number;
 }): ReactNode {
@@ -651,7 +862,7 @@ function MoneyInput({ currency, disabled, hint, label = "Precio", onChange, valu
       className="min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70"
     />
     <span id={hintId} className={parsed === null ? "text-error" : "text-text-muted"}>
-      {parsed === null ? errorText : formatMinorUnits(value, currency)}
+      {parsed === null ? errorText : note ?? formatMinorUnits(value, currency)}
     </span></>}</Field>;
 }
 
