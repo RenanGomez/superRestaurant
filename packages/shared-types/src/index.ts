@@ -298,8 +298,8 @@ export type MenuCategoryColorV1 = (typeof MENU_CATEGORY_COLORS)[number];
 
 /**
  * `{restaurantId}/categories/{categoryId}/{hash}.{ext}` with canonical UUID segments and the category's own id.
- * (Product and option paths are still checked by shape only, via MENU_IMAGE_PATH_PATTERN; the database CHECK
- * enforces their entity id.)
+ * Product and option parsers use MENU_IMAGE_PATH_PATTERN plus their expected segment; database CHECKs enforce
+ * the embedded entity id.
  */
 function isMenuCategoryImagePath(path: string, categoryId: string): boolean {
   const parts = path.split("/");
@@ -393,10 +393,9 @@ export interface MenuModifierOptionV1 {
   readonly unitPriceMinor: number;
 }
 
-/** Shape asserted by both the API's own validator and `app.menu_products`/`app.menu_modifier_options`
- * CHECK constraints: `<restaurantId>/<products|options>/<targetId>/<uuid32>.<ext>`. */
+/** Shape asserted by the API and the catalog image CHECK constraints. */
 export const MENU_IMAGE_PATH_PATTERN =
-  /^[0-9a-f-]{36}\/(products|options)\/[0-9a-f-]{36}\/[0-9a-f-]{32}\.(jpg|png|webp)$/u;
+  /^[0-9a-f-]{36}\/(products|options|categories)\/[0-9a-f-]{36}\/[0-9a-f-]{32}\.(jpg|png|webp)$/u;
 
 export interface MenuModifierGroupV1 {
   readonly active: boolean;
@@ -458,6 +457,18 @@ export interface UploadMenuImageCommandV1 {
   readonly targetId: string;
 }
 
+export interface CopyMenuImageCommandV1 {
+  readonly deviceId: string;
+  readonly eventId: string;
+  readonly idempotencyKey: string;
+  readonly occurredAt: string;
+  readonly schemaVersion: typeof MENU_CATALOG_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly sourceImagePath: string;
+  readonly target: "category" | "option" | "product";
+  readonly targetId: string;
+}
+
 export interface MenuImageUploadResultV1 {
   readonly imagePath: string;
   readonly publicUrl: string;
@@ -503,6 +514,45 @@ export function parseUploadMenuImageCommandV1(value: unknown): UploadMenuImageCo
     occurredAt,
     schemaVersion: MENU_CATALOG_SCHEMA_VERSION,
     scope,
+    target,
+    targetId,
+  });
+}
+
+export function parseCopyMenuImageCommandV1(value: unknown): CopyMenuImageCommandV1 | undefined {
+  const record = parseExactPlainRecord(value, [
+    "schemaVersion", "scope", "target", "targetId", "sourceImagePath",
+    "eventId", "idempotencyKey", "deviceId", "occurredAt",
+  ]);
+  if (record === undefined || ownValue(record, "schemaVersion") !== MENU_CATALOG_SCHEMA_VERSION) return undefined;
+  const scope = parseUuidBranchScope(ownValue(record, "scope"));
+  const target = ownValue(record, "target");
+  const targetId = parseUuid(ownValue(record, "targetId"));
+  const sourceImagePath = ownValue(record, "sourceImagePath");
+  const eventId = parseUuid(ownValue(record, "eventId"));
+  const idempotencyKey = parseUuid(ownValue(record, "idempotencyKey"));
+  const deviceId = parseUuid(ownValue(record, "deviceId"));
+  const occurredAt = parseCanonicalTimestamp(ownValue(record, "occurredAt"));
+  if (
+    scope === undefined
+    || (target !== "product" && target !== "option" && target !== "category")
+    || targetId === undefined
+    || typeof sourceImagePath !== "string"
+    || !MENU_IMAGE_PATH_PATTERN.test(sourceImagePath)
+    || sourceImagePath.split("/", 1)[0] !== scope.restaurantId
+    || eventId === undefined
+    || idempotencyKey === undefined
+    || deviceId === undefined
+    || occurredAt === undefined
+  ) return undefined;
+  return Object.freeze({
+    deviceId,
+    eventId,
+    idempotencyKey,
+    occurredAt,
+    schemaVersion: MENU_CATALOG_SCHEMA_VERSION,
+    scope,
+    sourceImagePath,
     target,
     targetId,
   });
@@ -1153,7 +1203,7 @@ function parseMenuProductV1(value: unknown): MenuProductV1 | undefined {
   const unitPriceMinor = parseBoundedInteger(ownValue(record, "unitPriceMinor"), 0, Number.MAX_SAFE_INTEGER);
   const rawTax = ownValue(record, "tax");
   const tax = rawTax === null ? null : parseMenuTaxV1(rawTax);
-  const imagePath = parseMenuImagePath(record);
+  const imagePath = parseMenuImagePath(record, "products");
   if (
     productId === undefined
     || categoryId === undefined
@@ -1264,11 +1314,15 @@ function parseExactRecordWithOptionalImagePath(value: unknown, keys: readonly st
   return parseExactPlainRecord(value, [...keys, "imagePath"]) ?? parseExactPlainRecord(value, keys);
 }
 
-function parseMenuImagePath(record: PlainRecord): string | null | undefined {
+function parseMenuImagePath(record: PlainRecord, segment: "options" | "products"): string | null | undefined {
   if (!Object.hasOwn(record, "imagePath")) return null;
   const value = ownValue(record, "imagePath");
   if (value === null) return null;
-  return typeof value === "string" && MENU_IMAGE_PATH_PATTERN.test(value) ? value : undefined;
+  return typeof value === "string"
+    && MENU_IMAGE_PATH_PATTERN.test(value)
+    && value.split("/")[1] === segment
+    ? value
+    : undefined;
 }
 
 function parseMenuTaxV1(value: unknown): MenuTaxV1 | undefined {
@@ -1348,7 +1402,7 @@ function parseMenuModifierOptionV1(value: unknown): MenuModifierOptionV1 | undef
   const active = ownValue(record, "active");
   const rawMaximum = ownValue(record, "maximumQuantity");
   const maximumQuantity = rawMaximum === null ? null : parseBoundedInteger(rawMaximum, 1, 1_000);
-  const imagePath = parseMenuImagePath(record);
+  const imagePath = parseMenuImagePath(record, "options");
   if (
     optionId === undefined
     || name === undefined

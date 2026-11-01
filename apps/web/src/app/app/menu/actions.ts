@@ -4,7 +4,12 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { parseUploadMenuImageCommandV1, type MenuImageUploadResultV1 } from "@super-restaurant/shared-types";
+import {
+  MENU_IMAGE_PATH_PATTERN,
+  parseCopyMenuImageCommandV1,
+  parseUploadMenuImageCommandV1,
+  type MenuImageUploadResultV1,
+} from "@super-restaurant/shared-types";
 
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
@@ -34,6 +39,63 @@ export async function uploadMenuImageAction(
     if (isNextRedirectError(error)) throw error;
     console.error("menu image upload failed unexpectedly", error instanceof Error ? error.name : typeof error);
     return { error: "No se pudo subir la foto por un error inesperado del servidor. Inténtalo de nuevo." };
+  }
+}
+
+export async function copyMenuImageAction(
+  target: "category" | "option" | "product",
+  targetId: string,
+  sourceImagePath: string,
+): Promise<{ readonly imagePath?: string; readonly error?: string }> {
+  try {
+    const context = await getAuthorizedContext();
+    const command = parseCopyMenuImageCommandV1({
+      deviceId: await getOrCreateDeviceId(),
+      eventId: randomUUID(),
+      idempotencyKey: randomUUID(),
+      occurredAt: new Date().toISOString(),
+      schemaVersion: 1,
+      scope: context.scope,
+      sourceImagePath,
+      target,
+      targetId,
+    });
+    if (command === undefined) return { error: "La foto elegida no pertenece a este restaurante." };
+    let response: Response;
+    try {
+      response = await fetch(`${context.apiBaseUrl}/api/v1/menu/images/copy`, {
+        method: "POST",
+        cache: "no-store",
+        headers: { authorization: `Bearer ${context.accessToken}`, "content-type": "application/json" },
+        body: JSON.stringify(command),
+      });
+    } catch {
+      console.error("menu image copy: API unreachable");
+      return { error: "No se pudo copiar la foto: el servidor no responde. Revisa la conexión e inténtalo de nuevo." };
+    }
+    let result: unknown;
+    try { result = await response.json(); } catch {
+      console.error(`menu image copy: non-JSON response status=${response.status}`);
+      return { error: `El servidor devolvió una respuesta inválida (HTTP ${response.status}).` };
+    }
+    if (!response.ok) {
+      const code = typeof result === "object" && result !== null && "code" in result ? result.code : undefined;
+      console.error(`menu image copy rejected status=${response.status} code=${typeof code === "string" ? code : "none"}`);
+      return { error: menuUploadErrorMessage(response.status, code) };
+    }
+    const copy = result as Partial<MenuImageUploadResultV1>;
+    const segment = target === "product" ? "products" : target === "category" ? "categories" : "options";
+    if (
+      copy.schemaVersion !== 1
+      || typeof copy.imagePath !== "string"
+      || !MENU_IMAGE_PATH_PATTERN.test(copy.imagePath)
+      || !copy.imagePath.startsWith(`${context.scope.restaurantId}/${segment}/${targetId}/`)
+    ) return { error: "El servidor devolvió una ruta de foto inválida." };
+    return { imagePath: copy.imagePath };
+  } catch (error: unknown) {
+    if (isNextRedirectError(error)) throw error;
+    console.error("menu image copy failed unexpectedly", error instanceof Error ? error.name : typeof error);
+    return { error: "No se pudo copiar la foto por un error inesperado del servidor. Inténtalo de nuevo." };
   }
 }
 

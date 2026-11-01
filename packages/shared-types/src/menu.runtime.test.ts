@@ -6,6 +6,7 @@ import {
   parseMenuCatalogV1,
   parseSaveMenuCatalogCommandV1,
   parseUploadMenuImageCommandV1,
+  parseCopyMenuImageCommandV1,
 } from "./index.js";
 
 const restaurantId = "1e37ae13-8507-484c-969f-2176f77b7000";
@@ -247,6 +248,29 @@ expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), dataBase64: "" }) ===
 expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), dataBase64: "not base64 at all!" }) === undefined, "non-base64 payload is rejected");
 expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), dataBase64: "A".repeat(3_000_000) }) === undefined, "oversized payload is rejected");
 expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), unexpected: true }) === undefined, "extra upload command field is rejected");
+
+function copyImageCommand(): Record<string, unknown> {
+  return {
+    schemaVersion: MENU_CATALOG_SCHEMA_VERSION,
+    scope: { restaurantId, branchId },
+    target: "product",
+    targetId: productId,
+    sourceImagePath: `${restaurantId}/products/${productId}/00000000000000000000000000000000.jpg`,
+    eventId: "9e113c0b-9f7f-4e8d-8d1e-9b6a7c1b0001",
+    idempotencyKey: "9e113c0b-9f7f-4e8d-8d1e-9b6a7c1b0002",
+    deviceId: "9e113c0b-9f7f-4e8d-8d1e-9b6a7c1b0003",
+    occurredAt: "2026-10-04T00:00:00.000Z",
+  };
+}
+
+const copyImageParsed = parseCopyMenuImageCommandV1(copyImageCommand());
+expectDefined(copyImageParsed, "valid copy-menu-image command parses");
+expect(Object.isFrozen(copyImageParsed), "copy image command is frozen");
+expect(parseCopyMenuImageCommandV1({ ...copyImageCommand(), target: "category" }) !== undefined, "copy accepts a category target");
+expect(parseCopyMenuImageCommandV1({ ...copyImageCommand(), sourceImagePath: `${restaurantId}/categories/${categoryId}/00000000000000000000000000000000.webp` }) !== undefined, "copy accepts a category source");
+expect(parseCopyMenuImageCommandV1({ ...copyImageCommand(), sourceImagePath: `2e37ae13-8507-484c-969f-2176f77b7000/products/${productId}/00000000000000000000000000000000.jpg` }) === undefined, "copy rejects a source from another restaurant");
+expect(parseCopyMenuImageCommandV1({ ...copyImageCommand(), sourceImagePath: "../../etc/passwd" }) === undefined, "copy rejects a malformed source path");
+expect(parseCopyMenuImageCommandV1({ ...copyImageCommand(), unexpected: true }) === undefined, "copy rejects extra fields");
 
 expect(parseMenuCatalogStateV1({ schemaVersion: 1, scope: parsed.scope, catalog: undefined }) === undefined, "undefined catalog state is rejected");
 expect(parseMenuCatalogV1({ ...response, version: 0 }) === undefined, "non-positive response version is rejected");

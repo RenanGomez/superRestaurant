@@ -9,6 +9,7 @@ export const CATALOG_IMAGES_BUCKET = "catalog-images";
 export type CatalogImagePutResult = "created" | "exists";
 
 export interface CatalogImageStoragePort {
+  get(path: string): Promise<Uint8Array | undefined>;
   put(path: string, bytes: Uint8Array, contentType: string): Promise<CatalogImagePutResult>;
 }
 
@@ -91,6 +92,32 @@ export class FetchCatalogImageStorageAdapter implements CatalogImageStoragePort 
   public constructor(
     @Inject(CATALOG_IMAGE_STORAGE_CONFIG) private readonly configSource: CatalogImageStorageConfigSource,
   ) {}
+
+  public async get(path: string): Promise<Uint8Array | undefined> {
+    const config = this.configSource.get();
+    let response: Response;
+    try {
+      response = await fetch(
+        `${config.supabaseUrl}/storage/v1/object/authenticated/${CATALOG_IMAGES_BUCKET}/${path}`,
+        {
+          headers: {
+            apikey: config.secretKey,
+            authorization: `Bearer ${config.secretKey}`,
+          },
+          method: "GET",
+        },
+      );
+    } catch {
+      throw new CatalogImageStorageUnavailableError();
+    }
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new CatalogImageStorageUnavailableError();
+    try {
+      return new Uint8Array(await response.arrayBuffer());
+    } catch {
+      throw new CatalogImageStorageUnavailableError();
+    }
+  }
 
   public async put(path: string, bytes: Uint8Array, contentType: string): Promise<CatalogImagePutResult> {
     const config = this.configSource.get();

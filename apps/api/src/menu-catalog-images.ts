@@ -4,6 +4,8 @@ import { Inject, Injectable } from "@nestjs/common";
 import {
   MENU_IMAGE_MAX_DECODED_BYTES,
   type MenuImageUploadResultV1,
+  parseCopyMenuImageCommandV1,
+  parseBranchScope,
   parseUploadMenuImageCommandV1,
 } from "@super-restaurant/shared-types";
 
@@ -18,7 +20,7 @@ import {
   type CatalogImageStoragePort,
 } from "./catalog-image-storage.js";
 
-export type MenuCatalogImageApplicationErrorCode = "authorization" | "request" | "unavailable" | "unconfigured";
+export type MenuCatalogImageApplicationErrorCode = "authorization" | "not_found" | "request" | "unavailable" | "unconfigured";
 
 export class MenuCatalogImageApplicationError extends Error {
   public constructor(public readonly code: MenuCatalogImageApplicationErrorCode) {
@@ -96,6 +98,107 @@ export class MenuCatalogImageService {
       publicUrl: buildCatalogImagePublicUrl(config, path),
       schemaVersion: 1 as const,
     });
+  }
+
+  public async copy(principal: AuthenticatedPrincipal, input: unknown): Promise<MenuImageUploadResultV1> {
+    const command = parseCopyMenuImageCommandV1(input);
+    if (command === undefined) {
+      const crossRestaurantScope = crossRestaurantCopyScope(input);
+      if (crossRestaurantScope !== undefined) {
+        try {
+          await this.authorization.authorizeBranch(principal, crossRestaurantScope, "catalog.manage");
+        } catch {
+          throw new MenuCatalogImageApplicationError("authorization");
+        }
+        throw new MenuCatalogImageApplicationError("authorization");
+      }
+      throw new MenuCatalogImageApplicationError("request");
+    }
+
+    let principalActor: string;
+    try {
+      principalActor = (await this.authorization.authorizeBranch(principal, command.scope, "catalog.manage")).principal.actorId;
+    } catch {
+      throw new MenuCatalogImageApplicationError("authorization");
+    }
+
+    let config;
+    try {
+      config = this.configSource.get();
+    } catch (error: unknown) {
+      throw new MenuCatalogImageApplicationError(
+        error instanceof CatalogImageStorageConfigurationError ? "unconfigured" : "unavailable",
+      );
+    }
+
+    let source: Uint8Array | undefined;
+    try {
+      source = await this.storage.get(command.sourceImagePath);
+    } catch (error: unknown) {
+      throw new MenuCatalogImageApplicationError(
+        error instanceof CatalogImageStorageConfigurationError ? "unconfigured" : "unavailable",
+      );
+    }
+    if (source === undefined) throw new MenuCatalogImageApplicationError("not_found");
+
+    const bytes = Buffer.from(source);
+    const extension = command.sourceImagePath.split(".").at(-1);
+    const contentType = extension === undefined ? undefined : CONTENT_TYPE_BY_EXTENSION[extension];
+    if (
+      bytes.length === 0
+      || bytes.length > MENU_IMAGE_MAX_DECODED_BYTES
+      || contentType === undefined
+      || !matchesMagicBytes(bytes, contentType)
+    ) throw new MenuCatalogImageApplicationError("request");
+
+    const segment = command.target === "product" ? "products" : command.target === "category" ? "categories" : "options";
+    const contentHash = createHash("sha256").update(bytes).digest("hex");
+    const name = createHash("sha256")
+      .update([
+        principalActor, command.scope.restaurantId, command.idempotencyKey, command.target, command.targetId,
+        command.sourceImagePath, contentHash,
+      ].join("|"), "utf8")
+      .digest("hex")
+      .slice(0, 32);
+    const path = `${command.scope.restaurantId}/${segment}/${command.targetId}/${name}.${extension}`;
+
+    try {
+      await this.storage.put(path, bytes, contentType);
+    } catch (error: unknown) {
+      throw new MenuCatalogImageApplicationError(
+        error instanceof CatalogImageStorageConfigurationError ? "unconfigured" : "unavailable",
+      );
+    }
+
+    return Object.freeze({
+      imagePath: path,
+      publicUrl: buildCatalogImagePublicUrl(config, path),
+      schemaVersion: 1 as const,
+    });
+  }
+}
+
+const CONTENT_TYPE_BY_EXTENSION: Readonly<Record<string, keyof typeof EXTENSION_BY_CONTENT_TYPE>> = Object.freeze({
+  jpg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+});
+
+function crossRestaurantCopyScope(input: unknown): ReturnType<typeof parseBranchScope> {
+  if (typeof input !== "object" || input === null) return undefined;
+  try {
+    if (!("scope" in input) || !("sourceImagePath" in input)) return undefined;
+    const scope = parseBranchScope(input.scope);
+    const sourceImagePath = input.sourceImagePath;
+    if (
+      scope !== undefined
+      && typeof sourceImagePath === "string"
+      && /^[0-9a-f-]{36}\/(products|options|categories)\//u.test(sourceImagePath)
+      && sourceImagePath.split("/", 1)[0] !== scope.restaurantId
+    ) return scope;
+    return undefined;
+  } catch {
+    return undefined;
   }
 }
 
