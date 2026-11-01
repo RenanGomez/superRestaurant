@@ -890,6 +890,9 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       if (!reply?.ok || !("customer" in reply.value)) return;
       const detail = reply.value as CustomerDirectoryDetailV1;
       const only = detail.customer.phones.length === 1 ? detail.customer.phones[0] : undefined;
+      // `run` already cleared `busy`; this closure still sees the pre-request value (false), so the
+      // follow-up `run("customer")` is not discarded. `detail` is passed explicitly because the
+      // `customer` state is not yet updated in this closure.
       if (only !== undefined) selectCustomer(only.contactId, detail);
     })();
   }
@@ -910,15 +913,16 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     })();
   }
 
-  async function selectAddress(addressId: string, version: number): Promise<boolean> {
-    if (capture?.customerSnapshotRef === null || capture?.customerSnapshotRef === undefined) return false;
+  async function selectAddress(addressId: string, version: number): Promise<"ok" | "busy" | "error"> {
+    if (capture?.customerSnapshotRef === null || capture?.customerSnapshotRef === undefined) return "error";
     setSelectedAddress(addressId);
     invalidateQuote();
     const command = { ...base(), customerSnapshotRef: capture.customerSnapshotRef, addressId,
       expectedAddressVersion: version };
     const reply = await run("fulfillment", command);
-    if (reply?.ok) await refreshWorkspace(capture.captureDraftId);
-    return reply?.ok === true;
+    if (reply === undefined) return "busy"; // run() discards the call while another operation is in flight
+    if (reply.ok) await refreshWorkspace(capture.captureDraftId);
+    return reply.ok ? "ok" : "error";
   }
 
   function goToCustomer(): void {
