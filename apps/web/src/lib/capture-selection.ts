@@ -1,5 +1,5 @@
 import type { LineFractionV1, MenuCatalogV1, MenuCategoryV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
-import { groupsForProduct } from "./menu-groups.js";
+import { groupsForProduct } from "./menu-groups";
 
 /** One chosen modifier option and how many units of it apply to a draft line. */
 export interface SelectionPlanModifierSelectionDraft {

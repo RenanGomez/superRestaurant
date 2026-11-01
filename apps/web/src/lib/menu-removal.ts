@@ -1,5 +1,5 @@
 import type { MenuCategoryV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
-import { groupsForProduct, withLegacyOwners } from "./menu-groups.js";
+import { groupsForProduct, withLegacyOwners } from "./menu-groups";
 
 /** One pending removal from the menu draft. For a variant, groupId carries the owning product id. */
 export type Removal = Readonly<{

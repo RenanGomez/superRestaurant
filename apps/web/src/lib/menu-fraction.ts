@@ -1,5 +1,5 @@
 import type { MenuModifierGroupV1, MenuProductFractionV1, MenuProductV1, MenuProductVariantV1, MenuVariantFractionV1 } from "@super-restaurant/shared-types";
-import { groupsForProduct } from "./menu-groups.js";
+import { groupsForProduct } from "./menu-groups";
 
 /** A product with halves off: nothing chosen yet. */
 export const EMPTY_PRODUCT_FRACTION: MenuProductFractionV1 = Object.freeze({

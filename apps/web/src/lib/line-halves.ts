@@ -10,8 +10,8 @@ import type {
   MenuVariantFractionV1,
   OrderDetailFractionHalfV1,
 } from "@super-restaurant/shared-types";
-import type { SelectionPlanLineDraft } from "./capture-selection.js";
-import { groupsForProduct } from "./menu-groups.js";
+import type { SelectionPlanLineDraft } from "./capture-selection";
+import { groupsForProduct } from "./menu-groups";
 
 /** What the operator has chosen for one half while arming a "mitad y mitad" line. */
 export interface HalfDraft {
