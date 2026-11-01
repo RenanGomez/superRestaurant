@@ -290,10 +290,47 @@ export interface MenuTaxV1 {
   readonly taxRuleVersion: string;
 }
 
+/** Closed pastel palette for categories; the single source for TypeScript, mirrored by a SQL CHECK. */
+export const MENU_CATEGORY_COLORS = Object.freeze([
+  "rose", "peach", "sand", "mint", "sky", "lilac", "butter", "sage",
+] as const);
+export type MenuCategoryColorV1 = (typeof MENU_CATEGORY_COLORS)[number];
+
+/**
+ * `{restaurantId}/categories/{categoryId}/{hash}.{ext}` with canonical UUID segments and the category's own id.
+ * (Product and option paths are still checked by shape only, via MENU_IMAGE_PATH_PATTERN; the database CHECK
+ * enforces their entity id.)
+ */
+function isMenuCategoryImagePath(path: string, categoryId: string): boolean {
+  const parts = path.split("/");
+  return parts.length === 4
+    && uuidPattern.test(parts[0] ?? "")
+    && parts[1] === "categories"
+    && parts[2]?.toLowerCase() === categoryId.toLowerCase()
+    && /^[0-9a-f]{32}\.(jpg|png|webp)$/u.test(parts[3] ?? "");
+}
+
+/**
+ * Parses the optional appearance fields of a category-like record, normalizing absent ones to null and rejecting
+ * present invalid ones. `categoryId` is the owner id the image path must embed.
+ */
+export function parseMenuCategoryAppearanceV1(
+  value: unknown,
+  categoryId: string,
+): { readonly color: MenuCategoryColorV1 | null; readonly imagePath: string | null } | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as PlainRecord;
+  const color = parseMenuCategoryColor(record);
+  const imagePath = parseMenuCategoryImagePath(record, categoryId);
+  return color === undefined || imagePath === undefined ? undefined : Object.freeze({ color, imagePath });
+}
+
 export interface MenuCategoryV1 {
   readonly active: boolean;
   readonly categoryId: string;
+  readonly color: MenuCategoryColorV1 | null;
   readonly displayOrder: number;
+  readonly imagePath: string | null;
   readonly name: string;
 }
 
@@ -417,7 +454,7 @@ export interface UploadMenuImageCommandV1 {
   readonly occurredAt: string;
   readonly schemaVersion: typeof MENU_CATALOG_SCHEMA_VERSION;
   readonly scope: BranchScope;
-  readonly target: "option" | "product";
+  readonly target: "category" | "option" | "product";
   readonly targetId: string;
 }
 
@@ -444,7 +481,7 @@ export function parseUploadMenuImageCommandV1(value: unknown): UploadMenuImageCo
   const occurredAt = parseCanonicalTimestamp(ownValue(record, "occurredAt"));
   if (
     scope === undefined
-    || (target !== "product" && target !== "option")
+    || (target !== "product" && target !== "option" && target !== "category")
     || targetId === undefined
     || typeof contentType !== "string"
     || !(MENU_IMAGE_CONTENT_TYPES as readonly string[]).includes(contentType)
@@ -1066,15 +1103,34 @@ function parseMenuCatalogPayload(record: PlainRecord): MenuCatalogPayloadV1 | un
 }
 
 function parseMenuCategoryV1(value: unknown): MenuCategoryV1 | undefined {
-  const record = parseExactPlainRecord(value, ["categoryId", "name", "active", "displayOrder"]);
+  const record = parseExactRecordWithOptionalKeys(value, ["categoryId", "name", "active", "displayOrder"], ["color", "imagePath"]);
   if (record === undefined) return undefined;
   const categoryId = parseUuid(ownValue(record, "categoryId"));
   const name = parseDisplayName(ownValue(record, "name"), 80);
   const active = ownValue(record, "active");
   const displayOrder = parseBoundedInteger(ownValue(record, "displayOrder"), 0, 1_000_000);
+  const color = parseMenuCategoryColor(record);
+  const imagePath = categoryId === undefined ? null : parseMenuCategoryImagePath(record, categoryId);
   return categoryId !== undefined && name !== undefined && typeof active === "boolean" && displayOrder !== undefined
-    ? Object.freeze({ active, categoryId, displayOrder, name })
+    && color !== undefined && imagePath !== undefined
+    ? Object.freeze({ active, categoryId, color, displayOrder, imagePath, name })
     : undefined;
+}
+
+function parseMenuCategoryColor(record: PlainRecord): MenuCategoryColorV1 | null | undefined {
+  if (!Object.hasOwn(record, "color")) return null;
+  const value = ownValue(record, "color");
+  if (value === null) return null;
+  return typeof value === "string" && (MENU_CATEGORY_COLORS as readonly string[]).includes(value)
+    ? value as MenuCategoryColorV1
+    : undefined;
+}
+
+function parseMenuCategoryImagePath(record: PlainRecord, categoryId: string): string | null | undefined {
+  if (!Object.hasOwn(record, "imagePath")) return null;
+  const value = ownValue(record, "imagePath");
+  if (value === null) return null;
+  return typeof value === "string" && isMenuCategoryImagePath(value, categoryId) ? value : undefined;
 }
 
 function parseMenuProductV1(value: unknown): MenuProductV1 | undefined {

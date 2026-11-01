@@ -37,3 +37,11 @@ test("retained paths keep a removed photo and add new ones without duplicates", 
   assert.equal(afterRemoval, first);
   assert.deepEqual(retainImagePaths(afterRemoval, ["b", "c"]), ["a", "b", "c"]);
 });
+
+test("category images are collected after products and options and belong to their own id", () => {
+  const category = "11111111-1111-4111-8111-111111111111";
+  const path = `r/categories/${category}/0123456789abcdef0123456789abcdef.png`;
+  const paths = collectUsedImagePaths([{ imagePath: "r/products/p/a.png" }], [], [{ imagePath: path }, { imagePath: null }]);
+  assert.deepEqual(paths, ["r/products/p/a.png", path]);
+  assert.deepEqual(imagePathsOfEntity(paths, category), [path]);
+});

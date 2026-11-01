@@ -3,7 +3,7 @@ import test from "node:test";
 import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys } from "./menu-draft-storage.js";
 
 const parts = {
-  categories: [{ active: true, categoryId: "c1", displayOrder: 1, name: "Pizzas" }],
+  categories: [{ active: true, categoryId: "c1", color: null, displayOrder: 1, imagePath: null, name: "Pizzas" }],
   groups: [{ active: true, displayOrder: 1, groupId: "g1", maximumQuantity: 1, minimumQuantity: 0, name: "G", options: [], productId: "p1" }],
   products: [{ active: true, categoryId: "c1", displayOrder: 1, imagePath: null, name: "P", productId: "p1", sku: null, stationId: "general", tax: null, unit: "pieza", unitPriceMinor: 100, variants: [] }],
 };
@@ -36,4 +36,27 @@ test("snapshot changes with any edit and ignores the version", () => {
 test("stale keys are other versions of this branch only", () => {
   const keys = ["menu-draft:r:b:3", "menu-draft:r:b:4", "menu-draft:r:other:3", "unrelated"];
   assert.deepEqual(staleMenuDraftKeys(keys, "r", "b", 4), ["menu-draft:r:b:3"]);
+});
+
+test("a draft saved before category colours existed reads back with null colour and image", () => {
+  const legacy = JSON.stringify({
+    categories: [{ active: true, categoryId: "c1", displayOrder: 1, name: "Pizzas" }],
+    expectedVersion: 2, groups: parts.groups, products: parts.products,
+  });
+  assert.deepEqual(parseMenuDraft(legacy, 2)?.categories, [{ active: true, categoryId: "c1", color: null, displayOrder: 1, imagePath: null, name: "Pizzas" }]);
+  const styled = JSON.stringify({
+    categories: [{ active: true, categoryId: "c1", color: "sky", displayOrder: 1, imagePath: "11111111-1111-4111-8111-111111111111/categories/c1/0123456789abcdef0123456789abcdef.png", name: "Pizzas" }],
+    expectedVersion: 2, groups: parts.groups, products: parts.products,
+  });
+  assert.equal(parseMenuDraft(styled, 2)?.categories[0]?.color, "sky");
+});
+
+test("a draft with an invalid or foreign category image or colour is rejected", () => {
+  const draft = (category: Record<string, unknown>): string => JSON.stringify({
+    categories: [{ active: true, categoryId: "c1", displayOrder: 1, name: "Pizzas", ...category }],
+    expectedVersion: 2, groups: parts.groups, products: parts.products,
+  });
+  assert.equal(parseMenuDraft(draft({ imagePath: "x/categories/y/z.png" }), 2), null);
+  assert.equal(parseMenuDraft(draft({ imagePath: "11111111-1111-4111-8111-111111111111/categories/c2/0123456789abcdef0123456789abcdef.png" }), 2), null);
+  assert.equal(parseMenuDraft(draft({ color: "#fff" }), 2), null);
 });

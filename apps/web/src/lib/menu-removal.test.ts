@@ -12,7 +12,7 @@ const group = (groupId: string, productId: string, optionIds: readonly string[])
   active: true, displayOrder: 1, groupId, maximumQuantity: 1, minimumQuantity: 0, name: groupId, productId,
   options: optionIds.map((optionId) => ({ active: true, imagePath: null, maximumQuantity: null, name: optionId, optionId, unitPriceMinor: 0 })),
 });
-const category = (categoryId: string) => ({ active: true, categoryId, displayOrder: 1, name: categoryId });
+const category = (categoryId: string) => ({ active: true, categoryId, color: null, displayOrder: 1, imagePath: null, name: categoryId });
 
 const draft: MenuDraftParts = {
   categories: [category("c1"), category("c2")],

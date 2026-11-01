@@ -76,6 +76,15 @@ test("uploads a well-formed PNG for an option target", async () => {
   assert.match(result.imagePath, new RegExp(`^${scope.restaurantId}/options/${targetId}/[0-9a-f]{32}\\.png$`));
 });
 
+test("uploads a category image under the categories segment and replays the same path", async () => {
+  const storage: CatalogImageStoragePort = { put: async () => "created" };
+  const service = serviceFor(["manager"], storage);
+  const input = command({ target: "category", contentType: "image/png", dataBase64: PNG_MAGIC.toString("base64") });
+  const first = await service.upload(principal, input);
+  assert.match(first.imagePath, new RegExp(`^${scope.restaurantId}/categories/${targetId}/[0-9a-f]{32}\\.png$`));
+  assert.deepEqual(await service.upload(principal, input), first);
+});
+
 test("rejects an insufficiently privileged role before ever touching storage", async () => {
   let called = false;
   const storage: CatalogImageStoragePort = { put: async () => { called = true; return "created"; } };

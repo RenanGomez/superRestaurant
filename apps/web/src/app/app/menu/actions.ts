@@ -23,7 +23,7 @@ const DEVICE_COOKIE = "sr-device-id";
 const MAXIMUM_DRAFT_LENGTH = 2_000_000;
 
 export async function uploadMenuImageAction(
-  target: "product" | "option",
+  target: "category" | "option" | "product",
   targetId: string,
   file: MenuImageAttempt,
 ): Promise<{ readonly imagePath?: string; readonly error?: string }> {
@@ -38,7 +38,7 @@ export async function uploadMenuImageAction(
 }
 
 async function uploadMenuImage(
-  target: "product" | "option",
+  target: "category" | "option" | "product",
   targetId: string,
   file: MenuImageAttempt,
 ): Promise<{ readonly imagePath?: string; readonly error?: string }> {
