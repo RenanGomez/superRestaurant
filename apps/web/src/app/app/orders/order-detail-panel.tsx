@@ -192,6 +192,10 @@ function nextAttempt(): { readonly eventId: string; readonly idempotencyKey: str
   return { eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), occurredAt: new Date().toISOString() };
 }
 
+function knownTableName(order: OrderDetailV1, names: ReadonlyMap<string, string> | undefined): string | undefined {
+  return order.tableId === null ? undefined : names?.get(order.tableId);
+}
+
 interface Props {
   readonly orderId: string;
   /** tableId → configured name, read once per page load; absent or incomplete falls back to «Mesa». */
@@ -282,16 +286,12 @@ export function OrderDetailPanel({ orderId, tableNames, adding, onAddingChange, 
         || printDocuments !== undefined || menuOpen || detail === undefined || event.target instanceof HTMLInputElement
         || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement
         || (event.target instanceof HTMLElement && event.target.isContentEditable)) return;
-      const documents = buildKitchenDocuments(detail, knownTableName(detail));
+      const documents = buildKitchenDocuments(detail, knownTableName(detail, tableNames));
       if (documents.length > 0) { event.preventDefault(); setPrintDocuments(documents); }
     };
     document.addEventListener("keydown", onPrintShortcut);
     return () => document.removeEventListener("keydown", onPrintShortcut);
   }, [detail, menuOpen, printDocuments, tableNames]);
-
-  function knownTableName(order: OrderDetailV1): string | undefined {
-    return order.tableId === null ? undefined : tableNames?.get(order.tableId);
-  }
 
   async function load(): Promise<OrderDetailV1 | undefined> {
     // `actions.detail` is a Next.js Server Action: a transport failure (e.g. the server process
@@ -520,9 +520,9 @@ export function OrderDetailPanel({ orderId, tableNames, adding, onAddingChange, 
             onClick={() => setCancelOrderOpen(true)}>
             {busyAction === "cancelOrder" ? "Cancelando…" : actionLabel("cancelOrder")}
           </button>}
-          <button type="button" className={button} disabled={buildKitchenDocuments(detail, knownTableName(detail)).length === 0}
-            aria-keyshortcuts="P" onClick={() => setPrintDocuments(buildKitchenDocuments(detail, knownTableName(detail)))}>Imprimir comanda</button>
-          <button type="button" className={button} onClick={() => setPrintDocuments([buildCustomerTicket(detail, [], printHeader, knownTableName(detail))])}>Imprimir ticket</button>
+          <button type="button" className={button} disabled={buildKitchenDocuments(detail, knownTableName(detail, tableNames)).length === 0}
+            aria-keyshortcuts="P" onClick={() => setPrintDocuments(buildKitchenDocuments(detail, knownTableName(detail, tableNames)))}>Imprimir comanda</button>
+          <button type="button" className={button} onClick={() => setPrintDocuments([buildCustomerTicket(detail, [], printHeader, knownTableName(detail, tableNames))])}>Imprimir ticket</button>
         </div>
         <div className="mt-4 space-y-4">
           {groups !== undefined && ([...groups.entries()] as readonly [OrderItemStatusGroup, readonly OrderDetailItemV1[]][])

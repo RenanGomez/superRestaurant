@@ -23,7 +23,7 @@ const METHOD_LABELS = { cash: "Efectivo", transfer: "Transferencia", card_manual
 const context = (order: OrderDetailV1, tableName?: string): string[] => [
   `Orden ${shortFolio(order)}`,
   `Canal: ${order.fulfillment.channel}`,
-  ...(order.tableId === null ? [] : [`Mesa: ${tableName ?? order.tableId}`]),
+  ...(order.tableId === null ? [] : [`Mesa: ${tableName ?? "Mesa"}`]),
   ...(order.fulfillment.customerLabel === null ? [] : [`Cliente: ${order.fulfillment.customerLabel}`]),
   ...(order.createdAt === null ? [] : [`Hora: ${new Intl.DateTimeFormat("es-MX", { dateStyle: "short", timeStyle: "short", timeZone: order.timeZone }).format(new Date(order.createdAt))}`]),
 ];
