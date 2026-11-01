@@ -1,6 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dropIndicatorSide, parseReorderIndex, reorder, reorderListSelector, reorderSubset } from "./menu-reorder.js";
+import { dropIndicatorSide, hoverIndexAt, parseReorderIndex, reorder, reorderListSelector, reorderSubset, tentativeOrder } from "./menu-reorder.js";
+
+test("tentativeOrder previews the drag without renumbering or mutating", () => {
+  const list = ["a", "b", "c"];
+  assert.deepEqual(tentativeOrder(list, 1, 1), ["a", "b", "c"]);
+  assert.deepEqual(tentativeOrder(list, 0, 2), ["b", "c", "a"]);
+  assert.deepEqual(tentativeOrder(list, 2, 0), ["c", "a", "b"]);
+  assert.deepEqual(tentativeOrder(list, 2, 1), ["a", "c", "b"]);
+  assert.deepEqual(tentativeOrder(list, 0, 9), ["a", "b", "c"]);
+  assert.deepEqual(list, ["a", "b", "c"]);
+});
+
+test("cancelling a drag is returning to the origin: the tentative order equals the original", () => {
+  const list = ["a", "b", "c"];
+  assert.deepEqual(tentativeOrder(list, 2, 2), list);
+  assert.notEqual(tentativeOrder(list, 2, 2), list);
+});
+
+test("hoverIndexAt maps a coordinate to a row and clamps at both ends", () => {
+  const bounds = [{ bottom: 50, top: 0 }, { bottom: 110, top: 60 }, { bottom: 170, top: 120 }];
+  assert.equal(hoverIndexAt(bounds, -20), 0);
+  assert.equal(hoverIndexAt(bounds, 70), 1);
+  assert.equal(hoverIndexAt(bounds, 55), 1);
+  assert.equal(hoverIndexAt(bounds, 400), 2);
+  assert.equal(hoverIndexAt([], 10), 0);
+});
 
 test("parseReorderIndex accepts only non-negative integers", () => {
   assert.equal(parseReorderIndex("0"), 0);

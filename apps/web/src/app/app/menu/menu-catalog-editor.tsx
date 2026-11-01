@@ -23,7 +23,7 @@ import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, publishDi
 import { editorProductFraction, legacyFractionNotice, migrateLegacyFraction } from "../../../lib/menu-fraction";
 import { variantValidationError } from "../../../lib/menu-variants";
 import { reorder, reorderSubset } from "../../../lib/menu-reorder";
-import { ReorderButtons, ReorderHandle, reorderRowProps } from "./reorder-controls";
+import { DragReorderList, ReorderButtons, ReorderHandle, reorderRowProps } from "./reorder-controls";
 
 import { saveMenuCatalogAction, uploadMenuImageAction } from "./actions";
 
@@ -159,21 +159,22 @@ export function MenuCatalogEditor({ canManage, state, supabaseUrl }: {
           {canManage && <AddButton label="Agregar categoría" onClick={addCategory} />}
         </SectionHeader>
         {categories.length === 0 ? <EmptyText text="Agrega una categoría para comenzar el menú." /> : (
-          <div className="mt-4 flex flex-col gap-3">
-            {categories.map((category, index) => (
-              <article key={category.categoryId} {...reorderRowProps("categories", index)} className="flex min-w-0 items-center gap-3 rounded-xl border border-border bg-bg/50 p-3">
-                <ReorderHandle count={categories.length} disabled={!canManage} index={index} listKey="categories" onMove={(from, to) => setCategories((current) => reorder(current, from, to))} />
-                <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-[1fr_auto_auto]">
+          <DragReorderList className="mt-4 flex flex-col gap-3" disabled={!canManage} getKey={(category) => category.categoryId} items={categories} label="Categorías" onMove={(from, to) => setCategories((current) => reorder(current, from, to))}
+            renderRow={(category, _index, handle) => (
+              <article className="flex min-w-0 items-center gap-3 rounded-xl border border-border bg-bg/50 p-3">
+                {handle}
+                {/* Reserved for the category image (another package); empty for now. */}
+                <div aria-hidden="true" className="size-10 shrink-0 rounded-full bg-bg" />
+                <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-[1fr_auto]">
                   <TextInput disabled={!canManage} hint="Nombre de la sección de la carta, por ejemplo Pizzas o Bebidas. El operador navega por estas categorías." label="Nombre" maxLength={80} value={category.name} onChange={(name) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, name } : entry))} />
-                  <div className="flex items-end"><ReorderButtons count={categories.length} disabled={!canManage} index={index} label={category.name} onMove={(from, to) => setCategories((current) => reorder(current, from, to))} /></div>
                   <div className="flex items-end gap-2 pb-1">
                     <ActiveInput disabled={!canManage} checked={category.active} onChange={(active) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, active } : entry))} />
                     {canManage && <RemoveButton label={`Quitar ${category.name}`} onClick={() => setRemoval({ id: category.categoryId, kind: "category", label: category.name })} />}
                   </div>
                 </div>
               </article>
-            ))}
-          </div>
+            )} />
+
         )}
       </section>
 

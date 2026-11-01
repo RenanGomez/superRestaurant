@@ -33,6 +33,29 @@ export function reorderSubset<T extends Positioned>(all: readonly T[], isMember:
   return all.map((item) => isMember(item) ? (reordered[cursor++] ?? item) : item);
 }
 
+/** Tentative order while dragging: the item at `from` is moved to `hover` without renumbering; the input is never mutated. */
+export function tentativeOrder<T>(list: readonly T[], from: number, hover: number): T[] {
+  const next = [...list];
+  const valid = Number.isInteger(from) && Number.isInteger(hover)
+    && from >= 0 && from < next.length && hover >= 0 && hover < next.length;
+  if (valid && from !== hover) {
+    const [moved] = next.splice(from, 1);
+    if (moved !== undefined) next.splice(hover, 0, moved);
+  }
+  return next;
+}
+
+export interface RowBounds { readonly bottom: number; readonly top: number }
+
+/** Row index under a vertical coordinate (same space as the bounds); clamps above the first and below the last row. */
+export function hoverIndexAt(bounds: readonly RowBounds[], y: number): number {
+  if (bounds.length === 0) return 0;
+  for (let index = 0; index < bounds.length; index += 1) {
+    if (y < (bounds[index]?.bottom ?? Number.POSITIVE_INFINITY)) return index;
+  }
+  return bounds.length - 1;
+}
+
 /** Attribute selector for a reorder list. Pure (no browser CSS.escape), so it is safe during SSR. */
 export function reorderListSelector(listKey: string): string {
   const escaped = listKey.replace(/[\\"\n\r\f]/g, (char) => {
