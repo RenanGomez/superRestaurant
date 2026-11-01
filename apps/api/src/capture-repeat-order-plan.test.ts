@@ -74,7 +74,7 @@ const catalog: MenuCatalogV1 = {
   updatedAt: "2026-09-24T11:59:00.000Z",
   updatedBy: ids.actor,
   version: 3,
-  categories: [{ categoryId: ids.category, name: "Comida", active: true, displayOrder: 0 }],
+  categories: [{ categoryId: ids.category, name: "Comida", active: true, color: null, displayOrder: 0, imagePath: null }],
   products: [{
     productId: ids.product,
     categoryId: ids.category,

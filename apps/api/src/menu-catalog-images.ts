@@ -62,7 +62,7 @@ export class MenuCatalogImageService {
 
     const extension = EXTENSION_BY_CONTENT_TYPE[command.contentType];
     if (extension === undefined) throw new MenuCatalogImageApplicationError("request");
-    const segment = command.target === "product" ? "products" : "options";
+    const segment = command.target === "product" ? "products" : command.target === "category" ? "categories" : "options";
     // Deterministic object name: a retry of the same command (same actor, key, target, type and
     // bytes) lands on the same path, Storage answers "exists", and we replay the same result
     // instead of leaving a second orphan. Any difference in those inputs yields a different object.

@@ -61,6 +61,8 @@
     "src/lib/menu-used-images.test.ts",
     "src/lib/menu-draft-storage.ts",
     "src/lib/menu-draft-storage.test.ts",
+    "src/lib/menu-category-color.ts",
+    "src/lib/menu-category-color.test.ts",
     "src/lib/customer-directory.ts",
     "src/lib/customer-directory.test.ts",
     "src/lib/customer-order-history.ts",

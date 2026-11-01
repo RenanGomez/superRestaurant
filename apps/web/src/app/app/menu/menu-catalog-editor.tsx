@@ -1,6 +1,6 @@
 "use client";
 
-import { MENU_PRODUCT_MAX_VARIANTS, MENU_VARIANT_MAX_EXCLUDABLE_INGREDIENTS } from "@super-restaurant/shared-types";
+import { MENU_CATEGORY_COLORS, MENU_PRODUCT_MAX_VARIANTS, MENU_VARIANT_MAX_EXCLUDABLE_INGREDIENTS } from "@super-restaurant/shared-types";
 import type {
   MenuCategoryV1,
   MenuCatalogStateV1,
@@ -25,6 +25,7 @@ import { variantValidationError } from "../../../lib/menu-variants";
 import { reorder, reorderSubset } from "../../../lib/menu-reorder";
 import { duplicateProduct } from "../../../lib/menu-duplicate";
 import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys, type LocalMenuDraft } from "../../../lib/menu-draft-storage";
+import { MENU_CATEGORY_COLOR_LABELS, menuCategoryColorClasses } from "../../../lib/menu-category-color";
 import { collectUsedImagePaths, imagePathsOfEntity, retainImagePaths } from "../../../lib/menu-used-images";
 import { DragReorderList, ReorderButtons, ReorderHandle, reorderRowProps } from "./reorder-controls";
 
@@ -116,7 +117,7 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
   };
 
   // Photos in use now plus the ones removed during this session, so a mistaken «Quitar» can be undone.
-  const currentImagePaths = useMemo(() => collectUsedImagePaths(products, groups), [products, groups]);
+  const currentImagePaths = useMemo(() => collectUsedImagePaths(products, groups, categories), [products, groups, categories]);
   const [retainedImagePaths, setRetainedImagePaths] = useState<readonly string[]>([]);
   useEffect(() => { setRetainedImagePaths((previous) => retainImagePaths(previous, currentImagePaths)); }, [currentImagePaths]);
   const usedImagePaths = useMemo(() => retainImagePaths(retainedImagePaths, currentImagePaths), [retainedImagePaths, currentImagePaths]);
@@ -146,7 +147,9 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
     setCategories((current) => [...current, {
       active: true,
       categoryId: crypto.randomUUID(),
+      color: null,
       displayOrder: nextDisplayOrder(current),
+      imagePath: null,
       name: "Nueva categoría",
     }]);
   };
@@ -254,12 +257,15 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
         {categories.length === 0 ? <EmptyText text="Agrega una categoría para comenzar el menú." /> : (
           <DragReorderList className="mt-4 flex flex-col gap-3" disabled={!canManage} getKey={(category) => category.categoryId} items={categories} itemLabel={(category) => category.name} label="Categorías" onMove={(from, to) => setCategories((current) => reorder(current, from, to))}
             renderRow={(category, _index, handle) => (
-              <article className="flex min-w-0 items-center gap-3 rounded-xl border border-border bg-bg/50 p-3">
+              <article className={`flex min-w-0 items-center gap-3 rounded-xl border p-3 ${menuCategoryColorClasses(category.color)?.card ?? "border-border bg-bg/50"}`}>
                 {handle}
-                {/* Reserved for the category image (another package); empty for now. */}
-                <div aria-hidden="true" className="size-10 shrink-0 rounded-full bg-bg" />
+                <MenuPhoto canManage={canManage} imagePath={category.imagePath} name={category.name} supabaseUrl={supabaseUrl} target="category" targetId={category.categoryId} usedImagePaths={usedImagePaths}
+                  onChange={(imagePath) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, imagePath } : entry))} onUploadPendingChange={onUploadPendingChange} />
                 <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-[1fr_auto]">
-                  <TextInput disabled={!canManage} hint="Nombre de la sección de la carta, por ejemplo Pizzas o Bebidas. El operador navega por estas categorías." label="Nombre" maxLength={80} value={category.name} onChange={(name) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, name } : entry))} />
+                  <div className="flex min-w-0 flex-col gap-2">
+                    <TextInput disabled={!canManage} hint="Nombre de la sección de la carta, por ejemplo Pizzas o Bebidas. El operador navega por estas categorías." label="Nombre" maxLength={80} value={category.name} onChange={(name) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, name } : entry))} />
+                    <CategoryColorPicker disabled={!canManage} name={category.name} value={category.color} onChange={(color) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, color } : entry))} />
+                  </div>
                   <div className="flex items-end gap-2 pb-1">
                     <ActiveInput disabled={!canManage} checked={category.active} onChange={(active) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, active } : entry))} />
                     {canManage && <RemoveButton label={`Quitar ${category.name}`} onClick={() => setRemoval({ id: category.categoryId, kind: "category", label: category.name })} />}
@@ -646,7 +652,7 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
   readonly imagePath: string | null;
   readonly name: string;
   readonly supabaseUrl: string;
-  readonly target: "product" | "option";
+  readonly target: "category" | "option" | "product";
   readonly targetId: string;
   readonly usedImagePaths: readonly string[];
   readonly onChange: (imagePath: string | null) => void;
@@ -659,10 +665,10 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
   const [failedPath, setFailedPath] = useState<string | null>(null);
   const [panel, setPanel] = useState<"photo" | "used" | null>(null);
   const url = menuImagePublicUrl(supabaseUrl, imagePath);
-  const label = `Foto de ${name.trim() === "" ? "producto sin nombre" : name}`;
+  const entityWord = target === "product" ? "producto" : target === "category" ? "categoría" : "opción";
+  const label = `Foto de ${name.trim() === "" ? `${entityWord} sin nombre` : name}`;
   // Only this entity's own removed photos: the database rejects a path that embeds another entity's id.
   const otherPaths = imagePathsOfEntity(usedImagePaths, targetId).filter((path) => path !== imagePath);
-  const entityWord = target === "product" ? "producto" : "opción";
   const showsPhoto = url !== null && failedPath !== imagePath;
 
   // A success note fades after a few seconds; errors stay until the next action.
@@ -771,6 +777,29 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
       </div>
       <UsedPhotos title={`Fotos quitadas de este ${entityWord}`} paths={otherPaths} supabaseUrl={supabaseUrl} onPick={(path) => assign(path, "Foto elegida. Publica la nueva versión para mostrarla en captura.")} />
     </PhotoDialog>}
+  </div>;
+}
+
+/** Closed pastel palette as toggle buttons (44 px targets); «Automático» clears the choice. */
+function CategoryColorPicker({ disabled, name, value, onChange }: {
+  readonly disabled: boolean;
+  readonly name: string;
+  readonly value: MenuCategoryV1["color"];
+  readonly onChange: (color: MenuCategoryV1["color"]) => void;
+}): ReactNode {
+  const focus = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+  const categoryName = name.trim() === "" ? "categoría sin nombre" : name;
+  return <div role="group" aria-label={`Color de ${categoryName}`} className="flex flex-wrap items-center gap-1">
+    <button type="button" disabled={disabled} aria-pressed={value === null} onClick={() => onChange(null)}
+      className={`min-h-11 rounded-lg border px-3 text-[12px] font-medium disabled:opacity-70 ${focus} ${value === null ? "border-accent bg-accent-soft font-semibold" : "border-border bg-surface"}`}>Automático</button>
+    {MENU_CATEGORY_COLORS.map((color) => {
+      const selected = value === color;
+      return <button key={color} type="button" disabled={disabled} aria-pressed={selected} aria-label={`Color ${MENU_CATEGORY_COLOR_LABELS[color]}`} title={MENU_CATEGORY_COLOR_LABELS[color]}
+        onClick={() => onChange(color)}
+        className={`inline-flex size-11 items-center justify-center rounded-full border-2 disabled:opacity-70 ${focus} ${menuCategoryColorClasses(color)?.swatch ?? ""} ${selected ? "ring-2 ring-accent ring-offset-1" : ""}`}>
+        {selected && <span aria-hidden="true" className="text-[14px] font-bold">✓</span>}
+      </button>;
+    })}
   </div>;
 }
 

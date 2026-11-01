@@ -185,9 +185,9 @@ test("groupProductsByCategory returns only active categories sorted by displayOr
   const catalog = {
     catalogVersion, currency: "MXN", replayed: false, updatedAt: "2026-01-01T00:00:00.000Z", updatedBy: "u1", version: 1,
     categories: [
-      { categoryId: "c2", name: "Bebidas", active: true, displayOrder: 2 },
-      { categoryId: "c1", name: "Pizzas", active: true, displayOrder: 1 },
-      { categoryId: "c3", name: "Oculta", active: false, displayOrder: 0 },
+      { categoryId: "c2", name: "Bebidas", active: true, color: null, displayOrder: 2, imagePath: null },
+      { categoryId: "c1", name: "Pizzas", active: true, color: null, displayOrder: 1, imagePath: null },
+      { categoryId: "c3", name: "Oculta", active: false, color: null, displayOrder: 0, imagePath: null },
     ],
     products: [
       { productId: "p1", categoryId: "c1", name: "Pizza", active: true, displayOrder: 1, unit: "pieza",

@@ -719,7 +719,7 @@ const selectionCatalog: MenuCatalogV1 = {
   updatedAt: "2026-09-24T11:59:00.000Z",
   updatedBy: principal.actorId,
   version: 3,
-  categories: [{ categoryId: "a409ec59-9f5e-496d-a45d-b83a46b49674", name: "Comida", active: true, displayOrder: 0 }],
+  categories: [{ categoryId: "a409ec59-9f5e-496d-a45d-b83a46b49674", name: "Comida", active: true, color: null, displayOrder: 0, imagePath: null }],
   products: [{
     productId: "ec5e7c30-edac-4b79-bf8c-e363b041c59f",
     categoryId: "a409ec59-9f5e-496d-a45d-b83a46b49674",
@@ -2405,7 +2405,7 @@ const taxExcludedCatalog: MenuCatalogV1 = {
   updatedAt: "2026-09-24T11:59:00.000Z",
   updatedBy: principal.actorId,
   version: 1,
-  categories: [{ categoryId: "a409ec59-9f5e-496d-a45d-b83a46b49674", name: "Comida", active: true, displayOrder: 0 }],
+  categories: [{ categoryId: "a409ec59-9f5e-496d-a45d-b83a46b49674", name: "Comida", active: true, color: null, displayOrder: 0, imagePath: null }],
   products: [{
     productId: "ec5e7c30-edac-4b79-bf8c-e363b041c59f",
     categoryId: "a409ec59-9f5e-496d-a45d-b83a46b49674",

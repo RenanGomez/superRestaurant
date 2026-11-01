@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { MEMBERSHIP_ROLE_CODES } from "@super-restaurant/shared-types";
+import { MEMBERSHIP_ROLE_CODES, MENU_CATEGORY_COLORS } from "@super-restaurant/shared-types";
 
 import { RBAC_ROLE_PERMISSIONS_V1 } from "./auth/rbac-policy.js";
 import { extractMigrationBody, validateCatalogAuditSql } from "./operations/schema-verification.js";
@@ -979,4 +979,21 @@ test("full POS flow reuses the recoverable tenancy, table, KDS, and finance harn
   for (const table of ["cash_register_sessions", "payments", "cash_movements", "financial_audit_events", "financial_device_sequences"]) {
     assert.match(recovery, new RegExp(table, "u"));
   }
+});
+
+test("menu category appearance migration mirrors the TypeScript palette and scopes the image path", () => {
+  const sql = readFileSync(new URL("../../../supabase/migrations/20261101000100_menu_category_appearance.sql", import.meta.url), "utf8");
+  const check = /menu_categories_color_valid check \(\s*color is null or color in \(([^)]*)\)/u.exec(sql);
+  assert.notEqual(check, null);
+  const tokens = [...(check?.[1] ?? "").matchAll(/'([a-z]+)'/gu)].map((match) => match[1]);
+  assert.deepEqual([...tokens].sort(), [...MENU_CATEGORY_COLORS].sort());
+  assert.match(sql, /\^\[0-9a-f-\]\{36\}\/categories\/\[0-9a-f-\]\{36\}\/\[0-9a-f-\]\{32\}/u);
+  assert.match(sql, /split_part\(image_path, '\/', 1\) = restaurant_id::text/u);
+  assert.match(sql, /split_part\(image_path, '\/', 3\) = id::text/u);
+  assert.equal(sql.includes("\r"), false);
+  for (const signature of [
+    "build_menu_catalog_state(uuid,uuid,uuid,boolean)",
+    "normalize_menu_catalog_payload(jsonb)",
+    "save_menu_catalog(uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,bigint,uuid,text,jsonb)",
+  ]) assert.ok(sql.includes(`alter function app_private.${signature} owner to postgres;`), signature);
 });

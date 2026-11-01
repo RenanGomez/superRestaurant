@@ -227,7 +227,7 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
 
     const menuCommand = {
       catalogVersion: "af2f9a7d-d581-46a6-8661-263f69200a70",
-      categories: [{ active: true, categoryId: "8a3754cb-58d4-45c8-8502-9709d453a5dc", displayOrder: 0, name: "Bebidas" }],
+      categories: [{ active: true, categoryId: "8a3754cb-58d4-45c8-8502-9709d453a5dc", color: null, displayOrder: 0, imagePath: null, name: "Bebidas" }],
       currency: "MXN",
       deviceId: "0a5dfef7-e2dd-4b66-845a-7e28d24a46ce",
       eventId: "e56167a7-d5b6-4838-b29e-d82f79bc5e84",

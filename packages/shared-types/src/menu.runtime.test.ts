@@ -1,6 +1,7 @@
 import {
   MAX_ORDER_ITEM_MODIFIER_GROUPS,
   MENU_CATALOG_SCHEMA_VERSION,
+  MENU_CATEGORY_COLORS,
   parseMenuCatalogStateV1,
   parseMenuCatalogV1,
   parseSaveMenuCatalogCommandV1,
@@ -316,3 +317,32 @@ expectRejected(withProductFraction({ ...fractionConfig, flavorGroupId: "9a1d2c3e
 expectRejected(withProductFraction({ ...fractionConfig, extraGroupId: groupId }), "same group for product flavors and ingredients is rejected");
 expectRejected(withProductFraction({ ...fractionConfig, excludableIngredientIds: ["a", "a"] }), "duplicate product excludable ingredient is rejected");
 expectRejected(withProductFraction({ ...fractionConfig, extra: 1 }), "extra product fraction field is rejected");
+
+// Category appearance: colour token and image path are optional on input and normalized to null.
+function withCategory(extra: Record<string, unknown>): Record<string, unknown> {
+  const next = command();
+  next.categories = [{ categoryId, name: "Alimentos", active: true, displayOrder: 0, ...extra }];
+  return next;
+}
+const categoryImage = `${restaurantId}/categories/${categoryId}/00000000000000000000000000000000.png`;
+const plainCategory = parseSaveMenuCatalogCommandV1(command());
+expectDefined(plainCategory, "category without appearance parses");
+expect(plainCategory.categories[0]?.color === null && plainCategory.categories[0]?.imagePath === null, "appearance defaults to null");
+const styledCategory = parseSaveMenuCatalogCommandV1(withCategory({ color: "lilac", imagePath: categoryImage }));
+expectDefined(styledCategory, "category with appearance parses");
+expect(styledCategory.categories[0]?.color === "lilac" && styledCategory.categories[0]?.imagePath === categoryImage, "appearance is preserved");
+expect(Object.isFrozen(styledCategory.categories[0]), "category is frozen");
+expect(parseSaveMenuCatalogCommandV1(withCategory({ color: null, imagePath: null }))?.categories[0]?.color === null, "explicit null appearance parses");
+for (const color of MENU_CATEGORY_COLORS) {
+  expect(parseSaveMenuCatalogCommandV1(withCategory({ color }))?.categories[0]?.color === color, `palette token ${color} is accepted`);
+}
+expect(MENU_CATEGORY_COLORS.length === 8, "palette has eight tokens");
+expectRejected(withCategory({ color: "#ffcccc" }), "hex colour is rejected");
+expectRejected(withCategory({ color: "red" }), "colour outside the palette is rejected");
+expectRejected(withCategory({ color: 3 }), "non-string colour is rejected");
+expectRejected(withCategory({ imagePath: `${restaurantId}/products/${categoryId}/00000000000000000000000000000000.png` }), "a products path is not a category image");
+expectRejected(withCategory({ imagePath: "categories/x.png" }), "malformed category image path is rejected");
+expectRejected(withCategory({ extra: 1 }), "extra category field is rejected");
+expectRejected({ ...command(), products: [{ ...(command().products as Record<string, unknown>[])[0], imagePath: categoryImage }] }, "a categories path is not a product image");
+expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), target: "category" }) !== undefined, "category target is accepted");
+expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), target: "other" }) === undefined, "other target is rejected");

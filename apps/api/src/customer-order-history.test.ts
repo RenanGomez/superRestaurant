@@ -438,7 +438,7 @@ function catalogState(overrides: Partial<NonNullable<MenuCatalogStateV1["catalog
   return Object.freeze({
     catalog: Object.freeze({
       catalogVersion,
-      categories: [{ active: true, categoryId, displayOrder: 0, name: "Comida" }],
+      categories: [{ active: true, categoryId, color: null, displayOrder: 0, imagePath: null, name: "Comida" }],
       currency: "MXN",
       modifierGroups: [{
         active: true,

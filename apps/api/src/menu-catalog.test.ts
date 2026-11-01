@@ -181,6 +181,31 @@ test("menu PostgreSQL adapter fails closed for ambiguous or mismatched rows", as
   );
 });
 
+test("menu catalog carries category appearance and the adapter detects divergence on replay", async () => {
+  const categoryId = "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02";
+  const imagePath = `${validScope.restaurantId}/categories/${categoryId}/0123456789abcdef0123456789abcdef.webp`;
+  const styled = parseSaveMenuCatalogCommandV1({
+    ...command,
+    categories: [{ categoryId, name: "Alimentos", active: true, displayOrder: 0, color: "mint", imagePath }],
+  });
+  if (styled === undefined) throw new Error("TEST_STYLED_COMMAND_INVALID");
+  assert.equal(styled.categories[0]?.color, "mint");
+  assert.equal(command.categories[0]?.color, null);
+  assert.equal(command.categories[0]?.imagePath, null);
+  const ok: DatabaseClientPort = { query: async () => ({ rows: [{ status: "replayed", state: stateFor(styled, true) }] }) };
+  assert.equal((await new PostgresMenuCatalogAdapter(ok).save(principal.actorId, styled)).status, "replayed");
+  for (const divergent of [
+    { ...styled.categories[0]!, color: "sky" as const },
+    { ...styled.categories[0]!, imagePath: null },
+  ]) {
+    const other = stateFor({ ...styled, categories: [divergent] }, true);
+    await assert.rejects(
+      new PostgresMenuCatalogAdapter({ query: async () => ({ rows: [{ status: "replayed", state: other }] }) }).save(principal.actorId, styled),
+      MenuCatalogApplicationError,
+    );
+  }
+});
+
 test("menu service accepts an empty first catalog and preserves exact branch scope", async () => {
   const service = serviceFor(["manager"], {
     read: async (_actorId, receivedScope) => {
