@@ -127,10 +127,10 @@ Reglas: una ronda de revisión en nivel C, dos en B, revisión doble en A con co
 ### Segunda retroalimentación de Emmanuel del 2026-11-01 (noche)
 
 - [ ] **REVIEW · B** — `tables-accounts-r2` (Codex; en `main`; Gemini APROBAR con dos P3 anotados): diálogo de mesa sin selector previo, cuentas abiertas dentro del diálogo, mesero asignable/removible por tarjeta, orden abierta al crearse, sin «Abrir cuenta» redundante.
-- [ ] **IN_PROGRESS · C** — `menu-polish-r2` (Gemini `-Write`): selector de color plegado, foto siempre por modal, alineación de inputs, duplicar producto, detalles del editor.
+- [ ] **REVIEW · C** — `menu-polish-r2` (Gemini `-Write`; en `main` d418ab9; puertas web en verde sin caché; pendiente verificación visual de Emmanuel): selector de color plegado, foto siempre por modal, alineación de inputs, duplicar producto, detalles del editor.
 - [ ] **TODO · C** — `menu-tabs-r2`: pestañas Categorías / Productos / Modificadores / Tamaños. Tras `menu-polish-r2`.
-- [ ] **IN_PROGRESS · A** — `menu-locked-ingredients` (P2, Codex `-Effort medium`): en curso; la parte del editor se reconciliará con `menu-polish-r2` al integrar.
-- [ ] **IN_PROGRESS · B** — `order-account-name` (Codex): nombre opcional de la cuenta de mesa; migración `20261102000200` (sin aplicar).
+- [ ] **IN_PROGRESS · A** — `menu-locked-ingredients` (P2): Codex se bloqueó (reporte no commiteado + orden de espera) y luego quedó sin cuota; lo implementa Gemini `-Write` desde `main` con `menu-polish-r2` ya integrado.
+- [ ] **IN_PROGRESS · B** — `order-account-name` (contratos por Codex `51752be`, resto Gemini `-Write` tras agotarse la cuenta secundaria de Codex): nombre opcional de la cuenta de mesa; migración `20261102000200` (sin aplicar).
 - [ ] **TODO · A** — `menu-size-presets`: tamaños definidos una vez por restaurante; investigación en `.agents/reports/size-presets-research.md`. Tras `menu-tabs-r2`.
 - [ ] **TODO · A** — `menu-specialties` (P3): supuestos adoptados salvo indicación de Emmanuel: precio de mitades = mayor de las dos especialidades; grupos de sabores actuales se conservan como legado.
 
