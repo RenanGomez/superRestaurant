@@ -303,6 +303,7 @@ const productFraction = {
   excludableIngredientIds: ["cebolla"],
   extraGroupId: null,
   flavorGroupId: "a409ec59-9f5e-496d-a45d-b83a46b49674",
+  lockedIngredientOptionIds: [],
 };
 
 test("menu catalog carries a product-level half-and-half setup through the PostgreSQL adapter", async () => {

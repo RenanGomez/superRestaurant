@@ -564,10 +564,11 @@ export function catalogVariantToFractionVariant(
           const fromGroup = extraGroup.options
             .filter((option) => !lockedSet.has(option.id))
             .map((option) => ({ ingredientId: option.id, name: option.name }));
-          if (fromGroup.length > 0 || (config.lockedIngredientOptionIds ?? []).length > 0) {
-            return fromGroup;
-          }
-          return (config.excludableIngredientIds ?? []).map((label) => ({ ingredientId: label, name: label }));
+          const existingIds = new Set(fromGroup.map((i) => i.ingredientId));
+          const fromLegacy = (config.excludableIngredientIds ?? [])
+            .filter((label) => !existingIds.has(label))
+            .map((label) => ({ ingredientId: label, name: label }));
+          return [...fromGroup, ...fromLegacy];
         })(),
     name: product.name,
     productId: product.id,

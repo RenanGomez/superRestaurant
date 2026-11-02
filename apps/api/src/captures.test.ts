@@ -853,7 +853,7 @@ const halvesCatalog: MenuCatalogV1 = {
     ...selectionCatalog.products[0]!,
     variants: [{
       active: true, displayOrder: 0, name: "Grande", sku: null, unitPriceMinor: 15_000, variantId: halvesVariantId,
-      fraction: { enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId: halvesExtraGroup, flavorGroupId: halvesFlavorGroup },
+      fraction: { enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId: halvesExtraGroup, flavorGroupId: halvesFlavorGroup, lockedIngredientOptionIds: [] },
     }],
   }],
 };

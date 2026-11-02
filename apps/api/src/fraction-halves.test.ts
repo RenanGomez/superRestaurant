@@ -58,3 +58,51 @@ test("the plan projection copies the stored slot ids, null flavor included", () 
   assert.deepEqual(projected[0]?.extraOptionIds, [CHEESE]);
   assert.equal(projected[1]?.flavorOptionId, FLAVOR);
 });
+
+test("exclusions strip 'Sin ' prefix for display and recover option IDs from modifierId", () => {
+  const ONION_ID = "8a506172-7283-4d94-9ea5-c6d7e8f90a99";
+  const snapWithExclusion = {
+    ...snapshot,
+    modifiers: [
+      ...snapshot.modifiers,
+      {
+        groupCatalogVersion: "v1",
+        groupId: "fraction-exclusion",
+        groupName: "exclude:half-a",
+        modifierId: `exclude:half-a:${ONION_ID}`,
+        name: "Sin Cebolla",
+        quantity: 1,
+        unitPrice: new Money(0, "MXN"),
+      },
+    ],
+  } as unknown as OrderItemPriceSnapshot;
+
+  const halves = describeHalves(snapWithExclusion);
+  assert.deepEqual(halves[0]?.exclusions, ["Cebolla"]);
+
+  const projected = describeHalvesFromSnapshot(snapWithExclusion);
+  assert.deepEqual(projected[0]?.excludedIngredientIds, [ONION_ID]);
+
+  // Legacy fallback: name without "Sin " prefix and legacy label in modifierId
+  const legacySnap = {
+    ...snapshot,
+    modifiers: [
+      ...snapshot.modifiers,
+      {
+        groupCatalogVersion: "v1",
+        groupId: "fraction-exclusion",
+        groupName: "exclude:half-a",
+        modifierId: "exclude:half-a:cebolla",
+        name: "cebolla",
+        quantity: 1,
+        unitPrice: new Money(0, "MXN"),
+      },
+    ],
+  } as unknown as OrderItemPriceSnapshot;
+
+  const legacyHalves = describeHalves(legacySnap);
+  assert.deepEqual(legacyHalves[0]?.exclusions, ["cebolla"]);
+
+  const legacyProjected = describeHalvesFromSnapshot(legacySnap);
+  assert.deepEqual(legacyProjected[0]?.excludedIngredientIds, ["cebolla"]);
+});
