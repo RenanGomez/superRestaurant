@@ -56,3 +56,29 @@ export function waiterLabel(members: readonly Pick<BranchMemberV1, "displayName"
   if (name) return name;
   return userId === actorId ? "Yo" : `Mesero ${userId.slice(0, 4).toLocaleUpperCase("es-MX")}`;
 }
+
+/**
+ * Tab label for an account in the table dialog.
+ * Format: "Cuenta 1 · $130" or "Juan · $130", falling back to "Cuenta 1" or "Juan" when total is absent.
+ * Index is 0-based (0 -> "Cuenta 1").
+ */
+export function accountTabLabel(
+  index: number,
+  order: { readonly accountLabel?: string | null; readonly total?: string | null } | null | undefined,
+  total?: string | null,
+): string {
+  const cleanLabel = order?.accountLabel?.replace(INVISIBLE, "").trim();
+  const base = cleanLabel && cleanLabel.length > 0 ? cleanLabel : `Cuenta ${index + 1}`;
+  const effectiveTotal = (total ?? order?.total)?.replace(INVISIBLE, "").trim();
+  if (effectiveTotal && effectiveTotal.length > 0) {
+    return `${base} · ${effectiveTotal}`;
+  }
+  return base;
+}
+
+/**
+ * Returns the number of open accounts for a table, or 0 when free or without state.
+ */
+export function tableOpenAccountsCount(state: TableBoardTableV1 | null): number {
+  return state?.activeOrders.length ?? 0;
+}
