@@ -433,17 +433,7 @@ begin
           'flavorGroupId', g_flavors::text,
           'extraGroupId', g_extras::text,
           'excludableIngredientIds', pg_catalog.jsonb_build_array('Cebolla')
-        ),
-        'variants', pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
-          'variantId', variant_empty::text, 'name', 'Grande', 'sku', null, 'unitPriceMinor', 18000,
-          'active', true, 'displayOrder', 0,
-          'fraction', pg_catalog.jsonb_build_object(
-            'enabled', true,
-            'flavorGroupId', g_flavors::text,
-            'extraGroupId', g_extras::text,
-            'excludableIngredientIds', '[]'::jsonb
-          )
-        ))
+        )
       )
     ),
     'modifierGroups', payload->'modifierGroups'
@@ -462,13 +452,6 @@ begin
       and p.fraction_locked_ingredient_option_ids = array[o_jamon]
       and p.fraction_excludable_ingredient_ids = array['Cebolla']
   ) then raise exception 'OLD_PAYLOAD_WITHOUT_LOCKED_BACKFILL_INCORRECT'; end if;
-
-  if not exists (
-    select 1 from app.menu_product_variants v
-    where v.restaurant_id = restaurant and v.catalog_id = test_catalog and v.id = variant_empty
-      and v.fraction_locked_ingredient_option_ids @> array[o_cebolla, o_jamon]
-      and pg_catalog.cardinality(v.fraction_locked_ingredient_option_ids) = 2
-  ) then raise exception 'OLD_VARIANT_EMPTY_EXCLUDABLE_MUST_LOCK_ALL'; end if;
 
   -- 7.2. Payload nuevo sin excludable (válido): guarda exitoso y preserva locked
   test_catalog := gen_random_uuid();
@@ -601,6 +584,46 @@ begin
   execute 'reset role';
 
   if save_status <> 'conflict' then raise exception 'OLD_EMPTY_VS_MODERN_UNLOCKED_MUST_CONFLICT: %', save_status; end if;
+
+  -- 7.5. Variante legada con lista vacia (sin configuracion a nivel producto, que seria MENU_FRACTION_DUPLICATE_SOURCE).
+  test_catalog := gen_random_uuid();
+  save_event := gen_random_uuid();
+  save_key := gen_random_uuid();
+  old_payload := pg_catalog.jsonb_build_object(
+    'categories', payload->'categories',
+    'products', pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'productId', product_pizza::text, 'categoryId', category::text, 'name', 'Pizza Variante', 'sku', null,
+        'active', true, 'displayOrder', 0, 'stationId', 'kitchen', 'unit', 'piece', 'unitPriceMinor', 15000, 'tax', null,
+        'modifierGroupIds', pg_catalog.jsonb_build_array(g_flavors::text, g_extras::text),
+        'variants', pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+          'variantId', variant_empty::text, 'name', 'Grande', 'sku', null, 'unitPriceMinor', 18000,
+          'active', true, 'displayOrder', 0,
+          'fraction', pg_catalog.jsonb_build_object(
+            'enabled', true,
+            'flavorGroupId', g_flavors::text,
+            'extraGroupId', g_extras::text,
+            'excludableIngredientIds', '[]'::jsonb
+          )
+        ))
+      )
+    ),
+    'modifierGroups', payload->'modifierGroups'
+  );
+
+  execute 'set local role app_api';
+  select s.status into save_status from app_private.save_menu_catalog(
+    actor, restaurant, branch, save_event, save_key, device, now_at, 6, test_catalog, 'MXN', old_payload) s;
+  execute 'reset role';
+
+  if save_status <> 'saved' then raise exception 'OLD_VARIANT_SAVE_FAILED: %', save_status; end if;
+
+  if not exists (
+    select 1 from app.menu_product_variants v
+    where v.restaurant_id = restaurant and v.catalog_id = test_catalog and v.id = variant_empty
+      and v.fraction_locked_ingredient_option_ids @> array[o_cebolla, o_jamon]
+      and pg_catalog.cardinality(v.fraction_locked_ingredient_option_ids) = 2
+  ) then raise exception 'OLD_VARIANT_EMPTY_EXCLUDABLE_MUST_LOCK_ALL'; end if;
 
 end
 $menu_locked_ingredients_tests$;
