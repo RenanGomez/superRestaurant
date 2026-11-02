@@ -134,7 +134,14 @@ Reglas: una ronda de revisión en nivel C, dos en B, revisión doble en A con co
 - [ ] **TODO · A** — `menu-size-presets`: tamaños definidos una vez por restaurante; investigación en `.agents/reports/size-presets-research.md`. Tras `menu-tabs-r2`.
 - [ ] **TODO · A** — `menu-specialties` (P3): supuestos adoptados salvo indicación de Emmanuel: precio de mitades = mayor de las dos especialidades; grupos de sabores actuales se conservan como legado.
 
-Última actualización: 2026-11-01 (noche)
+### Tercera retroalimentación de Emmanuel (2026-11-02, madrugada)
+
+- [ ] **REVIEW · C** — `shell-sidebar-perf` (Gemini; en `main`): barra lateral fija (sticky) en escritorio. Diagnóstico de lentitud en `.agents/reports/shell-sidebar-perf.md`.
+- [ ] **TODO · B/C** — `web-nav-perf-r1`: `loading.tsx` en todas las secciones, contexto de petición compartido, llamadas en paralelo, `Link` en vez de `a`. Paquete en `.claude/packets/web-nav-perf-r1.md`; tras las tareas en curso.
+- [ ] **IN_PROGRESS · C** — `tables-tabs-count` (Gemini): pestañas por cuenta con «+ Nueva» y contador de cuentas sobre la mesa.
+- [ ] **IN_PROGRESS · A (investigación)** — `caja-split-payments-research` (Gemini): bug del cobro parcial (70 con recibido 60), encabezado de cuenta, «Pagar total / Dividir pago», historial de pagos, tarjetas expandibles en «Por cobrar».
+
+Última actualización: 2026-11-02
 
 Fuente principal: `PLAN_MODERNIZACION_POS_RESTAURANTE.md`.
 
