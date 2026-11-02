@@ -201,7 +201,7 @@ export function resolveFractionPricing(
 
   const flavorsById = new Map(variant.flavors.map((flavor) => [flavor.optionId, flavor]));
   const extrasById = new Map(variant.extras.map((extra) => [extra.optionId, extra]));
-  const ingredientsById = new Set(variant.includedIngredients.map((ingredient) => ingredient.ingredientId));
+  const ingredientsById = new Map(variant.includedIngredients.map((ingredient) => [ingredient.ingredientId, ingredient]));
 
   const modifiers: ModifierPriceSnapshot[] = [];
   const fractionBreakdown: FractionPriceBreakdownEntry[] = [];
@@ -271,7 +271,8 @@ export function resolveFractionPricing(
     }
 
     for (const ingredientId of slot.excludedIngredientIds) {
-      if (!ingredientsById.has(ingredientId)) {
+      const ingredient = ingredientsById.get(ingredientId);
+      if (ingredient === undefined) {
         issues.push({ code: "exclusion_not_found", fraction: slot.fraction, detail: `included ingredient ${ingredientId} does not exist on this variant` });
         continue;
       }
@@ -280,7 +281,7 @@ export function resolveFractionPricing(
         groupCatalogVersion: variant.catalogVersion,
         groupName: `exclude:${slot.fraction}`,
         modifierId: `exclude:${slot.fraction}:${ingredientId}`,
-        name: `Sin ${ingredientId}`,
+        name: `Sin ${ingredient.name}`,
         // Quantity 1 at a zero price: order-item snapshots reject non-positive quantities.
         quantity: 1,
         unitPrice: new Money(0, variant.currency),

@@ -15,12 +15,14 @@ import type { MenuCatalog, MenuFractionSelection, MenuProductFractionConfig } fr
 
 const R = "restaurant-1";
 const V = "menu-v10";
+const QUESO_ID = "8a506172-7283-4d94-9ea5-c6d7e8f90a13";
 
 const enabled: MenuProductFractionConfig = {
   enabled: true,
   excludableIngredientIds: ["cebolla"],
   extraGroupId: "ingredients",
   flavorGroupId: "flavors",
+  lockedIngredientOptionIds: [QUESO_ID],
 };
 
 interface CatalogOptions {
@@ -75,8 +77,9 @@ function pizzaCatalog(options: CatalogOptions = {}): MenuCatalog {
         id: "ingredients", restaurantId: R, name: "Ingredientes", catalogVersion: V, productId: "pizza", active: true,
         minimumQuantity: 0, maximumQuantity: 5,
         options: [
-          { id: "queso", name: "Queso", unitPrice: new Money(2_501, "MXN"), active: true },
+          { id: QUESO_ID, name: "Queso", unitPrice: new Money(2_501, "MXN"), active: true },
           { id: "jamon", name: "Jamon", unitPrice: new Money(2_000, "MXN"), active: true },
+          { id: "cebolla", name: "Cebolla", unitPrice: new Money(0, "MXN"), active: true },
         ],
       },
     ],
@@ -137,7 +140,7 @@ test("a sized product uses the chosen size price from the product-level setup", 
 test("a half built ingredient by ingredient costs the base price and its ingredients are charged at half, rounded up", () => {
   const snapshot = createMenuProductPriceSnapshot(
     pizzaCatalog(),
-    context(halves({ flavor: null, extras: ["queso", "jamon"], excluded: ["cebolla"] }, { flavor: "pepperoni" })),
+    context(halves({ flavor: null, extras: [QUESO_ID, "jamon"], excluded: ["cebolla"] }, { flavor: "pepperoni" })),
   );
   // Both halves are priced at the 12000 product price: the custom one and the zero-priced flavor.
   assert.equal(snapshot.unitPrice.amountMinor, 12_000);
@@ -147,7 +150,7 @@ test("a half built ingredient by ingredient costs the base price and its ingredi
   ]);
   const charges = snapshot.modifiers.map((modifier) => [modifier.modifierId, modifier.unitPrice.amountMinor]);
   // 2501 / 2 = 1250.5 rounds up to 1251; 2000 / 2 = 1000; exclusions are zero-priced markers.
-  assert.deepEqual(charges, [["extra:half-a:queso", 1_251], ["extra:half-a:jamon", 1_000], ["exclude:half-a:cebolla", 0]]);
+  assert.deepEqual(charges, [[`extra:half-a:${QUESO_ID}`, 1_251], ["extra:half-a:jamon", 1_000], ["exclude:half-a:cebolla", 0]]);
 });
 
 test("a custom half on a sized product takes the size price and the other half may out-price it", () => {
@@ -187,7 +190,7 @@ test("the fraction groups stay empty as ordinary modifiers while a line is split
     () => createMenuProductPriceSnapshot(
       pizzaCatalog(),
       context(halves({ flavor: "pepperoni" }, { flavor: "hawaiana" })),
-      [{ groupId: "ingredients", selections: [{ optionId: "queso", quantity: 1 }] }],
+      [{ groupId: "ingredients", selections: [{ optionId: QUESO_ID, quantity: 1 }] }],
     ),
     (error) => error instanceof MenuFractionSelectionInvalidError
       && error.issueCodes[0] === "fraction_group_selection_forbidden",
@@ -247,7 +250,8 @@ test("catalogVariantToFractionVariant builds the pricing view of a product witho
   const view = catalogVariantToFractionVariant(validateMenuCatalog(pizzaCatalog()), "pizza", null);
   assert.equal(view.customHalfPriceMinor, 12_000);
   assert.deepEqual(view.flavors.map((flavor) => [flavor.optionId, flavor.priceMinor]), [["pepperoni", 12_000], ["hawaiana", 17_000]]);
-  assert.deepEqual(view.extras.map((extra) => extra.optionId), ["queso", "jamon"]);
+  assert.deepEqual(view.extras.map((extra) => extra.optionId), [QUESO_ID, "jamon", "cebolla"]);
+  assert.deepEqual(view.includedIngredients.map((i) => i.ingredientId), ["jamon", "cebolla"]);
   assert.throws(
     () => catalogVariantToFractionVariant(validateMenuCatalog(pizzaCatalog({ productFraction: null })), "pizza", null),
     MenuFractionSelectionInvalidError,

@@ -3,7 +3,11 @@ import { groupsForProduct } from "./menu-groups";
 
 /** A product with halves off: nothing chosen yet. */
 export const EMPTY_PRODUCT_FRACTION: MenuProductFractionV1 = Object.freeze({
-  enabled: false, excludableIngredientIds: [], extraGroupId: null, flavorGroupId: null,
+  enabled: false,
+  lockedIngredientOptionIds: [],
+  excludableIngredientIds: [],
+  extraGroupId: null,
+  flavorGroupId: null,
 });
 
 function enabledVariants(product: Pick<MenuProductV1, "variants">): readonly MenuProductVariantV1[] {
@@ -12,7 +16,11 @@ function enabledVariants(product: Pick<MenuProductV1, "variants">): readonly Men
 
 function sameSetup(left: MenuVariantFractionV1, right: MenuVariantFractionV1): boolean {
   const key = (setup: MenuVariantFractionV1) => JSON.stringify([
-    setup.flavorGroupId, setup.extraGroupId, [...setup.excludableIngredientIds].sort()]);
+    setup.flavorGroupId,
+    setup.extraGroupId,
+    [...(setup.lockedIngredientOptionIds ?? [])].sort(),
+    [...(setup.excludableIngredientIds ?? [])].sort(),
+  ]);
   return key(left) === key(right);
 }
 
@@ -59,7 +67,8 @@ export function migrateLegacyFraction(product: MenuProductV1, groups: readonly M
   const candidate = source?.fraction ?? product.fraction;
   const fraction = candidate === null || candidate === undefined ? candidate : {
     ...candidate,
-    excludableIngredientIds: [...candidate.excludableIngredientIds],
+    lockedIngredientOptionIds: [...(candidate.lockedIngredientOptionIds ?? [])],
+    ...(candidate.excludableIngredientIds ? { excludableIngredientIds: [...candidate.excludableIngredientIds] } : {}),
     extraGroupId: candidate.extraGroupId !== null && assigned.has(candidate.extraGroupId) ? candidate.extraGroupId : null,
     flavorGroupId: candidate.flavorGroupId !== null && assigned.has(candidate.flavorGroupId) ? candidate.flavorGroupId : null,
   };

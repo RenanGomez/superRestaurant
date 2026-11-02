@@ -131,10 +131,14 @@ begin
     actor,restaurant_a,branch_a,save_event,save_key,device,now_at,0,save_catalog,'MXN',payload) s;
   execute 'reset role';
   if save_status<>'saved' then raise exception 'CATALOG_HALVES_PL_SAVE_REJECTED'; end if;
-  if save_state#>'{catalog,products,0,fraction}' is distinct from fraction_cfg
+  if (save_state#>'{catalog,products,0,fraction}') - 'lockedIngredientOptionIds' is distinct from fraction_cfg
     or save_state#>'{catalog,products,1,fraction}' is distinct from 'null'::jsonb
     or save_state#>'{catalog,products,0,variants}' is distinct from '[]'::jsonb
   then raise exception 'CATALOG_HALVES_PL_STATE_ROUNDTRIP'; end if;
+  if pg_catalog.jsonb_typeof(save_state#>'{catalog,products,0,fraction,lockedIngredientOptionIds}') is distinct from 'array'
+    or not (save_state#>'{catalog,products,0,fraction,lockedIngredientOptionIds}' @> pg_catalog.jsonb_build_array(o_queso::text))
+    or not (save_state#>'{catalog,products,0,fraction,lockedIngredientOptionIds}' <@ pg_catalog.jsonb_build_array(o_queso::text))
+  then raise exception 'CATALOG_HALVES_PL_LOCKED_INGREDIENT_OPTIONS'; end if;
   -- The explicit null product fraction replays as the absent key.
   save_event := gen_random_uuid(); save_key := gen_random_uuid(); save_catalog := gen_random_uuid();
   execute 'set local role app_api';

@@ -21,14 +21,26 @@ export function duplicateProduct(product: MenuProductV1, newId: () => string, di
   const productId = newId();
   const variants = (product.variants ?? []).map((variant): MenuProductVariantV1 => ({
     ...variant,
-    ...(variant.fraction === null || variant.fraction === undefined ? {} : { fraction: { ...variant.fraction, excludableIngredientIds: [...variant.fraction.excludableIngredientIds] } }),
+    ...(variant.fraction === null || variant.fraction === undefined ? {} : {
+      fraction: {
+        ...variant.fraction,
+        lockedIngredientOptionIds: [...(variant.fraction.lockedIngredientOptionIds ?? [])],
+        ...(variant.fraction.excludableIngredientIds ? { excludableIngredientIds: [...variant.fraction.excludableIngredientIds] } : {}),
+      },
+    }),
     variantId: newId(),
   }));
   const copied: MenuProductV1 = {
     ...product,
     displayOrder,
     imagePath: null,
-    ...(product.fraction === null || product.fraction === undefined ? {} : { fraction: { ...product.fraction, excludableIngredientIds: [...product.fraction.excludableIngredientIds] } }),
+    ...(product.fraction === null || product.fraction === undefined ? {} : {
+      fraction: {
+        ...product.fraction,
+        lockedIngredientOptionIds: [...(product.fraction.lockedIngredientOptionIds ?? [])],
+        ...(product.fraction.excludableIngredientIds ? { excludableIngredientIds: [...product.fraction.excludableIngredientIds] } : {}),
+      },
+    }),
     modifierGroupIds: [...(product.modifierGroupIds ?? [])],
     name: copyName(product.name),
     productId,

@@ -833,6 +833,7 @@ const halvesFlavorA = "9d405f61-7283-4d94-9ea5-c6d7e8f90a10";
 const halvesFlavorB = "9d405f61-7283-4d94-9ea5-c6d7e8f90a11";
 const halvesFlavorOff = "9d405f61-7283-4d94-9ea5-c6d7e8f90a12";
 const halvesExtra = "9d405f61-7283-4d94-9ea5-c6d7e8f90a13";
+const halvesIngredientOnion = "9d405f61-7283-4d94-9ea5-c6d7e8f90a14";
 const halvesCatalog: MenuCatalogV1 = {
   ...selectionCatalog,
   modifierGroups: [
@@ -846,14 +847,17 @@ const halvesCatalog: MenuCatalogV1 = {
     },
     {
       active: true, displayOrder: 1, groupId: halvesExtraGroup, maximumQuantity: 5, minimumQuantity: 0, name: "Extras", productId: halvesProductId,
-      options: [{ active: true, imagePath: null, maximumQuantity: null, name: "Queso extra", optionId: halvesExtra, unitPriceMinor: 2_501 }],
+      options: [
+        { active: true, imagePath: null, maximumQuantity: null, name: "Queso extra", optionId: halvesExtra, unitPriceMinor: 2_501 },
+        { active: true, imagePath: null, maximumQuantity: null, name: "Cebolla", optionId: halvesIngredientOnion, unitPriceMinor: 0 },
+      ],
     },
   ],
   products: [{
     ...selectionCatalog.products[0]!,
     variants: [{
       active: true, displayOrder: 0, name: "Grande", sku: null, unitPriceMinor: 15_000, variantId: halvesVariantId,
-      fraction: { enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId: halvesExtraGroup, flavorGroupId: halvesFlavorGroup },
+      fraction: { enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId: halvesExtraGroup, flavorGroupId: halvesFlavorGroup, lockedIngredientOptionIds: [] },
     }],
   }],
 };
@@ -913,7 +917,7 @@ test("capture selection plan prices a halves line at the greater flavor plus hal
     save: async () => { throw new Error("must not save a catalog"); },
   }, { ...noConfirmationPort, readSelectionPlan: async () => ({ status: "ok", plan: command.plan, appliedCaptureVersion: 2 }) });
 
-  const priced = halvesPlanCommand(halvesFlavorB, [halvesExtra], ["cebolla"]);
+  const priced = halvesPlanCommand(halvesFlavorB, [halvesExtra], [halvesIngredientOnion]);
   const result = await serviceFor(priced).replace(principal, priced);
   const line = result.selectionProjection?.lines[0];
   // greater half 17_000 + one extra on half A at 50 % rounded up (2_501 -> 1_251) = 18_251 per unit.
@@ -921,7 +925,7 @@ test("capture selection plan prices a halves line at the greater flavor plus hal
   assert.equal(line?.lineTotalMinor, 2 * (17_000 + 1_251));
   assert.equal(result.selectionProjection?.subtotalMinor, 2 * (17_000 + 1_251));
   assert.deepEqual(line?.halves?.map((half) => [half.fraction, half.flavorName, half.amountMinor, half.extras, half.exclusions]), [
-    ["half-a", "Pepperoni", 15_000, ["Queso extra"], ["cebolla"]],
+    ["half-a", "Pepperoni", 15_000, ["Queso extra"], ["Cebolla"]],
     ["half-b", "Hawaiana", 17_000, [], []],
   ]);
   assert.deepEqual(line?.modifiers, []);
@@ -2740,18 +2744,18 @@ test("capture line quote prices whole lines with modifiers, a size, and halves e
   assert.equal(sized.lineTotalMinor, 30_000);
 
   const halves = await service.quoteLinePrice(principal, lineQuoteRequest({
-    variantId: halvesVariantId, quantity: 2, fraction: halvesFraction(halvesFlavorB, [halvesExtra], ["cebolla"]),
+    variantId: halvesVariantId, quantity: 2, fraction: halvesFraction(halvesFlavorB, [halvesExtra], [halvesIngredientOnion]),
   }));
   // greater half 17_000 + one extra on half A at 50 % rounded up (2_501 -> 1_251).
   assert.equal(halves.geometry, "halves");
   assert.equal(halves.unitPriceMinor, 17_000);
   assert.equal(halves.lineTotalMinor, 2 * (17_000 + 1_251));
   assert.deepEqual(halves.fractionBreakdown.map((half) => [half.fraction, half.flavorName, half.amountMinor, half.extras, half.exclusions]), [
-    ["half-a", "Pepperoni", 15_000, ["Queso extra"], ["cebolla"]],
+    ["half-a", "Pepperoni", 15_000, ["Queso extra"], ["Cebolla"]],
     ["half-b", "Hawaiana", 17_000, [], []],
   ]);
   assert.deepEqual(halves.fractionBreakdown.map((half) => [half.fraction, half.flavorOptionId, half.extraOptionIds, half.excludedIngredientIds]), [
-    ["half-a", halvesFlavorA, [halvesExtra], ["cebolla"]],
+    ["half-a", halvesFlavorA, [halvesExtra], [halvesIngredientOnion]],
     ["half-b", halvesFlavorB, [], []],
   ]);
   assert.deepEqual(halves.modifiers, []);
@@ -2798,7 +2802,7 @@ test("capture line quote returns the same figures as the selection plan projecti
     { quantity: 3, variantId: null, fraction: null,
       modifierGroups: [{ groupId: quoteSauceGroup, selections: [{ optionId: quoteSauceOption, quantity: 2 }] }] },
     { quantity: 2, variantId: halvesVariantId, fraction: null, modifierGroups: [] },
-    { quantity: 2, variantId: halvesVariantId, fraction: halvesFraction(halvesFlavorB, [halvesExtra], ["cebolla"]), modifierGroups: [] },
+    { quantity: 2, variantId: halvesVariantId, fraction: halvesFraction(halvesFlavorB, [halvesExtra], [halvesIngredientOnion]), modifierGroups: [] },
   ];
   for (const line of lines) {
     const quote = await service.quoteLinePrice(principal, lineQuoteRequest(line));

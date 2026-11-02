@@ -5,7 +5,7 @@ import { duplicateProduct } from "./menu-duplicate.js";
 
 const counter = (): (() => string) => { let n = 0; return () => `new-${++n}`; };
 const product: MenuProductV1 = {
-  active: true, categoryId: "c1", displayOrder: 3, fraction: { enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId: "g2", flavorGroupId: "g1" },
+  active: true, categoryId: "c1", displayOrder: 3, fraction: { enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId: "g2", flavorGroupId: "g1", lockedIngredientOptionIds: ["opt-1"] },
   imagePath: "11111111-1111-4111-8111-111111111111/products/22222222-2222-4222-8222-222222222222/0123456789abcdef0123456789abcdef.png", name: "Pizza", productId: "p1", sku: "PZ-1", stationId: "horno",
   tax: { inclusion: "included", name: "IVA", rateDenominator: 100, rateNumerator: 16, taxId: "iva", taxRuleVersion: "1" }, unit: "pieza", unitPriceMinor: 15000,
   modifierGroupIds: ["g1", "g2"],
@@ -31,6 +31,8 @@ test("the copy lists the same shared groups (no group is cloned) and its halves 
   assert.equal(copy.fraction?.extraGroupId, "g2");
   assert.deepEqual(copy.fraction?.excludableIngredientIds, ["cebolla"]);
   assert.notEqual(copy.fraction?.excludableIngredientIds, product.fraction?.excludableIngredientIds);
+  assert.deepEqual(copy.fraction?.lockedIngredientOptionIds, ["opt-1"]);
+  assert.notEqual(copy.fraction?.lockedIngredientOptionIds, product.fraction?.lockedIngredientOptionIds);
   assert.equal(product.name, "Pizza");
   assert.deepEqual(product.modifierGroupIds, ["g1", "g2"]);
 });

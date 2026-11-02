@@ -22,7 +22,14 @@ export function describeHalves(snapshot: OrderItemPriceSnapshot): readonly Order
     const prefix = `exclude:${entry.fraction}:`;
     const exclusions = snapshot.modifiers
       .filter((modifier) => modifier.groupId === "fraction-exclusion" && modifier.groupName === `exclude:${entry.fraction}`)
-      .map((modifier) => modifier.modifierId.startsWith(prefix) ? modifier.modifierId.slice(prefix.length) : modifier.name);
+      .map((modifier) => {
+        const optionId = modifier.modifierId.startsWith(prefix) ? modifier.modifierId.slice(prefix.length) : undefined;
+        if (optionId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(optionId)) {
+          return optionId;
+        }
+        if (modifier.name.startsWith("Sin ")) return modifier.name.slice(4);
+        return optionId ?? modifier.name;
+      });
     halves.push({
       amountMinor: entry.amountMinor,
       exclusions,
@@ -37,7 +44,7 @@ export function describeHalves(snapshot: OrderItemPriceSnapshot): readonly Order
 /**
  * Per-half view with ids recovered from the frozen snapshot alone (order detail has no stored
  * `fraction`): the flavor id is the breakdown entry's `flavorOptionId`, extra ids come from
- * `extra:<half>:<id>` modifier ids and exclusions are already the ids carried by `describeHalves`.
+ * `extra:<half>:<id>` modifier ids and exclusions come from `exclude:<half>:<id>` modifier ids.
  * A half whose ids cannot be recovered completely is returned without ids.
  */
 export function describeHalvesFromSnapshot(snapshot: OrderItemPriceSnapshot): readonly FractionHalfProjectionV1[] {
@@ -52,8 +59,12 @@ export function describeHalvesFromSnapshot(snapshot: OrderItemPriceSnapshot): re
     const extraOptionIds = snapshot.modifiers
       .filter((modifier) => modifier.groupId === "fraction-extra" && modifier.modifierId.startsWith(prefix))
       .map((modifier) => modifier.modifierId.slice(prefix.length));
-    if (flavorOptionId === undefined || extraOptionIds.length !== half.extras.length) return half;
-    return { ...half, excludedIngredientIds: [...half.exclusions], extraOptionIds, flavorOptionId };
+    const exclPrefix = `exclude:${half.fraction}:`;
+    const excludedIngredientIds = snapshot.modifiers
+      .filter((modifier) => modifier.groupId === "fraction-exclusion" && modifier.modifierId.startsWith(exclPrefix))
+      .map((modifier) => modifier.modifierId.slice(exclPrefix.length));
+    if (flavorOptionId === undefined || extraOptionIds.length !== half.extras.length || excludedIngredientIds.length !== half.exclusions.length) return half;
+    return { ...half, excludedIngredientIds, extraOptionIds, flavorOptionId };
   });
 }
 

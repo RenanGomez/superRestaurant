@@ -11,6 +11,10 @@ export const LINE_FRACTION_HALVES = Object.freeze(["half-a", "half-b"] as const)
 export type LineFractionHalfV1 = (typeof LINE_FRACTION_HALVES)[number];
 
 export interface LineFractionSlotV1 {
+  /**
+   * Option IDs of the ingredient group (extraGroupId) excluded on this half.
+   * Legacy snapshots may carry text labels; both are accepted when parsing.
+   */
   readonly excludedIngredientIds: readonly string[];
   /** Ingredients (options of the product's ingredient group) of this half. */
   readonly extraOptionIds: readonly string[];

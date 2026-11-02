@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CAPTURE_SELECTION_LINE_MAX_QUANTITY, type BranchScope, type CaptureLineQuoteRequestV1, type CaptureLineQuoteResultV1, type LineFractionHalfV1, type LineFractionV1, type MenuModifierGroupV1, type MenuProductV1 } from "@super-restaurant/shared-types";
 import { Field } from "../../../components/field-hint";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
@@ -107,6 +107,13 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
   const halvesActive = fractionSetup !== undefined && splitChosen;
   const flavorGroup = assignedGroups.find((group) => group.groupId === fractionSetup?.flavorGroupId);
   const extraGroup = assignedGroups.find((group) => group.groupId === fractionSetup?.extraGroupId);
+  const excludableIngredients = useMemo(() => {
+    if (!fractionSetup) return [];
+    const lockedSet = new Set(fractionSetup.lockedIngredientOptionIds ?? []);
+    return (extraGroup?.options ?? [])
+      .filter((option) => option.active && !lockedSet.has(option.optionId))
+      .map((option) => ({ id: option.optionId, name: option.name }));
+  }, [fractionSetup, extraGroup]);
   // With halves the flavor and extra groups live in the two columns, not in the ordinary list.
   const listedGroups = halvesActive ? assignedGroups.filter((group) => group.groupId !== flavorGroup?.groupId && group.groupId !== extraGroup?.groupId) : assignedGroups;
   const halvesValidation = validateHalvesDraft(halves);
@@ -189,7 +196,7 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
         </fieldset>}
         {halvesActive && <div className="grid gap-3 sm:grid-cols-2" aria-label="Mitad y mitad">
           {(["half-a", "half-b"] as const).map((half) => <HalfColumn key={half} half={half} draft={half === "half-a" ? halves.a : halves.b}
-            flavorGroup={flavorGroup} extraGroup={extraGroup} excludable={fractionSetup?.excludableIngredientIds ?? []}
+            flavorGroup={flavorGroup} extraGroup={extraGroup} excludable={excludableIngredients}
             currency={currency} variantPriceMinor={basePriceMinor}
             otherHalfBuilt={(half === "half-a" ? halves.b : halves.a).built}
             disabled={busy || confirmed || lockSelection}
@@ -277,7 +284,7 @@ interface HalfColumnProps {
   readonly draft: HalvesDraft["a"];
   readonly flavorGroup: MenuModifierGroupV1 | undefined;
   readonly extraGroup: MenuModifierGroupV1 | undefined;
-  readonly excludable: readonly string[];
+  readonly excludable: readonly { readonly id: string; readonly name: string }[];
   readonly currency: string;
   readonly variantPriceMinor: number;
   readonly disabled: boolean;
@@ -344,10 +351,10 @@ function HalfColumn({ half, draft, flavorGroup, extraGroup, excludable, currency
       <legend className="text-sm font-semibold">Quitar ingredientes</legend>
       <div className="flex flex-wrap gap-2">
         {excludable.map((ingredient) => {
-          const chosen = draft.excludedIngredientIds.includes(ingredient);
-          return <button key={ingredient} type="button" aria-pressed={chosen} disabled={disabled}
-            className={optionChip(chosen)} onClick={() => onEntry("excludedIngredientIds", ingredient)}>
-            Sin {ingredient}
+          const chosen = draft.excludedIngredientIds.includes(ingredient.id);
+          return <button key={ingredient.id} type="button" aria-pressed={chosen} disabled={disabled}
+            className={optionChip(chosen)} onClick={() => onEntry("excludedIngredientIds", ingredient.id)}>
+            Sin {ingredient.name}
           </button>;
         })}
       </div>

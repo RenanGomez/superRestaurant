@@ -99,7 +99,10 @@ export function toDomainMenuCatalog(catalog: MenuCatalogV1, restaurantId: string
 export function toDomainFraction(fraction: MenuVariantFractionV1): MenuVariantFractionConfig {
   return {
     enabled: fraction.enabled,
-    excludableIngredientIds: [...fraction.excludableIngredientIds],
+    ...(fraction.excludableIngredientIds !== undefined
+      ? { excludableIngredientIds: [...fraction.excludableIngredientIds] }
+      : {}),
+    lockedIngredientOptionIds: [...(fraction.lockedIngredientOptionIds ?? [])],
     extraGroupId: fraction.extraGroupId,
     flavorGroupId: fraction.flavorGroupId,
   };

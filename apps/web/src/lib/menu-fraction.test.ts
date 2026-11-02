@@ -7,7 +7,7 @@ import { variantValidationError } from "./menu-variants.js";
 const flavors = "11111111-1111-4111-8111-111111111111";
 const ingredients = "22222222-2222-4222-8222-222222222222";
 const setup = (extra: Partial<MenuVariantFractionV1> = {}): MenuVariantFractionV1 =>
-  ({ enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId: ingredients, flavorGroupId: flavors, ...extra });
+  ({ enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId: ingredients, flavorGroupId: flavors, lockedIngredientOptionIds: [], ...extra });
 const variant = (name: string, displayOrder: number, fraction: MenuVariantFractionV1 | null) =>
   ({ active: true, displayOrder, fraction, name, sku: null, unitPriceMinor: 100, variantId: `v-${name}` });
 const product = (overrides: Partial<MenuProductV1>): MenuProductV1 => ({
