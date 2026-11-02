@@ -969,11 +969,12 @@ test("order service detail reports the frozen line tax as taxMinor", async () =>
 });
 
 const receiptPaymentRow = {
-  amountMinor: 3_000, capturedAt: "2026-10-06T12:01:00.123Z", changeMinor: 1_800, method: "cash",
-  paymentId: "5d1c2c3e-4f50-4a61-8b72-93a4b5c6d7e8", tenderedAmountMinor: 5_000, tipMinor: 200, transferReference: null,
+  amountMinor: 3_000, capturedAt: "2026-10-06T12:01:00.123Z", capturedBy: "31313131-3131-4131-8131-313131313131",
+  changeMinor: 1_800, method: "cash", paymentId: "5d1c2c3e-4f50-4a61-8b72-93a4b5c6d7e8",
+  tenderedAmountMinor: 5_000, tipMinor: 200, transferReference: null,
 };
 const receiptTransferRow = {
-  amountMinor: 1_500, capturedAt: "2026-10-06T12:02:00.123Z", changeMinor: null, method: "transfer",
+  amountMinor: 1_500, capturedAt: "2026-10-06T12:02:00.123Z", capturedBy: null, changeMinor: null, method: "transfer",
   paymentId: "6d1c2c3e-4f50-4a61-8b72-93a4b5c6d7e8", tenderedAmountMinor: null, tipMinor: 0, transferReference: "SPEI-123",
 };
 
@@ -1009,6 +1010,8 @@ test("order detail projects createdAt, shortFolio and captured payments from the
     ["cash", 3_000, null], ["transfer", 1_500, "SPEI-123"],
   ]);
   assert.equal(two.payments[0]?.changeMinor, 1_800);
+  assert.equal(two.payments[0]?.capturedBy, "31313131-3131-4131-8131-313131313131");
+  assert.equal(two.payments[1]?.capturedBy, null);
   // The reader answering "missing" never invents facts: null folio/date and no payments.
   const missing = await serviceFor(["manager"], receiptPort("missing")).detail(principal, request);
   assert.equal(missing.createdAt, null);

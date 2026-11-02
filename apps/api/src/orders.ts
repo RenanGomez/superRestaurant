@@ -1057,7 +1057,9 @@ function projectOrderDetail(
     items,
     orderId: order.orderId,
     // Data minimization: payments (and the transfer reference) only for financial roles or the assigned courier.
-    payments: canSeePayments ? receipt?.payments ?? [] : [],
+    payments: canSeePayments
+      ? (receipt?.payments ?? []).map((p) => ({ ...p, capturedBy: p.capturedBy ?? null }))
+      : [],
     schemaVersion: 1,
     scope,
     shortFolio: receipt?.shortFolio ?? null,
