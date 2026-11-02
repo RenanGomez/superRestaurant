@@ -23,8 +23,12 @@ export function describeHalves(snapshot: OrderItemPriceSnapshot): readonly Order
     const exclusions = snapshot.modifiers
       .filter((modifier) => modifier.groupId === "fraction-exclusion" && modifier.groupName === `exclude:${entry.fraction}`)
       .map((modifier) => {
+        const optionId = modifier.modifierId.startsWith(prefix) ? modifier.modifierId.slice(prefix.length) : undefined;
+        if (optionId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(optionId)) {
+          return optionId;
+        }
         if (modifier.name.startsWith("Sin ")) return modifier.name.slice(4);
-        return modifier.modifierId.startsWith(prefix) ? modifier.modifierId.slice(prefix.length) : modifier.name;
+        return optionId ?? modifier.name;
       });
     halves.push({
       amountMinor: entry.amountMinor,
