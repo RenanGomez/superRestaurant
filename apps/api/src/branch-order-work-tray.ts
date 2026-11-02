@@ -130,10 +130,14 @@ function projectBranchOrderWorkItem(
   canReadCustomers: boolean,
 ): BranchOrderWorkItemV1 {
   // `deliveryState` is emitted by migration 20261007000100; a reader without it (key absent) means "no delivery".
-  const record = exactRecord(raw, [...ITEM_KEYS, "deliveryState"]) ?? exactRecord(raw, ITEM_KEYS);
+  // `accountLabel` is emitted by migration 20261102000200; null or absent means no label.
+  const record = exactRecord(raw, ITEM_KEYS, ["deliveryState", "accountLabel"]);
   if (record === undefined) throw unavailable();
   const deliveryState = own(record, "deliveryState") ?? null;
   if (deliveryState !== null && !member(deliveryState, DELIVERY_STATES)) throw unavailable();
+  const rawAccountLabel = own(record, "accountLabel") ?? null;
+  const accountLabel = rawAccountLabel === null ? null : (typeof rawAccountLabel === "string" ? rawAccountLabel : undefined);
+  if (accountLabel === undefined) throw unavailable();
   const orderId = own(record, "orderId");
   const channel = own(record, "channel");
   const status = own(record, "status");
@@ -174,6 +178,7 @@ function projectBranchOrderWorkItem(
   const fulfillmentChannel = snapshot === null ? (channel === "table" ? "dine_in" : null) : snapshot.fulfillmentChannel;
 
   const item = parseBranchOrderWorkItemV1({
+    accountLabel,
     addressLabel: canReadCustomers ? buildAddressLabel(snapshot) : null,
     channel,
     createdAt: confirmedAt ?? createdAt,
@@ -242,13 +247,20 @@ function member<const T extends readonly string[]>(value: unknown, values: T): v
   return typeof value === "string" && (values as readonly string[]).includes(value);
 }
 
-function exactRecord(value: unknown, keys: readonly string[]): Readonly<Record<string, unknown>> | undefined {
+function exactRecord(
+  value: unknown,
+  keys: readonly string[],
+  optionalKeys: readonly string[] = [],
+): Readonly<Record<string, unknown>> | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   try {
     if (![Object.prototype, null].includes(Object.getPrototypeOf(value))) return undefined;
     const ownKeys = Reflect.ownKeys(value);
-    if (ownKeys.length !== keys.length || keys.some((key) => !ownKeys.includes(key))) return undefined;
     for (const key of keys) {
+      if (!ownKeys.includes(key)) return undefined;
+    }
+    for (const key of ownKeys) {
+      if (typeof key !== "string" || (!keys.includes(key) && !optionalKeys.includes(key))) return undefined;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) return undefined;
     }

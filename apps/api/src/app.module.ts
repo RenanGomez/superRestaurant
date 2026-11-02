@@ -65,6 +65,8 @@ import {
 } from "./catalog-image-storage.js";
 import { OrderWaiterController } from "./order-waiter.controller.js";
 import { ORDER_WAITER_PORT, OrderWaiterService, PostgresOrderWaiterAdapter } from "./order-waiter.js";
+import { OrderAccountLabelController } from "./order-account-label.controller.js";
+import { ORDER_ACCOUNT_LABEL_PORT, OrderAccountLabelService, PostgresOrderAccountLabelAdapter } from "./order-account-label.js";
 import { OrdersController } from "./orders.controller.js";
 import {
   ORDER_PERSISTENCE_PORT,
@@ -150,6 +152,7 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     DeliveryZonesController,
     TableBoardController,
     OrderWaiterController,
+    OrderAccountLabelController,
     DeliveriesController,
     BranchMembersController,
   ],
@@ -230,6 +233,9 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     PostgresOrderWaiterAdapter,
     { provide: ORDER_WAITER_PORT, useExisting: PostgresOrderWaiterAdapter },
     OrderWaiterService,
+    PostgresOrderAccountLabelAdapter,
+    { provide: ORDER_ACCOUNT_LABEL_PORT, useExisting: PostgresOrderAccountLabelAdapter },
+    OrderAccountLabelService,
     PostgresMenuCatalogAdapter,
     { provide: MENU_CATALOG_PORT, useExisting: PostgresMenuCatalogAdapter },
     MenuCatalogService,

@@ -27,6 +27,7 @@ export class TableBoardApplicationError extends Error {
 }
 
 interface RawTableBoardOrder {
+  readonly accountLabel?: unknown;
   readonly openedAt: unknown;
   readonly orderId: unknown;
   readonly status: unknown;
@@ -62,9 +63,10 @@ export class PostgresTableBoardAdapter implements TableBoardPort {
     const rawOrders = dataProperty(record, "orders");
     if (!Array.isArray(rawOrders)) throw unavailable();
     return rawOrders.map((entry) => {
-      const order = exactRecord(entry, ["tableId", "orderId", "status", "version", "waiterUserId", "openedAt"]);
+      const order = exactRecord(entry, ["tableId", "orderId", "status", "version", "waiterUserId", "openedAt"], ["accountLabel"]);
       if (order === undefined) throw unavailable();
       return Object.freeze({
+        accountLabel: dataProperty(order, "accountLabel") ?? null,
         openedAt: dataProperty(order, "openedAt"), orderId: dataProperty(order, "orderId"),
         status: dataProperty(order, "status"), tableId: dataProperty(order, "tableId"),
         version: integerValue(dataProperty(order, "version")), waiterUserId: dataProperty(order, "waiterUserId"),
@@ -112,6 +114,7 @@ export class TableBoardService {
       ordersByTable.set(tableId, bucket);
     }
     const activeOrder = (order: RawTableBoardOrder) => ({
+      accountLabel: order.accountLabel ?? null,
       openedAt: order.openedAt, orderId: order.orderId, status: order.status,
       version: order.version, waiterUserId: order.waiterUserId,
     });
@@ -144,13 +147,20 @@ function parseUuidScope(value: unknown): BranchScope | undefined {
   return scope !== undefined && UUID_PATTERN.test(scope.restaurantId) && UUID_PATTERN.test(scope.branchId) ? scope : undefined;
 }
 
-function exactRecord(value: unknown, keys: readonly string[]): Record<string, unknown> | undefined {
+function exactRecord(
+  value: unknown,
+  keys: readonly string[],
+  optionalKeys: readonly string[] = [],
+): Record<string, unknown> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   try {
     if (![Object.prototype, null].includes(Object.getPrototypeOf(value))) return undefined;
     const ownKeys = Reflect.ownKeys(value);
-    if (ownKeys.length !== keys.length || keys.some((key) => !ownKeys.includes(key))) return undefined;
     for (const key of keys) {
+      if (!ownKeys.includes(key)) return undefined;
+    }
+    for (const key of ownKeys) {
+      if (typeof key !== "string" || (!keys.includes(key) && !optionalKeys.includes(key))) return undefined;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) return undefined;
     }
