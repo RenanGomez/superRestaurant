@@ -214,6 +214,89 @@ begin
   return result;
 end $function$;
 
+create or replace function app_private.normalize_menu_catalog_payload(p_payload jsonb)
+returns jsonb language sql immutable set search_path = '' as $function$
+  select pg_catalog.jsonb_build_object(
+    'categories', coalesce((
+      select pg_catalog.jsonb_agg(
+        entry.value - coalesce((
+          select pg_catalog.array_agg(dropped.key)
+          from (
+            select 'color'::text as key where entry.value->'color' = 'null'::jsonb
+            union all
+            select 'imagePath'::text where entry.value->'imagePath' = 'null'::jsonb
+          ) as dropped
+        ), '{}'::text[])
+        order by entry.ord)
+      from pg_catalog.jsonb_array_elements(p_payload->'categories') with ordinality as entry(value, ord)
+    ), '[]'::jsonb),
+    'products', coalesce((
+      select pg_catalog.jsonb_agg(
+        (case when pg_catalog.jsonb_typeof(stripped.value->'variants') = 'array'
+          then pg_catalog.jsonb_set(stripped.value, '{variants}', coalesce((
+            select pg_catalog.jsonb_agg(
+              case
+                when variant_entry.value->'fraction' = 'null'::jsonb then variant_entry.value - 'fraction'
+                when variant_entry.value ? 'fraction' and variant_entry.value->'fraction' <> 'null'::jsonb then
+                  pg_catalog.jsonb_set(
+                    variant_entry.value,
+                    '{fraction}',
+                    variant_entry.value->'fraction'
+                      || case when not (variant_entry.value->'fraction' ? 'lockedIngredientOptionIds')
+                           then pg_catalog.jsonb_build_object('lockedIngredientOptionIds', '[]'::jsonb)
+                           else '{}'::jsonb end
+                      || case when not (variant_entry.value->'fraction' ? 'excludableIngredientIds')
+                           then pg_catalog.jsonb_build_object('excludableIngredientIds', '[]'::jsonb)
+                           else '{}'::jsonb end
+                  )
+                else variant_entry.value
+              end
+              order by variant_entry.ord)
+            from pg_catalog.jsonb_array_elements(stripped.value->'variants') with ordinality as variant_entry(value, ord)
+          ), '[]'::jsonb))
+          else stripped.value end)
+        || pg_catalog.jsonb_build_object('modifierGroupIds', app_private.menu_product_group_ids(p_payload, stripped.value))
+        order by stripped.ord)
+      from (
+        select entry.ord,
+          (case
+            when entry.value ? 'fraction' and entry.value->'fraction' <> 'null'::jsonb then
+              pg_catalog.jsonb_set(
+                entry.value,
+                '{fraction}',
+                entry.value->'fraction'
+                  || case when not (entry.value->'fraction' ? 'lockedIngredientOptionIds')
+                       then pg_catalog.jsonb_build_object('lockedIngredientOptionIds', '[]'::jsonb)
+                       else '{}'::jsonb end
+                  || case when not (entry.value->'fraction' ? 'excludableIngredientIds')
+                       then pg_catalog.jsonb_build_object('excludableIngredientIds', '[]'::jsonb)
+                       else '{}'::jsonb end
+              )
+            else entry.value
+          end) - coalesce((
+          select pg_catalog.array_agg(dropped.key)
+          from (
+            select 'imagePath'::text as key where entry.value->'imagePath' = 'null'::jsonb
+            union all
+            select 'fraction'::text where entry.value->'fraction' = 'null'::jsonb
+            union all
+            select 'variants'::text where entry.value->'variants' = '[]'::jsonb
+          ) as dropped
+        ), '{}'::text[]) as value
+        from pg_catalog.jsonb_array_elements(p_payload->'products') with ordinality as entry(value, ord)
+      ) as stripped
+    ), '[]'::jsonb),
+    'modifierGroups', coalesce((
+      select pg_catalog.jsonb_agg(pg_catalog.jsonb_set(
+        case when grp.value->'productId' = 'null'::jsonb then grp.value - 'productId' else grp.value end,
+        '{options}', coalesce((
+        select pg_catalog.jsonb_agg(case when opt.value->'imagePath' = 'null'::jsonb then opt.value - 'imagePath' else opt.value end order by opt.ord)
+        from pg_catalog.jsonb_array_elements(grp.value->'options') with ordinality as opt(value, ord)
+      ), '[]'::jsonb)) order by grp.ord)
+      from pg_catalog.jsonb_array_elements(p_payload->'modifierGroups') with ordinality as grp(value, ord)
+    ), '[]'::jsonb)
+  )
+$function$;
 
 create or replace function app_private.save_menu_catalog(
   p_actor_id uuid, p_restaurant_id uuid, p_branch_id uuid, p_event_id uuid, p_idempotency_key uuid,
@@ -267,16 +350,36 @@ begin
         = pg_catalog.jsonb_array_length(entry.value->'modifierGroupIds')
     )) or (entry.value ? 'fraction' and entry.value->'fraction' <> 'null'::jsonb and not (
       app_private.jsonb_has_exact_keys(
-        entry.value->'fraction', array['enabled','flavorGroupId','extraGroupId','excludableIngredientIds']
+        entry.value->'fraction' - 'lockedIngredientOptionIds' - 'excludableIngredientIds',
+        array['enabled','flavorGroupId','extraGroupId']
       )
       and pg_catalog.jsonb_typeof(entry.value->'fraction'->'enabled') = 'boolean'
       and pg_catalog.jsonb_typeof(entry.value->'fraction'->'flavorGroupId') in ('string','null')
       and pg_catalog.jsonb_typeof(entry.value->'fraction'->'extraGroupId') in ('string','null')
-      and pg_catalog.jsonb_typeof(entry.value->'fraction'->'excludableIngredientIds') = 'array'
-      and pg_catalog.jsonb_array_length(entry.value->'fraction'->'excludableIngredientIds') <= 40
-      and not exists (
-        select 1 from pg_catalog.jsonb_array_elements(entry.value->'fraction'->'excludableIngredientIds') as label(value)
-        where pg_catalog.jsonb_typeof(label.value) <> 'string'
+      and (
+        not (entry.value->'fraction' ? 'excludableIngredientIds') or (
+          pg_catalog.jsonb_typeof(entry.value->'fraction'->'excludableIngredientIds') = 'array'
+          and pg_catalog.jsonb_array_length(entry.value->'fraction'->'excludableIngredientIds') <= 40
+          and not exists (
+            select 1 from pg_catalog.jsonb_array_elements(entry.value->'fraction'->'excludableIngredientIds') as label(value)
+            where pg_catalog.jsonb_typeof(label.value) <> 'string'
+          )
+        )
+      )
+      and (
+        not (entry.value->'fraction' ? 'lockedIngredientOptionIds') or (
+          pg_catalog.jsonb_typeof(entry.value->'fraction'->'lockedIngredientOptionIds') = 'array'
+          and pg_catalog.jsonb_array_length(entry.value->'fraction'->'lockedIngredientOptionIds') <= 40
+          and not exists (
+            select 1 from pg_catalog.jsonb_array_elements(entry.value->'fraction'->'lockedIngredientOptionIds') as opt(value)
+            where pg_catalog.jsonb_typeof(opt.value) <> 'string'
+              or not coalesce((opt.value #>> '{}') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', false)
+          )
+          and (
+            select pg_catalog.count(distinct opt.value)
+            from pg_catalog.jsonb_array_elements(entry.value->'fraction'->'lockedIngredientOptionIds') as opt(value)
+          ) = pg_catalog.jsonb_array_length(entry.value->'fraction'->'lockedIngredientOptionIds')
+        )
       )
     )) or (entry.value->'tax' <> 'null'::jsonb and not app_private.jsonb_has_exact_keys(
       entry.value->'tax', array['taxId','name','taxRuleVersion','rateNumerator','rateDenominator','inclusion']
@@ -290,16 +393,36 @@ begin
             variant_entry.value, array['variantId','name','unitPriceMinor','active','displayOrder','sku','fraction']
           )) or (variant_entry.value ? 'fraction' and variant_entry.value->'fraction' <> 'null'::jsonb and not (
             app_private.jsonb_has_exact_keys(
-              variant_entry.value->'fraction', array['enabled','flavorGroupId','extraGroupId','excludableIngredientIds']
+              variant_entry.value->'fraction' - 'lockedIngredientOptionIds' - 'excludableIngredientIds',
+              array['enabled','flavorGroupId','extraGroupId']
             )
             and pg_catalog.jsonb_typeof(variant_entry.value->'fraction'->'enabled') = 'boolean'
             and pg_catalog.jsonb_typeof(variant_entry.value->'fraction'->'flavorGroupId') in ('string','null')
             and pg_catalog.jsonb_typeof(variant_entry.value->'fraction'->'extraGroupId') in ('string','null')
-            and pg_catalog.jsonb_typeof(variant_entry.value->'fraction'->'excludableIngredientIds') = 'array'
-            and pg_catalog.jsonb_array_length(variant_entry.value->'fraction'->'excludableIngredientIds') <= 40
-            and not exists (
-              select 1 from pg_catalog.jsonb_array_elements(variant_entry.value->'fraction'->'excludableIngredientIds') as label(value)
-              where pg_catalog.jsonb_typeof(label.value) <> 'string'
+            and (
+              not (variant_entry.value->'fraction' ? 'excludableIngredientIds') or (
+                pg_catalog.jsonb_typeof(variant_entry.value->'fraction'->'excludableIngredientIds') = 'array'
+                and pg_catalog.jsonb_array_length(variant_entry.value->'fraction'->'excludableIngredientIds') <= 40
+                and not exists (
+                  select 1 from pg_catalog.jsonb_array_elements(variant_entry.value->'fraction'->'excludableIngredientIds') as label(value)
+                  where pg_catalog.jsonb_typeof(label.value) <> 'string'
+                )
+              )
+            )
+            and (
+              not (variant_entry.value->'fraction' ? 'lockedIngredientOptionIds') or (
+                pg_catalog.jsonb_typeof(variant_entry.value->'fraction'->'lockedIngredientOptionIds') = 'array'
+                and pg_catalog.jsonb_array_length(variant_entry.value->'fraction'->'lockedIngredientOptionIds') <= 40
+                and not exists (
+                  select 1 from pg_catalog.jsonb_array_elements(variant_entry.value->'fraction'->'lockedIngredientOptionIds') as opt(value)
+                  where pg_catalog.jsonb_typeof(opt.value) <> 'string'
+                    or not coalesce((opt.value #>> '{}') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', false)
+                )
+                and (
+                  select pg_catalog.count(distinct opt.value)
+                  from pg_catalog.jsonb_array_elements(variant_entry.value->'fraction'->'lockedIngredientOptionIds') as opt(value)
+                ) = pg_catalog.jsonb_array_length(variant_entry.value->'fraction'->'lockedIngredientOptionIds')
+              )
             )
           ))
         )
@@ -479,7 +602,7 @@ begin
       on conflict (restaurant_id, catalog_id, product_id, group_id)
       do update set display_order = excluded.display_order;
     end loop;
-    -- Backfill locked from legacy excludable if locked was omitted:
+    -- Backfill locked from legacy excludable ONLY when locked was omitted from the payload (old producer):
     update app.menu_products as product set
       fraction_locked_ingredient_option_ids = coalesce((
         select pg_catalog.array_agg(opt.id order by opt.id)
@@ -493,8 +616,14 @@ begin
       ), '{}'::uuid[])
     where product.restaurant_id = p_restaurant_id and product.catalog_id = p_catalog_id
       and product.fraction_extra_group_id is not null
-      and pg_catalog.cardinality(product.fraction_locked_ingredient_option_ids) = 0
-      and pg_catalog.cardinality(product.fraction_excludable_ingredient_ids) > 0;
+      and pg_catalog.cardinality(product.fraction_excludable_ingredient_ids) > 0
+      and exists (
+        select 1 from pg_catalog.jsonb_array_elements(p_payload->'products') as prod(value)
+        where (prod.value->>'productId')::uuid = product.id
+          and prod.value ? 'fraction'
+          and prod.value->'fraction' <> 'null'::jsonb
+          and not (prod.value->'fraction' ? 'lockedIngredientOptionIds')
+      );
 
     update app.menu_product_variants as variant set
       fraction_locked_ingredient_option_ids = coalesce((
@@ -509,35 +638,16 @@ begin
       ), '{}'::uuid[])
     where variant.restaurant_id = p_restaurant_id and variant.catalog_id = p_catalog_id
       and variant.fraction_extra_group_id is not null
-      and pg_catalog.cardinality(variant.fraction_locked_ingredient_option_ids) = 0
-      and pg_catalog.cardinality(variant.fraction_excludable_ingredient_ids) > 0;
-
-    -- Backfill excludable from locked for legacy readers if excludable was omitted:
-    update app.menu_products as product set
-      fraction_excludable_ingredient_ids = coalesce((
-        select pg_catalog.array_agg(opt.name order by opt.id)
-        from app.menu_modifier_options as opt
-        where opt.restaurant_id = product.restaurant_id and opt.catalog_id = product.catalog_id
-          and opt.group_id = product.fraction_extra_group_id
-          and not (opt.id = any(product.fraction_locked_ingredient_option_ids))
-      ), '{}'::text[])
-    where product.restaurant_id = p_restaurant_id and product.catalog_id = p_catalog_id
-      and product.fraction_extra_group_id is not null
-      and pg_catalog.cardinality(product.fraction_excludable_ingredient_ids) = 0
-      and pg_catalog.cardinality(product.fraction_locked_ingredient_option_ids) > 0;
-
-    update app.menu_product_variants as variant set
-      fraction_excludable_ingredient_ids = coalesce((
-        select pg_catalog.array_agg(opt.name order by opt.id)
-        from app.menu_modifier_options as opt
-        where opt.restaurant_id = variant.restaurant_id and opt.catalog_id = variant.catalog_id
-          and opt.group_id = variant.fraction_extra_group_id
-          and not (opt.id = any(variant.fraction_locked_ingredient_option_ids))
-      ), '{}'::text[])
-    where variant.restaurant_id = p_restaurant_id and variant.catalog_id = p_catalog_id
-      and variant.fraction_extra_group_id is not null
-      and pg_catalog.cardinality(variant.fraction_excludable_ingredient_ids) = 0
-      and pg_catalog.cardinality(variant.fraction_locked_ingredient_option_ids) > 0;
+      and pg_catalog.cardinality(variant.fraction_excludable_ingredient_ids) > 0
+      and exists (
+        select 1
+        from pg_catalog.jsonb_array_elements(p_payload->'products') as prod(value),
+             pg_catalog.jsonb_array_elements(prod.value->'variants') as v(value)
+        where (v.value->>'variantId')::uuid = variant.id
+          and v.value ? 'fraction'
+          and v.value->'fraction' <> 'null'::jsonb
+          and not (v.value->'fraction' ? 'lockedIngredientOptionIds')
+      );
 
     -- Half-and-half groups are modifier groups assigned to the very same product in this release.
     if exists (
@@ -1047,7 +1157,8 @@ begin
                 select * into extra_option
                 from app.menu_modifier_options
                 where restaurant_id = restaurant and catalog_id = catalog
-                  and group_id = fr_extra_group and id = label_text::uuid;
+                  and group_id = fr_extra_group and id = label_text::uuid
+                  and active;
                 if not found or (label_text::uuid = any(fr_locked)) then
                   return pg_catalog.jsonb_build_object('status','conflict');
                 end if;
@@ -1279,6 +1390,7 @@ end
 $function$;
 
 
+alter function app_private.normalize_menu_catalog_payload(jsonb) owner to postgres;
 alter function app_private.build_menu_catalog_state(uuid,uuid,uuid,boolean) owner to postgres;
 alter function app_private.save_menu_catalog(uuid,uuid,uuid,uuid,uuid,uuid,timestamptz,bigint,uuid,text,jsonb) owner to postgres;
 alter function app_private.confirm_capture_draft_v3(uuid,jsonb,jsonb,jsonb) owner to postgres;

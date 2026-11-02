@@ -34,6 +34,11 @@ declare
   save_key uuid;
   payload jsonb;
   bad_payload jsonb;
+  old_payload jsonb;
+  new_payload jsonb;
+  replay_payload_old jsonb;
+  replay_payload_new jsonb;
+  test_catalog uuid;
   target_capture uuid;
   line_id uuid;
   confirmed_order uuid;
@@ -62,6 +67,8 @@ begin
   -- ------------------------------------------------------------
   insert into app.menu_catalogs(id, restaurant_id, version, currency, published_by)
   values(catalog_id, restaurant, 1, 'MXN', actor);
+  insert into app.menu_catalog_heads(restaurant_id, catalog_id, version, updated_at, updated_by)
+  values(restaurant, catalog_id, 1, now_at, actor);
   insert into app.menu_categories(restaurant_id, catalog_id, id, name, active, display_order)
   values(restaurant, catalog_id, category, 'Pizzas', true, 0);
 
@@ -415,6 +422,170 @@ begin
   execute 'reset role';
 
   if result->>'status' <> 'conflict' then raise exception 'LOCKED_INGREDIENTS_LOCKED_CONFIRM_MUST_CONFLICT: %', result; end if;
+
+  -- ------------------------------------------------------------
+  -- 7. Additional invariant cases (Finding 6)
+  -- ------------------------------------------------------------
+  -- 7.1. Payload viejo sin locked (válido): backfill pobla fraction_locked_ingredient_option_ids
+  test_catalog := gen_random_uuid();
+  save_event := gen_random_uuid();
+  save_key := gen_random_uuid();
+  old_payload := pg_catalog.jsonb_build_object(
+    'categories', payload->'categories',
+    'products', pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'productId', product_pizza::text, 'categoryId', category::text, 'name', 'Pizza Vieja', 'sku', null,
+        'active', true, 'displayOrder', 0, 'stationId', 'kitchen', 'unit', 'piece', 'unitPriceMinor', 15000, 'tax', null,
+        'modifierGroupIds', pg_catalog.jsonb_build_array(g_flavors::text, g_extras::text),
+        'fraction', pg_catalog.jsonb_build_object(
+          'enabled', true,
+          'flavorGroupId', g_flavors::text,
+          'extraGroupId', g_extras::text,
+          'excludableIngredientIds', pg_catalog.jsonb_build_array('Cebolla')
+        )
+      )
+    ),
+    'modifierGroups', payload->'modifierGroups'
+  );
+
+  execute 'set local role app_api';
+  select s.status into save_status from app_private.save_menu_catalog(
+    actor, restaurant, branch, save_event, save_key, device, now_at, 2, test_catalog, 'MXN', old_payload) s;
+  execute 'reset role';
+
+  if save_status <> 'saved' then raise exception 'OLD_PAYLOAD_WITHOUT_LOCKED_SAVE_FAILED: %', save_status; end if;
+
+  if not exists (
+    select 1 from app.menu_products p
+    where p.restaurant_id = restaurant and p.catalog_id = test_catalog and p.id = product_pizza
+      and p.fraction_locked_ingredient_option_ids = array[o_jamon]
+      and p.fraction_excludable_ingredient_ids = array['Cebolla']
+  ) then raise exception 'OLD_PAYLOAD_WITHOUT_LOCKED_BACKFILL_INCORRECT'; end if;
+
+  -- 7.2. Payload nuevo sin excludable (válido): guarda exitoso y preserva locked
+  test_catalog := gen_random_uuid();
+  save_event := gen_random_uuid();
+  save_key := gen_random_uuid();
+  new_payload := pg_catalog.jsonb_build_object(
+    'categories', payload->'categories',
+    'products', pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'productId', product_pizza::text, 'categoryId', category::text, 'name', 'Pizza Nueva', 'sku', null,
+        'active', true, 'displayOrder', 0, 'stationId', 'kitchen', 'unit', 'piece', 'unitPriceMinor', 15000, 'tax', null,
+        'modifierGroupIds', pg_catalog.jsonb_build_array(g_flavors::text, g_extras::text),
+        'fraction', pg_catalog.jsonb_build_object(
+          'enabled', true,
+          'flavorGroupId', g_flavors::text,
+          'extraGroupId', g_extras::text,
+          'lockedIngredientOptionIds', pg_catalog.jsonb_build_array(o_jamon::text)
+        )
+      )
+    ),
+    'modifierGroups', payload->'modifierGroups'
+  );
+
+  execute 'set local role app_api';
+  select s.status into save_status from app_private.save_menu_catalog(
+    actor, restaurant, branch, save_event, save_key, device, now_at, 3, test_catalog, 'MXN', new_payload) s;
+  execute 'reset role';
+
+  if save_status <> 'saved' then raise exception 'NEW_PAYLOAD_WITHOUT_EXCLUDABLE_SAVE_FAILED: %', save_status; end if;
+
+  if not exists (
+    select 1 from app.menu_products p
+    where p.restaurant_id = restaurant and p.catalog_id = test_catalog and p.id = product_pizza
+      and p.fraction_locked_ingredient_option_ids = array[o_jamon]
+  ) then raise exception 'NEW_PAYLOAD_WITHOUT_EXCLUDABLE_VERIFICATION_FAILED'; end if;
+
+  -- 7.3. Desbloquear todo: locked: [] con etiquetas presentes deja fraction_locked_ingredient_option_ids = '{}'
+  test_catalog := gen_random_uuid();
+  save_event := gen_random_uuid();
+  save_key := gen_random_uuid();
+  payload := pg_catalog.jsonb_build_object(
+    'categories', payload->'categories',
+    'products', pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'productId', product_pizza::text, 'categoryId', category::text, 'name', 'Pizza Desbloqueada', 'sku', null,
+        'active', true, 'displayOrder', 0, 'stationId', 'kitchen', 'unit', 'piece', 'unitPriceMinor', 15000, 'tax', null,
+        'modifierGroupIds', pg_catalog.jsonb_build_array(g_flavors::text, g_extras::text),
+        'fraction', pg_catalog.jsonb_build_object(
+          'enabled', true,
+          'flavorGroupId', g_flavors::text,
+          'extraGroupId', g_extras::text,
+          'lockedIngredientOptionIds', '[]'::jsonb,
+          'excludableIngredientIds', pg_catalog.jsonb_build_array('Cebolla')
+        )
+      )
+    ),
+    'modifierGroups', payload->'modifierGroups'
+  );
+
+  execute 'set local role app_api';
+  select s.status into save_status from app_private.save_menu_catalog(
+    actor, restaurant, branch, save_event, save_key, device, now_at, 4, test_catalog, 'MXN', payload) s;
+  execute 'reset role';
+
+  if save_status <> 'saved' then raise exception 'UNLOCK_ALL_SAVE_FAILED: %', save_status; end if;
+
+  if not exists (
+    select 1 from app.menu_products p
+    where p.restaurant_id = restaurant and p.catalog_id = test_catalog and p.id = product_pizza
+      and p.fraction_locked_ingredient_option_ids = '{}'::uuid[]
+  ) then raise exception 'UNLOCK_ALL_OVERWRITTEN_BY_BACKFILL'; end if;
+
+  -- 7.4. Replay viejo<->nuevo idempotente: normalize_menu_catalog_payload previene conflicto de idempotencia
+  test_catalog := gen_random_uuid();
+  save_event := gen_random_uuid();
+  save_key := gen_random_uuid();
+  replay_payload_old := pg_catalog.jsonb_build_object(
+    'categories', payload->'categories',
+    'products', pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'productId', product_pizza::text, 'categoryId', category::text, 'name', 'Pizza Replay', 'sku', null,
+        'active', true, 'displayOrder', 0, 'stationId', 'kitchen', 'unit', 'piece', 'unitPriceMinor', 15000, 'tax', null,
+        'modifierGroupIds', pg_catalog.jsonb_build_array(g_flavors::text, g_extras::text),
+        'fraction', pg_catalog.jsonb_build_object(
+          'enabled', true,
+          'flavorGroupId', g_flavors::text,
+          'extraGroupId', g_extras::text,
+          'excludableIngredientIds', '[]'::jsonb
+        )
+      )
+    ),
+    'modifierGroups', payload->'modifierGroups'
+  );
+
+  replay_payload_new := pg_catalog.jsonb_build_object(
+    'categories', payload->'categories',
+    'products', pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'productId', product_pizza::text, 'categoryId', category::text, 'name', 'Pizza Replay', 'sku', null,
+        'active', true, 'displayOrder', 0, 'stationId', 'kitchen', 'unit', 'piece', 'unitPriceMinor', 15000, 'tax', null,
+        'modifierGroupIds', pg_catalog.jsonb_build_array(g_flavors::text, g_extras::text),
+        'fraction', pg_catalog.jsonb_build_object(
+          'enabled', true,
+          'flavorGroupId', g_flavors::text,
+          'extraGroupId', g_extras::text,
+          'lockedIngredientOptionIds', '[]'::jsonb
+        )
+      )
+    ),
+    'modifierGroups', payload->'modifierGroups'
+  );
+
+  execute 'set local role app_api';
+  select s.status into save_status from app_private.save_menu_catalog(
+    actor, restaurant, branch, save_event, save_key, device, now_at, 5, test_catalog, 'MXN', replay_payload_old) s;
+  execute 'reset role';
+
+  if save_status <> 'saved' then raise exception 'REPLAY_FIRST_SAVE_FAILED: %', save_status; end if;
+
+  execute 'set local role app_api';
+  select s.status into save_status from app_private.save_menu_catalog(
+    actor, restaurant, branch, save_event, save_key, device, now_at, 5, test_catalog, 'MXN', replay_payload_new) s;
+  execute 'reset role';
+
+  if save_status <> 'replayed' then raise exception 'REPLAY_OLD_VS_NEW_FAILED: %', save_status; end if;
 
 end
 $menu_locked_ingredients_tests$;
