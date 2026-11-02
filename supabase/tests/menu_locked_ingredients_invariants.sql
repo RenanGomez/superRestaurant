@@ -59,8 +59,8 @@ begin
   insert into app.branches(id, restaurant_id, name) values(branch, restaurant, 'rollback-only locked ingredients branch');
   insert into app.memberships(id, user_id, restaurant_id, branch_id, granted_by) values(membership, actor, restaurant, branch, actor);
   insert into app.membership_role_grants(membership_id, role_code, granted_by) values(membership, 'manager', actor);
-  insert into app.operational_shifts(id, restaurant_id, branch_id, opened_by, opened_at, state)
-  values(shift, restaurant, branch, actor, now_at, 'open');
+  insert into app.operational_shifts(id,restaurant_id,branch_id,name,status,opened_at,opened_by)
+  values(shift,restaurant,branch,'rollback locked ingredients confirmation','open',now_at,actor);
 
   -- ------------------------------------------------------------
   -- 1. Table CHECK constraints on fraction_locked_ingredient_option_ids
