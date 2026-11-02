@@ -92,7 +92,16 @@ begin
   -- ------------------------------------------------------------
   -- 2. Backfill simulation and idempotency
   -- ------------------------------------------------------------
-  -- Insert groups & options
+  -- Insert the product before its legacy-owned groups so the composite
+  -- menu_modifier_groups_product_fk can resolve the owner in this catalog.
+  -- Legacy excludable labels contain 'Cebolla' only.
+  insert into app.menu_products(restaurant_id, catalog_id, id, category_id, name, sku, active, display_order, station_id, unit, unit_price_minor,
+    fraction_enabled, fraction_flavor_group_id, fraction_extra_group_id, fraction_excludable_ingredient_ids, fraction_locked_ingredient_option_ids)
+  values
+    (restaurant, catalog_id, product_pizza, category, 'Pizza Clasica', null, true, 0, 'kitchen', 'piece', 12000,
+     true, g_flavors, g_extras, array['Cebolla'], '{}');
+
+  -- Insert groups & options after their referenced product and group rows.
   insert into app.menu_modifier_groups(restaurant_id, catalog_id, id, product_id, name, active, display_order, minimum_quantity, maximum_quantity)
   values
     (restaurant, catalog_id, g_flavors, product_pizza, 'Sabores', true, 0, 1, 1),
@@ -105,14 +114,7 @@ begin
     (restaurant, catalog_id, g_extras, o_jamon, 'Jamon', 1500, true, 1),
     (restaurant, catalog_id, g_extras, o_champi, 'Champinones', 1500, true, 1);
 
-  -- Insert a product with legacy excludable labels: 'Cebolla' only.
   -- Expected backfill result: 'Jamon' and 'Champinones' become locked, 'Cebolla' remains un-locked.
-  insert into app.menu_products(restaurant_id, catalog_id, id, category_id, name, sku, active, display_order, station_id, unit, unit_price_minor,
-    fraction_enabled, fraction_flavor_group_id, fraction_extra_group_id, fraction_excludable_ingredient_ids, fraction_locked_ingredient_option_ids)
-  values
-    (restaurant, catalog_id, product_pizza, category, 'Pizza Clasica', null, true, 0, 'kitchen', 'piece', 12000,
-     true, g_flavors, g_extras, array['Cebolla'], '{}');
-
   -- Execute backfill block
   update app.menu_products p
   set fraction_locked_ingredient_option_ids = coalesce((
