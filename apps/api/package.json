@@ -74,6 +74,7 @@
     "verify:cancel-order-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-cancel-order-schema-verification.js --local-disposable-only",
     "verify:courier-order-detail-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-courier-order-detail-schema-verification.js --local-disposable-only",
     "verify:order-receipt-data-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-order-receipt-data-schema-verification.js --local-disposable-only",
+    "verify:order-account-label-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-order-account-label-schema-verification.js --local-disposable-only",
     "verify:branch-day-summary-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-branch-day-summary-schema-verification.js --local-disposable-only",
     "verify:cancellation-actor-summary-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-cancellation-actor-summary-schema-verification.js --local-disposable-only",
     "verify:dining-table-details-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-dining-table-details-schema-verification.js --local-disposable-only",
