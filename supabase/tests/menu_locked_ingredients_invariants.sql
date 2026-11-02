@@ -27,7 +27,7 @@ declare
   o_cebolla uuid := gen_random_uuid();
   o_jamon uuid := gen_random_uuid();
   o_champi uuid := gen_random_uuid();
-  catalog_id uuid := gen_random_uuid();
+  v_catalog_id uuid := gen_random_uuid();
   save_status text;
   save_state jsonb;
   save_event uuid;
@@ -66,16 +66,16 @@ begin
   -- 1. Table CHECK constraints on fraction_locked_ingredient_option_ids
   -- ------------------------------------------------------------
   insert into app.menu_catalogs(id, restaurant_id, version, currency, published_by)
-  values(catalog_id, restaurant, 1, 'MXN', actor);
+  values(v_catalog_id, restaurant, 1, 'MXN', actor);
   insert into app.menu_catalog_heads(restaurant_id, catalog_id, version, updated_at, updated_by)
-  values(restaurant, catalog_id, 1, now_at, actor);
+  values(restaurant, v_catalog_id, 1, now_at, actor);
   insert into app.menu_categories(restaurant_id, catalog_id, id, name, active, display_order)
-  values(restaurant, catalog_id, category, 'Pizzas', true, 0);
+  values(restaurant, v_catalog_id, category, 'Pizzas', true, 0);
 
   -- Null element inside locked options must be rejected
   begin
     insert into app.menu_products(restaurant_id, catalog_id, id, category_id, name, sku, active, display_order, station_id, unit, unit_price_minor, fraction_locked_ingredient_option_ids)
-    values(restaurant, catalog_id, gen_random_uuid(), category, 'Bad Pizza Null', null, true, 0, 'kitchen', 'piece', 10000, array[o_cebolla, null]);
+    values(restaurant, v_catalog_id, gen_random_uuid(), category, 'Bad Pizza Null', null, true, 0, 'kitchen', 'piece', 10000, array[o_cebolla, null]);
     raise exception 'LOCKED_INGREDIENTS_NULL_OPTION_ACCEPTED';
   exception when check_violation then null;
   end;
@@ -83,7 +83,7 @@ begin
   -- Cardinality > 40 must be rejected
   begin
     insert into app.menu_products(restaurant_id, catalog_id, id, category_id, name, sku, active, display_order, station_id, unit, unit_price_minor, fraction_locked_ingredient_option_ids)
-    values(restaurant, catalog_id, gen_random_uuid(), category, 'Bad Pizza 41', null, true, 0, 'kitchen', 'piece', 10000,
+    values(restaurant, v_catalog_id, gen_random_uuid(), category, 'Bad Pizza 41', null, true, 0, 'kitchen', 'piece', 10000,
       (select array_agg(gen_random_uuid()) from generate_series(1, 41)));
     raise exception 'LOCKED_INGREDIENTS_OVER_40_ACCEPTED';
   exception when check_violation then null;
@@ -98,21 +98,21 @@ begin
   insert into app.menu_products(restaurant_id, catalog_id, id, category_id, name, sku, active, display_order, station_id, unit, unit_price_minor,
     fraction_enabled, fraction_flavor_group_id, fraction_extra_group_id, fraction_excludable_ingredient_ids, fraction_locked_ingredient_option_ids)
   values
-    (restaurant, catalog_id, product_pizza, category, 'Pizza Clasica', null, true, 0, 'kitchen', 'piece', 12000,
+    (restaurant, v_catalog_id, product_pizza, category, 'Pizza Clasica', null, true, 0, 'kitchen', 'piece', 12000,
      true, g_flavors, g_extras, array['Cebolla'], '{}');
 
   -- Insert groups & options after their referenced product and group rows.
   insert into app.menu_modifier_groups(restaurant_id, catalog_id, id, product_id, name, active, display_order, minimum_quantity, maximum_quantity)
   values
-    (restaurant, catalog_id, g_flavors, product_pizza, 'Sabores', true, 0, 1, 1),
-    (restaurant, catalog_id, g_extras, product_pizza, 'Ingredientes', true, 1, 0, 5);
+    (restaurant, v_catalog_id, g_flavors, product_pizza, 'Sabores', true, 0, 1, 1),
+    (restaurant, v_catalog_id, g_extras, product_pizza, 'Ingredientes', true, 1, 0, 5);
   insert into app.menu_modifier_options(restaurant_id, catalog_id, group_id, id, name, unit_price_minor, active, maximum_quantity)
   values
-    (restaurant, catalog_id, g_flavors, o_pep, 'Pepperoni', 12000, true, 1),
-    (restaurant, catalog_id, g_flavors, o_haw, 'Hawaiana', 13000, true, 1),
-    (restaurant, catalog_id, g_extras, o_cebolla, 'Cebolla', 1000, true, 1),
-    (restaurant, catalog_id, g_extras, o_jamon, 'Jamon', 1500, true, 1),
-    (restaurant, catalog_id, g_extras, o_champi, 'Champinones', 1500, true, 1);
+    (restaurant, v_catalog_id, g_flavors, o_pep, 'Pepperoni', 12000, true, 1),
+    (restaurant, v_catalog_id, g_flavors, o_haw, 'Hawaiana', 13000, true, 1),
+    (restaurant, v_catalog_id, g_extras, o_cebolla, 'Cebolla', 1000, true, 1),
+    (restaurant, v_catalog_id, g_extras, o_jamon, 'Jamon', 1500, true, 1),
+    (restaurant, v_catalog_id, g_extras, o_champi, 'Champinones', 1500, true, 1);
 
   -- Expected backfill result: 'Jamon' and 'Champinones' become locked, 'Cebolla' remains un-locked.
   -- Execute backfill block
@@ -127,7 +127,7 @@ begin
         where pg_catalog.lower(pg_catalog.btrim(opt.name)) = pg_catalog.lower(pg_catalog.btrim(ex.lbl))
       )
   ), '{}'::uuid[])
-  where p.restaurant_id = restaurant and p.catalog_id = catalog_id and p.id = product_pizza;
+  where p.restaurant_id = restaurant and p.catalog_id = v_catalog_id and p.id = product_pizza;
 
   if not exists (
     select 1 from app.menu_products p
@@ -179,11 +179,11 @@ begin
 
   save_event := gen_random_uuid();
   save_key := gen_random_uuid();
-  catalog_id := gen_random_uuid();
+  v_catalog_id := gen_random_uuid();
 
   execute 'set local role app_api';
   select s.status, s.state into save_status, save_state from app_private.save_menu_catalog(
-    actor, restaurant, branch, save_event, save_key, device, now_at, 1, catalog_id, 'MXN', payload) s;
+    actor, restaurant, branch, save_event, save_key, device, now_at, 1, v_catalog_id, 'MXN', payload) s;
   execute 'reset role';
 
   if save_status <> 'saved' then raise exception 'LOCKED_INGREDIENTS_SAVE_FAILED: %', save_status; end if;
@@ -195,7 +195,7 @@ begin
   -- Replay is idempotent
   execute 'set local role app_api';
   select s.status into save_status from app_private.save_menu_catalog(
-    actor, restaurant, branch, save_event, save_key, device, now_at, 1, catalog_id, 'MXN', payload) s;
+    actor, restaurant, branch, save_event, save_key, device, now_at, 1, v_catalog_id, 'MXN', payload) s;
   execute 'reset role';
 
   if save_status <> 'replayed' then raise exception 'LOCKED_INGREDIENTS_REPLAY_FAILED: %', save_status; end if;
@@ -253,7 +253,7 @@ begin
     'eventId', gen_random_uuid()::text, 'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', now_at
   );
   plan := pg_catalog.jsonb_build_object(
-    'schemaVersion', 1, 'catalogVersion', catalog_id::text, 'lines', pg_catalog.jsonb_build_array(
+    'schemaVersion', 1, 'catalogVersion', v_catalog_id::text, 'lines', pg_catalog.jsonb_build_array(
       pg_catalog.jsonb_build_object(
         'lineId', line_id::text, 'productId', product_pizza::text, 'quantity', 1, 'note', null,
         'fraction', pg_catalog.jsonb_build_object(
@@ -308,7 +308,7 @@ begin
             'name', 'Sin Jamon',
             'groupId', 'fraction-exclusion',
             'groupName', 'exclude:half-a',
-            'groupCatalogVersion', catalog_id::text,
+            'groupCatalogVersion', v_catalog_id::text,
             'unitPrice', pg_catalog.jsonb_build_object('amountMinor', 0, 'currency', 'MXN'),
             'quantity', 1
           )
@@ -356,7 +356,7 @@ begin
     'eventId', gen_random_uuid()::text, 'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', now_at
   );
   plan := pg_catalog.jsonb_build_object(
-    'schemaVersion', 1, 'catalogVersion', catalog_id::text, 'lines', pg_catalog.jsonb_build_array(
+    'schemaVersion', 1, 'catalogVersion', v_catalog_id::text, 'lines', pg_catalog.jsonb_build_array(
       pg_catalog.jsonb_build_object(
         'lineId', line_id::text, 'productId', product_pizza::text, 'quantity', 1, 'note', null,
         'fraction', pg_catalog.jsonb_build_object(
@@ -409,7 +409,7 @@ begin
             'name', 'Sin Cebolla',
             'groupId', 'fraction-exclusion',
             'groupName', 'exclude:half-a',
-            'groupCatalogVersion', catalog_id::text,
+            'groupCatalogVersion', v_catalog_id::text,
             'unitPrice', pg_catalog.jsonb_build_object('amountMinor', 0, 'currency', 'MXN'),
             'quantity', 1
           )
