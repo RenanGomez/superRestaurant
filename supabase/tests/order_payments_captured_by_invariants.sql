@@ -9,20 +9,24 @@ declare
   courier_a uuid := gen_random_uuid();
   courier_b uuid := gen_random_uuid();
   foreign_manager uuid := gen_random_uuid();
+  sibling_manager uuid := gen_random_uuid();
   restaurant uuid := gen_random_uuid();
   branch uuid := gen_random_uuid();
+  sibling_branch uuid := gen_random_uuid();
   other_restaurant uuid := gen_random_uuid();
   other_branch uuid := gen_random_uuid();
   m_manager uuid := gen_random_uuid();
   m_a uuid := gen_random_uuid();
   m_b uuid := gen_random_uuid();
   m_foreign uuid := gen_random_uuid();
+  m_sibling uuid := gen_random_uuid();
   v_session uuid := gen_random_uuid();
   v_register uuid := gen_random_uuid();
   v_shift uuid := gen_random_uuid();
   o_none uuid := gen_random_uuid();
   o_two uuid := gen_random_uuid();
   o_delivery uuid := gen_random_uuid();
+  o_sibling uuid := gen_random_uuid();
   p_cash uuid := gen_random_uuid();
   p_transfer uuid := gen_random_uuid();
   p_card uuid := gen_random_uuid();
@@ -35,15 +39,19 @@ begin
     (other_restaurant,'rollback-only receipt captured-by foreign','America/Hermosillo');
   insert into app.branches(id,restaurant_id,name) values
     (branch,restaurant,'rollback-only receipt captured-by branch'),
+    (sibling_branch,restaurant,'rollback-only receipt captured-by sibling branch'),
     (other_branch,other_restaurant,'rollback-only receipt captured-by foreign branch');
   insert into auth.users(id,email) values
     (manager,'local-receipt-cb-manager@invalid.test'),(courier_a,'local-receipt-cb-a@invalid.test'),
-    (courier_b,'local-receipt-cb-b@invalid.test'),(foreign_manager,'local-receipt-cb-foreign@invalid.test');
+    (courier_b,'local-receipt-cb-b@invalid.test'),(foreign_manager,'local-receipt-cb-foreign@invalid.test'),
+    (sibling_manager,'local-receipt-cb-sibling@invalid.test');
   insert into app.memberships(id,user_id,restaurant_id,branch_id,granted_by) values
     (m_manager,manager,restaurant,branch,creator),(m_a,courier_a,restaurant,branch,creator),
-    (m_b,courier_b,restaurant,branch,creator),(m_foreign,foreign_manager,other_restaurant,other_branch,creator);
+    (m_b,courier_b,restaurant,branch,creator),(m_foreign,foreign_manager,other_restaurant,other_branch,creator),
+    (m_sibling,sibling_manager,restaurant,sibling_branch,creator);
   insert into app.membership_role_grants(membership_id,role_code,granted_by) values
-    (m_manager,'manager',creator),(m_a,'courier',creator),(m_b,'courier',creator),(m_foreign,'manager',creator);
+    (m_manager,'manager',creator),(m_a,'courier',creator),(m_b,'courier',creator),(m_foreign,'manager',creator),
+    (m_sibling,'manager',creator);
 
   insert into app.orders(id,restaurant_id,branch_id,channel,status,aggregate,version,created_at,created_by,updated_by)
   select o,restaurant,branch,ch,'open',pg_catalog.jsonb_build_object(
@@ -51,6 +59,11 @@ begin
     'status','open','currency','MXN','timeZone','America/Hermosillo','items','[]'::jsonb
   ),3,t0,creator,creator
   from (values (o_none,'counter'),(o_two,'counter'),(o_delivery,'delivery')) as t(o,ch);
+  insert into app.orders(id,restaurant_id,branch_id,channel,status,aggregate,version,created_at,created_by,updated_by)
+  values (o_sibling,restaurant,sibling_branch,'counter','open',pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',o_sibling::text,'restaurantId',restaurant::text,'branchId',sibling_branch::text,
+    'channel','counter','status','open','currency','MXN','timeZone','America/Hermosillo','items','[]'::jsonb
+  ),3,t0,creator,creator);
   insert into app.order_deliveries(restaurant_id,branch_id,order_id,courier_user_id,state,assigned_at,created_by,updated_by)
   values (restaurant,branch,o_delivery,courier_a,'assigned',now(),creator,creator);
 
@@ -107,6 +120,9 @@ begin
   if app_private.read_order_receipt_data(foreign_manager,restaurant,branch,o_two) is not null then raise exception 'RECEIPT_FOREIGN_READ'; end if;
   if app_private.read_order_receipt_data(manager,other_restaurant,other_branch,o_two) is not null then raise exception 'RECEIPT_WRONG_SCOPE_READ'; end if;
   if app_private.read_order_receipt_data(manager,restaurant,other_branch,o_two) is not null then raise exception 'RECEIPT_WRONG_BRANCH_READ'; end if;
+  if app_private.read_order_receipt_data(manager,restaurant,branch,o_sibling) is not null then raise exception 'RECEIPT_SIBLING_BRANCH_FORWARD_READ'; end if;
+  if app_private.read_order_receipt_data(sibling_manager,restaurant,sibling_branch,o_two) is not null then raise exception 'RECEIPT_SIBLING_BRANCH_REVERSE_READ'; end if;
+  if app_private.read_order_receipt_data(sibling_manager,restaurant,sibling_branch,o_sibling) is null then raise exception 'RECEIPT_SIBLING_BRANCH_OWN_READ_MISSING'; end if;
   if app_private.read_order_receipt_data(manager,restaurant,branch,gen_random_uuid()) is not null then raise exception 'RECEIPT_MISSING_NOT_NULL'; end if;
   if app_private.read_order_receipt_data(null,restaurant,branch,o_two) is not null then raise exception 'RECEIPT_NULL_ACTOR_READ'; end if;
   execute 'reset role';

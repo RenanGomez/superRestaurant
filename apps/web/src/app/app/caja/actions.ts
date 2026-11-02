@@ -25,7 +25,7 @@ import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchP
 import { getMenuCatalog } from "../../../lib/menu-catalog";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
 import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } from "./context";
-import { buildReceiptHref, paymentAmountBounds, requiredCashTenderMinor } from "./caja-helpers";
+import { buildReceiptHref, paymentAmountBounds, paymentShortfallMinor, requiredCashTenderMinor } from "./caja-helpers";
 import { CASH_RECEIPT_COOKIE, encodeReceiptCookie } from "./receipt";
 
 export async function openCashRegisterAction(formData: FormData): Promise<void> {
@@ -70,7 +70,7 @@ export async function quotePaymentAction(input: {
   readonly receivedPesos: string;
   readonly tipPesos: string;
   readonly method: "cash" | "card_manual" | "transfer";
-}): Promise<{ status: string; value?: ReturnType<typeof parseCashPaymentQuoteV1>; requiredMinor?: number }> {
+}): Promise<{ status: string; value?: ReturnType<typeof parseCashPaymentQuoteV1>; missingMinor?: number }> {
   const context = await getAuthorizedContext();
   const cookieStore = await cookies();
   const registerId = readUuidCookie(cookieStore, CASH_REGISTER_COOKIE);
@@ -89,7 +89,8 @@ export async function quotePaymentAction(input: {
   const required = requiredCashTenderMinor(enteredAmount, tipMinor);
   if (required === null) return { status: "invalid_amount" };
   if (input.method === "cash" && received !== null && received < required) {
-    return { status: "invalid_amount", requiredMinor: required };
+    const missingMinor = paymentShortfallMinor(required, received);
+    return missingMinor === undefined ? { status: "invalid_amount" } : { status: "invalid_amount", missingMinor };
   }
   const request = {
     amountMinor: enteredAmount,

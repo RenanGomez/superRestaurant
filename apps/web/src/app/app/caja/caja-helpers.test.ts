@@ -8,6 +8,7 @@ import {
   parseReceiptQuery,
   paymentAmountBounds,
   paymentMethodLabel,
+  paymentShortfallMinor,
   quickCashAmounts,
   requiredCashTenderMinor,
   resolvePaymentAmountMinor,
@@ -35,6 +36,12 @@ test("quick notes never offer less than the balance", () => {
   assert.deepEqual(quickCashAmounts(10_000), [10_000, 20_000, 50_000]);
   assert.deepEqual(quickCashAmounts(9_900, 200), [20_000, 50_000]);
   assert.equal(requiredCashTenderMinor(12_500, 300), 12_800);
+});
+
+test("payment shortfall is returned only when received cash is lower than required", () => {
+  assert.equal(paymentShortfallMinor(12_800, 12_799), 1);
+  assert.equal(paymentShortfallMinor(12_800, 12_800), undefined);
+  assert.equal(paymentShortfallMinor(12_800, 20_000), undefined);
 });
 
 test("paymentAmountBounds accepts one cent through the full remaining balance", () => {

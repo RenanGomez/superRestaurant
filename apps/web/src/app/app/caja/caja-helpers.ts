@@ -41,6 +41,13 @@ export function requiredCashTenderMinor(balanceMinor: number, tipMinor: number):
   return Number.isSafeInteger(required) && required > 0 ? required : null;
 }
 
+/** Server-side quote rejection detail; absent when the tender covers the requirement. */
+export function paymentShortfallMinor(requiredMinor: number, tenderedAmountMinor: number): number | undefined {
+  if (!Number.isSafeInteger(requiredMinor) || !Number.isSafeInteger(tenderedAmountMinor)) return undefined;
+  const missingMinor = requiredMinor - tenderedAmountMinor;
+  return Number.isSafeInteger(missingMinor) && missingMinor > 0 ? missingMinor : undefined;
+}
+
 /** Fixed peso notes that cover the balance and chosen tip. Exacto is offered separately. */
 export function quickCashAmounts(balanceMinor: number, tipMinor = 0): readonly number[] {
   const required = requiredCashTenderMinor(balanceMinor, tipMinor);

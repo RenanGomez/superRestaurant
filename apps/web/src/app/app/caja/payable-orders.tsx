@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { unstable_rethrow } from "next/navigation";
 import type { BranchOrderWorkItemV1, BranchOrderWorkTrayV1, BranchScope, OrderDetailV1 } from "@super-restaurant/shared-types";
 import {
   channelLabel, formatMinorUnits, formatOrderWorkTime, isPayableBranchOrderWorkStatus,
@@ -23,6 +24,7 @@ export function PayableOrders({ initial, scope, selectedOrderId, tableNames }: P
   const [busy, setBusy] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, OrderDetailV1>>({});
+  const [detailErrors, setDetailErrors] = useState<ReadonlySet<string>>(() => new Set());
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const latestRequest = useRef(0);
   const payable = items.filter((item) => isPayableBranchOrderWorkStatus(item.status));
@@ -52,11 +54,21 @@ export function PayableOrders({ initial, scope, selectedOrderId, tableNames }: P
     setExpandedId(orderId);
     if (details[orderId] === undefined) {
       setLoadingId(orderId);
+      setDetailErrors((current) => {
+        const next = new Set(current);
+        next.delete(orderId);
+        return next;
+      });
       try {
         const result = await orderDetailAction(orderId);
         if (result.ok) {
           setDetails((prev) => ({ ...prev, [orderId]: result.value }));
+        } else {
+          setDetailErrors((current) => new Set(current).add(orderId));
         }
+      } catch (error) {
+        unstable_rethrow(error);
+        setDetailErrors((current) => new Set(current).add(orderId));
       } finally {
         setLoadingId((current) => (current === orderId ? null : current));
       }
@@ -94,6 +106,7 @@ export function PayableOrders({ initial, scope, selectedOrderId, tableNames }: P
           const isExpanded = expandedId === item.orderId;
           const detail = details[item.orderId];
           const isLoading = loadingId === item.orderId;
+          const detailFailed = detailErrors.has(item.orderId);
           const title = getTitle(item);
 
           return (
@@ -153,9 +166,9 @@ export function PayableOrders({ initial, scope, selectedOrderId, tableNames }: P
                         </li>
                       ))}
                     </ul>
-                  ) : (
+                  ) : detailFailed ? (
                     <p className="text-xs text-error">No se pudo cargar el detalle de la orden.</p>
-                  )}
+                  ) : null}
                 </div>
               )}
             </li>

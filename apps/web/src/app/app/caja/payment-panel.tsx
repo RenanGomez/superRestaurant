@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { unstable_rethrow, useRouter } from "next/navigation";
 import type { CashPaymentQuoteV1, CheckoutOrderSummaryV1, OrderPaymentV1 } from "@super-restaurant/shared-types";
 import { Field, FieldHint } from "../../../components/field-hint";
 import { formatMinorUnits, formatOrderWorkTime } from "../../../lib/branch-order-work-tray";
@@ -41,8 +41,7 @@ export function PaymentPanel({
   const [reference, setReference] = useState("");
   const [quote, setQuote] = useState<CashPaymentQuoteV1 | null>(null);
   const [quoteError, setQuoteError] = useState("");
-  // Cash needed (amount + tip) as reported by the server when it rejects the tender as short.
-  const [serverRequiredMinor, setServerRequiredMinor] = useState<number | null>(null);
+  const [missingCashMinor, setMissingCashMinor] = useState<number | null>(null);
   const [serverRejected, setServerRejected] = useState(false);
   const [collectError, setCollectError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -52,16 +51,11 @@ export function PaymentPanel({
   const receivedMinor = parseMoneyInputToMinor(receivedPesos, checkout.currency);
   const tipMinor = tipPesos.trim() === "" ? 0 : parseMoneyInputToMinor(tipPesos, checkout.currency);
   const requiredCashMinor = !validAmount || tipMinor === null ? null : requiredCashTenderMinor(amountMinor, tipMinor);
-  // Presentation only: the server decides insufficiency; this subtraction just words the message.
-  const missingCashMinor = method === "cash" && serverRequiredMinor !== null && receivedMinor !== null && serverRequiredMinor > receivedMinor
-    ? serverRequiredMinor - receivedMinor
-    : null;
-
   useEffect(() => {
     const request = ++latest.current;
     setQuote(null);
     setQuoteError("");
-    setServerRequiredMinor(null);
+    setMissingCashMinor(null);
     setServerRejected(false);
     if (!validAmount || tipMinor === null || (method === "cash" && (receivedMinor === null || receivedMinor <= 0))) return;
     const timer = setTimeout(() => {
@@ -77,7 +71,7 @@ export function PaymentPanel({
         if (result.status === "ok" && result.value !== undefined) setQuote(result.value);
         else {
           if (result.status === "invalid_amount") setServerRejected(true);
-          if (result.status === "invalid_amount" && result.requiredMinor !== undefined) setServerRequiredMinor(result.requiredMinor);
+          if (result.status === "invalid_amount" && result.missingMinor !== undefined) setMissingCashMinor(result.missingMinor);
           else setQuoteError(errorText(result.status));
         }
       }).catch(() => {
@@ -114,8 +108,8 @@ export function PaymentPanel({
         }
       }
       setCollectError(errorText(result.status));
-    } catch {
-      // The actions return statuses and their redirect() calls run server-side, so nothing to rethrow.
+    } catch (error) {
+      unstable_rethrow(error);
       const detail = await orderDetailAction(checkout.orderId).catch(() => undefined);
       if (detail?.ok && detail.value.payments.some((p) => p.paymentId === audit.paymentId)) {
         const receiptHref = buildReceiptHref(audit.paymentId, checkout.orderId);
