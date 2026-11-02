@@ -1,6 +1,6 @@
 -- Test-only fixtures. The schema verifier executes this body inside its rollback transaction.
 -- Exercises 20261102000100_menu_locked_ingredients.sql:
---   1. backfill simulation and idempotency: options of extra group not matching excludable labels become locked;
+--   1. table constraints (the verifier seeds legacy rows before applying the migration and checks its real backfill);
 --   2. save_menu_catalog / build_menu_catalog_state round-trip modern lockedIngredientOptionIds;
 --   3. save_menu_catalog idempotency / replay;
 --   4. save_menu_catalog rejections: duplicate locked options, foreign locked options, locked options without extra group;
@@ -28,6 +28,7 @@ declare
   o_cebolla uuid := gen_random_uuid();
   o_jamon uuid := gen_random_uuid();
   o_champi uuid := gen_random_uuid();
+  variant_empty uuid := gen_random_uuid();
   v_catalog_id uuid := gen_random_uuid();
   save_status text;
   save_state jsonb;
@@ -93,7 +94,7 @@ begin
   end;
 
   -- ------------------------------------------------------------
-  -- 2. Backfill simulation and idempotency
+  -- 2. Catalog fixtures used by save / confirmation tests
   -- ------------------------------------------------------------
   -- Insert the product before its legacy-owned groups so the composite
   -- menu_modifier_groups_product_fk can resolve the owner in this catalog.
@@ -116,29 +117,6 @@ begin
     (restaurant, v_catalog_id, g_extras, o_cebolla, 'Cebolla', 1000, true, 1),
     (restaurant, v_catalog_id, g_extras, o_jamon, 'Jamon', 1500, true, 1),
     (restaurant, v_catalog_id, g_extras, o_champi, 'Champinones', 1500, true, 1);
-
-  -- Expected backfill result: 'Jamon' and 'Champinones' become locked, 'Cebolla' remains un-locked.
-  -- Execute backfill block
-  update app.menu_products p
-  set fraction_locked_ingredient_option_ids = coalesce((
-    select pg_catalog.array_agg(opt.id order by opt.id)
-    from app.menu_modifier_options opt
-    where opt.restaurant_id = p.restaurant_id and opt.catalog_id = p.catalog_id
-      and opt.group_id = p.fraction_extra_group_id
-      and not exists (
-        select 1 from pg_catalog.unnest(p.fraction_excludable_ingredient_ids) as ex(lbl)
-        where pg_catalog.lower(pg_catalog.btrim(opt.name)) = pg_catalog.lower(pg_catalog.btrim(ex.lbl))
-      )
-  ), '{}'::uuid[])
-  where p.restaurant_id = restaurant and p.catalog_id = v_catalog_id and p.id = product_pizza;
-
-  if not exists (
-    select 1 from app.menu_products p
-    where p.id = product_pizza
-      and o_jamon = any(p.fraction_locked_ingredient_option_ids)
-      and o_champi = any(p.fraction_locked_ingredient_option_ids)
-      and not (o_cebolla = any(p.fraction_locked_ingredient_option_ids))
-  ) then raise exception 'LOCKED_INGREDIENTS_BACKFILL_INCORRECT'; end if;
 
   -- ------------------------------------------------------------
   -- 3. save_menu_catalog / build_menu_catalog_state roundtrip
@@ -455,7 +433,17 @@ begin
           'flavorGroupId', g_flavors::text,
           'extraGroupId', g_extras::text,
           'excludableIngredientIds', pg_catalog.jsonb_build_array('Cebolla')
-        )
+        ),
+        'variants', pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+          'variantId', variant_empty::text, 'name', 'Grande', 'sku', null, 'unitPriceMinor', 18000,
+          'active', true, 'displayOrder', 0,
+          'fraction', pg_catalog.jsonb_build_object(
+            'enabled', true,
+            'flavorGroupId', g_flavors::text,
+            'extraGroupId', g_extras::text,
+            'excludableIngredientIds', '[]'::jsonb
+          )
+        ))
       )
     ),
     'modifierGroups', payload->'modifierGroups'
@@ -474,6 +462,13 @@ begin
       and p.fraction_locked_ingredient_option_ids = array[o_jamon]
       and p.fraction_excludable_ingredient_ids = array['Cebolla']
   ) then raise exception 'OLD_PAYLOAD_WITHOUT_LOCKED_BACKFILL_INCORRECT'; end if;
+
+  if not exists (
+    select 1 from app.menu_product_variants v
+    where v.restaurant_id = restaurant and v.catalog_id = test_catalog and v.id = variant_empty
+      and v.fraction_locked_ingredient_option_ids @> array[o_cebolla, o_jamon]
+      and pg_catalog.cardinality(v.fraction_locked_ingredient_option_ids) = 2
+  ) then raise exception 'OLD_VARIANT_EMPTY_EXCLUDABLE_MUST_LOCK_ALL'; end if;
 
   -- 7.2. Payload nuevo sin excludable (válido): guarda exitoso y preserva locked
   test_catalog := gen_random_uuid();
@@ -546,7 +541,7 @@ begin
       and p.fraction_locked_ingredient_option_ids = '{}'::uuid[]
   ) then raise exception 'UNLOCK_ALL_OVERWRITTEN_BY_BACKFILL'; end if;
 
-  -- 7.4. Replay viejo<->nuevo idempotente: normalize_menu_catalog_payload previene conflicto de idempotencia
+  -- 7.4. Una lista legacy vacia bloquea todo; locked: [] moderno desbloquea todo y no es el mismo replay.
   test_catalog := gen_random_uuid();
   save_event := gen_random_uuid();
   save_key := gen_random_uuid();
@@ -593,12 +588,19 @@ begin
 
   if save_status <> 'saved' then raise exception 'REPLAY_FIRST_SAVE_FAILED: %', save_status; end if;
 
+  if not exists (
+    select 1 from app.menu_products p
+    where p.restaurant_id = restaurant and p.catalog_id = test_catalog and p.id = product_pizza
+      and p.fraction_locked_ingredient_option_ids @> array[o_cebolla, o_jamon]
+      and pg_catalog.cardinality(p.fraction_locked_ingredient_option_ids) = 2
+  ) then raise exception 'OLD_PRODUCT_EMPTY_EXCLUDABLE_MUST_LOCK_ALL'; end if;
+
   execute 'set local role app_api';
   select s.status into save_status from app_private.save_menu_catalog(
     actor, restaurant, branch, save_event, save_key, device, now_at, 5, test_catalog, 'MXN', replay_payload_new) s;
   execute 'reset role';
 
-  if save_status <> 'replayed' then raise exception 'REPLAY_OLD_VS_NEW_FAILED: %', save_status; end if;
+  if save_status <> 'conflict' then raise exception 'OLD_EMPTY_VS_MODERN_UNLOCKED_MUST_CONFLICT: %', save_status; end if;
 
 end
 $menu_locked_ingredients_tests$;

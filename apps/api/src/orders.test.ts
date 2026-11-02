@@ -1295,6 +1295,7 @@ const flavorPepperoni = "9d405f61-7283-4d94-9ea5-c6d7e8f90a10";
 const flavorHawaiana = "9d405f61-7283-4d94-9ea5-c6d7e8f90a11";
 const flavorSoldOut = "9d405f61-7283-4d94-9ea5-c6d7e8f90a12";
 const extraCheese = "9d405f61-7283-4d94-9ea5-c6d7e8f90a13";
+const ingredientOnion = "9d405f61-7283-4d94-9ea5-c6d7e8f90a14";
 
 const halvesMenuState: MenuCatalogStateV1 = (() => {
   const catalog = sizedMenuState.catalog;
@@ -1315,7 +1316,10 @@ const halvesMenuState: MenuCatalogStateV1 = (() => {
         },
         {
           active: true, displayOrder: 51, groupId: extraGroupId, maximumQuantity: 5, minimumQuantity: 0, name: "Extras", productId,
-          options: [{ active: true, imagePath: null, maximumQuantity: null, name: "Queso extra", optionId: extraCheese, unitPriceMinor: 2_501 }],
+          options: [
+            { active: true, imagePath: null, maximumQuantity: null, name: "Queso extra", optionId: extraCheese, unitPriceMinor: 2_501 },
+            { active: true, imagePath: null, maximumQuantity: null, name: "Cebolla", optionId: ingredientOnion, unitPriceMinor: 0 },
+          ],
         },
       ],
       products: [{
@@ -1345,7 +1349,7 @@ test("addItem prices a halves line at the greater flavor plus half-priced extras
   const saved: { order?: Order } = {};
   const manager = serviceFor(["manager"], capturingOrders(saved), undefined, halvesMenuState);
   await manager.addItem(principal, sizedAddCommand({
-    fraction: halvesFraction({ excludedA: ["cebolla"], extrasA: [extraCheese] }), variantId: sizeLarge,
+    fraction: halvesFraction({ excludedA: [ingredientOnion], extrasA: [extraCheese] }), variantId: sizeLarge,
   }));
   const snapshot = saved.order?.items[0]?.snapshot;
   assert.equal(snapshot?.unitPrice.amountMinor, 17_000);
@@ -1360,11 +1364,11 @@ test("addItem prices a halves line at the greater flavor plus half-priced extras
   const item = detail.items[0];
   assert.equal(item?.geometry, "halves");
   assert.deepEqual(item?.fractionBreakdown?.map((half) => [half.fraction, half.flavorName, half.extras, half.exclusions]), [
-    ["half-a", "Pepperoni", ["Queso extra"], ["cebolla"]],
+    ["half-a", "Pepperoni", ["Queso extra"], ["Cebolla"]],
     ["half-b", "Hawaiana", [], []],
   ]);
   assert.deepEqual(item?.fractionBreakdown?.map((half) => [half.fraction, half.flavorOptionId, half.extraOptionIds, half.excludedIngredientIds]), [
-    ["half-a", flavorPepperoni, [extraCheese], ["cebolla"]],
+    ["half-a", flavorPepperoni, [extraCheese], [ingredientOnion]],
     ["half-b", flavorHawaiana, [], []],
   ]);
   const wholeSaved: { order?: Order } = {};

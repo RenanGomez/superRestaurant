@@ -27,17 +27,16 @@ export interface DryrunMenuLockedIngredientsResult {
   readonly rows: readonly DryrunRow[];
 }
 
-export const DRYRUN_SQL = `with unnested as (
+export const DRYRUN_SQL = `with fractions as (
   select
     p.restaurant_id,
     p.catalog_id,
     p.id as product_id,
     null::uuid as variant_id,
     p.fraction_extra_group_id as ingredient_group_id,
-    label
+    p.fraction_excludable_ingredient_ids as labels
   from app.menu_products p
-  cross join lateral unnest(p.fraction_excludable_ingredient_ids) as label
-  where p.fraction_enabled and p.fraction_extra_group_id is not null
+  where pg_catalog.cardinality(p.fraction_excludable_ingredient_ids) > 0
   union all
   select
     v.restaurant_id,
@@ -45,10 +44,20 @@ export const DRYRUN_SQL = `with unnested as (
     v.product_id,
     v.id as variant_id,
     v.fraction_extra_group_id as ingredient_group_id,
-    label
+    v.fraction_excludable_ingredient_ids as labels
   from app.menu_product_variants v
-  cross join lateral unnest(v.fraction_excludable_ingredient_ids) as label
-  where v.fraction_enabled and v.fraction_extra_group_id is not null
+  where pg_catalog.cardinality(v.fraction_excludable_ingredient_ids) > 0
+),
+unnested as (
+  select
+    f.restaurant_id,
+    f.catalog_id,
+    f.product_id,
+    f.variant_id,
+    f.ingredient_group_id,
+    label
+  from fractions f
+  cross join lateral pg_catalog.unnest(f.labels) as label
 ),
 matches as (
   select
@@ -64,7 +73,7 @@ matches as (
       where o.restaurant_id = u.restaurant_id
         and o.catalog_id = u.catalog_id
         and o.group_id = u.ingredient_group_id
-        and lower(trim(o.name)) = lower(trim(u.label))
+        and pg_catalog.lower(pg_catalog.btrim(o.name)) = pg_catalog.lower(pg_catalog.btrim(u.label))
     ) as match_count
   from unnested u
 )

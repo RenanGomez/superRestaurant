@@ -230,16 +230,19 @@ export function restoreLineFraction(
     }
     const extraOptionIds = hasIds ? [...half.extraOptionIds!] : half.extras.map((name) => uniqueActiveByName(extraGroup, name));
     if (extraOptionIds.some((id) => id === undefined || !activeOption(extraGroup, id))) return { ok: false, reason: "extra" };
-    const excludedIngredientIds = hasIds ? half.excludedIngredientIds! : half.exclusions;
     const lockedSet = new Set(setup.lockedIngredientOptionIds ?? []);
-    const allowedExclusions = new Set<string>([
-      ...(setup.excludableIngredientIds ?? []),
-      ...(extraGroup?.options.filter((o) => !lockedSet.has(o.optionId)).map((o) => o.optionId) ?? []),
-    ]);
-    if (hasIds && excludedIngredientIds.some((id) => !allowedExclusions.has(id))) {
+    const excludedIngredientIds = hasIds
+      ? [...half.excludedIngredientIds!]
+      : half.exclusions.map((name) => uniqueActiveByName(extraGroup, name));
+    const allowedExclusions = new Set<string>(
+      extraGroup?.options
+        .filter((option) => option.active && !lockedSet.has(option.optionId))
+        .map((option) => option.optionId) ?? [],
+    );
+    if (excludedIngredientIds.some((id) => id === undefined || !allowedExclusions.has(id))) {
       return { ok: false, reason: "extra" };
     }
-    slots.push({ excludedIngredientIds: [...excludedIngredientIds], extraOptionIds: extraOptionIds as string[], flavorOptionId, fraction: fractionName });
+    slots.push({ excludedIngredientIds: excludedIngredientIds as string[], extraOptionIds: extraOptionIds as string[], flavorOptionId, fraction: fractionName });
   }
   if (slots.every((slot) => slot.flavorOptionId === null)) return { ok: false, reason: "flavor" };
   return { ok: true, fraction: { geometry: "halves", slots } };

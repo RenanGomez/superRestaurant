@@ -42,6 +42,108 @@ const TABLE_SQL = `select
   (select count(*)::integer from pg_catalog.pg_constraint
     where conname in ('menu_products_fraction_locked_valid','menu_product_variants_fraction_locked_valid')) as "lockedChecks"`;
 
+// These rows deliberately use the schema that existed immediately before the candidate. The
+// candidate must migrate them; inserting equivalent fixtures after it would only test a copy of the
+// backfill query. Fixed UUIDs make the expected option arrays explicit and stable.
+const SEED_LEGACY_SQL = `do $seed$
+declare
+  actor uuid := (select id from auth.users where deleted_at is null order by id limit 1);
+  r constant uuid := '10000000-0000-4000-8000-000000000001';
+  b constant uuid := '10000000-0000-4000-8000-000000000002';
+  c constant uuid := '10000000-0000-4000-8000-000000000003';
+  category constant uuid := '10000000-0000-4000-8000-000000000004';
+  confirmed_order constant uuid := '10000000-0000-4000-8000-000000000005';
+begin
+  if actor is null then raise exception 'LOCAL_LEGACY_ACTOR_REQUIRED'; end if;
+  insert into app.restaurants(id,name,time_zone) values(r,'rollback-only legacy locked ingredients','America/Hermosillo');
+  insert into app.branches(id,restaurant_id,name) values(b,r,'rollback-only legacy branch');
+  insert into app.menu_catalogs(id,restaurant_id,version,currency,published_by) values(c,r,1,'MXN',actor);
+  insert into app.menu_categories(restaurant_id,catalog_id,id,name,active,display_order)
+    values(r,c,category,'Pizzas',true,0);
+  insert into app.menu_products(
+    restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor,
+    fraction_extra_group_id,fraction_excludable_ingredient_ids
+  ) values
+    (r,c,'20000000-0000-4000-8000-000000000001',category,'Mapeable',null,true,0,'kitchen','piece',100,
+      '30000000-0000-4000-8000-000000000001',array['Cebolla']),
+    (r,c,'20000000-0000-4000-8000-000000000002',category,'No mapeable',null,true,1,'kitchen','piece',100,
+      '30000000-0000-4000-8000-000000000002',array['Fantasma']),
+    (r,c,'20000000-0000-4000-8000-000000000003',category,'Ambigua',null,true,2,'kitchen','piece',100,
+      '30000000-0000-4000-8000-000000000003',array['Cebolla']),
+    (r,c,'20000000-0000-4000-8000-000000000004',category,'Lista vacia',null,true,3,'kitchen','piece',100,
+      '30000000-0000-4000-8000-000000000004','{}'::text[]);
+  insert into app.menu_modifier_groups(
+    restaurant_id,catalog_id,id,product_id,name,active,display_order,minimum_quantity,maximum_quantity
+  ) values
+    (r,c,'30000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001','Ingredientes',true,0,0,5),
+    (r,c,'30000000-0000-4000-8000-000000000002','20000000-0000-4000-8000-000000000002','Ingredientes',true,0,0,5),
+    (r,c,'30000000-0000-4000-8000-000000000003','20000000-0000-4000-8000-000000000003','Ingredientes',true,0,0,5),
+    (r,c,'30000000-0000-4000-8000-000000000004','20000000-0000-4000-8000-000000000004','Ingredientes',true,0,0,5);
+  insert into app.menu_modifier_options(restaurant_id,catalog_id,group_id,id,name,unit_price_minor,active) values
+    (r,c,'30000000-0000-4000-8000-000000000001','40000000-0000-4000-8000-000000000001','Cebolla',0,true),
+    (r,c,'30000000-0000-4000-8000-000000000001','40000000-0000-4000-8000-000000000002','Jamon',0,true),
+    (r,c,'30000000-0000-4000-8000-000000000002','40000000-0000-4000-8000-000000000003','Cebolla',0,true),
+    (r,c,'30000000-0000-4000-8000-000000000002','40000000-0000-4000-8000-000000000004','Jamon',0,true),
+    (r,c,'30000000-0000-4000-8000-000000000003','40000000-0000-4000-8000-000000000005','Cebolla',0,true),
+    (r,c,'30000000-0000-4000-8000-000000000003','40000000-0000-4000-8000-000000000006',' cebolla ',0,true),
+    (r,c,'30000000-0000-4000-8000-000000000003','40000000-0000-4000-8000-000000000007','Jamon',0,true),
+    (r,c,'30000000-0000-4000-8000-000000000004','40000000-0000-4000-8000-000000000008','Cebolla',0,true),
+    (r,c,'30000000-0000-4000-8000-000000000004','40000000-0000-4000-8000-000000000009','Jamon',0,true);
+  insert into app.menu_product_variants(
+    restaurant_id,catalog_id,product_id,id,name,sku,unit_price_minor,active,display_order,
+    fraction_extra_group_id,fraction_excludable_ingredient_ids
+  ) values(r,c,'20000000-0000-4000-8000-000000000004','50000000-0000-4000-8000-000000000001',
+    'Grande',null,150,true,0,'30000000-0000-4000-8000-000000000004','{}'::text[]);
+  insert into app.orders(id,restaurant_id,branch_id,channel,status,aggregate,version,created_by,updated_by)
+  values(confirmed_order,r,b,'counter','open',pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',confirmed_order::text,'restaurantId',r::text,'branchId',b::text,
+    'channel','counter','status','open','currency','MXN','timeZone','America/Hermosillo',
+    'items',pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+      'orderItemId','60000000-0000-4000-8000-000000000001','snapshot',pg_catalog.jsonb_build_object(
+        'catalogVersion',c::text,'productId','20000000-0000-4000-8000-000000000001','name','Pizza congelada',
+        'stationId','kitchen','unit','piece','unitPrice',pg_catalog.jsonb_build_object('amountMinor',100,'currency','MXN'),
+        'modifiers',pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+          'modifierId','exclude:half-a:Cebolla','name','Sin Cebolla','unitPrice',pg_catalog.jsonb_build_object('amountMinor',0,'currency','MXN'))),
+        'geometry','halves','fractionBreakdown',pg_catalog.jsonb_build_array(
+          pg_catalog.jsonb_build_object('fraction','half-a','flavorName','Pepperoni','amountMinor',100,'extras','[]'::jsonb,'exclusions',pg_catalog.jsonb_build_array('Cebolla')),
+          pg_catalog.jsonb_build_object('fraction','half-b','flavorName','Hawaiana','amountMinor',100,'extras','[]'::jsonb,'exclusions','[]'::jsonb)
+        )
+      ),'quantity',1,'restaurantId',r::text,'branchId',b::text,'status','pending','note',null
+    ))
+  ),1,actor,actor);
+end $seed$`;
+
+const CHECK_BACKFILL_SQL = `select pg_catalog.jsonb_build_object(
+  'mapped',(select pg_catalog.to_jsonb(p.fraction_locked_ingredient_option_ids) from app.menu_products p
+    where p.id='20000000-0000-4000-8000-000000000001'),
+  'unmapped',(select pg_catalog.to_jsonb(p.fraction_locked_ingredient_option_ids) from app.menu_products p
+    where p.id='20000000-0000-4000-8000-000000000002'),
+  'ambiguous',(select pg_catalog.to_jsonb(p.fraction_locked_ingredient_option_ids) from app.menu_products p
+    where p.id='20000000-0000-4000-8000-000000000003'),
+  'emptyProduct',(select pg_catalog.to_jsonb(p.fraction_locked_ingredient_option_ids) from app.menu_products p
+    where p.id='20000000-0000-4000-8000-000000000004'),
+  'emptyVariant',(select pg_catalog.to_jsonb(v.fraction_locked_ingredient_option_ids) from app.menu_product_variants v
+    where v.id='50000000-0000-4000-8000-000000000001'),
+  'snapshotUnchanged',(select o.aggregate#>'{items,0,snapshot}' = pg_catalog.jsonb_build_object(
+    'catalogVersion','10000000-0000-4000-8000-000000000003','productId','20000000-0000-4000-8000-000000000001','name','Pizza congelada',
+    'stationId','kitchen','unit','piece','unitPrice',pg_catalog.jsonb_build_object('amountMinor',100,'currency','MXN'),
+    'modifiers',pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+      'modifierId','exclude:half-a:Cebolla','name','Sin Cebolla','unitPrice',pg_catalog.jsonb_build_object('amountMinor',0,'currency','MXN'))),
+    'geometry','halves','fractionBreakdown',pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object('fraction','half-a','flavorName','Pepperoni','amountMinor',100,'extras','[]'::jsonb,'exclusions',pg_catalog.jsonb_build_array('Cebolla')),
+      pg_catalog.jsonb_build_object('fraction','half-b','flavorName','Hawaiana','amountMinor',100,'extras','[]'::jsonb,'exclusions','[]'::jsonb)
+    )) from app.orders o where o.id='10000000-0000-4000-8000-000000000005')
+) as verification`;
+
+const EXPECTED_BACKFILL = {
+  mapped: ["40000000-0000-4000-8000-000000000002"],
+  unmapped: ["40000000-0000-4000-8000-000000000003", "40000000-0000-4000-8000-000000000004"],
+  ambiguous: ["40000000-0000-4000-8000-000000000007"],
+  emptyProduct: ["40000000-0000-4000-8000-000000000008", "40000000-0000-4000-8000-000000000009"],
+  emptyVariant: ["40000000-0000-4000-8000-000000000008", "40000000-0000-4000-8000-000000000009"],
+  snapshotUnchanged: true,
+};
+
 function executable(name: string): string {
   const path = realpathSync(join(binaries, `${name}.exe`));
   if (!path.toLowerCase().startsWith(`${realpathSync(cache).toLowerCase()}\\`)) throw new Error("LOCAL_BINARY_PATH_REJECTED");
@@ -120,12 +222,16 @@ try {
   await admin.query("BEGIN");
   let migrated;
   let lockedShape;
+  let backfill;
   let migrationFailure: unknown;
   try {
+    await admin.query(SEED_LEGACY_SQL);
     await admin.query(extractMigrationBody(candidateSql));
     migrated = (await admin.query(SUMMARY_SQL)).rows[0];
     lockedShape = (await admin.query(TABLE_SQL)).rows[0];
     assert.deepEqual(lockedShape, { lockedColumns: 2, lockedChecks: 2 });
+    backfill = (await admin.query(CHECK_BACKFILL_SQL)).rows[0]?.verification;
+    assert.deepEqual(backfill, EXPECTED_BACKFILL);
     // The invariants file opens with BEGIN and ends with ROLLBACK; the outer transaction is ours.
     if (!/^\s*(--[^\n]*\n\s*)*begin;/iu.test(invariantsSql) || !/rollback;\s*$/iu.test(invariantsSql) || /commit;/iu.test(invariantsSql)) {
       throw new Error("LOCAL_INVARIANTS_SHAPE_REJECTED");
@@ -158,7 +264,7 @@ try {
 
   process.stdout.write(`${JSON.stringify({
     stage: "menu_locked_ingredients_rollback", status: "ok", runId,
-    priorMigrationsApplied: priorNames.length, baseline, migrated, postcheck,
+    priorMigrationsApplied: priorNames.length, baseline, migrated, postcheck, backfill,
   })}\n`);
 } catch (error: unknown) {
   failed = true;

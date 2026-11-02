@@ -558,17 +558,12 @@ export function catalogVariantToFractionVariant(
       priceMinor: option.unitPrice.amountMinor === 0 ? basePriceMinor : option.unitPrice.amountMinor,
     })),
     includedIngredients: extraGroup === undefined
-      ? (config.excludableIngredientIds ?? []).map((label) => ({ ingredientId: label, name: label }))
+      ? []
       : (() => {
           const lockedSet = new Set(config.lockedIngredientOptionIds ?? []);
-          const fromGroup = extraGroup.options
+          return extraGroup.options
             .filter((option) => option.active && !lockedSet.has(option.id))
             .map((option) => ({ ingredientId: option.id, name: option.name }));
-          const existingIds = new Set(fromGroup.map((i) => i.ingredientId));
-          const fromLegacy = (config.excludableIngredientIds ?? [])
-            .filter((label) => !existingIds.has(label))
-            .map((label) => ({ ingredientId: label, name: label }));
-          return [...fromGroup, ...fromLegacy];
         })(),
     name: product.name,
     productId: product.id,

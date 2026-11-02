@@ -242,9 +242,6 @@ returns jsonb language sql immutable set search_path = '' as $function$
                     variant_entry.value,
                     '{fraction}',
                     variant_entry.value->'fraction'
-                      || case when not (variant_entry.value->'fraction' ? 'lockedIngredientOptionIds')
-                           then pg_catalog.jsonb_build_object('lockedIngredientOptionIds', '[]'::jsonb)
-                           else '{}'::jsonb end
                       || case when not (variant_entry.value->'fraction' ? 'excludableIngredientIds')
                            then pg_catalog.jsonb_build_object('excludableIngredientIds', '[]'::jsonb)
                            else '{}'::jsonb end
@@ -265,9 +262,6 @@ returns jsonb language sql immutable set search_path = '' as $function$
                 entry.value,
                 '{fraction}',
                 entry.value->'fraction'
-                  || case when not (entry.value->'fraction' ? 'lockedIngredientOptionIds')
-                       then pg_catalog.jsonb_build_object('lockedIngredientOptionIds', '[]'::jsonb)
-                       else '{}'::jsonb end
                   || case when not (entry.value->'fraction' ? 'excludableIngredientIds')
                        then pg_catalog.jsonb_build_object('excludableIngredientIds', '[]'::jsonb)
                        else '{}'::jsonb end
@@ -616,7 +610,6 @@ begin
       ), '{}'::uuid[])
     where product.restaurant_id = p_restaurant_id and product.catalog_id = p_catalog_id
       and product.fraction_extra_group_id is not null
-      and pg_catalog.cardinality(product.fraction_excludable_ingredient_ids) > 0
       and exists (
         select 1 from pg_catalog.jsonb_array_elements(p_payload->'products') as prod(value)
         where (prod.value->>'productId')::uuid = product.id
@@ -638,7 +631,6 @@ begin
       ), '{}'::uuid[])
     where variant.restaurant_id = p_restaurant_id and variant.catalog_id = p_catalog_id
       and variant.fraction_extra_group_id is not null
-      and pg_catalog.cardinality(variant.fraction_excludable_ingredient_ids) > 0
       and exists (
         select 1
         from pg_catalog.jsonb_array_elements(p_payload->'products') as prod(value),

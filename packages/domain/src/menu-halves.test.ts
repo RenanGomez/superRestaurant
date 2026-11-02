@@ -41,7 +41,7 @@ function pizzaCatalog(overrides: { readonly fraction?: unknown; readonly flavorA
         unitPrice: new Money(15_000, "MXN"),
         fraction: (overrides.fraction ?? {
           enabled: true,
-          excludableIngredientIds: ["cebolla"],
+          excludableIngredientIds: ["Cebolla"],
           extraGroupId: "extras",
           flavorGroupId: "flavors",
           lockedIngredientOptionIds: [QUESO_ID],
@@ -238,6 +238,8 @@ test("catalogVariantToFractionVariant maps zero-priced flavors to the size price
   // Cebolla is active and not locked -> included.
   // QUESO_ID is locked -> not included.
   // champinones is inactive -> not included (Finding 4).
+  // The legacy label "Cebolla" is not appended as another current ingredient.
   assert.deepEqual(variant.includedIngredients.map((ingredient) => ingredient.ingredientId), ["cebolla"]);
+  assert.deepEqual(variant.includedIngredients.map((ingredient) => ingredient.name), ["Cebolla"]);
   assert.ok(!variant.includedIngredients.some((ing) => ing.ingredientId === "champinones"));
 });

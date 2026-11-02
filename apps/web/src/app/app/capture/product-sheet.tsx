@@ -110,14 +110,9 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
   const excludableIngredients = useMemo(() => {
     if (!fractionSetup) return [];
     const lockedSet = new Set(fractionSetup.lockedIngredientOptionIds ?? []);
-    const fromGroup = (extraGroup?.options ?? [])
+    return (extraGroup?.options ?? [])
       .filter((option) => option.active && !lockedSet.has(option.optionId))
       .map((option) => ({ id: option.optionId, name: option.name }));
-    const groupIds = new Set(fromGroup.map((item) => item.id));
-    const fromLegacy = (fractionSetup.excludableIngredientIds ?? [])
-      .filter((label) => !groupIds.has(label))
-      .map((label) => ({ id: label, name: label }));
-    return [...fromGroup, ...fromLegacy];
   }, [fractionSetup, extraGroup]);
   // With halves the flavor and extra groups live in the two columns, not in the ordinary list.
   const listedGroups = halvesActive ? assignedGroups.filter((group) => group.groupId !== flavorGroup?.groupId && group.groupId !== extraGroup?.groupId) : assignedGroups;
