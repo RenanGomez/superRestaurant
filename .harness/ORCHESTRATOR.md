@@ -87,7 +87,9 @@ Antes de delegar, L0 clasifica la subtarea y elige el canal y esfuerzo mínimos 
 Reglas:
 0. **Codex y Gemini primero, siempre** (Emmanuel, 2026-11-01; `AGENTS.md` §19.4). Antes de lanzar cualquier
    sub-agente Claude, L0 intenta el canal pagado: Codex para implementar y revisar (todos los niveles, `-Effort`
-   según la fila), Gemini para investigar, armar paquetes, parsear logs y segunda opinión. Claude sólo como
+   según la fila), Gemini para investigar, armar paquetes, parsear logs, segunda opinión **y también para implementar**
+   (`-Write`, trabajando en un worktree `C:	mp\sr-wt\<id>` que el brief le ordena crear; Emmanuel, 2026-11-01:
+   «usa sub agente antigravity para programar también, hay que acabarse la cuota»). Claude sólo como
    fallback documentado (cuota, sesión, sandbox, dos intentos fallidos) o como segunda familia de la revisión
    cruzada de nivel A. La frase «nivel A siempre» de la fila L1 de §2 queda sustituida por: Codex implementa el
    nivel A con `-Effort high`, Claude lo revisa.
