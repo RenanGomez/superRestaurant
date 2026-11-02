@@ -460,6 +460,7 @@ export interface OrderPaymentV1 {
   readonly changeMinor: number | null;
   readonly transferReference: string | null;
   readonly capturedAt: string;
+  readonly capturedBy?: string | null;
 }
 
 export const ORDER_RECEIPT_DATA_SCHEMA_VERSION = 1 as const;
@@ -474,9 +475,9 @@ export interface OrderReceiptDataV1 {
 }
 
 export function parseOrderPaymentV1(value: unknown): OrderPaymentV1 | undefined {
-  const record = exactRecord(value, [
+  const record = exactRecordWithOptional(value, [
     "paymentId", "method", "amountMinor", "tipMinor", "tenderedAmountMinor", "changeMinor", "transferReference", "capturedAt",
-  ]);
+  ], ["capturedBy"]);
   if (record === undefined) return undefined;
   const paymentId = uuid(own(record, "paymentId"));
   const method = own(record, "method");
@@ -489,16 +490,18 @@ export function parseOrderPaymentV1(value: unknown): OrderPaymentV1 | undefined 
   const rawReference = own(record, "transferReference");
   const transferReference = rawReference === null ? null : text(rawReference, 1, 64);
   const capturedAt = timestamp(own(record, "capturedAt"));
+  const rawCapturedBy = Object.hasOwn(record, "capturedBy") ? own(record, "capturedBy") : null;
+  const capturedBy = rawCapturedBy === null ? null : uuid(rawCapturedBy);
   if (
     paymentId === undefined || typeof method !== "string" || !(SIMPLE_PAYMENT_METHODS as readonly string[]).includes(method)
     || amountMinor === undefined || tipMinor === undefined || tenderedAmountMinor === undefined || changeMinor === undefined
-    || transferReference === undefined || capturedAt === undefined
+    || transferReference === undefined || capturedAt === undefined || capturedBy === undefined
     || (transferReference !== null && method !== "transfer")
     || (tenderedAmountMinor === null) !== (changeMinor === null)
     || (tenderedAmountMinor !== null && method !== "cash")
   ) return undefined;
   return Object.freeze({
-    amountMinor, capturedAt, changeMinor, method: method as SimplePaymentMethodV1, paymentId, tenderedAmountMinor,
+    amountMinor, capturedAt, capturedBy, changeMinor, method: method as SimplePaymentMethodV1, paymentId, tenderedAmountMinor,
     tipMinor, transferReference,
   });
 }
