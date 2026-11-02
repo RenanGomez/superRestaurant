@@ -29,7 +29,7 @@ export function AppNav({ canAccessSystemAdmin, canReadReports, branchName }: { r
   const initial = branchName?.trim().charAt(0).toLocaleUpperCase("es-MX") ?? "";
 
   return (
-    <nav aria-label="Navegación principal" className="flex w-[76px] shrink-0 flex-col items-stretch gap-2 bg-nav px-2 py-4 lg:w-56">
+    <nav aria-label="Navegación principal" className="flex w-[76px] shrink-0 flex-col items-stretch gap-2 bg-nav px-2 py-4 lg:sticky lg:top-0 lg:h-[100dvh] lg:w-56 lg:self-start lg:overflow-x-hidden lg:overflow-y-auto">
       {branchName !== undefined && initial !== "" ? (
         <div className="mb-3 flex flex-col items-center gap-1 lg:flex-row lg:gap-3" title={`Sucursal activa: ${branchName}`}>
           <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/15 text-base font-bold text-white">{initial}</span>
