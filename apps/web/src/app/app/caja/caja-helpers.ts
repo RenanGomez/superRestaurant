@@ -54,6 +54,36 @@ export function paymentAmountBounds(remainingMinor: number, typedMinor: number |
     && typedMinor >= 1 && typedMinor <= remainingMinor;
 }
 
+export type PaymentCollectionMode = "full" | "split";
+
+/**
+ * In "full" mode the amount to collect is bound to the remaining balance.
+ * In "split" mode the operator can enter any amount within bounds [1, remainingBalanceMinor].
+ */
+export function resolvePaymentAmountMinor(
+  mode: PaymentCollectionMode,
+  remainingMinor: number,
+  customMinor: number | null,
+): number | null {
+  if (mode === "full") {
+    return Number.isSafeInteger(remainingMinor) && remainingMinor > 0 ? remainingMinor : null;
+  }
+  return paymentAmountBounds(remainingMinor, customMinor) ? customMinor : null;
+}
+
+/** Difference between required cash tender and received minor, or null when received is sufficient. */
+export function insufficientCashTenderDifference(requiredMinor: number, receivedMinor: number): number | null {
+  if (!Number.isSafeInteger(requiredMinor) || !Number.isSafeInteger(receivedMinor)) return null;
+  const diff = requiredMinor - receivedMinor;
+  return diff > 0 ? diff : null;
+}
+
+/** Operator message when the received cash does not cover the required tender. */
+export function formatInsufficientTenderWarning(missingMinor: number): string {
+  const pesos = (missingMinor / 100).toFixed(2);
+  return `Recibido menor al cobro más propina: faltan $${pesos}`;
+}
+
 export function canCollectPayment(input: {
   readonly quote: CashPaymentQuoteV1 | null;
   readonly remainingMinor: number;

@@ -70,7 +70,7 @@ export async function quotePaymentAction(input: {
   readonly receivedPesos: string;
   readonly tipPesos: string;
   readonly method: "cash" | "card_manual" | "transfer";
-}): Promise<{ status: string; value?: ReturnType<typeof parseCashPaymentQuoteV1> }> {
+}): Promise<{ status: string; value?: ReturnType<typeof parseCashPaymentQuoteV1>; requiredMinor?: number }> {
   const context = await getAuthorizedContext();
   const cookieStore = await cookies();
   const registerId = readUuidCookie(cookieStore, CASH_REGISTER_COOKIE);
@@ -88,17 +88,17 @@ export async function quotePaymentAction(input: {
     || (input.method === "cash" && (received === null || received <= 0))) return { status: "invalid_amount" };
   const required = requiredCashTenderMinor(enteredAmount, tipMinor);
   if (required === null) return { status: "invalid_amount" };
-  // For an insufficient tender, quote the portion available after tip. The server returns the unpaid balance.
-  const insufficient = received !== null && received < required;
-  if (insufficient && received <= tipMinor) return { status: "insufficient" };
+  if (input.method === "cash" && received !== null && received < required) {
+    return { status: "invalid_amount", requiredMinor: required };
+  }
   const request = {
-    amountMinor: insufficient ? (received as number) - tipMinor : enteredAmount,
+    amountMinor: enteredAmount,
     cashRegisterSessionId: input.cashRegisterSessionId,
     method: input.method,
     orderId: input.orderId,
     schemaVersion: 1,
     scope: context.scope,
-    tenderedAmountMinor: insufficient ? null : received,
+    tenderedAmountMinor: received,
     tipMinor,
   };
   try {
@@ -117,7 +117,7 @@ export async function quotePaymentAction(input: {
   } catch { return { status: "unavailable" }; }
 }
 
-export async function collectPaymentAction(formData: FormData): Promise<{ status: string }> {
+export async function collectPaymentAction(formData: FormData): Promise<{ status: string; receiptHref?: string }> {
   const context = await getAuthorizedContext();
   const cookieStore = await cookies();
   const registerId = readUuidCookie(cookieStore, CASH_REGISTER_COOKIE);
@@ -125,12 +125,12 @@ export async function collectPaymentAction(formData: FormData): Promise<{ status
   const cashRegisterSessionId = uuidField(formData, "cashRegisterSessionId");
   const orderId = uuidField(formData, "orderId");
   if (registerId === undefined || deviceId === undefined || cashRegisterSessionId === undefined || orderId === undefined) {
-    redirect("/app/caja?cashError=context_invalid");
+    return { status: "context_invalid" };
   }
   const checkout = await getCheckoutOrder(context.accessToken, context.apiBaseUrl, {
     cashRegisterSessionId, deviceId, orderId, registerId, schemaVersion: 1, scope: context.scope,
   });
-  if (checkout.status !== "ok") redirect(`/app/caja?orderId=${orderId}&cashError=${errorCode(checkout.status)}`);
+  if (checkout.status !== "ok") return { status: errorCode(checkout.status) };
   const method = textField(formData, "method");
   const amountMinor = parseMoneyInputToMinor(textField(formData, "amountPesos") ?? "", checkout.value.currency);
   const tenderedAmountMinor = method === "cash" ? parseMoneyInputToMinor(textField(formData, "receivedPesos") ?? "", checkout.value.currency) : null;
@@ -177,7 +177,7 @@ export async function collectPaymentAction(formData: FormData): Promise<{ status
     cookieStore.set(CASH_RECEIPT_COOKIE, encodeReceiptCookie(result.value, context.userId, context.receiptSecret), { ...cookieOptions(context.cookiesSecure), maxAge: 3_600 });
   }
   revalidatePath("/app/caja");
-  redirect(receiptHref);
+  return { status: "ok", receiptHref };
 }
 
 export async function closeCashRegisterAction(formData: FormData): Promise<void> {

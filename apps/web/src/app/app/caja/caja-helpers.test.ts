@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CashPaymentQuoteV1 } from "@super-restaurant/shared-types";
-import { buildReceiptHref, parseReceiptQuery, canCollectPayment, movementLabel, paymentAmountBounds, paymentMethodLabel, quickCashAmounts, requiredCashTenderMinor } from "./caja-helpers.js";
+import {
+  buildReceiptHref,
+  canCollectPayment,
+  formatInsufficientTenderWarning,
+  insufficientCashTenderDifference,
+  movementLabel,
+  parseReceiptQuery,
+  paymentAmountBounds,
+  paymentMethodLabel,
+  quickCashAmounts,
+  requiredCashTenderMinor,
+  resolvePaymentAmountMinor,
+} from "./caja-helpers.js";
 
 test("receipt labels show a transfer reference only when one exists", () => {
   assert.equal(paymentMethodLabel({ method: "transfer", transferReference: "ABC123" }), "Transferencia · Ref. ABC123");
@@ -34,6 +46,25 @@ test("paymentAmountBounds accepts one cent through the full remaining balance", 
   assert.equal(paymentAmountBounds(12_500, 0), false);
   assert.equal(paymentAmountBounds(12_500, 12_501), false);
   assert.equal(paymentAmountBounds(12_500, null), false);
+});
+
+test("resolvePaymentAmountMinor handles full and split modes", () => {
+  assert.equal(resolvePaymentAmountMinor("full", 13_000, null), 13_000);
+  assert.equal(resolvePaymentAmountMinor("full", 13_000, 5_000), 13_000);
+  assert.equal(resolvePaymentAmountMinor("full", 0, null), null);
+  assert.equal(resolvePaymentAmountMinor("split", 13_000, 7_000), 7_000);
+  assert.equal(resolvePaymentAmountMinor("split", 13_000, 13_000), 13_000);
+  assert.equal(resolvePaymentAmountMinor("split", 13_000, 13_001), null);
+  assert.equal(resolvePaymentAmountMinor("split", 13_000, 0), null);
+  assert.equal(resolvePaymentAmountMinor("split", 13_000, null), null);
+});
+
+test("insufficient cash tender difference and warning message", () => {
+  assert.equal(insufficientCashTenderDifference(12_800, 10_000), 2_800);
+  assert.equal(insufficientCashTenderDifference(12_800, 12_800), null);
+  assert.equal(insufficientCashTenderDifference(12_800, 15_000), null);
+  assert.equal(formatInsufficientTenderWarning(2_800), "Recibido menor al cobro más propina: faltan $28.00");
+  assert.equal(formatInsufficientTenderWarning(1_000), "Recibido menor al cobro más propina: faltan $10.00");
 });
 
 test("collect requires a current server quote and enough tender or card evidence", () => {

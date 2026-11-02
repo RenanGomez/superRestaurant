@@ -8,10 +8,13 @@ import type {
   PaymentCollectionSummaryV1,
 } from "@super-restaurant/shared-types";
 
-import { formatMinorUnits, requestBranchOrderWorkTray } from "../../../lib/branch-order-work-tray";
+import {
+  channelLabel, formatMinorUnits, formatOrderWorkTime, requestBranchOrderWorkTray,
+} from "../../../lib/branch-order-work-tray";
 import { getCheckoutOrder, type FinancialApiResult } from "../../../lib/finance";
+import { tableLabel } from "../../../lib/orders-view";
 import { uiButton } from "../../../lib/ui-classes";
-import { orderDetailAction } from "../orders/actions";
+import { orderDetailAction, tableNamesAction } from "../orders/actions";
 import { openCashRegisterAction } from "./actions";
 import { paymentMethodLabel, parseReceiptQuery } from "./caja-helpers";
 import {
@@ -39,6 +42,12 @@ export default async function CollectPaymentPage({ searchParams }: { readonly se
   const receiptQuery = parseReceiptQuery(params);
   const view = cobrarView({ canOperate, register, orderId, hasReceipt: receiptQuery !== null });
   const openReport = report?.status === "ok" && report.value.register.status === "open" ? report.value : undefined;
+
+  const tableNamesList = await tableNamesAction();
+  const tableNamesRecord: Record<string, string> = Object.fromEntries(
+    (tableNamesList ?? []).map((t) => [t.tableId, t.name]),
+  );
+  const tableNamesMap = new Map(Object.entries(tableNamesRecord));
 
   const decoded = receiptQuery === null || env.receiptCookieSecret === undefined ? undefined
     : decodeReceiptCookie(cookieStore.get(CASH_RECEIPT_COOKIE)?.value, userId, env.receiptCookieSecret);
@@ -84,7 +93,7 @@ export default async function CollectPaymentPage({ searchParams }: { readonly se
           <section className={PANEL}>
             <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Cobro</p>
             <h2 className="mt-1 font-heading text-[18px] font-semibold">Órdenes por cobrar</h2>
-            <PayableOrders scope={scope} initial={tray} selectedOrderId={undefined} />
+            <PayableOrders scope={scope} initial={tray} selectedOrderId={undefined} tableNames={tableNamesRecord} />
           </section>
           <section className={`self-start ${PANEL}`}>
             <h2 className="font-heading text-[18px] font-semibold">Cuenta a cobrar</h2>
@@ -100,6 +109,7 @@ export default async function CollectPaymentPage({ searchParams }: { readonly se
           receipt={receipt}
           receiptUnavailable={receiptUnavailable}
           sessionId={openReport?.register.cashRegisterSessionId}
+          tableNames={tableNamesMap}
         />
       )}
     </div>
@@ -129,7 +139,16 @@ function OpenRegisterPanel({ closed }: { readonly closed: boolean }): ReactNode 
   );
 }
 
-function OrderView({ checkout, detail, header, orderId, receipt, receiptUnavailable, sessionId }: {
+function OrderView({
+  checkout,
+  detail,
+  header,
+  orderId,
+  receipt,
+  receiptUnavailable,
+  sessionId,
+  tableNames,
+}: {
   readonly checkout: FinancialApiResult<CheckoutOrderSummaryV1> | undefined;
   readonly detail: OrderDetailV1 | undefined;
   readonly header: { readonly restaurantName: string; readonly branchName: string };
@@ -137,10 +156,11 @@ function OrderView({ checkout, detail, header, orderId, receipt, receiptUnavaila
   readonly receipt: PaymentCollectionSummaryV1 | undefined;
   readonly receiptUnavailable: boolean;
   readonly sessionId: string | undefined;
+  readonly tableNames: ReadonlyMap<string, string>;
 }): ReactNode {
   return (
     <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(340px,1.1fr)]">
-      <OrderSummary detail={detail} checkout={checkout?.status === "ok" ? checkout.value : undefined} />
+      <OrderSummary detail={detail} checkout={checkout?.status === "ok" ? checkout.value : undefined} tableNames={tableNames} />
       <section className={`min-w-0 self-start ${PANEL}`}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div><p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Cobro</p><h2 className="mt-1 font-heading text-[18px] font-semibold">Cobrar cuenta</h2></div>
@@ -160,7 +180,13 @@ function OrderView({ checkout, detail, header, orderId, receipt, receiptUnavaila
           </div>
         ) : (
           <>
-            <PaymentPanel key={`${checkout.value.orderId}:${checkout.value.orderVersion}`} checkout={checkout.value} audit={{ ...newAudit(), paymentId: randomUUID() }} />
+            <PaymentPanel
+              key={`${checkout.value.orderId}:${checkout.value.orderVersion}`}
+              checkout={checkout.value}
+              audit={{ ...newAudit(), paymentId: randomUUID() }}
+              payments={detail?.payments}
+              timeZone={detail?.timeZone}
+            />
             <div className="mt-4"><BackLinks /></div>
           </>
         )}
@@ -178,12 +204,48 @@ function BackLinks(): ReactNode {
   );
 }
 
-function OrderSummary({ checkout, detail }: { readonly checkout: CheckoutOrderSummaryV1 | undefined; readonly detail: OrderDetailV1 | undefined }): ReactNode {
+function OrderSummary({
+  checkout,
+  detail,
+  tableNames,
+}: {
+  readonly checkout: CheckoutOrderSummaryV1 | undefined;
+  readonly detail: OrderDetailV1 | undefined;
+  readonly tableNames: ReadonlyMap<string, string>;
+}): ReactNode {
   const currency = detail?.currency ?? checkout?.currency;
+  const headline = detail === undefined
+    ? "Resumen de la orden"
+    : detail.channel === "table"
+      ? tableLabel(detail.tableId, tableNames, detail.accountLabel)
+      : detail.accountLabel !== null && detail.accountLabel.trim().length > 0
+        ? `${channelLabel(detail.channel)} · ${detail.accountLabel.trim()}`
+        : detail.shortFolio !== null
+          ? `Orden ${detail.shortFolio}`
+          : channelLabel(detail.channel);
+
+  const orderTotalMinor = checkout?.orderTotalMinor ?? detail?.totals.totalMinor ?? 0;
+  const capturedPaymentsMinor = detail?.payments?.reduce((sum, p) => sum + p.amountMinor, 0) ?? 0;
+  const remainingMinor = checkout !== undefined
+    ? checkout.remainingBalanceMinor
+    : Math.max(0, orderTotalMinor - capturedPaymentsMinor);
+
   return (
     <section className={`min-w-0 self-start ${PANEL}`}>
       <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Cuenta</p>
-      <h2 className="mt-1 font-heading text-[18px] font-semibold">{detail?.shortFolio === null || detail?.shortFolio === undefined ? "Resumen de la orden" : `Orden ${detail.shortFolio}`}</h2>
+      <div className="mt-1 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="font-heading text-[18px] font-semibold">{headline}</h2>
+        {detail?.shortFolio !== null && detail?.shortFolio !== undefined && (
+          <span className="font-mono text-[11px] text-text-muted">Folio {detail.shortFolio}</span>
+        )}
+      </div>
+      {detail !== undefined && (
+        <p className="mt-1 text-[12px] text-text-muted">
+          {channelLabel(detail.channel)}
+          {detail.createdAt !== null && ` · Abierta ${formatOrderWorkTime(detail.createdAt, detail.timeZone)}`}
+        </p>
+      )}
+
       {detail === undefined || currency === undefined ? (
         <p className="mt-3 rounded-xl bg-bg p-4 text-[13px] text-text-muted">El detalle de la orden no está disponible. El cobro usa el saldo que calcula el servidor.</p>
       ) : (
@@ -199,10 +261,32 @@ function OrderSummary({ checkout, detail }: { readonly checkout: CheckoutOrderSu
           ))}
         </ul>
       )}
-      {checkout !== undefined && (
-        <p className="mt-4 flex items-baseline justify-between gap-3 border-t border-border pt-4 font-heading text-[16px] font-semibold">
-          <span>Total de la cuenta</span><span>{formatMinorUnits(checkout.orderTotalMinor, checkout.currency)}</span>
-        </p>
+
+      {currency !== undefined && (orderTotalMinor > 0 || (detail?.payments !== undefined && detail.payments.length > 0)) && (
+        <div className="mt-4 grid gap-2 border-t border-border pt-4 text-sm">
+          <div className="flex items-baseline justify-between font-heading font-semibold">
+            <span>Total de la cuenta</span>
+            <span>{formatMinorUnits(orderTotalMinor, currency)}</span>
+          </div>
+          {detail?.payments !== undefined && detail.payments.length > 0 && (
+            <ul className="grid gap-1.5 border-t border-border/50 py-2 text-xs">
+              {detail.payments.map((p, idx) => (
+                <li key={p.paymentId} className="flex items-baseline justify-between text-text-muted">
+                  <span>
+                    Pago {idx + 1} ({paymentMethodLabel(p)}{detail.timeZone ? `, ${formatOrderWorkTime(p.capturedAt, detail.timeZone)}` : ""})
+                  </span>
+                  <span className="font-semibold text-text">
+                    −{formatMinorUnits(p.amountMinor, currency)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex items-baseline justify-between border-t border-border/60 pt-2 font-heading text-[16px] font-semibold text-accent">
+            <span>Saldo pendiente</span>
+            <span>{formatMinorUnits(remainingMinor, currency)}</span>
+          </div>
+        </div>
       )}
     </section>
   );
