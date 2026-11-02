@@ -23,3 +23,8 @@ Separar el menú en pestañas:
 
 ## Formato de salida
 Resumen, archivos, salida literal de puertas, capturas o brecha, riesgos. Commits locales `feat(web-menu): …`. Sin merge ni push.
+
+## Añadido 2026-11-02 (retroalimentación de Emmanuel, captura de la tarjeta de producto)
+- Fila 1 del producto: «Duplicar» va junto al check «Activo», en el bloque de acciones de la derecha (Duplicar, Activo, ?, ×), no en la fila 3.
+- Anchos: «Precio» y «Unidad» están exagerados; precio 7.5rem, unidad 9rem; «Clave interna» 10rem, «Estación» 12rem; el nombre del producto toma el resto (minmax(0,1fr)). Misma regla de línea auxiliar reservada que en menu-polish-r2. A 390 px una columna.
+- Confirmar que la etiqueta «Ingredientes que se pueden agregar» y la ausencia de línea sobre «Mitades» siguen tras los cambios de menu-locked-ingredients.
