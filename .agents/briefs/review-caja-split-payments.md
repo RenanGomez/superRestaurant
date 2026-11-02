@@ -2,7 +2,7 @@
 Agente: Gemini   Nivel de rigor: A   Complejidad: Compleja
 
 ## Objetivo
-Revisar `git diff main...gemini/caja-split-payments` (ejecútalo desde la raíz; no edites nada) contra `.claude/packets/caja-split-payments.md`, `.agents/reports/caja-split-payments-research.md` y AGENTS.md §9 (dinero), §10, §12, §14. Revisa con ojos nuevos: no asumas que la implementación es correcta por venir de la misma familia.
+Revisar `git diff main...claude/caja-split-payments-fix1` (rama que incluye `gemini/caja-split-payments` más la corrección `c17385a`) (ejecútalo desde la raíz; no edites nada) contra `.claude/packets/caja-split-payments.md`, `.agents/reports/caja-split-payments-research.md` y AGENTS.md §9 (dinero), §10, §12, §14. Revisa con ojos nuevos: no asumas que la implementación es correcta por venir de la misma familia.
 
 ## Tarea
 1. `apps/web/src/app/app/caja/actions.ts` y `payment-panel.tsx`: ya no hay `redirect()` atrapado por un `try/catch` del cliente; el cliente distingue error de redirección de fallo real; tras `unavailable` relee el detalle y, si el pago ya aparece, lo trata como éxito; el reintento conserva el mismo `idempotencyKey`; no hay forma de cobrar dos veces desde la UI.
