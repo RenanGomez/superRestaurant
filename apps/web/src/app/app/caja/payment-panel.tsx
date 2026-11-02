@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { isRedirectError } from "next/dist/client/components/redirect-error";
 import type { CashPaymentQuoteV1, CheckoutOrderSummaryV1, OrderPaymentV1 } from "@super-restaurant/shared-types";
 import { Field, FieldHint } from "../../../components/field-hint";
 import { formatMinorUnits, formatOrderWorkTime } from "../../../lib/branch-order-work-tray";
@@ -12,7 +11,6 @@ import { collectPaymentAction, quotePaymentAction } from "./actions";
 import {
   buildReceiptHref,
   canCollectPayment,
-  insufficientCashTenderDifference,
   paymentAmountBounds,
   paymentMethodLabel,
   quickCashAmounts,
@@ -34,6 +32,8 @@ export function PaymentPanel({
   const [splitMode, setSplitMode] = useState<"full" | "split">("full");
   const [method, setMethod] = useState<"cash" | "card_manual" | "transfer">("cash");
   const [transferReference, setTransferReference] = useState("");
+  // The amount seeds from the server balance at mount. page.tsx remounts this panel via
+  // key={orderId:orderVersion}, so a changed balance resyncs it; "Pagar total" relies on that.
   const [amountPesos, setAmountPesos] = useState(() => formatMinorForMoneyInput(checkout.remainingBalanceMinor, checkout.currency) ?? "");
   const [receivedPesos, setReceivedPesos] = useState("");
   const [tipPesos, setTipPesos] = useState("");
@@ -41,6 +41,9 @@ export function PaymentPanel({
   const [reference, setReference] = useState("");
   const [quote, setQuote] = useState<CashPaymentQuoteV1 | null>(null);
   const [quoteError, setQuoteError] = useState("");
+  // Cash needed (amount + tip) as reported by the server when it rejects the tender as short.
+  const [serverRequiredMinor, setServerRequiredMinor] = useState<number | null>(null);
+  const [serverRejected, setServerRejected] = useState(false);
   const [collectError, setCollectError] = useState("");
   const [busy, setBusy] = useState(false);
   const latest = useRef(0);
@@ -49,15 +52,17 @@ export function PaymentPanel({
   const receivedMinor = parseMoneyInputToMinor(receivedPesos, checkout.currency);
   const tipMinor = tipPesos.trim() === "" ? 0 : parseMoneyInputToMinor(tipPesos, checkout.currency);
   const requiredCashMinor = !validAmount || tipMinor === null ? null : requiredCashTenderMinor(amountMinor, tipMinor);
-  const missingCashMinor = method === "cash" && requiredCashMinor !== null && receivedMinor !== null
-    ? insufficientCashTenderDifference(requiredCashMinor, receivedMinor)
+  // Presentation only: the server decides insufficiency; this subtraction just words the message.
+  const missingCashMinor = method === "cash" && serverRequiredMinor !== null && receivedMinor !== null && serverRequiredMinor > receivedMinor
+    ? serverRequiredMinor - receivedMinor
     : null;
-  const insufficient = missingCashMinor !== null;
 
   useEffect(() => {
     const request = ++latest.current;
     setQuote(null);
     setQuoteError("");
+    setServerRequiredMinor(null);
+    setServerRejected(false);
     if (!validAmount || tipMinor === null || (method === "cash" && (receivedMinor === null || receivedMinor <= 0))) return;
     const timer = setTimeout(() => {
       void quotePaymentAction({
@@ -70,7 +75,11 @@ export function PaymentPanel({
       }).then((result) => {
         if (request !== latest.current) return;
         if (result.status === "ok" && result.value !== undefined) setQuote(result.value);
-        else setQuoteError(errorText(result.status));
+        else {
+          if (result.status === "invalid_amount") setServerRejected(true);
+          if (result.status === "invalid_amount" && result.requiredMinor !== undefined) setServerRequiredMinor(result.requiredMinor);
+          else setQuoteError(errorText(result.status));
+        }
       }).catch(() => {
         if (request === latest.current) setQuoteError("No se pudo consultar el cambio. Actualiza e intenta de nuevo.");
       });
@@ -79,12 +88,13 @@ export function PaymentPanel({
   }, [amountPesos, checkout.cashRegisterSessionId, checkout.orderId, method, receivedMinor, receivedPesos, tipMinor, tipPesos, validAmount]);
 
   function handleSplitModeChange(mode: "full" | "split") {
+    // Reads checkout.remainingBalanceMinor, kept fresh by the key remount from page.tsx.
     setSplitMode(mode);
     setAmountPesos(formatMinorForMoneyInput(checkout.remainingBalanceMinor, checkout.currency) ?? "");
   }
 
   async function collect(formData: FormData) {
-    if (!canCollectPayment({ quote, remainingMinor: checkout.remainingBalanceMinor, amountMinor, method, receivedMinor, tipMinor, terminalId, reference, busy }) || insufficient) return;
+    if (!canCollectPayment({ quote, remainingMinor: checkout.remainingBalanceMinor, amountMinor, method, receivedMinor, tipMinor, terminalId, reference, busy }) || serverRejected) return;
     setBusy(true);
     setCollectError("");
     try {
@@ -104,10 +114,8 @@ export function PaymentPanel({
         }
       }
       setCollectError(errorText(result.status));
-    } catch (error: unknown) {
-      if (isRedirectError(error)) {
-        throw error;
-      }
+    } catch {
+      // The actions return statuses and their redirect() calls run server-side, so nothing to rethrow.
       const detail = await orderDetailAction(checkout.orderId).catch(() => undefined);
       if (detail?.ok && detail.value.payments.some((p) => p.paymentId === audit.paymentId)) {
         const receiptHref = buildReceiptHref(audit.paymentId, checkout.orderId);
@@ -124,7 +132,7 @@ export function PaymentPanel({
 
   const canCollect = canCollectPayment({
     quote, remainingMinor: checkout.remainingBalanceMinor, amountMinor, method, receivedMinor, tipMinor, terminalId, reference, busy,
-  }) && !insufficient;
+  }) && !serverRejected;
 
   return (
     <div id="cobrar" className="mt-4 grid min-w-0 gap-4 scroll-mt-4">
@@ -273,17 +281,17 @@ export function PaymentPanel({
                 />
               ))}
             </div>
-            {insufficient && missingCashMinor !== null && (
+            {missingCashMinor !== null && (
               <p role="status" className="font-heading text-sm font-semibold text-error">
                 Recibido menor al cobro más propina: faltan {formatMinorUnits(missingCashMinor, checkout.currency)}
               </p>
             )}
-            {!insufficient && quote !== null && (
+            {!serverRejected && quote !== null && (
               <p role="status" className="font-heading text-lg font-semibold text-accent">
                 Cambio después de propina: {formatMinorUnits(quote.changeMinor ?? 0, checkout.currency)}
               </p>
             )}
-            {receivedMinor !== null && receivedMinor > 0 && quote === null && quoteError === "" && !insufficient && (
+            {receivedMinor !== null && receivedMinor > 0 && quote === null && quoteError === "" && !serverRejected && (
               <p role="status" className="text-sm text-text-muted">Calculando cambio…</p>
             )}
           </div>

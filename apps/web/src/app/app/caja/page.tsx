@@ -225,10 +225,7 @@ function OrderSummary({
           : channelLabel(detail.channel);
 
   const orderTotalMinor = checkout?.orderTotalMinor ?? detail?.totals.totalMinor ?? 0;
-  const capturedPaymentsMinor = detail?.payments?.reduce((sum, p) => sum + p.amountMinor, 0) ?? 0;
-  const remainingMinor = checkout !== undefined
-    ? checkout.remainingBalanceMinor
-    : Math.max(0, orderTotalMinor - capturedPaymentsMinor);
+  const remainingMinor = checkout?.remainingBalanceMinor;
 
   return (
     <section className={`min-w-0 self-start ${PANEL}`}>
@@ -284,7 +281,7 @@ function OrderSummary({
           )}
           <div className="flex items-baseline justify-between border-t border-border/60 pt-2 font-heading text-[16px] font-semibold text-accent">
             <span>Saldo pendiente</span>
-            <span>{formatMinorUnits(remainingMinor, currency)}</span>
+            <span>{remainingMinor === undefined ? "Saldo no disponible" : formatMinorUnits(remainingMinor, currency)}</span>
           </div>
         </div>
       )}

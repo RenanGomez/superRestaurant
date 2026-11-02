@@ -71,19 +71,6 @@ export function resolvePaymentAmountMinor(
   return paymentAmountBounds(remainingMinor, customMinor) ? customMinor : null;
 }
 
-/** Difference between required cash tender and received minor, or null when received is sufficient. */
-export function insufficientCashTenderDifference(requiredMinor: number, receivedMinor: number): number | null {
-  if (!Number.isSafeInteger(requiredMinor) || !Number.isSafeInteger(receivedMinor)) return null;
-  const diff = requiredMinor - receivedMinor;
-  return diff > 0 ? diff : null;
-}
-
-/** Operator message when the received cash does not cover the required tender. */
-export function formatInsufficientTenderWarning(missingMinor: number): string {
-  const pesos = (missingMinor / 100).toFixed(2);
-  return `Recibido menor al cobro más propina: faltan $${pesos}`;
-}
-
 export function canCollectPayment(input: {
   readonly quote: CashPaymentQuoteV1 | null;
   readonly remainingMinor: number;
