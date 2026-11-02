@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gridPlacement, groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterCardState, waiterInitials, waiterLabel, waiterOptionLabel, waiterOptions } from "./tables-board.js";
+import { accountTabLabel, gridPlacement, groupBoardByZone, orderStatusLabel, tableOpenAccountsCount, tableStatusLabel, waiterCardState, waiterInitials, waiterLabel, waiterOptionLabel, waiterOptions } from "./tables-board.js";
 import type { DiningLayoutV1, TableBoardV1 } from "@super-restaurant/shared-types";
 
 const scope = { restaurantId: "11111111-1111-4111-8111-111111111111", branchId: "22222222-2222-4222-8222-222222222222" };
@@ -55,4 +55,53 @@ test("waiter card state marks only the order being saved", () => {
   assert.deepEqual(waiterCardState(first, first), { busy: true, label: "Guardando…" });
   assert.deepEqual(waiterCardState(second, first), { busy: false, label: "Mesero" });
   assert.deepEqual(waiterCardState(first, null), { busy: false, label: "Mesero" });
+});
+
+test("accountTabLabel formats account tabs with index, accountLabel and optional total", () => {
+  // Without total, defaults to "Cuenta N" based on 0-based index
+  assert.equal(accountTabLabel(0, { accountLabel: null }), "Cuenta 1");
+  assert.equal(accountTabLabel(1, { accountLabel: null }), "Cuenta 2");
+  assert.equal(accountTabLabel(2, { accountLabel: "" }), "Cuenta 3");
+  assert.equal(accountTabLabel(0, null), "Cuenta 1");
+
+  // With accountLabel, replaces "Cuenta N"
+  assert.equal(accountTabLabel(0, { accountLabel: "Terraza" }), "Terraza");
+  assert.equal(accountTabLabel(1, { accountLabel: "Familia Gómez" }), "Familia Gómez");
+
+  // With total passed as parameter
+  assert.equal(accountTabLabel(0, { accountLabel: null }, "$130"), "Cuenta 1 · $130");
+  assert.equal(accountTabLabel(1, { accountLabel: null }, "$0"), "Cuenta 2 · $0");
+  assert.equal(accountTabLabel(0, { accountLabel: "Juan" }, "$130"), "Juan · $130");
+
+  // With total inside order object
+  assert.equal(accountTabLabel(0, { accountLabel: null, total: "$130" }), "Cuenta 1 · $130");
+  assert.equal(accountTabLabel(1, { accountLabel: "Mesa VIP", total: "$500" }), "Mesa VIP · $500");
+
+  // Parameter total takes precedence
+  assert.equal(accountTabLabel(0, { accountLabel: "Juan", total: "$100" }, "$130"), "Juan · $130");
+
+  // Trims spaces and ignores empty totals
+  assert.equal(accountTabLabel(0, { accountLabel: "  Amigos  " }, "  $80  "), "Amigos · $80");
+  assert.equal(accountTabLabel(0, { accountLabel: "Amigos" }, "   "), "Amigos");
+  assert.equal(accountTabLabel(0, { accountLabel: "   " }, "$50"), "Cuenta 1 · $50");
+});
+
+test("tableOpenAccountsCount returns activeOrders length or zero when state is null or empty", () => {
+  assert.equal(tableOpenAccountsCount(null), 0);
+  assert.equal(tableOpenAccountsCount({ tableId: "t1", status: "free", activeOrders: [] }), 0);
+  assert.equal(tableOpenAccountsCount({
+    tableId: "t1",
+    status: "occupied",
+    activeOrders: [
+      { orderId: "o1", status: "open", version: 1, waiterUserId: null, openedAt: "2026-11-02T00:00:00Z", accountLabel: null },
+    ],
+  }), 1);
+  assert.equal(tableOpenAccountsCount({
+    tableId: "t1",
+    status: "occupied",
+    activeOrders: [
+      { orderId: "o1", status: "open", version: 1, waiterUserId: null, openedAt: "2026-11-02T00:00:00Z", accountLabel: null },
+      { orderId: "o2", status: "open", version: 1, waiterUserId: null, openedAt: "2026-11-02T00:00:00Z", accountLabel: "Juan" },
+    ],
+  }), 2);
 });
