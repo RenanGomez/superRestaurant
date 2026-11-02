@@ -186,3 +186,37 @@ Consolida §7 a §11 en un solo turno, en el orden en que lo viviría el operado
 20. Recorrer una vez la barra lateral completa: ninguna pantalla muestra error ni mensaje rojo en consola.
 
 **Cómo reportar**: una línea por paso, «Paso N: OK» o «Paso N: FALLA — qué hiciste, qué esperabas, qué viste», con captura si es visual. Lo que esté OK pasa a DONE en `TODO.md`; cada FALLA se convierte en un paquete de corrección.
+
+## 13. Smoke de la retroalimentación del 2026-11-01 (cambios recientes y pendientes)
+
+Complementa la ruta completa de §12. Marca cada punto como **OK**, **FALLA** (qué hiciste, qué esperabas, qué viste) u **OMITIDO**.
+
+**Antes de empezar**
+- `start-local.bat` sin `nobuild` (recompila la API con los contratos nuevos). Entrar con `emmanuel.rgomez@gmail.com`, sucursal Navojoa, consola abierta (F12).
+- Migración `20261101000200` (grupos compartidos): si no está aplicada, el paso 2.6 «Publicar nueva versión» fallará; eso es esperado hasta aplicarla.
+- `tools\agentic\local-servers\e2e-auth.bat` para renovar la sesión del arnés E2E.
+
+**1. Captura** (`/app/capture`)
+1. Ticket: agrega una pizza mitad y mitad con nota; la fila Editar · − 1 + · Editar nota · Quitar se ve completa, sin barra horizontal, y el precio no se corta. Repetir a 390×844.
+2. Efectivo: escribe «250» en «Otro monto» y toca «Exacto»; el campo se vacía y «Exacto» queda marcado con un solo toque. Escribe un monto que no coincida con ningún botón: ninguno queda marcado.
+3. Instrucciones de entrega: escribe algo y, sin pulsar nada, toca un botón de efectivo; recarga la página: el texto sigue ahí. Ya no existe «Guardar instrucciones».
+4. Atajos: `N` sola no hace nada; `Alt+N` crea captura; `Ctrl+K` enfoca la búsqueda; `Escape` o `Alt+R` reinicia.
+5. Cliente: busca `6622751352`; un toque selecciona al cliente (sin paso «Elegir teléfono»); debajo aparece su dirección con estado. «Usar esta dirección» la valida y la deja marcada, o dice «Fuera de cobertura» si la zona no cubre el CP 85860 (revisar Zonas). «Editar» y «Agregar dirección» funcionan sin salir de la captura. El paso 5 tiene «Ir a la dirección» y permite confirmar cuando la dirección está en cobertura.
+
+**2. Menú** (`/app/menu`)
+1. Categorías: arrastra la tercera sobre la segunda; aparece un hueco y la segunda baja; soltar aplica, `Escape` o clic derecho cancelan, soltar en el origen no cambia nada. Asidero angosto, sin botones subir/bajar. Flechas de teclado con el asidero enfocado reordenan.
+2. Categoría: el círculo a la izquierda del nombre abre el selector de foto; la foto se ve en el círculo. Fila de muestras de color: elegir una tiñe la tarjeta y la pestaña de esa categoría en `/app/capture`.
+3. Producto: tarjeta en tres filas; «Grupos de modificadores», «Permitir mitades», «Aplicar impuesto» y «+ Añadir tamaño» abren su sección sólo al activarse. Tocar la foto sin foto abre el selector; con foto abre el diálogo con «Reemplazar», «Quitar», «Cancelar» y las listas «Fotos quitadas de este producto» y «Fotos ya usadas en este menú» (elegir una ajena la copia al producto).
+4. «Duplicar» crea «(copia)» con la misma foto y los mismos grupos asignados, sin clonar grupos.
+5. Grupos de modificadores: sección propia para crear, editar, duplicar y quitar; en el producto, la casilla abre un desplegable multiselección (`Escape` y clic fuera cierran). Un grupo asignado a dos productos aparece en ambos en la captura. Quitar un grupo asignado pide confirmación y lo desasigna de todos.
+6. Autoguardado: edita algo y recarga; aparece «Recuperar cambios sin publicar» / «Descartar». Junto a «Publicar» se lee «Cambios sin publicar» con anillo pulsante; tras publicar, «Todo publicado». (Requiere la migración aplicada.)
+
+**3. Mesas y órdenes**
+1. `/app/tables`: mesa libre → «Abrir cuenta» → la app llega a Órdenes con «Agregar producto» abierto y **sin** un segundo «Abrir cuenta».
+2. `/app/orders`: las tarjetas, el detalle, la comanda y el ticket dicen «Mesa 2» (nombre real), nunca «Mesa» a secas ni un UUID. Pestaña «Canceladas» intacta.
+
+**4. Pendiente de Emmanuel** (no se puede probar todavía)
+- Nombre opcional de la cuenta de mesa («a nombre de quién»): paquete B sin iniciar.
+- Posición y zoom de la foto: paquete A sin iniciar.
+- Ingredientes «que no se pueden quitar» (P2) y «especialidades» como sabores de mitades (P3): P2 arranca cuando Codex recupere cuota; P3 espera dos decisiones: regla de precio de mitades con dos especialidades y destino de los grupos de sabores actuales.
+- Dos cuentas de prueba en borrador abiertas hoy en Mesa 2 y Mesa 5: cancelarlas o usarlas.
