@@ -5,6 +5,8 @@ import {
   parseAddOrderItemCommandV1,
   parseAssignOrderWaiterCommandV1,
   parseAssignOrderWaiterResultV1,
+  parseSetOrderAccountLabelCommandV1,
+  parseSetOrderAccountLabelResultV1,
   parseCancelOrderItemCommandV1,
   parseCreateOrderCommandV1,
   parseCreateOrderCommandV2,
@@ -103,6 +105,16 @@ const assignWaiterResult={
 };
 expect(parseAssignOrderWaiterResultV1(assignWaiterResult)!==undefined,"assign waiter result parses");
 expect(parseAssignOrderWaiterResultV1({...assignWaiterResult,waiterUserId:null})!==undefined,"assign waiter result accepts a cleared waiter");
+const {waiterUserId:_waiterUserId,...accountLabelBase}=assignWaiterCommand;
+void _waiterUserId;
+const accountLabelCommand={...accountLabelBase,accountLabel:"Juan"};
+expect(parseSetOrderAccountLabelCommandV1(accountLabelCommand)?.accountLabel==="Juan","account label command parses");
+expect(parseSetOrderAccountLabelCommandV1({...assignWaiterCommand,accountLabel:null})?.accountLabel===null,"account label command clears with null");
+expect(parseSetOrderAccountLabelCommandV1(accountLabelBase)?.accountLabel===null,"account label command normalizes an omitted label");
+expect(parseSetOrderAccountLabelCommandV1({...accountLabelCommand,accountLabel:"x".repeat(61)})===undefined,"account label command rejects 61 characters");
+const {waiterUserId:_resultWaiterUserId,...accountLabelResultBase}=assignWaiterResult;
+void _resultWaiterUserId;
+expect(parseSetOrderAccountLabelResultV1({...accountLabelResultBase,accountLabel:"Juan"})?.accountLabel==="Juan","account label result parses");
 
 const tableBoard={
   schemaVersion:1,
@@ -132,6 +144,7 @@ const tableBoard={
   }],
 };
 expect(parseTableBoardV1(tableBoard)!==undefined,"table board parses");
+expect(parseTableBoardV1(tableBoard)?.tables[0]?.activeOrders[0]?.accountLabel===null,"table board normalizes an omitted account label");
 const freeTable=(index:number)=>({tableId:`00000000-0000-4000-8000-${String(index).padStart(12,"0")}`,status:"free",activeOrders:[]});
 const manyTables=(count:number)=>Array.from({length:count},(_,index)=>freeTable(index+1));
 expect(parseTableBoardV1({...tableBoard,tables:manyTables(501)})?.tables.length===501,"a board with 501 tables (above the old cap) parses");
@@ -225,6 +238,8 @@ const detail={
   availableActions:["sendToKitchen","cancelItem"],
 };
 expect(parseOrderDetailV1(detail)!==undefined,"order detail parses");
+expect(parseOrderDetailV1(detail)?.accountLabel===null,"order detail normalizes an omitted account label");
+expect(parseOrderDetailV1({...detail,accountLabel:"Juan"})?.accountLabel==="Juan","order detail accepts an account label");
 const printable=parseOrderDetailV1({...detail,items:[{...detailItem,stationId:"kitchen"}],totals:{...detail.totals,taxMinor:1379}});
 expect(printable?.items[0]?.stationId==="kitchen"&&printable.totals.taxMinor===1379,"order detail keeps additive stationId and taxMinor");
 expect(parseOrderDetailV1(detail)?.items[0]?.stationId===null,"older detail without stationId normalizes to null");

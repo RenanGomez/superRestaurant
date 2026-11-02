@@ -110,6 +110,7 @@ export const MAX_TABLE_BOARD_TABLES = 50_000 as const;
 export const TABLE_BOARD_ORDER_STATUSES = Object.freeze(["draft", "open", "partially_paid"] as const);
 
 export interface TableBoardActiveOrderV1 {
+  readonly accountLabel: string | null;
   readonly openedAt: string;
   readonly orderId: string;
   readonly status: (typeof TABLE_BOARD_ORDER_STATUSES)[number];
@@ -187,7 +188,7 @@ function parseTableBoardTableV1(value: unknown): TableBoardTableV1 | undefined {
 }
 
 function parseTableBoardUnassignedOrderV1(value: unknown): TableBoardUnassignedOrderV1 | undefined {
-  const record = exactRecord(value, ["tableId", "orderId", "status", "version", "waiterUserId", "openedAt"]);
+  const record = exactRecordWithOptional(value, ["tableId", "orderId", "status", "version", "waiterUserId", "openedAt"], ["accountLabel"]);
   if (record === undefined) return undefined;
   const tableId = uuid(own(record, "tableId"));
   const { tableId: _ignored, ...rest } = record as Record<string, unknown>;
@@ -197,7 +198,7 @@ function parseTableBoardUnassignedOrderV1(value: unknown): TableBoardUnassignedO
 }
 
 function parseTableBoardActiveOrderV1(value: unknown): TableBoardActiveOrderV1 | undefined {
-  const record = exactRecord(value, ["orderId", "status", "version", "waiterUserId", "openedAt"]);
+  const record = exactRecordWithOptional(value, ["orderId", "status", "version", "waiterUserId", "openedAt"], ["accountLabel"]);
   if (record === undefined) return undefined;
   const orderId = uuid(own(record, "orderId"));
   const status = own(record, "status");
@@ -205,12 +206,14 @@ function parseTableBoardActiveOrderV1(value: unknown): TableBoardActiveOrderV1 |
   const rawWaiterUserId = own(record, "waiterUserId");
   const waiterUserId = rawWaiterUserId === null ? null : uuid(rawWaiterUserId);
   const openedAt = timestamp(own(record, "openedAt"));
+  const rawAccountLabel = Object.hasOwn(record, "accountLabel") ? own(record, "accountLabel") : null;
+  const accountLabel = rawAccountLabel === null ? null : text(rawAccountLabel, 1, 60);
   return orderId === undefined || typeof status !== "string"
     || !(TABLE_BOARD_ORDER_STATUSES as readonly string[]).includes(status)
-    || version === undefined || waiterUserId === undefined || openedAt === undefined
+    || version === undefined || waiterUserId === undefined || openedAt === undefined || accountLabel === undefined
     ? undefined
     : Object.freeze({
-      openedAt, orderId, status: status as TableBoardActiveOrderV1["status"], version, waiterUserId,
+      accountLabel, openedAt, orderId, status: status as TableBoardActiveOrderV1["status"], version, waiterUserId,
     });
 }
 
@@ -297,6 +300,24 @@ export interface AssignOrderWaiterResultV1 {
   readonly scope: BranchScope;
   readonly version: number;
   readonly waiterUserId: string | null;
+}
+
+/** Sets or clears the optional operator-facing name of a table account. An omitted label clears it. */
+export interface SetOrderAccountLabelCommandV1 extends OrderAuditInputV1 {
+  readonly accountLabel?: string | null;
+  readonly expectedVersion: number;
+  readonly orderId: string;
+  readonly schemaVersion: typeof ORDER_COMMAND_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+}
+
+export interface SetOrderAccountLabelResultV1 {
+  readonly accountLabel: string | null;
+  readonly orderId: string;
+  readonly replayed: boolean;
+  readonly schemaVersion: typeof ORDER_COMMAND_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly version: number;
 }
 
 export interface OrderMutationSummaryV1 {
@@ -401,6 +422,7 @@ export interface OrderDetailFulfillmentV1 {
 }
 
 export interface OrderDetailV1 {
+  readonly accountLabel: string | null;
   readonly schemaVersion: typeof ORDER_DETAIL_SCHEMA_VERSION;
   readonly scope: BranchScope;
   readonly orderId: string;
@@ -511,10 +533,12 @@ export function parseOrderDetailV1(value: unknown): OrderDetailV1 | undefined {
   const record = exactRecordWithOptional(value, [
     "schemaVersion", "scope", "orderId", "status", "channel", "tableId", "currency", "timeZone",
     "createdAt", "updatedAt", "version", "items", "totals", "fulfillment", "availableActions",
-  ], ["delivery", "shortFolio", "payments"]);
+  ], ["delivery", "shortFolio", "payments", "accountLabel"]);
   if (record === undefined || own(record, "schemaVersion") !== ORDER_DETAIL_SCHEMA_VERSION) return undefined;
   const scope = parseScope(own(record, "scope"));
   const orderId = uuid(own(record, "orderId"));
+  const rawAccountLabel = Object.hasOwn(record, "accountLabel") ? own(record, "accountLabel") : null;
+  const accountLabel = rawAccountLabel === null ? null : text(rawAccountLabel, 1, 60);
   const rawShortFolio = Object.hasOwn(record, "shortFolio") ? own(record, "shortFolio") : null;
   const shortFolio = rawShortFolio === null ? null : text(rawShortFolio, 1, 16);
   const rawPayments = Object.hasOwn(record, "payments") ? exactDenseArray(own(record, "payments"), MAX_ORDER_RECEIPT_PAYMENTS) : [];
@@ -542,7 +566,7 @@ export function parseOrderDetailV1(value: unknown): OrderDetailV1 | undefined {
     || (delivery !== null && (scope === undefined || orderId === undefined || delivery.orderId !== orderId
       || delivery.scope.restaurantId !== scope.restaurantId || delivery.scope.branchId !== scope.branchId
       || channel !== "delivery"))
-    || scope === undefined || orderId === undefined || typeof status !== "string"
+    || accountLabel === undefined || scope === undefined || orderId === undefined || typeof status !== "string"
     || !(ORDER_STATUSES as readonly string[]).includes(status) || typeof channel !== "string"
     || !(ORDER_CHANNELS as readonly string[]).includes(channel) || tableId === undefined
     || (channel === "table") !== (tableId !== null) || currency === undefined || timeZone === undefined
@@ -567,6 +591,7 @@ export function parseOrderDetailV1(value: unknown): OrderDetailV1 | undefined {
     actions.push(raw as OrderDetailActionV1);
   }
   return Object.freeze({
+    accountLabel,
     availableActions: Object.freeze(actions),
     channel: channel as OrderChannelV1,
     createdAt,
@@ -949,6 +974,38 @@ export function parseAssignOrderWaiterResultV1(value: unknown): AssignOrderWaite
     || typeof replayed !== "boolean"
     ? undefined
     : Object.freeze({ orderId, replayed, schemaVersion: ORDER_COMMAND_SCHEMA_VERSION, scope, version, waiterUserId });
+}
+
+export function parseSetOrderAccountLabelCommandV1(value: unknown): SetOrderAccountLabelCommandV1 | undefined {
+  const record = exactRecordWithOptional(value, [
+    "schemaVersion", "scope", "orderId", "expectedVersion", "eventId", "idempotencyKey", "deviceId", "occurredAt",
+  ], ["accountLabel"]);
+  if (record === undefined || own(record, "schemaVersion") !== ORDER_COMMAND_SCHEMA_VERSION) return undefined;
+  const common = parseCommon(record);
+  const scope = parseScope(own(record, "scope"));
+  const orderId = uuid(own(record, "orderId"));
+  const expectedVersion = integer(own(record, "expectedVersion"), 1, Number.MAX_SAFE_INTEGER);
+  const rawAccountLabel = Object.hasOwn(record, "accountLabel") ? own(record, "accountLabel") : null;
+  const accountLabel = rawAccountLabel === null ? null : text(rawAccountLabel, 1, 60);
+  return common === undefined || scope === undefined || orderId === undefined || expectedVersion === undefined
+    || accountLabel === undefined
+    ? undefined
+    : Object.freeze({ ...common, accountLabel, expectedVersion, orderId, schemaVersion: ORDER_COMMAND_SCHEMA_VERSION, scope });
+}
+
+export function parseSetOrderAccountLabelResultV1(value: unknown): SetOrderAccountLabelResultV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "orderId", "version", "accountLabel", "replayed"]);
+  if (record === undefined || own(record, "schemaVersion") !== ORDER_COMMAND_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(own(record, "scope"));
+  const orderId = uuid(own(record, "orderId"));
+  const version = integer(own(record, "version"), 1, Number.MAX_SAFE_INTEGER);
+  const rawAccountLabel = own(record, "accountLabel");
+  const accountLabel = rawAccountLabel === null ? null : text(rawAccountLabel, 1, 60);
+  const replayed = own(record, "replayed");
+  return scope === undefined || orderId === undefined || version === undefined || accountLabel === undefined
+    || typeof replayed !== "boolean"
+    ? undefined
+    : Object.freeze({ accountLabel, orderId, replayed, schemaVersion: ORDER_COMMAND_SCHEMA_VERSION, scope, version });
 }
 
 export function parseTransitionOrderItemCommandV1(value: unknown): TransitionOrderItemCommandV1 | undefined {
