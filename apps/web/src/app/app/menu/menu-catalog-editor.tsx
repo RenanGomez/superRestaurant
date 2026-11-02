@@ -1,6 +1,6 @@
 "use client";
 
-import { MENU_CATEGORY_COLORS, MENU_PRODUCT_MAX_VARIANTS, MENU_VARIANT_MAX_EXCLUDABLE_INGREDIENTS } from "@super-restaurant/shared-types";
+import { MENU_CATEGORY_COLORS, MENU_PRODUCT_MAX_VARIANTS, MENU_VARIANT_MAX_LOCKED_INGREDIENTS } from "@super-restaurant/shared-types";
 import type {
   MenuCategoryV1,
   MenuCatalogStateV1,
@@ -592,20 +592,11 @@ function FractionEditor({ canManage, fraction, groups, notice, productName, onCh
   readonly productName: string;
   readonly onChange: (fraction: MenuProductFractionV1) => void;
 }): ReactNode {
-  const [draft, setDraft] = useState("");
   const label = productName.trim() === "" ? "este producto" : productName;
   const update = (patch: Partial<MenuProductFractionV1>): void => onChange({ ...fraction, ...patch });
   const groupName = (group: MenuModifierGroupV1): string => group.name || "Grupo sin nombre";
   const flavorEligible = groups.filter((group) => group.groupId !== fraction.extraGroupId);
   const usedAsIngredients = groups.find((group) => group.groupId === fraction.extraGroupId);
-  const ingredients = fraction.excludableIngredientIds;
-  const addIngredient = (): void => {
-    const name = draft.trim();
-    if (name.length === 0 || name.length > 80 || ingredients.length >= MENU_VARIANT_MAX_EXCLUDABLE_INGREDIENTS
-      || ingredients.some((entry) => entry.toLowerCase() === name.toLowerCase())) return;
-    update({ excludableIngredientIds: [...ingredients, name] });
-    setDraft("");
-  };
   const select = MENU_FIELD_CONTROL_CLASS;
   return <div className="grid gap-3 sm:col-span-full">
     <h3 className="font-heading text-[13px] font-semibold">Mitades</h3>
@@ -629,7 +620,16 @@ function FractionEditor({ canManage, fraction, groups, notice, productName, onCh
       <EditorField hint={GROUP_CHOICE_HINTS.ingredients} label="Grupo de ingredientes (para armar y extras, opcional)">
         {(id) => (
           <select id={id} className={select} disabled={!canManage} value={fraction.extraGroupId ?? ""}
-            onChange={(event) => update({ extraGroupId: event.target.value === "" ? null : event.target.value })}>
+            onChange={(event) => {
+              const nextExtraGroupId = event.target.value === "" ? null : event.target.value;
+              const nextGroup = groups.find((g) => g.groupId === nextExtraGroupId);
+              const nextOptionIds = new Set(nextGroup?.options.map((o) => o.optionId) ?? []);
+              const prunedLocked = (fraction.lockedIngredientOptionIds ?? []).filter((optId) => nextOptionIds.has(optId));
+              update({
+                extraGroupId: nextExtraGroupId,
+                lockedIngredientOptionIds: prunedLocked,
+              });
+            }}>
             <option value="">Sin ingredientes</option>
             {groups.map((group) => {
               const taken = group.groupId === fraction.flavorGroupId;
@@ -640,26 +640,57 @@ function FractionEditor({ canManage, fraction, groups, notice, productName, onCh
       </EditorField>
       <div className="grid gap-2 sm:col-span-2">
         <span className={MENU_FIELD_LABEL_CLASS}>
-          <span className="text-[11px] font-medium">Ingredientes que se pueden agregar</span>
-          <FieldHint label="Ingredientes que se pueden agregar" text="Ingredientes adicionales que el cliente puede solicitar agregar a una mitad." />
+          <span className="text-[11px] font-medium">Ingredientes que no se pueden quitar</span>
+          <FieldHint
+            label="Ingredientes que no se pueden quitar"
+            text="Los ingredientes marcados aquí no podrán ser excluidos por el operador al capturar mitades (ej. queso, salsa base). Los no marcados se podrán excluir («Sin ...»)."
+          />
         </span>
-        {ingredients.length > 0 && <ul className="flex flex-wrap gap-2" aria-label="Ingredientes que se pueden agregar">
-          {ingredients.map((ingredient) => <li key={ingredient}>
-            <button type="button" disabled={!canManage} aria-label={`Quitar ingrediente ${ingredient} de la lista`}
-              className="min-h-11 rounded-lg border border-border bg-surface px-3 text-[13px] hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60"
-              onClick={() => update({ excludableIngredientIds: ingredients.filter((entry) => entry !== ingredient) })}>
-              {ingredient} ✕
-            </button>
-          </li>)}
-        </ul>}
-        {canManage && <div className="flex gap-2">
-          <input aria-label="Nuevo ingrediente" maxLength={80} value={draft} placeholder="Ej. cebolla"
-            className="h-11 min-h-11 min-w-0 grow rounded-lg border border-border bg-surface px-3 text-[13px] focus-visible:outline-2 focus-visible:outline-accent"
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addIngredient(); } }} />
-          <button type="button" onClick={addIngredient} disabled={draft.trim().length === 0}
-            className="min-h-11 rounded-lg border border-accent px-3 text-[12px] font-semibold text-accent disabled:opacity-40">+ Ingrediente</button>
-        </div>}
+        {usedAsIngredients === undefined ? (
+          <p role="status" className="text-[12px] text-text-muted">
+            Selecciona un grupo de ingredientes arriba para configurar ingredientes bloqueados.
+          </p>
+        ) : usedAsIngredients.options.length === 0 ? (
+          <p role="status" className="text-[12px] text-text-muted">
+            El grupo seleccionado no tiene opciones. Agrega opciones en la sección Modificadores.
+          </p>
+        ) : (
+          <div className="grid gap-2" role="group" aria-label="Ingredientes que no se pueden quitar">
+            <p className="text-[12px] text-text-muted">
+              Marca los ingredientes que son indispensables y que el cliente no puede retirar.
+            </p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {usedAsIngredients.options.map((option) => {
+                const isLocked = (fraction.lockedIngredientOptionIds ?? []).includes(option.optionId);
+                const toggleLocked = (): void => {
+                  if (!canManage) return;
+                  const current = fraction.lockedIngredientOptionIds ?? [];
+                  const next = isLocked
+                    ? current.filter((id) => id !== option.optionId)
+                    : current.length < MENU_VARIANT_MAX_LOCKED_INGREDIENTS
+                    ? [...current, option.optionId]
+                    : current;
+                  update({ lockedIngredientOptionIds: next });
+                };
+                return (
+                  <label
+                    key={option.optionId}
+                    className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2 text-[13px] hover:bg-bg has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60"
+                  >
+                    <input
+                      type="checkbox"
+                      className="size-4 rounded border-border text-accent focus:ring-accent"
+                      checked={isLocked}
+                      disabled={!canManage}
+                      onChange={toggleLocked}
+                    />
+                    <span className="font-medium text-text">{option.name || "Opción sin nombre"}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </div>}
   </div>;

@@ -231,7 +231,12 @@ export function restoreLineFraction(
     const extraOptionIds = hasIds ? [...half.extraOptionIds!] : half.extras.map((name) => uniqueActiveByName(extraGroup, name));
     if (extraOptionIds.some((id) => id === undefined || !activeOption(extraGroup, id))) return { ok: false, reason: "extra" };
     const excludedIngredientIds = hasIds ? half.excludedIngredientIds! : half.exclusions;
-    if (hasIds && excludedIngredientIds.some((id) => !setup.excludableIngredientIds.includes(id))) {
+    const lockedSet = new Set(setup.lockedIngredientOptionIds ?? []);
+    const allowedExclusions = new Set<string>([
+      ...(setup.excludableIngredientIds ?? []),
+      ...(extraGroup?.options.filter((o) => !lockedSet.has(o.optionId)).map((o) => o.optionId) ?? []),
+    ]);
+    if (hasIds && excludedIngredientIds.some((id) => !allowedExclusions.has(id))) {
       return { ok: false, reason: "extra" };
     }
     slots.push({ excludedIngredientIds: [...excludedIngredientIds], extraOptionIds: extraOptionIds as string[], flavorOptionId, fraction: fractionName });

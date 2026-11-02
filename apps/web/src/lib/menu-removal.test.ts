@@ -22,7 +22,7 @@ const draft: MenuDraftParts = {
 };
 
 test("unassigning one group from a product keeps the others and empties a halves setup that used it", () => {
-  const base = { ...product("p1", "c1", ["g1", "g3"]), fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: "g3", flavorGroupId: "g1" } };
+  const base = { ...product("p1", "c1", ["g1", "g3"]), fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: "g3", flavorGroupId: "g1", lockedIngredientOptionIds: [] } };
   const result = unassignGroup(base, "g3");
   assert.deepEqual(result.modifierGroupIds, ["g1"]);
   assert.equal(result.fraction?.extraGroupId, null);
@@ -62,7 +62,7 @@ test("removing a group deletes it from the catalog and from every product that o
   assert.deepEqual(result.products.map((entry) => entry.modifierGroupIds), [["g1"], ["g2"]]);
   const withHalves: MenuDraftParts = {
     ...draft,
-    products: [{ ...draft.products[0]!, fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: null, flavorGroupId: "g3" } }, draft.products[1]!],
+    products: [{ ...draft.products[0]!, fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: null, flavorGroupId: "g3", lockedIngredientOptionIds: [] } }, draft.products[1]!],
   };
   assert.equal(applyRemoval(withHalves, { id: "g3", kind: "group", label: "g3" }).products[0]?.fraction?.flavorGroupId, null);
   assert.equal(result.products[1]?.productId, "p2");
@@ -77,7 +77,7 @@ test("removing an option touches only that element", () => {
 test("unassigning all groups of a product keeps the groups, other products and clears dangling halves", () => {
   const withHalves: MenuDraftParts = {
     ...draft,
-    products: [{ ...draft.products[0]!, fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: null, flavorGroupId: "g1" } }, draft.products[1]!],
+    products: [{ ...draft.products[0]!, fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: null, flavorGroupId: "g1", lockedIngredientOptionIds: [] } }, draft.products[1]!],
   };
   const result = applyRemoval(withHalves, { id: "p1", kind: "groups", label: "todos los grupos de p1" });
   assert.deepEqual(result.groups.map((entry) => entry.groupId), ["g1", "g2", "g3"]);
@@ -86,7 +86,7 @@ test("unassigning all groups of a product keeps the groups, other products and c
   assert.equal(result.products[0]?.fraction?.flavorGroupId, null);
   assert.equal(result.products[0]?.fraction?.enabled, true);
   assert.equal(result.products[1], withHalves.products[1]);
-  const sizeSetup = { enabled: true, excludableIngredientIds: [], extraGroupId: "g1", flavorGroupId: null };
+  const sizeSetup = { enabled: true, excludableIngredientIds: [], extraGroupId: "g1", flavorGroupId: null, lockedIngredientOptionIds: [] };
   const legacy = applyRemoval({ ...draft, products: [{ ...product("p1", "c1", ["g1"], [{ ...variant("v1", "Grande"), fraction: sizeSetup } as ReturnType<typeof variant>]), fraction: null }] }, { id: "p1", kind: "groups", label: "x" });
   assert.equal(legacy.products[0]?.variants?.[0]?.fraction?.extraGroupId, null);
   assert.equal(removalNeedsConfirmation({ id: "p1", kind: "groups", label: "x" }), true);

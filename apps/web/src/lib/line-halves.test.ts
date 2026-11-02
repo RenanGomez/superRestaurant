@@ -32,7 +32,7 @@ const flavors: MenuModifierGroupV1 = { active: true, displayOrder: 0, groupId: f
   name: "Sabores", options: [option(margarita, "Margarita", 0), option(pepperoni, "Pepperoni", 18_000)], productId: "p" };
 const extras: MenuModifierGroupV1 = { active: true, displayOrder: 1, groupId: extraGroupId, maximumQuantity: 5, minimumQuantity: 0,
   name: "Extras", options: [option(queso, "Queso extra", 3_001), option(piña, "Piña", 2_000)], productId: "p" };
-const setup: MenuVariantFractionV1 = { enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId, flavorGroupId };
+const setup: MenuVariantFractionV1 = { enabled: true, excludableIngredientIds: ["cebolla"], extraGroupId, flavorGroupId, lockedIngredientOptionIds: [] };
 
 test("two flavors are required before a half-and-half line can be added", () => {
   assert.deepEqual(validateHalvesDraft(emptyHalvesDraft()), { valid: false, message: "Elige los dos sabores" });
@@ -131,6 +131,18 @@ test("projected ids preserve both halves after flavor and extra names change", (
     { ok: false, reason: "flavor" });
   assert.deepEqual(restoreLineFraction(halves, { ...setup, excludableIngredientIds: [] }, [renamedFlavors, renamedExtras]),
     { ok: false, reason: "extra" });
+});
+
+test("restoreLineFraction allows excluding options from extraGroup unless locked", () => {
+  const halvesWithOption: FractionHalfProjectionV1[] = [
+    { amountMinor: 0, exclusions: [], extras: [], excludedIngredientIds: [], extraOptionIds: [], flavorOptionId: margarita, flavorName: "Margarita", fraction: "half-a" },
+    { amountMinor: 18_000, exclusions: [], extras: [], excludedIngredientIds: [queso], extraOptionIds: [], flavorOptionId: pepperoni, flavorName: "Pepperoni", fraction: "half-b" },
+  ];
+  const allowed = restoreLineFraction(halvesWithOption, { ...setup, excludableIngredientIds: [], lockedIngredientOptionIds: [] }, [flavors, extras]);
+  assert.equal(allowed.ok, true);
+
+  const rejected = restoreLineFraction(halvesWithOption, { ...setup, excludableIngredientIds: [], lockedIngredientOptionIds: [queso] }, [flavors, extras]);
+  assert.deepEqual(rejected, { ok: false, reason: "extra" });
 });
 
 test("a split line that cannot be restored never becomes a whole line in the rebuilt plan", () => {

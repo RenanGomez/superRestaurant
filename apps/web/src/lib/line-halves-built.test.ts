@@ -29,7 +29,7 @@ const flavors: MenuModifierGroupV1 = { active: true, displayOrder: 0, groupId: f
   name: "Sabores", options: [option(hawaiana, "Hawaiana", 17_000)], productId: "p" };
 const ingredients: MenuModifierGroupV1 = { active: true, displayOrder: 1, groupId: ingredientGroupId, maximumQuantity: 3, minimumQuantity: 0,
   name: "Ingredientes", options: [option(queso, "Queso", 3_000), option(piña, "Piña", 2_001)], productId: "p" };
-const setup: MenuVariantFractionV1 = { enabled: true, excludableIngredientIds: [], extraGroupId: ingredientGroupId, flavorGroupId };
+const setup: MenuVariantFractionV1 = { enabled: true, excludableIngredientIds: [], extraGroupId: ingredientGroupId, flavorGroupId, lockedIngredientOptionIds: [] };
 
 test("a half can be built from ingredients, but not both, and it needs ingredients", () => {
   let draft = pickHalfFlavor(emptyHalvesDraft(), "half-b", hawaiana);
