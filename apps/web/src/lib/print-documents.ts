@@ -70,7 +70,7 @@ export function buildCustomerTicket(
   order: OrderDetailV1, payments: readonly PaymentCollectionSummaryV1[], header: PrintHeader, tableName?: string, accountLabel?: string | null,
 ): PrintDocument {
   const money = (minor: number) => formatMinorUnits(minor, order.currency);
-  const lines = [header.restaurantName, header.branchName, ...context(order, tableName), ""];
+  const lines = [header.restaurantName, header.branchName, ...context(order, tableName, accountLabel), ""];
   for (const item of order.items) {
     if (item.status === "cancelled") continue;
     lines.push(`${item.quantity} × ${item.name}${item.variantName ? ` · ${item.variantName}` : ""}  ${money(item.lineTotalMinor)}`);
