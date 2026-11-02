@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { unstable_rethrow, useRouter } from "next/navigation";
+import { unstable_rethrow } from "next/navigation";
 import { createPortal } from "react-dom";
 import type { BranchScope, DiningLayoutV1, BranchMemberV1, OperationalShiftSummaryV1, OrderDetailV1, TableBoardActiveOrderV1, TableBoardV1 } from "@super-restaurant/shared-types";
 import { captureDeviceId } from "../../../lib/capture-workspace";
@@ -11,7 +11,7 @@ import { watchTabReturn } from "../../../lib/revalidate-on-return";
 import { planCanvasStyle, planPlacement, planViewBox } from "../../../lib/floor-plan";
 import { uiButton, uiOption } from "../../../lib/ui-classes";
 import { tableShapeClass } from "../../../lib/table-shape";
-import { groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterLabel, waiterOptions } from "../../../lib/tables-board";
+import { groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterCardState, waiterLabel, waiterOptions } from "../../../lib/tables-board";
 
 type ErrorCode = "invalid" | "denied" | "conflict" | "no_shift" | "unavailable";
 type Failure = { readonly ok: false; readonly error: ErrorCode };
@@ -31,7 +31,7 @@ interface Props {
   readonly actions: {
     readonly read: () => Promise<Snapshot | Failure>;
     readonly create: (tableId: string, orderId: string, attempt: Attempt, waiterUserId: string | null) => Promise<{ readonly ok: true; readonly orderId: string; readonly waiterAssigned: boolean } | Failure>;
-    readonly assign: (orderId: string, expectedVersion: number, attempt: Attempt, waiterUserId: string) => Promise<{ readonly ok: true } | Failure>;
+    readonly assign: (orderId: string, expectedVersion: number, attempt: Attempt, waiterUserId: string | null) => Promise<{ readonly ok: true } | Failure>;
     readonly waiters: () => Promise<{ readonly ok: true; readonly members: readonly BranchMemberV1[] } | Failure>;
     readonly openShift: (shiftId: string, attempt: Attempt) => Promise<{ readonly ok: true } | Failure>;
     readonly detail: (orderId: string) => Promise<{ readonly ok: true; readonly value: OrderDetailV1 } | { readonly ok: false; readonly error: string }>;
@@ -74,16 +74,15 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
   const [waiters, setWaiters] = useState<readonly BranchMemberV1[] | null>(null);
   const [pickOrder, setPickOrder] = useState<string | null>(null);
   const waiterSeq = useRef(0);
-  const router = useRouter();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [selected, setSelected] = useState<Selected | null>(null);
   const [details, setDetails] = useState<Record<string, OrderDetailV1 | null>>({});
   const [busy, setBusy] = useState(false);
+  const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
+  const [orderFeedback, setOrderFeedback] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ErrorCode | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [noticeOrderId, setNoticeOrderId] = useState<string | null>(null);
-  const [newWaiter, setNewWaiter] = useState<string | null>(null);
   const seq = useRef(0);
   const detailSeq = useRef(0);
   const selectedRef = useRef<Selected | null>(null);
@@ -141,7 +140,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
 
   async function select(tableId: string, name: string, orders: readonly TableBoardActiveOrderV1[]) {
     selectedRef.current = { tableId, name, orders };
-    setSelected(selectedRef.current); setError(null); setNotice(null); setNoticeOrderId(null); setNewWaiter(null); setPickOrder(null);
+    setSelected(selectedRef.current); setError(null); setNotice(null); setPickOrder(null); setOrderFeedback({});
     loadDetails(orders);
   }
 
@@ -153,7 +152,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
   }, [selected?.tableId]);
 
   function dialogKeys(event: React.KeyboardEvent<HTMLElement>) {
-    if (event.key === "Escape") { if (!busy) { selectedRef.current = null; setSelected(null); } return; }
+    if (event.key === "Escape") { if (!busy && busyOrderId === null) { selectedRef.current = null; setSelected(null); } return; }
     if (event.key !== "Tab" || dialogRef.current === null) return;
     const controls = Array.from(dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled])'));
     if (controls.length === 0) return;
@@ -163,43 +162,43 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
   }
 
   async function create() {
-    if (selected === null || busy) return;
+    if (selected === null || busy || busyOrderId !== null) return;
     if (snapshot?.shift === null) { setError("no_shift"); return; }
-    setBusy(true); setError(null); setNotice(null); setNoticeOrderId(null);
+    setBusy(true); setError(null); setNotice(null);
     const orderId = crypto.randomUUID();
     let result: Awaited<ReturnType<Props["actions"]["create"]>>;
-    try { result = await actions.create(selected.tableId, orderId, attempt(), newWaiter); }
+    try { result = await actions.create(selected.tableId, orderId, attempt(), null); }
     catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
     if (!result.ok) {
       setError(result.error);
       if (result.error === "conflict" || result.error === "unavailable") {
         const latest = await refresh(true);
         if (latest !== null) {
-          const created = latest.board.tables.some((table) => table.activeOrders.some((order) => order.orderId === orderId))
-            || latest.board.unassignedOrders.some((order) => order.orderId === orderId);
-          if (created) { setBusy(false); router.push(`/app/orders?orderId=${orderId}&addItem=1`); return; }
+          const created = latest.board.tables.flatMap((table) => table.activeOrders).find((order) => order.orderId === orderId)
+            ?? latest.board.unassignedOrders.find((order) => order.orderId === orderId);
+          if (created !== undefined) {
+            setError(null);
+            setOrderFeedback((current) => ({ ...current, [orderId]: created.status === "draft"
+              ? "La cuenta se creó en borrador. Al enviar el primer producto a cocina se abrirá automáticamente."
+              : "Cuenta abierta." }));
+            setBusy(false); return;
+          }
           if (result.error === "conflict" && latest.shift === null) setError("no_shift");
         }
       }
       setBusy(false);
       return;
     }
-    if (newWaiter !== null && !result.waiterAssigned) {
-      setNotice("Cuenta abierta, pero no se pudo asignar el mesero. Verifica la cuenta antes de intentarlo de nuevo.");
-      setNoticeOrderId(orderId);
-      await refresh(true);
-      setBusy(false);
-      return;
-    }
     await refresh(true);
     setBusy(false);
-    router.push(`/app/orders?orderId=${result.orderId}&addItem=1`);
+    setOrderFeedback((current) => ({ ...current, [result.orderId]: "Cuenta abierta." }));
   }
 
-  async function assign(order: TableBoardActiveOrderV1, waiterUserId: string) {
-    if (busy) return;
+  async function assign(order: TableBoardActiveOrderV1, waiterUserId: string | null) {
+    if (busy || busyOrderId !== null) return;
     setPickOrder(null);
-    setBusy(true); setError(null); setNotice(null);
+    setBusyOrderId(order.orderId); setError(null); setNotice(null);
+    setOrderFeedback((current) => ({ ...current, [order.orderId]: "" }));
     let result: Awaited<ReturnType<Props["actions"]["assign"]>>;
     try { result = await actions.assign(order.orderId, order.version, attempt(), waiterUserId); }
     catch (error) { unstable_rethrow(error); result = { ok: false, error: "unavailable" }; }
@@ -208,13 +207,16 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
         const latest = await refresh(true);
         const currentOrder = latest?.board.tables.flatMap((table) => table.activeOrders).find((entry) => entry.orderId === order.orderId);
         if (result.error === "unavailable" && currentOrder?.waiterUserId === waiterUserId) {
-          setNotice("Mesero asignado."); setBusy(false); return;
+          setOrderFeedback((current) => ({ ...current, [order.orderId]: waiterUserId === null ? "Mesero quitado." : "Mesero actualizado." }));
+          setBusyOrderId(null); return;
         }
       }
-      setError(result.error); setBusy(false); return;
+      setOrderFeedback((current) => ({ ...current, [order.orderId]: message(result.error) }));
+      setBusyOrderId(null); return;
     }
     await refresh(true);
-    setNotice("Mesero asignado."); setBusy(false);
+    setOrderFeedback((current) => ({ ...current, [order.orderId]: waiterUserId === null ? "Mesero quitado." : "Mesero actualizado." }));
+    setBusyOrderId(null);
   }
 
   async function openShift() {
@@ -247,7 +249,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
         {snapshot !== null && snapshot.shift === null && canOpenShift && <button type="button" className={primary} disabled={busy} onClick={() => void openShift()}>{busy ? "Guardando…" : "Abrir turno"}</button>}</div>
     </header>
     {error !== null && <div role="alert" className="rounded-lg bg-error-bg p-3 text-sm text-error">{message(error)} {error === "no_shift" && canOpenShift && <button className={button} onClick={() => void openShift()} disabled={busy}>Abrir turno</button>}</div>}
-    {notice !== null && <p role="status" className="rounded-lg border border-success bg-surface p-3 text-sm">{notice} {noticeOrderId !== null && <Link className="inline-flex min-h-11 items-center px-2 font-semibold underline" href={`/app/orders?orderId=${noticeOrderId}`}>Ver cuenta</Link>}</p>}
+    {notice !== null && <p role="status" className="rounded-lg border border-success bg-surface p-3 text-sm">{notice}</p>}
     {snapshot === null ? <p className="text-sm text-text-muted">{loading ? "Cargando plano…" : "Plano no disponible. Pulsa Actualizar para reintentar."}</p>
       : zones.length === 0 ? <p className="text-sm text-text-muted">No hay zonas configuradas.</p>
       : zones.map((zone) => {
@@ -270,26 +272,30 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
       })}
     {snapshot !== null && snapshot.board.unassignedOrders.length > 0 && <section className="rounded-xl border border-border bg-surface p-4"><h2 className="font-heading font-semibold">Mesas eliminadas</h2>
       <ul className="mt-3 grid gap-2">{snapshot.board.unassignedOrders.map((order) => <li key={order.orderId} className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-2 text-sm"><span>Cuenta {order.orderId.slice(0, 8)} · {time(order.openedAt, snapshot.timeZone)} · {orderStatusLabel(order.status)} · Mesero: {waiterLabel(waiters ?? [], order.waiterUserId, actorId)}</span><Link className={`${button} inline-flex items-center link-text`} href={`/app/orders?orderId=${order.orderId}`}>Ver cuenta</Link></li>)}</ul></section>}
-    {selected !== null && typeof document !== "undefined" && createPortal(<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" onClick={() => { if (!busy) { selectedRef.current = null; setSelected(null); } }}>
+    {selected !== null && typeof document !== "undefined" && createPortal(<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4" onClick={() => { if (!busy && busyOrderId === null) { selectedRef.current = null; setSelected(null); } }}>
       <section role="dialog" aria-modal="true" aria-label={`${selected.name}: cuentas`} ref={dialogRef} tabIndex={-1} onKeyDown={dialogKeys} onClick={(event) => event.stopPropagation()}
         className="flex max-h-full w-full flex-col rounded-2xl border border-border bg-surface shadow-xl sm:max-w-xl">
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border p-4 sm:px-5"><h2 className="font-heading text-xl font-bold">{selected.name}</h2><button type="button" className={button} disabled={busy} onClick={() => { selectedRef.current = null; setSelected(null); }}>Cerrar</button></div>
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border p-4 sm:px-5"><h2 className="font-heading text-xl font-bold">{selected.name}</h2><button type="button" className={button} disabled={busy || busyOrderId !== null} onClick={() => { selectedRef.current = null; setSelected(null); }}>Cerrar</button></div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:px-5">
         {error !== null && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm text-error">{message(error)} {error === "no_shift" && canOpenShift && <button className={button} disabled={busy} onClick={() => void openShift()}>Abrir turno</button>}</p>}
-        {notice !== null && <p role="status" className="mt-3 rounded-lg border border-success p-3 text-sm">{notice} {noticeOrderId !== null && <a className="inline-flex min-h-11 items-center px-2 font-semibold underline" href={`/app/orders?orderId=${noticeOrderId}`}>Ver cuenta</a>}</p>}
-        {selected.orders.length > 0 && <ul className="mt-4 grid gap-3">{selected.orders.map((order) => <li key={order.orderId} className="rounded-lg border border-border p-3 text-sm">
-          <p className="font-semibold">{orderStatusLabel(order.status)} · {time(order.openedAt, snapshot?.timeZone)}</p><p>Mesero: {waiterLabel(waiters ?? [], order.waiterUserId, actorId)}</p>
-          <p>{totalLabel(details[order.orderId])}</p>
-          <div className="mt-2 flex flex-wrap gap-2"><Link className={`${primary} inline-flex items-center link-white`} href={`/app/orders?orderId=${order.orderId}`}>Ver cuenta</Link>
-            <button type="button" className={button} disabled={busy} aria-expanded={pickOrder === order.orderId} onClick={() => setPickOrder(pickOrder === order.orderId ? null : order.orderId)}>{busy ? "Guardando…" : "Cambiar mesero"}</button></div>
-          {pickOrder === order.orderId && <WaiterPicker members={waiters} actorId={actorId} current={order.waiterUserId} disabled={busy} allowNone={false} onPick={(id) => { if (id !== null) void assign(order, id); }} />}
-        </li>)}</ul>}
+        {notice !== null && <p role="status" className="mt-3 rounded-lg border border-success p-3 text-sm">{notice}</p>}
+        {selected.orders.length > 0 && <ul className="mt-4 grid gap-3">{selected.orders.map((order) => {
+          const waiterState = waiterCardState(order.orderId, busyOrderId);
+          return <li key={order.orderId} className="rounded-lg border border-border p-3 text-sm">
+            <p className="font-semibold">{orderStatusLabel(order.status)} · {time(order.openedAt, snapshot?.timeZone)} · {totalLabel(details[order.orderId])}</p>
+            <p className="mt-1">Mesero: {waiterLabel(waiters ?? [], order.waiterUserId, actorId)}</p>
+            <div className="mt-2 flex flex-wrap gap-2"><Link className={`${primary} inline-flex items-center link-white`} href={`/app/orders?orderId=${order.orderId}`}>Ver cuenta</Link>
+              <button type="button" className={button} disabled={busy || busyOrderId !== null} aria-expanded={pickOrder === order.orderId}
+                onClick={() => setPickOrder(pickOrder === order.orderId ? null : order.orderId)}>{waiterState.label}</button></div>
+            {pickOrder === order.orderId && <WaiterPicker members={waiters} actorId={actorId} current={order.waiterUserId}
+              disabled={waiterState.busy} allowNone onPick={(id) => void assign(order, id)} />}
+            {orderFeedback[order.orderId] && <p role="status" className="mt-2 text-xs text-text-muted">{orderFeedback[order.orderId]}</p>}
+          </li>;
+        })}</ul>}
         {selected.orders.length === 0 && <p className="mt-3 text-sm text-text-muted">Mesa libre.</p>}
-        <div className="mt-4 border-t border-border pt-4"><p className="mb-2 text-sm font-semibold">Mesero (opcional)</p>
-          <WaiterPicker members={waiters} actorId={actorId} current={newWaiter} disabled={busy} allowNone onPick={setNewWaiter} /></div>
         </div>
         <div className="shrink-0 border-t border-border bg-surface p-4 sm:px-5">
-          <button type="button" className={`${primary} w-full`} disabled={busy} onClick={() => void create()}>{busy ? "Guardando…" : selected.orders.length ? "Abrir otra cuenta" : "Abrir cuenta"}</button></div>
+          <button type="button" className={`${primary} w-full`} disabled={busy || busyOrderId !== null} onClick={() => void create()}>{busy ? "Abriendo…" : selected.orders.length ? "Abrir otra cuenta" : "Abrir cuenta"}</button></div>
       </section>
     </div>, document.body)}
   </div>;

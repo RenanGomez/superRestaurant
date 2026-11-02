@@ -1,5 +1,6 @@
 "use server";
 
+import { createHash } from "node:crypto";
 import { cookies } from "next/headers";
 import {
   parseAssignOrderWaiterResultV1, parseBranchOperationalContextV1, parseOpenOperationalShiftResultV1, parseOperationalShiftListV1, parseOrderMutationSummaryV1,
@@ -34,6 +35,14 @@ async function context() {
 function validAttempt(value: Attempt): boolean {
   return parseAttemptIds(value.eventId, value.idempotencyKey) !== undefined
     && parseOccurredAt(value.occurredAt) !== undefined && uuid.test(value.deviceId);
+}
+
+function derivedUuid(kind: string, namespace: string): string {
+  const bytes = createHash("sha256").update(`${kind}:${namespace}`, "utf8").digest().subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 async function request(token: string, base: string, path: string, body: unknown): Promise<Response | undefined> {
@@ -92,18 +101,35 @@ export async function createTableOrderAction(tableId: string, orderId: string, a
   try {
     const created = parseOrderMutationSummaryV1(await response.json());
     if (created === undefined || created.orderId !== orderId || created.scope.restaurantId !== ctx.scope.restaurantId || created.scope.branchId !== ctx.scope.branchId) return { ok: false, error: "unavailable" };
+    const openAttempt = {
+      ...attempt,
+      eventId: derivedUuid("table-order-open-event", attempt.eventId),
+      idempotencyKey: derivedUuid("table-order-open-idempotency", attempt.idempotencyKey),
+    };
+    const openedResponse = await request(ctx.token, ctx.base, "orders/open", {
+      ...openAttempt, schemaVersion: 1, scope: ctx.scope, orderId, expectedVersion: created.version,
+    });
+    const opened = openedResponse?.ok ? parseOrderMutationSummaryV1(await openedResponse.json().catch(() => undefined)) : undefined;
+    let openedVersion = opened?.version;
+    if (opened?.orderId !== orderId || opened.orderStatus !== "open"
+      || opened.scope.restaurantId !== ctx.scope.restaurantId || opened.scope.branchId !== ctx.scope.branchId) {
+      const detail = await requestOrderDetail(ctx.token, ctx.base, ctx.scope, orderId);
+      if (!detail.ok || detail.value.status !== "open") return failure(openedResponse);
+      openedVersion = detail.value.version;
+    }
     if (waiterUserId === null) return { ok: true, orderId, waiterAssigned: false };
     const assigned = await request(ctx.token, ctx.base, "orders/assign-waiter", { ...attempt, eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(),
-      schemaVersion: 1, scope: ctx.scope, orderId, expectedVersion: created.version, waiterUserId });
+      schemaVersion: 1, scope: ctx.scope, orderId, expectedVersion: openedVersion, waiterUserId });
     const value = assigned?.ok ? parseAssignOrderWaiterResultV1(await assigned.json().catch(() => undefined)) : undefined;
     return { ok: true, orderId, waiterAssigned: value?.waiterUserId === waiterUserId };
   } catch { return { ok: false, error: "unavailable" }; }
 }
 
-export async function assignWaiterAction(orderId: string, expectedVersion: number, attempt: Attempt, waiterUserId: string): Promise<{ readonly ok: true } | Failure> {
+export async function assignWaiterAction(orderId: string, expectedVersion: number, attempt: Attempt, waiterUserId: string | null): Promise<{ readonly ok: true } | Failure> {
   const ctx = await context();
   if (ctx === undefined) return { ok: false, error: "denied" };
-  if (!uuid.test(orderId) || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1 || !validAttempt(attempt) || !uuid.test(waiterUserId)) return { ok: false, error: "invalid" };
+  if (!uuid.test(orderId) || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1 || !validAttempt(attempt)
+    || (waiterUserId !== null && !uuid.test(waiterUserId))) return { ok: false, error: "invalid" };
   const response = await request(ctx.token, ctx.base, "orders/assign-waiter", { ...attempt, schemaVersion: 1, scope: ctx.scope,
     orderId, expectedVersion, waiterUserId });
   if (response === undefined || !response.ok) return failure(response);

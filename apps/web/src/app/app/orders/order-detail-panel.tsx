@@ -507,10 +507,6 @@ export function OrderDetailPanel({ orderId, tableNames, adding, onAddingChange, 
         <div className="mt-4 flex flex-wrap gap-2">
           {canAddItems(detail) && <button type="button" className={primaryButton} disabled={busyAction !== undefined || addBusy}
             onClick={openMenu}>Agregar producto</button>}
-          {hasAction(detail, "open") && !menuOpen && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
-            onClick={() => { const attempt = nextAttempt(); void runAction("open", () => actions.open(detail.orderId, detail.version, attempt.eventId, attempt.idempotencyKey, attempt.occurredAt, deviceId)); }}>
-            {busyAction === "open" ? "Abriendo…" : actionLabel("open")}
-          </button>}
           {hasAction(detail, "sendToKitchen") && <button type="button" className={primaryButton} disabled={busyAction !== undefined}
             onClick={() => void runSendToKitchen(detail.orderId, detail.version, pendingOrderItemIds(detail))}>
             {busyAction === "sendToKitchen" ? "Enviando…" : actionLabel("sendToKitchen")}
