@@ -270,6 +270,12 @@ const receiptPayment={paymentId:"5d1c2c3e-4f50-4a61-8b72-93a4b5c6d7e8",method:"c
 const receiptTransfer={...receiptPayment,paymentId:"6d1c2c3e-4f50-4a61-8b72-93a4b5c6d7e8",method:"transfer",tipMinor:0,tenderedAmountMinor:null,changeMinor:null,transferReference:"SPEI-123"};
 const withPayments=parseOrderDetailV1({...detail,shortFolio:"EE50F0F6",payments:[receiptPayment,receiptTransfer]});
 expect(withPayments!==undefined && withPayments.shortFolio==="EE50F0F6" && withPayments.payments.length===2,"detail carries shortFolio and payments");
+expect(withPayments?.payments[0]?.capturedBy===null,"payment without capturedBy normalizes to null");
+const capturedByUser="31313131-3131-4131-8131-313131313131";
+const withCapturedBy=parseOrderReceiptDataV1({schemaVersion:1,createdAt:"2026-10-06T12:00:00.123Z",shortFolio:"EE50F0F6",payments:[{...receiptPayment,capturedBy:capturedByUser},{...receiptTransfer,capturedBy:null}]});
+expect(withCapturedBy?.payments[0]?.capturedBy===capturedByUser,"receipt data keeps capturedBy user id");
+expect(withCapturedBy?.payments[1]?.capturedBy===null,"receipt data keeps null capturedBy");
+expect(parseOrderReceiptDataV1({schemaVersion:1,createdAt:"2026-10-06T12:00:00.123Z",shortFolio:"EE50F0F6",payments:[{...receiptPayment,capturedBy:"not-a-uuid"}]})===undefined,"invalid capturedBy is rejected");
 expect(parsedDetail!==undefined && parsedDetail.shortFolio===null && parsedDetail.payments.length===0,"detail without receipt keys reads null folio and no payments");
 expect(parseOrderDetailV1({...detail,payments:[{...receiptPayment,method:"card_manual"}]})===undefined,"a card payment cannot carry a cash tender");
 expect(parseOrderDetailV1({...detail,payments:[{...receiptPayment,transferReference:"X"}]})===undefined,"only a transfer carries a reference");

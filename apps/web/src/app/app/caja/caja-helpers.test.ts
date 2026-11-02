@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CashPaymentQuoteV1 } from "@super-restaurant/shared-types";
-import { buildReceiptHref, parseReceiptQuery, canCollectPayment, movementLabel, paymentAmountBounds, paymentMethodLabel, quickCashAmounts, requiredCashTenderMinor } from "./caja-helpers.js";
+import {
+  buildReceiptHref,
+  canCollectPayment,
+  movementLabel,
+  parseReceiptQuery,
+  paymentAmountBounds,
+  paymentMethodLabel,
+  paymentShortfallMinor,
+  quickCashAmounts,
+  requiredCashTenderMinor,
+  resolvePaymentAmountMinor,
+} from "./caja-helpers.js";
 
 test("receipt labels show a transfer reference only when one exists", () => {
   assert.equal(paymentMethodLabel({ method: "transfer", transferReference: "ABC123" }), "Transferencia · Ref. ABC123");
@@ -27,6 +38,12 @@ test("quick notes never offer less than the balance", () => {
   assert.equal(requiredCashTenderMinor(12_500, 300), 12_800);
 });
 
+test("payment shortfall is returned only when received cash is lower than required", () => {
+  assert.equal(paymentShortfallMinor(12_800, 12_799), 1);
+  assert.equal(paymentShortfallMinor(12_800, 12_800), undefined);
+  assert.equal(paymentShortfallMinor(12_800, 20_000), undefined);
+});
+
 test("paymentAmountBounds accepts one cent through the full remaining balance", () => {
   assert.equal(paymentAmountBounds(12_500, 1), true);
   assert.equal(paymentAmountBounds(12_500, 5_000), true);
@@ -34,6 +51,17 @@ test("paymentAmountBounds accepts one cent through the full remaining balance", 
   assert.equal(paymentAmountBounds(12_500, 0), false);
   assert.equal(paymentAmountBounds(12_500, 12_501), false);
   assert.equal(paymentAmountBounds(12_500, null), false);
+});
+
+test("resolvePaymentAmountMinor handles full and split modes", () => {
+  assert.equal(resolvePaymentAmountMinor("full", 13_000, null), 13_000);
+  assert.equal(resolvePaymentAmountMinor("full", 13_000, 5_000), 13_000);
+  assert.equal(resolvePaymentAmountMinor("full", 0, null), null);
+  assert.equal(resolvePaymentAmountMinor("split", 13_000, 7_000), 7_000);
+  assert.equal(resolvePaymentAmountMinor("split", 13_000, 13_000), 13_000);
+  assert.equal(resolvePaymentAmountMinor("split", 13_000, 13_001), null);
+  assert.equal(resolvePaymentAmountMinor("split", 13_000, 0), null);
+  assert.equal(resolvePaymentAmountMinor("split", 13_000, null), null);
 });
 
 test("collect requires a current server quote and enough tender or card evidence", () => {
