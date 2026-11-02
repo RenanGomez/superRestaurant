@@ -68,7 +68,13 @@ test("accountTabLabel formats account tabs with index, accountLabel and optional
   assert.equal(accountTabLabel(0, { accountLabel: "Terraza" }), "Terraza");
   assert.equal(accountTabLabel(1, { accountLabel: "Familia Gómez" }), "Familia Gómez");
 
-  // With total passed as parameter
+  // With total passed as parameter (formatted total, loading state, or null)
+  assert.equal(accountTabLabel(0, { accountLabel: null }, "$130.00"), "Cuenta 1 · $130.00");
+  assert.equal(accountTabLabel(0, { accountLabel: "Juan" }, "$130.00"), "Juan · $130.00");
+  assert.equal(accountTabLabel(0, { accountLabel: null }, "Cargando…"), "Cuenta 1 · Cargando…");
+  assert.equal(accountTabLabel(0, { accountLabel: "Juan" }, "Cargando…"), "Juan · Cargando…");
+  assert.equal(accountTabLabel(0, { accountLabel: null }, null), "Cuenta 1");
+  assert.equal(accountTabLabel(0, { accountLabel: "Juan" }, null), "Juan");
   assert.equal(accountTabLabel(0, { accountLabel: null }, "$130"), "Cuenta 1 · $130");
   assert.equal(accountTabLabel(1, { accountLabel: null }, "$0"), "Cuenta 2 · $0");
   assert.equal(accountTabLabel(0, { accountLabel: "Juan" }, "$130"), "Juan · $130");

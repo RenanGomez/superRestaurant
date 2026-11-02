@@ -6,6 +6,7 @@ import { unstable_rethrow } from "next/navigation";
 import { createPortal } from "react-dom";
 import type { BranchScope, DiningLayoutV1, BranchMemberV1, OperationalShiftSummaryV1, OrderDetailV1, TableBoardActiveOrderV1, TableBoardV1 } from "@super-restaurant/shared-types";
 import { captureDeviceId } from "../../../lib/capture-workspace";
+import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { watchTabReturn } from "../../../lib/revalidate-on-return";
 import { planCanvasStyle, planPlacement, planViewBox } from "../../../lib/floor-plan";
 import { uiButton, uiOption } from "../../../lib/ui-classes";
@@ -44,6 +45,14 @@ function attempt(): Attempt {
 }
 
 function time(iso: string, timeZone?: string) { return new Intl.DateTimeFormat("es-MX", { hour: "2-digit", minute: "2-digit", timeZone }).format(new Date(iso)); }
+function totalLabel(detail: OrderDetailV1 | null | undefined) {
+  return detail === undefined ? "Cargando total…" : detail === null ? "Total no disponible"
+    : formatMinorUnits(detail.totals.totalMinor, detail.totals.currency);
+}
+function tabTotal(detail: OrderDetailV1 | null | undefined): string | null {
+  return detail === undefined ? "Cargando…" : detail === null ? null
+    : formatMinorUnits(detail.totals.totalMinor, detail.totals.currency);
+}
 
 function message(error: ErrorCode) {
   return error === "no_shift" ? "No hay turno abierto." : error === "conflict" ? "Los datos cambiaron. Se actualizó el tablero."
@@ -75,6 +84,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
   const waiterSeq = useRef(0);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [selected, setSelected] = useState<Selected | null>(null);
+  const [details, setDetails] = useState<Record<string, OrderDetailV1 | null>>({});
   const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const [busy, setBusy] = useState(false);
@@ -84,8 +94,20 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
   const [error, setError] = useState<ErrorCode | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const seq = useRef(0);
+  const detailSeq = useRef(0);
   const selectedRef = useRef<Selected | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
+
+  function loadDetails(orders: readonly TableBoardActiveOrderV1[]) {
+    const current = ++detailSeq.current;
+    setDetails({});
+    for (const order of orders) {
+      void actions.detail(order.orderId).then((result) => {
+        if (current !== detailSeq.current) return;
+        setDetails((current) => ({ ...current, [order.orderId]: result.ok ? result.value : null }));
+      }).catch(() => { if (current === detailSeq.current) setDetails((values) => ({ ...values, [order.orderId]: null })); });
+    }
+  }
 
   async function refresh(preserveFeedback = false): Promise<Snapshot | null> {
     const current = ++seq.current;
@@ -95,12 +117,15 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
     if (current !== seq.current) return null;
     setLoading(false);
     if (!result.ok) {
+      detailSeq.current += 1;
       selectedRef.current = null;
-      setSnapshot(null); setError(result.error); setSelected(null); setActiveOrderId(null);
+      setDetails({}); setSnapshot(null); setError(result.error); setSelected(null); setActiveOrderId(null);
       return null;
     }
     setSnapshot(result);
     if (!preserveFeedback) setError(null);
+    const active = selectedRef.current === null ? undefined : result.board.tables.find((entry) => entry.tableId === selectedRef.current?.tableId);
+    if (active !== undefined) loadDetails(active.activeOrders);
     setSelected((previous) => {
       if (previous === null) return null;
       const table = result.board.tables.find((entry) => entry.tableId === previous.tableId);
@@ -128,6 +153,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
     setSelected(selectedRef.current);
     setActiveOrderId(orders[0]?.orderId ?? null);
     setError(null); setNotice(null); setPickOrder(null); setEditingAccountOrderId(null); setEditingAccountText(""); setOrderFeedback({});
+    loadDetails(orders);
   }
 
   useEffect(() => {
@@ -371,7 +397,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
           <div role="tablist" aria-label="Cuentas" className="flex flex-wrap items-center gap-2">
             {selected.orders.map((order, index) => {
               const isActive = activeOrder?.orderId === order.orderId;
-              const label = accountTabLabel(index, order);
+              const label = accountTabLabel(index, order, tabTotal(details[order.orderId]));
               return <button key={order.orderId} ref={(el) => { tabRefs.current[order.orderId] = el; }} type="button" role="tab" id={`tab-${order.orderId}`}
                 aria-controls={`tabpanel-${order.orderId}`} aria-selected={isActive} tabIndex={isActive ? 0 : -1} className={uiOption(isActive)}
                 onClick={() => { setActiveOrderId(order.orderId); setEditingAccountOrderId(null); setPickOrder(null); }}
@@ -390,7 +416,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
           const isBusyWithOrder = busyOrderId === activeOrder.orderId;
           return <div role="tabpanel" id={`tabpanel-${activeOrder.orderId}`} aria-labelledby={`tab-${activeOrder.orderId}`} tabIndex={0}
             className="mt-4 rounded-lg border border-border p-3 text-sm focus-visible:outline-2 focus-visible:outline-accent">
-            <p className="font-semibold">{orderStatusLabel(activeOrder.status)} · {time(activeOrder.openedAt, snapshot?.timeZone)}</p>
+            <p className="font-semibold">{orderStatusLabel(activeOrder.status)} · {time(activeOrder.openedAt, snapshot?.timeZone)} · {totalLabel(details[activeOrder.orderId])}</p>
             {activeOrder.accountLabel !== null && activeOrder.accountLabel !== "" && (
               <p className="mt-1 font-medium text-accent">Cuenta: {activeOrder.accountLabel}</p>
             )}
