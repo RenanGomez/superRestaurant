@@ -7,6 +7,11 @@ export const MENU_STATION_MAX_LENGTH = 64;
 /** Sentinel value of the «Otra estación…» entry; never stored as a station. */
 export const MENU_OTHER_STATION = "__other__";
 
+/** Common CSS classes enforcing the 3-tier row discipline (fixed-height label, 44 px control, reserved auxiliary line). */
+export const MENU_FIELD_LABEL_CLASS = "flex h-5 min-h-5 items-center gap-1.5 leading-tight";
+export const MENU_FIELD_CONTROL_CLASS = "h-11 min-h-11 min-w-0 w-full rounded-lg border border-border bg-surface px-2 text-[13px] disabled:opacity-70";
+export const MENU_FIELD_AUXILIARY_CLASS = "min-h-4 text-[11px] font-normal leading-4 text-text-muted truncate";
+
 const UNITS: readonly SelectOption[] = [
   { label: "Pieza (pz)", value: "pieza" },
   { label: "Porción", value: "porción" },

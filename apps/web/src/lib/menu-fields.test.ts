@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stationValues, unitOptions } from "./menu-fields.js";
+import { MENU_FIELD_AUXILIARY_CLASS, MENU_FIELD_CONTROL_CLASS, MENU_FIELD_LABEL_CLASS, stationValues, unitOptions } from "./menu-fields.js";
+
+test("field layout constants define label, 44px control and auxiliary line", () => {
+  assert.match(MENU_FIELD_LABEL_CLASS, /h-5/);
+  assert.match(MENU_FIELD_CONTROL_CLASS, /min-h-11/);
+  assert.match(MENU_FIELD_AUXILIARY_CLASS, /min-h-4/);
+});
 
 test("unit list is fixed and keeps an unknown stored unit as an extra selected option", () => {
   assert.deepEqual(unitOptions("pieza").map((option) => option.value),
