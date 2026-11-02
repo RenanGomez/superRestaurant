@@ -128,8 +128,8 @@ Reglas: una ronda de revisión en nivel C, dos en B, revisión doble en A con co
 
 - [ ] **REVIEW · B** — `tables-accounts-r2` (Codex; en `main`; Gemini APROBAR con dos P3 anotados): diálogo de mesa sin selector previo, cuentas abiertas dentro del diálogo, mesero asignable/removible por tarjeta, orden abierta al crearse, sin «Abrir cuenta» redundante.
 - [ ] **REVIEW · C** — `menu-polish-r2` (Gemini `-Write`; en `main` d418ab9; puertas web en verde sin caché; pendiente verificación visual de Emmanuel): selector de color plegado, foto siempre por modal, alineación de inputs, duplicar producto, detalles del editor.
-- [ ] **TODO · C** — `menu-tabs-r2`: pestañas Categorías / Productos / Modificadores / Tamaños. Tras `menu-polish-r2`.
-- [ ] **IN_PROGRESS · A** — `menu-locked-ingredients` (P2): Codex se bloqueó (reporte no commiteado + orden de espera) y luego quedó sin cuota; lo implementa Gemini `-Write` desde `main` con `menu-polish-r2` ya integrado.
+- [ ] **TODO · C** — `menu-tabs-r2`: pestañas Categorías / Productos / Modificadores / Tamaños + anchos de inputs y «Duplicar» junto a «Activo». Lista para lanzar (P2 ya integrado).
+- [ ] **REVIEW · A** — `menu-locked-ingredients` (P2; en `main` e791c40; Gemini impl + Codex fix3-fix9 + Claude fallback; revisión doble Claude CORREGIR→ok y Codex CORREGIR→ok; migración `20261102000100` + 4 suites de invariantes ok en remoto con rollback; **pendiente de autorización para aplicar**: contiene backfill etiquetas→ids y la regla «lista vacía legada ⇒ todo bloqueado»).
 - [ ] **REVIEW · B** — `order-account-name` (en `main`; Codex contratos + Gemini db/api/web; Sonnet APROBAR con 3 P3; migración `20261102000200` **aplicada** junto con la anterior): nombre opcional de la cuenta de mesa; migración `20261102000200` (sin aplicar).
 - [ ] **TODO · A** — `menu-size-presets`: tamaños definidos una vez por restaurante; investigación en `.agents/reports/size-presets-research.md`. Tras `menu-tabs-r2`.
 - [ ] **TODO · A** — `menu-specialties` (P3): supuestos adoptados salvo indicación de Emmanuel: precio de mitades = mayor de las dos especialidades; grupos de sabores actuales se conservan como legado.
