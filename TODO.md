@@ -138,8 +138,8 @@ Reglas: una ronda de revisión en nivel C, dos en B, revisión doble en A con co
 
 - [ ] **REVIEW · C** — `shell-sidebar-perf` (Gemini; en `main`): barra lateral fija (sticky) en escritorio. Diagnóstico de lentitud en `.agents/reports/shell-sidebar-perf.md`.
 - [ ] **TODO · B/C** — `web-nav-perf-r1`: `loading.tsx` en todas las secciones, contexto de petición compartido, llamadas en paralelo, `Link` en vez de `a`. Paquete en `.claude/packets/web-nav-perf-r1.md`; tras las tareas en curso.
-- [ ] **IN_PROGRESS · C** — `tables-tabs-count` (Gemini): pestañas por cuenta con «+ Nueva» y contador de cuentas sobre la mesa.
-- [ ] **IN_PROGRESS · A (investigación)** — `caja-split-payments-research` (Gemini): bug del cobro parcial (70 con recibido 60), encabezado de cuenta, «Pagar total / Dividir pago», historial de pagos, tarjetas expandibles en «Por cobrar».
+- [ ] **REVIEW · C** — `tables-tabs-count` (Gemini; en `main`; puertas web sin caché por L0; fix1 restauró los totales por cuenta): pestañas por cuenta con total, «+ Nueva» a la derecha, contador sobre la mesa.
+- [ ] **IN_PROGRESS · A** — `caja-split-payments` (Gemini `-Write`): causa raíz del cobro que «falla» pero cobra (`redirect()` atrapado por el `try/catch` del cliente), cotización sin reescritura, `capturedBy`, encabezado de cuenta, «Pagar total / Dividir pago», desglose de pagos, tarjetas expandibles. Investigación en `.agents/reports/caja-split-payments-research.md`.
 
 Última actualización: 2026-11-02
 
