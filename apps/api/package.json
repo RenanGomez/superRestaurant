@@ -65,6 +65,8 @@
     "verify:menu-shared-modifier-groups-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-menu-shared-modifier-groups-schema-verification.js --local-disposable-only",
     "verify:catalog-halves-product-level-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-catalog-halves-product-level-schema-verification.js --local-disposable-only",
     "verify:menu-category-appearance-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-menu-category-appearance-schema-verification.js --local-disposable-only",
+    "verify:menu-locked-ingredients-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-menu-locked-ingredients-schema-verification.js --local-disposable-only",
+    "dryrun:menu-locked-ingredients": "tsc --project tsconfig.build.json && node dist/operations/dryrun-menu-locked-ingredients.js",
     "verify:capture-payment-intent-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-payment-intent-schema-verification.js --local-disposable-only",
     "verify:branch-order-work-tray-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-branch-order-work-tray-schema-verification.js --local-disposable-only",
     "verify:branch-order-work-tray-delivery-state-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-branch-order-work-tray-delivery-state-schema-verification.js --local-disposable-only",
