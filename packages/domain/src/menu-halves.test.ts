@@ -13,6 +13,7 @@ import type { MenuCatalog, MenuFractionSelection } from "./index.js";
 
 const R = "restaurant-1";
 const V = "menu-v9";
+const QUESO_ID = "8a506172-7283-4d94-9ea5-c6d7e8f90a13";
 
 function pizzaCatalog(overrides: { readonly fraction?: unknown; readonly flavorActive?: boolean } = {}): MenuCatalog {
   return {
@@ -43,7 +44,7 @@ function pizzaCatalog(overrides: { readonly fraction?: unknown; readonly flavorA
           excludableIngredientIds: ["cebolla"],
           extraGroupId: "extras",
           flavorGroupId: "flavors",
-          lockedIngredientOptionIds: ["queso"],
+          lockedIngredientOptionIds: [QUESO_ID],
         }) as never,
       }],
     }],
@@ -60,8 +61,9 @@ function pizzaCatalog(overrides: { readonly fraction?: unknown; readonly flavorA
         id: "extras", restaurantId: R, name: "Extras", catalogVersion: V, productId: "pizza", active: true,
         minimumQuantity: 0, maximumQuantity: 5,
         options: [
-          { id: "queso", name: "Queso extra", unitPrice: new Money(2_501, "MXN"), active: true },
+          { id: QUESO_ID, name: "Queso extra", unitPrice: new Money(2_501, "MXN"), active: true },
           { id: "cebolla", name: "Cebolla", unitPrice: new Money(0, "MXN"), active: true },
+          { id: "champinones", name: "Champiñones", unitPrice: new Money(0, "MXN"), active: false },
         ],
       },
       {
@@ -92,7 +94,7 @@ const context = (fraction: MenuFractionSelection | null) => ({
 test("a halves line is priced at the greater flavor plus halved extras, rounded up to the minor unit", () => {
   const snapshot = createMenuProductPriceSnapshot(
     pizzaCatalog(),
-    context(halves({ a: { flavor: "pepperoni", extras: ["queso"], excluded: ["cebolla"] } })),
+    context(halves({ a: { flavor: "pepperoni", extras: [QUESO_ID], excluded: ["cebolla"] } })),
   );
   // pepperoni priced at 0 uses the size price (15000); hawaiana is 17000: the greater wins.
   assert.equal(snapshot.unitPrice.amountMinor, 17_000);
@@ -103,7 +105,7 @@ test("a halves line is priced at the greater flavor plus halved extras, rounded 
   assert.equal(snapshot.geometry, "halves");
   assert.equal(snapshot.variantId, "large");
   assert.equal(snapshot.variantName, "Grande");
-  const extra = snapshot.modifiers.find((modifier) => modifier.modifierId === "extra:half-a:queso");
+  const extra = snapshot.modifiers.find((modifier) => modifier.modifierId === `extra:half-a:${QUESO_ID}`);
   // 2501 / 2 = 1250.5 rounds up to 1251.
   assert.equal(extra?.unitPrice.amountMinor, 1_251);
   const exclusion = snapshot.modifiers.find((modifier) => modifier.modifierId === "exclude:half-a:cebolla");
@@ -142,7 +144,7 @@ test("invalid fraction selections are rejected with domain issue codes", () => {
   assert.deepEqual(issues(halves({ a: { flavor: "nope" } })), ["flavor_not_found"]);
   assert.deepEqual(issues(halves({ b: { flavor: "pepperoni", extras: ["ghost"] } })), ["extra_not_found"]);
   assert.deepEqual(issues(halves({ a: { flavor: "pepperoni", excluded: ["ghost"] } })), ["exclusion_not_found"]);
-  assert.deepEqual(issues(halves({ a: { flavor: "pepperoni", excluded: ["queso"] } })), ["exclusion_not_found"]);
+  assert.deepEqual(issues(halves({ a: { flavor: "pepperoni", excluded: [QUESO_ID] } })), ["exclusion_not_found"]);
   assert.deepEqual(issues(halves(), pizzaCatalog({ flavorActive: false })), ["flavor_inactive"]);
   assert.deepEqual(
     issues({ geometry: "halves", slots: [halves().slots[0]!] }),
@@ -198,34 +200,44 @@ test("catalog validation rejects fraction groups that do not belong to the produ
   );
   assert.throws(
     () => validateMenuCatalog(pizzaCatalog({
-      fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: "extras", flavorGroupId: "flavors", lockedIngredientOptionIds: ["queso", "queso"] },
+      fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: "extras", flavorGroupId: "flavors", lockedIngredientOptionIds: [QUESO_ID, QUESO_ID] },
     })),
     InvalidSnapshotError,
   );
   assert.throws(
     () => validateMenuCatalog(pizzaCatalog({
-      fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: "extras", flavorGroupId: "flavors", lockedIngredientOptionIds: ["not-in-extras"] },
+      fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: "extras", flavorGroupId: "flavors", lockedIngredientOptionIds: ["11111111-1111-4111-8111-111111111111"] },
     })),
     InvalidSnapshotError,
   );
   assert.throws(
     () => validateMenuCatalog(pizzaCatalog({
-      fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: null, flavorGroupId: "flavors", lockedIngredientOptionIds: ["queso"] },
+      fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: "extras", flavorGroupId: "flavors", lockedIngredientOptionIds: ["not-a-uuid"] },
+    })),
+    InvalidSnapshotError,
+  );
+  assert.throws(
+    () => validateMenuCatalog(pizzaCatalog({
+      fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: null, flavorGroupId: "flavors", lockedIngredientOptionIds: [QUESO_ID] },
     })),
     InvalidSnapshotError,
   );
 });
 
-
-test("catalogVariantToFractionVariant maps zero-priced flavors to the size price", () => {
+test("catalogVariantToFractionVariant maps zero-priced flavors to the size price and excludes inactive options from includedIngredients", () => {
   const variant = catalogVariantToFractionVariant(validateMenuCatalog(pizzaCatalog()), "pizza", "large");
   assert.deepEqual(variant.flavors.map((flavor) => [flavor.optionId, flavor.priceMinor, flavor.active]), [
     ["pepperoni", 15_000, true],
     ["hawaiana", 17_000, true],
   ]);
   assert.deepEqual(variant.extras.map((extra) => [extra.optionId, extra.priceMinor]), [
-    ["queso", 2_501],
+    [QUESO_ID, 2_501],
     ["cebolla", 0],
+    ["champinones", 0],
   ]);
+  // Cebolla is active and not locked -> included.
+  // QUESO_ID is locked -> not included.
+  // champinones is inactive -> not included (Finding 4).
   assert.deepEqual(variant.includedIngredients.map((ingredient) => ingredient.ingredientId), ["cebolla"]);
+  assert.ok(!variant.includedIngredients.some((ing) => ing.ingredientId === "champinones"));
 });

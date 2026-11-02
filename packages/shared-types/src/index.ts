@@ -344,7 +344,7 @@ export interface MenuCategoryV1 {
  */
 export interface MenuVariantFractionV1 {
   readonly enabled: boolean;
-  /** Legacy excludable ingredient labels (accepted/emitted while the column exists). Optional on input, normalized to [] if absent. */
+  /** Legado de sólo lectura: etiquetas de ingredientes excluibles (aceptadas/emitidas mientras exista la columna). Optional on input, normalized to [] if absent. */
   readonly excludableIngredientIds?: readonly string[];
   readonly extraGroupId: string | null;
   readonly flavorGroupId: string | null;

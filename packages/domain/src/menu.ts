@@ -562,7 +562,7 @@ export function catalogVariantToFractionVariant(
       : (() => {
           const lockedSet = new Set(config.lockedIngredientOptionIds ?? []);
           const fromGroup = extraGroup.options
-            .filter((option) => !lockedSet.has(option.id))
+            .filter((option) => option.active && !lockedSet.has(option.id))
             .map((option) => ({ ingredientId: option.id, name: option.name }));
           const existingIds = new Set(fromGroup.map((i) => i.ingredientId));
           const fromLegacy = (config.excludableIngredientIds ?? [])
@@ -723,7 +723,7 @@ function validateFractionConfig(
 
   const lockedIds = new Set<string>();
   for (const id of config.lockedIngredientOptionIds ?? []) {
-    assertText(id, "menu variant fraction lockedIngredientOptionId");
+    assertUuid(id, "menu variant fraction lockedIngredientOptionId");
     if (lockedIds.has(id)) throw new InvalidSnapshotError("menu variant fraction lockedIngredientOptionIds duplicate");
     lockedIds.add(id);
   }
@@ -834,6 +834,12 @@ function asDataArray(value: unknown, field: string): readonly unknown[] {
     items.push(ownData(value as unknown as Record<string, unknown>, String(index), field));
   }
   return items;
+}
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function assertUuid(value: string, field: string): void {
+  if (typeof value !== "string" || !UUID_REGEX.test(value)) throw new InvalidSnapshotError(field);
 }
 
 function assertText(value: string, field: string): void {
