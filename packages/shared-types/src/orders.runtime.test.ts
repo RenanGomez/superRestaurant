@@ -109,7 +109,7 @@ const {waiterUserId:_waiterUserId,...accountLabelBase}=assignWaiterCommand;
 void _waiterUserId;
 const accountLabelCommand={...accountLabelBase,accountLabel:"Juan"};
 expect(parseSetOrderAccountLabelCommandV1(accountLabelCommand)?.accountLabel==="Juan","account label command parses");
-expect(parseSetOrderAccountLabelCommandV1({...assignWaiterCommand,accountLabel:null})?.accountLabel===null,"account label command clears with null");
+expect(parseSetOrderAccountLabelCommandV1({...accountLabelBase,accountLabel:null})?.accountLabel===null,"account label command clears with null");
 expect(parseSetOrderAccountLabelCommandV1(accountLabelBase)?.accountLabel===null,"account label command normalizes an omitted label");
 expect(parseSetOrderAccountLabelCommandV1({...accountLabelCommand,accountLabel:"x".repeat(61)})===undefined,"account label command rejects 61 characters");
 const {waiterUserId:_resultWaiterUserId,...accountLabelResultBase}=assignWaiterResult;
