@@ -130,7 +130,7 @@ Reglas: una ronda de revisión en nivel C, dos en B, revisión doble en A con co
 - [ ] **REVIEW · C** — `menu-polish-r2` (Gemini `-Write`; en `main` d418ab9; puertas web en verde sin caché; pendiente verificación visual de Emmanuel): selector de color plegado, foto siempre por modal, alineación de inputs, duplicar producto, detalles del editor.
 - [ ] **TODO · C** — `menu-tabs-r2`: pestañas Categorías / Productos / Modificadores / Tamaños. Tras `menu-polish-r2`.
 - [ ] **IN_PROGRESS · A** — `menu-locked-ingredients` (P2): Codex se bloqueó (reporte no commiteado + orden de espera) y luego quedó sin cuota; lo implementa Gemini `-Write` desde `main` con `menu-polish-r2` ya integrado.
-- [ ] **IN_PROGRESS · B** — `order-account-name` (contratos por Codex `51752be`, resto Gemini `-Write` tras agotarse la cuenta secundaria de Codex): nombre opcional de la cuenta de mesa; migración `20261102000200` (sin aplicar).
+- [ ] **REVIEW · B** — `order-account-name` (en `main`; Codex contratos + Gemini db/api/web; Sonnet APROBAR con 3 P3; migración `20261102000200` verificada en remoto con rollback encima de `20261101000200`, pendiente de autorización para aplicar): nombre opcional de la cuenta de mesa; migración `20261102000200` (sin aplicar).
 - [ ] **TODO · A** — `menu-size-presets`: tamaños definidos una vez por restaurante; investigación en `.agents/reports/size-presets-research.md`. Tras `menu-tabs-r2`.
 - [ ] **TODO · A** — `menu-specialties` (P3): supuestos adoptados salvo indicación de Emmanuel: precio de mitades = mayor de las dos especialidades; grupos de sabores actuales se conservan como legado.
 
