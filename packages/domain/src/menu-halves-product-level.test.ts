@@ -21,6 +21,7 @@ const enabled: MenuProductFractionConfig = {
   excludableIngredientIds: ["cebolla"],
   extraGroupId: "ingredients",
   flavorGroupId: "flavors",
+  lockedIngredientOptionIds: ["queso"],
 };
 
 interface CatalogOptions {
@@ -77,6 +78,7 @@ function pizzaCatalog(options: CatalogOptions = {}): MenuCatalog {
         options: [
           { id: "queso", name: "Queso", unitPrice: new Money(2_501, "MXN"), active: true },
           { id: "jamon", name: "Jamon", unitPrice: new Money(2_000, "MXN"), active: true },
+          { id: "cebolla", name: "Cebolla", unitPrice: new Money(0, "MXN"), active: true },
         ],
       },
     ],
@@ -247,7 +249,8 @@ test("catalogVariantToFractionVariant builds the pricing view of a product witho
   const view = catalogVariantToFractionVariant(validateMenuCatalog(pizzaCatalog()), "pizza", null);
   assert.equal(view.customHalfPriceMinor, 12_000);
   assert.deepEqual(view.flavors.map((flavor) => [flavor.optionId, flavor.priceMinor]), [["pepperoni", 12_000], ["hawaiana", 17_000]]);
-  assert.deepEqual(view.extras.map((extra) => extra.optionId), ["queso", "jamon"]);
+  assert.deepEqual(view.extras.map((extra) => extra.optionId), ["queso", "jamon", "cebolla"]);
+  assert.deepEqual(view.includedIngredients.map((i) => i.ingredientId), ["jamon", "cebolla"]);
   assert.throws(
     () => catalogVariantToFractionVariant(validateMenuCatalog(pizzaCatalog({ productFraction: null })), "pizza", null),
     MenuFractionSelectionInvalidError,

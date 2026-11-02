@@ -312,16 +312,24 @@ expectRejected(withVariants(Array.from({ length: 13 }, (_, index) => ({
 expectRejected(withVariants([{ variantId: variantA, name: "A", unitPriceMinor: 1, active: true, displayOrder: 0, sku: null, extra: 1 }]), "extra variant field is rejected");
 
 // Half-and-half configuration of a size: optional on input, normalized to null, groups must belong to the product.
+const optionIdA = "11111111-2222-4333-8444-555555555555";
+const optionIdB = "22222222-3333-4444-8555-666666666666";
+const extraGroup2Id = "33333333-4444-4555-8666-777777777777";
 const fractionConfig = { enabled: true, flavorGroupId: groupId, extraGroupId: null, excludableIngredientIds: ["cebolla"] };
 const baseVariant = { variantId: variantA, name: "Grande", unitPriceMinor: 15_000, active: true, displayOrder: 0, sku: null };
 const parsedFraction = parseSaveMenuCatalogCommandV1(withVariants([{ ...baseVariant, fraction: fractionConfig }]));
 expectDefined(parsedFraction, "variant with fraction config parses");
 expect(parsedFraction.products[0]?.variants?.[0]?.fraction?.flavorGroupId === groupId, "fraction config is preserved");
+expect(parsedFraction.products[0]?.variants?.[0]?.fraction?.lockedIngredientOptionIds.length === 0, "lockedIngredientOptionIds defaults to []");
 expect(parseSaveMenuCatalogCommandV1(withVariants([baseVariant]))?.products[0]?.variants?.[0]?.fraction === null, "fraction defaults to null");
 expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, flavorGroupId: null } }]), "enabled fraction needs a flavor group");
 expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, flavorGroupId: "9a1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8" } }]), "foreign flavor group is rejected");
 expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, extraGroupId: groupId } }]), "same group for flavors and extras is rejected");
 expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, excludableIngredientIds: ["a", "a"] } }]), "duplicate excludable ingredient is rejected");
+expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, lockedIngredientOptionIds: [optionIdA] } }]), "locked ingredient option ids without extraGroupId is rejected");
+expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, extraGroupId: extraGroup2Id, lockedIngredientOptionIds: [optionIdA, optionIdA] } }]), "duplicate locked ingredient option id is rejected");
+expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, extraGroupId: extraGroup2Id, lockedIngredientOptionIds: ["not-a-uuid"] } }]), "invalid locked ingredient option id is rejected");
+expectRejected(withVariants([{ ...baseVariant, fraction: { ...fractionConfig, extraGroupId: extraGroup2Id, lockedIngredientOptionIds: Array.from({ length: 41 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`) } }]), "more than 40 locked ingredient option ids is rejected");
 
 // Half-and-half configuration of the product: optional on input, normalized to null, groups must belong to the product.
 function withProductFraction(fraction: unknown): Record<string, unknown> {
@@ -329,9 +337,30 @@ function withProductFraction(fraction: unknown): Record<string, unknown> {
   (next.products as Record<string, unknown>[])[0]!.fraction = fraction;
   return next;
 }
+function withTwoGroupsFraction(fraction: unknown): Record<string, unknown> {
+  const next = command();
+  const extraGroup = {
+    groupId: extraGroup2Id,
+    productId,
+    name: "Ingredientes",
+    active: true,
+    displayOrder: 1,
+    minimumQuantity: 0,
+    maximumQuantity: 5,
+    options: [{
+      optionId: optionIdA, name: "Cebolla", unitPriceMinor: 0, active: true, maximumQuantity: 1, imagePath: null,
+    }, {
+      optionId: optionIdB, name: "Champiñones", unitPriceMinor: 0, active: true, maximumQuantity: 1, imagePath: null,
+    }],
+  };
+  (next.modifierGroups as Record<string, unknown>[]).push(extraGroup);
+  (next.products as Record<string, unknown>[])[0]!.fraction = fraction;
+  return next;
+}
 const parsedProductFraction = parseSaveMenuCatalogCommandV1(withProductFraction(fractionConfig));
 expectDefined(parsedProductFraction, "product with fraction config parses");
 expect(parsedProductFraction.products[0]?.fraction?.flavorGroupId === groupId, "product fraction config is preserved");
+expect(parsedProductFraction.products[0]?.fraction?.lockedIngredientOptionIds.length === 0, "product fraction lockedIngredientOptionIds defaults to []");
 expect(Object.isFrozen(parsedProductFraction.products[0]?.fraction), "product fraction is frozen");
 expect(parseSaveMenuCatalogCommandV1(withProductFraction(null))?.products[0]?.fraction === null, "explicit null product fraction parses");
 expect(parseSaveMenuCatalogCommandV1(command())?.products[0]?.fraction === null, "product fraction defaults to null");
@@ -341,6 +370,11 @@ expectRejected(withProductFraction({ ...fractionConfig, flavorGroupId: "9a1d2c3e
 expectRejected(withProductFraction({ ...fractionConfig, extraGroupId: groupId }), "same group for product flavors and ingredients is rejected");
 expectRejected(withProductFraction({ ...fractionConfig, excludableIngredientIds: ["a", "a"] }), "duplicate product excludable ingredient is rejected");
 expectRejected(withProductFraction({ ...fractionConfig, extra: 1 }), "extra product fraction field is rejected");
+expectRejected(withProductFraction({ ...fractionConfig, lockedIngredientOptionIds: [optionIdA] }), "product fraction locked options without extra group is rejected");
+const parsedWithLockedOnly = parseSaveMenuCatalogCommandV1(withTwoGroupsFraction({ enabled: true, flavorGroupId: groupId, extraGroupId: extraGroup2Id, lockedIngredientOptionIds: [optionIdA, optionIdB] }));
+expectDefined(parsedWithLockedOnly, "product fraction with lockedIngredientOptionIds and omitted excludableIngredientIds parses");
+expect(parsedWithLockedOnly.products[0]?.fraction?.lockedIngredientOptionIds.length === 2, "lockedIngredientOptionIds parsed");
+expect(parsedWithLockedOnly.products[0]?.fraction?.excludableIngredientIds?.length === 0, "omitted excludableIngredientIds normalizes to []");
 
 // Category appearance: colour token and image path are optional on input and normalized to null.
 function withCategory(extra: Record<string, unknown>): Record<string, unknown> {

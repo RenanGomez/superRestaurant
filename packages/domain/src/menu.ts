@@ -60,8 +60,10 @@ export interface MenuVariantFractionConfig {
   readonly enabled: boolean;
   readonly flavorGroupId: string | null;
   readonly extraGroupId: string | null;
-  /** Labels of ingredients that may be excluded on a half; the label is the frozen exclusion name. */
-  readonly excludableIngredientIds: readonly string[];
+  /** Legacy labels of ingredients that may be excluded on a half; the label is the frozen exclusion name. */
+  readonly excludableIngredientIds?: readonly string[];
+  /** Option IDs of extraGroupId that cannot be excluded. Optional on input, normalized to [] if absent. */
+  readonly lockedIngredientOptionIds?: readonly string[];
 }
 
 export type MenuProductFractionConfig = MenuVariantFractionConfig;
@@ -319,6 +321,33 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
     }
   }
 
+  const checkFraction = (fraction: MenuVariantFractionConfig | undefined): void => {
+    if (fraction === undefined) return;
+    const lockedIds = fraction.lockedIngredientOptionIds ?? [];
+    if (fraction.extraGroupId === null) {
+      if (lockedIds.length > 0) {
+        throw new InvalidSnapshotError("menu variant fraction lockedIngredientOptionIds without extraGroupId");
+      }
+      return;
+    }
+    const extraGroup = groupsById.get(fraction.extraGroupId);
+    if (extraGroup !== undefined) {
+      const optionIds = new Set(extraGroup.options.map((opt) => opt.id));
+      for (const lockedId of lockedIds) {
+        if (!optionIds.has(lockedId)) {
+          throw new InvalidSnapshotError(`menu variant fraction lockedIngredientOptionId ${lockedId} not found in extra group`);
+        }
+      }
+    }
+  };
+
+  for (const product of products) {
+    checkFraction(product.fraction);
+    for (const variant of product.variants ?? []) {
+      checkFraction(variant.fraction);
+    }
+  }
+
   return deepFreeze({
     restaurantId: catalog.restaurantId,
     catalogVersion: catalog.catalogVersion,
@@ -528,7 +557,18 @@ export function catalogVariantToFractionVariant(
       optionId: option.id,
       priceMinor: option.unitPrice.amountMinor === 0 ? basePriceMinor : option.unitPrice.amountMinor,
     })),
-    includedIngredients: config.excludableIngredientIds.map((label) => ({ ingredientId: label, name: label })),
+    includedIngredients: extraGroup === undefined
+      ? (config.excludableIngredientIds ?? []).map((label) => ({ ingredientId: label, name: label }))
+      : (() => {
+          const lockedSet = new Set(config.lockedIngredientOptionIds ?? []);
+          const fromGroup = extraGroup.options
+            .filter((option) => !lockedSet.has(option.id))
+            .map((option) => ({ ingredientId: option.id, name: option.name }));
+          if (fromGroup.length > 0 || (config.lockedIngredientOptionIds ?? []).length > 0) {
+            return fromGroup;
+          }
+          return (config.excludableIngredientIds ?? []).map((label) => ({ ingredientId: label, name: label }));
+        })(),
     name: product.name,
     productId: product.id,
     restaurantId: catalog.restaurantId,
@@ -643,13 +683,18 @@ function normalizeMenuProductVariant(value: unknown): MenuProductVariantCatalog 
 
 function normalizeFractionConfig(value: unknown): MenuVariantFractionConfig {
   const config = asPlainRecord(value, "menu variant fraction");
+  const rawExcludable = optionalOwnData(config, "excludableIngredientIds", "menu variant fraction excludableIngredientIds");
+  const rawLocked = optionalOwnData(config, "lockedIngredientOptionIds", "menu variant fraction lockedIngredientOptionIds");
   return Object.freeze({
     enabled: ownData(config, "enabled", "menu variant fraction enabled") as boolean,
     flavorGroupId: ownData(config, "flavorGroupId", "menu variant fraction flavorGroupId") as string | null,
     extraGroupId: ownData(config, "extraGroupId", "menu variant fraction extraGroupId") as string | null,
-    excludableIngredientIds: Object.freeze(
-      ownDataArray(config, "excludableIngredientIds", "menu variant fraction excludableIngredientIds").map((id) => id as string),
-    ),
+    excludableIngredientIds: rawExcludable === undefined || rawExcludable === null
+      ? Object.freeze([])
+      : Object.freeze(asDataArray(rawExcludable, "menu variant fraction excludableIngredientIds").map((id) => id as string)),
+    lockedIngredientOptionIds: rawLocked === undefined || rawLocked === null
+      ? Object.freeze([])
+      : Object.freeze(asDataArray(rawLocked, "menu variant fraction lockedIngredientOptionIds").map((id) => id as string)),
   });
 }
 
@@ -668,16 +713,30 @@ function validateFractionConfig(
     throw new InvalidSnapshotError("menu variant fraction groups");
   }
   const labels = new Set<string>();
-  for (const label of config.excludableIngredientIds) {
+  for (const label of config.excludableIngredientIds ?? []) {
     assertText(label, "menu variant fraction excludableIngredientId");
     if (labels.has(label)) throw new InvalidSnapshotError("menu variant fraction excludableIngredientIds");
     labels.add(label);
   }
+  if (labels.size > 40) throw new InvalidSnapshotError("menu variant fraction excludableIngredientIds max");
+
+  const lockedIds = new Set<string>();
+  for (const id of config.lockedIngredientOptionIds ?? []) {
+    assertText(id, "menu variant fraction lockedIngredientOptionId");
+    if (lockedIds.has(id)) throw new InvalidSnapshotError("menu variant fraction lockedIngredientOptionIds duplicate");
+    lockedIds.add(id);
+  }
+  if (lockedIds.size > 40) throw new InvalidSnapshotError("menu variant fraction lockedIngredientOptionIds max");
+  if (config.extraGroupId === null && lockedIds.size > 0) {
+    throw new InvalidSnapshotError("menu variant fraction lockedIngredientOptionIds without extraGroupId");
+  }
+
   return Object.freeze({
     enabled: config.enabled,
-    excludableIngredientIds: Object.freeze([...config.excludableIngredientIds]),
+    excludableIngredientIds: Object.freeze([...(config.excludableIngredientIds ?? [])]),
     extraGroupId: config.extraGroupId,
     flavorGroupId: config.flavorGroupId,
+    lockedIngredientOptionIds: Object.freeze([...(config.lockedIngredientOptionIds ?? [])]),
   });
 }
 

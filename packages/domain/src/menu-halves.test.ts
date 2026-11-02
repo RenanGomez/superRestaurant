@@ -43,6 +43,7 @@ function pizzaCatalog(overrides: { readonly fraction?: unknown; readonly flavorA
           excludableIngredientIds: ["cebolla"],
           extraGroupId: "extras",
           flavorGroupId: "flavors",
+          lockedIngredientOptionIds: ["queso"],
         }) as never,
       }],
     }],
@@ -60,6 +61,7 @@ function pizzaCatalog(overrides: { readonly fraction?: unknown; readonly flavorA
         minimumQuantity: 0, maximumQuantity: 5,
         options: [
           { id: "queso", name: "Queso extra", unitPrice: new Money(2_501, "MXN"), active: true },
+          { id: "cebolla", name: "Cebolla", unitPrice: new Money(0, "MXN"), active: true },
         ],
       },
       {
@@ -140,6 +142,7 @@ test("invalid fraction selections are rejected with domain issue codes", () => {
   assert.deepEqual(issues(halves({ a: { flavor: "nope" } })), ["flavor_not_found"]);
   assert.deepEqual(issues(halves({ b: { flavor: "pepperoni", extras: ["ghost"] } })), ["extra_not_found"]);
   assert.deepEqual(issues(halves({ a: { flavor: "pepperoni", excluded: ["ghost"] } })), ["exclusion_not_found"]);
+  assert.deepEqual(issues(halves({ a: { flavor: "pepperoni", excluded: ["queso"] } })), ["exclusion_not_found"]);
   assert.deepEqual(issues(halves(), pizzaCatalog({ flavorActive: false })), ["flavor_inactive"]);
   assert.deepEqual(
     issues({ geometry: "halves", slots: [halves().slots[0]!] }),
@@ -189,11 +192,30 @@ test("catalog validation rejects fraction groups that do not belong to the produ
   );
   assert.throws(
     () => validateMenuCatalog(pizzaCatalog({
-      fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: "flavors", flavorGroupId: "flavors" },
+      fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: "flavors", flavorGroupId: "flavors", lockedIngredientOptionIds: [] },
+    })),
+    InvalidSnapshotError,
+  );
+  assert.throws(
+    () => validateMenuCatalog(pizzaCatalog({
+      fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: "extras", flavorGroupId: "flavors", lockedIngredientOptionIds: ["queso", "queso"] },
+    })),
+    InvalidSnapshotError,
+  );
+  assert.throws(
+    () => validateMenuCatalog(pizzaCatalog({
+      fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: "extras", flavorGroupId: "flavors", lockedIngredientOptionIds: ["not-in-extras"] },
+    })),
+    InvalidSnapshotError,
+  );
+  assert.throws(
+    () => validateMenuCatalog(pizzaCatalog({
+      fraction: { enabled: true, excludableIngredientIds: [], extraGroupId: null, flavorGroupId: "flavors", lockedIngredientOptionIds: ["queso"] },
     })),
     InvalidSnapshotError,
   );
 });
+
 
 test("catalogVariantToFractionVariant maps zero-priced flavors to the size price", () => {
   const variant = catalogVariantToFractionVariant(validateMenuCatalog(pizzaCatalog()), "pizza", "large");
@@ -201,6 +223,9 @@ test("catalogVariantToFractionVariant maps zero-priced flavors to the size price
     ["pepperoni", 15_000, true],
     ["hawaiana", 17_000, true],
   ]);
-  assert.deepEqual(variant.extras.map((extra) => [extra.optionId, extra.priceMinor]), [["queso", 2_501]]);
+  assert.deepEqual(variant.extras.map((extra) => [extra.optionId, extra.priceMinor]), [
+    ["queso", 2_501],
+    ["cebolla", 0],
+  ]);
   assert.deepEqual(variant.includedIngredients.map((ingredient) => ingredient.ingredientId), ["cebolla"]);
 });

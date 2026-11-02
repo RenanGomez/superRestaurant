@@ -344,9 +344,12 @@ export interface MenuCategoryV1 {
  */
 export interface MenuVariantFractionV1 {
   readonly enabled: boolean;
-  readonly excludableIngredientIds: readonly string[];
+  /** Legacy excludable ingredient labels (accepted/emitted while the column exists). Optional on input, normalized to [] if absent. */
+  readonly excludableIngredientIds?: readonly string[];
   readonly extraGroupId: string | null;
   readonly flavorGroupId: string | null;
+  /** Option IDs of extraGroupId that cannot be excluded. Optional on input, normalized to [] if absent. */
+  readonly lockedIngredientOptionIds: readonly string[];
 }
 
 export type MenuProductFractionV1 = MenuVariantFractionV1;
@@ -365,6 +368,7 @@ export interface MenuProductVariantV1 {
 
 export const MENU_PRODUCT_MAX_VARIANTS = 12;
 export const MENU_VARIANT_MAX_EXCLUDABLE_INGREDIENTS = 40;
+export const MENU_VARIANT_MAX_LOCKED_INGREDIENTS = 40;
 
 export interface MenuProductV1 {
   readonly active: boolean;
@@ -1327,28 +1331,52 @@ function parseMenuProductVariantV1(value: unknown): MenuProductVariantV1 | undef
 
 function parseMenuVariantFractionV1(value: unknown): MenuVariantFractionV1 | null | undefined {
   if (value === null) return null;
-  const record = parseExactPlainRecord(value, ["enabled", "flavorGroupId", "extraGroupId", "excludableIngredientIds"]);
+  const record = parseExactRecordWithOptionalKeys(
+    value,
+    ["enabled", "flavorGroupId", "extraGroupId"],
+    ["lockedIngredientOptionIds", "excludableIngredientIds"],
+  );
   if (record === undefined) return undefined;
   const enabled = ownValue(record, "enabled");
   const rawFlavor = ownValue(record, "flavorGroupId");
   const rawExtra = ownValue(record, "extraGroupId");
   const flavorGroupId = rawFlavor === null ? null : parseUuid(rawFlavor);
   const extraGroupId = rawExtra === null ? null : parseUuid(rawExtra);
-  const rawLabels = parseExactArray(ownValue(record, "excludableIngredientIds"), MENU_VARIANT_MAX_EXCLUDABLE_INGREDIENTS);
-  if (typeof enabled !== "boolean" || flavorGroupId === undefined || extraGroupId === undefined || rawLabels === undefined) {
+  if (typeof enabled !== "boolean" || flavorGroupId === undefined || extraGroupId === undefined) {
     return undefined;
   }
-  const labels = rawLabels.map((label) => parseDisplayName(label, 80));
-  if (labels.some(isUndefined)) return undefined;
-  const excludableIngredientIds = labels as string[];
-  if (new Set(excludableIngredientIds).size !== excludableIngredientIds.length) return undefined;
   if (enabled && flavorGroupId === null) return undefined;
   if (flavorGroupId !== null && flavorGroupId === extraGroupId) return undefined;
+
+  let lockedIngredientOptionIds: readonly string[] = [];
+  if (Object.hasOwn(record, "lockedIngredientOptionIds")) {
+    const rawLocked = parseExactArray(ownValue(record, "lockedIngredientOptionIds"), MENU_VARIANT_MAX_LOCKED_INGREDIENTS);
+    if (rawLocked === undefined) return undefined;
+    const parsedLocked = rawLocked.map(parseUuid);
+    if (parsedLocked.some(isUndefined)) return undefined;
+    const locked = parsedLocked as string[];
+    if (new Set(locked).size !== locked.length) return undefined;
+    if (extraGroupId === null && locked.length > 0) return undefined;
+    lockedIngredientOptionIds = locked;
+  }
+
+  let excludableIngredientIds: readonly string[] = [];
+  if (Object.hasOwn(record, "excludableIngredientIds")) {
+    const rawLabels = parseExactArray(ownValue(record, "excludableIngredientIds"), MENU_VARIANT_MAX_EXCLUDABLE_INGREDIENTS);
+    if (rawLabels === undefined) return undefined;
+    const labels = rawLabels.map((label) => parseDisplayName(label, 80));
+    if (labels.some(isUndefined)) return undefined;
+    const excludable = labels as string[];
+    if (new Set(excludable).size !== excludable.length) return undefined;
+    excludableIngredientIds = excludable;
+  }
+
   return Object.freeze({
     enabled,
     excludableIngredientIds: Object.freeze(excludableIngredientIds),
     extraGroupId,
     flavorGroupId,
+    lockedIngredientOptionIds: Object.freeze(lockedIngredientOptionIds),
   });
 }
 
