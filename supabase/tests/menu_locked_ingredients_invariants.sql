@@ -18,6 +18,7 @@ declare
   shift uuid := gen_random_uuid();
   device uuid := gen_random_uuid();
   now_at timestamptz := pg_catalog.date_trunc('milliseconds', pg_catalog.clock_timestamp());
+  stamp text := pg_catalog.to_char(now_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
   category uuid := gen_random_uuid();
   product_pizza uuid := gen_random_uuid();
   g_flavors uuid := gen_random_uuid();
@@ -43,6 +44,8 @@ declare
   line_id uuid;
   confirmed_order uuid;
   confirmation_event uuid;
+  item_event uuid;
+  item_id uuid;
   lease text;
   created jsonb;
   command jsonb;
@@ -234,28 +237,30 @@ begin
   line_id := gen_random_uuid();
   confirmed_order := gen_random_uuid();
   confirmation_event := gen_random_uuid();
+  item_event := gen_random_uuid();
+  item_id := gen_random_uuid();
 
   execute 'set local role app_api';
   created := app_private.create_capture_draft(actor, pg_catalog.jsonb_build_object(
     'schemaVersion', 1, 'scope', pg_catalog.jsonb_build_object('restaurantId', restaurant::text, 'branchId', branch::text),
     'captureDraftId', target_capture::text, 'expectedVersion', 0, 'eventId', gen_random_uuid()::text,
-    'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', now_at,
+    'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', stamp,
     'sourceChannel', 'phone', 'fulfillmentChannel', 'counter'
   ));
   execute 'reset role';
-  if created->>'status' <> 'applied' then raise exception 'LOCKED_INGREDIENTS_CAPTURE_CREATE_FAILED'; end if;
+  if created->>'status' <> 'applied' then raise exception 'LOCKED_INGREDIENTS_CAPTURE_CREATE_FAILED: %', created; end if;
   lease := created#>>'{record,detail,attentionLeaseId}';
 
   -- Replace plan with halves: Slot A excludes o_jamon (unlocked -> ok), Slot B has no exclusions
   command := pg_catalog.jsonb_build_object(
     'schemaVersion', 1, 'scope', pg_catalog.jsonb_build_object('restaurantId', restaurant::text, 'branchId', branch::text),
     'captureDraftId', target_capture::text, 'expectedVersion', 1, 'attentionLeaseId', lease,
-    'eventId', gen_random_uuid()::text, 'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', now_at
+    'eventId', gen_random_uuid()::text, 'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', stamp
   );
   plan := pg_catalog.jsonb_build_object(
     'schemaVersion', 1, 'catalogVersion', v_catalog_id::text, 'lines', pg_catalog.jsonb_build_array(
       pg_catalog.jsonb_build_object(
-        'lineId', line_id::text, 'productId', product_pizza::text, 'quantity', 1, 'note', null,
+        'lineId', line_id::text, 'productId', product_pizza::text, 'variantId', null, 'quantity', 1, 'note', null,
         'fraction', pg_catalog.jsonb_build_object(
           'geometry', 'halves',
           'slots', pg_catalog.jsonb_build_array(
@@ -280,49 +285,46 @@ begin
   confirmation_command := pg_catalog.jsonb_build_object(
     'schemaVersion', 2, 'scope', pg_catalog.jsonb_build_object('restaurantId', restaurant::text, 'branchId', branch::text),
     'captureDraftId', target_capture::text, 'expectedVersion', 2, 'eventId', confirmation_event::text,
-    'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', now_at,
+    'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', stamp,
     'attentionLeaseId', lease, 'orderId', confirmed_order::text, 'shiftId', shift::text, 'tableId', null,
     'currency', 'MXN', 'timeZone', 'America/Hermosillo'
   );
-  order_record := pg_catalog.jsonb_build_object(
-    'schemaVersion', 1, 'id', confirmed_order::text, 'restaurantId', restaurant::text, 'branchId', branch::text,
-    'shiftId', shift::text, 'orderNumber', 101, 'status', 'placed', 'placedAt', pg_catalog.to_char(now_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    'items', pg_catalog.jsonb_build_array(
-      pg_catalog.jsonb_build_object(
-        'orderItemId', gen_random_uuid()::text, 'productId', product_pizza::text, 'variantId', null, 'name', 'Pizza Moderna',
-        'stationId', 'kitchen', 'unitPriceMinor', 15000, 'quantity', 1, 'status', 'active', 'note', null,
-        'fraction', pg_catalog.jsonb_build_object(
-          'geometry', 'halves',
-          'slots', pg_catalog.jsonb_build_array(
-            pg_catalog.jsonb_build_object('fraction', 'half-a', 'flavorOptionId', o_pep::text, 'extraOptionIds', '[]'::jsonb, 'excludedIngredientIds', pg_catalog.jsonb_build_array(o_jamon::text)),
-            pg_catalog.jsonb_build_object('fraction', 'half-b', 'flavorOptionId', o_haw::text, 'extraOptionIds', '[]'::jsonb, 'excludedIngredientIds', '[]'::jsonb)
-          )
-        ),
-        'fractionBreakdown', pg_catalog.jsonb_build_array(
-          pg_catalog.jsonb_build_object('fraction', 'half-a', 'flavorOptionId', o_pep::text, 'flavorName', 'Pepperoni', 'extraOptionIds', '[]'::jsonb, 'excludedIngredientIds', pg_catalog.jsonb_build_array(o_jamon::text)),
-          pg_catalog.jsonb_build_object('fraction', 'half-b', 'flavorOptionId', o_haw::text, 'flavorName', 'Hawaiana', 'extraOptionIds', '[]'::jsonb, 'excludedIngredientIds', '[]'::jsonb)
-        ),
-        'modifiers', pg_catalog.jsonb_build_array(
-          pg_catalog.jsonb_build_object(
-            'modifierId', 'exclude:half-a:' || o_jamon::text,
-            'name', 'Sin Jamon',
-            'groupId', 'fraction-exclusion',
-            'groupName', 'exclude:half-a',
-            'groupCatalogVersion', v_catalog_id::text,
-            'unitPrice', pg_catalog.jsonb_build_object('amountMinor', 0, 'currency', 'MXN'),
-            'quantity', 1
-          )
-        ),
-        'subtotalMinor', 15000, 'taxMinor', 0, 'totalMinor', 15000
-      )
+  snap := pg_catalog.jsonb_build_object(
+    'catalogVersion', v_catalog_id::text, 'productId', product_pizza::text, 'name', 'Pizza Moderna',
+    'stationId', 'kitchen', 'unit', 'piece',
+    'unitPrice', pg_catalog.jsonb_build_object('amountMinor', 15000, 'currency', 'MXN'),
+    'modifiers', pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+      'modifierId', 'exclude:half-a:' || o_jamon::text, 'name', 'Sin Jamon',
+      'groupId', 'fraction-exclusion', 'groupName', 'exclude:half-a',
+      'groupCatalogVersion', v_catalog_id::text,
+      'unitPrice', pg_catalog.jsonb_build_object('amountMinor', 0, 'currency', 'MXN'), 'quantity', 1
+    )),
+    'geometry', 'halves',
+    'fractionBreakdown', pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object('fraction', 'half-a', 'flavorOptionId', o_pep::text, 'flavorName', 'Pepperoni', 'amountMinor', 15000),
+      pg_catalog.jsonb_build_object('fraction', 'half-b', 'flavorOptionId', o_haw::text, 'flavorName', 'Hawaiana', 'amountMinor', 15000)
     )
+  );
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion', 1, 'orderId', confirmed_order::text, 'restaurantId', restaurant::text, 'branchId', branch::text,
+    'channel', 'counter', 'currency', 'MXN', 'timeZone', 'America/Hermosillo', 'status', 'draft',
+    'items', pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+      'orderItemId', item_id::text, 'snapshot', snap, 'quantity', 1,
+      'restaurantId', restaurant::text, 'branchId', branch::text, 'status', 'pending', 'note', null
+    ))
   );
   order_audits := pg_catalog.jsonb_build_array(
     pg_catalog.jsonb_build_object(
       'schemaVersion', 1, 'eventId', confirmation_event::text, 'idempotencyKey', confirmation_command->>'idempotencyKey',
       'restaurantId', restaurant::text, 'branchId', branch::text, 'orderId', confirmed_order::text, 'actorId', actor::text,
-      'deviceId', device::text, 'occurredAt', pg_catalog.to_char(now_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-      'action', 'order_placed', 'details', pg_catalog.jsonb_build_object('totalMinor', 15000)
+      'deviceId', device::text, 'occurredAt', stamp, 'operation', 'order.created',
+      'entityType', 'order', 'entityId', confirmed_order::text, 'to', 'draft'
+    ),
+    pg_catalog.jsonb_build_object(
+      'schemaVersion', 1, 'eventId', item_event::text, 'idempotencyKey', gen_random_uuid()::text,
+      'restaurantId', restaurant::text, 'branchId', branch::text, 'orderId', confirmed_order::text, 'actorId', actor::text,
+      'deviceId', device::text, 'occurredAt', stamp, 'operation', 'order.item_added',
+      'entityType', 'order_item', 'entityId', item_id::text, 'orderItemId', item_id::text
     )
   );
 
@@ -339,26 +341,29 @@ begin
   line_id := gen_random_uuid();
   confirmed_order := gen_random_uuid();
   confirmation_event := gen_random_uuid();
+  item_event := gen_random_uuid();
+  item_id := gen_random_uuid();
 
   execute 'set local role app_api';
   created := app_private.create_capture_draft(actor, pg_catalog.jsonb_build_object(
     'schemaVersion', 1, 'scope', pg_catalog.jsonb_build_object('restaurantId', restaurant::text, 'branchId', branch::text),
     'captureDraftId', target_capture::text, 'expectedVersion', 0, 'eventId', gen_random_uuid()::text,
-    'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', now_at,
+    'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', stamp,
     'sourceChannel', 'phone', 'fulfillmentChannel', 'counter'
   ));
   execute 'reset role';
+  if created->>'status' <> 'applied' then raise exception 'LOCKED_INGREDIENTS_LOCKED_CAPTURE_CREATE_FAILED: %', created; end if;
   lease := created#>>'{record,detail,attentionLeaseId}';
 
   command := pg_catalog.jsonb_build_object(
     'schemaVersion', 1, 'scope', pg_catalog.jsonb_build_object('restaurantId', restaurant::text, 'branchId', branch::text),
     'captureDraftId', target_capture::text, 'expectedVersion', 1, 'attentionLeaseId', lease,
-    'eventId', gen_random_uuid()::text, 'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', now_at
+    'eventId', gen_random_uuid()::text, 'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', stamp
   );
   plan := pg_catalog.jsonb_build_object(
     'schemaVersion', 1, 'catalogVersion', v_catalog_id::text, 'lines', pg_catalog.jsonb_build_array(
       pg_catalog.jsonb_build_object(
-        'lineId', line_id::text, 'productId', product_pizza::text, 'quantity', 1, 'note', null,
+        'lineId', line_id::text, 'productId', product_pizza::text, 'variantId', null, 'quantity', 1, 'note', null,
         'fraction', pg_catalog.jsonb_build_object(
           'geometry', 'halves',
           'slots', pg_catalog.jsonb_build_array(
@@ -377,45 +382,51 @@ begin
   execute 'set local role app_api';
   result := app_private.replace_capture_selection_plan(actor, command, plan);
   execute 'reset role';
+  if result->>'status' <> 'applied' then raise exception 'LOCKED_INGREDIENTS_LOCKED_PLAN_FAILED: %', result; end if;
 
   confirmation_command := pg_catalog.jsonb_build_object(
     'schemaVersion', 2, 'scope', pg_catalog.jsonb_build_object('restaurantId', restaurant::text, 'branchId', branch::text),
     'captureDraftId', target_capture::text, 'expectedVersion', 2, 'eventId', confirmation_event::text,
-    'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', now_at,
+    'idempotencyKey', gen_random_uuid()::text, 'deviceId', device::text, 'occurredAt', stamp,
     'attentionLeaseId', lease, 'orderId', confirmed_order::text, 'shiftId', shift::text, 'tableId', null,
     'currency', 'MXN', 'timeZone', 'America/Hermosillo'
   );
+  snap := pg_catalog.jsonb_build_object(
+    'catalogVersion', v_catalog_id::text, 'productId', product_pizza::text, 'name', 'Pizza Moderna',
+    'stationId', 'kitchen', 'unit', 'piece',
+    'unitPrice', pg_catalog.jsonb_build_object('amountMinor', 15000, 'currency', 'MXN'),
+    'modifiers', pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+      'modifierId', 'exclude:half-a:' || o_cebolla::text, 'name', 'Sin Cebolla',
+      'groupId', 'fraction-exclusion', 'groupName', 'exclude:half-a',
+      'groupCatalogVersion', v_catalog_id::text,
+      'unitPrice', pg_catalog.jsonb_build_object('amountMinor', 0, 'currency', 'MXN'), 'quantity', 1
+    )),
+    'geometry', 'halves',
+    'fractionBreakdown', pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object('fraction', 'half-a', 'flavorOptionId', o_pep::text, 'flavorName', 'Pepperoni', 'amountMinor', 15000),
+      pg_catalog.jsonb_build_object('fraction', 'half-b', 'flavorOptionId', o_haw::text, 'flavorName', 'Hawaiana', 'amountMinor', 15000)
+    )
+  );
   order_record := pg_catalog.jsonb_build_object(
-    'schemaVersion', 1, 'id', confirmed_order::text, 'restaurantId', restaurant::text, 'branchId', branch::text,
-    'shiftId', shift::text, 'orderNumber', 102, 'status', 'placed', 'placedAt', pg_catalog.to_char(now_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    'items', pg_catalog.jsonb_build_array(
-      pg_catalog.jsonb_build_object(
-        'orderItemId', gen_random_uuid()::text, 'productId', product_pizza::text, 'variantId', null, 'name', 'Pizza Moderna',
-        'stationId', 'kitchen', 'unitPriceMinor', 15000, 'quantity', 1, 'status', 'active', 'note', null,
-        'fraction', pg_catalog.jsonb_build_object(
-          'geometry', 'halves',
-          'slots', pg_catalog.jsonb_build_array(
-            pg_catalog.jsonb_build_object('fraction', 'half-a', 'flavorOptionId', o_pep::text, 'extraOptionIds', '[]'::jsonb, 'excludedIngredientIds', pg_catalog.jsonb_build_array(o_cebolla::text)),
-            pg_catalog.jsonb_build_object('fraction', 'half-b', 'flavorOptionId', o_haw::text, 'extraOptionIds', '[]'::jsonb, 'excludedIngredientIds', '[]'::jsonb)
-          )
-        ),
-        'fractionBreakdown', pg_catalog.jsonb_build_array(
-          pg_catalog.jsonb_build_object('fraction', 'half-a', 'flavorOptionId', o_pep::text, 'flavorName', 'Pepperoni', 'extraOptionIds', '[]'::jsonb, 'excludedIngredientIds', pg_catalog.jsonb_build_array(o_cebolla::text)),
-          pg_catalog.jsonb_build_object('fraction', 'half-b', 'flavorOptionId', o_haw::text, 'flavorName', 'Hawaiana', 'extraOptionIds', '[]'::jsonb, 'excludedIngredientIds', '[]'::jsonb)
-        ),
-        'modifiers', pg_catalog.jsonb_build_array(
-          pg_catalog.jsonb_build_object(
-            'modifierId', 'exclude:half-a:' || o_cebolla::text,
-            'name', 'Sin Cebolla',
-            'groupId', 'fraction-exclusion',
-            'groupName', 'exclude:half-a',
-            'groupCatalogVersion', v_catalog_id::text,
-            'unitPrice', pg_catalog.jsonb_build_object('amountMinor', 0, 'currency', 'MXN'),
-            'quantity', 1
-          )
-        ),
-        'subtotalMinor', 15000, 'taxMinor', 0, 'totalMinor', 15000
-      )
+    'schemaVersion', 1, 'orderId', confirmed_order::text, 'restaurantId', restaurant::text, 'branchId', branch::text,
+    'channel', 'counter', 'currency', 'MXN', 'timeZone', 'America/Hermosillo', 'status', 'draft',
+    'items', pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+      'orderItemId', item_id::text, 'snapshot', snap, 'quantity', 1,
+      'restaurantId', restaurant::text, 'branchId', branch::text, 'status', 'pending', 'note', null
+    ))
+  );
+  order_audits := pg_catalog.jsonb_build_array(
+    pg_catalog.jsonb_build_object(
+      'schemaVersion', 1, 'eventId', confirmation_event::text, 'idempotencyKey', confirmation_command->>'idempotencyKey',
+      'restaurantId', restaurant::text, 'branchId', branch::text, 'orderId', confirmed_order::text, 'actorId', actor::text,
+      'deviceId', device::text, 'occurredAt', stamp, 'operation', 'order.created',
+      'entityType', 'order', 'entityId', confirmed_order::text, 'to', 'draft'
+    ),
+    pg_catalog.jsonb_build_object(
+      'schemaVersion', 1, 'eventId', item_event::text, 'idempotencyKey', gen_random_uuid()::text,
+      'restaurantId', restaurant::text, 'branchId', branch::text, 'orderId', confirmed_order::text, 'actorId', actor::text,
+      'deviceId', device::text, 'occurredAt', stamp, 'operation', 'order.item_added',
+      'entityType', 'order_item', 'entityId', item_id::text, 'orderItemId', item_id::text
     )
   );
 
@@ -497,7 +508,7 @@ begin
     select 1 from app.menu_products p
     where p.restaurant_id = restaurant and p.catalog_id = test_catalog and p.id = product_pizza
       and p.fraction_locked_ingredient_option_ids = array[o_jamon]
-  ) then raise exception 'NEW_PAYLOAD_WITHOUT_EXCLUDABLE_VERIFICATION_FAILED'; end if;
+  ) then raise exception 'NEW_PAYLOAD_WITHOUT_EXCLUDABLE_VERIFICATION_FAILED: %', save_status; end if;
 
   -- 7.3. Desbloquear todo: locked: [] con etiquetas presentes deja fraction_locked_ingredient_option_ids = '{}'
   test_catalog := gen_random_uuid();
