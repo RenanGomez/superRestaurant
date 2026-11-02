@@ -109,10 +109,14 @@ begin
     actor,restaurant_a,branch_a,save_event,save_key,device,now_at,0,save_catalog,'MXN',payload) s;
   execute 'reset role';
   if save_status<>'saved' then raise exception 'CATALOG_HALVES_SAVE_REJECTED'; end if;
-  if save_state#>'{catalog,products,0,variants,0,fraction}' is distinct from pg_catalog.jsonb_build_object(
+  if (save_state#>'{catalog,products,0,variants,0,fraction}') - 'lockedIngredientOptionIds' is distinct from pg_catalog.jsonb_build_object(
       'enabled',true,'flavorGroupId',g_flavor::text,'extraGroupId',g_extra::text,
       'excludableIngredientIds',pg_catalog.jsonb_build_array('cebolla','piña'))
   then raise exception 'CATALOG_HALVES_STATE_ROUNDTRIP'; end if;
+  if pg_catalog.jsonb_typeof(save_state#>'{catalog,products,0,variants,0,fraction,lockedIngredientOptionIds}') is distinct from 'array'
+    or not (save_state#>'{catalog,products,0,variants,0,fraction,lockedIngredientOptionIds}' @> pg_catalog.jsonb_build_array(o_queso::text))
+    or not (save_state#>'{catalog,products,0,variants,0,fraction,lockedIngredientOptionIds}' <@ pg_catalog.jsonb_build_array(o_queso::text))
+  then raise exception 'CATALOG_HALVES_LOCKED_INGREDIENT_OPTIONS'; end if;
   -- A size without a fraction reads back `fraction: null`.
   payload := pg_catalog.jsonb_set(payload,'{products,0,variants,0}',save_variant - 'fraction');
   save_event := gen_random_uuid(); save_key := gen_random_uuid(); save_catalog := gen_random_uuid();
