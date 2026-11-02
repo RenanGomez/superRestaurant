@@ -125,3 +125,19 @@ test("the table name reaches kitchen and ticket documents, and the fallback neve
   assert.ok(unnamed.includes("Mesa: Mesa"));
   assert.ok(!unnamed.some((line) => line.includes(tableId)));
 });
+
+test("account name formats as Mesa: <name> · <account> or Cuenta: <account> when tableId is null", () => {
+  const tableId = "5b7f0c1e-2a4d-4e8b-9c3f-1d2e3f4a5b6c";
+  const header = { restaurantName: "R", branchName: "S" };
+  const onTableWithAccount = { ...order, tableId, accountLabel: "Juan" };
+  assert.ok(buildKitchenDocuments(onTableWithAccount, "Mesa 2")[0]!.lines.includes("Mesa: Mesa 2 · Juan"));
+  assert.ok(buildCustomerTicket(onTableWithAccount, [], header, "Mesa 2").lines.includes("Mesa: Mesa 2 · Juan"));
+
+  const counterWithAccount = { ...order, tableId: null, accountLabel: "Familia Pérez" };
+  assert.ok(buildKitchenDocuments(counterWithAccount)[0]!.lines.includes("Cuenta: Familia Pérez"));
+  assert.ok(buildCustomerTicket(counterWithAccount, [], header).lines.includes("Cuenta: Familia Pérez"));
+
+  const counterWithoutAccount = { ...order, tableId: null, accountLabel: null };
+  const counterLines = [...buildKitchenDocuments(counterWithoutAccount)[0]!.lines, ...buildCustomerTicket(counterWithoutAccount, [], header).lines];
+  assert.ok(!counterLines.some((line) => line.startsWith("Cuenta:")));
+});

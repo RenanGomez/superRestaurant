@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { findMembership, BRANCH_PREFERENCE_COOKIE, parseBranchPreference } from "../../../lib/memberships";
 import { getRequestAuthorizedBranch, getRequestMemberships, getRequestSession } from "../../../lib/request-context";
 import { TablesBoard } from "./tables-board";
-import { assignWaiterAction, createTableOrderAction, listWaitersAction, openShiftAction, readTablesBoardAction, tableOrderDetailAction } from "./actions";
+import { assignWaiterAction, createTableOrderAction, listWaitersAction, openShiftAction, readTablesBoardAction, setOrderAccountLabelAction, tableOrderDetailAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -24,5 +24,5 @@ export default async function TablesPage() {
   const canOpenShift = authorized.roles.some((role) => role === "owner" || role === "admin" || role === "manager" || role === "supervisor" || role === "cashier");
   return <TablesBoard scope={scope} branchName={membership.branchName} restaurantName={membership.restaurantName}
     actorId={session.user.id} canManage={canManage} canOpenShift={canOpenShift}
-    actions={{ read: readTablesBoardAction, create: createTableOrderAction, assign: assignWaiterAction, waiters: listWaitersAction, openShift: openShiftAction, detail: tableOrderDetailAction }} />;
+    actions={{ read: readTablesBoardAction, create: createTableOrderAction, assign: assignWaiterAction, setAccountLabel: setOrderAccountLabelAction, waiters: listWaitersAction, openShift: openShiftAction, detail: tableOrderDetailAction }} />;
 }

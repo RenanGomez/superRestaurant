@@ -177,10 +177,16 @@ function OrderCard({ order, canCheckout, tableNames, selected, compact, onOpenDe
   readonly compact: boolean;
   readonly onOpenDetail: () => void;
 }) {
+  const headline = order.channel === "table"
+    ? tableLabel(order.tableId, tableNames, order.accountLabel)
+    : order.accountLabel !== null && order.accountLabel.trim().length > 0
+      ? `${channelLabel(order.channel)} · ${order.accountLabel.trim()}`
+      : channelLabel(order.channel);
+
   return <li className={`rounded-xl ${selected ? "border-2 border-selected bg-surface" : "border border-border bg-bg"} ${compact ? "p-3" : "p-4"}`} aria-current={selected ? "true" : undefined}>
     <div className="flex items-start justify-between gap-2">
       <div>
-        <strong className="block">{order.channel === "table" ? tableLabel(order.tableId, tableNames) : channelLabel(order.channel)}</strong>
+        <strong className="block">{headline}</strong>
         <span className="block text-xs text-text-muted">{formatOrderWorkTime(order.createdAt, order.timeZone)} · {preparationLabel(order.preparation)}</span>
       </div>
       <span className="text-right font-semibold">{formatMinorUnits(order.totals.totalMinor, order.totals.currency)}</span>

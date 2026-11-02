@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { cookies } from "next/headers";
 import {
   parseAssignOrderWaiterResultV1, parseBranchOperationalContextV1, parseOpenOperationalShiftResultV1, parseOperationalShiftListV1, parseOrderMutationSummaryV1,
-  parseTableBoardV1, type BranchMemberV1, type DiningLayoutV1, type OperationalShiftSummaryV1,
+  parseSetOrderAccountLabelResultV1, parseTableBoardV1, type BranchMemberV1, type DiningLayoutV1, type OperationalShiftSummaryV1,
   type TableBoardV1,
 } from "@super-restaurant/shared-types";
 import { getServerEnv } from "../../../env";
@@ -135,6 +135,25 @@ export async function assignWaiterAction(orderId: string, expectedVersion: numbe
   if (response === undefined || !response.ok) return failure(response);
   const value = parseAssignOrderWaiterResultV1(await response.json().catch(() => undefined));
   return value?.orderId === orderId && value.waiterUserId === waiterUserId && value.scope.restaurantId === ctx.scope.restaurantId && value.scope.branchId === ctx.scope.branchId
+    ? { ok: true } : { ok: false, error: "unavailable" };
+}
+
+export async function setOrderAccountLabelAction(
+  orderId: string, expectedVersion: number, attempt: Attempt, accountLabel: string | null,
+): Promise<{ readonly ok: true } | Failure> {
+  const ctx = await context();
+  if (ctx === undefined) return { ok: false, error: "denied" };
+  const trimmed = accountLabel === null ? null : accountLabel.trim();
+  const normalizedLabel = trimmed === null || trimmed.length === 0 ? null : trimmed;
+  if (!uuid.test(orderId) || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1 || !validAttempt(attempt)
+    || (normalizedLabel !== null && normalizedLabel.length > 60)) return { ok: false, error: "invalid" };
+  const response = await request(ctx.token, ctx.base, "orders/account-label", {
+    ...attempt, schemaVersion: 1, scope: ctx.scope, orderId, expectedVersion, accountLabel: normalizedLabel,
+  });
+  if (response === undefined || !response.ok) return failure(response);
+  const value = parseSetOrderAccountLabelResultV1(await response.json().catch(() => undefined));
+  return value?.orderId === orderId && value.accountLabel === normalizedLabel
+    && value.scope.restaurantId === ctx.scope.restaurantId && value.scope.branchId === ctx.scope.branchId
     ? { ok: true } : { ok: false, error: "unavailable" };
 }
 

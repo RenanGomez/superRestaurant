@@ -36,3 +36,14 @@ test("tableLabel returns the configured name or the generic Mesa", () => {
   assert.equal(tableLabel(ID, undefined), "Mesa");
   assert.equal(tableLabel(null, names), "Mesa");
 });
+
+test("tableLabel appends accountLabel when present and trimmed", () => {
+  const names = new Map([[ID, "Mesa 2"]]);
+  assert.equal(tableLabel(ID, names, "Juan"), "Mesa 2 · Juan");
+  assert.equal(tableLabel(ID, names, "  Familia Pérez  "), "Mesa 2 · Familia Pérez");
+  assert.equal(tableLabel(ID, names, null), "Mesa 2");
+  assert.equal(tableLabel(ID, names, undefined), "Mesa 2");
+  assert.equal(tableLabel(ID, names, ""), "Mesa 2");
+  assert.equal(tableLabel(ID, names, "   "), "Mesa 2");
+  assert.equal(tableLabel(null, names, "Juan"), "Mesa · Juan");
+});
