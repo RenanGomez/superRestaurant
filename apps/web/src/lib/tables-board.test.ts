@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gridPlacement, groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterInitials, waiterLabel, waiterOptionLabel, waiterOptions } from "./tables-board.js";
+import { gridPlacement, groupBoardByZone, orderStatusLabel, tableStatusLabel, waiterCardState, waiterInitials, waiterLabel, waiterOptionLabel, waiterOptions } from "./tables-board.js";
 import type { DiningLayoutV1, TableBoardV1 } from "@super-restaurant/shared-types";
 
 const scope = { restaurantId: "11111111-1111-4111-8111-111111111111", branchId: "22222222-2222-4222-8222-222222222222" };
@@ -47,4 +47,12 @@ test("waiter options never produce an empty label and skip the actor and duplica
     { userId: "cccc3333-3333-4333-8333-333333333333", label: "Luis" },
   ]);
   assert.equal(waiterOptionLabel({ userId: "dddd4444", displayName: null }), "Mesero sin nombre (DDDD)");
+});
+
+test("waiter card state marks only the order being saved", () => {
+  const first = "11111111-1111-4111-8111-111111111111";
+  const second = "22222222-2222-4222-8222-222222222222";
+  assert.deepEqual(waiterCardState(first, first), { busy: true, label: "Guardando…" });
+  assert.deepEqual(waiterCardState(second, first), { busy: false, label: "Mesero" });
+  assert.deepEqual(waiterCardState(first, null), { busy: false, label: "Mesero" });
 });
