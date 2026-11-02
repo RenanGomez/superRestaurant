@@ -350,7 +350,7 @@ begin
         = pg_catalog.jsonb_array_length(entry.value->'modifierGroupIds')
     )) or (entry.value ? 'fraction' and entry.value->'fraction' <> 'null'::jsonb and not (
       app_private.jsonb_has_exact_keys(
-        entry.value->'fraction' - 'lockedIngredientOptionIds' - 'excludableIngredientIds',
+        ((entry.value->'fraction') - 'lockedIngredientOptionIds'::text) - 'excludableIngredientIds'::text,
         array['enabled','flavorGroupId','extraGroupId']
       )
       and pg_catalog.jsonb_typeof(entry.value->'fraction'->'enabled') = 'boolean'
@@ -393,7 +393,7 @@ begin
             variant_entry.value, array['variantId','name','unitPriceMinor','active','displayOrder','sku','fraction']
           )) or (variant_entry.value ? 'fraction' and variant_entry.value->'fraction' <> 'null'::jsonb and not (
             app_private.jsonb_has_exact_keys(
-              variant_entry.value->'fraction' - 'lockedIngredientOptionIds' - 'excludableIngredientIds',
+              ((variant_entry.value->'fraction') - 'lockedIngredientOptionIds'::text) - 'excludableIngredientIds'::text,
               array['enabled','flavorGroupId','extraGroupId']
             )
             and pg_catalog.jsonb_typeof(variant_entry.value->'fraction'->'enabled') = 'boolean'
