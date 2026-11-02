@@ -1,5 +1,27 @@
 # HANDOFF
 
+## Traspaso para la siguiente conversación — 2026-11-02 01:35 (IN_PROGRESS)
+
+**Estado de `main`** (todo integrado con puertas globales en verde; última verificación global 40/40 en 5d4c0ef y puertas por paquete después): retroalimentación del 2026-11-01 (9 paquetes), ronda 2 (mesas/cuentas, pulido del menú, nombre de cuenta), ronda 3 parcial (barra lateral fija, pestañas de mesa con totales y contador). Migraciones aplicadas en Supabase con autorización: `20261101000100`, `20261101000200` (backfill de grupos), `20261102000200`. API local 3000 y web 8082 arrancadas en ventanas propias.
+
+**Ramas listas o casi listas, NO integradas**
+- `claude/caja-split-payments-fix1` (c17385a, sobre `gemini/caja-split-payments`): bug del cobro «falla pero cobra» (redirect atrapado por try/catch), cotización sin reescritura, `OrderPaymentV1.capturedBy`, migración `20261102000300` + invariantes (verificadas en remoto con rollback), UI «Pagar total / Dividir pago», desglose de pagos, tarjetas expandibles. Revisión Claude: CORREGIR → corregido. Falta la segunda familia (Gemini se colgó dos veces; reintento en curso) → integrar, aplicar `20261102000300` (aditiva, cubierta por la autorización permanente; igual avisar), recompilar y reiniciar API.
+- `gemini/menu-locked-ingredients` (f1ce2f4; P2): migración `20261102000100` ya pasa en remoto con rollback; faltan las fixtures de `supabase/tests/menu_locked_ingredients_invariants.sql` (columnas de `operational_shifts`: usar `name,status,opened_at,opened_by`, ver brief `menu-locked-ingredients-fix3`); Gemini fix3 en curso (una vez colgado). Tras arreglar: repetir `scratchpad/run-remote-locked.ps1` (o equivalente), segunda revisión, integrar; contiene backfill → **pedir autorización explícita** antes de aplicar.
+
+**Siguientes paquetes en fila (ya escritos en `.claude/packets/`)**
+1. `menu-tabs-r2` (C): pestañas Categorías/Productos/Modificadores/Tamaños + anchos de inputs y «Duplicar» junto a «Activo». Tras integrar P2 (mismo editor).
+2. `menu-size-presets` (A): investigación en `.agents/reports/size-presets-research.md`; tras tabs.
+3. `web-nav-perf-r1` (B/C): `loading.tsx`, contexto compartido, `Promise.all`, `Link`; tras caja/menú.
+4. `menu-specialties` (P3, A): supuestos declarados (precio = mayor de las dos especialidades; sabores actuales como legado) salvo que Emmanuel diga otra cosa.
+
+**Motores**: regla «Codex y Gemini antes que Claude» (AGENTS §19.4, ORCHESTRATOR §3 regla 0, memoria `codex-gemini-before-claude`). Codex: cuenta principal vuelve ~02:13 y secundaria ~03:47 del 2026-11-02; cuota ≈ 2 tareas medianas por cuenta; el sandbox no puede commitear (`.git/worktrees/*/index.lock`): L0 commitea con `git -C C:/tmp/sr-wt/<task> add -A && commit`. Gemini: `.harness/bin/agent.ps1 -Engine gemini -Id <brief> -Model strong [-Write] -TimeoutMin N`; con `-Write` el brief le ordena crear `C:	mp\sr-wt\<id>`; desde ~01:00 se cuelga (logs de 670 bytes, timeout) con 2-3 corridas simultáneas: lanzar de una en una. Claude `implementer-claude` sólo como fallback documentado o segunda familia de revisión A.
+
+**Verificación SQL sin Postgres local**: `scratchpad/remote-rollback-invariants.mjs` (BEGIN → migraciones → invariantes → ROLLBACK, quita `set local role app_api`) con `SCHEMA_VERIFICATION_CONFIRMATION=ROLLBACK_ONLY`, URL base de `.env.adr010.local` + `?sslmode=verify-full`, CA `.certs/prod-ca-2021.crt`. Apply: `scratchpad/migrate-20261101.ps1` (preflight → stage → dryrun → apply → postcheck → cleanup) adaptando `$staging`, `$candidate` y los `--functions` del postcheck; luego `pnpm --filter @super-restaurant/api... build` y reiniciar `tmp/start-authorized-local-api.ps1 3000` en ventana propia (`cmd /c start`).
+
+**Pendiente de Emmanuel**: `toolsgentic\local-servers\e2e-auth.bat` (sesión Playwright muerta desde el 2026-11-01; sin ella no hay verificación visual ni ronda 5 del arnés `claude/web-e2e-harness-r5`); CP 85860 en Zonas; dos decisiones de especialidades; cuentas de prueba en Mesa 2 y Mesa 5; smoke §13 de `docs/runbooks/guia-de-pruebas-operador.md`.
+
+**Limpieza pendiente (autorización)**: worktrees en `.claude/worktrees/agent-*` y `C:	mp\sr-wt\*`, ramas `claude/*`, `codex/*`, `gemini/*` ya integradas; `AGENTS.md.bak_20261021_221354`, `.agents/notes/legacy_*`, `.agents/plan.md`, `.agents/context.md`.
+
 ## Primera retroalimentación de Emmanuel en navegador: cinco paquetes integrados — 2026-11-01 (REVIEW)
 
 - Origen: Emmanuel probó /app/menu, /app/capture, /app/orders y /app/tables y dejó 25 observaciones. Se agruparon en paquetes de nivel C (UI) y uno B (contrato de bandeja); lo que exige contrato, SQL o API nuevo quedó en `.claude/packets/menu-model-v2-backlog.md` y en TODO «Retroalimentación 2026-11-01» como nivel A/B, sin iniciar.
