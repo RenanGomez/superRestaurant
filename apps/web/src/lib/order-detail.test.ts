@@ -33,7 +33,7 @@ function item(overrides: Partial<OrderDetailItemV1> = {}): OrderDetailItemV1 {
 
 function detail(overrides: Partial<OrderDetailV1> = {}): OrderDetailV1 {
   return {
-    availableActions: ["sendToKitchen"], channel: "table", createdAt: null,
+    accountLabel: null, availableActions: ["sendToKitchen"], channel: "table", createdAt: null,
     currency: "MXN", fulfillment: { addressLabel: null, channel: "table", customerLabel: null, paymentIntent: null, tableId: null },
     items: [item()], orderId: "72371a5f-2056-448d-9ddb-14ab6664a4e8", payments: [], schemaVersion: 1,
     scope, shortFolio: null, status: "open", tableId: null, timeZone: "America/Mexico_City",

@@ -58,6 +58,9 @@ const tableItem = {
   totals: { ...deliveryItem.totals, deliveryChargeMinor: 0, totalMinor: 20000 },
 } as const;
 expect(parseBranchOrderWorkItemV1(tableItem) !== undefined, "table item parses without payment intent or address");
+expect(parseBranchOrderWorkItemV1(tableItem)?.accountLabel === null, "table item normalizes an omitted account label");
+expect(parseBranchOrderWorkItemV1({ ...tableItem, accountLabel: "Juan" })?.accountLabel === "Juan", "table item accepts an account label");
+expect(parseBranchOrderWorkItemV1({ ...tableItem, accountLabel: "x".repeat(61) }) === undefined, "table item rejects a 61 character account label");
 
 const counterItemWithoutSnapshot = {
   ...deliveryItem,

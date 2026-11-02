@@ -118,6 +118,7 @@ export class OrderPaymentInFlightError extends OrderApplicationError {
 }
 
 export interface StoredOrder {
+  readonly accountLabel?: string | null;
   readonly order: Order;
   readonly version: number;
 }
@@ -245,7 +246,8 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
     const result = await this.database.query(sql, [actorId, scope.restaurantId, scope.branchId, orderId]);
     const raw = singleResult(result.rows);
     if (raw === null) return "missing";
-    const record = exactRecord(raw, ["schemaVersion", "scope", "order", "version", "updatedAt"]);
+    const record = exactRecordWithOptional(raw, ["schemaVersion", "scope", "order", "version", "updatedAt"], ["accountLabel"])
+      ?? exactRecord(raw, ["schemaVersion", "scope", "order", "version", "updatedAt"]);
     if (
       record === undefined
       || own(record, "schemaVersion") !== 1
@@ -255,7 +257,10 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
     const order = decodeOrderRecord(own(record, "order"));
     const version = positiveInteger(own(record, "version"));
     if (version === undefined || !orderMatchesScope(order, scope, orderId)) throw unavailable();
-    return Object.freeze({ order, version });
+    const rawAccountLabel = Object.hasOwn(record, "accountLabel") ? own(record, "accountLabel") : null;
+    const accountLabel = rawAccountLabel === null ? null : (typeof rawAccountLabel === "string" ? rawAccountLabel : undefined);
+    if (accountLabel === undefined) throw unavailable();
+    return Object.freeze({ accountLabel, order, version });
   }
 
   public async persist(
@@ -1033,6 +1038,7 @@ function projectOrderDetail(
   // `total - deliveryCharge`, or a tipped order would silently count its tip as part of the items total.
   const itemsTotalMinor = totals.subtotalBeforeOrderDiscount.amountMinor - totals.orderDiscount.amountMinor;
   return parseOrderDetailV1({
+    accountLabel: stored.accountLabel ?? null,
     availableActions: computeAvailableActions(order, roles, context?.delivery?.state === undefined || context.delivery.state === "pending" ? null : context.delivery.state),
     channel: order.channel,
     createdAt: receipt?.createdAt ?? null,
@@ -1205,6 +1211,27 @@ function exactRecord(value: unknown, keys: readonly string[]): Readonly<Record<s
     const ownKeys = Reflect.ownKeys(value);
     if (ownKeys.length !== keys.length || keys.some((key) => !ownKeys.includes(key))) return undefined;
     for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) return undefined;
+    }
+    return value as Readonly<Record<string, unknown>>;
+  } catch { return undefined; }
+}
+
+function exactRecordWithOptional(
+  value: unknown,
+  keys: readonly string[],
+  optionalKeys: readonly string[],
+): Readonly<Record<string, unknown>> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  try {
+    if (![Object.prototype, null].includes(Object.getPrototypeOf(value))) return undefined;
+    const ownKeys = Reflect.ownKeys(value);
+    for (const key of keys) {
+      if (!ownKeys.includes(key)) return undefined;
+    }
+    for (const key of ownKeys) {
+      if (typeof key !== "string" || (!keys.includes(key) && !optionalKeys.includes(key))) return undefined;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) return undefined;
     }

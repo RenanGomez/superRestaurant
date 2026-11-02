@@ -502,7 +502,11 @@ export function OrderDetailPanel({ orderId, tableNames, adding, onAddingChange, 
       {orderNotice !== undefined && <p role="status" className="mt-3 rounded-lg border border-border bg-bg p-3 text-sm font-semibold">{orderNotice}</p>}
       {detail === undefined && loadError === undefined && <p className="mt-4 text-sm text-text-muted">Cargando…</p>}
       {detail !== undefined && <>
-        {detail.channel === "table" && <p className="mt-1 text-sm font-semibold">{tableLabel(detail.tableId, tableNames)}</p>}
+        {detail.channel === "table" ? (
+          <p className="mt-1 text-sm font-semibold">{tableLabel(detail.tableId, tableNames, detail.accountLabel)}</p>
+        ) : detail.accountLabel !== null && detail.accountLabel.trim().length > 0 ? (
+          <p className="mt-1 text-sm font-semibold">{detail.accountLabel.trim()}</p>
+        ) : null}
         <p className="mt-1 text-sm">Total: <strong>{formatMinorUnits(detail.totals.totalMinor, detail.totals.currency)}</strong></p>
         <div className="mt-4 flex flex-wrap gap-2">
           {canAddItems(detail) && <button type="button" className={primaryButton} disabled={busyAction !== undefined || addBusy}

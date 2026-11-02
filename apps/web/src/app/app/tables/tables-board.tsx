@@ -32,6 +32,7 @@ interface Props {
     readonly read: () => Promise<Snapshot | Failure>;
     readonly create: (tableId: string, orderId: string, attempt: Attempt, waiterUserId: string | null) => Promise<{ readonly ok: true; readonly orderId: string; readonly waiterAssigned: boolean } | Failure>;
     readonly assign: (orderId: string, expectedVersion: number, attempt: Attempt, waiterUserId: string | null) => Promise<{ readonly ok: true } | Failure>;
+    readonly setAccountLabel: (orderId: string, expectedVersion: number, attempt: Attempt, accountLabel: string | null) => Promise<{ readonly ok: true } | Failure>;
     readonly waiters: () => Promise<{ readonly ok: true; readonly members: readonly BranchMemberV1[] } | Failure>;
     readonly openShift: (shiftId: string, attempt: Attempt) => Promise<{ readonly ok: true } | Failure>;
     readonly detail: (orderId: string) => Promise<{ readonly ok: true; readonly value: OrderDetailV1 } | { readonly ok: false; readonly error: string }>;
@@ -73,6 +74,8 @@ function WaiterPicker({ members, actorId, current, disabled, allowNone, onPick }
 export function TablesBoard({ scope, branchName, restaurantName, actorId, canManage, canOpenShift, actions }: Props) {
   const [waiters, setWaiters] = useState<readonly BranchMemberV1[] | null>(null);
   const [pickOrder, setPickOrder] = useState<string | null>(null);
+  const [editingAccountOrderId, setEditingAccountOrderId] = useState<string | null>(null);
+  const [editingAccountText, setEditingAccountText] = useState("");
   const waiterSeq = useRef(0);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [selected, setSelected] = useState<Selected | null>(null);
@@ -140,7 +143,7 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
 
   async function select(tableId: string, name: string, orders: readonly TableBoardActiveOrderV1[]) {
     selectedRef.current = { tableId, name, orders };
-    setSelected(selectedRef.current); setError(null); setNotice(null); setPickOrder(null); setOrderFeedback({});
+    setSelected(selectedRef.current); setError(null); setNotice(null); setPickOrder(null); setEditingAccountOrderId(null); setEditingAccountText(""); setOrderFeedback({});
     loadDetails(orders);
   }
 
@@ -152,7 +155,15 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
   }, [selected?.tableId]);
 
   function dialogKeys(event: React.KeyboardEvent<HTMLElement>) {
-    if (event.key === "Escape") { if (!busy && busyOrderId === null) { selectedRef.current = null; setSelected(null); } return; }
+    if (event.key === "Escape") {
+      if (editingAccountOrderId !== null) {
+        event.stopPropagation();
+        setEditingAccountOrderId(null);
+        return;
+      }
+      if (!busy && busyOrderId === null) { selectedRef.current = null; setSelected(null); }
+      return;
+    }
     if (event.key !== "Tab" || dialogRef.current === null) return;
     const controls = Array.from(dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled])'));
     if (controls.length === 0) return;
@@ -219,6 +230,54 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
     setBusyOrderId(null);
   }
 
+  async function saveAccountLabel(order: TableBoardActiveOrderV1, nextLabel: string) {
+    if (busy || busyOrderId !== null) return;
+    const trimmed = nextLabel.trim();
+    const normalized = trimmed.length === 0 ? null : trimmed;
+    if (normalized === (order.accountLabel ?? null)) {
+      setEditingAccountOrderId(null);
+      return;
+    }
+    setBusyOrderId(order.orderId);
+    setError(null);
+    setNotice(null);
+    setOrderFeedback((current) => ({ ...current, [order.orderId]: "" }));
+    let result: Awaited<ReturnType<Props["actions"]["setAccountLabel"]>>;
+    try {
+      result = await actions.setAccountLabel(order.orderId, order.version, attempt(), normalized);
+    } catch (error) {
+      unstable_rethrow(error);
+      result = { ok: false, error: "unavailable" };
+    }
+    if (!result.ok) {
+      if (result.error === "conflict" || result.error === "unavailable") {
+        const latest = await refresh(true);
+        const currentOrder = latest?.board.tables
+          .flatMap((table) => table.activeOrders)
+          .find((entry) => entry.orderId === order.orderId);
+        if (result.error === "unavailable" && (currentOrder?.accountLabel ?? null) === normalized) {
+          setOrderFeedback((current) => ({
+            ...current,
+            [order.orderId]: normalized === null ? "Nombre de cuenta eliminado." : "Nombre de cuenta actualizado.",
+          }));
+          setBusyOrderId(null);
+          setEditingAccountOrderId(null);
+          return;
+        }
+      }
+      setOrderFeedback((current) => ({ ...current, [order.orderId]: message(result.error) }));
+      setBusyOrderId(null);
+      return;
+    }
+    await refresh(true);
+    setOrderFeedback((current) => ({
+      ...current,
+      [order.orderId]: normalized === null ? "Nombre de cuenta eliminado." : "Nombre de cuenta actualizado.",
+    }));
+    setBusyOrderId(null);
+    setEditingAccountOrderId(null);
+  }
+
   async function openShift() {
     if (busy) return;
     setBusy(true); setError(null); setNotice(null);
@@ -281,15 +340,78 @@ export function TablesBoard({ scope, branchName, restaurantName, actorId, canMan
         {notice !== null && <p role="status" className="mt-3 rounded-lg border border-success p-3 text-sm">{notice}</p>}
         {selected.orders.length > 0 && <ul className="mt-4 grid gap-3">{selected.orders.map((order) => {
           const waiterState = waiterCardState(order.orderId, busyOrderId);
+          const isEditingAccount = editingAccountOrderId === order.orderId;
+          const isBusyWithOrder = busyOrderId === order.orderId;
           return <li key={order.orderId} className="rounded-lg border border-border p-3 text-sm">
             <p className="font-semibold">{orderStatusLabel(order.status)} · {time(order.openedAt, snapshot?.timeZone)} · {totalLabel(details[order.orderId])}</p>
+            {order.accountLabel !== null && order.accountLabel !== "" && (
+              <p className="mt-1 font-medium text-accent">Cuenta: {order.accountLabel}</p>
+            )}
             <p className="mt-1">Mesero: {waiterLabel(waiters ?? [], order.waiterUserId, actorId)}</p>
-            <div className="mt-2 flex flex-wrap gap-2"><Link className={`${primary} inline-flex items-center link-white`} href={`/app/orders?orderId=${order.orderId}`}>Ver cuenta</Link>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Link className={`${primary} inline-flex items-center link-white`} href={`/app/orders?orderId=${order.orderId}`}>Ver cuenta</Link>
               <button type="button" className={button} disabled={busy || busyOrderId !== null} aria-expanded={pickOrder === order.orderId}
-                onClick={() => setPickOrder(pickOrder === order.orderId ? null : order.orderId)}>{waiterState.label}</button></div>
+                onClick={() => { setEditingAccountOrderId(null); setPickOrder(pickOrder === order.orderId ? null : order.orderId); }}>{waiterState.label}</button>
+              <button type="button" className={button} disabled={busy || busyOrderId !== null} aria-expanded={isEditingAccount}
+                onClick={() => {
+                  if (isEditingAccount) {
+                    setEditingAccountOrderId(null);
+                  } else {
+                    setPickOrder(null);
+                    setEditingAccountOrderId(order.orderId);
+                    setEditingAccountText(order.accountLabel ?? "");
+                  }
+                }}>
+                Nombre
+              </button>
+            </div>
+            {isEditingAccount && (
+              <div className="mt-3 rounded-lg border border-border bg-bg p-3" role="group" aria-label="Editar nombre de cuenta">
+                <label htmlFor={`account-label-${order.orderId}`} className="block text-xs font-semibold text-text-muted">
+                  Nombre de la cuenta (máx. 60 caracteres, vacío para eliminar)
+                </label>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <input
+                    id={`account-label-${order.orderId}`}
+                    type="text"
+                    maxLength={60}
+                    disabled={isBusyWithOrder}
+                    value={editingAccountText}
+                    onChange={(e) => setEditingAccountText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void saveAccountLabel(order, editingAccountText);
+                      } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setEditingAccountOrderId(null);
+                      }
+                    }}
+                    placeholder="Ej. Juan, Familia Pérez"
+                    className="min-h-11 flex-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-70"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    className={primary}
+                    disabled={isBusyWithOrder}
+                    onClick={() => void saveAccountLabel(order, editingAccountText)}>
+                    {isBusyWithOrder ? "Guardando…" : "Guardar"}
+                  </button>
+                  <button
+                    type="button"
+                    className={button}
+                    disabled={isBusyWithOrder}
+                    onClick={() => setEditingAccountOrderId(null)}>
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
             {pickOrder === order.orderId && <WaiterPicker members={waiters} actorId={actorId} current={order.waiterUserId}
               disabled={waiterState.busy} allowNone onPick={(id) => void assign(order, id)} />}
-            {orderFeedback[order.orderId] && <p role="status" className="mt-2 text-xs text-text-muted">{orderFeedback[order.orderId]}</p>}
+            {orderFeedback[order.orderId] && <p role="status" aria-live="polite" className="mt-2 text-xs text-text-muted">{orderFeedback[order.orderId]}</p>}
           </li>;
         })}</ul>}
         {selected.orders.length === 0 && <p className="mt-3 text-sm text-text-muted">Mesa libre.</p>}

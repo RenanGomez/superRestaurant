@@ -20,16 +20,34 @@ export interface PrintHeader {
 /** The server's `shortFolio` when present (same first-8-characters rule), else the same derivation from the id. */
 const shortFolio = (order: OrderDetailV1) => order.shortFolio ?? order.orderId.slice(0, 8).toUpperCase();
 const METHOD_LABELS = { cash: "Efectivo", transfer: "Transferencia", card_manual: "Tarjeta" } as const;
-const context = (order: OrderDetailV1, tableName?: string): string[] => [
+
+const tableLine = (order: OrderDetailV1, tableName?: string, accountLabel?: string | null): string[] => {
+  const account = (accountLabel !== undefined ? accountLabel : order.accountLabel)?.trim();
+  const hasAccount = account !== undefined && account !== null && account.length > 0;
+  if (order.tableId !== null) {
+    const rawTable = tableName?.trim();
+    const baseTable = rawTable && rawTable.length > 0 ? rawTable : "Mesa";
+    if (hasAccount && !baseTable.includes(`· ${account}`)) {
+      return [`Mesa: ${baseTable} · ${account}`];
+    }
+    return [`Mesa: ${baseTable}`];
+  }
+  if (hasAccount) {
+    return [`Cuenta: ${account}`];
+  }
+  return [];
+};
+
+const context = (order: OrderDetailV1, tableName?: string, accountLabel?: string | null): string[] => [
   `Orden ${shortFolio(order)}`,
   `Canal: ${order.fulfillment.channel}`,
-  ...(order.tableId === null ? [] : [`Mesa: ${tableName ?? "Mesa"}`]),
+  ...tableLine(order, tableName, accountLabel),
   ...(order.fulfillment.customerLabel === null ? [] : [`Cliente: ${order.fulfillment.customerLabel}`]),
   ...(order.createdAt === null ? [] : [`Hora: ${new Intl.DateTimeFormat("es-MX", { dateStyle: "short", timeStyle: "short", timeZone: order.timeZone }).format(new Date(order.createdAt))}`]),
 ];
 
 /** `stationId` is read only when the authorized detail projection actually carries it. */
-export function buildKitchenDocuments(order: OrderDetailV1, tableName?: string): readonly PrintDocument[] {
+export function buildKitchenDocuments(order: OrderDetailV1, tableName?: string, accountLabel?: string | null): readonly PrintDocument[] {
   const groups = new Map<string, string[]>();
   for (const item of order.items) {
     if (item.status !== "sent" && item.status !== "preparing" && item.status !== "ready" && item.status !== "delivered") continue;
@@ -44,15 +62,15 @@ export function buildKitchenDocuments(order: OrderDetailV1, tableName?: string):
     if (item.note) lines.push(`Nota: ${item.note}`);
     groups.set(stationId, lines);
   }
-  return [...groups].map(([station, lines]) => ({ title: `Comanda · ${station}`, lines: [...context(order, tableName), "", ...lines] }));
+  return [...groups].map(([station, lines]) => ({ title: `Comanda · ${station}`, lines: [...context(order, tableName, accountLabel), "", ...lines] }));
 }
 
 /** Shows only amounts returned by the server. A payment summary represents one captured payment. */
 export function buildCustomerTicket(
-  order: OrderDetailV1, payments: readonly PaymentCollectionSummaryV1[], header: PrintHeader, tableName?: string,
+  order: OrderDetailV1, payments: readonly PaymentCollectionSummaryV1[], header: PrintHeader, tableName?: string, accountLabel?: string | null,
 ): PrintDocument {
   const money = (minor: number) => formatMinorUnits(minor, order.currency);
-  const lines = [header.restaurantName, header.branchName, ...context(order, tableName), ""];
+  const lines = [header.restaurantName, header.branchName, ...context(order, tableName, accountLabel), ""];
   for (const item of order.items) {
     if (item.status === "cancelled") continue;
     lines.push(`${item.quantity} × ${item.name}${item.variantName ? ` · ${item.variantName}` : ""}  ${money(item.lineTotalMinor)}`);

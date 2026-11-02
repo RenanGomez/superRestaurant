@@ -18,7 +18,7 @@ const orderId = "2ee5f057-7971-468d-b197-f946911743eb";
 
 function item(overrides: Partial<BranchOrderWorkItemV1> = {}): BranchOrderWorkItemV1 {
   return {
-    addressLabel: null, channel: "delivery", createdAt: "2026-09-26T18:00:00.000Z", customerLabel: null,
+    accountLabel: null, addressLabel: null, channel: "delivery", createdAt: "2026-09-26T18:00:00.000Z", customerLabel: null,
     deliveryState: null, fulfillmentChannel: "delivery", hasNotes: false, lineCount: 1, orderId, paymentIntent: null,
     preparation: "preparing", status: "open", tableId: null, timeZone: "America/Hermosillo",
     totals: { currency: "MXN", deliveryChargeMinor: 3000, itemsTotalMinor: 10000, tipMinor: 0, totalMinor: 13000 },
