@@ -86,3 +86,19 @@ apps/web/buttonmash-report/
 apps/web/e2e-report/
 
 .harness/runs/
+.harness/state/
+.harness/worktrees/
+.harness/context/repo.md
+
+# agent-harness: temporales, respaldos y salidas de depuración (por nombre, nunca por tamaño)
+.tmp/
+*.before
+*.before.*
+*.bak
+*.bak.*
+*.orig
+*.out
+*.patch
+__pycache__/
+screenshots/
+recordings/

@@ -1,0 +1,19 @@
+# agent-harness: temporales, respaldos y salidas de depuración (por nombre, nunca por tamaño)
+.tmp/
+tmp/
+*.before
+*.before.*
+*.bak
+*.bak.*
+*.orig
+*.log
+*.out
+*.patch
+.cache/
+__pycache__/
+screenshots/
+recordings/
+.harness/runs/
+.harness/state/
+.harness/worktrees/
+.harness/context/repo.md

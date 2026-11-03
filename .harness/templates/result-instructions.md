@@ -9,7 +9,7 @@ done | partial | blocked — una frase.
 ## Archivos tocados
 - ruta — qué cambió (o "ninguno")
 ## Verificación
-- qué ejecutaste/comprobaste y resultado
+- comando exacto y su salida real en un bloque ``` (ver REGLA DE EVIDENCIA)
 ## Riesgos / dudas
 - lo que el orquestador debe revisar o decidir
 ## Notas propuestas

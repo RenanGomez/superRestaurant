@@ -12,8 +12,10 @@ param(
   [string]$Model = 'default',            # alias fast|default|strong o nombre literal
   [ValidateSet('','minimal','low','medium','high','xhigh')][string]$Effort = '',  # solo codex
   [switch]$Write,                        # permite editar archivos
-  [switch]$Worktree,                     # trabaja en un git worktree aparte (codex)
-  [int]$TimeoutMin = 20                  # espera máxima del result (gemini/Antigravity)
+  [switch]$Worktree,                     # git worktree aparte (codex: --worktree; gemini: .harness/worktrees/<Id>)
+  [int]$TimeoutMin = 20,                 # espera máxima del result (gemini/Antigravity)
+  [switch]$Resumed,                      # lo pasa la tarea programada al relanzar tras un cooldown
+  [switch]$NoSchedule                    # lo pasa drain.ps1: la cola se encarga de reanudar
 )
 $ErrorActionPreference = 'Stop'
 $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -35,17 +37,55 @@ $runDir = Split-Path $log -Parent
 foreach ($d in @($runDir, (Split-Path $result -Parent))) { New-Item -ItemType Directory -Force $d | Out-Null }
 if (-not (Test-Path $brief)) { throw "No existe $brief" }
 
+# --- cuota: .harness/state/quota.json = { <motor>: { status, reset_at, msg } } ---
+$stateDir  = Join-Path $harness 'state'; New-Item -ItemType Directory -Force $stateDir | Out-Null
+$quotaFile = Join-Path $stateDir 'quota.json'
+$quota = if (Test-Path $quotaFile) { Get-Content $quotaFile -Raw -Encoding UTF8 | ConvertFrom-Json } else { [pscustomobject]@{} }
+$taskPath = '\agent-harness\'
+$taskName = "$(Split-Path $root -Leaf)-$Id" -replace '[^\w.-]', '_'
+$launch = $PSBoundParameters
+function Save-Quota { [IO.File]::WriteAllText($quotaFile, ($quota | ConvertTo-Json -Depth 5), $utf8) }
+# Programa el relanzamiento de este mismo run (mismos parámetros) para cuando vuelva la cuota.
+function Schedule-Resume([datetime]$at) {
+  $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Resumed')
+  foreach ($k in $launch.Keys) {
+    $v = $launch[$k]
+    if ($v -is [switch]) { if ($v -and $k -ne 'Resumed') { $a += "-$k" } } else { $a += @("-$k", "`"$v`"") }
+  }
+  $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ($a -join ' ') -WorkingDirectory $root
+  $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+  Register-ScheduledTask -TaskPath $taskPath -TaskName $taskName -Action $act -Settings $set `
+    -Trigger (New-ScheduledTaskTrigger -Once -At $at) -Force | Out-Null
+}
+function Exit-Queued([datetime]$at, [string]$why) {
+  $how = if ($NoSchedule) { 'Vuelve a la cola de drain' } else { Schedule-Resume $at; "Relanzamiento programado (tarea $taskPath$taskName)" }
+  [IO.File]::WriteAllText($result, "## Estado`nqueued — $why. $how; cuota desde $($at.ToString('yyyy-MM-dd HH:mm')).", $utf8)
+  "[$Engine queued hasta $($at.ToString('yyyy-MM-dd HH:mm'))] $result"
+  exit 75
+}
+if ($Resumed) { Unregister-ScheduledTask -TaskPath $taskPath -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
+$q = $quota.$Engine
+if ($q -and $q.status -eq 'cooldown' -and [datetime]$q.reset_at -gt (Get-Date)) {
+  Exit-Queued ([datetime]$q.reset_at).AddMinutes(2) "$Engine sin cuota hasta $($q.reset_at)"
+}
+
 $m = $cfg.$Engine.models.$Model
 if ($null -eq $m) { $m = $Model }      # nombre literal
 # formato del informe: plantilla del harness, o el texto que diga config.resultFormat
 $instr = if ($cfg.resultFormat) { "`n---`n$($cfg.resultFormat)`n" } else {
   (Get-Content (Join-Path $harness 'templates\result-instructions.md') -Raw -Encoding UTF8) -replace '\{MAX\}', $cfg.resultMaxLines }
-$prompt = (Get-Content $brief -Raw -Encoding UTF8) + "`n`nLee y respeta AGENTS.md del proyecto.`n"
-# Godot 4.6 crashes at start when it cannot create its log (sandbox: %APPDATA% is read-only); its wrapper avoids it
-if (Test-Path (Join-Path $root 'tools\godot.cmd')) {
-  $prompt += "Para correr Godot usa SIEMPRE tools\godot.cmd (mismos argumentos que el .exe; en Git Bash ./tools/godot.cmd), nunca el .exe directo: sin eso Godot crashea al arrancar en el sandbox.`n"
-}
-$prompt += $instr
+# codex ya carga AGENTS.md por su cuenta; solo se recuerda a los demás motores
+$rules = if ($Engine -eq 'codex') { "`n" } else { "`n`nLee y respeta AGENTS.md del proyecto.`n" }
+# evidencia obligatoria (también con config.resultFormat): drain marca "unverified" un informe sin bloque ```
+$evidence = @'
+
+REGLA DE EVIDENCIA (obligatoria): todo dato o comprobación del informe sale de algo que ejecutaste o leíste en
+esta tarea. En la verificación incluye un bloque ``` con el comando exacto y un extracto de su salida real
+(no la parafrasees). Si no pudiste comprobar algo, escribe "NO VERIFICADO: <motivo>" y no des el dato.
+Nunca respondas de memoria ni estimes. Leer archivos y ejecutar comandos de solo lectura está permitido
+aunque el brief diga "no ejecutes nada más".
+'@
+$prompt = (Get-Content $brief -Raw -Encoding UTF8) + $rules + $instr + $evidence
 
 # --- gemini: vía Antigravity agentapi (Gemini CLI ya no acepta cuentas personales) ---
 function Invoke-Antigravity {
@@ -78,6 +118,15 @@ function Invoke-Antigravity {
 
   $pfile = Join-Path $runDir 'prompt.md'
   $mode = if ($Write) { 'Puedes editar archivos dentro del alcance del brief.' } else { 'SOLO LECTURA: no modifiques ningún archivo salvo el informe.' }
+  if ($Worktree) {
+    # worktree dentro del proyecto (Antigravity solo ve la carpeta del proyecto); rama harness/<id>
+    $wt = Join-Path $harness "worktrees\$Id"
+    if (-not (Test-Path $wt)) {
+      $g = & git -C $root worktree add -b "harness/$Id" $wt 2>&1 | Out-String
+      if ($LASTEXITCODE -ne 0) { return @{ code = 2; out = "No pude crear el worktree (¿es un repo git con commits?): $g" } }
+    }
+    $mode += " Trabaja EXCLUSIVAMENTE dentro de la carpeta $wt (copia del repo en la rama harness/$Id): lee y edita solo ahí, nunca en $root fuera de ella. No hagas commit."
+  }
   [IO.File]::WriteAllText($pfile, $prompt, $utf8)
   if (Test-Path $result) { Remove-Item $result }
   $msg = "Lee y ejecuta las instrucciones del archivo $pfile . $mode Al terminar, escribe tu informe final (formato indicado en ese archivo) en $result con una sola escritura."
@@ -97,8 +146,12 @@ function Invoke-Antigravity {
 $args_ = @()
 switch ($Engine) {
   'codex' {
-    $args_ = @('exec','-C',$root,'--skip-git-repo-check','-o',$result,
+    # dieta de contexto: sin ~/.codex/config.toml (MCPs, plugins, notify) ni historial de sesión;
+    # lo necesario se pasa explícito desde config.json (codex.overrides)
+    $args_ = @('exec','--ignore-user-config','--ephemeral','-C',$root,'--skip-git-repo-check','-o',$result,
                '-s', $(if ($Write) {'workspace-write'} else {'read-only'}))
+    foreach ($o in $cfg.codex.overrides) { $args_ += @('-c',$o) }
+    if (-not $Effort -and $cfg.codex.defaultEffort) { $Effort = $cfg.codex.defaultEffort }
     if ($m)        { $args_ += @('-m',$m) }
     if ($Effort)   { $args_ += @('-c',"model_reasoning_effort=`"$Effort`"") }
     if ($Worktree) { $args_ += '--worktree' }
@@ -121,6 +174,21 @@ try {
   $code = $LASTEXITCODE }
 } finally { Pop-Location }
 [IO.File]::WriteAllText($log, ($out -join "`n"), $utf8)
+
+# cuota agotada → cooldown + relanzamiento. codex: "...or try again at Nov 3rd, 2026 2:11 AM."
+$text = $out -join "`n"
+if ($code -ne 0 -and $text -match 'usage limit|rate limit|RESOURCE_EXHAUSTED|quota exceeded') {
+  $at = (Get-Date).AddMinutes(60)      # el mensaje no trae hora: reintentar en 1 h
+  if ($text -match 'try again at ([A-Z][a-z]{2}) (\d{1,2})(?:st|nd|rd|th)?, (\d{4}) (\d{1,2}:\d{2} [AP]M)') {
+    $at = [datetime]::ParseExact("$($Matches[1]) $($Matches[2]) $($Matches[3]) $($Matches[4])", 'MMM d yyyy h:mm tt',
+                                 [Globalization.CultureInfo]::InvariantCulture)
+  }
+  $msg = ($text -split "`n" | Where-Object { $_ -match 'limit|quota|EXHAUSTED' } | Select-Object -First 1)
+  $quota | Add-Member $Engine ([pscustomobject]@{ status = 'cooldown'; reset_at = $at.ToString('s'); msg = "$msg".Trim() }) -Force
+  Save-Quota
+  Exit-Queued $at.AddMinutes(2) "$Engine agotó su cuota"
+}
+if ($code -eq 0 -and $q -and $q.status -eq 'cooldown') { $quota | Add-Member $Engine ([pscustomobject]@{ status = 'ok' }) -Force; Save-Quota }
 
 # claude escribe su respuesta en stdout: el result es esa salida
 if ($Engine -eq 'claude') { ($out | Where-Object { $_ -notmatch '^(Loaded cached|YOLO mode|Warning:)' }) -join "`n" | ForEach-Object { [IO.File]::WriteAllText($result, $_, $utf8) } }

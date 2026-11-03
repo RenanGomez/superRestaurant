@@ -1,20 +1,54 @@
 {
-  "paths": {
-    "brief":  ".agents/briefs/{id}.md",
-    "result": ".agents/reports/{id}.md",
-    "log":    ".harness/runs/{id}/log.txt"
-  },
-  "resultFormat": "Al terminar, entrega tu reporte EXACTAMENTE con la plantilla de AGENTS.md §10 (máximo 15 líneas).",
-  "codex": {
-    "models": { "fast": "", "default": "", "strong": "" },
-    "note": "Vacío = el modelo de ~/.codex/config.toml. Esfuerzo con -Effort low|medium|high (§3)."
-  },
-  "gemini": {
-    "models": { "fast": "flash_lite", "default": "flash", "strong": "pro" },
-    "note": "Vía Antigravity agentapi (cuenta Google AI Pro). Requiere Antigravity abierto."
-  },
-  "claude": {
-    "models": { "fast": "haiku", "default": "sonnet", "strong": "opus" }
-  },
-  "resultMaxLines": 15
+    "paths":  {
+                  "brief":  ".agents/briefs/{id}.md",
+                  "result":  ".agents/reports/{id}.md",
+                  "log":  ".harness/runs/{id}/log.txt"
+              },
+    "resultFormat":  "Al terminar, entrega tu reporte EXACTAMENTE con la plantilla de AGENTS.md §10 (máximo 15 líneas).",
+    "codex":  {
+                  "models":  {
+                                 "fast":  "gpt-6-luna",
+                                 "default":  "gpt-6.1-terra",
+                                 "strong":  "gpt-6.1-sol"
+                             },
+                  "note":  "Vacío = el modelo de ~/.codex/config.toml. Esfuerzo con -Effort low|medium|high (§3).",
+                  "defaultEffort":  "low",
+                  "overrides":  [
+                                    "windows.sandbox=\"unelevated\""
+                                ]
+              },
+    "gemini":  {
+                   "models":  {
+                                  "fast":  "flash_lite",
+                                  "default":  "flash",
+                                  "strong":  "pro"
+                              },
+                   "note":  "Vía Antigravity agentapi (cuenta Google AI Pro). Requiere Antigravity abierto."
+               },
+    "claude":  {
+                   "models":  {
+                                  "fast":  "haiku",
+                                  "default":  "sonnet",
+                                  "strong":  "opus"
+                              }
+               },
+    "resultMaxLines":  15,
+    "guard":  {
+                  "maxLines":  30,
+                  "note":  "guard.ps1: líneas de código que Claude puede escribir por sesión antes de tener que delegar. OVERRIDE en el mensaje del usuario lo levanta.",
+                  "enabled":  false
+              },
+    "queue":  {
+                  "maxParallel":  2,
+                  "note":  "drain.ps1: runs simultáneos máximos. Codex y Antigravity pueden ir en paralelo; dos escritores nunca tocan las mismas rutas (-Files)."
+              },
+    "largeFiles":  {
+                       "enabled":  true,
+                       "maxMB":  1,
+                       "allow":  [
+
+                                 ],
+                       "note":  "pre-commit: rechaza archivos staged \u003e maxMB salvo los que coincidan con allow (globs: \u0027godot/data/**\u0027, \u0027*.ogg\u0027). install.ps1 siembra allow con lo grande ya versionado. Excepción puntual: git commit --no-verify.",
+                       "seeded":  true
+                   }
 }
