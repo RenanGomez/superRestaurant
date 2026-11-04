@@ -3,11 +3,14 @@
   Ejecuta la cola (.harness/queue/*.json) por olas: tareas pending con dependencias done y motor con cuota,
   hasta config.queue.maxParallel a la vez, sin dos escritores sobre los mismos archivos.
   Si al final quedan tareas esperando cuota, programa UNA tarea de Windows que vuelve a correr drain al reset.
-  Resumen en .harness/state/drain.md. Lo lanza el orquestador (en background) o la tarea programada.
+  Con -Wait no termina: espera él mismo al reset y sigue, y solo sale cuando ya no queda nada que esperar.
+  Así, lanzado en background desde una conversación, su salida DESPIERTA a esa misma conversación al acabar
+  (la tarea de Windows queda solo como respaldo por si la app se cierra).
+  Resumen en .harness/state/drain.md.
 .EXAMPLE
-  powershell -NoProfile -File .harness/bin/drain.ps1
+  powershell -NoProfile -File .harness/bin/drain.ps1 -Wait     # desde la conversación, en background
 #>
-param([switch]$Resumed)
+param([switch]$Resumed, [switch]$Wait, [double]$MaxWaitHours = 12)
 $ErrorActionPreference = 'Stop'
 $utf8 = New-Object System.Text.UTF8Encoding $false
 $harness = Split-Path $PSScriptRoot -Parent
@@ -20,9 +23,14 @@ $taskPath = '\agent-harness\'
 $taskName = "$(Split-Path $root -Leaf)-drain" -replace '[^\w.-]', '_'
 if ($Resumed) { Unregister-ScheduledTask -TaskPath $taskPath -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
 
-# un solo drain por proyecto
+# un solo drain por proyecto: el lock guarda el PID; si ese proceso ya no existe, el lock está abandonado
 $lock = Join-Path $stateDir 'drain.lock'
-if ((Test-Path $lock) -and ((Get-Date) - (Get-Item $lock).LastWriteTime).TotalHours -lt 6) { "drain ya en marcha ($lock)"; exit 0 }
+if (Test-Path $lock) {
+  $owner = (Get-Content $lock -Raw) -as [int]
+  if ($owner -and $owner -ne $PID -and (Get-Process -Id $owner -ErrorAction SilentlyContinue)) {
+    "drain ya en marcha (PID $owner); sus resultados llegarán a quien lo lanzó. Resumen: .harness/state/drain.md"; exit 0
+  }
+}
 [IO.File]::WriteAllText($lock, "$PID", $utf8)
 
 function Load { Get-ChildItem $qDir -Filter *.json | ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json } }
@@ -50,7 +58,9 @@ function Overlap($a, $b) {   # prefijos de ruta en común = mismos archivos
 }
 
 $log = New-Object System.Collections.Generic.List[string]
+$deadline = (Get-Date).AddHours($MaxWaitHours)
 try {
+ while ($true) {      # una ronda por cada reset de cuota que se espera (-Wait); sin -Wait, una sola
   while ($true) {
     $all  = @(Load)
     $done = @($all | Where-Object { $_.status -eq 'done' } | ForEach-Object { $_.id })
@@ -88,7 +98,8 @@ try {
       @{ t = $t; p = (Start-Process powershell.exe -ArgumentList ($a -join ' ') -WorkingDirectory $root -WindowStyle Hidden -PassThru) }
     }
     foreach ($x in $procs) {
-      $x.p.WaitForExit(); $t = $x.t; $code = $x.p.ExitCode
+      while (-not $x.p.WaitForExit(60000)) { (Get-Item $lock).LastWriteTime = Get-Date }   # latido del lock
+      $t = $x.t; $code = $x.p.ExitCode
       $rp  = if ($cfg.paths -and $cfg.paths.result) { $cfg.paths.result } else { '.harness/runs/{id}/result.md' }
       $res = Join-Path $root ($rp -replace '\{id\}', $t.id)
       $line = if (Test-Path $res) { (Get-Content $res -Encoding UTF8 | Where-Object { $_ -and $_ -notmatch '^#' } | Select-Object -First 1) } else { '' }
@@ -120,11 +131,33 @@ try {
     Register-ScheduledTask -TaskPath $taskPath -TaskName $taskName -Action $act -Settings $set `
       -Trigger (New-ScheduledTaskTrigger -Once -At $at) -Force | Out-Null
     $next = "Relanzamiento de drain programado $($at.ToString('yyyy-MM-dd HH:mm')) ($taskPath$taskName)."
-  }
+  } else { Unregister-ScheduledTask -TaskPath $taskPath -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
   $all = @(Load)
   $sum = "# drain $(Get-Date -Format 'yyyy-MM-dd HH:mm')`n" + ($log -join "`n") + "`n`n" +
     "Cola: " + (($all | Group-Object status | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ' ') + "`n" +
     ($(if ($waiting) { "Esperando: " + (($waiting | ForEach-Object { "$($_.id)[$($_.engine)]" }) -join ', ') + "`n" } else { '' })) + $next
   [IO.File]::AppendAllText((Join-Path $stateDir 'drain.md'), "$sum`n`n", $utf8)
+
+  # -Wait: dormir hasta el reset (con latido en el lock) y hacer otra ronda; la tarea de Windows es el respaldo
+  if ($Wait -and $resets -and $at -lt $deadline) {
+    "[$(Get-Date -Format 'HH:mm')] esperando cuota hasta $($at.ToString('yyyy-MM-dd HH:mm'))…"
+    while ((Get-Date) -lt $at) { Start-Sleep 60; (Get-Item $lock).LastWriteTime = Get-Date }
+    $log.Add("- (reanudado tras esperar cuota hasta $($at.ToString('HH:mm')))")
+    continue
+  }
+  if ($Wait -and $resets) { $sum += "`nDejo de esperar: el próximo reset supera -MaxWaitHours ($MaxWaitHours h); queda la tarea programada." }
+  # lanzado por la tarea de Windows (nadie lo espera): avisar al usuario para que retome la conversación
+  if ($Resumed -and $log.Count) {
+    try {
+      $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+      $x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+      $txt = $x.GetElementsByTagName('text')
+      $null = $txt.Item(0).AppendChild($x.CreateTextNode("agent-harness: $(Split-Path $root -Leaf)"))
+      $null = $txt.Item(1).AppendChild($x.CreateTextNode("Volvió la cuota y la cola avanzó: " + (($all | Group-Object status | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ' ') + ". Retoma la conversación para revisar."))
+      [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe').Show([Windows.UI.Notifications.ToastNotification]::new($x))
+    } catch { }
+  }
   $sum
+  break
+ }
 } finally { Remove-Item $lock -ErrorAction SilentlyContinue }

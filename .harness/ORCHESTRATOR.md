@@ -22,7 +22,12 @@ Qué motor/modelo/esfuerzo por tipo de tarea: `routing.md`.
    citas a `map.md §N`. Nunca la conversación entera ni AGENTS.md copiado.
 3. **Encolar y drenar** (lo normal):
    `powershell -NoProfile -File .harness/bin/enqueue.ps1 -Id <id> -Engine <gemini|codex> [-Model] [-Effort] [-Write] [-Worktree] -Files <rutas> [-After <ids>]`
-   luego `powershell -NoProfile -File .harness/bin/drain.ps1` **en background**. Run suelto: `bin/agent.ps1` con los mismos parámetros.
+   luego `powershell -NoProfile -File .harness/bin/drain.ps1 -Wait` **en background** (herramienta de shell con
+   ejecución en segundo plano, nunca en primer plano ni con un bucle de espera propio). Con `-Wait`, si un motor se
+   queda sin cuota, drain espera él mismo al reset y continúa; solo termina cuando no queda nada que esperar, y
+   **ese fin te despierta** en esta misma conversación con el resumen: entonces revisa. No programes recordatorios
+   ni sondees mientras tanto. Si drain responde "ya en marcha", otro drain ya lleva la cola: no lances otro.
+   Run suelto (sin cola): `bin/agent.ps1` con los mismos parámetros, también en background.
 4. **Revisar** `runs/<id>/result.md` + `git diff` (en worktrees: rama `harness/<id>`). `log.txt` solo si falla.
    Todo cambio de un motor lo revisa Claude o el otro motor; correr tests del proyecto.
    **Evidencia:** un informe sin bloque ``` con comando y salida real, o con "NO VERIFICADO", no cuenta como hecho:
@@ -42,7 +47,10 @@ Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos 
   si una se agota, sigue con la otra. Para fijar una cuenta: `-Account A|B` en enqueue/agent; sin él, la libre.
 - `agent.ps1` detecta el agotamiento, marca el motor en `.harness/state/quota.json` (`cooldown`, `reset_at`) y sale
   con código 75 y result `queued`. Mientras dure, los runs a ese motor quedan `queued` sin gastar.
-- En la cola, drain deja esas tareas `pending` y programa **un** relanzamiento al reset (`\agent-harness\<proyecto>-drain`).
+- En la cola, drain deja esas tareas `pending`; con `-Wait` espera el reset él mismo (hasta `-MaxWaitHours`, 12) y
+  además programa **un** relanzamiento de respaldo (`\agent-harness\<proyecto>-drain`) por si la app se cierra.
+  Si es ese respaldo el que termina el trabajo, Windows muestra una notificación: al retomar la conversación, lee
+  `.harness/state/drain.md` y revisa los resultados.
   Un run suelto programa su propio relanzamiento (`\agent-harness\<proyecto>-<id>`).
 - Ante `queued`: **no** rehacerlo en Claude. Seguir con otras tareas o con el motor alternativo de `routing.md`.
 - Otros fallos (login, Antigravity cerrado): un reintento con el alternativo; si persiste, avisar al usuario.
