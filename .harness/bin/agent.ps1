@@ -15,7 +15,8 @@ param(
   [switch]$Worktree,                     # git worktree aparte (codex: --worktree; gemini: .harness/worktrees/<Id>)
   [int]$TimeoutMin = 20,                 # espera máxima del result (gemini/Antigravity)
   [switch]$Resumed,                      # lo pasa la tarea programada al relanzar tras un cooldown
-  [switch]$NoSchedule                    # lo pasa drain.ps1: la cola se encarga de reanudar
+  [switch]$NoSchedule,                   # lo pasa drain.ps1: la cola se encarga de reanudar
+  [string]$Account = ''                  # codex: cuenta de config.codex.accounts (A, B…); vacío = la primera con cuota
 )
 $ErrorActionPreference = 'Stop'
 $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -64,10 +65,41 @@ function Exit-Queued([datetime]$at, [string]$why) {
   exit 75
 }
 if ($Resumed) { Unregister-ScheduledTask -TaskPath $taskPath -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
-$q = $quota.$Engine
-if ($q -and $q.status -eq 'cooldown' -and [datetime]$q.reset_at -gt (Get-Date)) {
-  Exit-Queued ([datetime]$q.reset_at).AddMinutes(2) "$Engine sin cuota hasta $($q.reset_at)"
+function CoolUntil($key) {
+  $c = $quota.$key
+  if ($c -and $c.status -eq 'cooldown' -and [datetime]$c.reset_at -gt (Get-Date)) { [datetime]$c.reset_at } else { $null }
 }
+
+# codex con varias cuentas (config.codex.accounts = { "A": ".codex-a", ... } relativo a $HOME): cada una con su
+# CODEX_HOME (codex login una vez en cada una) y su propio cooldown en quota.json ("codex-A", "codex-B")
+# compatibilidad: config.codex.homes (lista de rutas, formato anterior) → cuentas H1, H2…
+$hasAccounts = $cfg.codex.accounts -and @($cfg.codex.accounts.PSObject.Properties).Count   # ojo: $null.PSObject cuenta 1
+if ($cfg.codex.homes -and -not $hasAccounts) {
+  $acc = [ordered]@{}; $i = 0
+  foreach ($h in @($cfg.codex.homes | Where-Object { $_ })) { $acc["H$((++$i))"] = [Environment]::ExpandEnvironmentVariables($h) }
+  $cfg.codex | Add-Member accounts ([pscustomobject]$acc) -Force
+}
+$accounts = if ($Engine -eq 'codex' -and $cfg.codex.accounts) { @($cfg.codex.accounts.PSObject.Properties.Name) } else { @() }
+if ($accounts) {
+  if ($Account -and $accounts -notcontains $Account) { throw "Cuenta '$Account' no está en config.codex.accounts ($($accounts -join ', '))" }
+  if (-not $Account) {                 # la primera libre; si todas están agotadas, esperar a la que antes vuelva
+    $Account = $accounts | Where-Object { -not (CoolUntil "codex-$_") } | Select-Object -First 1
+    if (-not $Account) {
+      $soon = $accounts | Sort-Object { CoolUntil "codex-$_" } | Select-Object -First 1
+      Exit-Queued (CoolUntil "codex-$soon").AddMinutes(2) "todas las cuentas de codex sin cuota"
+    }
+    $launch['Account'] = $Account
+  }
+  $codexHome = [Environment]::ExpandEnvironmentVariables($cfg.codex.accounts.$Account)
+  if (-not [IO.Path]::IsPathRooted($codexHome)) { $codexHome = Join-Path $HOME $codexHome }
+  if (-not (Test-Path (Join-Path $codexHome 'auth.json'))) {
+    throw "Cuenta $Account sin sesión: ejecuta  `$env:CODEX_HOME='$codexHome'; codex login  una vez."
+  }
+  $env:CODEX_HOME = $codexHome
+}
+$qkey = if ($Account) { "codex-$Account" } else { $Engine }
+$q = $quota.$qkey
+if (CoolUntil $qkey) { Exit-Queued (CoolUntil $qkey).AddMinutes(2) "$qkey sin cuota hasta $($q.reset_at)" }
 
 $m = $cfg.$Engine.models.$Model
 if ($null -eq $m) { $m = $Model }      # nombre literal
@@ -86,6 +118,15 @@ Nunca respondas de memoria ni estimes. Leer archivos y ejecutar comandos de solo
 aunque el brief diga "no ejecutes nada más".
 '@
 $prompt = (Get-Content $brief -Raw -Encoding UTF8) + $rules + $instr + $evidence
+# Godot 4 crashea al arrancar en el sandbox (no puede crear su log en %APPDATA%); el wrapper del proyecto lo evita
+if (Test-Path (Join-Path $root 'tools\godot.cmd')) {
+  $prompt += "`nPara correr Godot usa SIEMPRE tools\godot.cmd (mismos argumentos que el .exe; en Git Bash ./tools/godot.cmd), nunca el .exe directo: sin eso Godot crashea al arrancar en el sandbox.`n"
+}
+# el sandbox de codex en Windows no deja escribir en carpetas que empiezan por punto: .agents/ → agents_out/
+$agentsOut = ($Engine -eq 'codex') -and $Write -and (Test-Path (Join-Path $root '.agents'))
+if ($agentsOut) {
+  $prompt += "`nIMPORTANTE (sandbox): no puedes escribir dentro de .agents/. Todo archivo que el brief te pida crear o editar bajo .agents/<ruta> escríbelo en agents_out/<ruta> (misma ruta relativa); el harness lo moverá a .agents/ al terminar. Si una escritura falla por 'Access denied' en otra carpeta, dilo en el informe.`n"
+}
 
 # --- gemini: vía Antigravity agentapi (Gemini CLI ya no acepta cuentas personales) ---
 function Invoke-Antigravity {
@@ -93,7 +134,8 @@ function Invoke-Antigravity {
         Where-Object { $_.CommandLine -match 'csrf_token\s+([0-9a-f-]{36})' } | Select-Object -First 1
   if (-not $ls) { return @{ code = 2; out = 'Antigravity no está abierto. Ábrelo y reintenta (o usa el fallback de routing.md).' } }
   $null = $ls.CommandLine -match 'csrf_token\s+([0-9a-f-]{36})'; $env:ANTIGRAVITY_CSRF_TOKEN = $Matches[1]
-  $exeA = ($ls.CommandLine -replace '^"([^"]+)".*','$1')
+  # ExecutablePath no depende de si la línea de comando trae la ruta entre comillas
+  $exeA = if ($ls.ExecutablePath) { $ls.ExecutablePath } else { ($ls.CommandLine -replace '^"([^"]+)".*','$1') -replace '\s+--.*$','' }
 
   # proyecto de Antigravity cuya carpeta contiene este repo
   $rootN = $root.TrimEnd('\').ToLower()
@@ -155,6 +197,7 @@ switch ($Engine) {
     if ($m)        { $args_ += @('-m',$m) }
     if ($Effort)   { $args_ += @('-c',"model_reasoning_effort=`"$Effort`"") }
     if ($Worktree) { $args_ += '--worktree' }
+    if ($Write)    { $args_ += @('--add-dir', $root) }   # en un worktree, sin esto codex rechaza escribir ("outside of the project")
     $args_ += '-'                       # prompt por stdin
   }
   'claude' {
@@ -175,6 +218,17 @@ try {
 } finally { Pop-Location }
 [IO.File]::WriteAllText($log, ($out -join "`n"), $utf8)
 
+# codex: mover lo que dejó en agents_out/ a .agents/ (ver nota del sandbox arriba)
+$outDir = Join-Path $root 'agents_out'
+if ($agentsOut -and (Test-Path $outDir)) {
+  Get-ChildItem $outDir -Recurse -File | ForEach-Object {
+    $dst = Join-Path (Join-Path $root '.agents') $_.FullName.Substring($outDir.Length).TrimStart('\')
+    New-Item -ItemType Directory -Force (Split-Path $dst -Parent) | Out-Null
+    Move-Item -Force $_.FullName $dst
+  }
+  Remove-Item -Recurse -Force $outDir -ErrorAction SilentlyContinue
+}
+
 # cuota agotada → cooldown + relanzamiento. codex: "...or try again at Nov 3rd, 2026 2:11 AM."
 $text = $out -join "`n"
 if ($code -ne 0 -and $text -match 'usage limit|rate limit|RESOURCE_EXHAUSTED|quota exceeded') {
@@ -182,13 +236,26 @@ if ($code -ne 0 -and $text -match 'usage limit|rate limit|RESOURCE_EXHAUSTED|quo
   if ($text -match 'try again at ([A-Z][a-z]{2}) (\d{1,2})(?:st|nd|rd|th)?, (\d{4}) (\d{1,2}:\d{2} [AP]M)') {
     $at = [datetime]::ParseExact("$($Matches[1]) $($Matches[2]) $($Matches[3]) $($Matches[4])", 'MMM d yyyy h:mm tt',
                                  [Globalization.CultureInfo]::InvariantCulture)
+  } elseif ($text -match 'try again at (\d{1,2}:\d{2} [AP]M)') {
+    # solo hora ("try again at 1:33 PM"): hoy, o mañana si ya pasó
+    $at = [datetime]::ParseExact("$((Get-Date).ToString('yyyy-MM-dd')) $($Matches[1])", 'yyyy-MM-dd h:mm tt',
+                                 [Globalization.CultureInfo]::InvariantCulture)
+    if ($at -lt (Get-Date)) { $at = $at.AddDays(1) }
   }
   $msg = ($text -split "`n" | Where-Object { $_ -match 'limit|quota|EXHAUSTED' } | Select-Object -First 1)
-  $quota | Add-Member $Engine ([pscustomobject]@{ status = 'cooldown'; reset_at = $at.ToString('s'); msg = "$msg".Trim() }) -Force
+  $quota | Add-Member $qkey ([pscustomobject]@{ status = 'cooldown'; reset_at = $at.ToString('s'); msg = "$msg".Trim() }) -Force
   Save-Quota
-  Exit-Queued $at.AddMinutes(2) "$Engine agotó su cuota"
+  # con otra cuenta libre, un run suelto (sin drain) se relanza ya con ella en lugar de esperar
+  $other = $accounts | Where-Object { $_ -ne $Account -and -not (CoolUntil "codex-$_") } | Select-Object -First 1
+  if ($other -and -not $NoSchedule) {
+    $launch['Account'] = $other
+    Schedule-Resume (Get-Date).AddMinutes(1)
+    [IO.File]::WriteAllText($result, "## Estado`nqueued — $qkey agotó su cuota; relanzado con la cuenta $other en 1 min.", $utf8)
+    "[$qkey sin cuota → relanzado con cuenta $other] $result"; exit 75
+  }
+  Exit-Queued $at.AddMinutes(2) "$qkey agotó su cuota"
 }
-if ($code -eq 0 -and $q -and $q.status -eq 'cooldown') { $quota | Add-Member $Engine ([pscustomobject]@{ status = 'ok' }) -Force; Save-Quota }
+if ($code -eq 0 -and $q -and $q.status -eq 'cooldown') { $quota | Add-Member $qkey ([pscustomobject]@{ status = 'ok' }) -Force; Save-Quota }
 
 # claude escribe su respuesta en stdout: el result es esa salida
 if ($Engine -eq 'claude') { ($out | Where-Object { $_ -notmatch '^(Loaded cached|YOLO mode|Warning:)' }) -join "`n" | ForEach-Object { [IO.File]::WriteAllText($result, $_, $utf8) } }
@@ -196,5 +263,5 @@ if (-not (Test-Path $result) -or (Get-Item $result).Length -eq 0) {
   [IO.File]::WriteAllText($result, "## Estado`nblocked — el motor no produjo informe (exit $code). Ver log.txt", $utf8)
 }
 $secs = [int]((Get-Date) - $start).TotalSeconds
-"[$Engine model=$(if($m){$m}else{'(cli default)'}) effort=$Effort write=$Write exit=$code ${secs}s] $result"
+"[$Engine$(if($Account){"-$Account"}) model=$(if($m){$m}else{'(cli default)'}) effort=$Effort write=$Write exit=$code ${secs}s] $result"
 exit $code

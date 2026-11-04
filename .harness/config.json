@@ -15,7 +15,12 @@
                   "defaultEffort":  "low",
                   "overrides":  [
                                     "windows.sandbox=\"unelevated\""
-                                ]
+                                ],
+                  "accounts_note":  "Varias cuentas de codex en paralelo: { \"A\": \".codex-a\", \"B\": \".codex-b\" } (carpetas en $HOME, \u0027codex login\u0027 una vez con CODEX_HOME apuntando a cada una). Vacío = ~/.codex. Cada cuenta tiene su cooldown; drain las reparte.",
+                  "accounts":  {
+                                   "A":  ".codex-a",
+                                   "B":  ".codex-b"
+                               }
               },
     "gemini":  {
                    "models":  {

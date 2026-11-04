@@ -15,7 +15,8 @@ param(
   [switch]$Worktree,
   [string[]]$Files = @(),                # rutas/carpetas que escribe (para no solapar escritores)
   [string[]]$After = @(),                # ids que deben terminar antes
-  [int]$Priority = 5                     # menor = antes
+  [int]$Priority = 5,                    # menor = antes
+  [string]$Account = ''                  # codex: fijar una cuenta (A, B…); vacío = drain elige la libre
 )
 $ErrorActionPreference = 'Stop'
 $harness = Split-Path $PSScriptRoot -Parent
@@ -27,7 +28,7 @@ $qDir = Join-Path $harness 'queue'; New-Item -ItemType Directory -Force $qDir | 
 $t = [ordered]@{
   id = $Id; engine = $Engine; model = $Model; effort = $Effort; write = [bool]$Write; worktree = [bool]$Worktree
   files = @($Files | ForEach-Object { $_ -split ',' } | Where-Object { $_ }); after = @($After | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
-  priority = $Priority; status = 'pending'; added = (Get-Date).ToString('s'); attempts = 0; outcome = ''
+  priority = $Priority; status = 'pending'; added = (Get-Date).ToString('s'); attempts = 0; outcome = ''; account = $Account
 }
 [IO.File]::WriteAllText((Join-Path $qDir "$Id.json"), ($t | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding $false))
 "encolada $Id [$Engine/$Model] after=$($t.after -join ',') files=$($t.files -join ',')"

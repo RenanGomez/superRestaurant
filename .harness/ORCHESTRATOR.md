@@ -10,7 +10,7 @@ puntual, unas pocas líneas) se hace directo: delegar lo que cuesta menos que el
 | Motor | Para | Cuota |
 |---|---|---|
 | `gemini` (Antigravity, Google AI Pro) | leer mucho, mapas, docs, tests, boilerplate, revisar diffs | abundante → **primero** |
-| `codex` (ChatGPT Plus) | features acotadas, bugs difíciles (sandbox real) | escasa → solo lo que la exige |
+| `codex` (ChatGPT Plus; varias cuentas en `config.codex.accounts`) | features acotadas, bugs difíciles (sandbox real) | escasa → solo lo que la exige |
 | subagente Claude (Agent) | búsquedas rápidas (haiku), tareas atadas a esta conversación (sonnet) | — |
 
 Qué motor/modelo/esfuerzo por tipo de tarea: `routing.md`.
@@ -37,6 +37,9 @@ Markdown, `.harness/` y `.claude/` no cuentan. No esquivarlo (shell, subagente C
 Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos motores están caídos y no puede esperar.
 
 ## Cuota
+- **Cuentas de codex en paralelo:** con `config.codex.accounts` (p. ej. A y B), cada cuenta es un carril con su propia
+  cuota (`codex-A`, `codex-B` en quota.json). drain reparte las tareas de codex de una ola entre cuentas distintas y,
+  si una se agota, sigue con la otra. Para fijar una cuenta: `-Account A|B` en enqueue/agent; sin él, la libre.
 - `agent.ps1` detecta el agotamiento, marca el motor en `.harness/state/quota.json` (`cooldown`, `reset_at`) y sale
   con código 75 y result `queued`. Mientras dure, los runs a ese motor quedan `queued` sin gastar.
 - En la cola, drain deja esas tareas `pending` y programa **un** relanzamiento al reset (`\agent-harness\<proyecto>-drain`).
@@ -46,7 +49,12 @@ Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos 
 
 ## Seguridad
 - Un escritor por ruta: tareas que escriben en paralelo con `-Files` disjuntos, o `-Worktree`.
-- gemini con `-Write` va **siempre** con `-Worktree` (su solo-lectura es una instrucción, no un sandbox).
+- `-Worktree` parte del **último commit**: úsalo solo si las rutas de la tarea no tienen cambios sin commitear.
+  Si los tienen, el motor trabajaría sobre código viejo: corre en la carpeta del proyecto con `-Files` disjuntos
+  de cualquier otro escritor y revisa su `git diff` al terminar. drain hace este cambio solo (quita `-Worktree`
+  si `git status` muestra cambios en esas `-Files` y lo anota en `state/drain.md`).
+- gemini con `-Write` sin worktree: su "solo tocar X" es una instrucción, no un sandbox. Brief con rutas exactas y
+  revisar el diff completo (`git status`), no solo los archivos esperados.
 - Antigravity debe estar abierto y el proyecto abierto en él al menos una vez. Cada run crea una conversación
   "harness <id>".
 - Sin push, deploy, merges ni borrados desde motores o subagentes: lo decide el usuario.

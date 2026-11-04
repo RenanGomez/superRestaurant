@@ -32,6 +32,16 @@ function CoolUntil($engine) {
   $q = (Quota).$engine
   if ($q -and $q.status -eq 'cooldown' -and [datetime]$q.reset_at -gt (Get-Date)) { [datetime]$q.reset_at } else { $null }
 }
+# codex con varias cuentas: cada una es un "carril" con su propia cuota (quota.json: codex-A, codex-B…)
+$accounts = if ($cfg.codex.accounts -and @($cfg.codex.accounts.PSObject.Properties).Count) { @($cfg.codex.accounts.PSObject.Properties.Name) }
+            elseif ($cfg.codex.homes) { $i = 0; @($cfg.codex.homes | Where-Object { $_ } | ForEach-Object { "H$((++$i))" }) }   # formato anterior
+            else { @() }
+function Keys($t) {
+  if ($t.engine -ne 'codex' -or -not $accounts) { return @($t.engine) }
+  if ($t.account) { return @("codex-$($t.account)") }
+  return @($accounts | ForEach-Object { "codex-$_" })
+}
+function FreeKeys($t) { @(Keys $t | Where-Object { -not (CoolUntil $_) }) }
 function Overlap($a, $b) {   # prefijos de ruta en común = mismos archivos
   foreach ($x in $a) { foreach ($y in $b) {
     $x2 = ($x -replace '\\','/').TrimEnd('/').ToLower(); $y2 = ($y -replace '\\','/').TrimEnd('/').ToLower()
@@ -44,14 +54,20 @@ try {
   while ($true) {
     $all  = @(Load)
     $done = @($all | Where-Object { $_.status -eq 'done' } | ForEach-Object { $_.id })
-    $ready = @($all | Where-Object { $_.status -eq 'pending' -and -not (CoolUntil $_.engine) -and
+    $ready = @($all | Where-Object { $_.status -eq 'pending' -and (FreeKeys $_).Count -and
                  -not (@($_.after) | Where-Object { $_ -and $done -notcontains $_ }) } | Sort-Object priority, added)
     # ola: hasta maxPar, escritores sin solapar (un escritor sin -Files bloquea a todos los demás escritores)
-    $wave = @()
+    $wave = @(); $used = @()
     foreach ($t in $ready) {
       if ($wave.Count -ge $maxPar) { break }
       $clash = $t.write -and ($wave | Where-Object { $_.write -and (-not $t.files.Count -or -not $_.files.Count -or (Overlap $t.files $_.files)) })
-      if (-not $clash) { $wave += $t }
+      if ($clash) { continue }
+      # cuenta de codex: una libre que no use ya otra tarea de esta ola (así A y B trabajan en paralelo)
+      $free = FreeKeys $t
+      $key = @($free | Where-Object { $used -notcontains $_ }) + $free | Select-Object -First 1
+      $used += $key
+      $t | Add-Member runAccount $(if ($key -like 'codex-*') { $key.Substring(6) } else { '' }) -Force
+      $wave += $t
     }
     if (-not $wave) { break }
 
@@ -59,8 +75,15 @@ try {
       $a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSScriptRoot\agent.ps1`"",'-NoSchedule',
              '-Engine',$t.engine,'-Id',"`"$($t.id)`"",'-Model',"`"$($t.model)`"")
       if ($t.effort)   { $a += @('-Effort',$t.effort) }
+      if ($t.runAccount) { $a += @('-Account',$t.runAccount) }
       if ($t.write)    { $a += '-Write' }
-      if ($t.worktree) { $a += '-Worktree' }
+      if ($t.worktree) {
+        # un worktree parte del último commit: con cambios sin commitear en sus rutas trabajaría sobre código viejo
+        [string[]]$paths = if (@($t.files).Count) { @($t.files) } else { @('.', ':(exclude).harness', ':(exclude).agents') }
+        $dirty = @(git -C $root status --porcelain -- @paths 2>$null)
+        if ($dirty) { $log.Add("- $($t.id): sin worktree ($($dirty.Count) cambios sin commitear en sus rutas); escribe en la carpeta") }
+        else { $a += '-Worktree' }
+      }
       $t.status = 'running'; $t.attempts++; Save $t
       @{ t = $t; p = (Start-Process powershell.exe -ArgumentList ($a -join ' ') -WorkingDirectory $root -WindowStyle Hidden -PassThru) }
     }
@@ -76,14 +99,18 @@ try {
         $t.status = if ($body -match '```' -and $body -notmatch 'NO VERIFICADO') { 'done' } else { 'unverified' }
       }
       else { $t.status = 'failed' }
+      $lane = "$($t.engine)$(if ($t.runAccount) { "-$($t.runAccount)" })"
+      $t.PSObject.Properties.Remove('runAccount')
       $t.outcome = "$line".Trim(); Save $t
-      $log.Add("- $($t.id) [$($t.engine)] → $($t.status) (exit $code): $($t.outcome)")
+      $log.Add("- $($t.id) [$lane] → $($t.status) (exit $code): $($t.outcome)")
     }
   }
 
   # lo que queda esperando cuota → un único relanzamiento al primer reset
   $waiting = @(Load | Where-Object { $_.status -eq 'pending' })
-  $resets  = @($waiting | ForEach-Object { CoolUntil $_.engine } | Where-Object { $_ } | Sort-Object)
+  # cada tarea esperando por cuota vuelve cuando se libere la primera de sus cuentas/motor
+  $resets  = @($waiting | Where-Object { -not (FreeKeys $_).Count } | ForEach-Object {
+               Keys $_ | ForEach-Object { CoolUntil $_ } | Where-Object { $_ } | Sort-Object | Select-Object -First 1 } | Sort-Object)
   $next = ''
   if ($resets) {
     $at = $resets[0].AddMinutes(2)

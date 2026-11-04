@@ -10,8 +10,8 @@ Codex solo para lo que exige sandbox real de escritura o depuración dura. Todo 
 |---|---|---|
 | Mapa del repo, auditoría, "¿dónde está X?" | gemini fast (+ `context/map.md`) | subagente haiku |
 | Docs, changelog, comentarios | gemini fast | encolar |
-| Tests nuevos, boilerplate, renombrados, ediciones mecánicas | **gemini default `-Write -Worktree`** | codex fast/low |
-| Feature acotada | codex default/low | gemini strong `-Write -Worktree` |
+| Tests nuevos, boilerplate, renombrados, ediciones mecánicas | **gemini default `-Write`** (+`-Worktree` si las rutas están commiteadas) | codex fast/low |
+| Feature acotada | codex default/low | gemini strong `-Write` (ídem) |
 | Bug difícil, concurrencia, rendimiento | codex strong/medium | encolar |
 | Revisión de diff | gemini strong (si escribió codex) · codex default/low (si escribió gemini) | subagente sonnet |
 | Investigación web / comparar librerías | gemini strong | Claude (WebSearch) |

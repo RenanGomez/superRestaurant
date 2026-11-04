@@ -15,5 +15,6 @@ screenshots/
 recordings/
 .harness/runs/
 .harness/state/
+.harness/queue/
 .harness/worktrees/
 .harness/context/repo.md
