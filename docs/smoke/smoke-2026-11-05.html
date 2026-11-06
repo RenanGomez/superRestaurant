@@ -78,7 +78,7 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.88em;background:var(
 const KEY = "sr-smoke-2026-11-05";
 const SECTIONS = [
  {t:"0. Preparación", items:[
-  {id:"prep-start", h:"Levantar servidores", s:["Si NO has autorizado/aplicado la migración 20261106000100: usa start-local.bat nobuild (la API ya está compilada y compatible). Si ya está aplicada: start-local.bat sin nobuild","Entra con emmanuel.rgomez@gmail.com, sucursal Navojoa","Abre la consola (F12)"], e:"Web y API cargan sin errores rojos en consola. Ojo: recompilar la API sin aplicar 20261106000100 hace fallar «Publicar» del menú."},
+  {id:"prep-start", h:"Levantar servidores", s:["Usa start-local.bat (la migración 20261106000100 ya está aplicada; la API en :3000 ya corre con el build nuevo)","Entra con emmanuel.rgomez@gmail.com, sucursal Navojoa","Abre la consola (F12)"], e:"Web y API cargan sin errores rojos en consola."},
   {id:"prep-e2e", h:"Renovar sesión del arnés E2E", s:["Ejecuta tools\\agentic\\local-servers\\e2e-auth.bat","Inicia sesión cuando lo pida"], e:"Se crea apps/web/playwright/.auth/user.json. Desbloquea mi verificación automática en navegador."},
  ]},
  {t:"1. Captura (/app/capture)", items:[
@@ -118,12 +118,11 @@ const CHANGES = [
  {h:"Retroalimentación 2 y 3 (2026-11-01/02)", p:"Pestañas de cuentas por mesa con total y contador, pulido de menú, barra lateral fija, caja con pagos divididos y «Faltan $X» del servidor."},
  {h:"Ingredientes bloqueados (P2)", p:"Migración 20261102000100 aplicada el 2026-11-05 y API local recompilada y reiniciada: el servidor ya acepta los ingredientes bloqueados."},
  {h:"Hoy (2026-11-05)", p:"menu-tabs-r2 integrado en main (5fbedbe): menú en cuatro pestañas accesibles con ?tab= y memoria local, filtro y contador de grupos, aviso de tamaños, «Duplicar» junto a «Activo» y anchos ajustados. Puertas web sin caché verdes; revisión APROBAR. Detalles menores conocidos: foco del panel poco visible, breve parpadeo al restaurar pestaña guardada, texto «(sin asignar)» redundante."},
- {h:"2026-11-06", p:"menu-tabs-p3 integrado (foco visible, sin parpadeo, «Sin asignar»). menu-size-presets-backend integrado: presets de tamaño por carta en contratos, dominio, SQL (20261106000100, NO aplicada) y API; la UI (menu-size-presets-ui) y web-nav-perf-r1 siguen en cola esperando un motor que funcione."},
+ {h:"2026-11-06", p:"menu-tabs-p3 integrado (foco visible, sin parpadeo, «Sin asignar»). menu-size-presets-backend integrado: presets de tamaño por carta en contratos, dominio, SQL (20261106000100, aplicada en remoto el 2026-11-06 con postcheck ok) y API; la UI (menu-size-presets-ui) y web-nav-perf-r1 siguen en cola esperando un motor que funcione."},
 ];
 const DECISIONS = [
  {h:"Regla «lista vacía legada ⇒ todo bloqueado»", p:"La migración 20261102000100 ya está aplicada (autorizada el 2026-11-05). Si al probar prefieres que la lista vacía signifique «nada bloqueado», dímelo y preparo una migración compensatoria."},
- {h:"Aplicar migración 20261106000100 (tamaños reutilizables)", p:"Integrada en main y probada en remoto con rollback (más regresiones de ingredientes bloqueados, mitades y grupos). Sólo esquema, sin backfill. El modo automático bloqueó aplicarla: sal del modo auto o respóndeme «autorizo aplicar 20261106000100» para que la aplique y recompile la API."},
- {h:"Codex sin poder escribir", p:"Ambas cuentas fallan en modo escritura (los comandos se quedan colgados); en sólo lectura funcionan. Probable causa: la app de escritorio de Codex abierta bloquea archivos del sandbox. ¿Puedes cerrarla para reintentar?"},
+  {h:"Codex sin poder escribir", p:"Ambas cuentas fallan en modo escritura (los comandos se quedan colgados); en sólo lectura funcionan. Probable causa: la app de escritorio de Codex abierta bloquea archivos del sandbox. ¿Puedes cerrarla para reintentar?"},
  {h:"CP 85860 en Zonas", p:"La dirección de prueba sale «Fuera de cobertura». Revisa /app/delivery-zones y dime si la zona Navojoa debe incluirlo."},
  {h:"Especialidades (P3)", p:"Supuesto: precio de mitades = mayor de las dos especialidades; los sabores actuales quedan como legado. Confirma o corrige."},
  {h:"Cuentas de prueba en Mesa 2 y 5", p:"¿Cancelarlas o dejarlas?"},
