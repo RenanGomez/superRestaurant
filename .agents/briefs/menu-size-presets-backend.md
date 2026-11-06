@@ -17,3 +17,6 @@ Presets de tamaño definidos una vez por carta y referenciados opcionalmente des
 
 ## Hecho cuando
 `pnpm turbo run lint typecheck test build --filter=@super-restaurant/shared-types --filter=@super-restaurant/domain --filter=@super-restaurant/api` verde (si tu Node no es 24 o el sandbox falla con EPERM, dilo; el orquestador repite). Commits locales `feat(menu): …` en tu rama. Informe con bloque ``` de comandos y salida real; lista de riesgos.
+
+## Reintento 2 (2026-11-06)
+El intento anterior agotó el tiempo. En tu worktree ya está commiteado (wip) lo de `packages/shared-types` y `packages/domain`: revísalo, complétalo si falta, y continúa con la migración SQL, `supabase/tests/menu_size_presets_invariants.sql` y `apps/api`. Escribe el informe aunque no termines todo (di qué falta).
