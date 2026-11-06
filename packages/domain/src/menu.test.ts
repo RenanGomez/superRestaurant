@@ -15,6 +15,7 @@ import {
   InactiveMenuCategoryError,
   InactiveMenuProductError,
   InactiveMenuProductVariantError,
+  InactiveMenuSizePresetError,
   InvalidSnapshotError,
   MenuCatalogRestaurantMismatchError,
   MenuCatalogVersionMismatchError,
@@ -24,6 +25,8 @@ import {
   MenuProductNotFoundError,
   MenuProductVariantNotFoundError,
   MenuProductVariantRequiredError,
+  MenuSizePresetNotFoundError,
+  MenuVariantSizePresetNameMismatchError,
   ModifierGroupMinimumNotMetError,
   ModifierGroupProductMismatchError,
   Money,
@@ -457,4 +460,102 @@ test("variant catalog validation rejects duplicate names and foreign currency, a
   )) as never;
   assert.throws(() => validateMenuCatalog(foreign), CurrencyMismatchError);
   assert.deepEqual(validateMenuCatalog(sizedMenuCatalog()).products[0]!.variants!.map(({ id }) => id), ["small", "large", "retired"]);
+});
+
+test("menu size presets validation, variant references, name synchrony, and snapshot freezing", () => {
+  const presetSmall = { id: "preset-small", name: "Chica", displayOrder: 0, active: true };
+  const presetLarge = { id: "preset-large", name: "Grande", displayOrder: 1, active: true };
+  const presetInactive = { id: "preset-retired", name: "Gigante", displayOrder: 2, active: false };
+
+  const catalogWithPresets = {
+    ...sizedMenuCatalog(),
+    sizePresets: [presetLarge, presetSmall, presetInactive],
+    products: sizedMenuCatalog().products.map((p) => {
+      if (p.id !== "burger") return p;
+      return {
+        ...p,
+        variants: [
+          { id: "small", name: "Chica", active: true, displayOrder: 0, unitPrice: new Money(8_000, "MXN"), sizePresetId: "preset-small" },
+          { id: "large", name: "Grande", active: true, displayOrder: 1, unitPrice: new Money(12_000, "MXN"), sizePresetId: "preset-large" },
+          { id: "custom", name: "Personalizada", active: true, displayOrder: 2, unitPrice: new Money(15_000, "MXN"), sizePresetId: null },
+        ],
+      };
+    }),
+  };
+
+  const validated = validateMenuCatalog(catalogWithPresets);
+  assert.equal(validated.sizePresets.length, 3);
+  assert.deepEqual(validated.sizePresets.map((p) => p.name), ["Chica", "Grande", "Gigante"]);
+  assert.equal(Object.isFrozen(validated.sizePresets), true);
+
+  const burgerVariants = validated.products.find((p) => p.id === "burger")!.variants!;
+  assert.equal(burgerVariants.length, 3);
+  assert.equal(burgerVariants[0]!.sizePresetId, "preset-small");
+  assert.equal(burgerVariants[0]!.name, "Chica");
+  assert.equal(burgerVariants[2]!.sizePresetId, undefined);
+
+  // Price snapshot freezes text variantName
+  const snapshot = createMenuProductPriceSnapshot(
+    catalogWithPresets,
+    { ...burgerContext, variantId: "small" },
+    burgerSelections,
+  );
+  assert.equal(snapshot.variantId, "small");
+  assert.equal(snapshot.variantName, "Chica");
+  assert.equal(typeof snapshot.variantName, "string");
+
+  // Rejection 1: variant references non-existent sizePresetId
+  const missingPreset = {
+    ...sizedMenuCatalog(),
+    sizePresets: [presetSmall],
+    products: sizedMenuCatalog().products.map((p) => (
+      p.id === "burger"
+        ? { ...p, variants: [{ id: "small", name: "Chica", active: true, displayOrder: 0, unitPrice: new Money(8_000, "MXN"), sizePresetId: "preset-unknown" }] }
+        : p
+    )),
+  };
+  assert.throws(() => validateMenuCatalog(missingPreset), MenuSizePresetNotFoundError);
+
+  // Rejection 2: variant references inactive sizePresetId
+  const inactivePresetCatalog = {
+    ...sizedMenuCatalog(),
+    sizePresets: [presetInactive],
+    products: sizedMenuCatalog().products.map((p) => (
+      p.id === "burger"
+        ? { ...p, variants: [{ id: "small", name: "Gigante", active: true, displayOrder: 0, unitPrice: new Money(8_000, "MXN"), sizePresetId: "preset-retired" }] }
+        : p
+    )),
+  };
+  assert.throws(() => validateMenuCatalog(inactivePresetCatalog), InactiveMenuSizePresetError);
+
+  // Rejection 3: variant.name !== preset.name
+  const mismatchedName = {
+    ...sizedMenuCatalog(),
+    sizePresets: [presetSmall],
+    products: sizedMenuCatalog().products.map((p) => (
+      p.id === "burger"
+        ? { ...p, variants: [{ id: "small", name: "Pequena", active: true, displayOrder: 0, unitPrice: new Money(8_000, "MXN"), sizePresetId: "preset-small" }] }
+        : p
+    )),
+  };
+  assert.throws(() => validateMenuCatalog(mismatchedName), MenuVariantSizePresetNameMismatchError);
+
+  // Rejection 4: duplicate preset id
+  const dupId = {
+    ...sizedMenuCatalog(),
+    sizePresets: [presetSmall, { ...presetSmall, name: "Otra" }],
+  };
+  assert.throws(() => validateMenuCatalog(dupId), DuplicateMenuEntityIdError);
+
+  // Rejection 5: duplicate preset lower(name)
+  const dupName = {
+    ...sizedMenuCatalog(),
+    sizePresets: [presetSmall, { id: "p-other", name: " chica ", displayOrder: 1, active: true }],
+  };
+  assert.throws(() => validateMenuCatalog(dupName), DuplicateMenuEntityIdError);
+
+  // Retrocompatibility: catalog without sizePresets validates and yields empty sizePresets
+  const plainCatalog = sizedMenuCatalog();
+  const validatedPlain = validateMenuCatalog(plainCatalog);
+  assert.deepEqual(validatedPlain.sizePresets, []);
 });

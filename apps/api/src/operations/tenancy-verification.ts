@@ -38,7 +38,13 @@ import {
   type TenancyVerificationConfig,
   type TenancyVerificationStage,
 } from "./tenancy-verification-config.js";
-import { DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL, DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters } from "./menu-variant-cleanup.js";
+import {
+  DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL,
+  DELETE_MENU_PRODUCT_VARIANTS_SQL,
+  DELETE_MENU_SIZE_PRESETS_SQL,
+  menuProductVariantDeleteParameters,
+  menuSizePresetDeleteParameters,
+} from "./menu-variant-cleanup.js";
 import { validateCatalogAuditSql } from "./schema-verification.js";
 import {
   appApiLifecycleAdvisoryLockKey,
@@ -2253,6 +2259,15 @@ async function cleanupFixtures(
           plan.menuCatalog.commands.map((item) => item.catalogVersion),
           plan.menuCatalog.commands.map((item) => item.productId),
         ));
+        const sizePresetsTable = await client.query<{ present: boolean }>(
+          "select pg_catalog.to_regclass('app.menu_size_presets') is not null as present",
+        );
+        if (sizePresetsTable.rows[0]?.present === true) {
+          await client.query(DELETE_MENU_SIZE_PRESETS_SQL, menuSizePresetDeleteParameters(
+            plan.restaurantIds,
+            plan.menuCatalog.commands.map((item) => item.catalogVersion),
+          ));
+        }
         await deleteRequiredFixtureRows(client, "app.menu_products", plan.menuCatalog.commands.map((item) => item.productId), created.map((item) => item.productId));
         await deleteRequiredFixtureRows(client, "app.menu_categories", plan.menuCatalog.commands.map((item) => item.categoryId), created.map((item) => item.categoryId));
         await deleteRequiredFixtureRows(client, "app.menu_catalog_audit_events", plan.menuCatalog.commands.map((item) => item.eventId), created.map((item) => item.eventId), "event_id");

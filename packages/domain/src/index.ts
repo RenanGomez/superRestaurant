@@ -52,6 +52,7 @@ export {
   InactiveMenuCategoryError,
   InactiveMenuProductError,
   InactiveMenuProductVariantError,
+  InactiveMenuSizePresetError,
   MenuFractionSelectionInvalidError,
   MenuCatalogRestaurantMismatchError,
   MenuCatalogVersionMismatchError,
@@ -61,6 +62,8 @@ export {
   MenuProductNotFoundError,
   MenuProductVariantNotFoundError,
   MenuProductVariantRequiredError,
+  MenuSizePresetNotFoundError,
+  MenuVariantSizePresetNameMismatchError,
   OrderAuditAuthorizationRequiredError,
   OrderAuditReasonRequiredError,
 } from "./errors.js";
@@ -392,6 +395,7 @@ export type {
   MenuProductCatalog,
   MenuProductSelectionContext,
   MenuProductVariantCatalog,
+  MenuSizePresetCatalog,
   ValidatedMenuCatalog,
 } from "./menu.js";
 export {

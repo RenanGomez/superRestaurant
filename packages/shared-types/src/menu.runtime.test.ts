@@ -1,9 +1,11 @@
 import {
   MAX_ORDER_ITEM_MODIFIER_GROUPS,
+  MENU_CATALOG_MAX_SIZE_PRESETS,
   MENU_CATALOG_SCHEMA_VERSION,
   MENU_CATEGORY_COLORS,
   parseMenuCatalogStateV1,
   parseMenuCatalogV1,
+  parseMenuSizePresetV1,
   parseSaveMenuCatalogCommandV1,
   parseUploadMenuImageCommandV1,
   parseCopyMenuImageCommandV1,
@@ -407,3 +409,106 @@ expectRejected(withCategory({ imagePath: `not-a-uuid-not-a-uuid-not-a-uuid-12345
 expectRejected({ ...command(), products: [{ ...(command().products as Record<string, unknown>[])[0], imagePath: categoryImage }] }, "a categories path is not a product image");
 expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), target: "category" }) !== undefined, "category target is accepted");
 expect(parseUploadMenuImageCommandV1({ ...uploadCommand(), target: "other" }) === undefined, "other target is rejected");
+
+// Size presets (MenuSizePresetV1): optional on input, defaults to [] on output.
+expect(MENU_CATALOG_MAX_SIZE_PRESETS === 24, "catalog allows at most 24 size presets");
+const preset1Id = "44444444-1111-4111-8111-111111111111";
+const preset2Id = "55555555-2222-4222-8222-222222222222";
+const preset3Id = "66666666-3333-4333-8333-333333333333";
+
+expect(parseMenuSizePresetV1({ id: preset1Id, name: "Chica", displayOrder: 0, active: true }) !== undefined, "valid size preset parses");
+expect(parseMenuSizePresetV1({ id: "not-a-uuid", name: "Chica", displayOrder: 0, active: true }) === undefined, "invalid preset id is rejected");
+expect(parseMenuSizePresetV1({ id: preset1Id, name: "", displayOrder: 0, active: true }) === undefined, "empty preset name is rejected");
+expect(parseMenuSizePresetV1({ id: preset1Id, name: " Chica", displayOrder: 0, active: true }) === undefined, "untrimmed preset name is rejected");
+expect(parseMenuSizePresetV1({ id: preset1Id, name: "a".repeat(81), displayOrder: 0, active: true }) === undefined, "preset name > 80 chars is rejected");
+expect(parseMenuSizePresetV1({ id: preset1Id, name: "Chica\u0000", displayOrder: 0, active: true }) === undefined, "control char in preset name is rejected");
+expect(parseMenuSizePresetV1({ id: preset1Id, name: "Chica", displayOrder: -1, active: true }) === undefined, "negative preset displayOrder is rejected");
+expect(parseMenuSizePresetV1({ id: preset1Id, name: "Chica", displayOrder: 0, active: "true" }) === undefined, "non-boolean active is rejected");
+expect(parseMenuSizePresetV1({ id: preset1Id, name: "Chica", displayOrder: 0, active: true, extra: 1 }) === undefined, "extra field on preset is rejected");
+
+// Default when absent
+const commandNoPresets = command();
+const parsedNoPresets = parseSaveMenuCatalogCommandV1(commandNoPresets);
+expectDefined(parsedNoPresets, "command without sizePresets parses");
+expect(Array.isArray(parsedNoPresets.sizePresets) && parsedNoPresets.sizePresets.length === 0, "sizePresets defaults to []");
+
+// Command with sizePresets
+const commandWithPresets = {
+  ...command(),
+  sizePresets: [
+    { id: preset2Id, name: "Grande", displayOrder: 1, active: true },
+    { id: preset1Id, name: "Chica", displayOrder: 0, active: true },
+    { id: preset3Id, name: "Mediana", displayOrder: 2, active: false },
+  ],
+};
+const parsedWithPresets = parseSaveMenuCatalogCommandV1(commandWithPresets);
+expectDefined(parsedWithPresets, "command with sizePresets parses");
+expect(parsedWithPresets.sizePresets?.length === 3, "sizePresets length is 3");
+expect(parsedWithPresets.sizePresets?.[0]?.name === "Chica", "sizePresets are sorted by displayOrder");
+expect(Object.isFrozen(parsedWithPresets.sizePresets), "sizePresets array is frozen");
+expect(Object.isFrozen(parsedWithPresets.sizePresets?.[0]), "sizePreset item is frozen");
+
+// Rejections for sizePresets
+expectRejected({ ...command(), sizePresets: "not-an-array" }, "non-array sizePresets is rejected");
+expectRejected({ ...command(), sizePresets: [
+  { id: preset1Id, name: "Chica", displayOrder: 0, active: true },
+  { id: preset1Id, name: "Grande", displayOrder: 1, active: true },
+] }, "duplicate size preset id is rejected");
+expectRejected({ ...command(), sizePresets: [
+  { id: preset1Id, name: "Chica", displayOrder: 0, active: true },
+  { id: preset2Id, name: "chica", displayOrder: 1, active: true },
+] }, "duplicate lower(name) size preset is rejected");
+expectRejected({ ...command(), sizePresets: [
+  { id: preset1Id, name: "Chica", displayOrder: 0, active: true },
+  { id: preset2Id, name: " CHICA ", displayOrder: 1, active: true },
+] }, "untrimmed duplicate name is rejected");
+
+// Max 24 size presets
+const max24Presets = Array.from({ length: 24 }, (_, i) => ({
+  id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+  name: `Preset ${i}`,
+  displayOrder: i,
+  active: true,
+}));
+expect(parseSaveMenuCatalogCommandV1({ ...command(), sizePresets: max24Presets }) !== undefined, "24 size presets is accepted");
+const max25Presets = Array.from({ length: 25 }, (_, i) => ({
+  id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+  name: `Preset ${i}`,
+  displayOrder: i,
+  active: true,
+}));
+expectRejected({ ...command(), sizePresets: max25Presets }, "more than 24 size presets is rejected");
+
+// Variant sizePresetId: absent defaults to null, explicit null parses to null, valid uuid parses to lowercase uuid
+const variantWithPreset = { ...baseVariant, sizePresetId: preset1Id };
+const parsedVariantWithPreset = parseSaveMenuCatalogCommandV1(withVariants([variantWithPreset]));
+expectDefined(parsedVariantWithPreset, "variant with sizePresetId parses");
+expect(parsedVariantWithPreset.products[0]?.variants?.[0]?.sizePresetId === preset1Id, "variant sizePresetId is preserved");
+
+const variantWithNullPreset = { ...baseVariant, sizePresetId: null };
+const parsedVariantWithNullPreset = parseSaveMenuCatalogCommandV1(withVariants([variantWithNullPreset]));
+expectDefined(parsedVariantWithNullPreset, "variant with sizePresetId: null parses");
+expect(parsedVariantWithNullPreset.products[0]?.variants?.[0]?.sizePresetId === null, "variant sizePresetId is null");
+
+const parsedVariantAbsentPreset = parseSaveMenuCatalogCommandV1(withVariants([baseVariant]));
+expectDefined(parsedVariantAbsentPreset, "variant with absent sizePresetId parses");
+expect(parsedVariantAbsentPreset.products[0]?.variants?.[0]?.sizePresetId === null, "variant sizePresetId defaults to null");
+
+expectRejected(withVariants([{ ...baseVariant, sizePresetId: "not-a-uuid" }]), "invalid sizePresetId is rejected");
+expectRejected(withVariants([{ ...baseVariant, sizePresetId: 123 }]), "non-string non-null sizePresetId is rejected");
+
+// MenuCatalogV1 with sizePresets parses and normalizes
+const catalogWithPresets = parseMenuCatalogV1({
+  catalogVersion: parsedWithPresets.catalogVersion,
+  currency: parsedWithPresets.currency,
+  categories: parsedWithPresets.categories,
+  products: parsedWithPresets.products,
+  modifierGroups: parsedWithPresets.modifierGroups,
+  sizePresets: parsedWithPresets.sizePresets,
+  version: 1,
+  updatedAt: "2026-09-02T22:00:01.000Z",
+  updatedBy: "5ed22a92-a93d-4034-9661-4df2b523517b",
+  replayed: false,
+});
+expectDefined(catalogWithPresets, "catalog with sizePresets parses");
+expect(catalogWithPresets.sizePresets?.length === 3, "catalog sizePresets preserved");

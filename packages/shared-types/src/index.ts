@@ -354,6 +354,16 @@ export interface MenuVariantFractionV1 {
 
 export type MenuProductFractionV1 = MenuVariantFractionV1;
 
+/** A reusable size preset ("Chica", "Grande") defined once per catalog. */
+export interface MenuSizePresetV1 {
+  readonly active: boolean;
+  readonly displayOrder: number;
+  readonly id: string;
+  readonly name: string;
+}
+
+export const MENU_CATALOG_MAX_SIZE_PRESETS = 24;
+
 /** A size of a product ("Chica", "Grande") with its own whole-unit price. */
 export interface MenuProductVariantV1 {
   readonly active: boolean;
@@ -361,6 +371,8 @@ export interface MenuProductVariantV1 {
   /** Optional on input (older producers); the normalized output always carries it, `null` when absent. */
   readonly fraction?: MenuVariantFractionV1 | null;
   readonly name: string;
+  /** Optional on input (older producers); the normalized output always carries it, `null` when absent. */
+  readonly sizePresetId?: string | null;
   readonly sku: string | null;
   readonly unitPriceMinor: number;
   readonly variantId: string;
@@ -425,12 +437,14 @@ export interface MenuModifierGroupV1 {
   readonly productId?: string | null;
 }
 
-interface MenuCatalogPayloadV1 {
+export interface MenuCatalogPayloadV1 {
   readonly catalogVersion: string;
   readonly categories: readonly MenuCategoryV1[];
   readonly currency: string;
   readonly modifierGroups: readonly MenuModifierGroupV1[];
   readonly products: readonly MenuProductV1[];
+  /** Optional on input (older producers); the normalized output always carries it, `[]` when absent. */
+  readonly sizePresets?: readonly MenuSizePresetV1[];
 }
 
 export interface MenuCatalogV1 extends MenuCatalogPayloadV1 {
@@ -606,10 +620,11 @@ export interface UpdateDiningTableDetailsCommandV1 extends DiningTableMutationCo
 }
 
 export function parseSaveMenuCatalogCommandV1(value: unknown): SaveMenuCatalogCommandV1 | undefined {
-  const record = parseExactPlainRecord(value, [
+  const requiredKeys = [
     "schemaVersion", "scope", "eventId", "idempotencyKey", "deviceId", "occurredAt",
     "expectedVersion", "catalogVersion", "currency", "categories", "products", "modifierGroups",
-  ]);
+  ];
+  const record = parseExactPlainRecord(value, [...requiredKeys, "sizePresets"]) ?? parseExactPlainRecord(value, requiredKeys);
   if (record === undefined || ownValue(record, "schemaVersion") !== MENU_CATALOG_SCHEMA_VERSION) return undefined;
   const scope = parseUuidBranchScope(ownValue(record, "scope"));
   const eventId = parseUuid(ownValue(record, "eventId"));
@@ -640,10 +655,11 @@ export function parseSaveMenuCatalogCommandV1(value: unknown): SaveMenuCatalogCo
 }
 
 export function parseMenuCatalogV1(value: unknown): MenuCatalogV1 | undefined {
-  const record = parseExactPlainRecord(value, [
+  const requiredKeys = [
     "catalogVersion", "currency", "categories", "products", "modifierGroups",
     "version", "updatedAt", "updatedBy", "replayed",
-  ]);
+  ];
+  const record = parseExactPlainRecord(value, [...requiredKeys, "sizePresets"]) ?? parseExactPlainRecord(value, requiredKeys);
   if (record === undefined) return undefined;
   const payload = parseMenuCatalogPayload(record);
   const version = parseBoundedInteger(ownValue(record, "version"), 1, Number.MAX_SAFE_INTEGER);
@@ -1103,18 +1119,39 @@ function parseMenuCatalogPayload(record: PlainRecord): MenuCatalogPayloadV1 | un
   const rawCategories = parseExactArray(ownValue(record, "categories"), 200);
   const rawProducts = parseExactArray(ownValue(record, "products"), 2_000);
   const rawModifierGroups = parseExactArray(ownValue(record, "modifierGroups"), 2_000);
+  const rawSizePresets = Object.hasOwn(record, "sizePresets")
+    ? parseExactArray(ownValue(record, "sizePresets"), MENU_CATALOG_MAX_SIZE_PRESETS)
+    : [];
   if (
     catalogVersion === undefined
     || currency === undefined
     || rawCategories === undefined
     || rawProducts === undefined
     || rawModifierGroups === undefined
+    || rawSizePresets === undefined
   ) return undefined;
 
   const categories = rawCategories.map(parseMenuCategoryV1);
   const products = rawProducts.map(parseMenuProductV1);
   const modifierGroups = rawModifierGroups.map(parseMenuModifierGroupV1);
-  if (categories.some(isUndefined) || products.some(isUndefined) || modifierGroups.some(isUndefined)) return undefined;
+  const sizePresets = rawSizePresets.map(parseMenuSizePresetV1);
+  if (
+    categories.some(isUndefined)
+    || products.some(isUndefined)
+    || modifierGroups.some(isUndefined)
+    || sizePresets.some(isUndefined)
+  ) return undefined;
+
+  const definedSizePresets = sizePresets as MenuSizePresetV1[];
+  const presetIds = new Set<string>();
+  const presetNames = new Set<string>();
+  for (const preset of definedSizePresets) {
+    const nameKey = preset.name.toLowerCase();
+    if (presetIds.has(preset.id) || presetNames.has(nameKey)) return undefined;
+    presetIds.add(preset.id);
+    presetNames.add(nameKey);
+  }
+  definedSizePresets.sort((left, right) => left.displayOrder - right.displayOrder || compareCodeUnits(left.id, right.id));
 
   const definedCategories = categories as MenuCategoryV1[];
   const definedProducts = products as MenuProductV1[];
@@ -1189,6 +1226,7 @@ function parseMenuCatalogPayload(record: PlainRecord): MenuCatalogPayloadV1 | un
     currency,
     modifierGroups: Object.freeze(definedModifierGroups),
     products: Object.freeze(definedProducts),
+    sizePresets: Object.freeze(definedSizePresets),
   });
 }
 
@@ -1310,11 +1348,28 @@ function parseMenuProductVariantsV1(record: PlainRecord): readonly MenuProductVa
   return Object.freeze(variants);
 }
 
+export function parseMenuSizePresetV1(value: unknown): MenuSizePresetV1 | undefined {
+  const record = parseExactPlainRecord(value, ["id", "name", "displayOrder", "active"]);
+  if (record === undefined) return undefined;
+  const id = parseUuid(ownValue(record, "id"));
+  const name = parseDisplayName(ownValue(record, "name"), 80);
+  const displayOrder = parseBoundedInteger(ownValue(record, "displayOrder"), 0, 1_000_000);
+  const active = ownValue(record, "active");
+  if (id === undefined || name === undefined || displayOrder === undefined || typeof active !== "boolean") {
+    return undefined;
+  }
+  return Object.freeze({ active, displayOrder, id, name });
+}
+
 function parseMenuProductVariantV1(value: unknown): MenuProductVariantV1 | undefined {
   const requiredKeys = ["variantId", "name", "unitPriceMinor", "active", "displayOrder", "sku"];
-  const record = parseExactPlainRecord(value, [...requiredKeys, "fraction"]) ?? parseExactPlainRecord(value, requiredKeys);
+  const record = parseExactRecordWithOptionalKeys(value, requiredKeys, ["fraction", "sizePresetId"]);
   if (record === undefined) return undefined;
   const fraction = Object.hasOwn(record, "fraction") ? parseMenuVariantFractionV1(ownValue(record, "fraction")) : null;
+  const rawSizePresetId = Object.hasOwn(record, "sizePresetId") ? ownValue(record, "sizePresetId") : null;
+  const parsedSizePresetId = rawSizePresetId === null ? null : parseUuid(rawSizePresetId);
+  if (rawSizePresetId !== null && parsedSizePresetId === undefined) return undefined;
+  const sizePresetId = parsedSizePresetId ?? null;
   const variantId = parseUuid(ownValue(record, "variantId"));
   const name = parseDisplayName(ownValue(record, "name"), 80);
   const unitPriceMinor = parseBoundedInteger(ownValue(record, "unitPriceMinor"), 0, Number.MAX_SAFE_INTEGER);
@@ -1326,7 +1381,7 @@ function parseMenuProductVariantV1(value: unknown): MenuProductVariantV1 | undef
     variantId === undefined || name === undefined || unitPriceMinor === undefined
     || typeof active !== "boolean" || displayOrder === undefined || sku === undefined || fraction === undefined
   ) return undefined;
-  return Object.freeze({ active, displayOrder, fraction, name, sku, unitPriceMinor, variantId });
+  return Object.freeze({ active, displayOrder, fraction, name, sizePresetId, sku, unitPriceMinor, variantId });
 }
 
 function parseMenuVariantFractionV1(value: unknown): MenuVariantFractionV1 | null | undefined {

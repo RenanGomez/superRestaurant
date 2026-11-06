@@ -10,7 +10,13 @@ import {
   type TenancyFixtureRecoveryDatabasePort,
   validateTenancyFixtureRecoverySnapshot,
 } from "./tenancy-fixture-recovery.js";
-import { DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL, DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters } from "./menu-variant-cleanup.js";
+import {
+  DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL,
+  DELETE_MENU_PRODUCT_VARIANTS_SQL,
+  DELETE_MENU_SIZE_PRESETS_SQL,
+  menuProductVariantDeleteParameters,
+  menuSizePresetDeleteParameters,
+} from "./menu-variant-cleanup.js";
 import { TenancyFixtureRecoveryError } from "./tenancy-fixture-recovery-config.js";
 
 const runId = "11111111-1111-4111-8111-111111111111";
@@ -533,4 +539,20 @@ test("shared-group assignments are deleted bound to restaurant, release and grou
   assert.ok(assignmentsAt > 0);
   assert.ok(assignmentsAt < source.indexOf('"app.menu_modifier_groups", validated'));
   assert.ok(assignmentsAt < source.indexOf('"app.menu_products", validated'));
+});
+
+test("size presets cleanup is bound to restaurant and release, after variants and before catalogs", () => {
+  for (const predicate of [
+    "restaurant_id = any($1::uuid[])",
+    "catalog_id = any($2::uuid[])",
+  ]) {
+    assert.ok(DELETE_MENU_SIZE_PRESETS_SQL.includes(predicate), predicate);
+  }
+  assert.match(DELETE_MENU_SIZE_PRESETS_SQL, /^delete from app\.menu_size_presets where /u);
+  assert.deepEqual(menuSizePresetDeleteParameters(["r"], ["c"]), [["r"], ["c"]]);
+  const source = readFileSync(new URL("../../src/operations/tenancy-fixture-recovery.ts", import.meta.url), "utf8");
+  const presetsAt = source.indexOf("DELETE_MENU_SIZE_PRESETS_SQL, menuSizePresetDeleteParameters");
+  assert.ok(presetsAt > 0);
+  assert.ok(presetsAt > source.indexOf("DELETE_MENU_PRODUCT_VARIANTS_SQL"));
+  assert.ok(presetsAt < source.indexOf('"app.menu_catalogs", validated'));
 });
