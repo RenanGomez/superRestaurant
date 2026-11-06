@@ -190,14 +190,24 @@ switch ($Engine) {
   'codex' {
     # dieta de contexto: sin ~/.codex/config.toml (MCPs, plugins, notify) ni historial de sesión;
     # lo necesario se pasa explícito desde config.json (codex.overrides)
-    $args_ = @('exec','--ignore-user-config','--ephemeral','-C',$root,'--skip-git-repo-check','-o',$result,
+    # codex exec no acepta --worktree junto con --ignore-user-config: el harness crea el worktree
+    # fuera de carpetas con punto (el sandbox de Windows no escribe en ellas), rama harness/<id>
+    $cwd = $root
+    if ($Worktree) {
+      $cwd = Join-Path 'C:\tmp\sr-wt' $Id
+      if (-not (Test-Path $cwd)) {
+        $g = & git -C $root worktree add -b "harness/$Id" $cwd 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw "No pude crear el worktree: $g" }
+      }
+      $prompt += "`nTrabaja EXCLUSIVAMENTE en $cwd (worktree en la rama harness/$Id). Al terminar haz commit local en esa rama si el sandbox lo permite; si no, dilo en el informe.`n"
+    }
+    $args_ = @('exec','--ignore-user-config','--ephemeral','-C',$cwd,'--skip-git-repo-check','-o',$result,
                '-s', $(if ($Write) {'workspace-write'} else {'read-only'}))
     foreach ($o in $cfg.codex.overrides) { $args_ += @('-c',$o) }
     if (-not $Effort -and $cfg.codex.defaultEffort) { $Effort = $cfg.codex.defaultEffort }
     if ($m)        { $args_ += @('-m',$m) }
     if ($Effort)   { $args_ += @('-c',"model_reasoning_effort=`"$Effort`"") }
-    if ($Worktree) { $args_ += '--worktree' }
-    if ($Write)    { $args_ += @('--add-dir', $root) }   # en un worktree, sin esto codex rechaza escribir ("outside of the project")
+    if ($Write)    { $args_ += @('--add-dir', $root) }   # informe y agents_out/ viven en $root
     $args_ += '-'                       # prompt por stdin
   }
   'claude' {
