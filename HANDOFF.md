@@ -1,5 +1,13 @@
 # HANDOFF
 
+## menu-tabs-r2 integrado y smoke interactivo — 2026-11-05 (REVIEW)
+
+- `menu-tabs-r2` (C): Codex falló dos veces (harness: `--worktree` incompatible con `--ignore-user-config`; luego sandbox colgado incluso en `pwd`) → fallback de `routing.md` a Gemini strong `-Write` (commit 875ad7c). Gemini dejó la carpeta principal en su rama y reportó puertas 100 % cacheadas; L0 repitió `pnpm turbo run lint typecheck test build --filter=@super-restaurant/web --force` en Node 24.19.0: 12/12, 0 cacheadas. Revisión: `reviewer` Sonnet (fallback por Codex caído) APROBAR, sólo P3 (foco invisible en tabpanel `outline-none`, parpadeo al restaurar pestaña de `localStorage`, «(sin asignar)» redundante). Integrado en `main` 5fbedbe sin push. Sin verificación en navegador (sin sesión E2E).
+- Smoke para Emmanuel: `docs/smoke/smoke-2026-11-05.html` (standalone; estados, notas, decisiones, exportar a Markdown/JSON). Sustituye la ampliación de §13 de la guía.
+- Deuda de herramientas: `agent.ps1` pasa `--worktree` + `--ignore-user-config` a codex (falla siempre con `-Worktree`); Codex sandbox colgado (ver memoria de refresh de ACL).
+- `20261102000100` aplicada con autorización explícita de Emmanuel («Autorizo aplicarla», 2026-11-05): preflight (única faltante, fuera de orden tras `000300`), staging 70 hash-idénticos, dry-run exigió `--include-all` (sólo esa migración), sin solapamiento de funciones con `000200/000300`, apply exit 0 (`tmp/migration-apply-20261102000100.log`), postcheck contra `000300` 49/5/100 con EXECUTE `app_api` en `save_menu_catalog` y `confirm_capture_draft_v3` (normalize/build sin grant, como antes), segundo dry-run `upToDate`, staging borrado. Nota: `run-migration-postcheck` falla con `NOT_LATEST` en migraciones fuera de orden; usar la última versión remota. API recompilada y reiniciada en 3000 (health 200). La regla «lista vacía legada ⇒ todo bloqueado» quedó vigente; invertirla requiere migración compensatoria.
+- Siguiente: smoke de Emmanuel; luego `menu-size-presets` (A) y `web-nav-perf-r1`.
+
 ## Traspaso para la siguiente conversación — 2026-11-02 03:30 (REVIEW)
 
 **Qué hay en `main` (e791c40 + docs)** — todo con puertas globales en verde (última corrida completa `--force` tras el merge de P2; ver línea siguiente del log) y migraciones aplicadas en Supabase salvo la indicada:

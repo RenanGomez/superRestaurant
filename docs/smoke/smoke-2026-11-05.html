@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smoke superRestaurant</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--mute:#6b6a66;--line:#e2e0da;--ok:#1f7a4a;--fail:#b3261e;--skip:#8a6d1f;--pend:#5b5b5b;--acc:#2c5bd6}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#151514;--card:#1f1f1d;--ink:#eceae4;--mute:#a09e97;--line:#34332f;--ok:#5cc28c;--fail:#ff8a80;--skip:#e0c062;--pend:#b5b3ad;--acc:#8fb0ff}}
+:root[data-theme=dark]{--bg:#151514;--card:#1f1f1d;--ink:#eceae4;--mute:#a09e97;--line:#34332f;--ok:#5cc28c;--fail:#ff8a80;--skip:#e0c062;--pend:#b5b3ad;--acc:#8fb0ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:980px;margin:0 auto;padding:20px 16px 80px}
+h1{font-size:1.5rem;margin:0 0 4px}h2{font-size:1.1rem;margin:28px 0 10px}
+.sub{color:var(--mute);margin:0 0 16px}
+.bar{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.prog{flex:1 1 220px;height:10px;background:var(--line);border-radius:6px;overflow:hidden;display:flex}
+.prog i{display:block;height:100%}
+button,select,input[type=text]{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px;min-height:40px}
+button{cursor:pointer}button:hover{border-color:var(--acc)}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.tabs{display:flex;gap:6px;margin:14px 0;flex-wrap:wrap}
+.tabs button[aria-selected=true]{background:var(--acc);color:#fff;border-color:var(--acc)}
+.item{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--pend);border-radius:10px;padding:12px 14px;margin:8px 0}
+.item[data-s=ok]{border-left-color:var(--ok)}.item[data-s=fail]{border-left-color:var(--fail)}.item[data-s=skip]{border-left-color:var(--skip)}
+.row{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+.row h3{flex:1 1 300px;font-size:.98rem;margin:0}
+.steps{margin:6px 0 8px 18px;padding:0;color:var(--ink)}.steps li{margin:2px 0}
+.exp{color:var(--mute);font-size:.9rem;margin:4px 0}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;border-radius:0;min-height:36px;padding:6px 10px;font-size:.85rem}
+.seg button[aria-pressed=true][data-v=ok]{background:var(--ok);color:#fff}
+.seg button[aria-pressed=true][data-v=fail]{background:var(--fail);color:#fff}
+.seg button[aria-pressed=true][data-v=skip]{background:var(--skip);color:#fff}
+.seg button[aria-pressed=true][data-v=pend]{background:var(--pend);color:#fff}
+textarea{width:100%;min-height:54px;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px}
+.tag{font-size:.75rem;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mute);white-space:nowrap}
+.tag.block{border-color:var(--fail);color:var(--fail)}
+.chg{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:8px 0}
+.chg b{display:block}.chg p{margin:4px 0;color:var(--mute);font-size:.92rem}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.88em;background:var(--line);padding:1px 5px;border-radius:4px}
+.hidden{display:none}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;opacity:0;transition:opacity .2s}
+@media (prefers-reduced-motion:reduce){#toast{transition:none}}
+</style>
+</head>
+<body>
+<main>
+<h1>Smoke superRestaurant · 2026-11-05</h1>
+<p class="sub">Marca cada punto, deja notas y exporta el resultado (botón «Exportar») para pegarlo en la conversación. Se guarda solo en este navegador.</p>
+
+<div class="bar">
+  <div class="prog" id="prog" aria-label="Progreso"></div>
+  <span id="count"></span>
+  <select id="filter" aria-label="Filtrar por estado">
+    <option value="all">Todos</option><option value="pend">Pendientes</option><option value="ok">OK</option><option value="fail">Falla</option><option value="skip">Omitido</option>
+  </select>
+  <button id="export">Exportar</button>
+  <button id="import">Importar</button>
+  <button id="reset">Reiniciar</button>
+  <button id="theme" aria-label="Cambiar tema">◐</button>
+</div>
+
+<div class="tabs" role="tablist">
+  <button role="tab" aria-selected="true" data-tab="smoke">Pruebas</button>
+  <button role="tab" aria-selected="false" data-tab="changes">Cambios recientes</button>
+  <button role="tab" aria-selected="false" data-tab="decisions">Decisiones pendientes</button>
+</div>
+
+<section id="smoke"></section>
+<section id="changes" class="hidden"></section>
+<section id="decisions" class="hidden"></section>
+</main>
+<div id="toast" role="status"></div>
+<input type="file" id="file" accept="application/json" class="hidden">
+
+<script>
+const KEY = "sr-smoke-2026-11-05";
+const SECTIONS = [
+ {t:"0. Preparación", items:[
+  {id:"prep-start", h:"Levantar servidores con API recompilada", s:["Ejecuta start-local.bat SIN nobuild","Entra con emmanuel.rgomez@gmail.com, sucursal Navojoa","Abre la consola (F12)"], e:"Web y API cargan sin errores rojos en consola."},
+  {id:"prep-e2e", h:"Renovar sesión del arnés E2E", s:["Ejecuta tools\\agentic\\local-servers\\e2e-auth.bat","Inicia sesión cuando lo pida"], e:"Se crea apps/web/playwright/.auth/user.json. Desbloquea mi verificación automática en navegador."},
+ ]},
+ {t:"1. Captura (/app/capture)", items:[
+  {id:"cap-ticket", h:"Ticket sin cortes", s:["Agrega pizza mitad y mitad con nota","Revisa la fila Editar · − 1 + · Editar nota · Quitar","Repite a 390×844"], e:"Fila completa, sin barra horizontal, precio visible."},
+  {id:"cap-cash", h:"Botones de efectivo", s:["Escribe 250 en «Otro monto» y toca «Exacto»","Escribe un monto que no coincida con ningún botón"], e:"«Exacto» queda marcado con un toque; con monto libre ninguno queda marcado."},
+  {id:"cap-instr", h:"Instrucciones de entrega con autoguardado", s:["Escribe instrucciones y toca un botón de efectivo","Recarga la página"], e:"El texto persiste; no existe botón «Guardar instrucciones»."},
+  {id:"cap-keys", h:"Atajos de teclado", s:["Pulsa N sola","Alt+N","Ctrl+K","Escape / Alt+R"], e:"N no hace nada; Alt+N crea captura; Ctrl+K enfoca búsqueda; Escape/Alt+R reinicia."},
+  {id:"cap-cust", h:"Cliente y dirección", s:["Busca 6622751352 y tócalo una vez","«Usar esta dirección»","Prueba «Editar» y «Agregar dirección»"], e:"Selección en un toque; dirección validada o «Fuera de cobertura» (ver decisión CP 85860); edición sin salir de la captura."},
+ ]},
+ {t:"2. Menú (/app/menu)", items:[
+  {id:"menu-drag", h:"Reordenar categorías", s:["Arrastra la 3ª sobre la 2ª","Prueba Escape y clic derecho a medio arrastre","Flechas con el asidero enfocado"], e:"Hueco fantasma; soltar aplica; Escape/clic derecho cancelan."},
+  {id:"menu-cat", h:"Color y foto de categoría", s:["Toca el círculo junto al nombre y sube foto","Elige un color de muestra"], e:"Foto en el círculo; la tarjeta y la pestaña en /app/capture se tiñen."},
+  {id:"menu-prod", h:"Tarjeta de producto y fotos", s:["Activa grupos, mitades, impuesto, tamaño","Toca la foto (con y sin foto)"], e:"Secciones se abren al activar; diálogo con Reemplazar/Quitar/Cancelar y listas de fotos."},
+  {id:"menu-dup", h:"Duplicar producto", s:["«Duplicar» en un producto con foto y grupos"], e:"Aparece «(copia)» con misma foto y mismos grupos asignados (no clonados)."},
+  {id:"menu-groups", h:"Grupos de modificadores compartidos", s:["Crea un grupo y asígnalo a dos productos","Verifica ambos en /app/capture","Quita el grupo"], e:"Aparece en ambos productos; quitarlo pide confirmación en la app y desasigna de todos."},
+  {id:"menu-draft", h:"Borrador y publicar", s:["Edita algo y recarga","Publica"], e:"«Recuperar cambios sin publicar»; tras publicar «Todo publicado»."},
+  {id:"menu-locked", h:"Ingredientes que no se pueden quitar", s:["En un producto con mitades, marca ingredientes bloqueados","Publica"], e:"El servidor acepta y en captura no se pueden quitar. Productos antiguos con lista vacía quedan con todo bloqueado (regla de la migración, aplicada hoy)."},
+ ]},
+ {t:"3. Mesas y órdenes", items:[
+  {id:"tab-open", h:"Abrir cuenta desde mesa", s:["/app/tables → mesa libre → «Abrir cuenta»"], e:"Llega a Órdenes con «Agregar producto» abierto y sin segundo «Abrir cuenta»."},
+  {id:"tab-name", h:"Nombre de mesa en todas partes", s:["Revisa tarjetas, detalle, comanda y ticket en /app/orders"], e:"Dice «Mesa 2», nunca «Mesa» sola ni UUID."},
+  {id:"tab-tabs", h:"Pestañas de cuentas por mesa", s:["Abre una mesa con 2 cuentas","Usa «Nueva»"], e:"Pestañas con total, contador y «Nueva» funcionan."},
+  {id:"tab-acct", h:"Nombre de la cuenta («a nombre de»)", s:["Pon un nombre a una cuenta de mesa"], e:"Se guarda y aparece en la mesa y en la orden."},
+ ]},
+ {t:"4. Caja", items:[
+  {id:"caja-missing", h:"«Faltan $X» del servidor", s:["Cobra una orden con monto menor al total"], e:"Muestra «Faltan $X» correcto y no deja cerrar."},
+  {id:"caja-split", h:"Pagar total / Dividir pago", s:["Divide un cobro entre efectivo y tarjeta/transferencia","Revisa el desglose y las tarjetas expandibles"], e:"Cobra sin el error falso «cobra pero dice error»; el desglose suma el total."},
+ ]},
+ {t:"5. Menú en pestañas (nuevo hoy)", items:[
+  {id:"tabs-r2", h:"Categorías · Productos · Modificadores · Tamaños", s:["/app/menu, recorre las 4 pestañas (también con flechas ← → del teclado)","Cambia de pestaña con un cambio sin publicar","Recarga: vuelve a la última pestaña; prueba /app/menu?tab=modificadores","Revisa a 390×844"], e:"No se pierde el borrador; Publicar fijo arriba; «Duplicar» junto a «Activo»; precio/unidad más angostos; una columna en móvil."},
+  {id:"tabs-mods", h:"Pestaña Modificadores", s:["Filtra grupos por nombre","Desde un producto toca «Gestionar grupos»"], e:"Cada grupo dice «Asignado a N productos»; el enlace salta a Modificadores."},
+  {id:"tabs-sizes", h:"Pestaña Tamaños y presets", s:["Abre la pestaña"], e:"Aviso «Pronto podrás definir tamaños una sola vez…» y tamaños actuales agrupados."},
+ ]},
+];
+const CHANGES = [
+ {h:"Retroalimentación 1 (2026-11-01)", p:"capture-ux, cliente y dirección en captura, categorías arrastrables, tarjetas de producto, mesas/órdenes con nombre real, color/foto de categoría, copia de fotos, grupos de modificadores compartidos, nombre de cuenta."},
+ {h:"Retroalimentación 2 y 3 (2026-11-01/02)", p:"Pestañas de cuentas por mesa con total y contador, pulido de menú, barra lateral fija, caja con pagos divididos y «Faltan $X» del servidor."},
+ {h:"Ingredientes bloqueados (P2)", p:"Migración 20261102000100 aplicada el 2026-11-05 y API local recompilada y reiniciada: el servidor ya acepta los ingredientes bloqueados."},
+ {h:"Hoy (2026-11-05)", p:"menu-tabs-r2 integrado en main (5fbedbe): menú en cuatro pestañas accesibles con ?tab= y memoria local, filtro y contador de grupos, aviso de tamaños, «Duplicar» junto a «Activo» y anchos ajustados. Puertas web sin caché verdes; revisión APROBAR. Detalles menores conocidos: foco del panel poco visible, breve parpadeo al restaurar pestaña guardada, texto «(sin asignar)» redundante."},
+];
+const DECISIONS = [
+ {h:"Regla «lista vacía legada ⇒ todo bloqueado»", p:"La migración 20261102000100 ya está aplicada (autorizada el 2026-11-05). Si al probar prefieres que la lista vacía signifique «nada bloqueado», dímelo y preparo una migración compensatoria."},
+ {h:"CP 85860 en Zonas", p:"La dirección de prueba sale «Fuera de cobertura». Revisa /app/delivery-zones y dime si la zona Navojoa debe incluirlo."},
+ {h:"Especialidades (P3)", p:"Supuesto: precio de mitades = mayor de las dos especialidades; los sabores actuales quedan como legado. Confirma o corrige."},
+ {h:"Cuentas de prueba en Mesa 2 y 5", p:"¿Cancelarlas o dejarlas?"},
+ {h:"Limpieza", p:"¿Autorizas borrar worktrees en C:\\tmp\\sr-wt y .claude/worktrees, ramas ya integradas y AGENTS.md.bak?"},
+];
+const LABELS = {pend:"Pendiente", ok:"OK", fail:"Falla", skip:"Omitido"};
+let state = {};
+try { state = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { state = {}; }
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} };
+const all = () => SECTIONS.flatMap(s => s.items);
+const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function render() {
+  const f = document.getElementById("filter").value;
+  document.getElementById("smoke").innerHTML = SECTIONS.map(sec => {
+    const items = sec.items.filter(it => f === "all" || (state[it.id]?.s || "pend") === f);
+    if (!items.length) return "";
+    return `<h2>${esc(sec.t)}</h2>` + items.map(it => {
+      const st = state[it.id]?.s || "pend", note = state[it.id]?.n || "";
+      return `<div class="item" data-s="${st}"><div class="row"><h3>${esc(it.h)}</h3>${it.block ? '<span class="tag block">Bloqueado</span>' : ""}
+        <div class="seg" role="group" aria-label="Estado">${Object.keys(LABELS).map(v => `<button data-id="${it.id}" data-v="${v}" aria-pressed="${st === v}">${LABELS[v]}</button>`).join("")}</div></div>
+        <ol class="steps">${it.s.map(x => `<li>${esc(x)}</li>`).join("")}</ol>
+        <p class="exp"><b>Esperado:</b> ${esc(it.e)}</p>${it.block ? `<p class="exp"><b>Bloqueo:</b> ${esc(it.block)}</p>` : ""}
+        <textarea data-note="${it.id}" placeholder="Notas: qué hiciste, qué esperabas, qué viste">${esc(note)}</textarea></div>`;
+    }).join("");
+  }).join("");
+  const counts = {pend:0, ok:0, fail:0, skip:0};
+  all().forEach(it => counts[state[it.id]?.s || "pend"]++);
+  const n = all().length;
+  document.getElementById("count").textContent = `${counts.ok} OK · ${counts.fail} falla · ${counts.skip} omitido · ${counts.pend} pendiente`;
+  document.getElementById("prog").innerHTML = ["ok","fail","skip"].map(k => `<i style="width:${counts[k]/n*100}%;background:var(--${k})"></i>`).join("");
+}
+document.getElementById("changes").innerHTML = CHANGES.map(c => `<div class="chg"><b>${esc(c.h)}</b><p>${esc(c.p)}</p></div>`).join("");
+document.getElementById("decisions").innerHTML = DECISIONS.map((c, i) => `<div class="chg"><b>${esc(c.h)}</b><p>${esc(c.p)}</p><textarea data-note="dec-${i}" placeholder="Tu respuesta">${esc(state["dec-"+i]?.n || "")}</textarea></div>`).join("");
+
+document.addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-v]");
+  if (b) { state[b.dataset.id] = {...state[b.dataset.id], s: b.dataset.v, t: new Date().toISOString()}; save(); render(); }
+  const tab = ev.target.closest("[role=tab]");
+  if (tab) {
+    document.querySelectorAll("[role=tab]").forEach(x => x.setAttribute("aria-selected", x === tab));
+    ["smoke","changes","decisions"].forEach(id => document.getElementById(id).classList.toggle("hidden", id !== tab.dataset.tab));
+  }
+});
+document.addEventListener("input", ev => {
+  const id = ev.target.dataset.note;
+  if (id) { state[id] = {...state[id], n: ev.target.value}; save(); }
+});
+document.getElementById("filter").onchange = render;
+function toast(m) { const t = document.getElementById("toast"); t.textContent = m; t.style.opacity = 1; setTimeout(() => t.style.opacity = 0, 1800); }
+document.getElementById("export").onclick = async () => {
+  const lines = ["# Resultado smoke 2026-11-05", ""];
+  SECTIONS.forEach(sec => { lines.push("## " + sec.t); sec.items.forEach(it => {
+    const s = state[it.id]?.s || "pend"; lines.push(`- [${LABELS[s]}] ${it.h}${state[it.id]?.n ? " — " + state[it.id].n.replace(/\n/g, " ") : ""}`); }); lines.push(""); });
+  lines.push("## Decisiones"); DECISIONS.forEach((d, i) => lines.push(`- ${d.h}: ${state["dec-"+i]?.n || "(sin respuesta)"}`));
+  const md = lines.join("\n");
+  try { await navigator.clipboard.writeText(md); toast("Copiado al portapapeles"); } catch (e) { toast("No se pudo copiar"); }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], {type: "application/json"}));
+  a.download = "smoke-2026-11-05.json"; a.click();
+};
+document.getElementById("import").onclick = () => document.getElementById("file").click();
+document.getElementById("file").onchange = async ev => {
+  try { state = JSON.parse(await ev.target.files[0].text()); save(); render(); toast("Importado"); } catch (e) { toast("Archivo inválido"); }
+};
+document.getElementById("reset").onclick = () => {
+  const b = document.getElementById("reset");
+  if (b.dataset.armed) { state = {}; save(); render(); delete b.dataset.armed; b.textContent = "Reiniciar"; toast("Reiniciado"); }
+  else { b.dataset.armed = 1; b.textContent = "¿Seguro? Toca otra vez"; setTimeout(() => { delete b.dataset.armed; b.textContent = "Reiniciar"; }, 3000); }
+};
+document.getElementById("theme").onclick = () => {
+  const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+};
+render();
+</script>
+</body>
+</html>
