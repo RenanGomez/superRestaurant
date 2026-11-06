@@ -8,6 +8,8 @@ const LOGIN_PATH = "/login";
 const APP_PATH_PREFIX = "/app";
 
 /**
+ * The shell-sidebar-perf diagnosis measured approximately 150-250 ms per request
+ * for these session checks; preserve both security checks.
  * Runs on every request to `/login` and `/app/*`. This is the only boundary
  * that can persist cleared cookies: Server Components (see
  * `src/app/app/layout.tsx`) cannot write cookies during render, so both the

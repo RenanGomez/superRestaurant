@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { randomUUID } from "node:crypto";
 
 import { cookies } from "next/headers";
@@ -12,11 +13,10 @@ import type {
 
 import { Field } from "../../../components/field-hint";
 import { getServerEnv, type WebServerEnv } from "../../../env";
-import { authorizeBranch } from "../../../lib/branch-selection";
 import { getCashRegisterReport, type FinancialApiResult } from "../../../lib/finance";
-import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
+import { BRANCH_PREFERENCE_COOKIE, findMembership, parseBranchPreference } from "../../../lib/memberships";
 import { currencyFractionDigits } from "../../../lib/money-scale";
-import { createServerSupabaseClient } from "../../../lib/supabase-server";
+import { getRequestSession, getRequestMemberships, getRequestAuthorizedBranch } from "../../../lib/request-context";
 import { uiButton } from "../../../lib/ui-classes";
 import { COBRAR_PATH, CORTE_PATH } from "./caja-view";
 import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } from "./context";
@@ -48,16 +48,15 @@ export interface CajaContext {
 
 /** Session, branch authorization and the authoritative register report shared by Cobrar and Corte. */
 export async function loadCajaContext(searchParams: SearchParams): Promise<CajaContext> {
-  const supabase = await createServerSupabaseClient();
-  const { data: { session } } = await supabase.auth.getSession();
+  const session = await getRequestSession();
   if (session === null) redirect("/login");
   const cookieStore = await cookies();
   const scope = parseBranchPreference(cookieStore.get(BRANCH_PREFERENCE_COOKIE)?.value);
   if (scope === undefined) redirect("/app");
   const env = getServerEnv();
-  const memberships = await listMemberships(session.access_token, env.apiBaseUrl);
+  const memberships = await getRequestMemberships(session.access_token);
   const membership = memberships === undefined ? undefined : findMembership(memberships.memberships, scope);
-  if (membership === undefined || await authorizeBranch(session.access_token, env.apiBaseUrl, scope) === undefined) {
+  if (membership === undefined || await getRequestAuthorizedBranch(session.access_token, scope.restaurantId, scope.branchId) === undefined) {
     redirect("/app?branchError=not_authorized");
   }
   const params = await searchParams;
@@ -94,12 +93,12 @@ export function CajaHeader({ active, membership, registerStatus }: {
           <span className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${registerStatus === "open" ? "bg-[oklch(94%_0.04_155)] text-[oklch(38%_0.1_155)]" : "bg-bg text-text-muted"}`}>
             {registerStatus === "open" ? "Caja abierta" : registerStatus === "closed" ? "Caja cerrada" : "Sin caja"}
           </span>
-          <a href="/app?change=1" className={uiButton("secondary", "inline-flex items-center px-3 text-[13px]")}>Cambiar sucursal</a>
+          <Link href="/app?change=1" className={uiButton("secondary", "inline-flex items-center px-3 text-[13px]")}>Cambiar sucursal</Link>
         </div>
       </div>
       <nav aria-label="Secciones de caja" className="flex flex-wrap gap-2">
-        <a href={COBRAR_PATH} aria-current={active === "cobrar" ? "page" : undefined} className={uiButton(active === "cobrar" ? "selected" : "secondary", "inline-flex items-center rounded-full px-4 text-[13px]")}>Cobrar</a>
-        <a href={CORTE_PATH} aria-current={active === "corte" ? "page" : undefined} className={uiButton(active === "corte" ? "selected" : "secondary", "inline-flex items-center rounded-full px-4 text-[13px]")}>{active === "cobrar" ? "Ver corte de caja" : "Corte de caja"}</a>
+        <Link href={COBRAR_PATH} aria-current={active === "cobrar" ? "page" : undefined} className={uiButton(active === "cobrar" ? "selected" : "secondary", "inline-flex items-center rounded-full px-4 text-[13px]")}>Cobrar</Link>
+        <Link href={CORTE_PATH} aria-current={active === "corte" ? "page" : undefined} className={uiButton(active === "corte" ? "selected" : "secondary", "inline-flex items-center rounded-full px-4 text-[13px]")}>{active === "cobrar" ? "Ver corte de caja" : "Corte de caja"}</Link>
       </nav>
     </div>
   );

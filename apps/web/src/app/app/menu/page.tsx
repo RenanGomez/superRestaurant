@@ -1,18 +1,17 @@
+import Link from "next/link";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { getServerEnv } from "../../../env";
-import { authorizeBranch } from "../../../lib/branch-selection";
 import { getMenuCatalog } from "../../../lib/menu-catalog";
 import { parseMenuTab } from "../../../lib/menu-tabs";
 import {
   BRANCH_PREFERENCE_COOKIE,
   findMembership,
-  listMemberships,
   parseBranchPreference,
 } from "../../../lib/memberships";
-import { createServerSupabaseClient } from "../../../lib/supabase-server";
+import { getRequestSession, getRequestMemberships, getRequestAuthorizedBranch } from "../../../lib/request-context";
 import { MenuCatalogEditor } from "./menu-catalog-editor";
 
 export const dynamic = "force-dynamic";
@@ -22,8 +21,7 @@ interface MenuPageProps {
 }
 
 export default async function MenuPage({ searchParams }: MenuPageProps): Promise<ReactNode> {
-  const supabase = await createServerSupabaseClient();
-  const { data: { session } } = await supabase.auth.getSession();
+  const session = await getRequestSession();
   if (session === null) redirect("/login");
 
   const cookieStore = await cookies();
@@ -31,9 +29,9 @@ export default async function MenuPage({ searchParams }: MenuPageProps): Promise
   if (scope === undefined) redirect("/app");
 
   const env = getServerEnv();
-  const memberships = await listMemberships(session.access_token, env.apiBaseUrl);
+  const memberships = await getRequestMemberships(session.access_token);
   const membership = memberships === undefined ? undefined : findMembership(memberships.memberships, scope);
-  if (membership === undefined || await authorizeBranch(session.access_token, env.apiBaseUrl, scope) === undefined) {
+  if (membership === undefined || await getRequestAuthorizedBranch(session.access_token, scope.restaurantId, scope.branchId) === undefined) {
     redirect("/app?branchError=not_authorized");
   }
 
@@ -51,9 +49,9 @@ export default async function MenuPage({ searchParams }: MenuPageProps): Promise
             Consulta desde {membership.branchName}. Cada publicación conserva una versión histórica inmutable.
           </p>
         </div>
-        <a href="/app?change=1" className="rounded-lg border border-border bg-surface px-3 py-2 text-[13px] font-medium">
+        <Link href="/app?change=1" className="rounded-lg border border-border bg-surface px-3 py-2 text-[13px] font-medium">
           Cambiar sucursal
-        </a>
+        </Link>
       </div>
 
       {typeof resolvedSearchParams.menuError === "string" && (

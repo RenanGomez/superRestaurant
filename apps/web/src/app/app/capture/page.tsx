@@ -3,12 +3,11 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { getServerEnv } from "../../../env";
-import { authorizeBranch } from "../../../lib/branch-selection";
 import { getCaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
-import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
+import { BRANCH_PREFERENCE_COOKIE, findMembership, parseBranchPreference } from "../../../lib/memberships";
 import { getMenuCatalog } from "../../../lib/menu-catalog";
 import { MenuImageBaseUrlProvider } from "../../../lib/menu-image-url-context";
-import { createServerSupabaseClient } from "../../../lib/supabase-server";
+import { getRequestSession, getRequestMemberships, getRequestAuthorizedBranch } from "../../../lib/request-context";
 import { orderDetailAction, sendToKitchenAction } from "../orders/actions";
 import { captureWorkspaceAction, quoteCaptureLineAction, reloadCaptureCatalog } from "./actions";
 import { CaptureWorkspace } from "./capture-workspace";
@@ -16,23 +15,21 @@ import { CaptureWorkspace } from "./capture-workspace";
 export const dynamic = "force-dynamic";
 
 export default async function CapturePage(): Promise<ReactNode> {
-  const supabase = await createServerSupabaseClient();
-  const { data: { session } } = await supabase.auth.getSession();
+  const session = await getRequestSession();
   if (session === null) redirect("/login");
   const scope = parseBranchPreference((await cookies()).get(BRANCH_PREFERENCE_COOKIE)?.value);
   if (scope === undefined) redirect("/app");
   const env = getServerEnv();
-  const memberships = await listMemberships(session.access_token, env.apiBaseUrl);
+  const memberships = await getRequestMemberships(session.access_token);
   const membership = memberships === undefined ? undefined : findMembership(memberships.memberships, scope);
-  if (membership === undefined || await authorizeBranch(session.access_token, env.apiBaseUrl, scope) === undefined) {
+  if (membership === undefined || await getRequestAuthorizedBranch(session.access_token, scope.restaurantId, scope.branchId) === undefined) {
     redirect("/app?branchError=not_authorized");
   }
   const canOperate = membership.roles.some((role) => ["owner", "admin", "manager", "supervisor", "cashier", "waiter"].includes(role));
   const canManageAssignment = membership.roles.some((role) => ["owner", "admin", "manager", "supervisor"].includes(role));
-  const confirmationContext = canOperate
-    ? await getCaptureConfirmationContext(session.access_token, env.apiBaseUrl, scope)
-    : undefined;
-  const catalog = canOperate ? await getMenuCatalog(session.access_token, env.apiBaseUrl, scope) : undefined;
+  const [confirmationContext, catalog] = canOperate
+    ? await Promise.all([getCaptureConfirmationContext(session.access_token, env.apiBaseUrl, scope), getMenuCatalog(session.access_token, env.apiBaseUrl, scope)])
+    : [undefined, undefined];
   return <div className="flex min-w-0 flex-1 flex-col gap-5 p-4 sm:p-5 lg:p-8">
     <header className="min-w-0"><p className="text-xs font-semibold uppercase tracking-widest text-accent">Captura telefónica</p>
       <h1 className="break-words font-heading text-2xl font-bold">Nueva captura · {membership.restaurantName}</h1>

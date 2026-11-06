@@ -1,10 +1,9 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getServerEnv } from "../../../env";
-import { authorizeBranch } from "../../../lib/branch-selection";
-import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
+import { BRANCH_PREFERENCE_COOKIE, findMembership, parseBranchPreference } from "../../../lib/memberships";
 import { MenuImageBaseUrlProvider } from "../../../lib/menu-image-url-context";
-import { createServerSupabaseClient } from "../../../lib/supabase-server";
+import { getRequestSession, getRequestMemberships, getRequestAuthorizedBranch } from "../../../lib/request-context";
 import { FocusRevalidate } from "../focus-revalidate";
 import {
   branchOrderWorkTrayAction,
@@ -28,15 +27,14 @@ export const dynamic = "force-dynamic";
 const FINANCIAL_ROLES = new Set(["owner", "admin", "manager", "supervisor", "cashier"]);
 
 export default async function OrdersPage() {
-  const supabase = await createServerSupabaseClient();
-  const { data: { session } } = await supabase.auth.getSession();
+  const session = await getRequestSession();
   if (session === null) redirect("/login");
   const scope = parseBranchPreference((await cookies()).get(BRANCH_PREFERENCE_COOKIE)?.value);
   if (scope === undefined) redirect("/app");
   const env = getServerEnv();
-  const memberships = await listMemberships(session.access_token, env.apiBaseUrl);
+  const memberships = await getRequestMemberships(session.access_token);
   const membership = memberships === undefined ? undefined : findMembership(memberships.memberships, scope);
-  if (membership === undefined || await authorizeBranch(session.access_token, env.apiBaseUrl, scope) === undefined) {
+  if (membership === undefined || await getRequestAuthorizedBranch(session.access_token, scope.restaurantId, scope.branchId) === undefined) {
     redirect("/app?branchError=not_authorized");
   }
   return <div className="flex min-w-0 flex-1 flex-col gap-5 p-4 sm:p-5 lg:p-8">

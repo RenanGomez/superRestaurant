@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { randomUUID } from "node:crypto";
 
 import { cookies } from "next/headers";
@@ -14,7 +15,6 @@ import {
 } from "@super-restaurant/shared-types";
 
 import { getServerEnv } from "../../../env";
-import { authorizeBranch } from "../../../lib/branch-selection";
 import { formatMinorUnits, formatOrderWorkTime } from "../../../lib/branch-order-work-tray";
 import { formatMinorForMoneyInput, suggestTenderAmounts } from "../../../lib/capture-payment";
 import {
@@ -29,8 +29,8 @@ import {
 } from "../../../lib/delivery-board";
 import { listCouriers, listDeliveries, quoteCashPayment, readBranchTimeZone } from "../../../lib/deliveries";
 import { getCashRegisterReport } from "../../../lib/finance";
-import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../lib/memberships";
-import { createServerSupabaseClient } from "../../../lib/supabase-server";
+import { BRANCH_PREFERENCE_COOKIE, findMembership, parseBranchPreference } from "../../../lib/memberships";
+import { getRequestSession, getRequestMemberships, getRequestAuthorizedBranch } from "../../../lib/request-context";
 import { CashierSubmitButton } from "../caja/submit-button";
 import { CASH_REGISTER_COOKIE, CASH_REGISTER_SESSION_COOKIE, DEVICE_COOKIE } from "../caja/context";
 import { FocusRevalidate } from "../focus-revalidate";
@@ -75,16 +75,15 @@ const ERROR_MESSAGES: Readonly<Record<string, string>> = {
 };
 
 export default async function DeliveriesPage({ searchParams }: DeliveriesPageProps): Promise<ReactNode> {
-  const supabase = await createServerSupabaseClient();
-  const { data: { session } } = await supabase.auth.getSession();
+  const session = await getRequestSession();
   if (session === null) redirect("/login");
   const cookieStore = await cookies();
   const scope = parseBranchPreference(cookieStore.get(BRANCH_PREFERENCE_COOKIE)?.value);
   if (scope === undefined) redirect("/app");
   const env = getServerEnv();
-  const memberships = await listMemberships(session.access_token, env.apiBaseUrl);
+  const memberships = await getRequestMemberships(session.access_token);
   const membership = memberships === undefined ? undefined : findMembership(memberships.memberships, scope);
-  if (membership === undefined || await authorizeBranch(session.access_token, env.apiBaseUrl, scope) === undefined) {
+  if (membership === undefined || await getRequestAuthorizedBranch(session.access_token, scope.restaurantId, scope.branchId) === undefined) {
     redirect("/app?branchError=not_authorized");
   }
   const canManage = membership.roles.some((role) => MANAGER_ROLES.has(role));
@@ -102,7 +101,7 @@ export default async function DeliveriesPage({ searchParams }: DeliveriesPagePro
         <h1 className="break-words font-heading text-[22px] font-bold text-text">Entregas · {membership.branchName}</h1>
         <p className="mt-1 text-[13px] text-text-muted">{isCourier ? "Tus entregas asignadas." : "Asigna, despacha y liquida las entregas a domicilio."}</p>
       </div>
-      <a href="/app/deliveries" className="inline-flex min-h-11 items-center rounded-xl border border-border bg-surface px-4 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Actualizar</a>
+      <Link href="/app/deliveries" className="inline-flex min-h-11 items-center rounded-xl border border-border bg-surface px-4 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Actualizar</Link>
     </div>
   );
   const shell = (children: ReactNode): ReactNode => (
@@ -131,7 +130,7 @@ export default async function DeliveriesPage({ searchParams }: DeliveriesPagePro
     canManage ? listCouriers(session.access_token, env.apiBaseUrl, scope) : Promise.resolve(undefined),
   ]);
   if (list.status !== "ok" || timeZone === undefined) {
-    return shell(<Empty title="No se pudo cargar la lista" body="El estado no está disponible. No se registró ningún cambio." action={<a href="/app/deliveries" className="inline-flex min-h-11 items-center rounded-xl bg-accent px-4 text-[14px] font-semibold text-white">Reintentar</a>} />);
+    return shell(<Empty title="No se pudo cargar la lista" body="El estado no está disponible. No se registró ningún cambio." action={<Link href="/app/deliveries" className="inline-flex min-h-11 items-center rounded-xl bg-accent px-4 text-[14px] font-semibold text-white">Reintentar</Link>} />);
   }
   const items = list.value.items;
   const columns = groupDeliveriesByState(items);
@@ -177,7 +176,7 @@ export default async function DeliveriesPage({ searchParams }: DeliveriesPagePro
           {columns.to_settle.length === 0 ? <ColumnEmpty /> : columns.to_settle.map((item) => (
             <DeliveryCard key={item.delivery.orderId} item={item} timeZone={timeZone} showCourierDetail={isCourier}>
               {canManage
-                ? <a href={`/app/deliveries?settle=${item.delivery.orderId}`} className="inline-flex min-h-11 items-center rounded-xl bg-accent px-4 text-[14px] font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Liquidar</a>
+                ? <Link href={`/app/deliveries?settle=${item.delivery.orderId}`} className="inline-flex min-h-11 items-center rounded-xl bg-accent px-4 text-[14px] font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Liquidar</Link>
                 : <p className="text-[12px] text-text-muted">Pendiente de liquidar en caja.</p>}
             </DeliveryCard>
           ))}
@@ -315,7 +314,7 @@ function TransitionButton({ action, idle, item, pending }: {
 }
 
 function FailLink({ orderId }: { readonly orderId: string }): ReactNode {
-  return <a href={`/app/deliveries?fail=${orderId}`} className="inline-flex min-h-11 items-center rounded-xl border border-border bg-surface px-4 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">No se pudo</a>;
+  return <Link href={`/app/deliveries?fail=${orderId}`} className="inline-flex min-h-11 items-center rounded-xl border border-border bg-surface px-4 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">No se pudo</Link>;
 }
 
 function FailSheet({ item }: { readonly item: BranchDeliveryItemV1 }): ReactNode {
@@ -329,7 +328,7 @@ function FailSheet({ item }: { readonly item: BranchDeliveryItemV1 }): ReactNode
         <Field id="delivery-action-reason" className="grid gap-1.5 text-[12px] font-semibold" hint="Por qué se registra esta acción sobre la entrega (no entregada, cliente ausente, etc.). Queda en la auditoría." label="Motivo"><textarea id="delivery-action-reason" required name="reason" maxLength={300} rows={3} className="rounded-xl border border-border bg-surface px-3 py-2.5 text-[14px] font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" /></Field>
         <div className="flex flex-wrap gap-2">
           <CashierSubmitButton idle="Marcar como no entregada" pending="Guardando…" tone="danger" />
-          <a href="/app/deliveries" className="inline-flex min-h-12 items-center rounded-xl border border-border bg-surface px-4 text-[14px] font-semibold">Cancelar</a>
+          <Link href="/app/deliveries" className="inline-flex min-h-12 items-center rounded-xl border border-border bg-surface px-4 text-[14px] font-semibold">Cancelar</Link>
         </div>
       </form>
     </section>
@@ -358,8 +357,8 @@ async function SettleSheet({ item, params, scope, session }: {
         {heading}
         <p className="text-[14px]">Esta entrega se paga con {paymentMethodLabel(item.paymentIntent?.method ?? "card_manual").toLowerCase()}. Cóbrala en Caja.</p>
         <div className="flex flex-wrap gap-2">
-          <a href={`/app/caja?orderId=${orderId}`} className="inline-flex min-h-12 items-center rounded-xl bg-accent px-4 text-[14px] font-semibold text-white">Cobrar en Caja</a>
-          <a href="/app/deliveries" className="inline-flex min-h-12 items-center rounded-xl border border-border bg-surface px-4 text-[14px] font-semibold">Cerrar</a>
+          <Link href={`/app/caja?orderId=${orderId}`} className="inline-flex min-h-12 items-center rounded-xl bg-accent px-4 text-[14px] font-semibold text-white">Cobrar en Caja</Link>
+          <Link href="/app/deliveries" className="inline-flex min-h-12 items-center rounded-xl border border-border bg-surface px-4 text-[14px] font-semibold">Cerrar</Link>
         </div>
       </section>
     );
@@ -376,8 +375,8 @@ async function SettleSheet({ item, params, scope, session }: {
         {heading}
         <p className="text-[14px]">Abre la caja en este dispositivo para liquidar en efectivo.</p>
         <div className="flex flex-wrap gap-2">
-          <a href="/app/caja" className="inline-flex min-h-12 items-center rounded-xl bg-accent px-4 text-[14px] font-semibold text-white">Ir a Caja</a>
-          <a href="/app/deliveries" className="inline-flex min-h-12 items-center rounded-xl border border-border bg-surface px-4 text-[14px] font-semibold">Cerrar</a>
+          <Link href="/app/caja" className="inline-flex min-h-12 items-center rounded-xl bg-accent px-4 text-[14px] font-semibold text-white">Ir a Caja</Link>
+          <Link href="/app/deliveries" className="inline-flex min-h-12 items-center rounded-xl border border-border bg-surface px-4 text-[14px] font-semibold">Cerrar</Link>
         </div>
       </section>
     );
@@ -415,11 +414,11 @@ async function SettleSheet({ item, params, scope, session }: {
           <p className="text-[12px] font-semibold text-text-muted">Recibido rápido</p>
           <div className="flex flex-wrap gap-2">
             {quickAmounts.map((amount, index) => (
-              <a key={amount} href={`/app/deliveries?settle=${orderId}&tendered=${amount}&tip=${tipMinor}`}
+              <Link key={amount} href={`/app/deliveries?settle=${orderId}&tendered=${amount}&tip=${tipMinor}`}
                 aria-current={effectiveTendered === amount ? "true" : undefined}
                 className={`inline-flex min-h-11 items-center rounded-xl border px-4 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${effectiveTendered === amount ? "border-accent bg-accent text-white" : "border-border bg-surface"}`}>
                 {index === 0 ? "Exacto" : formatMinorUnits(amount, item.currency)}
-              </a>
+              </Link>
             ))}
           </div>
         </div>
@@ -441,7 +440,7 @@ async function SettleSheet({ item, params, scope, session }: {
         )}
         <div className="flex flex-wrap gap-2 sm:col-span-2">
           <CashierSubmitButton idle="Liquidar" pending="Guardando…" />
-          <a href="/app/deliveries" className="inline-flex min-h-12 items-center rounded-xl border border-border bg-surface px-4 text-[14px] font-semibold">Cancelar</a>
+          <Link href="/app/deliveries" className="inline-flex min-h-12 items-center rounded-xl border border-border bg-surface px-4 text-[14px] font-semibold">Cancelar</Link>
         </div>
       </form>
     </section>

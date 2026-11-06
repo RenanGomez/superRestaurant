@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { randomUUID } from "node:crypto";
 
 import type { ReactNode } from "react";
@@ -84,7 +85,7 @@ export default async function CollectPaymentPage({ searchParams }: { readonly se
         <EmptyState
           title="No se pudo recuperar la caja"
           body="El estado autoritativo no está disponible. No se realizó ningún cobro ni cierre."
-          action={<a href={COBRAR_PATH} className={uiButton("primary", "inline-flex items-center px-4 text-[14px]")}>Reintentar</a>}
+          action={<Link href={COBRAR_PATH} className={uiButton("primary", "inline-flex items-center px-4 text-[14px]")}>Reintentar</Link>}
         />
       ) : view === "open_register" ? (
         <OpenRegisterPanel closed={register === "closed"} />
@@ -134,7 +135,7 @@ function OpenRegisterPanel({ closed }: { readonly closed: boolean }): ReactNode 
         <MoneyField hint="Efectivo con el que abres la caja (cambio inicial). Cuéntalo físicamente antes de empezar a cobrar." label="Fondo inicial" name="openingFloatPesos" defaultValue="0" />
         <CashierSubmitButton idle="Abrir caja" pending="Guardando apertura…" />
       </form>
-      {closed && <a href={CORTE_PATH} className={uiButton("secondary", "inline-flex items-center justify-center px-4 text-[14px]")}>Ver el corte anterior</a>}
+      {closed && <Link href={CORTE_PATH} className={uiButton("secondary", "inline-flex items-center justify-center px-4 text-[14px]")}>Ver el corte anterior</Link>}
     </section>
   );
 }
@@ -170,7 +171,7 @@ function OrderView({
           <div id="cobrar" role="status" className="mt-4 grid gap-3 rounded-xl bg-bg p-4 text-[13px]">
             <h3 className="font-heading text-lg font-semibold">Recibo no disponible</h3>
             <p className="text-text-muted">Si acabas de cobrar, el pago quedó registrado; consulta el corte de caja para confirmarlo.</p>
-            <a href={CORTE_PATH} className={uiButton("secondary", "inline-flex items-center justify-center px-4 text-[14px]")}>Ver corte de caja</a>
+            <Link href={CORTE_PATH} className={uiButton("secondary", "inline-flex items-center justify-center px-4 text-[14px]")}>Ver corte de caja</Link>
             <BackLinks />
           </div>
         ) : orderId === undefined || checkout?.status !== "ok" ? (
@@ -198,8 +199,8 @@ function OrderView({
 function BackLinks(): ReactNode {
   return (
     <div className="flex flex-wrap gap-2">
-      <a href="/app/orders" className={uiButton("secondary", "inline-flex items-center justify-center px-4 text-[14px]")}>Volver a órdenes</a>
-      <a href={COBRAR_PATH} className={uiButton("secondary", "inline-flex items-center justify-center px-4 text-[14px]")}>Cobrar otra cuenta</a>
+      <Link href="/app/orders" className={uiButton("secondary", "inline-flex items-center justify-center px-4 text-[14px]")}>Volver a órdenes</Link>
+      <Link href={COBRAR_PATH} className={uiButton("secondary", "inline-flex items-center justify-center px-4 text-[14px]")}>Cobrar otra cuenta</Link>
     </div>
   );
 }
@@ -301,7 +302,7 @@ function ReceiptCard({ receipt, order, header }: { readonly receipt: PaymentColl
       <p className="font-heading text-lg font-semibold">
         {receipt.remainingBalanceMinor > 0 ? `Saldo restante ${formatMinorUnits(receipt.remainingBalanceMinor, receipt.currency)}` : "Cuenta pagada por completo"}
       </p>
-      {receipt.remainingBalanceMinor > 0 && <a href={cobrarHref(receipt.orderId)} className={uiButton("primary", "inline-flex items-center justify-center px-4 text-sm")}>Seguir cobrando esta cuenta</a>}
+      {receipt.remainingBalanceMinor > 0 && <Link href={cobrarHref(receipt.orderId)} className={uiButton("primary", "inline-flex items-center justify-center px-4 text-sm")}>Seguir cobrando esta cuenta</Link>}
       {order !== undefined && <ReceiptPrintButton order={order} payment={receipt} header={header} />}
       <BackLinks />
     </div>
