@@ -52,6 +52,7 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
 }): ReactNode {
   const currency = state.catalog?.currency ?? DEFAULT_PESO_CURRENCY;
   const [activeTab, setActiveTab] = useState<MenuTab>(() => initialTab ?? DEFAULT_MENU_TAB);
+  const [tabResolved, setTabResolved] = useState(() => initialTab !== undefined);
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const [groupFilter, setGroupFilter] = useState("");
   const [categories, setCategories] = useState<readonly MenuCategoryV1[]>(() =>
@@ -91,10 +92,14 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
         window.history.replaceState(null, "", menuTabHref(stored, window.location.search));
       }
     }
+    setTabResolved(true);
 
     const onPopState = (): void => {
       const popTab = parseMenuTab(new URL(window.location.href).searchParams.get("tab"));
-      if (popTab !== undefined) setActiveTab(popTab);
+      if (popTab !== undefined) {
+        setActiveTab(popTab);
+        setTabResolved(true);
+      }
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -102,6 +107,7 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
 
   const selectTab = (tab: MenuTab): void => {
     setActiveTab(tab);
+    setTabResolved(true);
     writeStoredMenuTab(window.localStorage, tab);
     window.history.replaceState(null, "", menuTabHref(tab, window.location.search));
   };
@@ -369,55 +375,68 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
         })}
       </nav>
 
+      {!tabResolved && (
+        <section aria-hidden="true" className="flex min-h-64 flex-col gap-4 rounded-2xl border border-border bg-surface p-6 animate-pulse">
+          <div className="h-6 w-44 rounded bg-border/60" />
+          <div className="h-4 w-72 rounded bg-border/40" />
+          <div className="mt-4 flex flex-col gap-3">
+            <div className="h-16 rounded-xl bg-border/20" />
+            <div className="h-16 rounded-xl bg-border/20" />
+          </div>
+        </section>
+      )}
+
       <div
         role="tabpanel"
         id="menu-panel-categorias"
         aria-labelledby="menu-tab-categorias"
         tabIndex={0}
-        hidden={activeTab !== "categorias"}
-        className={activeTab === "categorias" ? "flex flex-col gap-5 focus-visible:outline-none" : "hidden"}
+        hidden={!tabResolved || activeTab !== "categorias"}
+        className={tabResolved && activeTab === "categorias" ? "flex flex-col gap-5 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" : "hidden"}
       >
-        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-          <SectionHeader title="Categorías" description="Organizan la carta y controlan su orden de aparición.">
-            {canManage && <AddButton label="Agregar categoría" onClick={addCategory} />}
-          </SectionHeader>
-          {categories.length === 0 ? <EmptyText text="Agrega una categoría para comenzar el menú." /> : (
-            <DragReorderList className="mt-4 flex flex-col gap-3" disabled={!canManage} getKey={(category) => category.categoryId} items={categories} itemLabel={(category) => category.name} label="Categorías" onMove={(from, to) => setCategories((current) => reorder(current, from, to))}
-              renderRow={(category, _index, handle) => (
-                <article className={`flex min-w-0 items-start gap-3 rounded-xl border p-3 ${menuCategoryColorClasses(category.color)?.card ?? "border-border bg-bg/50"}`}>
-                  {handle !== null && (
-                    <EditorRowActions>
-                      {handle}
-                    </EditorRowActions>
-                  )}
-                  <div className="flex flex-col items-center">
-                    <div className="hidden h-5 min-h-5 sm:block" aria-hidden="true" />
-                    <div className="mt-1 flex h-11 min-h-11 w-12 items-center justify-center">
-                      <MenuPhoto canManage={canManage} imagePath={category.imagePath} name={category.name} supabaseUrl={supabaseUrl} target="category" targetId={category.categoryId} usedImagePaths={usedImagePaths}
-                        onChange={(imagePath) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, imagePath } : entry))} onUploadPendingChange={onUploadPendingChange} />
-                    </div>
-                    <div className="hidden min-h-4 sm:block" aria-hidden="true" />
-                  </div>
-                  <div className="flex flex-col items-center">
-                    <div className="hidden h-5 min-h-5 sm:block" aria-hidden="true" />
-                    <div className="mt-1 flex h-11 min-h-11 items-center justify-center">
-                      <CategoryColorPicker disabled={!canManage} name={category.name} value={category.color} onChange={(color) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, color } : entry))} />
-                    </div>
-                    <div className="hidden min-h-4 sm:block" aria-hidden="true" />
-                  </div>
-                  <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-                    <TextInput disabled={!canManage} hint="Nombre de la sección de la carta, por ejemplo Pizzas o Bebidas. El operador navega por estas categorías." label="Nombre" maxLength={80} value={category.name} onChange={(name) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, name } : entry))} />
-                    <EditorRowActions>
-                      <div className="flex items-center justify-end gap-2">
-                        <ActiveInput disabled={!canManage} checked={category.active} onChange={(active) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, active } : entry))} />
-                        {canManage && <RemoveButton label={`Quitar ${category.name}`} onClick={() => setRemoval({ id: category.categoryId, kind: "category", label: category.name })} />}
+        {tabResolved && (
+          <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+            <SectionHeader title="Categorías" description="Organizan la carta y controlan su orden de aparición.">
+              {canManage && <AddButton label="Agregar categoría" onClick={addCategory} />}
+            </SectionHeader>
+            {categories.length === 0 ? <EmptyText text="Agrega una categoría para comenzar el menú." /> : (
+              <DragReorderList className="mt-4 flex flex-col gap-3" disabled={!canManage} getKey={(category) => category.categoryId} items={categories} itemLabel={(category) => category.name} label="Categorías" onMove={(from, to) => setCategories((current) => reorder(current, from, to))}
+                renderRow={(category, _index, handle) => (
+                  <article className={`flex min-w-0 items-start gap-3 rounded-xl border p-3 ${menuCategoryColorClasses(category.color)?.card ?? "border-border bg-bg/50"}`}>
+                    {handle !== null && (
+                      <EditorRowActions>
+                        {handle}
+                      </EditorRowActions>
+                    )}
+                    <div className="flex flex-col items-center">
+                      <div className="hidden h-5 min-h-5 sm:block" aria-hidden="true" />
+                      <div className="mt-1 flex h-11 min-h-11 w-12 items-center justify-center">
+                        <MenuPhoto canManage={canManage} imagePath={category.imagePath} name={category.name} supabaseUrl={supabaseUrl} target="category" targetId={category.categoryId} usedImagePaths={usedImagePaths}
+                          onChange={(imagePath) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, imagePath } : entry))} onUploadPendingChange={onUploadPendingChange} />
                       </div>
-                    </EditorRowActions>
-                  </div>
-                </article>
-              )} />
-          )}
-        </section>
+                      <div className="hidden min-h-4 sm:block" aria-hidden="true" />
+                    </div>
+                    <div className="flex flex-col items-center">
+                      <div className="hidden h-5 min-h-5 sm:block" aria-hidden="true" />
+                      <div className="mt-1 flex h-11 min-h-11 items-center justify-center">
+                        <CategoryColorPicker disabled={!canManage} name={category.name} value={category.color} onChange={(color) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, color } : entry))} />
+                      </div>
+                      <div className="hidden min-h-4 sm:block" aria-hidden="true" />
+                    </div>
+                    <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                      <TextInput disabled={!canManage} hint="Nombre de la sección de la carta, por ejemplo Pizzas o Bebidas. El operador navega por estas categorías." label="Nombre" maxLength={80} value={category.name} onChange={(name) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, name } : entry))} />
+                      <EditorRowActions>
+                        <div className="flex items-center justify-end gap-2">
+                          <ActiveInput disabled={!canManage} checked={category.active} onChange={(active) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, active } : entry))} />
+                          {canManage && <RemoveButton label={`Quitar ${category.name}`} onClick={() => setRemoval({ id: category.categoryId, kind: "category", label: category.name })} />}
+                        </div>
+                      </EditorRowActions>
+                    </div>
+                  </article>
+                )} />
+            )}
+          </section>
+        )}
       </div>
 
       <div
@@ -425,47 +444,49 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
         id="menu-panel-productos"
         aria-labelledby="menu-tab-productos"
         tabIndex={0}
-        hidden={activeTab !== "productos"}
-        className={activeTab === "productos" ? "flex flex-col gap-5 focus-visible:outline-none" : "hidden"}
+        hidden={!tabResolved || activeTab !== "productos"}
+        className={tabResolved && activeTab === "productos" ? "flex flex-col gap-5 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" : "hidden"}
       >
-        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-          <SectionHeader title="Productos" description="Captura precios en la moneda del restaurante y elige qué grupos de modificadores ofrece cada producto.">
-            {canManage && <AddButton disabled={categories.length === 0} label="Agregar producto" onClick={addProduct} />}
-          </SectionHeader>
-          {products.length === 0 ? <EmptyText text="No hay productos en este borrador." /> : (
-            <div className="mt-4 flex flex-col gap-5">
-              {categories.map((category) => {
-                const inCategory = products.filter((entry) => entry.categoryId === category.categoryId);
-                if (inCategory.length === 0) return null;
-                return (
-                  <div key={category.categoryId} className="flex min-w-0 flex-col gap-2">
-                    <h3 className="font-heading text-[13px] font-semibold text-text-muted">{category.name.trim() === "" ? "Categoría sin nombre" : category.name}</h3>
-                    <DragReorderList className="flex flex-col gap-4" disabled={!canManage} getKey={(entry) => entry.productId} items={inCategory} itemLabel={(entry) => entry.name}
-                      label={`Productos de ${category.name}`}
-                      onMove={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.categoryId === category.categoryId, from, to))}
-                      renderRow={(product, _index, handle) => (
-                        <ProductEditor handle={handle} copyNotice={copiedProductIds.includes(product.productId)} usedStations={products.map((entry) => entry.stationId)} usedImagePaths={usedImagePaths} variantInvalid={variantIssue?.productId === product.productId}
-                          canManage={canManage}
-                          categories={categories}
-                          currency={currency}
-                          catalogGroups={groups}
-                          groups={groupsForProduct(product, groups)}
-                          product={product}
-                          supabaseUrl={supabaseUrl}
-                          onDuplicate={() => { void copyProduct(product.productId); }}
-                          onManageGroups={() => selectTab("modificadores")}
-                          onProductChange={(changed) => setProducts((current) => current.map((entry) => entry.productId === changed.productId ? changed : entry))}
-                          onProductImageChange={(imagePath) => setProducts((current) => current.map((entry) => entry.productId === product.productId ? { ...entry, imagePath } : entry))}
-                          onRemove={requestRemoval}
-                          onUploadPendingChange={onUploadPendingChange}
-                        />
-                      )} />
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
+        {tabResolved && (
+          <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+            <SectionHeader title="Productos" description="Captura precios en la moneda del restaurante y elige qué grupos de modificadores ofrece cada producto.">
+              {canManage && <AddButton disabled={categories.length === 0} label="Agregar producto" onClick={addProduct} />}
+            </SectionHeader>
+            {products.length === 0 ? <EmptyText text="No hay productos en este borrador." /> : (
+              <div className="mt-4 flex flex-col gap-5">
+                {categories.map((category) => {
+                  const inCategory = products.filter((entry) => entry.categoryId === category.categoryId);
+                  if (inCategory.length === 0) return null;
+                  return (
+                    <div key={category.categoryId} className="flex min-w-0 flex-col gap-2">
+                      <h3 className="font-heading text-[13px] font-semibold text-text-muted">{category.name.trim() === "" ? "Categoría sin nombre" : category.name}</h3>
+                      <DragReorderList className="flex flex-col gap-4" disabled={!canManage} getKey={(entry) => entry.productId} items={inCategory} itemLabel={(entry) => entry.name}
+                        label={`Productos de ${category.name}`}
+                        onMove={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.categoryId === category.categoryId, from, to))}
+                        renderRow={(product, _index, handle) => (
+                          <ProductEditor handle={handle} copyNotice={copiedProductIds.includes(product.productId)} usedStations={products.map((entry) => entry.stationId)} usedImagePaths={usedImagePaths} variantInvalid={variantIssue?.productId === product.productId}
+                            canManage={canManage}
+                            categories={categories}
+                            currency={currency}
+                            catalogGroups={groups}
+                            groups={groupsForProduct(product, groups)}
+                            product={product}
+                            supabaseUrl={supabaseUrl}
+                            onDuplicate={() => { void copyProduct(product.productId); }}
+                            onManageGroups={() => selectTab("modificadores")}
+                            onProductChange={(changed) => setProducts((current) => current.map((entry) => entry.productId === changed.productId ? changed : entry))}
+                            onProductImageChange={(imagePath) => setProducts((current) => current.map((entry) => entry.productId === product.productId ? { ...entry, imagePath } : entry))}
+                            onRemove={requestRemoval}
+                            onUploadPendingChange={onUploadPendingChange}
+                          />
+                        )} />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
       </div>
 
       <div
@@ -473,46 +494,48 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
         id="menu-panel-modificadores"
         aria-labelledby="menu-tab-modificadores"
         tabIndex={0}
-        hidden={activeTab !== "modificadores"}
-        className={activeTab === "modificadores" ? "flex flex-col gap-5 focus-visible:outline-none" : "hidden"}
+        hidden={!tabResolved || activeTab !== "modificadores"}
+        className={tabResolved && activeTab === "modificadores" ? "flex flex-col gap-5 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" : "hidden"}
       >
-        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-          <SectionHeader title="Modificadores" description="Configura grupos de ingredientes, opciones con sus precios y especialidades. Los grupos pueden fungir como especialidades o variantes de preparación para tus productos; asígnalos desde la pestaña Productos.">
-            {canManage && <AddButton label="Agregar grupo" onClick={addGroup} />}
-          </SectionHeader>
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <input
-                type="search"
-                aria-label="Buscar grupo por nombre"
-                placeholder="Buscar grupo por nombre…"
-                value={groupFilter}
-                onChange={(event) => setGroupFilter(event.target.value)}
-                className="h-11 min-h-11 w-full max-w-sm rounded-lg border border-border bg-surface px-3 text-[13px] focus-visible:outline-2 focus-visible:outline-accent"
-              />
-            </div>
-            {normalizedGroupFilter !== "" && (
-              <p className="text-[12px] text-text-muted">
-                Mostrando {filteredGroups.length} de {groups.length} grupos
-              </p>
-            )}
-          </div>
-          {groups.length === 0 ? <EmptyText text="Aún no hay grupos de modificadores. Crea uno y asígnalo a tus productos." /> : (
-            filteredGroups.length === 0 ? <EmptyText text="No hay grupos que coincidan con la búsqueda." /> : (
-              <div className="mt-4 flex flex-col gap-1">
-                {filteredGroups.map((group, groupIndex) => (
-                  <ModifierGroupEditor key={group.groupId} siblingCount={filteredGroups.length} siblingIndex={groupIndex} usedImagePaths={usedImagePaths}
-                    assignedCount={groupAssignmentCount(products, group)}
-                    onMoveGroup={(from, to) => setGroups((current) => reorder(current, from, to))} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl}
-                    onAddOption={() => addOption(group.groupId)} onChange={(changed) => setGroups((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))}
-                    onDuplicate={() => copyGroup(group.groupId)}
-                    onOptionImageChange={(optionId, imagePath) => setGroups((current) => current.map((entry) => entry.groupId === group.groupId ? { ...entry, options: entry.options.map((option) => option.optionId === optionId ? { ...option, imagePath } : option) } : entry))}
-                    onRemove={requestRemoval} onUploadPendingChange={onUploadPendingChange} />
-                ))}
+        {tabResolved && (
+          <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+            <SectionHeader title="Modificadores" description="Configura grupos de ingredientes, opciones con sus precios y especialidades. Los grupos pueden fungir como especialidades o variantes de preparación para tus productos; asígnalos desde la pestaña Productos.">
+              {canManage && <AddButton label="Agregar grupo" onClick={addGroup} />}
+            </SectionHeader>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <input
+                  type="search"
+                  aria-label="Buscar grupo por nombre"
+                  placeholder="Buscar grupo por nombre…"
+                  value={groupFilter}
+                  onChange={(event) => setGroupFilter(event.target.value)}
+                  className="h-11 min-h-11 w-full max-w-sm rounded-lg border border-border bg-surface px-3 text-[13px] focus-visible:outline-2 focus-visible:outline-accent"
+                />
               </div>
-            )
-          )}
-        </section>
+              {normalizedGroupFilter !== "" && (
+                <p className="text-[12px] text-text-muted">
+                  Mostrando {filteredGroups.length} de {groups.length} grupos
+                </p>
+              )}
+            </div>
+            {groups.length === 0 ? <EmptyText text="Aún no hay grupos de modificadores. Crea uno y asígnalo a tus productos." /> : (
+              filteredGroups.length === 0 ? <EmptyText text="No hay grupos que coincidan con la búsqueda." /> : (
+                <div className="mt-4 flex flex-col gap-1">
+                  {filteredGroups.map((group, groupIndex) => (
+                    <ModifierGroupEditor key={group.groupId} siblingCount={filteredGroups.length} siblingIndex={groupIndex} usedImagePaths={usedImagePaths}
+                      assignedCount={groupAssignmentCount(products, group)}
+                      onMoveGroup={(from, to) => setGroups((current) => reorder(current, from, to))} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl}
+                      onAddOption={() => addOption(group.groupId)} onChange={(changed) => setGroups((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))}
+                      onDuplicate={() => copyGroup(group.groupId)}
+                      onOptionImageChange={(optionId, imagePath) => setGroups((current) => current.map((entry) => entry.groupId === group.groupId ? { ...entry, options: entry.options.map((option) => option.optionId === optionId ? { ...option, imagePath } : option) } : entry))}
+                      onRemove={requestRemoval} onUploadPendingChange={onUploadPendingChange} />
+                  ))}
+                </div>
+              )
+            )}
+          </section>
+        )}
       </div>
 
       <div
@@ -520,89 +543,91 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
         id="menu-panel-tamanos"
         aria-labelledby="menu-tab-tamanos"
         tabIndex={0}
-        hidden={activeTab !== "tamanos"}
-        className={activeTab === "tamanos" ? "flex flex-col gap-5 focus-visible:outline-none" : "hidden"}
+        hidden={!tabResolved || activeTab !== "tamanos"}
+        className={tabResolved && activeTab === "tamanos" ? "flex flex-col gap-5 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" : "hidden"}
       >
-        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-          <SectionHeader title="Tamaños y presets" description="Presentaciones y porciones de tus productos. Cada producto define sus propios tamaños y precios.">
-            <button
-              type="button"
-              onClick={() => selectTab("productos")}
-              className="inline-flex min-h-11 items-center rounded-lg border border-accent px-4 py-2 text-[12px] font-semibold text-accent hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              Configurar en Productos →
-            </button>
-          </SectionHeader>
-
-          <div role="status" className="mt-4 rounded-xl border border-accent/40 bg-accent-soft p-4 text-[13px] text-text">
-            <p className="font-semibold text-accent-hover">Pronto podrás definir tamaños una sola vez y elegirlos en cada producto.</p>
-            <p className="mt-1 text-text-muted">Por ahora, cada producto define sus propias presentaciones y precios. Aquí puedes consultar los tamaños configurados actualmente en tu carta, agrupados por producto.</p>
-          </div>
-
-          {sizeSummary.length > 0 && (
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <span className="text-[12px] font-semibold text-text-muted">Presentaciones en uso:</span>
-              {sizeSummary.map((item) => (
-                <span key={item.name} className="inline-flex min-h-8 items-center rounded-full border border-border bg-surface px-3 py-1 text-[12px] text-text">
-                  <span className="font-medium">{item.name}</span>
-                  <span className="ml-1.5 text-text-muted">({item.count} {item.count === 1 ? "producto" : "productos"})</span>
-                </span>
-              ))}
-            </div>
-          )}
-
-          {productsWithSizes.length === 0 ? (
-            <div className="mt-4 rounded-xl border border-dashed border-border p-6 text-center">
-              <p className="text-[13px] text-text-muted">No hay productos con tamaños configurados en este borrador.</p>
-              <p className="mt-1 text-[12px] text-text-muted">Puedes agregar tamaños (chica, mediana, grande…) directamente en la tarjeta de cada producto en la pestaña Productos.</p>
+        {tabResolved && (
+          <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+            <SectionHeader title="Tamaños y presets" description="Presentaciones y porciones de tus productos. Cada producto define sus propios tamaños y precios.">
               <button
                 type="button"
                 onClick={() => selectTab("productos")}
-                className="mt-3 min-h-11 rounded-lg border border-accent px-4 py-2 text-[13px] font-semibold text-accent hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-accent"
+                className="inline-flex min-h-11 items-center rounded-lg border border-accent px-4 py-2 text-[12px] font-semibold text-accent hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-accent"
               >
-                Ir a Productos →
+                Configurar en Productos →
               </button>
+            </SectionHeader>
+
+            <div role="status" className="mt-4 rounded-xl border border-accent/40 bg-accent-soft p-4 text-[13px] text-text">
+              <p className="font-semibold text-accent-hover">Pronto podrás definir tamaños una sola vez y elegirlos en cada producto.</p>
+              <p className="mt-1 text-text-muted">Por ahora, cada producto define sus propias presentaciones y precios. Aquí puedes consultar los tamaños configurados actualmente en tu carta, agrupados por producto.</p>
             </div>
-          ) : (
-            <div className="mt-4 grid gap-3">
-              {productsWithSizes.map((prod) => {
-                const category = categories.find((c) => c.categoryId === prod.categoryId);
-                const variants = prod.variants ?? [];
-                return (
-                  <article key={prod.productId} className="flex flex-col gap-3 rounded-xl border border-border bg-bg/50 p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
-                      <div>
-                        <h3 className="font-heading text-[14px] font-bold text-text">{prod.name || "Producto sin nombre"}</h3>
-                        <p className="text-[12px] text-text-muted">{category?.name ?? "Sin categoría"} · {variants.length} {variants.length === 1 ? "tamaño" : "tamaños"}</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => selectTab("productos")}
-                        className="inline-flex min-h-9 items-center text-[12px] font-semibold text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent"
-                      >
-                        Editar en Productos →
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                      {variants.map((variant) => (
-                        <div key={variant.variantId} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface p-2.5 text-[13px]">
-                          <div className="min-w-0 flex-1 truncate">
-                            <span className="font-semibold text-text">{variant.name || "Tamaño sin nombre"}</span>
-                            {variant.sku && <span className="ml-1.5 text-[11px] text-text-muted">({variant.sku})</span>}
-                          </div>
-                          <span className="font-bold text-text">{formatMinorUnits(variant.unitPriceMinor, currency)}</span>
-                          <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${variant.active ? "bg-accent-soft text-accent" : "bg-bg text-text-muted"}`}>
-                            {variant.active ? "Activo" : "Inactivo"}
-                          </span>
+
+            {sizeSummary.length > 0 && (
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <span className="text-[12px] font-semibold text-text-muted">Presentaciones en uso:</span>
+                {sizeSummary.map((item) => (
+                  <span key={item.name} className="inline-flex min-h-8 items-center rounded-full border border-border bg-surface px-3 py-1 text-[12px] text-text">
+                    <span className="font-medium">{item.name}</span>
+                    <span className="ml-1.5 text-text-muted">({item.count} {item.count === 1 ? "producto" : "productos"})</span>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {productsWithSizes.length === 0 ? (
+              <div className="mt-4 rounded-xl border border-dashed border-border p-6 text-center">
+                <p className="text-[13px] text-text-muted">No hay productos con tamaños configurados en este borrador.</p>
+                <p className="mt-1 text-[12px] text-text-muted">Puedes agregar tamaños (chica, mediana, grande…) directamente en la tarjeta de cada producto en la pestaña Productos.</p>
+                <button
+                  type="button"
+                  onClick={() => selectTab("productos")}
+                  className="mt-3 min-h-11 rounded-lg border border-accent px-4 py-2 text-[13px] font-semibold text-accent hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  Ir a Productos →
+                </button>
+              </div>
+            ) : (
+              <div className="mt-4 grid gap-3">
+                {productsWithSizes.map((prod) => {
+                  const category = categories.find((c) => c.categoryId === prod.categoryId);
+                  const variants = prod.variants ?? [];
+                  return (
+                    <article key={prod.productId} className="flex flex-col gap-3 rounded-xl border border-border bg-bg/50 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
+                        <div>
+                          <h3 className="font-heading text-[14px] font-bold text-text">{prod.name || "Producto sin nombre"}</h3>
+                          <p className="text-[12px] text-text-muted">{category?.name ?? "Sin categoría"} · {variants.length} {variants.length === 1 ? "tamaño" : "tamaños"}</p>
                         </div>
-                      ))}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </section>
+                        <button
+                          type="button"
+                          onClick={() => selectTab("productos")}
+                          className="inline-flex min-h-9 items-center text-[12px] font-semibold text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+                        >
+                          Editar en Productos →
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {variants.map((variant) => (
+                          <div key={variant.variantId} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface p-2.5 text-[13px]">
+                            <div className="min-w-0 flex-1 truncate">
+                              <span className="font-semibold text-text">{variant.name || "Tamaño sin nombre"}</span>
+                              {variant.sku && <span className="ml-1.5 text-[11px] text-text-muted">({variant.sku})</span>}
+                            </div>
+                            <span className="font-bold text-text">{formatMinorUnits(variant.unitPriceMinor, currency)}</span>
+                            <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${variant.active ? "bg-accent-soft text-accent" : "bg-bg text-text-muted"}`}>
+                              {variant.active ? "Activo" : "Inactivo"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
       </div>
     </form>
   );
@@ -1064,7 +1089,7 @@ function ModifierGroupEditor({ assignedCount, siblingCount, siblingIndex, usedIm
           </div>
         </EditorRowActions>
       </div>
-      <p role="status" className="mt-2 text-[12px] text-text-muted">{assignedCount === 1 ? "Asignado a 1 producto." : `Asignado a ${assignedCount} productos.`}{assignedCount === 0 ? " (sin asignar)" : ""}</p>
+      <p role="status" className="mt-2 text-[12px] text-text-muted">{assignedCount === 0 ? "Sin asignar" : assignedCount === 1 ? "Asignado a 1 producto" : `Asignado a ${assignedCount} productos`}</p>
       <div className="mt-3 flex items-center justify-between gap-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted"><span className="inline-flex flex-wrap items-center gap-1.5">Opciones<FieldHint label="Opciones" text="Cada opción es una alternativa del grupo (por ejemplo Pepperoni) con su precio extra, que puede ser 0." /></span></p>{canManage && <AddButton label="Agregar opción" onClick={onAddOption} />}</div>
       <div className="mt-2 grid gap-2 lg:grid-cols-2">
         {group.options.map((option) => (
