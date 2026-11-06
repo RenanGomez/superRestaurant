@@ -4,12 +4,11 @@ import type { ReactNode } from "react";
 
 import { Field } from "../../../../components/field-hint";
 import { getServerEnv } from "../../../../env";
-import { authorizeBranch } from "../../../../lib/branch-selection";
 import { readBranchTimeZone } from "../../../../lib/deliveries";
 import { buildDaySummaryView, isCalendarDate, todayInZone, type DaySummaryRow } from "../../../../lib/day-summary";
-import { BRANCH_PREFERENCE_COOKIE, findMembership, listMemberships, parseBranchPreference } from "../../../../lib/memberships";
+import { BRANCH_PREFERENCE_COOKIE, findMembership, parseBranchPreference } from "../../../../lib/memberships";
 import { readDaySummary } from "../../../../lib/reports";
-import { createServerSupabaseClient } from "../../../../lib/supabase-server";
+import { getRequestSession, getRequestMemberships, getRequestAuthorizedBranch } from "../../../../lib/request-context";
 import { selectSummaryDateAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -21,21 +20,23 @@ interface PageProps {
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
 export default async function DaySummaryPage({ searchParams }: PageProps): Promise<ReactNode> {
-  const supabase = await createServerSupabaseClient();
-  const { data: { session } } = await supabase.auth.getSession();
+  const session = await getRequestSession();
   if (session === null) redirect("/login");
   const scope = parseBranchPreference((await cookies()).get(BRANCH_PREFERENCE_COOKIE)?.value);
   if (scope === undefined) redirect("/app");
   const env = getServerEnv();
-  const memberships = await listMemberships(session.access_token, env.apiBaseUrl);
+  const memberships = await getRequestMemberships(session.access_token);
   const membership = memberships === undefined ? undefined : findMembership(memberships.memberships, scope);
-  if (membership === undefined || await authorizeBranch(session.access_token, env.apiBaseUrl, scope) === undefined) {
+  if (membership === undefined || await getRequestAuthorizedBranch(session.access_token, scope.restaurantId, scope.branchId) === undefined) {
     redirect("/app?branchError=not_authorized");
   }
   const params = await searchParams;
   const rawDate = typeof params.date === "string" ? params.date : undefined;
   const invalidDate = params.error === "invalid_date" || (rawDate !== undefined && !isCalendarDate(rawDate));
-  const timeZone = await readBranchTimeZone(session.access_token, env.apiBaseUrl, scope);
+  const [timeZone, requestedSummary] = await Promise.all([
+    readBranchTimeZone(session.access_token, env.apiBaseUrl, scope),
+    rawDate !== undefined && isCalendarDate(rawDate) ? readDaySummary(session.access_token, env.apiBaseUrl, scope, rawDate) : undefined,
+  ]);
   const date = rawDate !== undefined && isCalendarDate(rawDate) ? rawDate : timeZone === undefined ? undefined : todayInZone(new Date(), timeZone);
 
   const shell = (children: ReactNode): ReactNode => (
@@ -63,7 +64,7 @@ export default async function DaySummaryPage({ searchParams }: PageProps): Promi
   );
 
   if (date === undefined) return message("No se pudo cargar la sucursal", "No se obtuvo la zona horaria. No se registró ningún cambio.");
-  const result = await readDaySummary(session.access_token, env.apiBaseUrl, scope, date);
+  const result = requestedSummary ?? await readDaySummary(session.access_token, env.apiBaseUrl, scope, date);
   if (result.status === "unauthorized") return message("Sin permiso de reportes", "Tu rol actual no puede ver el resumen del día en esta sucursal.", false);
   if (result.status !== "ok") return message("No se pudo cargar el resumen", "El servicio no respondió con datos válidos. Reintenta en un momento.");
   const view = buildDaySummaryView(result.value);

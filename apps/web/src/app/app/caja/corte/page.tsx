@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 
 import type { CashRegisterOperationalReportV1 } from "@super-restaurant/shared-types";
@@ -35,13 +36,13 @@ export default async function CashCutPage({ searchParams }: { readonly searchPar
         <EmptyState
           title="No se pudo recuperar la caja"
           body="El estado autoritativo no está disponible. No se realizó ningún cobro ni cierre."
-          action={<a href={CORTE_PATH} className={uiButton("primary", "inline-flex items-center px-4 text-[14px]")}>Reintentar</a>}
+          action={<Link href={CORTE_PATH} className={uiButton("primary", "inline-flex items-center px-4 text-[14px]")}>Reintentar</Link>}
         />
       ) : view === "no_register" || value === undefined ? (
         <EmptyState
           title="No hay una caja abierta"
           body="Abre la caja en Cobrar para empezar el turno; el corte aparece aquí después."
-          action={<a href={COBRAR_PATH} className={uiButton("primary", "inline-flex items-center px-4 text-[14px]")}>Ir a Cobrar</a>}
+          action={<Link href={COBRAR_PATH} className={uiButton("primary", "inline-flex items-center px-4 text-[14px]")}>Ir a Cobrar</Link>}
         />
       ) : view === "closed" ? (
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -50,7 +51,7 @@ export default async function CashCutPage({ searchParams }: { readonly searchPar
             <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Siguiente turno</p>
             <h2 className="mt-1 font-heading text-[18px] font-semibold">Abrir una caja nueva</h2>
             <p className="mt-2 text-[13px] text-text-muted">El cierre anterior permanece disponible en esta vista. Una nueva apertura tendrá otra sesión y otro turno.</p>
-            <a href={COBRAR_PATH} className={`mt-5 ${uiButton("primary", "inline-flex items-center px-4 text-[14px]")}`}>Abrir caja en Cobrar</a>
+            <Link href={COBRAR_PATH} className={`mt-5 ${uiButton("primary", "inline-flex items-center px-4 text-[14px]")}`}>Abrir caja en Cobrar</Link>
           </section>
         </div>
       ) : (
@@ -87,7 +88,7 @@ function OperationalReport({ report, title }: { readonly report: CashRegisterOpe
   const register = report.register;
   return (
     <section className="min-w-0 rounded-2xl border border-border bg-surface p-5 shadow-[0_8px_30px_oklch(20%_0.02_250_/_0.04)]">
-      <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Resumen no fiscal</p><h2 className="mt-1 font-heading text-[18px] font-semibold">{title}</h2></div><a href={CORTE_PATH} className={uiButton("secondary", "inline-flex items-center px-3 text-[13px]")}>Actualizar</a></div>
+      <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent">Resumen no fiscal</p><h2 className="mt-1 font-heading text-[18px] font-semibold">{title}</h2></div><Link href={CORTE_PATH} className={uiButton("secondary", "inline-flex items-center px-3 text-[13px]")}>Actualizar</Link></div>
       <p className="mt-2 text-[12px] text-text-muted">Lectura autoritativa del turno. No cierra la caja ni genera folio, impresión o efecto fiscal.</p>
       <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Metric label="Fondo inicial" value={formatMinorUnits(register.openingFloatMinor, register.currency)} />
