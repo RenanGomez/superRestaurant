@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys } from "./menu-draft-storage.js";
+import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, recoveredSizePresets, serializeMenuDraft, staleMenuDraftKeys } from "./menu-draft-storage.js";
 import { updatePresetVariants } from "./menu-variants.js";
 import { withDerivedAssignments } from "./menu-groups.js";
 
@@ -92,5 +92,13 @@ test("a draft with an invalid or foreign category image or colour is rejected", 
 test("draft retains presets and reads legacy drafts", () => {
   const sizePresets = [{ id: "s1", name: "Chica", active: true, displayOrder: 1 }];
   assert.deepEqual(parseMenuDraft(serializeMenuDraft({ ...parts, sizePresets, expectedVersion: 1 }), 1)?.sizePresets, sizePresets);
-  assert.deepEqual(parseMenuDraft(JSON.stringify({ categories: parts.categories, groups: parts.groups, products: parts.products, expectedVersion: 1 }), 1)?.sizePresets, []);
+  assert.deepEqual(parseMenuDraft(JSON.stringify({ categories: parts.categories, groups: parts.groups, products: parts.products, expectedVersion: 1 }), 1)?.sizePresets, undefined);
+});
+
+test("legacy recovery keeps published presets while explicit empty list clears them", () => {
+  const published = [{ id: "s1", name: "Chica", active: true, displayOrder: 1 }];
+  const legacy = parseMenuDraft(JSON.stringify({ categories: parts.categories, groups: parts.groups, products: parts.products, expectedVersion: 1 }), 1);
+  assert.ok(legacy);
+  assert.deepEqual(recoveredSizePresets(legacy, published), published);
+  assert.deepEqual(recoveredSizePresets({ ...legacy, sizePresets: [] }, published), []);
 });

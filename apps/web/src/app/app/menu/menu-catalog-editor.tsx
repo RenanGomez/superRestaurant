@@ -14,7 +14,7 @@ import type {
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 import { CheckField, FieldHint } from "../../../components/field-hint";
-import { MENU_DEFAULT_UNIT, MENU_FIELD_AUXILIARY_CLASS, MENU_FIELD_CONTROL_CLASS, MENU_FIELD_LABEL_CLASS, MENU_OTHER_STATION, MENU_STATION_MAX_LENGTH, stationValues, unitOptions } from "../../../lib/menu-fields";
+import { invalidPresetNameIds, MENU_DEFAULT_UNIT, MENU_FIELD_AUXILIARY_CLASS, MENU_FIELD_CONTROL_CLASS, MENU_FIELD_LABEL_CLASS, MENU_OTHER_STATION, MENU_STATION_MAX_LENGTH, stationValues, unitOptions } from "../../../lib/menu-fields";
 import { shrinkMenuImage } from "../../../lib/menu-image-resize";
 import { applyRemoval, removalNeedsConfirmation, unassignGroup, type Removal } from "../../../lib/menu-removal";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
@@ -26,7 +26,7 @@ import { updatePresetVariants, variantValidationError } from "../../../lib/menu-
 import { reorder, reorderSubset } from "../../../lib/menu-reorder";
 import { duplicateProduct } from "../../../lib/menu-duplicate";
 import { duplicateGroup, groupAssignmentCount, groupsForProduct, toggleGroupAssignment, withDerivedAssignments, withLegacyOwners } from "../../../lib/menu-groups";
-import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys, type LocalMenuDraft } from "../../../lib/menu-draft-storage";
+import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, recoveredSizePresets, serializeMenuDraft, staleMenuDraftKeys, type LocalMenuDraft } from "../../../lib/menu-draft-storage";
 import { MENU_CATEGORY_COLOR_LABELS, menuCategoryColorClasses } from "../../../lib/menu-category-color";
 import { DEFAULT_MENU_TAB, MENU_TAB_LABELS, MENU_TABS, menuTabHref, parseMenuTab, readStoredMenuTab, writeStoredMenuTab, type MenuTab } from "../../../lib/menu-tabs";
 import { uiOption } from "../../../lib/ui-classes";
@@ -71,6 +71,13 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
   );
   const [sizePresets, setSizePresets] = useState<readonly MenuSizePresetV1[]>(() => state.catalog?.sizePresets ?? []);
   const [presetRemoval, setPresetRemoval] = useState<MenuSizePresetV1 | null>(null);
+  const presetRemovalTrigger = useRef<HTMLElement | null>(null);
+  const presetCancel = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (presetRemoval !== null) presetCancel.current?.focus(); }, [presetRemoval]);
+  const cancelPresetRemoval = (): void => { setPresetRemoval(null); presetRemovalTrigger.current?.focus(); };
+  const invalidPresetIds = invalidPresetNameIds(sizePresets);
+  const inactivePresetInUse = sizePresets.some((preset) => !preset.active && products.some((product) => product.variants?.some((variant) => variant.sizePresetId === preset.id)));
+  const presetError = invalidPresetIds.size > 0 ? "Revisa los nombres de tama?os: deben ser ?nicos y no estar vac?os." : inactivePresetInUse ? "Un tama?o inactivo est? en uso; act?valo o cambia las variantes antes de publicar." : null;
   const [removal, setRemoval] = useState<Removal | null>(null);
   // Legacy per-size halves move to the product on save (the server rejects both at once); validate and send that shape.
   const savedProducts = useMemo(() => products.map((product) => migrateLegacyFraction(product, groups)), [products, groups]);
@@ -185,7 +192,7 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
     setCategories(recovery.categories);
     setProducts(withDerivedAssignments(recovery.products, recovery.groups));
     setGroups(recovery.groups);
-    setSizePresets(recovery.sizePresets ?? []);
+    setSizePresets(recoveredSizePresets(recovery, state.catalog?.sizePresets ?? []));
     setRecovery(null);
   };
   const discardRecovery = (): void => {
@@ -309,7 +316,7 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
   };
 
   return (
-    <form action={saveMenuCatalogAction} onSubmit={(event) => { if (publishDisabledReason(pendingUploads, false) !== null || variantError !== null) event.preventDefault(); }} className="flex min-w-0 flex-col gap-5">
+    <form action={saveMenuCatalogAction} onSubmit={(event) => { if (publishDisabledReason(pendingUploads, false) !== null || variantError !== null || presetError !== null) event.preventDefault(); }} className="flex min-w-0 flex-col gap-5">
       <input type="hidden" name="draft" value={draft} />
       <section className="sticky top-0 z-20 flex flex-wrap items-end justify-between gap-3 rounded-2xl border border-border bg-surface/95 p-4 shadow-sm backdrop-blur">
         <div className="flex flex-wrap items-end gap-4">
@@ -326,13 +333,13 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
             <p role="status" className={`text-[12px] ${dirty ? "font-semibold text-accent-hover" : "text-text-muted"}`}>
               {dirty ? (storageFailed ? "Cambios sin publicar · no se pudieron guardar en este navegador" : "Cambios sin publicar · guardados localmente") : "Todo publicado"}
             </p>
-            <PublishButton dirty={dirty} pendingUploads={pendingUploads} variantError={variantError} />
+            <PublishButton dirty={dirty} pendingUploads={pendingUploads} variantError={presetError ?? variantError} />
           </div>
         ) : (
           <p className="rounded-lg bg-bg px-3 py-2 text-[12px] text-text-muted">Vista de solo lectura</p>
         )}
       </section>
-      {variantError !== null && <p role="alert" className="text-sm text-error">{variantError}</p>}
+      {(presetError ?? variantError) !== null && <p role="alert" className="text-sm text-error">{presetError ?? variantError}</p>}
       {recovery !== null && canManage && (
         <section role="status" aria-label="Cambios sin publicar" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-accent bg-accent-soft p-4">
           <p className="min-w-0 text-[13px]">Hay cambios sin publicar de una sesión anterior guardados en este navegador. Aún no se han publicado.</p>
@@ -546,13 +553,13 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
             <DragReorderList className="mt-4 flex flex-col gap-3" disabled={!canManage} getKey={(preset) => preset.id} items={sizePresets} itemLabel={(preset) => preset.name || "Tamaño nuevo"} label="Tamaños"
               onMove={(from, to) => setSizePresets((current) => reorder(current, from, to))}
               renderRow={(preset, index, handle) => <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border p-3">
-                {handle}<div className="min-w-40 flex-1"><TextInput disabled={!canManage} label="Nombre" maxLength={80} value={preset.name} onChange={(name) => {
+                {handle}<div className="min-w-40 flex-1"><TextInput disabled={!canManage} invalid={invalidPresetIds.has(preset.id)} label="Nombre" maxLength={80} value={preset.name} onChange={(name) => {
                   setSizePresets((current) => current.map((item) => item.id === preset.id ? { ...item, name } : item));
                   setProducts((current) => updatePresetVariants(current, preset.id, name));
                 }} /></div>
                 <ReorderButtons count={sizePresets.length} disabled={!canManage} index={index} label={preset.name || "tamaño nuevo"} onMove={(from, to) => setSizePresets((current) => reorder(current, from, to))} />
                 <ActiveInput disabled={!canManage} checked={preset.active} onChange={(active) => setSizePresets((current) => current.map((item) => item.id === preset.id ? { ...item, active } : item))} />
-                {canManage && <RemoveButton label={`Quitar ${preset.name || "tamaño nuevo"}`} onClick={() => setPresetRemoval(preset)} />}
+                {canManage && <RemoveButton label={`Quitar ${preset.name || "tamaño nuevo"}`} onClick={() => { presetRemovalTrigger.current = document.activeElement as HTMLElement; setPresetRemoval(preset); }} />}
               </div>} />
             {canManage && <AddButton label="Agregar tamaño" disabled={sizePresets.length >= MENU_CATALOG_MAX_SIZE_PRESETS} onClick={() => setSizePresets((current) => [...current, { id: crypto.randomUUID(), name: "", active: true, displayOrder: nextDisplayOrder(current) }])} />}
             {presetRemoval !== null && <div role="alertdialog" aria-label="Quitar tamaño" className="mt-4 rounded-xl border border-border p-4">

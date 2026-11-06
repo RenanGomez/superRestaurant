@@ -54,8 +54,8 @@ export function parseMenuDraft(raw: string | null, expectedVersion: number): Loc
   try { value = JSON.parse(raw); } catch { return null; }
   if (!isRecord(value) || value.expectedVersion !== expectedVersion) return null;
   const { categories, groups, products } = value;
-  const sizePresets = value.sizePresets ?? [];
-  if (!allHaveString(sizePresets, "id")) return null;
+  const sizePresets = value.sizePresets;
+  if (sizePresets !== undefined && !allHaveString(sizePresets, "id")) return null;
   if (!allHaveString(categories, "categoryId") || !allHaveString(products, "productId") || !allHaveString(groups, "groupId")) return null;
   if (!(groups as readonly Record<string, unknown>[]).every((group) => Array.isArray(group.options))) return null;
   const groupIds = new Set((groups as readonly Record<string, unknown>[]).map((group) => group.groupId as string));
@@ -67,7 +67,7 @@ export function parseMenuDraft(raw: string | null, expectedVersion: number): Loc
     if (appearance === undefined) return null;
     normalized.push({ ...(entry as unknown as Omit<MenuCategoryV1, "color" | "imagePath">), ...appearance });
   }
-  return { categories: normalized, expectedVersion, groups: groups as readonly MenuModifierGroupV1[], products: products as readonly MenuProductV1[], sizePresets: sizePresets as readonly MenuSizePresetV1[] };
+  return { categories: normalized, expectedVersion, groups: groups as readonly MenuModifierGroupV1[], products: products as readonly MenuProductV1[], ...(sizePresets === undefined ? {} : { sizePresets: sizePresets as readonly MenuSizePresetV1[] }) };
 }
 
 /** Keys of this branch's drafts for versions other than the current one; they can never be recovered. */
@@ -75,4 +75,8 @@ export function staleMenuDraftKeys(keys: readonly string[], restaurantId: string
   const prefix = menuDraftKeyPrefix(restaurantId, branchId);
   const current = menuDraftKey(restaurantId, branchId, expectedVersion);
   return keys.filter((key) => key.startsWith(prefix) && key !== current);
+}
+
+export function recoveredSizePresets(draft: LocalMenuDraft, published: readonly MenuSizePresetV1[]): readonly MenuSizePresetV1[] {
+  return draft.sizePresets ?? published;
 }

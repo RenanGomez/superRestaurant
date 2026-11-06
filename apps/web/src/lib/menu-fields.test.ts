@@ -20,3 +20,10 @@ test("station values are distinct, trimmed, include general first and the curren
   assert.deepEqual(stationValues(["pizzas", "barra", "pizzas", " "], "cocina"), ["general", "barra", "cocina", "pizzas"]);
   assert.deepEqual(stationValues([], "general"), ["general"]);
 });
+
+import { invalidPresetNameIds } from "./menu-fields.js";
+
+test("preset names reject blanks and trimmed case-insensitive duplicates", () => {
+  assert.deepEqual([...invalidPresetNameIds([{ id: "a", name: "  " }, { id: "b", name: " Grande " }, { id: "c", name: "grande" }, { id: "d", name: "Chica" }])], ["a", "b", "c"]);
+  assert.equal(invalidPresetNameIds([{ id: "a", name: "Chica" }]).size, 0);
+});
