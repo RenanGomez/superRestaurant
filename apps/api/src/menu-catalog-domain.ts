@@ -86,12 +86,19 @@ export function toDomainMenuCatalog(catalog: MenuCatalogV1, restaurantId: string
           name: variant.name,
           ...(variant.sku === null ? {} : { sku: variant.sku }),
           unitPrice: new Money(variant.unitPriceMinor, catalog.currency),
+          ...(variant.sizePresetId === undefined || variant.sizePresetId === null ? {} : { sizePresetId: variant.sizePresetId }),
           ...(variant.fraction === undefined || variant.fraction === null ? {} : { fraction: toDomainFraction(variant.fraction) }),
         })),
       }),
       ...(product.fraction === undefined || product.fraction === null ? {} : { fraction: toDomainFraction(product.fraction) }),
     })),
     restaurantId,
+    sizePresets: (catalog.sizePresets ?? []).map((preset) => ({
+      active: preset.active,
+      displayOrder: preset.displayOrder,
+      id: preset.id,
+      name: preset.name,
+    })),
   };
 }
 

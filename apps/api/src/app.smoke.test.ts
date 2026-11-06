@@ -254,6 +254,7 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
         modifierGroups: [],
         products: [],
         replayed: false,
+        sizePresets: [],
         updatedAt: "2026-09-02T18:00:01.000Z",
         updatedBy: actorId,
         version: 1,

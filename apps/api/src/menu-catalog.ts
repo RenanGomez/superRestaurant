@@ -62,6 +62,7 @@ export class PostgresMenuCatalogAdapter implements MenuCatalogPort {
 
   public async save(actorId: string, command: SaveMenuCatalogCommandV1): Promise<SaveMenuCatalogResult> {
     const payload = JSON.stringify({
+      ...(command.sizePresets === undefined ? {} : { sizePresets: command.sizePresets }),
       categories: command.categories,
       modifierGroups: command.modifierGroups,
       products: command.products,
@@ -163,6 +164,14 @@ function validDomainCatalog(command: SaveMenuCatalogCommandV1): boolean {
   try {
     validateMenuCatalog({
       catalogVersion: command.catalogVersion,
+      ...(command.sizePresets === undefined ? {} : {
+        sizePresets: command.sizePresets.map((preset) => ({
+          active: preset.active,
+          displayOrder: preset.displayOrder,
+          id: preset.id,
+          name: preset.name,
+        })),
+      }),
       categories: command.categories.map((category) => ({
         active: category.active,
         catalogVersion: command.catalogVersion,
@@ -225,6 +234,7 @@ function validDomainCatalog(command: SaveMenuCatalogCommandV1): boolean {
             id: variant.variantId,
             name: variant.name,
             ...(variant.sku === null ? {} : { sku: variant.sku }),
+            ...(variant.sizePresetId === undefined || variant.sizePresetId === null ? {} : { sizePresetId: variant.sizePresetId }),
             unitPrice: new Money(variant.unitPriceMinor, command.currency),
             ...(variant.fraction === undefined || variant.fraction === null ? {} : { fraction: toDomainFraction(variant.fraction) }),
           })),
@@ -232,6 +242,12 @@ function validDomainCatalog(command: SaveMenuCatalogCommandV1): boolean {
         ...(product.fraction === undefined || product.fraction === null ? {} : { fraction: toDomainFraction(product.fraction) }),
       })),
       restaurantId: command.scope.restaurantId,
+      sizePresets: (command.sizePresets ?? []).map((preset) => ({
+        active: preset.active,
+        displayOrder: preset.displayOrder,
+        id: preset.id,
+        name: preset.name,
+      })),
     });
     return true;
   } catch {
@@ -244,6 +260,7 @@ function catalogMatchesCommand(state: MenuCatalogStateV1, command: SaveMenuCatal
   return catalog !== null
     && catalog.catalogVersion === command.catalogVersion
     && catalog.currency === command.currency
+    && JSON.stringify(catalog.sizePresets ?? []) === JSON.stringify(command.sizePresets ?? [])
     && JSON.stringify(catalog.categories) === JSON.stringify(command.categories)
     && JSON.stringify(catalog.products) === JSON.stringify(command.products)
     && JSON.stringify(catalog.modifierGroups) === JSON.stringify(command.modifierGroups);

@@ -16,7 +16,13 @@ import {
   tenancyMainRestaurantSuffixes,
   type TenancyFixtureKey,
 } from "./tenancy-fixture-markers.js";
-import { DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL, DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters } from "./menu-variant-cleanup.js";
+import {
+  DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL,
+  DELETE_MENU_PRODUCT_VARIANTS_SQL,
+  DELETE_MENU_SIZE_PRESETS_SQL,
+  menuProductVariantDeleteParameters,
+  menuSizePresetDeleteParameters,
+} from "./menu-variant-cleanup.js";
 import {
   TenancyFixtureRecoveryError,
   type TenancyFixtureRecoveryConfig,
@@ -668,6 +674,14 @@ class PostgresTenancyFixtureRecoveryStore implements TenancyFixtureRecoveryDatab
       if (validated.menuProductIds.length > 0) {
         await client.query(DELETE_MENU_PRODUCT_VARIANTS_SQL, menuProductVariantDeleteParameters(
           validated.restaurantIds, validated.menuCatalogIds, validated.menuProductIds,
+        ));
+      }
+      const sizePresets = await client.query<{ present: boolean }>(
+        "select pg_catalog.to_regclass('app.menu_size_presets') is not null as present",
+      );
+      if (sizePresets.rows[0]?.present === true && validated.menuCatalogIds.length > 0) {
+        await client.query(DELETE_MENU_SIZE_PRESETS_SQL, menuSizePresetDeleteParameters(
+          validated.restaurantIds, validated.menuCatalogIds,
         ));
       }
       removed += await deleteExactly(client, "app.menu_products", validated.menuProductIds);

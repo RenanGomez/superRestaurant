@@ -16,6 +16,13 @@ export const DELETE_MENU_PRODUCT_VARIANTS_SQL =
 export const DELETE_MENU_PRODUCT_MODIFIER_GROUPS_SQL =
   "delete from app.menu_product_modifier_groups where restaurant_id = any($1::uuid[]) and catalog_id = any($2::uuid[]) and group_id = any($3::uuid[])";
 
+/**
+ * Fixture cleanup for `app.menu_size_presets`. Product variants reference presets with ON DELETE RESTRICT,
+ * so presets must go after variants and before `app.menu_catalogs`. Bound to restaurant and release.
+ */
+export const DELETE_MENU_SIZE_PRESETS_SQL =
+  "delete from app.menu_size_presets where restaurant_id = any($1::uuid[]) and catalog_id = any($2::uuid[])";
+
 export function menuProductVariantDeleteParameters(
   restaurantIds: readonly string[],
   catalogIds: readonly string[],
@@ -23,3 +30,11 @@ export function menuProductVariantDeleteParameters(
 ): [string[], string[], string[]] {
   return [[...restaurantIds], [...catalogIds], [...productIds]];
 }
+
+export function menuSizePresetDeleteParameters(
+  restaurantIds: readonly string[],
+  catalogIds: readonly string[],
+): [string[], string[]] {
+  return [[...restaurantIds], [...catalogIds]];
+}
+

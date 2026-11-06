@@ -154,6 +154,7 @@ test("menu PostgreSQL adapter binds scope and canonical catalog payload", async 
     categories: command.categories,
     modifierGroups: command.modifierGroups,
     products: command.products,
+    sizePresets: [],
   });
 });
 
@@ -227,6 +228,7 @@ function stateFor(input: SaveMenuCatalogCommandV1, replayed: boolean): MenuCatal
       categories: input.categories,
       products: input.products,
       modifierGroups: input.modifierGroups,
+      ...(input.sizePresets === undefined ? {} : { sizePresets: input.sizePresets }),
       version: input.expectedVersion + 1,
       updatedAt: "2026-09-02T22:00:01.000Z",
       updatedBy: principal.actorId,
@@ -399,4 +401,69 @@ test("menu publication rejects a shared group assigned to a product outside the 
   const ownerShared = { ...base, modifierGroups: [{ ...base.modifierGroups[0]!, productId: base.products[0]!.productId }] };
   await assert.rejects(service.save(principal, ownerShared), (error: unknown) => error instanceof MenuCatalogApplicationError && error.code === "request");
   assert.equal(saved, 0);
+});
+
+test("menu catalog with size presets roundtrips through save and read", async () => {
+  const presetId = "6a409ec5-9f5e-496d-a45d-b83a46b49674";
+  const variantId = "7a409ec5-9f5e-496d-a45d-b83a46b49675";
+  const burger = command.products[0]!;
+  const presetCommand = parseSaveMenuCatalogCommandV1({
+    ...command,
+    sizePresets: [{ id: presetId, name: "Chica", displayOrder: 0, active: true }],
+    products: [{
+      ...burger,
+      variants: [{
+        variantId,
+        name: "Chica",
+        unitPriceMinor: 10_000,
+        active: true,
+        displayOrder: 0,
+        sku: "HAM-CH",
+        sizePresetId: presetId,
+      }],
+    }],
+  });
+  if (presetCommand === undefined) throw new Error("TEST_PRESET_COMMAND_INVALID");
+  const state = stateFor(presetCommand, false);
+
+  let capturedPayload: unknown;
+  const database: DatabaseClientPort = {
+    query: async (sql, parameters) => {
+      if (sql.includes("save_menu_catalog")) {
+        capturedPayload = JSON.parse(String(parameters[10]));
+        return { rows: [{ status: "saved", state }] };
+      }
+      return { rows: [{ state }] };
+    },
+  };
+  const adapter = new PostgresMenuCatalogAdapter(database);
+  const saveResult = await adapter.save(principal.actorId, presetCommand);
+  assert.equal(saveResult.status, "saved");
+  assert.deepEqual(saveResult.state, state);
+  assert.equal((capturedPayload as { sizePresets: unknown[] }).sizePresets.length, 1);
+
+  const readResult = await adapter.read(principal.actorId, validScope);
+  assert.deepEqual(readResult, state);
+
+  // Rejects variant referencing non-existent preset before SQL
+  const invalidPresetRef = {
+    ...presetCommand,
+    products: [{
+      ...burger,
+      variants: [{
+        variantId,
+        name: "Chica",
+        unitPriceMinor: 10_000,
+        active: true,
+        displayOrder: 0,
+        sku: "HAM-CH",
+        sizePresetId: "00000000-0000-4000-8000-000000000000",
+      }],
+    }],
+  };
+  const service = serviceFor(["manager"], adapter);
+  await assert.rejects(
+    service.save(principal, invalidPresetRef),
+    (err: unknown) => err instanceof MenuCatalogApplicationError && err.code === "request",
+  );
 });

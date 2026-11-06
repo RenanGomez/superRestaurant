@@ -209,6 +209,22 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
     return Object.freeze({ ...category });
   }).sort(compareMenuDisplayOrder);
 
+  const presetIds = new Set<string>();
+  const presetNames = new Set<string>();
+  const presets = (catalog.sizePresets ?? []).map((preset) => {
+    assertText(preset.id, "menu size preset id");
+    assertText(preset.name, "menu size preset name");
+    assertBoolean(preset.active, "menu size preset active");
+    assertDisplayOrder(preset.displayOrder, "menu size preset displayOrder");
+    if (presetIds.has(preset.id)) throw new DuplicateMenuEntityIdError("size preset", preset.id);
+    presetIds.add(preset.id);
+    const nameKey = preset.name.trim().toLowerCase();
+    if (presetNames.has(nameKey)) throw new DuplicateMenuEntityIdError("size preset", preset.name);
+    presetNames.add(nameKey);
+    return Object.freeze({ ...preset });
+  }).sort(compareMenuDisplayOrder);
+  const presetsById = new Map(presets.map((preset) => [preset.id, preset]));
+
   const productIds = new Set<string>();
   const productSkus = new Set<string>();
   const products = catalog.products.map((product) => {
@@ -256,10 +272,27 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
       assertBoolean(variant.active, "menu product variant active");
       assertDisplayOrder(variant.displayOrder, "menu product variant displayOrder");
       if (variant.sku !== undefined) assertText(variant.sku, "menu product variant sku");
+      let variantName = variant.name;
+      let sizePresetId: string | null = null;
+      if (variant.sizePresetId !== undefined && variant.sizePresetId !== null) {
+        assertText(variant.sizePresetId, "menu product variant sizePresetId");
+        const preset = presetsById.get(variant.sizePresetId);
+        if (preset === undefined) {
+          throw new MenuSizePresetNotFoundError(variant.sizePresetId);
+        }
+        if (!preset.active) {
+          throw new InactiveMenuSizePresetError(variant.sizePresetId);
+        }
+        if (variant.name !== preset.name) {
+          throw new MenuVariantSizePresetNameMismatchError(variant.name, preset.name);
+        }
+        variantName = preset.name;
+        sizePresetId = preset.id;
+      }
       if (variantIds.has(variant.id)) throw new DuplicateMenuEntityIdError("product variant", variant.id);
       variantIds.add(variant.id);
-      const nameKey = variant.name.trim().toLowerCase();
-      if (variantNames.has(nameKey)) throw new DuplicateMenuEntityIdError("product variant", variant.name);
+      const nameKey = variantName.trim().toLowerCase();
+      if (variantNames.has(nameKey)) throw new DuplicateMenuEntityIdError("product variant", variantName);
       variantNames.add(nameKey);
       const variantPrice = new Money(variant.unitPrice.amountMinor, variant.unitPrice.currency);
       if (variantPrice.amountMinor < 0) throw new NegativeMoneyAmountError("menu product variant unit price");
@@ -267,11 +300,12 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
       const fraction = variant.fraction === undefined ? undefined : validateFractionConfig(variant.fraction, product.modifierGroupIds);
       return deepFreeze({
         id: variant.id,
-        name: variant.name,
+        name: variantName,
         ...(variant.sku === undefined ? {} : { sku: variant.sku }),
         active: variant.active,
         displayOrder: variant.displayOrder,
         unitPrice: variantPrice,
+        ...(sizePresetId === null ? {} : { sizePresetId }),
         ...(fraction === undefined ? {} : { fraction }),
       });
     }).sort(compareMenuDisplayOrder);
@@ -369,6 +403,7 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
     categories,
     products,
     modifierGroups,
+    sizePresets: presets,
   });
 }
 
@@ -600,6 +635,10 @@ function normalizeMenuCatalog(value: unknown): MenuCatalog {
   const products = ownDataArray(catalog, "products", "menu products").map(normalizeMenuProduct);
   const modifierGroups = ownDataArray(catalog, "modifierGroups", "menu modifierGroups")
     .map((group) => validateModifierGroupCatalog(group as ModifierGroupCatalog));
+  const sizePresetsValue = optionalOwnData(catalog, "sizePresets", "menu size presets");
+  const sizePresets = sizePresetsValue === undefined
+    ? []
+    : asDataArray(sizePresetsValue, "menu size presets").map(normalizeMenuSizePreset);
   return deepFreeze({
     restaurantId: restaurantId as string,
     catalogVersion: catalogVersion as string,
@@ -607,6 +646,17 @@ function normalizeMenuCatalog(value: unknown): MenuCatalog {
     categories,
     products,
     modifierGroups,
+    sizePresets,
+  });
+}
+
+function normalizeMenuSizePreset(value: unknown): MenuSizePresetCatalog {
+  const preset = asPlainRecord(value, "menu size preset");
+  return Object.freeze({
+    id: ownData(preset, "id", "menu size preset id") as string,
+    name: ownData(preset, "name", "menu size preset name") as string,
+    displayOrder: ownData(preset, "displayOrder", "menu size preset displayOrder") as number,
+    active: ownData(preset, "active", "menu size preset active") as boolean,
   });
 }
 
@@ -680,6 +730,7 @@ function normalizeMenuProductVariant(value: unknown): MenuProductVariantCatalog 
   const variant = asPlainRecord(value, "menu product variant");
   const sku = optionalOwnData(variant, "sku", "menu product variant sku");
   const fractionValue = optionalOwnData(variant, "fraction", "menu product variant fraction");
+  const sizePresetId = optionalOwnData(variant, "sizePresetId", "menu product variant sizePresetId");
   return Object.freeze({
     id: ownData(variant, "id", "menu product variant id") as string,
     name: ownData(variant, "name", "menu product variant name") as string,
@@ -687,6 +738,7 @@ function normalizeMenuProductVariant(value: unknown): MenuProductVariantCatalog 
     active: ownData(variant, "active", "menu product variant active") as boolean,
     displayOrder: ownData(variant, "displayOrder", "menu product variant displayOrder") as number,
     unitPrice: normalizeMoney(ownData(variant, "unitPrice", "menu product variant unit price"), "menu product variant unit price"),
+    ...(sizePresetId === undefined || sizePresetId === null ? {} : { sizePresetId: sizePresetId as string }),
     ...(fractionValue === undefined ? {} : { fraction: normalizeFractionConfig(fractionValue) }),
   });
 }
