@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys } from "./menu-draft-storage.js";
+import { updatePresetVariants } from "./menu-variants.js";
 import { withDerivedAssignments } from "./menu-groups.js";
 
 const parts = {
   categories: [{ active: true, categoryId: "c1", color: null, displayOrder: 1, imagePath: null, name: "Pizzas" }],
   groups: [{ active: true, displayOrder: 1, groupId: "g1", maximumQuantity: 1, minimumQuantity: 0, name: "G", options: [], productId: "p1" }],
+  sizePresets: [],
   products: [{ active: true, categoryId: "c1", displayOrder: 1, imagePath: null, name: "P", productId: "p1", sku: null, stationId: "general", tax: null, unit: "pieza", unitPriceMinor: 100, variants: [] }],
 };
 
@@ -74,4 +76,21 @@ test("a draft with an invalid or foreign category image or colour is rejected", 
   assert.equal(parseMenuDraft(draft({ imagePath: "x/categories/y/z.png" }), 2), null);
   assert.equal(parseMenuDraft(draft({ imagePath: "11111111-1111-4111-8111-111111111111/categories/c2/0123456789abcdef0123456789abcdef.png" }), 2), null);
   assert.equal(parseMenuDraft(draft({ color: "#fff" }), 2), null);
+});
+
+ test("preset rename and removal preserve other variants and product values", () => {
+  const variant = { active: true, displayOrder: 1, name: "Chica", sku: "sku", unitPriceMinor: 250, variantId: "v1", sizePresetId: "s1" };
+  const products = [{ ...parts.products[0]!, variants: [variant, { ...variant, variantId: "v2", sizePresetId: null }] }];
+  const renamed = updatePresetVariants(products, "s1", "Grande");
+  assert.equal(renamed[0]?.variants?.[0]?.name, "Grande");
+  assert.deepEqual(renamed[0]?.variants?.[1], products[0]?.variants[1]);
+  const removed = updatePresetVariants(renamed, "s1", null);
+  assert.deepEqual(removed[0]?.variants?.[0], { ...variant, name: "Grande", sizePresetId: null });
+  assert.equal(products[0]?.variants[0]?.name, "Chica");
+});
+
+test("draft retains presets and reads legacy drafts", () => {
+  const sizePresets = [{ id: "s1", name: "Chica", active: true, displayOrder: 1 }];
+  assert.deepEqual(parseMenuDraft(serializeMenuDraft({ ...parts, sizePresets, expectedVersion: 1 }), 1)?.sizePresets, sizePresets);
+  assert.deepEqual(parseMenuDraft(JSON.stringify({ categories: parts.categories, groups: parts.groups, products: parts.products, expectedVersion: 1 }), 1)?.sizePresets, []);
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { MENU_CATEGORY_COLORS, MENU_PRODUCT_MAX_VARIANTS, MENU_VARIANT_MAX_LOCKED_INGREDIENTS } from "@super-restaurant/shared-types";
+import { MENU_CATEGORY_COLORS, MENU_CATALOG_MAX_SIZE_PRESETS, MENU_PRODUCT_MAX_VARIANTS, MENU_VARIANT_MAX_LOCKED_INGREDIENTS } from "@super-restaurant/shared-types";
 import type {
   MenuCategoryV1,
   MenuCatalogStateV1,
@@ -8,6 +8,7 @@ import type {
   MenuModifierOptionV1,
   MenuProductV1,
   MenuProductVariantV1,
+  MenuSizePresetV1,
   MenuProductFractionV1,
 } from "@super-restaurant/shared-types";
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
@@ -21,7 +22,7 @@ import { DEFAULT_PESO_CURRENCY, formatMinorForMoneyInput, parseMoneyInputToMinor
 import { currencyFractionDigits } from "../../../lib/money-scale";
 import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, publishDisabledReason, shouldDownscaleMenuImage, validateMenuImageFile, type MenuImageAttempt } from "../../../lib/menu-images";
 import { editorProductFraction, legacyFractionNotice, migrateLegacyFraction } from "../../../lib/menu-fraction";
-import { variantValidationError } from "../../../lib/menu-variants";
+import { updatePresetVariants, variantValidationError } from "../../../lib/menu-variants";
 import { reorder, reorderSubset } from "../../../lib/menu-reorder";
 import { duplicateProduct } from "../../../lib/menu-duplicate";
 import { duplicateGroup, groupAssignmentCount, groupsForProduct, toggleGroupAssignment, withDerivedAssignments, withLegacyOwners } from "../../../lib/menu-groups";
@@ -40,6 +41,7 @@ interface Draft {
   readonly expectedVersion: number;
   readonly modifierGroups: readonly MenuModifierGroupV1[];
   readonly products: readonly MenuProductV1[];
+  readonly sizePresets: readonly MenuSizePresetV1[];
 }
 
 export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantId, state, supabaseUrl }: {
@@ -67,6 +69,8 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
       options: group.options.map((option) => ({ ...option })),
     })) ?? [],
   );
+  const [sizePresets, setSizePresets] = useState<readonly MenuSizePresetV1[]>(() => state.catalog?.sizePresets ?? []);
+  const [presetRemoval, setPresetRemoval] = useState<MenuSizePresetV1 | null>(null);
   const [removal, setRemoval] = useState<Removal | null>(null);
   // Legacy per-size halves move to the product on save (the server rejects both at once); validate and send that shape.
   const savedProducts = useMemo(() => products.map((product) => migrateLegacyFraction(product, groups)), [products, groups]);
@@ -77,7 +81,7 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
   const [pendingUploads, setPendingUploads] = useState(0);
   const onUploadPendingChange = (pending: boolean): void => setPendingUploads((current) => current + (pending ? 1 : -1));
   const expectedVersion = state.catalog?.version ?? 0;
-  const draft = useMemo(() => JSON.stringify({ categories, currency, expectedVersion, modifierGroups: savedGroups, products: savedProducts } satisfies Draft), [categories, currency, expectedVersion, savedGroups, savedProducts]);
+  const draft = useMemo(() => JSON.stringify({ categories, currency, expectedVersion, modifierGroups: savedGroups, products: savedProducts, sizePresets } satisfies Draft), [categories, currency, expectedVersion, savedGroups, savedProducts, sizePresets]);
 
   // Tab sync with URL (?tab=) and localStorage
   useEffect(() => {
@@ -141,21 +145,9 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
   const normalizedGroupFilter = groupFilter.trim().toLocaleLowerCase("es-MX");
   const filteredGroups = useMemo(() => normalizedGroupFilter === "" ? groups : groups.filter((group) => group.name.toLocaleLowerCase("es-MX").includes(normalizedGroupFilter)), [groups, normalizedGroupFilter]);
 
-  const productsWithSizes = useMemo(() => products.filter((p) => (p.variants?.length ?? 0) > 0), [products]);
-  const sizeSummary = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const prod of products) {
-      for (const variant of prod.variants ?? []) {
-        const name = variant.name.trim() === "" ? "Tamaño sin nombre" : variant.name.trim();
-        counts.set(name, (counts.get(name) ?? 0) + 1);
-      }
-    }
-    return [...counts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
-  }, [products]);
-
   // Local draft: edits are kept in this browser (never published automatically) and offered back after a reload.
   const storageKey = menuDraftKey(restaurantId, branchId, expectedVersion);
-  const snapshot = useMemo(() => menuDraftSnapshot({ categories, groups, products }), [categories, groups, products]);
+  const snapshot = useMemo(() => menuDraftSnapshot({ categories, groups, products, sizePresets }), [categories, groups, products, sizePresets]);
   const [baseline, setBaseline] = useState(snapshot);
   const dirty = snapshot !== baseline;
   const [recovery, setRecovery] = useState<LocalMenuDraft | null>(null);
@@ -182,17 +174,18 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
     const timer = window.setTimeout(() => {
       try {
         if (snapshot === baseline) window.localStorage.removeItem(storageKey);
-        else window.localStorage.setItem(storageKey, serializeMenuDraft({ categories, expectedVersion, groups, products }));
+        else window.localStorage.setItem(storageKey, serializeMenuDraft({ categories, expectedVersion, groups, products, sizePresets }));
         setStorageFailed(false);
       } catch { setStorageFailed(true); }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [baseline, canManage, categories, expectedVersion, groups, products, recovery, snapshot, storageKey, storageReady]);
+  }, [baseline, canManage, categories, expectedVersion, groups, products, sizePresets, recovery, snapshot, storageKey, storageReady]);
   const recoverDraft = (): void => {
     if (recovery === null) return;
     setCategories(recovery.categories);
     setProducts(withDerivedAssignments(recovery.products, recovery.groups));
     setGroups(recovery.groups);
+    setSizePresets(recovery.sizePresets ?? []);
     setRecovery(null);
   };
   const discardRecovery = (): void => {
@@ -467,6 +460,7 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
                           <ProductEditor handle={handle} copyNotice={copiedProductIds.includes(product.productId)} usedStations={products.map((entry) => entry.stationId)} usedImagePaths={usedImagePaths} variantInvalid={variantIssue?.productId === product.productId}
                             canManage={canManage}
                             categories={categories}
+                            sizePresets={sizePresets}
                             currency={currency}
                             catalogGroups={groups}
                             groups={groupsForProduct(product, groups)}
@@ -548,84 +542,24 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
       >
         {tabResolved && (
           <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-            <SectionHeader title="Tamaños y presets" description="Presentaciones y porciones de tus productos. Cada producto define sus propios tamaños y precios.">
-              <button
-                type="button"
-                onClick={() => selectTab("productos")}
-                className="inline-flex min-h-11 items-center rounded-lg border border-accent px-4 py-2 text-[12px] font-semibold text-accent hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-accent"
-              >
-                Configurar en Productos →
-              </button>
-            </SectionHeader>
-
-            <div role="status" className="mt-4 rounded-xl border border-accent/40 bg-accent-soft p-4 text-[13px] text-text">
-              <p className="font-semibold text-accent-hover">Pronto podrás definir tamaños una sola vez y elegirlos en cada producto.</p>
-              <p className="mt-1 text-text-muted">Por ahora, cada producto define sus propias presentaciones y precios. Aquí puedes consultar los tamaños configurados actualmente en tu carta, agrupados por producto.</p>
-            </div>
-
-            {sizeSummary.length > 0 && (
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <span className="text-[12px] font-semibold text-text-muted">Presentaciones en uso:</span>
-                {sizeSummary.map((item) => (
-                  <span key={item.name} className="inline-flex min-h-8 items-center rounded-full border border-border bg-surface px-3 py-1 text-[12px] text-text">
-                    <span className="font-medium">{item.name}</span>
-                    <span className="ml-1.5 text-text-muted">({item.count} {item.count === 1 ? "producto" : "productos"})</span>
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {productsWithSizes.length === 0 ? (
-              <div className="mt-4 rounded-xl border border-dashed border-border p-6 text-center">
-                <p className="text-[13px] text-text-muted">No hay productos con tamaños configurados en este borrador.</p>
-                <p className="mt-1 text-[12px] text-text-muted">Puedes agregar tamaños (chica, mediana, grande…) directamente en la tarjeta de cada producto en la pestaña Productos.</p>
-                <button
-                  type="button"
-                  onClick={() => selectTab("productos")}
-                  className="mt-3 min-h-11 rounded-lg border border-accent px-4 py-2 text-[13px] font-semibold text-accent hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-accent"
-                >
-                  Ir a Productos →
-                </button>
-              </div>
-            ) : (
-              <div className="mt-4 grid gap-3">
-                {productsWithSizes.map((prod) => {
-                  const category = categories.find((c) => c.categoryId === prod.categoryId);
-                  const variants = prod.variants ?? [];
-                  return (
-                    <article key={prod.productId} className="flex flex-col gap-3 rounded-xl border border-border bg-bg/50 p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
-                        <div>
-                          <h3 className="font-heading text-[14px] font-bold text-text">{prod.name || "Producto sin nombre"}</h3>
-                          <p className="text-[12px] text-text-muted">{category?.name ?? "Sin categoría"} · {variants.length} {variants.length === 1 ? "tamaño" : "tamaños"}</p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => selectTab("productos")}
-                          className="inline-flex min-h-9 items-center text-[12px] font-semibold text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent"
-                        >
-                          Editar en Productos →
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {variants.map((variant) => (
-                          <div key={variant.variantId} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface p-2.5 text-[13px]">
-                            <div className="min-w-0 flex-1 truncate">
-                              <span className="font-semibold text-text">{variant.name || "Tamaño sin nombre"}</span>
-                              {variant.sku && <span className="ml-1.5 text-[11px] text-text-muted">({variant.sku})</span>}
-                            </div>
-                            <span className="font-bold text-text">{formatMinorUnits(variant.unitPriceMinor, currency)}</span>
-                            <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${variant.active ? "bg-accent-soft text-accent" : "bg-bg text-text-muted"}`}>
-                              {variant.active ? "Activo" : "Inactivo"}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
+            <SectionHeader title="Tamaños y presets" description="Define tamaños para usarlos en tus productos." />
+            <DragReorderList className="mt-4 flex flex-col gap-3" disabled={!canManage} getKey={(preset) => preset.id} items={sizePresets} itemLabel={(preset) => preset.name || "Tamaño nuevo"} label="Tamaños"
+              onMove={(from, to) => setSizePresets((current) => reorder(current, from, to))}
+              renderRow={(preset, index, handle) => <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border p-3">
+                {handle}<div className="min-w-40 flex-1"><TextInput disabled={!canManage} label="Nombre" maxLength={80} value={preset.name} onChange={(name) => {
+                  setSizePresets((current) => current.map((item) => item.id === preset.id ? { ...item, name } : item));
+                  setProducts((current) => updatePresetVariants(current, preset.id, name));
+                }} /></div>
+                <ReorderButtons count={sizePresets.length} disabled={!canManage} index={index} label={preset.name || "tamaño nuevo"} onMove={(from, to) => setSizePresets((current) => reorder(current, from, to))} />
+                <ActiveInput disabled={!canManage} checked={preset.active} onChange={(active) => setSizePresets((current) => current.map((item) => item.id === preset.id ? { ...item, active } : item))} />
+                {canManage && <RemoveButton label={`Quitar ${preset.name || "tamaño nuevo"}`} onClick={() => setPresetRemoval(preset)} />}
+              </div>} />
+            {canManage && <AddButton label="Agregar tamaño" disabled={sizePresets.length >= MENU_CATALOG_MAX_SIZE_PRESETS} onClick={() => setSizePresets((current) => [...current, { id: crypto.randomUUID(), name: "", active: true, displayOrder: nextDisplayOrder(current) }])} />}
+            {presetRemoval !== null && <div role="alertdialog" aria-label="Quitar tamaño" className="mt-4 rounded-xl border border-border p-4">
+              <p>¿Quitar «{presetRemoval.name}»? {products.filter((product) => product.variants?.some((variant) => variant.sizePresetId === presetRemoval.id)).length} productos afectados conservarán su nombre como tamaño personalizado.</p>
+              <div className="mt-3 flex gap-3"><button type="button" className="min-h-11 rounded-lg border border-border px-4" onClick={() => setPresetRemoval(null)}>Cancelar</button>
+                <button type="button" className="min-h-11 rounded-lg border border-accent px-4" onClick={() => { setProducts((current) => updatePresetVariants(current, presetRemoval.id, null)); setSizePresets((current) => current.filter((item) => item.id !== presetRemoval.id)); setPresetRemoval(null); }}>Quitar tamaño</button></div>
+            </div>}
           </section>
         )}
       </div>
@@ -682,7 +616,7 @@ function taxNote(tax: MenuProductV1["tax"], formattedPrice: string): string | un
  * (3) switches for modifier groups, halves and tax plus «+ Añadir tamaño». Each section shows only while its
  * switch is on (or it already has data), so a plain product takes three rows.
  */
-function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, variantInvalid, canManage, categories, currency, catalogGroups, groups, product, supabaseUrl, onDuplicate, onManageGroups, onProductChange, onProductImageChange, onRemove, onUploadPendingChange }: {
+function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, variantInvalid, canManage, categories, sizePresets, currency, catalogGroups, groups, product, supabaseUrl, onDuplicate, onManageGroups, onProductChange, onProductImageChange, onRemove, onUploadPendingChange }: {
   readonly copyNotice: boolean;
   readonly handle: ReactNode;
   readonly usedStations: readonly string[];
@@ -690,6 +624,7 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
   readonly variantInvalid: boolean;
   readonly canManage: boolean;
   readonly categories: readonly MenuCategoryV1[];
+  readonly sizePresets: readonly MenuSizePresetV1[];
   readonly currency: string;
   /** Every group of the restaurant catalog (the multiselect lists them all). */
   readonly catalogGroups: readonly MenuModifierGroupV1[];
@@ -808,7 +743,11 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
                   onMove={(from, to) => change({ variants: reorder(variants, from, to) })} />
               </EditorRowActions>
               <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]">
-              <TextInput disabled={!canManage} hint="Cómo se llama esta presentación, por ejemplo Chica, Mediana o Familiar. No se puede repetir en el mismo producto." invalid={variantInvalid} label="Nombre del tamaño" maxLength={80} value={variant.name}
+              <EditorField label="Tamaño">{(id) => <select id={id} disabled={!canManage} className={MENU_FIELD_CONTROL_CLASS} value={variant.sizePresetId ?? ""} onChange={(event) => {
+                const preset = sizePresets.find((item) => item.id === event.target.value);
+                changeVariant(variant.variantId, preset === undefined ? { sizePresetId: null } : { sizePresetId: preset.id, name: preset.name });
+              }}><option value="">Personalizado</option>{sizePresets.filter((item) => item.active || item.id === variant.sizePresetId).map((item) => <option key={item.id} value={item.id}>{item.name}{item.active ? "" : " (inactivo)"}</option>)}</select>}</EditorField>
+              <TextInput disabled={!canManage || variant.sizePresetId != null} hint="Cómo se llama esta presentación, por ejemplo Chica, Mediana o Familiar. No se puede repetir en el mismo producto." invalid={variantInvalid} label="Nombre del tamaño" maxLength={80} value={variant.name}
                 onChange={(name) => changeVariant(variant.variantId, { name })} />
               <MoneyInput key={variant.variantId} hint="Precio de venta de este tamaño." label="Precio del tamaño" disabled={!canManage} currency={currency}
                 value={variant.unitPriceMinor} onChange={(unitPriceMinor) => changeVariant(variant.variantId, { unitPriceMinor })} />

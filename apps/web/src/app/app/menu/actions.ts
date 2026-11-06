@@ -177,6 +177,7 @@ export async function saveMenuCatalogAction(formData: FormData): Promise<void> {
     modifierGroups: draft.modifierGroups,
     occurredAt: new Date().toISOString(),
     products: draft.products,
+    sizePresets: draft.sizePresets,
     schemaVersion: 1,
     scope: context.scope,
   });
@@ -223,15 +224,15 @@ async function getOrCreateDeviceId(): Promise<string> {
 }
 
 function isDraftRecord(value: unknown): value is Readonly<Record<
-  "categories" | "currency" | "expectedVersion" | "modifierGroups" | "products",
+  "categories" | "currency" | "expectedVersion" | "modifierGroups" | "products" | "sizePresets",
   unknown
 >> {
   if (typeof value !== "object" || value === null) return false;
   try {
     const keys = Reflect.ownKeys(value);
     return Object.getPrototypeOf(value) === Object.prototype
-      && keys.length === 5
-      && ["categories", "currency", "expectedVersion", "modifierGroups", "products"]
+      && keys.length === 6
+      && ["categories", "currency", "expectedVersion", "modifierGroups", "products", "sizePresets"]
         .every((key) => keys.includes(key));
   } catch {
     return false;
