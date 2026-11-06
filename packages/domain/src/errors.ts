@@ -375,7 +375,7 @@ export class OrderAuditAuthorizationRequiredError extends DomainError {
   public readonly operation: string;
 }
 
-export type MenuEntityKind = "category" | "product" | "modifier group" | "product variant";
+export type MenuEntityKind = "category" | "product" | "modifier group" | "product variant" | "size preset";
 
 export class DuplicateMenuEntityIdError extends DomainError {
   public readonly code = "DUPLICATE_MENU_ENTITY_ID";
@@ -523,6 +523,41 @@ export class MenuFractionSelectionInvalidError extends DomainError {
 
   public readonly productId: string;
   public readonly issueCodes: readonly string[];
+}
+
+export class MenuSizePresetNotFoundError extends DomainError {
+  public readonly code = "MENU_SIZE_PRESET_NOT_FOUND";
+
+  public constructor(presetId: string) {
+    super("The menu size preset was not found in this catalog.");
+    this.presetId = presetId;
+  }
+
+  public readonly presetId: string;
+}
+
+export class InactiveMenuSizePresetError extends DomainError {
+  public readonly code = "INACTIVE_MENU_SIZE_PRESET";
+
+  public constructor(presetId: string) {
+    super("An inactive menu size preset cannot be referenced by a variant.");
+    this.presetId = presetId;
+  }
+
+  public readonly presetId: string;
+}
+
+export class MenuVariantSizePresetNameMismatchError extends DomainError {
+  public readonly code = "MENU_VARIANT_SIZE_PRESET_NAME_MISMATCH";
+
+  public constructor(variantName: string, presetName: string) {
+    super(`Variant name '${variantName}' must match size preset name '${presetName}'.`);
+    this.variantName = variantName;
+    this.presetName = presetName;
+  }
+
+  public readonly variantName: string;
+  public readonly presetName: string;
 }
 
 export class InactiveMenuProductVariantError extends DomainError {

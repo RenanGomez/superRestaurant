@@ -7,6 +7,7 @@ import {
   InactiveMenuCategoryError,
   InactiveMenuProductError,
   InactiveMenuProductVariantError,
+  InactiveMenuSizePresetError,
   InvalidSnapshotError,
   MenuFractionSelectionInvalidError,
   MenuCatalogRestaurantMismatchError,
@@ -17,6 +18,8 @@ import {
   MenuProductNotFoundError,
   MenuProductVariantNotFoundError,
   MenuProductVariantRequiredError,
+  MenuSizePresetNotFoundError,
+  MenuVariantSizePresetNameMismatchError,
   ModifierGroupProductMismatchError,
   NegativeMoneyAmountError,
 } from "./errors.js";
@@ -68,6 +71,14 @@ export interface MenuVariantFractionConfig {
 
 export type MenuProductFractionConfig = MenuVariantFractionConfig;
 
+/** A reusable size preset defined once per catalog release and referenced by variants. */
+export interface MenuSizePresetCatalog {
+  readonly id: string;
+  readonly name: string;
+  readonly displayOrder: number;
+  readonly active: boolean;
+}
+
 /** A size of one product ("Chica", "Grande") with its own whole-unit price. */
 export interface MenuProductVariantCatalog {
   readonly id: string;
@@ -76,6 +87,7 @@ export interface MenuProductVariantCatalog {
   readonly active: boolean;
   readonly displayOrder: number;
   readonly unitPrice: Money;
+  readonly sizePresetId?: string | null;
   readonly fraction?: MenuVariantFractionConfig;
 }
 
@@ -122,6 +134,7 @@ export interface MenuCatalog {
   readonly categories: readonly MenuCategoryCatalog[];
   readonly products: readonly MenuProductCatalog[];
   readonly modifierGroups: readonly ModifierGroupCatalog[];
+  readonly sizePresets?: readonly MenuSizePresetCatalog[];
 }
 
 export interface ValidatedMenuCatalog {
@@ -131,6 +144,7 @@ export interface ValidatedMenuCatalog {
   readonly categories: readonly Readonly<MenuCategoryCatalog>[];
   readonly products: readonly Readonly<MenuProductCatalog>[];
   readonly modifierGroups: readonly ValidatedModifierGroupCatalog[];
+  readonly sizePresets: readonly Readonly<MenuSizePresetCatalog>[];
 }
 
 export interface MenuProductSelectionContext {
