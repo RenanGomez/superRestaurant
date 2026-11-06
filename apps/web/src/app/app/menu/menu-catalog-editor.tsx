@@ -73,11 +73,13 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
   const [presetRemoval, setPresetRemoval] = useState<MenuSizePresetV1 | null>(null);
   const presetRemovalTrigger = useRef<HTMLElement | null>(null);
   const presetCancel = useRef<HTMLButtonElement>(null);
+  const presetList = useRef<HTMLElement>(null);
+  const presetDescriptionId = useId();
   useEffect(() => { if (presetRemoval !== null) presetCancel.current?.focus(); }, [presetRemoval]);
   const cancelPresetRemoval = (): void => { setPresetRemoval(null); presetRemovalTrigger.current?.focus(); };
   const invalidPresetIds = invalidPresetNameIds(sizePresets);
   const inactivePresetInUse = sizePresets.some((preset) => !preset.active && products.some((product) => product.variants?.some((variant) => variant.sizePresetId === preset.id)));
-  const presetError = invalidPresetIds.size > 0 ? "Revisa los nombres de tama?os: deben ser ?nicos y no estar vac?os." : inactivePresetInUse ? "Un tama?o inactivo est? en uso; act?valo o cambia las variantes antes de publicar." : null;
+  const presetError = invalidPresetIds.size > 0 ? "Revisa los nombres de tama\u00f1os: deben ser \u00fanicos y no estar vac\u00edos." : inactivePresetInUse ? "Un tama\u00f1o inactivo est\u00e1 en uso; act\u00edvalo o cambia las variantes antes de publicar." : null;
   const [removal, setRemoval] = useState<Removal | null>(null);
   // Legacy per-size halves move to the product on save (the server rejects both at once); validate and send that shape.
   const savedProducts = useMemo(() => products.map((product) => migrateLegacyFraction(product, groups)), [products, groups]);
@@ -548,7 +550,7 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
         className={tabResolved && activeTab === "tamanos" ? "flex flex-col gap-5 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" : "hidden"}
       >
         {tabResolved && (
-          <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+          <section ref={presetList} tabIndex={-1} className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
             <SectionHeader title="Tamaños y presets" description="Define tamaños para usarlos en tus productos." />
             <DragReorderList className="mt-4 flex flex-col gap-3" disabled={!canManage} getKey={(preset) => preset.id} items={sizePresets} itemLabel={(preset) => preset.name || "Tamaño nuevo"} label="Tamaños"
               onMove={(from, to) => setSizePresets((current) => reorder(current, from, to))}
@@ -562,11 +564,14 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
                 {canManage && <RemoveButton label={`Quitar ${preset.name || "tamaño nuevo"}`} onClick={() => { presetRemovalTrigger.current = document.activeElement as HTMLElement; setPresetRemoval(preset); }} />}
               </div>} />
             {canManage && <AddButton label="Agregar tamaño" disabled={sizePresets.length >= MENU_CATALOG_MAX_SIZE_PRESETS} onClick={() => setSizePresets((current) => [...current, { id: crypto.randomUUID(), name: "", active: true, displayOrder: nextDisplayOrder(current) }])} />}
-            {presetRemoval !== null && <div role="alertdialog" aria-label="Quitar tamaño" className="mt-4 rounded-xl border border-border p-4">
-              <p>¿Quitar «{presetRemoval.name}»? {products.filter((product) => product.variants?.some((variant) => variant.sizePresetId === presetRemoval.id)).length} productos afectados conservarán su nombre como tamaño personalizado.</p>
-              <div className="mt-3 flex gap-3"><button type="button" className="min-h-11 rounded-lg border border-border px-4" onClick={() => setPresetRemoval(null)}>Cancelar</button>
-                <button type="button" className="min-h-11 rounded-lg border border-accent px-4" onClick={() => { setProducts((current) => updatePresetVariants(current, presetRemoval.id, null)); setSizePresets((current) => current.filter((item) => item.id !== presetRemoval.id)); setPresetRemoval(null); }}>Quitar tamaño</button></div>
-            </div>}
+            {presetRemoval !== null && (() => {
+              const affectedCount = products.filter((product) => product.variants?.some((variant) => variant.sizePresetId === presetRemoval.id)).length;
+              return <div role="alertdialog" aria-label="Quitar tamaño" aria-describedby={presetDescriptionId} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); cancelPresetRemoval(); } }} className="mt-4 rounded-xl border border-border p-4">
+                <p id={presetDescriptionId}>¿Quitar «{presetRemoval.name}»? {affectedCount === 0 ? "Ningún producto usa este tamaño." : affectedCount === 1 ? "1 producto afectado conservará su nombre como tamaño personalizado." : `${affectedCount} productos afectados conservarán su nombre como tamaño personalizado.`}</p>
+                <div className="mt-3 flex gap-3"><button ref={presetCancel} type="button" className="min-h-11 rounded-lg border border-border px-4" onClick={cancelPresetRemoval}>Cancelar</button>
+                  <button type="button" className="min-h-11 rounded-lg border border-accent px-4" onClick={() => { setProducts((current) => updatePresetVariants(current, presetRemoval.id, null)); setSizePresets((current) => current.filter((item) => item.id !== presetRemoval.id)); setPresetRemoval(null); presetList.current?.focus(); }}>Quitar tamaño</button></div>
+              </div>;
+            })()}
           </section>
         )}
       </div>
