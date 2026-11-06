@@ -196,7 +196,10 @@ switch ($Engine) {
     if ($Worktree) {
       $cwd = Join-Path 'C:\tmp\sr-wt' $Id
       if (-not (Test-Path $cwd)) {
-        $g = & git -C $root worktree add -b "harness/$Id" $cwd 2>&1 | Out-String
+        # git escribe el progreso en stderr; con ErrorActionPreference=Stop eso abortaba el script
+        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        $g = & git -C $root worktree add -q -b "harness/$Id" $cwd 2>&1 | Out-String
+        $ErrorActionPreference = $eap
         if ($LASTEXITCODE -ne 0) { throw "No pude crear el worktree: $g" }
       }
       $prompt += "`nTrabaja EXCLUSIVAMENTE en $cwd (worktree en la rama harness/$Id). Al terminar haz commit local en esa rama si el sandbox lo permite; si no, dilo en el informe.`n"
