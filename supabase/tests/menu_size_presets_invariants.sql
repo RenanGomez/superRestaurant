@@ -180,6 +180,8 @@ begin
       'restaurantId', restaurant_a::text,
       'branchId', branch_a::text,
       'channel', 'counter',
+      'currency', 'MXN',
+      'timeZone', 'America/Hermosillo',
       'status', 'draft',
       'items', pg_catalog.jsonb_build_array(
         pg_catalog.jsonb_build_object(
