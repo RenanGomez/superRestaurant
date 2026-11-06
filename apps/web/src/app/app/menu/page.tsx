@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { getServerEnv } from "../../../env";
 import { authorizeBranch } from "../../../lib/branch-selection";
 import { getMenuCatalog } from "../../../lib/menu-catalog";
+import { parseMenuTab } from "../../../lib/menu-tabs";
 import {
   BRANCH_PREFERENCE_COOKIE,
   findMembership,
@@ -73,7 +74,7 @@ export default async function MenuPage({ searchParams }: MenuPageProps): Promise
           <p className="mt-2 text-[13px] text-text-muted">Vuelve a intentarlo en unos segundos.</p>
         </div>
       ) : (
-        <MenuCatalogEditor branchId={scope.branchId} canManage={canManage} restaurantId={scope.restaurantId} state={state} supabaseUrl={env.supabaseUrl} />
+        <MenuCatalogEditor branchId={scope.branchId} canManage={canManage} initialTab={parseMenuTab(resolvedSearchParams.tab)} restaurantId={scope.restaurantId} state={state} supabaseUrl={env.supabaseUrl} />
       )}
     </div>
   );
