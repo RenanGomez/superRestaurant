@@ -27,6 +27,8 @@ import { duplicateProduct } from "../../../lib/menu-duplicate";
 import { duplicateGroup, groupAssignmentCount, groupsForProduct, toggleGroupAssignment, withDerivedAssignments, withLegacyOwners } from "../../../lib/menu-groups";
 import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys, type LocalMenuDraft } from "../../../lib/menu-draft-storage";
 import { MENU_CATEGORY_COLOR_LABELS, menuCategoryColorClasses } from "../../../lib/menu-category-color";
+import { DEFAULT_MENU_TAB, MENU_TAB_LABELS, MENU_TABS, menuTabHref, parseMenuTab, readStoredMenuTab, writeStoredMenuTab, type MenuTab } from "../../../lib/menu-tabs";
+import { uiOption } from "../../../lib/ui-classes";
 import { collectUsedImagePaths, imagePathsOfEntity, retainImagePaths } from "../../../lib/menu-used-images";
 import { DragReorderList, ReorderButtons, ReorderHandle, reorderRowProps } from "./reorder-controls";
 
@@ -40,14 +42,18 @@ interface Draft {
   readonly products: readonly MenuProductV1[];
 }
 
-export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, supabaseUrl }: {
+export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantId, state, supabaseUrl }: {
   readonly branchId: string;
   readonly canManage: boolean;
+  readonly initialTab?: MenuTab | undefined;
   readonly restaurantId: string;
   readonly state: MenuCatalogStateV1;
   readonly supabaseUrl: string;
 }): ReactNode {
   const currency = state.catalog?.currency ?? DEFAULT_PESO_CURRENCY;
+  const [activeTab, setActiveTab] = useState<MenuTab>(() => initialTab ?? DEFAULT_MENU_TAB);
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const [groupFilter, setGroupFilter] = useState("");
   const [categories, setCategories] = useState<readonly MenuCategoryV1[]>(() =>
     state.catalog?.categories.map((category) => ({ ...category })) ?? [],
   );
@@ -71,6 +77,75 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
   const onUploadPendingChange = (pending: boolean): void => setPendingUploads((current) => current + (pending ? 1 : -1));
   const expectedVersion = state.catalog?.version ?? 0;
   const draft = useMemo(() => JSON.stringify({ categories, currency, expectedVersion, modifierGroups: savedGroups, products: savedProducts } satisfies Draft), [categories, currency, expectedVersion, savedGroups, savedProducts]);
+
+  // Tab sync with URL (?tab=) and localStorage
+  useEffect(() => {
+    const urlTab = parseMenuTab(new URL(window.location.href).searchParams.get("tab"));
+    if (urlTab !== undefined) {
+      setActiveTab(urlTab);
+      writeStoredMenuTab(window.localStorage, urlTab);
+    } else {
+      const stored = readStoredMenuTab(window.localStorage);
+      if (stored !== null) {
+        setActiveTab(stored);
+        window.history.replaceState(null, "", menuTabHref(stored, window.location.search));
+      }
+    }
+
+    const onPopState = (): void => {
+      const popTab = parseMenuTab(new URL(window.location.href).searchParams.get("tab"));
+      if (popTab !== undefined) setActiveTab(popTab);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const selectTab = (tab: MenuTab): void => {
+    setActiveTab(tab);
+    writeStoredMenuTab(window.localStorage, tab);
+    window.history.replaceState(null, "", menuTabHref(tab, window.location.search));
+  };
+
+  const onTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, currentTab: MenuTab): void => {
+    const currentIndex = MENU_TABS.indexOf(currentTab);
+    if (currentIndex === -1) return;
+    let targetIndex = -1;
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      targetIndex = (currentIndex + 1) % MENU_TABS.length;
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      targetIndex = (currentIndex - 1 + MENU_TABS.length) % MENU_TABS.length;
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      targetIndex = 0;
+    } else if (event.key === "End") {
+      event.preventDefault();
+      targetIndex = MENU_TABS.length - 1;
+    }
+    if (targetIndex !== -1) {
+      const nextTab = MENU_TABS[targetIndex];
+      if (nextTab !== undefined) {
+        selectTab(nextTab);
+        tabRefs.current[nextTab]?.focus();
+      }
+    }
+  };
+
+  const normalizedGroupFilter = groupFilter.trim().toLocaleLowerCase("es-MX");
+  const filteredGroups = useMemo(() => normalizedGroupFilter === "" ? groups : groups.filter((group) => group.name.toLocaleLowerCase("es-MX").includes(normalizedGroupFilter)), [groups, normalizedGroupFilter]);
+
+  const productsWithSizes = useMemo(() => products.filter((p) => (p.variants?.length ?? 0) > 0), [products]);
+  const sizeSummary = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const prod of products) {
+      for (const variant of prod.variants ?? []) {
+        const name = variant.name.trim() === "" ? "Tamaño sin nombre" : variant.name.trim();
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
+    }
+    return [...counts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+  }, [products]);
 
   // Local draft: edits are kept in this browser (never published automatically) and offered back after a reload.
   const storageKey = menuDraftKey(restaurantId, branchId, expectedVersion);
@@ -271,105 +346,264 @@ export function MenuCatalogEditor({ branchId, canManage, restaurantId, state, su
 
       {removal !== null && <RemovalDialog removal={removal} onCancel={() => setRemoval(null)} onConfirm={confirmRemoval} />}
 
-      <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-        <SectionHeader title="Categorías" description="Organizan la carta y controlan su orden de aparición.">
-          {canManage && <AddButton label="Agregar categoría" onClick={addCategory} />}
-        </SectionHeader>
-        {categories.length === 0 ? <EmptyText text="Agrega una categoría para comenzar el menú." /> : (
-          <DragReorderList className="mt-4 flex flex-col gap-3" disabled={!canManage} getKey={(category) => category.categoryId} items={categories} itemLabel={(category) => category.name} label="Categorías" onMove={(from, to) => setCategories((current) => reorder(current, from, to))}
-            renderRow={(category, _index, handle) => (
-              <article className={`flex min-w-0 items-start gap-3 rounded-xl border p-3 ${menuCategoryColorClasses(category.color)?.card ?? "border-border bg-bg/50"}`}>
-                {handle !== null && (
-                  <EditorRowActions>
-                    {handle}
-                  </EditorRowActions>
-                )}
-                <div className="flex flex-col items-center">
-                  <div className="hidden h-5 min-h-5 sm:block" aria-hidden="true" />
-                  <div className="mt-1 flex h-11 min-h-11 w-12 items-center justify-center">
-                    <MenuPhoto canManage={canManage} imagePath={category.imagePath} name={category.name} supabaseUrl={supabaseUrl} target="category" targetId={category.categoryId} usedImagePaths={usedImagePaths}
-                      onChange={(imagePath) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, imagePath } : entry))} onUploadPendingChange={onUploadPendingChange} />
-                  </div>
-                  <div className="hidden min-h-4 sm:block" aria-hidden="true" />
-                </div>
-                <div className="flex flex-col items-center">
-                  <div className="hidden h-5 min-h-5 sm:block" aria-hidden="true" />
-                  <div className="mt-1 flex h-11 min-h-11 items-center justify-center">
-                    <CategoryColorPicker disabled={!canManage} name={category.name} value={category.color} onChange={(color) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, color } : entry))} />
-                  </div>
-                  <div className="hidden min-h-4 sm:block" aria-hidden="true" />
-                </div>
-                <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-                  <TextInput disabled={!canManage} hint="Nombre de la sección de la carta, por ejemplo Pizzas o Bebidas. El operador navega por estas categorías." label="Nombre" maxLength={80} value={category.name} onChange={(name) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, name } : entry))} />
-                  <EditorRowActions>
-                    <div className="flex items-center justify-end gap-2">
-                      <ActiveInput disabled={!canManage} checked={category.active} onChange={(active) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, active } : entry))} />
-                      {canManage && <RemoveButton label={`Quitar ${category.name}`} onClick={() => setRemoval({ id: category.categoryId, kind: "category", label: category.name })} />}
+      <nav role="tablist" aria-label="Secciones del menú" className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
+        {MENU_TABS.map((tab) => {
+          const isSelected = activeTab === tab;
+          return (
+            <button
+              key={tab}
+              ref={(el) => { tabRefs.current[tab] = el; }}
+              type="button"
+              role="tab"
+              id={`menu-tab-${tab}`}
+              aria-selected={isSelected}
+              aria-controls={`menu-panel-${tab}`}
+              tabIndex={isSelected ? 0 : -1}
+              onClick={() => selectTab(tab)}
+              onKeyDown={(event) => onTabKeyDown(event, tab)}
+              className={uiOption(isSelected, "min-w-28 text-center")}
+            >
+              {MENU_TAB_LABELS[tab]}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div
+        role="tabpanel"
+        id="menu-panel-categorias"
+        aria-labelledby="menu-tab-categorias"
+        tabIndex={0}
+        hidden={activeTab !== "categorias"}
+        className={activeTab === "categorias" ? "flex flex-col gap-5 focus-visible:outline-none" : "hidden"}
+      >
+        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+          <SectionHeader title="Categorías" description="Organizan la carta y controlan su orden de aparición.">
+            {canManage && <AddButton label="Agregar categoría" onClick={addCategory} />}
+          </SectionHeader>
+          {categories.length === 0 ? <EmptyText text="Agrega una categoría para comenzar el menú." /> : (
+            <DragReorderList className="mt-4 flex flex-col gap-3" disabled={!canManage} getKey={(category) => category.categoryId} items={categories} itemLabel={(category) => category.name} label="Categorías" onMove={(from, to) => setCategories((current) => reorder(current, from, to))}
+              renderRow={(category, _index, handle) => (
+                <article className={`flex min-w-0 items-start gap-3 rounded-xl border p-3 ${menuCategoryColorClasses(category.color)?.card ?? "border-border bg-bg/50"}`}>
+                  {handle !== null && (
+                    <EditorRowActions>
+                      {handle}
+                    </EditorRowActions>
+                  )}
+                  <div className="flex flex-col items-center">
+                    <div className="hidden h-5 min-h-5 sm:block" aria-hidden="true" />
+                    <div className="mt-1 flex h-11 min-h-11 w-12 items-center justify-center">
+                      <MenuPhoto canManage={canManage} imagePath={category.imagePath} name={category.name} supabaseUrl={supabaseUrl} target="category" targetId={category.categoryId} usedImagePaths={usedImagePaths}
+                        onChange={(imagePath) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, imagePath } : entry))} onUploadPendingChange={onUploadPendingChange} />
                     </div>
-                  </EditorRowActions>
-                </div>
-              </article>
-            )} />
+                    <div className="hidden min-h-4 sm:block" aria-hidden="true" />
+                  </div>
+                  <div className="flex flex-col items-center">
+                    <div className="hidden h-5 min-h-5 sm:block" aria-hidden="true" />
+                    <div className="mt-1 flex h-11 min-h-11 items-center justify-center">
+                      <CategoryColorPicker disabled={!canManage} name={category.name} value={category.color} onChange={(color) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, color } : entry))} />
+                    </div>
+                    <div className="hidden min-h-4 sm:block" aria-hidden="true" />
+                  </div>
+                  <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                    <TextInput disabled={!canManage} hint="Nombre de la sección de la carta, por ejemplo Pizzas o Bebidas. El operador navega por estas categorías." label="Nombre" maxLength={80} value={category.name} onChange={(name) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, name } : entry))} />
+                    <EditorRowActions>
+                      <div className="flex items-center justify-end gap-2">
+                        <ActiveInput disabled={!canManage} checked={category.active} onChange={(active) => setCategories((current) => current.map((entry) => entry.categoryId === category.categoryId ? { ...entry, active } : entry))} />
+                        {canManage && <RemoveButton label={`Quitar ${category.name}`} onClick={() => setRemoval({ id: category.categoryId, kind: "category", label: category.name })} />}
+                      </div>
+                    </EditorRowActions>
+                  </div>
+                </article>
+              )} />
+          )}
+        </section>
+      </div>
 
-        )}
-      </section>
+      <div
+        role="tabpanel"
+        id="menu-panel-productos"
+        aria-labelledby="menu-tab-productos"
+        tabIndex={0}
+        hidden={activeTab !== "productos"}
+        className={activeTab === "productos" ? "flex flex-col gap-5 focus-visible:outline-none" : "hidden"}
+      >
+        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+          <SectionHeader title="Productos" description="Captura precios en la moneda del restaurante y elige qué grupos de modificadores ofrece cada producto.">
+            {canManage && <AddButton disabled={categories.length === 0} label="Agregar producto" onClick={addProduct} />}
+          </SectionHeader>
+          {products.length === 0 ? <EmptyText text="No hay productos en este borrador." /> : (
+            <div className="mt-4 flex flex-col gap-5">
+              {categories.map((category) => {
+                const inCategory = products.filter((entry) => entry.categoryId === category.categoryId);
+                if (inCategory.length === 0) return null;
+                return (
+                  <div key={category.categoryId} className="flex min-w-0 flex-col gap-2">
+                    <h3 className="font-heading text-[13px] font-semibold text-text-muted">{category.name.trim() === "" ? "Categoría sin nombre" : category.name}</h3>
+                    <DragReorderList className="flex flex-col gap-4" disabled={!canManage} getKey={(entry) => entry.productId} items={inCategory} itemLabel={(entry) => entry.name}
+                      label={`Productos de ${category.name}`}
+                      onMove={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.categoryId === category.categoryId, from, to))}
+                      renderRow={(product, _index, handle) => (
+                        <ProductEditor handle={handle} copyNotice={copiedProductIds.includes(product.productId)} usedStations={products.map((entry) => entry.stationId)} usedImagePaths={usedImagePaths} variantInvalid={variantIssue?.productId === product.productId}
+                          canManage={canManage}
+                          categories={categories}
+                          currency={currency}
+                          catalogGroups={groups}
+                          groups={groupsForProduct(product, groups)}
+                          product={product}
+                          supabaseUrl={supabaseUrl}
+                          onDuplicate={() => { void copyProduct(product.productId); }}
+                          onManageGroups={() => selectTab("modificadores")}
+                          onProductChange={(changed) => setProducts((current) => current.map((entry) => entry.productId === changed.productId ? changed : entry))}
+                          onProductImageChange={(imagePath) => setProducts((current) => current.map((entry) => entry.productId === product.productId ? { ...entry, imagePath } : entry))}
+                          onRemove={requestRemoval}
+                          onUploadPendingChange={onUploadPendingChange}
+                        />
+                      )} />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </div>
 
-      <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-        <SectionHeader title="Grupos de modificadores" description="Listas de opciones (sabores, extras, término…) que se crean una vez y se asignan a uno o varios productos desde la tarjeta del producto.">
-          {canManage && <AddButton label="Agregar grupo" onClick={addGroup} />}
-        </SectionHeader>
-        {groups.length === 0 ? <EmptyText text="Aún no hay grupos de modificadores. Crea uno y asígnalo a tus productos." /> : (
-          <div className="mt-4 flex flex-col gap-1">
-            {groups.map((group, groupIndex) => (
-              <ModifierGroupEditor key={group.groupId} siblingCount={groups.length} siblingIndex={groupIndex} usedImagePaths={usedImagePaths}
-                assignedCount={groupAssignmentCount(products, group)}
-                onMoveGroup={(from, to) => setGroups((current) => reorder(current, from, to))} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl}
-                onAddOption={() => addOption(group.groupId)} onChange={(changed) => setGroups((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))}
-                onDuplicate={() => copyGroup(group.groupId)}
-                onOptionImageChange={(optionId, imagePath) => setGroups((current) => current.map((entry) => entry.groupId === group.groupId ? { ...entry, options: entry.options.map((option) => option.optionId === optionId ? { ...option, imagePath } : option) } : entry))}
-                onRemove={requestRemoval} onUploadPendingChange={onUploadPendingChange} />
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-        <SectionHeader title="Productos" description="Captura precios en la moneda del restaurante y elige qué grupos de modificadores ofrece cada producto.">
-          {canManage && <AddButton disabled={categories.length === 0} label="Agregar producto" onClick={addProduct} />}
-        </SectionHeader>
-        {products.length === 0 ? <EmptyText text="No hay productos en este borrador." /> : (
-          <div className="mt-4 flex flex-col gap-5">
-            {categories.map((category) => {
-              const inCategory = products.filter((entry) => entry.categoryId === category.categoryId);
-              if (inCategory.length === 0) return null;
-              return (
-                <div key={category.categoryId} className="flex min-w-0 flex-col gap-2">
-                  <h3 className="font-heading text-[13px] font-semibold text-text-muted">{category.name.trim() === "" ? "Categoría sin nombre" : category.name}</h3>
-                  <DragReorderList className="flex flex-col gap-4" disabled={!canManage} getKey={(entry) => entry.productId} items={inCategory} itemLabel={(entry) => entry.name}
-                    label={`Productos de ${category.name}`}
-                    onMove={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.categoryId === category.categoryId, from, to))}
-                    renderRow={(product, _index, handle) => (
-              <ProductEditor handle={handle} copyNotice={copiedProductIds.includes(product.productId)} usedStations={products.map((entry) => entry.stationId)} usedImagePaths={usedImagePaths} variantInvalid={variantIssue?.productId === product.productId}
-                canManage={canManage}
-                categories={categories}
-                currency={currency}
-                catalogGroups={groups}
-                groups={groupsForProduct(product, groups)}
-                product={product}
-                supabaseUrl={supabaseUrl}
-                onDuplicate={() => { void copyProduct(product.productId); }}
-                onProductChange={(changed) => setProducts((current) => current.map((entry) => entry.productId === changed.productId ? changed : entry))}
-                onProductImageChange={(imagePath) => setProducts((current) => current.map((entry) => entry.productId === product.productId ? { ...entry, imagePath } : entry))}
-                onRemove={requestRemoval}
-                onUploadPendingChange={onUploadPendingChange}
+      <div
+        role="tabpanel"
+        id="menu-panel-modificadores"
+        aria-labelledby="menu-tab-modificadores"
+        tabIndex={0}
+        hidden={activeTab !== "modificadores"}
+        className={activeTab === "modificadores" ? "flex flex-col gap-5 focus-visible:outline-none" : "hidden"}
+      >
+        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+          <SectionHeader title="Modificadores" description="Configura grupos de ingredientes, opciones con sus precios y especialidades. Los grupos pueden fungir como especialidades o variantes de preparación para tus productos; asígnalos desde la pestaña Productos.">
+            {canManage && <AddButton label="Agregar grupo" onClick={addGroup} />}
+          </SectionHeader>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <input
+                type="search"
+                aria-label="Buscar grupo por nombre"
+                placeholder="Buscar grupo por nombre…"
+                value={groupFilter}
+                onChange={(event) => setGroupFilter(event.target.value)}
+                className="h-11 min-h-11 w-full max-w-sm rounded-lg border border-border bg-surface px-3 text-[13px] focus-visible:outline-2 focus-visible:outline-accent"
               />
-                    )} />
-                </div>
-              );
-            })}
+            </div>
+            {normalizedGroupFilter !== "" && (
+              <p className="text-[12px] text-text-muted">
+                Mostrando {filteredGroups.length} de {groups.length} grupos
+              </p>
+            )}
           </div>
-        )}
-      </section>
+          {groups.length === 0 ? <EmptyText text="Aún no hay grupos de modificadores. Crea uno y asígnalo a tus productos." /> : (
+            filteredGroups.length === 0 ? <EmptyText text="No hay grupos que coincidan con la búsqueda." /> : (
+              <div className="mt-4 flex flex-col gap-1">
+                {filteredGroups.map((group, groupIndex) => (
+                  <ModifierGroupEditor key={group.groupId} siblingCount={filteredGroups.length} siblingIndex={groupIndex} usedImagePaths={usedImagePaths}
+                    assignedCount={groupAssignmentCount(products, group)}
+                    onMoveGroup={(from, to) => setGroups((current) => reorder(current, from, to))} canManage={canManage} currency={currency} group={group} supabaseUrl={supabaseUrl}
+                    onAddOption={() => addOption(group.groupId)} onChange={(changed) => setGroups((current) => current.map((entry) => entry.groupId === changed.groupId ? changed : entry))}
+                    onDuplicate={() => copyGroup(group.groupId)}
+                    onOptionImageChange={(optionId, imagePath) => setGroups((current) => current.map((entry) => entry.groupId === group.groupId ? { ...entry, options: entry.options.map((option) => option.optionId === optionId ? { ...option, imagePath } : option) } : entry))}
+                    onRemove={requestRemoval} onUploadPendingChange={onUploadPendingChange} />
+                ))}
+              </div>
+            )
+          )}
+        </section>
+      </div>
+
+      <div
+        role="tabpanel"
+        id="menu-panel-tamanos"
+        aria-labelledby="menu-tab-tamanos"
+        tabIndex={0}
+        hidden={activeTab !== "tamanos"}
+        className={activeTab === "tamanos" ? "flex flex-col gap-5 focus-visible:outline-none" : "hidden"}
+      >
+        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+          <SectionHeader title="Tamaños y presets" description="Presentaciones y porciones de tus productos. Cada producto define sus propios tamaños y precios.">
+            <button
+              type="button"
+              onClick={() => selectTab("productos")}
+              className="inline-flex min-h-11 items-center rounded-lg border border-accent px-4 py-2 text-[12px] font-semibold text-accent hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              Configurar en Productos →
+            </button>
+          </SectionHeader>
+
+          <div role="status" className="mt-4 rounded-xl border border-accent/40 bg-accent-soft p-4 text-[13px] text-text">
+            <p className="font-semibold text-accent-hover">Pronto podrás definir tamaños una sola vez y elegirlos en cada producto.</p>
+            <p className="mt-1 text-text-muted">Por ahora, cada producto define sus propias presentaciones y precios. Aquí puedes consultar los tamaños configurados actualmente en tu carta, agrupados por producto.</p>
+          </div>
+
+          {sizeSummary.length > 0 && (
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <span className="text-[12px] font-semibold text-text-muted">Presentaciones en uso:</span>
+              {sizeSummary.map((item) => (
+                <span key={item.name} className="inline-flex min-h-8 items-center rounded-full border border-border bg-surface px-3 py-1 text-[12px] text-text">
+                  <span className="font-medium">{item.name}</span>
+                  <span className="ml-1.5 text-text-muted">({item.count} {item.count === 1 ? "producto" : "productos"})</span>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {productsWithSizes.length === 0 ? (
+            <div className="mt-4 rounded-xl border border-dashed border-border p-6 text-center">
+              <p className="text-[13px] text-text-muted">No hay productos con tamaños configurados en este borrador.</p>
+              <p className="mt-1 text-[12px] text-text-muted">Puedes agregar tamaños (chica, mediana, grande…) directamente en la tarjeta de cada producto en la pestaña Productos.</p>
+              <button
+                type="button"
+                onClick={() => selectTab("productos")}
+                className="mt-3 min-h-11 rounded-lg border border-accent px-4 py-2 text-[13px] font-semibold text-accent hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                Ir a Productos →
+              </button>
+            </div>
+          ) : (
+            <div className="mt-4 grid gap-3">
+              {productsWithSizes.map((prod) => {
+                const category = categories.find((c) => c.categoryId === prod.categoryId);
+                const variants = prod.variants ?? [];
+                return (
+                  <article key={prod.productId} className="flex flex-col gap-3 rounded-xl border border-border bg-bg/50 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
+                      <div>
+                        <h3 className="font-heading text-[14px] font-bold text-text">{prod.name || "Producto sin nombre"}</h3>
+                        <p className="text-[12px] text-text-muted">{category?.name ?? "Sin categoría"} · {variants.length} {variants.length === 1 ? "tamaño" : "tamaños"}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => selectTab("productos")}
+                        className="inline-flex min-h-9 items-center text-[12px] font-semibold text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        Editar en Productos →
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      {variants.map((variant) => (
+                        <div key={variant.variantId} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface p-2.5 text-[13px]">
+                          <div className="min-w-0 flex-1 truncate">
+                            <span className="font-semibold text-text">{variant.name || "Tamaño sin nombre"}</span>
+                            {variant.sku && <span className="ml-1.5 text-[11px] text-text-muted">({variant.sku})</span>}
+                          </div>
+                          <span className="font-bold text-text">{formatMinorUnits(variant.unitPriceMinor, currency)}</span>
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${variant.active ? "bg-accent-soft text-accent" : "bg-bg text-text-muted"}`}>
+                            {variant.active ? "Activo" : "Inactivo"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </div>
     </form>
   );
 }
@@ -423,7 +657,7 @@ function taxNote(tax: MenuProductV1["tax"], formattedPrice: string): string | un
  * (3) switches for modifier groups, halves and tax plus «+ Añadir tamaño». Each section shows only while its
  * switch is on (or it already has data), so a plain product takes three rows.
  */
-function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, variantInvalid, canManage, categories, currency, catalogGroups, groups, product, supabaseUrl, onDuplicate, onProductChange, onProductImageChange, onRemove, onUploadPendingChange }: {
+function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, variantInvalid, canManage, categories, currency, catalogGroups, groups, product, supabaseUrl, onDuplicate, onManageGroups, onProductChange, onProductImageChange, onRemove, onUploadPendingChange }: {
   readonly copyNotice: boolean;
   readonly handle: ReactNode;
   readonly usedStations: readonly string[];
@@ -439,6 +673,7 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
   readonly product: MenuProductV1;
   readonly supabaseUrl: string;
   readonly onDuplicate: () => void;
+  readonly onManageGroups?: (() => void) | undefined;
   readonly onProductChange: (product: MenuProductV1) => void;
   readonly onProductImageChange: (imagePath: string | null) => void;
   readonly onRemove: (removal: Removal) => void;
@@ -459,7 +694,7 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
         </EditorRowActions>
       )}
       <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-[auto_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+        <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-[auto_minmax(0,1fr)_7.5rem_9rem_auto]">
           <div className="flex flex-col items-center">
             <div className="hidden h-5 min-h-5 sm:block" aria-hidden="true" />
             <div className="mt-1 flex h-11 min-h-11 w-12 items-center justify-center">
@@ -478,13 +713,24 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
           </EditorField>
           <EditorRowActions>
             <div className="flex items-center justify-end gap-2">
+              {canManage && (
+                <button
+                  type="button"
+                  onClick={onDuplicate}
+                  title={`Crear una copia de ${product.name}`}
+                  aria-label={`Duplicar ${product.name}`}
+                  className="min-h-11 rounded-lg border border-border bg-surface px-3 py-2 text-[12px] font-semibold hover:border-accent focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  Duplicar
+                </button>
+              )}
               <ActiveInput disabled={!canManage} checked={product.active} onChange={(active) => change({ active })} />
               {canManage && <RemoveButton label={`Quitar ${product.name}`} onClick={() => onRemove({ id: product.productId, kind: "product", label: product.name })} />}
             </div>
           </EditorRowActions>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-[minmax(0,1fr)_10rem_12rem]">
           <EditorField hint="Sección de la carta donde aparece este producto; el operador navega por categorías." label="Categoría">
             {(id) => (
               <select id={id} disabled={!canManage} value={product.categoryId} onChange={(event) => change({ categoryId: event.target.value })} className={MENU_FIELD_CONTROL_CLASS}>
@@ -497,11 +743,20 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
         </div>
 
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-          <GroupMultiSelect canManage={canManage} catalogGroups={catalogGroups} product={product}
+          <GroupMultiSelect canManage={canManage} catalogGroups={catalogGroups} product={product} onManageGroups={onManageGroups}
             onChange={(groupId, assigned) => onProductChange(assigned
               ? toggleGroupAssignment(product, groupId, true, catalogGroups)
               // Unassigning a group that the halves setup points at must not leave a dangling reference.
               : unassignGroup(product, groupId))} />
+          {onManageGroups !== undefined && (
+            <button
+              type="button"
+              onClick={onManageGroups}
+              className="inline-flex min-h-11 items-center px-1 text-[12px] font-semibold text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              Gestionar grupos →
+            </button>
+          )}
           <CheckField labelClassName="flex min-h-11 items-center" className={switchClass} label="Permitir mitades"
             hint="Cada mitad lleva un sabor del grupo de sabores; una de las dos puede armarse con ingredientes si eliges un grupo de ingredientes. Aplica a todos los tamaños.">{(id) =>
             <input id={id} type="checkbox" className="size-5" disabled={!canManage} checked={fraction.enabled}
@@ -512,8 +767,6 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
             active: true, displayOrder: nextDisplayOrder(variants), name: "", sku: null,
             unitPriceMinor: 0, variantId: crypto.randomUUID(),
           }] })} />}
-          {canManage && <button type="button" onClick={onDuplicate} title={`Crear una copia de ${product.name}`} aria-label={`Duplicar ${product.name}`}
-            className="min-h-11 rounded-lg border border-border bg-surface px-3 py-2 text-[12px] font-semibold hover:border-accent focus-visible:outline-2 focus-visible:outline-accent">Duplicar</button>}
         </div>
 
         {copyNotice && <p role="status" className="rounded-lg bg-accent-soft px-3 py-2 text-[12px]">Copia de otro producto. La foto no se copia; súbela de nuevo.</p>}
@@ -700,9 +953,10 @@ function FractionEditor({ canManage, fraction, groups, notice, productName, onCh
  * «Grupos de modificadores» of a product: a button that opens a checklist of every group of the catalog. Each row is a
  * 44 px `menuitemcheckbox`; the choice is applied immediately to the draft (nothing is published until «Publicar»).
  */
-function GroupMultiSelect({ canManage, catalogGroups, product, onChange }: {
+function GroupMultiSelect({ canManage, catalogGroups, onManageGroups, product, onChange }: {
   readonly canManage: boolean;
   readonly catalogGroups: readonly MenuModifierGroupV1[];
+  readonly onManageGroups?: (() => void) | undefined;
   readonly product: MenuProductV1;
   readonly onChange: (groupId: string, assigned: boolean) => void;
 }): ReactNode {
@@ -753,6 +1007,18 @@ function GroupMultiSelect({ canManage, catalogGroups, product, onChange }: {
               <span className="min-w-0 flex-1 truncate">{group.name.trim() === "" ? "Grupo sin nombre" : group.name}{group.active ? "" : " (inactivo)"}</span>
             </button>;
           })}
+        {onManageGroups !== undefined && (
+          <div className="border-t border-border p-1">
+            <button
+              type="button"
+              onClick={() => { close(); onManageGroups(); }}
+              className="flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-left text-[12px] font-semibold text-accent hover:bg-bg focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              <span>Gestionar grupos</span>
+              <span aria-hidden="true">→</span>
+            </button>
+          </div>
+        )}
       </div>}
     </div>
   );
@@ -798,7 +1064,7 @@ function ModifierGroupEditor({ assignedCount, siblingCount, siblingIndex, usedIm
           </div>
         </EditorRowActions>
       </div>
-      <p role="status" className="mt-2 text-[12px] text-text-muted">{assignedCount === 0 ? "Sin asignar: no se ofrece en ningún producto." : assignedCount === 1 ? "Asignado a 1 producto." : `Asignado a ${assignedCount} productos.`}</p>
+      <p role="status" className="mt-2 text-[12px] text-text-muted">{assignedCount === 1 ? "Asignado a 1 producto." : `Asignado a ${assignedCount} productos.`}{assignedCount === 0 ? " (sin asignar)" : ""}</p>
       <div className="mt-3 flex items-center justify-between gap-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted"><span className="inline-flex flex-wrap items-center gap-1.5">Opciones<FieldHint label="Opciones" text="Cada opción es una alternativa del grupo (por ejemplo Pepperoni) con su precio extra, que puede ser 0." /></span></p>{canManage && <AddButton label="Agregar opción" onClick={onAddOption} />}</div>
       <div className="mt-2 grid gap-2 lg:grid-cols-2">
         {group.options.map((option) => (
