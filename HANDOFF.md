@@ -1,5 +1,15 @@
 # HANDOFF
 
+## Codex A/B — tamaños UI y navegación — 2026-11-06 (REVIEW)
+
+- Codex se niega a escribir con el árbol sucio: `AGENTS.md.bak_*` va en `.git/info/exclude`; el orquestador commitea cada entrega verificada en su rama `harness/<id>` (el sandbox de Codex no puede escribir `index.lock` ni bajar dependencias; L0 corre `pnpm install` y las puertas).
+- `agent.ps1`: crear el worktree ya no aborta por el progreso de git en stderr.
+- `menu-size-presets-ui` (C, Codex A, 3 rondas): CRUD de presets, selector por variante, borrador local con `sizePresets` (borrador viejo conserva los publicados), validación de nombres e inactivo-en-uso, diálogo accesible. Revisión Codex A (1 P1, 3 P2, 1 P3) cerrada en fix1/fix2. Codex rompe acentos al escribir no-ASCII: pedir escapes unicode en los briefs.
+- `web-nav-perf-r1` (C, Codex B + fix de acentos): `loading.tsx` en 8 secciones, `Link` interno, contexto de petición con `React.cache`. Revisión Codex B: APROBAR.
+- Puertas: web 12/12 en cada rama; globales sin caché 40/40 tras integrar (main `d11a06d1`), push hecho.
+- NO VERIFICADO en navegador: el login exige la cuenta real de Emmanuel. Queda en el smoke (`tabs-sizes`, `sizes-product`, `nav-perf`).
+- Siguiente: smoke de Emmanuel; borrar worktrees `C:/tmp/sr-wt/menu-size-presets-ui*` y `web-nav-perf-r1*` tras su OK.
+
 ## Avance sin smoke — 2026-11-06 (REVIEW)
 
 - Push de `main` a origin hecho varias veces (último: merge de size presets `c743f668`); ramas de trabajo borradas tras integrar.
@@ -8,7 +18,7 @@
 - `menu-size-presets-backend` (A): Gemini strong (dos timeouts; avance protegido con commits wip pusheados) + fixture de invariantes por `implementer-claude` (fallback §19.4: Codex y Gemini colgados). Puertas globales sin caché 40/40; sonda remota rollback-only ok: migración `20261106000100` + `menu_size_presets`, `menu_locked_ingredients`, `catalog_halves_product_level`, `catalog_halves`, `menu_shared_modifier_groups` invariantes. Reviewer Sonnet (segunda familia, Codex caído) APROBAR; P3 deuda: cast de `displayOrder` sin guardia en SQL, SQL sobrescribe nombre de variante con el del preset (intencional), preset inactivo bloquea variantes inactivas, `toLowerCase` sin trim en shared-types, sin timestamps en la tabla.
 - **`20261106000100` aplicada** (autorización de Emmanuel 2026-11-06): dry-run con única candidata, `db push` ok, postcheck `upToDate` con `lastRemote=20261106000100` y privilegios esperados (EXECUTE `app_api` sólo en `save_menu_catalog`), segundo dry-run `upToDate`, staging borrado. API recompilada y reiniciada en :3000 (`tmp/start-authorized-local-api.ps1`), `/api/v1/health` 200.
 - Motores: Codex A y B fallan en modo escritura (comandos colgados; sólo lectura ok; otro proyecto Godot usa ambas cuentas a la vez; probable bloqueo de la app de escritorio de Codex). Gemini: timeouts de 20 y 50 min y cuelgue en una tarea de una línea.
-- En cola (pending, gemini strong): `web-nav-perf-r1`, `menu-size-presets-ui` (after backend, ya hecho). Relanzar con `drain.ps1 -Wait` cuando un motor funcione.
+- (Resuelto el mismo día: ver bloque Codex A/B.)
 
 ## menu-tabs-r2 integrado y smoke interactivo — 2026-11-05 (REVIEW)
 
