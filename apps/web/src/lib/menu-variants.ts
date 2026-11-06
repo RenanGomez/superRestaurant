@@ -51,3 +51,10 @@ export function menuProductPriceLabel(product: MenuProductV1, formatPrice: (amou
     ? `desde ${formatPrice(Math.min(...prices))}`
     : formatPrice(product.unitPriceMinor);
 }
+
+/** Keep variant snapshots aligned with a renamed preset, or detach them on removal. */
+export function updatePresetVariants(products: readonly MenuProductV1[], presetId: string, name: string | null): readonly MenuProductV1[] {
+  return products.map((product) => product.variants === undefined ? product : ({ ...product, variants: product.variants.map((variant) =>
+    variant.sizePresetId === presetId ? { ...variant, ...(name === null ? { sizePresetId: null } : { name }) } : variant),
+  }));
+}

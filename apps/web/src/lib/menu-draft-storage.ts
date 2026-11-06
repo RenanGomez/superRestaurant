@@ -1,14 +1,15 @@
 import { parseMenuCategoryAppearanceV1 } from "@super-restaurant/shared-types";
-import type { MenuCategoryV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
+import type { MenuCategoryV1, MenuModifierGroupV1, MenuProductV1, MenuSizePresetV1 } from "@super-restaurant/shared-types";
 
 export interface LocalMenuDraft {
   readonly categories: readonly MenuCategoryV1[];
   readonly expectedVersion: number;
   readonly groups: readonly MenuModifierGroupV1[];
   readonly products: readonly MenuProductV1[];
+  readonly sizePresets?: readonly MenuSizePresetV1[];
 }
 
-export type MenuDraftParts = Pick<LocalMenuDraft, "categories" | "groups" | "products">;
+export type MenuDraftParts = Pick<LocalMenuDraft, "categories" | "groups" | "products" | "sizePresets">;
 
 const PREFIX = "menu-draft:";
 
@@ -22,11 +23,11 @@ export function menuDraftKey(restaurantId: string, branchId: string, expectedVer
 
 /** Stable text of the editable parts; two drafts with equal text are the same draft. */
 export function menuDraftSnapshot(parts: MenuDraftParts): string {
-  return JSON.stringify({ categories: parts.categories, groups: parts.groups, products: parts.products });
+  return JSON.stringify({ categories: parts.categories, groups: parts.groups, products: parts.products, sizePresets: parts.sizePresets ?? [] });
 }
 
 export function serializeMenuDraft(draft: LocalMenuDraft): string {
-  return JSON.stringify({ categories: draft.categories, expectedVersion: draft.expectedVersion, groups: draft.groups, products: draft.products });
+  return JSON.stringify({ categories: draft.categories, expectedVersion: draft.expectedVersion, groups: draft.groups, products: draft.products, sizePresets: draft.sizePresets ?? [] });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -53,6 +54,8 @@ export function parseMenuDraft(raw: string | null, expectedVersion: number): Loc
   try { value = JSON.parse(raw); } catch { return null; }
   if (!isRecord(value) || value.expectedVersion !== expectedVersion) return null;
   const { categories, groups, products } = value;
+  const sizePresets = value.sizePresets;
+  if (sizePresets !== undefined && !allHaveString(sizePresets, "id")) return null;
   if (!allHaveString(categories, "categoryId") || !allHaveString(products, "productId") || !allHaveString(groups, "groupId")) return null;
   if (!(groups as readonly Record<string, unknown>[]).every((group) => Array.isArray(group.options))) return null;
   const groupIds = new Set((groups as readonly Record<string, unknown>[]).map((group) => group.groupId as string));
@@ -64,7 +67,7 @@ export function parseMenuDraft(raw: string | null, expectedVersion: number): Loc
     if (appearance === undefined) return null;
     normalized.push({ ...(entry as unknown as Omit<MenuCategoryV1, "color" | "imagePath">), ...appearance });
   }
-  return { categories: normalized, expectedVersion, groups: groups as readonly MenuModifierGroupV1[], products: products as readonly MenuProductV1[] };
+  return { categories: normalized, expectedVersion, groups: groups as readonly MenuModifierGroupV1[], products: products as readonly MenuProductV1[], ...(sizePresets === undefined ? {} : { sizePresets: sizePresets as readonly MenuSizePresetV1[] }) };
 }
 
 /** Keys of this branch's drafts for versions other than the current one; they can never be recovered. */
@@ -72,4 +75,8 @@ export function staleMenuDraftKeys(keys: readonly string[], restaurantId: string
   const prefix = menuDraftKeyPrefix(restaurantId, branchId);
   const current = menuDraftKey(restaurantId, branchId, expectedVersion);
   return keys.filter((key) => key.startsWith(prefix) && key !== current);
+}
+
+export function recoveredSizePresets(draft: LocalMenuDraft, published: readonly MenuSizePresetV1[]): readonly MenuSizePresetV1[] {
+  return draft.sizePresets ?? published;
 }

@@ -41,3 +41,13 @@ export function stationValues(used: readonly string[], current: string): readonl
   const rest = [...all].filter((value) => value !== MENU_DEFAULT_STATION).sort((left, right) => left.localeCompare(right, "es"));
   return [MENU_DEFAULT_STATION, ...rest];
 }
+
+/** IDs of presets whose trimmed names are empty or duplicate another name. */
+export function invalidPresetNameIds(presets: readonly { readonly id: string; readonly name: string }[]): ReadonlySet<string> {
+  const counts = new Map<string, number>();
+  for (const preset of presets) {
+    const name = preset.name.trim().toLowerCase();
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return new Set(presets.filter((preset) => { const name = preset.name.trim().toLowerCase(); return name === "" || (counts.get(name) ?? 0) > 1; }).map((preset) => preset.id));
+}
