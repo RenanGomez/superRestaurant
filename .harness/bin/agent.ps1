@@ -1,16 +1,16 @@
 ﻿<#
 .SYNOPSIS
-  Lanza un subagente (codex | gemini | claude) con el brief de .harness/runs/<Id>/brief.md.
+  Lanza un subagente (codex | gemini | dsh | claude) con el brief de .harness/runs/<Id>/brief.md.
   Deja result.md (informe corto) y log.txt (salida completa) en la misma carpeta.
 .EXAMPLE
   powershell -NoProfile -File .harness/bin/agent.ps1 -Engine gemini -Id map-auth -Model strong
   powershell -NoProfile -File .harness/bin/agent.ps1 -Engine codex -Id fix-login -Model default -Effort medium -Write
 #>
 param(
-  [Parameter(Mandatory)][ValidateSet('codex','gemini','claude')][string]$Engine,
+  [Parameter(Mandatory)][ValidateSet('codex','gemini','dsh','claude')][string]$Engine,
   [Parameter(Mandatory)][string]$Id,
   [string]$Model = 'default',            # alias fast|default|strong o nombre literal
-  [ValidateSet('','minimal','low','medium','high','xhigh')][string]$Effort = '',  # solo codex
+  [ValidateSet('','minimal','low','medium','high','xhigh')][string]$Effort = '',  # codex y dsh
   [switch]$Write,                        # permite editar archivos
   [switch]$Worktree,                     # git worktree aparte (codex: --worktree; gemini: .harness/worktrees/<Id>)
   [int]$TimeoutMin = 20,                 # espera máxima del result (gemini/Antigravity)
@@ -231,6 +231,50 @@ switch ($Engine) {
     if ($Write -and $Worktree) { $args_ += @('--add-dir', $root) }   # agents_out/ e informe viven en la carpeta del proyecto
     $args_ += '-'                       # prompt por stdin
   }
+  'dsh' {
+    # DeepSeek Harness headless con un modelo de OpenRouter (config.dsh.models). El modelo se fija con un --patch por
+    # run. La clave sale del almacén de dsh (credentials), no de la variable de entorno.
+    # Worktree fuera de C:\tmp: el sandbox de dsh no puede dar permisos en carpetas creadas por el de codex.
+    $cwd = $root
+    if ($Worktree) {
+      $wtBase = if ($cfg.dsh.worktreeDir) { [Environment]::ExpandEnvironmentVariables($cfg.dsh.worktreeDir) }
+                else { "$HOME\harness-wt\$(Split-Path $root -Leaf)" }
+      $cwd = Join-Path $wtBase $Id
+      if (-not (Test-Path $cwd)) {
+        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        $g = & git -C $root worktree add -q -b "harness/$Id" $cwd 2>&1 | Out-String
+        $ErrorActionPreference = $eap
+        if ($LASTEXITCODE -ne 0) { throw "No pude crear el worktree en ${cwd}: $g" }
+      }
+      $prompt += "`nTrabaja EXCLUSIVAMENTE en $cwd (worktree en la rama harness/$Id). No hagas commit; el orquestador revisa y fusiona.`n"
+    }
+    if (-not $Effort -and $cfg.dsh.defaultEffort) { $Effort = $cfg.dsh.defaultEffort }
+    $patch = Join-Path $runDir 'dsh-model.yml'
+    $eff = if ($Effort) { "`n    reasoningEffort: $(if ($Effort -in 'minimal','low') {'low'} elseif ($Effort -eq 'medium') {'medium'} else {'high'})" } else { '' }
+    [IO.File]::WriteAllText($patch, @"
+- id: llm-pi-ai
+  config:
+    providers:
+      openrouter:
+        apiKeyEnv: OPENROUTER_API_KEY
+        api: openai-completions
+        baseURL: https://openrouter.ai/api/v1
+        models:
+          - id: $m
+            contextWindow: 1000000
+- id: agent-default-model
+  config:
+    provider: openrouter
+    model: $m$eff
+- id: credentials
+  disabled: false
+"@, $utf8)
+    $args_ = @('--profile','headless','--patch',$patch,'--approval-policy','never',
+               '--permission-mode', $(if ($Write) {'workspace-write'} else {'read-only'}))
+    # sin --add-dir: el sandbox ACL de Windows de dsh no lo admite y el shell deja de arrancar (el result va por stdout)
+    $args_ += '-'                       # prompt por stdin
+    $env:OPENROUTER_API_KEY = $null     # la del entorno de Windows está vencida y taparía la del almacén de dsh
+  }
   'claude' {
     # worker headless: -Write edita y ejecuta comandos (tests, evidencia); sin -Write solo lee
     $args_ = @('-p','--permission-mode', $(if ($Write) {'acceptEdits'} else {'default'}),
@@ -241,10 +285,19 @@ switch ($Engine) {
 }
 
 $start = Get-Date
-Push-Location $root
+Push-Location $(if ($cwd) { $cwd } else { $root })   # dsh trabaja en el directorio actual
 try {
   $ErrorActionPreference = 'Continue'   # stderr de los CLIs no debe abortar
-  if ($Engine -eq 'gemini') { $r = Invoke-Antigravity; $out = $r.out; $code = $r.code } else {
+  if ($Engine -eq 'gemini') { $r = Invoke-Antigravity; $out = $r.out; $code = $r.code }
+  elseif ($Engine -eq 'dsh') {
+    # stdout = respuesta final (el result); stderr = razonamiento y diagnósticos (solo al log)
+    $exe = if ($cfg.dsh.exe) { [Environment]::ExpandEnvironmentVariables($cfg.dsh.exe) }
+           else { "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" }
+    $errF = Join-Path $runDir 'dsh-stderr.txt'
+    $answer = @($prompt | & $exe @args_ 2> $errF | ForEach-Object { "$_" })
+    $code = $LASTEXITCODE
+    $out = @(Get-Content $errF -Encoding UTF8 | Where-Object { $_ -ne 'System.Management.Automation.RemoteException' }) + '--- respuesta ---' + $answer
+  } else {
   $exe = (Get-Command "$Engine.cmd","$Engine.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).Source
   if (-not $exe) { $exe = $Engine }
   $out = $prompt | & $exe @args_ 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -ne 'System.Management.Automation.RemoteException' }
@@ -266,7 +319,8 @@ if ($agentsOut -and (Test-Path $outDir)) {
 # cuota agotada → cooldown + relanzamiento. codex: "...or try again at Nov 3rd, 2026 2:11 AM."
 $text = $out -join "`n"
 # claude: "You've hit your limit · resets 3pm" / "Claude AI usage limit reached"
-if ($code -ne 0 -and $text -match 'usage limit|rate limit|RESOURCE_EXHAUSTED|quota exceeded|hit your limit|limit reached') {
+# dsh/OpenRouter: "402 ... Insufficient credits" (sin saldo) o 429
+if ($code -ne 0 -and $text -match 'usage limit|rate limit|RESOURCE_EXHAUSTED|quota exceeded|hit your limit|limit reached|Insufficient credits|\b402\b|\b429\b') {
   $at = (Get-Date).AddMinutes(60)      # el mensaje no trae hora: reintentar en 1 h
   if ($text -match 'try again at ([A-Z][a-z]{2}) (\d{1,2})(?:st|nd|rd|th)?, (\d{4}) (\d{1,2}:\d{2} [AP]M)') {
     $at = [datetime]::ParseExact("$($Matches[1]) $($Matches[2]) $($Matches[3]) $($Matches[4])", 'MMM d yyyy h:mm tt',
@@ -294,6 +348,7 @@ if ($code -ne 0 -and $text -match 'usage limit|rate limit|RESOURCE_EXHAUSTED|quo
 if ($code -eq 0 -and $q -and $q.status -eq 'cooldown') { $quota | Add-Member $qkey ([pscustomobject]@{ status = 'ok' }) -Force; Save-Quota }
 
 # claude escribe su respuesta en stdout: el result es esa salida
+if ($Engine -eq 'dsh' -and $code -eq 0 -and ($answer -join '').Trim()) { [IO.File]::WriteAllText($result, ($answer -join "`n"), $utf8) }
 if ($Engine -eq 'claude') { ($out | Where-Object { $_ -notmatch '^(Loaded cached|YOLO mode|Warning:)' }) -join "`n" | ForEach-Object { [IO.File]::WriteAllText($result, $_, $utf8) } }
 if (-not (Test-Path $result) -or (Get-Item $result).Length -eq 0) {
   [IO.File]::WriteAllText($result, "## Estado`nblocked — el motor no produjo informe (exit $code). Ver log.txt", $utf8)

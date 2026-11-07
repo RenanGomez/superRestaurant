@@ -8,7 +8,7 @@
 #>
 param(
   [Parameter(Mandatory)][string]$Id,
-  [Parameter(Mandatory)][ValidateSet('codex','gemini','claude')][string]$Engine,
+  [Parameter(Mandatory)][ValidateSet('codex','gemini','dsh','claude')][string]$Engine,
   [string]$Model = 'default',
   [ValidateSet('','minimal','low','medium','high','xhigh')][string]$Effort = '',
   [switch]$Write,

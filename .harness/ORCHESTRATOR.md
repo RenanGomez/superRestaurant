@@ -9,9 +9,10 @@ puntual, unas pocas líneas) se hace directo: delegar lo que cuesta menos que el
 
 | Motor | Para | Cuota |
 |---|---|---|
-| `gemini` (Antigravity, Google AI Pro) | leer mucho, mapas, docs, tests, boilerplate, revisar diffs | abundante → **primero** |
-| `codex` (ChatGPT Plus, cuenta B; `config.codex.accounts`) | features acotadas, bugs difíciles (sandbox real) | escasa → solo lo que la exige |
-| `claude` CLI (`claude -p`, haiku/sonnet) | respaldo automático de codex sin cuota (`config.codex.fallback`) | la misma del orquestador → solo si codex está agotado |
+| `gemini` (Antigravity, Google AI Pro) | leer mucho, mapas, docs, revisar diffs | abundante → **primero en lectura** |
+| `dsh` (DeepSeek Harness → OpenRouter; `config.dsh.models`) | **código**: tests, features, bugs; revisión con `review`; UI con `vision` | por token, barato, varios en paralelo → **primero en código** |
+| `codex` (ChatGPT Plus, cuenta B; `config.codex.accounts`) | lo que dsh no resolvió, o lo que exige su sandbox | escasa → solo lo que la exige; sin cuota pasa a dsh solo |
+| `claude` CLI (`claude -p`, haiku/sonnet) | último recurso (`-Engine claude`) | la misma del orquestador |
 | subagente Claude (Agent) | búsquedas rápidas (haiku), tareas atadas a esta conversación (sonnet) | — |
 
 Qué motor/modelo/esfuerzo por tipo de tarea: `routing.md`.
@@ -22,7 +23,7 @@ Qué motor/modelo/esfuerzo por tipo de tarea: `routing.md`.
 2. **Brief** por tarea en `.harness/runs/<id>/brief.md` (`templates/brief.md`): objetivo, archivos, "hecho cuando",
    citas a `map.md §N`. Nunca la conversación entera ni AGENTS.md copiado.
 3. **Encolar y drenar** (lo normal):
-   `powershell -NoProfile -File .harness/bin/enqueue.ps1 -Id <id> -Engine <gemini|codex> [-Model] [-Effort] [-Write] [-Worktree] -Files <rutas> [-After <ids>]`
+   `powershell -NoProfile -File .harness/bin/enqueue.ps1 -Id <id> -Engine <gemini|dsh|codex> [-Model] [-Effort] [-Write] [-Worktree] -Files <rutas> [-After <ids>]`
    luego `powershell -NoProfile -File .harness/bin/drain.ps1 -Wait` **en background** (herramienta de shell con
    ejecución en segundo plano, nunca en primer plano ni con un bucle de espera propio). Con `-Wait`, si un motor se
    queda sin cuota, drain espera él mismo al reset y continúa; solo termina cuando no queda nada que esperar, y
@@ -45,10 +46,12 @@ Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos 
 ## Cuota
 - **Cuentas de codex:** `config.codex.accounts` (hoy solo B). Con varias, cada una es un carril con su cuota
   (`codex-B` en quota.json) y drain las reparte; `-Account X` fija una.
-- **Respaldo Claude:** si ninguna cuenta de codex tiene cuota, la tarea de codex la hace `claude -p` con el modelo
-  de `config.codex.fallback.models` (haiku/sonnet), sin esperar. El result lo dice (`[codex → claude/...]` en el
-  log, carril `codex→claude` en drain.md). Revísalo igual que uno de codex. Requiere el CLI `claude` con sesión
-  iniciada; si falla por login, avisa al usuario. Si Claude también se agota, la tarea espera el primer reset.
+- **Respaldo dsh:** una tarea de codex la hace dsh si la cuenta de codex no tiene cuota o ya está ocupada en la ola
+  (`config.codex.fallback`, `parallel: true`), con el alias mapeado. El log lo dice (`[codex → dsh/...]`) y
+  drain.md muestra el carril `codex→dsh`. Revísalo igual que uno de codex.
+- **dsh** no tiene cuota de 5 h: paga por token con la clave de OpenRouter guardada en DeepSeek Harness. Si falla con
+  401/"API key expired", la clave se cambia en DeepSeek Harness (Ajustes → Modelos), no en variables de entorno.
+  Con 402/"Insufficient credits" o 429 queda en cooldown 1 h; si es saldo, avisa al usuario.
 - `agent.ps1` detecta el agotamiento, marca el motor en `.harness/state/quota.json` (`cooldown`, `reset_at`) y sale
   con código 75 y result `queued`. Mientras dure, los runs a ese motor quedan `queued` sin gastar.
 - En la cola, drain deja esas tareas `pending`; con `-Wait` espera el reset él mismo (hasta `-MaxWaitHours`, 12) y
@@ -66,7 +69,9 @@ Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos 
   de cualquier otro escritor y revisa su `git diff` al terminar. drain hace este cambio solo (quita `-Worktree`
   si `git status` muestra cambios en esas `-Files` y lo anota en `state/drain.md`).
 - Dónde quedan: gemini en `.harness/worktrees/<id>`; codex en `C:\tmp\harness-wt\<proyecto>\<id>` (o
-  `config.codex.worktreeDir`), porque su sandbox no escribe en carpetas con punto. Rama `harness/<id>` en ambos.
+  `config.codex.worktreeDir`), porque su sandbox no escribe en carpetas con punto; dsh en
+  `%USERPROFILE%\harness-wt\<proyecto>\<id>` (o `config.dsh.worktreeDir`), porque su sandbox no puede dar permisos en
+  las carpetas que creó el de codex. Rama `harness/<id>` en todos.
 - **Nunca** crees enlaces/junctions dentro de un worktree, ni lo borres con `Remove-Item -Recurse` o
   `git worktree remove -f`: el borrado sigue los enlaces y vacía las carpetas originales (así se perdió
   `godot/game_assets`). Bórralos solo con `.harness/bin/remove-worktree.ps1 -Id <id> [-DeleteBranch]`, que se niega

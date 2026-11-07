@@ -1,35 +1,49 @@
-# routing — qué motor, modelo y razonamiento (v3)
+# routing — qué motor, modelo y razonamiento (v4)
 
-Los nombres de modelo viven en `config.json` (alias `fast` / `default` / `strong`). Usa alias.
+Los nombres de modelo viven en `config.json` (alias). Usa alias.
 
-**Motores disponibles:** Antigravity (gemini, cuota abundante), Codex con **una sola cuenta** (B, cuota escasa: 5 h
-que pueden durar minutos) y Claude CLI como **respaldo automático de Codex** (`config.codex.fallback`).
-Codex solo para lo que exige sandbox real de escritura o depuración dura. Todo lo demás, Antigravity primero.
+**Motores:**
+- **gemini** (Antigravity): cuota abundante y gratis.
+- **dsh** (DeepSeek Harness → OpenRouter): sin cuota de 5 h; se paga por token y es muy barato. **Es el motor de
+  código por defecto.**
+- **codex** (una cuenta, B): cuota escasa. Solo para lo que dsh no resolvió o lo que necesita su sandbox.
+- **Claude**: orquesta. No es worker salvo `claude -p` como último recurso.
 
-**Respaldo:** una tarea encolada como `codex` la hace Claude (`claude -p`) cuando Codex no tiene cuota, con el
-modelo mapeado (fast→haiku, default→sonnet, strong→sonnet). No hace falta encolarla distinto: drain y agent.ps1
-cambian solos. Claude gasta la misma cuota que el orquestador: por eso solo entra cuando Codex está agotado
-(`fallback.parallel: true` lo usa además como carril extra). Si Claude también está sin cuota, la tarea espera
-el primer reset.
+## Modelos de dsh (alias → modelo, US$/M tokens entrada/salida)
+| Alias | Modelo | Precio | Para qué |
+|---|---|---|---|
+| `fast` | qwen3.7-flash | 0.03 / 0.13 | leer, resumir, docs, "¿dónde está X?", ediciones triviales |
+| `default` | **deepseek-v4.1-flash-1017** | 0.15 / 0.60 | **casi todo el código**: tests, features, bugs normales, refactors, boilerplate |
+| `strong` | deepseek-v4-pro-0813 | 0.11 / 4.44 | features grandes, bugs difíciles, diseño dentro de un módulo |
+| `max` | kimi-k3.1-pro | 2 / 10 | solo escalado: lo que `strong` no resolvió |
+| `review` | glm-5.3 | 0.07 / 1.40 | revisar diffs de DeepSeek (otra familia de modelos detecta otros errores) |
+| `vision` | qwen3.8-omni-flash | 0.15 / 0.47 | capturas, UI, imágenes |
 
-| Tarea | 1º | Si el 1º está sin cuota |
+## Qué usar según la tarea
+| Tarea | 1º | Si falla o no hay cuota |
 |---|---|---|
-| Mapa del repo, auditoría, "¿dónde está X?" | gemini fast (+ `context/map.md`) | subagente haiku |
-| Docs, changelog, comentarios | gemini fast | encolar |
-| Tests nuevos, boilerplate, renombrados, ediciones mecánicas | **gemini default `-Write`** (+`-Worktree` si las rutas están commiteadas) | codex fast/low → claude haiku |
-| Feature acotada | codex default/low | → claude sonnet (automático) · o gemini strong `-Write` |
-| Bug difícil, concurrencia, rendimiento | codex strong/medium | → claude sonnet (automático) |
-| Revisión de diff | gemini strong (si escribió codex/claude) · codex default/low (si escribió gemini) | subagente sonnet |
+| Mapa del repo, auditoría, "¿dónde está X?" | gemini fast (+ `context/map.md`) | dsh fast |
+| Docs, changelog, comentarios | gemini fast | dsh fast |
+| Tests, boilerplate, renombrados, ediciones mecánicas | **dsh default `-Write`** | gemini default `-Write` |
+| Feature acotada | **dsh default `-Write`** | dsh strong → codex default/low |
+| Bug difícil, concurrencia, rendimiento | **dsh strong** | dsh max → codex strong/medium |
+| Revisión de diff | dsh review (si escribió dsh) · gemini strong (si escribió codex) · dsh default (si escribió gemini) | subagente sonnet |
+| UI, capturas, assets visuales | dsh vision | gemini strong |
 | Investigación web / comparar librerías | gemini strong | Claude (WebSearch) |
 | Diseño, decisiones con trade-offs, integración | Claude sesión principal | — |
 | Depende del contexto de esta conversación | subagente Claude (fork) sonnet | sesión principal |
 
+**Velocidad:** dsh admite varias tareas a la vez. Parte el trabajo en tareas pequeñas con `-Files` disjuntos y
+encólalas juntas: drain corre hasta `queue.maxParallel` (4) en paralelo.
+
+**Tareas encoladas como codex:** usan la cuenta B; si B ya está ocupada en la ola o sin cuota, las hace dsh
+(`codex.fallback`, alias mapeado: fast/default → default, strong → strong). No hace falta encolarlas distinto.
+
 ## Presupuesto
-- Esfuerzo de codex: `low` por defecto; `medium` solo en la fila de bugs; `high` solo en un reintento.
-- Opus no se usa como worker: es para el orquestador. Los workers Claude van en haiku o sonnet.
-- Escalado: si el result viene incompleto o mal, **un** reintento un nivel arriba (fast→default→strong,
-  low→medium→high) con feedback concreto añadido al mismo brief y el mismo `-Id`. Un segundo fallo → al usuario.
-- Un run = una tarea pequeña con criterio de "hecho". Nada de "revisa todo el proyecto": el coste crece con los
-  turnos × el contexto, así que tareas cortas y briefs que digan qué archivos tocar.
-- Contexto de proyecto: los briefs citan `.harness/context/map.md` en vez de pedir explorar. Si el mapa tiene
-  más de ~2 semanas o el cambio es estructural, regenerarlo (`bin/map.ps1`).
+- Esfuerzo: dsh y codex en `low` (o vacío) por defecto; `medium` en bugs; `high` solo en un reintento.
+- Escalado: si el result viene incompleto o mal, **un** reintento un nivel arriba (fast → default → strong → max) con
+  feedback concreto añadido al mismo brief y el mismo `-Id`. Si falla de nuevo: codex, y luego al usuario.
+- Opus no se usa como worker.
+- Un run = una tarea pequeña con criterio de "hecho". El coste crece con turnos × contexto, así que briefs que digan
+  qué archivos tocar y citen `.harness/context/map.md` en vez de pedir explorar.
+- dsh cuesta dinero: `max` solo en escalado. El límite de gasto se pone en la clave de openrouter.ai.
