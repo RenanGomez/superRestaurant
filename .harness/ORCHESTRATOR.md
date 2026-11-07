@@ -10,7 +10,8 @@ puntual, unas pocas líneas) se hace directo: delegar lo que cuesta menos que el
 | Motor | Para | Cuota |
 |---|---|---|
 | `gemini` (Antigravity, Google AI Pro) | leer mucho, mapas, docs, tests, boilerplate, revisar diffs | abundante → **primero** |
-| `codex` (ChatGPT Plus; varias cuentas en `config.codex.accounts`) | features acotadas, bugs difíciles (sandbox real) | escasa → solo lo que la exige |
+| `codex` (ChatGPT Plus, cuenta B; `config.codex.accounts`) | features acotadas, bugs difíciles (sandbox real) | escasa → solo lo que la exige |
+| `claude` CLI (`claude -p`, haiku/sonnet) | respaldo automático de codex sin cuota (`config.codex.fallback`) | la misma del orquestador → solo si codex está agotado |
 | subagente Claude (Agent) | búsquedas rápidas (haiku), tareas atadas a esta conversación (sonnet) | — |
 
 Qué motor/modelo/esfuerzo por tipo de tarea: `routing.md`.
@@ -42,9 +43,12 @@ Markdown, `.harness/` y `.claude/` no cuentan. No esquivarlo (shell, subagente C
 Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos motores están caídos y no puede esperar.
 
 ## Cuota
-- **Cuentas de codex en paralelo:** con `config.codex.accounts` (p. ej. A y B), cada cuenta es un carril con su propia
-  cuota (`codex-A`, `codex-B` en quota.json). drain reparte las tareas de codex de una ola entre cuentas distintas y,
-  si una se agota, sigue con la otra. Para fijar una cuenta: `-Account A|B` en enqueue/agent; sin él, la libre.
+- **Cuentas de codex:** `config.codex.accounts` (hoy solo B). Con varias, cada una es un carril con su cuota
+  (`codex-B` en quota.json) y drain las reparte; `-Account X` fija una.
+- **Respaldo Claude:** si ninguna cuenta de codex tiene cuota, la tarea de codex la hace `claude -p` con el modelo
+  de `config.codex.fallback.models` (haiku/sonnet), sin esperar. El result lo dice (`[codex → claude/...]` en el
+  log, carril `codex→claude` en drain.md). Revísalo igual que uno de codex. Requiere el CLI `claude` con sesión
+  iniciada; si falla por login, avisa al usuario. Si Claude también se agota, la tarea espera el primer reset.
 - `agent.ps1` detecta el agotamiento, marca el motor en `.harness/state/quota.json` (`cooldown`, `reset_at`) y sale
   con código 75 y result `queued`. Mientras dure, los runs a ese motor quedan `queued` sin gastar.
 - En la cola, drain deja esas tareas `pending`; con `-Wait` espera el reset él mismo (hasta `-MaxWaitHours`, 12) y
@@ -61,6 +65,15 @@ Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos 
   Si los tienen, el motor trabajaría sobre código viejo: corre en la carpeta del proyecto con `-Files` disjuntos
   de cualquier otro escritor y revisa su `git diff` al terminar. drain hace este cambio solo (quita `-Worktree`
   si `git status` muestra cambios en esas `-Files` y lo anota en `state/drain.md`).
+- Dónde quedan: gemini en `.harness/worktrees/<id>`; codex en `C:\tmp\harness-wt\<proyecto>\<id>` (o
+  `config.codex.worktreeDir`), porque su sandbox no escribe en carpetas con punto. Rama `harness/<id>` en ambos.
+- **Nunca** crees enlaces/junctions dentro de un worktree, ni lo borres con `Remove-Item -Recurse` o
+  `git worktree remove -f`: el borrado sigue los enlaces y vacía las carpetas originales (así se perdió
+  `godot/game_assets`). Bórralos solo con `.harness/bin/remove-worktree.ps1 -Id <id> [-DeleteBranch]`, que se niega
+  si encuentra enlaces. Pruebas que necesiten recursos ignorados por git (imágenes): en la carpeta principal.
+- No edites `.harness/bin` del proyecto para arreglar el harness sin avisar: el arreglo se pierde para los demás
+  proyectos. Propónlo en el informe; el usuario lo lleva a la plantilla (`~/agent-harness`). Si aun así se edita,
+  `install.ps1` ya no lo pisa: deja la versión nueva como `*.template-new` para fusionar.
 - gemini con `-Write` sin worktree: su "solo tocar X" es una instrucción, no un sandbox. Brief con rutas exactas y
   revisar el diff completo (`git status`), no solo los archivos esperados.
 - Antigravity debe estar abierto y el proyecto abierto en él al menos una vez. Cada run crea una conversación

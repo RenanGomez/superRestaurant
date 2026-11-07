@@ -11,6 +11,7 @@ $utf8 = New-Object System.Text.UTF8Encoding $false
 [Console]::OutputEncoding = $utf8
 $in = [Console]::In.ReadToEnd() | ConvertFrom-Json
 if (-not $in) { exit 0 }
+if ($env:HARNESS_WORKER) { exit 0 }      # worker lanzado por agent.ps1: delegar es su trabajo, no hay límite
 
 $harness = Split-Path $PSScriptRoot -Parent
 $root    = Split-Path $harness -Parent

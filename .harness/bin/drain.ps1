@@ -44,10 +44,14 @@ function CoolUntil($engine) {
 $accounts = if ($cfg.codex.accounts -and @($cfg.codex.accounts.PSObject.Properties).Count) { @($cfg.codex.accounts.PSObject.Properties.Name) }
             elseif ($cfg.codex.homes) { $i = 0; @($cfg.codex.homes | Where-Object { $_ } | ForEach-Object { "H$((++$i))" }) }   # formato anterior
             else { @() }
+# config.codex.fallback.engine (p. ej. claude) es el último carril de una tarea de codex: se usa si no hay cuota de codex
+$fallback = if ($cfg.codex.fallback -and $cfg.codex.fallback.engine) { $cfg.codex.fallback.engine } else { '' }
 function Keys($t) {
-  if ($t.engine -ne 'codex' -or -not $accounts) { return @($t.engine) }
-  if ($t.account) { return @("codex-$($t.account)") }
-  return @($accounts | ForEach-Object { "codex-$_" })
+  if ($t.engine -ne 'codex') { return @($t.engine) }
+  # tipado: con un solo elemento, += concatenaría texto
+  [string[]]$k = if (-not $accounts) { @('codex') } elseif ($t.account) { @("codex-$($t.account)") } else { @($accounts | ForEach-Object { "codex-$_" }) }
+  if ($fallback) { $k += $fallback }
+  return $k
 }
 function FreeKeys($t) { @(Keys $t | Where-Object { -not (CoolUntil $_) }) }
 function Overlap($a, $b) {   # prefijos de ruta en común = mismos archivos
@@ -74,9 +78,12 @@ try {
       if ($clash) { continue }
       # cuenta de codex: una libre que no use ya otra tarea de esta ola (así A y B trabajan en paralelo)
       $free = FreeKeys $t
+      # el respaldo solo entra si no queda cuota de codex (salvo fallback.parallel: también como carril extra)
+      if ($fallback -and -not $cfg.codex.fallback.parallel) { $cx = @($free | Where-Object { $_ -ne $fallback }); if ($cx) { $free = $cx } }
       $key = @($free | Where-Object { $used -notcontains $_ }) + $free | Select-Object -First 1
       $used += $key
       $t | Add-Member runAccount $(if ($key -like 'codex-*') { $key.Substring(6) } else { '' }) -Force
+      $t | Add-Member runLane $(if ($key -eq $fallback -and $t.engine -eq 'codex') { "codex→$fallback" } else { $key }) -Force
       $wave += $t
     }
     if (-not $wave) { break }
@@ -110,8 +117,8 @@ try {
         $t.status = if ($body -match '```' -and $body -notmatch 'NO VERIFICADO') { 'done' } else { 'unverified' }
       }
       else { $t.status = 'failed' }
-      $lane = "$($t.engine)$(if ($t.runAccount) { "-$($t.runAccount)" })"
-      $t.PSObject.Properties.Remove('runAccount')
+      $lane = $t.runLane
+      $t.PSObject.Properties.Remove('runAccount'); $t.PSObject.Properties.Remove('runLane')
       $t.outcome = "$line".Trim(); Save $t
       $log.Add("- $($t.id) [$lane] → $($t.status) (exit $code): $($t.outcome)")
     }

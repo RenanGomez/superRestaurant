@@ -79,27 +79,43 @@ if ($cfg.codex.homes -and -not $hasAccounts) {
   foreach ($h in @($cfg.codex.homes | Where-Object { $_ })) { $acc["H$((++$i))"] = [Environment]::ExpandEnvironmentVariables($h) }
   $cfg.codex | Add-Member accounts ([pscustomobject]$acc) -Force
 }
+# respaldo de codex (config.codex.fallback = { engine: "claude", models: { fast: "haiku", ... } }): si codex no
+# tiene cuota, la tarea la hace Claude en vez de esperar al reset. Devuelve $false si no hay respaldo disponible.
+$fallbackWhy = ''
+function Switch-ToFallback($why) {
+  $fb = $cfg.codex.fallback
+  if ($Engine -ne 'codex' -or -not $fb -or -not $fb.engine -or (CoolUntil $fb.engine)) { return $false }
+  $script:Model = if ($fb.models -and $fb.models.$Model) { $fb.models.$Model } else { $Model }
+  $script:Engine = $fb.engine; $script:Account = ''; $script:fallbackWhy = $why
+  return $true
+}
+
 $accounts = if ($Engine -eq 'codex' -and $cfg.codex.accounts) { @($cfg.codex.accounts.PSObject.Properties.Name) } else { @() }
 if ($accounts) {
   if ($Account -and $accounts -notcontains $Account) { throw "Cuenta '$Account' no está en config.codex.accounts ($($accounts -join ', '))" }
-  if (-not $Account) {                 # la primera libre; si todas están agotadas, esperar a la que antes vuelva
+  if (-not $Account) {                 # la primera libre; si todas están agotadas: respaldo o esperar a la que antes vuelva
     $Account = $accounts | Where-Object { -not (CoolUntil "codex-$_") } | Select-Object -First 1
-    if (-not $Account) {
+    if ($Account) { $launch['Account'] = $Account }
+    elseif (-not (Switch-ToFallback 'todas las cuentas de codex sin cuota')) {
       $soon = $accounts | Sort-Object { CoolUntil "codex-$_" } | Select-Object -First 1
       Exit-Queued (CoolUntil "codex-$soon").AddMinutes(2) "todas las cuentas de codex sin cuota"
     }
-    $launch['Account'] = $Account
   }
-  $codexHome = [Environment]::ExpandEnvironmentVariables($cfg.codex.accounts.$Account)
-  if (-not [IO.Path]::IsPathRooted($codexHome)) { $codexHome = Join-Path $HOME $codexHome }
-  if (-not (Test-Path (Join-Path $codexHome 'auth.json'))) {
-    throw "Cuenta $Account sin sesión: ejecuta  `$env:CODEX_HOME='$codexHome'; codex login  una vez."
+  if ($Engine -eq 'codex') {
+    $codexHome = [Environment]::ExpandEnvironmentVariables($cfg.codex.accounts.$Account)
+    if (-not [IO.Path]::IsPathRooted($codexHome)) { $codexHome = Join-Path $HOME $codexHome }
+    if (-not (Test-Path (Join-Path $codexHome 'auth.json'))) {
+      throw "Cuenta $Account sin sesión: ejecuta  `$env:CODEX_HOME='$codexHome'; codex login  una vez."
+    }
+    $env:CODEX_HOME = $codexHome
   }
-  $env:CODEX_HOME = $codexHome
 }
 $qkey = if ($Account) { "codex-$Account" } else { $Engine }
 $q = $quota.$qkey
-if (CoolUntil $qkey) { Exit-Queued (CoolUntil $qkey).AddMinutes(2) "$qkey sin cuota hasta $($q.reset_at)" }
+if ((CoolUntil $qkey) -and -not (Switch-ToFallback "$qkey sin cuota")) {
+  Exit-Queued (CoolUntil $qkey).AddMinutes(2) "$qkey sin cuota hasta $($q.reset_at)"
+}
+if ($fallbackWhy) { $qkey = $Engine; $q = $quota.$qkey; "[codex → $Engine/${Model}: $fallbackWhy]" }
 
 $m = $cfg.$Engine.models.$Model
 if ($null -eq $m) { $m = $Model }      # nombre literal
@@ -164,7 +180,7 @@ function Invoke-Antigravity {
     # worktree dentro del proyecto (Antigravity solo ve la carpeta del proyecto); rama harness/<id>
     $wt = Join-Path $harness "worktrees\$Id"
     if (-not (Test-Path $wt)) {
-      $g = & git -C $root worktree add -b "harness/$Id" $wt 2>&1 | Out-String
+      $g = & git -C $root worktree add -q -b "harness/$Id" $wt 2>&1 | Out-String
       if ($LASTEXITCODE -ne 0) { return @{ code = 2; out = "No pude crear el worktree (¿es un repo git con commits?): $g" } }
     }
     $mode += " Trabaja EXCLUSIVAMENTE dentro de la carpeta $wt (copia del repo en la rama harness/$Id): lee y edita solo ahí, nunca en $root fuera de ella. No hagas commit."
@@ -190,19 +206,21 @@ switch ($Engine) {
   'codex' {
     # dieta de contexto: sin ~/.codex/config.toml (MCPs, plugins, notify) ni historial de sesión;
     # lo necesario se pasa explícito desde config.json (codex.overrides)
-    # codex exec no acepta --worktree junto con --ignore-user-config: el harness crea el worktree
-    # fuera de carpetas con punto (el sandbox de Windows no escribe en ellas), rama harness/<id>
+    # --worktree de codex no admite --ignore-user-config: el worktree lo crea el harness (rama harness/<id>), fuera
+    # de carpetas con punto (el sandbox de Windows no escribe en ellas). Nunca enlaces/junctions dentro: al borrar el
+    # worktree, git los sigue y borra los originales (así se perdió godot/game_assets). Borrar con remove-worktree.ps1.
     $cwd = $root
     if ($Worktree) {
-      $cwd = Join-Path 'C:\tmp\sr-wt' $Id
+      $wtBase = if ($cfg.codex.worktreeDir) { [Environment]::ExpandEnvironmentVariables($cfg.codex.worktreeDir) }
+                else { "C:\tmp\harness-wt\$(Split-Path $root -Leaf)" }   # no %LOCALAPPDATA%: la app de Claude lo virtualiza
+      $cwd = Join-Path $wtBase $Id
       if (-not (Test-Path $cwd)) {
-        # git escribe el progreso en stderr; con ErrorActionPreference=Stop eso abortaba el script
-        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'   # git escribe el progreso en stderr
         $g = & git -C $root worktree add -q -b "harness/$Id" $cwd 2>&1 | Out-String
         $ErrorActionPreference = $eap
-        if ($LASTEXITCODE -ne 0) { throw "No pude crear el worktree: $g" }
+        if ($LASTEXITCODE -ne 0) { throw "No pude crear el worktree en ${cwd}: $g" }
       }
-      $prompt += "`nTrabaja EXCLUSIVAMENTE en $cwd (worktree en la rama harness/$Id). Al terminar haz commit local en esa rama si el sandbox lo permite; si no, dilo en el informe.`n"
+      $prompt += "`nTrabaja EXCLUSIVAMENTE en $cwd (worktree en la rama harness/$Id). No hagas commit; el orquestador revisa y fusiona.`n"
     }
     $args_ = @('exec','--ignore-user-config','--ephemeral','-C',$cwd,'--skip-git-repo-check','-o',$result,
                '-s', $(if ($Write) {'workspace-write'} else {'read-only'}))
@@ -210,12 +228,15 @@ switch ($Engine) {
     if (-not $Effort -and $cfg.codex.defaultEffort) { $Effort = $cfg.codex.defaultEffort }
     if ($m)        { $args_ += @('-m',$m) }
     if ($Effort)   { $args_ += @('-c',"model_reasoning_effort=`"$Effort`"") }
-    if ($Write)    { $args_ += @('--add-dir', $root) }   # informe y agents_out/ viven en $root
+    if ($Write -and $Worktree) { $args_ += @('--add-dir', $root) }   # agents_out/ e informe viven en la carpeta del proyecto
     $args_ += '-'                       # prompt por stdin
   }
   'claude' {
-    $args_ = @('-p','--permission-mode', $(if ($Write) {'acceptEdits'} else {'plan'}))
+    # worker headless: -Write edita y ejecuta comandos (tests, evidencia); sin -Write solo lee
+    $args_ = @('-p','--permission-mode', $(if ($Write) {'acceptEdits'} else {'default'}),
+               '--allowedTools', $(if ($Write) {'Read Edit Write Grep Glob Bash'} else {'Read Grep Glob'}))
     if ($m) { $args_ += @('--model',$m) }
+    $env:HARNESS_WORKER = '1'           # guard.ps1 no limita a los workers, solo al orquestador
   }
 }
 
@@ -232,7 +253,7 @@ try {
 [IO.File]::WriteAllText($log, ($out -join "`n"), $utf8)
 
 # codex: mover lo que dejó en agents_out/ a .agents/ (ver nota del sandbox arriba)
-$outDir = Join-Path $root 'agents_out'
+$outDir = Join-Path $(if ($cwd) { $cwd } else { $root }) 'agents_out'   # en un worktree, codex lo deja ahí
 if ($agentsOut -and (Test-Path $outDir)) {
   Get-ChildItem $outDir -Recurse -File | ForEach-Object {
     $dst = Join-Path (Join-Path $root '.agents') $_.FullName.Substring($outDir.Length).TrimStart('\')
@@ -244,15 +265,17 @@ if ($agentsOut -and (Test-Path $outDir)) {
 
 # cuota agotada → cooldown + relanzamiento. codex: "...or try again at Nov 3rd, 2026 2:11 AM."
 $text = $out -join "`n"
-if ($code -ne 0 -and $text -match 'usage limit|rate limit|RESOURCE_EXHAUSTED|quota exceeded') {
+# claude: "You've hit your limit · resets 3pm" / "Claude AI usage limit reached"
+if ($code -ne 0 -and $text -match 'usage limit|rate limit|RESOURCE_EXHAUSTED|quota exceeded|hit your limit|limit reached') {
   $at = (Get-Date).AddMinutes(60)      # el mensaje no trae hora: reintentar en 1 h
   if ($text -match 'try again at ([A-Z][a-z]{2}) (\d{1,2})(?:st|nd|rd|th)?, (\d{4}) (\d{1,2}:\d{2} [AP]M)') {
     $at = [datetime]::ParseExact("$($Matches[1]) $($Matches[2]) $($Matches[3]) $($Matches[4])", 'MMM d yyyy h:mm tt',
                                  [Globalization.CultureInfo]::InvariantCulture)
-  } elseif ($text -match 'try again at (\d{1,2}:\d{2} [AP]M)') {
-    # solo hora ("try again at 1:33 PM"): hoy, o mañana si ya pasó
-    $at = [datetime]::ParseExact("$((Get-Date).ToString('yyyy-MM-dd')) $($Matches[1])", 'yyyy-MM-dd h:mm tt',
-                                 [Globalization.CultureInfo]::InvariantCulture)
+  } elseif ($text -match '(?:try again at|resets) (\d{1,2})(?::(\d{2}))?\s?([AaPp][Mm])') {
+    # solo hora ("try again at 1:33 PM", claude: "resets 3pm"): hoy, o mañana si ya pasó
+    $hh = [int]$Matches[1] % 12; $mm = [int]("0" + $Matches[2]); $pm = $Matches[3] -like 'p*'   # antes de otro -match
+    if ($pm) { $hh += 12 }
+    $at = (Get-Date).Date.AddHours($hh).AddMinutes($mm)
     if ($at -lt (Get-Date)) { $at = $at.AddDays(1) }
   }
   $msg = ($text -split "`n" | Where-Object { $_ -match 'limit|quota|EXHAUSTED' } | Select-Object -First 1)

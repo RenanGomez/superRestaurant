@@ -18,3 +18,4 @@ recordings/
 .harness/queue/
 .harness/worktrees/
 .harness/context/repo.md
+.harness/**/*.template-new
