@@ -16,6 +16,7 @@ puntual, unas pocas líneas) se hace directo: delegar lo que cuesta menos que el
 | subagente Claude (Agent) | búsquedas rápidas (haiku), tareas atadas a esta conversación (sonnet) | — |
 
 Qué motor/modelo/esfuerzo por tipo de tarea: `routing.md`.
+**Con `config.dsh.enabled: false` (ahora), dsh no existe:** no lo uses ni lo propongas; código → codex.
 
 ## Flujo
 1. **Contexto**: `codegraph explore` (si hay `.codegraph/`) o `.harness/context/map.md` antes de abrir archivos.

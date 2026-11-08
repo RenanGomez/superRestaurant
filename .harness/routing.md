@@ -2,6 +2,10 @@
 
 Los nombres de modelo viven en `config.json` (alias). Usa alias.
 
+> **dsh desactivado temporalmente** (`config.dsh.enabled: false`, sin saldo en OpenRouter). Mientras siga así,
+> no uses `-Engine dsh`: código → codex (default/low; strong/medium en bugs) y lo demás → gemini. Si algo se
+> encola como dsh igualmente, agent.ps1 lo pasa a codex. Las tablas de abajo aplican cuando vuelva a `true`.
+
 **Motores:**
 - **gemini** (Antigravity): cuota abundante y gratis.
 - **dsh** (DeepSeek Harness → OpenRouter): sin cuota de 5 h; se paga por token y es muy barato. **Es el motor de

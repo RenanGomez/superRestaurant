@@ -75,9 +75,11 @@
                                "review":  "z-ai/glm-5.3",
                                "vision":  "qwen/qwen3.8-omni-flash"
                            },
+                "note":  "DeepSeek Harness headless vía OpenRouter (se paga por token, sin cuota de 5 h). Clave: la de dsh (Ajustes → Modelos), no la variable de entorno. US$/M entrada-salida (nov 2026): fast 0.03/0.13, default 0.15/0.60, strong 0.11/4.44, max 2/10, review 0.07/1.40, vision 0.15/0.47. Pon un límite de crédito a la clave en openrouter.ai. worktreeDir vacío = %USERPROFILE%\\harness-wt\\\u003cproyecto\u003e.",
+                "enabled":  false,
+                "enabled_note":  "false = apagado (sin saldo en OpenRouter): las tareas de dsh las hace codex y codex no se desvía a dsh. Poner true al recargar saldo.",
                 "defaultEffort":  "",
                 "worktreeDir":  "",
-                "exe":  "",
-                "note":  "DeepSeek Harness headless vía OpenRouter (se paga por token, sin cuota de 5 h). Clave: la de dsh (Ajustes → Modelos), no la variable de entorno. US$/M entrada-salida (nov 2026): fast 0.03/0.13, default 0.15/0.60, strong 0.11/4.44, max 2/10, review 0.07/1.40, vision 0.15/0.47. Pon un límite de crédito a la clave en openrouter.ai. worktreeDir vacío = %USERPROFILE%\\harness-wt\\\u003cproyecto\u003e."
+                "exe":  ""
             }
 }

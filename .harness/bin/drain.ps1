@@ -46,8 +46,10 @@ $accounts = if ($cfg.codex.accounts -and @($cfg.codex.accounts.PSObject.Properti
             else { @() }
 # config.codex.fallback.engine (p. ej. claude) es el último carril de una tarea de codex: se usa si no hay cuota de codex
 $fallback = if ($cfg.codex.fallback -and $cfg.codex.fallback.engine) { $cfg.codex.fallback.engine } else { '' }
+$dshOff = $cfg.dsh.enabled -eq $false     # dsh apagado: sin carril dsh; sus tareas van a codex (agent.ps1 las desvía)
+if ($dshOff -and $fallback -eq 'dsh') { $fallback = '' }
 function Keys($t) {
-  if ($t.engine -ne 'codex') { return @($t.engine) }
+  if ($t.engine -ne 'codex' -and -not ($t.engine -eq 'dsh' -and $dshOff)) { return @($t.engine) }
   # tipado: con un solo elemento, += concatenaría texto
   [string[]]$k = if (-not $accounts) { @('codex') } elseif ($t.account) { @("codex-$($t.account)") } else { @($accounts | ForEach-Object { "codex-$_" }) }
   if ($fallback) { $k += $fallback }

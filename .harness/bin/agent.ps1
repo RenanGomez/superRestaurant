@@ -85,11 +85,17 @@ $fallbackWhy = ''
 function Switch-ToFallback($why) {
   $fb = $cfg.codex.fallback
   if ($Engine -ne 'codex' -or -not $fb -or -not $fb.engine -or (CoolUntil $fb.engine)) { return $false }
+  if ($fb.engine -eq 'dsh' -and $cfg.dsh.enabled -eq $false) { return $false }
   $script:Model = if ($fb.models -and $fb.models.$Model) { $fb.models.$Model } else { $Model }
   $script:Engine = $fb.engine; $script:Account = ''; $script:fallbackWhy = $why
   return $true
 }
 
+# dsh apagado (config.dsh.enabled = false, p. ej. sin saldo en OpenRouter): sus tareas las hace codex
+if ($Engine -eq 'dsh' -and $cfg.dsh.enabled -eq $false) {
+  $Engine = 'codex'; $Model = if ($Model -in 'strong','max') { 'strong' } else { 'default' }
+  "[dsh desactivado → codex/$Model]"
+}
 $accounts = if ($Engine -eq 'codex' -and $cfg.codex.accounts) { @($cfg.codex.accounts.PSObject.Properties.Name) } else { @() }
 if ($accounts) {
   if ($Account -and $accounts -notcontains $Account) { throw "Cuenta '$Account' no está en config.codex.accounts ($($accounts -join ', '))" }
