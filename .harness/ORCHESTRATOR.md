@@ -101,6 +101,16 @@ Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos 
 `AGENTS.md` puede renombrar estos documentos; manda lo que diga.
 
 ## Tokens
+Cada paso del orquestador relee **todo** el contexto: el coste es tamaño de la conversación × número de pasos.
+- **Modelo del orquestador:** Sonnet 5.5 para orquestar; Opus 5.5 solo para diseño. Nunca Fable (2-5x más caro).
+- **Conversaciones cortas:** al pasar de `config.tokens.handoffAt` (100k) el hook te lo avisa. Cierra con `HANDOFF.md`
+  y pide al usuario una conversación nueva. Una conversación = una tarea grande.
+- **Nada de lectura masiva en el orquestador:** archivos de más de ~200 líneas, búsquedas amplias o logs → delegar
+  (gemini/subagente haiku) y quedarse con el resumen. Usa `Read` con `offset`/`limit` y `head`/`Select-Object -First`.
+- **Agrupa comandos** en una sola llamada de shell; las llamadas en paralelo van en un solo mensaje.
+- **No releas** `ORCHESTRATOR.md`, `routing.md`, `AGENTS.md` ni archivos ya leídos en la conversación.
+- **Sin `SearchPlugins`, `SearchSkills` ni sugerencias de plugins** salvo que el usuario lo pida.
+- **Subagentes Claude:** haiku para buscar, sonnet si necesita criterio; nunca el modelo del orquestador.
 - Results ≤ `config.resultMaxLines` (60), formato fijo; no releer lo ya resumido.
 - Modelo y esfuerzo más baratos que cumplan; un solo escalado por tarea.
 - Corregir = feedback concreto en el mismo brief y relanzar el mismo `-Id`.

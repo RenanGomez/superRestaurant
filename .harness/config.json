@@ -81,5 +81,9 @@
                 "defaultEffort":  "",
                 "worktreeDir":  "",
                 "exe":  ""
-            }
+            },
+    "tokens":  {
+                   "handoffAt":  100000,
+                   "note":  "guard.ps1 (UserPromptSubmit): pasados handoffAt tokens de contexto, pide al orquestador cerrar con HANDOFF.md y abrir conversación nueva; avisa una vez si el orquestador corre en Fable."
+               }
 }
