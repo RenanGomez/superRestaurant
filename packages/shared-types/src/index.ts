@@ -390,21 +390,27 @@ export const MENU_VARIANT_MAX_LOCKED_INGREDIENTS = 40;
 export type MenuPizzaModeV1 = "specialty" | "custom";
 export const MENU_PIZZA_MODES: readonly MenuPizzaModeV1[] = Object.freeze(["specialty", "custom"] as const);
 export const MENU_PIZZA_MAX_FREE_INGREDIENTS = 40;
+/** Legacy input bound: `extraGroupIds` is expanded to options on parse and never emitted. */
 export const MENU_PIZZA_MAX_EXTRA_GROUPS = 24;
+export const MENU_PIZZA_MAX_EXTRA_OPTIONS = 200;
 
 export interface MenuProductV1 {
   readonly active: boolean;
   /** Pizza V2: omitted on legacy products. */
   readonly pizzaMode?: MenuPizzaModeV1;
-  /** Pizza V2: non-negative integer N of free ingredients (custom base). */
+  /** Pizza V2: non-negative integer N shared by every base group (custom base). */
   readonly freeIngredientCount?: number;
-  /** Pizza V2: ingredient group (a group of the product) a custom base picks its ingredients from. */
+  /** Pizza V2: groups of the product a custom base picks its N free ingredients from. */
+  readonly baseGroupIds?: readonly string[];
+  /** Legacy input: normalized to `baseGroupIds: [id]`; never emitted. */
   readonly baseGroupId?: string | null;
-  /** Pizza V2: option ids of `baseGroupId` that make up a specialty's recipe. */
+  /** Pizza V2: option ids (from any of `baseGroupIds`) that make up a specialty's recipe. */
   readonly defaultIngredientOptionIds?: readonly string[];
-  /** Pizza V2: whether the operator may customize the pizza at order time. */
+  /** Pizza V2: derived as `pizzaMode === "custom"`; a persisted legacy `true` is preserved on read. */
   readonly customizeAtOrder?: boolean;
-  /** Pizza V2: groups of the product whose options are charged extras (never consume N). */
+  /** Pizza V2: loose charged options (never consume N). */
+  readonly extraOptionIds?: readonly string[];
+  /** Legacy input: expanded to the active options of those groups; never emitted. */
   readonly extraGroupIds?: readonly string[];
   readonly categoryId: string;
   readonly displayOrder: number;
@@ -1214,10 +1220,11 @@ function parseMenuCatalogPayload(record: PlainRecord): MenuCatalogPayloadV1 | un
     const owner = definedProducts.find(({ productId }) => productId === group.productId);
     if (owner?.modifierGroupIds?.includes(group.groupId) !== true) return undefined;
   }
-  for (const product of definedProducts) {
-    for (const groupId of [product.baseGroupId, ...(product.extraGroupIds ?? [])]) {
-      if (groupId !== undefined && groupId !== null && product.modifierGroupIds?.includes(groupId) !== true) return undefined;
-    }
+  for (let index = 0; index < definedProducts.length; index += 1) {
+    const product = definedProducts[index]!;
+    const canonical = canonicalizeMenuProductPizzaV1(product, groupsById);
+    if (canonical === undefined) return undefined;
+    definedProducts[index] = canonical;
   }
   for (const product of definedProducts) {
     const configs = [product.fraction, ...(product.variants ?? []).map((variant) => variant.fraction)];
@@ -1300,7 +1307,8 @@ function parseMenuProductV1(value: unknown): MenuProductV1 | undefined {
     "unit", "unitPriceMinor", "tax",
   ], [
     "imagePath", "variants", "fraction", "modifierGroupIds",
-    "pizzaMode", "freeIngredientCount", "baseGroupId", "defaultIngredientOptionIds", "customizeAtOrder", "extraGroupIds",
+    "pizzaMode", "freeIngredientCount", "baseGroupIds", "baseGroupId", "defaultIngredientOptionIds",
+    "customizeAtOrder", "extraOptionIds", "extraGroupIds",
   ]);
   if (record === undefined) return undefined;
   const pizza = parseMenuProductPizzaV1(record);
@@ -1347,10 +1355,15 @@ function parseMenuProductV1(value: unknown): MenuProductV1 | undefined {
 
 /**
  * Pizza V2 product fields. Returns `{}` for a legacy product; any V2 field without `pizzaMode` is
- * rejected. A custom base needs a base group; N is a bounded non-negative integer; ids are distinct UUIDs and the base group is never also an extra group.
+ * rejected. A custom base needs at least one base group; N is a bounded non-negative integer shared by
+ * all base groups; ids are distinct UUIDs. `baseGroupId`/`extraGroupIds` are legacy input forms:
+ * normalized to `baseGroupIds` here and to `extraOptionIds` once the modifier groups are known.
  */
 function parseMenuProductPizzaV1(record: PlainRecord): Partial<MenuProductV1> | undefined {
-  const v2Keys = ["freeIngredientCount", "baseGroupId", "defaultIngredientOptionIds", "customizeAtOrder", "extraGroupIds"];
+  const v2Keys = [
+    "freeIngredientCount", "baseGroupIds", "baseGroupId", "defaultIngredientOptionIds",
+    "customizeAtOrder", "extraOptionIds", "extraGroupIds",
+  ];
   if (!Object.hasOwn(record, "pizzaMode")) return v2Keys.some((key) => Object.hasOwn(record, key)) ? undefined : {};
   const mode = ownValue(record, "pizzaMode");
   if (typeof mode !== "string" || !(MENU_PIZZA_MODES as readonly string[]).includes(mode)) return undefined;
@@ -1359,10 +1372,8 @@ function parseMenuProductPizzaV1(record: PlainRecord): Partial<MenuProductV1> | 
   const freeIngredientCount = Object.hasOwn(record, "freeIngredientCount")
     ? parseBoundedInteger(ownValue(record, "freeIngredientCount"), 0, MENU_PIZZA_MAX_FREE_INGREDIENTS)
     : 0;
-  const rawBase = Object.hasOwn(record, "baseGroupId") ? ownValue(record, "baseGroupId") : null;
-  const baseGroupId = rawBase === null ? null : parseUuid(rawBase);
   const customizeAtOrder = Object.hasOwn(record, "customizeAtOrder") ? ownValue(record, "customizeAtOrder") : false;
-  if (freeIngredientCount === undefined || baseGroupId === undefined || typeof customizeAtOrder !== "boolean") return undefined;
+  if (freeIngredientCount === undefined || typeof customizeAtOrder !== "boolean") return undefined;
 
   const parseIds = (key: string, maximum: number): readonly string[] | undefined => {
     if (!Object.hasOwn(record, key)) return Object.freeze([]);
@@ -1373,14 +1384,104 @@ function parseMenuProductPizzaV1(record: PlainRecord): Partial<MenuProductV1> | 
     const defined = ids as string[];
     return new Set(defined).size === defined.length ? Object.freeze(defined) : undefined;
   };
+
+  // Legacy `baseGroupId` is read only when the canonical list is absent: emitting both is ambiguous.
+  const hasBaseGroupIds = Object.hasOwn(record, "baseGroupIds");
+  const hasBaseGroupId = Object.hasOwn(record, "baseGroupId");
+  if (hasBaseGroupIds && hasBaseGroupId) return undefined;
+  let baseGroupIds: readonly string[] = Object.freeze([]);
+  if (hasBaseGroupIds) {
+    const parsed = parseIds("baseGroupIds", MENU_PRODUCT_MAX_MODIFIER_GROUPS);
+    if (parsed === undefined) return undefined;
+    baseGroupIds = parsed;
+  } else if (hasBaseGroupId) {
+    const rawBase = ownValue(record, "baseGroupId");
+    if (rawBase !== null) {
+      const baseGroupId = parseUuid(rawBase);
+      if (baseGroupId === undefined) return undefined;
+      baseGroupIds = Object.freeze([baseGroupId]);
+    }
+  }
+
+  // Legacy `extraGroupIds` and canonical `extraOptionIds` never travel together.
+  const hasExtraOptionIds = Object.hasOwn(record, "extraOptionIds");
+  const hasExtraGroupIds = Object.hasOwn(record, "extraGroupIds");
+  if (hasExtraOptionIds && hasExtraGroupIds) return undefined;
+  const extraOptionIds = hasExtraOptionIds
+    ? parseIds("extraOptionIds", MENU_PIZZA_MAX_EXTRA_OPTIONS)
+    : Object.freeze([]) as readonly string[];
+  const extraGroupIds = hasExtraGroupIds
+    ? parseIds("extraGroupIds", MENU_PIZZA_MAX_EXTRA_GROUPS)
+    : undefined;
   const defaultIngredientOptionIds = parseIds("defaultIngredientOptionIds", MENU_VARIANT_MAX_LOCKED_INGREDIENTS);
-  const extraGroupIds = parseIds("extraGroupIds", MENU_PIZZA_MAX_EXTRA_GROUPS);
-  if (defaultIngredientOptionIds === undefined || extraGroupIds === undefined) return undefined;
+  if (extraOptionIds === undefined || defaultIngredientOptionIds === undefined) return undefined;
 
-  if (pizzaMode === "custom" && baseGroupId === null) return undefined;
-  if (baseGroupId !== null && extraGroupIds.includes(baseGroupId)) return undefined;
+  if (pizzaMode === "custom" && baseGroupIds.length === 0) return undefined;
+  if (defaultIngredientOptionIds.some((optionId) => extraOptionIds.includes(optionId))) return undefined;
 
-  return { baseGroupId, customizeAtOrder, defaultIngredientOptionIds, extraGroupIds, freeIngredientCount, pizzaMode };
+  return {
+    baseGroupIds,
+    customizeAtOrder,
+    defaultIngredientOptionIds,
+    extraOptionIds,
+    freeIngredientCount,
+    pizzaMode,
+    // Legacy input carried only until the payload parser expands it from the modifier groups.
+    ...(extraGroupIds === undefined ? {} : { extraGroupIds }),
+  };
+}
+
+/**
+ * Resolves the canonical Pizza V2 fields once every modifier group is known: expands the legacy
+ * `extraGroupIds` to the active options of those groups and drops both legacy forms. Fails closed when a
+ * base group is not assigned to the product, an extra option is not offered by an assigned group, a recipe
+ * option is outside the base groups, or a recipe option is also charged as an extra.
+ */
+function canonicalizeMenuProductPizzaV1(
+  product: MenuProductV1,
+  groupsById: ReadonlyMap<string, MenuModifierGroupV1>,
+): MenuProductV1 | undefined {
+  if (product.pizzaMode === undefined) return product;
+  const assignedGroupIds = product.modifierGroupIds ?? [];
+  const baseGroupIds = product.baseGroupIds ?? [];
+  if (baseGroupIds.some((groupId) => !assignedGroupIds.includes(groupId))) return undefined;
+
+  let extraOptionIds = product.extraOptionIds ?? [];
+  if (product.extraGroupIds !== undefined) {
+    const expanded: string[] = [];
+    for (const groupId of product.extraGroupIds) {
+      if (!assignedGroupIds.includes(groupId)) return undefined;
+      for (const option of groupsById.get(groupId)?.options ?? []) {
+        if (option.active) expanded.push(option.optionId);
+      }
+    }
+    extraOptionIds = expanded;
+  }
+  if (new Set(extraOptionIds).size !== extraOptionIds.length) return undefined;
+
+  const assignedOptionIds = new Set<string>();
+  for (const groupId of assignedGroupIds) {
+    for (const option of groupsById.get(groupId)?.options ?? []) assignedOptionIds.add(option.optionId);
+  }
+  if (extraOptionIds.some((optionId) => !assignedOptionIds.has(optionId))) return undefined;
+
+  const baseOptionIds = new Set<string>();
+  for (const groupId of baseGroupIds) {
+    for (const option of groupsById.get(groupId)?.options ?? []) baseOptionIds.add(option.optionId);
+  }
+  const defaultIngredientOptionIds = product.defaultIngredientOptionIds ?? [];
+  if (defaultIngredientOptionIds.some((optionId) => !baseOptionIds.has(optionId))) return undefined;
+  if (defaultIngredientOptionIds.some((optionId) => extraOptionIds.includes(optionId))) return undefined;
+
+  const rest = { ...product };
+  delete rest.baseGroupId;
+  delete rest.extraGroupIds;
+  return Object.freeze({
+    ...rest,
+    baseGroupIds: Object.freeze([...baseGroupIds]),
+    extraOptionIds: Object.freeze([...extraOptionIds]),
+    customizeAtOrder: product.customizeAtOrder ?? false,
+  });
 }
 
 /** `null` when the key is absent (derive later); otherwise a frozen list of distinct UUIDs. */

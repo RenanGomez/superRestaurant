@@ -181,7 +181,7 @@ test("repeat plan blocks a line whose product is now a pizza V2 product instead 
   const base = catalog();
   const pizzaCatalog: MenuCatalog = {
     ...base,
-    products: [{ ...base.products[0]!, pizzaMode: "specialty", defaultIngredientOptionIds: ["cheese"] }],
+    products: [{ ...base.products[0]!, baseGroupIds: ["toppings"], pizzaMode: "specialty", defaultIngredientOptionIds: ["cheese"] }],
   };
   const plan = buildRepeatOrderPlan(historicalOrder(), pizzaCatalog);
   assert.equal(plan.lines[0]?.status, "blocked");

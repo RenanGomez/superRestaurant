@@ -384,7 +384,16 @@ export type {
   OrderPricingInput,
   TaxSnapshot,
 } from "./order-totals.js";
-export { catalogVariantToFractionVariant, createMenuProductPriceSnapshot, validateMenuCatalog } from "./menu.js";
+export {
+  MENU_PIZZA_MAX_BASE_GROUPS,
+  MENU_PIZZA_MAX_DEFAULT_INGREDIENTS,
+  MENU_PIZZA_MAX_EXTRA_GROUPS,
+  MENU_PIZZA_MAX_EXTRA_OPTIONS,
+  MENU_PIZZA_MAX_FREE_INGREDIENTS,
+  catalogVariantToFractionVariant,
+  createMenuProductPriceSnapshot,
+  validateMenuCatalog,
+} from "./menu.js";
 export type {
   MenuCatalog,
   MenuCategoryCatalog,
