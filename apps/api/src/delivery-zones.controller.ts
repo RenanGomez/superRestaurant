@@ -2,7 +2,14 @@ import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException,
   Header, HttpCode, Inject, NotFoundException, Post, Req, ServiceUnavailableException,
 } from "@nestjs/common";
-import type { DeliveryQuoteV1, DeliveryZoneListV1, DeliveryZoneMatchResultV1, UpsertDeliveryZoneResultV1 } from "@super-restaurant/shared-types";
+import type {
+  DeliveryQuoteV1,
+  DeliveryZoneListV1,
+  DeliveryZoneMatchResultV1,
+  SetCaptureDeliveryManualFeeResultV1,
+  SettlementSearchResultV1,
+  UpsertDeliveryZoneResultV1,
+} from "@super-restaurant/shared-types";
 
 import { getAuthenticatedPrincipal } from "./auth/authentication.js";
 import { DeliveryZoneApplicationError, DeliveryZoneService } from "./delivery-zones.js";
@@ -43,6 +50,25 @@ export class DeliveryZonesController {
   public async match(@Req() request: unknown, @Body() body: unknown): Promise<DeliveryZoneMatchResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.zones.matchAddress(principal, body));
+  }
+
+  @Post("settlements/search")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async searchSettlements(@Req() request: unknown, @Body() body: unknown): Promise<SettlementSearchResultV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.zones.searchSettlements(principal, body));
+  }
+
+  @Post("manual-fee")
+  @HttpCode(200)
+  @Header("Cache-Control", "private, no-store")
+  public async manualFee(
+    @Req() request: unknown,
+    @Body() body: unknown,
+  ): Promise<SetCaptureDeliveryManualFeeResultV1> {
+    const principal = getAuthenticatedPrincipal(request);
+    return this.execute(() => this.zones.setManualFee(principal, body));
   }
 
   private async execute<Result>(action: () => Promise<Result>): Promise<Result> {

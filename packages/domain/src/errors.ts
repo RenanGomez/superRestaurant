@@ -1158,6 +1158,22 @@ export class DeliveryOverrideAuthorizationRequiredError extends DomainError {
   }
 }
 
+export class DeliveryManualFeeAuthorizationRequiredError extends DomainError {
+  public readonly code = "DELIVERY_MANUAL_FEE_AUTHORIZATION_REQUIRED";
+
+  public constructor() {
+    super("A manual delivery fee requires an owner, admin, manager or supervisor role.");
+  }
+}
+
+export class DeliveryManualFeeNotCoveredError extends DomainError {
+  public readonly code = "DELIVERY_MANUAL_FEE_NOT_COVERED";
+
+  public constructor() {
+    super("A manual delivery fee only applies to a not_covered quote.");
+  }
+}
+
 export class DeliveryOverrideReasonRequiredError extends DomainError {
   public readonly code = "DELIVERY_OVERRIDE_REASON_REQUIRED";
 

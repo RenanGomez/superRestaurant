@@ -433,6 +433,8 @@ export {
 export { createDeliveryZone, findDeliveryZone } from "./delivery-zone.js";
 export type { CreateDeliveryZoneInput, DeliveryAddressFacts, DeliveryZone } from "./delivery-zone.js";
 export {
+  DeliveryManualFeeAuthorizationRequiredError,
+  DeliveryManualFeeNotCoveredError,
   DeliveryOverrideAuthorizationRequiredError,
   DeliveryOverrideReasonRequiredError,
   DeliveryScheduleCutoffError,
@@ -443,7 +445,8 @@ export {
   InvalidDeliveryTimestampError,
 } from "./errors.js";
 export {
-  applyDeliveryQuoteOverride,
+  applyDeliveryManualFee,
+  deliveryQuoteEffectiveFeeMinor,
   DELIVERY_ASAP_PREPARATION_MS,
   DELIVERY_ASAP_QUOTE_EXPIRY_POLICY,
   DELIVERY_ASAP_QUOTE_TTL_MS,
@@ -451,7 +454,8 @@ export {
   quoteDelivery,
 } from "./delivery-quote.js";
 export type {
-  ApplyDeliveryQuoteOverrideInput,
+  ApplyDeliveryManualFeeInput,
+  DeliveryManualFeeRole,
   DeliveryQuote,
   DeliveryQuoteCoverageStatus,
   DeliveryQuoteOverride,

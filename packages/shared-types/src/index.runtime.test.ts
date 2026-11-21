@@ -200,6 +200,26 @@ expect(Object.isFrozen(branchOperationalContext), "branch operational context is
 expect(Object.isFrozen(branchOperationalContext.scope), "branch operational context scope is frozen");
 expect(Object.isFrozen(branchOperationalContext.roles), "branch operational context roles are frozen");
 
+const extendedBranchOperationalContext = parseBranchOperationalContextV1({
+  roles: ["manager"],
+  schemaVersion: BRANCH_OPERATIONAL_CONTEXT_SCHEMA_VERSION,
+  scope: { branchId, restaurantId },
+  timeZone: "America/Hermosillo",
+  branchName: "Centro",
+  locality: "Navojoa",
+  region: "Sonora",
+  countryCode: "MX",
+});
+expectDefined(extendedBranchOperationalContext, "extended branch operational context with geography parses");
+expectEqual(extendedBranchOperationalContext.branchName, "Centro", "extended context keeps branch name");
+expectUndefined(
+  parseBranchOperationalContextV1({
+    roles: ["manager"], schemaVersion: 1, scope: { branchId, restaurantId }, timeZone: "America/Hermosillo",
+    branchName: "Centro", locality: "Navojoa", region: "Sonora", countryCode: "MEX",
+  }),
+  "extended context rejects malformed country code",
+);
+
 for (const invalid of [
   { ...branchOperationalContext, schemaVersion: 2 },
   { ...branchOperationalContext, roles: [] },

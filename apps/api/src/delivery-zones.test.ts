@@ -19,7 +19,9 @@ import {
   DELIVERY_ZONE_QUOTE_FACTS_PORT,
   PostgresDeliveryZoneStore,
   type DeliveryZoneListPort,
+  type DeliveryZoneManualFeePort,
   type DeliveryZoneQuoteFactsPort,
+  type DeliveryZoneSettlementSearchPort,
   type DeliveryZoneUpsertPort,
 } from "./delivery-zones.js";
 import type { CaptureCreationPort } from "./captures.js";
@@ -38,8 +40,27 @@ const zoneId = "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e";
 
 const zoneWire = {
   schemaVersion: 1, zoneId, restaurantId: scope.restaurantId, branchId: scope.branchId,
-  name: "Centro", postalCodes: ["83000"], localities: ["Hermosillo"], feeMinor: 2500,
+  name: "Centro", postalCodes: ["83000"], localities: ["Hermosillo"], settlementIds: [], feeMinor: 2500,
   currency: "MXN", active: true, version: 1, updatedAt: "2026-09-16T12:00:01.000Z",
+};
+
+const settlementId = "c3d4e5f6-a7b8-4c9d-9e1f-2a3b4c5d6e7f";
+const settlementSummary = {
+  settlementId, name: "Centro", postalCode: "83000", settlementType: "Colonia",
+  municipality: "Hermosillo", state: "Sonora", countryCode: "MX",
+};
+const settlementSearchResult = {
+  schemaVersion: 1, scope,
+  branch: { name: "Centro", locality: "Hermosillo", region: "Sonora", countryCode: "MX" },
+  settlements: [settlementSummary],
+};
+const manualFeeRecord = {
+  eventId: "f1e2d3c4-b5a6-4978-8a9b-0c1d2e3f4a5b",
+  captureDraftId: "ee50f0f6-746f-47cb-8383-ad7834ef3ef0",
+  addressSnapshotRef: "a409ec59-9f5e-496d-a45d-b83a46b49674",
+  feeMinor: 3500, currency: "MXN", reason: "Colonia fuera de zona",
+  role: "supervisor" as const, actorId: principal.actorId,
+  authorizedAt: "2026-09-16T11:55:00.000Z", version: 1,
 };
 
 function code(expected: string) {
@@ -112,7 +133,9 @@ function catalogDouble(currency = "MXN"): MenuCatalogPort {
 }
 
 function branchContextDouble(timeZone = "America/Hermosillo"): BranchOperationalContextPort {
-  return { select: async () => ({ schemaVersion: 1, scope, roles: ["cashier"], timeZone } as unknown as Awaited<ReturnType<BranchOperationalContextPort["select"]>>) };
+  return { select: async () => ({ schemaVersion: 1, scope, roles: ["cashier"], timeZone,
+    branchName: "Centro", locality: "Hermosillo", region: "Sonora", countryCode: "MX",
+  } as unknown as Awaited<ReturnType<BranchOperationalContextPort["select"]>>) };
 }
 
 const clock: ClockPort = { now: () => "2026-09-16T12:00:02.000Z" };
@@ -123,6 +146,8 @@ function serviceFor(options: {
   listPort?: DeliveryZoneListPort;
   upsertPort?: DeliveryZoneUpsertPort;
   quoteFactsPort?: DeliveryZoneQuoteFactsPort;
+  searchPort?: DeliveryZoneSettlementSearchPort;
+  manualFeePort?: DeliveryZoneManualFeePort;
   captures?: CaptureCreationPort;
   catalogs?: MenuCatalogPort;
   branchContext?: BranchOperationalContextPort;
@@ -137,8 +162,13 @@ function serviceFor(options: {
     options.upsertPort ?? { upsertZone: async () => { throw new Error("not used"); } },
     options.quoteFactsPort ?? { listActiveZonesForQuote: async () => ({
       schemaVersion: 1, scope, zones: [{ zoneId, restaurantId: scope.restaurantId, branchId: scope.branchId,
-        name: "Centro", postalCodes: ["83000"], localities: ["Hermosillo"], feeMinor: 2500, currency: "MXN" }],
+        name: "Centro", postalCodes: ["83000"], localities: [], settlementIds: [settlementId], feeMinor: 2500, currency: "MXN" }],
     }) },
+    options.searchPort ?? { searchSettlements: async () => settlementSearchResult },
+    options.manualFeePort ?? {
+      setManualFee: async () => { throw new Error("not used"); },
+      readManualFee: async () => ({ schemaVersion: 1, scope, manualFee: null }),
+    },
     options.captures ?? captureCreationDouble(),
     options.catalogs ?? catalogDouble(),
     options.branchContext ?? branchContextDouble(),
@@ -298,7 +328,7 @@ test("quoteForCapture: covered address returns the zone fee, never a client-supp
 test("quoteForCapture: address outside every zone is not_covered with a zero fee", async () => {
   const notCoveredWorkspace = {
     ...workspaceFixture,
-    fulfillmentSnapshot: { ...workspaceFixture.fulfillmentSnapshot, postalCode: "99999", locality: "Otra ciudad" },
+    fulfillmentSnapshot: { ...workspaceFixture.fulfillmentSnapshot, neighborhood: "Desconocida", postalCode: "99999", locality: "Otra ciudad" },
   };
   const service = serviceFor({ captures: captureCreationDouble(notCoveredWorkspace) });
   const quote = await service.quoteForCapture(principal, quoteInput);
@@ -393,27 +423,53 @@ const matchInput = (address: { postalCode: string | null; locality: string }) =>
   schemaVersion: 1, restaurantId: scope.restaurantId, branchId: scope.branchId, address,
 });
 
-test("matchAddress: covered by postal code returns zone, fee in minor units and the ASAP window", async () => {
+test("matchAddress: covered by legacy postal code returns zone, fee, ASAP window and the legacy warning", async () => {
   const result = await serviceFor().matchAddress(principal, matchInput({ postalCode: "83000", locality: "Otra" }));
   assert.deepEqual(result, {
     schemaVersion: 1, coverageStatus: "covered", zoneId, zoneName: "Centro", feeMinor: 2500, currency: "MXN",
     promiseMinutes: 15, promiseStart: "2026-09-16T12:30:02.000Z", promiseEnd: "2026-09-16T12:45:02.000Z",
     evaluatedAt: "2026-09-16T12:00:02.000Z",
+    reason: { code: "legacy_postal_code_match", message: "No se reconoció la colonia; se usó el código postal como respaldo. Actualiza la dirección." },
+    matchedBy: "postal_code",
+    settlement: null,
   });
 });
 
-test("matchAddress: covered by locality when the postal code does not match", async () => {
-  const result = await serviceFor().matchAddress(principal, matchInput({ postalCode: null, locality: "Hermosillo" }));
+test("matchAddress: a unique neighborhood resolves to its settlement and matches by settlement id", async () => {
+  const result = await serviceFor().matchAddress(principal, {
+    schemaVersion: 1, restaurantId: scope.restaurantId, branchId: scope.branchId,
+    address: { settlementId: null, neighborhood: "Centro", postalCode: null, locality: null },
+  });
   assert.equal(result.coverageStatus, "covered");
   assert.equal(result.zoneId, zoneId);
+  assert.equal(result.matchedBy, "settlement");
+  assert.equal(result.reason, null);
+  assert.deepEqual(result.settlement, { settlementId, name: "Centro", postalCode: "83000" });
 });
 
-test("matchAddress: uncovered address is not_covered with fee 0 and no zone", async () => {
+test("matchAddress: an unknown neighborhood is not_covered and never falls back to the postal code", async () => {
+  const result = await serviceFor().matchAddress(principal, {
+    schemaVersion: 1, restaurantId: scope.restaurantId, branchId: scope.branchId,
+    address: { settlementId: null, neighborhood: "Desconocida", postalCode: "83000", locality: null },
+  });
+  assert.equal(result.coverageStatus, "not_covered");
+  assert.equal(result.zoneId, null);
+  assert.equal(result.zoneName, null);
+  assert.equal(result.feeMinor, 0);
+  assert.equal(result.matchedBy, null);
+  assert.equal(result.settlement, null);
+  assert.equal(result.reason?.code, "settlement_unknown");
+  assert.equal(result.reason?.message, "Colonia no reconocida en Hermosillo.");
+});
+
+test("matchAddress: an unresolved postal code without a neighborhood is not_covered with the exact message", async () => {
   const result = await serviceFor().matchAddress(principal, matchInput({ postalCode: "99999", locality: "Lejos" }));
   assert.equal(result.coverageStatus, "not_covered");
   assert.equal(result.zoneId, null);
   assert.equal(result.zoneName, null);
   assert.equal(result.feeMinor, 0);
+  assert.equal(result.reason?.code, "settlement_not_in_zone");
+  assert.equal(result.reason?.message, "La colonia 99999 no está en ninguna zona de la sucursal Centro.");
 });
 
 test("matchAddress: zones of another branch never apply and the facts query uses the authorized scope", async () => {
@@ -517,4 +573,91 @@ test("POST /delivery-zones/match: HTTP contract (401, 400, 200 no-store, 403, 50
   } finally {
     await app.close();
   }
+});
+
+// --- searchSettlements -------------------------------------------------------
+
+const searchInput = { schemaVersion: 1, scope, query: "cen", postalCode: null, limit: 20 };
+
+test("searchSettlements: authorized actor receives the branch-scoped catalog", async () => {
+  const result = await serviceFor().searchSettlements(principal, searchInput);
+  assert.equal(result.branch.name, "Centro");
+  assert.equal(result.settlements[0]?.settlementId, settlementId);
+  assert.equal(result.settlements[0]?.postalCode, "83000");
+});
+
+test("searchSettlements: a foreign branch scope is denied before calling the port", async () => {
+  let called = false;
+  const searchPort: DeliveryZoneSettlementSearchPort = {
+    searchSettlements: async () => { called = true; return settlementSearchResult; },
+  };
+  const service = serviceFor({ roles: ["cashier"], searchPort });
+  await assert.rejects(
+    service.searchSettlements(principal, { ...searchInput, scope: { restaurantId: scope.restaurantId, branchId: "00000000-0000-4000-8000-000000000000" } }),
+    code("authorization"),
+  );
+  assert.equal(called, false);
+});
+
+test("searchSettlements: malformed requests are rejected and SQL rejection maps to request", async () => {
+  const service = serviceFor();
+  await assert.rejects(service.searchSettlements(principal, { ...searchInput, query: null, postalCode: null }), code("request"));
+  const rejecting = serviceFor({ searchPort: { searchSettlements: async () => ({ status: "rejected" }) } });
+  await assert.rejects(rejecting.searchSettlements(principal, searchInput), code("request"));
+});
+
+// --- setManualFee ------------------------------------------------------------
+
+const manualFeeInput = {
+  schemaVersion: 1, scope, captureDraftId, addressSnapshotRef: manualFeeRecord.addressSnapshotRef,
+  expectedVersion: 0, feeMinor: 3500, currency: "MXN", reason: "Colonia fuera de zona",
+  eventId: manualFeeRecord.eventId, idempotencyKey: "c483b6e7-e102-4cc5-a887-d30712c85e52",
+  deviceId: "e74df54b-30a7-449b-a23f-c4ca6f93bda4", occurredAt: "2026-09-16T12:00:00.000Z",
+};
+
+test("setManualFee: supervisor may authorize and the result is returned", async () => {
+  const manualFeePort: DeliveryZoneManualFeePort = {
+    setManualFee: async () => ({ schemaVersion: 1, manualFee: manualFeeRecord, replayed: false }),
+    readManualFee: async () => ({ schemaVersion: 1, scope, manualFee: null }),
+  };
+  const result = await serviceFor({ roles: ["supervisor"], manualFeePort }).setManualFee(principal, manualFeeInput);
+  assert.equal(result.manualFee.feeMinor, 3500);
+  assert.equal(result.manualFee.role, "supervisor");
+  assert.equal(result.replayed, false);
+});
+
+test("setManualFee: cashier is denied before the port is called; SQL conflict maps to conflict", async () => {
+  let called = false;
+  const manualFeePort: DeliveryZoneManualFeePort = {
+    setManualFee: async () => { called = true; return { status: "conflict" }; },
+    readManualFee: async () => ({ schemaVersion: 1, scope, manualFee: null }),
+  };
+  await assert.rejects(serviceFor({ roles: ["cashier"], manualFeePort }).setManualFee(principal, manualFeeInput), code("authorization"));
+  assert.equal(called, false);
+  await assert.rejects(serviceFor({ roles: ["supervisor"], manualFeePort }).setManualFee(principal, manualFeeInput), code("conflict"));
+  await assert.rejects(serviceFor({ roles: ["supervisor"] }).setManualFee(principal, { ...manualFeeInput, reason: "" }), code("request"));
+});
+
+// --- quoteForCapture: manual fee override -----------------------------------
+
+test("quoteForCapture: a live manual fee overrides a not_covered quote without changing its base fee", async () => {
+  const notCoveredWorkspace = {
+    ...workspaceFixture,
+    fulfillmentSnapshot: { ...workspaceFixture.fulfillmentSnapshot, neighborhood: "Desconocida", postalCode: null },
+  };
+  const manualFeePort: DeliveryZoneManualFeePort = {
+    setManualFee: async () => { throw new Error("not used"); },
+    readManualFee: async () => ({ schemaVersion: 1, scope, manualFee: manualFeeRecord }),
+  };
+  const service = serviceFor({ captures: captureCreationDouble(notCoveredWorkspace), manualFeePort });
+  const quote = await service.quoteForCapture(principal, quoteInput);
+  assert.equal(quote.coverageStatus, "not_covered");
+  assert.equal(quote.feeMinor, 0);
+  assert.equal(quote.override !== null && "kind" in quote.override ? quote.override.kind : undefined, "manual_fee");
+  assert.equal(quote.override?.feeMinor, 3500);
+  assert.equal(quote.override?.role, "supervisor");
+  assert.equal(quote.override?.overriddenAt, manualFeeRecord.authorizedAt);
+  const withoutFee = await serviceFor({ captures: captureCreationDouble(notCoveredWorkspace) }).quoteForCapture(principal, quoteInput);
+  assert.equal(withoutFee.override, null);
+  assert.notEqual(quote.quoteId, withoutFee.quoteId);
 });

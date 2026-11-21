@@ -10,10 +10,17 @@ const ASAP_PREPARATION_MS = 30 * 60 * 1000;
 const ASAP_QUOTE_TTL_MS = 15 * 60 * 1000;
 const SCHEDULE_HORIZON_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** The address facts a coverage lookup matches against; never re-geocoded. */
+/**
+ * The address facts a coverage lookup matches against; never re-geocoded.
+ * `settlementId`/`neighborhood`/`settlementOutsideCatalog` are optional on the
+ * wire so historical clients keep parsing; a missing value means `null`/false.
+ */
 export interface DeliveryAddressFactsV1 {
+  readonly settlementId?: string | null;
+  readonly neighborhood?: string | null;
   readonly postalCode: string | null;
-  readonly locality: string;
+  readonly locality?: string | null;
+  readonly settlementOutsideCatalog?: boolean;
 }
 
 /**
@@ -35,8 +42,27 @@ export interface DeliveryQuoteRequestV1 {
   readonly version: number;
 }
 
-/** Manager-authorized correction to a quote's effective fee and/or window (decision 8.1.2). */
-export interface DeliveryQuoteOverrideV1 {
+export type DeliveryManualFeeRoleV1 = "owner" | "admin" | "manager" | "supervisor";
+
+/**
+ * Supervisor-authorized manual fee frozen alongside a not-covered quote
+ * (Z3, §6.4). `overriddenAt` is the authorization instant, never the
+ * re-quote instant, so an unchanged re-quote keeps the same quoteId.
+ */
+export interface DeliveryQuoteManualFeeOverrideV1 {
+  readonly kind: "manual_fee";
+  readonly eventId: string;
+  readonly actorId: string;
+  readonly role: DeliveryManualFeeRoleV1;
+  readonly reason: string;
+  readonly feeMinor: number;
+  readonly promiseStart: string;
+  readonly promiseEnd: string;
+  readonly overriddenAt: string;
+}
+
+/** Legacy manager override frozen in historical quotes; still readable. */
+export interface DeliveryQuoteManagerOverrideV1 {
   readonly actorId: string;
   readonly role: "manager";
   readonly reason: string;
@@ -45,6 +71,8 @@ export interface DeliveryQuoteOverrideV1 {
   readonly promiseEnd: string;
   readonly overriddenAt: string;
 }
+
+export type DeliveryQuoteOverrideV1 = DeliveryQuoteManualFeeOverrideV1 | DeliveryQuoteManagerOverrideV1;
 
 /**
  * Authoritative projection: server-derived coverage, fee, and promise window.
@@ -74,7 +102,7 @@ export function parseDeliveryQuoteRequestV1(value: unknown): DeliveryQuoteReques
     const branchId = uuid(own(record, "branchId"));
     const captureDraftId = uuid(own(record, "captureDraftId"));
     const addressSnapshotRef = uuid(own(record, "addressSnapshotRef"));
-    const address = parseAddressFacts(own(record, "address"));
+    const address = parseDeliveryAddressFactsV1(own(record, "address"));
     const currency = currencyCode(own(record, "currency"));
     const timeZone = timeZoneId(own(record, "timeZone"));
     const quotedAt = timestamp(own(record, "quotedAt"));
@@ -171,6 +199,43 @@ export function parseDeliveryQuoteV1(value: unknown): DeliveryQuoteV1 | undefine
 }
 
 function parseOverride(value: unknown): DeliveryQuoteOverrideV1 | undefined {
+  const manual = parseManualFeeOverride(value);
+  if (manual !== undefined) return manual;
+  return parseManagerOverride(value);
+}
+
+function parseManualFeeOverride(value: unknown): DeliveryQuoteManualFeeOverrideV1 | undefined {
+  const record = exactRecord(value, [
+    "kind", "eventId", "actorId", "role", "reason", "feeMinor", "promiseStart", "promiseEnd", "overriddenAt",
+  ]);
+  if (record === undefined || own(record, "kind") !== "manual_fee") return undefined;
+  const eventId = uuid(own(record, "eventId"));
+  const actorId = uuid(own(record, "actorId"));
+  const role = manualFeeRole(own(record, "role"));
+  const reason = boundedText(own(record, "reason"), 1, 500);
+  const feeMinor = money(own(record, "feeMinor"));
+  const promiseStart = timestamp(own(record, "promiseStart"));
+  const promiseEnd = timestamp(own(record, "promiseEnd"));
+  const overriddenAt = timestamp(own(record, "overriddenAt"));
+  if (eventId === undefined || actorId === undefined || role === undefined || reason === undefined
+    || feeMinor === undefined || promiseStart === undefined || promiseEnd === undefined || overriddenAt === undefined
+    || toMillis(promiseStart) >= toMillis(promiseEnd)) {
+    return undefined;
+  }
+  return Object.freeze({
+    kind: "manual_fee" as const,
+    eventId,
+    actorId,
+    role,
+    reason,
+    feeMinor,
+    promiseStart,
+    promiseEnd,
+    overriddenAt,
+  });
+}
+
+function parseManagerOverride(value: unknown): DeliveryQuoteManagerOverrideV1 | undefined {
   const record = exactRecord(value, ["actorId", "role", "reason", "feeMinor", "promiseStart", "promiseEnd", "overriddenAt"]);
   if (record === undefined || own(record, "role") !== "manager") return undefined;
   const actorId = uuid(own(record, "actorId"));
@@ -194,14 +259,26 @@ function parseOverride(value: unknown): DeliveryQuoteOverrideV1 | undefined {
   });
 }
 
-function parseAddressFacts(value: unknown): DeliveryAddressFactsV1 | undefined {
-  const record = exactRecord(value, ["postalCode", "locality"]);
+/**
+ * Parses the address facts of a quote. The Z2 persisted shape carries
+ * `settlementId`/`neighborhood`/`postalCode`; historical quotes and clients
+ * carry only `postalCode`/`locality`. Both parse, defaulting the rest to null.
+ */
+export function parseDeliveryAddressFactsV1(value: unknown): DeliveryAddressFactsV1 | undefined {
+  const keys = ["settlementId", "neighborhood", "postalCode", "locality", "settlementOutsideCatalog"] as const;
+  const record = exactRecordWithKnownKeys(value, keys);
   if (record === undefined) return undefined;
-  const rawPostalCode = own(record, "postalCode");
-  const postalCode = rawPostalCode === null ? null : boundedText(rawPostalCode, 1, 32);
-  const locality = boundedText(own(record, "locality"), 1, 200);
-  if (postalCode === undefined || locality === undefined) return undefined;
-  return Object.freeze({ postalCode, locality });
+  const settlementId = nullableUuid(own(record, "settlementId"));
+  const neighborhood = nullableBoundedText(own(record, "neighborhood"), 1, 200);
+  const postalCode = nullableBoundedText(own(record, "postalCode"), 1, 32);
+  const locality = nullableBoundedText(own(record, "locality"), 1, 200);
+  const rawOutsideCatalog = own(record, "settlementOutsideCatalog");
+  const settlementOutsideCatalog = rawOutsideCatalog === undefined || rawOutsideCatalog === null
+    ? false
+    : typeof rawOutsideCatalog === "boolean" ? rawOutsideCatalog : undefined;
+  if (settlementId === undefined || neighborhood === undefined || postalCode === undefined || locality === undefined
+    || settlementOutsideCatalog === undefined) return undefined;
+  return Object.freeze({ settlementId, neighborhood, postalCode, locality, settlementOutsideCatalog });
 }
 
 function isValidSchedule(quotedAt: string, scheduledFor: string | null): boolean {
@@ -225,6 +302,41 @@ function exactRecord(value: unknown, keys: readonly string[]): PlainRecord | und
   const ownKeys = Reflect.ownKeys(value);
   return ownKeys.length === keys.length && ownKeys.every((key) => typeof key === "string" && keys.includes(key))
     ? value as PlainRecord : undefined;
+}
+
+/**
+ * Like `exactRecord`, but tolerates a subset of the allowed keys (historical
+ * shapes). Extra keys are rejected and accessors are never invoked.
+ */
+function exactRecordWithKnownKeys(value: unknown, allowed: readonly string[]): PlainRecord | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    return undefined;
+  }
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.length === 0 || !ownKeys.every((key) => typeof key === "string" && allowed.includes(key))) {
+    return undefined;
+  }
+  const detached: PlainRecord = {};
+  for (const key of ownKeys as string[]) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) return undefined;
+    detached[key] = descriptor.value;
+  }
+  return detached;
+}
+
+function nullableBoundedText(value: unknown, minimum: number, maximum: number): string | null | undefined {
+  if (value === undefined || value === null) return null;
+  return boundedText(value, minimum, maximum);
+}
+
+function nullableUuid(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) return null;
+  return uuid(value);
+}
+
+function manualFeeRole(value: unknown): DeliveryManualFeeRoleV1 | undefined {
+  return value === "owner" || value === "admin" || value === "manager" || value === "supervisor" ? value : undefined;
 }
 
 function own(record: PlainRecord, key: string): unknown {

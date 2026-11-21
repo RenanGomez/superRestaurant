@@ -217,6 +217,10 @@ export interface BranchOperationalContextV1 {
   readonly schemaVersion: typeof BRANCH_OPERATIONAL_CONTEXT_SCHEMA_VERSION;
   readonly scope: BranchScope;
   readonly timeZone: string;
+  readonly branchName?: string;
+  readonly locality?: string;
+  readonly region?: string;
+  readonly countryCode?: string;
 }
 
 export interface CreateDiningZoneCommandV1 {
@@ -975,7 +979,13 @@ export function parseBranchAuthorizationV1(value: unknown): BranchAuthorizationV
 
 /** Parses the versioned branch context used by operational clients. */
 export function parseBranchOperationalContextV1(value: unknown): BranchOperationalContextV1 | undefined {
-  const record = parseExactPlainRecord(value, ["roles", "schemaVersion", "scope", "timeZone"]);
+  const extended = parseExactPlainRecord(value, [
+    "roles", "schemaVersion", "scope", "timeZone", "branchName", "locality", "region", "countryCode",
+  ]);
+  const legacy = extended === undefined
+    ? parseExactPlainRecord(value, ["roles", "schemaVersion", "scope", "timeZone"])
+    : undefined;
+  const record = extended ?? legacy;
   if (record === undefined || ownValue(record, "schemaVersion") !== BRANCH_OPERATIONAL_CONTEXT_SCHEMA_VERSION) {
     return undefined;
   }
@@ -993,6 +1003,25 @@ export function parseBranchOperationalContextV1(value: unknown): BranchOperation
       || roles.includes(rawRole as MembershipRoleCode)
     ) return undefined;
     roles.push(rawRole as MembershipRoleCode);
+  }
+
+  if (extended !== undefined) {
+    const branchName = parseDisplayName(ownValue(record, "branchName"), 200);
+    const locality = parseDisplayName(ownValue(record, "locality"), 200);
+    const region = parseDisplayName(ownValue(record, "region"), 200);
+    const rawCountryCode = ownValue(record, "countryCode");
+    if (branchName === undefined || locality === undefined || region === undefined
+      || typeof rawCountryCode !== "string" || !/^[A-Z]{2}$/u.test(rawCountryCode)) return undefined;
+    return Object.freeze({
+      roles: Object.freeze(roles),
+      schemaVersion: BRANCH_OPERATIONAL_CONTEXT_SCHEMA_VERSION,
+      scope,
+      timeZone,
+      branchName,
+      locality,
+      region,
+      countryCode: rawCountryCode,
+    });
   }
 
   return Object.freeze({

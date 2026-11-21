@@ -5,24 +5,47 @@ import {
   parseDeliveryZoneListV1,
   parseDeliveryZoneMatchRequestV1,
   parseDeliveryZoneMatchResultV1,
-  type DeliveryZoneMatchResultV1,
+  type DeliveryMatchMethodV1,
+  type DeliveryMatchReasonCodeV1,
+  type DeliveryMatchReasonV1,
+  type DeliveryMatchedSettlementV1,
   parseListDeliveryZonesQueryV1,
   parseRequestDeliveryQuoteCommandV1,
+  parseSetCaptureDeliveryManualFeeCommandV1,
+  parseSetCaptureDeliveryManualFeeResultV1,
+  parseSettlementSearchRequestV1,
+  parseSettlementSearchResultV1,
   parseUpsertDeliveryZoneCommandV1,
   parseUpsertDeliveryZoneResultV1,
   parseDeliveryQuoteV1,
   parseCaptureWorkspaceRequestV3,
   type BranchScope,
+  type CaptureDeliveryManualFeeV1,
+  type DeliveryAddressFactsV1,
   type DeliveryZoneBranchScopeV1,
   type DeliveryZoneListV1,
+  type DeliveryZoneMatchResultV1,
   type DeliveryZoneV1,
+  type DeliveryQuoteOverrideV1,
   type DeliveryQuoteV1,
   type ListDeliveryZonesQueryV1,
   type RequestDeliveryQuoteCommandV1,
+  type SetCaptureDeliveryManualFeeCommandV1,
+  type SetCaptureDeliveryManualFeeResultV1,
+  type SettlementSearchRequestV1,
+  type SettlementSearchResultV1,
+  type SettlementSummaryV1,
   type UpsertDeliveryZoneCommandV1,
   type UpsertDeliveryZoneResultV1,
+  SETTLEMENT_SEARCH_MAX_LIMIT,
 } from "@super-restaurant/shared-types";
-import { createDeliveryZone, quoteDelivery, Money, type DeliveryZone } from "@super-restaurant/domain";
+import {
+  applyDeliveryManualFee,
+  createDeliveryZone,
+  quoteDelivery,
+  Money,
+  type DeliveryZone,
+} from "@super-restaurant/domain";
 
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
@@ -44,6 +67,8 @@ export class DeliveryZoneApplicationError extends Error {
 }
 
 const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const MAX_REASON_LABEL_LENGTH = 200;
+const DELIVERY_MANUAL_FEE_ROLES: readonly string[] = Object.freeze(["owner", "admin", "manager", "supervisor"]);
 
 export interface ActiveQuoteZoneFactsV1 {
   readonly zoneId: string;
@@ -52,6 +77,7 @@ export interface ActiveQuoteZoneFactsV1 {
   readonly name: string;
   readonly postalCodes: readonly string[];
   readonly localities: readonly string[];
+  readonly settlementIds: readonly string[];
   readonly feeMinor: number;
   readonly currency: string;
 }
@@ -71,8 +97,33 @@ export interface DeliveryZoneQuoteFactsPort {
 }
 export const DELIVERY_ZONE_QUOTE_FACTS_PORT = Symbol("DELIVERY_ZONE_QUOTE_FACTS_PORT");
 
+export interface DeliveryZoneSettlementSearchPort {
+  searchSettlements(actorId: string, request: SettlementSearchRequestV1): Promise<unknown>;
+}
+export const DELIVERY_ZONE_SETTLEMENT_SEARCH_PORT = Symbol("DELIVERY_ZONE_SETTLEMENT_SEARCH_PORT");
+
+export interface DeliveryZoneManualFeePort {
+  setManualFee(actorId: string, command: SetCaptureDeliveryManualFeeCommandV1): Promise<unknown>;
+  readManualFee(actorId: string, request: ReadManualFeeRequest): Promise<unknown>;
+}
+export const DELIVERY_ZONE_MANUAL_FEE_PORT = Symbol("DELIVERY_ZONE_MANUAL_FEE_PORT");
+
+export interface ReadManualFeeRequest {
+  readonly schemaVersion: 1;
+  readonly scope: DeliveryZoneBranchScopeV1;
+  readonly captureDraftId: string;
+  readonly addressSnapshotRef: string;
+}
+
 @Injectable()
-export class PostgresDeliveryZoneStore implements DeliveryZoneListPort, DeliveryZoneUpsertPort, DeliveryZoneQuoteFactsPort {
+export class PostgresDeliveryZoneStore
+  implements
+    DeliveryZoneListPort,
+    DeliveryZoneUpsertPort,
+    DeliveryZoneQuoteFactsPort,
+    DeliveryZoneSettlementSearchPort,
+    DeliveryZoneManualFeePort
+{
   public constructor(@Inject(DATABASE_CLIENT) private readonly database: DatabaseClientPort) {}
 
   public async listZones(actorId: string, scope: DeliveryZoneBranchScopeV1): Promise<unknown> {
@@ -111,6 +162,55 @@ export class PostgresDeliveryZoneStore implements DeliveryZoneListPort, Delivery
     if (row === undefined) throw unavailable();
     return row.result;
   }
+
+  public async searchSettlements(actorId: string, request: SettlementSearchRequestV1): Promise<unknown> {
+    if (!canonicalUuid.test(actorId)) throw new DeliveryZoneApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.search_settlements($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async setManualFee(actorId: string, command: SetCaptureDeliveryManualFeeCommandV1): Promise<unknown> {
+    if (!canonicalUuid.test(actorId)) throw new DeliveryZoneApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.set_capture_delivery_manual_fee($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(command)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+
+  public async readManualFee(actorId: string, request: ReadManualFeeRequest): Promise<unknown> {
+    if (!canonicalUuid.test(actorId)) throw new DeliveryZoneApplicationError("request");
+    const response = await this.database.query(
+      "select app_private.read_capture_delivery_manual_fee($1::uuid, $2::jsonb) as result",
+      [actorId, JSON.stringify(request)],
+    );
+    if (response.rows.length !== 1) throw unavailable();
+    const row = exactRecord(response.rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    return row.result;
+  }
+}
+
+interface AddressResolution {
+  readonly settlementId: string | null;
+  readonly settlement: DeliveryMatchedSettlementV1 | null;
+  readonly matchedBy: DeliveryMatchMethodV1 | null;
+  readonly reason: DeliveryMatchReasonCodeV1 | null;
+  readonly label: string | null;
+}
+
+interface BranchGeography {
+  readonly name: string | null;
+  readonly locality: string | null;
 }
 
 @Injectable()
@@ -121,11 +221,62 @@ export class DeliveryZoneService {
     @Inject(DELIVERY_ZONE_LIST_PORT) private readonly listPort: DeliveryZoneListPort,
     @Inject(DELIVERY_ZONE_UPSERT_PORT) private readonly upsertPort: DeliveryZoneUpsertPort,
     @Inject(DELIVERY_ZONE_QUOTE_FACTS_PORT) private readonly quoteFactsPort: DeliveryZoneQuoteFactsPort,
+    @Inject(DELIVERY_ZONE_SETTLEMENT_SEARCH_PORT) private readonly searchPort: DeliveryZoneSettlementSearchPort,
+    @Inject(DELIVERY_ZONE_MANUAL_FEE_PORT) private readonly manualFeePort: DeliveryZoneManualFeePort,
     @Inject(CAPTURE_CREATION_PORT) private readonly captures: CaptureCreationPort,
     @Inject(MENU_CATALOG_PORT) private readonly catalogs: MenuCatalogPort,
     @Inject(BRANCH_OPERATIONAL_CONTEXT_PORT) private readonly branchContext: BranchOperationalContextPort,
     @Inject(SERVER_CLOCK_PORT) private readonly clock: ClockPort,
   ) {}
+
+  public async searchSettlements(
+    principal: AuthenticatedPrincipal,
+    input: unknown,
+  ): Promise<SettlementSearchResultV1> {
+    const request = parseSettlementSearchRequestV1(input);
+    if (request === undefined) throw new DeliveryZoneApplicationError("request");
+    let actorId: string;
+    let authorizedScope: BranchScope;
+    try {
+      const authorized = await this.authorizeRead(principal, request.scope);
+      actorId = authorized.principal.actorId;
+      authorizedScope = authorized.scope;
+    } catch { throw new DeliveryZoneApplicationError("authorization"); }
+    return this.querySettlements(actorId, authorizedScope, request);
+  }
+
+  public async setManualFee(
+    principal: AuthenticatedPrincipal,
+    input: unknown,
+  ): Promise<SetCaptureDeliveryManualFeeResultV1> {
+    const command = parseSetCaptureDeliveryManualFeeCommandV1(input);
+    if (command === undefined) throw new DeliveryZoneApplicationError("request");
+    let actorId: string;
+    try {
+      const authorized = await this.authorization.authorizeBranch(principal, command.scope, "deliveries.manage");
+      // §4.2: only owner/admin/manager/supervisor may fix a manual fee, even though cashier
+      // carries `deliveries.manage` for assigning/settling deliveries.
+      if (!authorized.roles.some((role) => DELIVERY_MANUAL_FEE_ROLES.includes(role))) {
+        throw new DeliveryZoneApplicationError("authorization");
+      }
+      actorId = authorized.principal.actorId;
+    } catch { throw new DeliveryZoneApplicationError("authorization"); }
+
+    let raw: unknown;
+    try { raw = await this.manualFeePort.setManualFee(actorId, command); } catch { throw unavailable(); }
+    const statusOnly = exactRecord(raw, ["status"]);
+    if (statusOnly?.status === "denied") throw new DeliveryZoneApplicationError("authorization");
+    if (statusOnly?.status === "conflict") throw new DeliveryZoneApplicationError("conflict");
+    if (statusOnly?.status === "rejected") throw new DeliveryZoneApplicationError("request");
+    if (statusOnly?.status === "missing") throw new DeliveryZoneApplicationError("missing");
+    if (statusOnly !== undefined) throw unavailable();
+
+    const result = parseSetCaptureDeliveryManualFeeResultV1(raw);
+    if (result === undefined
+      || result.manualFee.captureDraftId !== command.captureDraftId
+      || result.manualFee.addressSnapshotRef !== command.addressSnapshotRef) throw unavailable();
+    return result;
+  }
 
   public async listZones(principal: AuthenticatedPrincipal, input: unknown): Promise<DeliveryZoneListV1> {
     const query = parseListQuery(input);
@@ -183,6 +334,7 @@ export class DeliveryZoneService {
       name: command.name,
       postalCodes: canonicalizeTextArray(command.postalCodes),
       localities: canonicalizeTextArray(command.localities),
+      settlementIds: canonicalizeUuidArray(command.settlementIds),
       feeMinor: command.feeMinor,
       currency: command.currency,
       active: command.active,
@@ -234,7 +386,13 @@ export class DeliveryZoneService {
     const workspace = decodeCaptureWorkspaceV3(rawWorkspace, authorizedScope);
     if (workspace.detail.captureDraftId !== command.captureDraftId) throw unavailable();
     if (workspace.fulfillmentSnapshot === null) throw new DeliveryZoneApplicationError("conflict");
-    const address = { postalCode: workspace.fulfillmentSnapshot.postalCode, locality: workspace.fulfillmentSnapshot.locality };
+    const snapshot = workspace.fulfillmentSnapshot;
+    const facts: DeliveryAddressFactsV1 = {
+      settlementId: null,
+      neighborhood: snapshot.neighborhood,
+      postalCode: snapshot.postalCode,
+      locality: snapshot.locality,
+    };
 
     let catalogState;
     try { catalogState = await this.catalogs.read(actorId, authorizedScope); } catch { throw unavailable(); }
@@ -246,42 +404,26 @@ export class DeliveryZoneService {
     if (context === "forbidden") throw new DeliveryZoneApplicationError("authorization");
     const timeZone = context.timeZone;
 
-    let rawZones: unknown;
-    try { rawZones = await this.quoteFactsPort.listActiveZonesForQuote(authorizedScope.restaurantId, authorizedScope.branchId); }
-    catch { throw unavailable(); }
-    const zonesStatus = exactRecord(rawZones, ["status"]);
-    if (zonesStatus !== undefined) throw unavailable();
-    const zoneFacts = parseActiveQuoteZoneFacts(rawZones, authorizedScope);
-    if (zoneFacts === undefined) throw unavailable();
-
-    const zones: DeliveryZone[] = [];
-    for (const fact of zoneFacts) {
-      try {
-        zones.push(createDeliveryZone({
-          zoneId: fact.zoneId,
-          restaurantId: fact.restaurantId,
-          branchId: fact.branchId,
-          name: fact.name,
-          feeMinor: new Money(fact.feeMinor, fact.currency),
-          postalCodes: fact.postalCodes,
-          localities: fact.localities,
-        }));
-      } catch { throw unavailable(); }
-    }
-
+    const resolution = await this.resolveAddress(actorId, authorizedScope, facts);
+    const zones = await this.fetchZoneFacts(actorId, authorizedScope);
     const quotedAt = this.clock.now();
+
     let quote;
     try {
       quote = quoteDelivery({
         // Placeholder: quoteDelivery only requires quoteId to be non-empty text and never reads
-        // it back to derive coverage/fee/window, so the real, fact-derived id is computed below
-        // (from the coverage/fee/window this call produces) and substituted into the wire result.
+        // it back to derive coverage/fee/window, so the real, fact-derived id is computed below.
         quoteId: command.captureDraftId,
         restaurantId: command.scope.restaurantId,
         branchId: command.scope.branchId,
         captureDraftId: command.captureDraftId,
-        addressSnapshotRef: workspace.fulfillmentSnapshot.snapshotRef,
-        address,
+        addressSnapshotRef: snapshot.snapshotRef,
+        address: {
+          settlementId: resolution.settlementId,
+          neighborhood: facts.neighborhood ?? null,
+          postalCode: resolution.matchedBy === "postal_code" ? facts.postalCode ?? null : null,
+          locality: facts.locality ?? null,
+        },
         zones,
         currency,
         timeZone,
@@ -291,15 +433,44 @@ export class DeliveryZoneService {
       });
     } catch { throw new DeliveryZoneApplicationError("request"); }
 
+    // A live manual-fee authorization overrides the (zero) not-covered zone fee; the binding
+    // check happens again in SQL at confirmation.
+    let override: DeliveryQuoteOverrideV1 | null = null;
+    if (quote.coverageStatus === "not_covered") {
+      const manualFee = await this.readManualFee(actorId, command.scope, command.captureDraftId, snapshot.snapshotRef);
+      if (manualFee !== null) {
+        if (manualFee.currency !== quote.currency) throw unavailable();
+        try {
+          quote = applyDeliveryManualFee(quote, {
+            eventId: manualFee.eventId,
+            actorId: manualFee.actorId,
+            role: manualFee.role,
+            reason: manualFee.reason,
+            feeMinor: new Money(manualFee.feeMinor, manualFee.currency),
+            overriddenAt: manualFee.authorizedAt,
+          });
+        } catch { throw unavailable(); }
+        const authorized = quote.override;
+        if (authorized === null) throw unavailable();
+        override = Object.freeze({
+          kind: "manual_fee",
+          eventId: authorized.eventId,
+          actorId: authorized.actorId,
+          role: authorized.role,
+          reason: authorized.reason,
+          feeMinor: authorized.feeMinor.amountMinor,
+          promiseStart: authorized.promiseStart,
+          promiseEnd: authorized.promiseEnd,
+          overriddenAt: authorized.overriddenAt,
+        });
+      }
+    }
+
     // Deterministic, fact-derived quoteId (never Math.random/uuid-v4): every frozen fact the
-    // quote carries goes into the hash, so the same request quoted at the same instant always
-    // reproduces the same id, while any change to ANY of them (including the quoting instant
-    // itself, currency, timeZone or coverage status — not just zone/fee/window) produces a
-    // different one. S7.2 will decide whether/how a quote is persisted under this id; for now it
-    // only identifies the as-quoted facts for the caller (e.g. to detect a stale quote client-side).
+    // quote carries goes into the hash, including the manual-fee authorization when present.
     const quoteId = deterministicQuoteId([
       command.captureDraftId,
-      workspace.fulfillmentSnapshot.snapshotRef,
+      snapshot.snapshotRef,
       command.scheduledFor,
       quote.quotedAt,
       quote.coverageStatus,
@@ -310,6 +481,12 @@ export class DeliveryZoneService {
       quote.promiseStart,
       quote.promiseEnd,
       quote.expiresAt,
+      override?.eventId ?? null,
+      override?.feeMinor ?? null,
+      override?.role ?? null,
+      override?.actorId ?? null,
+      override?.reason ?? null,
+      override?.overriddenAt ?? null,
     ]);
 
     const result = parseDeliveryQuoteV1({
@@ -319,7 +496,12 @@ export class DeliveryZoneService {
       branchId: quote.branchId,
       captureDraftId: quote.captureDraftId,
       addressSnapshotRef: quote.addressSnapshotRef,
-      address,
+      address: {
+        settlementId: resolution.settlementId,
+        neighborhood: facts.neighborhood ?? null,
+        postalCode: facts.postalCode ?? null,
+        locality: facts.locality ?? null,
+      },
       currency: quote.currency,
       timeZone: quote.timeZone,
       quotedAt: quote.quotedAt,
@@ -331,7 +513,7 @@ export class DeliveryZoneService {
       promiseStart: quote.promiseStart,
       promiseEnd: quote.promiseEnd,
       expiresAt: quote.expiresAt,
-      override: null,
+      override,
     });
     if (result === undefined) throw unavailable();
     return result;
@@ -349,9 +531,7 @@ export class DeliveryZoneService {
     let actorId: string;
     let authorizedScope: BranchScope;
     try {
-      let authorized;
-      try { authorized = await this.authorization.authorizeBranch(principal, requestedScope, "captures.read"); }
-      catch { authorized = await this.authorization.authorizeBranch(principal, requestedScope, "customers.read"); }
+      const authorized = await this.authorizeRead(principal, requestedScope);
       actorId = authorized.principal.actorId;
       authorizedScope = authorized.scope;
     } catch { throw new DeliveryZoneApplicationError("authorization"); }
@@ -364,34 +544,49 @@ export class DeliveryZoneService {
 
     const context = await this.branchContext.select(actorId, authorizedScope);
     if (context === "forbidden") throw new DeliveryZoneApplicationError("authorization");
+    const geography: BranchGeography = {
+      name: context.branchName ?? null,
+      locality: context.locality ?? null,
+    };
 
-    let rawZones: unknown;
-    try { rawZones = await this.quoteFactsPort.listActiveZonesForQuote(authorizedScope.restaurantId, authorizedScope.branchId); }
-    catch { throw unavailable(); }
-    if (exactRecord(rawZones, ["status"]) !== undefined) throw unavailable();
-    const zoneFacts = parseActiveQuoteZoneFacts(rawZones, authorizedScope);
-    if (zoneFacts === undefined) throw unavailable();
-
-    const zones: DeliveryZone[] = [];
-    for (const fact of zoneFacts) {
-      try {
-        zones.push(createDeliveryZone({
-          zoneId: fact.zoneId, restaurantId: fact.restaurantId, branchId: fact.branchId, name: fact.name,
-          feeMinor: new Money(fact.feeMinor, fact.currency), postalCodes: fact.postalCodes, localities: fact.localities,
-        }));
-      } catch { throw unavailable(); }
-    }
-
+    const zones = await this.fetchZoneFacts(actorId, authorizedScope);
+    const facts = request.address;
+    const resolution = await this.resolveAddress(actorId, authorizedScope, facts);
     const evaluatedAt = this.clock.now();
+
     let quote;
     try {
       quote = quoteDelivery({
         quoteId: "match", restaurantId: authorizedScope.restaurantId, branchId: authorizedScope.branchId,
-        captureDraftId: "match", addressSnapshotRef: "match", address: request.address, zones,
+        captureDraftId: "match", addressSnapshotRef: "match",
+        address: {
+          settlementId: resolution.settlementId,
+          neighborhood: facts.neighborhood ?? null,
+          postalCode: resolution.matchedBy === "postal_code" ? facts.postalCode ?? null : null,
+          locality: facts.locality ?? null,
+        },
+        zones,
         currency, timeZone: context.timeZone, quotedAt: evaluatedAt, scheduledFor: null, version: 1,
       });
     } catch { throw unavailable(); }
     const matched = quote.zoneId === null ? undefined : zones.find((zone) => zone.zoneId === quote.zoneId);
+
+    let reason: DeliveryMatchReasonV1 | null = null;
+    let matchedBy: DeliveryMatchMethodV1 | null = resolution.matchedBy;
+    let settlement: DeliveryMatchedSettlementV1 | null = resolution.settlement;
+    if (quote.coverageStatus === "covered") {
+      if (resolution.matchedBy === "postal_code") {
+        reason = matchReason("legacy_postal_code_match", null, geography);
+      }
+    } else {
+      matchedBy = null;
+      settlement = null;
+      reason = matchReason(
+        resolution.reason ?? "settlement_not_in_zone",
+        resolution.label ?? resolution.settlement?.name ?? facts.neighborhood ?? facts.postalCode ?? null,
+        geography,
+      );
+    }
 
     const result = parseDeliveryZoneMatchResultV1({
       schemaVersion: 1,
@@ -404,9 +599,183 @@ export class DeliveryZoneService {
       promiseStart: quote.promiseStart,
       promiseEnd: quote.promiseEnd,
       evaluatedAt,
+      reason,
+      matchedBy,
+      settlement,
     });
     if (result === undefined) throw unavailable();
     return result;
+  }
+
+  private async authorizeRead(
+    principal: AuthenticatedPrincipal,
+    requestedScope: unknown,
+  ): Promise<{ principal: { actorId: string }; scope: BranchScope }> {
+    try {
+      return await this.authorization.authorizeBranch(principal, requestedScope, "captures.read");
+    } catch {
+      return await this.authorization.authorizeBranch(principal, requestedScope, "customers.read");
+    }
+  }
+
+  private async querySettlements(
+    actorId: string,
+    scope: BranchScope,
+    request: SettlementSearchRequestV1,
+  ): Promise<SettlementSearchResultV1> {
+    let raw: unknown;
+    try { raw = await this.searchPort.searchSettlements(actorId, request); } catch { throw unavailable(); }
+    const statusOnly = exactRecord(raw, ["status"]);
+    if (statusOnly?.status === "denied") throw new DeliveryZoneApplicationError("authorization");
+    if (statusOnly?.status === "rejected") throw new DeliveryZoneApplicationError("request");
+    if (statusOnly !== undefined) throw unavailable();
+    const parsed = parseSettlementSearchResultV1(raw);
+    if (parsed === undefined || parsed.scope.restaurantId !== scope.restaurantId
+      || parsed.scope.branchId !== scope.branchId) throw unavailable();
+    return parsed;
+  }
+
+  private async resolveAddress(
+    actorId: string,
+    scope: BranchScope,
+    facts: DeliveryAddressFactsV1,
+  ): Promise<AddressResolution> {
+    if (facts.settlementOutsideCatalog === true) {
+      return resolution(null, null, null, "settlement_outside_catalog", facts.neighborhood ?? null);
+    }
+    if (facts.settlementId !== null && facts.settlementId !== undefined) {
+      const details = await this.lookupSettlement(actorId, scope, facts);
+      return resolution(
+        facts.settlementId,
+        details?.settlementId === facts.settlementId ? details : null,
+        "settlement",
+        null,
+        details?.name ?? facts.neighborhood ?? null,
+      );
+    }
+    if (facts.neighborhood !== null && facts.neighborhood !== undefined) {
+      const normalized = normalizeSettlementName(facts.neighborhood);
+      if (normalized.length < 2 || normalized.length > 40) {
+        return resolution(null, null, null, "settlement_unknown", facts.neighborhood);
+      }
+      const searched = await this.querySettlements(actorId, scope, {
+        schemaVersion: 1,
+        scope: { restaurantId: scope.restaurantId, branchId: scope.branchId },
+        query: normalized,
+        postalCode: null,
+        limit: SETTLEMENT_SEARCH_MAX_LIMIT,
+      });
+      let candidates = searched.settlements.filter((settlement) => normalizeSettlementName(settlement.name) === normalized);
+      if (candidates.length === 0) {
+        return resolution(null, null, null, "settlement_unknown", facts.neighborhood);
+      }
+      if (candidates.length > 1 && facts.postalCode !== null && facts.postalCode !== undefined) {
+        candidates = candidates.filter((settlement) => settlement.postalCode === facts.postalCode);
+      }
+      if (candidates.length !== 1) {
+        return resolution(null, null, null, "settlement_ambiguous", facts.neighborhood);
+      }
+      const match = candidates[0] as SettlementSummaryV1;
+      return resolution(match.settlementId, toMatchedSettlement(match), "settlement", null, match.name);
+    }
+    if (facts.postalCode !== null && facts.postalCode !== undefined) {
+      return resolution(null, null, "postal_code", null, facts.postalCode);
+    }
+    return resolution(null, null, null, "settlement_missing", null);
+  }
+
+  private async lookupSettlement(
+    actorId: string,
+    scope: BranchScope,
+    facts: DeliveryAddressFactsV1,
+  ): Promise<DeliveryMatchedSettlementV1 | null> {
+    if (facts.postalCode !== null && facts.postalCode !== undefined) {
+      const byPostalCode = await this.querySettlements(actorId, scope, {
+        schemaVersion: 1,
+        scope: { restaurantId: scope.restaurantId, branchId: scope.branchId },
+        query: null,
+        postalCode: facts.postalCode,
+        limit: SETTLEMENT_SEARCH_MAX_LIMIT,
+      });
+      const match = byPostalCode.settlements.find((settlement) => settlement.settlementId === facts.settlementId);
+      return match === undefined ? null : toMatchedSettlement(match);
+    }
+    if (facts.neighborhood !== null && facts.neighborhood !== undefined) {
+      const normalized = normalizeSettlementName(facts.neighborhood);
+      if (normalized.length < 2 || normalized.length > 40) return null;
+      const byName = await this.querySettlements(actorId, scope, {
+        schemaVersion: 1,
+        scope: { restaurantId: scope.restaurantId, branchId: scope.branchId },
+        query: normalized,
+        postalCode: null,
+        limit: SETTLEMENT_SEARCH_MAX_LIMIT,
+      });
+      const match = byName.settlements.find((settlement) =>
+        settlement.settlementId === facts.settlementId && normalizeSettlementName(settlement.name) === normalized);
+      return match === undefined ? null : toMatchedSettlement(match);
+    }
+    return null;
+  }
+
+  private async readManualFee(
+    actorId: string,
+    scope: DeliveryZoneBranchScopeV1,
+    captureDraftId: string,
+    addressSnapshotRef: string,
+  ): Promise<CaptureDeliveryManualFeeV1 | null> {
+    const request: ReadManualFeeRequest = {
+      schemaVersion: 1,
+      scope: { restaurantId: scope.restaurantId, branchId: scope.branchId },
+      captureDraftId,
+      addressSnapshotRef,
+    };
+    let raw: unknown;
+    try { raw = await this.manualFeePort.readManualFee(actorId, request); } catch { throw unavailable(); }
+    const statusOnly = exactRecord(raw, ["status"]);
+    if (statusOnly?.status === "denied") throw new DeliveryZoneApplicationError("authorization");
+    if (statusOnly?.status === "rejected") throw new DeliveryZoneApplicationError("request");
+    if (statusOnly?.status === "missing") throw new DeliveryZoneApplicationError("missing");
+    if (statusOnly !== undefined) throw unavailable();
+    const envelope = exactRecord(raw, ["schemaVersion", "scope", "manualFee"]);
+    if (envelope === undefined || envelope.schemaVersion !== 1) throw unavailable();
+    const envelopeScope = envelope.scope;
+    if (typeof envelopeScope !== "object" || envelopeScope === null) throw unavailable();
+    if ((envelopeScope as Record<string, unknown>).restaurantId !== scope.restaurantId
+      || (envelopeScope as Record<string, unknown>).branchId !== scope.branchId) throw unavailable();
+    if (envelope.manualFee === null) return null;
+    const parsed = parseSetCaptureDeliveryManualFeeResultV1({
+      schemaVersion: 1,
+      manualFee: envelope.manualFee,
+      replayed: false,
+    });
+    if (parsed === undefined || parsed.manualFee.captureDraftId !== captureDraftId
+      || parsed.manualFee.addressSnapshotRef !== addressSnapshotRef) throw unavailable();
+    return parsed.manualFee;
+  }
+
+  private async fetchZoneFacts(actorId: string, scope: BranchScope): Promise<readonly DeliveryZone[]> {
+    let rawZones: unknown;
+    try { rawZones = await this.quoteFactsPort.listActiveZonesForQuote(scope.restaurantId, scope.branchId); }
+    catch { throw unavailable(); }
+    if (exactRecord(rawZones, ["status"]) !== undefined) throw unavailable();
+    const zoneFacts = parseActiveQuoteZoneFacts(rawZones, scope);
+    if (zoneFacts === undefined) throw unavailable();
+    const zones: DeliveryZone[] = [];
+    for (const fact of zoneFacts) {
+      try {
+        zones.push(createDeliveryZone({
+          zoneId: fact.zoneId,
+          restaurantId: fact.restaurantId,
+          branchId: fact.branchId,
+          name: fact.name,
+          feeMinor: new Money(fact.feeMinor, fact.currency),
+          postalCodes: fact.postalCodes,
+          localities: fact.localities,
+          settlementIds: fact.settlementIds,
+        }));
+      } catch { throw unavailable(); }
+    }
+    return zones;
   }
 
   private async fetchZonesForBranch(actorId: string, scope: DeliveryZoneBranchScopeV1): Promise<readonly DeliveryZoneV1[]> {
@@ -418,8 +787,8 @@ export class DeliveryZoneService {
     if (statusOnly !== undefined) throw unavailable();
     // app_private.list_delivery_zones orders its rows by (name, id) for a human-friendly listing,
     // not by zoneId — but parseDeliveryZoneListV1 requires zones strictly ascending by zoneId, so
-    // the SQL order can never be handed to the parser as-is. Sort by zoneId first, the same as the
-    // restaurant-wide aggregation path below already does after merging multiple branches.
+    // the SQL order can never be handed to the parser as-is. Sort by zoneId first, the same as
+    // the restaurant-wide aggregation path below already does after merging multiple branches.
     const rawZones = exactRecord(raw, ["schemaVersion", "scope", "zones"])?.zones;
     const sortedZones = Array.isArray(rawZones) ? [...rawZones].sort(compareZoneId) : rawZones;
     const parsed = parseDeliveryZoneListV1({
@@ -449,6 +818,82 @@ export class DeliveryZoneService {
     }
     return Object.freeze(scopes);
   }
+}
+
+function resolution(
+  settlementId: string | null,
+  settlement: DeliveryMatchedSettlementV1 | null,
+  matchedBy: DeliveryMatchMethodV1 | null,
+  reason: DeliveryMatchReasonCodeV1 | null,
+  label: string | null,
+): AddressResolution {
+  return Object.freeze({ settlementId, settlement, matchedBy, reason, label });
+}
+
+function toMatchedSettlement(settlement: SettlementSummaryV1): DeliveryMatchedSettlementV1 {
+  return Object.freeze({
+    settlementId: settlement.settlementId,
+    name: settlement.name,
+    postalCode: settlement.postalCode,
+  });
+}
+
+/** Mirrors tools/sepomex/normalize-settlements.mjs and app_private.normalize_settlement_name. */
+export function normalizeSettlementName(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function matchReason(
+  code: DeliveryMatchReasonCodeV1,
+  label: string | null,
+  geography: BranchGeography,
+): DeliveryMatchReasonV1 {
+  const name = sanitizeLabel(label);
+  const locality = geography.locality === null ? null : sanitizeLabel(geography.locality);
+  const branch = geography.name === null ? null : sanitizeLabel(geography.name);
+  let message: string;
+  switch (code) {
+    case "settlement_missing":
+      message = "Falta la colonia.";
+      break;
+    case "settlement_unknown":
+      message = locality === null
+        ? "Colonia no reconocida en el catálogo de la sucursal."
+        : `Colonia no reconocida en ${locality}.`;
+      break;
+    case "settlement_ambiguous":
+      message = locality === null
+        ? `La colonia ${name ?? "seleccionada"} coincide con varias colonias del catálogo. Elige una del catálogo.`
+        : `La colonia ${name ?? "seleccionada"} coincide con varias colonias de ${locality}. Elige una del catálogo.`;
+      break;
+    case "settlement_not_in_zone":
+      message = branch === null
+        ? `La colonia ${name ?? "seleccionada"} no está en ninguna zona de la sucursal.`
+        : `La colonia ${name ?? "seleccionada"} no está en ninguna zona de la sucursal ${branch}.`;
+      break;
+    case "settlement_outside_catalog":
+      message = locality === null
+        ? `La colonia ${name ?? "seleccionada"} no está en el catálogo de la sucursal. El envío requiere cuota manual de un supervisor.`
+        : `La colonia ${name ?? "seleccionada"} no está en el catálogo de ${locality}. El envío requiere cuota manual de un supervisor.`;
+      break;
+    case "legacy_postal_code_match":
+      message = "No se reconoció la colonia; se usó el código postal como respaldo. Actualiza la dirección.";
+      break;
+  }
+  return Object.freeze({ code, message });
+}
+
+function sanitizeLabel(value: string | null): string | null {
+  if (value === null) return null;
+  const cleaned = value.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/gu, " ").trim();
+  if (cleaned.length === 0) return null;
+  return cleaned.length > MAX_REASON_LABEL_LENGTH ? cleaned.slice(0, MAX_REASON_LABEL_LENGTH).trim() : cleaned;
 }
 
 /**
@@ -483,6 +928,10 @@ export function canonicalizeTextArray(values: readonly string[]): readonly strin
   return Object.freeze([...new Set(values)].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)));
 }
 
+export function canonicalizeUuidArray(values: readonly string[]): readonly string[] {
+  return Object.freeze([...new Set(values)].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)));
+}
+
 function parseActiveQuoteZoneFacts(raw: unknown, scope: BranchScope): readonly ActiveQuoteZoneFactsV1[] | undefined {
   const envelope = exactRecord(raw, ["schemaVersion", "scope", "zones"]);
   if (envelope === undefined || envelope.schemaVersion !== 1) return undefined;
@@ -490,14 +939,20 @@ function parseActiveQuoteZoneFacts(raw: unknown, scope: BranchScope): readonly A
   if (!Array.isArray(rawZones)) return undefined;
   const zones: ActiveQuoteZoneFactsV1[] = [];
   for (const rawZone of rawZones) {
-    const record = exactRecord(rawZone, [
-      "zoneId", "restaurantId", "branchId", "name", "postalCodes", "localities", "feeMinor", "currency",
+    const extended = exactRecord(rawZone, [
+      "zoneId", "restaurantId", "branchId", "name", "postalCodes", "localities", "settlementIds", "feeMinor", "currency",
     ]);
+    const legacy = extended === undefined ? exactRecord(rawZone, [
+      "zoneId", "restaurantId", "branchId", "name", "postalCodes", "localities", "feeMinor", "currency",
+    ]) : undefined;
+    const record = extended ?? legacy;
     if (record === undefined) return undefined;
     const { zoneId, restaurantId, branchId, name, postalCodes, localities, feeMinor, currency } = record;
+    const settlementIds = extended === undefined ? [] : record.settlementIds;
     if (typeof zoneId !== "string" || typeof restaurantId !== "string" || typeof branchId !== "string"
       || typeof name !== "string" || !Array.isArray(postalCodes) || !postalCodes.every((value) => typeof value === "string")
       || !Array.isArray(localities) || !localities.every((value) => typeof value === "string")
+      || !Array.isArray(settlementIds) || !settlementIds.every((value) => typeof value === "string")
       || typeof feeMinor !== "number" || !Number.isSafeInteger(feeMinor) || feeMinor < 0
       || typeof currency !== "string" || restaurantId !== scope.restaurantId || branchId !== scope.branchId) {
       return undefined;
@@ -506,6 +961,7 @@ function parseActiveQuoteZoneFacts(raw: unknown, scope: BranchScope): readonly A
       zoneId, restaurantId, branchId, name,
       postalCodes: Object.freeze([...postalCodes]),
       localities: Object.freeze([...localities]),
+      settlementIds: Object.freeze([...(settlementIds as string[])]),
       feeMinor, currency,
     });
   }

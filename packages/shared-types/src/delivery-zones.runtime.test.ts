@@ -5,6 +5,10 @@ import {
   parseDeliveryZoneV1,
   parseListDeliveryZonesQueryV1,
   parseRequestDeliveryQuoteCommandV1,
+  parseSetCaptureDeliveryManualFeeCommandV1,
+  parseSetCaptureDeliveryManualFeeResultV1,
+  parseSettlementSearchRequestV1,
+  parseSettlementSearchResultV1,
   parseUpsertDeliveryZoneCommandV1,
   parseUpsertDeliveryZoneResultV1,
 } from "./index.js";
@@ -25,6 +29,7 @@ const baseZone = {
   name: "Centro",
   postalCodes: ["06000", "06010"],
   localities: ["Centro Historico"],
+  settlementIds: [] as readonly string[],
   feeMinor: 2_500,
   currency: "MXN",
   active: true,
@@ -37,6 +42,15 @@ const baseZone = {
 const parsedZone = parseDeliveryZoneV1(baseZone);
 expect(parsedZone !== undefined && Object.isFrozen(parsedZone), "valid zone parses frozen");
 expect(parsedZone !== undefined && Object.isFrozen(parsedZone.postalCodes), "postalCodes array is frozen");
+expect(parsedZone !== undefined && Object.isFrozen(parsedZone.settlementIds), "settlementIds array is frozen");
+
+const settlementZone = { ...baseZone, postalCodes: [], localities: [], settlementIds: ["33333333-3333-4333-8333-333333333334"] } as const;
+expect(parseDeliveryZoneV1(settlementZone) !== undefined, "zone with only settlement ids parses");
+// Historical rows/events without settlementIds still parse with [].
+const { settlementIds: _omittedSettlements, ...legacyZone } = baseZone;
+void _omittedSettlements;
+const parsedLegacyZone = parseDeliveryZoneV1(legacyZone);
+expect(parsedLegacyZone !== undefined && parsedLegacyZone.settlementIds.length === 0, "legacy zone without settlementIds parses as []");
 
 const postalOnlyZone = { ...baseZone, localities: [] } as const;
 expect(parseDeliveryZoneV1(postalOnlyZone) !== undefined, "zone with only postal codes parses");
@@ -52,13 +66,15 @@ for (const invalid of [
   { ...baseZone, name: "" },
   { ...baseZone, name: "  Centro" },
   { ...baseZone, name: "x".repeat(81) },
-  // Neither postal codes nor localities: can never match.
-  { ...baseZone, postalCodes: [], localities: [] },
+  // Neither settlements, postal codes nor localities: can never match.
+  { ...baseZone, postalCodes: [], localities: [], settlementIds: [] },
   // Duplicate or unsorted entries are not canonical.
   { ...baseZone, postalCodes: ["06010", "06000"] },
   { ...baseZone, postalCodes: ["06000", "06000"] },
   { ...baseZone, postalCodes: ["", "06010"] },
   { ...baseZone, postalCodes: ["  06000", "06010"] },
+  { ...baseZone, settlementIds: ["not-a-uuid"] },
+  { ...baseZone, settlementIds: ["44444444-4444-4444-8444-444444444444", "33333333-3333-4333-8333-333333333333"] },
   { ...baseZone, feeMinor: -1 },
   { ...baseZone, feeMinor: 1.5 },
   { ...baseZone, currency: "mxn" },
@@ -150,6 +166,7 @@ const baseUpsert = {
   name: "Centro",
   postalCodes: ["06000"],
   localities: [] as readonly string[],
+  settlementIds: [] as readonly string[],
   feeMinor: 2_500,
   currency: "MXN",
   active: true,
@@ -163,6 +180,15 @@ const baseUpsert = {
 const parsedCreate = parseUpsertDeliveryZoneCommandV1(baseUpsert);
 expect(parsedCreate !== undefined && Object.isFrozen(parsedCreate), "create command (expectedVersion 0) parses frozen");
 
+const { settlementIds: _omittedUpsertSettlements, ...legacyUpsert } = baseUpsert;
+void _omittedUpsertSettlements;
+const parsedLegacyUpsert = parseUpsertDeliveryZoneCommandV1(legacyUpsert);
+expect(parsedLegacyUpsert !== undefined && parsedLegacyUpsert.settlementIds.length === 0,
+  "legacy command without settlementIds parses as []");
+
+const settlementCommand = { ...baseUpsert, postalCodes: [], settlementIds: ["33333333-3333-4333-8333-333333333334"] } as const;
+expect(parseUpsertDeliveryZoneCommandV1(settlementCommand) !== undefined, "settlement-only command parses");
+
 const updateCommand = { ...baseUpsert, expectedVersion: 3 } as const;
 expect(parseUpsertDeliveryZoneCommandV1(updateCommand) !== undefined, "update command with a positive expectedVersion parses");
 
@@ -174,6 +200,8 @@ for (const invalid of [
   { ...baseUpsert, expectedVersion: -1 },
   { ...baseUpsert, expectedVersion: 1.5 },
   { ...baseUpsert, postalCodes: [], localities: [] },
+  { ...baseUpsert, settlementIds: ["not-a-uuid"] },
+  { ...baseUpsert, settlementIds: ["44444444-4444-4444-8444-444444444444", "33333333-3333-4333-8333-333333333333"] },
   { ...baseUpsert, eventId: "not-a-uuid" },
   { ...baseUpsert, idempotencyKey: "not-a-uuid" },
   { ...baseUpsert, deviceId: "not-a-uuid" },
@@ -257,6 +285,15 @@ expect(
   parseDeliveryZoneMatchRequestV1({ ...matchRequest, address: { postalCode: null, locality: "Centro" } }) !== undefined,
   "match request accepts a null postal code",
 );
+expect(
+  parseDeliveryZoneMatchRequestV1({ ...matchRequest, address: { postalCode: "06000" } }) !== undefined,
+  "legacy match request without locality parses",
+);
+const settlementMatchRequest = {
+  ...matchRequest,
+  address: { settlementId: "33333333-3333-4333-8333-333333333333", neighborhood: "Benito Juárez", postalCode: null, locality: null },
+};
+expect(parseDeliveryZoneMatchRequestV1(settlementMatchRequest) !== undefined, "match request accepts settlement facts");
 expect(parseDeliveryZoneMatchRequestV1({ ...matchRequest, extra: 1 }) === undefined, "match request rejects extra keys");
 expect(parseDeliveryZoneMatchRequestV1({ ...matchRequest, schemaVersion: 2 }) === undefined, "match request rejects version 2");
 expect(parseDeliveryZoneMatchRequestV1({ ...matchRequest, branchId: "nope" }) === undefined, "match request rejects bad branch id");
@@ -265,8 +302,8 @@ expect(
   "match request rejects blank locality",
 );
 expect(
-  parseDeliveryZoneMatchRequestV1({ ...matchRequest, address: { postalCode: "06000" } }) === undefined,
-  "match request rejects a missing locality",
+  parseDeliveryZoneMatchRequestV1({ ...settlementMatchRequest, address: { ...settlementMatchRequest.address, settlementId: "nope" } }) === undefined,
+  "match request rejects a malformed settlement id",
 );
 expect(
   parseDeliveryZoneMatchRequestV1(new Proxy(matchRequest, { ownKeys: () => { throw new Error("hostile"); } })) === undefined,
@@ -293,3 +330,144 @@ expect(
 );
 expect(parseDeliveryZoneMatchResultV1({ ...coveredMatch, coverageStatus: "maybe" }) === undefined, "unknown coverage status is rejected");
 expect(parseDeliveryZoneMatchResultV1({ ...coveredMatch, quoteId: zoneId }) === undefined, "match result rejects extra keys");
+
+const settlementId = "33333333-3333-4333-8333-333333333334";
+const extendedCoveredMatch = {
+  ...coveredMatch,
+  reason: null,
+  matchedBy: "settlement",
+  settlement: { settlementId, name: "Benito Juárez", postalCode: "06000" },
+};
+expect(parseDeliveryZoneMatchResultV1(extendedCoveredMatch) !== undefined, "extended covered match result parses");
+const extendedNotCoveredMatch = {
+  ...notCoveredMatch,
+  reason: { code: "settlement_not_in_zone", message: "La colonia Benito Juárez no está en ninguna zona de la sucursal Centro." },
+  matchedBy: null,
+  settlement: null,
+};
+expect(parseDeliveryZoneMatchResultV1(extendedNotCoveredMatch) !== undefined, "extended not_covered match result parses");
+expect(
+  parseDeliveryZoneMatchResultV1({ ...extendedCoveredMatch, matchedBy: null }) === undefined,
+  "covered result requires matchedBy",
+);
+expect(
+  parseDeliveryZoneMatchResultV1({ ...extendedNotCoveredMatch, reason: null }) === undefined,
+  "not_covered result requires a reason",
+);
+expect(
+  parseDeliveryZoneMatchResultV1({ ...extendedNotCoveredMatch, reason: { code: "invented", message: "x" } }) === undefined,
+  "not_covered result rejects unknown reason codes",
+);
+expect(
+  parseDeliveryZoneMatchResultV1({ ...extendedNotCoveredMatch, reason: { code: "settlement_unknown", message: "x".repeat(401) } }) === undefined,
+  "reason messages are bounded",
+);
+
+// --- Settlement search ---
+
+const settlementIdForSearch = "33333333-3333-4333-8333-333333333334";
+const searchRequest = {
+  schemaVersion: 1,
+  scope: { restaurantId, branchId },
+  query: "benito",
+  postalCode: null,
+  limit: 20,
+} as const;
+expect(parseSettlementSearchRequestV1(searchRequest) !== undefined, "prefix search request parses");
+expect(parseSettlementSearchRequestV1({ ...searchRequest, query: null, postalCode: "06000" }) !== undefined,
+  "postal-code search request parses");
+
+for (const invalid of [
+  { ...searchRequest, extra: true },
+  { ...searchRequest, query: null, postalCode: null },
+  { ...searchRequest, query: "benito", postalCode: "06000" },
+  { ...searchRequest, query: "b" },
+  { ...searchRequest, postalCode: "0600" },
+  { ...searchRequest, limit: 0 },
+  { ...searchRequest, limit: 51 },
+  { ...searchRequest, scope: { restaurantId } },
+]) expect(parseSettlementSearchRequestV1(invalid) === undefined, `search request rejects invalid facts: ${JSON.stringify(invalid)}`);
+
+const settlementSummary = {
+  settlementId: settlementIdForSearch,
+  name: "Benito Juárez",
+  postalCode: "06000",
+  settlementType: "Colonia",
+  municipality: "Navojoa",
+  state: "Sonora",
+  countryCode: "MX",
+} as const;
+const searchResult = {
+  schemaVersion: 1,
+  scope: { restaurantId, branchId },
+  branch: { name: "Centro", locality: "Navojoa", region: "Sonora", countryCode: "MX" },
+  settlements: [settlementSummary],
+} as const;
+expect(parseSettlementSearchResultV1(searchResult) !== undefined, "search result parses");
+expect(parseSettlementSearchResultV1({ ...searchResult, settlements: [] }) !== undefined, "empty search result is valid");
+for (const invalid of [
+  { ...searchResult, extra: true },
+  { ...searchResult, settlements: [{ ...settlementSummary, settlementId: "nope" }] },
+  { ...searchResult, settlements: [{ ...settlementSummary, postalCode: "0600" }] },
+  { ...searchResult, settlements: [{ ...settlementSummary, countryCode: "mex" }] },
+  { ...searchResult, branch: { ...searchResult.branch, countryCode: "MEX" } },
+]) expect(parseSettlementSearchResultV1(invalid) === undefined, `search result rejects invalid facts: ${JSON.stringify(invalid)}`);
+
+// --- Manual delivery fee ---
+
+const manualFeeCommand = {
+  schemaVersion: 1,
+  scope: { restaurantId, branchId },
+  captureDraftId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  addressSnapshotRef: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  expectedVersion: 0,
+  feeMinor: 3_000,
+  currency: "MXN",
+  reason: "Colonia fuera de zona autorizada",
+  eventId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  idempotencyKey: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+  deviceId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+  occurredAt: "2026-11-21T18:00:00.000Z",
+} as const;
+expect(parseSetCaptureDeliveryManualFeeCommandV1(manualFeeCommand) !== undefined, "manual fee command parses");
+for (const invalid of [
+  { ...manualFeeCommand, extra: true },
+  { ...manualFeeCommand, expectedVersion: -1 },
+  { ...manualFeeCommand, feeMinor: -1 },
+  { ...manualFeeCommand, feeMinor: 1.5 },
+  { ...manualFeeCommand, currency: "mxn" },
+  { ...manualFeeCommand, reason: "" },
+  { ...manualFeeCommand, reason: "   " },
+  { ...manualFeeCommand, addressSnapshotRef: "nope" },
+  { ...manualFeeCommand, idempotencyKey: "nope" },
+  { ...manualFeeCommand, occurredAt: "2026-11-21" },
+]) expect(parseSetCaptureDeliveryManualFeeCommandV1(invalid) === undefined,
+  `manual fee command rejects invalid facts: ${JSON.stringify(invalid)}`);
+
+const manualFeeResult = {
+  schemaVersion: 1,
+  manualFee: {
+    eventId: manualFeeCommand.eventId,
+    captureDraftId: manualFeeCommand.captureDraftId,
+    addressSnapshotRef: manualFeeCommand.addressSnapshotRef,
+    feeMinor: 3_000,
+    currency: "MXN",
+    reason: manualFeeCommand.reason,
+    role: "supervisor",
+    actorId: "77777777-7777-4777-8777-777777777777",
+    authorizedAt: "2026-11-21T18:00:00.000Z",
+    version: 1,
+  },
+  replayed: false,
+} as const;
+expect(parseSetCaptureDeliveryManualFeeResultV1(manualFeeResult) !== undefined, "manual fee result parses");
+expect(parseSetCaptureDeliveryManualFeeResultV1({ ...manualFeeResult, replayed: true }) !== undefined,
+  "replayed manual fee result parses");
+for (const invalid of [
+  { ...manualFeeResult, extra: true },
+  { ...manualFeeResult, replayed: "false" },
+  { ...manualFeeResult, manualFee: { ...manualFeeResult.manualFee, role: "cashier" } },
+  { ...manualFeeResult, manualFee: { ...manualFeeResult.manualFee, version: 0 } },
+  { ...manualFeeResult, manualFee: { ...manualFeeResult.manualFee, extra: true } },
+]) expect(parseSetCaptureDeliveryManualFeeResultV1(invalid) === undefined,
+  `manual fee result rejects invalid facts: ${JSON.stringify(invalid)}`);
