@@ -29,13 +29,13 @@ import { duplicateGroup, groupAssignmentCount, groupsForProduct, toggleGroupAssi
 import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys, withoutSizePresetIds, type LocalMenuDraft } from "../../../lib/menu-draft-storage";
 import { MENU_CATEGORY_COLOR_LABELS, menuCategoryColorClasses } from "../../../lib/menu-category-color";
 import { DEFAULT_MENU_TAB, MENU_TAB_LABELS, MENU_TABS, menuTabHref, parseMenuTab, readStoredMenuTab, writeStoredMenuTab, type MenuTab } from "../../../lib/menu-tabs";
-import { uiOption } from "../../../lib/ui-classes";
+import { uiButton, uiOption } from "../../../lib/ui-classes";
 import { collectUsedImagePaths, imagePathsOfEntity, retainImagePaths } from "../../../lib/menu-used-images";
 import { DragReorderList, ReorderButtons, ReorderHandle, reorderRowProps } from "./reorder-controls";
 import { ProductActionsMenu } from "./product-actions-menu";
 import { PhotoCropDialog, type CroppedMenuPhoto } from "./photo-crop-dialog";
 import { PizzaV2Editor } from "./pizza-v2-editor";
-import { pizzaProductIssue } from "../../../lib/menu-pizza";
+import { pizzaProductIssue, setPizzaMode } from "../../../lib/menu-pizza";
 
 import { copyMenuImageAction, saveMenuCatalogAction, uploadMenuImageAction } from "./actions";
 
@@ -649,8 +649,6 @@ function ProductEditor({ archived, copyNotice, handle, usedStations, usedImagePa
   const tax = product.tax;
   const variants = product.variants ?? [];
   const fraction = editorProductFraction(product);
-  // The V2 section stays hidden for plain products until asked for, so a three-row product keeps three rows.
-  const [pizzaOffered, setPizzaOffered] = useState(false);
   const changeVariant = (variantId: string, patch: Partial<MenuProductVariantV1>): void =>
     change({ variants: variants.map((variant) => variant.variantId === variantId ? { ...variant, ...patch } : variant) });
   const switchClass = "inline-flex min-h-11 items-center gap-2 text-[12px] font-semibold";
@@ -722,18 +720,18 @@ function ProductEditor({ archived, copyNotice, handle, usedStations, usedImagePa
             <button
               type="button"
               onClick={onManageGroups}
-              className="inline-flex min-h-11 items-center px-1 text-[12px] font-semibold text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+              className={uiButton("secondary", "inline-flex items-center gap-2")}
             >
-              Gestionar grupos →
+              Gestionar grupos
             </button>
           )}
-          <CheckField labelClassName="flex min-h-11 items-center" className={switchClass} label="Permitir mitades"
-            hint="Cada mitad lleva un sabor del grupo de sabores; una de las dos puede armarse con ingredientes si eliges un grupo de ingredientes. Aplica a todos los tamaños. No se combina con «Pizza por mitades».">{(id) =>
-            <input id={id} type="checkbox" className="size-5" disabled={!canManage || product.pizzaMode !== undefined} checked={fraction.enabled}
-              onChange={(event) => change({ fraction: { ...fraction, enabled: event.target.checked } })} />}</CheckField>
-          {canManage && product.pizzaMode === undefined && !pizzaOffered && !fraction.enabled && <button type="button"
-            className="inline-flex min-h-11 items-center px-1 text-[12px] font-semibold text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent"
-            onClick={() => setPizzaOffered(true)}>Configurar pizza por mitades</button>}
+          {fraction.enabled && <div className="flex flex-wrap items-center gap-2 text-[12px] text-text-muted">
+            <span>Mitades por sabores (modelo anterior)</span>
+            {canManage && <button type="button" className={uiButton("secondary")}
+              onClick={() => change({ fraction: { ...fraction, enabled: false } })}>Desactivar</button>}
+          </div>}
+          {canManage && product.pizzaMode === undefined && <button type="button" className={uiButton("secondary")}
+            onClick={() => onProductChange({ ...setPizzaMode(product, "specialty"), fraction: { ...fraction, enabled: false } })}>Configurar especialidades</button>}
           <CheckField labelClassName="flex min-h-11 items-center" className={switchClass} hint="Marca si este producto causa IVA u otro impuesto. El impuesto se calcula siempre en el servidor con la regla indicada aquí." label="Aplicar impuesto">{(id) =>
             <input id={id} disabled={!canManage} type="checkbox" className="size-5" checked={tax !== null} onChange={(event) => change({ tax: event.target.checked ? { inclusion: "included", name: "IVA", rateDenominator: 100, rateNumerator: 16, taxId: "iva", taxRuleVersion: "1" } : null })} />}</CheckField>
           {canManage && <AddButton label="Añadir tamaño" disabled={variants.length >= MENU_PRODUCT_MAX_VARIANTS} onClick={() => change({ variants: [...variants, {
@@ -781,9 +779,9 @@ function ProductEditor({ archived, copyNotice, handle, usedStations, usedImagePa
             fraction={fraction} onChange={(next) => change({ fraction: next })} />
         </section>}
 
-        {(product.pizzaMode !== undefined || pizzaOffered) && <section className="rounded-xl border border-border bg-surface p-3">
-          <h3 className="mb-2 font-heading text-[13px] font-semibold">Pizza por mitades</h3>
-          <PizzaV2Editor canManage={canManage} groups={groups} product={product}
+        {product.pizzaMode !== undefined && <section className="rounded-xl border border-border bg-surface p-3">
+          <h3 className="mb-2 font-heading text-[13px] font-semibold">Especialidades de pizza</h3>
+          <PizzaV2Editor canManage={canManage} currency={currency} groups={groups} product={product} supabaseUrl={supabaseUrl}
             onChange={(next) => onProductChange(next.pizzaMode !== undefined && fraction.enabled ? { ...next, fraction: { ...fraction, enabled: false } } : next)} />
         </section>}
 
