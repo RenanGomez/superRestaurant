@@ -34,8 +34,19 @@ function taxKey(product: ValidatedProduct): string {
   return tax === undefined ? "" : [tax.taxId, tax.taxRuleVersion, tax.rate.numerator.toString(), tax.rate.denominator.toString(), tax.inclusion].join("|");
 }
 
-function pizzaGroupIds(product: Pick<MenuProductCatalog, "baseGroupId" | "extraGroupIds">): readonly string[] {
-  return [...(product.baseGroupId == null ? [] : [product.baseGroupId]), ...(product.extraGroupIds ?? [])];
+/**
+ * Groups priced by the halves rule instead of the regular pipeline: every base group plus the group that
+ * offers each loose extra option (an extra may live in a group that is also a base group).
+ */
+function pizzaGroupIds(
+  product: Pick<MenuProductCatalog, "baseGroupIds" | "extraOptionIds">,
+  catalog: ValidatedMenuCatalog,
+): readonly string[] {
+  const extraGroupIds = (product.extraOptionIds ?? []).flatMap((optionId) => {
+    const group = catalog.modifierGroups.find((candidate) => candidate.options.some((option) => option.id === optionId));
+    return group === undefined ? [] : [group.id];
+  });
+  return [...(product.baseGroupIds ?? []), ...extraGroupIds];
 }
 
 function optionPrice(group: ValidatedGroup, optionId: string): PizzaHalfOptionPrice {
@@ -59,25 +70,41 @@ function resolveHalf(catalog: ValidatedMenuCatalog, half: CapturePizzaHalfV2): {
   const defaults = product.defaultIngredientOptionIds ?? [];
   if (half.removedIngredientOptionIds.some((id) => !defaults.includes(id))) return fail("removal_not_in_recipe");
 
-  const baseGroup = product.baseGroupId == null ? undefined : catalog.modifierGroups.find((group) => group.id === product.baseGroupId);
-  if (baseGroup === undefined) return fail("base_group");
-  const ingredients = half.ingredientOptionIds.map((id) => optionPrice(baseGroup, id));
-  if (ingredients.length > baseGroup.maximumQuantity
-    || (product.pizzaMode === "custom" && ingredients.length < baseGroup.minimumQuantity)) return fail("ingredient_quantity");
+  const baseGroups = (product.baseGroupIds ?? []).map((groupId) => {
+    const group = catalog.modifierGroups.find((candidate) => candidate.id === groupId);
+    return group === undefined ? fail("base_group") : group;
+  });
+  if (baseGroups.length === 0) return fail("base_group");
+  // One N is shared by every base group: an ingredient is any active option of any of them.
+  const ingredients = half.ingredientOptionIds.map((id) => {
+    const group = baseGroups.find((candidate) => candidate.options.some((option) => option.id === id));
+    return group === undefined ? fail("option") : optionPrice(group, id);
+  });
+  for (const group of baseGroups) {
+    const chosen = ingredients.filter((ingredient) => ingredient.groupId === group.id).length;
+    if (chosen > group.maximumQuantity
+      || (product.pizzaMode === "custom" && chosen < group.minimumQuantity)) return fail("ingredient_quantity");
+  }
   const removedNames = new Map(half.removedIngredientOptionIds.map((id) => {
-    const option = baseGroup.options.find((candidate) => candidate.id === id);
+    const option = baseGroups.flatMap((group) => group.options).find((candidate) => candidate.id === id);
     return option === undefined ? fail("removal_not_in_base_group") : [id, option.name] as const;
   }));
 
-  const extraGroups = (product.extraGroupIds ?? []).map((groupId) => {
-    const group = catalog.modifierGroups.find((candidate) => candidate.id === groupId);
-    return group === undefined ? fail("extra_group") : group;
-  });
+  // Extras are the product's loose charged options, whatever group offers them and even when that group
+  // is also a base group; the role is decided by the list the option arrives in, never by its group.
+  const offeredExtraOptionIds = product.extraOptionIds ?? [];
   const extras = half.extraOptionIds.map((id) => {
-    const group = extraGroups.find((candidate) => candidate.options.some((option) => option.id === id));
-    return group === undefined ? fail("option") : optionPrice(group, id);
+    if (!offeredExtraOptionIds.includes(id)) return fail("option");
+    const group = catalog.modifierGroups.find((candidate) => candidate.options.some((option) => option.id === id));
+    return group === undefined ? fail("extra_group") : optionPrice(group, id);
   });
-  for (const group of extraGroups) {
+  const extraGroups = new Map<string, ValidatedGroup>();
+  for (const extra of extras) {
+    const group = catalog.modifierGroups.find((candidate) => candidate.id === extra.groupId);
+    if (group === undefined) return fail("extra_group");
+    extraGroups.set(group.id, group);
+  }
+  for (const group of extraGroups.values()) {
     const chosen = extras.filter((extra) => extra.groupId === group.id).length;
     if (chosen > group.maximumQuantity || ((product.pizzaMode === "custom" || customizeAtOrder) && chosen < group.minimumQuantity)) {
       return fail("extra_quantity");
@@ -135,7 +162,7 @@ export function pricePizzaLineSnapshot(
 
   const lineProduct = domainCatalog.products.find((candidate) => candidate.id === line.productId);
   if (lineProduct === undefined) return fail("product");
-  const ownGroupIds = new Set(pizzaGroupIds(lineProduct));
+  const ownGroupIds = new Set(pizzaGroupIds(lineProduct, catalog));
   // The base and extra groups are priced by the rule and must arrive empty, like the legacy fraction groups.
   if (line.modifierGroups.some((group) => ownGroupIds.has(group.groupId) && group.selections.length > 0)) {
     return fail("pizza_group_selection");
@@ -143,7 +170,7 @@ export function pricePizzaLineSnapshot(
   // Price the product's other groups with the regular pipeline on a catalog where the pizza fields and groups
   // of this one product are not part of the product (they are handled above).
   const plainProduct: Record<string, unknown> = { ...lineProduct };
-  for (const key of ["baseGroupId", "customizeAtOrder", "defaultIngredientOptionIds", "extraGroupIds", "freeIngredientCount", "pizzaMode"]) {
+  for (const key of ["baseGroupIds", "customizeAtOrder", "defaultIngredientOptionIds", "extraOptionIds", "freeIngredientCount", "pizzaMode"]) {
     delete plainProduct[key];
   }
   const regularCatalog: MenuCatalog = {

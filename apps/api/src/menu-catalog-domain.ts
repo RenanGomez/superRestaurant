@@ -106,7 +106,7 @@ export function toDomainMenuCatalog(catalog: MenuCatalogV1, restaurantId: string
 
 type PizzaConfigSource = Pick<
   MenuCatalogV1["products"][number],
-  "pizzaMode" | "freeIngredientCount" | "baseGroupId" | "defaultIngredientOptionIds" | "customizeAtOrder" | "extraGroupIds"
+  "pizzaMode" | "freeIngredientCount" | "baseGroupIds" | "baseGroupId" | "defaultIngredientOptionIds" | "customizeAtOrder" | "extraOptionIds" | "extraGroupIds"
 >;
 
 /** Pizza V2 fields of a product as the domain models them; `{}` for a legacy product (absent mode). */
@@ -115,17 +115,20 @@ export function toDomainPizzaConfig(product: PizzaConfigSource): Partial<MenuPro
   return {
     pizzaMode: product.pizzaMode,
     ...(product.freeIngredientCount === undefined ? {} : { freeIngredientCount: product.freeIngredientCount }),
+    ...(product.baseGroupIds === undefined ? {} : { baseGroupIds: [...product.baseGroupIds] }),
     ...(product.baseGroupId === undefined ? {} : { baseGroupId: product.baseGroupId }),
     ...(product.defaultIngredientOptionIds === undefined ? {} : { defaultIngredientOptionIds: [...product.defaultIngredientOptionIds] }),
     ...(product.customizeAtOrder === undefined ? {} : { customizeAtOrder: product.customizeAtOrder }),
+    ...(product.extraOptionIds === undefined ? {} : { extraOptionIds: [...product.extraOptionIds] }),
     ...(product.extraGroupIds === undefined ? {} : { extraGroupIds: [...product.extraGroupIds] }),
   };
 }
 
 /**
  * Cross-checks the Pizza V2 fields that need the whole catalog (the same rules the SQL enforces in
- * save_menu_catalog): a specialty has no eligible free ingredients, and the recipe lives in the base group.
- * Per-product bounds (0-40, 24 extra groups, group membership) are the domain's own validation.
+ * save_menu_catalog): a specialty has no eligible free ingredients, every base group exists, the recipe
+ * lives in any base group, and every extra option is offered by a group assigned to the product.
+ * Per-product bounds (0-40, 200 extra options, group membership) are the domain's own validation.
  */
 export function pizzaCatalogIssues(catalog: Pick<MenuCatalogV1, "modifierGroups" | "products">): readonly string[] {
   const issues: string[] = [];
@@ -135,15 +138,20 @@ export function pizzaCatalogIssues(catalog: Pick<MenuCatalogV1, "modifierGroups"
     if (product.pizzaMode === "specialty" && (product.freeIngredientCount ?? 0) > 0) {
       issues.push(`specialty_ingredients_not_allowed:${product.productId}`);
     }
-    const baseGroupId = product.baseGroupId ?? null;
-    if (baseGroupId !== null && !groups.has(baseGroupId)) issues.push(`base_group_not_in_catalog:${product.productId}`);
+    const baseGroupIds = product.baseGroupIds ?? [];
+    if (baseGroupIds.some((groupId) => !groups.has(groupId))) issues.push(`base_group_not_in_catalog:${product.productId}`);
     const defaults = product.defaultIngredientOptionIds ?? [];
     if (defaults.length > 0) {
-      const baseOptions = new Set((baseGroupId === null ? [] : groups.get(baseGroupId)?.options ?? []).map((option) => option.optionId));
+      const baseOptions = new Set(baseGroupIds.flatMap((groupId) => (groups.get(groupId)?.options ?? []).map((option) => option.optionId)));
       if (defaults.some((optionId) => !baseOptions.has(optionId))) issues.push(`default_option_outside_base_group:${product.productId}`);
     }
-    for (const groupId of product.extraGroupIds ?? []) {
-      if (!groups.has(groupId)) issues.push(`extra_group_not_in_catalog:${product.productId}`);
+    const extraOptionIds = product.extraOptionIds ?? [];
+    if (extraOptionIds.length > 0) {
+      const assigned = new Set(product.modifierGroupIds !== undefined
+        ? product.modifierGroupIds
+        : catalog.modifierGroups.filter((group) => group.productId === product.productId).map((group) => group.groupId));
+      const offered = new Set([...assigned].flatMap((groupId) => (groups.get(groupId)?.options ?? []).map((option) => option.optionId)));
+      if (extraOptionIds.some((optionId) => !offered.has(optionId))) issues.push(`extra_option_not_in_catalog:${product.productId}`);
     }
   }
   return issues;

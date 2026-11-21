@@ -19,8 +19,10 @@ const validScope = scope;
 const PRODUCT = "9544c299-d25b-44ce-98ed-d30116610887";
 const BASE_GROUP = "a409ec59-9f5e-496d-a45d-b83a46b49674";
 const EXTRA_GROUP = "a409ec59-9f5e-496d-a45d-b83a46b49675";
+const VEGGIES_GROUP = "a409ec59-9f5e-496d-a45d-b83a46b49676";
 const HAM = "c483b6e7-e102-4cc5-a887-d30712c85e52";
 const CHEESE = "c483b6e7-e102-4cc5-a887-d30712c85e53";
+const BACON = "c483b6e7-e102-4cc5-a887-d30712c85e54";
 const STRANGER = "c483b6e7-e102-4cc5-a887-d30712c85e99";
 
 function group(groupId: string, name: string, optionId: string) {
@@ -61,7 +63,7 @@ function catalog(pizza: Record<string, unknown>) {
       tax: null,
       ...pizza,
     }],
-    modifierGroups: [group(BASE_GROUP, "Ingredientes", HAM), group(EXTRA_GROUP, "Extras", CHEESE)],
+    modifierGroups: [group(BASE_GROUP, "Ingredientes", HAM), group(VEGGIES_GROUP, "Vegetales", CHEESE), group(EXTRA_GROUP, "Extras", BACON)],
   } as unknown as SaveMenuCatalogCommandV1;
 }
 
@@ -89,35 +91,40 @@ async function outcome(pizza: Record<string, unknown>): Promise<{ code: string; 
   }
 }
 
-const custom = { pizzaMode: "custom", baseGroupId: BASE_GROUP, freeIngredientCount: 2, extraGroupIds: [EXTRA_GROUP] };
+const custom = { pizzaMode: "custom", baseGroupIds: [BASE_GROUP], freeIngredientCount: 2, extraOptionIds: [BACON] };
+const twoBases = { pizzaMode: "custom", baseGroupIds: [BASE_GROUP, VEGGIES_GROUP], freeIngredientCount: 2 };
 
 test("a valid custom pizza product reaches the port (conflict is the stub's answer, not a rejection)", async () => {
   assert.deepEqual(await outcome(custom), { code: "conflict", saved: 1 });
-  assert.deepEqual(await outcome({ pizzaMode: "custom", baseGroupId: BASE_GROUP, freeIngredientCount: 0 }), { code: "conflict", saved: 1 });
-  assert.deepEqual(await outcome({ pizzaMode: "custom", baseGroupId: BASE_GROUP, freeIngredientCount: 40 }), { code: "conflict", saved: 1 });
+  assert.deepEqual(await outcome({ pizzaMode: "custom", baseGroupIds: [BASE_GROUP], freeIngredientCount: 0 }), { code: "conflict", saved: 1 });
+  assert.deepEqual(await outcome({ pizzaMode: "custom", baseGroupIds: [BASE_GROUP], freeIngredientCount: 40 }), { code: "conflict", saved: 1 });
+  assert.deepEqual(await outcome(twoBases), { code: "conflict", saved: 1 });
 });
 
-test("a specialty with a recipe from the base group is accepted; legacy products stay accepted", async () => {
-  assert.deepEqual(await outcome({ pizzaMode: "specialty", baseGroupId: BASE_GROUP, defaultIngredientOptionIds: [HAM] }), { code: "conflict", saved: 1 });
+test("a specialty with a recipe from any base group is accepted; legacy products stay accepted", async () => {
+  assert.deepEqual(await outcome({ pizzaMode: "specialty", baseGroupIds: [BASE_GROUP], defaultIngredientOptionIds: [HAM] }), { code: "conflict", saved: 1 });
+  assert.deepEqual(await outcome({ pizzaMode: "specialty", baseGroupIds: [BASE_GROUP, VEGGIES_GROUP], defaultIngredientOptionIds: [CHEESE] }), { code: "conflict", saved: 1 });
+  // The same group can be base and offer a loose extra; the role is decided by the list.
+  assert.deepEqual(await outcome({ pizzaMode: "custom", baseGroupIds: [BASE_GROUP, VEGGIES_GROUP], freeIngredientCount: 1, extraOptionIds: [HAM] }), { code: "conflict", saved: 1 });
   assert.deepEqual(await outcome({}), { code: "conflict", saved: 1 });
 });
 
 test("invalid V2 combinations are rejected as request errors before save_menu_catalog", async () => {
   const rejected: Record<string, unknown>[] = [
-    { pizzaMode: "specialty", freeIngredientCount: 2, baseGroupId: BASE_GROUP },
-    { pizzaMode: "custom", baseGroupId: BASE_GROUP, freeIngredientCount: 41 },
-    { pizzaMode: "custom", baseGroupId: BASE_GROUP, freeIngredientCount: -1 },
-    { pizzaMode: "custom", baseGroupId: BASE_GROUP, freeIngredientCount: 1.5 },
-    { pizzaMode: "custom", baseGroupId: STRANGER, freeIngredientCount: 1 },
+    { pizzaMode: "specialty", freeIngredientCount: 2, baseGroupIds: [BASE_GROUP] },
+    { pizzaMode: "custom", baseGroupIds: [BASE_GROUP], freeIngredientCount: 41 },
+    { pizzaMode: "custom", baseGroupIds: [BASE_GROUP], freeIngredientCount: -1 },
+    { pizzaMode: "custom", baseGroupIds: [BASE_GROUP], freeIngredientCount: 1.5 },
+    { pizzaMode: "custom", baseGroupIds: [STRANGER], freeIngredientCount: 1 },
     { pizzaMode: "custom", freeIngredientCount: 1 },
-    { pizzaMode: "specialty", baseGroupId: BASE_GROUP, defaultIngredientOptionIds: [STRANGER] },
-    { pizzaMode: "specialty", baseGroupId: BASE_GROUP, defaultIngredientOptionIds: [CHEESE] },
-    { pizzaMode: "custom", baseGroupId: BASE_GROUP, extraGroupIds: [STRANGER] },
-    { pizzaMode: "custom", baseGroupId: BASE_GROUP, extraGroupIds: [BASE_GROUP] },
-    { pizzaMode: "custom", baseGroupId: BASE_GROUP, extraGroupIds: Array.from({ length: 25 }, () => EXTRA_GROUP) },
-    { pizzaMode: "wild", baseGroupId: BASE_GROUP },
+    { pizzaMode: "specialty", baseGroupIds: [BASE_GROUP], defaultIngredientOptionIds: [STRANGER] },
+    { pizzaMode: "specialty", baseGroupIds: [BASE_GROUP], defaultIngredientOptionIds: [CHEESE] },
+    { pizzaMode: "custom", baseGroupIds: [BASE_GROUP], extraOptionIds: [STRANGER] },
+    { pizzaMode: "custom", baseGroupIds: [BASE_GROUP], extraOptionIds: [HAM, HAM] },
+    { pizzaMode: "wild", baseGroupIds: [BASE_GROUP] },
     { freeIngredientCount: 2 },
-    { baseGroupId: BASE_GROUP },
+    { baseGroupIds: [BASE_GROUP] },
+    { pizzaMode: "custom", baseGroupIds: [BASE_GROUP], baseGroupId: BASE_GROUP },
   ];
   for (const pizza of rejected) assert.deepEqual(await outcome(pizza), { code: "request", saved: 0 }, JSON.stringify(pizza));
 });
@@ -128,16 +135,19 @@ test("the domain mapping carries the V2 fields and leaves legacy products untouc
   const product = domain.products[0];
   assert.equal(product?.pizzaMode, "custom");
   assert.equal(product?.freeIngredientCount, 2);
-  assert.equal(product?.baseGroupId, BASE_GROUP);
-  assert.deepEqual(product?.extraGroupIds, [EXTRA_GROUP]);
+  assert.deepEqual(product?.baseGroupIds, [BASE_GROUP]);
+  assert.deepEqual(product?.extraOptionIds, [BACON]);
   assert.deepEqual(toDomainPizzaConfig({}), {});
 });
 
 test("pizzaCatalogIssues names each failing rule", () => {
   const view = (pizza: Record<string, unknown>) => pizzaCatalogIssues(catalog(pizza));
   assert.deepEqual(view(custom), []);
+  assert.deepEqual(view(twoBases), []);
   assert.deepEqual(view({ pizzaMode: "specialty", freeIngredientCount: 1 }), [`specialty_ingredients_not_allowed:${PRODUCT}`]);
-  assert.deepEqual(view({ pizzaMode: "custom", baseGroupId: STRANGER }), [`base_group_not_in_catalog:${PRODUCT}`]);
-  assert.deepEqual(view({ pizzaMode: "specialty", baseGroupId: BASE_GROUP, defaultIngredientOptionIds: [CHEESE] }), [`default_option_outside_base_group:${PRODUCT}`]);
-  assert.deepEqual(view({ pizzaMode: "custom", baseGroupId: BASE_GROUP, extraGroupIds: [STRANGER] }), [`extra_group_not_in_catalog:${PRODUCT}`]);
+  assert.deepEqual(view({ pizzaMode: "custom", baseGroupIds: [STRANGER] }), [`base_group_not_in_catalog:${PRODUCT}`]);
+  assert.deepEqual(view({ pizzaMode: "specialty", baseGroupIds: [BASE_GROUP, VEGGIES_GROUP], defaultIngredientOptionIds: [CHEESE] }), []);
+  assert.deepEqual(view({ pizzaMode: "specialty", baseGroupIds: [BASE_GROUP], defaultIngredientOptionIds: [CHEESE] }), [`default_option_outside_base_group:${PRODUCT}`]);
+  assert.deepEqual(view({ pizzaMode: "custom", baseGroupIds: [BASE_GROUP], extraOptionIds: [STRANGER] }), [`extra_option_not_in_catalog:${PRODUCT}`]);
+  assert.deepEqual(view({ pizzaMode: "custom", baseGroupIds: [BASE_GROUP], extraOptionIds: [HAM] }), []);
 });

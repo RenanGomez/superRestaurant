@@ -24,9 +24,12 @@ const CATEGORY = "a409ec59-9f5e-496d-a45d-b83a46b49674";
 const PIZZA = "ec5e7c30-edac-4b79-bf8c-e363b041c59f";
 const BASE_GROUP = "8c3f4e50-6172-4c83-8d94-b5c6d7e8f900";
 const EXTRA_GROUP = "8c3f4e50-6172-4c83-8d94-b5c6d7e8f901";
+const VEGGIES_GROUP = "8c3f4e50-6172-4c83-8d94-b5c6d7e8f902";
 const HAM = "9d405f61-7283-4d94-9ea5-c6d7e8f90a10";
 const CHEESE = "9d405f61-7283-4d94-9ea5-c6d7e8f90a11";
 const BACON = "9d405f61-7283-4d94-9ea5-c6d7e8f90a12";
+const ONION = "9d405f61-7283-4d94-9ea5-c6d7e8f90a13";
+const PINEAPPLE = "9d405f61-7283-4d94-9ea5-c6d7e8f90a14";
 const UNKNOWN = "9d405f61-7283-4d94-9ea5-c6d7e8f90aff";
 const LINE = "00000000-0000-4000-8000-000000000011";
 const VERSION = "47f7f293-b155-42b9-bdc7-f9be3846f44e";
@@ -41,13 +44,16 @@ const catalog = {
   products: [{
     productId: PIZZA, categoryId: CATEGORY, name: "Pizza a su gusto", sku: "PZ-1", active: true, displayOrder: 0,
     stationId: "hot", unit: "piece", unitPriceMinor: 10_000, tax: null, imagePath: null,
-    pizzaMode: "custom", baseGroupId: BASE_GROUP, freeIngredientCount: 1, extraGroupIds: [EXTRA_GROUP],
+    pizzaMode: "custom", baseGroupIds: [BASE_GROUP, VEGGIES_GROUP], freeIngredientCount: 1,
+    extraOptionIds: [BACON, PINEAPPLE],
   }],
   modifierGroups: [
     { active: true, displayOrder: 0, groupId: BASE_GROUP, maximumQuantity: 4, minimumQuantity: 0, name: "Ingredientes", productId: PIZZA,
       options: [option(HAM, "Jamon", 2_000), option(CHEESE, "Queso", 1_000)] },
     { active: true, displayOrder: 1, groupId: EXTRA_GROUP, maximumQuantity: 3, minimumQuantity: 0, name: "Extras", productId: PIZZA,
       options: [option(BACON, "Tocino", 1_500)] },
+    { active: true, displayOrder: 2, groupId: VEGGIES_GROUP, maximumQuantity: 4, minimumQuantity: 0, name: "Vegetales", productId: PIZZA,
+      options: [option(ONION, "Cebolla", 500), option(PINEAPPLE, "Piña", 3_000)] },
   ],
 } as unknown as MenuCatalogV1;
 
@@ -92,6 +98,27 @@ test("pricePizzaLineSnapshot freezes the rule's total: unit price plus the pizza
   PizzaLinePricingError);
 });
 
+test("several base groups share one N and an extra offered by a base group is always charged", () => {
+  // Same product on both halves: base 10_000, N = 1. Ingredients: Queso 1_000 (first base group) and
+  // Cebolla 500 (second base group) on both halves. The single N is shared: by price, Cebolla is the free
+  // one and Queso, in both halves, costs its full 1_000. Piña 3_000 is a loose extra of the second base
+  // group: it never consumes N and, in both halves, costs its full 3_000. Total 10_000 + 1_000 + 3_000.
+  const parsed = parseCapturePizzaLineV2(pizzaLine(
+    { extraOptionIds: [PINEAPPLE], ingredientOptionIds: [CHEESE, ONION] },
+    { extraOptionIds: [PINEAPPLE], ingredientOptionIds: [CHEESE, ONION] },
+  ));
+  assert.ok(parsed);
+  const snapshot = pricePizzaLineSnapshot(toDomainMenuCatalog(catalog, scope.restaurantId), scope.restaurantId,
+    { modifierGroups: [], productId: PIZZA, variantId: null }, parsed);
+  assert.deepEqual(snapshot.pizzaHalves?.freeAssignmentOrder, [ONION]);
+  assert.deepEqual(snapshot.pizzaHalves?.charges.map((charge) => [charge.role, charge.fractions, charge.optionId, charge.groupId, charge.amount.amountMinor]), [
+    ["ingredient", ["half-a", "half-b"], ONION, VEGGIES_GROUP, 0],
+    ["ingredient", ["half-a", "half-b"], CHEESE, BASE_GROUP, 1_000],
+    ["extra", ["half-a", "half-b"], PINEAPPLE, VEGGIES_GROUP, 3_000],
+  ]);
+  assert.equal(snapshot.pizzaHalves?.total.amountMinor, 14_000);
+});
+
 test("line quote of a pizza V2 line charges exactly the frozen pizzaHalves total", async () => {
   const quote = await quoteService().quoteLinePrice(principal, quoteRequest({ pizza: pizzaLine() }));
   const parsed = parseCapturePizzaLineV2(pizzaLine());
@@ -109,7 +136,8 @@ test("line quote of a pizza V2 line charges exactly the frozen pizzaHalves total
 test("line quote of a pizzaMode product without a pizza line, or with an invalid one, is rejected as line_invalid", async () => {
   const service = quoteService();
   for (const request of [quoteRequest(), quoteRequest({ pizza: pizzaLine({ ingredientOptionIds: [UNKNOWN] }) }),
-    quoteRequest({ pizza: pizzaLine({ extraOptionIds: [UNKNOWN] }) })]) {
+    quoteRequest({ pizza: pizzaLine({ extraOptionIds: [UNKNOWN] }) }),
+    quoteRequest({ pizza: pizzaLine({ extraOptionIds: [ONION] }) })]) {
     await assert.rejects(service.quoteLinePrice(principal, request),
       (error: unknown) => error instanceof CaptureLineQuoteRejectedError && error.reason === "line_invalid");
   }
