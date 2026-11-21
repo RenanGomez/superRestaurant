@@ -511,6 +511,31 @@ test("a product is orderable only while its category is published and active", (
   assert.equal(isOrderableProduct(catalog, UNKNOWN_GROUP), false, "unknown product");
 });
 
+test("a Pizza V2 product with canonical base and extra lists fails closed", () => {
+  // B1d: mobile carries the B1a shape (`baseGroupIds`/`extraOptionIds`) but has
+  // no half-and-ingredient composer, so the product must be refused here and
+  // never handed over with an incomplete line.
+  const pizzaCatalog = {
+    ...catalog,
+    products: catalog.products.map((product) => (
+      product.productId === FIXTURE_PRODUCT_MAIN
+        ? {
+          ...product,
+          baseGroupIds: [FIXTURE_GROUP_EXTRAS],
+          defaultIngredientOptionIds: [],
+          extraOptionIds: [FIXTURE_OPTION_CHEESE],
+          freeIngredientCount: 1,
+          pizzaMode: "custom" as const,
+        }
+        : product
+    )),
+  };
+  assert.deepEqual(
+    draftLineIssues(pizzaCatalog, { modifierGroups: [], productId: FIXTURE_PRODUCT_MAIN, quantity: 1 }),
+    ["Esta pizza se captura desde la web; la app aún no arma mitades ni ingredientes."],
+  );
+});
+
 test("the bounds the catalog publishes are what the interface may offer", () => {
   const groups = orderableGroups(catalog, FIXTURE_PRODUCT_MAIN);
 
