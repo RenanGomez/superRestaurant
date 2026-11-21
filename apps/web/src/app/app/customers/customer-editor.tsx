@@ -10,6 +10,7 @@ import { countOrderArticles } from "../../../lib/customer-order-history";
 import { formatDeliveryMatch } from "../../../lib/delivery-zones";
 import { matchDeliveryAddress } from "../delivery-match-action";
 import { uiButton } from "../../../lib/ui-classes";
+import { setUnsavedChanges } from "../../../lib/unsaved-changes";
 
 export type CustomerAction = "search" | "detail" | "profile" | "address" | "validate";
 export type CustomerActionResult = CustomerRequestResult<CustomerDirectorySearchResultV1 | CustomerDirectoryDetailV1> & { readonly command?: unknown };
@@ -434,6 +435,10 @@ export function AddressForm({ item, branchName, feedback, validating = false, di
 }): ReactNode {
   const [dirty, setDirty] = useState(false);
   const [addressLabel, setAddressLabel] = useState(item?.address.label ?? "Casa");
+  useEffect(() => {
+    setUnsavedChanges("customer-address", dirty);
+    return () => setUnsavedChanges("customer-address", false);
+  }, [dirty]);
   return <form className="rounded-lg border border-border p-3" onChange={() => { setDirty(true); onEdit?.(); }} onSubmit={event => {
     event.preventDefault(); const data = new FormData(event.currentTarget);
     const fields = Object.fromEntries(Object.keys(addressLabels).map(key => { const value = String(data.get(key) ?? "").trim(); return [key, value === "" ? null : key === "countryCode" ? value.toUpperCase() : value]; }));

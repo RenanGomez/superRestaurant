@@ -213,6 +213,13 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     if (instructionsTimer.current) clearTimeout(instructionsTimer.current);
     if (instructionsDebounce.current) clearTimeout(instructionsDebounce.current);
   }, []);
+  // Global Alt+N lands here as `/app/capture?focus=customer`; the search is the first thing the
+  // operator wants to type in, so move the caret there once the landing is mounted.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("focus") !== "customer") return;
+    const frame = window.requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
   // Each mobile step swaps the visible sections, so start the new step at its own top instead of
   // leaving the operator deep inside the previous one. First render is left untouched.
   useEffect(() => {
@@ -607,10 +614,6 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     if (saved === undefined) return;
     setNoteSheetLineId(undefined);
     setNoteSheetDraft("");
-  }
-
-  function create(): void {
-    void createFromLanding();
   }
 
   /** Opens a draft from the landing only when the chosen fulfillment has what it needs, then
@@ -1097,30 +1100,38 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   const stepVisible = (step: CaptureStep): string =>
     capture?.status !== "draft" || mobileStep === step ? "contents" : "hidden sm:contents";
   useEffect(() => {
-    const shortcuts: ShortcutTable = busy || kitchenSending ? {}
-      : { create: ariaKeyShortcut("create"), reset: ariaKeyShortcut("reset"),
+    const shortcuts: ShortcutTable = busy || kitchenSending ? { dismiss: ariaKeyShortcut("dismiss") }
+      : { reset: ariaKeyShortcut("reset"), dismiss: ariaKeyShortcut("dismiss"),
           ...(capture?.status === "draft" && !locked ? { search: ariaKeyShortcut("search") } : {}) };
     function onKeyDown(event: KeyboardEvent): void {
-      if (event.defaultPrevented || event.repeat || event.shiftKey) return;
-      const escape = event.key === "Escape" || event.code === "Escape";
-      if (escape && noteSheetLineId !== undefined) {
+      if (event.defaultPrevented || event.repeat) return;
+      // Escape runs a layer stack: the combobox and the product sheet close themselves first and
+      // call preventDefault, so only the note/no-sale dialogs and the focus reset remain here.
+      const bareEscape = (event.key === "Escape" || event.code === "Escape")
+        && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+      if (bareEscape && noteSheetLineId !== undefined) {
         event.preventDefault();
         setNoteSheetLineId(undefined); setNoteSheetDraft("");
         return;
       }
-      if (escape && noSaleOpen) { event.preventDefault(); cancelNoSale(); return; }
+      if (bareEscape && noSaleOpen) { event.preventDefault(); cancelNoSale(); return; }
       const target = event.target instanceof Element ? event.target : null;
       const id = dispatchShortcut({ key: event.key, code: event.code, ctrlKey: event.ctrlKey,
-        metaKey: event.metaKey, altKey: event.altKey, targetTag: target?.tagName,
+        metaKey: event.metaKey, altKey: event.altKey, shiftKey: event.shiftKey, targetTag: target?.tagName,
         targetIsEditable: target instanceof HTMLElement && target.isContentEditable }, shortcuts);
       if (id === undefined) return;
-      // Escape only closes overlays; leaving the draft for the tray is Alt+R (or the existing
-      // conflict/confirmed return), so a closed combobox in a draft never discards it.
-      if (id === "reset" && escape && capture?.status !== "confirmed" && error !== "conflict") return;
+      // With nothing else open, Escape never navigates or discards; it only releases the focus of
+      // the active field so the next keystroke stops typing into it.
+      if (id === "dismiss") {
+        if (document.activeElement instanceof HTMLElement) {
+          event.preventDefault();
+          document.activeElement.blur();
+        }
+        return;
+      }
       if (pending !== undefined && id !== "search") return;
       event.preventDefault();
-      if (id === "create") { if (capture === undefined) create(); else createAfterConfirmation(); }
-      else if (id === "reset") { if (capture === undefined) void run("tray", { schemaVersion: 2, scope, limit: 20 }); else reset(); }
+      if (id === "reset") { if (capture === undefined) void run("tray", { schemaVersion: 2, scope, limit: 20 }); else reset(); }
       else {
         if (window.matchMedia("(max-width: 639px)").matches && mobileStep !== "customer") setMobileStep("customer");
         window.requestAnimationFrame(() => searchInputRef.current?.focus());
@@ -1215,7 +1226,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
           <Field className="grid gap-1 text-sm" hint="Teléfono para avisarle cuando el pedido esté listo. Opcional." id="capture-pickup-phone" label="Teléfono (opcional)">{() => <input id="capture-pickup-phone" type="tel" maxLength={80} autoComplete="off" className={input}
             value={pickupPhone} onChange={(event) => setPickupPhone(event.target.value)} disabled={busy} />}</Field>
         </div>}
-        <button type="button" className={button} onClick={() => void createFromLanding()} aria-keyshortcuts={ariaKeyShortcut("create")}
+        <button type="button" className={button} onClick={() => void createFromLanding()}
           disabled={busy || !canStartCapture(fulfillmentChannel, landingCustomer !== undefined && landingContactId !== "", pickupName)}>
           {fulfillmentChannel === "delivery" && landingCustomer !== undefined
             ? `Nueva captura para ${landingCustomer.customer.displayName}` : "Nueva captura"}
@@ -1268,7 +1279,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
         {!kitchenLoading && kitchenNotice === undefined && kitchenDetail !== undefined && captureKitchenSend(kitchenDetail) === undefined &&
           <p role="status" className="mt-3 text-sm">No hay líneas pendientes que puedas enviar a cocina.</p>}
         <div className="mt-4 flex flex-wrap gap-3">
-          <button type="button" className={button} aria-keyshortcuts={ariaKeyShortcut("create")} disabled={kitchenSending || busy} onClick={createAfterConfirmation}>Nueva captura</button>
+          <button type="button" className={button} disabled={kitchenSending || busy} onClick={createAfterConfirmation}>Nueva captura</button>
           <a className={`${button} inline-flex items-center`} href={`/app/orders?orderId=${capture.confirmedOrderId}`}>Ver orden</a>
         </div>
       </section>}
@@ -1574,10 +1585,10 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     <details className={panel}>
       <summary className="flex min-h-11 cursor-pointer items-center font-semibold focus-visible:outline-2 focus-visible:outline-accent">Atajos</summary>
       <ul className="mt-2 grid gap-2 text-sm">
-        <li><kbd>Alt</kbd>+<kbd>N</kbd> — Nueva captura, incluso con otra abierta.</li>
+        <li><kbd>Alt</kbd>+<kbd>N</kbd> — Ir a Captura y enfocar el buscador de cliente.</li>
         <li><kbd>Ctrl</kbd>+<kbd>K</kbd> o <kbd>Alt</kbd>+<kbd>K</kbd> — Enfocar la búsqueda de cliente.</li>
-        <li><kbd>Esc</kbd> — Cerrar la lista, el diálogo o la hoja abierta.</li>
-        <li><kbd>Alt</kbd>+<kbd>R</kbd> — Volver a la bandeja.</li>
+        <li><kbd>Esc</kbd> — Cerrar la lista, la hoja o el diálogo abierto; si no hay nada abierto, quitar el foco del campo.</li>
+        <li><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> — Volver a la bandeja.</li>
       </ul>
     </details>
     {capture !== undefined && <p className="text-xs text-text-muted">Borrador {capture.folio} · versión {capture.version}</p>}

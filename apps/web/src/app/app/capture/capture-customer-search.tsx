@@ -98,7 +98,12 @@ export function CaptureCustomerSearch({ scope, disabled, inputRef, onSelect }: C
     setQuick({ mode, query: normalizeCustomerSearchQuery(mode, query) });
   }
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
-    if (event.key === "Escape") { close(); return; }
+    // Escape only consumes the event while this combobox is the open layer; otherwise it must
+    // reach the workspace so the next layer (product sheet, dialog) or the focus reset runs.
+    if (event.key === "Escape") {
+      if (open) { event.preventDefault(); close(); }
+      return;
+    }
     if (event.key === "Enter" && listVisible && active >= 0) {
       event.preventDefault();
       if (active < suggestions.length) chooseSuggestion(active);
@@ -125,7 +130,7 @@ export function CaptureCustomerSearch({ scope, disabled, inputRef, onSelect }: C
       </Field>
       <Field className="relative grid min-w-0 flex-1 gap-1 text-sm" hint="Escribe el teléfono, nombre o dirección; las sugerencias aparecen mientras escribes." id={`${baseId}-query`} label="Consulta">
         {(id) => <>
-          <input id={id} ref={field} role="combobox" aria-autocomplete="list" aria-expanded={listVisible}
+          <input id={id} ref={field} data-capture-customer-search role="combobox" aria-autocomplete="list" aria-expanded={listVisible}
             aria-controls={`${baseId}-listbox`} aria-label="Buscar cliente"
             aria-activedescendant={listVisible && active >= 0 ? `${baseId}-option-${active}` : undefined}
             aria-keyshortcuts={ariaKeyShortcut("search")} autoComplete="off" maxLength={200} disabled={disabled}
