@@ -1,16 +1,19 @@
 begin;
 
 -- pizza-model-v2 (P3-2): persistence for the Pizza V2 model of docs/architecture/PIZZA_MODEL_V2.md.
---   * app.menu_products gets the V2 columns (pizza_mode, free_ingredient_count, base_group_id,
---     default_ingredient_option_ids, customize_at_order, extra_group_ids). A legacy product keeps
+--   * app.menu_products gets the V2 columns (pizza_mode, free_ingredient_count, base_group_ids,
+--     default_ingredient_option_ids, customize_at_order, extra_option_ids). A legacy product keeps
 --     pizza_mode null and every other V2 column at its neutral value (CHECK); no legacy `fraction`
 --     configuration is migrated or inferred, and a V2 product cannot also carry a legacy fraction setup.
 --   * save_menu_catalog / build_menu_catalog_state / normalize_menu_catalog_payload round-trip the V2
---     fields and validate baseGroupId, extraGroupIds and defaultIngredientOptionIds by restaurant_id and
---     catalog_id (the groups must be assigned to the product in this very release; the recipe options
---     must belong to the base group). Arrays cannot carry foreign keys, and a foreign key from products
---     to groups would be checked before the groups are inserted, so the checks run in the function (the
---     same way the legacy fraction groups are checked) next to the table CHECKs.
+--     fields and validate baseGroupIds, extraOptionIds and defaultIngredientOptionIds by restaurant_id and
+--     catalog_id: every base group is assigned to the product in this very release, every extra option is
+--     offered by a group assigned to the product, every recipe option belongs to any of the base groups,
+--     and no option is both recipe and extra. The legacy input forms baseGroupId/extraGroupIds are parsed
+--     and normalized to baseGroupIds/extraOptionIds (the extra groups expand to their active options).
+--     Arrays cannot carry foreign keys, and a foreign key from products to groups would be checked before
+--     the groups are inserted, so the checks run in the function (the same way the legacy fraction groups
+--     are checked) next to the table CHECKs.
 --   * app_private.pizza_halves_price_v2 is the SQL twin of resolvePizzaHalvesPricing (packages/domain):
 --     same input/snapshot shape, same formula (N of the most expensive custom half, ties by smaller
 --     productId then half-a; dedupe by optionId before N; free = first N by price, groupId, optionId;
@@ -38,10 +41,10 @@ $function$;
 alter table app.menu_products
   add column pizza_mode text,
   add column free_ingredient_count integer not null default 0,
-  add column base_group_id uuid,
+  add column base_group_ids uuid[] not null default '{}'::uuid[],
   add column default_ingredient_option_ids uuid[] not null default '{}'::uuid[],
   add column customize_at_order boolean not null default false,
-  add column extra_group_ids uuid[] not null default '{}'::uuid[],
+  add column extra_option_ids uuid[] not null default '{}'::uuid[],
   add constraint menu_products_pizza_mode_valid
     check (pizza_mode is null or pizza_mode in ('specialty', 'custom')),
   add constraint menu_products_pizza_free_count_valid
@@ -49,39 +52,50 @@ alter table app.menu_products
   add constraint menu_products_pizza_arrays_valid check (
     pg_catalog.cardinality(default_ingredient_option_ids) <= 40
     and pg_catalog.array_position(default_ingredient_option_ids, null) is null
-    and pg_catalog.cardinality(extra_group_ids) <= 24
-    and pg_catalog.array_position(extra_group_ids, null) is null
+    and pg_catalog.cardinality(base_group_ids) <= 200
+    and pg_catalog.array_position(base_group_ids, null) is null
+    and pg_catalog.cardinality(extra_option_ids) <= 200
+    and pg_catalog.array_position(extra_option_ids, null) is null
     and app_private.uuid_array_is_set(default_ingredient_option_ids)
-    and app_private.uuid_array_is_set(extra_group_ids)
+    and app_private.uuid_array_is_set(base_group_ids)
+    and app_private.uuid_array_is_set(extra_option_ids)
   ),
   add constraint menu_products_pizza_legacy_neutral check (
     pizza_mode is not null or (
-      free_ingredient_count = 0 and base_group_id is null and not customize_at_order
+      free_ingredient_count = 0 and not customize_at_order
       and pg_catalog.cardinality(default_ingredient_option_ids) = 0
-      and pg_catalog.cardinality(extra_group_ids) = 0
+      and pg_catalog.cardinality(base_group_ids) = 0
+      and pg_catalog.cardinality(extra_option_ids) = 0
     )
   ),
   add constraint menu_products_pizza_custom_has_base
-    check (pizza_mode is distinct from 'custom' or base_group_id is not null),
+    check (pizza_mode is distinct from 'custom' or pg_catalog.cardinality(base_group_ids) > 0),
   add constraint menu_products_pizza_recipe_has_base
-    check (pg_catalog.cardinality(default_ingredient_option_ids) = 0 or base_group_id is not null),
-  add constraint menu_products_pizza_base_not_extra
-    check (base_group_id is null or not (base_group_id = any (extra_group_ids)));
+    check (pg_catalog.cardinality(default_ingredient_option_ids) = 0
+      or pg_catalog.cardinality(base_group_ids) > 0),
+  add constraint menu_products_pizza_option_roles
+    check (not (default_ingredient_option_ids && extra_option_ids));
 
--- Shape of the optional Pizza V2 fields of one product entry of a save_menu_catalog payload.
+-- Shape of the optional Pizza V2 fields of one product entry of a save_menu_catalog payload. The
+-- legacy `baseGroupId`/`extraGroupIds` forms are accepted next to the canonical `baseGroupIds`/
+-- `extraOptionIds` lists, never together; option-level membership is validated after the insert,
+-- against the release rows the function just wrote.
 create function app_private.menu_pizza_product_shape_valid(p_payload jsonb, p_product jsonb)
 returns boolean language plpgsql immutable set search_path = '' as $function$
 declare
   uuid_pattern constant text := '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
   mode_value jsonb := coalesce(p_product->'pizzaMode', 'null'::jsonb);
   group_ids jsonb := app_private.menu_product_group_ids(p_payload, p_product);
+  base_groups jsonb := coalesce(p_product->'baseGroupIds', '[]'::jsonb);
   base_group jsonb := coalesce(p_product->'baseGroupId', 'null'::jsonb);
-  extras jsonb := coalesce(p_product->'extraGroupIds', '[]'::jsonb);
+  extras jsonb := coalesce(p_product->'extraOptionIds', '[]'::jsonb);
+  extra_groups jsonb := coalesce(p_product->'extraGroupIds', '[]'::jsonb);
   defaults jsonb := coalesce(p_product->'defaultIngredientOptionIds', '[]'::jsonb);
 begin
   if mode_value = 'null'::jsonb then
     -- Fail closed: V2 fields without a mode are never silently dropped.
-    return not (p_product ?| array['freeIngredientCount','baseGroupId','defaultIngredientOptionIds','customizeAtOrder','extraGroupIds']);
+    return not (p_product ?| array['freeIngredientCount','baseGroupIds','baseGroupId',
+      'defaultIngredientOptionIds','customizeAtOrder','extraOptionIds','extraGroupIds']);
   end if;
   if pg_catalog.jsonb_typeof(mode_value) <> 'string' or (mode_value #>> '{}') not in ('specialty', 'custom') then
     return false;
@@ -94,21 +108,62 @@ begin
   if p_product ? 'customizeAtOrder' and pg_catalog.jsonb_typeof(p_product->'customizeAtOrder') <> 'boolean' then
     return false;
   end if;
+  -- Canonical base groups: a bounded list of distinct UUIDs assigned to this product; the legacy single
+  -- id is read only when the list is absent (emitting both is ambiguous).
+  if p_product ? 'baseGroupIds' and p_product ? 'baseGroupId' then return false; end if;
+  if p_product ? 'baseGroupIds' and pg_catalog.jsonb_typeof(p_product->'baseGroupIds') <> 'array' then
+    return false;
+  end if;
+  if pg_catalog.jsonb_typeof(base_groups) <> 'array' or pg_catalog.jsonb_array_length(base_groups) > 200 then
+    return false;
+  end if;
+  if exists (
+    select 1 from pg_catalog.jsonb_array_elements(base_groups) as entry(value)
+    where pg_catalog.jsonb_typeof(entry.value) <> 'string'
+      or not ((entry.value #>> '{}') ~* uuid_pattern)
+      or not (group_ids @> pg_catalog.jsonb_build_array(entry.value))
+  ) or (select pg_catalog.count(distinct entry.value) from pg_catalog.jsonb_array_elements(base_groups) as entry(value))
+    <> pg_catalog.jsonb_array_length(base_groups)
+  then return false; end if;
   if pg_catalog.jsonb_typeof(base_group) not in ('null', 'string') then return false; end if;
   if pg_catalog.jsonb_typeof(base_group) = 'string' and not (
     (base_group #>> '{}') ~* uuid_pattern and group_ids @> pg_catalog.jsonb_build_array(base_group)
   ) then return false; end if;
-  if (mode_value #>> '{}') = 'custom' and pg_catalog.jsonb_typeof(base_group) <> 'string' then return false; end if;
-  if pg_catalog.jsonb_typeof(extras) <> 'array' or pg_catalog.jsonb_array_length(extras) > 24 then return false; end if;
+  if (mode_value #>> '{}') = 'custom' and pg_catalog.jsonb_array_length(base_groups) = 0
+    and pg_catalog.jsonb_typeof(base_group) <> 'string' then return false; end if;
+  -- Canonical extra options: a bounded list of distinct UUIDs (membership belongs to the release check).
+  if p_product ? 'extraOptionIds' and pg_catalog.jsonb_typeof(p_product->'extraOptionIds') <> 'array' then
+    return false;
+  end if;
+  if pg_catalog.jsonb_typeof(extras) <> 'array' or pg_catalog.jsonb_array_length(extras) > 200 then
+    return false;
+  end if;
   if exists (
     select 1 from pg_catalog.jsonb_array_elements(extras) as entry(value)
-    where pg_catalog.jsonb_typeof(entry.value) <> 'string'
-      or not ((entry.value #>> '{}') ~* uuid_pattern)
-      or not (group_ids @> pg_catalog.jsonb_build_array(entry.value))
-      or entry.value = base_group
+    where pg_catalog.jsonb_typeof(entry.value) <> 'string' or not ((entry.value #>> '{}') ~* uuid_pattern)
   ) or (select pg_catalog.count(distinct entry.value) from pg_catalog.jsonb_array_elements(extras) as entry(value))
     <> pg_catalog.jsonb_array_length(extras)
   then return false; end if;
+  -- Legacy extra groups: bounded, distinct and assigned to the product; never next to the option list.
+  if p_product ? 'extraOptionIds' and p_product ? 'extraGroupIds' then return false; end if;
+  if p_product ? 'extraGroupIds' and pg_catalog.jsonb_typeof(p_product->'extraGroupIds') <> 'array' then
+    return false;
+  end if;
+  if pg_catalog.jsonb_typeof(extra_groups) <> 'array' or pg_catalog.jsonb_array_length(extra_groups) > 24 then
+    return false;
+  end if;
+  if exists (
+    select 1 from pg_catalog.jsonb_array_elements(extra_groups) as entry(value)
+    where pg_catalog.jsonb_typeof(entry.value) <> 'string'
+      or not ((entry.value #>> '{}') ~* uuid_pattern)
+      or not (group_ids @> pg_catalog.jsonb_build_array(entry.value))
+  ) or (select pg_catalog.count(distinct entry.value) from pg_catalog.jsonb_array_elements(extra_groups) as entry(value))
+    <> pg_catalog.jsonb_array_length(extra_groups)
+  then return false; end if;
+  -- Recipe option ids: bounded and distinct; the base-group membership is checked against the release and
+  -- an option cannot be both part of the recipe and a charged extra.
+  if p_product ? 'defaultIngredientOptionIds'
+    and pg_catalog.jsonb_typeof(p_product->'defaultIngredientOptionIds') <> 'array' then return false; end if;
   if pg_catalog.jsonb_typeof(defaults) <> 'array' or pg_catalog.jsonb_array_length(defaults) > 40 then return false; end if;
   if exists (
     select 1 from pg_catalog.jsonb_array_elements(defaults) as entry(value)
@@ -116,19 +171,46 @@ begin
   ) or (select pg_catalog.count(distinct entry.value) from pg_catalog.jsonb_array_elements(defaults) as entry(value))
     <> pg_catalog.jsonb_array_length(defaults)
   then return false; end if;
-  if pg_catalog.jsonb_array_length(defaults) > 0 and pg_catalog.jsonb_typeof(base_group) <> 'string' then return false; end if;
+  if exists (
+    select 1 from pg_catalog.jsonb_array_elements(defaults) as entry(value)
+    where extras @> pg_catalog.jsonb_build_array(entry.value)
+  ) then return false; end if;
+  if pg_catalog.jsonb_array_length(defaults) > 0 and pg_catalog.jsonb_array_length(base_groups) = 0
+    and pg_catalog.jsonb_typeof(base_group) <> 'string' then return false; end if;
   return true;
 end $function$;
 
--- Replay equivalence: an absent mode equals an explicit null; a V2 product gets its neutral defaults.
-create function app_private.normalize_menu_pizza_product(p_product jsonb)
+-- Replay equivalence: an absent mode equals an explicit null; a V2 product is rewritten to its canonical
+-- lists (legacy baseGroupId -> [id], extraGroupIds -> their active option ids, in payload order).
+create function app_private.normalize_menu_pizza_product(p_payload jsonb, p_product jsonb)
 returns jsonb language sql immutable set search_path = '' as $function$
   select case when coalesce(p_product->'pizzaMode', 'null'::jsonb) = 'null'::jsonb
     then p_product - 'pizzaMode'
     else pg_catalog.jsonb_build_object(
-      'freeIngredientCount', 0, 'baseGroupId', null, 'defaultIngredientOptionIds', '[]'::jsonb,
-      'customizeAtOrder', false, 'extraGroupIds', '[]'::jsonb
-    ) || p_product end
+      'baseGroupIds', case
+        when p_product ? 'baseGroupIds' then p_product->'baseGroupIds'
+        when coalesce(p_product->'baseGroupId', 'null'::jsonb) <> 'null'::jsonb
+          then pg_catalog.jsonb_build_array(p_product->'baseGroupId')
+        else '[]'::jsonb end,
+      'freeIngredientCount', coalesce(p_product->'freeIngredientCount', '0'::jsonb),
+      'defaultIngredientOptionIds', coalesce(p_product->'defaultIngredientOptionIds', '[]'::jsonb),
+      'customizeAtOrder', coalesce(p_product->'customizeAtOrder', 'false'::jsonb),
+      'extraOptionIds', case
+        when p_product ? 'extraOptionIds' then p_product->'extraOptionIds'
+        when p_product ? 'extraGroupIds' then coalesce((
+          select pg_catalog.jsonb_agg(option_row.value->'optionId' order by requested_group.ord, option_row.ord)
+          from pg_catalog.jsonb_array_elements(p_product->'extraGroupIds') with ordinality as requested_group(value, ord)
+          cross join lateral (
+            select grp.value from pg_catalog.jsonb_array_elements(p_payload->'modifierGroups') as grp(value)
+            where grp.value->>'groupId' = requested_group.value #>> '{}'
+          ) as matched_group(value)
+          cross join lateral pg_catalog.jsonb_array_elements(matched_group.value->'options')
+            with ordinality as option_row(value, ord)
+          where coalesce((option_row.value->>'active')::boolean, false)
+        ), '[]'::jsonb)
+        else '[]'::jsonb end
+    ) || (p_product - 'baseGroupId' - 'extraGroupIds')
+  end
 $function$;
 
 -- SQL twin of resolvePizzaHalvesPricing. Input: {ruleVersion, currency, halves:[{fraction, productId,
@@ -413,7 +495,7 @@ begin
       where not (removed.id::uuid = any (half_product.default_ingredient_option_ids))
     ) then return null; end if;
 
-    -- Chosen ingredients come from the base group of the half's own product; a request that does not
+    -- Chosen ingredients come from any base group of the half's own product; a request that does not
     -- resolve to exactly one active option of an active group is a conflict (duplicates stay visible
     -- to the pricing rules).
     select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
@@ -423,13 +505,16 @@ begin
     into ingredients, matched
     from pg_catalog.jsonb_array_elements_text(half->'ingredientOptionIds') with ordinality as requested(id, ordinality)
     join app.menu_modifier_options option_record on option_record.restaurant_id = p_restaurant
-      and option_record.catalog_id = p_catalog and option_record.group_id = half_product.base_group_id
+      and option_record.catalog_id = p_catalog
+      and option_record.group_id = any (half_product.base_group_ids)
       and option_record.id = requested.id::uuid and option_record.active
     join app.menu_modifier_groups option_group on option_group.restaurant_id = option_record.restaurant_id
       and option_group.catalog_id = option_record.catalog_id and option_group.id = option_record.group_id
       and option_group.active;
     if matched <> pg_catalog.jsonb_array_length(half->'ingredientOptionIds') then return null; end if;
 
+    -- Extras are the product's own loose charged options (extraOptionIds), whatever group offers them:
+    -- the role is decided by the list the id arrives in, never by the group.
     select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
         'optionId', option_record.id::text, 'groupId', option_record.group_id::text,
         'name', option_record.name, 'priceMinor', option_record.unit_price_minor
@@ -437,7 +522,8 @@ begin
     into extras, matched
     from pg_catalog.jsonb_array_elements_text(half->'extraOptionIds') with ordinality as requested(id, ordinality)
     join app.menu_modifier_options option_record on option_record.restaurant_id = p_restaurant
-      and option_record.catalog_id = p_catalog and option_record.group_id = any (half_product.extra_group_ids)
+      and option_record.catalog_id = p_catalog
+      and option_record.id = any (half_product.extra_option_ids)
       and option_record.id = requested.id::uuid and option_record.active
     join app.menu_modifier_groups option_group on option_group.restaurant_id = option_record.restaurant_id
       and option_group.catalog_id = option_record.catalog_id and option_group.id = option_record.group_id
@@ -467,39 +553,50 @@ exception when invalid_text_representation or invalid_parameter_value or numeric
   return null;
 end $function$;
 
--- Min/max of the pizza groups, per half and per group: the chosen ingredients of a custom half are
--- counted against its base group, the chosen extras against the extra group each option belongs to.
--- The minimum of a group only binds where the half can actually choose from it: ingredients of a custom
--- half, extras of a custom half or of a specialty that is customizable at order time; the maximum always binds.
--- Missing products/groups return false (the builder reports the same catalog conflict).
+-- Min/max of the pizza groups, per half and per group: the chosen ingredients of a half are counted
+-- against each of its product's base groups, the chosen extras against the group each declared extra
+-- option belongs to. The minimum of a group only binds where the half can actually choose from it:
+-- ingredients of a custom half, extras of a custom half or of a specialty that is customizable at order
+-- time; the maximum always binds. Missing products/groups return false (the builder reports the same
+-- catalog conflict).
 create function app_private.pizza_quantities_valid(
   p_restaurant uuid, p_catalog uuid, p_line jsonb
 ) returns boolean language plpgsql stable set search_path = '' as $function$
 declare
   half jsonb; half_product app.menu_products%rowtype; group_record app.menu_modifier_groups%rowtype;
-  chosen integer; extra_group_id uuid;
+  chosen integer; base_group_id uuid; extra_group_id uuid;
 begin
   if p_line is null or pg_catalog.jsonb_typeof(p_line->'pizza'->'halves') is distinct from 'array' then return false; end if;
   for half in select entry.value from pg_catalog.jsonb_array_elements(p_line->'pizza'->'halves') as entry(value) loop
     select product_record.* into half_product from app.menu_products product_record
     where product_record.restaurant_id = p_restaurant and product_record.catalog_id = p_catalog
       and product_record.id = (half->>'productId')::uuid;
-    if not found or half_product.base_group_id is null then return false; end if;
+    if not found or half_product.pizza_mode is null then return false; end if;
 
-    select g.* into group_record from app.menu_modifier_groups g
-    where g.restaurant_id = p_restaurant and g.catalog_id = p_catalog and g.id = half_product.base_group_id;
-    if not found then return false; end if;
-    chosen := pg_catalog.jsonb_array_length(half->'ingredientOptionIds');
-    if chosen > group_record.maximum_quantity
-      or (half_product.pizza_mode = 'custom' and chosen < group_record.minimum_quantity)
-    then return false; end if;
+    foreach base_group_id in array half_product.base_group_ids loop
+      select g.* into group_record from app.menu_modifier_groups g
+      where g.restaurant_id = p_restaurant and g.catalog_id = p_catalog and g.id = base_group_id;
+      if not found then return false; end if;
+      select pg_catalog.count(*)::integer into chosen
+      from pg_catalog.jsonb_array_elements_text(half->'ingredientOptionIds') as requested(id)
+      join app.menu_modifier_options option_record on option_record.restaurant_id = p_restaurant
+        and option_record.catalog_id = p_catalog and option_record.group_id = base_group_id
+        and option_record.id = requested.id::uuid;
+      if chosen > group_record.maximum_quantity
+        or (half_product.pizza_mode = 'custom' and chosen < group_record.minimum_quantity)
+      then return false; end if;
+    end loop;
 
-    foreach extra_group_id in array half_product.extra_group_ids loop
+    for extra_group_id in
+      select distinct option_record.group_id from app.menu_modifier_options option_record
+      where option_record.restaurant_id = p_restaurant and option_record.catalog_id = p_catalog
+        and option_record.id = any (half_product.extra_option_ids)
+    loop
       select g.* into group_record from app.menu_modifier_groups g
       where g.restaurant_id = p_restaurant and g.catalog_id = p_catalog and g.id = extra_group_id;
       if not found then return false; end if;
       select pg_catalog.count(*)::integer into chosen
-      from pg_catalog.jsonb_array_elements_text(half->'extraOptionIds') requested(id)
+      from pg_catalog.jsonb_array_elements_text(half->'extraOptionIds') as requested(id)
       join app.menu_modifier_options option_record on option_record.restaurant_id = p_restaurant
         and option_record.catalog_id = p_catalog and option_record.group_id = extra_group_id
         and option_record.id = requested.id::uuid;
@@ -518,13 +615,13 @@ alter function app_private.pizza_quantities_valid(uuid, uuid, jsonb) owner to po
 revoke all on function app_private.pizza_quantities_valid(uuid, uuid, jsonb) from public, anon, authenticated, service_role, app_api;
 alter function app_private.uuid_array_is_set(uuid[]) owner to postgres;
 alter function app_private.menu_pizza_product_shape_valid(jsonb, jsonb) owner to postgres;
-alter function app_private.normalize_menu_pizza_product(jsonb) owner to postgres;
+alter function app_private.normalize_menu_pizza_product(jsonb, jsonb) owner to postgres;
 alter function app_private.pizza_halves_price_v2(jsonb) owner to postgres;
 alter function app_private.pizza_selection_line_shape_valid(jsonb) owner to postgres;
 alter function app_private.build_pizza_halves_input_v2(uuid, uuid, text, jsonb) owner to postgres;
 revoke all on function app_private.uuid_array_is_set(uuid[]) from public, anon, authenticated, service_role, app_api;
 revoke all on function app_private.menu_pizza_product_shape_valid(jsonb, jsonb) from public, anon, authenticated, service_role, app_api;
-revoke all on function app_private.normalize_menu_pizza_product(jsonb) from public, anon, authenticated, service_role, app_api;
+revoke all on function app_private.normalize_menu_pizza_product(jsonb, jsonb) from public, anon, authenticated, service_role, app_api;
 revoke all on function app_private.pizza_halves_price_v2(jsonb) from public, anon, authenticated, service_role, app_api;
 revoke all on function app_private.pizza_selection_line_shape_valid(jsonb) from public, anon, authenticated, service_role, app_api;
 revoke all on function app_private.build_pizza_halves_input_v2(uuid, uuid, text, jsonb) from public, anon, authenticated, service_role, app_api;
@@ -611,10 +708,10 @@ begin
         ) || case when product.pizza_mode is null then '{}'::jsonb else pg_catalog.jsonb_build_object(
           'pizzaMode', product.pizza_mode,
           'freeIngredientCount', product.free_ingredient_count,
-          'baseGroupId', product.base_group_id::text,
+          'baseGroupIds', coalesce(pg_catalog.to_jsonb(product.base_group_ids), '[]'::jsonb),
           'defaultIngredientOptionIds', coalesce(pg_catalog.to_jsonb(product.default_ingredient_option_ids), '[]'::jsonb),
           'customizeAtOrder', product.customize_at_order,
-          'extraGroupIds', coalesce(pg_catalog.to_jsonb(product.extra_group_ids), '[]'::jsonb)
+          'extraOptionIds', coalesce(pg_catalog.to_jsonb(product.extra_option_ids), '[]'::jsonb)
         ) end order by product.display_order, product.id::text)
         from app.menu_products as product
         where product.restaurant_id = catalog.restaurant_id and product.catalog_id = catalog.id
@@ -711,7 +808,7 @@ returns jsonb language sql immutable set search_path = '' as $function$
         order by stripped.ord)
       from (
         select entry.ord,
-          app_private.normalize_menu_pizza_product((case
+          app_private.normalize_menu_pizza_product(p_payload, (case
             when entry.value ? 'fraction' and entry.value->'fraction' <> 'null'::jsonb then
               pg_catalog.jsonb_set(
                 entry.value,
@@ -759,6 +856,7 @@ declare
   preset jsonb;
   modifier_group jsonb;
   modifier_option jsonb;
+  canonical_product jsonb;
   existing_audit app.menu_catalog_audit_events%rowtype;
   current_version bigint;
   next_version bigint;
@@ -814,8 +912,8 @@ begin
     select 1 from pg_catalog.jsonb_array_elements(p_payload->'products') as entry(value)
     where not app_private.jsonb_has_exact_keys(
       entry.value - 'imagePath' - 'variants' - 'fraction' - 'modifierGroupIds'
-        - 'pizzaMode' - 'freeIngredientCount' - 'baseGroupId' - 'defaultIngredientOptionIds'
-        - 'customizeAtOrder' - 'extraGroupIds',
+        - 'pizzaMode' - 'freeIngredientCount' - 'baseGroupIds' - 'baseGroupId'
+        - 'defaultIngredientOptionIds' - 'customizeAtOrder' - 'extraOptionIds' - 'extraGroupIds',
       array['productId','categoryId','name','sku','active','displayOrder','stationId','unit','unitPriceMinor','tax']
     ) or not app_private.menu_pizza_product_shape_valid(p_payload, entry.value)
       or (entry.value ? 'modifierGroupIds' and not (
@@ -1013,13 +1111,16 @@ begin
     end loop;
 
     for product in select value from pg_catalog.jsonb_array_elements(p_payload->'products') loop
+      -- Canonical Pizza V2 fields: a legacy payload is rewritten to baseGroupIds/extraOptionIds before it is
+      -- stored, so the round-trip never depends on the input form.
+      canonical_product := app_private.normalize_menu_pizza_product(p_payload, product);
       insert into app.menu_products (
         restaurant_id, catalog_id, id, category_id, name, sku, active, display_order, station_id, unit,
         unit_price_minor, tax_id, tax_name, tax_rule_version, tax_rate_numerator, tax_rate_denominator, tax_inclusion,
         image_path, fraction_enabled, fraction_flavor_group_id, fraction_extra_group_id,
         fraction_excludable_ingredient_ids, fraction_locked_ingredient_option_ids,
-        pizza_mode, free_ingredient_count, base_group_id, default_ingredient_option_ids,
-        customize_at_order, extra_group_ids
+        pizza_mode, free_ingredient_count, base_group_ids, default_ingredient_option_ids,
+        customize_at_order, extra_option_ids
       ) values (
         p_restaurant_id, p_catalog_id, (product->>'productId')::uuid, (product->>'categoryId')::uuid,
         product->>'name', product->>'sku', (product->>'active')::boolean, (product->>'displayOrder')::integer,
@@ -1040,18 +1141,22 @@ begin
           from pg_catalog.jsonb_array_elements_text(product->'fraction'->'lockedIngredientOptionIds')
             with ordinality as opt_id(value, ordinality)
         ), '{}'::uuid[]),
-        product->>'pizzaMode',
-        coalesce((product->>'freeIngredientCount')::integer, 0),
-        (product->>'baseGroupId')::uuid,
+        canonical_product->>'pizzaMode',
+        coalesce((canonical_product->>'freeIngredientCount')::integer, 0),
+        coalesce((
+          select pg_catalog.array_agg(base_id.value::uuid order by base_id.ordinality)
+          from pg_catalog.jsonb_array_elements_text(coalesce(canonical_product->'baseGroupIds', '[]'::jsonb))
+            with ordinality as base_id(value, ordinality)
+        ), '{}'::uuid[]),
         coalesce((
           select pg_catalog.array_agg(default_id.value::uuid order by default_id.ordinality)
-          from pg_catalog.jsonb_array_elements_text(coalesce(product->'defaultIngredientOptionIds', '[]'::jsonb))
+          from pg_catalog.jsonb_array_elements_text(coalesce(canonical_product->'defaultIngredientOptionIds', '[]'::jsonb))
             with ordinality as default_id(value, ordinality)
         ), '{}'::uuid[]),
-        coalesce((product->>'customizeAtOrder')::boolean, false),
+        coalesce((canonical_product->>'customizeAtOrder')::boolean, false),
         coalesce((
           select pg_catalog.array_agg(extra_id.value::uuid order by extra_id.ordinality)
-          from pg_catalog.jsonb_array_elements_text(coalesce(product->'extraGroupIds', '[]'::jsonb))
+          from pg_catalog.jsonb_array_elements_text(coalesce(canonical_product->'extraOptionIds', '[]'::jsonb))
             with ordinality as extra_id(value, ordinality)
         ), '{}'::uuid[])
       );
@@ -1287,24 +1392,13 @@ begin
         and product.fraction_enabled and variant.fraction_enabled
     ) then raise exception using errcode = '23514', message = 'MENU_FRACTION_DUPLICATE_SOURCE'; end if;
 
-    -- Pizza V2: the base and extra groups belong to this restaurant and catalog release and are assigned
-    -- to the very same product; the recipe options belong to the base group; V2 and the legacy
-    -- half-and-half setup are mutually exclusive on a product (one source of truth).
+    -- Pizza V2: every base group belongs to this restaurant and catalog release and is assigned to the
+    -- very same product; every extra option is offered by a group assigned to the product; every recipe
+    -- option belongs to any of the base groups; no option is both recipe and extra (table CHECK); V2 and
+    -- the legacy half-and-half setup are mutually exclusive on a product (one source of truth).
     if exists (
       select 1 from app.menu_products as product
-      where product.restaurant_id = p_restaurant_id and product.catalog_id = p_catalog_id
-        and product.base_group_id is not null and not exists (
-          select 1 from app.menu_modifier_groups as pizza_group
-          join app.menu_product_modifier_groups as pizza_assignment
-            on pizza_assignment.restaurant_id = pizza_group.restaurant_id
-           and pizza_assignment.catalog_id = pizza_group.catalog_id
-           and pizza_assignment.group_id = pizza_group.id
-          where pizza_group.restaurant_id = product.restaurant_id and pizza_group.catalog_id = product.catalog_id
-            and pizza_group.id = product.base_group_id and pizza_assignment.product_id = product.id)
-    ) then raise exception using errcode = '23514', message = 'MENU_PIZZA_BASE_GROUP_FOREIGN'; end if;
-    if exists (
-      select 1 from app.menu_products as product
-      cross join lateral pg_catalog.unnest(product.extra_group_ids) as extra_group(id)
+      cross join lateral pg_catalog.unnest(product.base_group_ids) as base_group(id)
       where product.restaurant_id = p_restaurant_id and product.catalog_id = p_catalog_id
         and not exists (
           select 1 from app.menu_modifier_groups as pizza_group
@@ -1313,18 +1407,32 @@ begin
            and pizza_assignment.catalog_id = pizza_group.catalog_id
            and pizza_assignment.group_id = pizza_group.id
           where pizza_group.restaurant_id = product.restaurant_id and pizza_group.catalog_id = product.catalog_id
-            and pizza_group.id = extra_group.id and pizza_assignment.product_id = product.id)
-    ) then raise exception using errcode = '23514', message = 'MENU_PIZZA_EXTRA_GROUP_FOREIGN'; end if;
+            and pizza_group.id = base_group.id and pizza_assignment.product_id = product.id)
+    ) then raise exception using errcode = '23514', message = 'MENU_PIZZA_BASE_GROUP_FOREIGN'; end if;
+    if exists (
+      select 1 from app.menu_products as product
+      cross join lateral pg_catalog.unnest(product.extra_option_ids) as extra_option(id)
+      where product.restaurant_id = p_restaurant_id and product.catalog_id = p_catalog_id
+        and not exists (
+          select 1 from app.menu_modifier_options as extra_catalog_option
+          join app.menu_product_modifier_groups as pizza_assignment
+            on pizza_assignment.restaurant_id = extra_catalog_option.restaurant_id
+           and pizza_assignment.catalog_id = extra_catalog_option.catalog_id
+           and pizza_assignment.group_id = extra_catalog_option.group_id
+          where extra_catalog_option.restaurant_id = product.restaurant_id
+            and extra_catalog_option.catalog_id = product.catalog_id
+            and extra_catalog_option.id = extra_option.id and pizza_assignment.product_id = product.id)
+    ) then raise exception using errcode = '23514', message = 'MENU_PIZZA_EXTRA_OPTION_FOREIGN'; end if;
     if exists (
       select 1 from app.menu_products as product
       cross join lateral pg_catalog.unnest(product.default_ingredient_option_ids) as default_option(id)
       where product.restaurant_id = p_restaurant_id and product.catalog_id = p_catalog_id
         and not exists (
-          select 1 from app.menu_modifier_options as modifier_option
-          where modifier_option.restaurant_id = product.restaurant_id
-            and modifier_option.catalog_id = product.catalog_id
-            and modifier_option.group_id = product.base_group_id
-            and modifier_option.id = default_option.id)
+          select 1 from app.menu_modifier_options as recipe_catalog_option
+          where recipe_catalog_option.restaurant_id = product.restaurant_id
+            and recipe_catalog_option.catalog_id = product.catalog_id
+            and recipe_catalog_option.group_id = any (product.base_group_ids)
+            and recipe_catalog_option.id = default_option.id)
     ) then raise exception using errcode = '23514', message = 'MENU_PIZZA_DEFAULT_FOREIGN'; end if;
     if exists (
       select 1 from app.menu_products as product
@@ -1893,8 +2001,9 @@ begin
       end if;
 
       -- Pizza V2 (plan schemaVersion 2): priced by the versioned halves rule from the catalog release.
-      -- The line names half-a's product and size; the base and extra groups of that product are priced
-      -- by the rule and must arrive with empty selections, exactly like the legacy fraction groups.
+      -- The line names half-a's product and size; the base groups of that product and the groups holding
+      -- its extra options are priced by the rule and must arrive with empty selections, exactly like the
+      -- legacy fraction groups.
       line_pizza := null;
       pizza_modifiers := '[]'::jsonb;
       if line_record.value ? 'pizza' then
@@ -1906,9 +2015,12 @@ begin
         elsif line_pizza->>'ruleVersion' is distinct from 'pizza-halves-v2' then
           return pg_catalog.jsonb_build_object('status','conflict','reason','rule_version_unknown');
         end if;
-        fraction_group_ids := pg_catalog.array_remove(
-          array[product.base_group_id] || product.extra_group_ids, null
-        );
+        fraction_group_ids := pg_catalog.array_remove(product.base_group_ids || coalesce((
+          select pg_catalog.array_agg(distinct pizza_extra_option.group_id)
+          from app.menu_modifier_options pizza_extra_option
+          where pizza_extra_option.restaurant_id=restaurant and pizza_extra_option.catalog_id=catalog
+            and pizza_extra_option.id = any (product.extra_option_ids)
+        ), '{}'::uuid[]), null);
         pizza_input := app_private.build_pizza_halves_input_v2(restaurant,catalog,catalog_currency,line_record.value);
         if pizza_input is null then return pg_catalog.jsonb_build_object('status','conflict'); end if;
         if not app_private.pizza_quantities_valid(restaurant,catalog,line_record.value)
@@ -1948,7 +2060,7 @@ begin
           join app.menu_products removed_product on removed_product.restaurant_id=restaurant
             and removed_product.catalog_id=catalog and removed_product.id=(pizza_half.value->>'productId')::uuid
           join app.menu_modifier_options removed_option on removed_option.restaurant_id=restaurant
-            and removed_option.catalog_id=catalog and removed_option.group_id=removed_product.base_group_id
+            and removed_option.catalog_id=catalog and removed_option.group_id = any (removed_product.base_group_ids)
             and removed_option.id=removed.value::uuid
         ),'[]'::jsonb);
       end if;

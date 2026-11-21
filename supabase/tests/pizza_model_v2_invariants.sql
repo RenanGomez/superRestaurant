@@ -73,15 +73,20 @@ declare
   catalog_a uuid := gen_random_uuid(); category_a uuid := gen_random_uuid(); foreign_product uuid := gen_random_uuid();
   save_catalog uuid := gen_random_uuid(); s_cat uuid := gen_random_uuid();
   sp_custom uuid := gen_random_uuid(); sp_legacy uuid := gen_random_uuid();
-  sg_base uuid := gen_random_uuid(); sg_extra uuid := gen_random_uuid(); sg_other uuid := gen_random_uuid();
-  so_1 uuid := gen_random_uuid(); so_2 uuid := gen_random_uuid(); so_x uuid := gen_random_uuid(); so_o uuid := gen_random_uuid();
+  sg_base uuid := gen_random_uuid(); sg_base2 uuid := gen_random_uuid(); sg_extra uuid := gen_random_uuid();
+  sg_other uuid := gen_random_uuid();
+  so_1 uuid := gen_random_uuid(); so_2 uuid := gen_random_uuid(); so_3 uuid := gen_random_uuid();
+  so_bx uuid := gen_random_uuid(); so_x uuid := gen_random_uuid(); so_o uuid := gen_random_uuid();
   -- confirm fixtures
   restaurant uuid := gen_random_uuid(); branch uuid := gen_random_uuid(); membership uuid := gen_random_uuid();
   catalog uuid := gen_random_uuid(); category uuid := gen_random_uuid();
   p1 uuid := gen_random_uuid(); p2 uuid := gen_random_uuid(); spec uuid := gen_random_uuid(); spec_locked uuid := gen_random_uuid();
   p3 uuid := gen_random_uuid(); p4 uuid := gen_random_uuid(); p_legacy uuid := gen_random_uuid();
-  g_base uuid := gen_random_uuid(); g_extra uuid := gen_random_uuid(); g_bx uuid := gen_random_uuid(); g_by uuid := gen_random_uuid();
+  pz uuid := gen_random_uuid();
+  g_base uuid := gen_random_uuid(); g_base2 uuid := gen_random_uuid();
+  g_extra uuid := gen_random_uuid(); g_bx uuid := gen_random_uuid(); g_by uuid := gen_random_uuid();
   o_a uuid := gen_random_uuid(); o_b uuid := gen_random_uuid(); o_c uuid := gen_random_uuid(); o_e uuid := gen_random_uuid();
+  o_d uuid := gen_random_uuid(); o_g uuid := gen_random_uuid();
   o_conf uuid := gen_random_uuid();
   pq uuid := gen_random_uuid(); g_min uuid := gen_random_uuid(); g_xmax uuid := gen_random_uuid();
   m1 uuid := gen_random_uuid(); m2 uuid := gen_random_uuid(); m3 uuid := gen_random_uuid();
@@ -233,10 +238,11 @@ begin
       pg_catalog.jsonb_build_object(
         'productId',sp_custom::text,'categoryId',s_cat::text,'name','Pizza armada','sku',null,'active',true,'displayOrder',0,
         'stationId','kitchen','unit','piece','unitPriceMinor',12000,'tax',null,
-        'pizzaMode','custom','freeIngredientCount',2,'baseGroupId',sg_base::text,
-        'defaultIngredientOptionIds',pg_catalog.jsonb_build_array(so_1::text),'customizeAtOrder',true,
-        'extraGroupIds',pg_catalog.jsonb_build_array(sg_extra::text),
-        'modifierGroupIds',pg_catalog.jsonb_build_array(sg_base::text,sg_extra::text)),
+        'pizzaMode','custom','freeIngredientCount',2,
+        'baseGroupIds',pg_catalog.jsonb_build_array(sg_base::text,sg_base2::text),
+        'defaultIngredientOptionIds',pg_catalog.jsonb_build_array(so_1::text,so_3::text),'customizeAtOrder',true,
+        'extraOptionIds',pg_catalog.jsonb_build_array(so_x::text,so_bx::text),
+        'modifierGroupIds',pg_catalog.jsonb_build_array(sg_base::text,sg_base2::text,sg_extra::text)),
       pg_catalog.jsonb_build_object(
         'productId',sp_legacy::text,'categoryId',s_cat::text,'name','Refresco','sku',null,'active',true,'displayOrder',1,
         'stationId','bar','unit','piece','unitPriceMinor',100,'tax',null,
@@ -246,12 +252,16 @@ begin
       pg_catalog.jsonb_build_object('groupId',sg_base::text,'productId',null,'name','Ingredientes','active',true,
         'displayOrder',0,'minimumQuantity',0,'maximumQuantity',40,'options',pg_catalog.jsonb_build_array(
           pg_catalog.jsonb_build_object('optionId',so_1::text,'name','Queso','unitPriceMinor',2500,'active',true,'maximumQuantity',null),
-          pg_catalog.jsonb_build_object('optionId',so_2::text,'name','Jamon','unitPriceMinor',3000,'active',true,'maximumQuantity',null))),
+          pg_catalog.jsonb_build_object('optionId',so_2::text,'name','Jamon','unitPriceMinor',3000,'active',true,'maximumQuantity',null),
+          pg_catalog.jsonb_build_object('optionId',so_bx::text,'name','Extra desde base','unitPriceMinor',1500,'active',true,'maximumQuantity',null))),
+      pg_catalog.jsonb_build_object('groupId',sg_base2::text,'productId',null,'name','Vegetales','active',true,
+        'displayOrder',1,'minimumQuantity',0,'maximumQuantity',40,'options',pg_catalog.jsonb_build_array(
+          pg_catalog.jsonb_build_object('optionId',so_3::text,'name','Pina','unitPriceMinor',2000,'active',true,'maximumQuantity',null))),
       pg_catalog.jsonb_build_object('groupId',sg_extra::text,'productId',null,'name','Extras','active',true,
-        'displayOrder',1,'minimumQuantity',0,'maximumQuantity',10,'options',pg_catalog.jsonb_build_array(
+        'displayOrder',2,'minimumQuantity',0,'maximumQuantity',10,'options',pg_catalog.jsonb_build_array(
           pg_catalog.jsonb_build_object('optionId',so_x::text,'name','Orilla de queso','unitPriceMinor',4000,'active',true,'maximumQuantity',null))),
       pg_catalog.jsonb_build_object('groupId',sg_other::text,'productId',null,'name','Hielo','active',true,
-        'displayOrder',2,'minimumQuantity',0,'maximumQuantity',1,'options',pg_catalog.jsonb_build_array(
+        'displayOrder',3,'minimumQuantity',0,'maximumQuantity',1,'options',pg_catalog.jsonb_build_array(
           pg_catalog.jsonb_build_object('optionId',so_o::text,'name','Con hielo','unitPriceMinor',0,'active',true,'maximumQuantity',null)))
     )
   );
@@ -264,27 +274,34 @@ begin
   -- (product order is display_order: custom first, then the legacy product)
   if save_state#>>'{catalog,products,0,pizzaMode}' is distinct from 'custom'
     or save_state#>'{catalog,products,0,freeIngredientCount}' is distinct from '2'::jsonb
-    or save_state#>>'{catalog,products,0,baseGroupId}' is distinct from sg_base::text
-    or save_state#>'{catalog,products,0,defaultIngredientOptionIds}' is distinct from pg_catalog.jsonb_build_array(so_1::text)
+    or save_state#>'{catalog,products,0,baseGroupIds}' is distinct from pg_catalog.jsonb_build_array(sg_base::text,sg_base2::text)
+    or save_state#>'{catalog,products,0,defaultIngredientOptionIds}' is distinct from pg_catalog.jsonb_build_array(so_1::text,so_3::text)
     or save_state#>'{catalog,products,0,customizeAtOrder}' is distinct from 'true'::jsonb
-    or save_state#>'{catalog,products,0,extraGroupIds}' is distinct from pg_catalog.jsonb_build_array(sg_extra::text)
-    or (save_state#>'{catalog,products,1}') ?| array['pizzaMode','freeIngredientCount','baseGroupId',
-      'defaultIngredientOptionIds','customizeAtOrder','extraGroupIds']
+    or save_state#>'{catalog,products,0,extraOptionIds}' is distinct from pg_catalog.jsonb_build_array(so_x::text,so_bx::text)
+    or (save_state#>'{catalog,products,1}') ?| array['pizzaMode','freeIngredientCount','baseGroupIds','baseGroupId',
+      'defaultIngredientOptionIds','customizeAtOrder','extraOptionIds','extraGroupIds']
+    or (save_state#>'{catalog,products,0}') ?| array['baseGroupId','extraGroupIds']
   then raise exception 'PIZZA_V2_STATE_ROUNDTRIP_%',save_state#>'{catalog,products}'; end if;
   -- scope of the stored row: the catalog and groups it points at belong to the very same restaurant and release
   if not exists (
     select 1 from app.menu_products product
-    join app.menu_modifier_groups base_group on base_group.restaurant_id=product.restaurant_id
-      and base_group.catalog_id=product.catalog_id and base_group.id=product.base_group_id
     where product.restaurant_id=restaurant_a and product.catalog_id=save_catalog and product.id=sp_custom
       and product.pizza_mode='custom' and product.free_ingredient_count=2 and product.customize_at_order
-      and product.extra_group_ids=array[sg_extra] and product.default_ingredient_option_ids=array[so_1]
+      and product.base_group_ids=array[sg_base,sg_base2] and product.extra_option_ids=array[so_x,so_bx]
+      and product.default_ingredient_option_ids=array[so_1,so_3]
+      and not exists (
+        select 1 from pg_catalog.unnest(product.base_group_ids) as base_group(id)
+        where not exists (
+          select 1 from app.menu_modifier_groups stored_group
+          where stored_group.restaurant_id=product.restaurant_id and stored_group.catalog_id=product.catalog_id
+            and stored_group.id=base_group.id))
   ) or exists (
     select 1 from app.menu_products product
     where product.restaurant_id=restaurant_a and product.catalog_id=save_catalog and product.id=sp_legacy
-      and (product.pizza_mode is not null or product.free_ingredient_count<>0 or product.base_group_id is not null
+      and (product.pizza_mode is not null or product.free_ingredient_count<>0
+        or pg_catalog.cardinality(product.base_group_ids)<>0
         or product.customize_at_order or pg_catalog.cardinality(product.default_ingredient_option_ids)<>0
-        or pg_catalog.cardinality(product.extra_group_ids)<>0)
+        or pg_catalog.cardinality(product.extra_option_ids)<>0)
   ) then raise exception 'PIZZA_V2_SAVE_ROW_SCOPE'; end if;
 
   -- replay: the same payload under the same idempotency key replays; an explicit null pizzaMode equals the absent key
@@ -302,30 +319,78 @@ begin
   if save_status<>'replayed' then raise exception 'PIZZA_V2_NULL_MODE_REPLAY_%',save_status; end if;
   execute 'reset role';
 
-  -- rejections: all conflicts, none advances the version (head is at 2)
+  -- the legacy input forms (baseGroupId/extraGroupIds) are accepted and normalized on save: the emitted
+  -- state only carries the canonical lists, with the extra groups expanded to their active options.
+  save_event := gen_random_uuid(); save_key := gen_random_uuid(); save_catalog := gen_random_uuid();
+  execute 'set local role app_api';
+  select s.status,s.state into save_status,save_state from app_private.save_menu_catalog(
+    actor,restaurant_a,branch_a,save_event,save_key,device,now_at,2,save_catalog,'MXN',
+    pg_catalog.jsonb_set(payload,'{products,0}',((payload#>'{products,0}') - 'baseGroupIds' - 'extraOptionIds'
+      - 'defaultIngredientOptionIds')
+      || pg_catalog.jsonb_build_object(
+        'baseGroupId',sg_base::text,'extraGroupIds',pg_catalog.jsonb_build_array(sg_extra::text),
+        'defaultIngredientOptionIds',pg_catalog.jsonb_build_array(so_1::text)))) s;
+  execute 'reset role';
+  if save_status<>'saved' then raise exception 'PIZZA_V2_LEGACY_SAVE_%',save_status; end if;
+  if save_state#>'{catalog,products,0,baseGroupIds}' is distinct from pg_catalog.jsonb_build_array(sg_base::text)
+    or save_state#>'{catalog,products,0,extraOptionIds}' is distinct from pg_catalog.jsonb_build_array(so_x::text)
+    or (save_state#>'{catalog,products,0}') ?| array['baseGroupId','extraGroupIds']
+  then raise exception 'PIZZA_V2_LEGACY_NORMALIZE_%',save_state#>'{catalog,products,0}'; end if;
+  execute 'set local role app_api';
+  select s.status into save_status from app_private.save_menu_catalog(
+    actor,restaurant_a,branch_a,save_event,save_key,device,now_at,2,save_catalog,'MXN',
+    pg_catalog.jsonb_set(payload,'{products,0}',((payload#>'{products,0}') - 'baseGroupIds' - 'extraOptionIds'
+      - 'defaultIngredientOptionIds')
+      || pg_catalog.jsonb_build_object(
+        'baseGroupId',sg_base::text,'extraGroupIds',pg_catalog.jsonb_build_array(sg_extra::text),
+        'defaultIngredientOptionIds',pg_catalog.jsonb_build_array(so_1::text)))) s;
+  execute 'reset role';
+  if save_status<>'replayed' then raise exception 'PIZZA_V2_LEGACY_REPLAY_%',save_status; end if;
+
+  -- rejections: all conflicts, none advances the version (head is at 3)
   for scenario in select value from pg_catalog.jsonb_array_elements(pg_catalog.jsonb_build_array(
     pg_catalog.jsonb_build_object('label','v2_keys_without_mode','path','{products,1}',
       'value',(payload#>'{products,1}')||pg_catalog.jsonb_build_object('freeIngredientCount',1)),
     pg_catalog.jsonb_build_object('label','custom_without_base','path','{products,0}',
-      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('baseGroupId',null,'defaultIngredientOptionIds',pg_catalog.jsonb_build_array())),
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object(
+        'baseGroupIds','[]'::jsonb,'defaultIngredientOptionIds','[]'::jsonb)),
+    pg_catalog.jsonb_build_object('label','base_group_forms_together','path','{products,0}',
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('baseGroupId',sg_base::text)),
     pg_catalog.jsonb_build_object('label','base_group_unassigned','path','{products,0}',
-      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('baseGroupId',sg_other::text)),
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('baseGroupIds',pg_catalog.jsonb_build_array(sg_other::text))),
     pg_catalog.jsonb_build_object('label','base_group_foreign','path','{products,0}',
-      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('baseGroupId',gen_random_uuid()::text)),
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('baseGroupIds',pg_catalog.jsonb_build_array(gen_random_uuid()::text))),
+    pg_catalog.jsonb_build_object('label','base_group_duplicate','path','{products,0}',
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('baseGroupIds',pg_catalog.jsonb_build_array(sg_base::text,sg_base::text))),
+    pg_catalog.jsonb_build_object('label','base_group_null','path','{products,0}',
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('baseGroupIds',null)),
+    pg_catalog.jsonb_build_object('label','extra_option_foreign','path','{products,0}',
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('extraOptionIds',pg_catalog.jsonb_build_array(so_o::text))),
+    pg_catalog.jsonb_build_object('label','extra_option_unknown','path','{products,0}',
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('extraOptionIds',pg_catalog.jsonb_build_array(gen_random_uuid()::text))),
+    pg_catalog.jsonb_build_object('label','extra_option_duplicate','path','{products,0}',
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('extraOptionIds',pg_catalog.jsonb_build_array(so_x::text,so_x::text))),
+    pg_catalog.jsonb_build_object('label','extra_option_forms_together','path','{products,0}',
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('extraGroupIds','[]'::jsonb)),
     pg_catalog.jsonb_build_object('label','extra_group_foreign','path','{products,0}',
-      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('extraGroupIds',pg_catalog.jsonb_build_array(gen_random_uuid()::text))),
+      'value',((payload#>'{products,0}') - 'extraOptionIds')||pg_catalog.jsonb_build_object(
+        'extraGroupIds',pg_catalog.jsonb_build_array(gen_random_uuid()::text))),
     pg_catalog.jsonb_build_object('label','extra_group_unassigned','path','{products,0}',
-      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('extraGroupIds',pg_catalog.jsonb_build_array(sg_other::text))),
-    pg_catalog.jsonb_build_object('label','base_in_extras','path','{products,0}',
-      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('extraGroupIds',pg_catalog.jsonb_build_array(sg_base::text))),
-    pg_catalog.jsonb_build_object('label','extra_duplicate','path','{products,0}',
-      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('extraGroupIds',pg_catalog.jsonb_build_array(sg_extra::text,sg_extra::text))),
-    pg_catalog.jsonb_build_object('label','default_outside_base_group','path','{products,0}',
-      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('defaultIngredientOptionIds',pg_catalog.jsonb_build_array(so_x::text))),
+      'value',((payload#>'{products,0}') - 'extraOptionIds')||pg_catalog.jsonb_build_object(
+        'extraGroupIds',pg_catalog.jsonb_build_array(sg_other::text))),
+    pg_catalog.jsonb_build_object('label','default_outside_base_groups','path','{products,0}',
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object(
+        'defaultIngredientOptionIds',pg_catalog.jsonb_build_array(so_x::text))),
     pg_catalog.jsonb_build_object('label','default_unknown_option','path','{products,0}',
-      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('defaultIngredientOptionIds',pg_catalog.jsonb_build_array(gen_random_uuid()::text))),
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object(
+        'defaultIngredientOptionIds',pg_catalog.jsonb_build_array(gen_random_uuid()::text))),
     pg_catalog.jsonb_build_object('label','default_duplicate','path','{products,0}',
-      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('defaultIngredientOptionIds',pg_catalog.jsonb_build_array(so_1::text,so_1::text))),
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object(
+        'defaultIngredientOptionIds',pg_catalog.jsonb_build_array(so_1::text,so_1::text))),
+    pg_catalog.jsonb_build_object('label','recipe_also_extra','path','{products,0}',
+      'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object(
+        'defaultIngredientOptionIds',pg_catalog.jsonb_build_array(so_bx::text),
+        'extraOptionIds',pg_catalog.jsonb_build_array(so_bx::text))),
     pg_catalog.jsonb_build_object('label','free_count_over_40','path','{products,0}',
       'value',(payload#>'{products,0}')||pg_catalog.jsonb_build_object('freeIngredientCount',41)),
     pg_catalog.jsonb_build_object('label','free_count_negative','path','{products,0}',
@@ -340,13 +405,13 @@ begin
   )) loop
     execute 'set local role app_api';
     select s.status into save_status from app_private.save_menu_catalog(
-      actor,restaurant_a,branch_a,gen_random_uuid(),gen_random_uuid(),device,now_at,2,gen_random_uuid(),'MXN',
+      actor,restaurant_a,branch_a,gen_random_uuid(),gen_random_uuid(),device,now_at,3,gen_random_uuid(),'MXN',
       pg_catalog.jsonb_set(payload,(scenario->>'path')::text[],scenario->'value')) s;
     execute 'reset role';
     if save_status<>'conflict' then raise exception 'PIZZA_V2_SAVE_%_%',upper(scenario->>'label'),save_status; end if;
   end loop;
   -- a V2 product with a disabled legacy size setup is fine
-  if (select head.version from app.menu_catalog_heads head where head.restaurant_id=restaurant_a)<>2
+  if (select head.version from app.menu_catalog_heads head where head.restaurant_id=restaurant_a)<>3
   then raise exception 'PIZZA_V2_REJECTED_SAVE_ADVANCED_VERSION'; end if;
 
   -- ---------------------------------------------------------------- 3. confirm fixtures
@@ -362,48 +427,50 @@ begin
   insert into app.menu_products(
     restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor,
     fraction_enabled,fraction_flavor_group_id,fraction_extra_group_id,fraction_excludable_ingredient_ids,
-    pizza_mode,free_ingredient_count,base_group_id,default_ingredient_option_ids,customize_at_order,extra_group_ids
+    pizza_mode,free_ingredient_count,base_group_ids,default_ingredient_option_ids,customize_at_order,extra_option_ids
   ) values
     (restaurant_a,catalog_a,foreign_product,category_a,'Pizza ajena',null,true,1,'kitchen','piece',1000,false,null,null,array[]::text[],
-      'custom',0,gen_random_uuid(),array[]::uuid[],false,array[]::uuid[]);
+      'custom',0,array[gen_random_uuid()],array[]::uuid[],false,array[]::uuid[]);
   insert into app.menu_products(
     restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor,
     fraction_enabled,fraction_flavor_group_id,fraction_extra_group_id,fraction_excludable_ingredient_ids,
-    pizza_mode,free_ingredient_count,base_group_id,default_ingredient_option_ids,customize_at_order,extra_group_ids
+    pizza_mode,free_ingredient_count,base_group_ids,default_ingredient_option_ids,customize_at_order,extra_option_ids
   ) values
     (restaurant,catalog,p1,category,'Pizza armada chica',null,true,1,'kitchen','piece',1000,false,null,null,array[]::text[],
-      'custom',1,g_base,array[]::uuid[],false,array[g_extra]),
+      'custom',1,array[g_base],array[]::uuid[],false,array[o_e]),
     (restaurant,catalog,p2,category,'Pizza armada grande',null,true,2,'kitchen','piece',1200,false,null,null,array[]::text[],
-      'custom',2,g_base,array[]::uuid[],false,array[g_extra]),
+      'custom',2,array[g_base],array[]::uuid[],false,array[o_e]),
     (restaurant,catalog,spec,category,'Hawaiana',null,true,3,'kitchen','piece',1500,false,null,null,array[]::text[],
-      'specialty',0,g_base,array[o_a],true,array[g_extra]),
+      'specialty',0,array[g_base],array[o_a],true,array[o_e]),
     (restaurant,catalog,spec_locked,category,'Pepperoni',null,true,4,'kitchen','piece',1400,false,null,null,array[]::text[],
-      'specialty',0,g_base,array[o_a],false,array[g_extra]),
+      'specialty',0,array[g_base],array[o_a],false,array[o_e]),
     (restaurant,catalog,p3,category,'Armada X',null,true,5,'kitchen','piece',1000,false,null,null,array[]::text[],
-      'custom',0,g_bx,array[]::uuid[],false,array[]::uuid[]),
+      'custom',0,array[g_bx],array[]::uuid[],false,array[]::uuid[]),
     (restaurant,catalog,p4,category,'Armada Y',null,true,6,'kitchen','piece',1000,false,null,null,array[]::text[],
-      'custom',0,g_by,array[]::uuid[],false,array[]::uuid[]),
+      'custom',0,array[g_by],array[]::uuid[],false,array[]::uuid[]),
     (restaurant,catalog,p_legacy,category,'Refresco',null,true,7,'bar','piece',100,false,null,null,array[]::text[],
-      null,0,null,array[]::uuid[],false,array[]::uuid[]);
+      null,0,array[]::uuid[],array[]::uuid[],false,array[]::uuid[]),
+    (restaurant,catalog,pz,category,'Armada dos grupos',null,true,12,'kitchen','piece',1000,false,null,null,array[]::text[],
+      'custom',2,array[g_base,g_base2],array[]::uuid[],false,array[o_d]);
   -- pv: one product with two sizes; pt1/pt2: identical products except pt2 carries a tax configuration
   insert into app.menu_products(
     restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor,
     fraction_enabled,fraction_flavor_group_id,fraction_extra_group_id,fraction_excludable_ingredient_ids,
-    pizza_mode,free_ingredient_count,base_group_id,default_ingredient_option_ids,customize_at_order,extra_group_ids
+    pizza_mode,free_ingredient_count,base_group_ids,default_ingredient_option_ids,customize_at_order,extra_option_ids
   ) values
     (restaurant,catalog,pv,category,'Armada con tamanos',null,true,9,'kitchen','piece',1000,false,null,null,array[]::text[],
-      'custom',0,g_base,array[]::uuid[],false,array[g_extra]),
+      'custom',0,array[g_base],array[]::uuid[],false,array[o_e]),
     (restaurant,catalog,pt1,category,'Armada sin impuesto',null,true,10,'kitchen','piece',1000,false,null,null,array[]::text[],
-      'custom',0,g_base,array[]::uuid[],false,array[g_extra]);
+      'custom',0,array[g_base],array[]::uuid[],false,array[o_e]);
   insert into app.menu_products(
     restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor,
     tax_id,tax_name,tax_rule_version,tax_rate_numerator,tax_rate_denominator,tax_inclusion,
     fraction_enabled,fraction_flavor_group_id,fraction_extra_group_id,fraction_excludable_ingredient_ids,
-    pizza_mode,free_ingredient_count,base_group_id,default_ingredient_option_ids,customize_at_order,extra_group_ids
+    pizza_mode,free_ingredient_count,base_group_ids,default_ingredient_option_ids,customize_at_order,extra_option_ids
   ) values
     (restaurant,catalog,pt2,category,'Armada con impuesto',null,true,11,'kitchen','piece',1000,
       'iva','IVA','mx-2026',16,100,'included',false,null,null,array[]::text[],
-      'custom',0,g_base,array[]::uuid[],false,array[g_extra]);
+      'custom',0,array[g_base],array[]::uuid[],false,array[o_e]);
   insert into app.menu_product_variants(restaurant_id,catalog_id,product_id,id,name,sku,unit_price_minor,active,display_order) values
     (restaurant,catalog,pv,v_small,'Chica',null,1000,true,0),
     (restaurant,catalog,pv,v_large,'Grande',null,1200,true,1);
@@ -411,16 +478,17 @@ begin
   insert into app.menu_products(
     restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor,
     fraction_enabled,fraction_flavor_group_id,fraction_extra_group_id,fraction_excludable_ingredient_ids,
-    pizza_mode,free_ingredient_count,base_group_id,default_ingredient_option_ids,customize_at_order,extra_group_ids
+    pizza_mode,free_ingredient_count,base_group_ids,default_ingredient_option_ids,customize_at_order,extra_option_ids
   ) values
     (restaurant,catalog,pq,category,'Armada acotada',null,true,8,'kitchen','piece',1000,false,null,null,array[]::text[],
-      'custom',0,g_min,array[]::uuid[],false,array[g_xmax]);
+      'custom',0,array[g_min],array[]::uuid[],false,array[x1]);
   insert into app.menu_modifier_groups(
     restaurant_id,catalog_id,id,product_id,name,active,display_order,minimum_quantity,maximum_quantity
   ) values
     (restaurant,catalog,g_min,null,'Ingredientes acotados',true,4,1,2),
     (restaurant,catalog,g_xmax,null,'Extras acotados',true,5,0,1),
     (restaurant,catalog,g_base,null,'Ingredientes',true,0,0,40),
+    (restaurant,catalog,g_base2,null,'Vegetales',true,6,0,40),
     (restaurant,catalog,g_extra,null,'Extras',true,1,0,10),
     (restaurant,catalog,g_bx,null,'Ingredientes X',true,2,0,40),
     (restaurant,catalog,g_by,null,'Ingredientes Y',true,3,0,40);
@@ -430,7 +498,8 @@ begin
     (restaurant,catalog,spec,g_base,0),(restaurant,catalog,spec,g_extra,1),
     (restaurant,catalog,spec_locked,g_base,0),(restaurant,catalog,spec_locked,g_extra,1),
     (restaurant,catalog,p3,g_bx,0),(restaurant,catalog,p4,g_by,0),
-    (restaurant,catalog,pq,g_min,0),(restaurant,catalog,pq,g_xmax,1);
+    (restaurant,catalog,pq,g_min,0),(restaurant,catalog,pq,g_xmax,1),
+    (restaurant,catalog,pz,g_base,0),(restaurant,catalog,pz,g_base2,1);
   insert into app.menu_modifier_options(restaurant_id,catalog_id,group_id,id,name,unit_price_minor,active) values
     (restaurant,catalog,g_base,o_a,'Ing A',100,true),
     (restaurant,catalog,g_base,o_b,'Ing B',200,true),
@@ -438,6 +507,8 @@ begin
     (restaurant,catalog,g_extra,o_e,'Extra E',75,true),
     (restaurant,catalog,g_bx,o_conf,'Ing conflicto',100,true),
     (restaurant,catalog,g_by,o_conf,'Ing conflicto',101,true),
+    (restaurant,catalog,g_base,o_d,'Ing D',300,true),
+    (restaurant,catalog,g_base2,o_g,'Ing G',150,true),
     (restaurant,catalog,g_min,m1,'Min 1',100,true),
     (restaurant,catalog,g_min,m2,'Min 2',200,true),
     (restaurant,catalog,g_min,m3,'Min 3',300,true),
@@ -449,24 +520,29 @@ begin
 
   -- table CHECKs (each insert must fail; the nested block rolls the failed insert back)
   for scenario in select value from pg_catalog.jsonb_array_elements(pg_catalog.jsonb_build_array(
-    pg_catalog.jsonb_build_object('label','legacy_with_free_count','mode',null,'free',3,'base',null,'defaults','{}','extras','{}','custom_at',false),
-    pg_catalog.jsonb_build_object('label','legacy_with_base','mode',null,'free',0,'base',g_base,'defaults','{}','extras','{}','custom_at',false),
-    pg_catalog.jsonb_build_object('label','legacy_with_customize','mode',null,'free',0,'base',null,'defaults','{}','extras','{}','custom_at',true),
-    pg_catalog.jsonb_build_object('label','custom_without_base','mode','custom','free',0,'base',null,'defaults','{}','extras','{}','custom_at',false),
-    pg_catalog.jsonb_build_object('label','unknown_mode','mode','x','free',0,'base',g_base,'defaults','{}','extras','{}','custom_at',false),
-    pg_catalog.jsonb_build_object('label','free_over_40','mode','custom','free',41,'base',g_base,'defaults','{}','extras','{}','custom_at',false),
-    pg_catalog.jsonb_build_object('label','base_in_extras','mode','custom','free',0,'base',g_base,'defaults','{}','extras',pg_catalog.jsonb_build_array(g_base),'custom_at',false),
-    pg_catalog.jsonb_build_object('label','duplicate_defaults','mode','custom','free',0,'base',g_base,'defaults',pg_catalog.jsonb_build_array(o_a,o_a),'extras','{}','custom_at',false),
-    pg_catalog.jsonb_build_object('label','defaults_without_base','mode','specialty','free',0,'base',null,'defaults',pg_catalog.jsonb_build_array(o_a),'extras','{}','custom_at',false)
+    pg_catalog.jsonb_build_object('label','legacy_with_free_count','mode',null,'free',3,'base','{}','defaults','{}','extras','{}','custom_at',false),
+    pg_catalog.jsonb_build_object('label','legacy_with_base','mode',null,'free',0,'base',pg_catalog.jsonb_build_array(g_base),'defaults','{}','extras','{}','custom_at',false),
+    pg_catalog.jsonb_build_object('label','legacy_with_extra','mode',null,'free',0,'base','{}','defaults','{}','extras',pg_catalog.jsonb_build_array(o_a),'custom_at',false),
+    pg_catalog.jsonb_build_object('label','legacy_with_customize','mode',null,'free',0,'base','{}','defaults','{}','extras','{}','custom_at',true),
+    pg_catalog.jsonb_build_object('label','custom_without_base','mode','custom','free',0,'base','{}','defaults','{}','extras','{}','custom_at',false),
+    pg_catalog.jsonb_build_object('label','unknown_mode','mode','x','free',0,'base',pg_catalog.jsonb_build_array(g_base),'defaults','{}','extras','{}','custom_at',false),
+    pg_catalog.jsonb_build_object('label','free_over_40','mode','custom','free',41,'base',pg_catalog.jsonb_build_array(g_base),'defaults','{}','extras','{}','custom_at',false),
+    pg_catalog.jsonb_build_object('label','recipe_also_extra','mode','custom','free',0,'base',pg_catalog.jsonb_build_array(g_base),'defaults',pg_catalog.jsonb_build_array(o_a),'extras',pg_catalog.jsonb_build_array(o_a),'custom_at',false),
+    pg_catalog.jsonb_build_object('label','base_group_duplicate','mode','custom','free',0,'base',pg_catalog.jsonb_build_array(g_base,g_base),'defaults','{}','extras','{}','custom_at',false),
+    pg_catalog.jsonb_build_object('label','extra_option_duplicate','mode','custom','free',0,'base',pg_catalog.jsonb_build_array(g_base),'defaults','{}','extras',pg_catalog.jsonb_build_array(o_e,o_e),'custom_at',false),
+    pg_catalog.jsonb_build_object('label','duplicate_defaults','mode','custom','free',0,'base',pg_catalog.jsonb_build_array(g_base),'defaults',pg_catalog.jsonb_build_array(o_a,o_a),'extras','{}','custom_at',false),
+    pg_catalog.jsonb_build_object('label','defaults_without_base','mode','specialty','free',0,'base','{}','defaults',pg_catalog.jsonb_build_array(o_a),'extras','{}','custom_at',false)
   )) loop
     begin
       insert into app.menu_products(
         restaurant_id,catalog_id,id,category_id,name,sku,active,display_order,station_id,unit,unit_price_minor,
         fraction_enabled,fraction_flavor_group_id,fraction_extra_group_id,fraction_excludable_ingredient_ids,
-        pizza_mode,free_ingredient_count,base_group_id,default_ingredient_option_ids,customize_at_order,extra_group_ids
+        pizza_mode,free_ingredient_count,base_group_ids,default_ingredient_option_ids,customize_at_order,extra_option_ids
       ) values (
         restaurant,catalog,gen_random_uuid(),category,'check',null,true,50,'kitchen','piece',1,false,null,null,array[]::text[],
-        scenario->>'mode',(scenario->>'free')::integer,(scenario->>'base')::uuid,
+        scenario->>'mode',(scenario->>'free')::integer,
+        coalesce((select array_agg(value::uuid) from pg_catalog.jsonb_array_elements_text(
+          case when pg_catalog.jsonb_typeof(scenario->'base')='array' then scenario->'base' else '[]'::jsonb end) value),array[]::uuid[]),
         coalesce((select array_agg(value::uuid) from pg_catalog.jsonb_array_elements_text(
           case when pg_catalog.jsonb_typeof(scenario->'defaults')='array' then scenario->'defaults' else '[]'::jsonb end) value),array[]::uuid[]),
         (scenario->>'custom_at')::boolean,
@@ -647,7 +723,19 @@ begin
     -- the client sent a wrong frozen snapshot for an otherwise valid line
     pg_catalog.jsonb_build_object('label','tampered_total','expect','conflict','tamper',true,
       'a',pg_catalog.jsonb_build_object('product',p1,'ing',pg_catalog.jsonb_build_array(o_a),'extra','[]'::jsonb,'removed','[]'::jsonb),
-      'b',pg_catalog.jsonb_build_object('product',p2,'ing',pg_catalog.jsonb_build_array(o_b),'extra','[]'::jsonb,'removed','[]'::jsonb))
+      'b',pg_catalog.jsonb_build_object('product',p2,'ing',pg_catalog.jsonb_build_array(o_b),'extra','[]'::jsonb,'removed','[]'::jsonb)),
+    -- two base groups share the single N: A (group 1) and G (group 2) are the two free ingredients,
+    -- B (group 1, one half) costs ceil(200/2)=100 and the extra D (offered by a base group) ceil(300/2)=150
+    pg_catalog.jsonb_build_object('label','two_base_groups_shared_n','expect','applied','total',1250,
+      'free_order',pg_catalog.jsonb_build_array(o_a,o_g),
+      'a',pg_catalog.jsonb_build_object('product',pz,'ing',pg_catalog.jsonb_build_array(o_a,o_g),
+        'extra',pg_catalog.jsonb_build_array(o_d),'removed','[]'::jsonb),
+      'b',pg_catalog.jsonb_build_object('product',pz,'ing',pg_catalog.jsonb_build_array(o_b),'extra','[]'::jsonb,'removed','[]'::jsonb)),
+    -- an option of an assigned group that is not declared in extraOptionIds cannot be charged as an extra
+    pg_catalog.jsonb_build_object('label','extra_option_not_declared','expect','conflict',
+      'a',pg_catalog.jsonb_build_object('product',pz,'ing',pg_catalog.jsonb_build_array(o_a),
+        'extra',pg_catalog.jsonb_build_array(o_c),'removed','[]'::jsonb),
+      'b',pg_catalog.jsonb_build_object('product',pz,'ing','[]'::jsonb,'extra','[]'::jsonb,'removed','[]'::jsonb))
   );
 
   for scenario in select value from pg_catalog.jsonb_array_elements(scenarios) loop
