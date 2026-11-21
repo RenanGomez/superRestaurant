@@ -1,3 +1,7 @@
+## Smoke r2: arranque de la orquestación (2026-11-20)
+
+- Plan: `docs/plans/smoke-2026-11-05-r2-plan.md`. Ronda 1 y harness commiteados en la rama local `feat/smoke-r1` (ff9d35c1; sin push; los dos `smoke-2026-11-05*.json` quedan sin versionar). Preflight read-only remoto: `20261120000100` y `20261120000200` NO aplicadas, así que B1b las edita en sitio.
+
 ## Pizza V2: verificación SQL y HTTP en PostgreSQL 17 local desechable (2026-11-20)
 
 - Emmanuel autorizó descargar PG 17 portátil (`.cache/postgres-local`, ignorado). Runner nuevo `verify:pizza-model-v2-schema:rollback` (aplica 69 migraciones; ejecuta `pizza_model_v2_invariants.sql` y `capture_selection_plan_probe_v2_invariants.sql` con rollback): verde. `verify:capture-selection-plan-schema:rollback` verde; `test:http:local` 7/7; gates globales 40/40 (Node 22.20 efectivo, el shim Node 24 no se aplicó).

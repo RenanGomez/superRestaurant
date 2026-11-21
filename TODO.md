@@ -151,6 +151,15 @@ Reglas: una ronda de revisión en nivel C, dos en B, revisión doble en A con co
 - [ ] **REVIEW · C** — Fase 4: boceto aprobado por Emmanuel (2026-11-20); R2-1..R2-3 implementados por dsh (menú con carrusel y fichas grandes, hoja de producto, pasos Pedido→Cliente→Entrega, barra flotante «Total de productos»); revisión Codex (1 ronda) corregida en `r2-fixes`; lint/typecheck/test web verdes. NO VERIFICADO en navegador real (390×844 y escritorio).
 - [ ] **CANCELLED** — `menu-photo-focus`: reemplazada por M4 (`menu-photo-crop`).
 
+### Smoke 2026-11-05 · ronda 2 (plan en `docs/plans/smoke-2026-11-05-r2-plan.md`)
+
+- [ ] **TODO · B** — K0 `capture-landing-diag` (Codex sin escritura) → tarea B de API si falta algo (customerId/canal al crear, nombre Recoger, filtro por cliente, regla Domicilio exige cliente en servidor).
+- [ ] **TODO · C** — Carril CW: K1 `capture-landing-customer-first` → K2 `capture-shortcuts-r3` (Alt+N global, Alt+Shift+R, Escape en capas).
+- [ ] **TODO · C** — Carril Clientes: K4 `customer-phone-remove-confirm` → K3 `customer-open-captures` (tras K0).
+- [ ] **TODO · A** — Pizza ronda 2: B0 spec delta (puerta Emmanuel) → B1a dominio/tipos → B1b SQL (editar en sitio: migraciones 20261120000100/200 confirmadas NO aplicadas en remoto el 2026-11-20) → B1c API → B1d mobile; B3 tiles → B2 editor; B4 captura.
+- [ ] **TODO · A** — Zonas por colonia: Z0 datos SEPOMEX (Emmanuel descarga) · Z1 spec (puerta Emmanuel) → Z2 SQL → Z3 API → Z4 editor de zonas · Z5 formulario de dirección (tras K4).
+- [ ] **TODO** — Cierre de ola: puertas globales, verificación en navegador (escritorio y 390×844), `docs/smoke/smoke-<fecha>.html`.
+
 Última actualización: 2026-11-19
 
 Fuente principal: `PLAN_MODERNIZACION_POS_RESTAURANTE.md`.
