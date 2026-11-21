@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canonicalizePostalCodes, formatDeliveryMatch, formatDeliveryQuote, parseDeliveryFeeMinor,
-  quoteMatchesDeliverySnapshot, requestDelivery } from "./delivery-zones.js";
+import { canonicalizePostalCodes, formatDeliveryMatch, formatDeliveryQuote, mergeSettlementChoices, parseDeliveryFeeMinor,
+  quoteMatchesDeliverySnapshot, removeSettlementChoice, requestDelivery, settlementClaimConflicts, settlementIdsOf } from "./delivery-zones.js";
 import type { DeliveryQuoteV1 } from "@super-restaurant/shared-types";
 
 const scope = { restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" };
@@ -25,6 +25,25 @@ test("fee input converts to exact minor units", () => {
   assert.equal(parseDeliveryFeeMinor("123.45"), 12345);
   assert.equal(parseDeliveryFeeMinor("1.234"), undefined);
   assert.equal(parseDeliveryFeeMinor("9999999999999999"), undefined);
+});
+
+test("settlement chips merge without duplicates and yield exactly the sent ids", () => {
+  const centro = { settlementId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", name: "Centro", postalCode: "85800" };
+  const norte = { settlementId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "Norte", postalCode: "85801" };
+  const richerCentro = { ...centro, name: "Centro (centro)", postalCode: "85800" };
+  assert.deepEqual(mergeSettlementChoices([centro], [richerCentro]), [richerCentro]);
+  assert.deepEqual(mergeSettlementChoices([centro], [norte, richerCentro]), [richerCentro, norte]);
+  assert.deepEqual(settlementIdsOf([centro, norte, centro]), [norte.settlementId, centro.settlementId]);
+  assert.deepEqual(removeSettlementChoice([centro, norte], centro.settlementId), [norte]);
+});
+
+test("claimed settlements conflict only with other active zones", () => {
+  const claimed = ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"];
+  const zone = (zoneId: string, name: string, active: boolean, settlementIds: readonly string[]) => ({ zoneId, name, active, settlementIds });
+  assert.deepEqual(settlementClaimConflicts(claimed, [
+    zone("z1", "Centro", true, claimed), zone("z2", "Norte", true, []), zone("z3", "Sur", false, claimed),
+  ], undefined), [{ settlementId: claimed[0], zoneId: "z1", zoneName: "Centro" }]);
+  assert.deepEqual(settlementClaimConflicts(claimed, [zone("z1", "Centro", true, claimed)], "z1"), []);
 });
 
 test("quote formatting uses server fee and promise with locale", () => {

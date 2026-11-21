@@ -1,6 +1,7 @@
 import { parseDeliveryQuoteV1, parseDeliveryZoneListV1, parseDeliveryZoneMatchRequestV1, parseDeliveryZoneMatchResultV1, parseListDeliveryZonesQueryV1,
   parseRequestDeliveryQuoteCommandV1, parseSettlementSearchRequestV1, parseSettlementSearchResultV1, parseUpsertDeliveryZoneCommandV1, parseUpsertDeliveryZoneResultV1,
-  type DeliveryQuoteV1, type DeliveryZoneListV1, type DeliveryZoneMatchResultV1, type SettlementSearchResultV1, type UpsertDeliveryZoneResultV1 } from "@super-restaurant/shared-types";
+  type DeliveryQuoteV1, type DeliveryZoneListV1, type DeliveryZoneMatchResultV1, type DeliveryZoneV1,
+  type SettlementSearchResultV1, type UpsertDeliveryZoneResultV1 } from "@super-restaurant/shared-types";
 
 export type DeliveryRequestResult<T> = { readonly ok: true; readonly value: T } |
   { readonly ok: false; readonly error: "invalid" | "denied" | "missing" | "conflict" | "unavailable" };
@@ -25,6 +26,51 @@ function canonicalize(input: string, maxLength: number): string[] {
 
 export function canonicalizePostalCodes(input: string): string[] { return canonicalize(input, 32); }
 export function canonicalizeLocalities(input: string): string[] { return canonicalize(input, 200); }
+
+/** The display facts a chip needs; existing zones only carry settlement ids, so `name` may be a fallback. */
+export interface SettlementChoiceV1 {
+  readonly settlementId: string;
+  readonly name: string;
+  readonly postalCode: string;
+}
+
+export function mergeSettlementChoices(current: readonly SettlementChoiceV1[], added: readonly SettlementChoiceV1[]): readonly SettlementChoiceV1[] {
+  const byId = new Map(current.map((choice) => [choice.settlementId, choice] as const));
+  for (const choice of added) byId.set(choice.settlementId, { settlementId: choice.settlementId, name: choice.name, postalCode: choice.postalCode });
+  return [...byId.values()];
+}
+
+export function removeSettlementChoice(current: readonly SettlementChoiceV1[], settlementId: string): readonly SettlementChoiceV1[] {
+  return current.filter((choice) => choice.settlementId !== settlementId);
+}
+
+/** Sends exactly the chips shown, deduplicated and ordered so equivalent selections serialize alike. */
+export function settlementIdsOf(choices: readonly SettlementChoiceV1[]): readonly string[] {
+  return [...new Set(choices.map((choice) => choice.settlementId))].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+}
+
+export interface SettlementClaimConflictV1 {
+  readonly settlementId: string;
+  readonly zoneId: string;
+  readonly zoneName: string;
+}
+
+/** A settlement can only be claimed by one active zone per Branch; the server rejects the rest as conflict. */
+export function settlementClaimConflicts(
+  settlementIds: readonly string[],
+  zones: readonly Pick<DeliveryZoneV1, "zoneId" | "name" | "active" | "settlementIds">[],
+  editingZoneId?: string,
+): readonly SettlementClaimConflictV1[] {
+  const wanted = new Set(settlementIds);
+  const conflicts: SettlementClaimConflictV1[] = [];
+  for (const zone of zones) {
+    if (!zone.active || zone.zoneId === editingZoneId) continue;
+    for (const settlementId of zone.settlementIds) {
+      if (wanted.has(settlementId)) conflicts.push({ settlementId, zoneId: zone.zoneId, zoneName: zone.name });
+    }
+  }
+  return conflicts;
+}
 
 /** Converts a decimal field to minor units without floating point arithmetic. */
 export function parseDeliveryFeeMinor(input: string): number | undefined {
