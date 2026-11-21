@@ -1,0 +1,143 @@
+{
+  "sub": "Ronda 2 del smoke 2026-11-05 (rama local feat/smoke-r1, sin push). Marca cada punto, deja notas y exporta el resultado para pegarlo en la conversación. Se guarda solo en este navegador. NADA de esto se ha verificado en navegador todavía: las migraciones SQL nuevas no están aplicadas en remoto.",
+  "sections": [
+    {
+      "t": "0. Preparación",
+      "items": [
+        {
+          "id": "prep-start",
+          "h": "Levantar servidores y sesión E2E",
+          "s": [
+            "Ejecuta start-local.bat",
+            "Ejecuta tools\\agentic\\local-servers\\e2e-auth.bat e inicia sesión (sucursal Navojoa)",
+            "Abre la consola (F12)"
+          ],
+          "e": "Web y API arriba, sesión guardada en apps/web/playwright/.auth/user.json, consola sin errores rojos.",
+          "block": "Las migraciones 20261120000100, 20261120000200 y 20261121000100 NO están aplicadas en remoto. Las pantallas de pizza V2 y de zonas por colonia contra el remoto fallarán hasta que autorices aplicarlas (y z2b esté integrado)."
+        }
+      ]
+    },
+    {
+      "t": "1. Captura: landing, atajos y teléfono (K1, K2, K4)",
+      "items": [
+        {
+          "id": "k1-landing",
+          "h": "Landing de captura con cliente primero",
+          "s": [
+            "Abre /app/capture sin borrador",
+            "Busca un cliente por teléfono y selecciónalo",
+            "Continúa a productos"
+          ],
+          "e": "La captura empieza por el cliente; la selección es de un toque y el borrador queda con ese cliente."
+        },
+        {
+          "id": "k2-keys",
+          "h": "Atajos: Alt+N, Alt+Shift+R y Escape",
+          "s": [
+            "Alt+N con un borrador sin guardar: debe salir un modal dentro de la app (no confirm del navegador)",
+            "Alt+Shift+R reinicia la captura (Alt+R ya no hace nada)",
+            "Escape cierra solo la capa superior (nota, modal, menú) y no reinicia la captura"
+          ],
+          "e": "Alt+N global con confirmación en la app; Alt+Shift+R reemplaza a Alt+R; Escape cierra capas una a una."
+        },
+        {
+          "id": "k4-phone",
+          "h": "Quitar teléfono de un cliente con confirmación",
+          "s": [
+            "Clientes → un cliente con dos teléfonos → quitar uno",
+            "Intenta quitar el único teléfono"
+          ],
+          "e": "Quitar pide confirmación dentro de la app; el cliente conserva al menos lo que la regla permita y el cambio persiste al recargar."
+        }
+      ]
+    },
+    {
+      "t": "2. Pizza ronda 2 (B2, B3, B4)",
+      "items": [
+        {
+          "id": "b3-tiles",
+          "h": "Opciones de pizza como tiles",
+          "s": [
+            "Captura → una pizza → abre la hoja de producto",
+            "Elige ingredientes y extras con los tiles",
+            "Repite a 390×844"
+          ],
+          "e": "Tiles táctiles de 44 px o más, sin cortes ni barra horizontal."
+        },
+        {
+          "id": "b2-editor",
+          "h": "Editor de pizza en Menú (modo unificado)",
+          "s": [
+            "/app/menu → un producto de pizza → configura pizzaMode, ingredientes gratis y extras",
+            "Publica y recarga"
+          ],
+          "e": "Un solo modo de pizza (pizzaMode unificado); los valores sobreviven a recargar y a publicar.",
+          "block": "Publicar contra el remoto requiere la migración 20261120000100 aplicada."
+        },
+        {
+          "id": "b4-capture",
+          "h": "Captura de pizza (mitades, extras, quitar ingredientes)",
+          "s": [
+            "Pizza mitad y mitad con un ingrediente repetido en ambas mitades",
+            "Quita un ingrediente de una mitad",
+            "Revisa el total en el ticket"
+          ],
+          "e": "El total sigue la regla de mitades v2 y coincide con lo que cobra el servidor.",
+          "block": "Confirmar la orden de pizza está roto en la migración 20261121000100 (error SQL 42703) hasta que se integre z2b. Probar solo hasta el total del borrador."
+        }
+      ]
+    },
+    {
+      "t": "3. Zonas de entrega por colonia (Z4, Z5)",
+      "items": [
+        {
+          "id": "z4-editor",
+          "h": "Editor de zonas por colonia",
+          "s": [
+            "/app/delivery-zones → crea una zona y agrega colonias buscando por nombre (catálogo SEPOMEX de Navojoa)",
+            "Prueba una colonia con nombre repetido: debe verse como «Beltrones (ampliación)»",
+            "Guarda y recarga"
+          ],
+          "e": "Colonias con etiqueta distinguible; la zona persiste. Limitación conocida: las colonias guardadas se muestran por id hasta volver a buscarlas por nombre.",
+          "block": "Requiere la migración 20261121000100 aplicada."
+        },
+        {
+          "id": "z5-address",
+          "h": "Formulario de dirección con colonia",
+          "s": [
+            "Cliente → Agregar dirección → elige CP 85860 y una colonia del catálogo",
+            "Escribe una colonia fuera de SEPOMEX (texto libre)",
+            "Elige una colonia sin zona"
+          ],
+          "e": "Colonia fuera de catálogo = texto libre con aviso; sin zona = «Fuera de cobertura» con el motivo; con zona la dirección es válida.",
+          "block": "Requiere la migración 20261121000100 aplicada."
+        }
+      ]
+    }
+  ],
+  "r2": {},
+  "changes": [
+    {
+      "h": "Integrado en feat/smoke-r1 (sin push)",
+      "p": "Ola 1: K1 landing cliente primero, K4 quitar teléfono con confirmación, K2 atajos r3. Ola 2: B1a dominio/tipos de pizza v2, B1b SQL pizza v2, B1c API, B1d mobile, B3 tiles, B2 editor, B4 captura; Z0 catálogo SEPOMEX Navojoa, Z2 SQL zonas por colonia, Z3 API, Z4 editor de zonas, Z5 formulario de dirección. Puertas globales lint/typecheck/test/build en verde con Node 24 (API: 68 pruebas, 0 fallos)."
+    },
+    {
+      "h": "Defecto encontrado en la revisión de nivel A",
+      "p": "La migración 20261121000100 (Z2) redefine confirm_capture_draft_v3 con el cuerpo anterior a pizza v2: confirmar un borrador con pizza fallaría con SQLSTATE 42703. Tarea de arreglo z2b en curso: su worktree tiene el cambio de columnas pero sin pruebas, no integrado."
+    },
+    {
+      "h": "Hallazgos P2 de la revisión de API",
+      "p": "resolveAddress confía en settlementId sin confirmarlo contra el catálogo; confirmar que confirm relee la cuota manual vigente; confirmar que dist/ no está en Git."
+    }
+  ],
+  "decisions": [
+    {
+      "h": "Aplicar migraciones en remoto",
+      "p": "Hay tres migraciones sin aplicar (20261120000100, 20261120000200, 20261121000100). Se editaron en sitio porque el preflight del 2026-11-20 las mostraba sin aplicar. Dime si aplicaste algo desde entonces; si no, autoriza el plan (staging rollback-only primero, luego remoto) cuando z2b esté integrado."
+    },
+    {
+      "h": "Fallos falsos de dsh (EPIPE)",
+      "p": "Las tareas dsh suelen terminar «failed» aunque el trabajo esté completo. ¿Una tarea con informe completo y worktree limpio cuenta como éxito? Hoy lo corrijo a mano en la cola."
+    }
+  ]
+}

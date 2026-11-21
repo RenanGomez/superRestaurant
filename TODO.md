@@ -160,6 +160,18 @@ Reglas: una ronda de revisión en nivel C, dos en B, revisión doble en A con co
 - [ ] **TODO · A** — Zonas por colonia: Z0 datos SEPOMEX (Emmanuel descarga) · Z1 spec (puerta Emmanuel) → Z2 SQL → Z3 API → Z4 editor de zonas · Z5 formulario de dirección (tras K4).
 - [ ] **TODO** — Cierre de ola: puertas globales, verificación en navegador (escritorio y 390×844), `docs/smoke/smoke-<fecha>.html`.
 
+#### Smoke r2 · estado y pendientes para la siguiente conversación (2026-11-21)
+
+Hecho en `feat/smoke-r1` (REVIEW, sin push): K1, K2, K4; B1a, B1b, B1c, B1d, B2, B3, B4; Z0, Z2, Z3, Z4, Z5; harness y `queue-watch.ps1`. Detalle y hashes en HANDOFF. Smoke humano: `docs/smoke/smoke-2026-11-21.html`. **Regla:** tras cada cambio integrado, actualizar `docs/smoke/smoke-2026-11-21.data.json` y correr `node tools/agentic/build-smoke-html.mjs 2026-11-21` (AGENTS.md §19.5).
+
+- [ ] **BLOCKED · A** — **z2b** `z2b-rebase-confirm-on-pizza-v2`: reconstruir `app_private.confirm_capture_draft_v3` de `20261121000100` sobre el cuerpo v2 de `20261120000100` (~1767). Worktree `harness-wt/.../z2b-rebase-confirm-on-pizza-v2` tiene un diff parcial sin pruebas ni informe; revisarlo o relanzar. Falta: caso de prueba pizza+zona en `supabase/tests`, prueba negativa de cobertura vacía (`delivery_zones_coverage_nonempty` eliminado en la línea ~789), verificación en PG local rollback-only (`pnpm verify:pizza-model-v2-schema:rollback` y verificador de zonas). Luego: corregir estado en la cola, borrar `.harness/state/ALERT`, commit en el worktree y cherry-pick a `feat/smoke-r1`.
+- [ ] **TODO · A** — Rerevisar SQL (Sonnet) tras z2b; revisión Codex (segunda familia) de B1a/B1b/B1c/Z2/Z3; comprobar clúster/base huérfana en `.cache/postgres-local` (runId `edc8b6517faf443f9c7e9630acb1eb19`).
+- [ ] **TODO · B/A** — P2 de API: `resolveAddress` (`apps/api/src/delivery-zones.ts` ~646) debe devolver `settlement_unknown` y no propagar `settlementId` sin confirmar (+ prueba); verificar que `confirm` relea la cuota manual en SQL; verificar que `dist/` no está en Git.
+- [ ] **TODO · A** — Tarea API K0-B: contacto de Recoger (nombre/teléfono) como campo del borrador y regla «Domicilio exige cliente» en servidor (hoy Recoger sin cliente se bloquea en `confirm_capture_order`); incluye migración. Después **K3** `customer-open-captures` (UI, nivel C).
+- [ ] **TODO · C** — Revisión Codex de una ronda + verificación en navegador (escritorio y 390×844, consola limpia, targets 44 px; login con `tools\agentic\local-servers\e2e-auth.bat`) de B2, B3, B4, Z4, Z5, K1, K2, K4. Mejora conocida de Z4: colonias guardadas se muestran por id hasta buscarlas por nombre.
+- [ ] **TODO** — Cierre: corrida limpia de puertas globales (Node 24 por shim; sin jobs en paralelo), quitar worktrees de delegación con `.harness/bin/remove-worktree.ps1`, commit de briefs/reportes nuevos (incluye `.agents/reports/z2b-*`), actualizar el smoke.
+- [ ] **Emmanuel** — Autorizar (o no) aplicar en remoto `20261120000100`, `20261120000200`, `20261121000100` (staging rollback-only primero) cuando z2b esté integrado; confirmar que nada se aplicó desde el preflight del 2026-11-20; decidir si «EPIPE con informe completo» cuenta como éxito del motor dsh.
+
 Última actualización: 2026-11-19
 
 Fuente principal: `PLAN_MODERNIZACION_POS_RESTAURANTE.md`.

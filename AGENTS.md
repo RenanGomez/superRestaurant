@@ -482,6 +482,17 @@ Las reglas de orquestación entre Claude, Codex y Gemini viven en `.harness/ORCH
 
 ---
 
+### 19.5. Smoke standalone siempre al día (vigente desde 2026-11-21)
+
+Decisión de Emmanuel del 2026-11-21: el humano da seguimiento a los cambios con el HTML standalone de smoke (`docs/smoke/smoke-<fecha>.html`, vigente: `smoke-2026-11-21.html`).
+
+- Después de **cada cambio integrado** (commit/cherry-pick en la rama de trabajo) que sea visible para un humano, o cuyo estado cambie (bloqueado, desbloqueado, migración aplicada), el orquestador actualiza `docs/smoke/smoke-<fecha>.data.json` (secciones de prueba, «Cambios recientes», «Decisiones pendientes», bloqueos) y regenera el HTML con `node tools/agentic/build-smoke-html.mjs <fecha>`.
+- El HTML nunca declara «verificado» algo que no se probó en navegador; los puntos sin verificar quedan pendientes y los bloqueos (migraciones sin aplicar, tareas abiertas) se escriben en `block`.
+- La actualización del smoke va en el mismo commit que el cambio o en uno `docs:` inmediato; una tarea no se da por cerrada en TODO/HANDOFF sin ella. Al abrir una ronda nueva se crea un `.data.json` nuevo con la fecha y la anterior se conserva.
+- Es trabajo nivel D (orquestador); no lo delega a un motor de código.
+
+---
+
 ## 20. Definition of Done
 
 Una tarea llega a REVIEW cuando:
