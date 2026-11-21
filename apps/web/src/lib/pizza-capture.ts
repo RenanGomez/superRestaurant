@@ -1,4 +1,4 @@
-import type { MenuModifierGroupV1, MenuModifierOptionV1, MenuProductV1, MenuProductVariantV1 } from "@super-restaurant/shared-types";
+import type { CaptureLineQuoteResultV1, MenuModifierGroupV1, MenuModifierOptionV1, MenuProductV1, MenuProductVariantV1 } from "@super-restaurant/shared-types";
 
 /**
  * Pizza V2 capture helpers (pure). The client only assembles ids: it never prices anything. Amounts come from the
@@ -80,11 +80,25 @@ export function pickHalfProduct(productId: string): PizzaHalfDraft {
   return emptyPizzaHalf(productId);
 }
 
+/** One base group of the product with its active, selectable options. */
+export interface PizzaSetupGroup {
+  readonly group: MenuModifierGroupV1;
+  readonly options: readonly MenuModifierOptionV1[];
+}
+
+/** One loose charged option and the group that offers it (the group may also be a base group). */
+export interface PizzaExtraChoice {
+  readonly group: MenuModifierGroupV1;
+  readonly option: MenuModifierOptionV1;
+}
+
 export interface PizzaHalfSetup {
-  readonly baseGroup: MenuModifierGroupV1 | undefined;
-  readonly baseOptions: readonly MenuModifierOptionV1[];
+  /** Every free/base group; N is shared and split among all of them. */
+  readonly baseGroups: readonly PizzaSetupGroup[];
+  /** Recipe options of a specialty, taken from any base group. */
   readonly recipeOptions: readonly MenuModifierOptionV1[];
-  readonly extraGroups: readonly { readonly group: MenuModifierGroupV1; readonly options: readonly MenuModifierOptionV1[] }[];
+  /** Loose charged options; they never consume N and are never merged with ingredients. */
+  readonly extraOptions: readonly PizzaExtraChoice[];
   /** Custom: choose ingredients. */
   readonly canChooseIngredients: boolean;
   /** Specialty with `customizeAtOrder`: remove recipe ingredients. */
@@ -93,25 +107,69 @@ export interface PizzaHalfSetup {
   readonly canAddExtras: boolean;
 }
 
+/** The legacy singular fields are still read and normalized here; the editor never emits them. */
+function baseGroupIds(product: MenuProductV1): readonly string[] {
+  return product.baseGroupIds ?? (product.baseGroupId == null ? [] : [product.baseGroupId]);
+}
+
+function looseExtras(product: MenuProductV1, catalogGroups: readonly MenuModifierGroupV1[]): readonly PizzaExtraChoice[] {
+  const activeGroups = catalogGroups.filter((group) => group.active !== false);
+  const find = (optionId: string): PizzaExtraChoice | undefined => {
+    for (const group of activeGroups) {
+      const option = group.options.find((candidate) => candidate.optionId === optionId && candidate.active);
+      if (option !== undefined) return { group, option };
+    }
+    return undefined;
+  };
+  if (product.extraOptionIds !== undefined) {
+    return product.extraOptionIds.flatMap((optionId) => find(optionId) ?? []);
+  }
+  // Legacy `extraGroupIds` expands to the active options of those groups, the same offer the old model had.
+  return (product.extraGroupIds ?? []).flatMap((groupId) => {
+    const group = activeGroups.find((candidate) => candidate.groupId === groupId);
+    return group === undefined ? [] : group.options.filter((option) => option.active).map((option) => ({ group, option }));
+  });
+}
+
 export function pizzaHalfSetup(product: MenuProductV1, catalogGroups: readonly MenuModifierGroupV1[]): PizzaHalfSetup {
-  const active = (group: MenuModifierGroupV1 | undefined): readonly MenuModifierOptionV1[] => group?.options.filter((option) => option.active) ?? [];
-  const baseGroup = catalogGroups.find((group) => group.groupId === product.baseGroupId);
   const custom = product.pizzaMode === "custom";
   const customize = product.customizeAtOrder === true;
+  const baseGroups = baseGroupIds(product).flatMap((groupId) => {
+    const group = catalogGroups.find((candidate) => candidate.groupId === groupId);
+    return group === undefined ? [] : [{ group, options: group.options.filter((option) => option.active) }];
+  });
   const recipeIds = new Set(product.defaultIngredientOptionIds ?? []);
-  const extraGroups = (product.extraGroupIds ?? [])
-    .map((groupId) => catalogGroups.find((group) => group.groupId === groupId))
-    .filter((group): group is MenuModifierGroupV1 => group !== undefined && group.active !== false)
-    .map((group) => ({ group, options: active(group) }));
+  const extraOptions = looseExtras(product, catalogGroups);
   return {
-    baseGroup,
-    baseOptions: active(baseGroup),
-    canAddExtras: (custom || customize) && extraGroups.length > 0,
-    canChooseIngredients: custom && baseGroup !== undefined,
+    baseGroups,
+    canAddExtras: (custom || customize) && extraOptions.length > 0,
+    canChooseIngredients: custom && baseGroups.length > 0,
     canRemove: product.pizzaMode === "specialty" && customize,
-    extraGroups,
-    recipeOptions: (baseGroup?.options ?? []).filter((option) => recipeIds.has(option.optionId)),
+    extraOptions,
+    recipeOptions: baseGroups.flatMap(({ options }) => options.filter((option) => recipeIds.has(option.optionId))),
   };
+}
+
+/** Ingredients chosen in one half against the product's N, for the visible counter. Never an amount. */
+export interface PizzaIngredientCounter {
+  readonly chosen: number;
+  readonly free: number;
+}
+
+export function pizzaIngredientCounter(product: MenuProductV1, half: Pick<PizzaHalfDraft, "ingredientOptionIds">): PizzaIngredientCounter {
+  return { chosen: half.ingredientOptionIds.length, free: product.freeIngredientCount ?? 0 };
+}
+
+/**
+ * Charges the server reports for a line, taken from its quote only (`subtotalMinor` already includes them).
+ * The client never prices the catalog; this just subtracts the quoted base to label the counter's `+$X`.
+ */
+export function pizzaServerChargesMinor(
+  quote: Pick<CaptureLineQuoteResultV1, "subtotalMinor" | "unitPriceMinor">,
+  quantity: number,
+): number {
+  const charged = quote.subtotalMinor - quote.unitPriceMinor * Math.max(1, quantity);
+  return charged > 0 ? charged : 0;
 }
 
 /** Variant of `product` that matches a size name (the two halves must share the size), `null` when sold without sizes. */
@@ -127,18 +185,31 @@ export function matchingVariantId(product: MenuProductV1, sizeName: string | nul
 export function pizzaHalfIssue(product: MenuProductV1, catalogGroups: readonly MenuModifierGroupV1[], half: PizzaHalfDraft): string | null {
   const setup = pizzaHalfSetup(product, catalogGroups);
   const name = product.name;
-  if (setup.baseGroup === undefined) return `${name} no tiene grupo de ingredientes configurado.`;
-  const ingredientCount = half.ingredientOptionIds.length;
-  if (product.pizzaMode === "custom") {
-    if (ingredientCount < setup.baseGroup.minimumQuantity) return `${name}: elige al menos ${setup.baseGroup.minimumQuantity} ingredientes.`;
-    if (ingredientCount > setup.baseGroup.maximumQuantity) return `${name}: máximo ${setup.baseGroup.maximumQuantity} ingredientes.`;
-  } else if (ingredientCount > 0) return `${name}: una especialidad no lleva ingredientes elegidos.`;
+  if (setup.baseGroups.length === 0) return `${name} no tiene grupo de ingredientes configurado.`;
+  const baseOptionIds = new Set(setup.baseGroups.flatMap(({ options }) => options.map((option) => option.optionId)));
+  if (half.ingredientOptionIds.some((id) => !baseOptionIds.has(id))) return `${name}: un ingrediente ya no está disponible.`;
+  for (const { group, options } of setup.baseGroups) {
+    const chosen = half.ingredientOptionIds.filter((id) => options.some((option) => option.optionId === id)).length;
+    if (product.pizzaMode === "custom" && chosen < group.minimumQuantity) {
+      return `${name}: elige al menos ${group.minimumQuantity} ingredientes de ${group.name || "Ingredientes"}.`;
+    }
+    if (chosen > group.maximumQuantity) return `${group.name || name}: máximo ${group.maximumQuantity}.`;
+    if (product.pizzaMode !== "custom" && chosen > 0) return `${name}: una especialidad no lleva ingredientes elegidos.`;
+  }
+  const recipeIds = new Set(setup.recipeOptions.map((option) => option.optionId));
+  if (half.removedIngredientOptionIds.some((id) => !recipeIds.has(id))) return `${name}: sólo se pueden quitar ingredientes de la receta.`;
   if (half.removedIngredientOptionIds.length > 0 && !setup.canRemove) return `${name}: no se pueden quitar ingredientes.`;
+  const extraIds = new Set(setup.extraOptions.map(({ option }) => option.optionId));
+  if (half.extraOptionIds.some((id) => !extraIds.has(id))) return `${name}: un extra ya no está disponible.`;
+  if (half.extraOptionIds.some((id) => half.ingredientOptionIds.includes(id))) return `${name}: un ingrediente no puede ser extra a la vez.`;
   if (half.extraOptionIds.length > 0 && !setup.canAddExtras) return `${name}: no admite extras.`;
-  for (const { group } of setup.extraGroups) {
-    const chosen = half.extraOptionIds.filter((id) => group.options.some((option) => option.optionId === id)).length;
-    if (chosen > group.maximumQuantity) return `${group.name}: máximo ${group.maximumQuantity}.`;
-    if (setup.canAddExtras && chosen < group.minimumQuantity) return `${group.name}: elige al menos ${group.minimumQuantity}.`;
+  const extraGroups = new Map<string, MenuModifierGroupV1>();
+  for (const { group } of setup.extraOptions) extraGroups.set(group.groupId, group);
+  for (const group of extraGroups.values()) {
+    const offered = setup.extraOptions.filter(({ group: owner }) => owner.groupId === group.groupId).map(({ option }) => option.optionId);
+    const chosen = half.extraOptionIds.filter((id) => offered.includes(id)).length;
+    if (chosen > group.maximumQuantity) return `${group.name || "Extras"}: máximo ${group.maximumQuantity}.`;
+    if (setup.canAddExtras && chosen < group.minimumQuantity) return `${group.name || "Extras"}: elige al menos ${group.minimumQuantity}.`;
   }
   return null;
 }

@@ -16,7 +16,7 @@ import { menuImagePublicUrl } from "../../../lib/menu-images";
 import { groupsForProduct } from "../../../lib/menu-groups";
 import { uiButton, uiOption } from "../../../lib/ui-classes";
 import { trapFocusIndex } from "../../../lib/focus-trap";
-import { buildPizzaLine, isPizzaProduct, pizzaDraftFromLine, type PizzaBuildResult, type PizzaDraft, type PizzaLineV2 } from "../../../lib/pizza-capture";
+import { buildPizzaLine, isPizzaProduct, pizzaDraftFromLine, pizzaHalfSetup, type PizzaBuildResult, type PizzaDraft, type PizzaLineV2 } from "../../../lib/pizza-capture";
 import { PizzaSection } from "./pizza-section";
 
 const button = uiButton("secondary", "min-w-11");
@@ -140,7 +140,13 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, catalo
     : null;
   const pizzaMissing = pizzaBuild !== null && !pizzaBuild.ok;
   const pizzaLine = pizzaBuild?.ok === true ? pizzaBuild.pizza : null;
-  const pizzaGroupIds = pizzaActive ? new Set([product.baseGroupId, ...(product.extraGroupIds ?? [])]) : new Set<string | null | undefined>();
+  // The server prices the base groups plus the group offering each loose extra, the same groups it requires empty
+  // in `modifierGroups`; the sheet must not list them twice.
+  const pizzaOwnGroups = pizzaActive ? pizzaHalfSetup(product, catalogGroups ?? []) : undefined;
+  const pizzaGroupIds = new Set<string>([
+    ...(pizzaOwnGroups?.baseGroups.map(({ group }) => group.groupId) ?? []),
+    ...(pizzaOwnGroups?.extraOptions.map(({ group }) => group.groupId) ?? []),
+  ]);
   const basePriceMinor = selectedVariant?.unitPriceMinor ?? product.unitPriceMinor;
   const halvesActive = fractionSetup !== undefined && splitChosen;
   const flavorGroup = assignedGroups.find((group) => group.groupId === fractionSetup?.flavorGroupId);
@@ -240,7 +246,9 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, catalo
           </div>
         </fieldset>}
         {pizzaActive && catalogGroups !== undefined && <PizzaSection catalogGroups={catalogGroups} currency={currency} disabled={busy || confirmed || lockSelection}
-          draft={pizzaDraft} otherProducts={pizzaOtherProducts} product={product} sizeName={selectedVariant?.name ?? null} onChange={setPizzaDraft} />}
+          draft={pizzaDraft} otherProducts={pizzaOtherProducts} product={product} quantity={quantity}
+          serverQuote={serverEstimate !== null && serverEstimate.key === quoteKey ? serverEstimate.value : null}
+          sizeName={selectedVariant?.name ?? null} onChange={setPizzaDraft} />}
         {pizzaMissing && pizzaBuild !== null && !pizzaBuild.ok && !sizeMissing && <p role="status" className="text-sm text-text-muted">{pizzaBuild.message}</p>}
         {halvesActive && <div className="grid gap-3 sm:grid-cols-2" aria-label="Mitad y mitad">
           {(["half-a", "half-b"] as const).map((half) => <HalfColumn key={half} half={half} draft={half === "half-a" ? halves.a : halves.b}

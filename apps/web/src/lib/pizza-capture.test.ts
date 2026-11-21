@@ -8,6 +8,9 @@ import {
   parsePizzaLineV2,
   pizzaDraftFromLine,
   pizzaHalfIssue,
+  pizzaHalfSetup,
+  pizzaIngredientCounter,
+  pizzaServerChargesMinor,
   samePizzaLine,
   splitPlanPizza,
   splitQuotePizza,
@@ -17,15 +20,16 @@ import {
 } from "./pizza-capture.js";
 
 const id = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const [P1, P2, V_M, V_L, V2_M, G_BASE, G_EXTRA, O1, O2, O3, X1] = [id(1), id(2), id(3), id(4), id(5), id(6), id(7), id(8), id(9), id(10), id(11)];
+const [P1, P2, V_M, V_L, V2_M, G_BASE, G_EXTRA, O1, O2, O3, X1, G_VEG, O4] = [id(1), id(2), id(3), id(4), id(5), id(6), id(7), id(8), id(9), id(10), id(11), id(12), id(13)];
 
 const option = (optionId: string, name: string, unitPriceMinor = 0) => ({ active: true, displayOrder: 0, maximumQuantity: 1, name, optionId, unitPriceMinor });
 const baseGroup = { active: true, displayOrder: 0, groupId: G_BASE, maximumQuantity: 2, minimumQuantity: 1, name: "Ingredientes", options: [option(O1, "Jamon"), option(O2, "Queso"), option(O3, "Piña")] } as unknown as MenuModifierGroupV1;
-const extraGroup = { active: true, displayOrder: 1, groupId: G_EXTRA, maximumQuantity: 1, minimumQuantity: 0, name: "Extras", options: [option(X1, "Orilla", 1500)] } as unknown as MenuModifierGroupV1;
-const groups = [baseGroup, extraGroup];
+const veggieGroup = { active: true, displayOrder: 1, groupId: G_VEG, maximumQuantity: 2, minimumQuantity: 0, name: "Vegetales", options: [option(O4, "Champiñón", 500)] } as unknown as MenuModifierGroupV1;
+const extraGroup = { active: true, displayOrder: 2, groupId: G_EXTRA, maximumQuantity: 1, minimumQuantity: 0, name: "Extras", options: [option(X1, "Orilla", 1500)] } as unknown as MenuModifierGroupV1;
+const groups = [baseGroup, veggieGroup, extraGroup];
 
-const custom = { active: true, baseGroupId: G_BASE, customizeAtOrder: false, defaultIngredientOptionIds: [], extraGroupIds: [G_EXTRA], freeIngredientCount: 1, name: "Armable", pizzaMode: "custom", productId: P1, variants: [{ active: true, name: "Mediana", variantId: V_M }, { active: true, name: "Grande", variantId: V_L }] } as unknown as MenuProductV1;
-const specialty = { active: true, baseGroupId: G_BASE, customizeAtOrder: true, defaultIngredientOptionIds: [O1, O2], extraGroupIds: [G_EXTRA], freeIngredientCount: 0, name: "Hawaiana", pizzaMode: "specialty", productId: P2, variants: [{ active: true, name: "mediana", variantId: V2_M }] } as unknown as MenuProductV1;
+const custom = { active: true, baseGroupIds: [G_BASE, G_VEG], customizeAtOrder: false, defaultIngredientOptionIds: [], extraOptionIds: [X1], freeIngredientCount: 1, name: "Armable", pizzaMode: "custom", productId: P1, variants: [{ active: true, name: "Mediana", variantId: V_M }, { active: true, name: "Grande", variantId: V_L }] } as unknown as MenuProductV1;
+const specialty = { active: true, baseGroupIds: [G_BASE, G_VEG], customizeAtOrder: true, defaultIngredientOptionIds: [O1, O4], extraOptionIds: [X1], freeIngredientCount: 0, name: "Hawaiana", pizzaMode: "specialty", productId: P2, variants: [{ active: true, name: "mediana", variantId: V2_M }] } as unknown as MenuProductV1;
 const productsById = new Map([[P1, custom], [P2, specialty]]);
 
 test("matchingVariantId matches the size by name, case-insensitively", () => {
@@ -35,14 +39,35 @@ test("matchingVariantId matches the size by name, case-insensitively", () => {
   assert.equal(matchingVariantId(custom, null), undefined);
 });
 
-test("pizzaHalfIssue enforces ingredient bounds, removals and extras", () => {
-  assert.match(pizzaHalfIssue(custom, groups, emptyPizzaHalf(P1)) ?? "", /al menos 1/u);
+test("pizzaHalfIssue enforces ingredient bounds per base group, removals and extras", () => {
+  assert.match(pizzaHalfIssue(custom, groups, emptyPizzaHalf(P1)) ?? "", /al menos 1 ingredientes de Ingredientes/u);
   assert.match(pizzaHalfIssue(custom, groups, { ...emptyPizzaHalf(P1), ingredientOptionIds: [O1, O2, O3] }) ?? "", /máximo 2/u);
   assert.equal(pizzaHalfIssue(custom, groups, { ...emptyPizzaHalf(P1), extraOptionIds: [X1], ingredientOptionIds: [O1] }), null);
+  // An ingredient of the second base group is valid and counts against the shared N, not its group alone.
+  assert.equal(pizzaHalfIssue(custom, groups, { ...emptyPizzaHalf(P1), ingredientOptionIds: [O1, O4] }), null);
   assert.match(pizzaHalfIssue(specialty, groups, { ...emptyPizzaHalf(P2), ingredientOptionIds: [O1] }) ?? "", /no lleva ingredientes/u);
-  assert.equal(pizzaHalfIssue(specialty, groups, { ...emptyPizzaHalf(P2), removedIngredientOptionIds: [O1] }), null);
+  assert.equal(pizzaHalfIssue(specialty, groups, { ...emptyPizzaHalf(P2), removedIngredientOptionIds: [O4] }), null);
+  assert.match(pizzaHalfIssue(specialty, groups, { ...emptyPizzaHalf(P2), removedIngredientOptionIds: [O2] }) ?? "", /receta/u);
   assert.match(pizzaHalfIssue({ ...specialty, customizeAtOrder: false } as MenuProductV1, groups, { ...emptyPizzaHalf(P2), removedIngredientOptionIds: [O1] }) ?? "", /no se pueden quitar/u);
-  assert.match(pizzaHalfIssue({ ...custom, baseGroupId: null } as unknown as MenuProductV1, groups, emptyPizzaHalf(P1)) ?? "", /grupo de ingredientes/u);
+  assert.match(pizzaHalfIssue({ ...custom, baseGroupIds: [] } as unknown as MenuProductV1, groups, emptyPizzaHalf(P1)) ?? "", /grupo de ingredientes/u);
+});
+
+test("pizzaHalfSetup reads the r2 lists and normalizes the legacy singular fields", () => {
+  const setup = pizzaHalfSetup(custom, groups);
+  assert.deepEqual(setup.baseGroups.map(({ group }) => group.groupId), [G_BASE, G_VEG]);
+  assert.deepEqual(setup.extraOptions.map(({ option }) => option.optionId), [X1]);
+  assert.equal(setup.canChooseIngredients, true);
+  assert.deepEqual(pizzaHalfSetup(specialty, groups).recipeOptions.map((option) => option.optionId), [O1, O4]);
+  const legacy = { ...custom, baseGroupIds: undefined, baseGroupId: G_BASE, extraOptionIds: undefined, extraGroupIds: [G_EXTRA] } as unknown as MenuProductV1;
+  assert.deepEqual(pizzaHalfSetup(legacy, groups).baseGroups.map(({ group }) => group.groupId), [G_BASE]);
+  assert.deepEqual(pizzaHalfSetup(legacy, groups).extraOptions.map(({ option }) => option.optionId), [X1]);
+});
+
+test("pizzaIngredientCounter counts selections and pizzaServerChargesMinor reads only the quote", () => {
+  assert.deepEqual(pizzaIngredientCounter(custom, { ingredientOptionIds: [O1, O2, O4] }), { chosen: 3, free: 1 });
+  const quote = { subtotalMinor: 17_500, unitPriceMinor: 15_000 };
+  assert.equal(pizzaServerChargesMinor(quote, 1), 2_500);
+  assert.equal(pizzaServerChargesMinor({ subtotalMinor: 20_000, unitPriceMinor: 10_000 }, 2), 0);
 });
 
 test("buildPizzaLine mirrors half A for a whole pizza", () => {
