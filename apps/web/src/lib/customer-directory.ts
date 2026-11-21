@@ -7,8 +7,50 @@ import {
 } from "@super-restaurant/shared-types";
 import type {
   CustomerDirectorySearchResultV1,
+  CustomerPhoneInputV1,
   CustomerSearchModeV1,
 } from "@super-restaurant/shared-types";
+
+/** `parseSaveCustomerProfileCommandV1` accepts `phones: []`, so the profile may keep zero phones. */
+export const customerProfileMinimumPhones = 0;
+
+export interface CustomerPhoneRemovalInput {
+  readonly phones: readonly CustomerPhoneInputV1[];
+  readonly contactId: string;
+  readonly displayName: string;
+  readonly savedDisplayName: string;
+  readonly savedPhones: readonly CustomerPhoneInputV1[];
+}
+
+export interface CustomerPhoneRemoval {
+  readonly blocked: boolean;
+  readonly reason?: string;
+  readonly phones: readonly CustomerPhoneInputV1[];
+  readonly alsoSavesOtherChanges: boolean;
+}
+
+function phoneChanged(current: CustomerPhoneInputV1, saved: CustomerPhoneInputV1): boolean {
+  return current.label.trim() !== saved.label.trim() || current.displayValue.trim() !== saved.displayValue.trim();
+}
+
+/** Removing a phone is a full profile save: the pending list and name go together. */
+export function getCustomerPhoneRemoval(input: CustomerPhoneRemovalInput): CustomerPhoneRemoval {
+  const remaining = input.phones.filter(phone => phone.contactId !== input.contactId);
+  if (remaining.length === input.phones.length) {
+    return { blocked: true, reason: "Ese teléfono ya no está en la ficha.", phones: input.phones, alsoSavesOtherChanges: false };
+  }
+  if (remaining.length < customerProfileMinimumPhones) {
+    return { blocked: true, reason: "La ficha debe conservar al menos un teléfono.", phones: input.phones, alsoSavesOtherChanges: false };
+  }
+  const savedRemaining = input.savedPhones.filter(phone => phone.contactId !== input.contactId);
+  const alsoSavesOtherChanges = input.displayName.trim() !== input.savedDisplayName.trim()
+    || remaining.length !== savedRemaining.length
+    || remaining.some(phone => {
+      const saved = savedRemaining.find(item => item.contactId === phone.contactId);
+      return saved === undefined || phoneChanged(phone, saved);
+    });
+  return { blocked: false, phones: remaining, alsoSavesOtherChanges };
+}
 
 export type CustomerRequestResult<T> = { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable" };

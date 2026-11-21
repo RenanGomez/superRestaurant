@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type FormEvent, type KeyboardEvent } from "react";
 import Link from "next/link";
 import type { BranchScope, CustomerDirectoryDetailV1, CustomerDirectoryDetailAddressV1, CustomerDirectorySearchResultV1, CustomerRecentOrderListV1, CustomerPhoneInputV1, CustomerAddressFieldsV1, CustomerSearchModeV1 } from "@super-restaurant/shared-types";
 import { Field } from "../../../components/field-hint";
-import { getCustomerAutocompleteRequest, getCustomerDirectorySuggestions, insertCustomerDirectorySuggestion, isCurrentCustomerAutocompleteRequest, isCurrentCustomerSearch, selectCurrentCustomerSearch, type CustomerAutocompleteRequest, type CustomerDirectorySuggestion, type CustomerRequestResult, type CustomerSearchSnapshot } from "../../../lib/customer-directory";
+import { getCustomerAutocompleteRequest, getCustomerDirectorySuggestions, getCustomerPhoneRemoval, insertCustomerDirectorySuggestion, isCurrentCustomerAutocompleteRequest, isCurrentCustomerSearch, selectCurrentCustomerSearch, type CustomerAutocompleteRequest, type CustomerDirectorySuggestion, type CustomerRequestResult, type CustomerSearchSnapshot } from "../../../lib/customer-directory";
+import { trapFocusIndex } from "../../../lib/focus-trap";
 import { countOrderArticles } from "../../../lib/customer-order-history";
 import { formatDeliveryMatch } from "../../../lib/delivery-zones";
 import { matchDeliveryAddress } from "../delivery-match-action";
@@ -320,24 +321,95 @@ function CustomerHistory({ customerId, scope, action }: {
   </section>;
 }
 
+function PhoneRemovalDialog({ phone, customerName, alsoSavesOtherChanges, problem, onCancel, onConfirm }: {
+  readonly phone: CustomerPhoneInputV1;
+  readonly customerName: string | undefined;
+  readonly alsoSavesOtherChanges: boolean;
+  readonly problem: string | undefined;
+  readonly onCancel: () => void;
+  readonly onConfirm: () => void;
+}): ReactNode {
+  const headingId = useId();
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    cancelRef.current?.focus();
+    return () => { opener?.focus(); };
+  }, []);
+  useEffect(() => {
+    function onKeyDown(event: globalThis.KeyboardEvent): void {
+      if (event.key === "Escape") { event.preventDefault(); onCancel(); return; }
+      if (event.key !== "Tab" || dialogRef.current === null) return;
+      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>("button, input, select, textarea, [tabindex]")]
+        .filter((element) => !element.hasAttribute("disabled") && element.tabIndex >= 0 && element.getClientRects().length > 0);
+      const target = trapFocusIndex(focusable.length, focusable.indexOf(document.activeElement as HTMLElement), event.shiftKey);
+      if (target !== null) { event.preventDefault(); focusable[target]?.focus(); }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onCancel]);
+  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] p-4 sm:items-center"
+    role="dialog" aria-modal="true" aria-labelledby={headingId} aria-describedby={`${headingId}-description`}>
+    <div ref={dialogRef} className="w-full max-w-md rounded-xl border border-border bg-surface p-4 sm:p-5">
+      <h2 id={headingId} className="font-heading text-lg font-semibold">Quitar teléfono</h2>
+      <p id={`${headingId}-description`} className="mt-2 text-sm">¿Quitar el teléfono {phone.label.trim() || "sin etiqueta"}: {phone.displayValue.trim() || "sin número"} de la ficha de {customerName ?? "este cliente"}?</p>
+      <p className="mt-2 text-sm text-text-muted">La ficha se guarda de inmediato.</p>
+      {alsoSavesOtherChanges && <p role="note" className="mt-3 rounded-lg border border-border bg-bg p-3 text-sm font-semibold">También se guardarán los demás cambios que hiciste en la ficha.</p>}
+      {problem !== undefined && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{problem}</p>}
+      <div className="mt-4 flex flex-wrap justify-end gap-2">
+        <button ref={cancelRef} type="button" className={buttonClass} onClick={onCancel}>Cancelar</button>
+        <button type="button" className={uiButton("danger")} onClick={onConfirm}>Quitar y guardar</button>
+      </div>
+    </div>
+  </div>;
+}
+
 function ProfileForm({ customer, disabled, onSave }: {
   readonly customer?: CustomerDirectoryDetailV1["customer"] | undefined; readonly disabled: boolean;
   readonly onSave: (name: string, phones: readonly CustomerPhoneInputV1[]) => void;
 }): ReactNode {
   const [phones, setPhones] = useState<readonly CustomerPhoneInputV1[]>(customer?.phones ?? []);
+  const [removal, setRemoval] = useState<{ readonly phone: CustomerPhoneInputV1; readonly phones: readonly CustomerPhoneInputV1[]; readonly alsoSavesOtherChanges: boolean }>();
+  const [removalProblem, setRemovalProblem] = useState<string>();
+  const formRef = useRef<HTMLFormElement>(null);
+
+  function requestRemoval(phone: CustomerPhoneInputV1): void {
+    const displayName = formRef.current === null ? "" : String(new FormData(formRef.current).get("displayName") ?? "");
+    const plan = getCustomerPhoneRemoval({ phones, contactId: phone.contactId, displayName,
+      savedDisplayName: customer?.displayName ?? "", savedPhones: customer?.phones ?? [] });
+    if (plan.blocked) { setRemovalProblem(plan.reason); return; }
+    setRemovalProblem(undefined);
+    setRemoval({ phone, phones: plan.phones, alsoSavesOtherChanges: plan.alsoSavesOtherChanges });
+  }
+  function confirmRemoval(): void {
+    if (removal === undefined || formRef.current === null) return;
+    const displayName = String(new FormData(formRef.current).get("displayName") ?? "").trim();
+    if (displayName === "") { setRemovalProblem("Escribe el nombre o alias antes de guardar."); return; }
+    if (removal.phones.some(phone => phone.label.trim() === "" || phone.displayValue.trim() === "")) {
+      setRemovalProblem("Completa la etiqueta y el número de los demás teléfonos antes de guardar.");
+      return;
+    }
+    onSave(displayName, removal.phones.map(phone => ({ ...phone, label: phone.label.trim(), displayValue: phone.displayValue.trim() })));
+    setRemoval(undefined);
+  }
+
   return <section className={panelClass}><h2 className="mb-3 font-heading text-lg font-semibold">{customer === undefined ? "Alta rápida" : "Ficha del cliente"}</h2>
-    <form onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget); onSave(String(data.get("displayName") ?? "").trim(), phones.map(phone => ({ ...phone, label: phone.label.trim(), displayValue: phone.displayValue.trim() }))); }}>
+    <form ref={formRef} onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget); onSave(String(data.get("displayName") ?? "").trim(), phones.map(phone => ({ ...phone, label: phone.label.trim(), displayValue: phone.displayValue.trim() }))); }}>
       <fieldset disabled={disabled} className="flex min-w-0 flex-col gap-3">
         <Field className="flex flex-col gap-1 text-sm" hint="Cómo identificas al cliente al tomar el pedido; puede ser su nombre o un apodo." label="Nombre o alias">{(id) => <><input id={id} name="displayName" required maxLength={120} defaultValue={customer?.displayName ?? ""} className={inputClass} autoComplete="off" /></>}</Field>
         {phones.map((phone, index) => <div key={phone.contactId} className="flex min-w-0 flex-wrap items-end gap-2">
           <div className="flex min-w-0 flex-1 basis-28 flex-col gap-2"><Field className="flex flex-col gap-1 text-sm" hint="Tipo de teléfono (casa, celular, trabajo) para saber a cuál llamar." label={`Etiqueta de teléfono ${index + 1}`}>{(id) => <><select id={id} className={inputClass} value={phoneLabels.includes(phone.label as typeof phoneLabels[number]) ? phone.label : "Otro"} onChange={event => setPhones(phones.map(item => item.contactId === phone.contactId ? { ...item, label: event.target.value === "Otro" ? "" : event.target.value } : item))}>{phoneLabels.map(label => <option key={label}>{label}</option>)}<option>Otro</option></select></>}</Field>{!phoneLabels.includes(phone.label as typeof phoneLabels[number]) && <Field className="flex flex-col gap-1 text-sm" hint="Escribe cómo quieres llamar a este teléfono, por ejemplo Oficina." label="Otra etiqueta">{(id) => <><input id={id} required maxLength={40} className={inputClass} value={phone.label} onChange={event => setPhones(phones.map(item => item.contactId === phone.contactId ? { ...item, label: event.target.value } : item))} /></>}</Field>}</div>
           <Field className="flex min-w-0 flex-1 basis-40 flex-col gap-1 text-sm" hint="Número con el que se encuentra al cliente la próxima vez. Escríbelo tal como lo marcarías." label={`Teléfono ${index + 1}`}>{(id) => <><input id={id} type="tel" required maxLength={80} className={inputClass} value={phone.displayValue} onChange={event => setPhones(phones.map(item => item.contactId === phone.contactId ? { ...item, displayValue: event.target.value } : item))} /></>}</Field>
-          <button type="button" className={buttonClass} aria-label={`Quitar teléfono ${index + 1} de la ficha`} onClick={() => setPhones(phones.filter(item => item.contactId !== phone.contactId))}>Quitar</button>
+          <button type="button" className={buttonClass} aria-label={`Quitar teléfono ${index + 1} de la ficha`} onClick={() => requestRemoval(phone)}>Quitar</button>
         </div>)}
         <div className="flex flex-wrap gap-2"><button type="button" className={buttonClass} disabled={phones.length >= 20} onClick={() => setPhones([...phones, { contactId: crypto.randomUUID(), label: "Principal", displayValue: "" }])}>Añadir teléfono</button>
           <button className={buttonClass}>Guardar ficha</button></div>
       </fieldset>
     </form>
+    {removal === undefined && removalProblem !== undefined && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{removalProblem}</p>}
+    {removal !== undefined && <PhoneRemovalDialog phone={removal.phone} customerName={customer?.displayName} alsoSavesOtherChanges={removal.alsoSavesOtherChanges}
+      problem={removalProblem} onCancel={() => { setRemoval(undefined); setRemovalProblem(undefined); }} onConfirm={confirmRemoval} />}
   </section>;
 }
 
