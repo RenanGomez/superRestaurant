@@ -39,7 +39,7 @@ import type {
   OrderDetailV1,
 } from "@super-restaurant/shared-types";
 
-import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
+import { canStartCapture, captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
   rehydrateCaptureWorkspace, isRecoverableCaptureDraft, shouldRenewLease } from "../../../lib/capture-workspace";
 import { Field, FieldLabel } from "../../../components/field-hint";
 import type { CaptureRequestResult } from "../../../lib/capture-workspace";
@@ -154,6 +154,14 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   const [repeatPreview, setRepeatPreview] = useState<CustomerRepeatOrderPreviewV1>();
   const [selectedContact, setSelectedContact] = useState<string>();
   const [selectedAddress, setSelectedAddress] = useState<string>();
+  const [landingCustomer, setLandingCustomer] = useState<CustomerDirectoryDetailV1>();
+  const [landingContactId, setLandingContactId] = useState("");
+  const [landingCustomerError, setLandingCustomerError] = useState(false);
+  // shortcut: the Capture draft contract has no pickup-name/phone fields yet. The name stays in
+  // this landing's local state (it only gates "Nueva captura") until a separate API task can
+  // carry it on the draft; it is never invented into a server command here.
+  const [pickupName, setPickupName] = useState("");
+  const [pickupPhone, setPickupPhone] = useState("");
   const [sourceChannel, setSourceChannel] = useState<CaptureSourceChannelV1>("phone");
   const [fulfillmentChannel, setFulfillmentChannel] = useState<CaptureFulfillmentChannelV1 | null>("delivery");
   const [deliveryInstructions, setDeliveryInstructions] = useState("");
@@ -602,18 +610,37 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   }
 
   function create(): void {
+    void createFromLanding();
+  }
+
+  /** Opens a draft from the landing only when the chosen fulfillment has what it needs, then
+   * links the customer selected on the landing before handing control to the draft. */
+  async function createFromLanding(): Promise<void> {
+    if (busy) return;
+    const hasCustomer = fulfillmentChannel === "delivery" && landingCustomer !== undefined && landingContactId !== "";
+    if (!canStartCapture(fulfillmentChannel, hasCustomer, pickupName)) return;
     setNoSaleNotice(false);
     setHoldNotice(false);
-    void run("create", { schemaVersion: 1, scope, captureDraftId: crypto.randomUUID(), expectedVersion: 0,
-      sourceChannel, fulfillmentChannel, eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), deviceId,
-      occurredAt: new Date().toISOString() });
+    const created = await run("create", { schemaVersion: 1, scope, captureDraftId: crypto.randomUUID(),
+      expectedVersion: 0, sourceChannel, fulfillmentChannel, eventId: crypto.randomUUID(),
+      idempotencyKey: crypto.randomUUID(), deviceId, occurredAt: new Date().toISOString() });
+    if (created === undefined || !created.ok || !("replayed" in created.value)) return;
+    const detail = created.value.detail;
+    if (fulfillmentChannel !== "delivery" || landingCustomer === undefined || landingContactId === ""
+      || detail.attentionLeaseId === null) return;
+    const linked = await run("customer", { schemaVersion: 1, scope, captureDraftId: detail.captureDraftId,
+      expectedVersion: detail.version, attentionLeaseId: detail.attentionLeaseId,
+      customerId: landingCustomer.customer.customerId, contactId: landingContactId,
+      expectedCustomerVersion: landingCustomer.customer.version, eventId: crypto.randomUUID(),
+      idempotencyKey: crypto.randomUUID(), deviceId, occurredAt: new Date().toISOString() });
+    if (linked?.ok) await refreshWorkspace(detail.captureDraftId);
   }
 
   function createAfterConfirmation(): void {
     if (kitchenSending) return;
     reset();
     void run("create", { schemaVersion: 1, scope, captureDraftId: crypto.randomUUID(), expectedVersion: 0,
-      sourceChannel: "phone", fulfillmentChannel: "delivery", eventId: crypto.randomUUID(),
+      sourceChannel: "phone", fulfillmentChannel: null, eventId: crypto.randomUUID(),
       idempotencyKey: crypto.randomUUID(), deviceId, occurredAt: new Date().toISOString() });
   }
 
@@ -906,6 +933,24 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     }
   }
 
+  /** Resolves the customer picked on the landing and keeps its first phone as the contact that
+   * will be linked when the draft opens; a multi-phone customer can change it on the landing. */
+  function selectLandingCustomer(customerId: string): void {
+    void (async () => {
+      setLandingCustomerError(false);
+      const reply = await run("detail", { schemaVersion: 1, scope, customerId });
+      if (!reply?.ok || !("customer" in reply.value)) {
+        setLandingCustomer(undefined);
+        setLandingContactId("");
+        setLandingCustomerError(true);
+        return;
+      }
+      const detail = reply.value as CustomerDirectoryDetailV1;
+      setLandingCustomer(detail);
+      setLandingContactId(detail.customer.phones[0]?.contactId ?? "");
+    })();
+  }
+
   function read(customerId: string): void {
     void (async () => {
       const reply = await run("detail", { schemaVersion: 1, scope, customerId });
@@ -1013,6 +1058,8 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     setSheetConfirmedTotalMinor(undefined);
     setRecentOrders(undefined); setRepeatPreview(undefined);
     setError(undefined); setErrorOperation(undefined); setErrorCode(undefined); setSourceChannel("phone"); setFulfillmentChannel("delivery");
+    setLandingCustomer(undefined); setLandingContactId(""); setLandingCustomerError(false);
+    setPickupName(""); setPickupPhone("");
     setDeliveryInstructions("");
     setDeliveryInstructionSuggestions([]);
     setSelectedTableId("");
@@ -1122,15 +1169,58 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       <button type="button" className={`${button} ml-3`} disabled={busy}
         onClick={() => { reset(); void run("tray", { schemaVersion: 2, scope, limit: 20 }); }}>Retomar</button>
     </div>}
+    <section className={panel} aria-label="Cliente y canal de la captura">
+      <CaptureCustomerSearch scope={scope} disabled={capture === undefined ? busy : locked} inputRef={searchInputRef}
+        onSelect={capture === undefined ? selectLandingCustomer : read} />
+      {capture === undefined && landingCustomer !== undefined && <div className="mt-3 rounded-lg border border-border bg-bg p-3">
+        <p className="text-sm">Cliente: <strong>{landingCustomer.customer.displayName}</strong></p>
+        {landingCustomer.customer.phones.length > 1
+          ? <Field className="mt-2 grid gap-1 text-sm" hint="Teléfono con el que se contactará a este cliente en la captura." label="Teléfono de contacto">{(id) => <select id={id} className={input} value={landingContactId}
+              disabled={busy} onChange={(event) => setLandingContactId(event.target.value)}>
+              {landingCustomer.customer.phones.map((phone) => <option key={phone.contactId} value={phone.contactId}>
+                {phone.label} · {phone.displayValue}
+              </option>)}
+            </select>}</Field>
+          : landingCustomer.customer.phones.length === 1
+            ? <p className="mt-1 text-xs text-text-muted">{landingCustomer.customer.phones[0]?.label} · {landingCustomer.customer.phones[0]?.displayValue}</p>
+            : <p role="alert" className="mt-1 text-sm">Este cliente no tiene teléfono; agrégalo en el directorio antes de capturar un domicilio.</p>}
+      </div>}
+      {capture === undefined && landingCustomerError && <p role="alert" className="mt-2 text-sm">No se pudo cargar el cliente. Reintenta la búsqueda.</p>}
+      <div className="mt-4 flex flex-wrap gap-3 border-t border-border pt-4">
+        <Field className="text-sm" hint="Por dónde llegó el pedido: teléfono, WhatsApp, mostrador, mesa o autoservicio. Sirve para reportes." label="Origen">{(id) => <><select id={id} value={sourceChannel} onChange={changeSource}
+          className={`${input} ml-2`} disabled={capture === undefined ? busy : locked}><option value="phone">Teléfono</option><option value="whatsapp_manual">WhatsApp manual</option>
+          <option value="counter">Mostrador</option><option value="table">Mesa</option><option value="self_service">Autoservicio</option></select></>}</Field>
+        <Field className="text-sm" hint="Cómo se entrega el pedido: a domicilio, para recoger o en mostrador. Domicilio pide cliente y dirección." label="Cumplimiento">{(id) => <><select id={id} value={fulfillmentChannel ?? ""} onChange={changeFulfillment}
+          className={`${input} ml-2`} disabled={capture === undefined ? busy : locked || fulfillmentSnapshot !== null}><option value="">Sin definir</option><option value="delivery">Domicilio</option>
+          <option value="pickup" disabled={capture !== undefined && fulfillmentSnapshot !== null}>Recoger</option><option value="counter" disabled={capture !== undefined && fulfillmentSnapshot !== null}>Mostrador</option>
+          <option value="dine_in" disabled={capture !== undefined && fulfillmentSnapshot !== null}>Mesa</option></select></>}</Field>
+      </div>
+    </section>
     {capture === undefined ? <>
       {holdNotice && <div role="status" className="rounded-lg border border-border bg-surface p-3 text-sm">Captura guardada para después.</div>}
       {noSaleNotice && <div role="status" className="rounded-lg border border-border bg-surface p-3 text-sm">
         Captura cancelada.
       </div>}
-      <section className={panel}><h2 className="font-heading text-lg font-semibold">Abrir captura</h2>
-        <p className="my-2 text-sm text-text-muted">Crea un borrador durable para una llamada con entrega a domicilio.</p>
-        <button className={button} onClick={create} aria-keyshortcuts={ariaKeyShortcut("create")}
-          disabled={busy}>Nueva captura telefónica</button></section>
+      <section className={panel} aria-labelledby="capture-start-title"><h2 id="capture-start-title" className="font-heading text-lg font-semibold">Nueva captura</h2>
+        <p className="my-2 text-sm text-text-muted">
+          {fulfillmentChannel === "delivery" ? "Domicilio: busca y elige al cliente arriba; el borrador nunca se abre sin él."
+            : fulfillmentChannel === "pickup" ? "Recoger: escribe el nombre de quien recoge el pedido."
+              : fulfillmentChannel === "counter" ? "Mostrador: abre la captura y agrega los productos."
+                : fulfillmentChannel === "dine_in" ? "Mesa: abre la captura y elige la mesa al confirmar."
+                  : "Elige el cumplimiento arriba para abrir una captura."}
+        </p>
+        {fulfillmentChannel === "pickup" && <div className="my-3 grid gap-3 sm:grid-cols-2">
+          <Field className="grid gap-1 text-sm" hint="Nombre de quien recogerá el pedido; se usa para llamarle al entregarlo." id="capture-pickup-name" label="Nombre de quien recoge">{() => <input id="capture-pickup-name" required maxLength={120} autoComplete="off" className={input}
+            value={pickupName} onChange={(event) => setPickupName(event.target.value)} disabled={busy} />}</Field>
+          <Field className="grid gap-1 text-sm" hint="Teléfono para avisarle cuando el pedido esté listo. Opcional." id="capture-pickup-phone" label="Teléfono (opcional)">{() => <input id="capture-pickup-phone" type="tel" maxLength={80} autoComplete="off" className={input}
+            value={pickupPhone} onChange={(event) => setPickupPhone(event.target.value)} disabled={busy} />}</Field>
+        </div>}
+        <button type="button" className={button} onClick={() => void createFromLanding()} aria-keyshortcuts={ariaKeyShortcut("create")}
+          disabled={busy || !canStartCapture(fulfillmentChannel, landingCustomer !== undefined && landingContactId !== "", pickupName)}>
+          {fulfillmentChannel === "delivery" && landingCustomer !== undefined
+            ? `Nueva captura para ${landingCustomer.customer.displayName}` : "Nueva captura"}
+        </button>
+      </section>
       {tray.length > 0 && <section className={panel}><h2 className="font-heading text-lg font-semibold">Borradores recuperables</h2>
         <p className="my-2 text-sm text-text-muted">Retoma una captura de esta sucursal para seguir atendiéndola.</p>
         <div className="grid gap-2">{tray.filter(isRecoverableCaptureDraft).map((item) => <button key={item.captureDraftId} className={`${button} min-w-0 text-left`}
@@ -1183,20 +1273,8 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
         </div>
       </section>}
       {printDocuments !== undefined && <PrintPreview documents={printDocuments} onClose={() => setPrintDocuments(undefined)} />}
-      <div className={stepVisible("delivery")}>
-      <section className={panel}><h2 className="font-heading text-lg font-semibold">Canal y cumplimiento</h2>
-        <div className="mt-3 flex flex-wrap gap-3"><Field className="text-sm" hint="Por dónde llegó el pedido: teléfono, WhatsApp, mostrador, mesa o autoservicio. Sirve para reportes." label="Origen">{(id) => <><select id={id} value={sourceChannel} onChange={changeSource}
-          className={`${input} ml-2`} disabled={locked}><option value="phone">Teléfono</option><option value="whatsapp_manual">WhatsApp manual</option>
-          <option value="counter">Mostrador</option><option value="table">Mesa</option><option value="self_service">Autoservicio</option></select></>}</Field>
-        <Field className="text-sm" hint="Cómo se entrega el pedido: a domicilio, para recoger o en mostrador. Domicilio pide cliente y dirección." label="Cumplimiento">{(id) => <><select id={id} value={fulfillmentChannel ?? ""} onChange={changeFulfillment}
-          className={`${input} ml-2`} disabled={locked || fulfillmentSnapshot !== null}><option value="">Sin definir</option><option value="delivery">Domicilio</option>
-          <option value="pickup" disabled={fulfillmentSnapshot !== null}>Recoger</option><option value="counter" disabled={fulfillmentSnapshot !== null}>Mostrador</option>
-          <option value="dine_in" disabled={fulfillmentSnapshot !== null}>Mesa</option></select></>}</Field></div>
-      </section>
-      </div>
       <div className={stepVisible("customer")}>
       <section id="capture-customer-section" tabIndex={-1} className={`${panel} scroll-mt-20 focus-visible:outline-2 focus-visible:outline-accent`}><h2 className="font-heading text-lg font-semibold">Cliente</h2>
-        <div className="mt-3"><CaptureCustomerSearch scope={scope} disabled={locked} inputRef={searchInputRef} onSelect={read} /></div>
         {customer !== undefined && <CaptureCustomerCard scope={scope} deviceId={deviceId} locked={locked} detail={customer}
           selectedContact={selectedContact} selectedAddress={selectedAddress}
           customerSaved={customerSnapshot !== null && customerSnapshot.customerId === customer.customer.customerId}

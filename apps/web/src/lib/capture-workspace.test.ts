@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseAutosaveCaptureDraftCommandV1, parseBranchScope, type CaptureDraftSummaryV1,
   type CaptureTrayItemV2 } from "@super-restaurant/shared-types";
-import { captureDeviceId, clearPendingCaptureAutosave, isRecoverableCaptureDraft, persistPendingCaptureAutosave,
+import { canStartCapture, captureDeviceId, clearPendingCaptureAutosave, isRecoverableCaptureDraft, persistPendingCaptureAutosave,
   readPendingCaptureAutosave, rehydrateCaptureWorkspace, requestCapture, shortCaptureDraftId, shouldRenewLease } from "./capture-workspace.js";
 import { getCaptureConfirmationContext } from "./capture-confirmation-context.js";
 const scope={restaurantId:"1e37ae13-8507-484c-969f-2176f77b7000",branchId:"23723e10-c0bf-49fd-9363-4f0e2c60e955"};
@@ -12,6 +12,16 @@ const captureDraftId="ee50f0f6-746f-47cb-8383-ad7834ef3ef0";
 test("short capture ID distinguishes drafts without exposing a full UUID", () => {
   assert.equal(shortCaptureDraftId(captureDraftId), "EF3EF0");
   assert.equal(shortCaptureDraftId("ee50f0f6-746f-47cb-8383-ad7834abcdef"), "ABCDEF");
+});
+test("a draft can start only when its fulfillment has what it needs", () => {
+  assert.equal(canStartCapture("delivery", false, ""), false, "domicilio without a customer never starts");
+  assert.equal(canStartCapture("delivery", true, ""), true);
+  assert.equal(canStartCapture("pickup", false, ""), false, "recoger requires a name");
+  assert.equal(canStartCapture("pickup", false, "   "), false, "a blank name is not a name");
+  assert.equal(canStartCapture("pickup", false, "Ana Torres"), true);
+  assert.equal(canStartCapture("counter", false, ""), true, "mostrador starts directly");
+  assert.equal(canStartCapture("dine_in", false, ""), true, "mesa starts directly");
+  assert.equal(canStartCapture(null, true, "Ana"), false, "no fulfillment cannot start");
 });
 test("drafts are kept unless the server explicitly reports zero lines", () => {
   const summary: CaptureDraftSummaryV1 = { schemaVersion: 1, scope: confirmationScope, captureDraftId, folio: "C-1", sourceChannel: "phone",

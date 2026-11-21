@@ -58,6 +58,21 @@ export interface CaptureKeyValueStore {
   readonly setItem: (key: string, value: string) => void;
 }
 
+/**
+ * Whether the landing page may open a new draft for the chosen fulfillment: delivery needs an
+ * identified customer (a draft is never created for it without one), pickup needs a name to call,
+ * and counter/dine-in start directly.
+ */
+export function canStartCapture(channel: CaptureFulfillmentChannelV1 | null, hasCustomer: boolean,
+  pickupName: string): boolean {
+  switch (channel) {
+    case "delivery": return hasCustomer;
+    case "pickup": return pickupName.trim().length > 0;
+    case "counter": case "dine_in": return true;
+    default: return false;
+  }
+}
+
 /** Compact identifier for a tray row until its customer label is available. */
 export function shortCaptureDraftId(captureDraftId: string): string {
   return captureDraftId.slice(-6).toUpperCase();
