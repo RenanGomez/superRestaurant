@@ -156,6 +156,34 @@ expect(parseCaptureSelectionPlanProjectionV1({ ...projection, lineCount: 2 }) ==
 expect(parseCaptureSelectionPlanProjectionV1({ ...projection, currency: "mxn" }) === undefined,
   "projection requires uppercase ISO currency");
 
+// Pizza V2 line: the stored picks come back additively and are validated strictly.
+const pizzaHalf = (fraction: string) => ({
+  fraction, productId, variantId: null, ingredientOptionIds: [optionId], extraOptionIds: [], removedIngredientOptionIds: [],
+});
+const pizzaPicks = { ruleVersion: "pizza-halves-v2", halves: [pizzaHalf("half-a"), pizzaHalf("half-b")] };
+const withPizza = (pizza: unknown) => ({ ...projection, lines: [{ ...projection.lines[0], pizza }] });
+expect(parseCaptureSelectionPlanProjectionV1(withPizza(pizzaPicks))?.lines[0]?.pizza?.halves[1]?.fraction === "half-b",
+  "projection line carries the pizza V2 picks");
+expect(parseCaptureSelectionPlanProjectionV1(projection)?.lines[0]?.pizza === undefined, "projection pizza stays optional");
+expect(parseCaptureSelectionPlanProjectionV1(withPizza({ ...pizzaPicks, ruleVersion: "pizza-halves-v9" })) === undefined,
+  "projection pizza rejects an unknown rule version");
+expect(parseCaptureSelectionPlanProjectionV1(withPizza({ ...pizzaPicks, halves: [pizzaHalf("half-b"), pizzaHalf("half-a")] })) === undefined,
+  "projection pizza requires half-a then half-b");
+expect(parseCaptureSelectionPlanProjectionV1(withPizza({ ...pizzaPicks, halves: [pizzaHalf("half-a")] })) === undefined,
+  "projection pizza requires two halves");
+expect(parseCaptureSelectionPlanProjectionV1(withPizza({ ...pizzaPicks, extra: 1 })) === undefined,
+  "projection pizza rejects unknown keys");
+expect(parseCaptureSelectionPlanProjectionV1(withPizza({ ...pizzaPicks,
+  halves: [{ ...pizzaHalf("half-a"), ingredientOptionIds: ["x"] }, pizzaHalf("half-b")] })) === undefined,
+  "projection pizza rejects non-uuid option ids");
+const halfWith = (picks: Record<string, unknown>) => withPizza({ ...pizzaPicks, halves: [{ ...pizzaHalf("half-a"), ...picks }, pizzaHalf("half-b")] });
+expect(parseCaptureSelectionPlanProjectionV1(halfWith({ ingredientOptionIds: [optionId, optionId] })) === undefined,
+  "projection pizza rejects duplicate ids inside a role");
+expect(parseCaptureSelectionPlanProjectionV1(halfWith({ extraOptionIds: [optionId] })) === undefined,
+  "projection pizza rejects an option that is both ingredient and extra");
+expect(parseCaptureSelectionPlanProjectionV1(halfWith({ removedIngredientOptionIds: [optionId] })) === undefined,
+  "projection pizza rejects an option that is both added and removed");
+
 // variantId: required key, nullable uuid value.
 const withoutKey = <T extends Record<string, unknown>>(record: T, key: keyof T): Record<string, unknown> => {
   const clone: Record<string, unknown> = { ...record };

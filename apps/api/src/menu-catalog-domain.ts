@@ -5,6 +5,7 @@ import {
   type ConfiguredCatalogRelease,
   type ConfiguredProductSelectionInput,
   type MenuCatalog,
+  type MenuProductCatalog,
   type MenuVariantFractionConfig,
   type ModifierConstraint,
 } from "@super-restaurant/domain";
@@ -91,6 +92,7 @@ export function toDomainMenuCatalog(catalog: MenuCatalogV1, restaurantId: string
         })),
       }),
       ...(product.fraction === undefined || product.fraction === null ? {} : { fraction: toDomainFraction(product.fraction) }),
+      ...toDomainPizzaConfig(product),
     })),
     restaurantId,
     sizePresets: (catalog.sizePresets ?? []).map((preset) => ({
@@ -100,6 +102,51 @@ export function toDomainMenuCatalog(catalog: MenuCatalogV1, restaurantId: string
       name: preset.name,
     })),
   };
+}
+
+type PizzaConfigSource = Pick<
+  MenuCatalogV1["products"][number],
+  "pizzaMode" | "freeIngredientCount" | "baseGroupId" | "defaultIngredientOptionIds" | "customizeAtOrder" | "extraGroupIds"
+>;
+
+/** Pizza V2 fields of a product as the domain models them; `{}` for a legacy product (absent mode). */
+export function toDomainPizzaConfig(product: PizzaConfigSource): Partial<MenuProductCatalog> {
+  if (product.pizzaMode === undefined || product.pizzaMode === null) return {};
+  return {
+    pizzaMode: product.pizzaMode,
+    ...(product.freeIngredientCount === undefined ? {} : { freeIngredientCount: product.freeIngredientCount }),
+    ...(product.baseGroupId === undefined ? {} : { baseGroupId: product.baseGroupId }),
+    ...(product.defaultIngredientOptionIds === undefined ? {} : { defaultIngredientOptionIds: [...product.defaultIngredientOptionIds] }),
+    ...(product.customizeAtOrder === undefined ? {} : { customizeAtOrder: product.customizeAtOrder }),
+    ...(product.extraGroupIds === undefined ? {} : { extraGroupIds: [...product.extraGroupIds] }),
+  };
+}
+
+/**
+ * Cross-checks the Pizza V2 fields that need the whole catalog (the same rules the SQL enforces in
+ * save_menu_catalog): a specialty has no eligible free ingredients, and the recipe lives in the base group.
+ * Per-product bounds (0-40, 24 extra groups, group membership) are the domain's own validation.
+ */
+export function pizzaCatalogIssues(catalog: Pick<MenuCatalogV1, "modifierGroups" | "products">): readonly string[] {
+  const issues: string[] = [];
+  const groups = new Map(catalog.modifierGroups.map((group) => [group.groupId, group]));
+  for (const product of catalog.products) {
+    if (product.pizzaMode === undefined || product.pizzaMode === null) continue;
+    if (product.pizzaMode === "specialty" && (product.freeIngredientCount ?? 0) > 0) {
+      issues.push(`specialty_ingredients_not_allowed:${product.productId}`);
+    }
+    const baseGroupId = product.baseGroupId ?? null;
+    if (baseGroupId !== null && !groups.has(baseGroupId)) issues.push(`base_group_not_in_catalog:${product.productId}`);
+    const defaults = product.defaultIngredientOptionIds ?? [];
+    if (defaults.length > 0) {
+      const baseOptions = new Set((baseGroupId === null ? [] : groups.get(baseGroupId)?.options ?? []).map((option) => option.optionId));
+      if (defaults.some((optionId) => !baseOptions.has(optionId))) issues.push(`default_option_outside_base_group:${product.productId}`);
+    }
+    for (const groupId of product.extraGroupIds ?? []) {
+      if (!groups.has(groupId)) issues.push(`extra_group_not_in_catalog:${product.productId}`);
+    }
+  }
+  return issues;
 }
 
 /** Half-and-half setup of a size, as the domain catalog models it. */

@@ -24,12 +24,14 @@ export async function halvesFlow(): Promise<void> {
     const pepperoniId = randomUUID();
     const hawaiianId = randomUUID();
     const cheeseId = randomUUID();
+    // Exclusions name an included ingredient by option id: any non-locked option of the extra group.
+    const onionId = randomUUID();
     const { catalogVersion } = await publishCatalog(context, {
       categories: [{ categoryId, name: "Pizzas", active: true, displayOrder: 0 }],
       products: [{ productId, categoryId, name: "Pizza", sku: "PIZ-001", active: true, displayOrder: 0, stationId: "kitchen", unit: "piece",
         unitPriceMinor: 15_000, tax: null, imagePath: null,
         variants: [{ variantId, name: "Grande", sku: null, active: true, displayOrder: 0, unitPriceMinor: sizePriceMinor,
-          fraction: { enabled: true, flavorGroupId, extraGroupId, excludableIngredientIds: ["cebolla"] } }] }],
+          fraction: { enabled: true, flavorGroupId, extraGroupId, excludableIngredientIds: [] } }] }],
       modifierGroups: [
         { groupId: flavorGroupId, productId, name: "Sabores", active: true, displayOrder: 0, minimumQuantity: 0, maximumQuantity: 2,
           options: [
@@ -37,12 +39,15 @@ export async function halvesFlow(): Promise<void> {
             { optionId: hawaiianId, name: "Hawaiana", unitPriceMinor: hawaiianPriceMinor, active: true, imagePath: null, maximumQuantity: null },
           ] },
         { groupId: extraGroupId, productId, name: "Extras", active: true, displayOrder: 1, minimumQuantity: 0, maximumQuantity: 5,
-          options: [{ optionId: cheeseId, name: "Queso extra", unitPriceMinor: extraCheeseMinor, active: true, imagePath: null, maximumQuantity: null }] },
+          options: [
+            { optionId: cheeseId, name: "Queso extra", unitPriceMinor: extraCheeseMinor, active: true, imagePath: null, maximumQuantity: null },
+            { optionId: onionId, name: "cebolla", unitPriceMinor: 0, active: true, imagePath: null, maximumQuantity: null },
+          ] },
       ],
     });
     const register = await openShiftAndRegister(context, 0);
     const fraction = { geometry: "halves", slots: [
-      { fraction: "half-a", flavorOptionId: pepperoniId, extraOptionIds: [cheeseId], excludedIngredientIds: ["cebolla"] },
+      { fraction: "half-a", flavorOptionId: pepperoniId, extraOptionIds: [cheeseId], excludedIngredientIds: [onionId] },
       { fraction: "half-b", flavorOptionId: hawaiianId, extraOptionIds: [], excludedIngredientIds: [] },
     ] };
 

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseAutosaveCaptureDraftCommandV1, parseBranchScope } from "@super-restaurant/shared-types";
-import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
-  rehydrateCaptureWorkspace, requestCapture, shortCaptureDraftId, shouldRenewLease } from "./capture-workspace.js";
+import { parseAutosaveCaptureDraftCommandV1, parseBranchScope, type CaptureDraftSummaryV1,
+  type CaptureTrayItemV2 } from "@super-restaurant/shared-types";
+import { captureDeviceId, clearPendingCaptureAutosave, isRecoverableCaptureDraft, persistPendingCaptureAutosave,
+  readPendingCaptureAutosave, rehydrateCaptureWorkspace, requestCapture, shortCaptureDraftId, shouldRenewLease } from "./capture-workspace.js";
 import { getCaptureConfirmationContext } from "./capture-confirmation-context.js";
 const scope={restaurantId:"1e37ae13-8507-484c-969f-2176f77b7000",branchId:"23723e10-c0bf-49fd-9363-4f0e2c60e955"};
 const confirmationScope=parseBranchScope(scope);
@@ -11,6 +12,20 @@ const captureDraftId="ee50f0f6-746f-47cb-8383-ad7834ef3ef0";
 test("short capture ID distinguishes drafts without exposing a full UUID", () => {
   assert.equal(shortCaptureDraftId(captureDraftId), "EF3EF0");
   assert.equal(shortCaptureDraftId("ee50f0f6-746f-47cb-8383-ad7834abcdef"), "ABCDEF");
+});
+test("drafts are kept unless the server explicitly reports zero lines", () => {
+  const summary: CaptureDraftSummaryV1 = { schemaVersion: 1, scope: confirmationScope, captureDraftId, folio: "C-1", sourceChannel: "phone",
+    fulfillmentChannel: "delivery", status: "draft", attentionStatus: "unclaimed",
+    ownerMembershipId: null, version: 3, updatedAt: "2026-09-17T12:00:00.000Z" };
+  const v2 = (extra: Partial<CaptureTrayItemV2>): CaptureTrayItemV2 => ({ ...summary, schemaVersion: 2,
+    attentionLeaseExpiresAt: null, customer: null, totalMinor: null, currency: null, ...extra });
+  assert.equal(isRecoverableCaptureDraft(summary), true, "a V1 summary carries no content facts, so it is kept");
+  assert.equal(isRecoverableCaptureDraft(v2({})), true, "a null customer and an unpriced selection do not prove emptiness");
+  assert.equal(isRecoverableCaptureDraft(v2({ customer: { displayName: "Ana", phone: "5551234567" } })), true);
+  assert.equal(isRecoverableCaptureDraft(v2({ totalMinor: 12345, currency: "MXN" })), true);
+  assert.equal(isRecoverableCaptureDraft(v2({ totalMinor: 0, currency: "MXN" })), true, "a zero total is still a priced selection");
+  assert.equal(isRecoverableCaptureDraft({ ...v2({}), lineCount: 0 } as CaptureTrayItemV2), false,
+    "an explicit zero line count hides the row");
 });
 test("lease renewal requires a visible, recently active workspace with an unexpired lease", () => {
   const now = Date.parse("2026-10-03T12:00:00.000Z");

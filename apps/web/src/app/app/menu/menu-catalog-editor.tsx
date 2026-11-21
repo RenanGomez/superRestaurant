@@ -1,6 +1,6 @@
 "use client";
 
-import { MENU_CATEGORY_COLORS, MENU_CATALOG_MAX_SIZE_PRESETS, MENU_PRODUCT_MAX_VARIANTS, MENU_VARIANT_MAX_LOCKED_INGREDIENTS } from "@super-restaurant/shared-types";
+import { MENU_CATEGORY_COLORS, MENU_PRODUCT_MAX_VARIANTS } from "@super-restaurant/shared-types";
 import type {
   MenuCategoryV1,
   MenuCatalogStateV1,
@@ -14,24 +14,28 @@ import type {
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 import { CheckField, FieldHint } from "../../../components/field-hint";
-import { invalidPresetNameIds, MENU_DEFAULT_UNIT, MENU_FIELD_AUXILIARY_CLASS, MENU_FIELD_CONTROL_CLASS, MENU_FIELD_LABEL_CLASS, MENU_OTHER_STATION, MENU_STATION_MAX_LENGTH, stationValues, unitOptions } from "../../../lib/menu-fields";
-import { shrinkMenuImage } from "../../../lib/menu-image-resize";
+import { MENU_DEFAULT_UNIT, MENU_FIELD_AUXILIARY_CLASS, MENU_FIELD_CONTROL_CLASS, MENU_FIELD_LABEL_CLASS, MENU_OTHER_STATION, MENU_STATION_MAX_LENGTH, stationValues, unitOptions } from "../../../lib/menu-fields";
 import { applyRemoval, removalNeedsConfirmation, unassignGroup, type Removal } from "../../../lib/menu-removal";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { DEFAULT_PESO_CURRENCY, formatMinorForMoneyInput, parseMoneyInputToMinor } from "../../../lib/capture-payment";
 import { currencyFractionDigits } from "../../../lib/money-scale";
-import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, publishDisabledReason, shouldDownscaleMenuImage, validateMenuImageFile, type MenuImageAttempt } from "../../../lib/menu-images";
+import { isMenuImageContentType, menuImageAttempt, menuImagePublicUrl, publishDisabledReason, validateMenuImageFile, type MenuImageAttempt } from "../../../lib/menu-images";
 import { editorProductFraction, legacyFractionNotice, migrateLegacyFraction } from "../../../lib/menu-fraction";
-import { updatePresetVariants, variantValidationError } from "../../../lib/menu-variants";
+import { variantValidationError } from "../../../lib/menu-variants";
 import { reorder, reorderSubset } from "../../../lib/menu-reorder";
 import { duplicateProduct } from "../../../lib/menu-duplicate";
+import { splitArchivedProducts } from "../../../lib/menu-archived";
 import { duplicateGroup, groupAssignmentCount, groupsForProduct, toggleGroupAssignment, withDerivedAssignments, withLegacyOwners } from "../../../lib/menu-groups";
-import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, recoveredSizePresets, serializeMenuDraft, staleMenuDraftKeys, type LocalMenuDraft } from "../../../lib/menu-draft-storage";
+import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys, withoutSizePresetIds, type LocalMenuDraft } from "../../../lib/menu-draft-storage";
 import { MENU_CATEGORY_COLOR_LABELS, menuCategoryColorClasses } from "../../../lib/menu-category-color";
 import { DEFAULT_MENU_TAB, MENU_TAB_LABELS, MENU_TABS, menuTabHref, parseMenuTab, readStoredMenuTab, writeStoredMenuTab, type MenuTab } from "../../../lib/menu-tabs";
 import { uiOption } from "../../../lib/ui-classes";
 import { collectUsedImagePaths, imagePathsOfEntity, retainImagePaths } from "../../../lib/menu-used-images";
 import { DragReorderList, ReorderButtons, ReorderHandle, reorderRowProps } from "./reorder-controls";
+import { ProductActionsMenu } from "./product-actions-menu";
+import { PhotoCropDialog, type CroppedMenuPhoto } from "./photo-crop-dialog";
+import { PizzaV2Editor } from "./pizza-v2-editor";
+import { pizzaProductIssue } from "../../../lib/menu-pizza";
 
 import { copyMenuImageAction, saveMenuCatalogAction, uploadMenuImageAction } from "./actions";
 
@@ -69,28 +73,21 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
       options: group.options.map((option) => ({ ...option })),
     })) ?? [],
   );
-  const [sizePresets, setSizePresets] = useState<readonly MenuSizePresetV1[]>(() => state.catalog?.sizePresets ?? []);
-  const [presetRemoval, setPresetRemoval] = useState<MenuSizePresetV1 | null>(null);
-  const presetRemovalTrigger = useRef<HTMLElement | null>(null);
-  const presetCancel = useRef<HTMLButtonElement>(null);
-  const presetList = useRef<HTMLElement>(null);
-  const presetDescriptionId = useId();
-  useEffect(() => { if (presetRemoval !== null) presetCancel.current?.focus(); }, [presetRemoval]);
-  const cancelPresetRemoval = (): void => { setPresetRemoval(null); presetRemovalTrigger.current?.focus(); };
-  const invalidPresetIds = invalidPresetNameIds(sizePresets);
-  const inactivePresetInUse = sizePresets.some((preset) => !preset.active && products.some((product) => product.variants?.some((variant) => variant.sizePresetId === preset.id)));
-  const presetError = invalidPresetIds.size > 0 ? "Revisa los nombres de tama\u00f1os: deben ser \u00fanicos y no estar vac\u00edos." : inactivePresetInUse ? "Un tama\u00f1o inactivo est\u00e1 en uso; act\u00edvalo o cambia las variantes antes de publicar." : null;
+  const publishedSizePresets = state.catalog?.sizePresets;
   const [removal, setRemoval] = useState<Removal | null>(null);
   // Legacy per-size halves move to the product on save (the server rejects both at once); validate and send that shape.
-  const savedProducts = useMemo(() => products.map((product) => migrateLegacyFraction(product, groups)), [products, groups]);
+  const savedProducts = useMemo(() => withoutSizePresetIds(products.map((product) => migrateLegacyFraction(product, groups))), [products, groups]);
   // Older clients read the legacy single owner: send it only while exactly one product offers the group.
   const savedGroups = useMemo(() => withLegacyOwners(savedProducts, groups), [savedProducts, groups]);
   const variantIssue = savedProducts.map((product) => variantValidationError(product.productId, product.variants ?? [], new Set(product.modifierGroupIds ?? []), product.fraction)).find((issue) => issue !== null) ?? null;
   const variantError = variantIssue === null ? null : `${products.find((product) => product.productId === variantIssue.productId)?.name || "Producto sin nombre"}: ${variantIssue.message}`;
+  const pizzaIssueProduct = savedProducts.find((product) => pizzaProductIssue(product, groups) !== null);
+  const pizzaError = pizzaIssueProduct === undefined ? null : `${pizzaIssueProduct.name || "Producto sin nombre"}: ${pizzaProductIssue(pizzaIssueProduct, groups)}`;
+  const publishBlocker = variantError ?? pizzaError;
   const [pendingUploads, setPendingUploads] = useState(0);
   const onUploadPendingChange = (pending: boolean): void => setPendingUploads((current) => current + (pending ? 1 : -1));
   const expectedVersion = state.catalog?.version ?? 0;
-  const draft = useMemo(() => JSON.stringify({ categories, currency, expectedVersion, modifierGroups: savedGroups, products: savedProducts, sizePresets } satisfies Draft), [categories, currency, expectedVersion, savedGroups, savedProducts, sizePresets]);
+  const draft = useMemo(() => JSON.stringify({ categories, currency, expectedVersion, modifierGroups: savedGroups, products: savedProducts, sizePresets: publishedSizePresets ?? [] } satisfies Draft), [categories, currency, expectedVersion, publishedSizePresets, savedGroups, savedProducts]);
 
   // Tab sync with URL (?tab=) and localStorage
   useEffect(() => {
@@ -156,7 +153,7 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
 
   // Local draft: edits are kept in this browser (never published automatically) and offered back after a reload.
   const storageKey = menuDraftKey(restaurantId, branchId, expectedVersion);
-  const snapshot = useMemo(() => menuDraftSnapshot({ categories, groups, products, sizePresets }), [categories, groups, products, sizePresets]);
+  const snapshot = useMemo(() => menuDraftSnapshot({ categories, groups, products }), [categories, groups, products]);
   const [baseline, setBaseline] = useState(snapshot);
   const dirty = snapshot !== baseline;
   const [recovery, setRecovery] = useState<LocalMenuDraft | null>(null);
@@ -183,18 +180,17 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
     const timer = window.setTimeout(() => {
       try {
         if (snapshot === baseline) window.localStorage.removeItem(storageKey);
-        else window.localStorage.setItem(storageKey, serializeMenuDraft({ categories, expectedVersion, groups, products, sizePresets }));
+        else window.localStorage.setItem(storageKey, serializeMenuDraft({ categories, expectedVersion, groups, products }));
         setStorageFailed(false);
       } catch { setStorageFailed(true); }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [baseline, canManage, categories, expectedVersion, groups, products, sizePresets, recovery, snapshot, storageKey, storageReady]);
+  }, [baseline, canManage, categories, expectedVersion, groups, products, recovery, snapshot, storageKey, storageReady]);
   const recoverDraft = (): void => {
     if (recovery === null) return;
     setCategories(recovery.categories);
     setProducts(withDerivedAssignments(recovery.products, recovery.groups));
     setGroups(recovery.groups);
-    setSizePresets(recoveredSizePresets(recovery, state.catalog?.sizePresets ?? []));
     setRecovery(null);
   };
   const discardRecovery = (): void => {
@@ -207,9 +203,18 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
   const [retainedImagePaths, setRetainedImagePaths] = useState<readonly string[]>([]);
   useEffect(() => { setRetainedImagePaths((previous) => retainImagePaths(previous, currentImagePaths)); }, [currentImagePaths]);
   const usedImagePaths = useMemo(() => retainImagePaths(retainedImagePaths, currentImagePaths), [retainedImagePaths, currentImagePaths]);
+  const { active: activeProducts, archived: archivedProducts } = useMemo(() => splitArchivedProducts(products), [products]);
 
   const [copiedProductIds, setCopiedProductIds] = useState<readonly string[]>([]);
   const focusAfterCopy = useRef<string | null>(null);
+  // Archiving lowers the product into the folded «Archivados» section: focus its summary after the move.
+  const archivedSummaryRef = useRef<HTMLElement>(null);
+  const focusArchivedAfterArchive = useRef(false);
+  useEffect(() => {
+    if (!focusArchivedAfterArchive.current) return;
+    focusArchivedAfterArchive.current = false;
+    archivedSummaryRef.current?.focus();
+  }, [products]);
   useEffect(() => {
     const productId = focusAfterCopy.current;
     if (productId === null) return;
@@ -244,6 +249,17 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
     const source = groups.find((entry) => entry.groupId === groupId);
     if (source === undefined) return;
     setGroups((current) => [...current, duplicateGroup(source, () => crypto.randomUUID(), nextDisplayOrder(current))]);
+  };
+  const archiveProduct = (productId: string): void => {
+    focusArchivedAfterArchive.current = true;
+    setProducts((current) => current.map((entry) => entry.productId === productId ? { ...entry, active: false } : entry));
+  };
+  const unarchiveProduct = (productId: string): void => {
+    // The card moves back under its category; reuse the copy focus hook to land on it.
+    focusAfterCopy.current = productId;
+    setProducts((current) => current.map((entry) => entry.productId === productId
+      ? { ...entry, active: true, displayOrder: nextDisplayOrder(current.filter((other) => other.active && other.categoryId === entry.categoryId)) }
+      : entry));
   };
 
   const addCategory = (): void => {
@@ -317,8 +333,24 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
     setRemoval(null);
   };
 
+  const productEditor = (product: MenuProductV1, handle: ReactNode, archived: boolean): ReactNode => (
+    <ProductEditor archived={archived} canManage={canManage} categories={categories} catalogGroups={groups}
+      copyNotice={copiedProductIds.includes(product.productId)} currency={currency} groups={groupsForProduct(product, groups)} handle={handle}
+      product={product} supabaseUrl={supabaseUrl} usedImagePaths={usedImagePaths} usedStations={products.map((entry) => entry.stationId)}
+      variantInvalid={variantIssue?.productId === product.productId}
+      onArchive={() => archiveProduct(product.productId)}
+      onDuplicate={() => { void copyProduct(product.productId); }}
+      onManageGroups={() => selectTab("modificadores")}
+      onProductChange={(changed) => setProducts((current) => current.map((entry) => entry.productId === changed.productId ? changed : entry))}
+      onProductImageChange={(imagePath) => setProducts((current) => current.map((entry) => entry.productId === product.productId ? { ...entry, imagePath } : entry))}
+      onRemove={requestRemoval}
+      onUnarchive={() => unarchiveProduct(product.productId)}
+      onUploadPendingChange={onUploadPendingChange}
+    />
+  );
+
   return (
-    <form action={saveMenuCatalogAction} onSubmit={(event) => { if (publishDisabledReason(pendingUploads, false) !== null || variantError !== null || presetError !== null) event.preventDefault(); }} className="flex min-w-0 flex-col gap-5">
+    <form action={saveMenuCatalogAction} onSubmit={(event) => { if (publishDisabledReason(pendingUploads, false) !== null || publishBlocker !== null) event.preventDefault(); }} className="flex min-w-0 flex-col gap-5">
       <input type="hidden" name="draft" value={draft} />
       <section className="sticky top-0 z-20 flex flex-wrap items-end justify-between gap-3 rounded-2xl border border-border bg-surface/95 p-4 shadow-sm backdrop-blur">
         <div className="flex flex-wrap items-end gap-4">
@@ -335,13 +367,13 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
             <p role="status" className={`text-[12px] ${dirty ? "font-semibold text-accent-hover" : "text-text-muted"}`}>
               {dirty ? (storageFailed ? "Cambios sin publicar · no se pudieron guardar en este navegador" : "Cambios sin publicar · guardados localmente") : "Todo publicado"}
             </p>
-            <PublishButton dirty={dirty} pendingUploads={pendingUploads} variantError={presetError ?? variantError} />
+            <PublishButton dirty={dirty} pendingUploads={pendingUploads} variantError={publishBlocker} />
           </div>
         ) : (
           <p className="rounded-lg bg-bg px-3 py-2 text-[12px] text-text-muted">Vista de solo lectura</p>
         )}
       </section>
-      {(presetError ?? variantError) !== null && <p role="alert" className="text-sm text-error">{presetError ?? variantError}</p>}
+      {publishBlocker !== null && <p role="alert" className="text-sm text-error">{publishBlocker}</p>}
       {recovery !== null && canManage && (
         <section role="status" aria-label="Cambios sin publicar" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-accent bg-accent-soft p-4">
           <p className="min-w-0 text-[13px]">Hay cambios sin publicar de una sesión anterior guardados en este navegador. Aún no se han publicado.</p>
@@ -457,35 +489,29 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
             {products.length === 0 ? <EmptyText text="No hay productos en este borrador." /> : (
               <div className="mt-4 flex flex-col gap-5">
                 {categories.map((category) => {
-                  const inCategory = products.filter((entry) => entry.categoryId === category.categoryId);
+                  const inCategory = activeProducts.filter((entry) => entry.categoryId === category.categoryId);
                   if (inCategory.length === 0) return null;
                   return (
                     <div key={category.categoryId} className="flex min-w-0 flex-col gap-2">
                       <h3 className="font-heading text-[13px] font-semibold text-text-muted">{category.name.trim() === "" ? "Categoría sin nombre" : category.name}</h3>
                       <DragReorderList className="flex flex-col gap-4" disabled={!canManage} getKey={(entry) => entry.productId} items={inCategory} itemLabel={(entry) => entry.name}
                         label={`Productos de ${category.name}`}
-                        onMove={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.categoryId === category.categoryId, from, to))}
-                        renderRow={(product, _index, handle) => (
-                          <ProductEditor handle={handle} copyNotice={copiedProductIds.includes(product.productId)} usedStations={products.map((entry) => entry.stationId)} usedImagePaths={usedImagePaths} variantInvalid={variantIssue?.productId === product.productId}
-                            canManage={canManage}
-                            categories={categories}
-                            sizePresets={sizePresets}
-                            currency={currency}
-                            catalogGroups={groups}
-                            groups={groupsForProduct(product, groups)}
-                            product={product}
-                            supabaseUrl={supabaseUrl}
-                            onDuplicate={() => { void copyProduct(product.productId); }}
-                            onManageGroups={() => selectTab("modificadores")}
-                            onProductChange={(changed) => setProducts((current) => current.map((entry) => entry.productId === changed.productId ? changed : entry))}
-                            onProductImageChange={(imagePath) => setProducts((current) => current.map((entry) => entry.productId === product.productId ? { ...entry, imagePath } : entry))}
-                            onRemove={requestRemoval}
-                            onUploadPendingChange={onUploadPendingChange}
-                          />
-                        )} />
+                        onMove={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.active && entry.categoryId === category.categoryId, from, to))}
+                        renderRow={(product, _index, handle) => productEditor(product, handle, false)} />
                     </div>
                   );
                 })}
+                {archivedProducts.length > 0 && (
+                  <details className="rounded-xl border border-border bg-bg/40">
+                    <summary ref={archivedSummaryRef} className="flex min-h-11 cursor-pointer items-center gap-2 px-3 text-[13px] font-semibold text-text-muted focus-visible:outline-2 focus-visible:outline-accent">
+                      Archivados <span className="text-[12px] font-normal">({archivedProducts.length})</span>
+                    </summary>
+                    <div className="flex flex-col gap-4 border-t border-border p-3">
+                      <p className="text-[12px] text-text-muted">Estos productos no aparecen en la captura de pedidos. Desarchívalos para volver a ofrecerlos.</p>
+                      {archivedProducts.map((product) => <div key={product.productId}>{productEditor(product, null, true)}</div>)}
+                    </div>
+                  </details>
+                )}
               </div>
             )}
           </section>
@@ -541,40 +567,6 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
         )}
       </div>
 
-      <div
-        role="tabpanel"
-        id="menu-panel-tamanos"
-        aria-labelledby="menu-tab-tamanos"
-        tabIndex={0}
-        hidden={!tabResolved || activeTab !== "tamanos"}
-        className={tabResolved && activeTab === "tamanos" ? "flex flex-col gap-5 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" : "hidden"}
-      >
-        {tabResolved && (
-          <section ref={presetList} tabIndex={-1} className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-            <SectionHeader title="Tamaños y presets" description="Define tamaños para usarlos en tus productos." />
-            <DragReorderList className="mt-4 flex flex-col gap-3" disabled={!canManage} getKey={(preset) => preset.id} items={sizePresets} itemLabel={(preset) => preset.name || "Tamaño nuevo"} label="Tamaños"
-              onMove={(from, to) => setSizePresets((current) => reorder(current, from, to))}
-              renderRow={(preset, index, handle) => <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border p-3">
-                {handle}<div className="min-w-40 flex-1"><TextInput disabled={!canManage} invalid={invalidPresetIds.has(preset.id)} label="Nombre" maxLength={80} value={preset.name} onChange={(name) => {
-                  setSizePresets((current) => current.map((item) => item.id === preset.id ? { ...item, name } : item));
-                  setProducts((current) => updatePresetVariants(current, preset.id, name));
-                }} /></div>
-                <ReorderButtons count={sizePresets.length} disabled={!canManage} index={index} label={preset.name || "tamaño nuevo"} onMove={(from, to) => setSizePresets((current) => reorder(current, from, to))} />
-                <ActiveInput disabled={!canManage} checked={preset.active} onChange={(active) => setSizePresets((current) => current.map((item) => item.id === preset.id ? { ...item, active } : item))} />
-                {canManage && <RemoveButton label={`Quitar ${preset.name || "tamaño nuevo"}`} onClick={() => { presetRemovalTrigger.current = document.activeElement as HTMLElement; setPresetRemoval(preset); }} />}
-              </div>} />
-            {canManage && <AddButton label="Agregar tamaño" disabled={sizePresets.length >= MENU_CATALOG_MAX_SIZE_PRESETS} onClick={() => setSizePresets((current) => [...current, { id: crypto.randomUUID(), name: "", active: true, displayOrder: nextDisplayOrder(current) }])} />}
-            {presetRemoval !== null && (() => {
-              const affectedCount = products.filter((product) => product.variants?.some((variant) => variant.sizePresetId === presetRemoval.id)).length;
-              return <div role="alertdialog" aria-label="Quitar tamaño" aria-describedby={presetDescriptionId} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); cancelPresetRemoval(); } }} className="mt-4 rounded-xl border border-border p-4">
-                <p id={presetDescriptionId}>¿Quitar «{presetRemoval.name}»? {affectedCount === 0 ? "Ningún producto usa este tamaño." : affectedCount === 1 ? "1 producto afectado conservará su nombre como tamaño personalizado." : `${affectedCount} productos afectados conservarán su nombre como tamaño personalizado.`}</p>
-                <div className="mt-3 flex gap-3"><button ref={presetCancel} type="button" className="min-h-11 rounded-lg border border-border px-4" onClick={cancelPresetRemoval}>Cancelar</button>
-                  <button type="button" className="min-h-11 rounded-lg border border-accent px-4" onClick={() => { setProducts((current) => updatePresetVariants(current, presetRemoval.id, null)); setSizePresets((current) => current.filter((item) => item.id !== presetRemoval.id)); setPresetRemoval(null); presetList.current?.focus(); }}>Quitar tamaño</button></div>
-              </div>;
-            })()}
-          </section>
-        )}
-      </div>
     </form>
   );
 }
@@ -624,11 +616,12 @@ function taxNote(tax: MenuProductV1["tax"], formattedPrice: string): string | un
 }
 
 /**
- * Product card in three rows: (1) photo, name, price, unit, active, remove; (2) category, internal key, station;
+ * Product card in three rows: (1) photo, name, price, unit, actions; (2) category, internal key, station;
  * (3) switches for modifier groups, halves and tax plus «+ Añadir tamaño». Each section shows only while its
  * switch is on (or it already has data), so a plain product takes three rows.
  */
-function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, variantInvalid, canManage, categories, sizePresets, currency, catalogGroups, groups, product, supabaseUrl, onDuplicate, onManageGroups, onProductChange, onProductImageChange, onRemove, onUploadPendingChange }: {
+function ProductEditor({ archived, copyNotice, handle, usedStations, usedImagePaths, variantInvalid, canManage, categories, currency, catalogGroups, groups, product, supabaseUrl, onArchive, onDuplicate, onManageGroups, onProductChange, onProductImageChange, onRemove, onUnarchive, onUploadPendingChange }: {
+  readonly archived: boolean;
   readonly copyNotice: boolean;
   readonly handle: ReactNode;
   readonly usedStations: readonly string[];
@@ -636,7 +629,6 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
   readonly variantInvalid: boolean;
   readonly canManage: boolean;
   readonly categories: readonly MenuCategoryV1[];
-  readonly sizePresets: readonly MenuSizePresetV1[];
   readonly currency: string;
   /** Every group of the restaurant catalog (the multiselect lists them all). */
   readonly catalogGroups: readonly MenuModifierGroupV1[];
@@ -644,17 +636,21 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
   readonly groups: readonly MenuModifierGroupV1[];
   readonly product: MenuProductV1;
   readonly supabaseUrl: string;
+  readonly onArchive: () => void;
   readonly onDuplicate: () => void;
   readonly onManageGroups?: (() => void) | undefined;
   readonly onProductChange: (product: MenuProductV1) => void;
   readonly onProductImageChange: (imagePath: string | null) => void;
   readonly onRemove: (removal: Removal) => void;
+  readonly onUnarchive: () => void;
   readonly onUploadPendingChange: (pending: boolean) => void;
 }): ReactNode {
   const change = (patch: Partial<MenuProductV1>): void => onProductChange({ ...product, ...patch });
   const tax = product.tax;
   const variants = product.variants ?? [];
   const fraction = editorProductFraction(product);
+  // The V2 section stays hidden for plain products until asked for, so a three-row product keeps three rows.
+  const [pizzaOffered, setPizzaOffered] = useState(false);
   const changeVariant = (variantId: string, patch: Partial<MenuProductVariantV1>): void =>
     change({ variants: variants.map((variant) => variant.variantId === variantId ? { ...variant, ...patch } : variant) });
   const switchClass = "inline-flex min-h-11 items-center gap-2 text-[12px] font-semibold";
@@ -686,18 +682,20 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
           <EditorRowActions>
             <div className="flex items-center justify-end gap-2">
               {canManage && (
-                <button
-                  type="button"
-                  onClick={onDuplicate}
-                  title={`Crear una copia de ${product.name}`}
-                  aria-label={`Duplicar ${product.name}`}
-                  className="min-h-11 rounded-lg border border-border bg-surface px-3 py-2 text-[12px] font-semibold hover:border-accent focus-visible:outline-2 focus-visible:outline-accent"
-                >
-                  Duplicar
-                </button>
+                <ProductActionsMenu
+                  label={`Acciones de ${product.name.trim() === "" ? "este producto" : product.name}`}
+                  actions={archived
+                    ? [
+                        { label: "Desarchivar", onSelect: onUnarchive },
+                        { danger: true, label: "Quitar", onSelect: () => onRemove({ id: product.productId, kind: "product", label: product.name }) },
+                      ]
+                    : [
+                        { label: "Duplicar", onSelect: onDuplicate },
+                        { label: "Archivar", onSelect: onArchive },
+                        { danger: true, label: "Quitar", onSelect: () => onRemove({ id: product.productId, kind: "product", label: product.name }) },
+                      ]}
+                />
               )}
-              <ActiveInput disabled={!canManage} checked={product.active} onChange={(active) => change({ active })} />
-              {canManage && <RemoveButton label={`Quitar ${product.name}`} onClick={() => onRemove({ id: product.productId, kind: "product", label: product.name })} />}
             </div>
           </EditorRowActions>
         </div>
@@ -730,9 +728,12 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
             </button>
           )}
           <CheckField labelClassName="flex min-h-11 items-center" className={switchClass} label="Permitir mitades"
-            hint="Cada mitad lleva un sabor del grupo de sabores; una de las dos puede armarse con ingredientes si eliges un grupo de ingredientes. Aplica a todos los tamaños.">{(id) =>
-            <input id={id} type="checkbox" className="size-5" disabled={!canManage} checked={fraction.enabled}
+            hint="Cada mitad lleva un sabor del grupo de sabores; una de las dos puede armarse con ingredientes si eliges un grupo de ingredientes. Aplica a todos los tamaños. No se combina con «Pizza por mitades».">{(id) =>
+            <input id={id} type="checkbox" className="size-5" disabled={!canManage || product.pizzaMode !== undefined} checked={fraction.enabled}
               onChange={(event) => change({ fraction: { ...fraction, enabled: event.target.checked } })} />}</CheckField>
+          {canManage && product.pizzaMode === undefined && !pizzaOffered && !fraction.enabled && <button type="button"
+            className="inline-flex min-h-11 items-center px-1 text-[12px] font-semibold text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+            onClick={() => setPizzaOffered(true)}>Configurar pizza por mitades</button>}
           <CheckField labelClassName="flex min-h-11 items-center" className={switchClass} hint="Marca si este producto causa IVA u otro impuesto. El impuesto se calcula siempre en el servidor con la regla indicada aquí." label="Aplicar impuesto">{(id) =>
             <input id={id} disabled={!canManage} type="checkbox" className="size-5" checked={tax !== null} onChange={(event) => change({ tax: event.target.checked ? { inclusion: "included", name: "IVA", rateDenominator: 100, rateNumerator: 16, taxId: "iva", taxRuleVersion: "1" } : null })} />}</CheckField>
           {canManage && <AddButton label="Añadir tamaño" disabled={variants.length >= MENU_PRODUCT_MAX_VARIANTS} onClick={() => change({ variants: [...variants, {
@@ -755,11 +756,7 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
                   onMove={(from, to) => change({ variants: reorder(variants, from, to) })} />
               </EditorRowActions>
               <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]">
-              <EditorField label="Tamaño">{(id) => <select id={id} disabled={!canManage} className={MENU_FIELD_CONTROL_CLASS} value={variant.sizePresetId ?? ""} onChange={(event) => {
-                const preset = sizePresets.find((item) => item.id === event.target.value);
-                changeVariant(variant.variantId, preset === undefined ? { sizePresetId: null } : { sizePresetId: preset.id, name: preset.name });
-              }}><option value="">Personalizado</option>{sizePresets.filter((item) => item.active || item.id === variant.sizePresetId).map((item) => <option key={item.id} value={item.id}>{item.name}{item.active ? "" : " (inactivo)"}</option>)}</select>}</EditorField>
-              <TextInput disabled={!canManage || variant.sizePresetId != null} hint="Cómo se llama esta presentación, por ejemplo Chica, Mediana o Familiar. No se puede repetir en el mismo producto." invalid={variantInvalid} label="Nombre del tamaño" maxLength={80} value={variant.name}
+              <TextInput disabled={!canManage} hint="Cómo se llama esta presentación, por ejemplo Chica, Mediana o Familiar. No se puede repetir en el mismo producto." invalid={variantInvalid} label="Nombre del tamaño" maxLength={80} value={variant.name}
                 onChange={(name) => changeVariant(variant.variantId, { name })} />
               <MoneyInput key={variant.variantId} hint="Precio de venta de este tamaño." label="Precio del tamaño" disabled={!canManage} currency={currency}
                 value={variant.unitPriceMinor} onChange={(unitPriceMinor) => changeVariant(variant.variantId, { unitPriceMinor })} />
@@ -782,6 +779,12 @@ function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, varia
         {fraction.enabled && <section className="rounded-xl border border-border bg-surface p-3">
           <FractionEditor canManage={canManage} groups={groups} notice={legacyFractionNotice(product)} productName={product.name}
             fraction={fraction} onChange={(next) => change({ fraction: next })} />
+        </section>}
+
+        {(product.pizzaMode !== undefined || pizzaOffered) && <section className="rounded-xl border border-border bg-surface p-3">
+          <h3 className="mb-2 font-heading text-[13px] font-semibold">Pizza por mitades</h3>
+          <PizzaV2Editor canManage={canManage} groups={groups} product={product}
+            onChange={(next) => onProductChange(next.pizzaMode !== undefined && fraction.enabled ? { ...next, fraction: { ...fraction, enabled: false } } : next)} />
         </section>}
 
         {tax !== null && <section className="rounded-xl border border-border bg-surface p-3">
@@ -867,60 +870,6 @@ function FractionEditor({ canManage, fraction, groups, notice, productName, onCh
           </select>
         )}
       </EditorField>
-      <div className="grid gap-2 sm:col-span-2">
-        <span className={MENU_FIELD_LABEL_CLASS}>
-          <span className="text-[11px] font-medium">Ingredientes que no se pueden quitar</span>
-          <FieldHint
-            label="Ingredientes que no se pueden quitar"
-            text="Los ingredientes marcados aquí no podrán ser excluidos por el operador al capturar mitades (ej. queso, salsa base). Los no marcados se podrán excluir («Sin ...»)."
-          />
-        </span>
-        {usedAsIngredients === undefined ? (
-          <p role="status" className="text-[12px] text-text-muted">
-            Selecciona un grupo de ingredientes arriba para configurar ingredientes bloqueados.
-          </p>
-        ) : usedAsIngredients.options.length === 0 ? (
-          <p role="status" className="text-[12px] text-text-muted">
-            El grupo seleccionado no tiene opciones. Agrega opciones en la sección Modificadores.
-          </p>
-        ) : (
-          <div className="grid gap-2" role="group" aria-label="Ingredientes que no se pueden quitar">
-            <p className="text-[12px] text-text-muted">
-              Marca los ingredientes que son indispensables y que el cliente no puede retirar.
-            </p>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {usedAsIngredients.options.map((option) => {
-                const isLocked = (fraction.lockedIngredientOptionIds ?? []).includes(option.optionId);
-                const toggleLocked = (): void => {
-                  if (!canManage) return;
-                  const current = fraction.lockedIngredientOptionIds ?? [];
-                  const next = isLocked
-                    ? current.filter((id) => id !== option.optionId)
-                    : current.length < MENU_VARIANT_MAX_LOCKED_INGREDIENTS
-                    ? [...current, option.optionId]
-                    : current;
-                  update({ lockedIngredientOptionIds: next });
-                };
-                return (
-                  <label
-                    key={option.optionId}
-                    className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2 text-[13px] hover:bg-bg has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60"
-                  >
-                    <input
-                      type="checkbox"
-                      className="size-4 rounded border-border text-accent focus:ring-accent"
-                      checked={isLocked}
-                      disabled={!canManage}
-                      onChange={toggleLocked}
-                    />
-                    <span className="font-medium text-text">{option.name || "Opción sin nombre"}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
     </div>}
   </div>;
 }
@@ -1155,11 +1104,12 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
   const [message, setMessage] = useState<string | null>(null);
   const [failedPath, setFailedPath] = useState<string | null>(null);
   const [panel, setPanel] = useState<"photo" | null>(null);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  // The change is already in the draft: tell the operator it is saved before they close.
+  const [saved, setSaved] = useState(false);
   const url = menuImagePublicUrl(supabaseUrl, imagePath);
   const entityWord = target === "product" ? "producto" : target === "category" ? "categoría" : "opción";
   const label = `Foto de ${name.trim() === "" ? `${entityWord} sin nombre` : name}`;
-  const removedPaths = imagePathsOfEntity(usedImagePaths, targetId).filter((path) => path !== imagePath);
-  const menuPaths = usedImagePaths.filter((path) => path !== imagePath);
   const showsPhoto = url !== null && failedPath !== imagePath && imagePath !== null;
 
   // A success note fades after a few seconds; errors stay until the next action.
@@ -1175,6 +1125,7 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
       const result = await uploadMenuImageAction(target, targetId, selected);
       if (result.imagePath === undefined) { setMessage(result.error ?? "No se pudo subir la foto."); return; }
       onChange(result.imagePath);
+      setSaved(true);
       setFailedPath(null);
       setMessage("Foto lista. Publica la nueva versión para mostrarla en captura.");
     } catch (error: unknown) {
@@ -1199,35 +1150,38 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
     }
   };
 
-  const choose = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+  const send = async (source: Blob, contentType: string, identity: { readonly fileName: string; readonly lastModified: number }): Promise<void> => {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("read"));
+      reader.onerror = () => reject(new Error("read"));
+      reader.readAsDataURL(source);
+    });
+    const dataBase64 = dataUrl.split(",", 2)[1];
+    if (dataBase64 === undefined || !isMenuImageContentType(contentType)) throw new Error("read");
+    const selected = menuImageAttempt(attempt.current, { contentType, dataBase64, fileName: identity.fileName, lastModified: identity.lastModified }, () => crypto.randomUUID(), () => new Date().toISOString());
+    attempt.current = selected;
+    await upload(selected);
+  };
+
+  const choose = (event: ChangeEvent<HTMLInputElement>): void => {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (file === undefined) return;
     const validation = validateMenuImageFile(file);
     if (validation !== null) { setMessage(validation); return; }
+    setMessage(null);
+    setPendingFile(file);
+  };
+
+  const confirmCrop = async (cropped: CroppedMenuPhoto): Promise<void> => {
+    const file = pendingFile;
+    if (file === null) return;
+    setPendingFile(null);
     setBusy(true);
     onUploadPendingChange(true);
     try {
-      let source: Blob = file;
-      let contentType: string = file.type;
-      if (shouldDownscaleMenuImage(file.size)) {
-        setMessage("Reduciendo el tamaño de la foto…");
-        const shrunk = await shrinkMenuImage(file);
-        if (shrunk === null) { setMessage("La foto es demasiado grande y no se pudo reducir a menos de 2 MB. Prueba con otra imagen."); return; }
-        source = shrunk.blob;
-        contentType = shrunk.contentType;
-      }
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("read"));
-        reader.onerror = () => reject(new Error("read"));
-        reader.readAsDataURL(source);
-      });
-      const dataBase64 = dataUrl.split(",", 2)[1];
-      if (dataBase64 === undefined || !isMenuImageContentType(contentType)) throw new Error("read");
-      const selected = menuImageAttempt(attempt.current, { contentType, dataBase64, fileName: file.name, lastModified: file.lastModified }, () => crypto.randomUUID(), () => new Date().toISOString());
-      attempt.current = selected;
-      await upload(selected);
+      await send(cropped.blob, cropped.contentType, { fileName: file.name, lastModified: file.lastModified });
     } catch {
       setMessage("No se pudo leer la foto. Inténtalo de nuevo.");
     } finally {
@@ -1242,7 +1196,7 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
     setMessage(null);
     setPanel("photo");
   };
-  const assign = (path: string | null, note: string): void => { onChange(path); setFailedPath(null); setMessage(note); };
+  const assign = (path: string | null, note: string): void => { onChange(path); setSaved(true); setFailedPath(null); setMessage(note); };
   const pickUsed = async (path: string): Promise<void> => {
     if (imagePathsOfEntity([path], targetId).length > 0) {
       assign(path, "Foto elegida. Publica la nueva versión para mostrarla en captura.");
@@ -1291,17 +1245,18 @@ function MenuPhoto({ canManage, imagePath, name, supabaseUrl, target, targetId, 
           {showsPhoto ? "Reemplazar" : "Cargar foto"}
         </button>
         {showsPhoto && (
-          <button type="button" onClick={() => { onChange(null); setFailedPath(null); setMessage("Foto quitada del borrador."); }} className="min-h-11 rounded-lg border border-[oklch(85%_0.06_25)] px-4 py-2 text-[13px] font-semibold text-error focus-visible:outline-2 focus-visible:outline-accent">
+          <button type="button" onClick={() => assign(null, "Foto quitada del borrador.")} className="min-h-11 rounded-lg border border-[oklch(85%_0.06_25)] px-4 py-2 text-[13px] font-semibold text-error focus-visible:outline-2 focus-visible:outline-accent">
             Quitar
           </button>
         )}
         <button type="button" autoFocus onClick={() => setPanel(null)} className="min-h-11 rounded-lg border border-border bg-surface px-4 py-2 text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-accent">
-          Cerrar
+          Listo
         </button>
+        {saved && <p role="status" className="text-[12px] font-semibold text-accent-hover">Guardado en el borrador ✓</p>}
       </div>
-      <UsedPhotos title={`Fotos quitadas de este ${entityWord}`} paths={removedPaths} supabaseUrl={supabaseUrl} onPick={(path) => { void pickUsed(path); }} />
-      <UsedPhotos title="Fotos ya usadas en este menú" paths={menuPaths} supabaseUrl={supabaseUrl} onPick={(path) => { void pickUsed(path); }} />
+      <UsedPhotos title="Fotos recientes" paths={usedImagePaths} supabaseUrl={supabaseUrl} onPick={(path) => { void pickUsed(path); }} />
     </PhotoDialog>}
+    {pendingFile !== null && <PhotoCropDialog file={pendingFile} label={label} onCancel={() => setPendingFile(null)} onConfirm={(cropped) => { void confirmCrop(cropped); }} />}
   </div>;
 }
 

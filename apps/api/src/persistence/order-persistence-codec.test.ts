@@ -111,6 +111,69 @@ function richOrderMutation(): OrderMutation {
   }, audit("2"));
 }
 
+const plainMoney = (amountMinor: number) => ({ amountMinor, currency: "MXN" });
+const pizzaHalvesPlain = (total = 11_251, ruleVersion = "pizza-halves-v2") => ({
+  basePrice: plainMoney(10_000),
+  baseFraction: "half-a",
+  charges: [{ amount: plainMoney(1_251), fractions: ["half-b"], free: false, groupId: "g-extra", name: "Queso extra", optionId: "o-cheese", role: "extra" }],
+  currency: "MXN",
+  freeAssignmentOrder: [],
+  freeIngredientCount: 0,
+  freeIngredientCountFraction: null,
+  halves: [
+    { basePriceMinor: 10_000, fraction: "half-a", freeIngredientCount: 0, kind: "specialty", productId: "p-a", productName: "Pepperoni", removedIngredientOptionIds: [], sizeId: "s", sizeName: "Grande", stationId: "kitchen" },
+    { basePriceMinor: 9_000, fraction: "half-b", freeIngredientCount: 0, kind: "specialty", productId: "p-b", productName: "Hawaiana", removedIngredientOptionIds: [], sizeId: "s", sizeName: "Grande", stationId: "kitchen" },
+  ],
+  ruleVersion,
+  schemaVersion: 1,
+  total: plainMoney(total),
+});
+
+function pizzaOrderMutation(pizzaHalves: unknown): OrderMutation {
+  const created = createOrder({
+    orderId: "order-pz", restaurantId: "restaurant-1", branchId: "branch-1", channel: "counter",
+    currency: "MXN", timeZone: "America/Hermosillo",
+  }, audit("7"));
+  return addOrderItem(created.order, {
+    orderItemId: "item-pz",
+    quantity: 1,
+    snapshot: {
+      catalogVersion: "catalog-v3", productId: "p-a", name: "Pizza", stationId: "kitchen", unit: "piece",
+      unitPrice: new Money(10_000, "MXN"),
+      modifiers: [{ modifierId: "pizza-extra:half-b:o-cheese", name: "Queso extra", groupId: "pizza-extra", groupName: "extra:half-b", groupCatalogVersion: "catalog-v3", unitPrice: new Money(1_251, "MXN"), quantity: 1 }],
+      geometry: "halves",
+      pizzaHalves,
+    } as never,
+  }, audit("8"));
+}
+
+test("a pizza V2 snapshot round-trips through the codec and a legacy snapshot reads unchanged", () => {
+  const mutation = pizzaOrderMutation(pizzaHalvesPlain());
+  const transported = JSON.parse(JSON.stringify(encodeOrderMutationRecord(mutation))) as unknown;
+  const decoded = decodeOrderMutationRecord(transported);
+  assert.deepEqual(decoded, mutation);
+  const item = decoded.order.items[0];
+  assert.equal(item?.snapshot.pizzaHalves?.ruleVersion, "pizza-halves-v2");
+  assert.equal(item?.snapshot.pizzaHalves?.total.amountMinor, 11_251);
+  // legacy record: no pizzaHalves key at all
+  const legacy = JSON.parse(JSON.stringify(encodeOrderMutationRecord(richOrderMutation()))) as unknown;
+  assert.equal(decodeOrderMutationRecord(legacy).order.items[0]?.snapshot.pizzaHalves, undefined);
+});
+
+test("the codec rejects an unknown pizza rule version and a total that disagrees with the item", () => {
+  const good = JSON.parse(JSON.stringify(encodeOrderMutationRecord(pizzaOrderMutation(pizzaHalvesPlain())))) as {
+    order: { items: { snapshot: { pizzaHalves: unknown } }[] };
+  };
+  const mutate = (pizza: unknown) => {
+    const copy = JSON.parse(JSON.stringify(good)) as typeof good;
+    copy.order.items[0]!.snapshot.pizzaHalves = pizza;
+    return copy;
+  };
+  assert.throws(() => decodeOrderMutationRecord(mutate(pizzaHalvesPlain(11_251, "pizza-halves-v9"))));
+  assert.throws(() => decodeOrderMutationRecord(mutate(pizzaHalvesPlain(999))));
+  assert.throws(() => decodeOrderMutationRecord(mutate({ ...pizzaHalvesPlain(), extra: 1 })));
+});
+
 test("round-trips a null and a text order item note", () => {
   const created = createOrder({
     orderId: "order-2",

@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  orderDraftColumnsMinHeight,
   orderDraftLayout,
   orderDraftPaneBox,
   paneOwnsScroller,
@@ -46,7 +47,11 @@ test("the stacked pane box claims no share of a height it will not get", () => {
   assert.equal("flexGrow" in orderDraftPaneBox.stacked, false);
   assert.equal("flexBasis" in orderDraftPaneBox.stacked, false);
   // The two-column arrangement still fills its column: that part was correct.
-  assert.deepEqual(orderDraftPaneBox.columns, { flexBasis: 0, flexGrow: 1, flexShrink: 1, minWidth: 0 });
+  assert.deepEqual(orderDraftPaneBox.columns, { flexBasis: 0, flexGrow: 1, flexShrink: 1, minHeight: 0, minWidth: 0 });
+});
+
+test("columns keep a useful minimum height so a short viewport scrolls instead of collapsing", () => {
+  assert.ok(orderDraftColumnsMinHeight >= 560);
 });
 
 test("the screen resolves its arrangement from the width, not from a second rule", () => {

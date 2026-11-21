@@ -44,6 +44,7 @@ import {
   cancelOrder as cancelWholeOrder,
   InactiveMenuProductVariantError,
   MenuProductVariantNotFoundError,
+  MenuPizzaProductRequiresHalvesRuleError,
   MenuProductVariantRequiredError,
   MenuFractionSelectionInvalidError,
   calculateOrderAggregateTotals,
@@ -528,6 +529,7 @@ export class OrderService {
         || error instanceof MenuProductVariantNotFoundError
         || error instanceof InactiveMenuProductVariantError
         || error instanceof MenuFractionSelectionInvalidError
+        || error instanceof MenuPizzaProductRequiresHalvesRuleError
       ) throw applicationError("conflict");
       throw applicationError("request");
     }

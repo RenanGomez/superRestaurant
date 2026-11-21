@@ -3,16 +3,20 @@ import {
   type CaptureLineQuoteResultV1,
 } from "@super-restaurant/shared-types";
 import type { CaptureRequestResult } from "./capture-workspace";
+import { splitQuotePizza } from "./pizza-capture";
 
 /** A read-only estimate. Invalid or stale responses never become a displayed server price. */
 export async function quoteLinePrice(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureLineQuoteResultV1>> {
-  const request = parseCaptureLineQuoteRequestV1(input);
-  if (request === undefined) return { ok: false, error: "invalid" };
+  const split = splitQuotePizza(input);
+  const request = split === undefined ? undefined : parseCaptureLineQuoteRequestV1(split.rest);
+  if (split === undefined || request === undefined) return { ok: false, error: "invalid" };
+  // A pizza V2 line is exclusive with `fraction`; the API repeats that check.
+  if (split.pizza !== null && request.fraction !== null) return { ok: false, error: "invalid" };
   try {
     const response = await fetch(`${baseUrl}/api/v1/captures/line-quote`, {
       method: "POST", cache: "no-store", signal: AbortSignal.timeout(10_000),
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify(request),
+      body: JSON.stringify(split.pizza === null ? request : { ...request, pizza: split.pizza }),
     });
     if (!response.ok) {
       if (response.status === 409) {

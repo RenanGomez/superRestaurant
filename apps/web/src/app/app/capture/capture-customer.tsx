@@ -7,14 +7,27 @@ import type {
   CustomerDirectoryDetailAddressV1,
   CustomerDirectoryDetailV1,
 } from "@super-restaurant/shared-types";
-import { formatDeliveryMatch } from "../../../lib/delivery-zones";
 import { uiButton } from "../../../lib/ui-classes";
 import { matchDeliveryAddress } from "../delivery-match-action";
 import { AddressForm, type CustomerAction, type CustomerActionResult } from "../customers/customer-editor";
 
 const button = uiButton();
 
-type RowNote = { readonly key: string; readonly text: string; readonly conflict: boolean; readonly blocked: "coverage" | "validation" | false };
+type RowNote = { readonly key: string; readonly text: string; readonly conflict: boolean; readonly blocked: "coverage" | "validation" | false;
+  /** Address version plus content; a note only belongs to the snapshot it described. */
+  readonly signature?: string };
+
+function addressSignature(item: CustomerDirectoryDetailAddressV1): string {
+  return JSON.stringify([item.version, item.address]);
+}
+
+function coverageReason(item: CustomerDirectoryDetailAddressV1): string {
+  const { postalCode, locality } = item.address;
+  if (postalCode !== null && locality !== null) return `CP ${postalCode} sin zona en ${locality}`;
+  if (postalCode !== null) return `CP ${postalCode} sin zona`;
+  if (locality !== null) return `Sin zona en ${locality}`;
+  return "Sin zona para esta dirección";
+}
 
 const errorTexts = {
   invalid: "Revisa los datos de la dirección.",
@@ -83,7 +96,9 @@ export function CaptureCustomerCard({ scope, deviceId, locked, detail, selectedC
       onDetail(reply.value);
       const fresh = reply.value.addresses.find((entry) => entry.addressId === item.addressId);
       if (fresh === undefined || !fresh.validatedForRequestedBranch) {
-        setNote({ key, text: "La dirección no quedó validada para esta sucursal.", conflict: false, blocked: "validation" });
+        const text = "La dirección no quedó validada para esta sucursal.";
+        setNote(fresh === undefined ? { key, text, conflict: false, blocked: "validation" }
+          : { key, text, conflict: false, blocked: "validation", signature: addressSignature(fresh) });
         return;
       }
       current = fresh;
@@ -92,7 +107,8 @@ export function CaptureCustomerCard({ scope, deviceId, locked, detail, selectedC
       const match = await matchDeliveryAddress({ schemaVersion: 1, ...scope,
         address: { postalCode: current.address.postalCode, locality: current.address.locality } });
       if (match.ok && match.value.coverageStatus === "not_covered") {
-        setNote({ key, text: `${formatDeliveryMatch(match.value, "es-MX")}. Esta sucursal no entrega ahí.`, conflict: false, blocked: "coverage" });
+        setNote({ key, text: `${coverageReason(current)}. Esta sucursal no entrega ahí.`, conflict: false, blocked: "coverage",
+          signature: addressSignature(current) });
         return;
       }
     } catch { /* Coverage is informational here; the quote step confirms it. */ }
@@ -128,10 +144,16 @@ export function CaptureCustomerCard({ scope, deviceId, locked, detail, selectedC
     try { await useAddress(item); } finally { setWorking(undefined); }
   }
 
-  const noteFor = (key: string): ReactNode => note?.key === key && <div role="alert" className="mt-2 text-sm text-error">
-    <p>{note.text}</p>
-    {note.conflict && <button type="button" className={`${button} mt-2`} disabled={working !== undefined} onClick={() => void refresh()}>Actualizar</button>}
+  const noteBox = (value: RowNote | undefined): ReactNode => value !== undefined && <div role="alert" className="mt-2 text-sm text-error">
+    <p>{value.text}</p>
+    {value.conflict && <button type="button" className={`${button} mt-2`} disabled={working !== undefined} onClick={() => void refresh()}>Actualizar</button>}
   </div>;
+
+  const noteFor = (key: string): ReactNode => noteBox(note?.key === key ? note : undefined);
+
+  /** A row note stops applying as soon as its address changes version or content. */
+  const noteForAddress = (item: CustomerDirectoryDetailAddressV1): RowNote | undefined => note?.key === item.addressId
+    && (note.signature === undefined || note.signature === addressSignature(item)) ? note : undefined;
 
   return <div className="mt-4 rounded-lg border border-border p-3 sm:p-4" data-testid="capture-customer-card">
     <h3 className="font-heading text-base font-semibold">{detail.customer.displayName}</h3>
@@ -146,14 +168,15 @@ export function CaptureCustomerCard({ scope, deviceId, locked, detail, selectedC
     {!customerSaved && detail.addresses.length > 0 && <p className="mt-1 text-xs text-text-muted">Elige primero el teléfono para poder usar una dirección.</p>}
     {detail.addresses.length === 0 && <p className="mt-2 text-sm">Este cliente no tiene direcciones. Agrega una para el domicilio.</p>}
     <div className="mt-2 grid gap-3">{detail.addresses.map((item) => {
-      const blocked = note?.key === item.addressId && note.blocked !== false;
+      const rowNote = noteForAddress(item);
+      const blocked = rowNote !== undefined && rowNote.blocked !== false;
       const inUse = selectedAddress === item.addressId;
       return <article key={`${item.addressId}/${item.version}`} className="rounded-lg border border-border p-3">
         <strong className="block">{item.address.label}</strong>
         <span className="block break-words text-sm">{[item.address.streetLine, item.address.unit].filter(Boolean).join(" ")}</span>
         <span className="block break-words text-sm text-text-muted">{[item.address.neighborhood, item.address.locality, item.address.postalCode].filter(Boolean).join(", ")}</span>
-        <span className="mt-1 block text-xs font-semibold">{note?.key === item.addressId && note.blocked === "coverage" ? "Fuera de cobertura"
-          : item.validatedForRequestedBranch && !(note?.key === item.addressId && note.blocked === "validation") ? "Validada para esta sucursal" : "Sin validar"}{inUse ? " · En uso en esta captura" : ""}</span>
+        <span className="mt-1 block text-xs font-semibold">{rowNote?.blocked === "coverage" ? coverageReason(item)
+          : item.validatedForRequestedBranch && rowNote?.blocked !== "validation" ? "Validada para esta sucursal" : "Sin validar"}{inUse ? " · En uso en esta captura" : ""}</span>
         {editing === item.addressId ? <div className="mt-3"><AddressForm item={item} disabled={disabled}
           onSave={(fields) => void saveAddress(item, fields)} onCancel={() => setEditing(undefined)} /></div>
           : <div className="mt-3 flex flex-wrap gap-2">
@@ -161,13 +184,13 @@ export function CaptureCustomerCard({ scope, deviceId, locked, detail, selectedC
               {working === item.addressId ? "Validando…" : "Usar esta dirección"}</button>
             <button type="button" className={button} disabled={disabled} onClick={() => { setNote(undefined); setEditing(item.addressId); }}>Editar</button>
           </div>}
-        {noteFor(item.addressId)}
+        {noteBox(rowNote)}
       </article>;
     })}</div>
     {detail.addressesTruncated && <p role="status" className="mt-2 text-xs text-text-muted">Se muestran las primeras 20 direcciones.</p>}
     {editing === "new" ? <div className="mt-3"><AddressForm disabled={disabled} onSave={(fields) => void saveAddress(undefined, fields)} onCancel={() => setEditing(undefined)} /></div>
       : <button type="button" className={`${button} mt-3`} disabled={disabled} onClick={() => { setNote(undefined); setEditing("new"); }}>Agregar dirección</button>}
     {noteFor("new")}{noteFor("card")}
-    <a href="/app/customers" className="mt-3 block text-sm text-accent underline">Abrir el cliente en Directorio</a>
+    <a href={`/app/customers?customerId=${encodeURIComponent(customerId)}`} className="mt-3 block text-sm text-accent underline">Abrir el cliente en Directorio</a>
   </div>;
 }

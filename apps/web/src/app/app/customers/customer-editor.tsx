@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode, type FormEvent, t
 import Link from "next/link";
 import type { BranchScope, CustomerDirectoryDetailV1, CustomerDirectoryDetailAddressV1, CustomerDirectorySearchResultV1, CustomerRecentOrderListV1, CustomerPhoneInputV1, CustomerAddressFieldsV1, CustomerSearchModeV1 } from "@super-restaurant/shared-types";
 import { Field } from "../../../components/field-hint";
-import { getCustomerAutocompleteRequest, getCustomerDirectorySuggestions, insertCustomerDirectorySuggestion, isCurrentCustomerAutocompleteRequest, type CustomerAutocompleteRequest, type CustomerDirectorySuggestion, type CustomerRequestResult } from "../../../lib/customer-directory";
+import { getCustomerAutocompleteRequest, getCustomerDirectorySuggestions, insertCustomerDirectorySuggestion, isCurrentCustomerAutocompleteRequest, isCurrentCustomerSearch, selectCurrentCustomerSearch, type CustomerAutocompleteRequest, type CustomerDirectorySuggestion, type CustomerRequestResult, type CustomerSearchSnapshot } from "../../../lib/customer-directory";
 import { countOrderArticles } from "../../../lib/customer-order-history";
 import { formatDeliveryMatch } from "../../../lib/delivery-zones";
 import { matchDeliveryAddress } from "../delivery-match-action";
@@ -17,6 +17,8 @@ export interface CustomerEditorProps {
   readonly branchName: string;
   readonly action: (operation: CustomerAction, input: unknown) => Promise<CustomerActionResult>;
   readonly historyAction: (input: unknown) => Promise<{ ok: true; value: CustomerRecentOrderListV1 } | { ok: false }>;
+  /** Customer opened from a capture or directory deep link. */
+  readonly initialCustomerId?: string | undefined;
 }
 const inputClass = "min-h-11 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-accent";
 const buttonClass = uiButton();
@@ -31,14 +33,22 @@ const messages = {
   unavailable: "No se pudo confirmar el resultado. Mantén esta página abierta y reintenta la operación para confirmar su resultado.",
 };
 
-export function CustomerEditor({ scope, branchName, action, historyAction }: CustomerEditorProps): ReactNode {
+function searchTarget(command: unknown): CustomerAutocompleteRequest | undefined {
+  if (typeof command !== "object" || command === null) return undefined;
+  const mode = "mode" in command ? command.mode : undefined;
+  const query = "query" in command ? command.query : undefined;
+  if ((mode !== "phone" && mode !== "name" && mode !== "address") || typeof query !== "string") return undefined;
+  return { mode, query: query.trim() };
+}
+
+export function CustomerEditor({ scope, branchName, action, historyAction, initialCustomerId }: CustomerEditorProps): ReactNode {
   const [busy, setBusy] = useState(false);
   const [busyOperation, setBusyOperation] = useState<CustomerAction>();
   const [validatingAddressId, setValidatingAddressId] = useState<string>();
   const [deviceId] = useState(() => crypto.randomUUID());
   const [error, setError] = useState<keyof typeof messages>();
   const [notice, setNotice] = useState("");
-  const [result, setResult] = useState<CustomerDirectorySearchResultV1>();
+  const [searchSnapshot, setSearchSnapshot] = useState<CustomerSearchSnapshot<CustomerDirectorySearchResultV1>>();
   const [detail, setDetail] = useState<CustomerDirectoryDetailV1>();
   const [creating, setCreating] = useState(false);
   const [addingAddress, setAddingAddress] = useState(false);
@@ -55,9 +65,12 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
   const [autocompleteResult, setAutocompleteResult] = useState<{ readonly request: CustomerAutocompleteRequest; readonly value: CustomerDirectorySearchResultV1 }>();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const autocompleteSequence = useRef(0);
+  const searchRequestSequence = useRef(0);
+  const openedInitialCustomer = useRef(false);
   const currentSearch = useRef({ mode: searchMode, input: searchQuery });
   currentSearch.current = { mode: searchMode, input: searchQuery };
   const autocompleteRequest = useMemo(() => getCustomerAutocompleteRequest(searchMode, searchQuery), [searchMode, searchQuery]);
+  const visibleSearchResult = selectCurrentCustomerSearch(searchSnapshot, searchMode, searchQuery);
   const suggestionResult = autocompleteResult !== undefined
     && isCurrentCustomerAutocompleteRequest(autocompleteResult.request, searchMode, searchQuery) ? autocompleteResult.value : undefined;
   const suggestions = useMemo(() => getCustomerDirectorySuggestions(suggestionResult, searchMode, searchQuery), [suggestionResult, searchMode, searchQuery]);
@@ -87,8 +100,15 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
     return () => window.clearTimeout(timeout);
   }, [action, autocompleteRequest, locked, scope]);
 
+  useEffect(() => {
+    if (initialCustomerId === undefined || openedInitialCustomer.current) return;
+    openedInitialCustomer.current = true;
+    void run("detail", { schemaVersion: 1, scope, customerId: initialCustomerId });
+  }, [action, initialCustomerId, scope]);
+
   async function run(operation: CustomerAction, command: unknown): Promise<void> {
     if (busy) return;
+    const searchSequence = operation === "search" ? ++searchRequestSequence.current : undefined;
     const sequence = ++feedbackSequence.current;
     setBusy(true); setBusyOperation(operation); setError(undefined); setNotice("");
     if (operation === "validate" && typeof command === "object" && command !== null && "addressId" in command && typeof command.addressId === "string") setValidatingAddressId(command.addressId);
@@ -107,7 +127,14 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
       return;
     }
     setPending(undefined);
-    if ("candidates" in reply.value) { setResult(reply.value); setDetail(undefined); setCreating(false); setCreatedCustomerId(undefined); setAddingAddress(false); setActiveSuggestion(-1); setSuggestionsOpen(document.activeElement === searchInputRef.current); }
+    if ("candidates" in reply.value) {
+      const target = searchTarget(command);
+      const current = currentSearch.current;
+      if (searchSequence === undefined || searchSequence !== searchRequestSequence.current
+        || target === undefined || !isCurrentCustomerSearch(target, current.mode, current.input)) return;
+      setSearchSnapshot({ ...target, value: reply.value });
+      setDetail(undefined); setCreating(false); setCreatedCustomerId(undefined); setAddingAddress(false); setActiveSuggestion(-1); setSuggestionsOpen(document.activeElement === searchInputRef.current);
+    }
     else {
       setDetail(reply.value);
       if (operation === "profile" && creating) setCreatedCustomerId(reply.value.customer.customerId);
@@ -142,6 +169,8 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
   }
   function acceptSuggestion(suggestion: CustomerDirectorySuggestion): void {
     setSearchQuery(insertCustomerDirectorySuggestion(searchQuery, suggestion.value, searchMode));
+    searchRequestSequence.current += 1;
+    setSearchSnapshot(undefined);
     setActiveSuggestion(-1);
     setSuggestionsOpen(true);
     searchInputRef.current?.focus();
@@ -181,12 +210,12 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
     <section className={panelClass} aria-labelledby="customer-search-title">
       <h2 id="customer-search-title" className="mb-3 font-heading text-lg font-semibold">Buscar cliente</h2>
       <form onSubmit={searchSubmit} className="flex flex-wrap items-end gap-3">
-        <Field className="flex min-w-0 flex-col gap-1 text-sm" hint="Elige con qué dato quieres encontrar al cliente: teléfono, nombre o alias, o dirección." label="Buscar por">{(id) => <><select id={id} name="mode" className={inputClass} disabled={locked} value={searchMode} onChange={event => { setSearchMode(event.target.value as CustomerSearchModeV1); setActiveSuggestion(-1); setSuggestionsOpen(false); }}><option value="phone">Teléfono</option><option value="name">Nombre o alias</option><option value="address">Dirección o referencia</option></select></>}</Field>
+        <Field className="flex min-w-0 flex-col gap-1 text-sm" hint="Elige con qué dato quieres encontrar al cliente: teléfono, nombre o alias, o dirección." label="Buscar por">{(id) => <><select id={id} name="mode" className={inputClass} disabled={locked} value={searchMode} onChange={event => { setSearchMode(event.target.value as CustomerSearchModeV1); searchRequestSequence.current += 1; setSearchSnapshot(undefined); setActiveSuggestion(-1); setSuggestionsOpen(false); }}><option value="phone">Teléfono</option><option value="name">Nombre o alias</option><option value="address">Dirección o referencia</option></select></>}</Field>
         <Field className="relative flex min-w-0 flex-1 basis-48 flex-col gap-1 text-sm" hint="Escribe parte del teléfono, nombre o dirección; aparecen sugerencias mientras escribes." label="Dato de búsqueda">{(id) => <><input id={id} ref={searchInputRef} name="query" required maxLength={200} className={inputClass} disabled={locked} autoComplete="off"
             role="combobox" aria-autocomplete="list" aria-expanded={suggestionsOpen && optionCount > 0} aria-controls="customer-search-suggestions"
             aria-activedescendant={suggestionsOpen && activeSuggestion >= 0 ? activeSuggestion < suggestions.length
               ? `customer-suggestion-${suggestions[activeSuggestion]?.id}` : `customer-option-${customerOptions[activeSuggestion - suggestions.length]?.customerId}` : undefined}
-            value={searchQuery} onChange={event => { setSearchQuery(event.target.value); setActiveSuggestion(-1); setSuggestionsOpen(true); }}
+            value={searchQuery} onChange={event => { setSearchQuery(event.target.value); searchRequestSequence.current += 1; setSearchSnapshot(undefined); setActiveSuggestion(-1); setSuggestionsOpen(true); }}
             onFocus={() => setSuggestionsOpen(true)} onBlur={() => window.setTimeout(() => { if (document.activeElement !== searchInputRef.current) setSuggestionsOpen(false); }, 0)}
             onKeyDown={searchKeyDown} />
           {suggestionsOpen && optionCount > 0 && <ul id="customer-search-suggestions" role="listbox" aria-label="Sugerencias y clientes autorizados" className="absolute left-0 right-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg">
@@ -215,15 +244,15 @@ export function CustomerEditor({ scope, branchName, action, historyAction }: Cus
         <button type="button" className={buttonClass} disabled={locked} onClick={() => { setDetail(undefined); setCreating(true); setCreatedCustomerId(undefined); setNotice(""); setError(undefined); }}>Alta rápida</button>
       </form>
       <p className="mt-3 text-xs text-text-muted">Un teléfono puede pertenecer a varias personas. Revisa nombre y dirección y elige una ficha explícitamente.</p>
-      {result !== undefined && <div className="mt-4 flex flex-col gap-2">
-        {result.candidates.length === 0 && <p className="text-sm">No hay coincidencias. Puedes registrar un cliente nuevo.</p>}
-        {result.candidates.map(candidate => <button key={candidate.customerId} type="button" className={`${buttonClass} text-left`} disabled={locked} onClick={() => read(candidate.customerId)}>
+      {visibleSearchResult !== undefined && <div className="mt-4 flex flex-col gap-2">
+        {visibleSearchResult.candidates.length === 0 && <p className="text-sm">No hay coincidencias. Puedes registrar un cliente nuevo.</p>}
+        {visibleSearchResult.candidates.map(candidate => <button key={candidate.customerId} type="button" className={`${buttonClass} text-left`} disabled={locked} onClick={() => read(candidate.customerId)}>
           <span className="block break-words font-semibold">{candidate.displayName}</span>
           <span className="block break-words text-xs text-text-muted">{candidate.phones.map(phone => `${phone.label}: ${phone.displayValue}`).join(" · ") || "Sin teléfono"}</span>
           <span className="block break-words text-xs text-text-muted">{candidate.addresses.map(address => [address.label, address.streetLine, address.neighborhood, address.locality].filter(Boolean).join(", ")).join(" · ") || "Sin direcciones"}</span>
           <span className="mt-1 block text-xs text-accent">Abrir esta ficha</span>
         </button>)}
-        {result.nextCursor !== null && search !== undefined && <button className={buttonClass} disabled={locked} onClick={() => void run("search", { schemaVersion: 1, scope, ...search, limit: 20, cursor: result.nextCursor })}>Siguiente página de coincidencias</button>}
+        {visibleSearchResult.nextCursor !== null && search !== undefined && <button className={buttonClass} disabled={locked} onClick={() => void run("search", { schemaVersion: 1, scope, ...search, limit: 20, cursor: visibleSearchResult.nextCursor })}>Siguiente página de coincidencias</button>}
       </div>}
     </section>
     <div className="flex min-w-0 flex-col gap-4">

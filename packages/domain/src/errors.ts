@@ -488,6 +488,17 @@ export class MenuProductNotFoundError extends DomainError {
   public readonly productId: string;
 }
 
+export class MenuPizzaProductRequiresHalvesRuleError extends DomainError {
+  public readonly code = "PIZZA_REQUIRES_HALVES_RULE";
+
+  public constructor(productId: string) {
+    super("A pizza V2 product is sold only through the pizza halves rule.");
+    this.productId = productId;
+  }
+
+  public readonly productId: string;
+}
+
 export class MenuProductVariantRequiredError extends DomainError {
   public readonly code = "VARIANT_REQUIRED";
 

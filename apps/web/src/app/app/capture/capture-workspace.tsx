@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import type {
   BranchScope,
   CaptureAssignmentCandidateV1,
@@ -28,7 +28,6 @@ import type {
   DeliveryQuoteV1,
   DeliveryZoneMatchResultV1,
   CustomerDirectoryDetailV1,
-  CustomerDirectorySearchResultV1,
   CustomerRecentOrderListV1,
   CustomerRepeatOrderCaptureResultV1,
   CustomerRepeatOrderPreviewIssueV1,
@@ -41,7 +40,7 @@ import type {
 } from "@super-restaurant/shared-types";
 
 import { captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
-  rehydrateCaptureWorkspace, shortCaptureDraftId, shouldRenewLease } from "../../../lib/capture-workspace";
+  rehydrateCaptureWorkspace, isRecoverableCaptureDraft, shouldRenewLease } from "../../../lib/capture-workspace";
 import { Field, FieldLabel } from "../../../components/field-hint";
 import type { CaptureRequestResult } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
@@ -51,11 +50,12 @@ import { groupsForProduct } from "../../../lib/menu-groups";
 import { applyLineChange, buildSelectionPlan, type SelectionPlanLineDraft,
   type SelectionPlanModifierGroupDraft } from "../../../lib/capture-selection";
 import type { CaptureConfirmationContext } from "../../../lib/capture-confirmation-context";
-import { ariaKeyShortcut, dispatchShortcut, searchFocusTarget, type ShortcutTable } from "../../../lib/shortcut-dispatch";
+import { ariaKeyShortcut, dispatchShortcut, type ShortcutTable } from "../../../lib/shortcut-dispatch";
 import { formatDeliveryMatch, formatDeliveryQuote } from "../../../lib/delivery-zones";
 import { matchDeliveryAddress } from "../delivery-match-action";
 import { customerDirectoryAction } from "../customers/actions";
 import { CaptureCustomerCard } from "./capture-customer";
+import { CaptureCustomerSearch } from "./capture-customer-search";
 import {
   deliveryQuoteBlocksConfirm, deliveryQuoteScheduledForInputValue, isSwitchingToAnotherCapture,
   paymentIntentBlocksConfirm,
@@ -67,6 +67,7 @@ import { CaptureTicket } from "./capture-ticket";
 import { buildKitchenDocuments, type PrintDocument } from "../../../lib/print-documents";
 import { PrintPreview } from "../print-preview";
 import { ProductSheet } from "./product-sheet";
+import type { PizzaLineV2 } from "../../../lib/pizza-capture";
 import { uiButton } from "../../../lib/ui-classes";
 
 const panel = "rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -109,6 +110,7 @@ interface CaptureWorkspaceParameters {
     idempotencyKey: string, occurredAt: string, deviceId: string) => Promise<OrderMutationRequestResult>;
 }
 type ActionReply = Awaited<ReturnType<CaptureWorkspaceParameters["action"]>>;
+type CaptureStep = "order" | "customer" | "delivery";
 
 export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext, canManageAssignment, catalog: initialCatalog,
   reloadCatalog, orderDetail, sendToKitchen }: CaptureWorkspaceParameters): ReactNode {
@@ -143,7 +145,6 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   const [takeoverDraftId, setTakeoverDraftId] = useState("");
   const [takeoverReason, setTakeoverReason] = useState("");
   const [takeoverConfirmed, setTakeoverConfirmed] = useState(false);
-  const [results, setResults] = useState<CustomerDirectorySearchResultV1>();
   const [customer, setCustomer] = useState<CustomerDirectoryDetailV1>();
   const [customerSnapshot, setCustomerSnapshot] = useState<CaptureCustomerSnapshotV1 | null>(null);
   const [fulfillmentSnapshot, setFulfillmentSnapshot] = useState<CaptureFulfillmentSnapshotV1 | null>(null);
@@ -190,9 +191,13 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [selectionFeedback, setSelectionFeedback] = useState<"saving" | "saved" | string>();
   const selectionFeedbackTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pizzaLines = useRef<ReadonlyMap<string, PizzaLineV2>>(new Map());
   const [selectionBusyLineId, setSelectionBusyLineId] = useState<string>();
   const [noteSheetLineId, setNoteSheetLineId] = useState<string>();
   const [noteSheetDraft, setNoteSheetDraft] = useState("");
+  const [mobileStep, setMobileStep] = useState<CaptureStep>("order");
+  const stepNavRef = useRef<HTMLElement>(null);
+  const stepMounted = useRef(false);
   const productSearchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => () => {
@@ -200,6 +205,16 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     if (instructionsTimer.current) clearTimeout(instructionsTimer.current);
     if (instructionsDebounce.current) clearTimeout(instructionsDebounce.current);
   }, []);
+  // Each mobile step swaps the visible sections, so start the new step at its own top instead of
+  // leaving the operator deep inside the previous one. First render is left untouched.
+  useEffect(() => {
+    if (!stepMounted.current) { stepMounted.current = true; return; }
+    const nav = stepNavRef.current;
+    if (nav === null) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    nav.focus({ preventScroll: true });
+    nav.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  }, [mobileStep]);
   // Flush unsaved instructions when the capture changes or the workspace unmounts. Cleanups run before
   // the no-deps effect below reassigns the saver, so the ref still holds the previous capture's saver.
   const flushDraftId = capture?.captureDraftId;
@@ -348,8 +363,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       if (mutation.detail.fulfillmentSnapshotRef === null) setSelectedAddress(undefined);
       setSourceChannel(mutation.detail.sourceChannel);
       setFulfillmentChannel(mutation.detail.fulfillmentChannel);
-    } else if ("candidates" in value) setResults(value as CustomerDirectorySearchResultV1);
-    else setCustomer(value as CustomerDirectoryDetailV1);
+    } else setCustomer(value as CustomerDirectoryDetailV1);
     return reply;
   }
 
@@ -369,6 +383,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       setError(undefined);
       setErrorOperation(undefined);
       setErrorCode(undefined);
+      setMobileStep("order");
     }
     setQuoteError(undefined);
     setQuoteRequestedForDiffers(false);
@@ -418,7 +433,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
 
   /** Draft lines of the saved plan, or `undefined` (with a visible notice) if a split line cannot be kept. */
   function selectionDraftLines(): readonly SelectionPlanLineDraft[] | undefined {
-    const result = draftLinesFromProjection(selectionProjection?.lines ?? [], catalog.catalog);
+    const result = draftLinesFromProjection(selectionProjection?.lines ?? [], catalog.catalog, pizzaLines.current);
     if (result.ok) return result.lines;
     if (selectionFeedbackTimer.current) clearTimeout(selectionFeedbackTimer.current);
     setSelectionFeedback(splitLostMessage(result.lineName));
@@ -450,6 +465,8 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       setSelectionFeedback("No se pudo verificar el pedido guardado.");
       return undefined;
     }
+    // The projection does not echo a pizza V2 line's picks: keep the ones just accepted to rebuild later plans.
+    pizzaLines.current = new Map(lines.flatMap((line) => line.pizza === undefined ? [] : [[line.lineId, line.pizza] as const]));
     setSelectionFeedback("saved");
     selectionFeedbackTimer.current = setTimeout(() => setSelectionFeedback(undefined), 2000);
     return hydrated.selectionProjection;
@@ -457,7 +474,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
 
   function openProduct(product: MenuProductV1, groups: readonly MenuModifierGroupV1[]): void {
     if (locked || selectionBusy) return;
-    if (groups.length === 0 && !product.variants?.some((variant) => variant.active)) {
+    if (groups.length === 0 && !product.variants?.some((variant) => variant.active) && product.pizzaMode === undefined) {
       void addDirect(product.productId);
       return;
     }
@@ -497,6 +514,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     note: string | null,
     variantId: string | null,
     fraction: LineFractionV1 | null = null,
+    pizza: PizzaLineV2 | null = null,
   ): Promise<void> {
     if (sheetProduct === undefined) return;
     const productId = sheetProduct.productId;
@@ -507,9 +525,9 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     // One server replacement of the whole plan keeps the edit atomic and preserves its line ID.
     const nextLines = sheetEditLine === undefined
       ? applyLineChange(currentLines, { type: "add", lineId, productId, variantId, quantity, modifierGroups, note,
-        ...(fraction === null ? {} : { fraction }) })
+        ...(fraction === null ? {} : { fraction }), ...(pizza === null ? {} : { pizza }) })
       : currentLines.map((line) => line.lineId === lineId
-        ? { lineId, productId, variantId, quantity, modifierGroups, note, ...(fraction === null ? {} : { fraction }) } : line);
+        ? { lineId, productId, variantId, quantity, modifierGroups, note, ...(fraction === null ? {} : { fraction }), ...(pizza === null ? {} : { pizza }) } : line);
     const projection = await sendSelectionPlan(nextLines);
     setSelectionBusy(false);
     if (projection === undefined) { setSheetError(error === "conflict" ? messages.conflict : "No se pudo guardar la línea. Reintenta."); return; }
@@ -560,6 +578,13 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     setNoteSheetLineId(lineId);
     setNoteSheetDraft(currentNote ?? "");
   }
+  // The ticket sheet that owns the "Nota" trigger closes before this dialog mounts, so its focus
+  // restoration must not leave the keyboard behind the note sheet.
+  useEffect(() => {
+    if (noteSheetLineId === undefined) return;
+    const frame = window.requestAnimationFrame(() => document.getElementById("capture-line-note-text")?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [noteSheetLineId]);
 
   async function saveLineNote(): Promise<void> {
     const lineId = noteSheetLineId;
@@ -600,6 +625,9 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       setDeliveryInstructionSuggestions([]);
       return;
     }
+    // Resuming a draft only rehydrates the frozen snapshot; re-reading the directory detail is what
+    // brings back the customer card (with its phones and addresses) for the operator.
+    await run("detail", { schemaVersion: 1, scope, customerId: reply.value.customerSnapshot.customerId });
     await run("recentOrders", { schemaVersion: 1, scope,
       customerId: reply.value.customerSnapshot.customerId, limit: 20 });
     if (reply.value.detail.fulfillmentChannel === "delivery") {
@@ -878,13 +906,6 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     }
   }
 
-  function search(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    void run("search", { schemaVersion: 1, scope, mode: String(data.get("mode")),
-      query: String(data.get("query") ?? "").trim(), limit: 20, cursor: null });
-  }
-
   function read(customerId: string): void {
     void (async () => {
       const reply = await run("detail", { schemaVersion: 1, scope, customerId });
@@ -927,11 +948,15 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   }
 
   function goToCustomer(): void {
-    const target = document.getElementById("capture-customer-section");
-    if (target === null) return;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    target.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
-    target.focus({ preventScroll: true });
+    setMobileStep("customer");
+    // The customer section may still be hidden by the previous mobile step until React re-renders.
+    window.requestAnimationFrame(() => {
+      const target = document.getElementById("capture-customer-section");
+      if (target === null) return;
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      target.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+      target.focus({ preventScroll: true });
+    });
   }
 
   function previewOrder(orderId: string): void {
@@ -979,7 +1004,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     setQuoteRequestedForDiffers(false);
     setDeliveryQuote(null); setPaymentIntentState(null); setPaymentProjection(null); setPaymentBasis(null);
     setPaymentIntentNotice(undefined);
-    setCapture(undefined); setResults(undefined); setCustomer(undefined); setCustomerSnapshot(null);
+    setCapture(undefined); setCustomer(undefined); setCustomerSnapshot(null);
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
     setRepeatOrderPlan(null);
     setSelectionProjection(null); setSheetProduct(undefined); setSheetGroups([]); setSelectionBusy(false); setSelectionBusyLineId(undefined);
@@ -996,6 +1021,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     setTransferConfirmed(false);
     setNoSaleOpen(false);
     setNoSaleReason("");
+    setMobileStep("order");
   }
 
   const locked = busy || capture?.status !== "draft" || capture?.attentionLeaseId === null
@@ -1020,25 +1046,38 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     && (fulfillmentChannel !== "dine_in" || selectedTableId !== "")
     && (fulfillmentChannel !== "delivery" || (customerSnapshot !== null && fulfillmentSnapshot !== null))
     && !paymentBlocksConfirm && !quoteBlocksConfirm;
+  // Mobile shows one step at a time; `contents` keeps desktop exactly as it was (all sections visible).
+  const stepVisible = (step: CaptureStep): string =>
+    capture?.status !== "draft" || mobileStep === step ? "contents" : "hidden sm:contents";
   useEffect(() => {
-    const shortcuts: ShortcutTable = busy || kitchenSending ? {} : capture?.status === "confirmed"
-      ? { create: ariaKeyShortcut("create"), reset: ariaKeyShortcut("reset") }
-      : error === "conflict"
-      ? { reset: ariaKeyShortcut("reset") }
-      : capture === undefined ? { create: ariaKeyShortcut("create") }
-        : locked ? {} : { search: ariaKeyShortcut("search") };
+    const shortcuts: ShortcutTable = busy || kitchenSending ? {}
+      : { create: ariaKeyShortcut("create"), reset: ariaKeyShortcut("reset"),
+          ...(capture?.status === "draft" && !locked ? { search: ariaKeyShortcut("search") } : {}) };
     function onKeyDown(event: KeyboardEvent): void {
       if (event.defaultPrevented || event.repeat || event.shiftKey) return;
+      const escape = event.key === "Escape" || event.code === "Escape";
+      if (escape && noteSheetLineId !== undefined) {
+        event.preventDefault();
+        setNoteSheetLineId(undefined); setNoteSheetDraft("");
+        return;
+      }
+      if (escape && noSaleOpen) { event.preventDefault(); cancelNoSale(); return; }
       const target = event.target instanceof Element ? event.target : null;
-      const id = dispatchShortcut({ key: event.key, ctrlKey: event.ctrlKey, metaKey: event.metaKey,
-        altKey: event.altKey, targetTag: target?.tagName,
+      const id = dispatchShortcut({ key: event.key, code: event.code, ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey, altKey: event.altKey, targetTag: target?.tagName,
         targetIsEditable: target instanceof HTMLElement && target.isContentEditable }, shortcuts);
       if (id === undefined) return;
+      // Escape only closes overlays; leaving the draft for the tray is Alt+R (or the existing
+      // conflict/confirmed return), so a closed combobox in a draft never discards it.
+      if (id === "reset" && escape && capture?.status !== "confirmed" && error !== "conflict") return;
+      if (pending !== undefined && id !== "search") return;
       event.preventDefault();
-      if (id === "create") { if (capture?.status === "confirmed") createAfterConfirmation(); else create(); }
-      else if (id === "reset") reset();
-      else if (searchFocusTarget(capture?.status === "draft") === "menu") productSearchRef.current?.focus();
-      else searchInputRef.current?.focus();
+      if (id === "create") { if (capture === undefined) create(); else createAfterConfirmation(); }
+      else if (id === "reset") { if (capture === undefined) void run("tray", { schemaVersion: 2, scope, limit: 20 }); else reset(); }
+      else {
+        if (window.matchMedia("(max-width: 639px)").matches && mobileStep !== "customer") setMobileStep("customer");
+        window.requestAnimationFrame(() => searchInputRef.current?.focus());
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -1048,11 +1087,24 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   // missing, expired, or never covered the address; the fix is always the same -- re-quote.
   const confirmQuoteInvalid = error === "conflict" && errorOperation === "confirm"
     && errorCode === "CAPTURE_DELIVERY_QUOTE_INVALID";
-  return <div className={`flex flex-col gap-4 ${capture?.status === "draft" ? "pb-20 sm:pb-0" : ""}`} aria-busy={busy}>
+  return <div className={`flex flex-col gap-4 ${capture?.status === "draft" && mobileStep === "order" ? "pb-24 sm:pb-0" : ""}`} aria-busy={busy}>
+    {capture?.status === "draft" && <nav ref={stepNavRef} tabIndex={-1} aria-label="Pasos de la captura"
+      className="sticky top-0 z-10 flex items-center gap-2 rounded-xl border border-border bg-surface p-2 focus-visible:outline-2 focus-visible:outline-accent sm:hidden">
+      <button type="button" className={`${button} ${mobileStep === "order" ? "invisible" : ""}`} disabled={mobileStep === "order"}
+        aria-hidden={mobileStep === "order"}
+        onClick={() => setMobileStep(mobileStep === "delivery" ? "customer" : "order")}>Atrás</button>
+      <p role="status" aria-live="polite" className="grow basis-0 text-center text-sm font-semibold">
+        {mobileStep === "order" ? "Pedido" : mobileStep === "customer" ? "Cliente" : "Entrega"}
+        <span className="block text-xs font-normal text-text-muted">Paso {mobileStep === "order" ? 1 : mobileStep === "customer" ? 2 : 3} de 3</span>
+      </p>
+      <button type="button" className={`${button} ${mobileStep === "delivery" ? "invisible" : ""}`} disabled={mobileStep === "delivery"}
+        aria-hidden={mobileStep === "delivery"}
+        onClick={() => setMobileStep(mobileStep === "order" ? "customer" : "delivery")}>Continuar</button>
+    </nav>}
     <div role={error === undefined ? "status" : "alert"} aria-live="polite"
       className={error === undefined ? "text-sm text-text-muted" : "rounded-lg border border-border bg-error-bg p-4 text-sm"}>
       {busy ? "Guardando en el servidor…" : error === undefined ? capture === undefined ? "Crea o recupera un borrador para comenzar."
-        : `Borrador ${capture.folio} · versión ${capture.version}`
+        : "Borrador abierto."
         : menuConflict ? "El menú cambió; vuelve a cargar."
         : confirmQuoteInvalid ? "La cotización de entrega falta, venció o no cubre la dirección"
         : errorOperation === "renew" && errorCode === "CAPTURE_LEASE_TAKEN" ? "Otra estación tomó esta captura"
@@ -1081,10 +1133,9 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
           disabled={busy}>Nueva captura telefónica</button></section>
       {tray.length > 0 && <section className={panel}><h2 className="font-heading text-lg font-semibold">Borradores recuperables</h2>
         <p className="my-2 text-sm text-text-muted">Retoma una captura de esta sucursal para seguir atendiéndola.</p>
-        <div className="grid gap-2">{tray.map((item) => <button key={item.captureDraftId} title={item.captureDraftId} className={`${button} min-w-0 text-left`}
+        <div className="grid gap-2">{tray.filter(isRecoverableCaptureDraft).map((item) => <button key={item.captureDraftId} className={`${button} min-w-0 text-left`}
           disabled={busy} onClick={() => recover(item)}><strong className="block break-words">{"customer" in item && item.customer !== null ? item.customer.displayName : "Sin cliente"}</strong>
            {"customer" in item && item.customer !== null && <span className="block break-all text-sm">{item.customer.phone}</span>}
-           <span className="block text-xs text-text-muted">Captura {shortCaptureDraftId(item.captureDraftId)} · {item.folio}</span>
            <span className="block text-xs text-text-muted">{sourceLabel(item.sourceChannel)} · {item.fulfillmentChannel ? fulfillmentLabel(item.fulfillmentChannel) : "Sin entrega"} · {formatDate(item.updatedAt, confirmationContext?.timeZone)}</span>
            {"totalMinor" in item && item.totalMinor !== null && item.currency !== null && <span className="block text-sm">Ítems: {formatMinorUnits(item.totalMinor, item.currency)}</span>}
           {item.ownerMembershipId !== null && <span className="block text-xs text-text-muted">Asignada a {assignmentCandidates.find((candidate) => candidate.membershipId === item.ownerMembershipId)?.displayLabel ?? "otro operador"}</span>}
@@ -1132,6 +1183,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
         </div>
       </section>}
       {printDocuments !== undefined && <PrintPreview documents={printDocuments} onClose={() => setPrintDocuments(undefined)} />}
+      <div className={stepVisible("delivery")}>
       <section className={panel}><h2 className="font-heading text-lg font-semibold">Canal y cumplimiento</h2>
         <div className="mt-3 flex flex-wrap gap-3"><Field className="text-sm" hint="Por dónde llegó el pedido: teléfono, WhatsApp, mostrador, mesa o autoservicio. Sirve para reportes." label="Origen">{(id) => <><select id={id} value={sourceChannel} onChange={changeSource}
           className={`${input} ml-2`} disabled={locked}><option value="phone">Teléfono</option><option value="whatsapp_manual">WhatsApp manual</option>
@@ -1141,24 +1193,19 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
           <option value="pickup" disabled={fulfillmentSnapshot !== null}>Recoger</option><option value="counter" disabled={fulfillmentSnapshot !== null}>Mostrador</option>
           <option value="dine_in" disabled={fulfillmentSnapshot !== null}>Mesa</option></select></>}</Field></div>
       </section>
-      <section id="capture-customer-section" tabIndex={-1} className={`${panel} scroll-mt-20 focus-visible:outline-2 focus-visible:outline-accent`}><h2 className="font-heading text-lg font-semibold">1. Cliente</h2>
-        <form onSubmit={search} className="mt-3 flex flex-wrap gap-3"><Field className="grid gap-1 text-sm" hint="Dato con el que buscas al cliente: teléfono, nombre o dirección." id="capture-search-mode" label="Buscar por">{() => <><select id="capture-search-mode" name="mode" className={input} disabled={locked}>
-          <option value="phone">Teléfono</option><option value="name">Nombre</option><option value="address">Dirección</option></select>
-          </>}</Field>
-          <Field className="grid flex-1 gap-1 text-sm" hint="Escribe el teléfono, nombre o dirección a buscar." id="capture-search-query" label="Consulta">{() => <><input id="capture-search-query" ref={searchInputRef} name="query" required maxLength={200}
-              aria-keyshortcuts={ariaKeyShortcut("search")} className={`${input} min-w-48 w-full`}
-              placeholder="Teléfono, nombre o dirección" disabled={locked}/>
-          </>}</Field>
-          <button className={button} disabled={locked}>Buscar</button></form>
-        {results !== undefined && <div className="mt-3 grid gap-2">{results.candidates.length === 0 ? <p className="text-sm">Sin coincidencias.</p>
-          : results.candidates.map((item) => <button key={item.customerId} className={`${button} text-left`} disabled={locked}
-            onClick={() => read(item.customerId)}><strong className="block">{item.displayName}</strong>
-            <span className="text-xs text-text-muted">{item.phones.map((phone) => phone.displayValue).join(" · ")}</span></button>)}</div>}
+      </div>
+      <div className={stepVisible("customer")}>
+      <section id="capture-customer-section" tabIndex={-1} className={`${panel} scroll-mt-20 focus-visible:outline-2 focus-visible:outline-accent`}><h2 className="font-heading text-lg font-semibold">Cliente</h2>
+        <div className="mt-3"><CaptureCustomerSearch scope={scope} disabled={locked} inputRef={searchInputRef} onSelect={read} /></div>
         {customer !== undefined && <CaptureCustomerCard scope={scope} deviceId={deviceId} locked={locked} detail={customer}
           selectedContact={selectedContact} selectedAddress={selectedAddress}
           customerSaved={customerSnapshot !== null && customerSnapshot.customerId === customer.customer.customerId}
           directoryAction={customerDirectoryAction} onDetail={setCustomer}
-          onSelectPhone={(contactId) => selectCustomer(contactId)} onUseAddress={selectAddress} />}
+          onSelectPhone={(contactId) => selectCustomer(contactId)} onUseAddress={async (addressId, version) => {
+            const saved = await selectAddress(addressId, version);
+            if (saved === "ok") setMobileStep("delivery");
+            return saved;
+          }} />}
       </section>
       {customerSnapshot !== null && <section className={panel} data-testid="rehydrated-customer-snapshot">
         <h2 className="font-heading text-lg font-semibold">Cliente guardado</h2><p className="mt-2"><strong>{customerSnapshot.displayName}</strong><br />
@@ -1222,8 +1269,10 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
         <p className="mt-2 text-sm">{repeatOrderPlan.lineCount} {repeatOrderPlan.lineCount === 1 ? "línea lista" : "líneas listas"} para esta captura.</p>
         <p className="mt-1 text-xs text-text-muted">La preparación se conserva al recargar. Al confirmar, el servidor validará nuevamente cada selección y usará los precios vigentes.</p>
       </section>}
+      </div>
+      <div className={stepVisible("order")}>
       {capture.status === "draft" && <section className={`${panel} flex min-h-[520px] flex-col overflow-hidden p-0`} data-testid="capture-menu-section">
-        <h2 className="p-4 font-heading text-lg font-semibold">2. Menú</h2>
+        <h2 className="p-4 font-heading text-lg font-semibold">Pedido</h2>
         {selectionFeedback !== undefined && <p className="px-4 pb-2 text-sm" role={selectionFeedback === "saving" || selectionFeedback === "saved" ? "status" : "alert"}>
           {selectionFeedback === "saving" ? "Guardando pedido…" : selectionFeedback === "saved" ? "Pedido guardado" : selectionFeedback}
         </p>}
@@ -1240,9 +1289,11 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
             onDecrement={(lineId) => void changeLineQuantity(lineId, -1)}
             onRemove={(lineId) => void removeLine(lineId)}
             onEditNote={openNoteSheet}
-            onHold={holdCapture} onNoSale={openNoSale} />
+            onHold={holdCapture} onNoSale={openNoSale}
+            onContinue={() => setMobileStep("customer")} />
         </div>
       </section>}
+      </div>
       {noteSheetLineId !== undefined && <div className="fixed inset-0 z-30 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
         role="dialog" aria-modal="true" aria-labelledby="capture-line-note-title"
         onClick={(event) => { if (event.target === event.currentTarget) { setNoteSheetLineId(undefined); setNoteSheetDraft(""); } }}>
@@ -1283,10 +1334,12 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
         scope={scope} catalogVersion={catalog.catalog?.catalogVersion ?? null} quoteLine={quoteLine}
         currency={catalog.catalog?.currency ?? "MXN"} busy={selectionBusy} confirmedTotalMinor={sheetConfirmedTotalMinor}
         initialLine={sheetEditLine} error={sheetError} showVariants
+        catalogProducts={catalog.catalog?.products} catalogGroups={catalog.catalog?.modifierGroups}
         onClose={() => { setSheetProduct(undefined); setSheetGroups([]); setSheetConfirmedTotalMinor(undefined); setSheetEditLine(undefined); setSheetError(undefined); }}
-        onAdd={(quantity, modifierGroups, note, variantId, fraction) => void addFromSheet(quantity, modifierGroups, note, variantId, fraction)} />}
+        onAdd={(quantity, modifierGroups, note, variantId, fraction, pizza) => void addFromSheet(quantity, modifierGroups, note, variantId, fraction, pizza)} />}
+      <div className={stepVisible("delivery")}>
       {fulfillmentChannel === "delivery" && <section className={panel}>
-        <h2 className="font-heading text-lg font-semibold">3. Entrega · instrucciones</h2>
+        <h2 className="font-heading text-lg font-semibold">Entrega · instrucciones</h2>
         <p className="mt-1 text-sm text-text-muted">Se guardan en esta captura; nunca modifican la dirección del cliente ni se heredan automáticamente.</p>
         {deliveryInstructionSuggestions.length > 0 && <div className="mt-3 rounded-lg border border-border bg-bg p-3">
           <p className="text-sm font-semibold">Usadas antes por este cliente en esta sucursal</p>
@@ -1313,7 +1366,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
         </div>
       </section>}
       {fulfillmentChannel === "delivery" && fulfillmentSnapshot !== null && capture.status === "draft" && <section className={panel} data-testid="delivery-quote">
-        <h2 className="font-heading text-lg font-semibold">3. Entrega · cotización</h2>
+        <h2 className="font-heading text-lg font-semibold">Entrega · cotización</h2>
         <p className="mt-1 text-sm text-text-muted">La cobertura, tarifa y promesa se calculan en el servidor para la dirección guardada.</p>
         <p role="status" className="mt-3 rounded-lg border border-border bg-bg p-3 text-sm">
           {(selectedAddress !== undefined && selectedAddress !== fulfillmentSnapshot.addressId)
@@ -1389,7 +1442,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       </section>}
       </details>
       {capture.status === "draft" && <section className={panel} data-testid="capture-confirmation">
-        <h2 className="font-heading text-lg font-semibold">5. Confirmar</h2>
+        <h2 className="font-heading text-lg font-semibold">Confirmar</h2>
         {confirmationContext === undefined ? <p role="alert" className="mt-2 text-sm text-text-muted">
           No fue posible leer el turno, moneda o zona horaria de esta sucursal. Recarga antes de confirmar.
         </p> : <>
@@ -1421,7 +1474,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
             Falta {customerSnapshot === null && fulfillmentSnapshot === null ? "guardar un cliente y una dirección validada"
               : customerSnapshot === null ? "guardar un cliente" : "guardar una dirección validada"} para confirmar el domicilio.
             <button type="button" className={`${button} ml-2`} onClick={goToCustomer}>Ir a la dirección</button>
-            <a href="/app/customers" className="ml-3 text-sm text-accent underline">Directorio</a>
+            <a href={`/app/customers${customerSnapshot === null ? "" : `?customerId=${encodeURIComponent(customerSnapshot.customerId)}`}`} className="ml-3 text-sm text-accent underline">Directorio</a>
           </p>}
           {repeatOrderPlan !== null && <p role="status" className="mt-2 text-sm text-text-muted">
             El servidor volverá a cotizar este pedido con el catálogo vigente. Si algún producto o modificador ya no es válido, la confirmación se detendrá sin crear una orden parcial.
@@ -1438,15 +1491,18 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
         </>}
       </section>}
       {capture.status === "draft" && <aside className="rounded-xl border border-[oklch(80%_0.08_75)] bg-[oklch(96%_0.03_75)] p-4 text-sm"><strong>Captura abierta.</strong> Los cambios se guardan en el servidor. Si se vence tu tiempo de atención, vuelve a tomarla desde la bandeja.</aside>}
+      </div>
     </>}
     <details className={panel}>
       <summary className="flex min-h-11 cursor-pointer items-center font-semibold focus-visible:outline-2 focus-visible:outline-accent">Atajos</summary>
       <ul className="mt-2 grid gap-2 text-sm">
-        <li><kbd>N</kbd> — Nueva captura desde la bandeja.</li>
-        <li><kbd>/</kbd> — Enfocar la búsqueda de productos si el menú está visible; si no, la búsqueda de cliente.</li>
-        <li><kbd>Esc</kbd> — Volver a la bandeja tras un conflicto o una captura confirmada.</li>
+        <li><kbd>Alt</kbd>+<kbd>N</kbd> — Nueva captura, incluso con otra abierta.</li>
+        <li><kbd>Ctrl</kbd>+<kbd>K</kbd> o <kbd>Alt</kbd>+<kbd>K</kbd> — Enfocar la búsqueda de cliente.</li>
+        <li><kbd>Esc</kbd> — Cerrar la lista, el diálogo o la hoja abierta.</li>
+        <li><kbd>Alt</kbd>+<kbd>R</kbd> — Volver a la bandeja.</li>
       </ul>
     </details>
+    {capture !== undefined && <p className="text-xs text-text-muted">Borrador {capture.folio} · versión {capture.version}</p>}
   </div>;
 }
 

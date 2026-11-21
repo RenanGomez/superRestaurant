@@ -67,10 +67,7 @@ import {
   type SetCaptureDeliveryInstructionsResultV1,
   type ConfirmCaptureDraftCommandV2,
   parseCaptureWorkspaceRequestV4,
-  parseCaptureSelectionPlanV1,
   parseCaptureSelectionPlanProjectionV1,
-  parseReplaceCaptureSelectionPlanCommandV1,
-  parseCaptureLineQuoteRequestV1,
   parseCaptureLineQuoteResultV1,
   type CaptureLineQuoteResultV1,
   type CaptureWorkspaceRequestV4,
@@ -80,7 +77,6 @@ import {
   type CaptureSelectionPlanProjectionV1,
   type CaptureSelectionPlanV1,
   type CaptureSelectionLineV1,
-  type ReplaceCaptureSelectionPlanCommandV1,
   parseCaptureWorkspaceRequestV5,
   parseRequestCaptureDeliveryQuoteCommandV1,
   parseSetCapturePaymentIntentCommandV1,
@@ -117,6 +113,12 @@ import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import { MENU_CATALOG_PORT, type MenuCatalogPort } from "./menu-catalog.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
 import { describeHalvesWithIds, isFractionModifier } from "./fraction-halves.js";
+import {
+  NO_PIZZA_LINES, parseCaptureLineQuoteRequestWithPizza, parseReplaceCaptureSelectionPlanWireCommand,
+  parseStoredCaptureSelectionPlan, type CapturePizzaByLineId, type CapturePizzaLineV2,
+  type CaptureSelectionWirePlan, type ReplaceCaptureSelectionPlanWireCommand,
+} from "./capture-pizza-plan.js";
+import { pricePizzaLineSnapshot } from "./capture-pizza-pricing.js";
 import {
   decodeCaptureRecord, decodeCaptureWorkspace, decodeCaptureWorkspaceV2, decodeCaptureWorkspaceV3,
   decodeCaptureWorkspaceV4, decodeCaptureWorkspaceV5, withCaptureSelectionProjection,
@@ -185,8 +187,8 @@ export interface CaptureNoSalePort {
 }
 export const CAPTURE_NO_SALE_PORT = Symbol("CAPTURE_NO_SALE_PORT");
 export interface CaptureSelectionPlanPort {
-  replaceSelectionPlan(actorId: string, command: ReplaceCaptureSelectionPlanCommandV1): Promise<unknown>;
-  probeReplaceSelectionPlan(actorId: string, command: ReplaceCaptureSelectionPlanCommandV1): Promise<unknown>;
+  replaceSelectionPlan(actorId: string, command: ReplaceCaptureSelectionPlanWireCommand): Promise<unknown>;
+  probeReplaceSelectionPlan(actorId: string, command: ReplaceCaptureSelectionPlanWireCommand): Promise<unknown>;
 }
 export const CAPTURE_SELECTION_PLAN_PORT = Symbol("CAPTURE_SELECTION_PLAN_PORT");
 export interface CaptureDeliveryQuoteEnvelopeV1 {
@@ -383,8 +385,8 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     return row.result;
   }
 
-  public async replaceSelectionPlan(actorId: string, input: ReplaceCaptureSelectionPlanCommandV1): Promise<unknown> {
-    const command = parseReplaceCaptureSelectionPlanCommandV1(input);
+  public async replaceSelectionPlan(actorId: string, input: ReplaceCaptureSelectionPlanWireCommand): Promise<unknown> {
+    const command = parseReplaceCaptureSelectionPlanWireCommand(input);
     if (!canonicalUuid.test(actorId) || command === undefined) throw new CaptureApplicationError("request");
     const { plan, ...envelope } = command;
     const response = await this.database.query(
@@ -397,8 +399,8 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     return row.result;
   }
 
-  public async probeReplaceSelectionPlan(actorId: string, input: ReplaceCaptureSelectionPlanCommandV1): Promise<unknown> {
-    const command = parseReplaceCaptureSelectionPlanCommandV1(input);
+  public async probeReplaceSelectionPlan(actorId: string, input: ReplaceCaptureSelectionPlanWireCommand): Promise<unknown> {
+    const command = parseReplaceCaptureSelectionPlanWireCommand(input);
     if (!canonicalUuid.test(actorId) || command === undefined) throw new CaptureApplicationError("request");
     const { plan, ...envelope } = command;
     const response = await this.database.query(
@@ -724,9 +726,10 @@ function priceTrayDraft(
 ): { readonly currency: string; readonly totalMinor: number } | null {
   if (rawPlan === null) return null;
   try {
-    const plan = parseCaptureSelectionPlanV1(rawPlan);
-    if (plan === undefined || plan.lines.length === 0 || plan.catalogVersion !== catalog.catalogVersion) return null;
-    const projection = priceSelectionPlan(plan, catalog, scope.restaurantId);
+    const stored = parseStoredCaptureSelectionPlan(rawPlan);
+    const plan = stored?.plan;
+    if (stored === undefined || plan === undefined || plan.lines.length === 0 || plan.catalogVersion !== catalog.catalogVersion) return null;
+    const projection = priceSelectionPlan(plan, catalog, scope.restaurantId, stored.pizzaByLineId);
     return { currency: projection.currency, totalMinor: projection.itemsTotalMinor };
   } catch { return null; }
 }
@@ -964,6 +967,7 @@ export class CaptureConfirmationService {
       catalog = catalogState.catalog;
     }
     let selectionPlan: CaptureSelectionPlanV1 | null = null;
+    let selectionPizza: CapturePizzaByLineId = NO_PIZZA_LINES;
     if (workspace.selectionPlan !== null) {
       try {
         const authorized = await this.authorization.authorizeBranch(principal, command.scope, "catalog.read");
@@ -978,7 +982,9 @@ export class CaptureConfirmationService {
         if (planStatus?.status === "missing") throw new CaptureApplicationError("conflict");
         throw unavailable();
       }
-      selectionPlan = parseCaptureSelectionPlanV1(planEnvelope.plan) ?? null;
+      const storedSelection = parseStoredCaptureSelectionPlan(planEnvelope.plan);
+      selectionPlan = storedSelection?.plan ?? null;
+      selectionPizza = storedSelection?.pizzaByLineId ?? NO_PIZZA_LINES;
       if (selectionPlan === null || selectionPlan.catalogVersion !== workspace.selectionPlan.catalogVersion
         || selectionPlan.lines.length !== workspace.selectionPlan.lineCount) throw unavailable();
       let catalogState;
@@ -999,7 +1005,7 @@ export class CaptureConfirmationService {
     let materialization: CaptureOrderMaterialization;
     try {
       materialization = selectionPlan !== null
-        ? materializeCaptureSelectionOrder(command, actorId, channel, selectionPlan, catalog, deliveryCharge)
+        ? materializeCaptureSelectionOrder(command, actorId, channel, selectionPlan, catalog, deliveryCharge, selectionPizza)
         : materializeCaptureOrder(command, actorId, channel, plan, catalog, deliveryCharge);
     } catch { throw new CaptureApplicationError((plan === null && selectionPlan === null) ? "request" : "conflict"); }
     let raw: unknown;
@@ -1019,7 +1025,7 @@ export class CaptureSelectionPlanService {
   ) {}
 
   public async replace(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkspaceV5> {
-    const command = parseReplaceCaptureSelectionPlanCommandV1(input);
+    const command = parseReplaceCaptureSelectionPlanWireCommand(input);
     if (command === undefined) throw new CaptureApplicationError("request");
     let actorId: string;
     try {
@@ -1034,30 +1040,54 @@ export class CaptureSelectionPlanService {
     // pricing attempt -- means a catalog change (or a later, different write) since the
     // original apply can never turn a legitimate replay into a spurious rejection, and the
     // replayed response is never derived from comparing against this echoed command.
-    let rawProbe: unknown;
-    try { rawProbe = await this.persistence.probeReplaceSelectionPlan(actorId, command); } catch { throw unavailable(); }
-    const probe = exactRecord(rawProbe, ["status", "record"]);
-    if (probe?.status === "replayed") return this.replayedWorkspace(actorId, command);
-    const probeStatus = exactRecord(rawProbe, ["status"]);
-    if (probeStatus?.status === "denied") throw new CaptureApplicationError("authorization");
-    if (probeStatus?.status === "conflict") throw new CaptureApplicationError("conflict");
-    if (probeStatus?.status === "rejected") throw new CaptureApplicationError("request");
-    if (probeStatus?.status !== "pending") throw unavailable();
+    // TEMPORARY (schemaVersion 2 only): app_private.probe_capture_selection_plan_replace still accepts
+    // plan.schemaVersion 1 only and would answer "rejected" for a pizza V2 plan. Until a migration redefines
+    // the probe, a V2 plan skips it; replace_capture_selection_plan itself already deduplicates by
+    // idempotency key and answers "replayed", which is handled below after the catalog check.
+    if (command.plan.schemaVersion === 1) {
+      let rawProbe: unknown;
+      try { rawProbe = await this.persistence.probeReplaceSelectionPlan(actorId, command); } catch { throw unavailable(); }
+      const probe = exactRecord(rawProbe, ["status", "record"]);
+      if (probe?.status === "replayed") return this.replayedWorkspace(actorId, command);
+      const probeStatus = exactRecord(rawProbe, ["status"]);
+      if (probeStatus?.status === "denied") throw new CaptureApplicationError("authorization");
+      if (probeStatus?.status === "conflict") throw new CaptureApplicationError("conflict");
+      if (probeStatus?.status === "rejected") throw new CaptureApplicationError("request");
+      if (probeStatus?.status !== "pending") throw unavailable();
+    }
+
+    // A V2 plan skipped the probe, so a legitimate replay made after a catalog change would fail the checks
+    // below with 409. For V2 only, a 409 from those checks still asks the write itself and accepts SOLELY its
+    // `replayed` answer (idempotency decided by the database); any other result keeps the original 409.
+    const conflictUnlessReplayed = async (): Promise<never> => {
+      if (command.plan.schemaVersion === 2) {
+        let replay: unknown;
+        try { replay = await this.persistence.replaceSelectionPlan(actorId, command); } catch { throw unavailable(); }
+        if (exactRecord(replay, ["status", "record"])?.status === "replayed") return this.replayedWorkspace(actorId, command) as never;
+      }
+      throw new CaptureApplicationError("conflict");
+    };
 
     let catalogState;
     try { catalogState = await this.catalogs.read(actorId, command.scope); } catch { throw unavailable(); }
     if (catalogState === "forbidden") throw new CaptureApplicationError("authorization");
     if (catalogState.catalog === null || catalogState.scope.restaurantId !== command.scope.restaurantId
-      || catalogState.scope.branchId !== command.scope.branchId) throw new CaptureApplicationError("conflict");
+      || catalogState.scope.branchId !== command.scope.branchId) return conflictUnlessReplayed();
     const catalog = catalogState.catalog;
-    if (catalog.catalogVersion !== command.plan.catalogVersion) throw new CaptureApplicationError("conflict");
+    if (catalog.catalogVersion !== command.plan.catalogVersion) return conflictUnlessReplayed();
 
     // Validate and price every line against the live, published catalog before persisting anything: an
     // inactive product/option or a group outside its configured limits fails closed with 409, never a
     // silent reprice or a partially-applied plan. This result is validation-only: the response's
     // `selectionProjection` is always re-derived below from whatever the write actually produced,
     // never reused from here, since another write can race in between the persist and the re-read.
-    if (command.plan.lines.length > 0) priceSelectionPlan(command.plan, catalog, command.scope.restaurantId);
+    if (command.plan.lines.length > 0) {
+      try { priceSelectionPlan(command.plan, catalog, command.scope.restaurantId, pizzaOfWirePlan(command.plan)); }
+      catch (error: unknown) {
+        if (error instanceof CaptureApplicationError && error.code === "conflict") return conflictUnlessReplayed();
+        throw error;
+      }
+    }
 
     let raw: unknown;
     try { raw = await this.persistence.replaceSelectionPlan(actorId, command); } catch { throw unavailable(); }
@@ -1124,7 +1154,7 @@ export class CaptureSelectionPlanService {
    */
   private async replayedWorkspace(
     actorId: string,
-    command: ReplaceCaptureSelectionPlanCommandV1,
+    command: ReplaceCaptureSelectionPlanWireCommand,
   ): Promise<CaptureWorkspaceV5> {
     return readCaptureWorkspaceV5WithProjections(
       actorId, command.scope, command.captureDraftId, this.captures, this.confirmation, this.catalogs,
@@ -1160,8 +1190,9 @@ async function projectStoredSelectionPlan(
     if (typeof storedPlanEnvelope.appliedCaptureVersion !== "number"
       || !Number.isInteger(storedPlanEnvelope.appliedCaptureVersion)
       || storedPlanEnvelope.appliedCaptureVersion !== selectionPlan.appliedCaptureVersion) return null;
-    const storedPlan = parseCaptureSelectionPlanV1(storedPlanEnvelope.plan);
-    if (storedPlan === undefined || storedPlan.lines.length === 0
+    const stored = parseStoredCaptureSelectionPlan(storedPlanEnvelope.plan);
+    const storedPlan = stored?.plan;
+    if (stored === undefined || storedPlan === undefined || storedPlan.lines.length === 0
       || storedPlan.catalogVersion !== selectionPlan.catalogVersion
       || storedPlan.lines.length !== selectionPlan.lineCount) return null;
     const catalogState = await catalogs.read(actorId, scope);
@@ -1171,15 +1202,27 @@ async function projectStoredSelectionPlan(
     if (catalogState === "forbidden" || catalogState.catalog === null
       || catalogState.scope.restaurantId !== scope.restaurantId || catalogState.scope.branchId !== scope.branchId
       || catalogState.catalog.catalogVersion !== storedPlan.catalogVersion) return null;
-    return priceSelectionPlan(storedPlan, catalogState.catalog, scope.restaurantId);
+    return priceSelectionPlan(storedPlan, catalogState.catalog, scope.restaurantId, stored.pizzaByLineId);
   } catch { return null; }
 }
 
-/** Prices every line of a validated selection plan against the live catalog; throws a typed 409 on any mismatch. */
+/** The validated `pizza` objects of a wire plan, keyed by lineId (empty for a schemaVersion 1 plan). */
+function pizzaOfWirePlan(plan: CaptureSelectionWirePlan): CapturePizzaByLineId {
+  const byLine = new Map<string, CapturePizzaLineV2>();
+  for (const line of plan.lines) if (line.pizza !== undefined) byLine.set(line.lineId, line.pizza);
+  return byLine.size === 0 ? NO_PIZZA_LINES : byLine;
+}
+
+/**
+ * Prices every line of a validated selection plan against the live catalog; throws a typed 409 on any mismatch.
+ * A line with a `pizza` is priced by the pizza V2 rule; a line without it on a product that has `pizzaMode`
+ * is a 409 (the whole-line pipeline would silently misprice it).
+ */
 function priceSelectionPlan(
-  plan: CaptureSelectionPlanV1,
+  plan: Pick<CaptureSelectionPlanV1, "catalogVersion" | "lines">,
   catalog: MenuCatalogV1,
   restaurantId: string,
+  pizzaByLineId: CapturePizzaByLineId = NO_PIZZA_LINES,
 ): CaptureSelectionPlanProjectionV1 {
   const domainCatalog = toDomainMenuCatalog(catalog, restaurantId);
   let subtotalMinor = 0;
@@ -1187,11 +1230,17 @@ function priceSelectionPlan(
   const lines: CaptureSelectionPlanProjectionLineV1[] = [];
   for (const line of plan.lines) {
     let snapshot;
+    const pizza = pizzaByLineId.get(line.lineId);
+    if (pizza === undefined && domainCatalog.products.some((product) => product.id === line.productId && product.pizzaMode !== undefined)) {
+      throw new CaptureApplicationError("conflict");
+    }
     try {
-      snapshot = createMenuProductPriceSnapshot(domainCatalog, {
-        currency: catalog.currency, productId: line.productId, restaurantId, variantId: line.variantId,
-        fraction: line.fraction ?? null,
-      }, line.modifierGroups);
+      snapshot = pizza !== undefined
+        ? pricePizzaLineSnapshot(domainCatalog, restaurantId, line, pizza)
+        : createMenuProductPriceSnapshot(domainCatalog, {
+          currency: catalog.currency, productId: line.productId, restaurantId, variantId: line.variantId,
+          fraction: line.fraction ?? null,
+        }, line.modifierGroups);
     } catch { throw new CaptureApplicationError("conflict"); }
     const totals = calculateOrderItemTotals({
       orderItemId: line.lineId, quantity: line.quantity, snapshot, note: line.note,
@@ -1224,6 +1273,8 @@ function priceSelectionPlan(
       unitPriceMinor: snapshot.unitPrice.amountMinor,
       variantId: line.variantId,
       ...(snapshot.geometry === "halves" ? { halves: describeHalvesWithIds(snapshot, line.fraction ?? null) } : {}),
+      // Pizza V2: return the stored picks so the web restores the line after a reload.
+      ...(pizza === undefined ? {} : { pizza }),
     });
   }
   const projection = parseCaptureSelectionPlanProjectionV1({
@@ -1276,7 +1327,7 @@ async function readStoredCaptureSelectionPlanLines(
     const raw = await confirmation.readSelectionPlan(actorId, { schemaVersion: 3, scope, captureDraftId });
     const envelope = exactRecord(raw, ["status", "plan", "appliedCaptureVersion"]);
     if (envelope?.status !== "ok") return null;
-    return parseCaptureSelectionPlanV1(envelope.plan) ?? null;
+    return parseStoredCaptureSelectionPlan(envelope.plan)?.plan ?? null;
   } catch { return null; }
 }
 
@@ -1983,8 +2034,10 @@ export class CaptureService {
    * the projection; nothing is persisted and nothing is frozen.
    */
   public async quoteLinePrice(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureLineQuoteResultV1> {
-    const request = parseCaptureLineQuoteRequestV1(input);
-    if (request === undefined) throw new CaptureApplicationError("request");
+    const parsedQuote = parseCaptureLineQuoteRequestWithPizza(input);
+    if (parsedQuote === undefined) throw new CaptureApplicationError("request");
+    const request = parsedQuote.request;
+    const quoteLineId = "00000000-0000-4000-8000-000000000001";
     let actorId: string;
     try { actorId = (await this.authorization.authorizeBranch(principal, request.scope, "captures.read")).principal.actorId; }
     catch { throw new CaptureApplicationError("authorization"); }
@@ -2001,12 +2054,12 @@ export class CaptureService {
       projection = priceSelectionPlan({
         catalogVersion: request.catalogVersion,
         lines: [{
-          lineId: "00000000-0000-4000-8000-000000000001", modifierGroups: request.modifierGroups, note: null,
+          lineId: quoteLineId, modifierGroups: request.modifierGroups, note: null,
           productId: request.productId, quantity: request.quantity, variantId: request.variantId,
           ...(request.fraction === null ? {} : { fraction: request.fraction }),
         }],
-        schemaVersion: 1,
-      }, catalogState.catalog, request.scope.restaurantId);
+      }, catalogState.catalog, request.scope.restaurantId,
+      parsedQuote.pizza === null ? NO_PIZZA_LINES : new Map([[quoteLineId, parsedQuote.pizza]]));
     } catch (error: unknown) {
       if (error instanceof CaptureApplicationError && error.code === "conflict") throw new CaptureLineQuoteRejectedError("line_invalid");
       throw error;

@@ -12,13 +12,22 @@ if not exist "%NODE24%\node.exe" (
 set "PATH=%NODE24%;%PATH%"
 cd /d "%ROOT%"
 
+echo.
+echo ===== Smoke: pizza por mitades (modelo V2) =====
+echo La API usa la base REMOTA de .env.adr010.local. Este script NO aplica migraciones.
+echo Deben estar aplicadas: 20261120000100_pizza_model_v2.sql y 20261120000200_capture_selection_plan_probe_v2.sql
+echo Pasos de prueba: docs\runbooks\guia-de-pruebas-operador.md (seccion 14)
+echo ================================================
+echo.
+
 echo [1/4] Cerrando servidores previos en 3000 y 8082...
 powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 3000,8082 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"
 
 if /i "%~1"=="nobuild" (
   echo [2/4] Compilacion omitida.
 ) else (
-  echo [2/4] Compilando contratos compartidos y API...
+  echo [2/4] Compilando dominio, contratos compartidos y API...
+  call pnpm --filter "@super-restaurant/domain" build || goto :fail
   call pnpm --filter "@super-restaurant/shared-types" build || goto :fail
   call pnpm --filter "@super-restaurant/api" build || goto :fail
 )

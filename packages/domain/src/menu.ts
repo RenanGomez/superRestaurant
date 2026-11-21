@@ -15,6 +15,7 @@ import {
   MenuModifierGroupNotAllowedError,
   MenuProductCategoryNotFoundError,
   MenuProductModifierGroupNotFoundError,
+  MenuPizzaProductRequiresHalvesRuleError,
   MenuProductNotFoundError,
   MenuProductVariantNotFoundError,
   MenuProductVariantRequiredError,
@@ -124,7 +125,20 @@ export interface MenuProductCatalog {
   readonly variants?: readonly MenuProductVariantCatalog[];
   /** Half-and-half setup for every size of the product (or the product itself when it has no sizes). */
   readonly fraction?: MenuProductFractionConfig;
+  /** Pizza V2: absent means a legacy product; no other V2 field may then be present. */
+  readonly pizzaMode?: MenuPizzaMode;
+  /** Pizza V2: non-negative integer N of free ingredients. */
+  readonly freeIngredientCount?: number;
+  /** Pizza V2: ingredient group (listed in `modifierGroupIds`) a custom base picks from. */
+  readonly baseGroupId?: string | null;
+  /** Pizza V2: recipe option ids of a specialty. */
+  readonly defaultIngredientOptionIds?: readonly string[];
+  readonly customizeAtOrder?: boolean;
+  /** Pizza V2: charged extra groups (listed in `modifierGroupIds`); extras never consume N. */
+  readonly extraGroupIds?: readonly string[];
 }
+
+export type MenuPizzaMode = "specialty" | "custom";
 
 /** One coherent, restaurant-owned menu release. Branch/time availability is deliberately outside this neutral slice. */
 export interface MenuCatalog {
@@ -330,6 +344,7 @@ function validateMenuCatalogCanonical(catalog: MenuCatalog): ValidatedMenuCatalo
       modifierGroupIds: [...product.modifierGroupIds],
       ...(variants.length === 0 ? {} : { variants }),
       ...(productFraction === undefined ? {} : { fraction: productFraction }),
+      ...validatePizzaConfig(product),
     });
   }).sort(compareMenuDisplayOrder);
 
@@ -422,6 +437,8 @@ function createMenuProductPriceSnapshotCanonical(
   const product = catalog.products.find(({ id }) => id === context.productId);
   if (product === undefined) throw new MenuProductNotFoundError(context.productId);
   if (!product.active) throw new InactiveMenuProductError(product.id);
+  // Fail closed: a pizza V2 product is priced only by the halves rule, never as a plain catalog product.
+  if (product.pizzaMode !== undefined) throw new MenuPizzaProductRequiresHalvesRuleError(product.id);
   const category = catalog.categories.find(({ id }) => id === product.categoryId);
   if (category === undefined) throw new MenuProductCategoryNotFoundError(product.id, product.categoryId);
   if (!category.active) throw new InactiveMenuCategoryError(category.id);
@@ -723,7 +740,79 @@ function normalizeMenuProduct(value: unknown): MenuProductCatalog {
     modifierGroupIds,
     ...(variants.length === 0 ? {} : { variants }),
     ...(fractionValue === undefined ? {} : { fraction: normalizeFractionConfig(fractionValue) }),
+    ...normalizePizzaConfig(product),
   });
+}
+
+const PIZZA_PRODUCT_FIELDS = ["freeIngredientCount", "baseGroupId", "defaultIngredientOptionIds", "customizeAtOrder", "extraGroupIds"] as const;
+
+/** Detaches the optional Pizza V2 fields of a product; `{}` for a legacy product. */
+function normalizePizzaConfig(product: Record<string, unknown>): Partial<MenuProductCatalog> {
+  const mode = optionalOwnData(product, "pizzaMode", "menu product pizzaMode");
+  if (mode === undefined) {
+    // Fail closed: V2 fields without a mode are never silently dropped.
+    if (PIZZA_PRODUCT_FIELDS.some((key) => optionalOwnData(product, key, `menu product ${key}`) !== undefined)) {
+      throw new InvalidSnapshotError("menu product pizzaMode");
+    }
+    return {};
+  }
+  const freeIngredientCount = optionalOwnData(product, "freeIngredientCount", "menu product freeIngredientCount");
+  const baseGroupId = optionalOwnData(product, "baseGroupId", "menu product baseGroupId");
+  const defaults = optionalOwnData(product, "defaultIngredientOptionIds", "menu product defaultIngredientOptionIds");
+  const customizeAtOrder = optionalOwnData(product, "customizeAtOrder", "menu product customizeAtOrder");
+  const extraGroups = optionalOwnData(product, "extraGroupIds", "menu product extraGroupIds");
+  return {
+    pizzaMode: mode as MenuPizzaMode,
+    ...(freeIngredientCount === undefined ? {} : { freeIngredientCount: freeIngredientCount as number }),
+    ...(baseGroupId === undefined ? {} : { baseGroupId: baseGroupId as string | null }),
+    ...(defaults === undefined ? {} : { defaultIngredientOptionIds: asDataArray(defaults, "menu product defaultIngredientOptionIds").map((id) => id as string) }),
+    ...(customizeAtOrder === undefined ? {} : { customizeAtOrder: customizeAtOrder as boolean }),
+    ...(extraGroups === undefined ? {} : { extraGroupIds: asDataArray(extraGroups, "menu product extraGroupIds").map((id) => id as string) }),
+  };
+}
+
+/** Validates the Pizza V2 fields of a product against its own group allowlist; `{}` for a legacy product. */
+/** Same caps as shared-types (MENU_PIZZA_MAX_*); both packages pin them with boundary tests. */
+export const MENU_PIZZA_MAX_FREE_INGREDIENTS = 40;
+export const MENU_PIZZA_MAX_EXTRA_GROUPS = 24;
+export const MENU_PIZZA_MAX_DEFAULT_INGREDIENTS = 40;
+
+function validatePizzaConfig(product: MenuProductCatalog): Partial<MenuProductCatalog> {
+  if (product.pizzaMode === undefined) {
+    if (PIZZA_PRODUCT_FIELDS.some((key) => product[key] !== undefined)) throw new InvalidSnapshotError("menu product pizzaMode");
+    return {};
+  }
+  if (product.pizzaMode !== "specialty" && product.pizzaMode !== "custom") throw new InvalidSnapshotError("menu product pizzaMode");
+  const count = product.freeIngredientCount ?? 0;
+  if (!Number.isSafeInteger(count) || count < 0 || count > MENU_PIZZA_MAX_FREE_INGREDIENTS) throw new InvalidSnapshotError("menu product freeIngredientCount");
+  const customizeAtOrder = product.customizeAtOrder ?? false;
+  assertBoolean(customizeAtOrder, "menu product customizeAtOrder");
+  const baseGroupId = product.baseGroupId ?? null;
+  if (baseGroupId !== null) {
+    assertText(baseGroupId, "menu product baseGroupId");
+    if (!product.modifierGroupIds.includes(baseGroupId)) throw new InvalidSnapshotError("menu product baseGroupId");
+  }
+  if (product.pizzaMode === "custom" && baseGroupId === null) throw new InvalidSnapshotError("menu product baseGroupId");
+  const extraGroupIds = [...(product.extraGroupIds ?? [])];
+  if (extraGroupIds.length > MENU_PIZZA_MAX_EXTRA_GROUPS) throw new InvalidSnapshotError("menu product extraGroupIds");
+  for (const groupId of extraGroupIds) {
+    assertText(groupId, "menu product extraGroupId");
+    if (!product.modifierGroupIds.includes(groupId) || groupId === baseGroupId) throw new InvalidSnapshotError("menu product extraGroupIds");
+  }
+  const defaults = [...(product.defaultIngredientOptionIds ?? [])];
+  if (defaults.length > MENU_PIZZA_MAX_DEFAULT_INGREDIENTS) throw new InvalidSnapshotError("menu product defaultIngredientOptionIds");
+  for (const optionId of defaults) assertText(optionId, "menu product defaultIngredientOptionId");
+  if (new Set(extraGroupIds).size !== extraGroupIds.length || new Set(defaults).size !== defaults.length) {
+    throw new InvalidSnapshotError("menu product pizza duplicates");
+  }
+  return {
+    baseGroupId,
+    customizeAtOrder,
+    defaultIngredientOptionIds: Object.freeze(defaults),
+    extraGroupIds: Object.freeze(extraGroupIds),
+    freeIngredientCount: count,
+    pizzaMode: product.pizzaMode,
+  };
 }
 
 function normalizeMenuProductVariant(value: unknown): MenuProductVariantCatalog {

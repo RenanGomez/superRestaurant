@@ -123,6 +123,10 @@ function reconcileLine(item: OrderItem, catalog: ValidatedMenuCatalog): RepeatOr
     addIssue(issues, { code: "product_removed", severity: "blocking" });
   } else if (!product.active) {
     addIssue(issues, { code: "product_inactive", severity: "blocking" });
+  } else if (product.pizzaMode !== undefined) {
+    // A pizza V2 product is sold only through the halves rule, so a plain repeat cannot rebuild it. It blocks
+    // with the existing `product_inactive` code (no contract change) instead of letting the pricing guard throw.
+    addIssue(issues, { code: "product_inactive", severity: "blocking" });
   } else {
     const category = catalog.categories.find(({ id }) => id === product.categoryId);
     if (category === undefined || !category.active) {

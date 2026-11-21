@@ -59,6 +59,7 @@ export {
   MenuModifierGroupNotAllowedError,
   MenuProductCategoryNotFoundError,
   MenuProductModifierGroupNotFoundError,
+  MenuPizzaProductRequiresHalvesRuleError,
   MenuProductNotFoundError,
   MenuProductVariantNotFoundError,
   MenuProductVariantRequiredError,
@@ -389,6 +390,7 @@ export type {
   MenuCategoryCatalog,
   MenuFractionSelection,
   MenuFractionSlotSelection,
+  MenuPizzaMode,
   MenuProductFractionConfig,
   MenuVariantFractionConfig,
   MenuModifierGroupSelection,
@@ -446,8 +448,26 @@ export type {
   DeliveryQuoteOverride,
   QuoteDeliveryInput,
 } from "./delivery-quote.js";
-export { FRACTION_CUSTOM_FLAVOR_ID, FRACTION_CUSTOM_FLAVOR_NAME, resolveFractionPricing } from "./fraction-pricing.js";
+export {
+  FRACTION_CUSTOM_FLAVOR_ID,
+  FRACTION_CUSTOM_FLAVOR_NAME,
+  PIZZA_HALVES_RULE_V1,
+  PIZZA_HALVES_RULE_V2,
+  PIZZA_HALVES_SNAPSHOT_SCHEMA_VERSION,
+  readPizzaHalvesPriceSnapshot,
+  resolveFractionPricing,
+  resolvePizzaHalvesPricing,
+} from "./fraction-pricing.js";
 export type {
+  PizzaHalfFraction,
+  PizzaHalfInputV2,
+  PizzaHalfKind,
+  PizzaHalfOptionPrice,
+  PizzaHalvesChargeSnapshot,
+  PizzaHalvesPriceSnapshotV2,
+  PizzaHalvesPricingIssue,
+  PizzaHalvesPricingIssueCode,
+  ResolvePizzaHalvesPricingInput,
   FractionComboSlot,
   FractionComboSubstitutionOption,
   FractionExtraOption,

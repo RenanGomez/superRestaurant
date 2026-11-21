@@ -220,3 +220,14 @@ Complementa la ruta completa de §12. Marca cada punto como **OK**, **FALLA** (q
 - Posición y zoom de la foto: paquete A sin iniciar.
 - Ingredientes «que no se pueden quitar» (P2) y «especialidades» como sabores de mitades (P3): P2 arranca cuando Codex recupere cuota; P3 espera dos decisiones: regla de precio de mitades con dos especialidades y destino de los grupos de sabores actuales.
 - Dos cuentas de prueba en borrador abiertas hoy en Mesa 2 y Mesa 5: cancelarlas o usarlas.
+
+## 14. Pizza por mitades (modelo V2) — verificación para Emmanuel
+
+Requiere la migración `20261120000100_pizza_model_v2.sql` aplicada en el entorno que pruebes y productos con modo de pizza (especialidad o personalizada) en el menú.
+
+1. Captura: elige una pizza personalizada, divide en dos mitades y marca ingredientes en cada mitad y uno en «ambas». El ticket muestra «Mitad A» y «Mitad B» con sus ingredientes; el ingrediente de «ambas» aparece en las dos mitades y se cobra una sola vez.
+2. Especialidad con ingrediente quitado: la mitad muestra «Sin <ingrediente>» y el precio no baja.
+3. **Recargar la página (F5) con la cuenta abierta**: las líneas de pizza siguen con sus dos mitades, ingredientes y total; al cambiar la cantidad de otra línea la pizza no se convierte en pizza entera.
+4. Confirma la orden: el detalle de la orden, la comanda y el ticket impreso repiten las mismas mitades e ingredientes por mitad (desktop y 390×844, consola sin errores).
+5. Edita o retira el producto o un ingrediente en el menú: las órdenes ya confirmadas conservan nombres y precios.
+6. Mezcla una pizza V2 con una línea de mitades antigua en la misma cuenta: ambas se ven y se cobran bien.

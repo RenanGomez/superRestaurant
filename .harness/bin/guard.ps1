@@ -31,7 +31,7 @@ if ($in.hook_event_name -eq 'UserPromptSubmit') {
   if ($in.prompt -cmatch '\bOVERRIDE\b') { $st.override = $true; Save; Log 'override' }
   # tokens: cada paso relee todo el contexto. Con la última llamada de la transcripción se mide su tamaño y
   # el modelo; pasado config.tokens.handoffAt se pide cerrar con handoff, y en Fable se avisa del coste.
-  $tk = $cfg.tokens; $limit = if ($tk -and $tk.handoffAt) { [int]$tk.handoffAt } else { 100000 }
+  $tk = $cfg.tokens; $limit = if ($tk -and $tk.handoffAt) { [int]$tk.handoffAt } else { 150000 }
   $tp = $in.transcript_path; $msgs = @()
   if ($tp -and (Test-Path $tp)) {
     $fs = [IO.File]::Open($tp, 'Open', 'Read', 'ReadWrite')
@@ -42,10 +42,11 @@ if ($in.hook_event_name -eq 'UserPromptSubmit') {
     if ($j -and $j.message.usage) {
       $u = $j.message.usage
       $ctx = [int]$u.input_tokens + [int]$u.cache_creation_input_tokens + [int]$u.cache_read_input_tokens
-      if ($ctx -gt $limit) {
-        $msgs += "agent-harness (tokens): esta conversación ya lleva ~$([int]($ctx/1000))k tokens de contexto y cada paso los relee. " +
-                 "Termina el paso en curso, actualiza HANDOFF.md (en curso, pendientes, siguiente paso) y dile al usuario en una línea " +
-                 "que abra una conversación nueva que empiece leyendo HANDOFF.md. No empieces trabajo nuevo aquí."
+      if ($ctx -gt $limit -and -not $st.handoffNoted) {
+        # No se detiene: la compactación automática (autoCompactWindow en ~/.claude/settings.json) resume y sigue.
+        $msgs += "agent-harness (tokens): la conversación va en ~$([int]($ctx/1000))k tokens. Actualiza HANDOFF.md en pocas líneas " +
+                 "(en curso, pendientes, siguiente paso) y sigue trabajando normalmente; no pidas una conversación nueva."
+        $st | Add-Member handoffNoted $true -Force; Save
       }
       if ("$($j.message.model)" -match 'fable' -and -not $st.fableWarned) {
         $msgs += "agent-harness (tokens): el orquestador corre en $($j.message.model), 2-5x más caro que Opus/Sonnet. " +
@@ -78,8 +79,8 @@ $total = $st.lines + $n
 if ($total -gt $max -and -not $st.override) {
   Log "deny $rel +$n (total $total)"
   $reason = "agent-harness: esta sesión ya escribió $($st.lines) líneas de código (límite $max). " +
-    "Delega: escribe .harness/runs/<id>/brief.md y lanza .harness/bin/agent.ps1 (codex para implementar, " +
-    "gemini -Write -Worktree para tests/boilerplate) según routing.md. Si el motor está agotado, deja la tarea en la cola. " +
+    "Delega: escribe .harness/runs/<id>/brief.md y lanza .harness/bin/agent.ps1 (dsh -Write para código, " +
+    "gemini para lectura/revisión, codex solo si dsh ya falló) según routing.md. Si el motor está agotado, deja la tarea en la cola. " +
     "Solo el usuario puede levantar el límite escribiendo OVERRIDE en su mensaje; no se lo pidas salvo que delegar sea imposible."
   @{ hookSpecificOutput = @{ hookEventName = 'PreToolUse'; permissionDecision = 'deny'; permissionDecisionReason = $reason } } |
     ConvertTo-Json -Compress -Depth 5

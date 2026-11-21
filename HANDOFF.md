@@ -1,4 +1,59 @@
+## Pizza V2: verificación SQL y HTTP en PostgreSQL 17 local desechable (2026-11-20)
+
+- Emmanuel autorizó descargar PG 17 portátil (`.cache/postgres-local`, ignorado). Runner nuevo `verify:pizza-model-v2-schema:rollback` (aplica 69 migraciones; ejecuta `pizza_model_v2_invariants.sql` y `capture_selection_plan_probe_v2_invariants.sql` con rollback): verde. `verify:capture-selection-plan-schema:rollback` verde; `test:http:local` 7/7; gates globales 40/40 (Node 22.20 efectivo, el shim Node 24 no se aplicó).
+- Correcciones al ejecutar por primera vez: migración 20261120000100 (variable `group_id` ambigua en `pizza_quantities_valid`; CHECK de `capture_repeat_order_plans` ampliado a schemaVersion '1','2' para `selection`); tests: cuatro escenarios de producto/grupo ajeno o legado ahora esperan `plan_conflict` al reemplazar (fail-closed más temprano, ya no llegan a confirmar); fixtures HTTP de mitades actualizados (exclusión por id de opción, `lockedIngredientOptionIds: []`).
+- Ninguna migración se ha aplicado en remoto. Pendiente: verificación en navegador (escritorio y 390×844), zona CP 85860 (Emmanuel), aprobación de aplicar migraciones en staging.
+
+## P3-6 probe schemaVersion 2 y segunda revisión P3-4/P3-5 (2026-11-20)
+
+- Nueva migración `20261120000200_capture_selection_plan_probe_v2.sql` + casos en `supabase/tests/capture_selection_plan_invariants.sql`. NO ejecutadas (sin PostgreSQL). El probe no lee catálogo (contrato original); la pertenencia de ids la revalidan replace/confirm.
+- Segunda revisión Codex P3-4/P3-5: CORREGIR por un P2 (respuesta V1 de la proyección lleva `pizza`; cliente viejo la rechaza). Aceptado como deuda mientras web+API se desplieguen juntos.
+- Pendiente: ejecutar migraciones+tests en PG local desechable o staging rollback-only (requiere decisión de Emmanuel), verificación en navegador, zona CP 85860 (Emmanuel).
+
+## P3-4/P3-5 pizza V2 — UI y proyección (2026-11-20)
+- P3-4 (web): `menu/pizza-v2-editor.tsx`, `capture/pizza-section.tsx`, `lib/{menu-pizza,pizza-capture}.ts` (+tests), ediciones en menu-catalog-editor, product-sheet, capture-workspace/actions, capture-quote/selection, line-halves; mobile `order-draft.ts` falla cerrado ante pizzaMode (sin UI V2 en mobile).
+- P3-5: proyección del plan devuelve `pizza` (shared-types `capture-selection-plan.ts`, captures.ts) para restaurar líneas tras recargar; lectores ya leían `pizzaHalves`; runbook §14 «Pizza por mitades».
+- Motor: implementer-claude (Codex solo lectura, dsh desactivado). Gates globales 40/40 en Node 24 tras copiar a main.
+- NO VERIFICADO: navegador (desktop y 390×844), revisión de código P3-4/P3-5, PostgreSQL real. Deuda: probe SQL solo schemaVersion 1 (migración nueva, requiere autorización remota); ticket de mitad personalizada muestra «+ Jamón»; sin tests de buildSelectionPlan v2 ni draftLineIssues mobile.
+
+## P3-3 pizza V2 — API y snapshots (2026-11-20)
+- Archivos: `apps/api/src/{capture-pizza-plan,capture-pizza-pricing,captures,capture-repeat-order-plan,fraction-halves,menu-catalog-domain,menu-catalog,orders}.ts`, `persistence/order-persistence-codec.ts`, `packages/domain/src/{order-totals,menu,order-repeat,errors,index}.ts` y pruebas. Guard `PIZZA_REQUIRES_HALVES_RULE` (409) para producto V2 por camino normal; repeat-order lo bloquea como `product_inactive`.
+- Motores: implementer-claude (Codex solo lectura, fallback documentado). Revisión doble Codex+Sonnet, 2 rondas. Gates globales lint/typecheck/test/build --force: 40/40 en Node 24.19.0.
+- Deuda: sin PostgreSQL real (migración, test de invariantes y paridad API↔SQL sin ejecutar); plan V2 con pricing fallido puede quedar persistido con 409 (falta redefinir `probe_capture_selection_plan_replace` para schemaVersion 2; el confirm revalida); huella de pago excluye detalle de pizza; `orders.ts addItem` no consulta catálogo.
+- Siguiente: P3-4 UI (Codex/dsh primero), P3-5 KDS/impresión; remoto/push solo con autorización de Emmanuel.
+
+## P3-2 pizza V2 — migración SQL (2026-11-20)
+- Archivos: `supabase/migrations/20261120000100_pizza_model_v2.sql`, `supabase/tests/pizza_model_v2_invariants.sql` (rollback-only, 10 vectores + negativos de min/max por mitad, tamaños e impuestos distintos).
+- Motores: implementer-claude (Codex en modo solo lectura no puede escribir; fallback documentado). Revisiones: Codex CORREGIR (P1 aridad `pg_temp.price`, P2 min/max, P2 lector) → corregido; Sonnet CORREGIR sobre la versión previa → retoques (orden de conflictos igual al dominio, tests size/tax). Tercera ronda: lo restante es deuda.
+- NO VERIFICADO: ningún SQL se ejecutó. Antes de confiar: correr el test rollback-only (remoto exige autorización de Emmanuel; no exponer URL).
+- Contrato del snapshot OrderItem (`geometry:'halves'`, `pizzaHalves` schemaVersion 1, ruleVersion `pizza-halves-v2`; modifiers `pizza-<role>:<half|both>:<opt>` y `exclude:<half>:<opt>`; plan schemaVersion 2 con `pizza`) lo debe construir idéntico P3-3 (igualdad jsonb en confirm).
+- Deuda: línea sin `pizza` sobre producto V2 se cobra por camino normal sin N gratis (documentar/bloquear en P3-3); CHECKs llaman helper app_private (riesgo dump/restore); `fraction-halves.ts` no lee `pizzaHalves` (P3-3); lectores KDS/impresión/read_capture_workspace → P3-5.
+- Siguiente: P3-3 API/snapshots.
+
+## P3-1 pizza V2 (2026-11-20)
+
+- Aprobación de Emmanuel de los 3 criterios propuestos. Codex (read-only) no pudo implementar; fallback documentado a `implementer-claude` (worktree, nivel A). Cambios en `packages/shared-types` y `packages/domain` (+3 tests), integrados por parche al checkout principal.
+- Revisión doble: Codex CORREGIR (snapshot sin schemaVersion/estación/tamaño; límites no paritarios) → corregido en ronda 2; Sonnet APROBAR. Gates globales 40/40 (Node 24.19.0).
+- Deuda a P3-2: validar en `save_menu_catalog` que `defaultIngredientOptionIds` pertenezcan a `baseGroupId`, con restaurant_id/catalog_id; paridad SQL de los 10 vectores; idempotencia vía `capture_command_journal`.
+
+## Smoke 2026-11-05 — Fase 4 y spec de pizza (2026-11-20)
+
+- Decisiones de Emmanuel: N gratis de la mitad más cara; ingrediente repetido en ambas mitades se cobra una vez por pizza; supuestos aprobados; boceto móvil aprobado.
+- Fase 4 (nivel C): dsh implementó R2-1..R2-3; Codex revisó una ronda (2 P1, 4 P2); `r2-fixes` (dsh) los corrigió; lint/typecheck/test web verdes. Pendiente: verificación visual (requiere login de Emmanuel).
+- Pizza (nivel A): spec con 3 revisiones (Codex x2, Sonnet); último CORREGIR de Sonnet incorporado como requisitos en `PIZZA_MODEL_V2.md`. Pendiente: rehacer vectores de paridad, aprobar los 3 criterios «propuestos» (Emmanuel) y recién entonces P3-1…P3-5.
+- Motores: dsh implementó; Codex (B) diagnosticó/revisó. Claude solo orquestó.
+
 # HANDOFF
+
+## Smoke 2026-11-05 — orquestación (2026-11-19, Ola 1 en REVIEW)
+
+- Plan: `docs/plans/smoke-2026-11-05-plan.md`. Ola 1 (C1–C6, R1, M0–M4, fix D1) implementada por **dsh** (DeepSeek, OpenCode Go); **Codex B** diagnosticó D1/D2 y revisó (2 rondas por lote: wave1a y wave1b). Claude sólo orquestó (sin fallback de implementación). Los informes de dsh no traen salida real y el proceso sale con exit 1 (EPIPE): L0 corrió las puertas y marcó `done` a mano.
+- Puertas de `apps/web` (Node 24.19.0): lint, typecheck, test (0 fallos) y build verdes tras los fixes finales. **Sin verificación visual** (login real de Emmanuel); sin puertas globales turbo ni push.
+- Revisión Codex wave1a: 1 P2 aceptado (alerta obsoleta `noteFor` → fix `capture-address-note-fix`); `tabIndex={-1}` de `field-hint` rechazado (es lo pedido). Revisión wave1b: 3 P2 + 1 P3 corregidos en `wave1b-fixes` (idempotencia del reintento de contacto, resultado obsoleto A→B→A, cancelar recorte de foto, línea EOF). Sin tercera ronda (§19.3 nivel C): deuda aceptada = nada verificado en navegador.
+- D2 resuelto: consulta read-only (BEGIN READ ONLY/ROLLBACK) a `app.delivery_zones` remoto devolvió 0 filas → toda dirección es `not_covered`; falta crear la zona (CP 85860) en `/app/delivery-zones` (dato real, lo hace Emmanuel). Puertas globales `pnpm turbo run lint typecheck test build --force`: 40/40 sin caché.
+- Revisión Codex (alto) de PIZZA_MODEL_V2: CORREGIR (3 P1: N en mezclas, ingrediente en ambas mitades, mitades personalizadas hoy rechazadas por dominio/SQL; 2 P2: idempotencia/concurrencia y pruebas de snapshot/tenancy). Anexado al documento con dos preguntas nuevas para Emmanuel; sin segunda ronda hasta que las responda.
+- Fase 3 y 4: Codex redactó `docs/architecture/PIZZA_MODEL_V2.md` (P3-0, nivel A, con las decisiones de Emmanuel y supuestos marcados PENDIENTE DE APROBACIÓN) y `docs/architecture/MOBILE_CAPTURE_UX.md` (R2-0). Ambos son **propuestas**: puerta de aprobación de Emmanuel antes de P3-1…P3-5 y R2-n; no se implementó nada de ellas.
+- Para Emmanuel (escritorio y 390×844): Captura (borradores vacíos no listados, reanudar → detalle, atajos, búsqueda de cliente por teléfono sin resultados viejos, estado de dirección, imágenes de categoría), barra inferior móvil, Clientes (`?customerId=`), Menú (ingredientes bloqueados ocultos, tamaños inline, menú ⋮ por producto, Fotos recientes + «Guardado», diálogo de encuadre).
 
 ## Codex A/B — tamaños UI y navegación — 2026-11-06 (REVIEW)
 
@@ -2459,3 +2514,13 @@ En la sesión 2026-08-29 se clonó y actualizó `main` por HTTPS hasta `f0091f30
 - Invariante propuesta para implementar y probar: el mismo membership puede reclamar su borrador activo con `expectedVersion`, rotando lease y versión; otro membership recibe conflicto mientras el lease siga vigente. Un lease vencido o un borrador `held` conserva la recuperación normal. Cada recuperación debe quedar en el journal y el replay debe devolver el mismo resultado.
 - Verificación requerida antes de REVIEW: parser exacto de bandeja, Auth/RBAC `captures.read`, aislamiento Restaurant/Branch, replay/divergencia, dos conexiones compitiendo, revocación, reload real y objetivo ≤10 s. La nueva migración será candidata y rollback-only antes de solicitar/aplicar cualquier cambio persistente.
 - CodeGraph: la integración no estuvo disponible en esta continuación. La inspección manual dirigida cubrió `commercial-capture.ts`, `captures.ts`, controller/AppModule, codec y migraciones `20260916000100`/`00400`; un cambio de código no debe pasar a REVIEW sin reconsulta estructural o sin documentar una auditoría manual completa.
+
+## P3-1 dominio — 2026-11-20 (IN_PROGRESS)
+
+Inspección inicial: CodeGraph actualizado, resolvedor legado de una variante y rechazo explícito de dos mitades personalizadas. No se implementó V2 ni se ejecutaron pruebas; falta contrato, resolución y snapshots, diez vectores y puertas de paquetes. Sin cambios SQL, API, web ni interacción Git remota. Sin subagentes. Siguiente: implementar y verificar P3-1 antes de REVIEW. Informe en agents_out/reports/p3-1-domain.md.
+
+## Verificación en navegador del arnés móvil (2026-11-20)
+
+- Expo web + Chrome headless, 390×844 y 1024×768: PASS a 390×844 (targets ≥44 px, sin scroll horizontal, sin alert/confirm/prompt, doble toque envía una vez, estados de error visibles, consola sin errores). Pizza con `pizzaMode: "specialty"` inyectado por fetch: falla cerrado ("se captura desde la web"), agregar y enviar deshabilitados. No probado: `pizzaMode: "custom"`, tablets/dispositivos reales.
+- **P2 cerrado (1024×768, layout en columnas):** ScrollView externo + `orderDraftColumnsMinHeight=560` + `minHeight:0` en columnas (`order-draft-screen.tsx`, `order-draft-layout.ts`; implementer-claude porque Codex está en solo lectura). Medido por el propio agente en Chrome real: Editar/Eliminar alcanzables con rueda, 'Enviar comanda' no tapa la lista, sin targets <44 px, consola limpia; 390×844 sin cambios. Reconfirmado de forma independiente (agente distinto, script propio, wheel y click reales): PASS en 1024×768, 1024×1400 y 390×844. Matiz UX: a 1024×768 hay doble scroll anidado (página + borrador). No verificado: Eliminar ejecutando, dispositivos reales/touch.
+- P3: aviso "Require cycle" en `packages/shared-types/dist`; aviso de password fuera de form (solo arnés).

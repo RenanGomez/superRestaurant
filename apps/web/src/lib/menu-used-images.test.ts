@@ -38,6 +38,19 @@ test("retained paths keep a removed photo and add new ones without duplicates", 
   assert.deepEqual(retainImagePaths(afterRemoval, ["b", "c"]), ["a", "b", "c"]);
 });
 
+test("uploading A, replacing it with B and adding C shows all three in the same render", () => {
+  // The retained list only catches up through an effect after the render: the visible list must not wait for it.
+  let retained: readonly string[] = [];
+  let visible = retainImagePaths(retained, ["a"]);
+  assert.deepEqual(visible, ["a"]);
+  retained = retainImagePaths(retained, ["a"]);
+  visible = retainImagePaths(retained, ["b"]);
+  assert.deepEqual(visible, ["a", "b"]);
+  retained = retainImagePaths(retained, ["b"]);
+  visible = retainImagePaths(retained, ["c"]);
+  assert.deepEqual(visible, ["a", "b", "c"]);
+});
+
 test("category images are collected after products and options and belong to their own id", () => {
   const category = "11111111-1111-4111-8111-111111111111";
   const path = `r/categories/${category}/0123456789abcdef0123456789abcdef.png`;

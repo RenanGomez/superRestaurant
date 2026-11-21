@@ -1,5 +1,6 @@
 import type { LineFractionV1, MenuCatalogV1, MenuCategoryV1, MenuModifierGroupV1, MenuProductV1 } from "@super-restaurant/shared-types";
 import { groupsForProduct } from "./menu-groups";
+import { samePizzaLine, type PizzaLineV2 } from "./pizza-capture";
 
 /** One chosen modifier option and how many units of it apply to a draft line. */
 export interface SelectionPlanModifierSelectionDraft {
@@ -53,6 +54,8 @@ export interface SelectionPlanLineDraft {
   readonly note: string | null;
   /** Half-and-half split ("mitad y mitad"); absent for a whole line. */
   readonly fraction?: LineFractionV1;
+  /** Pizza V2 two-halves line; exclusive with `fraction`. */
+  readonly pizza?: PizzaLineV2;
 }
 
 /** Catalog-only preview. The server remains authoritative for the accepted line price. */
@@ -87,10 +90,12 @@ export interface SelectionPlanCommandLineV1 {
   readonly modifierGroups: readonly { readonly groupId: string; readonly selections: readonly { readonly optionId: string; readonly quantity: number }[] }[];
   readonly note: string | null;
   readonly fraction?: LineFractionV1;
+  readonly pizza?: PizzaLineV2;
 }
 
 export interface SelectionPlanCommandV1 {
-  readonly schemaVersion: 1;
+  /** 2 only when at least one line is a pizza V2 line; every other plan stays version 1. */
+  readonly schemaVersion: 1 | 2;
   readonly catalogVersion: string;
   readonly lines: readonly SelectionPlanCommandLineV1[];
 }
@@ -104,7 +109,7 @@ export function buildSelectionPlan(
   catalogVersion: string,
 ): SelectionPlanCommandV1 {
   return {
-    schemaVersion: 1,
+    schemaVersion: lines.some((line) => line.pizza !== undefined) ? 2 : 1,
     catalogVersion,
     lines: lines.map((line) => ({
       lineId: line.lineId,
@@ -117,6 +122,7 @@ export function buildSelectionPlan(
       })),
       note: line.note,
       ...(line.fraction === undefined ? {} : { fraction: line.fraction }),
+      ...(line.pizza === undefined ? {} : { pizza: line.pizza }),
     })),
   };
 }
@@ -124,7 +130,7 @@ export function buildSelectionPlan(
 export type SelectionLineChange =
   | { readonly type: "add"; readonly lineId: string; readonly productId: string; readonly quantity: number;
       readonly variantId: string | null; readonly modifierGroups: readonly SelectionPlanModifierGroupDraft[]; readonly note: string | null;
-      readonly fraction?: LineFractionV1 }
+      readonly fraction?: LineFractionV1; readonly pizza?: PizzaLineV2 }
   | { readonly type: "increment"; readonly lineId: string }
   | { readonly type: "decrement"; readonly lineId: string }
   | { readonly type: "remove"; readonly lineId: string }
@@ -155,11 +161,12 @@ export function applyLineChange(
   if (change.type === "add") {
     const existingIndex = lines.findIndex((line) => line.productId === change.productId && line.variantId === change.variantId
       && sameModifierSelection(line.modifierGroups, change.modifierGroups) && line.note === change.note
-      && sameLineFraction(line.fraction, change.fraction));
+      && sameLineFraction(line.fraction, change.fraction) && samePizzaLine(line.pizza, change.pizza));
     if (existingIndex === -1) {
       return [...lines, { lineId: change.lineId, productId: change.productId, variantId: change.variantId,
         quantity: clampQuantity(change.quantity), modifierGroups: change.modifierGroups, note: change.note,
-        ...(change.fraction === undefined ? {} : { fraction: change.fraction }) }];
+        ...(change.fraction === undefined ? {} : { fraction: change.fraction }),
+        ...(change.pizza === undefined ? {} : { pizza: change.pizza }) }];
     }
     return lines.map((line, index) => index === existingIndex
       ? { ...line, quantity: clampQuantity(line.quantity + change.quantity) }

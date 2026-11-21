@@ -7,7 +7,9 @@ import {
   getCustomerDirectorySuggestions,
   insertCustomerDirectorySuggestion,
   isCurrentCustomerAutocompleteRequest,
+  isCurrentCustomerSearch,
   requestCustomerDirectory,
+  selectCurrentCustomerSearch,
 } from "./customer-directory.js";
 
 const scope = parseBranchScope({
@@ -158,4 +160,22 @@ test("automatic autocomplete discards responses for a stale mode or query", () =
   assert.equal(isCurrentCustomerAutocompleteRequest(request, "address", " aca "), true);
   assert.equal(isCurrentCustomerAutocompleteRequest(request, "address", "acac"), false);
   assert.equal(isCurrentCustomerAutocompleteRequest(request, "name", "aca"), false);
+});
+
+test("a submitted search only shows results for the query that produced them", () => {
+  const value = { schemaVersion: 1 as const, scope, candidates: [], nextCursor: null };
+  const snapshot = { mode: "phone" as const, query: "6622751352", value };
+  assert.equal(selectCurrentCustomerSearch(snapshot, "phone", "6622751352"), value);
+  assert.equal(selectCurrentCustomerSearch(snapshot, "phone", " 6622751352 "), value);
+  assert.equal(selectCurrentCustomerSearch(snapshot, "phone", "6622900"), undefined);
+  assert.equal(selectCurrentCustomerSearch(snapshot, "name", "6622751352"), undefined);
+  assert.equal(selectCurrentCustomerSearch(undefined, "phone", "6622751352"), undefined);
+});
+
+test("a late response for an outdated submitted query is discarded", () => {
+  const late = { mode: "phone" as const, query: "6622751352" };
+  assert.equal(isCurrentCustomerSearch(late, "phone", "6622900"), false);
+  assert.equal(isCurrentCustomerSearch(late, "phone", "6622751352"), true);
+  assert.equal(isCurrentCustomerSearch(late, "name", "6622751352"), false);
+  assert.equal(isCurrentCustomerSearch(undefined, "phone", "6622751352"), false);
 });

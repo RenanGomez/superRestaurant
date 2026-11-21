@@ -55,6 +55,29 @@ export function isCurrentCustomerAutocompleteRequest(
   return current !== undefined && current.mode === request.mode && current.query === request.query;
 }
 
+export interface CustomerSearchSnapshot<T> {
+  readonly mode: CustomerSearchModeV1;
+  readonly query: string;
+  readonly value: T;
+}
+
+/** A submitted search result is only valid for the exact mode and query that produced it. */
+export function isCurrentCustomerSearch(
+  request: CustomerAutocompleteRequest | undefined,
+  mode: CustomerSearchModeV1,
+  input: string,
+): boolean {
+  return request !== undefined && request.mode === mode && request.query === input.trim();
+}
+
+export function selectCurrentCustomerSearch<T>(
+  snapshot: CustomerSearchSnapshot<T> | undefined,
+  mode: CustomerSearchModeV1,
+  input: string,
+): T | undefined {
+  return snapshot !== undefined && isCurrentCustomerSearch(snapshot, mode, input) ? snapshot.value : undefined;
+}
+
 /** Suggestions are derived exclusively from the already-authorized result held by the browser. */
 export function getCustomerDirectorySuggestions(
   result: CustomerDirectorySearchResultV1 | undefined,

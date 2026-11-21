@@ -11,6 +11,8 @@ import {
 } from "@super-restaurant/domain";
 import type { CaptureSelectionPlanV1, ConfirmCaptureDraftCommandV2, LineFractionV1, MenuCatalogV1 } from "@super-restaurant/shared-types";
 
+import { NO_PIZZA_LINES, type CapturePizzaByLineId, type CapturePizzaLineV2 } from "./capture-pizza-plan.js";
+import { pricePizzaLineSnapshot } from "./capture-pizza-pricing.js";
 import { toDomainMenuCatalog } from "./menu-catalog-domain.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -100,9 +102,10 @@ export function materializeCaptureSelectionOrder(
   command: ConfirmCaptureDraftCommandV2,
   actorId: string,
   channel: "counter" | "delivery" | "table" | "takeout",
-  plan: CaptureSelectionPlanV1,
+  plan: Pick<CaptureSelectionPlanV1, "catalogVersion" | "lines">,
   catalog: MenuCatalogV1 | null,
   deliveryCharge: DeliveryChargeSnapshot | null = null,
+  pizzaByLineId: CapturePizzaByLineId = NO_PIZZA_LINES,
 ): CaptureOrderMaterialization {
   const base = createBaseOrder(command, actorId, channel, deliveryCharge);
   if (catalog === null || plan.lines.length === 0 || catalog.currency !== command.currency
@@ -118,6 +121,7 @@ export function materializeCaptureSelectionOrder(
     quantity: line.quantity,
     variantId: line.variantId,
     fraction: line.fraction ?? null,
+    ...(pizzaByLineId.has(line.lineId) ? { pizza: pizzaByLineId.get(line.lineId) } : {}),
   })), "capture-selection");
 }
 
@@ -153,6 +157,8 @@ interface MaterializableLine {
   readonly variantId: string | null;
   /** Half-and-half split priced by the server; absent/`null` for whole lines (repeat plans never split). */
   readonly fraction?: LineFractionV1 | null;
+  /** Pizza V2 two-halves line (selection plans of schemaVersion 2 only); priced by the halves rule. */
+  readonly pizza?: CapturePizzaLineV2 | undefined;
 }
 
 function appendMaterializedItems(
@@ -166,13 +172,22 @@ function appendMaterializedItems(
   let order = base.order;
   const auditEvents: OrderAuditEvent[] = [...base.auditEvents];
   for (const line of lines) {
-    const snapshot = createMenuProductPriceSnapshot(domainCatalog, {
-      currency: command.currency,
-      productId: line.productId,
-      restaurantId: command.scope.restaurantId,
-      variantId: line.variantId,
-      fraction: line.fraction ?? null,
-    }, line.modifierGroups);
+    // Fail closed: a pizzaMode product is priced only by the halves rule, from a line that carries its `pizza`.
+    // A repeat-order line or a V1 selection line over such a product would be priced as a whole line, so it throws
+    // (the confirm maps any materialization error to 409).
+    if (line.pizza === undefined
+      && domainCatalog.products.some((product) => product.id === line.productId && product.pizzaMode !== undefined)) {
+      throw new Error("CAPTURE_PIZZA_LINE_REQUIRED");
+    }
+    const snapshot = line.pizza !== undefined
+      ? pricePizzaLineSnapshot(domainCatalog, command.scope.restaurantId, line, line.pizza)
+      : createMenuProductPriceSnapshot(domainCatalog, {
+        currency: command.currency,
+        productId: line.productId,
+        restaurantId: command.scope.restaurantId,
+        variantId: line.variantId,
+        fraction: line.fraction ?? null,
+      }, line.modifierGroups);
     const added = addOrderItem(order, {
       orderItemId: derivedUuid(`${namespace}-item`, command.eventId, line.identity),
       quantity: line.quantity,

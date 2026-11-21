@@ -141,7 +141,17 @@ Reglas: una ronda de revisión en nivel C, dos en B, revisión doble en A con co
 - [ ] **REVIEW · C** — `tables-tabs-count` (Gemini; en `main`; puertas web sin caché por L0; fix1 restauró los totales por cuenta): pestañas por cuenta con total, «+ Nueva» a la derecha, contador sobre la mesa.
 - [ ] **REVIEW · A** — `caja-split-payments` (en `main` b2f360f; Gemini impl + Claude fix1 + Codex fix2; revisión doble Claude CORREGIR→ok y Codex CORREGIR→ok; migración `20261102000300` aplicada en Supabase (autorización permanente, aditiva); API reiniciada): causa raíz del cobro que «falla» pero cobra (`redirect()` atrapado por el `try/catch` del cliente), cotización sin reescritura, `capturedBy`, encabezado de cuenta, «Pagar total / Dividir pago», desglose de pagos, tarjetas expandibles. Investigación en `.agents/reports/caja-split-payments-research.md`.
 
-Última actualización: 2026-11-02
+### Smoke 2026-11-05 (plan en `docs/plans/smoke-2026-11-05-plan.md`; briefs en `.agents/briefs/`)
+
+- [ ] **REVIEW · C** — Ola 1 carril A (dsh, cadena sobre `capture-workspace.tsx`): `capture-drafts-tidy` (C1) → `capture-customer-search` (C2) → `capture-shortcuts-r2` (C3).
+- [ ] **REVIEW · C** — Ola 1 carril B (dsh): `field-hint-tab` (C4), `capture-menu-category-images` (C5), `capture-address-state` (C6), `shell-mobile-nav` (R1).
+- [ ] **REVIEW** — Diagnóstico (Codex, sin escritura): D1 resuelto (`customer-search-stale-results`); D2 causa confirmada (consulta read-only 2026-11-19): `app.delivery_zones` está VACÍA en el remoto; Emmanuel debe crear la zona (con CP 85860) en `/app/delivery-zones`.
+- [ ] **REVIEW · C** — Ola 1 editor de menú (dsh, cadena): `menu-hide-locked-ingredients` (M0) → `menu-sizes-inline` (M1) → `menu-product-actions` (M2) → `menu-photos-recent` (M3) → `menu-photo-crop` (M4).
+- [ ] **REVIEW · A** — Fase 3: criterios aprobados por Emmanuel (2026-11-20). P3-1 (contrato+dominio, implementer-claude por fallo de solo lectura de Codex) en REVIEW: 10 vectores en pruebas, snapshot versionado, doble revisión (Codex CORREGIR → ronda 2; Sonnet APROBAR), gates globales 40/40. Deuda P3-2: pertenencia de ingredientes al grupo base en `save_menu_catalog`. P3-2 (migración SQL + test rollback-only) escrita y corregida en 3 rondas (Codex CORREGIR→corregido; Sonnet CORREGIR sobre versión previa→retoques aplicados); SQL NO EJECUTADO en ninguna base (verificador rollback-only y paridad real pendientes; migración remota requiere autorización de Emmanuel). P3-3 (API: plan v2, snapshots `pizzaHalves`, codec, guard fail-closed) en REVIEW tras doble revisión (Codex+Sonnet, 2 rondas); gates globales 40/40 (Node 24). P3-4 (UI editor/captura, nivel C) y P3-5 (proyección `pizza`, lectores, guía del operador §14) implementados por implementer-claude (fallback: Codex solo lectura), gates globales 40/40; SIN revisión de código P3-4/P3-5 ni verificación en navegador; SQL sin ejecutar.
+- [ ] **REVIEW · C** — Fase 4: boceto aprobado por Emmanuel (2026-11-20); R2-1..R2-3 implementados por dsh (menú con carrusel y fichas grandes, hoja de producto, pasos Pedido→Cliente→Entrega, barra flotante «Total de productos»); revisión Codex (1 ronda) corregida en `r2-fixes`; lint/typecheck/test web verdes. NO VERIFICADO en navegador real (390×844 y escritorio).
+- [ ] **CANCELLED** — `menu-photo-focus`: reemplazada por M4 (`menu-photo-crop`).
+
+Última actualización: 2026-11-19
 
 Fuente principal: `PLAN_MODERNIZACION_POS_RESTAURANTE.md`.
 

@@ -664,3 +664,404 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   }
   return value;
 }
+
+/*
+ * Pizza halves V2 (P3-1). Pure and independent of the legacy flavor model above: the legacy rule keeps
+ * rejecting two custom halves (`fraction_both_custom`); V2 prices them with one formula:
+ *
+ *   total = base + sum(charged ingredient) + sum(extra)
+ *   base  = max(full-pizza price of each half)
+ *   N     = freeIngredientCount of the most expensive custom half (ties: smaller productId, then half-a);
+ *           with a single custom half (mixed selection) it is that half's N, applied only to its ingredients
+ *   ingredients are deduplicated by optionId BEFORE applying N (one option in both halves counts once)
+ *   the first N unique ingredients by (price asc, groupId, optionId) are free
+ *   a charged ingredient costs ceil(price / 2) per ingredient when in one half, the full price when in both
+ *   extras never consume N and are charged the same way (ceil per extra, full when in both halves)
+ */
+export const PIZZA_HALVES_RULE_V1 = "pizza-halves-v1";
+export const PIZZA_HALVES_RULE_V2 = "pizza-halves-v2";
+/** Version of the frozen snapshot shape; readers fail closed on any other value. */
+export const PIZZA_HALVES_SNAPSHOT_SCHEMA_VERSION = 1;
+
+export type PizzaHalfKind = "specialty" | "custom";
+export type PizzaHalfFraction = Exclude<PizzaFraction, "whole">;
+
+export interface PizzaHalfOptionPrice {
+  readonly optionId: string;
+  readonly groupId: string;
+  readonly name: string;
+  /** Full-pizza price of the option; a half carries half of it (rounded up per option). */
+  readonly priceMinor: number;
+}
+
+export interface PizzaHalfInputV2 {
+  readonly fraction: PizzaHalfFraction;
+  /** Stable product UUID; the deterministic tie-break between two equally priced custom halves. */
+  readonly productId: string;
+  readonly productName: string;
+  /** Preparation station of this half's product, frozen so the kitchen never re-reads the catalog. */
+  readonly stationId: string;
+  /** Chosen size of this half (the size id and its frozen display name). */
+  readonly sizeId: string;
+  readonly sizeName: string;
+  readonly kind: PizzaHalfKind;
+  /** Whole-pizza price of this half's product at the chosen size. */
+  readonly basePriceMinor: number;
+  readonly freeIngredientCount: number;
+  /** Custom halves only: the chosen ingredients. A specialty's substitutes are charged `extras`. */
+  readonly ingredients: readonly PizzaHalfOptionPrice[];
+  readonly extras: readonly PizzaHalfOptionPrice[];
+  /** Specialty only: removed recipe ingredients; removal never discounts. */
+  readonly removedIngredientOptionIds: readonly string[];
+}
+
+export interface ResolvePizzaHalvesPricingInput {
+  readonly ruleVersion: string;
+  readonly currency: string;
+  readonly halves: readonly PizzaHalfInputV2[];
+}
+
+export type PizzaHalvesPricingIssueCode =
+  | "rule_version_unknown"
+  | "rule_version_legacy"
+  | "fraction_both_custom"
+  | "halves_mismatch"
+  | "specialty_ingredients_not_allowed"
+  | "removal_not_allowed"
+  | "option_duplicate"
+  | "option_role_conflict"
+  | "pizza_ingredient_price_conflict"
+  | "pizza_extra_price_conflict";
+
+export interface PizzaHalvesPricingIssue {
+  readonly code: PizzaHalvesPricingIssueCode;
+  readonly fraction?: PizzaHalfFraction;
+  readonly optionId?: string;
+  readonly detail: string;
+}
+
+export interface PizzaHalvesChargeSnapshot {
+  readonly optionId: string;
+  readonly groupId: string;
+  readonly name: string;
+  readonly role: "ingredient" | "extra";
+  readonly fractions: readonly PizzaHalfFraction[];
+  readonly free: boolean;
+  readonly amount: Money;
+}
+
+/** Frozen, versioned snapshot of a V2 halves price; kitchen and tickets read from it, never the catalog. */
+export interface PizzaHalvesPriceSnapshotV2 {
+  readonly schemaVersion: typeof PIZZA_HALVES_SNAPSHOT_SCHEMA_VERSION;
+  readonly ruleVersion: typeof PIZZA_HALVES_RULE_V2;
+  readonly currency: string;
+  readonly basePrice: Money;
+  /** Half whose whole-pizza price set the base. */
+  readonly baseFraction: PizzaHalfFraction;
+  /** N applied, and the half it came from (`null` when no half is custom). */
+  readonly freeIngredientCount: number;
+  readonly freeIngredientCountFraction: PizzaHalfFraction | null;
+  /** optionIds that were free, in assignment order. */
+  readonly freeAssignmentOrder: readonly string[];
+  readonly charges: readonly PizzaHalvesChargeSnapshot[];
+  readonly halves: readonly {
+    readonly fraction: PizzaHalfFraction;
+    readonly productId: string;
+    readonly productName: string;
+    readonly stationId: string;
+    readonly sizeId: string;
+    readonly sizeName: string;
+    readonly kind: PizzaHalfKind;
+    readonly basePriceMinor: number;
+    readonly freeIngredientCount: number;
+    readonly removedIngredientOptionIds: readonly string[];
+  }[];
+  readonly total: Money;
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
+ * Prices one two-halves pizza under the V2 rules. Returns issues for rule violations (including the
+ * legacy version with two custom halves, which stays rejected); throws InvalidSnapshotError for
+ * structurally malformed values (non-integer or negative money, empty ids).
+ */
+export function resolvePizzaHalvesPricing(
+  inputValue: ResolvePizzaHalvesPricingInput,
+): PizzaHalvesPriceSnapshotV2 | readonly PizzaHalvesPricingIssue[] {
+  return atFractionPricingBoundary("pizza halves pricing input", () => resolvePizzaHalvesPricingCanonical(inputValue));
+}
+
+type MergedOption = { readonly option: PizzaHalfOptionPrice; readonly fractions: PizzaHalfFraction[] };
+
+function resolvePizzaHalvesPricingCanonical(
+  inputValue: ResolvePizzaHalvesPricingInput,
+): PizzaHalvesPriceSnapshotV2 | readonly PizzaHalvesPricingIssue[] {
+  const record = asPlainRecord(inputValue, "pizza halves pricing input");
+  const ruleVersion = ownData(record, "ruleVersion", "pizza halves ruleVersion");
+  const currency = new Money(0, ownData(record, "currency", "pizza halves currency") as string).currency;
+  const halves = ownDataArray(record, "halves", "pizza halves").map((half) => normalizePizzaHalf(half, currency));
+
+  const fractions = halves.map((half) => half.fraction);
+  if (halves.length !== 2 || !fractions.includes("half-a") || !fractions.includes("half-b")) {
+    return deepFreeze([{ code: "halves_mismatch", detail: "exactly the halves half-a and half-b are required" }]);
+  }
+  if (ruleVersion === PIZZA_HALVES_RULE_V1) {
+    return deepFreeze([halves.every((half) => half.kind === "custom")
+      ? { code: "fraction_both_custom", detail: "the legacy rule rejects two custom halves; an updated client must send pizza-halves-v2" }
+      : { code: "rule_version_legacy", detail: "pizza-halves-v1 selections are priced by resolveFractionPricing" }]);
+  }
+  if (ruleVersion !== PIZZA_HALVES_RULE_V2) {
+    return deepFreeze([{ code: "rule_version_unknown", detail: "unknown pizza halves rule version; failing closed" }]);
+  }
+
+  const issues: PizzaHalvesPricingIssue[] = [];
+  for (const half of halves) {
+    if (half.kind === "specialty" && half.ingredients.length > 0) {
+      issues.push({ code: "specialty_ingredients_not_allowed", fraction: half.fraction, detail: "a specialty adds charged extras, not free-count ingredients" });
+    }
+    if (half.kind === "custom" && half.removedIngredientOptionIds.length > 0) {
+      issues.push({ code: "removal_not_allowed", fraction: half.fraction, detail: "only a specialty can remove recipe ingredients" });
+    }
+    for (const [role, options] of [["ingredient", half.ingredients], ["extra", half.extras]] as const) {
+      if (!unique(options.map((option) => option.optionId))) {
+        issues.push({ code: "option_duplicate", fraction: half.fraction, detail: `an ${role} was selected more than once on the same half` });
+      }
+    }
+  }
+
+  const merge = (role: "ingredient" | "extra"): Map<string, MergedOption> => {
+    const merged = new Map<string, MergedOption>();
+    for (const half of halves) {
+      for (const option of role === "ingredient" ? half.ingredients : half.extras) {
+        const existing = merged.get(option.optionId);
+        if (existing === undefined) {
+          merged.set(option.optionId, { option, fractions: [half.fraction] });
+        } else if (existing.option.priceMinor !== option.priceMinor || existing.option.groupId !== option.groupId) {
+          issues.push({
+            code: role === "ingredient" ? "pizza_ingredient_price_conflict" : "pizza_extra_price_conflict",
+            optionId: option.optionId,
+            detail: `${role} ${option.optionId} has different prices or groups in the two halves`,
+          });
+        } else if (!existing.fractions.includes(half.fraction)) {
+          existing.fractions.push(half.fraction);
+        }
+      }
+    }
+    return merged;
+  };
+  const ingredients = merge("ingredient");
+  const extras = merge("extra");
+  for (const optionId of ingredients.keys()) {
+    if (extras.has(optionId)) {
+      issues.push({ code: "option_role_conflict", optionId, detail: `option ${optionId} is both an included ingredient and a charged extra` });
+    }
+  }
+  if (issues.length > 0) return deepFreeze(issues);
+
+  // Base: the most expensive whole-pizza price (ties keep half-a, which never changes the amount).
+  const baseHalf = halves.reduce(
+    (best, half) => (half.basePriceMinor > best.basePriceMinor ? half : best),
+    halves.find((half) => half.fraction === "half-a")!,
+  );
+
+  // N: from the most expensive custom half; equal prices fall to the smaller productId, then half-a.
+  const customHalves = halves.filter((half) => half.kind === "custom");
+  const nHalf = customHalves.length === 0
+    ? null
+    : [...customHalves].sort((left, right) =>
+      right.basePriceMinor - left.basePriceMinor
+      || compareCodeUnits(left.productId, right.productId)
+      || compareCodeUnits(left.fraction, right.fraction))[0]!;
+  const freeCount = nHalf === null ? 0 : nHalf.freeIngredientCount;
+
+  const ordered = [...ingredients.values()].sort((left, right) =>
+    left.option.priceMinor - right.option.priceMinor
+    || compareCodeUnits(left.option.groupId, right.option.groupId)
+    || compareCodeUnits(left.option.optionId, right.option.optionId));
+  const charges: PizzaHalvesChargeSnapshot[] = [];
+  const freeAssignmentOrder: string[] = [];
+  const charge = (role: "ingredient" | "extra", entry: MergedOption, free: boolean): void => {
+    const full = new Money(entry.option.priceMinor, currency);
+    const amount = free ? new Money(0, currency) : entry.fractions.length === 2 ? full : full.multiplyRatio(1n, 2n, "ceil");
+    charges.push({
+      amount,
+      fractions: [...entry.fractions].sort(compareCodeUnits),
+      free,
+      groupId: entry.option.groupId,
+      name: entry.option.name,
+      optionId: entry.option.optionId,
+      role,
+    });
+  };
+  ordered.forEach((entry, index) => {
+    const free = index < freeCount;
+    if (free) freeAssignmentOrder.push(entry.option.optionId);
+    charge("ingredient", entry, free);
+  });
+  for (const entry of [...extras.values()].sort((left, right) => compareCodeUnits(left.option.optionId, right.option.optionId))) {
+    charge("extra", entry, false);
+  }
+
+  const basePrice = new Money(baseHalf.basePriceMinor, currency);
+  const total = charges.reduce((sum, entry) => sum.add(entry.amount), basePrice);
+  return deepFreeze({
+    basePrice,
+    baseFraction: baseHalf.fraction,
+    charges,
+    currency,
+    freeAssignmentOrder,
+    freeIngredientCount: freeCount,
+    freeIngredientCountFraction: nHalf === null ? null : nHalf.fraction,
+    halves: [...halves].sort((left, right) => compareCodeUnits(left.fraction, right.fraction)).map((half) => ({
+      basePriceMinor: half.basePriceMinor,
+      fraction: half.fraction,
+      freeIngredientCount: half.freeIngredientCount,
+      kind: half.kind,
+      productId: half.productId,
+      productName: half.productName,
+      removedIngredientOptionIds: half.removedIngredientOptionIds,
+      sizeId: half.sizeId,
+      sizeName: half.sizeName,
+      stationId: half.stationId,
+    })),
+    ruleVersion: PIZZA_HALVES_RULE_V2,
+    schemaVersion: PIZZA_HALVES_SNAPSHOT_SCHEMA_VERSION,
+    total,
+  });
+}
+
+function normalizePizzaHalf(value: unknown, currency: string): PizzaHalfInputV2 {
+  const record = asPlainRecord(value, "pizza half");
+  const fraction = ownData(record, "fraction", "pizza half fraction");
+  if (fraction !== "half-a" && fraction !== "half-b") throw new InvalidSnapshotError("pizza half fraction");
+  const kind = ownData(record, "kind", "pizza half kind");
+  if (kind !== "specialty" && kind !== "custom") throw new InvalidSnapshotError("pizza half kind");
+  const productId = assertTextReturn(ownData(record, "productId", "pizza half productId"), "pizza half productId");
+  const productName = assertTextReturn(ownData(record, "productName", "pizza half productName"), "pizza half productName");
+  const basePriceMinor = new Money(ownData(record, "basePriceMinor", "pizza half basePriceMinor") as number, currency).amountMinor;
+  const freeIngredientCount = ownData(record, "freeIngredientCount", "pizza half freeIngredientCount");
+  if (basePriceMinor < 0 || typeof freeIngredientCount !== "number" || !Number.isSafeInteger(freeIngredientCount) || freeIngredientCount < 0) {
+    throw new InvalidSnapshotError("pizza half price or free count");
+  }
+  const options = (key: string): readonly PizzaHalfOptionPrice[] => ownDataArray(record, key, `pizza half ${key}`).map((optionValue) => {
+    const option = asPlainRecord(optionValue, `pizza half ${key} option`);
+    const priceMinor = new Money(ownData(option, "priceMinor", "pizza option priceMinor") as number, currency).amountMinor;
+    if (priceMinor < 0) throw new InvalidSnapshotError("pizza option priceMinor");
+    return {
+      groupId: assertTextReturn(ownData(option, "groupId", "pizza option groupId"), "pizza option groupId"),
+      name: assertTextReturn(ownData(option, "name", "pizza option name"), "pizza option name"),
+      optionId: assertTextReturn(ownData(option, "optionId", "pizza option optionId"), "pizza option optionId"),
+      priceMinor,
+    };
+  });
+  const removedIngredientOptionIds = ownDataArray(record, "removedIngredientOptionIds", "pizza half removals")
+    .map((id) => assertTextReturn(id, "pizza half removal"));
+  return {
+    basePriceMinor,
+    extras: options("extras"),
+    fraction,
+    freeIngredientCount,
+    ingredients: options("ingredients"),
+    kind,
+    productId,
+    productName,
+    removedIngredientOptionIds,
+    sizeId: assertTextReturn(ownData(record, "sizeId", "pizza half sizeId"), "pizza half sizeId"),
+    sizeName: assertTextReturn(ownData(record, "sizeName", "pizza half sizeName"), "pizza half sizeName"),
+    stationId: assertTextReturn(ownData(record, "stationId", "pizza half stationId"), "pizza half stationId"),
+  };
+}
+
+/**
+ * Fail-closed reader of a persisted V2 snapshot: rejects an unknown schemaVersion/ruleVersion or any
+ * missing frozen fact (per-half station, size, N, charges) with InvalidSnapshotError. Money fields are
+ * rebuilt from `{ amountMinor, currency }`, so a JSON round trip reads back identically.
+ */
+export function readPizzaHalvesPriceSnapshot(value: unknown): PizzaHalvesPriceSnapshotV2 {
+  return atFractionPricingBoundary("pizza halves snapshot", () => {
+    const record = asPlainRecord(value, "pizza halves snapshot");
+    if (ownData(record, "schemaVersion", "pizza halves snapshot schemaVersion") !== PIZZA_HALVES_SNAPSHOT_SCHEMA_VERSION) {
+      throw new InvalidSnapshotError("pizza halves snapshot schemaVersion");
+    }
+    if (ownData(record, "ruleVersion", "pizza halves snapshot ruleVersion") !== PIZZA_HALVES_RULE_V2) {
+      throw new InvalidSnapshotError("pizza halves snapshot ruleVersion");
+    }
+    const currency = new Money(0, ownData(record, "currency", "pizza halves snapshot currency") as string).currency;
+    const money = (field: unknown, label: string): Money => {
+      const entry = asPlainRecord(field, label);
+      if (ownData(entry, "currency", label) !== currency) throw new InvalidSnapshotError(label);
+      return new Money(ownData(entry, "amountMinor", label) as number, currency);
+    };
+    const fraction = (field: unknown, label: string): PizzaHalfFraction => {
+      if (field !== "half-a" && field !== "half-b") throw new InvalidSnapshotError(label);
+      return field;
+    };
+    const nFraction = ownData(record, "freeIngredientCountFraction", "pizza halves snapshot N fraction");
+    const freeIngredientCount = ownData(record, "freeIngredientCount", "pizza halves snapshot N");
+    if (typeof freeIngredientCount !== "number" || !Number.isSafeInteger(freeIngredientCount) || freeIngredientCount < 0) {
+      throw new InvalidSnapshotError("pizza halves snapshot N");
+    }
+    const halves = ownDataArray(record, "halves", "pizza halves snapshot halves").map((entry) => {
+      const half = asPlainRecord(entry, "pizza halves snapshot half");
+      const kind = ownData(half, "kind", "pizza halves snapshot kind");
+      if (kind !== "specialty" && kind !== "custom") throw new InvalidSnapshotError("pizza halves snapshot kind");
+      const base = ownData(half, "basePriceMinor", "pizza halves snapshot basePriceMinor");
+      const count = ownData(half, "freeIngredientCount", "pizza halves snapshot half N");
+      if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) throw new InvalidSnapshotError("pizza halves snapshot half N");
+      return {
+        basePriceMinor: new Money(base as number, currency).amountMinor,
+        fraction: fraction(ownData(half, "fraction", "pizza halves snapshot fraction"), "pizza halves snapshot fraction"),
+        freeIngredientCount: count,
+        kind,
+        productId: assertTextReturn(ownData(half, "productId", "pizza halves snapshot productId"), "pizza halves snapshot productId"),
+        productName: assertTextReturn(ownData(half, "productName", "pizza halves snapshot productName"), "pizza halves snapshot productName"),
+        removedIngredientOptionIds: ownDataArray(half, "removedIngredientOptionIds", "pizza halves snapshot removals")
+          .map((id) => assertTextReturn(id, "pizza halves snapshot removal")),
+        sizeId: assertTextReturn(ownData(half, "sizeId", "pizza halves snapshot sizeId"), "pizza halves snapshot sizeId"),
+        sizeName: assertTextReturn(ownData(half, "sizeName", "pizza halves snapshot sizeName"), "pizza halves snapshot sizeName"),
+        stationId: assertTextReturn(ownData(half, "stationId", "pizza halves snapshot stationId"), "pizza halves snapshot stationId"),
+      } satisfies PizzaHalvesPriceSnapshotV2["halves"][number];
+    });
+    if (halves.length !== 2 || new Set(halves.map((half) => half.fraction)).size !== 2) {
+      throw new InvalidSnapshotError("pizza halves snapshot halves");
+    }
+    const charges = ownDataArray(record, "charges", "pizza halves snapshot charges").map((entry) => {
+      const charge = asPlainRecord(entry, "pizza halves snapshot charge");
+      const role = ownData(charge, "role", "pizza halves snapshot role");
+      const free = ownData(charge, "free", "pizza halves snapshot free");
+      if ((role !== "ingredient" && role !== "extra") || typeof free !== "boolean") throw new InvalidSnapshotError("pizza halves snapshot charge");
+      return {
+        amount: money(ownData(charge, "amount", "pizza halves snapshot amount"), "pizza halves snapshot amount"),
+        fractions: ownDataArray(charge, "fractions", "pizza halves snapshot charge fractions")
+          .map((item) => fraction(item, "pizza halves snapshot charge fraction")),
+        free,
+        groupId: assertTextReturn(ownData(charge, "groupId", "pizza halves snapshot groupId"), "pizza halves snapshot groupId"),
+        name: assertTextReturn(ownData(charge, "name", "pizza halves snapshot charge name"), "pizza halves snapshot charge name"),
+        optionId: assertTextReturn(ownData(charge, "optionId", "pizza halves snapshot optionId"), "pizza halves snapshot optionId"),
+        role,
+      } satisfies PizzaHalvesChargeSnapshot;
+    });
+    const basePrice = money(ownData(record, "basePrice", "pizza halves snapshot basePrice"), "pizza halves snapshot basePrice");
+    const total = money(ownData(record, "total", "pizza halves snapshot total"), "pizza halves snapshot total");
+    if (charges.reduce((sum, entry) => sum.add(entry.amount), basePrice).amountMinor !== total.amountMinor) {
+      throw new InvalidSnapshotError("pizza halves snapshot total");
+    }
+    return deepFreeze({
+      basePrice,
+      baseFraction: fraction(ownData(record, "baseFraction", "pizza halves snapshot baseFraction"), "pizza halves snapshot baseFraction"),
+      charges,
+      currency,
+      freeAssignmentOrder: ownDataArray(record, "freeAssignmentOrder", "pizza halves snapshot free order")
+        .map((id) => assertTextReturn(id, "pizza halves snapshot free order")),
+      freeIngredientCount,
+      freeIngredientCountFraction: nFraction === null ? null : fraction(nFraction, "pizza halves snapshot N fraction"),
+      halves,
+      ruleVersion: PIZZA_HALVES_RULE_V2,
+      schemaVersion: PIZZA_HALVES_SNAPSHOT_SCHEMA_VERSION,
+      total,
+    });
+  });
+}

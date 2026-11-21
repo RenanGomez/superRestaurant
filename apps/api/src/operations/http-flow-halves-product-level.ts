@@ -55,7 +55,7 @@ export async function halvesProductLevelFlow(): Promise<void> {
     const { catalogVersion } = await publishCatalog(context, catalog);
     const read = ok(await context.send("manager", "GET", `/catalog/menu${context.query({ ...scope })}`), "catalog_read");
     const savedProduct = record((record(record(read).catalog).products as unknown[])[0]);
-    assert.deepEqual(record(savedProduct.fraction), { enabled: true, flavorGroupId, extraGroupId: ingredientGroupId, excludableIngredientIds: ["cebolla"] });
+    assert.deepEqual(record(savedProduct.fraction), { enabled: true, flavorGroupId, extraGroupId: ingredientGroupId, excludableIngredientIds: ["cebolla"], lockedIngredientOptionIds: [] });
     context.check("catalog_read_returns_product_level_fraction");
 
     const register = await openShiftAndRegister(context, 0);

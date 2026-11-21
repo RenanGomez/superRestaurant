@@ -12,7 +12,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
-import { toDomainFraction } from "./menu-catalog-domain.js";
+import { pizzaCatalogIssues, toDomainFraction, toDomainPizzaConfig } from "./menu-catalog-domain.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const readCatalogSql = "select app_private.get_menu_catalog($1::uuid, $2::uuid, $3::uuid) as state";
@@ -161,6 +161,8 @@ function validDomainCatalog(command: SaveMenuCatalogCommandV1): boolean {
   // One source of truth: an enabled product-level setup cannot coexist with an enabled legacy size one.
   if (command.products.some((product) => product.fraction?.enabled === true
     && (product.variants ?? []).some((variant) => variant.fraction?.enabled === true))) return false;
+  // Pizza V2 cross-checks mirror save_menu_catalog so an invalid release never reaches the database.
+  if (pizzaCatalogIssues(command).length > 0) return false;
   try {
     validateMenuCatalog({
       catalogVersion: command.catalogVersion,
@@ -240,6 +242,7 @@ function validDomainCatalog(command: SaveMenuCatalogCommandV1): boolean {
           })),
         }),
         ...(product.fraction === undefined || product.fraction === null ? {} : { fraction: toDomainFraction(product.fraction) }),
+        ...toDomainPizzaConfig(product),
       })),
       restaurantId: command.scope.restaurantId,
       sizePresets: (command.sizePresets ?? []).map((preset) => ({

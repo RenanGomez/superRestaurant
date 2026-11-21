@@ -177,6 +177,19 @@ test("repeat plan blocks a removed product instead of dropping the historical li
   assert.deepEqual(plan.lines[0]?.issues, [{ code: "product_removed", severity: "blocking" }]);
 });
 
+test("repeat plan blocks a line whose product is now a pizza V2 product instead of throwing", () => {
+  const base = catalog();
+  const pizzaCatalog: MenuCatalog = {
+    ...base,
+    products: [{ ...base.products[0]!, pizzaMode: "specialty", defaultIngredientOptionIds: ["cheese"] }],
+  };
+  const plan = buildRepeatOrderPlan(historicalOrder(), pizzaCatalog);
+  assert.equal(plan.lines[0]?.status, "blocked");
+  assert.equal(plan.lines[0]?.selection, null);
+  assert.equal(plan.lines[0]?.currentSnapshot, null);
+  assert.equal(plan.readyLineCount, 0);
+});
+
 test("repeat plan blocks removed or inactive historical modifier options without substituting them", () => {
   const removed = buildRepeatOrderPlan(historicalOrder(), catalog({ removeCheese: true, version: "menu-v2" }));
   const inactive = buildRepeatOrderPlan(historicalOrder(), catalog({ cheeseActive: false, version: "menu-v2" }));

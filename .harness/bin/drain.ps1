@@ -32,6 +32,7 @@ if (Test-Path $lock) {
   }
 }
 [IO.File]::WriteAllText($lock, "$PID", $utf8)
+$drainStart = Get-Date -Format s   # cleanup.ps1 -Since: restos de motores lanzados desde aquí
 
 function Load { Get-ChildItem $qDir -Filter *.json | ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json } }
 function Save($t) { [IO.File]::WriteAllText((Join-Path $qDir "$($t.id).json"), ($t | ConvertTo-Json -Depth 4), $utf8) }
@@ -83,6 +84,9 @@ try {
       # el respaldo solo entra si no queda cuota de codex (salvo fallback.parallel: también como carril extra)
       if ($fallback -and -not $cfg.codex.fallback.parallel) { $cx = @($free | Where-Object { $_ -ne $fallback }); if ($cx) { $free = $cx } }
       $key = @($free | Where-Object { $used -notcontains $_ }) + $free | Select-Object -First 1
+      # Antigravity: como mucho gemini.maxParallel a la vez (las ráfagas agotan el límite semanal)
+      $gMax = if ($cfg.gemini.maxParallel) { [int]$cfg.gemini.maxParallel } else { 2 }
+      if ($key -like 'gemini*' -and @($used | Where-Object { $_ -like 'gemini*' }).Count -ge $gMax) { continue }
       $used += $key
       $t | Add-Member runAccount $(if ($key -like 'codex-*') { $key.Substring(6) } else { '' }) -Force
       $t | Add-Member runLane $(if ($key -eq $fallback -and $t.engine -eq 'codex') { "codex→$fallback" } else { $key }) -Force
@@ -169,4 +173,8 @@ try {
   $sum
   break
  }
-} finally { Remove-Item $lock -ErrorAction SilentlyContinue }
+} finally {
+  Remove-Item $lock -ErrorAction SilentlyContinue
+  # cerrar lo que los motores dejaron corriendo (servidores, watchers, Godot...); ver ORCHESTRATOR.md "Limpieza"
+  & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\cleanup.ps1" -Since $drainStart | Where-Object { $_ -ne 'nada abierto' }
+}

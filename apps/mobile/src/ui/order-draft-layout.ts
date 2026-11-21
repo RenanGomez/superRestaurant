@@ -18,6 +18,12 @@ import { tabletBreakpoint } from "./theme.js";
  */
 export type OrderDraftLayout = "columns" | "stacked";
 
+/**
+ * Least height a `columns` pane row keeps when the header leaves little room;
+ * below it the screen scrolls instead of squeezing the panes toward zero.
+ */
+export const orderDraftColumnsMinHeight = 560;
+
 /** The arrangement one viewport width can actually operate. */
 export function orderDraftLayout(width: number): OrderDraftLayout {
   return width >= tabletBreakpoint ? "columns" : "stacked";
@@ -39,6 +45,6 @@ export function paneOwnsScroller(layout: OrderDraftLayout): boolean {
  * share is the defect itself, so the pane keeps its own height instead.
  */
 export const orderDraftPaneBox = Object.freeze({
-  columns: Object.freeze({ flexBasis: 0, flexGrow: 1, flexShrink: 1, minWidth: 0 }),
+  columns: Object.freeze({ flexBasis: 0, flexGrow: 1, flexShrink: 1, minHeight: 0, minWidth: 0 }),
   stacked: Object.freeze({ flexShrink: 0, minWidth: 0 }),
 });

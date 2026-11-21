@@ -13,7 +13,7 @@ param(
   [ValidateSet('','minimal','low','medium','high','xhigh')][string]$Effort = '',  # codex y dsh
   [switch]$Write,                        # permite editar archivos
   [switch]$Worktree,                     # git worktree aparte (codex: --worktree; gemini: .harness/worktrees/<Id>)
-  [int]$TimeoutMin = 20,                 # espera máxima del result (gemini/Antigravity)
+  [int]$TimeoutMin = 30,                 # espera máxima del result (gemini/Antigravity)
   [switch]$Resumed,                      # lo pasa la tarea programada al relanzar tras un cooldown
   [switch]$NoSchedule,                   # lo pasa drain.ps1: la cola se encarga de reanudar
   [string]$Account = ''                  # codex: cuenta de config.codex.accounts (A, B…); vacío = la primera con cuota
@@ -35,6 +35,7 @@ $brief  = PathFor 'brief'  '.harness/runs/{id}/brief.md'
 $result = PathFor 'result' '.harness/runs/{id}/result.md'
 $log    = PathFor 'log'    '.harness/runs/{id}/log.txt'
 $runDir = Split-Path $log -Parent
+$isRetry = Test-Path $log   # ya hubo un intento con este -Id: es un reintento
 foreach ($d in @($runDir, (Split-Path $result -Parent))) { New-Item -ItemType Directory -Force $d | Out-Null }
 if (-not (Test-Path $brief)) { throw "No existe $brief" }
 
@@ -124,6 +125,9 @@ if ((CoolUntil $qkey) -and -not (Switch-ToFallback "$qkey sin cuota")) {
 if ($fallbackWhy) { $qkey = $Engine; $q = $quota.$qkey; "[codex → $Engine/${Model}: $fallbackWhy]" }
 
 $m = $cfg.$Engine.models.$Model
+# dsh con suscripción OpenCode Go: modelos y endpoint de config.dsh.opencodego
+$goDsh = ($Engine -eq 'dsh' -and $cfg.dsh.provider -eq 'opencodego')
+if ($goDsh) { $m = $cfg.dsh.opencodego.models.$Model }
 if ($null -eq $m) { $m = $Model }      # nombre literal
 # formato del informe: plantilla del harness, o el texto que diga config.resultFormat
 $instr = if ($cfg.resultFormat) { "`n---`n$($cfg.resultFormat)`n" } else {
@@ -140,6 +144,23 @@ Nunca respondas de memoria ni estimes. Leer archivos y ejecutar comandos de solo
 aunque el brief diga "no ejecutes nada más".
 '@
 $prompt = (Get-Content $brief -Raw -Encoding UTF8) + $rules + $instr + $evidence
+# revisión (-Model review): el diff va en el prompt para que el revisor no explore el repo vuelta tras vuelta.
+# Rango opcional en el brief con una línea "Diff: <rango git>" (p. ej. "Diff: main...harness/f4b"); si no, git diff HEAD.
+if ($Model -eq 'review') {
+  $briefTxt = Get-Content $brief -Raw -Encoding UTF8
+  $range = if ($briefTxt -match '(?m)^\s*Diff:\s*(\S+)') { $Matches[1] } else { 'HEAD' }
+  $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  $diffTxt = (& git -C $root diff $range 2>&1 | Out-String)
+  $ErrorActionPreference = $eap
+  $maxDiff = if ($cfg.dsh.reviewDiffMaxKB) { [int]$cfg.dsh.reviewDiffMaxKB * 1KB } else { 60KB }
+  if ($diffTxt.Trim() -and $diffTxt.Length -le $maxDiff) {
+    $prompt += "`n## Diff a revisar (git diff $range)`n" + '```diff' + "`n$diffTxt`n" + '```' +
+      "`nRevisa SOLO este diff. No explores el repositorio: abre otro archivo únicamente si el diff no basta para " +
+      "juzgar un cambio concreto (y dilo en el informe).`n"
+  } elseif ($diffTxt.Trim()) {
+    $prompt += "`n(El diff de $range pasa de $([int]($maxDiff/1KB)) KB y no se incluyó: revisa primero ``git diff --stat $range`` y lee solo los hunks necesarios.)`n"
+  }
+}
 # Godot 4 crashea al arrancar en el sandbox (no puede crear su log en %APPDATA%); el wrapper del proyecto lo evita
 if (Test-Path (Join-Path $root 'tools\godot.cmd')) {
   $prompt += "`nPara correr Godot usa SIEMPRE tools\godot.cmd (mismos argumentos que el .exe; en Git Bash ./tools/godot.cmd), nunca el .exe directo: sin eso Godot crashea al arrancar en el sandbox.`n"
@@ -193,17 +214,63 @@ function Invoke-Antigravity {
   }
   [IO.File]::WriteAllText($pfile, $prompt, $utf8)
   if (Test-Path $result) { Remove-Item $result }
-  $msg = "Lee y ejecuta las instrucciones del archivo $pfile . $mode Al terminar, escribe tu informe final (formato indicado en ese archivo) en $result con una sola escritura."
+  $progress = [IO.Path]::ChangeExtension($result, '.progress.md')
+  if (Test-Path $progress) { Remove-Item $progress }
+  $msg = "Lee y ejecuta las instrucciones del archivo $pfile . $mode Al terminar, escribe tu informe final (formato indicado en ese archivo) en $result con una sola escritura. " +
+         "SEÑAL DE VIDA (obligatorio): en los primeros 5 minutos escribe $progress con 3-6 líneas: qué entendiste, qué archivos tocarás y tu primer paso; añade una línea al completar cada paso. " +
+         "Si el brief es inviable o te bloqueas, escribe YA el informe final en $result con estado 'blocked': qué intentaste, qué archivo o función te frenó y qué necesitas. Nunca termines sin informe."
   $mA = if ($m) { $m } else { 'flash' }
   $o = & $exeA agentapi new-conversation "--model=$mA" "--title=harness $Id" $msg 2>&1 | Out-String
   if ($o -notmatch '"conversationId":\s*"([^"]+)"') { return @{ code = 1; out = $o } }
   $conv = $Matches[1]
-  $deadline = (Get-Date).AddMinutes($TimeoutMin); $last = -1
+  # vigilancia: live.log cada minuto (pasos de la conversación vía ag-trace.py), corte temprano sin señal de vida o atascado
+  $live  = Join-Path $runDir 'live.log'
+  $trace = Join-Path $PSScriptRoot 'ag-trace.py'
+  $py    = if (Get-Command python -ErrorAction SilentlyContinue) { 'python' } elseif (Get-Command py -ErrorAction SilentlyContinue) { 'py' } else { '' }
+  $aliveMin = if ($cfg.gemini.aliveMin) { [double]$cfg.gemini.aliveMin } else { 10 }
+  $stallMin = if ($cfg.gemini.stallMin) { [double]$cfg.gemini.stallMin } else { 10 }
+  # tope de pasos: cada paso reenvía todo el contexto y gasta el límite semanal; al llegar se le pide cerrar
+  $maxSteps = if ($cfg.gemini.maxSteps) { [int]$cfg.gemini.maxSteps } else { 150 }
+  $capAsked = $null
+  $start = Get-Date; $deadline = $start.AddMinutes($TimeoutMin); $last = -1
+  $steps = -1; $lastChange = $start; $nextLog = $start; $why = ''
+  [IO.File]::WriteAllText($live, "$(Get-Date -Format s) conversación $conv (modelo $mA); señal de vida en $progress`n", $utf8)
   while ((Get-Date) -lt $deadline) {
     Start-Sleep 5
     if (Test-Path $result) { $len = (Get-Item $result).Length; if ($len -gt 0 -and $len -eq $last) { break }; $last = $len }
+    if ((Get-Date) -lt $nextLog) { continue }
+    $nextLog = (Get-Date).AddSeconds(60)
+    $sum = if ($py) { (& $py -I $trace $conv --summary 2>&1 | Out-String).Trim() } else { '(sin python: sin detalle de pasos)' }
+    $alive = if (Test-Path $progress) { 'progress=sí' } else { 'progress=no' }
+    [IO.File]::AppendAllText($live, "$(Get-Date -Format s) $alive $sum`n", $utf8)
+    if ($sum -match 'pasos=(\d+)') { if ([int]$Matches[1] -ne $steps) { $steps = [int]$Matches[1]; $lastChange = Get-Date } }
+    if ($steps -ge $maxSteps -and -not $capAsked) {
+      $capAsked = Get-Date
+      $null = & $exeA agentapi send-message $conv "LÍMITE DE PASOS ($maxSteps) alcanzado. No hagas más cambios: escribe AHORA el informe final en $result con estado 'partial' (qué quedó hecho, qué falta, dónde seguir) y termina." 2>&1
+      [IO.File]::AppendAllText($live, "$(Get-Date -Format s) tope de $maxSteps pasos: pedido informe parcial`n", $utf8) }
+    if ($capAsked -and ((Get-Date) - $capAsked).TotalMinutes -ge 3) {
+      $why = "tope de pasos: superó $maxSteps pasos y no entregó informe parcial en 3 min"; break }
+    $mins = ((Get-Date) - $start).TotalMinutes
+    if ($mins -ge $aliveMin -and -not (Test-Path $progress) -and -not (Test-Path $result)) {
+      $why = "sin señal de vida: no escribió $(Split-Path $progress -Leaf) en $aliveMin min"; break }
+    if ($steps -ge 0 -and ((Get-Date) - $lastChange).TotalMinutes -ge $stallMin) {
+      $why = "atascado: ningún paso nuevo en $stallMin min"; break }
   }
   $done = (Test-Path $result) -and (Get-Item $result).Length -gt 0
+  if (-not $done) {
+    if (-not $why) { $why = "timeout: $TimeoutMin min sin informe" }
+    # pedirle que pare (si la API lo admite) y guardar qué hizo para el diagnóstico
+    $null = & $exeA agentapi send-message $conv "CANCELADA por el harness ($why). DETENTE: no ejecutes más herramientas ni edites archivos. Responde solo 'ok' y termina." 2>&1
+    # agentapi no tiene cancelación real: vigilar 2 min y dejar constancia si siguió gastando
+    if ($py) { $s0 = $steps; Start-Sleep 120
+      if ((& $py -I $trace $conv --summary 2>&1 | Out-String) -match 'pasos=(\d+)' -and [int]$Matches[1] -gt $s0 + 3) {
+        [IO.File]::AppendAllText($live, "$(Get-Date -Format s) AVISO: siguió trabajando tras cancelar ($s0 -> $($Matches[1]) pasos); ciérrala a mano en Antigravity: conversación $conv`n", $utf8)
+        $why += " | SIGUE ACTIVA tras cancelar: ciérrala en Antigravity ($conv)" } }
+    $tr = if ($py) { & $py -I $trace $conv --tail 40 2>&1 | Out-String } else { 'sin python: abre la conversación en Antigravity' }
+    [IO.File]::WriteAllText((Join-Path $runDir 'trace.txt'), $tr, $utf8)
+    [IO.File]::AppendAllText($live, "$(Get-Date -Format s) FALLO: $why. Pasos en trace.txt`n", $utf8)
+    $o += "`nFALLO: $why`n--- últimos pasos (trace.txt) ---`n" + (($tr -split "`n" | Select-Object -Last 15) -join "`n")
+  }
   return @{ code = $(if ($done) {0} else {124}); out = "$o`nconversation=$conv project=$proj timeout=$(-not $done)" }
 }
 
@@ -232,6 +299,11 @@ switch ($Engine) {
                '-s', $(if ($Write) {'workspace-write'} else {'read-only'}))
     foreach ($o in $cfg.codex.overrides) { $args_ += @('-c',$o) }
     if (-not $Effort -and $cfg.codex.defaultEffort) { $Effort = $cfg.codex.defaultEffort }
+    # cuota de codex: el razonamiento alto gasta mucho. high/xhigh solo en reintentos (mismo -Id); si no, maxEffort.
+    $cap = if ($cfg.codex.maxEffort) { $cfg.codex.maxEffort } else { 'medium' }
+    if ($Effort -in 'high','xhigh' -and -not $isRetry -and $cap -notin 'high','xhigh') {
+      "[effort $Effort -> ${cap}: high solo en reintento con el mismo -Id]"; $Effort = $cap
+    }
     if ($m)        { $args_ += @('-m',$m) }
     if ($Effort)   { $args_ += @('-c',"model_reasoning_effort=`"$Effort`"") }
     if ($Write -and $Worktree) { $args_ += @('--add-dir', $root) }   # agents_out/ e informe viven en la carpeta del proyecto
@@ -257,20 +329,38 @@ switch ($Engine) {
     if (-not $Effort -and $cfg.dsh.defaultEffort) { $Effort = $cfg.dsh.defaultEffort }
     $patch = Join-Path $runDir 'dsh-model.yml'
     $eff = if ($Effort) { "`n    reasoningEffort: $(if ($Effort -in 'minimal','low') {'low'} elseif ($Effort -eq 'medium') {'medium'} else {'high'})" } else { '' }
+    # dieta de contexto: ventana realista (dsh compacta antes) y tope de salida (sin él pide 393k y OpenRouter da 402)
+    $ctxWin = if ($cfg.dsh.contextWindow) { [int]$cfg.dsh.contextWindow } else { 128000 }
+    $maxTok = if ($cfg.dsh.maxTokens) { [int]$cfg.dsh.maxTokens } else { 16000 }
+    # config.dsh.routing (fijar proveedor de OpenRouter) NO se usa: dsh rechaza compat.openRouterRouting
+    # ("INVALID_CONFIG ... not configurable here"); OpenRouter elige proveedor solo.
+    $route = ''
+    # modelos que no aceptan reasoningEffort (p. ej. kimi): config.dsh.noEffort, por id o alias
+    $noEff = @(if ($cfg.dsh.noEffort) { $cfg.dsh.noEffort } else { 'moonshotai/kimi-k3.1-pro','kimi-k3.1-pro' })
+    if ($m -in $noEff -or $Model -in $noEff) { $eff = '' }
+    if ($goDsh) {
+      # la CLI opencode lee OPENCODE_API_KEY; el patch de dsh de abajo queda sin uso en este modo
+      $pName = 'opencodego'; $pBase = $cfg.dsh.opencodego.baseURL; $pKey = $cfg.dsh.opencodego.apiKeyEnv
+      if (-not [Environment]::GetEnvironmentVariable($pKey)) {
+        $v = [Environment]::GetEnvironmentVariable($pKey, 'User'); if ($v) { Set-Item "env:$pKey" $v }
+        else { throw "Falta la clave de OpenCode Go: crea la variable de usuario $pKey (console de opencode.ai → API Keys)." }
+      }
+    } else { $pName = 'openrouter'; $pBase = 'https://openrouter.ai/api/v1'; $pKey = 'OPENROUTER_API_KEY' }
     [IO.File]::WriteAllText($patch, @"
 - id: llm-pi-ai
   config:
     providers:
-      openrouter:
-        apiKeyEnv: OPENROUTER_API_KEY
+      ${pName}:
+        apiKeyEnv: $pKey
         api: openai-completions
-        baseURL: https://openrouter.ai/api/v1
+        baseURL: $pBase
         models:
           - id: $m
-            contextWindow: 1000000
+            contextWindow: $ctxWin
+            maxTokens: $maxTok$route
 - id: agent-default-model
   config:
-    provider: openrouter
+    provider: $pName
     model: $m$eff
 - id: credentials
   disabled: false
@@ -295,6 +385,62 @@ Push-Location $(if ($cwd) { $cwd } else { $root })   # dsh trabaja en el directo
 try {
   $ErrorActionPreference = 'Continue'   # stderr de los CLIs no debe abortar
   if ($Engine -eq 'gemini') { $r = Invoke-Antigravity; $out = $r.out; $code = $r.code }
+  elseif ($Engine -eq 'dsh' -and $goDsh) {
+    # OpenCode Go exige x-opencode-session: dsh no lo manda, así que corre la CLI oficial `opencode run`.
+    # Prompt en archivo adjunto (evita el límite de línea de comandos). plan = solo lectura; build = edita.
+    $oc = (Get-Command opencode.cmd, opencode -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    if (-not $oc) { throw 'Falta la CLI de OpenCode: npm i -g opencode-ai' }
+    $pf = Join-Path $runDir 'prompt.md'; [IO.File]::WriteAllText($pf, $prompt, $utf8)
+    # el mensaje va antes de -f: -f es un array y se tragaría lo que venga después
+    $ocArgs = @('run','Sigue exactamente las instrucciones del archivo adjunto prompt.md. Tu respuesta final es el informe.',
+                '--pure','-m',"opencode-go/$m",'--agent',$(if ($Write) {'build'} else {'plan'}),
+                '--dir', $(if ($cwd) { $cwd } else { $root }),'--title',"harness $Id",'-f',$pf)
+    if ($Effort -in 'medium','high','xhigh') { $ocArgs += @('--variant', $(if ($Effort -eq 'medium') {'medium'} else {'high'})) }
+    $ocArgs += @('--print-logs','--log-level','INFO')   # latido: opencode registra cada paso en stderr
+    $errF = Join-Path $runDir 'dsh-stderr.txt'; $outF = Join-Path $runDir 'dsh-stdout.txt'
+    $live = Join-Path $runDir 'live.log'
+    $env:NO_COLOR = '1'
+    # vigilancia (17-nov-2026: un run se quedó 3 h colgado en el arranque sin error): arranque sin sesión → relanzar;
+    # sin actividad stallMin → cortar; total maxMin → cortar. Código 124 = drain lo da por fallido y avisa.
+    $bootMin  = if ($cfg.dsh.bootMin)  { [double]$cfg.dsh.bootMin }  else { 2 }
+    $stallMin = if ($cfg.dsh.stallMin) { [double]$cfg.dsh.stallMin } else { 8 }
+    $maxMin   = if ($cfg.dsh.maxMin)   { [double]$cfg.dsh.maxMin }   else { 45 }
+    $q = { param($a) if ($a -match '[\s"]') { '"' + ($a -replace '"','\"') + '"' } else { $a } }
+    $argLine = ($ocArgs | ForEach-Object { & $q "$_" }) -join ' '
+    $why = $null; $code = 0
+    foreach ($try in 1, 2) {
+      Remove-Item $errF, $outF -ErrorAction SilentlyContinue
+      $proc = Start-Process -FilePath $oc -ArgumentList $argLine -RedirectStandardOutput $outF -RedirectStandardError $errF `
+                            -WorkingDirectory $(if ($cwd) { $cwd } else { $root }) -WindowStyle Hidden -PassThru
+      $null = $proc.Handle   # sin esto ExitCode llega vacío
+      $t0 = Get-Date; $lastSize = -1; $lastAct = $t0; $booted = $false; $why = $null
+      Add-Content $live "[$(Get-Date -f HH:mm:ss)] intento $try, pid $($proc.Id)" -Encoding UTF8
+      while (-not $proc.WaitForExit(15000)) {
+        $sz = (Get-Item $errF -ErrorAction SilentlyContinue).Length + (Get-Item $outF -ErrorAction SilentlyContinue).Length
+        if ($sz -ne $lastSize) { $lastSize = $sz; $lastAct = Get-Date }
+        if (-not $booted) { $booted = [bool](Select-String -Path $errF -Pattern 'session\.id=' -Quiet -ErrorAction SilentlyContinue) }
+        $el = ((Get-Date) - $t0).TotalMinutes; $idle = ((Get-Date) - $lastAct).TotalMinutes
+        $tail = (Get-Content $errF -Tail 1 -ErrorAction SilentlyContinue) -replace '.*message=', ''
+        Add-Content $live ("[{0:HH:mm:ss}] {1:N1} min, inactivo {2:N1} min | {3}" -f (Get-Date), $el, $idle, "$tail".Substring(0, [Math]::Min(140, "$tail".Length))) -Encoding UTF8
+        if (-not $booted -and $el -ge $bootMin) { $why = "arranque colgado: sin sesión tras $bootMin min" }
+        elseif ($idle -ge $stallMin)           { $why = "sin actividad $stallMin min" }
+        elseif ($el -ge $maxMin)               { $why = "superó maxMin=$maxMin min" }
+        if ($why) { & taskkill.exe /T /F /PID $proc.Id 2>&1 | Out-Null; Add-Content $live "[$(Get-Date -f HH:mm:ss)] CORTADO: $why" -Encoding UTF8; break }
+      }
+      if (-not $why) { $proc.WaitForExit(); $code = $proc.ExitCode; break }
+      $code = 124
+      if ($booted) { break }   # solo el arranque colgado se relanza solo; lo demás vuelve al orquestador
+    }
+    $answer = @(Get-Content $outF -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { $_ -replace '\x1b\[[0-9;]*m','' })
+    $err = @(Get-Content $errF -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { $_ -replace '\x1b\[[0-9;]*m','' } |
+             Where-Object { $_ -and ($_ -notmatch '^timestamp=' -or $_ -match 'level=(ERROR|WARN)') -and $_ -notmatch 'failed to add snapshot files' })
+    # stderr trae también la salida de las herramientas (tests de Godot imprimen "ERROR: ..."): solo cuenta el
+    # "Error: " exacto con que opencode termina (sensible a mayúsculas) y sus propias líneas level=ERROR.
+    $ocErr = @($err | Where-Object { $_ -cmatch '^Error: ' -or ($_ -cmatch '^timestamp=\S+ level=ERROR ') })
+    if ($code -eq 0 -and ($ocErr | Where-Object { $_ -cmatch '^Error: ' })) { $code = 1 }
+    if ($why) { $err = @("[harness] dsh cortado: $why (ver live.log)") + $err }
+    $out = $err + '--- respuesta ---' + $answer
+  }
   elseif ($Engine -eq 'dsh') {
     # stdout = respuesta final (el result); stderr = razonamiento y diagnósticos (solo al log)
     $exe = if ($cfg.dsh.exe) { [Environment]::ExpandEnvironmentVariables($cfg.dsh.exe) }
@@ -302,6 +448,14 @@ try {
     $errF = Join-Path $runDir 'dsh-stderr.txt'
     $answer = @($prompt | & $exe @args_ 2> $errF | ForEach-Object { "$_" })
     $code = $LASTEXITCODE
+    # el modelo no acepta ese reasoningEffort (cada modelo de OpenRouter admite otros): reintento al momento sin él
+    if ($code -ne 0 -and (Get-Content $errF -Raw -Encoding UTF8) -match 'UNSUPPORTED_REASONING_EFFORT') {
+      $y = (Get-Content $patch -Raw -Encoding UTF8) -replace '(?m)^\s*reasoningEffort:.*\r?\n?', ''
+      [IO.File]::WriteAllText($patch, $y, $utf8)
+      Add-Content $errF "[harness] $m no admite reasoningEffort=$Effort; reintento sin esfuerzo" -Encoding UTF8
+      $answer = @($prompt | & $exe @args_ 2>> $errF | ForEach-Object { "$_" })
+      $code = $LASTEXITCODE
+    }
     $out = @(Get-Content $errF -Encoding UTF8 | Where-Object { $_ -ne 'System.Management.Automation.RemoteException' }) + '--- respuesta ---' + $answer
   } else {
   $exe = (Get-Command "$Engine.cmd","$Engine.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).Source
@@ -324,10 +478,19 @@ if ($agentsOut -and (Test-Path $outDir)) {
 
 # cuota agotada → cooldown + relanzamiento. codex: "...or try again at Nov 3rd, 2026 2:11 AM."
 $text = $out -join "`n"
+# dsh/opencode: solo las líneas de error de la CLI, nunca la respuesta del modelo (17-nov-2026: una tabla de
+# docs con "`429` | RATE_LIMITED" y números de línea ":402:" congelaron dsh 1 h con la cuota intacta).
+if ($Engine -eq 'dsh' -and $goDsh) {
+  $text = if ($why) { '' } else { $ocErr -join "`n" }
+}
 # claude: "You've hit your limit · resets 3pm" / "Claude AI usage limit reached"
 # dsh/OpenRouter: "402 ... Insufficient credits" (sin saldo) o 429
 if ($code -ne 0 -and $text -match 'usage limit|rate limit|RESOURCE_EXHAUSTED|quota exceeded|hit your limit|limit reached|Insufficient credits|\b402\b|\b429\b') {
   $at = (Get-Date).AddMinutes(60)      # el mensaje no trae hora: reintentar en 1 h
+  # dsh: un 429 del proveedor de UN modelo (pool compartido saturado) es pasajero: no congelar dsh 1 h
+  if ($Engine -eq 'dsh' -and $text -match 'rate-limited upstream|upstream_provider|temporarily rate-limited' -and $text -notmatch 'Insufficient credits|402') {
+    $at = (Get-Date).AddMinutes($(if ($cfg.dsh.upstreamCooldownMin) { [int]$cfg.dsh.upstreamCooldownMin } else { 5 }))
+  }
   if ($text -match 'try again at ([A-Z][a-z]{2}) (\d{1,2})(?:st|nd|rd|th)?, (\d{4}) (\d{1,2}:\d{2} [AP]M)') {
     $at = [datetime]::ParseExact("$($Matches[1]) $($Matches[2]) $($Matches[3]) $($Matches[4])", 'MMM d yyyy h:mm tt',
                                  [Globalization.CultureInfo]::InvariantCulture)

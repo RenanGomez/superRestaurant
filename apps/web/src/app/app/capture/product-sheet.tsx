@@ -15,6 +15,9 @@ import { useMenuImageBaseUrl } from "../../../lib/menu-image-url-context";
 import { menuImagePublicUrl } from "../../../lib/menu-images";
 import { groupsForProduct } from "../../../lib/menu-groups";
 import { uiButton, uiOption } from "../../../lib/ui-classes";
+import { trapFocusIndex } from "../../../lib/focus-trap";
+import { buildPizzaLine, isPizzaProduct, pizzaDraftFromLine, type PizzaBuildResult, type PizzaDraft, type PizzaLineV2 } from "../../../lib/pizza-capture";
+import { PizzaSection } from "./pizza-section";
 
 const button = uiButton("secondary", "min-w-11");
 const bigButton = uiButton("secondary", "min-w-11 text-xl");
@@ -27,7 +30,10 @@ interface ProductSheetProps {
   readonly product: MenuProductV1;
   readonly scope?: BranchScope;
   readonly catalogVersion?: string | null;
-  readonly quoteLine?: (input: CaptureLineQuoteRequestV1) => Promise<CaptureRequestResult<CaptureLineQuoteResultV1>>;
+  readonly quoteLine?: (input: CaptureLineQuoteRequest) => Promise<CaptureRequestResult<CaptureLineQuoteResultV1>>;
+  /** Pizza V2: every product and group of the catalog (the second half is another product). */
+  readonly catalogProducts?: readonly MenuProductV1[] | undefined;
+  readonly catalogGroups?: readonly MenuModifierGroupV1[] | undefined;
   readonly groups: readonly MenuModifierGroupV1[];
   readonly currency: string;
   readonly busy: boolean;
@@ -44,13 +50,16 @@ interface ProductSheetProps {
   readonly initialVariantId?: string | null;
   readonly error?: string | undefined;
   readonly onClose: () => void;
-  readonly onAdd: (quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null, fraction: LineFractionV1 | null) => void;
+  readonly onAdd: (quantity: number, modifierGroups: readonly SelectionPlanModifierGroupDraft[], note: string | null, variantId: string | null, fraction: LineFractionV1 | null, pizza: PizzaLineV2 | null) => void;
 }
+
+/** A line quote request; `pizza` (V2) is exclusive with `fraction`. */
+type CaptureLineQuoteRequest = CaptureLineQuoteRequestV1 & { readonly pizza?: PizzaLineV2 };
 
 const MAX_NOTE_LENGTH = 200;
 
 /** In-app "hoja" for choosing a product's modifier groups; never uses `window.prompt`. */
-export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups, currency, busy, busyLabel = "Calculando…", addLabel, lockSelection = false, closeDisabled = false, showNote = true, showVariants = false, confirmedTotalMinor, initialLine, initialVariantId, error, onClose, onAdd }: ProductSheetProps) {
+export function ProductSheet({ product, scope, catalogVersion, quoteLine, catalogProducts, catalogGroups, groups, currency, busy, busyLabel = "Calculando…", addLabel, lockSelection = false, closeDisabled = false, showNote = true, showVariants = false, confirmedTotalMinor, initialLine, initialVariantId, error, onClose, onAdd }: ProductSheetProps) {
   const supabaseUrl = useMenuImageBaseUrl();
   const confirmed = confirmedTotalMinor !== undefined;
   const [quantity, setQuantity] = useState(initialLine?.quantity ?? 1);
@@ -67,19 +76,40 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
   const [note, setNote] = useState(initialLine?.note ?? "");
   const [splitChosen, setSplitChosen] = useState(initialLine?.fraction !== undefined);
   const [halves, setHalves] = useState<HalvesDraft>(() => halvesDraftFromFraction(initialLine?.fraction));
+  const pizzaActive = isPizzaProduct(product) && catalogGroups !== undefined;
+  const [pizzaDraft, setPizzaDraft] = useState<PizzaDraft>(() => pizzaDraftFromLine(initialLine?.pizza, product.productId));
   const closeRef = useRef<HTMLButtonElement>(null);
   const [serverEstimate, setServerEstimate] = useState<{ readonly key: string; readonly value: CaptureLineQuoteResultV1 } | null>(null);
   const [catalogConflictKey, setCatalogConflictKey] = useState<string | null>(null);
+  const [failedPhotoUrl, setFailedPhotoUrl] = useState<string | null>(null);
+  const photoUrl = menuImagePublicUrl(supabaseUrl, product.imagePath);
   const assignedGroups = groupsForProduct(product, groups);
 
-  useEffect(() => { closeRef.current?.focus(); }, []);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+    return () => { opener?.focus(); };
+  }, []);
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
-      if (event.key === "Escape") { event.preventDefault(); onClose(); }
+      if (event.key === "Escape") { event.preventDefault(); if (!closeDisabled) onClose(); return; }
+      if (event.key !== "Tab" || dialogRef.current === null) return;
+      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>("a[href], button, input, select, textarea, [tabindex]")]
+        .filter((element) => !element.hasAttribute("disabled") && element.tabIndex >= 0 && element.getClientRects().length > 0);
+      const target = trapFocusIndex(focusable.length, focusable.indexOf(document.activeElement as HTMLElement), event.shiftKey);
+      if (target !== null) { event.preventDefault(); focusable[target]?.focus(); }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [onClose, closeDisabled]);
+  // Touch scrolling must stay inside the sheet; desktop keeps its page scroll untouched.
+  useEffect(() => {
+    if (!window.matchMedia("(max-width: 639px)").matches) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, []);
 
   function changeOption(group: MenuModifierGroupV1, optionId: string, maximumQuantity: number | null, delta: -1 | 1): void {
     setSelections((current) => {
@@ -102,7 +132,15 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
 
   const selectedVariant = activeVariants.find((variant) => variant.variantId === variantId);
   // The product's own setup (also without sizes); a size's legacy setup only while the product has none.
-  const fractionSetup = effectiveHalvesSetup(product, selectedVariant);
+  const fractionSetup = pizzaActive ? undefined : effectiveHalvesSetup(product, selectedVariant);
+  const pizzaOtherProducts = useMemo(() => (catalogProducts ?? []).filter((candidate) => candidate.active && isPizzaProduct(candidate)), [catalogProducts]);
+  const pizzaBuild: PizzaBuildResult | null = pizzaActive
+    ? buildPizzaLine(pizzaDraft, { catalogGroups, productsById: new Map([...(catalogProducts ?? []), product].map((entry) => [entry.productId, entry] as const)),
+      sizeName: selectedVariant?.name ?? null, variantIdA: variantId })
+    : null;
+  const pizzaMissing = pizzaBuild !== null && !pizzaBuild.ok;
+  const pizzaLine = pizzaBuild?.ok === true ? pizzaBuild.pizza : null;
+  const pizzaGroupIds = pizzaActive ? new Set([product.baseGroupId, ...(product.extraGroupIds ?? [])]) : new Set<string | null | undefined>();
   const basePriceMinor = selectedVariant?.unitPriceMinor ?? product.unitPriceMinor;
   const halvesActive = fractionSetup !== undefined && splitChosen;
   const flavorGroup = assignedGroups.find((group) => group.groupId === fractionSetup?.flavorGroupId);
@@ -115,7 +153,9 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
       .map((option) => ({ id: option.optionId, name: option.name }));
   }, [fractionSetup, extraGroup]);
   // With halves the flavor and extra groups live in the two columns, not in the ordinary list.
-  const listedGroups = halvesActive ? assignedGroups.filter((group) => group.groupId !== flavorGroup?.groupId && group.groupId !== extraGroup?.groupId) : assignedGroups;
+  // The pizza V2 base and extra groups are handled by the pizza section; the server needs them empty in `modifierGroups`.
+  const listedGroups = pizzaActive ? assignedGroups.filter((group) => !pizzaGroupIds.has(group.groupId))
+    : halvesActive ? assignedGroups.filter((group) => group.groupId !== flavorGroup?.groupId && group.groupId !== extraGroup?.groupId) : assignedGroups;
   const halvesValidation = validateHalvesDraft(halves);
   const lineFraction = halvesActive ? buildLineFraction(halves) : null;
 
@@ -129,18 +169,20 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
     validation: validateModifierSelection(group, countModifierSelections(selections[group.groupId] ?? [])),
   }));
   const allValid = validations.every((entry) => entry.validation.valid);
-  const wholeEstimateMinor = estimateSelectionMinor(product, listedGroups, selections, quantity, variantId);
-  const wholeUnitMinor = estimateSelectionMinor(product, listedGroups, selections, 1, variantId);
+  // No local estimate for a pizza V2: its amounts come only from the server quote.
+  const wholeEstimateMinor = pizzaActive ? null : estimateSelectionMinor(product, listedGroups, selections, quantity, variantId);
+  const wholeUnitMinor = pizzaActive ? null : estimateSelectionMinor(product, listedGroups, selections, 1, variantId);
   const halvesUnitMinor = halvesActive && wholeUnitMinor !== null
     ? estimateHalvesUnitMinor({ variantPriceMinor: basePriceMinor, flavorGroup, extraGroup, draft: halves,
       otherModifiersMinor: wholeUnitMinor - basePriceMinor })
     : null;
-  const estimatedMinor = halvesActive ? (halvesUnitMinor === null ? null : halvesUnitMinor * quantity) : wholeEstimateMinor;
+  // A pizza V2 total is never estimated locally: it is the server quote or "se confirma al agregar".
+  const estimatedMinor = pizzaActive ? null : halvesActive ? (halvesUnitMinor === null ? null : halvesUnitMinor * quantity) : wholeEstimateMinor;
   const halvesMissing = halvesActive && !halvesValidation.valid;
-  const quoteRequest: CaptureLineQuoteRequestV1 | null = scope !== undefined && catalogVersion != null && quoteLine !== undefined && allValid && !sizeMissing && !halvesMissing
-    && estimatedMinor !== null && quantity <= CAPTURE_SELECTION_LINE_MAX_QUANTITY
+  const quoteRequest: CaptureLineQuoteRequest | null = scope !== undefined && catalogVersion != null && quoteLine !== undefined && allValid && !sizeMissing && !halvesMissing
+    && !pizzaMissing && (pizzaActive || estimatedMinor !== null) && quantity <= CAPTURE_SELECTION_LINE_MAX_QUANTITY
     ? { schemaVersion: 1, scope, catalogVersion, productId: product.productId, variantId,
-      modifierGroups: groupDrafts, fraction: lineFraction, quantity }
+      modifierGroups: groupDrafts, fraction: lineFraction, quantity, ...(pizzaLine === null ? {} : { pizza: pizzaLine }) }
     : null;
   const quoteKey = quoteRequest === null ? null : JSON.stringify(quoteRequest);
   const visibleEstimate = visibleLineEstimate(estimatedMinor, quoteKey, serverEstimate);
@@ -149,7 +191,7 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
     if (quoteKey === null || quoteLine === undefined) return;
     let active = true;
     const timer = window.setTimeout(() => {
-      const request = JSON.parse(quoteKey) as CaptureLineQuoteRequestV1;
+      const request = JSON.parse(quoteKey) as CaptureLineQuoteRequest;
       void quoteLine(request).then((result) => {
         if (!active) return;
         if (result.ok) {
@@ -164,16 +206,19 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
     return () => { active = false; window.clearTimeout(timer); };
   }, [quoteKey, quoteLine]);
 
-  return <div className="fixed inset-0 z-20 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
+  return <div ref={dialogRef} className="fixed inset-0 z-50 flex items-end justify-center bg-[oklch(10%_0.02_250_/_.45)] sm:items-center"
     role="dialog" aria-modal="true" aria-labelledby="product-sheet-title"
-    onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className={`flex max-h-[92dvh] w-full ${halvesActive ? "max-w-3xl" : "max-w-xl"} flex-col rounded-t-2xl bg-surface shadow-xl sm:rounded-2xl`}>
+    onClick={(event) => { if (event.target === event.currentTarget && !closeDisabled) onClose(); }}>
+    <div className={`flex max-h-[92dvh] w-full ${halvesActive || (pizzaActive && pizzaDraft.split) ? "max-w-3xl" : "max-w-xl"} flex-col rounded-t-2xl bg-surface shadow-xl sm:rounded-2xl`}>
       <header className="flex items-center gap-2 border-b border-border p-4">
         <h2 id="product-sheet-title" className="font-heading text-lg font-semibold">{product.name}</h2>
         <span className="grow" />
         <button ref={closeRef} type="button" className={button} aria-label="Cerrar (Esc)" disabled={closeDisabled} onClick={onClose}>✕</button>
       </header>
-      <div className="grid flex-1 gap-4 overflow-auto p-4">
+      <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto overscroll-contain p-4">
+        {photoUrl !== null && failedPhotoUrl !== photoUrl
+          ? <img src={photoUrl} alt="" loading="lazy" onError={() => setFailedPhotoUrl(photoUrl)} className="h-40 w-full rounded-xl object-cover sm:h-48" />
+          : <span aria-hidden="true" className="flex h-40 w-full items-center justify-center rounded-xl bg-accent-soft text-4xl font-bold text-accent sm:h-48">{product.name.trim().charAt(0).toLocaleUpperCase("es-MX")}</span>}
         {variantRequired && <fieldset className="grid gap-2">
           <legend className="text-sm font-semibold">Tamaño · obligatorio</legend>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -194,6 +239,9 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
               onClick={() => setSplitChosen(split)}>{label}</button>)}
           </div>
         </fieldset>}
+        {pizzaActive && catalogGroups !== undefined && <PizzaSection catalogGroups={catalogGroups} currency={currency} disabled={busy || confirmed || lockSelection}
+          draft={pizzaDraft} otherProducts={pizzaOtherProducts} product={product} sizeName={selectedVariant?.name ?? null} onChange={setPizzaDraft} />}
+        {pizzaMissing && pizzaBuild !== null && !pizzaBuild.ok && !sizeMissing && <p role="status" className="text-sm text-text-muted">{pizzaBuild.message}</p>}
         {halvesActive && <div className="grid gap-3 sm:grid-cols-2" aria-label="Mitad y mitad">
           {(["half-a", "half-b"] as const).map((half) => <HalfColumn key={half} half={half} draft={half === "half-a" ? halves.a : halves.b}
             flavorGroup={flavorGroup} extraGroup={extraGroup} excludable={excludableIngredients}
@@ -254,13 +302,18 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
         <p className="text-sm font-semibold">{visibleEstimate.label}: {visibleEstimate.minor === null ? "se confirma al agregar" : formatMinorUnits(visibleEstimate.minor, currency)}</p>
         {visibleEstimate.taxMinor !== null && visibleEstimate.taxMinor > 0 &&
           <p className="text-xs text-text-muted">Incluye IVA {formatMinorUnits(visibleEstimate.taxMinor, currency)}</p>}
+        {pizzaActive && serverEstimate !== null && serverEstimate.key === quoteKey && serverEstimate.value.modifiers.some((modifier) => modifier.unitPriceMinor > 0) &&
+          <ul className="mt-1 grid gap-0.5 text-xs text-text-muted" aria-label="Cargos de la pizza">
+            {serverEstimate.value.modifiers.filter((modifier) => modifier.unitPriceMinor > 0).map((modifier) => <li key={`${modifier.groupId}:${modifier.optionId}`}>
+              {modifier.name} +{formatMinorUnits(modifier.unitPriceMinor * modifier.quantity, currency)}</li>)}
+          </ul>}
         {quoteKey !== null && catalogConflictKey === quoteKey && <p className="text-xs text-error">El menú cambió, recarga.</p>}
       </div>
       {error && <p role="alert" className="mx-4 rounded-lg bg-error-bg p-3 text-sm">{error}</p>}
       {confirmed && <p role="status" aria-live="polite" className="mx-4 rounded-lg bg-success-bg px-3 py-2 text-sm font-semibold text-text">
         {confirmedTotalMinor === null ? (initialLine ? "Guardado" : "Agregado") : `${initialLine ? "Guardado" : "Agregado"} · ${formatMinorUnits(confirmedTotalMinor, currency)}`}
       </p>}
-      <footer className="flex flex-wrap items-center gap-3 border-t border-border p-4">
+      <footer className="flex flex-wrap items-center gap-3 border-t border-border px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pb-3">
         <div className="flex items-center gap-2">
           <button type="button" className={bigButton} aria-label="Menos" disabled={busy || confirmed || lockSelection || quantity <= 1}
             onClick={() => setQuantity((current) => Math.max(1, current - 1))}>−</button>
@@ -269,10 +322,10 @@ export function ProductSheet({ product, scope, catalogVersion, quoteLine, groups
             onClick={() => setQuantity((current) => Math.min(CAPTURE_SELECTION_LINE_MAX_QUANTITY, current + 1))}>+</button>
         </div>
         <span className="grow" />
-        <button type="button" className="min-h-11 min-w-11 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50" disabled={busy || confirmed || !allValid || sizeMissing || halvesMissing}
-          onClick={() => onAdd(quantity, groupDrafts, note.trim().length === 0 ? null : note.trim(), variantId, lineFraction)}>
+        <button type="button" className="min-h-11 min-w-11 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50" disabled={busy || confirmed || !allValid || sizeMissing || halvesMissing || pizzaMissing}
+          onClick={() => onAdd(quantity, groupDrafts, note.trim().length === 0 ? null : note.trim(), variantId, lineFraction, pizzaLine)}>
           {busy ? busyLabel : confirmed ? (confirmedTotalMinor === null ? "Agregado" : `Agregado · ${formatMinorUnits(confirmedTotalMinor, currency)}`)
-            : sizeMissing ? "Elige un tamaño" : halvesMissing ? (halvesValidation.message ?? "Elige los dos sabores") : !allValid ? "Completa lo obligatorio" : addLabel ?? (initialLine ? "Guardar cambios" : "Agregar")}
+            : sizeMissing ? "Elige un tamaño" : pizzaBuild !== null && !pizzaBuild.ok ? pizzaBuild.message : halvesMissing ? (halvesValidation.message ?? "Elige los dos sabores") : !allValid ? "Completa lo obligatorio" : addLabel ?? (initialLine ? "Guardar cambios" : "Agregar")}
         </button>
       </footer>
     </div>
