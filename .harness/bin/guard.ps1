@@ -2,6 +2,7 @@
 .SYNOPSIS
   Hook de Claude Code que obliga a delegar. Lo registra install.ps1 en .claude/settings.json del proyecto.
   - UserPromptSubmit: si el mensaje del usuario contiene OVERRIDE, levanta el límite para esta sesión.
+    Si la cola tiene tareas sin terminar o una ALERTA, añade al contexto la salida de status.ps1.
   - PreToolUse (Edit|Write|MultiEdit|NotebookEdit): suma las líneas que la sesión escribe en archivos de código
     y, pasado config.guard.maxLines, niega la edición con instrucciones para delegar a codex/gemini.
   Archivos del harness, .claude/ y Markdown no cuentan (cola, notas, handoff, briefs).
@@ -54,6 +55,19 @@ if ($in.hook_event_name -eq 'UserPromptSubmit') {
         $st | Add-Member fableWarned $true -Force; Save
       }
     }
+  }
+  # cola: si hay tareas sin terminar o una ALERTA, el orquestador debe verlo al empezar el turno
+  $sf = Join-Path $stateDir 'status.json'
+  $need = Test-Path (Join-Path $stateDir 'ALERT')
+  if (-not $need -and (Test-Path $sf)) {
+    try {
+      $sj = Get-Content $sf -Raw -Encoding UTF8 | ConvertFrom-Json
+      $need = @($sj.tasks | Where-Object { $_.status -notin @('done','failed') }).Count -gt 0
+    } catch { $need = $false }
+  }
+  if ($need -and (Test-Path (Join-Path $PSScriptRoot 'status.ps1'))) {
+    $sl = @(& (Join-Path $PSScriptRoot 'status.ps1') -MaxLines 12 2>$null)
+    if ($sl.Count) { $msgs += "agent-harness (cola):`n" + ($sl -join "`n") }
   }
   if ($msgs) { @{ hookSpecificOutput = @{ hookEventName = 'UserPromptSubmit'; additionalContext = ($msgs -join "`n") } } | ConvertTo-Json -Compress -Depth 5 }
   exit 0

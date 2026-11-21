@@ -30,7 +30,8 @@
                                               },
                                    "parallel":  true
                                },
-                  "fallback_note":  "Carril extra de una tarea de codex: dsh (OpenCode Go, solo deepseek-v4.1-flash). parallel=true: si la cuenta de codex está ocupada en la ola, la tarea va a dsh; sin cuota de codex, todo va a dsh. Quitar fallback para esperar al reset."
+                  "fallback_note":  "Carril extra de una tarea de codex: dsh (OpenCode Go, solo deepseek-v4.1-flash). parallel=true: si la cuenta de codex está ocupada en la ola, la tarea va a dsh; sin cuota de codex, todo va a dsh. Quitar fallback para esperar al reset.",
+                  "stallMin":  10
               },
     "gemini":  {
                    "models":  {
@@ -47,7 +48,8 @@
                                   "fast":  "haiku",
                                   "default":  "sonnet",
                                   "strong":  "opus"
-                              }
+                              },
+                   "stallMin":  10
                },
     "resultMaxLines":  15,
     "guard":  {
@@ -77,7 +79,7 @@
                                "review":  "z-ai/glm-5.3",
                                "vision":  "qwen/qwen3.8-omni-flash"
                            },
-                "note":  "DeepSeek Harness headless vía OpenRouter (se paga por token, sin cuota de 5 h). Clave: la de dsh (Ajustes → Modelos), no la variable de entorno. US$/M entrada-salida (nov 2026): fast 0.03/0.13, default 0.15/0.60, strong 0.11/4.44, max 2/10, review 0.07/1.40, vision 0.15/0.47. Pon un límite de crédito a la clave en openrouter.ai. worktreeDir vacío = %USERPROFILE%\\harness-wt\\\u003cproyecto\u003e.",
+                "note":  "SOLO aplica con provider=openrouter (hoy NO: se usa opencodego, cuota ya pagada, uso libre). DeepSeek Harness headless vía OpenRouter (se paga por token, sin cuota de 5 h). Clave: la de dsh (Ajustes → Modelos), no la variable de entorno. US$/M entrada-salida (nov 2026): fast 0.03/0.13, default 0.15/0.60, strong 0.11/4.44, max 2/10, review 0.07/1.40, vision 0.15/0.47. Pon un límite de crédito a la clave en openrouter.ai. worktreeDir vacío = %USERPROFILE%\\harness-wt\\\u003cproyecto\u003e.",
                 "defaultEffort":  "low",
                 "contextWindow":  128000,
                 "maxTokens":  16000,
@@ -123,5 +125,17 @@
     "tokens":  {
                    "handoffAt":  150000,
                    "note":  "guard.ps1 (UserPromptSubmit): pasados handoffAt tokens de contexto, pide al orquestador cerrar con HANDOFF.md y abrir conversación nueva; avisa una vez si el orquestador corre en Fable."
-               }
+               },
+    "eta":  {
+                "defaults":  {
+                                 "dsh":  15,
+                                 "codex":  20,
+                                 "gemini":  15,
+                                 "claude":  10
+                             },
+                "slowFactor":  1.5,
+                "killFactor":  3,
+                "drainIdleMin":  15,
+                "note":  "Minutos estimados por defecto si enqueue/agent no reciben -EtaMin. lento = eta*slowFactor; drain corta = eta*killFactor+5 o heartbeat inactivo drainIdleMin."
+            }
 }

@@ -3,6 +3,8 @@
 ## Objetivo
 <una o dos frases: qué debe quedar hecho>
 
+Tiempo estimado: <N> min (si te pasas mucho, cierra con informe 'partial' en vez de seguir sin fin)
+
 ## Alcance
 - Archivos/carpetas: <rutas>
 - Permitido: <leer / editar estos archivos / ejecutar tests>

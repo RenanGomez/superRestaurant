@@ -1,4 +1,4 @@
-﻿# ORCHESTRATOR — orquestación multi-motor
+# ORCHESTRATOR — orquestación multi-motor
 
 Aplica en proyectos con `.harness/`. `AGENTS.md` (reglas del proyecto) manda sobre este archivo.
 
@@ -40,8 +40,18 @@ nunca recortar validación, manejo de errores, seguridad, tests de lógica riesg
    luego `powershell -NoProfile -File .harness/bin/drain.ps1 -Wait` **en background** (herramienta de shell con
    ejecución en segundo plano, nunca en primer plano ni con un bucle de espera propio). Con `-Wait`, si un motor se
    queda sin cuota, drain espera él mismo al reset y continúa; solo termina cuando no queda nada que esperar, y
-   **ese fin te despierta** en esta misma conversación con el resumen: entonces revisa. No programes recordatorios
-   ni sondees mientras tanto. Si drain responde "ya en marcha", otro drain ya lleva la cola: no lances otro.
+   **ese fin te despierta** en esta misma conversación con el resumen: entonces revisa. drain también termina antes
+   si una tarea falla o el vigilante la corta (deja `state/ALERT`). Si drain responde "ya en marcha", otro drain ya
+   lleva la cola: no lances otro.
+   **ETA y ward (obligatorio):** cada tarea lleva `-EtaMin <min>` (estimado justificado por tamaño y pasos; también
+   "Tiempo estimado" en el brief). Nunca cierres un turno con runs en curso sin un ward armado: `ScheduleWakeup`
+   (o `Monitor` sobre `state/status.json`/`state/ALERT`) a `min(ETA de la ola × 1.5, 20 min)`. Al despertar lee
+   **solo** `powershell -NoProfile -File .harness/bin/status.ps1` y:
+   - todo `ok` → re-arma el ward, sin molestar;
+   - `lento` (pasó la ETA) → avisa al usuario en una línea (tiempo/ETA, último output) sin que pregunte;
+   - `trabado`/`muerto`/`failed`/ALERT → mira la cola de `log.txt`, y relanza con brief corregido, escala
+     (dsh→codex) o pregunta. No esperes a que el usuario pregunte "¿cómo van?".
+   Un ward por intervalo; nada de bucles de sondeo propios.
    Run suelto (sin cola): `bin/agent.ps1` con los mismos parámetros, también en background.
 4. **Revisar** `runs/<id>/result.md` + `git diff` (en worktrees: rama `harness/<id>`). `log.txt` solo si falla.
    Todo cambio de un motor lo revisa Claude o el otro motor; correr tests del proyecto.

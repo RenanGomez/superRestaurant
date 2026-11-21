@@ -6,6 +6,8 @@
   Con -Wait no termina: espera él mismo al reset y sigue, y solo sale cuando ya no queda nada que esperar.
   Así, lanzado en background desde una conversación, su salida DESPIERTA a esa misma conversación al acabar
   (la tarea de Windows queda solo como respaldo por si la app se cierra).
+  Vigila el heartbeat de cada run (lento/trabado), escribe .harness/state/status.json y, ante fallo,
+  .harness/state/ALERT; con -Wait termina tras la ola en curso para despertar al orquestador.
   Resumen en .harness/state/drain.md.
 .EXAMPLE
   powershell -NoProfile -File .harness/bin/drain.ps1 -Wait     # desde la conversación, en background
@@ -19,6 +21,13 @@ $cfg     = Get-Content (Join-Path $harness 'config.json') -Raw -Encoding UTF8 | 
 $maxPar  = if ($cfg.queue -and $cfg.queue.maxParallel) { [int]$cfg.queue.maxParallel } else { 2 }
 $qDir    = Join-Path $harness 'queue'
 $stateDir = Join-Path $harness 'state'; New-Item -ItemType Directory -Force $stateDir, $qDir | Out-Null
+$runsDir  = Join-Path $harness 'runs'
+$statusFile = Join-Path $stateDir 'status.json'
+$alertFile  = Join-Path $stateDir 'ALERT'
+$slowFactor = if ($cfg.eta -and $cfg.eta.slowFactor)    { [double]$cfg.eta.slowFactor }    else { 1.5 }
+$killFactor = if ($cfg.eta -and $cfg.eta.killFactor)    { [double]$cfg.eta.killFactor }    else { 3 }
+$idleLimit  = if ($cfg.eta -and $cfg.eta.drainIdleMin)  { [double]$cfg.eta.drainIdleMin }  else { 15 }
+$drainPid   = $PID
 $taskPath = '\agent-harness\'
 $taskName = "$(Split-Path $root -Leaf)-drain" -replace '[^\w.-]', '_'
 if ($Resumed) { Unregister-ScheduledTask -TaskPath $taskPath -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
@@ -63,9 +72,78 @@ function Overlap($a, $b) {   # prefijos de ruta en común = mismos archivos
     if ($x2 -eq $y2 -or $x2.StartsWith("$y2/") -or $y2.StartsWith("$x2/")) { return $true } } }
   return $false
 }
+function EtaOf($t) {
+  if ($t.PSObject.Properties['eta_min'] -and [double]$t.eta_min -gt 0) { return [double]$t.eta_min }
+  if ($cfg.eta -and $cfg.eta.defaults) {
+    $d = $cfg.eta.defaults.PSObject.Properties[$t.engine]
+    if ($d -and [double]$d.Value -gt 0) { return [double]$d.Value }
+  }
+  return 15.0
+}
+function ReadBeat($t) {
+  $f = Join-Path $runsDir "$($t.id)\heartbeat.json"
+  if (-not (Test-Path $f)) { return $null }
+  # heartbeat de un intento anterior: no vale para vigilar este run
+  if ($t.started_at -and (Get-Item $f).LastWriteTime -lt [datetime]$t.started_at) { return $null }
+  try {
+    $b = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($b.id -and "$($b.id)" -ne "$($t.id)") { return $null }
+    return $b
+  } catch { $null }
+}
+function Alert($id, $why) {
+  [IO.File]::AppendAllText($alertFile, "$(Get-Date -Format 'yyyy-MM-dd HH:mm') $id — $why`n", $utf8)
+}
+function SetBlocked($t, $why) {
+  $rp  = if ($cfg.paths -and $cfg.paths.result) { $cfg.paths.result } else { '.harness/runs/{id}/result.md' }
+  $res = Join-Path $root ($rp -replace '\{id\}', $t.id)
+  New-Item -ItemType Directory -Force (Split-Path $res) | Out-Null
+  $old = if (Test-Path $res) { Get-Content $res -Raw -Encoding UTF8 } else { '' }
+  [IO.File]::WriteAllText($res, "blocked — watchdog drain: $why`n`n$old", $utf8)
+}
+function SaveStatus {
+  $now = Get-Date
+  $tasks = foreach ($t in @(Load)) {
+    $beat = ReadBeat $t
+    $eta  = EtaOf $t
+    $started = $t.PSObject.Properties['started_at'] -and $t.started_at
+    $el = if ($t.status -ne 'pending' -and $started) { [math]::Round(($now - [datetime]$t.started_at).TotalMinutes, 1) } else { 0 }
+    $idle = if ($beat -and $null -ne $beat.idle_min) { [math]::Round([double]$beat.idle_min, 1) } else { 0 }
+    $out  = if ($beat -and $beat.last_output) { "$($beat.last_output)" } else { '' }
+    $health = 'ok'
+    if ($t.status -eq 'done') { $health = 'done' }
+    elseif ($t.status -eq 'unverified') { $health = 'failed' }
+    elseif ($t.status -eq 'failed') { $health = if ("$($t.outcome)" -match 'watchdog') { 'trabado' } else { 'failed' } }
+    elseif ($t.status -eq 'running') {
+      if ($t.pid -and -not (Get-Process -Id $t.pid -ErrorAction SilentlyContinue)) { $health = 'muerto' }
+      elseif ($idle -gt $idleLimit -or $el -gt ($eta * $killFactor + 5)) { $health = 'trabado' }
+      elseif ($el -gt $eta * $slowFactor) { $health = 'lento' }
+    }
+    [ordered]@{ id = $t.id; engine = $t.engine; status = $t.status; health = $health
+                elapsed_min = $el; eta_min = $eta; idle_min = $idle; last_output = $out }
+  }
+  $obj = [ordered]@{ updated = $now.ToString('s'); drain_pid = $drainPid; tasks = @($tasks) }
+  $tmp = "$statusFile.tmp"
+  [IO.File]::WriteAllText($tmp, ($obj | ConvertTo-Json -Depth 5), $utf8)
+  try { Move-Item -Force $tmp $statusFile } catch { Start-Sleep -Milliseconds 200; Move-Item -Force $tmp $statusFile }
+}
 
 $log = New-Object System.Collections.Generic.List[string]
 $deadline = (Get-Date).AddHours($MaxWaitHours)
+
+# ALERTA de un drain anterior ya leída por el orquestador (el resumen queda en drain.md):
+# si queda algo que revisar, esta corrida nueva lo vuelve a detectar y escribe su propia ALERTA.
+Remove-Item $alertFile -ErrorAction SilentlyContinue
+# huérfanas de un drain caído: running cuyo proceso ya no existe → pending (respetando el lock de arriba)
+foreach ($t in @(Load | Where-Object { $_.status -eq 'running' })) {
+  if ($t.pid -and (Get-Process -Id $t.pid -ErrorAction SilentlyContinue)) { continue }
+  $why = if ($t.pid) { "pid $($t.pid) ya no existe" } else { 'sin pid registrado' }
+  $t.status = 'pending'; $t.outcome = "huérfana de drain caído ($why); relanzada"
+  Save $t
+  $log.Add("- $($t.id): huérfana ($why) → pending")
+}
+SaveStatus
+
 try {
  while ($true) {      # una ronda por cada reset de cuota que se espera (-Wait); sin -Wait, una sola
   while ($true) {
@@ -96,7 +174,8 @@ try {
 
     $procs = foreach ($t in $wave) {
       $a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSScriptRoot\agent.ps1`"",'-NoSchedule',
-             '-Engine',$t.engine,'-Id',"`"$($t.id)`"",'-Model',"`"$($t.model)`"")
+             '-Engine',$t.engine,'-Id',"`"$($t.id)`"",'-Model',"`"$($t.model)`"",
+             '-EtaMin',(EtaOf $t).ToString([Globalization.CultureInfo]::InvariantCulture))
       if ($t.effort)   { $a += @('-Effort',$t.effort) }
       if ($t.runAccount) { $a += @('-Account',$t.runAccount) }
       if ($t.write)    { $a += '-Write' }
@@ -107,27 +186,85 @@ try {
         if ($dirty) { $log.Add("- $($t.id): sin worktree ($($dirty.Count) cambios sin commitear en sus rutas); escribe en la carpeta") }
         else { $a += '-Worktree' }
       }
-      $t.status = 'running'; $t.attempts++; Save $t
-      @{ t = $t; p = (Start-Process powershell.exe -ArgumentList ($a -join ' ') -WorkingDirectory $root -WindowStyle Hidden -PassThru) }
+      $t.status = 'running'; $t.attempts++
+      $t | Add-Member started_at (Get-Date).ToString('s') -Force
+      Save $t
+      $p = Start-Process powershell.exe -ArgumentList ($a -join ' ') -WorkingDirectory $root -WindowStyle Hidden -PassThru
+      $t | Add-Member pid $p.Id -Force; Save $t
+      @{ t = $t; p = $p; slowNoted = $false; killed = $false }
     }
-    foreach ($x in $procs) {
-      while (-not $x.p.WaitForExit(60000)) { (Get-Item $lock).LastWriteTime = Get-Date }   # latido del lock
-      $t = $x.t; $code = $x.p.ExitCode
-      $rp  = if ($cfg.paths -and $cfg.paths.result) { $cfg.paths.result } else { '.harness/runs/{id}/result.md' }
-      $res = Join-Path $root ($rp -replace '\{id\}', $t.id)
-      $line = if (Test-Path $res) { (Get-Content $res -Encoding UTF8 | Where-Object { $_ -and $_ -notmatch '^#' } | Select-Object -First 1) } else { '' }
-      if ($code -eq 75) { $t.status = 'pending'; $t.attempts-- }        # cuota: vuelve a la cola, no cuenta intento
-      elseif ($code -eq 0 -and $line -notmatch '^\s*blocked') {
-        # sin bloque de evidencia o con NO VERIFICADO → el orquestador debe comprobarlo antes de darlo por hecho
-        $body = if (Test-Path $res) { Get-Content $res -Raw -Encoding UTF8 } else { '' }
-        $t.status = if ($body -match '```' -and $body -notmatch 'NO VERIFICADO') { 'done' } else { 'unverified' }
+    # espera con vigilante: cada 30 s revisa proceso y heartbeat de TODA la ola (no uno tras otro)
+    $active = [System.Collections.ArrayList]@($procs)
+    $halt = $false
+    while ($active.Count -gt 0) {
+      $reaped = @()
+      foreach ($x in @($active)) {
+        $t = $x.t
+        $alive = Get-Process -Id $x.p.Id -ErrorAction SilentlyContinue
+        if ($x.p.HasExited -or -not $alive) {          # terminó (o su pid desapareció): no dejarlo running
+          try { $null = $x.p.WaitForExit(5000) } catch { }
+          $reaped += $x; continue
+        }
+        $beat = ReadBeat $t
+        $eta  = EtaOf $t
+        $el   = if ($t.started_at) { ((Get-Date) - [datetime]$t.started_at).TotalMinutes } else { 0 }
+        $idle = if ($beat -and $null -ne $beat.idle_min) { [double]$beat.idle_min } else { 0 }
+        if ($idle -gt $idleLimit -or $el -gt ($eta * $killFactor + 5)) {
+          $why = if ($idle -gt $idleLimit) { "heartbeat inactivo $([math]::Round($idle,0)) min (> $idleLimit)" }
+                 else { "elapsed $([math]::Round($el,0)) min > eta $eta x $killFactor + 5" }
+          & taskkill.exe /PID $x.p.Id /T /F *> $null
+          SetBlocked $t $why
+          $t.status = 'failed'; $t.outcome = "blocked — watchdog drain: $why"; Save $t
+          Alert $t.id "watchdog: $why"
+          $log.Add("- $($t.id) trabado → failed (watchdog: $why)")
+          $x.killed = $true; $halt = $true; $reaped += $x
+        }
+        elseif ($el -gt $eta * $slowFactor -and -not $x.slowNoted) {
+          $x.slowNoted = $true
+          [IO.File]::AppendAllText((Join-Path $stateDir 'drain.md'), "- $(Get-Date -Format 'HH:mm') $($t.id): lento — elapsed $([math]::Round($el,0)) min > eta $eta x $slowFactor`n", $utf8)
+        }
       }
-      else { $t.status = 'failed' }
-      $lane = $t.runLane
-      $t.PSObject.Properties.Remove('runAccount'); $t.PSObject.Properties.Remove('runLane')
-      $t.outcome = "$line".Trim(); Save $t
-      $log.Add("- $($t.id) [$lane] → $($t.status) (exit $code): $($t.outcome)")
+      foreach ($x in $reaped) {
+        $null = $active.Remove($x)
+        if ($x.killed) { continue }
+        $t = $x.t; $code = -1; try { $code = $x.p.ExitCode } catch { }
+        $rp  = if ($cfg.paths -and $cfg.paths.result) { $cfg.paths.result } else { '.harness/runs/{id}/result.md' }
+        $res = Join-Path $root ($rp -replace '\{id\}', $t.id)
+        $line = if (Test-Path $res) { (Get-Content $res -Encoding UTF8 | Where-Object { $_ -and $_ -notmatch '^#' } | Select-Object -First 1) } else { '' }
+        if ($code -eq 75) { $t.status = 'pending'; $t.attempts-- }        # cuota: vuelve a la cola, no cuenta intento
+        elseif ($code -eq 0 -and $line -notmatch '^\s*blocked') {
+          # sin bloque de evidencia o con NO VERIFICADO → el orquestador debe comprobarlo antes de darlo por hecho
+          $body = if (Test-Path $res) { Get-Content $res -Raw -Encoding UTF8 } else { '' }
+          $t.status = if ($body -match '```' -and $body -notmatch 'NO VERIFICADO') { 'done' } else { 'unverified' }
+        }
+        else { $t.status = 'failed' }
+        $lane = $t.runLane
+        $t.PSObject.Properties.Remove('runAccount'); $t.PSObject.Properties.Remove('runLane')
+        $t.outcome = "$line".Trim(); Save $t
+        $log.Add("- $($t.id) [$lane] → $($t.status) (exit $code): $($t.outcome)")
+        if ($t.status -eq 'failed' -or $t.status -eq 'unverified') {
+          Alert $t.id "$($t.status): $($t.outcome)"
+          $halt = $true
+        }
+      }
+      SaveStatus
+      if ($active.Count -gt 0) { Start-Sleep 30; (Get-Item $lock).LastWriteTime = Get-Date }   # latido del lock
     }
+    # fallo/trabado/unverified: no esperar resets ni lanzar más olas; el orquestador debe enterarse
+    if ($halt) { break }
+  }
+
+  if ($halt) {
+    $all = @(Load)
+    $todo = @($all | Where-Object { $_.status -eq 'pending' } | ForEach-Object { $_.id })
+    $sum = "# drain $(Get-Date -Format 'yyyy-MM-dd HH:mm')`n" + ($log -join "`n") + "`n`n" +
+      "ALERTA: hay tareas failed/trabado o unverified; drain se detiene para que el orquestador revise (.harness/state/ALERT).`n" +
+      "Cola: " + (($all | Group-Object status | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ' ') + "`n" +
+      "Quedan pending: " + ($(if ($todo) { $todo -join ', ' } else { 'ninguna' })) + "`n"
+    [IO.File]::AppendAllText((Join-Path $stateDir 'drain.md'), "$sum`n`n", $utf8)
+    Unregister-ScheduledTask -TaskPath $taskPath -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    $sum
+    break
   }
 
   # lo que queda esperando cuota → un único relanzamiento al primer reset
@@ -154,7 +291,7 @@ try {
   # -Wait: dormir hasta el reset (con latido en el lock) y hacer otra ronda; la tarea de Windows es el respaldo
   if ($Wait -and $resets -and $at -lt $deadline) {
     "[$(Get-Date -Format 'HH:mm')] esperando cuota hasta $($at.ToString('yyyy-MM-dd HH:mm'))…"
-    while ((Get-Date) -lt $at) { Start-Sleep 60; (Get-Item $lock).LastWriteTime = Get-Date }
+    while ((Get-Date) -lt $at) { Start-Sleep 60; (Get-Item $lock).LastWriteTime = Get-Date; SaveStatus }
     $log.Add("- (reanudado tras esperar cuota hasta $($at.ToString('HH:mm')))")
     continue
   }
@@ -175,6 +312,7 @@ try {
  }
 } finally {
   Remove-Item $lock -ErrorAction SilentlyContinue
+  $drainPid = $null; try { SaveStatus } catch { }    # última foto: sin drain activo
   # cerrar lo que los motores dejaron corriendo (servidores, watchers, Godot...); ver ORCHESTRATOR.md "Limpieza"
   & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\cleanup.ps1" -Since $drainStart | Where-Object { $_ -ne 'nada abierto' }
 }

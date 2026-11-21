@@ -1,0 +1,80 @@
+{
+  "prep-start": {
+    "s": "ok",
+    "t": "2026-11-20T01:16:52.198Z",
+    "n": "Correcto todo."
+  },
+  "prep-e2e": {
+    "s": "ok",
+    "t": "2026-11-20T01:17:16.171Z"
+  },
+  "cap-ticket": {
+    "n": "Todo en orden, pero si por 390x844 te refieres al view mobile, tambien se puede, pero la interfaz esta muy angosta debido a la barra lateral que se mantiene alli innecesariamente, la interfaz mobile necesita un rework para parecerse mas a lo que es uber eats.\n\nEn Captura Menu\n1 aparecen las secciones, bebidas, pizzas y postres con color pero no aparecen con imagenes, lo ideal es que las imagenes carguen aqui tambien para que la seleccion sea mas visual y no tener que estar leyendo\n2 La opcion de sabores deberia poder elegirse sin sabores, ya que se puede crear el producto pizza personalizada donde \nAlgunas modificaciones en el armado de menu/producto/sabores/ingredientes/extras:\n\n1. Un producto puede ser pizza, boneles, papas, bebidas, postres.\n2. Una pizza puede ser personalizada o especialidad (sabores)\n3. Una pizza personalizada trae como minimo 2 ingredientes gratuitos (esto debe ser configurable en el producto, cuantos ingredientes gratuitos puede traer)\n4. Para una pizza personalizada, todo ingrediente adicional por encima de los establecidos como gratuitos cuesta\n5. Si una pizza se elige mitad y mitad el limite de ingredientes gratuitos sigue siendo el mismo\n\n6. Hay que cambiar la manera en la que se configura un producto en el menu.\n1. En la configuracion de producto al elegir cuales grupos de modificadores base que traera la pizza deben aparecer debajo dichos ingredientes para poder armar la especialidad, independientemente de si se permiten mitades o no.\n\n2. abajo como ya pasa, salen la lista de ingredientes disponibles, en vez de que diga: ingredientes que no se pueden quitar, deberia decir, \"grupo de ingredientes para especialidad\" aquí se deberán seleccionar los ingredientes que esta especialidad trae por default, una especialidad puede traer una cantidad preconfigurada de ingredientes que no se cobraran extra pues ya vienen incluidos en el precio, antes del grupo de botones check para elegir ingredientes deberia traer un check de \"personalizar durante la orden\" eso deseleccionara cualquier ingrediente seleccionado y podra en gris todos los ingredientes de ese grupo indicando que no hace falta seleccionarlos y que se podran elegir al momento de hacer la orden.\n\n\nAdemas debe trae Grupo de ingredientes extra, alli debe ser un grupo de botones check donde se podra volver a elegir el mismo grupo de ingredientes que ya se selecciono previamente, y grupos adicionales \n\nvamos con un ejemplo, el usuario quiere configurar una pizza que ya trae: Peperoni, champiñon, aceituna negra y pimiento verde. En la configuracion del producto le llama Pizza Italiana y chorizo, y cuesta 150, ademas agrega Grupo de modificadores base, selecciona del grupo de botones check los ingredientes de pizza, se abrira el grupo de botones check para ese grupo de modificadores, ninguno de esos tendra coste adicional. \nAdemas puede elegir grupo de modificadores extra\nAqui se pueden elegir otro tipo de modificadores que siempre se cobran como extra, selecciono orillas y aderezos,etc\n\n\n",
+    "s": "ok",
+    "t": "2026-11-20T01:25:43.189Z"
+  },
+  "cap-cash": {
+    "s": "ok",
+    "t": "2026-11-20T01:26:15.690Z",
+    "n": "Todo funciona correcto"
+  },
+  "cap-instr": {
+    "n": "Correcto",
+    "s": "ok",
+    "t": "2026-11-20T01:28:36.664Z"
+  },
+  "cap-keys": {
+    "s": "fail",
+    "t": "2026-11-20T01:29:43.094Z",
+    "n": "N no pasa nada\nalt+N no pasa nada (aunque lo probe en una captura activa)\nalt+K no pasa nada \nEscape no pasa nada\nAlt+R no pasa nada"
+  },
+  "cap-cust": {
+    "n": "Aqui dato importante\n1. Cuando un cajero pondre una orden normalmente no quiere tener que buscar al cliente en captura, y si no existe regresar a cliente para hacer una captura rapida, lo ideal es que si al momento de buscar a un cliente en captura el cliente no se encuentra, alli mismo ofrezca la opcion de captura rapida.\n2. Grabe un nuevo cliente con el numero 6622900622 con el Nombre Carolina y cuando busco el numero 6622751352 me sale tanto Emmanuel Gomez como Carolina con el numero 6622751352,\n3. Cuando se está agregando una direccion y se escribe un numero al presionar tab uno esperaría que salte al siguiente input, en vez de eso, se selecciona el \"?\" siguiente, eso no deberia pasar, los tabs deben saltar al input, dropdown, checkbos, boton, etc pero nunca a un \"?\" \n4. En captura al, Cuando se agrega una direccion que no es valida, luego se edita dicha direccion por una valida, sigue marcando que no es valida y no permite modificarla\n5. Si se refresca la pagina o se regres a Captura, luego se retoma una orden a medias, la direccion deja de aparecer, en la parte de abajo donde dice 5. Confirmar, dice Falta guardar una dirección validada para confirmar el domicilio. y justo viene un boton de ir a la direccion, me manda a la parte de arriba de la pagina pero no hay direcciones a pesar de que ese cliente tiene guardadas dos, y hace falta volver a escribir el numero del cliente o su domiclio para que carguen esos datos de nuevo.\n6. El boton directorio me manda a clientes con la busqueda en blanco (sin resultados y sin cliente seleccionado), pero yo ya estaba en una captura con un cliente, deberia ser inteligente y abrir el cliente que ya tenia seleccionado en la captura\n7. En las direcciones, la nueva direccion agregada me aparece como Revisada para sucursal pero aqui no me marca error. Pero cuando intento seleccionarla en Captura usar esta direccion me sale como fuera de cobertura y no se en que se basa para decir eso.\n8. Si se abre una nueva captura y no se selecciona a un cliente o si no se agregan productos a la orden esta no deberia guardarse no tiene sentido.\n9. En borradores recuperables se muestra la orden de captura y el ID del borrador en la tarjeta de borrador, no tiene sentido, no es un dato que el cajero o el encargado de leer las ordenes le sirva solo contamina la parte visual.\n10. Remueve el ID del borradro, y la version del mismo de la parte de arriba, mandalo hasta abajo de la seccion captura telefonica, no es un dato relevante para el cajero.\n11. Correccion del punto 7 aparenetemente ya ninguna direccion es valida.\n12. La barra de busqueda muestra opciones debajo del input y esas opciones se mantienen alli incluso despues de haber seleccionado una de las opciones, algo mas correcto seria que la barra de busqueda mostrara opciones en tiempo real en forma de drop down no como parte de la propia pagina, agregando un throtle para que solo de opciones 0.5 segundos despues de que el usuario deja de typear.",
+    "s": "fail",
+    "t": "2026-11-20T02:00:53.141Z"
+  },
+  "menu-drag": {
+    "s": "ok",
+    "t": "2026-11-20T02:00:49.794Z",
+    "n": "Todo correcto."
+  },
+  "menu-cat": {
+    "n": "1. Permite que se pueda ajustar el coom in, zoom out y area de la foto subida\n2. cada que se sube una foto se replica la primera que ya estaba alli, la nueva no aparece hasta que se elige una 3ra, ejemplo ya estaba cargada una foto de pizzas, luego la reemplace por otra pizza y aparecio en fotos ya usadas en este menu la pizza que ya estba inicialmente 2 veces, luego cargue una foto de bebidas, y se agrego la 2da foto cargada pero no la de bebidas, luego agregue una 3ra imagen y solo alli se agrego la imagen de bebidas dentro de las ya usadas.\n3. Fotos ya usadas de esta categoria y fotos quitadas de esta categoria es redundante, solo dejala como \"fotos recientes\", esta bien que se auto guarde, pero el hecho de que no haya un boton de guardar aqui puede resultar un poco confuso.\nCarga foto, reemplazar foto, quitar foto, elegir color y elegir foto dentro de las recientes funciona correctamente.",
+    "s": "ok",
+    "t": "2026-11-20T02:09:49.187Z"
+  },
+  "menu-dup": {
+    "n": "Esta bien, solo que la posicion del boton duplicar esta fuera de lugar me parece. Mejor en vez del boton duplicar, check de activo, y boton remover, agrega un boton de 3 puntos como de settings, al darle click deben aparecen las 3 opciones: duplicar, archivar, o quitar. Ese boton debe estar en la misma posicion actual boton quitar\nArchivar sirve como activo, si esta archivada esta inactiva, Hasta abajo detodos los productos, debe haber una seccion para archivados, que esta colapsada por default. Si en archivado se da click en los 3 puntitos debe mostrar la opcion desarchivar.\nQuitar literalmente borra el producto, pero debe pedir una confirmacion con un modal de la propia pagina.",
+    "s": "ok",
+    "t": "2026-11-20T02:16:34.397Z"
+  },
+  "menu-prod": {
+    "n": "Impuesto ok, mitades tambien, tamaño  no, ya que en el tab de seleccion de tamaño puedes preconfigurar tamaños, y en el producto cuando se elige un tamaño hay un drop down donde eliges el tamaño y la derecha se escribe el nombre del tamaño que es el mismo que se configuro, no tiene sentido es redundante, mejor elimina el tab de tamaños y presets y deja que cada producto configure sus tamaños desde la configuracion del producto.",
+    "s": "ok",
+    "t": "2026-11-21T05:42:57.910Z"
+  },
+  "menu-groups": {
+    "s": "ok",
+    "t": "2026-11-20T03:15:36.943Z",
+    "n": "Correcto"
+  },
+  "menu-draft": {
+    "s": "ok",
+    "t": "2026-11-20T03:16:17.996Z",
+    "n": "Correcto"
+  },
+  "menu-locked": {
+    "s": "ok",
+    "t": "2026-11-20T03:16:30.134Z",
+    "n": "Ok pero vamos a remover esta opcion ya lo puse dentro de otra fase."
+  },
+  "r2-cap-ticket": {
+    "n": "1. OK se ve la barra inferior, y todo esta mejor acomodado\n2. OK\n3. Ok\n4. CASI pero dejaste el armado de especialidades como si fuera exclusivo de pizza por mitades, dejaste el check de permitir mitades, y luego agregaste un hypervinculo (boron sin formato) de configurar pizza por mitades lo cual es redundante. Ese boton deberia llamarse Configurar especialidades\n5. En esa seccion erronea de configurar pizza por mitades, que deberia ser \"configurar especialidades\" no deberia haber un segundo selector de ingredientes, para eso esta el drop down de grupo de modificadores, alli es donde se agregan los ingredientes y abajo deberian aparecer el grupo de checkbuttons de cada grupo de modificadores para que el usuario pueda elegir la configuracion deseada de ingredientes dentro de todos los grupos seleccionados de los grupos de modificadores seleccioandor.\n6. Gestionar grupos no deberia aparecer como un boton hypivinculo sino como un boton completo\n7. Grupo de extras aparece como check el grupo no cada elemento del grupo. Es decir si en grupo de modificadores elegi orgillas, en grupo de extras aparece de nuevo orillas, en vez de aparecer los tipos de orillas dentro del grupo orillas.\n8. Cada ingrediente dentro de esos checks, debe aparece con su respectiva imagen, y cuando esta en modo mobile, debe ser una lista vertical de ingredientes, actualmente es un cluster sin orden."
+  },
+  "r2-cap-keys": {
+    "n": "N no hace nada, pero no deberia hacer nada, entonces todo bien\nALT+N solo funciona si estoy en la ventana de captura, si ya estoy alli nada me cuesta dar un click, asi que este comando es parcialmente inutil\nALT+K si funciona\nCTRL+R tambien, no estoy seguro si ALT+R funciona ya que cuando lo presiono se abre una app de radeon en mi pc y me quita el foco de la pagina\nEscape no funciona para nada."
+  },
+  "r2-cap-cust": {
+    "n": "1. Desde Captura, al momento de abrir una nueva captura, capturar rapido a un nuevo cliente, y luego ir al directorio de se cliente se va a Clientes correctamente con ese cliente seleccionado, pero en Historial Reciente deberia aparece la orden que se le acaba de crear para poder regresar rapidamente a la orden que se acaba de abrir despues de configurar la direccion.\n2. Al verificador de direcciones no le basta con calle numero y colonia, cuando trato de \"usar esta direccion\" me dice revisar direccion y no me deja seleccionarla. Me obliga a poner ciudad, estado y pais (TOTALMENTE INNECESARIO) y despues de ponerlo me sigue diciendo que sin zona en Navojoa, esta sucursal no entraga ahi, cuando es una direccion perfectamente valida, no se en que demonios se basa para validarlo pero nisiquiera es transparente en eso.\nLa creacion de zonas no deberia ser por codigo postal ya que no se le pide el codigo postal al cliente en ningun momento, en vez de eso, podemos tomar un csv de todos los codigos postales con colonias y nombres de colonias de la ciudad y precargarlas para que ya esten todas registradas y sea mas facil identificarlas por nombre de colonia y no por codigo postal.  \n2 en clientes quitar a un cliente no lo remueve realmente, desaparece temporalmente de mi vista pero refrescar la pagina lo regresa, y ademas no me pide confirmacion para quitarlo\n3 En Captura en vez de abrir \"nueva captura\" sin datos, mejor pon alli mismo la barra de \"Cliente\" \"buscar por\" y \"consulta\" que se encuentra dentro de nueva captura (y sacala esos datos de nueva captura\" de manera. Comportamiento esperado: El usuario entra a captura, busca directamente a un cliente por nombre o direccion, si lo encuentra le aparece el boton de nueva captura, si no lo encuentra la de alta rapida, una vez que se haga el alta rapida, le debe aparecer el boton de nueva captura. Cada nueva captura debe venir asignada a un cliente, y asi no se crean capturas sin cliente.  La barra de canal y cumplimiento tambien ponla fuera de nueva captura, ponla directamente en captura, esto por si la nueva captura no requiere un cliente especifico (venta de mostrador, mesa o pasar a recoger) "
+  }
+}
