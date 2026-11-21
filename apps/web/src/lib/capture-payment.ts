@@ -169,7 +169,8 @@ export function deliveryQuoteBlocksConfirm(
 ): DeliveryQuoteBlockReason {
   if (fulfillmentChannel !== "delivery") return null;
   if (quote === null) return "missing";
-  if (quote.coverageStatus === "not_covered") return "not_covered";
+  // A supervisor-authorized manual fee freezes an override alongside the not-covered quote.
+  if (quote.coverageStatus === "not_covered" && quote.override === null) return "not_covered";
   if (Date.parse(quote.expiresAt) <= now.getTime()) return "expired";
   if (!quoteMatchesRequestedTime(quote, scheduledFor)) return "time_mismatch";
   return null;

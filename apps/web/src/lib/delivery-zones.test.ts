@@ -41,17 +41,43 @@ test("match formatting uses the server fee and coverage", () => {
   const match = { schemaVersion: 1 as const, coverageStatus: "covered" as const, zoneId, zoneName: "Centro",
     feeMinor: 3500, currency: "MXN", promiseMinutes: 15,
     promiseStart: "2026-09-26T12:00:00.000Z", promiseEnd: "2026-09-26T12:15:00.000Z",
-    evaluatedAt: "2026-09-26T12:00:00.000Z" };
+    evaluatedAt: "2026-09-26T12:00:00.000Z", reason: null, matchedBy: "settlement" as const,
+    settlement: { settlementId: zoneId, name: "Centro", postalCode: "85000" } };
   assert.equal(formatDeliveryMatch(match, "es-MX"), `Zona Centro · Envío ${new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(35)} · 0-15 min`);
-  assert.equal(formatDeliveryMatch({ ...match, coverageStatus: "not_covered", zoneId: null, zoneName: null, feeMinor: 0 }, "es-MX"), "Fuera de cobertura");
+  assert.equal(formatDeliveryMatch({ ...match, coverageStatus: "not_covered", zoneId: null, zoneName: null, feeMinor: 0,
+    matchedBy: null, settlement: null }, "es-MX"), "Fuera de cobertura");
+  assert.equal(formatDeliveryMatch({ ...match, coverageStatus: "not_covered", zoneId: null, zoneName: null, feeMinor: 0,
+    matchedBy: null, settlement: null,
+    reason: { code: "settlement_outside_catalog", message: "La colonia X no está en el catálogo. El envío requiere cuota manual de un supervisor." } }, "es-MX"),
+    "La colonia X no está en el catálogo. El envío requiere cuota manual de un supervisor.");
+});
+
+test("settlement search uses the exact route, filters by scope and parses the catalog result", async () => {
+  const original = globalThis.fetch;
+  const command = { schemaVersion: 1, scope, query: "Cent", postalCode: null, limit: 20 };
+  const result = { schemaVersion: 1, scope, branch: { name: "Navojoa", locality: "Navojoa", region: "Sonora", countryCode: "MX" },
+    settlements: [{ settlementId: zoneId, name: "Centro", postalCode: "85800", settlementType: "Colonia",
+      municipality: "Navojoa", state: "Sonora", countryCode: "MX" }] };
+  try {
+    globalThis.fetch = async (url, init) => {
+      assert.equal(String(url), "https://api.example/api/v1/delivery-zones/settlements/search");
+      assert.deepEqual(JSON.parse(String(init?.body)), command);
+      return new Response(JSON.stringify(result));
+    };
+    assert.deepEqual(await requestDelivery("token", "https://api.example", "settlements/search", command), { ok: true, value: result });
+    globalThis.fetch = async () => new Response(JSON.stringify({ ...result, scope: { ...scope, branchId: zoneId } }));
+    assert.deepEqual(await requestDelivery("token", "https://api.example", "settlements/search", command), { ok: false, error: "unavailable" });
+  } finally { globalThis.fetch = original; }
 });
 
 test("match request sends address and accepts only a valid result", async () => {
   const original = globalThis.fetch;
-  const command = { schemaVersion: 1, ...scope, address: { postalCode: "85000", locality: "Navojoa" } };
+  const command = { schemaVersion: 1, ...scope, address: { settlementId: null, neighborhood: null,
+    postalCode: "85000", locality: "Navojoa", settlementOutsideCatalog: false } };
   const result = { schemaVersion: 1, coverageStatus: "covered", zoneId, zoneName: "Centro", feeMinor: 3500,
     currency: "MXN", promiseMinutes: 15, promiseStart: "2026-09-26T12:00:00.000Z",
-    promiseEnd: "2026-09-26T12:15:00.000Z", evaluatedAt: "2026-09-26T12:00:00.000Z" };
+    promiseEnd: "2026-09-26T12:15:00.000Z", evaluatedAt: "2026-09-26T12:00:00.000Z",
+    reason: null, matchedBy: "settlement", settlement: { settlementId: zoneId, name: "Centro", postalCode: "85000" } };
   try {
     globalThis.fetch = async (url, init) => {
       assert.equal(String(url), "https://api.example/api/v1/delivery-zones/match");
@@ -106,7 +132,7 @@ test("zone list and CAS upsert validate exact scope and replay version", async (
     feeMinor: 2500, currency: "MXN", active: true, version: 1, updatedAt: "2026-09-26T12:00:00.000Z" };
   const list = { schemaVersion: 1, scope: { kind: "branch", ...scope }, zones: [zone] };
   const command = { schemaVersion: 1, scope, zoneId, expectedVersion: 0, name: zone.name,
-    postalCodes: zone.postalCodes, localities: zone.localities, feeMinor: zone.feeMinor, currency: zone.currency,
+    postalCodes: zone.postalCodes, localities: zone.localities, settlementIds: [], feeMinor: zone.feeMinor, currency: zone.currency,
     active: true, eventId: "a409ec59-9f5e-496d-a45d-b83a46b49674", idempotencyKey: "9544c299-d25b-44ce-98ed-d30116610887",
     deviceId: "8cc7eb84-af2a-4e84-95de-967c39af86ab", occurredAt: "2026-09-26T12:00:00.000Z", reason: null };
   try {

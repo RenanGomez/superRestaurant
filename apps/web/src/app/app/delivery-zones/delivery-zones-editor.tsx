@@ -86,14 +86,15 @@ export function DeliveryZonesEditor({ scope, currency, action }: Props) {
     event.preventDefault();
     const postal = canonicalizePostalCodes(postalCodes);
     const places = canonicalizeLocalities(localities);
+    const settlementIds = editing?.settlementIds ?? [];
     const feeMinor = parseDeliveryFeeMinor(fee);
-    if (name.trim().length === 0 || name.trim().length > 80 || (postal.length === 0 && places.length === 0)
+    if (name.trim().length === 0 || name.trim().length > 80 || (postal.length === 0 && places.length === 0 && settlementIds.length === 0)
       || (postalCodes.trim() !== "" && postal.length === 0) || (localities.trim() !== "" && places.length === 0)
       || feeMinor === undefined || (!active && (reason.trim().length === 0 || !confirmDeactivate))) {
       setError("invalid"); return;
     }
     void save({ schemaVersion: 1, scope, zoneId: editing?.zoneId ?? crypto.randomUUID(), expectedVersion: editing?.version ?? 0,
-      name: name.trim(), postalCodes: postal, localities: places, feeMinor, currency, active,
+      name: name.trim(), postalCodes: postal, localities: places, settlementIds, feeMinor, currency, active,
       eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), deviceId, occurredAt: new Date().toISOString(),
       reason: active ? null : reason.trim() });
   }

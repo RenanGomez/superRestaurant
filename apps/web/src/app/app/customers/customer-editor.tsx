@@ -2,13 +2,14 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type FormEvent, type KeyboardEvent } from "react";
 import Link from "next/link";
-import type { BranchScope, CustomerDirectoryDetailV1, CustomerDirectoryDetailAddressV1, CustomerDirectorySearchResultV1, CustomerRecentOrderListV1, CustomerPhoneInputV1, CustomerAddressFieldsV1, CustomerSearchModeV1 } from "@super-restaurant/shared-types";
+import type { BranchScope, CustomerDirectoryDetailV1, CustomerDirectoryDetailAddressV1, CustomerDirectorySearchResultV1, CustomerRecentOrderListV1, CustomerPhoneInputV1, CustomerAddressFieldsV1, CustomerSearchModeV1, SettlementSearchBranchV1, SettlementSummaryV1 } from "@super-restaurant/shared-types";
 import { Field } from "../../../components/field-hint";
 import { getCustomerAutocompleteRequest, getCustomerDirectorySuggestions, getCustomerPhoneRemoval, insertCustomerDirectorySuggestion, isCurrentCustomerAutocompleteRequest, isCurrentCustomerSearch, selectCurrentCustomerSearch, type CustomerAutocompleteRequest, type CustomerDirectorySuggestion, type CustomerRequestResult, type CustomerSearchSnapshot } from "../../../lib/customer-directory";
 import { trapFocusIndex } from "../../../lib/focus-trap";
 import { countOrderArticles } from "../../../lib/customer-order-history";
 import { formatDeliveryMatch } from "../../../lib/delivery-zones";
 import { matchDeliveryAddress } from "../delivery-match-action";
+import { searchSettlements } from "../settlement-search-action";
 import { uiButton } from "../../../lib/ui-classes";
 import { setUnsavedChanges } from "../../../lib/unsaved-changes";
 
@@ -267,11 +268,11 @@ export function CustomerEditor({ scope, branchName, action, historyAction, initi
       <h2 id="customer-address-title" className="font-heading text-lg font-semibold">Direcciones · {detail.customer.displayName}</h2>
       <p className="mt-1 text-sm text-text-muted">Guarda datos incompletos durante la llamada. Validar registra que la sucursal revisó esta dirección; no geocodifica ni garantiza por sí solo la zona de reparto. Cada edición elimina la validación anterior.</p>
       {detail.addressesTruncated && <p role="status" className="mt-2 text-sm">Se muestran las primeras 20 direcciones. Hay más direcciones en la ficha.</p>}
-      <div className="mt-4 flex flex-col gap-4">{detail.addresses.map(address => <AddressForm key={`${address.addressId}/${address.version}`} item={address} branchName={branchName} feedback={addressFeedback?.addressId === address.addressId ? addressFeedback : undefined} validating={validatingAddressId === address.addressId} disabled={locked}
+      <div className="mt-4 flex flex-col gap-4">{detail.addresses.map(address => <AddressForm key={`${address.addressId}/${address.version}`} item={address} scope={scope} branchName={branchName} feedback={addressFeedback?.addressId === address.addressId ? addressFeedback : undefined} validating={validatingAddressId === address.addressId} disabled={locked}
         onEdit={() => { feedbackSequence.current += 1; setAddressFeedback(current => current?.addressId === address.addressId ? undefined : current); }}
         onSave={fields => void run("address", { ...base(detail.customer.customerId, address.version), addressId: address.addressId, address: fields })}
         onValidate={() => void run("validate", { ...base(detail.customer.customerId, address.version), addressId: address.addressId })} />)}
-        {addingAddress && <AddressForm key={`new/${detail.customer.customerId}/${detail.addresses.length}`} disabled={locked} onCancel={() => setAddingAddress(false)}
+        {addingAddress && <AddressForm key={`new/${detail.customer.customerId}/${detail.addresses.length}`} scope={scope} disabled={locked} onCancel={() => setAddingAddress(false)}
           onSave={fields => void run("address", { ...base(detail.customer.customerId, 0), addressId: crypto.randomUUID(), address: fields })} />}
       </div>
       {!addingAddress && <button type="button" className={`${buttonClass} mt-4`} disabled={locked} onClick={() => setAddingAddress(true)}>+ Nueva dirección</button>}
@@ -414,35 +415,151 @@ function ProfileForm({ customer, disabled, onSave }: {
   </section>;
 }
 
-const primaryAddressLabels = { streetLine: "Calle y número", unit: "Interior", neighborhood: "Colonia", references: "Referencias" } as const;
-const additionalAddressLabels = { locality: "Localidad", region: "Estado o región", countryCode: "País (código de dos letras)", postalCode: "Código postal" } as const;
-const addressLabels = { ...primaryAddressLabels, ...additionalAddressLabels } as const;
-const addressHints = {
-  streetLine: "Calle y número exterior donde se entrega.",
-  unit: "Número de departamento, piso o interior, si aplica.",
-  neighborhood: "Colonia o barrio; ayuda a validar la zona de entrega.",
-  references: "Indicaciones para el repartidor: entre qué calles, color de la casa, portón, etc.",
-  locality: "Ciudad o municipio; se usa para validar la zona de entrega.",
-  region: "Estado o región de la dirección.",
-  countryCode: "Código ISO de dos letras, por ejemplo MX.",
-  postalCode: "Código postal; se usa para validar la zona de entrega.",
-} as const satisfies Record<keyof typeof addressLabels, string>;
-export function AddressForm({ item, branchName, feedback, validating = false, disabled, onSave, onValidate, onCancel, onEdit }: {
-  readonly item?: CustomerDirectoryDetailAddressV1; readonly disabled: boolean;
+function sameSettlementName(left: string, right: string): boolean {
+  return left.localeCompare(right, "es", { sensitivity: "base" }) === 0;
+}
+export function AddressForm({ item, scope, branchName, feedback, validating = false, disabled, onSave, onValidate, onCancel, onEdit }: {
+  readonly item?: CustomerDirectoryDetailAddressV1; readonly scope: BranchScope; readonly disabled: boolean;
   readonly branchName?: string; readonly feedback?: { message: string; error: boolean } | undefined; readonly validating?: boolean;
   readonly onSave: (fields: CustomerAddressFieldsV1) => void; readonly onValidate?: () => void; readonly onCancel?: () => void;
   readonly onEdit?: () => void;
 }): ReactNode {
+  const listId = useId();
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const legacyLookup = useRef(false);
   const [dirty, setDirty] = useState(false);
   const [addressLabel, setAddressLabel] = useState(item?.address.label ?? "Casa");
+  const [query, setQuery] = useState(item?.address.neighborhood ?? "");
+  const [selected, setSelected] = useState<SettlementSummaryV1>();
+  const [branch, setBranch] = useState<SettlementSearchBranchV1>();
+  const [options, setOptions] = useState<readonly SettlementSummaryV1[]>([]);
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string>();
+  const [outsideMode, setOutsideMode] = useState(item?.address.settlementOutsideCatalog === true);
+  const [outsideName, setOutsideName] = useState(item?.address.settlementOutsideCatalog === true ? item.address.neighborhood ?? "" : "");
+  const [outsideConfirmed, setOutsideConfirmed] = useState(false);
+  const [formError, setFormError] = useState<string>();
+  const deliveryScope = useMemo(() => ({ restaurantId: scope.restaurantId, branchId: scope.branchId }),
+    [scope.restaurantId, scope.branchId]);
+
   useEffect(() => {
     setUnsavedChanges("customer-address", dirty);
     return () => setUnsavedChanges("customer-address", false);
   }, [dirty]);
-  return <form className="rounded-lg border border-border p-3" onChange={() => { setDirty(true); onEdit?.(); }} onSubmit={event => {
-    event.preventDefault(); const data = new FormData(event.currentTarget);
-    const fields = Object.fromEntries(Object.keys(addressLabels).map(key => { const value = String(data.get(key) ?? "").trim(); return [key, value === "" ? null : key === "countryCode" ? value.toUpperCase() : value]; }));
-    onSave({ ...fields, label: addressLabel.trim(), instructions: item?.address.instructions ?? null, coordinates: item?.address.coordinates ?? null } as unknown as CustomerAddressFieldsV1);
+
+  /** Legacy rows keep only the readable neighborhood/CP; resolve their settlement once without changing the form. */
+  useEffect(() => {
+    if (legacyLookup.current || outsideMode || selected !== undefined || item === undefined) return;
+    const { neighborhood, postalCode } = item.address;
+    if (item.address.settlementOutsideCatalog === true || neighborhood === null || postalCode === null) return;
+    legacyLookup.current = true;
+    let cancelled = false;
+    void searchSettlements({ schemaVersion: 1, scope: deliveryScope, query: null, postalCode, limit: 50 })
+      .then(reply => {
+        if (cancelled || !reply.ok) return;
+        setBranch(reply.value.branch);
+        const matches = reply.value.settlements.filter(settlement => settlement.postalCode === postalCode
+          && sameSettlementName(settlement.name, neighborhood));
+        const only = matches.length === 1 ? matches[0] : undefined;
+        if (only !== undefined) { setSelected(only); setQuery(only.name); }
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [deliveryScope.branchId, deliveryScope.restaurantId, item, outsideMode, selected]);
+
+  useEffect(() => {
+    const text = query.trim();
+    if (outsideMode || selected !== undefined || text.length < 2) {
+      setOptions([]); setSearching(false); setSearchError(undefined); return;
+    }
+    let cancelled = false;
+    setSearching(true); setSearchError(undefined);
+    const timeout = window.setTimeout(() => {
+      void searchSettlements({ schemaVersion: 1, scope: deliveryScope, query: text, postalCode: null, limit: 20 })
+        .then(reply => {
+          if (cancelled) return;
+          if (!reply.ok) {
+            setOptions([]);
+            setSearchError(reply.error === "denied" ? "Tu sesión ya no permite buscar colonias." : "No se pudo buscar colonias. Reintenta.");
+            return;
+          }
+          setOptions(reply.value.settlements);
+          setBranch(reply.value.branch);
+          setOpen(document.activeElement === searchInputRef.current);
+        })
+        .catch(() => { if (!cancelled) { setOptions([]); setSearchError("No se pudo buscar colonias. Reintenta."); } })
+        .finally(() => { if (!cancelled) setSearching(false); });
+    }, 500);
+    return () => { cancelled = true; window.clearTimeout(timeout); };
+  }, [deliveryScope.branchId, deliveryScope.restaurantId, outsideMode, query, selected]);
+
+  function markDirty(): void { setDirty(true); onEdit?.(); }
+  function choose(settlement: SettlementSummaryV1): void {
+    setSelected(settlement); setQuery(settlement.name); setOptions([]); setOpen(false); setActive(-1);
+    setFormError(undefined); markDirty();
+  }
+  function clearSelection(): void {
+    setSelected(undefined); setQuery(""); setOptions([]); setOpen(true); setFormError(undefined);
+    setOutsideMode(false); setOutsideConfirmed(false); markDirty(); searchInputRef.current?.focus();
+  }
+  function startOutside(): void {
+    setSelected(undefined); setOutsideMode(true); setOutsideConfirmed(false);
+    setOutsideName(query.trim() || item?.address.neighborhood || "");
+    setOptions([]); setOpen(false); setFormError(undefined); markDirty();
+  }
+  function backToCatalog(): void {
+    setOutsideMode(false); setOutsideConfirmed(false); setOutsideName("");
+    setQuery(""); setOptions([]); setOpen(true); setFormError(undefined); markDirty();
+  }
+  function onSearchKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    if (event.key === "Escape") { setOpen(false); setActive(-1); return; }
+    if (options.length === 0 || !["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) return;
+    if (event.key === "Enter" && (!open || active < 0)) return;
+    event.preventDefault();
+    if (event.key === "ArrowDown") { setOpen(true); setActive(current => current < options.length - 1 ? current + 1 : 0); return; }
+    if (event.key === "ArrowUp") { setOpen(true); setActive(current => current > 0 ? current - 1 : options.length - 1); return; }
+    const target = options[active];
+    if (target !== undefined) choose(target);
+  }
+
+  const postalCode = selected?.postalCode ?? (outsideMode ? null : item?.address.postalCode ?? null);
+  const derivedLocality = selected?.municipality ?? branch?.locality ?? item?.address.locality ?? null;
+  const derivedRegion = selected?.state ?? branch?.region ?? item?.address.region ?? null;
+  const derivedCountry = selected?.countryCode ?? branch?.countryCode ?? item?.address.countryCode ?? null;
+  const derivedText = outsideMode ? "La ciudad, el estado y el país se toman de la sucursal."
+    : [derivedLocality, derivedRegion, derivedCountry].filter(Boolean).join(", ") || "Se completan al elegir la colonia.";
+
+  return <form className="rounded-lg border border-border p-3" onChange={markDirty} onSubmit={event => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const value = (key: string): string | null => {
+      const text = String(data.get(key) ?? "").trim();
+      return text === "" ? null : text;
+    };
+    if (!outsideMode && selected === undefined) {
+      setFormError("Elige una colonia del catálogo o declara que la colonia está fuera de catálogo.");
+      return;
+    }
+    if (outsideMode && outsideName.trim() === "") {
+      setFormError("Escribe el nombre de la colonia.");
+      return;
+    }
+    if (outsideMode && !outsideConfirmed) {
+      setFormError("Confirma que la colonia no aparece en el catálogo de la sucursal.");
+      return;
+    }
+    setFormError(undefined);
+    onSave({
+      label: addressLabel.trim(), streetLine: value("streetLine"), unit: value("unit"),
+      neighborhood: outsideMode ? outsideName.trim() : selected?.name ?? null,
+      locality: selected?.municipality ?? null, region: selected?.state ?? null,
+      countryCode: selected?.countryCode ?? null, postalCode: selected?.postalCode ?? null,
+      references: value("references"), instructions: item?.address.instructions ?? null,
+      coordinates: item?.address.coordinates ?? null,
+      settlementId: selected?.settlementId ?? null, settlementOutsideCatalog: outsideMode,
+    });
   }}>
     <h3 className="mb-2 font-semibold">{item?.address.label ?? "Nueva dirección"}</h3>
     {item !== undefined && <div className="mb-3"><span className={`inline-flex min-h-11 items-center rounded-full border px-3 text-sm font-semibold ${!dirty && item.validatedForRequestedBranch ? "border-success text-text" : "border-border text-text-muted"}`}>{dirty ? "Cambios sin guardar · revalidar al guardar" : item.validatedForRequestedBranch ? `Dirección revisada para ${branchName}` : "Sin revisar en esta sucursal"}</span>{!dirty && item.validatedForRequestedBranch && <p className="mt-2 break-words text-xs text-text-muted">Datos revisados: {[item.address.streetLine, item.address.locality, item.address.postalCode].filter(Boolean).join(", ")}. Cotiza en captura antes de confirmar.</p>}</div>}
@@ -450,14 +567,49 @@ export function AddressForm({ item, branchName, feedback, validating = false, di
     {validating && <p role="status" className="mb-3 text-sm text-text-muted">Validando esta dirección…</p>}
     <fieldset disabled={disabled} className="grid min-w-0 gap-3 sm:grid-cols-2">
       <div className="flex min-w-0 flex-col gap-2"><Field className="flex flex-col gap-1 text-sm" hint="Nombre corto para reconocer la dirección: Casa, Oficina, etc." label="Etiqueta de dirección">{(id) => <><select id={id} className={inputClass} value={addressLabelOptions.includes(addressLabel as typeof addressLabelOptions[number]) ? addressLabel : "Otro"} onChange={event => setAddressLabel(event.target.value === "Otro" ? "" : event.target.value)}>{addressLabelOptions.map(label => <option key={label}>{label}</option>)}<option>Otro</option></select></>}</Field>{!addressLabelOptions.includes(addressLabel as typeof addressLabelOptions[number]) && <Field className="flex flex-col gap-1 text-sm" hint="Escribe cómo quieres llamar a esta dirección." label="Otra etiqueta">{(id) => <><input id={id} required maxLength={40} className={inputClass} value={addressLabel} onChange={event => setAddressLabel(event.target.value)} /></>}</Field>}<span className="text-xs text-text-muted">Nombre corto para reconocer la dirección.</span></div>
-      {Object.entries(primaryAddressLabels).map(([key, label]) => <Field key={key} className={`flex min-w-0 flex-col gap-1 text-sm ${key === "references" ? "sm:col-span-2" : ""}`} hint={addressHints[key as keyof typeof addressHints]} label={label}>{(id) => <>
-        <input id={id} name={key} maxLength={key === "references" ? 500 : 200} defaultValue={item?.address[key as keyof typeof primaryAddressLabels] ?? ""} autoComplete="off" className={inputClass} />
-      </>}</Field>)}
-      <details className="sm:col-span-2"><summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold">Datos adicionales</summary>
-        <div className="grid min-w-0 gap-3 sm:grid-cols-2">{Object.entries(additionalAddressLabels).map(([key, label]) => <Field key={key} className="flex min-w-0 flex-col gap-1 text-sm" hint={addressHints[key as keyof typeof addressHints]} label={label}>{(id) => <>
-          <input id={id} name={key} maxLength={key === "countryCode" ? 2 : 200} defaultValue={item?.address[key as keyof typeof additionalAddressLabels] ?? ""} autoComplete="off" className={inputClass} />
-        </>}</Field>)}</div>
-      </details>
+      <Field className="flex min-w-0 flex-col gap-1 text-sm" hint="Calle y número exterior donde se entrega." label="Calle y número">{(id) => <input id={id} name="streetLine" maxLength={200} defaultValue={item?.address.streetLine ?? ""} autoComplete="off" className={inputClass} />}</Field>
+      <Field className="flex min-w-0 flex-col gap-1 text-sm" hint="Número de departamento, piso o interior, si aplica." label="Interior">{(id) => <input id={id} name="unit" maxLength={200} defaultValue={item?.address.unit ?? ""} autoComplete="off" className={inputClass} />}</Field>
+      <div className="flex min-w-0 flex-col gap-2 sm:col-span-2">
+        {!outsideMode && <>
+          <Field className="flex min-w-0 flex-col gap-1 text-sm" hint="Busca la colonia del catálogo de la sucursal; el código postal se completa solo." label="Colonia">{(id) => <div className="relative">
+            <input id={id} ref={searchInputRef} type="text" role="combobox" aria-autocomplete="list" aria-expanded={open && (searching || options.length > 0 || searchError !== undefined)} aria-controls={listId}
+              aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined} className={inputClass} value={query} autoComplete="off" placeholder="Escribe el nombre de la colonia"
+              onChange={event => { setSelected(undefined); setQuery(event.target.value); setOpen(true); setActive(-1); setFormError(undefined); }}
+              onFocus={() => setOpen(true)} onBlur={() => window.setTimeout(() => { if (document.activeElement !== searchInputRef.current) setOpen(false); }, 0)}
+              onKeyDown={onSearchKeyDown} />
+            {open && (searching || options.length > 0 || searchError !== undefined) && <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg">
+              {searching && <p role="status" className="px-3 py-2 text-sm text-text-muted">Buscando colonias…</p>}
+              {searchError !== undefined && <p role="alert" className="px-3 py-2 text-sm">{searchError}</p>}
+              {!searching && searchError === undefined && options.length === 0 && query.trim().length >= 2 && <p className="px-3 py-2 text-sm text-text-muted">Sin coincidencias en el catálogo.</p>}
+              {options.length > 0 && <ul id={listId} role="listbox" aria-label="Colonias del catálogo">{options.map((option, index) => <li key={option.settlementId} role="presentation">
+                <button id={`${listId}-${index}`} type="button" role="option" aria-selected={active === index}
+                  className={`min-h-11 w-full rounded-md px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-accent ${active === index ? "bg-bg" : "hover:bg-bg"}`}
+                  onMouseDown={event => event.preventDefault()} onPointerMove={() => setActive(index)} onClick={() => choose(option)}>
+                  <span className="block font-semibold">{option.name}</span>
+                  <span className="block break-words text-xs text-text-muted">CP {option.postalCode} · {option.settlementType} · {option.municipality}, {option.state}</span>
+                </button>
+              </li>)}</ul>}
+            </div>}
+          </div>}</Field>
+          {selected !== undefined && <div className="flex flex-wrap items-center gap-2 rounded-lg border border-success p-3 text-sm">
+            <span className="min-w-0 break-words"><strong>{selected.name}</strong> · CP {selected.postalCode} · {selected.municipality}, {selected.state}</span>
+            <button type="button" className={buttonClass} onClick={clearSelection}>Cambiar colonia</button>
+          </div>}
+          {selected === undefined && <button type="button" className={buttonClass} onClick={startOutside}>Mi colonia no está en la lista</button>}
+        </>}
+        {outsideMode && <>
+          <p role="note" className="rounded-lg border border-border bg-bg p-3 text-sm">Colonia fuera del catálogo. El domicilio queda sin zona y el envío requiere cuota manual de un supervisor.</p>
+          <Field className="flex min-w-0 flex-col gap-1 text-sm" hint="Escribe el nombre tal como lo conoce el cliente." label="Colonia fuera del catálogo">{(id) => <input id={id} name="outsideNeighborhood" maxLength={200} className={inputClass} value={outsideName} autoComplete="off"
+            onChange={event => { setOutsideName(event.target.value); setFormError(undefined); }} />}</Field>
+          <label className="flex min-h-11 items-start gap-2 text-sm"><input type="checkbox" className="mt-1 size-5" checked={outsideConfirmed}
+            onChange={event => { setOutsideConfirmed(event.target.checked); setFormError(undefined); }} /><span>Confirmo que esta colonia no aparece en el catálogo de la sucursal.</span></label>
+          <button type="button" className={buttonClass} onClick={backToCatalog}>Volver a buscar en el catálogo</button>
+        </>}
+      </div>
+      <Field className="flex min-w-0 flex-col gap-1 text-sm" hint="Se completa desde la colonia elegida; no se edita." label="Código postal">{(id) => <input id={id} className={inputClass} value={postalCode ?? ""} readOnly aria-readonly="true" />}</Field>
+      <div className="flex min-w-0 flex-col gap-1 text-sm"><span className="font-semibold">Localidad, estado y país</span><p className="break-words text-text-muted">{derivedText}</p></div>
+      <Field className="flex min-w-0 flex-col gap-1 text-sm sm:col-span-2" hint="Indicaciones para el repartidor: entre qué calles, color de la casa, portón, etc." label="Referencias">{(id) => <textarea id={id} name="references" maxLength={500} rows={3} defaultValue={item?.address.references ?? ""} className={`${inputClass} min-h-24 resize-y`} />}</Field>
+      {formError !== undefined && <p role="alert" className="rounded-lg bg-error-bg p-3 text-sm sm:col-span-2">{formError}</p>}
       <div className="flex flex-wrap gap-2 sm:col-span-2"><button className={buttonClass}>Guardar dirección</button>
         {onCancel !== undefined && <button type="button" className={buttonClass} onClick={onCancel}>Cancelar</button>}
         {onValidate !== undefined && <button type="button" className={buttonClass} disabled={disabled || dirty || item?.validatedForRequestedBranch === true} onClick={onValidate}>{dirty ? "Validar para esta sucursal" : item?.validatedForRequestedBranch ? `Revisada para ${branchName}` : validating ? "Validando…" : "Validar para esta sucursal"}</button>}</div>

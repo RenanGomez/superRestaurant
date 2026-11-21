@@ -105,9 +105,16 @@ export function CaptureCustomerCard({ scope, deviceId, locked, detail, selectedC
     }
     try {
       const match = await matchDeliveryAddress({ schemaVersion: 1, ...scope,
-        address: { postalCode: current.address.postalCode, locality: current.address.locality } });
+        address: {
+          settlementId: current.address.settlementId ?? null,
+          neighborhood: current.address.neighborhood,
+          postalCode: current.address.postalCode,
+          locality: current.address.locality,
+          settlementOutsideCatalog: current.address.settlementOutsideCatalog ?? false,
+        } });
       if (match.ok && match.value.coverageStatus === "not_covered") {
-        setNote({ key, text: `${coverageReason(current)}. Esta sucursal no entrega ahí.`, conflict: false, blocked: "coverage",
+        const reason = match.value.reason?.message ?? `${coverageReason(current)}. Esta sucursal no entrega ahí.`;
+        setNote({ key, text: `${reason} Pide a un supervisor para autorizar la cuota manual.`, conflict: false, blocked: "coverage",
           signature: addressSignature(current) });
         return;
       }
@@ -175,9 +182,9 @@ export function CaptureCustomerCard({ scope, deviceId, locked, detail, selectedC
         <strong className="block">{item.address.label}</strong>
         <span className="block break-words text-sm">{[item.address.streetLine, item.address.unit].filter(Boolean).join(" ")}</span>
         <span className="block break-words text-sm text-text-muted">{[item.address.neighborhood, item.address.locality, item.address.postalCode].filter(Boolean).join(", ")}</span>
-        <span className="mt-1 block text-xs font-semibold">{rowNote?.blocked === "coverage" ? coverageReason(item)
+        <span className="mt-1 block text-xs font-semibold">{rowNote?.blocked === "coverage" ? rowNote.text
           : item.validatedForRequestedBranch && rowNote?.blocked !== "validation" ? "Validada para esta sucursal" : "Sin validar"}{inUse ? " · En uso en esta captura" : ""}</span>
-        {editing === item.addressId ? <div className="mt-3"><AddressForm item={item} disabled={disabled}
+        {editing === item.addressId ? <div className="mt-3"><AddressForm item={item} scope={scope} disabled={disabled}
           onSave={(fields) => void saveAddress(item, fields)} onCancel={() => setEditing(undefined)} /></div>
           : <div className="mt-3 flex flex-wrap gap-2">
             <button type="button" className={button} disabled={!canUse || blocked} onClick={() => void chooseAddress(item)}>
@@ -188,7 +195,7 @@ export function CaptureCustomerCard({ scope, deviceId, locked, detail, selectedC
       </article>;
     })}</div>
     {detail.addressesTruncated && <p role="status" className="mt-2 text-xs text-text-muted">Se muestran las primeras 20 direcciones.</p>}
-    {editing === "new" ? <div className="mt-3"><AddressForm disabled={disabled} onSave={(fields) => void saveAddress(undefined, fields)} onCancel={() => setEditing(undefined)} /></div>
+    {editing === "new" ? <div className="mt-3"><AddressForm scope={scope} disabled={disabled} onSave={(fields) => void saveAddress(undefined, fields)} onCancel={() => setEditing(undefined)} /></div>
       : <button type="button" className={`${button} mt-3`} disabled={disabled} onClick={() => { setNote(undefined); setEditing("new"); }}>Agregar dirección</button>}
     {noteFor("new")}{noteFor("card")}
     <a href={`/app/customers?customerId=${encodeURIComponent(customerId)}`} className="mt-3 block text-sm text-accent underline">Abrir el cliente en Directorio</a>

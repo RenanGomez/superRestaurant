@@ -1476,7 +1476,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
         {quoteError && <p role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">{quoteError}</p>}
         {quoteBlocksConfirm && <div role="alert" className="mt-3 rounded-lg bg-error-bg p-3 text-sm">
           <p>{quoteBlockReason === "missing" ? "Aún no hay cotización de entrega: cotiza antes de convertir en orden."
-            : quoteBlockReason === "not_covered" ? "La dirección no tiene cobertura de entrega."
+            : quoteBlockReason === "not_covered" ? "La dirección no tiene cobertura de entrega. Pide a un supervisor para autorizar la cuota manual."
               : quoteBlockReason === "expired" ? "La cotización expiró: vuelve a cotizar antes de convertir en orden."
                 : "La cotización mostrada es de otra hora: vuelve a cotizar antes de convertir en orden."}</p>
           <button type="button" className={`${button} mt-2`} disabled={busy} onClick={() => void requestDeliveryQuote()}>

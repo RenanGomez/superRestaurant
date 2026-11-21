@@ -44,6 +44,20 @@ for (const coordinates of [{ latitudeE6: 90_000_001, longitudeE6: 0 }, { latitud
 }
 expect(parseSaveCustomerAddressCommandV1({ ...command, address: { ...address, countryCode: "mx" } }) === undefined, "country syntax");
 expect(parseSaveCustomerAddressCommandV1({ ...command, address: { ...address, instructions: "private\n" } }) === undefined, "control characters rejected");
+const settlementAddress = { ...address, neighborhood: "Centro", locality: "Navojoa", countryCode: "MX",
+  postalCode: "85800", settlementId: id, settlementOutsideCatalog: false };
+const parsedSettlement = parseSaveCustomerAddressCommandV1({ ...command, address: settlementAddress });
+expect(parsedSettlement?.address.settlementId === id, "settlement address parses");
+expect(parsedSettlement?.address.settlementOutsideCatalog === false, "outside flag parses");
+expect(parseSaveCustomerAddressCommandV1({ ...command, address: { ...settlementAddress, settlementId: "bad" } }) === undefined,
+  "invalid settlement id rejected");
+expect(parseSaveCustomerAddressCommandV1({ ...command, address: { ...settlementAddress, settlementOutsideCatalog: true } }) === undefined,
+  "settlement and outside are exclusive");
+const outsideAddress = { ...address, neighborhood: "Rancho", settlementId: null, settlementOutsideCatalog: true };
+expect(parseSaveCustomerAddressCommandV1({ ...command, address: outsideAddress })?.address.settlementOutsideCatalog === true,
+  "outside-catalog address parses");
+expect(parseSaveCustomerAddressCommandV1({ ...command, address: { ...address, settlementId: id } })?.address.settlementOutsideCatalog === undefined,
+  "legacy address stays optional");
 expect(parseValidateCustomerAddressCommandV1({ ...base, addressId: id }) === undefined, "validate cannot create");
 const validation = { ...base, expectedVersion: 1, addressId: id };
 expect(parseValidateCustomerAddressCommandV1(validation) !== undefined, "explicit versioned validation command");
