@@ -42,6 +42,13 @@ export function readDatabaseConfig(
   environment: NodeJS.ProcessEnv,
   certificateLoader: CertificateLoader = loadAndValidateCaCertificate,
 ): DatabaseConfig {
+  if (environment.NODE_ENV === "test" && environment.SR_TEST_DATABASE_URL !== undefined) {
+    let url: URL;
+    try { url = new URL(environment.SR_TEST_DATABASE_URL); } catch { throw new DatabaseConfigurationError(); }
+    if (!["postgres:", "postgresql:"].includes(url.protocol) || url.hostname !== "127.0.0.1" ||
+        !url.username || !url.password || url.pathname !== "/postgres" || url.search || url.hash) throw new DatabaseConfigurationError();
+    return Object.freeze({ caCertificate: "", connectionString: url.toString() });
+  }
   const rawUrl = boundedValue(environment.DATABASE_URL, 8_192);
   const certificatePath = boundedValue(environment.DATABASE_CA_CERT_PATH, 1_024);
   const projectRef = readProjectRef(environment.SUPABASE_URL);
@@ -96,7 +103,7 @@ export class PostgresDatabaseClient implements DatabaseClientPort, OnApplication
       idleTimeoutMillis: 30_000,
       max: 10,
       query_timeout: 5_000,
-      ssl: { ca: config.caCertificate, rejectUnauthorized: true },
+      ...(config.caCertificate === "" ? {} : { ssl: { ca: config.caCertificate, rejectUnauthorized: true } }),
       statement_timeout: 5_000,
     }));
   }
