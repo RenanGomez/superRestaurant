@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-22T00:00:00-07:00",
+  "minimumSample": 5,
+  "successThreshold": 0.6,
+  "engines": {
+    "opencode": {
+      "tasks": 0,
+      "success": 0,
+      "failed": 0,
+      "attempts": 0,
+      "byType": {}
+    },
+    "agy": {
+      "tasks": 0,
+      "success": 0,
+      "failed": 0,
+      "attempts": 0,
+      "byType": {}
+    },
+    "codex": {
+      "tasks": 0,
+      "success": 0,
+      "failed": 0,
+      "attempts": 0,
+      "byType": {}
+    }
+  },
+  "routingChanges": []
+}
