@@ -91,6 +91,7 @@ jobs:
       - name: Bootstrap local Auth fixtures
         run: |
           psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE supabase_admin SUPERUSER NOLOGIN;
           CREATE ROLE anon NOLOGIN;
           CREATE ROLE authenticated NOLOGIN;
           CREATE ROLE service_role NOLOGIN;
@@ -112,6 +113,9 @@ jobs:
             if [[ "$file" == *20260927000100_delivery_zones.sql ]]; then run_audit delivery_zones_pre_catalog.sql; fi
             psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$file"
             if [[ "$file" == *20260830000100_create_tenancy_memberships.sql ]]; then
+              psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "SET ROLE supabase_admin; GRANT app_api TO postgres WITH ADMIN TRUE, INHERIT FALSE, SET FALSE; RESET ROLE;"
+            fi
+            if [[ "$file" == *20260830000200_list_active_branch_memberships.sql ]]; then
               psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/tests/tenancy_memberships_catalog.sql
               { printf "BEGIN; ALTER ROLE app_api LOGIN PASSWORD 'ci-test-only' VALID UNTIL 'infinity';\n"; cat supabase/tests/tenancy_memberships_runtime_catalog.sql; printf "\nROLLBACK;\n"; } |
                 psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1
