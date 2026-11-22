@@ -6,29 +6,35 @@ Los nombres de modelo viven en `config.json` (alias). Usa alias.
 > sin pago por token). Con `provider: openrouter` vuelve a pagar por token con `config.dsh.models`.
 
 **Motores:**
-- **gemini** (Antigravity): cuota abundante y gratis.
-- **dsh** (DeepSeek Harness → OpenCode Go): cupo mensual amplio y límites de 5 h altos. **Es el motor de código por defecto.**
-- **codex** (una cuenta, B): cuota escasa. Solo para lo que dsh no resolvió o lo que necesita su sandbox.
+- **gemini** (CLI `agy`): cuota abundante y gratis. **Escribe código** (UI, visual, piezas medianas) además de leer y revisar.
+- **dsh** (DeepSeek Harness → OpenCode Go): cupo mensual amplio y límites de 5 h altos; varios a la vez. Tareas
+  pequeñas y mecánicas.
+- **codex** (cuenta B): cuota suficiente, **motor de código normal**: piezas difíciles, bugs, lógica con estado.
+**Los tres escriben en paralelo. Una ola que deja ocioso a un motor desperdicia cuota pagada.**
 - **Claude**: orquesta. No es worker salvo `claude -p` como último recurso.
 
 ## Modelo de dsh (OpenCode Go)
 **Solo `deepseek-v4.1-flash`.** Todos los alias apuntan a él: no pases `-Model` a dsh. Lo único que se ajusta es
 `-Effort` (`low` por defecto, `medium` en bugs o en el reintento). dsh no ve imágenes.
 
-## dsh es obligatorio (igual que codex y Antigravity)
-- **Todo código nuevo o editado lo intenta dsh primero**, salvo las excepciones de la tabla (imágenes/UI visual,
-  lo que exige el sandbox de codex, diseño/integración). Claude no escribe código que pueda escribir dsh.
-- Ninguna tarea de código va a codex sin que dsh la haya intentado una vez (con su reintento a `medium`).
-- En cada pedido con código se reparte en paralelo: **dsh escribe, gemini lee/mapea/revisa, codex solo escala.**
+## Reparto obligatorio: los tres motores en cada ola
+- Claude no escribe código que pueda escribir un motor.
+- **Con ≥3 tareas en un pedido, cada motor (dsh, codex, gemini) recibe al menos una que escriba código.** Con 2,
+  van a dos motores distintos. Nunca todo a dsh.
+- Reparto: **codex** → bugs difíciles, red/sincronización, estado, lógica con riesgo · **gemini** → UI, visual,
+  assets, piezas medianas con contexto amplio · **dsh** → tests, mecánico, piezas pequeñas (varias en paralelo).
+- Revisión cruzada: el diff de un motor lo revisa otro (gemini o codex revisan a dsh; dsh o gemini a codex).
+- Si una tarea falla, el reintento va a otro motor, no al mismo dos veces.
+- Antes de lanzar la ola, Claude escribe en una línea el reparto ("codex: A · gemini: B · dsh: C, D").
 
 ## Qué usar según la tarea
 | Tarea | 1º | Si falla |
 |---|---|---|
 | Mapa del repo, auditoría, "¿dónde está X?", docs | gemini fast (+ `context/map.md`) | dsh (sin `-Write`) |
 | Tests, boilerplate, renombrados, ediciones mecánicas | **dsh `-Write`** | gemini default `-Write` |
-| Feature acotada (1–3 archivos) | **dsh `-Write`** | dsh `-Effort medium` (mismo `-Id`) → codex default/low |
-| Feature grande | **varias tareas dsh `-Write` en paralelo** (`-Files` disjuntos); el contrato entre piezas lo fija Claude en los briefs | codex default/low solo la pieza que falló |
-| Bug difícil, concurrencia, rendimiento | **dsh `-Effort medium`** (brief con el fragmento exacto y cómo reproducir) | codex default/medium → codex strong |
+| Feature acotada (1–3 archivos) | dsh o gemini `-Write` (el que esté libre en la ola) | el otro, luego codex |
+| Feature grande | **piezas repartidas entre codex, gemini y dsh en paralelo** (`-Files` disjuntos); el contrato entre piezas lo fija Claude en los briefs | la pieza que falló, a otro motor |
+| Bug difícil, concurrencia, red, rendimiento | **codex default/medium** (brief con el fragmento exacto y cómo reproducir) | codex strong → dsh `-Effort medium` |
 | Revisión de diff | gemini strong si escribió dsh (otra familia) · dsh si escribió codex o gemini | subagente sonnet |
 | UI, capturas, assets visuales | gemini strong | — |
 | Investigación web / comparar librerías | gemini strong | Claude (WebSearch) |
@@ -37,7 +43,7 @@ Los nombres de modelo viven en `config.json` (alias). Usa alias.
 
 ## Rápido: cómo partir un pedido
 1. Una ola por pedido: encola juntas todas las tareas independientes y lanza **un** `drain -Wait` en background.
-   drain corre hasta `queue.maxParallel` (4) a la vez; dsh admite varias simultáneas.
+   drain corre hasta `queue.maxParallel` (6) a la vez: dsh varias, gemini hasta 3, codex 1 por cuenta.
 2. Tareas dsh pequeñas: **1–3 archivos, un objetivo, un "hecho cuando"**. Mejor 3 tareas de 5 min que una de 30.
 3. Mientras dsh escribe, gemini mapea o revisa en la misma ola; lo que depende de otra tarea va con `-After`.
 4. `-Worktree` solo si dos escritores tocarían lo mismo o el cambio es arriesgado; si no, `-Files` disjuntos en la
@@ -48,7 +54,7 @@ Los nombres de modelo viven en `config.json` (alias). Usa alias.
   repo". Flash gasta turnos buscando lo que no le dices.
 - Contexto mínimo: sin AGENTS.md copiado, sin la conversación, sin archivos enteros de más de ~200 líneas.
 - `-Effort low` por defecto; `medium` solo en bugs o reintento; `high` nunca en dsh.
-- Un reintento por tarea, con feedback concreto en el mismo brief y el mismo `-Id`. Luego codex, y luego el usuario.
+- Un reintento por tarea, con feedback concreto en el mismo brief y el mismo `-Id`, en otro motor. Luego el usuario.
 
 ## Certero: que lo hecho sea correcto
 - "Hecho cuando" verificable: un comando (test, build, script) cuya salida real va en el result. Sin evidencia →

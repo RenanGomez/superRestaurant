@@ -17,3 +17,16 @@ Los dos invariantes (`pizza_model_v2_invariants.sql` y `delivery_zones_settlemen
 
 ## Cierre
 Aplica Ponytail: el cambio más pequeño correcto, sin recortar validación/errores/seguridad/tests.
+
+## Reintento (2026-11-21)
+El worktree ya contiene un arreglo parcial de columnas (base_group_ids / extra_option_ids). NO lo rehagas: revísalo contra el cuerpo v2 de `20261120000100` (~línea 1767) y complétalo. Falta obligatoriamente: (1) caso en `supabase/tests` que confirme una pizza junto con una zona de entrega; (2) prueba negativa de cobertura vacía (el invariante `delivery_zones_coverage_nonempty` fue eliminado; lo protege `upsert_delivery_zone`); (3) escribir el informe en `.agents/reports/z2b-rebase-confirm-on-pizza-v2.md` con lo verificado. No leas ni escribas fuera del worktree.
+
+## Reintento 2 (2026-11-22) — corregir el fixture de la prueba nueva
+
+Estado verificado por el orquestador (PG 17 local, rollback): la corrección de `confirm_capture_draft_v3` en la migración Z2 está bien y `pizza_model_v2_invariants.sql` pasa con ella. NO toques la migración salvo que la prueba lo demuestre necesario.
+
+Falla `supabase/tests/delivery_zones_settlements_invariants.sql`, en tu bloque `z2b_pizza_delivery_confirmation`, con `SQLSTATE 55000 CAPTURE_JOURNAL_CURRENT_VERSION_MISSING`: el borrador de captura de la prueba no tiene la fila de `app.capture_command_events` (restaurant_id, branch_id, capture_draft_id, result_version = versión actual del borrador, result_capture con `detail`) que exigen las funciones de captura. Mira cómo otras pruebas (p. ej. las de capture_delivery_order / selection plan) crean ese journal y crea el mismo en tu fixture, o usa el comando público que ya lo crea.
+
+Además tu script `.cache/z2b-verify.mjs` tiene un bug en su SQL de resumen: `pg_catalog.pg_policy` no tiene `schemaname`; usa `pg_catalog.pg_policies`. Córrelo hasta que termine con `"status":"ok"` y los dos invariantes en `invariantFiles`.
+
+Termina SIEMPRE escribiendo `.agents/reports/z2b-rebase-confirm-on-pizza-v2.md` (qué cambió, cómo verificaste, salida del verificador). Sin informe la tarea no se acepta.

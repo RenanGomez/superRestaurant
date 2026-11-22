@@ -1,5 +1,12 @@
 # PROJECT_NOTES
 
+## Modo autónomo (Emmanuel, 2026-11-22): decisión durable
+
+- La construcción avanza sin aprobación humana intermedia. Un PR se integra a `main` cuando pasa las puertas G1–G4 de `docs/plans/plan-autonomo-100.md` §4: puertas locales, CI con `pg-verify` y `e2e-smoke`, revisión cruzada de otra familia y pruebas de invariantes en nivel A. Rige con los topes de rondas de §19.3.
+- Nuevo estado `DONE-auto`: la tarea queda cubierta por un journey E2E verde en CI y en la corrida nocturna. `DONE` queda reservado a la aprobación final de Emmanuel sobre el producto.
+- Siguen siendo humanos: deploy a producción, credenciales y secretos, proveedores externos reales, datos reales. Force-push y reescritura de historia están prohibidos. Las decisiones que normalmente subirían a Emmanuel se toman con el supuesto conservador y se registran en `docs/agentic/DECISIONS_PENDING.md`.
+- Todo el trabajo delegado va por `ao spawn` con los harness opencode, agy y codex, nunca claude-code. Claude solo orquesta (Sonnet 5.5, esfuerzo medio).
+
 ## Smoke r2 (2026-11-21): decisiones durables
 
 - **Smoke standalone siempre al día** (Emmanuel, 2026-11-21): tras cada cambio integrado se actualiza `docs/smoke/smoke-<fecha>.data.json` y se regenera el HTML con `tools/agentic/build-smoke-html.mjs`. Regla en AGENTS.md §19.5.

@@ -13,7 +13,7 @@ param(
   [ValidateSet('','minimal','low','medium','high','xhigh')][string]$Effort = '',  # codex y dsh
   [switch]$Write,                        # permite editar archivos
   [switch]$Worktree,                     # git worktree aparte (codex: --worktree; gemini: .harness/worktrees/<Id>)
-  [int]$TimeoutMin = 30,                 # espera máxima del result (gemini/Antigravity)
+  [int]$TimeoutMin = 30,                 # espera máxima del result (respaldo gemini/agentapi)
   [double]$EtaMin = 0,                   # estimación (min) de la tarea; 0 = config.eta.defaults.<motor> o 15
   [switch]$Resumed,                      # lo pasa la tarea programada al relanzar tras un cooldown
   [switch]$NoSchedule,                   # lo pasa drain.ps1: la cola se encarga de reanudar
@@ -205,7 +205,7 @@ if ($agentsOut) {
   $prompt += "`nIMPORTANTE (sandbox): no puedes escribir dentro de .agents/. Todo archivo que el brief te pida crear o editar bajo .agents/<ruta> escríbelo en agents_out/<ruta> (misma ruta relativa); el harness lo moverá a .agents/ al terminar. Si una escritura falla por 'Access denied' en otra carpeta, dilo en el informe.`n"
 }
 
-# --- gemini: vía Antigravity agentapi (Gemini CLI ya no acepta cuentas personales) ---
+# --- gemini (respaldo): vía Antigravity agentapi (requiere la app abierta); el backend por defecto es la CLI agy ---
 function Invoke-Antigravity {
   $ls = Get-CimInstance Win32_Process -Filter "Name='language_server.exe'" |
         Where-Object { $_.CommandLine -match 'csrf_token\s+([0-9a-f-]{36})' } | Select-Object -First 1
@@ -363,6 +363,58 @@ function Invoke-Watched {
   return @{ code = $code; why = $why; booted = $booted }
 }
 
+# --- gemini por defecto: CLI `agy` (misma cuenta/cuota, sin Antigravity abierto). Deja prompt.md y usa Invoke-Watched ---
+function Invoke-AgyCli {
+  $exe = (Get-Command agy -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+  if (-not $exe) { return @{ code = 2; out = 'Falta la CLI agy en PATH (%LOCALAPPDATA%\agy\bin\agy.exe).' } }
+  $pfile = Join-Path $runDir 'prompt.md'
+  $cwd = $root
+  if ($Worktree) {
+    $wt = Join-Path $harness "worktrees\$Id"
+    if (-not (Test-Path $wt)) {
+      $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+      $g = & git -C $root worktree add -q -b "harness/$Id" $wt 2>&1 | Out-String
+      $ErrorActionPreference = $eap
+      if ($LASTEXITCODE -ne 0) { return @{ code = 2; out = "No pude crear el worktree (¿es un repo git con commits?): $g" } }
+    }
+    $cwd = $wt
+    $prompt += "`nTrabaja EXCLUSIVAMENTE en $wt (worktree en la rama harness/$Id). No hagas commit; el orquestador revisa y fusiona.`n"
+  }
+  [IO.File]::WriteAllText($pfile, $prompt, $utf8)
+  if (Test-Path $result) { Remove-Item $result }   # informe de un intento anterior
+  $outF = Join-Path $runDir 'agy-stdout.txt'; $errF = Join-Path $runDir 'agy-stderr.txt'
+  $live = Join-Path $runDir 'live.log'
+  $stallMin = if ($cfg.gemini.stallMin) { [double]$cfg.gemini.stallMin } else { 10 }
+  $maxMin   = [Math]::Max($(if ($cfg.gemini.maxMin) { [double]$cfg.gemini.maxMin } else { 45 }), $EtaMin * 3)
+  $mode = if ($Write) { 'accept-edits' } else { 'plan' }
+  $msg = "Lee y sigue las instrucciones del archivo $pfile y deja tu informe final (con el formato que pide) como respuesta. " +
+         "Si el brief es inviable o te bloqueas, responde igualmente el informe con estado 'blocked'."
+  $agyArgs = @('-p', $msg, '--output-format', 'text', '--print-timeout', "$([int][Math]::Ceiling($maxMin))m",
+               '--model', $m)
+  # solo lectura = modo por defecto: en headless lee archivos y deniega solo lo que pide permiso ('plan' bloquea hasta leer)
+  if ($Write) { $agyArgs += @('--mode', $mode, '--dangerously-skip-permissions') }
+  # solo lectura: headless deniega run_command; --sandbox aisla los comandos (no impide escribir: el brief lo prohibe)
+  else { $agyArgs += @('--sandbox', '--dangerously-skip-permissions') }
+  $quoteArg = { param($a) if ($a -match '[\s"]') { '"' + ($a -replace '"','\"') + '"' } else { $a } }
+  $argLine = ($agyArgs | ForEach-Object { & $quoteArg "$_" }) -join ' '
+  $w = Invoke-Watched -Exe $exe -ArgLine $argLine -OutF $outF -ErrF $errF `
+                      -Cwd $cwd -StallMin $stallMin -MaxMin $maxMin -Live $live -Label 'agy,'
+  $answer = @(Get-Content $outF -Encoding UTF8 -ErrorAction SilentlyContinue |
+              ForEach-Object { $_ -replace '\x1b\[[0-9;]*m','' })
+  $answerTxt = ($answer -join "`n").Trim()
+  # stdout es el informe: si agy no escribió result.md, se guarda ahí
+  if ($answerTxt -and (-not (Test-Path $result) -or -not (Get-Item $result).Length)) {
+    [IO.File]::WriteAllText($result, $answerTxt, $utf8)
+  }
+  $err = @(Get-Content $errF -Encoding UTF8 -ErrorAction SilentlyContinue |
+           ForEach-Object { $_ -replace '\x1b\[[0-9;]*m','' } | Where-Object { $_ })
+  $code = $w.code
+  if ($code -eq 0 -and -not $answerTxt) { $code = 1 }
+  $out = @($err) + '--- respuesta ---' + $answer
+  if ($w.why) { $out = @("[harness] gemini cortado: $($w.why) (ver live.log)") + $out }
+  return @{ code = $code; why = $w.why; out = $out }
+}
+
 $args_ = @()
 switch ($Engine) {
   'codex' {
@@ -474,7 +526,11 @@ $killedWhy = $null; $stdoutLines = $null
 Push-Location $(if ($cwd) { $cwd } else { $root })   # dsh trabaja en el directorio actual
 try {
   $ErrorActionPreference = 'Continue'   # stderr de los CLIs no debe abortar
-  if ($Engine -eq 'gemini') { $r = Invoke-Antigravity; $out = $r.out; $code = $r.code; $killedWhy = $r.why }
+  if ($Engine -eq 'gemini') {
+    $gBackend = if ($cfg.gemini.backend) { [string]$cfg.gemini.backend } else { 'agy' }
+    $r = if ($gBackend -eq 'agentapi' -or -not (Get-Command agy -ErrorAction SilentlyContinue)) { Invoke-Antigravity } else { Invoke-AgyCli }
+    $out = $r.out; $code = $r.code; $killedWhy = $r.why
+  }
   elseif ($Engine -eq 'dsh' -and $goDsh) {
     # OpenCode Go exige x-opencode-session: dsh no lo manda, así que corre la CLI oficial `opencode run`.
     # Prompt en archivo adjunto (evita el límite de línea de comandos). plan = solo lectura; build = edita.
@@ -490,6 +546,8 @@ try {
     $errF = Join-Path $runDir 'dsh-stderr.txt'; $outF = Join-Path $runDir 'dsh-stdout.txt'
     $live = Join-Path $runDir 'live.log'
     $env:NO_COLOR = '1'
+    # BD propia: la app de escritorio de OpenCode migra/limpia la BD compartida (1 GB+) y la CLI se cuelga al arrancar
+    if (-not $env:XDG_DATA_HOME) { $env:XDG_DATA_HOME = Join-Path $HOME '.local\share\opencode-cli' }
     # vigilancia (17-nov-2026: un run se quedó 3 h colgado en el arranque sin error): arranque sin sesión → relanzar;
     # sin actividad stallMin → cortar; total maxMin → cortar. Código 124 = drain lo da por fallido y avisa.
     $bootMin  = if ($cfg.dsh.bootMin)  { [double]$cfg.dsh.bootMin }  else { 2 }

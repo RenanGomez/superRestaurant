@@ -1,3 +1,17 @@
+## Plan autónomo al 100 % (2026-11-22) — instrucción humana, sustituye la Ola 0 manual
+
+- **Instrucción de Emmanuel (prevalece sobre AGENTS §3.1/§5/§19 donde choque):** no esperar aprobación humana durante la construcción; basta la aprobación de los revisores y testers lanzados por el orquestador. Emmanuel aprueba el producto final. Objetivo: 100 % de las Fases 0–8. Todos los motores en paralelo vía AO (opencode/DeepSeek, agy/Gemini, codex). Claude solo orquesta, en Sonnet 5.5 con esfuerzo medio.
+- **Plan:** `docs/plans/plan-autonomo-100.md`, con hitos M0–M7, backlog congelado, tick del loop, puertas G1–G4, `DONE-auto` por journey E2E, Git con main protegido y merge serializado, topes anti-desperdicio y lecciones.
+- **Puertas humanas que quedan:** deploy a producción, credenciales, proveedores reales, datos reales y force-push. Se acumulan en `docs/agentic/DECISIONS_PENDING.md` sin detener el loop.
+- **Estado:** solo planificado; ningún `ao spawn` lanzado. Siguiente acción: abrir M0 (§7 del plan) en una sesión de orquestador con Sonnet 5.5 medio.
+- La investigación de AO y de loops se hizo con un subagente Claude (solo lectura, web). Motivo: tarea atada a la conversación.
+
+## Revisión general y plan de cierre del MVP (2026-11-22)
+
+- MVP = v1.0 Fases 0–2 online-first con Mobile (decisión del 2026-09-04; el plan maestro §3.2 dice 0–3 y debe corregirse). Avance estimado ≈75 % (construido ≈79 %, aceptado ≈34 %). Cuello de botella: 114 REVIEW sin verificar, `feat/smoke-r1` sin integrar, 3 migraciones sin aplicar en remoto, z2b.
+- Plan por olas: `docs/plans/mvp-cierre-2026-11-22.md`. No se lanzó ningún motor; la Ola 0 espera el visto bueno de Emmanuel.
+- Estimación basada en los estados de TODO/HANDOFF y la cola; no se corrieron puertas ni se probó en navegador en esta sesión.
+
 ## Smoke r2: cierre de sesión de orquestación (2026-11-21) — REVIEW parcial, z2b abierto
 
 - **Rama** `feat/smoke-r1` (local, sin push). Integrado: K1 `af1c649b`, K4 `648fb41e`, K2 `92935f05`; Ola 2 B1a `2453d03c`, B3 `c3828a25`, B1d `a2ab91d4`, B1b `f44ef6aa`, B2 `4877d416`, Z2 `8818cf89`, B1c `9bbd78dd`, B4 `f42021f8`, Z3 `35cb2137`, Z5 `4fe0cdcc`, Z4 `0b0087e6`; harness/briefs `e239b55b`.

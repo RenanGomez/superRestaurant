@@ -1,4 +1,4 @@
-# ORCHESTRATOR — orquestación multi-motor
+﻿# ORCHESTRATOR — orquestación multi-motor
 
 Aplica en proyectos con `.harness/`. `AGENTS.md` (reglas del proyecto) manda sobre este archivo.
 
@@ -9,15 +9,22 @@ puntual, unas pocas líneas) se hace directo: delegar lo que cuesta menos que el
 
 | Motor | Para | Cuota |
 |---|---|---|
-| `gemini` (Antigravity, Google AI Pro) | leer mucho, mapas, docs, revisar diffs | abundante → **primero en lectura** |
-| `dsh` (CLI de OpenCode → suscripción OpenCode Go, solo `deepseek-v4.1-flash`) | **código**: tests, features, bugs, refactors | cupo amplio, varios en paralelo → **obligatorio y primero en código** |
-| `codex` (ChatGPT Plus, cuenta B; `config.codex.accounts`) | lo que dsh no resolvió tras su reintento, o lo que exige su sandbox | escasa → solo escalado; sin cuota pasa a dsh solo |
+| `gemini` (CLI `agy`, Google AI Pro) | **código** UI/visual/piezas medianas; leer mucho, mapas, revisar diffs | abundante → escribe y revisa en cada ola |
+| `dsh` (CLI de OpenCode → suscripción OpenCode Go, solo `deepseek-v4.1-flash`) | **código**: tests, mecánico, piezas pequeñas | cupo amplio, varios en paralelo |
+| `codex` (ChatGPT Plus, cuenta B; `config.codex.accounts`) | **código**: bugs difíciles, red, estado, lógica con riesgo | suficiente → motor normal, 1 a la vez por cuenta |
 | `claude` CLI (`claude -p`, haiku/sonnet) | último recurso (`-Engine claude`) | la misma del orquestador |
 | subagente Claude (Agent) | búsquedas rápidas (haiku), tareas atadas a esta conversación (sonnet) | — |
 
 Qué motor/modelo/esfuerzo por tipo de tarea: `routing.md`.
-**Los tres motores son obligatorios:** dsh escribe el código, gemini lee/mapea/revisa, codex escala. Reglas de
+**Los tres motores escriben en paralelo en cada ola:** con ≥3 tareas, cada uno recibe al menos una (reparto en
+`routing.md` → "Reparto obligatorio"); antes de lanzar, una línea con el reparto. Nunca todo a dsh. Reglas de
 velocidad, eficiencia y precisión de dsh: `routing.md` (secciones "Rápido", "Eficiente", "Certero").
+
+**agent-orchestrator (AO):** si el usuario pide "agent-orchestrator"/"AO", lanza workers con el CLI `ao`
+(`ao spawn --project <id> --harness <opencode|agy|codex> --name "<título>" --prompt "<brief>"`; ids en
+`ao project list`, estado en `ao status`/`ao session ls`). Cada worker trabaja en su worktree y abre PR; revísalo
+y pruébalo antes de aceptarlo. Nunca `--harness claude-code`. Sin `ao` en PATH:
+`%LOCALAPPDATA%\Programs\agent-orchestrator\resources\daemon\ao.exe`.
 
 ## Ponytail (DietrichGebert/ponytail) — obligatorio
 Todo el código del proyecto sigue Ponytail: escribir solo lo que la tarea necesita, reutilizar lo que ya existe,
@@ -35,7 +42,10 @@ nunca recortar validación, manejo de errores, seguridad, tests de lógica riesg
    Sin mapa o desactualizado → `bin/map.ps1`.
 2. **Brief** por tarea en `.harness/runs/<id>/brief.md` (`templates/brief.md`): objetivo, archivos, "hecho cuando",
    citas a `map.md §N`. Nunca la conversación entera ni AGENTS.md copiado.
-3. **Encolar y drenar** (lo normal):
+3. **¿El usuario mencionó "agent-orchestrator"/"AO"** (aunque sea suelto en una lista)? → NO encolar: lanza cada tarea
+   con `ao spawn --project <id> --harness <opencode|agy|codex> --name "<id>" --prompt "<brief.md completo>"` (ver
+   párrafo AO arriba) y salta al paso 4 revisando sus PR. Si no lo mencionó:
+   **Encolar y drenar** (lo normal):
    `powershell -NoProfile -File .harness/bin/enqueue.ps1 -Id <id> -Engine <gemini|dsh|codex> [-Model] [-Effort] [-Write] [-Worktree] -Files <rutas> [-After <ids>]`
    luego `powershell -NoProfile -File .harness/bin/drain.ps1 -Wait` **en background** (herramienta de shell con
    ejecución en segundo plano, nunca en primer plano ni con un bucle de espera propio). Con `-Wait`, si un motor se
@@ -99,7 +109,7 @@ Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos 
   `.harness/state/drain.md` y revisa los resultados.
   Un run suelto programa su propio relanzamiento (`\agent-harness\<proyecto>-<id>`).
 - Ante `queued`: **no** rehacerlo en Claude. Seguir con otras tareas o con el motor alternativo de `routing.md`.
-- Otros fallos (login, Antigravity cerrado): un reintento con el alternativo; si persiste, avisar al usuario.
+- Otros fallos (login, cuota, `agy` ausente): un reintento con el alternativo; si persiste, avisar al usuario.
 
 ## Seguridad
 - Un escritor por ruta: tareas que escriben en paralelo con `-Files` disjuntos, o `-Worktree`.
@@ -122,7 +132,7 @@ Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos 
   `git status` completo al terminar.
 - gemini con `-Write` sin worktree: su "solo tocar X" es una instrucción, no un sandbox. Brief con rutas exactas y
   revisar el diff completo (`git status`), no solo los archivos esperados.
-- Antigravity debe estar abierto y el proyecto abierto en él al menos una vez. Cada run crea una conversación
+- gemini va por la CLI `agy` (config `gemini.backend: "agy"`): NO hace falta Antigravity abierto. Solo con `backend: "agentapi"` (o sin `agy` en PATH) se usa la app, que entonces debe estar abierta con el proyecto. Con agentapi cada run crea una conversación
   "harness <id>".
 - Sin push, deploy, merges ni borrados desde motores o subagentes: lo decide el usuario.
 - Temporales, respaldos (`*.before*`, `*.bak`) y salidas de depuración: solo en `.harness/state/tmp/`, y borrarlos

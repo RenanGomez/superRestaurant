@@ -133,7 +133,7 @@
   "decisions": [
     {
       "h": "Aplicar migraciones en remoto",
-      "p": "Hay tres migraciones sin aplicar (20261120000100, 20261120000200, 20261121000100). Se editaron en sitio porque el preflight del 2026-11-20 las mostraba sin aplicar. Dime si aplicaste algo desde entonces; si no, autoriza el plan (staging rollback-only primero, luego remoto) cuando z2b esté integrado."
+      "p": "AUTORIZADO por Emmanuel (2026-11-22, «Sí, con staging»): aplicar 20261120000100, 20261120000200 y 20261121000100 con staging/rollback-only primero y luego remoto. TODAVÍA NO APLICADO: espera a que z2b (arreglo de confirm_capture_draft_v3 en 20261121000100) esté integrado y verificado en PostgreSQL local, y a confirmar con un preflight de solo lectura que nada se aplicó desde el 2026-11-20. z2b está en reintento (dsh)."
     },
     {
       "h": "Fallos falsos de dsh (EPIPE)",

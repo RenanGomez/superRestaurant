@@ -34,14 +34,17 @@
                   "stallMin":  10
               },
     "gemini":  {
+                   "backend":  "agy",
                    "models":  {
-                                  "fast":  "flash_lite",
-                                  "default":  "flash",
-                                  "strong":  "pro"
+                                  "fast":  "gemini-3.8-flash-high",
+                                  "default":  "gemini-4-neon-medium",
+                                  "strong":  "gemini-4-neon-high"
                               },
-                   "note":  "Vía Antigravity agentapi (cuenta Google AI Pro). Requiere Antigravity abierto.",
+                   "stallMin":  10,
+                   "maxMin":  45,
+                   "note":  "Vía CLI agy; no requiere Antigravity abierto. backend=agentapi usa la app.",
                    "maxSteps":  150,
-                   "maxParallel":  2
+                   "maxParallel":  3
                },
     "claude":  {
                    "models":  {
@@ -58,7 +61,7 @@
                   "enabled":  false
               },
     "queue":  {
-                  "maxParallel":  4,
+                  "maxParallel":  6,
                   "note":  "drain.ps1: runs simultáneos máximos. Codex y Antigravity pueden ir en paralelo; dos escritores nunca tocan las mismas rutas (-Files)."
               },
     "largeFiles":  {
