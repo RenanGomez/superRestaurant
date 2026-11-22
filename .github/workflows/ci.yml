@@ -113,7 +113,7 @@ jobs:
             if [[ "$file" == *20260927000100_delivery_zones.sql ]]; then run_audit delivery_zones_pre_catalog.sql; fi
             psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$file"
             if [[ "$file" == *20260830000100_create_tenancy_memberships.sql ]]; then
-              psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "GRANT app_api TO postgres WITH ADMIN TRUE, INHERIT FALSE, SET FALSE GRANTED BY supabase_admin;"
+              psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "SET ROLE supabase_admin; GRANT app_api TO postgres WITH ADMIN TRUE, INHERIT FALSE, SET FALSE GRANTED BY supabase_admin; RESET ROLE;"
             fi
             if [[ "$file" == *20260830000200_list_active_branch_memberships.sql ]]; then
               psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/tests/tenancy_memberships_catalog.sql
