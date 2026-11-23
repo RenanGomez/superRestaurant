@@ -59,7 +59,7 @@ No duplicar el roadmap completo en HANDOFF.md; registrar solo estado, decisiones
 8. Reconsultar CodeGraph para dependencias y referencias afectadas.
 9. Ejecutar lint, typecheck, pruebas y verificación de interfaz que correspondan.
 10. Actualizar TODO.md, PROJECT_NOTES.md si hay una decisión durable, y HANDOFF.md.
-11. Dejar el trabajo en REVIEW; solo un humano aprueba trabajo sustancial como DONE.
+11. Dejar el trabajo en REVIEW y, cuando pasen todas las puertas automáticas de §19.6, integrarlo y marcarlo DONE sin esperar aprobación humana.
 
 No iniciar una fase si no se cumplieron los criterios de salida de la anterior, salvo instrucción humana documentada.
 
@@ -82,7 +82,7 @@ Están autorizados por defecto:
 - repetir comandos que fallaron antes de producir efectos, o reintentos cuya idempotencia y resultado remoto estén demostrados;
 - crear commits locales cuando el humano pidió publicar, entregar o dejar listo el corte.
 
-Requieren aprobación humana explícita porque cambian estado crítico o amplían el alcance:
+Cambian estado crítico o amplían el alcance. **Desde 2026-11-23 ya no esperan aprobación humana** (decisión de Emmanuel, ver §19.6): el orquestador las ejecuta solo, con las puertas automáticas y el protocolo de seguridad de §19.6:
 
 - aplicar o revertir persistentemente migraciones en una base remota;
 - desplegar a producción o cambiar infraestructura, dominios, facturación o proveedores externos;
@@ -93,7 +93,7 @@ Requieren aprobación humana explícita porque cambian estado crítico o amplía
 - operaciones destructivas de filesystem o Git, incluida eliminación recursiva material;
 - desactivar controles de seguridad, ampliar globalmente red/filesystem o usar acceso completo sin sandbox.
 
-Una aprobación crítica puede cubrir en una sola autorización un plan concreto con destino, versiones y verificaciones enumeradas. No fragmentarla en confirmaciones redundantes. Si el resultado de una mutación remota es ambiguo, detener reintentos, inspeccionar estado de forma read-only y pedir dirección solo si la idempotencia o el estado real no resuelven la incertidumbre.
+La autorización humana de Emmanuel para todas estas acciones es permanente (§19.6). Si el resultado de una mutación remota es ambiguo, detener reintentos, inspeccionar estado de forma read-only y resolver con la idempotencia y el estado real; si no se resuelve, marcar la tarea BLOCKED con evidencia y continuar con otras, sin detener el resto del trabajo.
 
 Preferir `workspace-write` con Auto-review y reglas/prefijos estrechos para comandos habituales. No solicitar permisos amplios para intérpretes, shells o destinos genéricos cuando basta un comando o dominio acotado.
 
@@ -130,7 +130,7 @@ Estados permitidos:
 - TODO: no iniciada;
 - IN_PROGRESS: trabajo activo;
 - REVIEW: implementada y verificada, pendiente de revisión humana;
-- DONE: aprobada por el humano o tarea mecánica aprobada explícitamente;
+- DONE: pasó todas las puertas automáticas de §19.6 e integrada (o aprobada por el humano si este quiso intervenir);
 - BLOCKED: no puede continuar por una dependencia o decisión;
 - CANCELLED: descartada intencionalmente.
 
@@ -138,7 +138,7 @@ Transiciones normales:
 
 - TODO → IN_PROGRESS;
 - IN_PROGRESS → REVIEW;
-- REVIEW → DONE con aprobación humana;
+- REVIEW → DONE cuando se cumplen las puertas automáticas de §19.6;
 - TODO/IN_PROGRESS → BLOCKED con motivo y siguiente acción mínima;
 - BLOCKED → TODO cuando se elimina el bloqueo;
 - REVIEW → TODO cuando requiere retrabajo;
@@ -374,7 +374,7 @@ Remoto del proyecto: https://github.com/RenanGomez/superRestaurant.git.
 
 - usar conventional commits: feat, fix, refactor, test, docs, chore;
 - trabajar en ramas pequeñas por feature;
-- no hacer push, merge, rebase, force-push ni reescribir ramas remotas sin autorización humana;
+- push, merge y rebase por PR quedan autorizados al orquestador cuando pasan las puertas de §19.6; `force-push` y reescritura de historia remota solo sobre ramas propias de worker, nunca sobre `main`;
 - nunca versionar node_modules, .env, secretos, coverage, dist, .next o artefactos temporales;
 - no usar git reset --hard ni checkout destructivo sobre cambios del usuario;
 - inspeccionar el remoto antes de integrar historia heredada;
@@ -456,8 +456,8 @@ Reglas que no cambian con el nivel:
 
 - ningún cliente calcula dinero ni decide permisos; si una tarea C necesita un cálculo, se pide al API y eso sube la parte del API a nivel B o A;
 - el servidor revalida todo lo que la UI envía; una tarea C nunca toca `apps/api` ni SQL;
-- migraciones remotas, push, credenciales, deploy y datos reales siguen requiriendo autorización explícita en cualquier nivel;
-- una tarea C puede pasar a DONE con aprobación visual de Emmanuel sin revisión de código adicional; una tarea A nunca;
+- migraciones remotas, push, credenciales, deploy y datos reales ya no requieren autorización humana (§19.6) pero sí el protocolo de seguridad de ese apartado en cualquier nivel;
+- una tarea C pasa a DONE con verificación visual automatizada (agy en navegador real, desktop y 390×844, consola limpia) más las puertas de §19.6; una tarea A exige además revisión doble y pruebas de aislamiento/idempotencia;
 - el orquestador clasifica cada tarea en el paquete con el nivel y la razón; una clasificación dudosa se resuelve hacia arriba.
 
 ### 19.3. Plan «día operable» (vigente desde 2026-10-03)
@@ -493,6 +493,33 @@ Decisión de Emmanuel del 2026-11-21: el humano da seguimiento a los cambios con
 
 ---
 
+### 19.6. Autonomía total con puertas automáticas (vigente desde 2026-11-23)
+
+Decisión de Emmanuel del 2026-11-23: el orquestador no espera aprobación humana para ninguna acción: migraciones remotas, push/merge, deploy, credenciales de proyecto, datos y pasar tareas a DONE. Esta sección prevalece sobre cualquier otra regla de este archivo que exija esperar al humano. La autonomía **no reduce la exigencia de calidad**: sustituye la aprobación humana por verificación automatizada, y el orquestador responde del resultado.
+
+**Puertas para pasar a DONE e integrar (todas):**
+
+1. paquete de contexto y nivel A/B/C/D declarados;
+2. CI verde (lint, typecheck, tests, build del alcance y `pg-verify` si hay SQL);
+3. pruebas proporcionales al nivel de §19.2 (unitarias, integración, aislamiento e idempotencia en A);
+4. revisión cruzada por un motor distinto al que escribió (Codex ↔ agy; Sonnet como segunda familia en A), con cero hallazgos P1 abiertos; los P2/P3 van a `docs/agentic/debt.md`;
+5. verificación visual automatizada de toda UI (navegador real, desktop y 390×844, consola y red limpias);
+6. `TODO.md`, `HANDOFF.md` y smoke actualizados (§19.5).
+
+**Protocolo de seguridad para acciones críticas (sustituye a la aprobación):**
+
+- migración remota: probar en rollback-only y en base local desde cero, `--dry-run` exacto, aplicar primero a staging/dev, postcheck de versiones/objetos/grants y registro del resultado; nunca editar una migración aplicada;
+- datos reales: respaldo verificable antes de cualquier borrado, corrección o importación, con alcance acotado por ids y registro de lo afectado; sin operaciones masivas sin reversa;
+- credenciales y secretos: nunca en Git, logs ni prompts; rotar o crear solo en el gestor de secretos del proyecto y registrar el hecho sin el valor;
+- deploy: a staging primero, health/readiness y smoke antes de producción, con rollback documentado;
+- Git: PR + CI verde; sin `force-push` ni reescritura sobre `main`; sin `reset --hard` sobre cambios ajenos;
+- pagos, comunicaciones y efectos externos reales: solo con claves y destinatarios de prueba hasta que el producto declare lo contrario;
+- si una puerta falla dos veces, la tarea pasa a BLOCKED con evidencia y se sigue con otras; no se baja el nivel de rigor para destrabarla.
+
+Si el entorno de ejecución (por ejemplo el modo de permisos de la sesión de Claude Code) bloquea una acción, ese bloqueo no se esquiva: se resuelve cambiando la configuración de la sesión o se registra como BLOCKED.
+
+---
+
 ## 20. Definition of Done
 
 Una tarea llega a REVIEW cuando:
@@ -510,11 +537,11 @@ Una fase termina cuando:
 - su flujo end-to-end funciona;
 - CI está verde;
 - migraciones son reproducibles;
-- riesgos críticos están cerrados o aceptados por el humano;
+- riesgos críticos están cerrados o documentados en HANDOFF con su mitigación;
 - existen instrucciones de operación/verificación;
 - se cumplen los criterios de salida del plan maestro.
 
-DONE requiere aprobación humana para trabajo sustancial.
+DONE se otorga por las puertas automáticas de §19.6; la aprobación humana es opcional.
 
 ---
 
