@@ -51,7 +51,9 @@ import {
 import { MobileOfflineSession } from "./sync-session.js";
 import {
   createWebCryptoEnvelopeCipher,
+  deriveScopeEnvelopeKey,
   hexToBytes,
+  MobileScopeEnvelopeError,
   type MobileSyncEnvelopeCipher,
 } from "./sync-envelope.js";
 import {
@@ -264,9 +266,21 @@ export function createExpoEnvelopeCipher(deviceId: string, keys: MobileSyncKeySt
   if (subtle === undefined) throw new MobileSyncStorageError("ENCRYPTION_UNAVAILABLE", "subtle");
   return createWebCryptoEnvelopeCipher({
     rawKey: async (version: number): Promise<Uint8Array> => {
-      const key = await keys.readKeyByVersion(deviceId, version);
-      if (key === null) throw new MobileSyncKeyError("ENCRYPTION_KEY_CORRUPT", "envelope-key");
-      return hexToBytes(key.hex);
+      let stored;
+      try {
+        stored = await keys.readKeyByVersion(deviceId, version);
+      } catch (error) {
+        if (error instanceof MobileSyncKeyError) {
+          throw new MobileScopeEnvelopeError(
+            error.code === "ENCRYPTION_UNAVAILABLE" ? "ENCRYPTION_UNAVAILABLE" : "STORAGE_LOAD_FAILED",
+            error.message,
+          );
+        }
+        throw error;
+      }
+      if (stored === null) throw new MobileScopeEnvelopeError("ENCRYPTION_KEY_MISSING", `v${version}`);
+      // The AES-GCM key is an HKDF subkey of the SQLCipher DEK, never the DEK itself.
+      return deriveScopeEnvelopeKey(subtle, hexToBytes(stored.hex));
     },
     subtle,
   });

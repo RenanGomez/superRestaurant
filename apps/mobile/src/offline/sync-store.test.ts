@@ -27,10 +27,12 @@ import {
   entry,
   fakeSha256,
   fixtureEnvelopeCipher,
+  fixtureKeyBytes,
   stateWith,
   storageFor,
   testId,
 } from "./test-fixtures.js";
+import { createWebCryptoEnvelopeCipher, MobileScopeEnvelopeError } from "./sync-envelope.js";
 
 async function expectStorageError(promise: Promise<unknown>, code: string): Promise<void> {
   await assert.rejects(promise, (error: unknown) => error instanceof MobileSyncStorageError && error.code === code, code);
@@ -342,5 +344,38 @@ test("transient hash I/O failure does not report corrupt evidence", async () => 
   await storageFor(database).persist(stateWith([entry()]));
   const store = new MobileSqliteSyncStorage({ cipher: fixtureEnvelopeCipher(), database, deviceId: DEVICE, keyVersion: 1, sha256Hex: () => Promise.reject(new Error("temporary I/O")) });
   await expectStorageError(store.inspectPendingEvidence(), "STORAGE_LOAD_FAILED");
+  assert.equal((await store.getStorageHealth()).quarantined, false);
+});
+
+test("a transient keystore failure is retryable and never quarantines the store", async () => {
+  const database = new FakeSyncDatabase();
+  await storageFor(database).persist(stateWith([entry()]));
+  let rejections = 1;
+  const cipher = createWebCryptoEnvelopeCipher({
+    rawKey: (version: number): Promise<Uint8Array> => {
+      if (rejections > 0) {
+        rejections -= 1;
+        return Promise.reject(new Error("keystore temporarily down"));
+      }
+      return Promise.resolve(fixtureKeyBytes(version));
+    },
+    subtle: globalThis.crypto.subtle,
+  });
+  const store = new MobileSqliteSyncStorage({ cipher, database, deviceId: DEVICE, keyVersion: 1, sha256Hex: fakeSha256 });
+  await expectStorageError(store.inspectPendingEvidence(), "STORAGE_LOAD_FAILED");
+  assert.equal((await store.getStorageHealth()).quarantined, false, "a key failure is not corruption");
+  const recovered = parseDurableState(await store.loadState(DEVICE), DEVICE);
+  assert.equal(recovered.ok, true, "the next load succeeds once the keystore recovers");
+});
+
+test("a missing key version surfaces ENCRYPTION_KEY_MISSING and does not quarantine", async () => {
+  const database = new FakeSyncDatabase();
+  await storageFor(database).persist(stateWith([entry()]));
+  const cipher = createWebCryptoEnvelopeCipher({
+    rawKey: (): Promise<Uint8Array> => Promise.reject(new MobileScopeEnvelopeError("ENCRYPTION_KEY_MISSING", "v1")),
+    subtle: globalThis.crypto.subtle,
+  });
+  const store = new MobileSqliteSyncStorage({ cipher, database, deviceId: DEVICE, keyVersion: 1, sha256Hex: fakeSha256 });
+  await expectStorageError(store.inspectPendingEvidence(), "ENCRYPTION_KEY_MISSING");
   assert.equal((await store.getStorageHealth()).quarantined, false);
 });

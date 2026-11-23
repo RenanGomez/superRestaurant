@@ -33,12 +33,23 @@ export const SCOPE_ENVELOPE_FORMAT = "sr-scope-envelope-v1" as const;
 /** AES-GCM nonce size mandated by ADR-005 §4.2. */
 export const SCOPE_ENVELOPE_IV_BYTES = 12;
 
+/** AES-GCM authentication tag length; ciphertext is never shorter than this. */
+export const SCOPE_ENVELOPE_TAG_BYTES = 16;
+
 /** AES-256 key size. */
 export const SCOPE_ENVELOPE_KEY_BYTES = 32;
 
+/** HKDF `info` used to derive a per-purpose subkey, distinct from the SQLCipher DEK. */
+export const SCOPE_ENVELOPE_HKDF_INFO = "sr-scope-envelope-v1";
+
 const HEX = /^(?:[0-9a-f]{2})*$/u;
 
-export type MobileScopeEnvelopeErrorCode = "STATE_CORRUPT" | "ENCRYPTION_UNAVAILABLE" | "STORAGE_LOAD_FAILED";
+export type MobileScopeEnvelopeErrorCode =
+  | "STATE_CORRUPT"
+  | "ENCRYPTION_UNAVAILABLE"
+  /** The keystore has no key for this version: a recoverable state, never corruption. */
+  | "ENCRYPTION_KEY_MISSING"
+  | "STORAGE_LOAD_FAILED";
 
 export class MobileScopeEnvelopeError extends Error {
   public constructor(public readonly code: MobileScopeEnvelopeErrorCode, detail?: string) {
@@ -195,9 +206,11 @@ export async function decodeScopedSnapshot(
     let plaintext: string;
     try {
       plaintext = await cipher.decrypt({ ciphertext: entry.ciphertext, iv: entry.iv }, aad, entry.keyVersion);
-    } catch {
-      // Wrong branch/tenant/device/key version or a tampered tag: never retried in clear.
-      throw new MobileScopeEnvelopeError("STATE_CORRUPT", "tag");
+    } catch (error) {
+      if (error instanceof MobileScopeEnvelopeError) throw error;
+      // A keystore/rawKey/platform failure is NOT corruption: surface it as a
+      // retryable load failure so the caller never quarantines on a key hiccup.
+      throw new MobileScopeEnvelopeError("STORAGE_LOAD_FAILED", error instanceof Error ? error.message : String(error));
     }
     let slice: unknown;
     try {
@@ -205,7 +218,7 @@ export async function decodeScopedSnapshot(
     } catch {
       throw new MobileScopeEnvelopeError("STATE_CORRUPT", "slice");
     }
-    const parsed = asSlice(slice);
+    const parsed = asSlice(slice, entry.restaurantId, entry.branchId);
     if (parsed.scope !== null) scopes.push(parsed.scope);
     for (const item of parsed.outbox) outbox.push(item);
     for (const entity of parsed.replica) replica.push(entity);
@@ -254,7 +267,7 @@ function asEntry(value: unknown): ScopedSnapshotEntry {
   if (typeof iv !== "string" || !HEX.test(iv) || iv.length !== SCOPE_ENVELOPE_IV_BYTES * 2) {
     throw new MobileScopeEnvelopeError("STATE_CORRUPT", "entry.iv");
   }
-  if (typeof ciphertext !== "string" || !HEX.test(ciphertext) || ciphertext.length === 0) {
+  if (typeof ciphertext !== "string" || !HEX.test(ciphertext) || ciphertext.length < SCOPE_ENVELOPE_TAG_BYTES * 2) {
     throw new MobileScopeEnvelopeError("STATE_CORRUPT", "entry.ciphertext");
   }
   if (typeof keyVersion !== "number" || !Number.isSafeInteger(keyVersion) || keyVersion < 1) {
@@ -263,14 +276,43 @@ function asEntry(value: unknown): ScopedSnapshotEntry {
   return Object.freeze({ branchId, ciphertext, iv, keyVersion, restaurantId, scope });
 }
 
-function asSlice(value: unknown): { readonly scope: ScopeState | null; readonly outbox: readonly OutboxEntry[]; readonly replica: readonly ReplicaEntity[] } {
+function asSlice(
+  value: unknown,
+  expectedRestaurantId: string,
+  expectedBranchId: string,
+): { readonly scope: ScopeState | null; readonly outbox: readonly OutboxEntry[]; readonly replica: readonly ReplicaEntity[] } {
   const record = asRecord(value);
   if (record === undefined) throw new MobileScopeEnvelopeError("STATE_CORRUPT", "slice");
   const scope = record["scope"];
-  if (scope !== null && asRecord(scope) === undefined) throw new MobileScopeEnvelopeError("STATE_CORRUPT", "slice.scope");
+  if (scope !== null) {
+    const scopeRecord = asRecord(scope);
+    if (scopeRecord === undefined
+      || scopeRecord["restaurantId"] !== expectedRestaurantId
+      || scopeRecord["branchId"] !== expectedBranchId) {
+      throw new MobileScopeEnvelopeError("STATE_CORRUPT", "slice.scope");
+    }
+  }
   const outbox = record["outbox"];
   const replica = record["replica"];
   if (!Array.isArray(outbox) || !Array.isArray(replica)) throw new MobileScopeEnvelopeError("STATE_CORRUPT", "slice.lists");
+  // Every record inside one envelope must belong to the scope the envelope is
+  // authenticated for; a decrypted-but-foreign record is still corruption.
+  for (const item of outbox) {
+    const entry = asRecord(item);
+    if (entry === undefined
+      || entry["restaurantId"] !== expectedRestaurantId
+      || entry["branchId"] !== expectedBranchId) {
+      throw new MobileScopeEnvelopeError("STATE_CORRUPT", "slice.outbox");
+    }
+  }
+  for (const item of replica) {
+    const entity = asRecord(item);
+    if (entity === undefined
+      || entity["restaurantId"] !== expectedRestaurantId
+      || entity["branchId"] !== expectedBranchId) {
+      throw new MobileScopeEnvelopeError("STATE_CORRUPT", "slice.replica");
+    }
+  }
   // The entries were parsed by `parseDurableState` before they were written; the
   // merged state is re-validated there. Here we only reject a non-object shape.
   return Object.freeze({
@@ -315,9 +357,15 @@ export function createWebCryptoEnvelopeCipher(options: WebCryptoEnvelopeCipherOp
   const keyFor = (keyVersion: number): Promise<CryptoKey> => {
     const cached = keys.get(keyVersion);
     if (cached !== undefined) return cached;
-    const imported = options.rawKey(keyVersion).then(async (raw) => {
+    const imported = (async (): Promise<CryptoKey> => {
+      const raw = await options.rawKey(keyVersion);
       if (raw.length !== SCOPE_ENVELOPE_KEY_BYTES) throw new MobileScopeEnvelopeError("ENCRYPTION_UNAVAILABLE", "key");
       return options.subtle.importKey("raw", raw as BufferSource, { length: 256, name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+    })().catch((error: unknown) => {
+      // Never cache a rejected import: a transient keystore failure must not
+      // poison every later read for the lifetime of this cipher.
+      keys.delete(keyVersion);
+      throw error;
     });
     keys.set(keyVersion, imported);
     return imported;
@@ -352,6 +400,27 @@ export function createWebCryptoEnvelopeCipher(options: WebCryptoEnvelopeCipherOp
       return utf8Decode(new Uint8Array(plaintext));
     },
   });
+}
+
+/**
+ * Derives the per-purpose AES-256-GCM subkey used for scope envelopes from the
+ * device DEK. HKDF-SHA256 with a fixed `info` means the SQLCipher key and the
+ * envelope key are different secrets derived from the same root, so exposing one
+ * cipher's key does not hand out the other and a rotation applies to both.
+ */
+export async function deriveScopeEnvelopeKey(subtle: SubtleCrypto, dekBytes: Uint8Array): Promise<Uint8Array> {
+  const ikm = await subtle.importKey("raw", dekBytes as BufferSource, "HKDF", false, ["deriveBits"]);
+  const bits = await subtle.deriveBits(
+    {
+      hash: "SHA-256",
+      info: utf8Encode(SCOPE_ENVELOPE_HKDF_INFO) as BufferSource,
+      name: "HKDF",
+      salt: new Uint8Array(0) as BufferSource,
+    },
+    ikm,
+    SCOPE_ENVELOPE_KEY_BYTES * 8,
+  );
+  return new Uint8Array(bits);
 }
 
 export function bytesToHex(bytes: Uint8Array): string {

@@ -39,11 +39,13 @@ import {
   decodeScopedSnapshot,
   encodeScopedSnapshot,
   MobileScopeEnvelopeError,
+  type MobileScopeEnvelopeErrorCode,
   type MobileSyncEnvelopeCipher,
 } from "./sync-envelope.js";
 
 export const MOBILE_SYNC_STORAGE_ERROR_CODES = [
   "ENCRYPTION_UNAVAILABLE",
+  "ENCRYPTION_KEY_MISSING",
   "STORAGE_COMMIT_FAILED",
   "STORAGE_LOAD_FAILED",
   "STORAGE_LOCKED",
@@ -359,7 +361,11 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
       try {
         state = await this.hydrate(raw, meta);
       } catch (error) {
-        if (!(error instanceof MobileSyncStorageError) || (error.code !== "STATE_CORRUPT" && error.code !== "SEQUENCE_REGRESSION")) throw toStorageError(error, "STORAGE_LOAD_FAILED");
+        const storageError = toStorageError(error, "STORAGE_LOAD_FAILED");
+        // Only authenticated corruption is evidence of corruption. A missing key
+        // or a keystore/platform failure is retryable and must be rethrown so the
+        // caller never quarantines a recoverable store.
+        if (storageError.code !== "STATE_CORRUPT" && storageError.code !== "SEQUENCE_REGRESSION") throw storageError;
         return Object.freeze({
           status: "corrupt" as const,
           outboxCount: 0,
@@ -472,12 +478,12 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
       state = await decodeScopedSnapshot(raw, this.cipher, this.deviceId);
     } catch (error) {
       if (error instanceof MobileScopeEnvelopeError) {
-        throw new MobileSyncStorageError(
-          error.code === "ENCRYPTION_UNAVAILABLE" ? "ENCRYPTION_UNAVAILABLE" : "STATE_CORRUPT",
-          error.message,
-        );
+        throw new MobileSyncStorageError(envelopeErrorCode(error.code), error.message);
       }
-      throw error;
+      if (error instanceof MobileSyncStorageError) throw error;
+      // Any other keystore/platform failure is a load failure, never corruption:
+      // the caller must be able to retry without quarantining the store.
+      throw new MobileSyncStorageError("STORAGE_LOAD_FAILED", error instanceof Error ? error.message : String(error));
     }
     const parsed = parseDurableState(state, this.deviceId);
     if (!parsed.ok) {
@@ -629,14 +635,21 @@ function purgeState(state: DurableSyncState, retained: readonly OutboxEntry[]): 
   });
 }
 
+/** Maps an envelope-layer failure to a storage code, keeping corruption distinct. */
+function envelopeErrorCode(code: MobileScopeEnvelopeErrorCode): MobileSyncStorageErrorCode {
+  switch (code) {
+    case "STATE_CORRUPT": return "STATE_CORRUPT";
+    case "ENCRYPTION_UNAVAILABLE": return "ENCRYPTION_UNAVAILABLE";
+    case "ENCRYPTION_KEY_MISSING": return "ENCRYPTION_KEY_MISSING";
+    case "STORAGE_LOAD_FAILED": return "STORAGE_LOAD_FAILED";
+  }
+}
+
 /** Maps a driver error to a stable storage code; quota is called out so the UI can go read-only. */
 export function toStorageError(error: unknown, fallback: MobileSyncStorageErrorCode): MobileSyncStorageError {
   if (error instanceof MobileSyncStorageError) return error;
   if (error instanceof MobileScopeEnvelopeError) {
-    return new MobileSyncStorageError(
-      error.code === "ENCRYPTION_UNAVAILABLE" ? "ENCRYPTION_UNAVAILABLE" : "STATE_CORRUPT",
-      error.message,
-    );
+    return new MobileSyncStorageError(envelopeErrorCode(error.code), error.message);
   }
   const message = error instanceof Error ? error.message : String(error);
   const lowered = message.toLowerCase();

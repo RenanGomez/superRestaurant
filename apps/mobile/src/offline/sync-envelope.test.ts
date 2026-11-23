@@ -6,6 +6,7 @@ import { parseDurableState, parseSyncScope, type DurableSyncState } from "@super
 import {
   createWebCryptoEnvelopeCipher,
   decodeScopedSnapshot,
+  deriveScopeEnvelopeKey,
   encodeScopedSnapshot,
   MobileScopeEnvelopeError,
   partitionStateByScope,
@@ -158,4 +159,23 @@ test("a device cannot read another device's persisted snapshot", async () => {
   const database = new FakeSyncDatabase();
   await storageFor(database, DEVICE).persist(stateWith([entry()]));
   assert.equal(await storageFor(database, OTHER_DEVICE).loadState(OTHER_DEVICE), null);
+});
+
+test("the envelope key is an HKDF subkey, distinct from the DEK", async () => {
+  const dek = fixtureKeyBytes(1);
+  const derived = await deriveScopeEnvelopeKey(globalThis.crypto.subtle, dek);
+  const again = await deriveScopeEnvelopeKey(globalThis.crypto.subtle, dek);
+  assert.equal(derived.length, 32);
+  assert.deepEqual([...again], [...derived], "derivation is deterministic");
+  assert.notDeepEqual([...derived], [...dek], "the AES-GCM key is not the SQLCipher DEK");
+});
+
+test("a ciphertext shorter than the GCM tag is rejected as corrupt", async () => {
+  const serialized = await encodeScopedSnapshot(stateWith([entry()]), fixtureEnvelopeCipher(), DEVICE, 1);
+  const document = JSON.parse(serialized) as { entries: { ciphertext: string }[] };
+  const target = document.entries[0];
+  assert.ok(target !== undefined);
+  target.ciphertext = "00";
+  await assert.rejects(decodeScopedSnapshot(JSON.stringify(document), fixtureEnvelopeCipher(), DEVICE), (error: unknown) =>
+    error instanceof MobileScopeEnvelopeError && error.code === "STATE_CORRUPT");
 });
