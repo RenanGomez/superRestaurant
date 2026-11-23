@@ -317,8 +317,6 @@ export type OrderSyncEventPayload =
     readonly kind: "apply_discount";
     readonly baseVersion: number;
     readonly orderDiscount: OrderDiscountSnapshot;
-    readonly requiresSupervisor?: boolean;
-    readonly allowStacking?: boolean;
     readonly authorization?: SyncSupervisorAuthorization;
     readonly reason?: string;
   }
@@ -349,9 +347,18 @@ export type OrderSyncEventPayload =
     readonly authorization?: SyncSupervisorAuthorization;
   };
 
+/** Server-trusted discount policy; client event payloads can NEVER supply or relax these flags. */
+export interface OrderDiscountMergePolicy {
+  /** Defaults to `true` (fail-closed): supervisor authorization is required unless server policy waives it. */
+  readonly requiresSupervisor?: boolean;
+  /** Defaults to `false` (fail-closed): competing order discounts never stack unless server policy allows it. */
+  readonly allowStacking?: boolean;
+}
+
 export interface MergeOrderSyncEventInput {
   readonly entityType?: "Order";
   readonly canonical: OrderSyncState | null;
+  readonly discountPolicy?: OrderDiscountMergePolicy;
   readonly event: SyncMergeEventMeta & { readonly entityId: string } & OrderSyncEventPayload;
 }
 
@@ -573,8 +580,14 @@ export interface PaymentSyncContext {
   readonly orderId: string;
   readonly orderStatus: OrderState;
   readonly currency: string;
+  /**
+   * Server-authoritative payable order total in minor units, recalculated by the caller
+   * from frozen order snapshots (plus delivery charge when applicable). Never trusted from client payloads.
+   */
   readonly orderTotalMinor: number;
   readonly existingPayments: readonly PaymentSyncRecord[];
+  /** Trusted server classification of whether this payment arrived via offline sync; client events cannot override it. */
+  readonly isOfflineEvent: boolean;
   readonly cashRegisterOpen?: boolean;
   readonly offlineCashLimitMinor?: number | null;
   readonly expectedCashSequenceByDevice?: Readonly<Record<string, number>>;
@@ -590,7 +603,6 @@ export interface IncomingPaymentSyncEvent extends SyncMergeEventMeta {
   readonly tenderedAmountMinor?: number | null;
   readonly currency: string;
   readonly method: PaymentMethod;
-  readonly isOfflineEvent: boolean;
   readonly cashRegisterId?: string | null;
   readonly cashierId?: string | null;
   readonly cashSequence?: number | null;
@@ -925,7 +937,8 @@ export function mergeOrderSyncEvent(input: MergeOrderSyncEventInput): OrderSyncM
   const canonicalTotals = computeOrderTotals(canonical);
 
   if (operation === "update") {
-    return mergeOrderUpdate(canonical, canonicalTotals, rawEvent, meta, baseVersion!);
+    const discountPolicy = readOptionalDiscountPolicy(root, "discountPolicy");
+    return mergeOrderUpdate(canonical, canonicalTotals, rawEvent, meta, baseVersion!, discountPolicy);
   }
   if (operation === "transition") {
     return mergeOrderTransition(canonical, canonicalTotals, rawEvent, meta, baseVersion!);
@@ -1019,6 +1032,7 @@ function mergeOrderUpdate(
   rawEvent: PlainRecord,
   meta: SyncMergeEventMeta,
   baseVersion: number,
+  discountPolicy: NormalizedOrderDiscountPolicy,
 ): OrderSyncMergeResult {
   const kind = readEnum(rawEvent, "kind", ["add_items", "modify_item", "apply_discount", "update_metadata"] as const, "event.kind");
 
@@ -1120,7 +1134,7 @@ function mergeOrderUpdate(
     if (baseVersion !== canonical.version) {
       return orderResult(canonical.orderId, "conflict", "CONCURRENT_ORDER_ITEM_MODIFICATION", canonical.version, true, true, null, null, null, meta, baseVersion, calculated.total.amountMinor, canonical.currency);
     }
-    if (!sameSnapshotUnitPrices(existing.snapshot, calculated.input.snapshot)) {
+    if (!sameLinePricingFacts(existing, calculated.input)) {
       return orderResult(canonical.orderId, "manual_review", "ARBITRARY_PRICE_OVERRIDE_BLOCKED", canonical.version, true, true, null, null, null, meta, baseVersion, calculated.total.amountMinor, canonical.currency);
     }
 
@@ -1147,8 +1161,6 @@ function mergeOrderUpdate(
 
   if (kind === "apply_discount") {
     const orderDiscount = ownData(rawEvent, "orderDiscount", "event.orderDiscount") as OrderDiscountSnapshot;
-    const requiresSupervisor = readOptionalBoolean(rawEvent, "requiresSupervisor", "event.requiresSupervisor") ?? false;
-    const allowStacking = readOptionalBoolean(rawEvent, "allowStacking", "event.allowStacking") ?? false;
     const authorization = readOptionalAuthorization(rawEvent, "authorization", "event.authorization");
     const reason = readOptionalString(rawEvent, "reason", "event.reason");
     const discountAmount = readMoneyAmountMinor(orderDiscount, "event.orderDiscount");
@@ -1171,10 +1183,11 @@ function mergeOrderUpdate(
     if (canonical.status === "paid" || canonical.status === "closed" || canonical.status === "cancelled") {
       return orderResult(canonical.orderId, "manual_review", "HISTORICAL_ORDER_IMMUTABLE", canonical.version, true, true, null, null, null, meta, baseVersion, discountAmount, canonical.currency);
     }
-    if (requiresSupervisor && authorization === undefined) {
+    // Policy is server-trusted (fail-closed defaults): client events can never waive supervisor approval or enable stacking.
+    if (discountPolicy.requiresSupervisor && authorization === undefined) {
       return orderResult(canonical.orderId, "rejected", "SUPERVISOR_AUTHORIZATION_REQUIRED", canonical.version, true, false, null, null, null, meta, baseVersion, discountAmount, canonical.currency);
     }
-    if (canonical.orderDiscount !== undefined && (baseVersion !== canonical.version || !allowStacking)) {
+    if (canonical.orderDiscount !== undefined && (baseVersion !== canonical.version || !discountPolicy.allowStacking)) {
       return orderResult(canonical.orderId, "manual_review", "CONCURRENT_DISCOUNT_CONFLICT", canonical.version, true, true, null, null, null, meta, baseVersion, discountAmount, canonical.currency);
     }
     if (baseVersion !== canonical.version) {
@@ -1502,11 +1515,10 @@ export function mergeOrderItemSyncEvent(input: MergeOrderItemSyncEventInput): Or
   const canonicalCalc = calculateOrderItemTotals(canonical.item);
 
   // Tombstone enforcement before mutating a deleted item.
+  // Compute the exact operation fingerprint first so replays of events applied
+  // BEFORE deletion deduplicate cleanly (`duplicate`) instead of tripping reuse conflict.
   if (canonical.tombstoned) {
-    const reason = operation === "delete" ? readOptionalString(rawEvent, "reason", "event.reason") : undefined;
-    const tombstoneFp = operation === "delete"
-      ? `order_item:delete:${entityId}:${reason ?? ""}`
-      : `order_item:${operation}:${entityId}:${String(baseVersion)}`;
+    const tombstoneFp = computeOrderItemEventFingerprint(rawEvent, entityId, operation, orderCurrency);
     const dedup = checkAppliedEventDedup(canonical.appliedEvents, meta.eventId, meta.idempotencyKey, entityId, operation, tombstoneFp);
     if (dedup !== null) {
       return orderItemResult(entityId, dedup.status, dedup.code, canonical.version, false, false, true, dedup.status === "duplicate" ? canonical : null, null, meta, baseVersion);
@@ -1569,7 +1581,7 @@ export function mergeOrderItemSyncEvent(input: MergeOrderItemSyncEventInput): Or
     if (baseVersion !== canonical.version) {
       return orderItemResult(entityId, "conflict", "CONCURRENT_ORDER_ITEM_MODIFICATION", canonical.version, true, true, false, null, null, meta, baseVersion, calculated.total.amountMinor, orderCurrency);
     }
-    if (!sameSnapshotUnitPrices(canonical.item.snapshot, calculated.input.snapshot)) {
+    if (!sameLinePricingFacts(canonical.item, calculated.input)) {
       return orderItemResult(entityId, "manual_review", "ARBITRARY_PRICE_OVERRIDE_BLOCKED", canonical.version, true, true, false, null, null, meta, baseVersion, calculated.total.amountMinor, orderCurrency);
     }
     const nextVersion = canonical.version + 1;
@@ -1596,12 +1608,12 @@ export function mergeOrderItemSyncEvent(input: MergeOrderItemSyncEventInput): Or
     if (baseVersion! > canonical.version) {
       return orderItemResult(entityId, "rejected", "INVALID_BASE_VERSION", canonical.version, false, false, false, null, null, meta, baseVersion);
     }
-    if (parentOrderStatus === "closed" || parentOrderStatus === "cancelled") {
-      return orderItemResult(entityId, "conflict", "ORDER_TERMINAL_STATE_CONFLICT", canonical.version, true, true, false, null, null, meta, baseVersion, canonicalCalc.total.amountMinor, orderCurrency);
-    }
-
     if (canonical.status === targetStatus) {
       return orderItemResult(entityId, "duplicate", "ALREADY_IN_TARGET_STATE", canonical.version, false, false, false, canonical, canonicalCalc, meta, baseVersion);
+    }
+
+    if (parentOrderStatus === "closed" || parentOrderStatus === "cancelled") {
+      return orderItemResult(entityId, "conflict", "ORDER_TERMINAL_STATE_CONFLICT", canonical.version, true, true, false, null, null, meta, baseVersion, canonicalCalc.total.amountMinor, orderCurrency);
     }
 
     // Cancel vs prepare/deliver conflict (already cancelled item cannot advance).
@@ -1800,9 +1812,7 @@ export function mergeDiningTableSyncEvent(input: MergeDiningTableSyncEventInput)
   }
 
   if (canonical.tombstoned) {
-    const fp = operation === "delete"
-      ? `table:delete:${entityId}`
-      : `table:${operation}:${entityId}:${String(baseVersion)}`;
+    const fp = computeDiningTableEventFingerprint(rawEvent, entityId, operation);
     const dedup = checkAppliedEventDedup(canonical.appliedEvents, meta.eventId, meta.idempotencyKey, entityId, operation, fp);
     if (dedup !== null) {
       return diningTableResult(entityId, dedup.status, dedup.code, canonical.version, false, true, dedup.status === "duplicate" ? canonical : null, meta, baseVersion);
@@ -2223,7 +2233,7 @@ export function mergePaymentSyncEvent(input: MergePaymentSyncEventInput): Paymen
     return paymentResult(event, "manual_review", "PAYMENT_ON_TERMINAL_ORDER", true, true, null, changeMinor, null, 0, null, null);
   }
   if (context.orderStatus === "draft") {
-    if (event.isOfflineEvent) {
+    if (context.isOfflineEvent) {
       return paymentResult(event, "manual_review", "PAYMENT_ON_DRAFT_ORDER", true, true, null, changeMinor, null, 0, null, null);
     }
     return paymentResult(event, "rejected", "ORDER_NOT_PAYABLE", false, false, null, null, null, 0, null, null);
@@ -2293,7 +2303,8 @@ export function mergePaymentSyncEvent(input: MergePaymentSyncEventInput): Paymen
   }
 
   // Offline method and cash-sequence/limit checks (MATRIX §2.1 & §4.2).
-  if (event.isOfflineEvent) {
+  // `isOfflineEvent` is authoritative from trusted server context, NEVER from client event payload.
+  if (context.isOfflineEvent) {
     if (event.method === "card_terminal" || event.method === "transfer" || event.method === "other") {
       return paymentResult(
         event, "rejected", "OFFLINE_PAYMENT_METHOD_NOT_ALLOWED", false, false, null, null,
@@ -2314,39 +2325,43 @@ export function mergePaymentSyncEvent(input: MergePaymentSyncEventInput): Paymen
       );
     }
 
-    // Offline cash.
-    if (context.cashRegisterOpen === false || event.cashRegisterId === null || event.cashierId === null) {
+    // Offline cash: fail-closed when register open state, limit, or device sequence context is absent.
+    if (context.cashRegisterOpen !== true || event.cashRegisterId === null || event.cashierId === null) {
       return paymentResult(
         event, "manual_review", "CASH_REGISTER_CLOSED_OFFLINE_PAYMENT", true, true, null, changeMinor,
         obligation.remainingBalance.amountMinor, 0, obligation.paymentStatus, null,
       );
     }
-    if (context.offlineCashLimitMinor !== null && event.amountMinor > context.offlineCashLimitMinor) {
+    if (context.offlineCashLimitMinor === null || event.amountMinor > context.offlineCashLimitMinor) {
       return paymentResult(
         event, "manual_review", "OFFLINE_CASH_LIMIT_EXCEEDED", true, true, null, changeMinor,
         obligation.remainingBalance.amountMinor, 0, obligation.paymentStatus, null,
       );
     }
-    if (context.expectedCashSequenceByDevice !== undefined) {
-      const expectedSeq = ownOptionalSafePositiveInt(context.expectedCashSequenceByDevice, event.deviceId);
-      if (event.cashSequence === null || event.cashSequence <= 0) {
-        return paymentResult(
-          event, "manual_review", "CASH_SEQUENCE_INVALID", true, true, null, changeMinor,
-          obligation.remainingBalance.amountMinor, 0, obligation.paymentStatus, null,
-        );
-      }
-      if (expectedSeq !== undefined && event.cashSequence < expectedSeq) {
-        return paymentResult(
-          event, "manual_review", "CASH_SEQUENCE_DUPLICATE", true, true, null, changeMinor,
-          obligation.remainingBalance.amountMinor, 0, obligation.paymentStatus, null,
-        );
-      }
-      if (expectedSeq !== undefined && event.cashSequence > expectedSeq) {
-        return paymentResult(
-          event, "manual_review", "CASH_SEQUENCE_GAP", true, true, null, changeMinor,
-          obligation.remainingBalance.amountMinor, 0, obligation.paymentStatus, null,
-        );
-      }
+    if (context.expectedCashSequenceByDevice === undefined) {
+      return paymentResult(
+        event, "manual_review", "CASH_SEQUENCE_INVALID", true, true, null, changeMinor,
+        obligation.remainingBalance.amountMinor, 0, obligation.paymentStatus, null,
+      );
+    }
+    const expectedSeq = ownOptionalSafePositiveInt(context.expectedCashSequenceByDevice, event.deviceId);
+    if (expectedSeq === undefined || event.cashSequence === null || event.cashSequence <= 0) {
+      return paymentResult(
+        event, "manual_review", "CASH_SEQUENCE_INVALID", true, true, null, changeMinor,
+        obligation.remainingBalance.amountMinor, 0, obligation.paymentStatus, null,
+      );
+    }
+    if (event.cashSequence < expectedSeq) {
+      return paymentResult(
+        event, "manual_review", "CASH_SEQUENCE_DUPLICATE", true, true, null, changeMinor,
+        obligation.remainingBalance.amountMinor, 0, obligation.paymentStatus, null,
+      );
+    }
+    if (event.cashSequence > expectedSeq) {
+      return paymentResult(
+        event, "manual_review", "CASH_SEQUENCE_GAP", true, true, null, changeMinor,
+        obligation.remainingBalance.amountMinor, 0, obligation.paymentStatus, null,
+      );
     }
   }
 
@@ -2361,7 +2376,7 @@ export function mergePaymentSyncEvent(input: MergePaymentSyncEventInput): Paymen
     "accepted",
     "ACCEPTED",
     false,
-    event.isOfflineEvent,
+    context.isOfflineEvent,
     resultingPaymentState,
     changeMinor,
     event.providerStatus === "pending" ? obligation.remainingBalance.amountMinor : nextRemaining,
@@ -2372,10 +2387,10 @@ export function mergePaymentSyncEvent(input: MergePaymentSyncEventInput): Paymen
 }
 
 function mergePaymentCompensation(
-  context: PaymentSyncContext,
+  context: NormalizedPaymentContext,
   event: NormalizedIncomingPaymentEvent,
 ): PaymentSyncMergeResult {
-  if (event.isOfflineEvent) {
+  if (context.isOfflineEvent) {
     return paymentResult(event, "rejected", "OFFLINE_COMPENSATION_FORBIDDEN", false, false, null, null, null, 0, null, null);
   }
   if (event.providerStatus === "uncertain") {
@@ -2804,28 +2819,157 @@ function safeComputeOrderTotals(
   }
 }
 
-function sameSnapshotUnitPrices(left: OrderItemPricingInput["snapshot"], right: OrderItemPricingInput["snapshot"]): boolean {
-  if (!left.unitPrice.equals(right.unitPrice)) return false;
-  if (left.modifiers.length !== right.modifiers.length) return false;
-  for (let index = 0; index < left.modifiers.length; index += 1) {
-    const a = left.modifiers[index];
-    const b = right.modifiers[index];
+/**
+ * Compares the complete frozen pricing facts of an order line (catalog identity,
+ * unit price, modifiers, tax rule/rate/inclusion, fraction/pizza halves, and lineDiscount).
+ * Any change to monetary/tax/discount facts during `modify_item` / `OrderItem.update`
+ * blocks automatic merge and escalates to `manual_review`.
+ */
+function sameLinePricingFacts(left: OrderItemPricingInput, right: OrderItemPricingInput): boolean {
+  const ls = left.snapshot;
+  const rs = right.snapshot;
+  if (
+    ls.catalogVersion !== rs.catalogVersion
+    || ls.productId !== rs.productId
+    || ls.stationId !== rs.stationId
+    || ls.unit !== rs.unit
+    || ls.variantId !== rs.variantId
+    || ls.geometry !== rs.geometry
+    || !ls.unitPrice.equals(rs.unitPrice)
+  ) {
+    return false;
+  }
+  if (ls.modifiers.length !== rs.modifiers.length) return false;
+  for (let index = 0; index < ls.modifiers.length; index += 1) {
+    const a = ls.modifiers[index];
+    const b = rs.modifiers[index];
     if (a === undefined || b === undefined) return false;
-    if (a.modifierId !== b.modifierId || a.quantity !== b.quantity || !a.unitPrice.equals(b.unitPrice)) {
+    if (
+      a.modifierId !== b.modifierId
+      || a.groupId !== b.groupId
+      || a.groupCatalogVersion !== b.groupCatalogVersion
+      || a.quantity !== b.quantity
+      || !a.unitPrice.equals(b.unitPrice)
+    ) {
+      return false;
+    }
+  }
+  if (!sameTaxSnapshot(ls.tax, rs.tax)) return false;
+  if (!sameAppliedDiscount(left.lineDiscount, right.lineDiscount)) return false;
+  if (!sameFractionBreakdown(ls.fractionBreakdown, rs.fractionBreakdown)) return false;
+  if (!samePizzaHalvesSnapshot(ls.pizzaHalves, rs.pizzaHalves)) return false;
+  return true;
+}
+
+function sameTaxSnapshot(
+  left: OrderItemPricingInput["snapshot"]["tax"],
+  right: OrderItemPricingInput["snapshot"]["tax"],
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.taxId === right.taxId
+    && left.taxRuleVersion === right.taxRuleVersion
+    && left.inclusion === right.inclusion
+    && left.rate.numerator === right.rate.numerator
+    && left.rate.denominator === right.rate.denominator;
+}
+
+function sameAppliedDiscount(
+  left: OrderItemPricingInput["lineDiscount"],
+  right: OrderItemPricingInput["lineDiscount"],
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.discountId === right.discountId
+    && left.discountRuleVersion === right.discountRuleVersion
+    && left.amount.equals(right.amount);
+}
+
+function sameFractionBreakdown(
+  left: OrderItemPricingInput["snapshot"]["fractionBreakdown"],
+  right: OrderItemPricingInput["snapshot"]["fractionBreakdown"],
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (a === undefined || b === undefined) return false;
+    if (a.fraction !== b.fraction || a.flavorOptionId !== b.flavorOptionId || a.amountMinor !== b.amountMinor) {
       return false;
     }
   }
   return true;
 }
 
+function samePizzaHalvesSnapshot(
+  left: OrderItemPricingInput["snapshot"]["pizzaHalves"],
+  right: OrderItemPricingInput["snapshot"]["pizzaHalves"],
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.schemaVersion === right.schemaVersion
+    && left.ruleVersion === right.ruleVersion
+    && left.currency === right.currency
+    && left.total.equals(right.total);
+}
+
+function computeOrderItemEventFingerprint(
+  rawEvent: PlainRecord,
+  entityId: string,
+  operation: SyncMergeOperation,
+  orderCurrency: string,
+): string {
+  if (operation === "delete") {
+    const reason = readOptionalString(rawEvent, "reason", "event.reason");
+    return `order_item:delete:${entityId}:${reason ?? ""}`;
+  }
+  if (operation === "update") {
+    const rawItem = ownData(rawEvent, "item", "event.item") as OrderItemPricingInput;
+    const customerId = readOptionalNullableString(rawEvent, "customerId", "event.customerId");
+    const calculated = validateLineForOrder(rawItem, orderCurrency);
+    if (calculated.input.orderItemId !== entityId) throw new InvalidSyncMergeInputError("event.item.orderItemId");
+    return `order_item:update:${entityId}:${linePricingFingerprint(calculated.input)}:${customerId ?? ""}`;
+  }
+  if (operation === "transition") {
+    const targetStatus = readEnum(rawEvent, "targetStatus", ORDER_ITEM_STATES, "event.targetStatus");
+    const reason = readOptionalString(rawEvent, "reason", "event.reason");
+    return `order_item:transition:${entityId}:${targetStatus}:${reason ?? ""}`;
+  }
+  if (operation === "compensate") {
+    const reason = readOptionalString(rawEvent, "reason", "event.reason");
+    return `order_item:compensate:${entityId}:${reason ?? ""}`;
+  }
+  return `order_item:${operation}:${entityId}`;
+}
+
+function computeDiningTableEventFingerprint(
+  rawEvent: PlainRecord,
+  entityId: string,
+  operation: SyncMergeOperation,
+): string {
+  if (operation === "delete") {
+    return `table:delete:${entityId}`;
+  }
+  if (operation === "transition" || operation === "update") {
+    const targetStatus = readEnum(rawEvent, "targetStatus", DINING_TABLE_SYNC_STATES, "event.targetStatus");
+    const activeOrderId = readNullableString(rawEvent, "activeOrderId", "event.activeOrderId");
+    const reservationId = readOptionalNullableString(rawEvent, "reservationId", "event.reservationId") ?? null;
+    const waiterUserId = readOptionalNullableString(rawEvent, "waiterUserId", "event.waiterUserId") ?? null;
+    const shiftId = readOptionalNullableString(rawEvent, "shiftId", "event.shiftId") ?? null;
+    return `table:${operation}:${entityId}:${targetStatus}:${activeOrderId ?? ""}:${reservationId ?? ""}:${waiterUserId ?? ""}:${shiftId ?? ""}`;
+  }
+  return `table:${operation}:${entityId}`;
+}
+
 function linePricingFingerprint(line: OrderItemPricingInput): string {
   const mods = line.snapshot.modifiers
     .map((m) => `${m.modifierId}:${m.quantity}:${m.unitPrice.amountMinor}:${m.unitPrice.currency}`)
     .join(",");
+  const tax = line.snapshot.tax === undefined
+    ? ""
+    : `${line.snapshot.tax.taxId}:${line.snapshot.tax.taxRuleVersion}:${line.snapshot.tax.inclusion}:${line.snapshot.tax.rate.numerator.toString()}/${line.snapshot.tax.rate.denominator.toString()}`;
   const disc = line.lineDiscount === undefined
     ? ""
-    : `${line.lineDiscount.discountId}:${line.lineDiscount.amount.amountMinor}:${line.lineDiscount.amount.currency}`;
-  return `${line.orderItemId}|${line.snapshot.productId}|${line.quantity}|${line.snapshot.unitPrice.amountMinor}:${line.snapshot.unitPrice.currency}|${mods}|${disc}|${line.note ?? ""}`;
+    : `${line.lineDiscount.discountId}:${line.lineDiscount.discountRuleVersion}:${line.lineDiscount.amount.amountMinor}:${line.lineDiscount.amount.currency}`;
+  return `${line.orderItemId}|${line.snapshot.productId}|${line.quantity}|${line.snapshot.unitPrice.amountMinor}:${line.snapshot.unitPrice.currency}|${mods}|${tax}|${disc}|${line.note ?? ""}`;
 }
 
 function readItemIdUnsafe(item: OrderItemPricingInput): string {
@@ -3345,6 +3489,7 @@ function normalizePaymentContext(value: unknown): NormalizedPaymentContext {
     currency,
     orderTotalMinor: readSafeNonNegativeInt(record, "orderTotalMinor", "context.orderTotalMinor"),
     existingPayments,
+    isOfflineEvent: readBoolean(record, "isOfflineEvent", "context.isOfflineEvent"),
     ...(cashRegisterOpen === undefined ? {} : { cashRegisterOpen }),
     offlineCashLimitMinor,
     ...(expectedCashSequenceByDevice === undefined ? {} : { expectedCashSequenceByDevice }),
@@ -3361,7 +3506,6 @@ interface NormalizedIncomingPaymentEvent extends SyncMergeEventMeta {
   readonly tenderedAmountMinor: number | null;
   readonly currency: string;
   readonly method: PaymentMethod;
-  readonly isOfflineEvent: boolean;
   readonly cashRegisterId: string | null;
   readonly cashierId: string | null;
   readonly cashSequence: number | null;
@@ -3418,7 +3562,6 @@ function normalizeIncomingPaymentEvent(value: unknown): NormalizedIncomingPaymen
     tenderedAmountMinor,
     currency: readCurrency(record, "currency", "event.currency"),
     method: readEnum(record, "method", PAYMENT_METHODS, "event.method"),
-    isOfflineEvent: readBoolean(record, "isOfflineEvent", "event.isOfflineEvent"),
     cashRegisterId: readOptionalNullableString(record, "cashRegisterId", "event.cashRegisterId") ?? null,
     cashierId: readOptionalNullableString(record, "cashierId", "event.cashierId") ?? null,
     cashSequence,
@@ -3623,6 +3766,23 @@ function sameCashSource(left: CashMovementSource | undefined, right: CashMovemen
     return left.refundId === right.refundId && left.paymentId === right.paymentId;
   }
   return false;
+}
+
+interface NormalizedOrderDiscountPolicy {
+  readonly requiresSupervisor: boolean;
+  readonly allowStacking: boolean;
+}
+
+function readOptionalDiscountPolicy(record: PlainRecord, field: string): NormalizedOrderDiscountPolicy {
+  const value = optionalOwnData(record, field, field);
+  if (value === undefined) {
+    return Object.freeze({ requiresSupervisor: true, allowStacking: false });
+  }
+  const policy = asPlainRecord(value, field);
+  return Object.freeze({
+    requiresSupervisor: readOptionalBoolean(policy, "requiresSupervisor", `${field}.requiresSupervisor`) ?? true,
+    allowStacking: readOptionalBoolean(policy, "allowStacking", `${field}.allowStacking`) ?? false,
+  });
 }
 
 function readOptionalAuthorization(record: PlainRecord, key: string, field: string): SyncSupervisorAuthorization | undefined {

@@ -539,6 +539,7 @@ export type {
   OrderItemSyncEventPayload,
   OrderItemSyncMergeResult,
   OrderItemSyncState,
+  OrderDiscountMergePolicy,
   OrderSyncEventPayload,
   OrderSyncMergeResult,
   OrderSyncState,

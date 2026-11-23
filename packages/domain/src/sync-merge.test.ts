@@ -161,6 +161,7 @@ function basePaymentContext(overrides: Partial<PaymentSyncContext> = {}): Paymen
     currency: "MXN",
     orderTotalMinor: 11600,
     existingPayments: [],
+    isOfflineEvent: false,
     cashRegisterOpen: true,
     offlineCashLimitMinor: 50000,
     expectedCashSequenceByDevice: { "dev-1": 1, "dev-2": 1 },
@@ -346,6 +347,7 @@ test("Order: concurrent edit of same line, arbitrary price override, competing d
       operation: "update",
       kind: "apply_discount",
       baseVersion: 3,
+      authorization: supervisor(),
       orderDiscount: {
         discountId: "disc-2",
         discountRuleVersion: "v1",
@@ -1011,6 +1013,7 @@ test("Payment: same idempotencyKey deduplicates; tampered key rejects; distinct-
   const paidCtx = basePaymentContext({
     orderStatus: "paid",
     existingPayments: [existingPay],
+    isOfflineEvent: true,
   });
 
   // Reconstructed retry with same idempotencyKey and identical business intent -> duplicate
@@ -1027,7 +1030,6 @@ test("Payment: same idempotencyKey deduplicates; tampered key rejects; distinct-
       tenderedAmountMinor: 15000,
       currency: "MXN",
       method: "cash",
-      isOfflineEvent: true,
       cashRegisterId: "cr-1",
       cashierId: "cashier-1",
       cashSequence: 1,
@@ -1041,7 +1043,7 @@ test("Payment: same idempotencyKey deduplicates; tampered key rejects; distinct-
 
   // Same idempotencyKey reused with different amount -> rejected (IDEMPOTENCY_KEY_REUSE)
   const tamperedKey = mergePaymentSyncEvent({
-    context: paidCtx,
+    context: { ...paidCtx, isOfflineEvent: false },
     event: {
       ...meta({ eventId: "evt-pay-tamper", idempotencyKey: "idem-pay-1" }),
       entityId: "pay-1",
@@ -1051,7 +1053,6 @@ test("Payment: same idempotencyKey deduplicates; tampered key rejects; distinct-
       amountMinor: 5000,
       currency: "MXN",
       method: "cash",
-      isOfflineEvent: false,
     },
   });
   assert.equal(tamperedKey.status, "rejected");
@@ -1069,7 +1070,6 @@ test("Payment: same idempotencyKey deduplicates; tampered key rejects; distinct-
       amountMinor: 11600,
       currency: "MXN",
       method: "cash",
-      isOfflineEvent: true,
       cashRegisterId: "cr-1",
       cashierId: "cashier-1",
       cashSequence: 1,
@@ -1097,7 +1097,6 @@ test("Payment: same idempotencyKey deduplicates; tampered key rejects; distinct-
       amountMinor: 7000,
       currency: "MXN",
       method: "cash",
-      isOfflineEvent: false,
     },
   });
   assert.equal(exceeds.status, "manual_review");
@@ -1118,7 +1117,6 @@ test("Payment: same idempotencyKey deduplicates; tampered key rejects; distinct-
       tenderedAmountMinor: 6000,
       currency: "MXN",
       method: "cash",
-      isOfflineEvent: false,
     },
   });
   assert.equal(splitOk.status, "accepted");
@@ -1130,7 +1128,7 @@ test("Payment: same idempotencyKey deduplicates; tampered key rejects; distinct-
 test("Payment: offline cash sequence/limit/closed-register and offline card_manual reconciliation rules", () => {
   // Offline cash exceeding limit -> manual_review
   const overLimit = mergePaymentSyncEvent({
-    context: basePaymentContext({ orderTotalMinor: 80000, offlineCashLimitMinor: 50000 }),
+    context: basePaymentContext({ orderTotalMinor: 80000, offlineCashLimitMinor: 50000, isOfflineEvent: true }),
     event: {
       ...meta({ eventId: "evt-lim", idempotencyKey: "idem-lim" }),
       entityId: "pay-lim",
@@ -1140,7 +1138,6 @@ test("Payment: offline cash sequence/limit/closed-register and offline card_manu
       amountMinor: 60000,
       currency: "MXN",
       method: "cash",
-      isOfflineEvent: true,
       cashRegisterId: "cr-1",
       cashierId: "cashier-1",
       cashSequence: 1,
@@ -1151,7 +1148,7 @@ test("Payment: offline cash sequence/limit/closed-register and offline card_manu
 
   // Offline cash sequence gap -> manual_review
   const seqGap = mergePaymentSyncEvent({
-    context: basePaymentContext({ expectedCashSequenceByDevice: { "dev-1": 2 } }),
+    context: basePaymentContext({ expectedCashSequenceByDevice: { "dev-1": 2 }, isOfflineEvent: true }),
     event: {
       ...meta({ eventId: "evt-gap", idempotencyKey: "idem-gap" }),
       entityId: "pay-gap",
@@ -1161,7 +1158,6 @@ test("Payment: offline cash sequence/limit/closed-register and offline card_manu
       amountMinor: 5000,
       currency: "MXN",
       method: "cash",
-      isOfflineEvent: true,
       cashRegisterId: "cr-1",
       cashierId: "cashier-1",
       cashSequence: 5,
@@ -1172,7 +1168,7 @@ test("Payment: offline cash sequence/limit/closed-register and offline card_manu
 
   // Offline card_manual with external confirmation -> accepted as authorized (NEVER captured), requiresReconciliation
   const cardManual = mergePaymentSyncEvent({
-    context: basePaymentContext(),
+    context: basePaymentContext({ isOfflineEvent: true }),
     event: {
       ...meta({ eventId: "evt-cm", idempotencyKey: "idem-cm" }),
       entityId: "pay-cm",
@@ -1182,7 +1178,6 @@ test("Payment: offline cash sequence/limit/closed-register and offline card_manu
       amountMinor: 11600,
       currency: "MXN",
       method: "card_manual",
-      isOfflineEvent: true,
       cardManualExternalConfirmed: true,
     },
   });
@@ -1192,7 +1187,7 @@ test("Payment: offline cash sequence/limit/closed-register and offline card_manu
 
   // Payment arriving on a cancelled order -> manual_review (preserve evidence)
   const onCancelled = mergePaymentSyncEvent({
-    context: basePaymentContext({ orderStatus: "cancelled" }),
+    context: basePaymentContext({ orderStatus: "cancelled", isOfflineEvent: true }),
     event: {
       ...meta({ eventId: "evt-canc-pay", idempotencyKey: "idem-canc-pay" }),
       entityId: "pay-canc",
@@ -1202,7 +1197,6 @@ test("Payment: offline cash sequence/limit/closed-register and offline card_manu
       amountMinor: 11600,
       currency: "MXN",
       method: "cash",
-      isOfflineEvent: true,
       cashRegisterId: "cr-1",
       cashierId: "cashier-1",
       cashSequence: 1,
@@ -1495,6 +1489,7 @@ test("occurredAt manipulation (far past vs far future) NEVER changes merge decis
     entityType: "Payment",
     context: basePaymentContext({
       orderStatus: "paid",
+      isOfflineEvent: true,
       existingPayments: [{
         paymentId: "pay-1",
         eventId: "evt-p1",
@@ -1522,7 +1517,6 @@ test("occurredAt manipulation (far past vs far future) NEVER changes merge decis
       amountMinor: 11600,
       currency: "MXN",
       method: "cash",
-      isOfflineEvent: true,
       cashRegisterId: "cr-1",
       cashierId: "cashier-1",
       cashSequence: 2,
@@ -1575,7 +1569,6 @@ test("Cross-tenant and cross-branch events are rejected fail-closed across all e
       amountMinor: 5000,
       currency: "MXN",
       method: "cash",
-      isOfflineEvent: false,
     },
   });
   assert.equal(crossTenantPayment.status, "rejected");
@@ -1620,7 +1613,6 @@ test("Floats, non-safe integers, invalid timestamps, and hostile getter objects 
         amountMinor: 100.5,
         currency: "MXN",
         method: "cash",
-        isOfflineEvent: false,
       },
     }),
     InvalidSyncMergeInputError,
@@ -1703,4 +1695,472 @@ test("Floats, non-safe integers, invalid timestamps, and hostile getter objects 
     }),
     InvalidSyncMergeInputError,
   );
+});
+
+// ============================================================================
+// 8. Round-1 Level A review regressions (P2-1 through P2-5 + unresolved exposure)
+// ============================================================================
+
+test("P2-1: Order apply_discount policy comes strictly from trusted server discountPolicy; client event cannot relax supervisor or stacking rules", () => {
+  const discount = {
+    discountId: "disc-new",
+    discountRuleVersion: "v1",
+    amount: mxn(1000),
+    allocationStrategy: ORDER_DISCOUNT_ALLOCATION_STRATEGY,
+  } as const;
+
+  // Client tries to smuggle requiresSupervisor: false on the event -> ignored; fail-closed default demands authorization!
+  const spoofedNoAuth = mergeOrderSyncEvent({
+    canonical: baseOrder({ version: 2 }),
+    event: {
+      ...meta({ eventId: "evt-spoof-1", idempotencyKey: "idem-spoof-1" }),
+      entityId: "order-1",
+      operation: "update",
+      kind: "apply_discount",
+      baseVersion: 2,
+      orderDiscount: discount,
+      ...({ requiresSupervisor: false } as object),
+    },
+  });
+  assert.equal(spoofedNoAuth.status, "rejected");
+  assert.equal(spoofedNoAuth.code, "SUPERVISOR_AUTHORIZATION_REQUIRED");
+
+  // Trusted server policy explicitly waives supervisor for an approved standard discount -> accepted
+  const serverStandardOk = mergeOrderSyncEvent({
+    canonical: baseOrder({ version: 2 }),
+    discountPolicy: { requiresSupervisor: false, allowStacking: false },
+    event: {
+      ...meta({ eventId: "evt-std-1", idempotencyKey: "idem-std-1" }),
+      entityId: "order-1",
+      operation: "update",
+      kind: "apply_discount",
+      baseVersion: 2,
+      orderDiscount: discount,
+    },
+  });
+  assert.equal(serverStandardOk.status, "accepted");
+  assert.equal(serverStandardOk.recalculatedTotals?.orderDiscount.amountMinor, 1000);
+
+  // Client tries to smuggle allowStacking: true on the event against an existing discount -> ignored; escalates to manual_review!
+  const spoofedStack = mergeOrderSyncEvent({
+    canonical: serverStandardOk.mergedState,
+    event: {
+      ...meta({ eventId: "evt-spoof-stack", idempotencyKey: "idem-spoof-stack" }),
+      entityId: "order-1",
+      operation: "update",
+      kind: "apply_discount",
+      baseVersion: 3,
+      authorization: supervisor(),
+      orderDiscount: { ...discount, discountId: "disc-2", amount: mxn(1500) },
+      ...({ allowStacking: true } as object),
+    },
+  });
+  assert.equal(spoofedStack.status, "manual_review");
+  assert.equal(spoofedStack.code, "CONCURRENT_DISCOUNT_CONFLICT");
+});
+
+test("P2-2: modify_item and OrderItem.update block tax and lineDiscount tampering via manual_review while allowing pure quantity/note edits", () => {
+  const order = baseOrder({ version: 2 });
+
+  // Tax rate/inclusion change on Order.modify_item -> manual_review
+  const baseLine = pricingLine("item-1", 10000, 1);
+  const taxTamperedOrder = mergeOrderSyncEvent({
+    canonical: order,
+    event: {
+      ...meta({ eventId: "evt-tax-o", idempotencyKey: "idem-tax-o" }),
+      entityId: "order-1",
+      operation: "update",
+      kind: "modify_item",
+      baseVersion: 2,
+      item: {
+        ...baseLine,
+        snapshot: {
+          ...baseLine.snapshot,
+          tax: {
+            taxId: "iva-16",
+            name: "IVA 16%",
+            taxRuleVersion: "mx-v1",
+            rate: { numerator: 0n, denominator: 100n },
+            inclusion: "excluded",
+          },
+        },
+      },
+    },
+  });
+  assert.equal(taxTamperedOrder.status, "manual_review");
+  assert.equal(taxTamperedOrder.code, "ARBITRARY_PRICE_OVERRIDE_BLOCKED");
+
+  // Removing tax completely on OrderItem.update -> manual_review
+  const { tax: _removedTax, ...snapshotWithoutTax } = baseLine.snapshot;
+  void _removedTax;
+  const taxRemovedItem = mergeOrderItemSyncEvent({
+    canonical: baseOrderItem({ version: 2 }),
+    parentOrderStatus: "open",
+    orderCurrency: "MXN",
+    event: {
+      ...meta({ eventId: "evt-tax-i", idempotencyKey: "idem-tax-i" }),
+      entityId: "item-1",
+      orderId: "order-1",
+      operation: "update",
+      baseVersion: 2,
+      item: { ...baseLine, snapshot: snapshotWithoutTax },
+    },
+  });
+  assert.equal(taxRemovedItem.status, "manual_review");
+  assert.equal(taxRemovedItem.code, "ARBITRARY_PRICE_OVERRIDE_BLOCKED");
+
+  // Injecting unauthorized lineDiscount on Order.modify_item -> manual_review
+  const discountInjectedOrder = mergeOrderSyncEvent({
+    canonical: order,
+    event: {
+      ...meta({ eventId: "evt-ld-o", idempotencyKey: "idem-ld-o" }),
+      entityId: "order-1",
+      operation: "update",
+      kind: "modify_item",
+      baseVersion: 2,
+      item: pricingLine("item-1", 10000, 1, {
+        lineDiscount: { discountId: "ld-1", discountRuleVersion: "v1", amount: mxn(2000) },
+      }),
+    },
+  });
+  assert.equal(discountInjectedOrder.status, "manual_review");
+  assert.equal(discountInjectedOrder.code, "ARBITRARY_PRICE_OVERRIDE_BLOCKED");
+
+  // Changing existing lineDiscount amount on OrderItem.update -> manual_review
+  const itemWithDiscount = baseOrderItem({
+    version: 2,
+    item: pricingLine("item-1", 10000, 1, {
+      lineDiscount: { discountId: "ld-1", discountRuleVersion: "v1", amount: mxn(1000) },
+    }),
+  });
+  const discountAlteredItem = mergeOrderItemSyncEvent({
+    canonical: itemWithDiscount,
+    parentOrderStatus: "open",
+    orderCurrency: "MXN",
+    event: {
+      ...meta({ eventId: "evt-ld-i", idempotencyKey: "idem-ld-i" }),
+      entityId: "item-1",
+      orderId: "order-1",
+      operation: "update",
+      baseVersion: 2,
+      item: pricingLine("item-1", 10000, 1, {
+        lineDiscount: { discountId: "ld-1", discountRuleVersion: "v1", amount: mxn(5000) },
+      }),
+    },
+  });
+  assert.equal(discountAlteredItem.status, "manual_review");
+  assert.equal(discountAlteredItem.code, "ARBITRARY_PRICE_OVERRIDE_BLOCKED");
+
+  // Preserving exact pricing snapshot + tax + lineDiscount while editing quantity and note -> accepted
+  const qtyNoteOk = mergeOrderItemSyncEvent({
+    canonical: itemWithDiscount,
+    parentOrderStatus: "open",
+    orderCurrency: "MXN",
+    event: {
+      ...meta({ eventId: "evt-qty-ok", idempotencyKey: "idem-qty-ok" }),
+      entityId: "item-1",
+      orderId: "order-1",
+      operation: "update",
+      baseVersion: 2,
+      item: pricingLine("item-1", 10000, 2, {
+        lineDiscount: { discountId: "ld-1", discountRuleVersion: "v1", amount: mxn(1000) },
+        note: "Sin cebolla",
+      }),
+    },
+  });
+  assert.equal(qtyNoteOk.status, "accepted");
+  assert.equal(qtyNoteOk.recalculatedLineTotals?.grossBeforeLineDiscount.amountMinor, 20000);
+});
+
+test("P2-3: Offline cash fails closed when register/limit/sequence context is absent, and client event cannot spoof isOfflineEvent", () => {
+  const cashEvent = {
+    ...meta({ eventId: "evt-fc-1", idempotencyKey: "idem-fc-1", deviceId: "dev-1" }),
+    entityId: "pay-fc-1",
+    orderId: "order-1",
+    operation: "create" as const,
+    baseVersion: null,
+    amountMinor: 5000,
+    currency: "MXN",
+    method: "cash" as const,
+    cashRegisterId: "cr-1",
+    cashierId: "cashier-1",
+    cashSequence: 1,
+  };
+
+  // Missing cashRegisterOpen (undefined) -> fail-closed manual_review
+  const { cashRegisterOpen: _noOpen, ...ctxNoOpen } = basePaymentContext({ isOfflineEvent: true });
+  void _noOpen;
+  const resNoOpen = mergePaymentSyncEvent({ context: ctxNoOpen, event: cashEvent });
+  assert.equal(resNoOpen.status, "manual_review");
+  assert.equal(resNoOpen.code, "CASH_REGISTER_CLOSED_OFFLINE_PAYMENT");
+  assert.equal(resNoOpen.blockNewCollection, true);
+
+  // Missing offlineCashLimitMinor (null/undefined) -> fail-closed manual_review
+  const resNoLimit = mergePaymentSyncEvent({
+    context: basePaymentContext({ isOfflineEvent: true, offlineCashLimitMinor: null }),
+    event: cashEvent,
+  });
+  assert.equal(resNoLimit.status, "manual_review");
+  assert.equal(resNoLimit.code, "OFFLINE_CASH_LIMIT_EXCEEDED");
+  assert.equal(resNoLimit.blockNewCollection, true);
+
+  // Missing expectedCashSequenceByDevice (undefined) -> fail-closed manual_review
+  const { expectedCashSequenceByDevice: _noSeq, ...ctxNoSeq } = basePaymentContext({ isOfflineEvent: true });
+  void _noSeq;
+  const resNoSeq = mergePaymentSyncEvent({ context: ctxNoSeq, event: cashEvent });
+  assert.equal(resNoSeq.status, "manual_review");
+  assert.equal(resNoSeq.code, "CASH_SEQUENCE_INVALID");
+  assert.equal(resNoSeq.blockNewCollection, true);
+
+  // Device absent from expectedCashSequenceByDevice -> fail-closed manual_review
+  const resUnknownDevice = mergePaymentSyncEvent({
+    context: basePaymentContext({ isOfflineEvent: true, expectedCashSequenceByDevice: { "other-dev": 1 } }),
+    event: cashEvent,
+  });
+  assert.equal(resUnknownDevice.status, "manual_review");
+  assert.equal(resUnknownDevice.code, "CASH_SEQUENCE_INVALID");
+
+  // Client trying to inject isOfflineEvent: false on event cannot bypass context.isOfflineEvent: true
+  const resSpoofedOnline = mergePaymentSyncEvent({
+    context: basePaymentContext({ isOfflineEvent: true, offlineCashLimitMinor: 1000 }),
+    event: {
+      ...cashEvent,
+      ...({ isOfflineEvent: false } as object),
+    },
+  });
+  assert.equal(resSpoofedOnline.status, "manual_review");
+  assert.equal(resSpoofedOnline.code, "OFFLINE_CASH_LIMIT_EXCEEDED");
+});
+
+test("P2-4: Replaying a pre-tombstone applied update/transition after delete returns duplicate (not EVENT_ID_REUSE_CONFLICT)", () => {
+  // 1) OrderItem: update accepted -> delete accepted -> replay update => duplicate
+  const itemUpdateEvent = {
+    ...meta({ eventId: "evt-item-u1", idempotencyKey: "idem-item-u1" }),
+    entityId: "item-1",
+    orderId: "order-1",
+    operation: "update" as const,
+    baseVersion: 2,
+    item: pricingLine("item-1", 10000, 3, { note: "Sin picante" }),
+  };
+  const updatedItem = mergeOrderItemSyncEvent({
+    canonical: baseOrderItem({ version: 2 }),
+    parentOrderStatus: "open",
+    orderCurrency: "MXN",
+    event: itemUpdateEvent,
+  });
+  assert.equal(updatedItem.status, "accepted");
+
+  const deletedItem = mergeOrderItemSyncEvent({
+    canonical: updatedItem.mergedState,
+    parentOrderStatus: "open",
+    orderCurrency: "MXN",
+    event: {
+      ...meta({ eventId: "evt-item-d1", idempotencyKey: "idem-item-d1" }),
+      entityId: "item-1",
+      orderId: "order-1",
+      operation: "delete",
+      baseVersion: 3,
+      reason: "Borrado antes de enviar",
+    },
+  });
+  assert.equal(deletedItem.status, "accepted");
+  assert.equal(deletedItem.tombstoned, true);
+
+  // Exact replay (same eventId) of pre-tombstone update -> duplicate!
+  const replayItemByEvent = mergeOrderItemSyncEvent({
+    canonical: deletedItem.mergedState,
+    parentOrderStatus: "open",
+    orderCurrency: "MXN",
+    event: itemUpdateEvent,
+  });
+  assert.equal(replayItemByEvent.status, "duplicate");
+  assert.equal(replayItemByEvent.code, "DUPLICATE_EVENT");
+  assert.equal(replayItemByEvent.tombstoned, true);
+
+  // Reconstructed retry (same idempotencyKey, new eventId) -> duplicate!
+  const replayItemByKey = mergeOrderItemSyncEvent({
+    canonical: deletedItem.mergedState,
+    parentOrderStatus: "open",
+    orderCurrency: "MXN",
+    event: { ...itemUpdateEvent, eventId: "evt-item-u1-retry" },
+  });
+  assert.equal(replayItemByKey.status, "duplicate");
+  assert.equal(replayItemByKey.code, "DUPLICATE_IDEMPOTENCY_KEY");
+
+  // Tampered replay with same eventId -> still rejected EVENT_ID_REUSE_CONFLICT
+  const tamperedItemReplay = mergeOrderItemSyncEvent({
+    canonical: deletedItem.mergedState,
+    parentOrderStatus: "open",
+    orderCurrency: "MXN",
+    event: { ...itemUpdateEvent, item: pricingLine("item-1", 10000, 99) },
+  });
+  assert.equal(tamperedItemReplay.status, "rejected");
+  assert.equal(tamperedItemReplay.code, "EVENT_ID_REUSE_CONFLICT");
+
+  // 2) DiningTable: transition accepted (free -> reserved -> free) -> delete accepted -> replay transition => duplicate
+  const tableReserveEvent = {
+    ...meta({ eventId: "evt-tbl-t1", idempotencyKey: "idem-tbl-t1" }),
+    entityId: "table-1",
+    operation: "transition" as const,
+    baseVersion: 1,
+    targetStatus: "reserved" as const,
+    activeOrderId: null,
+    reservationId: "res-1",
+  };
+  const reservedTable = mergeDiningTableSyncEvent({
+    canonical: baseTable({ version: 1, status: "free" }),
+    event: tableReserveEvent,
+  });
+  assert.equal(reservedTable.status, "accepted");
+
+  const deletedTable = mergeDiningTableSyncEvent({
+    canonical: reservedTable.mergedState,
+    event: {
+      ...meta({ eventId: "evt-tbl-d1", idempotencyKey: "idem-tbl-d1" }),
+      entityId: "table-1",
+      operation: "delete",
+      baseVersion: 2,
+    },
+  });
+  assert.equal(deletedTable.status, "accepted");
+  assert.equal(deletedTable.tombstoned, true);
+
+  const replayTable = mergeDiningTableSyncEvent({
+    canonical: deletedTable.mergedState,
+    event: tableReserveEvent,
+  });
+  assert.equal(replayTable.status, "duplicate");
+  assert.equal(replayTable.code, "DUPLICATE_EVENT");
+  assert.equal(replayTable.tombstoned, true);
+
+  // Brand-new stale transition on tombstoned table still blocks resurrection
+  const freshStaleTable = mergeDiningTableSyncEvent({
+    canonical: deletedTable.mergedState,
+    event: {
+      ...tableReserveEvent,
+      eventId: "evt-tbl-fresh",
+      idempotencyKey: "idem-tbl-fresh",
+    },
+  });
+  assert.equal(freshStaleTable.status, "conflict");
+  assert.equal(freshStaleTable.code, "TOMBSTONE_RESURRECTION_BLOCKED");
+});
+
+test("P2-5: OrderItem transition evaluates ALREADY_IN_TARGET_STATE before ORDER_TERMINAL_STATE_CONFLICT", () => {
+  // Delayed delivered transition arriving after parent order already closed -> idempotent duplicate
+  const sameOnClosed = mergeOrderItemSyncEvent({
+    canonical: baseOrderItem({ status: "delivered", version: 5 }),
+    parentOrderStatus: "closed",
+    orderCurrency: "MXN",
+    event: {
+      ...meta({ eventId: "evt-deliv-dup", idempotencyKey: "idem-deliv-dup" }),
+      entityId: "item-1",
+      orderId: "order-1",
+      operation: "transition",
+      baseVersion: 4,
+      targetStatus: "delivered",
+    },
+  });
+  assert.equal(sameOnClosed.status, "duplicate");
+  assert.equal(sameOnClosed.code, "ALREADY_IN_TARGET_STATE");
+
+  // Delayed cancelled transition arriving after parent order cancelled -> idempotent duplicate
+  const sameOnCancelled = mergeOrderItemSyncEvent({
+    canonical: baseOrderItem({ status: "cancelled", version: 4 }),
+    parentOrderStatus: "cancelled",
+    orderCurrency: "MXN",
+    event: {
+      ...meta({ eventId: "evt-canc-dup", idempotencyKey: "idem-canc-dup" }),
+      entityId: "item-1",
+      orderId: "order-1",
+      operation: "transition",
+      baseVersion: 3,
+      targetStatus: "cancelled",
+      reason: "Cancelado",
+      authorization: supervisor(),
+    },
+  });
+  assert.equal(sameOnCancelled.status, "duplicate");
+  assert.equal(sameOnCancelled.code, "ALREADY_IN_TARGET_STATE");
+
+  // Conflicting different state on closed parent order -> still ORDER_TERMINAL_STATE_CONFLICT
+  const diffOnClosed = mergeOrderItemSyncEvent({
+    canonical: baseOrderItem({ status: "delivered", version: 5 }),
+    parentOrderStatus: "closed",
+    orderCurrency: "MXN",
+    event: {
+      ...meta({ eventId: "evt-diff-closed", idempotencyKey: "idem-diff-closed" }),
+      entityId: "item-1",
+      orderId: "order-1",
+      operation: "transition",
+      baseVersion: 4,
+      targetStatus: "cancelled",
+      reason: "Tardío",
+      authorization: supervisor(),
+    },
+  });
+  assert.equal(diffOnClosed.status, "conflict");
+  assert.equal(diffOnClosed.code, "ORDER_TERMINAL_STATE_CONFLICT");
+});
+
+test("Payment: PAYMENT_UNRESOLVED_EXPOSURE blocks new collection when pending or ambiguous payments exist", () => {
+  const pendingPayment = {
+    paymentId: "pay-pending",
+    eventId: "evt-pending",
+    idempotencyKey: "idem-pending",
+    orderId: "order-1",
+    amountMinor: 5000,
+    tipMinor: 0,
+    tenderedAmountMinor: null,
+    currency: "MXN",
+    method: "card_manual" as const,
+    state: "authorized" as const,
+    deviceId: "dev-1",
+    cashRegisterId: null,
+    cashierId: null,
+    cashSequence: null,
+    receiptNumber: null,
+  };
+
+  const blockedByPending = mergePaymentSyncEvent({
+    context: basePaymentContext({
+      orderStatus: "open",
+      existingPayments: [pendingPayment],
+    }),
+    event: {
+      ...meta({ eventId: "evt-pay-new-1", idempotencyKey: "idem-pay-new-1" }),
+      entityId: "pay-new-1",
+      orderId: "order-1",
+      operation: "create",
+      baseVersion: null,
+      amountMinor: 5000,
+      currency: "MXN",
+      method: "cash",
+    },
+  });
+  assert.equal(blockedByPending.status, "manual_review");
+  assert.equal(blockedByPending.code, "PAYMENT_UNRESOLVED_EXPOSURE");
+  assert.equal(blockedByPending.blockNewCollection, true);
+  assert.equal(blockedByPending.resultingOrderPaymentStatus, "pending");
+
+  const blockedByAmbiguous = mergePaymentSyncEvent({
+    context: basePaymentContext({
+      orderStatus: "open",
+      existingPayments: [{ ...pendingPayment, paymentId: "pay-amb", state: "ambiguous" as const }],
+    }),
+    event: {
+      ...meta({ eventId: "evt-pay-new-2", idempotencyKey: "idem-pay-new-2" }),
+      entityId: "pay-new-2",
+      orderId: "order-1",
+      operation: "create",
+      baseVersion: null,
+      amountMinor: 5000,
+      currency: "MXN",
+      method: "cash",
+    },
+  });
+  assert.equal(blockedByAmbiguous.status, "manual_review");
+  assert.equal(blockedByAmbiguous.code, "PAYMENT_UNRESOLVED_EXPOSURE");
+  assert.equal(blockedByAmbiguous.blockNewCollection, true);
+  assert.equal(blockedByAmbiguous.resultingOrderPaymentStatus, "ambiguous");
 });
