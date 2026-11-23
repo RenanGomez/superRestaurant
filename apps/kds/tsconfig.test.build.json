@@ -16,6 +16,10 @@
     "src/kds-proxy-target.ts",
     "src/kds-proxy-target.test.ts",
     "src/kds-state.ts",
-    "src/kds-state.test.ts"
+    "src/kds-state.test.ts",
+    "src/kds-local.ts",
+    "src/kds-local.test.ts",
+    "src/kds-offline.ts",
+    "src/kds-offline.test.ts"
   ]
 }
