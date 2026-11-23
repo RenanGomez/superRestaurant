@@ -196,6 +196,7 @@ jobs:
           pnpm --filter @super-restaurant/api run verify:capture-selection-plan-schema:rollback
           pnpm --filter @super-restaurant/api run verify:pizza-model-v2-schema:rollback
           pnpm --filter @super-restaurant/api run verify:cash-transfer-method-schema:rollback
+          pnpm --filter @super-restaurant/api run verify:sync-schema:rollback
       - name: Run local HTTP flow
         run: pnpm --filter @super-restaurant/api run test:http:local -- --local-disposable-only
 

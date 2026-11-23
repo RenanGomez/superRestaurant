@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { Client } from "pg";
 import { assertLocalConfirmation, listMigrationNames, LocalPostgres } from "./local-postgres.js";
 import { syncInvariantSql } from "./sync-schema-verification.js";
+import { verifySyncExecutor } from "./sync-executor-verification.js";
 
 const local = new LocalPostgres({ marker: "LOCAL_SYNC_SCHEMA_ONLY", databasePrefix: "superrestaurant_sync", authUsersExtraColumns: ", raw_user_meta_data jsonb" });
 let stage = "configuration";
@@ -38,6 +39,8 @@ try {
   stage = "postcheck";
   assert.deepEqual((await local.admin.query(summary)).rows[0], baseline);
   if (invariantFailure !== undefined) { stage = "invariants"; throw invariantFailure; }
+  stage = "executor";
+  await verifySyncExecutor(local);
   process.stdout.write(`${JSON.stringify({ stage: "sync_schema_rollback", status: "ok", migrationsApplied: names.length, concurrentCursorLock: "ok", baseline })}\n`);
 } catch (error: unknown) {
   failed = true;
