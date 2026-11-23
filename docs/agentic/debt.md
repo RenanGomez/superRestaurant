@@ -11,6 +11,8 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 
 ## Registradas
 
+- **m1-obs-health:** el correlationId solo aparece en la línea de acceso HTTP; los demás logs no lo heredan. Incorporar AsyncLocalStorage para propagar el contexto de request entre capas y pruebas de concurrencia antes de depender de correlación transversal.
+
 - **m1-sec-rate-limit:** los contadores viven en memoria por proceso; reinicios y réplicas no comparten cuota. El límite previo usa la IP del socket, que puede identificar al proxy en despliegues detrás de uno. Adoptar almacenamiento compartido y una configuración explícita de proxies confiables antes de depender de estos límites en producción. El login directo a Supabase requiere protección del proveedor.
 
 | Fecha | Hito | Item | Descripcion | Motivo del atajo | Seguimiento |
