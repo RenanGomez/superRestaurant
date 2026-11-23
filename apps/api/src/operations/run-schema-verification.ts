@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import {
+  extractMigrationBody,
   readSchemaVerificationConfig,
   runSchemaVerification,
   SchemaVerificationError,
@@ -16,7 +17,23 @@ try {
     new URL("../../../../supabase/tests/tenancy_memberships_catalog.sql", import.meta.url),
     "utf8",
   );
-  const summary = await runSchemaVerification({ catalogAuditSql, config, migrationSql });
+  const directoryMigrationSql = readFileSync(
+    new URL("../../../../supabase/migrations/20260830000200_list_active_branch_memberships.sql", import.meta.url),
+    "utf8",
+  );
+  const summary = await runSchemaVerification({
+    catalogAuditSql: process.env.SCHEMA_VERIFICATION_LOCAL_CLUSTER === "1"
+      ? catalogAuditSql.replace("grantor_role.rolname = 'supabase_admin'", "grantor_role.rolname = 'postgres'")
+      : catalogAuditSql,
+    config, migrationSql,
+    expectedSecurityDefinerFunctions: 5,
+    verifyWithinTransaction: async (session) => {
+      await session.query(extractMigrationBody(directoryMigrationSql));
+      if (process.env.SCHEMA_VERIFICATION_LOCAL_CLUSTER === "1") {
+        await session.query("GRANT app_api TO postgres WITH ADMIN TRUE, INHERIT FALSE, SET FALSE");
+      }
+    },
+  });
   console.log(JSON.stringify({ stage: "complete", status: "ok", summary }));
 } catch (error: unknown) {
   const failure = error instanceof SchemaVerificationError
