@@ -94,7 +94,31 @@ export function shouldRenewLease(now: number, lastInteractionAt: number, visible
 }
 const deviceKey = "superrestaurant.capture.device.v1";
 const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const pendingKey = (scope: BranchScope) => `superrestaurant.capture.pending-autosave.v1:${scope.restaurantId}:${scope.branchId}`;
+
+/** Accepts only a single UUID query parameter for `/app/capture?draftId=` and canonicalizes its case. */
+export function parseInitialDraftId(value: string | readonly string[] | undefined): string | undefined {
+  return typeof value === "string" && uuidPattern.test(value) ? value.toLowerCase() : undefined;
+}
+
+export type LinkedCaptureDraftResult =
+  | { readonly ok: true; readonly workspace: RehydratedCaptureWorkspace }
+  | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable" };
+
+/**
+ * Resolves a read-only workspace response for a deep-linked draft without claiming it; an absent
+ * detail is surfaced explicitly as `missing` rather than silently ignored.
+ */
+export function resolveLinkedCaptureDraft(reply: CaptureRequestResult<unknown>): LinkedCaptureDraftResult {
+  if (!reply.ok) return { ok: false, error: reply.error };
+  if (typeof reply.value !== "object" || reply.value === null || !("detail" in reply.value)
+    || reply.value.detail === null || reply.value.detail === undefined) {
+    return { ok: false, error: "missing" };
+  }
+  const workspace = rehydrateCaptureWorkspace(reply.value);
+  return workspace === undefined ? { ok: false, error: "unavailable" } : { ok: true, workspace };
+}
 
 export function captureDeviceId(store: CaptureKeyValueStore | undefined, create: () => string): string {
   const stored = store?.getItem(deviceKey);

@@ -11,6 +11,17 @@
 - **Verificación:** `pnpm --filter @super-restaurant/shared-types test`, `pnpm --filter @super-restaurant/sync-engine test` (92/92 pruebas), `pnpm lint`, `pnpm typecheck`, `pnpm test` y `pnpm build` globales en verde (registrado tras correr la batería completa). Sin cambios SQL, sin interacción remota, sin subagentes, commit local sin push/PR por instrucción humana.
 - **Siguiente acción mínima:** revisión doble nivel A (segunda familia) y push/PR por Emmanuel; desbloquea `m2-sync-merge-domain` en `packages/domain`.
 
+## m1-k0b2-customer-open-captures — 2026-11-23 (REVIEW)
+
+- Ronda 1 de revisión del PR #26 aplicada en `ao/captures-fix/pr26-r1` sobre `25f3b484`:
+  - Deep link `/app/capture?draftId=` sin auto-claim: `apps/web/src/app/app/capture/page.tsx` valida el UUID con `parseInitialDraftId`; `apps/web/src/app/app/capture/capture-workspace.tsx` carga el workspace en modo sólo lectura mediante `resolveLinkedCaptureDraft`, maneja el caso de detalle ausente (`missing`) / malformado (`unavailable`) y muestra el borrador con un botón explícito «Retomar» que dispara `claim` sólo bajo acción del operador.
+  - API: `CustomerOpenCapturesService.list` mapea `{ status: "rejected" }` de SQL a `CustomerOrderHistoryError("request")` (HTTP 400 `BadRequestException`, nunca 5xx), con pruebas unitarias de servicio y controlador en `apps/api/src/customer-order-history.test.ts`.
+  - SQL: `supabase/tests/customer_open_captures_invariants.sql` verifica atributos de seguridad y grants (`EXECUTE` para `app_api`, sin `EXECUTE` para `public`, `anon`, `authenticated`, `service_role` ni otros roles vía `aclexplode`), ejecuta llamadas bajo `set local role app_api`, y prueba `customerId` de otro tenant, borrador de otro restaurante (incluso con membresía dual), `recovery_expires_at` expirada, payload inválido (`rejected`) y grant revocado.
+- Verificación: `pnpm lint` (10/10), `pnpm typecheck` (13/13) y `pnpm test` (13/13) verdes. PostgreSQL 17.6 desechable UTF-8 (binarios locales del repo principal, ya que `superrestaurant-23` no tenía `.cache/postgres-local`): 73/73 migraciones desde cero, 30/30 auditorías/invariantes por etapa (+ 4 tenancy), `customer_open_captures_invariants.sql` standalone verde y 41/41 pruebas SQL restantes en verde (`0` fallos).
+- CodeGraph no consultado directamente en este worktree; referencias e impacto inspeccionados manualmente con `git grep` sobre `CaptureWorkspace`, `draftId`, `CustomerOpenCapturesService` y `list_customer_open_captures`. Sin subagentes, sin push ni interacción remota; commit local únicamente. Pendiente: verificación en navegador real y revisión humana del PR #26.
+
+- Base inicial (`25f3b484`): se añadió la migración `20261123000200`, el endpoint `GET /customers/:customerId/captures/open` y la recuperación por `/app/capture?draftId=`. La respuesta reutiliza el resumen de bandeja V1 (máximo 50 borradores recuperables); no se modificó `packages/shared-types` ni se calculó dinero en el cliente.
+
 ## m1-k0b-pickup-contact — 2026-11-23 (REVIEW)
 
 - Ronda 1 del PR #20: CI ejecuta el invariante al aplicar la migración; se prueban claves extra, canal incompatible y limpieza del contacto. La API valida versión y lease antes de exigir cliente. PostgreSQL 17 desde cero y gates globales verificados localmente; pendiente push del humano.

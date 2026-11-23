@@ -9,6 +9,9 @@ import {
   parseCustomerRepeatOrderPreviewV1,
   parseCustomerRepeatOrderCaptureResultV1,
   parseCaptureMutationResultV1,
+  parseCaptureWorkTrayResultV1,
+  parseBranchScope,
+  type CaptureWorkTrayResultV1,
   parseRepeatCustomerOrderIntoCaptureCommandV1,
   type BranchScope,
   type CustomerRepeatOrderCaptureResultV1,
@@ -175,6 +178,41 @@ export class CustomerOrderHistoryService {
       if (error instanceof CustomerOrderHistoryError) throw error;
       throw unavailable();
     }
+  }
+}
+
+@Injectable()
+export class CustomerOpenCapturesService {
+  public constructor(
+    @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
+    @Inject(DATABASE_CLIENT) private readonly database: DatabaseClientPort,
+  ) {}
+
+  public async list(principal: AuthenticatedPrincipal, input: unknown): Promise<CaptureWorkTrayResultV1> {
+    const record = exactRecord(input, ["restaurantId", "branchId", "customerId"]);
+    const restaurantId = record === undefined ? undefined : uuid(record.restaurantId);
+    const branchId = record === undefined ? undefined : uuid(record.branchId);
+    const customerId = record === undefined ? undefined : uuid(record.customerId);
+    if (restaurantId === undefined || branchId === undefined || customerId === undefined) throw applicationError("request");
+    const scope = parseBranchScope({ restaurantId, branchId });
+    if (scope === undefined) throw applicationError("request");
+    const actorId = await authorizePermissions(this.authorization, principal, scope, ["customers.read"]);
+    let rows: readonly unknown[];
+    try {
+      rows = (await this.database.query("select app_private.list_customer_open_captures($1::uuid, $2::jsonb) as result", [
+        actorId, JSON.stringify({ schemaVersion: 1, scope, customerId, limit: 50 }),
+      ])).rows;
+    } catch { throw unavailable(); }
+    if (rows.length !== 1) throw unavailable();
+    const row = exactRecord(rows[0], ["result"]);
+    if (row === undefined) throw unavailable();
+    const statusOnly = exactRecord(row.result, ["status"]);
+    if (statusOnly?.status === "denied") throw applicationError("authorization");
+    if (statusOnly?.status === "rejected") throw applicationError("request");
+    const result = parseCaptureWorkTrayResultV1(row.result);
+    if (result === undefined || result.items.length > 50 || result.items.some((item) => item.status !== "draft"
+      || !sameScope(item.scope, scope))) throw unavailable();
+    return result;
   }
 }
 

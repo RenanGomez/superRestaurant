@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseAutosaveCaptureDraftCommandV1, parseBranchScope, type CaptureDraftSummaryV1,
   type CaptureTrayItemV2 } from "@super-restaurant/shared-types";
-import { canStartCapture, captureDeviceId, clearPendingCaptureAutosave, isRecoverableCaptureDraft, persistPendingCaptureAutosave,
-  readPendingCaptureAutosave, rehydrateCaptureWorkspace, requestCapture, shortCaptureDraftId, shouldRenewLease } from "./capture-workspace.js";
+import { canStartCapture, captureDeviceId, clearPendingCaptureAutosave, isRecoverableCaptureDraft, parseInitialDraftId,
+  persistPendingCaptureAutosave, readPendingCaptureAutosave, rehydrateCaptureWorkspace, requestCapture,
+  resolveLinkedCaptureDraft, shortCaptureDraftId, shouldRenewLease } from "./capture-workspace.js";
 import { getCaptureConfirmationContext } from "./capture-confirmation-context.js";
 const scope={restaurantId:"1e37ae13-8507-484c-969f-2176f77b7000",branchId:"23723e10-c0bf-49fd-9363-4f0e2c60e955"};
 const confirmationScope=parseBranchScope(scope);
@@ -169,4 +170,24 @@ test("capture payment intent uses the protected route and validates scope, captu
     assert.deepEqual(await requestCapture("token","https://api.example.com","paymentIntent",intentCommand),{ok:false,error:"conflict"});
     assert.deepEqual(await requestCapture("token","https://api.example.com","paymentIntent",{...intentCommand,method:"transfer",tenderedAmountMinor:9000}),{ok:false,error:"invalid"});
   }finally{globalThis.fetch=old;}
+});
+
+test("deep link draftId validation accepts only canonical UUID strings", () => {
+  assert.equal(parseInitialDraftId(captureDraftId), captureDraftId);
+  assert.equal(parseInitialDraftId(captureDraftId.toUpperCase()), captureDraftId);
+  assert.equal(parseInitialDraftId("not-a-uuid"), undefined);
+  assert.equal(parseInitialDraftId(""), undefined);
+  assert.equal(parseInitialDraftId([captureDraftId]), undefined);
+  assert.equal(parseInitialDraftId(undefined), undefined);
+});
+
+test("deep link workspace resolution handles valid workspace, absent detail and errors without claiming", () => {
+  const valid = resolveLinkedCaptureDraft({ ok: true, value: workspaceV5Base });
+  assert.equal(valid.ok, true);
+  if (valid.ok) assert.equal(valid.workspace.detail.captureDraftId, captureDraftId);
+  assert.deepEqual(resolveLinkedCaptureDraft({ ok: true, value: { schemaVersion: 5 } }), { ok: false, error: "missing" });
+  assert.deepEqual(resolveLinkedCaptureDraft({ ok: true, value: { schemaVersion: 5, detail: null } }), { ok: false, error: "missing" });
+  assert.deepEqual(resolveLinkedCaptureDraft({ ok: true, value: { schemaVersion: 5, detail: { bad: true } } }), { ok: false, error: "unavailable" });
+  assert.deepEqual(resolveLinkedCaptureDraft({ ok: false, error: "missing" }), { ok: false, error: "missing" });
+  assert.deepEqual(resolveLinkedCaptureDraft({ ok: false, error: "denied" }), { ok: false, error: "denied" });
 });
