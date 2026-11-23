@@ -1,5 +1,5 @@
 import type { CanActivate, ExecutionContext } from "@nestjs/common";
-import { Inject, Injectable, SetMetadata, UnauthorizedException } from "@nestjs/common";
+import { HttpException, Inject, Injectable, SetMetadata, UnauthorizedException } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
@@ -55,6 +55,7 @@ export class SupabaseAuthPrincipalVerifier implements AuthPrincipalVerifierPort 
 
 @Injectable()
 export class SupabaseAuthGuard implements CanActivate {
+  private readonly financialRequests = new Map<string, { count: number; expiresAt: number }>();
   public constructor(
     @Inject(AUTH_PRINCIPAL_VERIFIER) private readonly verifier: AuthPrincipalVerifierPort,
     @Inject(Reflector) private readonly reflector: Reflector,
@@ -68,8 +69,9 @@ export class SupabaseAuthGuard implements CanActivate {
     const accessToken = parseBearerAuthorization(request.headers?.authorization);
     if (accessToken === undefined) throw authenticationRequired();
 
+    let principal: AuthenticatedPrincipal | undefined;
     try {
-      const principal = normalizePrincipal(await this.verifier.verifyAccessToken(accessToken));
+      principal = normalizePrincipal(await this.verifier.verifyAccessToken(accessToken));
       if (principal === undefined) throw new AccessTokenRejectedError();
       Object.defineProperty(request, authenticatedPrincipalKey, {
         configurable: false,
@@ -77,9 +79,30 @@ export class SupabaseAuthGuard implements CanActivate {
         value: principal,
         writable: false,
       });
-      return true;
     } catch {
       throw authenticationRequired();
+    }
+    const controller = context.getClass().name;
+    const handler = context.getHandler().name;
+    if ((controller === "PaymentsController" && ["open", "collect", "close"].includes(handler))
+      || (controller === "OperationalShiftsController" && handler === "open")) {
+      this.limitFinancialRequests(principal.actorId);
+    }
+    return true;
+  }
+
+  private limitFinancialRequests(actorId: string): void {
+    const now = Date.now();
+    for (const [key, entry] of this.financialRequests) {
+      if (entry.expiresAt <= now) this.financialRequests.delete(key);
+    }
+    const entry = this.financialRequests.get(actorId);
+    if (entry !== undefined) {
+      if (entry.count >= 60) throw new HttpException({ code: "RATE_LIMITED" }, 429);
+      entry.count += 1;
+    } else {
+      if (this.financialRequests.size >= 10_000) throw new HttpException({ code: "RATE_LIMITED" }, 429);
+      this.financialRequests.set(actorId, { count: 1, expiresAt: now + 60_000 });
     }
   }
 }

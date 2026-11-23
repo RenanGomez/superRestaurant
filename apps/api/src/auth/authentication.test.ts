@@ -143,3 +143,22 @@ test("guard rejects malformed principals returned by a misconfigured verifier", 
     await assert.rejects(guard.canActivate(context), { status: 401 });
   }
 });
+
+test("financial mutations are limited per verified actor with a generic 429", async () => {
+  let actorId = "8cc7eb84-af2a-4e84-95de-967c39af86ab";
+  const guard = new SupabaseAuthGuard({ verifyAccessToken: async () => ({ actorId }) }, new Reflector());
+  class PaymentsController {}
+  const context = () => ({
+    getClass: () => PaymentsController,
+    getHandler: () => function collect() {},
+    switchToHttp: () => ({ getRequest: () => ({ headers: { authorization: "Bearer sensitive-access-token-value" } }) }),
+  }) as never;
+  for (let i = 0; i < 60; i += 1) assert.equal(await guard.canActivate(context()), true);
+  await assert.rejects(guard.canActivate(context()), (error: unknown) => {
+    assert.deepEqual((error as { getResponse: () => unknown }).getResponse(), { code: "RATE_LIMITED" });
+    assert.equal((error as { status: number }).status, 429);
+    return true;
+  });
+  actorId = "9cc7eb84-af2a-4e84-95de-967c39af86ab";
+  assert.equal(await guard.canActivate(context()), true);
+});
