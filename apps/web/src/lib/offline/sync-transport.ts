@@ -1,4 +1,4 @@
-﻿/**
+/**
  * HTTP implementation of `SyncTransportPort` for the web app.
  *
  * The engine owns every decision about the response (`parsePushResponse`,
@@ -7,7 +7,7 @@
  * the transport, and turns failures into the stable `SyncTransportError` codes
  * the engine already understands.
  *
- * Security rules (ADR-005 Â§4.1, OFFLINE_SYNC_CONTRACT Â§12):
+ * Security rules (ADR-005 §4.1, OFFLINE_SYNC_CONTRACT §12):
  *
  * - the token is read from the auth adapter on every request and never logged,
  *   stored or echoed back;
@@ -69,13 +69,14 @@ const SERVER_REVOCATION_CODES: ReadonlySet<string> = new Set(["AUTH_REVOKED", "D
 /**
  * `401` alone is an expired/absent credential, not a revocation: the caller can
  * renew the token and retry. Only a `401`/`403` whose body declares a
- * revocation code ends the session, and `403` without a declaration is treated
- * as a scope/permission revocation because retrying would never succeed.
+ * revocation code ends the session. A plain `403` does not revoke a scope.
  */
 export function classifySyncHttpStatus(status: number, declaredCode?: string | null): SyncHttpFailure {
   const declared = typeof declaredCode === "string" && SERVER_REVOCATION_CODES.has(declaredCode) ? declaredCode : null;
   if (status === 401) return declared === null ? { code: "AUTH_EXPIRED", retryable: true } : { code: declared, retryable: false };
-  if (status === 403) return { code: declared ?? "AUTH_REVOKED", retryable: false };
+  if (status === 403) return { code: declared ?? "HTTP_403", retryable: false };
+  // Endpoint deployment errors must retain the batch for a later retry.
+  if (status === 404 || status === 405) return { code: `HTTP_${status}`, retryable: true };
   if (status === 408 || status === 425 || status === 429) return { code: `HTTP_${status}`, retryable: true };
   if (status >= 500) return { code: `HTTP_${status}`, retryable: true };
   return { code: `HTTP_${status}`, retryable: false };
@@ -102,27 +103,26 @@ export function createWebSyncTransport(options: WebSyncTransportOptions): SyncTr
   const fetcher = options.fetcher ?? fetch;
 
   async function send(path: string, body: unknown, token: string): Promise<Response> {
-    const controller = typeof AbortController === "undefined" ? null : new AbortController();
+    const controller = new AbortController();
     const timeoutMs = options.timeoutMs ?? 0;
-    const timer = controller !== null && timeoutMs > 0
-      ? setTimeout(() => controller.abort(), timeoutMs)
-      : null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      if (timeoutMs > 0) timer = setTimeout(() => { controller.abort(); reject(new SyncTransportError("TRANSPORT_ERROR", true)); }, timeoutMs);
+    });
     try {
-      return await fetcher(`${base}${path}`, {
-        body: JSON.stringify(body),
-        cache: "no-store",
-        headers: {
-          accept: "application/json",
-          authorization: `Bearer ${token}`,
-          "content-type": "application/json",
-        },
-        method: "POST",
-        ...(controller === null ? {} : { signal: controller.signal }),
-      });
+      const operation = (async (): Promise<Response> => {
+        const response = await fetcher(`${base}${path}`, {
+          body: JSON.stringify(body), cache: "no-store", method: "POST", signal: controller.signal,
+          headers: { accept: "application/json", authorization: `Bearer ${token}`, "content-type": "application/json" },
+        });
+        const bytes = await response.arrayBuffer();
+        return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers });
+      })();
+      return await (timeoutMs > 0 ? Promise.race([operation, timeout]) : operation);
     } catch {
       throw new SyncTransportError("TRANSPORT_ERROR", true);
     } finally {
-      if (timer !== null) clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
     }
   }
 

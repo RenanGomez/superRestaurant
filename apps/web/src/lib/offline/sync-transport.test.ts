@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import test from "node:test";
 
 import { SyncTransportError, parseSyncScope, type SyncPullRequest, type SyncPushRequest } from "@super-restaurant/sync-engine";
@@ -120,7 +120,9 @@ test("a closed revocation gate blocks push and pull before the fetch", async () 
 test("HTTP failures keep an explicit retryability class", async () => {
   const cases: readonly { status: number; code: string; retryable: boolean; body?: unknown }[] = [
     { code: "AUTH_EXPIRED", retryable: true, status: 401 },
-    { code: "AUTH_REVOKED", retryable: false, status: 403 },
+    { code: "HTTP_403", retryable: false, status: 403 },
+    { code: "HTTP_404", retryable: true, status: 404 },
+    { code: "HTTP_405", retryable: true, status: 405 },
     { code: "HTTP_400", retryable: false, status: 400 },
     { code: "HTTP_409", retryable: false, status: 409 },
     { code: "HTTP_429", retryable: true, status: 429 },
@@ -244,4 +246,16 @@ test("declared revocation never refreshes or retries", async () => {
     error instanceof SyncTransportError && error.code === "DEVICE_REVOKED" && !error.retryable);
   assert.equal(refreshes, 0);
   assert.equal(calls.length, 1);
+});
+
+test("a stalled response body times out after headers", async () => {
+  const fetcher: typeof fetch = () => Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
+  const transport = createWebSyncTransport({ accessToken: () => Promise.resolve(TOKEN), apiBaseUrl: BASE, fetcher, timeoutMs: 20 });
+  await assert.rejects(transport.pull(pullRequest), (error: unknown) => error instanceof SyncTransportError && error.code === "TRANSPORT_ERROR" && error.retryable);
+});
+
+test("403 revokes only with an explicit server code", () => {
+  assert.deepEqual(classifySyncHttpStatus(403), { code: "HTTP_403", retryable: false });
+  assert.deepEqual(classifySyncHttpStatus(403, "DEVICE_REVOKED"), { code: "DEVICE_REVOKED", retryable: false });
+  assert.deepEqual(classifySyncHttpStatus(403, "AUTH_REVOKED"), { code: "AUTH_REVOKED", retryable: false });
 });

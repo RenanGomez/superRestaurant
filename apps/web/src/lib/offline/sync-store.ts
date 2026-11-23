@@ -8,7 +8,8 @@ const encoder = new TextEncoder();
 type Meta = { activeSlot: number; generation: number; sequence: number; keyVersion: number; locked: boolean; quarantined: boolean };
 type Slot = { ciphertext: ArrayBuffer; iv: Uint8Array; generation: number; keyVersion: number };
 export class WebSyncStorageError extends Error {
-  public constructor(public readonly code: string) { super(code); this.name = "WebSyncStorageError"; }
+  public readonly retryable: boolean;
+  public constructor(public readonly code: string) { super(code); this.name = "WebSyncStorageError"; this.retryable = code === "STORAGE_LOAD_FAILED"; }
 }
 
 function request<T>(req: IDBRequest<T>): Promise<T> {
@@ -25,7 +26,11 @@ function aad(deviceId: string, keyVersion: number, generation: number): Uint8Arr
   return encoder.encode(`sr-sync-v1|${deviceId}|1|${keyVersion}|${generation}`);
 }
 
-/** IndexedDB stores only AES-GCM ciphertext; Web Locks serialize all access per device. */
+/** IndexedDB stores ciphertext and its non-extractable key in the same origin. This does not protect against XSS.
+ * Web Locks serialize individual operations. After STORAGE_COMMIT_FAILED, discard the engine,
+ * reopen the store and initialize a new engine before retrying the same idempotency key.
+ * Web Locks do not elect a leader or serialize network sends across engine instances.
+ */
 export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
   private generation: number | null = null;
   private constructor(private readonly deviceId: string, private readonly db: IDBDatabase, private readonly crypto: Crypto, private readonly locks: LockManager) {}
@@ -45,8 +50,7 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
   private async read<T>(store: string, key: IDBValidKey): Promise<T | undefined> {
     const tx = this.db.transaction(store, "readonly");
     const done = finished(tx);
-    const value = await request(tx.objectStore(store).get(key) as IDBRequest<T | undefined>);
-    await done;
+    const [value] = await Promise.all([request(tx.objectStore(store).get(key) as IDBRequest<T | undefined>), done]);
     return value;
   }
   private async quarantine(): Promise<void> {
@@ -67,18 +71,53 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
       }
       if (meta.quarantined) throw new WebSyncStorageError("STORAGE_QUARANTINED");
       if (meta.locked) throw new WebSyncStorageError("STORAGE_LOCKED");
+      let slot: Slot | undefined;
+      let key: CryptoKey | undefined;
       try {
-        const slot = await this.read<Slot>(SLOTS, [deviceId, meta.activeSlot]);
-        const key = await this.read<CryptoKey>(KEYS, [deviceId, meta.keyVersion]);
-        if (!slot || !key || key.extractable || slot.generation !== meta.generation || slot.keyVersion !== meta.keyVersion || slot.iv.length !== 12) throw new Error("invalid slot");
-        const bytes = await this.crypto.subtle.decrypt({ name: "AES-GCM", iv: slot.iv as Uint8Array<ArrayBuffer>, additionalData: aad(deviceId, slot.keyVersion, slot.generation) }, key, slot.ciphertext);
-        const parsed = parseDurableState(JSON.parse(new TextDecoder().decode(bytes)) as unknown, deviceId);
-        if (!parsed.ok || parsed.value.lastLocalSequence !== meta.sequence) throw new Error("invalid state");
+        slot = await this.read<Slot>(SLOTS, [deviceId, meta.activeSlot]);
+        key = await this.read<CryptoKey>(KEYS, [deviceId, meta.keyVersion]);
+      } catch { throw new WebSyncStorageError("STORAGE_LOAD_FAILED"); }
+      try {
+        if (!slot || !key || key.extractable || slot.generation !== meta.generation || slot.keyVersion !== meta.keyVersion || !(slot.iv instanceof Uint8Array) || slot.iv.length !== 12) throw new WebSyncStorageError("STATE_CORRUPT");
+        let bytes: ArrayBuffer;
+        try {
+          bytes = await this.crypto.subtle.decrypt({ name: "AES-GCM", iv: slot.iv as Uint8Array<ArrayBuffer>, additionalData: aad(deviceId, slot.keyVersion, slot.generation) }, key, slot.ciphertext);
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "OperationError") throw new WebSyncStorageError("STATE_CORRUPT");
+          throw new WebSyncStorageError("STORAGE_LOAD_FAILED");
+        }
+        let raw: unknown;
+        try { raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown; }
+        catch { throw new WebSyncStorageError("STATE_CORRUPT"); }
+        const parsed = parseDurableState(raw, deviceId);
+        if (!parsed.ok || parsed.value.lastLocalSequence !== meta.sequence) throw new WebSyncStorageError("STATE_CORRUPT");
         this.generation = meta.generation;
         return parsed.value;
-      } catch {
-        await this.quarantine();
-        throw new WebSyncStorageError("STATE_CORRUPT");
+      } catch (error) {
+        if (error instanceof WebSyncStorageError && error.code === "STATE_CORRUPT") await this.quarantine();
+        throw error;
+      }
+    }).catch((error: unknown) => {
+      if (error instanceof WebSyncStorageError) throw error;
+      throw new WebSyncStorageError("STORAGE_LOAD_FAILED");
+    });
+  }
+  /** Read-only evidence recovery: never clears quarantine or replaces the active slot. */
+  public inspectPreviousEvidence(): Promise<DurableSyncState | null> {
+    return this.exclusive(async () => {
+      const meta = await this.read<Meta>(META, this.deviceId);
+      if (!meta?.quarantined || meta.generation < 2) return null;
+      const slot = await this.read<Slot>(SLOTS, [this.deviceId, 1 - meta.activeSlot]);
+      if (!slot || slot.generation !== meta.generation - 1) return null;
+      const key = await this.read<CryptoKey>(KEYS, [this.deviceId, slot.keyVersion]);
+      if (!key || key.extractable) return null;
+      try {
+        const bytes = await this.crypto.subtle.decrypt({ name: "AES-GCM", iv: slot.iv as Uint8Array<ArrayBuffer>, additionalData: aad(this.deviceId, slot.keyVersion, slot.generation) }, key, slot.ciphertext);
+        const parsed = parseDurableState(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown, this.deviceId);
+        return parsed.ok ? parsed.value : null;
+      } catch (error) {
+        if (error instanceof DOMException && error.name !== "OperationError") throw new WebSyncStorageError("STORAGE_LOAD_FAILED");
+        return null;
       }
     });
   }
