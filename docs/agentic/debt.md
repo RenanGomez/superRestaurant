@@ -1,6 +1,15 @@
-# Deuda técnica
+# Deuda tecnica (P3)
 
-Registro de deuda aceptada, con su identificador, impacto y condición de salida.
+Hallazgos P3 y atajos registrados. No se ejecutan durante el hito abierto: se
+revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
+
+## Formato
+
+| Fecha | Hito | Item | Descripcion | Motivo del atajo | Seguimiento |
+|---|---|---|---|---|---|
+| - | - | - | - | - | - |
+
+## Registradas
 
 ## M0-7 — Fallos conocidos de M0-7 (CI)
 

@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "milestone": "M0",
+  "updatedAt": "2026-11-22T00:00:00-07:00",
+  "items": [
+    {
+      "id": "schema-example",
+      "milestone": "M0",
+      "phase": 0,
+      "level": "D",
+      "lane": "opencode",
+      "paths": ["docs/agentic/EXAMPLE.md"],
+      "deps": [],
+      "acceptance": ["echo 'item de ejemplo; no ejecutar'"],
+      "etaMin": 5,
+      "attempts": 0,
+      "status": "cancelled",
+      "sessionId": null,
+      "pr": null,
+      "parent": null,
+      "note": "Ejemplo del esquema de la seccion 3.1 del plan. No es trabajo real."
+    }
+  ]
+}
