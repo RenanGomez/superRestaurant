@@ -1,3 +1,10 @@
+## m2-sync-sql-migrations - ronda 3 (revision pendiente)
+
+- RBAC limita compensacion MenuCatalog y borrado Customer a manager o superior; resolucion manual valida entidad, uso unico y replay del compensador; revocacion registra supervisor; secuencia distingue reuso y llegada tardia; changelog usa contador por restaurante/sucursal y exige tombstone equivalente a delete; una sola revision abierta por evento e IDs minusculos.
+- PostgreSQL 17 local y Node 24.19.0: 74 migraciones desde cero, invariantes y postcheck rollback verdes. El verificador usa dos conexiones: scopes distintos avanzan sin bloquearse y el mismo scope espera hasta lock_timeout. Lint/typecheck/test globales solicitados en esta ronda. Sin cambios remotos ni subagentes.
+- Deuda para m2-api-sync-push-merge (no implementada por instruccion humana): versiones sin huecos, payload/base_version no persistidos, retencion y low-water, replay reconstruido por API, mapeo de estados internos a SYNC_SERVER_RESULT_STATUSES y READ COMMITTED. Integrar tambien el efecto de negocio y ledger en la misma transaccion; preservar orden de push por dispositivo y reconciliar secuencia global del contrato con el scope del dispositivo.
+- CodeGraph no inicializado; inspeccion manual dirigida. La migracion aun no se aplica en remoto; rollback es no aplicarla. Siguiente paso: revision e integracion del PR #39.
+
 ## m2-sync-sql-migrations - ronda 1 (revision pendiente)
 
 - Corregidos permisos por entidad/operacion usando find_active_branch_membership y la matriz RBAC, aislamiento scoped de dispositivos, inmutabilidad del ledger/recibos/changelog, versiones monotonicamente crecientes y tombstones sin resurreccion, casos de revision supervisada, huella ligada al actor y handler de unicidad acotado. El contador global serializa commits para evitar huecos visibles; lock_timeout de 2 segundos limita espera.

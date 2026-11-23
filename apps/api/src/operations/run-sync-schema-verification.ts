@@ -13,7 +13,7 @@ try {
   if (!names.includes("20261123000300_sync_ledger.sql")) throw new Error("SYNC_MIGRATION_MISSING");
   stage = "migrations";
   await local.applyMigrations(names);
-  const summary = "select (select count(*) from app.sync_devices)::int as devices, (select count(*) from app.sync_event_ledger)::int as ledger, (select count(*) from app.sync_event_receipts)::int as receipts, (select count(*) from app.sync_changelog)::int as changes, (select count(*) from app.sync_manual_review_cases)::int as cases, (select value from app_private.sync_cursor_counter)::text as cursor";
+  const summary = "select (select count(*) from app.sync_devices)::int as devices, (select count(*) from app.sync_event_ledger)::int as ledger, (select count(*) from app.sync_event_receipts)::int as receipts, (select count(*) from app.sync_changelog)::int as changes, (select count(*) from app.sync_manual_review_cases)::int as cases, (select coalesce(sum(value),0)::text from app_private.sync_cursor_counter) as cursor, (select count(*)::int from app_private.sync_cursor_counter) as scopes";
   const baseline = (await local.admin.query(summary)).rows[0];
   stage = "invariants";
   await local.admin.query("BEGIN");
@@ -24,10 +24,11 @@ try {
   await competitor.connect();
   try {
     await local.admin.query("BEGIN");
-    await local.admin.query("UPDATE app_private.sync_cursor_counter SET value=value WHERE singleton");
+    await local.admin.query("INSERT INTO app_private.sync_cursor_counter VALUES ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000001',1)");
     await competitor.query("BEGIN");
     await competitor.query("SET LOCAL lock_timeout = '200ms'");
-    await assert.rejects(competitor.query("UPDATE app_private.sync_cursor_counter SET value=value WHERE singleton"),
+    await competitor.query("INSERT INTO app_private.sync_cursor_counter VALUES ('00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000002',1)");
+    await assert.rejects(competitor.query("INSERT INTO app_private.sync_cursor_counter VALUES ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000001',1) ON CONFLICT (restaurant_id,branch_id) DO UPDATE SET value=app_private.sync_cursor_counter.value+1"),
       (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "55P03");
   } finally {
     await competitor.query("ROLLBACK");

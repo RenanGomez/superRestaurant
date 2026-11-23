@@ -8,20 +8,22 @@ create table app.sync_devices (
   last_local_sequence bigint not null default -1 check (last_local_sequence >= -1),
   created_at timestamptz not null default now(),
   revoked_at timestamptz,
-  check (length(device_id) between 1 and 128),
+  revoked_by uuid references auth.users(id),
+  check ((revoked_at is null) = (revoked_by is null)),
+  check (length(device_id) between 1 and 128 and device_id = lower(device_id)),
   primary key (restaurant_id,branch_id,device_id),
   foreign key (restaurant_id,branch_id) references app.branches(restaurant_id,id)
 );
 create table app.sync_event_ledger (
   restaurant_id uuid not null,
   branch_id uuid not null,
-  event_id text not null,
+  event_id text not null check (event_id = lower(event_id)),
   idempotency_key text not null check (idempotency_key ~ '^[!-~]{1,128}$'),
   device_id text not null,
   actor_id uuid not null references auth.users(id),
   local_sequence bigint not null check (local_sequence >= 0),
   entity_type text not null,
-  entity_id text not null,
+  entity_id text not null check (entity_id = lower(entity_id)),
   operation text not null,
   schema_version text not null,
   event_fingerprint bytea not null,
@@ -39,7 +41,7 @@ create table app.sync_event_ledger (
 create table app.sync_event_receipts (
   restaurant_id uuid not null,
   branch_id uuid not null,
-  event_id text not null,
+  event_id text not null check (event_id = lower(event_id)),
   ledger_event_id text not null,
   event_fingerprint bytea not null,
   device_id text not null,
@@ -50,16 +52,17 @@ create table app.sync_event_receipts (
   foreign key (restaurant_id,branch_id,ledger_event_id) references app.sync_event_ledger(restaurant_id,branch_id,event_id)
 );
 create table app.sync_changelog (
-  canonical_sequence bigint primary key check (canonical_sequence > 0),
+  canonical_sequence bigint not null check (canonical_sequence > 0),
   restaurant_id uuid not null,
   branch_id uuid not null,
   entity_type text not null,
-  entity_id text not null,
+  entity_id text not null check (entity_id = lower(entity_id)),
   canonical_version bigint not null check (canonical_version > 0),
   tombstone boolean not null,
   snapshot jsonb,
   created_at timestamptz not null default clock_timestamp(),
   foreign key (restaurant_id, branch_id) references app.branches(restaurant_id,id),
+  primary key (restaurant_id,branch_id,canonical_sequence),
   unique (restaurant_id,branch_id,entity_type,entity_id,canonical_version),
   check ((tombstone and snapshot is null) or (not tombstone and jsonb_typeof(snapshot) = 'object')),
   check (not tombstone or entity_type in ('OrderItem','DiningTable','MenuCatalog','CaptureDraft','Customer'))
@@ -82,9 +85,10 @@ create table app.sync_manual_review_cases (
     (status <> 'open' and resolved_at is not null and resolved_by_actor_id is not null and resolution_reason is not null and length(btrim(resolution_reason)) > 0 and
       ((status = 'resolved_compensated' and compensating_event_id is not null) or (status = 'resolved_rejected' and compensating_event_id is null))))
 );
--- This row serializes allocation until commit, preventing pull cursors from skipping late commits.
-create table app_private.sync_cursor_counter (singleton boolean primary key default true check(singleton), value bigint not null default 0);
-insert into app_private.sync_cursor_counter values (true, 0);
+create unique index sync_one_open_review_per_event on app.sync_manual_review_cases(restaurant_id,branch_id,event_id) where status='open';
+create unique index sync_one_case_per_compensation on app.sync_manual_review_cases(restaurant_id,branch_id,compensating_event_id) where compensating_event_id is not null;
+-- Each scope serializes allocation until commit, so cursors cannot skip late commits.
+create table app_private.sync_cursor_counter (restaurant_id uuid not null, branch_id uuid not null, value bigint not null default 0, primary key (restaurant_id,branch_id));
 
 alter table app.sync_devices enable row level security;
 alter table app.sync_devices force row level security;
@@ -118,6 +122,8 @@ returns boolean language sql stable security definer set search_path = '' as $f$
    or (p_entity='MenuCatalog' and p_operation in ('create','update','delete','compensate'))
    or (p_entity='CaptureDraft' and p_operation in ('create','update','transition','delete'))
    or (p_entity='Customer' and p_operation in ('create','update','delete')),false) then false
+  when p_entity='MenuCatalog' and p_operation='compensate' then role = any(array['owner','admin','manager'])
+  when p_entity='Customer' and p_operation='delete' then role = any(array['owner','admin','manager'])
   when p_operation = 'compensate' then role = any(array['owner','admin','manager','supervisor'])
   when p_entity in ('Refund','OrderDiscount') then role = any(array['owner','admin','manager','supervisor'])
   when p_entity in ('Payment','CashMovement','CashRegisterSession') then role = any(array['owner','admin','manager','supervisor','cashier'])
@@ -137,7 +143,7 @@ begin
  return exists(select 1 from app.sync_devices where restaurant_id=p_restaurant and branch_id=p_branch and device_id=p_device and actor_id=p_actor and revoked_at is null);
 end $f$;
 
--- Caller must commit this ledger write and the corresponding business effect atomically.
+-- The API serializes push by device. The caller commits the ledger and business effect atomically.
 create function app_private.sync_record_event(p_actor uuid, p_event jsonb, p_result jsonb)
 returns jsonb language plpgsql security definer set search_path = '' as $f$
 declare r uuid; b uuid; seq bigint; d app.sync_devices%rowtype; prior app.sync_event_ledger%rowtype;
@@ -150,7 +156,7 @@ begin
  if r is null or b is null or not app_private.sync_authorized(p_actor,r,b) then return jsonb_build_object('status','denied'); end if;
  entity := p_event->>'entityType'; op := p_event->>'operation';
  if p_event->>'actorId' is distinct from p_actor::text or coalesce(p_event->>'eventId','') = '' or coalesce(p_event->>'deviceId','') = ''
- or coalesce(p_event->>'entityId','') = '' or coalesce(p_event->>'schemaVersion','') <> '1'
+ or coalesce(p_event->>'entityId','') = '' or p_event->>'eventId' <> lower(p_event->>'eventId') or p_event->>'deviceId' <> lower(p_event->>'deviceId') or p_event->>'entityId' <> lower(p_event->>'entityId') or coalesce(p_event->>'schemaVersion','') <> '1'
  or coalesce(p_event->>'idempotencyKey','') !~ '^[!-~]{1,128}$' or seq is null or seq < 0
  or jsonb_typeof(p_event->'payload') is distinct from 'object' or jsonb_typeof(p_result) is distinct from 'object'
  or not coalesce((entity = 'Order' and op in ('create','update','transition','compensate'))
@@ -178,12 +184,22 @@ begin
  select * into prior from app.sync_event_ledger where restaurant_id=r and branch_id=b and idempotency_key=p_event->>'idempotencyKey';
  if found then
   if prior.intention_fingerprint <> intent_hash then return jsonb_build_object('status','rejected','code','IDEMPOTENCY_KEY_REUSE'); end if;
-  if seq <= d.last_local_sequence then return jsonb_build_object('status','rejected','code','LOCAL_SEQUENCE_REUSE'); end if;
+  if seq <= d.last_local_sequence then
+   if exists(select 1 from app.sync_event_receipts where restaurant_id=r and branch_id=b and device_id=d.device_id and local_sequence=seq) then
+    return jsonb_build_object('status','rejected','code','LOCAL_SEQUENCE_REUSE');
+   end if;
+   return jsonb_build_object('status','retry_wait','code','SEQUENCE_OUT_OF_ORDER');
+  end if;
   insert into app.sync_event_receipts values(r,b,p_event->>'eventId',prior.event_id,event_hash,d.device_id,seq);
   update app.sync_devices set last_local_sequence=seq where restaurant_id=r and branch_id=b and device_id=d.device_id;
   return jsonb_build_object('status','duplicate','result',prior.result);
  end if;
- if seq <= d.last_local_sequence then return jsonb_build_object('status','rejected','code','LOCAL_SEQUENCE_REUSE'); end if;
+ if seq <= d.last_local_sequence then
+   if exists(select 1 from app.sync_event_receipts where restaurant_id=r and branch_id=b and device_id=d.device_id and local_sequence=seq) then
+    return jsonb_build_object('status','rejected','code','LOCAL_SEQUENCE_REUSE');
+   end if;
+   return jsonb_build_object('status','retry_wait','code','SEQUENCE_OUT_OF_ORDER');
+  end if;
  begin
   insert into app.sync_event_ledger(restaurant_id,branch_id,event_id,idempotency_key,device_id,actor_id,local_sequence,entity_type,entity_id,operation,schema_version,event_fingerprint,intention_fingerprint,result)
   values(r,b,p_event->>'eventId',p_event->>'idempotencyKey',d.device_id,p_actor,seq,entity,p_event->>'entityId',op,p_event->>'schemaVersion',event_hash,intent_hash,p_result);
@@ -195,15 +211,16 @@ begin
  return jsonb_build_object('status','recorded','result',p_result);
 end $f$;
 
--- The global counter serializes cursor allocation through commit. This deliberately
--- trades throughput for a cursor that cannot skip uncommitted earlier changes.
+-- Scoped counters serialize cursor allocation through commit without coupling branches.
 create function app_private.sync_append_change(p_actor uuid,p_restaurant uuid,p_branch uuid,p_entity text,p_entity_id text,p_version bigint,p_tombstone boolean,p_snapshot jsonb,p_operation text)
 returns bigint language plpgsql security definer set search_path = '' set lock_timeout = '2s' as $f$
 declare next_sequence bigint; last_version bigint; deleted boolean;
 begin
  if not app_private.sync_can_write(p_actor,p_restaurant,p_branch,p_entity,p_operation) then return null; end if;
- if p_tombstone is null or (p_tombstone and p_operation <> 'delete') or p_version is null or p_version <= 0 or coalesce(p_entity_id,'') = '' then raise exception 'SYNC_CHANGE_INVALID' using errcode='22023'; end if;
- update app_private.sync_cursor_counter set value=value+1 where singleton returning value into next_sequence;
+ if p_tombstone is null or p_tombstone is distinct from (p_operation = 'delete') or p_version is null or p_version <= 0 or coalesce(p_entity_id,'') = '' or p_entity_id <> lower(p_entity_id) then raise exception 'SYNC_CHANGE_INVALID' using errcode='22023'; end if;
+ insert into app_private.sync_cursor_counter(restaurant_id,branch_id,value) values(p_restaurant,p_branch,1)
+ on conflict (restaurant_id,branch_id) do update set value=app_private.sync_cursor_counter.value+1
+ returning value into next_sequence;
  select canonical_version,tombstone into last_version,deleted from app.sync_changelog
   where restaurant_id=p_restaurant and branch_id=p_branch and entity_type=p_entity and entity_id=p_entity_id
   order by canonical_version desc limit 1;
@@ -222,7 +239,9 @@ create function app_private.sync_revoke_device(p_actor uuid,p_restaurant uuid,p_
 returns boolean language plpgsql security definer set search_path = '' as $f$
 begin
  if not app_private.sync_authorized(p_actor,p_restaurant,p_branch) then return false; end if;
- update app.sync_devices set revoked_at=clock_timestamp() where restaurant_id=p_restaurant and branch_id=p_branch and device_id=p_device and actor_id=p_actor and revoked_at is null;
+ update app.sync_devices set revoked_at=clock_timestamp(),revoked_by=p_actor
+ where restaurant_id=p_restaurant and branch_id=p_branch and device_id=p_device and revoked_at is null
+ and (actor_id=p_actor or exists(select 1 from app_private.find_active_branch_membership(p_actor,p_restaurant,p_branch) m where m.roles && array['owner','admin','manager','supervisor']::text[]));
  return found;
 end $f$;
 
@@ -237,14 +256,29 @@ begin
 end $f$;
 
 create function app_private.sync_resolve_review(p_actor uuid,p_restaurant uuid,p_branch uuid,p_case uuid,p_decision text,p_reason text,p_compensating_event text)
-returns boolean language plpgsql security definer set search_path = '' as $f$
+returns text language plpgsql security definer set search_path = '' as $f$
+declare review app.sync_manual_review_cases%rowtype;
 begin
- if not exists(select 1 from app_private.find_active_branch_membership(p_actor,p_restaurant,p_branch) m where m.roles && array['owner','admin','manager','supervisor']::text[]) then return false; end if;
- if p_decision not in ('resolved_compensated','resolved_rejected') or coalesce(length(btrim(p_reason)),0)=0 or (p_decision='resolved_compensated' and p_compensating_event is null) or (p_decision='resolved_rejected' and p_compensating_event is not null) then return false; end if;
- if p_compensating_event is not null and not exists(select 1 from app.sync_event_ledger where restaurant_id=p_restaurant and branch_id=p_branch and event_id=p_compensating_event and operation='compensate') then return false; end if;
- update app.sync_manual_review_cases set status=p_decision,resolved_at=clock_timestamp(),resolved_by_actor_id=p_actor,resolution_reason=p_reason,compensating_event_id=p_compensating_event
- where case_id=p_case and restaurant_id=p_restaurant and branch_id=p_branch and status='open';
- return found;
+ if not exists(select 1 from app_private.find_active_branch_membership(p_actor,p_restaurant,p_branch) m where m.roles && array['owner','admin','manager','supervisor']::text[]) then return 'denied'; end if;
+ if p_decision is null or p_decision not in ('resolved_compensated','resolved_rejected') or coalesce(length(btrim(p_reason)),0)=0 or (p_decision='resolved_compensated' and p_compensating_event is null) or (p_decision='resolved_rejected' and p_compensating_event is not null) then return 'invalid'; end if;
+ select * into review from app.sync_manual_review_cases where case_id=p_case and restaurant_id=p_restaurant and branch_id=p_branch for update;
+ if not found then return 'not_found'; end if;
+ if review.status <> 'open' then
+  if p_decision='resolved_compensated' and review.status=p_decision and review.compensating_event_id=p_compensating_event then return 'duplicate'; end if;
+  return 'already_resolved';
+ end if;
+ if p_compensating_event is not null and not exists(
+  select 1 from app.sync_event_ledger original join app.sync_event_ledger compensation
+   on compensation.restaurant_id=original.restaurant_id and compensation.branch_id=original.branch_id
+   and compensation.entity_type=original.entity_type and compensation.entity_id=original.entity_id
+  where original.restaurant_id=p_restaurant and original.branch_id=p_branch and original.event_id=review.event_id
+   and compensation.event_id=p_compensating_event and compensation.operation='compensate'
+ ) then return 'invalid'; end if;
+ begin
+  update app.sync_manual_review_cases set status=p_decision,resolved_at=clock_timestamp(),resolved_by_actor_id=p_actor,resolution_reason=p_reason,compensating_event_id=p_compensating_event
+  where case_id=p_case;
+ exception when unique_violation then return 'compensation_in_use'; end;
+ return 'resolved';
 end $f$;
 
 alter function app_private.sync_authorized(uuid,uuid,uuid) owner to postgres;
