@@ -11,6 +11,12 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 
 ## Registradas
 
+| Fecha | Hito | Item | Descripcion | Motivo del atajo | Seguimiento |
+|---|---|---|---|---|---|
+| 2026-11-22 | AO M0 | P2 · smoke E2E limitado | El smoke de Playwright solo cubre `/health` y `/login`; no ejercita flujos de producto. | Prioridad a desbloquear el CI de M0. | Ampliar los flujos E2E al cierre del hito. |
+| 2026-11-22 | AO M0 | P2 · guardia CI opcional en `database.ts` | En `apps/api/src/database.ts` la guardia ligada a `CI === "true"` es opcional y no se ejerce fuera de CI. | Se mantiene para no alterar el arranque local. | Revisar al cierre del hito y hacerla explícita. |
+| 2026-11-22 | AO M0 | P3 · robustez de `stop()` en `local-postgres` | `LocalPostgres.stop()` puede dejar limpieza incompleta si fallan `pg_ctl` o `admin.end()`. | Solo afecta a fixtures locales desechables. | Endurecer la limpieza en una tarea mecánica. |
+
 ## M0-7 — Fallos conocidos de M0-7 (CI)
 
 - Estado: aceptada temporalmente; tests tolerados en `.github/workflows/ci.yml`

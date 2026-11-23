@@ -1,3 +1,11 @@
+## AO M0 — integración de PR #3, revisores y deuda de CI (2026-11-22)
+
+- **PR #3:** se integró con `gh pr merge --squash --match-head-commit` porque `ao pr merge` devolvió `PR_HEAD_CHANGED` (el daemon conservaba un head viejo). `feat/smoke-r1` entró después a `main` con el squash `079b8b37` (M0-8).
+- **Revisión:** se usó el subagente Claude `reviewer` como fallback porque los revisores de AO (codex/opencode) fallaron.
+- **Workers:** `codex` (`superrestaurant-6`) se estancó ~10 min y se reemplazó por `opencode`. `agy` no está instalado en AO; queda como pendiente de M0-2.
+- **Hallazgos P2/P3 del revisor:** el e2e smoke solo cubre `/health` y `/login`; la guardia `CI === "true"` en `apps/api/src/database.ts` es opcional; `stop()` de `local-postgres` necesita más robustez.
+- **Deuda M0-7:** registrada en `docs/agentic/debt.md` (tests SQL conocidos, verificador `pizza-model-v2` omitido y `continue-on-error` en `Run local HTTP flow`).
+
 ## Plan autónomo al 100 % (2026-11-22) — instrucción humana, sustituye la Ola 0 manual
 
 - **Instrucción de Emmanuel (prevalece sobre AGENTS §3.1/§5/§19 donde choque):** no esperar aprobación humana durante la construcción; basta la aprobación de los revisores y testers lanzados por el orquestador. Emmanuel aprueba el producto final. Objetivo: 100 % de las Fases 0–8. Todos los motores en paralelo vía AO (opencode/DeepSeek, agy/Gemini, codex). Claude solo orquesta, en Sonnet 5.5 con esfuerzo medio.
