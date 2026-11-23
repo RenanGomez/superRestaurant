@@ -11,6 +11,10 @@ import type {
   OperationalShiftSummaryV1,
   PaymentCollectionSummaryV1,
   SimplePaymentMethodV1,
+  SyncConnectivityStateV1,
+  SyncEntityTypeV1,
+  SyncOperationV1,
+  SyncOutboxStateV1,
 } from "@super-restaurant/shared-types";
 
 import { MobileRequestError, type MobileBranchScope } from "./mobile-client.js";
@@ -48,6 +52,48 @@ export interface MobilePaymentState extends MobilePaymentFields {
     readonly status: "collected" | "failed" | "idle" | "sending";
   };
 }
+
+/**
+ * One durable local change waiting to reach the server. It is deliberately a
+ * plain view of an outbox entry: raw error codes and internal states never
+ * reach the screen, only the operator-facing reading produced below.
+ */
+export interface MobileSyncQueueItem {
+  readonly eventId: string;
+  readonly entityType: SyncEntityTypeV1;
+  readonly operation: SyncOperationV1;
+  readonly localState: SyncOutboxStateV1;
+  readonly retryCount: number;
+  /** Raw code from the engine; used only to derive a sentence, never rendered. */
+  readonly errorCode: string | null;
+  readonly occurredAt: string;
+  readonly financial: boolean;
+}
+
+/**
+ * What the connectivity banner and the pending queue are allowed to know.
+ *
+ * Everything here belongs to one Restaurant/Branch pair (`scope`). A snapshot
+ * for another pair is dropped by the reducer, so a stale sync answer can never
+ * describe a branch the operator already left.
+ */
+export interface MobileSyncSnapshot {
+  readonly scope: MobileBranchScope | undefined;
+  readonly connectivity: SyncConnectivityStateV1;
+  readonly lastConfirmedSyncAt: string | null;
+  readonly storageAvailable: boolean;
+  readonly syncing: boolean;
+  readonly items: readonly MobileSyncQueueItem[];
+}
+
+export const EMPTY_MOBILE_SYNC_SNAPSHOT: MobileSyncSnapshot = Object.freeze({
+  connectivity: "online",
+  items: Object.freeze([]),
+  lastConfirmedSyncAt: null,
+  scope: undefined,
+  storageAvailable: false,
+  syncing: false,
+});
 
 export interface MobileResource<T> {
   /**
@@ -131,6 +177,10 @@ export interface MobileState {
   readonly shift: OperationalShiftSummaryV1 | undefined;
   readonly shifts: MobileResource<OperationalShiftListV1>;
   readonly started: boolean;
+  /** Connectivity and the pending-sync queue of the active branch. */
+  readonly sync: MobileSyncSnapshot;
+  /** True while the operator is looking at the pending-sync queue screen. */
+  readonly syncScreenOpen: boolean;
   readonly tab: MobileTab;
 }
 
@@ -182,6 +232,9 @@ export type MobileEvent =
   | { readonly type: "shiftsLoaded"; readonly attempt: number; readonly list: OperationalShiftListV1; readonly scope: MobileBranchScope }
   | { readonly type: "shiftsLoading"; readonly attempt: number; readonly scope: MobileBranchScope }
   | { readonly type: "shiftsReset"; readonly scope: MobileBranchScope }
+  | { readonly type: "syncScreenClosed" }
+  | { readonly type: "syncScreenOpened" }
+  | { readonly snapshot: MobileSyncSnapshot; readonly scope: MobileBranchScope; readonly type: "syncSnapshotLoaded" }
   | { readonly type: "tabSelected"; readonly tab: MobileTab };
 
 const idleResource = Object.freeze({
@@ -233,6 +286,8 @@ export const initialMobileState: MobileState = Object.freeze({
   shift: undefined,
   shifts: idleResource,
   started: false,
+  sync: EMPTY_MOBILE_SYNC_SNAPSHOT,
+  syncScreenOpen: false,
   tab: "tables",
 });
 
@@ -300,6 +355,8 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
           shifts: idleResource,
           revalidating: true,
           revalidationFailure: undefined,
+          sync: EMPTY_MOBILE_SYNC_SNAPSHOT,
+          syncScreenOpen: false,
         });
     case "revalidationSucceeded":
       if (!state.revalidating) return state;
@@ -360,6 +417,8 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         shifts: idleResource,
         revalidating: false,
         revalidationFailure: undefined,
+        sync: EMPTY_MOBILE_SYNC_SNAPSHOT,
+        syncScreenOpen: false,
         tab: "tables",
       });
     case "branchContextRequested":
@@ -407,6 +466,8 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         shifts: idleResource,
         revalidating: false,
         revalidationFailure: undefined,
+        sync: EMPTY_MOBILE_SYNC_SNAPSHOT,
+        syncScreenOpen: false,
         tab: "tables",
       });
     case "shiftSelected":
@@ -437,6 +498,21 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         : { ...current, shifts: failed(event.failure) }));
     case "shiftsReset":
       return forActiveScope(state, event.scope, (current) => ({ ...current, shifts: idleResource }));
+    case "syncSnapshotLoaded": {
+      // A sync answer belongs to one Restaurant/Branch pair and to the branch
+      // the operator is actually in. A snapshot for the branch just left (or
+      // for another tenant reusing the screen) is dropped whole.
+      if (state.branch === undefined || !sameScope(state.branch, event.scope)) return state;
+      const snapshotScope = event.snapshot.scope;
+      if (snapshotScope !== undefined && !sameScope(snapshotScope, event.scope)) return state;
+      return freeze({ ...state, sync: freezeSyncSnapshot(event.snapshot, event.scope) });
+    }
+    case "syncScreenOpened":
+      return state.branch === undefined || state.syncScreenOpen
+        ? state
+        : freeze({ ...state, syncScreenOpen: true });
+    case "syncScreenClosed":
+      return state.syncScreenOpen ? freeze({ ...state, syncScreenOpen: false }) : state;
     case "tabSelected":
       return state.branch === undefined || state.shift === undefined ? state : freeze({ ...state, tab: event.tab });
     case "layoutLoading":
@@ -590,6 +666,185 @@ export function canReadBranchData(state: MobileState): boolean {
 export function canReadOperationalData(state: MobileState): boolean {
   return canReadBranchData(state) && state.shift !== undefined;
 }
+
+const SYNC_CONNECTIVITY_LABEL: Readonly<Record<SyncConnectivityStateV1, string>> = Object.freeze({
+  degraded: "Conexión lenta",
+  offline: "Sin conexión",
+  online: "En línea",
+  reconnecting: "Reconectando",
+  sync_blocked: "Sincronización bloqueada",
+});
+
+export function syncConnectivityLabel(connectivity: SyncConnectivityStateV1): string {
+  return SYNC_CONNECTIVITY_LABEL[connectivity];
+}
+
+/**
+ * States an operator still has to care about. Accepted/duplicate entries are
+ * done and are not listed; leaving them in the queue would suggest work that no
+ * longer exists.
+ */
+const VISIBLE_SYNC_STATES: ReadonlySet<SyncOutboxStateV1> = new Set([
+  "conflict",
+  "manual_review",
+  "pending",
+  "rejected",
+  "retry_wait",
+  "sending",
+]);
+
+export function visibleSyncQueue(snapshot: MobileSyncSnapshot): readonly MobileSyncQueueItem[] {
+  const seen = new Set<string>();
+  const items: MobileSyncQueueItem[] = [];
+  for (const item of snapshot.items) {
+    if (seen.has(item.eventId) || !VISIBLE_SYNC_STATES.has(item.localState)) continue;
+    seen.add(item.eventId);
+    items.push(item);
+  }
+  return Object.freeze(items);
+}
+
+/** Changes still waiting for the server, financial evidence included. */
+export function syncPendingCount(snapshot: MobileSyncSnapshot): number {
+  return visibleSyncQueue(snapshot).filter(
+    (item) => item.localState === "pending" || item.localState === "retry_wait" || item.localState === "sending",
+  ).length;
+}
+
+/** Changes the server refused or that need a supervisor: retrying alone will not fix them. */
+export function syncAttentionCount(snapshot: MobileSyncSnapshot): number {
+  return visibleSyncQueue(snapshot).filter(
+    (item) => item.localState === "rejected" || item.localState === "conflict" || item.localState === "manual_review",
+  ).length;
+}
+
+export function syncItemTitle(item: MobileSyncQueueItem): string {
+  if (item.entityType === "Payment") return item.financial ? "Cobro en efectivo" : "Pago";
+  if (item.entityType === "CashMovement" || item.entityType === "CashRegisterSession") return "Movimiento de caja";
+  if (item.entityType === "OrderItem") return "Línea de pedido";
+  if (item.entityType === "Order") return item.operation === "create" ? "Pedido" : "Cambio de pedido";
+  if (item.entityType === "Customer") return "Cliente";
+  if (item.entityType === "DiningTable") return "Mesa";
+  return "Registro";
+}
+
+/** Operator-facing reading of one queued change. Never shows raw engine codes. */
+export function syncItemDetail(item: MobileSyncQueueItem): string {
+  const base = {
+    accepted: "Confirmado por el servidor.",
+    conflict: "Otro cambio usó una versión distinta. Se conservan ambos para revisión.",
+    duplicate: "El servidor ya tenía este cambio.",
+    manual_review: "Requiere revisión de un supervisor antes de continuar.",
+    pending: "Pendiente de enviar al servidor.",
+    rejected: "El servidor rechazó este cambio. Revisa la operación antes de intentarlo de nuevo.",
+    retry_wait: "No se confirmó el envío. Se reintentará sin duplicarlo.",
+    sending: "Enviando al servidor…",
+  }[item.localState];
+  if (base === undefined) return "Confirmado por el servidor.";
+  return item.retryCount > 0 ? `${base} Intentos: ${item.retryCount}.` : base;
+}
+
+/** Only a change that can still reach the server is worth a retry button. */
+export function syncItemCanRetry(item: MobileSyncQueueItem): boolean {
+  return item.localState === "pending" || item.localState === "retry_wait";
+}
+
+const SYNC_BLOCK_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+  CARD_MANUAL_CANNOT_CAPTURE_OFFLINE:
+    "El cobro con tarjeta no puede confirmarse sin conexión. Regístralo cuando vuelva la red.",
+  CASH_REGISTER_REQUIRED: "Abre una caja y un turno de cajero antes de cobrar sin conexión.",
+  CLIENT_NOT_SUPPORTED: "Esta pantalla no puede realizar esa operación.",
+  EXTERNAL_TERMINAL_CONFIRMATION_REQUIRED: "Confirma el cobro en la terminal antes de registrarlo.",
+  LOCAL_RULE_LIMIT_EXCEEDED: "El descuento supera el límite permitido sin conexión.",
+  OFFLINE_CASH_LIMIT_EXCEEDED: "El efectivo supera el tope permitido sin conexión.",
+  OFFLINE_NOT_SUPPORTED: "Esta operación requiere conexión con el servidor.",
+  PHASE3_UNSUPPORTED: "Esta operación no está disponible sin conexión en esta versión.",
+  REMOTE_ORIGIN_OFFLINE_BLOCKED:
+    "Este pedido se creó en otro dispositivo. Edítalo cuando vuelva la conexión.",
+  SESSION_REQUIRED: "Tu sesión no es válida para operar sin conexión.",
+  SNAPSHOTS_REQUIRED:
+    "Este dispositivo todavía no tiene menú y mesas guardados para operar sin conexión.",
+  SUPERVISOR_REQUIRED_ONLINE: "Esta acción requiere autorización de supervisor con conexión.",
+  SYNC_BLOCKED_ENTITY:
+    "Hay cambios pendientes de este registro que deben revisarse antes de continuar.",
+  TEMPLATE_CACHE_REQUIRED: "Este dispositivo no tiene una plantilla de ticket guardada.",
+});
+
+export function mobileCapabilityMessage(code: string | null | undefined): string {
+  if (code === null || code === undefined) return SYNC_BLOCK_MESSAGES.OFFLINE_NOT_SUPPORTED ?? "";
+  return SYNC_BLOCK_MESSAGES[code] ?? SYNC_BLOCK_MESSAGES.OFFLINE_NOT_SUPPORTED ?? "";
+}
+
+/** Local wall-clock time of a confirmed sync, or `null` when never confirmed. */
+export function formatSyncClock(iso: string | null): string | null {
+  if (iso === null) return null;
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return null;
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+export interface MobileSyncBannerModel {
+  readonly connectivityLabel: string;
+  readonly pendingLabel: string;
+  readonly lastSyncLabel: string;
+  readonly attentionLabel: string | undefined;
+  /** One sentence with the branch, the queue and the last confirmation, no promises. */
+  readonly message: string;
+  readonly tone: "error" | "info" | "success";
+}
+
+/**
+ * What the persistent banner says. It reports only what the queue screen can
+ * actually offer: pending changes, review items and the last confirmed sync. It
+ * never claims an operation was charged, paid or delivered to the kitchen.
+ */
+export function describeSyncBanner(
+  snapshot: MobileSyncSnapshot,
+  branchName: string | undefined,
+): MobileSyncBannerModel {
+  const pending = syncPendingCount(snapshot);
+  const attention = syncAttentionCount(snapshot);
+  const connectivityLabel = snapshot.storageAvailable
+    ? syncConnectivityLabel(snapshot.connectivity)
+    : `${syncConnectivityLabel(snapshot.connectivity)} · sin almacenamiento local`;
+  const branch = branchName !== undefined && branchName.trim() !== "" ? branchName : "Sucursal";
+  const pendingLabel = pending === 0 ? "Sin pendientes" : `Pendientes: ${pending}`;
+  const clock = formatSyncClock(snapshot.lastConfirmedSyncAt);
+  const lastSyncLabel = clock === null ? "Última sincronización: sin confirmar" : `Última sincronización: ${clock}`;
+  const attentionLabel = attention === 0 ? undefined : `Requiere revisión: ${attention}`;
+  const tone: "error" | "info" | "success" = attention > 0
+    ? "error"
+    : pending > 0
+      ? "info"
+      : snapshot.connectivity === "online" && snapshot.storageAvailable
+        ? "success"
+        : "info";
+  return Object.freeze({
+    attentionLabel,
+    connectivityLabel,
+    lastSyncLabel,
+    message: `${connectivityLabel} · ${branch} · ${pendingLabel} · ${lastSyncLabel}`,
+    pendingLabel,
+    tone,
+  });
+}
+
+/** Deduplicates by event id and freezes the snapshot to the active pair. */
+function freezeSyncSnapshot(snapshot: MobileSyncSnapshot, scope: MobileBranchScope): MobileSyncSnapshot {
+  const seen = new Set<string>();
+  const items: MobileSyncQueueItem[] = [];
+  for (const item of snapshot.items) {
+    if (seen.has(item.eventId)) continue;
+    seen.add(item.eventId);
+    items.push(Object.freeze({ ...item }));
+  }
+  return Object.freeze({
+    ...snapshot,
+    items: Object.freeze(items),
+    scope: frozenScope(scope),
+  });
+}
+
 
 /**
  * The Restaurant/Branch pair each branch-scoped read may be started for right
@@ -913,6 +1168,8 @@ function revokedState(state: MobileState): MobileState {
     shifts: idleResource,
     revalidating: false,
     revalidationFailure: undefined,
+    sync: EMPTY_MOBILE_SYNC_SNAPSHOT,
+    syncScreenOpen: false,
     tab: "tables",
   };
 }

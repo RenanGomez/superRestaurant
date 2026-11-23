@@ -1,19 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ActiveTableOrderListV2, OrderMutationSummaryV1 } from "@super-restaurant/shared-types";
+import type { ActiveTableOrderListV2, BranchScope, OrderMutationSummaryV1 } from "@super-restaurant/shared-types";
+import type { EnqueueInput } from "@super-restaurant/sync-engine";
 
 import { MobileRequestError, addOrderItem, createOrder, listActiveTableOrders, openOrder } from "./mobile-client.js";
 import type { OrderDraftLine } from "./order-draft.js";
 import { buildOrderDeliveryPlan, type OrderDeliveryPlanV1 } from "./order-plan.js";
 import {
+  buildOfflineCashInput,
+  buildOfflineOrderInputs,
   createOrderDeliveryPort,
+  enqueueCashCollectOffline,
+  enqueueOrderPlanOffline,
+  stableOfflineCashIdentity,
   submitOrderPlan,
   toOrderSubmissionFailure,
+  type MobileOfflineEnqueuePort,
+  type OfflineCashCollectInput,
   type OrderMutationTransport,
 } from "./order-submission.js";
 import {
   FIXTURE_GROUP_DONENESS,
+  FIXTURE_ORDER,
   FIXTURE_OPTION_WELL_DONE,
   FIXTURE_PRODUCT_MAIN,
   FIXTURE_SHIFT,
@@ -492,4 +501,228 @@ test("adds to a selected open order using its authoritative version and resumes 
   const stale = server({ answer: activeTableOrderListBody({ scope: scopeA, orders: [{ orderId: delivery.orderId, status: "partially_paid" }] }) });
   assert.deepEqual(await submitOrderPlan({ plan: delivery, transport: transportOver(stale.fetcher) }), { failure: "conflict", kind: "failed", step: "read" });
   assert.equal(stale.calls.length, 1);
+});
+
+// ---- Offline capture through the sync engine ----------------------------------------------
+
+const ACTOR = "a0000000-0000-4000-8000-0000000000aa";
+
+/** A controllable engine double: capability decisions are scripted, enqueue is idempotent. */
+function offlineEngine(options: {
+  readonly allow?: boolean;
+  readonly enqueueError?: unknown;
+  readonly reasonCode?: string | null;
+} = {}): MobileOfflineEnqueuePort & {
+  readonly canChecks: readonly unknown[];
+  readonly enqueued: readonly { idempotencyKey: string; payload: unknown; scope: unknown }[];
+} {
+  const seen = new Map<string, string>();
+  let serial = 0;
+  const enqueued: { idempotencyKey: string; payload: unknown; scope: unknown }[] = [];
+  const canChecks: unknown[] = [];
+  const port = {
+    canChecks,
+    canEnqueue: async () => {
+      canChecks.push(true);
+      return Object.freeze({
+        allowed: options.allow ?? true,
+        reasonCode: options.allow === false ? (options.reasonCode ?? "SNAPSHOTS_REQUIRED") : null,
+      });
+    },
+    enqueued,
+    enqueue: async (input: EnqueueInput) => {
+      if (options.enqueueError !== undefined) throw options.enqueueError;
+      enqueued.push({ idempotencyKey: input.idempotencyKey, payload: input.payload, scope: input.scope });
+      const existing = seen.get(input.idempotencyKey);
+      if (existing !== undefined) return { eventId: existing };
+      serial += 1;
+      const eventId = `offline-${serial}`;
+      seen.set(input.idempotencyKey, eventId);
+      return { eventId };
+    },
+  };
+  return port;
+}
+
+test("an offline delivery queues the order first, then each line, with stable identities", () => {
+  const delivery = plan(twoLines);
+  const events = buildOfflineOrderInputs({ actorId: ACTOR, plan: delivery });
+
+  assert.equal(events.length, 3, "one order create plus one event per line");
+  const order = events[0];
+  assert.ok(order !== undefined);
+  assert.equal(order.entityType, "Order");
+  assert.equal(order.operation, "create");
+  assert.equal(order.baseVersion, null);
+  assert.equal(order.entityId, delivery.orderId);
+  assert.equal(order.idempotencyKey, delivery.createOrder.idempotencyKey, "the plan owns the idempotency key");
+  assert.deepEqual(order.payload, {
+    channel: delivery.channel,
+    currency: delivery.currency,
+    timeZone: delivery.timeZone,
+  }, "no lines are smuggled into the order create");
+  assert.deepEqual(order.preconditions, { hasCatalogSnapshots: true, originatedOnThisDevice: true });
+
+  assert.deepEqual(
+    events.slice(1).map((event) => event.entityId),
+    delivery.addItems.map((line) => line.orderItemId),
+  );
+  for (const [index, event] of events.slice(1).entries()) {
+    assert.equal(event.entityType, "OrderItem");
+    assert.equal(event.operation, "create");
+    assert.equal(event.idempotencyKey, delivery.addItems[index]?.idempotencyKey);
+    const payload = event.payload as { readonly orderId?: string; readonly productId?: string };
+    assert.equal(payload.orderId, delivery.orderId);
+    assert.equal(payload.productId, delivery.addItems[index]?.productId);
+  }
+  // Nothing cross-tenant: every event carries the plan's own pair.
+  for (const event of events) {
+    assert.deepEqual(event.scope, { branchId: scopeA.branchId, restaurantId: scopeA.restaurantId });
+  }
+});
+
+test("an offline delivery is queued once and a retry reuses the same identities", async () => {
+  const delivery = plan(twoLines);
+  const engine = offlineEngine();
+
+  const first = await enqueueOrderPlanOffline({ actorId: ACTOR, plan: delivery, port: engine });
+  assert.equal(first.queued, true);
+  assert.equal(first.eventIds.length, 3);
+  assert.equal(engine.enqueued.length, 3);
+
+  const retry = await enqueueOrderPlanOffline({ actorId: ACTOR, plan: delivery, port: engine });
+  assert.equal(retry.queued, true);
+  assert.deepEqual(retry.eventIds, first.eventIds, "the engine dedupes by idempotency key");
+  assert.equal(engine.enqueued.length, 6, "all three events were offered again");
+  const keys = engine.enqueued.map((entry) => entry.idempotencyKey);
+  assert.equal(new Set(keys).size, 3, "the same three keys, never new ones");
+});
+
+test("a capability refusal blocks the offline queue before anything is written", async () => {
+  const delivery = plan();
+  const blocked = offlineEngine({ allow: false, reasonCode: "SNAPSHOTS_REQUIRED" });
+  const outcome = await enqueueOrderPlanOffline({ actorId: ACTOR, plan: delivery, port: blocked });
+  assert.deepEqual(outcome, { eventIds: [], queued: false, reasonCode: "SNAPSHOTS_REQUIRED" });
+  assert.equal(blocked.enqueued.length, 0);
+  assert.equal(blocked.canChecks.length, 1);
+});
+
+test("an engine capability error surfaces its matrix code, and other failures are not called queued", async () => {
+  const delivery = plan();
+  const refused = offlineEngine({ enqueueError: new Error("CAPABILITY_BLOCKED: REMOTE_ORIGIN_OFFLINE_BLOCKED") });
+  const blocked = await enqueueOrderPlanOffline({ actorId: ACTOR, plan: delivery, port: refused });
+  assert.equal(blocked.queued, false);
+  assert.equal(blocked.reasonCode, "REMOTE_ORIGIN_OFFLINE_BLOCKED");
+
+  const broken = offlineEngine({ enqueueError: new Error("STORAGE_COMMIT_FAILED") });
+  const failed = await enqueueOrderPlanOffline({ actorId: ACTOR, plan: delivery, port: broken });
+  assert.equal(failed.queued, false);
+  assert.equal(failed.reasonCode, null, "a storage failure is not a matrix refusal");
+});
+
+function cashInput(overrides: Partial<OfflineCashCollectInput> = {}): OfflineCashCollectInput {
+  return Object.freeze({
+    amountMinor: 12_500,
+    cashRegisterSessionId: "c0000000-0000-4000-8000-0000000000cc",
+    currency: "MXN",
+    idempotencyKey: "cash-idem-1",
+    occurredAt: "2026-11-23T18:00:00.000Z",
+    orderId: FIXTURE_ORDER,
+    orderVersion: 4,
+    paymentId: "c0000000-0000-4000-8000-0000000000dd",
+    ...overrides,
+  });
+}
+
+test("offline cash is built with its matrix preconditions and enqueued only when allowed", async () => {
+  const cash = cashInput();
+  const scope = scopeA as unknown as BranchScope;
+  const event = buildOfflineCashInput({
+    actorId: ACTOR,
+    cash,
+    preconditions: { cashRegisterOpen: true, cashierShiftOpen: true, withinOfflineCashLimit: true },
+    scope,
+  });
+  assert.equal(event.entityType, "Payment");
+  assert.equal(event.operation, "create");
+  assert.equal(event.entityId, cash.paymentId);
+  assert.equal(event.idempotencyKey, cash.idempotencyKey);
+  assert.equal(event.baseVersion, cash.orderVersion, "the version the server reported is expected");
+  assert.deepEqual(event.payload, {
+    amountMinor: 12_500,
+    cashRegisterSessionId: cash.cashRegisterSessionId,
+    currency: "MXN",
+    method: "cash",
+    orderId: FIXTURE_ORDER,
+    orderVersion: 4,
+    paymentId: cash.paymentId,
+  });
+  assert.deepEqual(event.preconditions, {
+    cashRegisterOpen: true,
+    cashierShiftOpen: true,
+    paymentMethod: "cash",
+    withinOfflineCashLimit: true,
+  });
+
+  const engine = offlineEngine();
+  const queued = await enqueueCashCollectOffline({
+    actorId: ACTOR,
+    cash,
+    port: engine,
+    preconditions: { cashRegisterOpen: true, cashierShiftOpen: true, withinOfflineCashLimit: true },
+    scope,
+  });
+  assert.equal(queued.queued, true);
+  assert.equal(engine.enqueued.length, 1);
+  assert.deepEqual(engine.enqueued[0]?.scope, scope);
+
+  const refused = offlineEngine({ allow: false, reasonCode: "CASH_REGISTER_REQUIRED" });
+  const blocked = await enqueueCashCollectOffline({
+    actorId: ACTOR,
+    cash,
+    port: refused,
+    preconditions: { cashRegisterOpen: false, cashierShiftOpen: false, withinOfflineCashLimit: true },
+    scope,
+  });
+  assert.deepEqual(blocked, { eventIds: [], queued: false, reasonCode: "CASH_REGISTER_REQUIRED" });
+  assert.equal(refused.enqueued.length, 0);
+});
+
+test("offline cash identity is stable per order and version, so a second tap replays it", async () => {
+  let serial = 0;
+  const uuid = (): string => `uuid-${(serial += 1)}`;
+  const first = stableOfflineCashIdentity(undefined, {
+    key: "order-1|4",
+    now: new Date("2026-11-23T18:00:00.000Z"),
+    uuid,
+  });
+  const second = stableOfflineCashIdentity(first, {
+    key: "order-1|4",
+    now: new Date("2026-11-23T18:05:00.000Z"),
+    uuid,
+  });
+  assert.equal(second, first, "the same order and version keep the same identity");
+  assert.equal(second.paymentId, first.paymentId);
+  assert.equal(second.idempotencyKey, first.idempotencyKey);
+  assert.equal(serial, 2, "no new identifiers were minted on the second tap");
+
+  const otherVersion = stableOfflineCashIdentity(first, { key: "order-1|5", now: new Date(), uuid });
+  assert.notEqual(otherVersion.paymentId, first.paymentId, "a new order version is a new collection");
+  assert.notEqual(otherVersion.idempotencyKey, first.idempotencyKey);
+
+  // Two taps through the engine with that identity enqueue the same event.
+  const engine = offlineEngine();
+  const scope = scopeA as unknown as BranchScope;
+  const cash = cashInput({
+    idempotencyKey: first.idempotencyKey,
+    occurredAt: first.occurredAt,
+    paymentId: first.paymentId,
+  });
+  const preconditions = { cashRegisterOpen: true, cashierShiftOpen: true, withinOfflineCashLimit: true };
+  const once = await enqueueCashCollectOffline({ actorId: ACTOR, cash, port: engine, preconditions, scope });
+  const twice = await enqueueCashCollectOffline({ actorId: ACTOR, cash, port: engine, preconditions, scope });
+  assert.equal(once.queued, true);
+  assert.deepEqual(twice.eventIds, once.eventIds, "the replay answers the original event");
+  assert.equal(engine.enqueued.length, 2);
+  assert.equal(new Set(engine.enqueued.map((entry) => entry.idempotencyKey)).size, 1, "one collection, not two");
 });

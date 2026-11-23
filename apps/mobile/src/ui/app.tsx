@@ -49,6 +49,7 @@ import {
   layoutReadTarget,
   membershipsReadOperator,
   menuReadTarget,
+  mobileCapabilityMessage,
   mobileScreen,
   noticeMessage,
   ownsContextRead,
@@ -77,7 +78,13 @@ import {
   type OrderDraftState,
 } from "../order-draft.js";
 import { buildOrderDeliveryPlan, type OrderDeliveryPlanV1 } from "../order-plan.js";
-import { createOrderDeliveryPort, type OrderDeliveryPort, type OrderMutationTransport } from "../order-submission.js";
+import {
+  createOrderDeliveryPort,
+  stableOfflineCashIdentity,
+  type OfflineCashIdentity,
+  type OrderDeliveryPort,
+  type OrderMutationTransport,
+} from "../order-submission.js";
 import type { MobileDeviceIdentity } from "../device-identity.js";
 import { readInitialSession, revalidateAccess } from "../revalidation.js";
 import type { MobileSession } from "../session.js";
@@ -87,7 +94,9 @@ import { BranchScreen } from "./branch-screen.js";
 import { ActionButton, Banner, Caption, LoadingBlock, StateBlock, Subheading, useFocusRing } from "./components.js";
 import { MenuScreen } from "./menu-screen.js";
 import { OrderDraftScreen } from "./order-draft-screen.js";
+import { PendingSyncScreen } from "./pending-sync-screen.js";
 import { SignInScreen } from "./sign-in-screen.js";
+import { SyncBanner, useMobileSyncBridge } from "./sync-banner.js";
 import { TablesScreen } from "./tables-screen.js";
 import { ShiftScreen } from "./shift-screen.js";
 import { colors, radius, spacing, touchTarget, typography } from "./theme.js";
@@ -400,6 +409,12 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     setSelectedOrderId(undefined);
     kitchenRef.current.clear();
     setKitchenState("idle");
+    setSyncNotice(undefined);
+    setOfflineQueued(false);
+    setOfflineCashBlocked(undefined);
+    setOfflineCashQueuedKey(undefined);
+    offlineCashIdentityRef.current = undefined;
+    offlineCashInFlightRef.current = false;
   }, [delivery, draftContext]);
 
   /**
@@ -438,6 +453,36 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     };
     return createOrderDeliveryPort(Object.freeze(transport));
   }, [branchId, config, orderDelivery, restaurantId, token]);
+
+  /**
+   * Durable sync engine of this installation, bound to the active branch. It is
+   * the same engine the queue screen reads, so the banner and the queue can
+   * never disagree about what is pending.
+   */
+  const sync = useMobileSyncBridge({
+    config,
+    deviceId,
+    scope: readable && branchId !== undefined && restaurantId !== undefined ? { branchId, restaurantId } : undefined,
+    session: state.session,
+  });
+  const [syncNotice, setSyncNotice] = useState<string | undefined>(undefined);
+  const [offlineQueued, setOfflineQueued] = useState(false);
+  const [offlineCashBusy, setOfflineCashBusy] = useState(false);
+  const [offlineCashBlocked, setOfflineCashBlocked] = useState<string | undefined>(undefined);
+  const [offlineCashQueuedKey, setOfflineCashQueuedKey] = useState<string | undefined>(undefined);
+  /** One collection identity per (order, version): a second tap must replay it. */
+  const offlineCashIdentityRef = useRef<OfflineCashIdentity | undefined>(undefined);
+  /** Synchronous guard: two taps in one frame cannot both start a collection. */
+  const offlineCashInFlightRef = useRef(false);
+
+  useEffect(() => {
+    if (branchId === undefined || restaurantId === undefined) return;
+    dispatch({
+      scope: { branchId, restaurantId },
+      snapshot: sync.snapshot,
+      type: "syncSnapshotLoaded",
+    });
+  }, [branchId, dispatch, restaurantId, sync.snapshot]);
 
   const [board, setBoard] = useState<{ key: string; value?: TableBoardV1; failed?: boolean }>({ key: "" });
   const [boardRevision, setBoardRevision] = useState(0);
@@ -704,6 +749,122 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     randomUuid, restaurantId, selectedOrderId, state.branch, state.menu.value, state.shift,
   ]);
 
+  /**
+   * The plan of the draft on screen, reusing the immutable identities already
+   * minted for this content. Both the online submit and the offline capture use
+   * it, so queueing after a failed connection is the same delivery, not a second
+   * order.
+   */
+  const buildCurrentPlan = useCallback((): OrderDeliveryPlanV1 | undefined => {
+    const tableId = draft.tableId;
+    const catalog = state.menu.value?.catalog ?? null;
+    const timeZone = state.branch?.timeZone;
+    const shiftId = state.shift?.shiftId;
+    if (tableId === undefined || branchId === undefined || restaurantId === undefined
+      || deviceId === undefined || timeZone === undefined || shiftId === undefined || catalog === null) {
+      return undefined;
+    }
+    const key = `${draftContext}|${tableId}|${selectedOrderId ?? "new"}|${JSON.stringify(draft.lines)}`;
+    const held = planRef.current;
+    if (held !== undefined && held.key === key) return held.plan;
+    const plan = buildOrderDeliveryPlan({
+      catalog,
+      ...(selectedOrderId === undefined ? {} : { existingOrderId: selectedOrderId }),
+      deviceId,
+      lines: draft.lines,
+      now: Date.now(),
+      randomUuid,
+      scope: { branchId, restaurantId },
+      shiftId,
+      tableId,
+      timeZone,
+    });
+    planRef.current = plan === undefined ? undefined : { key, plan };
+    return plan;
+  }, [
+    branchId, deviceId, draft.lines, draft.tableId, draftContext, randomUuid,
+    restaurantId, selectedOrderId, state.branch, state.menu.value, state.shift,
+  ]);
+
+  const queueOfflineOrder = useCallback((): void => {
+    const plan = buildCurrentPlan();
+    if (plan === undefined) {
+      setSyncNotice("No se pudo preparar el pedido para guardarlo en este dispositivo. Revisa el catálogo y el turno.");
+      return;
+    }
+    void sync.queueOrder(plan).then((result) => {
+      if (!result.queued) {
+        setSyncNotice(result.reasonCode === null
+          ? "No se pudo guardar el pedido en este dispositivo. Inténtalo de nuevo."
+          : mobileCapabilityMessage(result.reasonCode));
+        return;
+      }
+      planRef.current = undefined;
+      setOfflineQueued(true);
+      setSyncNotice(
+        "Pedido guardado en este dispositivo, pendiente de sincronizar. Cocina y otros equipos todavía no lo ven; "
+        + "no se considera enviado hasta que el servidor lo confirme.",
+      );
+      dispatchDraft({ type: "submissionSucceeded" });
+    });
+  }, [buildCurrentPlan, dispatchDraft, sync]);
+
+  const queueOfflineCash = useCallback((): void => {
+    const checkout = state.payment.checkout.value;
+    const quote = state.payment.quote.value;
+    if (checkout === undefined || quote === undefined || quote.method !== "cash"
+      || branchId === undefined || restaurantId === undefined || deviceId === undefined) {
+      return;
+    }
+    const key = `${checkout.orderId}|${checkout.orderVersion}`;
+    // Two taps in the same frame are stopped synchronously; after the first
+    // success the button stays disabled for this same collection.
+    if (offlineCashInFlightRef.current || offlineCashQueuedKey === key) return;
+    offlineCashInFlightRef.current = true;
+    setOfflineCashBusy(true);
+    setOfflineCashBlocked(undefined);
+    const identity = stableOfflineCashIdentity(offlineCashIdentityRef.current, {
+      key,
+      now: new Date(),
+      uuid: randomUuid,
+    });
+    offlineCashIdentityRef.current = identity;
+    void sync.queueCash({
+      amountMinor: quote.amountMinor,
+      cashRegisterSessionId: checkout.cashRegisterSessionId,
+      currency: quote.currency,
+      idempotencyKey: identity.idempotencyKey,
+      occurredAt: identity.occurredAt,
+      orderId: checkout.orderId,
+      orderVersion: checkout.orderVersion,
+      paymentId: identity.paymentId,
+    }, {
+      // The server confirmed both when it produced this checkout; the amount is
+      // the one it quoted, so the local limit is not invented here.
+      cashRegisterOpen: true,
+      cashierShiftOpen: true,
+      withinOfflineCashLimit: true,
+    }).then((result) => {
+      if (result.queued) {
+        setOfflineCashQueuedKey(key);
+        setSyncNotice(
+          "Cobro en efectivo guardado en este dispositivo, pendiente de sincronizar. "
+          + "No se considera cobrado hasta que el servidor lo confirme.",
+        );
+      } else {
+        setOfflineCashBlocked(result.reasonCode === null
+          ? "No se pudo guardar el cobro en este dispositivo. Inténtalo de nuevo."
+          : mobileCapabilityMessage(result.reasonCode));
+      }
+    }).finally(() => {
+      offlineCashInFlightRef.current = false;
+      setOfflineCashBusy(false);
+    });
+  }, [
+    branchId, deviceId, offlineCashQueuedKey, randomUuid, restaurantId,
+    state.payment.checkout.value, state.payment.quote.value, sync,
+  ]);
+
   const dispatchOrderDraft = useCallback((event: OrderDraftEvent): void => {
     const nextDraft = reduceOrderDraft(draft, event);
     if (nextDraft.tableId !== draft.tableId && branchId !== undefined && restaurantId !== undefined) {
@@ -755,6 +916,52 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
 
   const screen = mobileScreen(state);
   const notice = state.notice === undefined ? undefined : noticeMessage(state.notice);
+  // Offline capture is offered only when there is no connection at all.
+  // `reconnecting` may already reach the server, so the online actions stay
+  // visible; `sync_blocked` is not a network outage either, it is a blocked
+  // queue the operator has to review.
+  const offlineMode = sync.snapshot.connectivity === "offline";
+  const syncBlocked = sync.snapshot.connectivity === "sync_blocked";
+  const offlineOrder = offlineMode && readable && draft.tableId !== undefined
+    ? {
+      canQueue: sync.snapshot.storageAvailable,
+      message: sync.snapshot.storageAvailable
+        ? "Sin conexión. Puedes guardar este pedido en este dispositivo; se enviará al servidor al reconectar. "
+          + "Cocina y otros equipos todavía no lo ven."
+        : "Sin conexión y sin almacenamiento local en este dispositivo. No se puede guardar el pedido; reconecta para continuar.",
+      onQueue: queueOfflineOrder,
+      queued: offlineQueued,
+    }
+    : undefined;
+  const paymentCheckout = state.payment.checkout.value;
+  const offlineCashKey = paymentCheckout === undefined
+    ? undefined
+    : `${paymentCheckout.orderId}|${paymentCheckout.orderVersion}`;
+  const offlineCashAlreadyQueued = offlineCashKey !== undefined && offlineCashQueuedKey === offlineCashKey;
+  const offlineCash = offlineMode && readable
+    && state.payment.orderId !== undefined && paymentCheckout !== undefined
+    && state.payment.quote.status === "ready"
+    ? {
+      allowed: state.payment.method === "cash" && sync.snapshot.storageAvailable
+        && offlineCashBlocked === undefined && !offlineCashAlreadyQueued,
+      busy: offlineCashBusy,
+      message: offlineCashAlreadyQueued
+        ? "El cobro en efectivo de esta orden ya está guardado en este dispositivo, pendiente de sincronizar."
+        : offlineCashBlocked ?? (state.payment.method === "cash"
+          ? (sync.snapshot.storageAvailable
+            ? "Sin conexión. El efectivo se puede guardar en este dispositivo; quedará pendiente y no cuenta como cobrado "
+              + "hasta que el servidor lo confirme."
+            : "Sin conexión y sin almacenamiento local en este dispositivo. No se puede guardar el cobro; reconecta para continuar.")
+          : state.payment.method === "card_manual"
+            ? "Sin conexión. El cobro con tarjeta no puede confirmarse; regístralo cuando vuelva la red."
+            : "Sin conexión. La transferencia debe registrarse cuando vuelva la conexión."),
+      onQueue: queueOfflineCash,
+    }
+    : undefined;
+  const cashBlockedNotice = syncBlocked && readable
+    && state.payment.orderId !== undefined && paymentCheckout !== undefined
+    ? "La sincronización está bloqueada. Revisa la cola de pendientes antes de registrar el cobro."
+    : undefined;
 
   if (screen === "starting") return <LoadingBlock label="Abriendo superRestaurant…" />;
 
@@ -824,57 +1031,81 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
       </View>
     </View>
 
-    <View accessibilityRole="tablist" style={styles.tabs}>
-      {(["tables", "menu"] as const).map((tab) => <WorkspaceTab
-        key={tab}
-        onPress={() => { dispatch({ tab, type: "tabSelected" }); }}
-        selected={state.tab === tab}
-        tab={tab}
-      />)}
-    </View>
+    <SyncBanner
+      branchName={membership?.branchName}
+      onOpenQueue={() => { dispatch({ type: "syncScreenOpened" }); }}
+      snapshot={sync.snapshot}
+    />
 
-    <View style={styles.content}>
-      <WorkspaceContent
-        activeOrders={activeOrdersForTable(state, draft.tableId)}
-        selectedOrderId={selectedOrderId}
-        onSelectOrder={setSelectedOrderId}
-        onSendKitchen={sendPending}
-        kitchenState={kitchenState}
-        board={board.key === boardKey ? board.value : undefined}
-        boardFailed={board.key === boardKey && board.failed === true}
-        onRetryBoard={() => { setBoardRevision((revision) => revision + 1); }}
-        draft={draft}
-        draftCategory={draftCategory}
-        menu={state.menu}
-        layout={state.layout}
-        onCollectOrder={(orderId) => { dispatch({ orderId, type: "paymentOpened" }); }}
-        onDraftCategory={setDraftCategory}
-        onDraftEvent={dispatchOrderDraft}
-        onPaymentClose={() => {
-          paymentSubmitAttemptRef.current += 1;
-          paymentAttemptRef.current = undefined;
-          dispatch({ type: "paymentClosed" });
-        }}
-        onPaymentFieldChange={(patch) => { dispatch({ patch, type: "paymentFieldChanged" }); }}
-        onPaymentRetry={() => { dispatch({ type: "paymentCheckoutReset" }); }}
-        onPaymentSubmit={submitPayment}
-        onRetryActiveOrders={retryActiveOrders}
-        onRetryMenu={retryMenu}
-        onRetryRead={retry}
-        onRetryRevalidation={() => { dispatch({ type: "revalidationStarted" }); }}
-        onSelectTable={selectTable}
-        onSubmitDraft={submitDraft}
-        payment={state.payment}
-        registers={registers.key === registerKey ? registers : { status: "loading", entries: [] }}
-        registerId={registerId}
-        onRegisterSelect={(id) => { setRegisterId(id); dispatch({ type: "paymentCheckoutReset" }); }}
-        onRegisterRetry={() => { setRegisterRevision((n) => n + 1); }}
-        realtime={orderDelivery === undefined && token !== undefined ? { accessToken: token, apiBaseUrl: config.apiBaseUrl } : undefined}
-        revalidating={state.revalidating}
-        revalidationFailure={state.revalidationFailure}
-        tab={state.tab}
-      />
-    </View>
+    {state.syncScreenOpen
+      ? <View style={styles.content}>
+        <PendingSyncScreen
+          onClose={() => { dispatch({ type: "syncScreenClosed" }); }}
+          onRetryAll={sync.retryAll}
+          retrying={sync.snapshot.syncing}
+          snapshot={sync.snapshot}
+        />
+      </View>
+      : <>
+        <View accessibilityRole="tablist" style={styles.tabs}>
+          {(["tables", "menu"] as const).map((tab) => <WorkspaceTab
+            key={tab}
+            onPress={() => { dispatch({ tab, type: "tabSelected" }); }}
+            selected={state.tab === tab}
+            tab={tab}
+          />)}
+        </View>
+
+        <View style={styles.content}>
+          <WorkspaceContent
+            activeOrders={activeOrdersForTable(state, draft.tableId)}
+            selectedOrderId={selectedOrderId}
+            onSelectOrder={setSelectedOrderId}
+            onSendKitchen={sendPending}
+            kitchenState={kitchenState}
+            board={board.key === boardKey ? board.value : undefined}
+            boardFailed={board.key === boardKey && board.failed === true}
+            onRetryBoard={() => { setBoardRevision((revision) => revision + 1); }}
+            draft={draft}
+            draftCategory={draftCategory}
+            menu={state.menu}
+            layout={state.layout}
+            onCollectOrder={(orderId) => { dispatch({ orderId, type: "paymentOpened" }); }}
+            onDraftCategory={setDraftCategory}
+            onDraftEvent={dispatchOrderDraft}
+            onPaymentClose={() => {
+              paymentSubmitAttemptRef.current += 1;
+              paymentAttemptRef.current = undefined;
+              dispatch({ type: "paymentClosed" });
+            }}
+            onPaymentFieldChange={(patch) => { dispatch({ patch, type: "paymentFieldChanged" }); }}
+            onPaymentRetry={() => { dispatch({ type: "paymentCheckoutReset" }); }}
+            onPaymentSubmit={submitPayment}
+            onRetryActiveOrders={retryActiveOrders}
+            onRetryMenu={retryMenu}
+            onRetryRead={retry}
+            onRetryRevalidation={() => { dispatch({ type: "revalidationStarted" }); }}
+            onSelectTable={selectTable}
+            onSubmitDraft={submitDraft}
+            offline={offlineOrder}
+            offlineCash={offlineCash}
+            cashBlockedNotice={cashBlockedNotice}
+            payment={state.payment}
+            registers={registers.key === registerKey ? registers : { status: "loading", entries: [] }}
+            registerId={registerId}
+            onRegisterSelect={(id) => { setRegisterId(id); dispatch({ type: "paymentCheckoutReset" }); }}
+            onRegisterRetry={() => { setRegisterRevision((n) => n + 1); }}
+            realtime={orderDelivery === undefined && token !== undefined ? { accessToken: token, apiBaseUrl: config.apiBaseUrl } : undefined}
+            revalidating={state.revalidating}
+            revalidationFailure={state.revalidationFailure}
+            sentMessage={offlineQueued
+              ? "Pedido guardado en este dispositivo, pendiente de sincronizar. Cocina y otros equipos todavía no lo ven."
+              : undefined}
+            syncNotice={syncNotice}
+            tab={state.tab}
+          />
+        </View>
+      </>}
   </View>;
 }
 
@@ -944,11 +1175,16 @@ function WorkspaceContent({
   onRetryRevalidation,
   onSelectTable,
   onSubmitDraft,
+  offline,
+  offlineCash,
+  cashBlockedNotice,
   payment,
   registers, registerId, onRegisterSelect, onRegisterRetry,
   realtime,
   revalidating,
   revalidationFailure,
+  sentMessage,
+  syncNotice,
   tab,
 }: {
   readonly activeOrders: MobileState["activeOrders"];
@@ -976,6 +1212,20 @@ function WorkspaceContent({
   readonly onRetryRevalidation: () => void;
   readonly onSelectTable: (table: DiningTableV1) => void;
   readonly onSubmitDraft: () => void;
+  readonly offline?: {
+    readonly canQueue: boolean;
+    readonly message: string;
+    readonly onQueue: () => void;
+    readonly queued: boolean;
+  } | undefined;
+  readonly offlineCash?: {
+    readonly allowed: boolean;
+    readonly busy: boolean;
+    readonly message: string;
+    readonly onQueue: () => void;
+  } | undefined;
+  /** Non-network block (sync blocked): explains why a collection must wait. */
+  readonly cashBlockedNotice?: string | undefined;
   readonly payment: MobileState["payment"];
   readonly registers: { readonly status: "loading" | "failed" | "ready"; readonly entries: ReturnType<typeof openRegisters> };
   readonly registerId: string | undefined;
@@ -984,6 +1234,8 @@ function WorkspaceContent({
   readonly realtime?: ActiveOrdersRealtimeConfig | undefined;
   readonly revalidating: boolean;
   readonly revalidationFailure: MobileFailure | undefined;
+  readonly sentMessage?: string | undefined;
+  readonly syncNotice?: string | undefined;
   readonly tab: MobileTab;
 }): React.JSX.Element {
   if (revalidating) {
@@ -1054,12 +1306,17 @@ function WorkspaceContent({
     onRetryActiveOrders={onRetryActiveOrders}
     onRetryMenu={onRetryMenu}
     onSubmit={onSubmitDraft}
+    offline={offline}
+    offlineCash={offlineCash}
+    cashBlockedNotice={cashBlockedNotice}
     payment={payment}
     registers={registers}
     registerId={registerId}
     onRegisterSelect={onRegisterSelect}
     onRegisterRetry={onRegisterRetry}
     realtime={realtime}
+    sentMessage={sentMessage}
+    syncNotice={syncNotice}
     table={located.table}
     zoneName={located.zoneName}
   />;

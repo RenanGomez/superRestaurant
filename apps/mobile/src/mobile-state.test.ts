@@ -10,12 +10,16 @@ import {
   canReadOperationalData,
   canSubmitMobilePayment,
   contextReadTarget,
+  describeSyncBanner,
+  EMPTY_MOBILE_SYNC_SNAPSHOT,
   failureMessage,
+  formatSyncClock,
   hasNoMemberships,
   initialMobileState,
   layoutReadTarget,
   membershipsReadOperator,
   menuReadTarget,
+  mobileCapabilityMessage,
   mobileScreen,
   noticeMessage,
   ownsContextRead,
@@ -23,11 +27,20 @@ import {
   paymentMethodLabel,
   reduceMobileState,
   shiftsReadTarget,
+  syncAttentionCount,
+  syncConnectivityLabel,
+  syncItemCanRetry,
+  syncItemDetail,
+  syncItemTitle,
+  syncPendingCount,
   toMobileFailure,
   toPaymentFailure,
+  visibleSyncQueue,
   type MobileEvent,
   type MobileFailure,
   type MobileState,
+  type MobileSyncQueueItem,
+  type MobileSyncSnapshot,
 } from "./mobile-state.js";
 import {
   FIXTURE_ORDER,
@@ -1148,4 +1161,173 @@ test("a collection in flight cannot be started twice and a duplicate receipt is 
   // A late duplicate receipt for a submission already collected is ignored.
   const duplicate = apply(collected, { receipt, scope: scopeA, type: "paymentCollected" });
   assert.equal(duplicate, collected);
+});
+
+// ---- Offline sync banner and pending queue ------------------------------------------------
+
+function queueItem(overrides: Partial<MobileSyncQueueItem> = {}): MobileSyncQueueItem {
+  return Object.freeze({
+    entityType: "Order",
+    errorCode: null,
+    eventId: "evt-1",
+    financial: false,
+    localState: "pending",
+    occurredAt: "2026-11-23T18:00:00.000Z",
+    operation: "create",
+    retryCount: 0,
+    ...overrides,
+  });
+}
+
+function syncSnapshot(items: readonly MobileSyncQueueItem[], overrides: Partial<MobileSyncSnapshot> = {}): MobileSyncSnapshot {
+  return Object.freeze({
+    connectivity: "offline",
+    items: Object.freeze([...items]),
+    lastConfirmedSyncAt: "2026-11-23T18:05:00.000Z",
+    scope: { branchId: scopeA.branchId, restaurantId: scopeA.restaurantId },
+    storageAvailable: true,
+    syncing: false,
+    ...overrides,
+  });
+}
+
+test("a sync snapshot for another branch or tenant never reaches the active branch", () => {
+  const onA = onBranchA();
+  const foreign = syncSnapshot([queueItem()], { scope: { branchId: scopeB.branchId, restaurantId: scopeB.restaurantId } });
+
+  const otherBranch = apply(onA, { scope: scopeB, snapshot: foreign, type: "syncSnapshotLoaded" });
+  assert.equal(otherBranch, onA, "a snapshot for another branch is dropped");
+
+  const crossedScope = apply(onA, {
+    scope: scopeA,
+    snapshot: { ...foreign, scope: { branchId: scopeA.branchId, restaurantId: scopeB.restaurantId } },
+    type: "syncSnapshotLoaded",
+  });
+  assert.equal(crossedScope, onA, "a snapshot whose own pair is crossed is dropped");
+
+  const own = apply(onA, { scope: scopeA, snapshot: syncSnapshot([queueItem()]), type: "syncSnapshotLoaded" });
+  assert.notEqual(own, onA);
+  assert.equal(own.sync.items.length, 1);
+  assert.equal(syncPendingCount(own.sync), 1);
+});
+
+test("leaving, revalidating or signing out drops the sync state and closes the queue", () => {
+  const loaded = apply(onBranchA(), {
+    scope: scopeA,
+    snapshot: syncSnapshot([queueItem({ localState: "rejected" })]),
+    type: "syncSnapshotLoaded",
+  });
+  const open = apply(loaded, { type: "syncScreenOpened" });
+  assert.equal(open.syncScreenOpen, true);
+
+  for (const event of [
+    { scope: scopeB, type: "branchRequested" },
+    { type: "branchReleased" },
+    { type: "revalidationStarted" },
+    { type: "accessRevoked" },
+    { notice: "sessionEnded", type: "signedOut" },
+  ] as const) {
+    const after = apply(open, event);
+    assert.equal(after.sync, EMPTY_MOBILE_SYNC_SNAPSHOT, event.type);
+    assert.equal(after.syncScreenOpen, false, event.type);
+  }
+});
+
+test("the queue screen only opens over an authorized branch", () => {
+  const noBranch = apply(initialMobileState, { session, type: "sessionObserved" });
+  assert.equal(apply(noBranch, { type: "syncScreenOpened" }), noBranch);
+  assert.equal(apply(onBranchA(), { type: "syncScreenOpened" }).syncScreenOpen, true);
+  // Closing twice is idempotent.
+  const opened = apply(onBranchA(), { type: "syncScreenOpened" });
+  const closed = apply(opened, { type: "syncScreenClosed" });
+  assert.equal(apply(closed, { type: "syncScreenClosed" }), closed);
+});
+
+test("applying the same snapshot again changes nothing and duplicate events collapse", () => {
+  const snapshot = syncSnapshot([queueItem(), queueItem({ eventId: "evt-2", localState: "retry_wait" })]);
+  const once = apply(onBranchA(), { scope: scopeA, snapshot, type: "syncSnapshotLoaded" });
+  const twice = apply(once, { scope: scopeA, snapshot, type: "syncSnapshotLoaded" });
+  assert.deepEqual(twice, once);
+  assert.equal(twice.sync.items.length, 2);
+
+  const duplicated = syncSnapshot([queueItem(), queueItem(), queueItem({ eventId: "evt-3" })]);
+  const deduped = apply(onBranchA(), { scope: scopeA, snapshot: duplicated, type: "syncSnapshotLoaded" });
+  assert.equal(visibleSyncQueue(deduped.sync).length, 2, "one item per event id");
+});
+
+test("the banner names the branch, the queue and the last sync without claiming a charge", () => {
+  const snapshot = syncSnapshot([
+    queueItem({ eventId: "a", localState: "pending" }),
+    queueItem({ entityType: "Payment", eventId: "b", financial: true, localState: "retry_wait" }),
+    queueItem({ eventId: "c", localState: "rejected" }),
+  ]);
+  const banner = describeSyncBanner(snapshot, "Sucursal Centro");
+  assert.match(banner.message, /Sucursal Centro/u);
+  assert.match(banner.message, /Pendientes: 2/u);
+  assert.match(banner.message, /Última sincronización: /u);
+  assert.equal(banner.attentionLabel, "Requiere revisión: 1");
+  assert.equal(banner.tone, "error");
+  assert.doesNotMatch(banner.message, /cobrad|pagad|cobró|pagó/iu, "the banner never claims money was collected");
+
+  const online = describeSyncBanner(syncSnapshot([], { connectivity: "online" }), undefined);
+  assert.equal(online.tone, "success");
+  assert.match(online.message, /Sucursal/u);
+  assert.equal(online.pendingLabel, "Sin pendientes");
+
+  const onlineWithPending = describeSyncBanner(syncSnapshot([queueItem()], { connectivity: "online" }), undefined);
+  assert.equal(onlineWithPending.tone, "info", "pending work is never presented as success");
+  assert.equal(onlineWithPending.pendingLabel, "Pendientes: 1");
+
+  const noStorage = describeSyncBanner(syncSnapshot([], { storageAvailable: false }), "Centro");
+  assert.match(noStorage.message, /sin almacenamiento local/u);
+  assert.equal(noStorage.tone, "info");
+  assert.equal(syncConnectivityLabel("offline"), "Sin conexión");
+});
+
+test("queue items are explained in operator language, never with engine codes", () => {
+  const item = queueItem({ entityType: "Payment", financial: true, localState: "conflict", retryCount: 2 });
+  assert.equal(syncItemTitle(item), "Cobro en efectivo");
+  assert.match(syncItemDetail(item), /versión distinta/u);
+  assert.match(syncItemDetail(item), /Intentos: 2/u);
+  assert.equal(syncItemCanRetry(item), false, "a conflict needs review, not blind retries");
+
+  for (const localState of ["pending", "sending", "retry_wait", "rejected", "conflict", "manual_review"] as const) {
+    const detail = syncItemDetail(queueItem({ localState }));
+    assert.match(detail, /^[A-ZÁÉÍÓÚÑ¿]/u, localState);
+    assert.doesNotMatch(detail, /[A-Z]{3,}_[A-Z]|outbox|UUID|local_pending/u, localState);
+  }
+  assert.equal(syncItemCanRetry(queueItem({ localState: "pending" })), true);
+  assert.equal(syncItemCanRetry(queueItem({ localState: "retry_wait" })), true);
+
+  assert.equal(syncItemTitle(queueItem({ entityType: "OrderItem", operation: "create" })), "Línea de pedido");
+  assert.equal(syncItemTitle(queueItem({ entityType: "Order", operation: "create" })), "Pedido");
+  assert.equal(syncItemTitle(queueItem({ entityType: "Order", operation: "transition" })), "Cambio de pedido");
+});
+
+test("attention and pending counts never overlap", () => {
+  const snapshot = syncSnapshot([
+    queueItem({ eventId: "a", localState: "pending" }),
+    queueItem({ eventId: "b", localState: "sending" }),
+    queueItem({ eventId: "c", localState: "rejected" }),
+    queueItem({ eventId: "d", localState: "manual_review" }),
+    queueItem({ eventId: "e", localState: "conflict" }),
+    queueItem({ eventId: "f", localState: "accepted" }),
+  ]);
+  assert.equal(syncPendingCount(snapshot), 2);
+  assert.equal(syncAttentionCount(snapshot), 3);
+  assert.equal(visibleSyncQueue(snapshot).length, 5, "accepted entries are done and not listed");
+});
+
+test("capability refusals get an operator sentence, including unknown codes", () => {
+  assert.match(mobileCapabilityMessage("SNAPSHOTS_REQUIRED"), /menú y mesas guardados/u);
+  assert.match(mobileCapabilityMessage("CASH_REGISTER_REQUIRED"), /caja y un turno de cajero/u);
+  assert.match(mobileCapabilityMessage("REMOTE_ORIGIN_OFFLINE_BLOCKED"), /otro dispositivo/u);
+  assert.match(mobileCapabilityMessage("SOMETHING_NEW"), /requiere conexión/u);
+  assert.match(mobileCapabilityMessage(null), /requiere conexión/u);
+});
+
+test("sync clock formatting is local, explicit and never invents a time", () => {
+  assert.equal(formatSyncClock(null), null);
+  assert.equal(formatSyncClock("not-a-date"), null);
+  assert.match(formatSyncClock("2026-11-23T18:05:00.000Z") ?? "", /^\d{2}:\d{2}$/u);
 });
