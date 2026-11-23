@@ -3,3 +3,5 @@ export { MockPrinterPort, PrintJobQueue } from "./print-job-queue.js";
 export type { PrinterPort, PrintDestination, PrintJobStatus, PrintJobSnapshot } from "./print-job-queue.js";
 export { renderHandoffTicket, UnsupportedCurrencyExponentError } from "./handoff-ticket.js";
 export type { HandoffTicketInput } from "./handoff-ticket.js";
+export { BluetoothPrinterPort } from "./bluetooth-printer.js";
+export type { BluetoothTransport, BluetoothConnection } from "./bluetooth-printer.js";
