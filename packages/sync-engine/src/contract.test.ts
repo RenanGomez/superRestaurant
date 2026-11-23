@@ -97,12 +97,26 @@ test("el payload sensible o con dinero invalido invalida el envelope", () => {
 });
 
 test("respuestas de push y pull se validan en runtime", () => {
+  const scope = { restaurantId: id(1), branchId: id(2) };
   assert.equal(parsePushResponse(null).ok, false);
-  assert.equal(parsePushResponse({ results: [{ eventId: "x" }] }).ok, false);
-  assert.equal(parsePushResponse({ results: [{ eventId: id(1), idempotencyKey: "k", status: "applied" }] }).ok, false);
-  const good = parsePushResponse({ results: [{ eventId: id(1), idempotencyKey: "k", status: "accepted", code: null, canonicalVersion: 2 }] });
+  assert.equal(parsePushResponse({ protocolVersion: 1, scope, results: [{ eventId: "x" }] }).ok, false);
+  assert.equal(parsePushResponse({ protocolVersion: 1, scope, results: [{ eventId: id(1), idempotencyKey: "k", status: "applied", code: null, canonicalVersion: 1, auditId: null }] }).ok, false);
+  const good = parsePushResponse({
+    protocolVersion: 1,
+    scope,
+    results: [{ eventId: id(1), idempotencyKey: "k", status: "accepted", code: null, canonicalVersion: 2, auditId: null }],
+  });
   assert.equal(good.ok, true);
-  assert.equal(parsePullResponse({ scope: { restaurantId: id(1), branchId: id(2) }, changes: "no", nextCursor: null, hasMore: false }).ok, false);
-  assert.equal(parsePullResponse({ scope: { restaurantId: id(1), branchId: id(2) }, changes: [], nextCursor: 5, hasMore: false }).ok, false);
-  assert.equal(parsePullResponse({ scope: { restaurantId: id(1), branchId: id(2) }, changes: [], nextCursor: "opaque", hasMore: false }).ok, true);
+  assert.equal(parsePushResponse({ protocolVersion: 1, scope, results: [], extra: true }).ok, false);
+  assert.equal(parsePullResponse({ protocolVersion: 1, scope, changes: "no", nextCursor: null, hasMore: false }).ok, false);
+  assert.equal(parsePullResponse({ protocolVersion: 1, scope, changes: [], nextCursor: 5, hasMore: false }).ok, false);
+  assert.equal(parsePullResponse({ protocolVersion: 1, scope, changes: [], nextCursor: "opaque", hasMore: false }).ok, true);
+  assert.equal(parsePullResponse({ protocolVersion: 1, scope, changes: [], nextCursor: "opaque", hasMore: false, extra: 1 }).ok, false);
+});
+
+test("catalogo Fase 3 rechaza entidades desconocidas y operaciones no permitidas", () => {
+  assert.equal(codeFor((e) => { e["entityType"] = "Ticket"; }), "ENVELOPE_INVALID");
+  assert.equal(codeFor((e) => { e["entityType"] = "Order"; e["operation"] = "delete"; e["baseVersion"] = 1; }), "ENVELOPE_INVALID");
+  assert.equal(codeFor((e) => { e["entityType"] = "Payment"; e["operation"] = "update"; e["baseVersion"] = 1; }), "ENVELOPE_INVALID");
+  assert.equal(codeFor((e) => { e["entityType"] = "Payment"; e["operation"] = "delete"; e["baseVersion"] = 1; }), "ENVELOPE_INVALID");
 });

@@ -258,7 +258,7 @@ test("reutilizar idempotencyKey con otra huella falla y con la misma devuelve el
   assert.equal((await engine.getOutbox(SCOPE_A1)).length, 1);
   await expectCode(engine.enqueue({ ...base, payload: { a: 1, b: 3 } }), "IDEMPOTENCY_KEY_REUSE");
   await expectCode(engine.enqueue({ ...base, payload: { a: 1, b: 2 }, entityId: id(0xf0f0) }), "IDEMPOTENCY_KEY_REUSE");
-  await expectCode(engine.enqueue({ ...base, payload: { a: 1, b: 2 }, entityType: "Ticket" }), "IDEMPOTENCY_KEY_REUSE");
+  await expectCode(engine.enqueue({ ...base, payload: { a: 1, b: 2 }, entityType: "DiningTable" }), "IDEMPOTENCY_KEY_REUSE");
   await expectCode(engine.enqueue({ ...base, payload: { a: 1, b: 2 }, operation: "update", baseVersion: 0 }), "IDEMPOTENCY_KEY_REUSE");
   const otherScope = await engine.enqueue({ ...base, scope: SCOPE_B1, payload: { a: 9 } });
   assert.notEqual(otherScope.eventId, original.eventId);

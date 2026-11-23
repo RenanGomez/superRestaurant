@@ -22,8 +22,14 @@ async function expectCode(promise: Promise<unknown>, code: string): Promise<void
   await assert.rejects(promise, (error: unknown) => error instanceof SyncEngineError && error.code === code, code);
 }
 
-function change(entity: number, version: number, note: string, tombstone = false): { entityType: string; entityId: string; canonicalVersion: number; tombstone: boolean; snapshot: { note: string } | null } {
-  return { entityType: "Order", entityId: id(entity), canonicalVersion: version, tombstone, snapshot: tombstone ? null : { note } };
+function change(
+  entity: number,
+  version: number,
+  note: string,
+  tombstone = false,
+  entityType: "Order" | "DiningTable" = "Order",
+): { entityType: "Order" | "DiningTable"; entityId: string; canonicalVersion: number; tombstone: boolean; snapshot: { note: string } | null } {
+  return { entityType, entityId: id(entity), canonicalVersion: version, tombstone, snapshot: tombstone ? null : { note } };
 }
 
 test("accepted y duplicate cierran el outbox pero nunca avanzan el cursor de pull", async () => {
@@ -87,6 +93,7 @@ test("un cambio fuera de scope descarta el lote completo y no mueve el cursor", 
   await engine.pull(SCOPE_A1);
   const cursor = await engine.getPullCursor(SCOPE_A1);
   server.pullOverride = (request) => ({
+    protocolVersion: 1,
     scope: request.scope,
     changes: [
       { ...change(0x931, 1, "fine"), restaurantId: SCOPE_A1.restaurantId, branchId: SCOPE_A1.branchId },
@@ -99,19 +106,20 @@ test("un cambio fuera de scope descarta el lote completo y no mueve el cursor", 
   assert.equal(await engine.getPullCursor(SCOPE_A1), cursor);
   assert.equal((await engine.listReplica(SCOPE_A1)).length, 1);
   assert.equal((await engine.listReplica(SCOPE_B1)).length, 0);
-  server.pullOverride = (request) => ({
+  server.pullOverride = () => ({
+    protocolVersion: 1,
     scope: { restaurantId: SCOPE_A2.restaurantId, branchId: SCOPE_A2.branchId },
-    changes: [], nextCursor: "x", hasMore: false, requested: request.cursor,
+    changes: [], nextCursor: "x", hasMore: false,
   });
   await expectCode(engine.pull(SCOPE_A1), "PULL_SCOPE_VIOLATION");
-  server.pullOverride = () => ({ scope: SCOPE_A1, changes: "oops", nextCursor: null, hasMore: false });
+  server.pullOverride = () => ({ protocolVersion: 1, scope: SCOPE_A1, changes: "oops", nextCursor: null, hasMore: false });
   await expectCode(engine.pull(SCOPE_A1), "PULL_RESPONSE_INVALID");
   assert.equal(await engine.getPullCursor(SCOPE_A1), cursor);
 });
 
 test("hasMore sin cursor nuevo se rechaza para no ciclar", async () => {
   const { engine, server } = rig();
-  server.pullOverride = (request) => ({ scope: request.scope, changes: [], nextCursor: null, hasMore: true });
+  server.pullOverride = (request) => ({ protocolVersion: 1, scope: request.scope, changes: [], nextCursor: null, hasMore: true });
   await expectCode(engine.pull(SCOPE_A1), "PULL_RESPONSE_INVALID");
   assert.equal(server.pullRequests.length, 1);
 });
@@ -163,27 +171,27 @@ test("orden por canonicalVersion: la misma version o una menor no sobrescribe", 
 
 test("tombstone: no se resucita, bloquea updates atrasados y el entityId no se recrea", async () => {
   const { engine, server } = rig();
-  server.inject(SCOPE_A1, change(0x970, 1, "alive"));
-  server.inject(SCOPE_A1, change(0x970, 2, "", true));
-  server.inject(SCOPE_A1, change(0x970, 3, "zombie"));
-  server.inject(SCOPE_A1, change(0x970, 1, "late-update"));
+  server.inject(SCOPE_A1, change(0x970, 1, "alive", false, "DiningTable"));
+  server.inject(SCOPE_A1, change(0x970, 2, "", true, "DiningTable"));
+  server.inject(SCOPE_A1, change(0x970, 3, "zombie", false, "DiningTable"));
+  server.inject(SCOPE_A1, change(0x970, 1, "late-update", false, "DiningTable"));
   await engine.pull(SCOPE_A1);
-  const entity = await engine.getReplicaEntity(SCOPE_A1, "Order", id(0x970));
+  const entity = await engine.getReplicaEntity(SCOPE_A1, "DiningTable", id(0x970));
   assert.deepEqual([entity?.tombstone, entity?.canonicalVersion, entity?.snapshot], [true, 2, null]);
-  server.inject(SCOPE_A1, change(0x970, 5, "", true));
+  server.inject(SCOPE_A1, change(0x970, 5, "", true, "DiningTable"));
   await engine.pull(SCOPE_A1);
-  assert.equal((await engine.getReplicaEntity(SCOPE_A1, "Order", id(0x970)))?.canonicalVersion, 5);
-  await expectCode(engine.enqueue({ ...orderInput(SCOPE_A1, "recreate"), entityId: id(0x970) }), "ENTITY_TOMBSTONED");
-  await expectCode(engine.enqueue({ ...orderInput(SCOPE_A1, "late"), entityId: id(0x970), operation: "update" }), "ENTITY_TOMBSTONED");
+  assert.equal((await engine.getReplicaEntity(SCOPE_A1, "DiningTable", id(0x970)))?.canonicalVersion, 5);
+  await expectCode(engine.enqueue({ ...orderInput(SCOPE_A1, "recreate"), entityType: "DiningTable", entityId: id(0x970) }), "ENTITY_TOMBSTONED");
+  await expectCode(engine.enqueue({ ...orderInput(SCOPE_A1, "late"), entityType: "DiningTable", entityId: id(0x970), operation: "update" }), "ENTITY_TOMBSTONED");
   assert.equal((await engine.getOutbox(SCOPE_A1)).length, 0);
 });
 
 test("un tombstone de una entidad desconocida se conserva para impedir recrearla", async () => {
   const { engine, server } = rig();
-  server.inject(SCOPE_A1, change(0x980, 2, "", true));
-  server.inject(SCOPE_A1, change(0x980, 3, "ghost"));
+  server.inject(SCOPE_A1, change(0x980, 2, "", true, "DiningTable"));
+  server.inject(SCOPE_A1, change(0x980, 3, "ghost", false, "DiningTable"));
   await engine.pull(SCOPE_A1);
-  assert.equal((await engine.getReplicaEntity(SCOPE_A1, "Order", id(0x980)))?.tombstone, true);
+  assert.equal((await engine.getReplicaEntity(SCOPE_A1, "DiningTable", id(0x980)))?.tombstone, true);
 });
 
 test("aislamiento en pull: dos restaurantes y sucursales no comparten replica ni cursor", async () => {
@@ -215,6 +223,7 @@ test("un snapshot demasiado profundo sigue invalidando el lote de pull", async (
   let deep: Record<string, unknown> = { leaf: 1 };
   for (let level = 0; level < 9; level += 1) deep = { child: deep };
   server.pullOverride = (request) => ({
+    protocolVersion: 1,
     scope: request.scope, nextCursor: "x", hasMore: false,
     changes: [{ ...change(0x9a1, 1, "x"), restaurantId: SCOPE_A1.restaurantId, branchId: SCOPE_A1.branchId, snapshot: deep }],
   });
@@ -229,6 +238,7 @@ test("un error a mitad de paginacion conserva el cursor de la ultima pagina apli
     calls += 1;
     if (calls === 2) throw new SyncTransportError("UNAVAILABLE", true);
     return {
+      protocolVersion: 1,
       scope: request.scope, nextCursor: "page-1", hasMore: true,
       changes: [{ ...change(0x9b0, 1, "p1"), restaurantId: SCOPE_A1.restaurantId, branchId: SCOPE_A1.branchId }],
     };

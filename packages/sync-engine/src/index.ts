@@ -1,4 +1,5 @@
 export * from "./backoff.js";
+export * from "./capability-guard.js";
 export * from "./contract.js";
 export * from "./durable-state.js";
 export * from "./engine.js";
@@ -7,3 +8,4 @@ export * from "./in-memory-storage.js";
 export * from "./json.js";
 export * from "./outbox-state.js";
 export * from "./payload-guard.js";
+export * from "./schema-migration.js";

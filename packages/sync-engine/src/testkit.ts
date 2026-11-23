@@ -1,5 +1,11 @@
 // Shared fixtures for the sync-engine tests (excluded from the build via tsconfig.build.json).
-import { parseBranchScope, type BranchScope } from "@super-restaurant/shared-types";
+import {
+  SYNC_PROTOCOL_VERSION,
+  parseSyncScopeV1,
+  type BranchScope,
+  type SyncEntityTypeV1,
+  type SyncSnapshotResyncRequestV1,
+} from "@super-restaurant/shared-types";
 import type { ClockPort, EnqueueInput, IdGeneratorPort, SyncTransportPort } from "./engine.js";
 import type { SyncEnvelope, SyncPullChange, SyncPullRequest, SyncPushRequest } from "./contract.js";
 import { SyncTransportError } from "./errors.js";
@@ -10,7 +16,7 @@ export function id(value: number): string {
 }
 
 export function scopeOf(restaurant: number, branch: number): BranchScope {
-  const scope = parseBranchScope({ restaurantId: id(restaurant), branchId: id(branch) });
+  const scope = parseSyncScopeV1({ restaurantId: id(restaurant), branchId: id(branch) });
   if (scope === undefined) throw new Error("fixture scope must be valid");
   return scope;
 }
@@ -71,13 +77,16 @@ export class FakeServer implements SyncTransportPort {
   public readonly effects: string[] = [];
   public readonly pushRequests: SyncPushRequest[] = [];
   public readonly pullRequests: SyncPullRequest[] = [];
+  public readonly snapshotRequests: SyncSnapshotResyncRequestV1[] = [];
   public pushError: SyncTransportError | null = null;
   public pullError: SyncTransportError | null = null;
+  public snapshotError: SyncTransportError | null = null;
   public timeoutAfterCommit = 0;
   public readonly omitResults = new Set<string>();
   public readonly conflictEntities = new Set<string>();
   public pushCodeOverride = new Map<string, { status: "rejected" | "manual_review"; code: string }>();
   public pullOverride: ((request: SyncPullRequest) => unknown) | null = null;
+  public snapshotOverride: ((request: SyncSnapshotResyncRequestV1) => unknown) | null = null;
   private readonly ledger = new Map<string, Applied>();
   private readonly changelog = new Map<string, SyncPullChange[]>();
   private readonly versions = new Map<string, number>();
@@ -101,7 +110,11 @@ export class FakeServer implements SyncTransportPort {
       this.timeoutAfterCommit -= 1;
       return Promise.reject(new SyncTransportError("TIMEOUT", true));
     }
-    return Promise.resolve({ results: visible });
+    return Promise.resolve({
+      protocolVersion: SYNC_PROTOCOL_VERSION,
+      scope: request.scope,
+      results: visible,
+    });
   }
 
   private apply(request: SyncPushRequest, event: SyncEnvelope): unknown {
@@ -123,7 +136,10 @@ export class FakeServer implements SyncTransportPort {
     this.ledger.set(ledgerKey, { eventId: event.eventId, status: "accepted", version });
     this.effects.push(event.idempotencyKey);
     this.inject(request.scope, {
-      entityType: event.entityType, entityId: event.entityId, canonicalVersion: version, tombstone: event.operation === "delete",
+      entityType: event.entityType as SyncEntityTypeV1,
+      entityId: event.entityId,
+      canonicalVersion: version,
+      tombstone: event.operation === "delete",
       snapshot: event.operation === "delete" ? null : (event.payload as JsonObject),
     });
     return { eventId: event.eventId, idempotencyKey: event.idempotencyKey, status: "accepted", code: null, canonicalVersion: version, auditId: `audit-${event.eventId}` };
@@ -145,10 +161,30 @@ export class FakeServer implements SyncTransportPort {
     const page = list.slice(offset, offset + request.limit);
     const end = offset + page.length;
     return Promise.resolve({
+      protocolVersion: SYNC_PROTOCOL_VERSION,
       scope: request.scope,
       changes: page,
       nextCursor: `cur|${key}|${end}`,
       hasMore: end < list.length,
+    });
+  }
+
+  public pullSnapshot(request: SyncSnapshotResyncRequestV1): Promise<unknown> {
+    this.snapshotRequests.push(structuredClone(request));
+    if (this.snapshotError !== null) return Promise.reject(this.snapshotError);
+    if (this.snapshotOverride !== null) return Promise.resolve(this.snapshotOverride(request));
+    const key = `${request.scope.restaurantId}/${request.scope.branchId}`;
+    const list = this.changelog.get(key) ?? [];
+    const latestByEntity = new Map<string, SyncPullChange>();
+    for (const item of list) {
+      latestByEntity.set(`${item.entityType}|${item.entityId}`, item);
+    }
+    return Promise.resolve({
+      protocolVersion: SYNC_PROTOCOL_VERSION,
+      scope: request.scope,
+      snapshotCursor: `cur|${key}|${list.length}`,
+      entities: [...latestByEntity.values()],
+      generatedAt: "2026-10-22T12:00:00.000Z",
     });
   }
 }

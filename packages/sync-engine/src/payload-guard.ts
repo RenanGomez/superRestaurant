@@ -1,14 +1,15 @@
+import { SYNC_MAX_PAYLOAD_BYTES, SYNC_MAX_PAYLOAD_DEPTH } from "@super-restaurant/shared-types";
 import { fail, ok, unwrap, type ParseResult } from "./errors.js";
 import { deepFreeze } from "./freeze.js";
 import { asPlainRecord, type JsonObject, type JsonValue } from "./json.js";
 
 /** OFFLINE_SYNC_CONTRACT section 12 limits. */
-export const MAX_PAYLOAD_DEPTH = 8;
-export const MAX_PAYLOAD_BYTES = 64 * 1024;
+export const MAX_PAYLOAD_DEPTH = SYNC_MAX_PAYLOAD_DEPTH;
+export const MAX_PAYLOAD_BYTES = SYNC_MAX_PAYLOAD_BYTES;
 
 const SENSITIVE_KEY = /(cvv|cvc|password|passwd|secret|token)/iu;
 const PAN_KEY = /^(pan|card_?number)$/iu;
-const MONEY_KEY = /^(amount|total|price)/iu;
+const MONEY_KEY = /^(amount|total|price)|Minor$/iu;
 const CURRENCY = /^[A-Z]{3}$/u;
 // A whole 13-19 digit run (optional single space/hyphen separators) not glued to other alphanumerics.
 const PAN_CANDIDATE = /(?<![0-9A-Za-z])\d(?:[ -]?\d){12,18}(?![0-9A-Za-z])/gu;
@@ -50,8 +51,9 @@ function utf8ByteLength(text: string): number {
 type Walk = ParseResult<JsonValue>;
 
 /**
- * `strict` (enqueue) also rejects PAN, secrets and invalid money. `inbound` (pull snapshots and
- * hydration) only checks shape, depth and size, so server data such as `tokenCount` is accepted.
+ * `strict` (enqueue) also rejects PAN, secrets and invalid money objects. `inbound` (pull snapshots
+ * and hydration) checks shape, safe-integer-only numbers (no floats), depth and size, while allowing
+ * server field names such as `tokenCount`.
  */
 export type PayloadMode = "strict" | "inbound";
 
@@ -61,9 +63,11 @@ function walk(value: unknown, depth: number, key: string, strict: boolean, money
     return strict && looksLikePan(value) ? fail("PAYLOAD_SENSITIVE_DATA", key) : ok(value);
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) return fail("PAYLOAD_INVALID", key);
+    if (!Number.isSafeInteger(value)) {
+      return fail(strict && moneyKey ? "PAYLOAD_MONEY_INVALID" : "PAYLOAD_INVALID", key);
+    }
     // Integer PAN-shaped numbers; money-keyed amounts are exempt (they are minor units).
-    if (strict && !moneyKey && Number.isInteger(value)) {
+    if (strict && !moneyKey) {
       const digits = String(Math.abs(value));
       if (/^\d{13,19}$/u.test(digits) && passesLuhn(digits)) return fail("PAYLOAD_SENSITIVE_DATA", key);
     }
@@ -117,8 +121,8 @@ function isMoney(value: unknown): boolean {
 }
 
 /**
- * Validates a payload against section 12 and returns a deep-frozen clone, so callers
- * can keep mutating their own object without touching durable state.
+ * Validates a payload against section 12 (no floats, depth <= 8, size <= 64 KiB) and returns a
+ * deep-frozen clone, so callers can keep mutating their own object without touching durable state.
  */
 export function checkPayload(value: unknown, mode: PayloadMode = "strict"): ParseResult<JsonObject> {
   const record = asPlainRecord(value);

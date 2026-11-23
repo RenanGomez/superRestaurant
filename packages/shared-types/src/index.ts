@@ -43,6 +43,7 @@ export * from "./delivery-quote.js";
 export * from "./delivery-zones.js";
 export * from "./deliveries.js";
 export * from "./branch-members.js";
+export * from "./sync.js";
 
 export const MEMBERSHIP_ROLE_CODES = Object.freeze([
   "owner",

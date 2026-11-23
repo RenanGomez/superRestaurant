@@ -1,8 +1,19 @@
-import type { BranchScope } from "@super-restaurant/shared-types";
+import {
+  isSyncFinancialEntityTypeV1,
+  type BranchScope,
+  type SyncClientTypeV1,
+  type SyncConnectivityStateV1,
+  type SyncEntityTypeV1,
+  type SyncOperationV1,
+} from "@super-restaurant/shared-types";
 import { createExponentialBackoff, type BackoffPolicy } from "./backoff.js";
 import {
+  evaluateEnvelopeCapability,
+  type CapabilityDecision,
+  type CapabilityPreconditions,
+} from "./capability-guard.js";
+import {
   CURSOR_RESYNC_CODES,
-  FINANCIAL_ENTITY_TYPES,
   OUTBOX_STATES,
   REVOCATION_CODES,
   SYNC_PROTOCOL_VERSION,
@@ -11,6 +22,7 @@ import {
   isSyncId,
   parsePullResponse,
   parsePushResponse,
+  parseSnapshotResyncResponse,
   parseSyncEnvelope,
   parseSyncScope,
   toEnvelope,
@@ -22,6 +34,8 @@ import {
   type SyncPullRequest,
   type SyncPushRequest,
   type SyncScopeInput,
+  type SyncSnapshotEntity,
+  type SyncSnapshotResyncRequest,
 } from "./contract.js";
 import {
   createEmptyState,
@@ -29,15 +43,18 @@ import {
   parseDurableState,
   sameScope,
   type DurableSyncState,
+  type PendingReplicaWrite,
   type ReplicaEntity,
+  type ReplicaRevert,
   type ScopeState,
   type ScopeStatus,
 } from "./durable-state.js";
 import { SyncEngineError, SyncTransportError, unwrap } from "./errors.js";
 import { deepFreeze } from "./freeze.js";
-import { asPlainRecord, type JsonObject, type JsonValue } from "./json.js";
-import { isBlockingState, isTerminalState, transitionOutboxState } from "./outbox-state.js";
+import { asPlainRecord, isSafeNonNegativeInteger, type JsonObject, type JsonValue } from "./json.js";
+import { canCompactOutboxEntry, isBlockingState, isTerminalState, transitionOutboxState } from "./outbox-state.js";
 import { checkPayload } from "./payload-guard.js";
+import { migrateEnvelopeSchema, type SchemaMigrationRegistry } from "./schema-migration.js";
 
 // ---- Ports -------------------------------------------------------------------------------
 
@@ -52,6 +69,8 @@ export interface SyncTransportPort {
   /** Throws `SyncTransportError` for transport failures. Resolves with the raw response body. */
   push(request: SyncPushRequest): Promise<unknown>;
   pull(request: SyncPullRequest): Promise<unknown>;
+  /** Optional full-snapshot resync endpoint for cursor-expired or schema-retired recovery. */
+  pullSnapshot?(request: SyncSnapshotResyncRequest): Promise<unknown>;
 }
 
 export interface IdGeneratorPort {
@@ -90,6 +109,11 @@ export interface SyncEngineOptions {
   readonly leaseMs?: number;
   readonly maxPagesPerSync?: number;
   readonly pullLimit?: number;
+  /** When set, `enqueue` enforces OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX §2 per client & connectivity. */
+  readonly clientType?: SyncClientTypeV1;
+  readonly connectivity?: SyncConnectivityStateV1 | (() => SyncConnectivityStateV1);
+  /** Optional deterministic schemaVersion migration hook executed on hydration before validation. */
+  readonly schemaMigrations?: SchemaMigrationRegistry;
 }
 
 export interface EnqueueInput {
@@ -104,6 +128,10 @@ export interface EnqueueInput {
   readonly occurredAt?: string;
   /** Optimistic local replica content; defaults to the payload. */
   readonly replicaSnapshot?: unknown;
+  /** Optional capability-guard overrides for this operation. */
+  readonly clientType?: SyncClientTypeV1;
+  readonly connectivity?: SyncConnectivityStateV1;
+  readonly preconditions?: CapabilityPreconditions;
 }
 
 export interface PushEventOutcome {
@@ -129,6 +157,40 @@ export interface PullOutcome {
   readonly applied: number;
   readonly code: string | null;
   readonly retryable: boolean;
+}
+
+export interface SnapshotResyncOutcome {
+  readonly status: "complete" | "revoked" | "failed";
+  readonly applied: number;
+  readonly preservedPending: number;
+  readonly removedStale: number;
+  readonly cursor: string | null;
+  readonly code: string | null;
+  readonly retryable: boolean;
+}
+
+export interface CompactionOptions {
+  readonly scope: SyncScopeInput;
+  /** Only terminal non-financial outbox entries with `updatedAt <= olderThanMs` may be removed. */
+  readonly olderThanMs: number;
+  /** Optional minimum number of newest terminal non-financial entries to retain. */
+  readonly retainMinTerminalCount?: number;
+  /** Tombstones are NEVER dropped unless both `compactTombstones` and `resyncBarrierConfirmed` are true. */
+  readonly compactTombstones?: boolean;
+  readonly resyncBarrierConfirmed?: boolean;
+}
+
+export interface CompactionOutcome {
+  readonly scope: BranchScope;
+  readonly removedOutboxCount: number;
+  readonly retainedOutboxCount: number;
+  readonly skippedFinancialCount: number;
+  readonly removedTombstoneCount: number;
+}
+
+export interface HydrationMigrationSummary {
+  readonly migratedCount: number;
+  readonly quarantinedCount: number;
 }
 
 export interface SyncStatusSummary {
@@ -172,39 +234,128 @@ function safeCode(error: unknown): { readonly code: string; readonly retryable: 
   return { code: "TRANSPORT_ERROR", retryable: true };
 }
 
-function isFinancial(entry: SyncEnvelope): boolean {
-  return FINANCIAL_ENTITY_TYPES.includes(entry.entityType);
+function isFinancial(entry: Pick<SyncEnvelope, "entityType">): boolean {
+  return isSyncFinancialEntityTypeV1(entry.entityType);
 }
 
-function replaceScope(state: DurableSyncState, scope: SyncScopeInput, patch: Partial<ScopeState>): DurableSyncState {
+function replaceScope(state: DurableSyncState, scope: BranchScope, patch: Partial<ScopeState>): DurableSyncState {
   const existing = state.scopes.find((item) => sameScope(item, scope));
   if (existing === undefined) {
-    const created: ScopeState = { restaurantId: scope.restaurantId, branchId: scope.branchId, status: "active", pullCursor: null, ...patch };
+    const created: ScopeState = {
+      restaurantId: scope.restaurantId,
+      branchId: scope.branchId,
+      status: "active",
+      pullCursor: null,
+      ...patch,
+    };
     return { ...state, scopes: [...state.scopes, created] };
   }
   return { ...state, scopes: state.scopes.map((item) => (item === existing ? { ...item, ...patch } : item)) };
 }
 
 /**
- * A rejected event never took effect on the server: undo its optimistic replica write. Entities whose
- * latest pending event is a different one are left alone (that newer write still stands).
+ * Reconciles per-entity optimistic `pendingWrites` and `revertTo` after a push batch.
+ *
+ * Handles multiple pending writes per entity cleanly:
+ * - `accepted` / `duplicate` advances the confirmed base (`revertTo`) without bumping `canonicalVersion`
+ *   (so the subsequent pull still applies the authoritative server snapshot) and pops that write.
+ * - `rejected` pops only the rejected write: if earlier or later pending writes remain, the optimistic
+ *   snapshot rolls back to the newest remaining pending write; if none remain, it restores `revertTo`
+ *   (or removes the entity when `revertTo.existed === false`).
  */
-function revertRejected(replica: readonly ReplicaEntity[], scope: SyncScopeInput, rejected: ReadonlySet<string>): ReplicaEntity[] {
+function reconcileReplicaAfterPush(
+  replica: readonly ReplicaEntity[],
+  scope: BranchScope,
+  events: readonly PushEventOutcome[],
+): ReplicaEntity[] {
+  const outcomeOrder = new Map<string, OutboxState>();
+  for (const event of events) outcomeOrder.set(event.eventId, event.state);
+  if (outcomeOrder.size === 0) return [...replica];
+
   const result: ReplicaEntity[] = [];
   for (const entity of replica) {
-    if (!sameScope(entity, scope) || entity.pendingEventId === null || !rejected.has(entity.pendingEventId)) {
+    if (!sameScope(entity, scope) || entity.pendingWrites.length === 0) {
       result.push(entity);
-    } else if (entity.revertTo === null) {
-      result.push({ ...entity, pendingEventId: null });
-    } else if (entity.revertTo.existed) {
-      result.push({ ...entity, snapshot: entity.revertTo.snapshot, canonicalVersion: entity.revertTo.canonicalVersion, pendingEventId: null, revertTo: null });
-    } // else: a rejected create leaves no entity behind
+      continue;
+    }
+
+    let writes: PendingReplicaWrite[] = [...entity.pendingWrites];
+    let revertTo: ReplicaRevert | null = entity.revertTo;
+    let lastConfirmedSnapshot: JsonObject | null = entity.snapshot;
+    let confirmedAny = false;
+    let modified = false;
+
+    for (const event of events) {
+      const idx = writes.findIndex((write) => write.eventId === event.eventId);
+      if (idx === -1) continue;
+      const write = writes[idx]!;
+      if (event.state === "accepted" || event.state === "duplicate") {
+        modified = true;
+        confirmedAny = true;
+        lastConfirmedSnapshot = write.snapshot;
+        if (idx === 0) {
+          revertTo = {
+            existed: true,
+            snapshot: write.snapshot,
+            canonicalVersion: revertTo?.canonicalVersion ?? entity.canonicalVersion,
+          };
+        }
+        writes = [...writes.slice(0, idx), ...writes.slice(idx + 1)];
+      } else if (event.state === "rejected") {
+        modified = true;
+        writes = [...writes.slice(0, idx), ...writes.slice(idx + 1)];
+      }
+    }
+
+    if (!modified) {
+      result.push(entity);
+      continue;
+    }
+
+    if (writes.length > 0) {
+      const latest = writes[writes.length - 1]!;
+      result.push({
+        ...entity,
+        snapshot: latest.snapshot,
+        pendingEventId: latest.eventId,
+        revertTo,
+        pendingWrites: writes,
+      });
+      continue;
+    }
+
+    // No pending writes remain on this entity.
+    if (confirmedAny) {
+      result.push({
+        ...entity,
+        snapshot: lastConfirmedSnapshot,
+        pendingEventId: null,
+        revertTo: null,
+        pendingWrites: [],
+      });
+      continue;
+    }
+
+    // All pending writes were rejected without any confirmation: restore confirmed base.
+    if (revertTo === null) {
+      result.push({ ...entity, pendingEventId: null, pendingWrites: [] });
+    } else if (revertTo.existed) {
+      result.push({
+        ...entity,
+        snapshot: revertTo.snapshot,
+        canonicalVersion: revertTo.canonicalVersion,
+        pendingEventId: null,
+        revertTo: null,
+        pendingWrites: [],
+      });
+    }
+    // else: rejected create(s) with no prior confirmed entity -> drop entity from replica.
   }
   return result;
 }
 
 /** Marks the scope revoked and moves pending financial events to manual review. */
-function revokeScope(state: DurableSyncState, scope: SyncScopeInput, code: string, nowMs: number): DurableSyncState {
+function revokeScope(state: DurableSyncState, scope: BranchScope, code: string, nowMs: number): DurableSyncState {
   const revoked = replaceScope(state, scope, { status: "revoked" });
   return {
     ...revoked,
@@ -227,9 +378,14 @@ export class DeviceSyncEngine {
   private readonly leaseMs: number;
   private readonly maxPagesPerSync: number;
   private readonly pullLimit: number;
+  private readonly clientType: SyncClientTypeV1 | undefined;
+  private readonly connectivityProvider: (() => SyncConnectivityStateV1) | undefined;
+  private readonly schemaMigrations: SchemaMigrationRegistry | undefined;
+  private staticConnectivity: SyncConnectivityStateV1;
   private readonly stateQueue = new SerialQueue();
   private readonly pullQueue = new SerialQueue();
   private state: DurableSyncState | null = null;
+  private hydrationMigrationSummary: HydrationMigrationSummary = Object.freeze({ migratedCount: 0, quarantinedCount: 0 });
 
   public constructor(options: SyncEngineOptions) {
     if (!isSyncId(options.deviceId)) throw new SyncEngineError("INPUT_INVALID", "deviceId");
@@ -243,19 +399,60 @@ export class DeviceSyncEngine {
     this.leaseMs = positiveInt(options.leaseMs ?? 30_000, "leaseMs");
     this.maxPagesPerSync = positiveInt(options.maxPagesPerSync ?? 20, "maxPagesPerSync");
     this.pullLimit = positiveInt(options.pullLimit ?? 100, "pullLimit");
+    this.clientType = options.clientType;
+    if (typeof options.connectivity === "function") {
+      this.connectivityProvider = options.connectivity;
+      this.staticConnectivity = "online";
+    } else {
+      this.connectivityProvider = undefined;
+      this.staticConnectivity = options.connectivity ?? "online";
+    }
+    this.schemaMigrations = options.schemaMigrations;
   }
 
-  /** Hydrates and validates durable state. Every public method calls this implicitly. */
+  /** Hydrates and validates durable state, running deterministic schema migrations when configured. */
   public async init(): Promise<void> {
     await this.stateQueue.run(async () => { await this.ensureLoaded(); });
   }
 
+  public setConnectivity(connectivity: SyncConnectivityStateV1): void {
+    this.staticConnectivity = connectivity;
+  }
+
+  public getConnectivity(): SyncConnectivityStateV1 {
+    return this.connectivityProvider !== undefined ? this.connectivityProvider() : this.staticConnectivity;
+  }
+
+  public getHydrationMigrationSummary(): HydrationMigrationSummary {
+    return this.hydrationMigrationSummary;
+  }
+
   // ---- Local operations -------------------------------------------------------------------
 
+  /** Non-throwing capability check for UI pre-flighting against OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX §2. */
+  public canEnqueue(input: EnqueueInput): Promise<CapabilityDecision> {
+    return this.read((state) => {
+      const source = asPlainRecord(input);
+      if (source === undefined) throw new SyncEngineError("INPUT_INVALID", "input");
+      const scope = unwrap(parseSyncScope(source["scope"]));
+      const clientType = input.clientType ?? this.clientType;
+      if (clientType === undefined) {
+        return Object.freeze({
+          allowed: true,
+          mode: "allowed",
+          reasonCode: null,
+          localOnlyWarning: false,
+          requiresServerRevalidation: true,
+        });
+      }
+      return this.evaluateCapabilityForInput(state, scope, input, clientType);
+    });
+  }
+
   /**
-   * Local transaction of section 7.2: reserves `localSequence`, writes the optimistic replica and
-   * creates the outbox envelope in ONE `persist`. Calls are serialized, so concurrent enqueues
-   * never share a sequence. A repeated `idempotencyKey` returns the existing event.
+   * Local transaction of section 7.2: validates capability matrix (when clientType is set),
+   * reserves `localSequence`, writes the optimistic replica and creates the outbox envelope
+   * in ONE `persist`. Calls are serialized, so concurrent enqueues never share a sequence.
    */
   public enqueue(input: EnqueueInput): Promise<OutboxEntry> {
     return this.mutate((state) => this.buildEnqueue(state, input));
@@ -285,6 +482,97 @@ export class DeviceSyncEngine {
       const current = state.scopes.find((item) => sameScope(item, scope));
       if (current?.status !== "resync_required") return { state, result: undefined };
       return { state: replaceScope(state, scope, { status: "active", pullCursor: null }), result: undefined };
+    });
+  }
+
+  /**
+   * Safe compaction (OFFLINE_SYNC_CONTRACT §8 & §10):
+   * - Never purges financial entity events (`Payment`, `CashMovement`, `CashRegisterSession`, `Refund`, `OrderDiscount`).
+   * - Never purges non-terminal, blocking, or referenced outbox entries.
+   * - Never decreases `lastLocalSequence`.
+   * - Never drops tombstones unless `compactTombstones` AND `resyncBarrierConfirmed` are both true on an active synced scope.
+   */
+  public compact(options: CompactionOptions): Promise<CompactionOutcome> {
+    return this.mutate((state) => {
+      const source = asPlainRecord(options);
+      if (source === undefined) throw new SyncEngineError("COMPACTION_INVALID", "options");
+      const scope = unwrap(parseSyncScope(source["scope"]));
+      const olderThanMs = source["olderThanMs"];
+      const retainMinTerminalCount = source["retainMinTerminalCount"] ?? 0;
+      const compactTombstones = source["compactTombstones"] === true;
+      const resyncBarrierConfirmed = source["resyncBarrierConfirmed"] === true;
+      if (!isSafeNonNegativeInteger(olderThanMs) || !isSafeNonNegativeInteger(retainMinTerminalCount)) {
+        throw new SyncEngineError("COMPACTION_INVALID", "bounds");
+      }
+      if (compactTombstones && !resyncBarrierConfirmed) {
+        throw new SyncEngineError("COMPACTION_INVALID", "tombstone compaction requires resyncBarrierConfirmed");
+      }
+
+      const referencedEventIds = new Set<string>();
+      for (const entry of state.outbox) {
+        if (entry.blockedBy !== null) referencedEventIds.add(entry.blockedBy);
+        if (entry.resolvedBy !== null) referencedEventIds.add(entry.resolvedBy);
+      }
+      for (const entity of state.replica) {
+        if (entity.pendingEventId !== null) referencedEventIds.add(entity.pendingEventId);
+        for (const write of entity.pendingWrites) referencedEventIds.add(write.eventId);
+      }
+
+      const scopedEntries = state.outbox.filter((entry) => sameScope(entry, scope));
+      const skippedFinancialCount = scopedEntries.filter((entry) => isFinancial(entry)).length;
+      const eligibleIds = scopedEntries
+        .filter((entry) => canCompactOutboxEntry(entry, { olderThanMs, referencedEventIds }))
+        .map((entry) => entry.eventId);
+
+      // Keep the newest `retainMinTerminalCount` terminal non-financial entries.
+      const nonFinancialTerminalCount = scopedEntries.filter(
+        (entry) => !isFinancial(entry) && isTerminalState(entry.localState),
+      ).length;
+      const maxRemovable = Math.max(0, nonFinancialTerminalCount - retainMinTerminalCount);
+      const toRemove = new Set(eligibleIds.slice(0, maxRemovable));
+
+      const nextOutbox = toRemove.size === 0
+        ? state.outbox
+        : state.outbox.filter((entry) => !toRemove.has(entry.eventId));
+
+      let removedTombstoneCount = 0;
+      let nextReplica = state.replica;
+      const scopeState = state.scopes.find((item) => sameScope(item, scope));
+      if (compactTombstones && resyncBarrierConfirmed && scopeState?.status === "active" && scopeState.pullCursor !== null) {
+        const referencedEntities = new Set(
+          nextOutbox
+            .filter((entry) => sameScope(entry, scope))
+            .map((entry) => `${entry.entityType}|${entry.entityId}`),
+        );
+        const filtered: ReplicaEntity[] = [];
+        for (const entity of state.replica) {
+          const canDrop = sameScope(entity, scope)
+            && entity.tombstone
+            && entity.pendingWrites.length === 0
+            && !referencedEntities.has(`${entity.entityType}|${entity.entityId}`);
+          if (canDrop) {
+            removedTombstoneCount += 1;
+          } else {
+            filtered.push(entity);
+          }
+        }
+        if (removedTombstoneCount > 0) nextReplica = filtered;
+      }
+
+      const changed = toRemove.size > 0 || removedTombstoneCount > 0;
+      const nextState: DurableSyncState = changed ? { ...state, outbox: nextOutbox, replica: nextReplica } : state;
+      const retainedOutboxCount = nextOutbox.filter((entry) => sameScope(entry, scope)).length;
+
+      return {
+        state: nextState,
+        result: Object.freeze({
+          scope,
+          removedOutboxCount: toRemove.size,
+          retainedOutboxCount,
+          skippedFinancialCount,
+          removedTombstoneCount,
+        }),
+      };
     });
   }
 
@@ -341,7 +629,9 @@ export class DeviceSyncEngine {
   public async push(scopeInput: SyncScopeInput): Promise<PushOutcome> {
     const scope = unwrap(parseSyncScope(scopeInput));
     const claimed = await this.mutate((state) => this.claimBatch(state, scope));
-    if (claimed.length === 0) return Object.freeze({ sent: 0, events: Object.freeze([]), revoked: false, pullRecommended: false, failureCode: null });
+    if (claimed.length === 0) {
+      return Object.freeze({ sent: 0, events: Object.freeze([]), revoked: false, pullRecommended: false, failureCode: null });
+    }
 
     const request: SyncPushRequest = Object.freeze({
       protocolVersion: SYNC_PROTOCOL_VERSION,
@@ -352,13 +642,15 @@ export class DeviceSyncEngine {
     let results: ReadonlyMap<string, SyncEventResult> | null = null;
     let failure: { readonly code: string; readonly retryable: boolean } | null = null;
     try {
-      const parsed = parsePushResponse(await this.transport.push(request));
+      const parsed = parsePushResponse(await this.transport.push(request), scope);
       if (parsed.ok) {
         const byId = new Map<string, SyncEventResult>();
         for (const result of parsed.value.results) if (!byId.has(result.eventId)) byId.set(result.eventId, result);
         results = byId;
       } else {
-        failure = { code: "RESPONSE_INVALID", retryable: true };
+        failure = parsed.code === "PUSH_SCOPE_VIOLATION"
+          ? { code: "PUSH_SCOPE_VIOLATION", retryable: false }
+          : { code: "RESPONSE_INVALID", retryable: true };
       }
     } catch (error) {
       failure = safeCode(error);
@@ -370,15 +662,20 @@ export class DeviceSyncEngine {
   public async sync(scopeInput: SyncScopeInput): Promise<{ readonly push: PushOutcome; readonly pull: PullOutcome }> {
     const push = await this.push(scopeInput);
     if (push.revoked) {
-      // The push itself revoked the scope: report it instead of throwing and losing the push outcome.
-      const pull: PullOutcome = Object.freeze({ status: "revoked", pages: 0, applied: 0, code: push.failureCode ?? "SCOPE_REVOKED", retryable: false });
+      const pull: PullOutcome = Object.freeze({
+        status: "revoked",
+        pages: 0,
+        applied: 0,
+        code: push.failureCode ?? "SCOPE_REVOKED",
+        retryable: false,
+      });
       return { push, pull };
     }
     const pull = await this.pull(scopeInput);
     return { push, pull };
   }
 
-  // ---- Pull --------------------------------------------------------------------------------
+  // ---- Pull & Snapshot Resync --------------------------------------------------------------
 
   /**
    * Pages through the scope until `hasMore` is false or `maxPagesPerSync` is reached. Each page
@@ -386,6 +683,58 @@ export class DeviceSyncEngine {
    */
   public pull(scopeInput: SyncScopeInput): Promise<PullOutcome> {
     return this.pullQueue.run(() => this.pullPages(unwrap(parseSyncScope(scopeInput))));
+  }
+
+  /**
+   * Fetches a full scoped snapshot via `transport.pullSnapshot` and replaces this scope's confirmed
+   * replica + pullCursor atomically while preserving active unconfirmed `pendingWrites`, all outbox
+   * entries, `lastLocalSequence`, and every other scope.
+   */
+  public resyncFromSnapshot(scopeInput: SyncScopeInput): Promise<SnapshotResyncOutcome> {
+    return this.pullQueue.run(async () => {
+      const scope = unwrap(parseSyncScope(scopeInput));
+      const status = await this.read((state) => state.scopes.find((item) => sameScope(item, scope))?.status ?? "active");
+      if (status === "revoked") throw new SyncEngineError("SCOPE_REVOKED");
+      if (this.transport.pullSnapshot === undefined) throw new SyncEngineError("RESYNC_NOT_SUPPORTED");
+
+      let raw: unknown;
+      try {
+        raw = await this.transport.pullSnapshot(Object.freeze({
+          protocolVersion: SYNC_PROTOCOL_VERSION,
+          scope,
+        }));
+      } catch (error) {
+        const failure = safeCode(error);
+        if (REVOCATION_CODES.includes(failure.code)) {
+          await this.mutate((state) => ({ state: revokeScope(state, scope, failure.code, this.clock.nowMs()), result: undefined }));
+          return Object.freeze({
+            status: "revoked",
+            applied: 0,
+            preservedPending: 0,
+            removedStale: 0,
+            cursor: null,
+            code: failure.code,
+            retryable: false,
+          });
+        }
+        return Object.freeze({
+          status: "failed",
+          applied: 0,
+          preservedPending: 0,
+          removedStale: 0,
+          cursor: null,
+          code: failure.code,
+          retryable: failure.retryable,
+        });
+      }
+
+      return this.applySnapshotResyncInternal(scope, raw);
+    });
+  }
+
+  /** Applies an externally fetched full-snapshot payload atomically to the given scope. */
+  public applySnapshotResync(scopeInput: SyncScopeInput, rawSnapshot: unknown): Promise<SnapshotResyncOutcome> {
+    return this.pullQueue.run(() => this.applySnapshotResyncInternal(unwrap(parseSyncScope(scopeInput)), rawSnapshot));
   }
 
   // ---- Internals ---------------------------------------------------------------------------
@@ -398,8 +747,76 @@ export class DeviceSyncEngine {
     } catch {
       throw new SyncEngineError("STORAGE_LOAD_FAILED");
     }
-    this.state = raw === null || raw === undefined ? createEmptyState(this.deviceId) : unwrap(parseDurableState(raw, this.deviceId));
+    if (raw === null || raw === undefined) {
+      this.state = createEmptyState(this.deviceId);
+      return this.state;
+    }
+
+    if (this.schemaMigrations === undefined) {
+      this.state = unwrap(parseDurableState(raw, this.deviceId));
+      return this.state;
+    }
+
+    const hydrated = unwrap(parseDurableState(raw, this.deviceId, { allowLegacySchemaVersion: true }));
+    const { state: migrated, summary, changed } = this.migrateHydratedState(hydrated, this.schemaMigrations);
+    this.hydrationMigrationSummary = summary;
+    if (changed) {
+      const frozen = deepFreeze(migrated);
+      try {
+        await this.storage.persist(frozen);
+      } catch {
+        throw new SyncEngineError("STORAGE_COMMIT_FAILED");
+      }
+      this.state = frozen;
+      return this.state;
+    }
+    this.state = hydrated;
     return this.state;
+  }
+
+  private migrateHydratedState(
+    state: DurableSyncState,
+    registry: SchemaMigrationRegistry,
+  ): { readonly state: DurableSyncState; readonly summary: HydrationMigrationSummary; readonly changed: boolean } {
+    const nowMs = this.clock.nowMs();
+    let migratedCount = 0;
+    let quarantinedCount = 0;
+    let changed = false;
+
+    const outbox = state.outbox.map((entry) => {
+      if (entry.schemaVersion === registry.targetVersion) return entry;
+      // OFFLINE_SYNC_CONTRACT §9: terminal events are immutable even after a schema change.
+      if (isTerminalState(entry.localState)) return entry;
+
+      const result = migrateEnvelopeSchema(toEnvelope(entry), registry);
+      if (result.ok) {
+        migratedCount += 1;
+        changed = true;
+        return Object.freeze({
+          ...entry,
+          schemaVersion: result.envelope.schemaVersion,
+          payload: result.envelope.payload,
+          updatedAt: nowMs,
+        });
+      }
+
+      quarantinedCount += 1;
+      changed = true;
+      if (entry.localState === "sending") {
+        const released = transitionOutboxState(entry, { type: "lease_expired", nowMs });
+        return transitionOutboxState(released, { type: "invalidate", errorCode: result.code, nowMs });
+      }
+      if (entry.localState === "conflict") {
+        return transitionOutboxState(entry, { type: "escalate", errorCode: result.code, nowMs });
+      }
+      if (entry.localState === "pending" || entry.localState === "retry_wait") {
+        return transitionOutboxState(entry, { type: "invalidate", errorCode: result.code, nowMs });
+      }
+      return entry;
+    });
+
+    const summary = Object.freeze({ migratedCount, quarantinedCount });
+    return { state: changed ? { ...state, outbox } : state, summary, changed };
   }
 
   private mutate<T>(change: (state: DurableSyncState) => { readonly state: DurableSyncState; readonly result: T }): Promise<T> {
@@ -427,6 +844,44 @@ export class DeviceSyncEngine {
     const id = this.ids.uuid();
     if (!isSyncId(id) || taken.has(id)) throw new SyncEngineError("ID_GENERATION_INVALID");
     return id;
+  }
+
+  private evaluateCapabilityForInput(
+    state: DurableSyncState,
+    scope: BranchScope,
+    input: EnqueueInput,
+    clientType: SyncClientTypeV1,
+  ): CapabilityDecision {
+    const existing = findReplica(state, scope, input.entityType, input.entityId);
+    const derivedOrigin = existing === undefined
+      ? true
+      : state.outbox.some(
+        (entry) => sameScope(entry, scope)
+          && entry.entityType === input.entityType
+          && entry.entityId === input.entityId
+          && entry.operation === "create",
+      );
+    const derivedBlocked = state.outbox.some(
+      (entry) => sameScope(entry, scope)
+        && entry.entityType === input.entityType
+        && entry.entityId === input.entityId
+        && isBlockingState(entry.localState)
+        && entry.resolvedBy === null,
+    );
+    const preconditions: CapabilityPreconditions = {
+      originatedOnThisDevice: derivedOrigin,
+      entityBlocked: derivedBlocked,
+      ...(input.preconditions ?? {}),
+    };
+    const connectivity = input.connectivity ?? this.getConnectivity();
+    return evaluateEnvelopeCapability({
+      clientType,
+      connectivity,
+      entityType: input.entityType as SyncEntityTypeV1,
+      operation: input.operation as SyncOperationV1,
+      payload: input.payload,
+      preconditions,
+    });
   }
 
   private buildEnqueue(state: DurableSyncState, input: EnqueueInput): { readonly state: DurableSyncState; readonly result: OutboxEntry } {
@@ -466,12 +921,23 @@ export class DeviceSyncEngine {
       if (intentFingerprint(duplicate) !== intentFingerprint(probe)) throw new SyncEngineError("IDEMPOTENCY_KEY_REUSE");
       return { state, result: duplicate };
     }
+
+    const activeClientType = input.clientType ?? this.clientType;
+    if (activeClientType !== undefined) {
+      const decision = this.evaluateCapabilityForInput(state, scope, input, activeClientType);
+      if (!decision.allowed) {
+        throw new SyncEngineError("CAPABILITY_BLOCKED", decision.reasonCode ?? `${probe.entityType}.${probe.operation}`);
+      }
+    }
+
     if (existing?.tombstone === true) throw new SyncEngineError("ENTITY_TOMBSTONED");
     // A create may replace an entity whose optimistic write is stuck behind a conflict/manual review.
     const stuckBy = existing?.pendingEventId === null || existing === undefined
       ? undefined
       : state.outbox.find((item) => item.eventId === existing.pendingEventId);
-    if (existing !== undefined && probe.operation === "create" && (stuckBy === undefined || !isBlockingState(stuckBy.localState))) {
+    const isConflictReplacementCreate = existing !== undefined && probe.operation === "create"
+      && stuckBy !== undefined && isBlockingState(stuckBy.localState);
+    if (existing !== undefined && probe.operation === "create" && !isConflictReplacementCreate) {
       throw new SyncEngineError("ENTITY_EXISTS");
     }
 
@@ -483,21 +949,44 @@ export class DeviceSyncEngine {
     const envelope = unwrap(parseSyncEnvelope({ ...probe, eventId }));
     const entry: OutboxEntry = Object.freeze({
       ...envelope,
-      leaseUntil: null, attemptId: null, nextAttemptAt: null, lastErrorCode: null, blockedBy: null, resolvedBy: null, outcome: null, updatedAt: nowMs,
+      leaseUntil: null,
+      attemptId: null,
+      nextAttemptAt: null,
+      lastErrorCode: null,
+      blockedBy: null,
+      resolvedBy: null,
+      outcome: null,
+      updatedAt: nowMs,
     });
+
+    const newWrite: PendingReplicaWrite = { eventId, operation: probe.operation, snapshot };
+    const existingWrites = existing?.pendingWrites ?? [];
+    const nextPendingWrites: readonly PendingReplicaWrite[] = isConflictReplacementCreate
+      ? [newWrite]
+      : [...existingWrites, newWrite];
+    const nextRevertTo: ReplicaRevert = existingWrites.length > 0 && existing?.revertTo !== null && existing !== undefined
+      ? existing.revertTo
+      : { existed: existing !== undefined, snapshot: existing?.snapshot ?? null, canonicalVersion: existing?.canonicalVersion ?? 0 };
+
     const entity: ReplicaEntity = {
-      restaurantId: scope.restaurantId, branchId: scope.branchId, entityType: probe.entityType, entityId: probe.entityId,
-      canonicalVersion: existing?.canonicalVersion ?? 0, tombstone: false, snapshot, pendingEventId: eventId,
-      // Keep the oldest pre-pending content so a rejection restores the last confirmed state.
-      revertTo: existing?.pendingEventId !== null && existing?.revertTo !== null && existing !== undefined
-        ? existing.revertTo
-        : { existed: existing !== undefined, snapshot: existing?.snapshot ?? null, canonicalVersion: existing?.canonicalVersion ?? 0 },
+      restaurantId: scope.restaurantId,
+      branchId: scope.branchId,
+      entityType: probe.entityType,
+      entityId: probe.entityId,
+      canonicalVersion: existing?.canonicalVersion ?? 0,
+      tombstone: false,
+      snapshot,
+      pendingEventId: eventId,
+      revertTo: nextRevertTo,
+      pendingWrites: nextPendingWrites,
     };
     const registered = state.scopes.some((item) => sameScope(item, scope));
     const next: DurableSyncState = {
       ...state,
       lastLocalSequence: envelope.localSequence,
-      scopes: registered ? state.scopes : [...state.scopes, { restaurantId: scope.restaurantId, branchId: scope.branchId, status: "active", pullCursor: null }],
+      scopes: registered
+        ? state.scopes
+        : [...state.scopes, { restaurantId: scope.restaurantId, branchId: scope.branchId, status: "active", pullCursor: null }],
       outbox: [...state.outbox, entry],
       replica: existing === undefined ? [...state.replica, entity] : state.replica.map((item) => (item === existing ? entity : item)),
     };
@@ -576,8 +1065,9 @@ export class DeviceSyncEngine {
       if (next.localState === "accepted" || next.localState === "duplicate") pullRecommended = true;
       return next;
     });
-    const rejected = new Set(events.filter((event) => event.state === "rejected").map((event) => event.eventId));
-    let next: DurableSyncState = rejected.size === 0 ? { ...state, outbox } : { ...state, outbox, replica: revertRejected(state.replica, scope, rejected) };
+
+    const replica = reconcileReplicaAfterPush(state.replica, scope, events);
+    let next: DurableSyncState = { ...state, outbox, replica };
     if (revokedCode !== null) {
       next = revokeScope(next, scope, revokedCode, nowMs);
     }
@@ -601,11 +1091,16 @@ export class DeviceSyncEngine {
     nowMs: number,
   ): OutboxEntry {
     const retry = (code: string): OutboxEntry => transitionOutboxState(entry, {
-      type: "retry", errorCode: code, nowMs,
+      type: "retry",
+      errorCode: code,
+      nowMs,
       nextAttemptAt: nowMs + this.backoff.nextDelayMs({ retryCount: entry.retryCount + 1, eventId: entry.eventId }),
     });
     const review = (code: string): OutboxEntry => transitionOutboxState(entry, {
-      type: "result", status: "manual_review", nowMs, outcome: { code, canonicalVersion: null, auditId: null },
+      type: "result",
+      status: "manual_review",
+      nowMs,
+      outcome: { code, canonicalVersion: null, auditId: null },
     });
     if (results === null) {
       const code = failure?.code ?? "TRANSPORT_ERROR";
@@ -617,7 +1112,9 @@ export class DeviceSyncEngine {
     const revokedResult = result.code !== null && REVOCATION_CODES.includes(result.code);
     if (result.status === "rejected" && revokedResult && isFinancial(entry)) return review(result.code ?? "AUTH_REVOKED");
     return transitionOutboxState(entry, {
-      type: "result", status: result.status, nowMs,
+      type: "result",
+      status: result.status,
+      nowMs,
       outcome: { code: result.code, canonicalVersion: result.canonicalVersion, auditId: result.auditId },
     });
   }
@@ -653,12 +1150,9 @@ export class DeviceSyncEngine {
         return finish("failed", failure.code, failure.retryable);
       }
 
-      const parsed = parsePullResponse(raw);
-      if (!parsed.ok) throw new SyncEngineError("PULL_RESPONSE_INVALID", parsed.field);
+      const parsed = parsePullResponse(raw, scope);
+      if (!parsed.ok) throw new SyncEngineError(parsed.code, parsed.field);
       const response = parsed.value;
-      if (response.scope.restaurantId !== scope.restaurantId || response.scope.branchId !== scope.branchId) {
-        throw new SyncEngineError("PULL_SCOPE_VIOLATION");
-      }
       if (response.hasMore && (response.nextCursor === null || response.nextCursor === info.cursor)) {
         throw new SyncEngineError("PULL_RESPONSE_INVALID", "cursor did not advance");
       }
@@ -682,14 +1176,20 @@ export class DeviceSyncEngine {
       throw new SyncEngineError("PULL_RESPONSE_INVALID", "scope changed during pull");
     }
     for (const change of changes) {
-      if (change.restaurantId !== scope.restaurantId || change.branchId !== scope.branchId) throw new SyncEngineError("PULL_SCOPE_VIOLATION");
+      if (change.restaurantId !== scope.restaurantId || change.branchId !== scope.branchId) {
+        throw new SyncEngineError("PULL_SCOPE_VIOLATION");
+      }
     }
     const replica: ReplicaEntity[] = [...state.replica];
     const index = new Map<string, number>();
     replica.forEach((entity, position) => {
       if (sameScope(entity, scope)) index.set(`${entity.entityType}|${entity.entityId}`, position);
     });
-    const terminalEvents = new Set(state.outbox.filter((entry) => entry.localState === "accepted" || entry.localState === "duplicate").map((entry) => entry.eventId));
+    const terminalEvents = new Set(
+      state.outbox
+        .filter((entry) => isTerminalState(entry.localState))
+        .map((entry) => entry.eventId),
+    );
     let count = 0;
     for (const change of [...changes].sort((left, right) => left.canonicalVersion - right.canonicalVersion)) {
       const key = `${change.entityType}|${change.entityId}`;
@@ -700,13 +1200,24 @@ export class DeviceSyncEngine {
       } else if (existing !== undefined && change.canonicalVersion <= existing.canonicalVersion) {
         continue; // equal or older version never overwrites
       }
-      const pending = existing?.pendingEventId ?? null;
-      const keepPending = !(change.tombstone || pending === null || terminalEvents.has(pending));
+      const remainingWrites = change.tombstone
+        ? []
+        : (existing?.pendingWrites ?? []).filter((write) => !terminalEvents.has(write.eventId));
+      const hasPending = remainingWrites.length > 0;
+      const latestPending = hasPending ? remainingWrites[remainingWrites.length - 1]! : null;
       const entity: ReplicaEntity = {
-        restaurantId: scope.restaurantId, branchId: scope.branchId, entityType: change.entityType, entityId: change.entityId,
-        canonicalVersion: change.canonicalVersion, tombstone: change.tombstone, snapshot: change.tombstone ? null : change.snapshot,
-        pendingEventId: keepPending ? pending : null,
-        revertTo: keepPending ? (existing?.revertTo ?? null) : null,
+        restaurantId: scope.restaurantId,
+        branchId: scope.branchId,
+        entityType: change.entityType,
+        entityId: change.entityId,
+        canonicalVersion: change.canonicalVersion,
+        tombstone: change.tombstone,
+        snapshot: change.tombstone ? null : (hasPending ? latestPending!.snapshot : change.snapshot),
+        pendingEventId: latestPending?.eventId ?? null,
+        revertTo: hasPending
+          ? { existed: true, snapshot: change.snapshot, canonicalVersion: change.canonicalVersion }
+          : null,
+        pendingWrites: remainingWrites,
       };
       if (position === undefined) {
         index.set(key, replica.length);
@@ -719,6 +1230,100 @@ export class DeviceSyncEngine {
     const cursor = nextCursor ?? requestedCursor;
     const registered = replaceScope({ ...state, replica }, scope, { pullCursor: cursor });
     return { state: registered, result: count };
+  }
+
+  private async applySnapshotResyncInternal(scope: BranchScope, rawSnapshot: unknown): Promise<SnapshotResyncOutcome> {
+    const parsed = parseSnapshotResyncResponse(rawSnapshot, scope);
+    if (!parsed.ok) throw new SyncEngineError(parsed.code, parsed.field);
+    const snapshotResponse = parsed.value;
+
+    return this.mutate((state) => {
+      const current = state.scopes.find((item) => sameScope(item, scope));
+      if (current?.status === "revoked") throw new SyncEngineError("SCOPE_REVOKED");
+
+      const otherScopeEntities = state.replica.filter((entity) => !sameScope(entity, scope));
+      const existingScoped = new Map<string, ReplicaEntity>();
+      for (const entity of state.replica) {
+        if (sameScope(entity, scope)) {
+          existingScoped.set(`${entity.entityType}|${entity.entityId}`, entity);
+        }
+      }
+      const terminalEvents = new Set(
+        state.outbox
+          .filter((entry) => isTerminalState(entry.localState))
+          .map((entry) => entry.eventId),
+      );
+
+      const rebuiltScoped: ReplicaEntity[] = [];
+      const seenKeys = new Set<string>();
+      let preservedPending = 0;
+
+      for (const serverEntity of snapshotResponse.entities as readonly SyncSnapshotEntity[]) {
+        const key = `${serverEntity.entityType}|${serverEntity.entityId}`;
+        seenKeys.add(key);
+        const prior = existingScoped.get(key);
+        const activePending = serverEntity.tombstone
+          ? []
+          : (prior?.pendingWrites ?? []).filter((write) => !terminalEvents.has(write.eventId));
+        if (activePending.length > 0) preservedPending += 1;
+        const latest = activePending.length > 0 ? activePending[activePending.length - 1]! : null;
+        rebuiltScoped.push({
+          restaurantId: scope.restaurantId,
+          branchId: scope.branchId,
+          entityType: serverEntity.entityType,
+          entityId: serverEntity.entityId,
+          canonicalVersion: serverEntity.canonicalVersion,
+          tombstone: serverEntity.tombstone,
+          snapshot: serverEntity.tombstone ? null : (latest !== null ? latest.snapshot : serverEntity.snapshot),
+          pendingEventId: latest?.eventId ?? null,
+          revertTo: latest !== null
+            ? { existed: true, snapshot: serverEntity.snapshot, canonicalVersion: serverEntity.canonicalVersion }
+            : null,
+          pendingWrites: activePending,
+        });
+      }
+
+      // Preserve local-only unconfirmed creates/writes not yet present in the server snapshot; drop stale confirmed entities.
+      let removedStale = 0;
+      for (const [key, prior] of existingScoped.entries()) {
+        if (seenKeys.has(key)) continue;
+        const activePending = prior.pendingWrites.filter((write) => !terminalEvents.has(write.eventId));
+        if (activePending.length > 0) {
+          preservedPending += 1;
+          const latest = activePending[activePending.length - 1]!;
+          rebuiltScoped.push({
+            ...prior,
+            canonicalVersion: 0,
+            tombstone: false,
+            snapshot: latest.snapshot,
+            pendingEventId: latest.eventId,
+            revertTo: { existed: false, snapshot: null, canonicalVersion: 0 },
+            pendingWrites: activePending,
+          });
+        } else {
+          removedStale += 1;
+        }
+      }
+
+      const nextState = replaceScope(
+        { ...state, replica: [...otherScopeEntities, ...rebuiltScoped] },
+        scope,
+        { status: "active", pullCursor: snapshotResponse.snapshotCursor },
+      );
+
+      return {
+        state: nextState,
+        result: Object.freeze({
+          status: "complete" as const,
+          applied: snapshotResponse.entities.length,
+          preservedPending,
+          removedStale,
+          cursor: snapshotResponse.snapshotCursor,
+          code: null,
+          retryable: false,
+        }),
+      };
+    });
   }
 }
 

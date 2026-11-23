@@ -1,59 +1,151 @@
-import { parseBranchScope, type BranchScope } from "@super-restaurant/shared-types";
+import {
+  MANUAL_REVIEW_CASE_SCHEMA_VERSION,
+  MANUAL_REVIEW_CASE_STATUSES,
+  SUPPORTED_SYNC_SCHEMA_VERSIONS,
+  SYNC_CATALOG_VERSION,
+  SYNC_CLIENT_TYPES,
+  SYNC_CONNECTIVITY_STATES,
+  SYNC_CURSOR_RESYNC_CODES,
+  SYNC_ENTITY_CATALOG_V1,
+  SYNC_ENTITY_TYPES,
+  SYNC_ENVELOPE_KEYS,
+  SYNC_FINANCIAL_ENTITY_TYPES,
+  SYNC_OPERATIONS,
+  SYNC_OUTBOX_STATES,
+  SYNC_PROTOCOL_VERSION,
+  SYNC_REVOCATION_CODES,
+  SYNC_SCHEMA_VERSION,
+  SYNC_SERVER_RESULT_STATUSES,
+  getSyncEntityCatalogEntryV1,
+  isRfc3339UtcTimestamp,
+  isStableSyncCode,
+  isSyncEntityOperationAllowedV1,
+  isSyncFinancialEntityTypeV1,
+  isSyncId,
+  isSyncSchemaVersionFormat,
+  parseManualReviewCaseV1,
+  parseResolveManualReviewCaseCommandV1,
+  parseSyncEnvelopeV1,
+  parseSyncPullRequestV1,
+  parseSyncPullResponseV1,
+  parseSyncPushRequestV1,
+  parseSyncPushResponseV1,
+  parseSyncScopeV1,
+  parseSyncSnapshotResyncRequestV1,
+  parseSyncSnapshotResyncResponseV1,
+  type BranchScope,
+  type ManualReviewCaseStatusV1,
+  type ManualReviewCaseV1,
+  type ResolveManualReviewCaseCommandV1,
+  type SyncClientTypeV1,
+  type SyncConnectivityStateV1,
+  type SyncEntityCatalogEntryV1,
+  type SyncEntityTypeV1,
+  type SyncEnvelopeV1,
+  type SyncEventResultV1,
+  type SyncFinancialEntityTypeV1,
+  type SyncOperationV1,
+  type SyncOutboxStateV1,
+  type SyncPullChangeV1,
+  type SyncPullRequestV1,
+  type SyncPullResponseV1,
+  type SyncPushRequestV1,
+  type SyncPushResponseV1,
+  type SyncServerResultStatusV1,
+  type SyncSnapshotEntityV1,
+  type SyncSnapshotResyncRequestV1,
+  type SyncSnapshotResyncResponseV1,
+} from "@super-restaurant/shared-types";
 import { fail, ok, type ParseResult } from "./errors.js";
 import { deepFreeze } from "./freeze.js";
-import { asPlainRecord, hasExactKeys, isSafeNonNegativeInteger, type JsonObject } from "./json.js";
+import { asPlainRecord, hasExactKeys, isSafeNonNegativeInteger } from "./json.js";
 import { checkPayload, type PayloadMode } from "./payload-guard.js";
 
-export const SYNC_PROTOCOL_VERSION = 1;
-export const SYNC_SCHEMA_VERSION = "1";
-export const SUPPORTED_SCHEMA_VERSIONS: readonly string[] = [SYNC_SCHEMA_VERSION];
+export {
+  MANUAL_REVIEW_CASE_SCHEMA_VERSION,
+  MANUAL_REVIEW_CASE_STATUSES,
+  SUPPORTED_SYNC_SCHEMA_VERSIONS,
+  SYNC_CATALOG_VERSION,
+  SYNC_CLIENT_TYPES,
+  SYNC_CONNECTIVITY_STATES,
+  SYNC_CURSOR_RESYNC_CODES,
+  SYNC_ENTITY_CATALOG_V1,
+  SYNC_ENTITY_TYPES,
+  SYNC_ENVELOPE_KEYS,
+  SYNC_FINANCIAL_ENTITY_TYPES,
+  SYNC_OPERATIONS,
+  SYNC_OUTBOX_STATES,
+  SYNC_PROTOCOL_VERSION,
+  SYNC_REVOCATION_CODES,
+  SYNC_SCHEMA_VERSION,
+  SYNC_SERVER_RESULT_STATUSES,
+  getSyncEntityCatalogEntryV1,
+  isSyncEntityOperationAllowedV1,
+  isSyncFinancialEntityTypeV1,
+  isSyncId,
+  isSyncSchemaVersionFormat,
+  parseManualReviewCaseV1,
+  parseResolveManualReviewCaseCommandV1,
+  parseSyncEnvelopeV1,
+  parseSyncPullRequestV1,
+  parseSyncPullResponseV1,
+  parseSyncPushRequestV1,
+  parseSyncPushResponseV1,
+  parseSyncScopeV1,
+  parseSyncSnapshotResyncRequestV1,
+  parseSyncSnapshotResyncResponseV1,
+};
 
-export const OUTBOX_STATES = [
-  "pending",
-  "sending",
-  "retry_wait",
-  "accepted",
-  "duplicate",
-  "rejected",
-  "conflict",
-  "manual_review",
-] as const;
-export type OutboxState = (typeof OUTBOX_STATES)[number];
+export type {
+  ManualReviewCaseStatusV1,
+  ManualReviewCaseV1,
+  ResolveManualReviewCaseCommandV1,
+  SyncClientTypeV1,
+  SyncConnectivityStateV1,
+  SyncEntityCatalogEntryV1,
+  SyncEntityTypeV1,
+  SyncEnvelopeV1,
+  SyncEventResultV1,
+  SyncFinancialEntityTypeV1,
+  SyncOperationV1,
+  SyncOutboxStateV1,
+  SyncPullChangeV1,
+  SyncPullRequestV1,
+  SyncPullResponseV1,
+  SyncPushRequestV1,
+  SyncPushResponseV1,
+  SyncServerResultStatusV1,
+  SyncSnapshotEntityV1,
+  SyncSnapshotResyncRequestV1,
+  SyncSnapshotResyncResponseV1,
+};
 
-export const SERVER_RESULT_STATUSES = ["accepted", "duplicate", "rejected", "conflict", "manual_review"] as const;
-export type ServerResultStatus = (typeof SERVER_RESULT_STATUSES)[number];
+export const SUPPORTED_SCHEMA_VERSIONS: readonly string[] = SUPPORTED_SYNC_SCHEMA_VERSIONS;
+export const OUTBOX_STATES = SYNC_OUTBOX_STATES;
+export type OutboxState = SyncOutboxStateV1;
+export const SERVER_RESULT_STATUSES = SYNC_SERVER_RESULT_STATUSES;
+export type ServerResultStatus = SyncServerResultStatusV1;
+export type SyncOperation = SyncOperationV1;
+export const FINANCIAL_ENTITY_TYPES: readonly string[] = SYNC_FINANCIAL_ENTITY_TYPES;
+export const REVOCATION_CODES: readonly string[] = SYNC_REVOCATION_CODES;
+export const CURSOR_RESYNC_CODES: readonly string[] = SYNC_CURSOR_RESYNC_CODES;
+export const ENVELOPE_KEYS = SYNC_ENVELOPE_KEYS;
 
-export const SYNC_OPERATIONS = ["create", "update", "transition", "delete", "compensate"] as const;
-export type SyncOperation = (typeof SYNC_OPERATIONS)[number];
+export type SyncEnvelope = SyncEnvelopeV1;
+export type SyncPushRequest = SyncPushRequestV1;
+export type SyncEventResult = SyncEventResultV1;
+export type SyncPushResponse = SyncPushResponseV1;
+export type SyncPullRequest = SyncPullRequestV1;
+export type SyncPullChange = SyncPullChangeV1;
+export type SyncPullResponse = SyncPullResponseV1;
+export type SyncSnapshotResyncRequest = SyncSnapshotResyncRequestV1;
+export type SyncSnapshotEntity = SyncSnapshotEntityV1;
+export type SyncSnapshotResyncResponse = SyncSnapshotResyncResponseV1;
 
-export const FINANCIAL_ENTITY_TYPES: readonly string[] = ["Payment", "CashMovement"];
-export const REVOCATION_CODES: readonly string[] = ["AUTH_REVOKED", "DEVICE_REVOKED"];
-export const CURSOR_RESYNC_CODES: readonly string[] = ["CURSOR_INVALID", "CURSOR_EXPIRED", "CURSOR_SCOPE_MISMATCH"];
+export const isStableCode = isStableSyncCode;
+export const isRfc3339Utc = isRfc3339UtcTimestamp;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-const ULID = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/iu;
-const RFC3339_UTC = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/u;
-const ENTITY_TYPE = /^[A-Z][A-Za-z0-9]{0,63}$/u;
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,128}$/u;
-const STABLE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/u;
-
-export function isSyncId(value: unknown): value is string {
-  return typeof value === "string" && (UUID.test(value) || ULID.test(value));
-}
-
-export function isStableCode(value: unknown): value is string {
-  return typeof value === "string" && STABLE_CODE.test(value);
-}
-
-export function isRfc3339Utc(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const match = RFC3339_UTC.exec(value);
-  if (match === null) return false;
-  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number) as [number, number, number, number, number, number];
-  if (hour > 23 || minute > 59 || second > 59) return false;
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-}
 
 export interface SyncScopeInput {
   readonly restaurantId: string;
@@ -61,10 +153,8 @@ export interface SyncScopeInput {
 }
 
 export function parseSyncScope(value: unknown): ParseResult<BranchScope> {
-  const scope = parseBranchScope(value);
-  if (scope === undefined || !isSyncId(scope.restaurantId) || !isSyncId(scope.branchId)) {
-    return fail("SCOPE_INVALID", "scope");
-  }
+  const scope = parseSyncScopeV1(value);
+  if (scope === undefined) return fail("SCOPE_INVALID", "scope");
   return ok(scope);
 }
 
@@ -72,34 +162,19 @@ export function scopeKey(scope: SyncScopeInput): string {
   return `${scope.restaurantId}/${scope.branchId}`;
 }
 
-/** The 17-field envelope of OFFLINE_SYNC_CONTRACT section 3. */
-export interface SyncEnvelope {
-  readonly eventId: string;
-  readonly idempotencyKey: string;
-  readonly deviceId: string;
-  readonly actorId: string;
-  readonly restaurantId: string;
-  readonly branchId: string;
-  readonly entityType: string;
-  readonly entityId: string;
-  readonly operation: SyncOperation;
-  readonly schemaVersion: string;
-  readonly localSequence: number;
-  readonly baseVersion: number | null;
-  readonly occurredAt: string;
-  readonly receivedAt: string | null;
-  readonly payload: JsonObject;
-  readonly retryCount: number;
-  readonly localState: OutboxState;
+export interface ParseEnvelopeOptions {
+  readonly mode?: PayloadMode;
+  /** Only enabled during durable hydration so schema-migration can upgrade or quarantine legacy entries. */
+  readonly allowLegacySchemaVersion?: boolean;
 }
 
-export const ENVELOPE_KEYS = [
-  "eventId", "idempotencyKey", "deviceId", "actorId", "restaurantId", "branchId", "entityType", "entityId",
-  "operation", "schemaVersion", "localSequence", "baseVersion", "occurredAt", "receivedAt", "payload",
-  "retryCount", "localState",
-] as const;
+export function parseSyncEnvelope(
+  value: unknown,
+  modeOrOptions: PayloadMode | ParseEnvelopeOptions = "strict",
+): ParseResult<SyncEnvelopeV1> {
+  const mode: PayloadMode = typeof modeOrOptions === "string" ? modeOrOptions : (modeOrOptions.mode ?? "strict");
+  const allowLegacy = typeof modeOrOptions === "string" ? false : (modeOrOptions.allowLegacySchemaVersion === true);
 
-export function parseSyncEnvelope(value: unknown, mode: PayloadMode = "strict"): ParseResult<SyncEnvelope> {
   const record = asPlainRecord(value);
   if (record === undefined) return fail("ENVELOPE_INVALID", "envelope");
   const badKey = hasExactKeys(record, ENVELOPE_KEYS);
@@ -111,14 +186,24 @@ export function parseSyncEnvelope(value: unknown, mode: PayloadMode = "strict"):
     if (!isSyncId(record[field])) return fail("ENVELOPE_INVALID", field);
   }
   const idempotencyKey = record["idempotencyKey"];
-  if (typeof idempotencyKey !== "string" || !IDEMPOTENCY_KEY.test(idempotencyKey)) return fail("ENVELOPE_INVALID", "idempotencyKey");
+  if (typeof idempotencyKey !== "string" || !IDEMPOTENCY_KEY.test(idempotencyKey)) {
+    return fail("ENVELOPE_INVALID", "idempotencyKey");
+  }
   const entityType = record["entityType"];
-  if (typeof entityType !== "string" || !ENTITY_TYPE.test(entityType)) return fail("ENVELOPE_INVALID", "entityType");
+  if (typeof entityType !== "string" || getSyncEntityCatalogEntryV1(entityType) === undefined) {
+    return fail("ENVELOPE_INVALID", "entityType");
+  }
   const operation = record["operation"];
-  if (typeof operation !== "string" || !(SYNC_OPERATIONS as readonly string[]).includes(operation)) return fail("ENVELOPE_INVALID", "operation");
+  if (typeof operation !== "string" || !isSyncEntityOperationAllowedV1(entityType, operation)) {
+    return fail("ENVELOPE_INVALID", "operation");
+  }
   const schemaVersion = record["schemaVersion"];
   if (typeof schemaVersion !== "string") return fail("ENVELOPE_INVALID", "schemaVersion");
-  if (!SUPPORTED_SCHEMA_VERSIONS.includes(schemaVersion)) return fail("SCHEMA_UNSUPPORTED", "schemaVersion");
+  if (!SUPPORTED_SYNC_SCHEMA_VERSIONS.includes(schemaVersion)) {
+    if (!allowLegacy || !isSyncSchemaVersionFormat(schemaVersion)) {
+      return fail("SCHEMA_UNSUPPORTED", "schemaVersion");
+    }
+  }
   const localSequence = record["localSequence"];
   if (!isSafeNonNegativeInteger(localSequence)) return fail("ENVELOPE_INVALID", "localSequence");
   const baseVersion = record["baseVersion"];
@@ -131,9 +216,20 @@ export function parseSyncEnvelope(value: unknown, mode: PayloadMode = "strict"):
   const retryCount = record["retryCount"];
   if (!isSafeNonNegativeInteger(retryCount)) return fail("ENVELOPE_INVALID", "retryCount");
   const localState = record["localState"];
-  if (typeof localState !== "string" || !(OUTBOX_STATES as readonly string[]).includes(localState)) return fail("ENVELOPE_INVALID", "localState");
+  if (typeof localState !== "string" || !(OUTBOX_STATES as readonly string[]).includes(localState)) {
+    return fail("ENVELOPE_INVALID", "localState");
+  }
   const payload = checkPayload(record["payload"], mode);
   if (!payload.ok) return payload;
+
+  if (!allowLegacy || SUPPORTED_SYNC_SCHEMA_VERSIONS.includes(schemaVersion)) {
+    const canonical = parseSyncEnvelopeV1({
+      ...record,
+      payload: payload.value,
+    });
+    if (canonical === undefined) return fail("ENVELOPE_INVALID", "envelope");
+    return ok(canonical);
+  }
 
   return ok(deepFreeze({
     eventId: record["eventId"] as string,
@@ -142,9 +238,9 @@ export function parseSyncEnvelope(value: unknown, mode: PayloadMode = "strict"):
     actorId: record["actorId"] as string,
     restaurantId: scope.value.restaurantId,
     branchId: scope.value.branchId,
-    entityType,
+    entityType: entityType as SyncEntityTypeV1,
     entityId: record["entityId"] as string,
-    operation: operation as SyncOperation,
+    operation: operation as SyncOperationV1,
     schemaVersion,
     localSequence,
     baseVersion,
@@ -163,7 +259,7 @@ export interface OutboxOutcome {
 }
 
 /** Durable outbox record: the immutable intent plus local delivery metadata (times are epoch ms). */
-export interface OutboxEntry extends SyncEnvelope {
+export interface OutboxEntry extends SyncEnvelopeV1 {
   readonly leaseUntil: number | null;
   readonly attemptId: string | null;
   readonly nextAttemptAt: number | null;
@@ -174,18 +270,37 @@ export interface OutboxEntry extends SyncEnvelope {
   readonly updatedAt: number;
 }
 
-export function toEnvelope(entry: SyncEnvelope): SyncEnvelope {
+export function toEnvelope(entry: SyncEnvelopeV1): SyncEnvelopeV1 {
   return Object.freeze({
-    eventId: entry.eventId, idempotencyKey: entry.idempotencyKey, deviceId: entry.deviceId, actorId: entry.actorId,
-    restaurantId: entry.restaurantId, branchId: entry.branchId, entityType: entry.entityType, entityId: entry.entityId,
-    operation: entry.operation, schemaVersion: entry.schemaVersion, localSequence: entry.localSequence,
-    baseVersion: entry.baseVersion, occurredAt: entry.occurredAt, receivedAt: entry.receivedAt, payload: entry.payload,
-    retryCount: entry.retryCount, localState: entry.localState,
+    eventId: entry.eventId,
+    idempotencyKey: entry.idempotencyKey,
+    deviceId: entry.deviceId,
+    actorId: entry.actorId,
+    restaurantId: entry.restaurantId,
+    branchId: entry.branchId,
+    entityType: entry.entityType,
+    entityId: entry.entityId,
+    operation: entry.operation,
+    schemaVersion: entry.schemaVersion,
+    localSequence: entry.localSequence,
+    baseVersion: entry.baseVersion,
+    occurredAt: entry.occurredAt,
+    receivedAt: entry.receivedAt,
+    payload: entry.payload,
+    retryCount: entry.retryCount,
+    localState: entry.localState,
   });
 }
 
 const ENTRY_META_KEYS = [
-  "leaseUntil", "attemptId", "nextAttemptAt", "lastErrorCode", "blockedBy", "resolvedBy", "outcome", "updatedAt",
+  "leaseUntil",
+  "attemptId",
+  "nextAttemptAt",
+  "lastErrorCode",
+  "blockedBy",
+  "resolvedBy",
+  "outcome",
+  "updatedAt",
 ] as const;
 
 function nullableCode(value: unknown): value is string | null {
@@ -199,7 +314,9 @@ function nullableInt(value: unknown): value is number | null {
 function parseOutcome(value: unknown): ParseResult<OutboxOutcome | null> {
   if (value === null) return ok(null);
   const record = asPlainRecord(value);
-  if (record === undefined || hasExactKeys(record, ["code", "canonicalVersion", "auditId"]) !== undefined) return fail("STATE_CORRUPT", "outcome");
+  if (record === undefined || hasExactKeys(record, ["code", "canonicalVersion", "auditId"]) !== undefined) {
+    return fail("STATE_CORRUPT", "outcome");
+  }
   const { code, canonicalVersion, auditId } = record;
   if (!nullableCode(code) || !nullableInt(canonicalVersion) || !(auditId === null || (typeof auditId === "string" && auditId.length <= 128))) {
     return fail("STATE_CORRUPT", "outcome");
@@ -207,139 +324,128 @@ function parseOutcome(value: unknown): ParseResult<OutboxOutcome | null> {
   return ok(Object.freeze({ code, canonicalVersion, auditId }));
 }
 
-export function parseOutboxEntry(value: unknown): ParseResult<OutboxEntry> {
+export function parseOutboxEntry(
+  value: unknown,
+  options: { readonly allowLegacySchemaVersion?: boolean } = {},
+): ParseResult<OutboxEntry> {
   const record = asPlainRecord(value);
   if (record === undefined) return fail("STATE_CORRUPT", "outbox");
   const badKey = hasExactKeys(record, [...ENVELOPE_KEYS, ...ENTRY_META_KEYS]);
   if (badKey !== undefined) return fail("STATE_CORRUPT", badKey);
   const envelopeSource: Record<string, unknown> = {};
   for (const key of ENVELOPE_KEYS) envelopeSource[key] = record[key];
-  // Hydration trusts what strict enqueue already validated: shape, depth and size only.
-  const envelope = parseSyncEnvelope(envelopeSource, "inbound");
+  // Hydration trusts what strict enqueue already validated for field names, while enforcing no floats, depth and size.
+  const envelope = parseSyncEnvelope(envelopeSource, {
+    mode: "inbound",
+    allowLegacySchemaVersion: options.allowLegacySchemaVersion === true,
+  });
   if (!envelope.ok) return fail("STATE_CORRUPT", envelope.field);
   const outcome = parseOutcome(record["outcome"]);
   if (!outcome.ok) return outcome;
   const { leaseUntil, attemptId, nextAttemptAt, lastErrorCode, blockedBy, resolvedBy, updatedAt } = record;
-  if (!nullableInt(leaseUntil) || !nullableInt(nextAttemptAt) || !isSafeNonNegativeInteger(updatedAt)) return fail("STATE_CORRUPT", "timing");
-  if (!(attemptId === null || isSyncId(attemptId)) || !nullableCode(lastErrorCode)) return fail("STATE_CORRUPT", "attempt");
-  if (!(blockedBy === null || isSyncId(blockedBy)) || !(resolvedBy === null || isSyncId(resolvedBy))) return fail("STATE_CORRUPT", "links");
-  if (envelope.value.localState === "sending" && (leaseUntil === null || attemptId === null)) return fail("STATE_CORRUPT", "lease");
+  if (!nullableInt(leaseUntil) || !nullableInt(nextAttemptAt) || !isSafeNonNegativeInteger(updatedAt)) {
+    return fail("STATE_CORRUPT", "timing");
+  }
+  if (!(attemptId === null || isSyncId(attemptId)) || !nullableCode(lastErrorCode)) {
+    return fail("STATE_CORRUPT", "attempt");
+  }
+  if (!(blockedBy === null || isSyncId(blockedBy)) || !(resolvedBy === null || isSyncId(resolvedBy))) {
+    return fail("STATE_CORRUPT", "links");
+  }
+  if (envelope.value.localState === "sending" && (leaseUntil === null || attemptId === null)) {
+    return fail("STATE_CORRUPT", "lease");
+  }
   return ok(deepFreeze({
-    ...envelope.value, leaseUntil, attemptId, nextAttemptAt, lastErrorCode, blockedBy, resolvedBy, outcome: outcome.value, updatedAt,
+    ...envelope.value,
+    leaseUntil,
+    attemptId,
+    nextAttemptAt,
+    lastErrorCode,
+    blockedBy,
+    resolvedBy,
+    outcome: outcome.value,
+    updatedAt,
   }));
 }
 
-// ---- Wire contract -------------------------------------------------------------------------
+// ---- Wire response parsing (delegated to @super-restaurant/shared-types) -------------------
 
-export interface SyncPushRequest {
-  readonly protocolVersion: number;
-  readonly deviceId: string;
-  readonly scope: BranchScope;
-  readonly events: readonly SyncEnvelope[];
+function sameBranchScope(left: SyncScopeInput, right: SyncScopeInput): boolean {
+  return left.restaurantId === right.restaurantId && left.branchId === right.branchId;
 }
 
-export interface SyncEventResult {
-  readonly eventId: string;
-  readonly idempotencyKey: string;
-  readonly status: ServerResultStatus;
-  readonly code: string | null;
-  readonly canonicalVersion: number | null;
-  readonly auditId: string | null;
-}
-
-export interface SyncPushResponse {
-  readonly results: readonly SyncEventResult[];
-}
-
-export interface SyncPullRequest {
-  readonly protocolVersion: number;
-  readonly scope: BranchScope;
-  /** Opaque, scoped cursor. `null` starts the first scoped load. Never decoded or compared by the client. */
-  readonly cursor: string | null;
-  readonly limit: number;
-}
-
-export interface SyncPullChange {
-  readonly entityType: string;
-  readonly entityId: string;
-  readonly restaurantId: string;
-  readonly branchId: string;
-  readonly canonicalVersion: number;
-  readonly tombstone: boolean;
-  readonly snapshot: JsonObject | null;
-}
-
-export interface SyncPullResponse {
-  readonly scope: BranchScope;
-  readonly changes: readonly SyncPullChange[];
-  readonly nextCursor: string | null;
-  readonly hasMore: boolean;
-}
-
-function parseEventResult(value: unknown): ParseResult<SyncEventResult> {
-  const record = asPlainRecord(value);
-  if (record === undefined) return fail("PUSH_RESPONSE_INVALID", "result");
-  const { eventId, idempotencyKey, status, code, canonicalVersion, auditId } = record;
-  if (!isSyncId(eventId) || typeof idempotencyKey !== "string" || !IDEMPOTENCY_KEY.test(idempotencyKey)) return fail("PUSH_RESPONSE_INVALID", "identity");
-  if (typeof status !== "string" || !(SERVER_RESULT_STATUSES as readonly string[]).includes(status)) return fail("PUSH_RESPONSE_INVALID", "status");
-  const stableCode = code ?? null;
-  const version = canonicalVersion ?? null;
-  if (!nullableCode(stableCode) || !nullableInt(version)) return fail("PUSH_RESPONSE_INVALID", "outcome");
-  if (!(auditId === undefined || auditId === null || (typeof auditId === "string" && auditId.length <= 128))) return fail("PUSH_RESPONSE_INVALID", "auditId");
-  return ok(Object.freeze({
-    eventId, idempotencyKey, status: status as ServerResultStatus,
-    code: stableCode, canonicalVersion: version, auditId: auditId ?? null,
-  }));
-}
-
-export function parsePushResponse(value: unknown): ParseResult<SyncPushResponse> {
-  const record = asPlainRecord(value);
-  const raw = record?.["results"];
-  if (record === undefined || !Array.isArray(raw)) return fail("PUSH_RESPONSE_INVALID", "results");
-  const results: SyncEventResult[] = [];
-  for (const item of raw as readonly unknown[]) {
-    const result = parseEventResult(item);
-    if (!result.ok) return result;
-    results.push(result.value);
+export function parsePushResponse(value: unknown, expectedScope?: SyncScopeInput): ParseResult<SyncPushResponseV1> {
+  const parsed = parseSyncPushResponseV1(value);
+  if (parsed === undefined) return fail("PUSH_RESPONSE_INVALID", "response");
+  if (expectedScope !== undefined && !sameBranchScope(parsed.scope, expectedScope)) {
+    return fail("PUSH_SCOPE_VIOLATION", "scope");
   }
-  return ok(Object.freeze({ results: Object.freeze(results) }));
+  return ok(parsed);
 }
 
-function parseChange(value: unknown): ParseResult<SyncPullChange> {
+/**
+ * Validates a pull response using `@super-restaurant/shared-types`. Distinguishes cross-scope
+ * violations (`PULL_SCOPE_VIOLATION`) from structural errors (`PULL_RESPONSE_INVALID`).
+ */
+export function parsePullResponse(value: unknown, expectedScope?: SyncScopeInput): ParseResult<SyncPullResponseV1> {
   const record = asPlainRecord(value);
-  if (record === undefined) return fail("PULL_RESPONSE_INVALID", "change");
-  const { entityType, entityId, restaurantId, branchId, canonicalVersion, tombstone, snapshot } = record;
-  if (typeof entityType !== "string" || !ENTITY_TYPE.test(entityType) || !isSyncId(entityId)) return fail("PULL_RESPONSE_INVALID", "entity");
-  if (typeof restaurantId !== "string" || typeof branchId !== "string") return fail("PULL_RESPONSE_INVALID", "scope");
-  if (!isSafeNonNegativeInteger(canonicalVersion) || typeof tombstone !== "boolean") return fail("PULL_RESPONSE_INVALID", "version");
-  let parsedSnapshot: JsonObject | null = null;
-  if (snapshot !== null && snapshot !== undefined) {
-    const checked = checkPayload(snapshot, "inbound");
-    if (!checked.ok) return fail("PULL_RESPONSE_INVALID", "snapshot");
-    parsedSnapshot = checked.value;
+  if (record !== undefined && hasExactKeys(record, ["protocolVersion", "scope", "changes", "nextCursor", "hasMore"]) === undefined) {
+    const scope = parseSyncScopeV1(record["scope"]);
+    if (scope !== undefined) {
+      if (expectedScope !== undefined && !sameBranchScope(scope, expectedScope)) {
+        return fail("PULL_SCOPE_VIOLATION", "scope");
+      }
+      const rawChanges = record["changes"];
+      if (Array.isArray(rawChanges)) {
+        for (const item of rawChanges as readonly unknown[]) {
+          const change = asPlainRecord(item);
+          if (change === undefined) continue;
+          const rest = change["restaurantId"];
+          const branch = change["branchId"];
+          if (typeof rest === "string" && typeof branch === "string" && (rest !== scope.restaurantId || branch !== scope.branchId)) {
+            return fail("PULL_SCOPE_VIOLATION", "changes");
+          }
+        }
+      }
+    }
   }
-  return ok(Object.freeze({
-    entityType, entityId, restaurantId, branchId, canonicalVersion, tombstone, snapshot: tombstone ? null : parsedSnapshot,
-  }));
+  const parsed = parseSyncPullResponseV1(value);
+  if (parsed === undefined) return fail("PULL_RESPONSE_INVALID", "response");
+  if (expectedScope !== undefined && !sameBranchScope(parsed.scope, expectedScope)) {
+    return fail("PULL_SCOPE_VIOLATION", "scope");
+  }
+  return ok(parsed);
 }
 
-/** Shape-checks a pull response. Scope equality with the *requested* scope is enforced by the engine. */
-export function parsePullResponse(value: unknown): ParseResult<SyncPullResponse> {
+export function parseSnapshotResyncResponse(
+  value: unknown,
+  expectedScope?: SyncScopeInput,
+): ParseResult<SyncSnapshotResyncResponseV1> {
   const record = asPlainRecord(value);
-  if (record === undefined) return fail("PULL_RESPONSE_INVALID", "response");
-  const scope = parseBranchScope(record["scope"]);
-  const changes = record["changes"];
-  const nextCursor = record["nextCursor"];
-  const hasMore = record["hasMore"];
-  if (scope === undefined) return fail("PULL_RESPONSE_INVALID", "scope");
-  if (!Array.isArray(changes)) return fail("PULL_RESPONSE_INVALID", "changes");
-  if (!(nextCursor === null || (typeof nextCursor === "string" && nextCursor.length > 0 && nextCursor.length <= 2048))) return fail("PULL_RESPONSE_INVALID", "nextCursor");
-  if (typeof hasMore !== "boolean") return fail("PULL_RESPONSE_INVALID", "hasMore");
-  const parsed: SyncPullChange[] = [];
-  for (const item of changes as readonly unknown[]) {
-    const change = parseChange(item);
-    if (!change.ok) return change;
-    parsed.push(change.value);
+  if (record !== undefined && hasExactKeys(record, ["protocolVersion", "scope", "snapshotCursor", "entities", "generatedAt"]) === undefined) {
+    const scope = parseSyncScopeV1(record["scope"]);
+    if (scope !== undefined) {
+      if (expectedScope !== undefined && !sameBranchScope(scope, expectedScope)) {
+        return fail("PULL_SCOPE_VIOLATION", "scope");
+      }
+      const rawEntities = record["entities"];
+      if (Array.isArray(rawEntities)) {
+        for (const item of rawEntities as readonly unknown[]) {
+          const entity = asPlainRecord(item);
+          if (entity === undefined) continue;
+          const rest = entity["restaurantId"];
+          const branch = entity["branchId"];
+          if (typeof rest === "string" && typeof branch === "string" && (rest !== scope.restaurantId || branch !== scope.branchId)) {
+            return fail("PULL_SCOPE_VIOLATION", "entities");
+          }
+        }
+      }
+    }
   }
-  return ok(Object.freeze({ scope, changes: Object.freeze(parsed), nextCursor, hasMore }));
+  const parsed = parseSyncSnapshotResyncResponseV1(value);
+  if (parsed === undefined) return fail("RESYNC_SNAPSHOT_INVALID", "snapshot");
+  if (expectedScope !== undefined && !sameBranchScope(parsed.scope, expectedScope)) {
+    return fail("PULL_SCOPE_VIOLATION", "scope");
+  }
+  return ok(parsed);
 }
