@@ -130,3 +130,43 @@ test("executor preserves ledger deduplication, reuse and sequence results withou
   assert.equal(await executor.execute("token", parsed), null);
   assert.equal(persists, 0);
 });
+
+test("invalid IDs and forbidden or mismatched context are rejected through the ledger", async () => {
+  let context: unknown = { schemaVersion: 1, scope: { restaurantId, branchId }, roles: ["cashier"], timeZone: "America/Hermosillo" };
+  let catalog: unknown = { schemaVersion: 1, scope: { restaurantId, branchId }, catalog: null };
+  let invalidLedger = false;
+  const codes: string[] = [];
+  const database: TransactionalDatabaseClientPort = {
+    query: async () => { throw new Error("unexpected pool query"); },
+    transaction: async (operation) => operation({ query: async (sql, params) => {
+      if (sql.startsWith("SET LOCAL")) return { rows: [] };
+      if (sql.includes("sync_authorized")) return { rows: [{ authorized: true, allowed: true, device: "active" }] };
+      if (sql.includes("read_branch_operational_context")) return { rows: [{ result: context }] };
+      if (sql.includes("get_menu_catalog")) return { rows: [{ state: catalog }] };
+      if (sql.includes("sync_record_event")) {
+        const candidate = JSON.parse(String(params[2])) as { code: string };
+        codes.push(candidate.code);
+        if (invalidLedger) return { rows: [{ result: { status: "rejected" } }] };
+        return { rows: [{ result: { status: "recorded", result: candidate } }] };
+      }
+      throw new Error("unexpected query");
+    } }),
+  };
+  const executor = new SyncMergeExecutor(database, { verifyAccessToken: async () => ({ actorId: event.actorId }) });
+  const valid = parseSyncEnvelopeV1({ ...event, payload: { channel: "counter", currency: "MXN", timeZone: "America/Hermosillo" } });
+  assert.ok(valid);
+  assert.equal((await executor.execute("token", { ...valid, entityId: "01arz3ndektsv4rrffq69g5fav" }))?.code, "INVALID_PAYLOAD");
+  invalidLedger = true;
+  assert.equal((await executor.execute("token", { ...valid, entityId: "01ARZ3NDEKTSV4RRFFQ69G5FAV" }))?.code, "INVALID_PAYLOAD");
+  invalidLedger = false;
+  context = null;
+  assert.equal((await executor.execute("token", valid))?.code, "AUTH_REVOKED");
+  context = { schemaVersion: 1, scope: { restaurantId, branchId }, roles: ["cashier"], timeZone: "UTC" };
+  assert.equal((await executor.execute("token", valid))?.code, "TIMEZONE_MISMATCH");
+  context = { schemaVersion: 1, scope: { restaurantId, branchId }, roles: ["cashier"], timeZone: "America/Hermosillo" };
+  catalog = null;
+  assert.equal((await executor.execute("token", valid))?.code, "AUTH_REVOKED");
+  catalog = { schemaVersion: 1, scope: { restaurantId, branchId }, catalog: null };
+  assert.equal(await executor.execute("token", valid), null);
+  assert.deepEqual(codes, ["INVALID_PAYLOAD", "INVALID_PAYLOAD", "AUTH_REVOKED", "TIMEZONE_MISMATCH", "AUTH_REVOKED"]);
+});

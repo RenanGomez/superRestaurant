@@ -1,3 +1,8 @@
+## m2-api-sync-push-merge-fix2 — 2026-11-23 (BLOCKED parcial, nivel A)
+
+- Desde PR #60 `89d28e31fd6630ec2ad313f7cad1d19e6106d60d`: se registran rechazos por timezone/moneda y contexto prohibido, se conserva el retry para catalogo no publicado, se extrae `stale`, y se cubren rechazos y avance del lote. El test de servicio existente cubre `UNSUPPORTED_ENTITY` y `UNSUPPORTED_OPERATION`.
+- Brecha: el contrato SQL de `sync_record_event` exige alcance UUID autorizado y IDs en minusculas; scope invalido/no autorizado y IDs mayusculos no pueden insertarse en el ledger actual. El ejecutor devuelve rechazo inmediato para scope invalido y `INVALID_PAYLOAD` para rechazo SQL generico de ID, sin afirmar persistencia. Completar requiere definir un mecanismo seguro de auditoria para rechazos sin scope autorizado o cambiar invariantes SQL con pruebas de aislamiento; no se declara terminado.
+- Node 24: typecheck y lint API exit 0; test API exit 0. Verificador PG17 paso con 76 migraciones y limpieza exitosa (primer intento encontro expectativa incorrecta de codigo `ACCEPTED`, corregida; segundo paso). El ultimo ajuste de mapeo de ID se verifico en pruebas simuladas, no se reejecuto PG. CodeGraph no inicializado. Sin push.
 ## m2-api-sync-push-merge-fix — 2026-11-23 (REVIEW local, nivel A)
 
 - PR #60, base `bfe34e44433ecc2c4b98183a95cc7fc5fb2b80da`: entidades y operaciones no implementadas se registran como rechazos estables; permisos y dispositivo se revalidan antes del ledger. Transiciones con versión obsoleta se rechazan. `lock_timeout` local de 2 s; BOM retirado e imports ordenados.

@@ -3,7 +3,7 @@ import { createOrder, mergeOrderSyncEvent, transitionOrderStatus, type MergeOrde
 import { parseBranchScope, type SyncEnvelopeV1, type SyncEventResultV1 } from "@super-restaurant/shared-types";
 
 import { AUTH_PRINCIPAL_VERIFIER, AccessTokenRejectedError, type AuthPrincipalVerifierPort } from "../auth/authentication.js";
-import { DATABASE_CLIENT, type TransactionalDatabaseClientPort } from "../database.js";
+import { DATABASE_CLIENT, type DatabaseClientPort, type TransactionalDatabaseClientPort } from "../database.js";
 import { PostgresBranchOperationalContext } from "../branch-operational-context.js";
 import { PostgresMenuCatalogAdapter } from "../menu-catalog.js";
 import { PostgresOrderPersistenceAdapter } from "../orders.js";
@@ -41,20 +41,19 @@ export class SyncMergeExecutor implements SyncEventExecutor {
       const opening = event.operation === "transition" && event.baseVersion !== null
         && Object.keys(payload).length === 1 && payload.targetStatus === "open";
       if (event.entityType !== "Order" || (!creating && !opening)) {
-        const candidate: SyncEventResultV1 = { eventId: event.eventId, idempotencyKey: event.idempotencyKey,
-          status: "rejected", code: event.entityType === "Order" ? "UNSUPPORTED_OPERATION" : "UNSUPPORTED_ENTITY",
-          canonicalVersion: null, auditId: null };
-        const recorded = await db.query("select app_private.sync_record_event($1::uuid,$2::jsonb,$3::jsonb) as result", [actor, JSON.stringify(event), JSON.stringify(candidate)]);
-        return syncLedgerResult(event, (recorded.rows[0] as { result?: unknown } | undefined)?.result);
+        return rejectEvent(db, actor, event, event.entityType === "Order" ? "UNSUPPORTED_OPERATION" : "UNSUPPORTED_ENTITY");
       }
-      if (!uuid.test(event.entityId) || !uuid.test(event.eventId) || !uuid.test(event.deviceId)) return null;
+      if (!uuid.test(event.entityId) || !uuid.test(event.eventId) || !uuid.test(event.deviceId)) return rejectEvent(db, actor, event, "INVALID_PAYLOAD");
       const scope = parseBranchScope({ restaurantId: event.restaurantId, branchId: event.branchId });
-      if (scope === undefined) return null;
+      if (scope === undefined) return rejectEvent(db, actor, event, "INVALID_PAYLOAD");
       const context = await new PostgresBranchOperationalContext(db).select(actor, scope);
-      if (context === "forbidden" || (creating && context.timeZone !== payload.timeZone)) return null;
+      if (context === "forbidden") return rejectEvent(db, actor, event, "AUTH_REVOKED");
+      if (creating && context.timeZone !== payload.timeZone) return rejectEvent(db, actor, event, "TIMEZONE_MISMATCH");
       if (creating) {
         const catalog = await new PostgresMenuCatalogAdapter(db).read(actor, scope);
-        if (catalog === "forbidden" || catalog.catalog === null || catalog.catalog.currency !== payload.currency) return null;
+        if (catalog === "forbidden") return rejectEvent(db, actor, event, "AUTH_REVOKED");
+        if (catalog.catalog === null) return null;
+        if (catalog.catalog.currency !== payload.currency) return rejectEvent(db, actor, event, "CURRENCY_MISMATCH");
       }
       const orders = new PostgresOrderPersistenceAdapter(db);
       const stored = await orders.read(actor, scope, event.entityId);
@@ -67,10 +66,10 @@ export class SyncMergeExecutor implements SyncEventExecutor {
         ? { ...meta, operation: "create", baseVersion: null, channel: "counter", currency: payload.currency as string, timeZone: payload.timeZone as string }
         : { ...meta, operation: "transition", baseVersion: event.baseVersion as number, targetStatus: "open" } };
       const merged = mergeOrderSyncEvent(input);
+      const stale = opening && stored !== "missing" && event.baseVersion !== stored.version;
       const candidate: SyncEventResultV1 = { eventId: event.eventId, idempotencyKey: event.idempotencyKey,
-        status: opening && stored !== "missing" && event.baseVersion !== stored.version ? "rejected" : merged.status,
-        code: opening && stored !== "missing" && event.baseVersion !== stored.version ? "STALE_BASE_VERSION" : merged.code,
-        canonicalVersion: merged.canonicalVersion, auditId: merged.status === "accepted" && (!opening || stored === "missing" || event.baseVersion === stored.version) ? event.eventId : null };
+        status: stale ? "rejected" : merged.status, code: stale ? "STALE_BASE_VERSION" : merged.code,
+        canonicalVersion: merged.canonicalVersion, auditId: merged.status === "accepted" && !stale ? event.eventId : null };
       const recorded = await db.query("select app_private.sync_record_event($1::uuid,$2::jsonb,$3::jsonb) as result", [actor, JSON.stringify(event), JSON.stringify(candidate)]);
       const reply = (recorded.rows[0] as { result?: unknown } | undefined)?.result;
       const result = syncLedgerResult(event, reply);
@@ -87,6 +86,14 @@ export class SyncMergeExecutor implements SyncEventExecutor {
       return result;
     });
   }
+}
+
+async function rejectEvent(db: DatabaseClientPort, actor: string, event: SyncEnvelopeV1, code: string): Promise<SyncEventResultV1 | null> {
+  const candidate: SyncEventResultV1 = { eventId: event.eventId, idempotencyKey: event.idempotencyKey,
+    status: "rejected", code, canonicalVersion: null, auditId: null };
+  const recorded = await db.query("select app_private.sync_record_event($1::uuid,$2::jsonb,$3::jsonb) as result", [actor, JSON.stringify(event), JSON.stringify(candidate)]);
+  const result = syncLedgerResult(event, (recorded.rows[0] as { result?: unknown } | undefined)?.result);
+  return code === "INVALID_PAYLOAD" && result?.code === "SYNC_REJECTED" ? candidate : result;
 }
 
 function revoked(event: SyncEnvelopeV1, code: "AUTH_REVOKED" | "DEVICE_REVOKED"): SyncEventResultV1 {

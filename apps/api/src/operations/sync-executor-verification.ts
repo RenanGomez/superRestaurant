@@ -4,6 +4,7 @@ import { parseSyncEnvelopeV1 } from "@super-restaurant/shared-types";
 import { PostgresDatabaseClient } from "../database.js";
 import type { TransactionalDatabaseClientPort } from "../database.js";
 import { SyncMergeExecutor } from "../sync/sync-merge-executor.js";
+import { SyncPushService } from "../sync/sync-push.service.js";
 import type { LocalPostgres } from "./local-postgres.js";
 
 export async function verifySyncExecutor(local: LocalPostgres): Promise<void> {
@@ -28,8 +29,6 @@ export async function verifySyncExecutor(local: LocalPostgres): Promise<void> {
       operation: "create", schemaVersion: "1", localSequence: 1, baseVersion: null,
       occurredAt: "2026-11-23T00:00:00.000Z", receivedAt: null, payload: { channel: "counter", currency: "MXN", timeZone: "America/Hermosillo" }, retryCount: 0, localState: "pending" });
     assert.ok(event);
-    assert.equal(await executor.execute("token", { ...event, payload: { ...event.payload, currency: "USD" } }), null);
-    assert.equal(await executor.execute("token", { ...event, payload: { ...event.payload, timeZone: "UTC" } }), null);
     assert.equal((await executor.execute("token", event))?.status, "accepted");
     assert.equal((await executor.execute("token", event))?.status, "duplicate");
     assert.equal((await executor.execute("token", { ...event, payload: { ...event.payload, channel: "table" } }))?.code, "EVENT_ID_REUSE");
@@ -70,6 +69,14 @@ export async function verifySyncExecutor(local: LocalPostgres): Promise<void> {
     assert.equal(await executor.execute("token", outOfOrder), null);
     const reusedSequence = { ...outOfOrder, localSequence: 6 };
     assert.equal((await executor.execute("token", reusedSequence))?.code, "LOCAL_SEQUENCE_REUSE");
+    const otherDevice = randomUUID();
+    await local.admin.query("select app_private.sync_register_device($1,$2,$3,$4)", [actor, restaurant, branch, otherDevice]);
+    const currency = { ...event, eventId: randomUUID(), idempotencyKey: randomUUID(), deviceId: otherDevice, entityId: randomUUID(), localSequence: 1, payload: { ...event.payload, currency: "USD" } };
+    const timezone = { ...currency, eventId: randomUUID(), idempotencyKey: randomUUID(), localSequence: 2, payload: { ...event.payload, timeZone: "UTC" } };
+    const valid = { ...event, eventId: randomUUID(), idempotencyKey: randomUUID(), deviceId: otherDevice, entityId: randomUUID(), localSequence: 3 };
+    const service = new SyncPushService(executor, { omitted: () => { throw new Error("UNEXPECTED_OMISSION"); } });
+    const batch = await service.push("token", { protocolVersion: 1, deviceId: otherDevice, scope: { restaurantId: restaurant, branchId: branch }, events: [currency, timezone, valid] });
+    assert.deepEqual(batch.results.map((result) => [result.status, result.code]), [["rejected", "CURRENCY_MISMATCH"], ["rejected", "TIMEZONE_MISMATCH"], ["accepted", "ACCEPTED"]]);
     const foreign = { ...event, restaurantId: foreignRestaurant as typeof event.restaurantId, branchId: foreignBranch as typeof event.branchId };
     assert.equal((await executor.execute("token", foreign))?.code, "AUTH_REVOKED");
     await local.admin.query("insert into app.membership_role_grants(membership_id,role_code,granted_by) values ($1,'viewer',$2)", [membership, actor]);
