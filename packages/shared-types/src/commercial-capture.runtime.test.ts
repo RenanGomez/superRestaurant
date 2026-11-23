@@ -117,6 +117,11 @@ const autosave = {
   fulfillmentSnapshotRef: null,
 };
 const parsedAutosave = parseAutosaveCaptureDraftCommandV1(autosave);
+const pickupContact = { name: "Ana", phone: "6621002000" };
+expect(parseAutosaveCaptureDraftCommandV1({ ...autosave, customerSnapshotRef: null, pickupContact })?.pickupContact?.name === "Ana", "pickup contact does not require a customer");
+expect(parseAutosaveCaptureDraftCommandV1({ ...autosave, pickupContact: { ...pickupContact, extra: true } }) === undefined, "pickup contact rejects extra keys");
+expect(parseAutosaveCaptureDraftCommandV1({ ...autosave, pickupContact: { name: "Ana" } }) === undefined, "pickup contact rejects missing keys");
+expect(parseAutosaveCaptureDraftCommandV1({ ...autosave, fulfillmentChannel: "delivery", pickupContact }) === undefined, "pickup contact requires pickup");
 expect(parsedAutosave !== undefined && parsedAutosave.customerSnapshotRef === customerSnapshotRef, "autosave parses opaque snapshot refs");
 expect(parseAutosaveCaptureDraftCommandV1({ ...autosave, expectedVersion: 0 }) === undefined, "autosave requires a positive version");
 expect(parseAutosaveCaptureDraftCommandV1({ ...autosave, customer: { name: "PII" } }) === undefined, "autosave rejects embedded PII");

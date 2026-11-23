@@ -54,6 +54,7 @@ export interface CreateCaptureDraftCommandV1 extends CaptureMutationInputV1 {
 }
 
 export interface AutosaveCaptureDraftCommandV1 extends CaptureVersionedMutationInputV1 {
+  readonly pickupContact?: { readonly name: string; readonly phone: string } | null;
   readonly attentionLeaseId: string;
   readonly customerSnapshotRef: string | null;
   readonly fulfillmentChannel: CaptureFulfillmentChannelV1 | null;
@@ -161,6 +162,7 @@ export interface CaptureDraftDetailV1 extends CaptureDraftSummaryV1 {
 
 /** Additive D4 detail; V1 remains the stable journal payload. */
 export interface CaptureDraftDetailV2 extends Omit<CaptureDraftDetailV1, "schemaVersion"> {
+  readonly pickupContact?: { readonly name: string; readonly phone: string } | null;
   readonly deliveryInstructions: string | null;
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION;
 }
@@ -316,29 +318,43 @@ export function parseCreateCaptureDraftCommandV1(value: unknown): CreateCaptureD
 }
 
 export function parseAutosaveCaptureDraftCommandV1(value: unknown): AutosaveCaptureDraftCommandV1 | undefined {
-  const record = exactRecord(value, [
+  const keys = [
     ...VERSIONED_KEYS, "attentionLeaseId", "sourceChannel", "fulfillmentChannel",
     "customerSnapshotRef", "fulfillmentSnapshotRef",
-  ]);
+  ];
+  const record = exactRecord(value, keys) ?? exactRecord(value, [...keys, "pickupContact"]);
   const common = record === undefined ? undefined : parseVersionedMutationInput(record);
   const attentionLeaseId = record === undefined ? undefined : uuid(own(record, "attentionLeaseId"));
   const sourceChannel = record === undefined ? undefined : source(own(record, "sourceChannel"));
   const fulfillmentChannel = record === undefined ? undefined : nullableFulfillment(own(record, "fulfillmentChannel"));
   const customerSnapshotRef = record === undefined ? undefined : nullableUuid(own(record, "customerSnapshotRef"));
   const fulfillmentSnapshotRef = record === undefined ? undefined : nullableUuid(own(record, "fulfillmentSnapshotRef"));
+  const hasContact = record !== undefined && Object.hasOwn(record, "pickupContact");
+  const pickupContact = hasContact ? parsePickupContact(own(record!, "pickupContact")) : undefined;
   if (common === undefined || attentionLeaseId === undefined || sourceChannel === undefined
     || fulfillmentChannel === undefined || customerSnapshotRef === undefined
-    || fulfillmentSnapshotRef === undefined
+    || fulfillmentSnapshotRef === undefined || (hasContact && pickupContact === undefined)
+    || (pickupContact != null && fulfillmentChannel !== "pickup")
     || (fulfillmentSnapshotRef !== null && (customerSnapshotRef === null || fulfillmentChannel !== "delivery"))) return undefined;
   return Object.freeze({
     ...common,
     attentionLeaseId,
+    ...(hasContact ? { pickupContact: pickupContact! } : {}),
     customerSnapshotRef,
     fulfillmentChannel,
     fulfillmentSnapshotRef,
     schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION,
     sourceChannel,
   });
+}
+
+function parsePickupContact(value: unknown): { readonly name: string; readonly phone: string } | null | undefined {
+  if (value === null) return null;
+  const record = exactRecord(value, ["name", "phone"]);
+  if (record === undefined) return undefined;
+  const name = nullableBoundedText(own(record, "name"), 1, 120);
+  const phone = nullableBoundedText(own(record, "phone"), 1, 40);
+  return typeof name === "string" && typeof phone === "string" ? Object.freeze({ name, phone }) : undefined;
 }
 
 export function parseHoldCaptureDraftCommandV1(value: unknown): HoldCaptureDraftCommandV1 | undefined {
@@ -756,10 +772,11 @@ export function parseCaptureDraftDetailV1(value: unknown): CaptureDraftDetailV1 
 }
 
 export function parseCaptureDraftDetailV2(value: unknown): CaptureDraftDetailV2 | undefined {
-  const record = exactRecord(value, [
+  const keys = [
     ...SUMMARY_KEYS, "attentionLeaseId", "attentionLeaseExpiresAt", "customerSnapshotRef", "fulfillmentSnapshotRef", "confirmedOrderId",
     "deliveryInstructions",
-  ]);
+  ];
+  const record = exactRecord(value, keys) ?? exactRecord(value, [...keys, "pickupContact"]);
   if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION) return undefined;
   const detail = parseCaptureDraftDetailV1({
     attentionLeaseExpiresAt: own(record, "attentionLeaseExpiresAt"),
@@ -780,11 +797,14 @@ export function parseCaptureDraftDetailV2(value: unknown): CaptureDraftDetailV2 
     version: own(record, "version"),
   });
   const deliveryInstructions = nullableBoundedText(own(record, "deliveryInstructions"), 1, 500);
-  return detail === undefined || deliveryInstructions === undefined
+  const hasContact = Object.hasOwn(record, "pickupContact");
+  const pickupContact = hasContact ? parsePickupContact(own(record, "pickupContact")) : undefined;
+  return detail === undefined || deliveryInstructions === undefined || (hasContact && pickupContact === undefined)
     ? undefined
     : Object.freeze({
       ...detail,
       deliveryInstructions,
+      ...(hasContact ? { pickupContact: pickupContact! } : {}),
       schemaVersion: COMMERCIAL_CAPTURE_V2_SCHEMA_VERSION,
     });
 }

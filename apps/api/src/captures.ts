@@ -906,9 +906,13 @@ export class CaptureConfirmationService {
     if (detail.captureDraftId !== command.captureDraftId || detail.version !== command.expectedVersion
       || detail.status !== "draft" || detail.attentionStatus !== "claimed"
       || detail.attentionLeaseId !== command.attentionLeaseId || detail.fulfillmentChannel === null
-      || (detail.fulfillmentChannel === "dine_in") !== (command.tableId !== null)
-      || (detail.fulfillmentChannel === "delivery" && (workspace.customerSnapshot === null
-        || workspace.fulfillmentSnapshot === null))) throw new CaptureApplicationError("conflict");
+      || (detail.fulfillmentChannel === "dine_in") !== (command.tableId !== null)) throw new CaptureApplicationError("conflict");
+    if (detail.fulfillmentChannel === "delivery" && workspace.customerSnapshot === null) {
+      throw new CaptureDeliveryQuoteInvalidError("delivery_customer_required");
+    }
+    if (detail.fulfillmentChannel === "delivery" && workspace.fulfillmentSnapshot === null) {
+      throw new CaptureApplicationError("conflict");
+    }
 
     // SQL already refuses (CAS on applied_capture_version) a stale intent at the moment of
     // confirmation; this is the same guard given a clear, typed message before ever calling it.
@@ -1803,8 +1807,8 @@ export class CaptureLineQuoteRejectedError extends Error {
 }
 
 export class CaptureDeliveryQuoteInvalidError extends Error {
-  public readonly reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered";
-  public constructor(reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered") {
+  public readonly reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered" | "delivery_customer_required";
+  public constructor(reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered" | "delivery_customer_required") {
     super("CAPTURE_DELIVERY_QUOTE_INVALID");
     this.name = "CaptureDeliveryQuoteInvalidError";
     this.reason = reason;
@@ -2371,7 +2375,7 @@ function confirmationResult(raw: unknown, command: ConfirmCaptureDraftCommandV2)
   if (reasoned?.status === "conflict") {
     if (reasoned.reason === "payment_intent_stale") throw new CapturePaymentIntentStaleError();
     if (reasoned.reason === "delivery_quote_missing" || reasoned.reason === "delivery_quote_expired"
-      || reasoned.reason === "delivery_quote_not_covered") {
+      || reasoned.reason === "delivery_quote_not_covered" || reasoned.reason === "delivery_customer_required") {
       throw new CaptureDeliveryQuoteInvalidError(reasoned.reason);
     }
     throw new CaptureApplicationError("conflict");
