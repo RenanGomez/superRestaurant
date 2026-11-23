@@ -1,4 +1,50 @@
-import type { KdsTicketV1 } from "@super-restaurant/shared-types";
+import {
+  kitchenReadyMatchesSubscription,
+  type KdsTicketV1,
+  type KitchenReadyNotificationV1,
+  type RealtimeSubscriptionV1,
+} from "@super-restaurant/shared-types";
+
+export interface KitchenReadyAlert {
+  readonly eventId: string;
+  readonly orderId: string;
+  readonly orderItemId: string;
+  readonly stationId: string;
+  readonly summary: string;
+}
+
+const MAX_READY_ALERTS = 5;
+
+export function recordKitchenReadyAlert(
+  alerts: readonly KitchenReadyAlert[],
+  notification: KitchenReadyNotificationV1,
+  subscription: RealtimeSubscriptionV1,
+  tickets: readonly KdsTicketV1[],
+): readonly KitchenReadyAlert[] {
+  if (!kitchenReadyMatchesSubscription(subscription, notification)) return alerts;
+  if (alerts.some((existing) => existing.eventId === notification.eventId)) return alerts;
+  const ticket = tickets.find((candidate) => candidate.orderItemId === notification.orderItemId);
+  const summary = ticket === undefined
+    ? `Platillo listo · Orden ${notification.orderId.slice(0, 8)} (${notification.stationId})`
+    : `Platillo listo: ${ticket.quantity}× ${ticket.productName} (${notification.stationId})`;
+  return Object.freeze([
+    Object.freeze({
+      eventId: notification.eventId,
+      orderId: notification.orderId,
+      orderItemId: notification.orderItemId,
+      stationId: notification.stationId,
+      summary,
+    }),
+    ...alerts,
+  ].slice(0, MAX_READY_ALERTS));
+}
+
+export function dismissKitchenReadyAlert(
+  alerts: readonly KitchenReadyAlert[],
+  eventId: string,
+): readonly KitchenReadyAlert[] {
+  return Object.freeze(alerts.filter((alert) => alert.eventId !== eventId));
+}
 
 export type KdsAction = "preparing" | "ready";
 export const AMBER_AFTER_MINUTES = 10;

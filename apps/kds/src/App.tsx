@@ -3,9 +3,13 @@ import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { io, type Socket } from "socket.io-client";
 import {
   KDS_INITIAL_CURSOR,
+  REALTIME_KITCHEN_READY_EVENT,
+  REALTIME_KITCHEN_READY_SUBSCRIBE_EVENT,
   REALTIME_NAMESPACE,
   REALTIME_NOTIFICATION_EVENT,
   REALTIME_SUBSCRIBE_EVENT,
+  parseKitchenReadyNotificationV1,
+  parseKitchenReadySubscriptionAckV1,
   parseRealtimeNotificationV1,
   parseRealtimeSubscriptionAckV1,
   parseRealtimeSubscriptionV1,
@@ -17,7 +21,21 @@ import {
 
 import type { KdsConfig } from "./config.js";
 import { KdsRequestError, listKdsTickets, listMemberships, recoverKdsEvents, transitionKdsTicket } from "./kds-client.js";
-import { BatchTransitionError, NEW_FOR_SECONDS, ageBucket, groupTicketsByOrder, nextKdsAction, orderTicketsForDisplay, planBatchTransition, runBatchTransition, type KdsAction, type KdsOrderGroup } from "./kds-state.js";
+import {
+  BatchTransitionError,
+  NEW_FOR_SECONDS,
+  ageBucket,
+  dismissKitchenReadyAlert,
+  groupTicketsByOrder,
+  nextKdsAction,
+  orderTicketsForDisplay,
+  planBatchTransition,
+  recordKitchenReadyAlert,
+  runBatchTransition,
+  type KdsAction,
+  type KdsOrderGroup,
+  type KitchenReadyAlert,
+} from "./kds-state.js";
 
 export function App({ config, supabase }: {
   readonly config: KdsConfig;
@@ -120,6 +138,7 @@ function KdsBoard({ config, accessToken, subscription, soundEnabled, onAccessLos
   readonly onAccessLost: () => void;
 }): React.JSX.Element {
   const [tickets, setTickets] = useState<readonly KdsTicketV1[]>([]);
+  const [readyAlerts, setReadyAlerts] = useState<readonly KitchenReadyAlert[]>([]);
   const [connection, setConnection] = useState<"connecting" | "live" | "reconnecting" | "error">("connecting");
   const [message, setMessage] = useState("");
   const [busyItem, setBusyItem] = useState<string | undefined>(undefined);
@@ -130,6 +149,8 @@ function KdsBoard({ config, accessToken, subscription, soundEnabled, onAccessLos
   const refreshChain = useRef<Promise<void>>(Promise.resolve());
   const deviceId = useMemo(readDeviceId, []);
   const seenItems = useRef<Set<string> | undefined>(undefined);
+  const ticketsRef = useRef<readonly KdsTicketV1[]>([]);
+  ticketsRef.current = tickets;
   const soundEnabledRef = useRef(soundEnabled);
   useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
 
@@ -174,6 +195,17 @@ function KdsBoard({ config, accessToken, subscription, soundEnabled, onAccessLos
           setConnection("error"); socket.disconnect(); return;
         }
         setConnection("live"); enqueueRefresh();
+        socket.emit(REALTIME_KITCHEN_READY_SUBSCRIBE_EVENT, subscription, (readyAck: unknown) => {
+          const parsed = parseKitchenReadySubscriptionAckV1(readyAck);
+          if (
+            parsed === undefined
+            || parsed.stationId !== subscription.stationId
+            || parsed.scope.restaurantId !== subscription.scope.restaurantId
+            || parsed.scope.branchId !== subscription.scope.branchId
+          ) {
+            setConnection("error"); socket.disconnect();
+          }
+        });
       });
     };
     socket.on("connect", subscribe);
@@ -181,6 +213,13 @@ function KdsBoard({ config, accessToken, subscription, soundEnabled, onAccessLos
     socket.on(REALTIME_NOTIFICATION_EVENT, (value: unknown) => {
       const notification = parseRealtimeNotificationV1(value);
       if (notification !== undefined && sameSubscription(notification, subscription)) enqueueRefresh();
+    });
+    socket.on(REALTIME_KITCHEN_READY_EVENT, (value: unknown) => {
+      const notification = parseKitchenReadyNotificationV1(value);
+      if (notification === undefined || !sameSubscription(notification, subscription)) return;
+      setReadyAlerts((current) => recordKitchenReadyAlert(current, notification, subscription, ticketsRef.current));
+      if (soundEnabledRef.current) playArrivalSound(880);
+      enqueueRefresh();
     });
     return () => { socket.disconnect(); };
   }, [accessToken, config.apiBaseUrl, enqueueRefresh, subscription]);
@@ -227,6 +266,14 @@ function KdsBoard({ config, accessToken, subscription, soundEnabled, onAccessLos
       <button className="inline" onClick={enqueueRefresh}>Actualizar</button>
     </section>
     {message && <section className="banner" role="status">{message}</section>}
+    {readyAlerts.length > 0 && <section className="banner ready-banner" role="status" aria-live="polite">
+      <ul className="ready-list">
+        {readyAlerts.map((alert) => <li key={alert.eventId}>
+          <span>{alert.summary}</span>
+          <button type="button" className="ghost" onClick={() => setReadyAlerts((current) => dismissKitchenReadyAlert(current, alert.eventId))}>Descartar</button>
+        </li>)}
+      </ul>
+    </section>}
     {truncated && <section className="banner warning" role="alert">Hay más de 500 partidas activas. Filtra la carga operativa antes de continuar.</section>}
     {tickets.length === 0
       ? <section className="empty"><h2>Sin comandas activas</h2><p>La pantalla se actualizará al recibir nuevos platillos.</p></section>
@@ -263,12 +310,12 @@ function readStation(): string {
   try { return window.localStorage.getItem("superRestaurant.kds.station") || "kitchen"; } catch { return "kitchen"; }
 }
 
-function playArrivalSound(): void {
+function playArrivalSound(frequency = 660): void {
   try {
     const context = new AudioContext();
     const oscillator = context.createOscillator();
     const gain = context.createGain();
-    oscillator.frequency.value = 660;
+    oscillator.frequency.value = frequency;
     gain.gain.value = 0.05;
     oscillator.connect(gain).connect(context.destination);
     oscillator.start(); oscillator.stop(context.currentTime + 0.12);

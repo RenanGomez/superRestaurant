@@ -4,6 +4,8 @@ export const REALTIME_SCHEMA_VERSION = 1 as const;
 export const REALTIME_NAMESPACE = "/realtime/v1" as const;
 export const REALTIME_SUBSCRIBE_EVENT = "scope.subscribe.v1" as const;
 export const REALTIME_NOTIFICATION_EVENT = "state.changed.v1" as const;
+export const REALTIME_KITCHEN_READY_SUBSCRIBE_EVENT = "kitchen.ready.subscribe.v1" as const;
+export const REALTIME_KITCHEN_READY_EVENT = "kitchen.ready.v1" as const;
 export const KDS_INITIAL_CURSOR = "v1:0" as KdsCursorV1;
 
 declare const kdsCursorBrand: unique symbol;
@@ -80,6 +82,30 @@ export interface RealtimeNotificationV1 extends RealtimeSubscriptionV1 {
   readonly cursor: KdsCursorV1;
   readonly eventId: string;
   readonly eventType: "kds.changed";
+}
+
+export interface KitchenReadySubscriptionV1 {
+  readonly schemaVersion: typeof REALTIME_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly stationId: string | null;
+}
+
+export interface KitchenReadySubscriptionAckV1 extends KitchenReadySubscriptionV1 {
+  readonly cursor: KdsCursorV1;
+  readonly status: "subscribed";
+}
+
+export interface KitchenReadyNotificationV1 {
+  readonly cursor: KdsCursorV1;
+  readonly eventId: string;
+  readonly eventType: "kitchen.item_ready";
+  readonly occurredAt: string;
+  readonly orderId: string;
+  readonly orderItemId: string;
+  readonly receivedAt: string;
+  readonly schemaVersion: typeof REALTIME_SCHEMA_VERSION;
+  readonly scope: BranchScope;
+  readonly stationId: string;
 }
 
 export function parseKdsCursorV1(value: unknown): KdsCursorV1 | undefined {
@@ -287,6 +313,128 @@ export function parseRealtimeNotificationV1(value: unknown): RealtimeNotificatio
       scope,
       stationId,
     });
+}
+
+export function parseKitchenReadySubscriptionV1(value: unknown): KitchenReadySubscriptionV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "stationId"]);
+  if (record === undefined || ownValue(record, "schemaVersion") !== REALTIME_SCHEMA_VERSION) return undefined;
+  const scope = parseScope(ownValue(record, "scope"));
+  const rawStationId = ownValue(record, "stationId");
+  const stationId = rawStationId === null ? null : parseStationId(rawStationId);
+  return scope === undefined || stationId === undefined
+    ? undefined
+    : Object.freeze({ schemaVersion: REALTIME_SCHEMA_VERSION, scope, stationId });
+}
+
+export function parseKitchenReadySubscriptionAckV1(value: unknown): KitchenReadySubscriptionAckV1 | undefined {
+  const record = exactRecord(value, ["schemaVersion", "scope", "stationId", "cursor", "status"]);
+  if (
+    record === undefined
+    || ownValue(record, "schemaVersion") !== REALTIME_SCHEMA_VERSION
+    || ownValue(record, "status") !== "subscribed"
+  ) return undefined;
+  const scope = parseScope(ownValue(record, "scope"));
+  const rawStationId = ownValue(record, "stationId");
+  const stationId = rawStationId === null ? null : parseStationId(rawStationId);
+  const cursor = parseKdsCursorV1(ownValue(record, "cursor"));
+  return scope === undefined || stationId === undefined || cursor === undefined
+    ? undefined
+    : Object.freeze({ cursor, schemaVersion: REALTIME_SCHEMA_VERSION, scope, stationId, status: "subscribed" });
+}
+
+export function parseKitchenReadyNotificationV1(value: unknown): KitchenReadyNotificationV1 | undefined {
+  const record = exactRecord(value, [
+    "schemaVersion", "scope", "stationId", "cursor", "eventId", "eventType",
+    "orderId", "orderItemId", "occurredAt", "receivedAt",
+  ]);
+  if (
+    record === undefined
+    || ownValue(record, "schemaVersion") !== REALTIME_SCHEMA_VERSION
+    || ownValue(record, "eventType") !== "kitchen.item_ready"
+  ) return undefined;
+  const scope = parseScope(ownValue(record, "scope"));
+  const stationId = parseStationId(ownValue(record, "stationId"));
+  const cursor = parseKdsCursorV1(ownValue(record, "cursor"));
+  const eventId = parseUuid(ownValue(record, "eventId"));
+  const orderId = parseUuid(ownValue(record, "orderId"));
+  const orderItemId = parseUuid(ownValue(record, "orderItemId"));
+  const occurredAt = parseTimestamp(ownValue(record, "occurredAt"));
+  const receivedAt = parseTimestamp(ownValue(record, "receivedAt"));
+  if (
+    scope === undefined || stationId === undefined || cursor === undefined || eventId === undefined
+    || orderId === undefined || orderItemId === undefined || occurredAt === undefined || receivedAt === undefined
+  ) return undefined;
+  return Object.freeze({
+    cursor,
+    eventId,
+    eventType: "kitchen.item_ready",
+    occurredAt,
+    orderId,
+    orderItemId,
+    receivedAt,
+    schemaVersion: REALTIME_SCHEMA_VERSION,
+    scope,
+    stationId,
+  });
+}
+
+export function kitchenReadyMatchesSubscription(
+  subscription: KitchenReadySubscriptionV1,
+  target: { readonly scope: BranchScope; readonly stationId: string },
+): boolean {
+  return sameScope(subscription.scope, target.scope)
+    && (subscription.stationId === null || subscription.stationId === target.stationId);
+}
+
+export type KitchenReadyWireFrameV1 =
+  | { readonly kind: "open" }
+  | { readonly kind: "ping" }
+  | { readonly kind: "connected" }
+  | { readonly kind: "closed" }
+  | { readonly kind: "ack"; readonly ack: KitchenReadySubscriptionAckV1 | undefined }
+  | { readonly kind: "ready"; readonly notification: KitchenReadyNotificationV1 | undefined }
+  | { readonly kind: "ignore" };
+
+export function realtimeWebSocketUrl(apiBaseUrl: string): string {
+  const base = apiBaseUrl.replace(/\/$/u, "").replace(/^http:/u, "ws:").replace(/^https:/u, "wss:");
+  return `${base}/socket.io/?EIO=4&transport=websocket`;
+}
+
+export function encodeRealtimeConnectFrame(accessToken: string): string {
+  return `40${REALTIME_NAMESPACE},${JSON.stringify({ accessToken })}`;
+}
+
+export function encodeKitchenReadySubscribeFrame(subscription: KitchenReadySubscriptionV1): string {
+  return `42${REALTIME_NAMESPACE},1${JSON.stringify([REALTIME_KITCHEN_READY_SUBSCRIBE_EVENT, subscription])}`;
+}
+
+export function decodeKitchenReadyWireFrame(frame: string): KitchenReadyWireFrameV1 {
+  if (frame === "2") return { kind: "ping" };
+  if (frame.startsWith("0")) return { kind: "open" };
+  if (frame.startsWith(`40${REALTIME_NAMESPACE}`)) return { kind: "connected" };
+  if (frame.startsWith(`41${REALTIME_NAMESPACE}`) || frame.startsWith(`44${REALTIME_NAMESPACE}`)) return { kind: "closed" };
+  const ackPrefix = `43${REALTIME_NAMESPACE},1`;
+  if (frame.startsWith(ackPrefix)) {
+    const parsed = parseJsonArray(frame.slice(ackPrefix.length));
+    return { kind: "ack", ack: parsed === undefined ? undefined : parseKitchenReadySubscriptionAckV1(parsed[0]) };
+  }
+  const eventPrefix = `42${REALTIME_NAMESPACE},`;
+  if (frame.startsWith(eventPrefix)) {
+    const parsed = parseJsonArray(frame.slice(eventPrefix.length));
+    if (parsed !== undefined && parsed[0] === REALTIME_KITCHEN_READY_EVENT) {
+      return { kind: "ready", notification: parseKitchenReadyNotificationV1(parsed[1]) };
+    }
+  }
+  return { kind: "ignore" };
+}
+
+function parseJsonArray(raw: string): readonly unknown[] | undefined {
+  try {
+    const value: unknown = JSON.parse(raw);
+    return Array.isArray(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseScope(value: unknown): BranchScope | undefined {

@@ -1,9 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { KdsTicketV1 } from "@super-restaurant/shared-types";
+import {
+  parseKitchenReadyNotificationV1,
+  parseRealtimeSubscriptionV1,
+  type KdsTicketV1,
+} from "@super-restaurant/shared-types";
 
-import { BatchTransitionError, ageBucket, groupTicketsByOrder, nextKdsAction, orderTicketsForDisplay, planBatchTransition, runBatchTransition } from "./kds-state.js";
+import {
+  BatchTransitionError,
+  ageBucket,
+  dismissKitchenReadyAlert,
+  groupTicketsByOrder,
+  nextKdsAction,
+  orderTicketsForDisplay,
+  planBatchTransition,
+  recordKitchenReadyAlert,
+  runBatchTransition,
+} from "./kds-state.js";
 
 const base = {
   schemaVersion: 1,
@@ -93,4 +107,55 @@ test("stops batch on intermediate conflict", async () => {
     return { version: 4 };
   }), (error: unknown) => error instanceof BatchTransitionError && error.completed === 1);
   assert.deepEqual(seen, ["one", "two"]);
+});
+
+test("records kitchen-ready alerts only for the subscribed branch and station and deduplicates by eventId", () => {
+  const subscription = parseRealtimeSubscriptionV1({ schemaVersion: 1, scope: base.scope, stationId: "kitchen" });
+  const notification = parseKitchenReadyNotificationV1({
+    cursor: "v1:7",
+    eventId: "e74df54b-30a7-449b-a23f-c4ca6f93bda4",
+    eventType: "kitchen.item_ready",
+    occurredAt: "2026-09-03T10:05:00.000Z",
+    orderId: base.orderId,
+    orderItemId: base.orderItemId,
+    receivedAt: "2026-09-03T10:05:01.000Z",
+    schemaVersion: 1,
+    scope: base.scope,
+    stationId: "kitchen",
+  });
+  const foreignStation = parseKitchenReadyNotificationV1({
+    cursor: "v1:8",
+    eventId: "a72573ec-6224-4857-bc4a-f3d1d07b6d83",
+    eventType: "kitchen.item_ready",
+    occurredAt: "2026-09-03T10:06:00.000Z",
+    orderId: base.orderId,
+    orderItemId: base.orderItemId,
+    receivedAt: "2026-09-03T10:06:01.000Z",
+    schemaVersion: 1,
+    scope: base.scope,
+    stationId: "bar",
+  });
+  const foreignBranch = parseKitchenReadyNotificationV1({
+    cursor: "v1:9",
+    eventId: "c72573ec-6224-4857-bc4a-f3d1d07b6d83",
+    eventType: "kitchen.item_ready",
+    occurredAt: "2026-09-03T10:07:00.000Z",
+    orderId: base.orderId,
+    orderItemId: base.orderItemId,
+    receivedAt: "2026-09-03T10:07:01.000Z",
+    schemaVersion: 1,
+    scope: { restaurantId: base.scope.restaurantId, branchId: base.scope.restaurantId },
+    stationId: "kitchen",
+  });
+  if (subscription === undefined || notification === undefined || foreignStation === undefined || foreignBranch === undefined) {
+    throw new Error("TEST_FIXTURE_INVALID");
+  }
+  const tickets = [{ ...base, status: "ready" }] as unknown as readonly KdsTicketV1[];
+  const first = recordKitchenReadyAlert([], notification, subscription, tickets);
+  assert.equal(first.length, 1);
+  assert.match(first[0]?.summary ?? "", /1× Taco/u);
+  assert.equal(recordKitchenReadyAlert(first, notification, subscription, tickets), first);
+  assert.equal(recordKitchenReadyAlert(first, foreignStation, subscription, tickets), first);
+  assert.equal(recordKitchenReadyAlert(first, foreignBranch, subscription, tickets), first);
+  assert.deepEqual(dismissKitchenReadyAlert(first, notification.eventId), []);
 });
