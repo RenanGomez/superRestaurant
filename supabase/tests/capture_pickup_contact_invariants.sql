@@ -21,6 +21,10 @@ begin
   command := command || jsonb_build_object('expectedVersion',1,'eventId',gen_random_uuid()::text,
     'idempotencyKey',gen_random_uuid()::text,'attentionLeaseId',created#>>'{record,detail,attentionLeaseId}',
     'customerSnapshotRef',null,'fulfillmentSnapshotRef',null,'pickupContact',jsonb_build_object('name','Ana','phone','6621002000'));
+  result := app_private.autosave_capture_draft(actor,jsonb_set(command,'{pickupContact,extra}','true'::jsonb));
+  if result->>'status' is distinct from 'rejected' then raise exception 'PICKUP_EXTRA_KEY_ACCEPTED: %',result; end if;
+  result := app_private.autosave_capture_draft(actor,command || jsonb_build_object('fulfillmentChannel','delivery'));
+  if result->>'status' is distinct from 'rejected' then raise exception 'DELIVERY_PICKUP_CONTACT_ACCEPTED: %',result; end if;
   saved := app_private.autosave_capture_draft(actor,command);
   if saved->>'status' <> 'applied' then raise exception 'PICKUP_SAVE_FAILED: %',saved; end if;
   if app_private.autosave_capture_draft(actor,command)->>'status' <> 'replayed' then raise exception 'PICKUP_REPLAY_FAILED'; end if;
@@ -29,6 +33,11 @@ begin
   workspace := app_private.read_capture_workspace_v2(actor,jsonb_build_object('schemaVersion',2,'scope',scope,'captureDraftId',capture::text));
   if workspace#>>'{detail,pickupContact,name}' <> 'Ana' or workspace#>>'{detail,pickupContact,phone}' <> '6621002000'
     or workspace->'customerSnapshot' <> 'null'::jsonb then raise exception 'PICKUP_READ_FAILED: %',workspace; end if;
+  result := app_private.autosave_capture_draft(actor,(command - 'pickupContact') || jsonb_build_object(
+    'expectedVersion',2,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'fulfillmentChannel','counter'));
+  if result->>'status' is distinct from 'applied' then raise exception 'PICKUP_CHANNEL_CHANGE_FAILED: %',result; end if;
+  workspace := app_private.read_capture_workspace_v2(actor,jsonb_build_object('schemaVersion',2,'scope',scope,'captureDraftId',capture::text));
+  if workspace#>'{detail,pickupContact}' is distinct from 'null'::jsonb then raise exception 'PICKUP_CONTACT_NOT_CLEARED: %',workspace; end if;
   command := (command - 'attentionLeaseId' - 'customerSnapshotRef' - 'fulfillmentSnapshotRef' - 'pickupContact') ||
     jsonb_build_object('captureDraftId',delivery::text,'expectedVersion',0,'eventId',gen_random_uuid()::text,
       'idempotencyKey',gen_random_uuid()::text,'fulfillmentChannel','delivery');

@@ -578,6 +578,29 @@ test("capture confirmation probes replay and delegates one atomic persistence co
   await assert.rejects(service.confirm(principal, { ...confirmCommand, tableId: validCommand.captureDraftId }), code("conflict"));
 });
 
+test("delivery customer requirement follows version and lease validation", async () => {
+  const command = parseConfirmCaptureDraftCommandV2({ ...mutationCommand, schemaVersion: 2, expectedVersion: 2,
+    attentionLeaseId: validCommand.deviceId, orderId: validCommand.deviceId, shiftId: record.detail.ownerMembershipId,
+    tableId: null, currency: "MXN", timeZone: "America/Hermosillo" });
+  assert.ok(command);
+  const workspaceV4 = { ...workspace, schemaVersion: 4 as const, customerSnapshot: null, fulfillmentSnapshot: null,
+    detail: { ...fulfillmentRecord.detail, schemaVersion: 2 as const, fulfillmentChannel: "delivery" as const,
+      customerSnapshotRef: null, fulfillmentSnapshotRef: null, deliveryInstructions: null },
+    repeatOrderPlan: null, selectionPlan: null };
+  const service = new CaptureConfirmationService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["cashier"], scope: validCommand.scope }),
+  }), { createDraft: async () => ({}), readWorkspaceV4: async () => workspaceV4 }, {
+    probeConfirmation: async () => ({ status: "pending" }),
+    readRepeatOrderPlan: async () => { throw new Error("unexpected"); },
+    readSelectionPlan: async () => { throw new Error("unexpected"); },
+    confirmDraft: async () => { throw new Error("unexpected"); },
+  }, { read: async () => { throw new Error("unexpected"); }, save: async () => { throw new Error("unexpected"); } });
+  await assert.rejects(service.confirm(principal, { ...command, expectedVersion: 1 }), code("conflict"));
+  await assert.rejects(service.confirm(principal, { ...command, attentionLeaseId: validCommand.eventId }), code("conflict"));
+  await assert.rejects(service.confirm(principal, command),
+    (error: unknown) => error instanceof CaptureDeliveryQuoteInvalidError && error.reason === "delivery_customer_required");
+});
+
 test("H10: a conflict with a delivery-quote reason maps to CaptureDeliveryQuoteInvalidError, not a generic conflict", async () => {
   const confirmCommand = parseConfirmCaptureDraftCommandV2({
     ...mutationCommand,

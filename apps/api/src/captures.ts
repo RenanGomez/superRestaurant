@@ -903,15 +903,16 @@ export class CaptureConfirmationService {
     let workspace: CaptureWorkspaceV4;
     try { workspace = decodeCaptureWorkspaceV4(rawWorkspace, command.scope); } catch { throw unavailable(); }
     const detail = workspace.detail;
-    if (detail.fulfillmentChannel === "delivery" && workspace.customerSnapshot === null) {
-      throw new CaptureDeliveryQuoteInvalidError("delivery_customer_required");
-    }
     if (detail.captureDraftId !== command.captureDraftId || detail.version !== command.expectedVersion
       || detail.status !== "draft" || detail.attentionStatus !== "claimed"
       || detail.attentionLeaseId !== command.attentionLeaseId || detail.fulfillmentChannel === null
-      || (detail.fulfillmentChannel === "dine_in") !== (command.tableId !== null)
-      || (detail.fulfillmentChannel === "delivery" && (workspace.customerSnapshot === null
-        || workspace.fulfillmentSnapshot === null))) throw new CaptureApplicationError("conflict");
+      || (detail.fulfillmentChannel === "dine_in") !== (command.tableId !== null)) throw new CaptureApplicationError("conflict");
+    if (detail.fulfillmentChannel === "delivery" && workspace.customerSnapshot === null) {
+      throw new CaptureDeliveryQuoteInvalidError("delivery_customer_required");
+    }
+    if (detail.fulfillmentChannel === "delivery" && workspace.fulfillmentSnapshot === null) {
+      throw new CaptureApplicationError("conflict");
+    }
 
     // SQL already refuses (CAS on applied_capture_version) a stale intent at the moment of
     // confirmation; this is the same guard given a clear, typed message before ever calling it.

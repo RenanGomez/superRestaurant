@@ -2,6 +2,7 @@
 
 ## m1-k0b-pickup-contact — 2026-11-23 (REVIEW)
 
+- Ronda 1 del PR #20: CI ejecuta el invariante al aplicar la migración; se prueban claves extra, canal incompatible y limpieza del contacto. La API valida versión y lease antes de exigir cliente. PostgreSQL 17 desde cero y gates globales verificados localmente; pendiente push del humano.
 - Autosave de Recoger admite contacto sin cliente y el workspace lo recupera; la confirmación de Domicilio sin cliente devuelve `delivery_customer_required`. Migración nueva `20261123000100`; no aplicada a remoto. El contrato conserva la forma anterior y valida claves exactas.
 - PostgreSQL 17 local: todas las migraciones desde cero y `capture_pickup_contact_invariants.sql` verdes; `pnpm lint`, `pnpm typecheck` y `pnpm test` verdes. En una ejecución adicional de invariantes posteriores a todas las migraciones falló `branch_day_summary_invariants.sql`, que CI ejecuta en un punto anterior. El verificador histórico de Capture queda registrado como deuda P2.
 - CodeGraph no inicializado en este worktree; inspección manual dirigida de autosave, lectores y confirmación. Sin subagentes ni interacción remota. Siguiente: revisión humana y publicación por Emmanuel.
