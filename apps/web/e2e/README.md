@@ -9,6 +9,25 @@ Corre contra servidores locales ya levantados: web `http://localhost:8082` y API
 membresías el script sale con error. Ningún script escribe credenciales. Sin ese archivo los
 tests autenticados fallan con «Sin sesión: ejecuta pnpm e2e:auth».
 
+## Journeys 1-6 (`e2e/journeys/`)
+Una spec determinista por journey del plan maestro §4.2:
+
+1. `journey-1-open-shift-cash-register.spec.ts`: abre la caja desde Caja, verifica el aviso de apertura y el corte X.
+2. `journey-2-start-or-recover-order.spec.ts`: inicia una captura telefónica a domicilio y la recupera desde la bandeja tras recargar.
+3. `journey-3-customer-address.spec.ts`: busca y elige cliente, confirma teléfono y dirección, y verifica la respuesta de cobertura.
+4. `journey-4-configure-product.spec.ts`: configura tamaño, mitad y mitad, ingredientes, orilla y nota antes de agregar la línea.
+5. `journey-5-hold-and-cancel.spec.ts`: guarda en espera, retoma el borrador por el cliente del run y cancela con motivo.
+6. `journey-6-confirm-pay-send.spec.ts`: confirma el precio, envía las líneas a estación y cobra el saldo exacto en efectivo.
+
+**Entorno exclusivo de pruebas.** Estas specs escriben datos reales en la base configurada para la API local; nunca las apuntes a producción. El journey 6 cobra en efectivo y deja una orden pagada y su movimiento de caja como residuo irreversible (los registros financieros no se borran); el resto de artefactos se limpia.
+
+**Precondiciones** (si faltan, la spec se salta con un mensaje explícito):
+- catálogo publicado en la sucursal; para los journeys 4-6 además el catálogo sembrado `Pizza Personalizada` / tamaño `Grande` / grupos `Ingredientes` (Salchicha, Tocino) y `Orillas` (Pay Pizza, Orilla de Queso);
+- un turno operativo abierto y permiso de caja para el journey 1;
+- sesión guardada (`pnpm e2e:auth`).
+
+Corren sólo en el proyecto `desktop`. La URL base sale de `E2E_BASE_URL` (igual que `playwright.config.ts`), la API de `E2E_API_URL` (por defecto `http://127.0.0.1:3000/api/v1`) y la sesión de `E2E_AUTH_FILE`. Cada corrida usa un `runId` (`E2E_RUN_ID` lo fija) en el nombre/teléfono/dirección del cliente sembrado; el cleanup se registra **antes** de la acción de UI y barre sólo los borradores nuevos que coinciden con ese cliente del run, cierra cajas y cancela órdenes sin cobrar. Los clientes sembrados quedan en el directorio (la API no expone borrado) pero llevan el `runId` para identificarlos.
+
 ## Scripts
 - `pnpm e2e`: proyecto escritorio (1366x800): smoke por ruta, crawl exhaustivo del DOM y pruebas `@public`.
 - `pnpm e2e:mobile`: lo mismo con perfil Pixel 7.
