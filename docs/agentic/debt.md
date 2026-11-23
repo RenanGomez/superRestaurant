@@ -52,3 +52,12 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 - P3: falta prueba negativa de fuga entre restaurantes/sucursales específica de `confirm_capture_draft_v3`.
 - P3: `CREATE CONSTRAINT TRIGGER` no revalida zonas activas preexistentes solo con `localities`.
 - Protocolo pendiente: la migración no está aplicada en remoto (rollback-only, dry-run y staging primero, §19.6).
+
+## PR #53 y #54 (sync M2) — P2/P3
+
+- #53 P3: la suite `test:sync-conflicts:local` es opt-in y no está cableada en CI; la revisión Claude fue estática (agy sin cuota).
+- #53 P3: `viewer` asume membresía activa en branchA (sin aserción previa); la revocación se prueba con UPDATE directo, no con la función de producto; resultado fijo `{effect:"payment-1"}` en `record`; aclarar comentario de independencia por scope.
+- #53 P3: BOM y CRLF en `sync-conflicts.local.test.ts`; `nowIso()` no determinista.
+- #54 P2: offline, el titular promete "se guardó en este dispositivo" sin cola local persistente; reformular hasta que exista.
+- #54 P3: `formatSyncAmountMinor` antepone `$` a cualquier moneda; sin pruebas de render ni Server Actions; "Conexión" queda en "Más" en móvil; `getSession()` en servidor (usar `getUser()`).
+- #54: verificación visual contra stubs (404 en `/api/v1/sync/*`), sin PostgreSQL real; repetir con API real cuando exista push/pull.
