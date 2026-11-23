@@ -1,17 +1,22 @@
 import {
-  addWholePizza, beforeJourney, expect, newTrayIds, openCapture, startPickupCapture, test, waitForNewDraft,
+  addWholePizza, beforeJourney, expect, newTrayIds, openCapture, recoverDraftRow, registerDraftSweep,
+  requirePizzaCatalog, startDeliveryCapture, test, waitForNewDraft,
 } from "../fixtures/journey-test.ts";
+import { digitsFrom } from "../fixtures/journey-env.ts";
 
 test("journey 5: guardar en espera, retomar y cancelar con motivo", async ({ page, api, cleanup, runId }, testInfo) => {
   beforeJourney(testInfo);
+  await requirePizzaCatalog(api);
 
-  const pickupName = `E2E Recoger ${runId}`;
+  const customer = await api.seedCustomer(runId, `6${digitsFrom(runId, 4)}`);
+  const matches = (item: { readonly customer?: { readonly displayName: string } | null }): boolean =>
+    item.customer?.displayName === customer.name;
   const before = await newTrayIds(api);
-  await openCapture(page);
-  await startPickupCapture(page, pickupName);
+  registerDraftSweep(cleanup, api, before, matches, "journey 5");
 
-  const draft = await waitForNewDraft(api, before, (item) => item.fulfillmentChannel === "pickup");
-  cleanup.add("cerrar el borrador del journey 5 si quedó abierto", () => api.closeDraft(draft.captureDraftId));
+  await openCapture(page);
+  await startDeliveryCapture(page, customer.name);
+  const draft = await waitForNewDraft(api, before, matches);
 
   const note = `Espera ${runId}`;
   await addWholePizza(page, note);
@@ -19,11 +24,9 @@ test("journey 5: guardar en espera, retomar y cancelar con motivo", async ({ pag
   await page.getByRole("button", { name: /^Guardar para después/ }).click();
   await expect(page.getByText("Captura guardada para después.")).toBeVisible();
 
-  // The held draft must be recoverable from the server tray; the most recent "Recoger" row is ours.
-  const tray = page.locator("section").filter({ has: page.getByRole("heading", { name: "Borradores recuperables" }) });
-  const row = tray.getByRole("button").filter({ hasText: "Recoger" }).first();
-  await expect(row).toBeVisible({ timeout: 20_000 });
-  await row.click();
+  // The held draft is recovered by this run's customer name, never by "the first Recoger row":
+  // the row is unique to the run and cannot belong to another operator's draft.
+  await recoverDraftRow(page, new RegExp(customer.name));
   await expect(page.getByText("Borrador abierto.", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Resumen del pedido")).toContainText(`Nota: ${note}`);
 

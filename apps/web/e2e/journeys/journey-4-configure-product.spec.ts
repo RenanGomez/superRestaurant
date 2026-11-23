@@ -1,16 +1,22 @@
 import {
-  addHalfAndHalfPizza, beforeJourney, expect, newTrayIds, openCapture, startCounterCapture, test, waitForNewDraft,
+  addHalfAndHalfPizza, beforeJourney, expect, newTrayIds, openCapture, registerDraftSweep,
+  requirePizzaCatalog, startDeliveryCapture, test, waitForNewDraft,
 } from "../fixtures/journey-test.ts";
+import { digitsFrom } from "../fixtures/journey-env.ts";
 
 test("journey 4: configurar producto, tamaño, mitades, ingredientes y nota", async ({ page, api, cleanup, runId }, testInfo) => {
   beforeJourney(testInfo);
+  await requirePizzaCatalog(api);
 
+  const customer = await api.seedCustomer(runId, `7${digitsFrom(runId, 4)}`);
+  const matches = (item: { readonly customer?: { readonly displayName: string } | null }): boolean =>
+    item.customer?.displayName === customer.name;
   const before = await newTrayIds(api);
-  await openCapture(page);
-  await startCounterCapture(page);
+  registerDraftSweep(cleanup, api, before, matches, "journey 4");
 
-  const draft = await waitForNewDraft(api, before);
-  cleanup.add("cancelar el borrador del journey 4", () => api.closeDraft(draft.captureDraftId));
+  await openCapture(page);
+  await startDeliveryCapture(page, customer.name);
+  await waitForNewDraft(api, before, matches);
 
   const note = `Mitad E2E ${runId}`;
   await addHalfAndHalfPizza(page, { note });
@@ -23,6 +29,5 @@ test("journey 4: configurar producto, tamaño, mitades, ingredientes y nota", as
   await expect(ticket).toContainText("Total de productos");
   await expect(ticket).toContainText(/\$\s*\d/u);
 
-  // The server priced the configured line; reordering is not required for the journey.
   await expect(page.getByRole("button", { name: /^Guardar para después/ })).toBeEnabled();
 });

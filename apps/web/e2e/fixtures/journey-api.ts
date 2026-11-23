@@ -190,15 +190,21 @@ export class JourneyApi {
     return { cashRegisterSessionId, deviceId: this.deviceId, registerId, shiftId };
   }
 
-  /** Closes the register with counted === expected; a no-op when the server already reports it closed. */
+  /** Closes the register with counted === expected; a no-op when there is no register or it is closed. */
   public async closeRegister(handle: OpenRegisterHandle): Promise<void> {
     const query = new URLSearchParams({
       branchId: this.scope.branchId, cashRegisterSessionId: handle.cashRegisterSessionId,
       deviceId: handle.deviceId, registerId: handle.registerId, restaurantId: this.scope.restaurantId,
     });
-    const report = await this.request<{
-      readonly register: { readonly status: string; readonly version: number; readonly expectedCashBalanceMinor: number };
-    }>("GET", `/cash-registers/report?${query}`);
+    let report: { readonly register: { readonly status: string; readonly version: number; readonly expectedCashBalanceMinor: number } };
+    try {
+      report = await this.request("GET", `/cash-registers/report?${query}`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      // A test that failed before the server persisted the opening leaves no register to close.
+      if (message.includes("HTTP 404")) return;
+      throw error;
+    }
     if (report.register.status === "closed") return;
     await this.request("POST", "/cash-registers/close", {
       ...this.audit(), cashRegisterExpectedVersion: report.register.version,
@@ -227,8 +233,10 @@ export class JourneyApi {
         ...this.audit(), expectedVersion: detail.version, orderId,
         reason: `E2E cleanup ${this.runId}`, schemaVersion: 1, scope: this.scope,
       });
-    } catch {
-      // A concurrent state change (already sent/cancelled) is not a leak worth failing the run on.
+    } catch (error: unknown) {
+      // A concurrent state change (already sent/cancelled) is not a leak worth failing the run on,
+      // but it must stay visible in the log instead of disappearing silently.
+      console.warn(`No se pudo cancelar la orden ${orderId} en cleanup:`, error instanceof Error ? error.message : error);
     }
   }
 

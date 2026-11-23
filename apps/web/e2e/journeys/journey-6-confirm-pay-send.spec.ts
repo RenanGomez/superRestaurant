@@ -1,7 +1,9 @@
-import { assertAppPage, beforeJourney, expect, test } from "../fixtures/journey-test.ts";
+import { assertAppPage, beforeJourney, expect, requireOrderSeed, test } from "../fixtures/journey-test.ts";
+import { journeyBaseUrl } from "../fixtures/journey-env.ts";
 
 test("journey 6: confirmar precio, pago en caja y envío a estación", async ({ page, api, cleanup }, testInfo) => {
   beforeJourney(testInfo);
+  await requireOrderSeed(api);
 
   const activeShift = (await api.listActiveShifts()).shifts.find((shift) => shift.status === "open");
   if (activeShift === undefined) {
@@ -15,10 +17,11 @@ test("journey 6: confirmar precio, pago en caja y envío a estación", async ({ 
 
   const register = await api.openRegister(activeShift.shiftId, 0);
   cleanup.add("cerrar la caja del journey 6", () => api.closeRegister(register));
+  const baseUrl = journeyBaseUrl();
   await page.context().addCookies([
-    { name: "sr-register-id", value: register.registerId, url: "http://localhost:8082" },
-    { name: "sr-device-id", value: register.deviceId, url: "http://localhost:8082" },
-    { name: "sr-cash-session-id", value: register.cashRegisterSessionId, url: "http://localhost:8082" },
+    { name: "sr-register-id", value: register.registerId, url: baseUrl },
+    { name: "sr-device-id", value: register.deviceId, url: baseUrl },
+    { name: "sr-cash-session-id", value: register.cashRegisterSessionId, url: baseUrl },
   ]);
 
   // 1. The order detail shows the server-priced total.

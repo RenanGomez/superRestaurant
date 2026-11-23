@@ -110,34 +110,78 @@ export async function newTrayIds(api: JourneyApi): Promise<ReadonlySet<string>> 
   return new Set(tray.items.map((item) => item.captureDraftId));
 }
 
-/** Waits until the tray reports a draft that was not there before this journey started. */
+/** Waits until the tray reports a draft that was not there before and matches this run's marker. */
 export async function waitForNewDraft(
   api: JourneyApi,
   before: ReadonlySet<string>,
-  matches?: (item: CaptureTrayItem) => boolean,
+  matches: (item: CaptureTrayItem) => boolean,
 ): Promise<CaptureTrayItem> {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  let found: CaptureTrayItem | undefined;
+  await expect.poll(async () => {
     const tray = await api.listTray();
-    const found = tray.items.find((item) => !before.has(item.captureDraftId) && (matches === undefined || matches(item)));
-    if (found !== undefined) return found;
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    found = tray.items.find((item) => !before.has(item.captureDraftId) && matches(item));
+    return found !== undefined;
+  }, { message: "No apareció el borrador del run en la bandeja de captura", timeout: 30_000, intervals: [500, 1_000] }).toBe(true);
+  if (found === undefined) throw new Error("No apareció el borrador del run en la bandeja de captura");
+  return found;
+}
+
+/**
+ * Registers a cleanup sweep BEFORE the UI creates a draft. At teardown it closes only the drafts
+ * that appeared after `before` and still match this run's marker, so it never touches another
+ * operator's drafts and still runs when the test fails before it knows the new id.
+ */
+export function registerDraftSweep(
+  cleanup: CleanupStack,
+  api: JourneyApi,
+  before: ReadonlySet<string>,
+  matches: (item: CaptureTrayItem) => boolean,
+  label: string,
+): void {
+  cleanup.add(`barrer borradores del ${label}`, async () => {
+    const tray = await api.listTray();
+    for (const item of tray.items) {
+      if (!before.has(item.captureDraftId) && matches(item)) await api.closeDraft(item.captureDraftId);
+    }
+  });
+}
+
+/** Skips with a clear message when the branch has no published catalog to capture against. */
+export async function requireCatalog(api: JourneyApi): Promise<void> {
+  const catalog = (await api.menuCatalog()).catalog;
+  if (catalog === null) {
+    test.skip(true, "La sucursal no tiene catálogo publicado; siembra uno de pruebas antes de correr journeys");
+    throw new Error("Sin catálogo");
   }
-  throw new Error("No apareció el borrador nuevo en la bandeja de captura");
 }
 
-export async function startCounterCapture(page: Page): Promise<void> {
-  await page.getByLabel("Cumplimiento", { exact: true }).selectOption("counter");
-  await page.getByRole("button", { name: "Nueva captura", exact: true }).click();
-  await expect(page.getByText("Borrador abierto.", { exact: true })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId("capture-menu-section")).toBeVisible();
+/** Skips unless the catalog has the exact pizza, size, flavors and crust the specs configure. */
+export async function requirePizzaCatalog(api: JourneyApi): Promise<void> {
+  const catalog = (await api.menuCatalog()).catalog;
+  const product = catalog?.products.find((candidate) => candidate.active && candidate.name === "Pizza Personalizada");
+  const variant = product?.variants?.find((candidate) => candidate.active && candidate.name === "Grande");
+  const groups = catalog?.modifierGroups ?? [];
+  const ingredients = groups.find((group) => group.active && group.name === "Ingredientes");
+  const crust = groups.find((group) => group.active && group.name === "Orillas");
+  const flavorsOk = ["Salchicha", "Tocino"].every((name) => ingredients?.options.some((option) => option.active && option.name === name));
+  const crustOk = ["Pay Pizza", "Orilla de Queso"].every((name) => crust?.options.some((option) => option.active && option.name === name));
+  if (catalog === null || product === undefined || variant === undefined || ingredients === undefined || crust === undefined
+    || !flavorsOk || !crustOk) {
+    test.skip(true, "Falta el catálogo sembrado: Pizza Personalizada / Grande / Ingredientes (Salchicha, Tocino) / Orillas (Pay Pizza, Orilla de Queso)");
+    throw new Error("Catálogo de pizza incompleto");
+  }
 }
 
-export async function startPickupCapture(page: Page, name: string): Promise<void> {
-  await page.getByLabel("Cumplimiento", { exact: true }).selectOption("pickup");
-  await page.getByLabel("Nombre de quien recoge", { exact: true }).fill(name);
-  await page.getByRole("button", { name: "Nueva captura", exact: true }).click();
-  await expect(page.getByText("Borrador abierto.", { exact: true })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId("capture-menu-section")).toBeVisible();
+/** Skips unless the branch can seed a draft order with its first sellable product and an open shift. */
+export async function requireOrderSeed(api: JourneyApi): Promise<void> {
+  const catalog = (await api.menuCatalog()).catalog;
+  const product = catalog?.products.find((candidate) => candidate.active
+    && (candidate.variants ?? []).some((variant) => variant.active));
+  const shift = (await api.listActiveShifts()).shifts.find((candidate) => candidate.status === "open");
+  if (product === undefined || shift === undefined) {
+    test.skip(true, "Falta un producto vendible con tamaño o un turno operativo abierto para sembrar la orden");
+    throw new Error("Precondiciones de orden incompletas");
+  }
 }
 
 export async function searchCustomer(page: Page, customerName: string): Promise<void> {

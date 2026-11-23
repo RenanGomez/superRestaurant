@@ -22,6 +22,11 @@ export function authStatePath(): string {
   return process.env.E2E_AUTH_FILE ?? "playwright/.auth/user.json";
 }
 
+/** Base URL of the web app; matches playwright.config.ts but can be overridden per run. */
+export function journeyBaseUrl(): string {
+  return process.env.E2E_BASE_URL ?? "http://localhost:8082";
+}
+
 export function hasJourneySession(): boolean {
   const state = readAuthState();
   return state !== undefined && accessTokenFrom(state) !== undefined && scopeFrom(state) !== undefined;
