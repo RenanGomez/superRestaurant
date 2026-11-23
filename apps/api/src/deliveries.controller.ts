@@ -18,7 +18,7 @@ import type {
   SettleDeliveryResultV1,
 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { DeliveryApplicationError, DeliveryService } from "./deliveries.js";
 
 @Controller("deliveries")
@@ -37,31 +37,31 @@ export class DeliveriesController {
     return this.map(() => this.deliveries.orderDetail(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("assign")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("assign")
   @Header("Cache-Control", "private, no-store")
   public assign(@Req() request: unknown, @Body() body: unknown): Promise<OrderDeliveryResultV1> {
     return this.map(() => this.deliveries.assign(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("dispatch")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("dispatch")
   @Header("Cache-Control", "private, no-store")
   public dispatch(@Req() request: unknown, @Body() body: unknown): Promise<OrderDeliveryResultV1> {
     return this.map(() => this.deliveries.dispatch(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("complete")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("complete")
   @Header("Cache-Control", "private, no-store")
   public complete(@Req() request: unknown, @Body() body: unknown): Promise<OrderDeliveryResultV1> {
     return this.map(() => this.deliveries.complete(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("fail")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("fail")
   @Header("Cache-Control", "private, no-store")
   public fail(@Req() request: unknown, @Body() body: unknown): Promise<OrderDeliveryResultV1> {
     return this.map(() => this.deliveries.fail(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("settle")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("settle")
   @Header("Cache-Control", "private, no-store")
   public settle(@Req() request: unknown, @Body() body: unknown): Promise<SettleDeliveryResultV1> {
     return this.map(() => this.deliveries.settle(getAuthenticatedPrincipal(request), body));

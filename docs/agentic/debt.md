@@ -11,6 +11,8 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 
 ## Registradas
 
+- **m1-sec-rate-limit:** los contadores viven en memoria por proceso; reinicios y réplicas no comparten cuota. El límite previo usa la IP del socket, que puede identificar al proxy en despliegues detrás de uno. Adoptar almacenamiento compartido y una configuración explícita de proxies confiables antes de depender de estos límites en producción. El login directo a Supabase requiere protección del proveedor.
+
 | Fecha | Hito | Item | Descripcion | Motivo del atajo | Seguimiento |
 |---|---|---|---|---|---|
 | 2026-11-22 | AO M0 | P2 · smoke E2E limitado | El smoke de Playwright solo cubre `/health` y `/login`; no ejercita flujos de producto. | Prioridad a desbloquear el CI de M0. | Ampliar los flujos E2E al cierre del hito. |

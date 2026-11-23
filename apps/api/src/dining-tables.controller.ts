@@ -1,7 +1,7 @@
 import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, Header, HttpCode, Inject, Patch, Post, Query, Req, ServiceUnavailableException } from "@nestjs/common";
 import type { DiningLayoutV1, DiningTableV1 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { DiningTableApplicationError, DiningTableService } from "./dining-tables.js";
 
 @Controller("dining")
@@ -14,20 +14,20 @@ export class DiningTablesController {
     return this.map(() => this.tables.list(getAuthenticatedPrincipal(request), { restaurantId, branchId }));
   }
 
-  @Post("tables")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("tables")
   @HttpCode(201)
   @Header("Cache-Control", "private, no-store")
   public create(@Req() request: unknown, @Body() body: unknown): Promise<DiningTableV1> {
     return this.map(() => this.tables.create(getAuthenticatedPrincipal(request), body));
   }
 
-  @Patch("tables/layout")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Patch("tables/layout")
   @Header("Cache-Control", "private, no-store")
   public updateLayout(@Req() request: unknown, @Body() body: unknown): Promise<DiningTableV1> {
     return this.map(() => this.tables.updateLayout(getAuthenticatedPrincipal(request), body));
   }
 
-  @Patch("tables/details")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Patch("tables/details")
   @Header("Cache-Control", "private, no-store")
   public updateDetails(@Req() request: unknown, @Body() body: unknown): Promise<DiningTableV1> {
     return this.map(() => this.tables.updateDetails(getAuthenticatedPrincipal(request), body));

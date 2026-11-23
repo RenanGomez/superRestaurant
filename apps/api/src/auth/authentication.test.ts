@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
 
 import { Reflector } from "@nestjs/core";
 
 import type { ApiConfig } from "../config.js";
+import { PaymentsController } from "../payments.controller.js";
 import {
   AccessTokenRejectedError,
   getAuthenticatedPrincipal,
   parseBearerAuthorization,
+  RATE_LIMIT,
+  RateLimitStore,
   SupabaseAuthGuard,
   SupabaseAuthPrincipalVerifier,
 } from "./authentication.js";
@@ -142,4 +146,92 @@ test("guard rejects malformed principals returned by a misconfigured verifier", 
     } as never;
     await assert.rejects(guard.canActivate(context), { status: 401 });
   }
+});
+
+test("financial mutations are limited per verified actor with a generic 429", async () => {
+  let actorId = "8cc7eb84-af2a-4e84-95de-967c39af86ab";
+  let retryAfter = "";
+  const guard = new SupabaseAuthGuard({ verifyAccessToken: async () => ({ actorId }) }, new Reflector());
+  const context = () => ({
+    getClass: () => PaymentsController,
+    getHandler: () => PaymentsController.prototype.quote,
+    switchToHttp: () => ({
+      getRequest: () => ({ body: { scope: { branchId: randomUUID() } }, headers: { authorization: "Bearer sensitive-access-token-value" } }),
+      getResponse: () => ({ setHeader: (name: string, value: string) => { if (name === "Retry-After") retryAfter = value; } }),
+    }),
+  }) as never;
+  for (let i = 0; i < 60; i += 1) assert.equal(await guard.canActivate(context()), true);
+  await assert.rejects(guard.canActivate(context()), (error: unknown) => {
+    assert.deepEqual((error as { getResponse: () => unknown }).getResponse(), { code: "RATE_LIMITED" });
+    assert.equal((error as { status: number }).status, 429);
+    return true;
+  });
+  assert.ok(Number(retryAfter) > 0);
+  actorId = "9cc7eb84-af2a-4e84-95de-967c39af86ab";
+  assert.equal(await guard.canActivate(context()), true);
+});
+
+test("rate limit windows expire and capacity evicts the oldest key", () => {
+  let now = 0;
+  const store = new RateLimitStore(() => now, 2);
+  assert.equal(store.consume("a", 1, 1000), 0);
+  assert.equal(store.consume("a", 1, 1000), 1);
+  assert.equal(store.consume("b", 1, 1000), 0);
+  assert.equal(store.consume("c", 1, 1000), 0);
+  assert.equal(store.consume("a", 1, 1000), 0);
+  now = 1000;
+  assert.equal(store.consume("a", 1, 1000), 0);
+});
+
+test("expired entries are swept incrementally", () => {
+  let now = 0;
+  const store = new RateLimitStore(() => now);
+  store.consume("a", 1, 1000);
+  store.consume("b", 1, 1000);
+  now = 1000;
+  store.consume("c", 1, 1000);
+  store.consume("d", 1, 1000);
+  store.consume("e", 1, 1000);
+  store.consume("f", 1, 1000);
+  const entries = (store as unknown as { entries: Map<string, unknown> }).entries;
+  assert.equal(entries.has("a"), false);
+  assert.equal(entries.has("b"), false);
+});
+
+test("payment quote has rate metadata and a non-sensitive handler has none", () => {
+  const reflector = new Reflector();
+  assert.deepEqual(reflector.get(RATE_LIMIT, PaymentsController.prototype.quote), { limit: 60, windowMs: 60_000 });
+  assert.equal(reflector.get(RATE_LIMIT, PaymentsController.prototype.report), undefined);
+});
+
+test("successful requests to an undecorated handler do not consume the failure quota", async () => {
+  const guard = new SupabaseAuthGuard({ verifyAccessToken: async () => ({ actorId: "8cc7eb84-af2a-4e84-95de-967c39af86ab" }) }, new Reflector());
+  const context = () => ({
+    getClass: () => PaymentsController,
+    getHandler: () => PaymentsController.prototype.report,
+    switchToHttp: () => ({ getRequest: () => ({ headers: { authorization: "Bearer long-enough-access-token" } }) }),
+  }) as never;
+  for (let i = 0; i < 301; i += 1) assert.equal(await guard.canActivate(context()), true);
+});
+
+test("invalid tokens are limited by socket IP and 429 exposes only retry timing", async () => {
+  let calls = 0;
+  let retryAfter = "";
+  const guard = new SupabaseAuthGuard({ verifyAccessToken: async () => { calls += 1; throw new Error("secret"); } }, new Reflector());
+  const context = () => ({
+    getClass: () => class TestController {},
+    getHandler: () => function handler() {},
+    switchToHttp: () => ({
+      getRequest: () => ({ socket: { remoteAddress: "127.0.0.1" }, headers: { authorization: "Bearer sensitive-access-token-value", "x-forwarded-for": String(calls) } }),
+      getResponse: () => ({ setHeader: (_name: string, value: string) => { retryAfter = value; } }),
+    }),
+  }) as never;
+  for (let i = 0; i < 300; i += 1) await assert.rejects(guard.canActivate(context()), { status: 401 });
+  await assert.rejects(guard.canActivate(context()), (error: unknown) => {
+    assert.equal((error as { status: number }).status, 429);
+    assert.deepEqual((error as { getResponse: () => unknown }).getResponse(), { code: "RATE_LIMITED" });
+    return true;
+  });
+  assert.equal(calls, 300);
+  assert.ok(Number(retryAfter) > 0);
 });

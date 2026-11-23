@@ -11,7 +11,7 @@ import type {
   UpsertDeliveryZoneResultV1,
 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { DeliveryZoneApplicationError, DeliveryZoneService } from "./delivery-zones.js";
 
 @Controller("delivery-zones")
@@ -28,7 +28,7 @@ export class DeliveryZonesController {
     return this.execute(() => this.zones.listZones(principal, body));
   }
 
-  @Post("upsert")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("upsert")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async upsert(@Req() request: unknown, @Body() body: unknown): Promise<UpsertDeliveryZoneResultV1> {
@@ -60,7 +60,7 @@ export class DeliveryZonesController {
     return this.execute(() => this.zones.searchSettlements(principal, body));
   }
 
-  @Post("manual-fee")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("manual-fee")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async manualFee(

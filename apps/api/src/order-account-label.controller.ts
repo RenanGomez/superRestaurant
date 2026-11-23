@@ -12,14 +12,14 @@ import {
 } from "@nestjs/common";
 import type { SetOrderAccountLabelResultV1 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { OrderAccountLabelApplicationError, OrderAccountLabelService } from "./order-account-label.js";
 
 @Controller("orders")
 export class OrderAccountLabelController {
   public constructor(@Inject(OrderAccountLabelService) private readonly service: OrderAccountLabelService) {}
 
-  @Post("account-label")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("account-label")
   @Header("Cache-Control", "private, no-store")
   public async setAccountLabel(@Req() request: unknown, @Body() body: unknown): Promise<SetOrderAccountLabelResultV1> {
     try {

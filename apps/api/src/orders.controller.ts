@@ -22,7 +22,7 @@ import type {
   OrderMutationSummaryV1,
 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { CancelledWorkTrayService } from "./cancelled-work-tray.js";
 import { OrderApplicationError, OrderDeliveryActiveError, OrderPaymentInFlightError, OrderService } from "./orders.js";
 
@@ -33,37 +33,37 @@ export class OrdersController {
     @Inject(CancelledWorkTrayService) private readonly cancelled: CancelledWorkTrayService,
   ) {}
 
-  @Post("orders")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("orders")
   @Header("Cache-Control", "private, no-store")
   public create(@Req() request: unknown, @Body() body: unknown): Promise<OrderMutationSummaryV1> {
     return this.map(() => this.orders.create(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("orders/items")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("orders/items")
   @Header("Cache-Control", "private, no-store")
   public addItem(@Req() request: unknown, @Body() body: unknown): Promise<OrderMutationSummaryV1> {
     return this.map(() => this.orders.addItem(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("orders/open")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("orders/open")
   @Header("Cache-Control", "private, no-store")
   public open(@Req() request: unknown, @Body() body: unknown): Promise<OrderMutationSummaryV1> {
     return this.map(() => this.orders.open(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("orders/items/transition")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("orders/items/transition")
   @Header("Cache-Control", "private, no-store")
   public transitionItem(@Req() request: unknown, @Body() body: unknown): Promise<OrderMutationSummaryV1> {
     return this.map(() => this.orders.transitionItem(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("orders/items/cancel")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("orders/items/cancel")
   @Header("Cache-Control", "private, no-store")
   public cancelItem(@Req() request: unknown, @Body() body: unknown): Promise<OrderMutationSummaryV1> {
     return this.map(() => this.orders.cancelItem(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("orders/cancel")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("orders/cancel")
   @Header("Cache-Control", "private, no-store")
   public cancelOrder(@Req() request: unknown, @Body() body: unknown): Promise<CancelOrderResultV1> {
     return this.map(() => this.orders.cancelOrder(getAuthenticatedPrincipal(request), body));
@@ -81,7 +81,7 @@ export class OrdersController {
     return this.map(() => this.orders.detail(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("orders/send-to-kitchen")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("orders/send-to-kitchen")
   @Header("Cache-Control", "private, no-store")
   public sendToKitchen(@Req() request: unknown, @Body() body: unknown): Promise<OrderMutationSummaryV1> {
     return this.map(() => this.orders.sendToKitchen(getAuthenticatedPrincipal(request), body));

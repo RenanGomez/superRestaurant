@@ -1,14 +1,14 @@
 import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Header, Inject, Post, Req, ServiceUnavailableException } from "@nestjs/common";
 import type { AssignOrderWaiterResultV1 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { OrderWaiterApplicationError, OrderWaiterService } from "./order-waiter.js";
 
 @Controller("orders")
 export class OrderWaiterController {
   public constructor(@Inject(OrderWaiterService) private readonly waiter: OrderWaiterService) {}
 
-  @Post("assign-waiter")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("assign-waiter")
   @Header("Cache-Control", "private, no-store")
   public async assign(@Req() request: unknown, @Body() body: unknown): Promise<AssignOrderWaiterResultV1> {
     try {
