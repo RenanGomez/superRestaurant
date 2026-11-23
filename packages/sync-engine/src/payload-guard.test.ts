@@ -79,12 +79,14 @@ test("un PAN numerico que pasa Luhn se rechaza y un epoch de 13 digitos que no p
   assert.equal(codeOf({ amountMinor: 4111111111111111, currency: "MXN" }), "ok", "money-keyed minor units are exempt");
 });
 
-test("el modo inbound valida solo forma, profundidad y tamano", () => {
+test("el modo inbound valida forma, sin floats, profundidad y tamano sin bloquear nombres del servidor", () => {
   const inbound = (value: unknown): string => {
     const result = checkPayload(value, "inbound");
     return result.ok ? "ok" : result.code;
   };
-  assert.equal(inbound({ tokenCount: 3, passwordChangedAt: "2026-01-01", cvv: "x", total: 1.5, note: "4111111111111111" }), "ok");
+  assert.equal(inbound({ tokenCount: 3, passwordChangedAt: "2026-01-01", cvv: "x", total: 150, note: "4111111111111111" }), "ok");
+  assert.equal(inbound({ total: 1.5 }), "PAYLOAD_INVALID");
+  assert.equal(codeOf({ ratio: 0.25 }), "PAYLOAD_INVALID");
   assert.equal(checkPayload({ tokenCount: 3 }).ok, false, "strict stays the default");
   assert.equal(inbound(nested(9)), "PAYLOAD_TOO_DEEP");
   assert.equal(inbound({ blob: "a".repeat(65 * 1024) }), "PAYLOAD_TOO_LARGE");

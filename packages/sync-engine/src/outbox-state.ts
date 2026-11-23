@@ -1,3 +1,4 @@
+import { isSyncFinancialEntityTypeV1 } from "@super-restaurant/shared-types";
 import { type OutboxEntry, type OutboxOutcome, type OutboxState, type ServerResultStatus } from "./contract.js";
 import { SyncEngineError } from "./errors.js";
 
@@ -26,6 +27,26 @@ export function isTerminalState(state: OutboxState): boolean {
 /** States that stop later events of the same entity until a resolution event is linked. */
 export function isBlockingState(state: OutboxState): boolean {
   return state === "conflict" || state === "manual_review";
+}
+
+export interface OutboxCompactionEligibilityContext {
+  readonly olderThanMs: number;
+  readonly referencedEventIds: ReadonlySet<string>;
+}
+
+/**
+ * OFFLINE_SYNC_CONTRACT §8: financial records are NEVER compacted/purged; only terminal
+ * non-financial entries older than the cutoff and unreferenced by active chains may be compacted.
+ */
+export function canCompactOutboxEntry(
+  entry: OutboxEntry,
+  context: OutboxCompactionEligibilityContext,
+): boolean {
+  if (isSyncFinancialEntityTypeV1(entry.entityType)) return false;
+  if (!isTerminalState(entry.localState)) return false;
+  if (entry.updatedAt > context.olderThanMs) return false;
+  if (context.referencedEventIds.has(entry.eventId)) return false;
+  return true;
 }
 
 export type OutboxEvent =
@@ -60,8 +81,12 @@ export function transitionOutboxState(current: OutboxEntry, event: OutboxEvent):
     case "claim":
       if (state !== "pending" && state !== "retry_wait") throw invalid(current, event);
       return next(current, {
-        localState: "sending", attemptId: event.attemptId, leaseUntil: event.leaseUntil,
-        nextAttemptAt: null, blockedBy: null, updatedAt: event.nowMs,
+        localState: "sending",
+        attemptId: event.attemptId,
+        leaseUntil: event.leaseUntil,
+        nextAttemptAt: null,
+        blockedBy: null,
+        updatedAt: event.nowMs,
       });
     case "lease_expired":
       if (state !== "sending") throw invalid(current, event);
@@ -69,19 +94,34 @@ export function transitionOutboxState(current: OutboxEntry, event: OutboxEvent):
     case "retry":
       if (state !== "sending") throw invalid(current, event);
       return next(current, {
-        localState: "retry_wait", retryCount: current.retryCount + 1, lastErrorCode: event.errorCode,
-        nextAttemptAt: event.nextAttemptAt, attemptId: null, leaseUntil: null, updatedAt: event.nowMs,
+        localState: "retry_wait",
+        retryCount: current.retryCount + 1,
+        lastErrorCode: event.errorCode,
+        nextAttemptAt: event.nextAttemptAt,
+        attemptId: null,
+        leaseUntil: null,
+        updatedAt: event.nowMs,
       });
     case "result":
       if (state !== "sending") throw invalid(current, event);
       return next(current, {
-        localState: event.status, outcome: event.outcome, lastErrorCode: event.outcome.code,
-        attemptId: null, leaseUntil: null, nextAttemptAt: null, blockedBy: null, updatedAt: event.nowMs,
+        localState: event.status,
+        outcome: event.outcome,
+        lastErrorCode: event.outcome.code,
+        attemptId: null,
+        leaseUntil: null,
+        nextAttemptAt: null,
+        blockedBy: null,
+        updatedAt: event.nowMs,
       });
     case "invalidate":
       if (state !== "pending" && state !== "retry_wait") throw invalid(current, event);
       return next(current, {
-        localState: "manual_review", lastErrorCode: event.errorCode, nextAttemptAt: null, blockedBy: null, updatedAt: event.nowMs,
+        localState: "manual_review",
+        lastErrorCode: event.errorCode,
+        nextAttemptAt: null,
+        blockedBy: null,
+        updatedAt: event.nowMs,
       });
     case "escalate":
       if (state !== "conflict") throw invalid(current, event);
