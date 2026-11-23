@@ -20,7 +20,7 @@ function rig(overrides: Partial<SyncEngineOptions> = {}): Rig {
   const clock = new FakeClock();
   const ids = new SequentialIds();
   const build = (extra: Partial<SyncEngineOptions> = {}): DeviceSyncEngine => new DeviceSyncEngine({
-    deviceId: DEVICE, storage, transport: server, ids, clock,
+    deviceId: DEVICE, clientType: "web_pos", storage, transport: server, ids, clock,
     backoff: createExponentialBackoff({ baseMs: 1_000, maxMs: 8_000, maxRetries: 3, jitterRatio: 0 }),
     ...overrides, ...extra,
   });

@@ -12,6 +12,7 @@ function rig(options: { readonly maxBatchSize?: number } = {}) {
   const ids = new SequentialIds();
   const build = (): DeviceSyncEngine => new DeviceSyncEngine({
     deviceId: DEVICE,
+    clientType: "web_pos",
     storage,
     transport: server,
     ids,

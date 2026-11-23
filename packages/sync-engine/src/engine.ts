@@ -435,8 +435,17 @@ export class DeviceSyncEngine {
       const source = asPlainRecord(input);
       if (source === undefined) throw new SyncEngineError("INPUT_INVALID", "input");
       const scope = unwrap(parseSyncScope(source["scope"]));
-      const clientType = input.clientType ?? this.clientType;
+      const clientType = this.clientType ?? input.clientType;
       if (clientType === undefined) {
+        if (typeof input.entityType === "string" && isSyncFinancialEntityTypeV1(input.entityType)) {
+          return Object.freeze({
+            allowed: false,
+            mode: "blocked",
+            reasonCode: "CLIENT_NOT_SUPPORTED",
+            localOnlyWarning: false,
+            requiresServerRevalidation: false,
+          });
+        }
         return Object.freeze({
           allowed: true,
           mode: "allowed",
@@ -869,9 +878,9 @@ export class DeviceSyncEngine {
         && entry.resolvedBy === null,
     );
     const preconditions: CapabilityPreconditions = {
-      originatedOnThisDevice: derivedOrigin,
-      entityBlocked: derivedBlocked,
       ...(input.preconditions ?? {}),
+      originatedOnThisDevice: derivedOrigin && input.preconditions?.originatedOnThisDevice !== false,
+      entityBlocked: derivedBlocked || input.preconditions?.entityBlocked === true,
     };
     const connectivity = input.connectivity ?? this.getConnectivity();
     return evaluateEnvelopeCapability({
@@ -922,8 +931,12 @@ export class DeviceSyncEngine {
       return { state, result: duplicate };
     }
 
-    const activeClientType = input.clientType ?? this.clientType;
-    if (activeClientType !== undefined) {
+    const activeClientType = this.clientType ?? input.clientType;
+    if (activeClientType === undefined) {
+      if (isFinancial(probe)) {
+        throw new SyncEngineError("CAPABILITY_BLOCKED", "CLIENT_NOT_SUPPORTED");
+      }
+    } else {
       const decision = this.evaluateCapabilityForInput(state, scope, input, activeClientType);
       if (!decision.allowed) {
         throw new SyncEngineError("CAPABILITY_BLOCKED", decision.reasonCode ?? `${probe.entityType}.${probe.operation}`);

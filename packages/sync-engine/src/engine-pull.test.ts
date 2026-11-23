@@ -14,7 +14,7 @@ function rig(options: { readonly pullLimit?: number; readonly maxPagesPerSync?: 
   const storage = new InMemorySyncStorage();
   const server = new FakeServer();
   const clock = new FakeClock();
-  const engine = new DeviceSyncEngine({ deviceId: DEVICE, storage, transport: server, ids: new SequentialIds(), clock, ...options });
+  const engine = new DeviceSyncEngine({ deviceId: DEVICE, clientType: "web_pos", storage, transport: server, ids: new SequentialIds(), clock, ...options });
   return { storage, server, engine, clock };
 }
 

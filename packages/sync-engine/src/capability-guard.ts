@@ -289,23 +289,23 @@ export function evaluateOfflineCapability(input: CapabilityCheckInput): Capabili
 
   switch (input.action) {
     case "order.create_local":
-      if (offline && preconditions.hasCatalogSnapshots === false) return block("SNAPSHOTS_REQUIRED");
+      if (offline && preconditions.hasCatalogSnapshots !== true) return block("SNAPSHOTS_REQUIRED");
       break;
     case "order.edit_local_origin":
-      if (offline && preconditions.originatedOnThisDevice === false) return block("REMOTE_ORIGIN_OFFLINE_BLOCKED");
-      if (offline && preconditions.hasCatalogSnapshots === false) return block("SNAPSHOTS_REQUIRED");
+      if (offline && preconditions.originatedOnThisDevice !== true) return block("REMOTE_ORIGIN_OFFLINE_BLOCKED");
+      if (offline && preconditions.hasCatalogSnapshots !== true) return block("SNAPSHOTS_REQUIRED");
       break;
     case "discount.apply_standard":
-      if (offline && preconditions.withinLocalRuleLimit === false) return block("LOCAL_RULE_LIMIT_EXCEEDED");
+      if (offline && preconditions.withinLocalRuleLimit !== true) return block("LOCAL_RULE_LIMIT_EXCEEDED");
       break;
     case "kds.advance_received_ticket":
-      if (offline && preconditions.ticketReceivedOnStation === false) return block("TICKET_NOT_RECEIVED_ON_STATION");
+      if (offline && preconditions.ticketReceivedOnStation !== true) return block("TICKET_NOT_RECEIVED_ON_STATION");
       break;
     case "payment.cash_collect":
-      if ((offline || input.clientType === "mobile") && (preconditions.cashRegisterOpen === false || preconditions.cashierShiftOpen === false)) {
+      if ((offline || input.clientType === "mobile") && (preconditions.cashRegisterOpen !== true || preconditions.cashierShiftOpen !== true)) {
         return block("CASH_REGISTER_REQUIRED");
       }
-      if (offline && preconditions.withinOfflineCashLimit === false) return block("OFFLINE_CASH_LIMIT_EXCEEDED");
+      if (offline && preconditions.withinOfflineCashLimit !== true) return block("OFFLINE_CASH_LIMIT_EXCEEDED");
       break;
     case "payment.card_manual_record":
       if (offline && preconditions.externalTerminalConfirmed !== true) {
@@ -313,7 +313,7 @@ export function evaluateOfflineCapability(input: CapabilityCheckInput): Capabili
       }
       break;
     case "ticket.print_local":
-      if (offline && preconditions.templateCached === false) return block("TEMPLATE_CACHE_REQUIRED");
+      if (offline && preconditions.templateCached !== true) return block("TEMPLATE_CACHE_REQUIRED");
       break;
     default:
       break;
@@ -416,9 +416,9 @@ export function evaluateEnvelopeCapability(input: EnvelopeCapabilityCheckInput):
           preconditions,
         });
       }
-      const action: SyncCapabilityAction = preconditions.originatedOnThisDevice === false
-        ? "order.edit_remote_origin"
-        : "order.edit_local_origin";
+      const action: SyncCapabilityAction = preconditions.originatedOnThisDevice === true
+        ? "order.edit_local_origin"
+        : "order.edit_remote_origin";
       return evaluateOfflineCapability({
         clientType: input.clientType,
         connectivity: input.connectivity,
@@ -497,7 +497,7 @@ export function evaluateEnvelopeCapability(input: EnvelopeCapabilityCheckInput):
     case "Customer": {
       if (input.clientType === "kds") return block("CLIENT_NOT_SUPPORTED");
       if (preconditions.hasValidSession === false) return block("SESSION_REQUIRED");
-      if (offline && preconditions.originatedOnThisDevice === false && input.operation !== "create") {
+      if (offline && input.operation !== "create" && preconditions.originatedOnThisDevice !== true) {
         return block("REMOTE_ORIGIN_OFFLINE_BLOCKED");
       }
       return allow(offline ? "conditional" : "allowed", offline, true);

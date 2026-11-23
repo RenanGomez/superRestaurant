@@ -252,14 +252,18 @@ test("DeviceSyncEngine aplica la matriz de capacidades en enqueue sin consumir s
   );
   assert.equal((await engine.getOutbox(SCOPE_A1)).length, 0);
 
-  // Local-origin order CAN be created and edited offline; sequence starts cleanly at 1.
-  const localOrder = await engine.enqueue(orderInput(SCOPE_A1, "local-1"));
+  // Local-origin order CAN be created and edited offline with snapshots; sequence starts cleanly at 1.
+  const localOrder = await engine.enqueue({
+    ...orderInput(SCOPE_A1, "local-1"),
+    preconditions: { hasCatalogSnapshots: true },
+  });
   assert.equal(localOrder.localSequence, 1);
   const localEdit = await engine.enqueue({
     ...orderInput(SCOPE_A1, "local-1-edit"),
     entityId: localOrder.entityId,
     operation: "update",
     payload: { note: "edited-locally" },
+    preconditions: { hasCatalogSnapshots: true },
   });
   assert.equal(localEdit.localSequence, 2);
 
@@ -277,5 +281,272 @@ test("DeviceSyncEngine aplica la matriz de capacidades en enqueue sin consumir s
     }),
     (error: unknown) => error instanceof SyncEngineError && error.code === "CAPABILITY_BLOCKED",
   );
+  assert.equal((await engine.getOutbox(SCOPE_A1)).length, 2);
+});
+
+test("fail-closed: precondiciones omitidas en cash offline y operaciones offline bloquean en lugar de permitir", () => {
+  // Cash offline with omitted preconditions -> blocked.
+  assert.equal(
+    evaluateOfflineCapability({
+      clientType: "web_pos",
+      connectivity: "offline",
+      action: "payment.cash_collect",
+    }).reasonCode,
+    "CASH_REGISTER_REQUIRED",
+  );
+  assert.equal(
+    evaluateOfflineCapability({
+      clientType: "web_pos",
+      connectivity: "offline",
+      action: "payment.cash_collect",
+      preconditions: { cashRegisterOpen: true },
+    }).reasonCode,
+    "CASH_REGISTER_REQUIRED",
+  );
+  assert.equal(
+    evaluateOfflineCapability({
+      clientType: "web_pos",
+      connectivity: "offline",
+      action: "payment.cash_collect",
+      preconditions: { cashRegisterOpen: true, cashierShiftOpen: true },
+    }).reasonCode,
+    "OFFLINE_CASH_LIMIT_EXCEEDED",
+  );
+  assert.equal(
+    evaluateEnvelopeCapability({
+      clientType: "web_pos",
+      connectivity: "offline",
+      entityType: "Payment",
+      operation: "create",
+      payload: { paymentMethod: "cash", amountMinor: 5000, currency: "MXN" },
+    }).reasonCode,
+    "CASH_REGISTER_REQUIRED",
+  );
+
+  // Mobile cash even online requires cashRegisterOpen + cashierShiftOpen === true.
+  assert.equal(
+    evaluateOfflineCapability({
+      clientType: "mobile",
+      connectivity: "online",
+      action: "payment.cash_collect",
+    }).reasonCode,
+    "CASH_REGISTER_REQUIRED",
+  );
+
+  // Order create/edit, discount, KDS advance, print local offline all fail closed when preconditions are omitted.
+  assert.equal(
+    evaluateOfflineCapability({ clientType: "web_pos", connectivity: "offline", action: "order.create_local" }).reasonCode,
+    "SNAPSHOTS_REQUIRED",
+  );
+  assert.equal(
+    evaluateOfflineCapability({
+      clientType: "web_pos",
+      connectivity: "offline",
+      action: "order.edit_local_origin",
+      preconditions: { hasCatalogSnapshots: true },
+    }).reasonCode,
+    "REMOTE_ORIGIN_OFFLINE_BLOCKED",
+  );
+  assert.equal(
+    evaluateOfflineCapability({ clientType: "web_pos", connectivity: "offline", action: "discount.apply_standard" }).reasonCode,
+    "LOCAL_RULE_LIMIT_EXCEEDED",
+  );
+  assert.equal(
+    evaluateOfflineCapability({ clientType: "kds", connectivity: "offline", action: "kds.advance_received_ticket" }).reasonCode,
+    "TICKET_NOT_RECEIVED_ON_STATION",
+  );
+  assert.equal(
+    evaluateOfflineCapability({ clientType: "web_pos", connectivity: "offline", action: "ticket.print_local" }).reasonCode,
+    "TEMPLATE_CACHE_REQUIRED",
+  );
+});
+
+test("los valores derivados por el motor (originatedOnThisDevice, entityBlocked) no pueden sobrescribirse desde input.preconditions", async () => {
+  const storage = new InMemorySyncStorage();
+  const server = new FakeServer();
+  const engine = new DeviceSyncEngine({
+    deviceId: DEVICE,
+    storage,
+    transport: server,
+    ids: new SequentialIds(),
+    clock: new FakeClock(),
+    clientType: "web_pos",
+    connectivity: "offline",
+  });
+
+  // Remote-origin order pulled from server: caller attempting to forge originatedOnThisDevice: true MUST still be blocked.
+  const remoteId = id(0x4300);
+  server.inject(SCOPE_A1, {
+    entityType: "Order",
+    entityId: remoteId,
+    canonicalVersion: 1,
+    tombstone: false,
+    snapshot: { note: "remote" },
+  });
+  await engine.pull(SCOPE_A1);
+
+  await assert.rejects(
+    engine.enqueue({
+      ...orderInput(SCOPE_A1, "spoof-origin"),
+      entityId: remoteId,
+      operation: "update",
+      payload: { note: "hijack" },
+      preconditions: { originatedOnThisDevice: true, hasCatalogSnapshots: true },
+    }),
+    (error: unknown) => error instanceof SyncEngineError && error.code === "CAPABILITY_BLOCKED",
+  );
+
+  // Conflict-blocked entity under sync_blocked: caller attempting to forge entityBlocked: false MUST still be blocked.
+  engine.setConnectivity("online");
+  const conflictId = id(0x4301);
+  await engine.enqueue({ ...orderInput(SCOPE_A1, "conf-1"), entityId: conflictId });
+  server.conflictEntities.add(conflictId);
+  await engine.push(SCOPE_A1);
+
+  engine.setConnectivity("sync_blocked");
+  const decision = await engine.canEnqueue({
+    ...orderInput(SCOPE_A1, "spoof-unblock"),
+    entityId: conflictId,
+    operation: "update",
+    payload: { note: "bypass" },
+    preconditions: { entityBlocked: false, hasCatalogSnapshots: true, underlyingConnectivity: "online" },
+  });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reasonCode, "SYNC_BLOCKED_ENTITY");
+  await assert.rejects(
+    engine.enqueue({
+      ...orderInput(SCOPE_A1, "spoof-unblock"),
+      entityId: conflictId,
+      operation: "update",
+      payload: { note: "bypass" },
+      preconditions: { entityBlocked: false, hasCatalogSnapshots: true, underlyingConnectivity: "online" },
+    }),
+    (error: unknown) => error instanceof SyncEngineError && error.code === "CAPABILITY_BLOCKED",
+  );
+});
+
+test("ausencia de clientType en DeviceSyncEngine bloquea operaciones financieras y clientType configurado no se puede falsificar por llamada", async () => {
+  const storage = new InMemorySyncStorage();
+  const server = new FakeServer();
+  const untyped = new DeviceSyncEngine({
+    deviceId: DEVICE,
+    storage,
+    transport: server,
+    ids: new SequentialIds(),
+    clock: new FakeClock(),
+  });
+
+  const payCheck = await untyped.canEnqueue({
+    scope: SCOPE_A1,
+    actorId: ACTOR,
+    entityType: "Payment",
+    entityId: id(0x4400),
+    operation: "create",
+    idempotencyKey: "untyped-pay",
+    payload: { paymentMethod: "cash", amountMinor: 1000, currency: "MXN" },
+  });
+  assert.equal(payCheck.allowed, false);
+  assert.equal(payCheck.reasonCode, "CLIENT_NOT_SUPPORTED");
+
+  await assert.rejects(
+    untyped.enqueue({
+      scope: SCOPE_A1,
+      actorId: ACTOR,
+      entityType: "Payment",
+      entityId: id(0x4400),
+      operation: "create",
+      idempotencyKey: "untyped-pay",
+      payload: { paymentMethod: "cash", amountMinor: 1000, currency: "MXN" },
+    }),
+    (error: unknown) => error instanceof SyncEngineError && error.code === "CAPABILITY_BLOCKED",
+  );
+  await assert.rejects(
+    untyped.enqueue({
+      scope: SCOPE_A1,
+      actorId: ACTOR,
+      entityType: "CashMovement",
+      entityId: id(0x4401),
+      operation: "create",
+      idempotencyKey: "untyped-cash",
+      payload: { amountMinor: 500, currency: "MXN" },
+    }),
+    (error: unknown) => error instanceof SyncEngineError && error.code === "CAPABILITY_BLOCKED",
+  );
+  assert.equal((await untyped.getOutbox(SCOPE_A1)).length, 0);
+
+  // Configured KDS engine cannot be spoofed with per-call clientType: "web_pos".
+  const kdsEngine = new DeviceSyncEngine({
+    deviceId: DEVICE,
+    clientType: "kds",
+    connectivity: "online",
+    storage: new InMemorySyncStorage(),
+    transport: server,
+    ids: new SequentialIds(),
+    clock: new FakeClock(),
+  });
+  await assert.rejects(
+    kdsEngine.enqueue({
+      scope: SCOPE_A1,
+      actorId: ACTOR,
+      entityType: "Payment",
+      entityId: id(0x4402),
+      operation: "create",
+      idempotencyKey: "kds-spoof-pay",
+      payload: { paymentMethod: "cash", amountMinor: 500, currency: "MXN" },
+      clientType: "web_pos",
+    }),
+    (error: unknown) => error instanceof SyncEngineError && error.code === "CAPABILITY_BLOCKED",
+  );
+});
+
+test("reintento tras CAPABILITY_BLOCKED por precondicion omitida en cash offline no consume localSequence", async () => {
+  const storage = new InMemorySyncStorage();
+  const server = new FakeServer();
+  const engine = new DeviceSyncEngine({
+    deviceId: DEVICE,
+    clientType: "web_pos",
+    connectivity: "offline",
+    storage,
+    transport: server,
+    ids: new SequentialIds(),
+    clock: new FakeClock(),
+  });
+
+  const order = await engine.enqueue({
+    ...orderInput(SCOPE_A1, "seq-order-1"),
+    preconditions: { hasCatalogSnapshots: true },
+  });
+  assert.equal(order.localSequence, 1);
+
+  const paymentInput = {
+    scope: SCOPE_A1,
+    actorId: ACTOR,
+    entityType: "Payment",
+    entityId: id(0x4500),
+    operation: "create",
+    idempotencyKey: "cash-offline-retry",
+    payload: { paymentMethod: "cash", amountMinor: 2500, currency: "MXN" },
+  };
+
+  // Attempt 1: omitted preconditions -> blocked; persistCount and sequence unchanged.
+  const persistsBefore = storage.persistCount;
+  await assert.rejects(
+    engine.enqueue(paymentInput),
+    (error: unknown) => error instanceof SyncEngineError && error.code === "CAPABILITY_BLOCKED",
+  );
+  // Attempt 2: missing withinOfflineCashLimit -> blocked; sequence still unchanged.
+  await assert.rejects(
+    engine.enqueue({ ...paymentInput, preconditions: { cashRegisterOpen: true, cashierShiftOpen: true } }),
+    (error: unknown) => error instanceof SyncEngineError && error.code === "CAPABILITY_BLOCKED",
+  );
+  assert.equal(storage.persistCount, persistsBefore);
+  assert.equal((await engine.getOutbox(SCOPE_A1)).length, 1);
+
+  // Attempt 3: valid preconditions -> succeeds at localSequence 2 (no gap!).
+  const acceptedLocal = await engine.enqueue({
+    ...paymentInput,
+    preconditions: { cashRegisterOpen: true, cashierShiftOpen: true, withinOfflineCashLimit: true },
+  });
+  assert.equal(acceptedLocal.localSequence, 2);
   assert.equal((await engine.getOutbox(SCOPE_A1)).length, 2);
 });

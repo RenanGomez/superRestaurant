@@ -145,7 +145,7 @@ test("hidratacion en DeviceSyncEngine migra compatibles, lleva incompatibles a m
   const ids = new SequentialIds();
 
   // Seed durable state via normal engine, then downgrade schemaVersion of entries in raw storage.
-  const writer = new DeviceSyncEngine({ deviceId: DEVICE, storage, transport: server, ids, clock });
+  const writer = new DeviceSyncEngine({ deviceId: DEVICE, clientType: "web_pos", storage, transport: server, ids, clock });
   const acceptedOrder = await writer.enqueue(orderInput(SCOPE_A1, "term-1"));
   await writer.push(SCOPE_A1);
   const pendingOrder = await writer.enqueue(orderInput(SCOPE_A1, "mig-order"));
