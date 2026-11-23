@@ -270,6 +270,9 @@ begin
         ),'quantity',2,'restaurantId',restaurant::text,'branchId',branch::text,'status','pending'
       ))
     );
+    if pg_catalog.strpos(pg_catalog.pg_get_functiondef('app_private.confirm_capture_draft_v3(uuid,jsonb,jsonb,jsonb)'::regprocedure), '''status'',''note''') > 0 then
+      order_record := pg_catalog.jsonb_set(order_record, '{items,0,note}', 'null'::jsonb, true);
+    end if;
     order_audits := pg_catalog.jsonb_build_array(
       pg_catalog.jsonb_build_object(
         'schemaVersion',1,'eventId',confirmation_event::text,
@@ -301,6 +304,7 @@ begin
     )->>'status'<>'conflict' then
       raise exception 'CAPTURE_REPEAT_CONFIRMATION_PARTIAL_FAILURE_REJECTED';
     end if;
+    execute 'reset role';
     if exists (
       select 1 from app.orders placed
       where placed.restaurant_id=restaurant and placed.branch_id=branch and placed.id=confirmed_order
@@ -312,6 +316,7 @@ begin
       select 1 from app.capture_repeat_order_plans stored
       where stored.restaurant_id=restaurant and stored.branch_id=branch and stored.capture_draft_id=target_capture
     ) then raise exception 'CAPTURE_REPEAT_CONFIRMATION_PARTIAL_WRITE_LEAKED'; end if;
+    execute 'set local role app_api';
     result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
     if result->>'status'<>'applied' or result#>>'{record,detail,status}'<>'confirmed'
       or app_private.confirm_capture_draft_v3(actor,confirmation_command,null,null)->>'status'<>'replayed'

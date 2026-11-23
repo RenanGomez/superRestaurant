@@ -1,5 +1,7 @@
 # TODO
 
+- [ ] **REVIEW · A · m1-pg-verify-clean** — cinco invariantes SQL y flujo HTTP 7/7 verdes localmente; tolerancias retiradas. El PR #19 pasó pg-verify en `114b91e4`; pendiente push de los ajustes y verificar CI en la nueva cabeza. P2 del verificador histórico registrado en `docs/agentic/debt.md`.
+
 ## Día operable (alcance congelado el 2026-10-03; el % se mide sólo contra esta lista)
 
 | # | Capacidad del operador | Estado | % |

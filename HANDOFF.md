@@ -1,3 +1,12 @@
+# HANDOFF
+
+## m1-pg-verify-clean — REVIEW local (2026-11-23)
+
+- Cinco invariantes SQL pasan en PostgreSQL 17.6 desechable con todas las migraciones; CI sin tolerancias SQL ni HTTP. El parser compartido acepta y valida asentamiento en snapshots antiguos y actuales; flujo HTTP local 7/7, incluyendo entrega, aislamiento y caja.
+- Archivos: workflow, cinco fixtures SQL, parser y pruebas de `packages/shared-types`, `docs/agentic/debt.md`, TODO y este handoff. No hay migración nueva ni interacción con Supabase remoto. Autorización humana explícita para ampliar al parser compartido y dejar commits locales sin push/PR.
+- Lint 10/10, typecheck 13/13, test 13/13, build 10/10, pruebas unitarias shared-types y verificadores rollback selección, pizza V2 y transferencia verdes; flujo HTTP 7/7. El verificador histórico menu-shared rechaza el fixture ROLLBACK por exigir COMMIT: P2 en debt. La primera corrida HTTP tuvo desconexión local; segunda 7/7 y cleanup correcto.
+- CodeGraph no inicializado; consumidores inspeccionados manualmente. Sin subagentes. El PR #19 pasó pg-verify en `114b91e4`; tras el merge local de main y los ajustes de revisión, el humano hará push y comprobará CI en la nueva cabeza.
+
 ## AO M0 — integración de PR #3, revisores y deuda de CI (2026-11-22)
 
 - **PR #3:** se integró con `gh pr merge --squash --match-head-commit` porque `ao pr merge` devolvió `PR_HEAD_CHANGED` (el daemon conservaba un head viejo). `feat/smoke-r1` entró después a `main` con el squash `079b8b37` (M0-8).

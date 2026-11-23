@@ -36,6 +36,7 @@ declare
   save_state jsonb;
   save_event uuid;
   save_key uuid;
+  saved_catalog uuid;
   payload jsonb;
   payload_b jsonb;
   legacy jsonb;
@@ -92,10 +93,11 @@ begin
   if assignment_count<>3 then raise exception 'SHARED_GROUPS_ASSIGNMENT_COUNT_%',assignment_count; end if;
 
   -- 2. replay is idempotent
+  select head.catalog_id into saved_catalog from app.menu_catalog_heads head where head.restaurant_id=restaurant_a;
   execute 'set local role app_api';
   select s.status into save_status from app_private.save_menu_catalog(
     actor,restaurant_a,branch_a,save_event,save_key,device,now_at,0,
-    (select head.catalog_id from app.menu_catalog_heads head where head.restaurant_id=restaurant_a),'MXN',payload) s;
+    saved_catalog,'MXN',payload) s;
   execute 'reset role';
   if save_status<>'replayed' then raise exception 'SHARED_GROUPS_REPLAY_%',save_status; end if;
 
@@ -116,10 +118,11 @@ begin
   if save_state#>'{catalog,products,1,modifierGroupIds}' is distinct from pg_catalog.jsonb_build_array(g_shared::text)
     or save_state#>'{catalog,products,0,modifierGroupIds}' is distinct from pg_catalog.jsonb_build_array(g_own::text)
   then raise exception 'SHARED_GROUPS_LEGACY_DERIVATION'; end if;
+  select head.catalog_id into saved_catalog from app.menu_catalog_heads head where head.restaurant_id=restaurant_a;
   execute 'set local role app_api';
   select s.status into save_status from app_private.save_menu_catalog(
     actor,restaurant_a,branch_a,save_event,save_key,device,now_at,1,
-    (select head.catalog_id from app.menu_catalog_heads head where head.restaurant_id=restaurant_a),'MXN',
+    saved_catalog,'MXN',
     pg_catalog.jsonb_build_object(
       'categories',legacy->'categories',
       'products',pg_catalog.jsonb_build_array(

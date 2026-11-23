@@ -158,13 +158,6 @@ jobs:
           done
       - name: Run SQL tests
         run: |
-          # M0-7: fallan en CI al correr en lote; reparar y quitar
-          KNOWN_FAILING_SQL_TESTS="capture_drafts_invariants.sql
-          capture_repeat_order_invariants.sql
-          capture_selection_plan_invariants.sql
-          delivery_zones_invariants.sql
-          menu_shared_modifier_groups_invariants.sql"
-          known_failing() { grep -Fxq "$(basename "$1")" <<<"$KNOWN_FAILING_SQL_TESTS"; }
           failed=0
           for file in supabase/tests/*.sql; do
             case "$file" in */tenancy_memberships_catalog.sql|*/tenancy_memberships_runtime_catalog.sql|*/tenancy_memberships_post_dining_zones_catalog.sql|*/tenancy_memberships_post_dining_zones_runtime_catalog.sql) continue ;; esac
@@ -184,14 +177,8 @@ jobs:
               passed=0
             fi
             if [[ "$passed" == 0 ]]; then
-              if known_failing "$file"; then
-                echo "::warning file=$file::fallo conocido M0-7"
-              else
-                echo "::error file=$file::SQL test failed"
-                failed=1
-              fi
-            elif known_failing "$file"; then
-              echo "::warning file=$file::$file ya pasa; quitarlo de KNOWN_FAILING_SQL_TESTS"
+              echo "::error file=$file::SQL test failed"
+              failed=1
             fi
           done
           echo "sql tests failed=$failed"
@@ -204,8 +191,6 @@ jobs:
           pnpm --filter @super-restaurant/api run verify:pizza-model-v2-schema:rollback
           pnpm --filter @super-restaurant/api run verify:cash-transfer-method-schema:rollback
       - name: Run local HTTP flow
-        # M0-7: http flow local no verde en CI (order_detail ORDER_UNAVAILABLE); reparar y quitar
-        continue-on-error: true
         run: pnpm --filter @super-restaurant/api run test:http:local -- --local-disposable-only
 
   e2e-smoke:
