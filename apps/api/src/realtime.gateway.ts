@@ -1,11 +1,19 @@
 import {
   KDS_INITIAL_CURSOR,
+  REALTIME_KITCHEN_READY_EVENT,
+  REALTIME_KITCHEN_READY_SUBSCRIBE_EVENT,
   REALTIME_NAMESPACE,
   REALTIME_NOTIFICATION_EVENT,
   REALTIME_SUBSCRIBE_EVENT,
+  kitchenReadyMatchesSubscription,
+  parseKitchenReadyNotificationV1,
+  parseKitchenReadySubscriptionV1,
   parseRealtimeNotificationV1,
   parseRealtimeSubscriptionV1,
+  type BranchScope,
   type KdsEventV1,
+  type KitchenReadySubscriptionAckV1,
+  type KitchenReadySubscriptionV1,
   type RealtimeSubscriptionAckV1,
   type RealtimeSubscriptionV1,
 } from "@super-restaurant/shared-types";
@@ -29,6 +37,7 @@ import type { RealtimeNotificationPort } from "./orders.js";
 
 interface RealtimeSession {
   readonly principal: AuthenticatedPrincipal;
+  kitchenReadySubscription?: KitchenReadySubscriptionV1;
   subscription?: RealtimeSubscriptionV1;
 }
 
@@ -66,7 +75,12 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayDisconnect, Real
   ): Promise<RealtimeSubscriptionAckV1 | undefined> {
     const session = this.#sessions.get(client);
     const subscription = parseRealtimeSubscriptionV1(input);
-    if (session === undefined || session.subscription !== undefined || subscription === undefined) {
+    if (
+      session === undefined
+      || session.subscription !== undefined
+      || subscription === undefined
+      || (session.kitchenReadySubscription !== undefined && !sameScope(session.kitchenReadySubscription.scope, subscription.scope))
+    ) {
       client.disconnect(true);
       return undefined;
     }
@@ -74,6 +88,33 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayDisconnect, Real
       await this.authorization.authorizeBranch(session.principal, subscription.scope, "kds.read");
       session.subscription = subscription;
       await client.join(roomFor(subscription));
+      return Object.freeze({ ...subscription, cursor: KDS_INITIAL_CURSOR, status: "subscribed" });
+    } catch {
+      client.disconnect(true);
+      return undefined;
+    }
+  }
+
+  @SubscribeMessage(REALTIME_KITCHEN_READY_SUBSCRIBE_EVENT)
+  public async subscribeKitchenReady(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() input: unknown,
+  ): Promise<KitchenReadySubscriptionAckV1 | undefined> {
+    const session = this.#sessions.get(client);
+    const subscription = parseKitchenReadySubscriptionV1(input);
+    if (
+      session === undefined
+      || session.kitchenReadySubscription !== undefined
+      || subscription === undefined
+      || (session.subscription !== undefined && !sameScope(session.subscription.scope, subscription.scope))
+    ) {
+      client.disconnect(true);
+      return undefined;
+    }
+    try {
+      await this.authorization.authorizeBranch(session.principal, subscription.scope, "orders.read");
+      session.kitchenReadySubscription = subscription;
+      await client.join(kitchenReadyRoomFor(subscription));
       return Object.freeze({ ...subscription, cursor: KDS_INITIAL_CURSOR, status: "subscribed" });
     } catch {
       client.disconnect(true);
@@ -91,18 +132,49 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayDisconnect, Real
       stationId: event.stationId,
     });
     if (notification === undefined) return;
+    const kitchenReady = event.status === "ready"
+      ? parseKitchenReadyNotificationV1({
+        cursor: event.cursor,
+        eventId: event.eventId,
+        eventType: "kitchen.item_ready",
+        occurredAt: event.occurredAt,
+        orderId: event.orderId,
+        orderItemId: event.orderItemId,
+        receivedAt: event.receivedAt,
+        schemaVersion: 1,
+        scope: event.scope,
+        stationId: event.stationId,
+      })
+      : undefined;
+
     const deliveries = [...this.#sessions].map(async ([client, session]) => {
       const subscription = session.subscription;
-      if (subscription === undefined || !matches(subscription, event)) return;
-      try {
-        await this.authorization.authorizeBranch(session.principal, subscription.scope, "kds.read");
-        if (client.connected) client.volatile.emit(REALTIME_NOTIFICATION_EVENT, notification);
-      } catch {
-        await client.leave(roomFor(subscription));
-        client.disconnect(true);
+      if (subscription !== undefined && matches(subscription, event)) {
+        try {
+          await this.authorization.authorizeBranch(session.principal, subscription.scope, "kds.read");
+          if (client.connected) client.volatile.emit(REALTIME_NOTIFICATION_EVENT, notification);
+        } catch {
+          await this.disconnectUnauthorized(client, session);
+          return;
+        }
+      }
+      const readySubscription = session.kitchenReadySubscription;
+      if (kitchenReady !== undefined && readySubscription !== undefined && kitchenReadyMatchesSubscription(readySubscription, event)) {
+        try {
+          await this.authorization.authorizeBranch(session.principal, readySubscription.scope, "orders.read");
+          if (client.connected) client.volatile.emit(REALTIME_KITCHEN_READY_EVENT, kitchenReady);
+        } catch {
+          await this.disconnectUnauthorized(client, session);
+        }
       }
     });
     await Promise.all(deliveries);
+  }
+
+  private async disconnectUnauthorized(client: Socket, session: RealtimeSession): Promise<void> {
+    if (session.subscription !== undefined) await client.leave(roomFor(session.subscription));
+    if (session.kitchenReadySubscription !== undefined) await client.leave(kitchenReadyRoomFor(session.kitchenReadySubscription));
+    client.disconnect(true);
   }
 
   private async authenticate(client: Socket): Promise<void> {
@@ -125,12 +197,18 @@ function accessTokenFrom(value: unknown): string | undefined {
   } catch { return undefined; }
 }
 
+function sameScope(left: BranchScope, right: BranchScope): boolean {
+  return left.restaurantId === right.restaurantId && left.branchId === right.branchId;
+}
+
 function matches(subscription: RealtimeSubscriptionV1, event: KdsEventV1): boolean {
-  return subscription.scope.restaurantId === event.scope.restaurantId
-    && subscription.scope.branchId === event.scope.branchId
-    && subscription.stationId === event.stationId;
+  return sameScope(subscription.scope, event.scope) && subscription.stationId === event.stationId;
 }
 
 function roomFor(subscription: RealtimeSubscriptionV1): string {
   return `kds:v1:${subscription.scope.restaurantId}:${subscription.scope.branchId}:${subscription.stationId}`;
+}
+
+function kitchenReadyRoomFor(subscription: KitchenReadySubscriptionV1): string {
+  return `kitchen-ready:v1:${subscription.scope.restaurantId}:${subscription.scope.branchId}:${subscription.stationId ?? "*"}`;
 }

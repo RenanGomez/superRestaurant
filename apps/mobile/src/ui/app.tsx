@@ -73,6 +73,7 @@ import type { MobileDeviceIdentity } from "../device-identity.js";
 import { readInitialSession, revalidateAccess } from "../revalidation.js";
 import type { MobileSession } from "../session.js";
 import { endMobileSession } from "../sign-out.js";
+import { type ActiveOrdersRealtimeConfig } from "./active-orders-panel.js";
 import { BranchScreen } from "./branch-screen.js";
 import { ActionButton, Banner, Caption, LoadingBlock, StateBlock, Subheading, useFocusRing } from "./components.js";
 import { MenuScreen } from "./menu-screen.js";
@@ -786,6 +787,7 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
         onSelectTable={selectTable}
         onSubmitDraft={submitDraft}
         payment={state.payment}
+        realtime={orderDelivery === undefined && token !== undefined ? { accessToken: token, apiBaseUrl: config.apiBaseUrl } : undefined}
         revalidating={state.revalidating}
         revalidationFailure={state.revalidationFailure}
         tab={state.tab}
@@ -854,6 +856,7 @@ function WorkspaceContent({
   onSelectTable,
   onSubmitDraft,
   payment,
+  realtime,
   revalidating,
   revalidationFailure,
   tab,
@@ -877,6 +880,7 @@ function WorkspaceContent({
   readonly onSelectTable: (table: DiningTableV1) => void;
   readonly onSubmitDraft: () => void;
   readonly payment: MobileState["payment"];
+  readonly realtime?: ActiveOrdersRealtimeConfig | undefined;
   readonly revalidating: boolean;
   readonly revalidationFailure: MobileFailure | undefined;
   readonly tab: MobileTab;
@@ -943,6 +947,7 @@ function WorkspaceContent({
     onRetryMenu={onRetryMenu}
     onSubmit={onSubmitDraft}
     payment={payment}
+    realtime={realtime}
     table={located.table}
     zoneName={located.zoneName}
   />;

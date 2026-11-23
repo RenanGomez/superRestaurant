@@ -1,13 +1,21 @@
 import {
   KDS_INITIAL_CURSOR,
   REALTIME_SCHEMA_VERSION,
+  decodeKitchenReadyWireFrame,
+  encodeKitchenReadySubscribeFrame,
+  encodeRealtimeConnectFrame,
+  kitchenReadyMatchesSubscription,
   parseKdsCursorV1,
   parseKdsEventPageV1,
   parseKdsEventV1,
   parseKdsTicketListV1,
+  parseKitchenReadyNotificationV1,
+  parseKitchenReadySubscriptionAckV1,
+  parseKitchenReadySubscriptionV1,
   parseRealtimeNotificationV1,
   parseRealtimeSubscriptionAckV1,
   parseRealtimeSubscriptionV1,
+  realtimeWebSocketUrl,
 } from "./index.js";
 
 const restaurantId = "1e37ae13-8507-484c-969f-2176f77b7000";
@@ -100,3 +108,58 @@ const accessor = { schemaVersion: 1, scope, stationId: "kitchen" };
 Object.defineProperty(accessor, "stationId", { enumerable: true, get: () => { throw new Error("must not run"); } });
 expect(parseRealtimeSubscriptionV1(accessor) === undefined, "accessor fails without invocation");
 expect(parseKdsEventV1(new Proxy(event(), { ownKeys: () => { throw new Error("hostile"); } })) === undefined, "hostile proxy fails closed");
+
+const readyStationSub = parseKitchenReadySubscriptionV1({ schemaVersion: 1, scope, stationId: "kitchen" });
+const readyBranchSub = parseKitchenReadySubscriptionV1({ schemaVersion: 1, scope, stationId: null });
+expect(readyStationSub !== undefined && readyStationSub.stationId === "kitchen" && Object.isFrozen(readyStationSub), "station-scoped ready subscription parses frozen");
+expect(readyBranchSub !== undefined && readyBranchSub.stationId === null && Object.isFrozen(readyBranchSub), "branch-scoped ready subscription parses frozen");
+expect(parseKitchenReadySubscriptionV1({ schemaVersion: 1, scope, stationId: "" }) === undefined, "empty ready station fails");
+expect(parseKitchenReadySubscriptionV1({ schemaVersion: 1, scope, stationId: " kitchen" }) === undefined, "non-canonical ready station fails");
+expect(parseKitchenReadySubscriptionV1({ schemaVersion: 1, scope, stationId: null, extra: true }) === undefined, "extra ready subscription key fails");
+expect(parseKitchenReadySubscriptionV1(accessor) === undefined, "ready subscription rejects getter without invocation");
+
+expect(parseKitchenReadySubscriptionAckV1({ schemaVersion: 1, scope, stationId: "kitchen", cursor: "v1:0", status: "subscribed" }) !== undefined, "station ready ack parses");
+expect(parseKitchenReadySubscriptionAckV1({ schemaVersion: 1, scope, stationId: null, cursor: "v1:4", status: "subscribed" }) !== undefined, "branch ready ack parses");
+expect(parseKitchenReadySubscriptionAckV1({ schemaVersion: 1, scope, stationId: null, cursor: "v1:4", status: "other" }) === undefined, "invalid ready ack status fails");
+
+const readyPayload = {
+  schemaVersion: 1,
+  scope,
+  stationId: "kitchen",
+  cursor: "v1:5",
+  eventId,
+  eventType: "kitchen.item_ready",
+  orderId,
+  orderItemId,
+  occurredAt: "2026-09-02T22:00:00.000Z",
+  receivedAt: "2026-09-02T22:00:00.100Z",
+};
+const readyNotification = parseKitchenReadyNotificationV1(readyPayload);
+expect(readyNotification !== undefined && Object.isFrozen(readyNotification), "ready notification parses frozen");
+expect(parseKitchenReadyNotificationV1({ ...readyPayload, eventType: "kds.changed" }) === undefined, "wrong ready eventType fails");
+expect(parseKitchenReadyNotificationV1({ ...readyPayload, stationId: null }) === undefined, "null ready notification station fails");
+expect(parseKitchenReadyNotificationV1({ ...readyPayload, extra: 1 }) === undefined, "extra ready notification key fails");
+expect(parseKitchenReadyNotificationV1(new Proxy(readyPayload, { ownKeys: () => { throw new Error("hostile"); } })) === undefined, "hostile ready proxy fails closed");
+
+if (readyStationSub === undefined || readyBranchSub === undefined || readyNotification === undefined) {
+  throw new Error("expected valid ready fixtures");
+}
+expect(kitchenReadyMatchesSubscription(readyStationSub, readyNotification), "exact station ready subscription matches");
+expect(!kitchenReadyMatchesSubscription(readyStationSub, { ...readyNotification, stationId: "bar" }), "different station rejected");
+expect(kitchenReadyMatchesSubscription(readyBranchSub, { ...readyNotification, stationId: "bar" }), "branch-scoped subscription matches any station in branch");
+const otherBranch = parseKitchenReadyNotificationV1({ ...readyPayload, scope: { restaurantId, branchId: restaurantId } });
+if (otherBranch === undefined) throw new Error("expected otherBranch fixture");
+expect(!kitchenReadyMatchesSubscription(readyBranchSub, otherBranch), "different branch rejected");
+
+expect(realtimeWebSocketUrl("http://127.0.0.1:4000/") === "ws://127.0.0.1:4000/socket.io/?EIO=4&transport=websocket", "http ws url");
+expect(realtimeWebSocketUrl("https://api.example.com") === "wss://api.example.com/socket.io/?EIO=4&transport=websocket", "https wss url");
+expect(encodeRealtimeConnectFrame("tok") === '40/realtime/v1,{"accessToken":"tok"}', "connect frame");
+expect(encodeKitchenReadySubscribeFrame(readyStationSub).startsWith('42/realtime/v1,1["kitchen.ready.subscribe.v1",'), "subscribe frame");
+expect(decodeKitchenReadyWireFrame("2").kind === "ping", "ping decodes");
+expect(decodeKitchenReadyWireFrame('0{"sid":"abc"}').kind === "open", "open decodes");
+expect(decodeKitchenReadyWireFrame('40/realtime/v1,{"sid":"x"}').kind === "connected", "connected decodes");
+expect(decodeKitchenReadyWireFrame("44/realtime/v1,{}").kind === "closed", "closed decodes");
+const ackFrame = decodeKitchenReadyWireFrame(`43/realtime/v1,1[${JSON.stringify({ schemaVersion: 1, scope, stationId: "kitchen", cursor: "v1:0", status: "subscribed" })}]`);
+expect(ackFrame.kind === "ack" && ackFrame.ack?.stationId === "kitchen", "ack decodes");
+const readyFrame = decodeKitchenReadyWireFrame(`42/realtime/v1,${JSON.stringify(["kitchen.ready.v1", readyPayload])}`);
+expect(readyFrame.kind === "ready" && readyFrame.notification?.orderItemId === orderItemId, "ready event decodes");
