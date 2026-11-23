@@ -1,3 +1,10 @@
+## m2-sync-sql-migrations - 2026-11-23 (IN_PROGRESS; revision pendiente)
+
+- Migracion local 20261123000300_sync_ledger.sql: dispositivos con secuencia global serializada, ledger con huellas, recibos, changelog con contador transaccional y tombstones, y casos de revision. RLS+FORCE sin grants directos; funciones privadas con scope. Sin TTL financiero ni purga.
+- PostgreSQL 17.6 local desechable: 74 migraciones desde cero y sync_ledger_invariants.sql mediante pnpm --filter @super-restaurant/api verify:sync-schema:rollback; postcheck intacto. pnpm lint 10/10, pnpm typecheck 13/13, pnpm test 13/13 y lint API verdes. CodeGraph no inicializado; inspeccion manual. Sin subagentes, remoto ni push.
+- Pendiente antes de REVIEW: prueba real de concurrencia, integracion transaccional con el futuro endpoint y doble revision de seguridad nivel A. Sin migracion remota; rollback consiste en no aplicarla. PG17 se copio desde el checkout principal al cache ignorado del worktree.
+- Siguiente accion: probar concurrencia y completar revision; no afirmar operacion offline.
+
 # HANDOFF
 
 ## m2-sync-merge-domain — 2026-11-23 (REVIEW local)
