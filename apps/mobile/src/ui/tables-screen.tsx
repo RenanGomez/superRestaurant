@@ -1,5 +1,5 @@
 import { FlatList, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
-import type { DiningLayoutV1, DiningLayoutZoneV1, DiningTableV1 } from "@super-restaurant/shared-types";
+import type { DiningLayoutV1, DiningLayoutZoneV1, DiningTableV1, TableBoardV1 } from "@super-restaurant/shared-types";
 
 import { failureMessage, type MobileResource } from "../mobile-state.js";
 import { Banner, Body, Caption, LoadingBlock, StateBlock, Subheading, useFocusRing } from "./components.js";
@@ -11,16 +11,11 @@ const SHAPES: Readonly<Record<DiningTableV1["shape"], string>> = Object.freeze({
   square: "Cuadrada",
 });
 
-/**
- * Zones and tables of the authorized branch, as a touch selection.
- *
- * Only what the layout contract carries is shown — zone, name, capacity and
- * shape. Occupancy, availability, an open order or a bill are **not** shown,
- * and are not inferred: no consolidated POS read exists for them yet, so the
- * screen says so instead of guessing. Picking a table opens a local draft; it
- * does not open, hold or claim the table anywhere.
- */
-export function TablesScreen({ layout, onRetry, onSelectTable, selectedTableId }: {
+/** Zones and tables with server-reported occupancy. */
+export function TablesScreen({ board, boardFailed, onRetryBoard, layout, onRetry, onSelectTable, selectedTableId }: {
+  readonly board: TableBoardV1 | undefined;
+  readonly boardFailed: boolean;
+  readonly onRetryBoard: () => void;
   readonly layout: MobileResource<DiningLayoutV1>;
   readonly onRetry: () => void;
   readonly onSelectTable: (table: DiningTableV1) => void;
@@ -52,12 +47,9 @@ export function TablesScreen({ layout, onRetry, onSelectTable, selectedTableId }
     contentContainerStyle={styles.list}
     data={layout.value.zones}
     keyExtractor={(zone) => zone.zoneId}
-    ListHeaderComponent={<Banner
-      message={"Elige una mesa para preparar su comanda. Este plano no infiere ocupación ni cuenta; "
-        + "al abrir una mesa se consultan sus órdenes activas."}
-      tone="info"
-    />}
+    ListHeaderComponent={boardFailed ? <StateBlock action={{ label: "Reintentar", onPress: onRetryBoard }} description="No se pudo consultar la ocupación." title="Ocupación no disponible" /> : board === undefined ? <LoadingBlock label="Consultando ocupación…" /> : <Banner message="Ocupación consultada en el servidor." tone="info" />}
     renderItem={({ item }) => <ZoneSection
+      board={board}
       columns={columns}
       onSelectTable={onSelectTable}
       selectedTableId={selectedTableId}
@@ -66,7 +58,8 @@ export function TablesScreen({ layout, onRetry, onSelectTable, selectedTableId }
   />;
 }
 
-function ZoneSection({ columns, onSelectTable, selectedTableId, zone }: {
+function ZoneSection({ board, columns, onSelectTable, selectedTableId, zone }: {
+  readonly board: TableBoardV1 | undefined;
   readonly columns: number;
   readonly onSelectTable: (table: DiningTableV1) => void;
   readonly selectedTableId: string | undefined;
@@ -80,6 +73,7 @@ function ZoneSection({ columns, onSelectTable, selectedTableId, zone }: {
       : <View style={styles.tables}>
         {zone.tables.map((table) => <View key={table.tableId} style={[styles.tableSlot, { width: `${100 / columns}%` }]}>
           <TableButton
+            occupancy={board?.tables.find((entry) => entry.tableId === table.tableId)?.status}
             onSelect={onSelectTable}
             selected={selectedTableId === table.tableId}
             table={table}
@@ -90,7 +84,8 @@ function ZoneSection({ columns, onSelectTable, selectedTableId, zone }: {
   </View>;
 }
 
-function TableButton({ onSelect, selected, table, zoneName }: {
+function TableButton({ occupancy, onSelect, selected, table, zoneName }: {
+  readonly occupancy: "free" | "occupied" | undefined;
   readonly onSelect: (table: DiningTableV1) => void;
   readonly selected: boolean;
   readonly table: DiningTableV1;
@@ -115,6 +110,7 @@ function TableButton({ onSelect, selected, table, zoneName }: {
       <Subheading>{table.name}</Subheading>
       <Body>{capacity}</Body>
       <Caption>{SHAPES[table.shape]}</Caption>
+      <Caption>{occupancy === "free" ? "Libre" : occupancy === "occupied" ? "Ocupada" : "Ocupación desconocida"}</Caption>
     </View>
     <Text style={styles.tableAction}>{selected ? "Abierta" : "Comanda"}</Text>
   </Pressable>;

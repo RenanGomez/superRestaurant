@@ -7,6 +7,7 @@ import {
   type CollectPaymentCommandV1,
   type DiningTableV1,
   type OrderMutationSummaryV1,
+  type TableBoardV1,
 } from "@super-restaurant/shared-types";
 
 import { gateMobileAuth, type MobileAuthGate } from "../auth-gate.js";
@@ -22,6 +23,7 @@ import {
   getCheckoutOrder,
   getDiningLayout,
   getMenuCatalog,
+  getTableBoard,
   listActiveTableOrders,
   listMemberships,
   listOperationalShifts,
@@ -423,6 +425,20 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     return createOrderDeliveryPort(Object.freeze(transport));
   }, [branchId, config, orderDelivery, restaurantId, token]);
 
+  const [board, setBoard] = useState<{ key: string; value?: TableBoardV1; failed?: boolean }>({ key: "" });
+  const [boardRevision, setBoardRevision] = useState(0);
+  const boardKey = `${token ?? ""}|${restaurantId ?? ""}|${branchId ?? ""}|${state.shift?.shiftId ?? ""}`;
+  useEffect(() => {
+    if (token === undefined || branchId === undefined || restaurantId === undefined || state.shift === undefined || state.revalidating) return;
+    let active = true;
+    setBoard({ key: boardKey });
+    void getTableBoard(config, token, { branchId, restaurantId }).then(
+      (value) => { if (active) setBoard({ key: boardKey, value }); },
+      () => { if (active) setBoard({ key: boardKey, failed: true }); },
+    );
+    return () => { active = false; };
+  }, [boardKey, boardRevision, branchId, config, restaurantId, state.revalidating, state.shift, token]);
+
   const retry = useCallback((tab: MobileTab): void => {
     if (branchId === undefined || restaurantId === undefined) return;
     const target: MobileBranchScope = { branchId, restaurantId };
@@ -649,6 +665,7 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
           // must never be offered again.
           planRef.current = undefined;
           dispatchDraft({ type: "submissionSucceeded" });
+          setBoardRevision((revision) => revision + 1);
           // What the table now holds changed, so the active list is read again.
           if (branchId !== undefined && restaurantId !== undefined) {
             dispatch({ scope: { branchId, restaurantId }, type: "activeOrdersReset" });
@@ -765,6 +782,9 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     <View style={styles.content}>
       <WorkspaceContent
         activeOrders={activeOrdersForTable(state, draft.tableId)}
+        board={board.key === boardKey ? board.value : undefined}
+        boardFailed={board.key === boardKey && board.failed === true}
+        onRetryBoard={() => { setBoardRevision((revision) => revision + 1); }}
         draft={draft}
         draftCategory={draftCategory}
         menu={state.menu}
@@ -838,6 +858,9 @@ function WorkspaceTab({ onPress, selected, tab }: {
  */
 function WorkspaceContent({
   activeOrders,
+  board,
+  boardFailed,
+  onRetryBoard,
   draft,
   draftCategory,
   layout,
@@ -862,6 +885,9 @@ function WorkspaceContent({
   tab,
 }: {
   readonly activeOrders: MobileState["activeOrders"];
+  readonly board: TableBoardV1 | undefined;
+  readonly boardFailed: boolean;
+  readonly onRetryBoard: () => void;
   readonly draft: OrderDraftState;
   readonly draftCategory: string | undefined;
   readonly layout: MobileState["layout"];
@@ -902,6 +928,9 @@ function WorkspaceContent({
 
   if (draft.tableId === undefined) {
     return <TablesScreen
+      board={board}
+      boardFailed={boardFailed}
+      onRetryBoard={onRetryBoard}
       layout={layout}
       onRetry={() => { onRetryRead("tables"); }}
       onSelectTable={onSelectTable}

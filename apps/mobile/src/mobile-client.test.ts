@@ -14,6 +14,7 @@ import {
   getCheckoutOrder,
   getDiningLayout,
   getMenuCatalog,
+  getTableBoard,
   isAuthorizedMobilePath,
   listActiveTableOrders,
   listMemberships,
@@ -63,6 +64,7 @@ test("exposes exactly the operational reads, Order mutations and payment endpoin
     "getCheckoutOrder",
     "getDiningLayout",
     "getMenuCatalog",
+    "getTableBoard",
     "isAuthorizedMobilePath",
     "listActiveTableOrders",
     "listMemberships",
@@ -85,6 +87,7 @@ test("exposes exactly the operational reads, Order mutations and payment endpoin
     "/api/v1/payments/collect",
     "/api/v1/payments/quote",
     "/api/v1/shifts/active",
+    "/api/v1/tables/board",
   ]);
   for (const endpoint of Object.values(MOBILE_API_PATHS)) {
     for (const forbidden of ["refund", "transition", "cancel", "cfdi"]) {
@@ -637,4 +640,14 @@ test("fails closed on an unknown schemaVersion or a removed required field, per 
       label,
     );
   }
+});
+
+test("table board posts scope and rejects another branch", async () => {
+  const body = { schemaVersion: 1, scope: scopeA, tables: [], unassignedOrders: [] };
+  const { calls, fetcher } = jsonFetcher(body);
+  assert.equal((await getTableBoard(fixtureConfig, "token", scopeA, fetcher)).tables.length, 0);
+  assert.equal(calls[0]?.init?.method, "POST");
+  assert.deepEqual(JSON.parse(String(calls[0]?.init?.body)), scopeA);
+  await assert.rejects(getTableBoard(fixtureConfig, "token", scopeB, jsonFetcher(body).fetcher),
+    (error: unknown) => error instanceof MobileRequestError && error.status === "protocol");
 });

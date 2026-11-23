@@ -407,6 +407,7 @@ test("only the authorized operational, order and payment paths are reachable", (
     "/api/v1/payments/collect",
     "/api/v1/payments/quote",
     "/api/v1/shifts/active",
+    "/api/v1/tables/board",
   ]);
   assert.deepEqual(
     Object.values(MOBILE_API_PATHS).filter((endpoint) => endpoint.includes("orders")).sort(),

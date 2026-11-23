@@ -13,6 +13,7 @@ import {
   parseMenuCatalogStateV1,
   parseOpenOrderCommandV1,
   parseOperationalShiftListV1,
+  parseTableBoardV1,
   parseOrderMutationSummaryV1,
   parsePaymentCollectionSummaryV1,
   parseQuoteCashPaymentRequestV1,
@@ -29,6 +30,7 @@ import {
   type MenuCatalogStateV1,
   type OpenOrderCommandV1,
   type OperationalShiftListV1,
+  type TableBoardV1,
   type OrderMutationSummaryV1,
   type PaymentCollectionSummaryV1,
   type QuoteCashPaymentRequestV1,
@@ -62,6 +64,7 @@ export const MOBILE_API_PATHS = Object.freeze({
   menuCatalog: "/api/v1/catalog/menu",
   openOrder: "/api/v1/orders/open",
   operationalShifts: "/api/v1/shifts/active",
+  tableBoard: "/api/v1/tables/board",
   quotePayment: "/api/v1/payments/quote",
 } as const);
 
@@ -108,6 +111,18 @@ export async function getDiningLayout(
   const layout = await request(config, accessToken, scopedPath(MOBILE_API_PATHS.diningLayout, scope), parseDiningLayoutV1, fetcher);
   if (!sameScope(layout.scope, scope)) throw new MobileRequestError("protocol");
   return layout;
+}
+
+/** Reads authoritative table occupancy for the selected branch. */
+export async function getTableBoard(
+  config: MobileConfig, accessToken: string, scope: MobileBranchScope, fetcher: typeof fetch = fetch,
+): Promise<TableBoardV1> {
+  const validated = validScope(scope);
+  const board = await request(config, accessToken, MOBILE_API_PATHS.tableBoard, parseTableBoardV1, fetcher, {
+    body: JSON.stringify(validated), method: "POST",
+  });
+  if (!sameScope(board.scope, validated)) throw new MobileRequestError("protocol");
+  return board;
 }
 
 /** Reads the published catalog of one authorized branch, in read-only mode. */
