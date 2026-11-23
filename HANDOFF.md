@@ -2677,3 +2677,8 @@ Inspección inicial: CodeGraph actualizado, resolvedor legado de una variante y 
 - Se añadió `apps/api/src/sync/sync-result.ts` y tres pruebas para omisión transitoria, replay con identidad del request y denegación genérica; registradas en el script de pruebas API. No hay controlador ni endpoint conectado: no se declara REVIEW.
 - Verificación dirigida con Node 24: compilación TypeScript de shared-types, domain y pruebas API exit 0; `sync-result.test.js` 3/3; ESLint dirigido exit 0; `git diff --check` exit 0. `pnpm --filter @super-restaurant/api^... build` falló con `spawn EPERM` del sandbox. No se ejecutaron las puertas globales.
 - Pendiente: transacción por evento, serialización, revalidación, despacho y merge autoritativos, aislamiento y contrato HTTP, y todas las puertas. Sin migración remota ni push.
+
+### Coordinación parcial del lote
+
+- `sync-push.service.ts` valida el lote compartido, procesa secuencialmente y omite con hechos de log los eventos transitorios y los posteriores para no adelantar el cursor. `sync-push.test.ts` verifica reintento y scope con ejecutor simulado; no prueba PostgreSQL ni conecta una ruta HTTP.
+- Node 24: compilación de pruebas API, 2/2 pruebas dirigidas, ESLint dirigido y `git diff --check` verdes. Falta ejecutor transaccional real, auth/RBAC, escrituras, aislamiento y puertas globales. Estado IN_PROGRESS; sin remoto.
