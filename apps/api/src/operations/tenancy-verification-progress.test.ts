@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { mock } from "node:test";
+import { NestFactory } from "@nestjs/core";
 
 import {
   DINING_TABLE_VERIFICATION_CHECKPOINTS,
@@ -17,7 +18,7 @@ import {
   type MenuCatalogReadObservation,
   type MenuCatalogReadOutcome,
 } from "./tenancy-verification-progress.js";
-import { valuesEqual } from "./tenancy-verification.js";
+import { startProductApi, valuesEqual } from "./tenancy-verification.js";
 
 const createdEventId = "71000000-0000-4000-8000-000000000001";
 const updatedEventId = "71000000-0000-4000-8000-000000000002";
@@ -223,4 +224,32 @@ test("classifies only allowlisted layout transport failures", () => {
   assert.equal(classifyDiningLayoutFetchFailure({ code: "ENETUNREACH" }), "network_unreachable");
   assert.equal(classifyDiningLayoutFetchFailure({ code: "SECRET_PROVIDER_CODE", message: "secret" }), "other");
   assert.equal(classifyDiningLayoutFetchFailure(new Proxy({}, { get: () => { throw new Error("secret"); } })), "other");
+});
+
+
+test("isolated tenancy API uses an ephemeral cursor secret and restores the environment", async () => {
+  const previous = process.env.SYNC_CURSOR_SECRET;
+  let observed = "";
+  const app = { setGlobalPrefix: () => undefined, enableShutdownHooks: () => undefined, listen: async () => undefined, close: async () => undefined };
+  const factory = mock.method(NestFactory, "create", async () => {
+    observed = process.env.SYNC_CURSOR_SECRET ?? "";
+    return app as never;
+  });
+  try {
+    delete process.env.SYNC_CURSOR_SECRET;
+    await startProductApi(0, undefined);
+    assert.ok(observed.length >= 32);
+    assert.equal(process.env.SYNC_CURSOR_SECRET, undefined);
+    process.env.SYNC_CURSOR_SECRET = "original-secret";
+    await startProductApi(0, undefined);
+    assert.notEqual(observed, "original-secret");
+    assert.equal(process.env.SYNC_CURSOR_SECRET, "original-secret");
+    factory.mock.mockImplementation(async () => { throw new Error("creation failed"); });
+    await assert.rejects(startProductApi(0, undefined));
+    assert.equal(process.env.SYNC_CURSOR_SECRET, "original-secret");
+  } finally {
+    factory.mock.restore();
+    if (previous === undefined) delete process.env.SYNC_CURSOR_SECRET;
+    else process.env.SYNC_CURSOR_SECRET = previous;
+  }
 });

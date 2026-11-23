@@ -781,8 +781,16 @@ async function authenticateFixtures(
   return authenticated as unknown as readonly [AuthenticatedFixture, AuthenticatedFixture];
 }
 
-async function startProductApi(port: number, corsOrigin: string | undefined): Promise<INestApplication> {
-  const app = await NestFactory.create(AppModule, { abortOnError: false, logger: false });
+export async function startProductApi(port: number, corsOrigin: string | undefined): Promise<INestApplication> {
+  const previousCursorSecret = process.env.SYNC_CURSOR_SECRET;
+  let app: INestApplication;
+  try {
+    process.env.SYNC_CURSOR_SECRET = randomBytes(32).toString("base64url");
+    app = await NestFactory.create(AppModule, { abortOnError: false, logger: false });
+  } finally {
+    if (previousCursorSecret === undefined) delete process.env.SYNC_CURSOR_SECRET;
+    else process.env.SYNC_CURSOR_SECRET = previousCursorSecret;
+  }
   try {
     if (corsOrigin !== undefined) {
       app.enableCors({

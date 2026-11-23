@@ -210,11 +210,13 @@ expect(parseSyncPushResponseV1({
 }) === undefined, "duplicate eventId in push response rejected");
 
 // 7. SyncPullRequest, SyncPullChange & SyncPullResponse
-const pullReq = parseSyncPullRequestV1({ protocolVersion: 1, scope: SCOPE, cursor: null, limit: 100 });
+const pullReq = parseSyncPullRequestV1({ protocolVersion: 1, deviceId: DEVICE_1, scope: SCOPE, cursor: null, limit: 100 });
 expect(pullReq !== undefined && Object.isFrozen(pullReq), "valid SyncPullRequest parses frozen");
-expect(parseSyncPullRequestV1({ protocolVersion: 1, scope: SCOPE, cursor: "", limit: 100 }) === undefined, "empty cursor rejected");
-expect(parseSyncPullRequestV1({ protocolVersion: 1, scope: SCOPE, cursor: null, limit: 10.5 }) === undefined, "float limit rejected");
-expect(parseSyncPullRequestV1({ protocolVersion: 1, scope: SCOPE, cursor: null, limit: 0 }) === undefined, "zero limit rejected");
+expect(parseSyncPullRequestV1({ protocolVersion: 1, scope: SCOPE, cursor: null, limit: 100 }) === undefined, "pull without device rejected");
+expect(parseSyncPullRequestV1({ protocolVersion: 1, deviceId: "unknown", scope: SCOPE, cursor: null, limit: 100 }) === undefined, "invalid pull device rejected");
+expect(parseSyncPullRequestV1({ protocolVersion: 1, deviceId: DEVICE_1, scope: SCOPE, cursor: "", limit: 100 }) === undefined, "empty cursor rejected");
+expect(parseSyncPullRequestV1({ protocolVersion: 1, deviceId: DEVICE_1, scope: SCOPE, cursor: null, limit: 10.5 }) === undefined, "float limit rejected");
+expect(parseSyncPullRequestV1({ protocolVersion: 1, deviceId: DEVICE_1, scope: SCOPE, cursor: null, limit: 0 }) === undefined, "zero limit rejected");
 
 const pullChange = {
   entityType: "DiningTable",

@@ -5,6 +5,7 @@ import { Test } from "@nestjs/testing";
 import { parseBranchScope } from "@super-restaurant/shared-types";
 
 import { AppModule } from "./app.module.js";
+import { SyncCursor } from "./sync/sync-cursor.js";
 import { AUTH_PRINCIPAL_VERIFIER, type AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import { DATABASE_CLIENT } from "./database.js";
@@ -93,6 +94,7 @@ test("POST /reports/day-summary: 401, 400, 201 no-store, 403 by role and 503 wit
   let broken = false;
   const memberships = { findActiveMembership: async () => ({ roles: roles as never, scope }) };
   const module = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(SyncCursor).useValue(new SyncCursor("test-cursor-secret-only-for-tests-12345"))
     .overrideProvider(DATABASE_CLIENT).useValue({ query: async () => {
       if (broken) throw new Error("secret connection string");
       return { rows: [{ result: summary() }] };

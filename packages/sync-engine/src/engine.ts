@@ -1149,7 +1149,7 @@ export class DeviceSyncEngine {
 
       let raw: unknown;
       try {
-        raw = await this.transport.pull({ protocolVersion: SYNC_PROTOCOL_VERSION, scope, cursor: info.cursor, limit: this.pullLimit });
+        raw = await this.transport.pull({ protocolVersion: SYNC_PROTOCOL_VERSION, deviceId: this.deviceId, scope, cursor: info.cursor, limit: this.pullLimit });
       } catch (error) {
         const failure = safeCode(error);
         if (CURSOR_RESYNC_CODES.includes(failure.code)) {

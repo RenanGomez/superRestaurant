@@ -5,6 +5,7 @@ import { Test } from "@nestjs/testing";
 import { parseBranchAuthorizationV1, parseBranchOperationalContextV1 } from "@super-restaurant/shared-types";
 
 import { AppModule } from "./app.module.js";
+import { SyncCursor } from "./sync/sync-cursor.js";
 import { AUTH_PRINCIPAL_VERIFIER } from "./auth/authentication.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 
@@ -104,6 +105,7 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
     },
   };
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(SyncCursor).useValue(new SyncCursor("test-cursor-secret-only-for-tests-12345"))
     .overrideProvider(AUTH_PRINCIPAL_VERIFIER)
     .useValue({ verifyAccessToken: async () => Object.freeze({ actorId }) })
     .overrideProvider(DATABASE_CLIENT)
@@ -391,3 +393,30 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
 });
 import "./captures.test.js";
 import "./customer-directory.test.js";
+
+
+test("AppModule rejects missing or short sync cursor secrets at startup", async () => {
+  const previous = process.env.SYNC_CURSOR_SECRET;
+  try {
+    for (const value of [undefined, "a".repeat(31), "?".repeat(16)]) {
+      if (value === undefined) delete process.env.SYNC_CURSOR_SECRET;
+      else process.env.SYNC_CURSOR_SECRET = value;
+      await assert.rejects(
+        Test.createTestingModule({ imports: [AppModule] })
+          .overrideProvider(AUTH_PRINCIPAL_VERIFIER).useValue({ verifyAccessToken: async () => ({ actorId }) })
+          .overrideProvider(DATABASE_CLIENT).useValue({ query: async () => ({ rows: [] }) })
+          .compile(),
+        /SYNC_CURSOR_SECRET_INVALID/u,
+      );
+    }
+    process.env.SYNC_CURSOR_SECRET = "a".repeat(32);
+    const validModule = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(AUTH_PRINCIPAL_VERIFIER).useValue({ verifyAccessToken: async () => ({ actorId }) })
+      .overrideProvider(DATABASE_CLIENT).useValue({ query: async () => ({ rows: [] }) })
+      .compile();
+    await validModule.close();
+  } finally {
+    if (previous === undefined) delete process.env.SYNC_CURSOR_SECRET;
+    else process.env.SYNC_CURSOR_SECRET = previous;
+  }
+});

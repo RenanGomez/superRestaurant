@@ -44,6 +44,7 @@ const pushRequest: SyncPushRequest = {
 };
 
 const pullRequest: SyncPullRequest = {
+  deviceId: pushRequest.deviceId,
   cursor: null,
   limit: 100,
   protocolVersion: 1,

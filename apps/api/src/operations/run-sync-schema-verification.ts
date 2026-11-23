@@ -3,6 +3,7 @@ import { Client } from "pg";
 import { assertLocalConfirmation, listMigrationNames, LocalPostgres } from "./local-postgres.js";
 import { syncInvariantSql } from "./sync-schema-verification.js";
 import { verifySyncExecutor } from "./sync-executor-verification.js";
+import { verifySyncReviewHistorical } from "./sync-review-historical-verification.js";
 
 const local = new LocalPostgres({ marker: "LOCAL_SYNC_SCHEMA_ONLY", databasePrefix: "superrestaurant_sync", authUsersExtraColumns: ", raw_user_meta_data jsonb" });
 let stage = "configuration";
@@ -39,9 +40,11 @@ try {
   stage = "postcheck";
   assert.deepEqual((await local.admin.query(summary)).rows[0], baseline);
   if (invariantFailure !== undefined) { stage = "invariants"; throw invariantFailure; }
+  stage = "historical_review";
+  await verifySyncReviewHistorical(local);
   stage = "executor";
   await verifySyncExecutor(local);
-  process.stdout.write(`${JSON.stringify({ stage: "sync_schema_rollback", status: "ok", migrationsApplied: names.length, concurrentCursorLock: "ok", baseline })}\n`);
+  process.stdout.write(`${JSON.stringify({ stage: "sync_schema_rollback", status: "ok", migrationsApplied: names.length, concurrentCursorLock: "ok", historicalReview: "ok", baseline })}\n`);
 } catch (error: unknown) {
   failed = true;
   const message = error instanceof Error ? error.message.replace(/postgres(ql)?:\/\/\S+/giu, "[url]") : "unknown";

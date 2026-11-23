@@ -33,7 +33,7 @@ try {
     connectionString: config.connectionString,
     connectionTimeoutMillis: 15_000,
     query_timeout: 15_000,
-    ssl: { ca: config.caCertificate, rejectUnauthorized: true },
+    ssl: config.caCertificate.length === 0 ? false : { ca: config.caCertificate, rejectUnauthorized: true },
     statement_timeout: 12_000,
   });
   await client.connect();

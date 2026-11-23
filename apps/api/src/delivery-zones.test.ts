@@ -4,6 +4,7 @@ import { Test } from "@nestjs/testing";
 import type { BranchScope, MembershipRoleCode } from "@super-restaurant/shared-types";
 
 import { AppModule } from "./app.module.js";
+import { SyncCursor } from "./sync/sync-cursor.js";
 import { AUTH_PRINCIPAL_VERIFIER } from "./auth/authentication.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 import { MENU_CATALOG_PORT } from "./menu-catalog.js";
@@ -573,6 +574,7 @@ test("POST /delivery-zones/match: HTTP contract (401, 400, 200 no-store, 403, 50
     name: "Centro", postalCodes: ["83000"], localities: [], feeMinor: 2500, currency: "MXN" }] });
   const queries: string[] = [];
   const module = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(SyncCursor).useValue(new SyncCursor("test-cursor-secret-only-for-tests-12345"))
     .overrideProvider(DATABASE_CLIENT).useValue({ query: async (sql: string) => { queries.push(sql); throw new Error("unexpected database call"); } })
     .overrideProvider(MembershipAuthorizationService).useValue(authorizationFor([{ get roles() { return roles; }, scope }]))
     .overrideProvider(DELIVERY_ZONE_QUOTE_FACTS_PORT).useValue({ listActiveZonesForQuote: () => facts() })

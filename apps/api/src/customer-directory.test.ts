@@ -4,6 +4,7 @@ import test from "node:test";
 import { Test } from "@nestjs/testing";
 import { AUTH_PRINCIPAL_VERIFIER } from "./auth/authentication.js";
 import { AppModule } from "./app.module.js";
+import { SyncCursor } from "./sync/sync-cursor.js";
 import { CUSTOMER_DIRECTORY_READER_PORT, CUSTOMER_DIRECTORY_WRITER_PORT } from "./customer-directory.js";
 import { parseBranchScope } from "@super-restaurant/shared-types";
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
@@ -43,6 +44,7 @@ test("customer HTTP boundary authenticates every route and sanitizes persistence
   let fail = false;
   const authorization = new MembershipAuthorizationService({ findActiveMembership: async () => active ? { roles: ["cashier"], scope } : undefined });
   const module = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(SyncCursor).useValue(new SyncCursor("test-cursor-secret-only-for-tests-12345"))
     .overrideProvider(DATABASE_CLIENT).useValue({ query: async () => { throw new Error("unexpected database call"); } })
     .overrideProvider(MembershipAuthorizationService).useValue(authorization)
     .overrideProvider(CUSTOMER_DIRECTORY_WRITER_PORT).useValue({

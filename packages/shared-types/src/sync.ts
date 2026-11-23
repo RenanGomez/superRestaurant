@@ -225,6 +225,7 @@ export interface SyncPushResponseV1 {
 export type SyncPushResponse = SyncPushResponseV1;
 
 export interface SyncPullRequestV1 {
+  readonly deviceId: string;
   readonly protocolVersion: typeof SYNC_PROTOCOL_VERSION;
   readonly scope: BranchScope;
   readonly cursor: string | null;
@@ -268,6 +269,7 @@ export interface SyncSnapshotResyncResponseV1 {
 }
 
 export interface ManualReviewCaseV1 {
+  readonly factsAvailable?: boolean;
   readonly schemaVersion: typeof MANUAL_REVIEW_CASE_SCHEMA_VERSION;
   readonly caseId: string;
   readonly scope: BranchScope;
@@ -677,13 +679,15 @@ export function parseSyncPushResponseV1(value: unknown): SyncPushResponseV1 | un
 export const parseSyncPushResponse = parseSyncPushResponseV1;
 
 export function parseSyncPullRequestV1(value: unknown): SyncPullRequestV1 | undefined {
-  const record = exactRecord(value, ["protocolVersion", "scope", "cursor", "limit"]);
+  const record = exactRecord(value, ["protocolVersion", "scope", "cursor", "limit", "deviceId"]);
   if (record === undefined || ownValue(record, "protocolVersion") !== SYNC_PROTOCOL_VERSION) return undefined;
   const scope = parseSyncScopeV1(ownValue(record, "scope"));
   const cursor = ownValue(record, "cursor");
+  const deviceId = ownValue(record, "deviceId");
   const limit = ownValue(record, "limit");
   if (
     scope === undefined
+    || !isSyncId(deviceId)
     || (cursor !== null && !isOpaqueCursor(cursor))
     || !isPositiveInt(limit, SYNC_MAX_PULL_LIMIT)
   ) {
@@ -692,6 +696,7 @@ export function parseSyncPullRequestV1(value: unknown): SyncPullRequestV1 | unde
   return Object.freeze({
     protocolVersion: SYNC_PROTOCOL_VERSION,
     scope,
+    deviceId,
     cursor,
     limit,
   });
@@ -847,7 +852,7 @@ export function parseSyncSnapshotResyncResponseV1(value: unknown): SyncSnapshotR
 }
 
 export function parseManualReviewCaseV1(value: unknown): ManualReviewCaseV1 | undefined {
-  const record = exactRecord(value, [
+  const keys = [
     "schemaVersion",
     "caseId",
     "scope",
@@ -871,9 +876,11 @@ export function parseManualReviewCaseV1(value: unknown): ManualReviewCaseV1 | un
     "resolutionReason",
     "compensatingEventId",
     "auditId",
-  ]);
+  ] as const;
+  const record = exactRecord(value, keys) ?? exactRecord(value, [...keys, "factsAvailable"]);
   if (record === undefined || ownValue(record, "schemaVersion") !== MANUAL_REVIEW_CASE_SCHEMA_VERSION) return undefined;
 
+  const factsAvailable = ownValue(record, "factsAvailable");
   const caseId = ownValue(record, "caseId");
   const scope = parseSyncScopeV1(ownValue(record, "scope"));
   const eventId = ownValue(record, "eventId");
@@ -898,7 +905,8 @@ export function parseManualReviewCaseV1(value: unknown): ManualReviewCaseV1 | un
   const auditId = ownValue(record, "auditId");
 
   if (
-    !isSyncId(caseId)
+    (factsAvailable !== undefined && typeof factsAvailable !== "boolean")
+    || !isSyncId(caseId)
     || scope === undefined
     || !isSyncId(eventId)
     || !isIdempotencyKey(idempotencyKey)
@@ -914,7 +922,8 @@ export function parseManualReviewCaseV1(value: unknown): ManualReviewCaseV1 | un
     || typeof status !== "string"
     || !(MANUAL_REVIEW_CASE_STATUSES as readonly string[]).includes(status)
     || (baseVersion !== null && !isNonNegativeInt(baseVersion))
-    || (operation === "create") !== (baseVersion === null)
+    || (factsAvailable !== false && (operation === "create") !== (baseVersion === null))
+    || (factsAvailable === false && (baseVersion !== null || amountMinor !== null || currency !== null))
     || (canonicalVersion !== null && !isNonNegativeInt(canonicalVersion))
     || (amountMinor !== null && !(typeof amountMinor === "number" && Number.isSafeInteger(amountMinor)))
     || (currency !== null && !(typeof currency === "string" && CURRENCY_PATTERN.test(currency)))
@@ -951,6 +960,7 @@ export function parseManualReviewCaseV1(value: unknown): ManualReviewCaseV1 | un
 
   return Object.freeze({
     schemaVersion: MANUAL_REVIEW_CASE_SCHEMA_VERSION,
+    ...(factsAvailable === undefined ? {} : { factsAvailable }),
     caseId,
     scope,
     eventId,
