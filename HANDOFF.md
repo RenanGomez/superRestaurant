@@ -1,5 +1,14 @@
 # HANDOFF
 
+## m2-sync-merge-domain — 2026-11-23 (REVIEW local)
+
+- **Tarea y alcance (nivel A):** reglas deterministas puras de merge y clasificación de conflictos offline en `@super-restaurant/domain` según `OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX.md` §4.2 para `Order`, `OrderItem`, `DiningTable`, `KdsTicket`, `Payment` y `CashMovement`, más soporte reutilizable de tombstones.
+- **Archivos modificados:** `packages/domain/src/sync-merge.ts`, `packages/domain/src/sync-merge.test.ts`, `packages/domain/src/index.ts`, `packages/domain/package.json`.
+- **Decisiones y supuestos:** cero dependencias de infraestructura y cero floats (enteros seguros en unidad menor y aritmética exacta reutilizando `Money`, `calculateOrderTotals`, `calculateOrderItemTotals`, `order-state`, `cashChange` y `derivePaymentObligation`). Líneas aditivas con `orderItemId` distintos combinan y recalculan desde snapshots; ediciones concurrentes de la misma línea, alteración arbitraria de precio, descuentos competidores, disputa de mesa/reserva exclusiva, cancelación post-envío, cobro excedente/clave distinta, doble cierre/reapertura de caja y anomalías de secuencia/saldo en efectivo escalan a `conflict` o `manual_review` (nunca LWW). Transiciones monotónicas en `Order`/`OrderItem`/`KdsTicket` aceptan o deduplican sin retroceder estado; tombstones son idempotentes y bloquean resurrección; `occurredAt` se preserva sólo para auditoría y nunca decide prioridad ni orden; entradas con floats o getters/objetos hostiles fallan cerrado con `InvalidSyncMergeInputError`.
+- **Verificación:** `pnpm --filter @super-restaurant/domain lint` (`--max-warnings=0`), `pnpm --filter @super-restaurant/domain typecheck`, `pnpm --filter @super-restaurant/domain test` (toda la suite de dominio + 13/13 pruebas nuevas de `sync-merge.test.js`) y `pnpm --filter @super-restaurant/domain build` en verde. Sin cambios SQL, sin interacción remota, sin subagentes, sin push ni PR por instrucción humana explícita.
+- **CodeGraph / impacto:** `.codegraph` no inicializado en este worktree; inspección manual con `git grep` confirmó que las nuevas exportaciones son puramente aditivas y no colisionan ni rompen consumidores existentes.
+- **Siguiente acción mínima:** revisión doble nivel A (segunda familia) e integración por orquestador/Emmanuel; desbloquea `m2-sync-sql-migrations` y `m2-api-sync-push-merge`.
+
 ## m2-sync-contracts-engine — 2026-11-23 (REVIEW local)
 
 - **Tarea y alcance (nivel A):** contratos runtime compartidos de sincronización Fase 3 en `@super-restaurant/shared-types` y endurecimiento de `@super-restaurant/sync-engine` reutilizando dichos contratos como única autoridad.
