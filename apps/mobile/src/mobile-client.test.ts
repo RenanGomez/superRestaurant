@@ -8,7 +8,10 @@ import {
   MOBILE_API_PATHS,
   MobileRequestError,
   addOrderItem,
+  collectPayment,
   createOrder,
+  getCashRegisterReport,
+  getCheckoutOrder,
   getDiningLayout,
   getMenuCatalog,
   isAuthorizedMobilePath,
@@ -16,15 +19,23 @@ import {
   listMemberships,
   listOperationalShifts,
   openOrder,
+  quoteCashPayment,
   selectBranchContext,
 } from "./mobile-client.js";
 import {
   FIXTURE_CURRENCY,
+  FIXTURE_ORDER,
+  FIXTURE_PAYMENT,
+  FIXTURE_REGISTER,
+  FIXTURE_REGISTER_SESSION,
   FIXTURE_SHIFT,
   FIXTURE_TABLE,
   FIXTURE_TIME_ZONE,
   activeTableOrderListBody,
   branchOperationalContextBody,
+  cashPaymentQuoteBody,
+  cashRegisterReportBody,
+  checkoutOrderSummaryBody,
   diningLayoutBody,
   failingFetcher,
   fixtureConfig,
@@ -33,17 +44,21 @@ import {
   menuCatalogStateBody,
   operationalShiftListBody,
   orderMutationSummaryBody,
+  paymentCollectionSummaryBody,
   scopeA,
   scopeB,
   valueFetcher,
 } from "./test-fixtures.js";
 
-test("exposes exactly the operational reads and the three Order mutations", () => {
+test("exposes exactly the operational reads, Order mutations and payment endpoints", () => {
   assert.deepEqual(Object.keys(client).sort(), [
     "MOBILE_API_PATHS",
     "MobileRequestError",
     "addOrderItem",
+    "collectPayment",
     "createOrder",
+    "getCashRegisterReport",
+    "getCheckoutOrder",
     "getDiningLayout",
     "getMenuCatalog",
     "isAuthorizedMobilePath",
@@ -51,23 +66,26 @@ test("exposes exactly the operational reads and the three Order mutations", () =
     "listMemberships",
     "listOperationalShifts",
     "openOrder",
+    "quoteCashPayment",
     "selectBranchContext",
   ]);
   assert.deepEqual(Object.values(MOBILE_API_PATHS).sort(), [
     "/api/v1/access/branch/context",
     "/api/v1/access/memberships",
+    "/api/v1/cash-registers/report",
     "/api/v1/catalog/menu",
     "/api/v1/dining/layout",
     "/api/v1/orders",
     "/api/v1/orders/active",
     "/api/v1/orders/items",
     "/api/v1/orders/open",
+    "/api/v1/payments/checkout",
+    "/api/v1/payments/collect",
+    "/api/v1/payments/quote",
     "/api/v1/shifts/active",
   ]);
-  // The write surface is exactly three paths. Nothing that settles, refunds,
-  // moves cash or transitions a line is reachable from this app.
   for (const endpoint of Object.values(MOBILE_API_PATHS)) {
-    for (const forbidden of ["payments", "cash", "refund", "transition", "cancel", "cfdi"]) {
+    for (const forbidden of ["refund", "transition", "cancel", "cfdi"]) {
       assert.equal(endpoint.includes(forbidden), false, endpoint);
     }
   }
@@ -433,4 +451,69 @@ test("a table id that is not a UUID never reaches the network", async () => {
     (error: unknown) => error instanceof MobileRequestError && error.status === "protocol",
   );
   assert.equal(calls.length, 0);
+});
+
+test("reads cash register report, checkout summary, quotes and collects payment via shared contracts", async () => {
+  const reportMock = jsonFetcher(cashRegisterReportBody(scopeA, FIXTURE_REGISTER));
+  const report = await getCashRegisterReport(
+    fixtureConfig,
+    "token-1",
+    { cashRegisterSessionId: null, deviceId: DEVICE_ID, registerId: FIXTURE_REGISTER, scope: scopeA },
+    reportMock.fetcher,
+  );
+  assert.equal(report.register.cashRegisterSessionId, FIXTURE_REGISTER_SESSION);
+
+  const checkoutMock = jsonFetcher(checkoutOrderSummaryBody(scopeA));
+  const checkout = await getCheckoutOrder(
+    fixtureConfig,
+    "token-1",
+    { cashRegisterSessionId: FIXTURE_REGISTER_SESSION, deviceId: DEVICE_ID, orderId: FIXTURE_ORDER, registerId: FIXTURE_REGISTER, scope: scopeA },
+    checkoutMock.fetcher,
+  );
+  assert.equal(checkout.remainingBalanceMinor, 12_500);
+
+  const quoteMock = jsonFetcher(cashPaymentQuoteBody(scopeA));
+  const quote = await quoteCashPayment(fixtureConfig, "token-1", {
+    amountMinor: 12_500,
+    cashRegisterSessionId: FIXTURE_REGISTER_SESSION,
+    method: "cash",
+    orderId: FIXTURE_ORDER,
+    schemaVersion: 1,
+    scope: branchScope(),
+    tenderedAmountMinor: 20_000,
+    tipMinor: 0,
+  }, quoteMock.fetcher);
+  assert.equal(quote.changeMinor, 7_500);
+
+  const collectMock = jsonFetcher(paymentCollectionSummaryBody(scopeA));
+  const receipt = await collectPayment(fixtureConfig, "token-1", {
+    amountMinor: 12_500,
+    cardManualEvidence: null,
+    cashRegisterExpectedVersion: 1,
+    cashRegisterSessionId: FIXTURE_REGISTER_SESSION,
+    deviceId: DEVICE_ID,
+    eventId: EVENT_ID,
+    idempotencyKey: IDEMPOTENCY_KEY,
+    localSequence: 1,
+    method: "cash",
+    occurredAt: OCCURRED_AT,
+    orderExpectedVersion: 3,
+    orderId: FIXTURE_ORDER,
+    paymentId: FIXTURE_PAYMENT,
+    schemaVersion: 1,
+    scope: branchScope(),
+    tenderedAmountMinor: 20_000,
+    tipMinor: 0,
+  }, collectMock.fetcher);
+  assert.equal(receipt.orderStatus, "paid");
+
+  await assert.rejects(
+    () => getCheckoutOrder(
+      fixtureConfig,
+      "token-1",
+      { cashRegisterSessionId: FIXTURE_REGISTER_SESSION, deviceId: DEVICE_ID, orderId: FIXTURE_ORDER, registerId: FIXTURE_REGISTER, scope: scopeA },
+      jsonFetcher(checkoutOrderSummaryBody(scopeB)).fetcher,
+    ),
+    (error: unknown) => error instanceof MobileRequestError && error.status === "protocol",
+  );
 });

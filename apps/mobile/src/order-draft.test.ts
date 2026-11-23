@@ -644,3 +644,40 @@ test("a modifier group shared by two products is offered by both; catalogs witho
     activeProductGroups(catalog, FIXTURE_PRODUCT_MAIN).map((group) => group.groupId),
   );
 });
+
+test("composes, edits, trims and validates optional line notes", () => {
+  const composed = apply(
+    initialOrderDraftState,
+    { tableId: TABLE, type: "tableSelected", zoneId: ZONE },
+    { productId: FIXTURE_PRODUCT_MAIN, type: "productOpened" },
+    { groupId: FIXTURE_GROUP_DONENESS, optionId: FIXTURE_OPTION_WELL_DONE, quantity: 1, type: "composerOptionSet" },
+    { note: "  Sin cebolla  ", type: "composerNoteSet" },
+    { type: "composerCommitted" },
+  );
+  assert.equal(composed.lines[0]?.note, "Sin cebolla");
+
+  const edited = apply(
+    composed,
+    { draftLineId: "draft-line-1", type: "lineEditRequested" },
+  );
+  assert.equal(edited.composer?.note, "Sin cebolla");
+
+  const cleared = apply(edited, { note: "   ", type: "composerNoteSet" }, { type: "composerCommitted" });
+  assert.equal(cleared.lines[0]?.note, undefined);
+
+  const tooLong = draftLineIssues(catalog, {
+    modifierGroups: [{ groupId: FIXTURE_GROUP_DONENESS, selections: [{ optionId: FIXTURE_OPTION_WELL_DONE, quantity: 1 }] }],
+    note: "a".repeat(201),
+    productId: FIXTURE_PRODUCT_MAIN,
+    quantity: 1,
+  });
+  assert.equal(tooLong.length, 1);
+
+  const controlChars = draftLineIssues(catalog, {
+    modifierGroups: [{ groupId: FIXTURE_GROUP_DONENESS, selections: [{ optionId: FIXTURE_OPTION_WELL_DONE, quantity: 1 }] }],
+    note: "sin sal\notra linea",
+    productId: FIXTURE_PRODUCT_MAIN,
+    quantity: 1,
+  });
+  assert.equal(controlChars.length, 1);
+});

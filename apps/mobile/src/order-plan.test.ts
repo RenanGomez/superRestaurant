@@ -142,6 +142,26 @@ test("every command built from a plan is exactly what the shared parsers accept"
     scope,
   });
   assert.ok(open !== undefined, "the open command must parse");
+
+  const noted = build({ lines: [line({ note: "Sin picante" })] });
+  assert.equal(noted?.addItems[0]?.note, "Sin picante");
+  assert.ok(noted !== undefined && noted.addItems[0] !== undefined);
+  const parsedNoted = parseAddOrderItemCommandV1({
+    deviceId: noted.deviceId,
+    eventId: noted.addItems[0].eventId,
+    expectedVersion: 1,
+    idempotencyKey: noted.addItems[0].idempotencyKey,
+    modifierGroups: noted.addItems[0].modifierGroups,
+    note: noted.addItems[0].note,
+    occurredAt: noted.occurredAt,
+    orderId: noted.orderId,
+    orderItemId: noted.addItems[0].orderItemId,
+    productId: noted.addItems[0].productId,
+    quantity: noted.addItems[0].quantity,
+    schemaVersion: 1,
+    scope,
+  });
+  assert.equal(parsedNoted?.note, "Sin picante");
 });
 
 test("two deliveries never share an identity", () => {

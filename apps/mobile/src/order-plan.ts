@@ -39,6 +39,7 @@ export interface OrderDeliveryLinePlanV1 extends OrderMutationIdentityV1 {
   /** The composer's local handle, kept so feedback can name the right line. */
   readonly draftLineId: string;
   readonly modifierGroups: readonly ModifierGroupSelectionV1[];
+  readonly note?: string;
   readonly orderItemId: string;
   readonly productId: string;
   readonly quantity: number;
@@ -116,6 +117,7 @@ export function buildOrderDeliveryPlan(input: {
       ...identity,
       draftLineId: item.draftLineId,
       modifierGroups: item.modifierGroups,
+      ...(item.note === undefined ? {} : { note: item.note }),
       orderItemId,
       productId: item.productId,
       quantity: item.quantity,

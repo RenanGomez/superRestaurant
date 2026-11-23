@@ -392,29 +392,40 @@ test("the hand-over carries no audit identity of its own", () => {
   }
 });
 
-test("only the three Order mutations and the two operational reads are reachable", () => {
+test("only the authorized operational, order and payment paths are reachable", () => {
   assert.deepEqual(Object.values(MOBILE_API_PATHS).sort(), [
     "/api/v1/access/branch/context",
     "/api/v1/access/memberships",
+    "/api/v1/cash-registers/report",
     "/api/v1/catalog/menu",
     "/api/v1/dining/layout",
     "/api/v1/orders",
     "/api/v1/orders/active",
     "/api/v1/orders/items",
     "/api/v1/orders/open",
+    "/api/v1/payments/checkout",
+    "/api/v1/payments/collect",
+    "/api/v1/payments/quote",
     "/api/v1/shifts/active",
   ]);
-  // The whole write surface: create, add one line, open. No payment, cash,
-  // refund or item-transition path is reachable from this app at all.
   assert.deepEqual(
     Object.values(MOBILE_API_PATHS).filter((endpoint) => endpoint.includes("orders")).sort(),
     ["/api/v1/orders", "/api/v1/orders/active", "/api/v1/orders/items", "/api/v1/orders/open"],
   );
   for (const endpoint of Object.values(MOBILE_API_PATHS)) {
-    for (const forbidden of ["payments", "cash", "refund", "transition", "cancel"]) {
+    for (const forbidden of ["refund", "transition", "cancel"]) {
       assert.equal(endpoint.includes(forbidden), false, endpoint);
     }
   }
+});
+
+test("propagates trimmed line notes in handoff and rejects malformed notes", () => {
+  const withNote = build({ lines: [mainLine({ note: "  Sin cebolla  " })] });
+  assert.equal(withNote?.addItems[0]?.note, "Sin cebolla");
+  const blank = build({ lines: [mainLine({ note: "   " })] });
+  assert.equal("note" in (blank?.addItems[0] ?? {}), false);
+  assert.equal(build({ lines: [mainLine({ note: "a".repeat(201) })] }), undefined);
+  assert.equal(build({ lines: [mainLine({ note: "linea1\nlinea2" })] }), undefined);
 });
 
 test("no order-entry source performs or names a request", () => {

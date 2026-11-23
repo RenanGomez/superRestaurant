@@ -27,6 +27,10 @@ const FIXTURE_CATALOG = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const FIXTURE_ACTOR = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const FIXTURE_TIMESTAMP = "2026-09-04T12:00:00.000Z";
 export const FIXTURE_SHIFT = "f1111111-1111-4111-8111-111111111111";
+export const FIXTURE_REGISTER = "f2222222-2222-4222-8222-222222222222";
+export const FIXTURE_REGISTER_SESSION = "f3333333-3333-4333-8333-333333333333";
+export const FIXTURE_ORDER = "b0000000-0000-4000-8000-000000000001";
+export const FIXTURE_PAYMENT = "f4444444-4444-4444-8444-444444444444";
 
 /** The branch's authoritative IANA zone, as PostgreSQL would return it. */
 export const FIXTURE_TIME_ZONE = "America/Hermosillo";
@@ -587,4 +591,99 @@ export function valueFetcher(value: unknown, status = 200): typeof fetch {
 /** A `fetch` double that fails the way an unreachable network does. */
 export function failingFetcher(): typeof fetch {
   return ((): Promise<Response> => Promise.reject(new Error("ECONNREFUSED"))) as typeof fetch;
+}
+
+export function cashRegisterReportBody(scope: MobileBranchScope, registerId: string = FIXTURE_REGISTER): unknown {
+  return {
+    cardManualCapturedMinor: 0,
+    cashCapturedMinor: 0,
+    cashTipsMinor: 0,
+    movementCount: 0,
+    movements: [],
+    nextLocalSequence: 1,
+    paymentCount: 0,
+    register: {
+      cashRegisterSessionId: FIXTURE_REGISTER_SESSION,
+      cashierId: FIXTURE_ACTOR,
+      closedAt: null,
+      countedClosingBalanceMinor: null,
+      currency: FIXTURE_CURRENCY,
+      differenceMinor: null,
+      expectedCashBalanceMinor: 0,
+      openedAt: FIXTURE_TIMESTAMP,
+      openingFloatMinor: 0,
+      registerId,
+      replayed: false,
+      schemaVersion: 1,
+      scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
+      shiftId: FIXTURE_SHIFT,
+      status: "open",
+      version: 1,
+    },
+    schemaVersion: 1,
+    scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
+    tipsMinor: 0,
+    totalCapturedMinor: 0,
+    transferCapturedMinor: 0,
+  };
+}
+
+export function checkoutOrderSummaryBody(scope: MobileBranchScope, overrides: Readonly<Record<string, unknown>> = {}): unknown {
+  return {
+    capturedAmountMinor: 0,
+    cashRegisterSessionId: FIXTURE_REGISTER_SESSION,
+    cashRegisterVersion: 1,
+    currency: FIXTURE_CURRENCY,
+    nextLocalSequence: 1,
+    orderId: FIXTURE_ORDER,
+    orderStatus: "open",
+    orderTotalMinor: 12_500,
+    orderVersion: 3,
+    remainingBalanceMinor: 12_500,
+    schemaVersion: 1,
+    scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
+    ...overrides,
+  };
+}
+
+export function cashPaymentQuoteBody(scope: MobileBranchScope, overrides: Readonly<Record<string, unknown>> = {}): unknown {
+  return {
+    amountMinor: 12_500,
+    cashRegisterSessionId: FIXTURE_REGISTER_SESSION,
+    changeMinor: 7_500,
+    currency: FIXTURE_CURRENCY,
+    method: "cash",
+    orderId: FIXTURE_ORDER,
+    remainingAfterMinor: 0,
+    remainingBeforeMinor: 12_500,
+    schemaVersion: 1,
+    scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
+    tenderedAmountMinor: 20_000,
+    tipMinor: 0,
+    ...overrides,
+  };
+}
+
+export function paymentCollectionSummaryBody(scope: MobileBranchScope, overrides: Readonly<Record<string, unknown>> = {}): unknown {
+  return {
+    amountMinor: 12_500,
+    cashRegisterSessionId: FIXTURE_REGISTER_SESSION,
+    cashRegisterVersion: 2,
+    changeMinor: 7_500,
+    currency: FIXTURE_CURRENCY,
+    method: "cash",
+    orderId: FIXTURE_ORDER,
+    orderStatus: "paid",
+    orderVersion: 4,
+    paymentId: FIXTURE_PAYMENT,
+    paymentState: "captured",
+    remainingBalanceMinor: 0,
+    replayed: false,
+    schemaVersion: 1,
+    scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
+    tenderedAmountMinor: 20_000,
+    tipMinor: 0,
+    transferReference: null,
+    ...overrides,
+  };
 }
