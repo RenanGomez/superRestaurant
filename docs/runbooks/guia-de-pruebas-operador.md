@@ -1,233 +1,370 @@
-# Guía de pruebas del operador — estado al 2026-09-28
+# Guía única de pruebas del operador — superRestaurant
 
-Objetivo: que Emmanuel pueda ejercitar todo lo que ya existe en la consola web antes de aprobar el rediseño. Cada sección dice qué hay, cómo probarlo y qué está incompleto. Nada aquí es una promesa de producto: es el inventario real.
+**Fecha:** 2026-11-23 · **Propósito:** permitir a Emmanuel probar y aprobar de una sola pasada todo lo que está en estado `REVIEW` en `TODO.md` (bloques D1–D7, T1–T4, retroalimentaciones de noviembre, Smoke r1/r2 y cierres recientes en `main`), organizado por flujo real de operación.
 
-## 1. Servicios locales
+Cada prueba tiene **de 3 a 5 toques** y un **resultado esperado** verificable. Nada aquí se da por aprobado sin probarse en navegador; donde falte una migración en remoto o un dato previo se advierte explícitamente.
 
-| Servicio | Cómo arranca | URL | Log |
-|---|---|---|---|
-| API NestJS | `powershell -NoProfile -ExecutionPolicy Bypass -File tmp\start-authorized-local-api.ps1 3000` (lee `.env.adr010.local` y `apps/web/.env.local`; nunca imprime secretos) | http://127.0.0.1:3000/api/v1/health → `{"status":"ok"}` | `tmp/local-api-*.out.log` |
-| Web Next.js | `pnpm --filter @super-restaurant/web dev --hostname localhost --port 8082` (Node 24 y pnpm 11 en `%LOCALAPPDATA%\Programs\node24`) | http://localhost:8082/login (usar `localhost`, no `127.0.0.1`) | `tmp/local-web-*.out.log` |
-| KDS | `pnpm --filter @super-restaurant/kds dev` (Vite; configurar `VITE_*` según `apps/kds/src/config.ts`) | la URL que imprime Vite | consola |
-| Mobile | `pnpm --filter @super-restaurant/mobile start` (Expo; ver `docs/CLAUDE_FRONTEND_WORKSTREAM.md`) | Expo Go o emulador | consola |
+---
 
-Si el login vuelve a rebotar a `/login`: el API está viejo respecto a `apps/web/.env.local`; reiniciarlo. Si `/app` no renderiza: reiniciar el servidor web (grafo de módulos viejo).
+## 1. Cómo arrancar el entorno
 
-## 2. Pantallas web existentes y qué probar
+### 1.1. Prerrequisitos (una sola vez)
 
-### `/login`
-Correo y contraseña de Supabase. Error genérico ante credenciales inválidas. Tras entrar, `/app`.
+1. **Node 24.19.0 y pnpm 11.19.0** instalados en `C:\Users\Emmanuel G\AppData\Local\Programs\node24`. Si ejecutas comandos manuales en PowerShell, activa primero la versión correcta en esa ventana:
+   ```powershell
+   . .\tools\agentic\use-node24.ps1
+   node -v   # v24.19.0
+   pnpm -v   # 11.19.0
+   ```
+2. **Variables de entorno locales:**
+   - `.env.adr010.local` en la raíz del repositorio (conexión PostgreSQL/Supabase del API).
+   - `apps/web/.env.local` con `RECEIPT_COOKIE_SECRET` de al menos 32 caracteres aleatorios (sin esto el cobro se registra, pero el recibo durable muestra «Recibo no disponible»).
+3. **Navegador limpio:** desactiva Grammarly u otras extensiones que inyectan controles sobre `http://localhost:8082`. Abre las herramientas de desarrollador (**F12 → Consola**) durante la prueba y anota cualquier error rojo.
 
-### `/app` · Mesas y selección de sucursal
-- Selector Restaurant/Sucursal; la preferencia se guarda en cookie no autoritativa y el servidor la revalida.
-- Canvas de mesas con creación, arrastre por puntero o flechas (celda entera) y edición en panel lateral; «Guardar layout» envía la posición. La barra lateral marca la ruta activa. (Corregido el 2026-09-27, REVIEW.)
+### 1.2. Arranque rápido (API + Web)
 
-### `/app/menu` · Catálogo
-- Categorías, productos, precios en minor units, disponibilidad. Publicación de releases del catálogo.
-- **Falta:** configurador de pizza (tamaños, mitades, extras, combos). El dominio S5.1 existe; no hay pantalla.
+1. Haz doble clic en `tools\agentic\local-servers\start-local.bat` (o ejecuta `tools\agentic\local-servers\start-local.bat nobuild` si ya compilaste el API y no hubo cambios de backend).
+2. Espera el mensaje **`Listo: API y web responden.`** (tarda hasta 3 min si compila por primera vez). El script abre automáticamente `http://localhost:8082`.
+3. **Usa siempre `http://localhost:8082`**, nunca `127.0.0.1:8082`, para que las cookies de sesión coincidan con `WEB_ORIGIN`.
+4. **Comprobación rápida de salud:**
+   - API vivo: `http://127.0.0.1:3000/api/v1/health` → HTTP `200` (`{"status":"ok",...}`).
+   - API listo con base de datos: `http://127.0.0.1:3000/api/v1/ready` → HTTP `200`.
+   - Web: `http://localhost:8082/login` → HTTP `200`.
+5. **Para detener ambos servidores** al terminar: doble clic en `tools\agentic\local-servers\stop-local.bat`.
 
-### `/app/customers` · Directorio
-- Búsqueda por teléfono o nombre con sugerencias; alta rápida de cliente; teléfonos y direcciones con atestación de validez; historial y "repetir pedido" (desde Captura).
-- Corregido el 2026-09-27 (REVIEW): elegir un cliente abre su ficha e historial; etiqueta con ejemplo; «Validar para esta sucursal» muestra pill y mensaje; alta rápida con «Ir a captura telefónica»; columnas 60/40.
+Si al iniciar sesión te rebota a `/login`, reinicia con `start-local.bat` sin `nobuild`.
 
-### `/app/capture` · Captura telefónica
-Aquí nacen las órdenes. Flujo actual (rediseñado el 2026-09-27/28 según el prototipo aprobado):
-1. «Nueva captura telefónica» crea un borrador durable con folio. Atajos: `Alt+N` abre Captura y enfoca el buscador de cliente; `Ctrl+K`/`Alt+K` enfoca la búsqueda; `Esc` cierra la capa abierta (lista, hoja o diálogo) y, sin capas, suelta el foco; `Alt+Shift+R` vuelve a la bandeja.
-2. Origen (teléfono, mostrador, WhatsApp…) y cumplimiento (domicilio, recoger, mostrador, mesa).
-3. Cliente por teléfono: las sugerencias de término completan la búsqueda y las filas de cliente abren la ficha; contacto y dirección quedan congelados.
-4. **Menú táctil**: categorías (rail lateral en escritorio, chips en teléfono), tarjetas con contador, buscador; tocar un producto sin modificadores lo agrega; con modificadores abre la hoja de armado (grupos obligatorios/opcionales, nota para cocina ≤200). El ticket (lateral en escritorio, barra inferior + hoja en teléfono) muestra líneas, ±, quitar, botón «Nota» por línea y totales **calculados por el servidor**. Si el menú cambió, aparece «El menú cambió; vuelve a cargar».
-5. Instrucciones de entrega con sugerencias del mismo cliente; pedidos recientes → «Revisar para repetir» → «Preparar N líneas».
-6. «Cotizar entrega» (domicilio): la cotización se **persiste en el servidor** y sobrevive a recargas; cambiar la dirección o la hora programada la invalida y bloquea confirmar hasta recotizar; expirada o fuera de cobertura también bloquea.
-7. **Cobro**: método (efectivo contra entrega o en mostrador, tarjeta con terminal manual, transferencia pendiente de evidencia), atajos de monto y «Otro monto» (se aplica con Enter/Aplicar/blur), propina aparte; subtotal, envío, total y cambio vienen del servidor. Si cambian líneas, cumplimiento o cotización tras fijar el cobro, aparece «Cambió el pedido: confirma de nuevo el cobro».
-8. Turno abierto (y mesa si aplica) → «Convertir captura en orden»: la Order congela líneas con nota, cargo de envío e intención de pago; no crea Payment ni movimiento de caja.
-- Bandeja de borradores recuperables; «Pasar la captura a otro operador» (si nadie más tiene sesión, «Dejar en espera»); **«Sin venta»** con motivo obligatorio cierra el borrador sin borrarlo.
-- **Conocidos/pendientes:** variantes y mitades de pizza (S5) no se ofrecen aún; mobile no captura nota ni cobro; la verificación visual de todo lo anterior está pendiente (REVIEW).
+### 1.3. Servicios adicionales (solo para los flujos que los usan)
 
-### `/app/caja` · Caja
-- Apertura y cierre de caja por turno, pagos simples en efectivo o tarjeta manual sobre órdenes, movimientos auditados. Métodos `transfer`, anticipos y refunds: aún no.
+| Servicio | Cómo arrancar (en PowerShell tras `. .\tools\agentic\use-node24.ps1`) | Cuándo se usa |
+|---|---|---|
+| **KDS (Cocina)** | Configura `apps/kds/.env` copiando `apps/kds/.env.example` (con `VITE_API_BASE_URL=http://127.0.0.1:3000`), luego ejecuta `pnpm --filter @super-restaurant/kds dev` y abre la URL que imprime Vite. | Flujo 6 (Cocina y KDS) |
+| **Mobile (opcional)** | `pnpm --filter @super-restaurant/mobile start` (Expo Go / emulador; ver `docs/CLAUDE_FRONTEND_WORKSTREAM.md`). | Verificación móvil nativa aparte |
+| **Sesión E2E (opcional)** | Con API y Web arriba, ejecuta `tools\agentic\local-servers\e2e-auth.bat` e inicia sesión una vez para renovar `apps/web/playwright/.auth/user.json`. | Sólo si corres Playwright |
 
-### `/app/delivery-zones` · Zonas de entrega (gerente)
-- Alta y edición de zonas por códigos postales o localidades con tarifa fija, CAS y motivo al desactivar.
-- Migración `20260927000100` aplicada el 2026-09-27: la página ya carga.
+### 1.4. Cuentas y datos mínimos
 
-### `/app/system-admin/restaurants` · Administración
-- Alta de restaurantes y desactivación, sólo para el rol de sistema.
+- **Cuenta principal (gerente/manager):** `emmanuel.rgomez@gmail.com` en **Vittorinos Pizza · Sucursal Navojoa**.
+- **Segundo usuario repartidor (`courier`):** necesario únicamente para el Flujo 8.3 (abrir en ventana privada). Si no existe, marca el paso 8.3 como `OMITIDO`.
+- **Zona de entrega:** antes de probar domicilio (Flujo 4), crea al menos una zona activa en `/app/delivery-zones` (Flujo 3.1), por ejemplo con el CP `85860` o colonias de Navojoa.
 
-## 3. KDS y Mobile
-- KDS: lista de órdenes por estación con recuperación por cursor y notificación en tiempo real; cancelaciones llegan como evento durable.
-- Mobile: selección de sucursal y turno, mesas, toma de comanda por mesa, envío a cocina; verificado en harness de navegador, no en dispositivo real.
+### 1.5. Aviso importante de migraciones en Supabase remoto
 
-## 4. Migraciones
-Aplicadas al proyecto remoto con autorización permanente de Emmanuel (2026-09-27/28): `20260927000100` zonas, `20260928000100` líneas de captura, `20260929000100` sin venta, `20260930000100` nota de línea, `20261001000100` cotización congelada, intención de pago y cargo de envío. Procedimiento en `docs/runbooks/migration-apply.md`. Tras cada apply se reinicia el API local con `tmp/start-authorized-local-api.ps1 3000`.
+Según el último preflight de solo lectura, la base remota (`zwbyiefqeujstyzysydn`) tiene aplicadas las migraciones hasta `20261106000100_menu_size_presets.sql`. Si aún no se aplican las migraciones posteriores en el entorno remoto contra el que apunte tu `.env.adr010.local`, los siguientes pasos fallarán al guardar o consultar contra remoto (se señalan con **[Req. migración]** en cada flujo):
 
-## 5. Lo que no existe todavía
-Configurador de pizza/variantes en UI (S5 productivo), S6.3 corrección de producción, S7.2+ despacho y repartidor, S8.3+ captura real de pagos (checkout con envío ya calcula el saldo), anticipos y refunds, impresión Bluetooth real, offline, inventario, reportes, fiscal.
+- `20261120000100` + `20261120000200` + `20261122000100` → **Pizza V2** (publicar `pizzaMode` y confirmar orden de pizza V2: Flujos 2.4 y 4.3).
+- `20261121000100` → **Zonas por colonia SEPOMEX** (buscar colonias y guardar zonas/direcciones por colonia: Flujos 3.1 y 3.3).
+- `20261123000100` → **Contacto de Recoger sin cliente y regla «Domicilio exige cliente»** (Flujos 4.1 y 4.2).
+- `20261123000200` → **Capturas abiertas en la ficha del cliente** (Flujo 3.4).
 
-## 6. Qué probar el 2026-10-03 (lote de corrección tras tus 25 notas)
+Para verificar en solo lectura qué falta aplicar antes de empezar:
+```powershell
+node apps/api/dist/operations/run-migration-preflight.js
+```
 
-Servicios: API en `http://localhost:3000` (health `/api/v1/health`), web en `http://localhost:8082`. Probar en escritorio y en 390×844 con la consola abierta; anotar cualquier mensaje rojo.
+---
 
-1. **Menú** (`/app/menu`): el precio se escribe en pesos («130» o «130.50») y se ve «$130.00»; el cero se puede borrar; «Clave interna (opcional)» no bloquea; botón «Foto» en producto y en opción (JPG/PNG/WebP ≤ 2 MB), estado «Subiendo…», miniatura, «Quitar foto»; «Publicar nueva versión» se bloquea con «Esperando fotos…» mientras sube.
-2. **Clientes** (`/app/customers`): etiqueta de teléfono y de dirección como lista con «Otro»; al validar una dirección se muestra «Dirección revisada para <sucursal>» con los datos revisados (zona y cargo se confirman al cotizar en captura; pendiente).
-3. **Captura** (`/app/capture`): pasos Cliente → Menú → Entrega → Cobro → Confirmar; tarjetas con foto o iniciales por categoría; en la hoja de armado «Estimado: $X.XX» en vivo y control «− n +» para ingredientes repetibles; «Editar» una línea armada; guardar instrucciones, elegir método y montos muestran «Guardando…» y «Guardado» o el error; con efectivo ≥ total aparece «Cambio: $X.XX»; «Convertir captura en orden» sin elegir turno («Turno: …» o «No hay turno abierto»); borradores con nombre y teléfono del cliente, canal, hora e «Ítems: $X.XX»; «Guardar para después» y «Cancelar» con motivo; «Transferir» bajo «Más»; el aviso de lease dice «Otra estación tomó esta captura» o «Se venció tu tiempo de atención» con «Retomar», y mientras trabajas se renueva solo.
-4. **Órdenes** (`/app/orders`): «Detalle» → «Enviar a cocina», «Marcar lista/entregada», «Cancelar línea» con motivo; cada acción responde; el diálogo atrapa el foco y cierra con Escape.
-5. **Mesas** (`/app/tables`): plano con libre/ocupada; tocar mesa libre → «Abrir cuenta» (dos toques); «Sin turno abierto» con «Abrir turno»; mesa ocupada → cuentas con total, «Ver cuenta», «Asignarme», «Abrir otra cuenta»; «Editar plano» sólo para gestión.
-6. **Caja** (`/app/caja`): fondo y conteo en pesos, sin «ISO» ni «u.m.»; «Cargar cuenta» es una lista de órdenes cobrables con «Cobrar», sin UUID.
+## 2. Flujo 1 — Acceso, navegación, atajos y PWA
 
-## 7. Qué probar el 2026-10-05 (día operable: caja, entregas, tamaños, agregar a cuenta)
+### 1.1. Login, barra lateral fija, contraste y ayudas `?`
+1. Entra a `http://localhost:8082/login` con tu cuenta de manager y confirma **Sucursal Navojoa**.
+2. Recorre **Mesas → Menú → Caja → Órdenes → Entregas → Clientes → Captura → Zonas → Resumen** desde la barra lateral.
+3. Pasa el cursor (o toca) un icono **`?`** junto a una etiqueta y luego navega campos con `Tab`.
+4. Cambia de pestaña del navegador menos de 15 segundos y regresa.
+- **Resultado esperado:** navegación sin recarga completa ni pantalla «Rendering»; la barra lateral se queda fija en escritorio con iconos/textos blancos, barra blanca izquierda en la sección activa y sin botones ilegibles (blanco sobre blanco); el `?` explica el campo y `Tab` no se detiene en el `?`. Si tienes más de una sucursal, «Cambiar sucursal» aparece arriba junto a «Cerrar sesión». Cero errores rojos en consola.
 
-Antes: añadir `RECEIPT_COOKIE_SECRET=<32+ caracteres aleatorios>` a `apps/web/.env.local` y reiniciar el web dev (sin eso el recibo dice «Recibo no disponible», el cobro sí se registra).
+### 1.2. Atajos globales y aviso de cambios sin guardar
+1. Abre `/app/customers`, inicia una dirección nueva y escribe una calle sin guardar.
+2. Pulsa **`Alt+N`**.
+3. En el diálogo in-app **«Hay cambios sin guardar»**, pulsa **`Esc`** (o «Quedarme») y luego vuelve a pulsar **`Alt+N` → «Salir»**.
+4. Ya en `/app/capture`, prueba **`Ctrl+K`** / **`Alt+K`**, pulsa **`N`** sola y **`Alt+R`**, y luego **`Alt+Shift+R`** y **`Esc`**.
+- **Resultado esperado:** `Alt+N` desde otra página con cambios sin guardar muestra un modal dentro de la app (nunca `confirm()` del navegador); al confirmar abre Captura con el buscador de cliente enfocado. `N` sola y `Alt+R` no hacen nada; `Alt+Shift+R` vuelve a la bandeja/reinicia; `Esc` cierra una capa a la vez (lista → hoja → diálogo) antes de quitar foco.
 
-1. **Caja** (`/app/caja`): abrir caja en pesos; «Cargar cuenta» desde la lista; Efectivo → «$200» → ver «Cambio después de propina» → propina opcional → «Cobrar» (3-4 toques); recibo con cobrado, cambio, propina y saldo que sobrevive a recargar; «Cobrar parcial» editando el importe y segundo cobro con Tarjeta externa (terminal y referencia ≥ 6); Corte X con fondo, ventas por método, propinas, esperado y lista de movimientos en español; cerrar caja con conteo distinto → exige motivo.
-2. **Entregas** (`/app/deliveries`): con un usuario con rol `courier` en la sucursal (asignarlo en Accesos), «Por asignar» → tocar repartidor (2 toques) → «Salió» → «Entregada» → «Liquidar» con recibido precargado desde la intención y cambio del servidor; «No se pudo» con motivo y reasignar; una orden con intención de tarjeta remite a Caja; entrar como repartidor y ver sólo lo suyo.
-3. **Tamaños** (`/app/menu` y `/app/capture`): en un producto «Añadir tamaño» → nombre → precio (×2), publicar; en captura la tarjeta dice «desde $X», la hoja exige tamaño antes de Agregar, el ticket muestra «Pizza · Grande»; repetir un pedido anterior de ese producto muestra la línea bloqueada «requiere tamaño».
-4. **Mesas** (`/app/tables`): mesa libre → «Abrir cuenta» → «Agregar producto» → producto (con tamaño y nota) → Agregar (4 toques); la línea aparece en la cuenta; «Enviar a cocina».
-5. Todo en escritorio y 390×844 con consola abierta.
+### 1.3. PWA instalable (manifest y Service Worker)
+1. En Chrome sobre `http://localhost:8082/app/tables`, abre **F12 → Application → Manifest** y **Service Workers**.
+2. Comprueba que el manifest carga con icono y que `sw.js` está activo.
+3. Opcional: activa «Offline» en DevTools → Network y recarga la cáscara del sitio; luego vuelve a «No throttling».
+- **Resultado esperado:** `/manifest.webmanifest` válido con iconos, Service Worker registrado sin errores en consola, sin cachear respuestas privadas del API ni mostrar overlays bloqueantes.
 
-## 8. Qué probar el 2026-10-05 (tarde): mitad y mitad de pizza
+---
 
-1. **Editor** (`/app/menu`): en un producto con tamaños, activar «Permitir mitades» en un tamaño → elegir «Grupo de sabores» → «Grupo de extras» (3 toques); opcionalmente marcar ingredientes que se pueden quitar; publicar. Si el grupo de sabores no existe o no pertenece al producto, debe verse el error, no un guardado silencioso.
-2. **Hoja de armado** (`/app/capture`): elegir el tamaño con mitades → «Mitad y mitad» → sabor de la Mitad A → sabor de la Mitad B → Agregar (5 toques). «Agregar» debe decir «Elige los dos sabores» hasta tener ambos. El estimado debe ser el sabor más caro más cada extra de media pizza al 50 % redondeado arriba; el precio del ticket es el del servidor y debe coincidir.
-3. **Ticket y detalle**: la línea muestra «Mitad A: <sabor>» / «Mitad B: <sabor>» con extras y exclusiones debajo; al editar la línea los sabores vienen preseleccionados; cambiar la cantidad de otra línea no convierte la pizza partida en entera (si el menú cambió, aparece «No se pudo conservar la división…» y no se envía nada).
-4. **Cocina** (KDS): el ticket lista cada mitad por separado con sus extras.
-5. En 390×844 las dos mitades se apilan; consola limpia.
-6. **Transferencia en caja** (`/app/caja`): cargar una cuenta → «Transferencia» → referencia opcional → «Cobrar» (3 toques). Sin «Recibido» ni «Cambio»; propina opcional; el recibo dice «Transferencia»; el corte X muestra «Transferencias» aparte y el efectivo esperado no cambia. Una transferencia sobre una entrega en ruta debe rechazarse con un mensaje claro; sobre una entrega ya entregada la liquida.
-7. **Por asignar** (`/app/deliveries`): una orden de entrega prepagada (tarjeta o transferencia) aparece en «Por asignar» con «Pagada»; al asignarla desaparece de la lista; una entrega «No se pudo» sigue en su columna, no en «Por asignar».
-8. **Zona al validar** (`/app/customers` y captura): «Validar para esta sucursal» muestra «Zona … · Envío $X · hh:mm-hh:mm» o «Fuera de cobertura» sin bloquear el guardado; al editar el código postal el resumen desaparece hasta volver a validar. En el paso de entrega de la captura el mismo resumen aparece antes de «Cotizar entrega».
-9. **Estimado del servidor** (hoja de armado): al elegir tamaño y extras aparece «Estimado del servidor $X» (y «Incluye IVA» si aplica) en menos de un segundo; mientras llega se ve «Estimado»; «Agregar» nunca se bloquea y el precio del ticket coincide con el estimado del servidor.
-10. **Ver pedido como repartidor** (`/app/deliveries` con sesión `courier`): cada entrega asignada tiene «Ver pedido» (1 toque) con líneas, notas, dirección e instrucciones; con intención de efectivo dice «Cobrar en efectivo $X»; con tarjeta o transferencia dice «Pago pendiente en Caja» sin monto destacado; una línea cancelada no aparece; una entrega de otro repartidor no se puede abrir.
-11. **Enviar a cocina tras confirmar** (captura): «Convertir captura en orden» → aparece «Enviar a cocina» (1 toque) → mensaje «Enviada a cocina · N líneas»; un segundo toque no duplica; el KDS y «Por asignar» ya muestran la orden sin pasar por /app/orders; «Nueva captura» (N) limpia la pantalla.
+## 3. Flujo 2 — Menú, fotos, modificadores, tamaños y pizza V2
 
-## 9. Qué probar el 2026-10-06: bloque «turno completo»
+**Ruta:** `/app/menu`
 
-1. **Imprimir comanda** (detalle de orden o tras «Enviar a cocina»): vista previa a 80 mm con una hoja por estación, sólo líneas enviadas, mitades y notas; «Imprimir» abre el diálogo del navegador. **Imprimir ticket** (caja tras cobrar o detalle): encabezado con restaurante y sucursal, líneas, IVA, envío, propina por pago, recibido y cambio iguales al recibo.
-2. **Cancelar orden** (`/app/orders` → detalle): «Cancelar orden» sólo para gerente/supervisor; motivo obligatorio; con dinero cobrado aparece «Queda pendiente devolver $X en caja»; con entrega en ruta se bloquea con «Primero marca la entrega…»; las líneas en cocina desaparecen del KDS. Pestaña **«Canceladas»**: órdenes y capturas con motivo, quién, cuándo y devolución pendiente; «Cargar más».
-3. **Resumen del día** (`/app/reports/day`, roles con `reports.read`): hoy por defecto; tarjetas de ventas, propinas, envíos y canceladas; tablas por canal, por método y turnos con fondo, esperado, contado y diferencia; cambiar de fecha; día vacío en ceros.
-4. **KDS**: tarjetas por orden con tiempo en verde/ámbar/rojo (10 y 20 min), más viejas primero y listas al final; «Empezar todo» / «Listo todo» marcan todas las líneas; la estación elegida se recuerda al recargar; «Nuevo» en tickets recientes; sonido opcional apagado por defecto.
-5. **Cotización ASAP**: una captura a domicilio sin hora programada se confirma y promete entre 30 y 45 minutos; dime si prefieres otros tiempos.
+### 2.1. Pestañas, orden de categorías, color e imagen
+1. Cambia entre las pestañas **Categorías**, **Productos**, **Modificadores** y **Tamaños**.
+2. En **Categorías**, arrastra una categoría por su asidero **`⋮⋮`** encima de otra (prueba cancelar una vez con **`Esc`**) y suéltala en su nueva posición.
+3. Toca el círculo a la izquierda del nombre para subir una foto de categoría.
+4. Abre la fila de colores pastel y elige un color para la categoría.
+- **Resultado esperado:** las 4 pestañas conservan cambios sin recargar; al arrastrar aparece el hueco destino y ya no hay campo numérico «Orden» ni botones subir/bajar en categorías (las flechas de teclado en el asidero también reordenan); foto y color quedan visibles y luego tiñen la pestaña de esa categoría en `/app/capture`.
 
-## 10. Qué probar el 2026-10-08: Mesas, segunda ronda
+### 2.2. Producto, precios en pesos, fotos con encuadre y duplicado
+1. En **Productos**, crea o edita un producto: escribe el precio en pesos (`130` o `130.50`, verificando que puedes borrar el cero) y deja vacía **«Clave interna (opcional)»**; elige **Unidad** y **Estación** desde sus listas.
+2. Toca la foto del producto para abrir el modal: sube una imagen (incluso > 2 MB para verificar reducción automática), encuádrala en el diálogo de recorte y confirma.
+3. Abre el menú **`⋮`** del producto y toca **«Duplicar»**.
+4. Toca la foto de otro producto y elige una imagen desde **«Fotos ya usadas en este menú»** (o **«Fotos recientes»**).
+- **Resultado esperado:** los precios se muestran como `$130.00` (nunca «u.m.» ni «ISO»); «Clave interna» opcional nunca bloquea; las secciones («Grupos de modificadores», «Permitir mitades», «Aplicar impuesto», «Tamaños») permanecen plegadas hasta activarse; «Duplicar» crea `(copia)` conservando foto y grupos asignados; la foto ajena se copia sin error y la tarjeta indica «Guardado» / «Cambios sin publicar».
 
-En `http://localhost:8082` (desactiva Grammarly en localhost):
+### 2.3. Grupos de modificadores compartidos y tamaños
+1. En la pestaña **Modificadores**, crea un grupo (p. ej. *Ingredientes*) con 2–3 opciones y precios en pesos; confirma que puedes asignarlo a dos productos distintos desde la pestaña **Productos**.
+2. En un producto, abre **Tamaños** (o la pestaña **Tamaños**), agrega *Mediana* y *Grande* con precio en pesos (o usa un tamaño predefinido).
+3. Agrega un tamaño vacío y pulsa **`✕`**; luego intenta quitar uno con nombre.
+4. Edita cualquier campo, recarga la página (**F5**) antes de publicar y prueba **«Recuperar cambios sin publicar»**.
+- **Resultado esperado:** el grupo compartido aparece en ambos productos; quitar un grupo asignado pide confirmación in-app; un tamaño sin nombre se borra al instante y uno con nombre pide confirmación abajo con el foco en «Cancelar»; al recargar se ofrece recuperar o descartar el borrador local, y el botón de publicar marca «Cambios sin publicar» hasta quedar en «Todo publicado».
 
-1. Cambia entre Mesas, Órdenes, Caja y Menú desde la barra lateral: no debe recargarse la página entera y debe sentirse más rápido.
-2. Cambia de pestaña menos de 15 s y regresa: no debe aparecer «Rendering». Tras más de 15 s oculta puede actualizarse una vez.
-3. Mesas: el plano ocupa todo el ancho; al tocar una mesa el diálogo se ve completo (cabecera y «Abrir cuenta») en tu pantalla y a 390×844.
-4. Barra lateral: iconos y textos blancos; la sección activa con fondo claro translúcido y una barra blanca a la izquierda, sin azul.
-5. «Cambiar sucursal» ya no está en Mesas: aparece arriba, junto a «Cerrar sesión» (sólo si tienes más de una sucursal).
-6. Editar plano: arrastra una mesa y suéltala → «Guardando…» → «Guardado». Vuelve a Mesas: está donde la dejaste.
-7. Selecciona una mesa y arrastra el asidero de la esquina inferior derecha (o usa «Más ancha / Más alta…»): cambia de tamaño y se guarda solo.
-8. En el panel de la mesa cambia nombre (máx. 40), capacidad y forma → «Guardar datos». La capacidad no cambia al cambiar el tamaño.
-9. «Nueva mesa»: se cierra con Cancelar, con ✕, con Esc y tocando fuera; al crear, la mesa aparece en un hueco libre.
+### 2.4. Configuración de pizza por mitades V2 y publicación **[Req. migración `20261120000100` para publicar en remoto]**
+1. En un producto de pizza (con o sin tamaños), activa el modo de pizza / **«Permitir mitades»** a nivel producto.
+2. Configura **grupo de sabores/especialidades**, **grupo de ingredientes/extras** e **ingredientes gratis incluidos** (verifica que un grupo elegido en uno aparece deshabilitado en el otro como «ya usado como…»).
+3. Pulsa **«Publicar nueva versión»** y recarga la página (**F5**).
+- **Resultado esperado:** «Publicar» se bloquea solo mientras haya fotos subiendo; tras publicar y recargar, tamaños, fotos, grupos compartidos y configuración de mitades V2 persisten intactos sin error de conflicto.
 
-## 11. Qué probar el 2026-10-08: Menú, segunda ronda
+---
 
-En `http://localhost:8082/app/menu` (migración `20261008000200` aplicada y API/web reiniciados el 2026-10-08). Si una pizza que tenía mitades distintas por tamaño aparece sin mitades, vuelve a configurarla en el producto.
+## 4. Flujo 3 — Zonas de entrega y directorio de clientes
 
-1. Arrastra una categoría, un producto, un tamaño o un grupo por el asidero ⋮⋮: la fila se levanta, aparece una línea donde caerá y se mueve al soltar. Esc cancela.
-2. Pasa el mouse (o toca) el «?» junto a cualquier etiqueta, en Menú y en las demás secciones: explica el campo. En 390×844 no se sale de la pantalla y se cierra tocando fuera.
-3. Unidad y Estación son listas. «Otra estación…» permite escribir una nueva; si la dejas vacía vuelve a la anterior.
-4. «+ Añadir tamaño» y luego ✕: un tamaño sin nombre se quita al instante; uno con nombre pide confirmación abajo, con el foco en «Cancelar».
-5. Sube una foto a un producto y a una opción de modificador. Si falla, el mensaje dice la causa (permiso, formato, almacenamiento o código HTTP). Una foto de más de 2 MB se reduce sola antes de subirse.
-6. «Permitir mitades» aparece una vez por producto, aunque no tenga tamaños. Elige «Grupo de sabores» e «Grupo de ingredientes»: un grupo usado en uno aparece deshabilitado en el otro con «(ya usado como …)».
-7. Publica el menú con una pizza con mitades y vuelve a cargar: sigue configurada (sin error de conflicto).
-8. Captura → pizza → «Mitad y mitad»: Mitad A con un sabor, Mitad B con «Armar con ingredientes» y 2 ingredientes. El estimado del servidor aparece; no deja armar las dos mitades.
-9. Agrega la línea, ábrela de nuevo para editar: conserva la mitad armada.
-10. Ticket y detalle de la orden muestran «Mitad B: Armada (ingrediente, ingrediente)»; el KDS muestra la mitad «Armada».
-11. Editor de mesas («Editar plano»): nombre, capacidad, forma y tamaño tienen «?»; en «Nueva mesa» también. Caja, Entregas, Reporte del día y Administración cargan sin error y sus «?» funcionan; la casilla «Este cierre es definitivo» se marca tocando toda la fila.
+### 3.1. Crear zona de entrega por colonia SEPOMEX / CP **[Req. migración `20261121000100` para colonias]**
+**Ruta:** `/app/delivery-zones`
+1. Crea una zona nueva (p. ej. *Zona Centro*), escribe tarifa fija en pesos y tiempo estimado.
+2. Agrega colonias buscando por nombre del catálogo SEPOMEX de Navojoa (prueba una repetida para ver el sufijo tipo *«Beltrones (ampliación)»*) y/o agrega el código postal `85860`.
+3. Guarda la zona y recarga la página (**F5**).
+- **Resultado esperado:** la zona se guarda y persiste al recargar; las colonias con nombre repetido se distinguen claramente. *(Nota conocida: tras recargar, las colonias guardadas pueden verse por identificador corto hasta volver a buscarlas.)*
 
-## 12. Ruta de aceptación del «día operable» — 2026-10-23
+### 3.2. Búsqueda tolerante, alta rápida y dirección simplificada
+**Ruta:** `/app/customers`
+1. En el buscador escribe al menos 4 dígitos de teléfono (p. ej. `6622751352`) o palabras del nombre en cualquier orden; haz clic en una fila de cliente para abrir su ficha (en escritorio a columnas 60/40).
+2. Pulsa **«+ Nuevo cliente»**, crea un cliente con etiqueta de teléfono de la lista (*Principal*, *Trabajo*, *Otro*) y pulsa **«Ir a captura telefónica»** si deseas saltar directo.
+3. En la ficha del cliente pulsa **«+ Nueva dirección»**, comprueba que **«Datos adicionales»** inicia colapsado y pulsa **«Cancelar»**.
+- **Resultado esperado:** las sugerencias de término completan la búsqueda y las filas abren la ficha sin resultados viejos; «Cancelar» no guarda nada y tras guardar una dirección no queda un formulario vacío abierto.
 
-Consolida §7 a §11 en un solo turno, en el orden en que lo viviría el operador. Cada paso dice qué fila de `TODO.md` acepta (D1–D7, T1–T4). Marca cada paso como **OK**, **FALLA** (con lo que viste) u **OMITIDO**; con eso el orquestador pasa la fila a DONE o abre la corrección. Tiempo estimado: 60 a 90 minutos.
+### 3.3. Quitar teléfono con confirmación y validar dirección con colonia **[Req. migración `20261121000100` para colonia]**
+**Ruta:** `/app/customers`
+1. En un cliente con dos teléfonos, pulsa **Quitar** en uno y confirma en el diálogo in-app; luego intenta quitar el único teléfono restante.
+2. Agrega una dirección con CP `85860` y una colonia dentro de tu zona; pulsa **«Validar para esta sucursal»**.
+3. Prueba editar el CP o escribir una colonia fuera del catálogo SEPOMEX (texto libre) o fuera de zona.
+- **Resultado esperado:** quitar teléfono pide confirmación dentro de la app (sin `confirm()` nativo) y persiste al recargar; al validar se muestra **«Zona … · Envío $X · hh:mm–hh:mm»** (o **«Fuera de cobertura»** con motivo si no aplica, y aviso de texto libre si la colonia está fuera de SEPOMEX); editar el CP limpia el resumen previo hasta revalidar.
 
-**Antes de empezar**
-- Doble clic en `tools\agentic\local-servers\start-local.bat` y esperar «Listo: API y web responden». Entrar en `http://localhost:8082` con `emmanuel.rgomez@gmail.com` (manager) y confirmar la sucursal Navojoa.
-- KDS: `pnpm --filter @super-restaurant/kds dev` con un `apps/kds/.env` según `apps/kds/.env.example`; abrir la URL que imprime Vite en otra pestaña, estación «Cocina».
-- Un segundo usuario con rol `courier` en la sucursal (Accesos). Si no existe, el paso 7 queda OMITIDO y D6 no se acepta.
-- Consola del navegador abierta (F12) todo el tiempo; cualquier mensaje rojo se anota con el paso.
-- Desactivar Grammarly u otras extensiones en localhost. Repetir los pasos 2, 4, 5 y 6 a 390×844 (modo responsive) al final.
+### 3.4. Capturas abiertas del cliente y retomar sin reclamo automático **[Req. migración `20261123000200`]**
+**Ruta:** `/app/customers` → `/app/capture?draftId=...`
+1. Con un cliente que tenga un borrador abierto en `/app/capture`, abre su ficha en `/app/customers` y revisa la sección **«Capturas abiertas»**.
+2. Pulsa **«Retomar»** en uno de los borradores listados.
+3. Verifica en `/app/capture?draftId=...` que el borrador abre en modo consulta con el aviso *«No se reclama ni guarda ningún cambio hasta que pulses Retomar»*.
+4. Pulsa el botón **«Retomar»** dentro de Captura.
+- **Resultado esperado:** solo aparecen borradores abiertos de ese cliente en la sucursal activa; abrir el enlace no reclama el borrador automáticamente hasta pulsar **«Retomar»**.
 
-**Paso 1 · Menú listo (D7, §8.1, §11)**
-1. `/app/menu`: arrastra una categoría y un producto por el asidero ⋮⋮; Esc cancela. Sube una foto a un producto y a una opción de modificador: miniatura visible, «Quitar foto» funciona. *Acepta: fotos y reordenamiento.*
-2. En una pizza: «+ Añadir tamaño» Chica y Grande con precio; en Grande «Permitir mitades» con grupo de sabores y grupo de ingredientes. «Publicar nueva versión»; recarga: todo sigue igual. *Acepta: tamaños y mitades (D7).*
+---
 
-**Paso 2 · Pedido telefónico completo (D1, D7, §7.3, §8.2–8.3, §8.8–8.9, §8.11)**
-3. `/app/capture` → N (nueva) → origen Teléfono, cumplimiento Domicilio → buscar cliente por teléfono (o alta rápida con dirección) → «Validar para esta sucursal» muestra zona, envío y ventana, o «Fuera de cobertura».
-4. Menú táctil: una pizza Grande «Mitad y mitad» con dos sabores (Agregar se habilita sólo con ambos), un producto con nota a cocina, un producto sin modificadores (se agrega al toque). El «Estimado del servidor» aparece en menos de un segundo y el ticket coincide.
-5. Instrucciones de entrega → «Cotizar entrega» (promesa 30–45 min ASAP) → Cobro: Efectivo contra entrega con «Recibido» mayor al total → «Cambio: $X» del servidor. Cambia una línea después: aparece «Cambió el pedido: confirma de nuevo el cobro».
-6. «Convertir captura en orden» → «Enviar a cocina» → «Enviada a cocina · N líneas»; un segundo toque no duplica. El KDS muestra la orden con las dos mitades por separado y la nota. *Acepta: D1 completo y D3 (envío).*
+## 5. Flujo 4 — Captura telefónica, para recoger y pizza mitad y mitad
 
-**Paso 3 · Pedido de mesa (D2, §7.4, §10)**
-7. `/app/tables`: el plano ocupa todo el ancho; mesa libre → elegir mesero → «Abrir cuenta» → «Agregar producto» → producto con tamaño y nota → Agregar; la línea aparece en la cuenta; «Enviar a cocina». Mesa ocupada → «Ver cuenta», «Cambiar mesero».
-8. «Editar plano»: mover dos mesas → «Guardar plano»; cambiar tamaño con el asidero y nombre/capacidad/forma → «Guardar datos»; «Nueva mesa» aparece en un hueco libre; volver a Mesas conserva todo. *Acepta: D2 y el editor.*
+**Ruta:** `/app/capture`
 
-**Paso 4 · Cocina y seguimiento (D3, T4, §9.4)**
-9. KDS: tarjetas por orden, tiempo en verde/ámbar/rojo (10 y 20 min), más viejas primero; «Empezar todo» / «Listo todo»; la estación se recuerda al recargar; «Nuevo» en tickets recientes.
-10. `/app/orders` → detalle: «Marcar lista», «Marcar entregada», «Cancelar línea» con motivo; la línea cancelada desaparece del KDS. *Acepta: D3 y T4.*
+### 4.1. Portada cliente-primero, domicilio y regla «Domicilio exige cliente» **[Req. migración `20261123000100` para bloqueo servidor]**
+1. Abre `/app/capture` sin borrador activo, selecciona cumplimiento **Domicilio** e intenta confirmar o avanzar sin elegir cliente.
+2. Busca un cliente por teléfono (p. ej. `6622751352`) y selecciónalo en **un solo toque** (sin paso extra «Elegir teléfono»).
+3. Bajo el cliente, pulsa **«Usar esta dirección»** (o usa **«Editar»** / **«Agregar dirección»** sin salir de Captura).
+- **Resultado esperado:** Domicilio exige cliente y dirección en cobertura; la selección del cliente toma un toque; el estado de la dirección (zona, cargo y ventana, o «Fuera de cobertura») es visible de inmediato antes de cotizar.
 
-**Paso 5 · Impresión y cancelación (T1, T2, §9.1–9.2)**
-11. Detalle de orden → «Imprimir comanda»: vista previa 80 mm, una hoja por estación, sólo líneas enviadas, mitades y notas; «Imprimir» abre el diálogo del navegador. *Acepta: T1 comanda.*
-12. Otra orden de prueba → «Cancelar orden» (sólo gerente/supervisor) con motivo; con dinero cobrado dice «Queda pendiente devolver $X en caja»; con entrega en ruta se bloquea. Pestaña «Canceladas»: motivo, quién, cuándo; «Cargar más». *Acepta: T2.*
+### 4.2. Pedido «Para recoger» sin exigir cliente **[Req. migración `20261123000100`]**
+1. En `/app/capture` crea un borrador con cumplimiento **Recoger**.
+2. Escribe únicamente el **nombre y teléfono de contacto** de quien recoge (sin enlazar un cliente del directorio).
+3. Agrega un producto simple, elige método de cobro y confirma la orden.
+- **Resultado esperado:** el borrador guarda el contacto de Recoger, sobrevive a **F5** y permite convertir en orden sin obligar a dar de alta un cliente completo.
 
-**Paso 6 · Caja (D4, D5, T1 ticket, §7.1, §8.6)**
-13. `/app/caja`: abrir caja con fondo en pesos. «Cargar cuenta» → la orden de mesa → Efectivo «$200» → propina opcional → «Cobrar»; recibo con cobrado, cambio, propina y saldo, y sobrevive a recargar. «Imprimir ticket»: encabezado, líneas, IVA, propina, recibido y cambio iguales al recibo.
-14. Otra cuenta: «Cobrar parcial» editando el importe → segundo cobro con Tarjeta externa (terminal y referencia de 6 o más) → saldo en cero. Una tercera con Transferencia: sin «Recibido» ni «Cambio», recibo «Transferencia».
-15. Corte X: fondo, ventas por método con «Transferencias» aparte, propinas, esperado y movimientos en español. Cerrar caja con un conteo distinto al esperado → exige motivo; casilla «Este cierre es definitivo» se marca tocando la fila. *Acepta: D4 y D5.*
+### 4.3. Menú táctil, estimado del servidor, nota a cocina y pizza V2 mitad y mitad **[Req. migración `20261120000100`/`0200`/`20261122000100` para pizza V2]**
+1. Toca un producto sin modificadores (se agrega en 1 toque); luego toca uno con modificadores, agrega una **Nota para cocina** (≤ 200 caracteres) y pulsa **Agregar**.
+2. Toca una pizza, elige tamaño (la tarjeta muestra «desde $X»), cambia a **«Mitad y mitad»** y elige sabores/ingredientes con los tiles táctiles (prueba también **«Armar con ingredientes»** en una sola mitad, un ingrediente en **ambas** mitades y quitar un ingrediente con **«Sin X»**).
+3. Espera menos de 1 segundo para ver **«Estimado del servidor $X»** (y «Incluye IVA» si aplica) y pulsa **Agregar**.
+4. Recarga la página (**F5**), luego cambia la cantidad (`+`/`−`) de otra línea distinta y abre **Editar** sobre la pizza.
+- **Resultado esperado:** las categorías muestran su color e imagen; en pizza V2 un ingrediente repetido en ambas mitades se cobra una sola vez, quitar un ingrediente muestra «Sin X» sin bajar el precio, nunca deja armar ambas mitades a la vez en el flujo clásico, el total del ticket coincide con el servidor, el ticket no se corta horizontalmente y al recargar o cambiar otra línea la pizza conserva intactas sus mitades e ingredientes.
 
-**Paso 7 · Entregas (D6, §7.2, §8.7, §8.10)**
-16. `/app/deliveries`: la orden telefónica del paso 2 está en «Por asignar» → tocar repartidor → «Salió» → «Entregada» → «Liquidar» con el recibido precargado y el cambio del servidor. Una orden prepagada aparece con «Pagada» y desaparece al asignarla. «No se pudo» con motivo y reasignar.
-17. Entrar como el usuario `courier` (otra ventana privada): sólo ve lo suyo; «Ver pedido» muestra líneas, notas, dirección y «Cobrar en efectivo $X». *Acepta: D6.*
+### 4.4. Entrega, cotización ASAP, cobro, confirmación y envío a cocina
+1. En un borrador a **Domicilio**, escribe instrucciones de entrega (sin pulsar botón extra: se autoguardan) y pulsa **«Cotizar entrega»** sin elegir hora programada.
+2. En **Cobro**, escribe `250` en «Otro monto» y luego toca **«Exacto»** (o un billete mayor al total con propina opcional); revisa subtotal, envío, total y **«Cambio: $X»** calculados por el servidor.
+3. Cambia la cantidad de una línea tras fijar el cobro para comprobar el aviso **«Cambió el pedido: confirma de nuevo el cobro»**, vuelve a confirmar el cobro y pulsa **«Convertir captura en orden»**.
+4. Justo al confirmarse, pulsa **«Enviar a cocina»** (1 toque) y vuelve a intentarlo una segunda vez; luego prueba **«Ver orden»** o **«Nueva captura»**.
+- **Resultado esperado:** las instrucciones sobreviven a recargar; la cotización ASAP promete **30–45 min** (válida 15 min) y no vence al instante; «Exacto» limpia «Otro monto» en un toque; el turno abierto se toma automáticamente; «Enviar a cocina» responde «Enviada a cocina · N líneas» sin duplicar al segundo toque y manda la orden directo al KDS y a «Por asignar».
 
-**Paso 8 · Resumen del día (T3, §9.3)**
-18. `/app/reports/day`: hoy por defecto; tarjetas de ventas, propinas, envíos y canceladas; tablas por canal, por método y por turno con fondo, esperado, contado y diferencia; otra fecha vacía en ceros. Los números deben cuadrar con el corte del paso 15. *Acepta: T3.*
+### 4.5. Bandeja de borradores, transferencia y cancelar sin venta
+1. Crea un borrador vacío y vuelve a la bandeja (`Alt+Shift+R`): comprueba que los borradores vacíos no ensucian la lista.
+2. Abre un borrador con cliente/productos, recarga (**F5**) y comprueba que mantiene folio, cliente, líneas y total; mientras trabajas el tiempo de atención se renueva solo (sin menciones a «lease»).
+3. Abre el menú **«Más»** → **«Pasar la captura a otro operador»** (si no hay otro operador, usa **«Dejar en espera»**).
+4. En otro borrador de prueba pulsa **«Cancelar»** (cierre sin venta), escribe un motivo obligatorio y confirma en el diálogo in-app.
+- **Resultado esperado:** la bandeja muestra nombre, teléfono, canal, hora e «Ítems: $X.XX»; reanudar abre el detalle completo; el borrador cancelado desaparece de borradores activos y aparece después en `/app/orders` → pestaña **«Canceladas»**.
 
-**Paso 9 · Móvil y cierre**
-19. Repetir 3–6, 7, 13 y 16 a 390×844: nada se sale de pantalla, los diálogos se ven completos, las dos mitades se apilan.
-20. Recorrer una vez la barra lateral completa: ninguna pantalla muestra error ni mensaje rojo en consola.
+---
 
-**Cómo reportar**: una línea por paso, «Paso N: OK» o «Paso N: FALLA — qué hiciste, qué esperabas, qué viste», con captura si es visual. Lo que esté OK pasa a DONE en `TODO.md`; cada FALLA se convierte en un paquete de corrección.
+## 6. Flujo 5 — Mesas, cuentas múltiples y editor de plano
 
-## 13. Smoke de la retroalimentación del 2026-11-01 (cambios recientes y pendientes)
+**Rutas:** `/app/tables` y `/app/tables/edit`
 
-Complementa la ruta completa de §12. Marca cada punto como **OK**, **FALLA** (qué hiciste, qué esperabas, qué viste) u **OMITIDO**.
+### 5.1. Abrir cuenta, nombre de cuenta, agregar producto y mesero
+1. En `/app/tables` (plano a todo el ancho), toca una mesa libre; si no hay turno abierto, usa **«Abrir turno»**.
+2. Opcionalmente asigna mesero y escribe el **nombre de la cuenta** («a nombre de quién»), y pulsa **«Abrir cuenta»**.
+3. Desde el panel que se abre (sin un segundo botón redundante «Abrir cuenta»), agrega un producto con tamaño y nota y pulsa **«Enviar a cocina»**.
+4. Vuelve a `/app/tables`, toca la mesa ocupada y cambia o quita el mesero desde la tarjeta de la cuenta.
+- **Resultado esperado:** todo el diálogo de mesa se ve completo sin recortarse abajo; el flujo toma 3–4 toques; el nombre real de la mesa («Mesa 2») y el nombre de la cuenta acompañan al detalle, comanda y ticket.
 
-**Antes de empezar**
-- `start-local.bat` sin `nobuild` (recompila la API con los contratos nuevos). Entrar con `emmanuel.rgomez@gmail.com`, sucursal Navojoa, consola abierta (F12).
-- Migración `20261101000200` (grupos compartidos): si no está aplicada, el paso 2.6 «Publicar nueva versión» fallará; eso es esperado hasta aplicarla.
-- `tools\agentic\local-servers\e2e-auth.bat` para renovar la sesión del arnés E2E.
+### 5.2. Múltiples cuentas en la misma mesa
+1. Toca una mesa que ya tenga una cuenta abierta.
+2. Pulsa **«+ Nueva»** (a la derecha de las pestañas de cuentas) para abrir una segunda cuenta en la misma mesa.
+3. Cambia entre ambas pestañas dentro del diálogo y regresa al plano.
+- **Resultado esperado:** cada pestaña muestra su propio total; sobre la mesa en el plano aparece el contador de cuentas abiertas.
 
-**1. Captura** (`/app/capture`)
-1. Ticket: agrega una pizza mitad y mitad con nota; la fila Editar · − 1 + · Editar nota · Quitar se ve completa, sin barra horizontal, y el precio no se corta. Repetir a 390×844.
-2. Efectivo: escribe «250» en «Otro monto» y toca «Exacto»; el campo se vacía y «Exacto» queda marcado con un solo toque. Escribe un monto que no coincida con ningún botón: ninguno queda marcado.
-3. Instrucciones de entrega: escribe algo y, sin pulsar nada, toca un botón de efectivo; recarga la página: el texto sigue ahí. Ya no existe «Guardar instrucciones».
-4. Atajos: `N` sola y `Alt+R` no hacen nada; `Alt+N` lleva a Captura y enfoca el buscador de cliente (desde otra página, pide confirmación si hay cambios sin guardar); `Ctrl+K`/`Alt+K` enfoca la búsqueda; `Esc` cierra primero la lista, luego la hoja de producto y luego el diálogo; sin capas abiertas, quita el foco del campo; `Alt+Shift+R` reinicia o vuelve a la bandeja.
-5. Cliente: busca `6622751352`; un toque selecciona al cliente (sin paso «Elegir teléfono»); debajo aparece su dirección con estado. «Usar esta dirección» la valida y la deja marcada, o dice «Fuera de cobertura» si la zona no cubre el CP 85860 (revisar Zonas). «Editar» y «Agregar dirección» funcionan sin salir de la captura. El paso 5 tiene «Ir a la dirección» y permite confirmar cuando la dirección está en cobertura.
+### 5.3. Editar plano en borrador, tamaño, datos y mesa nueva
+1. En `/app/tables` (con rol de gestión), entra a **«Editar plano»** (`/app/tables/edit`).
+2. Arrastra dos mesas a nuevas posiciones (verás borde punteado de borrador) y pulsa **«Guardar plano»** (prueba también mover y pulsar **«Cancelar»** para comprobar que revierte).
+3. Selecciona una mesa, arrastra el asidero de la esquina o usa **«Más chica / Más grande»**, edita nombre (máx. 40), **capacidad** y **forma**, y pulsa **«Guardar datos»**.
+4. Pulsa **«Nueva mesa»**, prueba cerrarla con **`Esc`** / **Cancelar**, y luego crea una mesa real y regresa a `/app/tables`.
+- **Resultado esperado:** la rueda del ratón no queda atrapada en el lienzo; cambiar el tamaño no altera la capacidad; las formas (cuadrada/redonda/rectangular) se distinguen visualmente; la mesa nueva aparece en un hueco libre y todo persiste al volver a Mesas.
 
-**2. Menú** (`/app/menu`)
-1. Categorías: arrastra la tercera sobre la segunda; aparece un hueco y la segunda baja; soltar aplica, `Escape` o clic derecho cancelan, soltar en el origen no cambia nada. Asidero angosto, sin botones subir/bajar. Flechas de teclado con el asidero enfocado reordenan.
-2. Categoría: el círculo a la izquierda del nombre abre el selector de foto; la foto se ve en el círculo. Fila de muestras de color: elegir una tiñe la tarjeta y la pestaña de esa categoría en `/app/capture`.
-3. Producto: tarjeta en tres filas; «Grupos de modificadores», «Permitir mitades», «Aplicar impuesto» y «+ Añadir tamaño» abren su sección sólo al activarse. Tocar la foto sin foto abre el selector; con foto abre el diálogo con «Reemplazar», «Quitar», «Cancelar» y las listas «Fotos quitadas de este producto» y «Fotos ya usadas en este menú» (elegir una ajena la copia al producto).
-4. «Duplicar» crea «(copia)» con la misma foto y los mismos grupos asignados, sin clonar grupos.
-5. Grupos de modificadores: sección propia para crear, editar, duplicar y quitar; en el producto, la casilla abre un desplegable multiselección (`Escape` y clic fuera cierran). Un grupo asignado a dos productos aparece en ambos en la captura. Quitar un grupo asignado pide confirmación y lo desasigna de todos.
-6. Autoguardado: edita algo y recarga; aparece «Recuperar cambios sin publicar» / «Descartar». Junto a «Publicar» se lee «Cambios sin publicar» con anillo pulsante; tras publicar, «Todo publicado». (Requiere la migración aplicada.)
+---
 
-**3. Mesas y órdenes**
-1. `/app/tables`: mesa libre → «Abrir cuenta» → la app llega a Órdenes con «Agregar producto» abierto y **sin** un segundo «Abrir cuenta».
-2. `/app/orders`: las tarjetas, el detalle, la comanda y el ticket dicen «Mesa 2» (nombre real), nunca «Mesa» a secas ni un UUID. Pestaña «Canceladas» intacta.
+## 7. Flujo 6 — Órdenes activas, cocina (KDS), notificaciones, impresión y cancelación
 
-**4. Pendiente de Emmanuel** (no se puede probar todavía)
-- Nombre opcional de la cuenta de mesa («a nombre de quién»): paquete B sin iniciar.
-- Posición y zoom de la foto: paquete A sin iniciar.
-- Ingredientes «que no se pueden quitar» (P2) y «especialidades» como sabores de mitades (P3): P2 arranca cuando Codex recupere cuota; P3 espera dos decisiones: regla de precio de mitades con dos especialidades y destino de los grupos de sabores actuales.
-- Dos cuentas de prueba en borrador abiertas hoy en Mesa 2 y Mesa 5: cancelarlas o usarlas.
+**Rutas:** `/app/orders` y app **KDS** (URL de Vite)
 
-## 14. Pizza por mitades (modelo V2) — verificación para Emmanuel
+### 6.1. Lista en paneles, filtros y acciones sobre líneas
+1. Abre `/app/orders`, filtra por canal (Mesa / Domicilio / Para llevar) y comprueba las tarjetas: hora en zona del restaurante, nombre real de la mesa («Mesa 2», nunca UUID) y totales con envío y propina separados.
+2. Toca una orden para abrir su detalle en el panel izquierdo (sin tapar la lista ni «Agregar producto» a la derecha) y pulsa **«Agregar producto»** si quieres añadir otra línea.
+3. En una línea, prueba **«Marcar lista»**, **«Marcar entregada»** y **«Cancelar línea»** con motivo obligatorio.
+- **Resultado esperado:** las acciones disponibles dependen de tu rol y estado de la orden; cada botón muestra estado y resultado; si recargas con «Agregar producto» abierto sobre una orden no editable, se cierra con aviso; una línea cancelada desaparece del KDS.
 
-Requiere la migración `20261120000100_pizza_model_v2.sql` aplicada en el entorno que pruebes y productos con modo de pizza (especialidad o personalizada) en el menú.
+### 6.2. KDS por estación y notificación «platillo listo» en tiempo real
+1. Abre la app **KDS** en otra pestaña/ventana, inicia sesión y elige la estación (p. ej. *Cocina*); recarga (**F5**) para confirmar que recuerda la estación.
+2. Verifica las tarjetas agrupadas por orden: antigüedad en **verde / ámbar (10 min) / rojo (20 min)**, más viejas primero, etiqueta **«Nuevo»**, mitades de pizza por separado, notas destacadas y sonido opcional (apagado por defecto).
+3. Pulsa **«Empezar todo»** y luego **«Listo todo»** en una orden mientras miras `/app/orders` en la otra pestaña.
+- **Resultado esperado:** las líneas avanzan en serie sin conflictos de versión; `/app/orders` recibe el aviso de **platillo listo** sin recargar la página (sólo para la misma sucursal/estación).
 
-1. Captura: elige una pizza personalizada, divide en dos mitades y marca ingredientes en cada mitad y uno en «ambas». El ticket muestra «Mitad A» y «Mitad B» con sus ingredientes; el ingrediente de «ambas» aparece en las dos mitades y se cobra una sola vez.
-2. Especialidad con ingrediente quitado: la mitad muestra «Sin <ingrediente>» y el precio no baja.
-3. **Recargar la página (F5) con la cuenta abierta**: las líneas de pizza siguen con sus dos mitades, ingredientes y total; al cambiar la cantidad de otra línea la pizza no se convierte en pizza entera.
-4. Confirma la orden: el detalle de la orden, la comanda y el ticket impreso repiten las mismas mitades e ingredientes por mitad (desktop y 390×844, consola sin errores).
-5. Edita o retira el producto o un ingrediente en el menú: las órdenes ya confirmadas conservan nombres y precios.
-6. Mezcla una pizza V2 con una línea de mitades antigua en la misma cuenta: ambas se ven y se cobran bien.
+### 6.3. Comanda y ticket imprimibles desde el navegador
+1. En el detalle de una orden enviada a cocina (o justo tras «Enviar a cocina»), pulsa **«Imprimir comanda»** (o atajo **`P`**).
+2. Cambia entre vista **80 mm** y **58 mm**, verifica una hoja por estación con solo líneas enviadas, nombre de mesa, mitades y notas, y pulsa **«Imprimir»**.
+3. Tras cobrar en Caja (o desde el detalle de una orden cobrada), pulsa **«Imprimir ticket»**.
+- **Resultado esperado:** abre vista previa limpia y el diálogo nativo de impresión del navegador; el ticket muestra restaurante, sucursal, folio corto (8 caracteres), fecha, líneas, IVA, envío, propina y pagos reales idénticos al recibo (sin hardware ESC/POS todavía).
+
+### 6.4. Cancelar orden completa y pestaña «Canceladas»
+1. En `/app/orders`, abre una orden con pago cobrado (con rol gerente/supervisor) y pulsa **«Cancelar orden»**, escribe motivo y confirma.
+2. Intenta cancelar una orden cuya entrega esté **en ruta**.
+3. Entra a la pestaña **«Canceladas»** y prueba **«Cargar más»**.
+- **Resultado esperado:** con dinero cobrado avisa **«Queda pendiente devolver $X en caja»**; con entrega en ruta se bloquea con mensaje claro (409) indicando marcar la entrega primero; sus líneas salen del KDS; «Canceladas» muestra órdenes canceladas y capturas sin venta con motivo, nombre de quién canceló (sin exponer su correo), fecha y devolución pendiente.
+
+---
+
+## 8. Flujo 7 — Caja: cobro, cambio, transferencia, pagos divididos y corte
+
+**Rutas:** `/app/caja` (Cobrar) y `/app/caja/corte` (Turno y corte)
+
+### 7.1. Abrir caja y cobrar en efectivo con cambio y propina
+1. Abre `/app/caja`; si no hay caja abierta, ingresa un fondo inicial en pesos (p. ej. `500`) y abre caja desde el formulario compacto.
+2. En la lista de órdenes cobrables (sin teclear ningún UUID), elige la orden de mesa del Flujo 5.
+3. Elige **Efectivo**, toca un monto rápido mayor al saldo (p. ej. `$200` o `$500`), opcionalmente agrega propina, revisa **«Cambio después de propina»** y pulsa **«Cobrar»**.
+4. Recarga la página (**F5**).
+- **Resultado esperado:** el cobro termina con éxito (sin falsos mensajes de error), muestra el recibo durable con cobrado, cambio, propina y saldo restante, sobrevive a **F5** y permite **«Imprimir ticket»**.
+
+### 7.2. Dividir pago (efectivo + tarjeta externa) y desglose
+1. Selecciona otra cuenta abierta en `/app/caja` y toca **«Dividir pago»**.
+2. Baja el importe a la mitad, cobra en **Efectivo** y comprueba el aviso **«Faltan $X»** (saldo del servidor).
+3. Cobra el saldo restante con **Tarjeta externa** ingresando terminal y referencia de 6+ caracteres.
+4. Expande la tarjeta de pagos realizados en la cuenta.
+- **Resultado esperado:** el saldo llega a `$0.00`, la orden queda pagada y el desglose muestra cada pago individual, su método y quién lo cobró.
+
+### 7.3. Cobrar por transferencia con referencia en recibo
+1. Selecciona una tercera cuenta en `/app/caja` y elige el método **Transferencia**.
+2. Escribe una referencia opcional (p. ej. `SPEI-12345`), propina opcional y pulsa **«Cobrar»**.
+3. Intenta cobrar por transferencia una orden de entrega que esté **en ruta** (debe bloquearse); luego pruébalo sobre una entrega ya marcada **Entregada** (debe liquidarla).
+- **Resultado esperado:** Transferencia no pide «Recibido» ni calcula «Cambio»; el recibo muestra **«Transferencia · Ref. SPEI-12345»**; el efectivo esperado en caja no sube.
+
+### 7.4. Corte X y cierre de caja (Corte Z operativo)
+1. Abre **Turno y corte** (`/app/caja/corte`).
+2. Revisa el **Corte X**: fondo inicial, ventas separadas por método (Efectivo, Tarjeta, Transferencias), propinas, efectivo esperado y lista de movimientos en español.
+3. En cierre de caja, escribe un conteo diferente al esperado (en pesos) e intenta cerrar sin motivo; luego escribe un motivo, marca la casilla **«Este cierre es definitivo»** tocando toda la fila y cierra caja.
+- **Resultado esperado:** el cierre exige motivo obligatorio cuando hay diferencia, no muestra «u.m.» ni «ISO», y registra el corte de forma inmutable.
+
+---
+
+## 9. Flujo 8 — Entregas y vista del repartidor
+
+**Ruta:** `/app/deliveries`
+
+### 8.1. «Por asignar» (con prepagadas), despacho y liquidación de efectivo
+1. Abre `/app/deliveries` y localiza en **«Por asignar»** la orden telefónica a domicilio del Flujo 4 (y, si creaste una prepagada con tarjeta/transferencia, verifica que aparece con etiqueta **«Pagada»**). Si hay más de una página, prueba **«Cargar más»**.
+2. Toca un repartidor para asignarla (2 toques) y comprueba que desaparece de «Por asignar» sin quedar duplicada en dos columnas.
+3. Pulsa **«Salió»** y luego **«Entregada»**.
+4. Pulsa **«Liquidar»**, verifica que el recibido viene precargado desde la intención de cobro y muestra el cambio del servidor, y confirma.
+- **Resultado esperado:** las entregas liquidadas en efectivo registran el cobro completo y el cambio en caja; una entrega con intención de tarjeta o transferencia remite a `/app/caja` (sólo se liquida efectivo aquí).
+
+### 8.2. Incidencia «No se pudo» y reasignación
+1. En otra entrega despachada, pulsa **«No se pudo»**, ingresa motivo y confirma.
+2. Verifica que permanece en su columna de fallidas (no duplicada en «Por asignar») y reasígnala a un repartidor.
+- **Resultado esperado:** motivo guardado y transición limpia sin duplicados en pantalla.
+
+### 8.3. Vista aislada del repartidor (`courier`)
+1. Abre una ventana privada del navegador e inicia sesión con el segundo usuario que tenga rol **`courier`** en Navojoa.
+2. Entra a `/app/deliveries` y toca **«Ver pedido»** en una entrega asignada a este repartidor.
+3. Comprueba el texto de cobro (con efectivo vs. con tarjeta/transferencia) y confirma que no aparecen entregas de otros repartidores ni líneas canceladas.
+- **Resultado esperado:** sólo ve sus propias entregas; «Ver pedido» muestra líneas vigentes (con tamaño/mitades y notas), dirección, instrucciones y **«Cobrar en efectivo $X»** (o **«Pago pendiente en Caja»** sin monto destacado si es tarjeta/transferencia). Intentar abrir una entrega ajena devuelve acceso denegado.
+
+---
+
+## 10. Flujo 9 — Resumen del día
+
+**Ruta:** `/app/reports/day` (requiere permiso `reports.read`)
+
+### 9.1. Cuadre de ventas, entregas, cancelaciones y turnos
+1. Abre `/app/reports/day`: debe cargar la fecha de **hoy** en la zona horaria del restaurante (`America/Hermosillo`).
+2. Compara las tarjetas superiores (ventas, propinas, envíos, canceladas) y las tablas por canal, por método de pago y por turno de caja (fondo, esperado, contado, diferencia) contra tu Corte X/Z del Flujo 7.4.
+3. Cambia la fecha a un día sin operación (p. ej. mañana o una semana atrás).
+- **Resultado esperado:** los montos cuadran exactamente con los pagos capturados y cancelaciones del día; un día sin ventas muestra ceros limpios sin error.
+
+---
+
+## 11. Flujo 10 — Verificación móvil (`390×844`)
+
+En DevTools (**F12 → Toggle Device Toolbar → `390 × 844`**):
+
+1. **Barra inferior:** comprueba los 4 accesos directos (**Mesas**, **Captura**, **Órdenes**, **Caja**) y el botón **«Más»** que abre el resto de secciones y cierra con `Esc` o `✕`.
+2. **Captura móvil (Fase 4 R2):** abre `/app/capture`, recorre el carrusel de categorías, abre la hoja de producto (las dos mitades de pizza se apilan verticalmente con tiles ≥ 44 px), sigue los pasos **Pedido → Cliente → Entrega** y toca la barra flotante **«Total de productos»** para confirmar sin que la barra tape **«Convertir captura en orden»**.
+3. **Mesas, Órdenes, Caja y Entregas:** abre un diálogo de mesa, el detalle de una orden (una vista a la vez), el panel de cobro en `/app/caja` y una tarjeta en `/app/deliveries`; abre un tooltip **`?`** y toca fuera para cerrarlo.
+- **Resultado esperado:** cero desbordamiento horizontal, todos los diálogos caben completos en pantalla, targets táctiles ≥ 44 px, tooltips dentro del viewport y consola limpia.
+
+---
+
+## 12. Ítems técnicos en `REVIEW` (verificación automatizada opcional)
+
+Estos ítems de `TODO.md` no tienen pantalla propia; se validan por comando local (en PowerShell tras `. .\tools\agentic\use-node24.ps1`):
+
+| Ítem en `TODO.md` | Qué valida | Comando exacto |
+|---|---|---|
+| `migration-preflight-scripts` | Preflight y postcheck read-only contra Supabase sin mutar nada | `pnpm --filter @super-restaurant/api preflight:migrations` |
+| `api-http-postgres-tests` · `api-http-flow-iteration-2` · `tech-block-20261006` | Flujo HTTP completo (7/7: catálogo, caja, cambio, entregas, mitades, tarjeta+transferencia, cancelación, resumen del día) contra PG 17 local desechable | `pnpm --filter @super-restaurant/api test:http:local -- --local-disposable-only` |
+| `m1-pg-verify-clean` | Suite de invariantes SQL y migraciones desde cero sin tolerancias | Job `pg-verify` en CI (o `pnpm --filter @super-restaurant/api verify:pizza-model-v2-schema:rollback`) |
+| `P0 orquestación` | Harness multiagente y scripts en `.claude/` / `tools/agentic/` | Revisión documental / uso operativo en el repo |
+
+---
+
+## 13. Trazabilidad completa (`TODO.md` `REVIEW` → Flujo) y cómo reportar
+
+Cuando marques un flujo como **OK**, las tareas asociadas de esta tabla pueden pasar a `DONE` en `TODO.md`:
+
+| Flujo | Ítems en `REVIEW` en `TODO.md` cubiertos |
+|---|---|
+| **Flujo 1** (Acceso, nav, atajos, PWA) | `web-shell-nav-tables`, `shell-sidebar-perf`, `field-hint-tab`, `capture-shortcuts-r2`, `K2`, `shell-mobile-nav`, `lote-smoke-20261007` (barra lateral, contraste, tooltips), `m2-web-pwa-shell` |
+| **Flujo 2** (Menú y pizza V2) | `D7`, `menu-categories-r1`, `menu-products-ui-r1`, `menu-category-appearance`, `menu-shared-modifier-groups`, `menu-photo-copy`, `menu-polish-r2`, `menu-locked-ingredients`, `menu-hide-locked-ingredients`, `menu-sizes-inline`, `menu-product-actions`, `menu-photos-recent`, `menu-photo-crop`, `m1-menu-tabs-r2`, `P3-1..P3-5`, `B2`, `B3`, `lote-smoke-20261007` (menú r1/r2 y mitades producto) |
+| **Flujo 3** (Zonas y clientes) | `web-customers-fixes`, `P2 directorio D3`, `delivery-zones-match`, `Diagnóstico D1/D2`, `K4`, `Z4`, `Z5`, `m1-k0b2-customer-open-captures`, `m1-k3-customer-captures` |
+| **Flujo 4** (Captura telefónica y recoger) | `D1`, `api-capture-lines`, `web-capture-menu-tactil`, `capture-line-price-quote`, `capture-halves-ids-projection`, `order-item-note`, `capture-payment-intent`, `delivery-quote-asap-expiry`, `web-capture-confirm-send-kitchen`, `capture-no-sale`, `web-capture-polish`, `P2 bandeja de captura`, `capture-ux-r1`, `capture-customer-address-r1`, `capture-drafts-tidy`, `capture-customer-search`, `capture-menu-category-images`, `capture-address-state`, `K1`, `B4`, `m1-k0b-pickup-contact` |
+| **Flujo 5** (Mesas y plano) | `D2`, `web-shell-nav-tables`, `tables-orders-r1`, `tables-accounts-r2`, `order-account-name`, `tables-tabs-count`, `lote-smoke-20261007` (mesas r1–r4) |
+| **Flujo 6** (Órdenes, KDS, impresión, cancelación) | `D3`, `T1`, `T2`, `T4`, `web-active-orders`, `web-order-actions`, `orders-tray-table-id`, `tech-block-20261006`, `lote-smoke-20261007` (órdenes en paneles), `m1-kitchen-ready-notify` |
+| **Flujo 7** (Caja y corte) | `D4`, `D5`, `T1` (ticket), `cash-transfer-method`, `cash-transfer-receipt-reference`, `caja-split-payments`, `lote-smoke-20261007` (caja separada en Cobrar / Corte) |
+| **Flujo 8** (Entregas y repartidor) | `D6`, `deliveries-unassigned-tray`, `web-deliveries-load-more`, `courier-order-detail`, `small-debts-20261006` |
+| **Flujo 9** (Resumen del día) | `T3`, `tech-block-20261006` |
+| **Flujo 10** (Móvil 390×844) | `Fase 4 R2-1..R2-3`, `shell-mobile-nav`, verificación responsive de `D1–D7` y `T1–T4` |
+| **Sección 12** (Técnicos) | `m1-pg-verify-clean`, `api-http-postgres-tests`, `api-http-flow-iteration-2`, `migration-preflight-scripts`, `P0 orquestación` |
+
+### Cómo reportar tu resultado
+
+Responde con una línea por bloque probado (puedes pegar capturas solo en los `FALLA`):
+
+```text
+Flujo 1.1: OK
+Flujo 2.4: OMITIDO — falta migración 20261120000100 en remoto
+Flujo 4.3: FALLA — al editar la pizza mitad y mitad se borró el ingrediente de ambas; esperaba verlo marcado
+```
