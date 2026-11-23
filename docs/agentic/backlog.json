@@ -54,7 +54,9 @@
         "supabase/tests/menu_shared_modifier_groups_invariants.sql",
         "supabase/tests/order_deliveries_invariants.sql"
       ],
-      "deps": ["m1-z2b-confirm-pizza-v2"],
+      "deps": [
+        "m1-z2b-confirm-pizza-v2"
+      ],
       "acceptance": [
         "KNOWN_FAILING_SQL_TESTS queda vacío o se elimina de .github/workflows/ci.yml",
         "se restaura verify:pizza-model-v2-schema:rollback en el paso de verificadores y se quita el continue-on-error de Run local HTTP flow",
@@ -63,9 +65,9 @@
       ],
       "etaMin": 180,
       "attempts": 0,
-      "status": "ready",
+      "status": "done",
       "sessionId": null,
-      "pr": null,
+      "pr": 19,
       "parent": "M0-7",
       "note": "Cierra la deuda registrada en docs/agentic/debt.md §M0-7. Cada test tolerado se triage: se arregla o se documenta como P1/P2, no se vuelve a tolerar."
     },
@@ -108,7 +110,9 @@
         "packages/shared-types/src/commercial-capture.ts",
         "packages/shared-types/src/capture-selection-plan.ts"
       ],
-      "deps": ["m1-z2b-confirm-pizza-v2"],
+      "deps": [
+        "m1-z2b-confirm-pizza-v2"
+      ],
       "acceptance": [
         "borrador de Recoger acepta nombre y teléfono de contacto sin exigir cliente",
         "confirm_capture_order rechaza Domicilio sin cliente con error de dominio claro y prueba SQL",
@@ -118,9 +122,9 @@
       ],
       "etaMin": 240,
       "attempts": 0,
-      "status": "ready",
+      "status": "done",
       "sessionId": null,
-      "pr": null,
+      "pr": 20,
       "parent": "smoke-r2-k0",
       "note": "Depende de liberar el carril de migraciones (M1-1). shared-types es carril de un solo escritor cuando el contrato lo consumen dos apps o más."
     },
@@ -167,7 +171,9 @@
         "apps/kds/src/",
         "apps/mobile/src/ui/active-orders-panel.tsx"
       ],
-      "deps": ["m1-mobile-pay-note"],
+      "deps": [
+        "m1-mobile-pay-note"
+      ],
       "acceptance": [
         "al marcar una línea lista en KDS, web y mobile reciben el aviso sin recargar la página",
         "el canal respeta branchId y stationId; una sucursal o estación ajena nunca recibe el evento",
@@ -176,11 +182,42 @@
       ],
       "etaMin": 240,
       "attempts": 0,
+      "status": "done",
+      "sessionId": null,
+      "pr": 16,
+      "parent": "mvp-kds-80",
+      "note": "Dependencia de mobile solo por el directorio UI compartido; si el orquestador reparte, serializar ese archivo."
+    },
+    {
+      "id": "m1-k0b2-customer-open-captures",
+      "title": "K0-B2: capturas abiertas por cliente (SQL+API+deep link)",
+      "milestone": "M1",
+      "phase": 2,
+      "level": "A",
+      "lane": "codex",
+      "paths": [
+        "supabase/migrations/",
+        "supabase/tests/",
+        "apps/api/src/captures.ts",
+        "apps/api/src/customer-order-history.ts",
+        "apps/web/src/app/app/capture/"
+      ],
+      "deps": [
+        "m1-k0b-pickup-contact"
+      ],
+      "acceptance": [
+        "funcion SQL y endpoint listan borradores abiertos por customerId acotados a restaurantId/branchId y permiso customers.read",
+        "/app/capture?draftId= retoma el borrador",
+        "migracion nueva con guards, prueba SQL en supabase/tests cableada en CI, pruebas de aislamiento",
+        "lint typecheck test del alcance en verde"
+      ],
+      "etaMin": 150,
+      "attempts": 0,
       "status": "ready",
       "sessionId": null,
       "pr": null,
-      "parent": "mvp-kds-80",
-      "note": "Dependencia de mobile solo por el directorio UI compartido; si el orquestador reparte, serializar ese archivo."
+      "parent": "smoke-r2-k3",
+      "note": "Desbloquea K3 (-26 reporto falta de fuente server-side)."
     },
     {
       "id": "m1-k3-customer-captures",
@@ -194,7 +231,10 @@
         "apps/api/src/customer-directory.ts",
         "apps/api/src/customer-order-history.ts"
       ],
-      "deps": ["m1-k0b-pickup-contact"],
+      "deps": [
+        "m1-k0b-pickup-contact",
+        "m1-k0b2-customer-open-captures"
+      ],
       "acceptance": [
         "la ficha del cliente lista sus capturas abiertas y permite retomarlas",
         "consulta acotada a restaurantId/branchId y permiso customers.read en servidor",
@@ -220,7 +260,9 @@
         "apps/web/e2e/journeys/",
         "apps/web/e2e/fixtures/"
       ],
-      "deps": ["m1-z2b-confirm-pizza-v2"],
+      "deps": [
+        "m1-z2b-confirm-pizza-v2"
+      ],
       "acceptance": [
         "existe una spec determinista por journey 1, 2, 3, 4, 5 y 6 en apps/web/e2e/journeys/",
         "datos semilla deterministas y aislamiento por runId, con cleanup obligatorio",
@@ -229,9 +271,9 @@
       ],
       "etaMin": 240,
       "attempts": 0,
-      "status": "ready",
+      "status": "done",
       "sessionId": null,
-      "pr": null,
+      "pr": 21,
       "parent": "M1-journeys",
       "note": "Journeys del plan maestro §4.2: 1 abrir turno/caja; 2 iniciar o recuperar orden; 3 cliente y dirección; 4 configurar producto; 5 guardar en espera y cancelar; 6 confirmar precio, pago y enviar a estación."
     },
@@ -246,7 +288,9 @@
         "apps/web/e2e/journeys/",
         "apps/web/e2e/fixtures/"
       ],
-      "deps": ["m1-e2e-journeys-1-6"],
+      "deps": [
+        "m1-e2e-journeys-1-6"
+      ],
       "acceptance": [
         "existe una spec determinista por journey 7, 8, 9, 10, 11 y 12 (12 puede ser online-first: reconexión sin duplicar)",
         "reutiliza helpers y fixtures de M1-8 sin duplicarlos",
@@ -255,9 +299,9 @@
       ],
       "etaMin": 240,
       "attempts": 0,
-      "status": "ready",
+      "status": "done",
       "sessionId": null,
-      "pr": null,
+      "pr": 24,
       "parent": "M1-journeys",
       "note": "Journeys: 7 preparar/listo/asignar reparto; 8 descuento y cortesía con autorización; 9 pagos mixtos sin duplicados; 10 imprimir y cerrar con historial; 11 cerrar caja y conciliar; 12 continuidad ante pérdida de red."
     },
@@ -335,9 +379,9 @@
       ],
       "etaMin": 180,
       "attempts": 0,
-      "status": "ready",
+      "status": "done",
       "sessionId": null,
-      "pr": null,
+      "pr": 23,
       "parent": "M1-produccion",
       "note": "No registrar secretos, tokens ni payloads personales completos."
     },
@@ -386,9 +430,9 @@
       ],
       "etaMin": 120,
       "attempts": 0,
-      "status": "ready",
+      "status": "done",
       "sessionId": null,
-      "pr": null,
+      "pr": 18,
       "parent": "smoke-r2-visual",
       "note": "Estas pantallas ya están en main tras la integración de feat/smoke-r1. Login con tools/agentic/local-servers/e2e-auth.bat."
     },
@@ -411,9 +455,9 @@
       ],
       "etaMin": 120,
       "attempts": 0,
-      "status": "ready",
+      "status": "done",
       "sessionId": null,
-      "pr": null,
+      "pr": 15,
       "parent": "TODO-menu-tabs-r2",
       "note": "P2 ya integrado; esta ronda es solo presentación. Depende de no haber otro ítem abierto en apps/web/src/app/app/menu/."
     }
