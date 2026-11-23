@@ -1,3 +1,8 @@
+## m2-web-local-storage-crypto — 2026-11-23 (IN_PROGRESS parcial, nivel A)
+
+- Transporte web adaptado del móvil: POST /sync/push y /sync/pull, token por solicitud, 401 AUTH_EXPIRED reintentable y revocación declarada sin refresco. 12 pruebas focalizadas verdes; incluidas en el comando de test web.
+- Pendiente imprescindible: IndexedDB AES-GCM, clave no extraíble y rotación, concurrencia entre pestañas, sesión/revocación con evidencia manual_review, pruebas de aislamiento cross-tenant/branch e idempotencia y revisión nivel A. No declarar REVIEW ni habilitar operación offline con este corte.
+- Base origin/main 45efc3bc verificada remotamente. CodeGraph no inicializado antes ni después; inspección manual dirigida. Sin push ni PR por instrucción humana.
 ## m2-api-sync-push-merge-fix2 — 2026-11-23 (BLOCKED parcial, nivel A)
 
 - Desde PR #60 `89d28e31fd6630ec2ad313f7cad1d19e6106d60d`: se registran rechazos por timezone/moneda y contexto prohibido, se conserva el retry para catalogo no publicado, se extrae `stale`, y se cubren rechazos y avance del lote. El test de servicio existente cubre `UNSUPPORTED_ENTITY` y `UNSUPPORTED_OPERATION`.
