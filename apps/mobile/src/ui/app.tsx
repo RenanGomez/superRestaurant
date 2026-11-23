@@ -154,6 +154,12 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
   // released cannot revive a session this device already closed.
   const gate = useAuthGate(auth);
   const pendingNotice = useRef<MobileNotice | undefined>(undefined);
+  /**
+   * Sign-out hook of the durable offline store, published by `useMobileSyncBridge`
+   * (declared further down) and read by `endSession`: the store must purge or
+   * lock before the screen is considered closed.
+   */
+  const releaseLocalDataRef = useRef<(() => Promise<void>) | undefined>(undefined);
   // Whether this device is currently holding a session, readable from the
   // provider callbacks, which run long after the render that produced them.
   const identified = useRef(false);
@@ -177,8 +183,14 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
    */
   const endSession = useCallback((notice: MobileNotice | undefined): void => {
     pendingNotice.current = notice;
-    // `gate.signOut` closes the generation before the provider is asked.
-    endMobileSession({ dispatch, notice, signOut: gate.signOut });
+    // `gate.signOut` closes the generation before the provider is asked; the
+    // offline store releases its local data (purge or lock-with-evidence).
+    endMobileSession({
+      dispatch,
+      notice,
+      signOut: gate.signOut,
+      ...(releaseLocalDataRef.current === undefined ? {} : { releaseLocalData: releaseLocalDataRef.current }),
+    });
   }, [dispatch, gate]);
 
   /**
@@ -226,6 +238,9 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
         // close the generation as well, so nothing the provider says afterwards
         // can revive it — including a sign-out this device never asked for.
         if (identified.current) gate.closeGeneration();
+        // A provider-driven sign-out must release the offline store too, even
+        // when it did not go through `endSession`.
+        void releaseLocalDataRef.current?.().catch(() => undefined);
         dispatch({ notice: pendingNotice.current, type: "signedOut" });
         return;
       }
@@ -465,6 +480,9 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     scope: readable && branchId !== undefined && restaurantId !== undefined ? { branchId, restaurantId } : undefined,
     session: state.session,
   });
+  // Publish the store's sign-out hook synchronously (not in an effect) so a
+  // sign-out that happens right after the runtime opens still sees it.
+  releaseLocalDataRef.current = sync.releaseLocalData;
   const [syncNotice, setSyncNotice] = useState<string | undefined>(undefined);
   const [offlineQueued, setOfflineQueued] = useState(false);
   const [offlineCashBusy, setOfflineCashBusy] = useState(false);

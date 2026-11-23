@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { SyncTransportError } from "@super-restaurant/sync-engine";
+import { DeviceSyncEngine, SyncTransportError, type SyncPushRequest, type SyncTransportPort } from "@super-restaurant/sync-engine";
 
 import type { MobileEvent } from "../mobile-state.js";
 import { endMobileSession } from "../sign-out.js";
@@ -18,7 +18,7 @@ import type {
 } from "./sync-store.js";
 import { MobileSqliteSyncStorage } from "./sync-store.js";
 import { createMobileSyncTransport } from "./sync-transport.js";
-import { DEVICE, ACTOR, SCOPE, FakeSyncDatabase, entry, stateWith, storageFor } from "./test-fixtures.js";
+import { DEVICE, ACTOR, SCOPE, FakeSyncDatabase, entry, stateWith, storageFor, testId } from "./test-fixtures.js";
 
 const RESTAURANT = "00000000-0000-4000-8000-00000000a0a0";
 const BRANCH = "00000000-0000-4000-8000-00000000a1a1";
@@ -327,4 +327,87 @@ test("a storage hook that throws synchronously does not break the local sign-out
     signOut: () => Promise.resolve(),
   });
   assert.equal(events.length, 1);
+});
+
+test("sign-out with evidence then a new login unlocks and pushes with the same idempotencyKey", async () => {
+  const database = new FakeSyncDatabase();
+  const storage = storageFor(database);
+  let now = Date.UTC(2026, 10, 23, 12, 0, 0);
+  let count = 0;
+  const pushedKeys: string[] = [];
+  const transport: SyncTransportPort = {
+    pull: () => Promise.resolve(null),
+    push: (request: SyncPushRequest) => {
+      const event = request.events[0];
+      if (event === undefined) throw new Error("missing event");
+      pushedKeys.push(event.idempotencyKey);
+      return Promise.resolve({
+        protocolVersion: 1,
+        results: [{
+          auditId: testId(0x63),
+          canonicalVersion: 1,
+          code: null,
+          eventId: event.eventId,
+          idempotencyKey: event.idempotencyKey,
+          status: "accepted",
+        }],
+        scope: request.scope,
+      });
+    },
+  };
+  const build = (): DeviceSyncEngine => new DeviceSyncEngine({
+    clientType: "mobile",
+    clock: { nowMs: () => (now += 1) },
+    deviceId: DEVICE,
+    ids: { uuid: () => testId(0x9100 + (count += 1)) },
+    storage,
+    transport,
+  });
+  const session = new MobileOfflineSession({
+    deviceId: DEVICE,
+    keys: { purge: (): Promise<void> => Promise.resolve() },
+    storage,
+  });
+
+  const first = build();
+  await first.enqueue({
+    actorId: ACTOR,
+    entityId: testId(0x3101),
+    entityType: "Order",
+    idempotencyKey: "cycle-1",
+    operation: "create",
+    payload: { note: "offline" },
+    scope: SCOPE,
+  });
+
+  // Sign-out with an unconfirmed event: the store locks and keeps the evidence.
+  const signOut = await session.prepareSignOut();
+  assert.equal(signOut.status, "evidence-retained");
+  assert.equal(session.pushesAllowed(), false);
+  assert.equal((await storage.getStorageHealth()).locked, true);
+  assert.deepEqual(pushedKeys, [], "nothing may be pushed while locked");
+
+  // A fresh authenticated login with a valid scope resumes the same lifecycle.
+  const resumed = await session.resumeSession(SCOPE, ACTOR);
+  assert.deepEqual(resumed, { status: "resumed" });
+  assert.equal(session.pushesAllowed(), true);
+  assert.equal((await storage.getStorageHealth()).locked, false);
+
+  // The reopened engine pushes the retained event with the same idempotencyKey.
+  const restarted = build();
+  await restarted.init();
+  const outcome = await restarted.push(SCOPE);
+  assert.equal(outcome.failureCode, null);
+  assert.deepEqual(pushedKeys, ["cycle-1"]);
+  const outbox = await restarted.getOutbox(SCOPE);
+  assert.equal(outbox[0]?.idempotencyKey, "cycle-1");
+  assert.equal(outbox[0]?.localState, "accepted");
+});
+
+test("prepareSignOut is deduplicated: a provider echo joins the same purge run", async () => {
+  const admin = new FakeAdmin();
+  const { session } = sessionWith(admin);
+  const [first, second] = await Promise.all([session.prepareSignOut(), session.prepareSignOut()]);
+  assert.deepEqual(first, second);
+  assert.deepEqual(admin.calls, ["purge-cache"], "only one purge runs");
 });

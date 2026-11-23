@@ -8,12 +8,14 @@
  * empty `PRAGMA cipher_version` means "no offline storage", never "store in
  * plaintext".
  *
- * Requirements that live outside this module's allowed paths and are recorded
- * in HANDOFF.md as follow-ups:
+ * `apps/mobile/app.json` registers the `expo-sqlite` plugin with
+ * `useSQLCipher: true` (Development/EAS Build only) and sets
+ * `android.allowBackup: false`, so the encrypted database is never captured by
+ * Android auto-backup. The remaining follow-ups are recorded in HANDOFF.md:
  *
- * - `app.json` must register the `expo-sqlite` plugin with `useSQLCipher: true`
- *   (Development/EAS Build only) and exclude the `.db`/`-wal`/`-shm` files from
- *   iOS backups and Android auto-backup (ADR-005 Â§3.5, Â§5).
+ * - iOS: mark the directory that holds `.db`/`-wal`/`-shm` with
+ *   `NSURLIsExcludedFromBackupKey` at runtime, since `app.json` cannot express a
+ *   per-file backup exclusion (ADR-005 §3.5, §5).
  * - SQLCipher Community Edition attribution belongs in `THIRD_PARTY_NOTICES`
  *   and an "Acerca de / Avisos legales" screen before distribution.
  *
@@ -47,6 +49,13 @@ import {
   type MobileSyncSecureStorePort,
 } from "./sync-key.js";
 import { MobileOfflineSession } from "./sync-session.js";
+import {
+  createWebCryptoEnvelopeCipher,
+  deriveScopeEnvelopeKey,
+  hexToBytes,
+  MobileScopeEnvelopeError,
+  type MobileSyncEnvelopeCipher,
+} from "./sync-envelope.js";
 import {
   MobileSqliteSyncStorage,
   MobileSyncStorageError,
@@ -245,6 +254,38 @@ export async function openMobileSyncDatabase(options: OpenMobileSyncDatabaseOpti
 export const mobileSha256Hex = (text: string): Promise<string> =>
   digestStringAsync(CryptoDigestAlgorithm.SHA256, text, { encoding: CryptoEncoding.HEX });
 
+/**
+ * Per-scope envelope cipher bound to this installation's DEK. The same 32 bytes
+ * that key SQLCipher are imported (non-extractable) as an AES-256-GCM key. If the
+ * runtime has no `crypto.subtle`, this fails closed with
+ * `ENCRYPTION_UNAVAILABLE`: the app then works online-only instead of writing any
+ * scope as plaintext.
+ */
+export function createExpoEnvelopeCipher(deviceId: string, keys: MobileSyncKeyStore): MobileSyncEnvelopeCipher {
+  const subtle = (globalThis as { readonly crypto?: Crypto }).crypto?.subtle;
+  if (subtle === undefined) throw new MobileSyncStorageError("ENCRYPTION_UNAVAILABLE", "subtle");
+  return createWebCryptoEnvelopeCipher({
+    rawKey: async (version: number): Promise<Uint8Array> => {
+      let stored;
+      try {
+        stored = await keys.readKeyByVersion(deviceId, version);
+      } catch (error) {
+        if (error instanceof MobileSyncKeyError) {
+          throw new MobileScopeEnvelopeError(
+            error.code === "ENCRYPTION_UNAVAILABLE" ? "ENCRYPTION_UNAVAILABLE" : "STORAGE_LOAD_FAILED",
+            error.message,
+          );
+        }
+        throw error;
+      }
+      if (stored === null) throw new MobileScopeEnvelopeError("ENCRYPTION_KEY_MISSING", `v${version}`);
+      // The AES-GCM key is an HKDF subkey of the SQLCipher DEK, never the DEK itself.
+      return deriveScopeEnvelopeKey(subtle, hexToBytes(stored.hex));
+    },
+    subtle,
+  });
+}
+
 export interface MobileOfflineRuntime {
   readonly deviceId: string;
   readonly keys: MobileSyncKeyStore;
@@ -297,6 +338,7 @@ export async function openMobileOfflineRuntime(): Promise<MobileOfflineRuntime> 
   }
 
   const storage = new MobileSqliteSyncStorage({
+    cipher: createExpoEnvelopeCipher(deviceId, keys),
     database,
     deviceId,
     keyVersion: key.version,
@@ -336,11 +378,14 @@ export async function rotateMobileSyncDatabaseKey(runtime: MobileOfflineRuntime)
   } catch (error) {
     throw toStorageError(error, "STORAGE_COMMIT_FAILED");
   }
+  // Re-encrypt each scope envelope with the new key version while the old key is
+  // still in the keystore: pending outbox events survive, and no entry is ever
+  // left sealed with a key that `retireBelow` is about to delete.
+  await runtime.storage.rotateKeyVersion(next.version);
   // The rekey resolved, so the database now needs the new key: commit the
   // pointer before retiring the old key. If the commit fails, the old key is
   // kept and the next open falls back to `N + 1` via `openCandidates`.
   await runtime.keys.commitRotation(runtime.deviceId, next.version);
   await runtime.keys.retireBelow(runtime.deviceId, next.version);
-  runtime.storage.adoptKeyVersion(next.version);
   return next;
 }

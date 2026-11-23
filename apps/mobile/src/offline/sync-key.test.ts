@@ -220,3 +220,16 @@ test("the SQLite key literal is only built from validated hex", () => {
 // compile if `MobileSecureStorePort` ever diverges from what the key store needs.
 const identityCompatible: MobileSecureStorePort = new FakeSecureStore();
 assert.ok(identityCompatible);
+
+test("rotate persists N+1 before any read, so a crash before rotateKeyVersion still finds it", async () => {
+  const store = new FakeSecureStore();
+  const keys = keyStore(store);
+  await keys.getOrCreate(DEVICE);
+  const next = await keys.rotate(DEVICE);
+
+  // Simulate the process dying between `PRAGMA rekey` and `rotateKeyVersion`: a
+  // fresh keystore instance must already read N+1, while the pointer stays at N.
+  const reopened = keyStore(store);
+  assert.deepEqual(await reopened.readKeyByVersion(DEVICE, next.version), next);
+  assert.equal(store.values.get(syncKeyPointerKey(DEVICE)), "1", "the pointer is untouched until commitRotation");
+});

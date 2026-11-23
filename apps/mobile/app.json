@@ -8,7 +8,8 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "android": {
-      "package": "com.superrestaurant.mobile"
+      "package": "com.superrestaurant.mobile",
+      "allowBackup": false
     },
     "ios": {
       "bundleIdentifier": "com.superrestaurant.mobile",
@@ -18,7 +19,13 @@
       "bundler": "metro"
     },
     "plugins": [
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ]
     ]
   }
 }

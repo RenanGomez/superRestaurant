@@ -35,8 +35,17 @@ import {
   type SyncScopeInput,
 } from "@super-restaurant/sync-engine";
 
+import {
+  decodeScopedSnapshot,
+  encodeScopedSnapshot,
+  MobileScopeEnvelopeError,
+  type MobileScopeEnvelopeErrorCode,
+  type MobileSyncEnvelopeCipher,
+} from "./sync-envelope.js";
+
 export const MOBILE_SYNC_STORAGE_ERROR_CODES = [
   "ENCRYPTION_UNAVAILABLE",
+  "ENCRYPTION_KEY_MISSING",
   "STORAGE_COMMIT_FAILED",
   "STORAGE_LOAD_FAILED",
   "STORAGE_LOCKED",
@@ -45,6 +54,7 @@ export const MOBILE_SYNC_STORAGE_ERROR_CODES = [
   "SEQUENCE_REGRESSION",
   "STATE_CORRUPT",
   "DEVICE_MISMATCH",
+  "STALE_STATE",
 ] as const;
 
 export type MobileSyncStorageErrorCode = (typeof MOBILE_SYNC_STORAGE_ERROR_CODES)[number];
@@ -91,6 +101,12 @@ export interface MobileSyncStorageOptions {
   readonly database: MobileSyncDatabasePort;
   /** SHA-256 of the serialized state, as lowercase hex. `expo-offline.ts` supplies expo-crypto. */
   readonly sha256Hex: (text: string) => Promise<string>;
+  /**
+   * AES-256-GCM cipher used to seal each `restaurantId|branchId` partition of the
+   * snapshot. Required: without it the store refuses to open, so nothing is ever
+   * written as plaintext.
+   */
+  readonly cipher: MobileSyncEnvelopeCipher;
   /** Version of the database key in `expo-secure-store` that this database was opened with. */
   readonly keyVersion: number;
   readonly nowMs?: () => number;
@@ -177,9 +193,12 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
   private readonly deviceId: string;
   private readonly database: MobileSyncDatabasePort;
   private readonly sha256Hex: (text: string) => Promise<string>;
+  private readonly cipher: MobileSyncEnvelopeCipher;
   private keyVersion: number;
   private readonly nowMs: () => number;
   private tail: Promise<unknown> = Promise.resolve();
+  // STALE_STATE requires discarding the engine, loading again, and replaying the intent.
+  private generation = 0;
 
   public constructor(options: MobileSyncStorageOptions) {
     if (typeof options.deviceId !== "string" || options.deviceId.length === 0) {
@@ -191,6 +210,7 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
     this.deviceId = options.deviceId;
     this.database = options.database;
     this.sha256Hex = options.sha256Hex;
+    this.cipher = options.cipher;
     this.keyVersion = options.keyVersion;
     this.nowMs = options.nowMs ?? ((): number => Date.now());
   }
@@ -212,8 +232,12 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
       } catch (error) {
         throw toStorageError(error, "STORAGE_LOAD_FAILED");
       }
-      if (raw === null) return null;
+      if (raw === null) {
+        this.generation = meta?.writeGeneration ?? 0;
+        return null;
+      }
       const state = await this.hydrate(raw, meta);
+      this.generation = meta?.writeGeneration ?? 0;
       return state;
     });
   }
@@ -233,11 +257,13 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
           const meta = await transaction.readMeta(this.deviceId);
           if (meta?.quarantined === true) throw new MobileSyncStorageError("STORAGE_QUARANTINED");
           if (meta?.locked === true) throw new MobileSyncStorageError("STORAGE_LOCKED");
+          if ((meta?.writeGeneration ?? 0) !== this.generation) throw new MobileSyncStorageError("STALE_STATE");
           if (isSequenceRegression(validated.lastLocalSequence, meta?.lastLocalSequence ?? 0)) {
             throw new MobileSyncStorageError("SEQUENCE_REGRESSION");
           }
           await this.writeSnapshot(transaction, validated, meta);
         });
+        this.generation += 1;
       } catch (error) {
         throw toStorageError(error, "STORAGE_COMMIT_FAILED");
       }
@@ -320,7 +346,7 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
 
   public inspectPendingEvidence(): Promise<MobileSyncPendingEvidence> {
     return this.serialize(async () => {
-      const { raw } = await this.readBoth();
+      const { raw, meta } = await this.readBoth();
       if (raw === null) {
         return Object.freeze({
           status: "missing" as const,
@@ -333,8 +359,13 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
       }
       let state: DurableSyncState;
       try {
-        state = await this.hydrate(raw, null);
-      } catch {
+        state = await this.hydrate(raw, meta);
+      } catch (error) {
+        const storageError = toStorageError(error, "STORAGE_LOAD_FAILED");
+        // Only authenticated corruption is evidence of corruption. A missing key
+        // or a keystore/platform failure is retryable and must be rethrown so the
+        // caller never quarantines a recoverable store.
+        if (storageError.code !== "STATE_CORRUPT" && storageError.code !== "SEQUENCE_REGRESSION") throw storageError;
         return Object.freeze({
           status: "corrupt" as const,
           outboxCount: 0,
@@ -383,6 +414,42 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
     this.keyVersion = version;
   }
 
+  /**
+   * Re-encrypts every scope envelope with `version` in one transaction, keeping
+   * the replica, the outbox and `lastLocalSequence` untouched. This is the
+   * app-layer half of a verified DEK rotation: it must run while the previous key
+   * version is still readable, so a crash before commit leaves the old envelopes
+   * decryptable and a crash after commit leaves only the new ones.
+   */
+  public rotateKeyVersion(version: number): Promise<void> {
+    if (!Number.isSafeInteger(version) || version < 1) {
+      return Promise.reject(new MobileSyncStorageError("ENCRYPTION_UNAVAILABLE", "keyVersion"));
+    }
+    return this.serialize(async () => {
+      const previous = this.keyVersion;
+      try {
+        const generation = await this.database.withExclusiveTransaction(async (transaction) => {
+          const meta = await transaction.readMeta(this.deviceId);
+          if (meta?.quarantined === true) throw new MobileSyncStorageError("STORAGE_QUARANTINED");
+          if (meta?.locked === true) throw new MobileSyncStorageError("STORAGE_LOCKED");
+          const raw = await transaction.readSnapshot(this.deviceId);
+          if (raw === null) {
+            this.keyVersion = version;
+            return meta?.writeGeneration ?? 0;
+          }
+          const state = await this.hydrate(raw, meta);
+          this.keyVersion = version;
+          await this.writeSnapshot(transaction, state, meta);
+          return (meta?.writeGeneration ?? 0) + 1;
+        });
+        this.generation = generation;
+      } catch (error) {
+        this.keyVersion = previous;
+        throw toStorageError(error, "STORAGE_COMMIT_FAILED");
+      }
+    });
+  }
+
   // ---- Internals -------------------------------------------------------------------------
 
   private async readBoth(): Promise<{ readonly raw: string | null; readonly meta: MobileSyncStoredMeta | null }> {
@@ -397,21 +464,30 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
     }
   }
 
-  /** Parses, verifies the SHA-256 the adapter wrote, and enforces the sequence floor. */
+  /** Verifies the SHA-256, decrypts every scope envelope and enforces the sequence floor. */
   private async hydrate(raw: string, meta: MobileSyncStoredMeta | null): Promise<DurableSyncState> {
-    let value: unknown;
-    try {
-      value = JSON.parse(raw) as unknown;
-    } catch {
-      throw new MobileSyncStorageError("STATE_CORRUPT", "json");
-    }
-    const parsed = parseDurableState(value, this.deviceId);
-    if (!parsed.ok) {
-      throw new MobileSyncStorageError(parsed.code === "SEQUENCE_REGRESSION" ? "SEQUENCE_REGRESSION" : "STATE_CORRUPT", parsed.field);
-    }
+    // The adapter's SHA-256 over the stored envelope is an integrity gate before
+    // any decryption; a transient I/O failure must surface as a load failure, not
+    // as "corrupt evidence".
     if (meta !== null && meta.stateSha256.length > 0) {
       const digest = await this.sha256Hex(raw);
       if (digest !== meta.stateSha256) throw new MobileSyncStorageError("STATE_CORRUPT", "sha256");
+    }
+    let state: DurableSyncState;
+    try {
+      state = await decodeScopedSnapshot(raw, this.cipher, this.deviceId);
+    } catch (error) {
+      if (error instanceof MobileScopeEnvelopeError) {
+        throw new MobileSyncStorageError(envelopeErrorCode(error.code), error.message);
+      }
+      if (error instanceof MobileSyncStorageError) throw error;
+      // Any other keystore/platform failure is a load failure, never corruption:
+      // the caller must be able to retry without quarantining the store.
+      throw new MobileSyncStorageError("STORAGE_LOAD_FAILED", error instanceof Error ? error.message : String(error));
+    }
+    const parsed = parseDurableState(state, this.deviceId);
+    if (!parsed.ok) {
+      throw new MobileSyncStorageError(parsed.code === "SEQUENCE_REGRESSION" ? "SEQUENCE_REGRESSION" : "STATE_CORRUPT", parsed.field);
     }
     if (meta !== null && isSequenceRegression(parsed.value.lastLocalSequence, meta.lastLocalSequence)) {
       throw new MobileSyncStorageError("SEQUENCE_REGRESSION", "meta");
@@ -424,7 +500,7 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
     state: DurableSyncState,
     meta: MobileSyncStoredMeta | null,
   ): Promise<void> {
-    const json = JSON.stringify(state);
+    const json = await encodeScopedSnapshot(state, this.cipher, this.deviceId, this.keyVersion);
     const sha256 = await this.sha256Hex(json);
     const nextMeta: MobileSyncStoredMeta = {
       deviceId: this.deviceId,
@@ -448,7 +524,7 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
   private updateMeta(change: (meta: MobileSyncStoredMeta | null) => MobileSyncStoredMeta): Promise<void> {
     return this.serialize(async () => {
       try {
-        await this.database.withExclusiveTransaction(async (transaction) => {
+        const generation = await this.database.withExclusiveTransaction(async (transaction) => {
           const meta = await transaction.readMeta(this.deviceId);
           const next = change(meta);
           await transaction.writeMeta({
@@ -458,7 +534,9 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
             updatedAt: this.nowMs(),
             writeGeneration: (meta?.writeGeneration ?? 0) + 1,
           });
+          return (meta?.writeGeneration ?? 0) + 1;
         });
+        this.generation = generation;
       } catch (error) {
         throw toStorageError(error, "STORAGE_COMMIT_FAILED");
       }
@@ -476,16 +554,17 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
           const raw = await transaction.readSnapshot(this.deviceId);
           const state = raw === null ? null : await this.hydrate(raw, meta);
           const outcome = change(state);
-          if (outcome.state === null) return outcome.result;
+          if (outcome.state === null) return { result: outcome.result, generation: meta?.writeGeneration ?? 0 };
           const parsed = parseDurableState(outcome.state, this.deviceId);
           if (!parsed.ok) throw new MobileSyncStorageError("STATE_CORRUPT", parsed.field);
           if (isSequenceRegression(parsed.value.lastLocalSequence, meta?.lastLocalSequence ?? 0)) {
             throw new MobileSyncStorageError("SEQUENCE_REGRESSION");
           }
           await this.writeSnapshot(transaction, parsed.value, meta);
-          return outcome.result;
+          return { result: outcome.result, generation: (meta?.writeGeneration ?? 0) + 1 };
         });
-        return result;
+        this.generation = result.generation;
+        return result.result;
       } catch (error) {
         throw toStorageError(error, "STORAGE_COMMIT_FAILED");
       }
@@ -556,9 +635,22 @@ function purgeState(state: DurableSyncState, retained: readonly OutboxEntry[]): 
   });
 }
 
+/** Maps an envelope-layer failure to a storage code, keeping corruption distinct. */
+function envelopeErrorCode(code: MobileScopeEnvelopeErrorCode): MobileSyncStorageErrorCode {
+  switch (code) {
+    case "STATE_CORRUPT": return "STATE_CORRUPT";
+    case "ENCRYPTION_UNAVAILABLE": return "ENCRYPTION_UNAVAILABLE";
+    case "ENCRYPTION_KEY_MISSING": return "ENCRYPTION_KEY_MISSING";
+    case "STORAGE_LOAD_FAILED": return "STORAGE_LOAD_FAILED";
+  }
+}
+
 /** Maps a driver error to a stable storage code; quota is called out so the UI can go read-only. */
 export function toStorageError(error: unknown, fallback: MobileSyncStorageErrorCode): MobileSyncStorageError {
   if (error instanceof MobileSyncStorageError) return error;
+  if (error instanceof MobileScopeEnvelopeError) {
+    return new MobileSyncStorageError(envelopeErrorCode(error.code), error.message);
+  }
   const message = error instanceof Error ? error.message : String(error);
   const lowered = message.toLowerCase();
   if (lowered.includes("sqlite_full") || lowered.includes("database or disk is full")

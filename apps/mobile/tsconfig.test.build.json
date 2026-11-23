@@ -49,6 +49,8 @@
     "src/order-delivery.test.ts",
     "src/offline/sync-store.ts",
     "src/offline/sync-store.test.ts",
+    "src/offline/sync-envelope.ts",
+    "src/offline/sync-envelope.test.ts",
     "src/offline/sync-key.ts",
     "src/offline/sync-key.test.ts",
     "src/offline/sync-transport.ts",
