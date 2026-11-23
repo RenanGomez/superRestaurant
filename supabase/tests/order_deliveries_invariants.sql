@@ -203,7 +203,8 @@ begin
   cmd := pg_temp.t_dcmd(restaurant,branch,o_fail,0,gen_random_uuid(),'k-extra',device,now_text,pg_catalog.jsonb_build_object('courierUserId',courier_a::text,'amountMinor',5));
   if (app_private.assign_delivery(cashier,cmd))->>'status'<>'conflict' then raise exception 'DELIVERY_EXTRA_KEY_ACCEPTED'; end if;
   execute 'reset role';
-  if (select count(*) from app.order_deliveries)<>0 or (select count(*) from app.order_delivery_events)<>0
+  if (select count(*) from app.order_deliveries where restaurant_id=restaurant)<>0
+    or (select count(*) from app.order_delivery_events where restaurant_id=restaurant)<>0
   then raise exception 'DELIVERY_REFUSAL_PERSISTED'; end if;
 
   -- ---- Assign o_fail to courier A; replay; divergent replay; stale version.
