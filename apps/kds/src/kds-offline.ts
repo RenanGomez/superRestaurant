@@ -178,7 +178,7 @@ export function createKdsOfflineController(options: CreateKdsOfflineControllerOp
 export interface KdsSyncHttpTransportOptions {
   readonly apiBaseUrl: string;
   readonly accessToken: string;
-  /** Defaults to the versioned sync endpoints agreed for O1/O2 (`POST /api/v1/sync`, `POST /api/v1/sync/pull`). */
+  /** Defaults to the versioned sync endpoints agreed for O1/O2 (`POST /api/v1/sync/push`, `POST /api/v1/sync/pull`). */
   readonly pushPath?: string;
   readonly pullPath?: string;
   readonly fetcher?: typeof fetch;
@@ -194,7 +194,7 @@ function transportCodeForStatus(status: number): { readonly code: string; readon
 /** Minimal authenticated JSON transport over the sync endpoints. Never invents a cursor. */
 export function createKdsSyncHttpTransport(options: KdsSyncHttpTransportOptions): SyncTransportPort {
   const fetcher = options.fetcher ?? fetch;
-  const pushPath = options.pushPath ?? "/api/v1/sync";
+  const pushPath = options.pushPath ?? "/api/v1/sync/push";
   const pullPath = options.pullPath ?? "/api/v1/sync/pull";
 
   const post = async (path: string, body: unknown): Promise<unknown> => {
@@ -290,4 +290,25 @@ export class IndexedDbSyncStorage implements DurableSyncStoragePort {
 
 export function createKdsSyncStorage(indexedDb: IDBFactory | undefined = globalThis.indexedDB): DurableSyncStoragePort {
   return indexedDb === undefined ? new InMemorySyncStorage() : new IndexedDbSyncStorage(indexedDb);
+}
+
+/**
+ * Removes the durable outbox/replica for this browser profile. Called on
+ * sign-out so a different actor never inherits the previous user's pending
+ * KDS transitions.
+ */
+export async function clearKdsSyncState(indexedDb: IDBFactory | undefined = globalThis.indexedDB): Promise<void> {
+  if (indexedDb === undefined) return;
+  const database = await openSyncDatabase(indexedDb);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(KDS_SYNC_STORE, "readwrite");
+      transaction.objectStore(KDS_SYNC_STORE).clear();
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error("KDS_SYNC_CLEAR_FAILED"));
+      transaction.onabort = () => reject(transaction.error ?? new Error("KDS_SYNC_CLEAR_ABORTED"));
+    });
+  } finally {
+    database.close();
+  }
 }

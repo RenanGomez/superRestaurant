@@ -1,4 +1,9 @@
-import type { KdsTicketV1, SyncConnectivityStateV1 } from "@super-restaurant/shared-types";
+import {
+  parseKdsTicketListV1,
+  parseSyncScopeV1,
+  type KdsTicketV1,
+  type SyncConnectivityStateV1,
+} from "@super-restaurant/shared-types";
 
 /**
  * Local-first cache for the kitchen display.
@@ -71,23 +76,6 @@ export function ticketsForStation(
 }
 
 /**
- * Merges cached tickets with a freshly received server list.
- * The server list is authoritative for duplicated `orderItemId` values, so a
- * reconnection never creates duplicates and never resurrects a finished ticket
- * with stale cached data.
- */
-export function mergeStationTickets(
-  cached: readonly KdsTicketV1[],
-  incoming: readonly KdsTicketV1[],
-  scope: KdsStationScope,
-): readonly KdsTicketV1[] {
-  const merged = new Map<string, KdsTicketV1>();
-  for (const ticket of ticketsForStation(cached, scope)) merged.set(ticket.orderItemId, ticket);
-  for (const ticket of ticketsForStation(incoming, scope)) merged.set(ticket.orderItemId, ticket);
-  return Object.freeze([...merged.values()]);
-}
-
-/**
  * Applies queued local transitions on top of the known tickets for optimism.
  * A pending transition is only shown for a ticket already present in this
  * station, so the board never claims to have received a new order offline.
@@ -128,11 +116,55 @@ export function buildCacheRecord(input: {
   });
 }
 
-export function formatLastReceived(record: KdsCacheRecord | null): string {
-  if (record === null) return "Sin recepción registrada";
-  const parsed = new Date(record.lastReceivedAt);
+export function formatLastReceived(lastReceivedAt: string | null): string {
+  if (lastReceivedAt === null) return "Sin recepción registrada";
+  const parsed = new Date(lastReceivedAt);
   if (Number.isNaN(parsed.getTime())) return "Sin recepción registrada";
   return `Última recepción ${parsed.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+/**
+ * Runtime validation for a record read back from storage. A corrupted or
+ * cross-scope record is dropped instead of being rendered. Tickets are parsed
+ * with the shared contract, so a stale cache never leaks another station.
+ */
+export function parseCacheRecord(value: unknown, expected: KdsStationScope): KdsCacheRecord | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as { readonly [key: string]: unknown };
+  if (record["schemaVersion"] !== 1) return null;
+  const rawScope = record["scope"];
+  if (typeof rawScope !== "object" || rawScope === null) return null;
+  const scope = parseSyncScopeV1({
+    restaurantId: (rawScope as { readonly [key: string]: unknown })["restaurantId"],
+    branchId: (rawScope as { readonly [key: string]: unknown })["branchId"],
+  });
+  if (scope === undefined) return null;
+  const scoped = rawScope as { readonly [key: string]: unknown };
+  if (
+    scoped["restaurantId"] !== expected.restaurantId
+    || scoped["branchId"] !== expected.branchId
+    || scoped["stationId"] !== expected.stationId
+  ) return null;
+  const cursor = record["cursor"];
+  if (!(cursor === null || (typeof cursor === "string" && cursor.length > 0))) return null;
+  const lastReceivedAt = record["lastReceivedAt"];
+  if (typeof lastReceivedAt !== "string" || Number.isNaN(Date.parse(lastReceivedAt))) return null;
+
+  const parsed = parseKdsTicketListV1({
+    schemaVersion: 1,
+    scope,
+    stationId: expected.stationId,
+    tickets: record["tickets"],
+    truncated: false,
+  });
+  if (parsed === undefined) return null;
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    scope: Object.freeze({ ...expected }),
+    tickets: Object.freeze(ticketsForStation(parsed.tickets, expected)),
+    cursor: cursor as string | null,
+    lastReceivedAt,
+  });
 }
 
 /** In-memory reference cache for tests and for browsers without IndexedDB. */
@@ -141,12 +173,22 @@ export class InMemoryKdsCache implements KdsCachePort {
 
   public load(scope: KdsStationScope): Promise<KdsCacheRecord | null> {
     const raw = this.records.get(cacheKey(scope));
-    return Promise.resolve(raw === undefined ? null : (JSON.parse(raw) as KdsCacheRecord));
+    if (raw === undefined) return Promise.resolve(null);
+    try {
+      return Promise.resolve(parseCacheRecord(JSON.parse(raw) as unknown, scope));
+    } catch {
+      return Promise.resolve(null);
+    }
   }
 
   public save(record: KdsCacheRecord): Promise<void> {
     this.records.set(cacheKey(record.scope), JSON.stringify(record));
     return Promise.resolve();
+  }
+
+  /** Replaces the stored record with arbitrary JSON, to simulate corruption. */
+  public seedRaw(scope: KdsStationScope, value: unknown): void {
+    this.records.set(cacheKey(scope), JSON.stringify(value));
   }
 }
 
@@ -193,7 +235,7 @@ export class IndexedDbKdsCache implements KdsCachePort {
     const raw = await requestToPromise(transaction.objectStore(KDS_CACHE_STORE).get(cacheKey(scope)) as IDBRequest<unknown>);
     if (typeof raw !== "string") return null;
     try {
-      return JSON.parse(raw) as KdsCacheRecord;
+      return parseCacheRecord(JSON.parse(raw) as unknown, scope);
     } catch {
       return null;
     }
@@ -214,4 +256,24 @@ export class IndexedDbKdsCache implements KdsCachePort {
 /** Picks IndexedDB when the runtime exposes it; otherwise an in-memory cache. */
 export function createKdsCache(indexedDb: IDBFactory | undefined = globalThis.indexedDB): KdsCachePort {
   return indexedDb === undefined ? new InMemoryKdsCache() : new IndexedDbKdsCache(indexedDb);
+}
+
+/**
+ * Removes cached tickets for every station. Called on sign-out so a different
+ * actor never sees the previous user's kitchen data.
+ */
+export async function clearKdsCache(indexedDb: IDBFactory | undefined = globalThis.indexedDB): Promise<void> {
+  if (indexedDb === undefined) return;
+  const database = await openCacheDatabase(indexedDb);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(KDS_CACHE_STORE, "readwrite");
+      transaction.objectStore(KDS_CACHE_STORE).clear();
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error("KDS_CACHE_CLEAR_FAILED"));
+      transaction.onabort = () => reject(transaction.error ?? new Error("KDS_CACHE_CLEAR_ABORTED"));
+    });
+  } finally {
+    database.close();
+  }
 }

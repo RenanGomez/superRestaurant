@@ -7,8 +7,8 @@ import {
   InMemoryKdsCache,
   buildCacheRecord,
   formatLastReceived,
-  mergeStationTickets,
   overlayPendingTransitions,
+  parseCacheRecord,
   sameStationScope,
   stationSelectionLocked,
   ticketsForStation,
@@ -54,13 +54,14 @@ test("deduplicates by orderItemId keeping the first occurrence", () => {
   assert.deepEqual(ticketsForStation([first, duplicate], expected).map((item) => item.productName), ["First"]);
 });
 
-test("server tickets win over cached ones without creating duplicates", () => {
-  const cached = ticket({ status: "sent" });
-  const server = ticket({ status: "preparing" });
-  const dropped = ticket({ orderItemId: "b72573ec-6224-4857-bc4a-f3d1d07b6d83" });
-  const merged = mergeStationTickets([cached, dropped], [server], expected);
-  assert.equal(merged.length, 2);
-  assert.equal(merged.find((item) => item.orderItemId === server.orderItemId)?.status, "preparing");
+test("a successful server list replaces cached state so an absent ticket disappears", () => {
+  const kept = ticket({ orderItemId: "b72573ec-6224-4857-bc4a-f3d1d07b6d83", status: "preparing" });
+  const removed = ticket({ orderItemId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02", status: "sent" });
+  const cached = [ticket(), removed];
+  const server = [kept];
+  const next = ticketsForStation(server, expected);
+  assert.deepEqual(next.map((item) => item.orderItemId), [kept.orderItemId]);
+  assert.equal(next.length < cached.length, true, "the merge is not a union: server truth wins");
 });
 
 test("overlays only local transitions for tickets already received on the station", () => {
@@ -116,5 +117,20 @@ test("compares scopes exactly and formats the last reception", () => {
   assert.equal(sameStationScope(expected, { ...expected, stationId: "bar" }), false);
   assert.equal(formatLastReceived(null), "Sin recepción registrada");
   const record = buildCacheRecord({ scope: expected, tickets: [], cursor: null, receivedAt: new Date("2026-11-23T10:05:00.000Z") });
-  assert.match(formatLastReceived(record), /^Última recepción /u);
+  assert.match(formatLastReceived(record.lastReceivedAt), /^Última recepción /u);
+});
+
+test("drops corrupted or cross-scope cache records instead of rendering them", async () => {
+  const cache = new InMemoryKdsCache();
+  cache.seedRaw(expected, { schemaVersion: 1, scope: { ...expected, stationId: "bar" }, tickets: [], cursor: null, lastReceivedAt: "2026-11-23T10:05:00.000Z" });
+  assert.equal(await cache.load(expected), null);
+  cache.seedRaw(expected, { schemaVersion: 1, scope: expected, tickets: [{ bogus: true }], cursor: null, lastReceivedAt: "2026-11-23T10:05:00.000Z" });
+  assert.equal(await cache.load(expected), null);
+  cache.seedRaw(expected, { schemaVersion: 1, scope: expected, tickets: [{ ...ticket() }], cursor: null, lastReceivedAt: "not-a-date" });
+  assert.equal(await cache.load(expected), null);
+
+  const valid = buildCacheRecord({ scope: expected, tickets: [ticket()], cursor: "v1:3", receivedAt: new Date("2026-11-23T10:05:00.000Z") });
+  const parsed = parseCacheRecord(JSON.parse(JSON.stringify(valid)) as unknown, expected);
+  assert.equal(parsed?.tickets.length, 1);
+  assert.equal(parsed?.cursor, "v1:3");
 });

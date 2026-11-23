@@ -182,7 +182,7 @@ test("HTTP transport posts to the versioned sync endpoints with the bearer token
   await transport.pull({ cursor: null, limit: 10, protocolVersion: 1, scope });
 
   assert.deepEqual(calls.map((call) => call.url), [
-    "https://api.example.test/api/v1/sync",
+    "https://api.example.test/api/v1/sync/push",
     "https://api.example.test/api/v1/sync/pull",
   ]);
   assert.equal(calls[0]?.init?.method, "POST");

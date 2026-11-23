@@ -10,6 +10,7 @@ import {
   REALTIME_SUBSCRIBE_EVENT,
   parseKitchenReadyNotificationV1,
   parseKitchenReadySubscriptionAckV1,
+  parseKdsCursorV1,
   parseRealtimeNotificationV1,
   parseRealtimeSubscriptionAckV1,
   parseRealtimeSubscriptionV1,
@@ -27,8 +28,9 @@ import {
   KDS_OFFLINE_LOCKED_COPY,
   KDS_OFFLINE_NO_NEW_TICKETS_COPY,
   buildCacheRecord,
+  clearKdsCache,
   createKdsCache,
-  mergeStationTickets,
+  formatLastReceived,
   overlayPendingTransitions,
   stationSelectionLocked,
   ticketsForStation,
@@ -37,6 +39,7 @@ import {
   type KdsStationScope,
 } from "./kds-local.js";
 import {
+  clearKdsSyncState,
   createKdsOfflineController,
   createKdsSyncHttpTransport,
   createKdsSyncStorage,
@@ -143,6 +146,11 @@ function Workspace({ config, session, onLogout }: {
   }), [membership, station]);
   const stationLocked = stationSelectionLocked(toConnectivity(boardConnection));
 
+  const signOut = async (): Promise<void> => {
+    try { await Promise.all([clearKdsCache(), clearKdsSyncState()]); } catch { /* Purge is best-effort. */ }
+    await onLogout();
+  };
+
   return <main className="workspace">
     <header className="topbar">
       <div><p className="eyebrow">superRestaurant</p><h1>KDS</h1></div>
@@ -152,14 +160,14 @@ function Workspace({ config, session, onLogout }: {
         </select></label>
         <label>Estación<input value={station} maxLength={64} disabled={stationLocked} title={stationLocked ? KDS_OFFLINE_LOCKED_COPY : undefined} onChange={(event) => setStation(event.target.value)} /></label>
         <button className="ghost" type="button" aria-pressed={soundEnabled} onClick={() => setSoundEnabled((enabled) => !enabled)}>Sonido: {soundEnabled ? "sí" : "no"}</button>
-        <button className="ghost" onClick={() => void onLogout()}>Salir</button>
+        <button className="ghost" onClick={() => void signOut()}>Salir</button>
       </div>
     </header>
     {stationLocked && <section className="banner warning" role="status">{KDS_OFFLINE_LOCKED_COPY}</section>}
     {error && <section className="banner error" role="alert">No fue posible cargar tus sucursales.</section>}
     {subscription === undefined
       ? <section className="empty"><h2>Selecciona una estación válida</h2><p>Usa el identificador configurado en el menú, por ejemplo “kitchen”.</p></section>
-      : <KdsBoard key={`${selected}:${station}`} config={config} accessToken={session.access_token} actorId={session.user.id} subscription={subscription} soundEnabled={soundEnabled} onAccessLost={() => void onLogout()} onConnectionChange={setBoardConnection} />}
+      : <KdsBoard key={`${selected}:${station}`} config={config} accessToken={session.access_token} actorId={session.user.id} subscription={subscription} soundEnabled={soundEnabled} onAccessLost={() => void signOut()} onConnectionChange={setBoardConnection} />}
   </main>;
 }
 
@@ -210,6 +218,10 @@ function KdsBoard({ config, accessToken, actorId, subscription, soundEnabled, on
   }), [accessToken, actorId, config.apiBaseUrl, deviceId, subscription]);
   const pendingIds = useMemo(() => new Set(pending.map((item) => item.orderItemId)), [pending]);
   const offline = connection === "reconnecting" || connection === "error";
+  const serverLoadedRef = useRef(false);
+  const inFlightRef = useRef<Set<string>>(new Set());
+  const retryAttemptRef = useRef(0);
+  const [reconcileTick, setReconcileTick] = useState(0);
 
   const syncPendingState = useCallback(async (): Promise<void> => {
     try { setPending(await offlineController.pendingTransitions()); } catch { /* Storage may be unavailable. */ }
@@ -220,10 +232,11 @@ function KdsBoard({ config, accessToken, actorId, subscription, soundEnabled, on
     void (async () => {
       try {
         const record = await cachePort.load(stationScope);
-        if (active && record !== null && record.schemaVersion === 1) {
-          const cached = ticketsForStation(record.tickets, stationScope);
-          setTickets((current) => orderTicketsForDisplay(mergeStationTickets(cached, current, stationScope)));
-          setLastReceivedAt((current) => current ?? record.lastReceivedAt);
+        if (active && !serverLoadedRef.current && record !== null) {
+          // The cache is only the initial/offline snapshot; never mixed with a server result.
+          cursor.current = parseKdsCursorV1(record.cursor) ?? KDS_INITIAL_CURSOR;
+          setTickets(orderTicketsForDisplay(ticketsForStation(record.tickets, stationScope)));
+          setLastReceivedAt(record.lastReceivedAt);
         }
       } catch { /* Cache is optional; the server list still loads. */ }
       try {
@@ -245,13 +258,14 @@ function KdsBoard({ config, accessToken, actorId, subscription, soundEnabled, on
     const nextIds = new Set(result.tickets.map((ticket) => ticket.orderItemId));
     if (soundEnabledRef.current && seenItems.current !== undefined && result.tickets.some((ticket) => !seenItems.current!.has(ticket.orderItemId))) playArrivalSound();
     seenItems.current = nextIds;
-    const merged = mergeStationTickets(ticketsRef.current, result.tickets, stationScope);
-    setTickets(orderTicketsForDisplay(merged));
+    const receivedTickets = ticketsForStation(result.tickets, stationScope);
+    serverLoadedRef.current = true;
+    setTickets(orderTicketsForDisplay(receivedTickets));
     setTruncated(result.truncated);
     const receivedAt = new Date();
     setLastReceivedAt(receivedAt.toISOString());
     try {
-      await cachePort.save(buildCacheRecord({ scope: stationScope, tickets: merged, cursor: cursor.current, receivedAt }));
+      await cachePort.save(buildCacheRecord({ scope: stationScope, tickets: receivedTickets, cursor: cursor.current, receivedAt }));
     } catch { /* Keeping the server list on screen matters more than the local copy. */ }
   }, [accessToken, cachePort, config, stationScope, subscription]);
 
@@ -268,7 +282,6 @@ function KdsBoard({ config, accessToken, actorId, subscription, soundEnabled, on
   }, [onAccessLost, refresh]);
 
   useEffect(() => {
-    cursor.current = KDS_INITIAL_CURSOR;
     enqueueRefresh();
     const socket: Socket = io(`${config.apiBaseUrl}${REALTIME_NAMESPACE}`, {
       auth: { accessToken }, reconnection: true, transports: ["websocket"],
@@ -310,18 +323,48 @@ function KdsBoard({ config, accessToken, actorId, subscription, soundEnabled, on
     return () => { socket.disconnect(); };
   }, [accessToken, config.apiBaseUrl, enqueueRefresh, subscription]);
 
+  const runReconcile = useCallback(async (): Promise<void> => {
+    try {
+      const result = await offlineController.reconcile();
+      const unavailable = result.push.failureCode === "SYNC_UNAVAILABLE" || result.pull.code === "SYNC_UNAVAILABLE";
+      const confirmed = result.push.events.some((event) => event.state === "accepted" || event.state === "duplicate");
+      if (unavailable) setMessage("Cambios guardados en este KDS. El servicio de sincronización aún no está disponible en este entorno.");
+      else if (confirmed) setMessage("");
+    } catch { /* The list refresh below still runs. */ }
+    await syncPendingState();
+  }, [offlineController, syncPendingState]);
+
   // On every reconnect: push the durable outbox and pull the cursor before refreshing the list.
   useEffect(() => {
     if (connection !== "live") return;
     let active = true;
     void (async () => {
-      try { await offlineController.reconcile(); } catch { /* The list refresh below still runs. */ }
+      await runReconcile();
       if (!active) return;
-      await syncPendingState();
       await enqueueRefresh();
     })();
     return () => { active = false; };
-  }, [connection, enqueueRefresh, offlineController, syncPendingState]);
+  }, [connection, enqueueRefresh, runReconcile]);
+
+  // While transitions remain queued on a reachable device, retry with capped exponential backoff.
+  useEffect(() => {
+    if (connection !== "live" || pending.length === 0) {
+      retryAttemptRef.current = 0;
+      return;
+    }
+    let cancelled = false;
+    const delay = Math.min(30_000, 1_000 * 2 ** retryAttemptRef.current);
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        if (cancelled) return;
+        await runReconcile();
+        if (cancelled) return;
+        retryAttemptRef.current += 1;
+        setReconcileTick((tick) => tick + 1);
+      })();
+    }, delay);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [connection, pending.length, reconcileTick, runReconcile]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -335,9 +378,11 @@ function KdsBoard({ config, accessToken, actorId, subscription, soundEnabled, on
       setMessage("Esta comanda ya tiene un cambio guardado en este KDS; sincroniza antes de volver a avanzarla.");
       return;
     }
+    if (inFlightRef.current.has(ticket.orderItemId)) return;
+    inFlightRef.current.add(ticket.orderItemId);
     setBusyItem(ticket.orderItemId); setMessage("");
     try {
-      if (connection !== "live") {
+      if (offline) {
         const result = await offlineController.advance(ticket, action, { ticketReceivedOnStation: true });
         if (result.queued) { setMessage(KDS_LOCAL_ONLY_COPY); await syncPendingState(); }
         else setMessage(offlineReason(result.reasonCode));
@@ -349,15 +394,17 @@ function KdsBoard({ config, accessToken, actorId, subscription, soundEnabled, on
       if (error instanceof KdsRequestError && (error.status === 401 || error.status === 403)) onAccessLost();
       else if (error instanceof KdsRequestError && error.status === 409) { setMessage("La comanda cambió en otro dispositivo. Actualizando…"); enqueueRefresh(); }
       else setMessage("No se pudo guardar el cambio. La acción no quedó en cola.");
-    } finally { setBusyItem(undefined); }
+    } finally { inFlightRef.current.delete(ticket.orderItemId); setBusyItem(undefined); }
   };
 
   const actOrder = async (group: KdsOrderGroup, target: KdsAction): Promise<void> => {
     const lines = planBatchTransition(group, target).filter((line) => !pendingIds.has(line.orderItemId));
-    if (lines.length === 0) return;
+    const flightKey = `order:${group.orderId}`;
+    if (lines.length === 0 || inFlightRef.current.has(flightKey)) return;
+    inFlightRef.current.add(flightKey);
     setBusyOrder(group.orderId); setMessage("");
     try {
-      if (connection !== "live") {
+      if (offline) {
         let queued = 0;
         for (const line of lines) {
           const result = await offlineController.advance(line, target, { ticketReceivedOnStation: true });
@@ -378,13 +425,11 @@ function KdsBoard({ config, accessToken, actorId, subscription, soundEnabled, on
       if (error instanceof KdsRequestError && (error.status === 401 || error.status === 403)) onAccessLost();
       else if (error instanceof KdsRequestError && error.status === 409) { setMessage("La orden cambió, vuelve a intentar."); await enqueueRefresh(); }
       else { setMessage(`${completed} de ${lines.length} líneas guardadas. No se pudo completar la orden; actualiza y revisa antes de reintentar.`); await enqueueRefresh(); }
-    } finally { setBusyOrder(undefined); }
+    } finally { inFlightRef.current.delete(flightKey); setBusyOrder(undefined); }
   };
 
   const groups = groupTicketsByOrder(overlayPendingTransitions(tickets, pending));
-  const lastReceivedLabel = lastReceivedAt === null
-    ? "Sin recepción registrada"
-    : `Última recepción ${new Date(lastReceivedAt).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}`;
+  const lastReceivedLabel = formatLastReceived(lastReceivedAt);
 
   return <>
     <section className={`status ${connection}`} aria-live="polite">
