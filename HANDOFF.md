@@ -2659,3 +2659,11 @@ Inspección inicial: CodeGraph actualizado, resolvedor legado de una variante y 
 - Verificación: `pnpm --filter @super-restaurant/sync-engine lint`, `typecheck` y `test` en verde (108 pruebas, 0 fallos); `git diff --check` verde. Para typecheck/test local se construyó antes `@super-restaurant/shared-types`, cuyo `dist` no está versionado.
 - Hallazgo: al agotar reintentos el motor invalida ese lote a `manual_review` y continúa con el siguiente lote pendiente; la suite lo verifica como progreso esperado. No se encontraron bugs reales ni se modificó el motor.
 - Siguiente acción: revisión humana. Commit local únicamente; sin push ni merge en esta sesión.
+
+
+## 2026-11-23 · Decisión: autonomía total del orquestador (AGENTS.md §19.6)
+
+- Instrucción explícita de Emmanuel: el orquestador no espera aprobación humana para nada (migraciones remotas, push/merge, deploy, credenciales del proyecto, datos, DONE). La aprobación se sustituye por puertas automáticas (CI, tests, revisión cruzada, verificación visual) y por un protocolo de seguridad para acciones críticas.
+- Cambios: `AGENTS.md` §3.1, §5, §17, §19.2, §20 y nueva §19.6; órdenes en `docs/agentic/ordenes-2026-11-23-cierre-v1.md` (Mobile y offline en paralelo).
+- Pendiente de configuración externa: el modo de permisos de la sesión de Claude Code puede seguir bloqueando acciones (p. ej. base remota en auto mode); se resuelve en la configuración de la sesión, no en el repo.
+- Cambios sin commit; subagentes: ninguno.
