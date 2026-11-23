@@ -16,12 +16,13 @@ const links = [
   { href: "/app/capture", label: "Captura telefónica", icon: <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2Z" /> },
   { href: "/app/delivery-zones", label: "Zonas de entrega", icon: <><path d="M12 21s7-6.2 7-11a7 7 0 0 0-14 0c0 4.8 7 11 7 11Z" /><circle cx="12" cy="10" r="2.5" /></> },
   { href: "/app/reports/day", label: "Resumen del día", icon: <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></> },
+  { href: "/app/sync", label: "Sincronización", icon: <><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" /><path d="M16 16h5v5" /></> },
   { href: "/app/system-admin/restaurants", label: "Administración del sistema", icon: <text x="4" y="19" stroke="none" fill="currentColor" fontSize="20">⚙</text> },
 ] as const;
 
 /** Visible label under (narrow) or beside (wide) the icon; the full name stays in title/aria-label. */
 const SHORT_LABELS: Readonly<Record<string, string>> = {
-  "/app/capture": "Captura", "/app/delivery-zones": "Zonas", "/app/reports/day": "Resumen", "/app/system-admin/restaurants": "Sistema",
+  "/app/capture": "Captura", "/app/delivery-zones": "Zonas", "/app/reports/day": "Resumen", "/app/sync": "Conexión", "/app/system-admin/restaurants": "Sistema",
 };
 
 /** Hottest operational routes for the mobile bottom bar; everything else lives behind «Más». */

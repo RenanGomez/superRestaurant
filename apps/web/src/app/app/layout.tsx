@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { SyncStatusBar } from "../../components/sync-status-bar";
 import { BRANCH_PREFERENCE_COOKIE, findMembership, parseBranchPreference } from "../../lib/memberships";
 import { getRequestMemberships, getRequestSession, getRequestSystemAdminAccess, getRequestUser } from "../../lib/request-context";
 
@@ -79,6 +80,12 @@ export default async function AppLayout({ children }: { readonly children: React
             </form>
           </div>
         </header>
+        <SyncStatusBar
+          branchName={membership?.branchName}
+          scope={membership?.scope}
+          initialServerReachable={memberships !== undefined ? true : null}
+          initialConfirmedAt={null}
+        />
         <main className="flex min-w-0 flex-1">{children}</main>
       </div>
     </div>
