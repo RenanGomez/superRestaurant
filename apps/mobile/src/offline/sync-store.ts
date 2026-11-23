@@ -45,6 +45,7 @@ export const MOBILE_SYNC_STORAGE_ERROR_CODES = [
   "SEQUENCE_REGRESSION",
   "STATE_CORRUPT",
   "DEVICE_MISMATCH",
+  "STALE_STATE",
 ] as const;
 
 export type MobileSyncStorageErrorCode = (typeof MOBILE_SYNC_STORAGE_ERROR_CODES)[number];
@@ -180,6 +181,8 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
   private keyVersion: number;
   private readonly nowMs: () => number;
   private tail: Promise<unknown> = Promise.resolve();
+  // STALE_STATE requires discarding the engine, loading again, and replaying the intent.
+  private generation = 0;
 
   public constructor(options: MobileSyncStorageOptions) {
     if (typeof options.deviceId !== "string" || options.deviceId.length === 0) {
@@ -212,8 +215,12 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
       } catch (error) {
         throw toStorageError(error, "STORAGE_LOAD_FAILED");
       }
-      if (raw === null) return null;
+      if (raw === null) {
+        this.generation = meta?.writeGeneration ?? 0;
+        return null;
+      }
       const state = await this.hydrate(raw, meta);
+      this.generation = meta?.writeGeneration ?? 0;
       return state;
     });
   }
@@ -233,11 +240,13 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
           const meta = await transaction.readMeta(this.deviceId);
           if (meta?.quarantined === true) throw new MobileSyncStorageError("STORAGE_QUARANTINED");
           if (meta?.locked === true) throw new MobileSyncStorageError("STORAGE_LOCKED");
+          if ((meta?.writeGeneration ?? 0) !== this.generation) throw new MobileSyncStorageError("STALE_STATE");
           if (isSequenceRegression(validated.lastLocalSequence, meta?.lastLocalSequence ?? 0)) {
             throw new MobileSyncStorageError("SEQUENCE_REGRESSION");
           }
           await this.writeSnapshot(transaction, validated, meta);
         });
+        this.generation += 1;
       } catch (error) {
         throw toStorageError(error, "STORAGE_COMMIT_FAILED");
       }
@@ -448,7 +457,7 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
   private updateMeta(change: (meta: MobileSyncStoredMeta | null) => MobileSyncStoredMeta): Promise<void> {
     return this.serialize(async () => {
       try {
-        await this.database.withExclusiveTransaction(async (transaction) => {
+        const generation = await this.database.withExclusiveTransaction(async (transaction) => {
           const meta = await transaction.readMeta(this.deviceId);
           const next = change(meta);
           await transaction.writeMeta({
@@ -458,7 +467,9 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
             updatedAt: this.nowMs(),
             writeGeneration: (meta?.writeGeneration ?? 0) + 1,
           });
+          return (meta?.writeGeneration ?? 0) + 1;
         });
+        this.generation = generation;
       } catch (error) {
         throw toStorageError(error, "STORAGE_COMMIT_FAILED");
       }
@@ -476,16 +487,17 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
           const raw = await transaction.readSnapshot(this.deviceId);
           const state = raw === null ? null : await this.hydrate(raw, meta);
           const outcome = change(state);
-          if (outcome.state === null) return outcome.result;
+          if (outcome.state === null) return { result: outcome.result, generation: meta?.writeGeneration ?? 0 };
           const parsed = parseDurableState(outcome.state, this.deviceId);
           if (!parsed.ok) throw new MobileSyncStorageError("STATE_CORRUPT", parsed.field);
           if (isSequenceRegression(parsed.value.lastLocalSequence, meta?.lastLocalSequence ?? 0)) {
             throw new MobileSyncStorageError("SEQUENCE_REGRESSION");
           }
           await this.writeSnapshot(transaction, parsed.value, meta);
-          return outcome.result;
+          return { result: outcome.result, generation: (meta?.writeGeneration ?? 0) + 1 };
         });
-        return result;
+        this.generation = result.generation;
+        return result.result;
       } catch (error) {
         throw toStorageError(error, "STORAGE_COMMIT_FAILED");
       }
