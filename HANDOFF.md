@@ -1,3 +1,8 @@
+## m2-web-local-storage-crypto — 2026-11-23 (IN_PROGRESS parcial, almacenamiento)
+
+- Añadido `WebIndexedDbSyncStorage`: AES-256-GCM, clave no extraíble por dispositivo, AAD versionado, slots alternos y transacción estricta con metadatos; Web Locks y generación rechazan escritores obsoletos. Corrupción pone en cuarentena y cuota aborta sin perder el snapshot anterior.
+- Ocho pruebas con fake-indexeddb y Web Crypto real: reapertura/cifrado, concurrencia, regresión, corrupción, aislamiento de dispositivo/scope, cuota e idempotencia. Lint, typecheck, test y build web verdes (build fuera del sandbox por spawn EPERM). CodeGraph no inicializado antes/después.
+- Pendiente para completar el item original: rotación de clave, bloqueo/purga al cerrar sesión o revocar conservando manual_review, vínculo autenticado de sesión y prueba en navegador real; no activar offline ni marcar REVIEW. Sin push ni PR por instrucción humana.
 ## m2-web-local-storage-crypto — 2026-11-23 (IN_PROGRESS parcial, nivel A)
 
 - Transporte web adaptado del móvil: POST /sync/push y /sync/pull, token por solicitud, 401 AUTH_EXPIRED reintentable y revocación declarada sin refresco. 12 pruebas focalizadas verdes; incluidas en el comando de test web.
