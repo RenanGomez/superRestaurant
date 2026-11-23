@@ -128,6 +128,7 @@ export async function submitOrderPlan({ plan, transport }: {
         expectedVersion: version,
         idempotencyKey: line.idempotencyKey,
         modifierGroups: line.modifierGroups,
+        ...(line.note === undefined ? {} : { note: line.note }),
         occurredAt: plan.occurredAt,
         orderId: plan.orderId,
         orderItemId: line.orderItemId,

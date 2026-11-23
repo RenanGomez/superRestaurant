@@ -196,6 +196,16 @@ test("a delivery is exactly create, one add per line, then open", async () => {
     calls.slice(1, 3).map((call) => (call.body as { orderItemId: string }).orderItemId),
     delivery.addItems.map((item) => item.orderItemId),
   );
+
+  const notedPlan = plan([line({ note: "Término medio" })]);
+  const notedServer = server(
+    { answer: summary(1, notedPlan.orderId) },
+    { answer: summary(2, notedPlan.orderId) },
+    { answer: summary(3, notedPlan.orderId, "open") },
+  );
+  const notedOutcome = await submitOrderPlan({ plan: notedPlan, transport: transportOver(notedServer.fetcher) });
+  assert.equal(notedOutcome.kind, "sent");
+  assert.equal((notedServer.calls[1]?.body as { note?: string }).note, "Término medio");
 });
 
 test("an exact retry replays and resumes: only the missing lines are sent again", async () => {

@@ -4,22 +4,34 @@ import {
   parseBranchMembershipListV1,
   parseBranchOperationalContextV1,
   parseBranchScope,
+  parseCashPaymentQuoteV1,
+  parseCashRegisterOperationalReportV1,
+  parseCheckoutOrderSummaryV1,
+  parseCollectPaymentCommandV1,
   parseCreateOrderCommandV2,
   parseDiningLayoutV1,
   parseMenuCatalogStateV1,
   parseOpenOrderCommandV1,
   parseOperationalShiftListV1,
   parseOrderMutationSummaryV1,
+  parsePaymentCollectionSummaryV1,
+  parseQuoteCashPaymentRequestV1,
   type ActiveTableOrderListV2,
   type AddOrderItemCommandV1,
   type BranchMembershipListV1,
   type BranchOperationalContextV1,
+  type CashPaymentQuoteV1,
+  type CashRegisterOperationalReportV1,
+  type CheckoutOrderSummaryV1,
+  type CollectPaymentCommandV1,
   type CreateOrderCommandV2,
   type DiningLayoutV1,
   type MenuCatalogStateV1,
   type OpenOrderCommandV1,
   type OperationalShiftListV1,
   type OrderMutationSummaryV1,
+  type PaymentCollectionSummaryV1,
+  type QuoteCashPaymentRequestV1,
 } from "@super-restaurant/shared-types";
 
 import type { MobileConfig } from "./config.js";
@@ -41,12 +53,16 @@ export const MOBILE_API_PATHS = Object.freeze({
   activeTableOrders: "/api/v1/orders/active",
   addOrderItem: "/api/v1/orders/items",
   branchContext: "/api/v1/access/branch/context",
+  cashRegisterReport: "/api/v1/cash-registers/report",
+  checkoutOrder: "/api/v1/payments/checkout",
+  collectPayment: "/api/v1/payments/collect",
   createOrder: "/api/v1/orders",
   diningLayout: "/api/v1/dining/layout",
   memberships: "/api/v1/access/memberships",
   menuCatalog: "/api/v1/catalog/menu",
   openOrder: "/api/v1/orders/open",
   operationalShifts: "/api/v1/shifts/active",
+  quotePayment: "/api/v1/payments/quote",
 } as const);
 
 /** HTTP status, or the two client-side failures that never reach the server. */
@@ -216,6 +232,80 @@ export async function openOrder(
   fetcher: typeof fetch = fetch,
 ): Promise<OrderMutationSummaryV1> {
   return mutateOrder(config, accessToken, MOBILE_API_PATHS.openOrder, command, parseOpenOrderCommandV1, fetcher);
+}
+
+/** Reads the open cash register session for this register/device. */
+export async function getCashRegisterReport(
+  config: MobileConfig,
+  accessToken: string,
+  input: { readonly cashRegisterSessionId: string | null; readonly deviceId: string; readonly registerId: string; readonly scope: MobileBranchScope },
+  fetcher: typeof fetch = fetch,
+): Promise<CashRegisterOperationalReportV1> {
+  const scope = validScope(input.scope);
+  const registerId = validUuid(input.registerId);
+  const deviceId = validUuid(input.deviceId);
+  const query = new URLSearchParams({ branchId: scope.branchId, deviceId, registerId, restaurantId: scope.restaurantId });
+  if (input.cashRegisterSessionId !== null) query.set("cashRegisterSessionId", validUuid(input.cashRegisterSessionId));
+  const report = await request(config, accessToken, `${MOBILE_API_PATHS.cashRegisterReport}?${query.toString()}`, parseCashRegisterOperationalReportV1, fetcher);
+  if (!sameScope(report.scope, scope) || report.register.registerId.toLowerCase() !== registerId) throw new MobileRequestError("protocol");
+  return report;
+}
+
+/** Reads the server-authoritative checkout balance and versions for one order. */
+export async function getCheckoutOrder(
+  config: MobileConfig,
+  accessToken: string,
+  input: { readonly cashRegisterSessionId: string; readonly deviceId: string; readonly orderId: string; readonly registerId: string; readonly scope: MobileBranchScope },
+  fetcher: typeof fetch = fetch,
+): Promise<CheckoutOrderSummaryV1> {
+  const scope = validScope(input.scope);
+  const cashRegisterSessionId = validUuid(input.cashRegisterSessionId);
+  const deviceId = validUuid(input.deviceId);
+  const orderId = validUuid(input.orderId);
+  const registerId = validUuid(input.registerId);
+  const query = new URLSearchParams({ branchId: scope.branchId, cashRegisterSessionId, deviceId, orderId, registerId, restaurantId: scope.restaurantId });
+  const summary = await request(config, accessToken, `${MOBILE_API_PATHS.checkoutOrder}?${query.toString()}`, parseCheckoutOrderSummaryV1, fetcher);
+  if (!sameScope(summary.scope, scope) || summary.orderId.toLowerCase() !== orderId || summary.cashRegisterSessionId.toLowerCase() !== cashRegisterSessionId) {
+    throw new MobileRequestError("protocol");
+  }
+  return summary;
+}
+
+/** Asks the server for the authoritative change and post-payment remaining balance. */
+export async function quoteCashPayment(
+  config: MobileConfig,
+  accessToken: string,
+  input: QuoteCashPaymentRequestV1,
+  fetcher: typeof fetch = fetch,
+): Promise<CashPaymentQuoteV1> {
+  const validated = parseQuoteCashPaymentRequestV1(input);
+  if (validated === undefined) throw new MobileRequestError("protocol");
+  const quote = await request(config, accessToken, MOBILE_API_PATHS.quotePayment, parseCashPaymentQuoteV1, fetcher, {
+    body: JSON.stringify(validated), method: "POST",
+  });
+  if (!sameScope(quote.scope, validated.scope) || quote.orderId.toLowerCase() !== validated.orderId
+    || quote.cashRegisterSessionId.toLowerCase() !== validated.cashRegisterSessionId || quote.method !== validated.method
+    || quote.amountMinor !== validated.amountMinor || quote.tenderedAmountMinor !== validated.tenderedAmountMinor
+    || quote.tipMinor !== validated.tipMinor) throw new MobileRequestError("protocol");
+  return quote;
+}
+
+/** Submits one idempotent payment collection command; the server revalidates every amount and permission. */
+export async function collectPayment(
+  config: MobileConfig,
+  accessToken: string,
+  command: CollectPaymentCommandV1,
+  fetcher: typeof fetch = fetch,
+): Promise<PaymentCollectionSummaryV1> {
+  const validated = parseCollectPaymentCommandV1(command);
+  if (validated === undefined) throw new MobileRequestError("protocol");
+  const summary = await request(config, accessToken, MOBILE_API_PATHS.collectPayment, parsePaymentCollectionSummaryV1, fetcher, {
+    body: JSON.stringify(validated), method: "POST",
+  });
+  if (!sameScope(summary.scope, validated.scope) || summary.orderId.toLowerCase() !== validated.orderId
+    || summary.paymentId.toLowerCase() !== validated.paymentId
+    || summary.cashRegisterSessionId.toLowerCase() !== validated.cashRegisterSessionId) throw new MobileRequestError("protocol");
+  return summary;
 }
 
 async function mutateOrder<T extends { readonly orderId: string; readonly scope: { readonly branchId: string; readonly restaurantId: string } }>(

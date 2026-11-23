@@ -15,13 +15,23 @@ import type {
   MenuCatalogV1,
   MenuModifierGroupV1,
   MenuProductV1,
+  SimplePaymentMethodV1,
 } from "@super-restaurant/shared-types";
 
 import { renderMinorAmount } from "../money.js";
-import { failureMessage, type MobileResource } from "../mobile-state.js";
+import {
+  canSubmitMobilePayment,
+  failureMessage,
+  paymentFailureMessage,
+  paymentMethodLabel,
+  type MobilePaymentFields,
+  type MobilePaymentState,
+  type MobileResource,
+} from "../mobile-state.js";
 import { ActiveOrdersPanel } from "./active-orders-panel.js";
 import {
   DRAFT_MAX_GROUPS,
+  DRAFT_MAX_NOTE_LENGTH,
   DRAFT_MAX_QUANTITY,
   DRAFT_MIN_QUANTITY,
   activeProductGroups,
@@ -47,6 +57,7 @@ import {
   Body,
   Caption,
   Card,
+  Field,
   Heading,
   LoadingBlock,
   StateBlock,
@@ -79,10 +90,16 @@ export function OrderDraftScreen({
   menu,
   onBackToTables,
   onCategorySelected,
+  onCollectOrder,
   onEvent,
+  onPaymentClose,
+  onPaymentFieldChange,
+  onPaymentRetry,
+  onPaymentSubmit,
   onRetryActiveOrders,
   onRetryMenu,
   onSubmit,
+  payment,
   table,
   zoneName,
 }: {
@@ -93,10 +110,16 @@ export function OrderDraftScreen({
   readonly menu: MobileResource<MenuCatalogStateV1>;
   readonly onBackToTables: () => void;
   readonly onCategorySelected: (categoryId: string) => void;
+  readonly onCollectOrder: (orderId: string) => void;
   readonly onEvent: (event: OrderDraftEvent) => void;
+  readonly onPaymentClose: () => void;
+  readonly onPaymentFieldChange: (patch: Partial<MobilePaymentFields>) => void;
+  readonly onPaymentRetry: () => void;
+  readonly onPaymentSubmit: () => void;
   readonly onRetryActiveOrders: () => void;
   readonly onRetryMenu: () => void;
   readonly onSubmit: () => void;
+  readonly payment: MobilePaymentState;
   readonly table: DiningTableV1;
   readonly zoneName: string;
 }): React.JSX.Element {
@@ -169,9 +192,15 @@ export function OrderDraftScreen({
     catalog={catalog}
     draft={draft}
     layout={layout}
+    onCollectOrder={onCollectOrder}
     onEvent={onEvent}
+    onPaymentClose={onPaymentClose}
+    onPaymentFieldChange={onPaymentFieldChange}
+    onPaymentRetry={onPaymentRetry}
+    onPaymentSubmit={onPaymentSubmit}
     onRetryActiveOrders={onRetryActiveOrders}
     onSubmit={onSubmit}
+    payment={payment}
   />;
 
   // On a phone the header and the notice already claim most of the column, so
@@ -371,6 +400,19 @@ function ProductComposer({ catalog, draft, layout, onEvent, product }: {
         </Caption>
         : null}
 
+      <View style={styles.group}>
+        <Field
+          label="Nota de cocina (opcional)"
+          maxLength={DRAFT_MAX_NOTE_LENGTH}
+          onChangeText={(note) => { onEvent({ note, type: "composerNoteSet" }); }}
+          placeholder="Ej. sin cebolla, salsa aparte"
+          value={composer.note ?? ""}
+        />
+        {(composer.note ?? "").length > 0
+          ? <Caption>{`${(composer.note ?? "").trim().length}/${DRAFT_MAX_NOTE_LENGTH} caracteres`}</Caption>
+          : null}
+      </View>
+
       {issues.length === 0
         ? null
         : <View accessibilityLiveRegion="polite" style={styles.issues}>
@@ -440,18 +482,53 @@ function ModifierGroup({ currency, group, onEvent, selections }: {
  * one is the server's, one is local and unsent — so nothing suggests the draft
  * is part of an order until it has been accepted.
  */
-function DraftPane({ activeOrders, catalog, draft, layout, onEvent, onRetryActiveOrders, onSubmit }: {
+function DraftPane({
+  activeOrders,
+  catalog,
+  draft,
+  layout,
+  onCollectOrder,
+  onEvent,
+  onPaymentClose,
+  onPaymentFieldChange,
+  onPaymentRetry,
+  onPaymentSubmit,
+  onRetryActiveOrders,
+  onSubmit,
+  payment,
+}: {
   readonly activeOrders: MobileResource<ActiveTableOrderListV2>;
   readonly catalog: MenuCatalogV1 | null;
   readonly draft: OrderDraftState;
   readonly layout: OrderDraftLayout;
+  readonly onCollectOrder: (orderId: string) => void;
   readonly onEvent: (event: OrderDraftEvent) => void;
+  readonly onPaymentClose: () => void;
+  readonly onPaymentFieldChange: (patch: Partial<MobilePaymentFields>) => void;
+  readonly onPaymentRetry: () => void;
+  readonly onPaymentSubmit: () => void;
   readonly onRetryActiveOrders: () => void;
   readonly onSubmit: () => void;
+  readonly payment: MobilePaymentState;
 }): React.JSX.Element {
   const busy = draft.submission.status === "sending";
   return <View style={paneStyle(layout)}>
-    <ActiveOrdersPanel activeOrders={activeOrders} onRetry={onRetryActiveOrders} />
+    <ActiveOrdersPanel
+      activeOrders={activeOrders}
+      collectingOrderId={payment.orderId}
+      onCollectOrder={onCollectOrder}
+      onRetry={onRetryActiveOrders}
+    />
+
+    {payment.orderId === undefined
+      ? null
+      : <PaymentCollectionCard
+        onClose={onPaymentClose}
+        onFieldChange={onPaymentFieldChange}
+        onRetry={onPaymentRetry}
+        onSubmit={onPaymentSubmit}
+        payment={payment}
+      />}
 
     <Subheading>{`Borrador · ${draft.lines.length === 1 ? "1 línea" : `${draft.lines.length} líneas`}`}</Subheading>
 
@@ -521,6 +598,7 @@ function DraftLineCard({ busy, catalog, line, onEvent }: {
         })}
       </Fragment>;
     })}
+    {line.note === undefined ? null : <Caption>{`Nota: ${line.note}`}</Caption>}
     <View style={styles.lineActions}>
       <ActionButton
         disabled={busy}
@@ -535,6 +613,167 @@ function DraftLineCard({ busy, catalog, line, onEvent }: {
         tone="secondary"
       />
     </View>
+  </Card>;
+}
+
+const PAYMENT_METHODS: readonly SimplePaymentMethodV1[] = Object.freeze(["cash", "card_manual", "transfer"]);
+
+function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, payment }: {
+  readonly onClose: () => void;
+  readonly onFieldChange: (patch: Partial<MobilePaymentFields>) => void;
+  readonly onRetry: () => void;
+  readonly onSubmit: () => void;
+  readonly payment: MobilePaymentState;
+}): React.JSX.Element {
+  const busy = payment.submission.status === "sending";
+  const checkout = payment.checkout.value;
+  const quote = payment.quote.value;
+  const receipt = payment.submission.receipt;
+  return <Card>
+    <View style={styles.paymentHeader}>
+      <Subheading>{`Cobro · Orden ${(payment.orderId ?? "").slice(0, 8)}`}</Subheading>
+      <ActionButton disabled={busy} label="Cerrar" onPress={onClose} tone="secondary" />
+    </View>
+    {payment.checkout.status === "idle" || payment.checkout.status === "loading"
+      ? <LoadingBlock label="Consultando saldo y caja en el servidor…" />
+      : payment.checkout.status === "failed" || checkout === undefined
+        ? <StateBlock
+          action={{ label: "Reintentar", onPress: onRetry }}
+          description={paymentFailureMessage(payment.checkoutFailure ?? "unavailable")}
+          title="No se pudo iniciar el cobro"
+        />
+        : receipt !== undefined && payment.submission.status === "collected"
+          ? <View style={styles.group}>
+            <Banner
+              message={`Cobro registrado (${paymentMethodLabel(receipt.method)}): ${renderMinorAmount(receipt.amountMinor, receipt.currency)}`
+                + (receipt.tipMinor > 0 ? ` · Propina: ${renderMinorAmount(receipt.tipMinor, receipt.currency)}` : "")
+                + (receipt.changeMinor !== null ? ` · Cambio: ${renderMinorAmount(receipt.changeMinor, receipt.currency)}` : "")
+                + (receipt.transferReference !== null ? ` · Ref. ${receipt.transferReference}` : "")
+                + (receipt.remainingBalanceMinor === 0 ? " · Cuenta liquidada." : ` · Saldo pendiente: ${renderMinorAmount(receipt.remainingBalanceMinor, receipt.currency)}.`)}
+              tone="success"
+            />
+            <View style={styles.lineActions}>
+              {receipt.remainingBalanceMinor > 0
+                ? <ActionButton label="Cobrar saldo restante" onPress={onRetry} />
+                : null}
+              <ActionButton label="Listo" onPress={onClose} tone="secondary" />
+            </View>
+          </View>
+          : <View style={styles.group}>
+            <Caption>{`Total (servidor): ${renderMinorAmount(checkout.orderTotalMinor, checkout.currency)} · Pagado: ${renderMinorAmount(checkout.capturedAmountMinor, checkout.currency)}`}</Caption>
+            <Body>{`Saldo pendiente: ${renderMinorAmount(checkout.remainingBalanceMinor, checkout.currency)}`}</Body>
+            <View accessibilityRole="radiogroup" style={styles.chips}>
+              {PAYMENT_METHODS.map((method) => <Chip
+                key={method}
+                label={paymentMethodLabel(method)}
+                onPress={() => { onFieldChange({ method }); }}
+                role="radio"
+                selected={payment.method === method}
+              />)}
+            </View>
+            <Field
+              editable={!busy}
+              inputMode="decimal"
+              label={`Importe a cobrar (${checkout.currency})`}
+              onChangeText={(amountInput) => { onFieldChange({ amountInput }); }}
+              placeholder="0.00"
+              value={payment.amountInput}
+            />
+            {payment.method === "cash"
+              ? <>
+                <Field
+                  editable={!busy}
+                  inputMode="decimal"
+                  label={`Efectivo recibido (${checkout.currency})`}
+                  onChangeText={(receivedInput) => { onFieldChange({ receivedInput }); }}
+                  placeholder="0.00"
+                  value={payment.receivedInput}
+                />
+                {payment.tipInput.trim() === "" && payment.amountInput.trim() !== ""
+                  ? <ActionButton
+                    disabled={busy}
+                    label="Monto exacto"
+                    onPress={() => { onFieldChange({ receivedInput: payment.amountInput }); }}
+                    tone="secondary"
+                  />
+                  : null}
+              </>
+              : payment.method === "card_manual"
+                ? <>
+                  <Caption>Registra solo una operación ya confirmada en terminal externa. No captures datos de tarjeta.</Caption>
+                  <Field
+                    editable={!busy}
+                    label="Proveedor de terminal"
+                    maxLength={120}
+                    onChangeText={(cardProvider) => { onFieldChange({ cardProvider }); }}
+                    placeholder="Ej. Clip, BBVA, Mercado Pago"
+                    value={payment.cardProvider}
+                  />
+                  <Field
+                    editable={!busy}
+                    label="Terminal"
+                    maxLength={100}
+                    onChangeText={(terminalId) => { onFieldChange({ terminalId }); }}
+                    placeholder="Ej. Terminal 1"
+                    value={payment.terminalId}
+                  />
+                  <Field
+                    editable={!busy}
+                    label="Referencia (mínimo 6 caracteres)"
+                    maxLength={200}
+                    onChangeText={(cardReference) => { onFieldChange({ cardReference }); }}
+                    placeholder="Folio o autorización"
+                    value={payment.cardReference}
+                  />
+                  <Chip
+                    disabled={busy}
+                    displayLabel={payment.cardExternalConfirmed ? "✓ Confirmado en terminal" : "Confirmado en terminal"}
+                    label="Confirmado en terminal"
+                    onPress={() => { onFieldChange({ cardExternalConfirmed: !payment.cardExternalConfirmed }); }}
+                    role="checkbox"
+                    selected={payment.cardExternalConfirmed}
+                  />
+                </>
+                : <>
+                  <Caption>Confirma que el depósito ya se acreditó. Sin cambio ni terminal.</Caption>
+                  <Field
+                    editable={!busy}
+                    label="Referencia bancaria (opcional)"
+                    maxLength={64}
+                    onChangeText={(transferReference) => { onFieldChange({ transferReference }); }}
+                    placeholder="Clave de rastreo o folio"
+                    value={payment.transferReference}
+                  />
+                </>}
+            <Field
+              editable={!busy}
+              inputMode="decimal"
+              label={`Propina opcional (${checkout.currency})`}
+              onChangeText={(tipInput) => { onFieldChange({ tipInput }); }}
+              placeholder="0.00"
+              value={payment.tipInput}
+            />
+            {payment.quote.status === "loading" ? <Caption>Consultando cambio y saldo en el servidor…</Caption> : null}
+            {payment.quote.status === "ready" && quote !== undefined
+              ? <Caption>
+                {(quote.changeMinor !== null ? `Cambio (servidor): ${renderMinorAmount(quote.changeMinor, quote.currency)} · ` : "")
+                  + `Saldo después (servidor): ${renderMinorAmount(quote.remainingAfterMinor, quote.currency)}`}
+              </Caption>
+              : null}
+            {payment.quote.status === "failed" && payment.quoteFailure !== undefined
+              ? <Banner message={paymentFailureMessage(payment.quoteFailure)} tone="error" />
+              : null}
+            {busy ? <LoadingBlock label="Registrando cobro en el servidor…" /> : null}
+            {payment.submission.status === "failed" && payment.submission.failure !== undefined
+              ? <Banner message={paymentFailureMessage(payment.submission.failure)} tone="error" />
+              : null}
+            <ActionButton
+              busy={busy}
+              disabled={!canSubmitMobilePayment(payment)}
+              label="Confirmar cobro"
+              onPress={onSubmit}
+            />
+          </View>}
   </Card>;
 }
 
@@ -576,25 +815,31 @@ function DraftLossConfirmation({ composing, intent, lineCount, onCancel, onConfi
   </View>;
 }
 
-function Chip({ label, onPress, selected }: {
+function Chip({ disabled = false, displayLabel, label, onPress, role = "tab", selected }: {
+  readonly disabled?: boolean;
+  readonly displayLabel?: string;
   readonly label: string;
   readonly onPress: () => void;
+  readonly role?: "checkbox" | "radio" | "tab";
   readonly selected: boolean;
 }): React.JSX.Element {
   const focus = useFocusRing();
   return <Pressable
     accessibilityLabel={label}
-    accessibilityRole="tab"
-    accessibilityState={{ selected }}
+    accessibilityRole={role}
+    accessibilityState={role === "tab" ? { disabled, selected } : { checked: selected, disabled }}
+    {...(role === "tab" ? {} : { "aria-checked": selected })}
+    disabled={disabled}
     onPress={onPress}
     {...focus.handlers}
     style={(state) => [
       styles.chip,
       selected && styles.chipSelected,
+      disabled && styles.inactive,
       (state.pressed || focus.focused) && styles.chipPressed,
     ]}
   >
-    <Text style={[styles.chipLabel, selected && styles.chipLabelSelected]}>{label}</Text>
+    <Text style={[styles.chipLabel, selected && styles.chipLabelSelected]}>{displayLabel ?? label}</Text>
   </Pressable>;
 }
 
@@ -713,6 +958,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
   },
   pane: { ...orderDraftPaneBox.columns, gap: spacing.sm },
+  paymentHeader: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, justifyContent: "space-between" },
   paneScroll: { flexGrow: 1, flexShrink: 1, minHeight: 0 },
   paneContent: { gap: spacing.sm, paddingBottom: spacing.lg },
   paneStacked: { ...orderDraftPaneBox.stacked, gap: spacing.sm },

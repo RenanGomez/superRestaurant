@@ -17,7 +17,7 @@
 import type { MenuCatalogV1, ModifierGroupSelectionV1, OrderChannelV1 } from "@super-restaurant/shared-types";
 
 import type { MobileBranchScope } from "./mobile-client.js";
-import { draftLineIssues, type OrderDraftLine } from "./order-draft.js";
+import { draftLineIssues, normalizeDraftNote, type OrderDraftLine } from "./order-draft.js";
 
 const CURRENCY_PATTERN = /^[A-Z]{3}$/u;
 
@@ -36,6 +36,7 @@ export interface AddOrderItemIntentV1 {
   /** Local draft handle, not an `orderItemId`; it only correlates UI feedback. */
   readonly draftLineId: string;
   readonly modifierGroups: readonly ModifierGroupSelectionV1[];
+  readonly note?: string;
   readonly productId: string;
   readonly quantity: number;
   readonly scope: MobileBranchScope;
@@ -82,13 +83,17 @@ export function buildOrderDraftHandoff(input: {
 
   const scope = Object.freeze({ branchId: input.scope.branchId, restaurantId: input.scope.restaurantId });
   return Object.freeze({
-    addItems: Object.freeze(input.lines.map((line) => Object.freeze({
-      draftLineId: line.draftLineId,
-      modifierGroups: line.modifierGroups,
-      productId: line.productId,
-      quantity: line.quantity,
-      scope,
-    }))),
+    addItems: Object.freeze(input.lines.map((line) => {
+      const note = normalizeDraftNote(line.note);
+      return Object.freeze({
+        draftLineId: line.draftLineId,
+        modifierGroups: line.modifierGroups,
+        ...(note === undefined ? {} : { note }),
+        productId: line.productId,
+        quantity: line.quantity,
+        scope,
+      });
+    })),
     createOrder: Object.freeze({
       channel: TABLE_CHANNEL,
       currency,

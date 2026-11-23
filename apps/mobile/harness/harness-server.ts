@@ -186,6 +186,10 @@ export function installHarnessFetch(apiBaseUrl: string): void {
     if (path === MOBILE_API_PATHS.createOrder) return harnessOrders.create(body);
     if (path === MOBILE_API_PATHS.addOrderItem) return harnessOrders.addItem(body);
     if (path === MOBILE_API_PATHS.openOrder) return harnessOrders.open(body);
+    if (path === MOBILE_API_PATHS.cashRegisterReport) return harnessOrders.registerReport(scope, url.searchParams.get("registerId") ?? "");
+    if (path === MOBILE_API_PATHS.checkoutOrder) return harnessOrders.checkout(scope, url.searchParams.get("orderId") ?? "", url.searchParams.get("cashRegisterSessionId") ?? "");
+    if (path === MOBILE_API_PATHS.quotePayment) return harnessOrders.quotePayment(body);
+    if (path === MOBILE_API_PATHS.collectPayment) return harnessOrders.collectPayment(body);
 
     return jsonResponse({ code: "HARNESS_PATH_NOT_ALLOWED", path }, 404);
   };
@@ -219,26 +223,38 @@ export function installHarnessFetch(apiBaseUrl: string): void {
  * and answer 409 otherwise.
  */
 interface HarnessOrder {
-  items: { orderItemId: string; productId: string; quantity: number }[];
+  capturedMinor: number;
+  items: { note?: string; orderItemId: string; productId: string; quantity: number }[];
   orderId: string;
   shiftId: string | null;
-  status: "draft" | "open";
+  status: "draft" | "open" | "partially_paid" | "paid";
   tableId: string;
   version: number;
 }
+
+const HARNESS_REGISTER_SESSION = "9a000000-0000-4000-8000-000000000001";
+const HARNESS_CASHIER = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const HARNESS_SHIFT = "f1111111-1111-4111-8111-111111111111";
 
 const harnessOrders = createHarnessOrderServer();
 
 function createHarnessOrderServer(): {
   readonly addItem: (body: unknown) => Response;
+  readonly checkout: (scope: MobileBranchScope, orderId: string, sessionId: string) => Response;
+  readonly collectPayment: (body: unknown) => Response;
   readonly create: (body: unknown) => Response;
   readonly listActive: (scope: MobileBranchScope, tableId: string) => unknown;
   readonly open: (body: unknown) => Response;
+  readonly quotePayment: (body: unknown) => Response;
+  readonly registerReport: (scope: MobileBranchScope, registerId: string) => Response;
   readonly reset: () => void;
   readonly summary: () => readonly string[];
 } {
   const orders = new Map<string, HarnessOrder>();
   const applied = new Map<string, { orderId: string; version: number }>();
+  let registerVersion = 1;
+  let localSequence = 1;
+  const orderTotal = (order: HarnessOrder): number => order.items.reduce((sum, item) => sum + item.quantity * 12_500, 0);
 
   const record = (body: unknown, key: string): string | undefined => {
     const value = field(body, key);
@@ -272,7 +288,9 @@ function createHarnessOrderServer(): {
       if (harnessControl.orderConflict) return conflict();
       // Exactly as Nest: the version gate runs before the idempotency check.
       if (order.version !== expectedVersion) return conflict();
+      const note = field(body, "note");
       order.items.push({
+        ...(typeof note === "string" ? { note } : {}),
         orderItemId,
         productId,
         quantity: typeof quantity === "number" ? quantity : 1,
@@ -296,6 +314,7 @@ function createHarnessOrderServer(): {
         return answer(existing, true);
       }
       const order: HarnessOrder = {
+        capturedMinor: 0,
         items: [],
         orderId,
         shiftId: shiftId ?? null,
@@ -309,7 +328,7 @@ function createHarnessOrderServer(): {
     },
     listActive: (scope: MobileBranchScope, tableId: string): unknown => ({
       orders: [...orders.values()]
-        .filter((order) => order.tableId === tableId.toLowerCase())
+        .filter((order) => order.tableId === tableId.toLowerCase() && order.status !== "paid")
         .map((order) => ({
           currency: "XTS",
           itemCount: order.items.length,
@@ -352,7 +371,129 @@ function createHarnessOrderServer(): {
       applied.set(idempotencyKey, { orderId, version: order.version });
       return answer(order, false);
     },
-    reset: (): void => { orders.clear(); applied.clear(); },
+    checkout: (scope: MobileBranchScope, orderId: string, sessionId: string): Response => {
+      const order = orders.get(orderId.toLowerCase());
+      if (order === undefined || sessionId.toLowerCase() !== HARNESS_REGISTER_SESSION) return jsonResponse({ code: "NOT_FOUND" }, 404);
+      const total = orderTotal(order);
+      const remaining = total - order.capturedMinor;
+      if ((order.status !== "open" && order.status !== "partially_paid") || remaining <= 0) return conflict();
+      return jsonResponse({
+        capturedAmountMinor: order.capturedMinor,
+        cashRegisterSessionId: HARNESS_REGISTER_SESSION,
+        cashRegisterVersion: registerVersion,
+        currency: "XTS",
+        nextLocalSequence: localSequence,
+        orderId: order.orderId,
+        orderStatus: order.status,
+        orderTotalMinor: total,
+        orderVersion: order.version,
+        remainingBalanceMinor: remaining,
+        schemaVersion: 1,
+        scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
+      });
+    },
+    collectPayment: (body: unknown): Response => {
+      const orderId = record(body, "orderId");
+      const paymentId = record(body, "paymentId");
+      const method = field(body, "method");
+      const amountMinor = field(body, "amountMinor");
+      const tendered = field(body, "tenderedAmountMinor");
+      const tipMinor = typeof field(body, "tipMinor") === "number" ? (field(body, "tipMinor") as number) : 0;
+      const transferRef = typeof field(body, "transferReference") === "string" ? (field(body, "transferReference") as string) : null;
+      const order = orderId === undefined ? undefined : orders.get(orderId);
+      if (order === undefined || paymentId === undefined || typeof amountMinor !== "number") return jsonResponse({ code: "BAD_REQUEST" }, 400);
+      if (harnessControl.orderConflict) return conflict();
+      const remainingBefore = orderTotal(order) - order.capturedMinor;
+      if (amountMinor > remainingBefore) return conflict();
+      order.capturedMinor += amountMinor;
+      const remainingAfter = remainingBefore - amountMinor;
+      order.status = remainingAfter === 0 ? "paid" : "partially_paid";
+      order.version += 1;
+      registerVersion += 1;
+      localSequence += 1;
+      const tenderedMinor = typeof tendered === "number" ? tendered : null;
+      const changeMinor = tenderedMinor === null ? null : tenderedMinor - amountMinor - tipMinor;
+      return jsonResponse({
+        amountMinor,
+        cashRegisterSessionId: HARNESS_REGISTER_SESSION,
+        cashRegisterVersion: registerVersion,
+        changeMinor,
+        currency: "XTS",
+        method,
+        orderId: order.orderId,
+        orderStatus: order.status,
+        orderVersion: order.version,
+        paymentId,
+        paymentState: "captured",
+        remainingBalanceMinor: remainingAfter,
+        replayed: false,
+        schemaVersion: 1,
+        scope: field(body, "scope"),
+        tenderedAmountMinor: tenderedMinor,
+        tipMinor,
+        transferReference: method === "transfer" ? transferRef : null,
+      });
+    },
+    quotePayment: (body: unknown): Response => {
+      const orderId = record(body, "orderId");
+      const method = field(body, "method");
+      const amountMinor = field(body, "amountMinor");
+      const tendered = field(body, "tenderedAmountMinor");
+      const tipMinor = typeof field(body, "tipMinor") === "number" ? (field(body, "tipMinor") as number) : 0;
+      const order = orderId === undefined ? undefined : orders.get(orderId);
+      if (order === undefined || typeof amountMinor !== "number") return jsonResponse({ code: "BAD_REQUEST" }, 400);
+      const remainingBefore = orderTotal(order) - order.capturedMinor;
+      if (amountMinor > remainingBefore) return jsonResponse({ code: "INVALID" }, 400);
+      const tenderedMinor = typeof tendered === "number" ? tendered : null;
+      if (tenderedMinor !== null && tenderedMinor < amountMinor + tipMinor) return jsonResponse({ code: "INVALID" }, 400);
+      return jsonResponse({
+        amountMinor,
+        cashRegisterSessionId: HARNESS_REGISTER_SESSION,
+        changeMinor: tenderedMinor === null ? null : tenderedMinor - amountMinor - tipMinor,
+        currency: "XTS",
+        method,
+        orderId: order.orderId,
+        remainingAfterMinor: remainingBefore - amountMinor,
+        remainingBeforeMinor: remainingBefore,
+        schemaVersion: 1,
+        scope: field(body, "scope"),
+        tenderedAmountMinor: tenderedMinor,
+        tipMinor,
+      });
+    },
+    registerReport: (scope: MobileBranchScope, registerId: string): Response => jsonResponse({
+      cardManualCapturedMinor: 0,
+      cashCapturedMinor: 0,
+      cashTipsMinor: 0,
+      movementCount: 0,
+      movements: [],
+      nextLocalSequence: localSequence,
+      paymentCount: 0,
+      register: {
+        cashRegisterSessionId: HARNESS_REGISTER_SESSION,
+        cashierId: HARNESS_CASHIER,
+        closedAt: null,
+        countedClosingBalanceMinor: null,
+        currency: "XTS",
+        differenceMinor: null,
+        expectedCashBalanceMinor: 0,
+        openedAt: "2026-09-04T12:00:00.000Z",
+        openingFloatMinor: 0,
+        registerId: registerId.toLowerCase(),
+        replayed: false,
+        schemaVersion: 1,
+        scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
+        shiftId: HARNESS_SHIFT,
+        status: "open",
+        version: registerVersion,
+      },
+      schemaVersion: 1,
+      scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
+      tipsMinor: 0,
+      totalCapturedMinor: 0,
+      transferCapturedMinor: 0,
+    }),
+    reset: (): void => { orders.clear(); applied.clear(); registerVersion = 1; localSequence = 1; },
     summary: (): readonly string[] => [...orders.values()].map(
       (order) => `${order.status} v${order.version} · ${order.items.length} línea(s) · mesa ${order.tableId.slice(0, 8)}`,
     ),

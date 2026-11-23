@@ -39,6 +39,15 @@ export const DRAFT_MAX_QUANTITY = 1_000;
 /** Bounds `parseAddOrderItemCommandV1` accepts for one command. */
 export const DRAFT_MAX_GROUPS = 50;
 export const DRAFT_MAX_SELECTIONS_PER_GROUP = 100;
+/** Matches domain `normalizeOrderItemNote`: 1..200 chars, no control characters. */
+export const DRAFT_MAX_NOTE_LENGTH = 200;
+const NOTE_CONTROL_PATTERN = /[\p{Cc}\p{Cf}]/u;
+
+export function normalizeDraftNote(note: string | undefined): string | undefined {
+  if (note === undefined) return undefined;
+  const trimmed = note.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
 
 /**
  * Why a draft could not be handed over. The four shared failures keep the
@@ -64,6 +73,7 @@ export interface OrderDraftSubmission {
  */
 export interface OrderDraftComposition {
   readonly modifierGroups: readonly ModifierGroupSelectionV1[];
+  readonly note?: string | undefined;
   readonly productId: string;
   readonly quantity: number;
 }
@@ -101,6 +111,7 @@ export interface OrderDraftState {
 export type OrderDraftEvent =
   | { readonly type: "composerClosed" }
   | { readonly type: "composerCommitted" }
+  | { readonly note: string; readonly type: "composerNoteSet" }
   | {
     readonly type: "composerOptionSet";
     readonly groupId: string;
@@ -201,6 +212,10 @@ export function reduceOrderDraft(state: OrderDraftState, event: OrderDraftEvent)
       });
     case "composerClosed":
       return state.composer === undefined ? state : freeze({ ...state, composer: undefined });
+    case "composerNoteSet":
+      return state.composer === undefined
+        ? state
+        : freeze({ ...state, composer: Object.freeze({ ...state.composer, note: event.note }) });
     case "composerQuantitySet":
       return state.composer === undefined || !isCountableQuantity(event.quantity)
         ? state
@@ -235,9 +250,11 @@ export function reduceOrderDraft(state: OrderDraftState, event: OrderDraftEvent)
       if (composer === undefined) return state;
       const replacing = composer.replacingLineId;
       if (replacing !== undefined && !state.lines.some((line) => line.draftLineId === replacing)) return state;
+      const normalizedNote = normalizeDraftNote(composer.note);
       const line: OrderDraftLine = Object.freeze({
         draftLineId: replacing ?? `draft-line-${state.nextLineSerial}`,
         modifierGroups: composer.modifierGroups,
+        ...(normalizedNote === undefined ? {} : { note: normalizedNote }),
         productId: composer.productId,
         quantity: composer.quantity,
       });
@@ -259,6 +276,7 @@ export function reduceOrderDraft(state: OrderDraftState, event: OrderDraftEvent)
           ...state,
           composer: Object.freeze({
             modifierGroups: line.modifierGroups,
+            ...(line.note === undefined ? {} : { note: line.note }),
             productId: line.productId,
             quantity: line.quantity,
             replacingLineId: line.draftLineId,
@@ -458,6 +476,13 @@ export function composerIssues(
   const issues: string[] = [];
   if (!isCountableQuantity(composer.quantity)) {
     issues.push(`La cantidad debe ser un entero entre ${DRAFT_MIN_QUANTITY} y ${DRAFT_MAX_QUANTITY}.`);
+  }
+  if (composer.note !== undefined) {
+    if (NOTE_CONTROL_PATTERN.test(composer.note)) {
+      issues.push("La nota no puede incluir saltos de línea ni caracteres de control.");
+    } else if (composer.note.trim().length > DRAFT_MAX_NOTE_LENGTH) {
+      issues.push(`La nota admite como máximo ${DRAFT_MAX_NOTE_LENGTH} caracteres.`);
+    }
   }
   if (composer.modifierGroups.length > DRAFT_MAX_GROUPS) {
     issues.push(`Una línea admite como máximo ${DRAFT_MAX_GROUPS} grupos de modificadores.`);

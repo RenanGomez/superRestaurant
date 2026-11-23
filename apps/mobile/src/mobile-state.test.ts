@@ -7,6 +7,7 @@ import {
   activeOrdersReadTarget,
   activeScope,
   canReadBranchData,
+  canSubmitMobilePayment,
   contextReadTarget,
   failureMessage,
   hasNoMemberships,
@@ -17,23 +18,30 @@ import {
   mobileScreen,
   noticeMessage,
   ownsContextRead,
+  paymentFailureMessage,
+  paymentMethodLabel,
   reduceMobileState,
   shiftsReadTarget,
   toMobileFailure,
+  toPaymentFailure,
   type MobileEvent,
   type MobileFailure,
   type MobileState,
 } from "./mobile-state.js";
 import {
+  FIXTURE_ORDER,
   FIXTURE_TABLE,
   FIXTURE_USER_B,
   activeTableOrderListBody,
   branchOperationalContextBody,
+  cashPaymentQuoteBody,
+  checkoutOrderSummaryBody,
   diningLayoutBody,
   fixtureSession,
   membershipListBody,
   menuCatalogStateBody,
   operationalShiftListBody,
+  paymentCollectionSummaryBody,
   scopeA,
   scopeB,
 } from "./test-fixtures.js";
@@ -43,9 +51,12 @@ import {
   parseActiveTableOrderListV2,
   parseBranchMembershipListV1,
   parseBranchOperationalContextV1,
+  parseCashPaymentQuoteV1,
+  parseCheckoutOrderSummaryV1,
   parseDiningLayoutV1,
   parseMenuCatalogStateV1,
   parseOperationalShiftListV1,
+  parsePaymentCollectionSummaryV1,
   type BranchMembershipSummaryV1,
   type BranchOperationalContextV1,
   type DiningLayoutV1,
@@ -871,4 +882,102 @@ test("selecting a branch clears any pending revalidation state", () => {
   assert.equal(selecting.revalidating, false);
   assert.equal(selecting.revalidationFailure, undefined);
   assert.equal(canReadBranchData(selecting), false);
+});
+
+test("payment collection tracks server checkout, quote, methods, success and failures without revoking branch", () => {
+  const checkout = parseCheckoutOrderSummaryV1(checkoutOrderSummaryBody(scopeA));
+  const cashQuote = parseCashPaymentQuoteV1(cashPaymentQuoteBody(scopeA));
+  const cardQuote = parseCashPaymentQuoteV1(cashPaymentQuoteBody(scopeA, { changeMinor: null, method: "card_manual", tenderedAmountMinor: null }));
+  const transferQuote = parseCashPaymentQuoteV1(cashPaymentQuoteBody(scopeA, { changeMinor: null, method: "transfer", tenderedAmountMinor: null }));
+  const receipt = parsePaymentCollectionSummaryV1(paymentCollectionSummaryBody(scopeA));
+  assert.ok(checkout !== undefined && cashQuote !== undefined && cardQuote !== undefined && transferQuote !== undefined && receipt !== undefined);
+
+  const checkoutAttempt = nextAttempt();
+  const opened = apply(
+    onBranchA(),
+    { orderId: FIXTURE_ORDER, type: "paymentOpened" },
+    { attempt: checkoutAttempt, orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentCheckoutLoading" },
+    { attempt: checkoutAttempt, checkout, scope: scopeA, type: "paymentCheckoutLoaded" },
+  );
+  assert.equal(opened.payment.amountInput, "125.00");
+  assert.equal(canSubmitMobilePayment(opened.payment), false, "cannot submit before server quote");
+
+  const quoteAttempt = nextAttempt();
+  const quotedCash = apply(
+    opened,
+    { patch: { receivedInput: "200.00" }, type: "paymentFieldChanged" },
+    { attempt: quoteAttempt, orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentQuoteLoading" },
+    { attempt: quoteAttempt, quote: cashQuote, scope: scopeA, type: "paymentQuoteLoaded" },
+  );
+  assert.equal(canSubmitMobilePayment(quotedCash.payment), true);
+
+  // Editing amount invalidates stale quote immediately.
+  const edited = apply(quotedCash, { patch: { amountInput: "100.00" }, type: "paymentFieldChanged" });
+  assert.equal(edited.payment.quote.status, "idle");
+  assert.equal(canSubmitMobilePayment(edited.payment), false);
+
+  // Card manual requires provider, terminal, >= 6 char reference, and explicit external confirmation.
+  const cardAttempt = nextAttempt();
+  const cardQuoted = apply(
+    opened,
+    { patch: { method: "card_manual" }, type: "paymentFieldChanged" },
+    { attempt: cardAttempt, orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentQuoteLoading" },
+    { attempt: cardAttempt, quote: cardQuote, scope: scopeA, type: "paymentQuoteLoaded" },
+  );
+  assert.equal(canSubmitMobilePayment(cardQuoted.payment), false);
+  const cardUnconfirmed = apply(cardQuoted, {
+    patch: { cardProvider: "Clip", cardReference: "AUTH1234", terminalId: "Terminal 1" },
+    type: "paymentFieldChanged",
+  });
+  assert.equal(canSubmitMobilePayment(cardUnconfirmed.payment), false, "external confirmation must be explicitly checked");
+  const cardNoProvider = apply(cardQuoted, {
+    patch: { cardExternalConfirmed: true, cardProvider: "   ", cardReference: "AUTH1234", terminalId: "Terminal 1" },
+    type: "paymentFieldChanged",
+  });
+  assert.equal(canSubmitMobilePayment(cardNoProvider.payment), false, "provider cannot be blank");
+  const cardReady = apply(cardUnconfirmed, { patch: { cardExternalConfirmed: true }, type: "paymentFieldChanged" });
+  assert.equal(canSubmitMobilePayment(cardReady.payment), true);
+  assert.equal(
+    canSubmitMobilePayment(apply(cardReady, { patch: { cardExternalConfirmed: false }, type: "paymentFieldChanged" }).payment),
+    false,
+  );
+
+  // Transfer allows empty or optional <=64 char reference.
+  const transferAttempt = nextAttempt();
+  const transferReady = apply(
+    opened,
+    { patch: { method: "transfer", transferReference: "SPEI-9988" }, type: "paymentFieldChanged" },
+    { attempt: transferAttempt, orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentQuoteLoading" },
+    { attempt: transferAttempt, quote: transferQuote, scope: scopeA, type: "paymentQuoteLoaded" },
+  );
+  assert.equal(canSubmitMobilePayment(transferReady.payment), true);
+
+  // Collection success stores server receipt; 403 checkout failure keeps branch active.
+  const collected = apply(
+    quotedCash,
+    { orderId: FIXTURE_ORDER, type: "paymentSubmitStarted" },
+    { receipt, scope: scopeA, type: "paymentCollected" },
+  );
+  assert.equal(collected.payment.submission.status, "collected");
+  assert.equal(collected.payment.submission.receipt?.orderStatus, "paid");
+
+  const forbiddenAttempt = nextAttempt();
+  const forbidden = apply(
+    onBranchA(),
+    { orderId: FIXTURE_ORDER, type: "paymentOpened" },
+    { attempt: forbiddenAttempt, orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentCheckoutLoading" },
+    { attempt: forbiddenAttempt, failure: "authorization", orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentCheckoutFailed" },
+  );
+  assert.equal(mobileScreen(forbidden), "workspace", "payment 403 does not revoke the branch");
+  assert.equal(forbidden.payment.checkoutFailure, "authorization");
+
+  // Context switch clears payment state.
+  assert.equal(apply(collected, { type: "shiftReleased" }).payment.orderId, undefined);
+  assert.equal(toPaymentFailure(new MobileRequestError(404)), "noRegister");
+  assert.equal(toPaymentFailure(new MobileRequestError(409)), "conflict");
+  assert.equal(toPaymentFailure(new MobileRequestError(400)), "invalidAmount");
+  assert.equal(paymentMethodLabel("transfer"), "Transferencia");
+  for (const failure of ["authorization", "conflict", "invalidAmount", "network", "noRegister", "protocol", "unavailable"] as const) {
+    assert.match(paymentFailureMessage(failure), /^[A-ZÁÉÍÓÚÑ].+\.$/u);
+  }
 });

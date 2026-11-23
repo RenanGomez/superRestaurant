@@ -100,14 +100,22 @@ export function ActionButton({ accessibilityHint, busy = false, disabled = false
 
 export function Banner({ message, tone }: {
   readonly message: string;
-  readonly tone: "error" | "info";
+  readonly tone: "error" | "info" | "success";
 }): React.JSX.Element {
   return <View
     accessibilityLiveRegion="polite"
     accessibilityRole="alert"
-    style={[styles.banner, tone === "error" ? styles.bannerError : styles.bannerInfo]}
+    style={[
+      styles.banner,
+      tone === "error" ? styles.bannerError : tone === "success" ? styles.bannerSuccess : styles.bannerInfo,
+    ]}
   >
-    <Text style={[styles.body, tone === "error" ? styles.bannerErrorText : styles.bannerInfoText]}>{message}</Text>
+    <Text style={[
+      styles.body,
+      tone === "error" ? styles.bannerErrorText : tone === "success" ? styles.bannerSuccessText : styles.bannerInfoText,
+    ]}>
+      {message}
+    </Text>
   </View>;
 }
 
@@ -155,6 +163,8 @@ const styles = StyleSheet.create({
   bannerErrorText: { color: colors.danger },
   bannerInfo: { backgroundColor: colors.infoSurface, borderColor: colors.info },
   bannerInfoText: { color: colors.info },
+  bannerSuccess: { backgroundColor: "#e9f6ee", borderColor: "#1b6e3c" },
+  bannerSuccessText: { color: "#14532d" },
   block: {
     alignItems: "flex-start",
     backgroundColor: colors.surface,

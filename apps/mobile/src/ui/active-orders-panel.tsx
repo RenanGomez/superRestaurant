@@ -3,7 +3,7 @@ import type { ActiveTableOrderListV2, ActiveTableOrderSummaryV2 } from "@super-r
 
 import { renderMinorAmount } from "../money.js";
 import { failureMessage, type MobileResource } from "../mobile-state.js";
-import { Banner, Body, Caption, LoadingBlock, StateBlock, Subheading } from "./components.js";
+import { ActionButton, Banner, Body, Caption, LoadingBlock, StateBlock, Subheading } from "./components.js";
 import { colors, radius, spacing } from "./theme.js";
 
 const ITEM_STATUS_LABELS: Readonly<Record<ActiveTableOrderSummaryV2["items"][number]["status"], string>> =
@@ -31,8 +31,10 @@ const ORDER_STATUS_LABELS: Readonly<Record<ActiveTableOrderSummaryV2["status"], 
  * discount and no total is computed on the device, and none is shown, because
  * this app is not the authority on any of them.
  */
-export function ActiveOrdersPanel({ activeOrders, onRetry }: {
+export function ActiveOrdersPanel({ activeOrders, collectingOrderId, onCollectOrder, onRetry }: {
   readonly activeOrders: MobileResource<ActiveTableOrderListV2>;
+  readonly collectingOrderId?: string | undefined;
+  readonly onCollectOrder?: ((orderId: string) => void) | undefined;
   readonly onRetry: () => void;
 }): React.JSX.Element | null {
   if (activeOrders.status === "idle" || activeOrders.status === "loading") {
@@ -58,11 +60,21 @@ export function ActiveOrdersPanel({ activeOrders, onRetry }: {
         ? "Esta mesa ya tiene 1 orden activa en el servidor."
         : `Esta mesa ya tiene ${orders.length} órdenes activas en el servidor.`}
     </Caption>
-    {orders.map((order) => <ActiveOrderCard key={order.orderId} order={order} />)}
+    {orders.map((order) => <ActiveOrderCard
+      collecting={collectingOrderId === order.orderId.toLowerCase()}
+      key={order.orderId}
+      onCollectOrder={onCollectOrder}
+      order={order}
+    />)}
   </View>;
 }
 
-function ActiveOrderCard({ order }: { readonly order: ActiveTableOrderSummaryV2 }): React.JSX.Element {
+function ActiveOrderCard({ collecting, onCollectOrder, order }: {
+  readonly collecting: boolean;
+  readonly onCollectOrder?: ((orderId: string) => void) | undefined;
+  readonly order: ActiveTableOrderSummaryV2;
+}): React.JSX.Element {
+  const payable = order.status === "open" || order.status === "partially_paid";
   return <View style={styles.card}>
     <Subheading>{`Orden ${order.orderId.slice(0, 8)} · ${ORDER_STATUS_LABELS[order.status]}`}</Subheading>
     <Caption>
@@ -84,10 +96,21 @@ function ActiveOrderCard({ order }: { readonly order: ActiveTableOrderSummaryV2 
             + `(${renderMinorAmount(modifier.unitPrice.amountMinor, modifier.unitPrice.currency)})`}
         </Caption>)}
       </View>)}
+    {payable && onCollectOrder !== undefined
+      ? <View style={styles.actions}>
+        <ActionButton
+          disabled={collecting}
+          label={collecting ? "Cobro abierto" : "Cobrar cuenta"}
+          onPress={() => { onCollectOrder(order.orderId); }}
+          tone={collecting ? "secondary" : "primary"}
+        />
+      </View>
+      : null}
   </View>;
 }
 
 const styles = StyleSheet.create({
+  actions: { flexDirection: "row", flexWrap: "wrap", marginTop: spacing.xs },
   card: {
     backgroundColor: colors.surface,
     borderColor: colors.border,

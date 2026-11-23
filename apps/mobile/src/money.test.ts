@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatMinorAmount, isRenderableMinorAmount, renderMinorAmount } from "./money.js";
+import { formatMinorAmount, formatMinorUnitsInput, isRenderableMinorAmount, parseMinorUnitsInput, renderMinorAmount } from "./money.js";
 
 test("renders integer minor units with the currency the contract carries", () => {
   assert.equal(formatMinorAmount(0, "XTS"), "0 u.m. · XTS");
@@ -38,4 +38,23 @@ test("reports renderable amounts without throwing", () => {
   assert.equal(isRenderableMinorAmount(100, "xts"), false);
   assert.equal(isRenderableMinorAmount("100", "XTS"), false);
   assert.equal(isRenderableMinorAmount(100, undefined), false);
+});
+
+test("parses and formats editable major-unit inputs without float arithmetic", () => {
+  assert.equal(parseMinorUnitsInput("125", "MXN"), 12_500);
+  assert.equal(parseMinorUnitsInput("125.5", "MXN"), 12_550);
+  assert.equal(parseMinorUnitsInput("125,05", "XTS"), 12_505);
+  assert.equal(parseMinorUnitsInput("0.01", "USD"), 1);
+  assert.equal(parseMinorUnitsInput("500", "JPY"), 500);
+  assert.equal(parseMinorUnitsInput("500.5", "JPY"), null);
+  assert.equal(parseMinorUnitsInput("12.345", "MXN"), null);
+  assert.equal(parseMinorUnitsInput("-10", "MXN"), null);
+  assert.equal(parseMinorUnitsInput("10abc", "MXN"), null);
+  assert.equal(parseMinorUnitsInput("10", "ZZZ"), null);
+
+  assert.equal(formatMinorUnitsInput(12_500, "MXN"), "125.00");
+  assert.equal(formatMinorUnitsInput(5, "XTS"), "0.05");
+  assert.equal(formatMinorUnitsInput(500, "JPY"), "500");
+  assert.equal(formatMinorUnitsInput(-1, "MXN"), null);
+  assert.equal(formatMinorUnitsInput(100, "ZZZ"), null);
 });

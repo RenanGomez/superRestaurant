@@ -2,21 +2,52 @@ import type {
   ActiveTableOrderListV2,
   BranchMembershipSummaryV1,
   BranchOperationalContextV1,
+  CashPaymentQuoteV1,
+  CheckoutOrderSummaryV1,
   DiningLayoutV1,
   MembershipRoleCode,
   MenuCatalogStateV1,
   OperationalShiftListV1,
   OperationalShiftSummaryV1,
+  PaymentCollectionSummaryV1,
+  SimplePaymentMethodV1,
 } from "@super-restaurant/shared-types";
 
 import { MobileRequestError, type MobileBranchScope } from "./mobile-client.js";
+import { formatMinorUnitsInput } from "./money.js";
 import { isSameOperator, type MobileSession } from "./session.js";
 
 export type MobileScreen = "starting" | "signIn" | "branches" | "shifts" | "workspace";
 export type MobileTab = "tables" | "menu";
 export type MobileFailure = "authorization" | "network" | "protocol" | "unavailable";
+export type MobilePaymentFailure = MobileFailure | "conflict" | "invalidAmount" | "noRegister";
 export type MobileNotice = "branchRevoked" | "sessionEnded";
 export type MobileResourceStatus = "failed" | "idle" | "loading" | "ready";
+
+export interface MobilePaymentFields {
+  readonly amountInput: string;
+  readonly cardExternalConfirmed: boolean;
+  readonly cardProvider: string;
+  readonly cardReference: string;
+  readonly method: SimplePaymentMethodV1;
+  readonly receivedInput: string;
+  readonly terminalId: string;
+  readonly tipInput: string;
+  readonly transferReference: string;
+}
+
+export interface MobilePaymentState extends MobilePaymentFields {
+  readonly checkout: MobileResource<CheckoutOrderSummaryV1>;
+  readonly checkoutFailure: MobilePaymentFailure | undefined;
+  readonly orderId: string | undefined;
+  readonly quote: MobileResource<CashPaymentQuoteV1>;
+  readonly quoteFailure: MobilePaymentFailure | undefined;
+  readonly submission: {
+    readonly failure: MobilePaymentFailure | undefined;
+    readonly receipt: PaymentCollectionSummaryV1 | undefined;
+    readonly status: "collected" | "failed" | "idle" | "sending";
+  };
+}
 
 export interface MobileResource<T> {
   /**
@@ -90,6 +121,7 @@ export interface MobileState {
   readonly memberships: MobileResource<readonly BranchMembershipSummaryV1[]>;
   readonly menu: MobileResource<MenuCatalogStateV1>;
   readonly notice: MobileNotice | undefined;
+  readonly payment: MobilePaymentState;
   readonly pendingScope: MobileBranchScope | undefined;
   /** True while the foreground revalidation of session and scope is running. */
   readonly revalidating: boolean;
@@ -124,6 +156,20 @@ export type MobileEvent =
   | { readonly type: "menuLoaded"; readonly attempt: number; readonly menu: MenuCatalogStateV1; readonly scope: MobileBranchScope }
   | { readonly type: "menuLoading"; readonly attempt: number; readonly scope: MobileBranchScope }
   | { readonly type: "menuReset"; readonly scope: MobileBranchScope }
+  | { readonly orderId: string; readonly type: "paymentOpened" }
+  | { readonly type: "paymentClosed" }
+  | { readonly attempt: number; readonly orderId: string; readonly scope: MobileBranchScope; readonly type: "paymentCheckoutLoading" }
+  | { readonly attempt: number; readonly checkout: CheckoutOrderSummaryV1; readonly scope: MobileBranchScope; readonly type: "paymentCheckoutLoaded" }
+  | { readonly attempt: number; readonly failure: MobilePaymentFailure; readonly orderId: string; readonly scope: MobileBranchScope; readonly type: "paymentCheckoutFailed" }
+  | { readonly type: "paymentCheckoutReset" }
+  | { readonly patch: Partial<MobilePaymentFields>; readonly type: "paymentFieldChanged" }
+  | { readonly attempt: number; readonly orderId: string; readonly scope: MobileBranchScope; readonly type: "paymentQuoteLoading" }
+  | { readonly attempt: number; readonly quote: CashPaymentQuoteV1; readonly scope: MobileBranchScope; readonly type: "paymentQuoteLoaded" }
+  | { readonly attempt: number; readonly failure: MobilePaymentFailure; readonly orderId: string; readonly scope: MobileBranchScope; readonly type: "paymentQuoteFailed" }
+  | { readonly type: "paymentQuoteCleared" }
+  | { readonly orderId: string; readonly type: "paymentSubmitStarted" }
+  | { readonly receipt: PaymentCollectionSummaryV1; readonly scope: MobileBranchScope; readonly type: "paymentCollected" }
+  | { readonly failure: MobilePaymentFailure; readonly orderId: string; readonly scope: MobileBranchScope; readonly type: "paymentSubmitFailed" }
   | { readonly type: "revalidationFailed"; readonly failure: MobileFailure }
   | { readonly type: "revalidationStarted" }
   | { readonly type: "revalidationSucceeded"; readonly context: BranchOperationalContextV1 | undefined }
@@ -150,6 +196,26 @@ const idleActiveOrdersResource: ActiveOrdersResource = Object.freeze({
   target: undefined,
 });
 
+const idlePaymentSubmission = Object.freeze({ failure: undefined, receipt: undefined, status: "idle" as const });
+
+export const initialPaymentState: MobilePaymentState = Object.freeze({
+  amountInput: "",
+  cardExternalConfirmed: false,
+  cardProvider: "",
+  cardReference: "",
+  checkout: idleResource,
+  checkoutFailure: undefined,
+  method: "cash",
+  orderId: undefined,
+  quote: idleResource,
+  quoteFailure: undefined,
+  receivedInput: "",
+  submission: idlePaymentSubmission,
+  terminalId: "",
+  tipInput: "",
+  transferReference: "",
+});
+
 export const initialMobileState: MobileState = Object.freeze({
   activeOrders: idleActiveOrdersResource,
   branch: undefined,
@@ -159,6 +225,7 @@ export const initialMobileState: MobileState = Object.freeze({
   memberships: idleResource,
   menu: idleResource,
   notice: undefined,
+  payment: initialPaymentState,
   pendingScope: undefined,
   revalidating: false,
   revalidationFailure: undefined,
@@ -228,6 +295,7 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
           activeOrders: idleActiveOrdersResource,
           layout: idleResource,
           menu: idleResource,
+          payment: initialPaymentState,
           shift: undefined,
           shifts: idleResource,
           revalidating: true,
@@ -286,6 +354,7 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         layout: idleResource,
         menu: idleResource,
         notice: undefined,
+        payment: initialPaymentState,
         pendingScope: frozenScope(event.scope),
         shift: undefined,
         shifts: idleResource,
@@ -332,6 +401,7 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         contextRead: undefined,
         layout: idleResource,
         menu: idleResource,
+        payment: initialPaymentState,
         pendingScope: undefined,
         shift: undefined,
         shifts: idleResource,
@@ -345,7 +415,7 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
       return state.branch !== undefined && state.shifts.status === "ready"
         && state.shifts.value?.shifts.some((candidate) => candidate.shiftId === event.shift.shiftId)
         && sameScope(state.branch, event.shift.scope)
-        ? freeze(withoutBranchReadsInFlight({ ...state, shift: event.shift }))
+        ? freeze(withoutBranchReadsInFlight({ ...state, payment: initialPaymentState, shift: event.shift }))
         : state;
     case "shiftReleased":
       return freeze({
@@ -353,6 +423,7 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         activeOrders: idleActiveOrdersResource,
         layout: idleResource,
         menu: idleResource,
+        payment: initialPaymentState,
         shift: undefined,
         tab: "tables",
       });
@@ -408,6 +479,83 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
         : { ...current, activeOrders: activeOrdersFailed(event.failure, activeOrdersTarget(event)) }));
     case "activeOrdersReset":
       return forActiveScope(state, event.scope, (current) => ({ ...current, activeOrders: idleActiveOrdersResource }));
+    case "paymentOpened":
+      return canReadOperationalData(state)
+        ? freeze({ ...state, payment: Object.freeze({ ...initialPaymentState, orderId: event.orderId.toLowerCase() }) })
+        : state;
+    case "paymentClosed":
+      return state.payment.orderId === undefined ? state : freeze({ ...state, payment: initialPaymentState });
+    case "paymentCheckoutLoading":
+      return forActiveScope(state, event.scope, (current) => (current.payment.orderId === event.orderId.toLowerCase()
+        ? { ...current, payment: Object.freeze({ ...current.payment, checkout: loading<CheckoutOrderSummaryV1>(event.attempt), checkoutFailure: undefined, quote: idleResource, quoteFailure: undefined }) }
+        : current));
+    case "paymentCheckoutLoaded":
+      return forCurrentRead(state, event, state.payment.checkout, (current) => (current.payment.orderId === event.checkout.orderId.toLowerCase()
+        ? {
+          ...current,
+          payment: Object.freeze({
+            ...current.payment,
+            amountInput: formatMinorUnitsInput(event.checkout.remainingBalanceMinor, event.checkout.currency) ?? "",
+            checkout: ready(event.checkout),
+            checkoutFailure: undefined,
+            quote: idleResource,
+            quoteFailure: undefined,
+            submission: idlePaymentSubmission,
+          }),
+        }
+        : current));
+    case "paymentCheckoutFailed":
+      return forCurrentRead(state, event, state.payment.checkout, (current) => (current.payment.orderId === event.orderId.toLowerCase()
+        ? { ...current, payment: Object.freeze({ ...current.payment, checkout: failed<CheckoutOrderSummaryV1>("unavailable"), checkoutFailure: event.failure }) }
+        : current));
+    case "paymentCheckoutReset":
+      return state.payment.orderId === undefined ? state : freeze({
+        ...state,
+        payment: Object.freeze({ ...state.payment, checkout: idleResource, checkoutFailure: undefined, quote: idleResource, quoteFailure: undefined, submission: idlePaymentSubmission }),
+      });
+    case "paymentFieldChanged": {
+      if (state.payment.orderId === undefined || state.payment.submission.status === "sending") return state;
+      const affectsQuote = event.patch.method !== undefined || event.patch.amountInput !== undefined
+        || event.patch.receivedInput !== undefined || event.patch.tipInput !== undefined;
+      return freeze({
+        ...state,
+        payment: Object.freeze({
+          ...state.payment,
+          ...event.patch,
+          ...(affectsQuote ? { quote: idleResource, quoteFailure: undefined } : {}),
+          submission: state.payment.submission.status === "failed" ? idlePaymentSubmission : state.payment.submission,
+        }),
+      });
+    }
+    case "paymentQuoteLoading":
+      return forActiveScope(state, event.scope, (current) => (current.payment.orderId === event.orderId.toLowerCase()
+        ? { ...current, payment: Object.freeze({ ...current.payment, quote: loading<CashPaymentQuoteV1>(event.attempt), quoteFailure: undefined }) }
+        : current));
+    case "paymentQuoteLoaded":
+      return forCurrentRead(state, event, state.payment.quote, (current) => (current.payment.orderId === event.quote.orderId.toLowerCase()
+        ? { ...current, payment: Object.freeze({ ...current.payment, quote: ready(event.quote), quoteFailure: undefined }) }
+        : current));
+    case "paymentQuoteFailed":
+      return forCurrentRead(state, event, state.payment.quote, (current) => (current.payment.orderId === event.orderId.toLowerCase()
+        ? { ...current, payment: Object.freeze({ ...current.payment, quote: failed<CashPaymentQuoteV1>("unavailable"), quoteFailure: event.failure }) }
+        : current));
+    case "paymentQuoteCleared":
+      return state.payment.orderId === undefined || state.payment.quote.status === "idle" ? state
+        : freeze({ ...state, payment: Object.freeze({ ...state.payment, quote: idleResource, quoteFailure: undefined }) });
+    case "paymentSubmitStarted":
+      return state.payment.orderId === event.orderId.toLowerCase() && state.payment.submission.status !== "sending"
+        ? freeze({ ...state, payment: Object.freeze({ ...state.payment, submission: Object.freeze({ failure: undefined, receipt: undefined, status: "sending" }) }) })
+        : state;
+    case "paymentCollected":
+      return forActiveScope(state, event.scope, (current) => (current.payment.orderId === event.receipt.orderId.toLowerCase()
+        && current.payment.submission.status === "sending"
+        ? { ...current, payment: Object.freeze({ ...current.payment, submission: Object.freeze({ failure: undefined, receipt: event.receipt, status: "collected" }) }) }
+        : current));
+    case "paymentSubmitFailed":
+      return forActiveScope(state, event.scope, (current) => (current.payment.orderId === event.orderId.toLowerCase()
+        && current.payment.submission.status === "sending"
+        ? { ...current, payment: Object.freeze({ ...current.payment, submission: Object.freeze({ failure: event.failure, receipt: undefined, status: "failed" }) }) }
+        : current));
     default:
       return state;
   }
@@ -590,6 +738,44 @@ export function failureMessage(failure: MobileFailure): string {
   }[failure];
 }
 
+export function toPaymentFailure(error: unknown): MobilePaymentFailure {
+  if (!(error instanceof MobileRequestError)) return "unavailable";
+  if (error.status === 404) return "noRegister";
+  if (error.status === 409) return "conflict";
+  if (error.status === 400) return "invalidAmount";
+  return toMobileFailure(error);
+}
+
+export function paymentFailureMessage(failure: MobilePaymentFailure): string {
+  if (failure === "authorization") return "Tu rol actual no tiene permiso para cobrar en esta sucursal.";
+  if (failure === "noRegister") return "No hay una caja abierta en este dispositivo. Ábrela en Caja antes de cobrar.";
+  if (failure === "conflict") return "La orden o la caja cambiaron en el servidor. Actualiza antes de volver a cobrar.";
+  if (failure === "invalidAmount") return "Importe o monto recibido inválido. Revisa los datos e inténtalo de nuevo.";
+  return failureMessage(failure);
+}
+
+export function paymentMethodLabel(method: SimplePaymentMethodV1): string {
+  return { card_manual: "Tarjeta manual", cash: "Efectivo", transfer: "Transferencia" }[method];
+}
+
+/** True only when the server checkout and quote are ready and method evidence satisfies contract bounds. */
+export function canSubmitMobilePayment(payment: MobilePaymentState): boolean {
+  if (payment.checkout.status !== "ready" || payment.quote.status !== "ready" || payment.submission.status === "sending") return false;
+  if (payment.method === "card_manual") {
+    const provider = payment.cardProvider.trim();
+    const terminal = payment.terminalId.trim();
+    const reference = payment.cardReference.trim();
+    return payment.cardExternalConfirmed
+      && provider.length > 0 && provider.length <= 120 && !/[\p{Cc}\p{Cf}]/u.test(provider)
+      && terminal.length > 0 && terminal.length <= 100 && !/[\p{Cc}\p{Cf}]/u.test(terminal)
+      && reference.length >= 6 && reference.length <= 200 && !/[\p{Cc}\p{Cf}]/u.test(reference);
+  }
+  if (payment.method === "transfer") {
+    return payment.transferReference.trim().length <= 64 && !/[\p{Cc}\p{Cf}]/u.test(payment.transferReference);
+  }
+  return payment.quote.value?.changeMinor !== null;
+}
+
 export function noticeMessage(notice: MobileNotice): string {
   return {
     branchRevoked: "Tu acceso a la sucursal seleccionada fue revocado.",
@@ -700,6 +886,7 @@ function withoutBranchReadsInFlight(state: MobileState): MobileState {
     activeOrders: state.activeOrders.status === "loading" ? idleActiveOrdersResource : state.activeOrders,
     layout: givenUp(state.layout),
     menu: givenUp(state.menu),
+    payment: Object.freeze({ ...state.payment, checkout: givenUp(state.payment.checkout), quote: givenUp(state.payment.quote) }),
     shifts: givenUp(state.shifts),
   };
 }
@@ -720,6 +907,7 @@ function revokedState(state: MobileState): MobileState {
     memberships: idleResource,
     menu: idleResource,
     notice: "branchRevoked",
+    payment: initialPaymentState,
     pendingScope: undefined,
     shift: undefined,
     shifts: idleResource,

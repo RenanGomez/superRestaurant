@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import type {
-  ActiveTableOrderListV2,
-  DiningTableV1,
-  OrderMutationSummaryV1,
+import {
+  parseBranchScope,
+  parseQuoteCashPaymentRequestV1,
+  type ActiveTableOrderListV2,
+  type CollectPaymentCommandV1,
+  type DiningTableV1,
+  type OrderMutationSummaryV1,
 } from "@super-restaurant/shared-types";
 
 import { gateMobileAuth, type MobileAuthGate } from "../auth-gate.js";
@@ -13,13 +16,17 @@ import type { MobileConfig } from "../config.js";
 import { lifecycleEffects, type MobileAppStatus, type MobileLifecyclePort } from "../lifecycle.js";
 import {
   addOrderItem,
+  collectPayment,
   createOrder,
+  getCashRegisterReport,
+  getCheckoutOrder,
   getDiningLayout,
   getMenuCatalog,
   listActiveTableOrders,
   listMemberships,
   listOperationalShifts,
   openOrder,
+  quoteCashPayment,
   selectBranchContext,
   type MobileBranchScope,
 } from "../mobile-client.js";
@@ -28,6 +35,7 @@ import {
   activeOrdersReadTarget,
   activeScope,
   canReadBranchData,
+  canSubmitMobilePayment,
   contextReadTarget,
   failureMessage,
   initialMobileState,
@@ -40,12 +48,15 @@ import {
   ownsMembershipsRead,
   reduceMobileState,
   shiftsReadTarget,
+  toPaymentFailure,
   type MobileEvent,
   type MobileFailure,
   type MobileNotice,
+  type MobilePaymentFields,
   type MobileState,
   type MobileTab,
 } from "../mobile-state.js";
+import { parseMinorUnitsInput } from "../money.js";
 import {
   createOrderDeliveryTracker,
   type OrderDeliveryTracker,
@@ -427,6 +438,170 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     dispatch({ scope: { branchId, restaurantId }, type: "activeOrdersReset" });
   }, [branchId, dispatch, restaurantId]);
 
+  const paymentAttemptRef = useRef<{
+    readonly eventId: string;
+    readonly idempotencyKey: string;
+    readonly key: string;
+    readonly occurredAt: string;
+    readonly paymentId: string;
+  } | undefined>(undefined);
+  const paymentQuoteAttemptRef = useRef(0);
+  const paymentCheckoutAttemptRef = useRef(0);
+  const paymentSubmitAttemptRef = useRef(0);
+
+  // Checkout loader: discovers open register for this device and reads server checkout summary.
+  useEffect(() => {
+    const orderId = state.payment.orderId;
+    if (orderId === undefined || state.payment.checkout.status !== "idle" || token === undefined || branchId === undefined || restaurantId === undefined) return;
+    const targetScope: MobileBranchScope = { branchId, restaurantId };
+    paymentCheckoutAttemptRef.current += 1;
+    const attempt = paymentCheckoutAttemptRef.current;
+    dispatch({ attempt, orderId, scope: targetScope, type: "paymentCheckoutLoading" });
+    if (deviceId === undefined) {
+      dispatch({ attempt, failure: "unavailable", orderId, scope: targetScope, type: "paymentCheckoutFailed" });
+      return;
+    }
+    void getCashRegisterReport(config, token, { cashRegisterSessionId: null, deviceId, registerId: deviceId, scope: targetScope })
+      .then((report) => {
+        if (report.register.status !== "open") return Promise.reject(new Error("NO_OPEN_REGISTER"));
+        return getCheckoutOrder(config, token, {
+          cashRegisterSessionId: report.register.cashRegisterSessionId,
+          deviceId,
+          orderId,
+          registerId: deviceId,
+          scope: targetScope,
+        });
+      })
+      .then(
+        (checkout) => { dispatch({ attempt, checkout, scope: targetScope, type: "paymentCheckoutLoaded" }); },
+        (error: unknown) => {
+          const failure = error instanceof Error && error.message === "NO_OPEN_REGISTER" ? "noRegister" : toPaymentFailure(error);
+          dispatch({ attempt, failure, orderId, scope: targetScope, type: "paymentCheckoutFailed" });
+        },
+      );
+  }, [branchId, config, deviceId, dispatch, restaurantId, state.payment.checkout.status, state.payment.orderId, token]);
+
+  // Debounced server quote whenever payment inputs change; zero client money calculation.
+  useEffect(() => {
+    const checkout = state.payment.checkout.value;
+    if (state.payment.checkout.status !== "ready" || checkout === undefined || state.payment.submission.status === "collected"
+      || token === undefined || branchId === undefined || restaurantId === undefined) return undefined;
+    const amountMinor = parseMinorUnitsInput(state.payment.amountInput, checkout.currency);
+    const tipMinor = state.payment.tipInput.trim() === "" ? 0 : parseMinorUnitsInput(state.payment.tipInput, checkout.currency);
+    const tenderedAmountMinor = state.payment.method === "cash"
+      ? parseMinorUnitsInput(state.payment.receivedInput, checkout.currency)
+      : null;
+    if (amountMinor === null || tipMinor === null || (state.payment.method === "cash" && tenderedAmountMinor === null)) {
+      dispatch({ type: "paymentQuoteCleared" });
+      return undefined;
+    }
+    const targetScope: MobileBranchScope = { branchId, restaurantId };
+    const request = parseQuoteCashPaymentRequestV1({
+      amountMinor,
+      cashRegisterSessionId: checkout.cashRegisterSessionId,
+      method: state.payment.method,
+      orderId: checkout.orderId,
+      schemaVersion: 1,
+      scope: targetScope,
+      tenderedAmountMinor,
+      tipMinor,
+    });
+    if (request === undefined) {
+      paymentQuoteAttemptRef.current += 1;
+      const attempt = paymentQuoteAttemptRef.current;
+      dispatch({ attempt, orderId: checkout.orderId, scope: targetScope, type: "paymentQuoteLoading" });
+      dispatch({ attempt, failure: "invalidAmount", orderId: checkout.orderId, scope: targetScope, type: "paymentQuoteFailed" });
+      return undefined;
+    }
+    const timer = setTimeout(() => {
+      paymentQuoteAttemptRef.current += 1;
+      const attempt = paymentQuoteAttemptRef.current;
+      dispatch({ attempt, orderId: checkout.orderId, scope: targetScope, type: "paymentQuoteLoading" });
+      void quoteCashPayment(config, token, request).then(
+        (quote) => { dispatch({ attempt, quote, scope: targetScope, type: "paymentQuoteLoaded" }); },
+        (error: unknown) => { dispatch({ attempt, failure: toPaymentFailure(error), orderId: checkout.orderId, scope: targetScope, type: "paymentQuoteFailed" }); },
+      );
+    }, 200);
+    return (): void => { clearTimeout(timer); };
+  }, [
+    branchId, config, dispatch, restaurantId, state.payment.amountInput, state.payment.checkout.status,
+    state.payment.checkout.value, state.payment.method, state.payment.receivedInput,
+    state.payment.submission.status, state.payment.tipInput, token,
+  ]);
+
+  const submitPayment = useCallback((): void => {
+    const checkout = state.payment.checkout.value;
+    const quote = state.payment.quote.value;
+    if (checkout === undefined || quote === undefined || !canSubmitMobilePayment(state.payment)
+      || token === undefined || branchId === undefined || restaurantId === undefined || deviceId === undefined) return;
+    const commandScope = parseBranchScope({ branchId, restaurantId });
+    if (commandScope === undefined) return;
+    const targetScope: MobileBranchScope = { branchId, restaurantId };
+    let cardManualEvidence: CollectPaymentCommandV1["cardManualEvidence"] = null;
+    if (quote.method === "card_manual") {
+      if (!state.payment.cardExternalConfirmed) return;
+      cardManualEvidence = {
+        externalConfirmed: state.payment.cardExternalConfirmed,
+        provider: state.payment.cardProvider.trim(),
+        reference: state.payment.cardReference.trim(),
+        terminalId: state.payment.terminalId.trim(),
+      };
+    }
+    const transferRef = state.payment.method === "transfer" && state.payment.transferReference.trim().length > 0
+      ? state.payment.transferReference.trim()
+      : null;
+    const key = [
+      draftContext, checkout.orderId, checkout.orderVersion, checkout.cashRegisterSessionId, checkout.cashRegisterVersion,
+      quote.method, quote.amountMinor, quote.tenderedAmountMinor ?? "", quote.tipMinor,
+      state.payment.cardProvider.trim(), state.payment.terminalId.trim(), state.payment.cardReference.trim(),
+      String(state.payment.cardExternalConfirmed), transferRef ?? "",
+    ].join("|");
+    if (paymentAttemptRef.current?.key !== key) {
+      paymentAttemptRef.current = {
+        eventId: randomUuid(),
+        idempotencyKey: randomUuid(),
+        key,
+        occurredAt: new Date().toISOString(),
+        paymentId: randomUuid(),
+      };
+    }
+    const audit = paymentAttemptRef.current;
+    paymentSubmitAttemptRef.current += 1;
+    const submitAttempt = paymentSubmitAttemptRef.current;
+    dispatch({ orderId: checkout.orderId, type: "paymentSubmitStarted" });
+    void collectPayment(config, token, {
+      amountMinor: quote.amountMinor,
+      cardManualEvidence,
+      cashRegisterExpectedVersion: checkout.cashRegisterVersion,
+      cashRegisterSessionId: checkout.cashRegisterSessionId,
+      deviceId,
+      eventId: audit.eventId,
+      idempotencyKey: audit.idempotencyKey,
+      localSequence: checkout.nextLocalSequence,
+      method: quote.method,
+      occurredAt: audit.occurredAt,
+      orderExpectedVersion: checkout.orderVersion,
+      orderId: checkout.orderId,
+      paymentId: audit.paymentId,
+      schemaVersion: 1,
+      scope: commandScope,
+      tenderedAmountMinor: quote.tenderedAmountMinor,
+      tipMinor: quote.tipMinor,
+      ...(transferRef === null ? {} : { transferReference: transferRef }),
+    }).then(
+      (receipt) => {
+        if (paymentSubmitAttemptRef.current !== submitAttempt) return;
+        paymentAttemptRef.current = undefined;
+        dispatch({ receipt, scope: targetScope, type: "paymentCollected" });
+        dispatch({ scope: targetScope, type: "activeOrdersReset" });
+      },
+      (error: unknown) => {
+        if (paymentSubmitAttemptRef.current !== submitAttempt) return;
+        dispatch({ failure: toPaymentFailure(error), orderId: checkout.orderId, scope: targetScope, type: "paymentSubmitFailed" });
+      },
+    );
+  }, [branchId, config, deviceId, dispatch, draftContext, randomUuid, restaurantId, state.payment, token]);
+
   const submitDraft = useCallback((): void => {
     const tableId = draft.tableId;
     const catalog = state.menu.value?.catalog ?? null;
@@ -497,6 +672,7 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
       // empty-draft shortcut and a confirmed departure without duplicating its
       // rules here. A late failure — a 401 especially — then belongs nowhere.
       dispatch({ scope: { branchId, restaurantId }, type: "activeOrdersReset" });
+      dispatch({ type: "paymentClosed" });
     }
     dispatchDraft(event);
   }, [branchId, dispatch, draft, restaurantId]);
@@ -592,14 +768,24 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
         draftCategory={draftCategory}
         menu={state.menu}
         layout={state.layout}
+        onCollectOrder={(orderId) => { dispatch({ orderId, type: "paymentOpened" }); }}
         onDraftCategory={setDraftCategory}
         onDraftEvent={dispatchOrderDraft}
+        onPaymentClose={() => {
+          paymentSubmitAttemptRef.current += 1;
+          paymentAttemptRef.current = undefined;
+          dispatch({ type: "paymentClosed" });
+        }}
+        onPaymentFieldChange={(patch) => { dispatch({ patch, type: "paymentFieldChanged" }); }}
+        onPaymentRetry={() => { dispatch({ type: "paymentCheckoutReset" }); }}
+        onPaymentSubmit={submitPayment}
         onRetryActiveOrders={retryActiveOrders}
         onRetryMenu={retryMenu}
         onRetryRead={retry}
         onRetryRevalidation={() => { dispatch({ type: "revalidationStarted" }); }}
         onSelectTable={selectTable}
         onSubmitDraft={submitDraft}
+        payment={state.payment}
         revalidating={state.revalidating}
         revalidationFailure={state.revalidationFailure}
         tab={state.tab}
@@ -654,14 +840,20 @@ function WorkspaceContent({
   draftCategory,
   layout,
   menu,
+  onCollectOrder,
   onDraftCategory,
   onDraftEvent,
+  onPaymentClose,
+  onPaymentFieldChange,
+  onPaymentRetry,
+  onPaymentSubmit,
   onRetryActiveOrders,
   onRetryMenu,
   onRetryRead,
   onRetryRevalidation,
   onSelectTable,
   onSubmitDraft,
+  payment,
   revalidating,
   revalidationFailure,
   tab,
@@ -671,14 +863,20 @@ function WorkspaceContent({
   readonly draftCategory: string | undefined;
   readonly layout: MobileState["layout"];
   readonly menu: MobileState["menu"];
+  readonly onCollectOrder: (orderId: string) => void;
   readonly onDraftCategory: (categoryId: string) => void;
   readonly onDraftEvent: (event: OrderDraftEvent) => void;
+  readonly onPaymentClose: () => void;
+  readonly onPaymentFieldChange: (patch: Partial<MobilePaymentFields>) => void;
+  readonly onPaymentRetry: () => void;
+  readonly onPaymentSubmit: () => void;
   readonly onRetryActiveOrders: () => void;
   readonly onRetryMenu: () => void;
   readonly onRetryRead: (tab: MobileTab) => void;
   readonly onRetryRevalidation: () => void;
   readonly onSelectTable: (table: DiningTableV1) => void;
   readonly onSubmitDraft: () => void;
+  readonly payment: MobileState["payment"];
   readonly revalidating: boolean;
   readonly revalidationFailure: MobileFailure | undefined;
   readonly tab: MobileTab;
@@ -735,10 +933,16 @@ function WorkspaceContent({
     menu={menu}
     onBackToTables={() => { onDraftEvent({ intent: "leaveTable", type: "confirmationRequested" }); }}
     onCategorySelected={onDraftCategory}
+    onCollectOrder={onCollectOrder}
     onEvent={onDraftEvent}
+    onPaymentClose={onPaymentClose}
+    onPaymentFieldChange={onPaymentFieldChange}
+    onPaymentRetry={onPaymentRetry}
+    onPaymentSubmit={onPaymentSubmit}
     onRetryActiveOrders={onRetryActiveOrders}
     onRetryMenu={onRetryMenu}
     onSubmit={onSubmitDraft}
+    payment={payment}
     table={located.table}
     zoneName={located.zoneName}
   />;
