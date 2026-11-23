@@ -1,0 +1,566 @@
+[
+  {
+    "id": "m2-adr-005-local-storage",
+    "title": "ADR-005: selección de almacenamiento local web/mobile, cifrado en reposo y límites offline",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "D",
+    "lane": "agy",
+    "paths": [
+      "docs/adr/ADR-005.md",
+      "docs/THIRD_PARTY_LICENSE_AUDIT.md"
+    ],
+    "deps": [],
+    "acceptance": [
+      "docs/adr/ADR-005.md evalúa opciones concretas para web (IndexedDB nativo vs Dexie vs RxDB) y mobile (expo-sqlite vs WatermelonDB vs alternativa compatible con Expo 57 / RN 0.86), justifica la elección y fija transacción atómica de DurableSyncStoragePort",
+      "define estrategia de cifrado en reposo y gestión de claves (Web Crypto AES-GCM en web; expo-secure-store + cifrado en mobile), purga/bloqueo al cerrar sesión o revocar dispositivo, cuota y manejo de corrupción",
+      "documenta compatibilidad de licencias en docs/THIRD_PARTY_LICENSE_AUDIT.md si se propone cualquier dependencia externa y fija supuestos conservadores de retención y límites de efectivo offline",
+      "solo documentación; no modifica código fuente, SQL ni pnpm-lock.yaml",
+      "git diff --check"
+    ],
+    "etaMin": 120,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "M2-adr",
+    "note": "Resuelve ADR-005 pendiente en ADR-004, OFFLINE_SYNC_CONTRACT §14 y TODO Fase 3. Desbloquea los adaptadores de almacenamiento local y la PWA."
+  },
+  {
+    "id": "m2-sync-contracts-engine",
+    "title": "Contratos compartidos de sync en shared-types y endurecimiento de packages/sync-engine",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "A",
+    "lane": "codex",
+    "paths": [
+      "packages/shared-types/src/sync.ts",
+      "packages/shared-types/src/sync.runtime.test.ts",
+      "packages/shared-types/src/index.ts",
+      "packages/shared-types/package.json",
+      "packages/sync-engine/src/contract.ts",
+      "packages/sync-engine/src/durable-state.ts",
+      "packages/sync-engine/src/engine.ts",
+      "packages/sync-engine/src/outbox-state.ts",
+      "packages/sync-engine/src/capability-guard.ts",
+      "packages/sync-engine/src/schema-migration.ts",
+      "packages/sync-engine/src/index.ts",
+      "packages/sync-engine/package.json"
+    ],
+    "deps": [],
+    "acceptance": [
+      "packages/shared-types/src/sync.ts publica y valida en runtime (claves exactas, sin float, scope obligatorio) SyncEnvelopeV1, SyncPushRequest/Response, SyncPullRequest/Response, ManualReviewCaseV1 y el catálogo versionado de entityType/operation de Fase 3",
+      "packages/sync-engine reutiliza los contratos de shared-types y agrega: guard de matriz de capacidades offline por cliente/operación, hook determinista de migración de schemaVersion, corrección de rollback con múltiples pendientes por entidad, compactación segura sin purgar financieros y resync por snapshot",
+      "pnpm --filter @super-restaurant/shared-types test && pnpm --filter @super-restaurant/sync-engine test en verde",
+      "pnpm lint && pnpm typecheck && pnpm test && pnpm build en verde"
+    ],
+    "etaMin": 240,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "m1-coverage-inventory",
+    "note": "Inicio de la cadena estricta de nivel A (carril codex). Toca packages/shared-types (carril de un solo escritor) y packages/sync-engine; requiere revisión doble y pruebas de invariantes G4."
+  },
+  {
+    "id": "m2-sync-merge-domain",
+    "title": "Reglas deterministas de merge y clasificación de conflictos offline en packages/domain",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "A",
+    "lane": "codex",
+    "paths": [
+      "packages/domain/src/sync-merge.ts",
+      "packages/domain/src/sync-merge.test.ts",
+      "packages/domain/src/index.ts",
+      "packages/domain/package.json"
+    ],
+    "deps": [
+      "m2-sync-contracts-engine"
+    ],
+    "acceptance": [
+      "packages/domain/src/sync-merge.ts implementa sin dependencias de infraestructura ni float las reglas de OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX §4.2 para Order, OrderItem, DiningTable, KdsTicket, Payment y CashMovement",
+      "líneas aditivas con orderItemId distinto combinan y recalculan en minor units desde snapshots; edición concurrente de misma línea, disputa de mesa, cancelación post-envío y cobro excedente/clave distinta devuelven conflict o manual_review (nunca LWW)",
+      "transiciones monotónicas de OrderItem/KdsTicket aceptan o deduplican sin retroceder estado; tombstones bloquean resurrección ante updates obsoletos; occurredAt nunca decide prioridad ni orden",
+      "pnpm --filter @super-restaurant/domain lint && pnpm --filter @super-restaurant/domain typecheck && pnpm --filter @super-restaurant/domain test && pnpm --filter @super-restaurant/domain build en verde"
+    ],
+    "etaMin": 210,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "TODO-P3",
+    "note": "Paso 2 de la cadena codex. Dominio puro de dinero y estados críticos (nivel A); nunca importa NestJS, React, SQL ni red."
+  },
+  {
+    "id": "m2-sync-sql-migrations",
+    "title": "Migración SQL de ledger de deduplicación, dispositivos, changelog por cursor y manual_review",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "A",
+    "lane": "codex",
+    "paths": [
+      "supabase/migrations/",
+      "supabase/tests/sync_ledger_invariants.sql",
+      "apps/api/src/operations/sync-schema-verification.ts",
+      "apps/api/src/operations/run-sync-schema-verification.ts",
+      "apps/api/package.json"
+    ],
+    "deps": [
+      "m2-sync-merge-domain"
+    ],
+    "acceptance": [
+      "migración nueva versionada (timestamp asignado en el brief) crea tablas en app con RLS+FORCE y cero grants directos: sync_devices, sync_event_ledger (dedup por scope+eventId y scope+idempotencyKey con huella y retención protegida para eventos financieros), sync_changelog (secuencia canónica monotónica + tombstones) y sync_manual_review_cases",
+      "funciones SECURITY DEFINER en app_private con search_path fijo y EXECUTE únicamente para app_api validan restaurante/sucursal, monotonicidad de local_sequence por device_id, reutilización incompatible de idempotencyKey y aislamiento estricto entre tenants",
+      "supabase/tests/sync_ledger_invariants.sql y pnpm --filter @super-restaurant/api run verify:sync-schema:rollback pasan en PostgreSQL 17 local desde cero",
+      "pnpm lint && pnpm typecheck && pnpm test en verde"
+    ],
+    "etaMin": 240,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "m1-coverage-inventory",
+    "note": "Paso 3 de la cadena codex. Carril exclusivo de supabase/migrations/; no editar ninguna migración ya aplicada. No aplicar en remoto sin lote autorizado."
+  },
+  {
+    "id": "m2-api-sync-push-merge",
+    "title": "Endpoint POST /sync por lotes con revalidación server-side, deduplicación y merge determinista",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "A",
+    "lane": "codex",
+    "paths": [
+      "apps/api/src/sync/sync-push.service.ts",
+      "apps/api/src/sync/sync-merge-executor.ts",
+      "apps/api/src/sync/sync.controller.ts",
+      "apps/api/src/sync/sync-push.test.ts",
+      "apps/api/src/auth/rbac-policy.ts",
+      "apps/api/src/auth/rbac-policy.test.ts",
+      "apps/api/src/app.module.ts",
+      "apps/api/package.json"
+    ],
+    "deps": [
+      "m2-sync-sql-migrations"
+    ],
+    "acceptance": [
+      "POST /sync procesa lotes acotados a un solo scope con transacción independiente por evento y devuelve SyncEventResult para cada eventId (accepted|duplicate|rejected|conflict|manual_review) sin ocultar errores parciales",
+      "antes de deduplicar o aplicar cada evento revalida token, deviceId activo, membresía, branchId->restaurantId y permiso RBAC; actor o dispositivo revocado devuelve AUTH_REVOKED/DEVICE_REVOKED y mueve financieros pendientes a manual_review",
+      "despacha mutaciones sobre las autoridades existentes (orders, payments, cash-register, dining-tables, kds) usando sync-merge de packages/domain; recalcula dinero en servidor sin float y nunca permite LWW ni doble cobro",
+      "logs estructurados incluyen correlationId, restaurantId, branchId, deviceId y eventId sin PAN, CVV, tokens ni payloads sensibles",
+      "pnpm lint && pnpm typecheck && pnpm test && pnpm build en verde"
+    ],
+    "etaMin": 270,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "TODO-P3",
+    "note": "Paso 4 de la cadena codex. Nivel A crítico: toca autorización RBAC, dinero y escritura transaccional por evento."
+  },
+  {
+    "id": "m2-api-sync-pull-review",
+    "title": "Endpoints POST /sync/pull por cursor opaco, registro de dispositivos y resolución manual_review",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "A",
+    "lane": "codex",
+    "paths": [
+      "apps/api/src/sync/sync-pull.service.ts",
+      "apps/api/src/sync/sync-cursor.ts",
+      "apps/api/src/sync/sync-manual-review.service.ts",
+      "apps/api/src/sync/sync-review.controller.ts",
+      "apps/api/src/sync/sync-pull.test.ts",
+      "apps/api/src/sync/sync-manual-review.test.ts",
+      "apps/api/src/app.module.ts",
+      "apps/api/package.json"
+    ],
+    "deps": [
+      "m2-api-sync-push-merge"
+    ],
+    "acceptance": [
+      "POST /sync/pull devuelve cambios canónicos y tombstones en orden de servidor con cursor opaco versionado ligado a restaurantId, branchId y principal; cursor de otro scope o expirado devuelve CURSOR_SCOPE_MISMATCH/CURSOR_EXPIRED sin fuga de datos",
+      "expone registro/verificación de dispositivo autorizado y GET/POST /sync/manual-review restringido a roles supervisores (sync.manual_review.resolve) con resolución compensatoria auditada y motivo obligatorio",
+      "pruebas unitarias y de contrato cubren paginación, resync, tombstones, aislamiento cross-tenant/cross-branch y revocación",
+      "pnpm lint && pnpm typecheck && pnpm test && pnpm build en verde"
+    ],
+    "etaMin": 240,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "m1-coverage-inventory",
+    "note": "Paso 5 de la cadena codex. Completa el backend de sincronización y desbloquea pruebas de conflicto multi-dispositivo y clientes."
+  },
+  {
+    "id": "m2-web-local-storage-crypto",
+    "title": "Almacenamiento local IndexedDB cifrado en reposo y transporte sync para apps/web",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "A",
+    "lane": "codex",
+    "paths": [
+      "apps/web/src/lib/offline/",
+      "apps/web/package.json",
+      "pnpm-lock.yaml"
+    ],
+    "deps": [
+      "m2-adr-005-local-storage",
+      "m2-api-sync-pull-review"
+    ],
+    "acceptance": [
+      "implementa DurableSyncStoragePort sobre IndexedDB (según ADR-005) garantizando commit atómico de réplica + outbox + localSequence + pullCursor y detección explícita de falta de cuota o corrupción",
+      "cifra en reposo los registros sensibles de réplica/outbox con Web Crypto AES-GCM y clave no extraíble ligada a sesión/dispositivo; purga/bloquea al cerrar sesión o revocar sin perder evidencia requerida de manual_review",
+      "implementa SyncTransportPort HTTP hacia POST /sync y POST /sync/pull con manejo de errores retryable, sin almacenar secretos de servidor ni PAN/CVV",
+      "pnpm --filter @super-restaurant/web lint && pnpm --filter @super-restaurant/web typecheck && pnpm --filter @super-restaurant/web test && pnpm --filter @super-restaurant/web build en verde"
+    ],
+    "etaMin": 240,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "TODO-P3",
+    "note": "Paso 6 de la cadena codex. Clasificado nivel A porque implementa cifrado en reposo y ciclo de vida de claves para datos sensibles (AGENTS §13, OFFLINE_SYNC_CONTRACT §12) y actualiza pnpm-lock.yaml."
+  },
+  {
+    "id": "m2-mobile-local-storage-crypto",
+    "title": "Almacenamiento local cifrado en apps/mobile con expo-secure-store y transporte sync",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "A",
+    "lane": "codex",
+    "paths": [
+      "apps/mobile/src/offline/",
+      "apps/mobile/src/sign-out.ts",
+      "apps/mobile/package.json",
+      "pnpm-lock.yaml"
+    ],
+    "deps": [
+      "m2-adr-005-local-storage",
+      "m2-web-local-storage-crypto"
+    ],
+    "acceptance": [
+      "implementa DurableSyncStoragePort móvil (según ADR-005) con escritura atómica de réplica + outbox + localSequence + pullCursor y reutiliza el deviceId persistente de apps/mobile/src/expo-device-identity.ts",
+      "gestiona clave de cifrado en expo-secure-store y cifra en reposo datos sensibles locales; sign-out y revocación impiden nuevos pushes y purgan/bloquean datos sensibles de acuerdo con ADR-005",
+      "implementa SyncTransportPort HTTP autenticado hacia POST /sync y POST /sync/pull con pruebas unitarias de atomicidad, reinicio y revocación",
+      "pnpm --filter @super-restaurant/mobile lint && pnpm --filter @super-restaurant/mobile typecheck && pnpm --filter @super-restaurant/mobile test && pnpm --filter @super-restaurant/mobile build en verde"
+    ],
+    "etaMin": 240,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "TODO-P3",
+    "note": "Paso 7 y último de la cadena codex. Nivel A por cifrado local con expo-secure-store, manejo de cierre de sesión y escritura exclusiva de pnpm-lock.yaml."
+  },
+  {
+    "id": "m2-web-pwa-shell",
+    "title": "Convertir apps/web en PWA instalable con manifest y Service Worker seguro",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "C",
+    "lane": "agy",
+    "paths": [
+      "apps/web/public/sw.js",
+      "apps/web/public/icons/",
+      "apps/web/src/app/manifest.ts",
+      "apps/web/src/components/pwa-register.tsx",
+      "apps/web/src/app/layout.tsx",
+      "apps/web/next.config.ts"
+    ],
+    "deps": [
+      "m2-adr-005-local-storage"
+    ],
+    "acceptance": [
+      "apps/web expone manifest válido (/manifest.webmanifest), iconos instalables y Service Worker que cachea únicamente activos estáticos y el app shell, sin cachear respuestas API privadas/no-store ni mutaciones POST",
+      "aviso in-app accesible cuando existe una versión nueva del Service Worker o esquema actualizado, sin alert/confirm/prompt y con targets táctiles de al menos 44 px",
+      "pnpm --filter @super-restaurant/web lint && pnpm --filter @super-restaurant/web typecheck && pnpm --filter @super-restaurant/web test && pnpm --filter @super-restaurant/web build en verde",
+      "verificación en navegador real (escritorio y 390x844): manifest y SW activos, recarga del shell en modo offline sin overlay ni errores de consola"
+    ],
+    "etaMin": 150,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "TODO-P3",
+    "note": "Nivel C (UI/PWA). No toca apps/web/package.json ni src/app/app/ para correr en paralelo con la cadena codex sin solapamiento de rutas."
+  },
+  {
+    "id": "m2-kds-offline-cache",
+    "title": "Caché local IndexedDB en KDS, avance monotónico offline y recuperación por cursor",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "B",
+    "lane": "agy",
+    "paths": [
+      "apps/kds/src/",
+      "apps/kds/package.json",
+      "pnpm-lock.yaml"
+    ],
+    "deps": [
+      "m2-mobile-local-storage-crypto"
+    ],
+    "acceptance": [
+      "KDS persiste localmente en IndexedDB los tickets ya recibidos de su sucursal/estación y muestra la hora de última recepción cuando pierde WAN",
+      "permite avanzar localmente (preparing/ready) tickets ya recibidos de su estación encolando en DeviceSyncEngine con copy explícito de que otras estaciones lo verán al sincronizar; bloquea reasignación de estación/sucursal y no afirma recepción de órdenes nuevas sin WAN",
+      "al reconectar hace push de outbox y pull incremental por cursor para recuperar tickets perdidos tras caída de WebSocket sin duplicados ni fugas de estación",
+      "pnpm --filter @super-restaurant/kds lint && pnpm --filter @super-restaurant/kds typecheck && pnpm --filter @super-restaurant/kds test && pnpm --filter @super-restaurant/kds build en verde"
+    ],
+    "etaMin": 180,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "TODO-P3",
+    "note": "Nivel B porque los tickets KDS solo contienen datos de preparación de cocina (sin PII, dinero ni secretos de autenticación). Depende de m2-mobile-local-storage-crypto para serializar el acceso exclusivo a pnpm-lock.yaml."
+  },
+  {
+    "id": "m2-web-sync-status-ui",
+    "title": "Barra de estado de conectividad y vista /app/sync de pendientes, errores y manual_review en web",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "C",
+    "lane": "agy",
+    "paths": [
+      "apps/web/src/components/sync-status-bar.tsx",
+      "apps/web/src/app/app/sync/",
+      "apps/web/src/app/app/layout.tsx",
+      "apps/web/src/app/app/app-nav.tsx",
+      "apps/web/src/lib/sync-ui.ts",
+      "apps/web/src/lib/sync-ui.test.ts",
+      "apps/web/package.json"
+    ],
+    "deps": [
+      "m2-web-local-storage-crypto"
+    ],
+    "acceptance": [
+      "el shell autenticado muestra estado real de conectividad (online|degraded|offline|reconnecting|sync_blocked), sucursal activa, contador de eventos pendientes y hora de último sync confirmado",
+      "la pantalla /app/sync lista cada evento con estado, reintentos, último error, acción segura de reintento/resync y flujo de revisión manual para supervisores usando los textos en español de OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX §2.3 (sin jerga técnica ni UUIDs expuestos al operador)",
+      "targets táctiles >= 44 px, foco visible, respeto a reduced-motion, cero alert/confirm/prompt y unitarias para helpers puros en sync-ui.test.ts",
+      "pnpm --filter @super-restaurant/web lint && pnpm --filter @super-restaurant/web typecheck && pnpm --filter @super-restaurant/web test && pnpm --filter @super-restaurant/web build en verde, con capturas en escritorio y 390x844 con consola limpia"
+    ],
+    "etaMin": 180,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "TODO-P3",
+    "note": "Nivel C (UI de pendientes). Solo consume API y almacenamiento local vía lib/offline; no calcula dinero ni decide permisos."
+  },
+  {
+    "id": "m2-web-offline-pos-cash",
+    "title": "Operación offline en Web POS (catálogo/mesas cacheados, orden local, efectivo y ticket pendiente)",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "C",
+    "lane": "agy",
+    "paths": [
+      "apps/web/src/lib/offline-pos.ts",
+      "apps/web/src/lib/offline-pos.test.ts",
+      "apps/web/src/lib/print-documents.ts",
+      "apps/web/src/lib/print-documents.test.ts",
+      "apps/web/src/app/app/capture/",
+      "apps/web/src/app/app/caja/",
+      "apps/web/src/app/app/orders/",
+      "apps/web/package.json"
+    ],
+    "deps": [
+      "m2-web-sync-status-ui"
+    ],
+    "acceptance": [
+      "sin WAN permite consultar menú/mesas cacheados (mostrando versión/fecha), crear órdenes locales, agregar líneas a órdenes originadas en este dispositivo, registrar efectivo offline con precondiciones de caja/cajero/secuencia e imprimir ticket marcado explícitamente como 'Pendiente de sincronizar (solo este dispositivo)'",
+      "bloquea explícitamente con explicación en español las operaciones prohibidas offline (editar órdenes de otro dispositivo, descuentos/cancelaciones que exigen supervisor, cierre de caja, reembolsos y CFDI) sin encolarlas",
+      "las operaciones confirmadas localmente solo se anuncian como local_pending tras el commit atómico en DeviceSyncEngine; nunca afirma entrega a cocina ni a otros equipos sin WAN",
+      "pnpm --filter @super-restaurant/web lint && pnpm --filter @super-restaurant/web typecheck && pnpm --filter @super-restaurant/web test && pnpm --filter @super-restaurant/web build en verde, con capturas en escritorio y 390x844 con consola limpia"
+    ],
+    "etaMin": 240,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "TODO-P3",
+    "note": "Nivel C. Serializado tras m2-web-sync-status-ui para evitar conflicto en apps/web/package.json y reutilizar el proveedor de estado de sincronización."
+  },
+  {
+    "id": "m2-mobile-offline-sync-ui",
+    "title": "Integración offline y UI de conectividad/pendientes en apps/mobile",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "C",
+    "lane": "agy",
+    "paths": [
+      "apps/mobile/src/ui/sync-banner.tsx",
+      "apps/mobile/src/ui/pending-sync-screen.tsx",
+      "apps/mobile/src/ui/app.tsx",
+      "apps/mobile/src/ui/order-draft-screen.tsx",
+      "apps/mobile/src/mobile-state.ts",
+      "apps/mobile/src/mobile-state.test.ts",
+      "apps/mobile/src/order-submission.ts",
+      "apps/mobile/src/order-submission.test.ts",
+      "apps/mobile/package.json"
+    ],
+    "deps": [
+      "m2-mobile-local-storage-crypto"
+    ],
+    "acceptance": [
+      "apps/mobile conecta DeviceSyncEngine para consultar menú/mesas cacheados, encolar órdenes locales y cobros en efectivo permitidos por matriz, y bloquear acciones restringidas con explicación clara",
+      "muestra banner persistente de conectividad/sucursal/pendientes/último sync y pantalla de cola con detalle de errores, reintentos y conflictos sin alert/confirm/prompt y con targets táctiles >= 44 px",
+      "pnpm --filter @super-restaurant/mobile lint && pnpm --filter @super-restaurant/mobile typecheck && pnpm --filter @super-restaurant/mobile test && pnpm --filter @super-restaurant/mobile build en verde",
+      "verificación visual en viewport 390x844 (Expo web o emulador objetivo; si solo se verifica en Expo web, documentar limitación de dispositivo nativo)"
+    ],
+    "etaMin": 210,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "TODO-P3",
+    "note": "Nivel C (UI móvil). Corre en paralelo con m2-kds-offline-cache y m2-web-offline-pos-cash sin compartir rutas."
+  },
+  {
+    "id": "m2-test-sync-engine-failures",
+    "title": "Pruebas mecánicas de failure injection del motor en packages/sync-engine",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "B",
+    "lane": "opencode",
+    "paths": [
+      "packages/sync-engine/src/failure-injection.test.ts",
+      "packages/sync-engine/package.json"
+    ],
+    "deps": [
+      "m2-sync-contracts-engine"
+    ],
+    "acceptance": [
+      "cubre los escenarios de OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX §5 aplicables al motor: caída antes/después del commit atómico, timeout post-commit con recuperación duplicate, push accepted + pull fallido preservando pullCursor, lotes fuera de orden, 20 reenvíos concurrentes, reloj manipulado, schemaVersion atrasado, cola grande con backoff y rechazo estricto de PAN/CVV/secretos",
+      "valida que operaciones no habilitadas por matriz se bloquean antes de encolar y que eventos financieros pendientes nunca se purgan en compactación",
+      "pnpm --filter @super-restaurant/sync-engine lint && pnpm --filter @super-restaurant/sync-engine typecheck && pnpm --filter @super-restaurant/sync-engine test en verde"
+    ],
+    "etaMin": 120,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "m1-coverage-inventory",
+    "note": "Tests mecánicos en carril opencode. Se desbloquea en la ola 2 inmediatamente después de m2-sync-contracts-engine."
+  },
+  {
+    "id": "m2-test-sync-merge-matrix",
+    "title": "Pruebas exhaustivas de matriz de conflictos y merge determinista en packages/domain",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "B",
+    "lane": "opencode",
+    "paths": [
+      "packages/domain/src/sync-merge-matrix.test.ts",
+      "packages/domain/package.json"
+    ],
+    "deps": [
+      "m2-sync-merge-domain"
+    ],
+    "acceptance": [
+      "ejercita las 15 filas aplicables de OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX §4.2: líneas aditivas en orden abierta, edición concurrente de cantidad/precio/descuento, cancelación vs preparación, KDS doble estación, disputa de mesa, cobro efectivo con misma y distinta idempotencyKey, card_manual, tombstones y orden independiente de occurredAt",
+      "verifica invariantes monetarios sin float (minor units exactos) y cero fusiones LWW en casos financieros o críticos",
+      "pnpm --filter @super-restaurant/domain lint && pnpm --filter @super-restaurant/domain typecheck && pnpm --filter @super-restaurant/domain test en verde"
+    ],
+    "etaMin": 120,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "m1-coverage-inventory",
+    "note": "Tests mecánicos en carril opencode. Corre en paralelo con m2-sync-sql-migrations tras fusionar m2-sync-merge-domain."
+  },
+  {
+    "id": "m2-api-sync-conflicts-tests",
+    "title": "Pruebas de integración HTTP + PostgreSQL 17 de conflictos con dos dispositivos, revocación y aislamiento",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "B",
+    "lane": "opencode",
+    "paths": [
+      "apps/api/src/operations/http-flow-sync-conflicts.ts",
+      "apps/api/src/sync/sync-conflicts.local.test.ts",
+      "apps/api/package.json"
+    ],
+    "deps": [
+      "m2-api-sync-pull-review"
+    ],
+    "acceptance": [
+      "simula dos dispositivos offline contra PostgreSQL 17 desechable en dos restaurantes y dos sucursales: dos dispositivos agregan líneas distintas a una mesa/orden (combinan con total server-side), edición concurrente de misma línea/mesa (conflict/manual_review), cancelación vs KDS preparando (sin retroceso KDS), cobro repetido con misma clave (duplicate, 1 pago) y con clave distinta excedente (manual_review sin doble cobro)",
+      "verifica rechazo de actor y dispositivo revocados, 20 reenvíos concurrentes produciendo un solo efecto, aislamiento total cross-restaurant y cross-branch en push/pull/cursor/dedup/tombstone, y no-visibilidad entre dispositivos antes de sincronizar (no-garantía LAN)",
+      "pnpm --filter @super-restaurant/api test && pnpm --filter @super-restaurant/api run test:sync-conflicts:local en verde en local y pg-verify"
+    ],
+    "etaMin": 180,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "TODO-P3",
+    "note": "Pruebas de integración en carril opencode. Valida los criterios de salida de conflictos multi-dispositivo de plan-autonomo-100.md §1 M2 y TODO Fase 3."
+  },
+  {
+    "id": "m2-e2e-offline-web",
+    "title": "Suite Playwright e2e:offline real (PWA, recarga sin pérdida, reconexión y conflicto 2 dispositivos)",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "B",
+    "lane": "opencode",
+    "paths": [
+      "apps/web/e2e/offline.spec.ts",
+      "apps/web/e2e/offline-conflicts.spec.ts",
+      "apps/web/e2e/fixtures/offline-helpers.ts",
+      "apps/web/playwright.config.ts",
+      "apps/web/playwright.ci.config.ts"
+    ],
+    "deps": [
+      "m2-web-pwa-shell",
+      "m2-web-sync-status-ui",
+      "m2-web-offline-pos-cash"
+    ],
+    "acceptance": [
+      "actualiza apps/web/e2e/offline.spec.ts de modo informativo a aserciones reales de Fase 3: PWA carga offline, menú/mesas cacheados legibles, alta de orden + efectivo offline + ticket pendiente sobreviven recarga completa sin red, acciones prohibidas se bloquean con mensaje claro y al reconectar sincronizan sin duplicar",
+      "apps/web/e2e/offline-conflicts.spec.ts ejecuta dos contextos de navegador aislados offline sobre la misma mesa/orden y verifica la detección visible de conflicto y el flujo de manual_review en /app/sync sin alert/confirm/prompt ni pageerror",
+      "datos semilla deterministas con runId y cleanup obligatorio; cero overlays de Next ni errores de consola",
+      "pnpm --filter @super-restaurant/web e2e:typecheck && pnpm --filter @super-restaurant/web e2e:offline en verde contra API y web locales"
+    ],
+    "etaMin": 210,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "m1-coverage-inventory",
+    "note": "Puerta E2E principal de M2 en carril opencode. Sustituye el spec informativo actual por la verificación offline real requerida por plan-autonomo-100.md §1 M2."
+  },
+  {
+    "id": "m2-docs-offline-matrix-signoff",
+    "title": "Consolidar matriz offline verificada por cliente/operación y runbook de verificación M2",
+    "milestone": "M2",
+    "phase": 3,
+    "level": "D",
+    "lane": "agy",
+    "paths": [
+      "docs/architecture/OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX.md",
+      "docs/runbooks/offline-verification.md"
+    ],
+    "deps": [
+      "m2-kds-offline-cache",
+      "m2-mobile-offline-sync-ui",
+      "m2-test-sync-engine-failures",
+      "m2-test-sync-merge-matrix",
+      "m2-api-sync-conflicts-tests",
+      "m2-e2e-offline-web"
+    ],
+    "acceptance": [
+      "docs/architecture/OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX.md actualiza el estado por cada cliente (Web POS, Mobile, KDS) y operación enlazando exactamente las pruebas automatizadas que lo demuestran y manteniendo explícita la exclusión de Fase 3B/LAN, tarjeta integrada, CFDI, reembolsos e inventario",
+      "docs/runbooks/offline-verification.md documenta comandos reproducibles (e2e:offline, test:sync-conflicts:local, verify:sync-schema:rollback), límites conocidos de plataforma/hardware y checklist de prueba humana de cierre de M2",
+      "solo documentación; git diff --check en verde"
+    ],
+    "etaMin": 90,
+    "attempts": 0,
+    "status": "pending",
+    "sessionId": null,
+    "pr": null,
+    "parent": "M2",
+    "note": "Cierre documental del hito M2 (nivel D). Solo corre cuando todas las piezas técnicas y suites offline están integradas y verdes."
+  }
+]
