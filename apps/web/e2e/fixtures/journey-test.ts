@@ -1,11 +1,11 @@
-import { expect, test as base, type Page, type TestInfo } from "@playwright/test";
+import { expect, test as base, type Locator, type Page, type TestInfo } from "@playwright/test";
 
 import {
   attachDiagnostics, ensureBranchSelected, expectAuthenticated, expectFinalRoute, hasNextErrorOverlay,
   type Diagnostics,
 } from "../helpers.ts";
-import { createJourneyApi, type CaptureTrayItem, type JourneyApi } from "./journey-api.ts";
-import { escapeRegExp, hasJourneySession, NO_SESSION_MESSAGE } from "./journey-env.ts";
+import { createJourneyApi, type CaptureTrayItem, type JourneyApi, type OpenRegisterHandle } from "./journey-api.ts";
+import { escapeRegExp, hasJourneySession, journeyBaseUrl, NO_SESSION_MESSAGE } from "./journey-env.ts";
 
 export interface CleanupStep {
   readonly name: string;
@@ -182,6 +182,64 @@ export async function requireOrderSeed(api: JourneyApi): Promise<void> {
     test.skip(true, "Falta un producto vendible con tamaño o un turno operativo abierto para sembrar la orden");
     throw new Error("Precondiciones de orden incompletas");
   }
+}
+
+/** Skips with a clear message when the branch has no open operational shift. */
+export async function requireActiveShift(api: JourneyApi): Promise<string> {
+  const shift = (await api.listActiveShifts()).shifts.find((candidate) => candidate.status === "open");
+  if (shift === undefined) {
+    test.skip(true, "No hay turno operativo abierto; ábrelo en Caja antes de correr journeys");
+    throw new Error("Sin turno operativo abierto");
+  }
+  return shift.shiftId;
+}
+
+/**
+ * MXN amounts for the checked-in seeded catalog: two decimals, no float math kept beyond the
+ * integer minor units. Accepts the integers the API returns so tests never re-price a sale.
+ */
+export function pesosInput(minorUnits: number): string {
+  return (minorUnits / 100).toFixed(2);
+}
+
+/**
+ * Opens a register through the API and points the browser's cash cookies at it before the UI is
+ * touched. Cleanup is registered first, so a failure after this point still closes the register.
+ */
+export async function openRegisterForRun(
+  page: Page,
+  api: JourneyApi,
+  cleanup: CleanupStack,
+  shiftId: string,
+  openingFloatMinor: number,
+  label: string,
+): Promise<OpenRegisterHandle> {
+  const register = await api.openRegister(shiftId, openingFloatMinor);
+  cleanup.add(`cerrar la caja del ${label}`, () => api.closeRegister(register));
+  const baseUrl = journeyBaseUrl();
+  await page.context().addCookies([
+    { name: "sr-register-id", value: register.registerId, url: baseUrl },
+    { name: "sr-device-id", value: register.deviceId, url: baseUrl },
+    { name: "sr-cash-session-id", value: register.cashRegisterSessionId, url: baseUrl },
+  ]);
+  return register;
+}
+
+/** Opens the order detail panel owned by the URL, the same entry point journey 6 uses. */
+export async function openOrderDetail(page: Page, orderId: string): Promise<Locator> {
+  await page.goto(`/app/orders?orderId=${encodeURIComponent(orderId)}`);
+  await assertAppPage(page, "/app/orders");
+  const panel = page.getByRole("region", { name: "Detalle de la orden" });
+  await expect(panel).toBeVisible({ timeout: 20_000 });
+  return panel;
+}
+
+/** Collects the exact remaining balance in cash from an open checkout page. */
+export async function payExactCash(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Exacto" }).click();
+  await expect(page.getByText(/Cambio después de propina/u)).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Cobrar", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /Cobro registrado|Recibo no disponible/u })).toBeVisible({ timeout: 25_000 });
 }
 
 export async function searchCustomer(page: Page, customerName: string): Promise<void> {

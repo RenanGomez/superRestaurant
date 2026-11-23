@@ -69,12 +69,59 @@ export interface OpenRegisterHandle {
   readonly shiftId: string;
 }
 
+export interface OrderPayment {
+  readonly paymentId: string;
+  readonly method: "cash" | "card_manual" | "transfer";
+  readonly amountMinor: number;
+  readonly tipMinor: number;
+  readonly capturedAt: string;
+}
+
+export interface OrderDetailItem {
+  readonly orderItemId: string;
+  readonly status: string;
+  readonly name: string;
+  readonly quantity: number;
+  readonly lineTotalMinor: number;
+}
+
 export interface OrderDetail {
   readonly orderId: string;
   readonly status: string;
   readonly version: number;
-  readonly payments?: readonly unknown[];
-  readonly totals: { readonly totalMinor: number };
+  readonly items?: readonly OrderDetailItem[];
+  readonly payments?: readonly OrderPayment[];
+  readonly totals: { readonly totalMinor: number; readonly currency?: string };
+}
+
+export interface CashRegisterSummary {
+  readonly cashRegisterSessionId: string;
+  readonly status: "open" | "closed";
+  readonly version: number;
+  readonly currency: string;
+  readonly expectedCashBalanceMinor: number;
+  readonly openingFloatMinor: number;
+  readonly countedClosingBalanceMinor: number | null;
+  readonly differenceMinor: number | null;
+}
+
+export interface CashRegisterReport {
+  readonly cashCapturedMinor: number;
+  readonly cashTipsMinor: number;
+  readonly cardManualCapturedMinor: number;
+  readonly paymentCount: number;
+  readonly register: CashRegisterSummary;
+  readonly transferCapturedMinor?: number;
+}
+
+export interface BranchCourier {
+  readonly displayName: string | null;
+  readonly roles: readonly string[];
+  readonly userId: string;
+}
+
+export interface DeliveryListItem {
+  readonly delivery: { readonly orderId: string; readonly state: string; readonly version: number };
 }
 
 interface JsonObject {
@@ -152,7 +199,9 @@ export class JourneyApi {
    * first mandatory modifier). It exercises the same Order endpoints the backoffice uses and never
    * publishes or edits the catalog.
    */
-  public async seedOrder(): Promise<{ readonly orderId: string; readonly productName: string; readonly totalMinor: number }> {
+  public async seedOrder(
+    options: { readonly channel?: "counter" | "delivery" } = {},
+  ): Promise<{ readonly orderId: string; readonly productName: string; readonly totalMinor: number }> {
     const catalog = (await this.menuCatalog()).catalog;
     if (catalog === null) throw new Error("La sucursal no tiene catálogo publicado");
     const product = catalog.products.find((candidate) => candidate.active
@@ -167,7 +216,7 @@ export class JourneyApi {
     if (shift === undefined) throw new Error("No hay turno operativo abierto");
     const orderId = randomUUID();
     await this.request("POST", "/orders", {
-      ...this.audit(), channel: "counter", currency: catalog.currency, orderId, schemaVersion: 2,
+      ...this.audit(), channel: options.channel ?? "counter", currency: catalog.currency, orderId, schemaVersion: 2,
       scope: this.scope, shiftId: shift.shiftId, tableId: null, timeZone: "America/Hermosillo",
     });
     await this.request("POST", "/orders/items", {
@@ -190,15 +239,20 @@ export class JourneyApi {
     return { cashRegisterSessionId, deviceId: this.deviceId, registerId, shiftId };
   }
 
-  /** Closes the register with counted === expected; a no-op when there is no register or it is closed. */
-  public async closeRegister(handle: OpenRegisterHandle): Promise<void> {
+  /** Reads the authoritative register report of the handle's session. */
+  public async readRegister(handle: OpenRegisterHandle): Promise<CashRegisterReport> {
     const query = new URLSearchParams({
       branchId: this.scope.branchId, cashRegisterSessionId: handle.cashRegisterSessionId,
       deviceId: handle.deviceId, registerId: handle.registerId, restaurantId: this.scope.restaurantId,
     });
-    let report: { readonly register: { readonly status: string; readonly version: number; readonly expectedCashBalanceMinor: number } };
+    return this.request("GET", `/cash-registers/report?${query}`);
+  }
+
+  /** Closes the register with counted === expected; a no-op when there is no register or it is closed. */
+  public async closeRegister(handle: OpenRegisterHandle): Promise<void> {
+    let report: CashRegisterReport;
     try {
-      report = await this.request("GET", `/cash-registers/report?${query}`);
+      report = await this.readRegister(handle);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       // A test that failed before the server persisted the opening leaves no register to close.
@@ -212,6 +266,43 @@ export class JourneyApi {
       countedClosingBalanceMinor: report.register.expectedCashBalanceMinor, reason: null,
       schemaVersion: 1, scope: this.scope,
     });
+  }
+
+  /** Active couriers of the branch; an empty list is a precondition gap for assigning a delivery. */
+  public async listCouriers(): Promise<readonly BranchCourier[]> {
+    const members = await this.request<{ readonly members: readonly BranchCourier[] }>("POST", "/access/branch-members", {
+      roles: ["courier"], schemaVersion: 1, scope: this.scope,
+    });
+    return members.members;
+  }
+
+  /** Delivery rows of the branch, used to locate a run's delivery and its version. */
+  public listDeliveries(): Promise<{ readonly items: readonly DeliveryListItem[] }> {
+    return this.request("POST", "/deliveries/list", { schemaVersion: 1, scope: this.scope });
+  }
+
+  /**
+   * Best-effort cleanup of a delivery this run assigned or dispatched: marks it failed so the Order
+   * is no longer blocked by an active delivery and `cancelIfUnpaid` can close it. Never fails the run
+   * for a delivery that another actor already moved; the reason stays in the log.
+   */
+  public async failActiveDelivery(orderId: string): Promise<void> {
+    let item: DeliveryListItem | undefined;
+    try {
+      item = (await this.listDeliveries()).items.find((candidate) => candidate.delivery.orderId === orderId);
+    } catch (error: unknown) {
+      console.warn(`No se pudo leer la entrega ${orderId} en cleanup:`, error instanceof Error ? error.message : error);
+      return;
+    }
+    if (item === undefined || (item.delivery.state !== "assigned" && item.delivery.state !== "en_route")) return;
+    try {
+      await this.request("POST", "/deliveries/fail", {
+        ...this.audit(), expectedVersion: item.delivery.version, orderId,
+        reason: `E2E cleanup ${this.runId}`, schemaVersion: 1, scope: this.scope,
+      });
+    } catch (error: unknown) {
+      console.warn(`No se pudo marcar fallida la entrega ${orderId} en cleanup:`, error instanceof Error ? error.message : error);
+    }
   }
 
   public readOrder(orderId: string): Promise<OrderDetail> {
