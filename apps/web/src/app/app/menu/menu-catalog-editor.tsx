@@ -230,9 +230,11 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
     if (productId === null || activeTab !== "productos") return;
     const card = document.querySelector<HTMLElement>(`[data-product-id="${CSS.escape(productId)}"]`);
     if (card === null) return;
+    const archivedSection = card.closest("details");
+    if (archivedSection !== null && !archivedSection.open) archivedSection.open = true;
     focusAfterCopy.current = null;
     card.scrollIntoView({ block: "center" });
-    card.querySelector<HTMLInputElement>("input[type=text]")?.focus({ preventScroll: true });
+    card.querySelector<HTMLInputElement>("input:not([type=hidden]):not([type=file])")?.focus({ preventScroll: true });
   }, [activeTab, products]);
   const copyProduct = async (productId: string): Promise<void> => {
     const source = products.find((entry) => entry.productId === productId);
