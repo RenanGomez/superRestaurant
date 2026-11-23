@@ -5,6 +5,7 @@ import type { BranchScope, KdsTicketV1 } from "@super-restaurant/shared-types";
 
 import {
   InMemoryKdsCache,
+  applyServerList,
   buildCacheRecord,
   formatLastReceived,
   overlayPendingTransitions,
@@ -62,6 +63,35 @@ test("a successful server list replaces cached state so an absent ticket disappe
   const next = ticketsForStation(server, expected);
   assert.deepEqual(next.map((item) => item.orderItemId), [kept.orderItemId]);
   assert.equal(next.length < cached.length, true, "the merge is not a union: server truth wins");
+});
+
+test("applyServerList replaces the cached board {A,B} with the server list {A} and persists it", async () => {
+  const cache = new InMemoryKdsCache();
+  const kept = ticket({ orderItemId: "b72573ec-6224-4857-bc4a-f3d1d07b6d83", status: "preparing" });
+  const removed = ticket({ orderItemId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02", status: "sent" });
+  await cache.save(buildCacheRecord({ scope: expected, tickets: [kept, removed], cursor: "v1:5", receivedAt: new Date("2026-11-23T10:05:00.000Z") }));
+
+  const board = applyServerList([kept], expected);
+  assert.deepEqual(board.map((item) => item.orderItemId), [kept.orderItemId], "the absent ticket is not unioned back");
+  assert.equal("localPending" in (board[0] ?? {}), false, "a server list never marks tickets as locally pending");
+
+  await cache.save(buildCacheRecord({ scope: expected, tickets: board, cursor: "v1:6", receivedAt: new Date("2026-11-23T10:06:00.000Z") }));
+  const reloaded = await cache.load(expected);
+  assert.deepEqual(reloaded?.tickets.map((item) => item.orderItemId), [kept.orderItemId]);
+  assert.equal(reloaded?.cursor, "v1:6");
+});
+
+test("applyServerList drops foreign tenants, branches and stations and de-duplicates", () => {
+  const keeper = ticket();
+  const duplicate = ticket({ productName: "Otra" });
+  const crossStation = ticket({ orderItemId: "a72573ec-6224-4857-bc4a-f3d1d07b6d83", stationId: "bar" });
+  const crossRestaurant = ticket({
+    orderItemId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02",
+    scope: { restaurantId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02", branchId: scope.branchId } as unknown as BranchScope,
+  });
+  const board = applyServerList([keeper, duplicate, crossStation, crossRestaurant], expected);
+  assert.deepEqual(board.map((item) => item.orderItemId), [keeper.orderItemId]);
+  assert.equal(board[0]?.productName, "Taco");
 });
 
 test("overlays only local transitions for tickets already received on the station", () => {
@@ -124,6 +154,8 @@ test("drops corrupted or cross-scope cache records instead of rendering them", a
   const cache = new InMemoryKdsCache();
   cache.seedRaw(expected, { schemaVersion: 1, scope: { ...expected, stationId: "bar" }, tickets: [], cursor: null, lastReceivedAt: "2026-11-23T10:05:00.000Z" });
   assert.equal(await cache.load(expected), null);
+  cache.seedRaw(expected, { schemaVersion: 1, scope: { ...expected, restaurantId: "d6f3073e-4d2d-4b9f-90ea-926e5a86ff02" }, tickets: [], cursor: null, lastReceivedAt: "2026-11-23T10:05:00.000Z" });
+  assert.equal(await cache.load(expected), null, "a cache record from another restaurant is never rendered");
   cache.seedRaw(expected, { schemaVersion: 1, scope: expected, tickets: [{ bogus: true }], cursor: null, lastReceivedAt: "2026-11-23T10:05:00.000Z" });
   assert.equal(await cache.load(expected), null);
   cache.seedRaw(expected, { schemaVersion: 1, scope: expected, tickets: [{ ...ticket() }], cursor: null, lastReceivedAt: "not-a-date" });

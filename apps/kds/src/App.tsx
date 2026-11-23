@@ -27,6 +27,7 @@ import {
   KDS_LOCAL_ONLY_COPY,
   KDS_OFFLINE_LOCKED_COPY,
   KDS_OFFLINE_NO_NEW_TICKETS_COPY,
+  applyServerList,
   buildCacheRecord,
   clearKdsCache,
   createKdsCache,
@@ -258,9 +259,9 @@ function KdsBoard({ config, accessToken, actorId, subscription, soundEnabled, on
     const nextIds = new Set(result.tickets.map((ticket) => ticket.orderItemId));
     if (soundEnabledRef.current && seenItems.current !== undefined && result.tickets.some((ticket) => !seenItems.current!.has(ticket.orderItemId))) playArrivalSound();
     seenItems.current = nextIds;
-    const receivedTickets = ticketsForStation(result.tickets, stationScope);
+    const receivedTickets = applyServerList(result.tickets, stationScope);
     serverLoadedRef.current = true;
-    setTickets(orderTicketsForDisplay(receivedTickets));
+    setTickets(receivedTickets);
     setTruncated(result.truncated);
     const receivedAt = new Date();
     setLastReceivedAt(receivedAt.toISOString());
