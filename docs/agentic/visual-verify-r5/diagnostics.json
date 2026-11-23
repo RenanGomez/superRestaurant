@@ -1,0 +1,390 @@
+{
+ "desktop": {
+  "console": [
+   "warning: %c%s%c Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server. background: #e6e6e6;background: light-dark(rgba(0,0,0,0.1), rgba(255,255,255,0.25));color: #000000;color: light-dark(#000000, #ffffff);border-radius: 2px  Server  ",
+   "warning: %c%s%c Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server. background: #e6e6e6;background: light-dark(rgba(0,0,0,0.1), rgba(255,255,255,0.25));color: #000000;color: light-dark(#000000, #ffffff);border-radius: 2px  Server  "
+  ],
+  "pageerrors": [],
+  "failed": [],
+  "http": [],
+  "dialogs": [],
+  "scenarios": {
+   "01-online-sin-puerto": {
+    "bannerCount": 0,
+    "overflow": {
+     "sw": 1280,
+     "iw": 1280
+    }
+   },
+   "02-offline-sin-puerto-cerrado": {
+    "bannerCount": 1,
+    "text": "Sin conexión\n\nSin conexión. Este dispositivo todavía no tiene menú ni mesas guardados; reconecta para preparar la operación sin conexión.\n\nOperaciones que siguen bloqueadas sin conexión",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 958,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 992,
+     "h": 105,
+     "cls": "rounded-xl border p-4 text-sm border-border bg-surface text-text"
+    },
+    "detailsOpen": false,
+    "claimsPaid": false,
+    "cobroLines": [],
+    "overflow": {
+     "sw": 1280,
+     "iw": 1280
+    }
+   },
+   "03-offline-sin-puerto-abierto": {
+    "bannerCount": 1,
+    "text": "Sin conexión\n\nSin conexión. Este dispositivo todavía no tiene menú ni mesas guardados; reconecta para preparar la operación sin conexión.\n\nOperaciones que siguen bloqueadas sin conexión\nEditar órdenes de otro dispositivo: Esta orden se creó en otro dispositivo. Edítala cuando vuelva la conexión.\nDescuentos, cancelaciones o reaperturas que exigen supervisor: Esta acción requiere autorización de supervisor con conexión.\nCierre o reapertura de caja: Esta operación requiere conexión con el servidor.\nReembolsos y devoluciones: Esta operación no está disponible sin conexión en esta versión.\nTimbrado de CFDI: Esta operación no está disponible sin conexión en esta versión.\nAjustes o recepción de inventario: Esta operación no está disponible sin conexión en esta versión.\nCobro con terminal o pasarela integrada: Esta operación no está disponible sin conexión en esta versión.",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 958,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 992,
+     "h": 267,
+     "cls": "rounded-xl border p-4 text-sm border-border bg-surface text-text"
+    },
+    "detailsOpen": true,
+    "claimsPaid": false,
+    "cobroLines": [
+     "Cobro con terminal o pasarela integrada: Esta operación no está disponible sin conexión en esta versión."
+    ],
+    "overflow": {
+     "sw": 1280,
+     "iw": 1280
+    }
+   },
+   "04-offline-puerto-sin-commit-cerrado": {
+    "bannerCount": 1,
+    "text": "Trabajando sin conexión\n\nGuardado en este dispositivo. Pendiente de sincronizar (solo este dispositivo); cocina y otros equipos lo verán al reconectar.\n\nMenú en caché · versión 4 · actualizado 23-nov, 13:00\nMesas en caché · versión 2 · actualizado 23-nov, 13:00\nPuedes consultar el menú y las mesas guardados en este dispositivo.\nCrear órdenes locales y agregar líneas a las órdenes de este dispositivo.\nPuedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo.\nOperaciones que siguen bloqueadas sin conexión",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 958,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 992,
+     "h": 225,
+     "cls": "rounded-xl border p-4 text-sm border-selected bg-accent-soft text-text"
+    },
+    "detailsOpen": false,
+    "claimsPaid": false,
+    "cobroLines": [
+     "Puedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo."
+    ],
+    "overflow": {
+     "sw": 1280,
+     "iw": 1280
+    }
+   },
+   "05-offline-puerto-sin-commit-abierto": {
+    "bannerCount": 1,
+    "text": "Trabajando sin conexión\n\nGuardado en este dispositivo. Pendiente de sincronizar (solo este dispositivo); cocina y otros equipos lo verán al reconectar.\n\nMenú en caché · versión 4 · actualizado 23-nov, 13:00\nMesas en caché · versión 2 · actualizado 23-nov, 13:00\nPuedes consultar el menú y las mesas guardados en este dispositivo.\nCrear órdenes locales y agregar líneas a las órdenes de este dispositivo.\nPuedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo.\nOperaciones que siguen bloqueadas sin conexión\nEditar órdenes de otro dispositivo: Esta orden se creó en otro dispositivo. Edítala cuando vuelva la conexión.\nDescuentos, cancelaciones o reaperturas que exigen supervisor: Esta acción requiere autorización de supervisor con conexión.\nCierre o reapertura de caja: Esta operación requiere conexión con el servidor.\nReembolsos y devoluciones: Esta operación no está disponible sin conexión en esta versión.\nTimbrado de CFDI: Esta operación no está disponible sin conexión en esta versión.\nAjustes o recepción de inventario: Esta operación no está disponible sin conexión en esta versión.\nCobro con terminal o pasarela integrada: Esta operación no está disponible sin conexión en esta versión.",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 958,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 992,
+     "h": 387,
+     "cls": "rounded-xl border p-4 text-sm border-selected bg-accent-soft text-text"
+    },
+    "detailsOpen": true,
+    "claimsPaid": false,
+    "cobroLines": [
+     "Puedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo.",
+     "Cobro con terminal o pasarela integrada: Esta operación no está disponible sin conexión en esta versión."
+    ],
+    "overflow": {
+     "sw": 1280,
+     "iw": 1280
+    }
+   },
+   "06-offline-puerto-con-commit-cerrado": {
+    "bannerCount": 1,
+    "text": "Trabajando sin conexión\n\nGuardado en este dispositivo. Pendiente de sincronizar (solo este dispositivo); cocina y otros equipos lo verán al reconectar.\n\nMenú en caché · versión 4 · actualizado 23-nov, 13:00\nMesas en caché · versión 2 · actualizado 23-nov, 13:00\nPuedes consultar el menú y las mesas guardados en este dispositivo.\nCrear órdenes locales y agregar líneas a las órdenes de este dispositivo.\nPuedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo.\nOperaciones que siguen bloqueadas sin conexión",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 958,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 992,
+     "h": 225,
+     "cls": "rounded-xl border p-4 text-sm border-selected bg-accent-soft text-text"
+    },
+    "detailsOpen": false,
+    "claimsPaid": false,
+    "cobroLines": [
+     "Puedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo."
+    ],
+    "overflow": {
+     "sw": 1280,
+     "iw": 1280
+    }
+   },
+   "07-offline-puerto-con-commit-abierto": {
+    "bannerCount": 1,
+    "text": "Trabajando sin conexión\n\nGuardado en este dispositivo. Pendiente de sincronizar (solo este dispositivo); cocina y otros equipos lo verán al reconectar.\n\nMenú en caché · versión 4 · actualizado 23-nov, 13:00\nMesas en caché · versión 2 · actualizado 23-nov, 13:00\nPuedes consultar el menú y las mesas guardados en este dispositivo.\nCrear órdenes locales y agregar líneas a las órdenes de este dispositivo.\nPuedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo.\nOperaciones que siguen bloqueadas sin conexión\nEditar órdenes de otro dispositivo: Esta orden se creó en otro dispositivo. Edítala cuando vuelva la conexión.\nDescuentos, cancelaciones o reaperturas que exigen supervisor: Esta acción requiere autorización de supervisor con conexión.\nCierre o reapertura de caja: Esta operación requiere conexión con el servidor.\nReembolsos y devoluciones: Esta operación no está disponible sin conexión en esta versión.\nTimbrado de CFDI: Esta operación no está disponible sin conexión en esta versión.\nAjustes o recepción de inventario: Esta operación no está disponible sin conexión en esta versión.\nCobro con terminal o pasarela integrada: Esta operación no está disponible sin conexión en esta versión.",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 958,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 992,
+     "h": 387,
+     "cls": "rounded-xl border p-4 text-sm border-selected bg-accent-soft text-text"
+    },
+    "detailsOpen": true,
+    "claimsPaid": false,
+    "cobroLines": [
+     "Puedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo.",
+     "Cobro con terminal o pasarela integrada: Esta operación no está disponible sin conexión en esta versión."
+    ],
+    "overflow": {
+     "sw": 1280,
+     "iw": 1280
+    }
+   },
+   "08-online-puerto-sync-bloqueado": {
+    "bannerCount": 1,
+    "text": "Sincronización pendiente\n\nLa sincronización está bloqueada. Revisa /app/sync antes de continuar.\n\nOperaciones que siguen bloqueadas sin conexión",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 958,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 992,
+     "h": 105,
+     "cls": "rounded-xl border p-4 text-sm border-error bg-error-bg text-error"
+    },
+    "detailsOpen": false,
+    "claimsPaid": false,
+    "cobroLines": [],
+    "overflow": {
+     "sw": 1280,
+     "iw": 1280
+    }
+   },
+   "09-online-regreso-sin-puerto": {
+    "bannerCount": 0,
+    "overflow": {
+     "sw": 1280,
+     "iw": 1280
+    }
+   }
+  },
+  "afterConfirmUrl": "http://localhost:8093/app/tables",
+  "captureUrl": "http://localhost:8093/app/capture"
+ },
+ "mobile": {
+  "console": [
+   "warning: %c%s%c Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server. background: #e6e6e6;background: light-dark(rgba(0,0,0,0.1), rgba(255,255,255,0.25));color: #000000;color: light-dark(#000000, #ffffff);border-radius: 2px  Server  ",
+   "warning: %c%s%c Using the user object as returned from supabase.auth.getSession() or from some supabase.auth.onAuthStateChange() events could be insecure! This value comes directly from the storage medium (usually cookies on the server) and may not be authentic. Use supabase.auth.getUser() instead which authenticates the data by contacting the Supabase Auth server. background: #e6e6e6;background: light-dark(rgba(0,0,0,0.1), rgba(255,255,255,0.25));color: #000000;color: light-dark(#000000, #ffffff);border-radius: 2px  Server  "
+  ],
+  "pageerrors": [],
+  "failed": [],
+  "http": [],
+  "dialogs": [],
+  "scenarios": {
+   "01-online-sin-puerto": {
+    "bannerCount": 0,
+    "overflow": {
+     "sw": 390,
+     "iw": 390
+    }
+   },
+   "02-offline-sin-puerto-cerrado": {
+    "bannerCount": 1,
+    "text": "Sin conexión\n\nSin conexión. Este dispositivo todavía no tiene menú ni mesas guardados; reconecta para preparar la operación sin conexión.\n\nOperaciones que siguen bloqueadas sin conexión",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 324,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 358,
+     "h": 145,
+     "cls": "rounded-xl border p-4 text-sm border-border bg-surface text-text"
+    },
+    "detailsOpen": false,
+    "claimsPaid": false,
+    "cobroLines": [],
+    "overflow": {
+     "sw": 390,
+     "iw": 390
+    }
+   },
+   "03-offline-sin-puerto-abierto": {
+    "bannerCount": 1,
+    "text": "Sin conexión\n\nSin conexión. Este dispositivo todavía no tiene menú ni mesas guardados; reconecta para preparar la operación sin conexión.\n\nOperaciones que siguen bloqueadas sin conexión\nEditar órdenes de otro dispositivo: Esta orden se creó en otro dispositivo. Edítala cuando vuelva la conexión.\nDescuentos, cancelaciones o reaperturas que exigen supervisor: Esta acción requiere autorización de supervisor con conexión.\nCierre o reapertura de caja: Esta operación requiere conexión con el servidor.\nReembolsos y devoluciones: Esta operación no está disponible sin conexión en esta versión.\nTimbrado de CFDI: Esta operación no está disponible sin conexión en esta versión.\nAjustes o recepción de inventario: Esta operación no está disponible sin conexión en esta versión.\nCobro con terminal o pasarela integrada: Esta operación no está disponible sin conexión en esta versión.",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 324,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 358,
+     "h": 474,
+     "cls": "rounded-xl border p-4 text-sm border-border bg-surface text-text"
+    },
+    "detailsOpen": true,
+    "claimsPaid": false,
+    "cobroLines": [
+     "Cobro con terminal o pasarela integrada: Esta operación no está disponible sin conexión en esta versión."
+    ],
+    "overflow": {
+     "sw": 390,
+     "iw": 390
+    }
+   },
+   "04-offline-puerto-sin-commit-cerrado": {
+    "bannerCount": 1,
+    "text": "Trabajando sin conexión\n\nGuardado en este dispositivo. Pendiente de sincronizar (solo este dispositivo); cocina y otros equipos lo verán al reconectar.\n\nMenú en caché · versión 4 · actualizado 23-nov, 13:00\nMesas en caché · versión 2 · actualizado 23-nov, 13:00\nPuedes consultar el menú y las mesas guardados en este dispositivo.\nCrear órdenes locales y agregar líneas a las órdenes de este dispositivo.\nPuedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo.\nOperaciones que siguen bloqueadas sin conexión",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 324,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 358,
+     "h": 358,
+     "cls": "rounded-xl border p-4 text-sm border-selected bg-accent-soft text-text"
+    },
+    "detailsOpen": false,
+    "claimsPaid": false,
+    "cobroLines": [
+     "Puedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo."
+    ],
+    "overflow": {
+     "sw": 390,
+     "iw": 390
+    }
+   },
+   "05-offline-puerto-sin-commit-abierto": {
+    "bannerCount": 1,
+    "text": "Trabajando sin conexión\n\nGuardado en este dispositivo. Pendiente de sincronizar (solo este dispositivo); cocina y otros equipos lo verán al reconectar.\n\nMenú en caché · versión 4 · actualizado 23-nov, 13:00\nMesas en caché · versión 2 · actualizado 23-nov, 13:00\nPuedes consultar el menú y las mesas guardados en este dispositivo.\nCrear órdenes locales y agregar líneas a las órdenes de este dispositivo.\nPuedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo.\nOperaciones que siguen bloqueadas sin conexión\nEditar órdenes de otro dispositivo: Esta orden se creó en otro dispositivo. Edítala cuando vuelva la conexión.\nDescuentos, cancelaciones o reaperturas que exigen supervisor: Esta acción requiere autorización de supervisor con conexión.\nCierre o reapertura de caja: Esta operación requiere conexión con el servidor.\nReembolsos y devoluciones: Esta operación no está disponible sin conexión en esta versión.\nTimbrado de CFDI: Esta operación no está disponible sin conexión en esta versión.\nAjustes o recepción de inventario: Esta operación no está disponible sin conexión en esta versión.\nCobro con terminal o pasarela integrada: Esta operación no está disponible sin conexión en esta versión.",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 324,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 358,
+     "h": 687,
+     "cls": "rounded-xl border p-4 text-sm border-selected bg-accent-soft text-text"
+    },
+    "detailsOpen": true,
+    "claimsPaid": false,
+    "cobroLines": [
+     "Puedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo.",
+     "Cobro con terminal o pasarela integrada: Esta operación no está disponible sin conexión en esta versión."
+    ],
+    "overflow": {
+     "sw": 390,
+     "iw": 390
+    }
+   },
+   "06-offline-puerto-con-commit-cerrado": {
+    "bannerCount": 1,
+    "text": "Trabajando sin conexión\n\nGuardado en este dispositivo. Pendiente de sincronizar (solo este dispositivo); cocina y otros equipos lo verán al reconectar.\n\nMenú en caché · versión 4 · actualizado 23-nov, 13:00\nMesas en caché · versión 2 · actualizado 23-nov, 13:00\nPuedes consultar el menú y las mesas guardados en este dispositivo.\nCrear órdenes locales y agregar líneas a las órdenes de este dispositivo.\nPuedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo.\nOperaciones que siguen bloqueadas sin conexión",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 324,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 358,
+     "h": 358,
+     "cls": "rounded-xl border p-4 text-sm border-selected bg-accent-soft text-text"
+    },
+    "detailsOpen": false,
+    "claimsPaid": false,
+    "cobroLines": [
+     "Puedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo."
+    ],
+    "overflow": {
+     "sw": 390,
+     "iw": 390
+    }
+   },
+   "07-offline-puerto-con-commit-abierto": {
+    "bannerCount": 1,
+    "text": "Trabajando sin conexión\n\nGuardado en este dispositivo. Pendiente de sincronizar (solo este dispositivo); cocina y otros equipos lo verán al reconectar.\n\nMenú en caché · versión 4 · actualizado 23-nov, 13:00\nMesas en caché · versión 2 · actualizado 23-nov, 13:00\nPuedes consultar el menú y las mesas guardados en este dispositivo.\nCrear órdenes locales y agregar líneas a las órdenes de este dispositivo.\nPuedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo.\nOperaciones que siguen bloqueadas sin conexión\nEditar órdenes de otro dispositivo: Esta orden se creó en otro dispositivo. Edítala cuando vuelva la conexión.\nDescuentos, cancelaciones o reaperturas que exigen supervisor: Esta acción requiere autorización de supervisor con conexión.\nCierre o reapertura de caja: Esta operación requiere conexión con el servidor.\nReembolsos y devoluciones: Esta operación no está disponible sin conexión en esta versión.\nTimbrado de CFDI: Esta operación no está disponible sin conexión en esta versión.\nAjustes o recepción de inventario: Esta operación no está disponible sin conexión en esta versión.\nCobro con terminal o pasarela integrada: Esta operación no está disponible sin conexión en esta versión.",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 324,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 358,
+     "h": 687,
+     "cls": "rounded-xl border p-4 text-sm border-selected bg-accent-soft text-text"
+    },
+    "detailsOpen": true,
+    "claimsPaid": false,
+    "cobroLines": [
+     "Puedes cobrar en efectivo sin conexión; el movimiento queda pendiente en este dispositivo.",
+     "Cobro con terminal o pasarela integrada: Esta operación no está disponible sin conexión en esta versión."
+    ],
+    "overflow": {
+     "sw": 390,
+     "iw": 390
+    }
+   },
+   "08-online-puerto-sync-bloqueado": {
+    "bannerCount": 1,
+    "text": "Sincronización pendiente\n\nLa sincronización está bloqueada. Revisa /app/sync antes de continuar.\n\nOperaciones que siguen bloqueadas sin conexión",
+    "hasReachableSummaryByKeyboard": true,
+    "summary": {
+     "w": 324,
+     "h": 18.6
+    },
+    "summaryInViewportOrReachable": true,
+    "banner": {
+     "w": 358,
+     "h": 125,
+     "cls": "rounded-xl border p-4 text-sm border-error bg-error-bg text-error"
+    },
+    "detailsOpen": false,
+    "claimsPaid": false,
+    "cobroLines": [],
+    "overflow": {
+     "sw": 390,
+     "iw": 390
+    }
+   },
+   "09-online-regreso-sin-puerto": {
+    "bannerCount": 0,
+    "overflow": {
+     "sw": 390,
+     "iw": 390
+    }
+   }
+  },
+  "afterConfirmUrl": "http://localhost:8093/app/tables",
+  "captureUrl": "http://localhost:8093/app/capture"
+ }
+}
