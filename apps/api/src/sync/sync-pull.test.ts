@@ -3,7 +3,7 @@ import test from "node:test";
 import { SyncCursor } from "./sync-cursor.js";
 
 const scope = { actorId: "actor", restaurantId: "restaurant", branchId: "branch" };
-test("cursor secret is required at construction", () => { assert.throws(() => new SyncCursor(""), /SYNC_CURSOR_SECRET_INVALID/u); assert.throws(() => new SyncCursor(" ".repeat(32)), /SYNC_CURSOR_SECRET_INVALID/u); });
+test("cursor secret is required at construction", () => { assert.throws(() => new SyncCursor(""), /SYNC_CURSOR_SECRET_INVALID/u); assert.throws(() => new SyncCursor(" ".repeat(32)), /SYNC_CURSOR_SECRET_INVALID/u); assert.throws(() => new SyncCursor("a".repeat(31)), /SYNC_CURSOR_SECRET_INVALID/u); assert.throws(() => new SyncCursor("?".repeat(16)), /SYNC_CURSOR_SECRET_INVALID/u); assert.doesNotThrow(() => new SyncCursor("a".repeat(32))); });
 test("cursor binds actor and scope and expires", () => {
   let now = 0;
   const cursor = new SyncCursor("a".repeat(32), () => now);

@@ -5,7 +5,7 @@ interface Payload extends CursorScope { readonly v: 1; readonly sequence: string
 
 export class SyncCursor {
   public constructor(private readonly key: string, private readonly now: () => number = Date.now) {
-    if (key.trim().length === 0 || Buffer.byteLength(key, "utf8") < 32) throw new Error("SYNC_CURSOR_SECRET_INVALID");
+    if (key.trim().length === 0 || Array.from(key).length < 32) throw new Error("SYNC_CURSOR_SECRET_INVALID");
   }
   public encode(scope: CursorScope, sequence: string): string {
     const body = Buffer.from(JSON.stringify({ v: 1, ...scope, sequence, expires: this.now() + 30 * 86400_000 })).toString("base64url");
