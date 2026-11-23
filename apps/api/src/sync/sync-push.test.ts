@@ -38,3 +38,16 @@ test("a mismatched batch scope is rejected before execution", async () => {
   await assert.rejects(service.push("token", { ...request, scope: { restaurantId, branchId: "77777777-7777-4777-8777-777777777777" } }));
   assert.equal(called, false);
 });
+
+test("a transient failure stops later events from advancing the device sequence", async () => {
+  const attempted: string[] = [];
+  const omitted: string[] = [];
+  const service = new SyncPushService({ execute: async (_token, item) => {
+    attempted.push(item.eventId);
+    throw Object.assign(new Error("lock timeout"), { code: "55P03" });
+  } }, { omitted: (facts) => { omitted.push(facts.code); } });
+  const later = { ...event, eventId: "77777777-7777-4777-8777-777777777777", idempotencyKey: "key-2", localSequence: 2 };
+  assert.deepEqual((await service.push("token", { ...request, events: [event, later] })).results, []);
+  assert.deepEqual(attempted, [event.eventId]);
+  assert.deepEqual(omitted, ["CONCURRENT_RETRY", "DEVICE_SEQUENCE_BLOCKED"]);
+});
