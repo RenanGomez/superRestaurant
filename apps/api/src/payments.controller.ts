@@ -21,32 +21,32 @@ import type {
   PaymentCollectionSummaryV1,
 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { FinancialApplicationError, FinancialService } from "./payments.js";
 
 @Controller()
 export class PaymentsController {
   public constructor(@Inject(FinancialService) private readonly finances: FinancialService) {}
 
-  @Post("cash-registers/open")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("cash-registers/open")
   @Header("Cache-Control", "private, no-store")
   public open(@Req() request: unknown, @Body() body: unknown): Promise<CashRegisterSummaryV1> {
     return this.map(() => this.finances.open(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("payments/collect")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("payments/collect")
   @Header("Cache-Control", "private, no-store")
   public collect(@Req() request: unknown, @Body() body: unknown): Promise<PaymentCollectionSummaryV1> {
     return this.map(() => this.finances.collect(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("payments/quote")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("payments/quote")
   @Header("Cache-Control", "private, no-store")
   public quote(@Req() request: unknown, @Body() body: unknown): Promise<CashPaymentQuoteV1> {
     return this.map(() => this.finances.quote(getAuthenticatedPrincipal(request), body));
   }
 
-  @Post("cash-registers/close")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("cash-registers/close")
   @Header("Cache-Control", "private, no-store")
   public close(@Req() request: unknown, @Body() body: unknown): Promise<CashRegisterSummaryV1> {
     return this.map(() => this.finances.close(getAuthenticatedPrincipal(request), body));

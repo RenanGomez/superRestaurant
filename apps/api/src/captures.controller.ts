@@ -4,7 +4,7 @@ import {
 } from "@nestjs/common";
 import type { CaptureAssignmentDirectoryV1, CaptureLineQuoteResultV1, CaptureDeliveryInstructionSuggestionsV1, CaptureMutationResultV1, CaptureRecoveryPreferenceResultV1, CaptureWorkspaceV1, CaptureWorkspaceV2, CaptureWorkspaceV3, CaptureWorkspaceV4, CaptureWorkspaceV5, CaptureWorkTrayResultV1, CaptureWorkTrayResultV2, RenewCaptureLeaseResultV1, SetCaptureDeliveryInstructionsResultV1 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { CaptureApplicationError, CaptureAssignmentDirectoryService, CaptureAttentionService, CaptureConfirmationService, CaptureCustomerService, CaptureDeliveryInstructionsService, CaptureDeliveryQuoteInvalidError, CaptureDeliveryQuoteService, CapturePaymentIntentInsufficientError, CapturePaymentIntentNoLinesError, CapturePaymentIntentService, CapturePaymentIntentStaleError, CapturePaymentIntentUnpricedError, CaptureFulfillmentService, CaptureLeaseTakenError, CaptureLineQuoteRejectedError, CaptureNoSaleService, CaptureSelectionPlanService, CaptureService, CaptureTrayService } from "./captures.js";
 
 @Controller("captures")
@@ -43,7 +43,7 @@ export class CapturesController {
     return this.execute(() => this.tray.list(principal, body));
   }
 
-  @Post()
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post()
   @HttpCode(201)
   @Header("Cache-Control", "private, no-store")
   public async createDraft(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
@@ -51,7 +51,7 @@ export class CapturesController {
     return this.execute(() => this.captures.createDraft(principal, body));
   }
 
-  @Post("autosave")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("autosave")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async autosaveDraft(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
@@ -67,28 +67,28 @@ export class CapturesController {
     return this.execute(() => this.captures.readWorkspace(principal, body));
   }
 
-  @Post("hold")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("hold")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async hold(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.attention.mutateAttention(principal, "capture.held", body));
   }
-  @Post("customer")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("customer")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async setCustomer(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.customer.setCustomer(principal, body));
   }
-  @Post("fulfillment")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("fulfillment")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async setFulfillment(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.fulfillment.setFulfillment(principal, body));
   }
-  @Post("delivery-instructions")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("delivery-instructions")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async setDeliveryInstructions(
@@ -108,14 +108,14 @@ export class CapturesController {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.deliveryInstructions.listSuggestions(principal, body));
   }
-  @Post("confirm")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("confirm")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async confirm(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.confirmation.confirm(principal, body));
   }
-  @Post("no-sale")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("no-sale")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async closeNoSale(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
@@ -150,42 +150,42 @@ export class CapturesController {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.paymentIntent.setPaymentIntent(principal, body));
   }
-  @Post("claim")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("claim")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async claim(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.attention.mutateAttention(principal, "capture.claimed", body));
   }
-  @Post("resume")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("resume")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async resume(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.attention.mutateAttention(principal, "capture.resumed", body));
   }
-  @Post("transfer")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("transfer")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async transfer(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.attention.mutateAttention(principal, "capture.transferred", body));
   }
-  @Post("takeover")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("takeover")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async takeover(@Req() request: unknown, @Body() body: unknown): Promise<CaptureMutationResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.attention.mutateAttention(principal, "capture.taken_over", body));
   }
-  @Post("lease/renew")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("lease/renew")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async renewLease(@Req() request: unknown, @Body() body: unknown): Promise<RenewCaptureLeaseResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.attention.renewLease(principal, body));
   }
-  @Post("recovery-preference")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("recovery-preference")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async setRecoveryPreference(@Req() request: unknown, @Body() body: unknown): Promise<CaptureRecoveryPreferenceResultV1> {

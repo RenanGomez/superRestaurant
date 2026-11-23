@@ -1,7 +1,7 @@
 import { Body, Controller, ForbiddenException, Header, HttpCode, Inject, Post, Req } from "@nestjs/common";
 import { parseBranchScope, type BranchAuthorizationV1 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 
 @Controller("access/branch")
@@ -10,7 +10,7 @@ export class BranchAccessController {
     @Inject(MembershipAuthorizationService) private readonly authorization: MembershipAuthorizationService,
   ) {}
 
-  @Post()
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post()
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async selectBranch(@Req() request: unknown, @Body() body: unknown): Promise<BranchAuthorizationV1> {

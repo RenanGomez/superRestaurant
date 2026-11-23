@@ -1,7 +1,7 @@
 import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, Header, Inject, Post, Query, Req, ServiceUnavailableException } from "@nestjs/common";
 import type { OpenOperationalShiftResultV1, OperationalShiftListV1 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { OperationalShiftApplicationError, OperationalShiftService } from "./operational-shifts.js";
 
 @Controller("shifts")
@@ -18,7 +18,7 @@ export class OperationalShiftsController {
     return this.map(() => this.shifts.listActive(getAuthenticatedPrincipal(request), { branchId, restaurantId }));
   }
 
-  @Post("open")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("open")
   @Header("Cache-Control", "private, no-store")
   public open(@Req() request: unknown, @Body() body: unknown): Promise<OpenOperationalShiftResultV1> {
     return this.map(() => this.shifts.open(getAuthenticatedPrincipal(request), body));

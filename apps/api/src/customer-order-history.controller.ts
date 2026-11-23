@@ -21,7 +21,7 @@ import type {
   CustomerRepeatOrderPreviewV1,
 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import {
   CustomerOrderHistoryError,
   CustomerOrderHistoryService,
@@ -52,7 +52,7 @@ export class CustomerOrderHistoryController {
     ));
   }
 
-  @Post(":customerId/orders/:orderId/repeat")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post(":customerId/orders/:orderId/repeat")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public repeat(
