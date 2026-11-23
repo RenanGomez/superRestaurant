@@ -17,6 +17,7 @@ import {
   type OfflineCashPreconditions,
 } from "../order-submission.js";
 import { createMobileOfflineTransport, openMobileOfflineRuntime } from "../offline/expo-offline.js";
+import type { MobileOfflineRuntime } from "../offline/expo-offline.js";
 import { DeviceSyncEngine, type OutboxEntry } from "@super-restaurant/sync-engine";
 import {
   isSyncFinancialEntityTypeV1,
@@ -81,6 +82,12 @@ export interface MobileSyncBridge {
   readonly snapshot: MobileSyncSnapshot;
   readonly refresh: () => void;
   readonly retryAll: () => void;
+  /**
+   * Sign-out hook of the durable store. It closes the push gate synchronously and
+   * then purges read caches, or locks the store while keeping pending evidence
+   * encrypted (ADR-005 §5). Never wipes what the engine has not reconciled.
+   */
+  readonly releaseLocalData: () => Promise<void>;
   readonly queueOrder: (plan: OrderDeliveryPlanV1) => Promise<MobileOfflineQueueResult>;
   readonly queueCash: (
     cash: OfflineCashCollectInput,
@@ -119,6 +126,7 @@ export function useMobileSyncBridge(options: {
 
   const [snapshot, setSnapshot] = useState<MobileSyncSnapshot>(EMPTY_MOBILE_SYNC_SNAPSHOT);
   const engineRef = useRef<DeviceSyncEngine | undefined>(undefined);
+  const runtimeRef = useRef<MobileOfflineRuntime | undefined>(undefined);
   const scopeRef = useRef<BranchScope | undefined>(undefined);
   const tokenRef = useRef<string | undefined>(options.session?.accessToken);
   const actorRef = useRef<string | undefined>(userId);
@@ -172,6 +180,12 @@ export function useMobileSyncBridge(options: {
       const failed = result.push.failureCode !== null || result.pull.status === "failed";
       if (revoked) {
         connectivityRef.current = "sync_blocked";
+        // AUTH_REVOKED / UNAUTHORIZED_SCOPE: lock the store and drop the revoked
+        // read replica, but keep every pending event encrypted for reconciliation.
+        const runtime = runtimeRef.current;
+        if (runtime !== undefined) {
+          await runtime.session.handleScopeRevocation(active).catch(() => undefined);
+        }
       } else if (failed) {
         connectivityRef.current = "offline";
       } else {
@@ -207,6 +221,7 @@ export function useMobileSyncBridge(options: {
           await runtime.close();
           return;
         }
+        runtimeRef.current = runtime;
         const engine = new DeviceSyncEngine({
           clientType: "mobile",
           connectivity: () => connectivityRef.current,
@@ -237,6 +252,7 @@ export function useMobileSyncBridge(options: {
       alive = false;
       clearInterval(timer);
       engineRef.current = undefined;
+      runtimeRef.current = undefined;
       storageRef.current = false;
       if (runtime !== undefined) void runtime.close();
     };
@@ -307,10 +323,20 @@ export function useMobileSyncBridge(options: {
     return result;
   }, [refresh, syncNow]);
 
+  const releaseLocalData = useCallback(async (): Promise<void> => {
+    const runtime = runtimeRef.current;
+    if (runtime === undefined) return;
+    // Synchronous stop first, then the ADR-005 §5 policy: purge caches when
+    // nothing is pending, otherwise lock and keep every pending event encrypted.
+    runtime.session.closePushGate();
+    await runtime.session.prepareSignOut();
+  }, []);
+
   return Object.freeze({
     queueCash,
     queueOrder,
     refresh: (): void => { void refresh(); },
+    releaseLocalData,
     retryAll: (): void => { void syncNow(); },
     snapshot,
   });

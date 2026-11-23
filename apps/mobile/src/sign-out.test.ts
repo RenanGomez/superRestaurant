@@ -106,6 +106,23 @@ test("a sign-out that rejects leaves the session closed and raises nothing", asy
   }
 });
 
+test("a sign-out releases the offline store through its local-data hook", async () => {
+  const sink = recorder();
+  signedInOnBranchA(sink);
+  let releases = 0;
+  endMobileSession({
+    dispatch: sink.dispatch,
+    notice: undefined,
+    releaseLocalData: () => { releases += 1; return Promise.resolve(); },
+    signOut: () => Promise.resolve(),
+  });
+
+  // The screen closes before the store answers, and the hook still runs once.
+  assert.equal(mobileScreen(sink.state), "signIn");
+  await new Promise((resolve) => { setTimeout(resolve, 10); });
+  assert.equal(releases, 1);
+});
+
 test("a port that throws synchronously does not break the local sign-out", () => {
   const sink = recorder();
   signedInOnBranchA(sink);
