@@ -41,3 +41,14 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 - P2: el efecto de cajas depende de `state.branch`/`state.shift` por identidad; depender de `state.shift?.shiftId` y `state.branch?.timeZone` para no borrar la caja elegida.
 - P2: `sendPending` reintenta con expectedVersion viejo si el fallo no es 409; confirmar codigo de conflicto del API y limpiar tambien ahi.
 - P3: etiqueta de caja ilegible (8 chars de UUID); ocupacion solo en texto sin color/icono; formato de props; falta prueba de `order-kitchen` y `register-selection`; verificacion visual 390x844 pendiente.
+
+## PR #51 (confirm_capture_draft_v3 pizza v2 + cobertura de zonas) — P2/P3
+
+- P2: la paridad de moneda de `capture_delivery_manual_fees` y `frozen_quote` contra `p_order->>'currency'` no se valida incondicionalmente (migración 20261123000500, ~599-625).
+- P2: `deliveryCharge.amount.amountMinor` se compara con `::text::numeric`; acepta `2500.0` y puede lanzar 22P02. Validar `jsonb_typeof = 'number'` y regex de entero.
+- P2: `enforce_delivery_zone_coverage_nonempty()` lee `app.delivery_zones` sin `FOR SHARE` (write-skew con SQL directo concurrente).
+- P3: la migración 000500 se nombra 000400 en HANDOFF y en un comentario de `delivery_zones_invariants.sql`.
+- P3: `delivery_quote_expired` ahora aplica también a cotizaciones con tarifa manual (cambio de comportamiento; reflejar en smoke).
+- P3: falta prueba negativa de fuga entre restaurantes/sucursales específica de `confirm_capture_draft_v3`.
+- P3: `CREATE CONSTRAINT TRIGGER` no revalida zonas activas preexistentes solo con `localities`.
+- Protocolo pendiente: la migración no está aplicada en remoto (rollback-only, dry-run y staging primero, §19.6).
