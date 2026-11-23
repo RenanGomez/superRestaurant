@@ -34,3 +34,10 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 - **P2 · verificador histórico de Capture:** `verify:capture-schema:rollback` ejecuta la prueba actual de dirección incompleta antes de la migración `20260917000100`; la función histórica devuelve `conflict` y la prueba espera `rejected`. No se ejecuta en `pg-verify`; reconciliar la secuencia sin modificar migraciones aplicadas.
 - Los verificadores rollback de selección, pizza V2 y transferencia pasaron localmente. No se aplicaron migraciones remotas.
 - **P3 · printing Bluetooth (#42):** `declare function setTimeout` manual en bluetooth-printer.ts:14 (usar types node); backoff 3 intentos/100-200 ms fijo, hacerlo configurable con el adaptador movil real; el error de conexion descarta la causa (registrar en el adaptador de plataforma). Sin adaptador BLE/SPP real ni prueba con impresora fisica.
+
+## PR #47 (mobile mesas/comanda/selector de caja) — P2/P3 de revision Claude (2026-11-23)
+
+- P2: el selector de caja usa `getDaySummary` con fecha de hoy; un turno que cruza medianoche no aparece y el endpoint de reportes puede exigir permiso de supervisor (regresion para cajero). Confirmar permiso del rol cajero o usar la fecha de apertura de `state.shift`; anadir prueba de cruce de medianoche en `register-selection`.
+- P2: el efecto de cajas depende de `state.branch`/`state.shift` por identidad; depender de `state.shift?.shiftId` y `state.branch?.timeZone` para no borrar la caja elegida.
+- P2: `sendPending` reintenta con expectedVersion viejo si el fallo no es 409; confirmar codigo de conflicto del API y limpiar tambien ahi.
+- P3: etiqueta de caja ilegible (8 chars de UUID); ocupacion solo en texto sin color/icono; formato de props; falta prueba de `order-kitchen` y `register-selection`; verificacion visual 390x844 pendiente.
