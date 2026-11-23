@@ -8,7 +8,7 @@ begin
   if not exists(select 1 from pg_class c join pg_namespace ns on ns.oid=c.relnamespace where ns.nspname='app' and c.relname=tbl and c.relrowsecurity and c.relforcerowsecurity) then raise exception 'missing RLS: %',tbl; end if;
   if has_table_privilege('app_api','app.'||tbl,'SELECT,INSERT,UPDATE,DELETE') or has_table_privilege('authenticated','app.'||tbl,'SELECT,INSERT,UPDATE,DELETE') then raise exception 'direct grant: %',tbl; end if;
  end loop;
- for f in select p.oid,p.prosecdef,p.proconfig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='app_private' and p.proname in ('sync_authorized','sync_register_device','sync_record_event','sync_append_change','sync_open_review','sync_resolve_review','sync_revoke_device') loop
+ for f in select p.oid,p.prosecdef,p.proconfig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='app_private' and p.proname in ('sync_authorized','sync_register_device','sync_record_event','sync_append_change','sync_open_review','sync_resolve_review','sync_revoke_device','sync_device_state','sync_write_allowed') loop
   if not f.prosecdef or not (f.proconfig @> array['search_path=""'] or f.proconfig @> array['search_path=']) or not has_function_privilege('app_api',f.oid,'EXECUTE') or has_function_privilege('public',f.oid,'EXECUTE') or has_function_privilege('authenticated',f.oid,'EXECUTE') or has_function_privilege('anon',f.oid,'EXECUTE') or has_function_privilege('service_role',f.oid,'EXECUTE') then raise exception 'function security'; end if;
  end loop;
  insert into auth.users(id,email) values(actor,'sync@invalid.test'),(other_actor,'other@invalid.test'),(kitchen,'kitchen@invalid.test'),(supervisor,'supervisor@invalid.test'),(waiter,'waiter@invalid.test'),(manager,'manager@invalid.test');
@@ -19,7 +19,10 @@ begin
  if app_private.sync_can_write(waiter,r,b,'Customer','delete') or app_private.sync_can_write(actor,r,b,'Customer','delete') or app_private.sync_can_write(supervisor,r,b,'Customer','delete') or app_private.sync_can_write(supervisor,r,b,'MenuCatalog','compensate') or app_private.sync_can_write(actor,r,b,'MenuCatalog','compensate') or app_private.sync_can_write(waiter,r,b,'MenuCatalog','compensate') then raise exception 'denied role'; end if;
  if not app_private.sync_can_write(manager,r,b,'Customer','delete') or not app_private.sync_can_write(manager,r,b,'MenuCatalog','compensate') then raise exception 'manager capability'; end if;
  execute 'set local role app_api';
+ if app_private.sync_device_state(r,b,'device-1',actor) <> 'unknown' then raise exception 'unknown device'; end if;
+ if not app_private.sync_write_allowed(actor,r,b,'Payment','create') or app_private.sync_write_allowed(kitchen,r,b,'Payment','create') then raise exception 'write capability'; end if;
  if not app_private.sync_register_device(actor,r,b,'device-1') or app_private.sync_register_device(other_actor,r,b,'device-1') then raise exception 'device registration'; end if;
+ if app_private.sync_device_state(r,b,'device-1',actor) <> 'active' or app_private.sync_device_state(r,b,'device-1',kitchen) <> 'unknown' or app_private.sync_device_state(r,b3,'device-1',actor) <> 'unknown' then raise exception 'device scope'; end if;
  if not app_private.sync_register_device(kitchen,r2,b2,'device-1') then raise exception 'cross tenant device squatting'; end if;
  if not app_private.sync_register_device(kitchen,r,b,'kitchen-device') then raise exception 'kitchen device'; end if;
  if not app_private.sync_register_device(supervisor,r,b,'supervisor-device') then raise exception 'supervisor device'; end if;
@@ -54,6 +57,7 @@ begin
  review2 := app_private.sync_open_review(actor,r,b,'event-4','PAYMENT_UNCERTAIN');
  if app_private.sync_resolve_review(supervisor,r,b,review2,'resolved_compensated','reason','comp-ok') <> 'compensation_in_use' then raise exception 'compensation reused'; end if;
  if not app_private.sync_revoke_device(supervisor,r,b,'device-1') then raise exception 'supervisor revoke'; end if;
+ if app_private.sync_device_state(r,b,'device-1',actor) <> 'revoked' then raise exception 'revoked state'; end if;
  if not app_private.sync_register_device(actor,r,b3,'branch-device') then raise exception 'same restaurant branch registration'; end if;
  answer := app_private.sync_record_event(actor,jsonb_set(jsonb_set(jsonb_set(e,'{branchId}',to_jsonb(b3)),'{deviceId}','"branch-device"'),'{eventId}','"same-restaurant-event"'),'{}'); if answer->>'status' <> 'recorded' then raise exception 'same restaurant branch key %',answer; end if;
  if not app_private.sync_register_device(actor,r2,b2,'actor-device') then raise exception 'second branch registration'; end if;
@@ -79,7 +83,7 @@ begin
  end loop;
  update app.memberships set revoked_at=clock_timestamp(),revoked_by=actor,revocation_reason='test' where id=m;
  execute 'set local role app_api';
- if app_private.sync_authorized(actor,r,b) or app_private.sync_record_event(actor,e,'{}')->>'status' <> 'denied' then raise exception 'revoked membership'; end if;
+ if app_private.sync_authorized(actor,r,b) or app_private.sync_record_event(actor,e,'{}')->>'status' <> 'denied' or app_private.sync_device_state(r,b,'device-1',actor) <> 'unknown' or app_private.sync_write_allowed(actor,r,b,'Payment','create') then raise exception 'revoked membership'; end if;
  execute 'reset role';
 end $test$;
 rollback;
