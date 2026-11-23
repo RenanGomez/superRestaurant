@@ -2,16 +2,23 @@ import type { CanActivate, ExecutionContext } from "@nestjs/common";
 import { HttpException, Inject, Injectable, SetMetadata, UnauthorizedException } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 
-import type { ApiConfig } from "../config.js";
+import { readRateLimitPolicy, type ApiConfig, type RateLimitPolicy } from "../config.js";
 
 export const AUTH_PRINCIPAL_VERIFIER = Symbol("AUTH_PRINCIPAL_VERIFIER");
 export const PUBLIC_ROUTE = Symbol("PUBLIC_ROUTE");
 export const RATE_LIMIT = Symbol("RATE_LIMIT");
 const authenticatedPrincipalKey = Symbol("authenticatedPrincipal");
 
+export interface RateLimitOptions {
+  readonly limit: number;
+  readonly windowMs: number;
+}
+
 export const Public = (): MethodDecorator & ClassDecorator => SetMetadata(PUBLIC_ROUTE, true);
-export const RateLimited = (options: { limit: number; windowMs: number }): MethodDecorator => SetMetadata(RATE_LIMIT, options);
+export const RateLimited = (options: RateLimitOptions): MethodDecorator => SetMetadata(RATE_LIMIT, options);
 
 export class RateLimitStore {
   private readonly entries = new Map<string, { count: number; expiresAt: number }>();
@@ -45,6 +52,16 @@ export class RateLimitStore {
   public refund(key: string): void {
     const entry = this.entries.get(key);
     if (entry !== undefined && entry.count > 0) entry.count -= 1;
+  }
+
+  /** Read-only check: never consumes a slot, so a valid credential can be verified. */
+  public retryAfterIfLimited(key: string, limit: number): number {
+    const entry = this.entries.get(key);
+    if (entry === undefined) return 0;
+    const now = this.clock();
+    if (entry.expiresAt <= now) { this.entries.delete(key); return 0; }
+    if (entry.count < limit) return 0;
+    return Math.max(1, Math.ceil((entry.expiresAt - now) / 1000));
   }
 }
 
@@ -92,14 +109,25 @@ export class SupabaseAuthPrincipalVerifier implements AuthPrincipalVerifierPort 
 
 @Injectable()
 export class SupabaseAuthGuard implements CanActivate {
-  private readonly requests = new RateLimitStore();
-  private readonly authenticationRequests = new RateLimitStore();
+  private readonly requests: RateLimitStore;
+  /** Requests that presented no usable credential: they never reach the provider. */
+  private readonly missingCredentials: RateLimitStore;
+  /** Failed verifications, per client address and per token fingerprint. */
+  private readonly rejectedAttempts: RateLimitStore;
+  private readonly policy: RateLimitPolicy;
   private readonly operations = new WeakMap<object, number>();
   private nextOperation = 0;
   public constructor(
     @Inject(AUTH_PRINCIPAL_VERIFIER) private readonly verifier: AuthPrincipalVerifierPort,
     @Inject(Reflector) private readonly reflector: Reflector,
-  ) {}
+    policy: RateLimitPolicy = readRateLimitPolicy(process.env),
+    now: () => number = Date.now,
+  ) {
+    this.policy = policy;
+    this.requests = new RateLimitStore(now, policy.maxTrackedKeys);
+    this.missingCredentials = new RateLimitStore(now, policy.maxTrackedKeys);
+    this.rejectedAttempts = new RateLimitStore(now, policy.maxTrackedKeys);
+  }
 
   public async canActivate(context: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(PUBLIC_ROUTE, [context.getHandler(), context.getClass()]);
@@ -107,16 +135,25 @@ export class SupabaseAuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const response = context.switchToHttp().getResponse?.<{ setHeader(name: string, value: string): void }>();
-    const ip = request.socket?.remoteAddress ?? "unknown";
-    this.rejectLimited(response, this.authenticationRequests.consume(ip, 300, 60_000));
+    const clientIp = resolveClientIp(request, this.policy.trustForwardedFor, this.policy.trustedProxyHops);
     const accessToken = parseBearerAuthorization(request.headers?.authorization);
-    if (accessToken === undefined) throw authenticationRequired();
+    if (accessToken === undefined) {
+      // Bucket A: only credential-less requests. It shares no key with any token, so
+      // a header-less flood cannot consume the quota of valid clients.
+      this.rejectLimited(response, this.missingCredentials.consume(`missing|${clientIp}`, this.policy.loginMax, this.policy.loginWindowMs));
+      throw authenticationRequired();
+    }
+
+    // Bucket B: failed tokens. The fingerprint is only short-circuited when it has
+    // already failed; a valid credential has no failures and is always verified, so
+    // it is never blocked by traffic from other clients or other tokens.
+    const tokenKey = `token|${tokenFingerprint(accessToken)}`;
+    this.rejectLimited(response, this.rejectedAttempts.retryAfterIfLimited(tokenKey, this.policy.loginMax));
 
     let principal: AuthenticatedPrincipal | undefined;
     try {
       principal = normalizePrincipal(await this.verifier.verifyAccessToken(accessToken));
       if (principal === undefined) throw new AccessTokenRejectedError();
-      this.authenticationRequests.refund(ip);
       Object.defineProperty(request, authenticatedPrincipalKey, {
         configurable: false,
         enumerable: false,
@@ -124,10 +161,13 @@ export class SupabaseAuthGuard implements CanActivate {
         writable: false,
       });
     } catch {
+      const ipRetryAfter = this.rejectedAttempts.consume(`failure|${clientIp}`, this.policy.loginMax, this.policy.loginWindowMs);
+      const tokenRetryAfter = this.rejectedAttempts.consume(tokenKey, this.policy.loginMax, this.policy.loginWindowMs);
+      this.rejectLimited(response, Math.max(ipRetryAfter, tokenRetryAfter));
       throw authenticationRequired();
     }
     const handler = context.getHandler();
-    const options = this.reflector.getAllAndOverride<{ limit: number; windowMs: number }>(RATE_LIMIT, [handler, context.getClass()]);
+    const options = this.reflector.getAllAndOverride<RateLimitOptions>(RATE_LIMIT, [handler, context.getClass()]);
     if (options !== undefined && options !== null && typeof options === "object") {
       let operation = this.operations.get(handler);
       if (operation === undefined) { operation = this.nextOperation++; this.operations.set(handler, operation); }
@@ -158,8 +198,34 @@ export function parseBearerAuthorization(value: unknown): string | undefined {
   return token !== undefined && isBoundedAccessToken(token) ? token : undefined;
 }
 
-type AuthenticatedRequest = {
-  readonly headers?: { readonly authorization?: unknown };
+/**
+ * Resolves the login limiter's client address without trusting caller headers.
+ * `x-forwarded-for` is only read when a trusted proxy is configured. The header is
+ * appended left-to-right by the proxy chain, so with `trustedProxyHops` trusted
+ * proxies the address appended by the outermost trusted proxy is the one at
+ * `hops.length - trustedProxyHops`. Anything shorter or not an IP literal falls
+ * back to the socket address, so a spoofed or truncated header cannot pick a key.
+ */
+export function resolveClientIp(request: AuthenticatedRequest, trustForwardedFor: boolean, trustedProxyHops = 1): string {
+  if (trustForwardedFor && Number.isSafeInteger(trustedProxyHops) && trustedProxyHops >= 1) {
+    const forwarded = request.headers?.["x-forwarded-for"];
+    if (typeof forwarded === "string" && forwarded.length <= 1_024) {
+      const hops = forwarded.split(",").map((hop) => hop.trim()).filter((hop) => hop !== "");
+      const candidate = hops[hops.length - trustedProxyHops];
+      if (candidate !== undefined && isIP(candidate) !== 0) return candidate;
+    }
+  }
+  const socketAddress = request.socket?.remoteAddress;
+  return typeof socketAddress === "string" && socketAddress !== "" ? socketAddress : "unknown";
+}
+
+/** One-way fingerprint: the raw credential is never stored in the limiter map. */
+export function tokenFingerprint(accessToken: string): string {
+  return createHash("sha256").update(accessToken, "utf8").digest("base64url").slice(0, 22);
+}
+
+export type AuthenticatedRequest = {
+  readonly headers?: { readonly authorization?: unknown; readonly "x-forwarded-for"?: unknown };
   readonly socket?: { readonly remoteAddress?: string };
   readonly [authenticatedPrincipalKey]?: AuthenticatedPrincipal;
 };

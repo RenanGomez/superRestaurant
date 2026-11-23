@@ -13,7 +13,7 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 
 - **m1-obs-health:** el correlationId solo aparece en la línea de acceso HTTP; los demás logs no lo heredan. Incorporar AsyncLocalStorage para propagar el contexto de request entre capas y pruebas de concurrencia antes de depender de correlación transversal.
 
-- **m1-sec-rate-limit:** los contadores viven en memoria por proceso; reinicios y réplicas no comparten cuota. El límite previo usa la IP del socket, que puede identificar al proxy en despliegues detrás de uno. Adoptar almacenamiento compartido y una configuración explícita de proxies confiables antes de depender de estos límites en producción. El login directo a Supabase requiere protección del proveedor.
+- **m1-sec-rate-limit:** (1) no existe límite por cuenta: web, mobile y KDS inician sesión directamente contra Supabase Auth, que debe aplicar su propia protección de credenciales; el API solo limita intentos de token en su frontera. (2) Los contadores viven en memoria por proceso; reinicios y réplicas no comparten cuota. Adoptar almacenamiento compartido antes de depender de estos límites en producción. (3) El borde confía en `x-forwarded-for` solo con `RATE_LIMIT_TRUST_FORWARDED_FOR=true` y `RATE_LIMIT_TRUSTED_PROXY_HOPS` acotado (1..10, por defecto 1); debe desplegarse exactamente la cadena de proxies declarada o el guard vuelve a la IP del socket.
 
 | Fecha | Hito | Item | Descripcion | Motivo del atajo | Seguimiento |
 |---|---|---|---|---|---|

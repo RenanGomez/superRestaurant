@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ApiConfigurationError, readApiConfig } from "./config.js";
+import {
+  ApiConfigurationError,
+  DEFAULT_RATE_LIMIT_POLICY,
+  readApiConfig,
+  readRateLimitPolicy,
+} from "./config.js";
 
 const validEnvironment = Object.freeze({
   SUPABASE_PUBLISHABLE_KEY: "sb_publishable_example-key",
@@ -48,5 +53,51 @@ test("rejects malformed or unbounded publishable keys", () => {
     `sb_publishable_${"a".repeat(1_100)}`,
   ]) {
     assert.throws(() => readApiConfig({ ...validEnvironment, SUPABASE_PUBLISHABLE_KEY: invalidKey }), ApiConfigurationError);
+  }
+});
+
+test("rate limit policy defaults to bounded, non-proxy-trusting login metering", () => {
+  const policy = readRateLimitPolicy({});
+  assert.deepEqual(policy, DEFAULT_RATE_LIMIT_POLICY);
+  assert.equal(Object.isFrozen(policy), true);
+});
+
+test("rate limit policy accepts explicit bounded overrides", () => {
+  assert.deepEqual(readRateLimitPolicy({
+    RATE_LIMIT_LOGIN_MAX: "5",
+    RATE_LIMIT_LOGIN_WINDOW_MS: "30000",
+    RATE_LIMIT_MAX_KEYS: "500",
+    RATE_LIMIT_TRUST_FORWARDED_FOR: "TRUE",
+    RATE_LIMIT_TRUSTED_PROXY_HOPS: "2",
+  }), {
+    loginMax: 5,
+    loginWindowMs: 30_000,
+    maxTrackedKeys: 500,
+    trustForwardedFor: true,
+    trustedProxyHops: 2,
+  });
+});
+
+test("forwarded-for trust requires a bounded number of trusted proxy hops", () => {
+  assert.equal(readRateLimitPolicy({}).trustedProxyHops, 1);
+  assert.equal(readRateLimitPolicy({ RATE_LIMIT_TRUSTED_PROXY_HOPS: "3" }).trustedProxyHops, 3);
+  for (const hops of ["0", "11", "-1", "1.5", "one"]) {
+    assert.throws(() => readRateLimitPolicy({ RATE_LIMIT_TRUSTED_PROXY_HOPS: hops }), ApiConfigurationError);
+  }
+});
+
+test("rate limit policy rejects malformed or out-of-range values instead of guessing", () => {
+  const invalid: NodeJS.ProcessEnv[] = [
+    { RATE_LIMIT_LOGIN_MAX: "0" },
+    { RATE_LIMIT_LOGIN_MAX: "10001" },
+    { RATE_LIMIT_LOGIN_MAX: "3.5" },
+    { RATE_LIMIT_LOGIN_WINDOW_MS: "999" },
+    { RATE_LIMIT_LOGIN_WINDOW_MS: "3600001" },
+    { RATE_LIMIT_MAX_KEYS: "99" },
+    { RATE_LIMIT_MAX_KEYS: "1000001" },
+    { RATE_LIMIT_TRUST_FORWARDED_FOR: "yes" },
+  ];
+  for (const environment of invalid) {
+    assert.throws(() => readRateLimitPolicy(environment), ApiConfigurationError);
   }
 });
