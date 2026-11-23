@@ -51,7 +51,9 @@ const MISSING_ROUTE_STATUSES = new Set([404, 405]);
 /**
  * Probes the two sync routes with an authenticated manager. A missing route (404/405) means the
  * endpoints are not integrated yet: only the database-level conflict suite can run, so the scenario
- * catalog is reported as deferred instead of being asserted vacuously.
+ * catalog is reported as deferred instead of being asserted vacuously. Any answer other than
+ * 404/405 on *either* route turns the probe red, so a partial integration (push without pull) does
+ * not silently pass as "not implemented".
  */
 export async function probeSyncConflictEndpoints(transport: SyncConflictProbeTransport): Promise<SyncConflictProbeResult> {
   const probes: { endpoint: string; status: number }[] = [];
@@ -61,7 +63,7 @@ export async function probeSyncConflictEndpoints(transport: SyncConflictProbeTra
     });
     probes.push({ endpoint: path, status: response.status });
   }
-  const implemented = probes.every((probe) => !MISSING_ROUTE_STATUSES.has(probe.status));
+  const implemented = probes.some((probe) => !MISSING_ROUTE_STATUSES.has(probe.status));
   return Object.freeze({
     deferred: implemented ? Object.freeze([]) : Object.freeze(SYNC_CONFLICT_HTTP_SCENARIOS.map((scenario) => scenario.id)),
     implemented,
@@ -69,9 +71,9 @@ export async function probeSyncConflictEndpoints(transport: SyncConflictProbeTra
   });
 }
 
-/** Fails loudly once the routes exist: the HTTP half must then be implemented, not skipped. */
+/** Fails loudly once either route exists: the HTTP half must then be implemented, not skipped. */
 export function assertSyncConflictEndpointsDeferred(result: SyncConflictProbeResult): void {
   assert.equal(result.implemented, false,
-    `sync endpoints now answer (${result.probes.map((probe) => `${probe.endpoint}=${probe.status}`).join(",")}); implement the HTTP conflict flow instead of deferring it`);
+    `a sync endpoint now answers (${result.probes.map((probe) => `${probe.endpoint}=${probe.status}`).join(",")}); implement the HTTP conflict flow instead of deferring it`);
   assert.equal(result.deferred.length, SYNC_CONFLICT_HTTP_SCENARIOS.length);
 }
