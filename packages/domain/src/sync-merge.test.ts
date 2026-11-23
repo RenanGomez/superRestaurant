@@ -2164,3 +2164,243 @@ test("Payment: PAYMENT_UNRESOLVED_EXPOSURE blocks new collection when pending or
   assert.equal(blockedByAmbiguous.blockNewCollection, true);
   assert.equal(blockedByAmbiguous.resultingOrderPaymentStatus, "ambiguous");
 });
+
+// ============================================================================
+// 9. Matrix §4.2 residual rows: authorized non-excluding discounts, monetary
+//    invariants in minor units, and occurredAt independence for the remaining
+//    entities (OrderItem, CashMovement, Tombstone).
+// ============================================================================
+
+test("Discount §4.2: authorized non-excluding discount is accepted only when trusted policy allows stacking and baseVersion is current; stale or competing discounts never use LWW", () => {
+  const existingDiscount = {
+    discountId: "disc-1",
+    discountRuleVersion: "v1",
+    amount: mxn(1000),
+    allocationStrategy: ORDER_DISCOUNT_ALLOCATION_STRATEGY,
+  } as const;
+  const canonical = baseOrder({ version: 3, orderDiscount: existingDiscount });
+  const nextDiscount = {
+    discountId: "disc-2",
+    discountRuleVersion: "v1",
+    amount: mxn(1500),
+    allocationStrategy: ORDER_DISCOUNT_ALLOCATION_STRATEGY,
+  } as const;
+
+  // Trusted server policy allows stacking and the event is based on the current version -> accepted.
+  const allowed = mergeOrderSyncEvent({
+    canonical,
+    discountPolicy: { requiresSupervisor: false, allowStacking: true },
+    event: {
+      ...meta({ eventId: "evt-stack-ok", idempotencyKey: "idem-stack-ok" }),
+      entityId: "order-1",
+      operation: "update",
+      kind: "apply_discount",
+      baseVersion: 3,
+      orderDiscount: nextDiscount,
+    },
+  });
+  assert.equal(allowed.status, "accepted");
+  assert.equal(allowed.code, "ACCEPTED");
+  assert.equal(allowed.canonicalVersion, 4);
+  // 10000 * 1.16 = 11600 subtotal; combined authority snapshot of 1500 -> 10100 total.
+  assert.equal(allowed.recalculatedTotals?.orderDiscount.amountMinor, 1500);
+  assert.equal(allowed.recalculatedTotals?.total.amountMinor, 10100);
+  assert.equal(allowed.mergedState?.orderDiscount?.discountId, "disc-2");
+
+  // Same policy but stale baseVersion (another device already moved the order) -> manual_review, never LWW.
+  const staleStack = mergeOrderSyncEvent({
+    canonical,
+    discountPolicy: { requiresSupervisor: false, allowStacking: true },
+    event: {
+      ...meta({ eventId: "evt-stack-stale", idempotencyKey: "idem-stack-stale", deviceId: "dev-2" }),
+      entityId: "order-1",
+      operation: "update",
+      kind: "apply_discount",
+      baseVersion: 2,
+      orderDiscount: nextDiscount,
+    },
+  });
+  assert.equal(staleStack.status, "manual_review");
+  assert.equal(staleStack.code, "CONCURRENT_DISCOUNT_CONFLICT");
+  assert.equal(staleStack.requiresManualReview, true);
+  assert.equal(staleStack.manualReview?.financial, true);
+
+  // Policy does NOT allow stacking, even at the current version -> manual_review, never LWW.
+  const blockedStack = mergeOrderSyncEvent({
+    canonical,
+    discountPolicy: { requiresSupervisor: false, allowStacking: false },
+    event: {
+      ...meta({ eventId: "evt-stack-blocked", idempotencyKey: "idem-stack-blocked" }),
+      entityId: "order-1",
+      operation: "update",
+      kind: "apply_discount",
+      baseVersion: 3,
+      orderDiscount: nextDiscount,
+    },
+  });
+  assert.equal(blockedStack.status, "manual_review");
+  assert.equal(blockedStack.code, "CONCURRENT_DISCOUNT_CONFLICT");
+});
+
+test("Monetary invariants: totals stay exact safe integers in minor units and a discount above the subtotal is rejected, never rounded", () => {
+  // quantity 3 * 3333 = 9999; 16% excluded tax rounds half-away to 1600 on that line.
+  const oddLines: readonly OrderItemPricingInput[] = [
+    pricingLine("odd-1", 3333, 3),
+    pricingLine("odd-2", 1, 1),
+  ];
+  const created = mergeOrderSyncEvent({
+    canonical: null,
+    event: {
+      ...meta({ eventId: "evt-money-create", idempotencyKey: "idem-money-create" }),
+      entityId: "order-money",
+      operation: "create",
+      baseVersion: null,
+      channel: "counter",
+      currency: "MXN",
+      timeZone: "America/Hermosillo",
+      items: oddLines,
+      orderDiscount: {
+        discountId: "disc-money",
+        discountRuleVersion: "v1",
+        amount: mxn(1234),
+        allocationStrategy: ORDER_DISCOUNT_ALLOCATION_STRATEGY,
+      },
+      tip: mxn(250),
+      deliveryCharge: { amount: mxn(700), quoteId: "quote-money" },
+    },
+  });
+  assert.equal(created.status, "accepted");
+  // gross 10000, tax 1600, order discount 1234, tip 250 => total 10616; + delivery 700 => payable 11316
+  assert.equal(created.recalculatedTotals?.grossBeforeLineDiscount.amountMinor, 10000);
+  assert.equal(created.recalculatedTotals?.taxTotal.amountMinor, 1600);
+  assert.equal(created.recalculatedTotals?.total.amountMinor, 10616);
+  assert.equal(created.payableTotal?.amountMinor, 11316);
+
+  const observedMinorUnits = [
+    created.recalculatedTotals?.grossBeforeLineDiscount.amountMinor,
+    created.recalculatedTotals?.taxTotal.amountMinor,
+    created.recalculatedTotals?.orderDiscount.amountMinor,
+    created.recalculatedTotals?.tip.amountMinor,
+    created.recalculatedTotals?.total.amountMinor,
+    created.payableTotal?.amountMinor,
+  ];
+  for (const amountMinor of observedMinorUnits) {
+    assert.equal(typeof amountMinor, "number");
+    assert.equal(Number.isSafeInteger(amountMinor), true);
+  }
+
+  // Discount larger than the tax-inclusive subtotal cannot be absorbed -> rejected, not silently clamped.
+  const tooBig = mergeOrderSyncEvent({
+    canonical: baseOrder({ version: 2 }),
+    discountPolicy: { requiresSupervisor: false, allowStacking: false },
+    event: {
+      ...meta({ eventId: "evt-money-big", idempotencyKey: "idem-money-big" }),
+      entityId: "order-1",
+      operation: "update",
+      kind: "apply_discount",
+      baseVersion: 2,
+      orderDiscount: {
+        discountId: "disc-big",
+        discountRuleVersion: "v1",
+        amount: mxn(999999),
+        allocationStrategy: ORDER_DISCOUNT_ALLOCATION_STRATEGY,
+      },
+    },
+  });
+  assert.equal(tooBig.status, "rejected");
+  assert.equal(tooBig.code, "DISCOUNT_EXCEEDS_AMOUNT");
+  assert.equal(tooBig.financial, true);
+  assert.equal(tooBig.mergedState, null);
+
+  // Floating-point money is impossible to represent: the public boundary rejects it.
+  assert.throws(() => new Money(100.5, "MXN"));
+  // A line priced in a different currency than the order fails closed at the input boundary.
+  assert.throws(
+    () => mergeOrderSyncEvent({
+      canonical: null,
+      event: {
+        ...meta({ eventId: "evt-currency", idempotencyKey: "idem-currency" }),
+        entityId: "order-currency",
+        operation: "create",
+        baseVersion: null,
+        channel: "counter",
+        currency: "MXN",
+        timeZone: "America/Hermosillo",
+        items: [{
+          ...pricingLine("usd-1", 1000, 1),
+          snapshot: { ...pricingLine("usd-1", 1000, 1).snapshot, unitPrice: new Money(1000, "USD") },
+        }],
+      },
+    }),
+    InvalidSyncMergeInputError,
+  );
+});
+
+test("occurredAt independence extends to OrderItem, CashMovement and Tombstone decisions", () => {
+  const timestamps = ["1999-01-01T00:00:00Z", "2099-12-31T23:59:59Z"] as const;
+
+  // OrderItem concurrent edit -> conflict regardless of clock.
+  const itemOutcomes = timestamps.map((occurredAt) => evaluateSyncMerge({
+    entityType: "OrderItem",
+    canonical: baseOrderItem({ version: 3 }),
+    parentOrderStatus: "open",
+    orderCurrency: "MXN",
+    event: {
+      ...meta({ eventId: "evt-oi", idempotencyKey: "idem-oi", occurredAt }),
+      entityId: "item-1",
+      orderId: "order-1",
+      operation: "update",
+      baseVersion: 2,
+      item: pricingLine("item-1", 10000, 2),
+    },
+  }));
+  assert.equal(itemOutcomes[0]?.status, "conflict");
+  assert.equal(itemOutcomes[1]?.status, "conflict");
+  assert.equal(itemOutcomes[0]?.code, "CONCURRENT_ORDER_ITEM_MODIFICATION");
+  assert.equal(itemOutcomes[1]?.code, "CONCURRENT_ORDER_ITEM_MODIFICATION");
+
+  // CashMovement impossible negative balance -> manual_review regardless of clock.
+  const cashOutcomes = timestamps.map((occurredAt) => evaluateSyncMerge({
+    entityType: "CashMovement",
+    canonical: baseCashRegister(),
+    event: {
+      ...meta({ eventId: "evt-cm", idempotencyKey: "idem-cm", occurredAt, deviceId: "dev-1" }),
+      entityId: "mov-cm",
+      operation: "create",
+      baseVersion: null,
+      cashRegisterId: "cr-1",
+      registerId: "reg-1",
+      shiftId: "shift-1",
+      cashierId: "cashier-1",
+      localSequence: 1,
+      type: "cash_out",
+      direction: "out",
+      amountMinor: 999999,
+      currency: "MXN",
+      isOfflineEvent: false,
+      reason: "Retiro",
+    },
+  }));
+  assert.equal(cashOutcomes[0]?.status, "manual_review");
+  assert.equal(cashOutcomes[1]?.status, "manual_review");
+  assert.equal(cashOutcomes[0]?.code, "CASH_BALANCE_IMPOSSIBLE");
+  assert.equal(cashOutcomes[1]?.code, "CASH_BALANCE_IMPOSSIBLE");
+
+  // Tombstoned entity stale update -> conflict for resurrection regardless of clock.
+  const tombstoneOutcomes = timestamps.map((occurredAt) => evaluateSyncMerge({
+    entityType: "DiningTable",
+    canonical: baseTable({ version: 3, tombstoned: true, status: "disabled", activeOrderId: null }),
+    event: {
+      ...meta({ eventId: "evt-tb", idempotencyKey: "idem-tb", occurredAt }),
+      entityId: "table-1",
+      operation: "update",
+      baseVersion: 2,
+      targetStatus: "occupied",
+      activeOrderId: "order-1",
+    },
+  }));
+  assert.equal(tombstoneOutcomes[0]?.status, "conflict");
+  assert.equal(tombstoneOutcomes[1]?.status, "conflict");
+  assert.equal(tombstoneOutcomes[0]?.code, "TOMBSTONE_RESURRECTION_BLOCKED");
+  assert.equal(tombstoneOutcomes[1]?.code, "TOMBSTONE_RESURRECTION_BLOCKED");
+});
