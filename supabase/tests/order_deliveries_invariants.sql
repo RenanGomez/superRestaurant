@@ -178,7 +178,7 @@ begin
     values (restaurant,other_branch,o_fail,courier_a,'assigned',now(),cashier,cashier);
     raise exception 'DELIVERY_CROSS_SCOPE_ORDER_ACCEPTED';
   exception when foreign_key_violation then null; end;
-  if (select count(*) from app.order_deliveries)<>0 then raise exception 'DELIVERY_GUARD_PERSISTED_ROW'; end if;
+  if (select count(*) from app.order_deliveries where restaurant_id=restaurant)<>0 then raise exception 'DELIVERY_GUARD_PERSISTED_ROW'; end if;
 
   -- ---- Roles and the display name helper.
   if app_private.member_display_name(courier_a) is distinct from 'Repartidor Uno'
