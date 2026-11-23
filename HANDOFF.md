@@ -1,3 +1,11 @@
+## m2-web-local-storage-crypto — 2026-11-23 (PR #62, corrección local nivel A)
+
+- PR #62: cabeza original `12416488` ya basada en `origin/main` `86c5b900`. Fallos de E/S de lectura no ponen cuarentena; corrupción autenticada conserva slots y permite inspeccionar el slot anterior sin desbloquear ni sobrescribir evidencia `manual_review`. Ese slot puede carecer del último evento: exige conciliación supervisada, nunca rollback automático.
+- Pestaña obsoleta: ante `STORAGE_COMMIT_FAILED` descartar motor, recargar almacén e iniciar otro motor antes de repetir con la misma idempotency key. Web Locks serializa operaciones del almacén, no el envío entre motores; la prueba cubre la recarga y la prueba de integración reinicio/reintento y aislamiento por restaurante, sucursal y dispositivo.
+- HTTP: 403 genérico es `HTTP_403` no reintentable y no revoca scope; solo códigos de revocación explícitos revocan. 404/405 son reintentables para no mandar el lote a revisión por endpoint ausente. Otros 4xx no reintentables pueden enviar el lote a `manual_review` según el motor; no representan una revocación salvo código explícito. Timeout incluye lectura de cuerpo.
+- Node 24: lint, typecheck, test y build web exit 0 (build fuera del sandbox por `spawn EPERM`); 13 pruebas de almacenamiento y 14 de transporte. `fake-indexeddb` fijado a 6.2.8. CodeGraph no inicializado antes/después; inspección manual dirigida. La clave no extraíble reside en el mismo IndexedDB y no protege frente a XSS.
+- Sigue pendiente del item original: rotación, bloqueo/purga de sesión/revocación y verificación en navegador real; no activar offline ni marcar DONE. Sin push de este corte por instrucción humana.
+
 ## m2-api-sync-push-merge-fix2 — 2026-11-23 (BLOCKED parcial, nivel A)
 
 - Desde PR #60 `89d28e31fd6630ec2ad313f7cad1d19e6106d60d`: se registran rechazos por timezone/moneda y contexto prohibido, se conserva el retry para catalogo no publicado, se extrae `stale`, y se cubren rechazos y avance del lote. El test de servicio existente cubre `UNSUPPORTED_ENTITY` y `UNSUPPORTED_OPERATION`.
