@@ -1274,6 +1274,10 @@ test("the banner names the branch, the queue and the last sync without claiming 
   assert.match(online.message, /Sucursal/u);
   assert.equal(online.pendingLabel, "Sin pendientes");
 
+  const onlineWithPending = describeSyncBanner(syncSnapshot([queueItem()], { connectivity: "online" }), undefined);
+  assert.equal(onlineWithPending.tone, "info", "pending work is never presented as success");
+  assert.equal(onlineWithPending.pendingLabel, "Pendientes: 1");
+
   const noStorage = describeSyncBanner(syncSnapshot([], { storageAvailable: false }), "Centro");
   assert.match(noStorage.message, /sin almacenamiento local/u);
   assert.equal(noStorage.tone, "info");

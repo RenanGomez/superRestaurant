@@ -307,6 +307,33 @@ export async function enqueueOrderPlanOffline(input: {
   return enqueueAll(events, input.port);
 }
 
+/**
+ * Identity of one offline cash collection. Two taps on the same
+ * (order, version) must produce the same `paymentId` and `idempotencyKey`:
+ * that is what makes the second one a replay of the first, never a second
+ * charge. The engine dedupes by `idempotencyKey`, so the identity has to be
+ * chosen here, before the first enqueue, and kept until the order changes.
+ */
+export interface OfflineCashIdentity {
+  readonly key: string;
+  readonly idempotencyKey: string;
+  readonly occurredAt: string;
+  readonly paymentId: string;
+}
+
+export function stableOfflineCashIdentity(
+  previous: OfflineCashIdentity | undefined,
+  input: { readonly key: string; readonly now: Date; readonly uuid: () => string },
+): OfflineCashIdentity {
+  if (previous !== undefined && previous.key === input.key) return previous;
+  return Object.freeze({
+    idempotencyKey: input.uuid(),
+    key: input.key,
+    occurredAt: input.now.toISOString(),
+    paymentId: input.uuid(),
+  });
+}
+
 export interface OfflineCashCollectInput {
   readonly orderId: string;
   readonly paymentId: string;

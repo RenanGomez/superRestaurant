@@ -13,6 +13,7 @@ import {
   createOrderDeliveryPort,
   enqueueCashCollectOffline,
   enqueueOrderPlanOffline,
+  stableOfflineCashIdentity,
   submitOrderPlan,
   toOrderSubmissionFailure,
   type MobileOfflineEnqueuePort,
@@ -685,4 +686,43 @@ test("offline cash is built with its matrix preconditions and enqueued only when
   });
   assert.deepEqual(blocked, { eventIds: [], queued: false, reasonCode: "CASH_REGISTER_REQUIRED" });
   assert.equal(refused.enqueued.length, 0);
+});
+
+test("offline cash identity is stable per order and version, so a second tap replays it", async () => {
+  let serial = 0;
+  const uuid = (): string => `uuid-${(serial += 1)}`;
+  const first = stableOfflineCashIdentity(undefined, {
+    key: "order-1|4",
+    now: new Date("2026-11-23T18:00:00.000Z"),
+    uuid,
+  });
+  const second = stableOfflineCashIdentity(first, {
+    key: "order-1|4",
+    now: new Date("2026-11-23T18:05:00.000Z"),
+    uuid,
+  });
+  assert.equal(second, first, "the same order and version keep the same identity");
+  assert.equal(second.paymentId, first.paymentId);
+  assert.equal(second.idempotencyKey, first.idempotencyKey);
+  assert.equal(serial, 2, "no new identifiers were minted on the second tap");
+
+  const otherVersion = stableOfflineCashIdentity(first, { key: "order-1|5", now: new Date(), uuid });
+  assert.notEqual(otherVersion.paymentId, first.paymentId, "a new order version is a new collection");
+  assert.notEqual(otherVersion.idempotencyKey, first.idempotencyKey);
+
+  // Two taps through the engine with that identity enqueue the same event.
+  const engine = offlineEngine();
+  const scope = scopeA as unknown as BranchScope;
+  const cash = cashInput({
+    idempotencyKey: first.idempotencyKey,
+    occurredAt: first.occurredAt,
+    paymentId: first.paymentId,
+  });
+  const preconditions = { cashRegisterOpen: true, cashierShiftOpen: true, withinOfflineCashLimit: true };
+  const once = await enqueueCashCollectOffline({ actorId: ACTOR, cash, port: engine, preconditions, scope });
+  const twice = await enqueueCashCollectOffline({ actorId: ACTOR, cash, port: engine, preconditions, scope });
+  assert.equal(once.queued, true);
+  assert.deepEqual(twice.eventIds, once.eventIds, "the replay answers the original event");
+  assert.equal(engine.enqueued.length, 2);
+  assert.equal(new Set(engine.enqueued.map((entry) => entry.idempotencyKey)).size, 1, "one collection, not two");
 });

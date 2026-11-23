@@ -814,9 +814,11 @@ export function describeSyncBanner(
   const attentionLabel = attention === 0 ? undefined : `Requiere revisión: ${attention}`;
   const tone: "error" | "info" | "success" = attention > 0
     ? "error"
-    : snapshot.connectivity === "offline" || snapshot.connectivity === "reconnecting" || !snapshot.storageAvailable
+    : pending > 0
       ? "info"
-      : "success";
+      : snapshot.connectivity === "online" && snapshot.storageAvailable
+        ? "success"
+        : "info";
   return Object.freeze({
     attentionLabel,
     connectivityLabel,

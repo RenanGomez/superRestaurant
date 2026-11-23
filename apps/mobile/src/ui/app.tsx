@@ -78,7 +78,13 @@ import {
   type OrderDraftState,
 } from "../order-draft.js";
 import { buildOrderDeliveryPlan, type OrderDeliveryPlanV1 } from "../order-plan.js";
-import { createOrderDeliveryPort, type OrderDeliveryPort, type OrderMutationTransport } from "../order-submission.js";
+import {
+  createOrderDeliveryPort,
+  stableOfflineCashIdentity,
+  type OfflineCashIdentity,
+  type OrderDeliveryPort,
+  type OrderMutationTransport,
+} from "../order-submission.js";
 import type { MobileDeviceIdentity } from "../device-identity.js";
 import { readInitialSession, revalidateAccess } from "../revalidation.js";
 import type { MobileSession } from "../session.js";
@@ -406,6 +412,9 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     setSyncNotice(undefined);
     setOfflineQueued(false);
     setOfflineCashBlocked(undefined);
+    setOfflineCashQueuedKey(undefined);
+    offlineCashIdentityRef.current = undefined;
+    offlineCashInFlightRef.current = false;
   }, [delivery, draftContext]);
 
   /**
@@ -460,6 +469,11 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
   const [offlineQueued, setOfflineQueued] = useState(false);
   const [offlineCashBusy, setOfflineCashBusy] = useState(false);
   const [offlineCashBlocked, setOfflineCashBlocked] = useState<string | undefined>(undefined);
+  const [offlineCashQueuedKey, setOfflineCashQueuedKey] = useState<string | undefined>(undefined);
+  /** One collection identity per (order, version): a second tap must replay it. */
+  const offlineCashIdentityRef = useRef<OfflineCashIdentity | undefined>(undefined);
+  /** Synchronous guard: two taps in one frame cannot both start a collection. */
+  const offlineCashInFlightRef = useRef(false);
 
   useEffect(() => {
     if (branchId === undefined || restaurantId === undefined) return;
@@ -802,17 +816,28 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
       || branchId === undefined || restaurantId === undefined || deviceId === undefined) {
       return;
     }
+    const key = `${checkout.orderId}|${checkout.orderVersion}`;
+    // Two taps in the same frame are stopped synchronously; after the first
+    // success the button stays disabled for this same collection.
+    if (offlineCashInFlightRef.current || offlineCashQueuedKey === key) return;
+    offlineCashInFlightRef.current = true;
     setOfflineCashBusy(true);
     setOfflineCashBlocked(undefined);
+    const identity = stableOfflineCashIdentity(offlineCashIdentityRef.current, {
+      key,
+      now: new Date(),
+      uuid: randomUuid,
+    });
+    offlineCashIdentityRef.current = identity;
     void sync.queueCash({
       amountMinor: quote.amountMinor,
       cashRegisterSessionId: checkout.cashRegisterSessionId,
       currency: quote.currency,
-      idempotencyKey: randomUuid(),
-      occurredAt: new Date().toISOString(),
+      idempotencyKey: identity.idempotencyKey,
+      occurredAt: identity.occurredAt,
       orderId: checkout.orderId,
       orderVersion: checkout.orderVersion,
-      paymentId: randomUuid(),
+      paymentId: identity.paymentId,
     }, {
       // The server confirmed both when it produced this checkout; the amount is
       // the one it quoted, so the local limit is not invented here.
@@ -821,6 +846,7 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
       withinOfflineCashLimit: true,
     }).then((result) => {
       if (result.queued) {
+        setOfflineCashQueuedKey(key);
         setSyncNotice(
           "Cobro en efectivo guardado en este dispositivo, pendiente de sincronizar. "
           + "No se considera cobrado hasta que el servidor lo confirme.",
@@ -830,8 +856,14 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
           ? "No se pudo guardar el cobro en este dispositivo. Inténtalo de nuevo."
           : mobileCapabilityMessage(result.reasonCode));
       }
-    }).finally(() => { setOfflineCashBusy(false); });
-  }, [branchId, deviceId, randomUuid, restaurantId, state.payment.checkout.value, state.payment.quote.value, sync]);
+    }).finally(() => {
+      offlineCashInFlightRef.current = false;
+      setOfflineCashBusy(false);
+    });
+  }, [
+    branchId, deviceId, offlineCashQueuedKey, randomUuid, restaurantId,
+    state.payment.checkout.value, state.payment.quote.value, sync,
+  ]);
 
   const dispatchOrderDraft = useCallback((event: OrderDraftEvent): void => {
     const nextDraft = reduceOrderDraft(draft, event);
@@ -884,9 +916,12 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
 
   const screen = mobileScreen(state);
   const notice = state.notice === undefined ? undefined : noticeMessage(state.notice);
-  const offlineMode = sync.snapshot.connectivity === "offline"
-    || sync.snapshot.connectivity === "reconnecting"
-    || sync.snapshot.connectivity === "sync_blocked";
+  // Offline capture is offered only when there is no connection at all.
+  // `reconnecting` may already reach the server, so the online actions stay
+  // visible; `sync_blocked` is not a network outage either, it is a blocked
+  // queue the operator has to review.
+  const offlineMode = sync.snapshot.connectivity === "offline";
+  const syncBlocked = sync.snapshot.connectivity === "sync_blocked";
   const offlineOrder = offlineMode && readable && draft.tableId !== undefined
     ? {
       canQueue: sync.snapshot.storageAvailable,
@@ -898,22 +933,34 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
       queued: offlineQueued,
     }
     : undefined;
+  const paymentCheckout = state.payment.checkout.value;
+  const offlineCashKey = paymentCheckout === undefined
+    ? undefined
+    : `${paymentCheckout.orderId}|${paymentCheckout.orderVersion}`;
+  const offlineCashAlreadyQueued = offlineCashKey !== undefined && offlineCashQueuedKey === offlineCashKey;
   const offlineCash = offlineMode && readable
-    && state.payment.orderId !== undefined
-    && state.payment.checkout.value !== undefined && state.payment.quote.status === "ready"
+    && state.payment.orderId !== undefined && paymentCheckout !== undefined
+    && state.payment.quote.status === "ready"
     ? {
-      allowed: state.payment.method === "cash" && sync.snapshot.storageAvailable && offlineCashBlocked === undefined,
+      allowed: state.payment.method === "cash" && sync.snapshot.storageAvailable
+        && offlineCashBlocked === undefined && !offlineCashAlreadyQueued,
       busy: offlineCashBusy,
-      message: offlineCashBlocked ?? (state.payment.method === "cash"
-        ? (sync.snapshot.storageAvailable
-          ? "Sin conexión. El efectivo se puede guardar en este dispositivo; quedará pendiente y no cuenta como cobrado "
-            + "hasta que el servidor lo confirme."
-          : "Sin conexión y sin almacenamiento local en este dispositivo. No se puede guardar el cobro; reconecta para continuar.")
-        : state.payment.method === "card_manual"
-          ? "Sin conexión. El cobro con tarjeta no puede confirmarse; regístralo cuando vuelva la red."
-          : "Sin conexión. La transferencia debe registrarse cuando vuelva la conexión."),
+      message: offlineCashAlreadyQueued
+        ? "El cobro en efectivo de esta orden ya está guardado en este dispositivo, pendiente de sincronizar."
+        : offlineCashBlocked ?? (state.payment.method === "cash"
+          ? (sync.snapshot.storageAvailable
+            ? "Sin conexión. El efectivo se puede guardar en este dispositivo; quedará pendiente y no cuenta como cobrado "
+              + "hasta que el servidor lo confirme."
+            : "Sin conexión y sin almacenamiento local en este dispositivo. No se puede guardar el cobro; reconecta para continuar.")
+          : state.payment.method === "card_manual"
+            ? "Sin conexión. El cobro con tarjeta no puede confirmarse; regístralo cuando vuelva la red."
+            : "Sin conexión. La transferencia debe registrarse cuando vuelva la conexión."),
       onQueue: queueOfflineCash,
     }
+    : undefined;
+  const cashBlockedNotice = syncBlocked && readable
+    && state.payment.orderId !== undefined && paymentCheckout !== undefined
+    ? "La sincronización está bloqueada. Revisa la cola de pendientes antes de registrar el cobro."
     : undefined;
 
   if (screen === "starting") return <LoadingBlock label="Abriendo superRestaurant…" />;
@@ -994,7 +1041,6 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
       ? <View style={styles.content}>
         <PendingSyncScreen
           onClose={() => { dispatch({ type: "syncScreenClosed" }); }}
-          onRetry={() => { sync.retryAll(); }}
           onRetryAll={sync.retryAll}
           retrying={sync.snapshot.syncing}
           snapshot={sync.snapshot}
@@ -1043,6 +1089,7 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
             onSubmitDraft={submitDraft}
             offline={offlineOrder}
             offlineCash={offlineCash}
+            cashBlockedNotice={cashBlockedNotice}
             payment={state.payment}
             registers={registers.key === registerKey ? registers : { status: "loading", entries: [] }}
             registerId={registerId}
@@ -1130,6 +1177,7 @@ function WorkspaceContent({
   onSubmitDraft,
   offline,
   offlineCash,
+  cashBlockedNotice,
   payment,
   registers, registerId, onRegisterSelect, onRegisterRetry,
   realtime,
@@ -1176,6 +1224,8 @@ function WorkspaceContent({
     readonly message: string;
     readonly onQueue: () => void;
   } | undefined;
+  /** Non-network block (sync blocked): explains why a collection must wait. */
+  readonly cashBlockedNotice?: string | undefined;
   readonly payment: MobileState["payment"];
   readonly registers: { readonly status: "loading" | "failed" | "ready"; readonly entries: ReturnType<typeof openRegisters> };
   readonly registerId: string | undefined;
@@ -1258,6 +1308,7 @@ function WorkspaceContent({
     onSubmit={onSubmitDraft}
     offline={offline}
     offlineCash={offlineCash}
+    cashBlockedNotice={cashBlockedNotice}
     payment={payment}
     registers={registers}
     registerId={registerId}

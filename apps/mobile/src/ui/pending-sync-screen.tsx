@@ -3,12 +3,10 @@ import {
   formatSyncClock,
   syncAttentionCount,
   syncConnectivityLabel,
-  syncItemCanRetry,
   syncItemDetail,
   syncItemTitle,
   syncPendingCount,
   visibleSyncQueue,
-  type MobileSyncQueueItem,
   type MobileSyncSnapshot,
 } from "../mobile-state.js";
 
@@ -25,13 +23,11 @@ import { colors, spacing, typography } from "./theme.js";
  */
 export function PendingSyncScreen({
   onClose,
-  onRetry,
   onRetryAll,
   retrying,
   snapshot,
 }: {
   readonly onClose: () => void;
-  readonly onRetry: (item: MobileSyncQueueItem) => void;
   readonly onRetryAll: () => void;
   readonly retrying: boolean;
   readonly snapshot: MobileSyncSnapshot;
@@ -78,16 +74,6 @@ export function PendingSyncScreen({
           </View>
           <Body>{syncItemDetail(item)}</Body>
           <Caption>{`Registrado: ${formatSyncClock(item.occurredAt) ?? "hora no disponible"}`}</Caption>
-          {syncItemCanRetry(item)
-            ? <View style={styles.itemActions}>
-              <ActionButton
-                disabled={retrying || item.localState === "sending"}
-                label={item.localState === "sending" ? "Enviando…" : "Reintentar"}
-                onPress={() => { onRetry(item); }}
-                tone="secondary"
-              />
-            </View>
-            : null}
         </Card>)}
       </View>}
 
@@ -116,7 +102,6 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   headerText: { flexGrow: 1, flexShrink: 1, gap: spacing.xs, minWidth: 0 },
-  itemActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.sm },
   itemHeader: {
     alignItems: "center",
     flexDirection: "row",

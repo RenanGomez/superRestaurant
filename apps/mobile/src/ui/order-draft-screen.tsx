@@ -104,6 +104,7 @@ export function OrderDraftScreen({
   onSubmit,
   offline,
   offlineCash,
+  cashBlockedNotice,
   payment,
   registers, registerId, onRegisterSelect, onRegisterRetry,
   realtime,
@@ -150,6 +151,8 @@ export function OrderDraftScreen({
     readonly message: string;
     readonly onQueue: () => void;
   } | undefined;
+  /** Non-network block: sync is blocked, so a collection has to wait. */
+  readonly cashBlockedNotice?: string | undefined;
   readonly payment: MobilePaymentState;
   readonly registers: { readonly status: "loading" | "failed" | "ready"; readonly entries: ReturnType<typeof openRegisters> };
   readonly registerId: string | undefined;
@@ -246,6 +249,7 @@ export function OrderDraftScreen({
     onSubmit={onSubmit}
     offline={offline}
     offlineCash={offlineCash}
+    cashBlockedNotice={cashBlockedNotice}
     payment={payment}
     registers={registers}
     registerId={registerId}
@@ -551,6 +555,7 @@ function DraftPane({
   onSubmit,
   offline,
   offlineCash,
+  cashBlockedNotice,
   payment,
   registers, registerId, onRegisterSelect, onRegisterRetry,
   realtime,
@@ -585,6 +590,8 @@ function DraftPane({
     readonly message: string;
     readonly onQueue: () => void;
   } | undefined;
+  /** Non-network block: sync is blocked, so a collection has to wait. */
+  readonly cashBlockedNotice?: string | undefined;
   readonly payment: MobilePaymentState;
   readonly registers: { readonly status: "loading" | "failed" | "ready"; readonly entries: ReturnType<typeof openRegisters> };
   readonly registerId: string | undefined;
@@ -619,6 +626,7 @@ function DraftPane({
         onRetry={onPaymentRetry}
         onSubmit={onPaymentSubmit}
         offlineCash={offlineCash}
+        cashBlockedNotice={cashBlockedNotice}
         payment={payment}
         registers={registers}
         registerId={registerId}
@@ -669,9 +677,9 @@ function DraftPane({
       />
       : offline.canQueue
         ? <ActionButton
-          accessibilityHint="Guarda el pedido en este dispositivo; se enviarA¡ al servidor cuando vuelva la conexiA3n"
+          accessibilityHint="Guarda el pedido en este dispositivo; se enviaró al servidor cuando vuelva la conexión"
           disabled={offline.queued || draft.lines.length === 0 || draft.composer !== undefined}
-          label={offline.queued ? "Guardado en este dispositivo" : "Guardar pedido sin conexiA3n"}
+          label={offline.queued ? "Guardado en este dispositivo" : "Guardar pedido sin conexión"}
           onPress={offline.onQueue}
         />
         : null}
@@ -727,7 +735,7 @@ function DraftLineCard({ busy, catalog, line, onEvent }: {
 
 const PAYMENT_METHODS: readonly SimplePaymentMethodV1[] = Object.freeze(["cash", "card_manual", "transfer"]);
 
-function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, offlineCash, payment, registers, registerId, onRegisterSelect, onRegisterRetry }: {
+function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, offlineCash, cashBlockedNotice, payment, registers, registerId, onRegisterSelect, onRegisterRetry }: {
   readonly registers: { readonly status: "loading" | "failed" | "ready"; readonly entries: ReturnType<typeof openRegisters> };
   readonly registerId: string | undefined;
   readonly onRegisterSelect: (id: string) => void;
@@ -742,6 +750,8 @@ function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, offl
     readonly message: string;
     readonly onQueue: () => void;
   } | undefined;
+  /** Non-network block: sync is blocked, so a collection has to wait. */
+  readonly cashBlockedNotice?: string | undefined;
   readonly payment: MobilePaymentState;
 }): React.JSX.Element {
   const busy = payment.submission.status === "sending";
@@ -893,6 +903,9 @@ function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, offl
             {payment.submission.status === "failed" && payment.submission.failure !== undefined
               ? <Banner message={paymentFailureMessage(payment.submission.failure)} tone="error" />
               : null}
+            {cashBlockedNotice === undefined
+              ? null
+              : <Banner message={cashBlockedNotice} tone="error" />}
             {offlineCash === undefined
               ? null
               : <Banner message={offlineCash.message} tone={offlineCash.allowed ? "info" : "error"} />}
@@ -907,7 +920,7 @@ function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, offl
                 ? <ActionButton
                   busy={offlineCash.busy}
                   disabled={offlineCash.busy}
-                  label="Registrar efectivo sin conexiA3n"
+                  label="Registrar efectivo sin conexión"
                   onPress={offlineCash.onQueue}
                 />
                 : null}
