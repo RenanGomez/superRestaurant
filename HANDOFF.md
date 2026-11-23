@@ -1,3 +1,13 @@
+## m2-api-sync-push-merge-fix2 — 2026-11-23 (BLOCKED parcial, nivel A)
+
+- Desde PR #60 `89d28e31fd6630ec2ad313f7cad1d19e6106d60d`: se registran rechazos por timezone/moneda y contexto prohibido, se conserva el retry para catalogo no publicado, se extrae `stale`, y se cubren rechazos y avance del lote. El test de servicio existente cubre `UNSUPPORTED_ENTITY` y `UNSUPPORTED_OPERATION`.
+- Brecha: el contrato SQL de `sync_record_event` exige alcance UUID autorizado y IDs en minusculas; scope invalido/no autorizado y IDs mayusculos no pueden insertarse en el ledger actual. El ejecutor devuelve rechazo inmediato para scope invalido y `INVALID_PAYLOAD` para rechazo SQL generico de ID, sin afirmar persistencia. Completar requiere definir un mecanismo seguro de auditoria para rechazos sin scope autorizado o cambiar invariantes SQL con pruebas de aislamiento; no se declara terminado.
+- Node 24: typecheck y lint API exit 0; test API exit 0. Verificador PG17 paso con 76 migraciones y limpieza exitosa (primer intento encontro expectativa incorrecta de codigo `ACCEPTED`, corregida; segundo paso). El ultimo ajuste de mapeo de ID se verifico en pruebas simuladas, no se reejecuto PG. CodeGraph no inicializado. Sin push.
+## m2-api-sync-push-merge-fix — 2026-11-23 (REVIEW local, nivel A)
+
+- PR #60, base `bfe34e44433ecc2c4b98183a95cc7fc5fb2b80da`: entidades y operaciones no implementadas se registran como rechazos estables; permisos y dispositivo se revalidan antes del ledger. Transiciones con versión obsoleta se rechazan. `lock_timeout` local de 2 s; BOM retirado e imports ordenados.
+- Pruebas simuladas cubren rechazo y continuación de lote, duplicate sin persistencia, reutilización de identificadores y secuencia fuera de orden. PG17 real cubre replay, colisiones, rollback por excepción y conflicto de persistencia, versión obsoleta, rechazo financiero, hueco y secuencias reutilizadas. CI PostgreSQL ya invoca `verify:sync-schema:rollback`, que llama a `verifySyncExecutor`.
+- Node 24: lint, typecheck y build API exit 0; test API exit 0. Verificador PG17 local exit 0: 76 migraciones, cursor concurrente OK y limpieza exitosa. CodeGraph no inicializado; inspección manual dirigida. No se hizo push ni se modificó el PR remoto por instrucción.
 ## m2-web-sync-status-ui — 2026-11-23 (REVIEW local · nivel C)
 
 - **Ronda 1 revisión cruzada PR #54 (cierre P1.1 + P2.1..P2.5 + P3.1/P3.3/P3.4):**
@@ -48,6 +58,11 @@
 - **Brechas y deuda (no verificable en este worktree):** (1) `app.json` (fuera de los paths del ítem) aún no registra el plugin `expo-sqlite` con `useSQLCipher: true` ni excluye `.db`/`-wal`/`-shm` de backups (iOS/Android); sin ese plugin el adaptador falla cerrado con `ENCRYPTION_UNAVAILABLE`; (2) `PRAGMA cipher_version` real, cabecera ilegible y clave en Keychain solo se pueden comprobar en Development/EAS Build; (3) falta la atribución BSD de SQLCipher en `THIRD_PARTY_NOTICES` y pantalla legal; (4) el API todavía no expone `/sync` ni `/sync/pull` (dependencia `m2-api-sync-pull-review`), por lo que las pruebas del transporte usan `fetch` inyectado; (5) la rotación está implementada y probada en la capa pura, sin ejecutarse contra SQLCipher real.
 - **Migración / Git remoto:** sin migraciones, sin interacción remota, sin push ni PR. Commit local en la rama de sesión por instrucción explícita.
 - **Siguiente acción mínima:** registrar el plugin `useSQLCipher` y las exclusiones de backup en `app.json`, endurecer la verificación con un Development Build y conectar la UI a `openMobileOfflineRuntime()` cuando exista el endpoint `/sync`.
+## m2-api-sync-push-merge — 2026-11-23 (BLOCKED local, nivel A)
+
+- Continuación desde `903cfe386062529a6f6f23d3c8715d3bc30afc8e`; se corrigió la ruta a `POST /api/v1/sync/push` y sus comprobaciones HTTP. El ejecutor WIP aún no cuenta con verificación PostgreSQL exitosa, por lo que no se declara funcional ni REVIEW.
+- Puertas Node 24: lint, typecheck y build API pasaron tras compilar `shared-types` y `domain`; test API pasó (exit 0). Primer intento de typecheck/test/build/verificador falló por artefactos de dependencias ausentes. Segundo intento del verificador falló `LOCAL_PG17_REQUIRED` en configuración; no se inició el cluster. El binario indicado responde `postgres (PostgreSQL) 17.6` al invocarlo directamente. No repetir la puerta sin resolver el lanzamiento del proceso y nueva instrucción.
+- CodeGraph no inicializado; inspección manual dirigida. Falta verificación PG17, revisión cruzada de nivel A y pruebas de integración completas. No se hizo push ni PR por instrucción explícita.
 ## m1-z2b-confirm-pizza-v2 — 2026-11-23 (REVIEW local · nivel A)
 
 - **Tarea y alcance (nivel A):** reconstruir `app_private.confirm_capture_draft_v3` sobre el cuerpo canónico Pizza V2 sin referencias heredadas a `base_group_id`/`extra_group_ids`, restaurar a nivel de esquema el invariante `delivery_zones_coverage_nonempty` (eliminado como CHECK en `20261121000100`) y añadir pruebas SQL de confirmación pizza+zona y pruebas negativas de cobertura vacía.
@@ -2933,3 +2948,60 @@ Inspección inicial: CodeGraph actualizado, resolvedor legado de una variante y 
 - Alcance: `apps/web/src/lib/offline-pos.ts` (nuevo) decide, con el guard compartido `evaluateOfflineCapability` de `@super-restaurant/sync-engine`, que puede hacer la Web POS sin WAN: lee menu/mesas cacheados, crea ordenes locales, agrega lineas a ordenes originadas en este dispositivo, cobra efectivo con caja+turno+secuencia/tope y bloquea en espanol (edit de orden remota, descuentos/cancelaciones de supervisor, cierre de caja, reembolsos, CFDI, inventario, terminal/pasarela) sin encolarlas. `commitOfflineOperation` solo anuncia `local_pending` si el puerto registrado confirma un commit atomico y devuelve eventId; sin puerto queda `unavailable` (no finge offline). Se agrego `OfflinePosNotice` a `/app/capture` y `markDocumentPendingSync` marca el ticket con "Pendiente de sincronizar (solo este dispositivo)". Se agrego la dependencia workspace `@super-restaurant/sync-engine` a apps/web.
 - Verificacion Node 24.19.0: `pnpm --filter @super-restaurant/web lint` PASS; `typecheck` PASS; `test` PASS (incluye 14 casos nuevos offline-pos y el marcador de ticket); `build` PASS (`next build` con Turbopack); deps `shared-types` y `sync-engine` compiladas para resolver tipos; `git diff --check` PASS.
 - Brecha: el puerto concreto IndexedDB+DeviceSyncEngine (`m2-web-local-storage-crypto`) sigue BLOCKED por `m2-api-sync-pull-review` / `POST /sync`; por eso la capa queda lista pero la operacion offline real no se habilita ni se finge. Verificacion visual en navegador autenticado no se ejecuto (requiere Supabase/API); solo se valido el build. Sin push ni cambios remotos; commit local.
+## m2-api-sync-push-merge — 2026-11-23 (BLOCKED)
+
+- Nivel A. El fetch solicitado obtuvo `5ea11416649bbb345f59ee5ea3f7102b37a6d595`, pero `git merge --ff-only FETCH_HEAD` falló: la rama actual `ao/sync-push-api/root` y la rama solicitada divergen desde `e42f779ec6ba8bd87e8afaa4a540e4f750dab7eb` (10 commits solo en HEAD y 5 solo en FETCH_HEAD). `git merge-base --is-ancestor HEAD FETCH_HEAD` confirmó exit 1.
+- No se integró el trabajo previo ni se implementaron el ejecutor, el controlador o las pruebas solicitadas; tampoco se ejecutaron las puertas, pues falta su base. No se sustituyó el fast-forward pedido por una fusión distinta ni se alteró historia compartida.
+- Siguiente acción: reconciliar explícitamente las ramas conservando ambos historiales y retomar la implementación y las pruebas PG17.
+
+## m2-api-sync-push-merge — 2026-11-23 (BLOCKED)
+
+- Bloqueo de contrato: `SYNC_SERVER_RESULT_STATUSES` solo admite estados terminales; `DeviceSyncEngine.nextEntryState` reintenta un resultado ausente, pero procesa cualquier resultado presente como terminal. Por ello no se puede devolver un resultado por evento y a la vez reintentar individualmente `SEQUENCE_OUT_OF_ORDER`, `CONCURRENT_RETRY` o `55P03` sin cambiar el contrato/motor o incumplir uno de los criterios. Devolver `rejected` perdería el reintento; fallar todo el lote ocultaría resultados parciales.
+- Siguiente acción mínima: decidir y autorizar la semántica de reintento por evento (ampliar contrato y motor, o permitir resultados omitidos), incluyendo pruebas de compatibilidad y aislamiento; después implementar transacción por evento y ledger/efecto atómicos. `DatabaseClientPort` actualmente solo expone consultas del pool y las autoridades usan ese puerto: también requiere una vía de conexión transaccional compartida.
+- Inspección manual dirigida: contratos y motor sync, migración 20261123000300, persistencias de órdenes/pagos y deuda P3. CodeGraph no disponible en esta sesión. Sin código, pruebas, migraciones remotas, subagentes, push ni PR. La instrucción humana de no publicar prevalece sobre las reglas de publicación del proyecto.
+
+### Continuación: decisión de reintento
+
+- Decisión recibida: no cambiar contrato ni motor; omitir resultados transitorios, con log estructurado. El bloqueo anterior de representación queda resuelto.
+- Sigue pendiente la implementación completa. Hallazgos de integración: `sync_record_event` devuelve `denied` indistintamente por membresía, permiso o dispositivo; `app_api` no tiene lectura de las tablas de dispositivos y `sync_register_device` crea dispositivos, por lo que no sirve como consulta de estado activo. El puerto de base actual no ofrece transacción compartida con los writers. La secuencia `SEQUENCE_OUT_OF_ORDER` ya inferior al cursor no puede recuperarse con un reenvío idéntico porque el cursor solo avanza.
+- No se construyó un endpoint parcial ni se ejecutaron las puertas globales; no existe evidencia de atomicidad o aislamiento de este corte. Se necesita diseñar e implementar la frontera transaccional y resolver la distinción de revocación sin registro implícito, y probar la recuperación de secuencia. Sin migración remota ni push.
+
+### Avance parcial de implementación
+
+- Se añadió `apps/api/src/sync/sync-result.ts` y tres pruebas para omisión transitoria, replay con identidad del request y denegación genérica; registradas en el script de pruebas API. No hay controlador ni endpoint conectado: no se declara REVIEW.
+- Verificación dirigida con Node 24: compilación TypeScript de shared-types, domain y pruebas API exit 0; `sync-result.test.js` 3/3; ESLint dirigido exit 0; `git diff --check` exit 0. `pnpm --filter @super-restaurant/api^... build` falló con `spawn EPERM` del sandbox. No se ejecutaron las puertas globales.
+- Pendiente: transacción por evento, serialización, revalidación, despacho y merge autoritativos, aislamiento y contrato HTTP, y todas las puertas. Sin migración remota ni push.
+
+### Coordinación parcial del lote
+
+- `sync-push.service.ts` valida el lote compartido, procesa secuencialmente y omite con hechos de log los eventos transitorios y los posteriores para no adelantar el cursor. `sync-push.test.ts` verifica reintento y scope con ejecutor simulado; no prueba PostgreSQL ni conecta una ruta HTTP.
+- Node 24: compilación de pruebas API, 2/2 pruebas dirigidas, ESLint dirigido y `git diff --check` verdes. Falta ejecutor transaccional real, auth/RBAC, escrituras, aislamiento y puertas globales. Estado IN_PROGRESS; sin remoto.
+
+### Frontera transaccional preparatoria
+
+- `PostgresDatabaseClient.transaction` usa conexión dedicada y READ COMMITTED, confirma al terminar y revierte al fallar; descarta la conexión si falla rollback. Prueba simulada verifica uso de una conexión y rollback de escrituras de negocio y ledger. Aún no está conectada a sync ni verificada contra PostgreSQL.
+- Node 24 fuera del sandbox: `pnpm lint` 10/10, `pnpm typecheck` 13/13, `pnpm test` 13/13 y `pnpm build` 10/10 verdes; `git diff --check` verde. Son puertas del estado parcial, no pruebas del endpoint inexistente.
+- Sigue IN_PROGRESS: ejecutor real, autorización y estado de dispositivo, despacho/merge, controlador, integración PostgreSQL y aislamiento. Sin migración remota ni push.
+
+### m2-api-sync-push-merge — BLOCKED (continuación)
+
+- No se pudo completar una integración segura con la frontera actual: `app_api` no tiene SELECT en `app.sync_devices` ni EXECUTE en `sync_can_write`; `sync_register_device` inserta dispositivos ausentes, y `sync_record_event` devuelve `denied` tanto para dispositivo inactivo como para actor/scope o RBAC. No se estableció una forma de distinguir `DEVICE_REVOKED` y `AUTH_REVOKED` antes de deduplicar sin registrar dispositivos implícitamente. La migración permanece sin cambios y sin aplicar remotamente.
+- `SyncEnvelopeV1.payload` valida JSON genérico, no define esquemas específicos por operación; falta conectar y validar las intenciones con las autoridades existentes y el merge. El ledger requiere resultado al insertar y es inmutable, por lo que el diseño debe demostrar replay y efecto atómicos en la misma conexión, con pruebas de concurrencia reales.
+- Los commits locales b47b43f6, 775208be y af6bbe99 son preparación, no una implementación del endpoint. Puertas globales del estado parcial verdes (lint 10/10, typecheck 13/13, test 13/13, build 10/10); no existe contrato HTTP ni prueba PostgreSQL del flujo sync. CodeGraph no disponible. Siguiente acción: implementar y verificar una frontera SQL/API de consulta de autorización/dispositivo y deduplicación que mantenga las garantías, seguida del ejecutor, las pruebas de aislamiento e idempotencia y las puertas de nuevo. Sin push ni cambios remotos.
+
+### Frontera SQL candidata (IN_PROGRESS)
+
+- Añadida migración local `20261123000400_sync_api_boundary.sql` con consulta de estado de dispositivo y wrapper de capacidad, SECURITY DEFINER con search_path vacío y EXECUTE solo app_api; pruebas de grants, revocación y scope añadidas al verificador rollback. No se aplicó remotamente.
+- Primera ejecución `pnpm --filter @super-restaurant/api verify:sync-schema:rollback`: `LOCAL_POSTGRES_MISSING`. Se inició copia local de PostgreSQL desde el checkout principal y se interrumpió al no concluir; el verificador no llegó a ejecutarse con los binarios. No se declara verificación SQL ni REVIEW. Falta completar copia, verificador PostgreSQL, ejecutor/controlador, integración y puertas finales.
+
+### Frontera SQL validada localmente
+
+- La segunda ejecución usó PG17 del checkout principal mediante `LOCAL_POSTGRES_BIN`; `initdb --no-sync` y timeout de 300 s. `verify:sync-schema:rollback` pasó con 75 migraciones, invariantes de permisos/dispositivo/scope y concurrencia del cursor, postcheck sin residuos y cleanup correcto. El primer intento agotó el timeout anterior en initdb.
+- Node 24 fuera del sandbox: lint 10/10, typecheck 13/13, test 13/13 y build 10/10 verdes; `git diff --check` verde. Esto valida el bloque SQL, no un endpoint de sync.
+- Falta implementar ejecutor y controlador, transacción con efecto real, autorización por evento, idempotencia y aislamiento HTTP/PostgreSQL; tarea IN_PROGRESS. Sin push ni migración remota.
+
+### Integración sobre main más reciente (IN_PROGRESS)
+
+- Incorporados mediante cherry-pick los cuatro commits de código de sync; se conservaron ambas historias documentales y se omitió el commit que solo registraba bloqueo. CodeGraph no está indexado en este worktree; inspección manual de ledger, contratos, merge y persistencia.
+- Se añadió prueba de que un error transitorio impide ejecutar eventos posteriores del dispositivo. Lint global 10/10, typecheck global 13/13, test global 13/13 antes de esta prueba; build API y dependencias correcto. Verificador sync PG17 correcto: 75 migraciones, bloqueo concurrente y limpieza correcta. No equivale al job pg-verify completo ni prueba un endpoint.
+- Pendiente: ejecutor transaccional, validación de precios por catálogo y escritura auditada usando autoridades existentes, controlador, pruebas PG17 de extremo a extremo, pg-verify completo y repetir puertas sobre el corte final. La persistencia de órdenes exige auditoría y snapshots del catálogo; no conectar directamente payloads no confiables al merge financiero.

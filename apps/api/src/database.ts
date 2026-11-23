@@ -14,6 +14,10 @@ export interface DatabaseClientPort {
   query(sql: string, parameters: readonly unknown[]): Promise<DatabaseQueryResult>;
 }
 
+export interface TransactionalDatabaseClientPort extends DatabaseClientPort {
+  transaction<T>(operation: (database: DatabaseClientPort) => Promise<T>): Promise<T>;
+}
+
 export interface DatabaseConfig {
   readonly caCertificate: string;
   readonly connectionString: string;
@@ -92,7 +96,7 @@ export function readDatabaseConfig(
 }
 
 @Injectable()
-export class PostgresDatabaseClient implements DatabaseClientPort, OnApplicationShutdown {
+export class PostgresDatabaseClient implements TransactionalDatabaseClientPort, OnApplicationShutdown {
   readonly #pool: Pool;
 
   public constructor(config: DatabaseConfig) {
@@ -113,9 +117,37 @@ export class PostgresDatabaseClient implements DatabaseClientPort, OnApplication
     return Object.freeze({ rows: Object.freeze([...result.rows]) });
   }
 
+  public async transaction<T>(operation: (database: DatabaseClientPort) => Promise<T>): Promise<T> {
+    return runDatabaseTransaction(await this.#pool.connect(), operation);
+  }
+
   public async onApplicationShutdown(): Promise<void> {
     await this.#pool.end();
   }
+}
+
+export async function runDatabaseTransaction<T>(
+  connection: { query(sql: string, parameters?: unknown[]): Promise<{ rows: QueryResultRow[] }>; release(error?: Error): void },
+  operation: (database: DatabaseClientPort) => Promise<T>,
+): Promise<T> {
+    let releaseError: Error | undefined;
+    try {
+      await connection.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+      const database: DatabaseClientPort = {
+        query: async (sql, parameters) => {
+          const result = await connection.query(sql, [...parameters]);
+          return Object.freeze({ rows: Object.freeze([...result.rows]) });
+        },
+      };
+      const result = await operation(database);
+      await connection.query("COMMIT");
+      return result;
+    } catch (error: unknown) {
+      try { await connection.query("ROLLBACK"); } catch { releaseError = new Error("ROLLBACK_FAILED"); }
+      throw error;
+    } finally {
+      connection.release(releaseError);
+    }
 }
 
 export function loadAndValidateCaCertificate(path: string): string {

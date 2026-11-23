@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { Pool } from "pg";
 
-import { DatabaseConfigurationError, guardPostgresPool, readDatabaseConfig } from "./database.js";
+import { DatabaseConfigurationError, guardPostgresPool, readDatabaseConfig, runDatabaseTransaction } from "./database.js";
 import { readExternalTestDatabaseUrl } from "./operations/local-postgres.js";
 
 const projectRef = "abcdefghijklmnopqrst";
@@ -11,6 +11,22 @@ const validEnvironment = Object.freeze({
   DATABASE_CA_CERT_PATH: "C:/private/prod-ca.crt",
   DATABASE_URL: `postgresql://app_api.${projectRef}:private-password@aws-0-region.pooler.supabase.com:5432/postgres?sslmode=verify-full`,
   SUPABASE_URL: `https://${projectRef}.supabase.co`,
+});
+
+test("transaction uses one connection and rolls back failed work", async () => {
+  const calls: string[] = [];
+  let released = false;
+  const connection = {
+    query: async (sql: string) => { calls.push(sql); return { rows: [] }; },
+    release: () => { released = true; },
+  };
+  await assert.rejects(runDatabaseTransaction(connection, async (database) => {
+    await database.query("business write", []);
+    await database.query("ledger write", []);
+    throw new Error("failure");
+  }), /failure/u);
+  assert.deepEqual(calls, ["BEGIN ISOLATION LEVEL READ COMMITTED", "business write", "ledger write", "ROLLBACK"]);
+  assert.equal(released, true);
 });
 
 test("requires a dedicated app_api Supabase connection and strips the driver ssl query", () => {
