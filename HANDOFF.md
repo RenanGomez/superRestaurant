@@ -1,3 +1,10 @@
+## m2-sync-sql-migrations - ronda 1 (revision pendiente)
+
+- Corregidos permisos por entidad/operacion usando find_active_branch_membership y la matriz RBAC, aislamiento scoped de dispositivos, inmutabilidad del ledger/recibos/changelog, versiones monotonicamente crecientes y tombstones sin resurreccion, casos de revision supervisada, huella ligada al actor y handler de unicidad acotado. El contador global serializa commits para evitar huecos visibles; lock_timeout de 2 segundos limita espera.
+- Dispositivos y secuencias quedan vinculados a restaurante+sucursal+deviceId, segun la opcion solicitada en la revision; esto no garantiza una unica secuencia global entre scopes como pide el contrato previo y requiere reconciliacion al integrar el endpoint. No hay migracion remota; rollback es no aplicarla.
+- PostgreSQL 17.6 local: 74 migraciones desde cero, invariantes rollback y postcheck verdes; dos sesiones comprobaron bloqueo del contador y timeout, no una carrera de deduplicacion completa. Una ejecucion anterior se desconecto (ECONNRESET); el siguiente intento paso y paro el cluster. Lint y typecheck globales verdes; test global verificado en esta ronda. CodeGraph no inicializado, inspeccion manual; sin subagentes ni push.
+- Pendiente revision nivel A y prueba de efecto de negocio atomico con la futura API; no declarar capacidad offline operativa.
+
 ## m2-sync-sql-migrations - 2026-11-23 (IN_PROGRESS; revision pendiente)
 
 - Migracion local 20261123000300_sync_ledger.sql: dispositivos con secuencia global serializada, ledger con huellas, recibos, changelog con contador transaccional y tombstones, y casos de revision. RLS+FORCE sin grants directos; funciones privadas con scope. Sin TTL financiero ni purga.

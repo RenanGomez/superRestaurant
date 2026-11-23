@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Client } from "pg";
 import { assertLocalConfirmation, listMigrationNames, LocalPostgres } from "./local-postgres.js";
 import { syncInvariantSql } from "./sync-schema-verification.js";
 
@@ -18,10 +19,25 @@ try {
   await local.admin.query("BEGIN");
   let invariantFailure: unknown;
   try { await local.admin.query(syncInvariantSql()); } catch (error: unknown) { invariantFailure = error; } finally { await local.admin.query("ROLLBACK"); }
+  stage = "concurrent_cursor_lock";
+  const competitor = new Client({ connectionString: local.adminUrl });
+  await competitor.connect();
+  try {
+    await local.admin.query("BEGIN");
+    await local.admin.query("UPDATE app_private.sync_cursor_counter SET value=value WHERE singleton");
+    await competitor.query("BEGIN");
+    await competitor.query("SET LOCAL lock_timeout = '200ms'");
+    await assert.rejects(competitor.query("UPDATE app_private.sync_cursor_counter SET value=value WHERE singleton"),
+      (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "55P03");
+  } finally {
+    await competitor.query("ROLLBACK");
+    await competitor.end();
+    await local.admin.query("ROLLBACK");
+  }
   stage = "postcheck";
   assert.deepEqual((await local.admin.query(summary)).rows[0], baseline);
   if (invariantFailure !== undefined) { stage = "invariants"; throw invariantFailure; }
-  process.stdout.write(`${JSON.stringify({ stage: "sync_schema_rollback", status: "ok", migrationsApplied: names.length, baseline })}\n`);
+  process.stdout.write(`${JSON.stringify({ stage: "sync_schema_rollback", status: "ok", migrationsApplied: names.length, concurrentCursorLock: "ok", baseline })}\n`);
 } catch (error: unknown) {
   failed = true;
   const message = error instanceof Error ? error.message.replace(/postgres(ql)?:\/\/\S+/giu, "[url]") : "unknown";
