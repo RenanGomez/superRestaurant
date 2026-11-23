@@ -53,6 +53,16 @@ export class RateLimitStore {
     const entry = this.entries.get(key);
     if (entry !== undefined && entry.count > 0) entry.count -= 1;
   }
+
+  /** Read-only check: never consumes a slot, so a valid credential can be verified. */
+  public retryAfterIfLimited(key: string, limit: number): number {
+    const entry = this.entries.get(key);
+    if (entry === undefined) return 0;
+    const now = this.clock();
+    if (entry.expiresAt <= now) { this.entries.delete(key); return 0; }
+    if (entry.count < limit) return 0;
+    return Math.max(1, Math.ceil((entry.expiresAt - now) / 1000));
+  }
 }
 
 export interface AuthenticatedPrincipal {
@@ -100,7 +110,10 @@ export class SupabaseAuthPrincipalVerifier implements AuthPrincipalVerifierPort 
 @Injectable()
 export class SupabaseAuthGuard implements CanActivate {
   private readonly requests: RateLimitStore;
-  private readonly loginRequests: RateLimitStore;
+  /** Requests that presented no usable credential: they never reach the provider. */
+  private readonly missingCredentials: RateLimitStore;
+  /** Failed verifications, per client address and per token fingerprint. */
+  private readonly rejectedAttempts: RateLimitStore;
   private readonly policy: RateLimitPolicy;
   private readonly operations = new WeakMap<object, number>();
   private nextOperation = 0;
@@ -108,10 +121,12 @@ export class SupabaseAuthGuard implements CanActivate {
     @Inject(AUTH_PRINCIPAL_VERIFIER) private readonly verifier: AuthPrincipalVerifierPort,
     @Inject(Reflector) private readonly reflector: Reflector,
     policy: RateLimitPolicy = readRateLimitPolicy(process.env),
+    now: () => number = Date.now,
   ) {
     this.policy = policy;
-    this.requests = new RateLimitStore(Date.now, policy.maxTrackedKeys);
-    this.loginRequests = new RateLimitStore(Date.now, policy.maxTrackedKeys);
+    this.requests = new RateLimitStore(now, policy.maxTrackedKeys);
+    this.missingCredentials = new RateLimitStore(now, policy.maxTrackedKeys);
+    this.rejectedAttempts = new RateLimitStore(now, policy.maxTrackedKeys);
   }
 
   public async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -120,25 +135,25 @@ export class SupabaseAuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const response = context.switchToHttp().getResponse?.<{ setHeader(name: string, value: string): void }>();
-    // Login attempts are metered before any token work so unauthenticated floods are
-    // rejected cheaply and never reach the Auth provider. Successful attempts refund
-    // their slot, so only real failures consume the quota.
-    const clientIp = resolveClientIp(request, this.policy.trustForwardedFor);
-    const ipKey = `ip|${clientIp}`;
-    this.rejectLimited(response, this.loginRequests.consume(ipKey, this.policy.loginMax, this.policy.loginWindowMs));
+    const clientIp = resolveClientIp(request, this.policy.trustForwardedFor, this.policy.trustedProxyHops);
     const accessToken = parseBearerAuthorization(request.headers?.authorization);
-    if (accessToken === undefined) throw authenticationRequired();
-    // A second, independent slot keyed by a one-way token fingerprint stops a single
-    // stolen token from being sprayed across many source addresses.
+    if (accessToken === undefined) {
+      // Bucket A: only credential-less requests. It shares no key with any token, so
+      // a header-less flood cannot consume the quota of valid clients.
+      this.rejectLimited(response, this.missingCredentials.consume(`missing|${clientIp}`, this.policy.loginMax, this.policy.loginWindowMs));
+      throw authenticationRequired();
+    }
+
+    // Bucket B: failed tokens. The fingerprint is only short-circuited when it has
+    // already failed; a valid credential has no failures and is always verified, so
+    // it is never blocked by traffic from other clients or other tokens.
     const tokenKey = `token|${tokenFingerprint(accessToken)}`;
-    this.rejectLimited(response, this.loginRequests.consume(tokenKey, this.policy.loginMax, this.policy.loginWindowMs));
+    this.rejectLimited(response, this.rejectedAttempts.retryAfterIfLimited(tokenKey, this.policy.loginMax));
 
     let principal: AuthenticatedPrincipal | undefined;
     try {
       principal = normalizePrincipal(await this.verifier.verifyAccessToken(accessToken));
       if (principal === undefined) throw new AccessTokenRejectedError();
-      this.loginRequests.refund(ipKey);
-      this.loginRequests.refund(tokenKey);
       Object.defineProperty(request, authenticatedPrincipalKey, {
         configurable: false,
         enumerable: false,
@@ -146,6 +161,9 @@ export class SupabaseAuthGuard implements CanActivate {
         writable: false,
       });
     } catch {
+      const ipRetryAfter = this.rejectedAttempts.consume(`failure|${clientIp}`, this.policy.loginMax, this.policy.loginWindowMs);
+      const tokenRetryAfter = this.rejectedAttempts.consume(tokenKey, this.policy.loginMax, this.policy.loginWindowMs);
+      this.rejectLimited(response, Math.max(ipRetryAfter, tokenRetryAfter));
       throw authenticationRequired();
     }
     const handler = context.getHandler();
@@ -182,16 +200,19 @@ export function parseBearerAuthorization(value: unknown): string | undefined {
 
 /**
  * Resolves the login limiter's client address without trusting caller headers.
- * `x-forwarded-for` is only read when a trusted proxy is configured, and then the
- * last hop is used because a trusted reverse proxy appends the address it saw.
+ * `x-forwarded-for` is only read when a trusted proxy is configured. The header is
+ * appended left-to-right by the proxy chain, so with `trustedProxyHops` trusted
+ * proxies the address appended by the outermost trusted proxy is the one at
+ * `hops.length - trustedProxyHops`. Anything shorter or not an IP literal falls
+ * back to the socket address, so a spoofed or truncated header cannot pick a key.
  */
-export function resolveClientIp(request: AuthenticatedRequest, trustForwardedFor: boolean): string {
-  if (trustForwardedFor) {
+export function resolveClientIp(request: AuthenticatedRequest, trustForwardedFor: boolean, trustedProxyHops = 1): string {
+  if (trustForwardedFor && Number.isSafeInteger(trustedProxyHops) && trustedProxyHops >= 1) {
     const forwarded = request.headers?.["x-forwarded-for"];
     if (typeof forwarded === "string" && forwarded.length <= 1_024) {
-      const hops = forwarded.split(",");
-      const lastHop = hops[hops.length - 1]?.trim();
-      if (lastHop !== undefined && lastHop !== "" && isIP(lastHop) !== 0) return lastHop;
+      const hops = forwarded.split(",").map((hop) => hop.trim()).filter((hop) => hop !== "");
+      const candidate = hops[hops.length - trustedProxyHops];
+      if (candidate !== undefined && isIP(candidate) !== 0) return candidate;
     }
   }
   const socketAddress = request.socket?.remoteAddress;

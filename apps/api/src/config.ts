@@ -9,12 +9,21 @@ export interface ApiConfig {
  * verification boundary). Password sign-in itself is delegated to Supabase Auth by
  * web, mobile and KDS, so it can only be metered there; these counters protect every
  * login attempt that reaches this API and never trust caller-supplied identity.
+ *
+ * `trustForwardedFor` is a deployment contract: only enable it when exactly one
+ * trusted reverse proxy sits in front of the API and it rewrites `x-forwarded-for`.
+ * `trustedProxyHops` is the number of trusted proxies that may prepend an address;
+ * the guard reads the hop appended by the outermost trusted proxy and rejects the
+ * configuration at startup when it is missing or out of range. With
+ * `trustForwardedFor=false` (default) caller headers are ignored and the socket
+ * address is used.
  */
 export interface RateLimitPolicy {
   readonly loginMax: number;
   readonly loginWindowMs: number;
   readonly maxTrackedKeys: number;
   readonly trustForwardedFor: boolean;
+  readonly trustedProxyHops: number;
 }
 
 export const DEFAULT_RATE_LIMIT_POLICY: RateLimitPolicy = Object.freeze({
@@ -22,6 +31,7 @@ export const DEFAULT_RATE_LIMIT_POLICY: RateLimitPolicy = Object.freeze({
   loginWindowMs: 60_000,
   maxTrackedKeys: 10_000,
   trustForwardedFor: false,
+  trustedProxyHops: 1,
 });
 
 export class ApiConfigurationError extends Error {
@@ -40,11 +50,23 @@ export function readApiConfig(environment: NodeJS.ProcessEnv): ApiConfig {
 }
 
 export function readRateLimitPolicy(environment: NodeJS.ProcessEnv): RateLimitPolicy {
+  const trustForwardedFor = readBoolean(environment.RATE_LIMIT_TRUST_FORWARDED_FOR, DEFAULT_RATE_LIMIT_POLICY.trustForwardedFor, "RATE_LIMIT_TRUST_FORWARDED_FOR_INVALID");
+  const trustedProxyHops = readBoundedInteger(
+    environment.RATE_LIMIT_TRUSTED_PROXY_HOPS,
+    DEFAULT_RATE_LIMIT_POLICY.trustedProxyHops,
+    1,
+    10,
+    "RATE_LIMIT_TRUSTED_PROXY_HOPS_INVALID",
+  );
+  // Enabling forwarded headers without trusting at least one hop would let callers
+  // spoof their address, so the combination is rejected at startup.
+  if (trustForwardedFor && trustedProxyHops < 1) throw new ApiConfigurationError("RATE_LIMIT_TRUSTED_PROXY_HOPS_INVALID");
   return Object.freeze({
     loginMax: readBoundedInteger(environment.RATE_LIMIT_LOGIN_MAX, DEFAULT_RATE_LIMIT_POLICY.loginMax, 1, 10_000, "RATE_LIMIT_LOGIN_MAX_INVALID"),
     loginWindowMs: readBoundedInteger(environment.RATE_LIMIT_LOGIN_WINDOW_MS, DEFAULT_RATE_LIMIT_POLICY.loginWindowMs, 1_000, 3_600_000, "RATE_LIMIT_LOGIN_WINDOW_MS_INVALID"),
     maxTrackedKeys: readBoundedInteger(environment.RATE_LIMIT_MAX_KEYS, DEFAULT_RATE_LIMIT_POLICY.maxTrackedKeys, 100, 1_000_000, "RATE_LIMIT_MAX_KEYS_INVALID"),
-    trustForwardedFor: readBoolean(environment.RATE_LIMIT_TRUST_FORWARDED_FOR, DEFAULT_RATE_LIMIT_POLICY.trustForwardedFor, "RATE_LIMIT_TRUST_FORWARDED_FOR_INVALID"),
+    trustForwardedFor,
+    trustedProxyHops,
   });
 }
 

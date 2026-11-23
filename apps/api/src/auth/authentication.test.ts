@@ -224,32 +224,34 @@ function loginPolicy(overrides: Partial<RateLimitPolicy> = {}): RateLimitPolicy 
     loginWindowMs: 60_000,
     maxTrackedKeys: 10_000,
     trustForwardedFor: false,
+    trustedProxyHops: 1,
     ...overrides,
   });
 }
 
 function unauthenticatedContext(options: {
   readonly authorization?: unknown;
+  readonly omitAuthorization?: boolean;
   readonly token?: string;
   readonly ip?: string;
   readonly forwardedFor?: string;
   readonly retrySink?: (value: string) => void;
 }): never {
+  const headers: Record<string, unknown> = {
+    ...(options.omitAuthorization === true ? {} : { authorization: options.authorization ?? `Bearer ${options.token ?? "sensitive-access-token-value"}` }),
+    ...(options.forwardedFor === undefined ? {} : { "x-forwarded-for": options.forwardedFor }),
+  };
   return {
     getClass: () => class TestController {},
     getHandler: () => function handler() {},
     switchToHttp: () => ({
-      getRequest: () => ({
-        socket: { remoteAddress: options.ip ?? "127.0.0.1" },
-        headers: {
-          authorization: options.authorization ?? `Bearer ${options.token ?? "sensitive-access-token-value"}`,
-          ...(options.forwardedFor === undefined ? {} : { "x-forwarded-for": options.forwardedFor }),
-        },
-      }),
+      getRequest: () => ({ socket: { remoteAddress: options.ip ?? "127.0.0.1" }, headers }),
       getResponse: () => ({ setHeader: (_name: string, value: string) => options.retrySink?.(value) }),
     }),
   } as never;
 }
+
+const verifiedPrincipal = Object.freeze({ actorId: "8cc7eb84-af2a-4e84-95de-967c39af86ab" });
 
 test("invalid tokens are limited per client IP and 429 exposes only retry timing", async () => {
   let calls = 0;
@@ -269,11 +271,12 @@ test("invalid tokens are limited per client IP and 429 exposes only retry timing
     assert.equal(JSON.stringify(body).includes("127.0.0.1"), false);
     return true;
   });
+  // The repeated token is short-circuited by its own failure fingerprint.
   assert.equal(calls, 3);
   assert.ok(Number(retryAfter) > 0);
 });
 
-test("the login quota is per client address and does not leak between addresses", async () => {
+test("the failure quota is per client address and does not leak between addresses", async () => {
   const guard = new SupabaseAuthGuard(
     { verifyAccessToken: async () => { throw new Error("secret"); } },
     new Reflector(),
@@ -300,13 +303,83 @@ test("a single credential sprayed from many addresses is limited by token finger
   assert.equal(calls, 3);
 });
 
-test("successful authentication refunds the login quota instead of consuming it", async () => {
+test("a header-less flood never blocks a valid token", async () => {
+  const validToken = "valid-access-token-value";
   const guard = new SupabaseAuthGuard(
-    { verifyAccessToken: async () => Object.freeze({ actorId: "8cc7eb84-af2a-4e84-95de-967c39af86ab" }) },
+    {
+      verifyAccessToken: async (token) => {
+        if (token === validToken) return verifiedPrincipal;
+        throw new Error("secret");
+      },
+    },
+    new Reflector(),
+    loginPolicy({ loginMax: 2 }),
+  );
+  for (let i = 0; i < 2; i += 1) {
+    await assert.rejects(guard.canActivate(unauthenticatedContext({ omitAuthorization: true, ip: "10.0.0.1" })), { status: 401 });
+  }
+  await assert.rejects(guard.canActivate(unauthenticatedContext({ omitAuthorization: true, ip: "10.0.0.1" })), { status: 429 });
+  // Same client address, same minute: the valid token is in a different bucket.
+  assert.equal(await guard.canActivate(unauthenticatedContext({ ip: "10.0.0.1", token: validToken })), true);
+});
+
+test("an invalid-token flood never blocks a valid token from the same address", async () => {
+  const validToken = "valid-access-token-value";
+  const guard = new SupabaseAuthGuard(
+    {
+      verifyAccessToken: async (token) => {
+        if (token === validToken) return verifiedPrincipal;
+        throw new Error("secret");
+      },
+    },
+    new Reflector(),
+    loginPolicy({ loginMax: 2 }),
+  );
+  for (let i = 0; i < 3; i += 1) {
+    await assert.rejects(guard.canActivate(unauthenticatedContext({ ip: "10.0.0.1", token: `bad-token-${i}` })), i < 2 ? { status: 401 } : { status: 429 });
+  }
+  assert.equal(await guard.canActivate(unauthenticatedContext({ ip: "10.0.0.1", token: validToken })), true);
+});
+
+test("a valid token is verified repeatedly without consuming the failure quota", async () => {
+  let calls = 0;
+  const guard = new SupabaseAuthGuard(
+    { verifyAccessToken: async () => { calls += 1; return verifiedPrincipal; } },
     new Reflector(),
     loginPolicy({ loginMax: 1 }),
   );
   for (let i = 0; i < 25; i += 1) assert.equal(await guard.canActivate(unauthenticatedContext({})), true);
+  assert.equal(calls, 25);
+});
+
+test("the failure window resets after the configured interval", async () => {
+  let now = 0;
+  let calls = 0;
+  const guard = new SupabaseAuthGuard(
+    { verifyAccessToken: async () => { calls += 1; throw new Error("secret"); } },
+    new Reflector(),
+    loginPolicy({ loginMax: 1, loginWindowMs: 1_000 }),
+    () => now,
+  );
+  await assert.rejects(guard.canActivate(unauthenticatedContext({})), { status: 401 });
+  await assert.rejects(guard.canActivate(unauthenticatedContext({})), { status: 429 });
+  now = 1_000;
+  await assert.rejects(guard.canActivate(unauthenticatedContext({})), { status: 401 });
+  assert.equal(calls, 2);
+});
+
+test("the missing-credential window resets after the configured interval", async () => {
+  let now = 0;
+  const guard = new SupabaseAuthGuard(
+    { verifyAccessToken: async () => { throw new Error("secret"); } },
+    new Reflector(),
+    loginPolicy({ loginMax: 1, loginWindowMs: 1_000 }),
+    () => now,
+  );
+  await assert.rejects(guard.canActivate(unauthenticatedContext({ omitAuthorization: true })), { status: 401 });
+  await assert.rejects(guard.canActivate(unauthenticatedContext({ omitAuthorization: true })), { status: 429 });
+  now = 1_000;
+  await assert.rejects(guard.canActivate(unauthenticatedContext({ omitAuthorization: true })), { status: 401 });
 });
 
 test("forwarded addresses are only honoured when a trusted proxy is configured", async () => {
@@ -316,6 +389,8 @@ test("forwarded addresses are only honoured when a trusted proxy is configured",
   };
   assert.equal(resolveClientIp(request, false), "10.0.0.5");
   assert.equal(resolveClientIp(request, true), "198.51.100.9");
+  assert.equal(resolveClientIp(request, true, 2), "203.0.113.7");
+  assert.equal(resolveClientIp(request, true, 3), "10.0.0.5");
   assert.equal(resolveClientIp({ headers: { "x-forwarded-for": "not-an-ip" }, socket: { remoteAddress: "10.0.0.5" } }, true), "10.0.0.5");
   assert.equal(resolveClientIp({ headers: {}, socket: {} }, false), "unknown");
 

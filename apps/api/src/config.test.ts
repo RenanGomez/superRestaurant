@@ -68,12 +68,22 @@ test("rate limit policy accepts explicit bounded overrides", () => {
     RATE_LIMIT_LOGIN_WINDOW_MS: "30000",
     RATE_LIMIT_MAX_KEYS: "500",
     RATE_LIMIT_TRUST_FORWARDED_FOR: "TRUE",
+    RATE_LIMIT_TRUSTED_PROXY_HOPS: "2",
   }), {
     loginMax: 5,
     loginWindowMs: 30_000,
     maxTrackedKeys: 500,
     trustForwardedFor: true,
+    trustedProxyHops: 2,
   });
+});
+
+test("forwarded-for trust requires a bounded number of trusted proxy hops", () => {
+  assert.equal(readRateLimitPolicy({}).trustedProxyHops, 1);
+  assert.equal(readRateLimitPolicy({ RATE_LIMIT_TRUSTED_PROXY_HOPS: "3" }).trustedProxyHops, 3);
+  for (const hops of ["0", "11", "-1", "1.5", "one"]) {
+    assert.throws(() => readRateLimitPolicy({ RATE_LIMIT_TRUSTED_PROXY_HOPS: hops }), ApiConfigurationError);
+  }
 });
 
 test("rate limit policy rejects malformed or out-of-range values instead of guessing", () => {
