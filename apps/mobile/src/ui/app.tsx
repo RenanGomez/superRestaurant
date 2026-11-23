@@ -480,9 +480,9 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     scope: readable && branchId !== undefined && restaurantId !== undefined ? { branchId, restaurantId } : undefined,
     session: state.session,
   });
-  // Publish the store's sign-out hook so `endSession` and the provider-driven
-  // sign-out path can release local data before the screen closes.
-  useEffect(() => { releaseLocalDataRef.current = sync.releaseLocalData; }, [sync.releaseLocalData]);
+  // Publish the store's sign-out hook synchronously (not in an effect) so a
+  // sign-out that happens right after the runtime opens still sees it.
+  releaseLocalDataRef.current = sync.releaseLocalData;
   const [syncNotice, setSyncNotice] = useState<string | undefined>(undefined);
   const [offlineQueued, setOfflineQueued] = useState(false);
   const [offlineCashBusy, setOfflineCashBusy] = useState(false);

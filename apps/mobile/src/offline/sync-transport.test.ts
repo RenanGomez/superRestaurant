@@ -241,3 +241,96 @@ test("timeout covers a stalled response body", async () => {
   await assert.rejects(transport.pull(pullRequest),
     (error: unknown) => error instanceof SyncTransportError && error.code === "TRANSPORT_ERROR" && error.retryable);
 });
+
+// A push batch carries the idempotencyKey that must survive a retry verbatim.
+const pushWithEvent = {
+  ...pushRequest,
+  events: [{ eventId: "00000000-0000-4000-8000-00000000e001", idempotencyKey: "idem-push-1" }],
+} as unknown as SyncPushRequest;
+
+test("a push timeout aborts a stalled upload", async () => {
+  const fetcher = (() => Promise.resolve({
+    arrayBuffer: () => new Promise<ArrayBuffer>(() => undefined),
+  } as Response)) as typeof fetch;
+  const transport = createMobileSyncTransport({ accessToken: () => Promise.resolve(TOKEN), apiBaseUrl: BASE, fetcher, timeoutMs: 10 });
+  await assert.rejects(transport.push(pushWithEvent),
+    (error: unknown) => error instanceof SyncTransportError && error.code === "TRANSPORT_ERROR" && error.retryable);
+});
+
+test("a 401 on push refreshes once and retries with the same idempotencyKey", async () => {
+  const calls: Call[] = [];
+  let refreshes = 0;
+  const fetcher = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    calls.push({ init: init ?? {}, url: String(input) });
+    const first = calls.length === 1;
+    return Promise.resolve(new Response(
+      JSON.stringify(first ? { code: "AUTH_EXPIRED" } : { protocolVersion: 1 }),
+      { headers: { "content-type": "application/json" }, status: first ? 401 : 200 },
+    ));
+  };
+  const transport = createMobileSyncTransport({
+    accessToken: () => Promise.resolve("expired-token"),
+    apiBaseUrl: BASE,
+    fetcher: fetcher as typeof fetch,
+    refreshAccessToken: () => { refreshes += 1; return Promise.resolve("renewed-token"); },
+  });
+
+  await transport.push(pushWithEvent);
+  assert.equal(refreshes, 1);
+  assert.equal(calls.length, 2);
+  const keys = calls.map((call) => (JSON.parse(String(call.init.body)) as SyncPushRequest).events[0]?.idempotencyKey);
+  assert.deepEqual(keys, ["idem-push-1", "idem-push-1"], "a retry never re-keys the batch");
+  assert.equal((calls[1]?.init.headers as Record<string, string>)["authorization"], "Bearer renewed-token");
+});
+
+test("a 404 or 405 keeps the batch for a later retry", async () => {
+  for (const status of [404, 405] as const) {
+    const { fetcher } = fakeFetch(status, { code: "NOT_FOUND" });
+    const transport = createMobileSyncTransport({ accessToken: () => Promise.resolve(TOKEN), apiBaseUrl: BASE, fetcher });
+    await assert.rejects(
+      transport.push(pushWithEvent),
+      (error: unknown) => error instanceof SyncTransportError && error.code === `HTTP_${status}` && error.retryable,
+      String(status),
+    );
+    assert.deepEqual(classifySyncHttpStatus(status), { code: `HTTP_${status}`, retryable: true });
+  }
+});
+
+test("a 401 that declares a revocation code does not refresh", async () => {
+  let refreshes = 0;
+  const { calls, fetcher } = fakeFetch(401, { code: "AUTH_REVOKED" });
+  const transport = createMobileSyncTransport({
+    accessToken: () => Promise.resolve(TOKEN),
+    apiBaseUrl: BASE,
+    fetcher,
+    refreshAccessToken: () => { refreshes += 1; return Promise.resolve("renewed-token"); },
+  });
+  await assert.rejects(
+    transport.push(pushWithEvent),
+    (error: unknown) => error instanceof SyncTransportError && error.code === "AUTH_REVOKED" && !error.retryable,
+  );
+  assert.equal(refreshes, 0, "a declared revocation is terminal, not a refreshable expiry");
+  assert.equal(calls.length, 1);
+});
+
+test("the timeout bounds the whole push attempt, including the token refresh", async () => {
+  const fetcher = (() => Promise.resolve(new Response(
+    JSON.stringify({ code: "AUTH_EXPIRED" }),
+    { headers: { "content-type": "application/json" }, status: 401 },
+  ))) as typeof fetch;
+  let refreshed = false;
+  const transport = createMobileSyncTransport({
+    accessToken: () => Promise.resolve(TOKEN),
+    apiBaseUrl: BASE,
+    fetcher,
+    refreshAccessToken: () => { refreshed = true; return new Promise<string>(() => undefined); },
+    timeoutMs: 20,
+  });
+  const startedAt = Date.now();
+  await assert.rejects(
+    transport.push(pushWithEvent),
+    (error: unknown) => error instanceof SyncTransportError && error.code === "TRANSPORT_ERROR" && error.retryable,
+  );
+  assert.equal(refreshed, true);
+  assert.ok(Date.now() - startedAt < 1000, "a hanging refresh cannot outlive the attempt deadline");
+});

@@ -45,7 +45,12 @@ export interface MobileSyncTransportOptions {
   readonly accessToken: () => Promise<string | undefined>;
   readonly fetcher?: typeof fetch;
   readonly paths?: Partial<MobileSyncTransportPaths>;
-  /** Milliseconds before the request is aborted; `0` disables the timer; default 30 seconds. */
+  /**
+   * Overall bound in milliseconds for one `push`/`pull`/`pullSnapshot` attempt,
+   * including the token read, the body transfer, an optional 401 refresh and the
+   * retried request. `0` disables the timer; default 30 seconds. The adapter never
+   * runs longer than this for one call.
+   */
   readonly timeoutMs?: number;
   /** Revocation gate: `false` blocks the request before it is built. */
   readonly canSend?: () => boolean;
@@ -102,9 +107,8 @@ export function createMobileSyncTransport(options: MobileSyncTransportOptions): 
   });
   const fetcher = options.fetcher ?? fetch;
 
-  async function send(path: string, body: unknown, token: string): Promise<Response> {
+  async function send(path: string, body: unknown, token: string, timeoutMs: number): Promise<Response> {
     const controller = new AbortController();
-    const timeoutMs = options.timeoutMs ?? 30_000;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
       if (timeoutMs > 0) timer = setTimeout(() => { controller.abort(); reject(new SyncTransportError("TRANSPORT_ERROR", true)); }, timeoutMs);
@@ -126,10 +130,36 @@ export function createMobileSyncTransport(options: MobileSyncTransportOptions): 
     }
   }
 
+  /** Rejects with the transport timeout once `ms` elapses, bounding an external await. */
+  async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    if (ms <= 0) throw new SyncTransportError("TRANSPORT_ERROR", true);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new SyncTransportError("TRANSPORT_ERROR", true)), ms);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
   async function post(path: string, body: unknown): Promise<unknown> {
     if (options.canSend !== undefined && !options.canSend()) {
       throw new SyncTransportError("AUTH_REVOKED", false);
     }
+    // One deadline for the whole attempt: token read, send, refresh and retry.
+    const totalTimeout = options.timeoutMs ?? 30_000;
+    const deadline = Date.now() + (totalTimeout > 0 ? totalTimeout : 0);
+    const remaining = (): number => (totalTimeout > 0 ? Math.max(0, deadline - Date.now()) : 0);
+    const remainingOrThrow = (): number => {
+      const left = remaining();
+      if (totalTimeout > 0 && left <= 0) throw new SyncTransportError("TRANSPORT_ERROR", true);
+      return left;
+    };
+
     let token: string | undefined;
     try {
       token = await options.accessToken();
@@ -142,7 +172,7 @@ export function createMobileSyncTransport(options: MobileSyncTransportOptions): 
       throw new SyncTransportError("AUTH_REVOKED", false);
     }
 
-    let response = await send(path, body, token);
+    let response = await send(path, body, token, remainingOrThrow());
 
     // A 401 means the credential may simply have expired: renew once and retry
     // before classifying it. A sign-out that lands meanwhile still wins.
@@ -153,8 +183,12 @@ export function createMobileSyncTransport(options: MobileSyncTransportOptions): 
       }
       let refreshed: string | undefined;
       try {
-        refreshed = await options.refreshAccessToken();
-      } catch {
+        const refresh = options.refreshAccessToken();
+        refreshed = totalTimeout > 0 ? await withTimeout(refresh, remainingOrThrow()) : await refresh;
+      } catch (error) {
+        // A deadline overrun is the transport's timeout, not a recoverable
+        // refresh failure: surface it so the engine retries the batch later.
+        if (error instanceof SyncTransportError && error.code === "TRANSPORT_ERROR") throw error;
         refreshed = undefined;
       }
       if (options.canSend !== undefined && !options.canSend()) {
@@ -162,7 +196,7 @@ export function createMobileSyncTransport(options: MobileSyncTransportOptions): 
       }
       if (refreshed !== undefined && refreshed.length > 0) {
         token = refreshed;
-        response = await send(path, body, token);
+        response = await send(path, body, token, remainingOrThrow());
       }
     }
 

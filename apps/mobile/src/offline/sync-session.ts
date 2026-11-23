@@ -86,6 +86,8 @@ export class MobileOfflineSession {
   private readonly keys: MobileSyncKeyPurgePort;
   /** Kept `false` forever after a lock: re-enabling requires a new authenticated session. */
   private gate = true;
+  /** One sign-out runs once: a provider echo or a second caller joins the same purge. */
+  private signOutInFlight: Promise<MobileSyncSignOutOutcome> | undefined;
 
   public constructor(options: MobileOfflineSessionOptions) {
     this.deviceId = options.deviceId;
@@ -106,8 +108,24 @@ export class MobileOfflineSession {
     this.gate = false;
   }
 
-  public async prepareSignOut(): Promise<MobileSyncSignOutOutcome> {
+  /**
+   * Sign-out is idempotent and deduplicated: closing the gate and purging/locking
+   * runs once even when the local sign-out and the provider echo both call it.
+   * A failure is surfaced to the caller (never swallowed) and clears the memo so
+   * a later attempt can retry the purge.
+   */
+  public prepareSignOut(): Promise<MobileSyncSignOutOutcome> {
     this.gate = false;
+    if (this.signOutInFlight !== undefined) return this.signOutInFlight;
+    const run = this.runPrepareSignOut();
+    this.signOutInFlight = run;
+    void run.catch(() => {
+      if (this.signOutInFlight === run) this.signOutInFlight = undefined;
+    });
+    return run;
+  }
+
+  private async runPrepareSignOut(): Promise<MobileSyncSignOutOutcome> {
     const evidence = await this.storage.inspectPendingEvidence();
     if (evidence.status === "corrupt") {
       await this.storage.quarantineCorruptStore();
@@ -138,6 +156,9 @@ export class MobileOfflineSession {
     const health = await this.storage.getStorageHealth();
     if (health.quarantined) return Object.freeze({ status: "corrupt" as const, quarantined: true as const });
     await this.storage.unlockStore();
+    // A new authenticated session is a fresh lifecycle: a later sign-out must run
+    // again instead of returning the previous purge outcome.
+    this.signOutInFlight = undefined;
     this.gate = true;
     return Object.freeze({ status: "resumed" as const });
   }
