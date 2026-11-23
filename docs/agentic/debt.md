@@ -89,3 +89,23 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 - P3: se eliminó el reintento por ítem de la cola; queda solo "reintentar todo". Implementar retry por evento si se necesita.
 - P3: `navigator.onLine` puede no existir en React Native; verificar en runtime móvil que el banner llegue a mostrar "Sin conexión".
 - P3: `lastConfirmedSyncAt` usa la hora del dispositivo.
+
+## PR #65 sync pull/review (m2-api-sync-pull)
+
+- P3: mapeo de códigos de error del pull/review incompleto; sin pruebas de controller/RBAC de `sync-review.controller`.
+- P3: el cursor no incluye `deviceId` y tiene expiración fija de 30 días; una página con fallo de parseo de respuesta puede envenenar el avance.
+- P3: un caso histórico sin facts solo puede rechazarse, no compensarse.
+- P3: `sync_review_event_facts` y commands sin RLS ni triggers de inmutabilidad; `sync_read_reviews` sin paginación.
+- P3: la prueba con mock no afirma `deviceId`.
+- Operación: `SYNC_CURSOR_SECRET` (>=32 caracteres) debe definirse en todas las instancias antes de desplegar; rotarlo invalida cursores. Migración 20261123000600 sin aplicar en remoto.
+
+## PR #66 mobile crypto (m2-mobile-local-storage-crypto)
+
+- P2: sin pruebas de UI/hook para la carrera `!alive` ni la ruta resume/locked del banner.
+- P3: cabecera de documento sin autenticar (límite de amenaza documentado); exclusión de backup en iOS; salt HKDF vacío (documentar en ADR-005).
+- Pendiente: pregunta del puente runtime-bridge (la barra debe reflejar la cola local real); verificación en dispositivo real imposible en este entorno.
+
+## PR #67 KDS offline cache (m2-kds-offline-cache)
+
+- P3: falta prueba KDS explícita de idempotencyKey estable tras push fallido y de error IO transitorio sin cuarentena (hoy cubierto por sync-engine); sin prueba de `clearKdsCache`/`clearKdsSyncState`.
+- Pendiente: verificación visual de KDS offline en navegador (desktop y 390x844).
