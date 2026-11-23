@@ -108,6 +108,11 @@ jobs:
             psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -f "supabase/tests/$1"
             printf '%s\n' "$1" >> "$RUNNER_TEMP/sql-executed"
           }
+          run_invariant() {
+            { printf 'BEGIN;\n'; sed -E '/^[[:space:]]*(begin|commit|rollback);[[:space:]]*$/Id' "supabase/tests/$1"; printf '\nROLLBACK;\n'; } |
+              psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1
+            printf '%s\n' "$1" >> "$RUNNER_TEMP/sql-executed"
+          }
           for file in supabase/migrations/*.sql; do
             if [[ "$file" == *20260927000100_delivery_zones.sql ]]; then run_audit delivery_zones_pre_catalog.sql; fi
             psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$file"
@@ -147,6 +152,9 @@ jobs:
               *) audits="" ;;
             esac
             for audit in $audits; do run_audit "$audit"; done
+            if [[ "$file" == *20261007000500_branch_day_summary.sql ]]; then
+              run_invariant branch_day_summary_invariants.sql
+            fi
           done
       - name: Run SQL tests
         run: |
