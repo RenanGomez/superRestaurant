@@ -981,3 +981,77 @@ test("payment collection tracks server checkout, quote, methods, success and fai
     assert.match(paymentFailureMessage(failure), /^[A-ZÁÉÍÓÚÑ].+\.$/u);
   }
 });
+
+test("a superseded or foreign payment quote can never enable the submit button", () => {
+  const checkout = parseCheckoutOrderSummaryV1(checkoutOrderSummaryBody(scopeA));
+  const cashQuote = parseCashPaymentQuoteV1(cashPaymentQuoteBody(scopeA));
+  assert.ok(checkout !== undefined && cashQuote !== undefined);
+
+  const checkoutAttempt = nextAttempt();
+  const opened = apply(
+    onBranchA(),
+    { orderId: FIXTURE_ORDER, type: "paymentOpened" },
+    { attempt: checkoutAttempt, orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentCheckoutLoading" },
+    { attempt: checkoutAttempt, checkout, scope: scopeA, type: "paymentCheckoutLoaded" },
+  );
+
+  // Two quotes in flight: the second one supersedes the first, so only it owns
+  // the answer. The client never derives change or balance; it waits for the
+  // server quote of the current attempt.
+  const staleAttempt = nextAttempt();
+  const quoteAttempt = nextAttempt();
+  const quoting = apply(
+    opened,
+    { attempt: staleAttempt, orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentQuoteLoading" },
+    { attempt: quoteAttempt, orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentQuoteLoading" },
+  );
+
+  // The abandoned attempt's late answer is dropped and cannot unlock a charge.
+  const staleAnswer = apply(quoting, { attempt: staleAttempt, quote: cashQuote, scope: scopeA, type: "paymentQuoteLoaded" });
+  assert.equal(staleAnswer.payment.quote.status, "loading");
+  assert.equal(canSubmitMobilePayment(staleAnswer.payment), false);
+
+  // An answer for another Restaurant/Branch is dropped even with the right attempt.
+  const foreignAnswer = apply(quoting, { attempt: quoteAttempt, quote: cashQuote, scope: scopeB, type: "paymentQuoteLoaded" });
+  assert.equal(foreignAnswer.payment.quote.status, "loading");
+  assert.equal(canSubmitMobilePayment(foreignAnswer.payment), false);
+
+  // Only the current attempt, for the active branch, settles the quote.
+  const settled = apply(quoting, { attempt: quoteAttempt, quote: cashQuote, scope: scopeA, type: "paymentQuoteLoaded" });
+  assert.equal(settled.payment.quote.status, "ready");
+  assert.equal(canSubmitMobilePayment(settled.payment), true);
+});
+
+test("a collection in flight cannot be started twice and a duplicate receipt is not stored", () => {
+  const checkout = parseCheckoutOrderSummaryV1(checkoutOrderSummaryBody(scopeA));
+  const cashQuote = parseCashPaymentQuoteV1(cashPaymentQuoteBody(scopeA));
+  const receipt = parsePaymentCollectionSummaryV1(paymentCollectionSummaryBody(scopeA));
+  assert.ok(checkout !== undefined && cashQuote !== undefined && receipt !== undefined);
+
+  const checkoutAttempt = nextAttempt();
+  const quoteAttempt = nextAttempt();
+  const ready = apply(
+    onBranchA(),
+    { orderId: FIXTURE_ORDER, type: "paymentOpened" },
+    { attempt: checkoutAttempt, orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentCheckoutLoading" },
+    { attempt: checkoutAttempt, checkout, scope: scopeA, type: "paymentCheckoutLoaded" },
+    { attempt: quoteAttempt, orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentQuoteLoading" },
+    { attempt: quoteAttempt, quote: cashQuote, scope: scopeA, type: "paymentQuoteLoaded" },
+  );
+
+  const sending = apply(ready, { orderId: FIXTURE_ORDER, type: "paymentSubmitStarted" });
+  assert.equal(sending.payment.submission.status, "sending");
+
+  // A second start while sending is not a new transition: no second charge can
+  // be triggered from the same state.
+  const secondStart = apply(sending, { orderId: FIXTURE_ORDER, type: "paymentSubmitStarted" });
+  assert.equal(secondStart, sending);
+
+  const collected = apply(sending, { receipt, scope: scopeA, type: "paymentCollected" });
+  assert.equal(collected.payment.submission.status, "collected");
+  assert.equal(collected.payment.submission.receipt?.paymentId, receipt.paymentId);
+
+  // A late duplicate receipt for a submission already collected is ignored.
+  const duplicate = apply(collected, { receipt, scope: scopeA, type: "paymentCollected" });
+  assert.equal(duplicate, collected);
+});
