@@ -102,9 +102,13 @@ export function OrderDraftScreen({
   onRetryActiveOrders,
   onRetryMenu,
   onSubmit,
+  offline,
+  offlineCash,
   payment,
   registers, registerId, onRegisterSelect, onRegisterRetry,
   realtime,
+  sentMessage,
+  syncNotice,
   table,
   zoneName,
 }: {
@@ -128,12 +132,34 @@ export function OrderDraftScreen({
   readonly onRetryActiveOrders: () => void;
   readonly onRetryMenu: () => void;
   readonly onSubmit: () => void;
+  /**
+   * Offline order capture. Present only while the device has no connection.
+   * When `canQueue` is false the matrix refused the operation and `message`
+   * explains why; there is no button in that case.
+   */
+  readonly offline?: {
+    readonly canQueue: boolean;
+    readonly message: string;
+    readonly onQueue: () => void;
+    readonly queued: boolean;
+  } | undefined;
+  /** Offline cash collection, present only while the device has no connection. */
+  readonly offlineCash?: {
+    readonly allowed: boolean;
+    readonly busy: boolean;
+    readonly message: string;
+    readonly onQueue: () => void;
+  } | undefined;
   readonly payment: MobilePaymentState;
   readonly registers: { readonly status: "loading" | "failed" | "ready"; readonly entries: ReturnType<typeof openRegisters> };
   readonly registerId: string | undefined;
   readonly onRegisterSelect: (id: string) => void;
   readonly onRegisterRetry: () => void;
   readonly realtime?: ActiveOrdersRealtimeConfig | undefined;
+  /** Message shown after a successful submit; overridden for an offline queue. */
+  readonly sentMessage?: string | undefined;
+  /** Result of an offline action (queued or refused) shown as a banner. */
+  readonly syncNotice?: string | undefined;
   readonly table: DiningTableV1;
   readonly zoneName: string;
 }): React.JSX.Element {
@@ -218,12 +244,16 @@ export function OrderDraftScreen({
     onPaymentSubmit={onPaymentSubmit}
     onRetryActiveOrders={onRetryActiveOrders}
     onSubmit={onSubmit}
+    offline={offline}
+    offlineCash={offlineCash}
     payment={payment}
     registers={registers}
     registerId={registerId}
     onRegisterSelect={onRegisterSelect}
     onRegisterRetry={onRegisterRetry}
     realtime={realtime}
+    sentMessage={sentMessage}
+    syncNotice={syncNotice}
   />;
 
   // On a phone the header and the notice already claim most of the column, so
@@ -519,9 +549,13 @@ function DraftPane({
   onPaymentSubmit,
   onRetryActiveOrders,
   onSubmit,
+  offline,
+  offlineCash,
   payment,
   registers, registerId, onRegisterSelect, onRegisterRetry,
   realtime,
+  sentMessage,
+  syncNotice,
 }: {
   readonly activeOrders: MobileResource<ActiveTableOrderListV2>;
   readonly selectedOrderId: string | undefined;
@@ -539,12 +573,26 @@ function DraftPane({
   readonly onPaymentSubmit: () => void;
   readonly onRetryActiveOrders: () => void;
   readonly onSubmit: () => void;
+  readonly offline?: {
+    readonly canQueue: boolean;
+    readonly message: string;
+    readonly onQueue: () => void;
+    readonly queued: boolean;
+  } | undefined;
+  readonly offlineCash?: {
+    readonly allowed: boolean;
+    readonly busy: boolean;
+    readonly message: string;
+    readonly onQueue: () => void;
+  } | undefined;
   readonly payment: MobilePaymentState;
   readonly registers: { readonly status: "loading" | "failed" | "ready"; readonly entries: ReturnType<typeof openRegisters> };
   readonly registerId: string | undefined;
   readonly onRegisterSelect: (id: string) => void;
   readonly onRegisterRetry: () => void;
   readonly realtime?: ActiveOrdersRealtimeConfig | undefined;
+  readonly sentMessage?: string | undefined;
+  readonly syncNotice?: string | undefined;
 }): React.JSX.Element {
   const busy = draft.submission.status === "sending";
   return <View style={paneStyle(layout)}>
@@ -570,6 +618,7 @@ function DraftPane({
         onFieldChange={onPaymentFieldChange}
         onRetry={onPaymentRetry}
         onSubmit={onPaymentSubmit}
+        offlineCash={offlineCash}
         payment={payment}
         registers={registers}
         registerId={registerId}
@@ -582,7 +631,7 @@ function DraftPane({
     {draft.submission.status === "sending" ? <LoadingBlock label="Enviando la comanda…" /> : null}
     {draft.submission.status === "sent"
       ? <Banner
-        message="Las líneas se guardaron en la orden. Envía los pendientes a cocina desde la tarjeta de la orden."
+        message={sentMessage ?? "Las lA-neas se guardaron en la orden. EnvA-a los pendientes a cocina desde la tarjeta de la orden."}
         tone="info"
       />
       : null}
@@ -605,13 +654,27 @@ function DraftPane({
         />)}
       </PaneList>}
 
-    <ActionButton
-      accessibilityHint="Guarda las líneas en la orden seleccionada o crea una nueva"
-      busy={busy}
-      disabled={draft.lines.length === 0 || draft.composer !== undefined}
-      label="Guardar líneas en orden"
-      onPress={onSubmit}
-    />
+    {syncNotice === undefined ? null : <Banner message={syncNotice} tone="info" />}
+    {offline === undefined
+      ? null
+      : <Banner message={offline.message} tone={offline.canQueue ? "info" : "error"} />}
+
+    {offline === undefined
+      ? <ActionButton
+        accessibilityHint="Guarda las lA-neas en la orden seleccionada o crea una nueva"
+        busy={busy}
+        disabled={draft.lines.length === 0 || draft.composer !== undefined}
+        label="Guardar lA-neas en orden"
+        onPress={onSubmit}
+      />
+      : offline.canQueue
+        ? <ActionButton
+          accessibilityHint="Guarda el pedido en este dispositivo; se enviarA¡ al servidor cuando vuelva la conexiA3n"
+          disabled={offline.queued || draft.lines.length === 0 || draft.composer !== undefined}
+          label={offline.queued ? "Guardado en este dispositivo" : "Guardar pedido sin conexiA3n"}
+          onPress={offline.onQueue}
+        />
+        : null}
   </View>;
 }
 
@@ -664,7 +727,7 @@ function DraftLineCard({ busy, catalog, line, onEvent }: {
 
 const PAYMENT_METHODS: readonly SimplePaymentMethodV1[] = Object.freeze(["cash", "card_manual", "transfer"]);
 
-function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, payment, registers, registerId, onRegisterSelect, onRegisterRetry }: {
+function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, offlineCash, payment, registers, registerId, onRegisterSelect, onRegisterRetry }: {
   readonly registers: { readonly status: "loading" | "failed" | "ready"; readonly entries: ReturnType<typeof openRegisters> };
   readonly registerId: string | undefined;
   readonly onRegisterSelect: (id: string) => void;
@@ -673,6 +736,12 @@ function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, paym
   readonly onFieldChange: (patch: Partial<MobilePaymentFields>) => void;
   readonly onRetry: () => void;
   readonly onSubmit: () => void;
+  readonly offlineCash?: {
+    readonly allowed: boolean;
+    readonly busy: boolean;
+    readonly message: string;
+    readonly onQueue: () => void;
+  } | undefined;
   readonly payment: MobilePaymentState;
 }): React.JSX.Element {
   const busy = payment.submission.status === "sending";
@@ -824,12 +893,24 @@ function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, paym
             {payment.submission.status === "failed" && payment.submission.failure !== undefined
               ? <Banner message={paymentFailureMessage(payment.submission.failure)} tone="error" />
               : null}
-            <ActionButton
-              busy={busy}
-              disabled={!canSubmitMobilePayment(payment)}
-              label="Confirmar cobro"
-              onPress={onSubmit}
-            />
+            {offlineCash === undefined
+              ? null
+              : <Banner message={offlineCash.message} tone={offlineCash.allowed ? "info" : "error"} />}
+            {offlineCash === undefined
+              ? <ActionButton
+                busy={busy}
+                disabled={!canSubmitMobilePayment(payment)}
+                label="Confirmar cobro"
+                onPress={onSubmit}
+              />
+              : payment.method === "cash" && offlineCash.allowed
+                ? <ActionButton
+                  busy={offlineCash.busy}
+                  disabled={offlineCash.busy}
+                  label="Registrar efectivo sin conexiA3n"
+                  onPress={offlineCash.onQueue}
+                />
+                : null}
           </View>)}
   </Card>;
 }

@@ -34,6 +34,7 @@ import type {
   OpenOrderCommandV1,
   OrderMutationSummaryV1,
 } from "@super-restaurant/shared-types";
+import type { EnqueueInput } from "@super-restaurant/sync-engine";
 
 import { MobileRequestError } from "./mobile-client.js";
 import type { OrderDraftFailure } from "./order-draft.js";
@@ -209,4 +210,199 @@ export function createOrderDeliveryPort(transport: OrderMutationTransport): Orde
       return outcome.kind === "sent" ? undefined : outcome.failure;
     },
   });
+}
+
+// ---- Offline capture (sync engine) --------------------------------------------------------
+
+/**
+ * The local enqueue seam. It is the engine (`canEnqueue` + `enqueue`), never a
+ * bespoke queue: the capability matrix, the local sequence and the idempotency
+ * fingerprint stay in one place. Tests substitute a controlled object; the app
+ * substitutes a `DeviceSyncEngine`.
+ */
+export interface MobileOfflineEnqueuePort {
+  readonly canEnqueue: (input: EnqueueInput) => Promise<{ readonly allowed: boolean; readonly reasonCode: string | null }>;
+  readonly enqueue: (input: EnqueueInput) => Promise<{ readonly eventId: string }>;
+}
+
+export type MobileOfflineQueueResult =
+  | { readonly eventIds: readonly string[]; readonly queued: true }
+  | { readonly eventIds: readonly string[]; readonly queued: false; readonly reasonCode: string | null };
+
+/**
+ * The events one offline delivery enqueues, in the same order the online path
+ * would create them: the order first, then each line. It deliberately does NOT
+ * enqueue the "open" transition: the canonical version that transition needs
+ * only exists after the server accepted the create, and inventing one would
+ * make a later retry conflict.
+ */
+export function buildOfflineOrderInputs(input: {
+  readonly plan: OrderDeliveryPlanV1;
+  readonly actorId: string;
+}): readonly EnqueueInput[] {
+  const { plan } = input;
+  const scope = plan.scope as unknown as BranchScope;
+  const events: EnqueueInput[] = [Object.freeze({
+    actorId: input.actorId,
+    baseVersion: null,
+    entityId: plan.orderId,
+    entityType: "Order",
+    idempotencyKey: plan.createOrder.idempotencyKey,
+    occurredAt: plan.occurredAt,
+    operation: "create",
+    payload: Object.freeze({
+      channel: plan.channel,
+      currency: plan.currency,
+      timeZone: plan.timeZone,
+    }),
+    preconditions: { hasCatalogSnapshots: true, originatedOnThisDevice: true },
+    scope,
+  })];
+  for (const line of plan.addItems) {
+    events.push(Object.freeze({
+      actorId: input.actorId,
+      baseVersion: null,
+      entityId: line.orderItemId,
+      entityType: "OrderItem",
+      idempotencyKey: line.idempotencyKey,
+      occurredAt: plan.occurredAt,
+      operation: "create",
+      payload: Object.freeze({
+        modifierGroups: line.modifierGroups,
+        ...(line.note === undefined ? {} : { note: line.note }),
+        orderId: plan.orderId,
+        orderItemId: line.orderItemId,
+        productId: line.productId,
+        quantity: line.quantity,
+      }),
+      preconditions: { hasCatalogSnapshots: true, originatedOnThisDevice: true },
+      scope,
+    }));
+  }
+  return Object.freeze(events);
+}
+
+/**
+ * Queues one delivery locally, gated by the engine's capability check for the
+ * first event. A refusal is returned with its matrix code so the screen can
+ * explain it; a transport failure is never reported as queued.
+ */
+export async function enqueueOrderPlanOffline(input: {
+  readonly actorId: string;
+  readonly plan: OrderDeliveryPlanV1;
+  readonly port: MobileOfflineEnqueuePort;
+}): Promise<MobileOfflineQueueResult> {
+  const events = buildOfflineOrderInputs({ actorId: input.actorId, plan: input.plan });
+  const first = events[0];
+  if (first === undefined) return Object.freeze({ eventIds: [], queued: false, reasonCode: null });
+  let decision: { readonly allowed: boolean; readonly reasonCode: string | null };
+  try {
+    decision = await input.port.canEnqueue(first);
+  } catch {
+    return Object.freeze({ eventIds: [], queued: false, reasonCode: null });
+  }
+  if (!decision.allowed) {
+    return Object.freeze({ eventIds: [], queued: false, reasonCode: decision.reasonCode });
+  }
+  return enqueueAll(events, input.port);
+}
+
+export interface OfflineCashCollectInput {
+  readonly orderId: string;
+  readonly paymentId: string;
+  readonly amountMinor: number;
+  readonly currency: string;
+  readonly cashRegisterSessionId: string;
+  readonly orderVersion: number;
+  readonly occurredAt: string;
+  readonly idempotencyKey: string;
+}
+
+export interface OfflineCashPreconditions {
+  readonly cashRegisterOpen: boolean;
+  readonly cashierShiftOpen: boolean;
+  readonly withinOfflineCashLimit: boolean;
+}
+
+export function buildOfflineCashInput(input: {
+  readonly actorId: string;
+  readonly cash: OfflineCashCollectInput;
+  readonly preconditions: OfflineCashPreconditions;
+  readonly scope: BranchScope;
+}): EnqueueInput {
+  return Object.freeze({
+    actorId: input.actorId,
+    baseVersion: input.cash.orderVersion,
+    entityId: input.cash.paymentId,
+    entityType: "Payment",
+    idempotencyKey: input.cash.idempotencyKey,
+    occurredAt: input.cash.occurredAt,
+    operation: "create",
+    payload: Object.freeze({
+      amountMinor: input.cash.amountMinor,
+      cashRegisterSessionId: input.cash.cashRegisterSessionId,
+      currency: input.cash.currency,
+      method: "cash",
+      orderId: input.cash.orderId,
+      orderVersion: input.cash.orderVersion,
+      paymentId: input.cash.paymentId,
+    }),
+    preconditions: {
+      cashRegisterOpen: input.preconditions.cashRegisterOpen,
+      cashierShiftOpen: input.preconditions.cashierShiftOpen,
+      paymentMethod: "cash" as const,
+      withinOfflineCashLimit: input.preconditions.withinOfflineCashLimit,
+    },
+    scope: input.scope,
+  });
+}
+
+/** Queues one cash collection only when the matrix allows it for this device. */
+export async function enqueueCashCollectOffline(input: {
+  readonly actorId: string;
+  readonly cash: OfflineCashCollectInput;
+  readonly port: MobileOfflineEnqueuePort;
+  readonly preconditions: OfflineCashPreconditions;
+  readonly scope: BranchScope;
+}): Promise<MobileOfflineQueueResult> {
+  const event = buildOfflineCashInput({
+    actorId: input.actorId,
+    cash: input.cash,
+    preconditions: input.preconditions,
+    scope: input.scope,
+  });
+  let decision: { readonly allowed: boolean; readonly reasonCode: string | null };
+  try {
+    decision = await input.port.canEnqueue(event);
+  } catch {
+    return Object.freeze({ eventIds: [], queued: false, reasonCode: null });
+  }
+  if (!decision.allowed) {
+    return Object.freeze({ eventIds: [], queued: false, reasonCode: decision.reasonCode });
+  }
+  return enqueueAll([event], input.port);
+}
+
+async function enqueueAll(events: readonly EnqueueInput[], port: MobileOfflineEnqueuePort): Promise<MobileOfflineQueueResult> {
+  const eventIds: string[] = [];
+  for (const event of events) {
+    try {
+      const entry = await port.enqueue(event);
+      eventIds.push(entry.eventId);
+    } catch (error) {
+      return Object.freeze({
+        eventIds: Object.freeze([...eventIds]),
+        queued: false,
+        reasonCode: capabilityCodeOf(error),
+      });
+    }
+  }
+  return Object.freeze({ eventIds: Object.freeze([...eventIds]), queued: true });
+}
+
+/** `CAPABILITY_BLOCKED: <CODE>` is the only error string this layer interprets. */
+function capabilityCodeOf(error: unknown): string | null {
+  if (!(error instanceof Error) || !error.message.startsWith("CAPABILITY_BLOCKED")) return null;
+  const code = error.message.split(": ").slice(1).join(": ").trim();
+  return code === "" ? null : code;
 }
