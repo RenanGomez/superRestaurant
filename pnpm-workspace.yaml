@@ -17,3 +17,4 @@ minimumReleaseAgeExclude:
   - expo-modules-core@57.0.17
   - expo-modules-jsi@57.1.0
   - expo@57.0.21
+  - expo-sqlite@57.0.7

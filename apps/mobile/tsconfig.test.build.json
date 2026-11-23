@@ -46,6 +46,15 @@
     "src/order-intents.ts",
     "src/order-intents.test.ts",
     "src/order-delivery.ts",
-    "src/order-delivery.test.ts"
+    "src/order-delivery.test.ts",
+    "src/offline/sync-store.ts",
+    "src/offline/sync-store.test.ts",
+    "src/offline/sync-key.ts",
+    "src/offline/sync-key.test.ts",
+    "src/offline/sync-transport.ts",
+    "src/offline/sync-transport.test.ts",
+    "src/offline/sync-session.ts",
+    "src/offline/sync-session.test.ts",
+    "src/offline/test-fixtures.ts"
   ]
 }
