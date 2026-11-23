@@ -28,7 +28,7 @@ import {
   type MobilePaymentState,
   type MobileResource,
 } from "../mobile-state.js";
-import { ActiveOrdersPanel } from "./active-orders-panel.js";
+import { ActiveOrdersPanel, type ActiveOrdersRealtimeConfig } from "./active-orders-panel.js";
 import {
   DRAFT_MAX_GROUPS,
   DRAFT_MAX_NOTE_LENGTH,
@@ -100,6 +100,7 @@ export function OrderDraftScreen({
   onRetryMenu,
   onSubmit,
   payment,
+  realtime,
   table,
   zoneName,
 }: {
@@ -120,6 +121,7 @@ export function OrderDraftScreen({
   readonly onRetryMenu: () => void;
   readonly onSubmit: () => void;
   readonly payment: MobilePaymentState;
+  readonly realtime?: ActiveOrdersRealtimeConfig | undefined;
   readonly table: DiningTableV1;
   readonly zoneName: string;
 }): React.JSX.Element {
@@ -201,6 +203,7 @@ export function OrderDraftScreen({
     onRetryActiveOrders={onRetryActiveOrders}
     onSubmit={onSubmit}
     payment={payment}
+    realtime={realtime}
   />;
 
   // On a phone the header and the notice already claim most of the column, so
@@ -496,6 +499,7 @@ function DraftPane({
   onRetryActiveOrders,
   onSubmit,
   payment,
+  realtime,
 }: {
   readonly activeOrders: MobileResource<ActiveTableOrderListV2>;
   readonly catalog: MenuCatalogV1 | null;
@@ -510,6 +514,7 @@ function DraftPane({
   readonly onRetryActiveOrders: () => void;
   readonly onSubmit: () => void;
   readonly payment: MobilePaymentState;
+  readonly realtime?: ActiveOrdersRealtimeConfig | undefined;
 }): React.JSX.Element {
   const busy = draft.submission.status === "sending";
   return <View style={paneStyle(layout)}>
@@ -518,6 +523,7 @@ function DraftPane({
       collectingOrderId={payment.orderId}
       onCollectOrder={onCollectOrder}
       onRetry={onRetryActiveOrders}
+      realtime={realtime}
     />
 
     {payment.orderId === undefined

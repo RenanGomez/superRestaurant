@@ -3,7 +3,15 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import type { BranchOrderWorkChannelV1, BranchOrderWorkItemV1, BranchOrderWorkTrayV1, BranchScope } from "@super-restaurant/shared-types";
+import {
+  kitchenReadyMatchesSubscription,
+  parseKitchenReadyNotificationV1,
+  type BranchOrderWorkChannelV1,
+  type BranchOrderWorkItemV1,
+  type BranchOrderWorkTrayV1,
+  type BranchScope,
+  type KitchenReadyNotificationV1,
+} from "@super-restaurant/shared-types";
 import {
   channelLabel,
   formatOrderWorkTime,
@@ -61,6 +69,12 @@ export function OrdersTray({ scope, action, cancelledAction, tableNamesAction, c
   const currentView = ordersView(searchParams);
   const [menuSlot, setMenuSlot] = useState<HTMLElement | null>(null);
   const [tableNames, setTableNames] = useState<ReadonlyMap<string, string>>();
+  const [readyNotices, setReadyNotices] = useState<readonly KitchenReadyNotificationV1[]>([]);
+  const [detailRefreshTick, setDetailRefreshTick] = useState(0);
+  const openOrderIdRef = useRef<string | undefined>(openOrderId);
+  openOrderIdRef.current = openOrderId;
+  const filterRef = useRef<BranchOrderWorkFilter>(filter);
+  filterRef.current = filter;
   // One read of the floor plan per page load; failure leaves the generic «Mesa».
   useEffect(() => {
     let cancelled = false;
@@ -77,13 +91,19 @@ export function OrdersTray({ scope, action, cancelledAction, tableNamesAction, c
   const cursorRef = useRef<BranchOrderWorkTrayV1["nextCursor"]>(null);
   const requestSeqRef = useRef(0);
 
-  async function load(cursor: BranchOrderWorkTrayV1["nextCursor"], replace: boolean, channel: BranchOrderWorkChannelV1 | null) {
+  async function load(
+    cursor: BranchOrderWorkTrayV1["nextCursor"],
+    replace: boolean,
+    channel: BranchOrderWorkChannelV1 | null,
+    silent = false,
+  ) {
     const requestSeq = ++requestSeqRef.current;
     // A "replace" (filter change or "Actualizar") clears the previous filter's results and cursor
     // immediately, instead of leaving them on screen -- possibly stale or under the wrong filter --
-    // until the new page (or an error) arrives.
-    if (replace) { setItems([]); setNextCursor(null); cursorRef.current = null; setLoaded(false); }
-    setBusy(true); setError(undefined);
+    // until the new page (or an error) arrives. Silent realtime refreshes keep visible cards intact.
+    if (replace && !silent) { setItems([]); setNextCursor(null); cursorRef.current = null; setLoaded(false); }
+    if (!silent) setBusy(true);
+    setError(undefined);
     let result: BranchOrderTrayRequestResult;
     try { result = await action({ channel, cursor, limit: LIMIT, schemaVersion: 1, scope }); }
     catch { result = { error: "unavailable", ok: false }; }
@@ -95,12 +115,33 @@ export function OrdersTray({ scope, action, cancelledAction, tableNamesAction, c
       cursorRef.current = result.value.nextCursor;
       setLoaded(true);
     }
-    setBusy(false);
+    if (!silent) setBusy(false);
   }
 
   function refresh(): void { void load(null, true, filter === "all" ? null : filter); }
 
   useEffect(() => { refresh(); }, [filter]);
+
+  useEffect(() => {
+    if (typeof EventSource === "undefined") return undefined;
+    const source = new EventSource("/app/orders/ready-stream");
+    const onReady = (event: MessageEvent<string>): void => {
+      let raw: unknown;
+      try { raw = JSON.parse(event.data); } catch { return; }
+      const notification = parseKitchenReadyNotificationV1(raw);
+      if (notification === undefined || !kitchenReadyMatchesSubscription({ schemaVersion: 1, scope, stationId: null }, notification)) return;
+      setReadyNotices((current) => current.some((item) => item.eventId === notification.eventId)
+        ? current
+        : [notification, ...current].slice(0, 5));
+      void load(null, true, filterRef.current === "all" ? null : filterRef.current, true);
+      if (openOrderIdRef.current === notification.orderId) setDetailRefreshTick((tick) => tick + 1);
+    };
+    source.addEventListener("ready", onReady as EventListener);
+    return () => {
+      source.removeEventListener("ready", onReady as EventListener);
+      source.close();
+    };
+  }, [scope.branchId, scope.restaurantId]);
 
   useEffect(() => {
     function onVisibilityChange(): void { if (document.visibilityState === "visible") refresh(); }
@@ -111,6 +152,27 @@ export function OrdersTray({ scope, action, cancelledAction, tableNamesAction, c
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [filter]);
+
+  const readyBanner = readyNotices.length === 0 ? null : <div role="status" aria-live="polite" className="mb-4 rounded-xl border border-border bg-success-bg p-3 text-sm">
+    <p className="font-semibold">Platillo listo en cocina</p>
+    <ul className="mt-2 space-y-2">
+      {readyNotices.map((notice) => {
+        const match = items.find((candidate) => candidate.orderId === notice.orderId);
+        const label = match === undefined
+          ? `Orden ${notice.orderId.slice(0, 8)}`
+          : match.channel === "table"
+            ? tableLabel(match.tableId, tableNames, match.accountLabel)
+            : channelLabel(match.channel);
+        return <li key={notice.eventId} className="flex flex-wrap items-center justify-between gap-2">
+          <span>{label} · estación {notice.stationId}</span>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={button} onClick={() => navigate(notice.orderId, false)}>Ver orden</button>
+            <button type="button" className={button} onClick={() => setReadyNotices((current) => current.filter((item) => item.eventId !== notice.eventId))}>Descartar</button>
+          </div>
+        </li>;
+      })}
+    </ul>
+  </div>;
 
   const listPanel = <section className={`${panel} ${open ? "lg:h-full lg:overflow-y-auto" : ""}`}>
     <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="Vista de órdenes">
@@ -146,27 +208,31 @@ export function OrdersTray({ scope, action, cancelledAction, tableNamesAction, c
     </>}
   </section>;
 
-  if (!open) return listPanel;
-  return <div className="flex flex-col gap-4 lg:grid lg:h-[calc(100dvh-15rem)] lg:min-h-[28rem] lg:grid-cols-[2fr_3fr]">
-    <div className={`min-h-0 ${adding ? "hidden lg:block" : ""} lg:h-full`}>
-      <OrderDetailPanel
-        key={openOrderId}
-        orderId={openOrderId}
-        tableNames={tableNames}
-        adding={adding}
-        onAddingChange={(next) => navigate(openOrderId, next)}
-        menuSlot={menuSlot}
-        actions={detailActions}
-        canCheckout={canCheckout}
-        printHeader={printHeader}
-        onClose={() => navigate(undefined, false)}
-        onChanged={refresh}
-      />
+  if (!open) return <>{readyBanner}{listPanel}</>;
+  return <>
+    {readyBanner}
+    <div className="flex flex-col gap-4 lg:grid lg:h-[calc(100dvh-15rem)] lg:min-h-[28rem] lg:grid-cols-[2fr_3fr]">
+      <div className={`min-h-0 ${adding ? "hidden lg:block" : ""} lg:h-full`}>
+        <OrderDetailPanel
+          key={openOrderId}
+          orderId={openOrderId}
+          tableNames={tableNames}
+          adding={adding}
+          onAddingChange={(next) => navigate(openOrderId, next)}
+          menuSlot={menuSlot}
+          actions={detailActions}
+          canCheckout={canCheckout}
+          printHeader={printHeader}
+          onClose={() => navigate(undefined, false)}
+          onChanged={refresh}
+          realtimeRefreshTick={detailRefreshTick}
+        />
+      </div>
+      {adding
+        ? <div ref={setMenuSlot} className="h-[calc(100dvh-9rem)] min-h-0 lg:h-full" />
+        : <div className="hidden min-h-0 lg:block lg:h-full">{listPanel}</div>}
     </div>
-    {adding
-      ? <div ref={setMenuSlot} className="h-[calc(100dvh-9rem)] min-h-0 lg:h-full" />
-      : <div className="hidden min-h-0 lg:block lg:h-full">{listPanel}</div>}
-  </div>;
+  </>;
 }
 
 function OrderCard({ order, canCheckout, tableNames, selected, compact, onOpenDetail }: {

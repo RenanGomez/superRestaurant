@@ -210,6 +210,7 @@ interface Props {
   readonly printHeader: PrintHeader;
   readonly onClose: () => void;
   readonly onChanged: () => void;
+  readonly realtimeRefreshTick?: number | undefined;
 }
 
 const errorMessages: Record<string, string> = {
@@ -232,7 +233,7 @@ const errorMessages: Record<string, string> = {
  */
 const UNAVAILABLE_NO_RETRY_MESSAGE = "No se pudo confirmar el resultado. Se recargó la orden; revisa el estado antes de repetir.";
 
-export function OrderDetailPanel({ orderId, tableNames, adding, onAddingChange, menuSlot, actions, canCheckout, printHeader, onClose, onChanged }: Props) {
+export function OrderDetailPanel({ orderId, tableNames, adding, onAddingChange, menuSlot, actions, canCheckout, printHeader, onClose, onChanged, realtimeRefreshTick = 0 }: Props) {
   // Same device identity Capture's own workspace and the delivery-zones editor use (one stable id
   // per browser, in localStorage) -- never a second, order-specific device id, or the same browser
   // would be audited under two different identities depending on which screen it used.
@@ -312,7 +313,7 @@ export function OrderDetailPanel({ orderId, tableNames, adding, onAddingChange, 
     return result.value;
   }
 
-  useEffect(() => { void load(); }, [orderId]);
+  useEffect(() => { void load(); }, [orderId, realtimeRefreshTick]);
 
   // `adding` comes from the URL: once the detail is known, an order that no longer accepts new lines
   // falls back to the detail view; otherwise the catalog is loaded the first time the panel shows.

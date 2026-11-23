@@ -65,6 +65,9 @@ input, select { background: #111c16; color: #fff; padding: 0 12px; max-width: 10
 .empty { text-align: center; margin-top: 56px; color: #b9c7bf; }
 .empty h2 { color: #fff; }
 .banner { margin: 10px 0 14px; padding: 12px 14px; }
+.ready-banner { border-color: #49d486; background: #12291c; }
+.ready-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.ready-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .error { color: #ffaaa4; }
 .warning { color: #f6cf79; }
 .login-shell, .fatal { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
