@@ -2837,8 +2837,3 @@ Inspección inicial: CodeGraph actualizado, resolvedor legado de una variante y 
 - Verificacion con Node 24.19.0: pnpm --filter @super-restaurant/mobile lint PASS; pnpm --filter @super-restaurant/mobile typecheck PASS; pnpm --filter @super-restaurant/mobile test PASS (incluye reintento, version, scope, seleccion de caja y respuesta 403); git diff --check PASS. La exportacion Android del corte anterior fallo con Hermes spawn EPERM y no se repitio; no hay verificacion visual ni dispositivo real. CodeGraph no disponible en esta sesion; inspeccion manual de contratos, autorizacion y consumidores. Sin push ni cambios remotos.
 - Siguiente: incorporar listado de cajas compatible con el permiso de cajero y verificar flujos completos en dispositivo; mantener IN_PROGRESS. Los comandos de cocina retenidos solo viven en memoria y no sobreviven reinicio.
 
-## m2-api-sync-push-merge — 2026-11-23 (BLOCKED)
-
-- Nivel A. El fetch solicitado obtuvo `5ea11416649bbb345f59ee5ea3f7102b37a6d595`, pero `git merge --ff-only FETCH_HEAD` falló: la rama actual `ao/sync-push-api/root` y la rama solicitada divergen desde `e42f779ec6ba8bd87e8afaa4a540e4f750dab7eb` (10 commits solo en HEAD y 5 solo en FETCH_HEAD). `git merge-base --is-ancestor HEAD FETCH_HEAD` confirmó exit 1.
-- No se integró el trabajo previo ni se implementaron el ejecutor, el controlador o las pruebas solicitadas; tampoco se ejecutaron las puertas, pues falta su base. No se sustituyó el fast-forward pedido por una fusión distinta ni se alteró historia compartida.
-- Siguiente acción: reconciliar explícitamente las ramas conservando ambos historiales y retomar la implementación y las pruebas PG17.
