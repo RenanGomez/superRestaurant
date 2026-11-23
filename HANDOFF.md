@@ -1,11 +1,11 @@
 # HANDOFF
 
-## m1-pg-verify-clean ? REVIEW local (2026-11-23)
+## m1-pg-verify-clean — REVIEW local (2026-11-23)
 
 - Cinco invariantes SQL pasan en PostgreSQL 17.6 desechable con todas las migraciones; CI sin tolerancias SQL ni HTTP. El parser compartido acepta y valida asentamiento en snapshots antiguos y actuales; flujo HTTP local 7/7, incluyendo entrega, aislamiento y caja.
-- Archivos: workflow, cinco fixtures SQL, parser y pruebas de `packages/shared-types`, `docs/agentic/debt.md`, TODO y este handoff. No hay migraci?n nueva ni interacci?n con Supabase remoto. Autorizaci?n humana expl?cita para ampliar al parser compartido y dejar commits locales sin push/PR.
-- Lint 10/10, typecheck 13/13, test 13/13, build 10/10, pruebas unitarias shared-types y verificadores rollback selecci?n, pizza V2 y transferencia verdes; flujo HTTP 7/7. El verificador hist?rico menu-shared rechaza el fixture ROLLBACK por exigir COMMIT: P2 en debt. La primera corrida HTTP tuvo desconexi?n local; segunda 7/7 y cleanup correcto.
-- CodeGraph no inicializado; consumidores inspeccionados manualmente. Sin subagentes. Siguiente: humano hace push y PR y comprueba pg-verify completo en CI; no se ha verificado el job en PR.
+- Archivos: workflow, cinco fixtures SQL, parser y pruebas de `packages/shared-types`, `docs/agentic/debt.md`, TODO y este handoff. No hay migración nueva ni interacción con Supabase remoto. Autorización humana explícita para ampliar al parser compartido y dejar commits locales sin push/PR.
+- Lint 10/10, typecheck 13/13, test 13/13, build 10/10, pruebas unitarias shared-types y verificadores rollback selección, pizza V2 y transferencia verdes; flujo HTTP 7/7. El verificador histórico menu-shared rechaza el fixture ROLLBACK por exigir COMMIT: P2 en debt. La primera corrida HTTP tuvo desconexión local; segunda 7/7 y cleanup correcto.
+- CodeGraph no inicializado; consumidores inspeccionados manualmente. Sin subagentes. El PR #19 pasó pg-verify en `114b91e4`; tras el merge local de main y los ajustes de revisión, el humano hará push y comprobará CI en la nueva cabeza.
 
 ## AO M0 — integración de PR #3, revisores y deuda de CI (2026-11-22)
 

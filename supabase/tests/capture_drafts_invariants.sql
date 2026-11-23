@@ -213,6 +213,7 @@ begin
     or attention_result #>> '{record,detail,attentionStatus}' is distinct from 'claimed'
   then raise exception 'CAPTURE_RESUME_POSITIVE_PATH_REJECTED'; end if;
   attention_command := attention_command || jsonb_build_object('expectedVersion',3,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text);
+  -- Revoke member_a so the same actor can acquire a new membership; the lease remains active and owned by member_a.
   update app.memberships set revoked_at = clock_timestamp(), revoked_by = actor, revocation_reason = 'fixture' where id = member_a;
   insert into app.memberships (id, user_id, restaurant_id, branch_id, granted_by)
     values (other_member, actor, restaurant_a, branch_a, actor);
