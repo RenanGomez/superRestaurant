@@ -125,9 +125,9 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
       code: "AUTHENTICATION_REQUIRED",
     });
 
-    const syncUnauthenticated = await fetch(`${url}/api/v1/sync`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    const syncUnauthenticated = await fetch(`${url}/api/v1/sync/push`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     assert.equal(syncUnauthenticated.status, 401);
-    const syncInvalid = await fetch(`${url}/api/v1/sync`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer valid-smoke-access-token" }, body: "{}" });
+    const syncInvalid = await fetch(`${url}/api/v1/sync/push`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer valid-smoke-access-token" }, body: "{}" });
     assert.equal(syncInvalid.status, 400);
 
     const authenticatedSessionResponse = await fetch(`${url}/api/v1/session`, {

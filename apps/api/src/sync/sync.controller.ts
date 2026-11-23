@@ -8,7 +8,7 @@ import { SyncPushService } from "./sync-push.service.js";
 export class SyncController {
   public constructor(@Inject(SyncPushService) private readonly sync: SyncPushService) {}
 
-  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("sync")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("sync/push")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public push(@Req() request: { headers?: { authorization?: unknown } }, @Body() body: unknown): Promise<SyncPushResponseV1> {
