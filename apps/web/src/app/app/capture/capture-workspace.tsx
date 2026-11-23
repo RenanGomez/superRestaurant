@@ -98,6 +98,7 @@ const issueLabels: Record<CustomerRepeatOrderPreviewIssueV1["code"], string> = {
 };
 
 interface CaptureWorkspaceParameters {
+  readonly initialDraftId?: string;
   readonly scope: BranchScope;
   readonly action: (operation: CaptureWorkspaceOperation, input: unknown) => Promise<CaptureWorkspaceResult>;
   readonly quoteLine: (input: unknown) => Promise<CaptureRequestResult<CaptureLineQuoteResultV1>>;
@@ -113,7 +114,7 @@ type ActionReply = Awaited<ReturnType<CaptureWorkspaceParameters["action"]>>;
 type CaptureStep = "order" | "customer" | "delivery";
 
 export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext, canManageAssignment, catalog: initialCatalog,
-  reloadCatalog, orderDetail, sendToKitchen }: CaptureWorkspaceParameters): ReactNode {
+  reloadCatalog, orderDetail, sendToKitchen, initialDraftId }: CaptureWorkspaceParameters): ReactNode {
   const [catalog, setCatalog] = useState(initialCatalog);
   const [catalogReloading, setCatalogReloading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -134,6 +135,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   const kitchenInFlight = useRef(false);
   const [leaseClock, setLeaseClock] = useState(() => Date.now());
   const [tray, setTray] = useState<readonly (CaptureDraftSummaryV1 | CaptureTrayItemV2)[]>([]);
+  const initialLoadStarted = useRef(false);
   const lastInteractionAt = useRef(0);
   const [assignmentCandidates, setAssignmentCandidates] = useState<readonly CaptureAssignmentCandidateV1[]>([]);
   const [transferTarget, setTransferTarget] = useState("");
@@ -429,6 +431,8 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   }
 
   useEffect(() => { void (async () => {
+    if (initialLoadStarted.current) return;
+    initialLoadStarted.current = true;
     const pendingAutosave = readPendingCaptureAutosave(window.localStorage, scope);
     if (pendingAutosave !== undefined) {
       const replay = await run("autosave", pendingAutosave);
@@ -437,6 +441,17 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     }
     await run("tray", { schemaVersion: 2, scope, limit: 20 });
     if (canManageAssignment) await run("assignmentCandidates", { schemaVersion: 1, scope });
+    if (initialDraftId !== undefined) {
+      const workspace = await action("workspace", { schemaVersion: 3, scope, captureDraftId: initialDraftId })
+        .catch(() => ({ ok: false as const, error: "unavailable" as const }));
+      if (workspace?.ok && "detail" in workspace.value) {
+        const detail = workspace.value.detail;
+        const reply = await run("claim", { schemaVersion: 1, scope, captureDraftId: detail.captureDraftId,
+          expectedVersion: detail.version, eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(),
+          deviceId, occurredAt: new Date().toISOString() });
+        if (reply?.ok) await refreshWorkspace(detail.captureDraftId);
+      } else if (!workspace.ok) { setError(workspace.error); setErrorOperation("workspace"); }
+    }
   })(); }, []);
 
   function base(): Record<string, unknown> {

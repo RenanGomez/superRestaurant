@@ -17,6 +17,7 @@ import {
 } from "@nestjs/common";
 import type {
   CustomerRecentOrderListV1,
+  CaptureWorkTrayResultV1,
   CustomerRepeatOrderCaptureResultV1,
   CustomerRepeatOrderPreviewV1,
 } from "@super-restaurant/shared-types";
@@ -24,6 +25,7 @@ import type {
 import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import {
   CustomerOrderHistoryError,
+  CustomerOpenCapturesService,
   CustomerOrderHistoryService,
   CustomerOrderRepeatCaptureService,
   CustomerOrderRepeatPreviewService,
@@ -33,9 +35,17 @@ import {
 export class CustomerOrderHistoryController {
   public constructor(
     @Inject(CustomerOrderHistoryService) private readonly history: CustomerOrderHistoryService,
+    @Inject(CustomerOpenCapturesService) private readonly openCaptures: CustomerOpenCapturesService,
     @Inject(CustomerOrderRepeatPreviewService) private readonly repeatPreview: CustomerOrderRepeatPreviewService,
     @Inject(CustomerOrderRepeatCaptureService) private readonly repeatCapture: CustomerOrderRepeatCaptureService,
   ) {}
+
+  @Get(":customerId/captures/open")
+  @Header("Cache-Control", "private, no-store")
+  public listOpenCaptures(@Req() request: unknown, @Param("customerId") customerId: unknown,
+    @Query("restaurantId") restaurantId: unknown, @Query("branchId") branchId: unknown): Promise<CaptureWorkTrayResultV1> {
+    return this.execute(() => this.openCaptures.list(getAuthenticatedPrincipal(request), { restaurantId, branchId, customerId }));
+  }
 
   @Get(":customerId/orders/recent")
   @Header("Cache-Control", "private, no-store")

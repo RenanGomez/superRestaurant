@@ -1,5 +1,12 @@
 # HANDOFF
 
+## m1-k0b2-customer-open-captures — 2026-11-23 (IN_PROGRESS)
+
+- Se añadió la migración `20261123000200`, el endpoint `GET /customers/:customerId/captures/open` y la recuperación por `/app/capture?draftId=` mediante workspace y claim existente. La respuesta reutiliza el resumen de bandeja V1 (máximo 50 borradores recuperables); no se modificó `packages/shared-types` ni se calculó dinero en el cliente.
+- Seguridad: autorización `customers.read` en API y SQL; alcance restaurant/branch, customer y estado/expiración filtrados en SQL. CI ejecuta `customer_open_captures_invariants.sql` tras la migración. La prueba nueva cubre aislamiento por sucursal/restaurante y revocación; la prueba API cubre autorización y entrada inválida.
+- Verificación: `pnpm lint`, `pnpm typecheck`, `pnpm test` globales verdes; tras el último ajuste web, `pnpm --filter @super-restaurant/web lint` y `typecheck` verdes. PG17 local UTF-8 aplicó todas las migraciones desde cero; la prueba SQL nueva pasó. La ejecución directa de todas las SQL al final tuvo 16 fallos: varias auditorías esperan una etapa anterior y `capture_delivery_order_invariants.sql` requiere la adaptación de CI; `branch_day_summary_invariants.sql` también debe ejecutarse en su etapa. Falta reproducir exactamente el loop CI y validar navegador real. CodeGraph sincronizado: impacto del nuevo servicio limitado a controlador, módulo y prueba; CaptureWorkspace a página y fixtures.
+- Pendiente: completar pruebas SQL en las etapas de CI, navegador, revisión doble nivel A y revisión humana antes de REVIEW. No se aplicó nada remoto ni se hizo push. Sin subagentes. La instrucción humana autorizó commit local y excluyó push/PR. No hay cambio offline ni migración remota; rollback local de esquema mediante base desechable.
+
 ## m1-k0b-pickup-contact — 2026-11-23 (REVIEW)
 
 - Ronda 1 del PR #20: CI ejecuta el invariante al aplicar la migración; se prueban claves extra, canal incompatible y limpieza del contacto. La API valida versión y lease antes de exigir cliente. PostgreSQL 17 desde cero y gates globales verificados localmente; pendiente push del humano.

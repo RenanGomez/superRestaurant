@@ -14,7 +14,8 @@ import { CaptureWorkspace } from "./capture-workspace";
 
 export const dynamic = "force-dynamic";
 
-export default async function CapturePage(): Promise<ReactNode> {
+export default async function CapturePage({ searchParams }: { readonly searchParams: Promise<{ draftId?: string | string[] }> }): Promise<ReactNode> {
+  const draftId = (await searchParams).draftId;
   const session = await getRequestSession();
   if (session === null) redirect("/login");
   const scope = parseBranchPreference((await cookies()).get(BRANCH_PREFERENCE_COOKIE)?.value);
@@ -38,6 +39,7 @@ export default async function CapturePage(): Promise<ReactNode> {
     {canOperate && catalog !== undefined
       ? <MenuImageBaseUrlProvider url={env.supabaseUrl}><CaptureWorkspace scope={scope} action={captureWorkspaceAction} quoteLine={quoteCaptureLineAction} canManageAssignment={canManageAssignment} catalog={catalog}
         reloadCatalog={reloadCaptureCatalog} orderDetail={orderDetailAction} sendToKitchen={sendToKitchenAction}
+        {...(typeof draftId === "string" ? { initialDraftId: draftId } : {})}
         {...(confirmationContext === undefined ? {} : { confirmationContext })} /></MenuImageBaseUrlProvider>
       : canOperate ? <p role="alert" className="rounded-xl border border-border bg-surface p-5">No fue posible leer el catálogo de esta sucursal. Recarga la página.</p>
         : <p role="alert" className="rounded-xl border border-border bg-surface p-5">Tu rol no permite capturar pedidos.</p>}

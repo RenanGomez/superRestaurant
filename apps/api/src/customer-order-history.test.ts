@@ -16,6 +16,7 @@ import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
 import {
   CustomerOrderHistoryError,
+  CustomerOpenCapturesService,
   CustomerOrderHistoryService,
   CustomerOrderRepeatCaptureService,
   CustomerOrderRepeatPreviewService,
@@ -50,6 +51,27 @@ const parsedScope = parseBranchScope({ branchId, restaurantId });
 if (parsedScope === undefined) throw new Error("Invalid test scope");
 const scope = parsedScope;
 const principal: AuthenticatedPrincipal = Object.freeze({ actorId });
+
+test("open captures authorize customer access and reject invalid input", async () => {
+  let calls = 0;
+  const database: DatabaseClientPort = { query: async () => { calls += 1; return { rows: [{ result: { schemaVersion: 1, items: [] } }] }; } };
+  const authorization = new MembershipAuthorizationService({ findActiveMembership: async () => ({ roles: ["cashier"], scope }) });
+  const service = new CustomerOpenCapturesService(authorization, database);
+  assert.deepEqual(await service.list(principal, { restaurantId, branchId, customerId }), { schemaVersion: 1, items: [] });
+  assert.equal(calls, 1);
+  const denied = new CustomerOpenCapturesService(new MembershipAuthorizationService({
+    findActiveMembership: async () => ({ roles: ["kitchen"], scope }),
+  }), database);
+  await assert.rejects(denied.list(principal, { restaurantId, branchId, customerId }), isError("authorization"));
+  await assert.rejects(service.list(principal, { restaurantId, branchId, customerId: "invalid" }), isError("request"));
+  assert.equal(calls, 1);
+  const foreign = new CustomerOpenCapturesService(authorization, { query: async () => ({ rows: [{ result: {
+    schemaVersion: 1, items: [{ schemaVersion: 1, scope: { restaurantId, branchId: membershipId }, captureDraftId,
+      folio: "A", sourceChannel: "phone", fulfillmentChannel: "pickup", status: "draft", attentionStatus: "unclaimed",
+      ownerMembershipId: null, version: 1, updatedAt: confirmedAt }],
+  } }] }) });
+  await assert.rejects(foreign.list(principal, { restaurantId, branchId, customerId }), isError("unavailable"));
+});
 
 const query = parseCustomerRecentOrdersQueryV1({
   customerId,
