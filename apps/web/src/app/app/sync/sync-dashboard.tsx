@@ -37,6 +37,7 @@ import {
   normalizeScopedSyncSnapshot,
   summarizeSyncEvents,
   SYNC_MATRIX_MESSAGES,
+  tryGenerateSyncId,
   validateManualReviewResolutionForm,
   WEB_SCHEMA_UPDATE_EVENT,
   WEB_SYNC_STATE_CHANGED_EVENT,
@@ -48,8 +49,8 @@ import {
   checkSyncConnectivityAction,
   refreshManualReviewCasesAction,
   resolveManualReviewCaseAction,
-  type ManualReviewListOutcome,
 } from "./actions";
+import type { ManualReviewListOutcome } from "./server-fetch";
 
 const CONNECTIVITY_PILL_CLASSES: Readonly<Record<SyncConnectivityStateV1, string>> = {
   degraded: "inline-flex items-center gap-2 rounded-full border border-selected bg-accent-soft px-3 py-1 text-xs font-semibold text-text",
@@ -114,11 +115,10 @@ export interface SyncDashboardProps {
   readonly initialReviewOutcome: ManualReviewListOutcome;
 }
 
-function createUuid(): string {
-  if (typeof globalThis.crypto !== "undefined" && typeof globalThis.crypto.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
-  return "00000000-0000-4000-8000-000000000000";
+interface ServerRefreshResult {
+  readonly reachable: boolean;
+  readonly syncAvailable: boolean;
+  readonly syncConfirmedAt: string | null;
 }
 
 export function SyncDashboard({
@@ -136,9 +136,7 @@ export function SyncDashboard({
   );
   const [reconnecting, setReconnecting] = useState(false);
   const [confirmedAt, setConfirmedAt] = useState<string | null>(
-    initialReviewOutcome.status === "ok" || initialReviewOutcome.status === "not_deployed"
-      ? initialReviewOutcome.confirmedAt
-      : initialConfirmedAt,
+    initialReviewOutcome.status === "ok" ? initialReviewOutcome.confirmedAt : initialConfirmedAt,
   );
   const [snapshot, setSnapshot] = useState<WebSyncUiSnapshot>(EMPTY_WEB_SYNC_SNAPSHOT);
   const [reviewCases, setReviewCases] = useState<readonly ManualReviewCaseV1[]>(
@@ -160,6 +158,7 @@ export function SyncDashboard({
   const [resolutionSubmitting, setResolutionSubmitting] = useState(false);
   const resolutionAttemptRef = useRef<ResolutionAttempt | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const lastTriggerRef = useRef<HTMLElement | null>(null);
   const reviewSectionRef = useRef<HTMLElement | null>(null);
 
   const readBridgeSnapshot = useCallback((): void => {
@@ -179,11 +178,11 @@ export function SyncDashboard({
     }
   }, [scope]);
 
-  const refreshFromServer = useCallback(async (): Promise<boolean> => {
+  const refreshFromServer = useCallback(async (): Promise<ServerRefreshResult> => {
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       setBrowserOnline(false);
       setServerReachable(false);
-      return false;
+      return { reachable: false, syncAvailable: false, syncConfirmedAt: null };
     }
     try {
       const outcome = await refreshManualReviewCasesAction();
@@ -192,28 +191,33 @@ export function SyncDashboard({
         setReviewCases(outcome.cases);
         setConfirmedAt(outcome.confirmedAt);
         setServerReachable(true);
-        return true;
+        return { reachable: true, syncAvailable: true, syncConfirmedAt: outcome.confirmedAt };
       }
       if (outcome.status === "not_deployed") {
-        setConfirmedAt(outcome.confirmedAt);
         setServerReachable(true);
-        return true;
+        return { reachable: true, syncAvailable: false, syncConfirmedAt: null };
       }
       if (outcome.status === "denied") {
         const probe = await checkSyncConnectivityAction();
         if (probe.ok) {
-          setConfirmedAt(probe.confirmedAt);
+          if (probe.syncConfirmedAt !== null) {
+            setConfirmedAt(probe.syncConfirmedAt);
+          }
           setServerReachable(true);
-          return true;
+          return {
+            reachable: true,
+            syncAvailable: probe.syncAvailable,
+            syncConfirmedAt: probe.syncConfirmedAt,
+          };
         }
         setServerReachable(false);
-        return false;
+        return { reachable: false, syncAvailable: false, syncConfirmedAt: null };
       }
       setServerReachable(false);
-      return false;
+      return { reachable: false, syncAvailable: false, syncConfirmedAt: null };
     } catch {
       setServerReachable(false);
-      return false;
+      return { reachable: false, syncAvailable: false, syncConfirmedAt: null };
     }
   }, []);
 
@@ -275,7 +279,6 @@ export function SyncDashboard({
     blockedEventCount: counts.blockedCount,
     browserOnline,
     openManualReviewCount: openReviewCases.length,
-    pendingCount: counts.pendingCount,
     reconnecting: reconnecting || snapshot.syncing,
     resyncRequired: snapshot.resyncRequired,
     retryWaitCount: counts.retryWaitCount,
@@ -288,6 +291,7 @@ export function SyncDashboard({
   const presentation = getConnectivityPresentation(connectivityState);
   const effectiveConfirmedAt = snapshot.lastConfirmedSyncAt ?? confirmedAt;
   const formattedConfirmTime = formatSyncTime(effectiveConfirmedAt, timeZone);
+  const syncServiceAvailable = reviewSourceStatus !== "not_deployed" || snapshot.storageReady;
 
   const bannerMessage = buildSyncBannerMessage({
     counts,
@@ -298,6 +302,7 @@ export function SyncDashboard({
     scopeRevoked: snapshot.scopeRevoked,
     state: connectivityState,
     storageQuarantined: snapshot.storageQuarantined,
+    syncServiceAvailable,
     timeZone,
   });
 
@@ -314,11 +319,13 @@ export function SyncDashboard({
     setFeedback(null);
     setReconnecting(true);
     try {
+      let bridgeConfirmedAt: string | null = null;
       const bridge = getWebSyncBridge();
       if (bridge?.retryPending !== undefined) {
         const result = await bridge.retryPending(scope, eventId);
         readBridgeSnapshot();
         if (result.confirmedAt !== undefined && result.confirmedAt !== null) {
+          bridgeConfirmedAt = result.confirmedAt;
           setConfirmedAt(result.confirmedAt);
         }
         if (!result.ok) {
@@ -330,18 +337,35 @@ export function SyncDashboard({
         }
       }
 
-      const reachable = await refreshFromServer();
+      const serverResult = await refreshFromServer();
       readBridgeSnapshot();
-      if (reachable) {
-        const latestTime = formatSyncTime(new Date().toISOString(), timeZone);
+      if (!serverResult.reachable) {
+        setFeedback({ text: SYNC_MATRIX_MESSAGES.retryPreserved, tone: "error" });
+        return;
+      }
+
+      const confirmedTimestamp = bridgeConfirmedAt ?? serverResult.syncConfirmedAt;
+      const latestTime = formatSyncTime(confirmedTimestamp, timeZone);
+      if (latestTime !== null && counts.pendingCount === 0) {
         setFeedback({
-          text: latestTime !== null && counts.pendingCount === 0
-            ? SYNC_MATRIX_MESSAGES.reconciliationComplete(latestTime)
-            : "Reintento completado sin duplicar cambios.",
+          text: SYNC_MATRIX_MESSAGES.reconciliationComplete(latestTime),
           tone: "success",
         });
+      } else if (bridgeConfirmedAt !== null) {
+        setFeedback({
+          text: "Reintento completado sin duplicar cambios.",
+          tone: "success",
+        });
+      } else if (!serverResult.syncAvailable) {
+        setFeedback({
+          text: "El servidor respondió, pero el servicio de sincronización aún no está habilitado en este entorno.",
+          tone: "info",
+        });
       } else {
-        setFeedback({ text: SYNC_MATRIX_MESSAGES.retryPreserved, tone: "error" });
+        setFeedback({
+          text: "Conexión verificada con el servidor sin duplicar cambios.",
+          tone: "success",
+        });
       }
     } catch {
       setFeedback({ text: SYNC_MATRIX_MESSAGES.retryPreserved, tone: "error" });
@@ -362,10 +386,15 @@ export function SyncDashboard({
     setFeedback(null);
     setReconnecting(true);
     try {
+      let bridgeConfirmedAt: string | null = null;
       const bridge = getWebSyncBridge();
       if (bridge?.requestResync !== undefined) {
         const result = await bridge.requestResync(scope);
         readBridgeSnapshot();
+        if (result.confirmedAt !== undefined && result.confirmedAt !== null) {
+          bridgeConfirmedAt = result.confirmedAt;
+          setConfirmedAt(result.confirmedAt);
+        }
         if (!result.ok) {
           setFeedback({
             text: describeSyncOutcomeForOperator({ code: result.code ?? "TRANSPORT_ERROR" }),
@@ -375,18 +404,30 @@ export function SyncDashboard({
         }
       }
 
-      const reachable = await refreshFromServer();
+      const serverResult = await refreshFromServer();
       readBridgeSnapshot();
-      if (reachable) {
-        const latestTime = formatSyncTime(new Date().toISOString(), timeZone);
+      if (!serverResult.reachable) {
+        setFeedback({ text: SYNC_MATRIX_MESSAGES.retryPreserved, tone: "error" });
+        return;
+      }
+
+      const confirmedTimestamp = bridgeConfirmedAt ?? serverResult.syncConfirmedAt;
+      const latestTime = formatSyncTime(confirmedTimestamp, timeZone);
+      if (latestTime !== null) {
         setFeedback({
-          text: latestTime !== null
-            ? SYNC_MATRIX_MESSAGES.reconciliationComplete(latestTime)
-            : "Sincronización actualizada con el servidor.",
+          text: SYNC_MATRIX_MESSAGES.reconciliationComplete(latestTime),
           tone: "success",
         });
+      } else if (!serverResult.syncAvailable) {
+        setFeedback({
+          text: "El servidor respondió, pero el servicio de sincronización aún no está habilitado en este entorno.",
+          tone: "info",
+        });
       } else {
-        setFeedback({ text: SYNC_MATRIX_MESSAGES.retryPreserved, tone: "error" });
+        setFeedback({
+          text: "Conexión verificada con el servidor.",
+          tone: "success",
+        });
       }
     } catch {
       setFeedback({ text: SYNC_MATRIX_MESSAGES.retryPreserved, tone: "error" });
@@ -409,6 +450,7 @@ export function SyncDashboard({
   };
 
   const openResolutionDialog = (reviewCase: ManualReviewCaseV1): void => {
+    lastTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setResolvingCase(reviewCase);
     setResolutionDecision("compensate");
     setResolutionReason("");
@@ -421,6 +463,8 @@ export function SyncDashboard({
     setResolvingCase(null);
     setResolutionError(null);
     resolutionAttemptRef.current = null;
+    lastTriggerRef.current?.focus();
+    lastTriggerRef.current = null;
   };
 
   const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -462,17 +506,27 @@ export function SyncDashboard({
 
     // Preserve attempt identifiers across transient retries for the same case and decision.
     const existing = resolutionAttemptRef.current;
-    const attempt: ResolutionAttempt =
-      existing !== null && existing.caseId === resolvingCase.caseId && existing.decision === validation.decision
-        ? existing
-        : {
-            caseId: resolvingCase.caseId,
-            compensatingEventId: validation.decision === "compensate" ? createUuid() : null,
-            decision: validation.decision,
-            idempotencyKey: `mr-resolve-${createUuid()}`,
-            occurredAt: new Date().toISOString(),
-          };
-    resolutionAttemptRef.current = attempt;
+    let attempt: ResolutionAttempt;
+    if (existing !== null && existing.caseId === resolvingCase.caseId && existing.decision === validation.decision) {
+      attempt = existing;
+    } else {
+      const idempotencyUuid = tryGenerateSyncId();
+      const compensatingEventId = validation.decision === "compensate" ? tryGenerateSyncId() : null;
+      if (idempotencyUuid === null || (validation.decision === "compensate" && compensatingEventId === null)) {
+        setResolutionError(
+          "Este navegador no permite generar claves seguras para evitar duplicados. Abre la aplicación en un navegador actualizado con conexión segura.",
+        );
+        return;
+      }
+      attempt = {
+        caseId: resolvingCase.caseId,
+        compensatingEventId,
+        decision: validation.decision,
+        idempotencyKey: `mr-resolve-${idempotencyUuid}`,
+        occurredAt: new Date().toISOString(),
+      };
+      resolutionAttemptRef.current = attempt;
+    }
 
     setResolutionSubmitting(true);
     setResolutionError(null);
@@ -490,6 +544,8 @@ export function SyncDashboard({
         setConfirmedAt(result.confirmedAt);
         setResolvingCase(null);
         resolutionAttemptRef.current = null;
+        lastTriggerRef.current?.focus();
+        lastTriggerRef.current = null;
         await refreshFromServer();
         setFeedback({
           text:
@@ -830,7 +886,7 @@ export function SyncDashboard({
 
         {reviewSourceStatus === "not_deployed" && combinedReviewCases.length === 0 && (
           <p role="status" className="rounded-xl border border-border bg-bg p-4 text-sm text-text-muted">
-            No hay casos pendientes de revisión en este momento. Cuando exista un conflicto de sincronización, aparecerá aquí para decisión de supervisión.
+            La bandeja de revisión de supervisores aún no está habilitada en este entorno. Cuando el servicio de sincronización esté activo, los casos aparecerán aquí.
           </p>
         )}
 

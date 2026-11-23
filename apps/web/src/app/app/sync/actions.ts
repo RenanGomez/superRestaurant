@@ -18,21 +18,18 @@ import {
   parseBranchPreference,
 } from "../../../lib/memberships";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
-import { parseScopedManualReviewList } from "../../../lib/sync-ui";
+import { isSupervisorRoleList } from "../../../lib/sync-ui";
+import { fetchManualReviewCases, type ManualReviewListOutcome } from "./server-fetch";
 
 const DEVICE_COOKIE = "sr-device-id";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
-export type ManualReviewListOutcome =
-  | { readonly status: "ok"; readonly cases: readonly ManualReviewCaseV1[]; readonly confirmedAt: string }
-  | { readonly status: "not_deployed"; readonly confirmedAt: string }
-  | { readonly status: "denied" }
-  | { readonly status: "unavailable" };
-
 export type ConnectivityProbeOutcome =
   | {
       readonly ok: true;
-      readonly confirmedAt: string;
+      /** Authoritative sync confirmation timestamp; null when sync API is not deployed or denied. */
+      readonly syncConfirmedAt: string | null;
+      readonly syncAvailable: boolean;
       readonly openManualReviewCount: number | null;
     }
   | {
@@ -117,55 +114,10 @@ async function getOrCreateDeviceId(): Promise<string> {
 }
 
 /**
- * Fetches server-side manual review cases for the active Restaurant/Branch scope.
- * Fails closed on invalid payloads or cross-branch items; distinguishes 404/501 when
- * the sync review API module is not yet deployed on the backend.
+ * Lightweight server-side connectivity probe used by `SyncStatusBar` and `/app/sync`.
+ * Distinguishes API reachability (`ok: true`) from an actual confirmed sync response
+ * (`syncConfirmedAt !== null`, `syncAvailable: true`): `not_deployed` never fabricates a timestamp.
  */
-export async function fetchManualReviewCases(
-  accessToken: string,
-  apiBaseUrl: string,
-  scope: BranchScope,
-): Promise<ManualReviewListOutcome> {
-  const params = new URLSearchParams({
-    branchId: scope.branchId,
-    restaurantId: scope.restaurantId,
-  });
-  let response: Response;
-  try {
-    response = await fetch(`${apiBaseUrl}/api/v1/sync/manual-review?${params.toString()}`, {
-      cache: "no-store",
-      headers: { authorization: `Bearer ${accessToken}` },
-    });
-  } catch {
-    return { status: "unavailable" };
-  }
-
-  const confirmedAt = new Date().toISOString();
-  if (response.status === 404 || response.status === 501) {
-    return { confirmedAt, status: "not_deployed" };
-  }
-  if (response.status === 401 || response.status === 403) {
-    return { status: "denied" };
-  }
-  if (!response.ok) {
-    return { status: "unavailable" };
-  }
-
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    return { status: "unavailable" };
-  }
-
-  const cases = parseScopedManualReviewList(body, scope);
-  if (cases === undefined) {
-    return { status: "unavailable" };
-  }
-  return { cases, confirmedAt, status: "ok" };
-}
-
-/** Lightweight server-side connectivity check used by `SyncStatusBar` and `/app/sync`. */
 export async function checkSyncConnectivityAction(): Promise<ConnectivityProbeOutcome> {
   const resolved = await resolveAuthorizedSyncContext();
   if (resolved.status === "unauthorized") {
@@ -184,17 +136,28 @@ export async function checkSyncConnectivityAction(): Promise<ConnectivityProbeOu
   if (reviewOutcome.status === "ok") {
     const openCount = reviewOutcome.cases.filter((item) => item.status === "open").length;
     return {
-      confirmedAt: reviewOutcome.confirmedAt,
       ok: true,
       openManualReviewCount: openCount,
+      syncAvailable: true,
+      syncConfirmedAt: reviewOutcome.confirmedAt,
     };
   }
 
-  if (reviewOutcome.status === "not_deployed" || reviewOutcome.status === "denied") {
+  if (reviewOutcome.status === "not_deployed") {
     return {
-      confirmedAt: new Date().toISOString(),
       ok: true,
       openManualReviewCount: null,
+      syncAvailable: false,
+      syncConfirmedAt: null,
+    };
+  }
+
+  if (reviewOutcome.status === "denied") {
+    return {
+      ok: true,
+      openManualReviewCount: null,
+      syncAvailable: true,
+      syncConfirmedAt: null,
     };
   }
 
@@ -219,8 +182,8 @@ export async function refreshManualReviewCasesAction(): Promise<ManualReviewList
 
 /**
  * Submits an audited supervisor manual-review resolution to `POST /api/v1/sync/manual-review`.
- * Never trusts client-side permissions: the backend enforces `sync.manual_review.resolve` and
- * returns 403 for unauthorized actors.
+ * Checks supervisor role early as defense in depth; the backend remains the sole authority and
+ * enforces `sync.manual_review.resolve`.
  */
 export async function resolveManualReviewCaseAction(input: {
   readonly caseId: string;
@@ -236,6 +199,9 @@ export async function resolveManualReviewCaseAction(input: {
   }
   if (resolved.status === "unavailable") {
     return { error: "unavailable", ok: false };
+  }
+  if (!isSupervisorRoleList(resolved.context.roles)) {
+    return { error: "denied", ok: false };
   }
 
   const deviceId = await getOrCreateDeviceId();

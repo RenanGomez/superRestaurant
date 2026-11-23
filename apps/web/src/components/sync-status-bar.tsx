@@ -38,6 +38,7 @@ const DOT_CLASSES: Readonly<Record<SyncConnectivityStateV1, string>> = {
 export interface SyncStatusBarProps {
   readonly branchName?: string | undefined;
   readonly scope?: BranchScope | undefined;
+  readonly initialServerReachable?: boolean | null | undefined;
   readonly initialConfirmedAt: string | null;
   readonly timeZone?: string | undefined;
 }
@@ -49,11 +50,14 @@ export interface SyncStatusBarProps {
 export function SyncStatusBar({
   branchName,
   scope,
+  initialServerReachable,
   initialConfirmedAt,
   timeZone,
 }: SyncStatusBarProps): ReactNode {
   const [browserOnline, setBrowserOnline] = useState(true);
-  const [serverReachable, setServerReachable] = useState<boolean | null>(initialConfirmedAt !== null ? true : null);
+  const [serverReachable, setServerReachable] = useState<boolean | null>(
+    initialServerReachable ?? (initialConfirmedAt !== null ? true : null),
+  );
   const [reconnecting, setReconnecting] = useState(false);
   const [confirmedAt, setConfirmedAt] = useState<string | null>(initialConfirmedAt);
   const [openReviewCount, setOpenReviewCount] = useState<number>(0);
@@ -100,7 +104,9 @@ export function SyncStatusBar({
       const result = await checkSyncConnectivityAction();
       if (result.ok) {
         setServerReachable(true);
-        setConfirmedAt(result.confirmedAt);
+        if (result.syncConfirmedAt !== null) {
+          setConfirmedAt(result.syncConfirmedAt);
+        }
         if (result.openManualReviewCount !== null) {
           setOpenReviewCount(result.openManualReviewCount);
         }
@@ -120,6 +126,7 @@ export function SyncStatusBar({
       setBrowserOnline(navigator.onLine);
     }
     readBridgeSnapshot();
+    void runServerProbe(false);
 
     const bridge = getWebSyncBridge();
     const unsubscribeBridge = bridge?.subscribe?.(() => {
@@ -168,7 +175,6 @@ export function SyncStatusBar({
     blockedEventCount: counts.blockedCount,
     browserOnline,
     openManualReviewCount: totalOpenReviews,
-    pendingCount: counts.pendingCount,
     reconnecting: reconnecting || snapshot.syncing,
     resyncRequired: snapshot.resyncRequired,
     retryWaitCount: counts.retryWaitCount,

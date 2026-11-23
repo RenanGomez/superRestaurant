@@ -83,7 +83,8 @@ export default async function AppLayout({ children }: { readonly children: React
         <SyncStatusBar
           branchName={membership?.branchName}
           scope={membership?.scope}
-          initialConfirmedAt={memberships !== undefined ? new Date().toISOString() : null}
+          initialServerReachable={memberships !== undefined ? true : null}
+          initialConfirmedAt={null}
         />
         <main className="flex min-w-0 flex-1">{children}</main>
       </div>

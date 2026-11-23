@@ -140,7 +140,6 @@ export interface DeriveConnectivityInput {
   readonly browserOnline: boolean;
   readonly serverReachable: boolean | null;
   readonly reconnecting: boolean;
-  readonly pendingCount: number;
   readonly retryWaitCount: number;
   readonly blockedEventCount: number;
   readonly openManualReviewCount: number;
@@ -436,9 +435,6 @@ export function describeSyncOutcomeForOperator(input: {
   if (input.localState === "manual_review" || input.localState === "conflict") {
     return financial ? SYNC_MATRIX_MESSAGES.financialConflict : SYNC_MATRIX_MESSAGES.nonFinancialConflict;
   }
-  if (input.localState === "rejected") {
-    return SYNC_MATRIX_MESSAGES.permissionRejected;
-  }
   if (input.localState === "retry_wait") {
     return SYNC_MATRIX_MESSAGES.retryPreserved;
   }
@@ -471,7 +467,14 @@ export function describeSyncOutcomeForOperator(input: {
     ) {
       return SYNC_MATRIX_MESSAGES.nonFinancialConflict;
     }
+    if (input.localState === "rejected") {
+      return "El servidor no pudo aplicar este cambio porque ya no cumple las condiciones vigentes. Revisa el estado actual antes de repetirlo.";
+    }
     return "No se pudo completar el envío por ahora. Conservamos el cambio para revisión.";
+  }
+
+  if (input.localState === "rejected") {
+    return "El servidor no pudo aplicar este cambio porque ya no cumple las condiciones vigentes. Revisa el estado actual antes de repetirlo.";
   }
 
   return financial ? SYNC_MATRIX_MESSAGES.financialConflict : SYNC_MATRIX_MESSAGES.nonFinancialConflict;
@@ -484,6 +487,7 @@ export function buildSyncBannerMessage(input: {
   readonly openManualReviewCount: number;
   readonly hasFinancialReview: boolean;
   readonly lastConfirmedSyncAt: string | null;
+  readonly syncServiceAvailable?: boolean | undefined;
   readonly timeZone?: string | undefined;
   readonly schemaOutdated: boolean;
   readonly scopeRevoked: boolean;
@@ -512,7 +516,7 @@ export function buildSyncBannerMessage(input: {
     if (input.counts.conflictCount > 0 || input.counts.manualReviewCount > 0 || input.openManualReviewCount > 0) {
       return SYNC_MATRIX_MESSAGES.nonFinancialConflict;
     }
-    return SYNC_MATRIX_MESSAGES.permissionRejected;
+    return "Hay cambios que el servidor no pudo aplicar. Revisa el detalle antes de continuar.";
   }
 
   if (input.state === "reconnecting" || input.state === "degraded") {
@@ -523,12 +527,35 @@ export function buildSyncBannerMessage(input: {
     return SYNC_MATRIX_MESSAGES.pendingQueue(input.counts.pendingCount);
   }
 
+  if (input.syncServiceAvailable === false) {
+    return "Conectado con el servidor. El servicio de sincronización aún no está habilitado en este entorno.";
+  }
+
   const formattedTime = formatSyncTime(input.lastConfirmedSyncAt, input.timeZone);
   if (formattedTime !== null) {
     return SYNC_MATRIX_MESSAGES.reconciliationComplete(formattedTime);
   }
 
-  return "Conectado con el servidor. No hay cambios pendientes en este dispositivo.";
+  return "Conectado con el servidor. Aún no hay una sincronización confirmada en este dispositivo.";
+}
+
+/**
+ * Generates a unique sync identifier via Web Crypto `randomUUID()`. Fails closed (`null`) when
+ * unavailable so callers never reuse a static fallback UUID for idempotency keys or events.
+ */
+export function tryGenerateSyncId(
+  cryptoProvider: { readonly randomUUID?: () => string } | null =
+    typeof globalThis === "undefined" ? null : (globalThis.crypto ?? null),
+): string | null {
+  if (cryptoProvider === null || typeof cryptoProvider.randomUUID !== "function") {
+    return null;
+  }
+  try {
+    const candidate = cryptoProvider.randomUUID();
+    return isSyncId(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Formats an ISO timestamp as local HH:mm (es-MX) without exposing raw UTC strings. */

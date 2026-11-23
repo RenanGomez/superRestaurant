@@ -32,6 +32,7 @@ import {
   sanitizeOperatorSummary,
   summarizeSyncEvents,
   SYNC_MATRIX_MESSAGES,
+  tryGenerateSyncId,
   validateManualReviewResolutionForm,
   type SyncUiEventItem,
 } from "./sync-ui.js";
@@ -74,7 +75,6 @@ test("deriveConnectivityState covers all five states of OFFLINE_CAPABILITY_AND_C
     blockedEventCount: 0,
     browserOnline: true,
     openManualReviewCount: 0,
-    pendingCount: 0,
     reconnecting: false,
     resyncRequired: false,
     retryWaitCount: 0,
@@ -437,4 +437,84 @@ test("parseScopedManualReviewList parses valid cases and rejects cross-branch le
   // A case belonging to another branch is rejected fail-closed.
   const leaked = parseScopedManualReviewList({ cases: [{ ...validCase, scope: SCOPE_B }] }, SCOPE_A);
   assert.equal(leaked, undefined);
+});
+
+test("not_deployed or unconfirmed sync never emits reconciliationComplete (P1.1 / P2.4)", () => {
+  const emptyCounts = summarizeSyncEvents([]);
+
+  const notDeployed = buildSyncBannerMessage({
+    counts: emptyCounts,
+    hasFinancialReview: false,
+    lastConfirmedSyncAt: "2026-11-23T17:25:00Z",
+    openManualReviewCount: 0,
+    schemaOutdated: false,
+    scopeRevoked: false,
+    state: "online",
+    storageQuarantined: false,
+    syncServiceAvailable: false,
+    timeZone: "UTC",
+  });
+  assert.equal(notDeployed.includes("Sincronización confirmada"), false);
+  assert.match(notDeployed, /aún no está habilitado/i);
+
+  const unconfirmed = buildSyncBannerMessage({
+    counts: emptyCounts,
+    hasFinancialReview: false,
+    lastConfirmedSyncAt: null,
+    openManualReviewCount: 0,
+    schemaOutdated: false,
+    scopeRevoked: false,
+    state: "online",
+    storageQuarantined: false,
+    syncServiceAvailable: true,
+    timeZone: "UTC",
+  });
+  assert.equal(unconfirmed.includes("Sincronización confirmada"), false);
+  assert.match(unconfirmed, /sin|no hay una sincronización confirmada/i);
+});
+
+test("rejected events without permission error codes do not claim invalid authorization (P2.5)", () => {
+  const staleRejected = describeSyncOutcomeForOperator({
+    code: "STALE_WRITE",
+    localState: "rejected",
+  });
+  assert.equal(staleRejected, SYNC_MATRIX_MESSAGES.nonFinancialConflict);
+
+  const preconditionRejected = describeSyncOutcomeForOperator({
+    code: "PRECONDITION_FAILED",
+    localState: "rejected",
+  });
+  assert.notEqual(preconditionRejected, SYNC_MATRIX_MESSAGES.permissionRejected);
+  assert.equal(TECHNICAL_CODE_PATTERN.test(preconditionRejected), false);
+
+  const genericRejected = describeSyncOutcomeForOperator({
+    code: null,
+    localState: "rejected",
+  });
+  assert.notEqual(genericRejected, SYNC_MATRIX_MESSAGES.permissionRejected);
+
+  const authRejected = describeSyncOutcomeForOperator({
+    code: "FORBIDDEN",
+    localState: "rejected",
+  });
+  assert.equal(authRejected, SYNC_MATRIX_MESSAGES.permissionRejected);
+});
+
+test("tryGenerateSyncId fails closed without returning a static all-zeros UUID (P2.2)", () => {
+  const generated = tryGenerateSyncId({
+    randomUUID: () => "12345678-1234-4123-8123-123456789abc",
+  });
+  assert.equal(generated, "12345678-1234-4123-8123-123456789abc");
+
+  assert.equal(tryGenerateSyncId(null), null);
+  assert.equal(tryGenerateSyncId({}), null);
+  assert.equal(tryGenerateSyncId({ randomUUID: () => "not-a-uuid" }), null);
+  assert.equal(
+    tryGenerateSyncId({
+      randomUUID: () => {
+        throw new Error("crypto unavailable");
+      },
+    }),
+    null,
+  );
 });

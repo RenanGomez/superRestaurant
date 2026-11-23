@@ -11,7 +11,7 @@ import {
   getRequestSession,
 } from "../../../lib/request-context";
 import { isSupervisorRoleList } from "../../../lib/sync-ui";
-import { fetchManualReviewCases } from "./actions";
+import { fetchManualReviewCases } from "./server-fetch";
 import { SyncDashboard } from "./sync-dashboard";
 
 export const dynamic = "force-dynamic";
@@ -43,9 +43,7 @@ export default async function SyncPage(): Promise<ReactNode> {
   ]);
 
   const initialConfirmedAt =
-    initialReviewOutcome.status === "ok" || initialReviewOutcome.status === "not_deployed"
-      ? initialReviewOutcome.confirmedAt
-      : new Date().toISOString();
+    initialReviewOutcome.status === "ok" ? initialReviewOutcome.confirmedAt : null;
 
   return (
     <SyncDashboard
