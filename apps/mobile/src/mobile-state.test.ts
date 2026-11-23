@@ -941,6 +941,19 @@ test("payment collection tracks server checkout, quote, methods, success and fai
     canSubmitMobilePayment(apply(cardReady, { patch: { cardExternalConfirmed: false }, type: "paymentFieldChanged" }).payment),
     false,
   );
+  // Editing card evidence or reloading checkout for a subsequent payment invalidates prior external confirmation.
+  const cardEditedRef = apply(cardReady, { patch: { cardReference: "AUTH9999" }, type: "paymentFieldChanged" });
+  assert.equal(cardEditedRef.payment.cardExternalConfirmed, false, "changing card evidence requires re-confirmation");
+  assert.equal(canSubmitMobilePayment(cardEditedRef.payment), false);
+  const nextCheckoutAttempt = nextAttempt();
+  const cardReloaded = apply(
+    cardReady,
+    { type: "paymentCheckoutReset" },
+    { attempt: nextCheckoutAttempt, orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentCheckoutLoading" },
+    { attempt: nextCheckoutAttempt, checkout, scope: scopeA, type: "paymentCheckoutLoaded" },
+  );
+  assert.equal(cardReloaded.payment.cardExternalConfirmed, false, "fresh checkout clears prior terminal confirmation");
+  assert.equal(cardReloaded.payment.cardReference, "", "fresh checkout clears prior terminal reference");
 
   // Transfer allows empty or optional <=64 char reference.
   const transferAttempt = nextAttempt();

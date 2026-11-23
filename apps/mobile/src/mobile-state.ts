@@ -496,6 +496,8 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
           payment: Object.freeze({
             ...current.payment,
             amountInput: formatMinorUnitsInput(event.checkout.remainingBalanceMinor, event.checkout.currency) ?? "",
+            cardExternalConfirmed: false,
+            cardReference: "",
             checkout: ready(event.checkout),
             checkoutFailure: undefined,
             quote: idleResource,
@@ -517,11 +519,16 @@ export function reduceMobileState(state: MobileState, event: MobileEvent): Mobil
       if (state.payment.orderId === undefined || state.payment.submission.status === "sending") return state;
       const affectsQuote = event.patch.method !== undefined || event.patch.amountInput !== undefined
         || event.patch.receivedInput !== undefined || event.patch.tipInput !== undefined;
+      const resetsExternalConfirmation = event.patch.cardExternalConfirmed === undefined && (
+        affectsQuote || event.patch.cardProvider !== undefined
+        || event.patch.terminalId !== undefined || event.patch.cardReference !== undefined
+      );
       return freeze({
         ...state,
         payment: Object.freeze({
           ...state.payment,
           ...event.patch,
+          ...(resetsExternalConfirmation ? { cardExternalConfirmed: false } : {}),
           ...(affectsQuote ? { quote: idleResource, quoteFailure: undefined } : {}),
           submission: state.payment.submission.status === "failed" ? idlePaymentSubmission : state.payment.submission,
         }),
@@ -760,7 +767,8 @@ export function paymentMethodLabel(method: SimplePaymentMethodV1): string {
 
 /** True only when the server checkout and quote are ready and method evidence satisfies contract bounds. */
 export function canSubmitMobilePayment(payment: MobilePaymentState): boolean {
-  if (payment.checkout.status !== "ready" || payment.quote.status !== "ready" || payment.submission.status === "sending") return false;
+  if (payment.checkout.status !== "ready" || payment.quote.status !== "ready"
+    || payment.quote.value?.method !== payment.method || payment.submission.status === "sending") return false;
   if (payment.method === "card_manual") {
     const provider = payment.cardProvider.trim();
     const terminal = payment.terminalId.trim();
