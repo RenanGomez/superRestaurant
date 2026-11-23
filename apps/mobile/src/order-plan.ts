@@ -56,6 +56,7 @@ export interface OrderDeliveryPlanV1 {
   /** Canonical UTC instant, the one form the shared commands accept. */
   readonly occurredAt: string;
   readonly openOrder: OrderMutationIdentityV1;
+  readonly existingOrderId?: string;
   readonly orderId: string;
   readonly scope: MobileBranchScope;
   readonly shiftId: string;
@@ -66,6 +67,7 @@ export interface OrderDeliveryPlanV1 {
 
 export function buildOrderDeliveryPlan(input: {
   readonly catalog: MenuCatalogV1;
+  readonly existingOrderId?: string;
   readonly deviceId: string;
   readonly lines: readonly OrderDraftLine[];
   /** Milliseconds since the epoch; the plan keeps the canonical UTC form of it. */
@@ -104,7 +106,9 @@ export function buildOrderDeliveryPlan(input: {
     return value;
   };
 
-  const orderId = mint();
+  if (input.existingOrderId !== undefined && !UUID_PATTERN.test(input.existingOrderId.toLowerCase())) return undefined;
+  const orderId = input.existingOrderId?.toLowerCase() ?? mint();
+  if (input.existingOrderId !== undefined) minted.add(orderId!);
   const createOrder = mintIdentity(mint);
   if (orderId === undefined || createOrder === undefined) return undefined;
 
@@ -133,6 +137,7 @@ export function buildOrderDeliveryPlan(input: {
     createOrder,
     currency: handoff.createOrder.currency,
     deviceId: input.deviceId.toLowerCase(),
+    ...(input.existingOrderId === undefined ? {} : { existingOrderId: orderId }),
     occurredAt,
     openOrder,
     orderId,

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseActiveTableOrderListV2, parseBranchScope, type BranchScope } from "@super-restaurant/shared-types";
+import { parseBranchScope, parseActiveTableOrderListV2, type BranchDaySummaryV1, type BranchScope } from "@super-restaurant/shared-types";
 
 import * as client from "./mobile-client.js";
+import { kitchenAttempt, kitchenCommand } from "./order-kitchen.js";
+import { branchDate, openRegisters } from "./register-selection.js";
 import {
   MOBILE_API_PATHS,
   MobileRequestError,
@@ -34,6 +36,7 @@ import {
   FIXTURE_TIME_ZONE,
   activeTableOrderItemBody,
   activeTableOrderListBody,
+  activeTableOrderItemBody,
   branchOperationalContextBody,
   cashPaymentQuoteBody,
   cashRegisterReportBody,
@@ -62,6 +65,7 @@ test("exposes exactly the operational reads, Order mutations and payment endpoin
     "createOrder",
     "getCashRegisterReport",
     "getCheckoutOrder",
+    "getDaySummary",
     "getDiningLayout",
     "getMenuCatalog",
     "getTableBoard",
@@ -72,6 +76,7 @@ test("exposes exactly the operational reads, Order mutations and payment endpoin
     "openOrder",
     "quoteCashPayment",
     "selectBranchContext",
+    "sendToKitchen",
   ]);
   assert.deepEqual(Object.values(MOBILE_API_PATHS).sort(), [
     "/api/v1/access/branch/context",
@@ -83,9 +88,11 @@ test("exposes exactly the operational reads, Order mutations and payment endpoin
     "/api/v1/orders/active",
     "/api/v1/orders/items",
     "/api/v1/orders/open",
+    "/api/v1/orders/send-to-kitchen",
     "/api/v1/payments/checkout",
     "/api/v1/payments/collect",
     "/api/v1/payments/quote",
+    "/api/v1/reports/day-summary",
     "/api/v1/shifts/active",
     "/api/v1/tables/board",
   ]);
@@ -650,4 +657,52 @@ test("table board posts scope and rejects another branch", async () => {
   assert.deepEqual(JSON.parse(String(calls[0]?.init?.body)), scopeA);
   await assert.rejects(getTableBoard(fixtureConfig, "token", scopeB, jsonFetcher(body).fetcher),
     (error: unknown) => error instanceof MobileRequestError && error.status === "protocol");
+});
+
+
+test("kitchen command snapshots pending lines, version and retry identity", async () => {
+  const order = parseActiveTableOrderListV2(activeTableOrderListBody({ scope: scopeA, orders: [{ orderId: FIXTURE_ORDER, status: "open", version: 7, items: [
+    activeTableOrderItemBody({ status: "pending" }),
+    activeTableOrderItemBody({ orderItemId: "a0000000-0000-4000-8000-000000000002", status: "sent" }),
+  ] }] }))?.orders[0];
+  assert.ok(order);
+  const command = kitchenCommand({ order, scope: scopeA, deviceId: DEVICE_ID, eventId: "f0000000-0000-4000-8000-000000000001", idempotencyKey: "kitchen-attempt-123", occurredAt: "2026-09-06T18:30:45.123Z" });
+  assert.ok(command);
+  assert.equal(kitchenAttempt(command, { order: { ...order, version: 99 }, scope: scopeA, deviceId: DEVICE_ID, eventId: "f0000000-0000-4000-8000-000000000002", idempotencyKey: "another-attempt-123", occurredAt: "2026-09-06T18:30:46.123Z" }), command);
+  assert.equal(command.expectedVersion, 7);
+  assert.deepEqual(command.orderItemIds, [order.items[0]!.orderItemId]);
+  const { calls, fetcher } = jsonFetcher(orderMutationSummaryBody({ orderId: FIXTURE_ORDER, orderStatus: "open", scope: scopeA, version: 8 }));
+  await client.sendToKitchen(fixtureConfig, "token", command, fetcher);
+  await client.sendToKitchen(fixtureConfig, "token", command, fetcher);
+  assert.deepEqual(calls[0]?.init?.body, calls[1]?.init?.body);
+  assert.match(calls[0]!.url, /orders\/send-to-kitchen$/u);
+  assert.equal(kitchenCommand({ order: { ...order, items: [] }, scope: scopeA, deviceId: DEVICE_ID, eventId: "f0000000-0000-4000-8000-000000000001", idempotencyKey: "kitchen-attempt-123", occurredAt: "2026-09-06T18:30:45.123Z" }), undefined);
+});
+
+test("register selection uses only open sessions of the chosen shift and the branch date", () => {
+  const register = { registerId: FIXTURE_REGISTER, cashRegisterSessionId: FIXTURE_REGISTER_SESSION, cashierId: FIXTURE_ORDER, status: "open" };
+  const summary = { shifts: [ { shiftId: FIXTURE_SHIFT, status: "open", registers: [register, { ...register, status: "closed" }] }, { shiftId: FIXTURE_TABLE, status: "open", registers: [register] } ] } as unknown as BranchDaySummaryV1;
+  assert.deepEqual(openRegisters(summary, FIXTURE_SHIFT), [{ registerId: FIXTURE_REGISTER, cashRegisterSessionId: FIXTURE_REGISTER_SESSION, cashierId: FIXTURE_ORDER }]);
+  assert.deepEqual(openRegisters(summary, "missing"), []);
+  assert.equal(branchDate(new Date("2026-10-07T03:30:00Z"), "America/Hermosillo"), "2026-10-06");
+  assert.equal(branchDate(new Date(), "invalid/timezone"), undefined);
+});
+
+
+test("day summary requires the requested branch and date and propagates denied access", async () => {
+  const emptySales = { amountMinor: 0, paymentCount: 0, tipMinor: 0 };
+  const body = {
+    schemaVersion: 1, scope: scopeA, date: "2026-10-06", timeZone: "America/Hermosillo", currency: "MXN",
+    salesByChannel: ["table", "counter", "takeout", "delivery"].map((channel) => ({ ...emptySales, channel })),
+    salesByMethod: ["cash", "card_manual", "transfer"].map((method) => ({ ...emptySales, method })),
+    totals: { cashTipsMinor: 0, paymentCount: 0, salesMinor: 0, tipsMinor: 0 },
+    ordersPaid: { amountMinor: 0, count: 0 }, deliveryFees: { amountMinor: 0, orderCount: 0 },
+    deliveriesSettled: { cashCollectedMinor: 0, count: 0 }, cancellations: { captures: 0, orders: 0, refundPendingMinor: 0 }, shifts: [],
+  };
+  const { calls, fetcher } = jsonFetcher(body);
+  assert.equal((await client.getDaySummary(fixtureConfig, "token", scopeA, "2026-10-06", fetcher)).shifts.length, 0);
+  assert.deepEqual(JSON.parse(String(calls[0]?.init?.body)), { date: "2026-10-06", schemaVersion: 1, scope: scopeA });
+  await assert.rejects(client.getDaySummary(fixtureConfig, "token", scopeB, "2026-10-06", jsonFetcher(body).fetcher), (error: unknown) => error instanceof MobileRequestError && error.status === "protocol");
+  await assert.rejects(client.getDaySummary(fixtureConfig, "token", scopeA, "2026-10-07", jsonFetcher(body).fetcher), (error: unknown) => error instanceof MobileRequestError && error.status === "protocol");
+  await assert.rejects(client.getDaySummary(fixtureConfig, "token", scopeA, "2026-10-06", (() => Promise.resolve(new Response(null, { status: 403 }))) as typeof fetch), (error: unknown) => error instanceof MobileRequestError && error.status === 403);
 });

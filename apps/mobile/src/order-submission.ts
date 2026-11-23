@@ -73,46 +73,39 @@ export async function submitOrderPlan({ plan, transport }: {
 }): Promise<OrderSubmissionOutcome> {
   const scope = plan.scope as unknown as BranchScope;
 
-  let created: OrderMutationSummaryV1;
-  try {
-    created = await transport.createOrder(Object.freeze({
-      channel: plan.channel,
-      currency: plan.currency,
-      deviceId: plan.deviceId,
-      eventId: plan.createOrder.eventId,
-      idempotencyKey: plan.createOrder.idempotencyKey,
-      occurredAt: plan.occurredAt,
-      orderId: plan.orderId,
-      schemaVersion: 2,
-      scope,
-      shiftId: plan.shiftId,
-      tableId: plan.tableId,
-      timeZone: plan.timeZone,
-    }));
-  } catch (error: unknown) {
-    return failed("create", error);
-  }
-
-  let version = created.version;
-  let status: OrderMutationSummaryV1["orderStatus"] = created.orderStatus;
+  let version: number;
+  let status: OrderMutationSummaryV1["orderStatus"];
   let applied: ReadonlySet<string> = new Set();
-
-  if (created.replayed) {
-    // This plan has been attempted before. What is already on the server is the
-    // only thing that can say how far it got.
-    let list: ActiveTableOrderListV2;
+  let needsRead = plan.existingOrderId !== undefined;
+  if (plan.existingOrderId === undefined) {
+    let created: OrderMutationSummaryV1;
     try {
-      list = await transport.listActiveOrders(plan.tableId);
-    } catch (error: unknown) {
-      return failed("read", error);
-    }
+      created = await transport.createOrder(Object.freeze({
+        channel: plan.channel, currency: plan.currency, deviceId: plan.deviceId,
+        eventId: plan.createOrder.eventId, idempotencyKey: plan.createOrder.idempotencyKey,
+        occurredAt: plan.occurredAt, orderId: plan.orderId, schemaVersion: 2, scope,
+        shiftId: plan.shiftId, tableId: plan.tableId, timeZone: plan.timeZone,
+      }));
+    } catch (error: unknown) { return failed("create", error); }
+    version = created.version;
+    status = created.orderStatus;
+    needsRead = created.replayed;
+  } else {
+    version = 0;
+    status = "draft";
+  }
+  if (needsRead) {
+    let list: ActiveTableOrderListV2;
+    try { list = await transport.listActiveOrders(plan.tableId); }
+    catch (error: unknown) { return failed("read", error); }
     const existing = list.orders.find((order) => order.orderId.toLowerCase() === plan.orderId);
     if (existing === undefined) {
-      // The order is no longer active. If the previous attempt got it open, the
-      // delivery is done; anything else is a state this screen cannot resolve.
-      return (ALREADY_OPEN as readonly string[]).includes(status)
+      return plan.existingOrderId === undefined && (ALREADY_OPEN as readonly string[]).includes(status)
         ? Object.freeze({ kind: "sent", orderId: plan.orderId, version })
         : Object.freeze({ failure: "conflict", kind: "failed", step: "read" });
+    }
+    if (plan.existingOrderId !== undefined && existing.status !== "open") {
+      return Object.freeze({ failure: "conflict", kind: "failed", step: "read" });
     }
     version = existing.version;
     status = existing.status;

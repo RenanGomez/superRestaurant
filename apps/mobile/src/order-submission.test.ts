@@ -478,3 +478,18 @@ test("no rejection was left unhandled", async () => {
   await new Promise((resolve) => { setTimeout(resolve, 0); });
   assert.deepEqual(unhandled, []);
 });
+
+
+test("adds to a selected open order using its authoritative version and resumes without duplicates", async () => {
+  const base = plan(twoLines);
+  const delivery: OrderDeliveryPlanV1 = { ...base, orderId: "b0000000-0000-4000-8000-000000000001", existingOrderId: "b0000000-0000-4000-8000-000000000001" };
+  const existing = activeTableOrderListBody({ scope: scopeA, orders: [{ orderId: delivery.orderId, status: "open", version: 8, items: [activeTableOrderItemBody({ orderItemId: delivery.addItems[0]!.orderItemId })] }] });
+  const service = server({ answer: existing }, { answer: summary(9, delivery.orderId, "open") });
+  assert.deepEqual(await submitOrderPlan({ plan: delivery, transport: transportOver(service.fetcher) }), { kind: "sent", orderId: delivery.orderId, version: 9 });
+  assert.equal(service.calls.length, 2);
+  assert.equal((service.calls[1]!.body as { expectedVersion: number }).expectedVersion, 8);
+  assert.equal((service.calls[1]!.body as { orderItemId: string }).orderItemId, delivery.addItems[1]!.orderItemId);
+  const stale = server({ answer: activeTableOrderListBody({ scope: scopeA, orders: [{ orderId: delivery.orderId, status: "partially_paid" }] }) });
+  assert.deepEqual(await submitOrderPlan({ plan: delivery, transport: transportOver(stale.fetcher) }), { failure: "conflict", kind: "failed", step: "read" });
+  assert.equal(stale.calls.length, 1);
+});

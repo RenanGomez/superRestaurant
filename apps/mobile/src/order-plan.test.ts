@@ -231,3 +231,14 @@ test("the plan performs no request, names no endpoint and stores nothing", () =>
     assert.equal(code.includes(forbidden), false, `order-plan.ts computes ${forbidden}`);
   }
 });
+
+
+test("an existing order is validated and retained without reusing its identity", () => {
+  const id = "b0000000-0000-4000-8000-000000000001";
+  const plan = build({ existingOrderId: id });
+  assert.equal(plan?.orderId, id);
+  assert.equal(plan?.existingOrderId, id);
+  assert.notEqual(plan?.addItems[0]?.orderItemId, id);
+  assert.equal(build({ existingOrderId: "invalid" }), undefined);
+  assert.equal(build({ existingOrderId: id, randomUuid: () => id }), undefined);
+});

@@ -403,15 +403,17 @@ test("only the authorized operational, order and payment paths are reachable", (
     "/api/v1/orders/active",
     "/api/v1/orders/items",
     "/api/v1/orders/open",
+    "/api/v1/orders/send-to-kitchen",
     "/api/v1/payments/checkout",
     "/api/v1/payments/collect",
     "/api/v1/payments/quote",
+    "/api/v1/reports/day-summary",
     "/api/v1/shifts/active",
     "/api/v1/tables/board",
   ]);
   assert.deepEqual(
     Object.values(MOBILE_API_PATHS).filter((endpoint) => endpoint.includes("orders")).sort(),
-    ["/api/v1/orders", "/api/v1/orders/active", "/api/v1/orders/items", "/api/v1/orders/open"],
+    ["/api/v1/orders", "/api/v1/orders/active", "/api/v1/orders/items", "/api/v1/orders/open", "/api/v1/orders/send-to-kitchen"],
   );
   for (const endpoint of Object.values(MOBILE_API_PATHS)) {
     for (const forbidden of ["refund", "transition", "cancel"]) {
