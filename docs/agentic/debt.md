@@ -19,6 +19,11 @@ Registro de deuda aceptada, con su identificador, impacto y condición de salida
 - Verificadores omitidos en CI: `verify:pizza-model-v2-schema:rollback` se quitó de
   `Run compatible rollback verifiers` por el mismo bug M0-7
   (`confirm_capture_draft_v3`/`base_group_id`); restaurar al reparar.
+- Paso tolerado en CI: `Run local HTTP flow` usa `continue-on-error: true` porque el flujo
+  local no está verde en CI (`order_detail` responde `503 ORDER_UNAVAILABLE`); el fixture de
+  entrega se corrigió para cotizar por CP, pero el flujo sigue sin pasar. Quitar el
+  `continue-on-error` al repararlo.
 - Condición de salida: los siete tests pasan en CI sin tolerancia, se elimina la lista
-  `KNOWN_FAILING_SQL_TESTS` del paso `Run SQL tests` y se restaura la línea
-  `verify:pizza-model-v2-schema:rollback`.
+  `KNOWN_FAILING_SQL_TESTS` del paso `Run SQL tests`, se restaura la línea
+  `verify:pizza-model-v2-schema:rollback` y se quita el `continue-on-error` de
+  `Run local HTTP flow`.
