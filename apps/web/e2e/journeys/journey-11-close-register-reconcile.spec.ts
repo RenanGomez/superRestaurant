@@ -19,10 +19,11 @@ test("journey 11: cerrar caja y conciliar pedidos, cobros y efectivo", async ({ 
   await expect(page.getByRole("heading", { name: "Cobrar cuenta" })).toBeVisible();
   await payExactCash(page);
 
+  // The register is new for this run, so exactly this one sale and its amount are reconciled.
   const report = await api.readRegister(register);
   expect(report.register.status).toBe("open");
-  expect(report.paymentCount).toBeGreaterThanOrEqual(1);
-  expect(report.cashCapturedMinor).toBeGreaterThanOrEqual(seeded.totalMinor);
+  expect(report.paymentCount).toBe(1);
+  expect(report.cashCapturedMinor).toBe(seeded.totalMinor);
   expect(report.register.expectedCashBalanceMinor).toBe(
     report.register.openingFloatMinor + report.cashCapturedMinor + report.cashTipsMinor,
   );

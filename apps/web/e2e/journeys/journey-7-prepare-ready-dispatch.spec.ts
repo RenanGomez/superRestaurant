@@ -6,11 +6,22 @@ test("journey 7: preparar, marcar lista y asignar/despachar reparto", async ({ p
   beforeJourney(testInfo);
   await requireOrderSeed(api);
   await requireActiveShift(api);
+  const couriers = await api.listCouriers();
+
+  // Decide the delivery-board precondition BEFORE any order action: a role without
+  // `deliveries.manage` cannot exercise assignment/dispatch, so the whole journey skips instead of
+  // half-running kitchen transitions and failing on a board it may not use.
+  await page.goto("/app/deliveries");
+  await assertAppPage(page, "/app/deliveries");
+  if (await page.getByRole("heading", { name: "Por asignar" }).count() === 0) {
+    test.skip(true, "La cuenta guardada no administra entregas; el journey 7 necesita un rol con deliveries.manage");
+    throw new Error("Sin permiso de entregas");
+  }
 
   // A delivery-channel Order so the same run drives the kitchen transitions and the delivery board.
   const seeded = await api.seedOrder({ channel: "delivery" });
-  // Registered before any UI action: a failed run first releases a delivery it may have dispatched,
-  // then cancels the Order only while it still has no money captured.
+  // Registered before any UI mutation: a failed run first releases a delivery it may have
+  // dispatched, then cancels the Order only while it still has no money captured.
   cleanup.add("liberar la orden del journey 7", async () => {
     await api.failActiveDelivery(seeded.orderId);
     await api.cancelIfUnpaid(seeded.orderId);
@@ -29,19 +40,14 @@ test("journey 7: preparar, marcar lista y asignar/despachar reparto", async ({ p
   await expect(panel.getByRole("heading", { name: "Listas" })).toBeVisible({ timeout: 25_000 });
 
   // 2. Dispatch side: the run's own card in «Por asignar» is located by its orderId, never by position.
-  const couriers = await api.listCouriers();
   await page.goto("/app/deliveries");
   await assertAppPage(page, "/app/deliveries");
-  if (await page.getByRole("heading", { name: "Por asignar" }).count() === 0) {
-    test.skip(true, "La cuenta guardada no administra entregas; el journey 7 necesita un rol con deliveries.manage");
-    throw new Error("Sin permiso de entregas");
-  }
   const card = page.locator("article", { has: page.locator(`input[name="orderId"][value="${seeded.orderId}"]`) }).first();
   await expect(card).toBeVisible({ timeout: 25_000 });
 
   if (couriers.length === 0) {
-    // Deterministic branch for a branch with no active courier: the board states the gap instead of
-    // offering an assignment that the server would reject. Precondition documented in the annotation.
+    // Deterministic branch for a branch with no active courier: preparation and ready were already
+    // verified, and the board states the gap instead of offering an assignment the server rejects.
     testInfo.annotations.push({
       type: "precondicion",
       description: "Sin repartidores activos: se verificaron preparación y listo; la asignación corre cuando exista un rol courier",

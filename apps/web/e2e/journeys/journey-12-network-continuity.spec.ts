@@ -2,6 +2,11 @@ import {
   assertAppPage, beforeJourney, expect, openRegisterForRun, payExactCash, requireActiveShift, requireOrderSeed, test,
 } from "../fixtures/journey-test.ts";
 
+/** Drops only the intentional offline noise recorded after `from`, keeping any earlier error. */
+function dropOfflineNoise(entries: string[], from: number): void {
+  entries.splice(from, entries.length, ...entries.slice(from).filter((entry) => !/ERR_INTERNET_DISCONNECTED|Failed to fetch/iu.test(entry)));
+}
+
 test("journey 12: continuar sin red y reconectar sin perder ni duplicar el cobro", async ({ page, api, cleanup, diag }, testInfo) => {
   beforeJourney(testInfo);
   await requireOrderSeed(api);
@@ -18,6 +23,10 @@ test("journey 12: continuar sin red y reconectar sin perder ni duplicar el cobro
   // Get a valid server quote while online, then lose the network before confirming the charge.
   await page.getByRole("button", { name: "Exacto" }).click();
   await expect(page.getByText(/Cambio después de propina/u)).toBeVisible({ timeout: 20_000 });
+  // Snapshot before the deliberate disconnection: only entries recorded from here on are expected
+  // offline noise, so any error logged earlier still fails the diagnostics.
+  const failedBeforeOffline = diag.failedRequests.length;
+  const consoleBeforeOffline = diag.consoleErrors.length;
   await page.context().setOffline(true);
   try {
     await page.getByRole("button", { name: "Cobrar", exact: true }).click();
@@ -44,10 +53,8 @@ test("journey 12: continuar sin red y reconectar sin perder ni duplicar el cobro
   expect(paid.payments ?? []).toHaveLength(1);
   expect(paid.payments?.[0]?.amountMinor).toBe(seeded.totalMinor);
 
-  // This run deliberately disconnects, so its expected network failures are not page defects: drop
-  // them from the diagnostics instead of hiding any other error.
-  for (const entries of [diag.failedRequests, diag.consoleErrors]) {
-    const kept = entries.filter((entry) => !/ERR_INTERNET_DISCONNECTED|Failed to fetch/iu.test(entry));
-    entries.splice(0, entries.length, ...kept);
-  }
+  // This run deliberately disconnects, so the expected network failures recorded during that window
+  // are not page defects: drop only those, and only after the pre-offline snapshot.
+  dropOfflineNoise(diag.failedRequests, failedBeforeOffline);
+  dropOfflineNoise(diag.consoleErrors, consoleBeforeOffline);
 });
