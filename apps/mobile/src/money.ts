@@ -8,7 +8,12 @@
  * string is identical on Hermes, on web and in tests.
  */
 const CURRENCY_PATTERN = /^[A-Z]{3}$/u;
-const FRACTION_DIGITS: Readonly<Record<string, number>> = Object.freeze({
+/**
+ * Minor-unit scale per supported currency. Exported so a test can guard parity
+ * with `apps/web/src/lib/money-scale.ts`: two clients that disagree on the scale
+ * would read the same amount as different money.
+ */
+export const FRACTION_DIGITS: Readonly<Record<string, number>> = Object.freeze({
   CAD: 2, EUR: 2, JPY: 0, MXN: 2, USD: 2, XTS: 2,
 });
 

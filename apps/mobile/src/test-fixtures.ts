@@ -6,7 +6,7 @@
  * currency is the ISO test code `XTS`, and no fixture is ever written anywhere.
  */
 import { parseMenuCatalogStateV1 } from "@super-restaurant/shared-types";
-import type { MenuCatalogV1, OperationalShiftSummaryV1 } from "@super-restaurant/shared-types";
+import type { MenuCatalogV1 } from "@super-restaurant/shared-types";
 
 import type { MobileConfig } from "./config.js";
 import type { MobileBranchScope } from "./mobile-client.js";
@@ -16,6 +16,13 @@ export const FIXTURE_RESTAURANT_A = "11111111-1111-4111-8111-111111111111";
 export const FIXTURE_BRANCH_A = "22222222-2222-4222-8222-222222222222";
 export const FIXTURE_RESTAURANT_B = "33333333-3333-4333-8333-333333333333";
 export const FIXTURE_BRANCH_B = "44444444-4444-4444-8444-444444444444";
+/**
+ * A second branch of **the same restaurant** as A. `scopeA` and `scopeB` above
+ * differ in both ids, so they cannot express the finest isolation boundary of
+ * AGENTS.md §15.1: the same tenant, another branch. `scopeA2` shares A's
+ * `restaurantId` and changes only the `branchId`.
+ */
+export const FIXTURE_BRANCH_A2 = "22222222-2222-4222-8222-22222222222a";
 
 export const FIXTURE_ZONE = "55555555-5555-4555-8555-555555555555";
 export const FIXTURE_TABLE = "66666666-6666-4666-8666-666666666666";
@@ -56,6 +63,12 @@ export const scopeA: MobileBranchScope = Object.freeze({
 export const scopeB: MobileBranchScope = Object.freeze({
   branchId: FIXTURE_BRANCH_B,
   restaurantId: FIXTURE_RESTAURANT_B,
+});
+
+/** Same tenant as `scopeA` (identical `restaurantId`), different branch. */
+export const scopeA2: MobileBranchScope = Object.freeze({
+  branchId: FIXTURE_BRANCH_A2,
+  restaurantId: FIXTURE_RESTAURANT_A,
 });
 
 export function fixtureSession(overrides: Partial<MobileSession> = {}): MobileSession {
@@ -171,20 +184,33 @@ export function orderMutationSummaryBody(input: {
   };
 }
 
-export function operationalShiftListBody(scope: MobileBranchScope): unknown {
+/**
+ * Exact body of `GET /shifts/active`.
+ *
+ * By default it carries one open service period. Two deliberate variants are
+ * expressible, because they are operational states the app must handle:
+ * `{ shifts: [] }` — the branch has no open shift, an explicit state rather
+ * than a blank screen; and `{ status: "closed" }` — a shift that is not open,
+ * which the shared contract must refuse (the endpoint only lists open ones).
+ */
+export function operationalShiftListBody(
+  scope: MobileBranchScope,
+  options: { readonly shifts?: readonly Readonly<Record<string, unknown>>[]; readonly status?: string } = {},
+): unknown {
+  const defaultShift = {
+    name: "Servicio activo",
+    openedAt: FIXTURE_TIMESTAMP,
+    openedBy: FIXTURE_ACTOR,
+    schemaVersion: 1,
+    scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
+    shiftId: FIXTURE_SHIFT,
+    status: options.status ?? "open",
+    version: 1,
+  };
   return {
     schemaVersion: 1,
     scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
-    shifts: [{
-      name: "Servicio activo",
-      openedAt: FIXTURE_TIMESTAMP,
-      openedBy: FIXTURE_ACTOR,
-      schemaVersion: 1,
-      scope: { branchId: scope.branchId, restaurantId: scope.restaurantId },
-      shiftId: FIXTURE_SHIFT,
-      status: "open",
-      version: 1,
-    } satisfies OperationalShiftSummaryV1],
+    shifts: options.shifts ?? [defaultShift],
   };
 }
 

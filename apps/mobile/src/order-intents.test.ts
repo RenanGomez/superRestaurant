@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
 import { MAX_ORDER_ITEM_MODIFIER_GROUPS } from "@super-restaurant/shared-types";
 
-import { MOBILE_API_PATHS } from "./mobile-client.js";
+import { MOBILE_API_PATHS, isAuthorizedMobilePath } from "./mobile-client.js";
 import {
   DRAFT_MAX_GROUPS,
   activeProductGroups,
@@ -444,6 +444,45 @@ test("no order-entry source performs or names a request", () => {
     const clientLines = source.split(/\r?\n/u).filter((candidate) => candidate.includes("mobile-client.js"));
     for (const line of clientLines) {
       assert.match(line, /^import type /u, `${file}: ${line}`);
+    }
+  }
+});
+
+test("no mobile module can build, name or send a cancellation, transition or refund", () => {
+  // The allowlist is only half the guard. These are the request paths this app
+  // must never reach — its absence of refund/cancel/transition is deliberate
+  // until the server exposes an authorized command (`m1-cov-refunds-execution`).
+  // A path here is refused before the network, whatever gesture produced it.
+  const forbiddenPaths = [
+    "/api/v1/orders/cancel",
+    "/api/v1/orders/items/cancel",
+    "/api/v1/orders/items/transition",
+    "/api/v1/payments/refund",
+  ] as const;
+  for (const forbidden of forbiddenPaths) {
+    assert.equal(isAuthorizedMobilePath(forbidden), false, forbidden);
+    // A query string cannot smuggle one past the allowlist either.
+    assert.equal(isAuthorizedMobilePath(`${forbidden}?restaurantId=x`), false, forbidden);
+  }
+  // And no production module even names one: growing the allowlist still cannot
+  // reach a command the source does not know how to build.
+  const root = process.cwd();
+  const files: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const absolute = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(absolute);
+      else if (/\.tsx?$/u.test(entry.name) && !/\.test\.tsx?$/u.test(entry.name) && entry.name !== "test-fixtures.ts") {
+        files.push(absolute);
+      }
+    }
+  };
+  walk(path.join(root, "src"));
+  assert.ok(files.length > 0, "the production sources should be scannable");
+  for (const file of files) {
+    const source = readFileSync(file, "utf8");
+    for (const forbidden of forbiddenPaths) {
+      assert.equal(source.includes(forbidden), false, `${path.relative(root, file)} names ${forbidden}`);
     }
   }
 });
