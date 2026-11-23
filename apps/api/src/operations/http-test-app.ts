@@ -6,6 +6,7 @@ import { Pool, type QueryResultRow } from "pg";
 
 import { configureApiApp } from "../app-setup.js";
 import { AppModule } from "../app.module.js";
+import { SyncCursor } from "../sync/sync-cursor.js";
 import { AUTH_PRINCIPAL_VERIFIER, AccessTokenRejectedError, type AuthenticatedPrincipal } from "../auth/authentication.js";
 import { DATABASE_CLIENT, guardPostgresPool, type DatabaseClientPort } from "../database.js";
 
@@ -46,6 +47,7 @@ export async function bootstrapHttpApp(appApiUrl: string, principals: ReadonlyMa
   };
   const module = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(DATABASE_CLIENT).useValue(database)
+    .overrideProvider(SyncCursor).useValue(new SyncCursor("test-cursor-secret-only-for-tests-12345"))
     .overrideProvider(AUTH_PRINCIPAL_VERIFIER).useValue(verifier)
     .compile();
   const app = module.createNestApplication<NestExpressApplication>({ logger: false });

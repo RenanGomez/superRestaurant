@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, ServiceUnavailableException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, ServiceUnavailableException, UnprocessableEntityException } from "@nestjs/common";
 import { parseBranchScope, parseManualReviewCaseV1, parseResolveManualReviewCaseCommandV1 } from "@super-restaurant/shared-types";
 import { DATABASE_CLIENT, type TransactionalDatabaseClientPort } from "../database.js";
 
@@ -14,9 +14,9 @@ export class SyncManualReviewService {
         return result.rows.map((row) => {
           const record = row as { case_data?: Record<string, unknown>; event_data?: Record<string, unknown>; facts?: Record<string, unknown> | null };
           const c = record.case_data; const e = record.event_data; const f = record.facts;
-          if (!c || !e || !f) throw new ServiceUnavailableException({ code: "SYNC_REVIEW_FACTS_UNAVAILABLE" });
+          if (!c || !e) throw new ServiceUnavailableException({ code: "SYNC_REVIEW_FACTS_UNAVAILABLE" });
           const timestamp = (value: unknown): string | null => value === null ? null : new Date(String(value)).toISOString();
-          const parsed = parseManualReviewCaseV1({ schemaVersion: 1, caseId: c["case_id"], scope, eventId: c["event_id"], idempotencyKey: e["idempotency_key"], deviceId: e["device_id"], actorId: e["actor_id"], entityType: e["entity_type"], entityId: e["entity_id"], operation: e["operation"], reasonCode: c["reason_code"], financial: e["financial"], status: c["status"], baseVersion: f["base_version"], canonicalVersion: (e["result"] as Record<string, unknown> | undefined)?.["canonicalVersion"] ?? null, amountMinor: f["amount_minor"] ?? null, currency: f["currency"] ?? null, openedAt: timestamp(c["opened_at"]), resolvedAt: timestamp(c["resolved_at"]), resolvedByActorId: c["resolved_by_actor_id"], resolutionReason: c["resolution_reason"], compensatingEventId: c["compensating_event_id"], auditId: (e["result"] as Record<string, unknown> | undefined)?.["auditId"] ?? null });
+          const parsed = parseManualReviewCaseV1({ schemaVersion: 1, factsAvailable: f !== null && f !== undefined, caseId: c["case_id"], scope, eventId: c["event_id"], idempotencyKey: e["idempotency_key"], deviceId: e["device_id"], actorId: e["actor_id"], entityType: e["entity_type"], entityId: e["entity_id"], operation: e["operation"], reasonCode: c["reason_code"], financial: e["financial"], status: c["status"], baseVersion: f?.["base_version"] ?? null, canonicalVersion: (e["result"] as Record<string, unknown> | undefined)?.["canonicalVersion"] ?? null, amountMinor: f?.["amount_minor"] ?? null, currency: f?.["currency"] ?? null, openedAt: timestamp(c["opened_at"]), resolvedAt: timestamp(c["resolved_at"]), resolvedByActorId: c["resolved_by_actor_id"], resolutionReason: c["resolution_reason"], compensatingEventId: c["compensating_event_id"], auditId: (e["result"] as Record<string, unknown> | undefined)?.["auditId"] ?? null });
           if (!parsed) throw new ServiceUnavailableException({ code: "SYNC_REVIEW_FACTS_INVALID" });
           return parsed;
         });
@@ -31,6 +31,8 @@ export class SyncManualReviewService {
         const response = await db.query("select app_private.sync_resolve_review_command($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::text,$6::text,$7::text,$8::text,$9::text,$10::text) as result", [actor, command.scope.restaurantId, command.scope.branchId, command.caseId, command.decision, command.reason, command.compensatingEventId, command.idempotencyKey, command.deviceId, command.occurredAt]);
         const result = (response.rows[0] as { result?: string } | undefined)?.result;
         if (result === "denied") throw new ForbiddenException({ code: "ACTION_NOT_AUTHORIZED" });
+        if (result === "invalid") throw new UnprocessableEntityException({ code: "SYNC_REVIEW_INVALID" });
+        if (result === "not_found") throw new NotFoundException({ code: "SYNC_REVIEW_NOT_FOUND" });
         if (result !== "resolved" && result !== "duplicate") throw new ConflictException({ code: "SYNC_REVIEW_CONFLICT" });
         return { status: result };
       });

@@ -3,6 +3,7 @@ import test from "node:test";
 import { SyncCursor } from "./sync-cursor.js";
 
 const scope = { actorId: "actor", restaurantId: "restaurant", branchId: "branch" };
+test("cursor secret is required at construction", () => { assert.throws(() => new SyncCursor(""), /SYNC_CURSOR_SECRET_INVALID/u); assert.throws(() => new SyncCursor(" ".repeat(32)), /SYNC_CURSOR_SECRET_INVALID/u); });
 test("cursor binds actor and scope and expires", () => {
   let now = 0;
   const cursor = new SyncCursor("a".repeat(32), () => now);
@@ -24,10 +25,10 @@ const rows = [1, 2].map((sequence) => ({ canonical_sequence: String(sequence), c
 test("pull paginates canonical changes and tombstones without leaking scopes", async () => {
   const db: TransactionalDatabaseClientPort = { query: async () => { throw Error("unexpected"); }, transaction: async (f) => f({ query: async (_sql, args) => ({ rows: rows.filter((row) => Number(row.canonical_sequence) > Number(args[3])) }) }) };
   const service = new SyncPullService(db, new SyncCursor("a".repeat(32)));
-  const first = await service.pull(actor, { protocolVersion: 1, scope: ids, cursor: null, limit: 1 });
+  const first = await service.pull(actor, { protocolVersion: 1, deviceId: "22222222-2222-4222-8222-222222222222", scope: ids, cursor: null, limit: 1 });
   assert.equal(first.hasMore, true); assert.equal(first.changes[0]?.tombstone, false); assert.ok(first.nextCursor);
-  const next = await service.pull(actor, { protocolVersion: 1, scope: ids, cursor: first.nextCursor, limit: 1 });
+  const next = await service.pull(actor, { protocolVersion: 1, deviceId: "22222222-2222-4222-8222-222222222222", scope: ids, cursor: first.nextCursor, limit: 1 });
   assert.equal(next.changes[0]?.tombstone, true); assert.equal(next.hasMore, false);
-  await assert.rejects(service.pull("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", { protocolVersion: 1, scope: ids, cursor: first.nextCursor, limit: 1 }));
-  await assert.rejects(service.pull(actor, { protocolVersion: 1, scope: { ...ids, branchId: "77777777-7777-4777-8777-777777777777" }, cursor: first.nextCursor, limit: 1 }));
+  await assert.rejects(service.pull("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", { protocolVersion: 1, deviceId: "22222222-2222-4222-8222-222222222222", scope: ids, cursor: first.nextCursor, limit: 1 }));
+  await assert.rejects(service.pull(actor, { protocolVersion: 1, deviceId: "22222222-2222-4222-8222-222222222222", scope: { ...ids, branchId: "77777777-7777-4777-8777-777777777777" }, cursor: first.nextCursor, limit: 1 }));
 });

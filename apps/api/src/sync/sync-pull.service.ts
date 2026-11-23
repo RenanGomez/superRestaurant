@@ -27,7 +27,7 @@ export class SyncPullService {
     catch (error) { throw new BadRequestException({ code: error instanceof Error ? error.message : "CURSOR_SCOPE_MISMATCH" }); }
     try {
       return await this.database.transaction(async (db) => {
-        const result = await db.query("select * from app_private.sync_read_changes($1::uuid,$2::uuid,$3::uuid,$4::bigint,$5::integer)", [actorId, request.scope.restaurantId, request.scope.branchId, sequence, request.limit + 1]);
+        const result = await db.query("select * from app_private.sync_read_changes($1::uuid,$2::uuid,$3::uuid,$4::bigint,$5::integer,$6::text)", [actorId, request.scope.restaurantId, request.scope.branchId, sequence, request.limit + 1, request.deviceId]);
         const rows = result.rows as Array<Record<string, unknown>>;
         const page = rows.slice(0, request.limit);
         const changes = page.map((row) => ({ entityType: row["entity_type"], entityId: row["entity_id"], restaurantId: row["restaurant_id"], branchId: row["branch_id"], canonicalVersion: Number(row["canonical_version"]), tombstone: row["tombstone"], snapshot: row["snapshot"] }));

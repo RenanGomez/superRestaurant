@@ -179,7 +179,7 @@ test("HTTP transport posts to the versioned sync endpoints with the bearer token
   const transport = createKdsSyncHttpTransport({ accessToken: "token-123", apiBaseUrl: "https://api.example.test", fetcher });
 
   await transport.push({ deviceId, events: [], protocolVersion: 1, scope });
-  await transport.pull({ cursor: null, limit: 10, protocolVersion: 1, scope });
+  await transport.pull({ cursor: null, limit: 10, protocolVersion: 1, scope, deviceId: "00000000-0000-4000-8000-00000000d1d1" });
 
   assert.deepEqual(calls.map((call) => call.url), [
     "https://api.example.test/api/v1/sync/push",
@@ -202,7 +202,7 @@ test("HTTP transport maps a network failure to a retryable transport error", asy
   const fetcher = (): Promise<Response> => Promise.reject(new Error("ECONNREFUSED"));
   const transport = createKdsSyncHttpTransport({ accessToken: "t", apiBaseUrl: "https://api.example.test", fetcher });
   await assert.rejects(
-    transport.pull({ cursor: null, limit: 10, protocolVersion: 1, scope }),
+    transport.pull({ cursor: null, limit: 10, protocolVersion: 1, scope, deviceId: "00000000-0000-4000-8000-00000000d1d1" }),
     (error: unknown) => error instanceof SyncTransportError && error.code === "TRANSPORT_ERROR" && error.retryable,
   );
 });

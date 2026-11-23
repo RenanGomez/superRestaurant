@@ -6,6 +6,7 @@ import { Money, addOrderItem, createOrder } from "@super-restaurant/domain";
 import { parseBranchScope } from "@super-restaurant/shared-types";
 
 import { AppModule } from "./app.module.js";
+import { SyncCursor } from "./sync/sync-cursor.js";
 import type { AuthenticatedPrincipal } from "./auth/authentication.js";
 import { AUTH_PRINCIPAL_VERIFIER } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
@@ -199,6 +200,7 @@ test("POST /deliveries/order-detail: HTTP contract (401, 400, 201 no-store, 403,
   };
   const context = { read: async () => ({ delivery: deliveryView(actorId), snapshot: snapshot() }) };
   const module = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(SyncCursor).useValue(new SyncCursor("test-cursor-secret-only-for-tests-12345"))
     .overrideProvider(DATABASE_CLIENT).useValue({ query: async () => { throw new Error("unexpected database call"); } })
     .overrideProvider(MembershipAuthorizationService).useValue(new MembershipAuthorizationService(memberships))
     .overrideProvider(PostgresOrderPersistenceAdapter).useValue(orders)

@@ -1,9 +1,9 @@
 begin;
 
-create function app_private.sync_read_changes(p_actor uuid,p_restaurant uuid,p_branch uuid,p_after bigint,p_limit integer)
+create function app_private.sync_read_changes(p_actor uuid,p_restaurant uuid,p_branch uuid,p_after bigint,p_limit integer,p_device text)
 returns setof app.sync_changelog language plpgsql stable security definer set search_path = '' as $f$
 begin
- if not app_private.sync_authorized(p_actor,p_restaurant,p_branch) then raise exception 'SYNC_FORBIDDEN' using errcode='42501'; end if;
+ if not app_private.sync_authorized(p_actor,p_restaurant,p_branch) or app_private.sync_device_state(p_restaurant,p_branch,p_device,p_actor) <> 'active' then raise exception 'SYNC_FORBIDDEN' using errcode='42501'; end if;
  if p_after < 0 or p_limit < 1 or p_limit > 501 then raise exception 'SYNC_INVALID'; end if;
  return query select c.* from app.sync_changelog c where c.restaurant_id=p_restaurant and c.branch_id=p_branch and c.canonical_sequence>p_after
  and exists (select 1 from app_private.find_active_branch_membership(p_actor,p_restaurant,p_branch) m where
@@ -16,6 +16,7 @@ end $f$;
 -- Retain the minimum facts needed to render review cases; older ledger rows remain explicitly unknown.
 create table app_private.sync_review_event_facts (
  restaurant_id uuid not null, branch_id uuid not null, event_id text not null,
+ canonical_sequence bigint generated always as identity unique,
  base_version jsonb not null, amount_minor jsonb, currency jsonb,
  primary key (restaurant_id,branch_id,event_id),
  foreign key (restaurant_id,branch_id,event_id) references app.sync_event_ledger(restaurant_id,branch_id,event_id)
@@ -27,9 +28,10 @@ create function app_private.sync_record_event(p_actor uuid,p_event jsonb,p_resul
 returns jsonb language plpgsql security definer set search_path = '' as $f$
 declare outcome jsonb;
 begin
+ perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(coalesce(p_event->>'restaurantId','') || ':' || coalesce(p_event->>'branchId',''), 41));
  outcome := app_private.sync_record_event_internal(p_actor,p_event,p_result);
  if outcome->>'status'='recorded' then
-  insert into app_private.sync_review_event_facts values ((p_event->>'restaurantId')::uuid,(p_event->>'branchId')::uuid,p_event->>'eventId',coalesce(p_event->'baseVersion','null'::jsonb),p_event->'payload'->'amountMinor',p_event->'payload'->'currency');
+  insert into app_private.sync_review_event_facts (restaurant_id,branch_id,event_id,base_version,amount_minor,currency) values ((p_event->>'restaurantId')::uuid,(p_event->>'branchId')::uuid,p_event->>'eventId',coalesce(p_event->'baseVersion','null'::jsonb),p_event->'payload'->'amountMinor',p_event->'payload'->'currency');
  end if;
  return outcome;
 end $f$;
@@ -49,7 +51,7 @@ returns text language plpgsql security definer set search_path = '' as $f$
 declare review app.sync_manual_review_cases%rowtype;
 begin
  if not exists(select 1 from app_private.find_active_branch_membership(p_actor,p_restaurant,p_branch) m where m.roles && array['owner','admin','manager','supervisor']::text[]) then return 'denied'; end if;
- if p_decision is null or p_decision not in ('resolved_compensated','resolved_rejected') or coalesce(length(btrim(p_reason)),0)=0 or (p_decision='resolved_compensated' and p_compensating_event is null) or (p_decision='resolved_rejected' and p_compensating_event is not null) then return 'invalid'; end if;
+ if p_decision is null or p_decision not in ('resolved_compensated','resolved_rejected') or coalesce(length(btrim(p_reason)),0)=0 or length(p_reason)>500 or (p_decision='resolved_compensated' and p_compensating_event is null) or (p_decision='resolved_rejected' and p_compensating_event is not null) then return 'invalid'; end if;
  select * into review from app.sync_manual_review_cases where case_id=p_case and restaurant_id=p_restaurant and branch_id=p_branch for update;
  if not found then return 'not_found'; end if;
  if review.status <> 'open' then
@@ -60,8 +62,12 @@ begin
   select 1 from app.sync_event_ledger original join app.sync_event_ledger compensation
    on compensation.restaurant_id=original.restaurant_id and compensation.branch_id=original.branch_id
    and compensation.entity_type=original.entity_type and compensation.entity_id=original.entity_id
+  join app_private.sync_review_event_facts original_order on (original_order.restaurant_id,original_order.branch_id,original_order.event_id)=(original.restaurant_id,original.branch_id,original.event_id)
+  join app_private.sync_review_event_facts compensation_order on (compensation_order.restaurant_id,compensation_order.branch_id,compensation_order.event_id)=(compensation.restaurant_id,compensation.branch_id,compensation.event_id)
   where original.restaurant_id=p_restaurant and original.branch_id=p_branch and original.event_id=review.event_id
    and compensation.event_id=p_compensating_event and compensation.operation='compensate'
+   and compensation.event_id <> original.event_id
+   and compensation_order.canonical_sequence > original_order.canonical_sequence
    and compensation.result->>'status'='accepted'
  ) then return 'invalid'; end if;
  begin
@@ -71,10 +77,10 @@ begin
  return 'resolved';
 end $f$;
 
-alter function app_private.sync_read_changes(uuid,uuid,uuid,bigint,integer) owner to postgres;
+alter function app_private.sync_read_changes(uuid,uuid,uuid,bigint,integer,text) owner to postgres;
 alter function app_private.sync_read_reviews(uuid,uuid,uuid) owner to postgres;
-revoke all on function app_private.sync_read_changes(uuid,uuid,uuid,bigint,integer), app_private.sync_read_reviews(uuid,uuid,uuid), app_private.sync_resolve_review(uuid,uuid,uuid,uuid,text,text,text) from public,anon,authenticated,service_role,app_api;
-grant execute on function app_private.sync_read_changes(uuid,uuid,uuid,bigint,integer), app_private.sync_read_reviews(uuid,uuid,uuid), app_private.sync_resolve_review(uuid,uuid,uuid,uuid,text,text,text) to app_api;
+revoke all on function app_private.sync_read_changes(uuid,uuid,uuid,bigint,integer,text), app_private.sync_read_reviews(uuid,uuid,uuid), app_private.sync_resolve_review(uuid,uuid,uuid,uuid,text,text,text) from public,anon,authenticated,service_role,app_api;
+grant execute on function app_private.sync_read_changes(uuid,uuid,uuid,bigint,integer,text), app_private.sync_read_reviews(uuid,uuid,uuid) to app_api;
 
 create table app_private.sync_review_commands (
  restaurant_id uuid not null, branch_id uuid not null, idempotency_key text not null,

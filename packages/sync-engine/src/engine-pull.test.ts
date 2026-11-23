@@ -69,6 +69,7 @@ test("el cursor es opaco, se pagina con hasMore y se persiste junto con el lote"
   assert.equal(storage.persistCount - persistsBefore, 3, "exactly one persist per page");
   assert.deepEqual(server.pullRequests.map((request) => request.cursor === null ? null : "opaque"), [null, "opaque", "opaque"]);
   assert.equal(server.pullRequests[1]?.cursor, `cur|${SCOPE_A1.restaurantId}/${SCOPE_A1.branchId}|2`);
+  assert.ok(server.pullRequests.every((request) => request.deviceId === DEVICE));
   assert.equal((await engine.listReplica(SCOPE_A1)).length, 5);
   const stored = storage.rawState(DEVICE) as { scopes: { pullCursor: string }[]; replica: unknown[] };
   assert.equal(stored.scopes[0]?.pullCursor, await engine.getPullCursor(SCOPE_A1));

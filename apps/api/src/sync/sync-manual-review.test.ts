@@ -14,7 +14,20 @@ test("review resolution preserves idempotency and rejects revocation", async () 
   outcome = "denied"; await assert.rejects(service.resolve(actor, command));
   outcome = "idempotency_conflict"; await assert.rejects(service.resolve(actor, command));
 });
-test("historical review without facts fails closed", async () => {
-  const db: TransactionalDatabaseClientPort = { query: async () => { throw Error("unexpected"); }, transaction: async (f) => f({ query: async () => ({ rows: [{ case_data: {}, event_data: {}, facts: null }] }) }) };
-  await assert.rejects(new SyncManualReviewService(db).list(actor, scope));
+test("historical review without facts remains visible and resolvable", async () => {
+  const row = { case_data: { case_id: command.caseId, event_id: "77777777-7777-4777-8777-777777777777", reason_code: "PAYMENT_UNCERTAIN", status: "open", opened_at: "2026-11-23T00:00:00.000Z", resolved_at: null, resolved_by_actor_id: null, resolution_reason: null, compensating_event_id: null }, event_data: { idempotency_key: "old-key", device_id: command.deviceId, actor_id: actor, entity_type: "Payment", entity_id: "88888888-8888-4888-8888-888888888888", operation: "compensate", financial: true, result: {} }, facts: null };
+  const db: TransactionalDatabaseClientPort = { query: async () => { throw Error("unexpected"); }, transaction: async (f) => f({ query: async (sql) => ({ rows: sql.includes("sync_read_reviews") ? [row] : [{ result: "resolved" }] }) }) };
+  const service = new SyncManualReviewService(db);
+  const items = await service.list(actor, scope);
+  assert.equal((items[0] as { factsAvailable: boolean }).factsAvailable, false);
+  assert.equal((await service.resolve(actor, command)).status, "resolved");
+});
+
+test("resolution maps invalid and missing cases to 422 and 404", async () => {
+  let outcome = "invalid";
+  const db: TransactionalDatabaseClientPort = { query: async () => { throw Error("unexpected"); }, transaction: async (f) => f({ query: async () => ({ rows: [{ result: outcome }] }) }) };
+  const service = new SyncManualReviewService(db);
+  await assert.rejects(service.resolve(actor, command), (error: unknown) => (error as { getStatus(): number }).getStatus() === 422);
+  outcome = "not_found";
+  await assert.rejects(service.resolve(actor, command), (error: unknown) => (error as { getStatus(): number }).getStatus() === 404);
 });

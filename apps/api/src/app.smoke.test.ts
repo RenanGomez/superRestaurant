@@ -5,6 +5,7 @@ import { Test } from "@nestjs/testing";
 import { parseBranchAuthorizationV1, parseBranchOperationalContextV1 } from "@super-restaurant/shared-types";
 
 import { AppModule } from "./app.module.js";
+import { SyncCursor } from "./sync/sync-cursor.js";
 import { AUTH_PRINCIPAL_VERIFIER } from "./auth/authentication.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "./database.js";
 
@@ -104,6 +105,7 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
     },
   };
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(SyncCursor).useValue(new SyncCursor("test-cursor-secret-only-for-tests-12345"))
     .overrideProvider(AUTH_PRINCIPAL_VERIFIER)
     .useValue({ verifyAccessToken: async () => Object.freeze({ actorId }) })
     .overrideProvider(DATABASE_CLIENT)
