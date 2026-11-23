@@ -1,10 +1,12 @@
 # Matriz de capacidades offline y conflictos — Fase 3
 
-**Estado:** propuesta de política objetivo para revisión humana
+**Estado:** política objetivo vigente para Fase 3. El avance de implementación y la evidencia automatizada se registran por cliente y operación en la [§8](#8-estado-de-verificación-de-la-política-2026-11-23) (actualizado 2026-11-23).
 
 **Alcance:** Web POS, Mobile y KDS en Fase 3 (offline por dispositivo)
 
 **Fuera de alcance:** elección de base local, librería de sincronización, servidor LAN, pagos integrados, reglas fiscales definitivas y cambios de esquema
+
+**Runbook de verificación:** [`docs/runbooks/offline-verification.md`](../runbooks/offline-verification.md) contiene los comandos reproducibles, los límites de plataforma/hardware y el checklist de cierre de M2.
 
 ## 1. Propósito y límites
 
@@ -223,3 +225,97 @@ Estas preguntas no quedan resueltas por esta matriz y deben aprobarse antes de c
 - ¿Qué proveedor de pagos/fiscalidad ofrece contratos verificables para estados, reintentos, refunds, webhooks y operación fuera de línea?
 
 Hasta resolver estas decisiones, la UI debe etiquetar las capacidades como “propuesta”, mantener bloqueadas las operaciones de alto riesgo y evitar cualquier afirmación de operación LAN o de cobro integrado offline.
+
+## 8. Estado de verificación de la política (2026-11-23)
+
+Esta sección no cambia la política de las §2–§6: registra **qué parte de esa política está ya demostrada por pruebas automatizadas en `main`** y qué parte sigue pendiente de implementar. Se actualiza a medida que se integran los ítems de M2; el cierre oficial del hito exige que las filas marcadas como `Pendiente` pasen a `Verificado` con la suite enlazada en verde.
+
+### 8.1 Cómo leer los estados
+
+| Estado | Significado |
+|---|---|
+| `Verificado` | Existe una prueba automatizada integrada en `main` que demuestra la operación o regla enlazada, con datos de dos restaurantes/alcances cuando aplica. |
+| `Parcial (dominio/motor)` | La regla pura o el comportamiento del motor está probado, pero falta la capa de cliente (almacenamiento local, UI, transporte) que hace la operación usable por el operador. |
+| `Pendiente` | La operación está definida en la política pero todavía no tiene implementación ni prueba integrada; se indica el ítem de `docs/agentic/backlog.json` que la entrega. |
+| `Bloqueado por política` | La política de la §2 ya prohíbe la operación en Fase 3; solo se verifica que se rechaza y no se encola. |
+
+**Ninguna fila `Parcial` o `Pendiente` autoriza a anunciar la capacidad como disponible al operador.** La UI debe seguir mostrando estas capacidades como no disponibles o limitadas hasta que su ítem de M2 esté integrado y verificado en navegador o dispositivo real.
+
+### 8.2 Evidencia automatizada disponible en `main`
+
+| Suite / comando | Archivo | Qué demuestra |
+|---|---|---|
+| `pnpm --filter @super-restaurant/domain test` | `packages/domain/src/sync-merge.test.ts` | Merge determinista de §4.2 para Order, OrderItem, DiningTable, KdsTicket, Payment y CashMovement; combina líneas aditivas con recálculo en minor units; edición concurrente, disputa de mesa, cancelación post-envío y cobro excedente dan `conflict`/`manual_review` sin LWW; tombstones; independencia de `occurredAt`; rechazo fail-closed de float y de eventos cross-tenant/cross-branch. |
+| `pnpm --filter @super-restaurant/sync-engine test` | `packages/sync-engine/src/failure-injection.test.ts` (además de `contract`, `outbox-state`, `capability-guard`, `schema-migration`, `engine-*`) | Escenarios de §5 a nivel de motor: caída antes/después del commit atómico, timeout post-commit con `duplicate`, push `accepted` con pull fallido conservando `pullCursor`, lotes fuera de orden, 20 reenvíos concurrentes, reloj manipulado, `schemaVersion` atrasada, cola grande con backoff, rechazo de PAN/CVV y bloqueo por matriz de capacidades. |
+| `pnpm --filter @super-restaurant/api run test:sync-conflicts:local -- --local-disposable-only` | `apps/api/src/sync/sync-conflicts.local.test.ts` | Sobre PostgreSQL 17 desechable desde cero: dispositivo revocado, dos dispositivos activos, dedup por `eventId`/`idempotencyKey`, aislamiento cross-restaurant/cross-branch, cursor y tombstones por scope, `manual_review` único y resolución supervisora con motivo. Usa funciones del ledger, no el endpoint HTTP. |
+| `pnpm --filter @super-restaurant/api run verify:sync-schema:rollback` | `supabase/migrations/20261123000300_sync_ledger.sql` + `apps/api/src/operations/run-sync-schema-verification.ts` | Migraciones reproducibles desde cero, invariantes de ledger/cursor en transacción con `ROLLBACK` y postcheck sin estado persistente. |
+| `pnpm --filter @super-restaurant/web test` (bloque `sync-ui`) | `apps/web/src/lib/sync-ui.ts`, `apps/web/src/lib/sync-ui.test.ts` | Helpers puros de la barra de estado y `/app/sync` (etiquetas, pendientes, reintento/resync). La verificación visual de esas pantallas está en `docs/agentic/visual-verify-r4/` (capturas `sync-offline-desktop.png` y `sync-offline-mobile.png`). |
+| `pnpm --filter @super-restaurant/web e2e:offline` | `apps/web/e2e/offline.spec.ts` | **Informativo, no verificación**: el propio spec declara que el web aún no tiene soporte offline de Fase 3; solo comprueba que la ruta se recupera al reconectar. No se usa como evidencia de capacidades offline. |
+
+### 8.3 Estado por cliente y operación
+
+Recordatorio de la §1: sin WAN no hay comunicación entre dispositivos, ni siquiera en la misma LAN (Fase 3B queda fuera de alcance).
+
+**Web POS**
+
+| Operación (§2.1) | Estado | Evidencia / ítem pendiente |
+|---|---|---|
+| Consultar menú, precios y modificadores cacheados | `Pendiente` | `m2-web-local-storage-crypto`, `m2-web-offline-pos-cash` |
+| Consultar mesas/canales cacheados | `Pendiente` | `m2-web-offline-pos-cash` |
+| Crear orden local con snapshots | `Pendiente` | `m2-web-offline-pos-cash` |
+| Editar/agregar líneas de una orden creada en este dispositivo | `Pendiente` | `m2-web-offline-pos-cash` |
+| Editar orden originada en otro dispositivo (offline) | `Bloqueado por política` | Debe rechazarse y no encolarse; cubierto como regla de política, sin UI offline aún |
+| Asignar mesa/canal o cambiar ocupación | `Pendiente` | `m2-web-offline-pos-cash` |
+| Descuento/cortesía sin supervisor | `Parcial (dominio/motor)` | Regla de dominio en `sync-merge.test.ts` (descuento autorizado no excluyente solo con política del servidor y `baseVersion` vigente); UI offline pendiente |
+| Descuento fuera de límite / reapertura sensible | `Parcial (dominio/motor)` | Dominio exige autorización de supervisor; la UI debe bloquearlo offline (`m2-web-offline-pos-cash`) |
+| Registrar cobro en efectivo | `Parcial (dominio/motor)` | Reglas de efectivo offline, secuencia y caja en `sync-merge.test.ts`; almacenamiento/UI en `m2-web-offline-pos-cash` |
+| Emitir/imprimir ticket de una venta local | `Pendiente` | `m2-web-offline-pos-cash` (`print-documents`) |
+| Registrar `card_manual` | `Parcial (dominio/motor)` | Conciliación y no-`captured` en `sync-merge.test.ts`; UI offline pendiente |
+| Estado de conectividad, pendientes y `/app/sync` | `Verificado` | `sync-ui.test.ts` + `docs/agentic/visual-verify-r4/` |
+| Reembolso, anulación financiera, CFDI, cierre de caja, inventario offline | `Bloqueado por política` | §2.1 y §7; el dominio los rechaza o los envía a `manual_review` |
+
+**Mobile**
+
+| Operación (§2.1) | Estado | Evidencia / ítem pendiente |
+|---|---|---|
+| Consultar menú/mesas cacheados, crear orden local y encolar | `Pendiente` | `m2-mobile-local-storage-crypto`, `m2-mobile-offline-sync-ui` |
+| Cobro en efectivo permitido por matriz | `Parcial (dominio/motor)` | Reglas de efectivo en `sync-merge.test.ts`; almacenamiento/UI mobile pendiente |
+| Banner de conectividad y pantalla de cola con errores/reintentos/conflictos | `Pendiente` | `m2-mobile-offline-sync-ui` |
+| Operaciones que exigen supervisor offline | `Bloqueado por política` | §2.1; sin UI offline aún |
+
+**KDS**
+
+| Operación (§2.1) | Estado | Evidencia / ítem pendiente |
+|---|---|---|
+| Ver tickets previamente recibidos desde caché local | `Pendiente` | `m2-kds-offline-cache` |
+| Avanzar localmente (preparing/ready) tickets ya recibidos | `Parcial (dominio/motor)` | Transiciones monotónicas de `KdsTicket` en `sync-merge.test.ts`; caché/UI KDS pendiente |
+| Recuperación por cursor tras caída de WebSocket | `Pendiente` | `m2-kds-offline-cache` |
+| Recibir órdenes nuevas sin WAN | `Bloqueado por política` | §1/§2.1: no hay comunicación entre dispositivos en Fase 3 |
+
+### 8.4 Comportamiento del servidor y del motor (independiente de cliente)
+
+| Regla | Estado | Evidencia / ítem pendiente |
+|---|---|---|
+| Merge determinista por entidad (§4.2) | `Verificado` | `packages/domain/src/sync-merge.test.ts` |
+| Failure injection del motor (§5) | `Verificado` | `packages/sync-engine/src/failure-injection.test.ts` |
+| Dedup, cursor, tombstones, aislamiento y `manual_review` en PostgreSQL | `Verificado` | `apps/api/src/sync/sync-conflicts.local.test.ts` |
+| Esquema de sync reproducible desde cero | `Verificado` | `verify:sync-schema:rollback` |
+| `POST /sync` (push por lotes) | `Pendiente` | `m2-api-sync-push-merge` |
+| `POST /sync/pull` y resolución `manual_review` por HTTP | `Pendiente` | `m2-api-sync-pull-review` |
+| Suite E2E offline real de dos dispositivos | `Pendiente` | `m2-e2e-offline-web` |
+
+### 8.5 Qué falta para cerrar M2
+
+El signoff completo de M2 requiere integrar y verificar, como mínimo:
+
+- `m2-api-sync-push-merge` y `m2-api-sync-pull-review` (endpoints HTTP reales);
+- `m2-web-local-storage-crypto` y `m2-web-offline-pos-cash` (offline Web POS real);
+- `m2-mobile-local-storage-crypto` y `m2-mobile-offline-sync-ui` (offline Mobile real);
+- `m2-kds-offline-cache` (caché y avance local en KDS);
+- `m2-e2e-offline-web` (sustituir el spec informativo `apps/web/e2e/offline.spec.ts` por aserciones reales de Fase 3).
+
+Mientras falte cualquiera de ellos, este documento no declara la política como demostrada y `TODO.md`/`HANDOFF.md` no deben marcar M2 como DONE.
+
+### 8.6 Exclusiones explícitas
+
+Siguen **fuera de alcance de Fase 3** y no se presentan como capacidad del producto: servidor local/relay LAN y failover multi-dispositivo (Fase 3B, ADR-009), tarjeta integrada o pasarela de pagos, CFDI/timbrado, reembolsos y anulaciones financieras, y movimientos de inventario. Cualquier habilitación futura requiere ADR y las pruebas de la §5.
