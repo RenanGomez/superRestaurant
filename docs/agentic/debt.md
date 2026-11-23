@@ -2,7 +2,7 @@
 
 Registro de deuda aceptada, con su identificador, impacto y condición de salida.
 
-## M0-7 — Fallos conocidos en `Run SQL tests` (CI)
+## M0-7 — Fallos conocidos de M0-7 (CI)
 
 - Estado: aceptada temporalmente; tests tolerados en `.github/workflows/ci.yml`
   (`KNOWN_FAILING_SQL_TESTS`). Cualquier otro test que falle sigue marcando el paso en rojo.
@@ -16,5 +16,9 @@ Registro de deuda aceptada, con su identificador, impacto y condición de salida
   - `supabase/tests/delivery_zones_invariants.sql`
   - `supabase/tests/menu_shared_modifier_groups_invariants.sql`
   - `supabase/tests/order_deliveries_invariants.sql`
-- Condición de salida: los siete tests pasan en CI sin tolerancia y se elimina la lista
-  `KNOWN_FAILING_SQL_TESTS` del paso `Run SQL tests`.
+- Verificadores omitidos en CI: `verify:pizza-model-v2-schema:rollback` se quitó de
+  `Run compatible rollback verifiers` por el mismo bug M0-7
+  (`confirm_capture_draft_v3`/`base_group_id`); restaurar al reparar.
+- Condición de salida: los siete tests pasan en CI sin tolerancia, se elimina la lista
+  `KNOWN_FAILING_SQL_TESTS` del paso `Run SQL tests` y se restaura la línea
+  `verify:pizza-model-v2-schema:rollback`.

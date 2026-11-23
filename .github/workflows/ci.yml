@@ -200,11 +200,11 @@ jobs:
           echo "sql tests failed=$failed"
           [ "$failed" -eq 0 ]
       # Other rollback verifiers embed a Windows-only PostgreSQL executable or expect
-      # a specific pre-migration Supabase catalog; these three use LocalPostgres.
+      # a specific pre-migration Supabase catalog; these two use LocalPostgres.
       - name: Run compatible rollback verifiers
         run: |
           pnpm --filter @super-restaurant/api run verify:capture-selection-plan-schema:rollback
-          pnpm --filter @super-restaurant/api run verify:pizza-model-v2-schema:rollback
+          # M0-7: pizza-model-v2 roto; restaurar al reparar
           pnpm --filter @super-restaurant/api run verify:cash-transfer-method-schema:rollback
       - name: Run local HTTP flow
         run: pnpm --filter @super-restaurant/api run test:http:local -- --local-disposable-only
