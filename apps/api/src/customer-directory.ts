@@ -271,13 +271,21 @@ function own(record: Record<string, unknown>, key: string): unknown {
   return Object.getOwnPropertyDescriptor(record, key)?.value as unknown;
 }
 function sameAddress(left: SaveCustomerAddressCommandV1["address"], right: SaveCustomerAddressCommandV1["address"]): boolean {
-  return left.label === right.label && left.streetLine === right.streetLine && left.unit === right.unit
-    && left.neighborhood === right.neighborhood && left.locality === right.locality && left.region === right.region
-    && left.countryCode === right.countryCode && left.postalCode === right.postalCode
-    && left.references === right.references && left.instructions === right.instructions
-    && (left.coordinates === null ? right.coordinates === null : right.coordinates !== null
-      && left.coordinates.latitudeE6 === right.coordinates.latitudeE6
-      && left.coordinates.longitudeE6 === right.coordinates.longitudeE6);
+  const leftSettlement = left.settlementId ?? null;
+  const rightSettlement = right.settlementId ?? null;
+  const leftOutside = left.settlementOutsideCatalog ?? false;
+  const rightOutside = right.settlementOutsideCatalog ?? false;
+  if (leftSettlement !== rightSettlement || leftOutside !== rightOutside || left.neighborhood !== right.neighborhood
+    || left.label !== right.label || left.streetLine !== right.streetLine || left.unit !== right.unit
+    || left.references !== right.references || left.instructions !== right.instructions) return false;
+  // The server fills locality/region/country/postalCode from the settlement or Branch; a settlement
+  // or outside-catalog address therefore must not be compared against the client's derived text.
+  if (leftSettlement === null && !leftOutside
+    && (left.locality !== right.locality || left.region !== right.region
+      || left.countryCode !== right.countryCode || left.postalCode !== right.postalCode)) return false;
+  return left.coordinates === null ? right.coordinates === null : right.coordinates !== null
+    && left.coordinates.latitudeE6 === right.coordinates.latitudeE6
+    && left.coordinates.longitudeE6 === right.coordinates.longitudeE6;
 }
 function request(): CustomerDirectoryApplicationError { return new CustomerDirectoryApplicationError("request"); }
 function unavailable(): CustomerDirectoryApplicationError { return new CustomerDirectoryApplicationError("unavailable"); }

@@ -100,6 +100,15 @@ test("H21: deliveryQuoteBlocksConfirm reports not_covered ahead of any expiry/ti
   assert.equal(deliveryQuoteBlocksConfirm("delivery", quote, "", new Date("2026-09-27T12:00:00Z")), "not_covered");
 });
 
+test("a supervisor-authorized manual fee lets a not-covered quote confirm", () => {
+  const quote = { ...baseQuote, coverageStatus: "not_covered" as const,
+    override: { kind: "manual_fee" as const, eventId: "c483b6e7-e102-4cc5-a887-d30712c85e52",
+      actorId: "a72573ec-6224-4857-bc4a-f3d1d07b6d83", role: "supervisor" as const, reason: "Colonia sin zona",
+      feeMinor: 5000, promiseStart: "2026-09-27T12:00:00.000Z", promiseEnd: "2026-09-27T12:15:00.000Z",
+      overriddenAt: "2026-09-27T11:55:00.000Z" } };
+  assert.equal(deliveryQuoteBlocksConfirm("delivery", quote, "", new Date("2026-09-27T12:00:00Z")), null);
+});
+
 test("H21: deliveryQuoteBlocksConfirm reports expired once the client's clock passes expiresAt", () => {
   const quote = { ...baseQuote, expiresAt: "2026-09-27T12:00:00.000Z" };
   assert.equal(deliveryQuoteBlocksConfirm("delivery", quote, "", new Date("2026-09-27T12:00:01Z")), "expired");

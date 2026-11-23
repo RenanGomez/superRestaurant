@@ -39,6 +39,10 @@ textarea{width:100%;min-height:54px;font:inherit;color:inherit;background:var(--
 .chg{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:8px 0}
 .chg b{display:block}.chg p{margin:4px 0;color:var(--mute);font-size:.92rem}
 code{font-family:ui-monospace,Consolas,monospace;font-size:.88em;background:var(--line);padding:1px 5px;border-radius:4px}
+.r2{margin:12px 0 0;padding:10px 12px;border:1px dashed var(--line);border-radius:8px;background:var(--bg)}
+.r2 h4{margin:10px 0 4px;font-size:.85rem;color:var(--acc);text-transform:uppercase;letter-spacing:.03em}.r2 h4:first-child{margin-top:0}
+.r2 ul{margin:4px 0 0 18px;padding:0}.r2 li{margin:4px 0;font-size:.92rem}.mut{color:var(--mute)}
+.st{font-size:.72rem;padding:1px 8px;border-radius:99px;border:1px solid var(--line);white-space:nowrap}.st.hecho{border-color:var(--ok);color:var(--ok)}.st.accion{border-color:var(--skip);color:var(--skip)}
 .hidden{display:none}
 #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;opacity:0;transition:opacity .2s}
 @media (prefers-reduced-motion:reduce){#toast{transition:none}}
@@ -115,6 +119,53 @@ const SECTIONS = [
 {id:"nav-perf", h:"Navegación más rápida", s:["Ve y vuelve entre Órdenes, Captura, Menú, Mesas, Clientes, Entregas y Caja","Cambia de sucursal y repite"], e:"Cada cambio muestra un aviso «Cargando…» con acentos correctos y no recarga la página completa; los datos son siempre de la sucursal elegida; consola sin errores rojos."},
  ]},
 ];
+const R2 = {
+ "cap-ticket": {
+  c:[
+   ["Interfaz móvil angosta por la barra lateral; rework tipo Uber Eats","hecho","Barra inferior móvil en lugar de la lateral; menú móvil con carrusel de categorías (foto o color+iniciales), búsqueda arriba y tarjetas grandes de una columna; hoja inferior para configurar el producto; pasos Pedido → Cliente → Entrega con barra fija de total. Escritorio conserva el diseño denso."],
+   ["Categorías con imagen en Captura","hecho","Las pestañas de categoría muestran la foto de la categoría sobre su color."],
+   ["Pizza personalizada, especialidades, ingredientes gratis y extras","hecho","Modelo de pizza V2 (dominio, SQL, API, web): N ingredientes gratis configurable por producto; en mitad y mitad rige el N de la mitad más cara; un ingrediente repetido en ambas mitades se cobra una vez; especialidades con ingredientes por defecto o «personalizar durante la orden»; grupos de extras. La migración 20261120000100 aún NO está aplicada en remoto."]],
+  s:["A 390×844: revisa la barra inferior, el carrusel de categorías con foto, tarjetas grandes y la hoja de producto","Recorre Pedido → Cliente → Entrega con Atrás/Continuar; la barra fija muestra cantidad y Total","En escritorio verifica que sigue el rail lateral y la cuadrícula densa","Pizza: guía §14 (pizza personalizada, mitad y mitad, ingredientes gratis, recargar con F5)"],
+  e:"Móvil sin barra lateral ni cortes; categorías con imagen; pizza V2 cobra según las reglas y sobrevive a F5. Requiere la migración de pizza V2 aplicada."},
+ "cap-keys": {
+  c:[["N, Alt+N, Alt+K, Escape y Alt+R no hacían nada","hecho","Alt/Ctrl funcionan aunque el foco esté en un campo (la letra sola no); se usa event.code como respaldo. Alt+N crea captura (también con borrador abierto), Alt+R reinicia o vuelve, Alt+K enfoca la búsqueda, Escape cierra nota/no-venta. Hay leyenda de atajos."]],
+  s:["Con el foco dentro de un campo, pulsa N: no debe pasar nada","Alt+N con una captura activa; Alt+K; Alt+R; Escape con una nota abierta","Revisa la leyenda de atajos en pantalla"],
+  e:"Cada atajo hace su acción incluso escribiendo en un campo; la letra sola no dispara nada."},
+ "cap-cust": {
+  c:[
+   ["1. Crear cliente rápido desde la búsqueda de Captura","hecho","Sin coincidencias aparece «Crear cliente rápido con …» y al guardar queda seleccionado."],
+   ["2. Buscar 6622751352 mostraba también a Carolina (6622900622)","hecho","Los resultados se atan a la consulta que los produjo y se descartan las respuestas tardías. La causa es probable, no confirmada: si reaparece, puede ser un segundo teléfono guardado."],
+   ["3. Tab saltaba al «?» de ayuda","hecho","Los «?» salen del orden de tabulación (siguen con ratón y toque)."],
+   ["4. Dirección corregida seguía inválida","hecho","El estado se ata a versión+contenido de la dirección; al editarla desaparece el aviso anterior."],
+   ["5. Al recargar o retomar se pierde la dirección","hecho","Al reanudar se relee el detalle y reaparece la tarjeta del cliente con sus direcciones."],
+   ["6. «Directorio» abría Clientes en blanco","hecho","Abre la ficha del cliente de la captura (?customerId=)."],
+   ["7 y 11. Dirección nueva «fuera de cobertura»","accion","La sucursal tiene 0 zonas de entrega en remoto, por eso toda dirección sale fuera de cobertura. El mensaje ahora dice «CP 85860 sin zona en Navojoa». Falta crear o ajustar la zona en /app/delivery-zones (lo haces tú)."],
+   ["8. No guardar capturas sin cliente ni productos","hecho","Los borradores sin cliente ni total ya no se ofrecen como recuperables; los V1 se conservan porque no traen esos datos."],
+   ["9 y 10. Folio/ID del borrador visibles","hecho","Quitados de tarjetas y encabezado; folio y versión van en una línea gris al final de la sección."],
+   ["12. Búsqueda como dropdown con retardo","hecho","Combobox accesible: lista desplegable, flechas/Enter/Escape, se cierra al elegir y espera 500 ms tras dejar de teclear."]],
+  s:["Busca un teléfono inexistente: debe ofrecer «Crear cliente rápido» y seleccionarlo al guardar","Busca 6622751352: solo debe salir ese cliente; elige uno y la lista debe cerrarse","Al agregar una dirección, Tab debe pasar de campo en campo sin detenerse en los «?»","Edita una dirección inválida por una válida: el aviso viejo desaparece","Recarga con una captura a medias: reaparecen cliente y sus dos direcciones","Toca «Directorio»: abre la ficha del cliente de la captura","Primero crea la zona de CP 85860 en /app/delivery-zones y luego usa «Usar esta dirección»","Abre una captura sin cliente ni productos: no debe aparecer en borradores recuperables; las tarjetas no muestran ID"],
+  e:"Cada punto del feedback queda resuelto; con la zona creada la dirección de prueba es válida."},
+ "menu-cat": {
+  c:[
+   ["1. Zoom y área de la foto","hecho","Diálogo de encuadre al subir o reemplazar: zoom (control, botones, rueda), arrastre y flechas, marco 16:9."],
+   ["2. Fotos usadas se duplicaban y la nueva no aparecía","hecho","Una sola lista que ya incluye la foto actual; subir A, reemplazar por B y agregar C muestra las tres de inmediato (con prueba)."],
+   ["3. «Usadas» y «quitadas» redundante; sin botón guardar","hecho","Queda «Fotos recientes» y el aviso «Guardado en el borrador ✓»; el botón del modal dice «Listo»."]],
+  s:["Sube una foto: se abre el encuadre; ajusta zoom y posición y confirma","Reemplaza por otra y agrega una tercera: «Fotos recientes» muestra las tres sin esperar","Revisa el aviso «Guardado en el borrador ✓» y el botón «Listo»"],
+  e:"Encuadre usable, sin fotos duplicadas y un solo bloque «Fotos recientes»."},
+ "menu-dup": {
+  c:[["Menú de 3 puntos: duplicar, archivar, quitar; sección de archivados","hecho","Menú ⋯ por producto en la posición de «Quitar»; Archivar = inactivo; «Archivados» colapsada al final con «Desarchivar»; Quitar pide confirmación en un modal de la app."]],
+  s:["Abre el menú ⋯ de un producto: Duplicar, Archivar, Quitar","Archiva uno: baja a «Archivados» (colapsada) y desde su ⋯ aparece «Desarchivar»","Quitar: confirma en el modal de la página, no del navegador"],
+  e:"Tres acciones en el ⋯; archivados al final y recuperables; quitar solo tras confirmar."},
+ "menu-prod": {
+  c:[["Tamaños: eliminar la pestaña de presets y configurarlos por producto","hecho","Se quitó la pestaña «Tamaños» y los presets; cada variante lleva su nombre libre. Los borradores viejos con presets se migran. Los presets quedan en la BD sin uso (sin migración)."]],
+  s:["/app/menu: ya no hay pestaña «Tamaños»","En un producto con tamaños, escribe el nombre de cada variante; publica y captura una orden","Recarga con un borrador viejo que tenía presets: carga sin errores"],
+  e:"Tamaños solo dentro del producto, sin selector redundante; órdenes viejas sin cambios."},
+ "menu-locked": {
+  c:[["Remover la opción de ingredientes que no se pueden quitar","hecho","Bloque oculto del editor; los valores guardados se conservan. Lo sustituye el modelo de pizza V2."]],
+  s:["En un producto con mitades ya no aparece «Ingredientes que no se pueden quitar»","Publica y captura: nada se rompe"],
+  e:"Opción oculta sin pérdida de datos."},
+};
+const STL = {hecho:"Hecho", accion:"Acción tuya"};
 const CHANGES = [
  {h:"Retroalimentación 1 (2026-11-01)", p:"capture-ux, cliente y dirección en captura, categorías arrastrables, tarjetas de producto, mesas/órdenes con nombre real, color/foto de categoría, copia de fotos, grupos de modificadores compartidos, nombre de cuenta."},
  {h:"Retroalimentación 2 y 3 (2026-11-01/02)", p:"Pestañas de cuentas por mesa con total y contador, pulido de menú, barra lateral fija, caja con pagos divididos y «Faltan $X» del servidor."},
@@ -130,6 +181,10 @@ const DECISIONS = [
  {h:"Cuentas de prueba en Mesa 2 y 5", p:"¿Cancelarlas o dejarlas?"},
  {h:"Limpieza", p:"¿Autorizas borrar worktrees en C:\\tmp\\sr-wt y .claude/worktrees, ramas ya integradas y AGENTS.md.bak?"},
 ];
+const r2html = id => { const r = R2[id]; if (!r) return "";
+  return `<div class="r2"><h4>Cambios realizados</h4><ul>${r.c.map(x => `<li><b>${esc(x[0])}</b> <span class="st ${x[1]}">${STL[x[1]]}</span><br><span class="mut">${esc(x[2])}</span></li>`).join("")}</ul>
+  <h4>Nuevo smoke sugerido</h4><ol class="steps">${r.s.map(x => `<li>${esc(x)}</li>`).join("")}</ol><p class="exp"><b>Esperado:</b> ${esc(r.e)}</p>
+  <h4>Nuevo feedback</h4><textarea data-note="r2-${id}" placeholder="Nuevo feedback de esta ronda: qué viste, qué falta, qué cambiarías">${esc(state["r2-"+id]?.n || "")}</textarea></div>`; };
 const LABELS = {pend:"Pendiente", ok:"OK", fail:"Falla", skip:"Omitido"};
 let state = {};
 try { state = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { state = {}; }
@@ -148,7 +203,7 @@ function render() {
         <div class="seg" role="group" aria-label="Estado">${Object.keys(LABELS).map(v => `<button data-id="${it.id}" data-v="${v}" aria-pressed="${st === v}">${LABELS[v]}</button>`).join("")}</div></div>
         <ol class="steps">${it.s.map(x => `<li>${esc(x)}</li>`).join("")}</ol>
         <p class="exp"><b>Esperado:</b> ${esc(it.e)}</p>${it.block ? `<p class="exp"><b>Bloqueo:</b> ${esc(it.block)}</p>` : ""}
-        <textarea data-note="${it.id}" placeholder="Notas: qué hiciste, qué esperabas, qué viste">${esc(note)}</textarea></div>`;
+        <textarea data-note="${it.id}" placeholder="Notas: qué hiciste, qué esperabas, qué viste">${esc(note)}</textarea>${r2html(it.id)}</div>`;
     }).join("");
   }).join("");
   const counts = {pend:0, ok:0, fail:0, skip:0};
@@ -178,7 +233,7 @@ function toast(m) { const t = document.getElementById("toast"); t.textContent = 
 document.getElementById("export").onclick = async () => {
   const lines = ["# Resultado smoke 2026-11-05", ""];
   SECTIONS.forEach(sec => { lines.push("## " + sec.t); sec.items.forEach(it => {
-    const s = state[it.id]?.s || "pend"; lines.push(`- [${LABELS[s]}] ${it.h}${state[it.id]?.n ? " — " + state[it.id].n.replace(/\n/g, " ") : ""}`); }); lines.push(""); });
+    const s = state[it.id]?.s || "pend"; lines.push(`- [${LABELS[s]}] ${it.h}${state[it.id]?.n ? " — " + state[it.id].n.replace(/\n/g, " ") : ""}`); if (state["r2-"+it.id]?.n) lines.push(`  - Nuevo feedback: ${state["r2-"+it.id].n.replace(/\n/g, " ")}`); }); lines.push(""); });
   lines.push("## Decisiones"); DECISIONS.forEach((d, i) => lines.push(`- ${d.h}: ${state["dec-"+i]?.n || "(sin respuesta)"}`));
   const md = lines.join("\n");
   try { await navigator.clipboard.writeText(md); toast("Copiado al portapapeles"); } catch (e) { toast("No se pudo copiar"); }

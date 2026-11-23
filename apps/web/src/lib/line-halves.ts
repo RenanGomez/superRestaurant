@@ -12,6 +12,7 @@ import type {
 } from "@super-restaurant/shared-types";
 import type { SelectionPlanLineDraft } from "./capture-selection";
 import { groupsForProduct } from "./menu-groups";
+import type { PizzaLineV2 } from "./pizza-capture";
 
 /** What the operator has chosen for one half while arming a "mitad y mitad" line. */
 export interface HalfDraft {
@@ -259,9 +260,12 @@ export type DraftLinesResult =
 export function draftLinesFromProjection(
   lines: readonly CaptureSelectionPlanProjectionLineV1[],
   catalog: Pick<MenuCatalogV1, "products" | "modifierGroups"> | null,
+  pizzaByLineId: ReadonlyMap<string, PizzaLineV2> = new Map(),
 ): DraftLinesResult {
   const drafts: SelectionPlanLineDraft[] = [];
   for (const line of lines) {
+    // The picks the server confirmed prevail; the local map (what this client sent) is only a fallback.
+    const pizza: PizzaLineV2 | undefined = line.pizza ?? pizzaByLineId.get(line.lineId);
     const byGroup = new Map<string, { optionId: string; quantity: number }[]>();
     for (const modifier of line.modifiers) {
       const existing = byGroup.get(modifier.groupId) ?? [];
@@ -270,7 +274,7 @@ export function draftLinesFromProjection(
     }
     const modifierGroups = [...byGroup.entries()].map(([groupId, selections]) => ({ groupId, selections }));
     let fraction: LineFractionV1 | undefined;
-    if (line.halves !== undefined && line.halves.length > 0) {
+    if (pizza === undefined && line.halves !== undefined && line.halves.length > 0) {
       const product = catalog?.products.find((entry) => entry.productId === line.productId);
       const variant = product?.variants?.find((entry) => entry.variantId === line.variantId);
       const restored = restoreLineFraction(line.halves, product?.fraction ?? variant?.fraction,
@@ -279,7 +283,7 @@ export function draftLinesFromProjection(
       fraction = restored.fraction;
     }
     drafts.push({ lineId: line.lineId, productId: line.productId, variantId: line.variantId, quantity: line.quantity,
-      modifierGroups, note: line.note, ...(fraction === undefined ? {} : { fraction }) });
+      modifierGroups, note: line.note, ...(fraction === undefined ? {} : { fraction }), ...(pizza === undefined ? {} : { pizza }) });
   }
   return { ok: true, lines: drafts };
 }

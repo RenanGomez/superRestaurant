@@ -1,4 +1,4 @@
-# ORCHESTRATOR — orquestación multi-motor
+﻿# ORCHESTRATOR — orquestación multi-motor
 
 Aplica en proyectos con `.harness/`. `AGENTS.md` (reglas del proyecto) manda sobre este archivo.
 
@@ -9,27 +9,59 @@ puntual, unas pocas líneas) se hace directo: delegar lo que cuesta menos que el
 
 | Motor | Para | Cuota |
 |---|---|---|
-| `gemini` (Antigravity, Google AI Pro) | leer mucho, mapas, docs, revisar diffs | abundante → **primero en lectura** |
-| `dsh` (DeepSeek Harness → OpenRouter; `config.dsh.models`) | **código**: tests, features, bugs; revisión con `review`; UI con `vision` | por token, barato, varios en paralelo → **primero en código** |
-| `codex` (ChatGPT Plus, cuenta B; `config.codex.accounts`) | lo que dsh no resolvió, o lo que exige su sandbox | escasa → solo lo que la exige; sin cuota pasa a dsh solo |
+| `gemini` (CLI `agy`, Google AI Pro) | **código** UI/visual/piezas medianas; leer mucho, mapas, revisar diffs | abundante → escribe y revisa en cada ola |
+| `dsh` (CLI de OpenCode → suscripción OpenCode Go, solo `deepseek-v4.1-flash`) | **código**: tests, mecánico, piezas pequeñas | cupo amplio, varios en paralelo |
+| `codex` (ChatGPT Plus, cuenta B; `config.codex.accounts`) | **código**: bugs difíciles, red, estado, lógica con riesgo | suficiente → motor normal, 1 a la vez por cuenta |
 | `claude` CLI (`claude -p`, haiku/sonnet) | último recurso (`-Engine claude`) | la misma del orquestador |
 | subagente Claude (Agent) | búsquedas rápidas (haiku), tareas atadas a esta conversación (sonnet) | — |
 
 Qué motor/modelo/esfuerzo por tipo de tarea: `routing.md`.
-**Con `config.dsh.enabled: false` (ahora), dsh no existe:** no lo uses ni lo propongas; código → codex.
+**Los tres motores escriben en paralelo en cada ola:** con ≥3 tareas, cada uno recibe al menos una (reparto en
+`routing.md` → "Reparto obligatorio"); antes de lanzar, una línea con el reparto. Nunca todo a dsh. Reglas de
+velocidad, eficiencia y precisión de dsh: `routing.md` (secciones "Rápido", "Eficiente", "Certero").
 
+**agent-orchestrator (AO):** si el usuario pide "agent-orchestrator"/"AO", lanza workers con el CLI `ao`
+(`ao spawn --project <id> --harness <opencode|agy|codex> --name "<título>" --prompt "<brief>"`; ids en
+`ao project list`, estado en `ao status`/`ao session ls`). Cada worker trabaja en su worktree y abre PR; revísalo
+y pruébalo antes de aceptarlo. Nunca `--harness claude-code`. Sin `ao` en PATH:
+`%LOCALAPPDATA%\Programs\agent-orchestrator\resources\daemon\ao.exe`.
+
+## Ponytail (DietrichGebert/ponytail) — obligatorio
+Todo el código del proyecto sigue Ponytail: escribir solo lo que la tarea necesita, reutilizar lo que ya existe,
+nunca recortar validación, manejo de errores, seguridad, tests de lógica riesgosa ni accesibilidad.
+- **Claude** (orquestador y subagentes): plugin `ponytail@ponytail` activo; si falta, pedir al usuario
+  `/plugin marketplace add DietrichGebert/ponytail` y luego `/plugin install ponytail@ponytail`.
+- **codex**: `codex plugin marketplace add DietrichGebert/ponytail` + `codex plugin add ponytail@ponytail`.
+- **gemini/dsh y demás motores**: cada brief incluye la línea "Aplica Ponytail (AGENTS.md de DietrichGebert/ponytail):
+  el cambio más pequeño correcto, reutiliza lo existente, sin recortar validación/errores/seguridad/tests".
+- **Revisión** de diffs de motores: criterios de `/ponytail-review` (bugs, seguridad, carga real, tests, qué sobra).
+  Atajos deliberados con comentario `shortcut:`; `/ponytail-debt` los recoge.
+- Instalar solo desde `DietrichGebert/ponytail` (GitHub) o `@dietrichgebert/ponytail` (npm).
 ## Flujo
 1. **Contexto**: `codegraph explore` (si hay `.codegraph/`) o `.harness/context/map.md` antes de abrir archivos.
    Sin mapa o desactualizado → `bin/map.ps1`.
 2. **Brief** por tarea en `.harness/runs/<id>/brief.md` (`templates/brief.md`): objetivo, archivos, "hecho cuando",
    citas a `map.md §N`. Nunca la conversación entera ni AGENTS.md copiado.
-3. **Encolar y drenar** (lo normal):
+3. **¿El usuario mencionó "agent-orchestrator"/"AO"** (aunque sea suelto en una lista)? → NO encolar: lanza cada tarea
+   con `ao spawn --project <id> --harness <opencode|agy|codex> --name "<id>" --prompt "<brief.md completo>"` (ver
+   párrafo AO arriba) y salta al paso 4 revisando sus PR. Si no lo mencionó:
+   **Encolar y drenar** (lo normal):
    `powershell -NoProfile -File .harness/bin/enqueue.ps1 -Id <id> -Engine <gemini|dsh|codex> [-Model] [-Effort] [-Write] [-Worktree] -Files <rutas> [-After <ids>]`
    luego `powershell -NoProfile -File .harness/bin/drain.ps1 -Wait` **en background** (herramienta de shell con
    ejecución en segundo plano, nunca en primer plano ni con un bucle de espera propio). Con `-Wait`, si un motor se
    queda sin cuota, drain espera él mismo al reset y continúa; solo termina cuando no queda nada que esperar, y
-   **ese fin te despierta** en esta misma conversación con el resumen: entonces revisa. No programes recordatorios
-   ni sondees mientras tanto. Si drain responde "ya en marcha", otro drain ya lleva la cola: no lances otro.
+   **ese fin te despierta** en esta misma conversación con el resumen: entonces revisa. drain también termina antes
+   si una tarea falla o el vigilante la corta (deja `state/ALERT`). Si drain responde "ya en marcha", otro drain ya
+   lleva la cola: no lances otro.
+   **ETA y ward (obligatorio):** cada tarea lleva `-EtaMin <min>` (estimado justificado por tamaño y pasos; también
+   "Tiempo estimado" en el brief). Nunca cierres un turno con runs en curso sin un ward armado: `ScheduleWakeup`
+   (o `Monitor` sobre `state/status.json`/`state/ALERT`) a `min(ETA de la ola × 1.5, 20 min)`. Al despertar lee
+   **solo** `powershell -NoProfile -File .harness/bin/status.ps1` y:
+   - todo `ok` → re-arma el ward, sin molestar;
+   - `lento` (pasó la ETA) → avisa al usuario en una línea (tiempo/ETA, último output) sin que pregunte;
+   - `trabado`/`muerto`/`failed`/ALERT → mira la cola de `log.txt`, y relanza con brief corregido, escala
+     (dsh→codex) o pregunta. No esperes a que el usuario pregunte "¿cómo van?".
+   Un ward por intervalo; nada de bucles de sondeo propios.
    Run suelto (sin cola): `bin/agent.ps1` con los mismos parámetros, también en background.
 4. **Revisar** `runs/<id>/result.md` + `git diff` (en worktrees: rama `harness/<id>`). `log.txt` solo si falla.
    Todo cambio de un motor lo revisa Claude o el otro motor; correr tests del proyecto.
@@ -38,6 +70,22 @@ Qué motor/modelo/esfuerzo por tipo de tarea: `routing.md`.
    correcto, poner `"status": "done"` en `.harness/queue/<id>.json` y volver a correr drain. Los modelos baratos
    (luna/low) pueden inventar datos con total seguridad: nunca aceptar un dato sin evidencia.
 5. **Cerrar**: actualizar notas y handoff; resumen corto al usuario.
+   Antes del resumen, **cierra lo que lanzaste** (ver "Limpieza" abajo).
+
+## Limpieza — nada se queda abierto
+Regla para Claude, subagentes y motores: lo que abras para trabajar (servidor de dev, puerto, `cmd`/`powershell`
+en background, watcher, Godot/node/python de prueba, contenedor, túnel, pestaña de preview) **lo cierras cuando
+terminas de usarlo**, no al final del día. Cerrar = TaskStop, preview_stop, `taskkill /PID <pid> /T /F`, `docker stop`.
+- **Registrar** al abrir algo que vive más que un comando: `.harness/bin/open.ps1 -Add -ProcId <pid> -Port <p> -What "<qué>"`
+  (vale solo `-Port`); al cerrarlo, `open.ps1 -Done -ProcId <pid>`. `open.ps1 -List` muestra lo abierto.
+- **Excepción, solo si es imprescindible** (el usuario tiene que probarlo/verlo, o lo pidió): registrarlo con
+  `-Keep "<motivo>"` y decirlo en el resumen final con puerto/URL y cómo cerrarlo. Nada más se queda.
+- **Automático** (no sustituye cerrar a mano):
+  - hook `Stop` → `cleanup.ps1 -Hook` al final de cada turno: mata lo registrado sin keep y los procesos de la
+    sesión que escuchan en un puerto sin keep; avisa de lo que cerró y de lo que sigue abierto.
+  - `drain.ps1` al terminar → `cleanup.ps1 -Since <inicio>`: restos de codex/gemini/dsh (servidores, watchers...).
+  - `~/agent-harness/reaper.ps1`: al cerrar la sesión (SessionEnd) y cada 3 h; respeta los keep.
+- `drain -Wait` con trabajo pendiente, servidores MCP y el propio harness están protegidos.
 
 ## Enforcement — hook `guard.ps1`
 Pasadas `config.guard.maxLines` (30) líneas de código escritas por la sesión, Edit/Write se niegan: delegar.
@@ -50,9 +98,9 @@ Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos 
 - **Respaldo dsh:** una tarea de codex la hace dsh si la cuenta de codex no tiene cuota o ya está ocupada en la ola
   (`config.codex.fallback`, `parallel: true`), con el alias mapeado. El log lo dice (`[codex → dsh/...]`) y
   drain.md muestra el carril `codex→dsh`. Revísalo igual que uno de codex.
-- **dsh** no tiene cuota de 5 h: paga por token con la clave de OpenRouter guardada en DeepSeek Harness. Si falla con
-  401/"API key expired", la clave se cambia en DeepSeek Harness (Ajustes → Modelos), no en variables de entorno.
-  Con 402/"Insufficient credits" o 429 queda en cooldown 1 h; si es saldo, avisa al usuario.
+- **dsh** corre con `opencode run` (CLI oficial, `npm i -g opencode-ai`) y la clave de la variable de usuario
+  `OPENCODE_API_KEY`, con cupo de la suscripción OpenCode Go (Flash: $100/mes, ~43k req/5 h). Si falla por cupo
+  agotado o 429 queda en cooldown; con 401 la clave se cambia en la consola de opencode.ai y en esa variable.
 - `agent.ps1` detecta el agotamiento, marca el motor en `.harness/state/quota.json` (`cooldown`, `reset_at`) y sale
   con código 75 y result `queued`. Mientras dure, los runs a ese motor quedan `queued` sin gastar.
 - En la cola, drain deja esas tareas `pending`; con `-Wait` espera el reset él mismo (hasta `-MaxWaitHours`, 12) y
@@ -61,7 +109,7 @@ Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos 
   `.harness/state/drain.md` y revisa los resultados.
   Un run suelto programa su propio relanzamiento (`\agent-harness\<proyecto>-<id>`).
 - Ante `queued`: **no** rehacerlo en Claude. Seguir con otras tareas o con el motor alternativo de `routing.md`.
-- Otros fallos (login, Antigravity cerrado): un reintento con el alternativo; si persiste, avisar al usuario.
+- Otros fallos (login, cuota, `agy` ausente): un reintento con el alternativo; si persiste, avisar al usuario.
 
 ## Seguridad
 - Un escritor por ruta: tareas que escriben en paralelo con `-Files` disjuntos, o `-Worktree`.
@@ -80,9 +128,11 @@ Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos 
 - No edites `.harness/bin` del proyecto para arreglar el harness sin avisar: el arreglo se pierde para los demás
   proyectos. Propónlo en el informe; el usuario lo lleva a la plantilla (`~/agent-harness`). Si aun así se edita,
   `install.ps1` ya no lo pisa: deja la versión nueva como `*.template-new` para fusionar.
+- dsh con `-Write` (opencode, agente `build`) tampoco tiene sandbox de rutas: brief con rutas exactas y revisar
+  `git status` completo al terminar.
 - gemini con `-Write` sin worktree: su "solo tocar X" es una instrucción, no un sandbox. Brief con rutas exactas y
   revisar el diff completo (`git status`), no solo los archivos esperados.
-- Antigravity debe estar abierto y el proyecto abierto en él al menos una vez. Cada run crea una conversación
+- gemini va por la CLI `agy` (config `gemini.backend: "agy"`): NO hace falta Antigravity abierto. Solo con `backend: "agentapi"` (o sin `agy` en PATH) se usa la app, que entonces debe estar abierta con el proyecto. Con agentapi cada run crea una conversación
   "harness <id>".
 - Sin push, deploy, merges ni borrados desde motores o subagentes: lo decide el usuario.
 - Temporales, respaldos (`*.before*`, `*.bak`) y salidas de depuración: solo en `.harness/state/tmp/`, y borrarlos
@@ -103,8 +153,8 @@ Solo el usuario lo levanta escribiendo `OVERRIDE`; pedirlo únicamente si ambos 
 ## Tokens
 Cada paso del orquestador relee **todo** el contexto: el coste es tamaño de la conversación × número de pasos.
 - **Modelo del orquestador:** Sonnet 5.5 para orquestar; Opus 5.5 solo para diseño. Nunca Fable (2-5x más caro).
-- **Conversaciones cortas:** al pasar de `config.tokens.handoffAt` (100k) el hook te lo avisa. Cierra con `HANDOFF.md`
-  y pide al usuario una conversación nueva. Una conversación = una tarea grande.
+- **Contexto acotado:** Claude Code compacta solo al llegar a `autoCompactWindow` (200k en `~/.claude/settings.json`)
+  y sigue. Al pasar `config.tokens.handoffAt` (150k) el hook pide una vez actualizar `HANDOFF.md`; no pidas conversación nueva.
 - **Nada de lectura masiva en el orquestador:** archivos de más de ~200 líneas, búsquedas amplias o logs → delegar
   (gemini/subagente haiku) y quedarse con el resumen. Usa `Read` con `offset`/`limit` y `head`/`Select-Object -First`.
 - **Agrupa comandos** en una sola llamada de shell; las llamadas en paralelo van en un solo mensaje.

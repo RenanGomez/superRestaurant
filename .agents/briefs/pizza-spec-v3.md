@@ -1,0 +1,2 @@
+# Brief pizza-spec-v3 (nivel A, spec, SIN escritura de código)
+Corrige `docs/architecture/PIZZA_MODEL_V2.md` según `.agents/reports/review-pizza-spec-v2.md`: el snapshot debe congelar explícitamente nombres de producto/ingredientes/opciones y la estación, y la sección de pruebas debe exigir que historial e instrucciones de cocina sobrevivan a cambios del catálogo. No cambies reglas ya decididas. Escribe el documento actualizado en `.agents/reports/pizza-model-spec-v3.md` (documento completo) y un resumen ≤8 líneas al final.

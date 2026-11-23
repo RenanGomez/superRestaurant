@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, recoveredSizePresets, serializeMenuDraft, staleMenuDraftKeys } from "./menu-draft-storage.js";
+import { menuDraftKey, menuDraftSnapshot, parseMenuDraft, serializeMenuDraft, staleMenuDraftKeys, withoutSizePresetIds } from "./menu-draft-storage.js";
 import { updatePresetVariants } from "./menu-variants.js";
 import { withDerivedAssignments } from "./menu-groups.js";
 
 const parts = {
   categories: [{ active: true, categoryId: "c1", color: null, displayOrder: 1, imagePath: null, name: "Pizzas" }],
   groups: [{ active: true, displayOrder: 1, groupId: "g1", maximumQuantity: 1, minimumQuantity: 0, name: "G", options: [], productId: "p1" }],
-  sizePresets: [],
   products: [{ active: true, categoryId: "c1", displayOrder: 1, imagePath: null, name: "P", productId: "p1", sku: null, stationId: "general", tax: null, unit: "pieza", unitPriceMinor: 100, variants: [] }],
 };
 
@@ -89,16 +88,23 @@ test("a draft with an invalid or foreign category image or colour is rejected", 
   assert.equal(products[0]?.variants[0]?.name, "Chica");
 });
 
-test("draft retains presets and reads legacy drafts", () => {
-  const sizePresets = [{ id: "s1", name: "Chica", active: true, displayOrder: 1 }];
-  assert.deepEqual(parseMenuDraft(serializeMenuDraft({ ...parts, sizePresets, expectedVersion: 1 }), 1)?.sizePresets, sizePresets);
-  assert.deepEqual(parseMenuDraft(JSON.stringify({ categories: parts.categories, groups: parts.groups, products: parts.products, expectedVersion: 1 }), 1)?.sizePresets, undefined);
+test("a legacy draft with size presets loads and drops the preset links", () => {
+  const products = [{ ...parts.products[0]!, variants: [{ active: true, displayOrder: 1, name: "Chica", sku: null, sizePresetId: "s1", unitPriceMinor: 250, variantId: "v1" }] }];
+  const legacy = JSON.stringify({
+    categories: parts.categories,
+    expectedVersion: 1,
+    groups: parts.groups,
+    products,
+    sizePresets: [{ id: "s1", name: "Chica", active: true, displayOrder: 1 }],
+  });
+  const parsed = parseMenuDraft(legacy, 1);
+  assert.ok(parsed !== null);
+  assert.equal("sizePresets" in parsed, false);
+  assert.equal(parsed.products[0]?.variants?.[0]?.sizePresetId, null);
 });
 
-test("legacy recovery keeps published presets while explicit empty list clears them", () => {
-  const published = [{ id: "s1", name: "Chica", active: true, displayOrder: 1 }];
-  const legacy = parseMenuDraft(JSON.stringify({ categories: parts.categories, groups: parts.groups, products: parts.products, expectedVersion: 1 }), 1);
-  assert.ok(legacy);
-  assert.deepEqual(recoveredSizePresets(legacy, published), published);
-  assert.deepEqual(recoveredSizePresets({ ...legacy, sizePresets: [] }, published), []);
+test("the save payload never keeps a size preset link", () => {
+  const products = [{ ...parts.products[0]!, variants: [{ active: true, displayOrder: 1, name: "Chica", sku: null, sizePresetId: "s1", unitPriceMinor: 250, variantId: "v1" }] }];
+  assert.equal(withoutSizePresetIds(products)[0]?.variants?.[0]?.sizePresetId, null);
+  assert.equal(JSON.parse(serializeMenuDraft({ ...parts, products, expectedVersion: 1 })).products[0].variants[0].sizePresetId, null);
 });

@@ -7,8 +7,50 @@ import {
 } from "@super-restaurant/shared-types";
 import type {
   CustomerDirectorySearchResultV1,
+  CustomerPhoneInputV1,
   CustomerSearchModeV1,
 } from "@super-restaurant/shared-types";
+
+/** `parseSaveCustomerProfileCommandV1` accepts `phones: []`, so the profile may keep zero phones. */
+export const customerProfileMinimumPhones = 0;
+
+export interface CustomerPhoneRemovalInput {
+  readonly phones: readonly CustomerPhoneInputV1[];
+  readonly contactId: string;
+  readonly displayName: string;
+  readonly savedDisplayName: string;
+  readonly savedPhones: readonly CustomerPhoneInputV1[];
+}
+
+export interface CustomerPhoneRemoval {
+  readonly blocked: boolean;
+  readonly reason?: string;
+  readonly phones: readonly CustomerPhoneInputV1[];
+  readonly alsoSavesOtherChanges: boolean;
+}
+
+function phoneChanged(current: CustomerPhoneInputV1, saved: CustomerPhoneInputV1): boolean {
+  return current.label.trim() !== saved.label.trim() || current.displayValue.trim() !== saved.displayValue.trim();
+}
+
+/** Removing a phone is a full profile save: the pending list and name go together. */
+export function getCustomerPhoneRemoval(input: CustomerPhoneRemovalInput): CustomerPhoneRemoval {
+  const remaining = input.phones.filter(phone => phone.contactId !== input.contactId);
+  if (remaining.length === input.phones.length) {
+    return { blocked: true, reason: "Ese teléfono ya no está en la ficha.", phones: input.phones, alsoSavesOtherChanges: false };
+  }
+  if (remaining.length < customerProfileMinimumPhones) {
+    return { blocked: true, reason: "La ficha debe conservar al menos un teléfono.", phones: input.phones, alsoSavesOtherChanges: false };
+  }
+  const savedRemaining = input.savedPhones.filter(phone => phone.contactId !== input.contactId);
+  const alsoSavesOtherChanges = input.displayName.trim() !== input.savedDisplayName.trim()
+    || remaining.length !== savedRemaining.length
+    || remaining.some(phone => {
+      const saved = savedRemaining.find(item => item.contactId === phone.contactId);
+      return saved === undefined || phoneChanged(phone, saved);
+    });
+  return { blocked: false, phones: remaining, alsoSavesOtherChanges };
+}
 
 export type CustomerRequestResult<T> = { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable" };
@@ -53,6 +95,29 @@ export function isCurrentCustomerAutocompleteRequest(
 ): boolean {
   const current = getCustomerAutocompleteRequest(mode, input);
   return current !== undefined && current.mode === request.mode && current.query === request.query;
+}
+
+export interface CustomerSearchSnapshot<T> {
+  readonly mode: CustomerSearchModeV1;
+  readonly query: string;
+  readonly value: T;
+}
+
+/** A submitted search result is only valid for the exact mode and query that produced it. */
+export function isCurrentCustomerSearch(
+  request: CustomerAutocompleteRequest | undefined,
+  mode: CustomerSearchModeV1,
+  input: string,
+): boolean {
+  return request !== undefined && request.mode === mode && request.query === input.trim();
+}
+
+export function selectCurrentCustomerSearch<T>(
+  snapshot: CustomerSearchSnapshot<T> | undefined,
+  mode: CustomerSearchModeV1,
+  input: string,
+): T | undefined {
+  return snapshot !== undefined && isCurrentCustomerSearch(snapshot, mode, input) ? snapshot.value : undefined;
 }
 
 /** Suggestions are derived exclusively from the already-authorized result held by the browser. */

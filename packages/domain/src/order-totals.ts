@@ -10,7 +10,38 @@ import {
   InvalidTimeZoneError,
   NegativeMoneyAmountError,
 } from "./errors.js";
+import { readPizzaHalvesPriceSnapshot, type PizzaHalvesPriceSnapshotV2 } from "./fraction-pricing.js";
 import { Money } from "./money.js";
+
+/** The strict reader takes plain data; a resolved snapshot carries `Money` instances, so flatten those first. */
+function moneyToPlain(value: unknown): unknown {
+  if (value instanceof Money) return { amountMinor: value.amountMinor, currency: value.currency };
+  if (Array.isArray(value)) return value.map(moneyToPlain);
+  if (typeof value === "object" && value !== null) {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return value;
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, moneyToPlain(entry)]));
+  }
+  return value;
+}
+
+/** Modifier groups whose amounts make up the V2 halves total (charges and free/removed markers). */
+const PIZZA_RULE_GROUP_IDS: ReadonlySet<string> = new Set(["pizza-ingredient", "pizza-extra", "fraction-exclusion"]);
+
+/** Reads a stored V2 halves snapshot and checks it agrees with the item it rides on (halves, currency, total). */
+function checkedPizzaHalves(
+  value: unknown,
+  geometry: "whole" | "halves" | undefined,
+  unitPrice: Money,
+  modifiers: readonly ModifierPriceSnapshot[],
+): PizzaHalvesPriceSnapshotV2 {
+  const pizza = readPizzaHalvesPriceSnapshot(moneyToPlain(value));
+  if (geometry !== "halves" || pizza.currency !== unitPrice.currency) throw new InvalidSnapshotError("pizzaHalves");
+  // Only the modifiers the halves rule itself produced count: other groups of the product price separately.
+  const sum = modifiers.reduce((total, modifier) => (PIZZA_RULE_GROUP_IDS.has(modifier.groupId ?? "") ? total + modifier.unitPrice.amountMinor * modifier.quantity : total), unitPrice.amountMinor);
+  if (!Number.isSafeInteger(sum) || sum !== pizza.total.amountMinor) throw new InvalidSnapshotError("pizzaHalves total");
+  return pizza;
+}
 
 export interface ExactRatio {
   readonly numerator: bigint;
@@ -87,6 +118,11 @@ export interface OrderItemPriceSnapshot {
   readonly variantName?: string;
   readonly geometry?: "whole" | "halves";
   readonly fractionBreakdown?: readonly OrderItemFractionBreakdownEntry[];
+  /**
+   * Pizza V2 frozen halves price (`pizza-halves-v2`). Only valid with `geometry: "halves"`; its total must
+   * equal `unitPrice` plus the modifiers. Read fail-closed and carried verbatim, never rebuilt from the catalog.
+   */
+  readonly pizzaHalves?: PizzaHalvesPriceSnapshotV2;
 }
 
 export interface OrderItemPricingInput {
@@ -396,6 +432,10 @@ function normalizePriceSnapshot(value: unknown): OrderItemPriceSnapshot {
   const fractionBreakdown = fractionBreakdownValue === undefined
     ? undefined
     : asDataArray(fractionBreakdownValue, "fractionBreakdown").map(normalizeFractionBreakdownEntry);
+  const pizzaHalvesValue = optionalOwnData(snapshot, "pizzaHalves", "pizzaHalves");
+  const pizzaHalves = pizzaHalvesValue === undefined
+    ? undefined
+    : checkedPizzaHalves(pizzaHalvesValue, geometry as "whole" | "halves" | undefined, unitPrice, modifiers);
 
   return deepFreeze({
     catalogVersion: catalogVersion as string,
@@ -411,6 +451,7 @@ function normalizePriceSnapshot(value: unknown): OrderItemPriceSnapshot {
     ...(variantName === undefined ? {} : { variantName: variantName as string }),
     ...(geometry === undefined ? {} : { geometry }),
     ...(fractionBreakdown === undefined ? {} : { fractionBreakdown }),
+    ...(pizzaHalves === undefined ? {} : { pizzaHalves }),
   });
 }
 
@@ -652,6 +693,9 @@ function clonePriceSnapshot(snapshot: OrderItemPriceSnapshot): OrderItemPriceSna
   const fractionBreakdown = snapshot.fractionBreakdown === undefined
     ? undefined
     : snapshot.fractionBreakdown.map(cloneFractionBreakdownEntry);
+  const pizzaHalves = snapshot.pizzaHalves === undefined
+    ? undefined
+    : checkedPizzaHalves(snapshot.pizzaHalves, snapshot.geometry, unitPrice, modifiers);
 
   return deepFreeze({
     catalogVersion: snapshot.catalogVersion,
@@ -667,6 +711,7 @@ function clonePriceSnapshot(snapshot: OrderItemPriceSnapshot): OrderItemPriceSna
     ...(snapshot.variantName === undefined ? {} : { variantName: snapshot.variantName }),
     ...(snapshot.geometry === undefined ? {} : { geometry: snapshot.geometry }),
     ...(fractionBreakdown === undefined ? {} : { fractionBreakdown }),
+    ...(pizzaHalves === undefined ? {} : { pizzaHalves }),
   });
 }
 

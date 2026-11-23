@@ -116,7 +116,9 @@ import {
 import { DeliveryZonesController } from "./delivery-zones.controller.js";
 import {
   DELIVERY_ZONE_LIST_PORT,
+  DELIVERY_ZONE_MANUAL_FEE_PORT,
   DELIVERY_ZONE_QUOTE_FACTS_PORT,
+  DELIVERY_ZONE_SETTLEMENT_SEARCH_PORT,
   DELIVERY_ZONE_UPSERT_PORT,
   DeliveryZoneService,
   PostgresDeliveryZoneStore,
@@ -286,6 +288,8 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
     { provide: DELIVERY_ZONE_LIST_PORT, useExisting: PostgresDeliveryZoneStore },
     { provide: DELIVERY_ZONE_UPSERT_PORT, useExisting: PostgresDeliveryZoneStore },
     { provide: DELIVERY_ZONE_QUOTE_FACTS_PORT, useExisting: PostgresDeliveryZoneStore },
+    { provide: DELIVERY_ZONE_SETTLEMENT_SEARCH_PORT, useExisting: PostgresDeliveryZoneStore },
+    { provide: DELIVERY_ZONE_MANUAL_FEE_PORT, useExisting: PostgresDeliveryZoneStore },
     DeliveryZoneService,
     { provide: SYSTEM_ONBOARDING_AUTH, useFactory: () => createSystemOnboardingAuth(process.env) },
     SystemOnboardingService,

@@ -1,9 +1,10 @@
-import { types as nodeTypes } from "node:util";
+import { isDeepStrictEqual, types as nodeTypes } from "node:util";
 
 import {
   Money,
   ORDER_AUDIT_SCHEMA_VERSION,
   calculateOrderAggregateTotals,
+  readPizzaHalvesPriceSnapshot,
   transitionOrder,
   transitionOrderItem,
   type AppliedDiscountSnapshot,
@@ -19,6 +20,7 @@ import {
   type OrderItemFractionBreakdownEntry,
   type OrderItemPriceSnapshot,
   type OrderMutation,
+  type PizzaHalvesPriceSnapshotV2,
   type TaxSnapshot,
 } from "@super-restaurant/domain";
 
@@ -119,6 +121,20 @@ export interface PersistedOrderItemPriceSnapshotV1 {
   /** Half-and-half line: frozen geometry and per-half flavor/price; absent for whole lines. */
   readonly geometry?: "whole" | "halves";
   readonly fractionBreakdown?: readonly PersistedFractionBreakdownEntryV1[];
+  /** Pizza V2 frozen halves price as plain JSON (money as `{ amountMinor, currency }`); validated on decode. */
+  readonly pizzaHalves?: unknown;
+}
+
+/** Modifier groups whose amounts make up a V2 halves total; other groups of the product price separately. */
+const PIZZA_RULE_GROUP_IDS: ReadonlySet<string> = new Set(["pizza-ingredient", "pizza-extra", "fraction-exclusion"]);
+
+function plainMoney(value: unknown): unknown {
+  if (value instanceof Money) return { amountMinor: value.amountMinor, currency: value.currency };
+  if (Array.isArray(value)) return value.map(plainMoney);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, plainMoney(entry)]));
+  }
+  return value;
 }
 
 export interface PersistedFractionBreakdownEntryV1 {
@@ -440,11 +456,28 @@ function encodePriceSnapshot(snapshot: OrderItemPriceSnapshot): PersistedOrderIt
         fraction: entry.fraction,
       })),
     }),
+    ...(snapshot.pizzaHalves === undefined ? {} : { pizzaHalves: plainMoney(snapshot.pizzaHalves) }),
   });
 }
 
 function decodePriceSnapshot(value: unknown): OrderItemPriceSnapshot {
-  const record = exactRecord(value, ["catalogVersion", "productId", "name", "stationId", "unit", "unitPrice", "modifiers"], ["sku", "tax", "variantId", "variantName", "geometry", "fractionBreakdown"], "price snapshot");
+  const record = exactRecord(value, ["catalogVersion", "productId", "name", "stationId", "unit", "unitPrice", "modifiers"], ["sku", "tax", "variantId", "variantName", "geometry", "fractionBreakdown", "pizzaHalves"], "price snapshot");
+  const decoded = decodePriceSnapshotFields(record);
+  const rawPizza = optionalData(record, "pizzaHalves");
+  if (rawPizza === undefined) return decoded;
+  let pizza: PizzaHalvesPriceSnapshotV2;
+  try {
+    pizza = readPizzaHalvesPriceSnapshot(rawPizza);
+  } catch {
+    return fail("pizzaHalves");
+  }
+  const sum = decoded.modifiers.reduce((total, modifier) => (PIZZA_RULE_GROUP_IDS.has(modifier.groupId ?? "") ? total + modifier.unitPrice.amountMinor * modifier.quantity : total), decoded.unitPrice.amountMinor);
+  if (!isDeepStrictEqual(rawPizza, plainMoney(pizza))) return fail("pizzaHalves");
+  if (decoded.geometry !== "halves" || pizza.currency !== decoded.unitPrice.currency || sum !== pizza.total.amountMinor) return fail("pizzaHalves");
+  return deepFreeze({ ...decoded, pizzaHalves: pizza });
+}
+
+function decodePriceSnapshotFields(record: Record<string, unknown>): OrderItemPriceSnapshot {
   return deepFreeze({
     catalogVersion: text(data(record, "catalogVersion"), "catalogVersion"),
     productId: text(data(record, "productId"), "productId"),

@@ -4,6 +4,7 @@ import test from "node:test";
 import { Pool } from "pg";
 
 import { DatabaseConfigurationError, guardPostgresPool, readDatabaseConfig } from "./database.js";
+import { readExternalTestDatabaseUrl } from "./operations/local-postgres.js";
 
 const projectRef = "abcdefghijklmnopqrst";
 const validEnvironment = Object.freeze({
@@ -71,4 +72,24 @@ test("guards idle PostgreSQL transport errors without masking query promises", a
   } finally {
     await pool.end();
   }
+});
+
+test("test database URL is restricted to numeric loopback and never accepted in production", () => {
+  const url = "postgresql://postgres:password@127.0.0.1:5432/postgres";
+  assert.equal(readDatabaseConfig({ NODE_ENV: "test", SR_TEST_DATABASE_URL: url }).connectionString, url);
+  for (const bad of [url.replace("127.0.0.1", "localhost"), url + "?sslmode=disable", url.replace("127.0.0.1", "192.0.2.1")]) {
+    assert.throws(() => readDatabaseConfig({ NODE_ENV: "test", SR_TEST_DATABASE_URL: bad }), DatabaseConfigurationError);
+  }
+  assert.throws(() => readDatabaseConfig({ NODE_ENV: "production", SR_TEST_DATABASE_URL: url }), DatabaseConfigurationError);
+});
+
+test("external test cluster requires test mode and a numeric loopback PostgreSQL URL", () => {
+  const url = "postgresql://postgres:password@127.0.0.1:5432/postgres";
+  assert.equal(readExternalTestDatabaseUrl({ CI: "true", SR_TEST_DATABASE_URL: url }).hostname, "127.0.0.1");
+  for (const environment of [
+    { SR_TEST_DATABASE_URL: url },
+    { CI: "true", SR_TEST_DATABASE_URL: url.replace("127.0.0.1", "localhost") },
+    { CI: "true", SR_TEST_DATABASE_URL: url + "?sslmode=disable" },
+    { CI: "true", SR_TEST_DATABASE_URL: url.replace("postgres:password", "other:password") },
+  ]) assert.throws(() => readExternalTestDatabaseUrl(environment), /LOCAL_DATABASE_URL_REJECTED/u);
 });

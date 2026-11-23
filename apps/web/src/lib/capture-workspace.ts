@@ -31,6 +31,8 @@ import {
   parseTransferCaptureDraftCommandV1,
   type CaptureCustomerSnapshotV1,
   type CaptureDraftDetailV2,
+  type CaptureDraftSummaryV1,
+  type CaptureTrayItemV2,
   type AutosaveCaptureDraftCommandV1,
   type BranchScope,
   type CapturePaymentBasisV1,
@@ -44,6 +46,7 @@ import {
   type CaptureSourceChannelV1,
   type DeliveryQuoteV1,
 } from "@super-restaurant/shared-types";
+import { splitPlanPizza, withPlanPizza } from "./pizza-capture";
 export type CaptureRequestResult<T> = { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: "invalid" | "denied" | "conflict" | "missing" | "unavailable"; readonly code?: string };
 export type CaptureOperation = "autosave" | "confirm" | "create" | "claim" | "customer" | "deliveryInstructions" | "hold"
@@ -55,9 +58,34 @@ export interface CaptureKeyValueStore {
   readonly setItem: (key: string, value: string) => void;
 }
 
+/**
+ * Whether the landing page may open a new draft for the chosen fulfillment: delivery needs an
+ * identified customer (a draft is never created for it without one), pickup needs a name to call,
+ * and counter/dine-in start directly.
+ */
+export function canStartCapture(channel: CaptureFulfillmentChannelV1 | null, hasCustomer: boolean,
+  pickupName: string): boolean {
+  switch (channel) {
+    case "delivery": return hasCustomer;
+    case "pickup": return pickupName.trim().length > 0;
+    case "counter": case "dine_in": return true;
+    default: return false;
+  }
+}
+
 /** Compact identifier for a tray row until its customer label is available. */
 export function shortCaptureDraftId(captureDraftId: string): string {
   return captureDraftId.slice(-6).toUpperCase();
+}
+
+/**
+ * No current tray summary proves a draft is empty: V1 carries no content facts at all, and in V2 a
+ * null customer only means none was frozen while `totalMinor === null` only means the server could
+ * not price the selection (no plan, stale catalog, or missing `catalog.read`). Hide a row only when
+ * the server explicitly reports zero lines; otherwise keeping it is the safe choice.
+ */
+export function isRecoverableCaptureDraft(item: CaptureDraftSummaryV1 | CaptureTrayItemV2): boolean {
+  return (item as { readonly lineCount?: unknown }).lineCount !== 0;
 }
 export function shouldRenewLease(now: number, lastInteractionAt: number, visible: boolean, expiresAt: string): boolean {
   const expiry = Date.parse(expiresAt);
@@ -407,11 +435,14 @@ async function requestCapturePaymentIntent(token: string, baseUrl: string, input
  * product name.
  */
 async function requestCaptureSelectionPlan(token: string, baseUrl: string, input: unknown): Promise<CaptureRequestResult<CaptureResponse>> {
-  const command = parseReplaceCaptureSelectionPlanCommandV1(input);
-  if (command === undefined) return { ok: false, error: "invalid" };
+  // A schemaVersion 2 plan carries optional pizza V2 lines: validate the shared V1 shape without them and re-attach.
+  const split = splitPlanPizza(input);
+  const command = split === undefined ? undefined : parseReplaceCaptureSelectionPlanCommandV1(split.v1Input);
+  if (split === undefined || command === undefined) return { ok: false, error: "invalid" };
+  const body = split.schemaVersion === 2 ? withPlanPizza(command, split.pizzaByLineId) : command;
   try {
     const response = await fetch(`${baseUrl}/api/v1/captures${paths.selectionPlan}`, { method: "POST", cache: "no-store",
-      signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(command) });
+      signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
     if (!response.ok) return { ok: false, error: response.status === 409 ? "conflict"
       : response.status === 401 || response.status === 403 ? "denied" : response.status === 404 ? "missing"
         : response.status === 400 ? "invalid" : "unavailable" };

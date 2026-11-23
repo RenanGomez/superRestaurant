@@ -3,11 +3,15 @@ import test from "node:test";
 
 import { parseBranchScope } from "@super-restaurant/shared-types";
 import {
+  customerProfileMinimumPhones,
   getCustomerAutocompleteRequest,
   getCustomerDirectorySuggestions,
+  getCustomerPhoneRemoval,
   insertCustomerDirectorySuggestion,
   isCurrentCustomerAutocompleteRequest,
+  isCurrentCustomerSearch,
   requestCustomerDirectory,
+  selectCurrentCustomerSearch,
 } from "./customer-directory.js";
 
 const scope = parseBranchScope({
@@ -158,4 +162,63 @@ test("automatic autocomplete discards responses for a stale mode or query", () =
   assert.equal(isCurrentCustomerAutocompleteRequest(request, "address", " aca "), true);
   assert.equal(isCurrentCustomerAutocompleteRequest(request, "address", "acac"), false);
   assert.equal(isCurrentCustomerAutocompleteRequest(request, "name", "aca"), false);
+});
+
+test("a submitted search only shows results for the query that produced them", () => {
+  const value = { schemaVersion: 1 as const, scope, candidates: [], nextCursor: null };
+  const snapshot = { mode: "phone" as const, query: "6622751352", value };
+  assert.equal(selectCurrentCustomerSearch(snapshot, "phone", "6622751352"), value);
+  assert.equal(selectCurrentCustomerSearch(snapshot, "phone", " 6622751352 "), value);
+  assert.equal(selectCurrentCustomerSearch(snapshot, "phone", "6622900"), undefined);
+  assert.equal(selectCurrentCustomerSearch(snapshot, "name", "6622751352"), undefined);
+  assert.equal(selectCurrentCustomerSearch(undefined, "phone", "6622751352"), undefined);
+});
+
+test("a late response for an outdated submitted query is discarded", () => {
+  const late = { mode: "phone" as const, query: "6622751352" };
+  assert.equal(isCurrentCustomerSearch(late, "phone", "6622900"), false);
+  assert.equal(isCurrentCustomerSearch(late, "phone", "6622751352"), true);
+  assert.equal(isCurrentCustomerSearch(late, "name", "6622751352"), false);
+  assert.equal(isCurrentCustomerSearch(undefined, "phone", "6622751352"), false);
+});
+
+const secondaryContactId = "99999999-9999-4999-8999-999999999999";
+const secondaryPhone = { contactId: secondaryContactId, label: "Trabajo", displayValue: "+52 642 987 6543" };
+
+test("removing a phone saves the rest of the edited profile with it", () => {
+  const editedSecondary = { ...secondaryPhone, displayValue: "+52 642 000 1111" };
+  const plan = getCustomerPhoneRemoval({ phones: [phone, editedSecondary], contactId,
+    displayName: "Ana Editada", savedDisplayName: "Ana", savedPhones: [phone] });
+  assert.equal(plan.blocked, false);
+  assert.deepEqual(plan.phones, [editedSecondary]);
+  assert.equal(plan.alsoSavesOtherChanges, true);
+});
+
+test("removing an unchanged phone does not warn about other profile edits", () => {
+  const plan = getCustomerPhoneRemoval({ phones: [phone, secondaryPhone], contactId,
+    displayName: "Ana", savedDisplayName: "Ana", savedPhones: [phone, secondaryPhone] });
+  assert.deepEqual(plan.phones, [secondaryPhone]);
+  assert.equal(plan.alsoSavesOtherChanges, false);
+});
+
+test("the last phone can be removed because the profile contract allows an empty list", () => {
+  assert.equal(customerProfileMinimumPhones, 0);
+  const plan = getCustomerPhoneRemoval({ phones: [phone], contactId,
+    displayName: "Ana", savedDisplayName: "Ana", savedPhones: [phone] });
+  assert.equal(plan.blocked, false);
+  assert.deepEqual(plan.phones, []);
+});
+
+test("removing a primary phone targets only that contact and rejects a missing phone", () => {
+  const renamedPrimary = { ...phone, label: "Principal" };
+  const plan = getCustomerPhoneRemoval({ phones: [renamedPrimary, secondaryPhone], contactId,
+    displayName: "Ana", savedDisplayName: "Ana", savedPhones: [phone, secondaryPhone] });
+  assert.deepEqual(plan.phones, [secondaryPhone]);
+  assert.equal(plan.alsoSavesOtherChanges, false);
+
+  const missing = getCustomerPhoneRemoval({ phones: [secondaryPhone], contactId,
+    displayName: "Ana", savedDisplayName: "Ana", savedPhones: [phone, secondaryPhone] });
+  assert.equal(missing.blocked, true);
+  assert.equal(missing.reason, "Ese teléfono ya no está en la ficha.");
+  assert.deepEqual(missing.phones, [secondaryPhone]);
 });

@@ -59,6 +59,7 @@ export {
   MenuModifierGroupNotAllowedError,
   MenuProductCategoryNotFoundError,
   MenuProductModifierGroupNotFoundError,
+  MenuPizzaProductRequiresHalvesRuleError,
   MenuProductNotFoundError,
   MenuProductVariantNotFoundError,
   MenuProductVariantRequiredError,
@@ -383,12 +384,22 @@ export type {
   OrderPricingInput,
   TaxSnapshot,
 } from "./order-totals.js";
-export { catalogVariantToFractionVariant, createMenuProductPriceSnapshot, validateMenuCatalog } from "./menu.js";
+export {
+  MENU_PIZZA_MAX_BASE_GROUPS,
+  MENU_PIZZA_MAX_DEFAULT_INGREDIENTS,
+  MENU_PIZZA_MAX_EXTRA_GROUPS,
+  MENU_PIZZA_MAX_EXTRA_OPTIONS,
+  MENU_PIZZA_MAX_FREE_INGREDIENTS,
+  catalogVariantToFractionVariant,
+  createMenuProductPriceSnapshot,
+  validateMenuCatalog,
+} from "./menu.js";
 export type {
   MenuCatalog,
   MenuCategoryCatalog,
   MenuFractionSelection,
   MenuFractionSlotSelection,
+  MenuPizzaMode,
   MenuProductFractionConfig,
   MenuVariantFractionConfig,
   MenuModifierGroupSelection,
@@ -422,6 +433,8 @@ export {
 export { createDeliveryZone, findDeliveryZone } from "./delivery-zone.js";
 export type { CreateDeliveryZoneInput, DeliveryAddressFacts, DeliveryZone } from "./delivery-zone.js";
 export {
+  DeliveryManualFeeAuthorizationRequiredError,
+  DeliveryManualFeeNotCoveredError,
   DeliveryOverrideAuthorizationRequiredError,
   DeliveryOverrideReasonRequiredError,
   DeliveryScheduleCutoffError,
@@ -432,7 +445,8 @@ export {
   InvalidDeliveryTimestampError,
 } from "./errors.js";
 export {
-  applyDeliveryQuoteOverride,
+  applyDeliveryManualFee,
+  deliveryQuoteEffectiveFeeMinor,
   DELIVERY_ASAP_PREPARATION_MS,
   DELIVERY_ASAP_QUOTE_EXPIRY_POLICY,
   DELIVERY_ASAP_QUOTE_TTL_MS,
@@ -440,14 +454,33 @@ export {
   quoteDelivery,
 } from "./delivery-quote.js";
 export type {
-  ApplyDeliveryQuoteOverrideInput,
+  ApplyDeliveryManualFeeInput,
+  DeliveryManualFeeRole,
   DeliveryQuote,
   DeliveryQuoteCoverageStatus,
   DeliveryQuoteOverride,
   QuoteDeliveryInput,
 } from "./delivery-quote.js";
-export { FRACTION_CUSTOM_FLAVOR_ID, FRACTION_CUSTOM_FLAVOR_NAME, resolveFractionPricing } from "./fraction-pricing.js";
+export {
+  FRACTION_CUSTOM_FLAVOR_ID,
+  FRACTION_CUSTOM_FLAVOR_NAME,
+  PIZZA_HALVES_RULE_V1,
+  PIZZA_HALVES_RULE_V2,
+  PIZZA_HALVES_SNAPSHOT_SCHEMA_VERSION,
+  readPizzaHalvesPriceSnapshot,
+  resolveFractionPricing,
+  resolvePizzaHalvesPricing,
+} from "./fraction-pricing.js";
 export type {
+  PizzaHalfFraction,
+  PizzaHalfInputV2,
+  PizzaHalfKind,
+  PizzaHalfOptionPrice,
+  PizzaHalvesChargeSnapshot,
+  PizzaHalvesPriceSnapshotV2,
+  PizzaHalvesPricingIssue,
+  PizzaHalvesPricingIssueCode,
+  ResolvePizzaHalvesPricingInput,
   FractionComboSlot,
   FractionComboSubstitutionOption,
   FractionExtraOption,

@@ -231,3 +231,28 @@ test("publishing guidance rejects half setups without a usable flavor group", ()
   assert.match(variantValidationError("p", [variant({ ...setup, extraGroupId: flavorGroupId })], groupIds)?.message ?? "", /distintos/);
   assert.match(variantValidationError("p", [variant(setup)], new Set([extraGroupId]))?.message ?? "", /ya no existe/);
 });
+
+test("a pizza V2 line is restored from the projection's stored picks after a reload", () => {
+  const id = "8a506172-7283-4d94-9ea5-c6d7e8f90a01";
+  const half = (fraction: "half-a" | "half-b") => ({ extraOptionIds: [], fraction, ingredientOptionIds: [id],
+    productId: "8a506172-7283-4d94-9ea5-c6d7e8f90a02", removedIngredientOptionIds: [], variantId: null });
+  const pizza = { halves: [half("half-a"), half("half-b")] as const, ruleVersion: "pizza-halves-v2" as const };
+  const halves: OrderDetailFractionHalfV1[] = [
+    { amountMinor: 10_000, exclusions: [], extras: ["Jamon"], flavorName: "Pizza personalizada", fraction: "half-a" },
+    { amountMinor: 10_000, exclusions: [], extras: ["Jamon"], flavorName: "Pizza personalizada", fraction: "half-b" },
+  ];
+  const line = { halves, lineId: "l1", lineTotalMinor: 10_000, modifiers: [], note: null, pizza,
+    productId: "p", productName: "Pizza", quantity: 1, unitPriceMinor: 10_000, variantId: null };
+  const restored = draftLinesFromProjection([line], null);
+  assert.ok(restored.ok);
+  assert.deepEqual(restored.ok ? restored.lines[0]?.pizza : undefined, pizza);
+  assert.equal(restored.ok ? restored.lines[0]?.fraction : "x", undefined);
+  // A stale local map never overrides what the server confirmed; it only fills in when the projection has no picks.
+  const stale = { ...pizza, halves: [{ ...half("half-a"), ingredientOptionIds: [] }, half("half-b")] as const };
+  const confirmed = draftLinesFromProjection([line], null, new Map([["l1", stale]]));
+  assert.deepEqual(confirmed.ok ? confirmed.lines[0]?.pizza : undefined, pizza);
+  const withoutPizza = { halves, lineId: "l1", lineTotalMinor: 10_000, modifiers: [], note: null,
+    productId: "p", productName: "Pizza", quantity: 1, unitPriceMinor: 10_000, variantId: null };
+  const fallback = draftLinesFromProjection([withoutPizza], null, new Map([["l1", stale]]));
+  assert.deepEqual(fallback.ok ? fallback.lines[0]?.pizza : undefined, stale);
+});

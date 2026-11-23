@@ -3,6 +3,8 @@
 ## Objetivo
 <una o dos frases: qué debe quedar hecho>
 
+Tiempo estimado: <N> min (si te pasas mucho, cierra con informe 'partial' en vez de seguir sin fin)
+
 ## Alcance
 - Archivos/carpetas: <rutas>
 - Permitido: <leer / editar estos archivos / ejecutar tests>
@@ -16,3 +18,8 @@
 ## Hecho cuando
 - <criterio verificable 1>
 - <criterio verificable 2>
+
+## Pruebas (ahorro de cuota)
+- Corre los tests/el juego una vez al terminar el cambio, no tras cada edición. Máximo 3 ciclos de
+  probar → corregir; si sigue fallando, para y repórtalo con la salida real.
+- Filtra la salida (solo errores/resumen: `| tail -40`, `Select-Object -Last 40`); no vuelques logs enteros.

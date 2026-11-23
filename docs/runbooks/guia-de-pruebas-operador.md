@@ -32,7 +32,7 @@ Correo y contraseña de Supabase. Error genérico ante credenciales inválidas. 
 
 ### `/app/capture` · Captura telefónica
 Aquí nacen las órdenes. Flujo actual (rediseñado el 2026-09-27/28 según el prototipo aprobado):
-1. «Nueva captura telefónica» crea un borrador durable con folio. Atajos: N nueva, / buscar (cliente o productos según el paso), Esc volver, F2 cobro.
+1. «Nueva captura telefónica» crea un borrador durable con folio. Atajos: `Alt+N` abre Captura y enfoca el buscador de cliente; `Ctrl+K`/`Alt+K` enfoca la búsqueda; `Esc` cierra la capa abierta (lista, hoja o diálogo) y, sin capas, suelta el foco; `Alt+Shift+R` vuelve a la bandeja.
 2. Origen (teléfono, mostrador, WhatsApp…) y cumplimiento (domicilio, recoger, mostrador, mesa).
 3. Cliente por teléfono: las sugerencias de término completan la búsqueda y las filas de cliente abren la ficha; contacto y dirección quedan congelados.
 4. **Menú táctil**: categorías (rail lateral en escritorio, chips en teléfono), tarjetas con contador, buscador; tocar un producto sin modificadores lo agrega; con modificadores abre la hoja de armado (grupos obligatorios/opcionales, nota para cocina ≤200). El ticket (lateral en escritorio, barra inferior + hoja en teléfono) muestra líneas, ±, quitar, botón «Nota» por línea y totales **calculados por el servidor**. Si el menú cambió, aparece «El menú cambió; vuelve a cargar».
@@ -200,7 +200,7 @@ Complementa la ruta completa de §12. Marca cada punto como **OK**, **FALLA** (q
 1. Ticket: agrega una pizza mitad y mitad con nota; la fila Editar · − 1 + · Editar nota · Quitar se ve completa, sin barra horizontal, y el precio no se corta. Repetir a 390×844.
 2. Efectivo: escribe «250» en «Otro monto» y toca «Exacto»; el campo se vacía y «Exacto» queda marcado con un solo toque. Escribe un monto que no coincida con ningún botón: ninguno queda marcado.
 3. Instrucciones de entrega: escribe algo y, sin pulsar nada, toca un botón de efectivo; recarga la página: el texto sigue ahí. Ya no existe «Guardar instrucciones».
-4. Atajos: `N` sola no hace nada; `Alt+N` crea captura; `Ctrl+K` enfoca la búsqueda; `Escape` o `Alt+R` reinicia.
+4. Atajos: `N` sola y `Alt+R` no hacen nada; `Alt+N` lleva a Captura y enfoca el buscador de cliente (desde otra página, pide confirmación si hay cambios sin guardar); `Ctrl+K`/`Alt+K` enfoca la búsqueda; `Esc` cierra primero la lista, luego la hoja de producto y luego el diálogo; sin capas abiertas, quita el foco del campo; `Alt+Shift+R` reinicia o vuelve a la bandeja.
 5. Cliente: busca `6622751352`; un toque selecciona al cliente (sin paso «Elegir teléfono»); debajo aparece su dirección con estado. «Usar esta dirección» la valida y la deja marcada, o dice «Fuera de cobertura» si la zona no cubre el CP 85860 (revisar Zonas). «Editar» y «Agregar dirección» funcionan sin salir de la captura. El paso 5 tiene «Ir a la dirección» y permite confirmar cuando la dirección está en cobertura.
 
 **2. Menú** (`/app/menu`)
@@ -220,3 +220,14 @@ Complementa la ruta completa de §12. Marca cada punto como **OK**, **FALLA** (q
 - Posición y zoom de la foto: paquete A sin iniciar.
 - Ingredientes «que no se pueden quitar» (P2) y «especialidades» como sabores de mitades (P3): P2 arranca cuando Codex recupere cuota; P3 espera dos decisiones: regla de precio de mitades con dos especialidades y destino de los grupos de sabores actuales.
 - Dos cuentas de prueba en borrador abiertas hoy en Mesa 2 y Mesa 5: cancelarlas o usarlas.
+
+## 14. Pizza por mitades (modelo V2) — verificación para Emmanuel
+
+Requiere la migración `20261120000100_pizza_model_v2.sql` aplicada en el entorno que pruebes y productos con modo de pizza (especialidad o personalizada) en el menú.
+
+1. Captura: elige una pizza personalizada, divide en dos mitades y marca ingredientes en cada mitad y uno en «ambas». El ticket muestra «Mitad A» y «Mitad B» con sus ingredientes; el ingrediente de «ambas» aparece en las dos mitades y se cobra una sola vez.
+2. Especialidad con ingrediente quitado: la mitad muestra «Sin <ingrediente>» y el precio no baja.
+3. **Recargar la página (F5) con la cuenta abierta**: las líneas de pizza siguen con sus dos mitades, ingredientes y total; al cambiar la cantidad de otra línea la pizza no se convierte en pizza entera.
+4. Confirma la orden: el detalle de la orden, la comanda y el ticket impreso repiten las mismas mitades e ingredientes por mitad (desktop y 390×844, consola sin errores).
+5. Edita o retira el producto o un ingrediente en el menú: las órdenes ya confirmadas conservan nombres y precios.
+6. Mezcla una pizza V2 con una línea de mitades antigua en la misma cuenta: ambas se ven y se cobran bien.

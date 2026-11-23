@@ -17,35 +17,42 @@
                                     "windows.sandbox=\"unelevated\""
                                 ],
                   "accounts_note":  "Varias cuentas de codex en paralelo: { \"A\": \".codex-a\", \"B\": \".codex-b\" } (carpetas en $HOME, \u0027codex login\u0027 una vez con CODEX_HOME apuntando a cada una). Vacío = ~/.codex. Cada cuenta tiene su cooldown; drain las reparte.",
+                  "accounts":  {
+                                   "B":  ".codex-b"
+                               },
+                  "worktreeDir":  "C:\\tmp\\sr-wt",
                   "fallback":  {
                                    "engine":  "dsh",
                                    "models":  {
                                                   "fast":  "default",
                                                   "default":  "default",
-                                                  "strong":  "strong"
+                                                  "strong":  "default"
                                               },
                                    "parallel":  true
                                },
-                  "accounts":  {
-                                   "B":  ".codex-b"
-                               },
-                  "worktreeDir":  "C:\\tmp\\sr-wt",
-                  "fallback_note":  "Carril extra de una tarea de codex: dsh (DeepSeek por OpenRouter) con el alias mapeado. parallel=true: si la cuenta de codex ya está ocupada en la ola, la tarea va a dsh en vez de esperar; sin cuota de codex, todo va a dsh. engine \u0027claude\u0027 usa \u0027claude -p\u0027 (gasta la cuota del orquestador). Quitar \u0027fallback\u0027 para esperar al reset."
+                  "fallback_note":  "Carril extra de una tarea de codex: dsh (OpenCode Go, solo deepseek-v4.1-flash). parallel=true: si la cuenta de codex está ocupada en la ola, la tarea va a dsh; sin cuota de codex, todo va a dsh. Quitar fallback para esperar al reset.",
+                  "stallMin":  10
               },
     "gemini":  {
+                   "backend":  "agy",
                    "models":  {
-                                  "fast":  "flash_lite",
-                                  "default":  "flash",
-                                  "strong":  "pro"
+                                  "fast":  "gemini-3.8-flash-high",
+                                  "default":  "gemini-4-neon-medium",
+                                  "strong":  "gemini-4-neon-high"
                               },
-                   "note":  "Vía Antigravity agentapi (cuenta Google AI Pro). Requiere Antigravity abierto."
+                   "stallMin":  10,
+                   "maxMin":  45,
+                   "note":  "Vía CLI agy; no requiere Antigravity abierto. backend=agentapi usa la app.",
+                   "maxSteps":  150,
+                   "maxParallel":  3
                },
     "claude":  {
                    "models":  {
                                   "fast":  "haiku",
                                   "default":  "sonnet",
                                   "strong":  "opus"
-                              }
+                              },
+                   "stallMin":  10
                },
     "resultMaxLines":  15,
     "guard":  {
@@ -54,7 +61,7 @@
                   "enabled":  false
               },
     "queue":  {
-                  "maxParallel":  4,
+                  "maxParallel":  6,
                   "note":  "drain.ps1: runs simultáneos máximos. Codex y Antigravity pueden ir en paralelo; dos escritores nunca tocan las mismas rutas (-Files)."
               },
     "largeFiles":  {
@@ -75,15 +82,63 @@
                                "review":  "z-ai/glm-5.3",
                                "vision":  "qwen/qwen3.8-omni-flash"
                            },
-                "note":  "DeepSeek Harness headless vía OpenRouter (se paga por token, sin cuota de 5 h). Clave: la de dsh (Ajustes → Modelos), no la variable de entorno. US$/M entrada-salida (nov 2026): fast 0.03/0.13, default 0.15/0.60, strong 0.11/4.44, max 2/10, review 0.07/1.40, vision 0.15/0.47. Pon un límite de crédito a la clave en openrouter.ai. worktreeDir vacío = %USERPROFILE%\\harness-wt\\\u003cproyecto\u003e.",
-                "enabled":  false,
-                "enabled_note":  "false = apagado (sin saldo en OpenRouter): las tareas de dsh las hace codex y codex no se desvía a dsh. Poner true al recargar saldo.",
-                "defaultEffort":  "",
+                "note":  "SOLO aplica con provider=openrouter (hoy NO: se usa opencodego, cuota ya pagada, uso libre). DeepSeek Harness headless vía OpenRouter (se paga por token, sin cuota de 5 h). Clave: la de dsh (Ajustes → Modelos), no la variable de entorno. US$/M entrada-salida (nov 2026): fast 0.03/0.13, default 0.15/0.60, strong 0.11/4.44, max 2/10, review 0.07/1.40, vision 0.15/0.47. Pon un límite de crédito a la clave en openrouter.ai. worktreeDir vacío = %USERPROFILE%\\harness-wt\\\u003cproyecto\u003e.",
+                "defaultEffort":  "low",
+                "contextWindow":  128000,
+                "maxTokens":  16000,
+                "routing":  {
+                                "deepseek/deepseek-v4.1-flash-1017":  [
+                                                                          "deepinfra/fp8"
+                                                                      ],
+                                "deepseek/deepseek-v4-pro-0813":  [
+                                                                      "wafer/us"
+                                                                  ],
+                                "qwen/qwen3.7-flash":  [
+                                                           "alibaba"
+                                                       ]
+                            },
+                "diet_note":  "defaultEffort low: -Effort medium/high solo si la tarea lo pide. contextWindow/maxTokens: dsh compacta antes y no reserva 393k de salida (402 sin saldo). routing: proveedor preferido por modelo (slugs de openrouter.ai) para no perder la caché al rebotar entre proveedores; allow_fallbacks sigue activo. Actividad 19 oct-8 nov: v4-pro costó ~10x por llamada que v4.1-flash; usar strong solo cuando flash ya falló.",
+                "routing_note":  "Verificado en openrouter.ai/api/v1/models/\u003cid\u003e/endpoints (nov 2026). Elegido por costo efectivo con ~90% de caché: flash deepinfra/fp8 (entrada 0.098, caché 0.003, salida 0.29); pro wafer/us (entrada 0.11 vs 1.32 de Baidu: un fallo de caché cuesta ~12x menos); qwen solo lo sirve alibaba. allow_fallbacks sigue activo.",
+                "reviewDiffMaxKB":  60,
+                "review_note":  "review = glm-5.3-flash (otra familia que DeepSeek; salida ~0.1 vs 1.40 de glm-5.3, que casi no descuenta caché). agent.ps1 mete el diff en el prompt (línea \u0027Diff: \u003crango\u003e\u0027 en el brief; si no, git diff HEAD) hasta reviewDiffMaxKB. Fijar proveedor no es posible: dsh rechaza compat.openRouterRouting.",
+                "enabled":  true,
+                "enabled_note":  "false = apagado: las tareas de dsh las hace codex y codex no se desvía a dsh.",
+                "provider":  "opencodego",
+                "provider_note":  "opencodego = suscripción OpenCode Go (US$10/mes, cupo por modelo; clave en la variable de usuario OPENCODE_API_KEY). openrouter = pago por token con \u0027models\u0027 de abajo.",
+                "opencodego":  {
+                                   "baseURL":  "https://opencode.ai/zen/go/v1",
+                                   "apiKeyEnv":  "OPENCODE_API_KEY",
+                                   "models":  {
+                                                  "fast":  "deepseek-v4.1-flash",
+                                                  "default":  "deepseek-v4.1-flash",
+                                                  "strong":  "deepseek-v4.1-flash",
+                                                  "max":  "deepseek-v4.1-flash",
+                                                  "review":  "deepseek-v4.1-flash",
+                                                  "vision":  "deepseek-v4.1-flash"
+                                              },
+                                   "models_note":  "Solo deepseek-v4.1-flash (decisión del usuario, 17-nov-2026): todos los alias apuntan a él. Cupo Go: $100/mes, 43k req/5h."
+                               },
+                "bootMin":  2,
+                "stallMin":  8,
+                "maxMin":  45,
+                "watch_note":  "agent.ps1 vigila opencode: sin sesión en bootMin → relanza una vez; sin salida stallMin → corta; total maxMin → corta (código 124, drain avisa). live.log del run muestra el latido cada 15 s.",
                 "worktreeDir":  "",
                 "exe":  ""
             },
     "tokens":  {
-                   "handoffAt":  100000,
+                   "handoffAt":  150000,
                    "note":  "guard.ps1 (UserPromptSubmit): pasados handoffAt tokens de contexto, pide al orquestador cerrar con HANDOFF.md y abrir conversación nueva; avisa una vez si el orquestador corre en Fable."
-               }
+               },
+    "eta":  {
+                "defaults":  {
+                                 "dsh":  15,
+                                 "codex":  20,
+                                 "gemini":  15,
+                                 "claude":  10
+                             },
+                "slowFactor":  1.5,
+                "killFactor":  3,
+                "drainIdleMin":  15,
+                "note":  "Minutos estimados por defecto si enqueue/agent no reciben -EtaMin. lento = eta*slowFactor; drain corta = eta*killFactor+5 o heartbeat inactivo drainIdleMin."
+            }
 }

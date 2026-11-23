@@ -1,17 +1,20 @@
 import { parseDeliveryQuoteV1, parseDeliveryZoneListV1, parseDeliveryZoneMatchRequestV1, parseDeliveryZoneMatchResultV1, parseListDeliveryZonesQueryV1,
-  parseRequestDeliveryQuoteCommandV1, parseUpsertDeliveryZoneCommandV1, parseUpsertDeliveryZoneResultV1,
-  type DeliveryQuoteV1, type DeliveryZoneListV1, type DeliveryZoneMatchResultV1, type UpsertDeliveryZoneResultV1 } from "@super-restaurant/shared-types";
+  parseRequestDeliveryQuoteCommandV1, parseSettlementSearchRequestV1, parseSettlementSearchResultV1, parseUpsertDeliveryZoneCommandV1, parseUpsertDeliveryZoneResultV1,
+  type DeliveryQuoteV1, type DeliveryZoneListV1, type DeliveryZoneMatchResultV1, type DeliveryZoneV1,
+  type SettlementSearchResultV1, type UpsertDeliveryZoneResultV1 } from "@super-restaurant/shared-types";
 
 export type DeliveryRequestResult<T> = { readonly ok: true; readonly value: T } |
   { readonly ok: false; readonly error: "invalid" | "denied" | "missing" | "conflict" | "unavailable" };
-export type DeliveryOperation = "list" | "upsert" | "quote";
+export type DeliveryOperation = "list" | "upsert" | "quote" | "settlements/search";
 
 export function formatDeliveryMatch(match: DeliveryZoneMatchResultV1, locale: string): string {
-  if (match.coverageStatus === "not_covered") return "Fuera de cobertura";
+  // The server composes the exact reason; show it verbatim instead of inventing copy.
+  if (match.coverageStatus === "not_covered") return match.reason?.message ?? "Fuera de cobertura";
   const fee = new Intl.NumberFormat(locale, { style: "currency", currency: match.currency }).format(match.feeMinor / 100);
   const startMinutes = Math.round((Date.parse(match.promiseStart) - Date.parse(match.evaluatedAt)) / 60_000);
   const endMinutes = Math.round((Date.parse(match.promiseEnd) - Date.parse(match.evaluatedAt)) / 60_000);
-  return `Zona ${match.zoneName} · Envío ${fee} · ${startMinutes}-${endMinutes} min`;
+  const reason = match.reason?.message;
+  return `Zona ${match.zoneName} · Envío ${fee} · ${startMinutes}-${endMinutes} min${reason === undefined ? "" : `. ${reason}`}`;
 }
 
 function canonicalize(input: string, maxLength: number): string[] {
@@ -23,6 +26,51 @@ function canonicalize(input: string, maxLength: number): string[] {
 
 export function canonicalizePostalCodes(input: string): string[] { return canonicalize(input, 32); }
 export function canonicalizeLocalities(input: string): string[] { return canonicalize(input, 200); }
+
+/** The display facts a chip needs; existing zones only carry settlement ids, so `name` may be a fallback. */
+export interface SettlementChoiceV1 {
+  readonly settlementId: string;
+  readonly name: string;
+  readonly postalCode: string;
+}
+
+export function mergeSettlementChoices(current: readonly SettlementChoiceV1[], added: readonly SettlementChoiceV1[]): readonly SettlementChoiceV1[] {
+  const byId = new Map(current.map((choice) => [choice.settlementId, choice] as const));
+  for (const choice of added) byId.set(choice.settlementId, { settlementId: choice.settlementId, name: choice.name, postalCode: choice.postalCode });
+  return [...byId.values()];
+}
+
+export function removeSettlementChoice(current: readonly SettlementChoiceV1[], settlementId: string): readonly SettlementChoiceV1[] {
+  return current.filter((choice) => choice.settlementId !== settlementId);
+}
+
+/** Sends exactly the chips shown, deduplicated and ordered so equivalent selections serialize alike. */
+export function settlementIdsOf(choices: readonly SettlementChoiceV1[]): readonly string[] {
+  return [...new Set(choices.map((choice) => choice.settlementId))].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+}
+
+export interface SettlementClaimConflictV1 {
+  readonly settlementId: string;
+  readonly zoneId: string;
+  readonly zoneName: string;
+}
+
+/** A settlement can only be claimed by one active zone per Branch; the server rejects the rest as conflict. */
+export function settlementClaimConflicts(
+  settlementIds: readonly string[],
+  zones: readonly Pick<DeliveryZoneV1, "zoneId" | "name" | "active" | "settlementIds">[],
+  editingZoneId?: string,
+): readonly SettlementClaimConflictV1[] {
+  const wanted = new Set(settlementIds);
+  const conflicts: SettlementClaimConflictV1[] = [];
+  for (const zone of zones) {
+    if (!zone.active || zone.zoneId === editingZoneId) continue;
+    for (const settlementId of zone.settlementIds) {
+      if (wanted.has(settlementId)) conflicts.push({ settlementId, zoneId: zone.zoneId, zoneName: zone.name });
+    }
+  }
+  return conflicts;
+}
 
 /** Converts a decimal field to minor units without floating point arithmetic. */
 export function parseDeliveryFeeMinor(input: string): number | undefined {
@@ -54,14 +102,16 @@ export function quoteMatchesDeliverySnapshot(
 }
 
 export function requestDelivery(token: string, baseUrl: string, operation: "match", input: unknown): Promise<DeliveryRequestResult<DeliveryZoneMatchResultV1>>;
+export function requestDelivery(token: string, baseUrl: string, operation: "settlements/search", input: unknown): Promise<DeliveryRequestResult<SettlementSearchResultV1>>;
 export function requestDelivery(token: string, baseUrl: string, operation: DeliveryOperation, input: unknown): Promise<DeliveryRequestResult<DeliveryZoneListV1 | UpsertDeliveryZoneResultV1 | DeliveryQuoteV1>>;
 export async function requestDelivery(token: string, baseUrl: string, operation: DeliveryOperation | "match", input: unknown):
-  Promise<DeliveryRequestResult<DeliveryZoneListV1 | UpsertDeliveryZoneResultV1 | DeliveryQuoteV1 | DeliveryZoneMatchResultV1>> {
+  Promise<DeliveryRequestResult<DeliveryZoneListV1 | UpsertDeliveryZoneResultV1 | DeliveryQuoteV1 | DeliveryZoneMatchResultV1 | SettlementSearchResultV1>> {
   const listCommand = operation === "list" ? parseListDeliveryZonesQueryV1(input) : undefined;
   const upsertCommand = operation === "upsert" ? parseUpsertDeliveryZoneCommandV1(input) : undefined;
   const quoteCommand = operation === "quote" ? parseRequestDeliveryQuoteCommandV1(input) : undefined;
   const matchCommand = operation === "match" ? parseDeliveryZoneMatchRequestV1(input) : undefined;
-  const command = listCommand ?? upsertCommand ?? quoteCommand ?? matchCommand;
+  const searchCommand = operation === "settlements/search" ? parseSettlementSearchRequestV1(input) : undefined;
+  const command = listCommand ?? upsertCommand ?? quoteCommand ?? matchCommand ?? searchCommand;
   if (command === undefined) return { ok: false, error: "invalid" };
   try {
     const response = await fetch(`${baseUrl}/api/v1/delivery-zones/${operation}`, {
@@ -89,6 +139,13 @@ export async function requestDelivery(token: string, baseUrl: string, operation:
     if (operation === "match") {
       const value = parseDeliveryZoneMatchResultV1(body);
       return value === undefined ? { ok: false, error: "unavailable" } : { ok: true, value };
+    }
+    if (operation === "settlements/search") {
+      const value = parseSettlementSearchResultV1(body);
+      if (value === undefined || searchCommand === undefined
+        || value.scope.restaurantId !== searchCommand.scope.restaurantId
+        || value.scope.branchId !== searchCommand.scope.branchId) return { ok: false, error: "unavailable" };
+      return { ok: true, value };
     }
     const value = parseDeliveryQuoteV1(body);
     if (value === undefined || quoteCommand === undefined || value.restaurantId !== quoteCommand.scope.restaurantId

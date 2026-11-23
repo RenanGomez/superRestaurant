@@ -8,9 +8,8 @@ import { Client } from "pg";
 
 // Shared lifecycle for the fully local, disposable PostgreSQL 17 cluster used by the local
 // verifiers and the HTTP flow test. Each instance owns a brand-new cluster under
-// `.cache/postgres-local/<runId>` (initdb, loopback only, random SCRAM password) and stops it in
-// `stop()`. It never reads env URLs/PGHOST, never touches Supabase or a shared database, and never
-// deletes recursively or drops databases.
+// `.cache/postgres-local/<runId>` or uses an explicitly configured disposable loopback cluster.
+// External runs serialize access and remove only their own database and roles.
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const cache = join(repositoryRoot, ".cache", "postgres-local");
 const binaries = join(cache, "pgsql", "bin");
@@ -31,9 +30,18 @@ export interface LocalPostgresStopResult {
 
 /** Throws unless the process runs on win32 and was given exactly `--local-disposable-only`. */
 export function assertLocalConfirmation(argv: readonly string[] = process.argv): void {
-  if (process.platform !== "win32" || argv.slice(2).join(" ") !== "--local-disposable-only") {
+  if ((process.platform !== "win32" && process.env.SR_TEST_DATABASE_URL === undefined) || argv.slice(2).join(" ") !== "--local-disposable-only") {
     throw new Error("LOCAL_CONFIRMATION_REQUIRED");
   }
+}
+
+export function readExternalTestDatabaseUrl(environment: NodeJS.ProcessEnv): URL {
+  let url: URL;
+  try { url = new URL(environment.SR_TEST_DATABASE_URL ?? ""); } catch { throw new Error("LOCAL_DATABASE_URL_REJECTED"); }
+  if ((environment.CI !== "true" && environment.NODE_ENV !== "test") || !["postgres:", "postgresql:"].includes(url.protocol) ||
+      url.hostname !== "127.0.0.1" || url.username !== "postgres" || !url.password ||
+      url.pathname !== "/postgres" || url.search || url.hash) throw new Error("LOCAL_DATABASE_URL_REJECTED");
+  return url;
 }
 
 export function listMigrationNames(): readonly string[] {
@@ -50,6 +58,9 @@ export class LocalPostgres {
   public readonly database: string;
   public stage = "configuration";
   #admin: Client | undefined;
+  #external: Client | undefined;
+  #externalDatabaseCreated = false;
+  #externalRolesCreated = false;
   #clusterCreated = false;
   #started = false;
   #stopped = true;
@@ -93,6 +104,27 @@ export class LocalPostgres {
 
   public async start(onStage: (stage: string) => void = () => undefined): Promise<void> {
     const setStage = (stage: string): void => { this.stage = stage; onStage(stage); };
+    if (process.env.SR_TEST_DATABASE_URL !== undefined) {
+      const url = readExternalTestDatabaseUrl(process.env);
+      this.#port = Number(url.port || 5432);
+      this.#password = decodeURIComponent(url.password);
+      this.#external = new Client({ ...this.#config(), database: "postgres" });
+      await this.#external.connect();
+      await this.#external.query("SELECT pg_advisory_lock(737253019)");
+      const roles = await this.#external.query("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [["anon", "authenticated", "service_role", "app_api"]]);
+      if (roles.rowCount !== 0) throw new Error("LOCAL_CLUSTER_ROLE_COLLISION");
+      const version = await this.#external.query("SHOW server_version_num");
+      if (Number(version.rows[0].server_version_num) < 170000 || Number(version.rows[0].server_version_num) >= 180000) throw new Error("LOCAL_PG17_REQUIRED");
+      await this.#external.query(`CREATE DATABASE "${this.database}"`);
+      this.#externalDatabaseCreated = true;
+      this.#admin = new Client({ ...this.#config(), database: this.database });
+      await this.#admin.connect();
+      await this.#admin.query("CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN");
+      this.#externalRolesCreated = true;
+      await this.#admin.query(`CREATE SCHEMA auth; CREATE TABLE auth.users(id uuid PRIMARY KEY, email text, deleted_at timestamptz${this.#authUsersExtraColumns});
+        CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS 'SELECT NULL::uuid'`);
+      return;
+    }
     const version = spawnSync(this.#executable("postgres"), ["--version"], { windowsHide: true, encoding: "utf8", timeout: 5000 });
     if (version.status !== 0 || !/^postgres \(PostgreSQL\) 17\./u.test(version.stdout.trim())) throw new Error("LOCAL_PG17_REQUIRED");
     mkdirSync(this.#runDirectory, { recursive: true });
@@ -136,6 +168,13 @@ export class LocalPostgres {
   public async stop(): Promise<LocalPostgresStopResult> {
     let failed = false;
     try { await this.#admin?.end(); } catch { failed = true; }
+    if (this.#external !== undefined) {
+      try {
+        if (this.#externalDatabaseCreated) await this.#external.query(`DROP DATABASE "${this.database}"`);
+        if (this.#externalRolesCreated) await this.#external.query("DROP ROLE IF EXISTS app_api, anon, authenticated, service_role");
+      } catch { failed = true; }
+      try { await this.#external.end(); } catch { failed = true; }
+    }
     if (this.#clusterCreated) {
       try { this.#run("pg_ctl", ["-D", this.#data, "-m", "fast", "-w", "-t", "30", "stop"]); this.#started = false; this.#stopped = true; }
       catch { if (this.#started || this.stage === "start") failed = true; }

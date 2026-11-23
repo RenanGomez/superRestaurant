@@ -24,6 +24,12 @@ const baseRequest = {
 
 const parsedRequest = parseDeliveryQuoteRequestV1(baseRequest);
 expect(parsedRequest !== undefined && Object.isFrozen(parsedRequest), "valid request parses frozen");
+expect(parsedRequest !== undefined && parsedRequest.address.settlementId === null, "legacy address defaults settlementId to null");
+const settlementRequest = {
+  ...baseRequest,
+  address: { settlementId: "66666666-6666-4666-8666-666666666666", neighborhood: "Benito Juárez", postalCode: null, locality: null },
+} as const;
+expect(parseDeliveryQuoteRequestV1(settlementRequest) !== undefined, "request with settlement address facts parses");
 
 for (const invalid of [
   { ...baseRequest, extra: true },
@@ -36,8 +42,8 @@ for (const invalid of [
   { ...baseRequest, quotedAt: "2026-09-26T18:00:00.000000Z" },
   { ...baseRequest, version: 0 },
   { ...baseRequest, version: 1.5 },
-  { ...baseRequest, address: { postalCode: "06000" } },
   { ...baseRequest, address: { postalCode: "", locality: "Centro" } },
+  { ...baseRequest, address: { settlementId: "nope", postalCode: null } },
   // Scheduled inside the 30-minute cutoff.
   { ...baseRequest, scheduledFor: "2026-09-26T18:10:00.000Z" },
   // Scheduled in the past.
@@ -164,6 +170,37 @@ for (const invalidOverride of [
 ]) expect(
   parseDeliveryQuoteV1({ ...coveredQuote, override: invalidOverride }) === undefined,
   `quote rejects an invalid override: ${JSON.stringify(invalidOverride)}`,
+);
+
+// Z3 manual fee override: a not_covered quote keeps feeMinor 0 and carries the
+// authorized fee in `override.kind = "manual_fee"`.
+const manualFeeOverride = {
+  kind: "manual_fee",
+  eventId: "88888888-8888-4888-8888-888888888888",
+  actorId: "77777777-7777-4777-8777-777777777777",
+  role: "supervisor",
+  reason: "Colonia fuera del catálogo",
+  feeMinor: 3_000,
+  promiseStart: "2026-09-26T18:30:00.000Z",
+  promiseEnd: "2026-09-26T18:45:00.000Z",
+  overriddenAt: "2026-09-26T18:05:00.000Z",
+} as const;
+const manualFeeQuote = { ...notCoveredQuote, override: manualFeeOverride } as const;
+const parsedManualFeeQuote = parseDeliveryQuoteV1(manualFeeQuote);
+expect(parsedManualFeeQuote !== undefined, "a not_covered quote with a manual fee override parses");
+expect(parsedManualFeeQuote !== undefined && parsedManualFeeQuote.override?.feeMinor === 3_000,
+  "the manual fee override carries the authorized fee");
+for (const invalidManualOverride of [
+  { ...manualFeeOverride, kind: "other" },
+  { ...manualFeeOverride, eventId: "nope" },
+  { ...manualFeeOverride, role: "cashier" },
+  { ...manualFeeOverride, reason: "" },
+  { ...manualFeeOverride, feeMinor: -1 },
+  { ...manualFeeOverride, promiseStart: manualFeeOverride.promiseEnd, promiseEnd: manualFeeOverride.promiseStart },
+  { ...manualFeeOverride, extra: true },
+]) expect(
+  parseDeliveryQuoteV1({ ...notCoveredQuote, override: invalidManualOverride }) === undefined,
+  `quote rejects an invalid manual override: ${JSON.stringify(invalidManualOverride)}`,
 );
 
 const quoteAccessor = Object.defineProperty({ ...coveredQuote }, "feeMinor", { get: () => 2_500, enumerable: true });

@@ -1,5 +1,23 @@
 # PROJECT_NOTES
 
+## Modo autónomo (Emmanuel, 2026-11-22): decisión durable
+
+- La construcción avanza sin aprobación humana intermedia. Un PR se integra a `main` cuando pasa las puertas G1–G4 de `docs/plans/plan-autonomo-100.md` §4: puertas locales, CI con `pg-verify` y `e2e-smoke`, revisión cruzada de otra familia y pruebas de invariantes en nivel A. Rige con los topes de rondas de §19.3.
+- Nuevo estado `DONE-auto`: la tarea queda cubierta por un journey E2E verde en CI y en la corrida nocturna. `DONE` queda reservado a la aprobación final de Emmanuel sobre el producto.
+- Siguen siendo humanos: deploy a producción, credenciales y secretos, proveedores externos reales, datos reales. Force-push y reescritura de historia están prohibidos. Las decisiones que normalmente subirían a Emmanuel se toman con el supuesto conservador y se registran en `docs/agentic/DECISIONS_PENDING.md`.
+- Todo el trabajo delegado va por `ao spawn` con los harness opencode, agy y codex, nunca claude-code. Claude solo orquesta (Sonnet 5.5, esfuerzo medio).
+
+## Smoke r2 (2026-11-21): decisiones durables
+
+- **Smoke standalone siempre al día** (Emmanuel, 2026-11-21): tras cada cambio integrado se actualiza `docs/smoke/smoke-<fecha>.data.json` y se regenera el HTML con `tools/agentic/build-smoke-html.mjs`. Regla en AGENTS.md §19.5.
+- **Pizza**: `pizzaMode` unificado (un solo modo). Mitades v2 con ingredientes gratis N por producto; delta aprobado en `.agents/briefs/b0-pizza-model-v2-delta-spec.md`.
+- **Recoger**: nombre y teléfono de contacto como campo del borrador. **Domicilio exige cliente** (regla del servidor, aún sin implementar: tarea API pendiente en TODO).
+- **Zonas por colonia** (spec Z1 aprobada, `.agents/briefs/z1-delivery-zones-by-settlement-spec.md`): catálogo SEPOMEX (`data/sepomex/colonias.csv`, seed Navojoa). Colonia fuera de SEPOMEX = texto libre con aviso; cuota de envío manual solo por supervisor con autorización y auditoría; nombres repetidos se muestran «Beltrones (ampliación)».
+- **Atajos**: Alt+N global (borrador sin guardar → modal en la app), Alt+Shift+R reemplaza a Alt+R, Escape cierra capas.
+- **Migraciones editadas en sitio**: `20261120000100`, `20261120000200` y `20261121000100` se editan porque el preflight del 2026-11-20 las mostró sin aplicar en remoto. Si alguna se aplica, cualquier arreglo pasa a migración nueva (AGENTS.md §12).
+- **Defecto conocido de z2**: `20261121000100` redefine `app_private.confirm_capture_draft_v3` desde el cuerpo previo a pizza v2 (confirmar pizza → SQLSTATE 42703). El cuerpo correcto está en `20261120000100` (~línea 1767). La tarea z2b lo arregla; no aplicar remoto antes.
+- **dsh falla en falso**: las corridas dsh suelen terminar `failed` (EPIPE, exit 1) con el trabajo completo, o a medias sin informe. Verificar siempre worktree + log antes de aceptar o descartar.
+
 ## Smoke 2026-10-07: decisiones de interfaz
 
 - **Orden del menú se decide arrastrando** (Emmanuel, 2026-10-07): el campo numérico «Orden» de categorías, productos y modificadores confundía con «Órdenes» y no es forma de operar; el administrador arrastra cada elemento a la posición que quiere (con «Subir/Bajar» como alternativa accesible y táctil) y el número de posición se recalcula y se guarda sin mostrarse. El contrato del API no cambia.

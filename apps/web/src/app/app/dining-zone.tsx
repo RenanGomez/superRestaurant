@@ -10,6 +10,7 @@ import { applyDraftShape, draftFromTable, draftIsStale, mergeByVersion, validate
 import { applyPlanOutcome, clampPlanMove, commitPlanMove, layoutAttemptKey, movePlanTable, panelChanges, panelLayout, pendingMoveIds, planSaveCommands, rebasePlanMove, rebaseVersion, withoutMove, type PlanDraft } from "../../lib/plan-draft";
 import { clampPan, clampTablePosition, firstFreeSlot, moveTableByKeyboard, resizeSquareCells, resizeTableCells, savedTablePosition, type TablePosition } from "../../lib/table-position";
 import { tableShapeClass } from "../../lib/table-shape";
+import { setUnsavedChanges } from "../../lib/unsaved-changes";
 import { createDiningTableAction, saveDiningTableLayoutAction, updateDiningTableDetailsAction, type DiningActionResult } from "./actions";
 
 type Zone = DiningLayoutV1["zones"][number];
@@ -94,6 +95,11 @@ export function DiningZone({ zone, canManage }: { readonly zone: Zone; readonly 
   const editedSaved = edit === null || edit.isNew ? undefined : merged[edit.tableId];
   const changes = edit === null ? undefined : edit.isNew ? { layout: true, details: true } : editedSaved === undefined ? undefined : panelChanges(editedSaved, edit.draft);
   const dirty = edit !== null && changes !== undefined && (changes.layout || changes.details);
+  const hasPendingEdits = dirty || pendingIds.length > 0;
+  useEffect(() => {
+    setUnsavedChanges("dining-zone", hasPendingEdits);
+    return () => setUnsavedChanges("dining-zone", false);
+  }, [hasPendingEdits]);
   const blockedBy = edit === null ? "" : (edit.draft.name.trim() === "" ? editedSaved?.name ?? "la mesa" : edit.draft.name.trim());
 
   function applyServerTable(table: DiningTableV1): void {

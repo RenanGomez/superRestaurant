@@ -1,0 +1,569 @@
+cp,colonia,tipo,colonia_normalizada,etiqueta,municipio,estado
+85220,Benito Juárez (La Granja),Congregación,benito juarez la granja,Benito Juárez (La Granja),Navojoa,Sonora
+85220,Bulabampo,Ranchería,bulabampo,Bulabampo,Navojoa,Sonora
+85220,Choacalle,Ejido,choacalle,Choacalle,Navojoa,Sonora
+85220,Cucajaqui,Ejido,cucajaqui,Cucajaqui,Navojoa,Sonora
+85220,El Dique,Ranchería,el dique,El Dique,Navojoa,Sonora
+85220,El Sabinito de Tesia (Tesia y Sus Anexos),Ranchería,el sabinito de tesia tesia y sus anexos,El Sabinito de Tesia (Tesia y Sus Anexos),Navojoa,Sonora
+85220,Estación Masiaca,Ranchería,estacion masiaca,Estación Masiaca,Navojoa,Sonora
+85220,Felipe Ángeles,Ranchería,felipe angeles,Felipe Ángeles,Navojoa,Sonora
+85220,Guacaporo (Bacaporo),Ranchería,guacaporo bacaporo,Guacaporo (Bacaporo),Navojoa,Sonora
+85220,Huebampo,Ejido,huebampo,Huebampo,Navojoa,Sonora
+85220,Huiribis,Ranchería,huiribis,Huiribis,Navojoa,Sonora
+85220,Jopopaco,Congregación,jopopaco,Jopopaco,Navojoa,Sonora
+85220,La Finca,Ranchería,la finca,La Finca,Navojoa,Sonora
+85220,Las Amapas (Rancho el Jito),Ranchería,las amapas rancho el jito,Las Amapas (Rancho el Jito),Navojoa,Sonora
+85220,Las Flores,Ranchería,las flores,Las Flores,Navojoa,Sonora
+85220,Los González,Ranchería,los gonzalez,Los González,Navojoa,Sonora
+85220,Los Mochócolis,Ranchería,los mochocolis,Los Mochócolis,Navojoa,Sonora
+85220,Masiaca,Estación,masiaca,Masiaca,Navojoa,Sonora
+85220,Piedra Baya,Ranchería,piedra baya,Piedra Baya,Navojoa,Sonora
+85220,Presa Nueva,Ranchería,presa nueva,Presa Nueva,Navojoa,Sonora
+85220,Sahuaro,Ranchería,sahuaro,Sahuaro,Navojoa,Sonora
+85220,San Jose Masiaca,Congregación,san jose masiaca,San Jose Masiaca,Navojoa,Sonora
+85220,San Josecito,Ranchería,san josecito,San Josecito,Navojoa,Sonora
+85220,San Pedrito,Congregación,san pedrito,San Pedrito,Navojoa,Sonora
+85222,Adolfo de la Huerta,Ranchería,adolfo de la huerta,Adolfo de la Huerta,Navojoa,Sonora
+85222,Agua Nueva,Ranchería,agua nueva,Agua Nueva,Navojoa,Sonora
+85222,Hacienda San Antonio,Ranchería,hacienda san antonio,Hacienda San Antonio,Navojoa,Sonora
+85222,Huasaguari,Congregación,huasaguari,Huasaguari,Navojoa,Sonora
+85222,Jusibampito,Ranchería,jusibampito,Jusibampito,Navojoa,Sonora
+85222,La Aguja,Ranchería,la aguja,La Aguja,Navojoa,Sonora
+85222,La Esmeralda,Ranchería,la esmeralda,La Esmeralda,Navojoa,Sonora
+85222,Las Milpas,Ranchería,las milpas,Las Milpas,Navojoa,Sonora
+85222,Las Víboras,Ranchería,las viboras,Las Víboras,Navojoa,Sonora
+85222,Planta NOROTOSA,Ranchería,planta norotosa,Planta NOROTOSA,Navojoa,Sonora
+85222,Rancho Atalaya,Ranchería,rancho atalaya,Rancho Atalaya,Navojoa,Sonora
+85222,Rancho Nuevo,Ranchería,rancho nuevo,Rancho Nuevo,Navojoa,Sonora
+85222,San Antonio,Congregación,san antonio,San Antonio,Navojoa,Sonora
+85222,Teachive,Congregación,teachive,Teachive,Navojoa,Sonora
+85222,Torocoba,Ranchería,torocoba,"Torocoba (ranchería, 85222)",Navojoa,Sonora
+85222,Yopari,Ranchería,yopari,Yopari,Navojoa,Sonora
+85223,Alfredo Karam,Ranchería,alfredo karam,Alfredo Karam,Navojoa,Sonora
+85223,Álvarez Hermanos,Congregación,alvarez hermanos,Álvarez Hermanos (congregación),Navojoa,Sonora
+85223,Álvarez Hermanos,Ejido,alvarez hermanos,Álvarez Hermanos (ejido),Navojoa,Sonora
+85223,Álvarez Hermanos,Ranchería,alvarez hermanos,Álvarez Hermanos (ranchería),Navojoa,Sonora
+85223,Amador Almada,Ranchería,amador almada,Amador Almada,Navojoa,Sonora
+85223,Bacabachi,Ranchería,bacabachi,Bacabachi,Navojoa,Sonora
+85223,Bacabachi (La Granja),Ranchería,bacabachi la granja,Bacabachi (La Granja),Navojoa,Sonora
+85223,Brecha Colosio,Ranchería,brecha colosio,Brecha Colosio,Navojoa,Sonora
+85223,Buayums,Ranchería,buayums,Buayums,Navojoa,Sonora
+85223,Campo de Walter Almada (Sahuaribo),Ranchería,campo de walter almada sahuaribo,Campo de Walter Almada (Sahuaribo),Navojoa,Sonora
+85223,Campo Girasol,Ranchería,campo girasol,Campo Girasol,Navojoa,Sonora
+85223,Canuto Aguilar (Campo Canuto),Ranchería,canuto aguilar campo canuto,Canuto Aguilar (Campo Canuto),Navojoa,Sonora
+85223,El Reparo,Ranchería,el reparo,El Reparo,Navojoa,Sonora
+85223,El Saneal,Ranchería,el saneal,El Saneal,Navojoa,Sonora
+85223,El Saneal (La Granja),Ranchería,el saneal la granja,El Saneal (La Granja),Navojoa,Sonora
+85223,Federico Yépiz,Ranchería,federico yepiz,Federico Yépiz,Navojoa,Sonora
+85223,Francisco I. Madero Dos,Ranchería,francisco i madero dos,Francisco I. Madero Dos,Navojoa,Sonora
+85223,Jitotaila,Ranchería,jitotaila,Jitotaila,Navojoa,Sonora
+85223,La Esperanza,Ranchería,la esperanza,La Esperanza,Navojoa,Sonora
+85223,La Esquina Valdez (Puente Valdez),Ranchería,la esquina valdez puente valdez,La Esquina Valdez (Puente Valdez),Navojoa,Sonora
+85223,La Jaula,Ranchería,la jaula,La Jaula,Navojoa,Sonora
+85223,La Potable,Congregación,la potable,La Potable (congregación),Navojoa,Sonora
+85223,La Potable,Ranchería,la potable,La Potable (ranchería),Navojoa,Sonora
+85223,Las Bombas,Ranchería,las bombas,"Las Bombas (ranchería, 85223)",Navojoa,Sonora
+85223,Las Caballerizas (Campo Ruiz),Ranchería,las caballerizas campo ruiz,Las Caballerizas (Campo Ruiz),Navojoa,Sonora
+85223,Luis Echeverría,Ranchería,luis echeverria,Luis Echeverría,Navojoa,Sonora
+85223,Macías,Ejido,macias,Macías (ejido),Navojoa,Sonora
+85223,Macías,Ranchería,macias,Macías (ranchería),Navojoa,Sonora
+85223,Pilinque,Ranchería,pilinque,Pilinque,Navojoa,Sonora
+85223,Plano Oriente,Ranchería,plano oriente,Plano Oriente,Navojoa,Sonora
+85223,Puente San Ignacio,Ranchería,puente san ignacio,Puente San Ignacio,Navojoa,Sonora
+85223,San Juan (La Noria),Ranchería,san juan la noria,San Juan (La Noria),Navojoa,Sonora
+85223,San Martín Chuachora,Ranchería,san martin chuachora,San Martín Chuachora,Navojoa,Sonora
+85223,Tiqui Torres,Ranchería,tiqui torres,Tiqui Torres,Navojoa,Sonora
+85224,ABC Guayparín,Ranchería,abc guayparin,ABC Guayparín,Navojoa,Sonora
+85224,ABC los Jitos,Ranchería,abc los jitos,ABC los Jitos,Navojoa,Sonora
+85224,Agropecuaria Boza,Ranchería,agropecuaria boza,Agropecuaria Boza,Navojoa,Sonora
+85224,Alejo Aguilera,Ranchería,alejo aguilera,Alejo Aguilera,Navojoa,Sonora
+85224,Antonio Rosales (Las Ánimas),Ejido,antonio rosales las animas,Antonio Rosales (Las Ánimas),Navojoa,Sonora
+85224,Arturo Almada,Ranchería,arturo almada,Arturo Almada,Navojoa,Sonora
+85224,Bachoco,Ranchería,bachoco,Bachoco,Navojoa,Sonora
+85224,Bórquez,Ranchería,borquez,Bórquez,Navojoa,Sonora
+85224,Café Edna,Ranchería,cafe edna,Café Edna,Navojoa,Sonora
+85224,Campo Bojórquez,Ranchería,campo bojorquez,Campo Bojórquez,Navojoa,Sonora
+85224,Campo Chacón,Ranchería,campo chacon,Campo Chacón,Navojoa,Sonora
+85224,Campo Chacón II,Ranchería,campo chacon ii,Campo Chacón II,Navojoa,Sonora
+85224,Campo de Jesés Almada,Ranchería,campo de jeses almada,Campo de Jesés Almada,Navojoa,Sonora
+85224,Campo Jesés Down,Ranchería,campo jeses down,Campo Jesés Down,Navojoa,Sonora
+85224,Campo Roberto Rosas,Ranchería,campo roberto rosas,Campo Roberto Rosas,Navojoa,Sonora
+85224,Campo Saenz,Ranchería,campo saenz,Campo Saenz,Navojoa,Sonora
+85224,Campo Santa Mónica,Ranchería,campo santa monica,Campo Santa Mónica,Navojoa,Sonora
+85224,Capetamaya,Ejido,capetamaya,Capetamaya (ejido),Navojoa,Sonora
+85224,Capetamaya,Ranchería,capetamaya,Capetamaya (ranchería),Navojoa,Sonora
+85224,Capetamaya Granja Rosita (La Rosita),Ranchería,capetamaya granja rosita la rosita,Capetamaya Granja Rosita (La Rosita),Navojoa,Sonora
+85224,Casa Blanca,Ranchería,casa blanca,"Casa Blanca (ranchería, 85224)",Navojoa,Sonora
+85224,Chirajobampo,Congregación,chirajobampo,Chirajobampo,Navojoa,Sonora
+85224,Compuerta Treinta y Ocho,Ranchería,compuerta treinta y ocho,Compuerta Treinta y Ocho,Navojoa,Sonora
+85224,DER Agrícola,Ranchería,der agricola,DER Agrícola,Navojoa,Sonora
+85224,Dilot,Ranchería,dilot,Dilot,Navojoa,Sonora
+85224,Ejido Etchojoa Némero Uno,Ranchería,ejido etchojoa nemero uno,Ejido Etchojoa Némero Uno,Navojoa,Sonora
+85224,Ejido Etchojoa Número Uno,Ranchería,ejido etchojoa numero uno,Ejido Etchojoa Número Uno,Navojoa,Sonora
+85224,Ejido Primero de Abril,Ranchería,ejido primero de abril,Ejido Primero de Abril,Navojoa,Sonora
+85224,El Abajeño [Restaurante],Ranchería,el abajeno restaurante,El Abajeño [Restaurante],Navojoa,Sonora
+85224,El Barrial,Ranchería,el barrial,El Barrial,Navojoa,Sonora
+85224,El Ciano Kilómetro Nueve,Ranchería,el ciano kilometro nueve,El Ciano Kilómetro Nueve,Navojoa,Sonora
+85224,El Ciclón [Avícola],Ranchería,el ciclon avicola,El Ciclón [Avícola],Navojoa,Sonora
+85224,El Cuatro,Ranchería,el cuatro,El Cuatro,Navojoa,Sonora
+85224,El Falcón Granja,Ranchería,el falcon granja,El Falcón Granja,Navojoa,Sonora
+85224,El Milagro,Ranchería,el milagro,El Milagro,Navojoa,Sonora
+85224,El Papalote,Ranchería,el papalote,El Papalote,Navojoa,Sonora
+85224,Empaque Chacón,Ranchería,empaque chacon,Empaque Chacón,Navojoa,Sonora
+85224,Germán Corral,Ranchería,german corral,Germán Corral,Navojoa,Sonora
+85224,Godínez,Ranchería,godinez,Godínez,Navojoa,Sonora
+85224,Jesús Almada,Ranchería,jesus almada,Jesús Almada,Navojoa,Sonora
+85224,La Casita Granja,Ranchería,la casita granja,La Casita Granja,Navojoa,Sonora
+85224,La Huerta,Ranchería,la huerta,La Huerta,Navojoa,Sonora
+85224,La Pitahaya,Ranchería,la pitahaya,La Pitahaya,Navojoa,Sonora
+85224,Lolita,Ranchería,lolita,Lolita,Navojoa,Sonora
+85224,Los Bórquez,Ranchería,los borquez,Los Bórquez,Navojoa,Sonora
+85224,Los Pinos,Ranchería,los pinos,"Los Pinos (ranchería, 85224)",Navojoa,Sonora
+85224,Martínez,Ranchería,martinez,Martínez,Navojoa,Sonora
+85224,Mazolay,Ranchería,mazolay,Mazolay,Navojoa,Sonora
+85224,Molino de Almada,Ranchería,molino de almada,Molino de Almada,Navojoa,Sonora
+85224,Nacapél,Ranchería,nacapel,Nacapél,Navojoa,Sonora
+85224,Norisina,Ranchería,norisina,Norisina,Navojoa,Sonora
+85224,Octaciano Sáinz,Ranchería,octaciano sainz,Octaciano Sáinz,Navojoa,Sonora
+85224,Oficina de las Ánimas,Ranchería,oficina de las animas,Oficina de las Ánimas,Navojoa,Sonora
+85224,Pedro Almada,Ranchería,pedro almada,Pedro Almada,Navojoa,Sonora
+85224,Planta de Alimentos Cacharamba (Persamo),Ranchería,planta de alimentos cacharamba persamo,Planta de Alimentos Cacharamba (Persamo),Navojoa,Sonora
+85224,Ramon Zazueta,Ranchería,ramon zazueta,Ramon Zazueta,Navojoa,Sonora
+85224,Rancho de los Gonzáles,Ranchería,rancho de los gonzales,Rancho de los Gonzáles,Navojoa,Sonora
+85224,Rodolfo Rosas,Ranchería,rodolfo rosas,Rodolfo Rosas,Navojoa,Sonora
+85224,Salido,Ranchería,salido,Salido,Navojoa,Sonora
+85224,Santa Ana [Restaurante],Ranchería,santa ana restaurante,Santa Ana [Restaurante],Navojoa,Sonora
+85224,Santa Isabel,Ranchería,santa isabel,"Santa Isabel (ranchería, 85224)",Navojoa,Sonora
+85224,Saucobe,Ranchería,saucobe,Saucobe,Navojoa,Sonora
+85224,Sinahuisa,Ranchería,sinahuisa,Sinahuisa,Navojoa,Sonora
+85224,Tetacruz,Ranchería,tetacruz,Tetacruz,Navojoa,Sonora
+85224,Torocoba,Ranchería,torocoba,"Torocoba (ranchería, 85224)",Navojoa,Sonora
+85224,Tres Jitos (Los Carrazco),Ranchería,tres jitos los carrazco,Tres Jitos (Los Carrazco),Navojoa,Sonora
+85224,Veintisiete,Ranchería,veintisiete,Veintisiete,Navojoa,Sonora
+85224,Yépiz Rosas,Ranchería,yepiz rosas,Yépiz Rosas,Navojoa,Sonora
+85224,Yorimayo,Ranchería,yorimayo,Yorimayo,Navojoa,Sonora
+85225,Agropecuaria Marsam,Ranchería,agropecuaria marsam,Agropecuaria Marsam,Navojoa,Sonora
+85225,Algodonera Ucamayo,Ranchería,algodonera ucamayo,Algodonera Ucamayo,Navojoa,Sonora
+85225,Hipódromo del Noroeste,Ranchería,hipodromo del noroeste,Hipódromo del Noroeste,Navojoa,Sonora
+85225,Industrias Agrícolas del Mayo,Ejido,industrias agricolas del mayo,Industrias Agrícolas del Mayo,Navojoa,Sonora
+85225,Las Palmas,Ranchería,las palmas,Las Palmas,Navojoa,Sonora
+85225,Once de Mayo (Los Hoyones),Ranchería,once de mayo los hoyones,Once de Mayo (Los Hoyones),Navojoa,Sonora
+85225,Petroquimica del Golfo,Ranchería,petroquimica del golfo,Petroquimica del Golfo,Navojoa,Sonora
+85225,Ramiro González,Ranchería,ramiro gonzalez,Ramiro González,Navojoa,Sonora
+85225,Rubén Valenzuela,Ranchería,ruben valenzuela,Rubén Valenzuela,Navojoa,Sonora
+85225,Sapomora (Granja Sapomora),Ranchería,sapomora granja sapomora,Sapomora (Granja Sapomora),Navojoa,Sonora
+85225,Valle Verde [Motel],Ranchería,valle verde motel,Valle Verde [Motel],Navojoa,Sonora
+85225,Zapochopo,Ranchería,zapochopo,Zapochopo,Navojoa,Sonora
+85226,5 de junio,Congregación,5 de junio,5 de junio,Navojoa,Sonora
+85226,Agrolacteos del Sur de Sonora,Ranchería,agrolacteos del sur de sonora,Agrolacteos del Sur de Sonora,Navojoa,Sonora
+85226,Aldegundo,Ranchería,aldegundo,Aldegundo,Navojoa,Sonora
+85226,Arreola (Campo la Huerta),Ranchería,arreola campo la huerta,Arreola (Campo la Huerta),Navojoa,Sonora
+85226,Buenavista,Poblado comunal,buenavista,Buenavista (poblado comunal),Navojoa,Sonora
+85226,Cabrito a la Maya,Ranchería,cabrito a la maya,Cabrito a la Maya,Navojoa,Sonora
+85226,Campo Aguadulce,Ranchería,campo aguadulce,Campo Aguadulce,Navojoa,Sonora
+85226,Campo de Guillermo Giesecke,Ranchería,campo de guillermo giesecke,Campo de Guillermo Giesecke,Navojoa,Sonora
+85226,Campo de Remigio González,Ranchería,campo de remigio gonzalez,Campo de Remigio González,Navojoa,Sonora
+85226,Campo San Francisco,Ranchería,campo san francisco,Campo San Francisco,Navojoa,Sonora
+85226,Campo Valenzuela,Ranchería,campo valenzuela,Campo Valenzuela,Navojoa,Sonora
+85226,Campo Zazueta,Ranchería,campo zazueta,Campo Zazueta,Navojoa,Sonora
+85226,Chinotahueca,Congregación,chinotahueca,Chinotahueca (congregación),Navojoa,Sonora
+85226,Chinotahueca,Ejido,chinotahueca,Chinotahueca (ejido),Navojoa,Sonora
+85226,Chinotahueca,Ranchería,chinotahueca,Chinotahueca (ranchería),Navojoa,Sonora
+85226,Cohuibampo,Ranchería,cohuibampo,Cohuibampo,Navojoa,Sonora
+85226,Colegio del Pacífico,Congregación,colegio del pacifico,Colegio del Pacífico,Navojoa,Sonora
+85226,Don Juan [Restaurante],Ranchería,don juan restaurante,Don Juan [Restaurante],Navojoa,Sonora
+85226,El Barrial (Ejido San Ignacio),Ranchería,el barrial ejido san ignacio,El Barrial (Ejido San Ignacio),Navojoa,Sonora
+85226,El Barrial Kilómetro Doce,Ranchería,el barrial kilometro doce,El Barrial Kilómetro Doce,Navojoa,Sonora
+85226,El Jopo,Congregación,el jopo,El Jopo,Navojoa,Sonora
+85226,El Jopo (Aguilar Ramírez),Ranchería,el jopo aguilar ramirez,El Jopo (Aguilar Ramírez),Navojoa,Sonora
+85226,Guadalupe,Ranchería,guadalupe,Guadalupe,Navojoa,Sonora
+85226,Hacienda Don Pepe,Ranchería,hacienda don pepe,Hacienda Don Pepe,Navojoa,Sonora
+85226,Héctor Arreola,Ranchería,hector arreola,Héctor Arreola,Navojoa,Sonora
+85226,Jupacobe,Ranchería,jupacobe,Jupacobe,Navojoa,Sonora
+85226,Kilómetro Catorce,Ranchería,kilometro catorce,Kilómetro Catorce,Navojoa,Sonora
+85226,La Bomba,Ranchería,la bomba,La Bomba,Navojoa,Sonora
+85226,Las Carolinas (Cahurara) [Huerta],Ranchería,las carolinas cahurara huerta,Las Carolinas (Cahurara) [Huerta],Navojoa,Sonora
+85226,Las Dos Palmas,Ranchería,las dos palmas,Las Dos Palmas,Navojoa,Sonora
+85226,Los Arvizu (Campo Arvizu),Ranchería,los arvizu campo arvizu,Los Arvizu (Campo Arvizu),Navojoa,Sonora
+85226,Los Parosis (Epifanio Zazueta),Ranchería,los parosis epifanio zazueta,Los Parosis (Epifanio Zazueta),Navojoa,Sonora
+85226,Los Pinos,Ranchería,los pinos,"Los Pinos (ranchería, 85226)",Navojoa,Sonora
+85226,Manuel Godínez,Ranchería,manuel godinez,Manuel Godínez,Navojoa,Sonora
+85226,Navarro,Ranchería,navarro,Navarro,Navojoa,Sonora
+85226,Navojoa,Ranchería,navojoa,Navojoa,Navojoa,Sonora
+85226,Parosis Dos,Ranchería,parosis dos,Parosis Dos,Navojoa,Sonora
+85226,Planta Ada,Ranchería,planta ada,Planta Ada,Navojoa,Sonora
+85226,Porcarit,Ranchería,porcarit,Porcarit,Navojoa,Sonora
+85226,Robinson,Ranchería,robinson,Robinson,Navojoa,Sonora
+85226,San Gerardo,Ranchería,san gerardo,San Gerardo,Navojoa,Sonora
+85226,San José,Ejido,san jose,San José (ejido),Navojoa,Sonora
+85226,San José,Ranchería,san jose,"San José (ranchería, 85226)",Navojoa,Sonora
+85226,San José Chinotahueca,Ranchería,san jose chinotahueca,San José Chinotahueca,Navojoa,Sonora
+85226,San José Huerta Sandoval,Ranchería,san jose huerta sandoval,San José Huerta Sandoval,Navojoa,Sonora
+85226,San Pancho,Ranchería,san pancho,San Pancho,Navojoa,Sonora
+85226,Santa Anita,Ranchería,santa anita,Santa Anita,Navojoa,Sonora
+85226,Santa Isabel,Ranchería,santa isabel,"Santa Isabel (ranchería, 85226)",Navojoa,Sonora
+85226,Sicoma,Ranchería,sicoma,Sicoma,Navojoa,Sonora
+85226,Sicoma (Bachoco),Ranchería,sicoma bachoco,Sicoma (Bachoco),Navojoa,Sonora
+85226,Zapomora,Congregación,zapomora,Zapomora,Navojoa,Sonora
+85227,Aquimulato,Ranchería,aquimulato,Aquimulato,Navojoa,Sonora
+85227,Batayaqui,Congregación,batayaqui,Batayaqui,Navojoa,Sonora
+85227,Casa Blanca,Ranchería,casa blanca,"Casa Blanca (ranchería, 85227)",Navojoa,Sonora
+85227,Cascabel (Casbel),Ranchería,cascabel casbel,Cascabel (Casbel),Navojoa,Sonora
+85227,Chinobampo,Ranchería,chinobampo,Chinobampo,Navojoa,Sonora
+85227,El Bachivo,Ejido,el bachivo,El Bachivo,Navojoa,Sonora
+85227,El Chilicote,Ranchería,el chilicote,El Chilicote,Navojoa,Sonora
+85227,El Ranchito,Ejido,el ranchito,El Ranchito (ejido),Navojoa,Sonora
+85227,El Ranchito,Ranchería,el ranchito,"El Ranchito (ranchería, 85227)",Navojoa,Sonora
+85227,El Tecolote,Ranchería,el tecolote,"El Tecolote (ranchería, 85227)",Navojoa,Sonora
+85227,El Viejo Batayaqui,Ranchería,el viejo batayaqui,El Viejo Batayaqui,Navojoa,Sonora
+85227,Etchomocha,Ranchería,etchomocha,Etchomocha,Navojoa,Sonora
+85227,Industrias SONMEX,Ranchería,industrias sonmex,Industrias SONMEX,Navojoa,Sonora
+85227,Junelancahui (Joconas),Ejido,junelancahui joconas,Junelancahui (Joconas),Navojoa,Sonora
+85227,Jusibampo,Ranchería,jusibampo,"Jusibampo (ranchería, 85227)",Navojoa,Sonora
+85227,La Campana,Ranchería,la campana,La Campana,Navojoa,Sonora
+85227,La Fortuna,Ranchería,la fortuna,La Fortuna,Navojoa,Sonora
+85227,Las Chivas,Ranchería,las chivas,Las Chivas,Navojoa,Sonora
+85227,Los Cuatro,Ranchería,los cuatro,Los Cuatro,Navojoa,Sonora
+85227,Masubampo (Nasubampo),Ranchería,masubampo nasubampo,Masubampo (Nasubampo),Navojoa,Sonora
+85227,Miguel Hidalgo,Ranchería,miguel hidalgo,Miguel Hidalgo,Navojoa,Sonora
+85227,Porcina Cocutec,Ranchería,porcina cocutec,Porcina Cocutec,Navojoa,Sonora
+85227,Porcina San Alfonso,Ranchería,porcina san alfonso,Porcina San Alfonso,Navojoa,Sonora
+85227,Rancho la Soledad,Ranchería,rancho la soledad,Rancho la Soledad,Navojoa,Sonora
+85227,San José,Ranchería,san jose,"San José (ranchería, 85227)",Navojoa,Sonora
+85227,San Juan,Ranchería,san juan,"San Juan (ranchería, 85227)",Navojoa,Sonora
+85227,Singapur,Ranchería,singapur,Singapur,Navojoa,Sonora
+85228,Algodonera,Ranchería,algodonera,Algodonera,Navojoa,Sonora
+85228,Bacerán,Ranchería,baceran,Bacerán,Navojoa,Sonora
+85228,Camargo,Ranchería,camargo,Camargo,Navojoa,Sonora
+85228,Cohuirimpo,Ranchería,cohuirimpo,Cohuirimpo,Navojoa,Sonora
+85228,Cutataila (El Bayado),Ranchería,cutataila el bayado,Cutataila (El Bayado),Navojoa,Sonora
+85228,Daniel Camacho,Ranchería,daniel camacho,Daniel Camacho,Navojoa,Sonora
+85228,Dósali,Ranchería,dosali,Dósali,Navojoa,Sonora
+85228,El Bajío,Ranchería,el bajio,El Bajío (ranchería),Navojoa,Sonora
+85228,El Cumbro,Ranchería,el cumbro,El Cumbro,Navojoa,Sonora
+85228,El Recodo,Congregación,el recodo,El Recodo,Navojoa,Sonora
+85228,Familia Ozuna Ayala (San Ignacio),Ranchería,familia ozuna ayala san ignacio,Familia Ozuna Ayala (San Ignacio),Navojoa,Sonora
+85228,Fertilizantes e Insumos,Ranchería,fertilizantes e insumos,Fertilizantes e Insumos,Navojoa,Sonora
+85228,Francisco Clemen,Ranchería,francisco clemen,Francisco Clemen,Navojoa,Sonora
+85228,Jijica,Ranchería,jijica,Jijica,Navojoa,Sonora
+85228,Kowicarit,Ranchería,kowicarit,Kowicarit,Navojoa,Sonora
+85228,Kutantaka,Congregación,kutantaka,Kutantaka,Navojoa,Sonora
+85228,La Huerta (Once),Ranchería,la huerta once,La Huerta (Once),Navojoa,Sonora
+85228,Las Tierritas,Ranchería,las tierritas,Las Tierritas,Navojoa,Sonora
+85228,Los Pozos de los Nachuquis,Ranchería,los pozos de los nachuquis,Los Pozos de los Nachuquis,Navojoa,Sonora
+85228,MUSA,Ranchería,musa,MUSA,Navojoa,Sonora
+85228,Nachuquis (San Antonio Nachuquis),Hacienda,nachuquis san antonio nachuquis,Nachuquis (San Antonio Nachuquis),Navojoa,Sonora
+85228,Punta de la Laguna,Ejido,punta de la laguna,Punta de la Laguna,Navojoa,Sonora
+85228,Rancho Del Padre,Ranchería,rancho del padre,Rancho Del Padre,Navojoa,Sonora
+85228,Santa Isabel,Ranchería,santa isabel,"Santa Isabel (ranchería, 85228)",Navojoa,Sonora
+85228,Sibolibampo,Ranchería,sibolibampo,Sibolibampo,Navojoa,Sonora
+85228,Tesotahueca,Ranchería,tesotahueca,Tesotahueca,Navojoa,Sonora
+85228,Torovene,Ranchería,torovene,Torovene,Navojoa,Sonora
+85228,Unión de Crédito Agrícola del Noroeste,Ranchería,union de credito agricola del noroeste,Unión de Crédito Agrícola del Noroeste,Navojoa,Sonora
+85229,Autoservicio Mas,Ranchería,autoservicio mas,Autoservicio Mas,Navojoa,Sonora
+85229,Bemelabampo,Congregación,bemelabampo,Bemelabampo,Navojoa,Sonora
+85229,Chihuahuita,Congregación,chihuahuita,Chihuahuita,Navojoa,Sonora
+85229,Corrales Angelita,Ranchería,corrales angelita,Corrales Angelita,Navojoa,Sonora
+85229,Corrales la Quince,Ranchería,corrales la quince,Corrales la Quince,Navojoa,Sonora
+85229,El Árbol Caído [Restaurante],Ranchería,el arbol caido restaurante,El Árbol Caído [Restaurante],Navojoa,Sonora
+85229,El Arbolón,Ranchería,el arbolon,El Arbolón,Navojoa,Sonora
+85229,El Campito,Ranchería,el campito,El Campito,Navojoa,Sonora
+85229,El Dátil,Ranchería,el datil,El Dátil,Navojoa,Sonora
+85229,El Limón,Ranchería,el limon,El Limón,Navojoa,Sonora
+85229,El Mezquital de Abajo,Ranchería,el mezquital de abajo,El Mezquital de Abajo,Navojoa,Sonora
+85229,El Molino,Ranchería,el molino,El Molino,Navojoa,Sonora
+85229,El Pilar (Pilares),Ranchería,el pilar pilares,El Pilar (Pilares),Navojoa,Sonora
+85229,El Pisi,Ranchería,el pisi,El Pisi,Navojoa,Sonora
+85229,El Rancho,Ranchería,el rancho,El Rancho,Navojoa,Sonora
+85229,El Sabino,Ranchería,el sabino,"El Sabino (ranchería, 85229)",Navojoa,Sonora
+85229,El Sauz,Ranchería,el sauz,El Sauz,Navojoa,Sonora
+85229,El Tobogán,Ranchería,el tobogan,El Tobogán,Navojoa,Sonora
+85229,Fertinal (Carco),Ranchería,fertinal carco,Fertinal (Carco),Navojoa,Sonora
+85229,Gas Periférico,Ranchería,gas periferico,Gas Periférico,Navojoa,Sonora
+85229,Hacienda San Gerardo,Ranchería,hacienda san gerardo,Hacienda San Gerardo,Navojoa,Sonora
+85229,Huerta Aguilera,Ranchería,huerta aguilera,Huerta Aguilera,Navojoa,Sonora
+85229,J y J Machinery,Ranchería,j y j machinery,J y J Machinery,Navojoa,Sonora
+85229,Javier Lagarda,Ranchería,javier lagarda,Javier Lagarda,Navojoa,Sonora
+85229,Josomteco,Ranchería,josomteco,Josomteco,Navojoa,Sonora
+85229,La Cuchilla de los Bahuises,Congregación,la cuchilla de los bahuises,La Cuchilla de los Bahuises,Navojoa,Sonora
+85229,La Quince,Congregación,la quince,La Quince,Navojoa,Sonora
+85229,Ladrillera,Ranchería,ladrillera,Ladrillera,Navojoa,Sonora
+85229,LICONSA,Ranchería,liconsa,LICONSA,Navojoa,Sonora
+85229,Los Aguacates [Huerta],Ranchería,los aguacates huerta,Los Aguacates [Huerta],Navojoa,Sonora
+85229,Los Briseño,Ranchería,los briseno,Los Briseño,Navojoa,Sonora
+85229,Los Limones,Poblado comunal,los limones,Los Limones (poblado comunal),Navojoa,Sonora
+85229,Margarita,Ejido,margarita,Margarita (ejido),Navojoa,Sonora
+85229,Margarita,Ranchería,margarita,"Margarita (ranchería, 85229)",Navojoa,Sonora
+85229,Periférico Chihuahuita,Ranchería,periferico chihuahuita,Periférico Chihuahuita,Navojoa,Sonora
+85229,Porcina Pedro,Ranchería,porcina pedro,Porcina Pedro,Navojoa,Sonora
+85229,Quinta Angelina,Ranchería,quinta angelina,Quinta Angelina,Navojoa,Sonora
+85229,Santa Anita (Granja),Ranchería,santa anita granja,Santa Anita (Granja),Navojoa,Sonora
+85229,Santa María,Ranchería,santa maria,"Santa María (ranchería, 85229)",Navojoa,Sonora
+85229,Siviral,Ranchería,siviral,Siviral,Navojoa,Sonora
+85229,Valle Hermoso la Huerta,Ranchería,valle hermoso la huerta,Valle Hermoso la Huerta,Navojoa,Sonora
+85230,Bahuises,Congregación,bahuises,Bahuises,Navojoa,Sonora
+85230,Cemix,Ranchería,cemix,Cemix,Navojoa,Sonora
+85230,Establo San Juan,Ranchería,establo san juan,Establo San Juan,Navojoa,Sonora
+85230,Guaymitas,Congregación,guaymitas,Guaymitas,Navojoa,Sonora
+85230,Industrias Porcícola Balmar,Ranchería,industrias porcicola balmar,Industrias Porcícola Balmar,Navojoa,Sonora
+85230,La Cruz,Ranchería,la cruz,La Cruz,Navojoa,Sonora
+85230,Ladrilleras Tetaboca,Ranchería,ladrilleras tetaboca,Ladrilleras Tetaboca,Navojoa,Sonora
+85230,Napobampo,Ranchería,napobampo,Napobampo,Navojoa,Sonora
+85230,Santa Bárbara,Ranchería,santa barbara,Santa Bárbara (ranchería),Navojoa,Sonora
+85230,Tetaboca,Ranchería,tetaboca,Tetaboca (ranchería),Navojoa,Sonora
+85230,Valle Buey,Ranchería,valle buey,Valle Buey,Navojoa,Sonora
+85230,Valle Hermoso,Ranchería,valle hermoso,Valle Hermoso,Navojoa,Sonora
+85230,Zona de Tolerancia,Ranchería,zona de tolerancia,Zona de Tolerancia,Navojoa,Sonora
+85232,Agropecuaria Tecorahui,Ranchería,agropecuaria tecorahui,Agropecuaria Tecorahui,Navojoa,Sonora
+85232,Alinsumos,Ranchería,alinsumos,Alinsumos,Navojoa,Sonora
+85232,Babójori,Ranchería,babojori,Babójori,Navojoa,Sonora
+85232,Basiabampo,Ranchería,basiabampo,Basiabampo,Navojoa,Sonora
+85232,El Dolar,Ranchería,el dolar,El Dolar,Navojoa,Sonora
+85232,El Pollín,Ranchería,el pollin,El Pollín,Navojoa,Sonora
+85232,El Tori,Ranchería,el tori,El Tori,Navojoa,Sonora
+85232,Gabriel Leyva Solano,Ranchería,gabriel leyva solano,Gabriel Leyva Solano,Navojoa,Sonora
+85232,Las Iguanas,Ranchería,las iguanas,Las Iguanas,Navojoa,Sonora
+85232,Los Cuates,Ranchería,los cuates,Los Cuates,Navojoa,Sonora
+85232,Margarita,Ranchería,margarita,"Margarita (ranchería, 85232)",Navojoa,Sonora
+85232,San Martín,Ranchería,san martin,San Martín,Navojoa,Sonora
+85233,Agiabampo,Ranchería,agiabampo,"Agiabampo (ranchería, 85233)",Navojoa,Sonora
+85233,Alejandra,Ranchería,alejandra,Alejandra,Navojoa,Sonora
+85233,Caseta de Cobro,Ranchería,caseta de cobro,Caseta de Cobro,Navojoa,Sonora
+85233,El Ranchito,Ranchería,el ranchito,"El Ranchito (ranchería, 85233)",Navojoa,Sonora
+85233,El Retiro,Ejido,el retiro,El Retiro (ejido),Navojoa,Sonora
+85233,El Retiro,Ranchería,el retiro,El Retiro (ranchería),Navojoa,Sonora
+85233,Elsa,Ranchería,elsa,Elsa,Navojoa,Sonora
+85233,Engorda Campoy,Ranchería,engorda campoy,Engorda Campoy,Navojoa,Sonora
+85233,Enrique Orozco,Ranchería,enrique orozco,Enrique Orozco,Navojoa,Sonora
+85233,Esperancita,Ejido,esperancita,Esperancita (ejido),Navojoa,Sonora
+85233,Esperancita,Ranchería,esperancita,Esperancita (ranchería),Navojoa,Sonora
+85233,Estación de FFCC Sección Dieciocho,Ranchería,estacion de ffcc seccion dieciocho,Estación de FFCC Sección Dieciocho,Navojoa,Sonora
+85233,Estación Velderráin,Ranchería,estacion velderrain,Estación Velderráin,Navojoa,Sonora
+85233,Etchohuaquila,Ranchería,etchohuaquila,Etchohuaquila,Navojoa,Sonora
+85233,Eugenia,Ranchería,eugenia,Eugenia,Navojoa,Sonora
+85233,Fundición,Ranchería,fundicion,Fundición,Navojoa,Sonora
+85233,Gabriela,Ranchería,gabriela,Gabriela,Navojoa,Sonora
+85233,Genes,Ranchería,genes,Genes,Navojoa,Sonora
+85233,Granja Sonqui (La Tuna),Ranchería,granja sonqui la tuna,Granja Sonqui (La Tuna),Navojoa,Sonora
+85233,Guadalupe de Juárez,Hacienda,guadalupe de juarez,Guadalupe de Juárez,Navojoa,Sonora
+85233,Guadalupe Sonqui,Ranchería,guadalupe sonqui,Guadalupe Sonqui,Navojoa,Sonora
+85233,Jostahueca,Congregación,jostahueca,Jostahueca,Navojoa,Sonora
+85233,La Bombita,Ranchería,la bombita,La Bombita,Navojoa,Sonora
+85233,La Choya,Ranchería,la choya,La Choya,Navojoa,Sonora
+85233,La Lágrima,Ranchería,la lagrima,La Lágrima,Navojoa,Sonora
+85233,La Sandía,Ranchería,la sandia,La Sandía,Navojoa,Sonora
+85233,Las Cachimbas,Ranchería,las cachimbas,Las Cachimbas,Navojoa,Sonora
+85233,Loma Linda,Ranchería,loma linda,Loma Linda,Navojoa,Sonora
+85233,Los Batequis,Ranchería,los batequis,Los Batequis,Navojoa,Sonora
+85233,Los Buhitos,Ranchería,los buhitos,Los Buhitos,Navojoa,Sonora
+85233,Los Magueyes,Ranchería,los magueyes,Los Magueyes,Navojoa,Sonora
+85233,Musuabampo,Ejido,musuabampo,Musuabampo,Navojoa,Sonora
+85233,San Francisco,Ranchería,san francisco,San Francisco (ranchería),Navojoa,Sonora
+85233,San Germán,Ranchería,san german,San Germán,Navojoa,Sonora
+85233,San Ricardo,Ranchería,san ricardo,San Ricardo,Navojoa,Sonora
+85233,Santa María del Buaraje,Congregación,santa maria del buaraje,Santa María del Buaraje,Navojoa,Sonora
+85233,Siete Leguas,Ranchería,siete leguas,Siete Leguas,Navojoa,Sonora
+85233,Susana,Ranchería,susana,Susana,Navojoa,Sonora
+85233,Tamazula,Ranchería,tamazula,Tamazula,Navojoa,Sonora
+85233,Tesopobampo,Ranchería,tesopobampo,Tesopobampo,Navojoa,Sonora
+85234,Arroyo Cocoraque (Ladrillera),Ranchería,arroyo cocoraque ladrillera,Arroyo Cocoraque (Ladrillera),Navojoa,Sonora
+85234,Avícola Sonqui,Ranchería,avicola sonqui,Avícola Sonqui,Navojoa,Sonora
+85234,Bachoco Veinticinco Diecisiete,Ranchería,bachoco veinticinco diecisiete,Bachoco Veinticinco Diecisiete,Navojoa,Sonora
+85234,Bloque 1624,Ranchería,bloque 1624,Bloque 1624,Navojoa,Sonora
+85234,Bloque Mil Seiscientos Veintiséis,Ranchería,bloque mil seiscientos veintiseis,Bloque Mil Seiscientos Veintiséis,Navojoa,Sonora
+85234,Buáraje Viejo,Ejido,buaraje viejo,Buáraje Viejo,Navojoa,Sonora
+85234,Campo Antonio Zazueta (Las Ruinas),Ranchería,campo antonio zazueta las ruinas,Campo Antonio Zazueta (Las Ruinas),Navojoa,Sonora
+85234,Campo Arvizu,Ranchería,campo arvizu,Campo Arvizu,Navojoa,Sonora
+85234,Campo Cuauhtémoc,Ranchería,campo cuauhtemoc,Campo Cuauhtémoc,Navojoa,Sonora
+85234,Campo del Gringo,Ranchería,campo del gringo,Campo del Gringo,Navojoa,Sonora
+85234,Campo Ignacio Pablos,Ranchería,campo ignacio pablos,Campo Ignacio Pablos,Navojoa,Sonora
+85234,Campo José Gastélum,Ranchería,campo jose gastelum,Campo José Gastélum,Navojoa,Sonora
+85234,Che Guevara,Ranchería,che guevara,Che Guevara,Navojoa,Sonora
+85234,Ejido Revolución Mexicana,Ranchería,ejido revolucion mexicana,Ejido Revolución Mexicana,Navojoa,Sonora
+85234,El Gachupín,Ranchería,el gachupin,El Gachupín,Navojoa,Sonora
+85234,El Invernadero,Ranchería,el invernadero,El Invernadero,Navojoa,Sonora
+85234,El Sifón,Ranchería,el sifon,El Sifón,Navojoa,Sonora
+85234,Feriva,Ranchería,feriva,Feriva,Navojoa,Sonora
+85234,GenioKowi,Ranchería,geniokowi,GenioKowi,Navojoa,Sonora
+85234,Joaquín Amaro,Congregación,joaquin amaro,Joaquín Amaro,Navojoa,Sonora
+85234,La Laguna Mondaca,Ranchería,la laguna mondaca,La Laguna Mondaca,Navojoa,Sonora
+85234,La Pastera,Ranchería,la pastera,La Pastera,Navojoa,Sonora
+85234,Lamberto Arvizu,Ranchería,lamberto arvizu,Lamberto Arvizu,Navojoa,Sonora
+85234,Licenciado Miguel de la Madrid Hurtado,Ranchería,licenciado miguel de la madrid hurtado,Licenciado Miguel de la Madrid Hurtado,Navojoa,Sonora
+85234,Miguel de la Madrid Dos,Ejido,miguel de la madrid dos,Miguel de la Madrid Dos (ejido),Navojoa,Sonora
+85234,Miguel de la Madrid Dos,Ranchería,miguel de la madrid dos,Miguel de la Madrid Dos (ranchería),Navojoa,Sonora
+85234,Miguel de la Madrid Uno,Ejido,miguel de la madrid uno,Miguel de la Madrid Uno,Navojoa,Sonora
+85234,Oviáchic,Ranchería,oviachic,Oviáchic,Navojoa,Sonora
+85234,Planta de Aguamonia,Ranchería,planta de aguamonia,Planta de Aguamonia,Navojoa,Sonora
+85234,Tres Arbolitos,Ranchería,tres arbolitos,Tres Arbolitos,Navojoa,Sonora
+85235,Altamira,Ranchería,altamira,Altamira,Navojoa,Sonora
+85235,Barebampo,Ranchería,barebampo,Barebampo,Navojoa,Sonora
+85235,Casa Blanca,Ranchería,casa blanca,"Casa Blanca (ranchería, 85235)",Navojoa,Sonora
+85235,Cuchujaqui,Ranchería,cuchujaqui,Cuchujaqui,Navojoa,Sonora
+85235,El Chapulín,Ranchería,el chapulin,El Chapulín,Navojoa,Sonora
+85235,El Core,Ranchería,el core,El Core,Navojoa,Sonora
+85235,Graciano Sánchez (Yorigibe),Ranchería,graciano sanchez yorigibe,Graciano Sánchez (Yorigibe),Navojoa,Sonora
+85235,Jaitaca,Ranchería,jaitaca,Jaitaca,Navojoa,Sonora
+85235,Jijiri,Ranchería,jijiri,Jijiri,Navojoa,Sonora
+85235,Juan Diego,Ranchería,juan diego,Juan Diego,Navojoa,Sonora
+85235,Jusibampo,Ranchería,jusibampo,"Jusibampo (ranchería, 85235)",Navojoa,Sonora
+85235,La Ensenada,Ranchería,la ensenada,La Ensenada,Navojoa,Sonora
+85235,La Labor de Santa Rosa,Ranchería,la labor de santa rosa,La Labor de Santa Rosa,Navojoa,Sonora
+85235,La Pera,Ejido,la pera,La Pera,Navojoa,Sonora
+85235,La Perita,Ranchería,la perita,La Perita,Navojoa,Sonora
+85235,Las Lajas,Ranchería,las lajas,Las Lajas,Navojoa,Sonora
+85235,Las Pilas Tesia (Las Pilas y Anexos),Congregación,las pilas tesia las pilas y anexos,Las Pilas Tesia (Las Pilas y Anexos),Navojoa,Sonora
+85235,Palo Blanco,Congregación,palo blanco,Palo Blanco,Navojoa,Sonora
+85235,Paskolabampo,Ranchería,paskolabampo,Paskolabampo,Navojoa,Sonora
+85235,Ranchería,Ranchería,rancheria,Ranchería,Navojoa,Sonora
+85235,Rancho Jaitaca,Ranchería,rancho jaitaca,Rancho Jaitaca,Navojoa,Sonora
+85235,Rancho las Granjas,Ranchería,rancho las granjas,Rancho las Granjas,Navojoa,Sonora
+85235,Rancho Ojeda,Ranchería,rancho ojeda,Rancho Ojeda,Navojoa,Sonora
+85235,Santa María,Ranchería,santa maria,"Santa María (ranchería, 85235)",Navojoa,Sonora
+85235,Santa Rosa,Hacienda,santa rosa,Santa Rosa,Navojoa,Sonora
+85235,Tetapache,Ranchería,tetapache,Tetapache,Navojoa,Sonora
+85235,Tierra Blanca,Congregación,tierra blanca,Tierra Blanca (congregación),Navojoa,Sonora
+85236,Ada,Ranchería,ada,Ada,Navojoa,Sonora
+85236,Bacame Nuevo,Ranchería,bacame nuevo,Bacame Nuevo,Navojoa,Sonora
+85236,Buenos Aires,Ejido,buenos aires,Buenos Aires (ejido),Navojoa,Sonora
+85236,Buenos Aires,Ranchería,buenos aires,"Buenos Aires (ranchería, 85236)",Navojoa,Sonora
+85236,Campo Gilberto Barceló,Ranchería,campo gilberto barcelo,Campo Gilberto Barceló,Navojoa,Sonora
+85236,Campo Rodrigo Siqueiros,Ranchería,campo rodrigo siqueiros,Campo Rodrigo Siqueiros,Navojoa,Sonora
+85236,Corrales de Jaime Campos,Ranchería,corrales de jaime campos,Corrales de Jaime Campos,Navojoa,Sonora
+85236,Ejido Ignacio Pesqueira,Ranchería,ejido ignacio pesqueira,Ejido Ignacio Pesqueira,Navojoa,Sonora
+85236,El Bajío,Ejido,el bajio,El Bajío (ejido),Navojoa,Sonora
+85236,La Batalla,Ranchería,la batalla,La Batalla,Navojoa,Sonora
+85236,Las Muletas,Ranchería,las muletas,Las Muletas,Navojoa,Sonora
+85236,Linda Vista,Ranchería,linda vista,Linda Vista,Navojoa,Sonora
+85236,Navomora,Ranchería,navomora,Navomora,Navojoa,Sonora
+85236,Pozo Dulce,Ranchería,pozo dulce,Pozo Dulce,Navojoa,Sonora
+85236,Pueblo Mayo,Pueblo,pueblo mayo,Pueblo Mayo,Navojoa,Sonora
+85236,Raymundo López,Ranchería,raymundo lopez,Raymundo López,Navojoa,Sonora
+85236,Valle Verde,Ranchería,valle verde,Valle Verde,Navojoa,Sonora
+85236,Vista Hermosa,Ranchería,vista hermosa,Vista Hermosa,Navojoa,Sonora
+85237,Barrio Cantúa,Barrio,barrio cantua,Barrio Cantúa,Navojoa,Sonora
+85237,Barrio Corral,Ranchería,barrio corral,Barrio Corral,Navojoa,Sonora
+85237,Camoa,Pueblo,camoa,Camoa,Navojoa,Sonora
+85237,El Sabino,Ranchería,el sabino,"El Sabino (ranchería, 85237)",Navojoa,Sonora
+85237,El Tablón,Ranchería,el tablon,El Tablón,Navojoa,Sonora
+85237,El Tecolote,Ranchería,el tecolote,"El Tecolote (ranchería, 85237)",Navojoa,Sonora
+85237,Las Bombas,Ranchería,las bombas,"Las Bombas (ranchería, 85237)",Navojoa,Sonora
+85237,Las Pilas,Estación,las pilas,Las Pilas,Navojoa,Sonora
+85237,Santa Bárbara,Hacienda,santa barbara,Santa Bárbara (hacienda),Navojoa,Sonora
+85237,Siquisiva,Ranchería,siquisiva,Siquisiva,Navojoa,Sonora
+85237,Tres Hermanos,Hacienda,tres hermanos,Tres Hermanos,Navojoa,Sonora
+85238,Avícola San Carlos II,Ranchería,avicola san carlos ii,Avícola San Carlos II,Navojoa,Sonora
+85238,Caza y Pesca Club de Tiro,Ranchería,caza y pesca club de tiro,Caza y Pesca Club de Tiro,Navojoa,Sonora
+85238,Chivucu,Ranchería,chivucu,Chivucu,Navojoa,Sonora
+85238,El Alamito,Ranchería,el alamito,El Alamito,Navojoa,Sonora
+85238,El Mezquital de Tesia,Ejido,el mezquital de tesia,El Mezquital de Tesia,Navojoa,Sonora
+85238,El Rancho Sahueso,Ranchería,el rancho sahueso,El Rancho Sahueso,Navojoa,Sonora
+85238,El Zapote,Ranchería,el zapote,El Zapote,Navojoa,Sonora
+85238,La Laguna de Tesia,Ranchería,la laguna de tesia,La Laguna de Tesia,Navojoa,Sonora
+85238,Las Guásimas (El Japonés),Ranchería,las guasimas el japones,Las Guásimas (El Japonés),Navojoa,Sonora
+85238,Las Guásimas Rancho,Ranchería,las guasimas rancho,Las Guásimas Rancho,Navojoa,Sonora
+85238,Las Hurracas,Ranchería,las hurracas,Las Hurracas,Navojoa,Sonora
+85238,Los Álamos [Avícola],Ranchería,los alamos avicola,Los Álamos [Avícola],Navojoa,Sonora
+85238,Los Limones,Ejido,los limones,Los Limones (ejido),Navojoa,Sonora
+85238,Molino Julio Graff,Ranchería,molino julio graff,Molino Julio Graff,Navojoa,Sonora
+85238,Porcina San Carlos Cuatro,Ranchería,porcina san carlos cuatro,Porcina San Carlos Cuatro,Navojoa,Sonora
+85238,Porcina San Carlos Tres,Ranchería,porcina san carlos tres,Porcina San Carlos Tres,Navojoa,Sonora
+85238,San Francisco,Congregación,san francisco,San Francisco (congregación),Navojoa,Sonora
+85238,Santa Isabel,Ranchería,santa isabel,"Santa Isabel (ranchería, 85238)",Navojoa,Sonora
+85238,Sibacobe,Congregación,sibacobe,Sibacobe,Navojoa,Sonora
+85238,Tesia,Pueblo,tesia,Tesia,Navojoa,Sonora
+85238,Tetaboca (La Pedrera),Ranchería,tetaboca la pedrera,Tetaboca (La Pedrera),Navojoa,Sonora
+85239,Agiabampo,Ranchería,agiabampo,"Agiabampo (ranchería, 85239)",Navojoa,Sonora
+85239,Ajiabampo,Ranchería,ajiabampo,Ajiabampo,Navojoa,Sonora
+85239,Almacenadora de Navojoa,Ranchería,almacenadora de navojoa,Almacenadora de Navojoa,Navojoa,Sonora
+85239,Buenos Aires,Ranchería,buenos aires,"Buenos Aires (ranchería, 85239)",Navojoa,Sonora
+85239,Buiyacusi,Congregación,buiyacusi,Buiyacusi,Navojoa,Sonora
+85239,Capohuiza,Congregación,capohuiza,Capohuiza,Navojoa,Sonora
+85239,El Taste,Ranchería,el taste,El Taste,Navojoa,Sonora
+85239,El Triunfo,Ranchería,el triunfo,El Triunfo,Navojoa,Sonora
+85239,Empaque de Juan Carlos Cuevas,Ranchería,empaque de juan carlos cuevas,Empaque de Juan Carlos Cuevas,Navojoa,Sonora
+85239,Fitosanitaria (Estación Cuarentenaria),Ranchería,fitosanitaria estacion cuarentenaria,Fitosanitaria (Estación Cuarentenaria),Navojoa,Sonora
+85239,La Galerita,Ranchería,la galerita,La Galerita,Navojoa,Sonora
+85239,Las Pilitas,Ranchería,las pilitas,Las Pilitas,Navojoa,Sonora
+85239,Loma Del Refugio,Congregación,loma del refugio,Loma Del Refugio,Navojoa,Sonora
+85239,Los Ángeles,Ranchería,los angeles,Los Ángeles,Navojoa,Sonora
+85239,Mezquital de Buiyacusi,Congregación,mezquital de buiyacusi,Mezquital de Buiyacusi,Navojoa,Sonora
+85239,Rancho Agiabampo,Ranchería,rancho agiabampo,Rancho Agiabampo,Navojoa,Sonora
+85239,Rosales,Ranchería,rosales,Rosales (ranchería),Navojoa,Sonora
+85239,San Juan,Ranchería,san juan,"San Juan (ranchería, 85239)",Navojoa,Sonora
+85239,Tori Kowi,Ranchería,tori kowi,Tori Kowi,Navojoa,Sonora
+85239,Tucure de Abajo (Tucure Nuevo),Ranchería,tucure de abajo tucure nuevo,Tucure de Abajo (Tucure Nuevo),Navojoa,Sonora
+85239,Vivajimari,Ranchería,vivajimari,Vivajimari,Navojoa,Sonora
+85239,Yorentamehua,Ranchería,yorentamehua,Yorentamehua,Navojoa,Sonora
+85800,Estadio Viejo,Fraccionamiento,estadio viejo,Estadio Viejo,Navojoa,Sonora
+85800,Navojoa Centro,Colonia,navojoa centro,Navojoa Centro,Navojoa,Sonora
+85810,Buenavista,Colonia,buenavista,Buenavista,Navojoa,Sonora
+85810,Pueblo Nuevo,Colonia,pueblo nuevo,Pueblo Nuevo,Navojoa,Sonora
+85820,Constitución,Colonia,constitucion,Constitución,Navojoa,Sonora
+85820,Tierra Blanca,Colonia,tierra blanca,Tierra Blanca,Navojoa,Sonora
+85823,Camino Real,Fraccionamiento,camino real,Camino Real,Navojoa,Sonora
+85823,Campestre,Fraccionamiento,campestre,Campestre,Navojoa,Sonora
+85825,Los Arcos,Fraccionamiento,los arcos,Los Arcos,Navojoa,Sonora
+85825,Villa Lourdes,Fraccionamiento,villa lourdes,Villa Lourdes,Navojoa,Sonora
+85826,Hacienda Vieja,Fraccionamiento,hacienda vieja,Hacienda Vieja,Navojoa,Sonora
+85826,San Ignacio Cohuirimpo,Fraccionamiento,san ignacio cohuirimpo,San Ignacio Cohuirimpo,Navojoa,Sonora
+85826,Santa Fe,Fraccionamiento,santa fe,Santa Fe,Navojoa,Sonora
+85827,Tetanchopo,Colonia,tetanchopo,Tetanchopo,Navojoa,Sonora
+85830,Álamo,Residencial,alamo,Álamo,Navojoa,Sonora
+85830,Reforma,Colonia,reforma,Reforma,Navojoa,Sonora
+85830,Villa del Sol,Fraccionamiento,villa del sol,Villa del Sol,Navojoa,Sonora
+85835,Los Naranjos,Fraccionamiento,los naranjos,Los Naranjos,Navojoa,Sonora
+85835,Mezquital de Pueblo Viejo,Colonia,mezquital de pueblo viejo,Mezquital de Pueblo Viejo,Navojoa,Sonora
+85835,Residencial La Huerta,Fraccionamiento,residencial la huerta,Residencial La Huerta,Navojoa,Sonora
+85840,Aviación,Colonia,aviacion,Aviación,Navojoa,Sonora
+85840,CTM Obrera,Fraccionamiento,ctm obrera,CTM Obrera,Navojoa,Sonora
+85840,Hidalgo,Colonia,hidalgo,Hidalgo,Navojoa,Sonora
+85840,Moderna,Colonia,moderna,Moderna,Navojoa,Sonora
+85840,Nogalitos,Colonia,nogalitos,Nogalitos,Navojoa,Sonora
+85843,La Herradura,Fraccionamiento,la herradura,La Herradura,Navojoa,Sonora
+85843,Residencial Santa María,Fraccionamiento,residencial santa maria,Residencial Santa María,Navojoa,Sonora
+85845,Pueblo Viejo,Pueblo,pueblo viejo,Pueblo Viejo,Navojoa,Sonora
+85850,Allende,Colonia,allende,Allende,Navojoa,Sonora
+85850,Miravalle,Colonia,miravalle,Miravalle,Navojoa,Sonora
+85850,Mocuzari,Colonia,mocuzari,Mocuzari,Navojoa,Sonora
+85850,Rosales,Colonia,rosales,Rosales,Navojoa,Sonora
+85860,Beltrones,Ampliación,beltrones,Beltrones (ampliación),Navojoa,Sonora
+85860,Beltrones,Colonia,beltrones,Beltrones,Navojoa,Sonora
+85860,Deportiva,Colonia,deportiva,Deportiva,Navojoa,Sonora
+85860,Itson,Colonia,itson,Itson,Navojoa,Sonora
+85864,Brisas del Valle,Colonia,brisas del valle,Brisas del Valle,Navojoa,Sonora
+85864,FOVISSSTE,Fraccionamiento,fovissste,FOVISSSTE,Navojoa,Sonora
+85870,Juárez,Colonia,juarez,Juárez,Navojoa,Sonora
+85870,Santa Bárbara,Fraccionamiento,santa barbara,Santa Bárbara (fraccionamiento),Navojoa,Sonora
+85874,Aeropuerto,Colonia,aeropuerto,Aeropuerto,Navojoa,Sonora
+85874,La Joya,Fraccionamiento,la joya,La Joya,Navojoa,Sonora
+85874,Las Bugambilias,Fraccionamiento,las bugambilias,Las Bugambilias,Navojoa,Sonora
+85874,Los Laureles,Fraccionamiento,los laureles,Los Laureles,Navojoa,Sonora
+85874,Villa Dorada,Colonia,villa dorada,Villa Dorada,Navojoa,Sonora
+85880,Armando López Nogales,Colonia,armando lopez nogales,Armando López Nogales,Navojoa,Sonora
+85880,Francisco Villa,Colonia,francisco villa,Francisco Villa,Navojoa,Sonora
+85880,Girasoles,Colonia,girasoles,Girasoles,Navojoa,Sonora
+85880,Jacarandas,Fraccionamiento,jacarandas,Jacarandas,Navojoa,Sonora
+85880,Jacarandas II,Fraccionamiento,jacarandas ii,Jacarandas II,Navojoa,Sonora
+85880,Jacarandas III,Colonia,jacarandas iii,Jacarandas III,Navojoa,Sonora
+85880,La Guadalupana,Colonia,la guadalupana,La Guadalupana,Navojoa,Sonora
+85880,Tierra y Libertad,Colonia,tierra y libertad,Tierra y Libertad,Navojoa,Sonora
+85890,Arboledas,Colonia,arboledas,Arboledas,Navojoa,Sonora
+85890,Indeur,Colonia,indeur,Indeur,Navojoa,Sonora
+85890,INFONAVIT,Unidad habitacional,infonavit,INFONAVIT,Navojoa,Sonora
+85890,Minas de Arena,Colonia,minas de arena,Minas de Arena,Navojoa,Sonora
+85890,Rosario Ruelas,Colonia,rosario ruelas,Rosario Ruelas,Navojoa,Sonora
+85890,Sonora,Colonia,sonora,Sonora,Navojoa,Sonora
+85890,Sonora Ayuntamiento,Colonia,sonora ayuntamiento,Sonora Ayuntamiento,Navojoa,Sonora
+85890,Sonora Progresista,Colonia,sonora progresista,Sonora Progresista,Navojoa,Sonora
+85890,SOP,Colonia,sop,SOP,Navojoa,Sonora
+85890,Zona Urbana Ejidal,Colonia,zona urbana ejidal,Zona Urbana Ejidal,Navojoa,Sonora
+85893,16 de junio,Colonia,16 de junio,16 de junio,Navojoa,Sonora
+85894,Misioneros,Fraccionamiento,misioneros,Misioneros,Navojoa,Sonora
+85894,Misioneros Del Sur,Fraccionamiento,misioneros del sur,Misioneros Del Sur,Navojoa,Sonora
+85894,Privada del Pedregal,Colonia,privada del pedregal,Privada del Pedregal,Navojoa,Sonora
+85894,Tepeyac,Colonia,tepeyac,Tepeyac,Navojoa,Sonora
+85894,Tetaboca,Colonia,tetaboca,Tetaboca,Navojoa,Sonora
+85895,16 de septiembre,Colonia,16 de septiembre,16 de septiembre,Navojoa,Sonora
+85895,Nueva Generación,Colonia,nueva generacion,Nueva Generación,Navojoa,Sonora
+85895,Parque Industrial,Parque industrial,parque industrial,Parque Industrial,Navojoa,Sonora

@@ -29,6 +29,16 @@
                                                    ],
                                          "matcher":  "Edit|Write|MultiEdit|NotebookEdit"
                                      }
-                                 ]
+                                 ],
+                  "Stop":  [
+                               {
+                                   "hooks":  [
+                                                 {
+                                                     "type":  "command",
+                                                     "command":  "powershell -NoProfile -ExecutionPolicy Bypass -File .harness/bin/cleanup.ps1 -Hook"
+                                                 }
+                                             ]
+                               }
+                           ]
               }
 }

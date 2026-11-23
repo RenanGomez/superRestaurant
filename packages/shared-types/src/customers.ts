@@ -33,6 +33,10 @@ export interface CustomerAddressFieldsV1 {
   /** @deprecated Historical compatibility field. It is not an active delivery instruction. */
   readonly instructions: string | null;
   readonly coordinates: Readonly<{ latitudeE6: number; longitudeE6: number }> | null;
+  /** SEPOMEX settlement chosen in the catalog; optional for historical rows and legacy clients. */
+  readonly settlementId?: string | null;
+  /** True only when the operator declared the colonia outside the catalog. */
+  readonly settlementOutsideCatalog?: boolean;
 }
 
 /**
@@ -160,10 +164,42 @@ export interface CustomerDirectoryDetailV1 {
 const commonKeys = ["schemaVersion", "scope", "customerId", "expectedVersion", "eventId", "deviceId", "idempotencyKey", "occurredAt"] as const;
 const addressKeys = ["label", "streetLine", "unit", "neighborhood", "locality", "region", "countryCode", "postalCode", "references", "instructions", "coordinates"] as const;
 const addressV2Keys = ["label", "streetLine", "unit", "neighborhood", "locality", "region", "countryCode", "postalCode", "references", "legacyAddressInstructions", "coordinates"] as const;
+const settlementKeys = ["settlementId", "settlementOutsideCatalog"] as const;
+
+/** Accepts the legacy key set plus either settlement key, or both, so old rows and Z2 rows share one parser. */
+function addressRecord(value: unknown, keys: readonly string[]): Record<string, unknown> | undefined {
+  for (const variant of [keys, [...keys, settlementKeys[0]], [...keys, settlementKeys[1]], [...keys, ...settlementKeys]]) {
+    const fields = record(value, variant);
+    if (fields !== undefined) return fields;
+  }
+  return undefined;
+}
+
+/** Canonical settlement facts; omitted keys stay omitted so legacy inputs keep their shape. */
+function settlementFields(fields: Record<string, unknown>): Pick<CustomerAddressFieldsV1, "settlementId" | "settlementOutsideCatalog"> | undefined {
+  const rawId = fields.settlementId;
+  const rawOutside = fields.settlementOutsideCatalog;
+  const result: { settlementId?: string | null; settlementOutsideCatalog?: boolean } = {};
+  if (rawId !== undefined) {
+    if (rawId === null) result.settlementId = null;
+    else {
+      const settlementId = uuid(rawId);
+      if (settlementId === undefined) return undefined;
+      result.settlementId = settlementId;
+    }
+  }
+  if (rawOutside !== undefined) {
+    if (typeof rawOutside !== "boolean") return undefined;
+    result.settlementOutsideCatalog = rawOutside;
+  }
+  if (result.settlementOutsideCatalog === true && result.settlementId != null) return undefined;
+  return result;
+}
 
 export function parseCustomerAddressFieldsV2(value: unknown): CustomerAddressFieldsV2 | undefined {
-  const fields = record(value, addressV2Keys);
-  if (fields === undefined || !text(fields.label, 40)) return undefined;
+  const fields = addressRecord(value, addressV2Keys);
+  const settlement = fields === undefined ? undefined : settlementFields(fields);
+  if (fields === undefined || settlement === undefined || !text(fields.label, 40)) return undefined;
   for (const key of ["streetLine", "unit", "neighborhood", "locality", "region", "postalCode", "references", "legacyAddressInstructions"] as const) {
     if (fields[key] !== null && !text(fields[key], key === "references" || key === "legacyAddressInstructions" ? 500 : 200)) return undefined;
   }
@@ -175,7 +211,7 @@ export function parseCustomerAddressFieldsV2(value: unknown): CustomerAddressFie
       || !integer(point.longitudeE6, -180_000_000, 180_000_000)) return undefined;
     coordinates = Object.freeze({ latitudeE6: point.latitudeE6, longitudeE6: point.longitudeE6 });
   }
-  return Object.freeze({ ...fields, coordinates }) as unknown as CustomerAddressFieldsV2;
+  return Object.freeze({ ...fields, ...settlement, coordinates }) as unknown as CustomerAddressFieldsV2;
 }
 
 export function parseSaveCustomerProfileCommandV1(value: unknown): SaveCustomerProfileCommandV1 | undefined {
@@ -428,8 +464,9 @@ function metadataFields(fields: Record<string, unknown>): Readonly<{ version: nu
   return Object.freeze({ version: fields.version, createdAt: fields.createdAt, updatedAt: fields.updatedAt, deletedAt });
 }
 function parseAddressFields(value: unknown): CustomerAddressFieldsV1 | undefined {
-  const fields = record(value, addressKeys);
-  if (fields === undefined || !text(fields.label, 40)) return undefined;
+  const fields = addressRecord(value, addressKeys);
+  const settlement = fields === undefined ? undefined : settlementFields(fields);
+  if (fields === undefined || settlement === undefined || !text(fields.label, 40)) return undefined;
   for (const key of ["streetLine", "unit", "neighborhood", "locality", "region", "postalCode", "references", "instructions"] as const) {
     if (fields[key] !== null && !text(fields[key], key === "references" || key === "instructions" ? 500 : 200)) return undefined;
   }
@@ -441,7 +478,7 @@ function parseAddressFields(value: unknown): CustomerAddressFieldsV1 | undefined
       || !integer(point.longitudeE6, -180_000_000, 180_000_000)) return undefined;
     coordinates = Object.freeze({ latitudeE6: point.latitudeE6, longitudeE6: point.longitudeE6 });
   }
-  return Object.freeze({ ...fields, coordinates }) as unknown as CustomerAddressFieldsV1;
+  return Object.freeze({ ...fields, ...settlement, coordinates }) as unknown as CustomerAddressFieldsV1;
 }
 function normalizePhone(value: unknown): string | undefined {
   if (!text(value, 80) || !/^[+0-9 ().-]+$/u.test(value)) return undefined;

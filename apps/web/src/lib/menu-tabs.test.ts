@@ -13,8 +13,8 @@ import {
   writeStoredMenuTab,
 } from "./menu-tabs.js";
 
-test("MENU_TABS contains all four required sections", () => {
-  assert.deepEqual(MENU_TABS, ["categorias", "productos", "modificadores", "tamanos"]);
+test("MENU_TABS contains the three required sections", () => {
+  assert.deepEqual(MENU_TABS, ["categorias", "productos", "modificadores"]);
   assert.equal(DEFAULT_MENU_TAB, "categorias");
   for (const tab of MENU_TABS) {
     assert.equal(typeof MENU_TAB_LABELS[tab], "string");
@@ -26,7 +26,7 @@ test("isMenuTab validates tab strings", () => {
   assert.equal(isMenuTab("categorias"), true);
   assert.equal(isMenuTab("productos"), true);
   assert.equal(isMenuTab("modificadores"), true);
-  assert.equal(isMenuTab("tamanos"), true);
+  assert.equal(isMenuTab("tamanos"), false);
 
   assert.equal(isMenuTab(""), false);
   assert.equal(isMenuTab("other"), false);
@@ -39,7 +39,7 @@ test("parseMenuTab parses valid tab strings and ignores case or whitespace", () 
   assert.equal(parseMenuTab("categorias"), "categorias");
   assert.equal(parseMenuTab("PRODUCTOS"), "productos");
   assert.equal(parseMenuTab("  modificadores  "), "modificadores");
-  assert.equal(parseMenuTab("tamanos"), "tamanos");
+  assert.equal(parseMenuTab("tamanos"), undefined);
 
   assert.equal(parseMenuTab("invalid"), undefined);
   assert.equal(parseMenuTab(""), undefined);
@@ -59,7 +59,7 @@ test("menuTabHref generates URLs setting or updating the tab query parameter", (
   assert.equal(menuTabHref("categorias"), "/app/menu?tab=categorias");
   assert.equal(menuTabHref("productos"), "/app/menu?tab=productos");
   assert.equal(menuTabHref("modificadores", "?foo=bar"), "/app/menu?foo=bar&tab=modificadores");
-  assert.equal(menuTabHref("tamanos", "tab=categorias&branch=centro"), "/app/menu?tab=tamanos&branch=centro");
+  assert.equal(menuTabHref("modificadores", "tab=categorias&branch=centro"), "/app/menu?tab=modificadores&branch=centro");
 
   const searchParams = new URLSearchParams("menuStatus=published&tab=productos");
   assert.equal(menuTabHref("categorias", searchParams), "/app/menu?menuStatus=published&tab=categorias");
@@ -85,8 +85,13 @@ test("readStoredMenuTab and writeStoredMenuTab safely interact with storage", ()
   assert.equal(store.get(MENU_TAB_STORAGE_KEY), "productos");
   assert.equal(readStoredMenuTab(mockStorage), "productos");
 
-  writeStoredMenuTab(mockStorage, "tamanos");
-  assert.equal(readStoredMenuTab(mockStorage), "tamanos");
+  writeStoredMenuTab(mockStorage, "modificadores");
+  assert.equal(readStoredMenuTab(mockStorage), "modificadores");
+
+  // A legacy stored tab that no longer exists is ignored and resolves to the default.
+  store.set(MENU_TAB_STORAGE_KEY, "tamanos");
+  assert.equal(readStoredMenuTab(mockStorage), null);
+  assert.equal(resolveMenuTab("tamanos"), "categorias");
 
   // Invalid value stored in storage defaults to null
   store.set(MENU_TAB_STORAGE_KEY, "corrupt_data");

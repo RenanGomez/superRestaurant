@@ -517,6 +517,11 @@ export function draftLineIssues(catalog: MenuCatalogV1, line: OrderDraftComposit
   if (!isOrderableProduct(catalog, line.productId)) {
     return Object.freeze(["La categoría de este producto ya no está publicada."]);
   }
+  // Pizza V2 products need a `pizza` plan line (halves, ingredients) this draft cannot express yet:
+  // fail closed instead of handing over a line the server would answer with a 409.
+  if (product.pizzaMode !== undefined) {
+    return Object.freeze(["Esta pizza se captura desde la web; la app aún no arma mitades ni ingredientes."]);
+  }
   // Judged against every active group, never the truncated presentation list:
   // a required group past the visual cap still has to be satisfied.
   const groups = activeProductGroups(catalog, line.productId);

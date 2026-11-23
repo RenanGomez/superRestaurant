@@ -7,6 +7,7 @@ import { BRANCH_PREFERENCE_COOKIE, findMembership, parseBranchPreference } from 
 import { getRequestMemberships, getRequestSession, getRequestSystemAdminAccess, getRequestUser } from "../../lib/request-context";
 
 import { AppNav } from "./app-nav";
+import { GlobalShortcuts } from "./global-shortcuts";
 import { logoutAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -50,9 +51,10 @@ export default async function AppLayout({ children }: { readonly children: React
 
   return (
     <div className="flex min-h-screen bg-bg">
+      <GlobalShortcuts />
       <AppNav canAccessSystemAdmin={canAccessSystemAdmin} canReadReports={canReadReports} branchName={membership?.branchName} />
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col pb-[calc(4rem+env(safe-area-inset-bottom))] sm:pb-0">
         <header className="flex min-h-[68px] shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-surface px-3 py-2 sm:px-8">
           <span className="text-sm font-semibold text-text-muted">superRestaurant</span>
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 sm:gap-5">

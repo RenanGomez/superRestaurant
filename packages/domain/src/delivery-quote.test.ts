@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createDeliveryZone } from "./delivery-zone.js";
-import { applyDeliveryQuoteOverride, quoteDelivery } from "./delivery-quote.js";
+import { applyDeliveryManualFee, deliveryQuoteEffectiveFeeMinor, quoteDelivery } from "./delivery-quote.js";
 import {
-  DeliveryOverrideAuthorizationRequiredError,
+  DeliveryManualFeeAuthorizationRequiredError,
+  DeliveryManualFeeNotCoveredError,
   DeliveryOverrideReasonRequiredError,
   DeliveryScheduleCutoffError,
   DeliveryScheduleExceedsHorizonError,
@@ -25,7 +26,12 @@ const ZONE = createDeliveryZone({
   feeMinor: new Money(2_500, "MXN"),
   postalCodes: ["06000"],
   localities: ["Centro Historico"],
+  settlementIds: [],
 });
+
+function baseFacts(overrides: Partial<Parameters<typeof quoteDelivery>[0]["address"]> = {}): Parameters<typeof quoteDelivery>[0]["address"] {
+  return { settlementId: null, neighborhood: null, postalCode: "06000", locality: "Centro Historico", ...overrides };
+}
 
 function baseInput(overrides: Partial<Parameters<typeof quoteDelivery>[0]> = {}): Parameters<typeof quoteDelivery>[0] {
   return {
@@ -34,7 +40,7 @@ function baseInput(overrides: Partial<Parameters<typeof quoteDelivery>[0]> = {})
     branchId: BRANCH_ID,
     captureDraftId: "capture-1",
     addressSnapshotRef: "address-snapshot-1",
-    address: { postalCode: "06000", locality: "Centro Historico" },
+    address: baseFacts(),
     zones: [ZONE],
     currency: "MXN",
     timeZone: "America/Mexico_City",
@@ -58,7 +64,7 @@ test("quoteDelivery covers a matching address with a frozen 15-minute promise wi
 });
 
 test("quoteDelivery reports not_covered with a zero fee when no zone matches", () => {
-  const quote = quoteDelivery(baseInput({ address: { postalCode: "99999", locality: "Nowhere" } }));
+  const quote = quoteDelivery(baseInput({ address: baseFacts({ postalCode: "99999", locality: "Nowhere" }) }));
   assert.equal(quote.coverageStatus, "not_covered");
   assert.equal(quote.zoneId, null);
   assert.deepEqual(quote.feeMinor, new Money(0, "MXN"));
@@ -194,40 +200,81 @@ test("quoteDelivery rejects a zone list scoped to a different restaurant or bran
     feeMinor: new Money(1_000, "MXN"),
     postalCodes: ["06000"],
     localities: [],
+    settlementIds: [],
   });
   assert.throws(() => quoteDelivery(baseInput({ zones: [foreignZone] })), InvalidDeliveryQuoteFieldError);
 });
 
-test("applyDeliveryQuoteOverride requires a manager role and a non-empty reason", () => {
-  const quote = quoteDelivery(baseInput());
-  const overrideInput = {
+test("applyDeliveryManualFee rejects a covered quote", () => {
+  const covered = quoteDelivery(baseInput({ address: { settlementId: "settlement-1", neighborhood: null, postalCode: null, locality: null },
+    zones: [createDeliveryZone({
+      zoneId: "zone-settlement", restaurantId: RESTAURANT_ID, branchId: BRANCH_ID, name: "Colonia",
+      feeMinor: new Money(2_500, "MXN"), postalCodes: [], localities: [], settlementIds: ["settlement-1"],
+    })] }));
+  assert.equal(covered.coverageStatus, "covered");
+  assert.throws(
+    () => applyDeliveryManualFee(covered, {
+      eventId: "event-1", actorId: "actor-1", role: "supervisor", reason: "Fuera de zona",
+      feeMinor: new Money(3_000, "MXN"), overriddenAt: "2026-09-26T18:05:00.000Z",
+    }),
+    DeliveryManualFeeNotCoveredError,
+  );
+});
+
+test("applyDeliveryManualFee requires an owner/admin/manager/supervisor role and a non-empty reason", () => {
+  const quote = quoteDelivery(baseInput({ address: baseFacts({ postalCode: "99999", locality: "Nowhere" }) }));
+  assert.equal(quote.coverageStatus, "not_covered");
+  const input = {
+    eventId: "event-1",
     actorId: "actor-1",
-    role: "manager",
-    reason: "Rain surcharge waived for VIP customer",
-    feeMinor: new Money(0, "MXN"),
+    role: "supervisor",
+    reason: "Colonia fuera del catálogo",
+    feeMinor: new Money(3_000, "MXN"),
     promiseStart: "2026-09-26T18:10:00.000Z",
     promiseEnd: "2026-09-26T18:40:00.000Z",
     overriddenAt: "2026-09-26T18:05:00.000Z",
   } as const;
 
+  for (const role of ["cashier", "waiter", "kitchen", ""]) {
+    assert.throws(
+      () => applyDeliveryManualFee(quote, { ...input, role }),
+      DeliveryManualFeeAuthorizationRequiredError,
+    );
+  }
   assert.throws(
-    () => applyDeliveryQuoteOverride(quote, { ...overrideInput, role: "supervisor" }),
-    DeliveryOverrideAuthorizationRequiredError,
-  );
-  assert.throws(
-    () => applyDeliveryQuoteOverride(quote, { ...overrideInput, reason: "" }),
+    () => applyDeliveryManualFee(quote, { ...input, reason: "" }),
     DeliveryOverrideReasonRequiredError,
   );
   assert.throws(
-    () => applyDeliveryQuoteOverride(quote, { ...overrideInput, promiseStart: overrideInput.promiseEnd, promiseEnd: overrideInput.promiseStart }),
+    () => applyDeliveryManualFee(quote, { ...input, promiseStart: input.promiseEnd, promiseEnd: input.promiseStart }),
     InvalidDeliveryOverrideWindowError,
   );
 
-  const overridden = applyDeliveryQuoteOverride(quote, overrideInput);
-  assert.equal(overridden.override?.reason, overrideInput.reason);
-  assert.deepEqual(overridden.override?.feeMinor, new Money(0, "MXN"));
-  // The original quoted facts are never mutated by an override.
-  assert.deepEqual(overridden.feeMinor, new Money(2_500, "MXN"));
-  assert.equal(overridden.promiseStart, quote.promiseStart);
-  assert.equal(Object.isFrozen(overridden), true);
+  for (const role of ["owner", "admin", "manager", "supervisor"] as const) {
+    const overridden = applyDeliveryManualFee(quote, { ...input, role });
+    assert.equal(overridden.override?.kind, "manual_fee");
+    assert.equal(overridden.override?.role, role);
+    assert.equal(overridden.override?.reason, input.reason);
+    assert.equal(overridden.override?.overriddenAt, input.overriddenAt);
+    assert.equal(overridden.override?.promiseStart, input.promiseStart);
+    // The original quoted facts are never mutated by the authorization.
+    assert.deepEqual(overridden.feeMinor, new Money(0, "MXN"));
+    assert.notEqual(overridden.promiseStart, input.promiseStart);
+    assert.equal(Object.isFrozen(overridden), true);
+    assert.equal(Object.isFrozen(overridden.override), true);
+  }
 });
+
+test("deliveryQuoteEffectiveFeeMinor prefers the authorized override and falls back to the zone fee", () => {
+  const notCovered = quoteDelivery(baseInput({ address: baseFacts({ postalCode: "99999", locality: "Nowhere" }) }));
+  const authorized = applyDeliveryManualFee(notCovered, {
+    eventId: "event-1", actorId: "actor-1", role: "supervisor", reason: "Fuera de zona",
+    feeMinor: new Money(3_000, "MXN"), overriddenAt: "2026-09-26T18:05:00.000Z",
+  });
+  assert.deepEqual(deliveryQuoteEffectiveFeeMinor(authorized), new Money(3_000, "MXN"));
+  assert.deepEqual(deliveryQuoteEffectiveFeeMinor(notCovered), new Money(0, "MXN"));
+
+  const covered = quoteDelivery(baseInput());
+  assert.deepEqual(deliveryQuoteEffectiveFeeMinor(covered), new Money(2_500, "MXN"));
+});
+

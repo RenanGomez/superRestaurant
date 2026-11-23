@@ -488,6 +488,17 @@ export class MenuProductNotFoundError extends DomainError {
   public readonly productId: string;
 }
 
+export class MenuPizzaProductRequiresHalvesRuleError extends DomainError {
+  public readonly code = "PIZZA_REQUIRES_HALVES_RULE";
+
+  public constructor(productId: string) {
+    super("A pizza V2 product is sold only through the pizza halves rule.");
+    this.productId = productId;
+  }
+
+  public readonly productId: string;
+}
+
 export class MenuProductVariantRequiredError extends DomainError {
   public readonly code = "VARIANT_REQUIRED";
 
@@ -1144,6 +1155,22 @@ export class DeliveryOverrideAuthorizationRequiredError extends DomainError {
 
   public constructor() {
     super("Overriding a delivery quote's fee or promise window requires an explicit manager role.");
+  }
+}
+
+export class DeliveryManualFeeAuthorizationRequiredError extends DomainError {
+  public readonly code = "DELIVERY_MANUAL_FEE_AUTHORIZATION_REQUIRED";
+
+  public constructor() {
+    super("A manual delivery fee requires an owner, admin, manager or supervisor role.");
+  }
+}
+
+export class DeliveryManualFeeNotCoveredError extends DomainError {
+  public readonly code = "DELIVERY_MANUAL_FEE_NOT_COVERED";
+
+  public constructor() {
+    super("A manual delivery fee only applies to a not_covered quote.");
   }
 }
 

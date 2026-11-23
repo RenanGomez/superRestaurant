@@ -56,6 +56,7 @@ import {
 import {
   orderDraftLayout,
   orderDraftPaneBox,
+  orderDraftColumnsMinHeight,
   paneOwnsScroller,
   screenOwnsScroller,
   type OrderDraftLayout,
@@ -185,13 +186,16 @@ export function OrderDraftScreen({
     </ScrollView>;
   }
 
-  return <View style={styles.screen}>
+  // The header can take most of a short tablet viewport, so the screen scrolls
+  // as a whole and the columns keep a useful minimum height instead of
+  // collapsing to what is left; each column still scrolls its own list.
+  return <ScrollView contentContainerStyle={styles.columnsScreen} style={styles.screen}>
     {head}
     <View style={styles.columnsWide}>
       <View style={styles.column}>{catalogPane}</View>
       <View style={styles.column}>{draftPane}</View>
     </View>
-  </View>;
+  </ScrollView>;
 }
 
 /** The pane box for one arrangement: a flex share only where there is one. */
@@ -210,7 +214,7 @@ function PaneList({ children, layout }: {
   readonly layout: OrderDraftLayout;
 }): React.JSX.Element {
   return paneOwnsScroller(layout)
-    ? <ScrollView contentContainerStyle={styles.paneContent}>{children}</ScrollView>
+    ? <ScrollView contentContainerStyle={styles.paneContent} style={styles.paneScroll}>{children}</ScrollView>
     : <View style={styles.paneContent}>{children}</View>;
 }
 
@@ -672,8 +676,9 @@ const styles = StyleSheet.create({
   chipPressed: { borderColor: colors.focus, borderWidth: 3 },
   chipSelected: { backgroundColor: colors.accent, borderColor: colors.accent },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
-  column: { flexBasis: 0, flexGrow: 1, flexShrink: 1, minWidth: 0 },
-  columnsWide: { flex: 1, flexDirection: "row", gap: spacing.lg },
+  column: { flexBasis: 0, flexGrow: 1, flexShrink: 1, minHeight: 0, minWidth: 0 },
+  columnsScreen: { flexGrow: 1, gap: spacing.lg },
+  columnsWide: { flexDirection: "row", flexGrow: 1, gap: spacing.lg, minHeight: orderDraftColumnsMinHeight },
   composerActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.sm },
   confirm: {
     backgroundColor: colors.dangerSurface,
@@ -708,6 +713,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
   },
   pane: { ...orderDraftPaneBox.columns, gap: spacing.sm },
+  paneScroll: { flexGrow: 1, flexShrink: 1, minHeight: 0 },
   paneContent: { gap: spacing.sm, paddingBottom: spacing.lg },
   paneStacked: { ...orderDraftPaneBox.stacked, gap: spacing.sm },
   row: {
@@ -725,7 +731,7 @@ const styles = StyleSheet.create({
   rowAction: { color: colors.accent, fontWeight: "600", ...typography.body },
   rowPressed: { borderColor: colors.focus, borderWidth: 3 },
   rowText: { flexShrink: 1, gap: spacing.xs, minWidth: 0 },
-  screen: { flex: 1 },
+  screen: { flex: 1, minHeight: 0 },
   stack: { gap: spacing.lg, paddingBottom: spacing.lg },
   stepper: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
   stepperButton: {

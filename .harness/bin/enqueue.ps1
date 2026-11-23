@@ -16,7 +16,8 @@ param(
   [string[]]$Files = @(),                # rutas/carpetas que escribe (para no solapar escritores)
   [string[]]$After = @(),                # ids que deben terminar antes
   [int]$Priority = 5,                    # menor = antes
-  [string]$Account = ''                  # codex: fijar una cuenta (A, B…); vacío = drain elige la libre
+  [string]$Account = '',                 # codex: fijar una cuenta (A, B…); vacío = drain elige la libre
+  [double]$EtaMin = 0                    # minutos estimados; 0 = config.eta.defaults.<engine> o 15
 )
 $ErrorActionPreference = 'Stop'
 $harness = Split-Path $PSScriptRoot -Parent
@@ -24,11 +25,19 @@ $cfg = Get-Content (Join-Path $harness 'config.json') -Raw -Encoding UTF8 | Conv
 $bp = if ($cfg.paths -and $cfg.paths.brief) { $cfg.paths.brief } else { '.harness/runs/{id}/brief.md' }
 $bp = $bp -replace '\{id\}', $Id
 if (-not (Test-Path (Join-Path (Split-Path $harness -Parent) $bp))) { throw "Falta el brief $bp" }
+$eta = 0.0
+if ($EtaMin -gt 0) { $eta = $EtaMin }
+elseif ($cfg.eta -and $cfg.eta.defaults) {
+  $d = $cfg.eta.defaults.PSObject.Properties[$Engine]
+  if ($d) { $eta = [double]$d.Value }
+}
+if ($eta -le 0) { $eta = 15 }
 $qDir = Join-Path $harness 'queue'; New-Item -ItemType Directory -Force $qDir | Out-Null
 $t = [ordered]@{
   id = $Id; engine = $Engine; model = $Model; effort = $Effort; write = [bool]$Write; worktree = [bool]$Worktree
   files = @($Files | ForEach-Object { $_ -split ',' } | Where-Object { $_ }); after = @($After | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
   priority = $Priority; status = 'pending'; added = (Get-Date).ToString('s'); attempts = 0; outcome = ''; account = $Account
+  eta_min = $eta
 }
 [IO.File]::WriteAllText((Join-Path $qDir "$Id.json"), ($t | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding $false))
-"encolada $Id [$Engine/$Model] after=$($t.after -join ',') files=$($t.files -join ',')"
+"encolada $Id [$Engine/$Model] eta=${eta}min after=$($t.after -join ',') files=$($t.files -join ',')"

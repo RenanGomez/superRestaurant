@@ -3,7 +3,7 @@
  * and safe localStorage persistence.
  */
 
-export const MENU_TABS = ["categorias", "productos", "modificadores", "tamanos"] as const;
+export const MENU_TABS = ["categorias", "productos", "modificadores"] as const;
 export type MenuTab = (typeof MENU_TABS)[number];
 
 export const DEFAULT_MENU_TAB: MenuTab = "categorias";
@@ -14,7 +14,6 @@ export const MENU_TAB_LABELS: Readonly<Record<MenuTab, string>> = {
   categorias: "Categorías",
   productos: "Productos",
   modificadores: "Modificadores",
-  tamanos: "Tamaños y presets",
 };
 
 /** Checks whether a value is one of the valid menu tab identifiers. */

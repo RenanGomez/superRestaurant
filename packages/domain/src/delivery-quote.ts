@@ -1,7 +1,8 @@
 import type { DeliveryAddressFacts, DeliveryZone } from "./delivery-zone.js";
 import { findDeliveryZone } from "./delivery-zone.js";
 import {
-  DeliveryOverrideAuthorizationRequiredError,
+  DeliveryManualFeeAuthorizationRequiredError,
+  DeliveryManualFeeNotCoveredError,
   DeliveryOverrideReasonRequiredError,
   DeliveryScheduleCutoffError,
   DeliveryScheduleExceedsHorizonError,
@@ -39,10 +40,21 @@ const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 
 export type DeliveryQuoteCoverageStatus = "covered" | "not_covered";
 
-/** Manager-authorized correction to a quote's effective fee and/or window (decision 8.1.2). */
+export type DeliveryManualFeeRole = "owner" | "admin" | "manager" | "supervisor";
+
+const DELIVERY_MANUAL_FEE_ROLES: readonly string[] = Object.freeze(["owner", "admin", "manager", "supervisor"]);
+
+/**
+ * Supervisor-authorized manual fee for a not-covered delivery (Z3, §6.4). It is
+ * frozen alongside the as-quoted facts, never replacing them, and records who
+ * authorized it, why, and the authorization instant (`overriddenAt`), so
+ * re-quoting without changes produces the same quote id.
+ */
 export interface DeliveryQuoteOverride {
+  readonly kind: "manual_fee";
+  readonly eventId: string;
   readonly actorId: string;
-  readonly role: "manager";
+  readonly role: DeliveryManualFeeRole;
   readonly reason: string;
   readonly feeMinor: Money;
   readonly promiseStart: string;
@@ -50,13 +62,16 @@ export interface DeliveryQuoteOverride {
   readonly overriddenAt: string;
 }
 
-export interface ApplyDeliveryQuoteOverrideInput {
+export interface ApplyDeliveryManualFeeInput {
+  readonly eventId: string;
   readonly actorId: string;
   readonly role: string;
   readonly reason: string;
   readonly feeMinor: Money;
-  readonly promiseStart: string;
-  readonly promiseEnd: string;
+  /** Defaults to the quote's own promise window when omitted. */
+  readonly promiseStart?: string;
+  readonly promiseEnd?: string;
+  /** Authorization instant; stable across re-quotes (never the re-quote instant). */
   readonly overriddenAt: string;
 }
 
@@ -157,34 +172,43 @@ export function quoteDelivery(input: QuoteDeliveryInput): DeliveryQuote {
 }
 
 /**
- * Applies a manager override to a quote's effective fee and promise window.
- * Never mutates the original quote's `feeMinor`/`promiseStart`/`promiseEnd`;
- * it returns a new frozen quote carrying the override alongside the
- * as-quoted facts (decision 8.1.2: override requires role=manager and a
- * non-empty reason; it is auditable and never silent).
+ * Applies a supervisor-authorized manual fee to a not-covered quote. Never
+ * mutates the original quote's `feeMinor`/`promiseStart`/`promiseEnd`; it
+ * returns a new frozen quote carrying the authorization alongside the
+ * as-quoted facts (Z3, §6.4). Only an owner/admin/manager/supervisor role and
+ * a non-empty reason are accepted; the fee window defaults to the quote's own
+ * promise window.
  */
-export function applyDeliveryQuoteOverride(
+export function applyDeliveryManualFee(
   quote: DeliveryQuote,
-  input: ApplyDeliveryQuoteOverrideInput,
+  input: ApplyDeliveryManualFeeInput,
 ): DeliveryQuote {
-  if (input.role !== "manager") {
-    throw new DeliveryOverrideAuthorizationRequiredError();
+  if (quote.coverageStatus !== "not_covered") {
+    throw new DeliveryManualFeeNotCoveredError();
+  }
+  if (typeof input.role !== "string" || !DELIVERY_MANUAL_FEE_ROLES.includes(input.role)) {
+    throw new DeliveryManualFeeAuthorizationRequiredError();
   }
   if (typeof input.reason !== "string" || input.reason.trim().length === 0) {
     throw new DeliveryOverrideReasonRequiredError();
   }
+  assertNonEmptyText(input.eventId, "eventId");
   assertNonEmptyText(input.actorId, "actorId");
   const feeMinor = matchCurrency(input.feeMinor, quote.currency);
-  const startMs = parseTimestamp(input.promiseStart, "promiseStart");
-  const endMs = parseTimestamp(input.promiseEnd, "promiseEnd");
+  const promiseStart = input.promiseStart ?? quote.promiseStart;
+  const promiseEnd = input.promiseEnd ?? quote.promiseEnd;
+  const startMs = parseTimestamp(promiseStart, "promiseStart");
+  const endMs = parseTimestamp(promiseEnd, "promiseEnd");
   if (startMs >= endMs) {
     throw new InvalidDeliveryOverrideWindowError();
   }
   const overriddenAtMs = parseTimestamp(input.overriddenAt, "overriddenAt");
 
   const override: DeliveryQuoteOverride = Object.freeze({
+    kind: "manual_fee",
+    eventId: input.eventId,
     actorId: input.actorId,
-    role: "manager",
+    role: input.role as DeliveryManualFeeRole,
     reason: input.reason,
     feeMinor,
     promiseStart: serializeTimestamp(startMs, "promiseStart"),
@@ -193,6 +217,14 @@ export function applyDeliveryQuoteOverride(
   });
 
   return Object.freeze({ ...quote, override });
+}
+
+/**
+ * The fee the customer is actually charged: the authorized manual fee when
+ * present, otherwise the zone fee. Centralized so UI, API and reports agree.
+ */
+export function deliveryQuoteEffectiveFeeMinor(quote: DeliveryQuote): Money {
+  return quote.override?.feeMinor ?? quote.feeMinor;
 }
 
 function resolvePromiseStartMs(quotedAtMs: number, scheduledFor: string | null): number {

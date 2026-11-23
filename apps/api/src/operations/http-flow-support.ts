@@ -68,7 +68,9 @@ export async function createCustomerWithAddress(context: HttpFlowContext, postal
   ok(await context.send("cashier", "POST", "/customers/profile", { ...context.audit(), ...base, expectedVersion: 0,
     displayName: "Cliente Telefonico", phones: [{ contactId, label: "Celular", displayValue: "662 123 4567" }] }), "customer");
   ok(await context.send("cashier", "POST", "/customers/address", { ...context.audit(), ...base, expectedVersion: 0, addressId,
-    address: { label: "Casa", streetLine: "Calle Reforma 123", unit: null, neighborhood: "Centro", locality: "Hermosillo", region: "Sonora",
+    // No settlement catalog is seeded, so leave the neighborhood empty to use the postal-code
+    // coverage path; a neighborhood would force settlement resolution and quote as not_covered.
+    address: { label: "Casa", streetLine: "Calle Reforma 123", unit: null, neighborhood: null, locality: "Hermosillo", region: "Sonora",
       countryCode: "MX", postalCode, references: "Porton negro", instructions: null, coordinates: null } }), "address");
   ok(await context.send("cashier", "POST", "/customers/address/validate", { ...context.audit(), ...base, expectedVersion: 1, addressId }), "address_validate");
   return { addressId, contactId, customerId };

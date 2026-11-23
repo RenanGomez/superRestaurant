@@ -108,3 +108,6 @@ recordings/
 
 # agent-harness: temporales, respaldos y salidas de depuración (por nombre, nunca por tamaño)
 .harness/**/*.template-new
+
+# agent-harness: temporales, respaldos y salidas de depuración (por nombre, nunca por tamaño)
+.harness/run/

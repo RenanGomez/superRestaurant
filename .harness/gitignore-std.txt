@@ -1,4 +1,4 @@
-# agent-harness: temporales, respaldos y salidas de depuración (por nombre, nunca por tamaño)
+﻿# agent-harness: temporales, respaldos y salidas de depuración (por nombre, nunca por tamaño)
 .tmp/
 tmp/
 *.before
@@ -15,6 +15,7 @@ screenshots/
 recordings/
 .harness/runs/
 .harness/state/
+.harness/run/
 .harness/queue/
 .harness/worktrees/
 .harness/context/repo.md

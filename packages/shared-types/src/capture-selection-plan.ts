@@ -79,6 +79,22 @@ export interface CaptureSelectionPlanProjectionModifierV1 {
   readonly unitPriceMinor: number;
 }
 
+/** One half of a pizza V2 line as picked (ids only, never prices); mirrors the wire `pizza` of a replace command. */
+export interface CaptureSelectionPlanProjectionPizzaHalfV1 {
+  readonly fraction: "half-a" | "half-b";
+  readonly productId: string;
+  readonly variantId: string | null;
+  readonly ingredientOptionIds: readonly string[];
+  readonly extraOptionIds: readonly string[];
+  readonly removedIngredientOptionIds: readonly string[];
+}
+
+/** The stored pizza V2 picks of a line, returned so a client can restore the line after a reload. */
+export interface CaptureSelectionPlanProjectionPizzaV1 {
+  readonly ruleVersion: "pizza-halves-v2";
+  readonly halves: readonly [CaptureSelectionPlanProjectionPizzaHalfV1, CaptureSelectionPlanProjectionPizzaHalfV1];
+}
+
 /** A single resolved line inside the read-side selection projection. */
 export interface CaptureSelectionPlanProjectionLineV1 {
   readonly lineId: string;
@@ -92,6 +108,8 @@ export interface CaptureSelectionPlanProjectionLineV1 {
   readonly modifiers: readonly CaptureSelectionPlanProjectionModifierV1[];
   /** Half-and-half line only: the two priced halves (flavor, extras, exclusions); absent for whole lines. */
   readonly halves?: readonly FractionHalfProjectionV1[];
+  /** Pizza V2 line only: the stored picks (ids), additive; absent for every other line. */
+  readonly pizza?: CaptureSelectionPlanProjectionPizzaV1;
 }
 
 /**
@@ -315,8 +333,12 @@ function parseProjectionLine(value: unknown): CaptureSelectionPlanProjectionLine
   const projectionKeys = [
     "lineId", "productId", "variantId", "productName", "quantity", "unitPriceMinor", "lineTotalMinor", "note", "modifiers",
   ];
-  const record = exactRecord(value, projectionKeys) ?? exactRecord(value, [...projectionKeys, "halves"]);
+  const record = exactRecord(value, projectionKeys) ?? exactRecord(value, [...projectionKeys, "halves"])
+    ?? exactRecord(value, [...projectionKeys, "pizza"]) ?? exactRecord(value, [...projectionKeys, "halves", "pizza"]);
   if (record === undefined) return undefined;
+  const rawPizza = Object.hasOwn(record, "pizza") ? own(record, "pizza") : undefined;
+  const pizza = rawPizza === undefined ? undefined : parseProjectionPizza(rawPizza);
+  if (rawPizza !== undefined && pizza === undefined) return undefined;
   const rawHalves = Object.hasOwn(record, "halves") ? exactArray(own(record, "halves"), 2) : undefined;
   const halves = rawHalves?.map(parseFractionHalfProjectionV1);
   if (Object.hasOwn(record, "halves") && (halves === undefined || halves.length !== 2 || halves.some((half) => half === undefined))) {
@@ -344,8 +366,49 @@ function parseProjectionLine(value: unknown): CaptureSelectionPlanProjectionLine
   }
   return deepFreeze({
     ...(halves === undefined ? {} : { halves: halves as FractionHalfProjectionV1[] }),
+    ...(pizza === undefined ? {} : { pizza }),
     lineId, lineTotalMinor, modifiers, note, productId, productName, quantity, unitPriceMinor, variantId,
   });
+}
+
+const MAX_PIZZA_OPTIONS_PER_ROLE = 60;
+
+function uuidList(value: unknown): readonly string[] | undefined {
+  const items = exactArray(value, MAX_PIZZA_OPTIONS_PER_ROLE);
+  if (items === undefined) return undefined;
+  const ids = items.map((item) => uuid(item));
+  // Same rule as the API input parser (apps/api capture-pizza-plan.ts): no duplicate ids inside a role.
+  return ids.every((id) => id !== undefined) && new Set(ids).size === ids.length ? (ids as string[]) : undefined;
+}
+
+function parseProjectionPizza(value: unknown): CaptureSelectionPlanProjectionPizzaV1 | undefined {
+  const record = exactRecord(value, ["ruleVersion", "halves"]);
+  if (record === undefined || own(record, "ruleVersion") !== "pizza-halves-v2") return undefined;
+  const rawHalves = exactArray(own(record, "halves"), 2);
+  if (rawHalves === undefined || rawHalves.length !== 2) return undefined;
+  const halves: CaptureSelectionPlanProjectionPizzaHalfV1[] = [];
+  for (const [index, rawHalf] of rawHalves.entries()) {
+    const half = exactRecord(rawHalf, [
+      "fraction", "productId", "variantId", "ingredientOptionIds", "extraOptionIds", "removedIngredientOptionIds",
+    ]);
+    if (half === undefined) return undefined;
+    const fraction = index === 0 ? "half-a" : "half-b";
+    const productId = uuid(own(half, "productId"));
+    const variantId = nullableUuid(own(half, "variantId"));
+    const ingredientOptionIds = uuidList(own(half, "ingredientOptionIds"));
+    const extraOptionIds = uuidList(own(half, "extraOptionIds"));
+    const removedIngredientOptionIds = uuidList(own(half, "removedIngredientOptionIds"));
+    if (own(half, "fraction") !== fraction || productId === undefined || variantId === undefined
+      || ingredientOptionIds === undefined || extraOptionIds === undefined || removedIngredientOptionIds === undefined) {
+      return undefined;
+    }
+    // One role per option in a half: not both ingredient and extra, nor added and removed.
+    const added = [...ingredientOptionIds, ...extraOptionIds];
+    if (new Set(added).size !== added.length || removedIngredientOptionIds.some((id) => added.includes(id))) return undefined;
+    halves.push({ extraOptionIds, fraction, ingredientOptionIds, productId, removedIngredientOptionIds, variantId });
+  }
+  const [first, second] = halves;
+  return first === undefined || second === undefined ? undefined : { halves: [first, second], ruleVersion: "pizza-halves-v2" };
 }
 
 function parseProjectionModifier(value: unknown): CaptureSelectionPlanProjectionModifierV1 | undefined {

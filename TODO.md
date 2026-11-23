@@ -141,7 +141,38 @@ Reglas: una ronda de revisión en nivel C, dos en B, revisión doble en A con co
 - [ ] **REVIEW · C** — `tables-tabs-count` (Gemini; en `main`; puertas web sin caché por L0; fix1 restauró los totales por cuenta): pestañas por cuenta con total, «+ Nueva» a la derecha, contador sobre la mesa.
 - [ ] **REVIEW · A** — `caja-split-payments` (en `main` b2f360f; Gemini impl + Claude fix1 + Codex fix2; revisión doble Claude CORREGIR→ok y Codex CORREGIR→ok; migración `20261102000300` aplicada en Supabase (autorización permanente, aditiva); API reiniciada): causa raíz del cobro que «falla» pero cobra (`redirect()` atrapado por el `try/catch` del cliente), cotización sin reescritura, `capturedBy`, encabezado de cuenta, «Pagar total / Dividir pago», desglose de pagos, tarjetas expandibles. Investigación en `.agents/reports/caja-split-payments-research.md`.
 
-Última actualización: 2026-11-02
+### Smoke 2026-11-05 (plan en `docs/plans/smoke-2026-11-05-plan.md`; briefs en `.agents/briefs/`)
+
+- [ ] **REVIEW · C** — Ola 1 carril A (dsh, cadena sobre `capture-workspace.tsx`): `capture-drafts-tidy` (C1) → `capture-customer-search` (C2) → `capture-shortcuts-r2` (C3).
+- [ ] **REVIEW · C** — Ola 1 carril B (dsh): `field-hint-tab` (C4), `capture-menu-category-images` (C5), `capture-address-state` (C6), `shell-mobile-nav` (R1).
+- [ ] **REVIEW** — Diagnóstico (Codex, sin escritura): D1 resuelto (`customer-search-stale-results`); D2 causa confirmada (consulta read-only 2026-11-19): `app.delivery_zones` está VACÍA en el remoto; Emmanuel debe crear la zona (con CP 85860) en `/app/delivery-zones`.
+- [ ] **REVIEW · C** — Ola 1 editor de menú (dsh, cadena): `menu-hide-locked-ingredients` (M0) → `menu-sizes-inline` (M1) → `menu-product-actions` (M2) → `menu-photos-recent` (M3) → `menu-photo-crop` (M4).
+- [ ] **REVIEW · A** — Fase 3: criterios aprobados por Emmanuel (2026-11-20). P3-1 (contrato+dominio, implementer-claude por fallo de solo lectura de Codex) en REVIEW: 10 vectores en pruebas, snapshot versionado, doble revisión (Codex CORREGIR → ronda 2; Sonnet APROBAR), gates globales 40/40. Deuda P3-2: pertenencia de ingredientes al grupo base en `save_menu_catalog`. P3-2 (migración SQL + test rollback-only) escrita y corregida en 3 rondas (Codex CORREGIR→corregido; Sonnet CORREGIR sobre versión previa→retoques aplicados); SQL NO EJECUTADO en ninguna base (verificador rollback-only y paridad real pendientes; migración remota requiere autorización de Emmanuel). P3-3 (API: plan v2, snapshots `pizzaHalves`, codec, guard fail-closed) en REVIEW tras doble revisión (Codex+Sonnet, 2 rondas); gates globales 40/40 (Node 24). P3-4 (UI editor/captura, nivel C) y P3-5 (proyección `pizza`, lectores, guía del operador §14) implementados por implementer-claude (fallback: Codex solo lectura), gates globales 40/40; SIN revisión de código P3-4/P3-5 ni verificación en navegador; SQL sin ejecutar.
+- [ ] **REVIEW · C** — Fase 4: boceto aprobado por Emmanuel (2026-11-20); R2-1..R2-3 implementados por dsh (menú con carrusel y fichas grandes, hoja de producto, pasos Pedido→Cliente→Entrega, barra flotante «Total de productos»); revisión Codex (1 ronda) corregida en `r2-fixes`; lint/typecheck/test web verdes. NO VERIFICADO en navegador real (390×844 y escritorio).
+- [ ] **CANCELLED** — `menu-photo-focus`: reemplazada por M4 (`menu-photo-crop`).
+
+### Smoke 2026-11-05 · ronda 2 (plan en `docs/plans/smoke-2026-11-05-r2-plan.md`)
+
+- [ ] **TODO · B** — K0 `capture-landing-diag` (Codex sin escritura) → tarea B de API si falta algo (customerId/canal al crear, nombre Recoger, filtro por cliente, regla Domicilio exige cliente en servidor).
+- [ ] **TODO · C** — Carril CW: K1 `capture-landing-customer-first` → K2 `capture-shortcuts-r3` (Alt+N global, Alt+Shift+R, Escape en capas).
+- [ ] **TODO · C** — Carril Clientes: K4 `customer-phone-remove-confirm` → K3 `customer-open-captures` (tras K0).
+- [ ] **TODO · A** — Pizza ronda 2: B0 spec delta (puerta Emmanuel) → B1a dominio/tipos → B1b SQL (editar en sitio: migraciones 20261120000100/200 confirmadas NO aplicadas en remoto el 2026-11-20) → B1c API → B1d mobile; B3 tiles → B2 editor; B4 captura.
+- [ ] **TODO · A** — Zonas por colonia: Z0 datos SEPOMEX (Emmanuel descarga) · Z1 spec (puerta Emmanuel) → Z2 SQL → Z3 API → Z4 editor de zonas · Z5 formulario de dirección (tras K4).
+- [ ] **TODO** — Cierre de ola: puertas globales, verificación en navegador (escritorio y 390×844), `docs/smoke/smoke-<fecha>.html`.
+
+#### Smoke r2 · estado y pendientes para la siguiente conversación (2026-11-21)
+
+Hecho en `feat/smoke-r1` (REVIEW, sin push): K1, K2, K4; B1a, B1b, B1c, B1d, B2, B3, B4; Z0, Z2, Z3, Z4, Z5; harness y `queue-watch.ps1`. Detalle y hashes en HANDOFF. Smoke humano: `docs/smoke/smoke-2026-11-21.html`. **Regla:** tras cada cambio integrado, actualizar `docs/smoke/smoke-2026-11-21.data.json` y correr `node tools/agentic/build-smoke-html.mjs 2026-11-21` (AGENTS.md §19.5).
+
+- [ ] **BLOCKED · A** — **z2b** `z2b-rebase-confirm-on-pizza-v2`: reconstruir `app_private.confirm_capture_draft_v3` de `20261121000100` sobre el cuerpo v2 de `20261120000100` (~1767). Worktree `harness-wt/.../z2b-rebase-confirm-on-pizza-v2` tiene un diff parcial sin pruebas ni informe; revisarlo o relanzar. Falta: caso de prueba pizza+zona en `supabase/tests`, prueba negativa de cobertura vacía (`delivery_zones_coverage_nonempty` eliminado en la línea ~789), verificación en PG local rollback-only (`pnpm verify:pizza-model-v2-schema:rollback` y verificador de zonas). Luego: corregir estado en la cola, borrar `.harness/state/ALERT`, commit en el worktree y cherry-pick a `feat/smoke-r1`.
+- [ ] **TODO · A** — Rerevisar SQL (Sonnet) tras z2b; revisión Codex (segunda familia) de B1a/B1b/B1c/Z2/Z3; comprobar clúster/base huérfana en `.cache/postgres-local` (runId `edc8b6517faf443f9c7e9630acb1eb19`).
+- [ ] **TODO · B/A** — P2 de API: `resolveAddress` (`apps/api/src/delivery-zones.ts` ~646) debe devolver `settlement_unknown` y no propagar `settlementId` sin confirmar (+ prueba); verificar que `confirm` relea la cuota manual en SQL; verificar que `dist/` no está en Git.
+- [ ] **TODO · A** — Tarea API K0-B: contacto de Recoger (nombre/teléfono) como campo del borrador y regla «Domicilio exige cliente» en servidor (hoy Recoger sin cliente se bloquea en `confirm_capture_order`); incluye migración. Después **K3** `customer-open-captures` (UI, nivel C).
+- [ ] **TODO · C** — Revisión Codex de una ronda + verificación en navegador (escritorio y 390×844, consola limpia, targets 44 px; login con `tools\agentic\local-servers\e2e-auth.bat`) de B2, B3, B4, Z4, Z5, K1, K2, K4. Mejora conocida de Z4: colonias guardadas se muestran por id hasta buscarlas por nombre.
+- [ ] **TODO** — Cierre: corrida limpia de puertas globales (Node 24 por shim; sin jobs en paralelo), quitar worktrees de delegación con `.harness/bin/remove-worktree.ps1`, commit de briefs/reportes nuevos (incluye `.agents/reports/z2b-*`), actualizar el smoke.
+- [ ] **Emmanuel** — Autorizar (o no) aplicar en remoto `20261120000100`, `20261120000200`, `20261121000100` (staging rollback-only primero) cuando z2b esté integrado; confirmar que nada se aplicó desde el preflight del 2026-11-20; decidir si «EPIPE con informe completo» cuenta como éxito del motor dsh.
+
+Última actualización: 2026-11-19
 
 Fuente principal: `PLAN_MODERNIZACION_POS_RESTAURANTE.md`.
 

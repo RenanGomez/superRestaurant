@@ -49,6 +49,7 @@ export function FieldHint({ label, text }: { readonly label?: string | undefined
     <span ref={root} className="relative inline-flex align-middle" onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       <button
         type="button"
+        tabIndex={-1}
         aria-label={label === undefined || label.trim() === "" ? "Ayuda" : `Ayuda sobre ${label.trim()}`}
         aria-describedby={id}
         aria-expanded={open}
