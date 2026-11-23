@@ -158,12 +158,24 @@ jobs:
           done
       - name: Run SQL tests
         run: |
+          failed=0
           for file in supabase/tests/*.sql; do
             case "$file" in */tenancy_memberships_catalog.sql|*/tenancy_memberships_runtime_catalog.sql|*/tenancy_memberships_post_dining_zones_catalog.sql|*/tenancy_memberships_post_dining_zones_runtime_catalog.sql) continue ;; esac
             if grep -Fxq "$(basename "$file")" "$RUNNER_TEMP/sql-executed"; then continue; fi
             echo "Testing $file"
-            psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$file"
+            if [[ "$file" == */capture_delivery_order_invariants.sql ]]; then
+              # Match run-capture-delivery-order-schema-verification: fixtures inspect app tables as postgres.
+              if ! sed -e "s/execute 'set local role app_api';//g" -e "s/execute 'reset role';//g" "$file" |
+                psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1; then
+                echo "::error file=$file::SQL test failed"
+                failed=1
+              fi
+            elif ! psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$file"; then
+              echo "::error file=$file::SQL test failed"
+              failed=1
+            fi
           done
+          exit "$failed"
       # Other rollback verifiers embed a Windows-only PostgreSQL executable or expect
       # a specific pre-migration Supabase catalog; these three use LocalPostgres.
       - name: Run compatible rollback verifiers
