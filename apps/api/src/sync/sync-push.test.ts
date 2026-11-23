@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { SyncPushService } from "./sync-push.service.js";
+import { SyncMergeExecutor } from "./sync-merge-executor.js";
+import { parseSyncEnvelopeV1 } from "@super-restaurant/shared-types";
+import type { TransactionalDatabaseClientPort } from "../database.js";
 
 const restaurantId = "44444444-4444-4444-8444-444444444444";
 const branchId = "55555555-5555-4555-8555-555555555555";
@@ -50,4 +53,20 @@ test("a transient failure stops later events from advancing the device sequence"
   assert.deepEqual((await service.push("token", { ...request, events: [event, later] })).results, []);
   assert.deepEqual(attempted, [event.eventId]);
   assert.deepEqual(omitted, ["CONCURRENT_RETRY", "DEVICE_SEQUENCE_BLOCKED"]);
+});
+
+test("executor checks membership and device before processing an event", async () => {
+  const parsed = parseSyncEnvelopeV1(event);
+  assert.ok(parsed);
+  let checks = 0;
+  let state = { authorized: true, allowed: true, device: "revoked" };
+  const database: TransactionalDatabaseClientPort = {
+    query: async () => { throw new Error("unexpected pool query"); },
+    transaction: async (operation) => operation({ query: async () => { checks += 1; return { rows: [state] }; } }),
+  };
+  const executor = new SyncMergeExecutor(database, { verifyAccessToken: async () => ({ actorId: event.actorId }) });
+  assert.equal((await executor.execute("token", parsed))?.code, "DEVICE_REVOKED");
+  state = { authorized: false, allowed: false, device: "unknown" };
+  assert.equal((await executor.execute("token", parsed))?.code, "AUTH_REVOKED");
+  assert.equal(checks, 2);
 });
