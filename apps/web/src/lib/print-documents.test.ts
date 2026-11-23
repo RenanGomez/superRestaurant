@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseOrderDetailV1, type OrderDetailItemV1, type PaymentCollectionSummaryV1 } from "@super-restaurant/shared-types";
-import { buildCustomerTicket, buildKitchenDocuments } from "./print-documents.js";
+import { buildCustomerTicket, buildKitchenDocuments, markDocumentPendingSync, PENDING_SYNC_TICKET_MARKER } from "./print-documents.js";
 
 const scope = {
   restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000",
@@ -140,4 +140,16 @@ test("account name formats as Mesa: <name> · <account> or Cuenta: <account> whe
   const counterWithoutAccount = { ...order, tableId: null, accountLabel: null };
   const counterLines = [...buildKitchenDocuments(counterWithoutAccount)[0]!.lines, ...buildCustomerTicket(counterWithoutAccount, [], header).lines];
   assert.ok(!counterLines.some((line) => line.startsWith("Cuenta:")));
+});
+
+test("markDocumentPendingSync prepends the exact pending-sync marker without mutating the source", () => {
+  const source = buildCustomerTicket(order, [], { restaurantName: "R", branchName: "S" });
+  const marked = markDocumentPendingSync(source);
+  assert.equal(marked.lines[0], PENDING_SYNC_TICKET_MARKER);
+  assert.equal(marked.lines[0], "Pendiente de sincronizar (solo este dispositivo)");
+  assert.equal(marked.title, source.title);
+  assert.equal(marked.lines.length, source.lines.length + 1);
+  assert.deepEqual(marked.lines.slice(1), source.lines);
+  // The original document is untouched.
+  assert.notEqual(source.lines[0], PENDING_SYNC_TICKET_MARKER);
 });

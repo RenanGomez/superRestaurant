@@ -12,6 +12,7 @@ import { getRequestSession, getRequestMemberships, getRequestAuthorizedBranch } 
 import { orderDetailAction, sendToKitchenAction } from "../orders/actions";
 import { captureWorkspaceAction, quoteCaptureLineAction, reloadCaptureCatalog } from "./actions";
 import { CaptureWorkspace } from "./capture-workspace";
+import { OfflinePosNotice } from "./offline-pos-notice";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +38,7 @@ export default async function CapturePage({ searchParams }: { readonly searchPar
       <h1 className="break-words font-heading text-2xl font-bold">Nueva captura · {membership.restaurantName}</h1>
       <p className="mt-1 break-words text-sm text-text-muted">{membership.branchName} · conexión requerida · el borrador aún no es una orden</p>
     </header>
+    {canOperate && <OfflinePosNotice scope={scope} />}
     {canOperate && catalog !== undefined
       ? <MenuImageBaseUrlProvider url={env.supabaseUrl}><CaptureWorkspace scope={scope} action={captureWorkspaceAction} quoteLine={quoteCaptureLineAction} canManageAssignment={canManageAssignment} catalog={catalog}
         reloadCatalog={reloadCaptureCatalog} orderDetail={orderDetailAction} sendToKitchen={sendToKitchenAction}

@@ -7,6 +7,20 @@ export interface PrintDocument {
   readonly lines: readonly string[];
 }
 
+/** Exact marker that must appear on any ticket printed for an operation not yet synced (M2). */
+export const PENDING_SYNC_TICKET_MARKER = "Pendiente de sincronizar (solo este dispositivo)";
+
+/**
+ * Returns a copy of a ticket/comanda document explicitly marked as pending sync. Offline Web POS
+ * printing must always go through this helper so the paper never claims a cross-device delivery.
+ */
+export function markDocumentPendingSync(document: PrintDocument): PrintDocument {
+  return {
+    lines: [PENDING_SYNC_TICKET_MARKER, ...document.lines],
+    title: document.title,
+  };
+}
+
 type PrintedPayment = Pick<
   OrderPaymentV1,
   "method" | "amountMinor" | "tipMinor" | "tenderedAmountMinor" | "changeMinor" | "transferReference"
