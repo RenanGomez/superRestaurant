@@ -14,7 +14,7 @@ import {
 } from "@nestjs/common";
 import type { MenuCatalogStateV1 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { MenuCatalogApplicationError, MenuCatalogService } from "./menu-catalog.js";
 
 @Controller("catalog/menu")
@@ -31,7 +31,7 @@ export class MenuCatalogController {
     return this.map(() => this.catalogs.read(getAuthenticatedPrincipal(request), { branchId, restaurantId }));
   }
 
-  @Put()
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Put()
   @Header("Cache-Control", "private, no-store")
   public save(@Req() request: unknown, @Body() body: unknown): Promise<MenuCatalogStateV1> {
     return this.map(() => this.catalogs.save(getAuthenticatedPrincipal(request), body));

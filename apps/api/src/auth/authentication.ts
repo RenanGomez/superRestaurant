@@ -30,6 +30,7 @@ export class RateLimitStore {
     if (entry !== undefined && entry.expiresAt <= now) { this.entries.delete(key); entry = undefined; }
     if (entry === undefined) {
       if (this.entries.size >= this.capacity) {
+        // Map preserves insertion order, so eviction removes the oldest inserted key.
         const oldest = this.entries.keys().next().value;
         if (oldest !== undefined) this.entries.delete(oldest);
       }
@@ -130,9 +131,7 @@ export class SupabaseAuthGuard implements CanActivate {
     if (options !== undefined && options !== null && typeof options === "object") {
       let operation = this.operations.get(handler);
       if (operation === undefined) { operation = this.nextOperation++; this.operations.set(handler, operation); }
-      const branch = request.body?.scope?.branchId;
-      const branchKey = typeof branch === "string" && uuidPattern.test(branch) ? branch.toLowerCase() : "none";
-      this.rejectLimited(response, this.requests.consume(`${principal.actorId}|${branchKey}|${operation}`, options.limit, options.windowMs));
+      this.rejectLimited(response, this.requests.consume(`${principal.actorId}|${operation}`, options.limit, options.windowMs));
     }
     return true;
   }
@@ -162,7 +161,6 @@ export function parseBearerAuthorization(value: unknown): string | undefined {
 type AuthenticatedRequest = {
   readonly headers?: { readonly authorization?: unknown };
   readonly socket?: { readonly remoteAddress?: string };
-  readonly body?: { readonly scope?: { readonly branchId?: unknown } };
   readonly [authenticatedPrincipalKey]?: AuthenticatedPrincipal;
 };
 

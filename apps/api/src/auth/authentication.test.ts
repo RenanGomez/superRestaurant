@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
 
 import { Reflector } from "@nestjs/core";
@@ -149,11 +150,15 @@ test("guard rejects malformed principals returned by a misconfigured verifier", 
 
 test("financial mutations are limited per verified actor with a generic 429", async () => {
   let actorId = "8cc7eb84-af2a-4e84-95de-967c39af86ab";
+  let retryAfter = "";
   const guard = new SupabaseAuthGuard({ verifyAccessToken: async () => ({ actorId }) }, new Reflector());
   const context = () => ({
     getClass: () => PaymentsController,
     getHandler: () => PaymentsController.prototype.quote,
-    switchToHttp: () => ({ getRequest: () => ({ headers: { authorization: "Bearer sensitive-access-token-value" } }) }),
+    switchToHttp: () => ({
+      getRequest: () => ({ body: { scope: { branchId: randomUUID() } }, headers: { authorization: "Bearer sensitive-access-token-value" } }),
+      getResponse: () => ({ setHeader: (name: string, value: string) => { if (name === "Retry-After") retryAfter = value; } }),
+    }),
   }) as never;
   for (let i = 0; i < 60; i += 1) assert.equal(await guard.canActivate(context()), true);
   await assert.rejects(guard.canActivate(context()), (error: unknown) => {
@@ -161,6 +166,7 @@ test("financial mutations are limited per verified actor with a generic 429", as
     assert.equal((error as { status: number }).status, 429);
     return true;
   });
+  assert.ok(Number(retryAfter) > 0);
   actorId = "9cc7eb84-af2a-4e84-95de-967c39af86ab";
   assert.equal(await guard.canActivate(context()), true);
 });

@@ -2,7 +2,7 @@ import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException,
   Header, HttpCode, Inject, NotFoundException, Post, Req, ServiceUnavailableException,
 } from "@nestjs/common";
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { CustomerDirectoryApplicationError, CustomerDirectoryQueryService, CustomerDirectoryService } from "./customer-directory.js";
 
 /** Search uses a body so phone/address PII does not enter URLs or access-log query strings. */
@@ -13,7 +13,7 @@ export class CustomerDirectoryController {
     @Inject(CustomerDirectoryQueryService) private readonly queries: CustomerDirectoryQueryService,
   ) {}
 
-  @Post("profile")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("profile")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public saveProfile(@Req() request: unknown, @Body() body: unknown) {
@@ -21,7 +21,7 @@ export class CustomerDirectoryController {
     return this.execute(() => this.directory.saveProfile(principal, body));
   }
 
-  @Post("address")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("address")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public saveAddress(@Req() request: unknown, @Body() body: unknown) {

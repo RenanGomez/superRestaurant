@@ -122,28 +122,28 @@ export class CapturesController {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.noSale.closeNoSale(principal, body));
   }
-  @Post("selection-plan")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("selection-plan")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async replaceSelectionPlan(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV5> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.selectionPlan.replace(principal, body));
   }
-  @Post("delivery-quote")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("delivery-quote")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async requestDeliveryQuote(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV5> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.deliveryQuote.requestQuote(principal, body));
   }
-  @Post("line-quote")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("line-quote")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async quoteLinePrice(@Req() request: unknown, @Body() body: unknown): Promise<CaptureLineQuoteResultV1> {
     const principal = getAuthenticatedPrincipal(request);
     return this.execute(() => this.captures.quoteLinePrice(principal, body));
   }
-  @Post("payment-intent")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("payment-intent")
   @HttpCode(200)
   @Header("Cache-Control", "private, no-store")
   public async setPaymentIntent(@Req() request: unknown, @Body() body: unknown): Promise<CaptureWorkspaceV5> {

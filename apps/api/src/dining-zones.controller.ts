@@ -13,14 +13,14 @@ import {
 } from "@nestjs/common";
 import type { DiningZoneV1 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { DiningZoneApplicationError, DiningZoneService } from "./dining-zones.js";
 
 @Controller("dining/zones")
 export class DiningZonesController {
   public constructor(@Inject(DiningZoneService) private readonly zones: DiningZoneService) {}
 
-  @Post()
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post()
   @HttpCode(201)
   @Header("Cache-Control", "private, no-store")
   public async createZone(@Req() request: unknown, @Body() body: unknown): Promise<DiningZoneV1> {

@@ -12,14 +12,14 @@ import {
 } from "@nestjs/common";
 import type { MenuImageUploadResultV1 } from "@super-restaurant/shared-types";
 
-import { getAuthenticatedPrincipal } from "./auth/authentication.js";
+import { getAuthenticatedPrincipal, RateLimited } from "./auth/authentication.js";
 import { MenuCatalogImageApplicationError, MenuCatalogImageService } from "./menu-catalog-images.js";
 
 @Controller("menu/images")
 export class MenuCatalogImagesController {
   public constructor(@Inject(MenuCatalogImageService) private readonly images: MenuCatalogImageService) {}
 
-  @Post()
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post()
   @Header("Cache-Control", "private, no-store")
   public async upload(@Req() request: unknown, @Body() body: unknown): Promise<MenuImageUploadResultV1> {
     try {
@@ -35,7 +35,7 @@ export class MenuCatalogImagesController {
     }
   }
 
-  @Post("copy")
+  @RateLimited({ limit: 60, windowMs: 60_000 }) @Post("copy")
   @Header("Cache-Control", "private, no-store")
   public async copy(@Req() request: unknown, @Body() body: unknown): Promise<MenuImageUploadResultV1> {
     try {
