@@ -1,3 +1,8 @@
+## m2-api-sync-push-merge-fix — 2026-11-23 (REVIEW local, nivel A)
+
+- PR #60, base `bfe34e44433ecc2c4b98183a95cc7fc5fb2b80da`: entidades y operaciones no implementadas se registran como rechazos estables; permisos y dispositivo se revalidan antes del ledger. Transiciones con versión obsoleta se rechazan. `lock_timeout` local de 2 s; BOM retirado e imports ordenados.
+- Pruebas simuladas cubren rechazo y continuación de lote, duplicate sin persistencia, reutilización de identificadores y secuencia fuera de orden. PG17 real cubre replay, colisiones, rollback por excepción y conflicto de persistencia, versión obsoleta, rechazo financiero, hueco y secuencias reutilizadas. CI PostgreSQL ya invoca `verify:sync-schema:rollback`, que llama a `verifySyncExecutor`.
+- Node 24: lint, typecheck y build API exit 0; test API exit 0. Verificador PG17 local exit 0: 76 migraciones, cursor concurrente OK y limpieza exitosa. CodeGraph no inicializado; inspección manual dirigida. No se hizo push ni se modificó el PR remoto por instrucción.
 ## m2-web-sync-status-ui — 2026-11-23 (REVIEW local · nivel C)
 
 - **Ronda 1 revisión cruzada PR #54 (cierre P1.1 + P2.1..P2.5 + P3.1/P3.3/P3.4):**

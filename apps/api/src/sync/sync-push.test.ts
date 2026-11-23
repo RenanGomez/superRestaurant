@@ -62,11 +62,71 @@ test("executor checks membership and device before processing an event", async (
   let state = { authorized: true, allowed: true, device: "revoked" };
   const database: TransactionalDatabaseClientPort = {
     query: async () => { throw new Error("unexpected pool query"); },
-    transaction: async (operation) => operation({ query: async () => { checks += 1; return { rows: [state] }; } }),
+    transaction: async (operation) => operation({ query: async (sql) => { if (sql.startsWith("SET LOCAL")) return { rows: [] }; checks += 1; return { rows: [state] }; } }),
   };
   const executor = new SyncMergeExecutor(database, { verifyAccessToken: async () => ({ actorId: event.actorId }) });
   assert.equal((await executor.execute("token", parsed))?.code, "DEVICE_REVOKED");
   state = { authorized: false, allowed: false, device: "unknown" };
   assert.equal((await executor.execute("token", parsed))?.code, "AUTH_REVOKED");
   assert.equal(checks, 2);
+});
+
+test("unsupported events are recorded as permanent rejections and do not block the batch", async () => {
+  const recorded: string[] = [];
+  const database: TransactionalDatabaseClientPort = {
+    query: async () => { throw new Error("unexpected pool query"); },
+    transaction: async (operation) => operation({ query: async (sql, params) => {
+      if (sql.startsWith("SET LOCAL")) return { rows: [] };
+      if (sql.includes("sync_authorized")) return { rows: [{ authorized: true, allowed: true, device: "active" }] };
+      if (sql.includes("sync_record_event")) {
+        const candidate = JSON.parse(String(params[2])) as { code: string };
+        recorded.push(candidate.code);
+        return { rows: [{ result: { status: "recorded", result: candidate } }] };
+      }
+      throw new Error("unexpected query");
+    } }),
+  };
+  const executor = new SyncMergeExecutor(database, { verifyAccessToken: async () => ({ actorId: event.actorId }) });
+  const entities = ["Payment", "CashMovement", "CashRegisterSession", "Refund", "OrderDiscount"] as const;
+  for (const entityType of entities) {
+    const parsed = parseSyncEnvelopeV1({ ...event, entityType });
+    assert.ok(parsed);
+    assert.equal((await executor.execute("token", parsed))?.code, "UNSUPPORTED_ENTITY");
+  }
+  const unsupportedOrder = parseSyncEnvelopeV1({ ...event, operation: "update", baseVersion: 1 });
+  assert.ok(unsupportedOrder);
+  assert.equal((await executor.execute("token", unsupportedOrder))?.code, "UNSUPPORTED_OPERATION");
+  assert.deepEqual(recorded, [...entities.map(() => "UNSUPPORTED_ENTITY"), "UNSUPPORTED_OPERATION"]);
+  const service = new SyncPushService(executor, { omitted: () => { throw new Error("unexpected omission"); } });
+  const second = { ...event, eventId: "77777777-7777-4777-8777-777777777777", idempotencyKey: "key-2", localSequence: 2 };
+  const response = await service.push("token", { ...request, events: [{ ...event, entityType: "Payment" }, second] });
+  assert.deepEqual(response.results.map((result) => result.code), ["UNSUPPORTED_ENTITY", "UNSUPPORTED_OPERATION"]);
+});
+
+test("executor preserves ledger deduplication, reuse and sequence results without persisting again", async () => {
+  const parsed = parseSyncEnvelopeV1({ ...event, operation: "transition", baseVersion: 1, payload: { targetStatus: "open" } });
+  assert.ok(parsed);
+  let reply: unknown = { status: "duplicate", result: { status: "accepted", code: null, canonicalVersion: 1, auditId: null } };
+  let persists = 0;
+  const database: TransactionalDatabaseClientPort = {
+    query: async () => { throw new Error("unexpected pool query"); },
+    transaction: async (operation) => operation({ query: async (sql) => {
+      if (sql.startsWith("SET LOCAL")) return { rows: [] };
+      if (sql.includes("sync_authorized")) return { rows: [{ authorized: true, allowed: true, device: "active" }] };
+      if (sql.includes("read_branch_operational_context")) return { rows: [{ result: { schemaVersion: 1, scope: { restaurantId, branchId }, roles: ["cashier"], timeZone: "America/Hermosillo" } }] };
+      if (sql.includes("read_order")) return { rows: [{ result: null }] };
+      if (sql.includes("sync_record_event")) return { rows: [{ result: reply }] };
+      if (sql.includes("persist_order_mutation")) persists += 1;
+      throw new Error("unexpected query");
+    } }),
+  };
+  const executor = new SyncMergeExecutor(database, { verifyAccessToken: async () => ({ actorId: event.actorId }) });
+  assert.equal((await executor.execute("token", parsed))?.status, "duplicate");
+  for (const code of ["EVENT_ID_REUSE", "IDEMPOTENCY_KEY_REUSE", "LOCAL_SEQUENCE_REUSE"]) {
+    reply = { status: "rejected", code };
+    assert.equal((await executor.execute("token", parsed))?.code, code);
+  }
+  reply = { status: "retry_wait", code: "SEQUENCE_OUT_OF_ORDER" };
+  assert.equal(await executor.execute("token", parsed), null);
+  assert.equal(persists, 0);
 });

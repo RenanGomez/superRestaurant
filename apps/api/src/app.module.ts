@@ -1,4 +1,4 @@
-import { Module } from "@nestjs/common";
+import { Logger, Module } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 
 import {
@@ -129,10 +129,9 @@ import { TABLE_BOARD_PORT, PostgresTableBoardAdapter, TableBoardService } from "
 import { ReportsController } from "./reports.controller.js";
 import { BRANCH_DAY_SUMMARY_PORT, PostgresBranchDaySummary, ReportsService } from "./reports.js";
 import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
-import { SyncController } from "./sync/sync.controller.js";
 import { SyncMergeExecutor } from "./sync/sync-merge-executor.js";
 import { SyncPushService } from "./sync/sync-push.service.js";
-import { Logger } from "@nestjs/common";
+import { SyncController } from "./sync/sync.controller.js";
 
 @Module({
   controllers: [

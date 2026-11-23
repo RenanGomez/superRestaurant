@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { parseSyncEnvelopeV1 } from "@super-restaurant/shared-types";
 import { PostgresDatabaseClient } from "../database.js";
@@ -32,6 +32,8 @@ export async function verifySyncExecutor(local: LocalPostgres): Promise<void> {
     assert.equal(await executor.execute("token", { ...event, payload: { ...event.payload, timeZone: "UTC" } }), null);
     assert.equal((await executor.execute("token", event))?.status, "accepted");
     assert.equal((await executor.execute("token", event))?.status, "duplicate");
+    assert.equal((await executor.execute("token", { ...event, payload: { ...event.payload, channel: "table" } }))?.code, "EVENT_ID_REUSE");
+    assert.equal((await executor.execute("token", { ...event, eventId: randomUUID(), entityId: randomUUID(), localSequence: 2 }))?.code, "IDEMPOTENCY_KEY_REUSE");
     const opening = { ...event, eventId: randomUUID(), idempotencyKey: randomUUID(), localSequence: 2,
       operation: "transition" as const, baseVersion: 1, payload: { targetStatus: "open" } };
     assert.equal((await executor.execute("token", opening))?.status, "accepted");
@@ -46,11 +48,28 @@ export async function verifySyncExecutor(local: LocalPostgres): Promise<void> {
     };
     const failingExecutor = new SyncMergeExecutor(failing, { verifyAccessToken: async () => ({ actorId: actor }) });
     await assert.rejects(failingExecutor.execute("token", next), /INJECTED_WRITE_FAILURE/u);
+    const conflicting: TransactionalDatabaseClientPort = {
+      query: (sql, params) => database.query(sql, params),
+      transaction: (operation) => database.transaction((db) => operation({ query: (sql, params) =>
+        sql.includes("persist_order_mutation") ? Promise.resolve({ rows: [{ result: { status: "conflict" } }] }) : db.query(sql, params) })),
+    };
+    await assert.rejects(new SyncMergeExecutor(conflicting, { verifyAccessToken: async () => ({ actorId: actor }) }).execute("token", next), /SYNC_CONCURRENT_RETRY/u);
     const afterRollback = await local.admin.query("select count(*)::int as count from app.sync_event_ledger where event_id=$1", [next.eventId]);
     assert.equal(afterRollback.rows[0]?.count, 0);
     assert.equal((await executor.execute("token", next))?.status, "accepted");
     const counts = await local.admin.query("select (select count(*)::int from app.orders where restaurant_id=$1) as orders, (select count(*)::int from app.sync_event_ledger where restaurant_id=$1) as ledger", [restaurant]);
     assert.deepEqual(counts.rows[0], { orders: 2, ledger: 3 });
+    const stale = { ...opening, eventId: randomUUID(), idempotencyKey: randomUUID(), localSequence: 4, baseVersion: 0 };
+    const staleResult = await executor.execute("token", stale);
+    assert.equal(staleResult?.status, "rejected");
+    assert.equal(staleResult.code, "STALE_BASE_VERSION");
+    const unsupported = { ...event, eventId: randomUUID(), idempotencyKey: randomUUID(), localSequence: 6, entityType: "Payment" as const };
+    assert.equal((await executor.execute("token", unsupported))?.code, "UNSUPPORTED_ENTITY");
+    assert.equal((await executor.execute("token", unsupported))?.code, "UNSUPPORTED_ENTITY");
+    const outOfOrder = { ...event, eventId: randomUUID(), idempotencyKey: randomUUID(), entityId: randomUUID(), localSequence: 5 };
+    assert.equal(await executor.execute("token", outOfOrder), null);
+    const reusedSequence = { ...outOfOrder, localSequence: 6 };
+    assert.equal((await executor.execute("token", reusedSequence))?.code, "LOCAL_SEQUENCE_REUSE");
     const foreign = { ...event, restaurantId: foreignRestaurant as typeof event.restaurantId, branchId: foreignBranch as typeof event.branchId };
     assert.equal((await executor.execute("token", foreign))?.code, "AUTH_REVOKED");
     await local.admin.query("insert into app.membership_role_grants(membership_id,role_code,granted_by) values ($1,'viewer',$2)", [membership, actor]);
