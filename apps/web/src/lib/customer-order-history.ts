@@ -1,10 +1,14 @@
 import {
+  parseCaptureWorkTrayResultV1,
   parseCustomerRecentOrderListV1,
   parseCustomerRecentOrdersQueryV1,
   parseCustomerRepeatOrderCaptureResultV1,
   parseCustomerRepeatOrderPreviewQueryV1,
   parseCustomerRepeatOrderPreviewV1,
   parseRepeatCustomerOrderIntoCaptureCommandV1,
+  type CaptureFulfillmentChannelV1,
+  type CaptureSourceChannelV1,
+  type CaptureWorkTrayResultV1,
   type CustomerRecentOrderListV1,
   type CustomerRecentOrderItemV1,
   type CustomerRepeatOrderCaptureResultV1,
@@ -19,6 +23,52 @@ export type CustomerOrderRequestResult = Readonly<{ ok: true; value: CustomerOrd
 
 export function countOrderArticles(items: readonly Pick<CustomerRecentOrderItemV1, "quantity">[]): number {
   return items.reduce((total, item) => total + item.quantity, 0);
+}
+
+export type CustomerOpenCapturesResult = Readonly<{ ok: true; value: CaptureWorkTrayResultV1 }>
+  | Readonly<{ ok: false; error: "denied" | "invalid" | "unavailable" }>;
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+const SOURCE_CHANNEL_LABELS: Record<CaptureSourceChannelV1, string> = {
+  counter: "Mostrador", integration: "Integración", phone: "Teléfono",
+  self_service: "Autoservicio", table: "Mesa", whatsapp_manual: "WhatsApp",
+};
+
+const FULFILLMENT_CHANNEL_LABELS: Record<CaptureFulfillmentChannelV1, string> = {
+  counter: "Mostrador", delivery: "Domicilio", dine_in: "Mesa", pickup: "Para recoger",
+};
+
+export function captureSourceChannelLabel(value: CaptureSourceChannelV1): string {
+  return SOURCE_CHANNEL_LABELS[value];
+}
+
+export function captureFulfillmentChannelLabel(value: CaptureFulfillmentChannelV1): string {
+  return FULFILLMENT_CHANNEL_LABELS[value];
+}
+
+export function formatCaptureUpdatedAt(value: string, timeZone?: string): string {
+  return new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short", timeZone }).format(new Date(value));
+}
+
+/** Open captures of one customer in the authorized branch; totals/identity stay server-side. */
+export async function requestCustomerOpenCaptures(
+  token: string,
+  baseUrl: string,
+  scope: Readonly<{ restaurantId: string; branchId: string }>,
+  customerId: string,
+): Promise<CustomerOpenCapturesResult> {
+  if (!UUID_PATTERN.test(customerId)) return { error: "invalid", ok: false };
+  try {
+    const url = scopedUrl(baseUrl, `/api/v1/customers/${encodeURIComponent(customerId)}/captures/open`, scope);
+    const response = await get(token, url);
+    if (!response.ok) return { error: response.status === 400 ? "invalid"
+      : response.status === 401 || response.status === 403 ? "denied" : "unavailable", ok: false };
+    const value = parseCaptureWorkTrayResultV1(await response.json());
+    if (value === undefined || value.items.length > 50
+      || value.items.some((item) => !sameScope(item.scope, scope))) return { error: "unavailable", ok: false };
+    return { ok: true, value };
+  } catch { return { error: "unavailable", ok: false }; }
 }
 
 export async function requestCustomerOrder(
