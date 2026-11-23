@@ -48,6 +48,11 @@ import {
 } from "./sync-key.js";
 import { MobileOfflineSession } from "./sync-session.js";
 import {
+  createWebCryptoEnvelopeCipher,
+  hexToBytes,
+  type MobileSyncEnvelopeCipher,
+} from "./sync-envelope.js";
+import {
   MobileSqliteSyncStorage,
   MobileSyncStorageError,
   toStorageError,
@@ -245,6 +250,26 @@ export async function openMobileSyncDatabase(options: OpenMobileSyncDatabaseOpti
 export const mobileSha256Hex = (text: string): Promise<string> =>
   digestStringAsync(CryptoDigestAlgorithm.SHA256, text, { encoding: CryptoEncoding.HEX });
 
+/**
+ * Per-scope envelope cipher bound to this installation's DEK. The same 32 bytes
+ * that key SQLCipher are imported (non-extractable) as an AES-256-GCM key. If the
+ * runtime has no `crypto.subtle`, this fails closed with
+ * `ENCRYPTION_UNAVAILABLE`: the app then works online-only instead of writing any
+ * scope as plaintext.
+ */
+export function createExpoEnvelopeCipher(deviceId: string, keys: MobileSyncKeyStore): MobileSyncEnvelopeCipher {
+  const subtle = (globalThis as { readonly crypto?: Crypto }).crypto?.subtle;
+  if (subtle === undefined) throw new MobileSyncStorageError("ENCRYPTION_UNAVAILABLE", "subtle");
+  return createWebCryptoEnvelopeCipher({
+    rawKey: async (version: number): Promise<Uint8Array> => {
+      const key = await keys.readKeyByVersion(deviceId, version);
+      if (key === null) throw new MobileSyncKeyError("ENCRYPTION_KEY_CORRUPT", "envelope-key");
+      return hexToBytes(key.hex);
+    },
+    subtle,
+  });
+}
+
 export interface MobileOfflineRuntime {
   readonly deviceId: string;
   readonly keys: MobileSyncKeyStore;
@@ -297,6 +322,7 @@ export async function openMobileOfflineRuntime(): Promise<MobileOfflineRuntime> 
   }
 
   const storage = new MobileSqliteSyncStorage({
+    cipher: createExpoEnvelopeCipher(deviceId, keys),
     database,
     deviceId,
     keyVersion: key.version,
@@ -336,11 +362,14 @@ export async function rotateMobileSyncDatabaseKey(runtime: MobileOfflineRuntime)
   } catch (error) {
     throw toStorageError(error, "STORAGE_COMMIT_FAILED");
   }
+  // Re-encrypt each scope envelope with the new key version while the old key is
+  // still in the keystore: pending outbox events survive, and no entry is ever
+  // left sealed with a key that `retireBelow` is about to delete.
+  await runtime.storage.rotateKeyVersion(next.version);
   // The rekey resolved, so the database now needs the new key: commit the
   // pointer before retiring the old key. If the commit fails, the old key is
   // kept and the next open falls back to `N + 1` via `openCandidates`.
   await runtime.keys.commitRotation(runtime.deviceId, next.version);
   await runtime.keys.retireBelow(runtime.deviceId, next.version);
-  runtime.storage.adoptKeyVersion(next.version);
   return next;
 }

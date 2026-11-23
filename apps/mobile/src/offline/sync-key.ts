@@ -115,6 +115,18 @@ export class MobileSyncKeyStore {
     return this.readVersion(deviceId).then((version) => this.readKey(deviceId, version));
   }
 
+  /**
+   * Reads one specific version, for the per-scope envelope cipher: after a
+   * rotation the old and the new version must both be importable until every
+   * scope was re-encrypted. Returns `null` instead of throwing on a missing slot.
+   */
+  public readKeyByVersion(deviceId: string, version: number): Promise<MobileSyncDatabaseKey | null> {
+    if (!Number.isSafeInteger(version) || version < 1 || version > SYNC_DB_KEY_MAX_VERSION) {
+      return Promise.resolve(null);
+    }
+    return this.tryReadKey(deviceId, version);
+  }
+
   /** Reads the current key, minting `v1` on first use. Idempotent across launches. */
   public getOrCreate(deviceId: string): Promise<MobileSyncDatabaseKey> {
     const existing = this.attempts.get(deviceId);

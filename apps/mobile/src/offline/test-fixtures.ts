@@ -17,6 +17,10 @@ import {
   type MobileSyncStoredMeta,
   type MobileSyncTransactionPort,
 } from "./sync-store.js";
+import {
+  createWebCryptoEnvelopeCipher,
+  type MobileSyncEnvelopeCipher,
+} from "./sync-envelope.js";
 
 export const DEVICE = "00000000-0000-4000-8000-00000000d1d1";
 export const OTHER_DEVICE = "00000000-0000-4000-8000-00000000d2d2";
@@ -125,12 +129,34 @@ export function fakeSha256(text: string): Promise<string> {
 
 export function storageFor(database: MobileSyncDatabasePort, deviceId = DEVICE): MobileSqliteSyncStorage {
   return new MobileSqliteSyncStorage({
+    cipher: fixtureEnvelopeCipher(),
     database,
     deviceId,
     keyVersion: 1,
     nowMs: () => Date.UTC(2026, 10, 23, 12, 0, 0),
     sha256Hex: fakeSha256,
   });
+}
+
+/**
+ * Real AES-256-GCM over Node's WebCrypto, with deterministic key material per
+ * version so a rotation test sees a genuinely different keyset. The production
+ * adapter resolves the same bytes from `expo-secure-store` instead.
+ */
+export function fixtureEnvelopeCipher(seed = 0x5a): MobileSyncEnvelopeCipher {
+  return createWebCryptoEnvelopeCipher({
+    rawKey: (version: number): Promise<Uint8Array> => Promise.resolve(fixtureKeyBytes(version, seed)),
+    subtle: globalThis.crypto.subtle,
+  });
+}
+
+/** Deterministic 32-byte key material for one version, shared with rotation tests. */
+export function fixtureKeyBytes(version: number, seed = 0x5a): Uint8Array {
+  const bytes = new Uint8Array(32);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = (version * 31 + index * 17 + seed) & 0xff;
+  }
+  return bytes;
 }
 
 interface EntryOverrides {

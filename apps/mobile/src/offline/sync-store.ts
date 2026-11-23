@@ -35,6 +35,13 @@ import {
   type SyncScopeInput,
 } from "@super-restaurant/sync-engine";
 
+import {
+  decodeScopedSnapshot,
+  encodeScopedSnapshot,
+  MobileScopeEnvelopeError,
+  type MobileSyncEnvelopeCipher,
+} from "./sync-envelope.js";
+
 export const MOBILE_SYNC_STORAGE_ERROR_CODES = [
   "ENCRYPTION_UNAVAILABLE",
   "STORAGE_COMMIT_FAILED",
@@ -92,6 +99,12 @@ export interface MobileSyncStorageOptions {
   readonly database: MobileSyncDatabasePort;
   /** SHA-256 of the serialized state, as lowercase hex. `expo-offline.ts` supplies expo-crypto. */
   readonly sha256Hex: (text: string) => Promise<string>;
+  /**
+   * AES-256-GCM cipher used to seal each `restaurantId|branchId` partition of the
+   * snapshot. Required: without it the store refuses to open, so nothing is ever
+   * written as plaintext.
+   */
+  readonly cipher: MobileSyncEnvelopeCipher;
   /** Version of the database key in `expo-secure-store` that this database was opened with. */
   readonly keyVersion: number;
   readonly nowMs?: () => number;
@@ -178,6 +191,7 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
   private readonly deviceId: string;
   private readonly database: MobileSyncDatabasePort;
   private readonly sha256Hex: (text: string) => Promise<string>;
+  private readonly cipher: MobileSyncEnvelopeCipher;
   private keyVersion: number;
   private readonly nowMs: () => number;
   private tail: Promise<unknown> = Promise.resolve();
@@ -194,6 +208,7 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
     this.deviceId = options.deviceId;
     this.database = options.database;
     this.sha256Hex = options.sha256Hex;
+    this.cipher = options.cipher;
     this.keyVersion = options.keyVersion;
     this.nowMs = options.nowMs ?? ((): number => Date.now());
   }
@@ -393,6 +408,42 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
     this.keyVersion = version;
   }
 
+  /**
+   * Re-encrypts every scope envelope with `version` in one transaction, keeping
+   * the replica, the outbox and `lastLocalSequence` untouched. This is the
+   * app-layer half of a verified DEK rotation: it must run while the previous key
+   * version is still readable, so a crash before commit leaves the old envelopes
+   * decryptable and a crash after commit leaves only the new ones.
+   */
+  public rotateKeyVersion(version: number): Promise<void> {
+    if (!Number.isSafeInteger(version) || version < 1) {
+      return Promise.reject(new MobileSyncStorageError("ENCRYPTION_UNAVAILABLE", "keyVersion"));
+    }
+    return this.serialize(async () => {
+      const previous = this.keyVersion;
+      try {
+        const generation = await this.database.withExclusiveTransaction(async (transaction) => {
+          const meta = await transaction.readMeta(this.deviceId);
+          if (meta?.quarantined === true) throw new MobileSyncStorageError("STORAGE_QUARANTINED");
+          if (meta?.locked === true) throw new MobileSyncStorageError("STORAGE_LOCKED");
+          const raw = await transaction.readSnapshot(this.deviceId);
+          if (raw === null) {
+            this.keyVersion = version;
+            return meta?.writeGeneration ?? 0;
+          }
+          const state = await this.hydrate(raw, meta);
+          this.keyVersion = version;
+          await this.writeSnapshot(transaction, state, meta);
+          return (meta?.writeGeneration ?? 0) + 1;
+        });
+        this.generation = generation;
+      } catch (error) {
+        this.keyVersion = previous;
+        throw toStorageError(error, "STORAGE_COMMIT_FAILED");
+      }
+    });
+  }
+
   // ---- Internals -------------------------------------------------------------------------
 
   private async readBoth(): Promise<{ readonly raw: string | null; readonly meta: MobileSyncStoredMeta | null }> {
@@ -407,21 +458,30 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
     }
   }
 
-  /** Parses, verifies the SHA-256 the adapter wrote, and enforces the sequence floor. */
+  /** Verifies the SHA-256, decrypts every scope envelope and enforces the sequence floor. */
   private async hydrate(raw: string, meta: MobileSyncStoredMeta | null): Promise<DurableSyncState> {
-    let value: unknown;
-    try {
-      value = JSON.parse(raw) as unknown;
-    } catch {
-      throw new MobileSyncStorageError("STATE_CORRUPT", "json");
-    }
-    const parsed = parseDurableState(value, this.deviceId);
-    if (!parsed.ok) {
-      throw new MobileSyncStorageError(parsed.code === "SEQUENCE_REGRESSION" ? "SEQUENCE_REGRESSION" : "STATE_CORRUPT", parsed.field);
-    }
+    // The adapter's SHA-256 over the stored envelope is an integrity gate before
+    // any decryption; a transient I/O failure must surface as a load failure, not
+    // as "corrupt evidence".
     if (meta !== null && meta.stateSha256.length > 0) {
       const digest = await this.sha256Hex(raw);
       if (digest !== meta.stateSha256) throw new MobileSyncStorageError("STATE_CORRUPT", "sha256");
+    }
+    let state: DurableSyncState;
+    try {
+      state = await decodeScopedSnapshot(raw, this.cipher, this.deviceId);
+    } catch (error) {
+      if (error instanceof MobileScopeEnvelopeError) {
+        throw new MobileSyncStorageError(
+          error.code === "ENCRYPTION_UNAVAILABLE" ? "ENCRYPTION_UNAVAILABLE" : "STATE_CORRUPT",
+          error.message,
+        );
+      }
+      throw error;
+    }
+    const parsed = parseDurableState(state, this.deviceId);
+    if (!parsed.ok) {
+      throw new MobileSyncStorageError(parsed.code === "SEQUENCE_REGRESSION" ? "SEQUENCE_REGRESSION" : "STATE_CORRUPT", parsed.field);
     }
     if (meta !== null && isSequenceRegression(parsed.value.lastLocalSequence, meta.lastLocalSequence)) {
       throw new MobileSyncStorageError("SEQUENCE_REGRESSION", "meta");
@@ -434,7 +494,7 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
     state: DurableSyncState,
     meta: MobileSyncStoredMeta | null,
   ): Promise<void> {
-    const json = JSON.stringify(state);
+    const json = await encodeScopedSnapshot(state, this.cipher, this.deviceId, this.keyVersion);
     const sha256 = await this.sha256Hex(json);
     const nextMeta: MobileSyncStoredMeta = {
       deviceId: this.deviceId,
@@ -572,6 +632,12 @@ function purgeState(state: DurableSyncState, retained: readonly OutboxEntry[]): 
 /** Maps a driver error to a stable storage code; quota is called out so the UI can go read-only. */
 export function toStorageError(error: unknown, fallback: MobileSyncStorageErrorCode): MobileSyncStorageError {
   if (error instanceof MobileSyncStorageError) return error;
+  if (error instanceof MobileScopeEnvelopeError) {
+    return new MobileSyncStorageError(
+      error.code === "ENCRYPTION_UNAVAILABLE" ? "ENCRYPTION_UNAVAILABLE" : "STATE_CORRUPT",
+      error.message,
+    );
+  }
   const message = error instanceof Error ? error.message : String(error);
   const lowered = message.toLowerCase();
   if (lowered.includes("sqlite_full") || lowered.includes("database or disk is full")

@@ -26,6 +26,7 @@ import {
   FakeSyncDatabase,
   entry,
   fakeSha256,
+  fixtureEnvelopeCipher,
   stateWith,
   storageFor,
   testId,
@@ -136,6 +137,7 @@ test("a tampered snapshot is reported as corrupt and never reset to an empty sta
 
   database.snapshots.set(DEVICE, JSON.stringify({ stateVersion: 1 }));
   const corrupt = new MobileSqliteSyncStorage({
+    cipher: fixtureEnvelopeCipher(),
     database,
     deviceId: DEVICE,
     keyVersion: 1,
@@ -338,7 +340,7 @@ test("engine restart retries the same idempotency key with scope isolation", asy
 test("transient hash I/O failure does not report corrupt evidence", async () => {
   const database = new FakeSyncDatabase();
   await storageFor(database).persist(stateWith([entry()]));
-  const store = new MobileSqliteSyncStorage({ database, deviceId: DEVICE, keyVersion: 1, sha256Hex: () => Promise.reject(new Error("temporary I/O")) });
+  const store = new MobileSqliteSyncStorage({ cipher: fixtureEnvelopeCipher(), database, deviceId: DEVICE, keyVersion: 1, sha256Hex: () => Promise.reject(new Error("temporary I/O")) });
   await expectStorageError(store.inspectPendingEvidence(), "STORAGE_LOAD_FAILED");
   assert.equal((await store.getStorageHealth()).quarantined, false);
 });
