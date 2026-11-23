@@ -178,7 +178,7 @@ begin
     values (restaurant,other_branch,o_fail,courier_a,'assigned',now(),cashier,cashier);
     raise exception 'DELIVERY_CROSS_SCOPE_ORDER_ACCEPTED';
   exception when foreign_key_violation then null; end;
-  if (select count(*) from app.order_deliveries)<>0 then raise exception 'DELIVERY_GUARD_PERSISTED_ROW'; end if;
+  if (select count(*) from app.order_deliveries where restaurant_id=restaurant)<>0 then raise exception 'DELIVERY_GUARD_PERSISTED_ROW'; end if;
 
   -- ---- Roles and the display name helper.
   if app_private.member_display_name(courier_a) is distinct from 'Repartidor Uno'
@@ -203,7 +203,8 @@ begin
   cmd := pg_temp.t_dcmd(restaurant,branch,o_fail,0,gen_random_uuid(),'k-extra',device,now_text,pg_catalog.jsonb_build_object('courierUserId',courier_a::text,'amountMinor',5));
   if (app_private.assign_delivery(cashier,cmd))->>'status'<>'conflict' then raise exception 'DELIVERY_EXTRA_KEY_ACCEPTED'; end if;
   execute 'reset role';
-  if (select count(*) from app.order_deliveries)<>0 or (select count(*) from app.order_delivery_events)<>0
+  if (select count(*) from app.order_deliveries where restaurant_id=restaurant)<>0
+    or (select count(*) from app.order_delivery_events where restaurant_id=restaurant)<>0
   then raise exception 'DELIVERY_REFUSAL_PERSISTED'; end if;
 
   -- ---- Assign o_fail to courier A; replay; divergent replay; stale version.
