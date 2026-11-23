@@ -26,6 +26,12 @@ declare
   list_request jsonb;
   list_result jsonb;
   quote_result jsonb;
+  has_settlements boolean := false;
+  has_coverage_trigger boolean := false;
+  v_constraint text;
+  zone_s uuid := gen_random_uuid();
+  s_cov uuid;
+  trigger_fn oid;
 begin
   if manager_actor is null or waiter_actor is null or manager_actor = waiter_actor then
     raise exception using errcode = '55000', message = 'DELIVERY_ZONES_TWO_ACTORS_REQUIRED';
@@ -58,8 +64,16 @@ begin
   -- Waiter (captures.read, not manager-tier) is denied write access. Error responses use the
   -- disjoint {status:...} shape (never the {schemaVersion,zone,replayed} success envelope).
   if pg_catalog.strpos(pg_catalog.pg_get_functiondef('app_private.upsert_delivery_zone(uuid,jsonb)'::regprocedure), 'settlementIds') > 0 then
+    has_settlements := true;
     base_command := base_command || jsonb_build_object('settlementIds', jsonb_build_array());
   end if;
+  has_coverage_trigger := pg_catalog.to_regclass('app.delivery_zone_settlements') is not null
+    and exists (
+      select 1 from pg_catalog.pg_trigger t
+      where t.tgrelid = 'app.delivery_zones'::regclass
+        and t.tgname = 'delivery_zones_coverage_nonempty'
+        and not t.tgisinternal
+    );
   create_command := base_command || jsonb_build_object(
     'expectedVersion', 0, 'name', 'Centro', 'postalCodes', jsonb_build_array('83000', '83100'),
     'localities', jsonb_build_array(), 'feeMinor', 3500, 'currency', 'MXN', 'active', true, 'reason', null
@@ -74,6 +88,9 @@ begin
     or app_private.upsert_delivery_zone(manager_actor,
       create_command || jsonb_build_object('postalCodes', jsonb_build_array(), 'localities', jsonb_build_array())
     ) ->> 'status' <> 'rejected'
+    or (has_settlements and app_private.upsert_delivery_zone(manager_actor,
+      create_command || jsonb_build_object('postalCodes', jsonb_build_array(), 'localities', jsonb_build_array('Navojoa'))
+    ) ->> 'status' <> 'rejected')
     or app_private.upsert_delivery_zone(manager_actor,
       create_command || jsonb_build_object('postalCodes', jsonb_build_array('83000', '83000'))
     ) ->> 'status' <> 'rejected'
@@ -220,6 +237,121 @@ begin
         and reason = 'Zona fuera de servicio temporalmente' and actor_membership_id = manager_member
     )
   then raise exception using errcode = '55000', message = 'DELIVERY_ZONES_AUDIT_REJECTED'; end if;
+
+  -- Schema-level negative tests for delivery_zones_coverage_nonempty:
+  -- Works both pre-Z2 (CHECK constraint) and post-20261123000400 (deferred constraint trigger).
+  v_constraint := null;
+  begin
+    insert into app.delivery_zones (
+      id, restaurant_id, branch_id, name, postal_codes, localities, fee_minor, currency_code,
+      active, version, created_at, created_by, updated_at, updated_by
+    ) values (
+      gen_random_uuid(), restaurant, branch, 'Sin cobertura', '{}'::text[], '{}'::text[],
+      1000, 'MXN', true, 1, now_at, manager_actor, now_at, manager_actor
+    );
+    set constraints all immediate;
+    raise exception using errcode = '55000', message = 'DELIVERY_ZONES_COVERAGE_NONEMPTY_NOT_ENFORCED';
+  exception when check_violation then
+    get stacked diagnostics v_constraint = constraint_name;
+    if v_constraint is distinct from 'delivery_zones_coverage_nonempty' then
+      raise exception using errcode = '55000', message = 'DELIVERY_ZONES_COVERAGE_NONEMPTY_WRONG_CONSTRAINT';
+    end if;
+  end;
+
+  if has_coverage_trigger then
+    -- Trigger function security shape: postgres-owned SECURITY DEFINER, empty search_path, zero direct grants.
+    trigger_fn := pg_catalog.to_regprocedure('app_private.enforce_delivery_zone_coverage_nonempty()');
+    if trigger_fn is null
+      or not exists (
+        select 1 from pg_catalog.pg_proc p
+        join pg_catalog.pg_roles owner on owner.oid = p.proowner
+        where p.oid = trigger_fn and p.prosecdef and owner.rolname = 'postgres'
+          and coalesce(pg_catalog.array_to_string(p.proconfig, ','), '') in ('search_path=', 'search_path=""')
+      )
+      or pg_catalog.has_function_privilege('public', trigger_fn, 'EXECUTE')
+      or pg_catalog.has_function_privilege('anon', trigger_fn, 'EXECUTE')
+      or pg_catalog.has_function_privilege('authenticated', trigger_fn, 'EXECUTE')
+      or pg_catalog.has_function_privilege('service_role', trigger_fn, 'EXECUTE')
+      or pg_catalog.has_function_privilege('app_api', trigger_fn, 'EXECUTE')
+    then raise exception using errcode = '55000', message = 'DELIVERY_ZONES_COVERAGE_TRIGGER_SECURITY_REJECTED'; end if;
+
+    -- Localities alone (without postal codes or settlements) are inert and rejected at schema level.
+    v_constraint := null;
+    begin
+      insert into app.delivery_zones (
+        id, restaurant_id, branch_id, name, postal_codes, localities, fee_minor, currency_code,
+        active, version, created_at, created_by, updated_at, updated_by
+      ) values (
+        gen_random_uuid(), restaurant, branch, 'Solo localidad', '{}'::text[], array['Navojoa'],
+        1000, 'MXN', true, 1, now_at, manager_actor, now_at, manager_actor
+      );
+      set constraints all immediate;
+      raise exception using errcode = '55000', message = 'DELIVERY_ZONES_LOCALITIES_ONLY_ACCEPTED';
+    exception when check_violation then
+      get stacked diagnostics v_constraint = constraint_name;
+      if v_constraint is distinct from 'delivery_zones_coverage_nonempty' then
+        raise exception using errcode = '55000', message = 'DELIVERY_ZONES_LOCALITIES_ONLY_WRONG_CONSTRAINT';
+      end if;
+    end;
+
+    -- Emptying postal_codes on an active postal-code-only zone is rejected at schema level.
+    v_constraint := null;
+    begin
+      update app.delivery_zones set postal_codes = '{}'::text[]
+      where restaurant_id = restaurant and branch_id = branch and id = zone_b;
+      set constraints all immediate;
+      raise exception using errcode = '55000', message = 'DELIVERY_ZONES_UPDATE_EMPTY_COVERAGE_ACCEPTED';
+    exception when check_violation then
+      get stacked diagnostics v_constraint = constraint_name;
+      if v_constraint is distinct from 'delivery_zones_coverage_nonempty' then
+        raise exception using errcode = '55000', message = 'DELIVERY_ZONES_UPDATE_EMPTY_WRONG_CONSTRAINT';
+      end if;
+    end;
+
+    -- Active settlement-only zone passes immediately, deleting its last settlement is rejected,
+    -- and deactivating it cleanly releases the settlement membership.
+    select id into s_cov from app.settlements
+    where municipality = 'Navojoa' and state = 'Sonora'
+    order by postal_code, normalized_name, settlement_type limit 1;
+    if s_cov is null then
+      raise exception using errcode = '55000', message = 'DELIVERY_ZONES_SETTLEMENT_FIXTURE_MISSING';
+    end if;
+
+    execute 'set local role app_api';
+    if app_private.upsert_delivery_zone(manager_actor, (base_command - 'eventId' - 'idempotencyKey') || jsonb_build_object(
+        'zoneId', zone_s::text, 'eventId', gen_random_uuid()::text, 'idempotencyKey', gen_random_uuid()::text,
+        'expectedVersion', 0, 'name', 'Zona Colonia', 'postalCodes', jsonb_build_array(),
+        'localities', jsonb_build_array(), 'settlementIds', jsonb_build_array(s_cov::text),
+        'feeMinor', 2500, 'currency', 'MXN', 'active', true, 'reason', null
+      )) ? 'status'
+    then raise exception using errcode = '55000', message = 'DELIVERY_ZONES_SETTLEMENT_ONLY_CREATE_REJECTED'; end if;
+    execute 'reset role';
+    set constraints all immediate;
+
+    v_constraint := null;
+    begin
+      delete from app.delivery_zone_settlements
+      where restaurant_id = restaurant and branch_id = branch and zone_id = zone_s;
+      set constraints all immediate;
+      raise exception using errcode = '55000', message = 'DELIVERY_ZONES_DELETE_LAST_SETTLEMENT_ACCEPTED';
+    exception when check_violation then
+      get stacked diagnostics v_constraint = constraint_name;
+      if v_constraint is distinct from 'delivery_zones_coverage_nonempty' then
+        raise exception using errcode = '55000', message = 'DELIVERY_ZONES_DELETE_LAST_SETTLEMENT_WRONG_CONSTRAINT';
+      end if;
+    end;
+
+    execute 'set local role app_api';
+    if app_private.upsert_delivery_zone(manager_actor, (base_command - 'eventId' - 'idempotencyKey') || jsonb_build_object(
+        'zoneId', zone_s::text, 'eventId', gen_random_uuid()::text, 'idempotencyKey', gen_random_uuid()::text,
+        'expectedVersion', 1, 'name', 'Zona Colonia', 'postalCodes', jsonb_build_array(),
+        'localities', jsonb_build_array(), 'settlementIds', jsonb_build_array(s_cov::text),
+        'feeMinor', 2500, 'currency', 'MXN', 'active', false, 'reason', 'Liberar colonia de prueba'
+      )) ? 'status'
+    then raise exception using errcode = '55000', message = 'DELIVERY_ZONES_SETTLEMENT_ONLY_DEACTIVATE_REJECTED'; end if;
+    execute 'reset role';
+    set constraints all immediate;
+  end if;
 end
 $delivery_zones_invariants$;
 commit;
