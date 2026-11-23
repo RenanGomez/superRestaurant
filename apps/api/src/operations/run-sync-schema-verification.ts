@@ -10,7 +10,7 @@ try {
   assertLocalConfirmation();
   await local.start((next) => { stage = next; });
   const names = listMigrationNames();
-  if (!names.includes("20261123000300_sync_ledger.sql")) throw new Error("SYNC_MIGRATION_MISSING");
+  if (!names.includes("20261123000300_sync_ledger.sql") || !names.includes("20261123000400_sync_api_boundary.sql")) throw new Error("SYNC_MIGRATION_MISSING");
   stage = "migrations";
   await local.applyMigrations(names);
   const summary = "select (select count(*) from app.sync_devices)::int as devices, (select count(*) from app.sync_event_ledger)::int as ledger, (select count(*) from app.sync_event_receipts)::int as receipts, (select count(*) from app.sync_changelog)::int as changes, (select count(*) from app.sync_manual_review_cases)::int as cases, (select coalesce(sum(value),0)::text from app_private.sync_cursor_counter) as cursor, (select count(*)::int from app_private.sync_cursor_counter) as scopes";

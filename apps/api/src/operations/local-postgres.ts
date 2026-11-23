@@ -12,7 +12,7 @@ import { Client } from "pg";
 // External runs serialize access and remove only their own database and roles.
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const cache = join(repositoryRoot, ".cache", "postgres-local");
-const binaries = join(cache, "pgsql", "bin");
+const binaries = process.env.LOCAL_POSTGRES_BIN ?? join(cache, "pgsql", "bin");
 const migrationsDirectory = join(repositoryRoot, "supabase", "migrations");
 
 export interface LocalPostgresOptions {
@@ -133,7 +133,7 @@ export class LocalPostgres {
     this.#port = await availablePort();
     setStage("initdb");
     this.#run("initdb", ["-D", this.#data, "-U", "postgres", "--auth-host=scram-sha-256", "--auth-local=scram-sha-256",
-      "--pwfile", this.#passwordFile, "--encoding=UTF8", "--locale=C"]);
+      "--pwfile", this.#passwordFile, "--encoding=UTF8", "--locale=C", "--no-sync"]);
     this.#clusterCreated = true;
     unlinkSync(this.#passwordFile);
     setStage("start");
@@ -197,12 +197,12 @@ export class LocalPostgres {
     // Missing portable binaries are reported with a stable, actionable code.
     if (!existsSync(join(binaries, `${name}.exe`))) throw new Error("LOCAL_POSTGRES_MISSING");
     const path = realpathSync(join(binaries, `${name}.exe`));
-    if (!path.toLowerCase().startsWith(`${realpathSync(cache).toLowerCase()}\\`)) throw new Error("LOCAL_BINARY_PATH_REJECTED");
+    if (dirname(path).toLowerCase() !== realpathSync(binaries).toLowerCase()) throw new Error("LOCAL_BINARY_PATH_REJECTED");
     return path;
   }
 
   #run(name: string, args: readonly string[]): void {
-    const result = spawnSync(this.#executable(name), [...args], { windowsHide: true, timeout: 60_000, stdio: "ignore" });
+    const result = spawnSync(this.#executable(name), [...args], { windowsHide: true, timeout: name === "initdb" ? 300_000 : 60_000, stdio: "ignore" });
     if (result.status !== 0 || result.error !== undefined) throw new Error("LOCAL_PROCESS_FAILED");
   }
 }
