@@ -2659,3 +2659,21 @@ Inspección inicial: CodeGraph actualizado, resolvedor legado de una variante y 
 - Verificación: `pnpm --filter @super-restaurant/sync-engine lint`, `typecheck` y `test` en verde (108 pruebas, 0 fallos); `git diff --check` verde. Para typecheck/test local se construyó antes `@super-restaurant/shared-types`, cuyo `dist` no está versionado.
 - Hallazgo: al agotar reintentos el motor invalida ese lote a `manual_review` y continúa con el siguiente lote pendiente; la suite lo verifica como progreso esperado. No se encontraron bugs reales ni se modificó el motor.
 - Siguiente acción: revisión humana. Commit local únicamente; sin push ni merge en esta sesión.
+
+## m2-api-sync-push-merge — 2026-11-23 (BLOCKED)
+
+- Bloqueo de contrato: `SYNC_SERVER_RESULT_STATUSES` solo admite estados terminales; `DeviceSyncEngine.nextEntryState` reintenta un resultado ausente, pero procesa cualquier resultado presente como terminal. Por ello no se puede devolver un resultado por evento y a la vez reintentar individualmente `SEQUENCE_OUT_OF_ORDER`, `CONCURRENT_RETRY` o `55P03` sin cambiar el contrato/motor o incumplir uno de los criterios. Devolver `rejected` perdería el reintento; fallar todo el lote ocultaría resultados parciales.
+- Siguiente acción mínima: decidir y autorizar la semántica de reintento por evento (ampliar contrato y motor, o permitir resultados omitidos), incluyendo pruebas de compatibilidad y aislamiento; después implementar transacción por evento y ledger/efecto atómicos. `DatabaseClientPort` actualmente solo expone consultas del pool y las autoridades usan ese puerto: también requiere una vía de conexión transaccional compartida.
+- Inspección manual dirigida: contratos y motor sync, migración 20261123000300, persistencias de órdenes/pagos y deuda P3. CodeGraph no disponible en esta sesión. Sin código, pruebas, migraciones remotas, subagentes, push ni PR. La instrucción humana de no publicar prevalece sobre las reglas de publicación del proyecto.
+
+### Continuación: decisión de reintento
+
+- Decisión recibida: no cambiar contrato ni motor; omitir resultados transitorios, con log estructurado. El bloqueo anterior de representación queda resuelto.
+- Sigue pendiente la implementación completa. Hallazgos de integración: `sync_record_event` devuelve `denied` indistintamente por membresía, permiso o dispositivo; `app_api` no tiene lectura de las tablas de dispositivos y `sync_register_device` crea dispositivos, por lo que no sirve como consulta de estado activo. El puerto de base actual no ofrece transacción compartida con los writers. La secuencia `SEQUENCE_OUT_OF_ORDER` ya inferior al cursor no puede recuperarse con un reenvío idéntico porque el cursor solo avanza.
+- No se construyó un endpoint parcial ni se ejecutaron las puertas globales; no existe evidencia de atomicidad o aislamiento de este corte. Se necesita diseñar e implementar la frontera transaccional y resolver la distinción de revocación sin registro implícito, y probar la recuperación de secuencia. Sin migración remota ni push.
+
+### Avance parcial de implementación
+
+- Se añadió `apps/api/src/sync/sync-result.ts` y tres pruebas para omisión transitoria, replay con identidad del request y denegación genérica; registradas en el script de pruebas API. No hay controlador ni endpoint conectado: no se declara REVIEW.
+- Verificación dirigida con Node 24: compilación TypeScript de shared-types, domain y pruebas API exit 0; `sync-result.test.js` 3/3; ESLint dirigido exit 0; `git diff --check` exit 0. `pnpm --filter @super-restaurant/api^... build` falló con `spawn EPERM` del sandbox. No se ejecutaron las puertas globales.
+- Pendiente: transacción por evento, serialización, revalidación, despacho y merge autoritativos, aislamiento y contrato HTTP, y todas las puertas. Sin migración remota ni push.
