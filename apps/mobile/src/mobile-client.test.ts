@@ -36,7 +36,6 @@ import {
   FIXTURE_TIME_ZONE,
   activeTableOrderItemBody,
   activeTableOrderListBody,
-  activeTableOrderItemBody,
   branchOperationalContextBody,
   cashPaymentQuoteBody,
   cashRegisterReportBody,
