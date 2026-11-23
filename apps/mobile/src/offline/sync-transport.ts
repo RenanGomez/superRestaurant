@@ -27,7 +27,7 @@ import {
 } from "@super-restaurant/sync-engine";
 
 export const MOBILE_SYNC_PATHS = Object.freeze({
-  push: "/sync",
+  push: "/sync/push",
   pull: "/sync/pull",
   snapshot: "/sync/snapshot",
 });
@@ -45,7 +45,7 @@ export interface MobileSyncTransportOptions {
   readonly accessToken: () => Promise<string | undefined>;
   readonly fetcher?: typeof fetch;
   readonly paths?: Partial<MobileSyncTransportPaths>;
-  /** Milliseconds before the request is aborted; `0` or omitted disables the timer. */
+  /** Milliseconds before the request is aborted; `0` disables the timer; default 30 seconds. */
   readonly timeoutMs?: number;
   /** Revocation gate: `false` blocks the request before it is built. */
   readonly canSend?: () => boolean;
@@ -69,13 +69,14 @@ const SERVER_REVOCATION_CODES: ReadonlySet<string> = new Set(["AUTH_REVOKED", "D
 /**
  * `401` alone is an expired/absent credential, not a revocation: the caller can
  * renew the token and retry. Only a `401`/`403` whose body declares a
- * revocation code ends the session, and `403` without a declaration is treated
- * as a scope/permission revocation because retrying would never succeed.
+ * revocation code ends the session. A plain `403` does not revoke a scope.
  */
 export function classifySyncHttpStatus(status: number, declaredCode?: string | null): SyncHttpFailure {
   const declared = typeof declaredCode === "string" && SERVER_REVOCATION_CODES.has(declaredCode) ? declaredCode : null;
   if (status === 401) return declared === null ? { code: "AUTH_EXPIRED", retryable: true } : { code: declared, retryable: false };
-  if (status === 403) return { code: declared ?? "AUTH_REVOKED", retryable: false };
+  if (status === 403) return { code: declared ?? "HTTP_403", retryable: false };
+  // Endpoint deployment errors must retain the batch for a later retry.
+  if (status === 404 || status === 405) return { code: `HTTP_${status}`, retryable: true };
   if (status === 408 || status === 425 || status === 429) return { code: `HTTP_${status}`, retryable: true };
   if (status >= 500) return { code: `HTTP_${status}`, retryable: true };
   return { code: `HTTP_${status}`, retryable: false };
@@ -102,27 +103,26 @@ export function createMobileSyncTransport(options: MobileSyncTransportOptions): 
   const fetcher = options.fetcher ?? fetch;
 
   async function send(path: string, body: unknown, token: string): Promise<Response> {
-    const controller = typeof AbortController === "undefined" ? null : new AbortController();
-    const timeoutMs = options.timeoutMs ?? 0;
-    const timer = controller !== null && timeoutMs > 0
-      ? setTimeout(() => controller.abort(), timeoutMs)
-      : null;
+    const controller = new AbortController();
+    const timeoutMs = options.timeoutMs ?? 30_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      if (timeoutMs > 0) timer = setTimeout(() => { controller.abort(); reject(new SyncTransportError("TRANSPORT_ERROR", true)); }, timeoutMs);
+    });
     try {
-      return await fetcher(`${base}${path}`, {
-        body: JSON.stringify(body),
-        cache: "no-store",
-        headers: {
-          accept: "application/json",
-          authorization: `Bearer ${token}`,
-          "content-type": "application/json",
-        },
-        method: "POST",
-        ...(controller === null ? {} : { signal: controller.signal }),
-      });
+      const operation = (async (): Promise<Response> => {
+        const response = await fetcher(`${base}${path}`, {
+          body: JSON.stringify(body), cache: "no-store", method: "POST", signal: controller.signal,
+          headers: { accept: "application/json", authorization: `Bearer ${token}`, "content-type": "application/json" },
+        });
+        const bytes = await response.arrayBuffer();
+        return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers });
+      })();
+      return await (timeoutMs > 0 ? Promise.race([operation, timeout]) : operation);
     } catch {
       throw new SyncTransportError("TRANSPORT_ERROR", true);
     } finally {
-      if (timer !== null) clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
     }
   }
 
@@ -147,6 +147,10 @@ export function createMobileSyncTransport(options: MobileSyncTransportOptions): 
     // A 401 means the credential may simply have expired: renew once and retry
     // before classifying it. A sign-out that lands meanwhile still wins.
     if (response.status === 401 && options.refreshAccessToken !== undefined) {
+      const declared = await readDeclaredRevocationCode(response.clone());
+      if (declared !== null && SERVER_REVOCATION_CODES.has(declared)) {
+        throw new SyncTransportError(declared, false);
+      }
       let refreshed: string | undefined;
       try {
         refreshed = await options.refreshAccessToken();

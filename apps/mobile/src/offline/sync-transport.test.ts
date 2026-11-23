@@ -50,7 +50,7 @@ const pullRequest: SyncPullRequest = {
   scope: pushRequest.scope,
 };
 
-test("push and pull travel as authenticated POSTs to /sync and /sync/pull", async () => {
+test("push and pull travel as authenticated POSTs to /sync/push and /sync/pull", async () => {
   const { calls, fetcher } = fakeFetch(200, { protocolVersion: 1 });
   const transport = createMobileSyncTransport({ accessToken: () => Promise.resolve(TOKEN), apiBaseUrl: BASE, fetcher });
 
@@ -120,7 +120,7 @@ test("a closed revocation gate blocks push and pull before the fetch", async () 
 test("HTTP failures keep an explicit retryability class", async () => {
   const cases: readonly { status: number; code: string; retryable: boolean; body?: unknown }[] = [
     { code: "AUTH_EXPIRED", retryable: true, status: 401 },
-    { code: "AUTH_REVOKED", retryable: false, status: 403 },
+    { code: "HTTP_403", retryable: false, status: 403 },
     { code: "HTTP_400", retryable: false, status: 400 },
     { code: "HTTP_409", retryable: false, status: 409 },
     { code: "HTTP_429", retryable: true, status: 429 },
@@ -230,4 +230,14 @@ test("a plaintext remote origin or a path with a scheme is refused at constructi
     accessToken: () => Promise.resolve(TOKEN),
     apiBaseUrl: "http://127.0.0.1:3013",
   }));
+});
+
+
+test("timeout covers a stalled response body", async () => {
+  const fetcher = (() => Promise.resolve({
+    arrayBuffer: () => new Promise<ArrayBuffer>(() => undefined),
+  } as Response)) as typeof fetch;
+  const transport = createMobileSyncTransport({ accessToken: () => Promise.resolve(TOKEN), apiBaseUrl: BASE, fetcher, timeoutMs: 10 });
+  await assert.rejects(transport.pull(pullRequest),
+    (error: unknown) => error instanceof SyncTransportError && error.code === "TRANSPORT_ERROR" && error.retryable);
 });
