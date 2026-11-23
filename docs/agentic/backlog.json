@@ -1,24 +1,421 @@
 {
   "version": 1,
-  "milestone": "M0",
+  "milestone": "M1",
   "updatedAt": "2026-11-22T00:00:00-07:00",
+  "source": "docs/plans/plan-autonomo-100.md §1 M1, §7 M0-11 y §8; TODO.md lista \"Día operable\" D1-D7/T1-T4 y pendientes de smoke r2; PLAN_MODERNIZACION_POS_RESTAURANTE.md §4.2 (12 journeys).",
+  "notes": [
+    "Backlog congelado de M1. Nada se ejecuta si no está aquí.",
+    "status inicial = ready salvo donde una dependencia lo impide.",
+    "lane = motor sugerido (codex|agy|opencode) según plan-autonomo-100.md §2.",
+    "paths = conjunto de bloqueo exclusivo; dos ítems con rutas solapadas no corren a la vez.",
+    "supabase/migrations/** es carril de un solo escritor; el orquestador asigna timestamp en el brief."
+  ],
   "items": [
     {
-      "id": "schema-example",
-      "milestone": "M0",
-      "phase": 0,
-      "level": "D",
-      "lane": "opencode",
-      "paths": ["docs/agentic/EXAMPLE.md"],
+      "id": "m1-z2b-confirm-pizza-v2",
+      "title": "Reconstruir confirm_capture_draft_v3 sobre el cuerpo v2 y probar pizza+zona",
+      "milestone": "M1",
+      "phase": 1,
+      "level": "A",
+      "lane": "codex",
+      "paths": [
+        "supabase/migrations/20261121000100_delivery_zones_settlements.sql",
+        "supabase/tests/pizza_model_v2_invariants.sql",
+        "supabase/tests/delivery_zones_invariants.sql"
+      ],
       "deps": [],
-      "acceptance": ["echo 'item de ejemplo; no ejecutar'"],
-      "etaMin": 5,
+      "acceptance": [
+        "pnpm --filter @super-restaurant/api verify:pizza-model-v2-schema:rollback en verde sobre PostgreSQL 17 local desde cero",
+        "prueba nueva pizza+zona confirma sin 42703 (record \"product\" has no field \"base_group_id\")",
+        "prueba negativa del invariante delivery_zones_coverage_nonempty rechaza una zona sin cobertura",
+        "supabase/tests/pizza_model_v2_invariants.sql y delivery_zones_invariants.sql pasan sin tolerancia en el job pg-verify",
+        "git diff --check"
+      ],
+      "etaMin": 180,
       "attempts": 0,
-      "status": "cancelled",
+      "status": "ready",
       "sessionId": null,
       "pr": null,
-      "parent": null,
-      "note": "Ejemplo del esquema de la seccion 3.1 del plan. No es trabajo real."
+      "parent": "M0-7",
+      "note": "P1 abierto desde el smoke r2; migración 20261121000100 no aplicada en remoto. La reconstrucción reutiliza el cuerpo v2 de 20261120000100 (~1767)."
+    },
+    {
+      "id": "m1-pg-verify-clean",
+      "title": "Quitar las tolerancias de pg-verify y dejar los siete tests SQL conocidos en verde",
+      "milestone": "M1",
+      "phase": 0,
+      "level": "A",
+      "lane": "codex",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "supabase/tests/capture_drafts_invariants.sql",
+        "supabase/tests/capture_repeat_order_invariants.sql",
+        "supabase/tests/capture_selection_plan_invariants.sql",
+        "supabase/tests/menu_shared_modifier_groups_invariants.sql",
+        "supabase/tests/order_deliveries_invariants.sql"
+      ],
+      "deps": ["m1-z2b-confirm-pizza-v2"],
+      "acceptance": [
+        "KNOWN_FAILING_SQL_TESTS queda vacío o se elimina de .github/workflows/ci.yml",
+        "se restaura verify:pizza-model-v2-schema:rollback en el paso de verificadores y se quita el continue-on-error de Run local HTTP flow",
+        "job pg-verify en verde en un PR (migraciones desde cero, supabase/tests y verify:*:rollback)",
+        "git diff --check"
+      ],
+      "etaMin": 180,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "M0-7",
+      "note": "Cierra la deuda registrada en docs/agentic/debt.md §M0-7. Cada test tolerado se triage: se arregla o se documenta como P1/P2, no se vuelve a tolerar."
+    },
+    {
+      "id": "m1-resolve-address-settlement",
+      "title": "resolveAddress no propaga settlementId sin confirmar y devuelve settlement_unknown",
+      "milestone": "M1",
+      "phase": 2,
+      "level": "B",
+      "lane": "opencode",
+      "paths": [
+        "apps/api/src/delivery-zones.ts",
+        "apps/api/src/delivery-zones.test.ts"
+      ],
+      "deps": [],
+      "acceptance": [
+        "prueba nueva: una dirección sin asentamiento confirmado recibe settlement_unknown y no un settlementId inventado",
+        "el flujo de cotización sigue pasando settlementId: null y confirm relee la cuota manual en SQL, no del cliente",
+        "pnpm --filter @super-restaurant/api test en verde",
+        "pnpm --filter @super-restaurant/web typecheck en verde si consume el contrato"
+      ],
+      "etaMin": 90,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "review-smoke-r2-p2",
+      "note": "P2 de la revisión Sonnet del smoke r2 (apps/api/src/delivery-zones.ts ~646). Verificar también que dist/ no esté versionado."
+    },
+    {
+      "id": "m1-k0b-pickup-contact",
+      "title": "Contacto de Recoger en el borrador y regla Domicilio exige cliente en servidor",
+      "milestone": "M1",
+      "phase": 2,
+      "level": "A",
+      "lane": "codex",
+      "paths": [
+        "supabase/migrations/",
+        "apps/api/src/captures.ts",
+        "packages/shared-types/src/commercial-capture.ts",
+        "packages/shared-types/src/capture-selection-plan.ts"
+      ],
+      "deps": ["m1-z2b-confirm-pizza-v2"],
+      "acceptance": [
+        "borrador de Recoger acepta nombre y teléfono de contacto sin exigir cliente",
+        "confirm_capture_order rechaza Domicilio sin cliente con error de dominio claro y prueba SQL",
+        "pnpm --filter @super-restaurant/api verify:capture-schema:rollback en verde (PostgreSQL local rollback-only)",
+        "pnpm lint && pnpm typecheck && pnpm test en verde",
+        "migración nueva versionada; no se edita ninguna aplicada"
+      ],
+      "etaMin": 240,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "smoke-r2-k0",
+      "note": "Depende de liberar el carril de migraciones (M1-1). shared-types es carril de un solo escritor cuando el contrato lo consumen dos apps o más."
+    },
+    {
+      "id": "m1-mobile-pay-note",
+      "title": "Cobro (efectivo, tarjeta manual, transferencia) y nota de línea en mobile",
+      "milestone": "M1",
+      "phase": 2,
+      "level": "C",
+      "lane": "agy",
+      "paths": [
+        "apps/mobile/src/ui/order-draft-screen.tsx",
+        "apps/mobile/src/ui/components.tsx",
+        "apps/mobile/src/mobile-state.ts",
+        "apps/mobile/src/mobile-state.test.ts"
+      ],
+      "deps": [],
+      "acceptance": [
+        "el mesero cobra y registra nota de línea desde mobile usando los endpoints existentes, sin cálculo de dinero en cliente",
+        "estados de carga, error y éxito explícitos; sin alert/confirm/prompt; targets de 44 px",
+        "pnpm --filter @super-restaurant/mobile test && pnpm --filter @super-restaurant/mobile typecheck && pnpm --filter @super-restaurant/mobile lint en verde",
+        "captura de pantalla real en 390x844 con consola limpia"
+      ],
+      "etaMin": 240,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "mvp-mobile-60",
+      "note": "El servidor revalida montos; el cliente no decide permisos ni totales."
+    },
+    {
+      "id": "m1-kitchen-ready-notify",
+      "title": "Notificación «platillo listo» en web, KDS y mobile sobre el WebSocket existente",
+      "milestone": "M1",
+      "phase": 1,
+      "level": "B",
+      "lane": "agy",
+      "paths": [
+        "packages/shared-types/src/realtime.ts",
+        "apps/api/src/realtime.gateway.ts",
+        "apps/api/src/realtime.gateway.test.ts",
+        "apps/web/src/app/app/orders/",
+        "apps/kds/src/",
+        "apps/mobile/src/ui/active-orders-panel.tsx"
+      ],
+      "deps": ["m1-mobile-pay-note"],
+      "acceptance": [
+        "al marcar una línea lista en KDS, web y mobile reciben el aviso sin recargar la página",
+        "el canal respeta branchId y stationId; una sucursal o estación ajena nunca recibe el evento",
+        "pnpm --filter @super-restaurant/api test y pnpm --filter @super-restaurant/kds test en verde",
+        "verificación en navegador real con consola limpia"
+      ],
+      "etaMin": 240,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "mvp-kds-80",
+      "note": "Dependencia de mobile solo por el directorio UI compartido; si el orquestador reparte, serializar ese archivo."
+    },
+    {
+      "id": "m1-k3-customer-captures",
+      "title": "K3: capturas abiertas del cliente en su ficha",
+      "milestone": "M1",
+      "phase": 2,
+      "level": "C",
+      "lane": "opencode",
+      "paths": [
+        "apps/web/src/app/app/customers/",
+        "apps/api/src/customer-directory.ts",
+        "apps/api/src/customer-order-history.ts"
+      ],
+      "deps": ["m1-k0b-pickup-contact"],
+      "acceptance": [
+        "la ficha del cliente lista sus capturas abiertas y permite retomarlas",
+        "consulta acotada a restaurantId/branchId y permiso customers.read en servidor",
+        "pnpm --filter @super-restaurant/web test y typecheck en verde",
+        "captura real en escritorio y 390x844 con consola limpia"
+      ],
+      "etaMin": 120,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "smoke-r2-k3",
+      "note": "Después de K0-B; K4 (confirmación de borrado de teléfono) ya está integrado."
+    },
+    {
+      "id": "m1-e2e-journeys-1-6",
+      "title": "Specs Playwright de los journeys 1-6 contra PostgreSQL local",
+      "milestone": "M1",
+      "phase": 2,
+      "level": "B",
+      "lane": "opencode",
+      "paths": [
+        "apps/web/e2e/journeys/",
+        "apps/web/e2e/fixtures/"
+      ],
+      "deps": ["m1-z2b-confirm-pizza-v2"],
+      "acceptance": [
+        "existe una spec determinista por journey 1, 2, 3, 4, 5 y 6 en apps/web/e2e/journeys/",
+        "datos semilla deterministas y aislamiento por runId, con cleanup obligatorio",
+        "pnpm --filter @super-restaurant/web e2e:all en verde contra API y web locales",
+        "pnpm --filter @super-restaurant/web e2e:typecheck en verde"
+      ],
+      "etaMin": 240,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "M1-journeys",
+      "note": "Journeys del plan maestro §4.2: 1 abrir turno/caja; 2 iniciar o recuperar orden; 3 cliente y dirección; 4 configurar producto; 5 guardar en espera y cancelar; 6 confirmar precio, pago y enviar a estación."
+    },
+    {
+      "id": "m1-e2e-journeys-7-12",
+      "title": "Specs Playwright de los journeys 7-12 contra PostgreSQL local",
+      "milestone": "M1",
+      "phase": 2,
+      "level": "B",
+      "lane": "opencode",
+      "paths": [
+        "apps/web/e2e/journeys/",
+        "apps/web/e2e/fixtures/"
+      ],
+      "deps": ["m1-e2e-journeys-1-6"],
+      "acceptance": [
+        "existe una spec determinista por journey 7, 8, 9, 10, 11 y 12 (12 puede ser online-first: reconexión sin duplicar)",
+        "reutiliza helpers y fixtures de M1-8 sin duplicarlos",
+        "pnpm --filter @super-restaurant/web e2e:all en verde contra API y web locales",
+        "pnpm --filter @super-restaurant/web e2e:typecheck en verde"
+      ],
+      "etaMin": 240,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "M1-journeys",
+      "note": "Journeys: 7 preparar/listo/asignar reparto; 8 descuento y cortesía con autorización; 9 pagos mixtos sin duplicados; 10 imprimir y cerrar con historial; 11 cerrar caja y conciliar; 12 continuidad ante pérdida de red."
+    },
+    {
+      "id": "m1-coverage-inventory",
+      "title": "Inventario de cobertura obligatoria (§4.4) y sus huecos como ítems",
+      "milestone": "M1",
+      "phase": 2,
+      "level": "D",
+      "lane": "agy",
+      "paths": [
+        "docs/agentic/coverage-m1.md"
+      ],
+      "deps": [],
+      "acceptance": [
+        "docs/agentic/coverage-m1.md marca cubierto/faltante por cada área de §4.4 con archivo o prueba que lo demuestra",
+        "cada hueco queda listado con nivel y motor propuesto para entrar al backlog con parent",
+        "solo lectura sobre el código; no toca fuentes ni SQL"
+      ],
+      "etaMin": 90,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "M1",
+      "note": "Áreas: aislamiento entre restaurantes/sucursales, dinero y redondeo, máquinas de estado, doble envío/doble cobro, cancelación/reembolso, reconexión y conflictos offline, inventario compensatorio, permisos de supervisor, migraciones desde cero y sobre la versión anterior."
+    },
+    {
+      "id": "m1-sec-rate-limit",
+      "title": "Rate limiting en auth, pagos y caja, con repaso de sanitización y RBAC",
+      "milestone": "M1",
+      "phase": 0,
+      "level": "A",
+      "lane": "codex",
+      "paths": [
+        "apps/api/src/auth/",
+        "apps/api/src/payments.ts",
+        "apps/api/src/operational-shifts.ts",
+        "apps/api/src/config.ts"
+      ],
+      "deps": [],
+      "acceptance": [
+        "límites de tasa activos en login, cobro y caja; respuesta 429 sin filtrar secretos",
+        "prueba de aislamiento entre restaurantes y de permiso denegado sigue en verde",
+        "entradas validadas y sanitizadas; ningún secreto en logs",
+        "pnpm lint && pnpm typecheck && pnpm test en verde"
+      ],
+      "etaMin": 240,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "M1-produccion",
+      "note": "Nivel A: revisión doble de familias distintas y pruebas de invariantes G4."
+    },
+    {
+      "id": "m1-obs-health",
+      "title": "Health/readiness, logs con correlationId y métricas mínimas",
+      "milestone": "M1",
+      "phase": 0,
+      "level": "B",
+      "lane": "codex",
+      "paths": [
+        "apps/api/src/health.controller.ts",
+        "apps/api/src/main.ts",
+        "apps/api/src/app-setup.ts",
+        "apps/api/src/operations/"
+      ],
+      "deps": [],
+      "acceptance": [
+        "GET /health y /ready distinguen proceso vivo de dependencias listas",
+        "cada request lleva correlationId en los logs; restaurantId/branchId/orderId cuando aplique",
+        "métricas mínimas de errores y latencia expuestas sin datos personales",
+        "pnpm --filter @super-restaurant/api test && typecheck en verde"
+      ],
+      "etaMin": 180,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "M1-produccion",
+      "note": "No registrar secretos, tokens ni payloads personales completos."
+    },
+    {
+      "id": "m1-runbooks-release",
+      "title": "Runbooks de deploy, respaldo/restauración, RPO/RTO y rollback",
+      "milestone": "M1",
+      "phase": 2,
+      "level": "D",
+      "lane": "agy",
+      "paths": [
+        "docs/runbooks/deploy.md",
+        "docs/runbooks/backup-restore.md",
+        "docs/runbooks/rollback.md"
+      ],
+      "deps": [],
+      "acceptance": [
+        "los tres runbooks existen con comandos exactos, prerrequisitos y verificación posterior",
+        "el de respaldo define RPO/RTO y una prueba de restauración reproducible",
+        "git diff --check"
+      ],
+      "etaMin": 120,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "M1-produccion",
+      "note": "Solo documentación; el hosting y la política de respaldo real siguen siendo decisión humana (DECISIONS_PENDING.md)."
+    },
+    {
+      "id": "m1-visual-verify-r2",
+      "title": "Verificación visual de B2, B3, B4, Z4, Z5, K1, K2 y K4 en escritorio y 390x844",
+      "milestone": "M1",
+      "phase": 2,
+      "level": "C",
+      "lane": "agy",
+      "paths": [
+        "docs/agentic/visual-verify-r2.md"
+      ],
+      "deps": [],
+      "acceptance": [
+        "capturas reales de cada pantalla en escritorio y 390x844, consola limpia y targets de 44 px",
+        "ningún alert/confirm/prompt; contraste y foco visibles",
+        "hallazgos P1/P2 se reportan con captura y ruta; P3 va a debt.md",
+        "solo lectura: no modifica código"
+      ],
+      "etaMin": 120,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "smoke-r2-visual",
+      "note": "Estas pantallas ya están en main tras la integración de feat/smoke-r1. Login con tools/agentic/local-servers/e2e-auth.bat."
+    },
+    {
+      "id": "m1-menu-tabs-r2",
+      "title": "Pestañas Categorías/Productos/Modificadores/Tamaños y anchos de inputs en el editor de menú",
+      "milestone": "M1",
+      "phase": 1,
+      "level": "C",
+      "lane": "agy",
+      "paths": [
+        "apps/web/src/app/app/menu/"
+      ],
+      "deps": [],
+      "acceptance": [
+        "las cuatro pestañas conservan estado y no recargan el editor",
+        "anchos de inputs consistentes y Duplicar junto a Activo",
+        "pnpm --filter @super-restaurant/web test && typecheck && lint en verde",
+        "captura real en escritorio y 390x844 con consola limpia"
+      ],
+      "etaMin": 120,
+      "attempts": 0,
+      "status": "ready",
+      "sessionId": null,
+      "pr": null,
+      "parent": "TODO-menu-tabs-r2",
+      "note": "P2 ya integrado; esta ronda es solo presentación. Depende de no haber otro ítem abierto en apps/web/src/app/app/menu/."
     }
   ]
 }
