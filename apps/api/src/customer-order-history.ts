@@ -206,7 +206,9 @@ export class CustomerOpenCapturesService {
     if (rows.length !== 1) throw unavailable();
     const row = exactRecord(rows[0], ["result"]);
     if (row === undefined) throw unavailable();
-    if (exactRecord(row.result, ["status"])?.status === "denied") throw applicationError("authorization");
+    const statusOnly = exactRecord(row.result, ["status"]);
+    if (statusOnly?.status === "denied") throw applicationError("authorization");
+    if (statusOnly?.status === "rejected") throw applicationError("request");
     const result = parseCaptureWorkTrayResultV1(row.result);
     if (result === undefined || result.items.length > 50 || result.items.some((item) => item.status !== "draft"
       || !sameScope(item.scope, scope))) throw unavailable();

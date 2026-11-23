@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { BadRequestException, ForbiddenException } from "@nestjs/common";
 
 import { Money, addOrderItem, createOrder } from "@super-restaurant/domain";
 import {
@@ -12,8 +13,9 @@ import {
   type MembershipRoleCode,
 } from "@super-restaurant/shared-types";
 
-import type { AuthenticatedPrincipal } from "./auth/authentication.js";
+import { SupabaseAuthGuard, type AuthenticatedPrincipal } from "./auth/authentication.js";
 import { MembershipAuthorizationService } from "./auth/membership-authorization.js";
+import { CustomerOrderHistoryController } from "./customer-order-history.controller.js";
 import {
   CustomerOrderHistoryError,
   CustomerOpenCapturesService,
@@ -71,6 +73,19 @@ test("open captures authorize customer access and reject invalid input", async (
       ownerMembershipId: null, version: 1, updatedAt: confirmedAt }],
   } }] }) });
   await assert.rejects(foreign.list(principal, { restaurantId, branchId, customerId }), isError("unavailable"));
+  const sqlDenied = new CustomerOpenCapturesService(authorization, { query: async () => ({ rows: [{ result: { status: "denied" } }] }) });
+  await assert.rejects(sqlDenied.list(principal, { restaurantId, branchId, customerId }), isError("authorization"));
+  const sqlRejected = new CustomerOpenCapturesService(authorization, { query: async () => ({ rows: [{ result: { status: "rejected" } }] }) });
+  await assert.rejects(sqlRejected.list(principal, { restaurantId, branchId, customerId }), isError("request"));
+  const request: Record<string, unknown> = { headers: { authorization: "Bearer test-token-0123456789abcdef" } };
+  const guard = new SupabaseAuthGuard({ verifyAccessToken: async () => principal }, { getAllAndOverride: () => false } as never);
+  await guard.canActivate({ getClass: () => Object, getHandler: () => Object, switchToHttp: () => ({ getRequest: () => request }) } as never);
+  const controller = new CustomerOrderHistoryController(undefined as never, sqlRejected, undefined as never, undefined as never);
+  await assert.rejects(controller.listOpenCaptures(request, customerId, restaurantId, branchId),
+    (error: unknown) => error instanceof BadRequestException && error.getStatus() === 400);
+  const deniedController = new CustomerOrderHistoryController(undefined as never, sqlDenied, undefined as never, undefined as never);
+  await assert.rejects(deniedController.listOpenCaptures(request, customerId, restaurantId, branchId),
+    (error: unknown) => error instanceof ForbiddenException && error.getStatus() === 403);
 });
 
 const query = parseCustomerRecentOrdersQueryV1({
