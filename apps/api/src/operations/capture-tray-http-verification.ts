@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { Test } from "@nestjs/testing";
 
 import { AppModule } from "../app.module.js";
+import { SyncCursor } from "../sync/sync-cursor.js";
 import { AUTH_PRINCIPAL_VERIFIER, AccessTokenRejectedError } from "../auth/authentication.js";
 import {
   CAPTURE_ATTENTION_PORT,
@@ -32,6 +33,7 @@ export async function verifyCaptureTrayHttp(
   const { actorId, branchId, captureDraftId, membershipId, restaurantId } = fixture;
   const token = `rollback-only-${randomUUID()}`;
   const module = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(SyncCursor).useValue(new SyncCursor("rollback-only-cursor-secret-for-tests-12345"))
     .overrideProvider(DATABASE_CLIENT).useValue(database)
     .overrideProvider(AUTH_PRINCIPAL_VERIFIER).useValue({ verifyAccessToken: async (value: string) => {
       if (value !== token) throw new AccessTokenRejectedError();

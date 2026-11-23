@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { Test } from "@nestjs/testing";
 import { AppModule } from "../app.module.js";
+import { SyncCursor } from "../sync/sync-cursor.js";
 import { AccessTokenRejectedError, AUTH_PRINCIPAL_VERIFIER } from "../auth/authentication.js";
 import { DATABASE_CLIENT, type DatabaseClientPort } from "../database.js";
 import {
@@ -22,6 +23,7 @@ export async function verifyCustomerDirectoryHttp(
   const { actorId, restaurantId, branchId, membershipId } = fixture;
   const token = `rollback-only-${randomUUID()}`;
   const module = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(SyncCursor).useValue(new SyncCursor("rollback-only-cursor-secret-for-tests-12345"))
     .overrideProvider(DATABASE_CLIENT).useValue(database)
     .overrideProvider(AUTH_PRINCIPAL_VERIFIER).useValue({ verifyAccessToken: async (value: string) => {
       if (value !== token) throw new AccessTokenRejectedError();

@@ -21,9 +21,9 @@ la matriz.
   principal. Si falta, la prueba falla con `LOCAL_POSTGRES_MISSING`. Esta ruta nunca toca Supabase ni
   una base compartida y no usa `ADR010_DATABASE_URL`.
 
-### Secreto para cursores de sincronizaci?n
+### Secreto para cursores de sincronización
 
-Configure `SYNC_CURSOR_SECRET` ?nicamente en el entorno seguro del servidor API, con un valor aleatorio y estable de al menos 32 caracteres. Todas las instancias que atienden la misma API deben usar el mismo valor; el arranque falla si falta o es demasiado corto. No versionar el valor real. Al rotarlo, los cursores firmados con el valor anterior dejan de ser v?lidos: los clientes deben iniciar una resincronizaci?n conforme al contrato de sync.
+Configure `SYNC_CURSOR_SECRET` únicamente en el entorno seguro del servidor API, con un valor aleatorio y estable de al menos 32 caracteres. Todas las instancias que atienden la misma API deben usar el mismo valor; el arranque falla si falta o es demasiado corto. No versionar el valor real. Al rotarlo, los cursores firmados con el valor anterior dejan de ser válidos: los clientes deben iniciar una resincronización conforme al contrato de sync.
 
 ## 2. Comandos por capa
 

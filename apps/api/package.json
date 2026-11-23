@@ -72,6 +72,7 @@
     "verify:branch-order-work-tray-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-branch-order-work-tray-schema-verification.js --local-disposable-only",
     "verify:branch-order-work-tray-delivery-state-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-branch-order-work-tray-delivery-state-schema-verification.js --local-disposable-only",
     "verify:order-deliveries-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-order-deliveries-schema-verification.js --local-disposable-only",
+    "test:verification-http:local": "tsc --project tsconfig.test.build.json && node .test-dist/operations/verification-http.local.test.js",
     "test:http:local": "tsc --project tsconfig.test.build.json && node .test-dist/http-flow.local.test.js",
     "test:sync-conflicts:local": "tsc --project tsconfig.test.build.json && node .test-dist/sync/sync-conflicts.local.test.js",
     "verify:cash-transfer-method-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-cash-transfer-method-schema-verification.js --local-disposable-only",
