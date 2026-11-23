@@ -677,7 +677,7 @@ function DraftPane({
       />
       : offline.canQueue
         ? <ActionButton
-          accessibilityHint="Guarda el pedido en este dispositivo; se enviaró al servidor cuando vuelva la conexión"
+          accessibilityHint="Guarda el pedido en este dispositivo; se enviará al servidor cuando vuelva la conexión"
           disabled={offline.queued || draft.lines.length === 0 || draft.composer !== undefined}
           label={offline.queued ? "Guardado en este dispositivo" : "Guardar pedido sin conexión"}
           onPress={offline.onQueue}
