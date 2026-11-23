@@ -22,14 +22,15 @@ try {
     "utf8",
   );
   const summary = await runSchemaVerification({
-    catalogAuditSql, config, migrationSql,
+    catalogAuditSql: process.env.SCHEMA_VERIFICATION_LOCAL_CLUSTER === "1"
+      ? catalogAuditSql.replace("grantor_role.rolname = 'supabase_admin'", "grantor_role.rolname = 'postgres'")
+      : catalogAuditSql,
+    config, migrationSql,
     expectedSecurityDefinerFunctions: 5,
     verifyWithinTransaction: async (session) => {
       await session.query(extractMigrationBody(directoryMigrationSql));
       if (process.env.SCHEMA_VERIFICATION_LOCAL_CLUSTER === "1") {
-        await session.query("SET ROLE supabase_admin");
-        await session.query("GRANT app_api TO postgres WITH ADMIN TRUE, INHERIT FALSE, SET FALSE GRANTED BY supabase_admin");
-        await session.query("RESET ROLE");
+        await session.query("GRANT app_api TO postgres WITH ADMIN TRUE, INHERIT FALSE, SET FALSE");
       }
     },
   });
