@@ -132,11 +132,16 @@ import { SERVER_CLOCK_PORT, SystemClock } from "./clock.js";
 import { SyncMergeExecutor } from "./sync/sync-merge-executor.js";
 import { SyncPushService } from "./sync/sync-push.service.js";
 import { SyncController } from "./sync/sync.controller.js";
+import { SyncCursor } from "./sync/sync-cursor.js";
+import { SyncPullService } from "./sync/sync-pull.service.js";
+import { SyncManualReviewService } from "./sync/sync-manual-review.service.js";
+import { SyncReviewController } from "./sync/sync-review.controller.js";
 
 @Module({
   controllers: [
     HealthController,
     SyncController,
+    SyncReviewController,
     CapturesController,
     CustomerDirectoryController,
     CustomerOrderHistoryController,
@@ -173,6 +178,9 @@ import { SyncController } from "./sync/sync.controller.js";
       useFactory: () => new PostgresDatabaseClient(readDatabaseConfig(process.env)),
     },
     SyncMergeExecutor,
+    { provide: SyncCursor, useFactory: () => new SyncCursor(process.env.SYNC_CURSOR_SECRET ?? "") },
+    SyncPullService,
+    SyncManualReviewService,
     { provide: SyncPushService, useFactory: (executor: SyncMergeExecutor) => new SyncPushService(executor, { omitted: (facts) => Logger.log(JSON.stringify(facts), "SyncPush") }), inject: [SyncMergeExecutor] },
     PostgresMembershipLookup,
     PostgresMembershipDirectory,

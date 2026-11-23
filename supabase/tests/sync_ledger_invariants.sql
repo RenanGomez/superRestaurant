@@ -8,7 +8,7 @@ begin
   if not exists(select 1 from pg_class c join pg_namespace ns on ns.oid=c.relnamespace where ns.nspname='app' and c.relname=tbl and c.relrowsecurity and c.relforcerowsecurity) then raise exception 'missing RLS: %',tbl; end if;
   if has_table_privilege('app_api','app.'||tbl,'SELECT,INSERT,UPDATE,DELETE') or has_table_privilege('authenticated','app.'||tbl,'SELECT,INSERT,UPDATE,DELETE') then raise exception 'direct grant: %',tbl; end if;
  end loop;
- for f in select p.oid,p.prosecdef,p.proconfig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='app_private' and p.proname in ('sync_authorized','sync_register_device','sync_record_event','sync_append_change','sync_open_review','sync_resolve_review','sync_revoke_device','sync_device_state','sync_write_allowed') loop
+ for f in select p.oid,p.prosecdef,p.proconfig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='app_private' and p.proname in ('sync_authorized','sync_register_device','sync_record_event','sync_append_change','sync_open_review','sync_resolve_review','sync_revoke_device','sync_device_state','sync_write_allowed','sync_read_changes','sync_read_reviews','sync_resolve_review_command') loop
   if not f.prosecdef or not (f.proconfig @> array['search_path=""'] or f.proconfig @> array['search_path=']) or not has_function_privilege('app_api',f.oid,'EXECUTE') or has_function_privilege('public',f.oid,'EXECUTE') or has_function_privilege('authenticated',f.oid,'EXECUTE') or has_function_privilege('anon',f.oid,'EXECUTE') or has_function_privilege('service_role',f.oid,'EXECUTE') then raise exception 'function security'; end if;
  end loop;
  insert into auth.users(id,email) values(actor,'sync@invalid.test'),(other_actor,'other@invalid.test'),(kitchen,'kitchen@invalid.test'),(supervisor,'supervisor@invalid.test'),(waiter,'waiter@invalid.test'),(manager,'manager@invalid.test');
@@ -50,12 +50,20 @@ begin
  if app_private.sync_resolve_review(actor,r,b,review_id,'resolved_rejected','reason',null) <> 'denied' then raise exception 'cashier resolved'; end if;
  answer := app_private.sync_record_event(supervisor,jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(e,'{actorId}',to_jsonb(supervisor)),'{deviceId}','"supervisor-device"'),'{eventId}','"comp-wrong"'),'{idempotencyKey}','"comp-wrong-key"'),'{entityId}','"payment-other"'),'{operation}','"compensate"'),'{}'); if answer->>'status' <> 'recorded' then raise exception 'wrong compensation setup %',answer; end if;
  if app_private.sync_resolve_review(supervisor,r,b,review_id,'resolved_compensated','reason','comp-wrong') <> 'invalid' then raise exception 'wrong compensation accepted'; end if;
- answer := app_private.sync_record_event(supervisor,jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(e,'{actorId}',to_jsonb(supervisor)),'{deviceId}','"supervisor-device"'),'{eventId}','"comp-ok"'),'{idempotencyKey}','"comp-ok-key"'),'{localSequence}','1'),'{operation}','"compensate"'),'{}'); if answer->>'status' <> 'recorded' then raise exception 'compensation setup %',answer; end if;
+ answer := app_private.sync_record_event(supervisor,jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(e,'{actorId}',to_jsonb(supervisor)),'{deviceId}','"supervisor-device"'),'{eventId}','"comp-rejected"'),'{idempotencyKey}','"comp-rejected-key"'),'{localSequence}','1'),'{operation}','"compensate"'),'{"status":"rejected"}'); if answer->>'status' <> 'recorded' then raise exception 'rejected compensation setup %',answer; end if;
+ if app_private.sync_resolve_review(supervisor,r,b,review_id,'resolved_compensated','reason','comp-rejected') <> 'invalid' then raise exception 'rejected compensation accepted'; end if;
+ answer := app_private.sync_record_event(supervisor,jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(e,'{actorId}',to_jsonb(supervisor)),'{deviceId}','"supervisor-device"'),'{eventId}','"comp-ok"'),'{idempotencyKey}','"comp-ok-key"'),'{localSequence}','2'),'{operation}','"compensate"'),'{"status":"accepted"}'); if answer->>'status' <> 'recorded' then raise exception 'compensation setup %',answer; end if;
  if app_private.sync_resolve_review(supervisor,r,b,review_id,'resolved_compensated','reason','comp-ok') <> 'resolved' then raise exception 'supervisor resolve'; end if;
  if app_private.sync_resolve_review(supervisor,r,b,review_id,'resolved_compensated','reason','comp-ok') <> 'duplicate' then raise exception 'idempotent resolution'; end if;
  if app_private.sync_resolve_review(supervisor,r,b,review_id,'resolved_rejected','reason',null) <> 'already_resolved' then raise exception 'already resolved'; end if;
  review2 := app_private.sync_open_review(actor,r,b,'event-4','PAYMENT_UNCERTAIN');
  if app_private.sync_resolve_review(supervisor,r,b,review2,'resolved_compensated','reason','comp-ok') <> 'compensation_in_use' then raise exception 'compensation reused'; end if;
+ if app_private.sync_resolve_review_command(supervisor,r,b,review2,'reject','reason',null,'review-key','supervisor-device','2026-01-01T00:00:00Z') <> 'resolved' then raise exception 'review command'; end if;
+ if app_private.sync_resolve_review_command(supervisor,r,b,review2,'reject','reason',null,'review-key','supervisor-device','2026-01-01T00:00:00Z') <> 'duplicate' then raise exception 'review replay'; end if;
+ if app_private.sync_resolve_review_command(supervisor,r,b,review2,'reject','changed',null,'review-key','supervisor-device','2026-01-01T00:00:00Z') <> 'idempotency_conflict' then raise exception 'review key collision'; end if;
+ if app_private.sync_resolve_review_command(supervisor,r,b3,review2,'reject','reason',null,'review-key','supervisor-device','2026-01-01T00:00:00Z') <> 'denied' then raise exception 'review branch isolation'; end if;
+ if app_private.sync_resolve_review_command(kitchen,r2,b2,review2,'reject','reason',null,'review-key','device-1','2026-01-01T00:00:00Z') <> 'denied' then raise exception 'review tenant isolation'; end if;
+
  if not app_private.sync_revoke_device(supervisor,r,b,'device-1') then raise exception 'supervisor revoke'; end if;
  if app_private.sync_device_state(r,b,'device-1',actor) <> 'revoked' then raise exception 'revoked state'; end if;
  if not app_private.sync_register_device(actor,r,b3,'branch-device') then raise exception 'same restaurant branch registration'; end if;
@@ -69,6 +77,15 @@ begin
  n := app_private.sync_append_change(actor,r,b,'Customer','customer-1',1,false,'{}','create'); if n <> 1 then raise exception 'first cursor'; end if;
  begin perform app_private.sync_append_change(actor,r,b,'Customer','customer-1',1,false,'{}','update'); raise exception 'version accepted'; exception when check_violation then null; end;
  n := app_private.sync_append_change(manager,r,b,'Customer','customer-1',2,true,null,'delete'); if n <> 2 then raise exception 'second cursor'; end if;
+ if (select count(*) from app_private.sync_read_changes(actor,r,b,0,10)) <> 2 then raise exception 'pull pagination'; end if;
+ if (select count(*) from app_private.sync_read_changes(actor,r,b,1,10)) <> 1 then raise exception 'pull cursor'; end if;
+ if (select count(*) from app_private.sync_read_changes(actor,r,b3,0,10)) <> 1 then raise exception 'branch isolation'; end if;
+ if (select count(*) from app_private.sync_read_changes(kitchen,r,b,0,10)) <> 0 then raise exception 'restricted role leak'; end if;
+ begin perform * from app_private.sync_read_changes(kitchen,r,b3,0,10); raise exception 'foreign branch accepted'; exception when insufficient_privilege then null; end;
+ begin perform * from app_private.sync_read_changes(supervisor,r2,b2,0,10); raise exception 'foreign tenant accepted'; exception when insufficient_privilege then null; end;
+ begin perform * from app_private.sync_read_reviews(kitchen,r,b); raise exception 'review role accepted'; exception when insufficient_privilege then null; end;
+ if (select count(*) from app_private.sync_read_reviews(supervisor,r,b)) <> 2 then raise exception 'review list scope'; end if;
+
  begin perform app_private.sync_append_change(actor,r,b,'Customer','customer-1',3,false,'{}','update'); raise exception 'resurrection accepted'; exception when check_violation then null; end;
  if app_private.sync_append_change(actor,r,b,'Payment','payment-1',1,true,null,'delete') is not null then raise exception 'financial tombstone accepted'; end if;
  if app_private.sync_append_change(other_actor,r2,b2,'Customer','x',1,true,null,'delete') is not null then raise exception 'foreign append'; end if;
@@ -79,7 +96,7 @@ begin
  foreach tbl in array array['sync_event_ledger','sync_event_receipts','sync_changelog'] loop
   begin execute format('update app.%I set restaurant_id=restaurant_id',tbl); raise exception 'update accepted'; exception when object_not_in_prerequisite_state then null; end;
   begin execute format('delete from app.%I',tbl); raise exception 'delete accepted'; exception when object_not_in_prerequisite_state then null; end;
-  begin if tbl='sync_event_ledger' then execute 'truncate app.sync_event_ledger, app.sync_event_receipts, app.sync_manual_review_cases'; else execute format('truncate app.%I',tbl); end if; raise exception 'truncate accepted'; exception when object_not_in_prerequisite_state then null; end;
+  begin if tbl='sync_event_ledger' then execute 'truncate app.sync_event_ledger, app.sync_event_receipts, app.sync_manual_review_cases, app_private.sync_review_event_facts'; else execute format('truncate app.%I',tbl); end if; raise exception 'truncate accepted'; exception when object_not_in_prerequisite_state then null; end;
  end loop;
  update app.memberships set revoked_at=clock_timestamp(),revoked_by=actor,revocation_reason='test' where id=m;
  execute 'set local role app_api';
