@@ -2682,3 +2682,9 @@ Inspección inicial: CodeGraph actualizado, resolvedor legado de una variante y 
 
 - `sync-push.service.ts` valida el lote compartido, procesa secuencialmente y omite con hechos de log los eventos transitorios y los posteriores para no adelantar el cursor. `sync-push.test.ts` verifica reintento y scope con ejecutor simulado; no prueba PostgreSQL ni conecta una ruta HTTP.
 - Node 24: compilación de pruebas API, 2/2 pruebas dirigidas, ESLint dirigido y `git diff --check` verdes. Falta ejecutor transaccional real, auth/RBAC, escrituras, aislamiento y puertas globales. Estado IN_PROGRESS; sin remoto.
+
+### Frontera transaccional preparatoria
+
+- `PostgresDatabaseClient.transaction` usa conexión dedicada y READ COMMITTED, confirma al terminar y revierte al fallar; descarta la conexión si falla rollback. Prueba simulada verifica uso de una conexión y rollback de escrituras de negocio y ledger. Aún no está conectada a sync ni verificada contra PostgreSQL.
+- Node 24 fuera del sandbox: `pnpm lint` 10/10, `pnpm typecheck` 13/13, `pnpm test` 13/13 y `pnpm build` 10/10 verdes; `git diff --check` verde. Son puertas del estado parcial, no pruebas del endpoint inexistente.
+- Sigue IN_PROGRESS: ejecutor real, autorización y estado de dispositivo, despacho/merge, controlador, integración PostgreSQL y aislamiento. Sin migración remota ni push.
