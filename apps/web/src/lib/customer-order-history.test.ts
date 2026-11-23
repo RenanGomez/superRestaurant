@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { countOrderArticles, requestCustomerOrder } from "./customer-order-history.js";
+import { countOrderArticles, captureFulfillmentChannelLabel, captureSourceChannelLabel, formatCaptureUpdatedAt, requestCustomerOpenCaptures, requestCustomerOrder } from "./customer-order-history.js";
 
 test("recent order article count sums line quantities", () => {
   assert.equal(countOrderArticles([{ quantity: 3 }]), 3);
@@ -88,4 +88,69 @@ test("customer order requests map bounded HTTP failures", async () => {
         { error, ok: false });
     }
   } finally { globalThis.fetch = previous; }
+});
+
+const openCapture = {
+  attentionStatus: "unclaimed" as const,
+  captureDraftId: "0e22dfd1-9064-4fa8-86da-8fcce41fe821",
+  folio: "CAP-1",
+  fulfillmentChannel: "delivery" as const,
+  ownerMembershipId: null,
+  schemaVersion: 1 as const,
+  scope,
+  sourceChannel: "phone" as const,
+  status: "draft" as const,
+  updatedAt: "2026-09-24T12:00:00.000Z",
+  version: 3,
+};
+
+test("open captures use a scoped no-store GET and reject foreign responses", async () => {
+  const previous = globalThis.fetch;
+  const calls: Array<{ cache: RequestCache | undefined; method: string | undefined; url: string }> = [];
+  try {
+    globalThis.fetch = async (input, init) => {
+      calls.push({ cache: init?.cache, method: init?.method, url: String(input) });
+      return new Response(JSON.stringify({ schemaVersion: 1, items: [openCapture] }), { status: 200 });
+    };
+    const result = await requestCustomerOpenCaptures("token", "https://api.example.com", scope, customerId);
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.value.items[0]?.captureDraftId, openCapture.captureDraftId);
+    assert.match(calls[0]?.url ?? "", new RegExp(`/customers/${customerId}/captures/open\\?`));
+    assert.match(calls[0]?.url ?? "", new RegExp(`restaurantId=${scope.restaurantId}`));
+    assert.match(calls[0]?.url ?? "", new RegExp(`branchId=${scope.branchId}`));
+    assert.equal(calls[0]?.method, "GET");
+    assert.equal(calls[0]?.cache, "no-store");
+
+    globalThis.fetch = async () => new Response(JSON.stringify({ schemaVersion: 1,
+      items: [{ ...openCapture, scope: { ...scope, branchId: customerId } }] }), { status: 200 });
+    assert.deepEqual(await requestCustomerOpenCaptures("token", "https://api.example.com", scope, customerId),
+      { error: "unavailable", ok: false });
+    assert.deepEqual(await requestCustomerOpenCaptures("token", "https://api.example.com", scope, "invalid"),
+      { error: "invalid", ok: false });
+  } finally { globalThis.fetch = previous; }
+});
+
+test("open capture request maps bounded HTTP failures", async () => {
+  const previous = globalThis.fetch;
+  try {
+    for (const [status, error] of [[400, "invalid"], [403, "denied"], [500, "unavailable"]] as const) {
+      globalThis.fetch = async () => new Response("{}", { status });
+      assert.deepEqual(await requestCustomerOpenCaptures("token", "https://api.example.com", scope, customerId),
+        { error, ok: false });
+    }
+    globalThis.fetch = async () => { throw new Error("network"); };
+    assert.deepEqual(await requestCustomerOpenCaptures("token", "https://api.example.com", scope, customerId),
+      { error: "unavailable", ok: false });
+  } finally { globalThis.fetch = previous; }
+});
+
+test("capture labels and timestamps stay deterministic", () => {
+  assert.equal(captureSourceChannelLabel("phone"), "Teléfono");
+  assert.equal(captureSourceChannelLabel("whatsapp_manual"), "WhatsApp");
+  assert.equal(captureFulfillmentChannelLabel("delivery"), "Domicilio");
+  assert.equal(captureFulfillmentChannelLabel("pickup"), "Para recoger");
+  const formatted = formatCaptureUpdatedAt(openCapture.updatedAt, "UTC");
+  assert.ok(formatted.length > 0);
+  assert.match(formatted, /2026/u);
 });

@@ -6,6 +6,7 @@ import { BRANCH_PREFERENCE_COOKIE, findMembership, parseBranchPreference } from 
 import { getRequestSession, getRequestMemberships, getRequestAuthorizedBranch } from "../../../lib/request-context";
 import { customerDirectoryAction } from "./actions";
 import { customerHistoryAction } from "./history-action";
+import { customerOpenCapturesAction } from "./open-captures-action";
 import { CustomerEditor } from "./customer-editor";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +36,7 @@ export default async function CustomersPage({ searchParams }: CustomersPageProps
         <p className="mt-1 break-words text-sm text-text-muted">Sucursal: {membership.branchName} · Conexión requerida</p></div>
       <Link href="/app?change=1" className="rounded-lg border border-border px-3 py-3 text-sm focus-visible:outline-2">Cambiar sucursal</Link>
     </header>
-    {canOperate ? <CustomerEditor key={`${scope.restaurantId}/${scope.branchId}`} scope={scope} branchName={membership.branchName} action={customerDirectoryAction} historyAction={customerHistoryAction} initialCustomerId={initialCustomerId} />
+    {canOperate ? <CustomerEditor key={`${scope.restaurantId}/${scope.branchId}`} scope={scope} branchName={membership.branchName} action={customerDirectoryAction} historyAction={customerHistoryAction} openCapturesAction={customerOpenCapturesAction} initialCustomerId={initialCustomerId} />
       : <p role="alert" className="rounded-xl border border-border bg-surface p-5">Tu rol no permite consultar ni modificar clientes. Solicita acceso al responsable de la sucursal.</p>}
   </div>;
 }

@@ -2,11 +2,11 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type FormEvent, type KeyboardEvent } from "react";
 import Link from "next/link";
-import type { BranchScope, CustomerDirectoryDetailV1, CustomerDirectoryDetailAddressV1, CustomerDirectorySearchResultV1, CustomerRecentOrderListV1, CustomerPhoneInputV1, CustomerAddressFieldsV1, CustomerSearchModeV1, SettlementSearchBranchV1, SettlementSummaryV1 } from "@super-restaurant/shared-types";
+import type { BranchScope, CaptureWorkTrayResultV1, CustomerDirectoryDetailV1, CustomerDirectoryDetailAddressV1, CustomerDirectorySearchResultV1, CustomerRecentOrderListV1, CustomerPhoneInputV1, CustomerAddressFieldsV1, CustomerSearchModeV1, SettlementSearchBranchV1, SettlementSummaryV1 } from "@super-restaurant/shared-types";
 import { Field } from "../../../components/field-hint";
 import { getCustomerAutocompleteRequest, getCustomerDirectorySuggestions, getCustomerPhoneRemoval, insertCustomerDirectorySuggestion, isCurrentCustomerAutocompleteRequest, isCurrentCustomerSearch, selectCurrentCustomerSearch, type CustomerAutocompleteRequest, type CustomerDirectorySuggestion, type CustomerRequestResult, type CustomerSearchSnapshot } from "../../../lib/customer-directory";
 import { trapFocusIndex } from "../../../lib/focus-trap";
-import { countOrderArticles } from "../../../lib/customer-order-history";
+import { captureFulfillmentChannelLabel, captureSourceChannelLabel, countOrderArticles, formatCaptureUpdatedAt } from "../../../lib/customer-order-history";
 import { formatDeliveryMatch } from "../../../lib/delivery-zones";
 import { matchDeliveryAddress } from "../delivery-match-action";
 import { searchSettlements } from "../settlement-search-action";
@@ -20,6 +20,7 @@ export interface CustomerEditorProps {
   readonly branchName: string;
   readonly action: (operation: CustomerAction, input: unknown) => Promise<CustomerActionResult>;
   readonly historyAction: (input: unknown) => Promise<{ ok: true; value: CustomerRecentOrderListV1 } | { ok: false }>;
+  readonly openCapturesAction: (input: unknown) => Promise<{ ok: true; value: CaptureWorkTrayResultV1 } | { ok: false }>;
   /** Customer opened from a capture or directory deep link. */
   readonly initialCustomerId?: string | undefined;
 }
@@ -44,7 +45,7 @@ function searchTarget(command: unknown): CustomerAutocompleteRequest | undefined
   return { mode, query: query.trim() };
 }
 
-export function CustomerEditor({ scope, branchName, action, historyAction, initialCustomerId }: CustomerEditorProps): ReactNode {
+export function CustomerEditor({ scope, branchName, action, historyAction, openCapturesAction, initialCustomerId }: CustomerEditorProps): ReactNode {
   const [busy, setBusy] = useState(false);
   const [busyOperation, setBusyOperation] = useState<CustomerAction>();
   const [validatingAddressId, setValidatingAddressId] = useState<string>();
@@ -278,6 +279,7 @@ export function CustomerEditor({ scope, branchName, action, historyAction, initi
       {!addingAddress && <button type="button" className={`${buttonClass} mt-4`} disabled={locked} onClick={() => setAddingAddress(true)}>+ Nueva dirección</button>}
     </section>}
     {detail !== undefined && <CustomerHistory key={detail.customer.customerId} customerId={detail.customer.customerId} scope={scope} action={historyAction} />}
+    {detail !== undefined && <CustomerOpenCaptures key={`captures/${detail.customer.customerId}`} customerId={detail.customer.customerId} scope={scope} action={openCapturesAction} />}
     </div></div>
   </div>;
 }
@@ -323,8 +325,51 @@ function CustomerHistory({ customerId, scope, action }: {
   </section>;
 }
 
-function PhoneRemovalDialog({ phone, customerName, alsoSavesOtherChanges, problem, onCancel, onConfirm }: {
-  readonly phone: CustomerPhoneInputV1;
+function CustomerOpenCaptures({ customerId, scope, action }: {
+  readonly customerId: string;
+  readonly scope: BranchScope;
+  readonly action: CustomerEditorProps["openCapturesAction"];
+}): ReactNode {
+  const [state, setState] = useState<{ status: "loading" } | { status: "error" } | { status: "ready"; value: CaptureWorkTrayResultV1 }>({ status: "loading" });
+  const [attempt, setAttempt] = useState(0);
+  const requestSequence = useRef(0);
+  const selectedCustomerId = useRef(customerId);
+  selectedCustomerId.current = customerId;
+
+  useEffect(() => {
+    const sequence = ++requestSequence.current;
+    setState({ status: "loading" });
+    void action({ schemaVersion: 1, scope, customerId })
+      .then(reply => {
+        if (sequence !== requestSequence.current || customerId !== selectedCustomerId.current) return;
+        setState(reply.ok ? { status: "ready", value: reply.value } : { status: "error" });
+      })
+      .catch(() => {
+        if (sequence === requestSequence.current && customerId === selectedCustomerId.current) setState({ status: "error" });
+      });
+    return () => { requestSequence.current += 1; };
+  }, [action, attempt, customerId, scope]);
+
+  return <section className={panelClass} aria-labelledby="customer-open-captures-title">
+    <h2 id="customer-open-captures-title" className="font-heading text-lg font-semibold">Capturas abiertas</h2>
+    <p className="mt-1 text-sm text-text-muted">Borradores de este cliente en la sucursal. Retómalos para seguir la captura donde se quedó.</p>
+    {state.status === "loading" && <p role="status" className="mt-2 text-sm text-text-muted">Cargando capturas abiertas…</p>}
+    {state.status === "error" && <div className="mt-2">
+      <p role="alert" className="text-sm text-error">No se pudieron cargar las capturas abiertas.</p>
+      <button type="button" className={`${buttonClass} mt-2`} onClick={() => { setState({ status: "loading" }); setAttempt(value => value + 1); }}>Reintentar</button>
+    </div>}
+    {state.status === "ready" && state.value.items.length === 0 && <p className="mt-2 text-sm text-text-muted">Sin capturas abiertas de este cliente en esta sucursal.</p>}
+    {state.status === "ready" && state.value.items.map(item => <div key={item.captureDraftId} className="mt-3 flex min-w-0 flex-col gap-2 rounded-lg border border-border p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <p className="break-words font-semibold">{item.folio}</p>
+        <p className="break-words text-text-muted">{captureSourceChannelLabel(item.sourceChannel)} · {item.fulfillmentChannel === null ? "Sin entrega" : captureFulfillmentChannelLabel(item.fulfillmentChannel)} · {formatCaptureUpdatedAt(item.updatedAt)}</p>
+      </div>
+      <Link href={`/app/capture?draftId=${encodeURIComponent(item.captureDraftId)}`} className={`${buttonClass} inline-flex shrink-0 items-center justify-center`}>Retomar</Link>
+    </div>)}
+  </section>;
+}
+
+function PhoneRemovalDialog({ phone, customerName, alsoSavesOtherChanges, problem, onCancel, onConfirm }: {  readonly phone: CustomerPhoneInputV1;
   readonly customerName: string | undefined;
   readonly alsoSavesOtherChanges: boolean;
   readonly problem: string | undefined;
