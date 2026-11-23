@@ -1,25 +1,27 @@
 # Estado del loop
 
-Actualizado: 2026-11-22 14:52 -07:00
+Actualizado: 2026-11-22 20:58 -07:00
 
 ## CI de main
 
-- main CI: success (CI @ c1a37596, 2026-11-12 14:59)
+- main CI: in_progress (CI @ 7029438e, 2026-11-22 20:56)
 
 ## Sesiones
 
 ```
 superrestaurant:
-  SESSION            ROLE    BRANCH                  PR  CI  REVIEW  THREADS  ACTIVITY  AGE
-  superrestaurant-3  worker  ao/loop-tick-docs/root  -   -   -       0        active    5m ago
-  superrestaurant-4  worker  -                       -   -   -       0        idle      3m ago
-2 terminated sessions hidden. Use --include-terminated to show.
+  SESSION             ROLE    BRANCH                      PR  CI       REVIEW  THREADS  ACTIVITY  AGE
+  superrestaurant-10  worker  ao/capture-sql/root         -   -        -       0        active    10m ago
+  superrestaurant-11  worker  ao/lee-docs-agentic-2/root  -   -        -       0        active    18s ago
+  superrestaurant-3   worker  ao/loop-tick-docs/root      #1  passing  none    0        exited    3h ago
+  superrestaurant-5   worker  ao/node24-setup/root        #2  passing  none    0        exited    3h ago
+  ... (+3 lineas)
 ```
 
 ## PRs abiertos
 
-- Total: 0
-- (sin PRs abiertos)
+- Total: 1
+- #7 fix(sql): reparar confirmacion pizza M0-7 | CI 0/3 pend | sin revision
 
 ## Backlog
 
