@@ -1,5 +1,11 @@
 # HANDOFF
 
+## m1-k0b-pickup-contact — 2026-11-23 (REVIEW)
+
+- Autosave de Recoger admite contacto sin cliente y el workspace lo recupera; la confirmación de Domicilio sin cliente devuelve `delivery_customer_required`. Migración nueva `20261123000100`; no aplicada a remoto. El contrato conserva la forma anterior y valida claves exactas.
+- PostgreSQL 17 local: todas las migraciones desde cero y `capture_pickup_contact_invariants.sql` verdes; `pnpm lint`, `pnpm typecheck` y `pnpm test` verdes. En una ejecución adicional de invariantes posteriores a todas las migraciones falló `branch_day_summary_invariants.sql`, que CI ejecuta en un punto anterior. El verificador histórico de Capture queda registrado como deuda P2.
+- CodeGraph no inicializado en este worktree; inspección manual dirigida de autosave, lectores y confirmación. Sin subagentes ni interacción remota. Siguiente: revisión humana y publicación por Emmanuel.
+
 ## m1-pg-verify-clean — REVIEW local (2026-11-23)
 
 - Cinco invariantes SQL pasan en PostgreSQL 17.6 desechable con todas las migraciones; CI sin tolerancias SQL ni HTTP. El parser compartido acepta y valida asentamiento en snapshots antiguos y actuales; flujo HTTP local 7/7, incluyendo entrega, aislamiento y caja.

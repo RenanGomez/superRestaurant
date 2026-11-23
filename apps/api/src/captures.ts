@@ -903,6 +903,9 @@ export class CaptureConfirmationService {
     let workspace: CaptureWorkspaceV4;
     try { workspace = decodeCaptureWorkspaceV4(rawWorkspace, command.scope); } catch { throw unavailable(); }
     const detail = workspace.detail;
+    if (detail.fulfillmentChannel === "delivery" && workspace.customerSnapshot === null) {
+      throw new CaptureDeliveryQuoteInvalidError("delivery_customer_required");
+    }
     if (detail.captureDraftId !== command.captureDraftId || detail.version !== command.expectedVersion
       || detail.status !== "draft" || detail.attentionStatus !== "claimed"
       || detail.attentionLeaseId !== command.attentionLeaseId || detail.fulfillmentChannel === null
@@ -1803,8 +1806,8 @@ export class CaptureLineQuoteRejectedError extends Error {
 }
 
 export class CaptureDeliveryQuoteInvalidError extends Error {
-  public readonly reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered";
-  public constructor(reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered") {
+  public readonly reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered" | "delivery_customer_required";
+  public constructor(reason: "delivery_quote_missing" | "delivery_quote_expired" | "delivery_quote_not_covered" | "delivery_customer_required") {
     super("CAPTURE_DELIVERY_QUOTE_INVALID");
     this.name = "CaptureDeliveryQuoteInvalidError";
     this.reason = reason;
@@ -2371,7 +2374,7 @@ function confirmationResult(raw: unknown, command: ConfirmCaptureDraftCommandV2)
   if (reasoned?.status === "conflict") {
     if (reasoned.reason === "payment_intent_stale") throw new CapturePaymentIntentStaleError();
     if (reasoned.reason === "delivery_quote_missing" || reasoned.reason === "delivery_quote_expired"
-      || reasoned.reason === "delivery_quote_not_covered") {
+      || reasoned.reason === "delivery_quote_not_covered" || reasoned.reason === "delivery_customer_required") {
       throw new CaptureDeliveryQuoteInvalidError(reasoned.reason);
     }
     throw new CaptureApplicationError("conflict");
