@@ -337,6 +337,18 @@ test("quoteForCapture: address outside every zone is not_covered with a zero fee
   assert.equal(quote.feeMinor, 0);
 });
 
+test("quoteForCapture: the quote never fabricates a settlementId when the catalog cannot confirm one", async () => {
+  // The fulfillment snapshot carries no settlementId; quoteForCapture must start from
+  // `settlementId: null` (confirmed server-side from neighborhood/postal) and never echo one.
+  const notCoveredWorkspace = {
+    ...workspaceFixture,
+    fulfillmentSnapshot: { ...workspaceFixture.fulfillmentSnapshot, neighborhood: "Desconocida", postalCode: null, locality: "Otra ciudad" },
+  };
+  const quote = await serviceFor({ captures: captureCreationDouble(notCoveredWorkspace) }).quoteForCapture(principal, quoteInput);
+  assert.equal(quote.coverageStatus, "not_covered");
+  assert.equal(quote.address.settlementId, null);
+});
+
 test("quoteForCapture: ASAP quote lives 15 minutes from quotedAt and promises from quotedAt + 30 minutes", async () => {
   const service = serviceFor();
   const quote = await service.quoteForCapture(principal, quoteInput);
@@ -444,6 +456,33 @@ test("matchAddress: a unique neighborhood resolves to its settlement and matches
   assert.equal(result.zoneId, zoneId);
   assert.equal(result.matchedBy, "settlement");
   assert.equal(result.reason, null);
+  assert.deepEqual(result.settlement, { settlementId, name: "Centro", postalCode: "83000" });
+});
+
+test("matchAddress: a client-supplied settlementId the catalog cannot confirm is not echoed and reports settlement_unknown", async () => {
+  // The zone below lists this exact settlementId, so echoing it would falsely report coverage.
+  // Without a neighborhood or postal code the catalog cannot confirm the id, so resolveAddress
+  // must drop it and surface settlement_unknown instead of inventing a confirmed settlement.
+  const result = await serviceFor().matchAddress(principal, {
+    schemaVersion: 1, restaurantId: scope.restaurantId, branchId: scope.branchId,
+    address: { settlementId, neighborhood: null, postalCode: null, locality: null },
+  });
+  assert.equal(result.coverageStatus, "not_covered");
+  assert.equal(result.zoneId, null);
+  assert.equal(result.feeMinor, 0);
+  assert.equal(result.matchedBy, null);
+  assert.equal(result.settlement, null);
+  assert.equal(result.reason?.code, "settlement_unknown");
+});
+
+test("matchAddress: a settlementId confirmed by the catalog still resolves and matches its zone", async () => {
+  const result = await serviceFor().matchAddress(principal, {
+    schemaVersion: 1, restaurantId: scope.restaurantId, branchId: scope.branchId,
+    address: { settlementId, neighborhood: "Centro", postalCode: null, locality: null },
+  });
+  assert.equal(result.coverageStatus, "covered");
+  assert.equal(result.zoneId, zoneId);
+  assert.equal(result.matchedBy, "settlement");
   assert.deepEqual(result.settlement, { settlementId, name: "Centro", postalCode: "83000" });
 });
 
