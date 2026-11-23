@@ -8,12 +8,14 @@
  * empty `PRAGMA cipher_version` means "no offline storage", never "store in
  * plaintext".
  *
- * Requirements that live outside this module's allowed paths and are recorded
- * in HANDOFF.md as follow-ups:
+ * `apps/mobile/app.json` registers the `expo-sqlite` plugin with
+ * `useSQLCipher: true` (Development/EAS Build only) and sets
+ * `android.allowBackup: false`, so the encrypted database is never captured by
+ * Android auto-backup. The remaining follow-ups are recorded in HANDOFF.md:
  *
- * - `app.json` must register the `expo-sqlite` plugin with `useSQLCipher: true`
- *   (Development/EAS Build only) and exclude the `.db`/`-wal`/`-shm` files from
- *   iOS backups and Android auto-backup (ADR-005 Â§3.5, Â§5).
+ * - iOS: mark the directory that holds `.db`/`-wal`/`-shm` with
+ *   `NSURLIsExcludedFromBackupKey` at runtime, since `app.json` cannot express a
+ *   per-file backup exclusion (ADR-005 §3.5, §5).
  * - SQLCipher Community Edition attribution belongs in `THIRD_PARTY_NOTICES`
  *   and an "Acerca de / Avisos legales" screen before distribution.
  *
