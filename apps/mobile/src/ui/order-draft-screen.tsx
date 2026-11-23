@@ -703,6 +703,14 @@ function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, paym
                   <Caption>Registra solo una operación ya confirmada en terminal externa. No captures datos de tarjeta.</Caption>
                   <Field
                     editable={!busy}
+                    label="Proveedor de terminal"
+                    maxLength={120}
+                    onChangeText={(cardProvider) => { onFieldChange({ cardProvider }); }}
+                    placeholder="Ej. Clip, BBVA, Mercado Pago"
+                    value={payment.cardProvider}
+                  />
+                  <Field
+                    editable={!busy}
                     label="Terminal"
                     maxLength={100}
                     onChangeText={(terminalId) => { onFieldChange({ terminalId }); }}
@@ -716,6 +724,14 @@ function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, paym
                     onChangeText={(cardReference) => { onFieldChange({ cardReference }); }}
                     placeholder="Folio o autorización"
                     value={payment.cardReference}
+                  />
+                  <Chip
+                    disabled={busy}
+                    displayLabel={payment.cardExternalConfirmed ? "✓ Confirmado en terminal" : "Confirmado en terminal"}
+                    label="Confirmado en terminal"
+                    onPress={() => { onFieldChange({ cardExternalConfirmed: !payment.cardExternalConfirmed }); }}
+                    role="checkbox"
+                    selected={payment.cardExternalConfirmed}
                   />
                 </>
                 : <>
@@ -799,26 +815,31 @@ function DraftLossConfirmation({ composing, intent, lineCount, onCancel, onConfi
   </View>;
 }
 
-function Chip({ label, onPress, role = "tab", selected }: {
+function Chip({ disabled = false, displayLabel, label, onPress, role = "tab", selected }: {
+  readonly disabled?: boolean;
+  readonly displayLabel?: string;
   readonly label: string;
   readonly onPress: () => void;
-  readonly role?: "radio" | "tab";
+  readonly role?: "checkbox" | "radio" | "tab";
   readonly selected: boolean;
 }): React.JSX.Element {
   const focus = useFocusRing();
   return <Pressable
     accessibilityLabel={label}
     accessibilityRole={role}
-    accessibilityState={role === "radio" ? { checked: selected } : { selected }}
+    accessibilityState={role === "tab" ? { disabled, selected } : { checked: selected, disabled }}
+    {...(role === "tab" ? {} : { "aria-checked": selected })}
+    disabled={disabled}
     onPress={onPress}
     {...focus.handlers}
     style={(state) => [
       styles.chip,
       selected && styles.chipSelected,
+      disabled && styles.inactive,
       (state.pressed || focus.focused) && styles.chipPressed,
     ]}
   >
-    <Text style={[styles.chipLabel, selected && styles.chipLabelSelected]}>{label}</Text>
+    <Text style={[styles.chipLabel, selected && styles.chipLabelSelected]}>{displayLabel ?? label}</Text>
   </Pressable>;
 }
 

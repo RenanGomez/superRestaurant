@@ -916,7 +916,7 @@ test("payment collection tracks server checkout, quote, methods, success and fai
   assert.equal(edited.payment.quote.status, "idle");
   assert.equal(canSubmitMobilePayment(edited.payment), false);
 
-  // Card manual requires terminal + >= 6 char reference.
+  // Card manual requires provider, terminal, >= 6 char reference, and explicit external confirmation.
   const cardAttempt = nextAttempt();
   const cardQuoted = apply(
     opened,
@@ -925,8 +925,22 @@ test("payment collection tracks server checkout, quote, methods, success and fai
     { attempt: cardAttempt, quote: cardQuote, scope: scopeA, type: "paymentQuoteLoaded" },
   );
   assert.equal(canSubmitMobilePayment(cardQuoted.payment), false);
-  const cardReady = apply(cardQuoted, { patch: { cardReference: "AUTH1234", terminalId: "Terminal 1" }, type: "paymentFieldChanged" });
+  const cardUnconfirmed = apply(cardQuoted, {
+    patch: { cardProvider: "Clip", cardReference: "AUTH1234", terminalId: "Terminal 1" },
+    type: "paymentFieldChanged",
+  });
+  assert.equal(canSubmitMobilePayment(cardUnconfirmed.payment), false, "external confirmation must be explicitly checked");
+  const cardNoProvider = apply(cardQuoted, {
+    patch: { cardExternalConfirmed: true, cardProvider: "   ", cardReference: "AUTH1234", terminalId: "Terminal 1" },
+    type: "paymentFieldChanged",
+  });
+  assert.equal(canSubmitMobilePayment(cardNoProvider.payment), false, "provider cannot be blank");
+  const cardReady = apply(cardUnconfirmed, { patch: { cardExternalConfirmed: true }, type: "paymentFieldChanged" });
   assert.equal(canSubmitMobilePayment(cardReady.payment), true);
+  assert.equal(
+    canSubmitMobilePayment(apply(cardReady, { patch: { cardExternalConfirmed: false }, type: "paymentFieldChanged" }).payment),
+    false,
+  );
 
   // Transfer allows empty or optional <=64 char reference.
   const transferAttempt = nextAttempt();

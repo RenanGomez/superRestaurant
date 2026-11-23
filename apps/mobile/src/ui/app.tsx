@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import {
+  parseBranchScope,
   parseQuoteCashPaymentRequestV1,
   type ActiveTableOrderListV2,
-  type BranchScope,
+  type CollectPaymentCommandV1,
   type DiningTableV1,
   type OrderMutationSummaryV1,
 } from "@super-restaurant/shared-types";
@@ -533,14 +534,27 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     const quote = state.payment.quote.value;
     if (checkout === undefined || quote === undefined || !canSubmitMobilePayment(state.payment)
       || token === undefined || branchId === undefined || restaurantId === undefined || deviceId === undefined) return;
+    const commandScope = parseBranchScope({ branchId, restaurantId });
+    if (commandScope === undefined) return;
     const targetScope: MobileBranchScope = { branchId, restaurantId };
+    let cardManualEvidence: CollectPaymentCommandV1["cardManualEvidence"] = null;
+    if (quote.method === "card_manual") {
+      if (!state.payment.cardExternalConfirmed) return;
+      cardManualEvidence = {
+        externalConfirmed: state.payment.cardExternalConfirmed,
+        provider: state.payment.cardProvider.trim(),
+        reference: state.payment.cardReference.trim(),
+        terminalId: state.payment.terminalId.trim(),
+      };
+    }
     const transferRef = state.payment.method === "transfer" && state.payment.transferReference.trim().length > 0
       ? state.payment.transferReference.trim()
       : null;
     const key = [
       draftContext, checkout.orderId, checkout.orderVersion, checkout.cashRegisterSessionId, checkout.cashRegisterVersion,
       quote.method, quote.amountMinor, quote.tenderedAmountMinor ?? "", quote.tipMinor,
-      state.payment.terminalId.trim(), state.payment.cardReference.trim(), transferRef ?? "",
+      state.payment.cardProvider.trim(), state.payment.terminalId.trim(), state.payment.cardReference.trim(),
+      String(state.payment.cardExternalConfirmed), transferRef ?? "",
     ].join("|");
     if (paymentAttemptRef.current?.key !== key) {
       paymentAttemptRef.current = {
@@ -557,9 +571,7 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     dispatch({ orderId: checkout.orderId, type: "paymentSubmitStarted" });
     void collectPayment(config, token, {
       amountMinor: quote.amountMinor,
-      cardManualEvidence: quote.method === "card_manual"
-        ? { externalConfirmed: true, provider: "Terminal externa", reference: state.payment.cardReference.trim(), terminalId: state.payment.terminalId.trim() }
-        : null,
+      cardManualEvidence,
       cashRegisterExpectedVersion: checkout.cashRegisterVersion,
       cashRegisterSessionId: checkout.cashRegisterSessionId,
       deviceId,
@@ -572,7 +584,7 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
       orderId: checkout.orderId,
       paymentId: audit.paymentId,
       schemaVersion: 1,
-      scope: targetScope as unknown as BranchScope,
+      scope: commandScope,
       tenderedAmountMinor: quote.tenderedAmountMinor,
       tipMinor: quote.tipMinor,
       ...(transferRef === null ? {} : { transferReference: transferRef }),

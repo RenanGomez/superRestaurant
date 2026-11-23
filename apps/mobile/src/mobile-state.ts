@@ -26,6 +26,8 @@ export type MobileResourceStatus = "failed" | "idle" | "loading" | "ready";
 
 export interface MobilePaymentFields {
   readonly amountInput: string;
+  readonly cardExternalConfirmed: boolean;
+  readonly cardProvider: string;
   readonly cardReference: string;
   readonly method: SimplePaymentMethodV1;
   readonly receivedInput: string;
@@ -198,6 +200,8 @@ const idlePaymentSubmission = Object.freeze({ failure: undefined, receipt: undef
 
 export const initialPaymentState: MobilePaymentState = Object.freeze({
   amountInput: "",
+  cardExternalConfirmed: false,
+  cardProvider: "",
   cardReference: "",
   checkout: idleResource,
   checkoutFailure: undefined,
@@ -758,7 +762,13 @@ export function paymentMethodLabel(method: SimplePaymentMethodV1): string {
 export function canSubmitMobilePayment(payment: MobilePaymentState): boolean {
   if (payment.checkout.status !== "ready" || payment.quote.status !== "ready" || payment.submission.status === "sending") return false;
   if (payment.method === "card_manual") {
-    return payment.terminalId.trim().length > 0 && payment.cardReference.trim().length >= 6;
+    const provider = payment.cardProvider.trim();
+    const terminal = payment.terminalId.trim();
+    const reference = payment.cardReference.trim();
+    return payment.cardExternalConfirmed
+      && provider.length > 0 && provider.length <= 120 && !/[\p{Cc}\p{Cf}]/u.test(provider)
+      && terminal.length > 0 && terminal.length <= 100 && !/[\p{Cc}\p{Cf}]/u.test(terminal)
+      && reference.length >= 6 && reference.length <= 200 && !/[\p{Cc}\p{Cf}]/u.test(reference);
   }
   if (payment.method === "transfer") {
     return payment.transferReference.trim().length <= 64 && !/[\p{Cc}\p{Cf}]/u.test(payment.transferReference);
