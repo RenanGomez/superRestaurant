@@ -118,6 +118,7 @@
     "verify:web-protected-smoke:remote": "tsc --project tsconfig.build.json && node dist/operations/run-web-protected-smoke.js",
     "verify:capture-continuity-protected-smoke:remote": "tsc --project tsconfig.build.json && node dist/operations/run-capture-continuity-protected-smoke.js",
     "drive:capture-continuity-api-smoke:remote": "tsc --project tsconfig.build.json && node dist/operations/run-capture-continuity-api-smoke-driver.js",
-    "verify:menu-web-protected-smoke:remote": "tsc --project tsconfig.build.json && node dist/operations/run-menu-web-protected-smoke.js"
+    "verify:menu-web-protected-smoke:remote": "tsc --project tsconfig.build.json && node dist/operations/run-menu-web-protected-smoke.js",
+    "verify:sync-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-sync-schema-verification.js --local-disposable-only"
   }
 }
