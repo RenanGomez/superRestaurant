@@ -5,6 +5,8 @@ import {
   type SyncConnectivityStateV1,
 } from "@super-restaurant/shared-types";
 
+import { orderTicketsForDisplay } from "./kds-state.js";
+
 /**
  * Local-first cache for the kitchen display.
  *
@@ -73,6 +75,19 @@ export function ticketsForStation(
     if (!byItem.has(ticket.orderItemId)) byItem.set(ticket.orderItemId, ticket);
   }
   return Object.freeze([...byItem.values()]);
+}
+
+/**
+ * Replaces the board with exactly what the server currently lists for this
+ * station. It is intentionally not a union with any previous cache: a ticket
+ * the server no longer returns disappears, and a foreign ticket never reaches
+ * the board or the persisted cache.
+ */
+export function applyServerList(
+  received: readonly KdsTicketV1[],
+  scope: KdsStationScope,
+): readonly KdsTicketV1[] {
+  return orderTicketsForDisplay(ticketsForStation(received, scope));
 }
 
 /**

@@ -163,6 +163,39 @@ test("a rejected transition is not reported as still pending after reconcile", a
   assert.deepEqual(await controller.pendingTransitions(), [], "a rejected event is not shown as still pending");
 });
 
+test("reconcile pulls from the previous cursor and never resends an accepted transition", async () => {
+  const connectivity = { value: "online" as SyncConnectivityStateV1 };
+  const { controller, server } = rig(connectivity);
+  await controller.init();
+  await controller.advance(ticket(), "preparing", { ticketReceivedOnStation: true });
+
+  await controller.reconcile();
+  await controller.reconcile();
+
+  assert.equal(server.pulls[0]?.cursor, null, "the first pull starts without a cursor");
+  assert.equal(server.pulls[1]?.cursor, "pull:1", "the next pull resumes from the cursor returned by the server");
+  const pushed = server.pushes.reduce((total, request) => total + request.events.length, 0);
+  assert.equal(pushed, 1, "an accepted transition is not pushed again on the next reconcile");
+  assert.equal(await controller.pendingCount(), 0);
+});
+
+test("devices sharing durable storage keep independent outboxes", async () => {
+  const storage = new InMemorySyncStorage();
+  const connectivity = { value: "offline" as SyncConnectivityStateV1 };
+  const otherDeviceId = "11111111-2222-4333-8444-555555555555";
+  const first = createKdsOfflineController({
+    actorId, connectivity: () => connectivity.value, deviceId, scope, stationId, storage, transport: new FakeSyncServer(),
+  });
+  const second = createKdsOfflineController({
+    actorId, connectivity: () => connectivity.value, deviceId: otherDeviceId, scope, stationId, storage, transport: new FakeSyncServer(),
+  });
+  await Promise.all([first.init(), second.init()]);
+  await first.advance(ticket(), "preparing", { ticketReceivedOnStation: true });
+
+  assert.equal(await first.pendingCount(), 1);
+  assert.equal(await second.pendingCount(), 0, "another device never inherits this device's queued transition");
+});
+
 test("online KDS still resolves the capability for a received ticket", async () => {
   const { controller } = rig({ value: "online" });
   await controller.init();
