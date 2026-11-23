@@ -18,7 +18,7 @@ import type {
 } from "./sync-store.js";
 import { MobileSqliteSyncStorage } from "./sync-store.js";
 import { createMobileSyncTransport } from "./sync-transport.js";
-import { DEVICE, SCOPE, FakeSyncDatabase, storageFor } from "./test-fixtures.js";
+import { DEVICE, ACTOR, SCOPE, FakeSyncDatabase, entry, stateWith, storageFor } from "./test-fixtures.js";
 
 const RESTAURANT = "00000000-0000-4000-8000-00000000a0a0";
 const BRANCH = "00000000-0000-4000-8000-00000000a1a1";
@@ -61,6 +61,13 @@ class FakeAdmin implements MobileSyncLocalStorageAdmin {
 
   public lockStore(): Promise<void> {
     this.calls.push("lock");
+    this.health = Object.freeze({ ...this.health, locked: true });
+    return Promise.resolve();
+  }
+
+  public unlockStore(): Promise<void> {
+    this.calls.push("unlock");
+    this.health = Object.freeze({ ...this.health, locked: false });
     return Promise.resolve();
   }
 
@@ -234,6 +241,60 @@ test("locking the real store through the session stops the engine's next commit"
   assert.equal(session.pushesAllowed(), false);
 });
 
+test("resumeSession unlocks evidence retained by sign-out without touching lastLocalSequence", async () => {
+  const database = new FakeSyncDatabase();
+  const storage: MobileSqliteSyncStorage = storageFor(database);
+  const evidenceState = stateWith([entry({ entityType: "Payment", localState: "pending" })]);
+  await storage.persist(evidenceState);
+  const before = await storage.getStorageHealth();
+  assert.equal(before.lastLocalSequence, evidenceState.lastLocalSequence);
+
+  const session = new MobileOfflineSession({
+    deviceId: DEVICE,
+    keys: { purge: (): Promise<void> => Promise.resolve() },
+    storage,
+  });
+
+  const signOut = await session.prepareSignOut();
+  assert.equal(signOut.status, "evidence-retained");
+  const locked = await storage.getStorageHealth();
+  assert.equal(locked.locked, true);
+  assert.equal(session.pushesAllowed(), false);
+
+  // The operator logs back in with an authenticated actor.
+  const resumed = await session.resumeSession(SCOPE, ACTOR);
+  assert.deepEqual(resumed, { status: "resumed" });
+  assert.equal(session.pushesAllowed(), true);
+
+  const after = await storage.getStorageHealth();
+  assert.equal(after.locked, false);
+  assert.equal(after.lastLocalSequence, before.lastLocalSequence, "resume must never move the sequence");
+  assert.equal(after.writeGeneration > locked.writeGeneration, true);
+
+  // The store accepts commits again with the retained evidence intact.
+  await storage.persist(evidenceState);
+  assert.equal((await storage.getStorageHealth()).writeGeneration > after.writeGeneration, true);
+});
+
+test("resumeSession refuses to resurrect a quarantined store", async () => {
+  const admin = new FakeAdmin();
+  admin.health = Object.freeze({ ...admin.health, locked: true, quarantined: true });
+  const { session } = sessionWith(admin);
+  session.closePushGate();
+  const outcome = await session.resumeSession(SCOPE, ACTOR);
+  assert.deepEqual(outcome, { quarantined: true, status: "corrupt" });
+  assert.equal(session.pushesAllowed(), false);
+  assert.deepEqual(admin.calls, [], "a quarantine is never lifted by a login");
+});
+
+test("resumeSession requires an authenticated actor", async () => {
+  const admin = new FakeAdmin();
+  const { session } = sessionWith(admin);
+  session.closePushGate();
+  await assert.rejects(session.resumeSession(SCOPE, "  "));
+  assert.equal(session.pushesAllowed(), false);
+  assert.deepEqual(admin.calls, []);
+});
 test("a clean sign-out still ends the session locally when the storage hook fails", async () => {
   const events: MobileEvent[] = [];
   const rejections: unknown[] = [];

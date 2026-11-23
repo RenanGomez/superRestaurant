@@ -43,6 +43,7 @@ import {
   MobileSyncKeyStore,
   syncDatabaseKeySql,
   type MobileSyncDatabaseKey,
+  type MobileSyncKeyCandidates,
   type MobileSyncSecureStorePort,
 } from "./sync-key.js";
 import { MobileOfflineSession } from "./sync-session.js";
@@ -184,11 +185,16 @@ function transactionPort(transaction: SQLiteDatabase): MobileSyncTransactionPort
 export interface OpenMobileSyncDatabaseOptions {
   readonly databaseName: string;
   readonly keyHex: string;
+  /** Version of the key in the keystore that `keyHex` belongs to. */
+  readonly keyVersion: number;
 }
 
 export async function openMobileSyncDatabase(options: OpenMobileSyncDatabaseOptions): Promise<MobileSyncSqliteDatabase> {
   if (!isSyncDatabaseKeyHex(options.keyHex)) {
     throw new MobileSyncKeyError("ENCRYPTION_KEY_CORRUPT", "keyHex");
+  }
+  if (!Number.isSafeInteger(options.keyVersion) || options.keyVersion < 1) {
+    throw new MobileSyncKeyError("ENCRYPTION_KEY_CORRUPT", "keyVersion");
   }
   if (!/^[A-Za-z0-9._-]+$/u.test(options.databaseName)) {
     throw new MobileSyncStorageError("DEVICE_MISMATCH", "databaseName");
@@ -203,7 +209,7 @@ export async function openMobileSyncDatabase(options: OpenMobileSyncDatabaseOpti
 
   try {
     // The key must be the first statement on the connection.
-    await database.execAsync(`PRAGMA key = "${syncDatabaseKeySql({ version: 1, hex: options.keyHex })}"`);
+    await database.execAsync(`PRAGMA key = "${syncDatabaseKeySql({ version: options.keyVersion, hex: options.keyHex })}"`);
     const cipher = await database.getFirstAsync<{ readonly cipher_version: string | null }>("PRAGMA cipher_version");
     const cipherVersion = cipher?.cipher_version;
     if (typeof cipherVersion !== "string" || cipherVersion.trim().length === 0) {
@@ -256,8 +262,40 @@ export interface MobileOfflineRuntime {
 export async function openMobileOfflineRuntime(): Promise<MobileOfflineRuntime> {
   const deviceId = await createExpoDeviceIdentity().load();
   const keys = new MobileSyncKeyStore({ randomBytes: getRandomBytesAsync, store: expoMobileSecureStore });
-  const key = await keys.getOrCreate(deviceId);
-  const database = await openMobileSyncDatabase({ databaseName: `${MOBILE_SYNC_DATABASE_PREFIX}${deviceId}.db`, keyHex: key.hex });
+  const databaseName = `${MOBILE_SYNC_DATABASE_PREFIX}${deviceId}.db`;
+  let candidates: MobileSyncKeyCandidates = await keys.openCandidates(deviceId);
+  if (candidates.keys.length === 0) {
+    const created = await keys.getOrCreate(deviceId);
+    candidates = Object.freeze({ keys: Object.freeze([created]), pointerVersion: created.version });
+  }
+
+  let key: MobileSyncDatabaseKey | undefined;
+  let database: MobileSyncSqliteDatabase | undefined;
+  let lastError: unknown;
+  for (const candidate of candidates.keys) {
+    try {
+      database = await openMobileSyncDatabase({ databaseName, keyHex: candidate.hex, keyVersion: candidate.version });
+      key = candidate;
+      break;
+    } catch (error) {
+      lastError = error;
+      // A missing cipher affects every candidate; do not mask it as a wrong key.
+      if (error instanceof MobileSyncStorageError && error.code === "ENCRYPTION_UNAVAILABLE") throw error;
+    }
+  }
+  if (database === undefined || key === undefined) throw toStorageError(lastError, "STORAGE_LOAD_FAILED");
+
+  // A successful open with an uncommitted rotation is proof the rekey landed:
+  // commit the pointer so the next launch opens the right key on the first try.
+  if (key.version !== candidates.pointerVersion) {
+    try {
+      await keys.commitRotation(deviceId, key.version);
+    } catch {
+      // The database is already open with a working key; a stuck pointer only
+      // means the next launch falls back again.
+    }
+  }
+
   const storage = new MobileSqliteSyncStorage({
     database,
     deviceId,
@@ -287,8 +325,9 @@ export function createMobileOfflineTransport(
 
 /**
  * Verified rotation (ADR-005 Â§4.3): generate `N + 1`, rekey the database, and
- * only then delete the previous key. If the rekey fails the old key still
- * matches the database, so nothing is lost.
+ * only **after** the rekey resolves move the pointer and delete the previous
+ * key. A rekey that throws, or a process that dies before `commitRotation`,
+ * leaves the pointer on the key the database still uses, so nothing is lost.
  */
 export async function rotateMobileSyncDatabaseKey(runtime: MobileOfflineRuntime): Promise<MobileSyncDatabaseKey> {
   const next = await runtime.keys.rotate(runtime.deviceId);
@@ -297,6 +336,10 @@ export async function rotateMobileSyncDatabaseKey(runtime: MobileOfflineRuntime)
   } catch (error) {
     throw toStorageError(error, "STORAGE_COMMIT_FAILED");
   }
+  // The rekey resolved, so the database now needs the new key: commit the
+  // pointer before retiring the old key. If the commit fails, the old key is
+  // kept and the next open falls back to `N + 1` via `openCandidates`.
+  await runtime.keys.commitRotation(runtime.deviceId, next.version);
   await runtime.keys.retireBelow(runtime.deviceId, next.version);
   runtime.storage.adoptKeyVersion(next.version);
   return next;

@@ -116,18 +116,61 @@ test("a generator that returns the wrong length is refused instead of stored", a
   assert.equal(store.values.size, 0);
 });
 
-test("rotation points at N+1 and retireBelow deletes only the superseded key", async () => {
+test("rotation commits the pointer only after rekey and retireBelow deletes only the superseded key", async () => {
   const store = new FakeSecureStore();
   const keys = keyStore(store);
   await keys.getOrCreate(DEVICE);
   const next = await keys.rotate(DEVICE);
   assert.equal(next.version, 2);
+  assert.equal(store.values.get(syncKeyPointerKey(DEVICE)), "1", "rotate must not move the pointer before the rekey");
+
+  await keys.commitRotation(DEVICE, next.version);
   assert.equal(store.values.get(syncKeyPointerKey(DEVICE)), "2");
 
   await keys.retireBelow(DEVICE, 2);
   assert.equal(store.values.has(syncKeyStorageKey(DEVICE, 1)), false);
   assert.equal(store.values.has(syncKeyStorageKey(DEVICE, 2)), true);
   assert.deepEqual(await keys.current(DEVICE), next);
+});
+
+test("a failed rekey leaves the pointer on the old key so the database still reopens", async () => {
+  const store = new FakeSecureStore();
+  const keys = keyStore(store);
+  const original = await keys.getOrCreate(DEVICE);
+
+  // `rotate` stores N+1 but the simulated `PRAGMA rekey` throws, so nothing commits.
+  const next = await keys.rotate(DEVICE);
+  assert.equal(next.version, 2);
+  assert.equal(store.values.get(syncKeyPointerKey(DEVICE)), "1", "pointer must survive a failed rekey");
+  assert.deepEqual(await keys.current(DEVICE), original);
+
+  const reopened = await keyStore(store).openCandidates(DEVICE);
+  assert.equal(reopened.pointerVersion, 1);
+  assert.deepEqual(reopened.keys[0], original, "the old key still opens the database");
+});
+
+test("a crash after the rekey but before commit recovers the uncommitted key on reopen", async () => {
+  const store = new FakeSecureStore();
+  const keys = keyStore(store);
+  await keys.getOrCreate(DEVICE);
+  const next = await keys.rotate(DEVICE);
+
+  // The database was rekeyed but the process died before `commitRotation`.
+  const reopened = await keyStore(store).openCandidates(DEVICE);
+  assert.equal(reopened.pointerVersion, 1);
+  assert.deepEqual(reopened.keys.map((key) => key.version), [1, 2]);
+  assert.deepEqual(reopened.keys[1], next);
+});
+
+test("commitRotation refuses a version that was never stored", async () => {
+  const store = new FakeSecureStore();
+  const keys = keyStore(store);
+  await keys.getOrCreate(DEVICE);
+  await assert.rejects(
+    keys.commitRotation(DEVICE, 2),
+    (error: unknown) => error instanceof MobileSyncKeyError && error.code === "ENCRYPTION_KEY_CORRUPT",
+  );
+  assert.equal(store.values.get(syncKeyPointerKey(DEVICE)), "1");
 });
 
 test("concurrent first-run callers share one attempt and one key", async () => {

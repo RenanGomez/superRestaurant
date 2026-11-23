@@ -53,6 +53,12 @@ export interface MobileSyncDatabaseKey {
   readonly hex: string;
 }
 
+/** Candidate keys for opening one database; `pointerVersion` is `0` when none was minted yet. */
+export interface MobileSyncKeyCandidates {
+  readonly pointerVersion: number;
+  readonly keys: readonly MobileSyncDatabaseKey[];
+}
+
 /** The slice of `expo-secure-store` the key lifecycle needs; adds deletion to the identity port. */
 export interface MobileSyncSecureStorePort extends MobileSecureStorePort {
   readonly deleteItem: (key: string) => Promise<void>;
@@ -135,9 +141,11 @@ export class MobileSyncKeyStore {
   }
 
   /**
-   * Generates `N + 1` and points the device at it. The caller runs
-   * `PRAGMA rekey` and only then calls `retireBelow` so the old key is not
-   * deleted before a successful re-encryption.
+   * Generates `N + 1` and stores it **without moving the pointer**. The caller
+   * runs `PRAGMA rekey` and only after a verified re-encryption calls
+   * `commitRotation` (then `retireBelow`). If the rekey fails or the process
+   * dies before the commit, the pointer still names the key the database is
+   * actually encrypted with, so the store stays readable.
    */
   public async rotate(deviceId: string): Promise<MobileSyncDatabaseKey> {
     const current = await this.current(deviceId);
@@ -146,13 +154,56 @@ export class MobileSyncKeyStore {
     const hex = await this.mint();
     try {
       await this.store.setItem(syncKeyStorageKey(deviceId, nextVersion), hex);
-      await this.store.setItem(syncKeyPointerKey(deviceId), String(nextVersion));
     } catch {
       throw new MobileSyncKeyError("ENCRYPTION_UNAVAILABLE", "rotate");
     }
     // A cached first-run result would otherwise keep handing out the old key.
     this.attempts.delete(deviceId);
     return Object.freeze({ version: nextVersion, hex });
+  }
+
+  /**
+   * Moves the pointer to `version` **after** a rekey was verified against the
+   * new key. Until this succeeds the pointer keeps naming the previous key, so
+   * a crash between rekey and commit opens the old key first and then falls
+   * back to the newer one (`openCandidates`).
+   */
+  public async commitRotation(deviceId: string, version: number): Promise<void> {
+    if (!Number.isSafeInteger(version) || version < 1 || version > SYNC_DB_KEY_MAX_VERSION) {
+      throw new MobileSyncKeyError("ENCRYPTION_KEY_CORRUPT", "version");
+    }
+    if (await this.readKey(deviceId, version) === null) {
+      throw new MobileSyncKeyError("ENCRYPTION_KEY_CORRUPT", "missing");
+    }
+    try {
+      await this.store.setItem(syncKeyPointerKey(deviceId), String(version));
+    } catch {
+      throw new MobileSyncKeyError("ENCRYPTION_UNAVAILABLE", "rotate");
+    }
+    this.attempts.delete(deviceId);
+  }
+
+  /**
+   * Keys to try when opening the database, in order: the pointer key, an
+   * uncommitted rotation immediately above it (crash after a successful rekey
+   * but before `commitRotation`), and the previous version (a rotation that was
+   * stored but never committed, while the database still uses the old key).
+   */
+  public async openCandidates(deviceId: string): Promise<MobileSyncKeyCandidates> {
+    const pointerVersion = await this.readVersion(deviceId);
+    if (pointerVersion === 0) return Object.freeze({ keys: Object.freeze([]), pointerVersion });
+    const pointer = await this.readKey(deviceId, pointerVersion);
+    if (pointer === null) throw new MobileSyncKeyError("ENCRYPTION_KEY_CORRUPT", "missing");
+    const keys: MobileSyncDatabaseKey[] = [pointer];
+    if (pointerVersion + 1 <= SYNC_DB_KEY_MAX_VERSION) {
+      const uncommitted = await this.tryReadKey(deviceId, pointerVersion + 1);
+      if (uncommitted !== null) keys.push(uncommitted);
+    }
+    if (pointerVersion > 1) {
+      const previous = await this.tryReadKey(deviceId, pointerVersion - 1);
+      if (previous !== null) keys.push(previous);
+    }
+    return Object.freeze({ keys: Object.freeze(keys), pointerVersion });
   }
 
   /** Deletes every key below `version` after a confirmed rekey. Best effort per version. */
@@ -170,13 +221,9 @@ export class MobileSyncKeyStore {
   /** Crypto-shredding: every version and the pointer go. Afterwards ciphertext is unreadable. */
   public async purge(deviceId: string): Promise<void> {
     this.attempts.delete(deviceId);
-    let highest = 0;
-    try {
-      highest = await this.readVersion(deviceId);
-    } catch {
-      highest = SYNC_DB_KEY_MAX_VERSION;
-    }
-    for (let candidate = 1; candidate <= highest; candidate += 1) {
+    // Delete every possible version, not just those below the pointer: an
+    // uncommitted rotation stores `N + 1` while the pointer still says `N`.
+    for (let candidate = 1; candidate <= SYNC_DB_KEY_MAX_VERSION; candidate += 1) {
       try {
         await this.store.deleteItem(syncKeyStorageKey(deviceId, candidate));
       } catch {
@@ -235,6 +282,13 @@ export class MobileSyncKeyStore {
     const hex = await this.readRaw(syncKeyStorageKey(deviceId, version));
     if (hex === null) throw new MobileSyncKeyError("ENCRYPTION_KEY_CORRUPT", "missing");
     if (!isSyncDatabaseKeyHex(hex)) throw new MobileSyncKeyError("ENCRYPTION_KEY_CORRUPT", "format");
+    return Object.freeze({ version, hex });
+  }
+
+  /** Non-throwing variant for the optional fallback slots of `openCandidates`. */
+  private async tryReadKey(deviceId: string, version: number): Promise<MobileSyncDatabaseKey | null> {
+    const hex = await this.readRaw(syncKeyStorageKey(deviceId, version));
+    if (hex === null || !isSyncDatabaseKeyHex(hex)) return null;
     return Object.freeze({ version, hex });
   }
 

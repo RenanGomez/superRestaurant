@@ -23,7 +23,7 @@
  * shredding the DEK alone would leave an unreadable database behind while also
  * making post-incident reconciliation impossible.
  */
-import type { SyncScopeInput } from "@super-restaurant/sync-engine";
+import { parseSyncScope, type SyncScopeInput } from "@super-restaurant/sync-engine";
 
 import type {
   MobileSyncLocalStorageAdmin,
@@ -51,6 +51,19 @@ export type MobileDeviceRevocationOutcome =
   | { readonly status: "shredded"; readonly evidenceWasPending: boolean }
   | { readonly status: "evidence-quarantined"; readonly evidence: MobileSyncPendingEvidence; readonly purge: MobileSyncPurgeOutcome }
   | { readonly status: "corrupt"; readonly quarantined: true };
+
+export type MobileSyncResumeOutcome =
+  | { readonly status: "resumed" }
+  | { readonly status: "corrupt"; readonly quarantined: true };
+
+export type MobileSyncSessionErrorCode = "RESUME_INVALID";
+
+export class MobileSyncSessionError extends Error {
+  public constructor(public readonly code: MobileSyncSessionErrorCode, detail?: string) {
+    super(detail === undefined ? code : `${code}: ${detail}`);
+    this.name = "MobileSyncSessionError";
+  }
+}
 
 /** The only key operation this policy needs. */
 export interface MobileSyncKeyPurgePort {
@@ -107,6 +120,26 @@ export class MobileOfflineSession {
     }
     const purge = await this.storage.purgeNonEvidentiaryCache();
     return Object.freeze({ status: "clean" as const, purge });
+  }
+
+  /**
+   * Reverses a `prepareSignOut` that kept pending evidence: an authenticated
+   * session unlocks the store, reopens the push gate and leaves pending
+   * evidence readable. It never rewrites `lastLocalSequence` (the snapshot is
+   * untouched), and it refuses to resurrect a quarantined store.
+   */
+  public async resumeSession(scope: SyncScopeInput, actorId: string): Promise<MobileSyncResumeOutcome> {
+    if (typeof actorId !== "string" || actorId.trim().length === 0) {
+      throw new MobileSyncSessionError("RESUME_INVALID", "actorId");
+    }
+    const parsed = parseSyncScope(scope);
+    if (!parsed.ok) throw new MobileSyncSessionError("RESUME_INVALID", parsed.field);
+
+    const health = await this.storage.getStorageHealth();
+    if (health.quarantined) return Object.freeze({ status: "corrupt" as const, quarantined: true as const });
+    await this.storage.unlockStore();
+    this.gate = true;
+    return Object.freeze({ status: "resumed" as const });
   }
 
   /**

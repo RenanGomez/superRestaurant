@@ -118,8 +118,8 @@ test("a closed revocation gate blocks push and pull before the fetch", async () 
 });
 
 test("HTTP failures keep an explicit retryability class", async () => {
-  const cases: readonly { status: number; code: string; retryable: boolean }[] = [
-    { code: "AUTH_REVOKED", retryable: false, status: 401 },
+  const cases: readonly { status: number; code: string; retryable: boolean; body?: unknown }[] = [
+    { code: "AUTH_EXPIRED", retryable: true, status: 401 },
     { code: "AUTH_REVOKED", retryable: false, status: 403 },
     { code: "HTTP_400", retryable: false, status: 400 },
     { code: "HTTP_409", retryable: false, status: 409 },
@@ -127,7 +127,7 @@ test("HTTP failures keep an explicit retryability class", async () => {
     { code: "HTTP_503", retryable: true, status: 503 },
   ];
   for (const item of cases) {
-    const { fetcher } = fakeFetch(item.status, { code: "ERROR" });
+    const { fetcher } = fakeFetch(item.status, item.body ?? { code: "ERROR" });
     const transport = createMobileSyncTransport({ accessToken: () => Promise.resolve(TOKEN), apiBaseUrl: BASE, fetcher });
     await assert.rejects(
       transport.pull(pullRequest),
@@ -136,6 +136,55 @@ test("HTTP failures keep an explicit retryability class", async () => {
     );
   }
   assert.deepEqual(classifySyncHttpStatus(500), { code: "HTTP_500", retryable: true });
+});
+
+test("a 401 refreshes the token once and retries with the renewed credential", async () => {
+  const calls: Call[] = [];
+  let refreshes = 0;
+  const fetcher = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    calls.push({ init: init ?? {}, url: String(input) });
+    const first = calls.length === 1;
+    return Promise.resolve(new Response(
+      JSON.stringify(first ? { code: "AUTH_EXPIRED" } : { protocolVersion: 1 }),
+      { headers: { "content-type": "application/json" }, status: first ? 401 : 200 },
+    ));
+  };
+  const transport = createMobileSyncTransport({
+    accessToken: () => Promise.resolve("expired-token"),
+    apiBaseUrl: BASE,
+    fetcher: fetcher as typeof fetch,
+    refreshAccessToken: () => {
+      refreshes += 1;
+      return Promise.resolve("renewed-token");
+    },
+  });
+
+  assert.deepEqual(await transport.pull(pullRequest), { protocolVersion: 1 });
+  assert.equal(refreshes, 1);
+  assert.equal(calls.length, 2);
+  assert.equal((calls[0]?.init.headers as Record<string, string>)["authorization"], "Bearer expired-token");
+  assert.equal((calls[1]?.init.headers as Record<string, string>)["authorization"], "Bearer renewed-token");
+});
+
+test("a 401 without a refresh hook stays retryable as AUTH_EXPIRED", async () => {
+  const { fetcher } = fakeFetch(401, { message: "expired" });
+  const transport = createMobileSyncTransport({ accessToken: () => Promise.resolve(TOKEN), apiBaseUrl: BASE, fetcher });
+  await assert.rejects(
+    transport.pull(pullRequest),
+    (error: unknown) => error instanceof SyncTransportError && error.code === "AUTH_EXPIRED" && error.retryable,
+  );
+});
+
+test("a server-declared revocation in the body wins over the retryable 401 default", async () => {
+  const { fetcher } = fakeFetch(401, { code: "AUTH_REVOKED" });
+  const transport = createMobileSyncTransport({ accessToken: () => Promise.resolve(TOKEN), apiBaseUrl: BASE, fetcher });
+  await assert.rejects(
+    transport.pull(pullRequest),
+    (error: unknown) => error instanceof SyncTransportError && error.code === "AUTH_REVOKED" && !error.retryable,
+  );
+  assert.deepEqual(classifySyncHttpStatus(401, "AUTH_REVOKED"), { code: "AUTH_REVOKED", retryable: false });
+  assert.deepEqual(classifySyncHttpStatus(401, "DEVICE_REVOKED"), { code: "DEVICE_REVOKED", retryable: false });
+  assert.deepEqual(classifySyncHttpStatus(401, "SOMETHING_ELSE"), { code: "AUTH_EXPIRED", retryable: true });
 });
 
 test("a network failure or an unreadable body is retryable, and never leaks the token", async () => {

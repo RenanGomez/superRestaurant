@@ -130,6 +130,8 @@ export interface MobileSyncPurgeOutcome {
 export interface MobileSyncLocalStorageAdmin {
   readonly getStorageHealth: () => Promise<MobileSyncStorageHealth>;
   readonly lockStore: () => Promise<void>;
+  /** Reopens a store locked by a sign-out once an authenticated session resumes. Never clears quarantine. */
+  readonly unlockStore: () => Promise<void>;
   readonly quarantineCorruptStore: () => Promise<void>;
   readonly purgeNonEvidentiaryCache: () => Promise<MobileSyncPurgeOutcome>;
   readonly purgeReplicaForScope: (scope: SyncScopeInput) => Promise<MobileSyncPurgeOutcome>;
@@ -260,6 +262,19 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
 
   public lockStore(): Promise<void> {
     return this.updateMeta((meta) => ({ ...metaOrEmpty(meta, this.deviceId), locked: true }));
+  }
+
+  /**
+   * Reopens a store that a sign-out with retained evidence left locked. Only
+   * the `locked` flag changes: the snapshot, `lastLocalSequence`, the write
+   * generation and a quarantine in progress are all preserved.
+   */
+  public unlockStore(): Promise<void> {
+    return this.updateMeta((meta) => ({
+      ...metaOrEmpty(meta, this.deviceId),
+      locked: false,
+      quarantined: meta?.quarantined === true,
+    }));
   }
 
   public quarantineCorruptStore(): Promise<void> {
