@@ -32,7 +32,6 @@ import { DEFAULT_MENU_TAB, MENU_TAB_LABELS, MENU_TABS, menuTabHref, parseMenuTab
 import { uiButton, uiOption } from "../../../lib/ui-classes";
 import { collectUsedImagePaths, imagePathsOfEntity, retainImagePaths } from "../../../lib/menu-used-images";
 import { DragReorderList, ReorderButtons, ReorderHandle, reorderRowProps } from "./reorder-controls";
-import { ProductActionsMenu } from "./product-actions-menu";
 import { PhotoCropDialog, type CroppedMenuPhoto } from "./photo-crop-dialog";
 import { PizzaV2Editor } from "./pizza-v2-editor";
 import { pizzaProductIssue, setPizzaMode } from "../../../lib/menu-pizza";
@@ -150,6 +149,17 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
 
   const normalizedGroupFilter = groupFilter.trim().toLocaleLowerCase("es-MX");
   const filteredGroups = useMemo(() => normalizedGroupFilter === "" ? groups : groups.filter((group) => group.name.toLocaleLowerCase("es-MX").includes(normalizedGroupFilter)), [groups, normalizedGroupFilter]);
+  const productsWithSizes = useMemo(() => products.filter((product) => (product.variants?.length ?? 0) > 0), [products]);
+  const sizeSummary = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const product of products) {
+      for (const variant of product.variants ?? []) {
+        const name = variant.name.trim() === "" ? "Tamaño sin nombre" : variant.name.trim();
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
+    }
+    return [...counts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+  }, [products]);
 
   // Local draft: edits are kept in this browser (never published automatically) and offered back after a reload.
   const storageKey = menuDraftKey(restaurantId, branchId, expectedVersion);
@@ -217,13 +227,15 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
   }, [products]);
   useEffect(() => {
     const productId = focusAfterCopy.current;
-    if (productId === null) return;
+    if (productId === null || activeTab !== "productos") return;
     const card = document.querySelector<HTMLElement>(`[data-product-id="${CSS.escape(productId)}"]`);
     if (card === null) return;
+    const archivedSection = card.closest("details");
+    if (archivedSection !== null && !archivedSection.open) archivedSection.open = true;
     focusAfterCopy.current = null;
     card.scrollIntoView({ block: "center" });
-    card.querySelector<HTMLInputElement>("input[type=text]")?.focus({ preventScroll: true });
-  }, [products]);
+    card.querySelector<HTMLInputElement>("input:not([type=hidden]):not([type=file])")?.focus({ preventScroll: true });
+  }, [activeTab, products]);
   const copyProduct = async (productId: string): Promise<void> => {
     const source = products.find((entry) => entry.productId === productId);
     if (source === undefined) return;
@@ -333,8 +345,8 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
     setRemoval(null);
   };
 
-  const productEditor = (product: MenuProductV1, handle: ReactNode, archived: boolean): ReactNode => (
-    <ProductEditor archived={archived} canManage={canManage} categories={categories} catalogGroups={groups}
+  const productEditor = (product: MenuProductV1, handle: ReactNode): ReactNode => (
+    <ProductEditor canManage={canManage} categories={categories} catalogGroups={groups}
       copyNotice={copiedProductIds.includes(product.productId)} currency={currency} groups={groupsForProduct(product, groups)} handle={handle}
       product={product} supabaseUrl={supabaseUrl} usedImagePaths={usedImagePaths} usedStations={products.map((entry) => entry.stationId)}
       variantInvalid={variantIssue?.productId === product.productId}
@@ -497,7 +509,7 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
                       <DragReorderList className="flex flex-col gap-4" disabled={!canManage} getKey={(entry) => entry.productId} items={inCategory} itemLabel={(entry) => entry.name}
                         label={`Productos de ${category.name}`}
                         onMove={(from, to) => setProducts((current) => reorderSubset(current, (entry) => entry.active && entry.categoryId === category.categoryId, from, to))}
-                        renderRow={(product, _index, handle) => productEditor(product, handle, false)} />
+                        renderRow={(product, _index, handle) => productEditor(product, handle)} />
                     </div>
                   );
                 })}
@@ -507,8 +519,8 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
                       Archivados <span className="text-[12px] font-normal">({archivedProducts.length})</span>
                     </summary>
                     <div className="flex flex-col gap-4 border-t border-border p-3">
-                      <p className="text-[12px] text-text-muted">Estos productos no aparecen en la captura de pedidos. Desarchívalos para volver a ofrecerlos.</p>
-                      {archivedProducts.map((product) => <div key={product.productId}>{productEditor(product, null, true)}</div>)}
+                      <p className="text-[12px] text-text-muted">Estos productos no aparecen en la captura de pedidos. Marca «Activo» para volver a ofrecerlos.</p>
+                      {archivedProducts.map((product) => <div key={product.productId}>{productEditor(product, null)}</div>)}
                     </div>
                   </details>
                 )}
@@ -567,6 +579,101 @@ export function MenuCatalogEditor({ branchId, canManage, initialTab, restaurantI
         )}
       </div>
 
+      <div
+        role="tabpanel"
+        id="menu-panel-tamanos"
+        aria-labelledby="menu-tab-tamanos"
+        tabIndex={0}
+        hidden={!tabResolved || activeTab !== "tamanos"}
+        className={tabResolved && activeTab === "tamanos" ? "flex flex-col gap-5 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" : "hidden"}
+      >
+        {tabResolved && (
+          <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+            <SectionHeader title="Tamaños" description="Presentaciones configuradas en los productos de este borrador. Cada producto define sus propios tamaños y precios.">
+              <button
+                type="button"
+                onClick={() => selectTab("productos")}
+                className={uiButton("secondary")}
+              >
+                Configurar en Productos →
+              </button>
+            </SectionHeader>
+
+            <div role="status" className="mt-4 rounded-xl border border-accent/40 bg-accent-soft p-4 text-[13px] text-text">
+              <p className="font-semibold text-accent-hover">Cada producto administra sus propios tamaños y precios.</p>
+              <p className="mt-1 text-text-muted">Aquí puedes consultar las presentaciones activas en tu borrador sin perder cambios al cambiar de pestaña.</p>
+            </div>
+
+            {sizeSummary.length > 0 && (
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <span className="text-[12px] font-semibold text-text-muted">Presentaciones en uso:</span>
+                {sizeSummary.map((item) => (
+                  <span key={item.name} className="inline-flex min-h-8 items-center rounded-full border border-border bg-surface px-3 py-1 text-[12px] text-text">
+                    <span className="font-medium">{item.name}</span>
+                    <span className="ml-1.5 text-text-muted">({item.count} {item.count === 1 ? "producto" : "productos"})</span>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {productsWithSizes.length === 0 ? (
+              <div className="mt-4 rounded-xl border border-dashed border-border p-6 text-center">
+                <p className="text-[13px] text-text-muted">No hay productos con tamaños configurados en este borrador.</p>
+                <p className="mt-1 text-[12px] text-text-muted">Agrega tamaños (chica, mediana, grande…) desde la tarjeta de cada producto en la pestaña Productos.</p>
+                <button
+                  type="button"
+                  onClick={() => selectTab("productos")}
+                  className={uiButton("secondary", "mt-3")}
+                >
+                  Ir a Productos →
+                </button>
+              </div>
+            ) : (
+              <div className="mt-4 grid gap-3">
+                {productsWithSizes.map((prod) => {
+                  const category = categories.find((entry) => entry.categoryId === prod.categoryId);
+                  const variants = prod.variants ?? [];
+                  return (
+                    <article key={prod.productId} className="flex flex-col gap-3 rounded-xl border border-border bg-bg/50 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
+                        <div className="min-w-0">
+                          <h3 className="break-words font-heading text-[14px] font-bold text-text">{prod.name.trim() === "" ? "Producto sin nombre" : prod.name}</h3>
+                          <p className="text-[12px] text-text-muted">{category?.name ?? "Sin categoría"} · {variants.length} {variants.length === 1 ? "tamaño" : "tamaños"}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            focusAfterCopy.current = prod.productId;
+                            selectTab("productos");
+                          }}
+                          className={uiButton("secondary", "px-3 text-[12px]")}
+                        >
+                          Editar en Productos →
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {variants.map((variant) => (
+                          <div key={variant.variantId} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface p-2.5 text-[13px]">
+                            <div className="min-w-0 flex-1 truncate">
+                              <span className="font-semibold text-text">{variant.name.trim() === "" ? "Tamaño sin nombre" : variant.name}</span>
+                              {variant.sku !== null && variant.sku.trim() !== "" && <span className="ml-1.5 text-[11px] text-text-muted">({variant.sku})</span>}
+                            </div>
+                            <span className="shrink-0 font-bold text-text">{formatMinorUnits(variant.unitPriceMinor, currency)}</span>
+                            <span className={`inline-flex shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${variant.active ? "bg-accent-soft text-accent-hover" : "bg-bg text-text-muted"}`}>
+                              {variant.active ? "Activo" : "Inactivo"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
+      </div>
+
     </form>
   );
 }
@@ -620,8 +727,7 @@ function taxNote(tax: MenuProductV1["tax"], formattedPrice: string): string | un
  * (3) switches for modifier groups, halves and tax plus «+ Añadir tamaño». Each section shows only while its
  * switch is on (or it already has data), so a plain product takes three rows.
  */
-function ProductEditor({ archived, copyNotice, handle, usedStations, usedImagePaths, variantInvalid, canManage, categories, currency, catalogGroups, groups, product, supabaseUrl, onArchive, onDuplicate, onManageGroups, onProductChange, onProductImageChange, onRemove, onUnarchive, onUploadPendingChange }: {
-  readonly archived: boolean;
+function ProductEditor({ copyNotice, handle, usedStations, usedImagePaths, variantInvalid, canManage, categories, currency, catalogGroups, groups, product, supabaseUrl, onArchive, onDuplicate, onManageGroups, onProductChange, onProductImageChange, onRemove, onUnarchive, onUploadPendingChange }: {
   readonly copyNotice: boolean;
   readonly handle: ReactNode;
   readonly usedStations: readonly string[];
@@ -660,7 +766,7 @@ function ProductEditor({ archived, copyNotice, handle, usedStations, usedImagePa
         </EditorRowActions>
       )}
       <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-[auto_minmax(0,1fr)_7.5rem_9rem_auto]">
+        <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-[auto_minmax(0,1fr)_7.5rem_9rem] lg:grid-cols-[auto_minmax(0,1fr)_7.5rem_9rem_auto]">
           <div className="flex flex-col items-center">
             <div className="hidden h-5 min-h-5 sm:block" aria-hidden="true" />
             <div className="mt-1 flex h-11 min-h-11 w-12 items-center justify-center">
@@ -677,23 +783,28 @@ function ProductEditor({ archived, copyNotice, handle, usedStations, usedImagePa
               </select>
             )}
           </EditorField>
-          <EditorRowActions>
-            <div className="flex items-center justify-end gap-2">
+          <EditorRowActions className="sm:col-span-full lg:col-span-1">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               {canManage && (
-                <ProductActionsMenu
-                  label={`Acciones de ${product.name.trim() === "" ? "este producto" : product.name}`}
-                  actions={archived
-                    ? [
-                        { label: "Desarchivar", onSelect: onUnarchive },
-                        { danger: true, label: "Quitar", onSelect: () => onRemove({ id: product.productId, kind: "product", label: product.name }) },
-                      ]
-                    : [
-                        { label: "Duplicar", onSelect: onDuplicate },
-                        { label: "Archivar", onSelect: onArchive },
-                        { danger: true, label: "Quitar", onSelect: () => onRemove({ id: product.productId, kind: "product", label: product.name }) },
-                      ]}
-                />
+                <button
+                  type="button"
+                  onClick={onDuplicate}
+                  title={`Crear una copia de ${product.name}`}
+                  aria-label={`Duplicar ${product.name}`}
+                  className="min-h-11 rounded-lg border border-border bg-surface px-3 py-2 text-[12px] font-semibold hover:border-accent focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  Duplicar
+                </button>
               )}
+              <ActiveInput
+                disabled={!canManage}
+                checked={product.active}
+                onChange={(active) => {
+                  if (active) onUnarchive();
+                  else onArchive();
+                }}
+              />
+              {canManage && <RemoveButton label={`Quitar ${product.name}`} onClick={() => onRemove({ id: product.productId, kind: "product", label: product.name })} />}
             </div>
           </EditorRowActions>
         </div>
@@ -753,7 +864,7 @@ function ProductEditor({ archived, copyNotice, handle, usedStations, usedImagePa
                 <ReorderHandle count={variants.length} disabled={!canManage} index={variantIndex} listKey={`variants-${product.productId}`}
                   onMove={(from, to) => change({ variants: reorder(variants, from, to) })} />
               </EditorRowActions>
-              <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]">
+              <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_7.5rem_auto_auto]">
               <TextInput disabled={!canManage} hint="Cómo se llama esta presentación, por ejemplo Chica, Mediana o Familiar. No se puede repetir en el mismo producto." invalid={variantInvalid} label="Nombre del tamaño" maxLength={80} value={variant.name}
                 onChange={(name) => changeVariant(variant.variantId, { name })} />
               <MoneyInput key={variant.variantId} hint="Precio de venta de este tamaño." label="Precio del tamaño" disabled={!canManage} currency={currency}
@@ -971,7 +1082,7 @@ function ModifierGroupEditor({ assignedCount, siblingCount, siblingIndex, usedIm
         <ReorderHandle align="start" count={siblingCount} disabled={!canManage} index={siblingIndex} listKey="groups-catalog" onMove={onMoveGroup} />
       </EditorRowActions>
       <div className="min-w-0 flex-1">
-      <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_7.5rem_7.5rem_auto_auto]">
         <TextInput disabled={!canManage} hint="Nombre de la lista de opciones, por ejemplo Sabores o Extras." label="Grupo" maxLength={80} value={group.name} onChange={(name) => change({ name })} />
         <NumberInput disabled={!canManage} hint="Cuántas opciones debe elegir el operador como mínimo en este grupo. 0 = la elección es opcional." label="Mínimo total" min={0} max={1_000} value={group.minimumQuantity} onChange={(minimumQuantity) => change({ minimumQuantity })} />
         <NumberInput disabled={!canManage} hint="Cuántas opciones puede elegir como máximo en total, contando repeticiones de una misma opción." label="Máximo total" min={0} max={1_000} value={group.maximumQuantity} onChange={(maximumQuantity) => change({ maximumQuantity })} />
