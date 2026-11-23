@@ -118,6 +118,10 @@
   "r2": {},
   "changes": [
     {
+      "h": "Capturas abiertas de cliente (local, en progreso)",
+      "p": "Nuevo lector por cliente y enlace para retomar captura. Pendientes verificación en navegador y revisión de nivel A; la migración 20261123000200 no está aplicada en remoto."
+    },
+    {
       "h": "Integrado en feat/smoke-r1 (sin push)",
       "p": "Ola 1: K1 landing cliente primero, K4 quitar teléfono con confirmación, K2 atajos r3. Ola 2: B1a dominio/tipos de pizza v2, B1b SQL pizza v2, B1c API, B1d mobile, B3 tiles, B2 editor, B4 captura; Z0 catálogo SEPOMEX Navojoa, Z2 SQL zonas por colonia, Z3 API, Z4 editor de zonas, Z5 formulario de dirección. Puertas globales lint/typecheck/test/build en verde con Node 24 (API: 68 pruebas, 0 fallos)."
     },

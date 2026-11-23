@@ -40,9 +40,9 @@ import type {
 } from "@super-restaurant/shared-types";
 
 import { canStartCapture, captureDeviceId, clearPendingCaptureAutosave, persistPendingCaptureAutosave, readPendingCaptureAutosave,
-  rehydrateCaptureWorkspace, isRecoverableCaptureDraft, shouldRenewLease } from "../../../lib/capture-workspace";
+  rehydrateCaptureWorkspace, resolveLinkedCaptureDraft, isRecoverableCaptureDraft, shouldRenewLease,
+  type CaptureRequestResult, type RehydratedCaptureWorkspace } from "../../../lib/capture-workspace";
 import { Field, FieldLabel } from "../../../components/field-hint";
-import type { CaptureRequestResult } from "../../../lib/capture-workspace";
 import { formatMinorUnits } from "../../../lib/branch-order-work-tray";
 import { captureKitchenResultText, captureKitchenSend, chunkOrderItemIds, type OrderDetailRequestResult, type OrderMutationRequestResult } from "../../../lib/order-detail";
 import { draftLinesFromProjection, splitLostMessage } from "../../../lib/line-halves";
@@ -98,6 +98,7 @@ const issueLabels: Record<CustomerRepeatOrderPreviewIssueV1["code"], string> = {
 };
 
 interface CaptureWorkspaceParameters {
+  readonly initialDraftId?: string;
   readonly scope: BranchScope;
   readonly action: (operation: CaptureWorkspaceOperation, input: unknown) => Promise<CaptureWorkspaceResult>;
   readonly quoteLine: (input: unknown) => Promise<CaptureRequestResult<CaptureLineQuoteResultV1>>;
@@ -113,7 +114,7 @@ type ActionReply = Awaited<ReturnType<CaptureWorkspaceParameters["action"]>>;
 type CaptureStep = "order" | "customer" | "delivery";
 
 export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext, canManageAssignment, catalog: initialCatalog,
-  reloadCatalog, orderDetail, sendToKitchen }: CaptureWorkspaceParameters): ReactNode {
+  reloadCatalog, orderDetail, sendToKitchen, initialDraftId }: CaptureWorkspaceParameters): ReactNode {
   const [catalog, setCatalog] = useState(initialCatalog);
   const [catalogReloading, setCatalogReloading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -134,6 +135,8 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   const kitchenInFlight = useRef(false);
   const [leaseClock, setLeaseClock] = useState(() => Date.now());
   const [tray, setTray] = useState<readonly (CaptureDraftSummaryV1 | CaptureTrayItemV2)[]>([]);
+  const [linkedDraft, setLinkedDraft] = useState<RehydratedCaptureWorkspace>();
+  const initialLoadStarted = useRef(false);
   const lastInteractionAt = useRef(0);
   const [assignmentCandidates, setAssignmentCandidates] = useState<readonly CaptureAssignmentCandidateV1[]>([]);
   const [transferTarget, setTransferTarget] = useState("");
@@ -402,6 +405,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     }
     setQuoteError(undefined);
     setQuoteRequestedForDiffers(false);
+    setLinkedDraft(undefined);
     setCapture(hydrated.detail);
     setCustomerSnapshot(hydrated.customerSnapshot);
     setFulfillmentSnapshot(hydrated.fulfillmentSnapshot);
@@ -429,6 +433,8 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
   }
 
   useEffect(() => { void (async () => {
+    if (initialLoadStarted.current) return;
+    initialLoadStarted.current = true;
     const pendingAutosave = readPendingCaptureAutosave(window.localStorage, scope);
     if (pendingAutosave !== undefined) {
       const replay = await run("autosave", pendingAutosave);
@@ -437,6 +443,18 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     }
     await run("tray", { schemaVersion: 2, scope, limit: 20 });
     if (canManageAssignment) await run("assignmentCandidates", { schemaVersion: 1, scope });
+    if (initialDraftId !== undefined && pendingAutosave === undefined) {
+      const workspace = await action("workspace", { schemaVersion: 3, scope, captureDraftId: initialDraftId })
+        .catch(() => ({ ok: false as const, error: "unavailable" as const }));
+      const resolved = resolveLinkedCaptureDraft(workspace);
+      if (resolved.ok) {
+        setLinkedDraft(resolved.workspace);
+      } else {
+        setLinkedDraft(undefined);
+        setError(resolved.error);
+        setErrorOperation("workspace");
+      }
+    }
   })(); }, []);
 
   function base(): Record<string, unknown> {
@@ -624,6 +642,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     if (!canStartCapture(fulfillmentChannel, hasCustomer, pickupName)) return;
     setNoSaleNotice(false);
     setHoldNotice(false);
+    setLinkedDraft(undefined);
     const created = await run("create", { schemaVersion: 1, scope, captureDraftId: crypto.randomUUID(),
       expectedVersion: 0, sourceChannel, fulfillmentChannel, eventId: crypto.randomUUID(),
       idempotencyKey: crypto.randomUUID(), deviceId, occurredAt: new Date().toISOString() });
@@ -667,14 +686,17 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     }
   }
 
-  function recover(item: CaptureDraftSummaryV1 | CaptureTrayItemV2): void {
+  function recover(item: Pick<CaptureDraftSummaryV1, "captureDraftId" | "version">): void {
     const command = { schemaVersion: 1, scope, captureDraftId: item.captureDraftId, expectedVersion: item.version,
       eventId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), deviceId, occurredAt: new Date().toISOString() };
     setNoSaleNotice(false);
     setHoldNotice(false);
     void (async () => {
       const reply = await run("claim", command);
-      if (reply?.ok) await refreshWorkspace(item.captureDraftId);
+      if (reply?.ok) {
+        setLinkedDraft(undefined);
+        await refreshWorkspace(item.captureDraftId);
+      }
     })();
   }
 
@@ -1052,6 +1074,7 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     setQuoteRequestedForDiffers(false);
     setDeliveryQuote(null); setPaymentIntentState(null); setPaymentProjection(null); setPaymentBasis(null);
     setPaymentIntentNotice(undefined);
+    setLinkedDraft(undefined);
     setCapture(undefined); setCustomer(undefined); setCustomerSnapshot(null);
     setFulfillmentSnapshot(null); setSelectedContact(undefined); setSelectedAddress(undefined); setPending(undefined);
     setRepeatOrderPlan(null);
@@ -1161,7 +1184,8 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
     </nav>}
     <div role={error === undefined ? "status" : "alert"} aria-live="polite"
       className={error === undefined ? "text-sm text-text-muted" : "rounded-lg border border-border bg-error-bg p-4 text-sm"}>
-      {busy ? "Guardando en el servidor…" : error === undefined ? capture === undefined ? "Crea o recupera un borrador para comenzar."
+      {busy ? "Guardando en el servidor…" : error === undefined ? capture === undefined
+        ? linkedDraft === undefined ? "Crea o recupera un borrador para comenzar." : "Borrador cargado; pulsa Retomar para continuar."
         : "Borrador abierto."
         : menuConflict ? "El menú cambió; vuelve a cargar."
         : confirmQuoteInvalid ? "La cotización de entrega falta, venció o no cubre la dirección"
@@ -1212,6 +1236,35 @@ export function CaptureWorkspace({ scope, action, quoteLine, confirmationContext
       {noSaleNotice && <div role="status" className="rounded-lg border border-border bg-surface p-3 text-sm">
         Captura cancelada.
       </div>}
+      {linkedDraft !== undefined && <section className={panel} aria-labelledby="capture-linked-draft-title" data-testid="linked-capture-draft">
+        <h2 id="capture-linked-draft-title" className="font-heading text-lg font-semibold">Borrador seleccionado · {linkedDraft.detail.folio}</h2>
+        <p className="mt-1 text-sm text-text-muted">
+          {linkedDraft.detail.status === "draft"
+            ? "Revisa este borrador antes de tomarlo. No se reclama ni guarda ningún cambio hasta que pulses Retomar."
+            : "Este borrador ya no está abierto y no se puede retomar."}
+        </p>
+        <div className="mt-3 rounded-lg border border-border bg-bg p-3 text-sm">
+          <strong className="block break-words">{linkedDraft.customerSnapshot !== null ? linkedDraft.customerSnapshot.displayName : "Sin cliente"}</strong>
+          {linkedDraft.customerSnapshot !== null && <span className="block break-all text-sm">{linkedDraft.customerSnapshot.phoneDisplayValue}</span>}
+          <span className="block text-xs text-text-muted">
+            {sourceLabel(linkedDraft.sourceChannel)} · {linkedDraft.fulfillmentChannel ? fulfillmentLabel(linkedDraft.fulfillmentChannel) : "Sin entrega"} · {formatDate(linkedDraft.detail.updatedAt, confirmationContext?.timeZone)} · versión {linkedDraft.detail.version}
+          </span>
+          {linkedDraft.selectionProjection !== null && <span className="block text-sm">
+            Ítems ({linkedDraft.selectionProjection.lineCount}): {formatMinorUnits(linkedDraft.selectionProjection.itemsTotalMinor, linkedDraft.selectionProjection.currency)}
+          </span>}
+          {linkedDraft.detail.ownerMembershipId !== null && <span className="block text-xs text-text-muted">
+            Asignada a {assignmentCandidates.find((candidate) => candidate.membershipId === linkedDraft.detail.ownerMembershipId)?.displayLabel ?? "otro operador"}
+          </span>}
+        </div>
+        <div className="mt-4 flex flex-wrap gap-3">
+          {linkedDraft.detail.status === "draft" && <button type="button" className={button} disabled={busy}
+            onClick={() => recover(linkedDraft.detail)}>Retomar</button>}
+          {linkedDraft.detail.status === "confirmed" && linkedDraft.detail.confirmedOrderId !== null && <a
+            className={`${button} inline-flex items-center`}
+            href={`/app/orders?orderId=${encodeURIComponent(linkedDraft.detail.confirmedOrderId)}`}>Ver orden</a>}
+          <button type="button" className={button} disabled={busy} onClick={() => setLinkedDraft(undefined)}>Ocultar borrador</button>
+        </div>
+      </section>}
       <section className={panel} aria-labelledby="capture-start-title"><h2 id="capture-start-title" className="font-heading text-lg font-semibold">Nueva captura</h2>
         <p className="my-2 text-sm text-text-muted">
           {fulfillmentChannel === "delivery" ? "Domicilio: busca y elige al cliente arriba; el borrador nunca se abre sin él."

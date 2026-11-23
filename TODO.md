@@ -1,5 +1,7 @@
 # TODO
 
+- [ ] **REVIEW · A · m1-k0b2-customer-open-captures** — correcciones ronda 1 PR #26 aplicadas localmente (deep link sin auto-claim, validación UUID, detalle ausente, `rejected` → 400, invariantes SQL cross-tenant/expiración y grants `app_api`); puertas globales y PG17 desde cero + `supabase/tests` 100 % verdes. Ver HANDOFF.
+
 - [ ] **REVIEW · A · m1-pg-verify-clean** — cinco invariantes SQL y flujo HTTP 7/7 verdes localmente; tolerancias retiradas. El PR #19 pasó pg-verify en `114b91e4`; pendiente push de los ajustes y verificar CI en la nueva cabeza. P2 del verificador histórico registrado en `docs/agentic/debt.md`.
 
 ## Día operable (alcance congelado el 2026-10-03; el % se mide sólo contra esta lista)
