@@ -333,3 +333,12 @@ test("engine restart retries the same idempotency key with scope isolation", asy
   assert.equal(effects, 1);
   assert.equal((await restarted.getOutbox(SCOPE))[0]?.localState, "duplicate");
 });
+
+
+test("transient hash I/O failure does not report corrupt evidence", async () => {
+  const database = new FakeSyncDatabase();
+  await storageFor(database).persist(stateWith([entry()]));
+  const store = new MobileSqliteSyncStorage({ database, deviceId: DEVICE, keyVersion: 1, sha256Hex: () => Promise.reject(new Error("temporary I/O")) });
+  await expectStorageError(store.inspectPendingEvidence(), "STORAGE_LOAD_FAILED");
+  assert.equal((await store.getStorageHealth()).quarantined, false);
+});

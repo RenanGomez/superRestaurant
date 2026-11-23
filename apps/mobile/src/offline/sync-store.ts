@@ -329,7 +329,7 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
 
   public inspectPendingEvidence(): Promise<MobileSyncPendingEvidence> {
     return this.serialize(async () => {
-      const { raw } = await this.readBoth();
+      const { raw, meta } = await this.readBoth();
       if (raw === null) {
         return Object.freeze({
           status: "missing" as const,
@@ -342,8 +342,9 @@ export class MobileSqliteSyncStorage implements DurableSyncStoragePort, MobileSy
       }
       let state: DurableSyncState;
       try {
-        state = await this.hydrate(raw, null);
-      } catch {
+        state = await this.hydrate(raw, meta);
+      } catch (error) {
+        if (!(error instanceof MobileSyncStorageError) || (error.code !== "STATE_CORRUPT" && error.code !== "SEQUENCE_REGRESSION")) throw toStorageError(error, "STORAGE_LOAD_FAILED");
         return Object.freeze({
           status: "corrupt" as const,
           outboxCount: 0,
