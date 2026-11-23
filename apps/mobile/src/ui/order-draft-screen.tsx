@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import type {
   ActiveTableOrderListV2,
+  ActiveTableOrderSummaryV2,
   DiningTableV1,
   MenuCatalogStateV1,
   MenuCatalogV1,
@@ -18,6 +19,7 @@ import type {
   SimplePaymentMethodV1,
 } from "@super-restaurant/shared-types";
 
+import type { openRegisters } from "../register-selection.js";
 import { renderMinorAmount } from "../money.js";
 import {
   canSubmitMobilePayment,
@@ -85,6 +87,7 @@ import { colors, radius, spacing, touchTarget, typography } from "./theme.js";
  */
 export function OrderDraftScreen({
   activeOrders,
+  selectedOrderId, onSelectOrder, onSendKitchen, kitchenState,
   category,
   draft,
   menu,
@@ -100,12 +103,17 @@ export function OrderDraftScreen({
   onRetryMenu,
   onSubmit,
   payment,
+  registers, registerId, onRegisterSelect, onRegisterRetry,
   realtime,
   table,
   zoneName,
 }: {
   /** What the server already holds for this table; never recalculated here. */
   readonly activeOrders: MobileResource<ActiveTableOrderListV2>;
+  readonly selectedOrderId: string | undefined;
+  readonly onSelectOrder: (orderId: string | undefined) => void;
+  readonly onSendKitchen: (order: ActiveTableOrderSummaryV2) => void;
+  readonly kitchenState: "idle" | "sending" | "failed";
   readonly category: string | undefined;
   readonly draft: OrderDraftState;
   readonly menu: MobileResource<MenuCatalogStateV1>;
@@ -121,6 +129,10 @@ export function OrderDraftScreen({
   readonly onRetryMenu: () => void;
   readonly onSubmit: () => void;
   readonly payment: MobilePaymentState;
+  readonly registers: { readonly status: "loading" | "failed" | "ready"; readonly entries: ReturnType<typeof openRegisters> };
+  readonly registerId: string | undefined;
+  readonly onRegisterSelect: (id: string) => void;
+  readonly onRegisterRetry: () => void;
   readonly realtime?: ActiveOrdersRealtimeConfig | undefined;
   readonly table: DiningTableV1;
   readonly zoneName: string;
@@ -191,6 +203,10 @@ export function OrderDraftScreen({
   />;
   const draftPane = <DraftPane
     activeOrders={activeOrders}
+    selectedOrderId={selectedOrderId}
+    onSelectOrder={onSelectOrder}
+    onSendKitchen={onSendKitchen}
+    kitchenState={kitchenState}
     catalog={catalog}
     draft={draft}
     layout={layout}
@@ -203,6 +219,10 @@ export function OrderDraftScreen({
     onRetryActiveOrders={onRetryActiveOrders}
     onSubmit={onSubmit}
     payment={payment}
+    registers={registers}
+    registerId={registerId}
+    onRegisterSelect={onRegisterSelect}
+    onRegisterRetry={onRegisterRetry}
     realtime={realtime}
   />;
 
@@ -487,6 +507,7 @@ function ModifierGroup({ currency, group, onEvent, selections }: {
  */
 function DraftPane({
   activeOrders,
+  selectedOrderId, onSelectOrder, onSendKitchen, kitchenState,
   catalog,
   draft,
   layout,
@@ -499,9 +520,14 @@ function DraftPane({
   onRetryActiveOrders,
   onSubmit,
   payment,
+  registers, registerId, onRegisterSelect, onRegisterRetry,
   realtime,
 }: {
   readonly activeOrders: MobileResource<ActiveTableOrderListV2>;
+  readonly selectedOrderId: string | undefined;
+  readonly onSelectOrder: (orderId: string | undefined) => void;
+  readonly onSendKitchen: (order: ActiveTableOrderSummaryV2) => void;
+  readonly kitchenState: "idle" | "sending" | "failed";
   readonly catalog: MenuCatalogV1 | null;
   readonly draft: OrderDraftState;
   readonly layout: OrderDraftLayout;
@@ -514,17 +540,28 @@ function DraftPane({
   readonly onRetryActiveOrders: () => void;
   readonly onSubmit: () => void;
   readonly payment: MobilePaymentState;
+  readonly registers: { readonly status: "loading" | "failed" | "ready"; readonly entries: ReturnType<typeof openRegisters> };
+  readonly registerId: string | undefined;
+  readonly onRegisterSelect: (id: string) => void;
+  readonly onRegisterRetry: () => void;
   readonly realtime?: ActiveOrdersRealtimeConfig | undefined;
 }): React.JSX.Element {
   const busy = draft.submission.status === "sending";
   return <View style={paneStyle(layout)}>
     <ActiveOrdersPanel
       activeOrders={activeOrders}
+      selectedOrderId={selectedOrderId}
+      onSelectOrder={busy ? undefined : onSelectOrder}
+      onSendKitchen={onSendKitchen}
+      kitchenBusy={busy || kitchenState === "sending"}
       collectingOrderId={payment.orderId}
       onCollectOrder={onCollectOrder}
       onRetry={onRetryActiveOrders}
       realtime={realtime}
     />
+
+    {kitchenState === "failed" ? <Banner message="No se confirmó el envío a cocina. Reintenta sin cambiar la orden." tone="error" /> : null}
+    {selectedOrderId === undefined ? <Caption>Las lineas se guardaran en una orden nueva.</Caption> : <Caption>{`Agregar a orden ${selectedOrderId.slice(0, 8)}`}</Caption>}
 
     {payment.orderId === undefined
       ? null
@@ -534,6 +571,10 @@ function DraftPane({
         onRetry={onPaymentRetry}
         onSubmit={onPaymentSubmit}
         payment={payment}
+        registers={registers}
+        registerId={registerId}
+        onRegisterSelect={onRegisterSelect}
+        onRegisterRetry={onRegisterRetry}
       />}
 
     <Subheading>{`Borrador · ${draft.lines.length === 1 ? "1 línea" : `${draft.lines.length} líneas`}`}</Subheading>
@@ -541,8 +582,7 @@ function DraftPane({
     {draft.submission.status === "sending" ? <LoadingBlock label="Enviando la comanda…" /> : null}
     {draft.submission.status === "sent"
       ? <Banner
-        message={"La comanda se entregó y sus líneas salieron del borrador, así que no pueden reenviarse. "
-          + "Lo que agregues ahora será una comanda nueva para esta mesa."}
+        message="Las líneas se guardaron en la orden. Envía los pendientes a cocina desde la tarjeta de la orden."
         tone="info"
       />
       : null}
@@ -566,10 +606,10 @@ function DraftPane({
       </PaneList>}
 
     <ActionButton
-      accessibilityHint="Crea la orden, agrega sus líneas y la abre en el servidor"
+      accessibilityHint="Guarda las líneas en la orden seleccionada o crea una nueva"
       busy={busy}
       disabled={draft.lines.length === 0 || draft.composer !== undefined}
-      label="Enviar comanda"
+      label="Guardar líneas en orden"
       onPress={onSubmit}
     />
   </View>;
@@ -624,7 +664,11 @@ function DraftLineCard({ busy, catalog, line, onEvent }: {
 
 const PAYMENT_METHODS: readonly SimplePaymentMethodV1[] = Object.freeze(["cash", "card_manual", "transfer"]);
 
-function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, payment }: {
+function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, payment, registers, registerId, onRegisterSelect, onRegisterRetry }: {
+  readonly registers: { readonly status: "loading" | "failed" | "ready"; readonly entries: ReturnType<typeof openRegisters> };
+  readonly registerId: string | undefined;
+  readonly onRegisterSelect: (id: string) => void;
+  readonly onRegisterRetry: () => void;
   readonly onClose: () => void;
   readonly onFieldChange: (patch: Partial<MobilePaymentFields>) => void;
   readonly onRetry: () => void;
@@ -640,7 +684,14 @@ function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, paym
       <Subheading>{`Cobro · Orden ${(payment.orderId ?? "").slice(0, 8)}`}</Subheading>
       <ActionButton disabled={busy} label="Cerrar" onPress={onClose} tone="secondary" />
     </View>
-    {payment.checkout.status === "idle" || payment.checkout.status === "loading"
+    {registers.status === "loading" ? <LoadingBlock label="Consultando cajas abiertas..." />
+      : registers.status === "failed" ? <StateBlock action={{ label: "Reintentar", onPress: onRegisterRetry }} title="No se pudieron consultar las cajas" description="No fue posible obtener las cajas autorizadas. Solicita acceso al reporte a un supervisor." />
+      : registers.entries.length === 0 ? <Banner message="No se encontraron cajas abiertas en este turno." tone="info" />
+      : <View style={styles.group}><Caption>Selecciona una caja abierta:</Caption>{registers.entries.map((entry) => <ActionButton
+        key={entry.cashRegisterSessionId} disabled={busy} tone={registerId === entry.registerId ? "primary" : "secondary"}
+        label={`Caja ${entry.registerId.slice(0, 8)} - Cajero ${entry.cashierId.slice(0, 8)}`}
+        onPress={() => { onRegisterSelect(entry.registerId); }} />)}</View>}
+    {registerId !== undefined && registers.status === "ready" && (payment.checkout.status === "idle" || payment.checkout.status === "loading"
       ? <LoadingBlock label="Consultando saldo y caja en el servidor…" />
       : payment.checkout.status === "failed" || checkout === undefined
         ? <StateBlock
@@ -779,7 +830,7 @@ function PaymentCollectionCard({ onClose, onFieldChange, onRetry, onSubmit, paym
               label="Confirmar cobro"
               onPress={onSubmit}
             />
-          </View>}
+          </View>)}
   </Card>;
 }
 

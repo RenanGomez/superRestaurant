@@ -2743,3 +2743,26 @@ Inspección inicial: CodeGraph actualizado, resolvedor legado de una variante y 
 - Nivel B. `BluetoothPrinterPort` implementa `PrinterPort` mediante un transporte Bluetooth inyectado; serializa envíos, copia bytes, reintenta solo la conexión (máximo 3 intentos, esperas 100/200 ms), cierra la conexión y no reenvía una escritura de resultado ambiguo. La cola conserva el fallo para reconciliación explícita.
 - Verificación con Node v24.19.0: `pnpm --filter @super-restaurant/shared-types build` y `pnpm --filter @super-restaurant/domain build` pasaron; `pnpm --filter @super-restaurant/printing lint`, `typecheck`, `test` y `build` pasaron. Test: 28 casos, incluidos 5 contratos Bluetooth. `git diff --check` pasó.
 - Brechas: CodeGraph no está inicializado en este worktree; se inspeccionaron manualmente `PrinterPort`, cola, encoder y referencias. La compilación recursiva de dependencias falló con `spawn EPERM`; las compilaciones individuales pasaron. Falta implementar el transporte concreto de plataforma y verificar compatibilidad y desconexiones con hardware Bluetooth real; una escritura aceptada no confirma impresión física. Falta revisión cruzada y CI del integrador; no marcar DONE. Sin push ni cambios remotos, conforme a la instrucción de esta tarea.
+
+
+## 2026-11-23 · Decisión: autonomía total del orquestador (AGENTS.md §19.6)
+
+- Instrucción explícita de Emmanuel: el orquestador no espera aprobación humana para nada (migraciones remotas, push/merge, deploy, credenciales del proyecto, datos, DONE). La aprobación se sustituye por puertas automáticas (CI, tests, revisión cruzada, verificación visual) y por un protocolo de seguridad para acciones críticas.
+- Cambios: `AGENTS.md` §3.1, §5, §17, §19.2, §20 y nueva §19.6; órdenes en `docs/agentic/ordenes-2026-11-23-cierre-v1.md` (Mobile y offline en paralelo).
+- Pendiente de configuración externa: el modo de permisos de la sesión de Claude Code puede seguir bloqueando acciones (p. ej. base remota en auto mode); se resuelve en la configuración de la sesión, no en el repo.
+- Cambios sin commit; subagentes: ninguno.
+
+
+## 2026-11-23 - Tarea 1.1 mobile (parcial, IN_PROGRESS)
+
+- Alcance completado: tablero de ocupacion mediante POST /tables/board, parser compartido y validacion del scope, estados de carga/error/reintento y prueba node:test; se actualiza tras entregar un borrador. CodeGraph no disponible; inspeccion manual de contratos y consumidores.
+- Pendiente: envio explicito a cocina y agregar lineas a orden abierta; selector de caja abierta (el reporte diario exige reports.read; resolver acceso y sesiones sin suponer registerId=deviceId). Pizza V2 permanece fail-closed. No se hizo verificacion visual ni Android real; no declarar REVIEW/DONE.
+- Verificacion Node 24.19.0: pnpm --filter @super-restaurant/shared-types build PASS; pnpm --filter @super-restaurant/mobile lint PASS; pnpm --filter @super-restaurant/mobile typecheck PASS; pnpm --filter @super-restaurant/mobile test PASS (tras ajustar allowlist); pnpm --filter @super-restaurant/mobile build FAIL: Metro proceso 699 modulos y Hermes fallo con spawn EPERM. git diff --check PASS. No push ni cambios remotos.
+
+
+## 2026-11-23 - Tarea 1.1 mobile, continuacion (IN_PROGRESS)
+
+- Se puede elegir una orden abierta para guardar lineas; el reintento relee la version y omite lineas ya guardadas. Accion explicita para enviar pendientes a cocina con POST /orders/send-to-kitchen: comando e identidad se conservan en memoria ante respuesta incierta; 409 obliga a releer. Pizza V2 permanece fail-closed.
+- El selector de cajas lee POST /reports/day-summary, filtra sesiones abiertas del turno y valida la sesion elegida con /cash-registers/report antes del checkout; deviceId queda como identidad del dispositivo. Brecha bloqueante: cashier tiene cash-register.manage y payments.collect pero no reports.read, por lo que no puede listar cajas con este contrato y el cobro falla cerrado. Hace falta un listado API autorizado para cajeros; no se alteraron API, RBAC ni SQL. El reporte tambien esta acotado a 50 turnos y cajas por turno.
+- Verificacion con Node 24.19.0: pnpm --filter @super-restaurant/mobile lint PASS; pnpm --filter @super-restaurant/mobile typecheck PASS; pnpm --filter @super-restaurant/mobile test PASS (incluye reintento, version, scope, seleccion de caja y respuesta 403); git diff --check PASS. La exportacion Android del corte anterior fallo con Hermes spawn EPERM y no se repitio; no hay verificacion visual ni dispositivo real. CodeGraph no disponible en esta sesion; inspeccion manual de contratos, autorizacion y consumidores. Sin push ni cambios remotos.
+- Siguiente: incorporar listado de cajas compatible con el permiso de cajero y verificar flujos completos en dispositivo; mantener IN_PROGRESS. Los comandos de cocina retenidos solo viven en memoria y no sobreviven reinicio.

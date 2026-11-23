@@ -4,6 +4,7 @@ import {
   parseBranchMembershipListV1,
   parseBranchOperationalContextV1,
   parseBranchScope,
+  parseBranchDaySummaryV1,
   parseCashPaymentQuoteV1,
   parseCashRegisterOperationalReportV1,
   parseCheckoutOrderSummaryV1,
@@ -13,12 +14,15 @@ import {
   parseMenuCatalogStateV1,
   parseOpenOrderCommandV1,
   parseOperationalShiftListV1,
+  parseTableBoardV1,
+  parseSendOrderToKitchenCommandV1,
   parseOrderMutationSummaryV1,
   parsePaymentCollectionSummaryV1,
   parseQuoteCashPaymentRequestV1,
   type ActiveTableOrderListV2,
   type AddOrderItemCommandV1,
   type BranchMembershipListV1,
+  type BranchDaySummaryV1,
   type BranchOperationalContextV1,
   type CashPaymentQuoteV1,
   type CashRegisterOperationalReportV1,
@@ -29,6 +33,8 @@ import {
   type MenuCatalogStateV1,
   type OpenOrderCommandV1,
   type OperationalShiftListV1,
+  type TableBoardV1,
+  type SendOrderToKitchenCommandV1,
   type OrderMutationSummaryV1,
   type PaymentCollectionSummaryV1,
   type QuoteCashPaymentRequestV1,
@@ -61,8 +67,11 @@ export const MOBILE_API_PATHS = Object.freeze({
   memberships: "/api/v1/access/memberships",
   menuCatalog: "/api/v1/catalog/menu",
   openOrder: "/api/v1/orders/open",
+  sendToKitchen: "/api/v1/orders/send-to-kitchen",
   operationalShifts: "/api/v1/shifts/active",
+  tableBoard: "/api/v1/tables/board",
   quotePayment: "/api/v1/payments/quote",
+  daySummary: "/api/v1/reports/day-summary",
 } as const);
 
 /** HTTP status, or the two client-side failures that never reach the server. */
@@ -108,6 +117,18 @@ export async function getDiningLayout(
   const layout = await request(config, accessToken, scopedPath(MOBILE_API_PATHS.diningLayout, scope), parseDiningLayoutV1, fetcher);
   if (!sameScope(layout.scope, scope)) throw new MobileRequestError("protocol");
   return layout;
+}
+
+/** Reads authoritative table occupancy for the selected branch. */
+export async function getTableBoard(
+  config: MobileConfig, accessToken: string, scope: MobileBranchScope, fetcher: typeof fetch = fetch,
+): Promise<TableBoardV1> {
+  const validated = validScope(scope);
+  const board = await request(config, accessToken, MOBILE_API_PATHS.tableBoard, parseTableBoardV1, fetcher, {
+    body: JSON.stringify(validated), method: "POST",
+  });
+  if (!sameScope(board.scope, validated)) throw new MobileRequestError("protocol");
+  return board;
 }
 
 /** Reads the published catalog of one authorized branch, in read-only mode. */
@@ -232,6 +253,24 @@ export async function openOrder(
   fetcher: typeof fetch = fetch,
 ): Promise<OrderMutationSummaryV1> {
   return mutateOrder(config, accessToken, MOBILE_API_PATHS.openOrder, command, parseOpenOrderCommandV1, fetcher);
+}
+
+export async function sendToKitchen(
+  config: MobileConfig, accessToken: string, command: SendOrderToKitchenCommandV1, fetcher: typeof fetch = fetch,
+): Promise<OrderMutationSummaryV1> {
+  return mutateOrder(config, accessToken, MOBILE_API_PATHS.sendToKitchen, command, parseSendOrderToKitchenCommandV1, fetcher);
+}
+
+export async function getDaySummary(
+  config: MobileConfig, accessToken: string, scope: MobileBranchScope, date: string, fetcher: typeof fetch = fetch,
+): Promise<BranchDaySummaryV1> {
+  const validated = validScope(scope);
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(date)) throw new MobileRequestError("protocol");
+  const summary = await request(config, accessToken, MOBILE_API_PATHS.daySummary, parseBranchDaySummaryV1, fetcher, {
+    body: JSON.stringify({ schemaVersion: 1, scope: validated, date }), method: "POST",
+  });
+  if (!sameScope(summary.scope, validated) || summary.date !== date) throw new MobileRequestError("protocol");
+  return summary;
 }
 
 /** Reads the open cash register session for this register/device. */

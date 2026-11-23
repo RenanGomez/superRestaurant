@@ -4,9 +4,12 @@ import {
   parseBranchScope,
   parseQuoteCashPaymentRequestV1,
   type ActiveTableOrderListV2,
+  type ActiveTableOrderSummaryV2,
+  type SendOrderToKitchenCommandV1,
   type CollectPaymentCommandV1,
   type DiningTableV1,
   type OrderMutationSummaryV1,
+  type TableBoardV1,
 } from "@super-restaurant/shared-types";
 
 import { gateMobileAuth, type MobileAuthGate } from "../auth-gate.js";
@@ -16,18 +19,22 @@ import type { MobileConfig } from "../config.js";
 import { lifecycleEffects, type MobileAppStatus, type MobileLifecyclePort } from "../lifecycle.js";
 import {
   addOrderItem,
+  MobileRequestError,
   collectPayment,
   createOrder,
   getCashRegisterReport,
   getCheckoutOrder,
   getDiningLayout,
+  getDaySummary,
   getMenuCatalog,
+  getTableBoard,
   listActiveTableOrders,
   listMemberships,
   listOperationalShifts,
   openOrder,
   quoteCashPayment,
   selectBranchContext,
+  sendToKitchen,
   type MobileBranchScope,
 } from "../mobile-client.js";
 import {
@@ -56,6 +63,8 @@ import {
   type MobileState,
   type MobileTab,
 } from "../mobile-state.js";
+import { branchDate, openRegisters } from "../register-selection.js";
+import { kitchenAttempt } from "../order-kitchen.js";
 import { parseMinorUnitsInput } from "../money.js";
 import {
   createOrderDeliveryTracker,
@@ -126,6 +135,10 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     applyEvent(event);
   }, []);
   const [draft, dispatchDraft] = useReducer(reduceOrderDraft, initialOrderDraftState);
+  const [selectedOrderId, setSelectedOrderId] = useState<string | undefined>();
+  const [kitchenState, setKitchenState] = useState<"idle" | "sending" | "failed">("idle");
+  const kitchenRef = useRef(new Map<string, SendOrderToKitchenCommandV1>());
+  const kitchenBusyRef = useRef(false);
   const [draftCategory, setDraftCategory] = useState<string | undefined>(undefined);
   // Every conversation with the identity provider goes through the gate, so a
   // late notification, a late session read or a listener the provider never
@@ -384,6 +397,9 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     planRef.current = undefined;
     dispatchDraft({ type: "contextReleased" });
     setDraftCategory(undefined);
+    setSelectedOrderId(undefined);
+    kitchenRef.current.clear();
+    setKitchenState("idle");
   }, [delivery, draftContext]);
 
   /**
@@ -423,6 +439,20 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     return createOrderDeliveryPort(Object.freeze(transport));
   }, [branchId, config, orderDelivery, restaurantId, token]);
 
+  const [board, setBoard] = useState<{ key: string; value?: TableBoardV1; failed?: boolean }>({ key: "" });
+  const [boardRevision, setBoardRevision] = useState(0);
+  const boardKey = `${token ?? ""}|${restaurantId ?? ""}|${branchId ?? ""}|${state.shift?.shiftId ?? ""}`;
+  useEffect(() => {
+    if (token === undefined || branchId === undefined || restaurantId === undefined || state.shift === undefined || state.revalidating) return;
+    let active = true;
+    setBoard({ key: boardKey });
+    void getTableBoard(config, token, { branchId, restaurantId }).then(
+      (value) => { if (active) setBoard({ key: boardKey, value }); },
+      () => { if (active) setBoard({ key: boardKey, failed: true }); },
+    );
+    return () => { active = false; };
+  }, [boardKey, boardRevision, branchId, config, restaurantId, state.revalidating, state.shift, token]);
+
   const retry = useCallback((tab: MobileTab): void => {
     if (branchId === undefined || restaurantId === undefined) return;
     const target: MobileBranchScope = { branchId, restaurantId };
@@ -450,10 +480,28 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
   const paymentCheckoutAttemptRef = useRef(0);
   const paymentSubmitAttemptRef = useRef(0);
 
-  // Checkout loader: discovers open register for this device and reads server checkout summary.
+  const [registers, setRegisters] = useState<{ key: string; status: "loading" | "failed" | "ready"; entries: ReturnType<typeof openRegisters> }>({ key: "", status: "loading", entries: [] });
+  const [registerId, setRegisterId] = useState<string | undefined>();
+  const [registerRevision, setRegisterRevision] = useState(0);
+  const registerKey = `${draftContext}|${state.payment.orderId ?? ""}`;
+  useEffect(() => {
+    if (state.payment.orderId === undefined || token === undefined || branchId === undefined || restaurantId === undefined || state.shift === undefined || state.branch === undefined) return;
+    let active = true;
+    setRegisterId(undefined);
+    setRegisters({ key: registerKey, status: "loading", entries: [] });
+    const date = branchDate(new Date(), state.branch.timeZone);
+    if (date === undefined) { setRegisters({ key: registerKey, status: "failed", entries: [] }); return; }
+    void getDaySummary(config, token, { branchId, restaurantId }, date).then(
+      (summary) => { if (active) setRegisters({ key: registerKey, status: "ready", entries: openRegisters(summary, state.shift!.shiftId) }); },
+      () => { if (active) setRegisters({ key: registerKey, status: "failed", entries: [] }); },
+    );
+    return () => { active = false; };
+  }, [branchId, config, registerKey, registerRevision, restaurantId, state.branch, state.payment.orderId, state.shift, token]);
+
   useEffect(() => {
     const orderId = state.payment.orderId;
-    if (orderId === undefined || state.payment.checkout.status !== "idle" || token === undefined || branchId === undefined || restaurantId === undefined) return;
+    const selected = registers.key === registerKey ? registers.entries.find((entry) => entry.registerId === registerId) : undefined;
+    if (orderId === undefined || selected === undefined || state.payment.checkout.status !== "idle" || token === undefined || branchId === undefined || restaurantId === undefined) return;
     const targetScope: MobileBranchScope = { branchId, restaurantId };
     paymentCheckoutAttemptRef.current += 1;
     const attempt = paymentCheckoutAttemptRef.current;
@@ -462,25 +510,15 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
       dispatch({ attempt, failure: "unavailable", orderId, scope: targetScope, type: "paymentCheckoutFailed" });
       return;
     }
-    void getCashRegisterReport(config, token, { cashRegisterSessionId: null, deviceId, registerId: deviceId, scope: targetScope })
+    void getCashRegisterReport(config, token, { cashRegisterSessionId: selected.cashRegisterSessionId, deviceId, registerId: selected.registerId, scope: targetScope })
       .then((report) => {
-        if (report.register.status !== "open") return Promise.reject(new Error("NO_OPEN_REGISTER"));
-        return getCheckoutOrder(config, token, {
-          cashRegisterSessionId: report.register.cashRegisterSessionId,
-          deviceId,
-          orderId,
-          registerId: deviceId,
-          scope: targetScope,
-        });
-      })
-      .then(
+        if (report.register.status !== "open" || report.register.cashRegisterSessionId !== selected.cashRegisterSessionId) return Promise.reject(new Error("NO_OPEN_REGISTER"));
+        return getCheckoutOrder(config, token, { cashRegisterSessionId: selected.cashRegisterSessionId, deviceId, orderId, registerId: selected.registerId, scope: targetScope });
+      }).then(
         (checkout) => { dispatch({ attempt, checkout, scope: targetScope, type: "paymentCheckoutLoaded" }); },
-        (error: unknown) => {
-          const failure = error instanceof Error && error.message === "NO_OPEN_REGISTER" ? "noRegister" : toPaymentFailure(error);
-          dispatch({ attempt, failure, orderId, scope: targetScope, type: "paymentCheckoutFailed" });
-        },
+        (error: unknown) => { dispatch({ attempt, failure: error instanceof Error && error.message === "NO_OPEN_REGISTER" ? "noRegister" : toPaymentFailure(error), orderId, scope: targetScope, type: "paymentCheckoutFailed" }); },
       );
-  }, [branchId, config, deviceId, dispatch, restaurantId, state.payment.checkout.status, state.payment.orderId, token]);
+  }, [branchId, config, deviceId, dispatch, registerId, registerKey, registers, restaurantId, state.payment.checkout.status, state.payment.orderId, token]);
 
   // Debounced server quote whenever payment inputs change; zero client money calculation.
   useEffect(() => {
@@ -621,7 +659,7 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
 
     // The key of this delivery. Editing the draft changes it, which is what
     // makes the next submit a new delivery with new identities.
-    const key = `${draftContext}|${tableId}|${JSON.stringify(draft.lines)}`;
+    const key = `${draftContext}|${tableId}|${selectedOrderId ?? "new"}|${JSON.stringify(draft.lines)}`;
     delivery.run({
       build: () => {
         if (catalog === null) return undefined;
@@ -629,6 +667,7 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
         if (held !== undefined && held.key === key) return held.plan;
         const plan = buildOrderDeliveryPlan({
           catalog,
+          ...(selectedOrderId === undefined ? {} : { existingOrderId: selectedOrderId }),
           deviceId,
           lines: draft.lines,
           now: Date.now(),
@@ -649,6 +688,7 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
           // must never be offered again.
           planRef.current = undefined;
           dispatchDraft({ type: "submissionSucceeded" });
+          setBoardRevision((revision) => revision + 1);
           // What the table now holds changed, so the active list is read again.
           if (branchId !== undefined && restaurantId !== undefined) {
             dispatch({ scope: { branchId, restaurantId }, type: "activeOrdersReset" });
@@ -661,7 +701,7 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     });
   }, [
     branchId, config, deliveryPort, deviceId, dispatch, delivery, draft, draftContext,
-    randomUuid, restaurantId, state.branch, state.menu.value, state.shift,
+    randomUuid, restaurantId, selectedOrderId, state.branch, state.menu.value, state.shift,
   ]);
 
   const dispatchOrderDraft = useCallback((event: OrderDraftEvent): void => {
@@ -674,9 +714,40 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
       // rules here. A late failure — a 401 especially — then belongs nowhere.
       dispatch({ scope: { branchId, restaurantId }, type: "activeOrdersReset" });
       dispatch({ type: "paymentClosed" });
+      setSelectedOrderId(undefined);
+      kitchenRef.current.clear();
+      setKitchenState("idle");
     }
     dispatchDraft(event);
   }, [branchId, dispatch, draft, restaurantId]);
+
+  const sendPending = useCallback((order: ActiveTableOrderSummaryV2): void => {
+    if (kitchenBusyRef.current || token === undefined || deviceId === undefined || branchId === undefined || restaurantId === undefined || draft.tableId === undefined) return;
+    const key = `${draftContext}|${draft.tableId}|${order.orderId}`;
+    const previous = kitchenRef.current.get(key);
+    const command = previous ?? kitchenAttempt(previous, { deviceId, scope: { branchId, restaurantId }, order,
+      eventId: randomUuid(), idempotencyKey: randomUuid(), occurredAt: new Date().toISOString() });
+    if (command === undefined) { setKitchenState("failed"); return; }
+    kitchenRef.current.set(key, command);
+    const current = command;
+    kitchenBusyRef.current = true;
+    setKitchenState("sending");
+    void sendToKitchen(config, token, current).then(() => {
+      if (kitchenRef.current.get(key) !== current) return;
+      kitchenRef.current.delete(key);
+      setKitchenState("idle");
+      dispatch({ scope: { branchId, restaurantId }, type: "activeOrdersReset" });
+      setBoardRevision((revision) => revision + 1);
+    }, (error: unknown) => {
+      if (kitchenRef.current.get(key) !== current) return;
+      if (error instanceof MobileRequestError && error.status === 409) {
+        kitchenRef.current.delete(key);
+        dispatch({ scope: { branchId, restaurantId }, type: "activeOrdersReset" });
+      }
+      setKitchenState("failed");
+    })
+      .finally(() => { kitchenBusyRef.current = false; });
+  }, [branchId, config, deviceId, dispatch, draft.tableId, draftContext, randomUuid, restaurantId, token]);
 
   const selectTable = useCallback((table: DiningTableV1): void => {
     dispatchOrderDraft({ tableId: table.tableId, type: "tableSelected", zoneId: table.zoneId });
@@ -765,6 +836,13 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
     <View style={styles.content}>
       <WorkspaceContent
         activeOrders={activeOrdersForTable(state, draft.tableId)}
+        selectedOrderId={selectedOrderId}
+        onSelectOrder={setSelectedOrderId}
+        onSendKitchen={sendPending}
+        kitchenState={kitchenState}
+        board={board.key === boardKey ? board.value : undefined}
+        boardFailed={board.key === boardKey && board.failed === true}
+        onRetryBoard={() => { setBoardRevision((revision) => revision + 1); }}
         draft={draft}
         draftCategory={draftCategory}
         menu={state.menu}
@@ -787,6 +865,10 @@ export function App({ auth, config, deviceIdentity, lifecycle, orderDelivery, ra
         onSelectTable={selectTable}
         onSubmitDraft={submitDraft}
         payment={state.payment}
+        registers={registers.key === registerKey ? registers : { status: "loading", entries: [] }}
+        registerId={registerId}
+        onRegisterSelect={(id) => { setRegisterId(id); dispatch({ type: "paymentCheckoutReset" }); }}
+        onRegisterRetry={() => { setRegisterRevision((n) => n + 1); }}
         realtime={orderDelivery === undefined && token !== undefined ? { accessToken: token, apiBaseUrl: config.apiBaseUrl } : undefined}
         revalidating={state.revalidating}
         revalidationFailure={state.revalidationFailure}
@@ -838,6 +920,13 @@ function WorkspaceTab({ onPress, selected, tab }: {
  */
 function WorkspaceContent({
   activeOrders,
+  selectedOrderId,
+  onSelectOrder,
+  onSendKitchen,
+  kitchenState,
+  board,
+  boardFailed,
+  onRetryBoard,
   draft,
   draftCategory,
   layout,
@@ -856,12 +945,20 @@ function WorkspaceContent({
   onSelectTable,
   onSubmitDraft,
   payment,
+  registers, registerId, onRegisterSelect, onRegisterRetry,
   realtime,
   revalidating,
   revalidationFailure,
   tab,
 }: {
   readonly activeOrders: MobileState["activeOrders"];
+  readonly selectedOrderId: string | undefined;
+  readonly onSelectOrder: (orderId: string | undefined) => void;
+  readonly onSendKitchen: (order: ActiveTableOrderSummaryV2) => void;
+  readonly kitchenState: "idle" | "sending" | "failed";
+  readonly board: TableBoardV1 | undefined;
+  readonly boardFailed: boolean;
+  readonly onRetryBoard: () => void;
   readonly draft: OrderDraftState;
   readonly draftCategory: string | undefined;
   readonly layout: MobileState["layout"];
@@ -880,6 +977,10 @@ function WorkspaceContent({
   readonly onSelectTable: (table: DiningTableV1) => void;
   readonly onSubmitDraft: () => void;
   readonly payment: MobileState["payment"];
+  readonly registers: { readonly status: "loading" | "failed" | "ready"; readonly entries: ReturnType<typeof openRegisters> };
+  readonly registerId: string | undefined;
+  readonly onRegisterSelect: (id: string) => void;
+  readonly onRegisterRetry: () => void;
   readonly realtime?: ActiveOrdersRealtimeConfig | undefined;
   readonly revalidating: boolean;
   readonly revalidationFailure: MobileFailure | undefined;
@@ -902,6 +1003,9 @@ function WorkspaceContent({
 
   if (draft.tableId === undefined) {
     return <TablesScreen
+      board={board}
+      boardFailed={boardFailed}
+      onRetryBoard={onRetryBoard}
       layout={layout}
       onRetry={() => { onRetryRead("tables"); }}
       onSelectTable={onSelectTable}
@@ -932,6 +1036,10 @@ function WorkspaceContent({
 
   return <OrderDraftScreen
     activeOrders={activeOrders}
+    selectedOrderId={selectedOrderId}
+    onSelectOrder={onSelectOrder}
+    onSendKitchen={onSendKitchen}
+    kitchenState={kitchenState}
     category={draftCategory}
     draft={draft}
     menu={menu}
@@ -947,6 +1055,10 @@ function WorkspaceContent({
     onRetryMenu={onRetryMenu}
     onSubmit={onSubmitDraft}
     payment={payment}
+    registers={registers}
+    registerId={registerId}
+    onRegisterSelect={onRegisterSelect}
+    onRegisterRetry={onRegisterRetry}
     realtime={realtime}
     table={located.table}
     zoneName={located.zoneName}

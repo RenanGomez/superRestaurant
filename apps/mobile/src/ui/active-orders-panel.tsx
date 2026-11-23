@@ -51,7 +51,11 @@ const ORDER_STATUS_LABELS: Readonly<Record<ActiveTableOrderSummaryV2["status"], 
  * discount and no total is computed on the device, and none is shown, because
  * this app is not the authority on any of them.
  */
-export function ActiveOrdersPanel({ activeOrders, collectingOrderId, onCollectOrder, onRetry, realtime }: {
+export function ActiveOrdersPanel({ activeOrders, collectingOrderId, onCollectOrder, onRetry, realtime, onSelectOrder, selectedOrderId, onSendKitchen, kitchenBusy }: {
+  readonly onSelectOrder?: ((orderId: string | undefined) => void) | undefined;
+  readonly selectedOrderId?: string | undefined;
+  readonly onSendKitchen?: ((order: ActiveTableOrderSummaryV2) => void) | undefined;
+  readonly kitchenBusy?: boolean | undefined;
   readonly activeOrders: MobileResource<ActiveTableOrderListV2>;
   readonly collectingOrderId?: string | undefined;
   readonly onCollectOrder?: ((orderId: string) => void) | undefined;
@@ -166,6 +170,10 @@ export function ActiveOrdersPanel({ activeOrders, collectingOrderId, onCollectOr
     </Caption>
     {orders.map((order) => <ActiveOrderCard
       collecting={collectingOrderId === order.orderId.toLowerCase()}
+      selected={selectedOrderId === order.orderId}
+      onSelectOrder={onSelectOrder}
+      onSendKitchen={onSendKitchen}
+      kitchenBusy={kitchenBusy}
       key={order.orderId}
       onCollectOrder={onCollectOrder}
       order={order}
@@ -173,7 +181,11 @@ export function ActiveOrdersPanel({ activeOrders, collectingOrderId, onCollectOr
   </View>;
 }
 
-function ActiveOrderCard({ collecting, onCollectOrder, order }: {
+function ActiveOrderCard({ collecting, onCollectOrder, order, selected, onSelectOrder, onSendKitchen, kitchenBusy }: {
+  readonly selected: boolean;
+  readonly onSelectOrder?: ((orderId: string | undefined) => void) | undefined;
+  readonly onSendKitchen?: ((order: ActiveTableOrderSummaryV2) => void) | undefined;
+  readonly kitchenBusy?: boolean | undefined;
   readonly collecting: boolean;
   readonly onCollectOrder?: ((orderId: string) => void) | undefined;
   readonly order: ActiveTableOrderSummaryV2;
@@ -200,6 +212,11 @@ function ActiveOrderCard({ collecting, onCollectOrder, order }: {
             + `(${renderMinorAmount(modifier.unitPrice.amountMinor, modifier.unitPrice.currency)})`}
         </Caption>)}
       </View>)}
+    {order.status === "open" && onSelectOrder !== undefined ? <ActionButton
+      disabled={kitchenBusy === true} label={selected ? "Usar orden nueva" : "Agregar a esta orden"}
+      onPress={() => { onSelectOrder(selected ? undefined : order.orderId); }} tone="secondary" /> : null}
+    {(order.status === "open" || order.status === "draft") && order.items.some((item) => item.status === "pending") && onSendKitchen !== undefined
+      ? <ActionButton disabled={kitchenBusy === true} label="Enviar pendientes a cocina" onPress={() => { onSendKitchen(order); }} /> : null}
     {payable && onCollectOrder !== undefined
       ? <View style={styles.actions}>
         <ActionButton
