@@ -645,13 +645,14 @@ export class DeliveryZoneService {
     }
     if (facts.settlementId !== null && facts.settlementId !== undefined) {
       const details = await this.lookupSettlement(actorId, scope, facts);
-      return resolution(
-        facts.settlementId,
-        details?.settlementId === facts.settlementId ? details : null,
-        "settlement",
-        null,
-        details?.name ?? facts.neighborhood ?? null,
-      );
+      if (details !== null && details.settlementId === facts.settlementId) {
+        return resolution(details.settlementId, details, "settlement", null, details.name ?? facts.neighborhood ?? null);
+      }
+      // A caller-supplied settlementId that the branch catalog cannot confirm must never be echoed
+      // back into the quote: doing so would let a client drive zone matching with an unverified id.
+      // Report it as unknown (with no settlementId) so coverage stays uncovered and the UI asks the
+      // operator to pick a confirmed settlement.
+      return resolution(null, null, null, "settlement_unknown", facts.neighborhood ?? null);
     }
     if (facts.neighborhood !== null && facts.neighborhood !== undefined) {
       const normalized = normalizeSettlementName(facts.neighborhood);
