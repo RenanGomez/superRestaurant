@@ -383,14 +383,13 @@ export function useMobileSyncBridge(options: {
       // Synchronous stop first, then the ADR-005 §5 policy: purge caches when
       // nothing is pending, otherwise lock and keep every pending event encrypted.
       runtime.session.closePushGate();
-      try {
-        await runtime.session.prepareSignOut();
-      } finally {
-        // Close only after the purge/lock settled so it is never cut mid-commit.
-        closedRef.current = true;
-        if (runtimeRef.current === runtime) runtimeRef.current = undefined;
-        await runtime.close();
-      }
+      // If the purge/lock fails this throws BEFORE closing or clearing the
+      // runtime: the memoized promise is dropped below so a retry repeats the
+      // purge on the same open runtime instead of finding it already closed.
+      await runtime.session.prepareSignOut();
+      closedRef.current = true;
+      if (runtimeRef.current === runtime) runtimeRef.current = undefined;
+      await runtime.close();
     })();
     releasePromiseRef.current = promise;
     // A failure stays visible to the caller; clear the memo so it can be retried.

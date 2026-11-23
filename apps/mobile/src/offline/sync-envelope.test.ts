@@ -179,3 +179,86 @@ test("a ciphertext shorter than the GCM tag is rejected as corrupt", async () =>
   await assert.rejects(decodeScopedSnapshot(JSON.stringify(document), fixtureEnvelopeCipher(), DEVICE), (error: unknown) =>
     error instanceof MobileScopeEnvelopeError && error.code === "STATE_CORRUPT");
 });
+
+test("keyFor recovers after a transient rawKey rejection", async () => {
+  let attempts = 0;
+  const cipher = createWebCryptoEnvelopeCipher({
+    rawKey: (version: number): Promise<Uint8Array> => {
+      attempts += 1;
+      if (attempts === 1) return Promise.reject(new Error("transient keystore"));
+      return Promise.resolve(fixtureKeyBytes(version));
+    },
+    subtle: globalThis.crypto.subtle,
+  });
+  const aad = scopeEnvelopeAad({ branchId: BRANCH, restaurantId: RESTAURANT }, DEVICE, 1);
+  await assert.rejects(cipher.encrypt("payload", aad, 1));
+  const sealed = await cipher.encrypt("payload", aad, 1);
+  assert.equal(await cipher.decrypt(sealed, aad, 1), "payload");
+  assert.equal(attempts, 2, "the rejected import is not cached");
+});
+
+async function sealedDocumentForSlice(slice: unknown): Promise<string> {
+  const cipher = fixtureEnvelopeCipher();
+  const aad = scopeEnvelopeAad({ branchId: BRANCH, restaurantId: RESTAURANT }, DEVICE, 1);
+  const sealed = await cipher.encrypt(JSON.stringify(slice), aad, 1);
+  return JSON.stringify({
+    deviceId: DEVICE,
+    entries: [{
+      branchId: BRANCH,
+      ciphertext: sealed.ciphertext,
+      iv: sealed.iv,
+      keyVersion: 1,
+      restaurantId: RESTAURANT,
+      scope: `${RESTAURANT}|${BRANCH}`,
+    }],
+    format: "sr-scope-envelope-v1",
+    lastLocalSequence: 1,
+    stateVersion: 1,
+  });
+}
+
+test("a decrypted slice whose scope belongs to another tenant is corrupt", async () => {
+  const document = await sealedDocumentForSlice({
+    outbox: [],
+    replica: [],
+    scope: { branchId: BRANCH, pullCursor: null, restaurantId: testId(0x51), status: "active" },
+  });
+  await assert.rejects(decodeScopedSnapshot(document, fixtureEnvelopeCipher(), DEVICE), (error: unknown) =>
+    error instanceof MobileScopeEnvelopeError && error.code === "STATE_CORRUPT");
+});
+
+test("a decrypted outbox entry from another scope is corrupt", async () => {
+  const document = await sealedDocumentForSlice({
+    outbox: [{ branchId: BRANCH, restaurantId: testId(0x52) }],
+    replica: [],
+    scope: null,
+  });
+  await assert.rejects(decodeScopedSnapshot(document, fixtureEnvelopeCipher(), DEVICE), (error: unknown) =>
+    error instanceof MobileScopeEnvelopeError && error.code === "STATE_CORRUPT");
+});
+
+test("a decrypted replica entity from another scope is corrupt", async () => {
+  const document = await sealedDocumentForSlice({
+    outbox: [],
+    replica: [{ branchId: testId(0x53), restaurantId: RESTAURANT }],
+    scope: null,
+  });
+  await assert.rejects(decodeScopedSnapshot(document, fixtureEnvelopeCipher(), DEVICE), (error: unknown) =>
+    error instanceof MobileScopeEnvelopeError && error.code === "STATE_CORRUPT");
+});
+
+test("a rotation that fails leaves the previous envelopes readable", async () => {
+  const database = new FakeSyncDatabase();
+  await storageFor(database).persist(stateWith([entry()]));
+  // The new key version cannot be resolved: re-encryption must fail closed and
+  // keep the old ciphertext (and the old key version) intact.
+  const store = new MobileSqliteSyncStorage({ cipher: cipherForVersions([1]), database, deviceId: DEVICE, keyVersion: 1, sha256Hex: fakeSha256 });
+  await store.loadState(DEVICE);
+  await assert.rejects(store.rotateKeyVersion(2));
+  const reloaded = parseDurableState(await store.loadState(DEVICE), DEVICE);
+  assert.equal(reloaded.ok, true);
+  if (!reloaded.ok) return;
+  assert.equal(reloaded.value.outbox.length, 1);
+  const document = JSON.parse(database.rawSnapshot(DEVICE) ?? "{}") as { entries: { keyVersion: number }[] };
+  assert.deepEqual([...new Set(document.entries.map((item) => item.keyVersion))], [1]);
+});
