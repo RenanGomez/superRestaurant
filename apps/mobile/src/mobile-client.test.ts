@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseBranchScope, type BranchScope } from "@super-restaurant/shared-types";
+import { parseActiveTableOrderListV2, parseBranchScope, type BranchScope } from "@super-restaurant/shared-types";
 
 import * as client from "./mobile-client.js";
 import {
@@ -31,6 +31,7 @@ import {
   FIXTURE_SHIFT,
   FIXTURE_TABLE,
   FIXTURE_TIME_ZONE,
+  activeTableOrderItemBody,
   activeTableOrderListBody,
   branchOperationalContextBody,
   cashPaymentQuoteBody,
@@ -46,6 +47,7 @@ import {
   orderMutationSummaryBody,
   paymentCollectionSummaryBody,
   scopeA,
+  scopeA2,
   scopeB,
   valueFetcher,
 } from "./test-fixtures.js";
@@ -516,4 +518,123 @@ test("reads cash register report, checkout summary, quotes and collects payment 
     ),
     (error: unknown) => error instanceof MobileRequestError && error.status === "protocol",
   );
+});
+
+test("refuses a same-restaurant other-branch answer for every scoped read", async () => {
+  // The finest §15.1 boundary: the same tenant, another branch. `scopeA` and
+  // `scopeA2` share every id but `branchId`, so only the branch check can catch
+  // it — a client that compared the restaurant alone would accept every case.
+  const cases: readonly (readonly [string, () => Promise<unknown>])[] = [
+    ["layout", () => getDiningLayout(fixtureConfig, "token-1", scopeA, jsonFetcher(diningLayoutBody(scopeA2)).fetcher)],
+    ["catalog", () => getMenuCatalog(fixtureConfig, "token-1", scopeA, jsonFetcher(menuCatalogStateBody(scopeA2)).fetcher)],
+    ["shifts", () => listOperationalShifts(fixtureConfig, "token-1", scopeA, jsonFetcher(operationalShiftListBody(scopeA2)).fetcher)],
+    ["context", () => selectBranchContext(fixtureConfig, "token-1", scopeA, jsonFetcher(branchOperationalContextBody(scopeA2)).fetcher)],
+    ["active orders", () => listActiveTableOrders(
+      fixtureConfig, "token-1", scopeA, FIXTURE_TABLE,
+      jsonFetcher(activeTableOrderListBody({ scope: scopeA2, tableId: FIXTURE_TABLE })).fetcher,
+    )],
+    ["checkout", () => getCheckoutOrder(
+      fixtureConfig, "token-1",
+      { cashRegisterSessionId: FIXTURE_REGISTER_SESSION, deviceId: DEVICE_ID, orderId: FIXTURE_ORDER, registerId: FIXTURE_REGISTER, scope: scopeA },
+      jsonFetcher(checkoutOrderSummaryBody(scopeA2)).fetcher,
+    )],
+    ["cash report", () => getCashRegisterReport(
+      fixtureConfig, "token-1",
+      { cashRegisterSessionId: null, deviceId: DEVICE_ID, registerId: FIXTURE_REGISTER, scope: scopeA },
+      jsonFetcher(cashRegisterReportBody(scopeA2, FIXTURE_REGISTER)).fetcher,
+    )],
+  ];
+  for (const [label, run] of cases) {
+    await assert.rejects(
+      run,
+      (error: unknown) => error instanceof MobileRequestError && error.status === "protocol",
+      label,
+    );
+  }
+});
+
+test("the active-order list only carries non-terminal statuses, so no terminal order offers a write action", async () => {
+  // `ACTIVE_TABLE_ORDER_STATUSES` is draft/open/partially_paid. A paid, closed or
+  // cancelled order is terminal and is not part of this list at all, so it can
+  // never render a card and therefore never offer a collect/write action.
+  for (const status of ["draft", "open", "partially_paid"] as const) {
+    const parsed = parseActiveTableOrderListV2(activeTableOrderListBody({ orders: [{ status }], scope: scopeA }));
+    assert.ok(parsed !== undefined, status);
+    assert.equal(parsed.orders[0]?.status, status);
+  }
+  for (const status of ["paid", "closed", "cancelled"] as const) {
+    assert.equal(
+      parseActiveTableOrderListV2(activeTableOrderListBody({ orders: [{ status }], scope: scopeA })),
+      undefined,
+      `${status} is not representable in the active list`,
+    );
+    await assert.rejects(
+      () => listActiveTableOrders(
+        fixtureConfig, "token-1", scopeA, FIXTURE_TABLE,
+        jsonFetcher(activeTableOrderListBody({ orders: [{ status }], scope: scopeA })).fetcher,
+      ),
+      (error: unknown) => error instanceof MobileRequestError && error.status === "protocol",
+      `${status} response must be refused before it is applied`,
+    );
+  }
+  // An item that was cancelled *is* representable: it stays a line of the order,
+  // carried with its own status so the screen can label it «cancelado».
+  const cancelledItem = parseActiveTableOrderListV2(activeTableOrderListBody({
+    orders: [{ items: [activeTableOrderItemBody({ status: "cancelled" })] }],
+    scope: scopeA,
+  }));
+  assert.equal(cancelledItem?.orders[0]?.items[0]?.status, "cancelled");
+});
+
+test("fails closed on an unknown schemaVersion or a removed required field, per endpoint", async () => {
+  const withSchema = (body: unknown, version: number): unknown => ({ ...(body as object), schemaVersion: version });
+  const without = (body: unknown, key: string): unknown => {
+    const copy = { ...(body as Record<string, unknown>) };
+    delete copy[key];
+    return copy;
+  };
+  const collectCommand = {
+    amountMinor: 12_500,
+    cardManualEvidence: null,
+    cashRegisterExpectedVersion: 1,
+    cashRegisterSessionId: FIXTURE_REGISTER_SESSION,
+    deviceId: DEVICE_ID,
+    eventId: EVENT_ID,
+    idempotencyKey: IDEMPOTENCY_KEY,
+    localSequence: 1,
+    method: "cash" as const,
+    occurredAt: OCCURRED_AT,
+    orderExpectedVersion: 3,
+    orderId: FIXTURE_ORDER,
+    paymentId: FIXTURE_PAYMENT,
+    schemaVersion: 1 as const,
+    scope: branchScope(),
+    tenderedAmountMinor: 20_000,
+    tipMinor: 0,
+  };
+
+  const cases: readonly (readonly [string, () => Promise<unknown>])[] = [
+    // A future schema the app does not understand, and a field a migration removed.
+    ["layout schemaVersion 2", () => getDiningLayout(fixtureConfig, "token-1", scopeA, jsonFetcher(withSchema(diningLayoutBody(scopeA), 2)).fetcher)],
+    ["layout missing zones", () => getDiningLayout(fixtureConfig, "token-1", scopeA, jsonFetcher(without(diningLayoutBody(scopeA), "zones")).fetcher)],
+    ["catalog schemaVersion 2", () => getMenuCatalog(fixtureConfig, "token-1", scopeA, jsonFetcher(withSchema(menuCatalogStateBody(scopeA), 2)).fetcher)],
+    ["catalog missing catalog", () => getMenuCatalog(fixtureConfig, "token-1", scopeA, jsonFetcher(without(menuCatalogStateBody(scopeA), "catalog")).fetcher)],
+    ["shifts schemaVersion 2", () => listOperationalShifts(fixtureConfig, "token-1", scopeA, jsonFetcher(withSchema(operationalShiftListBody(scopeA), 2)).fetcher)],
+    ["shifts missing shifts", () => listOperationalShifts(fixtureConfig, "token-1", scopeA, jsonFetcher(without(operationalShiftListBody(scopeA), "shifts")).fetcher)],
+    ["context schemaVersion 2", () => selectBranchContext(fixtureConfig, "token-1", scopeA, jsonFetcher(withSchema(branchOperationalContextBody(scopeA), 2)).fetcher)],
+    ["context missing timeZone", () => selectBranchContext(fixtureConfig, "token-1", scopeA, jsonFetcher(without(branchOperationalContextBody(scopeA), "timeZone")).fetcher)],
+    ["active orders schemaVersion 3", () => listActiveTableOrders(fixtureConfig, "token-1", scopeA, FIXTURE_TABLE, jsonFetcher(withSchema(activeTableOrderListBody({ scope: scopeA }), 3)).fetcher)],
+    ["active orders missing orders", () => listActiveTableOrders(fixtureConfig, "token-1", scopeA, FIXTURE_TABLE, jsonFetcher(without(activeTableOrderListBody({ scope: scopeA }), "orders")).fetcher)],
+    ["checkout schemaVersion 2", () => getCheckoutOrder(fixtureConfig, "token-1", { cashRegisterSessionId: FIXTURE_REGISTER_SESSION, deviceId: DEVICE_ID, orderId: FIXTURE_ORDER, registerId: FIXTURE_REGISTER, scope: scopeA }, jsonFetcher(withSchema(checkoutOrderSummaryBody(scopeA), 2)).fetcher)],
+    ["checkout missing remainingBalanceMinor", () => getCheckoutOrder(fixtureConfig, "token-1", { cashRegisterSessionId: FIXTURE_REGISTER_SESSION, deviceId: DEVICE_ID, orderId: FIXTURE_ORDER, registerId: FIXTURE_REGISTER, scope: scopeA }, jsonFetcher(without(checkoutOrderSummaryBody(scopeA), "remainingBalanceMinor")).fetcher)],
+    ["collect schemaVersion 2", () => collectPayment(fixtureConfig, "token-1", collectCommand, jsonFetcher(withSchema(paymentCollectionSummaryBody(scopeA), 2)).fetcher)],
+    ["collect missing paymentId", () => collectPayment(fixtureConfig, "token-1", collectCommand, jsonFetcher(without(paymentCollectionSummaryBody(scopeA), "paymentId")).fetcher)],
+  ];
+  for (const [label, run] of cases) {
+    await assert.rejects(
+      run,
+      (error: unknown) => error instanceof MobileRequestError && error.status === "protocol",
+      label,
+    );
+  }
 });
