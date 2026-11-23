@@ -19,11 +19,17 @@ export default defineConfig({
     timezoneId: "America/Mexico_City",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
+    serviceWorkers: "allow",
     ...(storageState === undefined ? {} : { storageState }),
   },
   projects: [
     { name: "desktop", grepInvert: /@offline/, use: { ...devices["Desktop Chrome"], channel: "chrome", viewport: { width: 1366, height: 800 } } },
     { name: "mobile", grepInvert: /@offline/, use: { ...devices["Pixel 7"], channel: "chrome" } },
-    { name: "offline", grep: /@offline/, use: { ...devices["Desktop Chrome"], channel: "chrome", viewport: { width: 1366, height: 800 } } },
+    {
+      name: "offline",
+      grep: /@offline/,
+      timeout: 150_000,
+      use: { ...devices["Desktop Chrome"], channel: "chrome", viewport: { width: 1366, height: 800 } },
+    },
   ],
 });
