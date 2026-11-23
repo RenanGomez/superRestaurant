@@ -57,6 +57,9 @@ begin
 
   -- Waiter (captures.read, not manager-tier) is denied write access. Error responses use the
   -- disjoint {status:...} shape (never the {schemaVersion,zone,replayed} success envelope).
+  if pg_catalog.strpos(pg_catalog.pg_get_functiondef('app_private.upsert_delivery_zone(uuid,jsonb)'::regprocedure), 'settlementIds') > 0 then
+    base_command := base_command || jsonb_build_object('settlementIds', jsonb_build_array());
+  end if;
   create_command := base_command || jsonb_build_object(
     'expectedVersion', 0, 'name', 'Centro', 'postalCodes', jsonb_build_array('83000', '83100'),
     'localities', jsonb_build_array(), 'feeMinor', 3500, 'currency', 'MXN', 'active', true, 'reason', null
@@ -114,7 +117,7 @@ begin
   then raise exception using errcode = '55000', message = 'DELIVERY_ZONES_IDEMPOTENCY_FINGERPRINT_REJECTED'; end if;
 
   -- A second zone attempting to claim an already-claimed postal code in the same Branch is rejected.
-  collision_command := jsonb_build_object(
+  collision_command := base_command || jsonb_build_object(
     'schemaVersion', 1, 'scope', scope, 'zoneId', zone_b::text, 'eventId', gen_random_uuid()::text,
     'idempotencyKey', gen_random_uuid()::text, 'deviceId', gen_random_uuid()::text,
     'occurredAt', occurred_at_text, 'expectedVersion', 0, 'name', 'Sur',

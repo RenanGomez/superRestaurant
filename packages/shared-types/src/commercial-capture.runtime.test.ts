@@ -1,6 +1,7 @@
 import {
   parseAutosaveCaptureDraftCommandV1,
   parseCaptureDraftDetailV1,
+  parseCaptureFulfillmentSnapshotV1,
   parseCaptureDraftSummaryV1,
   parseCaptureAssignmentDirectoryRequestV1,
   parseCaptureAssignmentDirectoryV1,
@@ -190,6 +191,15 @@ const fulfillmentSnapshot = { schemaVersion: 1, snapshotRef: fulfillmentSnapshot
   unit: null, neighborhood: "Centro", locality: "Hermosillo", region: "Sonora", countryCode: "MX",
   postalCode: "83000", referencesText: "Portón azul", legacyAddressInstructions: null, latitudeE6: null, longitudeE6: null,
   validatedAt: "2026-09-15T18:00:00.000Z" };
+expect(parseCaptureFulfillmentSnapshotV1(fulfillmentSnapshot) !== undefined, "historical fulfillment snapshot parses");
+const settlementSnapshot = { ...fulfillmentSnapshot, settlementId: orderId, settlementOutsideCatalog: false };
+expect(parseCaptureFulfillmentSnapshotV1(settlementSnapshot)?.settlementId === orderId, "settlement snapshot preserves ID");
+expect(parseCaptureFulfillmentSnapshotV1({ ...settlementSnapshot, settlementId: null, settlementOutsideCatalog: true })?.settlementOutsideCatalog === true,
+  "outside-catalog snapshot parses");
+expect(parseCaptureFulfillmentSnapshotV1({ ...settlementSnapshot, settlementId: "bad" }) === undefined, "invalid settlement ID rejected");
+expect(parseCaptureFulfillmentSnapshotV1({ ...settlementSnapshot, settlementOutsideCatalog: true }) === undefined, "outside-catalog ID rejected");
+expect(parseCaptureFulfillmentSnapshotV1({ ...fulfillmentSnapshot, settlementId: null }) === undefined, "partial settlement fields rejected");
+expect(parseCaptureFulfillmentSnapshotV1({ ...settlementSnapshot, unexpected: true }) === undefined, "unknown snapshot fields rejected");
 const workspace = parseCaptureWorkspaceV1({ schemaVersion: 1, detail, customerSnapshot, fulfillmentSnapshot });
 expect(workspace !== undefined && Object.isFrozen(workspace.customerSnapshot) && Object.isFrozen(workspace.fulfillmentSnapshot),
   "workspace rehydrates immutable snapshots linked to capture refs");

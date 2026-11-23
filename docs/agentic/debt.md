@@ -21,15 +21,9 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 | 2026-11-22 | M1 | P2 · `registerId = deviceId` en cobro mobile (`m1-mobile-pay-note`) | `apps/mobile/src/ui/app.tsx` usa `deviceId` como `registerId` al consultar `/api/v1/cash-registers/report` y `/api/v1/payments/checkout`; no descubre ni permite elegir otra caja abierta de la sucursal ni abrir caja desde mobile. | Reutilizar los endpoints existentes sin introducir nuevas rutas o migraciones en nivel C. | Añadir selección de caja abierta o apertura controlada cuando se amplíe la operación de caja en mobile. |
 | 2026-11-22 | M1 | P3 · tabla `FRACTION_DIGITS` duplicada (`m1-mobile-pay-note`) | `apps/mobile/src/money.ts` define `FRACTION_DIGITS` (incluyendo `XTS` para fixtures) en paralelo a `apps/web/src/lib/money-scale.ts`. | Evitar tocar `packages/shared-types` (carril de un solo escritor) en una tarea de nivel C. | Consolidar una tabla compartida de escala monetaria por código ISO en `packages/shared-types` al cerrar M1. |
 
-## M0-7 — Fallos conocidos de CI (pendiente)
+## M0-7 ? pg-verify (en curso)
 
-- Reparado en migración nueva: `confirm_capture_draft_v3` usa los grupos y opciones de pizza V2; `pizza_model_v2_invariants.sql` y su verificador rollback pasan localmente. `order_deliveries_invariants.sql` también pasa en PostgreSQL local con fixtures de CI. Ambos se retiraron de la tolerancia.
-- Siguen tolerados, reproducidos en PostgreSQL 17 desechable con los dos usuarios de CI:
-  - `capture_drafts_invariants.sql`: `CAPTURE_CLAIM_ACTIVE_RESERVATION_ACCEPTED`.
-  - `capture_repeat_order_invariants.sql`: `permission denied for schema app` bajo `app_api`.
-  - `capture_selection_plan_invariants.sql`: `CAPTURE_SELECTION_CONFIRMATION_APPLY_OR_REPLAY_REJECTED`.
-  - `delivery_zones_invariants.sql`: `DELIVERY_ZONES_WAITER_WRITE_ACCEPTED`.
-  - `menu_shared_modifier_groups_invariants.sql`: `permission denied for schema app` bajo `app_api`.
-- Investigar cada fallo y distinguir errores de fixture de errores de producto antes de retirar su tolerancia; conservar las pruebas de permisos.
-- `Run local HTTP flow` sigue con `continue-on-error`: `order_detail` responde `503 ORDER_UNAVAILABLE` en CI. Reparar y retirar la tolerancia.
-- Salida: los cinco tests restantes y el flujo HTTP pasan en CI sin tolerancia; eliminar `KNOWN_FAILING_SQL_TESTS` y `continue-on-error`.
+- Los cinco invariantes SQL antes tolerados pasan en PostgreSQL 17.6 local tras aplicar todas las migraciones: se corrigieron los fixtures de identidad, privilegios y contratos hist?ricos/actuales. Pendiente confirmar el job completo en PR.
+- El `503 ORDER_UNAVAILABLE` del detalle de entrega qued? corregido: el parser acepta y valida los campos de asentamiento del snapshot, conservando compatibilidad hist?rica. El flujo HTTP local pas? 7/7; pendiente verificar el job completo en PR.
+- **P2 ? verificador hist?rico de grupos compartidos:** `verify:menu-shared-modifier-groups-schema:rollback` rechaza el fixture porque `extractMigrationBody` exige `COMMIT` y el fixture termina en `ROLLBACK`. El test directo pasa; reconciliar el arn?s sin dejar datos persistentes.
+- Los verificadores rollback de selecci?n, pizza V2 y transferencia pasaron localmente. No se aplicaron migraciones remotas.

@@ -237,6 +237,8 @@ export interface CaptureFulfillmentSnapshotV1 {
   readonly postalCode: string | null;
   readonly referencesText: string | null;
   readonly region: string | null;
+  readonly settlementId?: string | null;
+  readonly settlementOutsideCatalog?: boolean;
   readonly schemaVersion: typeof COMMERCIAL_CAPTURE_SCHEMA_VERSION;
   readonly snapshotRef: string;
   readonly streetLine: string;
@@ -608,9 +610,11 @@ export function parseCaptureCustomerSnapshotV1(value: unknown): CaptureCustomerS
 }
 
 export function parseCaptureFulfillmentSnapshotV1(value: unknown): CaptureFulfillmentSnapshotV1 | undefined {
-  const record = exactRecord(value, ["schemaVersion", "snapshotRef", "customerSnapshotRef", "customerId", "addressId",
+  const keys = ["schemaVersion", "snapshotRef", "customerSnapshotRef", "customerId", "addressId",
     "label", "streetLine", "unit", "neighborhood", "locality", "region", "countryCode", "postalCode", "referencesText",
-    "legacyAddressInstructions", "latitudeE6", "longitudeE6", "validatedAt"]);
+    "legacyAddressInstructions", "latitudeE6", "longitudeE6", "validatedAt"];
+  const withSettlement = exactRecord(value, [...keys, "settlementId", "settlementOutsideCatalog"]);
+  const record = withSettlement ?? exactRecord(value, keys);
   if (record === undefined || own(record, "schemaVersion") !== COMMERCIAL_CAPTURE_SCHEMA_VERSION) return undefined;
   const snapshotRef = uuid(own(record, "snapshotRef"));
   const customerSnapshotRef = uuid(own(record, "customerSnapshotRef"));
@@ -629,6 +633,9 @@ export function parseCaptureFulfillmentSnapshotV1(value: unknown): CaptureFulfil
   const latitudeE6 = nullableInteger(own(record, "latitudeE6"), -90_000_000, 90_000_000);
   const longitudeE6 = nullableInteger(own(record, "longitudeE6"), -180_000_000, 180_000_000);
   const validatedAt = timestamp(own(record, "validatedAt"));
+  const settlementId = withSettlement === undefined ? null : nullableUuid(own(record, "settlementId"));
+  const outside = withSettlement === undefined ? false : own(record, "settlementOutsideCatalog");
+  if (settlementId === undefined || typeof outside !== "boolean" || (outside && settlementId !== null)) return undefined;
   if (snapshotRef === undefined || customerSnapshotRef === undefined || customerId === undefined || addressId === undefined
     || label === undefined || streetLine === undefined || unit === undefined || neighborhood === undefined
     || locality === undefined || region === undefined || typeof countryCode !== "string" || !/^[A-Z]{2}$/u.test(countryCode)
@@ -636,7 +643,8 @@ export function parseCaptureFulfillmentSnapshotV1(value: unknown): CaptureFulfil
     || longitudeE6 === undefined || (latitudeE6 === null) !== (longitudeE6 === null) || validatedAt === undefined) return undefined;
   return Object.freeze({ addressId, countryCode, customerId, customerSnapshotRef, legacyAddressInstructions, label, latitudeE6, locality,
     longitudeE6, neighborhood, postalCode, referencesText, region, schemaVersion: COMMERCIAL_CAPTURE_SCHEMA_VERSION,
-    snapshotRef, streetLine, unit, validatedAt });
+    snapshotRef, streetLine, unit, validatedAt,
+    ...(withSettlement === undefined ? {} : { settlementId, settlementOutsideCatalog: outside }) });
 }
 
 export function parseCaptureWorkspaceV1(value: unknown): CaptureWorkspaceV1 | undefined {

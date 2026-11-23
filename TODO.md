@@ -1,5 +1,7 @@
 # TODO
 
+- [ ] **REVIEW ? A ? m1-pg-verify-clean** ? cinco invariantes SQL y flujo HTTP 7/7 verdes localmente; tolerancias retiradas. Pendiente push/PR por el humano y verificar pg-verify en CI. P2 del verificador hist?rico registrado en `docs/agentic/debt.md`.
+
 ## Día operable (alcance congelado el 2026-10-03; el % se mide sólo contra esta lista)
 
 | # | Capacidad del operador | Estado | % |

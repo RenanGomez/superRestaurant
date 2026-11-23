@@ -3,6 +3,7 @@ begin;
 do $capture_tests$
 declare
   actor uuid := (select id from auth.users where deleted_at is null order by id limit 1);
+  other_member uuid := gen_random_uuid();
   restaurant_a uuid := gen_random_uuid();
   restaurant_b uuid := gen_random_uuid();
   branch_a uuid := gen_random_uuid();
@@ -212,8 +213,15 @@ begin
     or attention_result #>> '{record,detail,attentionStatus}' is distinct from 'claimed'
   then raise exception 'CAPTURE_RESUME_POSITIVE_PATH_REJECTED'; end if;
   attention_command := attention_command || jsonb_build_object('expectedVersion',3,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text);
+  update app.memberships set revoked_at = clock_timestamp(), revoked_by = actor, revocation_reason = 'fixture' where id = member_a;
+  insert into app.memberships (id, user_id, restaurant_id, branch_id, granted_by)
+    values (other_member, actor, restaurant_a, branch_a, actor);
+  insert into app.membership_role_grants (membership_id, role_code, granted_by) values (other_member, 'cashier', actor);
   if app_private.mutate_capture_attention(actor,'capture.claimed',attention_command) ->> 'status' is distinct from 'conflict'
   then raise exception 'CAPTURE_CLAIM_ACTIVE_RESERVATION_ACCEPTED'; end if;
+  delete from app.membership_role_grants where membership_id = other_member;
+  delete from app.memberships where id = other_member;
+  update app.memberships set revoked_at = null, revoked_by = null, revocation_reason = null where id = member_a;
   update app.capture_drafts set attention_lease_expires_at = clock_timestamp() - interval '1 second'
     where restaurant_id = restaurant_a and branch_id = branch_a and id = created_id;
   if app_private.mutate_capture_attention(actor,'capture.resumed',attention_command) ->> 'status' is distinct from 'conflict'

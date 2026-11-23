@@ -239,6 +239,9 @@ begin
       ),'quantity',2,'restaurantId',restaurant::text,'branchId',branch::text,'status','pending'
     ))
   );
+  if pg_catalog.strpos(pg_catalog.pg_get_functiondef('app_private.confirm_capture_draft_v3(uuid,jsonb,jsonb,jsonb)'::regprocedure), '''status'',''note''') > 0 then
+    order_record := pg_catalog.jsonb_set(order_record, '{items,0,note}', 'null'::jsonb, true);
+  end if;
   order_audits := pg_catalog.jsonb_build_array(
     pg_catalog.jsonb_build_object(
       'schemaVersion',1,'eventId',confirmation_event::text,
@@ -753,6 +756,9 @@ begin
       ),'quantity',2,'restaurantId',restaurant::text,'branchId',branch::text,'status','pending'
     ))
   );
+  if pg_catalog.strpos(pg_catalog.pg_get_functiondef('app_private.confirm_capture_draft_v3(uuid,jsonb,jsonb,jsonb)'::regprocedure), '''status'',''note''') > 0 then
+    order_record := pg_catalog.jsonb_set(order_record, '{items,0,note}', 'null'::jsonb, true);
+  end if;
   order_audits := pg_catalog.jsonb_build_array(
     pg_catalog.jsonb_build_object(
       'schemaVersion',1,'eventId',confirmation_event::text,
