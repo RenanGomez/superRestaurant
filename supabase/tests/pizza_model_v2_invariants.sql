@@ -102,6 +102,17 @@ declare
   result jsonb; replay jsonb; confirmation_command jsonb; order_record jsonb; order_audits jsonb; snap jsonb;
   pizza_line jsonb; pizza_result jsonb; first_snap jsonb; first_order uuid; first_total bigint; attempts integer;
   item_sum bigint;
+  -- pizza V2 + delivery zone confirmation fixtures
+  confirm_def text; confirm_fn oid;
+  branch_z uuid := gen_random_uuid(); membership_z uuid := gen_random_uuid(); shift_z uuid := gen_random_uuid();
+  zone_z uuid := gen_random_uuid(); customer_z uuid := gen_random_uuid();
+  s_covered uuid; s_covered_cp text; s_covered_name text;
+  s_uncovered uuid; s_uncovered_cp text; s_uncovered_name text;
+  party_z1 uuid := gen_random_uuid(); addr_z1 uuid := gen_random_uuid(); fulf_z1 uuid := gen_random_uuid();
+  party_z2 uuid := gen_random_uuid(); addr_z2 uuid := gen_random_uuid(); fulf_z2 uuid := gen_random_uuid();
+  scope_z jsonb; quote_z1_id text := gen_random_uuid()::text; quote_z2_id text := gen_random_uuid()::text;
+  quote_z jsonb; fee_res jsonb; v_fee_z app.capture_delivery_manual_fees%rowtype; override_z jsonb;
+  zone_res jsonb;
 begin
   if actor is null then raise exception 'PIZZA_V2_TEST_ACTOR_REQUIRED'; end if;
 
@@ -873,6 +884,323 @@ begin
       and placed.aggregate#>'{items,0,snapshot}' = first_snap
       and (placed.aggregate#>>'{items,0,snapshot,pizzaHalves,total,amountMinor}')::bigint = first_total
   ) then raise exception 'PIZZA_V2_HISTORY_REPRICED'; end if;
+
+  -- ---------------------------------------------------------------- 7. pizza V2 + delivery zone confirmation
+  -- Verify confirm_capture_draft_v3 has no stale pre-v2 field references and preserves SECURITY DEFINER / grants.
+  confirm_fn := pg_catalog.to_regprocedure('app_private.confirm_capture_draft_v3(uuid,jsonb,jsonb,jsonb)');
+  if confirm_fn is null then raise exception 'PIZZA_V2_CONFIRM_FN_MISSING'; end if;
+  confirm_def := pg_catalog.pg_get_functiondef(confirm_fn);
+  if confirm_def ~ 'base_group_id([^s]|$)' or confirm_def ~ 'extra_group_ids' then
+    raise exception 'PIZZA_V2_CONFIRM_STALE_PRE_V2_FIELDS';
+  end if;
+  if not exists (
+    select 1 from pg_catalog.pg_proc p
+    join pg_catalog.pg_roles owner on owner.oid = p.proowner
+    where p.oid = confirm_fn and p.prosecdef and owner.rolname = 'postgres'
+      and coalesce(pg_catalog.array_to_string(p.proconfig, ','), '') in ('search_path=', 'search_path=""')
+  ) or not pg_catalog.has_function_privilege('app_api', confirm_fn, 'EXECUTE')
+    or pg_catalog.has_function_privilege('public', confirm_fn, 'EXECUTE')
+    or pg_catalog.has_function_privilege('anon', confirm_fn, 'EXECUTE')
+    or pg_catalog.has_function_privilege('authenticated', confirm_fn, 'EXECUTE')
+    or pg_catalog.has_function_privilege('service_role', confirm_fn, 'EXECUTE')
+  then raise exception 'PIZZA_V2_CONFIRM_SECURITY_SHAPE_REJECTED'; end if;
+
+  -- Dedicated manager-scoped branch under `restaurant` sharing the published V2 catalog.
+  -- Notice: catalog prices were bumped in section 6 above; restore them before building delivery orders.
+  update app.menu_modifier_options set unit_price_minor=unit_price_minor-7000 where restaurant_id=restaurant and catalog_id=catalog;
+  update app.menu_products set unit_price_minor=unit_price_minor-500,free_ingredient_count=case id when p1 then 1 else 2 end,pizza_mode='custom'
+  where restaurant_id=restaurant and catalog_id=catalog and id in (p1,p2);
+
+  select id, postal_code, name into s_covered, s_covered_cp, s_covered_name
+  from app.settlements where municipality='Navojoa' and state='Sonora'
+  order by postal_code, normalized_name, settlement_type limit 1;
+  select id, postal_code, name into s_uncovered, s_uncovered_cp, s_uncovered_name
+  from app.settlements where municipality='Navojoa' and state='Sonora'
+  order by postal_code desc, normalized_name desc, settlement_type desc limit 1;
+  if s_covered is null or s_uncovered is null or s_covered = s_uncovered then
+    raise exception 'PIZZA_V2_ZONE_SETTLEMENTS_REQUIRED';
+  end if;
+
+  insert into app.branches(id,restaurant_id,name) values(branch_z,restaurant,'rollback-only pizza v2 delivery branch');
+  insert into app.memberships(id,user_id,restaurant_id,branch_id,granted_by) values(membership_z,actor,restaurant,branch_z,actor);
+  insert into app.membership_role_grants(membership_id,role_code,granted_by) values(membership_z,'manager',actor);
+  insert into app.operational_shifts(id,restaurant_id,branch_id,name,status,opened_at,opened_by)
+    values(shift_z,restaurant,branch_z,'rollback pizza v2 delivery shift','open',now_at-interval '1 minute',actor);
+  scope_z := pg_catalog.jsonb_build_object('restaurantId',restaurant::text,'branchId',branch_z::text);
+
+  -- Create a settlement-only delivery zone covering s_covered (fee = 2500 minor units).
+  execute 'set local role app_api';
+  zone_res := app_private.upsert_delivery_zone(actor, pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',scope_z,'zoneId',zone_z::text,'expectedVersion',0,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,'occurredAt',stamp,'name','Zona Centro Pizza V2',
+    'postalCodes','[]'::jsonb,'localities','[]'::jsonb,
+    'settlementIds',pg_catalog.jsonb_build_array(s_covered::text),
+    'feeMinor',2500,'currency','MXN','active',true,'reason',null));
+  execute 'reset role';
+  if zone_res ? 'status' then raise exception 'PIZZA_V2_ZONE_CREATE_REJECTED_%',zone_res::text; end if;
+  set constraints all immediate;
+
+  insert into app.customers(id,restaurant_id,display_name,created_by,updated_by)
+    values(customer_z,restaurant,'Cliente Pizza Zona',actor,actor);
+  insert into app.customer_party_snapshots(id,restaurant_id,customer_id,contact_id,display_name,
+    phone_display_value,phone_normalized_value,created_at,created_by)
+  values
+    (party_z1,restaurant,customer_z,gen_random_uuid(),'Cliente Pizza Zona','6421000001','6421000001',now_at,actor),
+    (party_z2,restaurant,customer_z,gen_random_uuid(),'Cliente Pizza Zona','6421000001','6421000001',now_at,actor);
+  insert into app.customer_addresses(id,restaurant_id,customer_id,label,street_line,neighborhood,
+    locality,region,country_code,postal_code,settlement_id,version,created_at,updated_at,created_by,updated_by)
+  values
+    (addr_z1,restaurant,customer_z,'Casa Cubierta','Calle 1',s_covered_name,'Navojoa','Sonora','MX',s_covered_cp,s_covered,1,now_at,now_at,actor,actor),
+    (addr_z2,restaurant,customer_z,'Casa Manual','Calle 2',s_uncovered_name,'Navojoa','Sonora','MX',s_uncovered_cp,s_uncovered,1,now_at,now_at,actor,actor);
+  insert into app.customer_fulfillment_snapshots(id,restaurant_id,branch_id,customer_id,address_id,party_snapshot_id,
+    label,street_line,neighborhood,locality,region,country_code,postal_code,settlement_id,settlement_outside_catalog,
+    validation_event_id,validated_by,validation_device_id,validated_at,created_at,created_by)
+  values
+    (fulf_z1,restaurant,branch_z,customer_z,addr_z1,party_z1,'Casa Cubierta','Calle 1',s_covered_name,'Navojoa','Sonora','MX',s_covered_cp,s_covered,false,
+      gen_random_uuid(),actor,device,now_at,now_at,actor),
+    (fulf_z2,restaurant,branch_z,customer_z,addr_z2,party_z2,'Casa Manual','Calle 2',s_uncovered_name,'Navojoa','Sonora','MX',s_uncovered_cp,s_uncovered,false,
+      gen_random_uuid(),actor,device,now_at,now_at,actor);
+
+  -- 7a. Covered zone + Pizza V2 with BOTH extra_option_ids and removedIngredientOptionIds (exercises
+  --     product.base_group_ids, product.extra_option_ids and removed_product.base_group_ids on delivery).
+  target_capture := gen_random_uuid(); line_id := gen_random_uuid(); confirmed_order := gen_random_uuid();
+  confirmation_event := gen_random_uuid(); item_event := gen_random_uuid(); item_id := gen_random_uuid();
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',scope_z,'captureDraftId',target_capture::text,'expectedVersion',0,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',stamp,'sourceChannel','phone','fulfillmentChannel','delivery'));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'PIZZA_V2_ZONE_DRAFT_CREATE_%',created::text; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+  update app.capture_drafts set customer_id=customer_z,customer_snapshot_id=party_z1,fulfillment_snapshot_id=fulf_z1
+  where restaurant_id=restaurant and branch_id=branch_z and id=target_capture;
+
+  pizza_line := pg_catalog.jsonb_build_object(
+    'lineId',line_id::text,'productId',spec::text,'variantId',null,'quantity',1,'note',null,'modifierGroups','[]'::jsonb,
+    'pizza',pg_catalog.jsonb_build_object('ruleVersion','pizza-halves-v2','halves',pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object('fraction','half-a','productId',spec::text,'variantId',null,
+        'ingredientOptionIds','[]'::jsonb,'extraOptionIds','[]'::jsonb,
+        'removedIngredientOptionIds',pg_catalog.jsonb_build_array(o_a::text)),
+      pg_catalog.jsonb_build_object('fraction','half-b','productId',p1::text,'variantId',null,
+        'ingredientOptionIds',pg_catalog.jsonb_build_array(o_a::text,o_b::text),
+        'extraOptionIds',pg_catalog.jsonb_build_array(o_e::text),'removedIngredientOptionIds','[]'::jsonb))));
+  plan := pg_catalog.jsonb_build_object('schemaVersion',2,'catalogVersion',catalog::text,'lines',pg_catalog.jsonb_build_array(pizza_line));
+  execute 'set local role app_api';
+  result := app_private.replace_capture_selection_plan(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',scope_z,'captureDraftId',target_capture::text,'expectedVersion',1,
+    'attentionLeaseId',lease,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,'occurredAt',stamp),plan);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'PIZZA_V2_ZONE_PLAN_REJECTED_%',result::text; end if;
+
+  quote_z := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'quoteId',quote_z1_id,'restaurantId',restaurant::text,'branchId',branch_z::text,
+    'captureDraftId',target_capture::text,'addressSnapshotRef',fulf_z1::text,
+    'address',pg_catalog.jsonb_build_object('settlementId',s_covered::text,'neighborhood',s_covered_name,'postalCode',s_covered_cp),
+    'currency','MXN','timeZone','America/Hermosillo','quotedAt',stamp,'scheduledFor',null,
+    'version',1,'coverageStatus','covered','zoneId',zone_z::text,'feeMinor',2500,
+    'promiseStart',stamp,'promiseEnd',pg_catalog.to_char((now_at+interval '45 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'expiresAt',pg_catalog.to_char((now_at+interval '10 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'override',null);
+  insert into app.capture_delivery_quotes(restaurant_id,branch_id,capture_draft_id,quote,applied_capture_version,
+    idempotency_key,command_fingerprint,actor_id,actor_membership_id,device_id,occurred_at,received_at)
+  values(restaurant,branch_z,target_capture,quote_z,2,gen_random_uuid()::text,repeat('c',64),actor,membership_z,device,now_at,now_at);
+
+  pizza_result := app_private.pizza_halves_price_v2(app_private.build_pizza_halves_input_v2(restaurant,catalog,'MXN',pizza_line));
+  if pizza_result is null or pizza_result ? 'issues' or (pizza_result#>>'{total,amountMinor}')::bigint <> 1638 then
+    raise exception 'PIZZA_V2_ZONE_PRICE_MISMATCH_%',pizza_result::text;
+  end if;
+  snap := pg_temp.pizza_snapshot(catalog,spec,'Hawaiana',pizza_result,
+    pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('fraction','half-a','optionId',o_a,'name','Ing A')));
+
+  confirmation_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',2,'scope',scope_z,'captureDraftId',target_capture::text,'expectedVersion',2,
+    'eventId',confirmation_event::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',stamp,'attentionLeaseId',lease,'orderId',confirmed_order::text,'shiftId',shift_z::text,
+    'tableId',null,'currency','MXN','timeZone','America/Hermosillo');
+  order_audits := pg_catalog.jsonb_build_array(
+    pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'eventId',confirmation_event::text,'idempotencyKey',confirmation_command->>'idempotencyKey',
+      'restaurantId',restaurant::text,'branchId',branch_z::text,'orderId',confirmed_order::text,'actorId',actor::text,
+      'deviceId',device::text,'occurredAt',stamp,'operation','order.created','entityType','order',
+      'entityId',confirmed_order::text,'to','draft'),
+    pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'eventId',item_event::text,'idempotencyKey',gen_random_uuid()::text,
+      'restaurantId',restaurant::text,'branchId',branch_z::text,'orderId',confirmed_order::text,
+      'actorId',actor::text,'deviceId',device::text,'occurredAt',stamp,'operation','order.item_added',
+      'entityType','order_item','entityId',item_id::text,'orderItemId',item_id::text));
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',confirmed_order::text,'restaurantId',restaurant::text,'branchId',branch_z::text,
+    'channel','delivery','currency','MXN','timeZone','America/Hermosillo','status','draft',
+    'deliveryCharge',pg_catalog.jsonb_build_object(
+      'amount',pg_catalog.jsonb_build_object('amountMinor',2500,'currency','MXN'),'quoteId',quote_z1_id),
+    'items',pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+      'orderItemId',item_id::text,'snapshot',snap,'quantity',1,'restaurantId',restaurant::text,
+      'branchId',branch_z::text,'status','pending','note',null)));
+
+  -- Tampered delivery charge must conflict before persisting anything.
+  execute 'set local role app_api';
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,
+    pg_catalog.jsonb_set(order_record,'{deliveryCharge,amount,amountMinor}','1999'::jsonb),order_audits);
+  execute 'reset role';
+  if result->>'status'<>'conflict' or result->>'reason'<>'delivery_charge_mismatch' then
+    raise exception 'PIZZA_V2_ZONE_TAMPERED_CHARGE_ACCEPTED_%',result::text;
+  end if;
+  if exists (select 1 from app.orders where restaurant_id=restaurant and branch_id=branch_z and id=confirmed_order) then
+    raise exception 'PIZZA_V2_ZONE_TAMPERED_ORDER_PERSISTED';
+  end if;
+
+  -- Valid pizza+zone confirmation succeeds without 42703 and freezes pizzaHalves + deliveryCharge + settlementId.
+  execute 'set local role app_api';
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  replay := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'PIZZA_V2_ZONE_CONFIRM_FAILED_%',result::text; end if;
+  if replay->>'status'<>'replayed' or replay->'record' is distinct from result->'record' then
+    raise exception 'PIZZA_V2_ZONE_CONFIRM_REPLAY_FAILED_%',replay::text;
+  end if;
+  if not exists (
+    select 1 from app.orders placed
+    where placed.restaurant_id=restaurant and placed.branch_id=branch_z and placed.id=confirmed_order
+      and placed.aggregate#>'{items,0,snapshot}' = snap
+      and (placed.aggregate#>>'{items,0,snapshot,pizzaHalves,total,amountMinor}')::bigint = 1638
+      and (placed.aggregate#>>'{deliveryCharge,amount,amountMinor}')::bigint = 2500
+      and placed.aggregate#>>'{deliveryCharge,quoteId}' = quote_z1_id
+  ) then raise exception 'PIZZA_V2_ZONE_ORDER_NOT_FROZEN'; end if;
+  if not exists (
+    select 1 from app.order_fulfillment_snapshots ofs
+    where ofs.restaurant_id=restaurant and ofs.branch_id=branch_z and ofs.order_id=confirmed_order
+      and ofs.capture_draft_id=target_capture
+      and ofs.snapshot->>'schemaVersion' = '2'
+      and ofs.snapshot#>>'{deliveryQuote,zoneId}' = zone_z::text
+      and ofs.snapshot#>>'{fulfillmentSnapshot,settlementId}' = s_covered::text
+      and ofs.snapshot#>>'{fulfillmentSnapshot,settlementOutsideCatalog}' = 'false'
+  ) then raise exception 'PIZZA_V2_ZONE_FULFILLMENT_SNAPSHOT_INVALID'; end if;
+
+  -- 7b. Uncovered settlement + authorized manual fee + multi-base-group Pizza V2 (pz).
+  target_capture := gen_random_uuid(); line_id := gen_random_uuid(); confirmed_order := gen_random_uuid();
+  confirmation_event := gen_random_uuid(); item_event := gen_random_uuid(); item_id := gen_random_uuid();
+  execute 'set local role app_api';
+  created := app_private.create_capture_draft(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',scope_z,'captureDraftId',target_capture::text,'expectedVersion',0,
+    'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',stamp,'sourceChannel','phone','fulfillmentChannel','delivery'));
+  execute 'reset role';
+  if created->>'status'<>'applied' then raise exception 'PIZZA_V2_MANUAL_FEE_DRAFT_CREATE_%',created::text; end if;
+  lease := created#>>'{record,detail,attentionLeaseId}';
+  update app.capture_drafts set customer_id=customer_z,customer_snapshot_id=party_z2,fulfillment_snapshot_id=fulf_z2
+  where restaurant_id=restaurant and branch_id=branch_z and id=target_capture;
+
+  execute 'set local role app_api';
+  fee_res := app_private.set_capture_delivery_manual_fee(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',scope_z,'captureDraftId',target_capture::text,
+    'addressSnapshotRef',fulf_z2::text,'expectedVersion',0,'feeMinor',3200,'currency','MXN',
+    'reason','Pizza fuera de zona autorizada','eventId',gen_random_uuid()::text,
+    'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,'occurredAt',stamp));
+  execute 'reset role';
+  if fee_res->>'status'<>'applied' then raise exception 'PIZZA_V2_MANUAL_FEE_AUTH_FAILED_%',fee_res::text; end if;
+  select * into v_fee_z from app.capture_delivery_manual_fees
+  where restaurant_id=restaurant and branch_id=branch_z and capture_draft_id=target_capture;
+  override_z := pg_catalog.jsonb_build_object(
+    'kind','manual_fee','eventId',v_fee_z.authorization_event_id::text,'actorId',v_fee_z.actor_id::text,
+    'role',v_fee_z.role_code,'reason',v_fee_z.reason,'feeMinor',v_fee_z.fee_minor,
+    'promiseStart',stamp,'promiseEnd',pg_catalog.to_char((now_at+interval '45 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'overriddenAt',pg_catalog.to_char(v_fee_z.authorized_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
+
+  pizza_line := pg_catalog.jsonb_build_object(
+    'lineId',line_id::text,'productId',pz::text,'variantId',null,'quantity',1,'note',null,'modifierGroups','[]'::jsonb,
+    'pizza',pg_catalog.jsonb_build_object('ruleVersion','pizza-halves-v2','halves',pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object('fraction','half-a','productId',pz::text,'variantId',null,
+        'ingredientOptionIds',pg_catalog.jsonb_build_array(o_a::text,o_g::text),
+        'extraOptionIds',pg_catalog.jsonb_build_array(o_d::text),'removedIngredientOptionIds','[]'::jsonb),
+      pg_catalog.jsonb_build_object('fraction','half-b','productId',pz::text,'variantId',null,
+        'ingredientOptionIds',pg_catalog.jsonb_build_array(o_b::text),
+        'extraOptionIds','[]'::jsonb,'removedIngredientOptionIds','[]'::jsonb))));
+  plan := pg_catalog.jsonb_build_object('schemaVersion',2,'catalogVersion',catalog::text,'lines',pg_catalog.jsonb_build_array(pizza_line));
+  execute 'set local role app_api';
+  result := app_private.replace_capture_selection_plan(actor,pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'scope',scope_z,'captureDraftId',target_capture::text,'expectedVersion',1,
+    'attentionLeaseId',lease,'eventId',gen_random_uuid()::text,'idempotencyKey',gen_random_uuid()::text,
+    'deviceId',device::text,'occurredAt',stamp),plan);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'PIZZA_V2_MANUAL_FEE_PLAN_REJECTED_%',result::text; end if;
+
+  quote_z := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'quoteId',quote_z2_id,'restaurantId',restaurant::text,'branchId',branch_z::text,
+    'captureDraftId',target_capture::text,'addressSnapshotRef',fulf_z2::text,
+    'address',pg_catalog.jsonb_build_object('settlementId',s_uncovered::text,'neighborhood',s_uncovered_name,'postalCode',s_uncovered_cp),
+    'currency','MXN','timeZone','America/Hermosillo','quotedAt',stamp,'scheduledFor',null,
+    'version',1,'coverageStatus','not_covered','zoneId',null,'feeMinor',0,
+    'promiseStart',stamp,'promiseEnd',pg_catalog.to_char((now_at+interval '45 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'expiresAt',pg_catalog.to_char((now_at-interval '1 minute') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'override',override_z);
+  insert into app.capture_delivery_quotes(restaurant_id,branch_id,capture_draft_id,quote,applied_capture_version,
+    idempotency_key,command_fingerprint,actor_id,actor_membership_id,device_id,occurred_at,received_at)
+  values(restaurant,branch_z,target_capture,quote_z,2,gen_random_uuid()::text,repeat('d',64),actor,membership_z,device,now_at,now_at);
+
+  pizza_result := app_private.pizza_halves_price_v2(app_private.build_pizza_halves_input_v2(restaurant,catalog,'MXN',pizza_line));
+  if pizza_result is null or pizza_result ? 'issues' or (pizza_result#>>'{total,amountMinor}')::bigint <> 1250 then
+    raise exception 'PIZZA_V2_MANUAL_FEE_PRICE_MISMATCH_%',pizza_result::text;
+  end if;
+  snap := pg_temp.pizza_snapshot(catalog,pz,'Armada dos grupos',pizza_result,'[]'::jsonb);
+
+  confirmation_command := pg_catalog.jsonb_build_object(
+    'schemaVersion',2,'scope',scope_z,'captureDraftId',target_capture::text,'expectedVersion',2,
+    'eventId',confirmation_event::text,'idempotencyKey',gen_random_uuid()::text,'deviceId',device::text,
+    'occurredAt',stamp,'attentionLeaseId',lease,'orderId',confirmed_order::text,'shiftId',shift_z::text,
+    'tableId',null,'currency','MXN','timeZone','America/Hermosillo');
+  order_audits := pg_catalog.jsonb_build_array(
+    pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'eventId',confirmation_event::text,'idempotencyKey',confirmation_command->>'idempotencyKey',
+      'restaurantId',restaurant::text,'branchId',branch_z::text,'orderId',confirmed_order::text,'actorId',actor::text,
+      'deviceId',device::text,'occurredAt',stamp,'operation','order.created','entityType','order',
+      'entityId',confirmed_order::text,'to','draft'),
+    pg_catalog.jsonb_build_object(
+      'schemaVersion',1,'eventId',item_event::text,'idempotencyKey',gen_random_uuid()::text,
+      'restaurantId',restaurant::text,'branchId',branch_z::text,'orderId',confirmed_order::text,
+      'actorId',actor::text,'deviceId',device::text,'occurredAt',stamp,'operation','order.item_added',
+      'entityType','order_item','entityId',item_id::text,'orderItemId',item_id::text));
+  order_record := pg_catalog.jsonb_build_object(
+    'schemaVersion',1,'orderId',confirmed_order::text,'restaurantId',restaurant::text,'branchId',branch_z::text,
+    'channel','delivery','currency','MXN','timeZone','America/Hermosillo','status','draft',
+    'deliveryCharge',pg_catalog.jsonb_build_object(
+      'amount',pg_catalog.jsonb_build_object('amountMinor',3200,'currency','MXN'),'quoteId',quote_z2_id,
+      'manualFee',pg_catalog.jsonb_build_object(
+        'eventId',v_fee_z.authorization_event_id::text,'actorId',v_fee_z.actor_id::text,
+        'role',v_fee_z.role_code,'reason',v_fee_z.reason,
+        'authorizedAt',pg_catalog.to_char(v_fee_z.authorized_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))),
+    'items',pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+      'orderItemId',item_id::text,'snapshot',snap,'quantity',1,'restaurantId',restaurant::text,
+      'branchId',branch_z::text,'status','pending','note',null)));
+
+  -- Expired manual-fee quote must be rejected before persisting anything.
+  execute 'set local role app_api';
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'conflict' or result->>'reason'<>'delivery_quote_expired' then
+    raise exception 'PIZZA_V2_MANUAL_FEE_EXPIRED_ACCEPTED_%',result::text;
+  end if;
+
+  update app.capture_delivery_quotes set quote = quote || pg_catalog.jsonb_build_object(
+    'expiresAt',pg_catalog.to_char((now_at+interval '10 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+  where restaurant_id=restaurant and branch_id=branch_z and capture_draft_id=target_capture;
+
+  execute 'set local role app_api';
+  result := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  replay := app_private.confirm_capture_draft_v3(actor,confirmation_command,order_record,order_audits);
+  execute 'reset role';
+  if result->>'status'<>'applied' then raise exception 'PIZZA_V2_MANUAL_FEE_CONFIRM_FAILED_%',result::text; end if;
+  if replay->>'status'<>'replayed' or replay->'record' is distinct from result->'record' then
+    raise exception 'PIZZA_V2_MANUAL_FEE_REPLAY_FAILED_%',replay::text;
+  end if;
+  if not exists (
+    select 1 from app.orders placed
+    where placed.restaurant_id=restaurant and placed.branch_id=branch_z and placed.id=confirmed_order
+      and placed.aggregate#>'{items,0,snapshot}' = snap
+      and (placed.aggregate#>>'{items,0,snapshot,pizzaHalves,total,amountMinor}')::bigint = 1250
+      and (placed.aggregate#>>'{deliveryCharge,amount,amountMinor}')::bigint = 3200
+      and placed.aggregate#>>'{deliveryCharge,manualFee,eventId}' = v_fee_z.authorization_event_id::text
+  ) then raise exception 'PIZZA_V2_MANUAL_FEE_ORDER_NOT_FROZEN'; end if;
 end
 $pizza_model_v2_tests$;
 
