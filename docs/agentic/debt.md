@@ -61,3 +61,16 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 - #54 P2: offline, el titular promete "se guardó en este dispositivo" sin cola local persistente; reformular hasta que exista.
 - #54 P3: `formatSyncAmountMinor` antepone `$` a cualquier moneda; sin pruebas de render ni Server Actions; "Conexión" queda en "Más" en móvil; `getSession()` en servidor (usar `getUser()`).
 - #54: verificación visual contra stubs (404 en `/api/v1/sync/*`), sin PostgreSQL real; repetir con API real cuando exista push/pull.
+
+## PR #56, #58, #59 y #60 (offline M2) — P2/P3
+
+- #56 P2/P3: almacenamiento móvil cifrado revisado por Claude (agy sin cuota); sin prueba en dispositivo nativo, solo Node; pendiente verificar `expo-sqlite` real en Android/iOS.
+- #58 P2: `kds-local.test.ts` no prueba el flujo "el servidor reemplaza la caché" (solo un filtro puro); extraer `applyServerList(received, scope)` y probarlo con caché {A,B} y servidor {A}.
+- #58 P3: sin pruebas del backoff de reconcile, del mensaje `SYNC_UNAVAILABLE` ni de la purga de `signOut`; la purga es best-effort (si falla se hace logout igual y puede quedar caché/outbox del actor anterior).
+- #59 P2: con un puerto offline registrado el banner promete "crear órdenes locales" y "cobrar en efectivo sin conexión" aunque no exista `commitLocalOperation` ni pantalla que lo use; hoy no se registra ningún puerto, pero reformular antes de conectarlo.
+- #59 P2: el `<summary>` de operaciones bloqueadas mide ~18.6 px (mínimo 44 px).
+- #59 P3: en `sync_blocked` online el summary dice "bloqueadas sin conexión"; el mensaje muestra la ruta literal `/app/sync`; el tope offline ignora el importe; sesión fija en el puerto.
+- #60 P3: un evento con IDs mal formados se rechaza como `INVALID_PAYLOAD` sin registro en el ledger (no cabe), así que no deja huella de auditoría.
+- #60 P3: el rechazo `AUTH_REVOKED`/`DEVICE_REVOKED` no se audita en log estructurado; el token se verifica una vez por evento (N por push); `unknown` de dispositivo se trata como `DEVICE_REVOKED` (usar `DEVICE_UNKNOWN`); `ACTOR_MISMATCH` se reporta como `AUTH_REVOKED`.
+- #60 P3: `sync-push.test.ts` usa mock del ledger; la semántica real la cubre solo la verificación PostgreSQL de CI; falta aserción explícita de grants (`sync_device_state` y `sync_write_allowed` solo para `app_api`).
+- Protocolo pendiente: las migraciones 20261121000100, 20261123000300, 20261123000400 y 20261123000500 no están aplicadas en remoto (rollback-only, dry-run y staging primero, §19.6).
