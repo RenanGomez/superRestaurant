@@ -2,16 +2,23 @@ import type { CanActivate, ExecutionContext } from "@nestjs/common";
 import { HttpException, Inject, Injectable, SetMetadata, UnauthorizedException } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 
-import type { ApiConfig } from "../config.js";
+import { readRateLimitPolicy, type ApiConfig, type RateLimitPolicy } from "../config.js";
 
 export const AUTH_PRINCIPAL_VERIFIER = Symbol("AUTH_PRINCIPAL_VERIFIER");
 export const PUBLIC_ROUTE = Symbol("PUBLIC_ROUTE");
 export const RATE_LIMIT = Symbol("RATE_LIMIT");
 const authenticatedPrincipalKey = Symbol("authenticatedPrincipal");
 
+export interface RateLimitOptions {
+  readonly limit: number;
+  readonly windowMs: number;
+}
+
 export const Public = (): MethodDecorator & ClassDecorator => SetMetadata(PUBLIC_ROUTE, true);
-export const RateLimited = (options: { limit: number; windowMs: number }): MethodDecorator => SetMetadata(RATE_LIMIT, options);
+export const RateLimited = (options: RateLimitOptions): MethodDecorator => SetMetadata(RATE_LIMIT, options);
 
 export class RateLimitStore {
   private readonly entries = new Map<string, { count: number; expiresAt: number }>();
@@ -92,14 +99,20 @@ export class SupabaseAuthPrincipalVerifier implements AuthPrincipalVerifierPort 
 
 @Injectable()
 export class SupabaseAuthGuard implements CanActivate {
-  private readonly requests = new RateLimitStore();
-  private readonly authenticationRequests = new RateLimitStore();
+  private readonly requests: RateLimitStore;
+  private readonly loginRequests: RateLimitStore;
+  private readonly policy: RateLimitPolicy;
   private readonly operations = new WeakMap<object, number>();
   private nextOperation = 0;
   public constructor(
     @Inject(AUTH_PRINCIPAL_VERIFIER) private readonly verifier: AuthPrincipalVerifierPort,
     @Inject(Reflector) private readonly reflector: Reflector,
-  ) {}
+    policy: RateLimitPolicy = readRateLimitPolicy(process.env),
+  ) {
+    this.policy = policy;
+    this.requests = new RateLimitStore(Date.now, policy.maxTrackedKeys);
+    this.loginRequests = new RateLimitStore(Date.now, policy.maxTrackedKeys);
+  }
 
   public async canActivate(context: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(PUBLIC_ROUTE, [context.getHandler(), context.getClass()]);
@@ -107,16 +120,25 @@ export class SupabaseAuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const response = context.switchToHttp().getResponse?.<{ setHeader(name: string, value: string): void }>();
-    const ip = request.socket?.remoteAddress ?? "unknown";
-    this.rejectLimited(response, this.authenticationRequests.consume(ip, 300, 60_000));
+    // Login attempts are metered before any token work so unauthenticated floods are
+    // rejected cheaply and never reach the Auth provider. Successful attempts refund
+    // their slot, so only real failures consume the quota.
+    const clientIp = resolveClientIp(request, this.policy.trustForwardedFor);
+    const ipKey = `ip|${clientIp}`;
+    this.rejectLimited(response, this.loginRequests.consume(ipKey, this.policy.loginMax, this.policy.loginWindowMs));
     const accessToken = parseBearerAuthorization(request.headers?.authorization);
     if (accessToken === undefined) throw authenticationRequired();
+    // A second, independent slot keyed by a one-way token fingerprint stops a single
+    // stolen token from being sprayed across many source addresses.
+    const tokenKey = `token|${tokenFingerprint(accessToken)}`;
+    this.rejectLimited(response, this.loginRequests.consume(tokenKey, this.policy.loginMax, this.policy.loginWindowMs));
 
     let principal: AuthenticatedPrincipal | undefined;
     try {
       principal = normalizePrincipal(await this.verifier.verifyAccessToken(accessToken));
       if (principal === undefined) throw new AccessTokenRejectedError();
-      this.authenticationRequests.refund(ip);
+      this.loginRequests.refund(ipKey);
+      this.loginRequests.refund(tokenKey);
       Object.defineProperty(request, authenticatedPrincipalKey, {
         configurable: false,
         enumerable: false,
@@ -127,7 +149,7 @@ export class SupabaseAuthGuard implements CanActivate {
       throw authenticationRequired();
     }
     const handler = context.getHandler();
-    const options = this.reflector.getAllAndOverride<{ limit: number; windowMs: number }>(RATE_LIMIT, [handler, context.getClass()]);
+    const options = this.reflector.getAllAndOverride<RateLimitOptions>(RATE_LIMIT, [handler, context.getClass()]);
     if (options !== undefined && options !== null && typeof options === "object") {
       let operation = this.operations.get(handler);
       if (operation === undefined) { operation = this.nextOperation++; this.operations.set(handler, operation); }
@@ -158,8 +180,31 @@ export function parseBearerAuthorization(value: unknown): string | undefined {
   return token !== undefined && isBoundedAccessToken(token) ? token : undefined;
 }
 
-type AuthenticatedRequest = {
-  readonly headers?: { readonly authorization?: unknown };
+/**
+ * Resolves the login limiter's client address without trusting caller headers.
+ * `x-forwarded-for` is only read when a trusted proxy is configured, and then the
+ * last hop is used because a trusted reverse proxy appends the address it saw.
+ */
+export function resolveClientIp(request: AuthenticatedRequest, trustForwardedFor: boolean): string {
+  if (trustForwardedFor) {
+    const forwarded = request.headers?.["x-forwarded-for"];
+    if (typeof forwarded === "string" && forwarded.length <= 1_024) {
+      const hops = forwarded.split(",");
+      const lastHop = hops[hops.length - 1]?.trim();
+      if (lastHop !== undefined && lastHop !== "" && isIP(lastHop) !== 0) return lastHop;
+    }
+  }
+  const socketAddress = request.socket?.remoteAddress;
+  return typeof socketAddress === "string" && socketAddress !== "" ? socketAddress : "unknown";
+}
+
+/** One-way fingerprint: the raw credential is never stored in the limiter map. */
+export function tokenFingerprint(accessToken: string): string {
+  return createHash("sha256").update(accessToken, "utf8").digest("base64url").slice(0, 22);
+}
+
+export type AuthenticatedRequest = {
+  readonly headers?: { readonly authorization?: unknown; readonly "x-forwarded-for"?: unknown };
   readonly socket?: { readonly remoteAddress?: string };
   readonly [authenticatedPrincipalKey]?: AuthenticatedPrincipal;
 };
