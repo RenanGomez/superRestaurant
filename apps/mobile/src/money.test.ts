@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
 
-import { formatMinorAmount, formatMinorUnitsInput, isRenderableMinorAmount, parseMinorUnitsInput, renderMinorAmount } from "./money.js";
+import {
+  FRACTION_DIGITS,
+  formatMinorAmount,
+  formatMinorUnitsInput,
+  isRenderableMinorAmount,
+  parseMinorUnitsInput,
+  renderMinorAmount,
+} from "./money.js";
 
 test("renders integer minor units with the currency the contract carries", () => {
   assert.equal(formatMinorAmount(0, "XTS"), "0 u.m. · XTS");
@@ -57,4 +66,56 @@ test("parses and formats editable major-unit inputs without float arithmetic", (
   assert.equal(formatMinorUnitsInput(500, "JPY"), "500");
   assert.equal(formatMinorUnitsInput(-1, "MXN"), null);
   assert.equal(formatMinorUnitsInput(100, "ZZZ"), null);
+});
+
+test("parsing formatting is the identity for every supported currency and safe amount", () => {
+  // A deterministic spread across the boundary, not a random sample: zero, the
+  // smallest unit, a whole major unit, the largest countable minor amount and
+  // points around them. Nothing here depends on float rounding.
+  const amounts = [
+    0, 1, 9, 10, 99, 100, 101, 999, 1_000, 12_345, 999_999, 123_456_789, 4_000_000_000_000_000,
+    Number.MAX_SAFE_INTEGER,
+  ] as const;
+  for (const currency of Object.keys(FRACTION_DIGITS)) {
+    for (const amount of amounts) {
+      const formatted = formatMinorUnitsInput(amount, currency);
+      assert.notEqual(formatted, null, `${amount} ${currency} should format`);
+      assert.equal(
+        parseMinorUnitsInput(formatted as string, currency),
+        amount,
+        `${amount} ${currency} round trip through ${JSON.stringify(formatted)}`,
+      );
+    }
+  }
+});
+
+test("money refuses the unsafe boundary and unsupported numeric text instead of approximating", () => {
+  // One past the largest exactly representable integer is not money.
+  assert.equal(formatMinorUnitsInput(Number.MAX_SAFE_INTEGER + 1, "XTS"), null);
+  assert.equal(formatMinorUnitsInput(Number.MAX_SAFE_INTEGER + 2, "MXN"), null);
+  // Parsing a value that would overflow the safe range fails closed, not rounds.
+  assert.equal(parseMinorUnitsInput("90071992547409.92", "MXN"), null);
+  // Negatives, exponents and other numeric notations are not editable money.
+  for (const text of ["-1", "-0.01", "1e3", "1E3", "0x10", "Infinity", "NaN", "+5", "1_000"]) {
+    assert.equal(parseMinorUnitsInput(text, "MXN"), null, text);
+  }
+});
+
+test("mobile and web agree on the minor-unit scale for shared currencies", () => {
+  // Two clients that disagree on a currency's scale read the same integer as
+  // different money. The web table is the source this app must not drift from;
+  // `XTS` is the synthetic test currency mobile adds and web never ships.
+  const webSource = readFileSync(
+    path.join(process.cwd(), "..", "..", "apps", "web", "src", "lib", "money-scale.ts"),
+    "utf8",
+  );
+  const webScale = new Map<string, number>();
+  for (const match of webSource.matchAll(/\b([A-Z]{3}):\s*(\d+)/gu)) {
+    webScale.set(String(match[1]), Number(match[2]));
+  }
+  assert.ok(webScale.size > 0, "the web scale table should be readable");
+  for (const [currency, digits] of webScale) {
+    assert.equal(FRACTION_DIGITS[currency], digits, `${currency} scale drifted from web`);
+  }
+  assert.equal(FRACTION_DIGITS["XTS"], 2);
 });

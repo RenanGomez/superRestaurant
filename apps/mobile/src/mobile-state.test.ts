@@ -7,6 +7,7 @@ import {
   activeOrdersReadTarget,
   activeScope,
   canReadBranchData,
+  canReadOperationalData,
   canSubmitMobilePayment,
   contextReadTarget,
   failureMessage,
@@ -882,6 +883,99 @@ test("selecting a branch clears any pending revalidation state", () => {
   assert.equal(selecting.revalidating, false);
   assert.equal(selecting.revalidationFailure, undefined);
   assert.equal(canReadBranchData(selecting), false);
+});
+
+test("an empty or closed shift list is explicit and blocks operational reads", () => {
+  // `GET /shifts/active` lists only open periods, and an empty list is a real
+  // state: the branch has nothing open and must be told so, not shown a blank
+  // screen. The shift screen renders its «Sin turno abierto» block for exactly
+  // this state (`src/ui/shift-screen.tsx`); the state below is what feeds it.
+  const emptyList = parseOperationalShiftListV1(operationalShiftListBody(scopeA, { shifts: [] }));
+  assert.ok(emptyList !== undefined);
+  assert.deepEqual(emptyList.shifts, []);
+
+  const attempt = nextAttempt();
+  const empty = apply(
+    signedIn(),
+    { scope: scopeA, type: "branchRequested" },
+    ...authorized(contextA),
+    { attempt, scope: scopeA, type: "shiftsLoading" },
+    { attempt, list: emptyList, scope: scopeA, type: "shiftsLoaded" },
+  );
+  assert.equal(mobileScreen(empty), "shifts", "no shift is chosen, so the shift screen stays");
+  assert.equal(canReadBranchData(empty), true, "the branch itself is confirmed");
+  assert.equal(canReadOperationalData(empty), false, "nothing operational opens without a shift");
+  assert.equal(empty.shifts.status, "ready", "an empty answer is ready, not loading forever");
+  assert.deepEqual(empty.shifts.value?.shifts, []);
+
+  // A closed shift cannot arrive through this contract at all; the shared parser
+  // refuses it, so the app never renders a non-open period as selectable.
+  assert.equal(parseOperationalShiftListV1(operationalShiftListBody(scopeA, { status: "closed" })), undefined);
+});
+
+test("a payment submission cannot start twice and only accepts its own receipt", () => {
+  const checkout = parseCheckoutOrderSummaryV1(checkoutOrderSummaryBody(scopeA));
+  const cashQuote = parseCashPaymentQuoteV1(cashPaymentQuoteBody(scopeA));
+  const receipt = parsePaymentCollectionSummaryV1(paymentCollectionSummaryBody(scopeA));
+  assert.ok(checkout !== undefined && cashQuote !== undefined && receipt !== undefined);
+
+  const checkoutAttempt = nextAttempt();
+  const quoted = apply(
+    onBranchA(),
+    { orderId: FIXTURE_ORDER, type: "paymentOpened" },
+    { attempt: checkoutAttempt, orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentCheckoutLoading" },
+    { attempt: checkoutAttempt, checkout, scope: scopeA, type: "paymentCheckoutLoaded" },
+    { patch: { receivedInput: "200.00" }, type: "paymentFieldChanged" },
+  );
+  const quoteAttempt = nextAttempt();
+  const ready = apply(
+    quoted,
+    { attempt: quoteAttempt, orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentQuoteLoading" },
+    { attempt: quoteAttempt, quote: cashQuote, scope: scopeA, type: "paymentQuoteLoaded" },
+  );
+  assert.equal(canSubmitMobilePayment(ready.payment), true, "the server quote authorizes one submit");
+
+  const started = apply(ready, { orderId: FIXTURE_ORDER, type: "paymentSubmitStarted" });
+  assert.equal(started.payment.submission.status, "sending");
+  assert.equal(canSubmitMobilePayment(started.payment), false, "no submit while one is in flight");
+
+  // A second start while `sending` is a no-op that changes no identity.
+  const identity = {
+    amountInput: started.payment.amountInput,
+    method: started.payment.method,
+    orderId: started.payment.orderId,
+  };
+  const secondStart = apply(started, { orderId: FIXTURE_ORDER, type: "paymentSubmitStarted" });
+  assert.equal(secondStart, started, "a second start must not re-open the submission");
+  assert.deepEqual({
+    amountInput: secondStart.payment.amountInput,
+    method: secondStart.payment.method,
+    orderId: secondStart.payment.orderId,
+  }, identity);
+  // Editing fields mid-flight is refused too, so the command cannot change after
+  // it was sent.
+  assert.equal(apply(started, { patch: { amountInput: "1.00" }, type: "paymentFieldChanged" }), started);
+
+  const collected = apply(started, { receipt, scope: scopeA, type: "paymentCollected" });
+  assert.equal(collected.payment.submission.status, "collected");
+  assert.equal(collected.payment.submission.receipt, receipt);
+
+  // A duplicate receipt after collection, or a late failure, changes nothing.
+  assert.equal(apply(collected, { receipt, scope: scopeA, type: "paymentCollected" }), collected);
+  assert.equal(
+    apply(collected, { failure: "network", orderId: FIXTURE_ORDER, scope: scopeA, type: "paymentSubmitFailed" }),
+    collected,
+  );
+
+  // A receipt for another branch or another order is ignored, never applied.
+  const foreignScopeReceipt = parsePaymentCollectionSummaryV1(paymentCollectionSummaryBody(scopeB));
+  assert.ok(foreignScopeReceipt !== undefined);
+  assert.equal(apply(started, { receipt: foreignScopeReceipt, scope: scopeB, type: "paymentCollected" }), started);
+  const otherOrderReceipt = parsePaymentCollectionSummaryV1(paymentCollectionSummaryBody(scopeA, {
+    orderId: "c0000000-0000-4000-8000-0000000000ff",
+  }));
+  assert.ok(otherOrderReceipt !== undefined);
+  assert.equal(apply(started, { receipt: otherOrderReceipt, scope: scopeA, type: "paymentCollected" }), started);
 });
 
 test("payment collection tracks server checkout, quote, methods, success and failures without revoking branch", () => {
