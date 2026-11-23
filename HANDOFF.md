@@ -1,5 +1,15 @@
 # HANDOFF
 
+## m2-test-sync-merge-matrix — 2026-11-23 (REVIEW local)
+
+- **Tarea y alcance (nivel B):** pruebas exhaustivas de la matriz de conflictos §4.2 sobre `packages/domain/src/sync-merge.ts`, sin modificarlo.
+- **Hallazgo:** `packages/domain/src/sync-merge.test.ts` ya existía en `main` (PR #36) con las 15 filas aplicables cubiertas y el script `test` ya ejecutaba `sync-merge.test.js`; no hizo falta tocar `packages/domain/package.json` ni `sync-merge.ts`. No se encontraron bugs en el motor.
+- **Archivo modificado:** `packages/domain/src/sync-merge.test.ts` — se añadieron 3 pruebas (22/22, antes 19/19):
+  - Fila 12 de §4.2 (descuento/cortesía autorizado no excluyente): `accepted` sólo con `discountPolicy.allowStacking` de servidor y `baseVersion` vigente; `baseVersion` atrasado o stacking no permitido → `manual_review` (`CONCURRENT_DISCOUNT_CONFLICT`), sin LWW.
+  - Invariantes monetarios: totales exactos en unidad menor con cantidad/tax/descuento/propina/entrega (`gross 10000`, `tax 1600`, `total 10616`, `payable 11316`), `Number.isSafeInteger` en cada monto, descuento mayor al subtotal → `rejected` (`DISCOUNT_EXCEEDS_AMOUNT`), `Money` fraccionario rechazado y línea en moneda distinta a la orden falla cerrado con `InvalidSyncMergeInputError`.
+  - Independencia de `occurredAt` (reloj 1999 vs 2099) extendida a `OrderItem` (`CONCURRENT_ORDER_ITEM_MODIFICATION`), `CashMovement` (`CASH_BALANCE_IMPOSSIBLE`) y tombstone de `DiningTable` (`TOMBSTONE_RESURRECTION_BLOCKED`).
+- **Verificación:** `pnpm --filter @super-restaurant/domain lint` (exit 0), `typecheck` (exit 0) y `test` (exit 0, 22/22). Sin cambios SQL ni interacción remota; commit local sin push por instrucción explícita de la tarea.
+
 ## m2-sync-merge-domain — 2026-11-23 (REVIEW local)
 
 - **Ronda 1 revisión nivel A (PR #36, P2-1 a P2-5 + P3 cerrados):**
