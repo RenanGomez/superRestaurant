@@ -74,3 +74,18 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 - #60 P3: el rechazo `AUTH_REVOKED`/`DEVICE_REVOKED` no se audita en log estructurado; el token se verifica una vez por evento (N por push); `unknown` de dispositivo se trata como `DEVICE_REVOKED` (usar `DEVICE_UNKNOWN`); `ACTOR_MISMATCH` se reporta como `AUTH_REVOKED`.
 - #60 P3: `sync-push.test.ts` usa mock del ledger; la semántica real la cubre solo la verificación PostgreSQL de CI; falta aserción explícita de grants (`sync_device_state` y `sync_write_allowed` solo para `app_api`).
 - Protocolo pendiente: las migraciones 20261121000100, 20261123000300, 20261123000400 y 20261123000500 no están aplicadas en remoto (rollback-only, dry-run y staging primero, §19.6).
+
+## PR #62 (almacén cifrado web offline) — P2/P3
+
+- P2: el protocolo de pestaña obsoleta (STORAGE_COMMIT_FAILED → descartar motor, recargar, reintentar con la misma key) depende del llamador; falta prueba a nivel de motor y elección de líder o serialización entre motores antes de activar offline.
+- P2: faltan rotación de clave (`keyVersion`), purga al cerrar sesión o AUTH_REVOKED, y `restaurantId`/`branchId` en la AAD como defensa en profundidad; la clave no extraíble vive en el mismo IndexedDB y no protege frente a XSS.
+- P3: `sync-transport` sin timeout por defecto cuando `timeoutMs` es 0 o ausente (proponer 30 s); sin respeto de `Retry-After` en 429/503.
+- P3: los archivos del PR quedaron en CRLF; normalizar a LF. Falta verificación en navegador real del almacén IndexedDB.
+
+## PR #63 (banner y cola offline mobile) — P2/P3
+
+- P2: verificación visual NO realizada: el harness móvil (`apps/mobile/harness`) no simula conectividad offline ni cola, y `expo-sqlite` no está en el entorno de bundle web. Pendiente en dispositivo/emulador o ampliando el harness antes de activar offline (puerta 5 de §19.6).
+- P3: la prueba de doble disparo cubre el helper y el motor, no el componente (guard por ref y clave en `App` sin test de UI).
+- P3: se eliminó el reintento por ítem de la cola; queda solo "reintentar todo". Implementar retry por evento si se necesita.
+- P3: `navigator.onLine` puede no existir en React Native; verificar en runtime móvil que el banner llegue a mostrar "Sin conexión".
+- P3: `lastConfirmedSyncAt` usa la hora del dispositivo.
