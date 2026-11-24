@@ -28,3 +28,8 @@ revisa esta lista al final del loop.
 - 2026-11-23 · Triage Ola 0 (#41): F2-02, F2-04, F2-10, anexo TODO:112 y D4/D5 pasan a REVIEW segun docs/agentic/audit-fase2-2026-11-23.md y blocked-fase2-2026-11-23.md; D4/D5 se cierran con Playwright local + PG17, sin fixtures remotas; `legacyAddressInstructions` queda deprecado de solo lectura en v1.0. DONE exige verificacion visual (Ola 1.3).
 - 2026-11-23 · POST /sync omite eventos reintentables en la respuesta (el motor ya reintenta eventos sin resultado); no se amplia el contrato.
 - 2026-11-23 · Revision cruzada de #42 (printing, B) y #44 (tests mobile, C) por subagente Claude `reviewer` como respaldo (ao review sin veredicto): ambos APROBAR, sin P1/P2. Tambien las rondas de #39 fueron Claude-only.
+
+## Puente runtime mobile (m2-mobile-runtime-bridge)
+
+- Pregunta: como conectar la barra de sync mobile con la cola local real (sync-store cifrado) y el transporte. El puente web (PR #70) usa `OfflinePosPort` + `DeviceSyncEngine`; mobile aun no tiene equivalente.
+- Decision conservadora aplicada: replicar el patron del puente web (puerto + engine + transporte con timeout, aislamiento por restaurante/sucursal/dispositivo, purga solo sin eventos sin confirmar) en una tarea propia nivel A, tras el cierre de v1.0. Sin verificacion en dispositivo real en este entorno.
