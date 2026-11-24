@@ -71,6 +71,18 @@ import { WebIndexedDbSyncStorage } from "./sync-store";
 /** Default IndexedDB database name; tests and secondary tabs may override it. */
 export const WEB_SYNC_DATABASE_NAME = "sr_sync_v1";
 
+/**
+ * The durable outbox is bound to `(actorId, scope)`, not just to the browser:
+ * a different actor signing in on the same installation must never open the
+ * previous actor's encrypted store. The suffix is a non-reversible hash so the
+ * database name does not expose the Supabase user id.
+ */
+export function syncDatabaseNameForActor(deviceId: string, actorId: string | undefined): string {
+  if (actorId === undefined || !isSyncId(actorId)) return WEB_SYNC_DATABASE_NAME;
+  const suffix = stableEntityId([deviceId, actorId]).replace(/-/gu, "").slice(0, 16);
+  return `${WEB_SYNC_DATABASE_NAME}_${suffix}`;
+}
+
 export interface WebSyncBridgeOpenOptions {
   /** Local device identity (UUID/ULID). One engine per device. */
   readonly deviceId: string;
@@ -248,7 +260,7 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
   let storage = options.storage;
   if (storage === undefined) {
     ownedStorage = await WebIndexedDbSyncStorage.open(options.deviceId, {
-      databaseName: options.databaseName ?? WEB_SYNC_DATABASE_NAME,
+      databaseName: options.databaseName ?? syncDatabaseNameForActor(options.deviceId, options.actorId),
     });
     storage = ownedStorage;
   }
@@ -332,6 +344,18 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
       syncing = true;
       notify();
       try {
+        if (options.actorId !== undefined) {
+          // Defence in depth for a shared/legacy store: never hand this actor's
+          // token a batch that contains another actor's unconfirmed evidence.
+          const pending = await engine.getOutbox(scope);
+          const foreign = pending.filter(
+            (entry) => !isTerminalState(entry.localState) && entry.actorId !== options.actorId,
+          );
+          if (foreign.length > 0) {
+            connectivityRef.current = connectivityRef.current === "offline" ? "offline" : "degraded";
+            return;
+          }
+        }
         const result = await engine.sync(scope);
         if (result.push.revoked || result.pull.status === "revoked") {
           connectivityRef.current = "sync_blocked";

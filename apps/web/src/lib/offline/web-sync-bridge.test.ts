@@ -6,7 +6,7 @@ import { SyncTransportError, type SyncPushRequest, type SyncTransportPort } from
 import { parseSyncScopeV1, type BranchScope } from "@super-restaurant/shared-types";
 
 import { WebIndexedDbSyncStorage } from "./sync-store.js";
-import { openWebSyncBridge, stableEntityId } from "./web-sync-bridge.js";
+import { openWebSyncBridge, stableEntityId, syncDatabaseNameForActor } from "./web-sync-bridge.js";
 
 const device = "00000000-0000-4000-8000-000000000001";
 const actor = "00000000-0000-4000-8000-000000000002";
@@ -268,8 +268,44 @@ test("un fallo de escritura transitorio se reintenta con la misma key sin cuaren
   assert.ok(retried?.eventId);
 });
 
-test("stableEntityId es determinista para la misma intención", () => {
-  const first = stableEntityId([restaurant, branchA, "order_create", "same-key"]);
+test("cambiar de actor en el mismo almacén no drena eventos ajenos", async () => {
+  const otherActor = "00000000-0000-4000-8000-000000000003";
+  const factory = new IDBFactory();
+  const sharedStorage = await openStorage(factory, "actor-binding");
+  const transport = recordingTransport();
+
+  const first = await openWebSyncBridge({
+    actorId: actor,
+    deviceId: device,
+    ids: idGenerator(),
+    storage: sharedStorage,
+    transport,
+  });
+  assert.equal((await first.commitLocalOperation(commitInput(scopeA, "owned-by-first-actor")))?.committed, true);
+
+  // A different actor signs in on the same browser and receives the same injected
+  // store (legacy/shared case): its token must not push the first actor's evidence.
+  const second = await openWebSyncBridge({
+    actorId: otherActor,
+    deviceId: device,
+    ids: idGenerator(),
+    storage: sharedStorage,
+    transport,
+  });
+  await second.syncNow(scopeA);
+  assert.deepEqual(transport.keys, []);
+  assert.equal(second.getSnapshot(scopeA).events[0]?.localState, "pending");
+
+  // Production stores are also separate per actor, so the foreign evidence is not
+  // even readable after the account switch.
+  assert.notEqual(
+    syncDatabaseNameForActor(device, actor),
+    syncDatabaseNameForActor(device, otherActor),
+  );
+  assert.match(syncDatabaseNameForActor(device, actor), /^sr_sync_v1_[0-9a-f]{16}$/u);
+});
+
+test("stableEntityId es determinista para la misma intención", () => {  const first = stableEntityId([restaurant, branchA, "order_create", "same-key"]);
   const second = stableEntityId([restaurant, branchA, "order_create", "same-key"]);
   const other = stableEntityId([restaurant, branchB, "order_create", "same-key"]);
   assert.equal(first, second);
