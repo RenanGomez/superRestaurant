@@ -109,3 +109,15 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 
 - P3: falta prueba KDS explícita de idempotencyKey estable tras push fallido y de error IO transitorio sin cuarentena (hoy cubierto por sync-engine); sin prueba de `clearKdsCache`/`clearKdsSyncState`.
 - Pendiente: verificación visual de KDS offline en navegador (desktop y 390x844).
+
+## PR #70 puente offline web (m2-web-runtime-bridge)
+
+- P2 resueltos en el PR: carrera release/commit (flag `closing`, relectura del outbox antes de purgar), actor ajeno (`ACTOR_MISMATCH`), tamano por bytes y content-length, timeout 30 s, Sec-Fetch-Site/content-type, pruebas de ruta.
+- P2: el proxy solo compara `body.scope` con la cookie; no valida `restaurantId`/`branchId` por evento (depende de `PUSH_SCOPE_VIOLATION` del API). Validar en el proxy o documentarlo.
+- P3: StrictMode abre/libera el bridge a la vez (serializar por device); `entityType`/`operation` sin tipar a `SyncEntityTypeV1`/`SyncOperationV1`; `release` cuenta `rejected` como confirmado y borra su evidencia; `getSession` vs `getUser`; catch vacio en el mount.
+- Pendiente: verificacion en navegador real (desktop y 390x844); e2e contra el puente real (m2-e2e-offline-web, rehecha tras cerrar #69).
+
+## PR #71 conflictos de sync (m2-api-sync-conflicts-tests)
+
+- P2: `two_devices_add_lines` solo prueba el ledger (el total lo calcula el test, no el servidor); `cancel_vs_kds_preparing` solo prueba monotonia de version (renombrar o probar cancelacion real); `concurrent_same_line_edit` sin dos dispositivos con `baseVersion` divergente; ningun push HTTP produce `manual_review` (se abre con SQL directo); la prueba `test:sync-conflicts:local` no esta enganchada a CI/pg-verify.
+- P3: `assertSyncConflictScenariosCovered` depende de `cover()` autodeclarado; tautologia en tombstone 11f; 11e prueba aislamiento con tipo no soportado; `SYNC_CURSOR_SECRET` del test vacuo y sobrescrito; `bootstrapTransactionalHttpApp` duplica `bootstrapHttpApp`.

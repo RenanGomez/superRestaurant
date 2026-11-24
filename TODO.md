@@ -1,5 +1,6 @@
 # TODO
 
+- [ ] **REVIEW · A/B/C · fase3-offline-m2-20261123** — Nota 2026-11-23: integrados en main (CI verde, revision cruzada sin P1) sync push/pull, conflictos multi-dispositivo, almacen cifrado web/mobile, KDS cache, banner/cola, puente runtime web (#70) y pruebas de conflictos (#71). REVIEW porque falta verificacion visual offline (desktop y 390x844) y prueba con dos dispositivos reales. BLOCKED parcial (nota): migraciones remotas 20261121000100 y 20261123000300..600 sin aplicar (protocolo §19.6 pendiente). IN_PROGRESS: m2-e2e-offline-web contra el puente real (w82); siguiente m2-docs-offline-matrix-signoff y puente mobile (DECISIONS_PENDING).
 - [ ] **REVIEW · A · m1-k0b2-customer-open-captures** — correcciones ronda 1 PR #26 aplicadas localmente (deep link sin auto-claim, validación UUID, detalle ausente, `rejected` → 400, invariantes SQL cross-tenant/expiración y grants `app_api`); puertas globales y PG17 desde cero + `supabase/tests` 100 % verdes. Ver HANDOFF.
 
 - [ ] **REVIEW · A · m1-pg-verify-clean** — cinco invariantes SQL y flujo HTTP 7/7 verdes localmente; tolerancias retiradas. El PR #19 pasó pg-verify en `114b91e4`; pendiente push de los ajustes y verificar CI en la nueva cabeza. P2 del verificador histórico registrado en `docs/agentic/debt.md`.
