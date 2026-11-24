@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { OfflineRuntimeMount } from "../../components/offline-runtime-mount";
 import { SyncStatusBar } from "../../components/sync-status-bar";
 import { BRANCH_PREFERENCE_COOKIE, findMembership, parseBranchPreference } from "../../lib/memberships";
 import { getRequestMemberships, getRequestSession, getRequestSystemAdminAccess, getRequestUser } from "../../lib/request-context";
@@ -53,6 +54,7 @@ export default async function AppLayout({ children }: { readonly children: React
   return (
     <div className="flex min-h-screen bg-bg">
       <GlobalShortcuts />
+      <OfflineRuntimeMount scope={membership?.scope} actorId={user.id} />
       <AppNav canAccessSystemAdmin={canAccessSystemAdmin} canReadReports={canReadReports} branchName={membership?.branchName} />
 
       <div className="flex min-w-0 flex-1 flex-col pb-[calc(4rem+env(safe-area-inset-bottom))] sm:pb-0">

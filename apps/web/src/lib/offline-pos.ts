@@ -91,7 +91,12 @@ export interface OfflinePosCapabilityResult {
   readonly message: string;
 }
 
-/** The atomic commit contract that only `m2-web-local-storage-crypto` can fulfil. */
+/**
+ * The atomic commit contract the registered bridge fulfils. `entityType`, `operation`,
+ * `entityId`, `payload` and `actorId` are optional so a caller may omit them when the
+ * bridge can derive a stable intent; a real screen should pass the exact envelope data
+ * so the queued event is the same one the server would have received online.
+ */
 export interface OfflinePosCommitInput {
   readonly kind: "order_create" | "order_add_line" | "cash_collect" | "ticket_print";
   readonly scope: BranchScope;
@@ -99,6 +104,12 @@ export interface OfflinePosCommitInput {
   readonly idempotencyKey: string;
   readonly occurredAt: string;
   readonly summaryLabel?: string;
+  readonly actorId?: string;
+  readonly entityType?: string;
+  readonly operation?: string;
+  readonly entityId?: string;
+  readonly payload?: unknown;
+  readonly baseVersion?: number | null;
 }
 
 export interface OfflinePosCommitOutcome {
