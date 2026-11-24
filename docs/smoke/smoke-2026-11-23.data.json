@@ -1,0 +1,90 @@
+{
+  "sub": "Ronda 3 (2026-11-23): offline M2 integrado en main. NADA de lo offline se ha verificado en navegador ni con dispositivos reales; las migraciones nuevas no estan aplicadas en remoto.",
+  "sections": [
+    {
+      "t": "0. Preparacion",
+      "items": [
+        {
+          "id": "o-prep",
+          "h": "Levantar servidores y sesion E2E",
+          "s": [
+            "Ejecuta start-local.bat",
+            "Inicia sesion con toolsagenticlocal-serverse2e-auth.bat",
+            "Abre la consola (F12)"
+          ],
+          "e": "Web y API arriba, consola sin errores rojos.",
+          "block": "Migraciones 20261121000100 y 20261123000300/400/500/600 sin aplicar en remoto; sync pull/review y SYNC_CURSOR_SECRET requieren esa migracion y el secreto definido."
+        }
+      ]
+    },
+    {
+      "t": "1. Offline web (puente real, #70)",
+      "items": [
+        {
+          "id": "o-web-bridge",
+          "h": "Operar sin conexion en POS web",
+          "s": [
+            "Entra a /app y corta la red del navegador",
+            "Crea un pedido y cobra en efectivo",
+            "Revisa /app/sync (cola local)",
+            "Restablece la red"
+          ],
+          "e": "El pedido se encola, la barra muestra pendientes y al reconectar se envia una sola vez; nada se duplica."
+        },
+        {
+          "id": "o-web-iso",
+          "h": "Aislamiento por usuario/sucursal",
+          "s": [
+            "Con eventos pendientes cierra sesion",
+            "Entra con otro usuario o sucursal"
+          ],
+          "e": "No se ven ni se envian eventos del otro actor; no se purga sin confirmar."
+        }
+      ]
+    },
+    {
+      "t": "2. KDS y mobile offline",
+      "items": [
+        {
+          "id": "o-kds",
+          "h": "KDS offline",
+          "s": [
+            "Abre KDS, corta red, avanza una tarjeta",
+            "Reconecta"
+          ],
+          "e": "Avance en cola y se aplica al reconectar."
+        },
+        {
+          "id": "o-mobile",
+          "h": "Mobile: banner y cola de sync",
+          "s": [
+            "Abre la app mobile sin red",
+            "Crea pedido/cobro en efectivo permitido"
+          ],
+          "e": "Banner con pendientes; el resto se bloquea con explicacion. Requiere dispositivo real."
+        }
+      ]
+    }
+  ],
+  "r2": {},
+  "changes": [
+    {
+      "h": "Offline M2 integrado en main",
+      "p": "#56-#60 sync push, #62 almacen web cifrado, #63 POS offline efectivo, #65 pull por cursor y revision manual, #66 almacen mobile cifrado, #67 KDS offline, #70 puente runtime web, #71 pruebas de conflictos. CI verde y revision cruzada sin P1. Sin verificacion visual."
+    },
+    {
+      "h": "Otros integrados hoy",
+      "p": "Impresion Bluetooth, tests mobile, fix SQL v3 pizza v2, rate limits del login, runbooks de deploy/backup/rollback."
+    }
+  ],
+  "decisions": [
+    {
+      "h": "Aplicar migraciones en remoto",
+      "p": "Autorizado por §19.6: sonda rollback-only, staging, dry-run, postcheck. PENDIENTE de ejecutar. Definir SYNC_CURSOR_SECRET en todas las instancias antes."
+    },
+    {
+      "h": "Puente runtime mobile",
+      "p": "Pendiente; ver docs/agentic/DECISIONS_PENDING.md. Decision conservadora: replicar el patron del puente web en tarea nivel A."
+    }
+  ]
+}
