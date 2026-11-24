@@ -305,6 +305,90 @@ test("cambiar de actor en el mismo almacén no drena eventos ajenos", async () =
   assert.match(syncDatabaseNameForActor(device, actor), /^sr_sync_v1_[0-9a-f]{16}$/u);
 });
 
+test("release sella el almacén y rechaza commits posteriores con STORAGE_CLOSED", async () => {
+  const factory = new IDBFactory();
+  let purgeCalls = 0;
+  const storage = await openStorage(factory, "release-closing");
+  const bridge = await openWebSyncBridge({
+    actorId: actor,
+    deviceId: device,
+    ids: idGenerator(),
+    purgeStore: () => {
+      purgeCalls += 1;
+      return Promise.resolve();
+    },
+    storage,
+    transport: recordingTransport(),
+  });
+
+  const releasing = bridge.release();
+  const blocked = await bridge.commitLocalOperation(commitInput(scopeA, "after-release"));
+  assert.equal(blocked?.committed, false);
+  assert.equal(blocked?.code, "STORAGE_CLOSED");
+
+  const outcome = await releasing;
+  assert.equal(outcome.purged, true);
+  assert.equal(purgeCalls, 1);
+});
+
+test("release relee el outbox y no borra si aparece evidencia justo antes", async () => {
+  const factory = new IDBFactory();
+  const real = await openStorage(factory, "release-reread");
+  let inRelease = false;
+  let releaseReads = 0;
+  const wrapper = {
+    loadState: async (deviceId: string): Promise<unknown> => {
+      const base = await real.loadState(deviceId);
+      if (!inRelease) return base;
+      releaseReads += 1;
+      // First check looks empty; the re-read right before deletion sees the event.
+      return releaseReads === 1 ? { ...(base as Record<string, unknown>), outbox: [] } : base;
+    },
+    persist: (state: Parameters<typeof real.persist>[0]): Promise<void> => real.persist(state),
+  };
+
+  let purgeCalls = 0;
+  const bridge = await openWebSyncBridge({
+    actorId: actor,
+    deviceId: device,
+    ids: idGenerator(),
+    purgeStore: () => {
+      purgeCalls += 1;
+      return Promise.resolve();
+    },
+    storage: wrapper,
+    transport: recordingTransport(),
+  });
+  assert.equal((await bridge.commitLocalOperation(commitInput(scopeA, "race-evidence")))?.committed, true);
+
+  inRelease = true;
+  const outcome = await bridge.release();
+  assert.equal(outcome.purged, false);
+  assert.equal(outcome.retainedUnconfirmed, 1);
+  assert.equal(purgeCalls, 0);
+  assert.equal(releaseReads, 2);
+});
+
+test("un commit con actorId distinto al montado se rechaza sin encolar", async () => {
+  const factory = new IDBFactory();
+  const storage = await openStorage(factory, "actor-mismatch");
+  const bridge = await openWebSyncBridge({
+    actorId: actor,
+    deviceId: device,
+    ids: idGenerator(),
+    storage,
+    transport: recordingTransport(),
+  });
+
+  const rejected = await bridge.commitLocalOperation({
+    ...commitInput(scopeA, "foreign-commit"),
+    actorId: "00000000-0000-4000-8000-000000000099",
+  });
+  assert.equal(rejected?.committed, false);
+  assert.equal(rejected?.code, "ACTOR_MISMATCH");
+  assert.equal(bridge.getSnapshot(scopeA).events.length, 0);
+});
+
 test("stableEntityId es determinista para la misma intención", () => {  const first = stableEntityId([restaurant, branchA, "order_create", "same-key"]);
   const second = stableEntityId([restaurant, branchA, "order_create", "same-key"]);
   const other = stableEntityId([restaurant, branchB, "order_create", "same-key"]);

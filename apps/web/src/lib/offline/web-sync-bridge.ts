@@ -279,6 +279,10 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
   let lastConfirmedSyncAt: string | null = null;
   let syncPromise: Promise<void> | undefined;
   let releasePromise: Promise<WebSyncReleaseOutcome> | undefined;
+  /** Latched at the first synchronous step of `release()`; blocks new commits. */
+  let closing = false;
+  let activeCommits = 0;
+  const commitWaiters: Array<() => void> = [];
 
   const engine = new DeviceSyncEngine({
     clientType: "web_pos",
@@ -385,13 +389,25 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
   };
 
   const commitLocalOperation = async (input: OfflinePosCommitInput): Promise<OfflinePosCommitOutcome | null> => {
+    // `closing` is set synchronously at the start of `release()`, before any await:
+    // nothing can be added to a store that is about to be deleted.
+    if (closing) {
+      return Object.freeze({ code: "STORAGE_CLOSED", committed: false, eventId: null });
+    }
     if (input.deviceId !== options.deviceId) {
       return Object.freeze({ code: "DEVICE_MISMATCH", committed: false, eventId: null });
     }
-    const actorId = input.actorId ?? options.actorId;
-    if (actorId === undefined || !isSyncId(actorId)) {
+    const mountedActor = options.actorId;
+    if (mountedActor === undefined || !isSyncId(mountedActor)) {
       return Object.freeze({ code: "SESSION_REQUIRED", committed: false, eventId: null });
     }
+    // The outbox is bound to the actor this bridge was mounted for. A different
+    // actor is rejected here (and never reaches the durable queue) instead of
+    // being pushed later with someone else's token.
+    if (input.actorId !== undefined && input.actorId !== mountedActor) {
+      return Object.freeze({ code: "ACTOR_MISMATCH", committed: false, eventId: null });
+    }
+    const actorId = mountedActor;
 
     const base = COMMIT_KINDS[input.kind];
     const entityType = input.entityType ?? base?.entityType;
@@ -407,6 +423,7 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
       ...(input.summaryLabel === undefined ? {} : { summaryLabel: input.summaryLabel }),
     });
 
+    activeCommits += 1;
     try {
       const entry = await engine.enqueue({
         actorId,
@@ -431,6 +448,11 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
       await refresh(input.scope);
       const code = error instanceof SyncEngineError ? error.code : "STORAGE_COMMIT_FAILED";
       return Object.freeze({ code, committed: false, eventId: null });
+    } finally {
+      activeCommits -= 1;
+      if (activeCommits === 0) {
+        for (const resume of commitWaiters.splice(0)) resume();
+      }
     }
   };
 
@@ -500,9 +522,23 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
     notify();
   };
 
+  const countUnconfirmed = async (): Promise<number> => {
+    try {
+      const raw = await storage.loadState(options.deviceId);
+      const outbox = raw !== null && typeof raw === "object" && Array.isArray((raw as { outbox?: unknown }).outbox)
+        ? (raw as { outbox: readonly { localState: OutboxState }[] }).outbox
+        : [];
+      return outbox.filter((entry) => !isTerminalState(entry.localState)).length;
+    } catch {
+      return -1;
+    }
+  };
+
   const release = (): Promise<WebSyncReleaseOutcome> => {
     if (releasePromise !== undefined) return releasePromise;
     const run = (async (): Promise<WebSyncReleaseOutcome> => {
+      // First synchronous statement: no new commit may enter the store from here on.
+      closing = true;
       if (syncPromise !== undefined) {
         try {
           await syncPromise;
@@ -510,16 +546,15 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
           // The final state below is read from disk, not from the failed push.
         }
       }
-      let unconfirmed = -1;
-      try {
-        const raw = await storage.loadState(options.deviceId);
-        const outbox = raw !== null && typeof raw === "object" && Array.isArray((raw as { outbox?: unknown }).outbox)
-          ? (raw as { outbox: readonly { localState: OutboxState }[] }).outbox
-          : [];
-        unconfirmed = outbox.filter((entry) => !isTerminalState(entry.localState)).length;
-      } catch {
-        unconfirmed = -1;
+      // Let a commit that started before the latch finish, then read the outbox.
+      if (activeCommits > 0) {
+        await new Promise<void>((resolve) => commitWaiters.push(resolve));
       }
+      let unconfirmed = await countUnconfirmed();
+
+      // Re-read immediately before the destructive step: a commit that persisted
+      // between the first check and now must win, never be silently deleted.
+      if (unconfirmed === 0) unconfirmed = await countUnconfirmed();
 
       // Only a fully reconciled store may be deleted: anything not confirmed is evidence.
       if (unconfirmed === 0) {
