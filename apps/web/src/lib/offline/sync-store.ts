@@ -33,19 +33,43 @@ function aad(deviceId: string, keyVersion: number, generation: number): Uint8Arr
  */
 export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
   private generation: number | null = null;
-  private constructor(private readonly deviceId: string, private readonly db: IDBDatabase, private readonly crypto: Crypto, private readonly locks: LockManager) {}
+  private constructor(
+    private readonly deviceId: string,
+    private readonly db: IDBDatabase,
+    private readonly crypto: Crypto,
+    private readonly locks: LockManager,
+    private readonly factory: IDBFactory,
+    private readonly databaseName: string,
+  ) {}
 
   public static async open(deviceId: string, options: { databaseName?: string; indexedDB?: IDBFactory; crypto?: Crypto; locks?: LockManager } = {}): Promise<WebIndexedDbSyncStorage> {
     const factory = options.indexedDB ?? globalThis.indexedDB;
     const crypto = options.crypto ?? globalThis.crypto;
     const locks = options.locks ?? globalThis.navigator?.locks;
+    const databaseName = options.databaseName ?? "sr_sync_v1";
     if (!deviceId || !factory || !crypto?.subtle || !locks) throw new WebSyncStorageError("ENCRYPTION_UNAVAILABLE");
-    const open = factory.open(options.databaseName ?? "sr_sync_v1", 1);
+    const open = factory.open(databaseName, 1);
     open.onupgradeneeded = () => { for (const name of [META, SLOTS, KEYS]) if (!open.result.objectStoreNames.contains(name)) open.result.createObjectStore(name); };
     const db = await request(open);
-    return new WebIndexedDbSyncStorage(deviceId, db, crypto, locks);
+    return new WebIndexedDbSyncStorage(deviceId, db, crypto, locks, factory, databaseName);
   }
   public close(): void { this.db.close(); }
+
+  /**
+   * Best-effort destructive purge used only when the caller proved the outbox has no
+   * unconfirmed event. The connection is closed first; a blocked deletion (another
+   * tab still holds the database) is reported as a failure so the caller never claims
+   * the local store was cleared when it was not.
+   */
+  public purge(): Promise<void> {
+    this.db.close();
+    return new Promise<void>((resolve, reject) => {
+      const deletion = this.factory.deleteDatabase(this.databaseName);
+      deletion.onsuccess = () => resolve();
+      deletion.onerror = () => reject(new WebSyncStorageError("STORAGE_COMMIT_FAILED"));
+      deletion.onblocked = () => reject(new WebSyncStorageError("STORAGE_COMMIT_FAILED"));
+    });
+  }
   private exclusive<T>(work: () => Promise<T>): Promise<T> { return this.locks.request(`sr-sync:${this.deviceId}`, { mode: "exclusive" }, work); }
   private async read<T>(store: string, key: IDBValidKey): Promise<T | undefined> {
     const tx = this.db.transaction(store, "readonly");
