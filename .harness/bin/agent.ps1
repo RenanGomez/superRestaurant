@@ -546,8 +546,9 @@ try {
     $errF = Join-Path $runDir 'dsh-stderr.txt'; $outF = Join-Path $runDir 'dsh-stdout.txt'
     $live = Join-Path $runDir 'live.log'
     $env:NO_COLOR = '1'
-    # BD propia: la app de escritorio de OpenCode migra/limpia la BD compartida (1 GB+) y la CLI se cuelga al arrancar
-    if (-not $env:XDG_DATA_HOME) { $env:XDG_DATA_HOME = Join-Path $HOME '.local\share\opencode-cli' }
+    # BD propia por run: la CLI comparte sesiones si todos los runs usan la misma BD y se filtran
+    # comandos de otros proyectos (visto 2026-11-25). Cada run usa su propio XDG_DATA_HOME.
+    if (-not $env:XDG_DATA_HOME) { $env:XDG_DATA_HOME = Join-Path $runDir 'ocdata' }
     # vigilancia (17-nov-2026: un run se quedó 3 h colgado en el arranque sin error): arranque sin sesión → relanzar;
     # sin actividad stallMin → cortar; total maxMin → cortar. Código 124 = drain lo da por fallido y avisa.
     $bootMin  = if ($cfg.dsh.bootMin)  { [double]$cfg.dsh.bootMin }  else { 2 }
