@@ -514,7 +514,7 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     const command = parseConfirmCommand(input);
     if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
     const response = await this.database.query(
-      "select app_private.confirm_capture_draft_v3($1::uuid, $2::jsonb, null::jsonb, null::jsonb) as result",
+      "select app_private.confirm_capture_draft_v3_with_inventory($1::uuid, $2::jsonb, null::jsonb, null::jsonb) as result",
       [actorId, JSON.stringify(command)],
     );
     if (response.rows.length !== 1) throw unavailable();
@@ -557,7 +557,7 @@ export class PostgresCaptureCreator implements CaptureCreationPort, CaptureAtten
     const command = parseConfirmCommand(input);
     if (!canonicalUuid.test(actorId)) throw new CaptureApplicationError("request");
     const response = await this.database.query(
-      "select app_private.confirm_capture_draft_v3($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb) as result",
+      "select app_private.confirm_capture_draft_v3_with_inventory($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb) as result",
       [actorId, JSON.stringify(command), JSON.stringify(encodeOrderRecord(materialization.order)),
         JSON.stringify(materialization.auditEvents.map(encodeOrderAuditEventRecord))],
     );
@@ -2319,7 +2319,8 @@ function parseOutcome(raw: unknown, scope: BranchScope) {
     if (statusOnly.status === "rejected") throw new CaptureApplicationError("request");
     throw unavailable();
   }
-  const response = exactRecord(raw, ["status", "record"]);
+  const response = exactRecord(raw, ["status", "record"])
+    ?? exactRecord(raw, ["status", "record", "inventory"]);
   if (response === undefined || (response.status !== "applied" && response.status !== "replayed")) throw unavailable();
   try { return { record: decodeCaptureRecord(response.record, scope), replayed: response.status === "replayed" }; }
   catch { throw unavailable(); }

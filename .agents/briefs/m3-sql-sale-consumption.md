@@ -7,8 +7,9 @@ Tiempo estimado: 40 min. Carril SQL: único escritor de `supabase/migrations/**`
 
 ## Alcance
 - Crea: `supabase/migrations/20261126000500_inventory_sale_consumption.sql`, `supabase/tests/inventory_sale_consumption_invariants.sql`.
-- Edita: `apps/api/src/operations/inventory-schema-verification.ts` y `run-inventory-schema-verification.ts` (añadir la migración y el test).
+- Edita: `apps/api/src/operations/inventory-schema-verification.ts` y `run-inventory-schema-verification.ts`. Hoy el verificador ya registra `catalog`, `ledger`, `recipes`, `api-functions` y `purchasing`; añade tu entrada `sale-consumption` sin tocar las existentes (import con `inventorySaleConsumptionInvariantSql`, `if (!names.includes("20261126000500_inventory_sale_consumption.sql")) throw ...`, entrada en `invariants`).
 - Prohibido: editar `confirm_capture_draft_v3` ni `cancel_order` (son migraciones integradas); tocar otras apps; dependencias; remoto; rutas fuera del worktree. Sin commit ni push.
+- Nota: `app_private.inventory_record_movement` conserva `EXECUTE` para `app_api` (lo fija `inventory_ledger_invariants.sql`); úsalo como escritor del ledger.
 
 ## Fuente de verdad
 `docs/adr/ADR-013.md` §2.7, §2.8 y §5 (mapa `m3-map-sale-hooks`). Datos confirmados:

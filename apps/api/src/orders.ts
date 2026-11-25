@@ -86,10 +86,10 @@ const readOrderSql = "select app_private.read_order($1::uuid, $2::uuid, $3::uuid
 const readReceiptDataSql = "select app_private.read_order_receipt_data($1::uuid, $2::uuid, $3::uuid, $4::uuid) as result";
 const readAssignedCourierOrderSql = "select app_private.read_courier_delivery_order($1::uuid, $2::uuid, $3::uuid, $4::uuid) as result";
 const persistOrderSql = "select app_private.persist_order_mutation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
-const cancelOrderItemSql = "select app_private.persist_order_item_cancellation($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
+const cancelOrderItemSql = "select app_private.persist_order_item_cancellation_with_inventory($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
 const createOperationalOrderSql = "select app_private.create_operational_order($1::uuid, $2::uuid, $3::jsonb, $4::jsonb) as result";
 const sendOrderToKitchenSql = "select app_private.send_order_to_kitchen($1::uuid, $2::bigint, $3::jsonb, $4::jsonb) as result";
-const cancelWholeOrderSql = "select app_private.cancel_order($1::uuid, $2::jsonb, $3::jsonb) as result";
+const cancelWholeOrderSql = "select app_private.cancel_order_with_inventory($1::uuid, $2::jsonb, $3::jsonb) as result";
 const recoverKdsSql = "select app_private.recover_kds_events($1::uuid, $2::uuid, $3::uuid, $4::text, $5::bigint, $6::integer) as result";
 const listKdsTicketsSql = "select app_private.list_kds_tickets($1::uuid, $2::uuid, $3::uuid, $4::text) as result";
 
@@ -295,7 +295,8 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
       if (status === "conflict" || status === "forbidden") return Object.freeze({ status });
       throw unavailable();
     }
-    const record = exactRecord(raw, ["schemaVersion", "scope", "status", "order", "version", "kdsEvent"]);
+    const record = exactRecord(raw, ["schemaVersion", "scope", "status", "order", "version", "kdsEvent"])
+      ?? exactRecord(raw, ["schemaVersion", "scope", "status", "order", "version", "kdsEvent", "inventory"]);
     if (record === undefined || own(record, "schemaVersion") !== 1) throw unavailable();
     const status = own(record, "status");
     if (status !== "saved" && status !== "replayed") throw unavailable();
@@ -419,7 +420,8 @@ export class PostgresOrderPersistenceAdapter implements OrderPersistencePort {
       if (status === "conflict" || status === "forbidden" || status === "delivery_active") return Object.freeze({ status });
       throw unavailable();
     }
-    const record = exactRecord(raw, ["schemaVersion", "scope", "status", "order", "version", "refundObligation", "kdsEvents"]);
+    const record = exactRecord(raw, ["schemaVersion", "scope", "status", "order", "version", "refundObligation", "kdsEvents"])
+      ?? exactRecord(raw, ["schemaVersion", "scope", "status", "order", "version", "refundObligation", "kdsEvents", "inventory"]);
     if (record === undefined || own(record, "schemaVersion") !== 1) throw unavailable();
     const status = own(record, "status");
     if (status !== "saved" && status !== "replayed") throw unavailable();

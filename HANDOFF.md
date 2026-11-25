@@ -1,3 +1,12 @@
+## Ola M3 inventario — P1 de #90/#91 y consumo por venta (2026-11-25, nivel A)
+
+- **Fusionado en `main`:** PR #90 (API de insumos/almacenes con 8 funciones `app_private` SECURITY DEFINER y mapeo `23503/23514/42501`) y PR #91 (compras idempotentes por `(restaurante, sucursal, clave)`, `received_by`/`received_device_id`, pruebas de dinero/proveedor ajeno). CI verde; dos revisiones dsh por PR; verificador rollback-only desde cero.
+- **Decisión registrada:** se descartó conceder USAGE/DML directo a `app_api` (rompe el invariante de `app-api-recovery`/`tenancy_memberships_runtime_catalog` y abre lectura cross-tenant); el catálogo escribe por funciones `app_private`, como ADR-013 §13.
+- **Esta rama:** consumo por venta y reverso (`20261126000500`) con `is_default` por sucursal, conjunto de eventos de cancelación (comando + pasos de cocina), reverso con `compensates_movement_id` y skip sin almacén por defecto; envoltorio `20261126000700` para cancelar una línea; cableado en `captures.ts`/`orders.ts` (confirmación, cancelación de línea y de orden).
+- **Verificación:** `verify:inventory-schema:rollback` con 84 migraciones desde cero en verde (catálogo, ledger, recetas, funciones API, compras, consumo y cancelación de línea); `test:http:local` 7/7; typecheck/lint/test API verdes.
+- **Deuda:** el camino `applied` del envoltorio de confirmación se cubre en `m3-int-sale-to-stock`; `app_api` conserva EXECUTE de `inventory_record_movement` hasta los wrappers por operación; P3 de pruebas (aserción débil, contador de movimientos en replay, almacén del reverso si quedó inactivo) en `docs/agentic/debt.md`.
+- **Siguiente acción mínima:** PR + CI del corte de consumo/cableado; luego `m3-api-wire` (montar `ItemsModule` en `app.module.ts` —hoy no está expuesto—, scripts y OpenAPI), y después movimientos, recetas, compras, alertas/costeo, UI y E2E.
+
 ## Cierre de sesion 2026-11-25 (nivel D, orquestador) — parada por contexto
 
 - **Fusionado en `main` durante la sesion:** 17 PRs (#73-#89). Ola 0 completa, M2 cerrado formalmente (`docs/agentic/m2-offline-signoff.md`), dominio de inventario completo (unidades, ledger, costo, recetas), contratos de inventario, catalogo/ledger/recetas SQL y API de insumos y almacenes.
