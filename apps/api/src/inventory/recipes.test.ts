@@ -148,7 +148,14 @@ test("publishRecipe: validates with the shared parser and calls the publisher wi
   const { service, database } = serviceFor();
   const version = await service.publishRecipe(principal, validCommand);
 
-  assert.deepEqual(version, expectedVersion);
+  // The response is built from the command that just committed, not from a second read.
+  assert.deepEqual(version, {
+    restaurantId,
+    recipeId,
+    productId,
+    version: 2,
+    lines: [{ itemId, quantity: 600, unitCode: "g" }],
+  });
 
   const publish = database.queries.find((query) => query.sql.includes("publish_inventory_recipe"));
   assert.deepEqual(publish?.parameters.slice(0, 2), [principal.actorId, restaurantId]);
@@ -158,9 +165,7 @@ test("publishRecipe: validates with the shared parser and calls the publisher wi
     notes: null,
     lines: [{ itemId, quantity: 600, unitCode: "g" }],
   });
-
-  const read = database.queries.find((query) => query.sql.includes("read_inventory_recipe"));
-  assert.deepEqual(read?.parameters, [principal.actorId, restaurantId, recipeId]);
+  assert.equal(database.queries.some((query) => query.sql.includes("read_inventory_recipe")), false);
 });
 
 test("publishRecipe: invalid payloads are request errors and never reach the database", async () => {

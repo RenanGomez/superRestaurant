@@ -82,9 +82,15 @@ export class RecipesService {
     const published = toPublished(rows[0]);
     if (published === undefined) throw unavailable();
 
-    const version = await this.readRecipe(principal, command.restaurantId, published.recipeId);
-    if (version === undefined || version.version !== published.version) throw unavailable();
-    return version;
+    // The published version is the command that just committed; re-reading it in a second
+    // transaction could fail after the commit and provoke a retry that publishes another version.
+    return Object.freeze({
+      restaurantId: command.restaurantId,
+      recipeId: published.recipeId,
+      productId: command.productId,
+      version: published.version,
+      lines: command.lines,
+    });
   }
 
   public async listRecipes(principal: AuthenticatedPrincipal, input: unknown): Promise<RecipeVersionListV1> {
@@ -202,7 +208,7 @@ export class RecipesService {
     } catch (error: unknown) {
       if (error instanceof RecipeApplicationError) throw error;
       const state = sqlState(error);
-      if (state === "23503") throw new RecipeApplicationError("conflict");
+      if (state === "23505" || state === "23503") throw new RecipeApplicationError("conflict");
       if (state === "22000" || state === "23514") throw new RecipeApplicationError("request");
       if (state === "42501") throw new RecipeApplicationError("authorization");
       throw unavailable();
