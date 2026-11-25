@@ -130,7 +130,8 @@ test("purgeForScope drops the scope replica but keeps outbox evidence under a fr
   db.close(); store.close();
 });
 
-test("purgeAll keeps retained outbox evidence when the store cannot distinguish it", async () => {
+test("sign_out with financial evidence degrades purge_all to keep-outbox and keeps the store readable", async () => {
+  assert.equal(decideOfflinePurge({ event: "sign_out", hasFinancialEvidence: true }).action, "purge_replica_keep_outbox");
   const { store } = await setup();
   const evidence = evidenceState();
   await store.persist(evidence);
@@ -144,11 +145,14 @@ test("purgeAll keeps retained outbox evidence when the store cannot distinguish 
   store.close();
 });
 
-test("purgeAll with no evidence wipes stored slots, keys and metadata", async () => {
+test("sign_out without financial evidence purges everything even when a replica exists", async () => {
+  assert.equal(decideOfflinePurge({ event: "sign_out", hasFinancialEvidence: false }).action, "purge_all");
   const { factory, store } = await setup();
-  await store.persist(fixture());
+  const replicaOnly = { ...fixture(), replica: [replicaEntity({ restaurantId: restaurant, branchId: branch }, other)] } as unknown as DurableSyncState;
+  await store.persist(replicaOnly);
   const outcome = await store.purgeAll();
   assert.equal(outcome.wiped, true);
+  assert.equal(outcome.retainedOutboxCount, 0);
   const db = await openDb(factory);
   assert.equal(await req(db.transaction("sr_device_meta").objectStore("sr_device_meta").get(device)), undefined);
   assert.equal(await req(db.transaction("sr_state_slots").objectStore("sr_state_slots").get([device, 0])), undefined);
@@ -297,5 +301,32 @@ test("purgeForScope matches case-insensitive identifiers instead of silently pur
   const loaded = await store.loadState(device) as DurableSyncState;
   assert.equal(loaded.replica.length, 0);
   assert.deepEqual(loaded.outbox, [item]);
+  store.close();
+});
+
+test("lock on an already quarantined store keeps both flags without corrupting the slot", async () => {
+  const { factory, store } = await setup();
+  await store.persist(fixture());
+  await store.quarantine();
+  await store.lock();
+  const db = await openDb(factory);
+  const meta = await req(db.transaction("sr_device_meta").objectStore("sr_device_meta").get(device) as IDBRequest<{ locked: boolean; quarantined: boolean }>);
+  assert.equal(meta.locked, true);
+  assert.equal(meta.quarantined, true);
+  assert.notEqual(await req(db.transaction("sr_state_slots").objectStore("sr_state_slots").get([device, 0])), undefined);
+  db.close();
+  await assert.rejects(store.loadState(device), code("STORAGE_QUARANTINED"));
+  store.close();
+});
+
+test("a degraded purge reencrypts and a later commit still loads", async () => {
+  const { store } = await setup();
+  const evidence = evidenceState();
+  await store.persist(evidence);
+  const outcome = await store.purgeAll();
+  assert.equal(outcome.wiped, false);
+  const next = { ...evidence, replica: [], lastLocalSequence: 2 } as DurableSyncState;
+  await store.persist(next);
+  assert.deepEqual(await store.loadState(device), next);
   store.close();
 });

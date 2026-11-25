@@ -309,6 +309,8 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
         const removedReplicaCount = state.replica.length - replica.length;
         const parsed = parseDurableState({ ...state, replica }, this.deviceId);
         if (!parsed.ok) throw new WebSyncStorageError("STATE_CORRUPT");
+        // `purgeAll` removes every replica, so its wipe decision reduces to "no retained outbox".
+        // `purgeForScope` keeps other-scope replica and therefore never wipes them.
         if (parsed.value.outbox.length === 0 && parsed.value.replica.length === 0) {
           await this.wipeRows();
           return Object.freeze({ wiped: true, removedReplicaCount, retainedOutboxCount: 0, retainedScopeCount: 0 });
@@ -329,6 +331,11 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
     const branchId = normalizeId(scope.branchId);
     return this.purgeReplica((entity) => normalizeId(entity.restaurantId) === restaurantId && normalizeId(entity.branchId) === branchId);
   }
+  /**
+   * Total purge. Wipes slots, keys and metadata when the outbox retains no evidence; otherwise
+   * it degrades to `purge_replica_keep_outbox`: the replica is dropped and the retained outbox is
+   * re-encrypted under a fresh key. Retained financial evidence is never deleted.
+   */
   public purgeAll(): Promise<WebSyncPurgeOutcome> {
     return this.purgeReplica(() => true);
   }

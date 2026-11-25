@@ -14,6 +14,14 @@ export interface OfflinePurgeDecision {
   readonly reason: string;
 }
 
+/**
+ * Decides the requested purge action for an offline event.
+ *
+ * `purge_all` is a request for a total purge, not a guarantee that the local store is empty:
+ * the store wipes slots, keys and metadata only when the outbox holds no retained evidence.
+ * When evidence exists, `purge_all` degrades to `purge_replica_keep_outbox` (drop the replica,
+ * keep the outbox). A purge never deletes retained financial evidence.
+ */
 export function decideOfflinePurge(input: OfflinePurgeInput): OfflinePurgeDecision {
   switch (input.event) {
     case "sign_out":
