@@ -10,3 +10,7 @@ export function inventoryInvariantSql(): string {
 export function inventoryLedgerInvariantSql(): string {
   return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_ledger_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
 }
+
+export function inventoryRecipeInvariantSql(): string {
+  return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_recipes_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
+}
