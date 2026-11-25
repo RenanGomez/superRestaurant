@@ -133,6 +133,12 @@ begin
     raise exception using errcode = '22000', message = 'INVENTORY_ITEM_UNIT_MISMATCH';
   end if;
 
+  -- Serialize concurrent callers of the same transfer key so the pair precheck and the two inserts
+  -- cannot interleave into a one-sided or conflicting pair.
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+    'inventory-transfer:' || p_restaurant_id::text || ':' || p_idempotency_key, 0
+  ));
+
   select m.source_id into v_existing_out
   from app.inventory_movements as m
   where m.restaurant_id = p_restaurant_id

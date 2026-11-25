@@ -205,6 +205,61 @@ begin
   from app_private.list_inventory_movements(manager, r, b, null, null, 1000);
   if visible <> 3 then raise exception 'limit 1000 returned %, expected 3', visible; end if;
 
+  -- A foreign item is rejected before any leg is written (no one-sided transfer).
+  begin
+    perform app_private.inventory_transfer(
+      manager, r, b, warehouse_a, warehouse_b, foreign_item, 5, 'g', 'foreign item',
+      'movements-api-foreign-item', null);
+    raise exception 'transfer accepted an item from another restaurant';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_ITEM_SCOPE_INVALID' then raise; end if;
+  end;
+  if exists (
+    select 1 from app_private.list_inventory_movements(manager, r, b, null, null, 200) as mv
+    where mv.idempotency_key like 'movements-api-foreign-item%'
+  ) then
+    raise exception 'rejected transfer left a movement behind';
+  end if;
+
+  -- A unit that does not match the item is rejected as well.
+  begin
+    perform app_private.inventory_transfer(
+      manager, r, b, warehouse_a, warehouse_b, item, 5, 'ml', 'wrong unit',
+      'movements-api-unit', null);
+    raise exception 'transfer accepted a mismatched unit';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_ITEM_UNIT_MISMATCH' then raise; end if;
+  end;
+
+  -- A half-written pair from a previous failure is a conflict, never a silent second pair.
+  perform app_private.inventory_record_movement(
+    manager, r, b, warehouse_a, item, 'transfer_out', -1, 'orphan leg',
+    'movements-api-orphan:out', 'inventory_transfer', gen_random_uuid(), null,
+    pg_catalog.clock_timestamp(), null
+  );
+  begin
+    perform app_private.inventory_transfer(
+      manager, r, b, warehouse_a, warehouse_b, item, 1, 'g', 'orphan leg',
+      'movements-api-orphan', null);
+    raise exception 'transfer accepted a one-sided pair';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_TRANSFER_STATE_INVALID' then raise; end if;
+  end;
+
+  -- Replaying the same transfer key never moves stock twice.
+  select coalesce(pg_catalog.sum(quantity), 0)::integer into balance_a
+  from app_private.list_inventory_balances(manager, r, b, null);
+  result := app_private.inventory_transfer(
+    manager, r, b, warehouse_a, warehouse_b, item, 10, 'g', 'transfer to kitchen',
+    'movements-api-transfer', null);
+  if result ->> 'status' <> 'duplicate' then raise exception 'transfer replay status %', result; end if;
+  if (select coalesce(pg_catalog.sum(quantity), 0)::integer
+      from app_private.list_inventory_balances(manager, r, b, null)) <> balance_a
+  then raise exception 'transfer replay moved stock'; end if;
+
   execute 'reset role';
 end $test$;
 rollback;
