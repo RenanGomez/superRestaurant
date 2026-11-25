@@ -1,33 +1,11 @@
 # Estado del loop
 
-Actualizado: 2026-11-22 20:58 -07:00
+Actualizado: 2026-11-25 06:30 -07:00
 
-## CI de main
-
-- main CI: in_progress (CI @ 7029438e, 2026-11-22 20:56)
-
-## Sesiones
-
-```
-superrestaurant:
-  SESSION             ROLE    BRANCH                      PR  CI       REVIEW  THREADS  ACTIVITY  AGE
-  superrestaurant-10  worker  ao/capture-sql/root         -   -        -       0        active    10m ago
-  superrestaurant-11  worker  ao/lee-docs-agentic-2/root  -   -        -       0        active    18s ago
-  superrestaurant-3   worker  ao/loop-tick-docs/root      #1  passing  none    0        exited    3h ago
-  superrestaurant-5   worker  ao/node24-setup/root        #2  passing  none    0        exited    3h ago
-  ... (+3 lineas)
-```
-
-## PRs abiertos
-
-- Total: 1
-- #7 fix(sql): reparar confirmacion pizza M0-7 | CI 0/3 pend | sin revision
-
-## Backlog
-
-- **M0**: 0/0 (n/a) merged; ready 0, running 0, pr 0, review 0, parked 0, cancelled 1
-
-| id | hito | nivel | carril | estado |
-|---|---|---|---|---|
-| schema-example | M0 | D | opencode | cancelled |
-
+- **M1/M2:** cerrados. M2 con puertas humanas en `docs/agentic/m2-offline-signoff.md` (migraciones remotas, dispositivo real, impresora, capturas).
+- **Ola 0 (solo dsh):** cerrada y fusionada (#73–#79, #85). 17 PRs fusionados en la sesión.
+- **M3 inventario:** dominio completo y fusionado (#80, #82, #83, #84, #87); contratos (#88); SQL de catálogo (#81), ledger (#86) y recetas (#89). API de insumos (#90) y compras SQL (#91) abiertos con P1 documentados.
+- **Porcentaje M3 (fusionado / total del hito):** ~55 % (dominio, contratos, SQL base y API de insumos listos; faltan consumo por venta, API de movimientos/recetas/compras/alertas, UI, integración y E2E).
+- **Bloqueado:** nada por permisos de sesión. Pendiente de decisión/acción humana: migraciones remotas y proveedores reales.
+- **Cuota:** sin agotarse; las paradas fueron por turno agotado de los workers, no por cuota.
+- **Retomada:** `docs/agentic/entrega-final-2026-11-25.md` §4.
