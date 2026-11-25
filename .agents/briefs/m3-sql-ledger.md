@@ -46,18 +46,20 @@ app_private.inventory_record_movement(
 7. Un actor de otro restaurante no puede registrar (aislamiento) ni leer movimientos ajenos.
 8. El saldo tras tres movimientos (100, -30, -20) es 50.
 
-## Puertas (obligatorio, Node 24.19.0)
-El binario de PostgreSQL local vive fuera de tu worktree y el sandbox lo rechaza: **no ejecutes el verificador**. El orquestador corre después `verify:inventory-schema:rollback`.
+## Puertas (obligatorio, Node 24.19.0 + PG17 local)
 ```powershell
 . .\tools\agentic\use-node24.ps1
 node -v   # v24.19.0
+$env:LOCAL_POSTGRES_BIN = 'C:\Users\Emmanuel G\Documents\ChatGPT\superRestaurant\.cache\postgres-local\pgsql\bin'
 $PNPM = "C:\Users\Emmanuel G\AppData\Local\Programs\node24\pnpm.CMD"
 & $PNPM --filter @super-restaurant/api typecheck
 & $PNPM --filter @super-restaurant/api lint
+& $PNPM --filter @super-restaurant/api verify:inventory-schema:rollback
 ```
+La última debe imprimir `"status":"ok"` y `"local_cleanup"` `"stopped":true`. Si `LOCAL_POSTGRES_BIN` no existe, informa `NO VERIFICADO: LOCAL_PG17_REQUIRED` con la ruta comprobada.
 
 ## Hecho cuando
-Migración, invariantes 1–8 y verificador escritos y coherentes; `typecheck`, `lint` y `git diff --check` limpios con salida real; el informe marca `NO VERIFICADO: PG por orquestador`.
+Migración reproducible, invariantes 1–8 en verde con salida real, `typecheck`/`lint` y `git diff --check` limpios.
 
 ## Cierre
 No hagas commit ni push. Tu respuesta final ES el informe con archivos, decisiones y bloques comando + salida real. Sin evidencia = NO VERIFICADO.
