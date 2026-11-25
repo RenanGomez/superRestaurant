@@ -309,7 +309,7 @@ export function parseInventoryItemV1(value: unknown): InventoryItemV1 | undefine
     !isInventoryId(id)
     || !isInventoryId(restaurantId)
     || !isNullableText(sku, 100)
-    || !isBoundedText(name, 200)
+    || !isBoundedText(name, 160)
     || !isInventoryUnit(unitCode)
     || !isPositiveInt(purchaseUnitFactor)
     || !isNonNegativeInt(minQuantity)
@@ -344,7 +344,7 @@ export function parseInventoryWarehouseV1(value: unknown): InventoryWarehouseV1 
     !isInventoryId(id)
     || !isInventoryId(restaurantId)
     || !isInventoryId(branchId)
-    || !isBoundedText(name, 200)
+    || !isBoundedText(name, 160)
     || typeof active !== "boolean"
   ) {
     return undefined;

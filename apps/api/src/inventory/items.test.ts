@@ -84,10 +84,14 @@ class FakeDatabase implements TransactionalDatabaseClientPort {
 }
 
 function defaultHandler(sql: string): readonly unknown[] {
-  if (sql.includes("insert into app.inventory_items")) return [itemRow];
-  if (sql.includes("insert into app.inventory_warehouses")) return [warehouseRow];
-  if (sql.includes("from app.inventory_items")) return [itemRow];
-  if (sql.includes("from app.inventory_warehouses")) return [warehouseRow];
+  if (sql.includes("app_private.create_inventory_item")) return [itemRow];
+  if (sql.includes("app_private.create_inventory_warehouse")) return [warehouseRow];
+  if (sql.includes("app_private.update_inventory_item")) return [itemRow];
+  if (sql.includes("app_private.update_inventory_warehouse")) return [warehouseRow];
+  if (sql.includes("app_private.read_inventory_item_for_manage")) return [itemRow];
+  if (sql.includes("app_private.read_inventory_warehouse_for_manage")) return [warehouseRow];
+  if (sql.includes("app_private.list_inventory_items")) return [itemRow];
+  if (sql.includes("app_private.list_inventory_warehouses")) return [warehouseRow];
   return [];
 }
 
@@ -137,13 +141,13 @@ function serviceFor(options: {
   return { service, database };
 }
 
-test("listItems: projects explicit columns and filters by the authorized restaurant", async () => {
+test("listItems: calls the restaurant-scoped API function with the actor", async () => {
   const { service, database } = serviceFor();
   const result = await service.listItems(principal, { restaurantId });
   assert.equal(result.restaurantId, restaurantId);
   assert.deepEqual(result.items, [expectedItem]);
-  assert.deepEqual(database.queries[0]?.parameters, [restaurantId]);
-  assert.equal(database.queries[0]?.sql.toLowerCase().includes("select *"), false);
+  assert.deepEqual(database.queries[0]?.parameters, [principal.actorId, restaurantId]);
+  assert.equal(database.queries[0]?.sql.includes("app_private.list_inventory_items"), true);
 });
 
 test("listItems: a restaurant outside the actor's memberships is rejected before touching the database", async () => {
@@ -152,12 +156,13 @@ test("listItems: a restaurant outside the actor's memberships is rejected before
   assert.equal(database.queries.length, 0);
 });
 
-test("listWarehouses: filters by the authorized branch and returns explicit columns", async () => {
+test("listWarehouses: calls the branch-scoped API function with the actor", async () => {
   const { service, database } = serviceFor();
   const result = await service.listWarehouses(principal, { restaurantId, branchId });
   assert.equal(result.branchId, branchId);
   assert.deepEqual(result.warehouses, [expectedWarehouse]);
-  assert.deepEqual(database.queries[0]?.parameters, [restaurantId, branchId]);
+  assert.deepEqual(database.queries[0]?.parameters, [principal.actorId, restaurantId, branchId]);
+  assert.equal(database.queries[0]?.sql.includes("app_private.list_inventory_warehouses"), true);
 });
 
 test("listWarehouses: a foreign branch scope is denied before any query", async () => {
@@ -169,14 +174,14 @@ test("listWarehouses: a foreign branch scope is denied before any query", async 
   assert.equal(database.queries.length, 0);
 });
 
-test("createItem: validates with the shared parser, omits the id and returns the stored resource", async () => {
+test("createItem: validates with the shared parser and creates through the API function", async () => {
   const { service, database } = serviceFor();
   const item = await service.createItem(principal, validItemInput);
   assert.deepEqual(item, expectedItem);
   assert.deepEqual(database.queries[0]?.parameters, [
-    restaurantId, "SKU-MASA", "Masa", "g", 1000, 5000, true,
+    principal.actorId, restaurantId, "SKU-MASA", "Masa", "g", 1000, 5000, true,
   ]);
-  assert.equal(database.queries[0]?.sql.includes("returning id::text as id"), true);
+  assert.equal(database.queries[0]?.sql.includes("app_private.create_inventory_item"), true);
 });
 
 test("createItem: invalid payloads are request errors and never reach the database", async () => {
@@ -194,6 +199,30 @@ test("createItem: invalid payloads are request errors and never reach the databa
   assert.equal(database.queries.length, 0);
 });
 
+test("createItem: a database check violation is a request error, not an outage", async () => {
+  const handler: Handler = () => {
+    throw Object.assign(new Error("check violation"), { code: "23514" });
+  };
+  const { service } = serviceFor({ handler });
+  await assert.rejects(service.createItem(principal, validItemInput), code("request"));
+});
+
+test("createItem: a database foreign key violation is a conflict", async () => {
+  const handler: Handler = () => {
+    throw Object.assign(new Error("foreign key violation"), { code: "23503" });
+  };
+  const { service } = serviceFor({ handler });
+  await assert.rejects(service.createItem(principal, validItemInput), code("conflict"));
+});
+
+test("createItem: an authorization SQLSTATE becomes an authorization error", async () => {
+  const handler: Handler = () => {
+    throw Object.assign(new Error("actor forbidden"), { code: "42501" });
+  };
+  const { service } = serviceFor({ handler });
+  await assert.rejects(service.createItem(principal, validItemInput), code("authorization"));
+});
+
 test("createItem: a manager without catalog.manage is denied", async () => {
   const { service, database } = serviceFor({ roles: ["cashier"] });
   await assert.rejects(service.createItem(principal, validItemInput), code("authorization"));
@@ -204,25 +233,27 @@ test("createWarehouse: stores a branch-scoped warehouse without a client-supplie
   const { service, database } = serviceFor();
   const warehouse = await service.createWarehouse(principal, { restaurantId, branchId, name: "Almacén central" });
   assert.deepEqual(warehouse, expectedWarehouse);
-  assert.deepEqual(database.queries[0]?.parameters, [restaurantId, branchId, "Almacén central", true]);
+  assert.deepEqual(database.queries[0]?.parameters, [principal.actorId, restaurantId, branchId, "Almacén central", true]);
 });
 
-test("updateItem: merges the patch with the stored row and scopes the update to its restaurant", async () => {
+test("updateItem: merges the patch with the stored row and updates through the API function", async () => {
   const handler: Handler = (sql) => {
-    if (sql.includes("from app.inventory_items")) return [itemRow];
-    if (sql.includes("update app.inventory_items")) return [{ ...itemRow, name: "Masa premium", active: false }];
+    if (sql.includes("read_inventory_item_for_manage")) return [itemRow];
+    if (sql.includes("update_inventory_item")) return [{ ...itemRow, name: "Masa premium", active: false }];
     return [];
   };
   const { service, database } = serviceFor({ handler });
   const updated = await service.updateItem(principal, itemId, { name: "Masa premium", active: false });
   assert.equal(updated.name, "Masa premium");
   assert.equal(updated.active, false);
-  const update = database.queries.find((query) => query.sql.includes("update app.inventory_items"));
-  assert.deepEqual(update?.parameters, [itemId, restaurantId, "SKU-MASA", "Masa premium", "g", 1000, 5000, false]);
+  const update = database.queries.find((query) => query.sql.includes("update_inventory_item"));
+  assert.deepEqual(update?.parameters, [
+    principal.actorId, itemId, "SKU-MASA", "Masa premium", "g", 1000, 5000, false,
+  ]);
 });
 
 test("updateItem: unknown ids are missing, never a silent no-op", async () => {
-  const handler: Handler = (sql) => (sql.includes("from app.inventory_items") ? [] : [itemRow]);
+  const handler: Handler = (sql) => (sql.includes("read_inventory_item_for_manage") ? [] : [itemRow]);
   const { service, database } = serviceFor({ handler });
   await assert.rejects(service.updateItem(principal, itemId, { active: false }), code("missing"));
   assert.equal(database.queries.length, 1);
@@ -230,7 +261,7 @@ test("updateItem: unknown ids are missing, never a silent no-op", async () => {
 
 test("updateItem: an item from another restaurant is not writable by the actor", async () => {
   const foreignRow = { ...itemRow, restaurant_id: otherRestaurantId };
-  const handler: Handler = (sql) => (sql.includes("from app.inventory_items") ? [foreignRow] : [itemRow]);
+  const handler: Handler = (sql) => (sql.includes("read_inventory_item_for_manage") ? [foreignRow] : [itemRow]);
   const { service, database } = serviceFor({ handler });
   await assert.rejects(service.updateItem(principal, itemId, { active: false }), code("authorization"));
   assert.equal(database.queries.length, 1);
@@ -242,17 +273,17 @@ test("updateItem: unknown patch keys are request errors", async () => {
   assert.equal(database.queries.length, 0);
 });
 
-test("updateWarehouse: updates name and active within the stored branch scope", async () => {
+test("updateWarehouse: updates name and active through the API function", async () => {
   const handler: Handler = (sql) => {
-    if (sql.includes("from app.inventory_warehouses")) return [warehouseRow];
-    if (sql.includes("update app.inventory_warehouses")) return [{ ...warehouseRow, name: "Almacén 2" }];
+    if (sql.includes("read_inventory_warehouse_for_manage")) return [warehouseRow];
+    if (sql.includes("update_inventory_warehouse")) return [{ ...warehouseRow, name: "Almacén 2" }];
     return [];
   };
   const { service, database } = serviceFor({ handler });
   const updated = await service.updateWarehouse(principal, warehouseId, { name: "Almacén 2" });
   assert.equal(updated.name, "Almacén 2");
-  const update = database.queries.find((query) => query.sql.includes("update app.inventory_warehouses"));
-  assert.deepEqual(update?.parameters, [warehouseId, restaurantId, branchId, "Almacén 2", true]);
+  const update = database.queries.find((query) => query.sql.includes("update_inventory_warehouse"));
+  assert.deepEqual(update?.parameters, [principal.actorId, warehouseId, "Almacén 2", true]);
 });
 
 test("HTTP contract: 401, 400 INVENTORY_REQUEST_INVALID, 201 no-store, 403 ACTION_NOT_AUTHORIZED", async () => {

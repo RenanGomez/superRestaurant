@@ -21,46 +21,19 @@ import {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
-const ITEM_COLUMNS =
-  "id::text as id, restaurant_id::text as restaurant_id, sku, name, unit_code, purchase_unit_factor, min_quantity, active";
-const WAREHOUSE_COLUMNS =
-  "id::text as id, restaurant_id::text as restaurant_id, branch_id::text as branch_id, name, active";
+const listItemsSql = "select * from app_private.list_inventory_items($1::uuid, $2::uuid)";
+const listWarehousesSql = "select * from app_private.list_inventory_warehouses($1::uuid, $2::uuid, $3::uuid)";
+const readItemForManageSql = "select * from app_private.read_inventory_item_for_manage($1::uuid, $2::uuid)";
+const readWarehouseForManageSql = "select * from app_private.read_inventory_warehouse_for_manage($1::uuid, $2::uuid)";
 
-const listItemsSql = `select ${ITEM_COLUMNS} from app.inventory_items where restaurant_id = $1::uuid and deleted_at is null order by name, id`;
-const listWarehousesSql = `select ${WAREHOUSE_COLUMNS} from app.inventory_warehouses where restaurant_id = $1::uuid and branch_id = $2::uuid order by name, id`;
-const findItemSql = `select ${ITEM_COLUMNS} from app.inventory_items where id = $1::uuid and deleted_at is null`;
-const findWarehouseSql = `select ${WAREHOUSE_COLUMNS} from app.inventory_warehouses where id = $1::uuid`;
-
-const insertItemSql = `
-insert into app.inventory_items (restaurant_id, sku, name, unit_code, purchase_unit_factor, min_quantity, active)
-values ($1::uuid, $2::text, $3::text, $4::text, $5::integer, $6::integer, $7::boolean)
-returning ${ITEM_COLUMNS}
-`;
-const insertWarehouseSql = `
-insert into app.inventory_warehouses (restaurant_id, branch_id, name, active)
-values ($1::uuid, $2::uuid, $3::text, $4::boolean)
-returning ${WAREHOUSE_COLUMNS}
-`;
-const updateItemSql = `
-update app.inventory_items
-set sku = $3::text,
-    name = $4::text,
-    unit_code = $5::text,
-    purchase_unit_factor = $6::integer,
-    min_quantity = $7::integer,
-    active = $8::boolean,
-    updated_at = pg_catalog.clock_timestamp()
-where id = $1::uuid and restaurant_id = $2::uuid and deleted_at is null
-returning ${ITEM_COLUMNS}
-`;
-const updateWarehouseSql = `
-update app.inventory_warehouses
-set name = $4::text,
-    active = $5::boolean,
-    updated_at = pg_catalog.clock_timestamp()
-where id = $1::uuid and restaurant_id = $2::uuid and branch_id = $3::uuid
-returning ${WAREHOUSE_COLUMNS}
-`;
+const insertItemSql =
+  "select * from app_private.create_inventory_item($1::uuid,$2::uuid,$3::text,$4::text,$5::text,$6::integer,$7::integer,$8::boolean)";
+const insertWarehouseSql =
+  "select * from app_private.create_inventory_warehouse($1::uuid,$2::uuid,$3::uuid,$4::text,$5::boolean)";
+const updateItemSql =
+  "select * from app_private.update_inventory_item($1::uuid,$2::uuid,$3::text,$4::text,$5::text,$6::integer,$7::integer,$8::boolean)";
+const updateWarehouseSql =
+  "select * from app_private.update_inventory_warehouse($1::uuid,$2::uuid,$3::text,$4::boolean)";
 
 const ITEM_CREATE_KEYS = Object.freeze([
   "restaurantId",
@@ -133,7 +106,7 @@ export class ItemsService {
     if (query === undefined) throw requestError();
     await this.authorizeRestaurant(principal, query.restaurantId, "catalog.read");
 
-    const rows = await this.rows((database) => database.query(listItemsSql, [query.restaurantId]));
+    const rows = await this.rows((database) => database.query(listItemsSql, [principal.actorId, query.restaurantId]));
     const items: InventoryItemV1[] = [];
     for (const row of rows) {
       const item = toItem(row);
@@ -148,7 +121,11 @@ export class ItemsService {
     if (query === undefined) throw requestError();
     await this.authorizeBranchScope(principal, query.restaurantId, query.branchId, "catalog.read");
 
-    const rows = await this.rows((database) => database.query(listWarehousesSql, [query.restaurantId, query.branchId]));
+    const rows = await this.rows((database) => database.query(listWarehousesSql, [
+      principal.actorId,
+      query.restaurantId,
+      query.branchId,
+    ]));
     const warehouses: InventoryWarehouseV1[] = [];
     for (const row of rows) {
       const warehouse = toWarehouse(row);
@@ -169,6 +146,7 @@ export class ItemsService {
     await this.authorizeRestaurant(principal, command.restaurantId, "catalog.manage");
 
     const rows = await this.rows((database) => database.query(insertItemSql, [
+      principal.actorId,
       command.restaurantId,
       command.sku,
       command.name,
@@ -189,6 +167,7 @@ export class ItemsService {
     await this.authorizeBranchScope(principal, command.restaurantId, command.branchId, "catalog.manage");
 
     const rows = await this.rows((database) => database.query(insertWarehouseSql, [
+      principal.actorId,
       command.restaurantId,
       command.branchId,
       command.name,
@@ -205,7 +184,7 @@ export class ItemsService {
     const patch = parsePatch(input, ITEM_PATCH_KEYS);
     if (itemId === undefined || patch === undefined) throw requestError();
 
-    const existing = await this.readItem(itemId);
+    const existing = await this.readItem(principal, itemId);
     if (existing === undefined) throw new InventoryApplicationError("missing");
     await this.authorizeRestaurant(principal, existing.restaurantId, "catalog.manage");
 
@@ -213,8 +192,8 @@ export class ItemsService {
     if (merged === undefined) throw requestError();
 
     const rows = await this.rows((database) => database.query(updateItemSql, [
+      principal.actorId,
       itemId,
-      existing.restaurantId,
       merged.sku,
       merged.name,
       merged.unitCode,
@@ -237,7 +216,7 @@ export class ItemsService {
     const patch = parsePatch(input, WAREHOUSE_PATCH_KEYS);
     if (warehouseId === undefined || patch === undefined) throw requestError();
 
-    const existing = await this.readWarehouse(warehouseId);
+    const existing = await this.readWarehouse(principal, warehouseId);
     if (existing === undefined) throw new InventoryApplicationError("missing");
     await this.authorizeBranchScope(principal, existing.restaurantId, existing.branchId, "catalog.manage");
 
@@ -245,9 +224,8 @@ export class ItemsService {
     if (merged === undefined) throw requestError();
 
     const rows = await this.rows((database) => database.query(updateWarehouseSql, [
+      principal.actorId,
       warehouseId,
-      existing.restaurantId,
-      existing.branchId,
       merged.name,
       merged.active,
     ]));
@@ -257,8 +235,8 @@ export class ItemsService {
     return updated;
   }
 
-  private async readItem(id: string): Promise<InventoryItemV1 | undefined> {
-    const rows = await this.rows((database) => database.query(findItemSql, [id]));
+  private async readItem(principal: AuthenticatedPrincipal, id: string): Promise<InventoryItemV1 | undefined> {
+    const rows = await this.rows((database) => database.query(readItemForManageSql, [principal.actorId, id]));
     if (rows.length === 0) return undefined;
     if (rows.length !== 1) throw unavailable();
     const item = toItem(rows[0]);
@@ -266,8 +244,8 @@ export class ItemsService {
     return item;
   }
 
-  private async readWarehouse(id: string): Promise<InventoryWarehouseV1 | undefined> {
-    const rows = await this.rows((database) => database.query(findWarehouseSql, [id]));
+  private async readWarehouse(principal: AuthenticatedPrincipal, id: string): Promise<InventoryWarehouseV1 | undefined> {
+    const rows = await this.rows((database) => database.query(readWarehouseForManageSql, [principal.actorId, id]));
     if (rows.length === 0) return undefined;
     if (rows.length !== 1) throw unavailable();
     const warehouse = toWarehouse(rows[0]);
@@ -315,7 +293,10 @@ export class ItemsService {
       });
     } catch (error: unknown) {
       if (error instanceof InventoryApplicationError) throw error;
-      if (isUniqueViolation(error)) throw new InventoryApplicationError("conflict");
+      const state = sqlState(error);
+      if (state === "23505" || state === "23503") throw new InventoryApplicationError("conflict");
+      if (state === "23514") throw new InventoryApplicationError("request");
+      if (state === "42501") throw new InventoryApplicationError("authorization");
       throw unavailable();
     }
   }
@@ -489,8 +470,10 @@ function ownValue(record: Record<string, unknown>, key: string): unknown {
   return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
 }
 
-function isUniqueViolation(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505";
+function sqlState(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
 }
 
 function requestError(): InventoryApplicationError {
