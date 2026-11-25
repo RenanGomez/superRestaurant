@@ -4,10 +4,15 @@ import test from "node:test";
 import { InvalidInventoryUnitError, type InventoryUnit } from "./units.js";
 import {
   applyMovement,
+  InvalidInventoryBalanceError,
   InvalidMovementQuantityError,
+  InvalidMovementTimestampError,
   InvalidTransferDirectionError,
+  InventoryBalanceOverflowError,
+  InventoryIdempotencyConflictError,
   MovementActorRequiredError,
   MovementReasonRequiredError,
+  MovementScopeMismatchError,
   reconcileBalances,
   SaleConsumptionIdempotencyKeyRequiredError,
   SaleReversalCompensationRequiredError,
@@ -15,14 +20,19 @@ import {
   TransferPairMismatchError,
   TransferPairRequiredError,
   validateMovement,
+  validateMovementInScope,
   validateTransferPair,
   ZeroMovementQuantityError,
   type InventoryMovement,
+  type InventoryScope,
 } from "./stock-ledger.js";
 
 function baseMovement(overrides: Partial<InventoryMovement> = {}): InventoryMovement {
+  const id = overrides.id ?? "m-1";
   return {
-    id: "m-1",
+    id,
+    restaurantId: "r1",
+    branchId: "b1",
     warehouseId: "w1",
     itemId: "i1",
     kind: "receipt",
@@ -31,7 +41,7 @@ function baseMovement(overrides: Partial<InventoryMovement> = {}): InventoryMove
     occurredAt: "2026-11-25T00:00:00.000Z",
     actorId: "actor-1",
     reason: null,
-    idempotencyKey: "key-1",
+    idempotencyKey: `key-${id}`,
     ...overrides,
   };
 }
@@ -167,6 +177,8 @@ test("sale_reversal without compensatesMovementId fails", () => {
         baseMovement({
           kind: "sale_reversal",
           quantityDelta: 2,
+          reason: "customer complaint",
+          actorId: "actor-1",
           idempotencyKey: "reverse-1",
           compensatesMovementId: null,
         }),
@@ -174,6 +186,134 @@ test("sale_reversal without compensatesMovementId fails", () => {
     (error: unknown) =>
       error instanceof SaleReversalCompensationRequiredError &&
       error.code === "INVENTORY_SALE_REVERSAL_COMPENSATION_REQUIRED",
+  );
+});
+
+test("sale_reversal requires a reason and an actor", () => {
+  assert.throws(
+    () =>
+      validateMovement(
+        baseMovement({
+          kind: "sale_reversal",
+          quantityDelta: 2,
+          reason: null,
+          actorId: "actor-1",
+          compensatesMovementId: "m-0",
+        }),
+      ),
+    (error: unknown) =>
+      error instanceof MovementReasonRequiredError &&
+      error.code === "INVENTORY_MOVEMENT_REASON_REQUIRED",
+  );
+  assert.throws(
+    () =>
+      validateMovement(
+        baseMovement({
+          kind: "sale_reversal",
+          quantityDelta: 2,
+          reason: "customer complaint",
+          actorId: "  ",
+          compensatesMovementId: "m-0",
+        }),
+      ),
+    (error: unknown) =>
+      error instanceof MovementActorRequiredError &&
+      error.code === "INVENTORY_MOVEMENT_ACTOR_REQUIRED",
+  );
+});
+
+test("validateMovement rejects a non-canonical UTC occurredAt", () => {
+  assert.throws(
+    () => validateMovement(baseMovement({ occurredAt: "2026-11-25T00:00:00Z" })),
+    (error: unknown) =>
+      error instanceof InvalidMovementTimestampError &&
+      error.code === "INVALID_MOVEMENT_TIMESTAMP",
+  );
+  assert.throws(
+    () => validateMovement(baseMovement({ occurredAt: "not-a-timestamp" })),
+    InvalidMovementTimestampError,
+  );
+});
+
+test("validateMovementInScope rejects movements from another restaurant, branch or warehouse", () => {
+  const scope: InventoryScope = { restaurantId: "r1", branchId: "b1", warehouseIds: ["w1"] };
+
+  validateMovementInScope(baseMovement(), scope);
+
+  assert.throws(
+    () => validateMovementInScope(baseMovement({ restaurantId: "r2" }), scope),
+    (error: unknown) =>
+      error instanceof MovementScopeMismatchError && error.code === "INVENTORY_SCOPE_MISMATCH",
+  );
+  assert.throws(
+    () => validateMovementInScope(baseMovement({ branchId: "b2" }), scope),
+    (error: unknown) =>
+      error instanceof MovementScopeMismatchError && error.code === "INVENTORY_SCOPE_MISMATCH",
+  );
+  assert.throws(
+    () => validateMovementInScope(baseMovement({ warehouseId: "w9" }), scope),
+    (error: unknown) =>
+      error instanceof MovementScopeMismatchError && error.code === "INVENTORY_SCOPE_MISMATCH",
+  );
+  assert.throws(
+    () => validateMovementInScope(baseMovement(), { ...scope, warehouseIds: [] }),
+    MovementScopeMismatchError,
+  );
+});
+
+test("a replayed movement is counted once by id and by idempotency key", () => {
+  const movement = baseMovement({ id: "receipt-1", idempotencyKey: "receive-receipt-1" });
+
+  assert.deepEqual(applyMovement(applyMovement({}, movement), movement), { "w1:i1": 10 });
+  assert.deepEqual(sumBalances([movement, movement]), { "w1:i1": 10 });
+  assert.deepEqual(reconcileBalances({ "w1:i1": 10 }, [movement, movement]), {
+    ok: true,
+    diffs: [],
+  });
+});
+
+test("the first movement wins when the same id appears again", () => {
+  const first = baseMovement({ id: "dup-id", idempotencyKey: "first-key" });
+  const replay = baseMovement({ id: "dup-id", idempotencyKey: "other-key", quantityDelta: 99 });
+
+  assert.deepEqual(sumBalances([first, replay]), { "w1:i1": 10 });
+});
+
+test("reusing an idempotency key with a different payload fails", () => {
+  const first = baseMovement({ id: "a", idempotencyKey: "same-key" });
+  const divergent = baseMovement({ id: "b", idempotencyKey: "same-key", quantityDelta: 5 });
+
+  assert.throws(
+    () => sumBalances([first, divergent]),
+    (error: unknown) =>
+      error instanceof InventoryIdempotencyConflictError &&
+      error.code === "INVENTORY_IDEMPOTENCY_CONFLICT",
+  );
+  assert.throws(
+    () => applyMovement(applyMovement({}, first), divergent),
+    InventoryIdempotencyConflictError,
+  );
+});
+
+test("balance accumulation rejects values outside the safe-integer range", () => {
+  assert.throws(
+    () => reconcileBalances({ "w1:i1": 1.5 }, []),
+    (error: unknown) =>
+      error instanceof InvalidInventoryBalanceError && error.code === "INVALID_INVENTORY_BALANCE",
+  );
+  assert.throws(
+    () => reconcileBalances({ "w1:i1": Number.NaN }, []),
+    InvalidInventoryBalanceError,
+  );
+  assert.throws(
+    () =>
+      applyMovement(
+        { "w1:i1": 1 },
+        baseMovement({ id: "huge", quantityDelta: Number.MAX_SAFE_INTEGER }),
+      ),
+    (error: unknown) =>
+      error instanceof InventoryBalanceOverflowError &&
+      error.code === "INVENTORY_BALANCE_OVERFLOW",
   );
 });
 

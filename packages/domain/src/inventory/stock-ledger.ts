@@ -13,6 +13,8 @@ export type MovementKind =
 
 export interface InventoryMovement {
   id: string;
+  restaurantId: string;
+  branchId: string;
   warehouseId: string;
   itemId: string;
   kind: MovementKind;
@@ -25,6 +27,12 @@ export interface InventoryMovement {
   compensatesMovementId?: string | null;
   unitCostMinor?: number | null;
   currency?: string | null;
+}
+
+export interface InventoryScope {
+  readonly restaurantId: string;
+  readonly branchId: string;
+  readonly warehouseIds: readonly string[];
 }
 
 export class InvalidMovementQuantityError extends DomainError {
@@ -119,10 +127,68 @@ export class TransferPairMismatchError extends DomainError {
   public readonly reason: "kinds" | "item" | "unit" | "quantity" | "warehouse";
 }
 
+export class MovementScopeMismatchError extends DomainError {
+  public readonly code = "INVENTORY_SCOPE_MISMATCH";
+
+  public constructor(field: "restaurantId" | "branchId" | "warehouseId") {
+    super(`Inventory movement ${field} is outside the authorized restaurant/branch scope.`);
+    this.field = field;
+  }
+
+  public readonly field: "restaurantId" | "branchId" | "warehouseId";
+}
+
+export class InvalidMovementTimestampError extends DomainError {
+  public readonly code = "INVALID_MOVEMENT_TIMESTAMP";
+
+  public constructor(occurredAt: string) {
+    super("Inventory movement occurredAt must be a canonical ISO-8601 UTC timestamp.");
+    this.occurredAt = occurredAt;
+  }
+
+  public readonly occurredAt: string;
+}
+
+export class InventoryIdempotencyConflictError extends DomainError {
+  public readonly code = "INVENTORY_IDEMPOTENCY_CONFLICT";
+
+  public constructor(idempotencyKey: string) {
+    super("An inventory idempotency key cannot be reused with a different payload.");
+    this.idempotencyKey = idempotencyKey;
+  }
+
+  public readonly idempotencyKey: string;
+}
+
+export class InventoryBalanceOverflowError extends DomainError {
+  public readonly code = "INVENTORY_BALANCE_OVERFLOW";
+
+  public constructor(key: string) {
+    super("Inventory balance accumulation exceeds the JavaScript safe-integer range.");
+    this.key = key;
+  }
+
+  public readonly key: string;
+}
+
+export class InvalidInventoryBalanceError extends DomainError {
+  public readonly code = "INVALID_INVENTORY_BALANCE";
+
+  public constructor(key: string, value: number) {
+    super("Inventory balances must be safe integers.");
+    this.key = key;
+    this.value = value;
+  }
+
+  public readonly key: string;
+  public readonly value: number;
+}
+
 const MANUAL_KINDS: ReadonlySet<MovementKind> = new Set<MovementKind>([
   "waste",
   "adjustment",
   "count_adjustment",
+  "sale_reversal",
   "transfer_out",
   "transfer_in",
 ]);
@@ -131,8 +197,65 @@ function isNonEmpty(value: string | null | undefined): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function isCanonicalUtcTimestamp(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) {
+    return false;
+  }
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value;
+}
+
 function balanceKey(movement: InventoryMovement): string {
   return `${movement.warehouseId}:${movement.itemId}`;
+}
+
+interface SeenMovements {
+  readonly ids: Set<string>;
+  readonly idempotencyKeys: Map<string, string>;
+}
+
+const ledgerSeen = new WeakMap<Record<string, number>, SeenMovements>();
+
+function movementPayload(movement: InventoryMovement): string {
+  return JSON.stringify([
+    movement.id,
+    movement.restaurantId,
+    movement.branchId,
+    movement.warehouseId,
+    movement.itemId,
+    movement.kind,
+    movement.quantityDelta,
+    movement.unit,
+    movement.occurredAt,
+    movement.actorId,
+    movement.reason,
+    movement.idempotencyKey,
+    movement.compensatesMovementId ?? null,
+    movement.unitCostMinor ?? null,
+    movement.currency ?? null,
+  ]);
+}
+
+function cloneBalances(
+  balances: Record<string, number>,
+  seen: SeenMovements,
+): Record<string, number> {
+  const next = { ...balances };
+  ledgerSeen.set(next, seen);
+  return next;
+}
+
+export function validateMovementInScope(movement: InventoryMovement, scope: InventoryScope): void {
+  validateMovement(movement);
+  if (!isNonEmpty(scope.restaurantId) || movement.restaurantId !== scope.restaurantId) {
+    throw new MovementScopeMismatchError("restaurantId");
+  }
+  if (!isNonEmpty(scope.branchId) || movement.branchId !== scope.branchId) {
+    throw new MovementScopeMismatchError("branchId");
+  }
+  if (!scope.warehouseIds.includes(movement.warehouseId)) {
+    throw new MovementScopeMismatchError("warehouseId");
+  }
 }
 
 export function validateMovement(movement: InventoryMovement): void {
@@ -144,6 +267,17 @@ export function validateMovement(movement: InventoryMovement): void {
   }
 
   parseInventoryUnit(movement.unit);
+
+  if (!isCanonicalUtcTimestamp(movement.occurredAt)) {
+    throw new InvalidMovementTimestampError(movement.occurredAt);
+  }
+
+  if (!isNonEmpty(movement.restaurantId)) {
+    throw new MovementScopeMismatchError("restaurantId");
+  }
+  if (!isNonEmpty(movement.branchId)) {
+    throw new MovementScopeMismatchError("branchId");
+  }
 
   if (MANUAL_KINDS.has(movement.kind)) {
     if (!isNonEmpty(movement.reason)) {
@@ -180,9 +314,44 @@ export function applyMovement(
   movement: InventoryMovement,
 ): Record<string, number> {
   const key = balanceKey(movement);
-  const current = balances[key] ?? 0;
+  const seen = ledgerSeen.get(balances);
+  const payload = movementPayload(movement);
 
-  return { ...balances, [key]: current + movement.quantityDelta };
+  if (seen !== undefined && isNonEmpty(movement.id) && seen.ids.has(movement.id)) {
+    return cloneBalances(balances, seen);
+  }
+  if (seen !== undefined && isNonEmpty(movement.idempotencyKey)) {
+    const previous = seen.idempotencyKeys.get(movement.idempotencyKey);
+    if (previous !== undefined) {
+      if (previous !== payload) {
+        throw new InventoryIdempotencyConflictError(movement.idempotencyKey);
+      }
+      return cloneBalances(balances, seen);
+    }
+  }
+
+  const current = balances[key] ?? 0;
+  if (!Number.isSafeInteger(current)) {
+    throw new InvalidInventoryBalanceError(key, current);
+  }
+
+  const nextQuantity = current + movement.quantityDelta;
+  if (!Number.isSafeInteger(nextQuantity)) {
+    throw new InventoryBalanceOverflowError(key);
+  }
+
+  const next = { ...balances, [key]: nextQuantity };
+  const ids = new Set<string>(seen?.ids);
+  const idempotencyKeys = new Map<string, string>(seen?.idempotencyKeys);
+  if (isNonEmpty(movement.id)) {
+    ids.add(movement.id);
+  }
+  if (isNonEmpty(movement.idempotencyKey)) {
+    idempotencyKeys.set(movement.idempotencyKey, payload);
+  }
+  ledgerSeen.set(next, { ids, idempotencyKeys });
+
+  return next;
 }
 
 export function sumBalances(movements: readonly InventoryMovement[]): Record<string, number> {
@@ -196,6 +365,12 @@ export function reconcileBalances(
   stored: Record<string, number>,
   movements: readonly InventoryMovement[],
 ): { ok: boolean; diffs: Array<{ key: string; stored: number; expected: number }> } {
+  for (const [key, value] of Object.entries(stored)) {
+    if (!Number.isSafeInteger(value)) {
+      throw new InvalidInventoryBalanceError(key, value);
+    }
+  }
+
   const expected = sumBalances(movements);
   const keys = new Set([...Object.keys(stored), ...Object.keys(expected)]);
   const diffs: Array<{ key: string; stored: number; expected: number }> = [];
