@@ -6,12 +6,16 @@ import {
   parseInventoryItemV1,
   parseInventoryMovementV1,
   parseInventoryWarehouseV1,
+  parseMenuCatalogStateV1,
+  parsePublishRecipeCommandV1,
+  parseRecipeVersionV1,
   type InventoryBalanceV1,
   type InventoryItemV1,
   type InventoryMovementKindV1,
   type InventoryMovementV1,
   type InventoryUnitV1,
   type InventoryWarehouseV1,
+  type RecipeVersionV1,
 } from "@super-restaurant/shared-types";
 
 import { getServerEnv } from "../../../env";
@@ -33,18 +37,43 @@ export type InventoryOperation =
   | "listBalances"
   | "listItems"
   | "listMovements"
+  | "listProducts"
+  | "listRecipes"
   | "listWarehouses"
+  | "publishRecipe"
+  | "readRecipe"
   | "updateItem"
   | "updateWarehouse";
+
+export interface RecipeProductV1 {
+  readonly productId: string;
+  readonly name: string;
+  readonly sku: string | null;
+  readonly active: boolean;
+}
+
+export interface RecipeSummaryV1 {
+  readonly recipeId: string;
+  readonly productId: string;
+  readonly modifierId: string | null;
+  readonly version: number;
+  readonly active: boolean;
+  readonly notes: string | null;
+  readonly createdAt: string;
+}
 
 export type InventoryActionResult =
   | { readonly ok: true; readonly items: readonly InventoryItemV1[] }
   | { readonly ok: true; readonly warehouses: readonly InventoryWarehouseV1[] }
   | { readonly ok: true; readonly movements: readonly InventoryMovementV1[] }
   | { readonly ok: true; readonly balances: readonly InventoryBalanceV1[] }
+  | { readonly ok: true; readonly products: readonly RecipeProductV1[] }
+  | { readonly ok: true; readonly recipes: readonly RecipeSummaryV1[] }
+  | { readonly ok: true; readonly recipe: RecipeVersionV1 }
   | { readonly ok: true; readonly item: InventoryItemV1 }
   | { readonly ok: true; readonly warehouse: InventoryWarehouseV1 }
   | { readonly ok: true; readonly recorded: true }
+  | { readonly ok: true; readonly published: true }
   | { readonly ok: false; readonly error: InventoryError };
 
 const INVENTORY_UNITS: readonly InventoryUnitV1[] = ["g", "ml", "piece"];
@@ -65,7 +94,9 @@ export async function inventoryAction(
 ): Promise<InventoryActionResult> {
   if (operation !== "listItems" && operation !== "listWarehouses" && operation !== "listMovements"
     && operation !== "listBalances" && operation !== "createItem" && operation !== "updateItem"
-    && operation !== "createWarehouse" && operation !== "updateWarehouse" && operation !== "createMovement") {
+    && operation !== "createWarehouse" && operation !== "updateWarehouse" && operation !== "createMovement"
+    && operation !== "listProducts" && operation !== "listRecipes" && operation !== "readRecipe"
+    && operation !== "publishRecipe") {
     return invalid();
   }
 
@@ -83,9 +114,71 @@ export async function inventoryAction(
   }
   const canManage = membership.roles.some((role) => MANAGE_ROLES.has(role));
   if (!canManage && operation !== "listItems" && operation !== "listWarehouses"
-    && operation !== "listMovements" && operation !== "listBalances") return denied();
+    && operation !== "listMovements" && operation !== "listBalances"
+    && operation !== "listProducts" && operation !== "listRecipes" && operation !== "readRecipe") {
+    return denied();
+  }
 
   const base = `${env.apiBaseUrl}/api/v1/inventory`;
+
+  if (operation === "listProducts") {
+    const query = new URLSearchParams({ branchId: scope.branchId, restaurantId: scope.restaurantId });
+    const reply = await send(session.access_token, `${env.apiBaseUrl}/api/v1/catalog/menu?${query.toString()}`, "GET");
+    if (!reply.ok) return reply;
+    const state = parseMenuCatalogStateV1(reply.body);
+    if (state === undefined || state.scope.restaurantId !== scope.restaurantId
+      || state.scope.branchId !== scope.branchId) {
+      return unavailable();
+    }
+    const products = (state.catalog?.products ?? []).map((product) => Object.freeze({
+      active: product.active,
+      name: product.name,
+      productId: product.productId,
+      sku: product.sku,
+    }));
+    return { ok: true, products: Object.freeze(products) };
+  }
+
+  if (operation === "listRecipes") {
+    const productId = readUuidField(input, "productId");
+    if (productId === undefined) return invalid();
+    const query = new URLSearchParams({ includeInactive: "true", productId, restaurantId: scope.restaurantId });
+    const reply = await send(session.access_token, `${base}/recipes?${query.toString()}`, "GET");
+    if (!reply.ok) return reply;
+    const recipes = parseRecipesList(reply.body, scope.restaurantId, productId);
+    return recipes === undefined ? unavailable() : { ok: true, recipes };
+  }
+
+  if (operation === "readRecipe") {
+    const recipeId = readUuidField(input, "recipeId");
+    if (recipeId === undefined) return invalid();
+    const query = new URLSearchParams({ restaurantId: scope.restaurantId });
+    const reply = await send(
+      session.access_token,
+      `${base}/recipes/${encodeURIComponent(recipeId)}?${query.toString()}`,
+      "GET",
+    );
+    if (!reply.ok) return reply;
+    const recipe = parseRecipeVersionV1(reply.body);
+    return recipe === undefined || recipe.restaurantId !== scope.restaurantId || recipe.recipeId !== recipeId
+      ? unavailable() : { ok: true, recipe };
+  }
+
+  if (operation === "publishRecipe") {
+    const command = readPublishRecipeCommand(input, scope.restaurantId);
+    if (command === undefined) return invalid();
+    const reply = await send(session.access_token, `${base}/recipes`, "POST", {
+      lines: command.lines,
+      modifierId: command.modifierId,
+      notes: command.notes,
+      productId: command.productId,
+      restaurantId: command.restaurantId,
+    });
+    if (!reply.ok) return reply;
+    const recipe = parseRecipeVersionV1(reply.body);
+    return recipe === undefined || recipe.restaurantId !== scope.restaurantId
+      || recipe.productId !== command.productId ? unavailable() : { ok: true, published: true };
+  }
 
   if (operation === "listItems") {
     const query = new URLSearchParams({ restaurantId: scope.restaurantId });
@@ -383,6 +476,69 @@ function parseBalancesList(
     balances.push(balance);
   }
   return balances;
+}
+
+function parseRecipesList(
+  value: unknown,
+  restaurantId: string,
+  productId: string,
+): readonly RecipeSummaryV1[] | undefined {
+  const record = plainRecord(value);
+  if (record === undefined || own(record, "schemaVersion") !== 1
+    || own(record, "restaurantId") !== restaurantId || own(record, "productId") !== productId) {
+    return undefined;
+  }
+  const rawRecipes = own(record, "recipes");
+  if (!Array.isArray(rawRecipes)) return undefined;
+  const recipes: RecipeSummaryV1[] = [];
+  for (const rawRecipe of rawRecipes) {
+    const summary = parseRecipeSummary(rawRecipe, restaurantId, productId);
+    if (summary === undefined) return undefined;
+    recipes.push(summary);
+  }
+  return recipes;
+}
+
+function parseRecipeSummary(
+  value: unknown,
+  restaurantId: string,
+  productId: string,
+): RecipeSummaryV1 | undefined {
+  const record = plainRecord(value);
+  if (record === undefined) return undefined;
+  const recipeId = own(record, "recipeId");
+  const modifierId = own(record, "modifierId");
+  const version = own(record, "version");
+  const active = own(record, "active");
+  const notes = own(record, "notes");
+  const createdAt = own(record, "createdAt");
+  if (typeof recipeId !== "string" || !UUID_PATTERN.test(recipeId)) return undefined;
+  if (own(record, "restaurantId") !== restaurantId || own(record, "productId") !== productId) return undefined;
+  if (!(modifierId === null || (typeof modifierId === "string" && UUID_PATTERN.test(modifierId)))) return undefined;
+  if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) return undefined;
+  if (typeof active !== "boolean") return undefined;
+  if (!(notes === null || typeof notes === "string")) return undefined;
+  if (typeof createdAt !== "string" || createdAt.length === 0) return undefined;
+  return Object.freeze({ active, createdAt, modifierId, notes, productId, recipeId, restaurantId, version });
+}
+
+function readUuidField(input: unknown, key: string): string | undefined {
+  const record = plainRecord(input);
+  if (record === undefined) return undefined;
+  const value = own(record, key);
+  return typeof value === "string" && UUID_PATTERN.test(value) ? value : undefined;
+}
+
+function readPublishRecipeCommand(input: unknown, restaurantId: string) {
+  const record = plainRecord(input);
+  if (record === undefined) return undefined;
+  return parsePublishRecipeCommandV1({
+    lines: own(record, "lines"),
+    modifierId: null,
+    notes: null,
+    productId: own(record, "productId"),
+    restaurantId,
+  });
 }
 
 interface MovementFilter {

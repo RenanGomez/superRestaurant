@@ -9,6 +9,7 @@ import {
   formatInventoryMovementQuantity,
   formatInventoryNumber,
   formatInventoryTimestamp,
+  formatRecipeVersionLabel,
   inventoryMovementKindLabel,
   inventoryTabHref,
   inventoryUnitLabel,
@@ -16,16 +17,20 @@ import {
   matchesInventoryQuery,
   parseInventoryTab,
   parseInventoryWholeNumber,
+  recipeVersionStateLabel,
   validateInventoryMovementDraft,
+  validateRecipeLineDrafts,
 } from "./inventory-ui.js";
 
 test("inventory tabs are stable and parse untrusted values", () => {
-  assert.deepEqual(INVENTORY_TABS, ["insumos", "almacenes", "movimientos"]);
+  assert.deepEqual(INVENTORY_TABS, ["insumos", "recetas", "almacenes", "movimientos"]);
   assert.equal(DEFAULT_INVENTORY_TAB, "insumos");
   assert.equal(isInventoryTab("insumos"), true);
+  assert.equal(isInventoryTab("recetas"), true);
   assert.equal(isInventoryTab("ALMACENES"), false);
   assert.equal(parseInventoryTab("  Almacenes  "), "almacenes");
   assert.equal(parseInventoryTab("movimientos"), "movimientos");
+  assert.equal(parseInventoryTab("recetas"), "recetas");
   assert.equal(parseInventoryTab("otra"), undefined);
   assert.equal(parseInventoryTab(undefined), undefined);
 });
@@ -181,4 +186,30 @@ test("idempotency key survives a retry and is generated only once", () => {
   assert.equal(generated, 1);
   assert.equal(ensureInventoryIdempotencyKey("", generate), "generated-key");
   assert.equal(generated, 2);
+});
+
+test("recipe version labels separate the active version from history", () => {
+  assert.equal(formatRecipeVersionLabel(1), "Versión 1");
+  assert.equal(formatRecipeVersionLabel(1500), "Versión 1,500");
+  assert.equal(recipeVersionStateLabel(true), "Activa");
+  assert.equal(recipeVersionStateLabel(false), "Histórica");
+});
+
+test("recipe drafts require at least one complete line", () => {
+  assert.equal(validateRecipeLineDrafts([]).ok, false);
+
+  const base = { itemId: "item-a", quantity: "250", unitCode: "g" as const };
+  const valid = validateRecipeLineDrafts([base, { itemId: "item-b", quantity: " 2 ", unitCode: "piece" }]);
+  assert.equal(valid.ok, true);
+  if (!valid.ok) return;
+  assert.deepEqual(valid.lines, [
+    { itemId: "item-a", quantity: 250, unitCode: "g" },
+    { itemId: "item-b", quantity: 2, unitCode: "piece" },
+  ]);
+
+  assert.equal(validateRecipeLineDrafts([{ ...base, itemId: " " }]).ok, false);
+  assert.equal(validateRecipeLineDrafts([{ ...base, quantity: "0" }]).ok, false);
+  assert.equal(validateRecipeLineDrafts([{ ...base, quantity: "2.5" }]).ok, false);
+  assert.equal(validateRecipeLineDrafts([{ ...base, quantity: "-3" }]).ok, false);
+  assert.equal(validateRecipeLineDrafts([base, { ...base, quantity: "10" }]).ok, false);
 });

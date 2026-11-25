@@ -3,7 +3,9 @@
  * units, search matching and whole-number parsing. No React, no network.
  */
 
-export const INVENTORY_TABS = ["insumos", "almacenes", "movimientos"] as const;
+import { INVENTORY_UNITS, type InventoryUnitV1, type RecipeLineV1 } from "@super-restaurant/shared-types";
+
+export const INVENTORY_TABS = ["insumos", "recetas", "almacenes", "movimientos"] as const;
 export type InventoryTab = (typeof INVENTORY_TABS)[number];
 
 export const DEFAULT_INVENTORY_TAB: InventoryTab = "insumos";
@@ -12,6 +14,7 @@ export const INVENTORY_TAB_LABELS: Readonly<Record<InventoryTab, string>> = {
   almacenes: "Almacenes",
   insumos: "Insumos",
   movimientos: "Movimientos",
+  recetas: "Recetas",
 };
 
 export function isInventoryTab(value: unknown): value is InventoryTab {
@@ -174,4 +177,48 @@ export function formatInventoryTimestamp(value: string, timeZone: string): strin
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
   return new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short", timeZone }).format(date);
+}
+
+export interface RecipeLineDraft {
+  readonly itemId: string;
+  readonly quantity: string;
+  readonly unitCode: InventoryUnitV1;
+}
+
+export type RecipeLinesValidation =
+  | { readonly ok: true; readonly lines: readonly RecipeLineV1[] }
+  | { readonly ok: false; readonly error: string };
+
+/**
+ * Validates the in-app recipe editor before publishing: at least one line, one positive whole
+ * quantity per line, a known unit and no repeated ingredient.
+ */
+export function validateRecipeLineDrafts(drafts: readonly RecipeLineDraft[]): RecipeLinesValidation {
+  if (drafts.length === 0) return { error: "Agrega al menos un insumo a la receta.", ok: false };
+  const lines: RecipeLineV1[] = [];
+  const seen = new Set<string>();
+  for (const draft of drafts) {
+    if (draft.itemId.trim() === "") return { error: "Elige un insumo en cada línea de la receta.", ok: false };
+    if (!(INVENTORY_UNITS as readonly string[]).includes(draft.unitCode)) {
+      return { error: "La unidad del insumo no es válida.", ok: false };
+    }
+    const quantity = parseInventoryWholeNumber(draft.quantity, 1);
+    if (quantity === undefined) {
+      return { error: "Cada cantidad debe ser un número entero mayor o igual a 1.", ok: false };
+    }
+    if (seen.has(draft.itemId)) return { error: "No repitas el mismo insumo en la receta.", ok: false };
+    seen.add(draft.itemId);
+    lines.push(Object.freeze({ itemId: draft.itemId, quantity, unitCode: draft.unitCode }));
+  }
+  return { lines: Object.freeze(lines), ok: true };
+}
+
+/** Header for a recipe version, e.g. `Versión 2`. */
+export function formatRecipeVersionLabel(version: number): string {
+  return `Versión ${formatInventoryNumber(version)}`;
+}
+
+/** Whether a recipe version is the active one or kept only for history. */
+export function recipeVersionStateLabel(active: boolean): string {
+  return active ? "Activa" : "Histórica";
 }

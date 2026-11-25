@@ -27,6 +27,7 @@ import {
 import { uiButton } from "../../../lib/ui-classes";
 import { InventoryModal } from "./inventory-modal";
 import { MovementsPanel } from "./movements-panel";
+import { RecipesPanel } from "./recipes-panel";
 import type { InventoryActionResult, InventoryError, InventoryOperation } from "./actions";
 
 const panelClass = "rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -78,20 +79,24 @@ export function InventoryWorkspace({ action, canManage, initialTab }: InventoryW
   const [notice, setNotice] = useState<string>();
   const tabRefs = useRef<Partial<Record<InventoryTab, HTMLButtonElement | null>>>({});
   const insumosTabId = useId();
+  const recetasTabId = useId();
   const almacenesTabId = useId();
   const movimientosTabId = useId();
   const insumosPanelId = useId();
+  const recetasPanelId = useId();
   const almacenesPanelId = useId();
   const movimientosPanelId = useId();
   const tabButtonIds: Readonly<Record<InventoryTab, string>> = {
     almacenes: almacenesTabId,
     insumos: insumosTabId,
     movimientos: movimientosTabId,
+    recetas: recetasTabId,
   };
   const tabPanelIds: Readonly<Record<InventoryTab, string>> = {
     almacenes: almacenesPanelId,
     insumos: insumosPanelId,
     movimientos: movimientosPanelId,
+    recetas: recetasPanelId,
   };
 
   async function loadItems(): Promise<void> {
@@ -137,7 +142,8 @@ export function InventoryWorkspace({ action, canManage, initialTab }: InventoryW
   }, [initialTab]);
 
   useEffect(() => {
-    if ((activeTab === "insumos" || activeTab === "movimientos") && items.status === "idle") void loadItems();
+    if ((activeTab === "insumos" || activeTab === "movimientos" || activeTab === "recetas")
+      && items.status === "idle") void loadItems();
   }, [activeTab, items.status]);
 
   useEffect(() => {
@@ -283,6 +289,18 @@ export function InventoryWorkspace({ action, canManage, initialTab }: InventoryW
               ))}
             </ul>
           )}
+        </section>
+      )}
+
+      {activeTab === "recetas" && (
+        <section role="tabpanel" id={recetasPanelId} aria-labelledby={recetasTabId} tabIndex={0} className={panelClass}>
+          <RecipesPanel
+            action={action}
+            canManage={canManage}
+            items={items.status === "ready" ? items.value : []}
+            itemsStatus={items.status}
+            onRetryCatalog={() => { void loadItems(); }}
+          />
         </section>
       )}
 
