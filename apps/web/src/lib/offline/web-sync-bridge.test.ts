@@ -6,7 +6,12 @@ import { SyncTransportError, type SyncPushRequest, type SyncTransportPort } from
 import { parseSyncScopeV1, type BranchScope } from "@super-restaurant/shared-types";
 
 import { WebIndexedDbSyncStorage } from "./sync-store.js";
-import { openWebSyncBridge, stableEntityId, syncDatabaseNameForActor } from "./web-sync-bridge.js";
+import {
+  openWebSyncBridge,
+  stableEntityId,
+  syncDatabaseNameForActor,
+  syncDeviceIdForActor,
+} from "./web-sync-bridge.js";
 
 const device = "00000000-0000-4000-8000-000000000001";
 const actor = "00000000-0000-4000-8000-000000000002";
@@ -36,8 +41,12 @@ function idGenerator(): { uuid: () => string } {
   return { uuid: () => `00000000-0000-4000-8000-${(counter++).toString(16).padStart(12, "0")}` };
 }
 
-async function openStorage(factory: IDBFactory, databaseName: string): Promise<WebIndexedDbSyncStorage> {
-  return WebIndexedDbSyncStorage.open(device, {
+async function openStorage(
+  factory: IDBFactory,
+  databaseName: string,
+  storageDeviceId: string = device,
+): Promise<WebIndexedDbSyncStorage> {
+  return WebIndexedDbSyncStorage.open(storageDeviceId, {
     crypto: globalThis.crypto,
     databaseName,
     indexedDB: factory,
@@ -402,9 +411,15 @@ test("el puente registra el dispositivo exactamente una vez antes del primer pus
   const storage = await openStorage(factory, "register-once");
   const registered: Array<{ readonly deviceId: string; readonly scope: BranchScope }> = [];
   const base = recordingTransport();
+  const order: string[] = [];
   const transport: SyncTransportPort = {
-    ...base,
+    pull: base.pull,
+    push: (request) => {
+      order.push("push");
+      return base.push(request);
+    },
     registerDevice: (request) => {
+      order.push("register");
       registered.push(request);
       return Promise.resolve({ status: "active" });
     },
@@ -417,6 +432,67 @@ test("el puente registra el dispositivo exactamente una vez antes del primer pus
 
   assert.deepEqual(registered, [{ deviceId: device, scope: scopeA }]);
   assert.deepEqual(base.keys, ["registered-intent"]);
+  assert.deepEqual(order, ["register", "push"]);
+});
+
+test("dos actores del mismo tablet derivan deviceId distintos y ambos registran", async () => {
+  const baseDeviceId = "00000000-0000-4000-8000-0000000000aa";
+  const otherActor = "00000000-0000-4000-8000-000000000003";
+  const actorDeviceId = syncDeviceIdForActor(baseDeviceId, actor);
+  const otherDeviceId = syncDeviceIdForActor(baseDeviceId, otherActor);
+
+  assert.equal(syncDeviceIdForActor(baseDeviceId, actor), actorDeviceId);
+  assert.notEqual(actorDeviceId, otherDeviceId);
+  assert.match(actorDeviceId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+  assert.match(otherDeviceId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+
+  // Simulated server: a device row binds to the first actor that registers it, so
+  // reusing the base browser id makes the second cashier fail with 403 forever.
+  const owners = new Map<string, string>();
+  const registrations: Array<{ readonly actorId: string; readonly deviceId: string }> = [];
+  const transportFor = (registeredActor: string): SyncTransportPort => {
+    const base = recordingTransport();
+    return {
+      pull: base.pull,
+      push: base.push,
+      registerDevice: (request) => {
+        const owner = owners.get(request.deviceId);
+        if (owner !== undefined && owner !== registeredActor) {
+          return Promise.reject(new SyncTransportError("HTTP_403", false));
+        }
+        owners.set(request.deviceId, registeredActor);
+        registrations.push({ actorId: registeredActor, deviceId: request.deviceId });
+        return Promise.resolve({ status: "active" });
+      },
+    };
+  };
+  const factory = new IDBFactory();
+  const first = await openWebSyncBridge({
+    actorId: actor,
+    deviceId: actorDeviceId,
+    ids: idGenerator(),
+    storage: await openStorage(factory, "shared-tablet-a", actorDeviceId),
+    transport: transportFor(actor),
+  });
+  const second = await openWebSyncBridge({
+    actorId: otherActor,
+    deviceId: otherDeviceId,
+    ids: idGenerator(),
+    storage: await openStorage(factory, "shared-tablet-b", otherDeviceId),
+    transport: transportFor(otherActor),
+  });
+
+  assert.equal((await first.commitLocalOperation({ ...commitInput(scopeA, "first-cashier"), deviceId: actorDeviceId }))?.committed, true);
+  assert.equal((await second.commitLocalOperation({ ...commitInput(scopeA, "second-cashier"), deviceId: otherDeviceId }))?.committed, true);
+  await first.syncNow(scopeA);
+  await second.syncNow(scopeA);
+
+  assert.deepEqual(registrations, [
+    { actorId: actor, deviceId: actorDeviceId },
+    { actorId: otherActor, deviceId: otherDeviceId },
+  ]);
+  assert.equal(first.getSnapshot(scopeA).events[0]?.localState, "accepted");
+  assert.equal(second.getSnapshot(scopeA).events[0]?.localState, "accepted");
 });
 
 test("un registro 403 bloquea el push y conserva la evidencia local", async () => {

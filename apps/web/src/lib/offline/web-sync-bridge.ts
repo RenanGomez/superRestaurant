@@ -170,6 +170,22 @@ export function stableEntityId(parts: readonly string[]): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
+/**
+ * Sync device identity is derived per `(browser installation, actor)`: the server
+ * pins a registered device row to the first actor (`on conflict do nothing`) and
+ * keeps `sync_device_state` per actor, so sharing one browser id across cashiers of
+ * the same tablet left every later actor `unknown`/403. The base browser identity in
+ * localStorage is untouched; only the identifier sent to the API/engine changes, so
+ * replica and outbox stay per actor and a shift change cannot leak evidence.
+ * The version/variant nibbles are rewritten to a valid v4 UUID for the API contract.
+ */
+export function syncDeviceIdForActor(baseDeviceId: string, actorId: string): string {
+  const derived = stableEntityId([baseDeviceId, actorId]);
+  const versioned = `${derived.slice(0, 14)}4${derived.slice(15)}`;
+  const variant = ["8", "9", "a", "b"][Number.parseInt(versioned.slice(19, 20), 16) & 0x3] ?? "8";
+  return `${versioned.slice(0, 19)}${variant}${versioned.slice(20)}`;
+}
+
 function toEventItem(entry: OutboxEntry): SyncUiEventItem {
   const payload = entry.payload as Readonly<Record<string, unknown>>;
   const summaryLabel = typeof payload["summaryLabel"] === "string" ? payload["summaryLabel"] : null;
