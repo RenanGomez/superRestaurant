@@ -398,7 +398,7 @@ export class PurchasingService {
         throw new PurchasingApplicationError("idempotency-conflict");
       }
       const state = sqlState(error);
-      if (state === "22000" || state === "23514") throw new PurchasingApplicationError("request");
+      if (state === "22000" || state === "22003" || state === "23514") throw new PurchasingApplicationError("request");
       if (state === "23503" || state === "23505") throw new PurchasingApplicationError("conflict");
       if (state === "42501") throw new PurchasingApplicationError("authorization");
       throw unavailable();
