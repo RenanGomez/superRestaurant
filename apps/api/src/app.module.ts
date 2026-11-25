@@ -143,6 +143,8 @@ import { MovementsController } from "./inventory/movements.controller.js";
 import { MovementsService } from "./inventory/movements.service.js";
 import { RecipesController } from "./inventory/recipes.controller.js";
 import { RecipesService } from "./inventory/recipes.service.js";
+import { PurchasingController } from "./inventory/purchasing.controller.js";
+import { PurchasingService } from "./inventory/purchasing.service.js";
 
 @Module({
   controllers: [
@@ -163,6 +165,7 @@ import { RecipesService } from "./inventory/recipes.service.js";
     ItemsController,
     MovementsController,
     RecipesController,
+    PurchasingController,
     OrdersController,
     PaymentsController,
     OperationalShiftsController,
@@ -278,6 +281,7 @@ import { RecipesService } from "./inventory/recipes.service.js";
     ItemsService,
     MovementsService,
     RecipesService,
+    PurchasingService,
     PostgresOrderPersistenceAdapter,
     { provide: ORDER_PERSISTENCE_PORT, useExisting: PostgresOrderPersistenceAdapter },
     RealtimeGateway,

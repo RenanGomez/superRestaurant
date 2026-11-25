@@ -151,6 +151,18 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
     assert.equal(inventoryRecipeUnauthenticated.status, 401);
     assert.deepEqual(await inventoryRecipeUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
 
+    const inventorySuppliersUnauthenticated = await fetch(`${url}/api/v1/inventory/suppliers?restaurantId=${restaurantId}`);
+    assert.equal(inventorySuppliersUnauthenticated.status, 401);
+    assert.deepEqual(await inventorySuppliersUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryPurchaseOrdersUnauthenticated = await fetch(`${url}/api/v1/inventory/purchase-orders?restaurantId=${restaurantId}&branchId=${branchId}`);
+    assert.equal(inventoryPurchaseOrdersUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryPurchaseOrdersUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryPurchaseOrderUnauthenticated = await fetch(`${url}/api/v1/inventory/purchase-orders/${branchId}`);
+    assert.equal(inventoryPurchaseOrderUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryPurchaseOrderUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
     const syncUnauthenticated = await fetch(`${url}/api/v1/sync/push`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     assert.equal(syncUnauthenticated.status, 401);
     const syncInvalid = await fetch(`${url}/api/v1/sync/push`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer valid-smoke-access-token" }, body: "{}" });
