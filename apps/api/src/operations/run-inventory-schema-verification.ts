@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { assertLocalConfirmation, listMigrationNames, LocalPostgres } from "./local-postgres.js";
 import { inventoryInvariantSql } from "./inventory-schema-verification.js";
 
-const local = new LocalPostgres({ marker: "LOCAL_INVENTORY_SCHEMA_ONLY", databasePrefix: "superrestaurant_inventory" });
+const local = new LocalPostgres({ marker: "LOCAL_INVENTORY_SCHEMA_ONLY", databasePrefix: "superrestaurant_inventory", authUsersExtraColumns: ", raw_user_meta_data jsonb" });
 let stage = "configuration";
 let failed = false;
 try {
