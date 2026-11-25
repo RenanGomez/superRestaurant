@@ -26,6 +26,7 @@ import {
 } from "@super-restaurant/shared-types";
 
 import { ActionButton } from "./components.js";
+import { createSyncBannerLifecycle } from "./sync-banner-lifecycle.js";
 import { colors, radius, spacing, typography } from "./theme.js";
 
 /**
@@ -218,75 +219,68 @@ export function useMobileSyncBridge(options: {
       return;
     }
 
-    let alive = true;
+    const emptySnapshot = (): MobileSyncSnapshot =>
+      Object.freeze({ ...EMPTY_MOBILE_SYNC_SNAPSHOT, connectivity: connectivityRef.current });
     let runtime: Awaited<ReturnType<typeof openMobileOfflineRuntime>> | undefined;
-    const open = async (): Promise<void> => {
-      try {
-        runtime = await openMobileOfflineRuntime();
-        if (!alive) {
-          // The sign-out landed while the runtime was still opening. There was no
-          // runtime to release, so discard this one and purge/lock exactly as a
-          // normal sign-out would before closing it.
-          closedRef.current = true;
-          runtime.session.closePushGate();
-          try {
-            await runtime.session.prepareSignOut();
-          } finally {
-            await runtime.close();
-          }
-          return;
+
+    const lifecycle = createSyncBannerLifecycle({
+      loadHealth: (opened) => opened.storage.getStorageHealth(),
+      onDiscard: async (opened) => {
+        closedRef.current = true;
+        opened.session.closePushGate();
+        try {
+          await opened.session.prepareSignOut();
+        } finally {
+          await opened.close();
         }
+      },
+      onOpened: (opened) => {
+        runtime = opened;
         closedRef.current = false;
         releasePromiseRef.current = undefined;
-        runtimeRef.current = runtime;
-        // A store locked by a previous sign-out with retained evidence, or by a
-        // scope/device revocation, only reopens with this fresh authenticated
-        // scope and actor. A quarantined store is never resurrected.
-        const health = await runtime.storage.getStorageHealth();
-        if (health.locked) {
-          const resumed = await runtime.session.resumeSession(
-            { branchId: active.branchId, restaurantId: active.restaurantId },
-            userId,
-          );
-          if (resumed.status !== "resumed") {
-            closedRef.current = true;
-            await runtime.close();
-            runtimeRef.current = undefined;
-            if (alive) {
-              storageRef.current = false;
-              setSnapshot(Object.freeze({ ...EMPTY_MOBILE_SYNC_SNAPSHOT, connectivity: connectivityRef.current }));
-            }
-            return;
-          }
+        runtimeRef.current = opened;
+      },
+      onState: async (state, opened, isActive) => {
+        if (state.status === "ready") {
+          if (opened === undefined) return;
+          const engine = new DeviceSyncEngine({
+            clientType: "mobile",
+            connectivity: () => connectivityRef.current,
+            deviceId: opened.deviceId,
+            storage: opened.storage,
+            transport: createMobileOfflineTransport(opened, {
+              accessToken: async (): Promise<string | undefined> => tokenRef.current,
+              apiBaseUrl,
+            }),
+          });
+          await engine.init();
+          if (!isActive()) return;
+          engineRef.current = engine;
+          storageRef.current = true;
+          await refresh();
+          await syncNow();
+          return;
         }
-        const engine = new DeviceSyncEngine({
-          clientType: "mobile",
-          connectivity: () => connectivityRef.current,
-          deviceId: runtime.deviceId,
-          storage: runtime.storage,
-          transport: createMobileOfflineTransport(runtime, {
-            accessToken: async (): Promise<string | undefined> => tokenRef.current,
-            apiBaseUrl,
-          }),
-        });
-        await engine.init();
-        if (!alive) return;
-        engineRef.current = engine;
-        storageRef.current = true;
-        await refresh();
-        await syncNow();
-      } catch {
-        if (alive) {
-          storageRef.current = false;
-          setSnapshot(Object.freeze({ ...EMPTY_MOBILE_SYNC_SNAPSHOT, connectivity: connectivityRef.current }));
+        if (state.notice !== "storage-unavailable" && opened !== undefined) {
+          closedRef.current = true;
+          await opened.close();
+          runtimeRef.current = undefined;
         }
-      }
-    };
-    void open();
+        if (!isActive()) return;
+        storageRef.current = false;
+        setSnapshot(emptySnapshot());
+      },
+      openRuntime: () => openMobileOfflineRuntime(),
+      resumeSession: (opened) => opened.session.resumeSession(
+        { branchId: active.branchId, restaurantId: active.restaurantId },
+        userId,
+      ),
+    });
+    lifecycle.start();
 
     const timer = setInterval(() => { void refresh(); }, 20_000);
     return () => {
-      alive = false;
+      lifecycle.stop();
       clearInterval(timer);
       engineRef.current = undefined;
       storageRef.current = false;
