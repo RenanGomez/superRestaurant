@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { InvalidQuantityError } from "../errors.js";
 import {
   explodeRecipe,
   RecipeIncompatibleUnitsError,
+  RecipeModifierConflictError,
   type RecipeModifierContribution,
   type RecipeVersion,
 } from "./recipe-explosion.js";
@@ -96,6 +98,76 @@ test("explodeRecipe keeps the rounding remainder for a fractional line", () => {
   );
 
   assert.deepEqual(result, [{ itemId: "cheese", quantity: 76, unit: "g", remainder: 1 }]);
+});
+
+test("explodeRecipe applies a repeated modifier id only once", () => {
+  const modifiers: readonly RecipeModifierContribution[] = [
+    { modifierId: "extra-cheese", lines: [{ itemId: "cheese", quantity: 30, unit: "g" }] },
+  ];
+
+  const result = explodeRecipe(
+    { productId: "pizza", quantity: 1, modifierIds: ["extra-cheese", "extra-cheese"] },
+    [recipe("pizza", 1, [{ itemId: "cheese", quantity: 100, unit: "g" }])],
+    modifiers,
+  );
+
+  assert.deepEqual(result, [{ itemId: "cheese", quantity: 130, unit: "g", remainder: 0 }]);
+});
+
+test("explodeRecipe rejects repeated modifier contribution ids", () => {
+  const modifiers: readonly RecipeModifierContribution[] = [
+    { modifierId: "extra-cheese", lines: [{ itemId: "cheese", quantity: 30, unit: "g" }] },
+    { modifierId: "extra-cheese", lines: [{ itemId: "cheese", quantity: 30, unit: "g" }] },
+  ];
+
+  assert.throws(
+    () =>
+      explodeRecipe(
+        { productId: "pizza", quantity: 1, modifierIds: ["extra-cheese"] },
+        [recipe("pizza", 1, [{ itemId: "cheese", quantity: 100, unit: "g" }])],
+        modifiers,
+      ),
+    (error: unknown) => {
+      return (
+        error instanceof RecipeModifierConflictError &&
+        error.code === "RECIPE_MODIFIER_CONFLICT"
+      );
+    },
+  );
+});
+
+test("explodeRecipe rejects a fractional recipe line quantity regardless of sold quantity", () => {
+  assert.throws(
+    () =>
+      explodeRecipe({ productId: "pizza", quantity: 2 }, [
+        recipe("pizza", 1, [{ itemId: "cheese", quantity: 0.5, unit: "g" }]),
+      ]),
+    (error: unknown) => {
+      return error instanceof InvalidQuantityError && error.code === "INVALID_QUANTITY";
+    },
+  );
+});
+
+test("explodeRecipe accepts an integer recipe line quantity for two sold units", () => {
+  const result = explodeRecipe({ productId: "pizza", quantity: 2 }, [
+    recipe("pizza", 1, [{ itemId: "cheese", quantity: 2, unit: "g" }]),
+  ]);
+
+  assert.deepEqual(result, [{ itemId: "cheese", quantity: 4, unit: "g", remainder: 0 }]);
+});
+
+test("explodeRecipe applies the fraction after accumulating repeated item lines", () => {
+  const result = explodeRecipe(
+    { productId: "pizza", quantity: 1, fraction: { numerator: 1, denominator: 2 } },
+    [
+      recipe("pizza", 1, [
+        { itemId: "cheese", quantity: 1, unit: "g" },
+        { itemId: "cheese", quantity: 1, unit: "g" },
+      ]),
+    ],
+  );
+
+  assert.deepEqual(result, [{ itemId: "cheese", quantity: 1, unit: "g", remainder: 0 }]);
 });
 
 test("explodeRecipe rejects incompatible units for the same item", () => {

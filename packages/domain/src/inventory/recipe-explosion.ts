@@ -53,6 +53,17 @@ export class RecipeIncompatibleUnitsError extends DomainError {
   public readonly right: InventoryUnit;
 }
 
+export class RecipeModifierConflictError extends DomainError {
+  public readonly code = "RECIPE_MODIFIER_CONFLICT";
+
+  public constructor(modifierId: string) {
+    super("Modifier contributions must not repeat the same modifier id.");
+    this.modifierId = modifierId;
+  }
+
+  public readonly modifierId: string;
+}
+
 interface ConsumptionAccumulator {
   itemId: string;
   unit: InventoryUnit;
@@ -113,31 +124,40 @@ export function explodeRecipe(
     throw new InvalidQuantityError(soldQuantity);
   }
 
+  const contributions = new Map<string, RecipeModifierContribution>();
+  for (const contribution of modifierContributions) {
+    if (contributions.has(contribution.modifierId)) {
+      throw new RecipeModifierConflictError(contribution.modifierId);
+    }
+    contributions.set(contribution.modifierId, contribution);
+  }
+
   const recipe = selectLatestRecipe(request.productId, recipes);
   if (recipe === undefined) {
     return [];
   }
 
   const fraction = request.fraction ?? null;
-  const contributions = new Map(
-    modifierContributions.map((contribution) => [contribution.modifierId, contribution]),
-  );
   const accumulators = new Map<string, ConsumptionAccumulator>();
 
   const addLine = (line: RecipeLine): void => {
+    if (!Number.isSafeInteger(line.quantity) || line.quantity <= 0) {
+      throw new InvalidQuantityError(line.quantity);
+    }
     const base = assertInventoryQuantity(line.quantity * soldQuantity);
-    const scaled =
-      fraction === null
-        ? { quantity: base, remainder: 0 }
-        : applyFraction(base, fraction.numerator, fraction.denominator);
-    accumulate(accumulators, line.itemId, line.unit, scaled.quantity, scaled.remainder);
+    accumulate(accumulators, line.itemId, line.unit, base, 0);
   };
 
   for (const line of recipe.lines) {
     addLine(line);
   }
 
+  const appliedModifiers = new Set<string>();
   for (const modifierId of request.modifierIds ?? []) {
+    if (appliedModifiers.has(modifierId)) {
+      continue;
+    }
+    appliedModifiers.add(modifierId);
     const contribution = contributions.get(modifierId);
     if (contribution === undefined) {
       continue;
@@ -147,12 +167,21 @@ export function explodeRecipe(
     }
   }
 
-  return [...accumulators.values()]
-    .filter((accumulator) => accumulator.quantity > 0)
-    .map((accumulator) => ({
-      itemId: accumulator.itemId,
-      quantity: accumulator.quantity,
-      unit: accumulator.unit,
-      remainder: accumulator.remainder,
-    }));
+  const result: ConsumptionLine[] = [];
+  for (const accumulator of accumulators.values()) {
+    const scaled =
+      fraction === null
+        ? { quantity: accumulator.quantity, remainder: accumulator.remainder }
+        : applyFraction(accumulator.quantity, fraction.numerator, fraction.denominator);
+    if (scaled.quantity > 0) {
+      result.push({
+        itemId: accumulator.itemId,
+        quantity: scaled.quantity,
+        unit: accumulator.unit,
+        remainder: scaled.remainder,
+      });
+    }
+  }
+
+  return result;
 }
