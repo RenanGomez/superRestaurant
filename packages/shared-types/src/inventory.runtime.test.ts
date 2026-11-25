@@ -8,6 +8,7 @@ import {
   parseInventoryMovementRequestV1,
   parseInventoryMovementV1,
   parseInventoryWarehouseV1,
+  parsePublishRecipeCommandV1,
   parsePurchaseOrderV1,
   parseRecipeVersionV1,
 } from "./index.js";
@@ -197,6 +198,63 @@ test("parseRecipeVersionV1 rejects an unknown line unit", () => {
     parseRecipeVersionV1(validRecipe({ lines: [{ itemId: ITEM, quantity: 2, unitCode: "kg" }] })),
     undefined,
   );
+});
+
+function validPublishCommand(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    restaurantId: RESTAURANT,
+    productId: PRODUCT,
+    modifierId: null,
+    notes: null,
+    lines: [{ itemId: ITEM, quantity: 250, unitCode: "g" }],
+    ...overrides,
+  };
+}
+
+test("parsePublishRecipeCommandV1 accepts a valid command", () => {
+  const parsed = parsePublishRecipeCommandV1(validPublishCommand());
+  assert.ok(parsed);
+  assert.equal(parsed.restaurantId, RESTAURANT);
+  assert.equal(parsed.productId, PRODUCT);
+  assert.equal(parsed.modifierId, null);
+  assert.equal(parsed.notes, null);
+  assert.deepEqual(parsed.lines, [{ itemId: ITEM, quantity: 250, unitCode: "g" }]);
+});
+
+test("parsePublishRecipeCommandV1 fills optional modifierId and notes as null", () => {
+  const command = validPublishCommand();
+  delete command.modifierId;
+  delete command.notes;
+  const parsed = parsePublishRecipeCommandV1(command);
+  assert.ok(parsed);
+  assert.equal(parsed.modifierId, null);
+  assert.equal(parsed.notes, null);
+});
+
+test("parsePublishRecipeCommandV1 rejects an empty, duplicated or invalid line list", () => {
+  assert.equal(parsePublishRecipeCommandV1(validPublishCommand({ lines: [] })), undefined);
+  assert.equal(
+    parsePublishRecipeCommandV1(validPublishCommand({
+      lines: [
+        { itemId: ITEM, quantity: 1, unitCode: "g" },
+        { itemId: ITEM, quantity: 2, unitCode: "g" },
+      ],
+    })),
+    undefined,
+  );
+  assert.equal(
+    parsePublishRecipeCommandV1(validPublishCommand({
+      lines: [{ itemId: ITEM, quantity: 0, unitCode: "g" }],
+    })),
+    undefined,
+  );
+});
+
+test("parsePublishRecipeCommandV1 rejects unknown keys and malformed scope", () => {
+  assert.equal(parsePublishRecipeCommandV1(validPublishCommand({ recipeId: RECIPE })), undefined);
+  assert.equal(parsePublishRecipeCommandV1(validPublishCommand({ restaurantId: "not-a-uuid" })), undefined);
+  assert.equal(parsePublishRecipeCommandV1(validPublishCommand({ modifierId: "not-a-uuid" })), undefined);
+  assert.equal(parsePublishRecipeCommandV1(validPublishCommand({ notes: "  " })), undefined);
 });
 
 test("parseInventoryMovementRequestV1 accepts a valid request", () => {
