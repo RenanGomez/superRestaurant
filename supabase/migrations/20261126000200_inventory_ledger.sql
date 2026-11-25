@@ -95,7 +95,10 @@ declare
   v_unit_code text;
   v_movement_id uuid;
   v_existing app.inventory_movements%rowtype;
+  v_compensated app.inventory_movements%rowtype;
   v_balance integer;
+  v_warehouse_active boolean;
+  v_item_deleted_at timestamptz;
 begin
   if p_actor_id is null
     or p_restaurant_id is null
@@ -134,10 +137,6 @@ begin
     raise exception using errcode = '22000', message = 'INVENTORY_MOVEMENT_REASON_REQUIRED';
   end if;
 
-  if p_kind = 'sale_reversal' and p_compensates_movement_id is null then
-    raise exception using errcode = '22000', message = 'INVENTORY_MOVEMENT_COMPENSATION_REQUIRED';
-  end if;
-
   if not exists (
     select 1
     from app.memberships as m
@@ -159,23 +158,64 @@ begin
     raise exception using errcode = '42501', message = 'INVENTORY_ACTOR_FORBIDDEN';
   end if;
 
-  if not exists (
-    select 1
-    from app.inventory_warehouses as w
-    where w.id = p_warehouse_id
-      and w.restaurant_id = p_restaurant_id
-      and w.branch_id = p_branch_id
-  ) then
+  select w.active into v_warehouse_active
+  from app.inventory_warehouses as w
+  where w.id = p_warehouse_id
+    and w.restaurant_id = p_restaurant_id
+    and w.branch_id = p_branch_id;
+
+  if not found then
     raise exception using errcode = '22000', message = 'INVENTORY_WAREHOUSE_SCOPE_INVALID';
   end if;
 
-  select i.unit_code into v_unit_code
+  if not v_warehouse_active then
+    raise exception using errcode = '22000', message = 'INVENTORY_WAREHOUSE_INACTIVE';
+  end if;
+
+  select i.unit_code, i.deleted_at into v_unit_code, v_item_deleted_at
   from app.inventory_items as i
   where i.id = p_item_id
     and i.restaurant_id = p_restaurant_id;
 
   if not found then
     raise exception using errcode = '22000', message = 'INVENTORY_ITEM_SCOPE_INVALID';
+  end if;
+
+  if v_item_deleted_at is not null then
+    raise exception using errcode = '22000', message = 'INVENTORY_ITEM_INACTIVE';
+  end if;
+
+  if p_kind = 'sale_reversal' then
+    if p_compensates_movement_id is null then
+      raise exception using errcode = '22000', message = 'INVENTORY_REVERSAL_INVALID';
+    end if;
+
+    select m.* into v_compensated
+    from app.inventory_movements as m
+    where m.id = p_compensates_movement_id
+      and m.restaurant_id = p_restaurant_id
+      and m.branch_id = p_branch_id
+      and m.warehouse_id = p_warehouse_id
+      and m.item_id = p_item_id
+      and m.kind = 'sale_consumption';
+
+    if not found then
+      raise exception using errcode = '22000', message = 'INVENTORY_REVERSAL_INVALID';
+    end if;
+
+    if p_quantity_delta <> -v_compensated.quantity_delta then
+      raise exception using errcode = '22000', message = 'INVENTORY_REVERSAL_INVALID';
+    end if;
+
+    if exists (
+      select 1
+      from app.inventory_movements as x
+      where x.compensates_movement_id = p_compensates_movement_id
+        and x.kind = 'sale_reversal'
+        and x.idempotency_key <> p_idempotency_key
+    ) then
+      raise exception using errcode = '22000', message = 'INVENTORY_REVERSAL_INVALID';
+    end if;
   end if;
 
   insert into app.inventory_movements (
@@ -201,9 +241,15 @@ begin
     end if;
 
     if v_existing.kind <> p_kind
+      or v_existing.restaurant_id <> p_restaurant_id
+      or v_existing.branch_id <> p_branch_id
+      or v_existing.warehouse_id <> p_warehouse_id
       or v_existing.item_id <> p_item_id
       or v_existing.quantity_delta <> p_quantity_delta
       or v_existing.reason is distinct from p_reason
+      or v_existing.source_type is distinct from p_source_type
+      or v_existing.source_id is distinct from p_source_id
+      or v_existing.compensates_movement_id is distinct from p_compensates_movement_id
     then
       raise exception using errcode = '22000', message = 'INVENTORY_IDEMPOTENCY_CONFLICT';
     end if;
