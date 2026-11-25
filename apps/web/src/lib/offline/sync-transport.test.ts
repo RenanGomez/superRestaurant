@@ -255,6 +255,29 @@ test("a stalled response body times out after headers", async () => {
   await assert.rejects(transport.pull(pullRequest), (error: unknown) => error instanceof SyncTransportError && error.code === "TRANSPORT_ERROR" && error.retryable);
 });
 
+test("a fetch that never settles is aborted after the default 30 s timeout", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let signal: AbortSignal | null | undefined;
+  const fetcher: typeof fetch = (_input, init) => {
+    signal = init?.signal;
+    return new Promise<Response>(() => undefined);
+  };
+  const transport = createWebSyncTransport({ accessToken: () => Promise.resolve(TOKEN), apiBaseUrl: BASE, fetcher });
+  const attempt = transport.pull(pullRequest);
+  await new Promise((resolve) => setImmediate(resolve));
+  const captured = signal;
+  assert.ok(captured !== undefined && captured !== null, "the request must carry an AbortSignal");
+  assert.equal(captured.aborted, false);
+  t.mock.timers.tick(29_999);
+  assert.equal(captured.aborted, false);
+  t.mock.timers.tick(1);
+  await assert.rejects(
+    attempt,
+    (error: unknown) => error instanceof SyncTransportError && error.code === "TRANSPORT_ERROR" && error.retryable,
+  );
+  assert.equal(captured.aborted, true);
+});
+
 test("403 revokes only with an explicit server code", () => {
   assert.deepEqual(classifySyncHttpStatus(403), { code: "HTTP_403", retryable: false });
   assert.deepEqual(classifySyncHttpStatus(403, "DEVICE_REVOKED"), { code: "DEVICE_REVOKED", retryable: false });

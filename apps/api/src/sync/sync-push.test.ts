@@ -71,6 +71,43 @@ test("executor checks membership and device before processing an event", async (
   assert.equal(checks, 2);
 });
 
+test("rejections are distinguished in the structured log while the wire keeps revocation codes", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "info", (line: string) => { logged.push(line); });
+  let state = { authorized: true, allowed: true, device: "unknown" };
+  const database: TransactionalDatabaseClientPort = {
+    query: async () => { throw new Error("unexpected pool query"); },
+    transaction: async (operation) => operation({ query: async (sql) => {
+      if (sql.startsWith("SET LOCAL")) return { rows: [] };
+      return { rows: [state] };
+    } }),
+  };
+  const executor = new SyncMergeExecutor(database, { verifyAccessToken: async () => ({ actorId: event.actorId }) });
+  const parsed = parseSyncEnvelopeV1(event);
+  assert.ok(parsed);
+  const token = "secret-token-should-never-be-logged";
+  assert.equal((await executor.execute(token, parsed))?.code, "DEVICE_REVOKED");
+  state = { authorized: true, allowed: true, device: "revoked" };
+  assert.equal((await executor.execute(token, parsed))?.code, "DEVICE_REVOKED");
+  const mismatched = { ...parsed, actorId: "99999999-9999-4999-8999-999999999999" };
+  assert.equal((await executor.execute(token, mismatched))?.code, "AUTH_REVOKED");
+
+  const records = logged.map((line) => JSON.parse(line) as Record<string, string>);
+  assert.deepEqual(
+    records.map((record) => [record.code, record.reason]),
+    [["DEVICE_REVOKED", "DEVICE_UNKNOWN"], ["DEVICE_REVOKED", "DEVICE_REVOKED"], ["AUTH_REVOKED", "ACTOR_MISMATCH"]],
+  );
+  for (const record of records) {
+    assert.deepEqual(Object.keys(record).sort(), ["branchId", "code", "correlationId", "deviceId", "eventId", "reason", "restaurantId"]);
+    assert.equal(record.eventId, parsed.eventId);
+    assert.equal(record.deviceId, parsed.deviceId);
+    assert.equal(record.restaurantId, parsed.restaurantId);
+    assert.equal(record.branchId, parsed.branchId);
+    assert.match(record.correlationId ?? "", /^[0-9a-f-]{36}$/u);
+  }
+  assert.ok(logged.every((line) => !line.includes(token)), "the access token never reaches the log");
+});
+
 test("unsupported events are recorded as permanent rejections and do not block the batch", async () => {
   const recorded: string[] = [];
   const database: TransactionalDatabaseClientPort = {

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { Inject, Injectable } from "@nestjs/common";
 import { createOrder, mergeOrderSyncEvent, transitionOrderStatus, type MergeOrderSyncEventInput } from "@super-restaurant/domain";
 import { parseBranchScope, type SyncEnvelopeV1, type SyncEventResultV1 } from "@super-restaurant/shared-types";
@@ -12,6 +14,22 @@ import type { SyncEventExecutor } from "./sync-push.service.js";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
+type RejectionReason = "AUTH_REVOKED" | "ACTOR_MISMATCH" | "INVALID_SCOPE" | "DEVICE_REVOKED" | "DEVICE_UNKNOWN";
+interface SyncRejection { readonly code: "AUTH_REVOKED" | "DEVICE_REVOKED"; readonly reason: RejectionReason; }
+
+/**
+ * shortcut: `SyncEventResultV1.code` is an open string, but the only codes the web
+ * client and `sync-engine` treat as revocation are `SYNC_REVOCATION_CODES`
+ * ("AUTH_REVOKED" | "DEVICE_REVOKED"). Emitting `DEVICE_UNKNOWN` or `ACTOR_MISMATCH`
+ * on the wire would stop the client from revoking the scope, so the wire keeps the
+ * revocation code and the finer distinction travels in the structured log.
+ */
+export function classifyRejection(reason: RejectionReason): SyncRejection {
+  return reason === "DEVICE_REVOKED" || reason === "DEVICE_UNKNOWN"
+    ? { code: "DEVICE_REVOKED", reason }
+    : { code: "AUTH_REVOKED", reason };
+}
+
 @Injectable()
 export class SyncMergeExecutor implements SyncEventExecutor {
   public constructor(
@@ -20,20 +38,21 @@ export class SyncMergeExecutor implements SyncEventExecutor {
   ) {}
 
   public async execute(token: string, event: SyncEnvelopeV1): Promise<SyncEventResultV1 | null> {
+    const correlationId = randomUUID();
     let actor: string;
     try { actor = (await this.verifier.verifyAccessToken(token)).actorId; }
     catch (error: unknown) {
       if (!(error instanceof AccessTokenRejectedError)) throw error;
-      return revoked(event, "AUTH_REVOKED");
+      return reject(event, classifyRejection("AUTH_REVOKED"), correlationId);
     }
-    if (actor !== event.actorId) return revoked(event, "AUTH_REVOKED");
-    if (!uuid.test(event.restaurantId) || !uuid.test(event.branchId)) return revoked(event, "AUTH_REVOKED");
+    if (actor !== event.actorId) return reject(event, classifyRejection("ACTOR_MISMATCH"), correlationId);
+    if (!uuid.test(event.restaurantId) || !uuid.test(event.branchId)) return reject(event, classifyRejection("INVALID_SCOPE"), correlationId);
     return this.database.transaction(async (db) => {
       await db.query("SET LOCAL lock_timeout = '2s'", []);
       const auth = await db.query("select app_private.sync_authorized($1::uuid,$2::uuid,$3::uuid) as authorized, app_private.sync_device_state($2::uuid,$3::uuid,$4::text,$1::uuid) as device, app_private.sync_write_allowed($1::uuid,$2::uuid,$3::uuid,$5::text,$6::text) as allowed", [actor, event.restaurantId, event.branchId, event.deviceId, event.entityType, event.operation]);
       const row = auth.rows[0] as { authorized?: boolean; device?: string; allowed?: boolean } | undefined;
-      if (row?.authorized !== true || row.allowed !== true) return revoked(event, "AUTH_REVOKED");
-      if (row.device !== "active") return revoked(event, "DEVICE_REVOKED");
+      if (row?.authorized !== true || row.allowed !== true) return reject(event, classifyRejection("AUTH_REVOKED"), correlationId);
+      if (row.device !== "active") return reject(event, classifyRejection(row.device === "unknown" ? "DEVICE_UNKNOWN" : "DEVICE_REVOKED"), correlationId);
       const payload = event.payload;
       const creating = event.operation === "create" && event.baseVersion === null
         && !Object.keys(payload).some((key) => !["channel", "currency", "timeZone"].includes(key))
@@ -96,6 +115,15 @@ async function rejectEvent(db: DatabaseClientPort, actor: string, event: SyncEnv
   return code === "INVALID_PAYLOAD" && result?.code === "SYNC_REJECTED" ? candidate : result;
 }
 
-function revoked(event: SyncEnvelopeV1, code: "AUTH_REVOKED" | "DEVICE_REVOKED"): SyncEventResultV1 {
-  return { eventId: event.eventId, idempotencyKey: event.idempotencyKey, status: "rejected", code, canonicalVersion: null, auditId: null };
+function reject(event: SyncEnvelopeV1, rejection: SyncRejection, correlationId: string): SyncEventResultV1 {
+  console.info(JSON.stringify({
+    correlationId,
+    eventId: event.eventId,
+    deviceId: event.deviceId,
+    restaurantId: event.restaurantId,
+    branchId: event.branchId,
+    code: rejection.code,
+    reason: rejection.reason,
+  }));
+  return { eventId: event.eventId, idempotencyKey: event.idempotencyKey, status: "rejected", code: rejection.code, canonicalVersion: null, auditId: null };
 }
