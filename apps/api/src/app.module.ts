@@ -137,6 +137,8 @@ import { SyncDeviceService } from "./sync/sync-device.service.js";
 import { SyncPullService } from "./sync/sync-pull.service.js";
 import { SyncManualReviewService } from "./sync/sync-manual-review.service.js";
 import { SyncReviewController } from "./sync/sync-review.controller.js";
+import { ItemsController } from "./inventory/items.controller.js";
+import { ItemsService } from "./inventory/items.service.js";
 
 @Module({
   controllers: [
@@ -154,6 +156,7 @@ import { SyncReviewController } from "./sync/sync-review.controller.js";
     DiningTablesController,
     MenuCatalogController,
     MenuCatalogImagesController,
+    ItemsController,
     OrdersController,
     PaymentsController,
     OperationalShiftsController,
@@ -266,6 +269,7 @@ import { SyncReviewController } from "./sync/sync-review.controller.js";
     FetchCatalogImageStorageAdapter,
     { provide: CATALOG_IMAGE_STORAGE_PORT, useExisting: FetchCatalogImageStorageAdapter },
     MenuCatalogImageService,
+    ItemsService,
     PostgresOrderPersistenceAdapter,
     { provide: ORDER_PERSISTENCE_PORT, useExisting: PostgresOrderPersistenceAdapter },
     RealtimeGateway,
