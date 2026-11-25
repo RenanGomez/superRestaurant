@@ -547,7 +547,7 @@ test("capture confirmation probes replay and delegates one atomic persistence co
     readSelectionPlan: async () => { throw new Error("must not read a selection plan"); },
     confirmDraft: async (actorId, parsed, materialization) => {
       persisted = { actorId, command: parsed, materialization };
-      return { status: "applied", record: confirmedRecord };
+      return { status: "applied", record: confirmedRecord, inventory: { status: "recorded", movements: 2 } };
     },
   }, { read: async () => { throw new Error("must not read a catalog"); },
     save: async () => { throw new Error("must not save a catalog"); } });
@@ -562,8 +562,9 @@ test("capture confirmation probes replay and delegates one atomic persistence co
   const adapter = new PostgresCaptureCreator({ query: async (sql, parameters) => {
     queryCount += 1;
     assert.equal(sql, queryCount === 1
-      ? "select app_private.confirm_capture_draft_v3($1::uuid, $2::jsonb, null::jsonb, null::jsonb) as result"
-      : "select app_private.confirm_capture_draft_v3($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb) as result");
+      ? "select app_private.confirm_capture_draft_v3_with_inventory($1::uuid, $2::jsonb, null::jsonb, null::jsonb) as result"
+      : "select app_private.confirm_capture_draft_v3_with_inventory($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb) as result");
+    assert.equal(parameters.length, queryCount === 1 ? 2 : 4);
     assert.equal(parameters[0], principal.actorId);
     assert.equal(parameters[1], JSON.stringify(confirmCommand));
     if (queryCount === 1) return { rows: [{ result: { status: "pending" } }] };

@@ -296,15 +296,16 @@ test("order service creates, snapshots catalog items, transitions, and only noti
   assert.equal(storedOrder.items[0]?.cancellationAudit?.authorization?.actorId, principal.actorId);
   assert.equal(notifications.length, 3);
   if (cancellationMutation === undefined) throw new Error("TEST_CANCELLATION_MUTATION_MISSING");
-  const cancellationCalls: string[] = [];
+  const cancellationCalls: { parameters: readonly unknown[]; sql: string }[] = [];
   const cancellationAdapter = new PostgresOrderPersistenceAdapter({
-    query: async (sql) => {
-      cancellationCalls.push(sql);
+    query: async (sql, parameters) => {
+      cancellationCalls.push({ parameters, sql });
       return { rows: [{ result: { status: "conflict" } }] };
     },
   });
   assert.deepEqual(await cancellationAdapter.persist(principal.actorId, 3, cancellationMutation), { status: "conflict" });
-  assert.match(cancellationCalls[0] ?? "", /app_private\.persist_order_item_cancellation/u);
+  assert.match(cancellationCalls[0]?.sql ?? "", /app_private\.persist_order_item_cancellation_with_inventory\(\$1::uuid, \$2::bigint, \$3::jsonb, \$4::jsonb\)/u);
+  assert.equal(cancellationCalls[0]?.parameters.length, 4);
   assert.deepEqual(await service.recoverKds(principal, subscription, initialCursor, "50"), eventPage);
   assert.deepEqual(await service.listKdsTickets(principal, subscription), ticketList);
 });

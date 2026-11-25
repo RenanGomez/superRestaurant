@@ -444,8 +444,7 @@ begin
   perform pg_catalog.set_config('test.actor_id', actor::text, true);
   execute 'set local role authenticated';
   select pg_catalog.count(*) into visible from app.inventory_consumptions where restaurant_id = r;
-  if visible < 2 then raise exception 'own actor sees only % consumption rows', visible; end if;
-  select pg_catalog.count(*) into visible from app.inventory_consumptions where restaurant_id = r2;
+  if visible < 2 then raise exception 'own actor sees only % consumption rows', visible; end if;  select pg_catalog.count(*) into visible from app.inventory_consumptions where restaurant_id = r2;
   if visible <> 0 then raise exception 'foreign consumption rows visible: %', visible; end if;
   execute 'reset role';
 
@@ -515,7 +514,7 @@ begin
       pg_catalog.jsonb_build_object(
         'orderItemId', pending_item::text,
         'snapshot', pg_catalog.jsonb_build_object(
-          'productId', no_recipe_product::text, 'geometry', 'whole', 'stationId', 'kitchen'
+          'productId', simple_product::text, 'geometry', 'whole', 'stationId', 'kitchen'
         ),
         'quantity', 1, 'restaurantId', r::text, 'branchId', b::text, 'status', 'pending', 'note', null
       )
@@ -527,9 +526,9 @@ begin
   result := app_private.inventory_consume_order(actor, r, b, order3);
   if result ->> 'status' <> 'recorded' then raise exception 'order3 sale not recorded: %', result; end if;
   select quantity into balance from app.inventory_balances where warehouse_id = warehouse and item_id = flour;
-  if balance <> 9700 then raise exception 'order3 flour balance %, expected 9700', balance; end if;
+  if balance <> 9400 then raise exception 'order3 flour balance %, expected 9400', balance; end if;
   select quantity into balance from app.inventory_balances where warehouse_id = warehouse and item_id = cheese;
-  if balance <> 4900 then raise exception 'order3 cheese balance %, expected 4900', balance; end if;
+  if balance <> 4800 then raise exception 'order3 cheese balance %, expected 4800', balance; end if;
 
   occurred := pg_catalog.date_trunc('milliseconds', pg_catalog.clock_timestamp());
   occurred_text := pg_catalog.to_char(occurred at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
@@ -620,10 +619,15 @@ begin
   from app.inventory_consumptions
   where restaurant_id = r and order_id = order3 and order_item_id = sent_item and cause = 'cancel';
   if consumption_count <> 1 then raise exception 'wrapper cancel rows %, expected 1', consumption_count; end if;
+  select pg_catalog.count(*) into reversal_count
+  from app.inventory_movements
+  where restaurant_id = r and source_type = 'order_item' and source_id = pending_item
+    and kind = 'sale_reversal' and compensates_movement_id is not null;
+  if reversal_count <> 2 then raise exception 'pending line reversal count %, expected 2', reversal_count; end if;
   select pg_catalog.count(*) into consumption_count
   from app.inventory_consumptions
   where restaurant_id = r and order_id = order3 and order_item_id = pending_item and cause = 'cancel';
-  if consumption_count <> 0 then raise exception 'no-consumption line kept % cancel rows', consumption_count; end if;
+  if consumption_count <> 1 then raise exception 'pending line cancel rows %, expected 1', consumption_count; end if;
   select quantity into balance from app.inventory_balances where warehouse_id = warehouse and item_id = flour;
   if balance <> 10000 then raise exception 'wrapper cancel flour balance %, expected 10000', balance; end if;
   select quantity into balance from app.inventory_balances where warehouse_id = warehouse and item_id = cheese;
