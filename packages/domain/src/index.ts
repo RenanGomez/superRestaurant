@@ -561,3 +561,7 @@ export type {
   TombstoneCanonicalState,
   TombstoneSyncMergeResult,
 } from "./sync-merge.js";
+export * from "./inventory/units.js";
+export * from "./inventory/stock-ledger.js";
+export * from "./inventory/costing.js";
+export * from "./inventory/recipe-explosion.js";
