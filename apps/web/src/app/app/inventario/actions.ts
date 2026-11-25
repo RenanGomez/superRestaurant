@@ -2,9 +2,14 @@
 
 import { cookies } from "next/headers";
 import {
+  parseInventoryBalanceV1,
   parseInventoryItemV1,
+  parseInventoryMovementV1,
   parseInventoryWarehouseV1,
+  type InventoryBalanceV1,
   type InventoryItemV1,
+  type InventoryMovementKindV1,
+  type InventoryMovementV1,
   type InventoryUnitV1,
   type InventoryWarehouseV1,
 } from "@super-restaurant/shared-types";
@@ -23,8 +28,11 @@ export type InventoryError = "conflict" | "denied" | "invalid" | "missing" | "ti
 
 export type InventoryOperation =
   | "createItem"
+  | "createMovement"
   | "createWarehouse"
+  | "listBalances"
   | "listItems"
+  | "listMovements"
   | "listWarehouses"
   | "updateItem"
   | "updateWarehouse";
@@ -32,11 +40,21 @@ export type InventoryOperation =
 export type InventoryActionResult =
   | { readonly ok: true; readonly items: readonly InventoryItemV1[] }
   | { readonly ok: true; readonly warehouses: readonly InventoryWarehouseV1[] }
+  | { readonly ok: true; readonly movements: readonly InventoryMovementV1[] }
+  | { readonly ok: true; readonly balances: readonly InventoryBalanceV1[] }
   | { readonly ok: true; readonly item: InventoryItemV1 }
   | { readonly ok: true; readonly warehouse: InventoryWarehouseV1 }
+  | { readonly ok: true; readonly recorded: true }
   | { readonly ok: false; readonly error: InventoryError };
 
 const INVENTORY_UNITS: readonly InventoryUnitV1[] = ["g", "ml", "piece"];
+const MANUAL_MOVEMENT_KINDS: ReadonlySet<InventoryMovementKindV1> = new Set([
+  "adjustment",
+  "count_adjustment",
+  "transfer_out",
+  "transfer_in",
+  "waste",
+]);
 const MANAGE_ROLES: ReadonlySet<string> = new Set(["owner", "admin", "manager"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const CONTROL_CHARACTER_PATTERN = /[\p{Cc}\p{Cf}]/u;
@@ -45,8 +63,9 @@ export async function inventoryAction(
   operation: InventoryOperation,
   input?: unknown,
 ): Promise<InventoryActionResult> {
-  if (operation !== "listItems" && operation !== "listWarehouses" && operation !== "createItem"
-    && operation !== "updateItem" && operation !== "createWarehouse" && operation !== "updateWarehouse") {
+  if (operation !== "listItems" && operation !== "listWarehouses" && operation !== "listMovements"
+    && operation !== "listBalances" && operation !== "createItem" && operation !== "updateItem"
+    && operation !== "createWarehouse" && operation !== "updateWarehouse" && operation !== "createMovement") {
     return invalid();
   }
 
@@ -63,7 +82,8 @@ export async function inventoryAction(
     return denied();
   }
   const canManage = membership.roles.some((role) => MANAGE_ROLES.has(role));
-  if (!canManage && operation !== "listItems" && operation !== "listWarehouses") return denied();
+  if (!canManage && operation !== "listItems" && operation !== "listWarehouses"
+    && operation !== "listMovements" && operation !== "listBalances") return denied();
 
   const base = `${env.apiBaseUrl}/api/v1/inventory`;
 
@@ -81,6 +101,57 @@ export async function inventoryAction(
     if (!reply.ok) return reply;
     const warehouses = parseWarehousesList(reply.body, scope.restaurantId, scope.branchId);
     return warehouses === undefined ? unavailable() : { ok: true, warehouses };
+  }
+
+  if (operation === "listMovements") {
+    const filter = readMovementFilter(input);
+    if (filter === undefined) return invalid();
+    const query = new URLSearchParams({
+      branchId: scope.branchId,
+      limit: "100",
+      restaurantId: scope.restaurantId,
+    });
+    if (filter.warehouseId !== undefined) query.set("warehouseId", filter.warehouseId);
+    if (filter.itemId !== undefined) query.set("itemId", filter.itemId);
+    const reply = await send(session.access_token, `${base}/movements?${query.toString()}`, "GET");
+    if (!reply.ok) return reply;
+    const movements = parseMovementsList(reply.body, scope.restaurantId, scope.branchId);
+    return movements === undefined ? unavailable() : { ok: true, movements };
+  }
+
+  if (operation === "listBalances") {
+    const filter = readBalanceFilter(input);
+    if (filter === undefined) return invalid();
+    const query = new URLSearchParams({ branchId: scope.branchId, restaurantId: scope.restaurantId });
+    if (filter.warehouseId !== undefined) query.set("warehouseId", filter.warehouseId);
+    const reply = await send(session.access_token, `${base}/balances?${query.toString()}`, "GET");
+    if (!reply.ok) return reply;
+    const balances = parseBalancesList(reply.body, scope.restaurantId, scope.branchId);
+    return balances === undefined ? unavailable() : { ok: true, balances };
+  }
+
+  if (operation === "createMovement") {
+    const command = readMovementCommand(input);
+    if (command === undefined) return invalid();
+    const transfer = command.kind === "transfer_out" || command.kind === "transfer_in";
+    const reply = await send(session.access_token, `${base}/movements`, "POST", {
+      branchId: scope.branchId,
+      compensatesMovementId: null,
+      currency: null,
+      idempotencyKey: command.idempotencyKey,
+      itemId: command.itemId,
+      kind: command.kind,
+      quantityDelta: command.quantityDelta,
+      reason: command.reason,
+      restaurantId: scope.restaurantId,
+      toWarehouseId: transfer ? command.toWarehouseId : null,
+      transferPairId: null,
+      unitCode: command.unitCode,
+      unitCostMinor: null,
+      warehouseId: command.warehouseId,
+    });
+    if (!reply.ok) return reply;
+    return plainRecord(reply.body) === undefined ? unavailable() : { ok: true, recorded: true };
   }
 
   if (operation === "createItem") {
@@ -266,6 +337,144 @@ function parseWarehousesList(
     warehouses.push(warehouse);
   }
   return warehouses;
+}
+
+function parseMovementsList(
+  value: unknown,
+  restaurantId: string,
+  branchId: string,
+): readonly InventoryMovementV1[] | undefined {
+  const record = plainRecord(value);
+  if (record === undefined || own(record, "schemaVersion") !== 1
+    || own(record, "restaurantId") !== restaurantId || own(record, "branchId") !== branchId) {
+    return undefined;
+  }
+  const rawMovements = own(record, "movements");
+  if (!Array.isArray(rawMovements)) return undefined;
+  const movements: InventoryMovementV1[] = [];
+  for (const rawMovement of rawMovements) {
+    const movement = parseInventoryMovementV1(rawMovement);
+    if (movement === undefined || movement.restaurantId !== restaurantId || movement.branchId !== branchId) {
+      return undefined;
+    }
+    movements.push(movement);
+  }
+  return movements;
+}
+
+function parseBalancesList(
+  value: unknown,
+  restaurantId: string,
+  branchId: string,
+): readonly InventoryBalanceV1[] | undefined {
+  const record = plainRecord(value);
+  if (record === undefined || own(record, "schemaVersion") !== 1
+    || own(record, "restaurantId") !== restaurantId || own(record, "branchId") !== branchId) {
+    return undefined;
+  }
+  const rawBalances = own(record, "balances");
+  if (!Array.isArray(rawBalances)) return undefined;
+  const balances: InventoryBalanceV1[] = [];
+  for (const rawBalance of rawBalances) {
+    const balance = parseInventoryBalanceV1(rawBalance);
+    if (balance === undefined || balance.restaurantId !== restaurantId || balance.branchId !== branchId) {
+      return undefined;
+    }
+    balances.push(balance);
+  }
+  return balances;
+}
+
+interface MovementFilter {
+  readonly warehouseId?: string;
+  readonly itemId?: string;
+}
+
+function readMovementFilter(input: unknown): MovementFilter | undefined {
+  if (input === undefined) return {};
+  const record = plainRecord(input);
+  if (record === undefined) return undefined;
+  const warehouseId = readFilterUuid(own(record, "warehouseId"));
+  const itemId = readFilterUuid(own(record, "itemId"));
+  if (warehouseId === null || itemId === null) return undefined;
+  return {
+    ...(warehouseId === undefined ? {} : { warehouseId }),
+    ...(itemId === undefined ? {} : { itemId }),
+  };
+}
+
+function readBalanceFilter(input: unknown): { readonly warehouseId?: string } | undefined {
+  if (input === undefined) return {};
+  const record = plainRecord(input);
+  if (record === undefined) return undefined;
+  const warehouseId = readFilterUuid(own(record, "warehouseId"));
+  if (warehouseId === null) return undefined;
+  return warehouseId === undefined ? {} : { warehouseId };
+}
+
+/** Blank or absent means «all»; anything that is not a UUID is invalid (`null`). */
+function readFilterUuid(value: unknown): string | undefined | null {
+  if (value === undefined || value === null || value === "") return undefined;
+  return typeof value === "string" && UUID_PATTERN.test(value) ? value : null;
+}
+
+interface ManualMovementCommand {
+  readonly warehouseId: string;
+  readonly itemId: string;
+  readonly kind: InventoryMovementKindV1;
+  readonly quantityDelta: number;
+  readonly unitCode: InventoryUnitV1;
+  readonly reason: string;
+  readonly idempotencyKey: string;
+  readonly toWarehouseId: string | null;
+}
+
+function readMovementCommand(input: unknown): ManualMovementCommand | undefined {
+  const record = plainRecord(input);
+  if (record === undefined) return undefined;
+  const warehouseId = readFilterUuid(own(record, "warehouseId"));
+  const itemId = readFilterUuid(own(record, "itemId"));
+  const kindValue = own(record, "kind");
+  const kind = typeof kindValue === "string" && MANUAL_MOVEMENT_KINDS.has(kindValue as InventoryMovementKindV1)
+    ? kindValue as InventoryMovementKindV1 : undefined;
+  const quantityDelta = own(record, "quantityDelta");
+  const unitCode = own(record, "unitCode");
+  const reason = readText(own(record, "reason"), 500);
+  const idempotencyKey = own(record, "idempotencyKey");
+  const rawTarget = own(record, "toWarehouseId");
+  if (rawTarget !== undefined && rawTarget !== null
+    && (typeof rawTarget !== "string" || !UUID_PATTERN.test(rawTarget))) {
+    return undefined;
+  }
+  const toWarehouseId = typeof rawTarget === "string" ? rawTarget : null;
+
+  if (warehouseId === undefined || warehouseId === null
+    || itemId === undefined || itemId === null
+    || kind === undefined
+    || typeof quantityDelta !== "number" || !Number.isSafeInteger(quantityDelta) || quantityDelta === 0
+    || !isInventoryUnit(unitCode)
+    || reason === undefined || reason.length < 3
+    || typeof idempotencyKey !== "string" || !UUID_PATTERN.test(idempotencyKey)) {
+    return undefined;
+  }
+  if ((kind === "waste" || kind === "transfer_out") && quantityDelta > 0) return undefined;
+  if (kind === "transfer_in" && quantityDelta < 0) return undefined;
+  if (kind === "transfer_out" || kind === "transfer_in") {
+    if (toWarehouseId === null || toWarehouseId === warehouseId) return undefined;
+  } else if (toWarehouseId !== null) {
+    return undefined;
+  }
+
+  return Object.freeze({
+    idempotencyKey,
+    itemId,
+    kind,
+    quantityDelta,
+    reason,
+    toWarehouseId,
+    unitCode,
+    warehouseId,
+  });
 }
 
 async function send(
