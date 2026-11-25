@@ -1417,13 +1417,14 @@
                       "deps":  [
                                    "m3-sql-recipes"
                                ],
-                      "status":  "review",
+                      "status":  "done",
                       "id":  "m3-sql-purchasing",
                       "title":  "Proveedores, ordenes de compra y recepcion",
                       "level":  "A",
                       "paths":  [
                                     "supabase/migrations/20261126000400_inventory_purchasing.sql"
-                                ]
+                                ],
+                      "note":  "PR #91 fusionado: idempotencia por sucursal+clave, auditoria de recepcion y pruebas de dinero; revision doble dsh."
                   },
                   {
                       "attempts":  0,
@@ -1438,13 +1439,14 @@
                                    "m3-sql-purchasing",
                                    "m3-map-sale-hooks"
                                ],
-                      "status":  "todo",
+                      "status":  "review",
                       "id":  "m3-sql-sale-consumption",
                       "title":  "Consumo por venta y reverso idempotentes",
                       "level":  "A",
                       "paths":  [
                                     "supabase/migrations/20261126000500_inventory_sale_consumption.sql"
-                                ]
+                                ],
+                      "note":  "Migracion 00500 + 00700 y cableado API en la rama m3-sql-sale-consumption: is_default por sucursal, eventos comando+pasos, reverso compensado, cancelacion de linea. Verificador 84 migraciones verde y test:http:local 7/7. Falta el E2E applied del wrapper de confirmacion (m3-int-sale-to-stock)."
                   },
                   {
                       "attempts":  0,
@@ -1478,13 +1480,14 @@
                       "deps":  [
                                    "m3-contracts"
                                ],
-                      "status":  "review",
+                      "status":  "done",
                       "id":  "m3-api-items",
                       "title":  "API de insumos y almacenes",
                       "level":  "B",
                       "paths":  [
                                     "apps/api/src/inventory"
-                                ]
+                                ],
+                      "note":  "PR #90 fusionado: 8 funciones app_private SECURITY DEFINER, mapeo de errores 23503/23514/42501; revision doble dsh."
                   },
                   {
                       "attempts":  0,
