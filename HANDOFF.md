@@ -1,11 +1,14 @@
 ## Ola M3 inventario — API completa y pantalla (2026-11-25, nivel A/B/C)
 
+- **Integración venta→stock (#104):** `http_flow_inventory` siembra almacén por defecto y receta, confirma por API (consumo 240 g, saldo 4 760), replay sin duplicar, cancelación con `sale_reversal` compensado y línea sin receta inerte. `test:http:local` 8/8.
+- **P3 de la integración:** el flujo solo tiene un almacén (no distingue resolución del default de "único almacén"); el caso sin receta no fija `status`/`reason` del resultado.
+
 - **Fusionado en `main`:** #97 consumo por venta/reverso + cableado, #98 rutas de insumos/almacenes expuestas, #99 movimientos/transferencias/saldos + pantalla `/app/inventario`, #100 recetas versionadas y #102 API de compras (proveedores, OC con totales, recepción con auditoría). Con #90 y #91 la API de inventario queda **completa**: insumos, almacenes, movimientos manuales, transferencias, saldos, recetas y compras.
 - **Decisiones clave:** (1) escrituras por funciones `app_private` SECURITY DEFINER, nunca grants directos a `app_api`; (2) consumo por venta con envoltorios `*_with_inventory` y almacén por defecto por sucursal (`is_default`), revirtiendo por el conjunto de eventos comando+pasos; (3) `InventoryMovementRequestV1.toWarehouseId` explícito y `transferPairId` del servidor; (4) `AppModule` registra controladores/servicios directos (el repo no usa `imports` de módulos).
 - **Verificación:** `verify:inventory-schema:rollback` con 87 migraciones desde cero en verde (catálogo, ledger, recetas, funciones API, compras, consumo, cancelación de línea, movimientos, recetas API y compras API); `test:http:local` 7/7; shared-types 47/47; API y web lint/typecheck/test/build verdes.
 - **Deuda:** ver `docs/agentic/debt.md` (P3 de recetas/UI/movimientos/compras, `items.module.ts` huérfano, ledger `EXECUTE` pendiente de wrappers, `x-device-id` sin validar, `deviceId` de recepción en cuerpo).
-- **Pendiente:** `m3-api-alerts-costing` (stock mínimo, costo promedio y margen), `m3-api-http-tests`, pestañas de movimientos/conteo/recetas/compras/alertas en la UI, `m3-int-sale-to-stock` (brief listo en `.agents/briefs/`), `m3-e2e-journey` y verificación visual real de `/app/inventario` (desktop y 390×844, consola limpia). Migraciones remotas: `20261121000100`, `20261123000300…0600`, `2026112600*` (flujo §19.6).
-- **Siguiente acción mínima:** lanzar `m3-int-sale-to-stock` con `.agents/briefs/m3-int-sale-to-stock.md` y, en paralelo, `m3-api-alerts-costing`; después las pestañas de UI y el pase visual con Playwright.
+- **Pendiente:** `m3-api-alerts-costing` (stock mínimo, costo promedio y margen), `m3-api-http-tests`, pestañas de movimientos/conteo/recetas/compras/alertas en la UI, `m3-e2e-journey` y verificación visual real de `/app/inventario` (desktop y 390×844, consola limpia). Migraciones remotas: `20261121000100`, `20261123000300…0600`, `2026112600*` (flujo §19.6).
+- **Siguiente acción mínima:** lanzar `m3-api-alerts-costing` (necesita funciones SQL de alertas/costo sobre el ledger) y después las pestañas de UI; el pase visual con Playwright queda para cuando estén todas las pestañas.
 
 ## Ola M3 inventario — P1 de #90/#91 y consumo por venta (2026-11-25, nivel A)
 

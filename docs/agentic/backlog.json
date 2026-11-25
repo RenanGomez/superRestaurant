@@ -1604,13 +1604,14 @@
                       "deps":  [
                                    "m3-sql-sale-consumption"
                                ],
-                      "status":  "todo",
+                      "status":  "done",
                       "id":  "m3-int-sale-to-stock",
                       "title":  "Integracion venta-cancelacion contra existencias",
                       "level":  "A",
                       "paths":  [
                                     "apps/api/src/inventory"
-                                ]
+                                ],
+                      "note":  "PR #104: flujo http_flow_inventory (8/8) con almacen default, receta, consumo 240 g, replay sin duplicar, reverso y linea sin receta inerte; revision A APROBAR."
                   },
                   {
                       "attempts":  0,
