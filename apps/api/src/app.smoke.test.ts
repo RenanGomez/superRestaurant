@@ -127,6 +127,14 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
       code: "AUTHENTICATION_REQUIRED",
     });
 
+    const inventoryItemsUnauthenticated = await fetch(`${url}/api/v1/inventory/items?restaurantId=${restaurantId}`);
+    assert.equal(inventoryItemsUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryItemsUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryWarehousesUnauthenticated = await fetch(`${url}/api/v1/inventory/warehouses?restaurantId=${restaurantId}&branchId=${branchId}`);
+    assert.equal(inventoryWarehousesUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryWarehousesUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
     const syncUnauthenticated = await fetch(`${url}/api/v1/sync/push`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     assert.equal(syncUnauthenticated.status, 401);
     const syncInvalid = await fetch(`${url}/api/v1/sync/push`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer valid-smoke-access-token" }, body: "{}" });
