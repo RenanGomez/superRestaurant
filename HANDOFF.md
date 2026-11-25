@@ -2,7 +2,8 @@
 
 - **API de inventario cerrada (#106):** alertas de stock mínimo, costo medio ponderado entero con resto, coste de receta y margen estimado con catálogo/receta vigentes; revisión B APROBAR. **88 migraciones** desde cero en verde.
 - **P3 de costeo:** el margen con receta sin receipts da coste 0 (margen = precio) y el `COMMENT` no lo advierte; `product-costs` elige el primer almacén con saldo (no el último con costo) y no valida moneda mixta entre líneas.
-- **Pendiente de esta ola:** pestañas de UI (movimientos, conteo, recetas, compras, alertas), pruebas HTTP contractuales de inventario y verificación visual real de `/app/inventario`.
+- **Pendiente de esta ola:** pestañas de UI (compras y alertas), pruebas HTTP contractuales de inventario y verificación visual real de `/app/inventario`.
+- **Pestañas de UI fusionadas:** #108 Movimientos (listado + ajuste/merma/transferencia con motivo, idempotencia y diálogo accesible) y #109 Recetas (producto del menú, líneas de insumo, versión activa/históricas, editor oculto sin `catalog.manage`).
 
 - **Integración venta→stock (#104):** `http_flow_inventory` siembra almacén por defecto y receta, confirma por API (consumo 240 g, saldo 4 760), replay sin duplicar, cancelación con `sale_reversal` compensado y línea sin receta inerte. `test:http:local` 8/8.
 - **P3 de la integración:** el flujo solo tiene un almacén (no distingue resolución del default de "único almacén"); el caso sin receta no fija `status`/`reason` del resultado.
@@ -11,8 +12,8 @@
 - **Decisiones clave:** (1) escrituras por funciones `app_private` SECURITY DEFINER, nunca grants directos a `app_api`; (2) consumo por venta con envoltorios `*_with_inventory` y almacén por defecto por sucursal (`is_default`), revirtiendo por el conjunto de eventos comando+pasos; (3) `InventoryMovementRequestV1.toWarehouseId` explícito y `transferPairId` del servidor; (4) `AppModule` registra controladores/servicios directos (el repo no usa `imports` de módulos).
 - **Verificación:** `verify:inventory-schema:rollback` con 88 migraciones desde cero en verde (catálogo, ledger, recetas, funciones API, compras, consumo, cancelación de línea, movimientos, recetas API, compras API y costeo); `test:http:local` 8/8; shared-types 47/47; API y web lint/typecheck/test/build verdes.
 - **Deuda:** ver `docs/agentic/debt.md` (P3 de recetas/UI/movimientos/compras/costeo, `items.module.ts` huérfano, ledger `EXECUTE` pendiente de wrappers, `x-device-id` sin validar, `deviceId` de recepción en cuerpo).
-- **Pendiente:** `m3-api-http-tests` (contratos HTTP e aislamiento de inventario), pestañas de movimientos/conteo/recetas/compras/alertas en la UI, `m3-e2e-journey` y verificación visual real de `/app/inventario` (desktop y 390×844, consola limpia). Migraciones remotas: `20261121000100`, `20261123000300…0600`, `2026112600*` (flujo §19.6).
-- **Siguiente acción mínima:** construir la pestaña «Movimientos» en `/app/inventario` (listado + alta de ajuste/merma/transferencia con motivo y confirmación in-app) sobre `GET/POST /api/v1/inventory/movements` y `GET /balances`; después recetas, compras y alertas, y el pase visual con Playwright.
+- **Pendiente:** `m3-api-http-tests` (contratos HTTP e aislamiento de inventario), pestañas de compras y alertas, `m3-e2e-journey` y verificación visual real de `/app/inventario` (insumos, almacenes, movimientos y recetas; desktop y 390×844, consola limpia). Migraciones remotas: `20261121000100`, `20261123000300…0600`, `2026112600*` (flujo §19.6).
+- **Siguiente acción mínima:** pestaña «Compras» en `/app/inventario` (proveedores, OC con idempotencia y recepción) y «Alertas» (saldo bajo mínimo, costo medio y margen); después las pruebas HTTP contractuales y el pase visual con Playwright.
 
 ## Ola M3 inventario — P1 de #90/#91 y consumo por venta (2026-11-25, nivel A)
 
