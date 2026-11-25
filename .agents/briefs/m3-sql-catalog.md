@@ -36,22 +36,19 @@ Sigue exactamente la estructura de `supabase/tests/sync_ledger_invariants.sql` (
 - `run-inventory-schema-verification.ts`: copia el patrón de `run-sync-schema-verification.ts` (`LocalPostgres` con `marker: "LOCAL_INVENTORY_SCHEMA_ONLY"`, `databasePrefix: "superrestaurant_inventory"`, `assertLocalConfirmation()`, `applyMigrations(listMigrationNames())`, invariantes dentro de `BEGIN`/`ROLLBACK`, resumen JSON, `local.stop()`), comprobando que la migración `20261126000100_inventory_catalog.sql` está en la lista.
 - `apps/api/package.json`: `"verify:inventory-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-inventory-schema-verification.js --local-disposable-only"`.
 
-## Puertas (obligatorio, Node 24.19.0 + PG17 local)
+## Puertas (obligatorio, Node 24.19.0)
+El binario de PostgreSQL local vive fuera de tu worktree y el sandbox lo rechaza: **no intentes ejecutar el verificador ni accedas a rutas fuera del repo**. El orquestador corre después `verify:inventory-schema:rollback`.
 ```powershell
 . .\tools\agentic\use-node24.ps1
 node -v   # v24.19.0
-$env:LOCAL_POSTGRES_BIN = 'C:\Users\Emmanuel G\Documents\ChatGPT\superRestaurant\.cache\postgres-local\pgsql\bin'
 $PNPM = "C:\Users\Emmanuel G\AppData\Local\Programs\node24\pnpm.CMD"
 & $PNPM --filter @super-restaurant/api typecheck
 & $PNPM --filter @super-restaurant/api lint
-& $PNPM --filter @super-restaurant/api verify:inventory-schema:rollback
 ```
-La última debe imprimir `"status":"ok"` y `"local_cleanup"` `"stopped":true`. Si el binario de Postgres no está en esa ruta, busca `pg_ctl.exe` bajo `.cache/postgres-local` y usa su carpeta `bin`; si no existe, informa `NO VERIFICADO: LOCAL_PG17_REQUIRED` con la ruta comprobada (no inventes éxito).
 
 ## Hecho cuando
-- Migración reproducible desde cero y verificador rollback-only en verde (salida real).
-- Invariantes cubren los 6 puntos.
-- `typecheck`, `lint` y `git diff --check` limpios.
+- Migración, invariantes (6 puntos) y verificador escritos y coherentes; `typecheck`, `lint` y `git diff --check` limpios con salida real.
+- El informe indica `NO VERIFICADO: PG por orquestador`.
 
 ## Cierre
 No hagas commit ni push. Tu respuesta final ES el informe con: archivos, decisiones (función de autorización reutilizada, FKs), y un bloque por puerta con comando y salida real. Sin evidencia = NO VERIFICADO.
