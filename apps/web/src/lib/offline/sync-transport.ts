@@ -45,7 +45,7 @@ export interface WebSyncTransportOptions {
   readonly accessToken: () => Promise<string | undefined>;
   readonly fetcher?: typeof fetch;
   readonly paths?: Partial<WebSyncTransportPaths>;
-  /** Milliseconds before the request is aborted; `0` or omitted disables the timer. */
+  /** Milliseconds before the request is aborted; defaults to `30_000`, `0` disables the timer. */
   readonly timeoutMs?: number;
   /** Revocation gate: `false` blocks the request before it is built. */
   readonly canSend?: () => boolean;
@@ -104,7 +104,7 @@ export function createWebSyncTransport(options: WebSyncTransportOptions): SyncTr
 
   async function send(path: string, body: unknown, token: string): Promise<Response> {
     const controller = new AbortController();
-    const timeoutMs = options.timeoutMs ?? 0;
+    const timeoutMs = options.timeoutMs ?? 30_000;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
       if (timeoutMs > 0) timer = setTimeout(() => { controller.abort(); reject(new SyncTransportError("TRANSPORT_ERROR", true)); }, timeoutMs);
